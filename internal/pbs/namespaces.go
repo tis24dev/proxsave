@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 )
 
+var execCommand = exec.Command
+
 // Namespace rappresenta un singolo namespace PBS.
 type Namespace struct {
 	Ns      string `json:"ns"`
@@ -38,7 +40,7 @@ func ListNamespaces(datastoreName, datastorePath string) ([]Namespace, bool, err
 }
 
 func listNamespacesViaCLI(datastore string) ([]Namespace, error) {
-	cmd := exec.Command(
+	cmd := execCommand(
 		"proxmox-backup-manager",
 		"datastore",
 		"namespace",

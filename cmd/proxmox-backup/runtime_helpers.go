@@ -710,10 +710,11 @@ func cleanupAfterRun(logger *logging.Logger) {
 }
 
 func addPathExclusion(excludes []string, path string) []string {
-	clean := filepath.Clean(strings.TrimSpace(path))
-	if clean == "" {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
 		return excludes
 	}
+	clean := filepath.Clean(trimmed)
 	excludes = append(excludes, clean)
 	excludes = append(excludes, filepath.ToSlash(filepath.Join(clean, "**")))
 	return excludes
