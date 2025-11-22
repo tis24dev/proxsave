@@ -228,7 +228,7 @@ The legacy Bash version should **only be used** if you have:
 
 ### Migration
 - **[Migration Guide](MIGRATION_GUIDE.md)** - Complete Bash → Go upgrade guide
-- **BACKUP_ENV_MAPPING.md** - Variable mapping reference (in repository root)
+- **[BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)** - Variable mapping reference
 
 ### Go Version Documentation
 - **[README](../README.md)** - Main documentation for Go version

@@ -3,38 +3,44 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/tis24dev/proxmox-backup/internal/types"
 )
 
+const (
+	defaultConfigPath   = "./configs/backup.env"
+	configSourceDefault = "default path"
+	configSourceFlag    = "specified via --config/-c flag"
+)
+
 // Args holds the parsed command-line arguments
 type Args struct {
-	ConfigPath       string
-	ConfigPathSource string
-	LogLevel         types.LogLevel
-	DryRun           bool
-	Support          bool
+	ConfigPath        string
+	ConfigPathSource  string
+	LogLevel          types.LogLevel
+	DryRun            bool
+	Support           bool
 	SupportGitHubUser string
-	SupportIssueID     string
-	ShowVersion      bool
-	ShowHelp         bool
-	ForceNewKey      bool
-	Decrypt          bool
-	Restore          bool
-	Install          bool
-	UpgradeConfig    bool
-	UpgradeConfigDry bool
-	EnvMigration     bool
-	EnvMigrationDry  bool
-	LegacyEnvPath    string
+	SupportIssueID    string
+	ShowVersion       bool
+	ShowHelp          bool
+	ForceNewKey       bool
+	Decrypt           bool
+	Restore           bool
+	Install           bool
+	UpgradeConfig     bool
+	UpgradeConfigDry  bool
+	EnvMigration      bool
+	EnvMigrationDry   bool
+	LegacyEnvPath     string
 }
 
 // Parse parses command-line arguments and returns Args struct
 func Parse() *Args {
 	args := &Args{}
 
-	const defaultConfigPath = "./configs/backup.env"
 	configFlag := newStringFlag(defaultConfigPath)
 
 	// Define flags
@@ -91,14 +97,7 @@ func Parse() *Args {
 
 	// Custom usage message
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "Proxmox Backup Manager - Go Edition\n\n")
-		fmt.Fprintf(os.Stderr, "Options:\n")
-		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  %s -c /path/to/config.env\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s --dry-run --log-level debug\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s --version\n", os.Args[0])
+		printHelp(os.Stderr, os.Args[0])
 	}
 
 	// Parse flags
@@ -106,9 +105,9 @@ func Parse() *Args {
 
 	args.ConfigPath = configFlag.value
 	if configFlag.set {
-		args.ConfigPathSource = "specified via --config/-c flag"
+		args.ConfigPathSource = configSourceFlag
 	} else {
-		args.ConfigPathSource = "default path"
+		args.ConfigPathSource = configSourceDefault
 	}
 
 	// Parse log level if provided
@@ -143,17 +142,34 @@ func parseLogLevel(s string) types.LogLevel {
 
 // ShowHelp displays help message and exits
 func ShowHelp() {
-	flag.Usage()
+	printHelp(os.Stderr, os.Args[0])
 	os.Exit(0)
 }
 
 // ShowVersion displays version information and exits
 func ShowVersion() {
-	fmt.Printf("Proxmox Backup Manager (Go Edition)\n")
-	fmt.Printf("Version: 0.2.0-dev\n")
-	fmt.Printf("Build: development\n")
-	fmt.Printf("Author: tis24dev\n")
+	printVersion(os.Stdout)
 	os.Exit(0)
+}
+
+func printHelp(w io.Writer, argv0 string) {
+	fmt.Fprintf(w, "Usage: %s [options]\n\n", argv0)
+	fmt.Fprintln(w, "Proxmox Backup Manager - Go Edition")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Options:")
+	flag.PrintDefaults()
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Examples:")
+	fmt.Fprintf(w, "  %s -c /path/to/config.env\n", argv0)
+	fmt.Fprintf(w, "  %s --dry-run --log-level debug\n", argv0)
+	fmt.Fprintf(w, "  %s --version\n", argv0)
+}
+
+func printVersion(w io.Writer) {
+	fmt.Fprintln(w, "Proxmox Backup Manager (Go Edition)")
+	fmt.Fprintln(w, "Version: 0.2.0-dev")
+	fmt.Fprintln(w, "Build: development")
+	fmt.Fprintln(w, "Author: tis24dev")
 }
 
 type stringFlag struct {

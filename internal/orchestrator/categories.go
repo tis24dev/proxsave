@@ -73,7 +73,10 @@ func GetAllCategories() []Category {
 			Name:        "PVE Backup Jobs",
 			Description: "Scheduled backup job definitions",
 			Type:        CategoryTypePVE,
-			Paths:       []string{},
+			Paths: []string{
+				"./etc/pve/jobs.cfg",
+				"./etc/pve/vzdump.cron",
+			},
 		},
 		{
 			ID:          "corosync",

@@ -236,7 +236,7 @@ Your selection: c      # Continue to restore plan
 
 ## Complete Workflow
 
-The restore process follows an 11-phase workflow with safety checks at each step.
+The restore process follows a **14-phase workflow** with safety checks at each step.
 
 ### Workflow Diagram
 
@@ -255,7 +255,7 @@ Phase 2: Decryption (if needed)
   ├─ Detect encryption (AGE)
   ├─ Prompt for key/passphrase
   ├─ Decrypt to /tmp/proxmox-backup/
-  └─ Generate new SHA256 checksum
+  └─ Verify SHA256 checksum
 
 Phase 3: Compatibility Check
   ├─ Detect current system type (PVE/PBS/Unknown)
@@ -274,38 +274,57 @@ Phase 5: Mode Selection & Category Choice
   ├─ If Custom: Interactive category selection
   └─ Build final category list
 
-Phase 6: Restore Plan & Confirmation
+Phase 6: Cluster Restore Mode (PVE Cluster Backups Only)
+  ├─ SKIPPED if backup is from standalone node
+  ├─ Detect if backup ClusterMode = "cluster"
+  ├─ Prompt: SAFE (export+API) vs RECOVERY (full restore)
+  ├─ SAFE: Redirect pve_cluster to export-only, apply via pvesh
+  └─ RECOVERY: Proceed with direct database restore
+
+Phase 7: Restore Plan & Confirmation
   ├─ Display detailed restore plan
   ├─ Show categories and file paths
   ├─ Show warnings
   └─ User types "RESTORE" to confirm
 
-Phase 7: Safety Backup
+Phase 8: Safety Backup
   ├─ Create /tmp backup of files to be overwritten
   ├─ Preserve permissions, ownership, timestamps
   └─ Display rollback command
 
-Phase 8: Service Management (Cluster Restore Only)
-  ├─ Detect if pve_cluster category selected
+Phase 9: Service Management (PVE Cluster Restore)
+  ├─ Detect if pve_cluster category selected (RECOVERY mode)
   ├─ Stop: pve-cluster, pvedaemon, pveproxy, pvestatd
   ├─ Unmount /etc/pve
   └─ Defer restart for after restore
 
-Phase 9: File Extraction
+Phase 10: Service Management (PBS Restore)
+  ├─ Detect if PBS-specific categories selected
+  ├─ Stop: proxmox-backup-proxy, proxmox-backup
+  ├─ Prompt to continue if stop fails
+  └─ Defer restart for after restore
+
+Phase 11: File Extraction
   ├─ Extract normal categories to /
   ├─ Selective extraction based on category paths
   ├─ Preserve ownership, permissions, timestamps
   └─ Log all operations
 
-Phase 10: Export-Only Extraction
+Phase 12: Export-Only Extraction
   ├─ Extract export-only categories to timestamped directory
   ├─ Destination: <BASE_DIR>/pve-config-export-YYYYMMDD-HHMMSS/
   └─ Separate detailed log
 
-Phase 11: Post-Restore Tasks
+Phase 13: pvesh SAFE Apply (Cluster SAFE Mode Only)
+  ├─ Scan exported VM/CT configs
+  ├─ Offer to apply via pvesh API
+  ├─ Offer to apply storage.cfg via pvesh
+  └─ Offer to apply datacenter.cfg via pvesh
+
+Phase 14: Post-Restore Tasks
   ├─ Recreate storage/datastore directories
   ├─ Check ZFS pool status (PBS only)
-  ├─ Restart PVE services (if stopped)
+  ├─ Restart PVE/PBS services (if stopped)
   └─ Display completion summary
 ```
 
@@ -378,7 +397,24 @@ compatible with PBS. Proceeding may result in system instability.
 Type "yes" to continue anyway or "no" to abort:
 ```
 
-#### Phase 6: Restore Plan
+#### Phase 6: Cluster Restore Mode (PVE Cluster Backups Only)
+
+**This phase is SKIPPED for standalone backups** - the workflow proceeds directly to Phase 7.
+
+When the backup was created from a **cluster node** (manifest `ClusterMode = "cluster"`) and `pve_cluster` category is selected:
+
+```
+Cluster backup detected. Choose how to restore the cluster database:
+  [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
+  [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
+  [0] Exit
+
+Choice: _
+```
+
+See [Cluster Restore Modes](#cluster-restore-modes-safe-vs-recovery) for detailed explanation.
+
+#### Phase 7: Restore Plan
 
 **Example display**:
 ```
@@ -416,7 +452,7 @@ Files/directories that will be restored:
 Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort:
 ```
 
-#### Phase 7: Safety Backup
+#### Phase 8: Safety Backup
 
 ```
 Creating safety backup of existing files...
@@ -427,9 +463,9 @@ You can restore from this backup if needed using:
   tar -xzf /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz -C /
 ```
 
-#### Phase 8: Service Management
+#### Phase 9: Service Management (PVE Cluster)
 
-**For cluster database restore**:
+**For cluster database restore (RECOVERY mode)**:
 ```
 Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve
 
@@ -443,7 +479,24 @@ Unmounting /etc/pve...
 Successfully unmounted /etc/pve
 ```
 
-#### Phase 9 & 10: Extraction
+#### Phase 10: Service Management (PBS)
+
+**For PBS configuration restore**:
+```
+Preparing PBS system for restore: stopping proxmox-backup services
+
+Stopping proxmox-backup-proxy...
+Stopping proxmox-backup...
+PBS services stopped successfully.
+```
+
+If service stop fails, you'll be prompted:
+```
+Unable to stop PBS services automatically: <error>
+Continue restore with PBS services still running? (y/N): _
+```
+
+#### Phase 11 & 12: Extraction
 
 ```
 Extracting selected categories from archive into /
@@ -459,7 +512,27 @@ Exporting /etc/pve contents to: /opt/proxmox-backup/pve-config-export-20251120-1
 Exported 23 files/directories
 ```
 
-#### Phase 11: Completion
+#### Phase 13: pvesh SAFE Apply (Cluster SAFE Mode Only)
+
+When using Cluster SAFE mode, after extraction:
+```
+SAFE cluster restore: applying configs via pvesh (node=pve01)
+
+Found 3 VM/CT configs for node pve01
+Apply all VM/CT configs via pvesh? (y/N): y
+Applied VM/CT config 100 (webserver)
+Applied VM/CT config 101 (database)
+VM/CT apply completed: ok=2 failed=0
+
+Storage configuration found: .../etc/pve/storage.cfg
+Apply storage.cfg via pvesh? (y/N): y
+Applied storage definition local
+Storage apply completed: ok=1 failed=0
+```
+
+See [pvesh SAFE Apply](#pvesh-safe-apply-cluster-safe-mode) for detailed explanation.
+
+#### Phase 14: Completion
 
 ```
 ═══════════════════════════════════════════════════════════════
@@ -481,6 +554,103 @@ Created: /mnt/backup/dump/
 Created: /mnt/backup/images/
 Storage directories recreated successfully.
 ```
+
+---
+
+## PVE Restore: Standalone vs Cluster
+
+The restore workflow behaves differently based on whether the backup originated from a **standalone PVE node** or a **cluster member**. This is critical for understanding what happens during restore.
+
+### Detection
+
+The system reads the `ClusterMode` field from the backup manifest:
+- **Standalone**: `ClusterMode = "standalone"` or empty
+- **Cluster**: `ClusterMode = "cluster"`
+
+### Behavior Comparison
+
+| Scenario | ClusterMode | SAFE/RECOVERY Prompt | Restore Behavior |
+|----------|-------------|----------------------|------------------|
+| **Standalone** | `standalone` | NOT shown | Database restored directly |
+| **Cluster + SAFE** | `cluster` | Shown, choice 1 | Export only + pvesh API apply |
+| **Cluster + RECOVERY** | `cluster` | Shown, choice 2 | Database restored directly |
+
+### Standalone Restore
+
+When restoring from a **standalone PVE backup**:
+
+1. **No additional prompts** - The workflow proceeds directly
+2. **Direct database restore** - `/var/lib/pve-cluster/config.db` is overwritten
+3. **Automatic service management** - PVE services are stopped, database restored, services restarted
+4. **No isolation required** - Single node has no split-brain risk
+
+```
+Detected system type: Proxmox Virtual Environment (PVE)
+[Backup is from standalone node - no SAFE/RECOVERY prompt]
+
+Preparing system for cluster database restore: stopping PVE services...
+Stopping pve-cluster, pvedaemon, pveproxy, pvestatd...
+Unmounting /etc/pve...
+Extracting /var/lib/pve-cluster/config.db...
+Restarting PVE services...
+```
+
+### Cluster Restore - SAFE Mode
+
+When restoring from a **cluster backup** and selecting **SAFE mode** (option 1):
+
+1. **Files are EXPORTED only** - NOT written to system paths
+2. **Database is NOT modified** - Current cluster state preserved
+3. **pvesh API apply** - User can selectively apply configurations:
+   - VM/CT configs applied one by one
+   - Storage definitions applied individually
+   - Datacenter config applied if desired
+4. **Non-destructive** - Safe for active clusters
+
+```
+Cluster backup detected. Choose how to restore:
+  [1] SAFE: Export cluster files only (apply via API)  ← SELECTED
+  [2] RECOVERY: Full database restore
+
+Exporting /etc/pve contents to: /opt/proxmox-backup/pve-config-export-*/
+
+SAFE cluster restore: applying configs via pvesh (node=pve01)
+Found 5 VM/CT configs for node pve01
+Apply all VM/CT configs via pvesh? (y/N): y
+Applied VM/CT config 100 (webserver)
+Applied VM/CT config 101 (database)
+...
+```
+
+### Cluster Restore - RECOVERY Mode
+
+When restoring from a **cluster backup** and selecting **RECOVERY mode** (option 2):
+
+1. **Same as Standalone** - Direct database restore
+2. **WARNING displayed** - User must confirm node isolation
+3. **Split-brain risk** - CRITICAL to isolate node before proceeding
+
+```
+Cluster backup detected. Choose how to restore:
+  [1] SAFE: Export cluster files only
+  [2] RECOVERY: Full database restore  ← SELECTED
+
+WARNING: Selected RECOVERY cluster restore
+Ensure other nodes are ISOLATED before proceeding!
+
+Preparing system for cluster database restore...
+[Same flow as Standalone]
+```
+
+### When to Use Each Mode
+
+| Use Case | Recommended Mode |
+|----------|------------------|
+| Recovering a single standalone node | Standalone (automatic) |
+| Recovering specific VM configs from cluster backup | Cluster SAFE |
+| Recovering storage definitions from cluster backup | Cluster SAFE |
+| Full disaster recovery, cluster destroyed | Cluster RECOVERY |
+| Single surviving node after cluster failure | Cluster RECOVERY + isolate first |
 
 ---
 
@@ -509,6 +679,58 @@ syncs via corosync (cluster communication)
 - Cannot write to `/etc/pve` directly (it's a FUSE mount)
 - Must stop pmxcfs to safely replace config.db
 - Must ensure cluster synchronization after restore
+
+### Cluster Restore Modes: SAFE vs RECOVERY
+
+When the backup was created from a cluster node (detected via manifest `ClusterMode: cluster`) and you select the `pve_cluster` category, the restore workflow presents two options:
+
+```
+Cluster backup detected. Choose how to restore the cluster database:
+  [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
+  [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
+  [0] Exit
+```
+
+#### Option 1: SAFE Mode (Recommended for Active Clusters)
+
+**What it does**:
+- Does **NOT** write to `/var/lib/pve-cluster/config.db`
+- Exports all cluster files to a separate directory for review
+- Offers to apply configurations via `pvesh` API (non-destructive)
+- Preserves your current running cluster state
+
+**When to use**:
+- Cluster is still operational
+- You want to selectively restore specific VMs or storage definitions
+- You're recovering individual configurations, not the entire cluster
+- You want to review changes before applying them
+
+**Post-restore actions (SAFE mode)**:
+After export, the workflow offers interactive options to apply configurations via `pvesh`:
+1. **VM/CT configs**: Scans exported configs and applies them via `pvesh set /nodes/<node>/qemu/<vmid>/config`
+2. **Storage configuration**: Applies `storage.cfg` entries via `pvesh set /cluster/storage/<id>`
+3. **Datacenter configuration**: Applies `datacenter.cfg` via `pvesh set /cluster/config`
+
+Each action prompts for confirmation before execution.
+
+#### Option 2: RECOVERY Mode (Full Cluster Restore)
+
+**What it does**:
+- Stops PVE cluster services (pve-cluster, pvedaemon, pveproxy, pvestatd)
+- Unmounts `/etc/pve` FUSE filesystem
+- Writes directly to `/var/lib/pve-cluster/config.db`
+- Restarts services with restored configuration
+
+**When to use**:
+- Complete disaster recovery
+- Cluster is completely offline or destroyed
+- Node is isolated from other cluster members
+- You have no working cluster to preserve
+
+**CRITICAL WARNING**:
+- Using RECOVERY mode on a node that is still part of an active cluster can cause split-brain
+- Always isolate the node first (stop corosync, disconnect network)
+- Other nodes may need to be removed and rejoined after restore
 
 ### Prerequisites
 
@@ -972,6 +1194,79 @@ Result:
 **Why Both?**:
 - `pve_cluster`: Restores the database (actual restore)
 - `pve_config_export`: Provides reference copy of old /etc/pve (for comparison)
+
+### pvesh SAFE Apply (Cluster SAFE Mode)
+
+When using **SAFE cluster restore mode**, the workflow offers to apply exported configurations via the Proxmox VE API (`pvesh`). This allows you to restore individual configurations without replacing the entire cluster database.
+
+**Available Actions**:
+
+#### 1. VM/CT Configuration Apply
+
+```
+Found 5 VM/CT configs for node pve01
+Apply all VM/CT configs via pvesh? (y/N): y
+```
+
+For each VM/CT config found in the export:
+- Reads config from `<export>/etc/pve/nodes/<node>/qemu-server/<vmid>.conf`
+- Applies via: `pvesh set /nodes/<node>/qemu/<vmid>/config --filename <config>`
+- Reports success/failure for each VM
+
+**Note**: This creates or updates VM configurations in the cluster. Disk images are NOT affected.
+
+#### 2. Storage Configuration Apply
+
+```
+Storage configuration found: /opt/proxmox-backup/pve-config-export-*/etc/pve/storage.cfg
+Apply storage.cfg via pvesh? (y/N): y
+```
+
+Parses `storage.cfg` and applies each storage definition:
+- Each `storage: <name>` block is extracted
+- Applied via: `pvesh set /cluster/storage/<name> -conf <block>`
+- Existing storage with same name will be updated
+
+**Note**: Storage directories are NOT created automatically. Run `pvesm status` to verify, then create missing directories manually.
+
+#### 3. Datacenter Configuration Apply
+
+```
+Datacenter configuration found: /opt/proxmox-backup/pve-config-export-*/etc/pve/datacenter.cfg
+Apply datacenter.cfg via pvesh? (y/N): y
+```
+
+Applies datacenter-wide settings:
+- Applied via: `pvesh set /cluster/config -conf <file>`
+- Affects all cluster nodes
+
+**Interactive Flow**:
+```
+SAFE cluster restore: applying configs via pvesh (node=pve01)
+
+Found 3 VM/CT configs for node pve01
+Apply all VM/CT configs via pvesh? (y/N): y
+Applied VM/CT config 100 (webserver)
+Applied VM/CT config 101 (database)
+Applied VM/CT config 102 (mailserver)
+VM/CT apply completed: ok=3 failed=0
+
+Storage configuration found: .../etc/pve/storage.cfg
+Apply storage.cfg via pvesh? (y/N): y
+Applied storage definition local
+Applied storage definition backup-nfs
+Storage apply completed: ok=2 failed=0
+
+Datacenter configuration found: .../etc/pve/datacenter.cfg
+Apply datacenter.cfg via pvesh? (y/N): n
+Skipping datacenter.cfg apply
+```
+
+**Benefits of pvesh Apply**:
+- Non-destructive: works with running cluster
+- Selective: apply only what you need
+- Auditable: each action logged
+- Reversible: changes can be undone via GUI/API
 
 ---
 

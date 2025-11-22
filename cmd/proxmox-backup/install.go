@@ -219,7 +219,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Println("  --install          - Re-run interactive installation/setup")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
-	fmt.Println("  --restore          - Restore data from a decrypted backup")
+	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
 	fmt.Println("  --upgrade-config-dry-run - Show differences between current configuration and the embedded template without modifying files")
 	fmt.Println("  --support          - Run backup in support mode (force debug log level and send email with attached log to github-support@tis24.it)")

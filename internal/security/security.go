@@ -813,8 +813,11 @@ func extractPort(address string) (int, string) {
 	}
 
 	// Remove wildcard notation like [::]:22
-	addr = strings.TrimPrefix(addr, "[")
-	addr = strings.TrimSuffix(addr, "]")
+	if strings.HasPrefix(addr, "[") {
+		if closing := strings.Index(addr, "]"); closing != -1 {
+			addr = addr[1:closing] + addr[closing+1:]
+		}
+	}
 
 	lastColon := strings.LastIndex(addr, ":")
 	if lastColon == -1 {

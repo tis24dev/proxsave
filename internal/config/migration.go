@@ -58,6 +58,7 @@ var migrationRules = map[string]migrationRule{
 	"MIN_DISK_SPACE_SECONDARY_GB": {LegacyKeys: []string{"STORAGE_WARNING_THRESHOLD_SECONDARY"}},
 	"CONTINUE_ON_SECURITY_ISSUES": {LegacyKeys: []string{"ABORT_ON_SECURITY_ISSUES"}, Transform: invertBool},
 	"USE_COLOR":                   {LegacyKeys: []string{"DISABLE_COLORS"}, Transform: invertBool},
+	"SECURITY_CHECK_ENABLED":      {LegacyKeys: []string{"FULL_SECURITY_CHECK"}},
 }
 
 // MigrateLegacyEnv creates a new Go-style backup.env by reading the legacy Bash

@@ -173,36 +173,58 @@ func RunRestoreWorkflow(
 
 **Key Sections**:
 
-1. **Preparation** (Lines 28-91):
+1. **Preparation** (Lines 28-66):
    - Decrypt backup if needed
    - Detect system type
    - Validate compatibility
    - Analyze categories
 
-2. **Category Selection** (Lines 93-116):
-   - Split normal vs export-only
-   - User selects mode and categories
-   - Validate selection
+2. **Mode & Category Selection** (Lines 68-91):
+   - User selects restore mode (Full/Storage/Base/Custom)
+   - Interactive category selection for Custom mode
+   - Build category list
 
-3. **Safety Backup** (Lines 117-134):
+3. **Cluster SAFE/RECOVERY Prompt** (Lines 93-116):
+   - Detect if backup is from cluster node (`manifest.ClusterMode`)
+   - Prompt user: SAFE (export+API) vs RECOVERY (full restore)
+   - Redirect pve_cluster to export-only if SAFE mode selected
+   - `promptClusterRestoreMode()` function
+
+4. **Category Split & Plan** (Lines 118-137):
+   - Split normal vs export-only categories
+   - `splitExportCategories()`, `redirectClusterCategoryToExport()`
+   - Show restore plan and confirm
+
+5. **Safety Backup** (Lines 139-156):
    - Backup files to be overwritten
    - Handle backup failures
 
-4. **Service Management** (Lines 136-155):
-   - Detect cluster restore need
-   - Stop PVE services
+6. **PVE Service Management** (Lines 158-179):
+   - Detect cluster restore need (RECOVERY mode)
+   - Stop PVE services: pve-cluster, pvedaemon, pveproxy, pvestatd
    - Unmount /etc/pve
    - Defer restart
 
-5. **File Extraction** (Lines 157-189):
+7. **PBS Service Management** (Lines 181-204):
+   - Detect PBS-specific category restore need
+   - Stop PBS services: proxmox-backup-proxy, proxmox-backup
+   - Prompt to continue if stop fails
+   - Defer restart
+
+8. **File Extraction** (Lines 206-239):
    - Extract normal categories to /
-   - Extract export categories separately
+   - Extract export categories to timestamped directory
    - Handle extraction errors
 
-6. **Post-Restore** (Lines 191-238):
-   - Recreate storage directories
-   - Check ZFS pools
-   - Display completion summary
+9. **pvesh SAFE Apply** (Lines 241-248):
+   - If SAFE cluster mode selected
+   - `runSafeClusterApply()` function
+   - Apply VM/CT configs, storage.cfg, datacenter.cfg via API
+
+10. **Post-Restore** (Lines 250-303):
+    - Recreate storage/datastore directories
+    - Check ZFS pools (PBS only)
+    - Display completion summary
 
 ### File: internal/orchestrator/categories.go
 
@@ -1000,6 +1022,49 @@ Stop order:  pve-cluster → pvedaemon → pveproxy → pvestatd
 Start order: pve-cluster → pvedaemon → pveproxy → pvestatd
 ```
 
+**PBS Service Dependency Graph**:
+
+```
+proxmox-backup-proxy
+    ↓ (provides web interface and API)
+proxmox-backup
+    (provides backup/restore operations)
+
+Stop order:  proxmox-backup-proxy → proxmox-backup
+Start order: proxmox-backup → proxmox-backup-proxy
+```
+
+**PBS Service Management Code**:
+```go
+func stopPBSServices(ctx context.Context, logger *logging.Logger) error {
+    commands := [][]string{
+        {"systemctl", "stop", "proxmox-backup-proxy"},
+        {"systemctl", "stop", "proxmox-backup"},
+    }
+    // ... execute with error collection
+}
+
+func startPBSServices(ctx context.Context, logger *logging.Logger) error {
+    commands := [][]string{
+        {"systemctl", "start", "proxmox-backup"},
+        {"systemctl", "start", "proxmox-backup-proxy"},
+    }
+    // ... execute with error collection
+}
+```
+
+**PBS Service Trigger**: PBS services are stopped when any PBS-specific category is selected:
+```go
+func shouldStopPBSServices(categories []Category) bool {
+    for _, cat := range categories {
+        if cat.Type == CategoryTypePBS {
+            return true
+        }
+    }
+    return false
+}
+```
+
 ### Error Handling Philosophy
 
 **Stop Phase**: **FAIL-FAST**
@@ -1020,6 +1085,110 @@ defer func() {
 }()
 ```
 **Reason**: Restore already done, aborting doesn't help
+
+---
+
+## Cluster SAFE/RECOVERY Mode
+
+### Standalone vs Cluster Detection
+
+The `ClusterMode` field in the backup manifest determines restore behavior:
+
+| Manifest Value | Detection | Prompt Shown | Restore Behavior |
+|----------------|-----------|--------------|------------------|
+| `"standalone"` or empty | Standalone | NO | Direct database restore |
+| `"cluster"` | Cluster | YES | SAFE or RECOVERY choice |
+
+**ClusterMode is set during backup** in `bash.go`:
+```go
+if stats.IsPVEClusterNode {
+    stats.ClusterMode = "cluster"
+} else {
+    stats.ClusterMode = "standalone"
+}
+```
+
+### Detection Logic
+
+The workflow detects cluster backups via the manifest's `ClusterMode` field:
+
+```go
+if systemType == SystemTypePVE &&
+   strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster") &&
+   hasCategoryID(selectedCategories, "pve_cluster") {
+    // Cluster backup detected, prompt for SAFE vs RECOVERY
+}
+```
+
+**For standalone backups**: This condition is FALSE, so:
+- No SAFE/RECOVERY prompt is shown
+- `pve_cluster` remains in `normalCategories`
+- Database is restored directly (same as RECOVERY mode)
+
+**For cluster backups**: This condition is TRUE, so:
+- SAFE/RECOVERY prompt is shown
+- User chooses restore strategy
+- SAFE mode redirects to export + pvesh API
+
+### SAFE Mode Implementation
+
+When SAFE mode is selected:
+
+```go
+if choice == 1 { // SAFE mode
+    clusterSafeMode = true
+    // Redirect pve_cluster from normal to export-only
+    normalCategories, exportCategories = redirectClusterCategoryToExport(normalCategories, exportCategories)
+}
+```
+
+**`redirectClusterCategoryToExport()`**:
+```go
+func redirectClusterCategoryToExport(normal []Category, export []Category) ([]Category, []Category) {
+    filtered := make([]Category, 0, len(normal))
+    for _, cat := range normal {
+        if cat.ID == "pve_cluster" {
+            export = append(export, cat) // Move to export
+            continue
+        }
+        filtered = append(filtered, cat)
+    }
+    return filtered, export
+}
+```
+
+### pvesh SAFE Apply
+
+After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restoration:
+
+**Key Functions**:
+- `scanVMConfigs()`: Scans `<export>/etc/pve/nodes/<node>/qemu-server/` and `lxc/`
+- `applyVMConfigs()`: Applies each config via `pvesh set /nodes/<node>/<type>/<vmid>/config`
+- `applyStorageCfg()`: Parses storage.cfg blocks and applies via `pvesh set /cluster/storage/<id>`
+- `runPvesh()`: Executes pvesh commands with logging
+
+**Flow**:
+```go
+func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) error {
+    // 1. Scan and apply VM/CT configs
+    vmEntries, _ := scanVMConfigs(exportRoot, currentNode)
+    if len(vmEntries) > 0 && promptYesNo("Apply all VM/CT configs via pvesh?") {
+        applyVMConfigs(ctx, vmEntries, logger)
+    }
+
+    // 2. Apply storage.cfg
+    storageCfg := filepath.Join(exportRoot, "etc/pve/storage.cfg")
+    if fileExists(storageCfg) && promptYesNo("Apply storage.cfg via pvesh?") {
+        applyStorageCfg(ctx, storageCfg, logger)
+    }
+
+    // 3. Apply datacenter.cfg
+    dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
+    if fileExists(dcCfg) && promptYesNo("Apply datacenter.cfg via pvesh?") {
+        runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", dcCfg})
+    }
+}
+```
 
 ---
 

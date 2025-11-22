@@ -95,7 +95,7 @@ Next step: ./build/proxmox-backup --dry-run
 
 For those who prefer manual control or want to understand the changes:
 
-**📄 BACKUP_ENV_MAPPING.md** - Complete Bash → Go variable mapping reference (in repository root)
+**📄 [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)** - Complete Bash → Go variable mapping reference
 
 **Quick migration workflow**:
 1. Open your Bash `backup.env`
@@ -475,7 +475,7 @@ COMPRESSION_MODE=standard
 
 ### Still Having Issues?
 
-1. **Review the complete mapping guide**: [BACKUP_ENV_MAPPING.md](../BACKUP_ENV_MAPPING.md)
+1. **Review the complete mapping guide**: [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)
 2. **Compare configs side-by-side**:
    ```bash
    diff -u /path/to/bash/backup.env configs/backup.env
@@ -498,7 +498,7 @@ COMPRESSION_MODE=standard
 ## Related Documentation
 
 ### Migration Resources
-- **BACKUP_ENV_MAPPING.md** - Complete Bash → Go variable mapping (in repository root)
+- **BACKUP_ENV_MAPPING.md** - Complete Bash → Go variable mapping
 - **[Legacy Bash Guide](LEGACY_BASH.md)** - Information about the Bash version
 
 ### Configuration

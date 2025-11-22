@@ -224,7 +224,7 @@ You can then manually add your custom variables by referring to the mapping guid
 
 The project includes a complete environment variable mapping guide to help you migrate your configuration:
 
-**📄 [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)** - Complete Bash → Go variable mapping reference
+**📄 [BACKUP_ENV_MAPPING.md](docs/BACKUP_ENV_MAPPING.md)** - Complete Bash → Go variable mapping reference
 
 This guide categorizes every variable:
 - **SAME**: Variables with identical names (just copy them)
@@ -326,7 +326,7 @@ This guide categorizes every variable:
 - **Solution**: Split `CLOUD_BACKUP_PATH` into `CLOUD_REMOTE` (remote:path) and `CLOUD_REMOTE_PATH` (prefix)
 
 **Still having issues?**
-- Review the complete mapping guide: [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)
+- Review the complete mapping guide: [BACKUP_ENV_MAPPING.md](docs/BACKUP_ENV_MAPPING.md)
 - Compare your Bash config with the Go template side-by-side
 - Enable debug logging: `./build/proxmox-backup --dry-run --log-level debug`
 

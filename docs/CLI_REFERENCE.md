@@ -277,24 +277,27 @@ Next step: ./build/proxmox-backup --dry-run
 ./build/proxmox-backup --restore
 ```
 
-**`--restore` workflow**:
+**`--restore` workflow** (14 phases):
 1. Scans configured storage locations (local/secondary/cloud)
 2. Lists available backups with metadata (encrypted or unencrypted)
-3. If encrypted, prompts for decryption key/passphrase
-4. Presents restore mode selection:
+3. If encrypted, prompts for decryption key/passphrase and decrypts
+4. Validates system compatibility (PVE/PBS mismatch warning)
+5. Analyzes backup categories
+6. Presents restore mode selection:
    - **Full Restore**: All categories
    - **Storage Restore**: PVE/PBS-specific configs
    - **Base System Restore**: Network, SSH, system files
    - **Custom Restore**: Select specific categories
-5. Shows selected categories for review
-6. Requires confirmation: type `RESTORE` to proceed
-7. Creates safety backup of existing files
-8. Extracts selected categories to system root (`/`)
-9. For cluster configs (`/etc/pve`):
-   - Stops cluster services in correct order
-   - Extracts to system
-   - Restarts services with defer pattern
-10. Verifies restoration and reports results
+7. For cluster backups: prompts for **SAFE** (export+API) or **RECOVERY** (full restore) mode
+8. Shows detailed restore plan with selected categories
+9. Requires confirmation: type `RESTORE` to proceed
+10. Creates safety backup of existing files
+11. Stops services if needed (PVE: pve-cluster, pvedaemon, pveproxy, pvestatd; PBS: proxmox-backup-proxy, proxmox-backup)
+12. Extracts selected categories to system root (`/`)
+13. Exports export-only categories to separate directory
+14. For SAFE cluster mode: offers to apply configs via `pvesh` API
+15. Recreates storage/datastore directories, checks ZFS pools
+16. Restarts services and displays completion summary
 
 **⚠️ WARNING**: Restore operations overwrite files in-place. **Always test in a VM or snapshot your system first!**
 
@@ -307,7 +310,7 @@ Next step: ./build/proxmox-backup --dry-run
 
 | Flag | Description |
 |------|-------------|
-| `--restore` | Restore data from backup to system |
+| `--restore` | Run interactive restore workflow (select bundle, decrypt if needed, apply to system) |
 
 ---
 
