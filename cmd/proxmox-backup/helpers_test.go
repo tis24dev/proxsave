@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,6 +67,62 @@ func TestSetEnvValue_SupportsValuesWithEquals(t *testing.T) {
 	result := setEnvValue(template, "FOO", "a=b=c")
 
 	assertContains(t, result, "FOO=a=b=c")
+}
+
+func TestResolveInstallConfigPath(t *testing.T) {
+	t.Run("absolute path", func(t *testing.T) {
+		got, err := resolveInstallConfigPath("/etc/config.env")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "/etc/config.env" {
+			t.Fatalf("expected absolute path untouched, got %q", got)
+		}
+	})
+
+	t.Run("empty path", func(t *testing.T) {
+		if _, err := resolveInstallConfigPath("  "); err == nil {
+			t.Fatal("expected error for empty path")
+		}
+	})
+}
+
+type stubLogger struct {
+	warns []string
+}
+
+func (s *stubLogger) Warning(format string, args ...interface{}) {
+	s.warns = append(s.warns, fmt.Sprintf(format, args...))
+}
+func (s *stubLogger) Info(format string, args ...interface{}) {}
+
+func TestEnsureConfigExists(t *testing.T) {
+	t.Run("empty path", func(t *testing.T) {
+		if err := ensureConfigExists("   ", &stubLogger{}); err == nil {
+			t.Fatal("expected error for empty path")
+		}
+	})
+
+	t.Run("existing file", func(t *testing.T) {
+		tmp := filepath.Join(t.TempDir(), "config.env")
+		if err := os.WriteFile(tmp, []byte("data"), 0o644); err != nil {
+			t.Fatalf("failed to write tmp file: %v", err)
+		}
+		if err := ensureConfigExists(tmp, &stubLogger{}); err != nil {
+			t.Fatalf("expected nil error for existing file: %v", err)
+		}
+	})
+
+	t.Run("missing file warns", func(t *testing.T) {
+		logger := &stubLogger{}
+		tmp := filepath.Join(t.TempDir(), "missing.env")
+		if err := ensureConfigExists(tmp, logger); err == nil {
+			t.Fatal("expected error for missing file")
+		}
+		if len(logger.warns) == 0 {
+			t.Fatal("expected warnings to be logged for missing file")
+		}
+	})
 }
 
 func TestSanitizeEnvValue(t *testing.T) {
@@ -386,6 +444,9 @@ func TestValidateFutureFeatures_CloudDisabledWhenNoRemote(t *testing.T) {
 	}
 	if cfg.CloudEnabled {
 		t.Error("cloud should be disabled when remote is empty")
+	}
+	if cfg.CloudRemote != "" || cfg.CloudLogPath != "" {
+		t.Errorf("cloud fields should be cleared; remote=%q logPath=%q", cfg.CloudRemote, cfg.CloudLogPath)
 	}
 }
 
