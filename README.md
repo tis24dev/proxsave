@@ -657,6 +657,10 @@ Complete documentation is available in the `docs/` directory:
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
 
+### Third-Party Licenses
+
+This project uses third-party libraries licensed under BSD-3-Clause and MIT licenses. For complete attribution and license texts, see [THIRD-PARTY-LICENSES](.github/THIRD-PARTY-LICENSES.md).
+
 ---
 
 ## Restore Operations

@@ -669,7 +669,8 @@ func formatTargetSummary(manifest *backup.Manifest) string {
 }
 
 func statusFromManifest(manifest *backup.Manifest) string {
-	if strings.EqualFold(manifest.EncryptionMode, "age") {
+	mode := strings.TrimSpace(manifest.EncryptionMode)
+	if strings.EqualFold(mode, "age") {
 		return "encrypted"
 	}
 	return "plain"
