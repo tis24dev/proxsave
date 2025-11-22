@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -672,7 +671,7 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 	}
 
 	// Check if command exists
-	if _, err := exec.LookPath(cmdParts[0]); err != nil {
+	if _, err := execLookPath(cmdParts[0]); err != nil {
 		if critical {
 			c.incFilesFailed()
 			return fmt.Errorf("critical command not available: %s", cmdParts[0])
@@ -686,51 +685,32 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 		return nil
 	}
 
-	// Ensure output directory exists
-	if err := c.ensureDir(filepath.Dir(output)); err != nil {
-		return err
-	}
-
-	// Execute command
-	execCmd := exec.CommandContext(ctx, cmdParts[0], cmdParts[1:]...)
-	outFile, err := os.OpenFile(output, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	cmdString := strings.Join(cmdParts, " ")
+	out, err := runCommand(ctx, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		c.incFilesFailed()
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer func() { _ = outFile.Close() }()
-
-	var outputBuf bytes.Buffer
-	multiWriter := io.MultiWriter(outFile, &outputBuf)
-	execCmd.Stdout = multiWriter
-	execCmd.Stderr = multiWriter
-
-	if err := execCmd.Run(); err != nil {
-		if closeErr := outFile.Close(); closeErr != nil {
-			c.logger.Debug("Failed to close output file for %s: %v", description, closeErr)
-		}
-		if removeErr := os.Remove(output); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			c.logger.Debug("Failed to remove incomplete output %s: %v", output, removeErr)
-		}
 		if critical {
 			c.incFilesFailed()
-			return fmt.Errorf("critical command failed for %s: %w", description, err)
-		}
-		cmdString := cmd
-		if len(cmdParts) > 0 {
-			cmdString = strings.Join(cmdParts, " ")
+			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
 		}
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the PBS CLI is available and has proper permissions. Output: %s",
 			description,
 			cmdString,
 			err,
-			summarizeCommandOutput(&outputBuf),
+			summarizeCommandOutputText(string(out)),
 		)
 		return nil // Non-critical failure
 	}
 
+	if err := c.ensureDir(filepath.Dir(output)); err != nil {
+		return err
+	}
+	if err := os.WriteFile(output, out, 0640); err != nil {
+		c.incFilesFailed()
+		return fmt.Errorf("failed to write output %s: %w", output, err)
+	}
+
 	c.incFilesProcessed()
-	c.logger.Debug("Successfully collected %s via command: %s", description, cmd)
+	c.logger.Debug("Successfully collected %s via command: %s", description, cmdString)
 
 	return nil
 }
@@ -748,7 +728,7 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 	}
 
 	// Check if command exists
-	if _, err := exec.LookPath(cmdParts[0]); err != nil {
+	if _, err := execLookPath(cmdParts[0]); err != nil {
 		if critical {
 			c.incFilesFailed()
 			return fmt.Errorf("critical command not available: %s", cmdParts[0])
@@ -762,27 +742,19 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 		return nil
 	}
 
-	// Ensure output directory exists
-	if err := c.ensureDir(filepath.Dir(output)); err != nil {
-		return err
-	}
-
-	// Execute command with PBS authentication environment
-	execCmd := exec.CommandContext(ctx, cmdParts[0], cmdParts[1:]...)
-
 	// Set PBS authentication environment variables (if available)
-	execCmd.Env = os.Environ()
+	var extraEnv []string
 	pbsAuthUsed := false
 	if c.config.PBSRepository != "" {
-		execCmd.Env = append(execCmd.Env, fmt.Sprintf("PBS_REPOSITORY=%s", c.config.PBSRepository))
+		extraEnv = append(extraEnv, fmt.Sprintf("PBS_REPOSITORY=%s", c.config.PBSRepository))
 		pbsAuthUsed = true
 	}
 	if c.config.PBSPassword != "" {
-		execCmd.Env = append(execCmd.Env, fmt.Sprintf("PBS_PASSWORD=%s", c.config.PBSPassword))
+		extraEnv = append(extraEnv, fmt.Sprintf("PBS_PASSWORD=%s", c.config.PBSPassword))
 		pbsAuthUsed = true
 	}
 	if c.config.PBSFingerprint != "" {
-		execCmd.Env = append(execCmd.Env, fmt.Sprintf("PBS_FINGERPRINT=%s", c.config.PBSFingerprint))
+		extraEnv = append(extraEnv, fmt.Sprintf("PBS_FINGERPRINT=%s", c.config.PBSFingerprint))
 		pbsAuthUsed = true
 	}
 
@@ -790,49 +762,33 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 		c.logger.Debug("Using PBS authentication for command: %s", cmdParts[0])
 	}
 
-	outFile, err := os.OpenFile(output, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	cmdString := strings.Join(cmdParts, " ")
+	out, err := runCommandWithEnv(ctx, extraEnv, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		c.incFilesFailed()
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer func() {
-		if outFile != nil {
-			_ = outFile.Close()
-		}
-	}()
-
-	var outputBuf bytes.Buffer
-	multiWriter := io.MultiWriter(outFile, &outputBuf)
-	execCmd.Stdout = multiWriter
-	execCmd.Stderr = multiWriter
-
-	if err := execCmd.Run(); err != nil {
-		if closeErr := outFile.Close(); closeErr != nil {
-			c.logger.Debug("Failed to close output file for %s: %v", description, closeErr)
-		}
-		outFile = nil
-		if removeErr := os.Remove(output); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			c.logger.Debug("Failed to remove incomplete output %s: %v", output, removeErr)
-		}
 		if critical {
 			c.incFilesFailed()
-			return fmt.Errorf("critical command failed for %s: %w", description, err)
-		}
-		cmdString := cmd
-		if len(cmdParts) > 0 {
-			cmdString = strings.Join(cmdParts, " ")
+			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
 		}
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the PBS CLI is available and has proper permissions. Output: %s",
 			description,
 			cmdString,
 			err,
-			summarizeCommandOutput(&outputBuf),
+			summarizeCommandOutputText(string(out)),
 		)
 		return nil // Non-critical failure
 	}
 
+	if err := c.ensureDir(filepath.Dir(output)); err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(output, out, 0640); err != nil {
+		c.incFilesFailed()
+		return fmt.Errorf("failed to write output %s: %w", output, err)
+	}
+
 	c.incFilesProcessed()
-	c.logger.Debug("Successfully collected %s via PBS-authenticated command: %s", description, cmd)
+	c.logger.Debug("Successfully collected %s via PBS-authenticated command: %s", description, cmdString)
 
 	return nil
 }
@@ -850,7 +806,7 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
 	}
 
 	// Check if command exists
-	if _, err := exec.LookPath(cmdParts[0]); err != nil {
+	if _, err := execLookPath(cmdParts[0]); err != nil {
 		if critical {
 			c.incFilesFailed()
 			return fmt.Errorf("critical command not available: %s", cmdParts[0])
@@ -863,17 +819,6 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
 		c.logger.Debug("[DRY RUN] Would execute command with PBS auth for datastore %s: %s > %s", datastoreName, cmd, output)
 		return nil
 	}
-
-	// Ensure output directory exists
-	if err := c.ensureDir(filepath.Dir(output)); err != nil {
-		return err
-	}
-
-	// Execute command with PBS authentication environment
-	execCmd := exec.CommandContext(ctx, cmdParts[0], cmdParts[1:]...)
-
-	// Set PBS authentication environment variables with datastore
-	execCmd.Env = os.Environ()
 
 	// Check if PBS credentials are configured
 	if c.config.PBSRepository == "" && c.config.PBSPassword == "" {
@@ -902,61 +847,45 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
 		c.logger.Debug("Using default user root@pam for PBS repository")
 	}
 
-	execCmd.Env = append(execCmd.Env, fmt.Sprintf("PBS_REPOSITORY=%s", repoWithDatastore))
+	var extraEnv []string
+	extraEnv = append(extraEnv, fmt.Sprintf("PBS_REPOSITORY=%s", repoWithDatastore))
 	c.logger.Debug("Using PBS_REPOSITORY=%s", repoWithDatastore)
 
 	if c.config.PBSPassword != "" {
-		execCmd.Env = append(execCmd.Env, fmt.Sprintf("PBS_PASSWORD=%s", c.config.PBSPassword))
+		extraEnv = append(extraEnv, fmt.Sprintf("PBS_PASSWORD=%s", c.config.PBSPassword))
 		c.logger.Debug("Using PBS_PASSWORD (hidden)")
 	}
 	if c.config.PBSFingerprint != "" {
-		execCmd.Env = append(execCmd.Env, fmt.Sprintf("PBS_FINGERPRINT=%s", c.config.PBSFingerprint))
+		extraEnv = append(extraEnv, fmt.Sprintf("PBS_FINGERPRINT=%s", c.config.PBSFingerprint))
 		c.logger.Debug("Using PBS_FINGERPRINT=%s", c.config.PBSFingerprint)
 	}
 
-	outFile, err := os.OpenFile(output, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	cmdString := strings.Join(cmdParts, " ")
+	out, err := runCommandWithEnv(ctx, extraEnv, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		c.incFilesFailed()
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer func() {
-		if outFile != nil {
-			_ = outFile.Close()
-		}
-	}()
-
-	var outputBuf bytes.Buffer
-	multiWriter := io.MultiWriter(outFile, &outputBuf)
-	execCmd.Stdout = multiWriter
-	execCmd.Stderr = multiWriter
-
-	if err := execCmd.Run(); err != nil {
-		if closeErr := outFile.Close(); closeErr != nil {
-			c.logger.Debug("Failed to close output file for %s: %v", description, closeErr)
-		}
-		outFile = nil
-		if removeErr := os.Remove(output); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			c.logger.Debug("Failed to remove incomplete output %s: %v", output, removeErr)
-		}
 		if critical {
 			c.incFilesFailed()
-			return fmt.Errorf("critical command failed for %s: %w", description, err)
-		}
-		cmdString := cmd
-		if len(cmdParts) > 0 {
-			cmdString = strings.Join(cmdParts, " ")
+			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
 		}
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the PBS CLI is available and has proper permissions. Output: %s",
 			description,
 			cmdString,
 			err,
-			summarizeCommandOutput(&outputBuf),
+			summarizeCommandOutputText(string(out)),
 		)
 		return nil // Non-critical failure
 	}
 
+	if err := c.ensureDir(filepath.Dir(output)); err != nil {
+		return err
+	}
+	if err := os.WriteFile(output, out, 0640); err != nil {
+		c.incFilesFailed()
+		return fmt.Errorf("failed to write output %s: %w", output, err)
+	}
+
 	c.incFilesProcessed()
-	c.logger.Debug("Successfully collected %s via PBS-authenticated command for datastore %s: %s", description, datastoreName, cmd)
+	c.logger.Debug("Successfully collected %s via PBS-authenticated command for datastore %s: %s", description, datastoreName, cmdString)
 
 	return nil
 }
@@ -1042,7 +971,7 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		return nil, fmt.Errorf("empty command")
 	}
 
-	if _, err := exec.LookPath(parts[0]); err != nil {
+	if _, err := execLookPath(parts[0]); err != nil {
 		if critical {
 			c.incFilesFailed()
 			return nil, fmt.Errorf("critical command not available: %s", parts[0])
@@ -1056,8 +985,7 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		return nil, nil
 	}
 
-	execCmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
-	out, err := execCmd.CombinedOutput()
+	out, err := runCommand(ctx, parts[0], parts[1:]...)
 	if err != nil {
 		cmdString := strings.Join(parts, " ")
 		if critical {

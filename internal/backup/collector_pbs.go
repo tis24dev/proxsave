@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -21,6 +20,8 @@ type pbsDatastore struct {
 	Path    string
 	Comment string
 }
+
+var listNamespacesFunc = pbs.ListNamespaces
 
 // CollectPBSConfigs collects Proxmox Backup Server specific configurations
 func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
@@ -456,7 +457,7 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
 // using CLI first, then filesystem fallback.
 func (c *Collector) collectDatastoreNamespaces(ds pbsDatastore, datastoreDir string) error {
 	c.logger.Debug("Collecting namespaces for datastore %s (path: %s)", ds.Name, ds.Path)
-	namespaces, fromFallback, err := pbs.ListNamespaces(ds.Name, ds.Path)
+	namespaces, fromFallback, err := listNamespacesFunc(ds.Name, ds.Path)
 	if err != nil {
 		return err
 	}
@@ -843,12 +844,11 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 	}
 	c.logger.Debug("Enumerating PBS datastores via proxmox-backup-manager")
 
-	if _, err := exec.LookPath("proxmox-backup-manager"); err != nil {
+	if _, err := execLookPath("proxmox-backup-manager"); err != nil {
 		return nil, nil
 	}
 
-	cmd := exec.CommandContext(ctx, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
-	output, err := cmd.CombinedOutput()
+	output, err := runCommand(ctx, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
 	if err != nil {
 		return nil, fmt.Errorf("proxmox-backup-manager datastore list failed: %w", err)
 	}
@@ -915,18 +915,17 @@ func (c *Collector) hasTapeSupport(ctx context.Context) (bool, error) {
 	}
 	c.logger.Debug("Checking PBS tape support configuration")
 
-	if _, err := os.Stat("/etc/proxmox-backup/tape.cfg"); err == nil {
+	if _, err := statFunc("/etc/proxmox-backup/tape.cfg"); err == nil {
 		c.logger.Debug("Detected /etc/proxmox-backup/tape.cfg, tape support enabled")
 		return true, nil
 	}
 
-	if _, err := exec.LookPath("proxmox-tape"); err != nil {
+	if _, err := execLookPath("proxmox-tape"); err != nil {
 		c.logger.Debug("proxmox-tape CLI not available, tape support disabled")
 		return false, nil
 	}
 
-	cmd := exec.CommandContext(ctx, "proxmox-tape", "drive", "list")
-	output, err := cmd.CombinedOutput()
+	output, err := runCommand(ctx, "proxmox-tape", "drive", "list")
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()

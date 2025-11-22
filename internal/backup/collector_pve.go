@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1161,7 +1160,7 @@ func (c *Collector) collectPVECephInfo(ctx context.Context) error {
 		}
 	}
 
-	if _, err := exec.LookPath("ceph"); err != nil {
+	if _, err := execLookPath("ceph"); err != nil {
 		c.logger.Debug("Ceph CLI not available, skipping Ceph command outputs")
 		return nil
 	}
@@ -1668,9 +1667,8 @@ func (c *Collector) isClusteredPVE(ctx context.Context) (bool, error) {
 	}
 
 	// Fallback to pvecm status
-	if _, err := exec.LookPath("pvecm"); err == nil {
-		cmd := exec.CommandContext(ctx, "pvecm", "status")
-		output, err := cmd.CombinedOutput()
+	if _, err := execLookPath("pvecm"); err == nil {
+		output, err := runCommand(ctx, "pvecm", "status")
 		if err != nil {
 			return false, fmt.Errorf("pvecm status failed: %w", err)
 		}
@@ -1734,11 +1732,10 @@ func (c *Collector) isServiceActive(ctx context.Context, service string) bool {
 	if service == "" {
 		return false
 	}
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	if _, err := execLookPath("systemctl"); err != nil {
 		return false
 	}
-	cmd := exec.CommandContext(ctx, "systemctl", "is-active", service)
-	if err := cmd.Run(); err == nil {
+	if _, err := runCommand(ctx, "systemctl", "is-active", service); err == nil {
 		return true
 	}
 	return false
@@ -1865,11 +1862,10 @@ func (c *Collector) cephServiceActive(ctx context.Context) bool {
 }
 
 func (c *Collector) cephStorageConfigured(ctx context.Context) bool {
-	if _, err := exec.LookPath("pvesm"); err != nil {
+	if _, err := execLookPath("pvesm"); err != nil {
 		return false
 	}
-	cmd := exec.CommandContext(ctx, "pvesm", "status")
-	output, err := cmd.CombinedOutput()
+	output, err := runCommand(ctx, "pvesm", "status")
 	if err != nil {
 		return false
 	}
@@ -1878,24 +1874,22 @@ func (c *Collector) cephStorageConfigured(ctx context.Context) bool {
 }
 
 func (c *Collector) cephStatusAvailable(ctx context.Context) bool {
-	if _, err := exec.LookPath("ceph"); err != nil {
+	if _, err := execLookPath("ceph"); err != nil {
 		return false
 	}
 	statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(statusCtx, "ceph", "-s")
-	if err := cmd.Run(); err == nil {
+	if _, err := runCommand(statusCtx, "ceph", "-s"); err == nil {
 		return true
 	}
 	return false
 }
 
 func (c *Collector) cephProcessesRunning(ctx context.Context) bool {
-	if _, err := exec.LookPath("pgrep"); err != nil {
+	if _, err := execLookPath("pgrep"); err != nil {
 		return false
 	}
-	cmd := exec.CommandContext(ctx, "pgrep", "-f", "ceph-")
-	if err := cmd.Run(); err == nil {
+	if _, err := runCommand(ctx, "pgrep", "-f", "ceph-"); err == nil {
 		return true
 	}
 	return false
