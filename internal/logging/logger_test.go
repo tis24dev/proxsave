@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"os"
+	"path/filepath"
+
 	"github.com/tis24dev/proxmox-backup/internal/types"
 )
 
@@ -226,5 +229,119 @@ func TestPackageLevelFunctions(t *testing.T) {
 		if !strings.Contains(output, level) {
 			t.Errorf("Output should contain %s", level)
 		}
+	}
+}
+
+func TestSetOutputNilDefaultsToStdout(t *testing.T) {
+	logger := New(types.LogLevelInfo, false)
+	logger.SetOutput(nil)
+	if logger.output != os.Stdout {
+		t.Fatalf("expected output to default to stdout when nil provided")
+	}
+}
+
+func TestOpenAndCloseLogFile(t *testing.T) {
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "app.log")
+
+	logger := New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatalf("OpenLogFile error: %v", err)
+	}
+	if logger.GetLogFilePath() != logPath {
+		t.Fatalf("GetLogFilePath = %s, want %s", logger.GetLogFilePath(), logPath)
+	}
+
+	logger.Info("hello")
+	logger.Warning("warn")
+	if err := logger.CloseLogFile(); err != nil {
+		t.Fatalf("CloseLogFile error: %v", err)
+	}
+	if logger.GetLogFilePath() != "" {
+		t.Fatalf("expected log file path to be cleared after close")
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	if !strings.Contains(string(content), "hello") || !strings.Contains(string(content), "warn") {
+		t.Fatalf("log file missing expected entries: %s", string(content))
+	}
+
+	// Second close should be a no-op
+	if err := logger.CloseLogFile(); err != nil {
+		t.Fatalf("second CloseLogFile should not error: %v", err)
+	}
+}
+
+func TestUsesColorAndGetLevel(t *testing.T) {
+	col := New(types.LogLevelInfo, true)
+	if !col.UsesColor() {
+		t.Fatalf("UsesColor should be true when enabled")
+	}
+	if col.GetLevel() != types.LogLevelInfo {
+		t.Fatalf("GetLevel mismatch")
+	}
+	col.SetLevel(types.LogLevelDebug)
+	if col.GetLevel() != types.LogLevelDebug {
+		t.Fatalf("GetLevel should reflect updated level")
+	}
+	plain := New(types.LogLevelInfo, false)
+	if plain.UsesColor() {
+		t.Fatalf("UsesColor should be false when disabled")
+	}
+}
+
+func TestWarningAndErrorCounters(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+
+	if logger.HasWarnings() || logger.HasErrors() {
+		t.Fatalf("counters should be false initially")
+	}
+	logger.Warning("warn")
+	if !logger.HasWarnings() || logger.HasErrors() {
+		t.Fatalf("warning should set HasWarnings only")
+	}
+	logger.Error("err")
+	logger.Critical("crit")
+	if !logger.HasErrors() {
+		t.Fatalf("error counter should be set after error/critical")
+	}
+	logger.Info("info")
+	logger.Debug("dbg")
+	if !strings.Contains(buf.String(), "warn") || !strings.Contains(buf.String(), "err") {
+		t.Fatalf("output missing expected messages: %s", buf.String())
+	}
+}
+
+func TestPhaseStepSkipNilReceiver(t *testing.T) {
+	var l *Logger
+	l.Phase("phase")
+	l.Step("step")
+	l.Skip("skip")
+	// No panic expected
+}
+
+func TestPackageLevelStepAndSkip(t *testing.T) {
+	var buf bytes.Buffer
+	customLogger := New(types.LogLevelDebug, false)
+	customLogger.SetOutput(&buf)
+	SetDefaultLogger(customLogger)
+
+	Step("step msg")
+	Skip("skip msg")
+
+	out := buf.String()
+	if !strings.Contains(out, "STEP") || !strings.Contains(out, "step msg") {
+		t.Fatalf("expected STEP output, got %s", out)
+	}
+	if !strings.Contains(out, "SKIP") || !strings.Contains(out, "skip msg") {
+		t.Fatalf("expected SKIP output, got %s", out)
 	}
 }

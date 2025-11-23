@@ -1,0 +1,152 @@
+package backup
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/tis24dev/proxmox-backup/internal/pbs"
+	"github.com/tis24dev/proxmox-backup/internal/types"
+)
+
+func TestGetDatastoreListNoBinary(t *testing.T) {
+	origLook := execLookPath
+	t.Cleanup(func() { execLookPath = origLook })
+	execLookPath = func(string) (string, error) { return "", errors.New("not found") }
+
+	collector := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false)
+	ds, err := collector.getDatastoreList(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if ds != nil && len(ds) != 0 {
+		t.Fatalf("expected empty datastores when binary missing")
+	}
+}
+
+func TestGetDatastoreListCommandErrorAndParseError(t *testing.T) {
+	origLook := execLookPath
+	origRun := runCommand
+	t.Cleanup(func() {
+		execLookPath = origLook
+		runCommand = origRun
+	})
+
+	execLookPath = func(string) (string, error) { return "/bin/true", nil }
+	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("cmd fail")
+	}
+
+	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false)
+	if _, err := c.getDatastoreList(context.Background()); err == nil {
+		t.Fatalf("expected error when command fails")
+	}
+
+	// Now simulate parse error
+	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("{invalid"), nil
+	}
+	if _, err := c.getDatastoreList(context.Background()); err == nil {
+		t.Fatalf("expected parse error for invalid JSON")
+	}
+}
+
+func TestGetDatastoreListSuccess(t *testing.T) {
+	origLook := execLookPath
+	origRun := runCommand
+	t.Cleanup(func() {
+		execLookPath = origLook
+		runCommand = origRun
+	})
+
+	execLookPath = func(string) (string, error) { return "/bin/true", nil }
+	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`[{"name":" ds1 ","path":"/store1","comment":" main "},{"name":"", "path":"/skip"}]`), nil
+	}
+
+	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false)
+	ds, err := c.getDatastoreList(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ds) != 1 || ds[0].Name != "ds1" || ds[0].Path != "/store1" || ds[0].Comment != "main" {
+		t.Fatalf("unexpected datastore parsed: %+v", ds)
+	}
+}
+
+func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
+	origList := listNamespacesFunc
+	t.Cleanup(func() { listNamespacesFunc = origList })
+
+	tmp := t.TempDir()
+	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
+	ds := pbsDatastore{Name: "store", Path: "/tmp/path"}
+	targetDir := filepath.Join(tmp, "ds")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	listNamespacesFunc = func(name, path string) ([]pbs.Namespace, bool, error) {
+		if name != ds.Name || path != ds.Path {
+			t.Fatalf("unexpected args %s %s", name, path)
+		}
+		return []pbs.Namespace{{Ns: "root", Path: "/root"}}, true, nil
+	}
+
+	if err := c.collectDatastoreNamespaces(ds, targetDir); err != nil {
+		t.Fatalf("collectDatastoreNamespaces error: %v", err)
+	}
+	nsPath := filepath.Join(targetDir, "store_namespaces.json")
+	if _, err := os.Stat(nsPath); err != nil {
+		t.Fatalf("expected namespaces file, got %v", err)
+	}
+
+	listNamespacesFunc = func(string, string) ([]pbs.Namespace, bool, error) {
+		return nil, false, errors.New("fail")
+	}
+	if err := c.collectDatastoreNamespaces(ds, targetDir); err == nil {
+		t.Fatalf("expected error when namespace listing fails")
+	}
+}
+
+func TestCollectUserTokensAggregates(t *testing.T) {
+	origLook := execLookPath
+	origRun := runCommand
+	t.Cleanup(func() {
+		execLookPath = origLook
+		runCommand = origRun
+	})
+	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
+	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`{"token":"ok"}`), nil
+	}
+
+	tmp := t.TempDir()
+	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
+
+	commandsDir := filepath.Join(tmp, "commands")
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatalf("mkdir commands: %v", err)
+	}
+	userList := []map[string]string{{"userid": "user@pam"}, {"userid": "second@pve"}}
+	data, _ := json.Marshal(userList)
+	if err := os.WriteFile(filepath.Join(commandsDir, "user_list.json"), data, 0o640); err != nil {
+		t.Fatalf("write user list: %v", err)
+	}
+
+	if err := c.collectUserConfigs(context.Background()); err != nil {
+		t.Fatalf("collectUserConfigs error: %v", err)
+	}
+
+	aggPath := filepath.Join(tmp, "users", "tokens.json")
+	if _, err := os.Stat(aggPath); err != nil {
+		t.Fatalf("expected aggregated tokens.json, got %v", err)
+	}
+	payload, _ := os.ReadFile(aggPath)
+	if !json.Valid(payload) {
+		t.Fatalf("aggregated tokens not valid json: %s", string(payload))
+	}
+}
