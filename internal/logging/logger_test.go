@@ -232,6 +232,27 @@ func TestPackageLevelFunctions(t *testing.T) {
 	}
 }
 
+func TestFatalUsesExitFunc(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+	exitCalled := 0
+	var exitCode int
+	logger.SetExitFunc(func(code int) {
+		exitCalled++
+		exitCode = code
+	})
+
+	logger.Fatal(types.ExitGenericError, "fatal message")
+
+	if exitCalled != 1 || exitCode != types.ExitGenericError.Int() {
+		t.Fatalf("exitFunc not called as expected, called=%d code=%d", exitCalled, exitCode)
+	}
+	if !strings.Contains(buf.String(), "fatal message") {
+		t.Fatalf("fatal log missing message: %s", buf.String())
+	}
+}
+
 func TestSetOutputNilDefaultsToStdout(t *testing.T) {
 	logger := New(types.LogLevelInfo, false)
 	logger.SetOutput(nil)

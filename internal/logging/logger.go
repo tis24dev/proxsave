@@ -20,6 +20,7 @@ type Logger struct {
 	logFile      *os.File // File di log (opzionale)
 	warningCount int64
 	errorCount   int64
+	exitFunc     func(int)
 }
 
 // New crea un nuovo logger
@@ -29,6 +30,7 @@ func New(level types.LogLevel, useColor bool) *Logger {
 		useColor:   useColor,
 		output:     os.Stdout,
 		timeFormat: "2006-01-02 15:04:05",
+		exitFunc:   os.Exit,
 	}
 }
 
@@ -48,6 +50,18 @@ func (l *Logger) SetLevel(level types.LogLevel) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.level = level
+}
+
+// SetExitFunc allows customizing the exit function (useful for tests).
+// If fn is nil, it restores os.Exit.
+func (l *Logger) SetExitFunc(fn func(int)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if fn == nil {
+		l.exitFunc = os.Exit
+		return
+	}
+	l.exitFunc = fn
 }
 
 // OpenLogFile apre un file di log e inizia la scrittura real-time
@@ -258,7 +272,12 @@ func (l *Logger) Critical(format string, args ...interface{}) {
 // Fatal scrive un log critico ed esce con il codice specificato
 func (l *Logger) Fatal(exitCode types.ExitCode, format string, args ...interface{}) {
 	l.Critical(format, args...)
-	os.Exit(exitCode.Int())
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.exitFunc == nil {
+		l.exitFunc = os.Exit
+	}
+	l.exitFunc(exitCode.Int())
 }
 
 // Package-level default logger
