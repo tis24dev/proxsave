@@ -189,7 +189,7 @@ func TestMigrateLegacyEnvRollsBackOnValidationFailure(t *testing.T) {
 			t.Fatalf("failed to write legacy env: %v", err)
 		}
 
-		originalContent := []byte("ORIGINAL_CONFIG")
+		originalContent := []byte(invalidPermissionsTemplate)
 		if err := os.WriteFile(outputPath, originalContent, 0600); err != nil {
 			t.Fatalf("failed to seed existing config: %v", err)
 		}
@@ -215,6 +215,68 @@ func TestPlanLegacyEnvMigrationFailsWhenLegacyMissing(t *testing.T) {
 		outputPath := filepath.Join(tmpDir, "out.env")
 		if _, _, err := PlanLegacyEnvMigration(filepath.Join(tmpDir, "missing.env"), outputPath); err == nil {
 			t.Fatalf("expected error for missing legacy env, got nil")
+		}
+	})
+}
+
+func TestPlanLegacyEnvMigrationUsesExistingConfigAsBase(t *testing.T) {
+	withTemplate(t, baseInstallTemplate, func() {
+		tmpDir := t.TempDir()
+		legacyPath := filepath.Join(tmpDir, "legacy.env")
+		outputPath := filepath.Join(tmpDir, "backup.env")
+
+		if err := os.WriteFile(legacyPath, []byte("LOCAL_BACKUP_PATH=/legacy/backup\n"), 0600); err != nil {
+			t.Fatalf("failed to write legacy env: %v", err)
+		}
+
+		existingContent := "BACKUP_PATH=/existing/backup\nLOG_PATH=/existing/log\nCUSTOM_SETTING=keep\n"
+		if err := os.WriteFile(outputPath, []byte(existingContent), 0600); err != nil {
+			t.Fatalf("failed to write existing config: %v", err)
+		}
+
+		summary, merged, err := PlanLegacyEnvMigration(legacyPath, outputPath)
+		if err != nil {
+			t.Fatalf("PlanLegacyEnvMigration returned error: %v", err)
+		}
+		if summary.OutputPath != outputPath {
+			t.Fatalf("summary.OutputPath=%s; want %s", summary.OutputPath, outputPath)
+		}
+
+		if !strings.Contains(merged, "CUSTOM_SETTING=keep") {
+			t.Fatalf("existing config content not preserved in merge:\n%s", merged)
+		}
+		if !strings.Contains(merged, "LOG_PATH=/existing/log") {
+			t.Fatalf("existing LOG_PATH not preserved:\n%s", merged)
+		}
+		if !strings.Contains(merged, "BACKUP_PATH=/legacy/backup") {
+			t.Fatalf("legacy LOCAL_BACKUP_PATH did not override existing backup path:\n%s", merged)
+		}
+	})
+}
+
+func TestPlanLegacyEnvMigrationFallsBackToTemplateWhenNoExistingConfig(t *testing.T) {
+	template := `BACKUP_PATH=/template/backup
+LOG_PATH=/template/log
+NEW_FLAG=true
+`
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		legacyPath := filepath.Join(tmpDir, "legacy.env")
+		outputPath := filepath.Join(tmpDir, "backup.env")
+
+		if err := os.WriteFile(legacyPath, []byte("LOCAL_BACKUP_PATH=/legacy/backup\n"), 0600); err != nil {
+			t.Fatalf("failed to write legacy env: %v", err)
+		}
+
+		_, merged, err := PlanLegacyEnvMigration(legacyPath, outputPath)
+		if err != nil {
+			t.Fatalf("PlanLegacyEnvMigration returned error: %v", err)
+		}
+		if !strings.Contains(merged, "NEW_FLAG=true") {
+			t.Fatalf("expected template-only value NEW_FLAG to be present:\n%s", merged)
+		}
+		if !strings.Contains(merged, "BACKUP_PATH=/legacy/backup") {
+			t.Fatalf("legacy value not merged:\n%s", merged)
 		}
 	})
 }

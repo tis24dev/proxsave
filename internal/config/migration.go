@@ -231,8 +231,18 @@ func PlanLegacyEnvMigration(legacyPath, outputPath string) (*EnvMigrationSummary
 		return nil, "", fmt.Errorf("failed to parse legacy configuration: %w", err)
 	}
 
-	template := DefaultEnvTemplate()
-	mergedContent, summary := mergeTemplateWithLegacy(template, legacyValues)
+	var baseTemplate string
+	if utils.FileExists(outputPath) {
+		content, err := os.ReadFile(outputPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read existing configuration: %w", err)
+		}
+		baseTemplate = string(content)
+	} else {
+		baseTemplate = DefaultEnvTemplate()
+	}
+
+	mergedContent, summary := mergeTemplateWithLegacy(baseTemplate, legacyValues)
 	summary.OutputPath = outputPath
 
 	return summary, mergedContent, nil
