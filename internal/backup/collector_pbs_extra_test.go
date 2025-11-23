@@ -77,6 +77,35 @@ func TestGetDatastoreListSuccess(t *testing.T) {
 	}
 }
 
+func TestGetDatastoreListOverridePaths(t *testing.T) {
+	origLook := execLookPath
+	origRun := runCommand
+	t.Cleanup(func() {
+		execLookPath = origLook
+		runCommand = origRun
+	})
+
+	execLookPath = func(string) (string, error) { return "/bin/true", nil }
+	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`[{"name":"ds1","path":"/auto1"},{"name":"ds2","path":"/auto2"}]`), nil
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSDatastorePaths = []string{"/override"}
+	c := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
+
+	ds, err := c.getDatastoreList(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ds) != 3 {
+		t.Fatalf("expected 3 datastores (2 auto + 1 override), got %d", len(ds))
+	}
+	if ds[2].Name != "override" || ds[2].Path != "/override" || ds[2].Comment != "configured via PBS_DATASTORE_PATH" {
+		t.Fatalf("override entry not appended as expected: %+v", ds[2])
+	}
+}
+
 func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
 	origList := listNamespacesFunc
 	t.Cleanup(func() { listNamespacesFunc = origList })
