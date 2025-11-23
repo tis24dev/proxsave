@@ -79,8 +79,8 @@ func (n *NotificationAdapter) Notify(ctx context.Context, stats *BackupStats) er
 			n.logger.Debug("  Primary method failed: %v", result.Error)
 		}
 	} else {
-		// Primary method succeeded
-		n.logger.Info("✓ %s: sent successfully (took %v)", n.notifier.Name(), result.Duration)
+		// Primary method succeeded (notification pipeline completed)
+		n.logger.Info("✓ %s: notification completed successfully (took %v)", n.notifier.Name(), result.Duration)
 	}
 
 	n.recordNotifierStatus(stats, result)

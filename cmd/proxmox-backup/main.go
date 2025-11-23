@@ -1262,7 +1262,7 @@ func sendSupportEmail(ctx context.Context, cfg *config.Config, logger *logging.L
 		return
 	}
 
-	logging.Info("Support mode: support email sent to github-support@tis24.it")
+	logging.Info("Support mode: support email handed off to local MTA for github-support@tis24.it (check mailq and /var/log/mail.log for delivery)")
 }
 
 func runSupportIntro(ctx context.Context, bootstrap *logging.BootstrapLogger, args *cli.Args) (bool, bool) {

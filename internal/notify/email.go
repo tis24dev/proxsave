@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,8 +44,30 @@ type EmailNotifier struct {
 	proxmoxType types.ProxmoxType
 }
 
-// Email validation regex
-var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+var (
+	// Email validation regex
+	emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+
+	// Detect queue IDs in sendmail verbose output (e.g., "queued as 1234ABCD123")
+	queueIDRegex = regexp.MustCompile(`queued as ([A-Za-z0-9.-]+)`)
+
+	// Detect queue IDs at the beginning of mailq output lines
+	mailQueueIDLineRegex = regexp.MustCompile(`^[A-Za-z0-9]{5,}[*!]?`)
+
+	// Detect remote acceptance IDs from sendmail verbose transcript
+	remoteAcceptedRegex = regexp.MustCompile(`Sent\s+\(OK\s+id=([A-Za-z0-9\-]+)\)`)
+
+	// Detect local acceptance IDs from sendmail transcript
+	localAcceptedSentRegex = regexp.MustCompile(`Sent\s+\(([A-Za-z0-9\-]+)\s+Message accepted for delivery\)`)
+	messageAcceptedRegex   = regexp.MustCompile(`\b([A-Za-z0-9\-]{5,})\b\s+Message accepted for delivery`)
+
+	// Candidate mail log files to inspect for delivery status
+	mailLogPaths = []string{
+		"/var/log/mail.log",
+		"/var/log/maillog",
+		"/var/log/mail.err",
+	}
+)
 
 // NewEmailNotifier creates a new Email notifier
 func NewEmailNotifier(config EmailConfig, proxmoxType types.ProxmoxType, logger *logging.Logger) (*EmailNotifier, error) {
@@ -147,7 +170,11 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 			result.Method = "email-sendmail-fallback"
 			result.UsedFallback = true
-			err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
+			queueID, sendErr := e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
+			if queueID != "" {
+				result.Metadata["mail_queue_id"] = queueID
+			}
+			err = sendErr
 
 			// If fallback succeeds, preserve the original relay error for logging
 			if err == nil {
@@ -156,7 +183,11 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		}
 	} else {
 		result.Method = "email-sendmail"
-		err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
+		var queueID string
+		queueID, err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
+		if queueID != "" {
+			result.Metadata["mail_queue_id"] = queueID
+		}
 	}
 
 	// Handle result
@@ -174,10 +205,15 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	if result.UsedFallback {
 		// Fallback succeeded after relay failure
 		e.logger.Warning("⚠️ Email sent via fallback after relay failure")
-		e.logger.Info("Email provider confirmed delivery to %s via %s", recipient, describeEmailMethod(result.Method))
+	}
+
+	// Log according to delivery method to avoid implying guaranteed inbox delivery
+	if result.Method == "email-relay" {
+		// Cloud relay confirmed the request (HTTP 200 from worker)
+		e.logger.Info("Email relay accepted request for %s (%s)", recipient, describeEmailMethod(result.Method))
 	} else {
-		// Primary method succeeded
-		e.logger.Info("Email provider confirmed delivery to %s via %s", recipient, describeEmailMethod(result.Method))
+		// Local MTA / sendmail path: we only know the message was handed off
+		e.logger.Info("Email notification handed off to %s for %s", describeEmailMethod(result.Method), recipient)
 	}
 
 	result.Success = true
@@ -381,53 +417,281 @@ func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
 	return queueCount, nil
 }
 
-// checkRecentMailLogs checks recent mail log entries for errors
-func (e *EmailNotifier) checkRecentMailLogs() []string {
-	logFiles := []string{
-		"/var/log/mail.log",
-		"/var/log/maillog",
-		"/var/log/mail.err",
+// detectQueueEntry scans the mail queue for a recipient and returns the latest queue ID.
+func (e *EmailNotifier) detectQueueEntry(ctx context.Context, recipient string) (string, string, error) {
+	mailqPath := "/usr/bin/mailq"
+	if _, err := exec.LookPath("mailq"); err == nil {
+		mailqPath = "mailq"
+	} else if _, err := exec.LookPath(mailqPath); err != nil {
+		return "", "", fmt.Errorf("mailq command not found")
 	}
 
-	var errors []string
+	cmd := exec.CommandContext(ctx, mailqPath)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", "", fmt.Errorf("mailq failed: %w", err)
+	}
 
-	for _, logFile := range logFiles {
+	lines := strings.Split(string(output), "\n")
+	lowerRecipient := strings.ToLower(strings.TrimSpace(recipient))
+	var currentID string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		fields := strings.Fields(trimmed)
+		if len(fields) > 0 && mailQueueIDLineRegex.MatchString(fields[0]) {
+			currentID = strings.TrimSuffix(strings.TrimSuffix(fields[0], "*"), "!")
+			continue
+		}
+
+		if currentID != "" && lowerRecipient != "" && strings.Contains(strings.ToLower(trimmed), lowerRecipient) {
+			return currentID, trimmed, nil
+		}
+	}
+
+	return "", "", nil
+}
+
+// tailMailLog reads the last maxLines from the first available mail log file.
+func (e *EmailNotifier) tailMailLog(maxLines int) ([]string, string) {
+	for _, logFile := range mailLogPaths {
 		if _, err := os.Stat(logFile); err != nil {
 			continue
 		}
 
-		// Read last 50 lines
-		cmd := exec.Command("tail", "-n", "50", logFile)
+		cmd := exec.Command("tail", "-n", strconv.Itoa(maxLines), logFile)
 		output, err := cmd.Output()
 		if err != nil {
 			continue
 		}
 
-		lines := strings.Split(string(output), "\n")
-		for _, line := range lines {
-			lower := strings.ToLower(line)
-			// Look for common error patterns
-			if strings.Contains(lower, "error") ||
-				strings.Contains(lower, "failed") ||
-				strings.Contains(lower, "rejected") ||
-				strings.Contains(lower, "deferred") ||
-				strings.Contains(lower, "connection refused") ||
-				strings.Contains(lower, "timeout") {
-				errors = append(errors, strings.TrimSpace(line))
-			}
+		lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
+		return lines, logFile
+	}
+
+	// Fallback to journald if traditional log files are unavailable
+	if _, err := exec.LookPath("journalctl"); err == nil {
+		args := []string{"--no-pager", "-n", strconv.Itoa(maxLines)}
+		for _, unit := range []string{"postfix.service", "sendmail.service", "exim4.service"} {
+			args = append(args, "-u", unit)
 		}
 
-		// Only check first available log file
-		if len(errors) > 0 {
-			break
+		cmd := exec.Command("journalctl", args...)
+		output, err := cmd.Output()
+		if err == nil && len(output) > 0 {
+			lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
+			return lines, "journalctl"
+		}
+	}
+
+	return nil, ""
+}
+
+// checkRecentMailLogs checks recent mail log entries for errors
+func (e *EmailNotifier) checkRecentMailLogs() []string {
+	lines, _ := e.tailMailLog(50)
+	if len(lines) == 0 {
+		return nil
+	}
+
+	var errors []string
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "error") ||
+			strings.Contains(lower, "failed") ||
+			strings.Contains(lower, "rejected") ||
+			strings.Contains(lower, "deferred") ||
+			strings.Contains(lower, "connection refused") ||
+			strings.Contains(lower, "timeout") {
+			errors = append(errors, strings.TrimSpace(line))
 		}
 	}
 
 	return errors
 }
 
+// extractQueueID attempts to parse a queue ID from sendmail verbose output.
+func extractQueueID(outputs ...string) string {
+	for _, text := range outputs {
+		if text == "" {
+			continue
+		}
+		matches := queueIDRegex.FindStringSubmatch(text)
+		if len(matches) > 1 {
+			return strings.TrimSpace(matches[1])
+		}
+	}
+	return ""
+}
+
+// inspectMailLogStatus looks for a delivery status line for the given queue ID.
+func (e *EmailNotifier) inspectMailLogStatus(queueID string) (status, matchedLine, logPath string) {
+	lines, logPath := e.tailMailLog(80)
+	if len(lines) == 0 || logPath == "" {
+		return "", "", logPath
+	}
+
+	relevant := lines
+	if queueID != "" {
+		filtered := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if strings.Contains(line, queueID) {
+				filtered = append(filtered, line)
+			}
+		}
+		if len(filtered) > 0 {
+			relevant = filtered
+		}
+	}
+
+	for i := len(relevant) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(relevant[i])
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		switch {
+		case strings.Contains(lower, "status=sent"):
+			return "sent", line, logPath
+		case strings.Contains(lower, "status=deferred"):
+			return "deferred", line, logPath
+		case strings.Contains(lower, "status=bounced"), strings.Contains(lower, "status=softbounce"):
+			return "bounced", line, logPath
+		case strings.Contains(lower, "status=expired"):
+			return "expired", line, logPath
+		case strings.Contains(lower, "status=rejected") || strings.Contains(lower, "rejected "):
+			return "rejected", line, logPath
+		case strings.Contains(lower, "connection refused"),
+			strings.Contains(lower, "host not found"),
+			strings.Contains(lower, "no route to host"),
+			strings.Contains(lower, "timeout"):
+			return "error", line, logPath
+		}
+	}
+
+	if len(relevant) > 0 {
+		line := strings.TrimSpace(relevant[len(relevant)-1])
+		if line != "" {
+			return "unknown", line, logPath
+		}
+	}
+
+	return "", "", logPath
+}
+
+// logMailLogStatus writes a human-readable summary based on inspectMailLogStatus results.
+func (e *EmailNotifier) logMailLogStatus(queueID, status, matchedLine, logPath string) {
+	if queueID == "" && status == "" {
+		return
+	}
+
+	displayID := queueID
+	if strings.TrimSpace(displayID) == "" {
+		displayID = "(unknown)"
+	}
+
+	switch status {
+	case "sent":
+		e.logger.Info("Mail log (%s) reports status=sent for queue ID %s", logPath, displayID)
+	case "deferred":
+		e.logger.Warning("Mail log (%s) reports status=deferred for queue ID %s", logPath, displayID)
+	case "bounced":
+		e.logger.Warning("Mail log (%s) reports status=bounced for queue ID %s", logPath, displayID)
+	case "expired":
+		e.logger.Warning("Mail log (%s) reports status=expired for queue ID %s", logPath, displayID)
+	case "rejected":
+		e.logger.Warning("Mail log (%s) reports status=rejected for queue ID %s", logPath, displayID)
+	case "error":
+		e.logger.Warning("Mail log (%s) reports delivery errors for queue ID %s", logPath, displayID)
+	case "unknown":
+		e.logger.Info("Mail log (%s) has entries for queue ID %s, but status is inconclusive", logPath, displayID)
+	default:
+		if status == "" {
+			if queueID != "" && logPath != "" {
+				e.logger.Info("Mail log (%s) has no recent entries for queue ID %s (delivery status pending)", logPath, displayID)
+			}
+			return
+		}
+	}
+
+	if matchedLine != "" {
+		if e.logger.GetLevel() <= types.LogLevelDebug {
+			e.logger.Debug("Mail log entry: %s", matchedLine)
+		} else if status != "sent" {
+			// Surface a truncated version even outside debug when status is problematic
+			line := matchedLine
+			if len(line) > 200 {
+				line = line[:200] + "..."
+			}
+			e.logger.Info("  Details: %s", line)
+		}
+	}
+}
+
+// summarizeSendmailTranscript extracts human-readable highlights from a verbose sendmail transcript.
+func summarizeSendmailTranscript(transcript string) (highlights []string, remoteID string, localQueueID string) {
+	lines := strings.Split(transcript, "\n")
+	var loggedLocalConn, loggedRemoteConn, loggedRcpt, loggedClose bool
+
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+
+		lower := strings.ToLower(line)
+
+		switch {
+		case !loggedLocalConn && strings.Contains(lower, "connecting to") && strings.Contains(lower, "via relay"):
+			highlights = append(highlights, fmt.Sprintf("Local relay connection: %s", line))
+			loggedLocalConn = true
+			continue
+		case !loggedRemoteConn && strings.Contains(lower, "connecting to") && (strings.Contains(lower, "via esmtp") || strings.Contains(lower, "via smtp")) && !strings.Contains(lower, "via relay"):
+			highlights = append(highlights, fmt.Sprintf("Remote relay connection: %s", line))
+			loggedRemoteConn = true
+			continue
+		case !loggedRcpt && strings.Contains(lower, "recipient ok"):
+			highlights = append(highlights, fmt.Sprintf("Recipient accepted by remote server: %s", line))
+			loggedRcpt = true
+			continue
+		}
+
+		if remoteID == "" {
+			if matches := remoteAcceptedRegex.FindStringSubmatch(line); len(matches) > 1 {
+				remoteID = matches[1]
+				highlights = append(highlights, fmt.Sprintf("Remote server accepted message (remote_id=%s)", remoteID))
+				continue
+			}
+		}
+
+		if localQueueID == "" {
+			if matches := localAcceptedSentRegex.FindStringSubmatch(line); len(matches) > 1 {
+				localQueueID = matches[1]
+				highlights = append(highlights, fmt.Sprintf("Local MTA queued message with ID %s", localQueueID))
+				continue
+			}
+			if matches := messageAcceptedRegex.FindStringSubmatch(line); len(matches) > 1 {
+				localQueueID = matches[1]
+				highlights = append(highlights, fmt.Sprintf("Local MTA queued message with ID %s", localQueueID))
+				continue
+			}
+		}
+
+		if !loggedClose && strings.Contains(lower, "closing connection") {
+			highlights = append(highlights, fmt.Sprintf("SMTP session closed: %s", line))
+			loggedClose = true
+		}
+	}
+
+	return highlights, remoteID, localQueueID
+}
+
 // sendViaSendmail sends email via local sendmail command
-func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) error {
+func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) (string, error) {
 	e.logger.Debug("sendViaSendmail() starting for recipient: %s", recipient)
 
 	// ========================================================================
@@ -435,10 +699,13 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	// ========================================================================
 	e.logger.Debug("=== Pre-flight MTA diagnostic checks ===")
 
+	// Track initial mail queue size for post-send comparison
+	initialQueueCount := -1
+
 	// Check if sendmail exists
 	sendmailPath := "/usr/sbin/sendmail"
 	if _, err := exec.LookPath(sendmailPath); err != nil {
-		return fmt.Errorf("sendmail not found at %s - please install postfix or configure email relay", sendmailPath)
+		return "", fmt.Errorf("sendmail not found at %s - please install postfix or configure email relay", sendmailPath)
 	}
 	e.logger.Debug("✓ Sendmail binary found at %s", sendmailPath)
 
@@ -468,11 +735,18 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	}
 
 	// Check current mail queue
-	if queueCount, err := e.checkMailQueue(ctx); err == nil && queueCount > 0 {
-		e.logger.Warning("⚠ %d message(s) currently in mail queue (previous emails may be stuck)", queueCount)
-		if queueCount > 10 {
-			e.logger.Warning("  Large queue detected - check mail server configuration with 'mailq' and /var/log/mail.log")
+	if queueCount, err := e.checkMailQueue(ctx); err == nil {
+		initialQueueCount = queueCount
+		if queueCount > 0 {
+			e.logger.Warning("⚠ %d message(s) currently in mail queue (previous emails may be stuck)", queueCount)
+			if queueCount > 10 {
+				e.logger.Warning("  Large queue detected - check mail server configuration with 'mailq' and /var/log/mail.log")
+			}
+		} else {
+			e.logger.Debug("Mail queue initially empty before sending email")
 		}
+	} else {
+		e.logger.Debug("Could not inspect mail queue before sending: %v", err)
 	}
 
 	e.logger.Debug("=== Building email message ===")
@@ -605,6 +879,8 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
+	queueID := ""
+
 	// Execute
 	startTime := time.Now()
 	err := cmd.Run()
@@ -614,7 +890,20 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 
 	// Log stdout if available
 	if stdoutBuf.Len() > 0 {
-		e.logger.Debug("Sendmail stdout: %s", strings.TrimSpace(stdoutBuf.String()))
+		stdoutStr := strings.TrimSpace(stdoutBuf.String())
+		if stdoutStr != "" {
+			e.logger.Debug("Sendmail stdout: %s", stdoutStr)
+			highlights, _, derivedQueueID := summarizeSendmailTranscript(stdoutStr)
+			if len(highlights) > 0 {
+				for _, msg := range highlights {
+					e.logger.Info("SMTP summary: %s", msg)
+				}
+			}
+			if queueID == "" && derivedQueueID != "" {
+				queueID = derivedQueueID
+				e.logger.Debug("Detected queue ID from SMTP transcript: %s", queueID)
+			}
+		}
 	}
 
 	// Log stderr (check for warnings)
@@ -627,9 +916,14 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 		}
 	}
 
+	if id := extractQueueID(stdoutBuf.String(), stderrBuf.String()); id != "" {
+		queueID = id
+		e.logger.Debug("Detected mail queue ID from sendmail output: %s", queueID)
+	}
+
 	if err != nil {
 		e.logger.Error("❌ Sendmail command failed: %v", err)
-		return fmt.Errorf("sendmail failed: %w (stderr: %s)", err, stderrBuf.String())
+		return "", fmt.Errorf("sendmail failed: %w (stderr: %s)", err, stderrBuf.String())
 	}
 
 	// ========================================================================
@@ -643,32 +937,67 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	// Check queue again to see if message is stuck
 	if queueCount, err := e.checkMailQueue(ctx); err == nil {
 		if queueCount > 0 {
-			e.logger.Debug("ℹ Mail queue size: %d (message may be queued for delivery)", queueCount)
+			// If queue grew after sending, highlight this explicitly
+			if initialQueueCount >= 0 && queueCount > initialQueueCount {
+				e.logger.Warning("⚠ Mail queue size increased from %d to %d after sending email (messages may be queued or delayed)", initialQueueCount, queueCount)
+				e.logger.Info("  Suggestion: run 'mailq' and inspect /var/log/mail.log to verify delivery and diagnose issues")
+			} else {
+				e.logger.Debug("ℹ Mail queue size: %d (message may be queued for delivery)", queueCount)
+			}
 		} else {
 			e.logger.Debug("✓ Mail queue is empty (message likely processed)")
 		}
+	} else {
+		e.logger.Debug("Could not inspect mail queue after sending: %v", err)
 	}
 
-	// Check recent mail logs for errors (only in debug mode)
-	if e.logger.GetLevel() <= types.LogLevelDebug {
-		recentErrors := e.checkRecentMailLogs()
-		if len(recentErrors) > 0 && len(recentErrors) <= 5 {
-			e.logger.Debug("Recent mail log entries (%d found):", len(recentErrors))
-			for _, errLine := range recentErrors {
-				if len(errLine) > 200 {
-					errLine = errLine[:200] + "..."
+	// Check recent mail logs for errors (always surface summary, details only in debug)
+	recentErrors := e.checkRecentMailLogs()
+	if len(recentErrors) > 0 {
+		e.logger.Warning("⚠ Recent mail log entries indicate potential delivery issues (found %d error-like lines)", len(recentErrors))
+		e.logger.Info("  Suggestion: inspect /var/log/mail.log (or maillog/mail.err) on this host for details")
+
+		if e.logger.GetLevel() <= types.LogLevelDebug {
+			if len(recentErrors) <= 5 {
+				e.logger.Debug("Recent mail log entries (%d found):", len(recentErrors))
+				for _, errLine := range recentErrors {
+					if len(errLine) > 200 {
+						errLine = errLine[:200] + "..."
+					}
+					e.logger.Debug("  %s", errLine)
 				}
-				e.logger.Debug("  %s", errLine)
-			}
-		} else if len(recentErrors) > 5 {
-			e.logger.Debug("Recent mail log entries (%d found, showing first 5):", len(recentErrors))
-			for i := 0; i < 5; i++ {
-				errLine := recentErrors[i]
-				if len(errLine) > 200 {
-					errLine = errLine[:200] + "..."
+			} else {
+				e.logger.Debug("Recent mail log entries (%d found, showing first 5):", len(recentErrors))
+				for i := 0; i < 5; i++ {
+					errLine := recentErrors[i]
+					if len(errLine) > 200 {
+						errLine = errLine[:200] + "..."
+					}
+					e.logger.Debug("  %s", errLine)
 				}
-				e.logger.Debug("  %s", errLine)
 			}
+		}
+	}
+
+	if queueID != "" {
+		status, matchedLine, logPath := e.inspectMailLogStatus(queueID)
+		e.logMailLogStatus(queueID, status, matchedLine, logPath)
+	} else {
+		e.logger.Debug("Sendmail did not report a queue ID; attempting to detect from mail queue output")
+		if detectedID, queueLine, err := e.detectQueueEntry(ctx, recipient); err == nil {
+			if detectedID != "" {
+				queueID = detectedID
+				e.logger.Info("Detected queue ID %s for %s by inspecting mail queue output", queueID, recipient)
+				if queueLine != "" && e.logger.GetLevel() <= types.LogLevelDebug {
+					e.logger.Debug("Mail queue entry: %s", queueLine)
+				}
+				status, matchedLine, logPath := e.inspectMailLogStatus(queueID)
+				e.logMailLogStatus(queueID, status, matchedLine, logPath)
+			} else {
+				e.logger.Debug("No matching mail queue entry found for %s immediately after sending", recipient)
+			}
+		} else {
+			e.logger.Debug("Unable to inspect mail queue entries for %s: %v", recipient, err)
 		}
 	}
 
@@ -676,5 +1005,5 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	e.logger.Info("NOTE: Sendmail exit code 0 means email accepted to queue, not necessarily delivered")
 	e.logger.Info("  To verify actual delivery, check: mailq and /var/log/mail.log")
 
-	return nil
+	return queueID, nil
 }
