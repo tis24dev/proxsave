@@ -44,9 +44,25 @@ func applyBackupPermissions(cfg *config.Config, logger *logging.Logger) error {
 	}
 
 	for _, dir := range dirs {
+		dir = strings.TrimSpace(dir)
 		if dir == "" {
 			continue
 		}
+
+		info, err := os.Stat(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				logger.Skip("Permissions: directory does not exist: %s", dir)
+				continue
+			}
+			logger.Warning("Permissions: failed to stat %s (skipping): %v", dir, err)
+			continue
+		}
+		if !info.IsDir() {
+			logger.Skip("Permissions: path is not a directory, skipping: %s", dir)
+			continue
+		}
+
 		logger.Debug("Applying permissions on path: %s (uid=%d,gid=%d)", dir, uid, gid)
 		if err := applyDirOwnershipRecursive(dir, uid, gid, logger); err != nil {
 			logger.Warning("Failed to apply permissions on %s: %v", dir, err)
