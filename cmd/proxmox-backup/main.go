@@ -537,6 +537,8 @@ func run() int {
 			status := notify.CheckTelegramRegistration(ctx, cfg.TelegramServerAPIHost, serverIDValue, logger)
 			if status.Error != nil {
 				logging.Warning("Telegram: %s", status.Message)
+				logging.Skip("Telegram: disabled")
+				cfg.TelegramEnabled = false
 				logTelegramInfo = false
 			} else {
 				logging.Debug("Remote server contacted: Bot token / chat ID verified (handshake)")
