@@ -31,3 +31,22 @@ func TestAnalyzeArchivePaths(t *testing.T) {
 		t.Fatalf("logs should not be marked available")
 	}
 }
+
+func TestPathMatchesPatternVariants(t *testing.T) {
+	cases := []struct {
+		path     string
+		pattern  string
+		expected bool
+	}{
+		{"etc/pve/storage.cfg", "./etc/pve/", true},
+		{"./etc/network/interfaces", "./etc/network/interfaces", true},
+		{"./etc/network/interfaces.d/foo", "./etc/network/interfaces", false},
+		{"./var/log/syslog", "./etc/network/", false},
+	}
+
+	for _, tc := range cases {
+		if got := pathMatchesPattern(tc.path, tc.pattern); got != tc.expected {
+			t.Fatalf("pathMatchesPattern(%q,%q)=%v want %v", tc.path, tc.pattern, got, tc.expected)
+		}
+	}
+}

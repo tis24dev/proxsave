@@ -15,16 +15,18 @@ import (
 // FakeFS is a sandboxed filesystem rooted at a temporary directory.
 // Paths are mapped under Root to avoid touching the real FS.
 type FakeFS struct {
-	Root     string
-	StatErr  map[string]error
-	WriteErr error
+	Root       string
+	StatErr    map[string]error
+	StatErrors map[string]error
+	WriteErr   error
 }
 
 func NewFakeFS() *FakeFS {
 	root, _ := os.MkdirTemp("", "fakefs-*")
 	return &FakeFS{
-		Root:    root,
-		StatErr: make(map[string]error),
+		Root:       root,
+		StatErr:    make(map[string]error),
+		StatErrors: make(map[string]error),
 	}
 }
 
@@ -34,8 +36,21 @@ func (f *FakeFS) onDisk(path string) string {
 	return filepath.Join(f.Root, clean)
 }
 
+// AddFile creates a file with content.
+func (f *FakeFS) AddFile(path string, content []byte) error {
+	return f.WriteFile(path, content, 0o640)
+}
+
+// AddDir ensures a directory exists.
+func (f *FakeFS) AddDir(path string) error {
+	return f.MkdirAll(path, 0o755)
+}
+
 func (f *FakeFS) Stat(path string) (os.FileInfo, error) {
 	if err, ok := f.StatErr[filepath.Clean(path)]; ok {
+		return nil, err
+	}
+	if err, ok := f.StatErrors[filepath.Clean(path)]; ok {
 		return nil, err
 	}
 	return os.Stat(f.onDisk(path))
@@ -151,6 +166,17 @@ func (f *FakeCommandRunner) Run(ctx context.Context, name string, args ...string
 		return out, nil
 	}
 	return nil, nil
+}
+
+func (f *FakeCommandRunner) ExpectCommand(cmd string, output []byte) {
+	if f.Outputs == nil {
+		f.Outputs = make(map[string][]byte)
+	}
+	f.Outputs[cmd] = output
+}
+
+func (f *FakeCommandRunner) CallsList() []string {
+	return append([]string(nil), f.Calls...)
 }
 
 func commandKey(name string, args []string) string {
