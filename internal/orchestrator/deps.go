@@ -12,11 +12,6 @@ import (
 	"github.com/tis24dev/proxmox-backup/internal/logging"
 )
 
-// BashRunner allows overriding how scripts are executed (useful for tests).
-type BashRunner interface {
-	Run(ctx context.Context, script string, args ...string) (string, error)
-}
-
 // FS abstracts filesystem operations to simplify testing.
 type FS interface {
 	Stat(path string) (os.FileInfo, error)
@@ -63,9 +58,7 @@ type CommandRunner interface {
 type Deps struct {
 	Logger   *logging.Logger
 	Config   *config.Config
-	Script   string
 	DryRun   bool
-	Bash     BashRunner
 	FS       FS
 	Prompter Prompter
 	System   SystemDetector
@@ -159,26 +152,15 @@ func (w *waitReadCloser) Close() error {
 	return w.wait()
 }
 
-type bashRunnerAdapter struct {
-	exec *BashExecutor
-}
-
-func (b *bashRunnerAdapter) Run(ctx context.Context, script string, args ...string) (string, error) {
-	return b.exec.ExecuteScriptWithContext(ctx, script, args...)
-}
-
-func defaultDeps(logger *logging.Logger, scriptPath string, dryRun bool) Deps {
-	exec := NewBashExecutor(logger, scriptPath, dryRun)
+func defaultDeps(logger *logging.Logger, dryRun bool) Deps {
 	return Deps{
 		Logger:   logger,
-		Bash:     &bashRunnerAdapter{exec: exec},
 		FS:       osFS{},
 		Prompter: consolePrompter{},
 		System:   realSystemDetector{},
 		Time:     realTimeProvider{},
 		Command:  osCommandRunner{},
 		DryRun:   dryRun,
-		Script:   scriptPath,
 	}
 }
 
@@ -188,11 +170,8 @@ func NewWithDeps(deps Deps) *Orchestrator {
 	if logger == nil {
 		logger = logging.New(logging.GetDefaultLogger().GetLevel(), false)
 	}
-	base := defaultDeps(logger, deps.Script, deps.DryRun)
+	base := defaultDeps(logger, deps.DryRun)
 
-	if deps.Bash != nil {
-		base.Bash = deps.Bash
-	}
 	if deps.FS != nil {
 		base.FS = deps.FS
 	}
@@ -213,16 +192,12 @@ func NewWithDeps(deps Deps) *Orchestrator {
 		base.DryRun = deps.Config.DryRun
 	}
 
-	o := New(logger, base.Script, base.DryRun)
-	o.bashRunner = base.Bash
+	o := New(logger, base.DryRun)
 	o.fs = base.FS
 	o.prompter = base.Prompter
 	o.system = base.System
 	o.clock = base.Time
 	o.cmdRunner = base.Command
-	if o.bashExecutor != nil && base.FS != nil {
-		o.bashExecutor.fs = base.FS
-	}
 	setRestoreDeps(base.FS, base.Time, base.Prompter, base.Command, base.System)
 	if deps.Config != nil {
 		o.SetConfig(deps.Config)

@@ -151,7 +151,7 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if logger == nil {
 		logger = logging.GetDefaultLogger()
 	}
-	deps := defaultDeps(logger, "", cfg.DryRun)
+	deps := defaultDeps(logger, cfg.DryRun)
 	deps.Config = cfg
 	return RunDecryptWorkflowWithDeps(ctx, &deps, version)
 }

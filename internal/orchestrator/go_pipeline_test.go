@@ -27,7 +27,7 @@ func TestRunGoBackupEndToEnd(t *testing.T) {
 	backupDir := t.TempDir()
 	logDir := t.TempDir()
 
-	orch := New(logger, "/nonexistent", false)
+	orch := New(logger, false)
 	orch.SetBackupConfig(backupDir, logDir, types.CompressionNone, 0, 0, "standard", nil)
 
 	checkerConfig := &checks.CheckerConfig{
@@ -155,7 +155,7 @@ func TestRunGoBackupFallbackCompression(t *testing.T) {
 	backupDir := t.TempDir()
 	logDir := t.TempDir()
 
-	orch := New(logger, "/nonexistent", false)
+	orch := New(logger, false)
 	orch.SetBackupConfig(backupDir, logDir, types.CompressionXZ, 6, 0, "ultra", nil)
 
 	checkerConfig := &checks.CheckerConfig{

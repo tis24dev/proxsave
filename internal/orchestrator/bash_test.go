@@ -9,273 +9,80 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/age"
+	"github.com/tis24dev/proxmox-backup/internal/config"
 	"github.com/tis24dev/proxmox-backup/internal/logging"
 	"github.com/tis24dev/proxmox-backup/internal/types"
 )
 
-func TestNewBashExecutor(t *testing.T) {
-	logger := logging.New(types.LogLevelInfo, false)
-	executor := NewBashExecutor(logger, "/test/path", false)
+func TestBackupErrorMethods(t *testing.T) {
+	underlying := errors.New("boom")
+	be := &BackupError{Phase: "archive", Err: underlying, Code: types.ExitArchiveError}
 
-	if executor == nil {
-		t.Fatal("NewBashExecutor should return non-nil executor")
+	if !strings.Contains(be.Error(), "archive phase failed") {
+		t.Fatalf("Error string mismatch: %s", be.Error())
 	}
-
-	if executor.scriptPath != "/test/path" {
-		t.Errorf("scriptPath = %q; want %q", executor.scriptPath, "/test/path")
-	}
-
-	if executor.dryRun {
-		t.Error("dryRun should be false")
+	if !errors.Is(be, underlying) {
+		t.Fatalf("Unwrap should expose underlying error")
 	}
 }
 
-func TestBashExecutorExecuteScript(t *testing.T) {
-	tmpDir := t.TempDir()
-	logger := logging.New(types.LogLevelInfo, false)
-
-	// Create a simple test script
-	scriptContent := `#!/bin/bash
-echo "Hello from bash"
-exit 0
-`
-	scriptPath := filepath.Join(tmpDir, "test.sh")
-	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
-		t.Fatalf("Failed to create test script: %v", err)
+func TestEarlyErrorStateHasError(t *testing.T) {
+	state := &EarlyErrorState{}
+	if state.HasError() {
+		t.Fatalf("expected HasError false when nil error")
 	}
-
-	executor := NewBashExecutor(logger, tmpDir, false)
-
-	// Execute script
-	output, err := executor.ExecuteScript("test.sh")
-	if err != nil {
-		t.Errorf("ExecuteScript failed: %v", err)
-	}
-
-	if !strings.Contains(output, "Hello from bash") {
-		t.Errorf("Output should contain 'Hello from bash', got: %s", output)
+	state.Error = errors.New("init fail")
+	if !state.HasError() {
+		t.Fatalf("expected HasError true when error set")
 	}
 }
 
-func TestBashExecutorExecuteScriptNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
+func TestOrchestratorSetters(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
+	o := New(logger, false)
 
-	executor := NewBashExecutor(logger, tmpDir, false)
+	o.SetForceNewAgeRecipient(true)
+	if !o.forceNewAgeRecipient || o.ageRecipientCache != nil {
+		t.Fatalf("expected forceNewAgeRecipient to set and cache cleared")
+	}
 
-	// Try to execute non-existent script
-	_, err := executor.ExecuteScript("nonexistent.sh")
-	if err == nil {
-		t.Error("ExecuteScript should return error for non-existent script")
+	o.SetProxmoxVersion(" 7.4 ")
+	if o.proxmoxVersion != "7.4" {
+		t.Fatalf("SetProxmoxVersion did not trim: %q", o.proxmoxVersion)
+	}
+
+	now := time.Now()
+	o.SetStartTime(now)
+	if o.startTime != now {
+		t.Fatalf("start time not set")
 	}
 }
 
-func TestBashExecutorExecuteScriptStatError(t *testing.T) {
+func TestSetConfigAndVersion(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
-	fakeFS := NewFakeFS()
+	o := New(logger, false)
 
-	executor := NewBashExecutor(logger, "/scripts", false)
-	executor.fs = fakeFS
-	scriptPath := filepath.Join(executor.scriptPath, "fail.sh")
-	fakeFS.StatErr[scriptPath] = os.ErrPermission
-	onDisk := filepath.Join(fakeFS.Root, strings.TrimPrefix(scriptPath, string(filepath.Separator)))
-	fakeFS.StatErr[onDisk] = os.ErrPermission
-
-	if _, err := executor.fs.Stat(scriptPath); !errors.Is(err, os.ErrPermission) {
-		t.Fatalf("precondition failed: expected stat permission error, got %v", err)
+	cfg := &config.Config{DryRun: true, BackupPath: "/data"}
+	o.SetConfig(cfg)
+	if o.cfg != cfg {
+		t.Fatalf("config not set")
+	}
+	o.ageRecipientCache = []age.Recipient{nil}
+	o.SetConfig(cfg)
+	if o.ageRecipientCache != nil {
+		t.Fatalf("ageRecipientCache should be cleared on SetConfig")
 	}
 
-	_, err := executor.ExecuteScript("fail.sh")
-	if err == nil || !errors.Is(err, os.ErrPermission) {
-		t.Fatalf("expected permission error, got %v", err)
-	}
-}
-
-func TestBashExecutorExecuteScriptWithArgs(t *testing.T) {
-	tmpDir := t.TempDir()
-	logger := logging.New(types.LogLevelInfo, false)
-
-	// Create a script that echoes its arguments
-	scriptContent := `#!/bin/bash
-echo "Args: $1 $2"
-exit 0
-`
-	scriptPath := filepath.Join(tmpDir, "args.sh")
-	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
-		t.Fatalf("Failed to create test script: %v", err)
-	}
-
-	executor := NewBashExecutor(logger, tmpDir, false)
-
-	// Execute script with arguments
-	output, err := executor.ExecuteScript("args.sh", "hello", "world")
-	if err != nil {
-		t.Errorf("ExecuteScript failed: %v", err)
-	}
-
-	if !strings.Contains(output, "Args: hello world") {
-		t.Errorf("Output should contain 'Args: hello world', got: %s", output)
-	}
-}
-
-func TestBashExecutorExecuteScriptWithEnv(t *testing.T) {
-	tmpDir := t.TempDir()
-	logger := logging.New(types.LogLevelInfo, false)
-
-	// Create a script that uses environment variables
-	scriptContent := `#!/bin/bash
-echo "TEST_VAR=$TEST_VAR"
-exit 0
-`
-	scriptPath := filepath.Join(tmpDir, "env.sh")
-	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
-		t.Fatalf("Failed to create test script: %v", err)
-	}
-
-	executor := NewBashExecutor(logger, tmpDir, false)
-
-	// Execute script with custom environment
-	env := map[string]string{
-		"TEST_VAR": "test_value",
-	}
-	output, err := executor.ExecuteScriptWithEnv("env.sh", env)
-	if err != nil {
-		t.Errorf("ExecuteScriptWithEnv failed: %v", err)
-	}
-
-	if !strings.Contains(output, "TEST_VAR=test_value") {
-		t.Errorf("Output should contain 'TEST_VAR=test_value', got: %s", output)
-	}
-}
-
-func TestBashExecutorDryRun(t *testing.T) {
-	tmpDir := t.TempDir()
-	logger := logging.New(types.LogLevelInfo, false)
-
-	// Create a test script
-	scriptContent := `#!/bin/bash
-echo "This should not run"
-exit 0
-`
-	scriptPath := filepath.Join(tmpDir, "dryrun.sh")
-	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
-		t.Fatalf("Failed to create test script: %v", err)
-	}
-
-	executor := NewBashExecutor(logger, tmpDir, true) // dryRun = true
-
-	// Execute script in dry-run mode
-	output, err := executor.ExecuteScript("dryrun.sh")
-	if err != nil {
-		t.Errorf("ExecuteScript should not error in dry-run: %v", err)
-	}
-
-	if output != "[dry-run]" {
-		t.Errorf("Output should be '[dry-run]', got: %s", output)
-	}
-}
-
-func TestBashExecutorValidateScript(t *testing.T) {
-	tmpDir := t.TempDir()
-	logger := logging.New(types.LogLevelInfo, false)
-
-	// Create a valid executable script
-	scriptContent := `#!/bin/bash
-exit 0
-`
-	scriptPath := filepath.Join(tmpDir, "valid.sh")
-	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
-		t.Fatalf("Failed to create test script: %v", err)
-	}
-
-	executor := NewBashExecutor(logger, tmpDir, false)
-
-	// Validate existing executable script
-	if err := executor.ValidateScript("valid.sh"); err != nil {
-		t.Errorf("ValidateScript should not error for valid script: %v", err)
-	}
-
-	// Test non-existent script
-	if err := executor.ValidateScript("nonexistent.sh"); err == nil {
-		t.Error("ValidateScript should error for non-existent script")
-	}
-
-	// Create non-executable script
-	nonExecPath := filepath.Join(tmpDir, "nonexec.sh")
-	if err := os.WriteFile(nonExecPath, []byte(scriptContent), 0644); err != nil {
-		t.Fatalf("Failed to create non-executable script: %v", err)
-	}
-
-	if err := executor.ValidateScript("nonexec.sh"); err == nil {
-		t.Error("ValidateScript should error for non-executable script")
-	}
-}
-
-func TestNewOrchestrator(t *testing.T) {
-	logger := logging.New(types.LogLevelInfo, false)
-	orch := New(logger, "/test/path", false)
-
-	if orch == nil {
-		t.Fatal("New should return non-nil orchestrator")
-	}
-
-	if orch.bashExecutor == nil {
-		t.Error("Orchestrator should have bashExecutor")
-	}
-
-	if orch.logger == nil {
-		t.Error("Orchestrator should have logger")
-	}
-
-	if orch.dryRun {
-		t.Error("dryRun should be false")
-	}
-}
-
-func TestOrchestratorRunBackup(t *testing.T) {
-	logger := logging.New(types.LogLevelInfo, false)
-	orch := New(logger, "/test/path", false)
-
-	// Test PVE backup
-	err := orch.RunBackup(context.Background(), types.ProxmoxVE)
-	if err != nil {
-		t.Errorf("RunBackup(ProxmoxVE) should not error (placeholder): %v", err)
-	}
-
-	// Test PBS backup
-	err = orch.RunBackup(context.Background(), types.ProxmoxBS)
-	if err != nil {
-		t.Errorf("RunBackup(ProxmoxBS) should not error (placeholder): %v", err)
-	}
-}
-
-func TestOrchestratorRunBackupDryRun(t *testing.T) {
-	logger := logging.New(types.LogLevelInfo, false)
-	orch := New(logger, "/test/path", true) // dryRun = true
-
-	err := orch.RunBackup(context.Background(), types.ProxmoxVE)
-	if err != nil {
-		t.Errorf("RunBackup should not error in dry-run: %v", err)
-	}
-}
-
-func TestOrchestratorGetBashExecutor(t *testing.T) {
-	logger := logging.New(types.LogLevelInfo, false)
-	orch := New(logger, "/test/path", false)
-
-	executor := orch.GetBashExecutor()
-	if executor == nil {
-		t.Error("GetBashExecutor should return non-nil executor")
-	}
-
-	if executor != orch.bashExecutor {
-		t.Error("GetBashExecutor should return the same instance")
+	o.SetVersion("1.2.3")
+	if o.version != "1.2.3" {
+		t.Fatalf("version not set")
 	}
 }
 
 func TestSaveStatsReportDryRun(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
-	orch := New(logger, "/test/path", true)
+	orch := New(logger, true)
 
 	tempDir := t.TempDir()
 	orch.SetBackupConfig(tempDir, tempDir, types.CompressionGzip, 6, 0, "standard", nil)
@@ -315,7 +122,7 @@ func TestSaveStatsReportDryRun(t *testing.T) {
 
 func TestSaveStatsReportReal(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
-	orch := New(logger, "/test/path", false)
+	orch := New(logger, false)
 
 	tempDir := t.TempDir()
 	orch.SetBackupConfig(tempDir, tempDir, types.CompressionXZ, 9, 0, "ultra", nil)
@@ -389,7 +196,7 @@ func (m *mockNotifier) Notify(ctx context.Context, stats *BackupStats) error {
 
 func TestDispatchPostBackupNoTargets(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
-	orch := New(logger, "/tmp", false)
+	orch := New(logger, false)
 
 	if err := orch.dispatchPostBackup(context.Background(), &BackupStats{}); err != nil {
 		t.Fatalf("dispatchPostBackup with no targets should not error: %v", err)
@@ -398,7 +205,7 @@ func TestDispatchPostBackupNoTargets(t *testing.T) {
 
 func TestDispatchPostBackupStorageError(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
-	orch := New(logger, "/tmp", false)
+	orch := New(logger, false)
 	orch.RegisterStorageTarget(&mockStorage{err: errors.New("storage failure")})
 
 	err := orch.dispatchPostBackup(context.Background(), &BackupStats{})
@@ -420,7 +227,7 @@ func TestDispatchPostBackupStorageError(t *testing.T) {
 
 func TestDispatchPostBackupNotificationError(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
-	orch := New(logger, "/tmp", false)
+	orch := New(logger, false)
 	orch.RegisterNotificationChannel(&mockNotifier{err: errors.New("notify failure")})
 
 	// Notifications are non-critical: errors should NOT abort backup

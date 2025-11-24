@@ -593,8 +593,7 @@ func run() int {
 
 	// Initialize orchestrator
 	logging.Step("Initializing backup orchestrator")
-	bashScriptPath := "/opt/proxmox-backup/script"
-	orch = orchestrator.New(logger, bashScriptPath, dryRun)
+	orch = orchestrator.New(logger, dryRun)
 	orch.SetForceNewAgeRecipient(args.ForceNewKey)
 	orch.SetVersion(version)
 	orch.SetConfig(cfg)
@@ -949,24 +948,10 @@ func run() int {
 
 	fmt.Println()
 
-	useGoPipeline := cfg.EnableGoBackup || args.Support
-
-	// Validate / report hybrid (bash) mode
-	if useGoPipeline {
-		// Go pipeline attiva: gli script bash non sono richiesti
-		if args.Support {
-			logging.Info("Support mode: forcing Go backup pipeline (hybrid bash mode disabled)")
-		} else {
-			logging.Skip("Hybrid mode: disabled")
-		}
+	if !cfg.EnableGoBackup && !args.Support {
+		logging.Warning("ENABLE_GO_BACKUP=false is ignored; the Go backup pipeline is always used.")
 	} else {
-		if utils.DirExists(bashScriptPath) {
-			logging.Info("Validating bash script environment...")
-			logging.Info("✓ Bash scripts directory exists: %s", bashScriptPath)
-		} else {
-			logging.Info("✗ Bash scripts directory not found: %s", bashScriptPath)
-			logging.Skip("Hybrid mode: disabled")
-		}
+		logging.Debug("Go backup pipeline enabled")
 	}
 	fmt.Println()
 
@@ -1016,142 +1001,122 @@ func run() int {
 	logging.Info("  Webhook: %v", cfg.WebhookEnabled)
 	logging.Info("  Metrics: %v", cfg.MetricsEnabled)
 	fmt.Println()
-
-	if useGoPipeline {
-		logging.Debug("Go backup pipeline enabled")
-	} else {
-		logging.Info("Go backup pipeline disabled (ENABLE_GO_BACKUP=false).")
-		logging.Info("Using legacy bash workflow.")
-	}
+	logging.Debug("Go backup pipeline enabled")
 
 	// Run backup orchestration
 	if cfg.BackupEnabled {
-		if useGoPipeline {
-			if err := orch.RunPreBackupChecks(ctx); err != nil {
-				logging.Error("Pre-backup validation failed: %v", err)
-				earlyErrorState = &orchestrator.EarlyErrorState{
-					Phase:     "pre_backup_checks",
-					Error:     err,
-					ExitCode:  types.ExitBackupError,
-					Timestamp: time.Now(),
-				}
-				return finalize(types.ExitBackupError.Int())
+		if err := orch.RunPreBackupChecks(ctx); err != nil {
+			logging.Error("Pre-backup validation failed: %v", err)
+			earlyErrorState = &orchestrator.EarlyErrorState{
+				Phase:     "pre_backup_checks",
+				Error:     err,
+				ExitCode:  types.ExitBackupError,
+				Timestamp: time.Now(),
 			}
-			fmt.Println()
+			return finalize(types.ExitBackupError.Int())
+		}
+		fmt.Println()
 
-			logging.Step("Start Go backup orchestration")
+		logging.Step("Start Go backup orchestration")
 
-			// Get hostname for backup naming
-			hostname := resolveHostname()
+		// Get hostname for backup naming
+		hostname := resolveHostname()
 
-			// Run Go-based backup (collection + archive)
-			stats, err := orch.RunGoBackup(ctx, envInfo.Type, hostname)
-			if err != nil {
-				// Check if error is due to cancellation
-				if ctx.Err() == context.Canceled {
-					logging.Warning("Backup was canceled")
-					orch.FinalizeAfterRun(ctx, stats)
-					if stats != nil {
-						pendingSupportStats = stats
-					}
-					return finalize(exitCodeInterrupted) // Standard Unix exit code for SIGINT
-				}
-
-				// Check if it's a BackupError with specific exit code
-				var backupErr *orchestrator.BackupError
-				if errors.As(err, &backupErr) {
-					logging.Error("Backup %s failed: %v", backupErr.Phase, backupErr.Err)
-					orch.FinalizeAfterRun(ctx, stats)
-					if stats != nil {
-						pendingSupportStats = stats
-					}
-					return finalize(backupErr.Code.Int())
-				}
-
-				// Generic backup error
-				logging.Error("Backup orchestration failed: %v", err)
+		// Run Go-based backup (collection + archive)
+		stats, err := orch.RunGoBackup(ctx, envInfo.Type, hostname)
+		if err != nil {
+			// Check if error is due to cancellation
+			if ctx.Err() == context.Canceled {
+				logging.Warning("Backup was canceled")
 				orch.FinalizeAfterRun(ctx, stats)
 				if stats != nil {
 					pendingSupportStats = stats
 				}
-				return finalize(types.ExitBackupError.Int())
+				return finalize(exitCodeInterrupted) // Standard Unix exit code for SIGINT
 			}
 
-			if err := orch.SaveStatsReport(stats); err != nil {
-				logging.Warning("Failed to persist backup statistics: %v", err)
-			} else if stats.ReportPath != "" {
-				logging.Info("✓ Statistics report saved to %s", stats.ReportPath)
-			}
-
-			// Display backup statistics
-			fmt.Println()
-			logging.Info("=== Backup Statistics ===")
-			logging.Info("Files collected: %d", stats.FilesCollected)
-			if stats.FilesFailed > 0 {
-				logging.Warning("Files failed: %d", stats.FilesFailed)
-			}
-			logging.Info("Directories created: %d", stats.DirsCreated)
-			logging.Info("Data collected: %s", formatBytes(stats.BytesCollected))
-			logging.Info("Archive size: %s", formatBytes(stats.ArchiveSize))
-			switch {
-			case stats.CompressionSavingsPercent > 0:
-				logging.Info("Compression ratio: %.1f%%", stats.CompressionSavingsPercent)
-			case stats.CompressionRatioPercent > 0:
-				logging.Info("Compression ratio: %.1f%%", stats.CompressionRatioPercent)
-			case stats.BytesCollected > 0:
-				ratio := float64(stats.ArchiveSize) / float64(stats.BytesCollected) * 100
-				logging.Info("Compression ratio: %.1f%%", ratio)
-			default:
-				logging.Info("Compression ratio: N/A")
-			}
-			logging.Info("Compression used: %s (level %d, mode %s)", stats.Compression, stats.CompressionLevel, stats.CompressionMode)
-			if stats.RequestedCompression != stats.Compression {
-				logging.Info("Requested compression: %s", stats.RequestedCompression)
-			}
-			logging.Info("Duration: %s", formatDuration(stats.Duration))
-			if stats.BundleCreated {
-				logging.Info("Bundle path: %s", stats.ArchivePath)
-				logging.Info("Bundle contents: archive + checksum + metadata")
-			} else {
-				logging.Info("Archive path: %s", stats.ArchivePath)
-				if stats.ManifestPath != "" {
-					logging.Info("Manifest path: %s", stats.ManifestPath)
+			// Check if it's a BackupError with specific exit code
+			var backupErr *orchestrator.BackupError
+			if errors.As(err, &backupErr) {
+				logging.Error("Backup %s failed: %v", backupErr.Phase, backupErr.Err)
+				orch.FinalizeAfterRun(ctx, stats)
+				if stats != nil {
+					pendingSupportStats = stats
 				}
-				if stats.Checksum != "" {
-					logging.Info("Archive checksum (SHA256): %s", stats.Checksum)
-				}
-			}
-			fmt.Println()
-
-			logging.Info("✓ Go backup orchestration completed")
-			logServerIdentityValues(serverIDValue, serverMACValue)
-
-			if heapProfilePath != "" {
-				logging.Info("Heap profiling saved: %s", heapProfilePath)
+				return finalize(backupErr.Code.Int())
 			}
 
-			exitCode := stats.ExitCode
-			status := notify.StatusFromExitCode(exitCode)
-			statusLabel := strings.ToUpper(status.String())
-			emoji := notify.GetStatusEmoji(status)
-			logging.Info("Exit status: %s %s (code=%d)", emoji, statusLabel, exitCode)
-
-			pendingSupportStats = stats
-
-			finalExitCode = exitCode
-		} else {
-			logging.Info("Starting legacy bash backup orchestration...")
-			if err := orch.RunBackup(ctx, envInfo.Type); err != nil {
-				if ctx.Err() == context.Canceled {
-					logging.Warning("Backup was canceled")
-					return finalize(exitCodeInterrupted)
-				}
-				logging.Error("Bash backup orchestration failed: %v", err)
-				return finalize(types.ExitBackupError.Int())
+			// Generic backup error
+			logging.Error("Backup orchestration failed: %v", err)
+			orch.FinalizeAfterRun(ctx, stats)
+			if stats != nil {
+				pendingSupportStats = stats
 			}
-			logging.Info("✓ Bash backup orchestration completed")
-			logServerIdentityValues(serverIDValue, serverMACValue)
+			return finalize(types.ExitBackupError.Int())
 		}
+
+		if err := orch.SaveStatsReport(stats); err != nil {
+			logging.Warning("Failed to persist backup statistics: %v", err)
+		} else if stats.ReportPath != "" {
+			logging.Info("✓ Statistics report saved to %s", stats.ReportPath)
+		}
+
+		// Display backup statistics
+		fmt.Println()
+		logging.Info("=== Backup Statistics ===")
+		logging.Info("Files collected: %d", stats.FilesCollected)
+		if stats.FilesFailed > 0 {
+			logging.Warning("Files failed: %d", stats.FilesFailed)
+		}
+		logging.Info("Directories created: %d", stats.DirsCreated)
+		logging.Info("Data collected: %s", formatBytes(stats.BytesCollected))
+		logging.Info("Archive size: %s", formatBytes(stats.ArchiveSize))
+		switch {
+		case stats.CompressionSavingsPercent > 0:
+			logging.Info("Compression ratio: %.1f%%", stats.CompressionSavingsPercent)
+		case stats.CompressionRatioPercent > 0:
+			logging.Info("Compression ratio: %.1f%%", stats.CompressionRatioPercent)
+		case stats.BytesCollected > 0:
+			ratio := float64(stats.ArchiveSize) / float64(stats.BytesCollected) * 100
+			logging.Info("Compression ratio: %.1f%%", ratio)
+		default:
+			logging.Info("Compression ratio: N/A")
+		}
+		logging.Info("Compression used: %s (level %d, mode %s)", stats.Compression, stats.CompressionLevel, stats.CompressionMode)
+		if stats.RequestedCompression != stats.Compression {
+			logging.Info("Requested compression: %s", stats.RequestedCompression)
+		}
+		logging.Info("Duration: %s", formatDuration(stats.Duration))
+		if stats.BundleCreated {
+			logging.Info("Bundle path: %s", stats.ArchivePath)
+			logging.Info("Bundle contents: archive + checksum + metadata")
+		} else {
+			logging.Info("Archive path: %s", stats.ArchivePath)
+			if stats.ManifestPath != "" {
+				logging.Info("Manifest path: %s", stats.ManifestPath)
+			}
+			if stats.Checksum != "" {
+				logging.Info("Archive checksum (SHA256): %s", stats.Checksum)
+			}
+		}
+		fmt.Println()
+
+		logging.Info("✓ Go backup orchestration completed")
+		logServerIdentityValues(serverIDValue, serverMACValue)
+
+		if heapProfilePath != "" {
+			logging.Info("Heap profiling saved: %s", heapProfilePath)
+		}
+
+		exitCode := stats.ExitCode
+		status := notify.StatusFromExitCode(exitCode)
+		statusLabel := strings.ToUpper(status.String())
+		emoji := notify.GetStatusEmoji(status)
+		logging.Info("Exit status: %s %s (code=%d)", emoji, statusLabel, exitCode)
+
+		pendingSupportStats = stats
+
+		finalExitCode = exitCode
 	} else {
 		logging.Warning("Backup is disabled in configuration")
 	}

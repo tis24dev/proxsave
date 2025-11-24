@@ -382,7 +382,7 @@ func runInitialEncryptionSetup(ctx context.Context, configPath string) error {
 	}
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
-	orch := orchestrator.New(logger, "/opt/proxmox-backup/script", false)
+	orch := orchestrator.New(logger, false)
 	orch.SetConfig(cfg)
 	if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
 		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {

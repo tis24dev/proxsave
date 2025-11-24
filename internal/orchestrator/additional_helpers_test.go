@@ -1088,35 +1088,9 @@ func TestRunPreBackupChecksWithCheckerResults(t *testing.T) {
 	}
 }
 
-func TestRunBackupScriptFailureAndTimeout(t *testing.T) {
-	logger := logging.New(types.LogLevelError, false)
-	scriptDir := t.TempDir()
-
-	// Failing script
-	failScript := filepath.Join(scriptDir, "proxmox-backup.sh")
-	if err := os.WriteFile(failScript, []byte("#!/bin/bash\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("write fail script: %v", err)
-	}
-	orch := New(logger, scriptDir, false)
-	if err := orch.RunBackup(context.Background(), types.ProxmoxVE); err == nil {
-		t.Fatalf("expected error from failing script")
-	}
-
-	// Timeout script
-	if err := os.WriteFile(failScript, []byte("#!/bin/bash\nsleep 2\n"), 0o755); err != nil {
-		t.Fatalf("write sleep script: %v", err)
-	}
-	orch = New(logger, scriptDir, false)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	if err := orch.RunBackup(ctx, types.ProxmoxVE); err == nil {
-		t.Fatalf("expected timeout error")
-	}
-}
-
 func TestRunGoBackupConfigValidationError(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
-	orch := New(logger, "/nonexistent", false)
+	orch := New(logger, false)
 	tempDir := t.TempDir()
 	orch.SetBackupConfig(tempDir, tempDir, types.CompressionType("invalid"), 1, 0, "standard", nil)
 

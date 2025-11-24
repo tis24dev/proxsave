@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -36,6 +35,10 @@ func TestStopPVEClusterServices_Success(t *testing.T) {
 }
 
 func TestExtractPlainArchive_CorruptedTar(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	defer func() { restoreFS = origFS }()
+
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "bad.tar.gz")
@@ -50,7 +53,25 @@ func TestExtractPlainArchive_CorruptedTar(t *testing.T) {
 	}
 }
 
-// Helper to create a reader for prompt-driven functions.
-func fakeReader(inputs ...string) *bufio.Reader {
-	return bufio.NewReader(bytes.NewBufferString(strings.Join(inputs, "\n") + "\n"))
+func TestRunSafeClusterApply_PveshNotFound(t *testing.T) {
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	reader := bufio.NewReader(strings.NewReader("0\n"))
+
+	// Force PATH empty so LookPath fails
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", "")
+	defer os.Setenv("PATH", origPath)
+
+	if err := runSafeClusterApply(context.Background(), reader, t.TempDir(), logger); err != nil {
+		t.Fatalf("expected nil when pvesh missing, got %v", err)
+	}
+}
+
+func TestDetectConfiguredZFSPools_Empty(t *testing.T) {
+	orig := restoreFS
+	defer func() { restoreFS = orig }()
+	restoreFS = NewFakeFS()
+	if pools := detectConfiguredZFSPools(); len(pools) != 0 {
+		t.Fatalf("expected no pools, got %v", pools)
+	}
 }

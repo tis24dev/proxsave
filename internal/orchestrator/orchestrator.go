@@ -1,14 +1,13 @@
 package orchestrator
 
 import (
-	"bytes"
+	"archive/tar"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -22,183 +21,6 @@ import (
 	"github.com/tis24dev/proxmox-backup/internal/storage"
 	"github.com/tis24dev/proxmox-backup/internal/types"
 )
-
-// BashExecutor handles execution of bash scripts
-type BashExecutor struct {
-	logger         *logging.Logger
-	scriptPath     string // Base path to bash scripts
-	dryRun         bool
-	defaultTimeout time.Duration // Default timeout for script execution
-	fs             FS
-	commandFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
-}
-
-// NewBashExecutor creates a new BashExecutor
-func NewBashExecutor(logger *logging.Logger, scriptPath string, dryRun bool) *BashExecutor {
-	return &BashExecutor{
-		logger:         logger,
-		scriptPath:     scriptPath,
-		dryRun:         dryRun,
-		defaultTimeout: 30 * time.Minute, // 30 minutes default timeout
-		fs:             osFS{},
-		commandFactory: exec.CommandContext,
-	}
-}
-
-// SetDefaultTimeout sets the default timeout for script execution
-func (b *BashExecutor) SetDefaultTimeout(timeout time.Duration) {
-	b.defaultTimeout = timeout
-}
-
-// ExecuteScript executes a bash script with the given arguments
-func (b *BashExecutor) ExecuteScript(scriptName string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), b.defaultTimeout)
-	defer cancel()
-	return b.ExecuteScriptWithContext(ctx, scriptName, args...)
-}
-
-// ExecuteScriptWithContext executes a bash script with the given context and arguments
-func (b *BashExecutor) ExecuteScriptWithContext(ctx context.Context, scriptName string, args ...string) (string, error) {
-	scriptPath := filepath.Join(b.scriptPath, scriptName)
-
-	// Check if script exists
-	if _, err := b.fs.Stat(scriptPath); err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("script not found: %s", scriptPath)
-		}
-		return "", fmt.Errorf("stat script: %w", err)
-	}
-
-	if b.dryRun {
-		b.logger.Info("[DRY RUN] Would execute: %s %s", scriptPath, strings.Join(args, " "))
-		return "[dry-run]", nil
-	}
-
-	b.logger.Debug("Executing bash script: %s %s", scriptPath, strings.Join(args, " "))
-
-	// Create command with context
-	cmd := b.commandFactory(ctx, "/bin/bash", append([]string{scriptPath}, args...)...)
-
-	// Capture stdout and stderr
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// Execute command
-	err := cmd.Run()
-
-	// Log output
-	if stdout.Len() > 0 {
-		b.logger.Debug("Script stdout: %s", stdout.String())
-	}
-	if stderr.Len() > 0 {
-		b.logger.Debug("Script stderr: %s", stderr.String())
-	}
-
-	if err != nil {
-		// Check if context was canceled
-		if ctx.Err() == context.DeadlineExceeded {
-			return stdout.String(), fmt.Errorf("script execution timeout after %v: %s", b.defaultTimeout, scriptPath)
-		}
-		if ctx.Err() == context.Canceled {
-			return stdout.String(), fmt.Errorf("script execution canceled: %s", scriptPath)
-		}
-		return stdout.String(), fmt.Errorf("script execution failed: %w (stderr: %s)", err, stderr.String())
-	}
-
-	return stdout.String(), nil
-}
-
-// ExecuteScriptWithEnv executes a bash script with custom environment variables
-func (b *BashExecutor) ExecuteScriptWithEnv(scriptName string, env map[string]string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), b.defaultTimeout)
-	defer cancel()
-	return b.ExecuteScriptWithEnvContext(ctx, scriptName, env, args...)
-}
-
-// ExecuteScriptWithEnvContext executes a bash script with context and custom environment variables
-func (b *BashExecutor) ExecuteScriptWithEnvContext(ctx context.Context, scriptName string, env map[string]string, args ...string) (string, error) {
-	scriptPath := filepath.Join(b.scriptPath, scriptName)
-
-	// Check if script exists
-	if _, err := b.fs.Stat(scriptPath); err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("script not found: %s", scriptPath)
-		}
-		return "", fmt.Errorf("stat script: %w", err)
-	}
-
-	if b.dryRun {
-		b.logger.Info("[DRY RUN] Would execute: %s %s with env: %v", scriptPath, strings.Join(args, " "), env)
-		return "[dry-run]", nil
-	}
-
-	b.logger.Debug("Executing bash script with env: %s %s", scriptPath, strings.Join(args, " "))
-
-	// Create command with context
-	cmd := b.commandFactory(ctx, "/bin/bash", append([]string{scriptPath}, args...)...)
-
-	// Set environment variables
-	cmd.Env = os.Environ()
-	for key, value := range env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
-	}
-
-	// Capture stdout and stderr
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// Execute command
-	err := cmd.Run()
-
-	// Log output
-	if stdout.Len() > 0 {
-		b.logger.Debug("Script stdout: %s", stdout.String())
-	}
-	if stderr.Len() > 0 {
-		b.logger.Debug("Script stderr: %s", stderr.String())
-	}
-
-	if err != nil {
-		// Check if context was canceled
-		if ctx.Err() == context.DeadlineExceeded {
-			return stdout.String(), fmt.Errorf("script execution timeout after %v: %s", b.defaultTimeout, scriptPath)
-		}
-		if ctx.Err() == context.Canceled {
-			return stdout.String(), fmt.Errorf("script execution canceled: %s", scriptPath)
-		}
-		return stdout.String(), fmt.Errorf("script execution failed: %w (stderr: %s)", err, stderr.String())
-	}
-
-	return stdout.String(), nil
-}
-
-// ValidateScript checks if a bash script is valid and executable
-func (b *BashExecutor) ValidateScript(scriptName string) error {
-	scriptPath := filepath.Join(b.scriptPath, scriptName)
-
-	// Check if file exists
-	info, err := b.fs.Stat(scriptPath)
-	if os.IsNotExist(err) {
-		return fmt.Errorf("script not found: %s", scriptPath)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to stat script: %w", err)
-	}
-
-	// Check if it's a regular file
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("not a regular file: %s", scriptPath)
-	}
-
-	// Check if it's executable
-	if info.Mode().Perm()&0111 == 0 {
-		return fmt.Errorf("script is not executable: %s", scriptPath)
-	}
-
-	return nil
-}
 
 // BackupError represents a backup error with specific phase and exit code
 type BackupError struct {
@@ -334,10 +156,8 @@ type BackupStats struct {
 	EmailStatus    string
 }
 
-// Orchestrator coordinates the backup process using both Go and Bash components
+// Orchestrator coordinates the backup process using Go components
 type Orchestrator struct {
-	bashExecutor         *BashExecutor
-	bashRunner           BashRunner
 	checker              *checks.Checker
 	logger               *logging.Logger
 	cfg                  *config.Config
@@ -377,12 +197,10 @@ const tempDirCleanupAge = 24 * time.Hour
 const backupTotalSteps = 8
 
 // New creates a new Orchestrator
-func New(logger *logging.Logger, scriptPath string, dryRun bool) *Orchestrator {
-	deps := defaultDeps(logger, scriptPath, dryRun)
+func New(logger *logging.Logger, dryRun bool) *Orchestrator {
+	deps := defaultDeps(logger, dryRun)
 	setRestoreDeps(deps.FS, deps.Time, deps.Prompter, deps.Command, deps.System)
 	return &Orchestrator{
-		bashExecutor:         deps.Bash.(*bashRunnerAdapter).exec,
-		bashRunner:           deps.Bash,
 		logger:               logger,
 		dryRun:               dryRun,
 		storageTargets:       make([]StorageTarget, 0),
@@ -472,82 +290,6 @@ func (o *Orchestrator) filesystem() FS {
 		return o.fs
 	}
 	return osFS{}
-}
-
-func (o *Orchestrator) bashRunnerOrDefault() BashRunner {
-	if o != nil && o.bashRunner != nil {
-		return o.bashRunner
-	}
-	if o != nil && o.bashExecutor != nil {
-		return &bashRunnerAdapter{exec: o.bashExecutor}
-	}
-	return nil
-}
-
-func (o *Orchestrator) commandRunnerOrDefault() CommandRunner {
-	if o != nil && o.cmdRunner != nil {
-		return o.cmdRunner
-	}
-	return osCommandRunner{}
-}
-
-// RunBackup coordinates the full backup process
-// Currently calls the main bash backup script (proxmox-backup.sh)
-// This is a hybrid approach during migration
-func (o *Orchestrator) RunBackup(ctx context.Context, pType types.ProxmoxType) error {
-	o.logger.Info("Starting backup orchestration for %s", pType)
-
-	if o.dryRun {
-		o.logger.Info("[DRY RUN] Backup orchestration would call proxmox-backup.sh")
-		return nil
-	}
-
-	// Phase 2: Call the main bash script
-	// This maintains compatibility while we migrate incrementally
-	mainScript := "proxmox-backup.sh"
-
-	// Validate script exists and is executable
-	if err := o.bashExecutor.ValidateScript(mainScript); err != nil {
-		o.logger.Warning("Main backup script not found or not executable: %v", err)
-		o.logger.Warning("Skipping backup execution - this is expected in test/dev environments")
-		return nil
-	}
-
-	o.logger.Info("Executing main backup script: %s", mainScript)
-
-	// Execute with a longer timeout for backup operations
-	// Combine parent context with timeout
-	execCtx, cancel := context.WithTimeout(ctx, 2*time.Hour)
-	defer cancel()
-
-	runner := o.bashRunner
-	if runner == nil {
-		runner = &bashRunnerAdapter{exec: o.bashExecutor}
-	}
-
-	output, err := runner.Run(execCtx, mainScript)
-	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("backup failed: %w", execCtx.Err())
-		}
-		// Check if parent context was canceled (e.g., SIGINT)
-		if ctx.Err() == context.Canceled {
-			o.logger.Warning("Backup canceled by user")
-			return fmt.Errorf("backup canceled: %w", ctx.Err())
-		}
-		o.logger.Error("Backup script execution failed: %v", err)
-		return fmt.Errorf("backup failed: %w", err)
-	}
-
-	o.logger.Debug("Backup script output: %s", output)
-	o.logger.Info("Backup completed successfully")
-
-	return nil
-}
-
-// GetBashExecutor returns the underlying bash executor
-func (o *Orchestrator) GetBashExecutor() *BashExecutor {
-	return o.bashExecutor
 }
 
 // SetConfig attaches the loaded configuration to the orchestrator
@@ -1260,20 +1002,68 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (st
 	}
 
 	bundlePath := archivePath + ".bundle.tar"
-	args := []string{"tar", "-cf", bundlePath, "-C", dir}
-	args = append(args, associated...)
+	logger.Debug("Creating bundle with native Go tar: %s (files: %v)", bundlePath, associated)
 
-	logger.Debug("Creating bundle with command: %s", strings.Join(args, " "))
+	// Create tar archive using native Go archive/tar
+	outFile, err := fs.Create(bundlePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create bundle file: %w", err)
+	}
+	defer outFile.Close()
 
-	runner := o.commandRunnerOrDefault()
-	if output, err := runner.Run(ctx, args[0], args[1:]...); err != nil {
-		return "", fmt.Errorf("tar failed: %w (output: %s)", err, bytes.TrimSpace(output))
+	tw := tar.NewWriter(outFile)
+	defer tw.Close()
+
+	// Add each associated file to the tar archive
+	for _, filename := range associated {
+		filePath := filepath.Join(dir, filename)
+
+		// Get file info
+		fileInfo, err := fs.Stat(filePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to stat %s: %w", filename, err)
+		}
+
+		// Create tar header
+		header, err := tar.FileInfoHeader(fileInfo, "")
+		if err != nil {
+			return "", fmt.Errorf("failed to create tar header for %s: %w", filename, err)
+		}
+		header.Name = filename // Use basename only (no directory prefix)
+
+		// Write header
+		if err := tw.WriteHeader(header); err != nil {
+			return "", fmt.Errorf("failed to write tar header for %s: %w", filename, err)
+		}
+
+		// Write file content
+		file, err := fs.Open(filePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to open %s: %w", filename, err)
+		}
+
+		if _, err := io.Copy(tw, file); err != nil {
+			file.Close()
+			return "", fmt.Errorf("failed to write %s to tar: %w", filename, err)
+		}
+		file.Close()
 	}
 
+	// Close tar writer to flush
+	if err := tw.Close(); err != nil {
+		return "", fmt.Errorf("failed to finalize tar archive: %w", err)
+	}
+
+	if err := outFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close bundle file: %w", err)
+	}
+
+	// Verify bundle was created
 	if _, err := fs.Stat(bundlePath); err != nil {
 		return "", fmt.Errorf("bundle file not created: %w", err)
 	}
 
+	logger.Debug("Bundle created successfully: %s", bundlePath)
 	return bundlePath, nil
 }
 
@@ -1302,9 +1092,7 @@ func (o *Orchestrator) removeAssociatedFiles(archivePath string) error {
 
 // Legacy compatibility wrappers for callers that used the package-level functions.
 func createBundle(ctx context.Context, logger *logging.Logger, archivePath string) (string, error) {
-	o := &Orchestrator{logger: logger, fs: osFS{}, bashExecutor: NewBashExecutor(logger, "", false)}
-	o.bashRunner = &bashRunnerAdapter{exec: o.bashExecutor}
-	o.clock = realTimeProvider{}
+	o := &Orchestrator{logger: logger, fs: osFS{}, clock: realTimeProvider{}}
 	return o.createBundle(ctx, archivePath)
 }
 
