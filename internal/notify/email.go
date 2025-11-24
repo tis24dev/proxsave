@@ -682,7 +682,7 @@ func (e *EmailNotifier) logMailLogStatus(queueID, status, matchedLine, logPath s
 	case "error":
 		e.logger.Warning("Mail log (%s) reports delivery errors for queue ID %s", logPath, displayID)
 	case "unknown":
-		e.logger.Info("Mail log (%s) has entries for queue ID %s, but status is inconclusive", logPath, displayID)
+		e.logger.Debug("Mail log (%s) has entries for queue ID %s, but status is inconclusive", logPath, displayID)
 	default:
 		if status == "" {
 			if queueID != "" && logPath != "" {
@@ -968,9 +968,9 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 		if stdoutStr != "" {
 			e.logger.Debug("Sendmail stdout: %s", stdoutStr)
 			highlights, _, derivedQueueID := summarizeSendmailTranscript(stdoutStr)
-			if len(highlights) > 0 {
+			if len(highlights) > 0 && e.logger.GetLevel() <= types.LogLevelDebug {
 				for _, msg := range highlights {
-					e.logger.Info("SMTP summary: %s", msg)
+					e.logger.Debug("SMTP summary: %s", msg)
 				}
 			}
 			if queueID == "" && derivedQueueID != "" {

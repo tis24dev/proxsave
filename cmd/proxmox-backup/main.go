@@ -534,9 +534,11 @@ func run() int {
 	if cfg.TelegramEnabled {
 		if strings.EqualFold(cfg.TelegramBotType, "centralized") {
 			logging.Debug("Contacting remote Telegram server...")
+			logging.Debug("Telegram server URL: %s", cfg.TelegramServerAPIHost)
 			status := notify.CheckTelegramRegistration(ctx, cfg.TelegramServerAPIHost, serverIDValue, logger)
 			if status.Error != nil {
 				logging.Warning("Telegram: %s", status.Message)
+				logging.Debug("Telegram connection error: %v", status.Error)
 				logging.Skip("Telegram: disabled")
 				cfg.TelegramEnabled = false
 				logTelegramInfo = false
