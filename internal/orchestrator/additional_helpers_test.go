@@ -5,6 +5,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -732,5 +734,269 @@ func TestConfirmRestoreAction(t *testing.T) {
 	reader = bufio.NewReader(strings.NewReader("foo\nRESTORE\n"))
 	if err := confirmRestoreAction(context.Background(), reader, cand, "/tmp"); err != nil {
 		t.Fatalf("confirmRestoreAction retry error: %v", err)
+	}
+}
+
+func TestShowRestorePlanOutputsPaths(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	categories := []Category{
+		{ID: "network", Name: "Network", Description: "Net cfg", Paths: []string{"./etc/network/"}},
+		{ID: "ssh", Name: "SSH", Description: "SSH cfg", Paths: []string{"./etc/ssh/sshd_config"}},
+	}
+	cfg := &SelectiveRestoreConfig{
+		Mode:               RestoreModeFull,
+		SelectedCategories: categories,
+		SystemType:         SystemTypePVE,
+	}
+
+	var out bytes.Buffer
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&out, r)
+		close(done)
+	}()
+
+	ShowRestorePlan(logger, cfg)
+
+	_ = w.Close()
+	os.Stdout = old
+	<-done
+
+	output := out.String()
+	if !strings.Contains(output, "RESTORE PLAN") || !strings.Contains(output, "/etc/network") {
+		t.Fatalf("unexpected plan output: %s", output)
+	}
+	if !strings.Contains(output, "Network") || !strings.Contains(output, "SSH") {
+		t.Fatalf("missing category names in output: %s", output)
+	}
+}
+
+func TestShowRestoreModeMenu(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	old := os.Stdin
+	defer func() { os.Stdin = old }()
+
+	tests := []struct {
+		input string
+		want  RestoreMode
+	}{
+		{"1\n", RestoreModeFull},
+		{"2\n", RestoreModeStorage},
+		{"3\n", RestoreModeBase},
+		{"4\n", RestoreModeCustom},
+	}
+
+	for _, tt := range tests {
+		r, w, _ := os.Pipe()
+		_, _ = w.WriteString(tt.input)
+		_ = w.Close()
+		os.Stdin = r
+		mode, err := ShowRestoreModeMenu(logger, SystemTypePVE)
+		if err != nil {
+			t.Fatalf("ShowRestoreModeMenu error: %v", err)
+		}
+		if mode != tt.want {
+			t.Fatalf("ShowRestoreModeMenu(%q) = %v, want %v", tt.input, mode, tt.want)
+		}
+	}
+
+	// Cancel
+	r, w, _ := os.Pipe()
+	_, _ = w.WriteString("0\n")
+	_ = w.Close()
+	os.Stdin = r
+	if _, err := ShowRestoreModeMenu(logger, SystemTypePVE); err == nil {
+		t.Fatalf("expected cancel error")
+	}
+}
+
+func TestShowCategorySelectionMenu(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	old := os.Stdin
+	defer func() { os.Stdin = old }()
+
+	available := []Category{
+		{ID: "pve_cluster", Name: "Cluster", Type: CategoryTypePVE},
+		{ID: "network", Name: "Network", Type: CategoryTypeCommon},
+		{ID: "ssh", Name: "SSH", Type: CategoryTypeCommon},
+	}
+
+	// Select all then continue
+	r, w, _ := os.Pipe()
+	_, _ = w.WriteString("a\nc\n")
+	_ = w.Close()
+	os.Stdin = r
+	cats, err := ShowCategorySelectionMenu(logger, available, SystemTypePVE)
+	if err != nil {
+		t.Fatalf("ShowCategorySelectionMenu error: %v", err)
+	}
+	if len(cats) != 3 {
+		t.Fatalf("expected 3 categories, got %d", len(cats))
+	}
+
+	// Cancel
+	r, w, _ = os.Pipe()
+	_, _ = w.WriteString("0\n")
+	_ = w.Close()
+	os.Stdin = r
+	if _, err := ShowCategorySelectionMenu(logger, available, SystemTypePVE); err == nil {
+		t.Fatalf("expected cancel error")
+	}
+}
+
+func TestExtractArchiveNativeBlocksTraversal(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	tmpDir := t.TempDir()
+	tarPath := filepath.Join(tmpDir, "traversal.tar")
+
+	f, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatalf("create tar: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	hdr := &tar.Header{
+		Name:     "../etc/passwd",
+		Typeflag: tar.TypeReg,
+		Mode:     0o644,
+		Size:     int64(len("data")),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write([]byte("data")); err != nil {
+		t.Fatalf("write data: %v", err)
+	}
+	_ = tw.Close()
+	_ = f.Close()
+
+	dest := filepath.Join(tmpDir, "dest")
+	if err := extractArchiveNative(context.Background(), tarPath, dest, logger, nil, RestoreModeFull, nil, ""); err != nil {
+		t.Fatalf("extractArchiveNative error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "../etc/passwd")); err == nil {
+		t.Fatalf("path traversal file should not be created")
+	}
+}
+
+type stubListBackend struct {
+	loc    storage.BackupLocation
+	called bool
+	err    error
+}
+
+func (s *stubListBackend) Name() string                     { return "stub" }
+func (s *stubListBackend) Location() storage.BackupLocation { return s.loc }
+func (s *stubListBackend) IsEnabled() bool                  { return true }
+func (s *stubListBackend) IsCritical() bool                 { return s.loc == storage.LocationPrimary }
+func (s *stubListBackend) DetectFilesystem(ctx context.Context) (*storage.FilesystemInfo, error) {
+	return nil, nil
+}
+func (s *stubListBackend) Store(ctx context.Context, backupFile string, metadata *types.BackupMetadata) error {
+	return nil
+}
+func (s *stubListBackend) List(ctx context.Context) ([]*types.BackupMetadata, error) {
+	s.called = true
+	return nil, s.err
+}
+func (s *stubListBackend) Delete(ctx context.Context, backupFile string) error { return nil }
+func (s *stubListBackend) ApplyRetention(ctx context.Context, config storage.RetentionConfig) (int, error) {
+	return 0, nil
+}
+func (s *stubListBackend) VerifyUpload(ctx context.Context, localFile, remoteFile string) (bool, error) {
+	return true, nil
+}
+func (s *stubListBackend) GetStats(ctx context.Context) (*storage.StorageStats, error) {
+	return nil, nil
+}
+
+func TestLogCurrentBackupCountCloudSkipsList(t *testing.T) {
+	backend := &stubListBackend{loc: storage.LocationCloud}
+	adapter := &StorageAdapter{backend: backend, logger: logging.New(types.LogLevelError, false)}
+	adapter.logCurrentBackupCount()
+	if backend.called {
+		t.Fatalf("cloud backend should not call List in logCurrentBackupCount")
+	}
+}
+
+func TestLogCurrentBackupCountHandlesError(t *testing.T) {
+	backend := &stubListBackend{loc: storage.LocationPrimary, err: fmt.Errorf("list fail")}
+	adapter := &StorageAdapter{backend: backend, logger: logging.New(types.LogLevelError, false)}
+	adapter.logCurrentBackupCount()
+	if !backend.called {
+		t.Fatalf("expected List to be called for primary backend")
+	}
+}
+
+func TestApplyStorageStatsCloud(t *testing.T) {
+	adapter := &StorageAdapter{
+		backend: &stubStorage{loc: storage.LocationCloud},
+		logger:  logging.New(types.LogLevelError, false),
+	}
+	stats := &BackupStats{}
+	storageStats := &storage.StorageStats{TotalBackups: 2}
+	retentionCfg := storage.RetentionConfig{Policy: "gfs", Daily: 1}
+	adapter.applyStorageStats(storageStats, retentionCfg, stats)
+	if stats.CloudBackups != 2 || stats.CloudRetentionPolicy != "gfs" {
+		t.Fatalf("cloud stats not populated correctly: %+v", stats)
+	}
+}
+
+func TestFileExistsHelper(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "file.txt")
+	if fileExists(tmp) {
+		t.Fatalf("file should not exist yet")
+	}
+	if err := os.WriteFile(tmp, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if !fileExists(tmp) {
+		t.Fatalf("fileExists should return true for existing file")
+	}
+}
+
+func TestLoadEntriesEmptyFile(t *testing.T) {
+	regPath := filepath.Join(t.TempDir(), "reg.json")
+	if err := os.WriteFile(regPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("write reg: %v", err)
+	}
+	reg, err := NewTempDirRegistry(logging.New(types.LogLevelError, false), regPath)
+	if err != nil {
+		t.Fatalf("NewTempDirRegistry: %v", err)
+	}
+	entries, err := reg.loadEntries()
+	if err != nil {
+		t.Fatalf("loadEntries: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no entries, got %d", len(entries))
+	}
+}
+
+func TestRunBackupScriptFailureAndTimeout(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	scriptDir := t.TempDir()
+
+	// Failing script
+	failScript := filepath.Join(scriptDir, "proxmox-backup.sh")
+	if err := os.WriteFile(failScript, []byte("#!/bin/bash\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write fail script: %v", err)
+	}
+	orch := New(logger, scriptDir, false)
+	if err := orch.RunBackup(context.Background(), types.ProxmoxVE); err == nil {
+		t.Fatalf("expected error from failing script")
+	}
+
+	// Timeout script
+	if err := os.WriteFile(failScript, []byte("#!/bin/bash\nsleep 2\n"), 0o755); err != nil {
+		t.Fatalf("write sleep script: %v", err)
+	}
+	orch = New(logger, scriptDir, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := orch.RunBackup(ctx, types.ProxmoxVE); err == nil {
+		t.Fatalf("expected timeout error")
 	}
 }
