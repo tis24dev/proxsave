@@ -90,6 +90,8 @@ func TestSplitKeyValue(t *testing.T) {
 		{"no equals", "INVALID", "", "", false},
 		{"multiple equals", "KEY=value=123", "KEY", "value=123", true},
 		{"empty value", "KEY=", "KEY", "", true},
+		{"inline comment", "KEY=value # comment", "KEY", "value", true},
+		{"quoted hash", `KEY="value # keep"`, "KEY", "value # keep", true},
 	}
 
 	for _, tt := range tests {
@@ -131,5 +133,15 @@ func TestIsComment(t *testing.T) {
 				t.Errorf("IsComment(%q) = %v; want %v", tt.input, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestGenerateRandomString(t *testing.T) {
+	s := GenerateRandomString(16)
+	if len(s) != 16 {
+		t.Fatalf("GenerateRandomString length = %d; want 16", len(s))
+	}
+	if s == "" {
+		t.Fatal("GenerateRandomString returned empty string")
 	}
 }

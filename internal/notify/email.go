@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -67,6 +69,9 @@ var (
 		"/var/log/maillog",
 		"/var/log/mail.err",
 	}
+
+	// Default domain to test outbound SMTP connectivity if recipient domain is not usable
+	defaultSMTPTestDomain = "gmail.com"
 )
 
 // NewEmailNotifier creates a new Email notifier
@@ -158,6 +163,15 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	var err error
 	var relayErr error // Store original relay error if fallback is used
 
+	// Preflight: if sendmail is involved (primary or fallback), check outbound port 25
+	smtpOK := true
+	needsSendmail := e.config.DeliveryMethod == EmailDeliverySendmail || e.config.FallbackSendmail
+	if needsSendmail {
+		testDomain := deriveTestDomain(recipient)
+		e.logger.Debug("Running outbound SMTP port 25 preflight for domain: %s", testDomain)
+		smtpOK = e.testOutboundPort25(ctx, testDomain)
+	}
+
 	if e.config.DeliveryMethod == EmailDeliveryRelay {
 		result.Method = "email-relay"
 		err = e.sendViaRelay(ctx, recipient, subject, htmlBody, textBody, data)
@@ -166,6 +180,15 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		if err != nil && e.config.FallbackSendmail {
 			relayErr = err // Store original relay error
 			e.logger.Warning("WARNING: Cloud relay failed: %v", err)
+
+			if !smtpOK {
+				e.logger.Warning("⚠ Outbound port 25 appears blocked - skipping fallback to sendmail")
+				e.logger.Info("  Fallback disabled: using only cloud relay result for this run")
+				result.Success = false
+				result.Error = fmt.Errorf("relay failed: %w (sendmail fallback skipped, port 25 blocked)", relayErr)
+				return result, nil
+			}
+
 			e.logger.Info("Attempting fallback to sendmail...")
 
 			result.Method = "email-sendmail-fallback"
@@ -184,9 +207,16 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	} else {
 		result.Method = "email-sendmail"
 		var queueID string
-		queueID, err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
-		if queueID != "" {
-			result.Metadata["mail_queue_id"] = queueID
+		if !smtpOK {
+			e.logger.Warning("⚠ Outbound port 25 appears blocked - skipping sendmail delivery for this run")
+			e.logger.Info("  Suggestion: switch to EMAIL_DELIVERY_METHOD=relay or fix provider firewall")
+			result.Success = false
+			result.Error = fmt.Errorf("outbound port 25 blocked, sendmail unusable")
+		} else {
+			queueID, err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
+			if queueID != "" {
+				result.Metadata["mail_queue_id"] = queueID
+			}
 		}
 	}
 
@@ -284,6 +314,50 @@ func (e *EmailNotifier) detectRecipient(ctx context.Context) (string, error) {
 	}
 
 	return "", fmt.Errorf("root@pam user not found in Proxmox configuration")
+}
+
+// deriveTestDomain chooses a domain for outbound SMTP port 25 checks based on recipient.
+func deriveTestDomain(recipient string) string {
+	parts := strings.Split(recipient, "@")
+	if len(parts) == 2 {
+		domain := strings.TrimSpace(parts[1])
+		if domain != "" && !strings.HasSuffix(domain, "localhost") {
+			return domain
+		}
+	}
+	return defaultSMTPTestDomain
+}
+
+// testOutboundPort25 verifies TCP connectivity to MX servers of the given domain.
+// It logs diagnostics and returns true if at least one MX host is reachable on port 25.
+func (e *EmailNotifier) testOutboundPort25(ctx context.Context, domain string) bool {
+	mxRecords, err := net.LookupMX(domain)
+	if err != nil || len(mxRecords) == 0 {
+		e.logger.Warning("⚠ SMTP connectivity test: failed to resolve MX for %s: %v", domain, err)
+		e.logger.Info("  This may indicate DNS issues (check /etc/resolv.conf)")
+		return false
+	}
+
+	sort.Slice(mxRecords, func(i, j int) bool { return mxRecords[i].Pref < mxRecords[j].Pref })
+
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	for _, mx := range mxRecords {
+		host := strings.TrimSuffix(mx.Host, ".")
+		addr := net.JoinHostPort(host, "25")
+		e.logger.Debug("SMTP connectivity test: trying %s (pref=%d)...", addr, mx.Pref)
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			e.logger.Warning("  ❌ Connect to %s failed: %v", addr, err)
+			continue
+		}
+		_ = conn.Close()
+		e.logger.Info("  ✅ Outbound TCP/25 reachable: %s", addr)
+		return true
+	}
+
+	e.logger.Warning("⚠ Outbound TCP/25 to MX servers of %s failed for all records", domain)
+	e.logger.Info("  Your ISP or firewall may be blocking port 25 towards the Internet")
+	return false
 }
 
 // sendViaRelay sends email via cloud relay

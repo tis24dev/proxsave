@@ -531,3 +531,125 @@ RETENTION_WEEKLY=4
 		t.Errorf("IsGFSRetentionEnabled() = false; want true when RETENTION_POLICY=gfs")
 	}
 }
+
+func TestParseSizeToBytes(t *testing.T) {
+	t.Run("valid units", func(t *testing.T) {
+		tests := []struct {
+			input string
+			want  int64
+		}{
+			{"10K", 10 * 1024},
+			{"2m", 2 * 1024 * 1024},
+			{"3G", 3 * 1024 * 1024 * 1024},
+			{"1t", 1 * 1024 * 1024 * 1024 * 1024},
+			{"42", 42},
+		}
+		for _, tt := range tests {
+			got, err := parseSizeToBytes(tt.input)
+			if err != nil {
+				t.Fatalf("parseSizeToBytes(%q) returned error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseSizeToBytes(%q) = %d; want %d", tt.input, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("invalid values", func(t *testing.T) {
+		if _, err := parseSizeToBytes("-5"); err == nil {
+			t.Fatal("expected error for negative value")
+		}
+		if _, err := parseSizeToBytes("K"); err == nil {
+			t.Fatal("expected error for missing numeric value")
+		}
+	})
+}
+
+func TestAdjustLevelForMode(t *testing.T) {
+	tests := []struct {
+		comp   types.CompressionType
+		mode   string
+		level  int
+		expect int
+	}{
+		{types.CompressionXZ, "fast", 6, 1},
+		{types.CompressionZstd, "maximum", 3, 19},
+		{types.CompressionZstd, "ultra", 3, 22},
+		{types.CompressionXZ, "maximum", 2, 9},
+		{types.CompressionZstd, "standard", 4, 4},
+	}
+
+	for _, tt := range tests {
+		if got := adjustLevelForMode(tt.comp, tt.mode, tt.level); got != tt.expect {
+			t.Fatalf("adjustLevelForMode(%s, %s, %d) = %d; want %d",
+				tt.comp, tt.mode, tt.level, got, tt.expect)
+		}
+	}
+}
+
+func TestFormatHelpers(t *testing.T) {
+	if got := sanitizeMinDisk(-1); got != 10 {
+		t.Fatalf("sanitizeMinDisk(-1) = %f; want 10", got)
+	}
+	if got := sanitizeMinDisk(5.5); got != 5.5 {
+		t.Fatalf("sanitizeMinDisk(5.5) = %f; want 5.5", got)
+	}
+}
+
+func TestNormalizeAndMergeLists(t *testing.T) {
+	values := []string{" foo ", "", "bar", "  "}
+	normalized := normalizeList(values)
+	if len(normalized) != 2 || normalized[0] != "foo" || normalized[1] != "bar" {
+		t.Fatalf("normalizeList = %#v; want [foo bar]", normalized)
+	}
+
+	merged := mergeStringSlices([]string{"a", "b"}, []string{"b", "c", " "})
+	if len(merged) < 3 {
+		t.Fatalf("mergeStringSlices unexpected length: %#v", merged)
+	}
+	for _, must := range []string{"a", "b", "c"} {
+		found := false
+		for _, v := range merged {
+			if v == must {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("mergeStringSlices missing %s: %#v", must, merged)
+		}
+	}
+
+	if res := mergeStringSlices(nil, nil); res != nil {
+		t.Fatalf("mergeStringSlices(nil,nil) = %#v; want nil", res)
+	}
+}
+
+func TestConfigGetIntList(t *testing.T) {
+	cfg := &Config{
+		raw: map[string]string{
+			"TEST_INT_LIST": "1, 2; 3|4\n5",
+		},
+	}
+	got := cfg.getIntList("TEST_INT_LIST", []int{})
+	want := []int{1, 2, 3, 4, 5}
+	if len(got) != len(want) {
+		t.Fatalf("getIntList length mismatch: got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("getIntList[%d] = %d; want %d", i, got[i], want[i])
+		}
+	}
+
+	// Ensure default slice is copied, not referenced
+	defaultSlice := []int{9, 9}
+	got = cfg.getIntList("MISSING", defaultSlice)
+	if len(got) != len(defaultSlice) || got[0] != 9 || got[1] != 9 {
+		t.Fatalf("getIntList default copy failed: %v", got)
+	}
+	got[0] = 1
+	if defaultSlice[0] != 9 {
+		t.Fatalf("expected default slice to remain unchanged, got %v", defaultSlice)
+	}
+}

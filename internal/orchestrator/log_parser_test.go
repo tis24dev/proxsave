@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxmox-backup/internal/notify"
@@ -250,5 +251,34 @@ func TestSortLogCategories(t *testing.T) {
 	// Verify sorting within same type (by count descending)
 	if categories[0].Count < categories[1].Count {
 		t.Error("ERROR categories should be sorted by count descending")
+	}
+}
+
+func TestSanitizeLogMessage(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"[Warning] something bad", "something bad"},
+		{"[error] details", "details"},
+		{"#123 some code", "some code"},
+		{strings.Repeat("a", 300), strings.Repeat("a", 200)},
+	}
+	for _, c := range cases {
+		if got := sanitizeLogMessage(c.in); got != c.want {
+			t.Fatalf("sanitizeLogMessage(%q) = %q; want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestTruncateString(t *testing.T) {
+	if got := truncateString("short", 10); got != "short" {
+		t.Fatalf("truncateString short = %q; want short", got)
+	}
+	if got := truncateString("longstring", 4); got != "long" {
+		t.Fatalf("truncateString long = %q; want long", got)
+	}
+	if got := truncateString("exact", 5); got != "exact" {
+		t.Fatalf("truncateString exact = %q; want exact", got)
 	}
 }
