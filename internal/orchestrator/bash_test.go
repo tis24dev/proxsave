@@ -70,6 +70,27 @@ func TestBashExecutorExecuteScriptNotFound(t *testing.T) {
 	}
 }
 
+func TestBashExecutorExecuteScriptStatError(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	fakeFS := NewFakeFS()
+
+	executor := NewBashExecutor(logger, "/scripts", false)
+	executor.fs = fakeFS
+	scriptPath := filepath.Join(executor.scriptPath, "fail.sh")
+	fakeFS.StatErr[scriptPath] = os.ErrPermission
+	onDisk := filepath.Join(fakeFS.Root, strings.TrimPrefix(scriptPath, string(filepath.Separator)))
+	fakeFS.StatErr[onDisk] = os.ErrPermission
+
+	if _, err := executor.fs.Stat(scriptPath); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("precondition failed: expected stat permission error, got %v", err)
+	}
+
+	_, err := executor.ExecuteScript("fail.sh")
+	if err == nil || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("expected permission error, got %v", err)
+	}
+}
+
 func TestBashExecutorExecuteScriptWithArgs(t *testing.T) {
 	tmpDir := t.TempDir()
 	logger := logging.New(types.LogLevelInfo, false)

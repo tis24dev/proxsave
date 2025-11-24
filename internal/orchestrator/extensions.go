@@ -245,6 +245,7 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 		return nil
 	}
 
+	fs := o.filesystem()
 	logFileName := filepath.Base(logFilePath)
 	o.logger.Info("Dispatching log file: %s", logFileName)
 
@@ -253,10 +254,10 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 		secondaryLogPath := filepath.Join(o.cfg.SecondaryLogPath, logFileName)
 		o.logger.Debug("Copying log to secondary: %s", secondaryLogPath)
 
-		if err := os.MkdirAll(o.cfg.SecondaryLogPath, 0755); err != nil {
+		if err := fs.MkdirAll(o.cfg.SecondaryLogPath, 0755); err != nil {
 			o.logger.Warning("Failed to create secondary log directory: %v", err)
 		} else {
-			if err := copyFile(logFilePath, secondaryLogPath); err != nil {
+			if err := copyFile(fs, logFilePath, secondaryLogPath); err != nil {
 				o.logger.Warning("Failed to copy log to secondary: %v", err)
 			} else {
 				o.logger.Info("✓ Log copied to secondary: %s", secondaryLogPath)

@@ -13,6 +13,9 @@ import (
 	"github.com/tis24dev/proxmox-backup/internal/logging"
 )
 
+var safetyFS FS = osFS{}
+var safetyNow = time.Now
+
 // SafetyBackupResult contains information about the safety backup
 type SafetyBackupResult struct {
 	BackupPath    string
@@ -23,9 +26,9 @@ type SafetyBackupResult struct {
 
 // CreateSafetyBackup creates a backup of files that will be overwritten
 func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (*SafetyBackupResult, error) {
-	timestamp := time.Now().Format("20060102_150405")
+	timestamp := safetyNow().Format("20060102_150405")
 	baseDir := filepath.Join("/tmp", "proxmox-backup")
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
+	if err := safetyFS.MkdirAll(baseDir, 0755); err != nil {
 		return nil, fmt.Errorf("create safety backup directory: %w", err)
 	}
 	backupDir := filepath.Join(baseDir, fmt.Sprintf("restore_backup_%s", timestamp))
@@ -35,7 +38,7 @@ func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	logger.Debug("Safety backup will be saved to: %s", backupArchive)
 
 	// Create backup archive
-	file, err := os.Create(backupArchive)
+	file, err := safetyFS.Create(backupArchive)
 	if err != nil {
 		return nil, fmt.Errorf("create backup archive: %w", err)
 	}
@@ -49,7 +52,7 @@ func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 
 	result := &SafetyBackupResult{
 		BackupPath: backupArchive,
-		Timestamp:  time.Now(),
+		Timestamp:  safetyNow(),
 	}
 
 	// Collect all paths to backup
@@ -61,7 +64,7 @@ func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 		fullPath := filepath.Join(destRoot, fsPath)
 
 		// Check if path exists
-		info, err := os.Stat(fullPath)
+		info, err := safetyFS.Stat(fullPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				// Path doesn't exist, skip
@@ -94,7 +97,7 @@ func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 
 	// Write backup location to a file for easy reference
 	locationFile := filepath.Join(baseDir, "restore_backup_location.txt")
-	if err := os.WriteFile(locationFile, []byte(backupArchive), 0644); err != nil {
+	if err := safetyFS.WriteFile(locationFile, []byte(backupArchive), 0644); err != nil {
 		logger.Warning("Could not write backup location file: %v", err)
 	} else {
 		logger.Info("Backup location saved to: %s", locationFile)
@@ -105,7 +108,7 @@ func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 
 // backupFile adds a single file to the tar archive
 func backupFile(tw *tar.Writer, sourcePath, archivePath string, result *SafetyBackupResult, logger *logging.Logger) error {
-	file, err := os.Open(sourcePath)
+	file, err := safetyFS.Open(sourcePath)
 	if err != nil {
 		return err
 	}
@@ -146,7 +149,7 @@ func backupFile(tw *tar.Writer, sourcePath, archivePath string, result *SafetyBa
 
 // backupDirectory recursively backs up a directory
 func backupDirectory(tw *tar.Writer, sourcePath, archivePath string, result *SafetyBackupResult, logger *logging.Logger) error {
-	return filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
+	return walkFS(safetyFS, sourcePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -177,7 +180,7 @@ func backupDirectory(tw *tar.Writer, sourcePath, archivePath string, result *Saf
 
 		// Handle symlinks
 		if info.Mode()&os.ModeSymlink != 0 {
-			linkTarget, err := os.Readlink(path)
+			linkTarget, err := safetyFS.Readlink(path)
 			if err != nil {
 				logger.Warning("Cannot read symlink %s: %v", path, err)
 				return nil
@@ -206,7 +209,7 @@ func backupDirectory(tw *tar.Writer, sourcePath, archivePath string, result *Saf
 func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot string) error {
 	logger.Info("Restoring from safety backup: %s", backupPath)
 
-	file, err := os.Open(backupPath)
+	file, err := safetyFS.Open(backupPath)
 	if err != nil {
 		return fmt.Errorf("open backup: %w", err)
 	}
@@ -233,14 +236,14 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 		target := filepath.Join(destRoot, header.Name)
 
 		// Create parent directories
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		if err := safetyFS.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			logger.Warning("Cannot create directory for %s: %v", target, err)
 			continue
 		}
 
 		// Handle directories
 		if header.Typeflag == tar.TypeDir {
-			if err := os.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+			if err := safetyFS.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
 				logger.Warning("Cannot create directory %s: %v", target, err)
 			}
 			continue
@@ -249,15 +252,15 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 		// Handle symlinks
 		if header.Typeflag == tar.TypeSymlink {
 			// Remove existing file/symlink
-			os.Remove(target)
-			if err := os.Symlink(header.Linkname, target); err != nil {
+			safetyFS.Remove(target)
+			if err := safetyFS.Symlink(header.Linkname, target); err != nil {
 				logger.Warning("Cannot create symlink %s: %v", target, err)
 			}
 			continue
 		}
 
 		// Handle regular files
-		outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+		outFile, err := safetyFS.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
 		if err != nil {
 			logger.Warning("Cannot create file %s: %v", target, err)
 			continue
@@ -288,17 +291,17 @@ func CleanupOldSafetyBackups(logger *logging.Logger, olderThan time.Duration) er
 		return err
 	}
 
-	now := time.Now()
+	now := safetyNow()
 	removed := 0
 
 	for _, match := range matches {
-		info, err := os.Stat(match)
+		info, err := safetyFS.Stat(match)
 		if err != nil {
 			continue
 		}
 
 		if now.Sub(info.ModTime()) > olderThan {
-			if err := os.Remove(match); err != nil {
+			if err := safetyFS.Remove(match); err != nil {
 				logger.Warning("Cannot remove old backup %s: %v", match, err)
 			} else {
 				logger.Debug("Removed old safety backup: %s", match)
@@ -309,6 +312,56 @@ func CleanupOldSafetyBackups(logger *logging.Logger, olderThan time.Duration) er
 
 	if removed > 0 {
 		logger.Info("Cleaned up %d old safety backup(s)", removed)
+	}
+
+	return nil
+}
+
+// walkFS recursively walks a filesystem using the provided FS implementation.
+func walkFS(fs FS, root string, fn func(path string, info os.FileInfo, err error) error) error {
+	info, err := fs.Stat(root)
+	if err != nil {
+		return fn(root, nil, err)
+	}
+	return walkFSRecursive(fs, root, info, fn)
+}
+
+func walkFSRecursive(fs FS, path string, info os.FileInfo, fn func(path string, info os.FileInfo, err error) error) error {
+	if err := fn(path, info, nil); err != nil {
+		if info != nil && info.IsDir() && err == filepath.SkipDir {
+			return nil
+		}
+		return err
+	}
+
+	if info == nil || !info.IsDir() {
+		return nil
+	}
+
+	entries, err := fs.ReadDir(path)
+	if err != nil {
+		if err := fn(path, info, err); err != nil && err != filepath.SkipDir {
+			return err
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		childPath := filepath.Join(path, entry.Name())
+		childInfo, err := entry.Info()
+		if err != nil {
+			if err := fn(childPath, nil, err); err != nil && err != filepath.SkipDir {
+				return err
+			}
+			continue
+		}
+
+		if err := walkFSRecursive(fs, childPath, childInfo, fn); err != nil {
+			if err == filepath.SkipDir {
+				continue
+			}
+			return err
+		}
 	}
 
 	return nil

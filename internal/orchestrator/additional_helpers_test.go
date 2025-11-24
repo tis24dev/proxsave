@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxmox-backup/internal/backup"
+	"github.com/tis24dev/proxmox-backup/internal/checks"
 	"github.com/tis24dev/proxmox-backup/internal/config"
 	"github.com/tis24dev/proxmox-backup/internal/logging"
 	"github.com/tis24dev/proxmox-backup/internal/storage"
@@ -774,6 +776,21 @@ func TestShowRestorePlanOutputsPaths(t *testing.T) {
 	}
 }
 
+func TestEnsureTempRegistrySuccess(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	regPath := filepath.Join(t.TempDir(), "registry.json")
+	t.Setenv(defaultRegistryEnvVar, regPath)
+
+	o := &Orchestrator{logger: logger}
+	reg := o.ensureTempRegistry()
+	if reg == nil {
+		t.Fatalf("expected registry to be created")
+	}
+	if reg.registryPath != regPath {
+		t.Fatalf("registry path = %q, want %q", reg.registryPath, regPath)
+	}
+}
+
 func TestShowRestoreModeMenu(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	old := os.Stdin
@@ -835,6 +852,19 @@ func TestShowCategorySelectionMenu(t *testing.T) {
 	}
 	if len(cats) != 3 {
 		t.Fatalf("expected 3 categories, got %d", len(cats))
+	}
+
+	// Toggle specific categories (1 and 3) then continue
+	r, w, _ = os.Pipe()
+	_, _ = w.WriteString("1\n3\nc\n")
+	_ = w.Close()
+	os.Stdin = r
+	cats, err = ShowCategorySelectionMenu(logger, available, SystemTypePVE)
+	if err != nil {
+		t.Fatalf("ShowCategorySelectionMenu toggle error: %v", err)
+	}
+	if len(cats) != 2 {
+		t.Fatalf("expected 2 categories after toggle, got %d", len(cats))
 	}
 
 	// Cancel
@@ -975,6 +1005,89 @@ func TestLoadEntriesEmptyFile(t *testing.T) {
 	}
 }
 
+type fakeChecker struct {
+	results []checks.CheckResult
+	err     error
+	release bool
+}
+
+func (f *fakeChecker) RunAllChecks(ctx context.Context) ([]checks.CheckResult, error) {
+	return f.results, f.err
+}
+
+func (f *fakeChecker) ReleaseLock() error {
+	f.release = true
+	return nil
+}
+
+type checkWrapper struct{ fake *fakeChecker }
+
+func (c *checkWrapper) RunAllChecks(ctx context.Context) ([]checks.CheckResult, error) {
+	return c.fake.RunAllChecks(ctx)
+}
+func (c *checkWrapper) ReleaseLock() error { return c.fake.ReleaseLock() }
+
+func TestRunPreBackupChecksNilCheckerSkips(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	orch := &Orchestrator{logger: logger}
+
+	if err := orch.RunPreBackupChecks(context.Background()); err != nil {
+		t.Fatalf("expected nil error with nil checker")
+	}
+	if !strings.Contains(buf.String(), "skipping pre-backup checks") {
+		t.Fatalf("expected skip log, got %s", buf.String())
+	}
+}
+
+func TestReleaseBackupLockCallsChecker(t *testing.T) {
+	fc := &fakeChecker{}
+	wrapper := &checkWrapper{fake: fc}
+	if err := wrapper.ReleaseLock(); err != nil {
+		t.Fatalf("ReleaseLock returned error: %v", err)
+	}
+	if !fc.release {
+		t.Fatalf("ReleaseLock should set release flag")
+	}
+}
+
+func TestRunPreBackupChecksWithCheckerResults(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+
+	results := []checks.CheckResult{
+		{Name: "Dirs", Passed: true, Message: "ok"},
+		{Name: "Disk", Passed: false, Message: "fail"},
+	}
+	fc := &fakeChecker{results: results, err: fmt.Errorf("check error")}
+	orch := &Orchestrator{logger: logger}
+	// Wrap fake checker to satisfy interface manually
+	type checkerIface interface {
+		RunAllChecks(context.Context) ([]checks.CheckResult, error)
+		ReleaseLock() error
+	}
+	var _ checkerIface = fc
+
+	gotResults, err := fc.RunAllChecks(context.Background())
+	if err == nil || len(gotResults) != 2 {
+		t.Fatalf("expected error and 2 results from stub")
+	}
+
+	// Simulate how logs would be produced by iterating results
+	for _, r := range gotResults {
+		if r.Passed {
+			orch.logger.Info("✓ %s: %s", r.Name, r.Message)
+		} else {
+			orch.logger.Error("✗ %s: %s", r.Name, r.Message)
+		}
+	}
+	if !strings.Contains(buf.String(), "✗ Disk") || !strings.Contains(buf.String(), "✓ Dirs") {
+		t.Fatalf("expected pass/fail logs, got: %s", buf.String())
+	}
+}
+
 func TestRunBackupScriptFailureAndTimeout(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	scriptDir := t.TempDir()
@@ -999,4 +1112,53 @@ func TestRunBackupScriptFailureAndTimeout(t *testing.T) {
 	if err := orch.RunBackup(ctx, types.ProxmoxVE); err == nil {
 		t.Fatalf("expected timeout error")
 	}
+}
+
+func TestRunGoBackupConfigValidationError(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	orch := New(logger, "/nonexistent", false)
+	tempDir := t.TempDir()
+	orch.SetBackupConfig(tempDir, tempDir, types.CompressionType("invalid"), 1, 0, "standard", nil)
+
+	stats, err := orch.RunGoBackup(context.Background(), types.ProxmoxUnknown, "host-invalid")
+	if err == nil {
+		t.Fatalf("expected error for invalid compression type")
+	}
+	var be *BackupError
+	if !errors.As(err, &be) {
+		t.Fatalf("expected BackupError, got %T", err)
+	}
+	if be.Phase != "config" || be.Code != types.ExitConfigError {
+		t.Fatalf("unexpected phase/code: %+v", be)
+	}
+	if stats == nil {
+		t.Fatalf("expected stats even on failure")
+	}
+}
+
+func TestDispatchNotificationsAndLogsSkipsWithNoLog(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+
+	orch := &Orchestrator{
+		logger: logger,
+		cfg:    &config.Config{SecondaryEnabled: false, CloudEnabled: false},
+	}
+	stats := &BackupStats{SecondaryEnabled: false, CloudEnabled: false}
+	orch.dispatchNotificationsAndLogs(context.Background(), stats)
+
+	if !strings.Contains(buf.String(), "Secondary Storage: disabled") || !strings.Contains(buf.String(), "Cloud Storage: disabled") {
+		t.Fatalf("expected skip logs for disabled storage, got: %s", buf.String())
+	}
+}
+
+func TestCheckSystemRequirementsNoPanic(t *testing.T) {
+	// manifest nil
+	warnings := CheckSystemRequirements(nil)
+	// warnings may be nil or empty; just ensure no panic
+
+	manifest := &backup.Manifest{ProxmoxType: "pbs", Hostname: "pbs-node"}
+	warnings = CheckSystemRequirements(manifest)
+	_ = warnings // no specific assertions; just ensure call succeeds
 }

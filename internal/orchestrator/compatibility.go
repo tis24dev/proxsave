@@ -2,11 +2,12 @@ package orchestrator
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/tis24dev/proxmox-backup/internal/backup"
 )
+
+var compatFS FS = osFS{}
 
 // SystemType represents the type of Proxmox system
 type SystemType string
@@ -110,7 +111,7 @@ func GetSystemTypeString(st SystemType) string {
 
 // fileExists checks if a file or directory exists
 func fileExists(path string) bool {
-	_, err := os.Stat(path)
+	_, err := compatFS.Stat(path)
 	return err == nil
 }
 
@@ -124,17 +125,17 @@ func GetSystemInfo() map[string]string {
 
 	// Get version information
 	if systemType == SystemTypePVE {
-		if content, err := os.ReadFile("/etc/pve-release"); err == nil {
+		if content, err := compatFS.ReadFile("/etc/pve-release"); err == nil {
 			info["version"] = strings.TrimSpace(string(content))
 		}
 	} else if systemType == SystemTypePBS {
-		if content, err := os.ReadFile("/etc/proxmox-backup-release"); err == nil {
+		if content, err := compatFS.ReadFile("/etc/proxmox-backup-release"); err == nil {
 			info["version"] = strings.TrimSpace(string(content))
 		}
 	}
 
 	// Get hostname
-	if content, err := os.ReadFile("/etc/hostname"); err == nil {
+	if content, err := compatFS.ReadFile("/etc/hostname"); err == nil {
 		info["hostname"] = strings.TrimSpace(string(content))
 	}
 
@@ -169,9 +170,7 @@ func CheckSystemRequirements(manifest *backup.Manifest) []string {
 
 	// Check disk space (basic check)
 	// This is a simplified check - in production you'd want more sophisticated checks
-	if stat, err := os.Stat("/"); err == nil {
-		_ = stat // We have access to root
-	} else {
+	if _, err := compatFS.Stat("/"); err != nil {
 		warnings = append(warnings, "Cannot access root filesystem - may lack permissions")
 	}
 

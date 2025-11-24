@@ -29,6 +29,8 @@ type BashExecutor struct {
 	scriptPath     string // Base path to bash scripts
 	dryRun         bool
 	defaultTimeout time.Duration // Default timeout for script execution
+	fs             FS
+	commandFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
 // NewBashExecutor creates a new BashExecutor
@@ -38,6 +40,8 @@ func NewBashExecutor(logger *logging.Logger, scriptPath string, dryRun bool) *Ba
 		scriptPath:     scriptPath,
 		dryRun:         dryRun,
 		defaultTimeout: 30 * time.Minute, // 30 minutes default timeout
+		fs:             osFS{},
+		commandFactory: exec.CommandContext,
 	}
 }
 
@@ -58,8 +62,11 @@ func (b *BashExecutor) ExecuteScriptWithContext(ctx context.Context, scriptName 
 	scriptPath := filepath.Join(b.scriptPath, scriptName)
 
 	// Check if script exists
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("script not found: %s", scriptPath)
+	if _, err := b.fs.Stat(scriptPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("script not found: %s", scriptPath)
+		}
+		return "", fmt.Errorf("stat script: %w", err)
 	}
 
 	if b.dryRun {
@@ -70,7 +77,7 @@ func (b *BashExecutor) ExecuteScriptWithContext(ctx context.Context, scriptName 
 	b.logger.Debug("Executing bash script: %s %s", scriptPath, strings.Join(args, " "))
 
 	// Create command with context
-	cmd := exec.CommandContext(ctx, "/bin/bash", append([]string{scriptPath}, args...)...)
+	cmd := b.commandFactory(ctx, "/bin/bash", append([]string{scriptPath}, args...)...)
 
 	// Capture stdout and stderr
 	var stdout, stderr bytes.Buffer
@@ -114,8 +121,11 @@ func (b *BashExecutor) ExecuteScriptWithEnvContext(ctx context.Context, scriptNa
 	scriptPath := filepath.Join(b.scriptPath, scriptName)
 
 	// Check if script exists
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("script not found: %s", scriptPath)
+	if _, err := b.fs.Stat(scriptPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("script not found: %s", scriptPath)
+		}
+		return "", fmt.Errorf("stat script: %w", err)
 	}
 
 	if b.dryRun {
@@ -126,7 +136,7 @@ func (b *BashExecutor) ExecuteScriptWithEnvContext(ctx context.Context, scriptNa
 	b.logger.Debug("Executing bash script with env: %s %s", scriptPath, strings.Join(args, " "))
 
 	// Create command with context
-	cmd := exec.CommandContext(ctx, "/bin/bash", append([]string{scriptPath}, args...)...)
+	cmd := b.commandFactory(ctx, "/bin/bash", append([]string{scriptPath}, args...)...)
 
 	// Set environment variables
 	cmd.Env = os.Environ()
@@ -169,7 +179,7 @@ func (b *BashExecutor) ValidateScript(scriptName string) error {
 	scriptPath := filepath.Join(b.scriptPath, scriptName)
 
 	// Check if file exists
-	info, err := os.Stat(scriptPath)
+	info, err := b.fs.Stat(scriptPath)
 	if os.IsNotExist(err) {
 		return fmt.Errorf("script not found: %s", scriptPath)
 	}
@@ -327,9 +337,15 @@ type BackupStats struct {
 // Orchestrator coordinates the backup process using both Go and Bash components
 type Orchestrator struct {
 	bashExecutor         *BashExecutor
+	bashRunner           BashRunner
 	checker              *checks.Checker
 	logger               *logging.Logger
 	cfg                  *config.Config
+	prompter             Prompter
+	fs                   FS
+	system               SystemDetector
+	clock                TimeProvider
+	cmdRunner            CommandRunner
 	version              string
 	proxmoxVersion       string
 	dryRun               bool
@@ -362,12 +378,20 @@ const backupTotalSteps = 8
 
 // New creates a new Orchestrator
 func New(logger *logging.Logger, scriptPath string, dryRun bool) *Orchestrator {
+	deps := defaultDeps(logger, scriptPath, dryRun)
+	setRestoreDeps(deps.FS, deps.Time, deps.Prompter, deps.Command, deps.System)
 	return &Orchestrator{
-		bashExecutor:         NewBashExecutor(logger, scriptPath, dryRun),
+		bashExecutor:         deps.Bash.(*bashRunnerAdapter).exec,
+		bashRunner:           deps.Bash,
 		logger:               logger,
 		dryRun:               dryRun,
 		storageTargets:       make([]StorageTarget, 0),
 		notificationChannels: make([]NotificationChannel, 0),
+		prompter:             deps.Prompter,
+		fs:                   deps.FS,
+		system:               deps.System,
+		clock:                deps.Time,
+		cmdRunner:            deps.Command,
 	}
 }
 
@@ -436,6 +460,37 @@ func (o *Orchestrator) SetStartTime(t time.Time) {
 	o.startTime = t
 }
 
+func (o *Orchestrator) now() time.Time {
+	if o != nil && o.clock != nil {
+		return o.clock.Now()
+	}
+	return time.Now()
+}
+
+func (o *Orchestrator) filesystem() FS {
+	if o != nil && o.fs != nil {
+		return o.fs
+	}
+	return osFS{}
+}
+
+func (o *Orchestrator) bashRunnerOrDefault() BashRunner {
+	if o != nil && o.bashRunner != nil {
+		return o.bashRunner
+	}
+	if o != nil && o.bashExecutor != nil {
+		return &bashRunnerAdapter{exec: o.bashExecutor}
+	}
+	return nil
+}
+
+func (o *Orchestrator) commandRunnerOrDefault() CommandRunner {
+	if o != nil && o.cmdRunner != nil {
+		return o.cmdRunner
+	}
+	return osCommandRunner{}
+}
+
 // RunBackup coordinates the full backup process
 // Currently calls the main bash backup script (proxmox-backup.sh)
 // This is a hybrid approach during migration
@@ -465,8 +520,16 @@ func (o *Orchestrator) RunBackup(ctx context.Context, pType types.ProxmoxType) e
 	execCtx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
 
-	output, err := o.bashExecutor.ExecuteScriptWithContext(execCtx, mainScript)
+	runner := o.bashRunner
+	if runner == nil {
+		runner = &bashRunnerAdapter{exec: o.bashExecutor}
+	}
+
+	output, err := runner.Run(execCtx, mainScript)
 	if err != nil {
+		if execCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("backup failed: %w", execCtx.Err())
+		}
 		// Check if parent context was canceled (e.g., SIGINT)
 		if ctx.Err() == context.Canceled {
 			o.logger.Warning("Backup canceled by user")
@@ -576,19 +639,7 @@ func (o *Orchestrator) SetTempDirRegistry(reg *TempDirRegistry) {
 }
 
 func (o *Orchestrator) describeTelegramConfig() string {
-	if o == nil || o.cfg == nil || !o.cfg.TelegramEnabled {
-		return "disabled"
-	}
-	mode := strings.ToLower(strings.TrimSpace(o.cfg.TelegramBotType))
-	if mode == "" {
-		return "personal"
-	}
-	switch mode {
-	case "personal", "centralized":
-		return mode
-	default:
-		return mode
-	}
+	return describeTelegramStatus(o.cfg)
 }
 
 func (o *Orchestrator) ensureTempRegistry() *TempDirRegistry {
@@ -612,66 +663,35 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 
 	// Unified cleanup of previous execution artifacts
 	registry := o.cleanupPreviousExecutionArtifacts()
+	fs := o.filesystem()
 
 	startTime := o.startTime
 	if startTime.IsZero() {
-		startTime = time.Now()
+		startTime = o.now()
 		o.startTime = startTime
 	}
 	normalizedLevel := normalizeCompressionLevel(o.compressionType, o.compressionLevel)
 
 	fmt.Println()
 	o.logStep(1, "Initializing backup statistics and temporary workspace")
-	stats = &BackupStats{
-		Hostname:                 hostname,
-		ProxmoxType:              pType,
-		ProxmoxVersion:           o.proxmoxVersion,
-		Timestamp:                startTime,
-		Version:                  o.version,
-		ScriptVersion:            o.version, // Use same version for script version (for cloud relay)
-		StartTime:                startTime,
-		RequestedCompression:     o.compressionType,
-		RequestedCompressionMode: o.compressionMode,
-		Compression:              o.compressionType,
-		CompressionLevel:         normalizedLevel,
-		CompressionMode:          o.compressionMode,
-		CompressionThreads:       o.compressionThreads,
-		LocalPath:                o.backupPath,
-		// Start with unknown email status; updated later by notification adapter after email send.
-		EmailStatus:    "unknown",
-		TelegramStatus: o.describeTelegramConfig(),
-		ServerID:       o.serverID,
-		ServerMAC:      o.serverMAC,
-		ExitCode:       types.ExitSuccess.Int(),
-	}
+	stats = InitializeBackupStats(
+		hostname,
+		pType,
+		o.proxmoxVersion,
+		o.version,
+		startTime,
+		o.cfg,
+		o.compressionType,
+		o.compressionMode,
+		normalizedLevel,
+		o.compressionThreads,
+		o.backupPath,
+		o.serverID,
+		o.serverMAC,
+	)
 	// Get log file path from logger (more reliable than env var)
 	if logFile := o.logger.GetLogFilePath(); logFile != "" {
 		stats.LogFilePath = logFile
-	}
-
-	if o.cfg != nil {
-		stats.SecondaryEnabled = o.cfg.SecondaryEnabled
-		stats.CloudEnabled = o.cfg.CloudEnabled
-		stats.SecondaryPath = o.cfg.SecondaryPath
-		stats.CloudPath = o.cfg.CloudRemote
-		stats.MaxLocalBackups = o.cfg.MaxLocalBackups
-		stats.MaxSecondaryBackups = o.cfg.MaxSecondaryBackups
-		stats.MaxCloudBackups = o.cfg.MaxCloudBackups
-		if stats.LocalPath == "" {
-			stats.LocalPath = o.cfg.BackupPath
-		}
-	}
-
-	if stats.SecondaryEnabled {
-		stats.SecondaryStatus = "ok"
-	} else {
-		stats.SecondaryStatus = "disabled"
-	}
-
-	if stats.CloudEnabled {
-		stats.CloudStatus = "ok"
-	} else {
-		stats.CloudStatus = "disabled"
 	}
 
 	metricsStats := stats
@@ -681,7 +701,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		}
 
 		if metricsStats.EndTime.IsZero() {
-			metricsStats.EndTime = time.Now()
+			metricsStats.EndTime = o.now()
 		}
 		if metricsStats.Duration == 0 && !metricsStats.StartTime.IsZero() {
 			metricsStats.Duration = metricsStats.EndTime.Sub(metricsStats.StartTime)
@@ -715,7 +735,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 
 		// Ensure end time and duration are set
 		if stats.EndTime.IsZero() {
-			stats.EndTime = time.Now()
+			stats.EndTime = o.now()
 		}
 		if stats.Duration == 0 && !stats.StartTime.IsZero() {
 			stats.Duration = stats.EndTime.Sub(stats.StartTime)
@@ -748,10 +768,10 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	// Create temporary directory for collection (outside backup path)
 	timestampStr := startTime.Format("20060102-150405")
 	tempRoot := filepath.Join("/tmp", "proxmox-backup")
-	if err := os.MkdirAll(tempRoot, 0o755); err != nil {
+	if err := fs.MkdirAll(tempRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create temporary root directory: %w", err)
 	}
-	tempDir, err := os.MkdirTemp(tempRoot, fmt.Sprintf("proxmox-backup-%s-%s-", hostname, timestampStr))
+	tempDir, err := fs.MkdirTemp(tempRoot, fmt.Sprintf("proxmox-backup-%s-%s-", hostname, timestampStr))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary directory: %w", err)
 	}
@@ -762,7 +782,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	}
 	defer func() {
 		if registry == nil {
-			if cleanupErr := os.RemoveAll(tempDir); cleanupErr != nil {
+			if cleanupErr := fs.RemoveAll(tempDir); cleanupErr != nil {
 				o.logger.Warning("Failed to remove temp directory %s: %v", tempDir, cleanupErr)
 			}
 			return
@@ -775,9 +795,9 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	markerContent := fmt.Sprintf(
 		"Created by PID %d on %s UTC\n",
 		os.Getpid(),
-		time.Now().UTC().Format("2006-01-02 15:04:05"),
+		o.now().UTC().Format("2006-01-02 15:04:05"),
 	)
-	if err := os.WriteFile(markerPath, []byte(markerContent), 0600); err != nil {
+	if err := fs.WriteFile(markerPath, []byte(markerContent), 0600); err != nil {
 		return stats, fmt.Errorf("failed to create temp marker file: %w", err)
 	}
 
@@ -908,15 +928,15 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		}
 	}
 
-	archiverConfig := &backup.ArchiverConfig{
-		Compression:        o.compressionType,
-		CompressionLevel:   normalizedLevel,
-		CompressionThreads: o.compressionThreads,
-		CompressionMode:    o.compressionMode,
-		DryRun:             o.dryRun,
-		EncryptArchive:     o.cfg != nil && o.cfg.EncryptArchive,
-		AgeRecipients:      ageRecipients,
-	}
+	archiverConfig := BuildArchiverConfig(
+		o.compressionType,
+		normalizedLevel,
+		o.compressionThreads,
+		o.compressionMode,
+		o.dryRun,
+		o.cfg != nil && o.cfg.EncryptArchive,
+		ageRecipients,
+	)
 
 	if err := archiverConfig.Validate(); err != nil {
 		return stats, &BackupError{
@@ -992,7 +1012,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		stats.Checksum = checksum
 
 		checksumContent := fmt.Sprintf("%s  %s\n", checksum, filepath.Base(archivePath))
-		if err := os.WriteFile(checksumPath, []byte(checksumContent), 0640); err != nil {
+		if err := fs.WriteFile(checksumPath, []byte(checksumContent), 0640); err != nil {
 			o.logger.Warning("Failed to write checksum file %s: %v", checksumPath, err)
 		} else {
 			o.logger.Debug("Checksum file written to %s", checksumPath)
@@ -1036,7 +1056,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 
 		// Maintain Bash-compatible metadata filename for downstream tooling
 		metadataAlias := archivePath + ".metadata"
-		if err := copyFile(manifestPath, metadataAlias); err != nil {
+		if err := copyFile(fs, manifestPath, metadataAlias); err != nil {
 			o.logger.Warning("Failed to write legacy metadata file %s: %v", metadataAlias, err)
 		} else {
 			o.logger.Debug("Legacy metadata file written to %s", metadataAlias)
@@ -1048,7 +1068,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 			fmt.Println()
 			o.logStep(5, "Bundling of archive, checksum and metadata")
 			o.logger.Debug("Bundling enabled: creating bundle from %s", filepath.Base(archivePath))
-			bundlePath, err := createBundle(ctx, o.logger, archivePath)
+			bundlePath, err := o.createBundle(ctx, archivePath)
 			if err != nil {
 				return stats, &BackupError{
 					Phase: "archive",
@@ -1057,13 +1077,13 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 				}
 			}
 
-			if err := removeAssociatedFiles(o.logger, archivePath); err != nil {
+			if err := o.removeAssociatedFiles(archivePath); err != nil {
 				o.logger.Warning("Failed to remove raw files after bundling: %v", err)
 			} else {
 				o.logger.Debug("Removed raw tar/checksum/metadata after bundling")
 			}
 
-			if info, err := os.Stat(bundlePath); err == nil {
+			if info, err := fs.Stat(bundlePath); err == nil {
 				stats.ArchiveSize = info.Size()
 				stats.CompressedSize = info.Size()
 				stats.updateCompressionMetrics()
@@ -1078,14 +1098,14 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 			o.logger.Skip("Bundling disabled")
 		}
 
-		stats.EndTime = time.Now()
+		stats.EndTime = o.now()
 
 		o.logger.Info("✓ Archive created and verified")
 	} else {
 		fmt.Println()
 		o.logStep(4, "Verification skipped (dry run mode)")
 		o.logger.Info("[DRY RUN] Would create archive: %s", archivePath)
-		stats.EndTime = time.Now()
+		stats.EndTime = o.now()
 	}
 
 	stats.Duration = stats.EndTime.Sub(stats.StartTime)
@@ -1216,7 +1236,9 @@ func (s *BackupStats) toPrometheusMetrics() *metrics.BackupMetrics {
 	}
 }
 
-func createBundle(ctx context.Context, logger *logging.Logger, archivePath string) (string, error) {
+func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (string, error) {
+	logger := o.logger
+	fs := o.filesystem()
 	dir := filepath.Dir(archivePath)
 	base := filepath.Base(archivePath)
 
@@ -1227,12 +1249,12 @@ func createBundle(ctx context.Context, logger *logging.Logger, archivePath strin
 	}
 
 	metaChecksum := base + ".metadata.sha256"
-	if _, err := os.Stat(filepath.Join(dir, metaChecksum)); err == nil {
+	if _, err := fs.Stat(filepath.Join(dir, metaChecksum)); err == nil {
 		associated = append(associated, metaChecksum)
 	}
 
 	for _, file := range associated[:3] {
-		if _, err := os.Stat(filepath.Join(dir, file)); err != nil {
+		if _, err := fs.Stat(filepath.Join(dir, file)); err != nil {
 			return "", fmt.Errorf("associated file not found: %s: %w", file, err)
 		}
 	}
@@ -1243,19 +1265,21 @@ func createBundle(ctx context.Context, logger *logging.Logger, archivePath strin
 
 	logger.Debug("Creating bundle with command: %s", strings.Join(args, " "))
 
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	runner := o.commandRunnerOrDefault()
+	if output, err := runner.Run(ctx, args[0], args[1:]...); err != nil {
 		return "", fmt.Errorf("tar failed: %w (output: %s)", err, bytes.TrimSpace(output))
 	}
 
-	if _, err := os.Stat(bundlePath); err != nil {
+	if _, err := fs.Stat(bundlePath); err != nil {
 		return "", fmt.Errorf("bundle file not created: %w", err)
 	}
 
 	return bundlePath, nil
 }
 
-func removeAssociatedFiles(logger *logging.Logger, archivePath string) error {
+func (o *Orchestrator) removeAssociatedFiles(archivePath string) error {
+	logger := o.logger
+	fs := o.filesystem()
 	files := []string{
 		archivePath,
 		archivePath + ".sha256",
@@ -1265,8 +1289,8 @@ func removeAssociatedFiles(logger *logging.Logger, archivePath string) error {
 	}
 
 	for _, f := range files {
-		if err := os.Remove(f); err != nil {
-			if os.IsNotExist(err) {
+		if err := fs.Remove(f); err != nil {
+			if os.IsNotExist(err) { // fs.Remove should still return os.ErrNotExist
 				continue
 			}
 			return fmt.Errorf("remove %s: %w", filepath.Base(f), err)
@@ -1276,6 +1300,19 @@ func removeAssociatedFiles(logger *logging.Logger, archivePath string) error {
 	return nil
 }
 
+// Legacy compatibility wrappers for callers that used the package-level functions.
+func createBundle(ctx context.Context, logger *logging.Logger, archivePath string) (string, error) {
+	o := &Orchestrator{logger: logger, fs: osFS{}, bashExecutor: NewBashExecutor(logger, "", false)}
+	o.bashRunner = &bashRunnerAdapter{exec: o.bashExecutor}
+	o.clock = realTimeProvider{}
+	return o.createBundle(ctx, archivePath)
+}
+
+func removeAssociatedFiles(logger *logging.Logger, archivePath string) error {
+	o := &Orchestrator{logger: logger, fs: osFS{}}
+	return o.removeAssociatedFiles(archivePath)
+}
+
 // encryptArchive was replaced by streaming encryption inside the archiver.
 
 // SaveStatsReport writes a JSON report with backup statistics to the log directory.
@@ -1283,6 +1320,7 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) error {
 	if stats == nil {
 		return fmt.Errorf("stats cannot be nil")
 	}
+	fs := o.filesystem()
 
 	if o.logPath == "" || stats.Timestamp.IsZero() {
 		return nil
@@ -1297,11 +1335,11 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) error {
 		return nil
 	}
 
-	if err := os.MkdirAll(o.logPath, 0755); err != nil {
+	if err := fs.MkdirAll(o.logPath, 0755); err != nil {
 		return fmt.Errorf("create log directory: %w", err)
 	}
 
-	file, err := os.OpenFile(reportPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	file, err := fs.OpenFile(reportPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
 	if err != nil {
 		return fmt.Errorf("create stats report: %w", err)
 	}
@@ -1398,6 +1436,7 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) error {
 func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 	// Check if there's anything to clean
 	hasStatsFiles := false
+	fs := o.filesystem()
 
 	// Check for JSON stats files
 	if o.logPath != "" {
@@ -1430,7 +1469,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 			for _, file := range matches {
 				filename := filepath.Base(file)
-				if err := os.Remove(file); err != nil {
+				if err := fs.Remove(file); err != nil {
 					o.logger.Debug("Failed to remove file %s: %v", filename, err)
 					failedFiles++
 				} else {
@@ -1474,8 +1513,9 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 }
 
 func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) error {
+	fs := o.filesystem()
 	infoDir := filepath.Join(tempDir, "var/lib/proxmox-backup-info")
-	if err := os.MkdirAll(infoDir, 0755); err != nil {
+	if err := fs.MkdirAll(infoDir, 0755); err != nil {
 		return err
 	}
 
@@ -1498,7 +1538,7 @@ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) e
 	builder.WriteString("BACKUP_FEATURES=selective_restore,category_mapping,version_detection,auto_directory_creation\n")
 
 	target := filepath.Join(infoDir, "backup_metadata.txt")
-	if err := os.WriteFile(target, []byte(builder.String()), 0640); err != nil {
+	if err := fs.WriteFile(target, []byte(builder.String()), 0640); err != nil {
 		return err
 	}
 	return nil
@@ -1585,14 +1625,17 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.PBSPassword = cfg.PBSPassword
 	cc.PBSFingerprint = cfg.PBSFingerprint
 }
-func copyFile(src, dest string) error {
-	in, err := os.Open(src)
+func copyFile(fs FS, src, dest string) error {
+	if fs == nil {
+		fs = osFS{}
+	}
+	in, err := fs.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
 
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
 	if err != nil {
 		return err
 	}

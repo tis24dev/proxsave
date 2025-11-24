@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"archive/tar"
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -26,14 +27,14 @@ func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) ([]Cate
 	logger.Info("Analyzing backup categories...")
 
 	// Open the archive and read all entry names
-	file, err := os.Open(archivePath)
+	file, err := restoreFS.Open(archivePath)
 	if err != nil {
 		return nil, fmt.Errorf("open archive: %w", err)
 	}
 	defer file.Close()
 
 	// Create appropriate reader based on compression
-	reader, err := createDecompressionReader(file, archivePath)
+	reader, err := createDecompressionReader(context.Background(), file, archivePath)
 	if err != nil {
 		return nil, err
 	}
@@ -45,22 +46,24 @@ func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) ([]Cate
 
 	tarReader := tar.NewReader(reader)
 
-	// Collect all file paths in archive
-	var archivePaths []string
-	for {
-		header, err := tarReader.Next()
-		if err != nil {
-			break // EOF or error
-		}
-		archivePaths = append(archivePaths, header.Name)
-	}
-
+	archivePaths := collectArchivePaths(tarReader)
 	logger.Debug("Found %d entries in archive", len(archivePaths))
 
-	// Get all categories and mark which ones are available
-	allCategories := GetAllCategories()
-	var availableCategories []Category
+	availableCategories := AnalyzeArchivePaths(archivePaths, GetAllCategories())
+	for _, cat := range availableCategories {
+		logger.Debug("Category available: %s (%s)", cat.ID, cat.Name)
+	}
 
+	logger.Info("Detected %d available categories", len(availableCategories))
+	return availableCategories, nil
+}
+
+// AnalyzeArchivePaths determines available categories from the provided archive entries.
+func AnalyzeArchivePaths(archivePaths []string, allCategories []Category) []Category {
+	if len(archivePaths) == 0 || len(allCategories) == 0 {
+		return nil
+	}
+	var availableCategories []Category
 	for _, cat := range allCategories {
 		isAvailable := false
 
@@ -80,12 +83,21 @@ func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) ([]Cate
 		if isAvailable {
 			cat.IsAvailable = true
 			availableCategories = append(availableCategories, cat)
-			logger.Debug("Category available: %s (%s)", cat.ID, cat.Name)
 		}
 	}
+	return availableCategories
+}
 
-	logger.Info("Detected %d available categories", len(availableCategories))
-	return availableCategories, nil
+func collectArchivePaths(tarReader *tar.Reader) []string {
+	var archivePaths []string
+	for {
+		header, err := tarReader.Next()
+		if err != nil {
+			break // EOF or error
+		}
+		archivePaths = append(archivePaths, header.Name)
+	}
+	return archivePaths
 }
 
 // pathMatchesPattern checks if an archive path matches a category pattern

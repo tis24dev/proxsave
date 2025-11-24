@@ -12,6 +12,9 @@ import (
 
 func TestExtractTarEntry_AllowsRootDestinationPaths(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
 
 	// Simulate a restore to system root ("/") but write under /tmp
 	destRoot := string(os.PathSeparator)

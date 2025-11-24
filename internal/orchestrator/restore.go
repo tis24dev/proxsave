@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"archive/tar"
 	"bufio"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -15,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/tis24dev/proxmox-backup/internal/config"
 	"github.com/tis24dev/proxmox-backup/internal/logging"
@@ -39,7 +37,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	logger.Info("Restore target: system root (/) — files will be written back to their original paths")
 
 	// Detect system type
-	systemType := DetectCurrentSystem()
+	systemType := restoreSystem.DetectCurrentSystem()
 	logger.Info("Detected system type: %s", GetSystemTypeString(systemType))
 
 	// Validate compatibility
@@ -66,7 +64,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 
 	// Show restore mode selection menu
-	mode, err := ShowRestoreModeMenu(logger, systemType)
+	mode, err := restorePrompter.SelectRestoreMode(logger, systemType)
 	if err != nil {
 		if err.Error() == "user cancelled" {
 			return ErrRestoreAborted
@@ -78,7 +76,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	var selectedCategories []Category
 	if mode == RestoreModeCustom {
 		// Interactive category selection
-		selectedCategories, err = ShowCategorySelectionMenu(logger, availableCategories, systemType)
+		selectedCategories, err = restorePrompter.SelectCategories(logger, availableCategories, systemType)
 		if err != nil {
 			if err.Error() == "user cancelled" {
 				return ErrRestoreAborted
@@ -90,9 +88,11 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		selectedCategories = GetCategoriesForMode(mode, systemType, availableCategories)
 	}
 
+	plan := PlanRestore(candidate.Manifest, selectedCategories, systemType, mode)
+
 	// Cluster safety prompt: if backup proviene da cluster e vogliamo ripristinare pve_cluster, chiedi come procedere.
-	clusterSafeMode := false
-	if systemType == SystemTypePVE && strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster") && hasCategoryID(selectedCategories, "pve_cluster") {
+	clusterBackup := strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster")
+	if plan.NeedsClusterRestore && clusterBackup {
 		logger.Info("Backup marked as cluster node; enabling guarded restore options for pve_cluster")
 		choice, promptErr := promptClusterRestoreMode(ctx, reader)
 		if promptErr != nil {
@@ -102,32 +102,28 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 			return ErrRestoreAborted
 		}
 		if choice == 1 {
-			clusterSafeMode = true
+			plan.ApplyClusterSafeMode(true)
 			logger.Info("Selected SAFE cluster restore: /var/lib/pve-cluster will be exported only, not written to system")
 		} else {
+			plan.ApplyClusterSafeMode(false)
 			logger.Warning("Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated")
 		}
 	}
 
-	// Split into normal restore categories and export-only categories
-	normalCategories, exportCategories := splitExportCategories(selectedCategories)
-	if clusterSafeMode {
-		normalCategories, exportCategories = redirectClusterCategoryToExport(normalCategories, exportCategories)
-	}
-
 	// Create restore configuration
 	restoreConfig := &SelectiveRestoreConfig{
-		Mode:               mode,
-		SelectedCategories: selectedCategories,
-		SystemType:         systemType,
-		Metadata:           candidate.Manifest,
+		Mode:       mode,
+		SystemType: systemType,
+		Metadata:   candidate.Manifest,
 	}
+	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.NormalCategories...)
+	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.ExportCategories...)
 
 	// Show detailed restore plan
 	ShowRestorePlan(logger, restoreConfig)
 
 	// Confirm operation
-	confirmed, err := ConfirmRestoreOperation(logger)
+	confirmed, err := restorePrompter.ConfirmRestore(logger)
 	if err != nil {
 		return err
 	}
@@ -138,9 +134,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 	// Create safety backup of current configuration (only for categories that will write to system paths)
 	var safetyBackup *SafetyBackupResult
-	if len(normalCategories) > 0 {
+	if len(plan.NormalCategories) > 0 {
 		logger.Info("")
-		safetyBackup, err = CreateSafetyBackup(logger, normalCategories, destRoot)
+		safetyBackup, err = CreateSafetyBackup(logger, plan.NormalCategories, destRoot)
 		if err != nil {
 			logger.Warning("Failed to create safety backup: %v", err)
 			fmt.Println()
@@ -156,10 +152,10 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 
 	// If we are restoring cluster database, stop PVE services and unmount /etc/pve before writing
-	needsClusterRestore := systemType == SystemTypePVE && hasCategoryID(normalCategories, "pve_cluster")
+	needsClusterRestore := plan.NeedsClusterRestore
 	clusterServicesStopped := false
 	pbsServicesStopped := false
-	needsPBSServices := systemType == SystemTypePBS && shouldStopPBSServices(normalCategories)
+	needsPBSServices := plan.NeedsPBSServices
 	if needsClusterRestore {
 		logger.Info("")
 		logger.Info("Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve")
@@ -205,9 +201,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 	// Perform selective extraction for normal categories
 	var detailedLogPath string
-	if len(normalCategories) > 0 {
+	if len(plan.NormalCategories) > 0 {
 		logger.Info("")
-		detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, normalCategories, mode, logger)
+		detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, plan.NormalCategories, mode, logger)
 		if err != nil {
 			logger.Error("Restore failed: %v", err)
 			if safetyBackup != nil {
@@ -223,15 +219,15 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	// Handle export-only categories (/etc/pve) by extracting them to a separate directory
 	exportLogPath := ""
 	exportRoot := ""
-	if len(exportCategories) > 0 {
+	if len(plan.ExportCategories) > 0 {
 		exportRoot = exportDestRoot(cfg.BaseDir)
 		logger.Info("")
 		logger.Info("Exporting /etc/pve contents to: %s", exportRoot)
-		if err := os.MkdirAll(exportRoot, 0o755); err != nil {
+		if err := restoreFS.MkdirAll(exportRoot, 0o755); err != nil {
 			return fmt.Errorf("failed to create export directory %s: %w", exportRoot, err)
 		}
 
-		if exportLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, exportRoot, exportCategories, RestoreModeCustom, logger); err != nil {
+		if exportLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, exportRoot, plan.ExportCategories, RestoreModeCustom, logger); err != nil {
 			logger.Warning("Export of /etc/pve contents completed with errors: %v", err)
 		} else {
 			exportLogPath = exportLog
@@ -239,7 +235,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 
 	// SAFE cluster mode: offer applying configs via pvesh without touching config.db
-	if clusterSafeMode {
+	if plan.ClusterSafeMode {
 		if exportRoot == "" {
 			logger.Warning("Cluster SAFE mode selected but export directory not available; skipping automatic pvesh apply")
 		} else if err := runSafeClusterApply(ctx, reader, exportRoot, logger); err != nil {
@@ -249,7 +245,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 	// Recreate directory structures from configuration files if relevant categories were restored
 	logger.Info("")
-	if shouldRecreateDirectories(systemType, normalCategories) {
+	if shouldRecreateDirectories(systemType, plan.NormalCategories) {
 		if err := RecreateDirectoriesFromConfig(systemType, logger); err != nil {
 			logger.Warning("Failed to recreate directory structures: %v", err)
 			logger.Warning("You may need to manually create storage/datastore directories")
@@ -290,7 +286,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 
 		// Check ZFS pool status for PBS systems only when ZFS category was restored
-		if hasCategoryID(normalCategories, "zfs") {
+		if hasCategoryID(plan.NormalCategories, "zfs") {
 			logger.Info("")
 			if err := checkZFSPoolsAfterRestore(logger); err != nil {
 				logger.Warning("ZFS pool check: %v", err)
@@ -305,7 +301,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 // checkZFSPoolsAfterRestore checks if ZFS pools need to be imported after restore
 func checkZFSPoolsAfterRestore(logger *logging.Logger) error {
-	if _, err := exec.LookPath("zpool"); err != nil {
+	if _, err := restoreCmd.Run(context.Background(), "which", "zpool"); err != nil {
 		// zpool utility not available -> no ZFS tooling installed
 		return nil
 	}
@@ -342,7 +338,7 @@ func checkZFSPoolsAfterRestore(logger *logging.Logger) error {
 		if len(configuredPools) > 0 {
 			logger.Info("")
 			for _, pool := range configuredPools {
-				if err := exec.Command("zpool", "status", pool).Run(); err == nil {
+				if _, err := restoreCmd.Run(context.Background(), "zpool", "status", pool); err == nil {
 					logger.Info("Pool %s is already imported (no manual action needed)", pool)
 				} else {
 					logger.Warning("Systemd expects pool %s, but `zpool import` and `zpool status` did not report it. Check disk visibility and pool status.", pool)
@@ -399,7 +395,7 @@ func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error 
 }
 
 func stopPBSServices(ctx context.Context, logger *logging.Logger) error {
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	if _, err := restoreCmd.Run(ctx, "which", "systemctl"); err != nil {
 		return fmt.Errorf("systemctl not available: %w", err)
 	}
 	commands := [][]string{
@@ -419,7 +415,7 @@ func stopPBSServices(ctx context.Context, logger *logging.Logger) error {
 }
 
 func startPBSServices(ctx context.Context, logger *logging.Logger) error {
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	if _, err := restoreCmd.Run(ctx, "which", "systemctl"); err != nil {
 		return fmt.Errorf("systemctl not available: %w", err)
 	}
 	commands := [][]string{
@@ -439,8 +435,7 @@ func startPBSServices(ctx context.Context, logger *logging.Logger) error {
 }
 
 func unmountEtcPVE(ctx context.Context, logger *logging.Logger) error {
-	cmd := exec.CommandContext(ctx, "umount", "/etc/pve")
-	output, err := cmd.CombinedOutput()
+	output, err := restoreCmd.Run(ctx, "umount", "/etc/pve")
 	msg := strings.TrimSpace(string(output))
 	if err != nil {
 		if strings.Contains(msg, "not mounted") {
@@ -459,8 +454,7 @@ func unmountEtcPVE(ctx context.Context, logger *logging.Logger) error {
 }
 
 func runCommand(ctx context.Context, logger *logging.Logger, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := restoreCmd.Run(ctx, name, args...)
 	msg := strings.TrimSpace(string(output))
 	if err != nil {
 		if msg != "" {
@@ -468,7 +462,7 @@ func runCommand(ctx context.Context, logger *logging.Logger, name string, args .
 		}
 		return fmt.Errorf("%s %s failed: %w", name, strings.Join(args, " "), err)
 	}
-	if msg != "" {
+	if msg != "" && logger != nil {
 		logger.Debug("%s %s: %s", name, strings.Join(args, " "), msg)
 	}
 	return nil
@@ -483,7 +477,7 @@ func detectConfiguredZFSPools() []string {
 	}
 
 	for _, dir := range directories {
-		entries, err := os.ReadDir(dir)
+		entries, err := restoreFS.ReadDir(dir)
 		if err != nil {
 			continue
 		}
@@ -534,19 +528,12 @@ func parsePoolNameFromUnit(unitName string) string {
 }
 
 func detectImportableZFSPools() ([]string, string, error) {
-	var output bytes.Buffer
-
-	cmd := exec.Command("zpool", "import")
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-
-	err := cmd.Run()
-	poolNames := parseZpoolImportOutput(output.String())
-
+	output, err := restoreCmd.Run(context.Background(), "zpool", "import")
+	poolNames := parseZpoolImportOutput(string(output))
 	if err != nil {
-		return poolNames, output.String(), err
+		return poolNames, string(output), err
 	}
-	return poolNames, output.String(), nil
+	return poolNames, string(output), nil
 }
 
 func parseZpoolImportOutput(output string) []string {
@@ -645,7 +632,7 @@ func exportDestRoot(baseDir string) string {
 	if base == "" {
 		base = "/opt/proxmox-backup"
 	}
-	return filepath.Join(base, fmt.Sprintf("pve-config-export-%s", time.Now().Format("20060102-150405")))
+	return filepath.Join(base, fmt.Sprintf("pve-config-export-%s", nowRestore().Format("20060102-150405")))
 }
 
 // runFullRestore performs a full restore without selective options (fallback)
@@ -688,7 +675,7 @@ func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *decry
 }
 
 func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logger *logging.Logger) error {
-	if err := os.MkdirAll(destRoot, 0o755); err != nil {
+	if err := restoreFS.MkdirAll(destRoot, 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
 
@@ -747,7 +734,7 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 
 	// Storage configuration
 	storageCfg := filepath.Join(exportRoot, "etc/pve/storage.cfg")
-	if info, err := os.Stat(storageCfg); err == nil && !info.IsDir() {
+	if info, err := restoreFS.Stat(storageCfg); err == nil && !info.IsDir() {
 		fmt.Println()
 		fmt.Printf("Storage configuration found: %s\n", storageCfg)
 		applyStorage, err := promptYesNo(ctx, reader, "Apply storage.cfg via pvesh?")
@@ -769,7 +756,7 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 
 	// Datacenter configuration
 	dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
-	if info, err := os.Stat(dcCfg); err == nil && !info.IsDir() {
+	if info, err := restoreFS.Stat(dcCfg); err == nil && !info.IsDir() {
 		fmt.Println()
 		fmt.Printf("Datacenter configuration found: %s\n", dcCfg)
 		applyDC, err := promptYesNo(ctx, reader, "Apply datacenter.cfg via pvesh?")
@@ -814,7 +801,7 @@ func scanVMConfigs(exportRoot, node string) ([]vmEntry, error) {
 	}
 
 	for _, spec := range dirs {
-		infos, err := os.ReadDir(spec.path)
+		infos, err := restoreFS.ReadDir(spec.path)
 		if err != nil {
 			continue
 		}
@@ -842,7 +829,7 @@ func scanVMConfigs(exportRoot, node string) ([]vmEntry, error) {
 }
 
 func readVMName(confPath string) string {
-	data, err := os.ReadFile(confPath)
+	data, err := restoreFS.ReadFile(confPath)
 	if err != nil {
 		return ""
 	}
@@ -906,7 +893,7 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 	}
 
 	for _, blk := range blocks {
-		tmp, tmpErr := os.CreateTemp("", fmt.Sprintf("pve-storage-%s-*.cfg", sanitizeID(blk.ID)))
+		tmp, tmpErr := restoreFS.CreateTemp("", fmt.Sprintf("pve-storage-%s-*.cfg", sanitizeID(blk.ID)))
 		if tmpErr != nil {
 			failed++
 			continue
@@ -914,7 +901,7 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 		tmpName := tmp.Name()
 		if _, werr := tmp.WriteString(strings.Join(blk.data, "\n") + "\n"); werr != nil {
 			_ = tmp.Close()
-			_ = os.Remove(tmpName)
+			_ = restoreFS.Remove(tmpName)
 			failed++
 			continue
 		}
@@ -929,7 +916,7 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 			applied++
 		}
 
-		_ = os.Remove(tmpName)
+		_ = restoreFS.Remove(tmpName)
 
 		if err := ctx.Err(); err != nil {
 			return applied, failed, err
@@ -940,7 +927,7 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 }
 
 func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
-	data, err := os.ReadFile(cfgPath)
+	data, err := restoreFS.ReadFile(cfgPath)
 	if err != nil {
 		return nil, err
 	}
@@ -977,8 +964,7 @@ func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
 }
 
 func runPvesh(ctx context.Context, logger *logging.Logger, args []string) error {
-	cmd := exec.CommandContext(ctx, "pvesh", args...)
-	output, err := cmd.CombinedOutput()
+	output, err := restoreCmd.Run(ctx, "pvesh", args...)
 	if len(output) > 0 {
 		logger.Debug("pvesh %v output: %s", args, strings.TrimSpace(string(output)))
 	}
@@ -1036,7 +1022,7 @@ func promptClusterRestoreMode(ctx context.Context, reader *bufio.Reader) (int, e
 
 // extractSelectiveArchive extracts only files matching selected categories
 func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, categories []Category, mode RestoreMode, logger *logging.Logger) (string, error) {
-	if err := os.MkdirAll(destRoot, 0o755); err != nil {
+	if err := restoreFS.MkdirAll(destRoot, 0o755); err != nil {
 		return "", fmt.Errorf("create destination directory: %w", err)
 	}
 
@@ -1046,14 +1032,14 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 
 	// Create detailed log directory
 	logDir := "/tmp/proxmox-backup"
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := restoreFS.MkdirAll(logDir, 0755); err != nil {
 		logger.Warning("Could not create log directory: %v", err)
 	}
 
 	// Create detailed log file
-	timestamp := time.Now().Format("20060102_150405")
+	timestamp := nowRestore().Format("20060102_150405")
 	logPath := filepath.Join(logDir, fmt.Sprintf("restore_%s.log", timestamp))
-	logFile, err := os.Create(logPath)
+	logFile, err := restoreFS.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
 	if err != nil {
 		logger.Warning("Could not create detailed log file: %v", err)
 		logFile = nil
@@ -1076,14 +1062,14 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 // If categories is nil, all files are extracted. Otherwise, only files matching the categories are extracted.
 func extractArchiveNative(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, categories []Category, mode RestoreMode, logFile *os.File, logFilePath string) error {
 	// Open the archive file
-	file, err := os.Open(archivePath)
+	file, err := restoreFS.Open(archivePath)
 	if err != nil {
 		return fmt.Errorf("open archive: %w", err)
 	}
 	defer file.Close()
 
 	// Create decompression reader based on file extension
-	reader, err := createDecompressionReader(file, archivePath)
+	reader, err := createDecompressionReader(ctx, file, archivePath)
 	if err != nil {
 		return fmt.Errorf("create decompression reader: %w", err)
 	}
@@ -1097,7 +1083,7 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 	// Write log header if log file is available
 	if logFile != nil {
 		fmt.Fprintf(logFile, "=== PROXMOX RESTORE LOG ===\n")
-		fmt.Fprintf(logFile, "Date: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+		fmt.Fprintf(logFile, "Date: %s\n", nowRestore().Format("2006-01-02 15:04:05"))
 		fmt.Fprintf(logFile, "Mode: %s\n", getModeName(mode))
 		if categories != nil && len(categories) > 0 {
 			fmt.Fprintf(logFile, "Selected categories: %d categories\n", len(categories))
@@ -1119,21 +1105,21 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 
 	var restoredTemp, skippedTemp *os.File
 	if logFile != nil {
-		if tmp, err := os.CreateTemp("", "restored_entries_*.log"); err == nil {
+		if tmp, err := restoreFS.CreateTemp("", "restored_entries_*.log"); err == nil {
 			restoredTemp = tmp
 			defer func() {
 				tmp.Close()
-				_ = os.Remove(tmp.Name())
+				_ = restoreFS.Remove(tmp.Name())
 			}()
 		} else {
 			logger.Warning("Could not create temporary file for restored entries: %v", err)
 		}
 
-		if tmp, err := os.CreateTemp("", "skipped_entries_*.log"); err == nil {
+		if tmp, err := restoreFS.CreateTemp("", "skipped_entries_*.log"); err == nil {
 			skippedTemp = tmp
 			defer func() {
 				tmp.Close()
-				_ = os.Remove(tmp.Name())
+				_ = restoreFS.Remove(tmp.Name())
 			}()
 		} else {
 			logger.Warning("Could not create temporary file for skipped entries: %v", err)
@@ -1239,18 +1225,18 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 }
 
 // createDecompressionReader creates appropriate decompression reader based on file extension
-func createDecompressionReader(file *os.File, archivePath string) (io.Reader, error) {
+func createDecompressionReader(ctx context.Context, file *os.File, archivePath string) (io.Reader, error) {
 	switch {
 	case strings.HasSuffix(archivePath, ".tar.gz") || strings.HasSuffix(archivePath, ".tgz"):
 		return gzip.NewReader(file)
 	case strings.HasSuffix(archivePath, ".tar.xz"):
-		return createXZReader(file)
+		return createXZReader(ctx, file)
 	case strings.HasSuffix(archivePath, ".tar.zst") || strings.HasSuffix(archivePath, ".tar.zstd"):
-		return createZstdReader(file)
+		return createZstdReader(ctx, file)
 	case strings.HasSuffix(archivePath, ".tar.bz2"):
-		return createBzip2Reader(file)
+		return createBzip2Reader(ctx, file)
 	case strings.HasSuffix(archivePath, ".tar.lzma"):
-		return createLzmaReader(file)
+		return createLzmaReader(ctx, file)
 	case strings.HasSuffix(archivePath, ".tar"):
 		return file, nil
 	default:
@@ -1258,60 +1244,47 @@ func createDecompressionReader(file *os.File, archivePath string) (io.Reader, er
 	}
 }
 
-// createXZReader creates an XZ decompression reader using external xz command
-func createXZReader(file *os.File) (io.Reader, error) {
-	cmd := exec.Command("xz", "-d", "-c")
-	cmd.Stdin = file
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("create xz pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start xz: %w", err)
-	}
-	return stdout, nil
+// createXZReader creates an XZ decompression reader using injectable command runner
+func createXZReader(ctx context.Context, file *os.File) (io.Reader, error) {
+	return runRestoreCommandStream(ctx, "xz", file, "-d", "-c")
 }
 
-// createZstdReader creates a Zstd decompression reader using external zstd command
-func createZstdReader(file *os.File) (io.Reader, error) {
-	cmd := exec.Command("zstd", "-d", "-c")
-	cmd.Stdin = file
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("create zstd pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start zstd: %w", err)
-	}
-	return stdout, nil
+// createZstdReader creates a Zstd decompression reader using injectable command runner
+func createZstdReader(ctx context.Context, file *os.File) (io.Reader, error) {
+	return runRestoreCommandStream(ctx, "zstd", file, "-d", "-c")
 }
 
-// createBzip2Reader creates a Bzip2 decompression reader using external bzip2 command
-func createBzip2Reader(file *os.File) (io.Reader, error) {
-	cmd := exec.Command("bzip2", "-d", "-c")
-	cmd.Stdin = file
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("create bzip2 pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start bzip2: %w", err)
-	}
-	return stdout, nil
+// createBzip2Reader creates a Bzip2 decompression reader using injectable command runner
+func createBzip2Reader(ctx context.Context, file *os.File) (io.Reader, error) {
+	return runRestoreCommandStream(ctx, "bzip2", file, "-d", "-c")
 }
 
-// createLzmaReader creates an LZMA decompression reader using external lzma command
-func createLzmaReader(file *os.File) (io.Reader, error) {
-	cmd := exec.Command("lzma", "-d", "-c")
-	cmd.Stdin = file
+// createLzmaReader creates an LZMA decompression reader using injectable command runner
+func createLzmaReader(ctx context.Context, file *os.File) (io.Reader, error) {
+	return runRestoreCommandStream(ctx, "lzma", file, "-d", "-c")
+}
+
+// runRestoreCommandStream starts a command that reads from stdin and exposes stdout as a ReadCloser.
+// It prefers an injectable streaming runner when available; otherwise falls back to exec.CommandContext.
+func runRestoreCommandStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.Reader, error) {
+	type streamingRunner interface {
+		RunStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.ReadCloser, error)
+	}
+	if sr, ok := restoreCmd.(streamingRunner); ok && sr != nil {
+		return sr.RunStream(ctx, name, stdin, args...)
+	}
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = stdin
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("create lzma pipe: %w", err)
+		return nil, fmt.Errorf("create %s pipe: %w", name, err)
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start lzma: %w", err)
+		stdout.Close()
+		return nil, fmt.Errorf("start %s: %w", name, err)
 	}
-	return stdout, nil
+	return &waitReadCloser{ReadCloser: stdout, wait: cmd.Wait}, nil
 }
 
 // extractTarEntry extracts a single TAR entry, preserving all attributes including atime/ctime
@@ -1339,7 +1312,7 @@ func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string,
 	}
 
 	// Create parent directories
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+	if err := restoreFS.MkdirAll(filepath.Dir(target), 0755); err != nil {
 		return fmt.Errorf("create parent directory: %w", err)
 	}
 
@@ -1360,7 +1333,7 @@ func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string,
 
 // extractDirectory creates a directory with proper permissions and timestamps
 func extractDirectory(target string, header *tar.Header, logger *logging.Logger) error {
-	if err := os.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+	if err := restoreFS.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
@@ -1385,10 +1358,10 @@ func extractDirectory(target string, header *tar.Header, logger *logging.Logger)
 // extractRegularFile extracts a regular file with content and timestamps
 func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header, logger *logging.Logger) error {
 	// Remove existing file if it exists
-	_ = os.Remove(target)
+	_ = restoreFS.Remove(target)
 
 	// Create the file
-	outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+	outFile, err := restoreFS.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
@@ -1425,10 +1398,10 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 // extractSymlink creates a symbolic link
 func extractSymlink(target string, header *tar.Header, logger *logging.Logger) error {
 	// Remove existing file/link if it exists
-	_ = os.Remove(target)
+	_ = restoreFS.Remove(target)
 
 	// Create symlink
-	if err := os.Symlink(header.Linkname, target); err != nil {
+	if err := restoreFS.Symlink(header.Linkname, target); err != nil {
 		return fmt.Errorf("create symlink: %w", err)
 	}
 
@@ -1446,10 +1419,10 @@ func extractHardlink(target string, header *tar.Header, destRoot string, logger 
 	linkTarget := filepath.Join(destRoot, header.Linkname)
 
 	// Remove existing file/link if it exists
-	_ = os.Remove(target)
+	_ = restoreFS.Remove(target)
 
 	// Create hard link
-	if err := os.Link(linkTarget, target); err != nil {
+	if err := restoreFS.Link(linkTarget, target); err != nil {
 		return fmt.Errorf("create hardlink: %w", err)
 	}
 

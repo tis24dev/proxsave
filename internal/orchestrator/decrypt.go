@@ -65,9 +65,15 @@ func (p *preparedBundle) Cleanup() {
 	p.cleanup()
 }
 
-func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) error {
-	if cfg == nil {
+// RunDecryptWorkflowWithDeps executes the decrypt workflow using injected dependencies.
+func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string) error {
+	if deps == nil || deps.Config == nil {
 		return fmt.Errorf("configuration not available")
+	}
+	cfg := deps.Config
+	logger := deps.Logger
+	if logger == nil {
+		logger = logging.GetDefaultLogger()
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -81,7 +87,7 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	if err := restoreFS.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
 	destDir, _ = filepath.Abs(destDir)
@@ -106,7 +112,7 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 
 	checksumPath := destArchivePath + ".sha256"
-	if err := os.WriteFile(checksumPath, []byte(fmt.Sprintf("%s  %s\n", prepared.Checksum, filepath.Base(destArchivePath))), 0o640); err != nil {
+	if err := restoreFS.WriteFile(checksumPath, []byte(fmt.Sprintf("%s  %s\n", prepared.Checksum, filepath.Base(destArchivePath))), 0o640); err != nil {
 		return fmt.Errorf("write checksum file: %w", err)
 	}
 
@@ -125,13 +131,29 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(bundlePath, targetBundlePath); err != nil {
+	if err := restoreFS.Remove(targetBundlePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logger.Warning("Failed to remove existing bundle target: %v", err)
+	}
+	if err := restoreFS.Rename(bundlePath, targetBundlePath); err != nil {
 		logger.Warning("Failed to rename bundle: %v", err)
 		targetBundlePath = bundlePath
 	}
 
 	logger.Info("Decrypted bundle created: %s", targetBundlePath)
 	return nil
+}
+
+// RunDecryptWorkflow is the legacy entrypoint that builds default deps.
+func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) error {
+	if cfg == nil {
+		return fmt.Errorf("configuration not available")
+	}
+	if logger == nil {
+		logger = logging.GetDefaultLogger()
+	}
+	deps := defaultDeps(logger, "", cfg.DryRun)
+	deps.Config = cfg
+	return RunDecryptWorkflowWithDeps(ctx, &deps, version)
 }
 
 func buildDecryptPathOptions(cfg *config.Config) []decryptPathOption {
@@ -179,7 +201,7 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 		}
 
 		logger.Info("Scanning %s for backup bundles...", option.Path)
-		info, err := os.Stat(option.Path)
+		info, err := restoreFS.Stat(option.Path)
 		if err != nil || !info.IsDir() {
 			logger.Warning("Path %s is not accessible (%v)", option.Path, err)
 			continue
@@ -232,7 +254,7 @@ func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []de
 }
 
 func discoverBackupCandidates(logger *logging.Logger, root string) ([]*decryptCandidate, error) {
-	entries, err := os.ReadDir(root)
+	entries, err := restoreFS.ReadDir(root)
 	if err != nil {
 		return nil, fmt.Errorf("read directory %s: %w", root, err)
 	}
@@ -266,12 +288,12 @@ func discoverBackupCandidates(logger *logging.Logger, root string) ([]*decryptCa
 				continue
 			}
 			archivePath := filepath.Join(root, baseName)
-			if _, err := os.Stat(archivePath); err != nil {
+			if _, err := restoreFS.Stat(archivePath); err != nil {
 				continue
 			}
 			checksumPath := archivePath + ".sha256"
 			hasChecksum := true
-			if _, err := os.Stat(checksumPath); err != nil {
+			if _, err := restoreFS.Stat(checksumPath); err != nil {
 				// Checksum missing - allow but warn
 				logger.Warning("Backup %s is missing .sha256 checksum file", baseName)
 				checksumPath = ""
@@ -308,7 +330,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) ([]*decryptCa
 }
 
 func inspectBundleManifest(bundlePath string) (*backup.Manifest, error) {
-	file, err := os.Open(bundlePath)
+	file, err := restoreFS.Open(bundlePath)
 	if err != nil {
 		return nil, fmt.Errorf("open bundle: %w", err)
 	}
@@ -398,15 +420,15 @@ func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config
 
 func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decryptCandidate, version string, logger *logging.Logger) (*preparedBundle, error) {
 	tempRoot := filepath.Join("/tmp", "proxmox-backup")
-	if err := os.MkdirAll(tempRoot, 0o755); err != nil {
+	if err := restoreFS.MkdirAll(tempRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create temp root: %w", err)
 	}
-	workDir, err := os.MkdirTemp(tempRoot, "proxmox-decrypt-*")
+	workDir, err := restoreFS.MkdirTemp(tempRoot, "proxmox-decrypt-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
 	cleanup := func() {
-		_ = os.RemoveAll(workDir)
+		_ = restoreFS.RemoveAll(workDir)
 	}
 
 	var staged stagedFiles
@@ -445,7 +467,7 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 		// For plain archives, only copy if source and destination are different
 		// to avoid truncating the file when copying to itself
 		if staged.ArchivePath != plainArchivePath {
-			if err := copyFile(staged.ArchivePath, plainArchivePath); err != nil {
+			if err := copyFile(restoreFS, staged.ArchivePath, plainArchivePath); err != nil {
 				cleanup()
 				return nil, fmt.Errorf("copy archive: %w", err)
 			}
@@ -453,7 +475,7 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 		// If paths are identical, file is already in the correct location
 	}
 
-	archiveInfo, err := os.Stat(plainArchivePath)
+	archiveInfo, err := restoreFS.Stat(plainArchivePath)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("stat decrypted archive: %w", err)
@@ -496,7 +518,7 @@ func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *conf
 }
 
 func extractBundleToWorkdir(bundlePath, workDir string) (stagedFiles, error) {
-	file, err := os.Open(bundlePath)
+	file, err := restoreFS.Open(bundlePath)
 	if err != nil {
 		return stagedFiles{}, fmt.Errorf("open bundle: %w", err)
 	}
@@ -517,7 +539,7 @@ func extractBundleToWorkdir(bundlePath, workDir string) (stagedFiles, error) {
 			continue
 		}
 		target := filepath.Join(workDir, filepath.Base(hdr.Name))
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
+		out, err := restoreFS.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 		if err != nil {
 			return stagedFiles{}, fmt.Errorf("extract %s: %w", hdr.Name, err)
 		}
@@ -545,15 +567,15 @@ func extractBundleToWorkdir(bundlePath, workDir string) (stagedFiles, error) {
 
 func copyRawArtifactsToWorkdir(cand *decryptCandidate, workDir string) (stagedFiles, error) {
 	archiveDest := filepath.Join(workDir, filepath.Base(cand.RawArchivePath))
-	if err := copyFile(cand.RawArchivePath, archiveDest); err != nil {
+	if err := copyFile(restoreFS, cand.RawArchivePath, archiveDest); err != nil {
 		return stagedFiles{}, fmt.Errorf("copy archive: %w", err)
 	}
 	metadataDest := filepath.Join(workDir, filepath.Base(cand.RawMetadataPath))
-	if err := copyFile(cand.RawMetadataPath, metadataDest); err != nil {
+	if err := copyFile(restoreFS, cand.RawMetadataPath, metadataDest); err != nil {
 		return stagedFiles{}, fmt.Errorf("copy metadata: %w", err)
 	}
 	checksumDest := filepath.Join(workDir, filepath.Base(cand.RawChecksumPath))
-	if err := copyFile(cand.RawChecksumPath, checksumDest); err != nil {
+	if err := copyFile(restoreFS, cand.RawChecksumPath, checksumDest); err != nil {
 		return stagedFiles{}, fmt.Errorf("copy checksum: %w", err)
 	}
 	return stagedFiles{
@@ -611,13 +633,13 @@ func parseIdentityInput(input string) (age.Identity, error) {
 }
 
 func decryptWithIdentity(src, dst string, identity age.Identity) error {
-	in, err := os.Open(src)
+	in, err := restoreFS.Open(src)
 	if err != nil {
 		return fmt.Errorf("open encrypted archive: %w", err)
 	}
 	defer in.Close()
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
+	out, err := restoreFS.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 	if err != nil {
 		return fmt.Errorf("create decrypted archive: %w", err)
 	}
@@ -677,13 +699,13 @@ func statusFromManifest(manifest *backup.Manifest) string {
 }
 
 func moveFileSafe(src, dst string) error {
-	if err := os.Rename(src, dst); err == nil {
+	if err := restoreFS.Rename(src, dst); err == nil {
 		return nil
 	}
-	if err := copyFile(src, dst); err != nil {
+	if err := copyFile(restoreFS, src, dst); err != nil {
 		return err
 	}
-	return os.Remove(src)
+	return restoreFS.Remove(src)
 }
 
 func isLocalFilesystemPath(path string) bool {
@@ -700,7 +722,7 @@ func isLocalFilesystemPath(path string) bool {
 func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, description string) (string, error) {
 	current := filepath.Clean(path)
 	for {
-		if _, err := os.Stat(current); errors.Is(err, os.ErrNotExist) {
+		if _, err := restoreFS.Stat(current); errors.Is(err, os.ErrNotExist) {
 			return current, nil
 		} else if err != nil && !errors.Is(err, os.ErrExist) {
 			return "", fmt.Errorf("stat %s: %w", current, err)
@@ -718,7 +740,7 @@ func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, descrip
 		}
 		switch strings.TrimSpace(input) {
 		case "1":
-			if err := os.Remove(current); err != nil {
+			if err := restoreFS.Remove(current); err != nil {
 				fmt.Printf("Failed to remove existing file: %v\n", err)
 				continue
 			}
