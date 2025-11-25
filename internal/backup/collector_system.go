@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -133,7 +132,7 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	if c.config.BackupNetworkConfigs {
 		c.logger.Debug("Collecting network configuration files (/etc/network/*)")
 		if err := c.safeCopyFile(ctx,
-			"/etc/network/interfaces",
+			c.systemPath("/etc/network/interfaces"),
 			filepath.Join(c.tempDir, "etc/network/interfaces"),
 			"Network interfaces"); err != nil {
 			c.logger.Debug("No /etc/network/interfaces found")
@@ -141,7 +140,7 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 
 		// Additional network configs
 		if err := c.safeCopyDir(ctx,
-			"/etc/network/interfaces.d",
+			c.systemPath("/etc/network/interfaces.d"),
 			filepath.Join(c.tempDir, "etc/network/interfaces.d"),
 			"Network interfaces.d"); err != nil {
 			c.logger.Debug("No /etc/network/interfaces.d found")
@@ -151,14 +150,14 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	// Hostname and hosts
 	c.logger.Debug("Collecting hostname/hosts information")
 	if err := c.safeCopyFile(ctx,
-		"/etc/hostname",
+		c.systemPath("/etc/hostname"),
 		filepath.Join(c.tempDir, "etc/hostname"),
 		"Hostname"); err != nil {
 		c.logger.Debug("No /etc/hostname found")
 	}
 
 	if err := c.safeCopyFile(ctx,
-		"/etc/hosts",
+		c.systemPath("/etc/hosts"),
 		filepath.Join(c.tempDir, "etc/hosts"),
 		"Hosts file"); err != nil {
 		c.logger.Debug("No /etc/hosts found")
@@ -167,7 +166,7 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	// DNS configuration
 	c.logger.Debug("Collecting DNS resolver configuration")
 	if err := c.safeCopyFile(ctx,
-		"/etc/resolv.conf",
+		c.systemPath("/etc/resolv.conf"),
 		filepath.Join(c.tempDir, "etc/resolv.conf"),
 		"DNS resolver"); err != nil {
 		c.logger.Debug("No /etc/resolv.conf found")
@@ -176,7 +175,7 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	// Timezone configuration
 	c.logger.Debug("Collecting timezone configuration")
 	if err := c.safeCopyFile(ctx,
-		"/etc/timezone",
+		c.systemPath("/etc/timezone"),
 		filepath.Join(c.tempDir, "etc/timezone"),
 		"Timezone configuration"); err != nil {
 		c.logger.Debug("No /etc/timezone found")
@@ -186,14 +185,14 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	if c.config.BackupAptSources {
 		c.logger.Debug("Collecting APT sources and authentication data")
 		if err := c.safeCopyFile(ctx,
-			"/etc/apt/sources.list",
+			c.systemPath("/etc/apt/sources.list"),
 			filepath.Join(c.tempDir, "etc/apt/sources.list"),
 			"APT sources"); err != nil {
 			c.logger.Debug("No /etc/apt/sources.list found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/apt/sources.list.d",
+			c.systemPath("/etc/apt/sources.list.d"),
 			filepath.Join(c.tempDir, "etc/apt/sources.list.d"),
 			"APT sources.list.d"); err != nil {
 			c.logger.Debug("No /etc/apt/sources.list.d found")
@@ -201,14 +200,14 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 
 		// APT preferences
 		if err := c.safeCopyFile(ctx,
-			"/etc/apt/preferences",
+			c.systemPath("/etc/apt/preferences"),
 			filepath.Join(c.tempDir, "etc/apt/preferences"),
 			"APT preferences"); err != nil {
 			c.logger.Debug("No /etc/apt/preferences found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/apt/preferences.d",
+			c.systemPath("/etc/apt/preferences.d"),
 			filepath.Join(c.tempDir, "etc/apt/preferences.d"),
 			"APT preferences.d"); err != nil {
 			c.logger.Debug("No /etc/apt/preferences.d found")
@@ -216,42 +215,42 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 
 		// APT authentication keys
 		if err := c.safeCopyDir(ctx,
-			"/etc/apt/trusted.gpg.d",
+			c.systemPath("/etc/apt/trusted.gpg.d"),
 			filepath.Join(c.tempDir, "etc/apt/trusted.gpg.d"),
 			"APT GPG keys"); err != nil {
 			c.logger.Debug("No /etc/apt/trusted.gpg.d found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/apt/apt.conf.d",
+			c.systemPath("/etc/apt/apt.conf.d"),
 			filepath.Join(c.tempDir, "etc/apt/apt.conf.d"),
 			"APT apt.conf.d"); err != nil {
 			c.logger.Debug("No /etc/apt/apt.conf.d found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/apt/auth.conf.d",
+			c.systemPath("/etc/apt/auth.conf.d"),
 			filepath.Join(c.tempDir, "etc/apt/auth.conf.d"),
 			"APT auth.conf.d"); err != nil {
 			c.logger.Debug("No /etc/apt/auth.conf.d found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/apt/keyrings",
+			c.systemPath("/etc/apt/keyrings"),
 			filepath.Join(c.tempDir, "etc/apt/keyrings"),
 			"APT keyrings"); err != nil {
 			c.logger.Debug("No /etc/apt/keyrings found")
 		}
 
 		if err := c.safeCopyFile(ctx,
-			"/etc/apt/listchanges.conf",
+			c.systemPath("/etc/apt/listchanges.conf"),
 			filepath.Join(c.tempDir, "etc/apt/listchanges.conf"),
 			"APT listchanges.conf"); err != nil {
 			c.logger.Debug("No /etc/apt/listchanges.conf found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/apt/listchanges.conf.d",
+			c.systemPath("/etc/apt/listchanges.conf.d"),
 			filepath.Join(c.tempDir, "etc/apt/listchanges.conf.d"),
 			"APT listchanges.conf.d"); err != nil {
 			c.logger.Debug("No /etc/apt/listchanges.conf.d found")
@@ -262,14 +261,14 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	if c.config.BackupCronJobs {
 		c.logger.Debug("Collecting cron definitions (system and per-user)")
 		if err := c.safeCopyFile(ctx,
-			"/etc/crontab",
+			c.systemPath("/etc/crontab"),
 			filepath.Join(c.tempDir, "etc/crontab"),
 			"System crontab"); err != nil {
 			c.logger.Debug("No /etc/crontab found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/cron.d",
+			c.systemPath("/etc/cron.d"),
 			filepath.Join(c.tempDir, "etc/cron.d"),
 			"Cron.d directory"); err != nil {
 			c.logger.Debug("No /etc/cron.d found")
@@ -283,7 +282,7 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 			"/etc/cron.weekly",
 		}
 		for _, dir := range cronDirs {
-			if err := c.safeCopyDir(ctx, dir,
+			if err := c.safeCopyDir(ctx, c.systemPath(dir),
 				filepath.Join(c.tempDir, dir[1:]), // Remove leading /
 				filepath.Base(dir)); err != nil {
 				c.logger.Debug("No %s found", dir)
@@ -292,7 +291,7 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 
 		// Per-user crontabs
 		if err := c.safeCopyDir(ctx,
-			"/var/spool/cron/crontabs",
+			c.systemPath("/var/spool/cron/crontabs"),
 			filepath.Join(c.tempDir, "var/spool/cron/crontabs"),
 			"User crontabs"); err != nil {
 			c.logger.Debug("No user crontabs found")
@@ -303,7 +302,7 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	if c.config.BackupSystemdServices {
 		c.logger.Debug("Collecting systemd unit definitions")
 		if err := c.safeCopyDir(ctx,
-			"/etc/systemd/system",
+			c.systemPath("/etc/systemd/system"),
 			filepath.Join(c.tempDir, "etc/systemd/system"),
 			"Systemd services"); err != nil {
 			c.logger.Debug("No /etc/systemd/system found")
@@ -314,21 +313,21 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	if c.config.BackupSSLCerts {
 		c.logger.Debug("Collecting SSL certificates and keys")
 		if err := c.safeCopyDir(ctx,
-			"/etc/ssl/certs",
+			c.systemPath("/etc/ssl/certs"),
 			filepath.Join(c.tempDir, "etc/ssl/certs"),
 			"SSL certificates"); err != nil {
 			c.logger.Debug("No /etc/ssl/certs found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/ssl/private",
+			c.systemPath("/etc/ssl/private"),
 			filepath.Join(c.tempDir, "etc/ssl/private"),
 			"SSL private keys"); err != nil {
 			c.logger.Debug("No /etc/ssl/private found")
 		}
 
 		if err := c.safeCopyFile(ctx,
-			"/etc/ssl/openssl.cnf",
+			c.systemPath("/etc/ssl/openssl.cnf"),
 			filepath.Join(c.tempDir, "etc/ssl/openssl.cnf"),
 			"OpenSSL configuration"); err != nil {
 			c.logger.Debug("No /etc/ssl/openssl.cnf found")
@@ -339,14 +338,14 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	if c.config.BackupSysctlConfig {
 		c.logger.Debug("Collecting sysctl configuration files")
 		if err := c.safeCopyFile(ctx,
-			"/etc/sysctl.conf",
+			c.systemPath("/etc/sysctl.conf"),
 			filepath.Join(c.tempDir, "etc/sysctl.conf"),
 			"Sysctl configuration"); err != nil {
 			c.logger.Debug("No /etc/sysctl.conf found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/sysctl.d",
+			c.systemPath("/etc/sysctl.d"),
 			filepath.Join(c.tempDir, "etc/sysctl.d"),
 			"Sysctl.d directory"); err != nil {
 			c.logger.Debug("No /etc/sysctl.d found")
@@ -357,14 +356,14 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	if c.config.BackupKernelModules {
 		c.logger.Debug("Collecting kernel module configuration")
 		if err := c.safeCopyFile(ctx,
-			"/etc/modules",
+			c.systemPath("/etc/modules"),
 			filepath.Join(c.tempDir, "etc/modules"),
 			"Kernel modules"); err != nil {
 			c.logger.Debug("No /etc/modules found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/modprobe.d",
+			c.systemPath("/etc/modprobe.d"),
 			filepath.Join(c.tempDir, "etc/modprobe.d"),
 			"Modprobe.d directory"); err != nil {
 			c.logger.Debug("No /etc/modprobe.d found")
@@ -375,14 +374,14 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	if c.config.BackupZFSConfig {
 		c.logger.Debug("Collecting ZFS configuration (/etc/zfs, /etc/hostid)")
 		if err := c.safeCopyDir(ctx,
-			"/etc/zfs",
+			c.systemPath("/etc/zfs"),
 			filepath.Join(c.tempDir, "etc/zfs"),
 			"ZFS configuration"); err != nil {
 			c.logger.Warning("Failed to collect /etc/zfs: %v", err)
 		}
 
 		if err := c.safeCopyFile(ctx,
-			"/etc/hostid",
+			c.systemPath("/etc/hostid"),
 			filepath.Join(c.tempDir, "etc/hostid"),
 			"ZFS host identifier"); err != nil {
 			c.logger.Warning("Failed to collect /etc/hostid: %v", err)
@@ -393,21 +392,21 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	if c.config.BackupFirewallRules {
 		c.logger.Debug("Collecting firewall rules (/etc/iptables, nftables)")
 		if err := c.safeCopyDir(ctx,
-			"/etc/iptables",
+			c.systemPath("/etc/iptables"),
 			filepath.Join(c.tempDir, "etc/iptables"),
 			"iptables rules"); err != nil {
 			c.logger.Debug("No /etc/iptables found")
 		}
 
 		if err := c.safeCopyDir(ctx,
-			"/etc/nftables.d",
+			c.systemPath("/etc/nftables.d"),
 			filepath.Join(c.tempDir, "etc/nftables.d"),
 			"nftables rules"); err != nil {
 			c.logger.Debug("No /etc/nftables.d found")
 		}
 
 		if err := c.safeCopyFile(ctx,
-			"/etc/nftables.conf",
+			c.systemPath("/etc/nftables.conf"),
 			filepath.Join(c.tempDir, "etc/nftables.conf"),
 			"nftables configuration"); err != nil {
 			c.logger.Debug("No /etc/nftables.conf found")
@@ -416,7 +415,7 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 
 	// Logrotate configuration
 	if err := c.safeCopyDir(ctx,
-		"/etc/logrotate.d",
+		c.systemPath("/etc/logrotate.d"),
 		filepath.Join(c.tempDir, "etc/logrotate.d"),
 		"logrotate configuration"); err != nil {
 		c.logger.Debug("No /etc/logrotate.d found")
@@ -441,8 +440,9 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 	c.logger.Debug("System info snapshots will be stored in %s", infoDir)
 
 	// OS release information (CRITICAL)
+	osReleasePath := c.systemPath("/etc/os-release")
 	if err := c.collectCommandMulti(ctx,
-		"cat /etc/os-release",
+		fmt.Sprintf("cat %s", osReleasePath),
 		filepath.Join(commandsDir, "os_release.txt"),
 		"OS release",
 		true,
@@ -495,8 +495,9 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(infoDir, "ip_link.txt"))
 
 	// DNS resolver
+	resolvPath := c.systemPath("/etc/resolv.conf")
 	c.safeCmdOutput(ctx,
-		"cat /etc/resolv.conf",
+		fmt.Sprintf("cat %s", resolvPath),
 		filepath.Join(commandsDir, "resolv_conf.txt"),
 		"DNS configuration",
 		false)
@@ -661,7 +662,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 			return fmt.Errorf("failed to create zfs info directory: %w", err)
 		}
 
-		if _, err := exec.LookPath("zpool"); err == nil {
+		if _, err := c.depLookPath("zpool"); err == nil {
 			c.collectCommandOptional(ctx,
 				"zpool status",
 				filepath.Join(commandsDir, "zpool_status.txt"),
@@ -675,7 +676,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 				filepath.Join(zfsDir, "zpool_list.txt"))
 		}
 
-		if _, err := exec.LookPath("zfs"); err == nil {
+		if _, err := c.depLookPath("zfs"); err == nil {
 			c.collectCommandOptional(ctx,
 				"zfs list",
 				filepath.Join(commandsDir, "zfs_list.txt"),
@@ -691,7 +692,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 	}
 
 	// LVM information
-	if _, err := os.Stat("/sbin/pvs"); err == nil {
+	if _, err := c.depStat(c.systemPath("/sbin/pvs")); err == nil {
 		c.safeCmdOutput(ctx,
 			"pvs",
 			filepath.Join(commandsDir, "lvm_pvs.txt"),
@@ -755,14 +756,14 @@ func (c *Collector) collectKernelInfo(ctx context.Context) error {
 
 	// Kernel command line
 	c.safeCmdOutput(ctx,
-		"cat /proc/cmdline",
+		fmt.Sprintf("cat %s", c.systemPath("/proc/cmdline")),
 		filepath.Join(commandsDir, "kernel_cmdline.txt"),
 		"Kernel command line",
 		false)
 
 	// Kernel version details
 	c.safeCmdOutput(ctx,
-		"cat /proc/version",
+		fmt.Sprintf("cat %s", c.systemPath("/proc/version")),
 		filepath.Join(commandsDir, "kernel_version.txt"),
 		"Kernel version details",
 		false)
@@ -784,7 +785,7 @@ func (c *Collector) collectHardwareInfo(ctx context.Context) error {
 		false)
 
 	// Hardware sensors (if available)
-	if _, err := os.Stat("/usr/bin/sensors"); err == nil {
+	if _, err := c.depStat(c.systemPath("/usr/bin/sensors")); err == nil {
 		c.safeCmdOutput(ctx,
 			"sensors",
 			filepath.Join(commandsDir, "sensors.txt"),
@@ -793,7 +794,7 @@ func (c *Collector) collectHardwareInfo(ctx context.Context) error {
 	}
 
 	// SMART status for disks (if available)
-	if _, err := os.Stat("/usr/sbin/smartctl"); err == nil {
+	if _, err := c.depStat(c.systemPath("/usr/sbin/smartctl")); err == nil {
 		// Get list of disks
 		c.safeCmdOutput(ctx,
 			"smartctl --scan",
@@ -822,7 +823,7 @@ func (c *Collector) collectCriticalFiles(ctx context.Context) error {
 			return err
 		}
 		dest := filepath.Join(c.tempDir, strings.TrimPrefix(file, "/"))
-		if err := c.safeCopyFile(ctx, file, dest, fmt.Sprintf("critical file %s", filepath.Base(file))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := c.safeCopyFile(ctx, c.systemPath(file), dest, fmt.Sprintf("critical file %s", filepath.Base(file))); err != nil && !errors.Is(err, os.ErrNotExist) {
 			c.logger.Debug("Failed to copy critical file %s: %v", file, err)
 		}
 	}
@@ -843,7 +844,11 @@ func (c *Collector) collectConfigFile(ctx context.Context) error {
 	}
 
 	dest := filepath.Join(c.tempDir, strings.TrimPrefix(configPath, "/"))
-	if err := c.safeCopyFile(ctx, configPath, dest, "backup configuration file"); err != nil && !errors.Is(err, os.ErrNotExist) {
+	src := configPath
+	if filepath.IsAbs(src) {
+		src = c.systemPath(src)
+	}
+	if err := c.safeCopyFile(ctx, src, dest, "backup configuration file"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
@@ -863,33 +868,34 @@ func (c *Collector) collectCustomPaths(ctx context.Context) error {
 			continue
 		}
 
-		absPath := path
-		if !filepath.IsAbs(absPath) {
-			absPath = filepath.Join("/", path)
+		logicalPath := path
+		if !filepath.IsAbs(logicalPath) {
+			logicalPath = filepath.Join("/", path)
 		}
-		absPath = filepath.Clean(absPath)
+		logicalPath = filepath.Clean(logicalPath)
 
-		if _, ok := seen[absPath]; ok {
+		if _, ok := seen[logicalPath]; ok {
 			continue
 		}
-		seen[absPath] = struct{}{}
+		seen[logicalPath] = struct{}{}
 
-		info, err := os.Lstat(absPath)
+		physicalPath := c.systemPath(logicalPath)
+		info, err := os.Lstat(physicalPath)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				c.logger.Debug("Custom path %s not accessible: %v", absPath, err)
+				c.logger.Debug("Custom path %s not accessible: %v", physicalPath, err)
 			}
 			continue
 		}
 
-		dest := filepath.Join(c.tempDir, strings.TrimPrefix(absPath, "/"))
+		dest := filepath.Join(c.tempDir, strings.TrimPrefix(logicalPath, "/"))
 		if info.IsDir() {
-			if err := c.safeCopyDir(ctx, absPath, dest, fmt.Sprintf("custom directory %s", absPath)); err != nil {
-				c.logger.Debug("Failed to copy custom directory %s: %v", absPath, err)
+			if err := c.safeCopyDir(ctx, physicalPath, dest, fmt.Sprintf("custom directory %s", logicalPath)); err != nil {
+				c.logger.Debug("Failed to copy custom directory %s: %v", physicalPath, err)
 			}
 		} else {
-			if err := c.safeCopyFile(ctx, absPath, dest, fmt.Sprintf("custom file %s", filepath.Base(absPath))); err != nil {
-				c.logger.Debug("Failed to copy custom file %s: %v", absPath, err)
+			if err := c.safeCopyFile(ctx, physicalPath, dest, fmt.Sprintf("custom file %s", filepath.Base(logicalPath))); err != nil {
+				c.logger.Debug("Failed to copy custom file %s: %v", physicalPath, err)
 			}
 		}
 	}
@@ -910,7 +916,7 @@ func (c *Collector) collectScriptDirectories(ctx context.Context) error {
 			return err
 		}
 		dest := filepath.Join(c.tempDir, strings.TrimPrefix(dir, "/"))
-		if err := c.safeCopyDir(ctx, dir, dest, fmt.Sprintf("scripts in %s", dir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := c.safeCopyDir(ctx, c.systemPath(dir), dest, fmt.Sprintf("scripts in %s", dir)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			c.logger.Debug("Failed to copy script directory %s: %v", dir, err)
 		}
 	}
@@ -926,7 +932,7 @@ func (c *Collector) collectSSHKeys(ctx context.Context) error {
 	c.logger.Debug("Collecting SSH keys for host, root and users")
 
 	// Host keys (public)
-	if matches, err := filepath.Glob("/etc/ssh/ssh_host_*"); err == nil {
+	if matches, err := filepath.Glob(c.systemPath("/etc/ssh/ssh_host_*")); err == nil {
 		for _, file := range matches {
 			if !strings.HasSuffix(file, ".pub") {
 				continue
@@ -939,18 +945,18 @@ func (c *Collector) collectSSHKeys(ctx context.Context) error {
 	}
 
 	// Root SSH keys
-	if err := c.safeCopyDir(ctx, "/root/.ssh", filepath.Join(c.tempDir, "root/.ssh"), "root SSH keys"); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := c.safeCopyDir(ctx, c.systemPath("/root/.ssh"), filepath.Join(c.tempDir, "root/.ssh"), "root SSH keys"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.logger.Debug("Failed to copy root SSH keys: %v", err)
 	}
 
 	// User SSH keys
-	homeEntries, err := os.ReadDir("/home")
+	homeEntries, err := os.ReadDir(c.systemPath("/home"))
 	if err == nil {
 		for _, entry := range homeEntries {
 			if !entry.IsDir() {
 				continue
 			}
-			userSSH := filepath.Join("/home", entry.Name(), ".ssh")
+			userSSH := filepath.Join(c.systemPath("/home"), entry.Name(), ".ssh")
 			if _, err := os.Stat(userSSH); err == nil {
 				dest := filepath.Join(c.tempDir, "home", entry.Name(), ".ssh")
 				if err := c.safeCopyDir(ctx, userSSH, dest, fmt.Sprintf("%s SSH keys", entry.Name())); err != nil {
@@ -1029,7 +1035,7 @@ func (c *Collector) collectRootHome(ctx context.Context) error {
 	}
 	c.logger.Debug("Collecting /root profile files and histories")
 
-	if _, err := os.Stat("/root"); err != nil {
+	if _, err := c.depStat(c.systemPath("/root")); err != nil {
 		return nil
 	}
 
@@ -1050,7 +1056,7 @@ func (c *Collector) collectRootHome(ctx context.Context) error {
 		"test-cron.log",
 	}
 	for _, name := range files {
-		src := filepath.Join("/root", name)
+		src := filepath.Join(c.systemPath("/root"), name)
 		dest := filepath.Join(target, name)
 		if err := c.safeCopyFile(ctx, src, dest, fmt.Sprintf("root file %s", name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			c.logger.Debug("Failed to copy root file %s: %v", name, err)
@@ -1059,7 +1065,7 @@ func (c *Collector) collectRootHome(ctx context.Context) error {
 
 	historyPatterns := []string{".bash_history", ".bash_history-*"}
 	for _, pattern := range historyPatterns {
-		matches, err := filepath.Glob(filepath.Join("/root", pattern))
+		matches, err := filepath.Glob(filepath.Join(c.systemPath("/root"), pattern))
 		if err != nil {
 			continue
 		}
@@ -1072,16 +1078,16 @@ func (c *Collector) collectRootHome(ctx context.Context) error {
 	}
 
 	// Only copy security-critical directories; custom paths must be configured explicitly.
-	if err := c.safeCopyDir(ctx, "/root/.ssh", filepath.Join(target, ".ssh"), "root SSH directory"); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := c.safeCopyDir(ctx, c.systemPath("/root/.ssh"), filepath.Join(target, ".ssh"), "root SSH directory"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.logger.Debug("Failed to copy root SSH directory: %v", err)
 	}
 
 	// Copy full root .config directory (for CLI tools, editors, and other configs)
-	if err := c.safeCopyDir(ctx, "/root/.config", filepath.Join(target, ".config"), "root config directory"); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := c.safeCopyDir(ctx, c.systemPath("/root/.config"), filepath.Join(target, ".config"), "root config directory"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.logger.Debug("Failed to copy root .config directory: %v", err)
 	}
 
-	wranglerLogs := filepath.Join("/root", ".config", ".wrangler", "logs")
+	wranglerLogs := filepath.Join(c.systemPath("/root"), ".config", ".wrangler", "logs")
 	if err := c.safeCopyDir(ctx, wranglerLogs, filepath.Join(target, ".config", ".wrangler", "logs"), "wrangler logs"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.logger.Debug("Failed to copy wrangler logs: %v", err)
 	}
@@ -1096,7 +1102,7 @@ func (c *Collector) collectUserHomes(ctx context.Context) error {
 	}
 	c.logger.Debug("Collecting home directories under /home")
 
-	entries, err := os.ReadDir("/home")
+	entries, err := os.ReadDir(c.systemPath("/home"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -1112,7 +1118,7 @@ func (c *Collector) collectUserHomes(ctx context.Context) error {
 		if name == "" {
 			continue
 		}
-		src := filepath.Join("/home", name)
+		src := filepath.Join(c.systemPath("/home"), name)
 		dest := filepath.Join(c.tempDir, "users", name)
 
 		info, err := entry.Info()

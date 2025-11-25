@@ -13,11 +13,9 @@ import (
 )
 
 func TestGetDatastoreListNoBinary(t *testing.T) {
-	origLook := execLookPath
-	t.Cleanup(func() { execLookPath = origLook })
-	execLookPath = func(string) (string, error) { return "", errors.New("not found") }
-
-	collector := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false)
+	collector := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
+		LookPath: func(string) (string, error) { return "", errors.New("not found") },
+	})
 	ds, err := collector.getDatastoreList(context.Background())
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
@@ -28,25 +26,20 @@ func TestGetDatastoreListNoBinary(t *testing.T) {
 }
 
 func TestGetDatastoreListCommandErrorAndParseError(t *testing.T) {
-	origLook := execLookPath
-	origRun := runCommand
-	t.Cleanup(func() {
-		execLookPath = origLook
-		runCommand = origRun
-	})
-
-	execLookPath = func(string) (string, error) { return "/bin/true", nil }
-	runCommand = func(context.Context, string, ...string) ([]byte, error) {
-		return nil, errors.New("cmd fail")
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return nil, errors.New("cmd fail")
+		},
 	}
 
-	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false)
+	c := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, deps)
 	if _, err := c.getDatastoreList(context.Background()); err == nil {
 		t.Fatalf("expected error when command fails")
 	}
 
 	// Now simulate parse error
-	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+	c.deps.RunCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("{invalid"), nil
 	}
 	if _, err := c.getDatastoreList(context.Background()); err == nil {
@@ -55,19 +48,12 @@ func TestGetDatastoreListCommandErrorAndParseError(t *testing.T) {
 }
 
 func TestGetDatastoreListSuccess(t *testing.T) {
-	origLook := execLookPath
-	origRun := runCommand
-	t.Cleanup(func() {
-		execLookPath = origLook
-		runCommand = origRun
+	c := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(`[{"name":" ds1 ","path":"/store1","comment":" main "},{"name":"", "path":"/skip"}]`), nil
+		},
 	})
-
-	execLookPath = func(string) (string, error) { return "/bin/true", nil }
-	runCommand = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(`[{"name":" ds1 ","path":"/store1","comment":" main "},{"name":"", "path":"/skip"}]`), nil
-	}
-
-	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false)
 	ds, err := c.getDatastoreList(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -78,21 +64,14 @@ func TestGetDatastoreListSuccess(t *testing.T) {
 }
 
 func TestGetDatastoreListOverridePaths(t *testing.T) {
-	origLook := execLookPath
-	origRun := runCommand
-	t.Cleanup(func() {
-		execLookPath = origLook
-		runCommand = origRun
-	})
-
-	execLookPath = func(string) (string, error) { return "/bin/true", nil }
-	runCommand = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(`[{"name":"ds1","path":"/auto1"},{"name":"ds2","path":"/auto2"}]`), nil
-	}
-
 	cfg := GetDefaultCollectorConfig()
 	cfg.PBSDatastorePaths = []string{"/override"}
-	c := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
+	c := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(`[{"name":"ds1","path":"/auto1"},{"name":"ds2","path":"/auto2"}]`), nil
+		},
+	})
 
 	ds, err := c.getDatastoreList(context.Background())
 	if err != nil {
@@ -107,23 +86,22 @@ func TestGetDatastoreListOverridePaths(t *testing.T) {
 }
 
 func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
-	origList := listNamespacesFunc
-	t.Cleanup(func() { listNamespacesFunc = origList })
-
 	tmp := t.TempDir()
-	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
+	c := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false, CollectorDeps{})
 	ds := pbsDatastore{Name: "store", Path: "/tmp/path"}
 	targetDir := filepath.Join(tmp, "ds")
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	origList := listNamespacesFunc
 	listNamespacesFunc = func(name, path string) ([]pbs.Namespace, bool, error) {
 		if name != ds.Name || path != ds.Path {
 			t.Fatalf("unexpected args %s %s", name, path)
 		}
 		return []pbs.Namespace{{Ns: "root", Path: "/root"}}, true, nil
 	}
+	t.Cleanup(func() { listNamespacesFunc = origList })
 
 	if err := c.collectDatastoreNamespaces(ds, targetDir); err != nil {
 		t.Fatalf("collectDatastoreNamespaces error: %v", err)
@@ -142,19 +120,13 @@ func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
 }
 
 func TestCollectUserTokensAggregates(t *testing.T) {
-	origLook := execLookPath
-	origRun := runCommand
-	t.Cleanup(func() {
-		execLookPath = origLook
-		runCommand = origRun
-	})
-	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommand = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(`{"token":"ok"}`), nil
-	}
-
 	tmp := t.TempDir()
-	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
+	c := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false, CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(`{"token":"ok"}`), nil
+		},
+	})
 
 	commandsDir := filepath.Join(tmp, "commands")
 	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
@@ -177,5 +149,40 @@ func TestCollectUserTokensAggregates(t *testing.T) {
 	payload, _ := os.ReadFile(aggPath)
 	if !json.Valid(payload) {
 		t.Fatalf("aggregated tokens not valid json: %s", string(payload))
+	}
+}
+
+func TestCollectPBSConfigsWithCustomRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "dummy.cfg"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write dummy cfg: %v", err)
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = root
+	cfg.BackupDatastoreConfigs = false
+	cfg.BackupUserConfigs = false
+	cfg.BackupRemoteConfigs = false
+	cfg.BackupSyncJobs = false
+	cfg.BackupVerificationJobs = false
+	cfg.BackupTapeConfigs = false
+	cfg.BackupPruneSchedules = false
+	cfg.BackupPxarFiles = false
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(`[{"name":"store1","path":"/fake"}]`), nil
+		},
+	})
+	if err := collector.CollectPBSConfigs(context.Background()); err != nil {
+		t.Fatalf("CollectPBSConfigs failed with custom root: %v", err)
+	}
+
+	commandsDir := filepath.Join(collector.tempDir, "commands")
+	if _, err := os.Stat(commandsDir); err != nil {
+		t.Fatalf("expected commands directory, got err: %v", err)
 	}
 }

@@ -15,30 +15,32 @@ import (
 )
 
 func TestGetDatastoreListSuccessWithOverrides(t *testing.T) {
-	stubLookPath(t, func(cmd string) (string, error) {
-		if cmd != "proxmox-backup-manager" {
-			t.Fatalf("unexpected lookPath for %s", cmd)
-		}
-		return "/usr/bin/" + cmd, nil
-	})
-	stubRunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		t.Helper()
-		if name != "proxmox-backup-manager" {
-			t.Fatalf("unexpected command %s", name)
-		}
-		expected := []string{"datastore", "list", "--output-format=json"}
-		if len(args) != len(expected) {
-			t.Fatalf("unexpected args: %v", args)
-		}
-		for i, want := range expected {
-			if args[i] != want {
-				t.Fatalf("unexpected arg[%d]=%s", i, args[i])
+	deps := CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			if cmd != "proxmox-backup-manager" {
+				t.Fatalf("unexpected lookPath for %s", cmd)
 			}
-		}
-		return []byte(`[{"name":"primary","path":"/data/primary","comment":"main"},{"name":"","path":"/ignored"}]`), nil
-	})
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			t.Helper()
+			if name != "proxmox-backup-manager" {
+				t.Fatalf("unexpected command %s", name)
+			}
+			expected := []string{"datastore", "list", "--output-format=json"}
+			if len(args) != len(expected) {
+				t.Fatalf("unexpected args: %v", args)
+			}
+			for i, want := range expected {
+				if args[i] != want {
+					t.Fatalf("unexpected arg[%d]=%s", i, args[i])
+				}
+			}
+			return []byte(`[{"name":"primary","path":"/data/primary","comment":"main"},{"name":"","path":"/ignored"}]`), nil
+		},
+	}
 
-	collector := newTestCollector(t)
+	collector := newTestCollectorWithDeps(t, deps)
 	collector.config.PBSDatastorePaths = []string{" /custom/store ", "/data/primary", "/weird/path/??"}
 
 	datastores, err := collector.getDatastoreList(context.Background())
@@ -73,10 +75,11 @@ func TestGetDatastoreListContextCanceled(t *testing.T) {
 }
 
 func TestGetDatastoreListNoCLI(t *testing.T) {
-	stubLookPath(t, func(string) (string, error) {
-		return "", fmt.Errorf("missing")
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(string) (string, error) {
+			return "", fmt.Errorf("missing")
+		},
 	})
-	collector := newTestCollector(t)
 	datastores, err := collector.getDatastoreList(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -87,13 +90,14 @@ func TestGetDatastoreListNoCLI(t *testing.T) {
 }
 
 func TestGetDatastoreListCommandError(t *testing.T) {
-	stubLookPath(t, func(cmd string) (string, error) {
-		return "/usr/bin/" + cmd, nil
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return nil, fmt.Errorf("command failed")
+		},
 	})
-	stubRunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return nil, fmt.Errorf("command failed")
-	})
-	collector := newTestCollector(t)
 
 	_, err := collector.getDatastoreList(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "datastore list failed") {
@@ -102,13 +106,14 @@ func TestGetDatastoreListCommandError(t *testing.T) {
 }
 
 func TestGetDatastoreListBadJSON(t *testing.T) {
-	stubLookPath(t, func(cmd string) (string, error) {
-		return "/usr/bin/" + cmd, nil
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte("not-json"), nil
+		},
 	})
-	stubRunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return []byte("not-json"), nil
-	})
-	collector := newTestCollector(t)
 
 	_, err := collector.getDatastoreList(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "failed to parse datastore list JSON") {
@@ -117,30 +122,30 @@ func TestGetDatastoreListBadJSON(t *testing.T) {
 }
 
 func TestHasTapeSupportContextCanceled(t *testing.T) {
-	stubStat(t, func(string) (os.FileInfo, error) {
-		t.Fatal("stat should not be called after context cancellation")
-		return nil, nil
-	})
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	collector := newTestCollector(t)
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		Stat: func(string) (os.FileInfo, error) {
+			t.Fatal("stat should not be called after context cancellation")
+			return nil, nil
+		},
+	})
 	if _, err := collector.hasTapeSupport(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
 }
 
 func TestHasTapeSupportConfigFilePresent(t *testing.T) {
-	stubStat(t, func(string) (os.FileInfo, error) {
-		return fakeFileInfo{}, nil
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		Stat: func(string) (os.FileInfo, error) {
+			return fakeFileInfo{}, nil
+		},
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatal("runCommand should not be called when tape.cfg exists")
+			return nil, nil
+		},
 	})
-	stubRunCommand(t, func(context.Context, string, ...string) ([]byte, error) {
-		t.Fatal("runCommand should not be called when tape.cfg exists")
-		return nil, nil
-	})
-
-	collector := newTestCollector(t)
 	hasTape, err := collector.hasTapeSupport(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -151,14 +156,14 @@ func TestHasTapeSupportConfigFilePresent(t *testing.T) {
 }
 
 func TestHasTapeSupportNoCLI(t *testing.T) {
-	stubStat(t, func(string) (os.FileInfo, error) {
-		return nil, os.ErrNotExist
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		Stat: func(string) (os.FileInfo, error) {
+			return nil, os.ErrNotExist
+		},
+		LookPath: func(string) (string, error) {
+			return "", fmt.Errorf("not found")
+		},
 	})
-	stubLookPath(t, func(string) (string, error) {
-		return "", fmt.Errorf("not found")
-	})
-
-	collector := newTestCollector(t)
 	hasTape, err := collector.hasTapeSupport(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -169,17 +174,17 @@ func TestHasTapeSupportNoCLI(t *testing.T) {
 }
 
 func TestHasTapeSupportCommandError(t *testing.T) {
-	stubStat(t, func(string) (os.FileInfo, error) {
-		return nil, os.ErrNotExist
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		Stat: func(string) (os.FileInfo, error) {
+			return nil, os.ErrNotExist
+		},
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return nil, fmt.Errorf("drive list failed")
+		},
 	})
-	stubLookPath(t, func(cmd string) (string, error) {
-		return "/usr/bin/" + cmd, nil
-	})
-	stubRunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return nil, fmt.Errorf("drive list failed")
-	})
-
-	collector := newTestCollector(t)
 	_, err := collector.hasTapeSupport(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "proxmox-tape drive list failed") {
 		t.Fatalf("expected proxmox-tape error, got %v", err)
@@ -187,37 +192,36 @@ func TestHasTapeSupportCommandError(t *testing.T) {
 }
 
 func TestHasTapeSupportCommandErrorAfterContextCancel(t *testing.T) {
-	stubStat(t, func(string) (os.FileInfo, error) {
-		return nil, os.ErrNotExist
-	})
-	stubLookPath(t, func(cmd string) (string, error) {
-		return "/usr/bin/" + cmd, nil
-	})
-
 	ctx, cancel := context.WithCancel(context.Background())
-	stubRunCommand(t, func(context.Context, string, ...string) ([]byte, error) {
-		cancel()
-		return nil, fmt.Errorf("failure")
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		Stat: func(string) (os.FileInfo, error) {
+			return nil, os.ErrNotExist
+		},
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			cancel()
+			return nil, fmt.Errorf("failure")
+		},
 	})
-
-	collector := newTestCollector(t)
 	if _, err := collector.hasTapeSupport(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
 }
 
 func TestHasTapeSupportNoDrives(t *testing.T) {
-	stubStat(t, func(string) (os.FileInfo, error) {
-		return nil, os.ErrNotExist
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		Stat: func(string) (os.FileInfo, error) {
+			return nil, os.ErrNotExist
+		},
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("   \n"), nil
+		},
 	})
-	stubLookPath(t, func(cmd string) (string, error) {
-		return "/usr/bin/" + cmd, nil
-	})
-	stubRunCommand(t, func(context.Context, string, ...string) ([]byte, error) {
-		return []byte("   \n"), nil
-	})
-
-	collector := newTestCollector(t)
 	hasTape, err := collector.hasTapeSupport(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -228,17 +232,17 @@ func TestHasTapeSupportNoDrives(t *testing.T) {
 }
 
 func TestHasTapeSupportHasDrives(t *testing.T) {
-	stubStat(t, func(string) (os.FileInfo, error) {
-		return nil, os.ErrNotExist
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		Stat: func(string) (os.FileInfo, error) {
+			return nil, os.ErrNotExist
+		},
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("drive1\n"), nil
+		},
 	})
-	stubLookPath(t, func(cmd string) (string, error) {
-		return "/usr/bin/" + cmd, nil
-	})
-	stubRunCommand(t, func(context.Context, string, ...string) ([]byte, error) {
-		return []byte("drive1\n"), nil
-	})
-
-	collector := newTestCollector(t)
 	hasTape, err := collector.hasTapeSupport(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -259,7 +263,7 @@ func TestCollectDatastoreNamespacesSuccess(t *testing.T) {
 		}, true, nil
 	})
 
-	collector := newTestCollector(t)
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
 	dsDir := filepath.Join(collector.tempDir, "datastores")
 	if err := os.MkdirAll(dsDir, 0o755); err != nil {
 		t.Fatalf("failed to create datastore dir: %v", err)
@@ -289,7 +293,7 @@ func TestCollectDatastoreNamespacesError(t *testing.T) {
 		return nil, false, fmt.Errorf("boom")
 	})
 
-	collector := newTestCollector(t)
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
 	dsDir := filepath.Join(collector.tempDir, "datastores")
 	if err := os.MkdirAll(dsDir, 0o755); err != nil {
 		t.Fatalf("failed to create datastore dir: %v", err)
@@ -306,17 +310,17 @@ func TestCollectDatastoreConfigsDryRun(t *testing.T) {
 		return []pbs.Namespace{{Ns: ""}}, false, nil
 	})
 
-	stubLookPath(t, func(cmd string) (string, error) {
-		if cmd != "proxmox-backup-manager" {
-			return "", fmt.Errorf("unexpected command %s", cmd)
-		}
-		return "/usr/bin/" + cmd, nil
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			if cmd != "proxmox-backup-manager" {
+				return "", fmt.Errorf("unexpected command %s", cmd)
+			}
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(`{"status":"ok"}`), nil
+		},
 	})
-	stubRunCommand(t, func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(`{"status":"ok"}`), nil
-	})
-
-	collector := newTestCollector(t)
 
 	datastores := []pbsDatastore{{Name: "store1", Path: "/fake"}}
 	if err := collector.collectDatastoreConfigs(context.Background(), datastores); err != nil {
@@ -330,25 +334,24 @@ func TestCollectDatastoreConfigsDryRun(t *testing.T) {
 }
 
 func TestCollectUserConfigsWithTokens(t *testing.T) {
-	stubLookPath(t, func(cmd string) (string, error) {
-		if cmd != "proxmox-backup-manager" {
-			return "", fmt.Errorf("unexpected command %s", cmd)
-		}
-		return "/usr/bin/" + cmd, nil
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			if cmd != "proxmox-backup-manager" {
+				return "", fmt.Errorf("unexpected command %s", cmd)
+			}
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			t.Helper()
+			if name != "proxmox-backup-manager" {
+				return nil, fmt.Errorf("unexpected command %s", name)
+			}
+			if len(args) != 4 || args[0] != "user" || args[1] != "list-tokens" {
+				return nil, fmt.Errorf("unexpected args %v", args)
+			}
+			return []byte(`[{"tokenid":"mytoken"}]`), nil
+		},
 	})
-
-	stubRunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		t.Helper()
-		if name != "proxmox-backup-manager" {
-			return nil, fmt.Errorf("unexpected command %s", name)
-		}
-		if len(args) != 4 || args[0] != "user" || args[1] != "list-tokens" {
-			return nil, fmt.Errorf("unexpected args %v", args)
-		}
-		return []byte(`[{"tokenid":"mytoken"}]`), nil
-	})
-
-	collector := newTestCollector(t)
 	commandsDir := filepath.Join(collector.tempDir, "commands")
 	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
 		t.Fatalf("failed to create commands dir: %v", err)
@@ -381,7 +384,7 @@ func TestCollectUserConfigsWithTokens(t *testing.T) {
 }
 
 func TestCollectUserConfigsMissingUserList(t *testing.T) {
-	collector := newTestCollector(t)
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
 	if err := collector.collectUserConfigs(context.Background()); err != nil {
 		t.Fatalf("collectUserConfigs failed: %v", err)
 	}
@@ -392,45 +395,6 @@ func TestCollectUserConfigsMissingUserList(t *testing.T) {
 	}
 }
 
-type fakeFileInfo struct{}
-
-func (fakeFileInfo) Name() string       { return "fake" }
-func (fakeFileInfo) Size() int64        { return 0 }
-func (fakeFileInfo) Mode() os.FileMode  { return 0 }
-func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
-func (fakeFileInfo) IsDir() bool        { return false }
-func (fakeFileInfo) Sys() interface{}   { return nil }
-
-func stubLookPath(t *testing.T, fn func(string) (string, error)) {
-	t.Helper()
-	orig := execLookPath
-	execLookPath = fn
-	t.Cleanup(func() {
-		execLookPath = orig
-	})
-}
-
-func stubRunCommandWithEnv(t *testing.T, fn func(context.Context, []string, string, ...string) ([]byte, error)) {
-	t.Helper()
-	orig := runCommand
-	origEnv := runCommandWithEnv
-	runCommandWithEnv = fn
-	runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return fn(ctx, nil, name, args...)
-	}
-	t.Cleanup(func() {
-		runCommand = orig
-		runCommandWithEnv = origEnv
-	})
-}
-
-func stubRunCommand(t *testing.T, fn func(context.Context, string, ...string) ([]byte, error)) {
-	t.Helper()
-	stubRunCommandWithEnv(t, func(ctx context.Context, _ []string, name string, args ...string) ([]byte, error) {
-		return fn(ctx, name, args...)
-	})
-}
-
 func stubListNamespaces(t *testing.T, fn func(string, string) ([]pbs.Namespace, bool, error)) {
 	t.Helper()
 	orig := listNamespacesFunc
@@ -439,6 +403,15 @@ func stubListNamespaces(t *testing.T, fn func(string, string) ([]pbs.Namespace, 
 		listNamespacesFunc = orig
 	})
 }
+
+type fakeFileInfo struct{}
+
+func (fakeFileInfo) Name() string       { return "fake" }
+func (fakeFileInfo) Size() int64        { return 0 }
+func (fakeFileInfo) Mode() os.FileMode  { return 0 }
+func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (fakeFileInfo) IsDir() bool        { return false }
+func (fakeFileInfo) Sys() interface{}   { return nil }
 
 func stubStat(t *testing.T, fn func(string) (os.FileInfo, error)) {
 	t.Helper()

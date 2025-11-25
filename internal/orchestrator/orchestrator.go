@@ -1406,6 +1406,7 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.PVEClusterPath = cfg.PVEClusterPath
 	cc.CorosyncConfigPath = cfg.CorosyncConfigPath
 	cc.VzdumpConfigPath = cfg.VzdumpConfigPath
+	cc.PBSConfigPath = cfg.PBSConfigPath
 	cc.PBSDatastorePaths = append([]string(nil), cfg.PBSDatastorePaths...)
 
 	// Pass PBS authentication (auto-detected, zero user input)

@@ -236,6 +236,7 @@ type Config struct {
 	BackupUserHomes         bool
 	BackupConfigFile        bool
 	PVEConfigPath           string
+	PBSConfigPath           string
 	PVEClusterPath          string
 	CorosyncConfigPath      string
 	VzdumpConfigPath        string
@@ -420,19 +421,19 @@ func (c *Config) parse() error {
 	userSafeBracket := c.getStringSlice("SAFE_BRACKET_PROCESSES", nil)
 	c.SafeBracketProcesses = mergeStringSlices(defaultSafeBracket, userSafeBracket)
 
-		defaultSafeKernel := []string{
-			"ksgxd",
-			"hwrng",
-			"usb-storage",
-			"vdev_autotrim",
-			"card1-crtc0",
-			"card1-crtc1",
-			"card1-crtc2",
-			"kvm-pit*",
-			"psimon",
-			"regex:^kvm-pit/[0-9]+$",
-			"regex:^worker/.+-drbd_as_pm-.*",
-		}
+	defaultSafeKernel := []string{
+		"ksgxd",
+		"hwrng",
+		"usb-storage",
+		"vdev_autotrim",
+		"card1-crtc0",
+		"card1-crtc1",
+		"card1-crtc2",
+		"kvm-pit*",
+		"psimon",
+		"regex:^kvm-pit/[0-9]+$",
+		"regex:^worker/.+-drbd_as_pm-.*",
+	}
 	userSafeKernel := c.getStringSlice("SAFE_KERNEL_PROCESSES", nil)
 	c.SafeKernelProcesses = mergeStringSlices(defaultSafeKernel, userSafeKernel)
 
@@ -622,6 +623,7 @@ func (c *Config) parse() error {
 	defaultCorosync := filepath.Join(c.PVEConfigPath, "corosync.conf")
 	c.CorosyncConfigPath = c.getString("COROSYNC_CONFIG_PATH", defaultCorosync)
 	c.VzdumpConfigPath = c.getString("VZDUMP_CONFIG_PATH", "/etc/vzdump.conf")
+	c.PBSConfigPath = c.getString("PBS_CONFIG_PATH", "/etc/proxmox-backup")
 
 	// PBS-specific collection options
 	c.BackupDatastoreConfigs = c.getBool("BACKUP_DATASTORE_CONFIGS", true)

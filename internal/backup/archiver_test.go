@@ -188,14 +188,12 @@ func TestResolveCompressionFallbackToGzip(t *testing.T) {
 	}
 	archiver := NewArchiver(logger, config)
 
-	original := lookPath
-	restore := WithLookPathOverride(func(binary string) (string, error) {
+	archiver.deps.LookPath = func(binary string) (string, error) {
 		if binary == "xz" {
 			return "", fmt.Errorf("xz not available")
 		}
-		return original(binary)
-	})
-	t.Cleanup(restore)
+		return "/usr/bin/" + binary, nil
+	}
 
 	actual := archiver.ResolveCompression()
 	if actual != types.CompressionGzip {

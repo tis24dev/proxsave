@@ -197,6 +197,7 @@ PVE_CONFIG_PATH=/data/etc/pve
 PVE_CLUSTER_PATH=/data/cluster
 COROSYNC_CONFIG_PATH=/data/etc/pve/custom.conf
 VZDUMP_CONFIG_PATH=/data/etc/vzdump.conf
+PBS_CONFIG_PATH=/data/etc/pbs
 PBS_DATASTORE_PATH=/mnt/pbs1,/mnt/pbs2,/mnt/pbs3
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -237,6 +238,9 @@ PBS_DATASTORE_PATH=/mnt/pbs1,/mnt/pbs2,/mnt/pbs3
 	}
 	if cfg.VzdumpConfigPath != "/data/etc/vzdump.conf" {
 		t.Errorf("VzdumpConfigPath = %q; want /data/etc/vzdump.conf", cfg.VzdumpConfigPath)
+	}
+	if cfg.PBSConfigPath != "/data/etc/pbs" {
+		t.Errorf("PBSConfigPath = %q; want /data/etc/pbs", cfg.PBSConfigPath)
 	}
 	if got := cfg.PBSDatastorePaths; len(got) != 3 || got[0] != "/mnt/pbs1" || got[1] != "/mnt/pbs2" || got[2] != "/mnt/pbs3" {
 		t.Errorf("PBSDatastorePaths = %#v; want [/mnt/pbs1 /mnt/pbs2 /mnt/pbs3]", got)

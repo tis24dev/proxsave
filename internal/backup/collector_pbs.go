@@ -23,20 +23,28 @@ type pbsDatastore struct {
 
 var listNamespacesFunc = pbs.ListNamespaces
 
+func (c *Collector) pbsConfigPath() string {
+	if c.config != nil && c.config.PBSConfigPath != "" {
+		return c.systemPath(c.config.PBSConfigPath)
+	}
+	return c.systemPath("/etc/proxmox-backup")
+}
+
 // CollectPBSConfigs collects Proxmox Backup Server specific configurations
 func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 	c.logger.Info("Collecting PBS configurations")
 	c.logger.Debug("Validating PBS environment before collection")
 
 	// Check if we're actually on PBS
-	if _, err := os.Stat("/etc/proxmox-backup"); os.IsNotExist(err) {
-		return fmt.Errorf("not a PBS system: /etc/proxmox-backup not found")
+	pbsConfigPath := c.pbsConfigPath()
+	if _, err := os.Stat(pbsConfigPath); os.IsNotExist(err) {
+		return fmt.Errorf("not a PBS system: %s not found", pbsConfigPath)
 	}
-	c.logger.Debug("Detected /etc/proxmox-backup, proceeding with PBS collection")
+	c.logger.Debug("Detected %s, proceeding with PBS collection", pbsConfigPath)
 
 	// Collect PBS directories
 	c.logger.Debug("Collecting PBS configuration directories")
-	if err := c.collectPBSDirectories(ctx); err != nil {
+	if err := c.collectPBSDirectories(ctx, pbsConfigPath); err != nil {
 		return fmt.Errorf("failed to collect PBS directories: %w", err)
 	}
 	c.logger.Debug("PBS directory collection completed")
@@ -113,11 +121,11 @@ func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 }
 
 // collectPBSDirectories collects PBS-specific directories
-func (c *Collector) collectPBSDirectories(ctx context.Context) error {
-	c.logger.Debug("Collecting PBS directories (/etc/proxmox-backup, configs, schedules)")
+func (c *Collector) collectPBSDirectories(ctx context.Context, root string) error {
+	c.logger.Debug("Collecting PBS directories (%s, configs, schedules)", root)
 	// PBS main configuration directory
 	if err := c.safeCopyDir(ctx,
-		"/etc/proxmox-backup",
+		root,
 		filepath.Join(c.tempDir, "etc/proxmox-backup"),
 		"PBS configuration"); err != nil {
 		return err
@@ -126,7 +134,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 	// Datastore configuration
 	if c.config.BackupDatastoreConfigs {
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/datastore.cfg",
+			filepath.Join(root, "datastore.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/datastore.cfg"),
 			"Datastore configuration"); err != nil {
 			c.logger.Debug("No datastore.cfg found")
@@ -136,7 +144,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 	// User configuration
 	if c.config.BackupUserConfigs {
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/user.cfg",
+			filepath.Join(root, "user.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/user.cfg"),
 			"User configuration"); err != nil {
 			c.logger.Debug("No user.cfg found")
@@ -144,7 +152,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 
 		// ACL configuration
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/acl.cfg",
+			filepath.Join(root, "acl.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/acl.cfg"),
 			"ACL configuration"); err != nil {
 			c.logger.Debug("No acl.cfg found")
@@ -154,7 +162,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 	// Remote configuration (for sync jobs)
 	if c.config.BackupRemoteConfigs {
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/remote.cfg",
+			filepath.Join(root, "remote.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/remote.cfg"),
 			"Remote configuration"); err != nil {
 			c.logger.Debug("No remote.cfg found")
@@ -164,7 +172,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 	// Sync jobs configuration
 	if c.config.BackupSyncJobs {
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/sync.cfg",
+			filepath.Join(root, "sync.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/sync.cfg"),
 			"Sync configuration"); err != nil {
 			c.logger.Debug("No sync.cfg found")
@@ -174,7 +182,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 	// Verification jobs configuration
 	if c.config.BackupVerificationJobs {
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/verification.cfg",
+			filepath.Join(root, "verification.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/verification.cfg"),
 			"Verification configuration"); err != nil {
 			c.logger.Debug("No verification.cfg found")
@@ -184,7 +192,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 	// Tape backup configuration (if applicable)
 	if c.config.BackupTapeConfigs {
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/tape.cfg",
+			filepath.Join(root, "tape.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/tape.cfg"),
 			"Tape configuration"); err != nil {
 			c.logger.Debug("No tape.cfg found")
@@ -192,7 +200,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 
 		// Media pool configuration
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/media-pool.cfg",
+			filepath.Join(root, "media-pool.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/media-pool.cfg"),
 			"Media pool configuration"); err != nil {
 			c.logger.Debug("No media-pool.cfg found")
@@ -202,7 +210,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 	// Network configuration
 	if c.config.BackupNetworkConfigs {
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/network.cfg",
+			filepath.Join(root, "network.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/network.cfg"),
 			"Network configuration"); err != nil {
 			c.logger.Debug("No network.cfg found")
@@ -212,7 +220,7 @@ func (c *Collector) collectPBSDirectories(ctx context.Context) error {
 	// Prune/GC schedules
 	if c.config.BackupPruneSchedules {
 		if err := c.safeCopyFile(ctx,
-			"/etc/proxmox-backup/prune.cfg",
+			filepath.Join(root, "prune.cfg"),
 			filepath.Join(c.tempDir, "etc/proxmox-backup/prune.cfg"),
 			"Prune configuration"); err != nil {
 			c.logger.Debug("No prune.cfg found")
@@ -844,11 +852,11 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 	}
 	c.logger.Debug("Enumerating PBS datastores via proxmox-backup-manager")
 
-	if _, err := execLookPath("proxmox-backup-manager"); err != nil {
+	if _, err := c.depLookPath("proxmox-backup-manager"); err != nil {
 		return nil, nil
 	}
 
-	output, err := runCommand(ctx, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
+	output, err := c.depRunCommand(ctx, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
 	if err != nil {
 		return nil, fmt.Errorf("proxmox-backup-manager datastore list failed: %w", err)
 	}
@@ -915,17 +923,18 @@ func (c *Collector) hasTapeSupport(ctx context.Context) (bool, error) {
 	}
 	c.logger.Debug("Checking PBS tape support configuration")
 
-	if _, err := statFunc("/etc/proxmox-backup/tape.cfg"); err == nil {
-		c.logger.Debug("Detected /etc/proxmox-backup/tape.cfg, tape support enabled")
+	tapeCfg := filepath.Join(c.pbsConfigPath(), "tape.cfg")
+	if _, err := c.depStat(tapeCfg); err == nil {
+		c.logger.Debug("Detected %s, tape support enabled", tapeCfg)
 		return true, nil
 	}
 
-	if _, err := execLookPath("proxmox-tape"); err != nil {
+	if _, err := c.depLookPath("proxmox-tape"); err != nil {
 		c.logger.Debug("proxmox-tape CLI not available, tape support disabled")
 		return false, nil
 	}
 
-	output, err := runCommand(ctx, "proxmox-tape", "drive", "list")
+	output, err := c.depRunCommand(ctx, "proxmox-tape", "drive", "list")
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()

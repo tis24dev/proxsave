@@ -347,6 +347,43 @@ func TestCollectSystemInfo(t *testing.T) {
 	}
 }
 
+func TestCollectSystemInfoWithCustomRootPrefix(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	root := t.TempDir()
+	tempDir := t.TempDir()
+
+	hostnamePath := filepath.Join(root, "etc", "hostname")
+	if err := os.MkdirAll(filepath.Dir(hostnamePath), 0o755); err != nil {
+		t.Fatalf("mkdir fake etc: %v", err)
+	}
+	if err := os.WriteFile(hostnamePath, []byte("custom-host\n"), 0o644); err != nil {
+		t.Fatalf("write hostname: %v", err)
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.SystemRootPrefix = root
+
+	deps := defaultCollectorDeps()
+	deps.LookPath = func(string) (string, error) { return "/bin/true", nil }
+	deps.RunCommand = func(context.Context, string, ...string) ([]byte, error) { return []byte("stub"), nil }
+	deps.RunCommandWithEnv = func(context.Context, []string, string, ...string) ([]byte, error) { return []byte("stub"), nil }
+
+	collector := NewCollectorWithDeps(logger, cfg, tempDir, types.ProxmoxUnknown, false, deps)
+
+	ctx := context.Background()
+	if err := collector.CollectSystemInfo(ctx); err != nil {
+		t.Fatalf("CollectSystemInfo with custom root failed: %v", err)
+	}
+
+	gotHostname, err := os.ReadFile(filepath.Join(tempDir, "etc", "hostname"))
+	if err != nil {
+		t.Fatalf("hostname not copied: %v", err)
+	}
+	if string(gotHostname) != "custom-host\n" {
+		t.Fatalf("hostname content mismatch: %q", string(gotHostname))
+	}
+}
+
 func TestGetStats(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	config := GetDefaultCollectorConfig()

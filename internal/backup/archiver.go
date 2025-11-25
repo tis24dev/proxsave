@@ -21,6 +21,19 @@ import (
 
 var lookPath = exec.LookPath
 
+// ArchiverDeps groups external dependencies used by Archiver.
+type ArchiverDeps struct {
+	LookPath       func(string) (string, error)
+	CommandContext func(context.Context, string, ...string) *exec.Cmd
+}
+
+func defaultArchiverDeps() ArchiverDeps {
+	return ArchiverDeps{
+		LookPath:       lookPath,
+		CommandContext: exec.CommandContext,
+	}
+}
+
 // WithLookPathOverride temporaneamente sostituisce lookPath (per i test) e
 // restituisce una funzione di ripristino da invocare con defer.
 func WithLookPathOverride(fn func(string) (string, error)) func() {
@@ -42,6 +55,7 @@ type Archiver struct {
 	requestedCompression types.CompressionType
 	encryptArchive       bool
 	ageRecipients        []age.Recipient
+	deps                 ArchiverDeps
 }
 
 // ArchiverConfig holds configuration for archive creation
@@ -135,7 +149,22 @@ func NewArchiver(logger *logging.Logger, config *ArchiverConfig) *Archiver {
 		requestedCompression: config.Compression,
 		encryptArchive:       config.EncryptArchive,
 		ageRecipients:        append([]age.Recipient(nil), config.AgeRecipients...),
+		deps:                 defaultArchiverDeps(),
 	}
+}
+
+func (a *Archiver) cmd(ctx context.Context, name string, args ...string) *exec.Cmd {
+	if a.deps.CommandContext != nil {
+		return a.deps.CommandContext(ctx, name, args...)
+	}
+	return exec.CommandContext(ctx, name, args...)
+}
+
+func (a *Archiver) findPath(name string) (string, error) {
+	if a.deps.LookPath != nil {
+		return a.deps.LookPath(name)
+	}
+	return exec.LookPath(name)
 }
 
 // RequestedCompression returns the compression algorithm requested via configuration.
@@ -173,13 +202,13 @@ func (a *Archiver) ResolveCompression() types.CompressionType {
 	a.logger.Debug("Resolving compression (requested=%s level=%d mode=%s)", a.requestedCompression, a.compressionLevel, a.CompressionMode())
 	switch a.compression {
 	case types.CompressionXZ:
-		if _, err := lookPath("xz"); err != nil {
+		if _, err := a.findPath("xz"); err != nil {
 			a.logger.Warning("xz command not available: %v", err)
 			a.compression = types.CompressionGzip
 			a.compressionLevel = normalizeLevelForCompression(a.compression, a.compressionLevel)
 		}
 	case types.CompressionZstd:
-		if _, err := lookPath("zstd"); err != nil {
+		if _, err := a.findPath("zstd"); err != nil {
 			a.logger.Warning("zstd command not available: %v", err)
 			a.compression = types.CompressionGzip
 			a.compressionLevel = normalizeLevelForCompression(a.compression, a.compressionLevel)
@@ -187,21 +216,21 @@ func (a *Archiver) ResolveCompression() types.CompressionType {
 			a.compressionLevel = normalizeLevelForCompression(a.compression, a.compressionLevel)
 		}
 	case types.CompressionPigz:
-		if _, err := lookPath("pigz"); err != nil {
+		if _, err := a.findPath("pigz"); err != nil {
 			a.logger.Warning("pigz command not available: %v", err)
 			a.compression = types.CompressionGzip
 			a.compressionLevel = normalizeLevelForCompression(a.compression, a.compressionLevel)
 		}
 	case types.CompressionBzip2:
-		if _, err := lookPath("pbzip2"); err != nil {
-			if _, err := lookPath("bzip2"); err != nil {
+		if _, err := a.findPath("pbzip2"); err != nil {
+			if _, err := a.findPath("bzip2"); err != nil {
 				a.logger.Warning("bzip2 command not available: %v", err)
 				a.compression = types.CompressionGzip
 				a.compressionLevel = normalizeLevelForCompression(a.compression, a.compressionLevel)
 			}
 		}
 	case types.CompressionLZMA:
-		if _, err := lookPath("lzma"); err != nil {
+		if _, err := a.findPath("lzma"); err != nil {
 			a.logger.Warning("lzma command not available: %v", err)
 			a.compression = types.CompressionGzip
 			a.compressionLevel = normalizeLevelForCompression(a.compression, a.compressionLevel)
@@ -444,7 +473,7 @@ func (a *Archiver) createGzipArchive(ctx context.Context, sourceDir, outputPath 
 func (a *Archiver) createPigzArchive(ctx context.Context, sourceDir, outputPath string) error {
 	a.logger.Debug("Creating pigz archive with level %d (mode %s)", a.compressionLevel, a.CompressionMode())
 	args := buildPigzArgs(a.compressionLevel, a.compressionThreads, a.CompressionMode())
-	cmd := exec.CommandContext(ctx, "pigz", args...)
+	cmd := a.cmd(ctx, "pigz", args...)
 	return a.pipeTarThroughCommand(ctx, sourceDir, outputPath, cmd, "pigz")
 }
 
@@ -483,8 +512,8 @@ func (a *Archiver) createBzip2Archive(ctx context.Context, sourceDir, outputPath
 	a.logger.Debug("Creating bzip2 archive with level %d (mode %s)", a.compressionLevel, a.CompressionMode())
 	var cmd *exec.Cmd
 	if a.compressionThreads > 1 {
-		if _, err := lookPath("pbzip2"); err == nil {
-			cmd = exec.CommandContext(ctx, "pbzip2",
+		if _, err := a.findPath("pbzip2"); err == nil {
+			cmd = a.cmd(ctx, "pbzip2",
 				fmt.Sprintf("-%d", a.compressionLevel),
 				fmt.Sprintf("-p%d", a.compressionThreads),
 				"-c",
@@ -492,7 +521,7 @@ func (a *Archiver) createBzip2Archive(ctx context.Context, sourceDir, outputPath
 		}
 	}
 	if cmd == nil {
-		cmd = exec.CommandContext(ctx, "bzip2",
+		cmd = a.cmd(ctx, "bzip2",
 			fmt.Sprintf("-%d", a.compressionLevel),
 			"-c",
 		)
@@ -506,7 +535,7 @@ func (a *Archiver) createLzmaArchive(ctx context.Context, sourceDir, outputPath 
 	if requiresExtremeMode(a.CompressionMode()) {
 		levelFlag += "e"
 	}
-	cmd := exec.CommandContext(ctx, "lzma",
+	cmd := a.cmd(ctx, "lzma",
 		levelFlag,
 		"-c",
 	)
@@ -518,7 +547,7 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 	a.logger.Debug("Creating xz archive with level %d (mode %s)", a.compressionLevel, a.CompressionMode())
 
 	args := buildXZArgs(a.compressionLevel, a.compressionThreads, a.CompressionMode())
-	cmd := exec.CommandContext(ctx, "xz", args...)
+	cmd := a.cmd(ctx, "xz", args...)
 	if err := a.attachStderrLogger(cmd, "xz"); err != nil {
 		return fmt.Errorf("capture xz output: %w", err)
 	}
@@ -588,7 +617,7 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 	a.logger.Debug("Creating zstd archive with level %d (mode %s)", a.compressionLevel, a.CompressionMode())
 
 	args := buildZstdArgs(a.compressionLevel, a.compressionThreads)
-	cmd := exec.CommandContext(ctx, "zstd", args...)
+	cmd := a.cmd(ctx, "zstd", args...)
 	if err := a.attachStderrLogger(cmd, "zstd"); err != nil {
 		return fmt.Errorf("capture zstd output: %w", err)
 	}
@@ -943,7 +972,7 @@ func (a *Archiver) verifyXZArchive(ctx context.Context, archivePath string) erro
 	a.logger.Debug("Testing XZ compression integrity")
 
 	// Test XZ compression integrity
-	cmd := exec.CommandContext(ctx, "xz", "--test", archivePath)
+	cmd := a.cmd(ctx, "xz", "--test", archivePath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("xz integrity test failed: %w (output: %s)", err, string(output))
 	}
@@ -951,7 +980,7 @@ func (a *Archiver) verifyXZArchive(ctx context.Context, archivePath string) erro
 	a.logger.Debug("XZ compression test passed")
 
 	// Test tar listing (decompress and list without extracting)
-	cmd = exec.CommandContext(ctx, "tar", "-tJf", archivePath)
+	cmd = a.cmd(ctx, "tar", "-tJf", archivePath)
 	cmd.Stdout = nil // Discard output
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tar listing failed: %w (output: %s)", err, string(output))
@@ -966,7 +995,7 @@ func (a *Archiver) verifyZstdArchive(ctx context.Context, archivePath string) er
 	a.logger.Debug("Testing Zstd compression integrity")
 
 	// Test Zstd compression integrity
-	cmd := exec.CommandContext(ctx, "zstd", "--test", archivePath)
+	cmd := a.cmd(ctx, "zstd", "--test", archivePath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("zstd integrity test failed: %w (output: %s)", err, string(output))
 	}
@@ -974,7 +1003,7 @@ func (a *Archiver) verifyZstdArchive(ctx context.Context, archivePath string) er
 	a.logger.Debug("Zstd compression test passed")
 
 	// Test tar listing (decompress and list without extracting)
-	cmd = exec.CommandContext(ctx, "tar", "--use-compress-program=zstd", "-tf", archivePath)
+	cmd = a.cmd(ctx, "tar", "--use-compress-program=zstd", "-tf", archivePath)
 	cmd.Stdout = nil // Discard output
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tar listing failed: %w (output: %s)", err, string(output))
@@ -989,7 +1018,7 @@ func (a *Archiver) verifyGzipArchive(ctx context.Context, archivePath string) er
 	a.logger.Debug("Testing Gzip compression integrity")
 
 	// Test tar listing (tar will test gzip integrity automatically)
-	cmd := exec.CommandContext(ctx, "tar", "-tzf", archivePath)
+	cmd := a.cmd(ctx, "tar", "-tzf", archivePath)
 	cmd.Stdout = nil // Discard output
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tar/gzip verification failed: %w (output: %s)", err, string(output))
@@ -1004,7 +1033,7 @@ func (a *Archiver) verifyTarArchive(ctx context.Context, archivePath string) err
 	a.logger.Debug("Testing uncompressed tar integrity")
 
 	// Test tar listing
-	cmd := exec.CommandContext(ctx, "tar", "-tf", archivePath)
+	cmd := a.cmd(ctx, "tar", "-tf", archivePath)
 	cmd.Stdout = nil // Discard output
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tar verification failed: %w (output: %s)", err, string(output))

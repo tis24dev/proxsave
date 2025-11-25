@@ -161,8 +161,26 @@ func TestSanitizeFilename(t *testing.T) {
 
 func newTestCollector(t *testing.T) *Collector {
 	t.Helper()
+	return newTestCollectorWithDeps(t, CollectorDeps{})
+}
+
+func newTestCollectorWithDeps(t *testing.T, override CollectorDeps) *Collector {
+	t.Helper()
+	deps := defaultCollectorDeps()
+	if override.LookPath != nil {
+		deps.LookPath = override.LookPath
+	}
+	if override.RunCommand != nil {
+		deps.RunCommand = override.RunCommand
+	}
+	if override.RunCommandWithEnv != nil {
+		deps.RunCommandWithEnv = override.RunCommandWithEnv
+	}
+	if override.Stat != nil {
+		deps.Stat = override.Stat
+	}
 	logger := logging.New(types.LogLevelDebug, false)
 	config := GetDefaultCollectorConfig()
 	tempDir := t.TempDir()
-	return NewCollector(logger, config, tempDir, types.ProxmoxUnknown, false)
+	return NewCollectorWithDeps(logger, config, tempDir, types.ProxmoxUnknown, false, deps)
 }

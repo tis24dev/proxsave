@@ -48,6 +48,7 @@ type Collector struct {
 	dryRun     bool
 	rootsMu    sync.RWMutex
 	rootsCache map[string][]string
+	deps       CollectorDeps
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
@@ -70,6 +71,45 @@ func (c *Collector) addBytesCollected(delta int64) {
 		return
 	}
 	atomic.AddInt64(&c.stats.BytesCollected, delta)
+}
+
+func (c *Collector) depLookPath(name string) (string, error) {
+	if c.deps.LookPath != nil {
+		return c.deps.LookPath(name)
+	}
+	return execLookPath(name)
+}
+
+func (c *Collector) depRunCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if c.deps.RunCommand != nil {
+		return c.deps.RunCommand(ctx, name, args...)
+	}
+	return runCommand(ctx, name, args...)
+}
+
+func (c *Collector) depRunCommandWithEnv(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
+	if c.deps.RunCommandWithEnv != nil {
+		return c.deps.RunCommandWithEnv(ctx, extraEnv, name, args...)
+	}
+	return runCommandWithEnv(ctx, extraEnv, name, args...)
+}
+
+func (c *Collector) depStat(path string) (os.FileInfo, error) {
+	if c.deps.Stat != nil {
+		return c.deps.Stat(path)
+	}
+	return statFunc(path)
+}
+
+// systemPath resolves an absolute system path under an optional test prefix.
+// When SystemRootPrefix is empty or "/", it returns the original path.
+func (c *Collector) systemPath(path string) string {
+	prefix := c.config.SystemRootPrefix
+	if prefix == "" || prefix == string(filepath.Separator) {
+		return path
+	}
+	trimmed := strings.TrimPrefix(path, string(filepath.Separator))
+	return filepath.Join(prefix, trimmed)
 }
 
 // CollectorConfig holds configuration for backup collection
@@ -118,6 +158,7 @@ type CollectorConfig struct {
 	BackupScriptRepository  bool
 	BackupUserHomes         bool
 	BackupConfigFile        bool
+	SystemRootPrefix        string
 
 	// PXAR scanning tuning
 	PxarDatastoreConcurrency int
@@ -143,6 +184,7 @@ type CollectorConfig struct {
 	PVEClusterPath       string
 	CorosyncConfigPath   string
 	VzdumpConfigPath     string
+	PBSConfigPath        string
 	PBSDatastorePaths    []string
 
 	// PBS Authentication (auto-detected)
@@ -210,12 +252,20 @@ func (c *CollectorConfig) Validate() error {
 	if c.MaxPVEBackupSizeBytes < 0 {
 		return fmt.Errorf("MAX_PVE_BACKUP_SIZE must be >= 0")
 	}
+	if c.SystemRootPrefix != "" && !filepath.IsAbs(c.SystemRootPrefix) {
+		return fmt.Errorf("system root prefix must be an absolute path")
+	}
 
 	return nil
 }
 
 // NewCollector creates a new backup collector
 func NewCollector(logger *logging.Logger, config *CollectorConfig, tempDir string, proxType types.ProxmoxType, dryRun bool) *Collector {
+	return NewCollectorWithDeps(logger, config, tempDir, proxType, dryRun, defaultCollectorDeps())
+}
+
+// NewCollectorWithDeps creates a collector with explicit dependency overrides (for testing).
+func NewCollectorWithDeps(logger *logging.Logger, config *CollectorConfig, tempDir string, proxType types.ProxmoxType, dryRun bool, deps CollectorDeps) *Collector {
 	return &Collector{
 		logger:     logger,
 		config:     config,
@@ -224,6 +274,7 @@ func NewCollector(logger *logging.Logger, config *CollectorConfig, tempDir strin
 		proxType:   proxType,
 		dryRun:     dryRun,
 		rootsCache: make(map[string][]string),
+		deps:       deps,
 	}
 }
 
@@ -274,6 +325,7 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		BackupScriptRepository:  true,
 		BackupUserHomes:         true,
 		BackupConfigFile:        true,
+		SystemRootPrefix:        "",
 
 		PxarDatastoreConcurrency: 3,
 		PxarIntraConcurrency:     4,
@@ -291,6 +343,7 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		PVEClusterPath:     "/var/lib/pve-cluster",
 		CorosyncConfigPath: "/etc/pve/corosync.conf",
 		VzdumpConfigPath:   "/etc/vzdump.conf",
+		PBSConfigPath:      "/etc/proxmox-backup",
 		PBSDatastorePaths:  []string{},
 	}
 }
@@ -671,7 +724,7 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 	}
 
 	// Check if command exists
-	if _, err := execLookPath(cmdParts[0]); err != nil {
+	if _, err := c.depLookPath(cmdParts[0]); err != nil {
 		if critical {
 			c.incFilesFailed()
 			return fmt.Errorf("critical command not available: %s", cmdParts[0])
@@ -686,7 +739,7 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 	}
 
 	cmdString := strings.Join(cmdParts, " ")
-	out, err := runCommand(ctx, cmdParts[0], cmdParts[1:]...)
+	out, err := c.depRunCommand(ctx, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		if critical {
 			c.incFilesFailed()
@@ -728,7 +781,7 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 	}
 
 	// Check if command exists
-	if _, err := execLookPath(cmdParts[0]); err != nil {
+	if _, err := c.depLookPath(cmdParts[0]); err != nil {
 		if critical {
 			c.incFilesFailed()
 			return fmt.Errorf("critical command not available: %s", cmdParts[0])
@@ -763,7 +816,7 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 	}
 
 	cmdString := strings.Join(cmdParts, " ")
-	out, err := runCommandWithEnv(ctx, extraEnv, cmdParts[0], cmdParts[1:]...)
+	out, err := c.depRunCommandWithEnv(ctx, extraEnv, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		if critical {
 			c.incFilesFailed()
@@ -806,7 +859,7 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
 	}
 
 	// Check if command exists
-	if _, err := execLookPath(cmdParts[0]); err != nil {
+	if _, err := c.depLookPath(cmdParts[0]); err != nil {
 		if critical {
 			c.incFilesFailed()
 			return fmt.Errorf("critical command not available: %s", cmdParts[0])
@@ -861,7 +914,7 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
 	}
 
 	cmdString := strings.Join(cmdParts, " ")
-	out, err := runCommandWithEnv(ctx, extraEnv, cmdParts[0], cmdParts[1:]...)
+	out, err := c.depRunCommandWithEnv(ctx, extraEnv, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		if critical {
 			c.incFilesFailed()
@@ -971,7 +1024,7 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		return nil, fmt.Errorf("empty command")
 	}
 
-	if _, err := execLookPath(parts[0]); err != nil {
+	if _, err := c.depLookPath(parts[0]); err != nil {
 		if critical {
 			c.incFilesFailed()
 			return nil, fmt.Errorf("critical command not available: %s", parts[0])
@@ -985,7 +1038,7 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		return nil, nil
 	}
 
-	out, err := runCommand(ctx, parts[0], parts[1:]...)
+	out, err := c.depRunCommand(ctx, parts[0], parts[1:]...)
 	if err != nil {
 		cmdString := strings.Join(parts, " ")
 		if critical {

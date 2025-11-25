@@ -568,16 +568,16 @@ func (c *Collector) collectPVEJobs(ctx context.Context, nodes []string) error {
 
 func (c *Collector) effectivePVEConfigPath() string {
 	if path := strings.TrimSpace(c.config.PVEConfigPath); path != "" {
-		return path
+		return c.systemPath(path)
 	}
-	return "/etc/pve"
+	return c.systemPath("/etc/pve")
 }
 
 func (c *Collector) effectivePVEClusterPath() string {
 	if path := strings.TrimSpace(c.config.PVEClusterPath); path != "" {
-		return path
+		return c.systemPath(path)
 	}
-	return "/var/lib/pve-cluster"
+	return c.systemPath("/var/lib/pve-cluster")
 }
 
 func (c *Collector) targetPathFor(src string) string {
@@ -1160,7 +1160,7 @@ func (c *Collector) collectPVECephInfo(ctx context.Context) error {
 		}
 	}
 
-	if _, err := execLookPath("ceph"); err != nil {
+	if _, err := c.depLookPath("ceph"); err != nil {
 		c.logger.Debug("Ceph CLI not available, skipping Ceph command outputs")
 		return nil
 	}
@@ -1667,8 +1667,8 @@ func (c *Collector) isClusteredPVE(ctx context.Context) (bool, error) {
 	}
 
 	// Fallback to pvecm status
-	if _, err := execLookPath("pvecm"); err == nil {
-		output, err := runCommand(ctx, "pvecm", "status")
+	if _, err := c.depLookPath("pvecm"); err == nil {
+		output, err := c.depRunCommand(ctx, "pvecm", "status")
 		if err != nil {
 			return false, fmt.Errorf("pvecm status failed: %w", err)
 		}
@@ -1732,10 +1732,10 @@ func (c *Collector) isServiceActive(ctx context.Context, service string) bool {
 	if service == "" {
 		return false
 	}
-	if _, err := execLookPath("systemctl"); err != nil {
+	if _, err := c.depLookPath("systemctl"); err != nil {
 		return false
 	}
-	if _, err := runCommand(ctx, "systemctl", "is-active", service); err == nil {
+	if _, err := c.depRunCommand(ctx, "systemctl", "is-active", service); err == nil {
 		return true
 	}
 	return false
@@ -1773,6 +1773,7 @@ func (c *Collector) cephConfigPaths() []string {
 		if !filepath.IsAbs(path) {
 			abs = filepath.Clean(filepath.Join("/", path))
 		}
+		abs = c.systemPath(abs)
 		for _, existing := range paths {
 			if existing == abs {
 				return
@@ -1862,10 +1863,10 @@ func (c *Collector) cephServiceActive(ctx context.Context) bool {
 }
 
 func (c *Collector) cephStorageConfigured(ctx context.Context) bool {
-	if _, err := execLookPath("pvesm"); err != nil {
+	if _, err := c.depLookPath("pvesm"); err != nil {
 		return false
 	}
-	output, err := runCommand(ctx, "pvesm", "status")
+	output, err := c.depRunCommand(ctx, "pvesm", "status")
 	if err != nil {
 		return false
 	}
@@ -1874,22 +1875,22 @@ func (c *Collector) cephStorageConfigured(ctx context.Context) bool {
 }
 
 func (c *Collector) cephStatusAvailable(ctx context.Context) bool {
-	if _, err := execLookPath("ceph"); err != nil {
+	if _, err := c.depLookPath("ceph"); err != nil {
 		return false
 	}
 	statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := runCommand(statusCtx, "ceph", "-s"); err == nil {
+	if _, err := c.depRunCommand(statusCtx, "ceph", "-s"); err == nil {
 		return true
 	}
 	return false
 }
 
 func (c *Collector) cephProcessesRunning(ctx context.Context) bool {
-	if _, err := execLookPath("pgrep"); err != nil {
+	if _, err := c.depLookPath("pgrep"); err != nil {
 		return false
 	}
-	if _, err := runCommand(ctx, "pgrep", "-f", "ceph-"); err == nil {
+	if _, err := c.depRunCommand(ctx, "pgrep", "-f", "ceph-"); err == nil {
 		return true
 	}
 	return false
