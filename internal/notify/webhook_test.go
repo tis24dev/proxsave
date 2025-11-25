@@ -134,6 +134,24 @@ func TestNewWebhookNotifier(t *testing.T) {
 	}
 }
 
+func TestWebhookNotifier_Name(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, _ := NewWebhookNotifier(&config.WebhookConfig{Enabled: false}, logger)
+
+	if notifier.Name() != "Webhook" {
+		t.Errorf("Name() = %q, want %q", notifier.Name(), "Webhook")
+	}
+}
+
+func TestWebhookNotifier_IsCritical(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, _ := NewWebhookNotifier(&config.WebhookConfig{Enabled: false}, logger)
+
+	if notifier.IsCritical() {
+		t.Error("IsCritical() should return false for webhook notifier")
+	}
+}
+
 func TestWebhookNotifier_IsEnabled(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 

@@ -66,6 +66,55 @@ func TestNewTelegramNotifierValidation(t *testing.T) {
 	}
 }
 
+func TestTelegramName(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, _ := NewTelegramNotifier(TelegramConfig{
+		Enabled:  true,
+		Mode:     TelegramModePersonal,
+		BotToken: "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+		ChatID:   "123456",
+	}, logger)
+
+	if notifier.Name() != "Telegram" {
+		t.Errorf("Name() = %q, want %q", notifier.Name(), "Telegram")
+	}
+}
+
+func TestTelegramIsEnabled(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	// Test disabled
+	notifier1, _ := NewTelegramNotifier(TelegramConfig{Enabled: false}, logger)
+	if notifier1 != nil && notifier1.IsEnabled() {
+		t.Error("IsEnabled() should return false when disabled")
+	}
+
+	// Test enabled
+	notifier2, _ := NewTelegramNotifier(TelegramConfig{
+		Enabled:  true,
+		Mode:     TelegramModePersonal,
+		BotToken: "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+		ChatID:   "123456",
+	}, logger)
+	if !notifier2.IsEnabled() {
+		t.Error("IsEnabled() should return true when enabled")
+	}
+}
+
+func TestTelegramIsCritical(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, _ := NewTelegramNotifier(TelegramConfig{
+		Enabled:  true,
+		Mode:     TelegramModePersonal,
+		BotToken: "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+		ChatID:   "123456",
+	}, logger)
+
+	if notifier.IsCritical() {
+		t.Error("IsCritical() should return false for Telegram notifier")
+	}
+}
+
 func TestTelegramSendPersonal(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	data := createTestNotificationData()

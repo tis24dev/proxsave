@@ -49,6 +49,44 @@ func TestGotifySendDisabled(t *testing.T) {
 	}
 }
 
+func TestGotifyName(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, _ := NewGotifyNotifier(GotifyConfig{Enabled: false}, logger)
+
+	if notifier.Name() != "Gotify" {
+		t.Errorf("Name() = %q, want %q", notifier.Name(), "Gotify")
+	}
+}
+
+func TestGotifyIsEnabled(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	// Test disabled
+	notifier1, _ := NewGotifyNotifier(GotifyConfig{Enabled: false}, logger)
+	if notifier1.IsEnabled() {
+		t.Error("IsEnabled() should return false when disabled")
+	}
+
+	// Test enabled
+	notifier2, _ := NewGotifyNotifier(GotifyConfig{
+		Enabled:   true,
+		ServerURL: "https://gotify.example",
+		Token:     "token",
+	}, logger)
+	if !notifier2.IsEnabled() {
+		t.Error("IsEnabled() should return true when enabled")
+	}
+}
+
+func TestGotifyIsCritical(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, _ := NewGotifyNotifier(GotifyConfig{Enabled: false}, logger)
+
+	if notifier.IsCritical() {
+		t.Error("IsCritical() should return false for Gotify notifier")
+	}
+}
+
 func TestGotifySendSuccessAndFailure(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	bodySeen := false

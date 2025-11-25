@@ -2,6 +2,7 @@ package security
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tis24dev/proxmox-backup/internal/config"
+	"github.com/tis24dev/proxmox-backup/internal/environment"
 	"github.com/tis24dev/proxmox-backup/internal/logging"
 	"github.com/tis24dev/proxmox-backup/internal/types"
 )
@@ -697,5 +699,391 @@ func TestDetectPrivateAgeKeysAddsWarning(t *testing.T) {
 
 	if !containsIssue(checker.result, "AGE/SSH key") {
 		t.Fatalf("expected warning about private key, issues=%+v", checker.result.Issues)
+	}
+}
+
+// TestChecksumFile tests file checksumming
+func TestChecksumFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create test file with known content
+	testFile := filepath.Join(tmpDir, "test.txt")
+	content := []byte("test content for checksum")
+	if err := os.WriteFile(testFile, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Calculate checksum
+	checksum1, err := checksumFile(testFile)
+	if err != nil {
+		t.Errorf("checksumFile() error = %v", err)
+	}
+	if checksum1 == "" {
+		t.Error("checksumFile() returned empty checksum")
+	}
+
+	// Verify checksum is consistent
+	checksum2, err := checksumFile(testFile)
+	if err != nil {
+		t.Errorf("checksumFile() second call error = %v", err)
+	}
+	if checksum1 != checksum2 {
+		t.Errorf("checksumFile() inconsistent: first=%s, second=%s", checksum1, checksum2)
+	}
+
+	// Test with different content
+	testFile2 := filepath.Join(tmpDir, "test2.txt")
+	if err := os.WriteFile(testFile2, []byte("different content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	checksum3, err := checksumFile(testFile2)
+	if err != nil {
+		t.Errorf("checksumFile() error = %v", err)
+	}
+	if checksum3 == checksum1 {
+		t.Error("checksumFile() should return different checksums for different content")
+	}
+
+	// Test with nonexistent file
+	_, err = checksumFile(filepath.Join(tmpDir, "nonexistent.txt"))
+	if err == nil {
+		t.Error("checksumFile() should return error for nonexistent file")
+	}
+}
+
+// TestIsSafeBracketProcess tests bracket process safety checking
+func TestIsSafeBracketProcess(t *testing.T) {
+	tests := []struct {
+		name     string
+		procName string
+		config   *config.Config
+		expected bool
+	}{
+		{
+			name:     "kernel worker",
+			procName: "kworker/0:1",
+			config:   &config.Config{},
+			expected: true,
+		},
+		{
+			name:     "configured safe bracket process",
+			procName: "systemd-journal",
+			config: &config.Config{
+				SafeBracketProcesses: []string{"systemd-journal", "systemd-udevd"},
+			},
+			expected: true,
+		},
+		{
+			name:     "configured safe kernel process",
+			procName: "mykernel-worker",
+			config: &config.Config{
+				SafeKernelProcesses: []string{"mykernel-*"},
+			},
+			expected: true,
+		},
+		{
+			name:     "unknown bracket process",
+			procName: "unknown-process",
+			config:   &config.Config{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checker := &Checker{
+				logger: newSecurityTestLogger(),
+				cfg:    tt.config,
+				result: &Result{},
+			}
+			result := checker.isSafeBracketProcess(tt.procName)
+			if result != tt.expected {
+				t.Errorf("isSafeBracketProcess(%s) = %v, want %v", tt.procName, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestIsSafeKernelProcess tests kernel process safety checking
+func TestIsSafeKernelProcess(t *testing.T) {
+	tests := []struct {
+		name     string
+		procName string
+		patterns []string
+		expected bool
+	}{
+		{
+			name:     "matches pattern",
+			procName: "zfs-worker",
+			patterns: []string{"zfs-*", "kvm-*"},
+			expected: true,
+		},
+		{
+			name:     "no match",
+			procName: "unknown-worker",
+			patterns: []string{"zfs-*", "kvm-*"},
+			expected: false,
+		},
+		{
+			name:     "empty patterns",
+			procName: "any-process",
+			patterns: []string{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checker := &Checker{
+				logger: newSecurityTestLogger(),
+				cfg: &config.Config{
+					SafeKernelProcesses: tt.patterns,
+				},
+				result: &Result{},
+			}
+			result := checker.isSafeKernelProcess(tt.procName)
+			if result != tt.expected {
+				t.Errorf("isSafeKernelProcess(%s) = %v, want %v", tt.procName, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestCheckFirewall tests firewall checking
+func TestCheckFirewall(t *testing.T) {
+	tests := []struct {
+		name          string
+		iptablesFound bool
+		expectWarning bool
+	}{
+		{
+			name:          "iptables not found",
+			iptablesFound: false,
+			expectWarning: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checker := newChecker(t, &config.Config{})
+
+			// Mock iptables lookup
+			if !tt.iptablesFound {
+				checker.checkFirewall(context.Background())
+				if !containsIssue(checker.result, "iptables") {
+					t.Error("Expected warning about missing iptables")
+				}
+			}
+		})
+	}
+}
+
+// TestCheckSuspiciousProcesses tests suspicious process detection
+func TestCheckSuspiciousProcesses(t *testing.T) {
+	checker := &Checker{
+		logger: newSecurityTestLogger(),
+		cfg: &config.Config{
+			SuspiciousProcesses: []string{"malware", "cryptominer"},
+		},
+		result: &Result{},
+	}
+
+	// This test verifies the function doesn't crash
+	// In a real environment, it would need to mock the ps command
+	// For now, we just verify the function can be called
+	checker.checkSuspiciousProcesses(context.Background())
+
+	// The function should complete without panic
+	if checker.result == nil {
+		t.Error("Result should not be nil")
+	}
+}
+
+// TestRunSecurityChecks tests the main Run function
+func TestRunSecurityChecks(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	execPath := filepath.Join(tmpDir, "proxmox-backup")
+
+	// Create test config file
+	if err := os.WriteFile(configPath, []byte("test: config"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create test executable
+	if err := os.WriteFile(execPath, []byte("#!/bin/sh\necho test"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newSecurityTestLogger()
+
+	tests := []struct {
+		name        string
+		config      *config.Config
+		expectError bool
+	}{
+		{
+			name: "security checks disabled",
+			config: &config.Config{
+				SecurityCheckEnabled: false,
+			},
+			expectError: false,
+		},
+		{
+			name: "security checks enabled with no issues",
+			config: &config.Config{
+				SecurityCheckEnabled:      true,
+				ContinueOnSecurityIssues:  true,
+				CheckNetworkSecurity:      false,
+				AutoFixPermissions:        false,
+				AutoUpdateHashes:          false,
+				CheckFirewall:             false,
+				CheckOpenPorts:            false,
+				SuspiciousProcesses:       []string{},
+				SafeBracketProcesses:      []string{},
+				SafeKernelProcesses:       []string{},
+				SuspiciousPorts:           []int{},
+				PortWhitelist:             []string{},
+				BaseDir:                   tmpDir,
+			},
+			expectError: false,
+		},
+		{
+			name: "security checks with network checks",
+			config: &config.Config{
+				SecurityCheckEnabled:      true,
+				ContinueOnSecurityIssues:  true,
+				CheckNetworkSecurity:      true,
+				CheckFirewall:             true,
+				CheckOpenPorts:            true,
+				AutoFixPermissions:        false,
+				AutoUpdateHashes:          false,
+				SuspiciousProcesses:       []string{},
+				SafeBracketProcesses:      []string{},
+				SafeKernelProcesses:       []string{},
+				SuspiciousPorts:           []int{22, 80},
+				PortWhitelist:             []string{},
+				BaseDir:                   tmpDir,
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envInfo := &environment.EnvironmentInfo{
+				Type:    types.ProxmoxVE,
+				Version: "7.4-1",
+			}
+
+			result, err := Run(context.Background(), logger, tt.config, configPath, execPath, envInfo)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Run() should return error")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Run() error = %v, expected no error", err)
+				}
+			}
+
+			if result == nil {
+				t.Fatal("Run() should return result")
+			}
+		})
+	}
+}
+
+// TestRunWithSecurityErrors tests Run function with security errors
+func TestRunWithSecurityErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	execPath := filepath.Join(tmpDir, "proxmox-backup")
+
+	// Create config with restrictive permissions to trigger error
+	if err := os.WriteFile(configPath, []byte("test: config"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create executable
+	if err := os.WriteFile(execPath, []byte("#!/bin/sh\necho test"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newSecurityTestLogger()
+	cfg := &config.Config{
+		SecurityCheckEnabled:     true,
+		ContinueOnSecurityIssues: false, // Will cause error if issues found
+		CheckNetworkSecurity:     false,
+		AutoFixPermissions:       false,
+		AutoUpdateHashes:         false,
+		CheckFirewall:            false,
+		CheckOpenPorts:           false,
+		SuspiciousProcesses:      []string{},
+		SafeBracketProcesses:     []string{},
+		SafeKernelProcesses:      []string{},
+		SuspiciousPorts:          []int{},
+		PortWhitelist:            []string{},
+		BaseDir:                  tmpDir,
+	}
+
+	envInfo := &environment.EnvironmentInfo{
+		Type:    types.ProxmoxVE,
+		Version: "7.4-1",
+	}
+
+	// Run checks - config file has wrong permissions (0644 instead of 0600)
+	result, err := Run(context.Background(), logger, cfg, configPath, execPath, envInfo)
+
+	// Should get result even if there are errors
+	if result == nil {
+		t.Fatal("Run() should return result even with errors")
+	}
+
+	// With ContinueOnSecurityIssues=false and wrong permissions, should get error
+	if err == nil && result.HasErrors() {
+		t.Error("Run() should return error when ContinueOnSecurityIssues=false and errors exist")
+	}
+}
+
+// TestCheckOpenPortsAgainstSuspiciousList tests suspicious port checking
+func TestCheckOpenPortsAgainstSuspiciousList(t *testing.T) {
+	checker := &Checker{
+		logger: newSecurityTestLogger(),
+		cfg: &config.Config{
+			SuspiciousPorts: []int{4444, 31337},
+		},
+		result: &Result{},
+	}
+
+	// This test verifies the function doesn't crash
+	// In a real environment, it would need to mock the ss command
+	checker.checkOpenPortsAgainstSuspiciousList(context.Background())
+
+	// The function should complete without panic
+	if checker.result == nil {
+		t.Error("Result should not be nil")
+	}
+}
+
+// TestCheckOpenPorts tests open port checking
+func TestCheckOpenPorts(t *testing.T) {
+	checker := &Checker{
+		logger: newSecurityTestLogger(),
+		cfg: &config.Config{
+			SuspiciousPorts: []int{4444},
+			PortWhitelist:   []string{},
+		},
+		result: &Result{},
+	}
+
+	// This test verifies the function doesn't crash
+	// In a real environment, it would need to mock the ss command
+	checker.checkOpenPorts(context.Background())
+
+	// The function should complete without panic and may add warnings
+	if checker.result == nil {
+		t.Error("Result should not be nil")
 	}
 }
