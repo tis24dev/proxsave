@@ -60,6 +60,18 @@ func newCheckerWithExec(t *testing.T, cfg *config.Config, execPath string) *Chec
 	}
 }
 
+func newChecker(t *testing.T, cfg *config.Config) *Checker {
+	t.Helper()
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	return &Checker{
+		logger: newSecurityTestLogger(),
+		cfg:    cfg,
+		result: &Result{},
+	}
+}
+
 // ============================================================
 // Result struct tests
 // ============================================================
@@ -217,6 +229,102 @@ func TestParseSSLineVariants(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestVerifyConfigFileMissingPath(t *testing.T) {
+	checker := newChecker(t, &config.Config{})
+	checker.verifyConfigFile()
+	if !containsIssue(checker.result, "Configuration path not provided") {
+		t.Fatalf("expected warning about missing configuration path, got %+v", checker.result.Issues)
+	}
+}
+
+func TestVerifyConfigFileStatError(t *testing.T) {
+	checker := newChecker(t, &config.Config{})
+	checker.configPath = filepath.Join(t.TempDir(), "does-not-exist.conf")
+	checker.verifyConfigFile()
+	if !containsIssue(checker.result, "Cannot stat configuration file") {
+		t.Fatalf("expected error about missing configuration file, got %+v", checker.result.Issues)
+	}
+}
+
+func TestVerifySensitiveFilesOptionalSkip(t *testing.T) {
+	cfg := &config.Config{BaseDir: t.TempDir()}
+	checker := newChecker(t, cfg)
+	checker.verifySensitiveFiles()
+	if checker.result.TotalIssues() != 0 {
+		t.Fatalf("expected no issues for optional sensitive files, got %+v", checker.result.Issues)
+	}
+}
+
+func TestVerifySensitiveFilesAgeRecipientPermissions(t *testing.T) {
+	baseDir := t.TempDir()
+	ageDir := filepath.Join(baseDir, "identity", "age")
+	if err := os.MkdirAll(ageDir, 0o755); err != nil {
+		t.Fatalf("mkdir age dir: %v", err)
+	}
+	recipient := filepath.Join(ageDir, "recipient.txt")
+	if err := os.WriteFile(recipient, []byte("age-recipient"), 0o644); err != nil {
+		t.Fatalf("write recipient: %v", err)
+	}
+
+	cfg := &config.Config{
+		BaseDir:        baseDir,
+		EncryptArchive: true,
+	}
+	checker := newChecker(t, cfg)
+	checker.verifySensitiveFiles()
+
+	if !containsIssue(checker.result, "AGE recipient file") {
+		t.Fatalf("expected warning mentioning AGE recipient file, got %+v", checker.result.Issues)
+	}
+}
+
+func TestVerifySecureAccountFiles(t *testing.T) {
+	secureDir := t.TempDir()
+	jsonFile := filepath.Join(secureDir, "account.json")
+	if err := os.WriteFile(jsonFile, []byte(`{"id":"demo"}`), 0o644); err != nil {
+		t.Fatalf("write secure account file: %v", err)
+	}
+
+	cfg := &config.Config{SecureAccount: secureDir}
+	checker := newChecker(t, cfg)
+	checker.verifySecureAccountFiles()
+
+	if !containsIssue(checker.result, "Secure account file") {
+		t.Fatalf("expected issue referencing secure account file, got %+v", checker.result.Issues)
+	}
+}
+
+func TestVerifyDirectoriesCreatesMissing(t *testing.T) {
+	baseDir := t.TempDir()
+	cfg := &config.Config{
+		BaseDir:       baseDir,
+		BackupPath:    filepath.Join(baseDir, "backup"),
+		LogPath:       filepath.Join(baseDir, "log"),
+		LockPath:      filepath.Join(baseDir, "lock"),
+		SecureAccount: filepath.Join(baseDir, "secure_account"),
+	}
+	checker := newChecker(t, cfg)
+	checker.verifyDirectories()
+
+	paths := []string{
+		cfg.BackupPath,
+		cfg.LogPath,
+		cfg.LockPath,
+		cfg.SecureAccount,
+		filepath.Join(baseDir, "identity"),
+		filepath.Join(baseDir, "identity", "age"),
+	}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("expected directory %s to exist: %v", path, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("%s should be a directory", path)
+		}
 	}
 }
 

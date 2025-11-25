@@ -411,6 +411,41 @@ func TestFormatBytes(t *testing.T) {
 	}
 }
 
+func TestCompressionErrorWrap(t *testing.T) {
+	base := fmt.Errorf("boom")
+	cerr := &CompressionError{Algorithm: "xz", Err: base}
+	if cerr.Error() != "xz compression failed: boom" {
+		t.Fatalf("unexpected Error(): %s", cerr.Error())
+	}
+	if !errors.Is(cerr, base) {
+		t.Fatalf("CompressionError should unwrap to base error")
+	}
+	if errors.Is(cerr, fmt.Errorf("other")) {
+		t.Fatalf("CompressionError should not match unrelated errors")
+	}
+}
+
+func TestArchiverCompressionGetters(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	cfg := &ArchiverConfig{
+		Compression:        types.CompressionXZ,
+		CompressionLevel:   7,
+		CompressionMode:    "ultra",
+		CompressionThreads: 3,
+		DryRun:             false,
+	}
+	archiver := NewArchiver(logger, cfg)
+	if archiver.RequestedCompression() != types.CompressionXZ {
+		t.Fatalf("RequestedCompression=%s want xz", archiver.RequestedCompression())
+	}
+	if archiver.CompressionThreads() != 3 {
+		t.Fatalf("CompressionThreads=%d want 3", archiver.CompressionThreads())
+	}
+	if archiver.CompressionMode() != "ultra" {
+		t.Fatalf("CompressionMode=%s want ultra", archiver.CompressionMode())
+	}
+}
+
 func TestContextCancellation(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{

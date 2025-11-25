@@ -1,9 +1,11 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxmox-backup/internal/logging"
@@ -408,5 +410,41 @@ func TestCollectorShouldExcludePatterns(t *testing.T) {
 				t.Fatalf("shouldExclude(%s) = %v, want %v", tc.path, result, tc.expected)
 			}
 		})
+	}
+}
+
+func TestSummarizeCommandOutput(t *testing.T) {
+	var buf bytes.Buffer
+	if got := summarizeCommandOutput(&buf); got != "(no stdout/stderr)" {
+		t.Fatalf("empty buffer summary = %q", got)
+	}
+
+	buf.WriteString("line1\nline2")
+	if got := summarizeCommandOutput(&buf); got != "line1 | line2" {
+		t.Fatalf("summary unexpected: %q", got)
+	}
+
+	buf.Reset()
+	buf.WriteString(strings.Repeat("x", 2100))
+	summary := summarizeCommandOutput(&buf)
+	if !strings.HasSuffix(summary, "…") {
+		t.Fatalf("expected summary to end with ellipsis, got %q", summary[len(summary)-1:])
+	}
+	if len([]rune(summary)) != 2049 {
+		t.Fatalf("expected rune length 2049, got %d", len([]rune(summary)))
+	}
+}
+
+func TestCollectorClusteredPVEFlag(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	collector := NewCollector(logger, GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxVE, false)
+
+	if collector.IsClusteredPVE() {
+		t.Fatalf("expected default clusteredPVE to be false")
+	}
+
+	collector.clusteredPVE = true
+	if !collector.IsClusteredPVE() {
+		t.Fatalf("expected IsClusteredPVE to reflect flag")
 	}
 }
