@@ -30,6 +30,7 @@ type Args struct {
 	Decrypt           bool
 	Restore           bool
 	Install           bool
+	NewInstall        bool
 	UpgradeConfig     bool
 	UpgradeConfigDry  bool
 	EnvMigration      bool
@@ -82,6 +83,8 @@ func Parse() *Args {
 		"Run the interactive restore workflow (select bundle, optionally decrypt, apply to system)")
 	flag.BoolVar(&args.Install, "install", false,
 		"Run the interactive installer (generate/configure backup.env)")
+	flag.BoolVar(&args.NewInstall, "new-install", false,
+		"Reset the installation directory (preserving env/identity) and launch the interactive installer")
 	flag.BoolVar(&args.EnvMigration, "env-migration", false,
 		"Run the installer and migrate a legacy Bash backup.env to the Go template")
 	flag.BoolVar(&args.EnvMigrationDry, "env-migration-dry-run", false,

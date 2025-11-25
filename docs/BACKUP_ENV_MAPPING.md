@@ -86,6 +86,10 @@ WEBHOOK_MAX_RETRIES       = SAME
 WEBHOOK_RETRY_DELAY       = SAME
 WEBHOOK_TIMEOUT           = SAME  
 
+## Go-only variables (new)
+
+SYSTEM_ROOT_PREFIX = NEW (Go-only) → Override system root for collection (testing/chroot). Empty or "/" uses the real root.
+
 ## Renamed variables / Supported aliases in Go
 
 ### Renamed with automatic fallback ✅

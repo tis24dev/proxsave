@@ -13,6 +13,7 @@ Real-world configuration examples for Proxmox Backup Go covering common deployme
 - [Example 6: MinIO Self-Hosted with High Performance](#example-6-minio-self-hosted-with-high-performance)
 - [Example 7: Multi-Notification Setup](#example-7-multi-notification-setup)
 - [Example 8: Complete Production Setup](#example-8-complete-production-setup)
+- [Example 9: Test in a Chroot/Fixture](#example-9-test-in-a-chrootfixture)
 - [Related Documentation](#related-documentation)
 
 ---
@@ -71,6 +72,7 @@ MAX_LOCAL_BACKUPS=15
 ```bash
 # 1. Install
 ./build/proxmox-backup --install
+# (use --new-install to wipe everything except env/ and identity/ before installing)
 
 # 2. Edit configuration
 nano configs/backup.env
@@ -157,6 +159,7 @@ touch /mnt/nas/pbs-backup/test.txt && rm /mnt/nas/pbs-backup/test.txt
 
 # 4. Configure and run
 ./build/proxmox-backup --install
+# (use --new-install if you want to reset the install dir first, keeping env/identity)
 # (paste configuration above)
 ./build/proxmox-backup --dry-run
 ./build/proxmox-backup
@@ -831,6 +834,44 @@ CLOUD_LOG_PATH=
 
 # Result: ~19 backups instead of 365 (5% storage cost)
 ```
+
+---
+
+## Example 9: Test in a Chroot/Fixture
+
+**Scenario**: Esegui la raccolta su un root alternativo (chroot, snapshot montato, fixture di test) senza toccare il filesystem live.
+
+**Use case**:
+- CI/test di backup in ambiente isolato
+- Analisi offline di un'immagine/snapshot montata
+- Esecuzione in container che monta un root diverso
+
+### Configuration
+
+```bash
+# configs/backup.env
+SYSTEM_ROOT_PREFIX=/mnt/snapshot-root   # punta al root alternativo
+BACKUP_ENABLED=true
+ENABLE_GO_BACKUP=true
+# /etc, /var, /root, /home vengono risolti sotto il prefisso
+```
+
+### Setup Steps
+
+```bash
+# 1) Monta o prepara il root alternativo
+mount /dev/vg0/snap /mnt/snapshot-root   # esempio
+
+# 2) Esegui un dry-run
+SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxmox-backup --dry-run
+
+# 3) Esegui il backup reale (opzionale)
+SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxmox-backup
+```
+
+### Expected Results
+- I file raccolti riflettono il contenuto di `/mnt/snapshot-root/etc`, `/var`, `/root`, `/home`, ecc.
+- Nessuna scrittura sul filesystem live del nodo.
 
 ---
 

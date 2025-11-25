@@ -77,6 +77,9 @@ The binary `/opt/proxmox-backup/build/proxmox-backup` supports multiple operatio
 ```bash
 # Interactive installation wizard
 ./build/proxmox-backup --install
+
+# Clean reinstall (wipes install dir except env/identity, then runs wizard)
+./build/proxmox-backup --new-install
 ```
 
 **Wizard workflow**:
@@ -212,6 +215,7 @@ Next step: ./build/proxmox-backup --dry-run
 | Flag | Description |
 |------|-------------|
 | `--install` | Interactive installation wizard |
+| `--new-install` | Wipe install directory (preserve env/identity) then launch wizard |
 | `--upgrade-config` | Merge current config with latest template |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
 | `--env-migration` | Migrate legacy Bash config to Go |
@@ -422,6 +426,9 @@ Next step: ./build/proxmox-backup --dry-run
 # First-time installation
 ./build/proxmox-backup --install
 
+# Full reset + installation (preserves env/identity)
+./build/proxmox-backup --new-install
+
 # Upgrade configuration after binary update
 ./build/proxmox-backup --upgrade-config
 
@@ -552,6 +559,7 @@ crontab -e
 | `--dry-run` | `-n` | Test mode - no actual changes |
 | `--log-level <level>` | `-l` | Set log level (debug\|info\|warning\|error\|critical) |
 | `--install` | - | Interactive installation wizard |
+| `--new-install` | - | Wipe install dir (preserve env/identity) then run wizard |
 | `--upgrade-config` | - | Upgrade config from embedded template |
 | `--upgrade-config-dry-run` | - | Preview config upgrade |
 | `--env-migration` | - | Migrate legacy Bash config |
@@ -574,6 +582,9 @@ crontab -e
 
 # First-time setup
 ./build/proxmox-backup --install
+
+# Full reset (preserve env/identity) then setup
+./build/proxmox-backup --new-install
 
 # After binary upgrade
 ./build/proxmox-backup --upgrade-config

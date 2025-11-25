@@ -122,6 +122,9 @@ func run() int {
 		if args.Install {
 			incompatible = append(incompatible, "--install")
 		}
+		if args.NewInstall {
+			incompatible = append(incompatible, "--new-install")
+		}
 		if args.EnvMigration || args.EnvMigrationDry {
 			incompatible = append(incompatible, "--env-migration")
 		}
@@ -139,6 +142,11 @@ func run() int {
 		}
 	}
 
+	if args.Install && args.NewInstall {
+		bootstrap.Error("Cannot use --install and --new-install together. Choose one installation mode.")
+		return types.ExitConfigError.Int()
+	}
+
 	// Resolve configuration path relative to the executable's base directory so
 	// that configs/ is located consistently next to the binary, regardless of
 	// the current working directory.
@@ -148,6 +156,20 @@ func run() int {
 		return types.ExitConfigError.Int()
 	}
 	args.ConfigPath = resolvedConfigPath
+
+	if args.NewInstall {
+		if err := runNewInstall(ctx, args.ConfigPath, bootstrap); err != nil {
+			// Interactive aborts (Ctrl+C, explicit cancel) are treated as a graceful exit
+			// and already summarized by the install footer.
+			if isInstallAbortedError(err) {
+				bootstrap.Warning("Installation aborted by user")
+				return types.ExitSuccess.Int()
+			}
+			bootstrap.Error("ERROR: %v", err)
+			return types.ExitConfigError.Int()
+		}
+		return types.ExitSuccess.Int()
+	}
 
 	// Handle configuration upgrade dry-run (plan-only, no writes).
 	if args.UpgradeConfigDry {
@@ -1175,6 +1197,7 @@ func printFinalSummary(finalExitCode int) {
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
+	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
 	fmt.Println("  --env-migration    - Run installer and migrate legacy Bash backup.env to Go template")
 	fmt.Println("  --env-migration-dry-run - Preview installer/migration without writing files")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")

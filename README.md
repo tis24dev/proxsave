@@ -83,6 +83,8 @@ Intelligent backup rotation - Intelligent deletion of logs associated with speci
 cd /opt && mkdir -p proxmox-backup/build && cd proxmox-backup && wget -q https://raw.githubusercontent.com/tis24dev/go/main/build/proxmox-backup -O build/proxmox-backup && chmod +x build/proxmox-backup && ./build/proxmox-backup --install
 ```
 
+> Need a fully clean reinstall? Use `./build/proxmox-backup --new-install` (preserves `env/` and `identity/`).
+
 2. OPTIONAL - Run migration installation from bash with old env file
 ```bash
 ./build/proxmox-backup --env-migration
@@ -176,6 +178,9 @@ The installation wizard creates your configuration file interactively:
 
 ```bash
 ./build/proxmox-backup --install
+
+# Or perform a clean reinstall (keeps env/ and identity/)
+./build/proxmox-backup --new-install
 ```
 
 **Wizard prompts:**
@@ -442,6 +447,9 @@ Quick reference for command-line options. For complete details, see **[CLI Refer
 # Installation wizard
 ./build/proxmox-backup --install
 
+# Full reset + installation (preserves env/identity)
+./build/proxmox-backup --new-install
+
 # Migrate from Bash version
 ./build/proxmox-backup --env-migration
 
@@ -462,6 +470,7 @@ Quick reference for command-line options. For complete details, see **[CLI Refer
 | `--config <path>` | Use custom config file |
 | `--dry-run` | Test mode (no changes) |
 | `--install` | Interactive installation wizard |
+| `--new-install` | Wipe install dir (keep env/identity) then run wizard |
 | `--env-migration` | Migrate Bash → Go config |
 | `--upgrade-config` | Upgrade config to latest template |
 | `--newkey` | Generate AGE encryption key |
@@ -602,6 +611,9 @@ Real-world configuration examples for common deployment scenarios.
 8. **Complete Production Setup** - Enterprise setup with all features
 
 **For complete examples**, see: **[Examples](docs/EXAMPLES.md)**
+
+> **Testing in a chroot/fixture?**
+> Set `SYSTEM_ROOT_PREFIX=/tmp/fake-root` in `backup.env` to collect system/PVE/PBS configs from an alternate root without touching the live host. Useful for CI or offline validation of snapshots.
 
 ---
 

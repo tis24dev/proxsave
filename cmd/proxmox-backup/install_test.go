@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxmox-backup/internal/logging"
 )
 
 func TestPrintInstallBanner(t *testing.T) {
@@ -87,6 +90,67 @@ func TestIsInstallAbortedError(t *testing.T) {
 	}
 	if isInstallAbortedError(errors.New("other failure")) {
 		t.Fatalf("unrelated errors should not be aborted")
+	}
+}
+
+func TestResetInstallBaseDirPreservesEnvAndIdentity(t *testing.T) {
+	base := t.TempDir()
+
+	// setup contents
+	if err := os.WriteFile(filepath.Join(base, "delete.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("setup file: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(base, "remove-dir"), 0o755); err != nil {
+		t.Fatalf("setup dir: %v", err)
+	}
+
+	envDir := filepath.Join(base, "env")
+	if err := os.Mkdir(envDir, 0o755); err != nil {
+		t.Fatalf("setup env: %v", err)
+	}
+	envFile := filepath.Join(envDir, "keep.env")
+	if err := os.WriteFile(envFile, []byte("data"), 0o600); err != nil {
+		t.Fatalf("setup env file: %v", err)
+	}
+
+	identityDir := filepath.Join(base, "identity")
+	if err := os.Mkdir(identityDir, 0o755); err != nil {
+		t.Fatalf("setup identity: %v", err)
+	}
+	idFile := filepath.Join(identityDir, "id.txt")
+	if err := os.WriteFile(idFile, []byte("id"), 0o600); err != nil {
+		t.Fatalf("setup identity file: %v", err)
+	}
+
+	logger := logging.NewBootstrapLogger()
+	if err := resetInstallBaseDir(base, logger); err != nil {
+		t.Fatalf("resetInstallBaseDir returned error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(base, "delete.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected delete.txt to be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "remove-dir")); !os.IsNotExist(err) {
+		t.Fatalf("expected remove-dir to be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(envDir); err != nil {
+		t.Fatalf("env dir should remain: %v", err)
+	}
+	if _, err := os.Stat(envFile); err != nil {
+		t.Fatalf("env file should remain: %v", err)
+	}
+	if _, err := os.Stat(identityDir); err != nil {
+		t.Fatalf("identity dir should remain: %v", err)
+	}
+	if _, err := os.Stat(idFile); err != nil {
+		t.Fatalf("identity file should remain: %v", err)
+	}
+}
+
+func TestResetInstallBaseDirRefusesRoot(t *testing.T) {
+	logger := logging.NewBootstrapLogger()
+	if err := resetInstallBaseDir("/", logger); err == nil {
+		t.Fatal("expected error when trying to reset root directory")
 	}
 }
 

@@ -99,6 +99,8 @@ make build
 ```bash
 # Run installer to create config
 ./build/proxmox-backup --install
+# For a clean reinstall (keeps env/ and identity/), run:
+# ./build/proxmox-backup --new-install
 
 # Or copy template manually
 cp internal/config/templates/backup.env configs/backup.env

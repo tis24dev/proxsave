@@ -937,6 +937,10 @@ VZDUMP_CONFIG_PATH=/etc/vzdump.conf
 
 # PBS datastore paths (comma/space separated)
 PBS_DATASTORE_PATH=                # e.g., "/mnt/pbs1,/mnt/pbs2"
+
+# System root override (testing/chroot)
+SYSTEM_ROOT_PREFIX=                # Optional alternate root for system collection. Empty or "/" = real root.
+# Use this to point the collector at a chroot/test fixture without touching the host FS.
 ```
 
 **Use case**: Working with mounted snapshots or mirrors at non-standard paths.

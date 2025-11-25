@@ -164,6 +164,38 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	return nil
 }
 
+func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) error {
+	resolvedPath, err := resolveInstallConfigPath(configPath)
+	if err != nil {
+		return err
+	}
+
+	baseDir := filepath.Dir(filepath.Dir(resolvedPath))
+	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
+		baseDir = "/opt/proxmox-backup"
+	}
+
+	if err := ensureInteractiveStdin(); err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	confirm, err := promptYesNo(ctx, reader, fmt.Sprintf("This will DELETE all contents under %s except env/ and identity/. Continue? [y/N]: ", baseDir), false)
+	if err != nil {
+		return wrapInstallError(err)
+	}
+	if !confirm {
+		return wrapInstallError(errInteractiveAborted)
+	}
+
+	bootstrap.Info("Resetting %s (preserving env/ and identity/)", baseDir)
+	if err := resetInstallBaseDir(baseDir, bootstrap); err != nil {
+		return err
+	}
+
+	return runInstall(ctx, resolvedPath, bootstrap)
+}
+
 func printInstallFooter(installErr error, configPath, baseDir, telegramCode string) {
 	colorReset := "\033[0m"
 
@@ -217,6 +249,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
+	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")
@@ -224,6 +257,42 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Println("  --upgrade-config-dry-run - Show differences between current configuration and the embedded template without modifying files")
 	fmt.Println("  --support          - Run backup in support mode (force debug log level and send email with attached log to github-support@tis24.it)")
 	fmt.Println()
+}
+
+func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) error {
+	baseDir = filepath.Clean(baseDir)
+	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
+		return fmt.Errorf("refusing to reset unsafe base directory: %q", baseDir)
+	}
+
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create base directory %s: %w", baseDir, err)
+	}
+
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return fmt.Errorf("failed to list base directory %s: %w", baseDir, err)
+	}
+
+	preserve := map[string]struct{}{
+		"env":      {},
+		"identity": {},
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if _, keep := preserve[name]; keep {
+			bootstrap.Info("Preserving %s", filepath.Join(baseDir, name))
+			continue
+		}
+		target := filepath.Join(baseDir, name)
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("failed to remove %s: %w", target, err)
+		}
+		bootstrap.Info("Removed %s", target)
+	}
+
+	return nil
 }
 
 func printInstallBanner(configPath string) {
