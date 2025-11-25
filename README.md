@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8.svg?logo=go)](https://golang.org/)
-[![codecov](https://codecov.io/gh/tis24dev/proxmox-backup/graph/badge.svg)](https://codecov.io/gh/tis24dev/proxmox-backup)
+[![codecov](https://codecov.io/gh/tis24dev/proxmox-backup/branch/dev/graph/badge.svg)](https://codecov.io/gh/tis24dev/proxmox-backup)
 [![Proxmox](https://img.shields.io/badge/Proxmox-PVE%20%7C%20PBS-E57000.svg)](https://www.proxmox.com/)
 [![rclone](https://img.shields.io/badge/rclone-1.50+-136C9E.svg)](https://rclone.org/)
 [![💖 Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
