@@ -27,12 +27,9 @@ Intelligent backup rotation - Intelligent deletion of logs associated with speci
 ## 📑 Table of Contents
 
 - [🎯 Introduction](#introduction)
-  - [Key Features](#key-features)
-  - [System Requirements](#system-requirements)
 - [🚀 Quick Start](#quick-start)
-- [💾 Installation](#installation)
-  - [Building from Source](#building-from-source)
-  - [Interactive Installation Wizard](#interactive-installation-wizard)
+  - [1 Minute Setup](#1-minute-setup)
+- [💾 Manual Installation](#installation)
 - [🔄 Upgrading from Bash Version](#upgrading-from-previous-bash-version-v074-bash-or-earlier)
 - [📜 Legacy Bash Version](#legacy-bash-version-v074-bash)
 - [⌨️ Command-Line Reference](#command-line-reference)
@@ -45,7 +42,6 @@ Intelligent backup rotation - Intelligent deletion of logs associated with speci
 - [📚 Documentation](#documentation)
 - [📄 License](#license)
 - [🔄 Restore Operations](#restore-operations)
-- [📜 Legacy Bash Version](#legacy-bash-version)
 - [✨ Conclusion](#conclusion)
 
 ---
@@ -83,7 +79,10 @@ Intelligent backup rotation - Intelligent deletion of logs associated with speci
 cd /opt && mkdir -p proxmox-backup/build && cd proxmox-backup && wget -q https://raw.githubusercontent.com/tis24dev/go/main/build/proxmox-backup -O build/proxmox-backup && chmod +x build/proxmox-backup && ./build/proxmox-backup --install
 ```
 
-> Need a fully clean reinstall? Use `./build/proxmox-backup --new-install` (preserves `env/` and `identity/`).
+or: if you need a fully clean reinstall use: (preserves `env/` and `identity/`)
+```bash
+cd /opt && mkdir -p proxmox-backup/build && cd proxmox-backup && wget -q https://raw.githubusercontent.com/tis24dev/go/main/build/proxmox-backup -O build/proxmox-backup && chmod +x build/proxmox-backup && ./build/proxmox-backup --new-install` 
+```
 
 2. OPTIONAL - Run migration installation from bash with old env file
 ```bash
@@ -248,11 +247,7 @@ This guide categorizes every variable:
 
 ### Upgrade Steps
 
-1. **Build the Go version**
-   ```bash
-   cd /opt/proxmox-backup
-   make build
-   ```
+1. **Run 1 minute Setup or Full manually Setup**
 
 2. **Migrate your configuration**
 
@@ -296,9 +291,6 @@ This guide categorizes every variable:
    cat log/backup-*.log
    ```
 
-5. **Gradual cutover** (optional)
-
-   The old Bash version remains functional and can be used as fallback during the transition period. You can run both versions in parallel for testing before fully switching to Go.
 
 ### Key Migration Notes
 
