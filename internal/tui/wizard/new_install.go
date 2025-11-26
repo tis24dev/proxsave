@@ -26,7 +26,7 @@ func ConfirmNewInstall(baseDir string) (bool, error) {
 
 	// Navigation instructions
 	navInstructions := tview.NewTextView().
-		SetText("[yellow]Navigation:[white] TAB/↑↓ to move | ←→ on buttons | ENTER to select | Mouse clicks enabled").
+		SetText("[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled").
 		SetTextColor(tcell.ColorWhite).
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
@@ -40,7 +40,7 @@ func ConfirmNewInstall(baseDir string) (bool, error) {
 
 	// Confirmation modal
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]env/ identity/[white]\nbut deletes everything else.\n\nContinue?", baseDir)).
+		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]build/ env/ identity/[white]\nbut deletes everything else.\n\nContinue?", baseDir)).
 		AddButtons([]string{"Continue", "Cancel"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Continue" {
