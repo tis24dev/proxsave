@@ -169,8 +169,9 @@ func run() int {
 		return types.ExitSuccess.Int()
 	}
 
+	decryptCLI := args.ForceCLI
 	if args.Decrypt {
-		if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, version); err != nil {
+		if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, version, decryptCLI); err != nil {
 			if errors.Is(err, orchestrator.ErrDecryptAborted) {
 				bootstrap.Info("Decrypt workflow aborted by user")
 				return types.ExitSuccess.Int()
@@ -182,13 +183,14 @@ func run() int {
 		return types.ExitSuccess.Int()
 	}
 
+	newInstallCLI := args.ForceCLI
 	if args.NewInstall {
 		sessionLogger, cleanupSessionLog := startFlowSessionLog("new-install", bootstrap)
 		defer cleanupSessionLog()
 		if sessionLogger != nil {
 			sessionLogger.Info("Starting --new-install (config=%s)", args.ConfigPath)
 		}
-		if err := runNewInstall(ctx, args.ConfigPath, bootstrap); err != nil {
+		if err := runNewInstall(ctx, args.ConfigPath, bootstrap, newInstallCLI); err != nil {
 			if sessionLogger != nil {
 				if isInstallAbortedError(err) {
 					sessionLogger.Warning("new-install aborted by user: %v", err)
@@ -250,8 +252,13 @@ func run() int {
 		if sessionLogger != nil {
 			sessionLogger.Info("Starting --install (config=%s)", args.ConfigPath)
 		}
-		// Use modern TUI wizard
-		err := runInstallTUI(ctx, args.ConfigPath, bootstrap)
+
+		var err error
+		if args.ForceCLI {
+			err = runInstall(ctx, args.ConfigPath, bootstrap)
+		} else {
+			err = runInstallTUI(ctx, args.ConfigPath, bootstrap)
+		}
 
 		if err != nil {
 			if sessionLogger != nil {
@@ -660,7 +667,26 @@ func run() int {
 	}
 	fmt.Println()
 
+	restoreCLI := args.ForceCLI
 	if args.Restore {
+		if restoreCLI {
+			logging.Info("Restore mode enabled - starting CLI workflow...")
+			if err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, version); err != nil {
+				if errors.Is(err, orchestrator.ErrRestoreAborted) {
+					logging.Info("Restore workflow aborted by user")
+					return finalize(exitCodeInterrupted)
+				}
+				logging.Error("Restore workflow failed: %v", err)
+				return finalize(types.ExitGenericError.Int())
+			}
+			if logger.HasWarnings() {
+				logging.Warning("Restore workflow completed with warnings (see log above)")
+			} else {
+				logging.Info("Restore workflow completed successfully")
+			}
+			return finalize(types.ExitSuccess.Int())
+		}
+
 		logging.Info("Restore mode enabled - starting interactive workflow...")
 		sig := buildSignature()
 		if strings.TrimSpace(sig) == "" {
@@ -683,20 +709,33 @@ func run() int {
 	}
 
 	if args.Decrypt {
-		logging.Info("Decrypt mode enabled - starting interactive workflow...")
-		sig := buildSignature()
-		if strings.TrimSpace(sig) == "" {
-			sig = "n/a"
-		}
-		if err := orchestrator.RunDecryptWorkflowTUI(ctx, cfg, logger, version, args.ConfigPath, sig); err != nil {
-			if errors.Is(err, orchestrator.ErrDecryptAborted) {
-				logging.Info("Decrypt workflow aborted by user")
-				return finalize(types.ExitSuccess.Int())
+		if decryptCLI {
+			logging.Info("Decrypt mode enabled - starting CLI workflow...")
+			if err := orchestrator.RunDecryptWorkflow(ctx, cfg, logger, version); err != nil {
+				if errors.Is(err, orchestrator.ErrDecryptAborted) {
+					logging.Info("Decrypt workflow aborted by user")
+					return finalize(types.ExitSuccess.Int())
+				}
+				logging.Error("Decrypt workflow failed: %v", err)
+				return finalize(types.ExitGenericError.Int())
 			}
-			logging.Error("Decrypt workflow failed: %v", err)
-			return finalize(types.ExitGenericError.Int())
+			logging.Info("Decrypt workflow completed successfully")
+		} else {
+			logging.Info("Decrypt mode enabled - starting interactive workflow...")
+			sig := buildSignature()
+			if strings.TrimSpace(sig) == "" {
+				sig = "n/a"
+			}
+			if err := orchestrator.RunDecryptWorkflowTUI(ctx, cfg, logger, version, args.ConfigPath, sig); err != nil {
+				if errors.Is(err, orchestrator.ErrDecryptAborted) {
+					logging.Info("Decrypt workflow aborted by user")
+					return finalize(types.ExitSuccess.Int())
+				}
+				logging.Error("Decrypt workflow failed: %v", err)
+				return finalize(types.ExitGenericError.Int())
+			}
+			logging.Info("Decrypt workflow completed successfully")
 		}
-		logging.Info("Decrypt workflow completed successfully")
 		return finalize(types.ExitSuccess.Int())
 	}
 

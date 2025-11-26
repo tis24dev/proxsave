@@ -144,16 +144,12 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 
 	// Ensure a proxmox-backup entry points to this Go binary, if not already customized.
 	execInfo := getExecInfo()
-	if execInfo.ExecPath != "" {
-		ensureGoSymlink(execInfo.ExecPath, bootstrap)
-	}
+	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
 	// Migrate legacy cron entries pointing to the bash script to the Go binary.
 	// If no cron entry exists at all, create a default one at 02:00 every day.
 	cronSchedule := resolveCronSchedule(nil)
-	if execInfo.ExecPath != "" {
-		migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
-	}
+	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 
 	// Attempt to resolve or create a server identity so that we can show a
 	// Telegram pairing code to the user (similar to the legacy installer).
@@ -167,7 +163,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	return nil
 }
 
-func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) error {
+func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, useCLI bool) error {
 	resolvedPath, err := resolveInstallConfigPath(configPath)
 	if err != nil {
 		return err
@@ -200,6 +196,9 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return err
 	}
 
+	if useCLI {
+		return runInstall(ctx, resolvedPath, bootstrap)
+	}
 	return runInstallTUI(ctx, resolvedPath, bootstrap)
 }
 

@@ -118,7 +118,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// Run encryption setup if enabled (only if wizard was run)
 	if !skipConfigWizard && wizardData != nil && wizardData.EnableEncryption {
 		recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
-			ageData, err := wizard.RunAgeSetupWizard(ctx, recipientPath, configPath, buildSig)
+		ageData, err := wizard.RunAgeSetupWizard(ctx, recipientPath, configPath, buildSig)
 		if err != nil {
 			if errors.Is(err, wizard.ErrAgeSetupCancelled) {
 				installErr = fmt.Errorf("encryption setup aborted by user: %w", errInteractiveAborted)
@@ -167,15 +167,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	// Ensure a proxmox-backup entry points to this Go binary
 	execInfo := getExecInfo()
-	if execInfo.ExecPath != "" {
-		ensureGoSymlink(execInfo.ExecPath, bootstrap)
-	}
+	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
 	// Migrate legacy cron entries
 	cronSchedule := resolveCronSchedule(wizardData)
-	if execInfo.ExecPath != "" {
-		migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
-	}
+	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 
 	// Attempt to resolve or create a server identity for Telegram pairing
 	if info, err := identity.Detect(baseDir, nil); err == nil {

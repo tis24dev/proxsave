@@ -41,13 +41,39 @@ func getExecInfo() ExecInfo {
 }
 
 func detectExecInfo() ExecInfo {
-	execPath, err := os.Executable()
-	if err != nil {
-		return ExecInfo{}
+	candidates := collectExecPathCandidates()
+
+	execPath := ""
+	seen := map[string]struct{}{}
+	for _, cand := range candidates {
+		clean := filepath.Clean(strings.TrimSpace(cand))
+		if clean == "" {
+			continue
+		}
+
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil && strings.TrimSpace(resolved) != "" {
+			clean = resolved
+		}
+		clean = filepath.Clean(clean)
+
+		if _, dup := seen[clean]; dup {
+			continue
+		}
+		seen[clean] = struct{}{}
+
+		if info, err := os.Stat(clean); err == nil && info.Mode().IsRegular() {
+			if info.Mode().Perm()&0o111 == 0 {
+				logging.Debug("Skipping %s: lacks executable permissions", clean)
+				continue
+			}
+			execPath = clean
+			break
+		}
 	}
 
-	if resolved, err := filepath.EvalSymlinks(execPath); err == nil && resolved != "" {
-		execPath = resolved
+	if execPath == "" {
+		warnExecPathMissing()
+		return ExecInfo{}
 	}
 
 	execDir := filepath.Dir(execPath)
@@ -91,6 +117,51 @@ func detectExecInfo() ExecInfo {
 func detectBaseDir() (string, bool) {
 	info := getExecInfo()
 	return info.BaseDir, info.HasBase
+}
+
+func collectExecPathCandidates() []string {
+	var candidates []string
+
+	if path, err := os.Executable(); err == nil && strings.TrimSpace(path) != "" {
+		candidates = append(candidates, path)
+	} else if err != nil {
+		logging.Debug("os.Executable failed: %v", err)
+	}
+
+	if resolved, err := filepath.EvalSymlinks("/proc/self/exe"); err == nil && strings.TrimSpace(resolved) != "" {
+		candidates = append(candidates, resolved)
+	} else if err != nil {
+		logging.Debug("EvalSymlinks on /proc/self/exe failed: %v", err)
+	}
+
+	arg0 := strings.TrimSpace(os.Args[0])
+	if arg0 != "" {
+		if filepath.IsAbs(arg0) {
+			candidates = append(candidates, arg0)
+		} else if abs, err := filepath.Abs(arg0); err == nil {
+			candidates = append(candidates, abs)
+		} else {
+			logging.Debug("Unable to convert argv[0] to absolute path: %v", err)
+		}
+
+		if found, err := exec.LookPath(arg0); err == nil && strings.TrimSpace(found) != "" {
+			if abs, err := filepath.Abs(found); err == nil {
+				candidates = append(candidates, abs)
+			} else {
+				candidates = append(candidates, found)
+			}
+		} else if err != nil {
+			logging.Debug("exec.LookPath failed for %s: %v", arg0, err)
+		}
+	}
+
+	return candidates
+}
+
+func warnExecPathMissing() {
+	msg := "WARNING: Unable to determine proxmox-backup executable path; symlink and cron setup skipped"
+	fmt.Fprintln(os.Stderr, msg)
+	logging.Warning("%s", msg)
 }
 
 func checkInternetConnectivity(timeout time.Duration) error {
@@ -412,34 +483,39 @@ func cleanupLegacyBashSymlinks(baseDir string, bootstrap *logging.BootstrapLogge
 }
 
 func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
-	dest := "/usr/local/bin/proxmox-backup"
-	info, err := os.Lstat(dest)
-	if err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			// Silent success - symlink already exists
-			// bootstrap.Info("Existing symlink preserved: %s", dest)
-			return
-		}
-		bootstrap.Warning("WARNING: %s already exists and is not a symlink; leaving it untouched", dest)
+	execPath = strings.TrimSpace(execPath)
+	if execPath == "" {
+		logBootstrapWarning(bootstrap, "WARNING: Unable to create proxmox-backup symlink: executable path is unknown")
 		return
 	}
-	if !os.IsNotExist(err) {
-		bootstrap.Warning("WARNING: Unable to inspect %s: %v", dest, err)
+
+	dest := "/usr/local/bin/proxmox-backup"
+	if _, err := os.Lstat(dest); err == nil {
+		if rmErr := os.Remove(dest); rmErr != nil {
+			logBootstrapWarning(bootstrap, "WARNING: Failed to replace %s: remove failed: %v", dest, rmErr)
+			return
+		}
+	} else if !os.IsNotExist(err) {
+		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect %s: %v", dest, err)
 		return
 	}
 
 	if err := os.Symlink(execPath, dest); err != nil {
-		bootstrap.Warning("WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
+		logBootstrapWarning(bootstrap, "WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
 		return
 	}
-	// Silent success - symlink created
-	// bootstrap.Info("Created symlink: %s -> %s", dest, execPath)
 }
 
 func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule string) {
 	baseDir = strings.TrimSpace(baseDir)
 	if baseDir == "" {
 		baseDir = "/opt/proxmox-backup"
+	}
+
+	execPath = strings.TrimSpace(execPath)
+	if execPath == "" {
+		logBootstrapWarning(bootstrap, "WARNING: Unable to update cron entry: executable path is unknown")
+		return
 	}
 
 	legacyPaths := []string{
@@ -539,6 +615,14 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 
 	bootstrap.Debug("Recreated cron entry for proxmox-backup at 02:00: %s", newCommandToken)
+}
+
+func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+	if bootstrap != nil {
+		bootstrap.Warning(format, args...)
+		return
+	}
+	logging.Warning(format, args...)
 }
 
 func fetchBackupList(ctx context.Context, backend storage.Storage) []*types.BackupMetadata {

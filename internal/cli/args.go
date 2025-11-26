@@ -21,6 +21,7 @@ type Args struct {
 	ConfigPathSource  string
 	LogLevel          types.LogLevel
 	DryRun            bool
+	ForceCLI          bool
 	Support           bool
 	SupportGitHubUser string
 	SupportIssueID    string
@@ -61,6 +62,8 @@ func Parse() *Args {
 
 	flag.BoolVar(&args.Support, "support", false,
 		"Run backup in support mode (force debug log level and send a support email with the attached log to github-support@tis24.it)")
+	flag.BoolVar(&args.ForceCLI, "cli", false,
+		"Use CLI prompts instead of TUI for interactive workflows (works with --install/--new-install/--decrypt/--restore)")
 
 	flag.BoolVar(&args.ShowVersion, "version", false,
 		"Show version information")
@@ -78,9 +81,9 @@ func Parse() *Args {
 		"Alias for --newkey")
 
 	flag.BoolVar(&args.Decrypt, "decrypt", false,
-		"Run the interactive decrypt workflow (converts encrypted bundles into plaintext bundles)")
+		"Run the decrypt workflow (converts encrypted bundles into plaintext bundles)")
 	flag.BoolVar(&args.Restore, "restore", false,
-		"Run the interactive restore workflow (select bundle, optionally decrypt, apply to system)")
+		"Run the restore workflow (select bundle, optionally decrypt, apply to system)")
 	flag.BoolVar(&args.Install, "install", false,
 		"Run the interactive installer (generate/configure backup.env)")
 	flag.BoolVar(&args.NewInstall, "new-install", false,
