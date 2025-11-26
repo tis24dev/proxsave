@@ -227,6 +227,11 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Printf("================================================%s\n", colorReset)
 	fmt.Println()
 
+	// For user-aborted runs, stop here to avoid showing next steps/commands.
+	if installErr != nil && isInstallAbortedError(installErr) {
+		return
+	}
+
 	fmt.Println("Next steps:")
 	fmt.Println("0. If you need, start migration from old backup.env:  proxmox-backup --env-migration")
 	if strings.TrimSpace(configPath) != "" {
@@ -252,8 +257,6 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  proxmox-backup     - Start backup")
-	fmt.Println("  make test          - Run all tests")
-	fmt.Println("  make build         - Build binary")
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")

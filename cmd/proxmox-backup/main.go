@@ -157,12 +157,36 @@ func run() int {
 	}
 	args.ConfigPath = resolvedConfigPath
 
+	// Dedicated new key mode (no backup run)
+	if args.ForceNewKey {
+		if err := runNewKey(ctx, args.ConfigPath, bootstrap); err != nil {
+			if isInstallAbortedError(err) || errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
+				return types.ExitSuccess.Int()
+			}
+			bootstrap.Error("ERROR: %v", err)
+			return types.ExitConfigError.Int()
+		}
+		return types.ExitSuccess.Int()
+	}
+
+	if args.Decrypt {
+		if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, version); err != nil {
+			if errors.Is(err, orchestrator.ErrDecryptAborted) {
+				bootstrap.Info("Decrypt workflow aborted by user")
+				return types.ExitSuccess.Int()
+			}
+			bootstrap.Error("ERROR: %v", err)
+			return types.ExitGenericError.Int()
+		}
+		bootstrap.Info("Decrypt workflow completed successfully")
+		return types.ExitSuccess.Int()
+	}
+
 	if args.NewInstall {
 		if err := runNewInstall(ctx, args.ConfigPath, bootstrap); err != nil {
 			// Interactive aborts (Ctrl+C, explicit cancel) are treated as a graceful exit
 			// and already summarized by the install footer.
 			if isInstallAbortedError(err) {
-				bootstrap.Warning("Installation aborted by user")
 				return types.ExitSuccess.Int()
 			}
 			bootstrap.Error("ERROR: %v", err)
@@ -213,7 +237,6 @@ func run() int {
 			// Interactive aborts (Ctrl+C, explicit cancel) are treated as a graceful exit
 			// and already summarized by the install footer.
 			if isInstallAbortedError(err) {
-				bootstrap.Warning("Installation aborted by user")
 				return types.ExitSuccess.Int()
 			}
 			bootstrap.Error("ERROR: %v", err)
@@ -608,7 +631,11 @@ func run() int {
 
 	if args.Decrypt {
 		logging.Info("Decrypt mode enabled - starting interactive workflow...")
-		if err := orchestrator.RunDecryptWorkflow(ctx, cfg, logger, version); err != nil {
+		sig := buildSignature()
+		if strings.TrimSpace(sig) == "" {
+			sig = "n/a"
+		}
+		if err := orchestrator.RunDecryptWorkflowTUI(ctx, cfg, logger, version, args.ConfigPath, sig); err != nil {
 			if errors.Is(err, orchestrator.ErrDecryptAborted) {
 				logging.Info("Decrypt workflow aborted by user")
 				return finalize(types.ExitSuccess.Int())
@@ -623,7 +650,6 @@ func run() int {
 	// Initialize orchestrator
 	logging.Step("Initializing backup orchestrator")
 	orch = orchestrator.New(logger, dryRun)
-	orch.SetForceNewAgeRecipient(args.ForceNewKey)
 	orch.SetVersion(version)
 	orch.SetConfig(cfg)
 	orch.SetIdentity(serverIDValue, serverMACValue)
@@ -658,33 +684,6 @@ func run() int {
 		ChunkThresholdBytes:       int64(cfg.ChunkThresholdMB) * bytesPerMegabyte,
 		PrefilterMaxFileSizeBytes: int64(cfg.PrefilterMaxFileSizeMB) * bytesPerMegabyte,
 	})
-
-	// Dedicated mode: --newkey only runs AGE setup
-	if args.ForceNewKey {
-		logging.Info("New AGE key setup mode enabled (--newkey)")
-		if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
-			if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
-				logging.Warning("Encryption setup aborted by user. Exiting...")
-				earlyErrorState = &orchestrator.EarlyErrorState{
-					Phase:     "encryption_setup",
-					Error:     err,
-					ExitCode:  types.ExitGenericError,
-					Timestamp: time.Now(),
-				}
-				return finalize(types.ExitGenericError.Int())
-			}
-			logging.Error("ERROR: %v", err)
-			earlyErrorState = &orchestrator.EarlyErrorState{
-				Phase:     "encryption_setup",
-				Error:     err,
-				ExitCode:  types.ExitConfigError,
-				Timestamp: time.Now(),
-			}
-			return finalize(types.ExitConfigError.Int())
-		}
-		logging.Info("✓ AGE recipients updated successfully; no backup will be run (--newkey)")
-		return finalize(types.ExitSuccess.Int())
-	}
 
 	if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
 		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
@@ -1195,8 +1194,6 @@ func printFinalSummary(finalExitCode int) {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  proxmox-backup     - Start backup")
-	fmt.Println("  make test          - Run all tests")
-	fmt.Println("  make build         - Build binary")
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")

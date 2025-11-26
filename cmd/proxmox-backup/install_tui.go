@@ -61,8 +61,8 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	switch existingAction {
 	case wizard.ExistingConfigSkip:
-		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
-		skipConfigWizard = true
+		installErr = wrapInstallError(errInteractiveAborted)
+		return installErr
 	case wizard.ExistingConfigEdit:
 		content, readErr := os.ReadFile(configPath)
 		if readErr != nil {
@@ -118,7 +118,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// Run encryption setup if enabled (only if wizard was run)
 	if !skipConfigWizard && wizardData != nil && wizardData.EnableEncryption {
 		recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
-		ageData, err := wizard.RunAgeSetupWizard(ctx, recipientPath)
+			ageData, err := wizard.RunAgeSetupWizard(ctx, recipientPath, configPath, buildSig)
 		if err != nil {
 			if errors.Is(err, wizard.ErrAgeSetupCancelled) {
 				installErr = fmt.Errorf("encryption setup aborted by user: %w", errInteractiveAborted)

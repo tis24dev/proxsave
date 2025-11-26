@@ -29,8 +29,87 @@ var (
 	ErrAgeSetupCancelled = errors.New("encryption setup aborted by user")
 )
 
+// ConfirmRecipientOverwrite shows a TUI modal to confirm overwriting an existing AGE recipient.
+func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool, error) {
+	app := tui.NewApp()
+	overwrite := false
+
+	welcomeText := tview.NewTextView().
+		SetText("PROXMOX SYSTEM BACKUP - By TIS24DEV\nAGE Encryption Setup\n\n" +
+			"Configure encryption for your backups using the AGE encryption tool.\n" +
+			"Choose how you want to set up your encryption key.\n").
+		SetTextColor(tui.ProxmoxLight).
+		SetDynamicColors(true)
+	welcomeText.SetBorder(false)
+
+	navInstructions := tview.NewTextView().
+		SetText("\n[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled").
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	navInstructions.SetBorder(false)
+
+	separator := tview.NewTextView().
+		SetText(strings.Repeat("─", 80)).
+		SetTextColor(tui.ProxmoxOrange)
+	separator.SetBorder(false)
+
+	configPathText := tview.NewTextView().
+		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	configPathText.SetBorder(false)
+
+	buildSigText := tview.NewTextView().
+		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	buildSigText.SetBorder(false)
+
+	modal := tview.NewModal().
+		SetText(fmt.Sprintf("Existing recipient:\n[yellow]%s[white]\n\nOverwrite with a new one?", recipientPath)).
+		AddButtons([]string{"Overwrite", "Cancel"}).
+		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+			if buttonLabel == "Overwrite" {
+				overwrite = true
+			}
+			app.Stop()
+		})
+
+	modal.SetBorder(true).
+		SetTitle(" Existing AGE Recipient ").
+		SetTitleAlign(tview.AlignCenter).
+		SetTitleColor(tui.WarningYellow).
+		SetBorderColor(tui.WarningYellow).
+		SetBackgroundColor(tcell.ColorBlack)
+
+	flex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(welcomeText, 5, 0, false).
+		AddItem(navInstructions, 2, 0, false).
+		AddItem(separator, 1, 0, false).
+		AddItem(modal, 0, 1, true).
+		AddItem(configPathText, 1, 0, false).
+		AddItem(buildSigText, 1, 0, false)
+
+	flex.SetBorder(true).
+		SetTitle(" AGE Encryption Setup ").
+		SetTitleAlign(tview.AlignCenter).
+		SetTitleColor(tui.ProxmoxOrange).
+		SetBorderColor(tui.ProxmoxOrange).
+		SetBackgroundColor(tcell.ColorBlack)
+
+	if err := app.SetRoot(flex, true).SetFocus(modal).Run(); err != nil {
+		return false, err
+	}
+
+	return overwrite, nil
+}
+
 // RunAgeSetupWizard runs the TUI-based AGE encryption setup wizard
-func RunAgeSetupWizard(ctx context.Context, recipientPath string) (*AgeSetupData, error) {
+func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig string) (*AgeSetupData, error) {
 	data := &AgeSetupData{}
 	app := tui.NewApp()
 
@@ -42,16 +121,16 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath string) (*AgeSetupData
 
 	// Welcome text
 	welcomeText := tview.NewTextView().
-		SetText("AGE Encryption Setup\n\n" +
+		SetText("PROXMOX SYSTEM BACKUP - By TIS24DEV\nAGE Encryption Setup\n\n" +
 			"Configure encryption for your backups using the AGE encryption tool.\n" +
-			"Choose how you want to set up your encryption key.").
+			"Choose how you want to set up your encryption key.\n").
 		SetTextColor(tui.ProxmoxLight).
 		SetDynamicColors(true)
 	welcomeText.SetBorder(false)
 
 	// Navigation instructions
 	navInstructions := tview.NewTextView().
-		SetText("[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled").
+		SetText("\n[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled").
 		SetTextColor(tcell.ColorWhite).
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
@@ -62,6 +141,20 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath string) (*AgeSetupData
 		SetText(strings.Repeat("─", 80)).
 		SetTextColor(tui.ProxmoxOrange)
 	separator.SetBorder(false)
+
+	configPathText := tview.NewTextView().
+		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	configPathText.SetBorder(false)
+
+	buildSigText := tview.NewTextView().
+		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	buildSigText.SetBorder(false)
 
 	// Setup type dropdown
 	var setupType string
@@ -265,6 +358,9 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath string) (*AgeSetupData
 		AddItem(navInstructions, 2, 0, false).
 		AddItem(separator, 1, 0, false).
 		AddItem(form.Form, 0, 1, true)
+		// Footers
+	flex.AddItem(configPathText, 1, 0, false).
+		AddItem(buildSigText, 1, 0, false)
 
 	flex.SetBorder(true).
 		SetTitle(" AGE Encryption Setup ").
