@@ -613,7 +613,11 @@ func run() int {
 
 	if args.Restore {
 		logging.Info("Restore mode enabled - starting interactive workflow...")
-		if err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, version); err != nil {
+		sig := buildSignature()
+		if strings.TrimSpace(sig) == "" {
+			sig = "n/a"
+		}
+		if err := orchestrator.RunRestoreWorkflowTUI(ctx, cfg, logger, version, args.ConfigPath, sig); err != nil {
 			if errors.Is(err, orchestrator.ErrRestoreAborted) || errors.Is(err, orchestrator.ErrDecryptAborted) {
 				logging.Info("Restore workflow aborted by user")
 				return finalize(exitCodeInterrupted)
