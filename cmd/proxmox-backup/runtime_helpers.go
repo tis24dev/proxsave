@@ -436,7 +436,7 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 	// bootstrap.Info("Created symlink: %s -> %s", dest, execPath)
 }
 
-func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger) {
+func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule string) {
 	baseDir = strings.TrimSpace(baseDir)
 	if baseDir == "" {
 		baseDir = "/opt/proxmox-backup"
@@ -495,11 +495,12 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 
 	updatedLines := make([]string, 0, len(lines)+1)
-	legacyFound := false
-	newCronExists := false
 
-	containsLegacy := func(line string) bool {
+	containsAny := func(line string) bool {
 		if strings.Contains(line, "proxmox-backup.sh") {
+			return true
+		}
+		if strings.Contains(line, "proxmox-backup") {
 			return true
 		}
 		for _, p := range legacyPaths {
@@ -510,54 +511,26 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		return false
 	}
 
-	isGoCron := func(line string) bool {
-		if strings.Contains(line, newCommandToken) {
-			return true
-		}
-		trimmed := strings.TrimSpace(line)
-		if strings.Contains(trimmed, "proxmox-backup") && !strings.Contains(trimmed, "proxmox-backup.sh") {
-			return true
-		}
-		return false
-	}
-
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			updatedLines = append(updatedLines, line)
 			continue
 		}
-
-		if containsLegacy(line) {
-			legacyFound = true
-			newLine := line
-			for _, p := range legacyPaths {
-				newLine = strings.ReplaceAll(newLine, p, newCommandToken)
-			}
-			newLine = strings.ReplaceAll(newLine, "proxmox-backup.sh", "proxmox-backup")
-			if isGoCron(newLine) {
-				newCronExists = true
-			}
-			updatedLines = append(updatedLines, newLine)
+		if containsAny(line) {
+			// Skip all existing proxmox-backup entries (bash or go) to recreate cleanly.
 			continue
-		}
-
-		if isGoCron(line) {
-			newCronExists = true
 		}
 		updatedLines = append(updatedLines, line)
 	}
 
-	addedDefault := false
-	if !legacyFound && !newCronExists {
-		defaultLine := fmt.Sprintf("0 2 * * * %s", newCommandToken)
-		updatedLines = append(updatedLines, defaultLine)
-		addedDefault = true
+	schedule := strings.TrimSpace(cronSchedule)
+	if schedule == "" {
+		schedule = "0 2 * * *"
 	}
-
-	if !legacyFound && !addedDefault {
-		return
-	}
+	// Always append a fresh default entry pointing to the Go binary (or fallback).
+	defaultLine := fmt.Sprintf("%s %s", schedule, newCommandToken)
+	updatedLines = append(updatedLines, defaultLine)
 
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
@@ -565,12 +538,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		return
 	}
 
-	if legacyFound {
-		bootstrap.Info("Migrated legacy cron entries to use Go binary (%s)", newCommandToken)
-	}
-	if addedDefault {
-		bootstrap.Info("Created default cron entry for Go backup at 02:00: %s", newCommandToken)
-	}
+	bootstrap.Info("Recreated cron entry for proxmox-backup at 02:00: %s", newCommandToken)
 }
 
 func fetchBackupList(ctx context.Context, backend storage.Storage) []*types.BackupMetadata {

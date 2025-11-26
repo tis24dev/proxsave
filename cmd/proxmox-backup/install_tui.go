@@ -43,8 +43,13 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		printInstallFooter(installErr, configPath, baseDir, telegramCode)
 	}()
 
+	buildSig := buildSignature()
+	if strings.TrimSpace(buildSig) == "" {
+		buildSig = "n/a"
+	}
+
 	// Check if config exists
-	existingAction, err := wizard.CheckExistingConfig(configPath)
+	existingAction, err := wizard.CheckExistingConfig(configPath, buildSig)
 	if err != nil {
 		installErr = err
 		return installErr
@@ -71,7 +76,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	if !skipConfigWizard {
 		// Run the wizard
-		wizardData, err = wizard.RunInstallWizard(ctx, configPath, baseDir)
+		wizardData, err = wizard.RunInstallWizard(ctx, configPath, baseDir, buildSig)
 		if err != nil {
 			if errors.Is(err, wizard.ErrInstallCancelled) {
 				installErr = wrapInstallError(errInteractiveAborted)
@@ -167,8 +172,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 
 	// Migrate legacy cron entries
+	cronSchedule := resolveCronSchedule(wizardData)
 	if execInfo.ExecPath != "" {
-		migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap)
+		migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 	}
 
 	// Attempt to resolve or create a server identity for Telegram pairing

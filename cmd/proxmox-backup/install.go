@@ -150,8 +150,9 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 
 	// Migrate legacy cron entries pointing to the bash script to the Go binary.
 	// If no cron entry exists at all, create a default one at 02:00 every day.
+	cronSchedule := resolveCronSchedule(nil)
 	if execInfo.ExecPath != "" {
-		migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap)
+		migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 	}
 
 	// Attempt to resolve or create a server identity so that we can show a
@@ -181,7 +182,12 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return err
 	}
 
-	confirm, err := wizard.ConfirmNewInstall(baseDir)
+	buildSig := buildSignature()
+	if strings.TrimSpace(buildSig) == "" {
+		buildSig = "n/a"
+	}
+
+	confirm, err := wizard.ConfirmNewInstall(baseDir, buildSig)
 	if err != nil {
 		return wrapInstallError(err)
 	}
@@ -314,9 +320,11 @@ func printInstallBanner(configPath string) {
 	fmt.Println("===========================================")
 	fmt.Println("  Proxmox Backup - Go Version")
 	fmt.Printf("  Version: %s\n", version)
-	if sig := buildSignature(); sig != "" {
-		fmt.Printf("  Build Signature: %s\n", sig)
+	sig := buildSignature()
+	if strings.TrimSpace(sig) == "" {
+		sig = "n/a"
 	}
+	fmt.Printf("  Build Signature: %s\n", sig)
 	fmt.Println("  Mode: Install Wizard")
 	fmt.Println("===========================================")
 	fmt.Printf("Configuration file: %s\n\n", configPath)

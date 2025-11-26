@@ -11,7 +11,7 @@ import (
 )
 
 // ConfirmNewInstall shows a TUI confirmation before wiping baseDir for --new-install.
-func ConfirmNewInstall(baseDir string) (bool, error) {
+func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
 	app := tui.NewApp()
 	proceed := false
 
@@ -23,6 +23,13 @@ func ConfirmNewInstall(baseDir string) (bool, error) {
 		SetTextColor(tui.ProxmoxLight).
 		SetDynamicColors(true)
 	welcomeText.SetBorder(false)
+
+	// Build signature line
+	buildSigText := tview.NewTextView().
+		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true)
+	buildSigText.SetBorder(false)
 
 	// Navigation instructions
 	navInstructions := tview.NewTextView().
@@ -62,7 +69,8 @@ func ConfirmNewInstall(baseDir string) (bool, error) {
 		AddItem(welcomeText, 5, 0, false).
 		AddItem(navInstructions, 2, 0, false).
 		AddItem(separator, 1, 0, false).
-		AddItem(modal, 0, 1, true)
+		AddItem(modal, 0, 1, true).
+		AddItem(buildSigText, 1, 0, false)
 
 	flex.SetBorder(true).
 		SetTitle(" Proxmox Backup New Install ").

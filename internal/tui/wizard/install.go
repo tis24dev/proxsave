@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -27,6 +28,7 @@ type InstallWizardData struct {
 	RcloneBackupRemote     string
 	RcloneLogRemote        string
 	NotificationMode       string // "none", "telegram", "email", "both"
+	CronTime               string // HH:MM
 	EnableEncryption       bool
 }
 
@@ -45,10 +47,11 @@ var (
 )
 
 // RunInstallWizard runs the TUI-based installation wizard
-func RunInstallWizard(ctx context.Context, configPath string, baseDir string) (*InstallWizardData, error) {
+func RunInstallWizard(ctx context.Context, configPath string, baseDir string, buildSig string) (*InstallWizardData, error) {
 	data := &InstallWizardData{
 		BaseDir:          baseDir,
 		ConfigPath:       configPath,
+		CronTime:         "02:00",
 		EnableEncryption: false, // Default to disabled
 	}
 
@@ -184,15 +187,23 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string) (*
 	rcloneLogField.SetDisabled(true)
 	form.Form.AddFormItem(rcloneLogField)
 
-	// Notifications
-	notificationDropdown := tview.NewDropDown().
+	// Notifications (header + two toggles)
+	var telegramEnabled, emailEnabled bool
+	notificationHeader := tview.NewInputField().
 		SetLabel("Notifications").
-		SetOptions([]string{"None", "Telegram Only", "Email Only", "Both Telegram and Email"}, func(option string, index int) {
+		SetFieldWidth(0).
+		SetText("").
+		SetDisabled(true)
+	form.Form.AddFormItem(notificationHeader)
+
+	telegramDropdown := tview.NewDropDown().
+		SetLabel("  └─ Enable Telegram notifications").
+		SetOptions([]string{"No", "Yes"}, func(option string, index int) {
+			telegramEnabled = (option == "Yes")
 			dropdownOpen = false
 		}).
 		SetCurrentOption(0)
-
-	notificationDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	telegramDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEnter {
 			dropdownOpen = !dropdownOpen
 		} else if event.Key() == tcell.KeyEscape {
@@ -200,8 +211,24 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string) (*
 		}
 		return event
 	})
+	form.Form.AddFormItem(telegramDropdown)
 
-	form.Form.AddFormItem(notificationDropdown)
+	emailDropdown := tview.NewDropDown().
+		SetLabel("  └─ Enable Email notifications").
+		SetOptions([]string{"No", "Yes"}, func(option string, index int) {
+			emailEnabled = (option == "Yes")
+			dropdownOpen = false
+		}).
+		SetCurrentOption(0)
+	emailDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEnter {
+			dropdownOpen = !dropdownOpen
+		} else if event.Key() == tcell.KeyEscape {
+			dropdownOpen = false
+		}
+		return event
+	})
+	form.Form.AddFormItem(emailDropdown)
 
 	// Encryption
 	encryptionDropdown := tview.NewDropDown().
@@ -221,6 +248,22 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string) (*
 	})
 
 	form.Form.AddFormItem(encryptionDropdown)
+
+	// Separator before scheduling
+	cronSeparator := tview.NewInputField().
+		SetLabel(strings.Repeat("─", 40)).
+		SetFieldWidth(0).
+		SetText("").
+		SetDisabled(true)
+	form.Form.AddFormItem(cronSeparator)
+
+	// Cron schedule (after encryption)
+	cronField := tview.NewInputField().
+		SetLabel("Cron time (HH:MM)").
+		SetText("").
+		SetPlaceholder(data.CronTime).
+		SetFieldWidth(5)
+	form.Form.AddFormItem(cronField)
 
 	// Set up form submission
 	form.SetOnSubmit(func(values map[string]string) error {
@@ -253,21 +296,39 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string) (*
 			}
 		}
 
-		// Get notification mode
-		notifValue := values["Notifications"]
-		switch notifValue {
-		case "Telegram Only":
-			data.NotificationMode = "telegram"
-		case "Email Only":
-			data.NotificationMode = "email"
-		case "Both Telegram and Email":
+		// Get notification mode from two toggles
+		switch {
+		case telegramEnabled && emailEnabled:
 			data.NotificationMode = "both"
+		case telegramEnabled:
+			data.NotificationMode = "telegram"
+		case emailEnabled:
+			data.NotificationMode = "email"
 		default:
 			data.NotificationMode = "none"
 		}
 
 		// Get encryption setting
 		data.EnableEncryption = values["Enable Backup Encryption (AGE)"] == "Yes"
+
+		// Cron time validation (HH:MM)
+		cron := strings.TrimSpace(cronField.GetText())
+		if cron == "" {
+			cron = "02:00"
+		}
+		parts := strings.Split(cron, ":")
+		if len(parts) != 2 {
+			return fmt.Errorf("cron time must be in HH:MM format")
+		}
+		hour, err := strconv.Atoi(parts[0])
+		if err != nil || hour < 0 || hour > 23 {
+			return fmt.Errorf("cron hour must be between 00 and 23")
+		}
+		minute, err := strconv.Atoi(parts[1])
+		if err != nil || minute < 0 || minute > 59 {
+			return fmt.Errorf("cron minute must be between 00 and 59")
+		}
+		data.CronTime = fmt.Sprintf("%02d:%02d", hour, minute)
 
 		return nil
 	})
@@ -325,6 +386,13 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string) (*
 		SetTextAlign(tview.AlignCenter)
 	configPathText.SetBorder(false)
 
+	buildSigText := tview.NewTextView().
+		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	buildSigText.SetBorder(false)
+
 	// Create layout
 	flex := tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -332,7 +400,8 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string) (*
 		AddItem(navInstructions, 2, 0, false).
 		AddItem(separator, 1, 0, false).
 		AddItem(form.Form, 0, 1, true).
-		AddItem(configPathText, 1, 0, false)
+		AddItem(configPathText, 1, 0, false).
+		AddItem(buildSigText, 1, 0, false)
 
 	flex.SetBorder(true).
 		SetTitle(" Proxmox Backup Installation ").
@@ -398,6 +467,19 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = setEnvValue(template, "EMAIL_ENABLED", "false")
 	}
 
+	// Apply cron schedule
+	cron := strings.TrimSpace(data.CronTime)
+	if cron == "" {
+		cron = "02:00"
+	}
+	if parts := strings.Split(cron, ":"); len(parts) == 2 {
+		min := strings.TrimSpace(parts[1])
+		hr := strings.TrimSpace(parts[0])
+		template = setEnvValue(template, "CRON_SCHEDULE", fmt.Sprintf("%s %s * * *", min, hr))
+		template = setEnvValue(template, "CRON_HOUR", hr)
+		template = setEnvValue(template, "CRON_MINUTE", min)
+	}
+
 	// Apply encryption
 	if data.EnableEncryption {
 		template = setEnvValue(template, "ENCRYPT_ARCHIVE", "true")
@@ -431,7 +513,7 @@ func setEnvValue(template, key, value string) string {
 }
 
 // CheckExistingConfig checks if config file exists and asks how to proceed
-func CheckExistingConfig(configPath string) (ExistingConfigAction, error) {
+func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigAction, error) {
 	if _, err := os.Stat(configPath); err == nil {
 		// File exists, ask how to proceed
 		app := tui.NewApp()
@@ -446,15 +528,21 @@ func CheckExistingConfig(configPath string) (ExistingConfigAction, error) {
 			SetDynamicColors(true)
 		welcomeText.SetBorder(false)
 
-		// Navigation instructions
+		// Navigation instructions (no dropdowns in this view)
 		navInstructions := tview.NewTextView().
 			SetText("[yellow]Navigation:[white] Press [yellow]TAB[white] or [yellow]↑↓[white] to move between fields | " +
-				"Press [yellow]ENTER[white] to open dropdowns | " +
 				"Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to submit | Mouse clicks enabled").
 			SetTextColor(tcell.ColorWhite).
 			SetDynamicColors(true).
 			SetTextAlign(tview.AlignCenter)
 		navInstructions.SetBorder(false)
+
+		buildSigText := tview.NewTextView().
+			SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
+			SetTextColor(tcell.ColorWhite).
+			SetDynamicColors(true).
+			SetTextAlign(tview.AlignCenter)
+		buildSigText.SetBorder(false)
 
 		// Separator
 		separator := tview.NewTextView().
@@ -468,8 +556,7 @@ func CheckExistingConfig(configPath string) (ExistingConfigAction, error) {
 				"Choose how to proceed:\n"+
 				"[yellow]Overwrite[white]   - Start from embedded template\n"+
 				"[yellow]Edit existing[white] - Keep current file as base\n"+
-				"[yellow]Keep & exit[white]   - Leave file untouched, exit wizard\n\n"+
-				"[yellow]Use TAB or ←→ Arrows to switch | Press ENTER to select[white]", configPath)).
+				"[yellow]Keep & exit[white]   - Leave file untouched, exit wizard", configPath)).
 			AddButtons([]string{"Overwrite", "Edit existing", "Keep & exit"}).
 			SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 				switch buttonLabel {
@@ -490,13 +577,14 @@ func CheckExistingConfig(configPath string) (ExistingConfigAction, error) {
 			SetBorderColor(tui.WarningYellow).
 			SetBackgroundColor(tcell.ColorBlack)
 
-		// Create layout with welcome text at top
+			// Create layout with welcome text at top
 		flex := tview.NewFlex().
 			SetDirection(tview.FlexRow).
 			AddItem(welcomeText, 5, 0, false).
 			AddItem(navInstructions, 2, 0, false).
 			AddItem(separator, 1, 0, false).
-			AddItem(modal, 0, 1, true)
+			AddItem(modal, 0, 1, true).
+			AddItem(buildSigText, 1, 0, false)
 
 		flex.SetBorder(true).
 			SetTitle(" Proxmox Backup Installation ").
