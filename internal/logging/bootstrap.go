@@ -44,6 +44,12 @@ func (b *BootstrapLogger) Println(message string) {
 	b.recordRaw(message)
 }
 
+// Debug registra un messaggio di debug senza stamparlo a console.
+func (b *BootstrapLogger) Debug(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	b.record(types.LogLevelDebug, msg)
+}
+
 // Printf registra una riga formattata come raw.
 func (b *BootstrapLogger) Printf(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)

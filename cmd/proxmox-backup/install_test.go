@@ -50,9 +50,6 @@ func TestPrintInstallFooterVariants(t *testing.T) {
 				t.Fatalf("output %q does not contain %q", output, tt.wantSnippet)
 			}
 			if tt.err == nil {
-				if !strings.Contains(output, "Build Signature:") {
-					t.Fatalf("expected build signature line in footer")
-				}
 				if !strings.Contains(output, "Edit configuration: /etc/proxmox-backup/backup.env") {
 					t.Fatalf("expected config path reference in footer")
 				}

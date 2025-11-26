@@ -262,7 +262,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetLabel("Cron time (HH:MM)").
 		SetText("").
 		SetPlaceholder(data.CronTime).
-		SetFieldWidth(5)
+		SetFieldWidth(7)
 	form.Form.AddFormItem(cronField)
 
 	// Set up form submission

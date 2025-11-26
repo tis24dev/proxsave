@@ -227,12 +227,6 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Printf("================================================%s\n", colorReset)
 	fmt.Println()
 
-	sig := buildSignature()
-	if strings.TrimSpace(sig) == "" {
-		sig = "n/a"
-	}
-	fmt.Printf("Build Signature: %s\n\n", sig)
-
 	fmt.Println("Next steps:")
 	fmt.Println("0. If you need, start migration from old backup.env:  proxmox-backup --env-migration")
 	if strings.TrimSpace(configPath) != "" {

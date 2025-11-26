@@ -106,7 +106,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			return installErr
 		}
 
-		bootstrap.Info("Configuration saved at %s", configPath)
+		bootstrap.Debug("Configuration saved at %s", configPath)
 	}
 
 	// Install support docs

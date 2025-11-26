@@ -538,7 +538,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		return
 	}
 
-	bootstrap.Info("Recreated cron entry for proxmox-backup at 02:00: %s", newCommandToken)
+	bootstrap.Debug("Recreated cron entry for proxmox-backup at 02:00: %s", newCommandToken)
 }
 
 func fetchBackupList(ctx context.Context, backend storage.Storage) []*types.BackupMetadata {
