@@ -416,7 +416,8 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 	info, err := os.Lstat(dest)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
-			bootstrap.Info("Existing symlink preserved: %s", dest)
+			// Silent success - symlink already exists
+			// bootstrap.Info("Existing symlink preserved: %s", dest)
 			return
 		}
 		bootstrap.Warning("WARNING: %s already exists and is not a symlink; leaving it untouched", dest)
@@ -431,7 +432,8 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 		bootstrap.Warning("WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
 		return
 	}
-	bootstrap.Info("Created symlink: %s -> %s", dest, execPath)
+	// Silent success - symlink created
+	// bootstrap.Info("Created symlink: %s -> %s", dest, execPath)
 }
 
 func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger) {

@@ -14,6 +14,7 @@ import (
 	"github.com/tis24dev/proxmox-backup/internal/identity"
 	"github.com/tis24dev/proxmox-backup/internal/logging"
 	"github.com/tis24dev/proxmox-backup/internal/orchestrator"
+	"github.com/tis24dev/proxmox-backup/internal/tui/wizard"
 	"github.com/tis24dev/proxmox-backup/internal/types"
 )
 
@@ -179,8 +180,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return err
 	}
 
-	reader := bufio.NewReader(os.Stdin)
-	confirm, err := promptYesNo(ctx, reader, fmt.Sprintf("This will DELETE all contents under %s except env/ and identity/. Continue? [y/N]: ", baseDir), false)
+	confirm, err := wizard.ConfirmNewInstall(baseDir)
 	if err != nil {
 		return wrapInstallError(err)
 	}
@@ -193,7 +193,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return err
 	}
 
-	return runInstall(ctx, resolvedPath, bootstrap)
+	return runInstallTUI(ctx, resolvedPath, bootstrap)
 }
 
 func printInstallFooter(installErr error, configPath, baseDir, telegramCode string) {
@@ -254,7 +254,6 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
-	fmt.Println("  --upgrade-config-dry-run - Show differences between current configuration and the embedded template without modifying files")
 	fmt.Println("  --support          - Run backup in support mode (force debug log level and send email with attached log to github-support@tis24.it)")
 	fmt.Println()
 }

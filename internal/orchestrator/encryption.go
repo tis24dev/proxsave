@@ -532,6 +532,11 @@ func backupExistingRecipientFile(path string) error {
 	return nil
 }
 
+// DeriveDeterministicRecipientFromPassphrase derives an AGE recipient from a passphrase (exported for TUI wizard)
+func DeriveDeterministicRecipientFromPassphrase(passphrase string) (string, error) {
+	return deriveDeterministicRecipientFromPassphrase(passphrase)
+}
+
 func deriveDeterministicRecipientFromPassphrase(passphrase string) (string, error) {
 	key, err := deriveCurve25519ScalarFromPassphrase(passphrase)
 	if err != nil {

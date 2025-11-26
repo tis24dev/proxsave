@@ -26,9 +26,10 @@ func installSupportDocs(baseDir string, bootstrap *logging.BootstrapLogger) erro
 		if err := os.WriteFile(target, doc.Data, 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", target, err)
 		}
-		if bootstrap != nil {
-			bootstrap.Info("✓ Installed %s", target)
-		}
+		// Silent success - only errors are shown
+		// if bootstrap != nil {
+		// 	bootstrap.Info("✓ Installed %s", target)
+		// }
 	}
 
 	return nil

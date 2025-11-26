@@ -206,7 +206,10 @@ func run() int {
 
 	// Handle install wizard (runs before normal execution)
 	if args.Install {
-		if err := runInstall(ctx, args.ConfigPath, bootstrap); err != nil {
+		// Use modern TUI wizard
+		err := runInstallTUI(ctx, args.ConfigPath, bootstrap)
+
+		if err != nil {
 			// Interactive aborts (Ctrl+C, explicit cancel) are treated as a graceful exit
 			// and already summarized by the install footer.
 			if isInstallAbortedError(err) {
@@ -1204,7 +1207,6 @@ func printFinalSummary(finalExitCode int) {
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
-	fmt.Println("  --upgrade-config-dry-run - Show differences between current configuration and the embedded template without modifying files")
 	fmt.Println("  --support          - Run backup in support mode (force debug log level and send email with attached log to github-support@tis24.it)")
 	fmt.Println()
 }
