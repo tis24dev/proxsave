@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -285,6 +286,13 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) err
 			continue
 		}
 		target := filepath.Join(baseDir, name)
+		clearImmutableAttributes(target, bootstrap)
+		// Best-effort: ensure write permission before removal
+		if entry.IsDir() {
+			_ = os.Chmod(target, 0o700)
+		} else {
+			_ = os.Chmod(target, 0o600)
+		}
 		if err := os.RemoveAll(target); err != nil {
 			return fmt.Errorf("failed to remove %s: %w", target, err)
 		}
@@ -491,4 +499,30 @@ func isInstallAbortedError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// clearImmutableAttributes attempts to remove immutable flags (chattr -i) so deletion can proceed.
+// It logs warnings on failure but does not return an error, since removal will report issues later.
+func clearImmutableAttributes(target string, bootstrap *logging.BootstrapLogger) {
+	chattrPath, err := exec.LookPath("chattr")
+	if err != nil {
+		return
+	}
+
+	argsList := [][]string{{chattrPath, "-i", target}}
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		argsList = append([][]string{{chattrPath, "-R", "-i", target}}, argsList...)
+	}
+
+	for _, args := range argsList {
+		cmd := exec.Command(args[0], args[1:]...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			trimmed := strings.TrimSpace(string(out))
+			if trimmed != "" {
+				bootstrap.Warning("Failed to clear immutable flag on %s: %v (%s)", target, err, trimmed)
+			} else {
+				bootstrap.Warning("Failed to clear immutable flag on %s: %v", target, err)
+			}
+		}
+	}
 }
