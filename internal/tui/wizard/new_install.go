@@ -15,9 +15,11 @@ func ConfirmNewInstall(baseDir string) (bool, error) {
 	app := tui.NewApp()
 	proceed := false
 
-	// Header text
+	// Header text (align with main install wizard)
 	welcomeText := tview.NewTextView().
-		SetText("New Install (wipe)\n\nThis will DELETE all contents under the base directory except env/ and identity/.\nUse this only when you want a clean reinstall.").
+		SetText("Welcome to PROXMOX SYSTEM BACKUP Installation Wizard - By TIS24DEV\n\n" +
+			"This wizard will guide you through configuring your backup system.\n" +
+			"All settings can be changed later by editing the configuration file.").
 		SetTextColor(tui.ProxmoxLight).
 		SetDynamicColors(true)
 	welcomeText.SetBorder(false)
@@ -38,7 +40,7 @@ func ConfirmNewInstall(baseDir string) (bool, error) {
 
 	// Confirmation modal
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]env/\nidentity/[white] but deletes everything else.\n\nContinue?", baseDir)).
+		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]env/ identity/[white]\nbut deletes everything else.\n\nContinue?", baseDir)).
 		AddButtons([]string{"Continue", "Cancel"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Continue" {
