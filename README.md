@@ -102,6 +102,10 @@ ls -lh backup/
 cat log/backup-*.log
 ```
 
+### Interactive Session Logs
+
+Interactive commands such as `--install`, `--new-install`, `--restore`, and standalone `--decrypt` automatically create a real-time session log under `/tmp/proxmox-backup/` (for example `install-myhost-20250101-120000.log`). These files mirror the wizard output so you can review every prompt even when running unattended.
+
 ### First Backup Workflow
 
 ```bash

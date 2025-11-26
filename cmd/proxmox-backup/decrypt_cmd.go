@@ -36,7 +36,15 @@ func runDecryptWorkflowOnly(ctx context.Context, configPath string, bootstrap *l
 	_ = os.Setenv("BASE_DIR", cfg.BaseDir)
 
 	logLevel := cfg.DebugLevel
-	logger := logging.New(logLevel, cfg.UseColor)
+	logger, sessionLogPath, closeSessionLog, err := logging.StartSessionLogger("decrypt", logLevel, cfg.UseColor)
+	if err != nil {
+		logger = logging.New(logLevel, cfg.UseColor)
+		closeSessionLog = func() {}
+	} else {
+		bootstrap.Info("Decrypt log: %s", sessionLogPath)
+	}
+	defer closeSessionLog()
+
 	logging.SetDefaultLogger(logger)
 	bootstrap.SetLevel(logLevel)
 	bootstrap.Flush(logger)

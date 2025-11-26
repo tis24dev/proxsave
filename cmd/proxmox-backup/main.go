@@ -183,7 +183,19 @@ func run() int {
 	}
 
 	if args.NewInstall {
+		sessionLogger, cleanupSessionLog := startFlowSessionLog("new-install", bootstrap)
+		defer cleanupSessionLog()
+		if sessionLogger != nil {
+			sessionLogger.Info("Starting --new-install (config=%s)", args.ConfigPath)
+		}
 		if err := runNewInstall(ctx, args.ConfigPath, bootstrap); err != nil {
+			if sessionLogger != nil {
+				if isInstallAbortedError(err) {
+					sessionLogger.Warning("new-install aborted by user: %v", err)
+				} else {
+					sessionLogger.Error("new-install failed: %v", err)
+				}
+			}
 			// Interactive aborts (Ctrl+C, explicit cancel) are treated as a graceful exit
 			// and already summarized by the install footer.
 			if isInstallAbortedError(err) {
@@ -191,6 +203,9 @@ func run() int {
 			}
 			bootstrap.Error("ERROR: %v", err)
 			return types.ExitConfigError.Int()
+		}
+		if sessionLogger != nil {
+			sessionLogger.Info("new-install completed successfully")
 		}
 		return types.ExitSuccess.Int()
 	}
@@ -230,10 +245,22 @@ func run() int {
 
 	// Handle install wizard (runs before normal execution)
 	if args.Install {
+		sessionLogger, cleanupSessionLog := startFlowSessionLog("install", bootstrap)
+		defer cleanupSessionLog()
+		if sessionLogger != nil {
+			sessionLogger.Info("Starting --install (config=%s)", args.ConfigPath)
+		}
 		// Use modern TUI wizard
 		err := runInstallTUI(ctx, args.ConfigPath, bootstrap)
 
 		if err != nil {
+			if sessionLogger != nil {
+				if isInstallAbortedError(err) {
+					sessionLogger.Warning("install aborted by user: %v", err)
+				} else {
+					sessionLogger.Error("install failed: %v", err)
+				}
+			}
 			// Interactive aborts (Ctrl+C, explicit cancel) are treated as a graceful exit
 			// and already summarized by the install footer.
 			if isInstallAbortedError(err) {
@@ -241,6 +268,9 @@ func run() int {
 			}
 			bootstrap.Error("ERROR: %v", err)
 			return types.ExitConfigError.Int()
+		}
+		if sessionLogger != nil {
+			sessionLogger.Info("install completed successfully")
 		}
 		return types.ExitSuccess.Int()
 	}
@@ -416,6 +446,20 @@ func run() int {
 
 	// Initialize logger with configuration
 	logger := logging.New(logLevel, cfg.UseColor)
+	sessionLogActive := false
+	sessionLogCloser := func() {}
+	if args.Restore {
+		if restoreLogger, restoreLogPath, closeFn, err := logging.StartSessionLogger("restore", logLevel, cfg.UseColor); err == nil {
+			logger = restoreLogger
+			sessionLogCloser = closeFn
+			sessionLogActive = true
+			bootstrap.Info("Restore log: %s", restoreLogPath)
+			_ = os.Setenv("LOG_FILE", restoreLogPath)
+		} else {
+			bootstrap.Warning("WARNING: Unable to start restore log: %v", err)
+		}
+	}
+
 	logging.SetDefaultLogger(logger)
 	bootstrap.SetLevel(logLevel)
 	bootstrap.Flush(logger)
@@ -424,19 +468,24 @@ func run() int {
 	hostname := resolveHostname()
 	startTime := time.Now()
 	timestampStr := startTime.Format("20060102-150405")
-	logFileName := fmt.Sprintf("backup-%s-%s.log", hostname, timestampStr)
-	logFilePath := filepath.Join(cfg.LogPath, logFileName)
 
-	// Ensure log directory exists
-	if err := os.MkdirAll(cfg.LogPath, defaultDirPerm); err != nil {
-		logging.Warning("Failed to create log directory %s: %v", cfg.LogPath, err)
+	if sessionLogActive {
+		defer sessionLogCloser()
 	} else {
-		if err := logger.OpenLogFile(logFilePath); err != nil {
-			logging.Warning("Failed to open log file %s: %v", logFilePath, err)
+		logFileName := fmt.Sprintf("backup-%s-%s.log", hostname, timestampStr)
+		logFilePath := filepath.Join(cfg.LogPath, logFileName)
+
+		// Ensure log directory exists
+		if err := os.MkdirAll(cfg.LogPath, defaultDirPerm); err != nil {
+			logging.Warning("Failed to create log directory %s: %v", cfg.LogPath, err)
 		} else {
-			logging.Info("Log file opened: %s", logFilePath)
-			// Store log path in environment for backup stats
-			_ = os.Setenv("LOG_FILE", logFilePath)
+			if err := logger.OpenLogFile(logFilePath); err != nil {
+				logging.Warning("Failed to open log file %s: %v", logFilePath, err)
+			} else {
+				logging.Info("Log file opened: %s", logFilePath)
+				// Store log path in environment for backup stats
+				_ = os.Setenv("LOG_FILE", logFilePath)
+			}
 		}
 	}
 

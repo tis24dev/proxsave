@@ -28,6 +28,8 @@ const (
 	restoreErrorModalPage = "restore-error-modal"
 )
 
+var errRestoreBackToMode = errors.New("restore mode back")
+
 // RunRestoreWorkflowTUI runs the restore workflow using a TUI flow.
 func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) error {
 	if cfg == nil {
@@ -74,27 +76,44 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		return runFullRestoreTUI(ctx, candidate, prepared, destRoot, logger, configPath, buildSig)
 	}
 
-	// Restore mode selection
-	mode, err := selectRestoreModeTUI(systemType, configPath, buildSig)
-	if err != nil {
-		if errors.Is(err, ErrRestoreAborted) {
-			return ErrRestoreAborted
-		}
-		return err
-	}
+	// Restore mode selection (loop to allow going back from category selection)
+	var (
+		mode               RestoreMode
+		selectedCategories []Category
+	)
 
-	// Determine selected categories based on mode
-	var selectedCategories []Category
-	if mode == RestoreModeCustom {
-		selectedCategories, err = selectCategoriesTUI(availableCategories, systemType, configPath, buildSig)
+	for {
+		backupSummary := fmt.Sprintf(
+			"%s (%s)",
+			candidate.DisplayBase,
+			candidate.Manifest.CreatedAt.Format("2006-01-02 15:04:05"),
+		)
+
+		mode, err = selectRestoreModeTUI(systemType, configPath, buildSig, backupSummary)
 		if err != nil {
 			if errors.Is(err, ErrRestoreAborted) {
 				return ErrRestoreAborted
 			}
 			return err
 		}
-	} else {
-		selectedCategories = GetCategoriesForMode(mode, systemType, availableCategories)
+
+		if mode != RestoreModeCustom {
+			selectedCategories = GetCategoriesForMode(mode, systemType, availableCategories)
+			break
+		}
+
+		selectedCategories, err = selectCategoriesTUI(availableCategories, systemType, configPath, buildSig)
+		if err != nil {
+			if errors.Is(err, ErrRestoreAborted) {
+				return ErrRestoreAborted
+			}
+			if errors.Is(err, errRestoreBackToMode) {
+				// User chose "Back" from category selection: re-open restore mode selection.
+				continue
+			}
+			return err
+		}
+		break
 	}
 
 	plan := PlanRestore(candidate.Manifest, selectedCategories, systemType, mode)
@@ -592,7 +611,7 @@ func showRestoreCandidatePage(app *tui.App, pages *tview.Pages, candidates []*de
 	pages.AddPage("candidates", page, true, true)
 }
 
-func selectRestoreModeTUI(systemType SystemType, configPath, buildSig string) (RestoreMode, error) {
+func selectRestoreModeTUI(systemType SystemType, configPath, buildSig, backupSummary string) (RestoreMode, error) {
 	app := tui.NewApp()
 	var selected RestoreMode
 	var aborted bool
@@ -655,7 +674,26 @@ func selectRestoreModeTUI(systemType SystemType, configPath, buildSig string) (R
 	form.AddCancelButton("Cancel")
 	enableFormNavigation(form, nil)
 
-	page := buildRestoreWizardPage("Select restore mode", configPath, buildSig, form.Form)
+	// Selected backup summary
+	summaryText := strings.TrimSpace(backupSummary)
+	var summaryView tview.Primitive
+	if summaryText != "" {
+		summary := tview.NewTextView().
+			SetText(fmt.Sprintf("Selected backup: %s", summaryText)).
+			SetWrap(true).
+			SetTextColor(tcell.ColorWhite)
+		summary.SetBorder(false)
+		summaryView = summary
+	} else {
+		summaryView = tview.NewBox()
+	}
+
+	content := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(summaryView, 2, 0, false).
+		AddItem(form.Form, 0, 1, true)
+
+	page := buildRestoreWizardPage("Select restore mode", configPath, buildSig, content)
 	app.SetRoot(page, true).SetFocus(form.Form)
 	if err := app.Run(); err != nil {
 		return "", err
@@ -695,59 +733,60 @@ func selectCategoriesTUI(available []Category, systemType SystemType, configPath
 	})
 
 	app := tui.NewApp()
-	list := tview.NewList().ShowSecondaryText(true)
-	list.SetMainTextColor(tcell.ColorWhite).
-		SetSelectedTextColor(tcell.ColorWhite).
-		SetSelectedBackgroundColor(tui.ProxmoxOrange)
+	form := components.NewForm(app)
+	var dropdownOpen bool
 
-	selected := make(map[int]bool)
+	// Helper text
+	helper := tview.NewTextView().
+		SetText("Select which categories to restore using the dropdowns below (Yes/No).").
+		SetWrap(true).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true)
 
-	refresh := func(current int) {
-		list.Clear()
-		for i, cat := range relevant {
-			checkbox := "[ ]"
-			if selected[i] {
-				checkbox = "[X]"
+	// Create one dropdown per category, defaulting to "No"
+	for _, cat := range relevant {
+		dropdown := tview.NewDropDown().
+			SetLabel(cat.Name).
+			SetOptions([]string{"No", "Yes"}, nil).
+			SetCurrentOption(0)
+
+		dropdown.SetFieldTextColor(tcell.ColorWhite)
+		dropdown.SetFieldBackgroundColor(tui.ProxmoxDark)
+
+		dropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			if event == nil {
+				return event
 			}
-			main := fmt.Sprintf("%2d) %s %s", i+1, checkbox, cat.Name)
-			list.AddItem(main, cat.Description, 0, nil)
-		}
-		if current >= 0 && current < list.GetItemCount() {
-			list.SetCurrentItem(current)
+			switch event.Key() {
+			case tcell.KeyEnter:
+				dropdownOpen = !dropdownOpen
+			case tcell.KeyEscape:
+				dropdownOpen = false
+			}
+			return event
+		})
+
+		form.Form.AddFormItem(dropdown)
+
+		if strings.TrimSpace(cat.Description) != "" {
+			desc := tview.NewInputField().
+				SetLabel("  └─ " + cat.Description).
+				SetFieldWidth(0).
+				SetText("").
+				SetDisabled(true)
+			form.Form.AddFormItem(desc)
 		}
 	}
-
-	refresh(0)
-
-	list.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		if index < 0 || index >= len(relevant) {
-			return
-		}
-		selected[index] = !selected[index]
-		refresh(index)
-	})
 
 	var chosen []Category
 	var aborted bool
-
-	form := components.NewForm(app)
-	listHeight := len(relevant)
-	if listHeight < 8 {
-		listHeight = 8
-	}
-	if listHeight > 18 {
-		listHeight = 18
-	}
-	listItem := components.NewListFormItem(list).
-		SetLabel("Select categories (ENTER toggles selection)").
-		SetFieldHeight(listHeight)
-	form.Form.AddFormItem(listItem)
-	form.Form.SetFocus(0)
+	var goBack bool
 
 	form.SetOnSubmit(func(values map[string]string) error {
 		var out []Category
-		for i, cat := range relevant {
-			if selected[i] {
+		for _, cat := range relevant {
+			value := strings.TrimSpace(values[cat.Name])
+			if strings.EqualFold(value, "Yes") {
 				out = append(out, cat)
 			}
 		}
@@ -760,15 +799,29 @@ func selectCategoriesTUI(available []Category, systemType SystemType, configPath
 	form.SetOnCancel(func() {
 		aborted = true
 	})
+
+	// Buttons: Back, Continue, Cancel
+	form.Form.AddButton("Back", func() {
+		goBack = true
+		app.Stop()
+	})
 	form.AddSubmitButton("Continue")
 	form.AddCancelButton("Cancel")
-	enableFormNavigation(form, nil)
+	enableFormNavigation(form, &dropdownOpen)
 
-	page := buildRestoreWizardPage("Select restore categories", configPath, buildSig, form.Form)
+	content := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(helper, 3, 0, false).
+		AddItem(form.Form, 0, 1, true)
+
+	page := buildRestoreWizardPage("Select restore categories", configPath, buildSig, content)
 	form.SetParentView(page)
 
 	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
 		return nil, err
+	}
+	if goBack {
+		return nil, errRestoreBackToMode
 	}
 	if aborted {
 		return nil, ErrRestoreAborted
@@ -966,7 +1019,7 @@ func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
 	var confirmed bool
 	var aborted bool
 
-	infoMessage := "Type [yellow]RESTORE[white] to proceed or press Cancel to abort."
+	infoMessage := "Review the restore plan. Press [yellow]RESTORE[white] to start the restore process, or Cancel to abort.\nYou will be asked for explicit confirmation before overwriting files."
 	infoText := tview.NewTextView().
 		SetText(infoMessage).
 		SetWrap(true).
@@ -974,13 +1027,6 @@ func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
 		SetDynamicColors(true)
 
 	form := components.NewForm(app)
-	label := "Confirmation"
-	form.AddInputFieldWithValidation(label, "", 16, func(value string) error {
-		if strings.TrimSpace(value) != "RESTORE" {
-			return fmt.Errorf("please type RESTORE to confirm")
-		}
-		return nil
-	})
 	form.SetOnSubmit(func(values map[string]string) error {
 		confirmed = true
 		return nil
@@ -988,7 +1034,7 @@ func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
 	form.SetOnCancel(func() {
 		aborted = true
 	})
-	form.AddSubmitButton("Proceed")
+	form.AddSubmitButton("RESTORE")
 	form.AddCancelButton("Cancel")
 	enableFormNavigation(form, nil)
 
@@ -1009,6 +1055,14 @@ func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
 	if !confirmed {
 		return false, ErrRestoreAborted
 	}
+	// Second-stage explicit overwrite confirmation
+	ok, err := confirmOverwriteTUI(configPath, buildSig)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
 	return true, nil
 }
 
@@ -1027,7 +1081,7 @@ func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepare
 	)
 	b.WriteString("Restore destination: / (system root; original paths will be preserved)\n")
 	b.WriteString("WARNING: This operation will overwrite configuration files on this system.\n\n")
-	b.WriteString("Type RESTORE to proceed or Cancel to abort.\n")
+	b.WriteString("Press RESTORE to start the restore process, or Cancel to abort.\nYou will be asked for explicit confirmation before overwriting files.\n")
 
 	infoText := tview.NewTextView().
 		SetText(b.String()).
@@ -1035,15 +1089,8 @@ func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepare
 		SetTextColor(tcell.ColorWhite)
 
 	form := components.NewForm(app)
-	label := "Confirmation"
 	var confirmed bool
 	var aborted bool
-	form.AddInputFieldWithValidation(label, "", 16, func(value string) error {
-		if strings.TrimSpace(value) != "RESTORE" {
-			return fmt.Errorf("please type RESTORE to confirm")
-		}
-		return nil
-	})
 	form.SetOnSubmit(func(values map[string]string) error {
 		confirmed = true
 		return nil
@@ -1051,7 +1098,7 @@ func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepare
 	form.SetOnCancel(func() {
 		aborted = true
 	})
-	form.AddSubmitButton("Proceed")
+	form.AddSubmitButton("RESTORE")
 	form.AddCancelButton("Cancel")
 	enableFormNavigation(form, nil)
 
@@ -1067,6 +1114,14 @@ func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepare
 		return err
 	}
 	if aborted || !confirmed {
+		return ErrRestoreAborted
+	}
+
+	ok, err := confirmOverwriteTUI(configPath, buildSig)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return ErrRestoreAborted
 	}
 
@@ -1116,6 +1171,18 @@ func promptYesNoTUI(title, configPath, buildSig, message, yesLabel, noLabel stri
 		return false, nil
 	}
 	return result, nil
+}
+
+func confirmOverwriteTUI(configPath, buildSig string) (bool, error) {
+	message := "This operation will overwrite existing configuration files on this system.\n\nAre you sure you want to proceed with the restore?"
+	return promptYesNoTUI(
+		"Confirm overwrite",
+		configPath,
+		buildSig,
+		message,
+		"Overwrite and restore",
+		"Cancel",
+	)
 }
 
 func buildRestoreWizardPage(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
