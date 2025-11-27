@@ -17,6 +17,7 @@ type EnvMigrationSummary struct {
 	BackupPath         string
 	MigratedKeys       map[string]string
 	UnmappedLegacyKeys []string
+	AutoDisabledCeph   bool
 }
 
 // migrationRule describes how to map one or more legacy keys into a template key.
@@ -230,6 +231,7 @@ func PlanLegacyEnvMigration(legacyPath, outputPath string) (*EnvMigrationSummary
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to parse legacy configuration: %w", err)
 	}
+	cephAutoDisabled := autoDisableLegacyCephIfUnavailable(legacyValues)
 
 	var baseTemplate string
 	if utils.FileExists(outputPath) {
@@ -244,6 +246,95 @@ func PlanLegacyEnvMigration(legacyPath, outputPath string) (*EnvMigrationSummary
 
 	mergedContent, summary := mergeTemplateWithLegacy(baseTemplate, legacyValues)
 	summary.OutputPath = outputPath
+	summary.AutoDisabledCeph = cephAutoDisabled
 
 	return summary, mergedContent, nil
+}
+
+func autoDisableLegacyCephIfUnavailable(values map[string]string) bool {
+	raw, ok := values["BACKUP_CEPH_CONFIG"]
+	if ok && !utils.ParseBool(raw) {
+		return false
+	}
+
+	if cephPresenceChecker(gatherCephProbePaths(values)) {
+		return false
+	}
+
+	values["BACKUP_CEPH_CONFIG"] = "false"
+	return true
+}
+
+var cephPresenceChecker = defaultCephPresenceChecker
+
+func gatherCephProbePaths(values map[string]string) []string {
+	paths := make([]string, 0, 4)
+	seen := make(map[string]struct{})
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+
+	add(values["CEPH_CONFIG_PATH"])
+	add("/etc/ceph")
+	add("/etc/pve")
+	add("/var/lib/ceph")
+
+	return paths
+}
+
+func defaultCephPresenceChecker(paths []string) bool {
+	for _, path := range paths {
+		if cephPathHasConfig(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func cephPathHasConfig(path string) bool {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if cleaned == "" || cleaned == "." || cleaned == string(filepath.Separator) {
+		return false
+	}
+
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil && strings.TrimSpace(resolved) != "" {
+		cleaned = resolved
+	}
+
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		return false
+	}
+
+	if info.IsDir() {
+		entries, err := os.ReadDir(cleaned)
+		if err != nil {
+			// If we cannot read the directory (permissions, etc.), assume Ceph might be present.
+			return true
+		}
+		for _, entry := range entries {
+			name := strings.ToLower(entry.Name())
+			if entry.IsDir() {
+				if strings.Contains(name, "ceph") {
+					return true
+				}
+				continue
+			}
+			if name == "ceph.conf" || strings.HasSuffix(name, ".keyring") {
+				return true
+			}
+		}
+		return false
+	}
+
+	name := strings.ToLower(info.Name())
+	return name == "ceph.conf" || strings.HasSuffix(name, ".keyring")
 }

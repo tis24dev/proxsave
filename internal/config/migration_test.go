@@ -209,6 +209,72 @@ func TestMigrateLegacyEnvRollsBackOnValidationFailure(t *testing.T) {
 	})
 }
 
+func TestMigrateLegacyEnvAutoDisablesCephWhenUnavailable(t *testing.T) {
+	template := baseInstallTemplate + "BACKUP_CEPH_CONFIG=true\nCEPH_CONFIG_PATH=/etc/ceph\n"
+	withTemplate(t, template, func() {
+		restore := cephPresenceChecker
+		cephPresenceChecker = func(paths []string) bool { return false }
+		t.Cleanup(func() { cephPresenceChecker = restore })
+
+		tmpDir := t.TempDir()
+		legacyPath := filepath.Join(tmpDir, "legacy.env")
+		outputPath := filepath.Join(tmpDir, "backup.env")
+		content := "BACKUP_CEPH_CONFIG=true\nCEPH_CONFIG_PATH=/missing/path\n"
+		if err := os.WriteFile(legacyPath, []byte(content), 0o600); err != nil {
+			t.Fatalf("failed to write legacy env: %v", err)
+		}
+
+		summary, err := MigrateLegacyEnv(legacyPath, outputPath)
+		if err != nil {
+			t.Fatalf("MigrateLegacyEnv returned error: %v", err)
+		}
+		if !summary.AutoDisabledCeph {
+			t.Fatalf("expected AutoDisabledCeph to be true")
+		}
+
+		cfg, err := LoadConfig(outputPath)
+		if err != nil {
+			t.Fatalf("LoadConfig returned error: %v", err)
+		}
+		if cfg.BackupCephConfig {
+			t.Fatalf("expected Ceph backup to be disabled when no config detected")
+		}
+	})
+}
+
+func TestMigrateLegacyEnvKeepsCephWhenDetected(t *testing.T) {
+	template := baseInstallTemplate + "BACKUP_CEPH_CONFIG=true\nCEPH_CONFIG_PATH=/etc/ceph\n"
+	withTemplate(t, template, func() {
+		restore := cephPresenceChecker
+		cephPresenceChecker = func(paths []string) bool { return true }
+		t.Cleanup(func() { cephPresenceChecker = restore })
+
+		tmpDir := t.TempDir()
+		legacyPath := filepath.Join(tmpDir, "legacy.env")
+		outputPath := filepath.Join(tmpDir, "backup.env")
+		content := "BACKUP_CEPH_CONFIG=true\nCEPH_CONFIG_PATH=/detected/path\n"
+		if err := os.WriteFile(legacyPath, []byte(content), 0o600); err != nil {
+			t.Fatalf("failed to write legacy env: %v", err)
+		}
+
+		summary, err := MigrateLegacyEnv(legacyPath, outputPath)
+		if err != nil {
+			t.Fatalf("MigrateLegacyEnv returned error: %v", err)
+		}
+		if summary.AutoDisabledCeph {
+			t.Fatalf("did not expect AutoDisabledCeph when Ceph is detected")
+		}
+
+		cfg, err := LoadConfig(outputPath)
+		if err != nil {
+			t.Fatalf("LoadConfig returned error: %v", err)
+		}
+		if !cfg.BackupCephConfig {
+			t.Fatalf("expected Ceph backup to remain enabled")
+		}
+	})
+}
+
 func TestPlanLegacyEnvMigrationFailsWhenLegacyMissing(t *testing.T) {
 	withTemplate(t, baseInstallTemplate, func() {
 		tmpDir := t.TempDir()

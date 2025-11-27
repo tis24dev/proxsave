@@ -459,15 +459,18 @@ func (c *Checker) verifySecureAccountFiles() {
 
 func (c *Checker) verifyDirectories() {
 	dirs := []struct {
-		path string
-		perm os.FileMode
+		path        string
+		perm        os.FileMode
+		allowBackup bool
 	}{
-		{c.cfg.BackupPath, 0o755},
-		{c.cfg.LogPath, 0o755},
-		{c.cfg.LockPath, 0o755},
-		{c.cfg.SecureAccount, 0o700},
-		{filepath.Join(c.cfg.BaseDir, "identity"), 0o700},
-		{filepath.Join(c.cfg.BaseDir, "identity", "age"), 0o700},
+		{c.cfg.BackupPath, 0o755, true},
+		{c.cfg.LogPath, 0o755, true},
+		{c.cfg.SecondaryPath, 0o755, true},
+		{c.cfg.SecondaryLogPath, 0o755, true},
+		{c.cfg.LockPath, 0o755, false},
+		{c.cfg.SecureAccount, 0o700, false},
+		{filepath.Join(c.cfg.BaseDir, "identity"), 0o700, false},
+		{filepath.Join(c.cfg.BaseDir, "identity", "age"), 0o700, false},
 	}
 
 	for _, dir := range dirs {
@@ -488,6 +491,11 @@ func (c *Checker) verifyDirectories() {
 			}
 		} else if err != nil {
 			c.addWarning("Cannot stat directory %s: %v", dir.path, err)
+			continue
+		}
+
+		if dir.allowBackup && c.shouldSkipOwnershipChecks(dir.path) {
+			c.logger.Debug("Security check: skipping root ownership enforcement for %s (managed by SET_BACKUP_PERMISSIONS)", dir.path)
 			continue
 		}
 
@@ -768,6 +776,30 @@ func isOwnedByRoot(info os.FileInfo) bool {
 		return false
 	}
 	return stat.Uid == 0 && stat.Gid == 0
+}
+
+func (c *Checker) shouldSkipOwnershipChecks(path string) bool {
+	if !c.cfg.SetBackupPermissions {
+		return false
+	}
+
+	target := filepath.Clean(path)
+	paths := []string{
+		c.cfg.BackupPath,
+		c.cfg.LogPath,
+		c.cfg.SecondaryPath,
+		c.cfg.SecondaryLogPath,
+	}
+
+	for _, candidate := range paths {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		if filepath.Clean(candidate) == target {
+			return true
+		}
+	}
+	return false
 }
 
 type ssEntry struct {

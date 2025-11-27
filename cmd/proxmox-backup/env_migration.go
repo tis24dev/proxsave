@@ -45,6 +45,10 @@ func runEnvMigration(ctx context.Context, args *cli.Args, bootstrap *logging.Boo
 		bootstrap.Printf("Legacy keys requiring manual review (%d): %s",
 			len(summary.UnmappedLegacyKeys), strings.Join(summary.UnmappedLegacyKeys, ", "))
 	}
+	if summary.AutoDisabledCeph {
+		bootstrap.Warning("Ceph configuration collection was disabled automatically (no Ceph configuration detected).")
+		bootstrap.Warning("Edit BACKUP_CEPH_CONFIG in the generated file if you need to re-enable it.")
+	}
 	bootstrap.Println("")
 	bootstrap.Println("IMPORTANT:")
 	bootstrap.Println("- Review the generated configuration manually before any production run.")
@@ -78,6 +82,10 @@ func runEnvMigrationDry(ctx context.Context, args *cli.Args, bootstrap *logging.
 	bootstrap.Printf("Target configuration file: %s", summary.OutputPath)
 	printMigratedKeys(summary, bootstrap)
 	printUnmappedKeys(summary, bootstrap)
+	if summary.AutoDisabledCeph {
+		bootstrap.Warning("Ceph configuration collection would be disabled automatically (no Ceph configuration detected).")
+		bootstrap.Warning("Edit BACKUP_CEPH_CONFIG manually if you need to keep it enabled.")
+	}
 	bootstrap.Println("")
 	bootstrap.Println("No files were modified. Run --env-migration to apply these changes after reviewing the plan.")
 	return types.ExitSuccess.Int()
