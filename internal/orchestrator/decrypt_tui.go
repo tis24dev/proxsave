@@ -64,36 +64,53 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	if err := restoreFS.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
+
+	// Determine the logical decrypted archive path for naming purposes.
+	// This keeps the same defaults and prompts as before, but the archive
+	// itself stays in the temporary working directory.
 	destArchivePath := filepath.Join(destDir, filepath.Base(prepared.ArchivePath))
 	destArchivePath, err = ensureWritablePathTUI(destArchivePath, "decrypted archive", configPath, buildSig)
 	if err != nil {
 		return err
 	}
 
-	if err := moveFileSafe(prepared.ArchivePath, destArchivePath); err != nil {
-		return fmt.Errorf("move decrypted archive: %w", err)
+	// Work exclusively inside the temporary directory created by preparePlainBundleTUI.
+	workDir := filepath.Dir(prepared.ArchivePath)
+	archiveBase := filepath.Base(destArchivePath)
+	tempArchivePath := filepath.Join(workDir, archiveBase)
+
+	// Ensure the staged archive in the temp dir has the desired basename.
+	if tempArchivePath != prepared.ArchivePath {
+		if err := moveFileSafe(prepared.ArchivePath, tempArchivePath); err != nil {
+			return fmt.Errorf("move decrypted archive within temp dir: %w", err)
+		}
 	}
 
 	manifestCopy := prepared.Manifest
+	// As in the CLI workflow, keep the manifest's ArchivePath pointing to the
+	// destination archive location while the actual archive continues to live
+	// only inside the temporary work directory.
 	manifestCopy.ArchivePath = destArchivePath
 
-	metadataPath := destArchivePath + ".metadata"
+	metadataPath := tempArchivePath + ".metadata"
 	if err := backup.CreateManifest(ctx, logger, &manifestCopy, metadataPath); err != nil {
 		return fmt.Errorf("write metadata: %w", err)
 	}
 
-	checksumPath := destArchivePath + ".sha256"
-	if err := restoreFS.WriteFile(checksumPath, []byte(fmt.Sprintf("%s  %s\n", prepared.Checksum, filepath.Base(destArchivePath))), 0o640); err != nil {
+	checksumPath := tempArchivePath + ".sha256"
+	if err := restoreFS.WriteFile(checksumPath, []byte(fmt.Sprintf("%s  %s\n", prepared.Checksum, filepath.Base(tempArchivePath))), 0o640); err != nil {
 		return fmt.Errorf("write checksum file: %w", err)
 	}
 
 	logger.Debug("Creating decrypted bundle...")
-	bundlePath, err := createBundle(ctx, logger, destArchivePath)
+	bundlePath, err := createBundle(ctx, logger, tempArchivePath)
 	if err != nil {
 		return err
 	}
 
-	targetBundlePath := strings.TrimSuffix(bundlePath, ".bundle.tar") + ".decrypted.bundle.tar"
+	// Only the final decrypted bundle is moved into the destination directory.
+	logicalBundlePath := destArchivePath + ".bundle.tar"
+	targetBundlePath := strings.TrimSuffix(logicalBundlePath, ".bundle.tar") + ".decrypted.bundle.tar"
 	targetBundlePath, err = ensureWritablePathTUI(targetBundlePath, "decrypted bundle", configPath, buildSig)
 	if err != nil {
 		return err
@@ -101,9 +118,8 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	if err := restoreFS.Remove(targetBundlePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.Warning("Failed to remove existing bundle target: %v", err)
 	}
-	if err := restoreFS.Rename(bundlePath, targetBundlePath); err != nil {
-		logger.Warning("Failed to rename bundle: %v", err)
-		targetBundlePath = bundlePath
+	if err := moveFileSafe(bundlePath, targetBundlePath); err != nil {
+		return fmt.Errorf("move decrypted bundle: %w", err)
 	}
 
 	logger.Info("Decrypted bundle created: %s", targetBundlePath)

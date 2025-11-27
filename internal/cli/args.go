@@ -63,7 +63,7 @@ func Parse() *Args {
 	flag.BoolVar(&args.Support, "support", false,
 		"Run backup in support mode (force debug log level and send a support email with the attached log to github-support@tis24.it)")
 	flag.BoolVar(&args.ForceCLI, "cli", false,
-		"Use CLI prompts instead of TUI for interactive workflows (works with --install/--new-install/--decrypt/--restore)")
+		"Use CLI prompts instead of TUI for interactive workflows (works with --install/--new-install/--newkey/--decrypt/--restore)")
 
 	flag.BoolVar(&args.ShowVersion, "version", false,
 		"Show version information")

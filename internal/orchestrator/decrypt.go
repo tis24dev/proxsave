@@ -83,6 +83,7 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	}
 	defer prepared.Cleanup()
 
+	// Ask for destination directory (where the final decrypted bundle will live)
 	destDir, err := promptDestinationDir(ctx, reader, cfg)
 	if err != nil {
 		return err
@@ -93,40 +94,54 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	destDir, _ = filepath.Abs(destDir)
 	logger.Info("Destination directory: %s", destDir)
 
+	// Determine the logical decrypted archive path for naming purposes.
+	// This keeps the same defaults and prompts as before, but the archive
+	// itself stays in the temporary working directory.
 	destArchivePath := filepath.Join(destDir, filepath.Base(prepared.ArchivePath))
 	destArchivePath, err = ensureWritablePath(ctx, reader, destArchivePath, "decrypted archive")
 	if err != nil {
 		return err
 	}
 
-	if err := moveFileSafe(prepared.ArchivePath, destArchivePath); err != nil {
-		return fmt.Errorf("move decrypted archive: %w", err)
+	// Work exclusively inside the temporary directory created by preparePlainBundle.
+	workDir := filepath.Dir(prepared.ArchivePath)
+	archiveBase := filepath.Base(destArchivePath)
+	tempArchivePath := filepath.Join(workDir, archiveBase)
+
+	// Ensure the staged archive in the temp dir has the desired basename.
+	if tempArchivePath != prepared.ArchivePath {
+		if err := moveFileSafe(prepared.ArchivePath, tempArchivePath); err != nil {
+			return fmt.Errorf("move decrypted archive within temp dir: %w", err)
+		}
 	}
 
 	manifestCopy := prepared.Manifest
+	// Keep manifest path consistent with previous behavior: it refers to the
+	// archive location in the destination directory, even though the archive
+	// itself is not written there during the decrypt process.
 	manifestCopy.ArchivePath = destArchivePath
 
-	metadataPath := destArchivePath + ".metadata"
+	metadataPath := tempArchivePath + ".metadata"
 	if err := backup.CreateManifest(ctx, logger, &manifestCopy, metadataPath); err != nil {
 		return fmt.Errorf("write metadata: %w", err)
 	}
 
-	checksumPath := destArchivePath + ".sha256"
-	if err := restoreFS.WriteFile(checksumPath, []byte(fmt.Sprintf("%s  %s\n", prepared.Checksum, filepath.Base(destArchivePath))), 0o640); err != nil {
+	checksumPath := tempArchivePath + ".sha256"
+	if err := restoreFS.WriteFile(checksumPath, []byte(fmt.Sprintf("%s  %s\n", prepared.Checksum, filepath.Base(tempArchivePath))), 0o640); err != nil {
 		return fmt.Errorf("write checksum file: %w", err)
 	}
 
 	logger.Info("Creating decrypted bundle...")
-	bundlePath, err := createBundle(ctx, logger, destArchivePath)
+	bundlePath, err := createBundle(ctx, logger, tempArchivePath)
 	if err != nil {
 		return err
 	}
 
-	if err := removeAssociatedFiles(logger, destArchivePath); err != nil {
-		logger.Warning("Failed to remove temporary decrypted files: %v", err)
-	}
-
-	targetBundlePath := strings.TrimSuffix(bundlePath, ".bundle.tar") + ".decrypted.bundle.tar"
+	// Only the final decrypted bundle is moved into the destination directory.
+	// All temporary plain artifacts remain confined to the temp workdir and
+	// are removed by prepared.Cleanup().
+	logicalBundlePath := destArchivePath + ".bundle.tar"
+	targetBundlePath := strings.TrimSuffix(logicalBundlePath, ".bundle.tar") + ".decrypted.bundle.tar"
 	targetBundlePath, err = ensureWritablePath(ctx, reader, targetBundlePath, "decrypted bundle")
 	if err != nil {
 		return err
@@ -134,9 +149,8 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	if err := restoreFS.Remove(targetBundlePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.Warning("Failed to remove existing bundle target: %v", err)
 	}
-	if err := restoreFS.Rename(bundlePath, targetBundlePath); err != nil {
-		logger.Warning("Failed to rename bundle: %v", err)
-		targetBundlePath = bundlePath
+	if err := moveFileSafe(bundlePath, targetBundlePath); err != nil {
+		return fmt.Errorf("move decrypted bundle: %w", err)
 	}
 
 	logger.Info("Decrypted bundle created: %s", targetBundlePath)
@@ -216,11 +230,21 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 			logger.Warning("No backup bundles found in %s", option.Path)
 			continue
 		}
+
+		// Align CLI behavior with the TUI decrypt flow:
+		// only encrypted backups are valid candidates for decrypt.
+		encrypted := filterEncryptedCandidates(candidates)
+		if len(encrypted) == 0 {
+			logger.Warning("No encrypted backups found in %s", option.Path)
+			continue
+		}
+
+		candidates = encrypted
 		selectedPath = option.Path
 		break
 	}
 
-	logger.Info("Found %d backup artifact(s) in %s", len(candidates), selectedPath)
+	logger.Info("Found %d encrypted backup(s) in %s", len(candidates), selectedPath)
 	return promptCandidateSelection(ctx, reader, candidates)
 }
 

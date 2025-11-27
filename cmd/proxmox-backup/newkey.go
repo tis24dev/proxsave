@@ -8,12 +8,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/term"
+
+	"github.com/tis24dev/proxmox-backup/internal/config"
 	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxmox-backup/internal/orchestrator"
 	"github.com/tis24dev/proxmox-backup/internal/tui/wizard"
+	"github.com/tis24dev/proxmox-backup/internal/types"
 )
 
 // runNewKey performs a standalone AGE recipient setup without running a backup.
-func runNewKey(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) error {
+func runNewKey(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, useCLI bool) error {
 	resolvedPath, err := resolveInstallConfigPath(configPath)
 	if err != nil {
 		return err
@@ -31,6 +36,13 @@ func runNewKey(ctx context.Context, configPath string, bootstrap *logging.Bootst
 		return err
 	}
 
+	if useCLI {
+		return runNewKeyCLI(ctx, configPath, baseDir, bootstrap)
+	}
+	return runNewKeyTUI(ctx, configPath, baseDir, bootstrap)
+}
+
+func runNewKeyTUI(ctx context.Context, configPath, baseDir string, bootstrap *logging.BootstrapLogger) error {
 	recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
 	sig := buildSignature()
 	if strings.TrimSpace(sig) == "" {
@@ -81,6 +93,36 @@ func runNewKey(ctx context.Context, configPath string, bootstrap *logging.Bootst
 	// Save the recipient
 	if err := wizard.SaveAgeRecipient(recipientPath, recipientKey); err != nil {
 		return fmt.Errorf("failed to save AGE recipient: %w", err)
+	}
+
+	bootstrap.Info("✓ New AGE recipient generated and saved to %s", recipientPath)
+	bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
+
+	return nil
+}
+
+func runNewKeyCLI(ctx context.Context, configPath, baseDir string, bootstrap *logging.BootstrapLogger) error {
+	recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
+
+	cfg := &config.Config{
+		BaseDir:          baseDir,
+		ConfigPath:       configPath,
+		EncryptArchive:   true,
+		AgeRecipientFile: recipientPath,
+	}
+
+	useColor := term.IsTerminal(int(os.Stdout.Fd()))
+	logger := logging.New(types.LogLevelInfo, useColor)
+
+	orch := orchestrator.New(logger, false)
+	orch.SetConfig(cfg)
+	orch.SetForceNewAgeRecipient(true)
+
+	if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
+		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
+			return wrapInstallError(errInteractiveAborted)
+		}
+		return fmt.Errorf("AGE setup failed: %w", err)
 	}
 
 	bootstrap.Info("✓ New AGE recipient generated and saved to %s", recipientPath)

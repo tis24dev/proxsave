@@ -157,9 +157,10 @@ func run() int {
 	}
 	args.ConfigPath = resolvedConfigPath
 
+	newKeyCLI := args.ForceCLI
 	// Dedicated new key mode (no backup run)
 	if args.ForceNewKey {
-		if err := runNewKey(ctx, args.ConfigPath, bootstrap); err != nil {
+		if err := runNewKey(ctx, args.ConfigPath, bootstrap, newKeyCLI); err != nil {
 			if isInstallAbortedError(err) || errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
 				return types.ExitSuccess.Int()
 			}
