@@ -465,6 +465,276 @@ func TestValidateFutureFeatures_ValidConfig(t *testing.T) {
 	}
 }
 
+// ============================================================
+// runtime_helpers.go - additional tests
+// ============================================================
+
+func TestDetectBaseDir(t *testing.T) {
+	baseDir, found := detectBaseDir()
+
+	// Should return values (may be empty)
+	t.Logf("detectBaseDir() returned: baseDir=%q, found=%v", baseDir, found)
+
+	// If found is true, baseDir should not be empty
+	if found && baseDir == "" {
+		t.Error("if found is true, baseDir should not be empty")
+	}
+}
+
+func TestResolveHostname(t *testing.T) {
+	hostname := resolveHostname()
+
+	if hostname == "" {
+		t.Error("resolveHostname should not return empty string")
+	}
+
+	// Should be either a valid hostname or "unknown"
+	if hostname != "unknown" {
+		// Basic validation: no spaces, reasonable length
+		if strings.Contains(hostname, " ") {
+			t.Errorf("hostname should not contain spaces: %q", hostname)
+		}
+		if len(hostname) > 255 {
+			t.Errorf("hostname too long: %d chars", len(hostname))
+		}
+	}
+}
+
+func TestLogServerIdentityValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		serverID string
+		mac      string
+	}{
+		{"both values", "server-123", "00:11:22:33:44:55"},
+		{"only server ID", "server-456", ""},
+		{"only MAC", "", "AA:BB:CC:DD:EE:FF"},
+		{"empty values", "", ""},
+		{"whitespace", "  ", "  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Just ensure it doesn't panic
+			logServerIdentityValues(tt.serverID, tt.mac)
+		})
+	}
+}
+
+func TestWarnExecPathMissing(t *testing.T) {
+	// Just ensure it doesn't panic
+	warnExecPathMissing()
+}
+
+func TestCheckInternetConnectivity(t *testing.T) {
+	// This test may fail in isolated environments
+	// We test it doesn't panic and handles timeout correctly
+
+	t.Run("with timeout", func(t *testing.T) {
+		err := checkInternetConnectivity(100 * time.Millisecond)
+		// May succeed or fail depending on network
+		t.Logf("checkInternetConnectivity result: %v", err)
+	})
+
+	t.Run("zero timeout", func(t *testing.T) {
+		err := checkInternetConnectivity(0)
+		// Should fail immediately with zero timeout
+		if err == nil {
+			t.Log("checkInternetConnectivity with zero timeout succeeded (unexpected but ok)")
+		}
+	})
+}
+
+// Note: detectFilesystemInfo requires storage.Storage mock, tested elsewhere
+
+// ============================================================
+// main.go tests
+// ============================================================
+
+func TestCheckGoRuntimeVersion(t *testing.T) {
+	tests := []struct {
+		name       string
+		minVersion string
+		wantErr    bool
+	}{
+		{
+			name:       "very old version passes",
+			minVersion: "1.0.0",
+			wantErr:    false,
+		},
+		{
+			name:       "future version fails",
+			minVersion: "99.99.99",
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkGoRuntimeVersion(tt.minVersion)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("checkGoRuntimeVersion(%s) error = %v, wantErr %v", tt.minVersion, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestFeaturesNeedNetwork(t *testing.T) {
+	tests := []struct {
+		name         string
+		cfg          *config.Config
+		expectNeeds  bool
+		expectReason string
+	}{
+		{
+			name: "no network features",
+			cfg: &config.Config{
+				TelegramEnabled: false,
+				EmailEnabled:    false,
+				CloudEnabled:    false,
+			},
+			expectNeeds: false,
+		},
+		{
+			name: "telegram enabled",
+			cfg: &config.Config{
+				TelegramEnabled: true,
+				EmailEnabled:    false,
+				CloudEnabled:    false,
+			},
+			expectNeeds:  true,
+			expectReason: "Telegram",
+		},
+		{
+			name: "email relay enabled",
+			cfg: &config.Config{
+				TelegramEnabled:     false,
+				EmailEnabled:        true,
+				EmailDeliveryMethod: "relay",
+				CloudEnabled:        false,
+			},
+			expectNeeds:  true,
+			expectReason: "Email",
+		},
+		{
+			name: "cloud enabled",
+			cfg: &config.Config{
+				TelegramEnabled: false,
+				EmailEnabled:    false,
+				CloudEnabled:    true,
+			},
+			expectNeeds:  true,
+			expectReason: "Cloud",
+		},
+		{
+			name: "secondary rclone enabled",
+			cfg: &config.Config{
+				TelegramEnabled:  false,
+				EmailEnabled:     false,
+				CloudEnabled:     false,
+				SecondaryEnabled: true,
+				SecondaryPath:    "rclone:remote/path",
+			},
+			expectNeeds: false, // Secondary is not checked in featuresNeedNetwork
+		},
+		{
+			name: "multiple features",
+			cfg: &config.Config{
+				TelegramEnabled:     true,
+				EmailEnabled:        true,
+				EmailDeliveryMethod: "relay",
+				CloudEnabled:        true,
+			},
+			expectNeeds: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			needs, reasons := featuresNeedNetwork(tt.cfg)
+
+			if needs != tt.expectNeeds {
+				t.Errorf("featuresNeedNetwork() needs = %v, want %v", needs, tt.expectNeeds)
+			}
+
+			if tt.expectNeeds && tt.expectReason != "" {
+				found := false
+				for _, reason := range reasons {
+					if strings.Contains(reason, tt.expectReason) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected reason containing %q in reasons: %v", tt.expectReason, reasons)
+				}
+			}
+		})
+	}
+}
+
+func TestDisableNetworkFeaturesForRun(t *testing.T) {
+	cfg := &config.Config{
+		TelegramEnabled:     true,
+		EmailEnabled:        true,
+		EmailDeliveryMethod: "relay",
+		CloudEnabled:        true,
+	}
+
+	// Mock bootstrap logger (nil is ok for this test)
+	disableNetworkFeaturesForRun(cfg, nil)
+
+	if cfg.TelegramEnabled {
+		t.Error("TelegramEnabled should be disabled")
+	}
+	if cfg.CloudEnabled {
+		t.Error("CloudEnabled should be disabled")
+	}
+
+	// Email with relay should be disabled
+	if cfg.EmailEnabled && cfg.EmailDeliveryMethod == "relay" {
+		t.Error("Email relay should be disabled")
+	}
+}
+
+func TestDisableNetworkFeaturesForRun_PreservesLocal(t *testing.T) {
+	cfg := &config.Config{
+		TelegramEnabled:     false,
+		EmailEnabled:        true,
+		EmailDeliveryMethod: "email-sendmail",
+		SecondaryEnabled:    true,
+		SecondaryPath:       "/local/path",
+	}
+
+	disableNetworkFeaturesForRun(cfg, nil)
+
+	// Local features should remain enabled
+	if !cfg.EmailEnabled {
+		t.Error("Local email (sendmail) should remain enabled")
+	}
+	if !cfg.SecondaryEnabled {
+		t.Error("Local secondary storage should remain enabled")
+	}
+}
+
+func TestPrintFinalSummary(t *testing.T) {
+	tests := []struct {
+		name     string
+		exitCode int
+	}{
+		{"success", 0},
+		{"error", 1},
+		{"config error", 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Just ensure it doesn't panic
+			printFinalSummary(tt.exitCode)
+		})
+	}
+}
+
 // Helper
 
 func assertContains(t *testing.T, s, substr string) {

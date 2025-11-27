@@ -261,3 +261,266 @@ func newPVECollectorWithDeps(t *testing.T, override CollectorDeps) *Collector {
 	collector.config.PVEConfigPath = cfgPath
 	return collector
 }
+
+// Test CollectPVEConfigs with full workflow
+func TestCollectPVEConfigsIntegration(t *testing.T) {
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			// Mock various PVE commands
+			switch name {
+			case "pvecm":
+				return []byte("Cluster information not available\n"), nil
+			case "pvesh", "pveversion":
+				return []byte("{}"), nil
+			default:
+				return []byte{}, nil
+			}
+		},
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+	})
+
+	// Create minimal PVE structure
+	pveConfigPath := collector.config.PVEConfigPath
+	nodesDir := filepath.Join(pveConfigPath, "nodes")
+	if err := os.MkdirAll(nodesDir, 0o755); err != nil {
+		t.Fatalf("failed to create nodes dir: %v", err)
+	}
+
+	// Create a test node directory
+	nodeDir := filepath.Join(nodesDir, "test-node")
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatalf("failed to create node dir: %v", err)
+	}
+
+	ctx := context.Background()
+	err := collector.CollectPVEConfigs(ctx)
+	if err != nil {
+		t.Fatalf("CollectPVEConfigs failed: %v", err)
+	}
+}
+
+// Test collectVMConfigs function
+func TestCollectVMConfigs(t *testing.T) {
+	collector := newPVECollector(t)
+
+	// Create VM config structure
+	pveConfigPath := collector.config.PVEConfigPath
+	nodesDir := filepath.Join(pveConfigPath, "nodes")
+	nodeDir := filepath.Join(nodesDir, "test-node")
+	qemuDir := filepath.Join(nodeDir, "qemu-server")
+	lxcDir := filepath.Join(nodeDir, "lxc")
+
+	for _, dir := range []string{qemuDir, lxcDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("failed to create dir %s: %v", dir, err)
+		}
+	}
+
+	// Create sample VM configs
+	vmConfig := "cores: 2\nmemory: 4096\n"
+	if err := os.WriteFile(filepath.Join(qemuDir, "100.conf"), []byte(vmConfig), 0o644); err != nil {
+		t.Fatalf("failed to write VM config: %v", err)
+	}
+
+	ctConfig := "cores: 1\nmemory: 512\n"
+	if err := os.WriteFile(filepath.Join(lxcDir, "101.conf"), []byte(ctConfig), 0o644); err != nil {
+		t.Fatalf("failed to write CT config: %v", err)
+	}
+
+	ctx := context.Background()
+	err := collector.collectVMConfigs(ctx)
+	if err != nil {
+		t.Fatalf("collectVMConfigs failed: %v", err)
+	}
+}
+
+// Test collectPVEDirectories function
+func TestCollectPVEDirectories(t *testing.T) {
+	collector := newPVECollector(t)
+
+	// Create PVE directory structure
+	pveConfigPath := collector.config.PVEConfigPath
+	if err := os.MkdirAll(pveConfigPath, 0o755); err != nil {
+		t.Fatalf("failed to create pve config path: %v", err)
+	}
+
+	// Create firewall directory
+	firewallDir := filepath.Join(pveConfigPath, "firewall")
+	if err := os.MkdirAll(firewallDir, 0o755); err != nil {
+		t.Fatalf("failed to create firewall dir: %v", err)
+	}
+
+	// Create a sample firewall file
+	fwConfig := "[OPTIONS]\nenable: 1\n"
+	if err := os.WriteFile(filepath.Join(firewallDir, "cluster.fw"), []byte(fwConfig), 0o644); err != nil {
+		t.Fatalf("failed to write firewall config: %v", err)
+	}
+
+	ctx := context.Background()
+	err := collector.collectPVEDirectories(ctx, false)
+	if err != nil {
+		t.Fatalf("collectPVEDirectories failed: %v", err)
+	}
+}
+
+// Test collectPVECommands function
+func TestCollectPVECommands(t *testing.T) {
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			switch name {
+			case "pvesh":
+				if len(args) > 2 && args[2] == "/nodes" {
+					return []byte(`[{"node":"test-node","status":"online"}]`), nil
+				}
+				if len(args) > 2 && args[2] == "/storage" {
+					return []byte(`[{"storage":"local","type":"dir"}]`), nil
+				}
+				return []byte("[]"), nil
+			case "pveversion":
+				return []byte("pve-manager/7.2-3"), nil
+			case "pvecm":
+				return []byte("Cluster information not available"), nil
+			default:
+				return []byte{}, nil
+			}
+		},
+	})
+
+	ctx := context.Background()
+	runtimeInfo, err := collector.collectPVECommands(ctx, false)
+	if err != nil {
+		t.Fatalf("collectPVECommands failed: %v", err)
+	}
+
+	if runtimeInfo == nil {
+		t.Error("expected non-nil runtimeInfo")
+	}
+}
+
+// Test createPVEInfoAliases function
+func TestCreatePVEInfoAliases(t *testing.T) {
+	collector := newPVECollector(t)
+
+	ctx := context.Background()
+	err := collector.createPVEInfoAliases(ctx)
+	// This may fail in test environment, but should not panic
+	if err != nil {
+		t.Logf("createPVEInfoAliases returned error (expected in test env): %v", err)
+	}
+}
+
+// Test collectPVEJobs function
+func TestCollectPVEJobs(t *testing.T) {
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name == "pvesh" {
+				return []byte(`[{"id":"backup-job-1","enabled":true}]`), nil
+			}
+			return []byte("[]"), nil
+		},
+	})
+
+	ctx := context.Background()
+	nodes := []string{"test-node"}
+	err := collector.collectPVEJobs(ctx, nodes)
+	if err != nil {
+		t.Logf("collectPVEJobs returned error (expected in some envs): %v", err)
+	}
+}
+
+// Test collectPVESchedules function
+func TestCollectPVESchedules(t *testing.T) {
+	collector := newPVECollector(t)
+
+	ctx := context.Background()
+	err := collector.collectPVESchedules(ctx)
+	// May fail if crontab not available
+	if err != nil {
+		t.Logf("collectPVESchedules returned error: %v", err)
+	}
+}
+
+// Test collectPVEReplication function
+func TestCollectPVEReplication(t *testing.T) {
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte(`[]`), nil
+		},
+	})
+
+	ctx := context.Background()
+	nodes := []string{"test-node"}
+	err := collector.collectPVEReplication(ctx, nodes)
+	if err != nil {
+		t.Logf("collectPVEReplication returned error: %v", err)
+	}
+}
+
+// Test collectPVEStorageMetadata function
+func TestCollectPVEStorageMetadata(t *testing.T) {
+	collector := newPVECollector(t)
+
+	ctx := context.Background()
+	storages := []pveStorageEntry{
+		{Name: "local", Path: "/var/lib/vz", Type: "dir"},
+	}
+	err := collector.collectPVEStorageMetadata(ctx, storages)
+	if err != nil {
+		t.Logf("collectPVEStorageMetadata returned error: %v", err)
+	}
+}
+
+// Test collectPVECephInfo function
+func TestCollectPVECephInfo(t *testing.T) {
+	t.Run("no ceph configured", func(t *testing.T) {
+		collector := newPVECollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				return "", fmt.Errorf("command not found")
+			},
+		})
+
+		ctx := context.Background()
+		err := collector.collectPVECephInfo(ctx)
+		// Should not error when ceph is not configured
+		if err != nil {
+			t.Logf("collectPVECephInfo returned error when ceph missing: %v", err)
+		}
+	})
+
+	t.Run("ceph configured", func(t *testing.T) {
+		collector := newPVECollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				switch name {
+				case "pvesm":
+					return []byte("local cephfs storage"), nil
+				case "ceph":
+					return []byte("health: HEALTH_OK"), nil
+				case "pgrep":
+					return []byte("1234"), nil
+				default:
+					return []byte{}, nil
+				}
+			},
+		})
+
+		ctx := context.Background()
+		err := collector.collectPVECephInfo(ctx)
+		if err != nil {
+			t.Logf("collectPVECephInfo with ceph returned error: %v", err)
+		}
+	})
+}

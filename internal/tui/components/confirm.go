@@ -9,6 +9,14 @@ import (
 	"github.com/tis24dev/proxmox-backup/internal/tui"
 )
 
+var modalCreatedHook func(*tview.Modal)
+
+func notifyModalCreated(modal *tview.Modal) {
+	if modalCreatedHook != nil {
+		modalCreatedHook(modal)
+	}
+}
+
 // ShowConfirm displays a Yes/No confirmation modal
 func ShowConfirm(app *tui.App, title, message string, onYes, onNo func()) {
 	// Add navigation instructions if not already present
@@ -27,6 +35,8 @@ func ShowConfirm(app *tui.App, title, message string, onYes, onNo func()) {
 			}
 			app.Stop()
 		})
+
+	notifyModalCreated(modal)
 
 	modal.SetBorder(true).
 		SetTitle(" " + title + " ").
@@ -49,6 +59,8 @@ func ShowInfo(app *tui.App, title, message string) {
 			app.Stop()
 		})
 
+	notifyModalCreated(modal)
+
 	modal.SetBorder(true).
 		SetTitle(" " + title + " ").
 		SetTitleAlign(tview.AlignCenter).
@@ -69,6 +81,8 @@ func ShowSuccess(app *tui.App, title, message string) {
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			app.Stop()
 		})
+
+	notifyModalCreated(modal)
 
 	modal.SetBorder(true).
 		SetTitle(" " + title + " ").
@@ -91,6 +105,8 @@ func ShowError(app *tui.App, title, message string) {
 			app.Stop()
 		})
 
+	notifyModalCreated(modal)
+
 	modal.SetBorder(true).
 		SetTitle(" " + title + " ").
 		SetTitleAlign(tview.AlignCenter).
@@ -112,6 +128,8 @@ func ShowErrorInline(app *tui.App, title, message string, returnTo tview.Primiti
 			app.SetRoot(returnTo, true).SetFocus(returnTo)
 		})
 
+	notifyModalCreated(modal)
+
 	modal.SetBorder(true).
 		SetTitle(" " + title + " ").
 		SetTitleAlign(tview.AlignCenter).
@@ -132,6 +150,8 @@ func ShowWarning(app *tui.App, title, message string) {
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			app.Stop()
 		})
+
+	notifyModalCreated(modal)
 
 	modal.SetBorder(true).
 		SetTitle(" " + title + " ").

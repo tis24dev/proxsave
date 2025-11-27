@@ -10,6 +10,10 @@ import (
 	"github.com/tis24dev/proxmox-backup/internal/tui"
 )
 
+var confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	return app.SetRoot(root, true).SetFocus(focus).Run()
+}
+
 // ConfirmNewInstall shows a TUI confirmation before wiping baseDir for --new-install.
 func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
 	app := tui.NewApp()
@@ -80,7 +84,7 @@ func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
 		SetBackgroundColor(tcell.ColorBlack)
 
 	// Run the app - ignore errors from normal app termination
-	_ = app.SetRoot(flex, true).SetFocus(modal).Run()
+	_ = confirmNewInstallRunner(app, flex, modal)
 
 	return proceed, nil
 }
