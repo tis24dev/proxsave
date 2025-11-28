@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ "main", "dev" ]
   schedule:
-    - cron: "0 3 * * 1"   # Every Monday at 03:00 UTC
+    - cron: "0 3 * * 1"
 
 permissions:
   contents: read
@@ -24,18 +24,18 @@ jobs:
         uses: actions/checkout@v4
 
       ########################################
-      # GO 1.23 (DEFAULT FOR THE WHOLE JOB)
+      # GO 1.25 — MAIN TOOLCHAIN
       ########################################
-      - name: Set up Go 1.23
+      - name: Set up Go 1.25
         uses: actions/setup-go@v4
         with:
-          go-version: "1.23"
+          go-version: "1.25"
 
       - name: Show Go version
         run: go version
 
       ########################################
-      # STATICCHECK
+      # STATICCHECK — RUNS NATIVELY ON GO 1.25
       ########################################
       - name: Install Staticcheck
         run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
@@ -44,7 +44,7 @@ jobs:
         run: staticcheck ./...
 
       ########################################
-      # GOVULNCHECK
+      # GOVULNCHECK — NATIVE
       ########################################
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -53,11 +53,9 @@ jobs:
         run: govulncheck ./...
 
       ########################################
-      # GOSEC — SARIF v1 (works only with v2.20.0)
-      # We run it inside Go 1.21 because this version
-      # is fully compatible with GoSec 2.20.0.
+      # GOSEC — MUST RUN INSIDE GO 1.21
       ########################################
-      - name: Run GoSec (Go 1.21 via Docker)
+      - name: Run GoSec (Go 1.21 in Docker)
         run: |
           docker run --rm \
             -v "$PWD":/work \
@@ -69,7 +67,7 @@ jobs:
             "
 
       ########################################
-      # Upload GoSec SARIF to GitHub Security
+      # UPLOAD SARIF
       ########################################
       - name: Upload GoSec SARIF
         uses: github/codeql-action/upload-sarif@v3
@@ -77,7 +75,7 @@ jobs:
           sarif_file: gosec.sarif
 
       ########################################
-      # CODEQL — ADVANCED SECURITY ANALYSIS
+      # CODEQL
       ########################################
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
