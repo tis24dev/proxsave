@@ -7,7 +7,7 @@
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/tis24dev/proxmox-backup/codeql.yml?label=CodeQL&logo=github)](https://github.com/tis24dev/proxmox-backup/actions/workflows/codeql.yml)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-success?logo=dependabot)](https://github.com/tis24dev/proxmox-backup/network/updates)
 [![Proxmox](https://img.shields.io/badge/Proxmox-PVE%20%7C%20PBS-E57000.svg)](https://www.proxmox.com/)
-[![rclone](https://img.shields.io/badge/rclone-1.50+-136C9E.svg)](https://rclone.org/)
+[![rclone](https://img.shields.io/badge/rclone-1.60+-136C9E.svg)](https://rclone.org/)
 [![💖 Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
 [![☕ Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee)](https://buymeacoffee.com/tis24dev)
 
