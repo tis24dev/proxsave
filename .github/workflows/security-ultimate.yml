@@ -64,7 +64,7 @@ jobs:
               go clean -modcache &&
               go install github.com/securego/gosec/v2/cmd/gosec@v2.20.0 &&
               echo 'Running GoSec...' &&
-              gosec -no-fail -fmt=sarif_v1 -out gosec.sarif ./... || true &&
+              gosec -no-fail -fmt sarif -out gosec.sarif ./... || true &&
               echo 'Files in /work:' &&
               ls -al /work
           "
@@ -74,13 +74,13 @@ jobs:
       ########################################
       - name: Check GoSec SARIF file
         run: |
-          echo "Verifying gosec.sarif..."
+          echo "Checking SARIF validity..."
+          head -n 5 gosec.sarif
           if [ ! -f gosec.sarif ]; then
-            echo 'ERROR: gosec.sarif file NOT PRODUCED'
+            exit 1
+            echo "ERROR: gosec.sarif NOT FOUND"
             exit 1
           fi
-          echo "gosec.sarif found ✔"
-          ls -al gosec.sarif
 
       ########################################
       # UPLOAD SARIF
