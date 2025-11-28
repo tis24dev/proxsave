@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1081,7 +1082,7 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 	tarReader := tar.NewReader(reader)
 
 	// Write log header if log file is available
-		if logFile != nil {
+	if logFile != nil {
 		fmt.Fprintf(logFile, "=== PROXMOX RESTORE LOG ===\n")
 		fmt.Fprintf(logFile, "Date: %s\n", nowRestore().Format("2006-01-02 15:04:05"))
 		fmt.Fprintf(logFile, "Mode: %s\n", getModeName(mode))
@@ -1287,22 +1288,42 @@ func runRestoreCommandStream(ctx context.Context, name string, stdin io.Reader, 
 	return &waitReadCloser{ReadCloser: stdout, wait: cmd.Wait}, nil
 }
 
-// extractTarEntry extracts a single TAR entry, preserving all attributes including atime/ctime
-func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string, logger *logging.Logger) error {
-	// Clean the target path
+func sanitizeRestoreEntryTarget(destRoot, entryName string) (string, string, error) {
 	cleanDestRoot := filepath.Clean(destRoot)
-	target := filepath.Join(cleanDestRoot, header.Name)
-	target = filepath.Clean(target)
-
-	// Security check: prevent path traversal
-	safePrefix := cleanDestRoot
-	if cleanDestRoot != string(os.PathSeparator) {
-		safePrefix = cleanDestRoot + string(os.PathSeparator)
+	if cleanDestRoot == "" {
+		cleanDestRoot = string(os.PathSeparator)
 	}
 
-	if !strings.HasPrefix(target, safePrefix) &&
-		target != cleanDestRoot {
-		return fmt.Errorf("illegal path: %s", header.Name)
+	name := strings.TrimSpace(entryName)
+	if name == "" {
+		return "", "", fmt.Errorf("empty archive entry name")
+	}
+
+	sanitized := path.Clean(name)
+	for strings.HasPrefix(sanitized, string(os.PathSeparator)) {
+		sanitized = strings.TrimPrefix(sanitized, string(os.PathSeparator))
+	}
+
+	if sanitized == "" || sanitized == "." {
+		return "", "", fmt.Errorf("invalid archive entry name: %q", entryName)
+	}
+
+	if sanitized == ".." || strings.HasPrefix(sanitized, "../") || strings.Contains(sanitized, "/../") {
+		return "", "", fmt.Errorf("illegal path: %s", entryName)
+	}
+
+	target, err := resolveAndCheckPath(cleanDestRoot, sanitized)
+	if err != nil {
+		return "", "", fmt.Errorf("illegal path: %s: %w", entryName, err)
+	}
+	return target, cleanDestRoot, nil
+}
+
+// extractTarEntry extracts a single TAR entry, preserving all attributes including atime/ctime
+func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string, logger *logging.Logger) error {
+	target, cleanDestRoot, err := sanitizeRestoreEntryTarget(destRoot, header.Name)
+	if err != nil {
+		return err
 	}
 
 	// Hard guard: never write directly into /etc/pve when restoring to system root
@@ -1322,9 +1343,9 @@ func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string,
 	case tar.TypeReg:
 		return extractRegularFile(tarReader, target, header, logger)
 	case tar.TypeSymlink:
-		return extractSymlink(target, header, logger)
+		return extractSymlink(target, header, cleanDestRoot, logger)
 	case tar.TypeLink:
-		return extractHardlink(target, header, destRoot, logger)
+		return extractHardlink(target, header, cleanDestRoot, logger)
 	default:
 		logger.Debug("Skipping unsupported file type %d: %s", header.Typeflag, header.Name)
 		return nil
@@ -1396,13 +1417,73 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 }
 
 // extractSymlink creates a symbolic link
-func extractSymlink(target string, header *tar.Header, logger *logging.Logger) error {
+func extractSymlink(target string, header *tar.Header, destRoot string, logger *logging.Logger) error {
+	linkTarget := header.Linkname
+
+	// Reject absolute symlink targets immediately
+	if filepath.IsAbs(linkTarget) {
+		return fmt.Errorf("absolute symlink target not allowed: %s", linkTarget)
+	}
+
+	// Pre-validation: ensure the resolved target would stay within destRoot before creating the symlink
+	relativeTarget, err := filepath.Rel(destRoot, target)
+	if err != nil {
+		return fmt.Errorf("determine relative path for symlink %s: %w", target, err)
+	}
+	if strings.HasPrefix(relativeTarget, ".."+string(os.PathSeparator)) || relativeTarget == ".." {
+		return fmt.Errorf("sanitized symlink path escapes root: %s", target)
+	}
+
+	symlinkArchivePath := path.Clean(filepath.ToSlash(relativeTarget))
+	symlinkArchiveDir := path.Dir(symlinkArchivePath)
+	if symlinkArchiveDir == "." {
+		symlinkArchiveDir = ""
+	}
+	potentialTarget := path.Join(symlinkArchiveDir, linkTarget)
+	potentialTarget = filepath.FromSlash(potentialTarget)
+
+	if _, err := resolveAndCheckPath(destRoot, potentialTarget); err != nil {
+		return fmt.Errorf("symlink target escapes root before creation: %s -> %s: %w", header.Name, linkTarget, err)
+	}
+
 	// Remove existing file/link if it exists
 	_ = restoreFS.Remove(target)
 
 	// Create symlink
-	if err := restoreFS.Symlink(header.Linkname, target); err != nil {
+	if err := restoreFS.Symlink(linkTarget, target); err != nil {
 		return fmt.Errorf("create symlink: %w", err)
+	}
+
+	// POST-CREATION VALIDATION: Verify the created symlink's target stays within destRoot
+	actualTarget, err := restoreFS.Readlink(target)
+	if err != nil {
+		restoreFS.Remove(target) // Clean up
+		return fmt.Errorf("read created symlink %s: %w", target, err)
+	}
+
+	// Resolve the symlink target relative to the symlink's directory
+	symlinkDir := filepath.Dir(target)
+	resolvedTarget := filepath.Join(symlinkDir, actualTarget)
+
+	// Validate the resolved target stays within destRoot using absolute paths
+	absDestRoot, err := filepath.Abs(destRoot)
+	if err != nil {
+		restoreFS.Remove(target)
+		return fmt.Errorf("resolve destination root: %w", err)
+	}
+
+	absResolvedTarget, err := filepath.Abs(resolvedTarget)
+	if err != nil {
+		restoreFS.Remove(target)
+		return fmt.Errorf("resolve symlink target: %w", err)
+	}
+
+	// Check if resolved target is within destRoot
+	rel, err := filepath.Rel(absDestRoot, absResolvedTarget)
+	if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
+		restoreFS.Remove(target)
+		return fmt.Errorf("symlink target escapes root after creation: %s -> %s (resolves to %s)",
+			header.Name, linkTarget, absResolvedTarget)
 	}
 
 	// Set ownership (on the symlink itself, not the target)
@@ -1416,7 +1497,20 @@ func extractSymlink(target string, header *tar.Header, logger *logging.Logger) e
 
 // extractHardlink creates a hard link
 func extractHardlink(target string, header *tar.Header, destRoot string, logger *logging.Logger) error {
-	linkTarget := filepath.Join(destRoot, header.Linkname)
+	// Validate hard link target
+	linkName := header.Linkname
+
+	// Reject absolute hard link targets immediately
+	if filepath.IsAbs(linkName) {
+		return fmt.Errorf("absolute hardlink target not allowed: %s", linkName)
+	}
+
+	// Validate the hard link target stays within extraction root
+	if _, err := resolveAndCheckPath(destRoot, linkName); err != nil {
+		return fmt.Errorf("hardlink target escapes root: %s -> %s: %w", header.Name, linkName, err)
+	}
+
+	linkTarget := filepath.Join(destRoot, linkName)
 
 	// Remove existing file/link if it exists
 	_ = restoreFS.Remove(target)
@@ -1467,4 +1561,3 @@ func getModeName(mode RestoreMode) string {
 		return "Unknown mode"
 	}
 }
-

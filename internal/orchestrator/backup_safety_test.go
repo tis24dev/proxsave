@@ -174,3 +174,102 @@ func TestCleanupOldSafetyBackups(t *testing.T) {
 	// Cleanup
 	_ = os.Remove(newBackup)
 }
+
+func TestRestoreSafetyBackup_MaliciousSymlinks(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "malicious.tar.gz")
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	// Create a legitimate file first
+	hdr := &tar.Header{Name: "etc/", Mode: 0755, Typeflag: tar.TypeDir}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write dir header: %v", err)
+	}
+
+	hdr = &tar.Header{
+		Name: "etc/config.txt",
+		Mode: 0644,
+		Size: 5,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write file header: %v", err)
+	}
+	if _, err := tw.Write([]byte("hello")); err != nil {
+		t.Fatalf("write content: %v", err)
+	}
+
+	// Test case 1: Symlink attempting to escape via ../../../
+	maliciousSymlink1 := &tar.Header{
+		Name:     "link_escape",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "../../../../etc/passwd",
+	}
+	if err := tw.WriteHeader(maliciousSymlink1); err != nil {
+		t.Fatalf("write malicious symlink header: %v", err)
+	}
+
+	// Test case 2: Symlink with multiple levels of traversal
+	maliciousSymlink2 := &tar.Header{
+		Name:     "subdir/link_escape2",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "../../../../../../../tmp/evil",
+	}
+	if err := tw.WriteHeader(maliciousSymlink2); err != nil {
+		t.Fatalf("write malicious symlink2 header: %v", err)
+	}
+
+	// Test case 3: Legitimate symlink (should work)
+	legitimateSymlink := &tar.Header{
+		Name:     "link_good",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "etc/config.txt",
+	}
+	if err := tw.WriteHeader(legitimateSymlink); err != nil {
+		t.Fatalf("write legitimate symlink header: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	restoreDir := filepath.Join(tmpDir, "restore")
+	if err := RestoreSafetyBackup(logger, backupPath, restoreDir); err != nil {
+		t.Fatalf("RestoreSafetyBackup failed: %v", err)
+	}
+
+	// Verify malicious symlinks were NOT created
+	if _, err := os.Lstat(filepath.Join(restoreDir, "link_escape")); err == nil {
+		t.Fatalf("malicious symlink 'link_escape' should not have been created")
+	}
+	if _, err := os.Lstat(filepath.Join(restoreDir, "subdir/link_escape2")); err == nil {
+		t.Fatalf("malicious symlink 'link_escape2' should not have been created")
+	}
+
+	// Verify legitimate symlink WAS created and points correctly
+	linkTarget, err := os.Readlink(filepath.Join(restoreDir, "link_good"))
+	if err != nil {
+		t.Fatalf("legitimate symlink should exist: %v", err)
+	}
+	if linkTarget != "etc/config.txt" {
+		t.Fatalf("legitimate symlink target = %q, want 'etc/config.txt'", linkTarget)
+	}
+
+	// Verify the legitimate symlink resolves within restoreDir
+	resolvedPath := filepath.Join(filepath.Dir(filepath.Join(restoreDir, "link_good")), linkTarget)
+	absRestoreDir, _ := filepath.Abs(restoreDir)
+	absResolved, _ := filepath.Abs(resolvedPath)
+	if !strings.HasPrefix(absResolved, absRestoreDir) {
+		t.Fatalf("legitimate symlink resolves outside restore dir")
+	}
+}

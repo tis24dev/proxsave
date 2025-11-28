@@ -209,6 +209,47 @@ func TestParseIdentityInput(t *testing.T) {
 	})
 }
 
+func TestSanitizeBundleEntryName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		input     string
+		want      string
+		expectErr bool
+	}{
+		{"simple name", "archive.tar", "archive.tar", false},
+		{"leading dot slash", "./data/file.txt", "file.txt", false},
+		{"nested path collapsed", "dir/sub/../data.bin", "data.bin", false},
+		{"trailing spaces trimmed", "  manifest.json  ", "manifest.json", false},
+		{"absolute path rejected", "/etc/passwd", "", true},
+		{"parent directory prefix rejected", "../foo", "", true},
+		{"multiple parent traversal rejected", "dir/../../foo", "", true},
+		{"only dots rejected", "..", "", true},
+		{"slash parent segment rejected", "a/../..", "", true},
+		{"empty name", "   ", "", true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := sanitizeBundleEntryName(tt.input)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("expected error for %q but got none (result=%q)", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("sanitizeBundleEntryName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnsureWritablePath(t *testing.T) {
 	t.Run("overwrite existing file", func(t *testing.T) {
 		dir := t.TempDir()

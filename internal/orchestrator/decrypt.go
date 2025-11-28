@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -541,6 +542,23 @@ func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *conf
 	return candidate, prepared, nil
 }
 
+// sanitizeBundleEntryName ensures the tar entry name cannot escape the working directory.
+func sanitizeBundleEntryName(name string) (string, error) {
+	cleaned := path.Clean(strings.TrimSpace(name))
+	if cleaned == "" || cleaned == "." {
+		return "", fmt.Errorf("invalid archive entry name %q", name)
+	}
+	if path.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "/../") {
+		return "", fmt.Errorf("archive entry escapes workdir: %q", name)
+	}
+
+	base := path.Base(cleaned)
+	if base == "" || base == "." || base == ".." {
+		return "", fmt.Errorf("invalid base name in archive entry %q", name)
+	}
+	return base, nil
+}
+
 func extractBundleToWorkdir(bundlePath, workDir string) (stagedFiles, error) {
 	file, err := restoreFS.Open(bundlePath)
 	if err != nil {
@@ -562,7 +580,13 @@ func extractBundleToWorkdir(bundlePath, workDir string) (stagedFiles, error) {
 		if hdr.FileInfo().IsDir() {
 			continue
 		}
-		target := filepath.Join(workDir, filepath.Base(hdr.Name))
+
+		safeName, err := sanitizeBundleEntryName(hdr.Name)
+		if err != nil {
+			return stagedFiles{}, fmt.Errorf("unsafe entry name %q in bundle: %w", hdr.Name, err)
+		}
+
+		target := filepath.Join(workDir, safeName)
 		out, err := restoreFS.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 		if err != nil {
 			return stagedFiles{}, fmt.Errorf("extract %s: %w", hdr.Name, err)
