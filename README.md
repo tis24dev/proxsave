@@ -66,11 +66,12 @@ Intelligent backup rotation - Intelligent deletion of logs associated with speci
 
 ### System Requirements
 
-- **OS**: Linux (Debian/Ubuntu/Proxmox tested)
-- **Go**: Version 1.21+ (for building from source)
-- **rclone**: Version 1.50+ (for cloud storage)
-- **Disk Space**: Minimum 1GB for primary storage
-- **Network**: Internet access (for cloud storage, notifications)
+- **OS:** Linux (Debian, Proxmox VE tested)  
+- **Go:** Version 1.25+ (required for building from source)  
+- **rclone:** Version 1.60+ (recommended for full cloud provider support)  
+- **Disk Space:** Minimum 1 GB for local storage  
+- **Network:** Internet access (required for cloud backups & notifications)
+
 
 ---
 
@@ -80,25 +81,30 @@ Intelligent backup rotation - Intelligent deletion of logs associated with speci
 
 1. Download & start Install
 ```bash
-cd /opt && mkdir -p proxmox-backup/build && cd proxmox-backup && wget -q https://raw.githubusercontent.com/tis24dev/go/main/build/proxmox-backup -O build/proxmox-backup && chmod +x build/proxmox-backup && ./build/proxmox-backup --install
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
 ```
 
 or: if you need a fully clean reinstall use: (preserves `env/` and `identity/`)
 ```bash
-cd /opt && mkdir -p proxmox-backup/build && cd proxmox-backup && wget -q https://raw.githubusercontent.com/tis24dev/go/main/build/proxmox-backup -O build/proxmox-backup && chmod +x build/proxmox-backup && ./build/proxmox-backup --new-install` 
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" --new-install
 ```
 
-2. OPTIONAL - Run migration installation from bash with old env file
-```bash
-./build/proxmox-backup --env-migration
-```
-
-3. Run your first backup with go version
+2. Run your first backup
 ```bash
 ./build/proxmox-backup
 ```
 
-4. Check results
+3. OPTIONAL - Run migration installation from bash with old env file
+```bash
+./build/proxmox-backup --env-migration
+```
+
+4. OPTIONAL - Run your first backup again after migration
+```bash
+./build/proxmox-backup
+```
+
+5. Check results
 ```bash
 ls -lh backup/
 ```
@@ -351,9 +357,9 @@ The original Bash script (20,370 lines) has been moved to the `old` branch and i
 
 The legacy Bash version can still be installed using the original installation command:
 
-#### Option 1: Fast Bash Install or Update or Reinstall
+#### Option 1: Fast Bash Legacy Install or Update or Reinstall
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/old/install.sh)"
 ```
 
 #### Option 2: Manual
@@ -461,6 +467,13 @@ Quick reference for command-line options. For complete details, see **[CLI Refer
 
 # Restore from backup
 ./build/proxmox-backup --restore
+
+# Use CLI mode instead of TUI (for debugging)
+./build/proxmox-backup --install --cli
+./build/proxmox-backup --new-install --cli
+./build/proxmox-backup --newkey --cli
+./build/proxmox-backup --decrypt --cli
+./build/proxmox-backup --restore --cli
 ```
 
 ### All Flags
@@ -469,6 +482,7 @@ Quick reference for command-line options. For complete details, see **[CLI Refer
 |------|-------------|
 | `--config <path>` | Use custom config file |
 | `--dry-run` | Test mode (no changes) |
+| `--cli` | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | Interactive installation wizard |
 | `--new-install` | Wipe install dir (keep env/identity) then run wizard |
 | `--env-migration` | Migrate Bash → Go config |

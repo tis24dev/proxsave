@@ -1,0 +1,102 @@
+# ===============================================================
+# GoReleaser configuration for Proxmox Backup (Go version)
+# Maintainer: tis24dev
+# ===============================================================
+
+version: 2
+project_name: proxmox-backup
+dist: build
+
+before:
+  hooks:
+    - go mod tidy
+
+###############################################
+# BUILDS — principal binary
+###############################################
+builds:
+  - id: proxmox-backup
+    main: ./cmd/proxmox-backup/main.go
+    binary: proxmox-backup
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/tis24dev/proxmox-backup/internal/version.Version={{ .Version }}
+        -X github.com/tis24dev/proxmox-backup/internal/version.Commit={{ .FullCommit }}
+        -X github.com/tis24dev/proxmox-backup/internal/version.Date={{ .Date }}
+
+###############################################
+# ARCHIVI — tar.gz (classic release)
+###############################################
+archives:
+  - id: archive
+    builds:
+      - proxmox-backup
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+###############################################
+# BINARI STANDALONE —  
+###############################################
+blobs:
+  - id: standalone-binary
+    builds:
+      - proxmox-backup
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    path: "{{ .Binary }}"
+
+###############################################
+# CHECKSUM
+###############################################
+checksum:
+  name_template: "SHA256SUMS"
+
+###############################################
+# SBOM (CycloneDX via Syft)
+###############################################
+sboms:
+  - id: archive-cyclonedx
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.sbom.cdx.json"
+    cmd: syft
+    args:
+      - "$artifact"
+      - "--output"
+      - "cyclonedx-json=$document"
+
+###############################################
+# RELEASE — GitHub release + prerelease auto
+###############################################
+release:
+  github:
+    owner: tis24dev
+    name: proxmox-backup
+  draft: false
+  prerelease: auto
+  name_template: "{{ .Tag }}"
+
+###############################################
+# CHANGELOG — 
+###############################################
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^refactor:"

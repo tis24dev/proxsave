@@ -34,6 +34,37 @@ The binary `/opt/proxmox-backup/build/proxmox-backup` supports multiple operatio
 
 ---
 
+## Interface Modes
+
+Some interactive commands support two interface modes:
+
+### TUI Mode (Default)
+- **Full Terminal UI**: Interactive menus, forms, and visual feedback
+- **Commands**: `--install`, `--new-install`, `--newkey`, `--decrypt`, `--restore`
+- **Best for**: Normal interactive use on local terminals
+
+### CLI Mode (--cli flag)
+- **Text-based prompts**: Simple stdin/stdout interaction
+- **Activated by**: Adding `--cli` flag to TUI-enabled commands
+- **Best for**:
+  - Troubleshooting TUI rendering issues
+  - Advanced debugging scenarios
+  - SSH sessions with limited terminal support
+  - Non-standard terminal emulators
+
+**Example**:
+```bash
+# TUI mode (default) - full terminal interface
+./build/proxmox-backup --install
+
+# CLI mode - text prompts only
+./build/proxmox-backup --install --cli
+```
+
+**Note**: The `--cli` flag **only works** with the 5 commands listed above. All other commands always use CLI mode (no TUI alternative exists).
+
+---
+
 ## Basic Operations
 
 ### Run Backup
@@ -75,12 +106,29 @@ The binary `/opt/proxmox-backup/build/proxmox-backup` supports multiple operatio
 ### Installation Wizard
 
 ```bash
-# Interactive installation wizard
+# Interactive installation wizard (TUI mode - default)
 ./build/proxmox-backup --install
+
+# Interactive installation wizard (CLI mode - for debugging)
+./build/proxmox-backup --install --cli
 
 # Clean reinstall (wipes install dir except env/identity, then runs wizard)
 ./build/proxmox-backup --new-install
+
+# Clean reinstall with CLI mode
+./build/proxmox-backup --new-install --cli
 ```
+
+**Interface modes**:
+```bash
+# TUI mode (default) - terminal interface
+./build/proxmox-backup --install
+
+# CLI mode - text prompts (for debugging)
+./build/proxmox-backup --install --cli
+```
+
+**Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **Wizard workflow**:
 1. Detects installation environment (PVE, PBS, or standalone)
@@ -229,10 +277,24 @@ Next step: ./build/proxmox-backup --dry-run
 ### Generate Encryption Keys
 
 ```bash
-# Generate new AGE encryption key
+# Generate new AGE encryption key (TUI mode - default)
 ./build/proxmox-backup --newkey
 ./build/proxmox-backup --age-newkey  # Alias
+
+# Generate new AGE encryption key (CLI mode - for debugging)
+./build/proxmox-backup --newkey --cli
 ```
+
+**Interface modes**:
+```bash
+# TUI mode (default) - terminal interface
+./build/proxmox-backup --newkey
+
+# CLI mode - text prompts (for debugging)
+./build/proxmox-backup --newkey --cli
+```
+
+**Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **`--newkey` workflow**:
 1. Backs up existing recipient file (`recipient.txt.bak-YYYYMMDD-HHMMSS`)
@@ -249,9 +311,23 @@ Next step: ./build/proxmox-backup --dry-run
 ### Decrypt Backup
 
 ```bash
-# Decrypt existing backup archive
+# Decrypt existing backup archive (TUI mode - default)
 ./build/proxmox-backup --decrypt
+
+# Decrypt existing backup archive (CLI mode - for debugging)
+./build/proxmox-backup --decrypt --cli
 ```
+
+**Interface modes**:
+```bash
+# TUI mode (default) - terminal interface
+./build/proxmox-backup --decrypt
+
+# CLI mode - text prompts (for debugging)
+./build/proxmox-backup --decrypt --cli
+```
+
+**Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **`--decrypt` workflow**:
 1. Scans configured storage locations (local/secondary/cloud)
@@ -277,9 +353,23 @@ Next step: ./build/proxmox-backup --dry-run
 ### Restore from Backup
 
 ```bash
-# Restore data from backup to system
+# Restore data from backup to system (TUI mode - default)
 ./build/proxmox-backup --restore
+
+# Restore data from backup to system (CLI mode - for debugging)
+./build/proxmox-backup --restore --cli
 ```
+
+**Interface modes**:
+```bash
+# TUI mode (default) - terminal interface
+./build/proxmox-backup --restore
+
+# CLI mode - text prompts (for debugging)
+./build/proxmox-backup --restore --cli
+```
+
+**Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **`--restore` workflow** (14 phases):
 1. Scans configured storage locations (local/secondary/cloud)
@@ -558,6 +648,7 @@ crontab -e
 | `--config <path>` | `-c` | Path to configuration file |
 | `--dry-run` | `-n` | Test mode - no actual changes |
 | `--log-level <level>` | `-l` | Set log level (debug\|info\|warning\|error\|critical) |
+| `--cli` | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Interactive installation wizard |
 | `--new-install` | - | Wipe install dir (preserve env/identity) then run wizard |
 | `--upgrade-config` | - | Upgrade config from embedded template |
@@ -592,6 +683,13 @@ crontab -e
 # Migrate from Bash (safe preview first)
 ./build/proxmox-backup --env-migration-dry-run
 ./build/proxmox-backup --env-migration
+
+# Use CLI mode instead of TUI (for debugging)
+./build/proxmox-backup --install --cli
+./build/proxmox-backup --new-install --cli
+./build/proxmox-backup --newkey --cli
+./build/proxmox-backup --decrypt --cli
+./build/proxmox-backup --restore --cli
 
 # Encryption workflow
 ./build/proxmox-backup --newkey          # Generate keys

@@ -7,36 +7,76 @@ on:
 
 jobs:
   release:
-    # Esegui il job SOLO se il tag è creato sul branch main
+    # Esegui il job SOLO se il tag è creato direttamente (non da PR)
+    # e comunque su un ref di tipo "tag"
     if: startsWith(github.ref, 'refs/tags/') && github.event.base_ref == ''
 
     runs-on: ubuntu-latest
 
     permissions:
       contents: write      # Per creare release GitHub
-      id-token: write      # Per generare token OIDC
-      attestations: write  # Per pubblicare attestazioni
 
     steps:
+      ########################################
+      # CHECKOUT (fetch-depth 0 per changelog e GoReleaser)
+      ########################################
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      ########################################
+      # VALIDAZIONE TAG (Migliora il flusso ed evita errori)
+      ########################################
+      - name: Validate SemVer tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Current tag: $TAG"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z\.-]+)?$ ]]; then
+            echo "❌ Tag '$TAG' is not a valid SemVer (expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc1/beta1)"
+            exit 1
+          fi
+          echo "✔ Tag '$TAG' is valid SemVer"
+
+      ########################################
+      # SETUP GO TOOLCHAIN (coerente con il progetto)
+      ########################################
+      - name: Set up Go
+        uses: actions/setup-go@v4
         with:
           go-version: "1.25"
 
-      - name: Verify Go modules integrity
+      - name: Show Go version
+        run: go version
+
+      ########################################
+      # VERIFICA MODULI
+      ########################################
+      - name: Verify Go modules
         run: go mod verify
 
+      ########################################
+      # INSTALL SYFT (per SBOM CycloneDX via GoReleaser)
+      ########################################
+      - name: Install Syft (for SBOM generation)
+        uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v1.19.0
+
+      ########################################
+      # GORELEASER
+      ########################################
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --clean
+          args: release --clean --config .github/goreleaser.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      ########################################
+      # ATTESTAZIONE PROVENIENZA BUILD
+      ########################################
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@v1
         with:

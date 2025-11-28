@@ -1,0 +1,116 @@
+name: Auto Tag (DISABLED)
+
+on:
+  push:
+    branches:
+      - main   # 🔥 SOLO MAIN — mai dev, mai PR
+
+permissions:
+  contents: write
+
+jobs:
+  autotag:
+    if: false   # 🔴 DISATTIVATO — togli questa riga per attivarlo
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # necessario per leggere commit + tag
+
+      - name: Determine next version from commits
+        id: next_version
+        run: |
+          echo "➡ Detecting last tag..."
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Last tag: $LAST_TAG"
+
+          echo "➡ Collecting commits after last tag..."
+          COMMITS=$(git log "${LAST_TAG}..HEAD" --pretty=format:%s || true)
+          echo "Commits:"
+          echo "$COMMITS"
+
+          echo "➡ Filtering version-relevant commits..."
+          # Rimuove commit irrilevanti
+          VALID_COMMITS=$(echo "$COMMITS" | grep -viE '^(docs:|ci:|chore:|style:|refactor:)' || true)
+
+          if [ -z "$VALID_COMMITS" ]; then
+            echo "ℹ️ No version-relevant commits found."
+            echo "ℹ️ Skipping tag creation."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "➡ Relevant commits:"
+          echo "$VALID_COMMITS"
+
+          # Determina bump type
+          BUMP="patch"
+
+          if echo "$VALID_COMMITS" | grep -qiE 'BREAKING CHANGE|feat!:'; then
+            BUMP="major"
+          elif echo "$VALID_COMMITS" | grep -qiE '^feat:'; then
+            BUMP="minor"
+          fi
+
+          echo "➡ Version bump type: $BUMP"
+
+          # Calcolo nuova versione
+          VERSION_NO_V=${LAST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_NO_V"
+
+          case "$BUMP" in
+            major)
+              MAJOR=$((MAJOR+1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR+1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH+1))
+              ;;
+          esac
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "➡ New tag: $NEW_TAG"
+
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Show next tag (dry run)
+        if: steps.next_version.outputs.skip == 'false'
+        run: |
+          echo "Auto-tagging is currently DISABLED."
+          echo "If enabled, next tag would be: ${{ steps.next_version.outputs.new_tag }}"
+
+      # Quando vuoi attivarlo:
+      # basta togliere if:false sopra, e sbloccare questo step:
+      #
+      # - name: Create and push tag
+      #   if: steps.next_version.outputs.skip == 'false'
+      #   run: |
+      #     NEW_TAG="${{ steps.next_version.outputs.new_tag }}"
+      #     git config user.name "github-actions[bot]"
+      #     git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      #     git tag "$NEW_TAG"
+      #     git push origin "$NEW_TAG"
+
+# Auto Tag Workflow
+# ------------------
+# This workflow automatically determines the next semantic version
+# based on commits pushed to the main branch. It analyzes all commits
+# made after the latest existing tag and applies the following rules:
+#
+# - "feat:" → minor version bump
+# - "feat!:" or "BREAKING CHANGE" → major version bump
+# - "fix:" or other relevant commits → patch bump
+#
+# Commits that do NOT affect the program version (docs:, ci:, chore:, 
+# refactor:, style:) are ignored. If all commits are irrelevant, no tag 
+# is created.
+#
+# The job is currently disabled (if: false). Remove that condition to enable it.
