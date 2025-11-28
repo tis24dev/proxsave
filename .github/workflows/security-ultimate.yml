@@ -67,7 +67,7 @@ jobs:
       # GOSEC — SARIF
       ########################################
       - name: Install GoSec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.18.1
 
       - name: Run GoSec (SARIF)
         run: |
