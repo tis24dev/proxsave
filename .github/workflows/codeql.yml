@@ -2,9 +2,9 @@ name: CodeQL Advanced Security
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, dev ]
   schedule:
     # Run weekly on Wednesday at 00:00 UTC
     - cron: '0 0 * * 3'
