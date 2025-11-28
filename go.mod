@@ -1,13 +1,15 @@
 module github.com/tis24dev/proxmox-backup
 
-go 1.24.0
+go 1.23
+
+toolchain go1.23.12
 
 require (
 	filippo.io/age v1.1.1
 	github.com/gdamore/tcell/v2 v2.12.0
 	github.com/rivo/tview v0.42.0
 	golang.org/x/crypto v0.23.0
-	golang.org/x/term v0.37.0
+	golang.org/x/term v0.36.0
 )
 
 require (
