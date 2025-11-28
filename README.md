@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8.svg?logo=go)](https://golang.org/)
 [![codecov](https://codecov.io/gh/tis24dev/proxmox-backup/branch/dev/graph/badge.svg)](https://codecov.io/gh/tis24dev/proxmox-backup)
-[![GoSec](https://img.shields.io/github/actions/workflow/status/tis24dev/proxmox-backup/security.yml?label=GoSec&logo=go)](https://github.com/tis24dev/proxmox-backup/actions/workflows/security.yml)
+[![GoSec](https://img.shields.io/github/actions/workflow/status/tis24dev/proxmox-backup/security-ultimate.yml?label=GoSec&logo=go)](https://github.com/tis24dev/proxmox-backup/actions/workflows/security-ultimate.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/tis24dev/proxmox-backup/codeql.yml?label=CodeQL&logo=github)](https://github.com/tis24dev/proxmox-backup/actions/workflows/codeql.yml)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-success?logo=dependabot)](https://github.com/tis24dev/proxmox-backup/network/updates)
 [![Proxmox](https://img.shields.io/badge/Proxmox-PVE%20%7C%20PBS-E57000.svg)](https://www.proxmox.com/)
