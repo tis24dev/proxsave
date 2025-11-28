@@ -58,13 +58,29 @@ jobs:
       - name: Run GoSec (Go 1.21 in Docker)
         run: |
           docker run --rm \
-            -v "$PWD":/work \
-            -w /work \
-            golang:1.21 sh -c "
+          -v "$PWD":/work \
+          -w /work \
+          golang:1.21 sh -c "
               go clean -modcache &&
               go install github.com/securego/gosec/v2/cmd/gosec@v2.20.0 &&
-              gosec -quiet -no-fail -fmt=sarif_v1 -out gosec.sarif ./...
-            "
+              echo 'Running GoSec...' &&
+              gosec -no-fail -fmt=sarif_v1 -out gosec.sarif ./... || true &&
+              echo 'Files in /work:' &&
+              ls -al /work
+          "
+
+      ########################################
+      # VERIFY GOSEC SARIF EXISTS
+      ########################################
+      - name: Check GoSec SARIF file
+        run: |
+          echo "Verifying gosec.sarif..."
+          if [ ! -f gosec.sarif ]; then
+            echo 'ERROR: gosec.sarif file NOT PRODUCED'
+            exit 1
+          fi
+          echo "gosec.sarif found ✔"
+          ls -al gosec.sarif
 
       ########################################
       # UPLOAD SARIF
