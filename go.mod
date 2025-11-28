@@ -2,7 +2,7 @@ module github.com/tis24dev/proxmox-backup
 
 go 1.24
 
-toolchain go1.24
+toolchain go1.24.1
 
 require (
 	filippo.io/age v1.1.1
