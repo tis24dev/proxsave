@@ -1,0 +1,108 @@
+name: Ultimate Security Analysis (Go)
+
+on:
+  push:
+    branches: [ "main", "dev" ]
+  pull_request:
+    branches: [ "main", "dev" ]
+  schedule:
+    - cron: "0 3 * * 1"   # ogni lunedì alle 03:00
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      ########################################
+      # CHECKOUT + SETUP GO
+      ########################################
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      ########################################
+      # STATICCHECK (lint avanzato)
+      ########################################
+      - name: Install Staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run Staticcheck
+        run: |
+          ~/go/bin/staticcheck -f json ./... > staticcheck.json
+        continue-on-error: true
+
+      - name: Upload Staticcheck report
+        uses: actions/upload-artifact@v4
+        with:
+          name: staticcheck-report
+          path: staticcheck.json
+          retention-days: 30
+
+      ########################################
+      # GOVULNCHECK (Go vulnerability DB)
+      ########################################
+      - name: Run Go vulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          ~/go/bin/govulncheck -json ./... > vulncheck.json
+        continue-on-error: true
+
+      - name: Upload vulncheck report
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulncheck-report
+          path: vulncheck.json
+          retention-days: 30
+
+      ########################################
+      # GOSEC — SARIF V1 (FIXATO, 100% VALIDO)
+      ########################################
+      - name: Install GoSec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run GoSec (SARIF v1)
+        run: |
+          ~/go/bin/gosec -fmt=sarif_v1 -out=gosec-results.sarif ./...
+        continue-on-error: true
+
+      - name: Upload GoSec SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gosec-results.sarif
+
+      - name: Run GoSec (JSON)
+        run: |
+          ~/go/bin/gosec -fmt=json -out=gosec.json ./...
+        continue-on-error: true
+
+      - name: Upload GoSec JSON Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gosec-json
+          path: gosec.json
+          retention-days: 30
+
+      ########################################
+      # CODEQL — GITHUB ADVANCED SECURITY
+      ########################################
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
+
+      - name: Build Go project
+        run: |
+          go mod tidy
+          go build ./...
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
