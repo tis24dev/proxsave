@@ -148,7 +148,7 @@ apt update && apt install -y git
 apt update && apt install -y make
 
 # Verify installations
-go version    # Should show go1.21+
+go version    # Should show go1.25+
 rclone version  # Should show rclone v1.50+
 git --version # Should show git 2.47.3+
 make --version # Should show make 4.4.1+

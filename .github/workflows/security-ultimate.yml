@@ -26,7 +26,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.25"
           cache: true
 
       ########################################
@@ -64,14 +64,14 @@ jobs:
           retention-days: 30
 
       ########################################
-      # GOSEC — SARIF V1
+      # GOSEC — SARIF
       ########################################
       - name: Install GoSec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
 
-      - name: Run GoSec (SARIF v1)
+      - name: Run GoSec (SARIF)
         run: |
-          ~/go/bin/gosec -quiet -no-fail -fmt=sarif_v1 -out=gosec-results.sarif ./...
+          ~/go/bin/gosec -quiet -no-fail -fmt=sarif -out=gosec-results.sarif ./...
         continue-on-error: true
 
       - name: Upload GoSec SARIF to GitHub Security
