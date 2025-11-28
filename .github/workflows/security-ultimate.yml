@@ -64,14 +64,14 @@ jobs:
           retention-days: 30
 
       ########################################
-      # GOSEC — SARIF V1 (FIXATO, 100% VALIDO)
+      # GOSEC — SARIF V1
       ########################################
       - name: Install GoSec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run GoSec (SARIF v1)
         run: |
-          ~/go/bin/gosec -fmt=sarif_v1 -out=gosec-results.sarif ./...
+          ~/go/bin/gosec -quiet -no-fail -fmt=sarif_v1 -out=gosec-results.sarif ./...
         continue-on-error: true
 
       - name: Upload GoSec SARIF to GitHub Security
@@ -81,7 +81,7 @@ jobs:
 
       - name: Run GoSec (JSON)
         run: |
-          ~/go/bin/gosec -fmt=json -out=gosec.json ./...
+          ~/go/bin/gosec -quiet -no-fail -fmt=json -out=gosec.json ./...
         continue-on-error: true
 
       - name: Upload GoSec JSON Report
