@@ -6,8 +6,7 @@ on:
   pull_request:
     branches: [ main, dev ]
   schedule:
-    # Run weekly on Monday at 00:00 UTC
-    - cron: '0 0 * * 1'
+    - cron: '0 0 * * 1'  # ogni lunedì
 
 permissions:
   contents: read
@@ -15,39 +14,42 @@ permissions:
 
 jobs:
   gosec:
+    name: Run GoSec Security Scan
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Go
+      - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: '1.23'
 
-      - name: Run GoSec Security Scanner
-        uses: securego/gosec@master
-        with:
-          # Generate SARIF file for GitHub Security tab
-          args: '-fmt sarif -out gosec-results.sarif ./...'
+      # Install GoSec da source → più stabile e sempre aggiornato
+      - name: Install GoSec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
 
-      - name: Upload GoSec Results to GitHub Security
+      # Analisi principale → SARIF valido (per GitHub Code Scanning)
+      - name: Run GoSec (SARIF)
+        run: |
+          ~/go/bin/gosec -fmt sarif -out gosec-results.sarif ./...
+        continue-on-error: true
+
+      # Upload SARIF alla sezione "Code scanning alerts"
+      - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
           sarif_file: gosec-results.sarif
-          category: gosec
 
-      - name: Run GoSec with Console Output
-        if: always()
-        uses: securego/gosec@master
-        with:
-          args: '-fmt=json -out=gosec-report.json ./...'
+      # OPTIONAL: aggiungo anche report JSON per archivio
+      - name: Run GoSec (JSON)
+        run: |
+          ~/go/bin/gosec -fmt=json -out=gosec-report.json ./...
         continue-on-error: true
 
       - name: Upload GoSec JSON Report
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gosec-report

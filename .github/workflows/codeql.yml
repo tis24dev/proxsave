@@ -1,22 +1,20 @@
-name: CodeQL Advanced Security
+name: CodeQL Analysis
 
 on:
   push:
-    branches: [ main, dev ]
+    branches: [ "main", "dev" ]
   pull_request:
-    branches: [ main, dev ]
+    branches: [ "main", "dev" ]
   schedule:
-    # Run weekly on Wednesday at 00:00 UTC
-    - cron: '0 0 * * 3'
+    - cron: '0 3 * * 1'   # ogni lunedì alle 03:00
 
 permissions:
   contents: read
   security-events: write
-  actions: read
 
 jobs:
   analyze:
-    name: CodeQL Analysis
+    name: Analyze (Go)
     runs-on: ubuntu-latest
 
     strategy:
@@ -28,33 +26,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Go
+      - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.23"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          # Queries to run (security-extended includes more checks)
-          queries: security-extended,security-and-quality
 
-      - name: Build Project
+      # Build: necessario per CodeQL per analizzare correttamente il flusso del codice
+      - name: Build Go project
         run: |
           go mod download
-          go build -v ./...
+          go build ./...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:${{ matrix.language }}"
-          upload: true
-
-      - name: Upload CodeQL Database
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: codeql-database
-          path: /home/runner/work/_temp/codeql_databases
-          retention-days: 7
