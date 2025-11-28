@@ -33,7 +33,7 @@ jobs:
       # STATICCHECK (lint avanzato)
       ########################################
       - name: Install Staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
 
       - name: Run Staticcheck
         run: |
