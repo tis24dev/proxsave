@@ -324,7 +324,7 @@ func (t *TelegramNotifier) sendToTelegram(ctx context.Context, botToken, chatID,
 	// Check response
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Telegram API returned status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("telegram api returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
