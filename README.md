@@ -1,7 +1,7 @@
 # 🔄 Proxmox Backup PBS & PVE System Files - GO
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8.svg?logo=go)](https://golang.org/)
+[![Go](https://img.shields.io/badge/Go-1.25+-success.svg?logo=go)](https://go.dev/)
 [![codecov](https://codecov.io/gh/tis24dev/proxmox-backup/branch/dev/graph/badge.svg)](https://codecov.io/gh/tis24dev/proxmox-backup)
 [![GoSec](https://img.shields.io/github/actions/workflow/status/tis24dev/proxmox-backup/security-ultimate.yml?label=GoSec&logo=go)](https://github.com/tis24dev/proxmox-backup/actions/workflows/security-ultimate.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/tis24dev/proxmox-backup/codeql.yml?label=CodeQL&logo=github)](https://github.com/tis24dev/proxmox-backup/actions/workflows/codeql.yml)
