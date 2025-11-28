@@ -168,17 +168,19 @@ func TestRunCommand(t *testing.T) {
 
 // TestRunCommandTimeout tests command timeout
 func TestRunCommandTimeout(t *testing.T) {
-	// This test creates a function that would timeout
-	// We can't easily test the actual timeout without a long-running command
-	// So we test that the context mechanism works
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	// This test verifies that a context with timeout actually
+	// reaches DeadlineExceeded within a reasonable time window,
+	// without relying on extremely small sleeps which can be
+	// flaky on slower or loaded CI machines.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	// The function uses its own context, but we verify the pattern works
-	time.Sleep(2 * time.Millisecond)
-
-	if ctx.Err() != context.DeadlineExceeded {
+	select {
+	case <-ctx.Done():
+		if ctx.Err() != context.DeadlineExceeded {
+			t.Errorf("expected DeadlineExceeded, got %v", ctx.Err())
+		}
+	case <-time.After(200 * time.Millisecond):
 		t.Error("Context should have timed out")
 	}
 }
