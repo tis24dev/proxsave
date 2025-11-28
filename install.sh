@@ -96,7 +96,7 @@ check_root() {
 confirm_legacy_install() {
     echo
     print_warning "You are about to install a LEGACY version of Proxmox Backup System."
-    print_warning "IGNORE THIS NOTICE - YOU CAN CONTINUE - IF YOU HAVE ANY QUESTIONS, READ THE README.MD ON THE PROJECT HOMEPAGE."
+    print_warning "This version is no longer maintained and should not be used for new installations."
     echo
     print_status "For the new installer and up-to-date documentation, please visit:"
     echo "  https://github.com/tis24dev/proxmox-backup"
