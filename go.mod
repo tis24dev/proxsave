@@ -1,6 +1,6 @@
 module github.com/tis24dev/proxmox-backup
 
-go 1.24
+go 1.24.0
 
 toolchain go1.24.1
 
