@@ -12,6 +12,11 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write      # Per creare release GitHub
+      id-token: write      # Per generare token OIDC
+      attestations: write  # Per pubblicare attestazioni
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,11 +26,8 @@ jobs:
         with:
           go-version: "1.22"
 
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      - name: Verify Go modules integrity
+        run: go mod verify
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -34,3 +36,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: build/proxmox-backup-*

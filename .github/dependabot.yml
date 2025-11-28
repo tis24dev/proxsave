@@ -1,0 +1,76 @@
+version: 2
+
+updates:
+  # Go module dependencies
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+      timezone: "UTC"
+
+    # Limite PR aperte (evita spam)
+    open-pull-requests-limit: 5
+
+    # Raggruppa aggiornamenti per ridurre PR
+    groups:
+      # Gruppo per security patches (auto-merge)
+      security-patches:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+        dependency-type: "production"
+
+      # Gruppo per minor updates (auto-merge se test ok)
+      minor-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+
+      # Major updates separati (review manuale)
+      # Non raggruppati intenzionalmente
+
+    # Label per identificare tipo di PR
+    labels:
+      - "dependencies"
+      - "automated"
+
+    # Commit message prefix
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+
+    # Assignee per major updates (opzionale)
+    reviewers:
+      - "tis24dev"
+
+    # Ignora dipendenze che non vuoi aggiornare (se necessario)
+    # ignore:
+    #   - dependency-name: "example.com/frozen-package"
+    #     versions: ["1.x", "2.x"]
+
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+      timezone: "UTC"
+
+    open-pull-requests-limit: 3
+
+    groups:
+      actions-updates:
+        patterns:
+          - "*"
+
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+    commit-message:
+      prefix: "ci"

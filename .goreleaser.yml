@@ -14,7 +14,7 @@ before:
 
 builds:
   - id: proxmox-backup
-    main: ./build/proxmox-backup
+    main: ./cmd/proxmox-backup
     binary: proxmox-backup
     env:
       - CGO_ENABLED=0
@@ -32,20 +32,6 @@ builds:
 
 checksum:
   name_template: "SHA256SUMS"
-
-signs:
-  - id: gpg-checksum-sign
-    cmd: gpg
-    artifacts: checksum
-    args:
-      - "--batch"
-      - "--yes"
-      - "--armor"
-      - "--local-user=CD28A21CC11B270E"
-      - "--detach-sign"
-      - "--output"
-      - "${signature}"
-      - "${artifact}"
 
 release:
   github:

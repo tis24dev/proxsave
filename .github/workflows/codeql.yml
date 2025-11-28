@@ -1,0 +1,60 @@
+name: CodeQL Advanced Security
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run weekly on Wednesday at 00:00 UTC
+    - cron: '0 0 * * 3'
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'go' ]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Queries to run (security-extended includes more checks)
+          queries: security-extended,security-and-quality
+
+      - name: Build Project
+        run: |
+          go mod download
+          go build -v ./...
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: true
+
+      - name: Upload CodeQL Database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-database
+          path: /home/runner/work/_temp/codeql_databases
+          retention-days: 7

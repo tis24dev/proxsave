@@ -3,6 +3,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8.svg?logo=go)](https://golang.org/)
 [![codecov](https://codecov.io/gh/tis24dev/proxmox-backup/branch/dev/graph/badge.svg)](https://codecov.io/gh/tis24dev/proxmox-backup)
+[![GoSec](https://img.shields.io/github/actions/workflow/status/tis24dev/proxmox-backup/security.yml?label=GoSec&logo=go)](https://github.com/tis24dev/proxmox-backup/actions/workflows/security.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/tis24dev/proxmox-backup/codeql.yml?label=CodeQL&logo=github)](https://github.com/tis24dev/proxmox-backup/actions/workflows/codeql.yml)
+[![Dependabot](https://img.shields.io/badge/Dependabot-enabled-success?logo=dependabot)](https://github.com/tis24dev/proxmox-backup/network/updates)
 [![Proxmox](https://img.shields.io/badge/Proxmox-PVE%20%7C%20PBS-E57000.svg)](https://www.proxmox.com/)
 [![rclone](https://img.shields.io/badge/rclone-1.50+-136C9E.svg)](https://rclone.org/)
 [![💖 Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
@@ -41,6 +44,7 @@ Intelligent backup rotation - Intelligent deletion of logs associated with speci
 - [🤝 Contributing](#contributing)
 - [📚 Documentation](#documentation)
 - [📄 License](#license)
+- [🔐 Build Provenance](#build-provenance)
 - [🔄 Restore Operations](#restore-operations)
 - [✨ Conclusion](#conclusion)
 
@@ -659,6 +663,7 @@ Complete documentation is available in the `docs/` directory:
 | **[Migration Guide](docs/MIGRATION_GUIDE.md)** | Bash → Go upgrade guide |
 | **[Developer Guide](docs/DEVELOPER_GUIDE.md)** | Contributing and development |
 | **[Legacy Bash](docs/LEGACY_BASH.md)** | Information about Bash version |
+| **[Provenance Verification](docs/PROVENANCE_VERIFICATION.md)** | Build attestation verification guide |
 
 ---
 
@@ -669,6 +674,124 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 ### Third-Party Licenses
 
 This project uses third-party libraries licensed under BSD-3-Clause and MIT licenses. For complete attribution and license texts, see [THIRD-PARTY-LICENSES](.github/THIRD-PARTY-LICENSES.md).
+
+---
+
+## Build Provenance
+
+All release binaries include cryptographically signed build provenance attestations that prove the binary was built from this repository using GitHub Actions.
+
+### What Are Attestations?
+
+Build provenance attestations provide cryptographic proof that:
+- ✓ The binary was built from this exact repository and commit
+- ✓ The binary was built using the official GitHub Actions workflow
+- ✓ The binary has not been tampered with after the build
+- ✓ The build process is traceable and verifiable via public transparency log
+
+This protects you from supply chain attacks, unauthorized builds, and tampered binaries.
+
+### Quick Verification
+
+Before using a downloaded binary, verify its authenticity:
+
+```bash
+# 1. Download the binary for your platform
+wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.1/proxmox-backup-linux-amd64
+
+# 2. Verify the attestation (requires GitHub CLI)
+gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
+
+# 3. If verification succeeds, you can safely use the binary
+chmod +x proxmox-backup-linux-amd64
+./proxmox-backup-linux-amd64 --version
+```
+
+**Expected output:**
+```
+✓ Verification succeeded!
+
+sha256:abc123... was attested by:
+REPO                        PREDICATE_TYPE                  WORKFLOW
+tis24dev/proxmox-backup     https://slsa.dev/provenance/v1  .github/workflows/release.yml@refs/tags/v0.9.1
+```
+
+### Prerequisites
+
+To verify attestations, you need GitHub CLI (`gh`):
+
+```bash
+# Linux (Debian/Ubuntu)
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+sudo apt update && sudo apt install gh
+
+# macOS
+brew install gh
+
+# Windows
+winget install --id GitHub.cli
+```
+
+### Detailed Verification Guide
+
+For complete instructions including:
+- Multiple verification methods (single binary, all artifacts, JSON output, offline)
+- Platform-specific examples (Linux, macOS, Windows)
+- Troubleshooting common issues
+- Security considerations and trust model
+- Integration with automated scripts
+
+See the complete guide: **[Provenance Verification Guide](docs/PROVENANCE_VERIFICATION.md)**
+
+### Migration from GPG Signing
+
+Previous releases (v0.9.0 and earlier) used GPG signatures. Starting from v0.9.1, we use GitHub's native attestation system which provides:
+- **Easier verification**: Single `gh` command instead of GPG key management
+- **Better transparency**: Public immutable log of all attestations
+- **Modern security**: OIDC-based keyless signing with Sigstore
+- **SLSA compliance**: Industry-standard provenance metadata
+
+Old GPG signatures: `gpg --verify SHA256SUMS.asc SHA256SUMS`
+New attestations: `gh attestation verify <binary> --repo tis24dev/proxmox-backup`
+
+### Security Scanning
+
+This project uses automated security scanning to ensure code quality and detect vulnerabilities:
+
+**Static Analysis Security Testing (SAST):**
+- **GoSec**: Go-specific security scanner that checks for common vulnerabilities (SQL injection, command injection, weak crypto, etc.)
+  - Runs on: Every push, pull request, and weekly schedule
+  - Results: Available in GitHub Security tab
+
+- **CodeQL**: Deep semantic analysis for complex security issues and code quality
+  - Runs on: Every push, pull request, and weekly schedule
+  - Queries: `security-extended` + `security-and-quality`
+  - Results: Available in GitHub Security tab
+
+**Why This Matters:**
+- Proactive detection of security vulnerabilities before they reach production
+- Continuous monitoring for newly discovered vulnerability patterns
+- Automated security review as part of CI/CD pipeline
+- Complementary to build provenance attestations (code quality + artifact integrity)
+
+View security scan results: [GitHub Security Tab](https://github.com/tis24dev/proxmox-backup/security)
+
+**Supply Chain Security:**
+- **Dependabot**: Automated dependency updates with security vulnerability detection
+  - Schedule: Weekly (Monday 02:00 UTC)
+  - Auto-merge: Enabled for patch/minor security updates
+  - Manual review: Required only for major version updates
+
+- **Dependency Review**: Blocks PRs introducing vulnerable or malicious dependencies
+  - Triggers: On all PRs modifying go.mod/go.sum
+  - Blocks: Critical CVE + unapproved licenses (GPL, AGPL)
+  - Warns: High/Medium/Low CVE (doesn't block)
+
+**Zero-Touch Operation:**
+- Security patches auto-merged within 24-48h of release
+- Critical CVEs block deployment automatically
+- Manual intervention required only for breaking changes (~1-2 times/year)
 
 ---
 

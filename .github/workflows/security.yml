@@ -1,0 +1,55 @@
+name: Security Scanning (GoSec)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run weekly on Monday at 00:00 UTC
+    - cron: '0 0 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  gosec:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Run GoSec Security Scanner
+        uses: securego/gosec@master
+        with:
+          # Generate SARIF file for GitHub Security tab
+          args: '-fmt sarif -out gosec-results.sarif ./...'
+
+      - name: Upload GoSec Results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gosec-results.sarif
+          category: gosec
+
+      - name: Run GoSec with Console Output
+        if: always()
+        uses: securego/gosec@master
+        with:
+          args: '-fmt=json -out=gosec-report.json ./...'
+        continue-on-error: true
+
+      - name: Upload GoSec JSON Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gosec-report
+          path: gosec-report.json
+          retention-days: 30
