@@ -71,7 +71,27 @@ jobs:
 
       - name: Run GoSec (SARIF)
         run: |
-          ~/go/bin/gosec -quiet -no-fail -fmt=sarif -out=gosec-results.sarif ./...
+          ~/go/bin/gosec -quiet -no-fail -fmt=sarif -out=gosec-results.raw.sarif ./...
+          python - << 'EOF'
+          import json
+          from pathlib import Path
+
+          path = Path("gosec-results.raw.sarif")
+          if path.is_file():
+              try:
+                  data = json.loads(path.read_text())
+              except Exception:
+                  raise SystemExit(0)
+
+              for run in data.get("runs", []):
+                  for result in run.get("results", []):
+                      for fix in result.get("fixes", []):
+                          ac = fix.get("artifactChanges")
+                          if ac is not None and not isinstance(ac, list):
+                              fix["artifactChanges"] = [ac]
+
+              Path("gosec-results.sarif").write_text(json.dumps(data))
+          EOF
         continue-on-error: true
 
       - name: Upload GoSec SARIF to GitHub Security
