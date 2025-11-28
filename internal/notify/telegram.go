@@ -317,7 +317,7 @@ func (t *TelegramNotifier) sendToTelegram(ctx context.Context, botToken, chatID,
 	// Send request
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("API request failed: %w", err)
+		return fmt.Errorf("api request failed: %w", err)
 	}
 	defer resp.Body.Close()
 

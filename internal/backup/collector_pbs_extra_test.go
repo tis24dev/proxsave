@@ -20,7 +20,7 @@ func TestGetDatastoreListNoBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if ds != nil && len(ds) != 0 {
+	if len(ds) != 0 {
 		t.Fatalf("expected empty datastores when binary missing")
 	}
 }

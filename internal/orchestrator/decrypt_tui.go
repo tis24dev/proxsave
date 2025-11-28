@@ -392,12 +392,6 @@ func showCandidatePage(app *tui.App, pages *tview.Pages, candidates []*decryptCa
 	pages.AddPage("candidates", page, true, true)
 }
 
-func buildCandidateListEntry(idx int, cand *decryptCandidate) (string, string) {
-	// Kept for compatibility with existing calls; formatting now handled in showCandidatePage.
-	main := fmt.Sprintf("%2d) %s", idx+1, cand.Manifest.CreatedAt.Format("2006-01-02 15:04:05"))
-	return main, ""
-}
-
 func buildTargetInfo(manifest *backup.Manifest) string {
 	targets := formatTargets(manifest)
 	if targets == "" {
@@ -671,10 +665,7 @@ func preparePlainBundleTUI(ctx context.Context, cand *decryptCandidate, version 
 
 	logger.Debug("Preparing archive %s for decryption (mode: %s)", filepath.Base(manifestCopy.ArchivePath), statusFromManifest(&manifestCopy))
 
-	plainArchiveName := filepath.Base(staged.ArchivePath)
-	if strings.HasSuffix(plainArchiveName, ".age") {
-		plainArchiveName = strings.TrimSuffix(plainArchiveName, ".age")
-	}
+	plainArchiveName := strings.TrimSuffix(filepath.Base(staged.ArchivePath), ".age")
 	plainArchivePath := filepath.Join(workDir, plainArchiveName)
 
 	if currentEncryption == "age" {

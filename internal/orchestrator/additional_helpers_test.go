@@ -1129,10 +1129,10 @@ func TestDispatchNotificationsAndLogsSkipsWithNoLog(t *testing.T) {
 
 func TestCheckSystemRequirementsNoPanic(t *testing.T) {
 	// manifest nil
-	warnings := CheckSystemRequirements(nil)
-	// warnings may be nil or empty; just ensure no panic
+	CheckSystemRequirements(nil)
+	// just ensure no panic
 
 	manifest := &backup.Manifest{ProxmoxType: "pbs", Hostname: "pbs-node"}
-	warnings = CheckSystemRequirements(manifest)
-	_ = warnings // no specific assertions; just ensure call succeeds
+	CheckSystemRequirements(manifest)
+	// no specific assertions; just ensure call succeeds
 }

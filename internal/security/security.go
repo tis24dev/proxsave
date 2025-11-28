@@ -733,6 +733,7 @@ func (c *Checker) checkSuspiciousProcesses(ctx context.Context) {
 			}
 		}
 
+		//lint:ignore SA4017 isZombieProxmoxProcess is intentionally used only for control flow
 		if isZombieProxmoxProcess(user, state, vsz, trimmed) {
 			continue
 		}

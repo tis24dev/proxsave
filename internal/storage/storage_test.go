@@ -538,14 +538,9 @@ func TestSecondaryStorageApplyRetentionGFS(t *testing.T) {
 		now.Add(-32 * 24 * time.Hour), // delete
 	}
 
-	type backupInfo struct {
-		path string
-		ts   time.Time
-	}
-	var infos []backupInfo
 	for _, ts := range timestamps {
 		path := createSecondaryBackup(t, backupDir, logDir, "node-gfs", ts)
-		infos = append(infos, backupInfo{path: path, ts: ts})
+		_ = path
 	}
 
 	deleted, err := storage.ApplyRetention(context.Background(), RetentionConfig{

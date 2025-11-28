@@ -432,7 +432,7 @@ func (c *CloudStorage) tryWriteTest(ctx context.Context) error {
 	argsDelete := c.buildRcloneArgs("deletefile")
 	argsDelete = append(argsDelete, testRemote)
 	c.logger.Debug("Running (remote write cleanup): %s", strings.Join(argsDelete, " "))
-	output, err = c.exec(ctx, argsDelete[0], argsDelete[1:]...)
+	_, err = c.exec(ctx, argsDelete[0], argsDelete[1:]...)
 	if err != nil {
 		c.logger.Debug("Warning: write test file cleanup failed (may lack delete permissions): %v", err)
 		// Don't return error - write succeeded which confirms write access

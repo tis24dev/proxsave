@@ -19,9 +19,12 @@ import (
 	"github.com/tis24dev/proxmox-backup/internal/backup"
 	"github.com/tis24dev/proxmox-backup/internal/config"
 	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 var ErrDecryptAborted = errors.New("decrypt workflow aborted by user")
+var titleCaser = cases.Title(language.English)
 
 type decryptPathOption struct {
 	Label string
@@ -476,10 +479,7 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 
 	logger.Info("Preparing archive %s for decryption (mode: %s)", manifestCopy.ArchivePath, statusFromManifest(&manifestCopy))
 
-	plainArchiveName := filepath.Base(staged.ArchivePath)
-	if strings.HasSuffix(plainArchiveName, ".age") {
-		plainArchiveName = strings.TrimSuffix(plainArchiveName, ".age")
-	}
+	plainArchiveName := strings.TrimSuffix(filepath.Base(staged.ArchivePath), ".age")
 	plainArchivePath := filepath.Join(workDir, plainArchiveName)
 
 	if currentEncryption == "age" {
@@ -752,7 +752,7 @@ func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, descrip
 			return "", fmt.Errorf("stat %s: %w", current, err)
 		}
 
-		fmt.Printf("%s %s already exists.\n", strings.Title(description), current)
+		fmt.Printf("%s %s already exists.\n", titleCaser.String(description), current)
 		fmt.Println("  [1] Overwrite")
 		fmt.Println("  [2] Enter a different path")
 		fmt.Println("  [0] Exit")

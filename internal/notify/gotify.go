@@ -136,7 +136,7 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		err = fmt.Errorf("Gotify request failed: %w", err)
+		err = fmt.Errorf("gotify request failed: %w", err)
 		g.logger.Warning("WARNING: %v", err)
 		result.Success = false
 		result.Error = err
@@ -149,7 +149,7 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err = fmt.Errorf("Gotify returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		err = fmt.Errorf("gotify returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		g.logger.Warning("WARNING: %v", err)
 		result.Success = false
 		result.Error = err

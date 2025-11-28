@@ -194,7 +194,6 @@ type Orchestrator struct {
 }
 
 const tempDirCleanupAge = 24 * time.Hour
-const backupTotalSteps = 8
 
 // New creates a new Orchestrator
 func New(logger *logging.Logger, dryRun bool) *Orchestrator {
@@ -1090,15 +1089,10 @@ func (o *Orchestrator) removeAssociatedFiles(archivePath string) error {
 	return nil
 }
 
-// Legacy compatibility wrappers for callers that used the package-level functions.
+// Legacy compatibility wrapper for callers that used the package-level createBundle function.
 func createBundle(ctx context.Context, logger *logging.Logger, archivePath string) (string, error) {
 	o := &Orchestrator{logger: logger, fs: osFS{}, clock: realTimeProvider{}}
 	return o.createBundle(ctx, archivePath)
-}
-
-func removeAssociatedFiles(logger *logging.Logger, archivePath string) error {
-	o := &Orchestrator{logger: logger, fs: osFS{}}
-	return o.removeAssociatedFiles(archivePath)
 }
 
 // encryptArchive was replaced by streaming encryption inside the archiver.

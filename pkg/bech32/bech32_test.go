@@ -72,7 +72,7 @@ func TestEncodeDecode_RoundTrip(t *testing.T) {
 				t.Fatalf("Decode failed: %v", err)
 			}
 
-			if strings.ToLower(hrp) != strings.ToLower(tc.hrp) {
+			if !strings.EqualFold(hrp, tc.hrp) {
 				t.Errorf("HRP mismatch: got %q, want %q", hrp, tc.hrp)
 			}
 			if !bytes.Equal(decoded, tc.data) {

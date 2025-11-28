@@ -137,18 +137,6 @@ func (l *LocalStorage) countBackups(ctx context.Context) int {
 	return len(backups)
 }
 
-// executeTarCommand executes a tar command
-func (l *LocalStorage) executeTarCommand(ctx context.Context, args []string) error {
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("tar command failed: %w: %s", err, string(output))
-	}
-
-	return nil
-}
-
 // List returns all backups in local storage
 func (l *LocalStorage) List(ctx context.Context) ([]*types.BackupMetadata, error) {
 	if err := ctx.Err(); err != nil {

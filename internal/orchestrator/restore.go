@@ -1081,11 +1081,11 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 	tarReader := tar.NewReader(reader)
 
 	// Write log header if log file is available
-	if logFile != nil {
+		if logFile != nil {
 		fmt.Fprintf(logFile, "=== PROXMOX RESTORE LOG ===\n")
 		fmt.Fprintf(logFile, "Date: %s\n", nowRestore().Format("2006-01-02 15:04:05"))
 		fmt.Fprintf(logFile, "Mode: %s\n", getModeName(mode))
-		if categories != nil && len(categories) > 0 {
+		if len(categories) > 0 {
 			fmt.Fprintf(logFile, "Selected categories: %d categories\n", len(categories))
 			for _, cat := range categories {
 				fmt.Fprintf(logFile, "  - %s (%s)\n", cat.Name, cat.ID)
@@ -1101,7 +1101,7 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 	filesExtracted := 0
 	filesSkipped := 0
 	filesFailed := 0
-	selectiveMode := categories != nil && len(categories) > 0
+	selectiveMode := len(categories) > 0
 
 	var restoredTemp, skippedTemp *os.File
 	if logFile != nil {
@@ -1468,23 +1468,3 @@ func getModeName(mode RestoreMode) string {
 	}
 }
 
-func buildTarExtractArgs(archivePath, destRoot string) ([]string, error) {
-	baseArgs := []string{"tar"}
-	switch {
-	case strings.HasSuffix(archivePath, ".tar.gz") || strings.HasSuffix(archivePath, ".tgz"):
-		baseArgs = append(baseArgs, "-xzpf", archivePath, "-C", destRoot)
-	case strings.HasSuffix(archivePath, ".tar.bz2"):
-		baseArgs = append(baseArgs, "-xjpf", archivePath, "-C", destRoot)
-	case strings.HasSuffix(archivePath, ".tar.xz"):
-		baseArgs = append(baseArgs, "-xJpf", archivePath, "-C", destRoot)
-	case strings.HasSuffix(archivePath, ".tar.lzma"):
-		baseArgs = append(baseArgs, "--lzma", "-xpf", archivePath, "-C", destRoot)
-	case strings.HasSuffix(archivePath, ".tar.zst") || strings.HasSuffix(archivePath, ".tar.zstd"):
-		baseArgs = append(baseArgs, "--use-compress-program=zstd", "-xpf", archivePath, "-C", destRoot)
-	case strings.HasSuffix(archivePath, ".tar"):
-		baseArgs = append(baseArgs, "-xpf", archivePath, "-C", destRoot)
-	default:
-		return nil, fmt.Errorf("unsupported archive format: %s", filepath.Base(archivePath))
-	}
-	return baseArgs, nil
-}

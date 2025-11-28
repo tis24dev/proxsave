@@ -412,12 +412,3 @@ func (fakeFileInfo) Mode() os.FileMode  { return 0 }
 func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (fakeFileInfo) IsDir() bool        { return false }
 func (fakeFileInfo) Sys() interface{}   { return nil }
-
-func stubStat(t *testing.T, fn func(string) (os.FileInfo, error)) {
-	t.Helper()
-	orig := statFunc
-	statFunc = fn
-	t.Cleanup(func() {
-		statFunc = orig
-	})
-}

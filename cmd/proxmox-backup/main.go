@@ -1506,7 +1506,7 @@ func checkGoRuntimeVersion(min string) error {
 	}
 
 	if !newer(rtMaj, rtMin, rtPatch, minMaj, minMin, minPatch) {
-		return fmt.Errorf("Go runtime version %s is below required %s — rebuild with Go %s or set GOTOOLCHAIN=auto", rt, "go"+min, "go"+min)
+		return fmt.Errorf("go runtime version %s is below required %s — rebuild with go %s or set GOTOOLCHAIN=auto", rt, "go"+min, "go"+min)
 	}
 	return nil
 }
