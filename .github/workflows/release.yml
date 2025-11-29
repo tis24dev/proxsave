@@ -79,14 +79,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       ########################################
-      # DEBUG OIDC (CRUDO)
-      ########################################
-      - name: Debug OIDC env
-        run: |
-          echo "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL:-<empty>}"
-          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-<empty>}"
-
-      ########################################
       # ATTESTAZIONE PROVENIENZA BUILD
       ########################################
       - name: Attest Build Provenance
