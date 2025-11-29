@@ -255,6 +255,11 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 	tarReader := tar.NewReader(gzReader)
 	filesRestored := 0
 
+	absDestRoot, err := filepath.Abs(destRoot)
+	if err != nil {
+		return fmt.Errorf("resolve destination root: %w", err)
+	}
+
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
@@ -264,38 +269,19 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 			return fmt.Errorf("read tar entry: %w", err)
 		}
 
-		target := filepath.Join(destRoot, header.Name)
+		target, err := resolveAndCheckPath(destRoot, header.Name)
+		if err != nil {
+			logger.Warning("Skipping archive entry %s: %v", header.Name, err)
+			continue
+		}
 
-		// Normalize and validate target path to prevent directory traversal (Zip Slip)
-		absDestRoot, err := filepath.Abs(destRoot)
+		relTarget, err := filepath.Rel(absDestRoot, target)
 		if err != nil {
-			logger.Warning("Cannot resolve destination root: %v", err)
+			logger.Warning("Cannot compute relative path for %s: %v", header.Name, err)
 			continue
 		}
-		absTarget, err := filepath.Abs(target)
-		if err != nil {
-			logger.Warning("Cannot resolve archive entry path %s: %v", header.Name, err)
-			continue
-		}
-		// Ensure target is within destRoot
-		if !strings.HasPrefix(absTarget, absDestRoot+string(os.PathSeparator)) && absTarget != absDestRoot {
-			logger.Warning("Skipping file outside extraction root: %s (resolved to %s)", header.Name, absTarget)
-			continue
-		}
-		// Disallow absolute paths and ".." path elements in archive entries
-		if filepath.IsAbs(header.Name) {
-			logger.Warning("Skipping suspicious absolute path in archive entry: %s", header.Name)
-			continue
-		}
-		suspicious := false
-		for _, part := range strings.Split(header.Name, string(os.PathSeparator)) {
-			if part == ".." {
-				suspicious = true
-				break
-			}
-		}
-		if suspicious {
-			logger.Warning("Skipping suspicious relative path in archive entry: %s", header.Name)
+		if strings.HasPrefix(relTarget, ".."+string(os.PathSeparator)) || relTarget == ".." {
+			logger.Warning("Skipping archive entry %s: relative path escapes root (%s)", header.Name, relTarget)
 			continue
 		}
 
@@ -323,6 +309,15 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 				continue
 			}
 
+			// Resolve intended target relative to the sanitized symlink directory inside the archive
+			sanitizedDir := filepath.Dir(relTarget)
+			resolvedLinkPath := filepath.Join(sanitizedDir, linkTarget)
+
+			if _, pathErr := resolveAndCheckPath(destRoot, resolvedLinkPath); pathErr != nil {
+				logger.Warning("Skipping symlink %s -> %s: target escapes root: %v", target, linkTarget, pathErr)
+				continue
+			}
+
 			// Remove existing file/symlink before creating new one
 			safetyFS.Remove(target)
 
@@ -341,8 +336,8 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 			}
 
 			// Resolve the symlink target relative to the symlink's directory
-			symlinkDir := filepath.Dir(target)
-			resolvedTarget := filepath.Join(symlinkDir, actualTarget)
+			symlinkTargetDir := filepath.Dir(target)
+			resolvedTarget := filepath.Join(symlinkTargetDir, actualTarget)
 
 			// Validate the resolved target stays within destRoot
 			absDestRoot, err := filepath.Abs(destRoot)
