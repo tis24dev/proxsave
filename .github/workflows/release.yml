@@ -17,6 +17,7 @@ jobs:
       contents: write       # Per creare release GitHub
       id-token: write       # Necessario per OIDC / attestazioni
       attestations: write   # Necessario per actions/attest-build-provenance
+      actions: read         # Necessario per leggere metadata del run
 
     steps:
       ########################################
@@ -76,6 +77,14 @@ jobs:
           args: release --clean --config .github/.goreleaser.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      ########################################
+      # DEBUG OIDC (CRUDO)
+      ########################################
+      - name: Debug OIDC env
+        run: |
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL:-<empty>}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-<empty>}"
 
       ########################################
       # ATTESTAZIONE PROVENIENZA BUILD
