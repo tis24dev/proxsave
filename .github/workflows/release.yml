@@ -26,20 +26,20 @@ jobs:
           fetch-depth: 0
 
       ########################################
-      # VALIDAZIONE TAG (Migliora il flusso ed evita errori)
+      # VALIDAZIONE TAG
       ########################################
       - name: Validate SemVer tag
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           echo "Current tag: $TAG"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z\.-]+)?$ ]]; then
-            echo "❌ Tag '$TAG' is not a valid SemVer (expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc1/beta1)"
+            echo "❌ Tag '$TAG' is not a valid SemVer (expected vMAJOR.MINOR.PATCH or pre-release)"
             exit 1
           fi
           echo "✔ Tag '$TAG' is valid SemVer"
 
       ########################################
-      # SETUP GO TOOLCHAIN (coerente con il progetto)
+      # SETUP GO
       ########################################
       - name: Set up Go
         uses: actions/setup-go@v4
@@ -56,7 +56,7 @@ jobs:
         run: go mod verify
 
       ########################################
-      # INSTALL SYFT (per SBOM CycloneDX via GoReleaser)
+      # INSTALL SYFT (per SBOM)
       ########################################
       - name: Install Syft (for SBOM generation)
         uses: anchore/sbom-action/download-syft@v0
@@ -64,12 +64,13 @@ jobs:
           syft-version: v1.19.0
 
       ########################################
-      # GORELEASER
+      # GORELEASER (FIXATO con workdir)
       ########################################
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
+          workdir: ${{ github.workspace }}
           args: release --clean --config .github/goreleaser.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
