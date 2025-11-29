@@ -16,7 +16,7 @@ before:
 ###############################################
 builds:
   - id: proxmox-backup
-    main: ./cmd/proxmox-backup/main.go
+    main: ./cmd/proxmox-backup
     binary: proxmox-backup
     env:
       - CGO_ENABLED=0
@@ -24,7 +24,6 @@ builds:
       - linux
     goarch:
       - amd64
-      - arm64
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - >-
@@ -38,18 +37,20 @@ builds:
 ###############################################
 archives:
   - id: archive
-    builds:
+    ids:
       - proxmox-backup
-    format: tar.gz
+    formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md
 
   - id: binary
-    builds:
+    ids:
       - proxmox-backup
-    format: binary
+    formats:
+      - binary
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 ###############################################
