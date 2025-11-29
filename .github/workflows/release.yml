@@ -14,7 +14,9 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write      # Per creare release GitHub
+      contents: write       # Per creare release GitHub
+      id-token: write       # Necessario per OIDC / attestazioni
+      attestations: write   # Necessario per actions/attest-build-provenance
 
     steps:
       ########################################
