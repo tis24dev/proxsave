@@ -84,4 +84,4 @@ jobs:
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@v3
         with:
-          subject-path: build/proxmox-backup-*
+          subject-path: build/proxmox-backup_*
