@@ -71,7 +71,7 @@ jobs:
         with:
           version: latest
           workdir: ${{ github.workspace }}
-          args: release --clean --config .github/goreleaser.yml
+          args: release --clean --config .github/.goreleaser.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
