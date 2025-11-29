@@ -544,7 +544,14 @@ func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *conf
 
 // sanitizeBundleEntryName ensures the tar entry name cannot escape the working directory.
 func sanitizeBundleEntryName(name string) (string, error) {
-	cleaned := path.Clean(strings.TrimSpace(name))
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return "", fmt.Errorf("invalid archive entry name %q", name)
+	}
+
+	// Normalize Windows-style separators to POSIX style so path.Clean can catch traversal attempts.
+	normalized := strings.ReplaceAll(trimmed, "\\", "/")
+	cleaned := path.Clean(normalized)
 	if cleaned == "" || cleaned == "." {
 		return "", fmt.Errorf("invalid archive entry name %q", name)
 	}
@@ -587,6 +594,13 @@ func extractBundleToWorkdir(bundlePath, workDir string) (stagedFiles, error) {
 		}
 
 		target := filepath.Join(workDir, safeName)
+		rel, err := filepath.Rel(workDir, target)
+		if err != nil {
+			return stagedFiles{}, fmt.Errorf("resolve %s: %w", hdr.Name, err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return stagedFiles{}, fmt.Errorf("archive entry escapes workdir: %q", hdr.Name)
+		}
 		out, err := restoreFS.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 		if err != nil {
 			return stagedFiles{}, fmt.Errorf("extract %s: %w", hdr.Name, err)

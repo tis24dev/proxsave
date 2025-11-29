@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"archive/tar"
 	"bufio"
 	"context"
 	"errors"
@@ -221,6 +222,9 @@ func TestSanitizeBundleEntryName(t *testing.T) {
 		{"leading dot slash", "./data/file.txt", "file.txt", false},
 		{"nested path collapsed", "dir/sub/../data.bin", "data.bin", false},
 		{"trailing spaces trimmed", "  manifest.json  ", "manifest.json", false},
+		{"windows separators collapsed", "dir\\child\\file.txt", "file.txt", false},
+		{"mixed windows traversal cleaned", ".\\nested\\..\\manifest.json", "manifest.json", false},
+		{"windows traversal rejected", "..\\escape.txt", "", true},
 		{"absolute path rejected", "/etc/passwd", "", true},
 		{"parent directory prefix rejected", "../foo", "", true},
 		{"multiple parent traversal rejected", "dir/../../foo", "", true},
@@ -248,6 +252,93 @@ func TestSanitizeBundleEntryName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExtractBundleToWorkdir(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	t.Run("extracts files into workdir", func(t *testing.T) {
+		workDir := t.TempDir()
+		bundlePath := createTestBundle(t, []bundleEntry{
+			{name: "nested/archive.age", data: []byte("archive-data")},
+			{name: "./manifest/backup.metadata", data: []byte("metadata-data")},
+			{name: "checksum/backup.sha256", data: []byte("checksum-data")},
+		})
+
+		staged, err := extractBundleToWorkdir(bundlePath, workDir)
+		if err != nil {
+			t.Fatalf("extractBundleToWorkdir error: %v", err)
+		}
+
+		if staged.ArchivePath != filepath.Join(workDir, "archive.age") {
+			t.Fatalf("ArchivePath = %q; want %q", staged.ArchivePath, filepath.Join(workDir, "archive.age"))
+		}
+		if staged.MetadataPath != filepath.Join(workDir, "backup.metadata") {
+			t.Fatalf("MetadataPath = %q; want %q", staged.MetadataPath, filepath.Join(workDir, "backup.metadata"))
+		}
+		if staged.ChecksumPath != filepath.Join(workDir, "backup.sha256") {
+			t.Fatalf("ChecksumPath = %q; want %q", staged.ChecksumPath, filepath.Join(workDir, "backup.sha256"))
+		}
+
+		if data, err := os.ReadFile(staged.ArchivePath); err != nil || string(data) != "archive-data" {
+			t.Fatalf("archive contents = %q, err=%v; want archive-data", string(data), err)
+		}
+		if data, err := os.ReadFile(staged.MetadataPath); err != nil || string(data) != "metadata-data" {
+			t.Fatalf("metadata contents = %q, err=%v; want metadata-data", string(data), err)
+		}
+		if data, err := os.ReadFile(staged.ChecksumPath); err != nil || string(data) != "checksum-data" {
+			t.Fatalf("checksum contents = %q, err=%v; want checksum-data", string(data), err)
+		}
+	})
+
+	t.Run("rejects traversal entry names", func(t *testing.T) {
+		workDir := t.TempDir()
+		bundlePath := createTestBundle(t, []bundleEntry{
+			{name: "..\\escape.metadata", data: []byte("evil")},
+		})
+
+		if _, err := extractBundleToWorkdir(bundlePath, workDir); err == nil {
+			t.Fatalf("expected error for traversal entry name")
+		}
+	})
+}
+
+type bundleEntry struct {
+	name string
+	data []byte
+}
+
+func createTestBundle(t *testing.T, entries []bundleEntry) string {
+	t.Helper()
+	dir := t.TempDir()
+	bundlePath := filepath.Join(dir, "bundle.tar")
+
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	defer f.Close()
+
+	tw := tar.NewWriter(f)
+	for _, entry := range entries {
+		hdr := &tar.Header{
+			Name: entry.name,
+			Mode: 0o640,
+			Size: int64(len(entry.data)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("write header %q: %v", entry.name, err)
+		}
+		if _, err := tw.Write(entry.data); err != nil {
+			t.Fatalf("write data for %q: %v", entry.name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	return bundlePath
 }
 
 func TestEnsureWritablePath(t *testing.T) {

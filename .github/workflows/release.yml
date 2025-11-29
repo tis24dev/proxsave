@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 0
 
       ########################################
-      # VALIDAZIONE TAG (Migliora il flusso ed evita errori)
+      # VALIDAZIONE TAG
       ########################################
       - name: Validate SemVer tag
         run: |
@@ -39,7 +39,7 @@ jobs:
           echo "✔ Tag '$TAG' is valid SemVer"
 
       ########################################
-      # SETUP GO TOOLCHAIN (coerente con il progetto)
+      # SETUP GO
       ########################################
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -70,6 +70,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
+          workdir: ${{ github.workspace }}
           args: release --clean --config .github/goreleaser.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
