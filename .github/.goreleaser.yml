@@ -46,15 +46,11 @@ archives:
       - LICENSE
       - README.md
 
-###############################################
-# BINARI STANDALONE —  
-###############################################
-blobs:
-  - id: standalone-binary
+  - id: binary
     builds:
       - proxmox-backup
+    format: binary
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    path: "{{ .Binary }}"
 
 ###############################################
 # CHECKSUM
