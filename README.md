@@ -15,7 +15,7 @@
 
 > **Complete guide for installing, configuring, and using proxmox-backup**
 >
-> Version: 0.9.0 | Last Updated: 2025-11-17
+> Version: 0.9.0 | Last Updated: 2025-11-29
 
 ---
 
@@ -86,7 +86,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/
 
 or: if you need a fully clean reinstall use: (preserves `env/` and `identity/`)
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" --new-install
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)" _ --new-install
 ```
 
 2. Run your first backup

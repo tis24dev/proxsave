@@ -3,13 +3,29 @@
 set -euo pipefail
 
 ###############################################
-# Optional argument: --new-install
+# Optional arguments: --new-install / --cli
 ###############################################
 INSTALL_FLAG="--install"   # default mode
+CLI_FLAG=""
 
-if [ "${1:-}" = "--new-install" ]; then
-  INSTALL_FLAG="--new-install"
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --new-install)
+      INSTALL_FLAG="--new-install"
+      ;;
+    --install)
+      INSTALL_FLAG="--install"
+      ;;
+    --cli)
+      CLI_FLAG="--cli"
+      ;;
+    *)
+      echo "❌ Unknown argument: $1"
+      exit 1
+      ;;
+  esac
+  shift
+done
 
 ###############################################
 # 1) Ensure running as root
@@ -151,8 +167,13 @@ chmod +x "${TARGET_BIN}"
 ###############################################
 cd "${TARGET_DIR}"
 
-echo "[+] Running: ${TARGET_BIN} ${INSTALL_FLAG}"
-"${TARGET_BIN}" ${INSTALL_FLAG}
+BINARY_ARGS=("${INSTALL_FLAG}")
+if [[ -n "${CLI_FLAG}" ]]; then
+  BINARY_ARGS+=("${CLI_FLAG}")
+fi
+
+echo "[+] Running: ${TARGET_BIN} ${BINARY_ARGS[*]}"
+"${TARGET_BIN}" "${BINARY_ARGS[@]}"
 
 ###############################################
 # 12) Cleanup
