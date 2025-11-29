@@ -72,10 +72,12 @@ fi
 
 echo "📦 Latest tag: ${LATEST_TAG}"
 
+VERSION="${LATEST_TAG#v}"
+
 ###############################################
 # 5) Build correct filename (ARCHIVE)
 ###############################################
-FILENAME="proxmox-backup_${LATEST_TAG}_${OS}_${ARCH}.tar.gz"
+FILENAME="proxmox-backup_${VERSION}_${OS}_${ARCH}.tar.gz"
 
 BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${FILENAME}"
 CHECKSUM_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/SHA256SUMS"
