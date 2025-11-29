@@ -439,11 +439,14 @@ func cleanupLegacyBashSymlinks(baseDir string, bootstrap *logging.BootstrapLogge
 		addLegacyDir("/opt/proxmox-backup")
 	}
 
+	searchDirs := []string{"/usr/local/bin", "/usr/bin"}
+
 	if len(legacyTargets) == 0 {
+		bootstrap.Info("No legacy bash-based proxmox-backup scripts detected under %s or /opt/proxmox-backup", baseDir)
 		return
 	}
 
-	searchDirs := []string{"/usr/local/bin", "/usr/bin"}
+	removed := 0
 
 	for _, dir := range searchDirs {
 		entries, err := os.ReadDir(dir)
@@ -477,8 +480,112 @@ func cleanupLegacyBashSymlinks(baseDir string, bootstrap *logging.BootstrapLogge
 				bootstrap.Warning("WARNING: Failed to remove legacy symlink %s -> %s: %v", path, resolved, err)
 			} else {
 				bootstrap.Info("Removed legacy bash symlink: %s -> %s", path, resolved)
+				removed++
 			}
 		}
+	}
+
+	if removed == 0 {
+		bootstrap.Info("Legacy bash-based proxmox-backup symlink cleanup completed: no matching symlinks found in /usr/local/bin or /usr/bin")
+	} else {
+		bootstrap.Info("Legacy bash-based proxmox-backup symlink cleanup completed: removed %d symlink(s)", removed)
+	}
+}
+
+// cleanupGlobalProxmoxBackupEntrypoints performs a best-effort cleanup of any existing
+// proxmox-backup entrypoints on the system PATH, as well as the common global
+// locations /usr/local/bin and /usr/bin. This is intentionally more aggressive
+// than cleanupLegacyBashSymlinks and is designed to mirror what an operator
+// would manually inspect with:
+//
+//   type -a proxmox-backup
+//   which proxmox-backup
+//   ls -l /usr/local/bin/proxmox-backup /usr/bin/proxmox-backup
+//
+// Any discovered filesystem entries named "proxmox-backup" that are not the
+// current Go binary are removed so that the installer can recreate a clean
+// symlink pointing at the Go executable.
+func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.BootstrapLogger) {
+	execPath = strings.TrimSpace(execPath)
+
+	pathEnv := os.Getenv("PATH")
+	if strings.TrimSpace(pathEnv) == "" {
+		bootstrap.Info("PATH is empty; skipping global proxmox-backup entrypoint scan")
+		return
+	}
+
+	bootstrap.Info("Scanning for existing proxmox-backup commands on PATH before installation")
+
+	candidates := make([]string, 0, 16)
+	for _, dir := range filepath.SplitList(pathEnv) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		candidates = append(candidates, filepath.Join(dir, "proxmox-backup"))
+	}
+
+	// Ensure the common global paths are always considered, even if not in PATH.
+	candidates = append(candidates,
+		"/usr/local/bin/proxmox-backup",
+		"/usr/bin/proxmox-backup",
+	)
+
+	seen := map[string]struct{}{}
+	removed := 0
+	kept := 0
+
+	for _, cand := range candidates {
+		cand = filepath.Clean(strings.TrimSpace(cand))
+		if cand == "" {
+			continue
+		}
+		if _, ok := seen[cand]; ok {
+			continue
+		}
+		seen[cand] = struct{}{}
+
+		info, err := os.Lstat(cand)
+		if err != nil {
+			continue
+		}
+
+		// If this entry *is* the current Go executable, keep it.
+		if execPath != "" {
+			if cand == execPath {
+				bootstrap.Info("Keeping proxmox-backup entrypoint (current Go binary): %s", cand)
+				kept++
+				continue
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				if target, err := os.Readlink(cand); err == nil {
+					if !filepath.IsAbs(target) {
+						target = filepath.Join(filepath.Dir(cand), target)
+					}
+					if resolved, err := filepath.EvalSymlinks(target); err == nil && resolved == execPath {
+						bootstrap.Info("Keeping proxmox-backup symlink pointing to Go binary: %s -> %s", cand, resolved)
+						kept++
+						continue
+					}
+				}
+			}
+		}
+
+		// At this point cand is an existing proxmox-backup entrypoint that does
+		// not resolve to the current Go binary – remove it so that the installer
+		// can recreate a clean symlink.
+		if err := os.Remove(cand); err != nil {
+			logBootstrapWarning(bootstrap, "WARNING: Failed to remove existing proxmox-backup entrypoint %s: %v", cand, err)
+			continue
+		}
+		bootstrap.Info("Removed existing proxmox-backup entrypoint: %s", cand)
+		removed++
+	}
+
+	if removed == 0 && kept == 0 {
+		bootstrap.Info("No existing proxmox-backup entrypoints found on PATH or in /usr/local/bin,/usr/bin")
+	} else {
+		bootstrap.Info("Global proxmox-backup entrypoint scan: removed=%d kept=%d", removed, kept)
 	}
 }
 
@@ -495,6 +602,7 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 			logBootstrapWarning(bootstrap, "WARNING: Failed to replace %s: remove failed: %v", dest, rmErr)
 			return
 		}
+		logBootstrapInfo(bootstrap, "Removed existing proxmox-backup entrypoint at %s", dest)
 	} else if !os.IsNotExist(err) {
 		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect %s: %v", dest, err)
 		return
@@ -504,6 +612,7 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 		logBootstrapWarning(bootstrap, "WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
 		return
 	}
+	logBootstrapInfo(bootstrap, "Created proxmox-backup symlink: %s -> %s", dest, execPath)
 }
 
 func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule string) {
@@ -623,6 +732,14 @@ func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args
 		return
 	}
 	logging.Warning(format, args...)
+}
+
+func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+	if bootstrap != nil {
+		bootstrap.Info(format, args...)
+		return
+	}
+	logging.Info(format, args...)
 }
 
 func fetchBackupList(ctx context.Context, backend storage.Storage) []*types.BackupMetadata {

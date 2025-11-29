@@ -34,6 +34,18 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 	_ = os.Setenv("BASE_DIR", baseDir)
 
+	// Before starting the interactive wizard, perform a best-effort cleanup of any
+	// existing proxmox-backup entrypoints so that the installer can recreate a
+	// clean symlink for the Go binary.
+	execInfo := getExecInfo()
+	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
+
+	if bootstrap != nil {
+		bootstrap.Info("Starting --install in CLI mode")
+		bootstrap.Info("  Configuration path: %s", configPath)
+		bootstrap.Info("  Base directory: %s", baseDir)
+	}
+
 	var telegramCode string
 	var installErr error
 
@@ -133,6 +145,9 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	if !skipConfigWizard && enableEncryption {
+		if bootstrap != nil {
+			bootstrap.Info("Running initial encryption setup (AGE recipients)")
+		}
 		if err := runInitialEncryptionSetup(ctx, configPath); err != nil {
 			installErr = err
 			return installErr
@@ -140,10 +155,15 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	// Clean up legacy bash-based symlinks that point to the old installer scripts.
+	if bootstrap != nil {
+		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")
+	}
 	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 
 	// Ensure a proxmox-backup entry points to this Go binary, if not already customized.
-	execInfo := getExecInfo()
+	if bootstrap != nil {
+		bootstrap.Info("Ensuring 'proxmox-backup' command points to the Go binary")
+	}
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
 	// Migrate legacy cron entries pointing to the bash script to the Go binary.

@@ -31,6 +31,18 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 	_ = os.Setenv("BASE_DIR", baseDir)
 
+	// Before starting the TUI wizard, perform a best-effort cleanup of any existing
+	// proxmox-backup entrypoints so that the installer can recreate a clean
+	// symlink for the Go binary.
+	execInfo := getExecInfo()
+	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
+
+	if bootstrap != nil {
+		bootstrap.Info("Starting --install in TUI mode")
+		bootstrap.Info("  Configuration path: %s", configPath)
+		bootstrap.Info("  Base directory: %s", baseDir)
+	}
+
 	var telegramCode string
 	var installErr error
 
@@ -117,6 +129,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	// Run encryption setup if enabled (only if wizard was run)
 	if !skipConfigWizard && wizardData != nil && wizardData.EnableEncryption {
+		if bootstrap != nil {
+			bootstrap.Info("Running initial encryption setup (AGE recipients)")
+		}
 		recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
 		ageData, err := wizard.RunAgeSetupWizard(ctx, recipientPath, configPath, buildSig)
 		if err != nil {
@@ -163,10 +178,15 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 
 	// Clean up legacy bash-based symlinks
+	if bootstrap != nil {
+		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")
+	}
 	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 
 	// Ensure a proxmox-backup entry points to this Go binary
-	execInfo := getExecInfo()
+	if bootstrap != nil {
+		bootstrap.Info("Ensuring 'proxmox-backup' command points to the Go binary")
+	}
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
 	// Migrate legacy cron entries
