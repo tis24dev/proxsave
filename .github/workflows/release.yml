@@ -33,7 +33,7 @@ jobs:
           TAG="${GITHUB_REF#refs/tags/}"
           echo "Current tag: $TAG"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z\.-]+)?$ ]]; then
-            echo "❌ Tag '$TAG' is not a valid SemVer (expected vMAJOR.MINOR.PATCH or pre-release)"
+            echo "❌ Tag '$TAG' is not a valid SemVer (expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc1/beta1)"
             exit 1
           fi
           echo "✔ Tag '$TAG' is valid SemVer"
@@ -56,7 +56,7 @@ jobs:
         run: go mod verify
 
       ########################################
-      # INSTALL SYFT (per SBOM)
+      # INSTALL SYFT (per SBOM CycloneDX via GoReleaser)
       ########################################
       - name: Install Syft (for SBOM generation)
         uses: anchore/sbom-action/download-syft@v0
@@ -64,7 +64,7 @@ jobs:
           syft-version: v1.19.0
 
       ########################################
-      # GORELEASER (FIXATO con workdir)
+      # GORELEASER
       ########################################
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
