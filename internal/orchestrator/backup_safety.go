@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 var safetyFS FS = osFS{}
@@ -58,7 +58,7 @@ type SafetyBackupResult struct {
 // CreateSafetyBackup creates a backup of files that will be overwritten
 func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (*SafetyBackupResult, error) {
 	timestamp := safetyNow().Format("20060102_150405")
-	baseDir := filepath.Join("/tmp", "proxmox-backup")
+	baseDir := filepath.Join("/tmp", "proxsave")
 	if err := safetyFS.MkdirAll(baseDir, 0755); err != nil {
 		return nil, fmt.Errorf("create safety backup directory: %w", err)
 	}

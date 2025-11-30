@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestExtractTarEntry_AllowsRootDestinationPaths(t *testing.T) {
@@ -19,7 +19,7 @@ func TestExtractTarEntry_AllowsRootDestinationPaths(t *testing.T) {
 
 	// Simulate a restore to system root ("/") but write under /tmp
 	destRoot := string(os.PathSeparator)
-	relPath := filepath.Join("tmp", "proxmox-backup-test", t.Name())
+	relPath := filepath.Join("tmp", "proxsave-test", t.Name())
 
 	header := &tar.Header{
 		Name:     relPath,

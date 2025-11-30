@@ -36,7 +36,7 @@ The legacy Bash version is available in two locations:
 ### Source Code
 
 - **Branch**: `old` branch of this repository
-- **URL**: https://github.com/tis24dev/proxmox-backup/tree/old
+- **URL**: https://github.com/tis24dev/proxsave/tree/old
 - **Tag**: `v0.7.4-bash` (last stable Bash release)
 
 ### Installation Script
@@ -81,7 +81,7 @@ cd /opt
 **Step 2: Download the repository (stable release)**
 
 ```bash
-wget https://github.com/tis24dev/proxmox-backup/archive/refs/tags/v0.7.4-bash.tar.gz
+wget https://github.com/tis24dev/proxsave/archive/refs/tags/v0.7.4-bash.tar.gz
 ```
 
 **Step 3: Create the script directory**
@@ -299,7 +299,7 @@ rm -rf /opt/proxmox-backup/
 A: Yes! Follow the [Migration Guide](MIGRATION_GUIDE.md). The Go binary can be built in the same directory.
 
 **Q: Where can I find the Bash version source code?**
-A: GitHub branch `old`: https://github.com/tis24dev/proxmox-backup/tree/old
+A: GitHub branch `old`: https://github.com/tis24dev/proxsave/tree/old
 
 **Q: Will my configuration work in Go version?**
 A: Most variables (~70) are identical. Some (~16) were renamed. Use the migration tool to convert automatically: `./build/proxmox-backup --env-migration`

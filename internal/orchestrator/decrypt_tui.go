@@ -12,11 +12,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/tis24dev/proxmox-backup/internal/backup"
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/tui"
-	"github.com/tis24dev/proxmox-backup/internal/tui/components"
+	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui/components"
 )
 
 type decryptSelection struct {
@@ -632,7 +632,7 @@ func preparePlainBundleTUI(ctx context.Context, cand *decryptCandidate, version 
 		return nil, fmt.Errorf("invalid backup candidate")
 	}
 
-	tempRoot := filepath.Join("/tmp", "proxmox-backup")
+	tempRoot := filepath.Join("/tmp", "proxsave")
 	if err := restoreFS.MkdirAll(tempRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create temp root: %w", err)
 	}
@@ -715,12 +715,12 @@ func preparePlainBundleTUI(ctx context.Context, cand *decryptCandidate, version 
 func decryptArchiveWithTUIPrompts(ctx context.Context, encryptedPath, outputPath, displayName, configPath, buildSig string, logger *logging.Logger) error {
 	var promptError string
 	for {
-		identity, err := promptDecryptIdentity(displayName, configPath, buildSig, promptError)
+		identities, err := promptDecryptIdentity(displayName, configPath, buildSig, promptError)
 		if err != nil {
 			return err
 		}
 
-		if err := decryptWithIdentity(encryptedPath, outputPath, identity); err != nil {
+		if err := decryptWithIdentity(encryptedPath, outputPath, identities...); err != nil {
 			var noMatch *age.NoIdentityMatchError
 			if errors.Is(err, age.ErrIncorrectIdentity) || errors.As(err, &noMatch) {
 				promptError = "Provided key or passphrase does not match this archive."
@@ -733,10 +733,10 @@ func decryptArchiveWithTUIPrompts(ctx context.Context, encryptedPath, outputPath
 	}
 }
 
-func promptDecryptIdentity(displayName, configPath, buildSig, errorMessage string) (age.Identity, error) {
+func promptDecryptIdentity(displayName, configPath, buildSig, errorMessage string) ([]age.Identity, error) {
 	app := tui.NewApp()
 	var (
-		chosenIdentity age.Identity
+		chosenIdentity []age.Identity
 		cancelled      bool
 	)
 
@@ -791,7 +791,7 @@ func promptDecryptIdentity(displayName, configPath, buildSig, errorMessage strin
 	if cancelled {
 		return nil, ErrDecryptAborted
 	}
-	if chosenIdentity == nil {
+	if len(chosenIdentity) == 0 {
 		return nil, fmt.Errorf("missing identity")
 	}
 	return chosenIdentity, nil
@@ -841,7 +841,7 @@ func enableFormNavigation(form *components.Form, dropdownOpen *bool) {
 
 func buildWizardPage(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
 	welcomeText := tview.NewTextView().
-		SetText(fmt.Sprintf("PROXMOX SYSTEM BACKUP - By TIS24DEV\n%s\n", decryptWizardSubtitle)).
+		SetText(fmt.Sprintf("ProxSave - By TIS24DEV\n%s\n", decryptWizardSubtitle)).
 		SetTextColor(tui.ProxmoxLight).
 		SetDynamicColors(true)
 	welcomeText.SetBorder(false)

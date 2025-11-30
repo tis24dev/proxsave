@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestBackupFileAndDirectory(t *testing.T) {

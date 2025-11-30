@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/notify"
+	"github.com/tis24dev/proxsave/internal/notify"
 )
 
 func TestParseLogCounts(t *testing.T) {

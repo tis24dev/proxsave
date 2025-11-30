@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestStringFlag(t *testing.T) {
@@ -179,9 +179,9 @@ func TestPrintHelp(t *testing.T) {
 	flag.CommandLine.String("config", "", "Path to configuration file")
 	flag.CommandLine.Bool("dry-run", false, "Perform a dry run")
 
-	printHelp(&buf, "proxmox-backup")
+	printHelp(&buf, "proxsave")
 	out := buf.String()
-	if !strings.Contains(out, "Usage: proxmox-backup [options]") {
+	if !strings.Contains(out, "Usage: proxsave [options]") {
 		t.Fatalf("help missing usage line: %q", out)
 	}
 	if !strings.Contains(out, "-config") || !strings.Contains(out, "-dry-run") {
@@ -193,7 +193,7 @@ func TestPrintVersion(t *testing.T) {
 	var buf bytes.Buffer
 	printVersion(&buf)
 	out := buf.String()
-	if !strings.Contains(out, "Proxmox Backup Manager (Go Edition)") {
+	if !strings.Contains(out, "ProxSave") {
 		t.Fatalf("version output missing header: %q", out)
 	}
 	if !strings.Contains(out, "Version: 0.2.0-dev") || !strings.Contains(out, "Author: tis24dev") {

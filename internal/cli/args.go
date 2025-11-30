@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 const (
@@ -160,7 +160,7 @@ func ShowVersion() {
 
 func printHelp(w io.Writer, argv0 string) {
 	fmt.Fprintf(w, "Usage: %s [options]\n\n", argv0)
-	fmt.Fprintln(w, "Proxmox Backup Manager - Go Edition")
+	fmt.Fprintln(w, "ProxSave")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Options:")
 	flag.PrintDefaults()
@@ -172,7 +172,7 @@ func printHelp(w io.Writer, argv0 string) {
 }
 
 func printVersion(w io.Writer) {
-	fmt.Fprintln(w, "Proxmox Backup Manager (Go Edition)")
+	fmt.Fprintln(w, "ProxSave")
 	fmt.Fprintln(w, "Version: 0.2.0-dev")
 	fmt.Fprintln(w, "Build: development")
 	fmt.Fprintln(w, "Author: tis24dev")

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/environment"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/environment"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func newSecurityTestLogger() *logging.Logger {
@@ -903,7 +903,7 @@ func TestCheckSuspiciousProcesses(t *testing.T) {
 func TestRunSecurityChecks(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
-	execPath := filepath.Join(tmpDir, "proxmox-backup")
+	execPath := filepath.Join(tmpDir, "proxsave")
 
 	// Create test config file
 	if err := os.WriteFile(configPath, []byte("test: config"), 0600); err != nil {
@@ -932,38 +932,38 @@ func TestRunSecurityChecks(t *testing.T) {
 		{
 			name: "security checks enabled with no issues",
 			config: &config.Config{
-				SecurityCheckEnabled:      true,
-				ContinueOnSecurityIssues:  true,
-				CheckNetworkSecurity:      false,
-				AutoFixPermissions:        false,
-				AutoUpdateHashes:          false,
-				CheckFirewall:             false,
-				CheckOpenPorts:            false,
-				SuspiciousProcesses:       []string{},
-				SafeBracketProcesses:      []string{},
-				SafeKernelProcesses:       []string{},
-				SuspiciousPorts:           []int{},
-				PortWhitelist:             []string{},
-				BaseDir:                   tmpDir,
+				SecurityCheckEnabled:     true,
+				ContinueOnSecurityIssues: true,
+				CheckNetworkSecurity:     false,
+				AutoFixPermissions:       false,
+				AutoUpdateHashes:         false,
+				CheckFirewall:            false,
+				CheckOpenPorts:           false,
+				SuspiciousProcesses:      []string{},
+				SafeBracketProcesses:     []string{},
+				SafeKernelProcesses:      []string{},
+				SuspiciousPorts:          []int{},
+				PortWhitelist:            []string{},
+				BaseDir:                  tmpDir,
 			},
 			expectError: false,
 		},
 		{
 			name: "security checks with network checks",
 			config: &config.Config{
-				SecurityCheckEnabled:      true,
-				ContinueOnSecurityIssues:  true,
-				CheckNetworkSecurity:      true,
-				CheckFirewall:             true,
-				CheckOpenPorts:            true,
-				AutoFixPermissions:        false,
-				AutoUpdateHashes:          false,
-				SuspiciousProcesses:       []string{},
-				SafeBracketProcesses:      []string{},
-				SafeKernelProcesses:       []string{},
-				SuspiciousPorts:           []int{22, 80},
-				PortWhitelist:             []string{},
-				BaseDir:                   tmpDir,
+				SecurityCheckEnabled:     true,
+				ContinueOnSecurityIssues: true,
+				CheckNetworkSecurity:     true,
+				CheckFirewall:            true,
+				CheckOpenPorts:           true,
+				AutoFixPermissions:       false,
+				AutoUpdateHashes:         false,
+				SuspiciousProcesses:      []string{},
+				SafeBracketProcesses:     []string{},
+				SafeKernelProcesses:      []string{},
+				SuspiciousPorts:          []int{22, 80},
+				PortWhitelist:            []string{},
+				BaseDir:                  tmpDir,
 			},
 			expectError: false,
 		},
@@ -999,7 +999,7 @@ func TestRunSecurityChecks(t *testing.T) {
 func TestRunWithSecurityErrors(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
-	execPath := filepath.Join(tmpDir, "proxmox-backup")
+	execPath := filepath.Join(tmpDir, "proxsave")
 
 	// Create config with restrictive permissions to trigger error
 	if err := os.WriteFile(configPath, []byte("test: config"), 0644); err != nil {

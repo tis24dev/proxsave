@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 func TestAnalyzeBackupCategories_OpenError(t *testing.T) {

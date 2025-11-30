@@ -65,7 +65,7 @@ Questo è il metodo più semplice per verificare un singolo binario scaricato.
 
 ```bash
 # Scarica il binario per la tua piattaforma
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/proxmox-backup-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 
 # Verifica l'attestazione
 gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
@@ -89,8 +89,8 @@ Verifica tutti i binari scaricati in una directory.
 ```bash
 # Scarica tutti i binari che ti servono
 cd ~/downloads
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/proxmox-backup-linux-amd64
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/proxmox-backup-darwin-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-darwin-amd64
 
 # Verifica tutti insieme
 gh attestation verify proxmox-backup-* --repo tis24dev/proxmox-backup
@@ -133,7 +133,7 @@ gh attestation verify proxmox-backup-linux-amd64 \
           "externalParameters": {
             "workflow": {
               "ref": "refs/tags/v0.9.0",
-              "repository": "https://github.com/tis24dev/proxmox-backup"
+              "repository": "https://github.com/tis24dev/proxsave"
             }
           }
         }
@@ -169,7 +169,7 @@ set -e
 
 # 1. Scarica il binario
 echo "Downloading binary..."
-wget -q https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/proxmox-backup-linux-amd64
+wget -q https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 
 # 2. Verifica l'attestazione
 echo "Verifying attestation..."
@@ -199,7 +199,7 @@ set -e
 
 VERSION="v0.9.0"
 BINARY="proxmox-backup-darwin-$(uname -m)"
-URL="https://github.com/tis24dev/proxmox-backup/releases/download/${VERSION}/${BINARY}"
+URL="https://github.com/tis24dev/proxsave/releases/download/${VERSION}/${BINARY}"
 
 # Scarica
 echo "Downloading ${BINARY}..."
@@ -225,7 +225,7 @@ echo "Installed successfully!"
 # Download binary
 $version = "v0.9.0"
 $binary = "proxmox-backup-windows-amd64.exe"
-$url = "https://github.com/tis24dev/proxmox-backup/releases/download/$version/$binary"
+$url = "https://github.com/tis24dev/proxsave/releases/download/$version/$binary"
 
 Write-Host "Downloading $binary..." -ForegroundColor Cyan
 Invoke-WebRequest -Uri $url -OutFile "proxmox-backup.exe"
@@ -263,7 +263,7 @@ Quando esegui `gh attestation verify`, vengono effettuati i seguenti controlli:
 
 | Verifica | Descrizione |
 |----------|-------------|
-| ✓ **Repository sorgente** | Conferma che il build proviene da `github.com/tis24dev/proxmox-backup` |
+| ✓ **Repository sorgente** | Conferma che il build proviene da `github.com/tis24dev/proxsave` |
 | ✓ **Commit SHA** | Verifica il commit esatto usato per il build |
 | ✓ **Workflow** | Controlla che sia stato usato `.github/workflows/release.yml` |
 | ✓ **Ambiente di build** | Conferma che il build è avvenuto su GitHub-hosted runner |
@@ -300,7 +300,7 @@ gh release view v0.9.0 --repo tis24dev/proxmox-backup
 ```bash
 # Riscaricare il binario
 rm proxmox-backup-linux-amd64
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/proxmox-backup-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 
 # Ritentare la verifica
 gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
@@ -324,10 +324,10 @@ ls -lh proxmox-backup-linux-amd64
 
 # Riscaricare completamente
 rm proxmox-backup-linux-amd64
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/proxmox-backup-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 
 # Verifica checksum manuale (opzionale)
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/SHA256SUMS
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS
 sha256sum -c SHA256SUMS
 ```
 
@@ -426,16 +426,16 @@ Se hai script che usano GPG, ecco come migrarli:
 
 **Prima (GPG)**:
 ```bash
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/proxmox-backup-linux-amd64
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/SHA256SUMS
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.0/SHA256SUMS.asc
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS.asc
 gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum -c SHA256SUMS
 ```
 
 **Dopo (Attestazioni)**:
 ```bash
-wget https://github.com/tis24dev/proxmox-backup/releases/download/v0.9.1/proxmox-backup-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.1/proxmox-backup-linux-amd64
 gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
 ```
 
@@ -455,6 +455,6 @@ Molto più semplice! 🎉
 Se hai problemi con la verifica delle attestazioni:
 1. Controlla questa documentazione per troubleshooting
 2. Verifica di avere l'ultima versione di `gh` CLI
-3. Apri una issue su https://github.com/tis24dev/proxmox-backup/issues
+3. Apri una issue su https://github.com/tis24dev/proxsave/issues
 
 **Note di sicurezza**: Se sospetti che un'attestazione sia stata falsificata o compromessa, **NON usare il binario** e segnala immediatamente aprendo una security advisory privata su GitHub.

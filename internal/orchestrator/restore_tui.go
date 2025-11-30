@@ -12,10 +12,10 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/tui"
-	"github.com/tis24dev/proxmox-backup/internal/tui/components"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui/components"
 )
 
 type restoreSelection struct {
@@ -1187,7 +1187,7 @@ func confirmOverwriteTUI(configPath, buildSig string) (bool, error) {
 
 func buildRestoreWizardPage(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
 	welcomeText := tview.NewTextView().
-		SetText(fmt.Sprintf("PROXMOX SYSTEM BACKUP - By TIS24DEV\n%s\n", restoreWizardSubtitle)).
+		SetText(fmt.Sprintf("ProxSave - By TIS24DEV\n%s\n", restoreWizardSubtitle)).
 		SetTextColor(tui.ProxmoxLight).
 		SetDynamicColors(true)
 	welcomeText.SetBorder(false)

@@ -17,7 +17,7 @@ import (
 
 	"filippo.io/age"
 	"filippo.io/age/agessh"
-	"github.com/tis24dev/proxmox-backup/pkg/bech32"
+	"github.com/tis24dev/proxsave/pkg/bech32"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/scrypt"
 	"golang.org/x/term"
@@ -26,11 +26,13 @@ import (
 var ErrAgeRecipientSetupAborted = errors.New("encryption setup aborted by user")
 
 const (
-	passphraseRecipientSalt = "proxmox-backup-go/age-passphrase/v1"
-	passphraseScryptN       = 1 << 15
-	passphraseScryptR       = 8
-	passphraseScryptP       = 1
-	minPassphraseLength     = 12
+	// Note: dual salt for passphrase-derived keys — keep legacy for decrypting older archives.
+	passphraseRecipientSalt       = "proxsave/age-passphrase/v1"
+	legacyPassphraseRecipientSalt = "proxmox-backup-go/age-passphrase/v1"
+	passphraseScryptN             = 1 << 15
+	passphraseScryptR             = 8
+	passphraseScryptP             = 1
+	minPassphraseLength           = 12
 )
 
 var weakPassphraseList = []string{
@@ -538,7 +540,11 @@ func DeriveDeterministicRecipientFromPassphrase(passphrase string) (string, erro
 }
 
 func deriveDeterministicRecipientFromPassphrase(passphrase string) (string, error) {
-	key, err := deriveCurve25519ScalarFromPassphrase(passphrase)
+	return deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, passphraseRecipientSalt)
+}
+
+func deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, salt string) (string, error) {
+	key, err := deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, salt)
 	if err != nil {
 		return "", err
 	}
@@ -563,7 +569,11 @@ func clampCurve25519Scalar(k []byte) {
 }
 
 func deriveCurve25519ScalarFromPassphrase(passphrase string) ([]byte, error) {
-	key, err := scrypt.Key([]byte(passphrase), []byte(passphraseRecipientSalt), passphraseScryptN, passphraseScryptR, passphraseScryptP, curve25519.ScalarSize)
+	return deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, passphraseRecipientSalt)
+}
+
+func deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, salt string) ([]byte, error) {
+	key, err := scrypt.Key([]byte(passphrase), []byte(salt), passphraseScryptN, passphraseScryptR, passphraseScryptP, curve25519.ScalarSize)
 	if err != nil {
 		return nil, fmt.Errorf("derive key from passphrase: %w", err)
 	}
@@ -572,7 +582,11 @@ func deriveCurve25519ScalarFromPassphrase(passphrase string) ([]byte, error) {
 }
 
 func deriveDeterministicIdentityFromPassphrase(passphrase string) (age.Identity, error) {
-	key, err := deriveCurve25519ScalarFromPassphrase(passphrase)
+	return deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, passphraseRecipientSalt)
+}
+
+func deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, salt string) (age.Identity, error) {
+	key, err := deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -582,6 +596,29 @@ func deriveDeterministicIdentityFromPassphrase(passphrase string) (age.Identity,
 	}
 	secret = strings.ToUpper(secret)
 	return age.ParseX25519Identity(secret)
+}
+
+func deriveDeterministicIdentitiesFromPassphrase(passphrase string) ([]age.Identity, error) {
+	salts := []string{passphraseRecipientSalt, legacyPassphraseRecipientSalt}
+	seen := make(map[string]struct{}, len(salts))
+	ids := make([]age.Identity, 0, len(salts))
+
+	for _, salt := range salts {
+		id, err := deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, salt)
+		if err != nil {
+			return nil, err
+		}
+		rec, err := deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, salt)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[rec]; ok {
+			continue
+		}
+		seen[rec] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func validatePassphraseStrength(pass []byte) error {

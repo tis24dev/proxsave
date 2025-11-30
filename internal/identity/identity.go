@@ -15,13 +15,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 const (
 	identityDirName       = "identity"
 	identityFileName      = ".server_identity"
-	fallbackIdentityDir   = "/tmp/proxmox-backup"
+	fallbackIdentityDir   = "/tmp/proxsave"
 	fallbackIdentityPath  = fallbackIdentityDir + "/.proxmox_backup_identity"
 	maxProcVersionBytes   = 100
 	maxMachineIDBytes     = 32
@@ -195,7 +195,7 @@ func encodeProtectedServerID(serverID, primaryMAC string) (string, error) {
 	encoded := base64.StdEncoding.EncodeToString([]byte(finalData))
 
 	var builder strings.Builder
-	builder.WriteString("# Proxmox Backup System Configuration\n")
+	builder.WriteString("# ProxSave Backup System Configuration\n")
 	builder.WriteString(fmt.Sprintf("# Generated: %s\n", time.Now().Format(time.RFC3339)))
 	builder.WriteString("# DO NOT MODIFY THIS FILE MANUALLY\n")
 	builder.WriteString(fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", encoded))

@@ -20,7 +20,7 @@ func TestSetEnvValueUpdateAndAppend(t *testing.T) {
 func TestApplyInstallDataRespectsBaseTemplate(t *testing.T) {
 	baseTemplate := "BASE_DIR=\nMARKER=1\nTELEGRAM_ENABLED=false\nEMAIL_ENABLED=false\nENCRYPT_ARCHIVE=false\n"
 	data := &InstallWizardData{
-		BaseDir:                "/opt/proxmox-backup",
+		BaseDir:                "/opt/proxsave",
 		EnableSecondaryStorage: true,
 		SecondaryPath:          "/mnt/sec",
 		SecondaryLogPath:       "/mnt/sec/logs",

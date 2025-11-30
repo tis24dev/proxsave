@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // RecreateStorageDirectories parses storage.cfg and recreates storage directories (PVE)

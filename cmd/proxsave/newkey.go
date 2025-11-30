@@ -10,11 +10,11 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/orchestrator"
-	"github.com/tis24dev/proxmox-backup/internal/tui/wizard"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/tui/wizard"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // runNewKey performs a standalone AGE recipient setup without running a backup.
@@ -28,7 +28,11 @@ func runNewKey(ctx context.Context, configPath string, bootstrap *logging.Bootst
 	// Derive BASE_DIR from the configuration path
 	baseDir := filepath.Dir(filepath.Dir(configPath))
 	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxmox-backup"
+		if _, err := os.Stat("/opt/proxsave"); err == nil {
+			baseDir = "/opt/proxsave"
+		} else {
+			baseDir = "/opt/proxmox-backup"
+		}
 	}
 	_ = os.Setenv("BASE_DIR", baseDir)
 

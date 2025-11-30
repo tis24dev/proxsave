@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // buildDiscordPayload builds a Discord-formatted webhook payload with embeds

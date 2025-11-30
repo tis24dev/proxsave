@@ -6,7 +6,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // FilesystemType represents the detected filesystem type

@@ -58,7 +58,7 @@ age --version
 
 ```bash
 # Clone from GitHub
-git clone https://github.com/tis24dev/proxmox-backup.git
+git clone https://github.com/tis24dev/proxsave.git
 cd proxmox-backup
 
 # Install dependencies
@@ -451,7 +451,7 @@ We welcome contributions! Here's how you can help:
 # Fork on GitHub, then:
 git clone https://github.com/YOUR_USERNAME/proxmox-backup.git
 cd proxmox-backup
-git remote add upstream https://github.com/tis24dev/proxmox-backup.git
+git remote add upstream https://github.com/tis24dev/proxsave.git
 ```
 
 **2. Create feature branch**:
@@ -750,8 +750,8 @@ This project is licensed under the **MIT License** - see the [LICENSE](../LICENS
 
 ## Contact & Support
 
-- **GitHub Issues**: https://github.com/tis24dev/proxmox-backup/issues
-- **Pull Requests**: https://github.com/tis24dev/proxmox-backup/pulls
+- **GitHub Issues**: https://github.com/tis24dev/proxsave/issues
+- **Pull Requests**: https://github.com/tis24dev/proxsave/pulls
 - **Discussions**: Use GitHub Discussions for questions and ideas
 
 **For security vulnerabilities**: Please email privately instead of opening a public issue.

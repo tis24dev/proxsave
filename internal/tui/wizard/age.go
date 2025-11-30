@@ -11,8 +11,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/tis24dev/proxmox-backup/internal/tui"
-	"github.com/tis24dev/proxmox-backup/internal/tui/components"
+	"github.com/tis24dev/proxsave/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui/components"
 )
 
 // AgeSetupData holds the collected AGE encryption setup data
@@ -35,7 +35,7 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 	overwrite := false
 
 	welcomeText := tview.NewTextView().
-		SetText("PROXMOX SYSTEM BACKUP - By TIS24DEV\nAGE Encryption Setup\n\n" +
+		SetText("ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n" +
 			"Configure encryption for your backups using the AGE encryption tool.\n" +
 			"Choose how you want to set up your encryption key.\n").
 		SetTextColor(tui.ProxmoxLight).
@@ -121,7 +121,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 
 	// Welcome text
 	welcomeText := tview.NewTextView().
-		SetText("PROXMOX SYSTEM BACKUP - By TIS24DEV\nAGE Encryption Setup\n\n" +
+		SetText("ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n" +
 			"Configure encryption for your backups using the AGE encryption tool.\n" +
 			"Choose how you want to set up your encryption key.\n").
 		SetTextColor(tui.ProxmoxLight).

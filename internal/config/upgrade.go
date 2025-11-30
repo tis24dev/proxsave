@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/pkg/utils"
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 // UpgradeResult describes the outcome of a configuration upgrade.

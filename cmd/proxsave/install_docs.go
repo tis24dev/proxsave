@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	rootdocs "github.com/tis24dev/proxmox-backup"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	rootdocs "github.com/tis24dev/proxsave"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // installSupportDocs writes embedded documentation files (README, mapping, etc.)

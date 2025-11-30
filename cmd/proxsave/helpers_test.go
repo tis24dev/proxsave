@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
+	"github.com/tis24dev/proxsave/internal/config"
 )
 
 // ============================================================

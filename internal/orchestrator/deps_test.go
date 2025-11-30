@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // FakeFS is a sandboxed filesystem rooted at a temporary directory.

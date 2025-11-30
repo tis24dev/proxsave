@@ -13,8 +13,8 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/tis24dev/proxmox-backup/internal/backup"
-	"github.com/tis24dev/proxmox-backup/internal/config"
+	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/config"
 )
 
 // ========================================
@@ -182,9 +182,9 @@ func TestParseIdentityInput(t *testing.T) {
 			t.Fatalf("parseIdentityInput error: %v", err)
 		}
 
-		want, err := deriveDeterministicIdentityFromPassphrase(passphrase)
+		want, err := deriveDeterministicIdentitiesFromPassphrase(passphrase)
 		if err != nil {
-			t.Fatalf("deriveDeterministicIdentityFromPassphrase error: %v", err)
+			t.Fatalf("deriveDeterministicIdentitiesFromPassphrase error: %v", err)
 		}
 
 		if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -204,7 +204,7 @@ func TestParseIdentityInput(t *testing.T) {
 			t.Fatalf("parseIdentityInput(%q) error: %v", secretLower, err)
 		}
 
-		if fmt.Sprint(got) != id.String() {
+		if len(got) != 1 || fmt.Sprint(got[0]) != id.String() {
 			t.Fatalf("parseIdentityInput() did not parse secret key correctly, got %q want %q", fmt.Sprint(got), id.String())
 		}
 	})

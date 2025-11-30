@@ -11,12 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/identity"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/orchestrator"
-	"github.com/tis24dev/proxmox-backup/internal/tui/wizard"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/tui/wizard"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) error {
@@ -30,12 +30,12 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	// all live under the same root, even during --install.
 	baseDir := filepath.Dir(filepath.Dir(configPath))
 	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxmox-backup"
+		baseDir = "/opt/proxsave"
 	}
 	_ = os.Setenv("BASE_DIR", baseDir)
 
 	// Before starting the interactive wizard, perform a best-effort cleanup of any
-	// existing proxmox-backup entrypoints so that the installer can recreate a
+	// existing proxsave/proxmox-backup entrypoints so that the installer can recreate a
 	// clean symlink for the Go binary.
 	execInfo := getExecInfo()
 	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
@@ -160,9 +160,9 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 
-	// Ensure a proxmox-backup entry points to this Go binary, if not already customized.
+	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary, if not already customized.
 	if bootstrap != nil {
-		bootstrap.Info("Ensuring 'proxmox-backup' command points to the Go binary")
+		bootstrap.Info("Ensuring 'proxsave' and 'proxmox-backup' commands point to the Go binary")
 	}
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
@@ -191,7 +191,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	baseDir := filepath.Dir(filepath.Dir(resolvedPath))
 	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxmox-backup"
+		baseDir = "/opt/proxsave"
 	}
 
 	if err := ensureInteractiveStdin(); err != nil {
@@ -252,18 +252,18 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	}
 
 	fmt.Println("Next steps:")
-	fmt.Println("0. If you need, start migration from old backup.env:  proxmox-backup --env-migration")
+	fmt.Println("0. If you need, start migration from old backup.env:  proxsave --env-migration (alias: proxmox-backup --env-migration)")
 	if strings.TrimSpace(configPath) != "" {
 		fmt.Printf("1. Edit configuration: %s\n", configPath)
 	} else {
 		fmt.Println("1. Edit configuration: <configuration path unavailable>")
 	}
 	if strings.TrimSpace(baseDir) != "" {
-		fmt.Println("2. Run first backup: proxmox-backup")
+		fmt.Println("2. Run first backup: proxsave")
 		fmt.Printf("3. Check logs: tail -f %s/log/*.log\n", baseDir)
 	} else {
-		fmt.Println("2. Run first backup: proxmox-backup")
-		fmt.Println("3. Check logs: tail -f /opt/proxmox-backup/log/*.log")
+		fmt.Println("2. Run first backup: proxsave")
+		fmt.Println("3. Check logs: tail -f /opt/proxsave/log/*.log")
 	}
 	if telegramCode != "" {
 		fmt.Printf("4. Telegram: Open @ProxmoxAN_bot and enter code: %s\n", telegramCode)
@@ -275,7 +275,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Println("https://buymeacoffee.com/tis24dev")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  proxmox-backup     - Start backup")
+	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
@@ -334,7 +334,7 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) err
 
 func printInstallBanner(configPath string) {
 	fmt.Println("===========================================")
-	fmt.Println("  Proxmox Backup - Go Version")
+	fmt.Println("  ProxSave - Go Version")
 	fmt.Printf("  Version: %s\n", version)
 	sig := buildSignature()
 	if strings.TrimSpace(sig) == "" {

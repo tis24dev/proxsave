@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 const (
@@ -346,7 +346,7 @@ func dirExists(path string) bool {
 }
 
 func writeDetectionDebug() string {
-	debugDir := filepath.Join("/tmp", "proxmox-backup")
+	debugDir := filepath.Join("/tmp", "proxsave")
 	if err := os.MkdirAll(debugDir, 0o755); err != nil {
 		return ""
 	}

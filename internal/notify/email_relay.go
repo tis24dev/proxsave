@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // CloudRelayConfig holds configuration for email cloud relay
@@ -109,7 +109,7 @@ func sendViaCloudRelay(
 		req.Header.Set("X-Signature", signature)
 		req.Header.Set("X-Script-Version", payload.ScriptVersion)
 		req.Header.Set("X-Server-MAC", payload.ServerMAC)
-		req.Header.Set("User-Agent", fmt.Sprintf("proxmox-backup-go/%s", payload.ScriptVersion))
+		req.Header.Set("User-Agent", fmt.Sprintf("proxsave/%s", payload.ScriptVersion))
 
 		// Send request
 		resp, err := client.Do(req)

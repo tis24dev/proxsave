@@ -38,10 +38,16 @@ fi
 ###############################################
 # 2) Config
 ###############################################
-REPO="tis24dev/proxmox-backup"
-TARGET_DIR="/opt/proxmox-backup"
+REPO="tis24dev/proxsave"
+TARGET_DIR="/opt/proxsave"
 BUILD_DIR="${TARGET_DIR}/build"
-TARGET_BIN="${BUILD_DIR}/proxmox-backup"
+TARGET_BIN="${BUILD_DIR}/proxsave"
+
+if [ -d "/opt/proxmox-backup" ] && [ ! -d "${TARGET_DIR}" ]; then
+  echo "🔄 Detected legacy installation at /opt/proxmox-backup"
+  echo "➡  Migrating to ${TARGET_DIR}..."
+  mv /opt/proxmox-backup "${TARGET_DIR}"
+fi
 
 ###############################################
 # 3) OS/ARCH detection
@@ -64,7 +70,7 @@ case "$ARCH_RAW" in
 esac
 
 echo "--------------------------------------------"
-echo " Proxmox Backup Installer"
+echo " ProxSave Installer"
 echo " Mode: ${INSTALL_FLAG}"
 echo " OS:   ${OS}"
 echo " Arch: ${ARCH}"
@@ -93,7 +99,7 @@ VERSION="${LATEST_TAG#v}"
 ###############################################
 # 5) Build correct filename (ARCHIVE)
 ###############################################
-FILENAME="proxmox-backup_${VERSION}_${OS}_${ARCH}.tar.gz"
+FILENAME="proxsave_${VERSION}_${OS}_${ARCH}.tar.gz"
 
 BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${FILENAME}"
 CHECKSUM_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/SHA256SUMS"
@@ -148,10 +154,10 @@ echo "✔ Checksum OK"
 # 9) Extract ONLY the binary
 ###############################################
 echo "[+] Extracting binary from tar.gz..."
-tar -xzf "${FILENAME}" proxmox-backup
+tar -xzf "${FILENAME}" proxsave
 
-if [ ! -f proxmox-backup ]; then
-  echo "❌ Binary 'proxmox-backup' not found inside archive"
+if [ ! -f proxsave ]; then
+  echo "❌ Binary 'proxsave' not found inside archive"
   exit 1
 fi
 
@@ -159,7 +165,7 @@ fi
 # 10) Install binary
 ###############################################
 echo "[+] Installing binary -> ${TARGET_BIN}"
-mv proxmox-backup "${TARGET_BIN}"
+mv proxsave "${TARGET_BIN}"
 chmod +x "${TARGET_BIN}"
 
 ###############################################

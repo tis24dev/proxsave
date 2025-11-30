@@ -4,7 +4,7 @@
 # ===============================================================
 
 version: 2
-project_name: proxmox-backup
+project_name: proxsave
 dist: build
 
 before:
@@ -15,9 +15,9 @@ before:
 # BUILDS — principal binary
 ###############################################
 builds:
-  - id: proxmox-backup
-    main: ./cmd/proxmox-backup
-    binary: proxmox-backup
+  - id: proxsave
+    main: ./cmd/proxsave
+    binary: proxsave
     env:
       - CGO_ENABLED=0
     goos:
@@ -28,9 +28,9 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X github.com/tis24dev/proxmox-backup/internal/version.Version={{ .Version }}
-        -X github.com/tis24dev/proxmox-backup/internal/version.Commit={{ .FullCommit }}
-        -X github.com/tis24dev/proxmox-backup/internal/version.Date={{ .Date }}
+        -X github.com/tis24dev/proxsave/internal/version.Version={{ .Version }}
+        -X github.com/tis24dev/proxsave/internal/version.Commit={{ .FullCommit }}
+        -X github.com/tis24dev/proxsave/internal/version.Date={{ .Date }}
 
 ###############################################
 # ARCHIVI — tar.gz (classic release)
@@ -38,7 +38,7 @@ builds:
 archives:
   - id: archive
     ids:
-      - proxmox-backup
+      - proxsave
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -48,7 +48,7 @@ archives:
 
   - id: binary
     ids:
-      - proxmox-backup
+      - proxsave
     formats:
       - binary
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -79,7 +79,7 @@ sboms:
 release:
   github:
     owner: tis24dev
-    name: proxmox-backup
+    name: proxsave
   draft: false
   prerelease: auto
   name_template: "{{ .Tag }}"

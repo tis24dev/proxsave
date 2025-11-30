@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
-const sessionLogDir = "/tmp/proxmox-backup"
+const sessionLogDir = "/tmp/proxsave"
 
 // StartSessionLogger creates a new logger instance that writes to a real-time log
-// file under /tmp/proxmox-backup. The caller receives the configured logger, the
+// file under /tmp/proxsave. The caller receives the configured logger, the
 // absolute log path, and a cleanup function that must be invoked when the
 // session completes.
 func StartSessionLogger(flow string, level types.LogLevel, useColor bool) (*Logger, string, func(), error) {

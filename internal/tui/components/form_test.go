@@ -7,7 +7,7 @@ import (
 
 	"github.com/rivo/tview"
 
-	"github.com/tis24dev/proxmox-backup/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui"
 )
 
 func TestValidateAllWithValidators(t *testing.T) {

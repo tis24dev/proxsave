@@ -39,7 +39,7 @@ This guide covers the most common issues encountered when using Proxmox Backup G
 **Solution**:
 ```bash
 cd /opt/proxmox-backup  # Ensure you're in project root
-go mod init github.com/tis24dev/proxmox-backup
+go mod init github.com/tis24dev/proxsave
 go mod tidy
 make build
 ```
@@ -700,7 +700,7 @@ nano /tmp/backup.env.sanitized
 ```
 
 **4. Create GitHub issue**:
-- **Repository**: https://github.com/tis24dev/proxmox-backup/issues
+- **Repository**: https://github.com/tis24dev/proxsave/issues
 - **Include**:
   - Version information
   - Sanitized configuration

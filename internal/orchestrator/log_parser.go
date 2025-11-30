@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/notify"
+	"github.com/tis24dev/proxsave/internal/notify"
 )
 
 // ParseLogCounts parses a log file and returns error/warning counts and categorized issues

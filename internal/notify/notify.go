@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // NotificationStatus represents the overall status of a backup operation

@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/tis24dev/proxmox-backup/internal/backup"
-	"github.com/tis24dev/proxmox-backup/internal/checks"
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/metrics"
-	"github.com/tis24dev/proxmox-backup/internal/storage"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/checks"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/metrics"
+	"github.com/tis24dev/proxsave/internal/storage"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // BackupError represents a backup error with specific phase and exit code
@@ -508,11 +508,11 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	o.logger.Debug("Creating temporary directory for collection output")
 	// Create temporary directory for collection (outside backup path)
 	timestampStr := startTime.Format("20060102-150405")
-	tempRoot := filepath.Join("/tmp", "proxmox-backup")
+	tempRoot := filepath.Join("/tmp", "proxsave")
 	if err := fs.MkdirAll(tempRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create temporary root directory: %w", err)
 	}
-	tempDir, err := fs.MkdirTemp(tempRoot, fmt.Sprintf("proxmox-backup-%s-%s-", hostname, timestampStr))
+	tempDir, err := fs.MkdirTemp(tempRoot, fmt.Sprintf("proxsave-%s-%s-", hostname, timestampStr))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary directory: %w", err)
 	}
@@ -532,7 +532,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	}()
 
 	// Create marker file for parity with Bash cleanup guarantees
-	markerPath := filepath.Join(tempDir, ".proxmox-backup-marker")
+	markerPath := filepath.Join(tempDir, ".proxsave-marker")
 	markerContent := fmt.Sprintf(
 		"Created by PID %d on %s UTC\n",
 		os.Getpid(),
@@ -1296,7 +1296,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) error {
 	fs := o.filesystem()
-	infoDir := filepath.Join(tempDir, "var/lib/proxmox-backup-info")
+	infoDir := filepath.Join(tempDir, "var/lib/proxsave-info")
 	if err := fs.MkdirAll(infoDir, 0755); err != nil {
 		return err
 	}
@@ -1307,7 +1307,7 @@ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) e
 	}
 
 	builder := strings.Builder{}
-	builder.WriteString("# Proxmox Backup Metadata\n")
+	builder.WriteString("# ProxSave Metadata\n")
 	builder.WriteString("# This file enables selective restore functionality in newer restore scripts\n")
 	builder.WriteString(fmt.Sprintf("VERSION=%s\n", version))
 	builder.WriteString(fmt.Sprintf("BACKUP_TYPE=%s\n", stats.ProxmoxType.String()))

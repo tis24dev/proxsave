@@ -5,7 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/tis24dev/proxmox-backup/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui"
 )
 
 func TestPanelDefaultStyling(t *testing.T) {

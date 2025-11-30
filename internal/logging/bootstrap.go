@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 type bootstrapEntry struct {

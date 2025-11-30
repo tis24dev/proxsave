@@ -17,24 +17,25 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/backup"
-	"github.com/tis24dev/proxmox-backup/internal/checks"
-	"github.com/tis24dev/proxmox-backup/internal/cli"
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/environment"
-	"github.com/tis24dev/proxmox-backup/internal/identity"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/notify"
-	"github.com/tis24dev/proxmox-backup/internal/orchestrator"
-	"github.com/tis24dev/proxmox-backup/internal/security"
-	"github.com/tis24dev/proxmox-backup/internal/storage"
-	"github.com/tis24dev/proxmox-backup/internal/types"
-	"github.com/tis24dev/proxmox-backup/pkg/utils"
+	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/checks"
+	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/environment"
+	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/security"
+	"github.com/tis24dev/proxsave/internal/storage"
+	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 const (
 	version                       = "0.9.0" // Semantic version format required by cloud relay worker
-	defaultLegacyEnvPath          = "/opt/proxmox-backup/env/backup.env"
+	defaultLegacyEnvPath          = "/opt/proxsave/env/backup.env"
+	legacyEnvFallbackPath         = "/opt/proxmox-backup/env/backup.env"
 	goRuntimeMinVersion           = "1.25.4"
 	networkPreflightTimeout       = 2 * time.Second
 	bytesPerMegabyte        int64 = 1024 * 1024
@@ -291,7 +292,7 @@ func run() int {
 
 	// Print header
 	bootstrap.Println("===========================================")
-	bootstrap.Println("  Proxmox Backup - Go Version")
+	bootstrap.Println("  ProxSave - Go Version")
 	bootstrap.Printf("  Version: %s", version)
 	if sig := buildSignature(); sig != "" {
 		bootstrap.Printf("  Build Signature: %s", sig)
@@ -377,7 +378,11 @@ func run() int {
 	// Load configuration
 	autoBaseDir, autoFound := detectBaseDir()
 	if autoBaseDir == "" {
-		autoBaseDir = "/opt/proxmox-backup"
+		if _, err := os.Stat("/opt/proxsave"); err == nil {
+			autoBaseDir = "/opt/proxsave"
+		} else {
+			autoBaseDir = "/opt/proxmox-backup"
+		}
 	}
 	initialEnvBaseDir := os.Getenv("BASE_DIR")
 	if initialEnvBaseDir == "" {
@@ -520,7 +525,7 @@ func run() int {
 				cpuProfileFile = f
 				logging.Info("CPU profiling enabled: %s", cpuProfilePath)
 
-				tmpProfileDir := filepath.Join("/tmp", "proxmox-backup")
+				tmpProfileDir := filepath.Join("/tmp", "proxsave")
 				if err := os.MkdirAll(tmpProfileDir, defaultDirPerm); err != nil {
 					logging.Warning("Failed to create temp profile directory %s: %v", tmpProfileDir, err)
 				} else {
@@ -1273,11 +1278,11 @@ func printFinalSummary(finalExitCode int) {
 
 	if color != "" {
 		fmt.Printf("%s===========================================\n", color)
-		fmt.Printf("Proxmox Backup Script - Go - %s\n", summarySig)
+		fmt.Printf("ProxSave - Go - %s\n", summarySig)
 		fmt.Printf("===========================================%s\n", colorReset)
 	} else {
 		fmt.Println("===========================================")
-		fmt.Printf("Proxmox Backup Script - Go - %s\n", summarySig)
+		fmt.Printf("ProxSave - Go - %s\n", summarySig)
 		fmt.Println("===========================================")
 	}
 
@@ -1286,7 +1291,7 @@ func printFinalSummary(finalExitCode int) {
 	fmt.Println("https://buymeacoffee.com/tis24dev")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  proxmox-backup     - Start backup")
+	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")

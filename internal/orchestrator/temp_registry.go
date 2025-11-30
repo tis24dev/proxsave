@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 const (
 	defaultRegistryEnvVar = "PROXMOX_TEMP_REGISTRY_PATH"
-	defaultRegistryPath   = "/var/run/proxmox-backup/temp-dirs.json"
-	registryFallbackDir   = "proxmox-backup"
+	defaultRegistryPath   = "/var/run/proxsave/temp-dirs.json"
+	registryFallbackDir   = "proxsave"
 )
 
 type tempDirRecord struct {

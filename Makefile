@@ -4,15 +4,15 @@ COVERAGE_THRESHOLD ?= 50.0
 
 # Build del progetto
 build:
-	@echo "Building proxmox-backup..."
+	@echo "Building proxsave..."
 	@BUILD_TIME=$$(date -u +"%Y-%m-%dT%H:%M:%SZ") && \
-	go build -ldflags="-X 'main.buildTime=$$BUILD_TIME'" -o build/proxmox-backup ./cmd/proxmox-backup
+	go build -ldflags="-X 'main.buildTime=$$BUILD_TIME'" -o build/proxsave ./cmd/proxsave
 
 # Build ottimizzato per release
 build-release:
 	@echo "Building release..."
 	@BUILD_TIME=$$(date -u +"%Y-%m-%dT%H:%M:%SZ") && \
-	go build -ldflags="-s -w -X 'main.buildTime=$$BUILD_TIME'" -o build/proxmox-backup ./cmd/proxmox-backup
+	go build -ldflags="-s -w -X 'main.buildTime=$$BUILD_TIME'" -o build/proxsave ./cmd/proxsave
 
 # Test
 test:
@@ -58,7 +58,7 @@ clean:
 
 # Run in development
 run:
-	go run ./cmd/proxmox-backup
+	go run ./cmd/proxsave
 
 # Install/update dependencies
 deps:

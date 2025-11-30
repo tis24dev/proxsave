@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // NormalizeGFSRetentionConfig applica le correzioni necessarie alla configurazione

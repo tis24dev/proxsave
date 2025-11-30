@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // Helper function to create a test NotificationData
@@ -625,8 +625,8 @@ func TestMaskHeaderValue(t *testing.T) {
 		},
 		{
 			key:      "User-Agent",
-			value:    "proxmox-backup-go/0.2.0",
-			expected: "proxmox-backup-go/0.2.0",
+			value:    "proxsave/0.2.0",
+			expected: "proxsave/0.2.0",
 		},
 	}
 

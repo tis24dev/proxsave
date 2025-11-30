@@ -20,7 +20,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          go test $(go list ./... | grep -v -E '/cmd/|/pbs$|/bech32$|^github.com/tis24dev/proxmox-backup$') -coverprofile=coverage.out
+          go test $(go list ./... | grep -v -E '/cmd/|/pbs$|/bech32$|^github.com/tis24dev/proxsave$') -coverprofile=coverage.out
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5

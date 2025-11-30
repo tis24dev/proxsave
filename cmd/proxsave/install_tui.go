@@ -10,10 +10,10 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/tis24dev/proxmox-backup/internal/identity"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/orchestrator"
-	"github.com/tis24dev/proxmox-backup/internal/tui/wizard"
+	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/tui/wizard"
 )
 
 // runInstallTUI runs the TUI-based installation wizard
@@ -27,12 +27,12 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// Derive BASE_DIR from the configuration path
 	baseDir := filepath.Dir(filepath.Dir(configPath))
 	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxmox-backup"
+		baseDir = "/opt/proxsave"
 	}
 	_ = os.Setenv("BASE_DIR", baseDir)
 
 	// Before starting the TUI wizard, perform a best-effort cleanup of any existing
-	// proxmox-backup entrypoints so that the installer can recreate a clean
+	// proxsave/proxmox-backup entrypoints so that the installer can recreate a clean
 	// symlink for the Go binary.
 	execInfo := getExecInfo()
 	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
@@ -183,9 +183,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 
-	// Ensure a proxmox-backup entry points to this Go binary
+	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary
 	if bootstrap != nil {
-		bootstrap.Info("Ensuring 'proxmox-backup' command points to the Go binary")
+		bootstrap.Info("Ensuring 'proxsave' and 'proxmox-backup' commands point to the Go binary")
 	}
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 

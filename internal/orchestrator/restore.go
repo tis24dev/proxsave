@@ -16,8 +16,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 var ErrRestoreAborted = errors.New("restore workflow aborted by user")
@@ -631,7 +631,7 @@ func redirectClusterCategoryToExport(normal []Category, export []Category) ([]Ca
 func exportDestRoot(baseDir string) string {
 	base := strings.TrimSpace(baseDir)
 	if base == "" {
-		base = "/opt/proxmox-backup"
+		base = "/opt/proxsave"
 	}
 	return filepath.Join(base, fmt.Sprintf("pve-config-export-%s", nowRestore().Format("20060102-150405")))
 }
@@ -1032,7 +1032,7 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 	}
 
 	// Create detailed log directory
-	logDir := "/tmp/proxmox-backup"
+	logDir := "/tmp/proxsave"
 	if err := restoreFS.MkdirAll(logDir, 0755); err != nil {
 		logger.Warning("Could not create log directory: %v", err)
 	}

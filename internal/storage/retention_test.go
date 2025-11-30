@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // TestNewRetentionConfigFromConfig tests the auto-detection of retention policy

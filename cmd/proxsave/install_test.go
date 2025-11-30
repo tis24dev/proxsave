@@ -9,14 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 func TestPrintInstallBanner(t *testing.T) {
 	output := captureStdout(t, func() {
 		printInstallBanner("/etc/proxmox-backup/backup.env")
 	})
-	if !strings.Contains(output, "Proxmox Backup - Go Version") {
+	if !strings.Contains(output, "ProxSave - Go Version") {
 		t.Fatalf("banner missing title: %q", output)
 	}
 	if !strings.Contains(output, "Version:") {
@@ -44,7 +44,7 @@ func TestPrintInstallFooterVariants(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			output := captureStdout(t, func() {
-				printInstallFooter(tt.err, "/etc/proxmox-backup/backup.env", "/opt/proxmox-backup", "CODE123")
+				printInstallFooter(tt.err, "/etc/proxmox-backup/backup.env", "/opt/proxsave", "CODE123")
 			})
 			if !strings.Contains(output, tt.wantSnippet) {
 				t.Fatalf("output %q does not contain %q", output, tt.wantSnippet)
@@ -53,7 +53,7 @@ func TestPrintInstallFooterVariants(t *testing.T) {
 				if !strings.Contains(output, "Edit configuration: /etc/proxmox-backup/backup.env") {
 					t.Fatalf("expected config path reference in footer")
 				}
-				if !strings.Contains(output, "Check logs: tail -f /opt/proxmox-backup/log/*.log") {
+				if !strings.Contains(output, "Check logs: tail -f /opt/proxsave/log/*.log") {
 					t.Fatalf("expected log path guidance")
 				}
 				if !strings.Contains(output, "enter code: CODE123") {

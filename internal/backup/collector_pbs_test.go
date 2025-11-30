@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/pbs"
+	"github.com/tis24dev/proxsave/internal/pbs"
 )
 
 func TestGetDatastoreListSuccessWithOverrides(t *testing.T) {

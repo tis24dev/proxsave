@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // TelegramRegistrationStatus rappresenta l'esito dell'handshake con il server Telegram centralizzato.

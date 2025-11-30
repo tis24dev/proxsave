@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/pbs"
+	"github.com/tis24dev/proxsave/internal/pbs"
 )
 
 type pbsDatastore struct {

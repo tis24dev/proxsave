@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // Logger gestisce il logging dell'applicazione

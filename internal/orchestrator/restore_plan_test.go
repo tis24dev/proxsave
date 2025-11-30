@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/backup"
+	"github.com/tis24dev/proxsave/internal/backup"
 )
 
 func TestPlanRestoreClusterSafeToggle(t *testing.T) {

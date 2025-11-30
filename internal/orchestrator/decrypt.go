@@ -17,9 +17,9 @@ import (
 	"strings"
 
 	"filippo.io/age"
-	"github.com/tis24dev/proxmox-backup/internal/backup"
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -447,7 +447,7 @@ func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config
 }
 
 func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decryptCandidate, version string, logger *logging.Logger) (*preparedBundle, error) {
-	tempRoot := filepath.Join("/tmp", "proxmox-backup")
+	tempRoot := filepath.Join("/tmp", "proxsave")
 	if err := restoreFS.MkdirAll(tempRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create temp root: %w", err)
 	}
@@ -668,14 +668,14 @@ func decryptArchiveWithPrompts(ctx context.Context, reader *bufio.Reader, encryp
 			return ErrDecryptAborted
 		}
 
-		identity, err := parseIdentityInput(input)
+		identities, err := parseIdentityInput(input)
 		resetString(&input)
 		if err != nil {
 			logger.Warning("Invalid key/passphrase: %v", err)
 			continue
 		}
 
-		if err := decryptWithIdentity(encryptedPath, outputPath, identity); err != nil {
+		if err := decryptWithIdentity(encryptedPath, outputPath, identities...); err != nil {
 			var noMatch *age.NoIdentityMatchError
 			if errors.Is(err, age.ErrIncorrectIdentity) || errors.As(err, &noMatch) {
 				logger.Warning("Provided key or passphrase does not match this archive. Try again or press 0 to exit.")
@@ -687,14 +687,18 @@ func decryptArchiveWithPrompts(ctx context.Context, reader *bufio.Reader, encryp
 	}
 }
 
-func parseIdentityInput(input string) (age.Identity, error) {
+func parseIdentityInput(input string) ([]age.Identity, error) {
 	if strings.HasPrefix(strings.ToUpper(input), "AGE-SECRET-KEY-") {
-		return age.ParseX25519Identity(strings.ToUpper(input))
+		id, err := age.ParseX25519Identity(strings.ToUpper(input))
+		if err != nil {
+			return nil, err
+		}
+		return []age.Identity{id}, nil
 	}
-	return deriveDeterministicIdentityFromPassphrase(input)
+	return deriveDeterministicIdentitiesFromPassphrase(input)
 }
 
-func decryptWithIdentity(src, dst string, identity age.Identity) error {
+func decryptWithIdentity(src, dst string, identities ...age.Identity) error {
 	in, err := restoreFS.Open(src)
 	if err != nil {
 		return fmt.Errorf("open encrypted archive: %w", err)
@@ -707,7 +711,7 @@ func decryptWithIdentity(src, dst string, identity age.Identity) error {
 	}
 	defer out.Close()
 
-	reader, err := age.Decrypt(in, identity)
+	reader, err := age.Decrypt(in, identities...)
 	if err != nil {
 		return err
 	}

@@ -4,8 +4,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // startFlowSessionLog creates a session log for interactive flows (install,

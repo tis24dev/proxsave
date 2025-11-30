@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/backup"
-	"github.com/tis24dev/proxmox-backup/internal/checks"
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/storage"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/checks"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/storage"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestBackupStatsUpdateCompressionMetrics(t *testing.T) {
@@ -275,7 +275,7 @@ func TestSplitExportCategoriesAndRedirectCluster(t *testing.T) {
 
 func TestExportDestRootAndHelpers(t *testing.T) {
 	defaultRoot := exportDestRoot("")
-	if !strings.HasPrefix(defaultRoot, "/opt/proxmox-backup/pve-config-export-") {
+	if !strings.HasPrefix(defaultRoot, "/opt/proxsave/pve-config-export-") {
 		t.Fatalf("unexpected default export root: %s", defaultRoot)
 	}
 
@@ -533,7 +533,7 @@ func TestWriteBackupMetadata(t *testing.T) {
 		t.Fatalf("writeBackupMetadata error: %v", err)
 	}
 
-	metaPath := filepath.Join(tempDir, "var/lib/proxmox-backup-info/backup_metadata.txt")
+	metaPath := filepath.Join(tempDir, "var/lib/proxsave-info/backup_metadata.txt")
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		t.Fatalf("failed reading metadata: %v", err)

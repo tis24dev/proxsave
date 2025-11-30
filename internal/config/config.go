@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
-	"github.com/tis24dev/proxmox-backup/pkg/utils"
+	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 var (
@@ -385,7 +385,7 @@ func (c *Config) parse() error {
 	envBaseDir := os.Getenv("BASE_DIR")
 	c.BaseDir = c.getString("BASE_DIR", envBaseDir)
 	if c.BaseDir == "" {
-		c.BaseDir = "/opt/proxmox-backup"
+		c.BaseDir = defaultBaseDir()
 	}
 	_ = os.Setenv("BASE_DIR", c.BaseDir)
 
@@ -827,6 +827,18 @@ func mergeStringSlices(base, extra []string) []string {
 }
 
 // Helper methods with fallback support (try multiple keys)
+func defaultBaseDir() string {
+	if val := strings.TrimSpace(os.Getenv("BASE_DIR")); val != "" {
+		return val
+	}
+	if _, err := os.Stat("/opt/proxsave"); err == nil {
+		return "/opt/proxsave"
+	}
+	if _, err := os.Stat("/opt/proxmox-backup"); err == nil {
+		return "/opt/proxmox-backup"
+	}
+	return "/opt/proxsave"
+}
 
 // expandEnvVars expands environment variables and special variables like ${BASE_DIR}
 func expandEnvVars(s string) string {
@@ -835,10 +847,7 @@ func expandEnvVars(s string) string {
 		// Special handling for BASE_DIR
 		if key == "BASE_DIR" {
 			// Check if BASE_DIR is set in environment, otherwise use default
-			if val := os.Getenv("BASE_DIR"); val != "" {
-				return val
-			}
-			return "/opt/proxmox-backup"
+			return defaultBaseDir()
 		}
 		return os.Getenv(key)
 	})
@@ -1244,7 +1253,7 @@ type WebhookAuth struct {
 // autoDetectPBSToken tries to read API token from secure_account directory
 func autoDetectPBSToken(secureAccountPath string) (token, secret string) {
 	if secureAccountPath == "" {
-		secureAccountPath = "/opt/proxmox-backup/secure_account"
+		secureAccountPath = filepath.Join(defaultBaseDir(), "secure_account")
 	}
 
 	// Try multiple possible token file locations

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // BackupMetrics represents the subset of backup statistics exported as Prometheus metrics.

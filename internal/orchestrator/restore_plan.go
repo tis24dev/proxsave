@@ -1,6 +1,6 @@
 package orchestrator
 
-import "github.com/tis24dev/proxmox-backup/internal/backup"
+import "github.com/tis24dev/proxsave/internal/backup"
 
 // RestorePlan contains a pure, side-effect-free description of a restore run.
 type RestorePlan struct {

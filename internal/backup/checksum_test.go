@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestGenerateAndVerifyChecksum(t *testing.T) {
@@ -61,7 +61,7 @@ func TestCreateAndLoadManifest(t *testing.T) {
 	manifestPath := filepath.Join(tmpDir, "manifest.json")
 
 	manifest := &Manifest{
-		ArchivePath:      "/opt/proxmox-backup/backup/test.tar.xz",
+		ArchivePath:      "/opt/proxsave/backup/test.tar.xz",
 		ArchiveSize:      1024,
 		SHA256:           "abc123",
 		CreatedAt:        time.Now().UTC().Truncate(time.Second),

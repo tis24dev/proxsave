@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/backup"
+	"github.com/tis24dev/proxsave/internal/backup"
 )
 
 func TestValidateCompatibility_Mismatch(t *testing.T) {

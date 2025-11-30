@@ -12,9 +12,9 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/tui"
-	"github.com/tis24dev/proxmox-backup/internal/tui/components"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui/components"
 )
 
 // InstallWizardData holds the collected installation data
@@ -62,8 +62,8 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 
 	// Welcome text
 	welcomeText := tview.NewTextView().
-		SetText("Welcome to PROXMOX SYSTEM BACKUP Installation Wizard - By TIS24DEV\n\n" +
-			"This wizard will guide you through configuring your backup system.\n" +
+		SetText("Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n" +
+			"This wizard will guide you through configuring your backup system for Proxmox.\n" +
 			"All settings can be changed later by editing the configuration file.").
 		SetTextColor(tui.ProxmoxLight).
 		SetDynamicColors(true)
@@ -343,7 +343,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	form.AddCancelButton("Cancel")
 
 	// Style the form
-	form.SetBorderWithTitle("Proxmox Backup Installation")
+	form.SetBorderWithTitle("ProxSave Installation")
 	form.Form.SetBackgroundColor(tcell.ColorBlack)
 
 	// Add arrow key support for navigation
@@ -404,7 +404,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		AddItem(buildSigText, 1, 0, false)
 
 	flex.SetBorder(true).
-		SetTitle(" Proxmox Backup Installation ").
+		SetTitle(" ProxSave Installation ").
 		SetTitleAlign(tview.AlignCenter).
 		SetTitleColor(tui.ProxmoxOrange).
 		SetBorderColor(tui.ProxmoxOrange).
@@ -521,8 +521,8 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 
 		// Welcome text (same as main wizard)
 		welcomeText := tview.NewTextView().
-			SetText("Welcome to PROXMOX SYSTEM BACKUP Installation Wizard - By TIS24DEV\n\n" +
-				"This wizard will guide you through configuring your backup system.\n" +
+			SetText("Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n" +
+				"This wizard will guide you through configuring your backup system for Proxmox.\n" +
 				"All settings can be changed later by editing the configuration file.").
 			SetTextColor(tui.ProxmoxLight).
 			SetDynamicColors(true)
@@ -587,7 +587,7 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 			AddItem(buildSigText, 1, 0, false)
 
 		flex.SetBorder(true).
-			SetTitle(" Proxmox Backup Installation ").
+			SetTitle(" ProxSave Installation ").
 			SetTitleAlign(tview.AlignCenter).
 			SetTitleColor(tui.ProxmoxOrange).
 			SetBorderColor(tui.ProxmoxOrange).

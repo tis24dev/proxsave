@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // Checker performs pre-backup validation checks

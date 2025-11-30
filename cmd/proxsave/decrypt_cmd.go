@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
 
 // runDecryptWorkflowOnly executes the decrypt workflow without initializing the backup orchestrator.
@@ -29,7 +29,11 @@ func runDecryptWorkflowOnly(ctx context.Context, configPath string, bootstrap *l
 	autoBaseDir, _ := detectBaseDir()
 	if cfg.BaseDir == "" {
 		if autoBaseDir == "" {
-			autoBaseDir = "/opt/proxmox-backup"
+			if _, err := os.Stat("/opt/proxsave"); err == nil {
+				autoBaseDir = "/opt/proxsave"
+			} else {
+				autoBaseDir = "/opt/proxmox-backup"
+			}
 		}
 		cfg.BaseDir = autoBaseDir
 	}

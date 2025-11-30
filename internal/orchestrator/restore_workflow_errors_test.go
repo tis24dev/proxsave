@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/backup"
+	"github.com/tis24dev/proxsave/internal/backup"
 )
 
 func TestConfirmRestoreAction_Abort(t *testing.T) {

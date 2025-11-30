@@ -6,7 +6,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/tis24dev/proxmox-backup/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui"
 )
 
 var modalCreatedHook func(*tview.Modal)

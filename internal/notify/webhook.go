@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // WebhookNotifier sends notifications to configured webhook endpoints
@@ -262,7 +262,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 		if bodyReader != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		req.Header.Set("User-Agent", fmt.Sprintf("proxmox-backup-go/%s", data.ScriptVersion))
+		req.Header.Set("User-Agent", fmt.Sprintf("proxsave/%s", data.ScriptVersion))
 		w.logger.Debug("Default headers set (User-Agent + Content-Type when applicable)")
 
 		// Set custom headers

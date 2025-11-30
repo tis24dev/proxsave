@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/tui/wizard"
+	"github.com/tis24dev/proxsave/internal/tui/wizard"
 )
 
 // resolveCronSchedule returns a cron schedule string (e.g. "0 2 * * *") derived from

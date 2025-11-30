@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/pbs"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/pbs"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestGetDatastoreListNoBinary(t *testing.T) {

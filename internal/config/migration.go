@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/pkg/utils"
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 // EnvMigrationSummary describes the outcome of a legacy -> Go config migration.

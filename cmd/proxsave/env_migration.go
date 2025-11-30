@@ -8,10 +8,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/cli"
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func runEnvMigration(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) int {
@@ -53,7 +53,7 @@ func runEnvMigration(ctx context.Context, args *cli.Args, bootstrap *logging.Boo
 	bootstrap.Println("IMPORTANT:")
 	bootstrap.Println("- Review the generated configuration manually before any production run.")
 	bootstrap.Println("- Run one or more dry-run tests to validate behavior:")
-	bootstrap.Println("    ./build/proxmox-backup --dry-run")
+	bootstrap.Println("    ./build/proxsave --dry-run")
 	bootstrap.Println("- Verify storage paths, retention policies, and notification settings.")
 	return types.ExitSuccess.Int()
 }
@@ -107,7 +107,8 @@ func resolveLegacyEnvPath(ctx context.Context, args *cli.Args, bootstrap *loggin
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println()
 	fmt.Println("Legacy configuration import")
-	question := fmt.Sprintf("Enter the path to the legacy Bash backup.env [%s]: ", defaultLegacyEnvPath)
+	defaultPromptPath := pickLegacyEnvPath()
+	question := fmt.Sprintf("Enter the path to the legacy Bash backup.env [%s]: ", defaultPromptPath)
 	for {
 		fmt.Print(question)
 		input, err := readLineWithContext(ctx, reader)
@@ -116,7 +117,7 @@ func resolveLegacyEnvPath(ctx context.Context, args *cli.Args, bootstrap *loggin
 		}
 		input = strings.TrimSpace(input)
 		if input == "" {
-			legacyPath = defaultLegacyEnvPath
+			legacyPath = defaultPromptPath
 		} else {
 			legacyPath = input
 		}
@@ -168,4 +169,17 @@ func ensureLegacyFile(path string) error {
 		return fmt.Errorf("legacy config %s is a directory", path)
 	}
 	return nil
+}
+
+func pickLegacyEnvPath() string {
+	candidates := []string{
+		defaultLegacyEnvPath,
+		legacyEnvFallbackPath,
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return defaultLegacyEnvPath
 }

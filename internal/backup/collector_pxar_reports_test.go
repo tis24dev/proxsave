@@ -7,7 +7,7 @@ import (
 
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestWritePxarSubdirReportHandlesMissingPath(t *testing.T) {

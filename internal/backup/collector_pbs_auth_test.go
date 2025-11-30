@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/tis24dev/proxmox-backup/internal/types"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestSafeCmdOutputWithPBSAuthSetsEnv(t *testing.T) {

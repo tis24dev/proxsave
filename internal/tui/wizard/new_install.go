@@ -7,7 +7,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/tis24dev/proxmox-backup/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui"
 )
 
 var confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
@@ -21,8 +21,8 @@ func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
 
 	// Header text (align with main install wizard)
 	welcomeText := tview.NewTextView().
-		SetText("Welcome to PROXMOX SYSTEM BACKUP Installation Wizard - By TIS24DEV\n\n" +
-			"This wizard will guide you through configuring your backup system.\n" +
+		SetText("Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n" +
+			"This wizard will guide you through configuring your backup system for Proxmox.\n" +
 			"All settings can be changed later by editing the configuration file.").
 		SetTextColor(tui.ProxmoxLight).
 		SetDynamicColors(true)
@@ -77,7 +77,7 @@ func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
 		AddItem(buildSigText, 1, 0, false)
 
 	flex.SetBorder(true).
-		SetTitle(" Proxmox Backup New Install ").
+		SetTitle(" ProxSave New Install ").
 		SetTitleAlign(tview.AlignCenter).
 		SetTitleColor(tui.ProxmoxOrange).
 		SetBorderColor(tui.ProxmoxOrange).

@@ -4,7 +4,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/tis24dev/proxmox-backup/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui"
 )
 
 // ListFormItem wraps a tview.List so it can be used inside a Form.

@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tis24dev/proxmox-backup/internal/config"
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/internal/types"
-	"github.com/tis24dev/proxmox-backup/pkg/utils"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 // CloudStorage implements the Storage interface for cloud storage using rclone

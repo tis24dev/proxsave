@@ -1,4 +1,4 @@
-module github.com/tis24dev/proxmox-backup
+module github.com/tis24dev/proxsave
 
 go 1.25
 

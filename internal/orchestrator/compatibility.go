@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tis24dev/proxmox-backup/internal/backup"
+	"github.com/tis24dev/proxsave/internal/backup"
 )
 
 var compatFS FS = osFS{}

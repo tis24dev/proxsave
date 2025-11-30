@@ -8,8 +8,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/tis24dev/proxmox-backup/internal/logging"
-	"github.com/tis24dev/proxmox-backup/pkg/utils"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 // FilesystemDetector provides methods to detect and validate filesystem types

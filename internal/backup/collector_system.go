@@ -433,7 +433,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 	}
 	c.logger.Debug("Collecting system command outputs into %s", commandsDir)
 
-	infoDir := filepath.Join(c.tempDir, "var/lib/proxmox-backup-info")
+	infoDir := filepath.Join(c.tempDir, "var/lib/proxsave-info")
 	if err := c.ensureDir(infoDir); err != nil {
 		return fmt.Errorf("failed to create system info directory: %w", err)
 	}
