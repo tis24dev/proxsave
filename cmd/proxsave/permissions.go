@@ -143,7 +143,7 @@ func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string,
 	configPath = strings.TrimSpace(configPath)
 	baseDir = strings.TrimSpace(baseDir)
 	if configPath == "" {
-		return "skipped", "normalizzazione permessi non eseguita (percorso configurazione non disponibile)"
+		return "skipped", "permissions normalization skipped (configuration path unavailable)"
 	}
 
 	cfg, err := config.LoadConfig(configPath)
@@ -151,7 +151,7 @@ func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string,
 		if bootstrap != nil {
 			bootstrap.Warning("Post-install: skipping permission fix, failed to load configuration: %v", err)
 		}
-		return "error", "impossibile normalizzare i permessi: caricamento configurazione fallito (vedi log)"
+		return "error", "unable to normalize permissions: failed to load configuration (see log)"
 	}
 
 	if strings.TrimSpace(cfg.BaseDir) == "" && baseDir != "" {
@@ -178,14 +178,14 @@ func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string,
 	execPath := execInfo.ExecPath
 
 	status := "ok"
-	message := "permessi e proprietà normalizzati correttamente"
+	message := "permissions and ownership normalized correctly"
 
 	if _, secErr := security.Run(ctx, logger, cfg, configPath, execPath, nil); secErr != nil {
 		if bootstrap != nil {
 			bootstrap.Warning("Post-install: security permission checks reported errors (ignored): %v", secErr)
 		}
 		status = "error"
-		message = "errori durante i controlli di sicurezza per la normalizzazione permessi (non bloccante, vedi log)"
+		message = "errors during security permission checks (non-blocking, see log)"
 	}
 
 	if cfg.SetBackupPermissions {
@@ -198,10 +198,10 @@ func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string,
 			}
 			if status != "error" {
 				status = "warning"
-				message = "permessi normalizzati con avvisi sui percorsi di backup (non bloccante, vedi log)"
+				message = "permissions normalized with warnings for backup paths (non-blocking, see log)"
 			}
 		} else if status == "ok" {
-			message = "permessi e proprietà normalizzati correttamente (inclusi i percorsi di backup)"
+			message = "permissions and ownership normalized correctly (including backup paths)"
 		}
 	}
 

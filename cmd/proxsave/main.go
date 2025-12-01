@@ -512,6 +512,12 @@ func run() int {
 		}
 	}
 
+	// Best-effort check for newer releases on GitHub.
+	// If the installed version is up to date, nothing is printed at INFO/WARNING level
+	// (only a DEBUG message is logged). If a newer version exists, a WARNING is emitted
+	// suggesting the use of --upgrade.
+	checkForUpdates(ctx, logger, version)
+
 	// Apply backup permissions (optional, Bash-compatible behavior)
 	if cfg.SetBackupPermissions {
 		if err := applyBackupPermissions(cfg, logger); err != nil {
@@ -1600,4 +1606,85 @@ func disableNetworkFeaturesForRun(cfg *config.Config, bootstrap *logging.Bootstr
 		warn("WARNING: Disabling Webhook notifications due to missing network connectivity")
 		cfg.WebhookEnabled = false
 	}
+
+}
+
+// checkForUpdates performs a best-effort check against the latest GitHub release.
+// - If the latest version cannot be determined or the current version is already up to date,
+//   only a DEBUG log entry is written (no user-facing output).
+// - If a newer version is available, a WARNING is logged suggesting the --upgrade command.
+func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion string) {
+	if logger == nil {
+		return
+	}
+
+	currentVersion = strings.TrimSpace(currentVersion)
+	if currentVersion == "" {
+		logger.Debug("Update check skipped: current version is empty")
+		return
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	_, latestVersion, err := fetchLatestRelease(checkCtx)
+	if err != nil {
+		logger.Debug("Update check skipped (GitHub unreachable): %v", err)
+		return
+	}
+
+	latestVersion = strings.TrimSpace(latestVersion)
+	if latestVersion == "" {
+		logger.Debug("Update check skipped: latest version from GitHub is empty")
+		return
+	}
+
+	if !isNewerVersion(currentVersion, latestVersion) {
+		logger.Debug("Update check: current version (%s) is up to date (latest: %s)", currentVersion, latestVersion)
+		return
+	}
+
+	logger.Warning("A newer ProxSave version is available: %s (current: %s)", latestVersion, currentVersion)
+	logger.Warning("Consider running 'proxsave --upgrade' to install the latest release.")
+}
+
+// isNewerVersion returns true if latest is strictly newer than current,
+// comparing MAJOR.MINOR.PATCH (ignoring any leading 'v' and pre-release suffixes).
+func isNewerVersion(current, latest string) bool {
+	parse := func(v string) (int, int, int) {
+		v = strings.TrimSpace(v)
+		v = strings.TrimPrefix(v, "v")
+		if i := strings.IndexByte(v, '-'); i >= 0 {
+			v = v[:i]
+		}
+
+		parts := strings.Split(v, ".")
+		toInt := func(s string) int {
+			n, _ := strconv.Atoi(s)
+			return n
+		}
+
+		major, minor, patch := 0, 0, 0
+		if len(parts) > 0 {
+			major = toInt(parts[0])
+		}
+		if len(parts) > 1 {
+			minor = toInt(parts[1])
+		}
+		if len(parts) > 2 {
+			patch = toInt(parts[2])
+		}
+		return major, minor, patch
+	}
+
+	curMaj, curMin, curPatch := parse(current)
+	latMaj, latMin, latPatch := parse(latest)
+
+	if latMaj != curMaj {
+		return latMaj > curMaj
+	}
+	if latMin != curMin {
+		return latMin > curMin
+	}
+	return latPatch > curPatch
 }

@@ -167,7 +167,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	form.Form.AddFormItem(cloudDropdown)
 
 	cloudHint := tview.NewInputField().
-		SetLabel("  tip: remotename:path (via 'rclone config'), es. myremote:pbs-backups").
+		SetLabel("  Tip: remotename:path (via 'rclone config'), e.g. myremote:pbs-backups").
 		SetFieldWidth(0).
 		SetText("")
 	cloudHint.SetDisabled(true)
