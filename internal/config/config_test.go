@@ -657,3 +657,84 @@ func TestConfigGetIntList(t *testing.T) {
 		t.Fatalf("expected default slice to remain unchanged, got %v", defaultSlice)
 	}
 }
+
+func TestBuildWebhookConfigParsesConfiguredEndpoints(t *testing.T) {
+	cfg := &Config{
+		WebhookEnabled:       true,
+		WebhookDefaultFormat: "json",
+		WebhookTimeout:       17,
+		WebhookMaxRetries:    4,
+		WebhookRetryDelay:    7,
+		WebhookEndpointNames: []string{"alert", "", "backup"},
+		raw: map[string]string{
+			"WEBHOOK_ALERT_URL":          "https://example.com/alert",
+			"WEBHOOK_ALERT_FORMAT":       "lines",
+			"WEBHOOK_ALERT_METHOD":       "PUT",
+			"WEBHOOK_ALERT_AUTH_TYPE":    "bearer",
+			"WEBHOOK_ALERT_AUTH_TOKEN":   "tok-123",
+			"WEBHOOK_ALERT_AUTH_USER":    "admin",
+			"WEBHOOK_ALERT_AUTH_PASS":    "pass-123",
+			"WEBHOOK_ALERT_AUTH_SECRET":  "secret-xyz",
+			"WEBHOOK_ALERT_HEADERS":      "X-Trace:  12345 , Authorization: Bearer token123",
+			"WEBHOOK_BACKUP_URL":         "https://example.com/backup",
+		},
+	}
+
+	got := cfg.BuildWebhookConfig()
+
+	if !got.Enabled {
+		t.Fatalf("expected webhook config to be enabled")
+	}
+	if got.DefaultFormat != cfg.WebhookDefaultFormat {
+		t.Fatalf("default format = %q; want %q", got.DefaultFormat, cfg.WebhookDefaultFormat)
+	}
+	if got.Timeout != cfg.WebhookTimeout {
+		t.Fatalf("timeout = %d; want %d", got.Timeout, cfg.WebhookTimeout)
+	}
+	if got.MaxRetries != cfg.WebhookMaxRetries {
+		t.Fatalf("max retries = %d; want %d", got.MaxRetries, cfg.WebhookMaxRetries)
+	}
+	if got.RetryDelay != cfg.WebhookRetryDelay {
+		t.Fatalf("retry delay = %d; want %d", got.RetryDelay, cfg.WebhookRetryDelay)
+	}
+	if len(got.Endpoints) != 2 {
+		t.Fatalf("expected 2 webhook endpoints, got %d", len(got.Endpoints))
+	}
+
+	alert := got.Endpoints[0]
+	if alert.Name != "alert" {
+		t.Fatalf("first endpoint name = %q; want alert", alert.Name)
+	}
+	if alert.URL != "https://example.com/alert" {
+		t.Fatalf("alert URL = %q; want %q", alert.URL, "https://example.com/alert")
+	}
+	if alert.Format != "lines" {
+		t.Fatalf("alert format = %q; want lines", alert.Format)
+	}
+	if alert.Method != "PUT" {
+		t.Fatalf("alert method = %q; want PUT", alert.Method)
+	}
+	if alert.Auth.Type != "bearer" || alert.Auth.Token != "tok-123" || alert.Auth.User != "admin" || alert.Auth.Pass != "pass-123" || alert.Auth.Secret != "secret-xyz" {
+		t.Fatalf("alert auth = %+v; want bearer token-user-pass-secret", alert.Auth)
+	}
+	if alert.Headers["X-Trace"] != "12345" || alert.Headers["Authorization"] != "Bearer token123" {
+		t.Fatalf("alert headers = %+v; want parsed header values", alert.Headers)
+	}
+
+	backup := got.Endpoints[1]
+	if backup.Name != "backup" {
+		t.Fatalf("second endpoint name = %q; want backup", backup.Name)
+	}
+	if backup.Format != cfg.WebhookDefaultFormat {
+		t.Fatalf("backup format = %q; want %q", backup.Format, cfg.WebhookDefaultFormat)
+	}
+	if backup.Method != "POST" {
+		t.Fatalf("backup method = %q; want POST", backup.Method)
+	}
+	if backup.Auth.Type != "none" {
+		t.Fatalf("backup auth type = %q; want none", backup.Auth.Type)
+	}
+	if len(backup.Headers) != 0 {
+		t.Fatalf("expected backup headers to be empty, got %+v", backup.Headers)
+	}
+}
