@@ -1,0 +1,34 @@
+name: Sync dev after squash merge
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+
+jobs:
+  sync:
+    if: github.event.pull_request.merged == true
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync dev with main (HARD RESET)
+        run: |
+          git fetch origin
+          git checkout dev
+          git reset --hard origin/main
+
+      - name: Push new cleaned dev
+        run: git push origin dev --force
