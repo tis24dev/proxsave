@@ -35,3 +35,18 @@ func TestFilterAndSortCategoriesForSystem_PBS(t *testing.T) {
 		t.Fatalf("unexpected order: %+v", got)
 	}
 }
+
+func TestFilterAndSortCategoriesForSystem_CommonAfterSpecific(t *testing.T) {
+	cats := []Category{
+		{Name: "Storage", Type: CategoryTypePVE},
+		{Name: "General", Type: CategoryTypeCommon},
+	}
+
+	got := filterAndSortCategoriesForSystem(cats, SystemTypePVE)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 categories, got %d", len(got))
+	}
+	if got[0].Type != CategoryTypePVE || got[1].Type != CategoryTypeCommon {
+		t.Fatalf("unexpected ordering when common follows specific: %+v", got)
+	}
+}

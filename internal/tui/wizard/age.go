@@ -29,9 +29,14 @@ var (
 	ErrAgeSetupCancelled = errors.New("encryption setup aborted by user")
 )
 
-var ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-	return app.SetRoot(root, true).SetFocus(focus).Run()
-}
+var (
+	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return app.SetRoot(root, true).SetFocus(focus).Run()
+	}
+	ageMkdirAll  = os.MkdirAll
+	ageWriteFile = os.WriteFile
+	ageChmod     = os.Chmod
+)
 
 // ConfirmRecipientOverwrite shows a TUI modal to confirm overwriting an existing AGE recipient.
 func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool, error) {
@@ -379,7 +384,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 	form.AddCancelButton("Cancel")
 
 	// Run the app - ignore errors from normal app termination
-	_ = app.SetRoot(flex, true).SetFocus(form.Form).Run()
+	_ = ageWizardRunner(app, flex, form.Form)
 
 	if data == nil {
 		return nil, ErrAgeSetupCancelled
@@ -390,16 +395,16 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 
 // SaveAgeRecipient saves the AGE recipient to the file
 func SaveAgeRecipient(recipientPath, recipient string) error {
-	if err := os.MkdirAll(filepath.Dir(recipientPath), 0o700); err != nil {
+	if err := ageMkdirAll(filepath.Dir(recipientPath), 0o700); err != nil {
 		return fmt.Errorf("create recipient directory: %w", err)
 	}
 
 	content := recipient + "\n"
-	if err := os.WriteFile(recipientPath, []byte(content), 0o600); err != nil {
+	if err := ageWriteFile(recipientPath, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write recipient file: %w", err)
 	}
 
-	if err := os.Chmod(recipientPath, 0o600); err != nil {
+	if err := ageChmod(recipientPath, 0o600); err != nil {
 		return fmt.Errorf("chmod recipient file: %w", err)
 	}
 
