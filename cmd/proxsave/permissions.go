@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/user"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/security"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // applyBackupPermissions applies ownership and basic directory permissions to
@@ -123,4 +126,84 @@ func applyDirOwnershipRecursive(root string, uid, gid int, logger *logging.Logge
 		}
 		return nil
 	})
+}
+
+// fixPermissionsAfterInstall runs a best-effort permission and ownership
+// normalization after a successful --install / --install --cli run so that
+// the environment starts in a consistent state.
+//
+// It reuses the existing security checks (with AutoFix enabled and
+// ContinueOnSecurityIssues=true) and, if configured, applies backup
+// permissions managed by SET_BACKUP_PERMISSIONS.
+//
+// It returns a status code (ok, warning, error, skipped) and a short
+// human-readable message suitable for the install footer. Errors are
+// always non-blocking for the install flow.
+func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string, bootstrap *logging.BootstrapLogger) (string, string) {
+	configPath = strings.TrimSpace(configPath)
+	baseDir = strings.TrimSpace(baseDir)
+	if configPath == "" {
+		return "skipped", "normalizzazione permessi non eseguita (percorso configurazione non disponibile)"
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		if bootstrap != nil {
+			bootstrap.Warning("Post-install: skipping permission fix, failed to load configuration: %v", err)
+		}
+		return "error", "impossibile normalizzare i permessi: caricamento configurazione fallito (vedi log)"
+	}
+
+	if strings.TrimSpace(cfg.BaseDir) == "" && baseDir != "" {
+		cfg.BaseDir = baseDir
+	}
+
+	logger := logging.New(types.LogLevelInfo, cfg.UseColor)
+
+	// Force-enable security checks in a safe, non-blocking way for install.
+	cfg.SecurityCheckEnabled = true
+	cfg.AutoFixPermissions = true
+	cfg.ContinueOnSecurityIssues = true
+
+	// Avoid running network/port/process-heavy checks during install.
+	cfg.CheckNetworkSecurity = false
+	cfg.CheckFirewall = false
+	cfg.CheckOpenPorts = false
+
+	if bootstrap != nil {
+		bootstrap.Info("Finalizing installation: normalizing permissions and ownership")
+	}
+
+	execInfo := getExecInfo()
+	execPath := execInfo.ExecPath
+
+	status := "ok"
+	message := "permessi e proprietà normalizzati correttamente"
+
+	if _, secErr := security.Run(ctx, logger, cfg, configPath, execPath, nil); secErr != nil {
+		if bootstrap != nil {
+			bootstrap.Warning("Post-install: security permission checks reported errors (ignored): %v", secErr)
+		}
+		status = "error"
+		message = "errori durante i controlli di sicurezza per la normalizzazione permessi (non bloccante, vedi log)"
+	}
+
+	if cfg.SetBackupPermissions {
+		if bootstrap != nil {
+			bootstrap.Info("Finalizing installation: applying backup directory permissions")
+		}
+		if err := applyBackupPermissions(cfg, logger); err != nil {
+			if bootstrap != nil {
+				bootstrap.Warning("Post-install: backup permission adjustment failed (ignored): %v", err)
+			}
+			if status != "error" {
+				status = "warning"
+				message = "permessi normalizzati con avvisi sui percorsi di backup (non bloccante, vedi log)"
+			}
+		} else if status == "ok" {
+			message = "permessi e proprietà normalizzati correttamente (inclusi i percorsi di backup)"
+		}
+	}
+
+	return status, message
 }

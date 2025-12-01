@@ -45,6 +45,8 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	var telegramCode string
 	var installErr error
+	var permStatus string
+	var permMessage string
 
 	if err := ensureInteractiveStdin(); err != nil {
 		installErr = err
@@ -52,7 +54,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 
 	defer func() {
-		printInstallFooter(installErr, configPath, baseDir, telegramCode)
+		printInstallFooter(installErr, configPath, baseDir, telegramCode, permStatus, permMessage)
 	}()
 
 	buildSig := buildSignature()
@@ -199,6 +201,10 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			telegramCode = code
 		}
 	}
+
+	// Best-effort post-install permission and ownership normalization so that
+	// the environment starts in a consistent state.
+	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap)
 
 	installErr = nil
 	return nil

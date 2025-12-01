@@ -43,8 +43,14 @@ func TestPrintInstallFooterVariants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			permStatus := ""
+			permMessage := ""
+			if tt.err == nil {
+				permStatus = "ok"
+				permMessage = "permessi e proprietà normalizzati correttamente"
+			}
 			output := captureStdout(t, func() {
-				printInstallFooter(tt.err, "/etc/proxmox-backup/backup.env", "/opt/proxsave", "CODE123")
+				printInstallFooter(tt.err, "/etc/proxmox-backup/backup.env", "/opt/proxsave", "CODE123", permStatus, permMessage)
 			})
 			if !strings.Contains(output, tt.wantSnippet) {
 				t.Fatalf("output %q does not contain %q", output, tt.wantSnippet)
@@ -58,6 +64,9 @@ func TestPrintInstallFooterVariants(t *testing.T) {
 				}
 				if !strings.Contains(output, "enter code: CODE123") {
 					t.Fatalf("expected telegram code mention")
+				}
+				if !strings.Contains(output, "permessi e proprietà normalizzati correttamente") {
+					t.Fatalf("expected permissions normalization confirmation line in footer, got %q", output)
 				}
 			}
 		})

@@ -5,7 +5,7 @@ Proxmox PBS & PVE System Files Backup
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/Go-1.25+-success.svg?logo=go)](https://go.dev/)
-[![codecov](https://codecov.io/gh/tis24dev/proxsave/branch/dev/graph/badge.svg)](https://codecov.io/gh/tis24dev/proxmox-backup)
+[![codecov](https://codecov.io/gh/tis24dev/proxsave/branch/dev/graph/badge.svg)](https://codecov.io/gh/tis24dev/proxsave)
 [![GoSec](https://img.shields.io/github/actions/workflow/status/tis24dev/proxsave/security-ultimate.yml?label=GoSec&logo=go)](https://github.com/tis24dev/proxsave/actions/workflows/security-ultimate.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/tis24dev/proxsave/codeql.yml?label=CodeQL&logo=github)](https://github.com/tis24dev/proxsave/actions/workflows/codeql.yml)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-success?logo=dependabot)](https://github.com/tis24dev/proxsave/network/updates)
@@ -23,7 +23,7 @@ Restoring a PVE or PBS server after a disaster (or even just a migration) is alw
 
 **ProxSave** allows you to save and restore, integrating advanced features: automatic backups, multi-path saves, intelligent retention, encryption of backups, integrated email and Telegram notifications without configuration, and compatibility with webhooks, Gotify, and Prometheus.
 
-For more information, take a look at our landing page at [proxsave.dev](https://proxsave.de).
+For more information, take a look at our landing page at [proxsave.dev](https://proxsave.dev).
 
 ## Installation
 

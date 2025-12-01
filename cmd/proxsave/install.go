@@ -48,9 +48,11 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 
 	var telegramCode string
 	var installErr error
+	var permStatus string
+	var permMessage string
 
 	defer func() {
-		printInstallFooter(installErr, configPath, baseDir, telegramCode)
+		printInstallFooter(installErr, configPath, baseDir, telegramCode, permStatus, permMessage)
 	}()
 
 	if err := ensureInteractiveStdin(); err != nil {
@@ -179,6 +181,10 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		}
 	}
 
+	// Best-effort post-install permission and ownership normalization so that
+	// the environment starts in a consistent state.
+	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap)
+
 	installErr = nil
 	return nil
 }
@@ -222,7 +228,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 	return runInstallTUI(ctx, resolvedPath, bootstrap)
 }
 
-func printInstallFooter(installErr error, configPath, baseDir, telegramCode string) {
+func printInstallFooter(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
 	colorReset := "\033[0m"
 
 	title := "Go-based installation completed"
@@ -245,6 +251,22 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode stri
 	fmt.Printf(" %s\n", title)
 	fmt.Printf("================================================%s\n", colorReset)
 	fmt.Println()
+
+	if permStatus != "" {
+		switch permStatus {
+		case "ok":
+			fmt.Printf("Permissions: %s\n", permMessage)
+		case "warning":
+			fmt.Printf("Permissions: WARNING (non blocking) - %s\n", permMessage)
+		case "error":
+			fmt.Printf("Permissions: ERROR (non blocking) - %s\n", permMessage)
+		case "skipped":
+			fmt.Printf("Permissions: %s\n", permMessage)
+		default:
+			fmt.Printf("Permissions: %s\n", permMessage)
+		}
+		fmt.Println()
+	}
 
 	// For user-aborted runs, stop here to avoid showing next steps/commands.
 	if installErr != nil && isInstallAbortedError(installErr) {
