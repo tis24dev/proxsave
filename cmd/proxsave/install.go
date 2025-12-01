@@ -17,6 +17,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
 	"github.com/tis24dev/proxsave/internal/types"
+	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
 
 func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) error {
@@ -358,7 +359,7 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) err
 func printInstallBanner(configPath string) {
 	fmt.Println("===========================================")
 	fmt.Println("  ProxSave - Go Version")
-	fmt.Printf("  Version: %s\n", version)
+	fmt.Printf("  Version: %s\n", buildinfo.String())
 	sig := buildSignature()
 	if strings.TrimSpace(sig) == "" {
 		sig = "n/a"

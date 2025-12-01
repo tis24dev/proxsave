@@ -29,18 +29,18 @@ import (
 	"github.com/tis24dev/proxsave/internal/security"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
+	buildinfo "github.com/tis24dev/proxsave/internal/version"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 const (
-	version                       = "0.9.0" // Semantic version format required by cloud relay worker
-	defaultLegacyEnvPath          = "/opt/proxsave/env/backup.env"
-	legacyEnvFallbackPath         = "/opt/proxmox-backup/env/backup.env"
-	goRuntimeMinVersion           = "1.25.4"
-	networkPreflightTimeout       = 2 * time.Second
-	bytesPerMegabyte        int64 = 1024 * 1024
-	defaultDirPerm                = 0o755
-	exitCodeInterrupted           = 128 + int(syscall.SIGINT)
+	defaultLegacyEnvPath    = "/opt/proxsave/env/backup.env"
+	legacyEnvFallbackPath   = "/opt/proxmox-backup/env/backup.env"
+	goRuntimeMinVersion     = "1.25.4"
+	networkPreflightTimeout = 2 * time.Second
+	bytesPerMegabyte  int64 = 1024 * 1024
+	defaultDirPerm          = 0o755
+	exitCodeInterrupted     = 128 + int(syscall.SIGINT)
 )
 
 // Build-time variables (injected via ldflags)
@@ -56,6 +56,10 @@ var closeStdinOnce sync.Once
 
 func run() int {
 	bootstrap := logging.NewBootstrapLogger()
+
+	// Resolve the effective tool version once for the entire run.
+	toolVersion := buildinfo.String()
+
 	finalExitCode := types.ExitSuccess.Int()
 	showSummary := false
 	finalize := func(code int) int {
@@ -183,7 +187,7 @@ func run() int {
 
 	decryptCLI := args.ForceCLI
 	if args.Decrypt {
-		if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, version, decryptCLI); err != nil {
+		if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, toolVersion, decryptCLI); err != nil {
 			if errors.Is(err, orchestrator.ErrDecryptAborted) {
 				bootstrap.Info("Decrypt workflow aborted by user")
 				return types.ExitSuccess.Int()
@@ -303,7 +307,7 @@ func run() int {
 	// Print header
 	bootstrap.Println("===========================================")
 	bootstrap.Println("  ProxSave - Go Version")
-	bootstrap.Printf("  Version: %s", version)
+	bootstrap.Printf("  Version: %s", toolVersion)
 	if sig := buildSignature(); sig != "" {
 		bootstrap.Printf("  Build Signature: %s", sig)
 	}
@@ -516,7 +520,7 @@ func run() int {
 	// If the installed version is up to date, nothing is printed at INFO/WARNING level
 	// (only a DEBUG message is logged). If a newer version exists, a WARNING is emitted
 	// suggesting the use of --upgrade.
-	checkForUpdates(ctx, logger, version)
+	checkForUpdates(ctx, logger, toolVersion)
 
 	// Apply backup permissions (optional, Bash-compatible behavior)
 	if cfg.SetBackupPermissions {
@@ -693,7 +697,7 @@ func run() int {
 	if args.Restore {
 		if restoreCLI {
 			logging.Info("Restore mode enabled - starting CLI workflow...")
-			if err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, version); err != nil {
+			if err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, toolVersion); err != nil {
 				if errors.Is(err, orchestrator.ErrRestoreAborted) {
 					logging.Info("Restore workflow aborted by user")
 					return finalize(exitCodeInterrupted)
@@ -714,7 +718,7 @@ func run() int {
 		if strings.TrimSpace(sig) == "" {
 			sig = "n/a"
 		}
-		if err := orchestrator.RunRestoreWorkflowTUI(ctx, cfg, logger, version, args.ConfigPath, sig); err != nil {
+		if err := orchestrator.RunRestoreWorkflowTUI(ctx, cfg, logger, toolVersion, args.ConfigPath, sig); err != nil {
 			if errors.Is(err, orchestrator.ErrRestoreAborted) || errors.Is(err, orchestrator.ErrDecryptAborted) {
 				logging.Info("Restore workflow aborted by user")
 				return finalize(exitCodeInterrupted)
@@ -733,7 +737,7 @@ func run() int {
 	if args.Decrypt {
 		if decryptCLI {
 			logging.Info("Decrypt mode enabled - starting CLI workflow...")
-			if err := orchestrator.RunDecryptWorkflow(ctx, cfg, logger, version); err != nil {
+			if err := orchestrator.RunDecryptWorkflow(ctx, cfg, logger, toolVersion); err != nil {
 				if errors.Is(err, orchestrator.ErrDecryptAborted) {
 					logging.Info("Decrypt workflow aborted by user")
 					return finalize(types.ExitSuccess.Int())
@@ -748,7 +752,7 @@ func run() int {
 			if strings.TrimSpace(sig) == "" {
 				sig = "n/a"
 			}
-			if err := orchestrator.RunDecryptWorkflowTUI(ctx, cfg, logger, version, args.ConfigPath, sig); err != nil {
+			if err := orchestrator.RunDecryptWorkflowTUI(ctx, cfg, logger, toolVersion, args.ConfigPath, sig); err != nil {
 				if errors.Is(err, orchestrator.ErrDecryptAborted) {
 					logging.Info("Decrypt workflow aborted by user")
 					return finalize(types.ExitSuccess.Int())
@@ -764,7 +768,7 @@ func run() int {
 	// Initialize orchestrator
 	logging.Step("Initializing backup orchestrator")
 	orch = orchestrator.New(logger, dryRun)
-	orch.SetVersion(version)
+	orch.SetVersion(toolVersion)
 	orch.SetConfig(cfg)
 	orch.SetIdentity(serverIDValue, serverMACValue)
 	orch.SetProxmoxVersion(envInfo.Version)
