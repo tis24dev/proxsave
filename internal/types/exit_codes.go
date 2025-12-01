@@ -1,4 +1,4 @@
-# Package types defines shared application data types.
+// Package types defines shared application data types.
 package types
 
 // ExitCode represents the application's exit codes.
