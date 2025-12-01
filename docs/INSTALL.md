@@ -4,6 +4,10 @@
   - [Direct Install](#direct-install)
   - [Migration](#migration)
   - [First Backup Workflow](#first-backup-workflow)
+- [⬆️ Upgrading ProxSave Binary](#upgrading-proxsave-binary)
+  - [Quick Upgrade](#quick-upgrade)
+  - [What Gets Updated](#what-gets-updated)
+  - [Full Upgrade Workflow](#full-upgrade-workflow)
 - [💾 Manual Installation](#installation)
   - [Prerequisites](#prerequisites)
   - [Building from Source](#building-from-source)
@@ -61,6 +65,72 @@ tail -f log/backup-$(hostname)-*.log
 # Check backup files
 ls -lh backup/
 ```
+
+---
+
+## Upgrading ProxSave Binary
+
+ProxSave provides a built-in upgrade command to update your installation to the latest release from GitHub.
+
+### Quick Upgrade
+
+```bash
+# Upgrade to latest version
+./build/proxsave --upgrade
+
+# Optionally update configuration template
+./build/proxsave --upgrade-config
+
+# Verify everything works
+./build/proxsave --dry-run
+```
+
+### What Gets Updated
+
+The `--upgrade` command:
+- ✅ Downloads latest binary from GitHub releases
+- ✅ Verifies integrity with SHA256 checksums
+- ✅ Atomically replaces current binary
+- ✅ Updates symlinks (`/usr/local/bin/proxsave`, `/usr/local/bin/proxmox-backup`)
+- ✅ Cleans up legacy Bash script symlinks
+- ✅ Migrates cron entries to new binary
+- ✅ Fixes file permissions
+- ❌ **Does NOT modify** your `backup.env` configuration
+
+### Full Upgrade Workflow
+
+```bash
+# 1. Upgrade binary
+./build/proxsave --upgrade
+
+# 2. (Optional) Update configuration with new template variables
+./build/proxsave --upgrade-config
+
+# 3. Test configuration
+./build/proxsave --dry-run
+
+# 4. Verify cron schedule
+crontab -l
+
+# 5. Run a real backup to confirm
+./build/proxsave
+```
+
+### Requirements
+
+- **Internet connection**: Must reach GitHub releases
+- **Platform**: Linux (amd64 or arm64)
+- **Permissions**: Root/sudo access recommended
+
+### Troubleshooting
+
+If upgrade fails:
+1. Check internet connectivity: `curl -I https://github.com`
+2. Verify GitHub is reachable: `curl -I https://api.github.com`
+3. Check disk space: `df -h /opt/proxsave`
+4. Review logs for specific errors
+
+For more details, see [CLI Reference - Binary Upgrade](CLI_REFERENCE.md#binary-upgrade).
 
 ---
 

@@ -148,6 +148,11 @@ func run() int {
 		return types.ExitConfigError.Int()
 	}
 
+	if args.Upgrade && (args.Install || args.NewInstall) {
+		bootstrap.Error("Cannot use --upgrade together with --install or --new-install.")
+		return types.ExitConfigError.Int()
+	}
+
 	// Resolve configuration path relative to the executable's base directory so
 	// that configs/ is located consistently next to the binary, regardless of
 	// the current working directory.
@@ -157,6 +162,11 @@ func run() int {
 		return types.ExitConfigError.Int()
 	}
 	args.ConfigPath = resolvedConfigPath
+
+	// Dedicated upgrade mode (download latest binary, no config changes)
+	if args.Upgrade {
+		return runUpgrade(ctx, args, bootstrap)
+	}
 
 	newKeyCLI := args.ForceCLI
 	// Dedicated new key mode (no backup run)
@@ -1298,6 +1308,7 @@ func printFinalSummary(finalExitCode int) {
 	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
 	fmt.Println("  --env-migration    - Run installer and migrate legacy Bash backup.env to Go template")
 	fmt.Println("  --env-migration-dry-run - Preview installer/migration without writing files")
+	fmt.Println("  --upgrade          - Update proxsave binary to latest release (no config changes)")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")

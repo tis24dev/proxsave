@@ -27,6 +27,7 @@ type Args struct {
 	SupportIssueID    string
 	ShowVersion       bool
 	ShowHelp          bool
+	Upgrade           bool
 	ForceNewKey       bool
 	Decrypt           bool
 	Restore           bool
@@ -88,6 +89,8 @@ func Parse() *Args {
 		"Run the interactive installer (generate/configure backup.env)")
 	flag.BoolVar(&args.NewInstall, "new-install", false,
 		"Reset the installation directory (preserving env/identity) and launch the interactive installer")
+	flag.BoolVar(&args.Upgrade, "upgrade", false,
+		"Download and install the latest ProxSave binary (without modifying backup.env)")
 	flag.BoolVar(&args.EnvMigration, "env-migration", false,
 		"Run the installer and migrate a legacy Bash backup.env to the Go template")
 	flag.BoolVar(&args.EnvMigrationDry, "env-migration-dry-run", false,

@@ -159,6 +159,49 @@ Some interactive commands support two interface modes:
 5. Writes updated configuration
 6. Reports added/removed variables
 
+### Binary Upgrade
+
+```bash
+# Upgrade binary to latest version
+./build/proxsave --upgrade
+
+# Full upgrade including configuration
+./build/proxsave --upgrade
+./build/proxsave --upgrade-config
+```
+
+**`--upgrade` use case**: Update ProxSave binary to the latest version from GitHub releases while preserving your configuration and backup data. The upgrade process is safe and atomic, with checksum verification and automatic permission fixes.
+
+**Upgrade workflow**:
+1. Validates configuration file exists
+2. Queries GitHub API for latest release version
+3. Downloads binary archive and SHA256SUMS from GitHub
+4. Creates temporary directory for download
+5. Verifies archive integrity using SHA256 checksum
+6. Extracts binary from tar.gz archive
+7. Atomically replaces current binary (write to .tmp, then rename)
+8. Updates symlinks in `/usr/local/bin/` (proxsave, proxmox-backup)
+9. Cleans up legacy Bash script symlinks
+10. Migrates cron entries and fixes file permissions
+
+**Post-upgrade steps**:
+1. Configuration file automatically compatible with new version
+2. Optionally run `--upgrade-config` to merge new config template variables
+3. Test functionality with dry-run: `./build/proxsave --dry-run`
+4. Verify backups continue to work as expected
+5. Check cron schedule was preserved: `crontab -l`
+
+**Important notes**:
+- **Internet required**: Must be able to reach GitHub releases
+- **No configuration changes**: `backup.env` is never modified during `--upgrade`
+- **Platform support**: Linux only (amd64, arm64)
+- **Incompatible flags**: Cannot use with `--install` or `--new-install`
+- **Automatic maintenance**: Symlinks, cron, and permissions updated automatically
+- **Safe replacement**: Old binary is replaced atomically (no backup created)
+- **Separate config upgrade**: Use `--upgrade-config` separately to update configuration
+
+See also: [upgrading configuration](#configuration-upgrade)
+
 ### Configuration Migration
 
 ```bash
@@ -264,6 +307,7 @@ Next step: ./build/proxmox-backup --dry-run
 |------|-------------|
 | `--install` | Interactive installation wizard |
 | `--new-install` | Wipe install directory (preserve env/identity) then launch wizard |
+| `--upgrade` | Download and install latest ProxSave binary from GitHub releases |
 | `--upgrade-config` | Merge current config with latest template |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
 | `--env-migration` | Migrate legacy Bash config to Go |
@@ -519,11 +563,19 @@ Next step: ./build/proxmox-backup --dry-run
 # Full reset + installation (preserves env/identity)
 ./build/proxmox-backup --new-install
 
+# Upgrade binary to latest release
+./build/proxmox-backup --upgrade
+
 # Upgrade configuration after binary update
 ./build/proxmox-backup --upgrade-config
 
 # Preview upgrade changes
 ./build/proxmox-backup --upgrade-config-dry-run
+
+# Full upgrade workflow (binary + config)
+./build/proxmox-backup --upgrade
+./build/proxmox-backup --upgrade-config
+./build/proxmox-backup --dry-run  # Verify everything works
 
 # Migrate from Bash version (preview)
 ./build/proxmox-backup --env-migration-dry-run --old-env /opt/proxmox-backup/env/backup.env
@@ -651,6 +703,7 @@ crontab -e
 | `--cli` | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Interactive installation wizard |
 | `--new-install` | - | Wipe install dir (preserve env/identity) then run wizard |
+| `--upgrade` | - | Download and install latest binary from GitHub releases |
 | `--upgrade-config` | - | Upgrade config from embedded template |
 | `--upgrade-config-dry-run` | - | Preview config upgrade |
 | `--env-migration` | - | Migrate legacy Bash config |
@@ -677,7 +730,10 @@ crontab -e
 # Full reset (preserve env/identity) then setup
 ./build/proxmox-backup --new-install
 
-# After binary upgrade
+# Upgrade binary to latest version
+./build/proxmox-backup --upgrade
+
+# After binary upgrade, optionally update config
 ./build/proxmox-backup --upgrade-config
 
 # Migrate from Bash (safe preview first)
