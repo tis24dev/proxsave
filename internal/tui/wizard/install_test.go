@@ -68,3 +68,33 @@ func TestApplyInstallDataDefaultsBaseTemplate(t *testing.T) {
 		t.Fatalf("expected BASE_DIR to be set in default template")
 	}
 }
+
+func TestApplyInstallDataCronAndNotifications(t *testing.T) {
+	baseTemplate := "CRON_SCHEDULE=\nCRON_HOUR=\nCRON_MINUTE=\nTELEGRAM_ENABLED=true\nEMAIL_ENABLED=false\nENCRYPT_ARCHIVE=true\n"
+	data := &InstallWizardData{
+		BaseDir:          "/data",
+		NotificationMode: "email",
+		CronTime:         "3:7",
+		EnableEncryption: false,
+	}
+
+	result, err := ApplyInstallData(baseTemplate, data)
+	if err != nil {
+		t.Fatalf("ApplyInstallData returned error: %v", err)
+	}
+
+	assertContains := func(key, val string) {
+		needle := key + "=" + val
+		if !strings.Contains(result, needle) {
+			t.Fatalf("missing %q in result:\n%s", needle, result)
+		}
+	}
+
+	assertContains("TELEGRAM_ENABLED", "false")
+	assertContains("EMAIL_ENABLED", "true")
+	assertContains("EMAIL_DELIVERY_METHOD", "relay")
+	assertContains("CRON_SCHEDULE", "7 3 * * *")
+	assertContains("CRON_HOUR", "3")
+	assertContains("CRON_MINUTE", "7")
+	assertContains("ENCRYPT_ARCHIVE", "false")
+}

@@ -704,19 +704,14 @@ func selectRestoreModeTUI(systemType SystemType, configPath, buildSig, backupSum
 	return selected, nil
 }
 
-func selectCategoriesTUI(available []Category, systemType SystemType, configPath, buildSig string) ([]Category, error) {
-	// Filter categories by system type (same logic as ShowCategorySelectionMenu)
-	relevant := make([]Category, 0)
+func filterAndSortCategoriesForSystem(available []Category, systemType SystemType) []Category {
+	relevant := make([]Category, 0, len(available))
 	for _, cat := range available {
 		if cat.Type == CategoryTypeCommon ||
 			(systemType == SystemTypePVE && cat.Type == CategoryTypePVE) ||
 			(systemType == SystemTypePBS && cat.Type == CategoryTypePBS) {
 			relevant = append(relevant, cat)
 		}
-	}
-
-	if len(relevant) == 0 {
-		return nil, fmt.Errorf("no categories available for this system type")
 	}
 
 	// Sort categories: PVE/PBS first, then common
@@ -731,6 +726,16 @@ func selectCategoriesTUI(available []Category, systemType SystemType, configPath
 		}
 		return relevant[i].Name < relevant[j].Name
 	})
+
+	return relevant
+}
+
+func selectCategoriesTUI(available []Category, systemType SystemType, configPath, buildSig string) ([]Category, error) {
+	relevant := filterAndSortCategoriesForSystem(available, systemType)
+
+	if len(relevant) == 0 {
+		return nil, fmt.Errorf("no categories available for this system type")
+	}
 
 	app := tui.NewApp()
 	form := components.NewForm(app)

@@ -273,3 +273,45 @@ func TestRestoreSafetyBackup_MaliciousSymlinks(t *testing.T) {
 		t.Fatalf("legitimate symlink resolves outside restore dir")
 	}
 }
+
+func TestResolveAndCheckPathInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	target, err := resolveAndCheckPath(root, filepath.Join("etc", "pve", "config.db"))
+	if err != nil {
+		t.Fatalf("resolveAndCheckPath returned error: %v", err)
+	}
+	if !strings.HasPrefix(target, root) {
+		t.Fatalf("resolved path not inside root: %s", target)
+	}
+	if !strings.HasSuffix(target, filepath.Join("etc", "pve", "config.db")) {
+		t.Fatalf("resolved path does not keep relative structure: %s", target)
+	}
+}
+
+func TestResolveAndCheckPathRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	if _, err := resolveAndCheckPath(root, filepath.Join("..", "outside")); err == nil {
+		t.Fatalf("expected traversal to be rejected")
+	}
+}
+
+func TestResolveAndCheckPathRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(root, "..", "outside-root")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+	outsideFile := filepath.Join(outside, "data.txt")
+	if err := os.WriteFile(outsideFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	link := filepath.Join(root, "escape-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	if _, err := resolveAndCheckPath(root, filepath.Join("escape-link", "data.txt")); err == nil {
+		t.Fatalf("expected symlink escape to be rejected")
+	}
+}

@@ -1,25 +1,13 @@
 package wizard
 
 import (
-	"reflect"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"github.com/rivo/tview"
 
 	"github.com/tis24dev/proxsave/internal/tui"
 )
-
-func extractModalDone(modal *tview.Modal) func(int, string) {
-	field := reflect.ValueOf(modal).Elem().FieldByName("done")
-	ptr := unsafe.Pointer(field.UnsafeAddr())
-	return *(*func(int, string))(ptr)
-}
-
-func extractModalText(modal *tview.Modal) string {
-	return reflect.ValueOf(modal).Elem().FieldByName("text").String()
-}
 
 func TestConfirmNewInstallContinue(t *testing.T) {
 	originalRunner := confirmNewInstallRunner

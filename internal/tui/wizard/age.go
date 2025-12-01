@@ -29,6 +29,10 @@ var (
 	ErrAgeSetupCancelled = errors.New("encryption setup aborted by user")
 )
 
+var ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	return app.SetRoot(root, true).SetFocus(focus).Run()
+}
+
 // ConfirmRecipientOverwrite shows a TUI modal to confirm overwriting an existing AGE recipient.
 func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool, error) {
 	app := tui.NewApp()
@@ -101,7 +105,7 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 		SetBorderColor(tui.ProxmoxOrange).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	if err := app.SetRoot(flex, true).SetFocus(modal).Run(); err != nil {
+	if err := ageWizardRunner(app, flex, modal); err != nil {
 		return false, err
 	}
 
