@@ -196,7 +196,7 @@ func TestPrintVersion(t *testing.T) {
 	if !strings.Contains(out, "ProxSave") {
 		t.Fatalf("version output missing header: %q", out)
 	}
-	if !strings.Contains(out, "Version: 0.2.0-dev") || !strings.Contains(out, "Author: tis24dev") {
+	if !strings.Contains(out, "Version: ") || !strings.Contains(out, "Author: tis24dev") {
 		t.Fatalf("version output missing fields: %q", out)
 	}
 }

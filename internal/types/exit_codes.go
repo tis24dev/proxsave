@@ -1,56 +1,57 @@
+// Package types defines shared application data types.
 package types
 
-// ExitCode rappresenta i codici di uscita dell'applicazione
+// ExitCode represents the application's exit codes.
 type ExitCode int
 
 const (
-	// ExitSuccess - Esecuzione completata con successo
+	// ExitSuccess - Execution completed successfully.
 	ExitSuccess ExitCode = 0
 
-	// ExitGenericError - Errore generico non specificato
+	// ExitGenericError - Unspecified generic error.
 	ExitGenericError ExitCode = 1
 
-	// ExitConfigError - Errore nella configurazione
+	// ExitConfigError - Configuration error.
 	ExitConfigError ExitCode = 2
 
-	// ExitEnvironmentError - Ambiente Proxmox non valido o non supportato
+	// ExitEnvironmentError - Invalid or unsupported Proxmox environment.
 	ExitEnvironmentError ExitCode = 3
 
-	// ExitBackupError - Errore durante l'operazione di backup (generico)
+	// ExitBackupError - Error during the backup operation (generic).
 	ExitBackupError ExitCode = 4
 
-	// ExitStorageError - Errore nelle operazioni di storage
+	// ExitStorageError - Error during storage operations.
 	ExitStorageError ExitCode = 5
 
-	// ExitNetworkError - Errore di rete (upload, notifiche, ecc.)
+	// ExitNetworkError - Network error (upload, notifications, etc.).
 	ExitNetworkError ExitCode = 6
 
-	// ExitPermissionError - Errore di permessi
+	// ExitPermissionError - Permission error.
 	ExitPermissionError ExitCode = 7
 
-	// ExitVerificationError - Errore nella verifica dell'integrità
+	// ExitVerificationError - Error during integrity verification.
 	ExitVerificationError ExitCode = 8
 
-	// ExitCollectionError - Errore durante la raccolta dei file di configurazione
+	// ExitCollectionError - Error during collection of configuration files.
 	ExitCollectionError ExitCode = 9
 
-	// ExitArchiveError - Errore durante la creazione dell'archivio
+	// ExitArchiveError - Error while creating the archive.
 	ExitArchiveError ExitCode = 10
 
-	// ExitCompressionError - Errore durante la compressione
+	// ExitCompressionError - Error during compression.
 	ExitCompressionError ExitCode = 11
 
-	// ExitDiskSpaceError - Spazio su disco insufficiente
+	// ExitDiskSpaceError - Insufficient disk space.
 	ExitDiskSpaceError ExitCode = 12
 
-	// ExitPanicError - Panic non gestito intercettato
+	// ExitPanicError - Unhandled panic caught.
 	ExitPanicError ExitCode = 13
 
-	// ExitSecurityError - Errori rilevati dal controllo di sicurezza
+	// ExitSecurityError - Errors detected by the security check.
 	ExitSecurityError ExitCode = 14
 )
 
-// String restituisce una descrizione testuale del codice di uscita
+// String returns a human-readable description of the exit code.
 func (e ExitCode) String() string {
 	switch e {
 	case ExitSuccess:

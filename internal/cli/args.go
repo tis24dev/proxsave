@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/version"
 )
 
 const (
@@ -176,8 +178,26 @@ func printHelp(w io.Writer, argv0 string) {
 
 func printVersion(w io.Writer) {
 	fmt.Fprintln(w, "ProxSave")
-	fmt.Fprintln(w, "Version: 0.2.0-dev")
-	fmt.Fprintln(w, "Build: development")
+
+	v := version.String()
+	if strings.TrimSpace(v) == "" {
+		v = "0.0.0-dev"
+	}
+	fmt.Fprintf(w, "Version: %s\n", v)
+
+	build := "development"
+	commit := strings.TrimSpace(version.Commit)
+	date := strings.TrimSpace(version.Date)
+	switch {
+	case commit != "" && date != "":
+		build = fmt.Sprintf("%s (%s)", commit, date)
+	case commit != "":
+		build = commit
+	case date != "":
+		build = date
+	}
+	fmt.Fprintf(w, "Build: %s\n", build)
+
 	fmt.Fprintln(w, "Author: tis24dev")
 }
 
