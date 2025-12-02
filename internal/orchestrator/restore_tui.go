@@ -217,14 +217,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		logger.Info("Preparing PBS system for restore: stopping proxmox-backup services")
 		if err := stopPBSServices(ctx, logger); err != nil {
 			logger.Warning("Unable to stop PBS services automatically: %v", err)
-			cont, perr := promptContinueWithPBSServicesTUI(configPath, buildSig)
-			if perr != nil {
-				return perr
-			}
-			if !cont {
-				return fmt.Errorf("restore aborted: PBS services still running")
-			}
-			logger.Info("Continuing restore without stopping PBS services")
+			logger.Warning("Continuing restore with PBS services still running")
 		} else {
 			pbsServicesStopped = true
 			defer func() {

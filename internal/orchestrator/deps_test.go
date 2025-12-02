@@ -159,13 +159,14 @@ type FakeCommandRunner struct {
 func (f *FakeCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	key := commandKey(name, args)
 	f.Calls = append(f.Calls, key)
+	var out []byte
+	if f.Outputs != nil {
+		out = f.Outputs[key]
+	}
 	if err, ok := f.Errors[key]; ok {
-		return nil, err
+		return out, err
 	}
-	if out, ok := f.Outputs[key]; ok {
-		return out, nil
-	}
-	return nil, nil
+	return out, nil
 }
 
 func (f *FakeCommandRunner) ExpectCommand(cmd string, output []byte) {

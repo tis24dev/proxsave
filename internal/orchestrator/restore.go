@@ -15,12 +15,22 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 var ErrRestoreAborted = errors.New("restore workflow aborted by user")
+
+const (
+	serviceStopTimeout        = 45 * time.Second
+	serviceStartTimeout       = 30 * time.Second
+	serviceVerifyTimeout      = 5 * time.Second
+	serviceStatusCheckTimeout = 5 * time.Second
+	servicePollInterval       = 500 * time.Millisecond
+	serviceRetryDelay         = 500 * time.Millisecond
+)
 
 func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) error {
 	if cfg == nil {
@@ -182,13 +192,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		if err := stopPBSServices(ctx, logger); err != nil {
 			logger.Warning("Unable to stop PBS services automatically: %v", err)
 			fmt.Println()
-			cont, promptErr := promptYesNo(ctx, reader, "Continue restore with PBS services still running? (y/N): ")
-			if promptErr != nil {
-				return promptErr
-			}
-			if !cont {
-				return fmt.Errorf("restore aborted: PBS services still running")
-			}
+			fmt.Println("⚠ PBS services are still running. Continuing restore may leave proxmox-backup processes active.")
 			logger.Info("Continuing restore without stopping PBS services")
 		} else {
 			pbsServicesStopped = true
@@ -366,30 +370,20 @@ func checkZFSPoolsAfterRestore(logger *logging.Logger) error {
 }
 
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	commands := [][]string{
-		{"systemctl", "stop", "pve-cluster"},
-		{"systemctl", "stop", "pvedaemon"},
-		{"systemctl", "stop", "pveproxy"},
-		{"systemctl", "stop", "pvestatd"},
-	}
-	for _, cmd := range commands {
-		if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
-			return fmt.Errorf("failed to stop PVE services (%s %s): %w", cmd[0], strings.Join(cmd[1:], " "), err)
+	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
+	for _, service := range services {
+		if err := stopServiceWithRetries(ctx, logger, service); err != nil {
+			return fmt.Errorf("failed to stop PVE services (%s): %w", service, err)
 		}
 	}
 	return nil
 }
 
 func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	commands := [][]string{
-		{"systemctl", "start", "pve-cluster"},
-		{"systemctl", "start", "pvedaemon"},
-		{"systemctl", "start", "pveproxy"},
-		{"systemctl", "start", "pvestatd"},
-	}
-	for _, cmd := range commands {
-		if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
-			return fmt.Errorf("failed to start PVE services (%s %s): %w", cmd[0], strings.Join(cmd[1:], " "), err)
+	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
+	for _, service := range services {
+		if err := startServiceWithRetries(ctx, logger, service); err != nil {
+			return fmt.Errorf("failed to start PVE services (%s): %w", service, err)
 		}
 	}
 	return nil
@@ -399,18 +393,15 @@ func stopPBSServices(ctx context.Context, logger *logging.Logger) error {
 	if _, err := restoreCmd.Run(ctx, "which", "systemctl"); err != nil {
 		return fmt.Errorf("systemctl not available: %w", err)
 	}
-	commands := [][]string{
-		{"systemctl", "stop", "proxmox-backup-proxy"},
-		{"systemctl", "stop", "proxmox-backup"},
-	}
+	services := []string{"proxmox-backup-proxy", "proxmox-backup"}
 	var failures []string
-	for _, cmd := range commands {
-		if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
-			failures = append(failures, fmt.Sprintf("%s %s: %v", cmd[0], strings.Join(cmd[1:], " "), err))
+	for _, service := range services {
+		if err := stopServiceWithRetries(ctx, logger, service); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", service, err))
 		}
 	}
 	if len(failures) > 0 {
-		return fmt.Errorf("%s", strings.Join(failures, "; "))
+		return errors.New(strings.Join(failures, "; "))
 	}
 	return nil
 }
@@ -419,18 +410,15 @@ func startPBSServices(ctx context.Context, logger *logging.Logger) error {
 	if _, err := restoreCmd.Run(ctx, "which", "systemctl"); err != nil {
 		return fmt.Errorf("systemctl not available: %w", err)
 	}
-	commands := [][]string{
-		{"systemctl", "start", "proxmox-backup"},
-		{"systemctl", "start", "proxmox-backup-proxy"},
-	}
+	services := []string{"proxmox-backup", "proxmox-backup-proxy"}
 	var failures []string
-	for _, cmd := range commands {
-		if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
-			failures = append(failures, fmt.Sprintf("%s %s: %v", cmd[0], strings.Join(cmd[1:], " "), err))
+	for _, service := range services {
+		if err := startServiceWithRetries(ctx, logger, service); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", service, err))
 		}
 	}
 	if len(failures) > 0 {
-		return fmt.Errorf("%s", strings.Join(failures, "; "))
+		return errors.New(strings.Join(failures, "; "))
 	}
 	return nil
 }
@@ -455,9 +443,27 @@ func unmountEtcPVE(ctx context.Context, logger *logging.Logger) error {
 }
 
 func runCommand(ctx context.Context, logger *logging.Logger, name string, args ...string) error {
-	output, err := restoreCmd.Run(ctx, name, args...)
+	return runCommandWithTimeout(ctx, logger, 0, name, args...)
+}
+
+func runCommandWithTimeout(ctx context.Context, logger *logging.Logger, timeout time.Duration, name string, args ...string) error {
+	return execCommand(ctx, logger, timeout, name, args...)
+}
+
+func execCommand(ctx context.Context, logger *logging.Logger, timeout time.Duration, name string, args ...string) error {
+	execCtx := ctx
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		execCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	output, err := restoreCmd.Run(execCtx, name, args...)
 	msg := strings.TrimSpace(string(output))
 	if err != nil {
+		if timeout > 0 && (errors.Is(execCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded)) {
+			return fmt.Errorf("%s %s timed out after %s", name, strings.Join(args, " "), timeout)
+		}
 		if msg != "" {
 			return fmt.Errorf("%s %s failed: %s", name, strings.Join(args, " "), msg)
 		}
@@ -467,6 +473,162 @@ func runCommand(ctx context.Context, logger *logging.Logger, name string, args .
 		logger.Debug("%s %s: %s", name, strings.Join(args, " "), msg)
 	}
 	return nil
+}
+
+func stopServiceWithRetries(ctx context.Context, logger *logging.Logger, service string) error {
+	attempts := []struct {
+		description string
+		args        []string
+	}{
+		{"stop", []string{"stop", "--no-block", service}},
+		{"retry stop", []string{"stop", "--no-block", service}},
+		{"aggressive stop", []string{"kill", service}},
+	}
+
+	var lastErr error
+	for i, attempt := range attempts {
+		if i > 0 {
+			if err := sleepWithContext(ctx, serviceRetryDelay); err != nil {
+				return err
+			}
+		}
+
+		if logger != nil {
+			logger.Debug("Attempting %s for %s (%d/%d)", attempt.description, service, i+1, len(attempts))
+		}
+
+		if err := runCommandWithTimeout(ctx, logger, serviceStopTimeout, "systemctl", attempt.args...); err != nil {
+			lastErr = err
+			continue
+		}
+		if err := waitForServiceInactive(ctx, logger, service, serviceVerifyTimeout); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("unable to stop %s", service)
+	}
+	return lastErr
+}
+
+func startServiceWithRetries(ctx context.Context, logger *logging.Logger, service string) error {
+	attempts := []struct {
+		description string
+		args        []string
+	}{
+		{"start", []string{"start", service}},
+		{"retry start", []string{"start", service}},
+		{"aggressive restart", []string{"restart", service}},
+	}
+
+	var lastErr error
+	for i, attempt := range attempts {
+		if i > 0 {
+			if err := sleepWithContext(ctx, serviceRetryDelay); err != nil {
+				return err
+			}
+		}
+
+		if logger != nil {
+			logger.Debug("Attempting %s for %s (%d/%d)", attempt.description, service, i+1, len(attempts))
+		}
+
+		if err := runCommandWithTimeout(ctx, logger, serviceStartTimeout, "systemctl", attempt.args...); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("unable to start %s", service)
+	}
+	return lastErr
+}
+
+func waitForServiceInactive(ctx context.Context, logger *logging.Logger, service string, timeout time.Duration) error {
+	if timeout <= 0 {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("%s still active after %s", service, timeout)
+		}
+
+		checkTimeout := minDuration(remaining, serviceStatusCheckTimeout)
+		active, err := isServiceActive(ctx, service, checkTimeout)
+		if err != nil {
+			return err
+		}
+		if !active {
+			if logger != nil {
+				logger.Debug("%s stopped successfully", service)
+			}
+			return nil
+		}
+
+		wait := minDuration(remaining, servicePollInterval)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func isServiceActive(ctx context.Context, service string, timeout time.Duration) (bool, error) {
+	if timeout <= 0 {
+		timeout = serviceStatusCheckTimeout
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	output, err := restoreCmd.Run(checkCtx, "systemctl", "is-active", service)
+	msg := strings.TrimSpace(string(output))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(checkCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return false, fmt.Errorf("systemctl is-active %s timed out after %s", service, timeout)
+	}
+	if msg == "" {
+		msg = err.Error()
+	}
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "inactive") || strings.Contains(lower, "failed") || strings.Contains(lower, "dead") {
+		return false, nil
+	}
+	return false, fmt.Errorf("systemctl is-active %s failed: %s", service, msg)
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func detectConfiguredZFSPools() []string {
