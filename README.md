@@ -46,24 +46,33 @@ You can find the guide files for the various functions [here](./docs/).
 
 ## Support
 
-Contact us at [GitHub Issues](https://github.com/tis24dev/proxsave/issues).
+Every report or issue is important to us. There are various channels you can use to report a problem.
+
+It is important that you provide as much information as possible with each report.
+You will often find these details listed. They are important, so please do not forget to include them:
+
+
+```bash
+example
+===========================================
+  Version: 0.11.2
+  Build Signature: 60d0d998f* (2025-12-02T14:46:14+01:00) hash=eeb72ef6b8b6ad89
+===========================================
+```
+
+<a href="https://github.com/tis24dev/proxsave/issues" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/GitHub-Issues-orange?logo=github" style="height:25px;"/></a>
+<a href="https://t.me/tis24dev" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Telegram-@tis24dev-red?logo=telegram" style="height:25px;"/></a>
 
 ## Donations
 To stay completely free and open-source, with no feature behind the paywall and evolve the project, we need your help. If you like ProxSave, please consider donating to help us fund the project's future development.
 
-[GitHub](https://github.com/sponsors/tis24dev)
-[Buy me a coffe](https://buymeacoffee.com/tis24dev)
+<a href="https://github.com/sponsors/tis24dev" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github" style="height:25px;"/></a>
+<a href="https://buymeacoffee.com/tis24dev" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee" style="height:25px;"/></a>
 
 Thank you so much!
 
 ## Recognitions
-<a href="https://www.xda-developers.com/i-use-this-free-tool-with-proxmox-backup-server/"
-   target="_blank" rel="noopener noreferrer">
-  <img
-    src="https://img.shields.io/badge/XDA%20Developers-Article-blue?logo=android"
-    width="300"
-  />
-</a>
+<a href="https://www.xda-developers.com/i-use-this-free-tool-with-proxmox-backup-server/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/XDA%20Developers-Article-blue?logo=android" style="height:25px;"/></a>
 
 ## Repo Activity
 
