@@ -489,7 +489,6 @@ func run() int {
 
 	logging.SetDefaultLogger(logger)
 	bootstrap.SetLevel(logLevel)
-	bootstrap.Flush(logger)
 
 	// Open log file for real-time writing (will be closed after notifications)
 	hostname := resolveHostname()
@@ -515,6 +514,11 @@ func run() int {
 			}
 		}
 	}
+
+	// Flush bootstrap logs into the main logger now that log files (if any)
+	// are attached, so that early banners and messages appear at the top
+	// of the corresponding log.
+	bootstrap.Flush(logger)
 
 	// Best-effort check for newer releases on GitHub.
 	// If the installed version is up to date, nothing is printed at INFO/WARNING level
@@ -1648,8 +1652,7 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 		return
 	}
 
-	logger.Warning("A newer ProxSave version is available: %s (current: %s)", latestVersion, currentVersion)
-	logger.Warning("Consider running 'proxsave --upgrade' to install the latest release.")
+	logger.Warning("A newer ProxSave version is available %s (current %s): consider running 'proxsave --upgrade' to install the latest release.", latestVersion, currentVersion)
 }
 
 // isNewerVersion returns true if latest is strictly newer than current,

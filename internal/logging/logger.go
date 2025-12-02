@@ -280,6 +280,24 @@ func (l *Logger) Fatal(exitCode types.ExitCode, format string, args ...interface
 	l.exitFunc(exitCode.Int())
 }
 
+// AppendRaw writes a raw log line directly to the log file (if any)
+// without emitting it to stdout. It is primarily used by the bootstrap
+// logger to persist early banner/output without duplicating it on console.
+func (l *Logger) AppendRaw(message string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.logFile == nil {
+		return
+	}
+	timestamp := time.Now().Format(l.timeFormat)
+	output := fmt.Sprintf("[%s] %-8s %s\n",
+		timestamp,
+		types.LogLevelInfo.String(),
+		message,
+	)
+	fmt.Fprint(l.logFile, output)
+}
+
 // Package-level default logger
 var defaultLogger *Logger
 

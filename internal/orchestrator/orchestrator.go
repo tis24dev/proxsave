@@ -1213,20 +1213,28 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) error {
 	return nil
 }
 
-// cleanupPreviousExecutionArtifacts performs unified cleanup of old JSON stats and orphaned temp directories
-// Returns the TempDirRegistry for use by the caller
+// cleanupPreviousExecutionArtifacts performs unified cleanup of old JSON stats, pprof files,
+// and orphaned temp directories. Returns the TempDirRegistry for use by the caller.
 func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
-	// Check if there's anything to clean
-	hasStatsFiles := false
 	fs := o.filesystem()
 
-	// Check for JSON stats files
+	// Discover JSON stats files and pprof profiles from previous runs
+	var statsFiles []string
+	var cpuProfiles []string
+	var heapProfiles []string
 	if o.logPath != "" {
-		pattern := filepath.Join(o.logPath, "backup-stats-*.json")
-		matches, err := filepath.Glob(pattern)
-		if err == nil && len(matches) > 0 {
-			hasStatsFiles = true
+		if matches, err := filepath.Glob(filepath.Join(o.logPath, "backup-stats-*.json")); err == nil {
+			statsFiles = matches
 		}
+
+		if matches, err := filepath.Glob(filepath.Join(o.logPath, "cpu-*.pprof")); err == nil {
+			cpuProfiles = matches
+		}
+	}
+
+	// Heap profiles are written under /tmp/proxsave
+	if matches, err := filepath.Glob(filepath.Join("/tmp", "proxsave", "heap-*.pprof")); err == nil {
+		heapProfiles = matches
 	}
 
 	// Get temp directory registry
@@ -1238,31 +1246,66 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 	cleanupStarted := false
 
 	// Phase 1: Cleanup JSON stats files
-	if hasStatsFiles {
-		pattern := filepath.Join(o.logPath, "backup-stats-*.json")
-		matches, _ := filepath.Glob(pattern)
+	if len(statsFiles) > 0 {
+		if !cleanupStarted {
+			o.logger.Debug("Starting cleanup of previous execution files...")
+			cleanupStarted = true
+		}
+		o.logger.Debug("Found %d stats file(s) from previous execution", len(statsFiles))
 
-		if len(matches) > 0 {
-			if !cleanupStarted {
-				o.logger.Debug("Starting cleanup of previous execution files...")
-				cleanupStarted = true
-			}
-			o.logger.Debug("Found %d stats file(s) from previous execution", len(matches))
-
-			for _, file := range matches {
-				filename := filepath.Base(file)
-				if err := fs.Remove(file); err != nil {
-					o.logger.Debug("Failed to remove file %s: %v", filename, err)
-					failedFiles++
-				} else {
-					o.logger.Debug("Cleanup file %s executed", filename)
-					removedFiles++
-				}
+		for _, file := range statsFiles {
+			filename := filepath.Base(file)
+			if err := fs.Remove(file); err != nil {
+				o.logger.Debug("Failed to remove file %s: %v", filename, err)
+				failedFiles++
+			} else {
+				o.logger.Debug("Cleanup file %s executed", filename)
+				removedFiles++
 			}
 		}
 	}
 
-	// Phase 2: Cleanup orphaned temp directories
+	// Phase 2: Cleanup CPU pprof files under log path
+	if len(cpuProfiles) > 0 {
+		if !cleanupStarted {
+			o.logger.Debug("Starting cleanup of previous execution files...")
+			cleanupStarted = true
+		}
+		o.logger.Debug("Found %d CPU profile file(s) from previous execution", len(cpuProfiles))
+
+		for _, file := range cpuProfiles {
+			filename := filepath.Base(file)
+			if err := fs.Remove(file); err != nil {
+				o.logger.Debug("Failed to remove CPU profile %s: %v", filename, err)
+				failedFiles++
+			} else {
+				o.logger.Debug("Cleanup CPU profile %s executed", filename)
+				removedFiles++
+			}
+		}
+	}
+
+	// Phase 3: Cleanup heap pprof files under /tmp/proxsave
+	if len(heapProfiles) > 0 {
+		if !cleanupStarted {
+			o.logger.Debug("Starting cleanup of previous execution files...")
+			cleanupStarted = true
+		}
+		o.logger.Debug("Found %d heap profile file(s) from previous execution", len(heapProfiles))
+
+		for _, file := range heapProfiles {
+			filename := filepath.Base(file)
+			if err := fs.Remove(file); err != nil {
+				o.logger.Debug("Failed to remove heap profile %s: %v", filename, err)
+				failedFiles++
+			} else {
+				o.logger.Debug("Cleanup heap profile %s executed", filename)
+				removedFiles++
+			}
+		}
+	}
+
+	// Phase 4: Cleanup orphaned temp directories
 	if registry != nil {
 		if !cleanupStarted {
 			o.logger.Debug("Starting cleanup of previous execution files...")

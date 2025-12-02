@@ -57,6 +57,8 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		printInstallFooter(installErr, configPath, baseDir, telegramCode, permStatus, permMessage)
 	}()
 
+	printInstallBanner(configPath)
+
 	buildSig := buildSignature()
 	if strings.TrimSpace(buildSig) == "" {
 		buildSig = "n/a"

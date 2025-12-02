@@ -121,7 +121,9 @@ func (b *BootstrapLogger) Flush(logger *Logger) {
 	}
 	for _, entry := range b.entries {
 		if entry.raw {
-			logger.Info("%s", entry.message)
+			if logger != nil {
+				logger.AppendRaw(entry.message)
+			}
 			continue
 		}
 		if entry.level > b.minLevel {

@@ -13,6 +13,16 @@ import (
 
 // runDecryptWorkflowOnly executes the decrypt workflow without initializing the backup orchestrator.
 func runDecryptWorkflowOnly(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, version string, useCLI bool) error {
+	// Print version/banner header (mirrored later into the decrypt log via bootstrap.Flush).
+	bootstrap.Println("===========================================")
+	bootstrap.Println("  ProxSave - Go Version")
+	bootstrap.Printf("  Version: %s", version)
+	if sig := buildSignature(); strings.TrimSpace(sig) != "" {
+		bootstrap.Printf("  Build Signature: %s", sig)
+	}
+	bootstrap.Println("===========================================")
+	bootstrap.Println("")
+
 	if err := ensureConfigExists(configPath, bootstrap); err != nil {
 		return err
 	}
@@ -45,7 +55,7 @@ func runDecryptWorkflowOnly(ctx context.Context, configPath string, bootstrap *l
 		logger = logging.New(logLevel, cfg.UseColor)
 		closeSessionLog = func() {}
 	} else {
-		bootstrap.Info("Decrypt log: %s", sessionLogPath)
+		bootstrap.Printf("Decrypt log: %s", sessionLogPath)
 	}
 	defer closeSessionLog()
 

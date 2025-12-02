@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
+	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
 
 const (
@@ -49,11 +52,19 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 		return types.ExitConfigError.Int()
 	}
 
+	// Print version/banner header for upgrade mode
+	currentVersion := buildinfo.String()
 	bootstrap.Println("===========================================")
-	bootstrap.Println("  ProxSave - Upgrade")
-	bootstrap.Printf("  Config: %s", args.ConfigPath)
-	bootstrap.Printf("  Base:   %s", baseDir)
+	bootstrap.Println("  ProxSave - Go Version")
+	bootstrap.Printf("  Version: %s", currentVersion)
+	if sig := buildSignature(); strings.TrimSpace(sig) != "" {
+		bootstrap.Printf("  Build Signature: %s", sig)
+	}
+	bootstrap.Println("  Mode: Upgrade")
 	bootstrap.Println("===========================================")
+	bootstrap.Printf("Configuration file: %s", args.ConfigPath)
+	bootstrap.Printf("Base directory: %s", baseDir)
+	bootstrap.Println("")
 
 	cfg, err := config.LoadConfig(args.ConfigPath)
 	if err != nil {
@@ -64,10 +75,40 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 		cfg.BaseDir = baseDir
 	}
 
-	// Download + install latest binary
+	// Discover the latest available release on GitHub and compare with the
+	// currently installed version before proceeding.
+	tag, latestVersion, err := fetchLatestRelease(ctx)
+	if err != nil {
+		bootstrap.Error("ERROR: Failed to check latest release: %v", err)
+		return types.ExitConfigError.Int()
+	}
+
+	switch compareVersions(currentVersion, latestVersion) {
+	case 0:
+		bootstrap.Printf("You are already running the latest version: %s", currentVersion)
+		return types.ExitSuccess.Int()
+	case 1:
+		bootstrap.Printf("Installed version (%s) is newer than latest release (%s); aborting upgrade.", currentVersion, latestVersion)
+		return types.ExitConfigError.Int()
+	}
+
+	bootstrap.Printf("Latest available version: %s (current: %s)", latestVersion, currentVersion)
+
+	reader := bufio.NewReader(os.Stdin)
+	confirm, err := promptYesNo(ctx, reader, "Do you want to download and install this version now? [y/N]: ", false)
+	if err != nil {
+		bootstrap.Error("ERROR: %v", err)
+		return types.ExitConfigError.Int()
+	}
+	if !confirm {
+		bootstrap.Println("Upgrade cancelled by user; no changes were made.")
+		return types.ExitSuccess.Int()
+	}
+
+	// Download + install latest binary (confirmed)
 	execInfo := getExecInfo()
 	execPath := execInfo.ExecPath
-	versionInstalled, upgradeErr := downloadAndInstallLatest(ctx, execPath, bootstrap)
+	versionInstalled, upgradeErr := downloadAndInstallLatest(ctx, execPath, bootstrap, tag, latestVersion)
 	if upgradeErr != nil {
 		bootstrap.Error("ERROR: Upgrade failed: %v", upgradeErr)
 		// Continue to footer to show guidance and permission status, but exit with error.
@@ -100,15 +141,10 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	return types.ExitSuccess.Int()
 }
 
-// downloadAndInstallLatest downloads the latest release archive from GitHub,
+// downloadAndInstallLatest downloads the specified release archive from GitHub,
 // verifies the checksum, extracts the proxsave binary, and installs it to execPath.
-func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *logging.BootstrapLogger) (string, error) {
+func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *logging.BootstrapLogger, tag, version string) (string, error) {
 	osName, arch, err := detectOSArch()
-	if err != nil {
-		return "", err
-	}
-
-	tag, version, err := fetchLatestRelease(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -202,6 +238,65 @@ func fetchLatestRelease(ctx context.Context) (string, string, error) {
 
 	version := strings.TrimPrefix(tag, "v")
 	return tag, version, nil
+}
+
+// compareVersions compares two semantic version strings (e.g. "0.11.2") and
+// returns -1 if current < latest, 0 if equal, 1 if current > latest.
+// Pre-release/build suffixes are ignored for comparison purposes.
+func compareVersions(current, latest string) int {
+	normalize := func(v string) []int {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return []int{0}
+		}
+		// Strip common pre-release/build suffixes (e.g. "-rc1")
+		if idx := strings.IndexAny(v, "-+"); idx >= 0 {
+			v = v[:idx]
+		}
+		parts := strings.Split(v, ".")
+		out := make([]int, 0, len(parts))
+		for _, p := range parts {
+			if p == "" {
+				out = append(out, 0)
+				continue
+			}
+			n, err := strconv.Atoi(p)
+			if err != nil {
+				out = append(out, 0)
+			} else {
+				out = append(out, n)
+			}
+		}
+		if len(out) == 0 {
+			return []int{0}
+		}
+		return out
+	}
+
+	a := normalize(current)
+	b := normalize(latest)
+
+	maxLen := len(a)
+	if len(b) > maxLen {
+		maxLen = len(b)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var av, bv int
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+	}
+	return 0
 }
 
 func downloadFile(ctx context.Context, url, dest string) error {

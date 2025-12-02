@@ -33,7 +33,9 @@ func TestBootstrapLoggerRecordAndFlushDefaultLevel(t *testing.T) {
 	b.Flush(logger)
 
 	out := buf.String()
-	for _, msg := range []string{"plain1", "plain-2", "info", "warn", "err"} {
+	// Raw entries (Println/Printf) are only flushed to the log file,
+	// not to the main logger output, to avoid duplicating banners on stdout.
+	for _, msg := range []string{"info", "warn", "err"} {
 		if !strings.Contains(out, msg) {
 			t.Fatalf("output missing %s", msg)
 		}
