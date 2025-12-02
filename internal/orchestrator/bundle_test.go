@@ -109,6 +109,41 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 	}
 }
 
+func TestLegacyCreateBundleWrapper_DelegatesToMethod(t *testing.T) {
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	tempDir := t.TempDir()
+	archive := filepath.Join(tempDir, "backup.tar")
+
+	// Minimal associated files required by createBundle
+	required := map[string]string{
+		"":          "archive-content",
+		".sha256":   "checksum",
+		".metadata": "metadata-json",
+	}
+	for suffix, content := range required {
+		if err := os.WriteFile(archive+suffix, []byte(content), 0o640); err != nil {
+			t.Fatalf("write %s: %v", suffix, err)
+		}
+	}
+
+	ctx := context.Background()
+
+	// Call legacy wrapper
+	bundlePath, err := createBundle(ctx, logger, archive)
+	if err != nil {
+		t.Fatalf("legacy createBundle returned error: %v", err)
+	}
+
+	expectedPath := archive + ".bundle.tar"
+	if bundlePath != expectedPath {
+		t.Fatalf("bundle path = %s, want %s", bundlePath, expectedPath)
+	}
+
+	if _, err := os.Stat(bundlePath); err != nil {
+		t.Fatalf("expected bundle file to exist, got %v", err)
+	}
+}
+
 func TestRemoveAssociatedFiles_RemovesAll(t *testing.T) {
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 	tempDir := t.TempDir()

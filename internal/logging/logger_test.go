@@ -366,3 +366,137 @@ func TestPackageLevelStepAndSkip(t *testing.T) {
 		t.Fatalf("expected SKIP output, got %s", out)
 	}
 }
+
+func TestAppendRawWritesOnlyToLogFile(t *testing.T) {
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "raw.log")
+
+	logger := New(types.LogLevelInfo, false)
+
+	// No log file opened: AppendRaw should be a no-op and not panic
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+	logger.AppendRaw("no file")
+	if buf.Len() != 0 {
+		t.Fatalf("AppendRaw should not write to stdout when no log file is open")
+	}
+
+	// Now open a log file and ensure AppendRaw writes only there
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatalf("OpenLogFile error: %v", err)
+	}
+	buf.Reset()
+
+	logger.AppendRaw("raw line")
+
+	if buf.Len() != 0 {
+		t.Fatalf("AppendRaw should not write to stdout; got %q", buf.String())
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read raw log file: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "raw line") {
+		t.Fatalf("raw log file missing message: %s", text)
+	}
+	if !strings.Contains(text, types.LogLevelInfo.String()) {
+		t.Fatalf("raw log file should use INFO level label, got: %s", text)
+	}
+}
+
+func TestPhaseStepSkipColorOverrides(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(types.LogLevelInfo, true)
+	logger.SetOutput(&buf)
+
+	logger.Phase("phase msg")
+	logger.Step("step msg")
+	logger.Skip("skip msg")
+
+	out := buf.String()
+
+	// PHASE and STEP use blue, SKIP uses magenta
+	if !strings.Contains(out, "\033[34m") {
+		t.Fatalf("expected blue ANSI color code for PHASE/STEP, got %q", out)
+	}
+	if !strings.Contains(out, "\033[35m") {
+		t.Fatalf("expected magenta ANSI color code for SKIP, got %q", out)
+	}
+	if !strings.Contains(out, "PHASE") || !strings.Contains(out, "phase msg") {
+		t.Fatalf("expected PHASE label and message, got %q", out)
+	}
+	if !strings.Contains(out, "STEP") || !strings.Contains(out, "step msg") {
+		t.Fatalf("expected STEP label and message, got %q", out)
+	}
+	if !strings.Contains(out, "SKIP") || !strings.Contains(out, "skip msg") {
+		t.Fatalf("expected SKIP label and message, got %q", out)
+	}
+}
+
+func TestSetExitFuncNilRestoresNonNilExitFunc(t *testing.T) {
+	logger := New(types.LogLevelInfo, false)
+
+	// Replace with custom, then reset to default via nil
+	logger.SetExitFunc(func(int) {})
+	logger.SetExitFunc(nil)
+
+	if logger.exitFunc == nil {
+		t.Fatalf("SetExitFunc(nil) should ensure exitFunc is non-nil")
+	}
+}
+
+func TestOpenLogFileReopenClosesPrevious(t *testing.T) {
+	tmp := t.TempDir()
+	first := filepath.Join(tmp, "first.log")
+	second := filepath.Join(tmp, "second.log")
+
+	logger := New(types.LogLevelInfo, false)
+
+	if err := logger.OpenLogFile(first); err != nil {
+		t.Fatalf("OpenLogFile(first) error: %v", err)
+	}
+	oldFile := logger.logFile
+	if oldFile == nil {
+		t.Fatalf("expected logFile to be non-nil after first open")
+	}
+
+	if err := logger.OpenLogFile(second); err != nil {
+		t.Fatalf("OpenLogFile(second) error: %v", err)
+	}
+
+	// Logger should now point to the second file
+	if got := logger.GetLogFilePath(); got != second {
+		t.Fatalf("GetLogFilePath = %s, want %s", got, second)
+	}
+
+	// Writing to the old file should now fail because it was closed
+	if _, err := oldFile.Write([]byte("test")); err == nil {
+		t.Fatalf("expected write to old closed file to fail")
+	}
+}
+
+func TestPackageLevelFatalUsesDefaultLoggerExitFunc(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+
+	exitCalled := 0
+	var exitCode int
+	logger.SetExitFunc(func(code int) {
+		exitCalled++
+		exitCode = code
+	})
+
+	SetDefaultLogger(logger)
+
+	Fatal(types.ExitConfigError, "pkg fatal msg")
+
+	if exitCalled != 1 || exitCode != types.ExitConfigError.Int() {
+		t.Fatalf("package-level Fatal exitFunc not called as expected, called=%d code=%d", exitCalled, exitCode)
+	}
+	if !strings.Contains(buf.String(), "pkg fatal msg") {
+		t.Fatalf("package-level fatal log missing message: %s", buf.String())
+	}
+}
