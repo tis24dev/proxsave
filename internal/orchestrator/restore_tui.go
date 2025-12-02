@@ -217,14 +217,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		logger.Info("Preparing PBS system for restore: stopping proxmox-backup services")
 		if err := stopPBSServices(ctx, logger); err != nil {
 			logger.Warning("Unable to stop PBS services automatically: %v", err)
-			cont, perr := promptContinueWithPBSServicesTUI(configPath, buildSig)
-			if perr != nil {
-				return perr
-			}
-			if !cont {
-				return fmt.Errorf("restore aborted: PBS services still running")
-			}
-			logger.Info("Continuing restore without stopping PBS services")
+			logger.Warning("Continuing restore with PBS services still running")
 		} else {
 			pbsServicesStopped = true
 			defer func() {
@@ -929,9 +922,9 @@ func promptClusterRestoreModeTUI(configPath, buildSig string) (int, error) {
 	return choice, nil
 }
 
-func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig string) error {
+func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 	if config == nil {
-		return fmt.Errorf("restore configuration not available")
+		return ""
 	}
 
 	var b strings.Builder
@@ -980,8 +973,17 @@ func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig str
 	b.WriteString("  • A safety backup will be created before restoration\n")
 	b.WriteString("  • Services may need to be restarted after restoration\n\n")
 
+	return b.String()
+}
+
+func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig string) error {
+	if config == nil {
+		return fmt.Errorf("restore configuration not available")
+	}
+
+	planText := buildRestorePlanText(config)
 	textView := tview.NewTextView().
-		SetText(b.String()).
+		SetText(planText).
 		SetScrollable(true).
 		SetWrap(false).
 		SetTextColor(tcell.ColorWhite)

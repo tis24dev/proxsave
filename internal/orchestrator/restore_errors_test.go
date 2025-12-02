@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -74,17 +75,20 @@ func TestStopPBSServices_CommandFails(t *testing.T) {
 
 	fake := &FakeCommandRunner{
 		Outputs: map[string][]byte{
-			"which systemctl": {},
+			"which systemctl":                    {},
+			"systemctl is-active proxmox-backup": []byte("inactive"),
 		},
 		Errors: map[string]error{
-			"systemctl stop proxmox-backup-proxy": fmt.Errorf("fail-proxy"),
+			"systemctl stop --no-block proxmox-backup-proxy": fmt.Errorf("fail-proxy"),
+			"systemctl kill proxmox-backup-proxy":            fmt.Errorf("kill-fail"),
+			"systemctl is-active proxmox-backup":             fmt.Errorf("inactive"),
 		},
 	}
 	restoreCmd = fake
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 	err := stopPBSServices(context.Background(), logger)
-	if err == nil || !strings.Contains(err.Error(), "fail-proxy") {
+	if err == nil || !strings.Contains(err.Error(), "kill-fail") {
 		t.Fatalf("expected failure, got %v", err)
 	}
 	if len(fake.Calls) == 0 || fake.Calls[0] != "which systemctl" {
@@ -98,9 +102,13 @@ func TestStopPBSServices_Succeeds(t *testing.T) {
 
 	fake := &FakeCommandRunner{
 		Outputs: map[string][]byte{
-			"which systemctl":                     {},
-			"systemctl stop proxmox-backup-proxy": {},
-			"systemctl stop proxmox-backup":       {},
+			"which systemctl":                          {},
+			"systemctl is-active proxmox-backup-proxy": []byte("inactive"),
+			"systemctl is-active proxmox-backup":       []byte("inactive"),
+		},
+		Errors: map[string]error{
+			"systemctl is-active proxmox-backup-proxy": fmt.Errorf("inactive"),
+			"systemctl is-active proxmox-backup":       fmt.Errorf("inactive"),
 		},
 	}
 	restoreCmd = fake
@@ -109,8 +117,8 @@ func TestStopPBSServices_Succeeds(t *testing.T) {
 	if err := stopPBSServices(context.Background(), logger); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
-	if len(fake.Calls) != 3 {
-		t.Fatalf("expected 3 calls, got %d", len(fake.Calls))
+	if len(fake.Calls) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(fake.Calls))
 	}
 }
 
@@ -129,6 +137,253 @@ func TestStopPBSServices_SystemctlMissing(t *testing.T) {
 	err := stopPBSServices(context.Background(), logger)
 	if err == nil || !strings.Contains(err.Error(), "systemctl not available") {
 		t.Fatalf("expected systemctl missing error, got %v", err)
+	}
+}
+
+func TestRunCommandWithTimeout_TimeoutError(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	fake := &FakeCommandRunner{
+		Errors: map[string]error{
+			"systemctl start proxmox-backup": context.DeadlineExceeded,
+		},
+	}
+	restoreCmd = fake
+
+	err := runCommandWithTimeout(context.Background(), nil, 10*time.Millisecond, "systemctl", "start", "proxmox-backup")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+}
+
+func TestStopPVEClusterServices_UsesNoBlock(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	outputs := map[string][]byte{}
+	errors := map[string]error{}
+	for _, svc := range []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
+		key := fmt.Sprintf("systemctl is-active %s", svc)
+		outputs[key] = []byte("inactive")
+		errors[key] = fmt.Errorf("inactive")
+	}
+	fake := &FakeCommandRunner{
+		Outputs: outputs,
+		Errors:  errors,
+	}
+	restoreCmd = fake
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	if err := stopPVEClusterServices(context.Background(), logger); err != nil {
+		t.Fatalf("expected success stopping PVE services, got %v", err)
+	}
+
+	wantStops := []string{
+		"systemctl stop --no-block pve-cluster",
+		"systemctl stop --no-block pvedaemon",
+		"systemctl stop --no-block pveproxy",
+		"systemctl stop --no-block pvestatd",
+	}
+	for _, cmd := range wantStops {
+		found := false
+		for _, call := range fake.Calls {
+			if call == cmd {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected %s to be called, calls: %#v", cmd, fake.Calls)
+		}
+	}
+}
+
+func TestStartPBSServices_CommandTimeout(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"which systemctl": {},
+		},
+		Errors: map[string]error{
+			"systemctl start proxmox-backup":   context.DeadlineExceeded,
+			"systemctl restart proxmox-backup": context.DeadlineExceeded,
+		},
+	}
+	restoreCmd = fake
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	err := startPBSServices(context.Background(), logger)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+}
+
+func TestStopPBSServices_AggressiveRetry(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"which systemctl":                          {},
+			"systemctl is-active proxmox-backup-proxy": []byte("inactive"),
+			"systemctl is-active proxmox-backup":       []byte("inactive"),
+		},
+		Errors: map[string]error{
+			"systemctl stop --no-block proxmox-backup-proxy": fmt.Errorf("stop failed"),
+			"systemctl is-active proxmox-backup-proxy":       fmt.Errorf("inactive"),
+			"systemctl is-active proxmox-backup":             fmt.Errorf("inactive"),
+		},
+	}
+	restoreCmd = fake
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	if err := stopPBSServices(context.Background(), logger); err != nil {
+		t.Fatalf("expected success with aggressive retry, got %v", err)
+	}
+
+	foundKill := false
+	for _, call := range fake.Calls {
+		if call == "systemctl kill proxmox-backup-proxy" {
+			foundKill = true
+			break
+		}
+	}
+	if !foundKill {
+		t.Fatalf("expected systemctl kill proxmox-backup-proxy to be invoked, calls: %#v", fake.Calls)
+	}
+}
+
+func TestStartPBSServices_AggressiveRetry(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"which systemctl": {},
+		},
+		Errors: map[string]error{
+			"systemctl start proxmox-backup": fmt.Errorf("start failed"),
+		},
+	}
+	restoreCmd = fake
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	if err := startPBSServices(context.Background(), logger); err != nil {
+		t.Fatalf("expected success with aggressive restart, got %v", err)
+	}
+
+	foundRestart := false
+	for _, call := range fake.Calls {
+		if call == "systemctl restart proxmox-backup" {
+			foundRestart = true
+			break
+		}
+	}
+	if !foundRestart {
+		t.Fatalf("expected systemctl restart proxmox-backup to be invoked, calls: %#v", fake.Calls)
+	}
+}
+
+func TestStopPBSServices_VerifyFailure(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"which systemctl":                          {},
+			"systemctl is-active proxmox-backup-proxy": []byte("active"),
+			"systemctl is-active proxmox-backup":       []byte("inactive"),
+		},
+		Errors: map[string]error{
+			"systemctl is-active proxmox-backup-proxy": fmt.Errorf("active"),
+			"systemctl is-active proxmox-backup":       fmt.Errorf("inactive"),
+		},
+	}
+	restoreCmd = fake
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	err := stopPBSServices(context.Background(), logger)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "active") {
+		t.Fatalf("expected verification error mentioning active service, got %v", err)
+	}
+}
+
+func TestWaitForServiceInactive_Succeeds(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"systemctl is-active demo.service": []byte("inactive"),
+		},
+		Errors: map[string]error{
+			"systemctl is-active demo.service": fmt.Errorf("inactive"),
+		},
+	}
+	restoreCmd = fake
+
+	if err := waitForServiceInactive(context.Background(), nil, "demo.service", 50*time.Millisecond); err != nil {
+		t.Fatalf("expected wait to succeed, got %v", err)
+	}
+}
+
+func TestWaitForServiceInactive_TimesOut(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"systemctl is-active demo.service": []byte("active"),
+		},
+	}
+	restoreCmd = fake
+
+	err := waitForServiceInactive(context.Background(), nil, "demo.service", 30*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "still active") {
+		t.Fatalf("expected still active error, got %v", err)
+	}
+}
+
+func TestIsServiceActive_Inactive(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"systemctl is-active demo.service": []byte("inactive"),
+		},
+		Errors: map[string]error{
+			"systemctl is-active demo.service": fmt.Errorf("inactive"),
+		},
+	}
+	restoreCmd = fake
+
+	active, err := isServiceActive(context.Background(), "demo.service", 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if active {
+		t.Fatalf("expected service to be inactive")
+	}
+}
+
+func TestIsServiceActive_Timeout(t *testing.T) {
+	orig := restoreCmd
+	defer func() { restoreCmd = orig }()
+
+	fake := &FakeCommandRunner{
+		Errors: map[string]error{
+			"systemctl is-active demo.service": context.DeadlineExceeded,
+		},
+	}
+	restoreCmd = fake
+
+	_, err := isServiceActive(context.Background(), "demo.service", 5*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout error, got %v", err)
 	}
 }
 
@@ -211,7 +466,8 @@ func TestStopPVEClusterServices_Failure(t *testing.T) {
 			"systemctl start pve-cluster": {},
 		},
 		Errors: map[string]error{
-			"systemctl start pvedaemon": fmt.Errorf("fail daemon"),
+			"systemctl start pvedaemon":   fmt.Errorf("fail daemon"),
+			"systemctl restart pvedaemon": fmt.Errorf("fail daemon restart"),
 		},
 	}
 	restoreCmd = fake

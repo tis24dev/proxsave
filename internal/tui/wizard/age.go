@@ -38,6 +38,41 @@ var (
 	ageChmod     = os.Chmod
 )
 
+func validatePublicKey(value string) (string, error) {
+	key := strings.TrimSpace(value)
+	if key == "" {
+		return "", fmt.Errorf("public key cannot be empty")
+	}
+	if !strings.HasPrefix(key, "age1") {
+		return "", fmt.Errorf("public key must start with 'age1'")
+	}
+	return key, nil
+}
+
+func validatePassphrase(pass, confirm string) (string, error) {
+	if pass == "" {
+		return "", fmt.Errorf("passphrase cannot be empty")
+	}
+	if len(pass) < 8 {
+		return "", fmt.Errorf("passphrase must be at least 8 characters long")
+	}
+	if pass != confirm {
+		return "", fmt.Errorf("passphrases do not match")
+	}
+	return pass, nil
+}
+
+func validatePrivateKey(value string) (string, error) {
+	key := strings.TrimSpace(value)
+	if key == "" {
+		return "", fmt.Errorf("private key cannot be empty")
+	}
+	if !strings.HasPrefix(key, "AGE-SECRET-KEY-1") {
+		return "", fmt.Errorf("private key must start with 'AGE-SECRET-KEY-1'")
+	}
+	return key, nil
+}
+
 // ConfirmRecipientOverwrite shows a TUI modal to confirm overwriting an existing AGE recipient.
 func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool, error) {
 	app := tui.NewApp()
@@ -280,38 +315,24 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 
 		switch setupType {
 		case "existing":
-			publicKey := strings.TrimSpace(publicKeyField.GetText())
-			if publicKey == "" {
-				return fmt.Errorf("public key cannot be empty")
-			}
-			if !strings.HasPrefix(publicKey, "age1") {
-				return fmt.Errorf("public key must start with 'age1'")
+			publicKey, err := validatePublicKey(publicKeyField.GetText())
+			if err != nil {
+				return err
 			}
 			data.PublicKey = publicKey
 			data.RecipientKey = publicKey
 
 		case "passphrase":
-			passphrase := passphraseField.GetText()
-			passphraseConfirm := passphraseConfirmField.GetText()
-
-			if passphrase == "" {
-				return fmt.Errorf("passphrase cannot be empty")
-			}
-			if len(passphrase) < 8 {
-				return fmt.Errorf("passphrase must be at least 8 characters long")
-			}
-			if passphrase != passphraseConfirm {
-				return fmt.Errorf("passphrases do not match")
+			passphrase, err := validatePassphrase(passphraseField.GetText(), passphraseConfirmField.GetText())
+			if err != nil {
+				return err
 			}
 			data.Passphrase = passphrase
 
 		case "privatekey":
-			privateKey := strings.TrimSpace(privateKeyField.GetText())
-			if privateKey == "" {
-				return fmt.Errorf("private key cannot be empty")
-			}
-			if !strings.HasPrefix(privateKey, "AGE-SECRET-KEY-1") {
-				return fmt.Errorf("private key must start with 'AGE-SECRET-KEY-1'")
+			privateKey, err := validatePrivateKey(privateKeyField.GetText())
+			if err != nil {
+				return err
 			}
 			data.PrivateKey = privateKey
 		}
