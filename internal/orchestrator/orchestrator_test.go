@@ -1,9 +1,11 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,7 +129,7 @@ func TestOrchestrator_SetIdentity(t *testing.T) {
 // TestOrchestrator_SetBackupConfig tests SetBackupConfig
 func TestOrchestrator_SetBackupConfig(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
-	
+
 	orch := New(logger, false)
 
 	backupPath := "/tmp/backups"
@@ -372,13 +374,13 @@ func TestApplyCollectorOverridesCopiesConfig(t *testing.T) {
 		CustomBackupPaths: []string{"/etc", "/var/lib"},
 		BackupBlacklist:   []string{"/tmp"},
 
-		ConfigPath:       "/etc/proxsave/backup.env",
-		PVEConfigPath:    "/etc/pve",
-		PBSConfigPath:    "/etc/proxmox-backup",
-		PVEClusterPath:   "/etc/pve/corosync.conf",
+		ConfigPath:         "/etc/proxsave/backup.env",
+		PVEConfigPath:      "/etc/pve",
+		PBSConfigPath:      "/etc/proxmox-backup",
+		PVEClusterPath:     "/etc/pve/corosync.conf",
 		CorosyncConfigPath: "/etc/corosync/corosync.conf",
-		VzdumpConfigPath: "/etc/vzdump.conf",
-		PBSDatastorePaths: []string{"/mnt/pbs1", "/mnt/pbs2"},
+		VzdumpConfigPath:   "/etc/vzdump.conf",
+		PBSDatastorePaths:  []string{"/mnt/pbs1", "/mnt/pbs2"},
 
 		PBSRepository:  "pbs@pam!token",
 		PBSPassword:    "secret",
@@ -437,5 +439,57 @@ func TestApplyCollectorOverridesCopiesConfig(t *testing.T) {
 	}
 	if cc.PBSRepository != cfg.PBSRepository || cc.PBSPassword != cfg.PBSPassword || cc.PBSFingerprint != cfg.PBSFingerprint {
 		t.Fatalf("PBS auth fields not copied correctly")
+	}
+}
+
+func TestLogStepWritesStepMessage(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	o := &Orchestrator{logger: logger}
+	o.logStep(3, "Processing %s", "configs")
+
+	out := buf.String()
+	if !strings.Contains(out, "STEP") {
+		t.Fatalf("expected STEP label in output, got: %s", out)
+	}
+	if !strings.Contains(out, "Processing configs") {
+		t.Fatalf("expected formatted message, got: %s", out)
+	}
+}
+
+func TestLogStepHandlesNilLogger(t *testing.T) {
+	o := &Orchestrator{}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("logStep should not panic without logger: %v", r)
+		}
+	}()
+	o.logStep(1, "noop")
+}
+
+func TestSaveStatsReportNilStats(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	orch := New(logger, false)
+
+	if err := orch.SaveStatsReport(nil); err == nil {
+		t.Fatalf("expected error when stats is nil")
+	}
+}
+
+func TestSaveStatsReportSkipsWithoutLogPath(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	orch := New(logger, false)
+
+	stats := &BackupStats{
+		Timestamp: time.Now(),
+	}
+
+	if err := orch.SaveStatsReport(stats); err != nil {
+		t.Fatalf("SaveStatsReport should skip without log path: %v", err)
+	}
+	if stats.ReportPath != "" {
+		t.Fatalf("ReportPath should remain empty when log path is unset, got %s", stats.ReportPath)
 	}
 }

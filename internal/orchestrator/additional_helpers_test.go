@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -788,6 +789,141 @@ func TestEnsureTempRegistrySuccess(t *testing.T) {
 	}
 	if reg.registryPath != regPath {
 		t.Fatalf("registry path = %q, want %q", reg.registryPath, regPath)
+	}
+}
+
+func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	o := &Orchestrator{
+		logger: logger,
+	}
+
+	logDir := t.TempDir()
+	o.logPath = logDir
+
+	statsFile := filepath.Join(logDir, "backup-stats-old.json")
+	cpuProfile := filepath.Join(logDir, "cpu-test.pprof")
+	if err := os.WriteFile(statsFile, []byte("stats"), 0o640); err != nil {
+		t.Fatalf("write stats file: %v", err)
+	}
+	if err := os.WriteFile(cpuProfile, []byte("cpu"), 0o640); err != nil {
+		t.Fatalf("write cpu profile: %v", err)
+	}
+
+	heapDir := filepath.Join("/tmp", "proxsave")
+	if err := os.MkdirAll(heapDir, 0o755); err != nil {
+		t.Fatalf("prepare heap dir: %v", err)
+	}
+	heapFile := filepath.Join(heapDir, fmt.Sprintf("heap-%d.pprof", time.Now().UnixNano()))
+	if err := os.WriteFile(heapFile, []byte("heap"), 0o640); err != nil {
+		t.Fatalf("write heap profile: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Remove(heapFile); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("cleanup heap file: %v", err)
+		}
+	})
+
+	registryDir := t.TempDir()
+	registryPath := filepath.Join(registryDir, "registry.json")
+	reg, err := NewTempDirRegistry(logger, registryPath)
+	if err != nil {
+		t.Fatalf("NewTempDirRegistry: %v", err)
+	}
+	o.tempRegistry = reg
+
+	orphanDir := filepath.Join(registryDir, "orphan-temp")
+	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+		t.Fatalf("create orphan dir: %v", err)
+	}
+	if err := reg.Register(orphanDir); err != nil {
+		t.Fatalf("register orphan dir: %v", err)
+	}
+	makeRegistryEntriesStale(t, registryPath)
+
+	returned := o.cleanupPreviousExecutionArtifacts()
+	if returned != reg {
+		t.Fatalf("cleanup should return configured registry instance")
+	}
+
+	if _, err := os.Stat(statsFile); !os.IsNotExist(err) {
+		t.Fatalf("stats file should be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(cpuProfile); !os.IsNotExist(err) {
+		t.Fatalf("cpu profile should be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(heapFile); !os.IsNotExist(err) {
+		t.Fatalf("heap profile should be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
+		t.Fatalf("orphan directory should be removed, got err=%v", err)
+	}
+}
+
+func makeRegistryEntriesStale(t *testing.T, registryPath string) {
+	t.Helper()
+	data, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+	var entries []tempDirRecord
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("parse registry: %v", err)
+	}
+	staleTime := time.Now().Add(-2 * tempDirCleanupAge)
+	for i := range entries {
+		entries[i].CreatedAt = staleTime
+	}
+	content, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("marshal registry: %v", err)
+	}
+	if err := os.WriteFile(registryPath, content, 0o640); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+}
+
+func TestCopyFileUsesProvidedFS(t *testing.T) {
+	fs := NewFakeFS()
+	src := "src/config.txt"
+	dest := "dest/clone.txt"
+	if err := fs.AddFile(src, []byte("payload")); err != nil {
+		t.Fatalf("add src: %v", err)
+	}
+	if err := fs.AddDir("dest"); err != nil {
+		t.Fatalf("mkdir dest: %v", err)
+	}
+
+	if err := copyFile(fs, src, dest); err != nil {
+		t.Fatalf("copyFile returned error: %v", err)
+	}
+
+	data, err := fs.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if string(data) != "payload" {
+		t.Fatalf("copied content mismatch: %q", data)
+	}
+}
+
+func TestCopyFileFallsBackToOSFS(t *testing.T) {
+	tempDir := t.TempDir()
+	src := filepath.Join(tempDir, "src.txt")
+	dest := filepath.Join(tempDir, "dest.txt")
+	if err := os.WriteFile(src, []byte("data"), 0o640); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	if err := copyFile(nil, src, dest); err != nil {
+		t.Fatalf("copyFile fallback error: %v", err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if string(data) != "data" {
+		t.Fatalf("dest content mismatch: %q", data)
 	}
 }
 
