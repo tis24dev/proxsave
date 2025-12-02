@@ -929,9 +929,9 @@ func promptClusterRestoreModeTUI(configPath, buildSig string) (int, error) {
 	return choice, nil
 }
 
-func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig string) error {
+func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 	if config == nil {
-		return fmt.Errorf("restore configuration not available")
+		return ""
 	}
 
 	var b strings.Builder
@@ -980,8 +980,17 @@ func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig str
 	b.WriteString("  • A safety backup will be created before restoration\n")
 	b.WriteString("  • Services may need to be restarted after restoration\n\n")
 
+	return b.String()
+}
+
+func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig string) error {
+	if config == nil {
+		return fmt.Errorf("restore configuration not available")
+	}
+
+	planText := buildRestorePlanText(config)
 	textView := tview.NewTextView().
-		SetText(b.String()).
+		SetText(planText).
 		SetScrollable(true).
 		SetWrap(false).
 		SetTextColor(tcell.ColorWhite)

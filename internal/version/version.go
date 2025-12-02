@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// readBuildInfo is defined for testing overrides.
+var readBuildInfo = debug.ReadBuildInfo
+
 // These variables are intended to be populated at build time via -ldflags.
 // For example, GoReleaser injects:
 //   -X github.com/tis24dev/proxsave/internal/version.Version=v0.9.0
@@ -33,7 +36,7 @@ func String() string {
 	v := strings.TrimSpace(Version)
 
 	if v == "" {
-		if info, ok := debug.ReadBuildInfo(); ok {
+		if info, ok := readBuildInfo(); ok {
 			if mv := strings.TrimSpace(info.Main.Version); mv != "" && mv != "(devel)" {
 				v = mv
 			}

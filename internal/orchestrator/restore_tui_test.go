@@ -1,52 +1,70 @@
 package orchestrator
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestFilterAndSortCategoriesForSystem_PVE(t *testing.T) {
-	cats := []Category{
-		{Name: "Common B", Type: CategoryTypeCommon},
-		{Name: "Zeta PVE", Type: CategoryTypePVE},
-		{Name: "Alpha PVE", Type: CategoryTypePVE},
-		{Name: "PBS Only", Type: CategoryTypePBS},
+func TestFilterAndSortCategoriesForSystem(t *testing.T) {
+	categories := []Category{
+		{Name: "Common", Type: CategoryTypeCommon},
+		{Name: "PBS", Type: CategoryTypePBS},
+		{Name: "Alpha", Type: CategoryTypePVE},
+		{Name: "Beta", Type: CategoryTypePVE},
 	}
 
-	got := filterAndSortCategoriesForSystem(cats, SystemTypePVE)
-	if len(got) != 3 {
-		t.Fatalf("expected 3 categories for PVE, got %d", len(got))
-	}
-	if got[0].Name != "Alpha PVE" || got[1].Name != "Zeta PVE" || got[2].Type != CategoryTypeCommon {
-		t.Fatalf("unexpected order: %+v", got)
+	for _, tc := range []struct {
+		name       string
+		systemType SystemType
+		wantNames  []string
+	}{
+		{name: "pve", systemType: SystemTypePVE, wantNames: []string{"Alpha", "Beta", "Common"}},
+		{name: "pbs", systemType: SystemTypePBS, wantNames: []string{"PBS", "Common"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := filterAndSortCategoriesForSystem(categories, tc.systemType)
+			if len(got) != len(tc.wantNames) {
+				t.Fatalf("unexpected count: %d", len(got))
+			}
+			for i, want := range tc.wantNames {
+				if got[i].Name != want {
+					t.Fatalf("position %d: got %q, want %q", i, got[i].Name, want)
+				}
+			}
+		})
 	}
 }
 
-func TestFilterAndSortCategoriesForSystem_PBS(t *testing.T) {
-	cats := []Category{
-		{Name: "Common A", Type: CategoryTypeCommon},
-		{Name: "Zeta PBS", Type: CategoryTypePBS},
-		{Name: "Beta PBS", Type: CategoryTypePBS},
-		{Name: "PVE Only", Type: CategoryTypePVE},
+func TestBuildRestorePlanText(t *testing.T) {
+	config := &SelectiveRestoreConfig{
+		Mode:       RestoreModeCustom,
+		SystemType: SystemTypePVE,
+		SelectedCategories: []Category{
+			{Name: "Alpha", Description: "First", Paths: []string{"./etc/alpha"}},
+			{Name: "Beta", Description: "Second", Paths: []string{"./var/beta"}},
+		},
 	}
 
-	got := filterAndSortCategoriesForSystem(cats, SystemTypePBS)
-	if len(got) != 3 {
-		t.Fatalf("expected 3 categories for PBS, got %d", len(got))
-	}
-	if got[0].Name != "Beta PBS" || got[1].Name != "Zeta PBS" || got[2].Type != CategoryTypeCommon {
-		t.Fatalf("unexpected order: %+v", got)
-	}
-}
+	text := buildRestorePlanText(config)
 
-func TestFilterAndSortCategoriesForSystem_CommonAfterSpecific(t *testing.T) {
-	cats := []Category{
-		{Name: "Storage", Type: CategoryTypePVE},
-		{Name: "General", Type: CategoryTypeCommon},
+	if !strings.Contains(text, "CUSTOM selection (2 categories)") {
+		t.Fatalf("missing mode line: %s", text)
 	}
-
-	got := filterAndSortCategoriesForSystem(cats, SystemTypePVE)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 categories, got %d", len(got))
+	if !strings.Contains(text, "System type:  Proxmox Virtual Environment (PVE)") {
+		t.Fatalf("missing system type line: %s", text)
 	}
-	if got[0].Type != CategoryTypePVE || got[1].Type != CategoryTypeCommon {
-		t.Fatalf("unexpected ordering when common follows specific: %+v", got)
+	if !strings.Contains(text, "1. Alpha") || !strings.Contains(text, "2. Beta") {
+		t.Fatalf("missing category entries: %s", text)
+	}
+	alphaIndex := strings.Index(text, "/etc/alpha")
+	betaIndex := strings.Index(text, "/var/beta")
+	if alphaIndex == -1 || betaIndex == -1 {
+		t.Fatalf("missing paths: %s", text)
+	}
+	if alphaIndex > betaIndex {
+		t.Fatalf("paths not sorted: %d vs %d", alphaIndex, betaIndex)
+	}
+	if !strings.Contains(text, "Existing files at these locations will be OVERWRITTEN") {
+		t.Fatalf("missing warning text")
 	}
 }

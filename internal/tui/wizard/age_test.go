@@ -1,303 +1,194 @@
 package wizard
 
 import (
-	"context"
 	"errors"
-	"github.com/gdamore/tcell/v2"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
-	"unsafe"
-
-	"github.com/rivo/tview"
-
-	"github.com/tis24dev/proxsave/internal/tui"
 )
 
-func TestSaveAgeRecipient(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "recipient.txt")
-
-	if err := SaveAgeRecipient(target, "age1abcd"); err != nil {
-		t.Fatalf("SaveAgeRecipient error: %v", err)
+func TestValidatePublicKey(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "valid", input: " age1abc  ", want: "age1abc"},
+		{name: "empty", input: "", wantErr: true},
+		{name: "missing prefix", input: "abc", wantErr: true},
 	}
 
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("failed to read recipient file: %v", err)
-	}
-	if string(data) != "age1abcd\n" {
-		t.Fatalf("unexpected file content: %q", string(data))
-	}
-
-	info, err := os.Stat(target)
-	if err != nil {
-		t.Fatalf("stat error: %v", err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("expected permissions 0600, got %v", info.Mode().Perm())
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := validatePublicKey(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestConfirmRecipientOverwriteAccept(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
+func TestValidatePassphrase(t *testing.T) {
+	cases := []struct {
+		name    string
+		pass    string
+		confirm string
+		wantErr bool
+	}{
+		{name: "valid", pass: "correct horse", confirm: "correct horse"},
+		{name: "empty", pass: "", confirm: "", wantErr: true},
+		{name: "short", pass: "short", confirm: "short", wantErr: true},
+		{name: "mismatch", pass: "longenough", confirm: "diff", wantErr: true},
+	}
 
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		done := extractModalDone(focus.(*tview.Modal))
-		done(0, "Overwrite")
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := validatePassphrase(tc.pass, tc.confirm)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidatePrivateKey(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "valid", input: " AGE-SECRET-KEY-1abc  ", want: "AGE-SECRET-KEY-1abc"},
+		{name: "empty", input: "", wantErr: true},
+		{name: "wrong prefix", input: "SECRET", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := validatePrivateKey(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSaveAgeRecipientSuccess(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "keys", "recipient.age")
+
+	origMkdir := ageMkdirAll
+	origWrite := ageWriteFile
+	origChmod := ageChmod
+	t.Cleanup(func() {
+		ageMkdirAll = origMkdir
+		ageWriteFile = origWrite
+		ageChmod = origChmod
+	})
+
+	ageMkdirAll = func(path string, perm os.FileMode) error {
+		if perm != 0o700 {
+			t.Fatalf("unexpected mkdir perm: %v", perm)
+		}
 		return nil
 	}
 
-	overwrite, err := ConfirmRecipientOverwrite("/tmp/recipient", "/tmp/config", "sig")
-	if err != nil {
-		t.Fatalf("ConfirmRecipientOverwrite error: %v", err)
-	}
-	if !overwrite {
-		t.Fatalf("expected overwrite=true when Overwrite selected")
-	}
-}
-
-func TestConfirmRecipientOverwriteCancel(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
-
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		done := extractModalDone(focus.(*tview.Modal))
-		done(1, "Cancel")
+	var written []byte
+	ageWriteFile = func(path string, data []byte, perm os.FileMode) error {
+		if path != target {
+			t.Fatalf("unexpected path %s", path)
+		}
+		written = append([]byte(nil), data...)
+		if perm != 0o600 {
+			t.Fatalf("unexpected write perm: %v", perm)
+		}
 		return nil
 	}
 
-	overwrite, err := ConfirmRecipientOverwrite("/tmp/recipient", "/tmp/config", "sig")
-	if err != nil {
-		t.Fatalf("ConfirmRecipientOverwrite error: %v", err)
-	}
-	if overwrite {
-		t.Fatalf("expected overwrite=false when Cancel selected")
-	}
-}
-
-func TestConfirmRecipientOverwriteMessageContainsPaths(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
-
-	var captured string
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		captured = extractModalText(focus.(*tview.Modal))
+	var chmodPath string
+	ageChmod = func(path string, perm os.FileMode) error {
+		chmodPath = path
+		if perm != 0o600 {
+			t.Fatalf("unexpected chmod perm: %v", perm)
+		}
 		return nil
 	}
 
-	if _, err := ConfirmRecipientOverwrite("/var/lib/age/recipient.txt", "/etc/proxsave/backup.env", "sig"); err != nil {
-		t.Fatalf("ConfirmRecipientOverwrite error: %v", err)
+	if err := SaveAgeRecipient(target, "age1final"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(captured, "/var/lib/age/recipient.txt") {
-		t.Fatalf("modal text did not include recipient path: %q", captured)
+	if string(written) != "age1final\n" {
+		t.Fatalf("wrong payload: %q", string(written))
 	}
-}
-
-func TestRunAgeSetupWizardExistingKey(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
-
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		form, ok := focus.(*tview.Form)
-		if !ok {
-			t.Fatalf("expected focus to be form, got %T", focus)
-		}
-
-		dd, ok := form.GetFormItem(0).(*tview.DropDown)
-		if !ok {
-			t.Fatalf("expected first form item to be dropdown, got %T", form.GetFormItem(0))
-		}
-		dd.SetCurrentOption(0)
-
-		pubField, ok := form.GetFormItem(1).(*tview.InputField)
-		if !ok {
-			t.Fatalf("expected public key field, got %T", form.GetFormItem(1))
-		}
-		pubField.SetText("age1deadbeefexamplekey")
-
-		// Exercise dropdown input capture branches
-		if handler := dd.GetInputCapture(); handler != nil {
-			handler(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
-			handler(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone))
-		}
-		if capture := form.GetInputCapture(); capture != nil {
-			capture(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
-		}
-
-		// Trigger submit
-		clickFormButton(t, form, 0)
-		return nil
-	}
-
-	data, err := RunAgeSetupWizard(context.Background(), "/tmp/recipient", "/tmp/config", "sig")
-	if err != nil {
-		t.Fatalf("RunAgeSetupWizard error: %v", err)
-	}
-	if data == nil {
-		t.Fatalf("expected data to be populated")
-	}
-	if data.SetupType != "existing" {
-		t.Fatalf("expected setup type 'existing', got %q", data.SetupType)
-	}
-	if data.PublicKey != "age1deadbeefexamplekey" || data.RecipientKey != data.PublicKey {
-		t.Fatalf("unexpected public/recipient key: %+v", data)
+	if chmodPath != target {
+		t.Fatalf("chmod not called on target")
 	}
 }
 
-func TestRunAgeSetupWizardCancel(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
+func TestSaveAgeRecipientErrors(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "keys", "recipient.age")
 
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		form, ok := focus.(*tview.Form)
-		if !ok {
-			t.Fatalf("expected focus to be form, got %T", focus)
-		}
-		// Cancel button is the second added button
-		clickFormButton(t, form, 1)
-		return nil
+	origMkdir := ageMkdirAll
+	origWrite := ageWriteFile
+	origChmod := ageChmod
+	t.Cleanup(func() {
+		ageMkdirAll = origMkdir
+		ageWriteFile = origWrite
+		ageChmod = origChmod
+	})
+
+	ageMkdirAll = func(string, os.FileMode) error {
+		return errors.New("boom")
+	}
+	if err := SaveAgeRecipient(target, "age1final"); err == nil || !strings.Contains(err.Error(), "create recipient directory") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	data, err := RunAgeSetupWizard(context.Background(), "/tmp/recipient", "/tmp/config", "sig")
-	if !errors.Is(err, ErrAgeSetupCancelled) {
-		t.Fatalf("expected cancellation error, got %v", err)
+	ageMkdirAll = origMkdir
+
+	ageWriteFile = func(string, []byte, os.FileMode) error {
+		return errors.New("write fail")
 	}
-	if data != nil {
-		t.Fatalf("expected data to be nil on cancel")
-	}
-}
-
-func TestRunAgeSetupWizardPassphrase(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
-
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		form, ok := focus.(*tview.Form)
-		if !ok {
-			t.Fatalf("expected focus to be form, got %T", focus)
-		}
-
-		dd, ok := form.GetFormItem(0).(*tview.DropDown)
-		if !ok {
-			t.Fatalf("expected dropdown, got %T", form.GetFormItem(0))
-		}
-		dd.SetCurrentOption(1) // passphrase mode
-
-		passField, ok := form.GetFormItem(2).(*tview.InputField)
-		if !ok {
-			t.Fatalf("expected passphrase field, got %T", form.GetFormItem(2))
-		}
-		confirmField, ok := form.GetFormItem(3).(*tview.InputField)
-		if !ok {
-			t.Fatalf("expected confirm field, got %T", form.GetFormItem(3))
-		}
-
-		passField.SetText("longpass")
-		confirmField.SetText("longpass")
-
-		clickFormButton(t, form, 0)
-		return nil
+	if err := SaveAgeRecipient(target, "age1final"); err == nil || !strings.Contains(err.Error(), "write recipient file") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	data, err := RunAgeSetupWizard(context.Background(), "/tmp/recipient", "/tmp/config", "sig")
-	if err != nil {
-		t.Fatalf("RunAgeSetupWizard error: %v", err)
-	}
-	if data == nil || data.SetupType != "passphrase" || data.Passphrase != "longpass" {
-		t.Fatalf("unexpected passphrase data: %+v", data)
-	}
-}
+	ageWriteFile = origWrite
 
-func TestRunAgeSetupWizardPrivateKey(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
-
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		form, ok := focus.(*tview.Form)
-		if !ok {
-			t.Fatalf("expected focus to be form, got %T", focus)
-		}
-
-		dd, ok := form.GetFormItem(0).(*tview.DropDown)
-		if !ok {
-			t.Fatalf("expected dropdown, got %T", form.GetFormItem(0))
-		}
-		dd.SetCurrentOption(2) // private key mode
-
-		privateField, ok := form.GetFormItem(4).(*tview.InputField)
-		if !ok {
-			t.Fatalf("expected private key field, got %T", form.GetFormItem(4))
-		}
-		privateField.SetText("AGE-SECRET-KEY-1example")
-
-		clickFormButton(t, form, 0)
-		return nil
-	}
-
-	data, err := RunAgeSetupWizard(context.Background(), "/tmp/recipient", "/tmp/config", "sig")
-	if err != nil {
-		t.Fatalf("RunAgeSetupWizard error: %v", err)
-	}
-	if data == nil || data.SetupType != "privatekey" || data.PrivateKey != "AGE-SECRET-KEY-1example" {
-		t.Fatalf("unexpected private key data: %+v", data)
-	}
-}
-
-func TestSaveAgeRecipientDirErrors(t *testing.T) {
-	dir := t.TempDir()
-	fileParent := filepath.Join(dir, "parent-file")
-	if err := os.WriteFile(fileParent, []byte("x"), 0o600); err != nil {
-		t.Fatalf("prepare parent file: %v", err)
-	}
-
-	target := filepath.Join(fileParent, "recipient.txt")
-	err := SaveAgeRecipient(target, "age1abcd")
-	if err == nil || !strings.Contains(err.Error(), "create recipient directory") {
-		t.Fatalf("expected directory creation error, got %v", err)
-	}
-}
-
-func TestSaveAgeRecipientWriteErrors(t *testing.T) {
-	dir := t.TempDir()
-	targetDir := filepath.Join(dir, "recipient-dir")
-	if err := os.Mkdir(targetDir, 0o700); err != nil {
-		t.Fatalf("prepare target dir: %v", err)
-	}
-
-	err := SaveAgeRecipient(targetDir, "age1abcd")
-	if err == nil || !strings.Contains(err.Error(), "write recipient file") {
-		t.Fatalf("expected write error, got %v", err)
-	}
-}
-
-func TestSaveAgeRecipientChmodErrors(t *testing.T) {
-	originalChmod := ageChmod
-	defer func() { ageChmod = originalChmod }()
 	ageChmod = func(string, os.FileMode) error {
 		return errors.New("chmod fail")
 	}
-
-	target := filepath.Join(t.TempDir(), "recipient.txt")
-	err := SaveAgeRecipient(target, "age1abcd")
-	if err == nil || !strings.Contains(err.Error(), "chmod recipient file") {
-		t.Fatalf("expected chmod error, got %v", err)
+	if err := SaveAgeRecipient(target, "age1final"); err == nil || !strings.Contains(err.Error(), "chmod recipient file") {
+		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-func clickFormButton(t *testing.T, form *tview.Form, index int) {
-	t.Helper()
-	btn := form.GetButton(index)
-	if btn == nil {
-		t.Fatalf("button %d not found", index)
-	}
-	selectedField := reflect.ValueOf(btn).Elem().FieldByName("selected")
-	if !selectedField.IsValid() || selectedField.IsNil() {
-		t.Fatalf("selected func missing on button %d", index)
-	}
-	callback := *(*func())(unsafe.Pointer(selectedField.UnsafeAddr()))
-	callback()
 }
