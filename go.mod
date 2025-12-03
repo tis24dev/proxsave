@@ -2,6 +2,8 @@ module github.com/tis24dev/proxsave
 
 go 1.25.5
 
+toolchain go1.25.5
+
 require (
 	filippo.io/age v1.2.1
 	github.com/gdamore/tcell/v2 v2.13.1
