@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -698,64 +699,12 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		lines = strings.Split(strings.TrimRight(normalized, "\n"), "\n")
 	}
 
-	updatedLines := make([]string, 0, len(lines)+1)
-
 	correctPaths := []string{strings.TrimSpace(newCommandToken)}
 	if execPath != "" && execPath != newCommandToken {
 		correctPaths = append(correctPaths, execPath)
 	}
 
-	containsLegacy := func(line string) bool {
-		if strings.Contains(line, "proxmox-backup.sh") {
-			return true
-		}
-		for _, p := range legacyPaths {
-			if p != "" && strings.Contains(line, p) {
-				return true
-			}
-		}
-		return false
-	}
-
-	containsCorrectPath := func(line string) bool {
-		for _, p := range correctPaths {
-			if p != "" && strings.Contains(line, p) {
-				return true
-			}
-		}
-		return false
-	}
-
-	containsBinaryReference := func(line string) bool {
-		if strings.Contains(line, "proxsave") || strings.Contains(line, "proxmox-backup") {
-			return true
-		}
-		return false
-	}
-
-	hasCurrentEntry := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			updatedLines = append(updatedLines, line)
-			continue
-		}
-		if containsLegacy(line) {
-			// Remove cron entries that still reference the legacy Bash script paths.
-			continue
-		}
-		if containsCorrectPath(line) {
-			hasCurrentEntry = true
-			updatedLines = append(updatedLines, line)
-			continue
-		}
-		if containsBinaryReference(line) {
-			// Remove proxsave/proxmox-backup entries that point to outdated binaries.
-			continue
-		}
-		updatedLines = append(updatedLines, line)
-	}
+	updatedLines, hasCurrentEntry := filterCronLines(lines, legacyPaths, correctPaths)
 
 	schedule := strings.TrimSpace(cronSchedule)
 	if schedule == "" {
@@ -780,6 +729,56 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 }
 
+func filterCronLines(lines []string, legacyPaths []string, correctPaths []string) ([]string, bool) {
+	updatedLines := make([]string, 0, len(lines))
+	hasCurrentEntry := false
+
+	containsLegacy := func(line string) bool {
+		if strings.Contains(line, "proxmox-backup.sh") {
+			return true
+		}
+		for _, p := range legacyPaths {
+			if p != "" && strings.Contains(line, p) {
+				return true
+			}
+		}
+		return false
+	}
+
+	containsCorrectPath := func(line string) bool {
+		for _, p := range correctPaths {
+			if p != "" && strings.Contains(line, p) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			updatedLines = append(updatedLines, line)
+			continue
+		}
+		if containsLegacy(line) {
+			// Remove cron entries that still reference the legacy Bash script paths.
+			continue
+		}
+		if containsCorrectPath(line) {
+			hasCurrentEntry = true
+			updatedLines = append(updatedLines, line)
+			continue
+		}
+		if containsBinaryReference(line) {
+			// Remove proxsave/proxmox-backup entries that point to outdated binaries.
+			continue
+		}
+		updatedLines = append(updatedLines, line)
+	}
+
+	return updatedLines, hasCurrentEntry
+}
+
 func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
 	if bootstrap != nil {
 		bootstrap.Warning(format, args...)
@@ -794,6 +793,174 @@ func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ..
 		return
 	}
 	logging.Info(format, args...)
+}
+
+func containsBinaryReference(line string) bool {
+	if commandTokenMatchesTarget(cronCommandToken(line)) {
+		return true
+	}
+	return containsInlineBinaryReference(line)
+}
+
+func cronCommandToken(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return ""
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return ""
+	}
+
+	first := fields[0]
+	if looksLikeEnvAssignment(first) {
+		return ""
+	}
+
+	if strings.HasPrefix(first, "@") {
+		if len(fields) >= 2 {
+			return fields[1]
+		}
+		return ""
+	}
+
+	if len(fields) <= 5 {
+		return ""
+	}
+	return fields[5]
+}
+
+func looksLikeEnvAssignment(token string) bool {
+	idx := strings.Index(token, "=")
+	if idx <= 0 {
+		return false
+	}
+	key := token[:idx]
+	for _, r := range key {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func commandTokenMatchesTarget(token string) bool {
+	token = strings.Trim(token, "\"'")
+	if token == "" {
+		return false
+	}
+	base := filepath.Base(token)
+	return base == "proxsave" || base == "proxmox-backup"
+}
+
+func containsInlineBinaryReference(line string) bool {
+	targets := []string{"proxsave", "proxmox-backup"}
+	for _, target := range targets {
+		searchStart := 0
+		for searchStart < len(line) {
+			offset := strings.Index(line[searchStart:], target)
+			if offset == -1 {
+				break
+			}
+			start := searchStart + offset
+			end := start + len(target)
+			if tokenLooksLikeExecutable(line, start, end) {
+				return true
+			}
+			searchStart = end
+		}
+	}
+	return false
+}
+
+func tokenLooksLikeExecutable(line string, start, end int) bool {
+	var before, after byte
+	if start > 0 {
+		before = line[start-1]
+	}
+	if end < len(line) {
+		after = line[end]
+	}
+
+	if !isExecutableBoundaryBefore(before) || !isExecutableBoundaryAfter(after) {
+		return false
+	}
+
+	token := extractToken(line, start, end)
+	token = strings.Trim(token, "\"'")
+	if token == "" {
+		return false
+	}
+
+	base := filepath.Base(token)
+	return base == "proxsave" || base == "proxmox-backup"
+}
+
+func extractToken(line string, start, end int) string {
+	begin := start
+	for begin > 0 {
+		prev := line[begin-1]
+		if unicode.IsSpace(rune(prev)) || isCommandSeparator(prev) {
+			break
+		}
+		begin--
+	}
+
+	stop := end
+	for stop < len(line) {
+		next := line[stop]
+		if unicode.IsSpace(rune(next)) || isCommandSeparator(next) {
+			break
+		}
+		stop++
+	}
+
+	return line[begin:stop]
+}
+
+func isCommandSeparator(b byte) bool {
+	switch b {
+	case ';', '&', '|', '>', '<', '(', ')':
+		return true
+	}
+	return false
+}
+
+func isExecutableBoundaryBefore(b byte) bool {
+	if b == 0 {
+		return true
+	}
+	if unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) || b == '_' || b == '-' || b == '.' {
+		return false
+	}
+	if unicode.IsSpace(rune(b)) {
+		return true
+	}
+	switch b {
+	case '"', '\'', '/', '\\', '=', ':', '[', '{':
+		return true
+	}
+	return false
+}
+
+func isExecutableBoundaryAfter(b byte) bool {
+	if b == 0 {
+		return true
+	}
+	if unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) || b == '_' || b == '-' || b == '.' {
+		return false
+	}
+	if b == '/' || b == '\\' {
+		return false
+	}
+	if unicode.IsSpace(rune(b)) {
+		return true
+	}
+	switch b {
+	case '"', '\'', ';', '&', '|', '>', '<', ')', '(', ']', '}':
+		return true
+	}
+	return false
 }
 
 func fetchBackupList(ctx context.Context, backend storage.Storage) []*types.BackupMetadata {
