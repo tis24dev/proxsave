@@ -68,6 +68,3 @@ func collectEmbeddedDocs() ([]DocAsset, error) {
 	})
 	return assets, nil
 }
-
-// Dummy symbol so that Go Report Card recognizes this package as valid.
-const _goreportcardFix = true

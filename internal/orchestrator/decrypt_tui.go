@@ -34,6 +34,11 @@ const (
 	pathActionCancel    = "cancel"
 )
 
+var (
+	promptOverwriteActionFunc = promptOverwriteAction
+	promptNewPathInputFunc    = promptNewPathInput
+)
+
 // RunDecryptWorkflowTUI runs the decrypt workflow using a TUI flow.
 func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) error {
 	if cfg == nil {
@@ -513,7 +518,7 @@ func ensureWritablePathTUI(path, description, configPath, buildSig string) (stri
 			return "", fmt.Errorf("stat %s: %w", current, err)
 		}
 
-		action, err := promptOverwriteAction(current, description, failureMessage, configPath, buildSig)
+		action, err := promptOverwriteActionFunc(current, description, failureMessage, configPath, buildSig)
 		if err != nil {
 			return "", err
 		}
@@ -527,7 +532,7 @@ func ensureWritablePathTUI(path, description, configPath, buildSig string) (stri
 			}
 			return current, nil
 		case pathActionNew:
-			newPath, err := promptNewPathInput(current, configPath, buildSig)
+			newPath, err := promptNewPathInputFunc(current, configPath, buildSig)
 			if err != nil {
 				if errors.Is(err, ErrDecryptAborted) {
 					return "", ErrDecryptAborted
