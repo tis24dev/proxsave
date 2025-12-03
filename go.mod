@@ -1,6 +1,6 @@
 module github.com/tis24dev/proxsave
 
-go 1.25.5
+go 1.25
 
 toolchain go1.25.5
 
