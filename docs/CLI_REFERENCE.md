@@ -182,7 +182,7 @@ Some interactive commands support two interface modes:
 7. Atomically replaces current binary (write to .tmp, then rename)
 8. Updates symlinks in `/usr/local/bin/` (proxsave, proxmox-backup)
 9. Cleans up legacy Bash script symlinks
-10. Migrates cron entries and fixes file permissions
+10. Migrates cron entries (legacy entries are replaced, existing ones using the Go binary are preserved) and fixes file permissions
 
 **Post-upgrade steps**:
 1. Configuration file automatically compatible with new version
@@ -196,7 +196,7 @@ Some interactive commands support two interface modes:
 - **No configuration changes**: `backup.env` is never modified during `--upgrade`
 - **Platform support**: Linux only (amd64, arm64)
 - **Incompatible flags**: Cannot use with `--install` or `--new-install`
-- **Automatic maintenance**: Symlinks, cron, and permissions updated automatically
+- **Automatic maintenance**: Symlinks, cron (without touching entries already pointing to proxsave/proxmox-backup), and permissions updated automatically
 - **Safe replacement**: Old binary is replaced atomically (no backup created)
 - **Separate config upgrade**: Use `--upgrade-config` separately to update configuration
 
