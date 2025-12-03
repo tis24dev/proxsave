@@ -26,10 +26,10 @@ jobs:
       ########################################
       # GO 1.25 — MAIN TOOLCHAIN
       ########################################
-      - name: Set up Go 1.25
+      - name: Set up Go (from go.mod)
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: 'go.mod'
 
       - name: Show Go version
         run: go version

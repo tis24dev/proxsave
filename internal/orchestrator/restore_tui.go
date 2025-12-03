@@ -29,6 +29,7 @@ const (
 )
 
 var errRestoreBackToMode = errors.New("restore mode back")
+var promptYesNoTUIFunc = promptYesNoTUI
 
 // RunRestoreWorkflowTUI runs the restore workflow using a TUI flow.
 func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) error {
@@ -217,6 +218,13 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		logger.Info("Preparing PBS system for restore: stopping proxmox-backup services")
 		if err := stopPBSServices(ctx, logger); err != nil {
 			logger.Warning("Unable to stop PBS services automatically: %v", err)
+			cont, perr := promptContinueWithPBSServicesTUI(configPath, buildSig)
+			if perr != nil {
+				return perr
+			}
+			if !cont {
+				return ErrRestoreAborted
+			}
 			logger.Warning("Continuing restore with PBS services still running")
 		} else {
 			pbsServicesStopped = true
@@ -832,7 +840,7 @@ func selectCategoriesTUI(available []Category, systemType SystemType, configPath
 
 func promptCompatibilityTUI(configPath, buildSig string, compatErr error) (bool, error) {
 	message := fmt.Sprintf("Compatibility check reported:\n\n[red]%v[white]\n\nContinuing may cause system instability.\n\nDo you want to continue anyway?", compatErr)
-	return promptYesNoTUI(
+	return promptYesNoTUIFunc(
 		"Compatibility warning",
 		configPath,
 		buildSig,
@@ -844,7 +852,7 @@ func promptCompatibilityTUI(configPath, buildSig string, compatErr error) (bool,
 
 func promptContinueWithoutSafetyBackupTUI(configPath, buildSig string, cause error) (bool, error) {
 	message := fmt.Sprintf("Failed to create safety backup:\n\n[red]%v[white]\n\nWithout a safety backup, it will be harder to rollback changes.\n\nContinue without safety backup?", cause)
-	return promptYesNoTUI(
+	return promptYesNoTUIFunc(
 		"Safety backup failed",
 		configPath,
 		buildSig,
@@ -856,7 +864,7 @@ func promptContinueWithoutSafetyBackupTUI(configPath, buildSig string, cause err
 
 func promptContinueWithPBSServicesTUI(configPath, buildSig string) (bool, error) {
 	message := "Unable to stop Proxmox Backup Server services automatically.\n\nContinuing the restore while services are running may lead to inconsistent state.\n\nContinue restore with PBS services still running?"
-	return promptYesNoTUI(
+	return promptYesNoTUIFunc(
 		"PBS services running",
 		configPath,
 		buildSig,
@@ -1182,7 +1190,7 @@ func promptYesNoTUI(title, configPath, buildSig, message, yesLabel, noLabel stri
 
 func confirmOverwriteTUI(configPath, buildSig string) (bool, error) {
 	message := "This operation will overwrite existing configuration files on this system.\n\nAre you sure you want to proceed with the restore?"
-	return promptYesNoTUI(
+	return promptYesNoTUIFunc(
 		"Confirm overwrite",
 		configPath,
 		buildSig,

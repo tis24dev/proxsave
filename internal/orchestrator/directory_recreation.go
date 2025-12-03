@@ -10,10 +10,14 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
+var (
+	storageCfgPath   = "/etc/pve/storage.cfg"
+	datastoreCfgPath = "/etc/proxmox-backup/datastore.cfg"
+	zpoolCachePath   = "/etc/zfs/zpool.cache"
+)
+
 // RecreateStorageDirectories parses storage.cfg and recreates storage directories (PVE)
 func RecreateStorageDirectories(logger *logging.Logger) error {
-	storageCfgPath := "/etc/pve/storage.cfg"
-
 	// Check if file exists
 	if _, err := os.Stat(storageCfgPath); err != nil {
 		if os.IsNotExist(err) {
@@ -50,8 +54,8 @@ func RecreateStorageDirectories(logger *logging.Logger) error {
 		if strings.Contains(line, ":") && !strings.Contains(line, "=") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
-				currentType = parts[0]
-				currentStorage = parts[1]
+				currentType = strings.TrimSuffix(parts[0], ":")
+				currentStorage = strings.TrimSuffix(parts[1], ":")
 				currentPath = ""
 			}
 			continue
@@ -134,8 +138,6 @@ func createPVEStorageStructure(basePath, storageType string, logger *logging.Log
 
 // RecreateDatastoreDirectories parses datastore.cfg and recreates datastore directories (PBS)
 func RecreateDatastoreDirectories(logger *logging.Logger) error {
-	datastoreCfgPath := "/etc/proxmox-backup/datastore.cfg"
-
 	// Check if file exists
 	if _, err := os.Stat(datastoreCfgPath); err != nil {
 		if os.IsNotExist(err) {
@@ -171,7 +173,7 @@ func RecreateDatastoreDirectories(logger *logging.Logger) error {
 		if strings.HasPrefix(line, "datastore:") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
-				currentDatastore = parts[1]
+				currentDatastore = strings.TrimSuffix(parts[1], ":")
 				currentPath = ""
 			}
 			continue
@@ -252,7 +254,7 @@ func createPBSDatastoreStructure(basePath, datastoreName string, logger *logging
 // isLikelyZFSMountPoint checks if a path is likely a ZFS mount point
 func isLikelyZFSMountPoint(path string, logger *logging.Logger) bool {
 	// Check if /etc/zfs/zpool.cache exists (indicates ZFS is used on this system)
-	if _, err := os.Stat("/etc/zfs/zpool.cache"); err != nil {
+	if _, err := os.Stat(zpoolCachePath); err != nil {
 		// No ZFS on this system
 		return false
 	}
@@ -261,8 +263,8 @@ func isLikelyZFSMountPoint(path string, logger *logging.Logger) bool {
 	// PBS datastores on ZFS are typically under /mnt/ or use "backup" in the name
 	pathLower := strings.ToLower(path)
 	if strings.HasPrefix(pathLower, "/mnt/") ||
-	   strings.Contains(pathLower, "backup") ||
-	   strings.Contains(pathLower, "datastore") {
+		strings.Contains(pathLower, "backup") ||
+		strings.Contains(pathLower, "datastore") {
 		logger.Debug("Path %s matches ZFS mount point pattern", path)
 		return true
 	}

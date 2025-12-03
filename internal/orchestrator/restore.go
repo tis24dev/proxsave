@@ -442,10 +442,6 @@ func unmountEtcPVE(ctx context.Context, logger *logging.Logger) error {
 	return nil
 }
 
-func runCommand(ctx context.Context, logger *logging.Logger, name string, args ...string) error {
-	return runCommandWithTimeout(ctx, logger, 0, name, args...)
-}
-
 func runCommandWithTimeout(ctx context.Context, logger *logging.Logger, timeout time.Duration, name string, args ...string) error {
 	return execCommand(ctx, logger, timeout, name, args...)
 }
