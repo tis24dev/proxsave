@@ -105,17 +105,17 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		statusMessage = "Backup failed"
 	}
 
-		// Determine storage statuses
-		localStatus := strings.TrimSpace(stats.LocalStatus)
-		if localStatus == "" {
-			switch notify.StatusFromExitCode(stats.ExitCode) {
-			case notify.StatusSuccess:
-				localStatus = "ok"
-			case notify.StatusWarning:
-				localStatus = "warning"
-			default:
-				localStatus = "error"
-			}
+	// Determine storage statuses
+	localStatus := strings.TrimSpace(stats.LocalStatus)
+	if localStatus == "" {
+		switch notify.StatusFromExitCode(stats.ExitCode) {
+		case notify.StatusSuccess:
+			localStatus = "ok"
+		case notify.StatusWarning:
+			localStatus = "warning"
+		default:
+			localStatus = "error"
+		}
 	}
 
 	secondaryStatus := strings.TrimSpace(stats.SecondaryStatus)

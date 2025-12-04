@@ -69,9 +69,9 @@ func TestLocalStorage_Location(t *testing.T) {
 // TestLocalStorage_IsEnabled tests IsEnabled method
 func TestLocalStorage_IsEnabled(t *testing.T) {
 	tests := []struct {
-		name        string
-		backupPath  string
-		expected    bool
+		name       string
+		backupPath string
+		expected   bool
 	}{
 		{
 			name:       "Enabled with path",
@@ -442,4 +442,3 @@ func TestLocalStorage_LoadMetadataFromBundle(t *testing.T) {
 		t.Log("loadMetadataFromBundle succeeded (unexpected but acceptable)")
 	}
 }
-

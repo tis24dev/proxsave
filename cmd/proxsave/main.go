@@ -34,13 +34,13 @@ import (
 )
 
 const (
-	defaultLegacyEnvPath    = "/opt/proxsave/env/backup.env"
-	legacyEnvFallbackPath   = "/opt/proxmox-backup/env/backup.env"
-	goRuntimeMinVersion     = "1.25.5"
-	networkPreflightTimeout = 2 * time.Second
-	bytesPerMegabyte  int64 = 1024 * 1024
-	defaultDirPerm          = 0o755
-	exitCodeInterrupted     = 128 + int(syscall.SIGINT)
+	defaultLegacyEnvPath          = "/opt/proxsave/env/backup.env"
+	legacyEnvFallbackPath         = "/opt/proxmox-backup/env/backup.env"
+	goRuntimeMinVersion           = "1.25.5"
+	networkPreflightTimeout       = 2 * time.Second
+	bytesPerMegabyte        int64 = 1024 * 1024
+	defaultDirPerm                = 0o755
+	exitCodeInterrupted           = 128 + int(syscall.SIGINT)
 )
 
 // Build-time variables (injected via ldflags)
@@ -1618,9 +1618,9 @@ func disableNetworkFeaturesForRun(cfg *config.Config, bootstrap *logging.Bootstr
 }
 
 // checkForUpdates performs a best-effort check against the latest GitHub release.
-// - If the latest version cannot be determined or the current version is already up to date,
-//   only a DEBUG log entry is written (no user-facing output).
-// - If a newer version is available, a WARNING is logged suggesting the --upgrade command.
+//   - If the latest version cannot be determined or the current version is already up to date,
+//     only a DEBUG log entry is written (no user-facing output).
+//   - If a newer version is available, a WARNING is logged suggesting the --upgrade command.
 func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion string) {
 	if logger == nil {
 		return

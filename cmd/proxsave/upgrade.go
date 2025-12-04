@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"

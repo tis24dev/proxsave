@@ -24,4 +24,3 @@ func NormalizeGFSRetentionConfig(logger *logging.Logger, backendName string, cfg
 
 	return effective
 }
-

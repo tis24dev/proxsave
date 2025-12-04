@@ -273,7 +273,6 @@ func buildInfoTableRow(label, value string) string {
 	return fmt.Sprintf("                    <tr>\n                        <td>%s</td>\n                        <td>%s</td>\n                    </tr>\n", escapeHTML(label), escapeHTML(value))
 }
 
-
 func valueOrNA(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "N/A"
