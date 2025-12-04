@@ -213,12 +213,12 @@ func (l *Logger) Debug(format string, args ...interface{}) {
 	l.log(types.LogLevelDebug, format, args...)
 }
 
-// Info scrive un log informativo
+// Info writes an informational log
 func (l *Logger) Info(format string, args ...interface{}) {
 	l.log(types.LogLevelInfo, format, args...)
 }
 
-// Phase scrive un log informativo con etichetta PHASE
+// Phase writes an informational log with PHASE label
 func (l *Logger) Phase(format string, args ...interface{}) {
 	if l == nil {
 		return
@@ -230,7 +230,7 @@ func (l *Logger) Phase(format string, args ...interface{}) {
 	l.logWithLabel(types.LogLevelInfo, "PHASE", colorOverride, format, args...)
 }
 
-// Step scrive un log informativo con etichetta STEP (per evidenziare attività sequenziali)
+// Step writes an informational log with STEP label (to highlight sequential activities)
 func (l *Logger) Step(format string, args ...interface{}) {
 	if l == nil {
 		return
@@ -242,7 +242,7 @@ func (l *Logger) Step(format string, args ...interface{}) {
 	l.logWithLabel(types.LogLevelInfo, "STEP", colorOverride, format, args...)
 }
 
-// Skip scrive un log informativo con etichetta SKIP (per elementi disabilitati/ignorati)
+// Skip writes an informational log with SKIP label (for disabled/ignored elements)
 func (l *Logger) Skip(format string, args ...interface{}) {
 	if l == nil {
 		return
@@ -269,7 +269,7 @@ func (l *Logger) Critical(format string, args ...interface{}) {
 	l.log(types.LogLevelCritical, format, args...)
 }
 
-// Fatal scrive un log critico ed esce con il codice specificato
+// Fatal writes a critical log and exits with the specified code
 func (l *Logger) Fatal(exitCode types.ExitCode, format string, args ...interface{}) {
 	l.Critical(format, args...)
 	l.mu.Lock()
@@ -322,7 +322,7 @@ func Debug(format string, args ...interface{}) {
 	defaultLogger.Debug(format, args...)
 }
 
-// Info scrive un log informativo usando il logger di default
+// Info writes an informational log using the default logger
 func Info(format string, args ...interface{}) {
 	defaultLogger.Info(format, args...)
 }
@@ -352,7 +352,7 @@ func Critical(format string, args ...interface{}) {
 	defaultLogger.Critical(format, args...)
 }
 
-// Fatal scrive un log critico ed esce con il codice specificato
+// Fatal writes a critical log and exits with the specified code
 func Fatal(exitCode types.ExitCode, format string, args ...interface{}) {
 	defaultLogger.Fatal(exitCode, format, args...)
 }

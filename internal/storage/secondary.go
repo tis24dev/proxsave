@@ -322,7 +322,7 @@ func (s *SecondaryStorage) List(ctx context.Context) ([]*types.BackupMetadata, e
 	// Find all backup files (legacy + Go naming)
 	globPatterns := []string{
 		filepath.Join(s.basePath, "proxmox-backup-*.tar.*"), // Legacy Bash naming
-		filepath.Join(s.basePath, "*-backup-*.tar*"),        // Go pipeline naming (bundle compreso)
+		filepath.Join(s.basePath, "*-backup-*.tar*"),        // Go pipeline naming (bundle included)
 	}
 
 	var matches []string

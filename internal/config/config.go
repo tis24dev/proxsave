@@ -328,24 +328,39 @@ func (c *Config) loadEnvOverrides() {
 
 // parse interpreta i valori raw della configurazione
 // Supporta sia il formato legacy che quello nuovo del backup.env
+// parse interpreta i valori raw della configurazione
+// Supporta sia il formato legacy che quello nuovo del backup.env
 func (c *Config) parse() error {
-	// General settings
+	c.parseGeneralSettings()
+	c.parseCompressionSettings()
+	c.parseOptimizationSettings()
+	c.parseSecuritySettings()
+	c.parsePathSettings()
+	c.parseStorageSettings()
+	c.parseRetentionSettings()
+	c.parseNotificationSettings()
+	if err := c.parseCollectionSettings(); err != nil {
+		return err
+	}
+	c.autoDetectPBSAuth()
+	return nil
+}
+
+func (c *Config) parseGeneralSettings() {
 	c.BackupEnabled = c.getBool("BACKUP_ENABLED", true)
 	c.DryRun = c.getBool("DRY_RUN", false)
 	c.ProfilingEnabled = c.getBool("PROFILING_ENABLED", true)
-
-	// DEBUG_LEVEL: supporta sia numerico che string ("standard", "advanced", "extreme")
 	c.DebugLevel = c.getLogLevel("DEBUG_LEVEL", types.LogLevelInfo)
 
-	// USE_COLOR vs DISABLE_COLORS (invertito)
 	if disableColors, ok := c.raw["DISABLE_COLORS"]; ok {
 		c.UseColor = !utils.ParseBool(disableColors)
 	} else {
 		c.UseColor = c.getBool("USE_COLOR", true)
 	}
 	c.ColorizeStepLogs = c.getBool("COLORIZE_STEP_LOGS", true) && c.UseColor
+}
 
-	// Compression
+func (c *Config) parseCompressionSettings() {
 	c.CompressionType = c.getCompressionType("COMPRESSION_TYPE", types.CompressionXZ)
 	c.CompressionLevel = c.getInt("COMPRESSION_LEVEL", 6)
 	c.CompressionThreads = c.getInt("COMPRESSION_THREADS", 0) // 0 = auto
@@ -354,8 +369,9 @@ func (c *Config) parse() error {
 		c.CompressionMode = "standard"
 	}
 	c.CompressionLevel = adjustLevelForMode(c.CompressionType, c.CompressionMode, c.CompressionLevel)
+}
 
-	// Optimizations
+func (c *Config) parseOptimizationSettings() {
 	c.EnableSmartChunking = c.getBool("ENABLE_SMART_CHUNKING", false)
 	c.EnableDeduplication = c.getBool("ENABLE_DEDUPLICATION", false)
 	c.EnablePrefilter = c.getBool("ENABLE_PREFILTER", false)
@@ -375,13 +391,13 @@ func (c *Config) parse() error {
 	c.MinDiskPrimaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_PRIMARY_GB", 10.0))
 	c.MinDiskSecondaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_SECONDARY_GB", c.MinDiskPrimaryGB))
 	c.MinDiskCloudGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_CLOUD_GB", c.MinDiskPrimaryGB))
+}
 
-	// Feature flags
+func (c *Config) parseSecuritySettings() {
 	c.EnableGoBackup = c.getBoolWithFallback([]string{"ENABLE_GO_BACKUP", "ENABLE_GO_PIPELINE"}, true)
-	// Preflight controls
 	c.DisableNetworkPreflight = c.getBool("DISABLE_NETWORK_PREFLIGHT", false)
 
-	// Base directory (compatibile con lo script Bash: se non specificato, usa env o default)
+	// Base directory
 	envBaseDir := os.Getenv("BASE_DIR")
 	c.BaseDir = c.getString("BASE_DIR", envBaseDir)
 	if c.BaseDir == "" {
@@ -389,7 +405,6 @@ func (c *Config) parse() error {
 	}
 	_ = os.Setenv("BASE_DIR", c.BaseDir)
 
-	// Security controls
 	c.SecurityCheckEnabled = c.getBoolWithFallback([]string{"SECURITY_CHECK_ENABLED", "FULL_SECURITY_CHECK"}, true)
 	c.AutoUpdateHashes = c.getBool("AUTO_UPDATE_HASHES", true)
 	c.AutoFixPermissions = c.getBool("AUTO_FIX_PERMISSIONS", false)
@@ -447,16 +462,18 @@ func (c *Config) parse() error {
 	if len(c.AgeRecipients) == 0 {
 		c.AgeRecipients = c.getStringSlice("AGE_RECIPIENTS", nil)
 	}
+}
 
-	// Paths: supporta LOCAL_BACKUP_PATH o BACKUP_PATH
+func (c *Config) parsePathSettings() {
 	c.BackupPath = c.getStringWithFallback([]string{"LOCAL_BACKUP_PATH", "BACKUP_PATH"}, filepath.Join(c.BaseDir, "backup"))
 	c.LogPath = c.getStringWithFallback([]string{"LOCAL_LOG_PATH", "LOG_PATH"}, filepath.Join(c.BaseDir, "log"))
 	c.SecondaryLogPath = c.getString("SECONDARY_LOG_PATH", "")
 	c.CloudLogPath = c.getString("CLOUD_LOG_PATH", "")
 	c.LockPath = c.getString("LOCK_PATH", filepath.Join(c.BaseDir, "lock"))
 	c.SecureAccount = c.getString("SECURE_ACCOUNT", filepath.Join(c.BaseDir, "secure_account"))
+}
 
-	// Storage: supporta ENABLE_SECONDARY_BACKUP o SECONDARY_ENABLED
+func (c *Config) parseStorageSettings() {
 	c.SecondaryEnabled = c.getBoolWithFallback([]string{"ENABLE_SECONDARY_BACKUP", "SECONDARY_ENABLED"}, false)
 	c.SecondaryPath = c.getStringWithFallback([]string{"SECONDARY_BACKUP_PATH", "SECONDARY_PATH"}, "")
 
@@ -475,7 +492,6 @@ func (c *Config) parse() error {
 	c.CloudParallelVerify = c.getBool("CLOUD_PARALLEL_VERIFICATION", false)
 	c.CloudWriteHealthCheck = c.getBool("CLOUD_WRITE_HEALTHCHECK", false)
 
-	// Rclone settings with comprehensible timeout names
 	c.RcloneTimeoutConnection = c.getIntWithFallback([]string{"RCLONE_TIMEOUT_CONNECTION", "CLOUD_CONNECTIVITY_TIMEOUT"}, 30)
 	c.RcloneTimeoutOperation = c.getInt("RCLONE_TIMEOUT_OPERATION", 300)
 	c.RcloneBandwidthLimit = c.getString("RCLONE_BANDWIDTH_LIMIT", "")
@@ -488,9 +504,9 @@ func (c *Config) parse() error {
 	if rawFlags := strings.TrimSpace(c.getString("RCLONE_FLAGS", "")); rawFlags != "" {
 		c.RcloneFlags = strings.Fields(rawFlags)
 	}
+}
 
-	// Retention: supporta MAX_LOCAL_BACKUPS o LOCAL_RETENTION_DAYS
-	// Applies to both backups and log files
+func (c *Config) parseRetentionSettings() {
 	c.LocalRetentionDays = c.getIntWithFallback([]string{"MAX_LOCAL_BACKUPS", "LOCAL_RETENTION_DAYS"}, 7)
 	c.SecondaryRetentionDays = c.getIntWithFallback([]string{"MAX_SECONDARY_BACKUPS", "SECONDARY_RETENTION_DAYS"}, 14)
 	c.CloudRetentionDays = c.getIntWithFallback([]string{"MAX_CLOUD_BACKUPS", "CLOUD_RETENTION_DAYS"}, 30)
@@ -498,16 +514,11 @@ func (c *Config) parse() error {
 	c.MaxSecondaryBackups = c.SecondaryRetentionDays
 	c.MaxCloudBackups = c.CloudRetentionDays
 
-	// GFS (Grandfather-Father-Son) retention policy
-	// Tier limits; the active policy is selected via RETENTION_POLICY
 	c.RetentionDaily = c.getInt("RETENTION_DAILY", 0)
 	c.RetentionWeekly = c.getInt("RETENTION_WEEKLY", 0)
 	c.RetentionMonthly = c.getInt("RETENTION_MONTHLY", 0)
 	c.RetentionYearly = c.getInt("RETENTION_YEARLY", 0)
 
-	// Retention policy selector
-	// RETENTION_POLICY=simple (default) uses MAX_*_BACKUPS
-	// RETENTION_POLICY=gfs uses RETENTION_* tiers
 	policy := strings.ToLower(strings.TrimSpace(c.getString("RETENTION_POLICY", "simple")))
 	switch policy {
 	case "gfs":
@@ -516,7 +527,6 @@ func (c *Config) parse() error {
 		c.RetentionPolicy = "simple"
 	}
 
-	// Batch deletion settings for cloud storage (avoid API rate limits)
 	c.CloudBatchSize = c.getInt("CLOUD_BATCH_SIZE", 20)
 	if c.CloudBatchSize <= 0 {
 		c.CloudBatchSize = 20
@@ -526,12 +536,11 @@ func (c *Config) parse() error {
 		c.CloudBatchPause = 1
 	}
 
-	// Bundle associated files into single archive
 	c.BundleAssociatedFiles = c.getBool("BUNDLE_ASSOCIATED_FILES", true)
-
 	c.SafetyFactor = 1.5
+}
 
-	// Telegram Notifications
+func (c *Config) parseNotificationSettings() {
 	c.TelegramEnabled = c.getBool("TELEGRAM_ENABLED", false)
 	c.TelegramBotType = c.getString("BOT_TELEGRAM_TYPE", "centralized")
 	c.TelegramBotToken = c.getString("TELEGRAM_BOT_TOKEN", "")
@@ -539,14 +548,12 @@ func (c *Config) parse() error {
 	c.TelegramServerAPIHost = "https://bot.tis24.it:1443"
 	c.ServerID = ""
 
-	// Email Notifications
 	c.EmailEnabled = c.getBool("EMAIL_ENABLED", true)
 	c.EmailDeliveryMethod = c.getString("EMAIL_DELIVERY_METHOD", "relay")
 	c.EmailFallbackSendmail = c.getBool("EMAIL_FALLBACK_SENDMAIL", true)
 	c.EmailRecipient = c.getString("EMAIL_RECIPIENT", "")
 	c.EmailFrom = c.getString("EMAIL_FROM", "no-reply@proxmox.tis24.it")
 
-	// Gotify Notifications
 	c.GotifyEnabled = c.getBool("GOTIFY_ENABLED", false)
 	c.GotifyServerURL = strings.TrimSpace(c.getString("GOTIFY_SERVER_URL", ""))
 	c.GotifyToken = strings.TrimSpace(c.getString("GOTIFY_TOKEN", ""))
@@ -554,26 +561,22 @@ func (c *Config) parse() error {
 	c.GotifyPriorityWarning = c.ensurePositiveInt("GOTIFY_PRIORITY_WARNING", 5)
 	c.GotifyPriorityFailure = c.ensurePositiveInt("GOTIFY_PRIORITY_FAILURE", 8)
 
-	// Cloud Relay Configuration (hardcoded for Bash compatibility)
 	c.CloudflareWorkerURL = "https://relay-tis24.weathered-hill-5216.workers.dev/send"
 	c.CloudflareWorkerToken = "v1_public_20251024"
-	c.CloudflareHMACSecret = "4cc8946c15338082674d7213aee19069571e1afe60ad21b44be4d68260486fb2" // From wrangler.jsonc
+	c.CloudflareHMACSecret = "4cc8946c15338082674d7213aee19069571e1afe60ad21b44be4d68260486fb2"
 	c.WorkerTimeout = 30
 	c.WorkerMaxRetries = 2
 	c.WorkerRetryDelay = 2
 
-	// Webhook Notifications
 	c.WebhookEnabled = c.getBool("WEBHOOK_ENABLED", false)
 	c.WebhookDefaultFormat = c.getString("WEBHOOK_FORMAT", "generic")
 	c.WebhookTimeout = c.getInt("WEBHOOK_TIMEOUT", 30)
 	c.WebhookMaxRetries = c.getInt("WEBHOOK_MAX_RETRIES", 3)
 	c.WebhookRetryDelay = c.getInt("WEBHOOK_RETRY_DELAY", 2)
 
-	// Parse webhook endpoint names (comma-separated)
 	endpointNames := c.getString("WEBHOOK_ENDPOINTS", "")
 	if endpointNames != "" {
 		c.WebhookEndpointNames = strings.Split(endpointNames, ",")
-		// Trim whitespace from each name
 		for i, name := range c.WebhookEndpointNames {
 			c.WebhookEndpointNames[i] = strings.TrimSpace(name)
 		}
@@ -581,23 +584,34 @@ func (c *Config) parse() error {
 		c.WebhookEndpointNames = []string{}
 	}
 
-	// Metrics: supporta PROMETHEUS_ENABLED o METRICS_ENABLED
 	c.MetricsEnabled = c.getBoolWithFallback([]string{"PROMETHEUS_ENABLED", "METRICS_ENABLED"}, false)
 	rawMetricsPath := strings.TrimSpace(c.getStringWithFallback([]string{"METRICS_PATH", "PROMETHEUS_TEXTFILE_DIR"}, ""))
 	if rawMetricsPath == "" {
-		// Default to node_exporter textfile directory when not overridden
 		c.MetricsPath = "/var/lib/prometheus/node-exporter"
 	} else {
 		c.MetricsPath = rawMetricsPath
 	}
+}
 
+func (c *Config) parseCollectionSettings() error {
 	if patterns := c.getStringSlice("BACKUP_EXCLUDE_PATTERNS", nil); patterns != nil {
 		c.ExcludePatterns = patterns
 	} else {
 		c.ExcludePatterns = []string{}
 	}
 
-	// PVE-specific collection options
+	if err := c.parsePVESettings(); err != nil {
+		return err
+	}
+	c.parsePBSSettings()
+	c.parseSystemSettings()
+
+	c.CustomBackupPaths = normalizeList(c.getStringSlice("CUSTOM_BACKUP_PATHS", nil))
+	c.BackupBlacklist = normalizeList(c.getStringSlice("BACKUP_BLACKLIST", nil))
+	return nil
+}
+
+func (c *Config) parsePVESettings() error {
 	c.BackupVMConfigs = c.getBool("BACKUP_VM_CONFIGS", true)
 	c.BackupClusterConfig = c.getBool("BACKUP_CLUSTER_CONFIG", true)
 	c.BackupPVEFirewall = c.getBool("BACKUP_PVE_FIREWALL", true)
@@ -624,8 +638,10 @@ func (c *Config) parse() error {
 	c.CorosyncConfigPath = c.getString("COROSYNC_CONFIG_PATH", defaultCorosync)
 	c.VzdumpConfigPath = c.getString("VZDUMP_CONFIG_PATH", "/etc/vzdump.conf")
 	c.PBSConfigPath = c.getString("PBS_CONFIG_PATH", "/etc/proxmox-backup")
+	return nil
+}
 
-	// PBS-specific collection options
+func (c *Config) parsePBSSettings() {
 	c.BackupDatastoreConfigs = c.getBool("BACKUP_DATASTORE_CONFIGS", true)
 	c.BackupUserConfigs = c.getBool("BACKUP_USER_CONFIGS", true)
 	c.BackupRemoteConfigs = c.getBoolWithFallback([]string{"BACKUP_REMOTE_CONFIGS", "BACKUP_REMOTE_CFG"}, true)
@@ -633,7 +649,6 @@ func (c *Config) parse() error {
 	c.BackupVerificationJobs = c.getBool("BACKUP_VERIFICATION_JOBS", true)
 	c.BackupTapeConfigs = c.getBool("BACKUP_TAPE_CONFIGS", true)
 	c.BackupPruneSchedules = c.getBool("BACKUP_PRUNE_SCHEDULES", true)
-	// PXAR scan enable: prefer new key PXAR_SCAN_ENABLE, fallback to legacy BACKUP_PXAR_FILES
 	c.BackupPxarFiles = c.getBoolWithFallback([]string{"PXAR_SCAN_ENABLE", "BACKUP_PXAR_FILES"}, true)
 	c.PxarDatastoreConcurrency = c.getInt("PXAR_SCAN_DS_CONCURRENCY", 3)
 	c.PxarIntraConcurrency = c.getInt("PXAR_SCAN_INTRA_CONCURRENCY", 4)
@@ -644,8 +659,9 @@ func (c *Config) parse() error {
 	c.PxarEnumBudgetMs = c.getInt("PXAR_ENUM_BUDGET_MS", 0)
 	c.PxarFileIncludePatterns = normalizeList(c.getStringSliceWithFallback([]string{"PXAR_FILE_INCLUDE_PATTERN", "PXAR_INCLUDE_PATTERN"}, nil))
 	c.PxarFileExcludePatterns = normalizeList(c.getStringSlice("PXAR_FILE_EXCLUDE_PATTERN", nil))
+}
 
-	// System collection options
+func (c *Config) parseSystemSettings() {
 	c.BackupNetworkConfigs = c.getBoolWithFallback([]string{"BACKUP_NETWORK_CONFIGS", "BACKUP_NETWORK_CONFIG"}, true)
 	c.BackupAptSources = c.getBool("BACKUP_APT_SOURCES", true)
 	c.BackupCronJobs = c.getBoolWithFallback([]string{"BACKUP_CRON_JOBS", "BACKUP_CRONTABS"}, true)
@@ -664,14 +680,6 @@ func (c *Config) parse() error {
 	c.BackupUserHomes = c.getBool("BACKUP_USER_HOMES", true)
 	c.BackupConfigFile = c.getBool("BACKUP_CONFIG_FILE", true)
 	c.PBSDatastorePaths = normalizeList(c.getStringSlice("PBS_DATASTORE_PATH", nil))
-
-	c.CustomBackupPaths = normalizeList(c.getStringSlice("CUSTOM_BACKUP_PATHS", nil))
-	c.BackupBlacklist = normalizeList(c.getStringSlice("BACKUP_BLACKLIST", nil))
-
-	// Auto-detect PBS authentication (zero user input required)
-	c.autoDetectPBSAuth()
-
-	return nil
 }
 
 // Helper methods per ottenere valori tipizzati

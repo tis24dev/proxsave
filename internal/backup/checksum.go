@@ -160,6 +160,15 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 	}
 
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	parseLegacyMetadata(scanner, legacy)
+
+	loadLegacyChecksum(archivePath, legacy)
+	inferEncryptionMode(archivePath, legacy)
+
+	return legacy, nil
+}
+
+func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -191,7 +200,9 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 			legacy.EncryptionMode = value
 		}
 	}
+}
 
+func loadLegacyChecksum(archivePath string, legacy *Manifest) {
 	// Attempt to load checksum from legacy .sha256 file
 	if shaData, err := os.ReadFile(archivePath + ".sha256"); err == nil {
 		fields := strings.Fields(string(shaData))
@@ -199,7 +210,9 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 			legacy.SHA256 = fields[0]
 		}
 	}
+}
 
+func inferEncryptionMode(archivePath string, legacy *Manifest) {
 	// Fallback: infer encryption from file extension if not specified in metadata
 	if legacy.EncryptionMode == "" {
 		// Get the actual archive path (remove .metadata suffix)
@@ -210,6 +223,4 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 			legacy.EncryptionMode = "plain"
 		}
 	}
-
-	return legacy, nil
 }
