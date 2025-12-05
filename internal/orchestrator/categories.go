@@ -189,6 +189,7 @@ func GetAllCategories() []Category {
 			Paths: []string{
 				"./etc/systemd/system/",
 				"./etc/default/",
+				"./etc/udev/rules.d/",
 			},
 		},
 		{
