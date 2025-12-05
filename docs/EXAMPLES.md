@@ -369,6 +369,7 @@ rclone config
 
 # Cloud storage
 CLOUD_ENABLED=true
+# Either style is valid; here we use remote with base path:
 CLOUD_REMOTE=b2:pbs-backups
 CLOUD_LOG_PATH=b2:pbs-backups/logs
 CLOUD_UPLOAD_MODE=sequential

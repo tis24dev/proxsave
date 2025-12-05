@@ -30,8 +30,8 @@ const (
 type CloudStorage struct {
 	config         *config.Config
 	logger         *logging.Logger
-	remote         string
-	remotePrefix   string
+	remote         string // rclone remote name (e.g. "gdrive")
+	remotePrefix   string // combined path inside remote (base path from CLOUD_REMOTE + CLOUD_REMOTE_PATH)
 	uploadMode     string
 	parallelJobs   int
 	parallelVerify bool
@@ -113,7 +113,18 @@ func remoteBaseName(ref string) string {
 
 // NewCloudStorage creates a new cloud storage instance
 func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage, error) {
-	prefix := strings.Trim(strings.TrimSpace(cfg.CloudRemotePath), "/")
+	// Normalize CloudRemote and CloudRemotePath into:
+	//   - remote: rclone remote name (e.g. "gdrive")
+	//   - remotePrefix: full path inside the remote where backups live
+	//     (base path from CLOUD_REMOTE plus optional CLOUD_REMOTE_PATH)
+	rawRemote := strings.TrimSpace(cfg.CloudRemote)
+	remoteName, basePath := splitRemoteRef(rawRemote)
+	basePath = strings.Trim(strings.TrimSpace(basePath), "/")
+
+	userPrefix := strings.Trim(strings.TrimSpace(cfg.CloudRemotePath), "/")
+
+	combinedPrefix := strings.Trim(path.Join(basePath, userPrefix), "/")
+
 	mode := strings.ToLower(strings.TrimSpace(cfg.CloudUploadMode))
 	if mode != cloudUploadModeParallel {
 		mode = cloudUploadModeSequential
@@ -125,8 +136,8 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage,
 	return &CloudStorage{
 		config:         cfg,
 		logger:         logger,
-		remote:         cfg.CloudRemote,
-		remotePrefix:   prefix,
+		remote:         remoteName,
+		remotePrefix:   combinedPrefix,
 		uploadMode:     mode,
 		parallelJobs:   parallelJobs,
 		parallelVerify: cfg.CloudParallelVerify,

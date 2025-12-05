@@ -87,15 +87,15 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 			wantLabel: []string{"Local backups"},
 		},
 		{
-			name: "cloud with rclone remote excluded",
+			name: "cloud with rclone remote included",
 			cfg: &config.Config{
 				BackupPath:   "/backup/local",
 				CloudEnabled: true,
-				CloudRemote:  "gdrive:backups", // rclone remote, not local path
+				CloudRemote:  "gdrive:backups", // rclone remote, NOW INCLUDED
 			},
-			wantCount: 1,
-			wantPaths: []string{"/backup/local"},
-			wantLabel: []string{"Local backups"},
+			wantCount: 2,
+			wantPaths: []string{"/backup/local", "gdrive:backups"},
+			wantLabel: []string{"Local backups", "Cloud backups (rclone)"},
 		},
 		{
 			name: "cloud with local absolute path included",

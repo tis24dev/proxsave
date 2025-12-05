@@ -421,11 +421,14 @@ SECONDARY_PATH=\\192.168.0.10\backup    # ✗ WRONG - Windows path
 # Enable cloud storage
 CLOUD_ENABLED=false                # true | false
 
-# rclone remote (format: remote:path)
-CLOUD_REMOTE=gdrive:pbs-backups    # e.g., gdrive:backups, s3:bucket-name
+# rclone remote (either NAME or NAME:base/path)
+# Style 1 (remote name + prefix):
+CLOUD_REMOTE=gdrive                # remote name from `rclone config`
+CLOUD_REMOTE_PATH=pbs-backups      # base path inside remote
 
-# Optional prefix inside remote
-CLOUD_REMOTE_PATH=                 # e.g., "datacenter1/pbs1"
+# Style 2 (remote with base path):
+# CLOUD_REMOTE=gdrive:pbs-backups  # equivalent to the combination above
+# CLOUD_REMOTE_PATH=               # optional extra prefix (e.g., "server1")
 
 # Cloud log path (full remote path)
 CLOUD_LOG_PATH=                    # e.g., "gdrive:/pbs-logs"
