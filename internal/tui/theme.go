@@ -10,15 +10,15 @@ var (
 	ProxmoxOrange = tcell.NewRGBColor(229, 112, 0) // #E57000
 
 	// Neutral colors
-	ProxmoxDark  = tcell.NewRGBColor(40, 40, 40)   // #282828
+	ProxmoxDark  = tcell.NewRGBColor(40, 40, 40)    // #282828
 	ProxmoxGray  = tcell.NewRGBColor(128, 128, 128) // #808080
 	ProxmoxLight = tcell.NewRGBColor(200, 200, 200) // #C8C8C8
 
 	// Status colors
-	SuccessGreen  = tcell.NewRGBColor(34, 197, 94)   // #22C55E
-	ErrorRed      = tcell.NewRGBColor(239, 68, 68)   // #EF4444
-	WarningYellow = tcell.NewRGBColor(234, 179, 8)   // #EAB308
-	InfoBlue      = tcell.NewRGBColor(59, 130, 246)  // #3B82F6
+	SuccessGreen  = tcell.NewRGBColor(34, 197, 94)  // #22C55E
+	ErrorRed      = tcell.NewRGBColor(239, 68, 68)  // #EF4444
+	WarningYellow = tcell.NewRGBColor(234, 179, 8)  // #EAB308
+	InfoBlue      = tcell.NewRGBColor(59, 130, 246) // #3B82F6
 
 	// Additional UI colors
 	White     = tcell.ColorWhite

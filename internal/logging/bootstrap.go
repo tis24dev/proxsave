@@ -61,7 +61,7 @@ func (b *BootstrapLogger) Printf(format string, args ...interface{}) {
 	b.recordRaw(msg)
 }
 
-// Info registra un messaggio informativo precoce.
+// Info logs an early informational message.
 func (b *BootstrapLogger) Info(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	fmt.Println(msg)

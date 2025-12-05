@@ -37,17 +37,17 @@ type UpgradeResult struct {
 //   - Keep the layout and comments of the template as much as possible.
 //
 // The procedure is:
-//   1. Parse the existing config file and collect all KEY=VALUE entries.
-//   2. Walk the template line-by-line:
-//      - Comments/blank lines are copied as-is.
-//      - For KEY=VALUE lines:
-//        * If the user has values for that key, all of them are written
-//          (one KEY=VALUE per line, in original order).
-//        * Otherwise the template's line is kept and the key is recorded as
-//          "missing" (a new default added).
-//   3. Keys present in the user config but not in the template are appended
-//      to a "Custom keys" section at the bottom of the file.
-//   4. The original file is backed up before writing the new version.
+//  1. Parse the existing config file and collect all KEY=VALUE entries.
+//  2. Walk the template line-by-line:
+//     - Comments/blank lines are copied as-is.
+//     - For KEY=VALUE lines:
+//     * If the user has values for that key, all of them are written
+//     (one KEY=VALUE per line, in original order).
+//     * Otherwise the template's line is kept and the key is recorded as
+//     "missing" (a new default added).
+//  3. Keys present in the user config but not in the template are appended
+//     to a "Custom keys" section at the bottom of the file.
+//  4. The original file is backed up before writing the new version.
 func UpgradeConfigFile(configPath string) (*UpgradeResult, error) {
 	result, newContent, originalContent, err := computeConfigUpgrade(configPath)
 	if err != nil {
@@ -103,6 +103,7 @@ func UpgradeConfigFile(configPath string) (*UpgradeResult, error) {
 //   - MissingKeys: keys that would be added from the template.
 //   - ExtraKeys: keys that would be preserved in the custom section.
 //   - Changed: true if an upgrade would actually modify the file.
+//
 // BackupPath is always empty in dry-run mode.
 func PlanUpgradeConfigFile(configPath string) (*UpgradeResult, error) {
 	result, _, _, err := computeConfigUpgrade(configPath)

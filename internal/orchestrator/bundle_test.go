@@ -18,10 +18,10 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 
 	// Create test files with specific content
 	testData := map[string]string{
-		"":                    "archive-content",
-		".sha256":             "checksum1",
-		".metadata":           "metadata-json",
-		".metadata.sha256":    "checksum2",
+		"":                 "archive-content",
+		".sha256":          "checksum1",
+		".metadata":        "metadata-json",
+		".metadata.sha256": "checksum2",
 	}
 
 	for suffix, content := range testData {

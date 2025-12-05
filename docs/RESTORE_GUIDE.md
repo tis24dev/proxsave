@@ -108,7 +108,7 @@ Restore operations are organized into **15+ categories** that group related conf
 | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
 | `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
 | `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |
-| `services` | System Services | Systemd service configs | `./etc/systemd/system/`<br>`./etc/default/` |
+| `services` | System Services | Systemd service configs and udev rules | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/` |
 | `zfs` | ZFS Configuration | ZFS pool cache and configs | `./etc/zfs/`<br>`./etc/hostid` |
 
 ### Category Availability
@@ -174,7 +174,7 @@ Select restore mode:
 
 ### 3. SYSTEM BASE Only
 
-**Description**: Restore core system configurations (network, SSH, SSL, services)
+**Description**: Restore core system configurations (network, SSH, SSL, services and udev rules)
 
 **Use Cases**:
 - Restoring network configuration after manual changes
@@ -186,7 +186,7 @@ Select restore mode:
 - `network` - Network interfaces, hostname, routing
 - `ssl` - SSL/TLS certificates
 - `ssh` - SSH keys and configuration
-- `services` - Systemd service configs
+- `services` - Systemd service configs and udev rules
 
 **Command Flow**:
 ```

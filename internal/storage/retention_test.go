@@ -20,11 +20,11 @@ func TestNewRetentionConfigFromConfig(t *testing.T) {
 		{
 			name: "GFS policy - daily set",
 			cfg: &config.Config{
-				RetentionPolicy: "gfs",
-				RetentionDaily:  7,
-				RetentionWeekly: 0,
+				RetentionPolicy:  "gfs",
+				RetentionDaily:   7,
+				RetentionWeekly:  0,
 				RetentionMonthly: 0,
-				RetentionYearly: 0,
+				RetentionYearly:  0,
 			},
 			location:       LocationPrimary,
 			expectedPolicy: "gfs",
@@ -33,11 +33,11 @@ func TestNewRetentionConfigFromConfig(t *testing.T) {
 		{
 			name: "GFS policy - weekly set",
 			cfg: &config.Config{
-				RetentionPolicy: "gfs",
-				RetentionDaily:  0,
-				RetentionWeekly: 4,
+				RetentionPolicy:  "gfs",
+				RetentionDaily:   0,
+				RetentionWeekly:  4,
 				RetentionMonthly: 0,
-				RetentionYearly: 0,
+				RetentionYearly:  0,
 			},
 			location:       LocationPrimary,
 			expectedPolicy: "gfs",
@@ -46,11 +46,11 @@ func TestNewRetentionConfigFromConfig(t *testing.T) {
 		{
 			name: "GFS policy - all parameters set",
 			cfg: &config.Config{
-				RetentionPolicy: "gfs",
-				RetentionDaily:  7,
-				RetentionWeekly: 4,
+				RetentionPolicy:  "gfs",
+				RetentionDaily:   7,
+				RetentionWeekly:  4,
 				RetentionMonthly: 6,
-				RetentionYearly: 3,
+				RetentionYearly:  3,
 			},
 			location:       LocationPrimary,
 			expectedPolicy: "gfs",
@@ -143,15 +143,15 @@ func TestClassifyBackupsGFS_EmptyList(t *testing.T) {
 func TestClassifyBackupsGFS_DailyOnly(t *testing.T) {
 	now := time.Now()
 	backups := []*types.BackupMetadata{
-		{Timestamp: now.Add(-24 * time.Hour)},     // 1 day ago
-		{Timestamp: now.Add(-48 * time.Hour)},     // 2 days ago
-		{Timestamp: now.Add(-72 * time.Hour)},     // 3 days ago
-		{Timestamp: now.Add(-96 * time.Hour)},     // 4 days ago
-		{Timestamp: now.Add(-120 * time.Hour)},    // 5 days ago
-		{Timestamp: now.Add(-144 * time.Hour)},    // 6 days ago
-		{Timestamp: now.Add(-168 * time.Hour)},    // 7 days ago
-		{Timestamp: now.Add(-192 * time.Hour)},    // 8 days ago
-		{Timestamp: now.Add(-216 * time.Hour)},    // 9 days ago
+		{Timestamp: now.Add(-24 * time.Hour)},  // 1 day ago
+		{Timestamp: now.Add(-48 * time.Hour)},  // 2 days ago
+		{Timestamp: now.Add(-72 * time.Hour)},  // 3 days ago
+		{Timestamp: now.Add(-96 * time.Hour)},  // 4 days ago
+		{Timestamp: now.Add(-120 * time.Hour)}, // 5 days ago
+		{Timestamp: now.Add(-144 * time.Hour)}, // 6 days ago
+		{Timestamp: now.Add(-168 * time.Hour)}, // 7 days ago
+		{Timestamp: now.Add(-192 * time.Hour)}, // 8 days ago
+		{Timestamp: now.Add(-216 * time.Hour)}, // 9 days ago
 	}
 
 	config := RetentionConfig{
@@ -218,12 +218,12 @@ func TestClassifyBackupsGFS_WeeklyRetention(t *testing.T) {
 	// Create backups spanning multiple weeks
 	now := time.Date(2024, 12, 15, 12, 0, 0, 0, time.UTC) // Sunday
 	backups := []*types.BackupMetadata{
-		{Timestamp: now.Add(-1 * 24 * time.Hour)},   // Yesterday (this week - should be daily)
-		{Timestamp: now.Add(-8 * 24 * time.Hour)},   // Last week
-		{Timestamp: now.Add(-15 * 24 * time.Hour)},  // 2 weeks ago
-		{Timestamp: now.Add(-22 * 24 * time.Hour)},  // 3 weeks ago
-		{Timestamp: now.Add(-29 * 24 * time.Hour)},  // 4 weeks ago
-		{Timestamp: now.Add(-36 * 24 * time.Hour)},  // 5 weeks ago
+		{Timestamp: now.Add(-1 * 24 * time.Hour)},  // Yesterday (this week - should be daily)
+		{Timestamp: now.Add(-8 * 24 * time.Hour)},  // Last week
+		{Timestamp: now.Add(-15 * 24 * time.Hour)}, // 2 weeks ago
+		{Timestamp: now.Add(-22 * 24 * time.Hour)}, // 3 weeks ago
+		{Timestamp: now.Add(-29 * 24 * time.Hour)}, // 4 weeks ago
+		{Timestamp: now.Add(-36 * 24 * time.Hour)}, // 5 weeks ago
 	}
 
 	config := RetentionConfig{
@@ -296,11 +296,11 @@ func TestClassifyBackupsGFS_MonthlyRetention(t *testing.T) {
 func TestClassifyBackupsGFS_YearlyRetention(t *testing.T) {
 	now := time.Date(2024, 12, 15, 12, 0, 0, 0, time.UTC)
 	backups := []*types.BackupMetadata{
-		{Timestamp: now.Add(-1 * 24 * time.Hour)},         // 2024 (daily)
-		{Timestamp: now.Add(-366 * 24 * time.Hour)},       // 2023
-		{Timestamp: now.Add(-731 * 24 * time.Hour)},       // 2022
-		{Timestamp: now.Add(-1096 * 24 * time.Hour)},      // 2021
-		{Timestamp: now.Add(-1461 * 24 * time.Hour)},      // 2020
+		{Timestamp: now.Add(-1 * 24 * time.Hour)},    // 2024 (daily)
+		{Timestamp: now.Add(-366 * 24 * time.Hour)},  // 2023
+		{Timestamp: now.Add(-731 * 24 * time.Hour)},  // 2022
+		{Timestamp: now.Add(-1096 * 24 * time.Hour)}, // 2021
+		{Timestamp: now.Add(-1461 * 24 * time.Hour)}, // 2020
 	}
 
 	config := RetentionConfig{
@@ -331,12 +331,12 @@ func TestClassifyBackupsGFS_YearlyRetention(t *testing.T) {
 func TestClassifyBackupsGFS_YearlyUnlimited(t *testing.T) {
 	now := time.Date(2024, 12, 15, 12, 0, 0, 0, time.UTC)
 	backups := []*types.BackupMetadata{
-		{Timestamp: now.Add(-1 * 24 * time.Hour)},         // 2024 (daily)
-		{Timestamp: now.Add(-366 * 24 * time.Hour)},       // 2023
-		{Timestamp: now.Add(-731 * 24 * time.Hour)},       // 2022
-		{Timestamp: now.Add(-1096 * 24 * time.Hour)},      // 2021
-		{Timestamp: now.Add(-1461 * 24 * time.Hour)},      // 2020
-		{Timestamp: now.Add(-1826 * 24 * time.Hour)},      // 2019
+		{Timestamp: now.Add(-1 * 24 * time.Hour)},    // 2024 (daily)
+		{Timestamp: now.Add(-366 * 24 * time.Hour)},  // 2023
+		{Timestamp: now.Add(-731 * 24 * time.Hour)},  // 2022
+		{Timestamp: now.Add(-1096 * 24 * time.Hour)}, // 2021
+		{Timestamp: now.Add(-1461 * 24 * time.Hour)}, // 2020
+		{Timestamp: now.Add(-1826 * 24 * time.Hour)}, // 2019
 	}
 
 	config := RetentionConfig{
@@ -372,19 +372,19 @@ func TestClassifyBackupsGFS_CompleteGFS(t *testing.T) {
 	// Create a comprehensive set of backups
 	backups := []*types.BackupMetadata{
 		// Daily (last 7 days)
-		{Timestamp: now.Add(-1 * 24 * time.Hour)},  // Day 1
-		{Timestamp: now.Add(-2 * 24 * time.Hour)},  // Day 2
-		{Timestamp: now.Add(-3 * 24 * time.Hour)},  // Day 3
-		{Timestamp: now.Add(-4 * 24 * time.Hour)},  // Day 4
-		{Timestamp: now.Add(-5 * 24 * time.Hour)},  // Day 5
-		{Timestamp: now.Add(-6 * 24 * time.Hour)},  // Day 6
-		{Timestamp: now.Add(-7 * 24 * time.Hour)},  // Day 7
+		{Timestamp: now.Add(-1 * 24 * time.Hour)}, // Day 1
+		{Timestamp: now.Add(-2 * 24 * time.Hour)}, // Day 2
+		{Timestamp: now.Add(-3 * 24 * time.Hour)}, // Day 3
+		{Timestamp: now.Add(-4 * 24 * time.Hour)}, // Day 4
+		{Timestamp: now.Add(-5 * 24 * time.Hour)}, // Day 5
+		{Timestamp: now.Add(-6 * 24 * time.Hour)}, // Day 6
+		{Timestamp: now.Add(-7 * 24 * time.Hour)}, // Day 7
 
 		// Older backups for weekly/monthly/yearly
-		{Timestamp: now.Add(-14 * 24 * time.Hour)},  // 2 weeks ago
-		{Timestamp: now.Add(-21 * 24 * time.Hour)},  // 3 weeks ago
-		{Timestamp: now.Add(-28 * 24 * time.Hour)},  // 4 weeks ago
-		{Timestamp: now.Add(-35 * 24 * time.Hour)},  // 5 weeks ago
+		{Timestamp: now.Add(-14 * 24 * time.Hour)}, // 2 weeks ago
+		{Timestamp: now.Add(-21 * 24 * time.Hour)}, // 3 weeks ago
+		{Timestamp: now.Add(-28 * 24 * time.Hour)}, // 4 weeks ago
+		{Timestamp: now.Add(-35 * 24 * time.Hour)}, // 5 weeks ago
 
 		// Monthly
 		{Timestamp: now.Add(-65 * 24 * time.Hour)},  // ~2 months ago
@@ -392,8 +392,8 @@ func TestClassifyBackupsGFS_CompleteGFS(t *testing.T) {
 		{Timestamp: now.Add(-125 * 24 * time.Hour)}, // ~4 months ago
 
 		// Yearly
-		{Timestamp: now.Add(-400 * 24 * time.Hour)},  // ~1.1 years ago
-		{Timestamp: now.Add(-800 * 24 * time.Hour)},  // ~2.2 years ago
+		{Timestamp: now.Add(-400 * 24 * time.Hour)}, // ~1.1 years ago
+		{Timestamp: now.Add(-800 * 24 * time.Hour)}, // ~2.2 years ago
 	}
 
 	config := RetentionConfig{
@@ -558,10 +558,10 @@ func TestClassifyBackupsGFS_OneBackupPerPeriod(t *testing.T) {
 
 	// Multiple backups in the same week
 	backups := []*types.BackupMetadata{
-		{Timestamp: now.Add(-1 * 24 * time.Hour)},   // Daily
-		{Timestamp: now.Add(-8 * 24 * time.Hour)},   // Last week - first
-		{Timestamp: now.Add(-9 * 24 * time.Hour)},   // Last week - second (same week, should not be kept as weekly)
-		{Timestamp: now.Add(-10 * 24 * time.Hour)},  // Last week - third
+		{Timestamp: now.Add(-1 * 24 * time.Hour)},  // Daily
+		{Timestamp: now.Add(-8 * 24 * time.Hour)},  // Last week - first
+		{Timestamp: now.Add(-9 * 24 * time.Hour)},  // Last week - second (same week, should not be kept as weekly)
+		{Timestamp: now.Add(-10 * 24 * time.Hour)}, // Last week - third
 	}
 
 	config := RetentionConfig{

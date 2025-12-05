@@ -25,10 +25,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	configPath = resolvedPath
 
 	// Derive BASE_DIR from the configuration path
-	baseDir := filepath.Dir(filepath.Dir(configPath))
-	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxsave"
-	}
+	baseDir := deriveBaseDirFromConfig(configPath)
 	_ = os.Setenv("BASE_DIR", baseDir)
 
 	// Before starting the TUI wizard, perform a best-effort cleanup of any existing

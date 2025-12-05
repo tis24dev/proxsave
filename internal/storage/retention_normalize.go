@@ -8,7 +8,7 @@ import (
 // GFS prima di eseguire la retention. Attualmente:
 //   - garantisce che il tier DAILY abbia almeno valore 1 (minimo accettato)
 //     se la policy è gfs e RETENTION_DAILY è <= 0.
-//   - emette una linea di log per documentare l'aggiustamento.
+//   - emits a log line to document the adjustment.
 func NormalizeGFSRetentionConfig(logger *logging.Logger, backendName string, cfg RetentionConfig) RetentionConfig {
 	if cfg.Policy != "gfs" {
 		return cfg
@@ -24,4 +24,3 @@ func NormalizeGFSRetentionConfig(logger *logging.Logger, backendName string, cfg
 
 	return effective
 }
-

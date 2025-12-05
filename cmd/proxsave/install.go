@@ -27,12 +27,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 	configPath = resolvedPath
 
-	// Derive BASE_DIR from the configuration path so that configs/, identity/, logs/, etc.
-	// all live under the same root, even during --install.
-	baseDir := filepath.Dir(filepath.Dir(configPath))
-	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxsave"
-	}
+	baseDir := deriveBaseDirFromConfig(configPath)
 	_ = os.Setenv("BASE_DIR", baseDir)
 
 	// Before starting the interactive wizard, perform a best-effort cleanup of any
@@ -62,84 +57,20 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	tmpConfigPath := configPath + ".tmp"
-	defer func() {
-		if _, err := os.Stat(tmpConfigPath); err == nil {
-			_ = os.Remove(tmpConfigPath)
-		}
-	}()
+	defer cleanupTempConfig(tmpConfigPath)
 
 	reader := bufio.NewReader(os.Stdin)
 	printInstallBanner(configPath)
-	enableEncryption := false
 
-	// Detect legacy Bash-based installation (old backup.env or proxmox-backup.sh)
-	legacyPaths := []string{
-		filepath.Join(baseDir, "env", "backup.env"),
-		filepath.Join(baseDir, "proxmox-backup.sh"),
-		filepath.Join(baseDir, "script", "proxmox-backup.sh"),
-	}
-	legacyFound := false
-	for _, p := range legacyPaths {
-		if _, err := os.Stat(p); err == nil {
-			legacyFound = true
-			break
-		}
-	}
-
-	if legacyFound {
-		yellow := "\033[33m"
-		reset := "\033[0m"
-		fmt.Println(string(yellow) + "A previous Bash-based version of the Proxmox Backup script has been detected on this system." + string(reset))
-		fmt.Println(string(yellow) + "This Go version requires migrating or recreating the configuration file. You will also have access to the migration tool." + string(reset))
-		fmt.Println()
-
-		confirm, err := promptYesNo(ctx, reader, "Do you want to continue with the Go install wizard? [y/N]: ", false)
-		if err != nil {
-			installErr = wrapInstallError(err)
-			return installErr
-		}
-		if !confirm {
-			installErr = wrapInstallError(errInteractiveAborted)
-			return installErr
-		}
-
-		fmt.Println()
-	}
-
-	template, skipConfigWizard, err := prepareBaseTemplate(ctx, reader, configPath)
-	if err != nil {
-		installErr = wrapInstallError(err)
+	if err := handleLegacyInstall(ctx, reader, baseDir); err != nil {
+		installErr = err
 		return installErr
 	}
 
-	if !skipConfigWizard {
-		if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
-			installErr = wrapInstallError(err)
-			return installErr
-		}
-		if template, err = configureCloudStorage(ctx, reader, template); err != nil {
-			installErr = wrapInstallError(err)
-			return installErr
-		}
-		if template, err = configureNotifications(ctx, reader, template); err != nil {
-			installErr = wrapInstallError(err)
-			return installErr
-		}
-		enableEncryption, err = configureEncryption(ctx, reader, &template)
-		if err != nil {
-			installErr = wrapInstallError(err)
-			return installErr
-		}
-
-		// Ensure BASE_DIR is explicitly present in the generated env file so that
-		// subsequent runs and encryption setup use the same root directory.
-		template = setEnvValue(template, "BASE_DIR", baseDir)
-
-		if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
-			installErr = err
-			return installErr
-		}
-		bootstrap.Info("✓ Configuration saved at %s", configPath)
+	enableEncryption, skipConfigWizard, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
+	if err != nil {
+		installErr = err
+		return installErr
 	}
 
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
@@ -147,40 +78,14 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		return installErr
 	}
 
-	if !skipConfigWizard && enableEncryption {
-		if bootstrap != nil {
-			bootstrap.Info("Running initial encryption setup (AGE recipients)")
-		}
-		if err := runInitialEncryptionSetup(ctx, configPath); err != nil {
-			installErr = err
-			return installErr
-		}
+	if err := runEncryptionSetupIfNeeded(ctx, configPath, enableEncryption, skipConfigWizard, bootstrap); err != nil {
+		installErr = err
+		return installErr
 	}
 
-	// Clean up legacy bash-based symlinks that point to the old installer scripts.
-	if bootstrap != nil {
-		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")
-	}
-	cleanupLegacyBashSymlinks(baseDir, bootstrap)
+	runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap)
 
-	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary, if not already customized.
-	if bootstrap != nil {
-		bootstrap.Info("Ensuring 'proxsave' and 'proxmox-backup' commands point to the Go binary")
-	}
-	ensureGoSymlink(execInfo.ExecPath, bootstrap)
-
-	// Migrate legacy cron entries pointing to the bash script to the Go binary.
-	// If no cron entry exists at all, create a default one at 02:00 every day.
-	cronSchedule := resolveCronSchedule(nil)
-	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
-
-	// Attempt to resolve or create a server identity so that we can show a
-	// Telegram pairing code to the user (similar to the legacy installer).
-	if info, err := identity.Detect(baseDir, nil); err == nil {
-		if code := strings.TrimSpace(info.ServerID); code != "" {
-			telegramCode = code
-		}
-	}
+	telegramCode = detectTelegramCode(baseDir)
 
 	// Best-effort post-install permission and ownership normalization so that
 	// the environment starts in a consistent state.
@@ -196,10 +101,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return err
 	}
 
-	baseDir := filepath.Dir(filepath.Dir(resolvedPath))
-	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxsave"
-	}
+	baseDir := deriveBaseDirFromConfig(resolvedPath)
 
 	if err := ensureInteractiveStdin(); err != nil {
 		return err
@@ -310,6 +212,145 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
 	fmt.Println("  --support          - Run backup in support mode (force debug log level and send email with attached log to github-support@tis24.it)")
 	fmt.Println()
+}
+
+func deriveBaseDirFromConfig(configPath string) string {
+	baseDir := filepath.Dir(filepath.Dir(configPath))
+	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
+		baseDir = "/opt/proxsave"
+	}
+	return baseDir
+}
+
+func cleanupTempConfig(tmpConfigPath string) {
+	if tmpConfigPath == "" {
+		return
+	}
+	if _, err := os.Stat(tmpConfigPath); err == nil {
+		_ = os.Remove(tmpConfigPath)
+	}
+}
+
+func handleLegacyInstall(ctx context.Context, reader *bufio.Reader, baseDir string) error {
+	// Detect legacy Bash-based installation (old backup.env or proxmox-backup.sh)
+	legacyPaths := []string{
+		filepath.Join(baseDir, "env", "backup.env"),
+		filepath.Join(baseDir, "proxmox-backup.sh"),
+		filepath.Join(baseDir, "script", "proxmox-backup.sh"),
+	}
+
+	legacyFound := false
+	for _, p := range legacyPaths {
+		if _, err := os.Stat(p); err == nil {
+			legacyFound = true
+			break
+		}
+	}
+
+	if !legacyFound {
+		return nil
+	}
+
+	yellow := "\033[33m"
+	reset := "\033[0m"
+	fmt.Println(string(yellow) + "A previous Bash-based version of the Proxmox Backup script has been detected on this system." + string(reset))
+	fmt.Println(string(yellow) + "This Go version requires migrating or recreating the configuration file. You will also have access to the migration tool." + string(reset))
+	fmt.Println()
+
+	confirm, err := promptYesNo(ctx, reader, "Do you want to continue with the Go install wizard? [y/N]: ", false)
+	if err != nil {
+		return wrapInstallError(err)
+	}
+	if !confirm {
+		return wrapInstallError(errInteractiveAborted)
+	}
+
+	fmt.Println()
+	return nil
+}
+
+func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, tmpConfigPath, baseDir string, bootstrap *logging.BootstrapLogger) (bool, bool, error) {
+	template, skipConfigWizard, err := prepareBaseTemplate(ctx, reader, configPath)
+	if err != nil {
+		return false, false, wrapInstallError(err)
+	}
+
+	if skipConfigWizard {
+		return false, true, nil
+	}
+
+	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
+		return false, false, wrapInstallError(err)
+	}
+	if template, err = configureCloudStorage(ctx, reader, template); err != nil {
+		return false, false, wrapInstallError(err)
+	}
+	if template, err = configureNotifications(ctx, reader, template); err != nil {
+		return false, false, wrapInstallError(err)
+	}
+
+	enableEncryption, err := configureEncryption(ctx, reader, &template)
+	if err != nil {
+		return false, false, wrapInstallError(err)
+	}
+
+	// Ensure BASE_DIR is explicitly present in the generated env file so that
+	// subsequent runs and encryption setup use the same root directory.
+	template = setEnvValue(template, "BASE_DIR", baseDir)
+
+	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
+		return false, false, err
+	}
+
+	if bootstrap != nil {
+		bootstrap.Info("✓ Configuration saved at %s", configPath)
+	}
+
+	return enableEncryption, false, nil
+}
+
+func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEncryption, skipConfigWizard bool, bootstrap *logging.BootstrapLogger) error {
+	if skipConfigWizard || !enableEncryption {
+		return nil
+	}
+
+	if bootstrap != nil {
+		bootstrap.Info("Running initial encryption setup (AGE recipients)")
+	}
+
+	if err := runInitialEncryptionSetup(ctx, configPath); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) {
+	// Clean up legacy bash-based symlinks that point to the old installer scripts.
+	if bootstrap != nil {
+		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")
+	}
+	cleanupLegacyBashSymlinks(baseDir, bootstrap)
+
+	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary, if not already customized.
+	if bootstrap != nil {
+		bootstrap.Info("Ensuring 'proxsave' and 'proxmox-backup' commands point to the Go binary")
+	}
+	ensureGoSymlink(execInfo.ExecPath, bootstrap)
+
+	// Migrate legacy cron entries pointing to the bash script to the Go binary.
+	// If no cron entry exists at all, create a default one at 02:00 every day.
+	cronSchedule := resolveCronSchedule(nil)
+	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
+}
+
+func detectTelegramCode(baseDir string) string {
+	info, err := identity.Detect(baseDir, nil)
+	if err != nil {
+		return ""
+	}
+	code := strings.TrimSpace(info.ServerID)
+	return code
 }
 
 func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) error {

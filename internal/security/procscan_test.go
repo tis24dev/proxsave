@@ -402,24 +402,24 @@ func TestIsHeuristicallySafeKernelProcess(t *testing.T) {
 	currentPID := os.Getpid()
 
 	tests := []struct {
-		name       string
-		pid        int
-		procName   string
-		safeBracket []string
+		name         string
+		pid          int
+		procName     string
+		safeBracket  []string
 		expectedSafe bool
 	}{
 		{
-			name:       "empty name",
-			pid:        currentPID,
-			procName:   "",
-			safeBracket: []string{},
+			name:         "empty name",
+			pid:          currentPID,
+			procName:     "",
+			safeBracket:  []string{},
 			expectedSafe: false,
 		},
 		{
-			name:       "whitespace only name",
-			pid:        currentPID,
-			procName:   "   ",
-			safeBracket: []string{},
+			name:         "whitespace only name",
+			pid:          currentPID,
+			procName:     "   ",
+			safeBracket:  []string{},
 			expectedSafe: false,
 		},
 	}
@@ -439,32 +439,32 @@ func TestIsHeuristicallySafeKernelProcess(t *testing.T) {
 func TestProcessDetectionPatterns(t *testing.T) {
 	// Test regex patterns directly
 	tests := []struct {
-		name    string
-		pattern string
-		matches []string
+		name       string
+		pattern    string
+		matches    []string
 		nonMatches []string
 	}{
 		{
-			name:    "DRBD pattern",
-			pattern: "drbd",
-			matches: []string{"drbd-worker", "DRBD-receiver", "drbd0"},
+			name:       "DRBD pattern",
+			pattern:    "drbd",
+			matches:    []string{"drbd-worker", "DRBD-receiver", "drbd0"},
 			nonMatches: []string{"worker", "kvm"},
 		},
 		{
-			name:    "Card CRTC pattern",
-			matches: []string{"card0-crtc0", "card1-crtc2", "card10-crtc99"},
+			name:       "Card CRTC pattern",
+			matches:    []string{"card0-crtc0", "card1-crtc2", "card10-crtc99"},
 			nonMatches: []string{"card", "crtc", "card-crtc", "cardA-crtc0"},
 		},
 		{
-			name:    "ZFS pattern",
-			pattern: "zfs",
-			matches: []string{"zfs-io", "spa_sync", "arc_prune", "txg_sync", "vdev", "zil"},
+			name:       "ZFS pattern",
+			pattern:    "zfs",
+			matches:    []string{"zfs-io", "spa_sync", "arc_prune", "txg_sync", "vdev", "zil"},
 			nonMatches: []string{"worker", "kvm"},
 		},
 		{
-			name:    "KVM pattern",
-			pattern: "kvm",
-			matches: []string{"kvm-pit", "KVM-worker", "kvm-vcpu"},
+			name:       "KVM pattern",
+			pattern:    "kvm",
+			matches:    []string{"kvm-pit", "KVM-worker", "kvm-vcpu"},
 			nonMatches: []string{"worker", "zfs"},
 		},
 	}

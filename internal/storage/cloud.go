@@ -469,38 +469,53 @@ func classifyRemoteError(stage, target string, err error, output []byte) error {
 	text := strings.ToLower(strings.TrimSpace(string(output)))
 	msg := fmt.Sprintf("rclone %s check failed for %s", stage, target)
 
-	kind := remoteErrorOther
-
-	// Try to classify based on typical rclone/network messages
-	switch {
-	case strings.Contains(text, "directory not found") ||
-		strings.Contains(text, "file not found") ||
-		strings.Contains(text, "couldn't find root") ||
-		strings.Contains(text, "path not found"):
-		kind = remoteErrorPath
-	case strings.Contains(text, "failed to create file system") ||
-		strings.Contains(text, "couldn't find configuration section") ||
-		strings.Contains(text, "not found in config file") ||
-		strings.Contains(text, "error reading section"):
-		kind = remoteErrorAuth
-	case strings.Contains(text, "401 unauthorized") ||
-		strings.Contains(text, "403 forbidden") ||
-		strings.Contains(text, "access denied") ||
-		strings.Contains(text, "permission denied"):
-		kind = remoteErrorAuth
-	case strings.Contains(text, "dial tcp") ||
-		strings.Contains(text, "connection refused") ||
-		strings.Contains(text, "network is unreachable") ||
-		strings.Contains(text, "host is down") ||
-		strings.Contains(text, "no such host"):
-		kind = remoteErrorNetwork
-	}
+	kind := detectRemoteErrorKind(text)
 
 	return &remoteCheckError{
 		kind: kind,
 		msg:  fmt.Sprintf("%s: %s", msg, strings.TrimSpace(string(output))),
 		err:  err,
 	}
+}
+
+func detectRemoteErrorKind(text string) remoteErrorKind {
+	// Try to classify based on typical rclone/network messages
+	switch {
+	case containsAny(text,
+		"directory not found",
+		"file not found",
+		"couldn't find root",
+		"path not found"):
+		return remoteErrorPath
+	case containsAny(text,
+		"failed to create file system",
+		"couldn't find configuration section",
+		"not found in config file",
+		"error reading section",
+		"401 unauthorized",
+		"403 forbidden",
+		"access denied",
+		"permission denied"):
+		return remoteErrorAuth
+	case containsAny(text,
+		"dial tcp",
+		"connection refused",
+		"network is unreachable",
+		"host is down",
+		"no such host"):
+		return remoteErrorNetwork
+	default:
+		return remoteErrorOther
+	}
+}
+
+func containsAny(text string, substrings ...string) bool {
+	for _, s := range substrings {
+		if strings.Contains(text, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Store uploads a backup file to cloud storage using rclone
@@ -690,26 +705,9 @@ func (c *CloudStorage) uploadTasks(ctx context.Context, tasks []uploadTask) (boo
 		return false, nil
 	}
 
-	runUpload := func(parentCtx context.Context, task uploadTask) error {
-		taskCtx, cancel := context.WithTimeout(parentCtx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
-		defer cancel()
-		if err := c.uploadWithRetry(taskCtx, task.local, task.remote); err != nil {
-			return err
-		}
-		if task.verify {
-			if ok, err := c.VerifyUpload(parentCtx, task.local, task.remote); err != nil || !ok {
-				if err == nil {
-					err = fmt.Errorf("verification failed")
-				}
-				return err
-			}
-		}
-		return nil
-	}
-
 	first := tasks[0]
-	if err := runUpload(ctx, first); err != nil {
-		return true, fmt.Errorf("%s: %w", filepath.Base(first.local), err)
+	if err := c.runUploadTask(ctx, first); err != nil {
+		return true, c.wrapUploadError(first.local, err)
 	}
 
 	remaining := tasks[1:]
@@ -717,23 +715,58 @@ func (c *CloudStorage) uploadTasks(ctx context.Context, tasks []uploadTask) (boo
 		return false, nil
 	}
 
-	if c.uploadMode != cloudUploadModeParallel || c.parallelJobs <= 1 {
-		for _, task := range remaining {
-			if err := runUpload(ctx, task); err != nil {
-				return false, fmt.Errorf("%s: %w", filepath.Base(task.local), err)
-			}
-		}
-		return false, nil
+	if !c.shouldUseParallelUpload() {
+		return c.uploadTasksSequential(ctx, remaining)
 	}
 
+	return c.uploadTasksParallel(ctx, remaining)
+}
+
+func (c *CloudStorage) shouldUseParallelUpload() bool {
+	return c.uploadMode == cloudUploadModeParallel && c.parallelJobs > 1
+}
+
+func (c *CloudStorage) runUploadTask(parentCtx context.Context, task uploadTask) error {
+	taskCtx, cancel := context.WithTimeout(parentCtx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+	defer cancel()
+
+	if err := c.uploadWithRetry(taskCtx, task.local, task.remote); err != nil {
+		return err
+	}
+
+	if !task.verify {
+		return nil
+	}
+
+	ok, err := c.VerifyUpload(parentCtx, task.local, task.remote)
+	if err != nil || !ok {
+		if err == nil {
+			err = fmt.Errorf("verification failed")
+		}
+		return err
+	}
+
+	return nil
+}
+
+func (c *CloudStorage) uploadTasksSequential(ctx context.Context, tasks []uploadTask) (bool, error) {
+	for _, task := range tasks {
+		if err := c.runUploadTask(ctx, task); err != nil {
+			return false, c.wrapUploadError(task.local, err)
+		}
+	}
+	return false, nil
+}
+
+func (c *CloudStorage) uploadTasksParallel(ctx context.Context, tasks []uploadTask) (bool, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	errCh := make(chan error, len(remaining))
+	errCh := make(chan error, len(tasks))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, c.parallelJobs)
 
-	for _, task := range remaining {
+	for _, task := range tasks {
 		task := task
 		wg.Add(1)
 		go func() {
@@ -745,9 +778,9 @@ func (c *CloudStorage) uploadTasks(ctx context.Context, tasks []uploadTask) (boo
 			}
 			defer func() { <-sem }()
 
-			if err := runUpload(ctx, task); err != nil {
+			if err := c.runUploadTask(ctx, task); err != nil {
 				select {
-				case errCh <- fmt.Errorf("%s: %w", filepath.Base(task.local), err):
+				case errCh <- c.wrapUploadError(task.local, err):
 				default:
 				}
 				cancel()
@@ -761,6 +794,10 @@ func (c *CloudStorage) uploadTasks(ctx context.Context, tasks []uploadTask) (boo
 		return false, err
 	}
 	return false, nil
+}
+
+func (c *CloudStorage) wrapUploadError(localPath string, err error) error {
+	return fmt.Errorf("%s: %w", filepath.Base(localPath), err)
 }
 
 // UploadToRemotePath uploads an arbitrary file to the provided remote path using
@@ -925,6 +962,11 @@ func (c *CloudStorage) verifyAlternative(ctx context.Context, remoteFile string,
 	return false, fmt.Errorf("file not found in rclone ls output")
 }
 
+type lslEntry struct {
+	fields   []string
+	filename string
+}
+
 // List returns all backups in cloud storage
 func (c *CloudStorage) List(ctx context.Context) ([]*types.BackupMetadata, error) {
 	if err := ctx.Err(); err != nil {
@@ -949,84 +991,78 @@ func (c *CloudStorage) List(ctx context.Context) ([]*types.BackupMetadata, error
 		}
 	}
 
-	var backups []*types.BackupMetadata
+	entries := parseLslEntries(string(output))
+	snapshot := buildSnapshot(entries)
+	c.setRemoteSnapshot(snapshot)
 
-	type lslEntry struct {
-		fields   []string
-		filename string
-	}
+	backups := c.buildBackupMetadata(entries, snapshot)
 
-	lines := strings.Split(string(output), "\n")
+	// Sort by timestamp (newest first)
+	sort.Slice(backups, func(i, j int) bool {
+		return backups[i].Timestamp.After(backups[j].Timestamp)
+	})
+
+	return backups, nil
+}
+
+func parseLslEntries(output string) []lslEntry {
+	lines := strings.Split(output, "\n")
 	entries := make([]lslEntry, 0, len(lines))
+
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
 		}
+
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
 			continue
 		}
+
 		filename := strings.Join(fields[3:], " ")
 		filename = normalizeRemoteRelativePath(filename)
 		if filename == "" {
 			continue
 		}
+
 		entries = append(entries, lslEntry{
 			fields:   fields,
 			filename: filename,
 		})
 	}
 
+	return entries
+}
+
+func buildSnapshot(entries []lslEntry) map[string]struct{} {
 	snapshot := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		snapshot[entry.filename] = struct{}{}
 	}
-	c.setRemoteSnapshot(snapshot)
+	return snapshot
+}
+
+func (c *CloudStorage) buildBackupMetadata(entries []lslEntry, snapshot map[string]struct{}) []*types.BackupMetadata {
+	backups := make([]*types.BackupMetadata, 0, len(entries))
 
 	for _, entry := range entries {
 		filename := entry.filename
 
-		// Only include backup files (legacy `proxmox-backup-*` or Go `*-backup-*`)
-		isNewName := strings.Contains(filename, "-backup-")
-		isLegacy := strings.HasPrefix(filename, "proxmox-backup-")
-		if !(isLegacy || isNewName) {
+		if !c.isBackupEntry(filename, snapshot) {
 			continue
 		}
 
-		if !strings.Contains(filename, ".tar") {
+		size, ok := parseEntrySize(entry.fields[0])
+		if !ok {
+			c.logger.Debug("Cloud storage: skipping %s (cannot parse size from %q)", filename, entry.fields[0])
 			continue
 		}
 
-		// Skip associated files
-		if strings.HasSuffix(filename, ".sha256") ||
-			strings.HasSuffix(filename, ".metadata") {
-			continue
-		}
-
-		// When bundling is enabled, skip standalone files that have a corresponding bundle
-		if c.config != nil && c.config.BundleAssociatedFiles {
-			if !strings.HasSuffix(filename, ".bundle.tar") {
-				bundleFilename := filename + ".bundle.tar"
-				if _, ok := snapshot[bundleFilename]; ok {
-					c.logger.Debug("Skipping standalone file %s (bundle exists)", filename)
-					continue
-				}
-			}
-		}
-
-		// Parse size
-		var size int64
-		if _, err := fmt.Sscanf(entry.fields[0], "%d", &size); err != nil {
-			c.logger.Debug("Cloud storage: skipping %s (cannot parse size from %q): %v", filename, entry.fields[0], err)
-			continue
-		}
-
-		// Parse timestamp (DATE TIME)
-		timeStr := entry.fields[1] + " " + entry.fields[2]
-		timestamp, err := time.Parse("2006-01-02 15:04:05", timeStr)
-		if err != nil {
-			c.logger.Debug("Cloud storage: skipping %s (cannot parse timestamp %q): %v", filename, timeStr, err)
+		timestamp, ok := parseEntryTimestamp(entry.fields[1], entry.fields[2])
+		if !ok {
+			timeStr := entry.fields[1] + " " + entry.fields[2]
+			c.logger.Debug("Cloud storage: skipping %s (cannot parse timestamp %q)", filename, timeStr)
 			continue
 		}
 
@@ -1037,12 +1073,56 @@ func (c *CloudStorage) List(ctx context.Context) ([]*types.BackupMetadata, error
 		})
 	}
 
-	// Sort by timestamp (newest first)
-	sort.Slice(backups, func(i, j int) bool {
-		return backups[i].Timestamp.After(backups[j].Timestamp)
-	})
+	return backups
+}
 
-	return backups, nil
+func (c *CloudStorage) isBackupEntry(filename string, snapshot map[string]struct{}) bool {
+	// Only include backup files (legacy `proxmox-backup-*` or Go `*-backup-*`)
+	isNewName := strings.Contains(filename, "-backup-")
+	isLegacy := strings.HasPrefix(filename, "proxmox-backup-")
+	if !(isLegacy || isNewName) {
+		return false
+	}
+
+	if !strings.Contains(filename, ".tar") {
+		return false
+	}
+
+	// Skip associated files
+	if strings.HasSuffix(filename, ".sha256") ||
+		strings.HasSuffix(filename, ".metadata") {
+		return false
+	}
+
+	// When bundling is enabled, skip standalone files that have a corresponding bundle
+	if c.config != nil && c.config.BundleAssociatedFiles {
+		if !strings.HasSuffix(filename, ".bundle.tar") {
+			bundleFilename := filename + ".bundle.tar"
+			if _, ok := snapshot[bundleFilename]; ok {
+				c.logger.Debug("Skipping standalone file %s (bundle exists)", filename)
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func parseEntrySize(sizeField string) (int64, bool) {
+	var size int64
+	if _, err := fmt.Sscanf(sizeField, "%d", &size); err != nil {
+		return 0, false
+	}
+	return size, true
+}
+
+func parseEntryTimestamp(dateField, timeField string) (time.Time, bool) {
+	timeStr := dateField + " " + timeField
+	timestamp, err := time.Parse("2006-01-02 15:04:05", timeStr)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return timestamp, true
 }
 
 // Delete removes a backup file from cloud storage

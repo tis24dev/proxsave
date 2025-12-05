@@ -53,21 +53,24 @@ jobs:
         run: govulncheck ./...
 
       ########################################
-      # GOSEC — MUST RUN INSIDE GO 1.21
+      # GOSEC — RUN USING GO 1.21 (NO DOCKER)
       ########################################
-      - name: Run GoSec (Go 1.21 in Docker)
+      - name: Set up Go 1.21 for GoSec
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.21"
+
+      - name: Install GoSec
         run: |
-          docker run --rm \
-          -v "$PWD":/work \
-          -w /work \
-          golang:1.21 sh -c "
-              go clean -modcache &&
-              go install github.com/securego/gosec/v2/cmd/gosec@v2.20.0 &&
-              echo 'Running GoSec...' &&
-              gosec -no-fail -fmt sarif -out gosec.sarif ./... || true &&
-              echo 'Files in /work:' &&
-              ls -al /work
-          "
+          go clean -modcache
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.20.0
+
+      - name: Run GoSec
+        run: |
+          echo "Running GoSec..."
+          gosec -no-fail -fmt sarif -out gosec.sarif ./... || true
+          echo "Files in workspace:"
+          ls -al
 
       ########################################
       # VERIFY GOSEC SARIF EXISTS
@@ -77,7 +80,6 @@ jobs:
           echo "Checking SARIF validity..."
           head -n 5 gosec.sarif
           if [ ! -f gosec.sarif ]; then
-            exit 1
             echo "ERROR: gosec.sarif NOT FOUND"
             exit 1
           fi
@@ -89,6 +91,14 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: gosec.sarif
+
+      ########################################
+      # RESTORE GO 1.25 FOR CODEQL
+      ########################################
+      - name: Restore Go 1.25 for CodeQL
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
 
       ########################################
       # CODEQL

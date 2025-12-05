@@ -60,7 +60,7 @@ func TestFilterEncryptedCandidates(t *testing.T) {
 	encrypted := &decryptCandidate{Manifest: &backup.Manifest{EncryptionMode: "age", CreatedAt: now}}
 	plain := &decryptCandidate{Manifest: &backup.Manifest{EncryptionMode: "none", CreatedAt: now}}
 
-	filtered := filterEncryptedCandidates([]*decryptCandidate{nil, encrypted, plain, &decryptCandidate{}})
+	filtered := filterEncryptedCandidates([]*decryptCandidate{nil, encrypted, plain, {}})
 	if len(filtered) != 1 || filtered[0] != encrypted {
 		t.Fatalf("filterEncryptedCandidates returned %+v, want only encrypted candidate", filtered)
 	}
