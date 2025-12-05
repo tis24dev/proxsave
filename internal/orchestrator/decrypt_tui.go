@@ -161,7 +161,14 @@ func runDecryptSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 		selectedOption := options[index]
 		pages.SwitchToPage("loading")
 		go func() {
-			candidates, err := discoverBackupCandidates(logging.GetDefaultLogger(), selectedOption.Path)
+			var candidates []*decryptCandidate
+			var err error
+
+			if selectedOption.IsRclone {
+				candidates, err = discoverRcloneBackups(context.Background(), selectedOption.Path, logging.GetDefaultLogger())
+			} else {
+				candidates, err = discoverBackupCandidates(logging.GetDefaultLogger(), selectedOption.Path)
+			}
 			app.QueueUpdateDraw(func() {
 				if err != nil {
 					message := fmt.Sprintf("Failed to inspect %s: %v", selectedOption.Path, err)
@@ -637,16 +644,37 @@ func preparePlainBundleTUI(ctx context.Context, cand *decryptCandidate, version 
 		return nil, fmt.Errorf("invalid backup candidate")
 	}
 
+	// If this is an rclone-backed bundle, download it first into the local temp area.
+	var rcloneCleanup func()
+	if cand.IsRclone && cand.Source == sourceBundle {
+		logger.Debug("Detected rclone backup, downloading for TUI workflow...")
+		localPath, cleanupFn, err := downloadRcloneBackup(ctx, cand.BundlePath, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download rclone backup: %w", err)
+		}
+		rcloneCleanup = cleanupFn
+		cand.BundlePath = localPath
+	}
+
 	tempRoot := filepath.Join("/tmp", "proxsave")
 	if err := restoreFS.MkdirAll(tempRoot, 0o755); err != nil {
+		if rcloneCleanup != nil {
+			rcloneCleanup()
+		}
 		return nil, fmt.Errorf("create temp root: %w", err)
 	}
 	workDir, err := restoreFS.MkdirTemp(tempRoot, "proxmox-decrypt-*")
 	if err != nil {
+		if rcloneCleanup != nil {
+			rcloneCleanup()
+		}
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
 	cleanup := func() {
 		_ = restoreFS.RemoveAll(workDir)
+		if rcloneCleanup != nil {
+			rcloneCleanup()
+		}
 	}
 
 	var staged stagedFiles

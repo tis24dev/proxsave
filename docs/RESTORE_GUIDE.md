@@ -2296,20 +2296,42 @@ A: All standard formats:
 
 **Q: Can I restore from cloud backup?**
 
-A: Yes, if cloud remote is a local mount:
+A: Yes, in two ways:
 
-```bash
-# Mount cloud storage locally
-rclone mount remote:bucket /mnt/cloud &
+1. **Directly from rclone remote (recommended)**  
+   If you are already uploading with `CLOUD_ENABLED=true` and rclone:
 
-# Configure in backup.env
-CLOUD_ENABLED=true
-CLOUD_REMOTE=/mnt/cloud/proxmox-backups
+   ```bash
+   # Example backup.env
+   CLOUD_ENABLED=true
+   CLOUD_REMOTE=gdrive
+   CLOUD_REMOTE_PATH=pbs-backups/server1
+   ```
 
-# Run restore
-./build/proxmox-backup --restore
-# Select option [3] Cloud/local path
-```
+   - During `--decrypt` or `--restore` (CLI o TUI), ProxSave leggerà la stessa
+     combinazione `CLOUD_REMOTE` / `CLOUD_REMOTE_PATH` e mostrerà una voce:
+       - `Cloud backups (rclone)`
+   - Selezionandola, il tool:
+     - elenca i bundle `.bundle.tar` sul remote con `rclone lsf`;
+     - legge i metadata/manifest tramite `rclone cat` (senza scaricare tutto);
+     - quando scegli un backup, lo scarica in `/tmp/proxsave` e procede al decrypt/restore.
+
+2. **Da mount locale rclone (solo restore)**  
+   Se preferisci montare il backend rclone come filesystem locale:
+
+   ```bash
+   # Mount cloud storage locally
+   rclone mount remote:bucket /mnt/cloud &
+
+   # Configure in backup.env (restore-only scenario)
+   CLOUD_ENABLED=false                      # cloud upload disabilitato
+   # Usa BACKUP_PATH / SECONDARY_PATH oppure naviga il mount direttamente
+   ```
+
+   In questo caso puoi:
+   - copiare i bundle dal mount (`/mnt/cloud/...`) nella cartella di backup locale;
+   - oppure indicare il path montato quando il tool chiede il percorso dei backup
+     (CLI) o sfogliare la directory montata prima di lanciare ProxSave.
 
 ---
 

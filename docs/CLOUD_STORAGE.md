@@ -322,7 +322,10 @@ nano /opt/proxmox-backup/configs/backup.env
 
 # Enable cloud storage
 CLOUD_ENABLED=true
-CLOUD_REMOTE=gdrive:pbs-backups
+# rclone remote NAME (from `rclone config`)
+CLOUD_REMOTE=gdrive
+# Base path inside the remote (optional)
+CLOUD_REMOTE_PATH=pbs-backups
 
 # Retention
 MAX_CLOUD_BACKUPS=30
@@ -335,9 +338,9 @@ This is sufficient to start! Other options use sensible defaults.
 ```bash
 # Cloud storage
 CLOUD_ENABLED=true
-CLOUD_REMOTE=gdrive:pbs-backups
-CLOUD_REMOTE_PATH=                    # Optional prefix
-CLOUD_LOG_PATH=gdrive:/pbs-logs       # Separate log path
+CLOUD_REMOTE=gdrive
+CLOUD_REMOTE_PATH=pbs-backups         # Optional subdirectory
+CLOUD_LOG_PATH=                       # Optional: separate log path (leave empty or set subdirectory)
 
 # Upload mode
 CLOUD_UPLOAD_MODE=parallel
@@ -373,8 +376,8 @@ RETENTION_YEARLY=3
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLOUD_ENABLED` | `false` | Enable cloud storage |
-| `CLOUD_REMOTE` | _(required)_ | rclone remote path (e.g., `gdrive:backups`) |
-| `CLOUD_REMOTE_PATH` | _(empty)_ | Optional subdirectory within remote |
+| `CLOUD_REMOTE` | _(required)_ | rclone remote (either `remote` or `remote:path`) |
+| `CLOUD_REMOTE_PATH` | _(empty)_ | Optional subdirectory within remote (e.g., `backups/proxmox`) |
 | `CLOUD_LOG_PATH` | _(empty)_ | Separate path for logs (or empty to disable) |
 | `CLOUD_UPLOAD_MODE` | `parallel` | `parallel` or `sequential` |
 | `CLOUD_PARALLEL_MAX_JOBS` | `2` | Max concurrent uploads (parallel mode) |
@@ -391,6 +394,36 @@ RETENTION_YEARLY=3
 | `MAX_CLOUD_BACKUPS` | `30` | Simple retention (ignored if GFS enabled) |
 
 For complete configuration reference, see: **[Configuration Guide](CONFIGURATION.md)**
+
+### Understanding CLOUD_REMOTE vs CLOUD_REMOTE_PATH
+
+**How CLOUD_REMOTE and CLOUD_REMOTE_PATH work together**
+
+ProxSave supports both common rclone styles and normalizes them internally:
+
+1. **Remote name + prefix (recommended for new setups)**  
+   - `CLOUD_REMOTE=gdrive`  
+   - `CLOUD_REMOTE_PATH=backups/proxmox/server1`  
+   → backups in: `gdrive:backups/proxmox/server1`
+
+2. **Remote with base path + optional prefix**  
+   - `CLOUD_REMOTE=gdrive:pbs-backups`  
+   - `CLOUD_REMOTE_PATH=server1`  
+   → backups in: `gdrive:pbs-backups/server1`
+
+In both cases ProxSave combines the base path and the optional prefix into a single
+path inside the remote, and uses that consistently for:
+- **uploads** (cloud backend);
+- **cloud retention**;
+- **restore / decrypt menus** (entry “Cloud backups (rclone)”).
+
+You can choose the style you prefer; they are equivalent from the tool’s point of view.
+
+**When to use CLOUD_REMOTE_PATH**:
+- Organizing multiple servers' backups: `server1/`, `server2/`
+- Separating environments: `production/`, `staging/`
+- Version control: `v1/`, `v2/`
+- Or leave empty to store in remote root
 
 ---
 

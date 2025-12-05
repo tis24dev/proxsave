@@ -381,7 +381,14 @@ func runRestoreSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 		selectedOption := options[index]
 		pages.SwitchToPage("paths-loading")
 		go func() {
-			candidates, err := discoverBackupCandidates(logging.GetDefaultLogger(), selectedOption.Path)
+			var candidates []*decryptCandidate
+			var err error
+
+			if selectedOption.IsRclone {
+				candidates, err = discoverRcloneBackups(context.Background(), selectedOption.Path, logging.GetDefaultLogger())
+			} else {
+				candidates, err = discoverBackupCandidates(logging.GetDefaultLogger(), selectedOption.Path)
+			}
 			app.QueueUpdateDraw(func() {
 				if err != nil {
 					message := fmt.Sprintf("Failed to inspect %s: %v", selectedOption.Path, err)
