@@ -11,6 +11,7 @@ Complete guide for restoring Proxmox VE and Proxmox Backup Server configurations
 - [Complete Workflow](#complete-workflow)
 - [Cluster Database Restore](#cluster-database-restore)
 - [Export-Only Categories](#export-only-categories)
+- [VM/CT Configuration Restore](#vmct-configuration-restore)
 - [Safety Features](#safety-features)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
@@ -1176,6 +1177,8 @@ Export-only categories (will be extracted to separate directory):
     Destination: /opt/proxmox-backup/pve-config-export-20251120-143052/
 ```
 
+**Important**: ProxSave extracts export-only files to the separate directory shown above. The tool **does NOT automatically copy** these files to system paths. Any `cp` commands shown in this documentation are **manual examples** that you must execute yourself after reviewing the exported files. This design prevents accidental overwrites and gives you full control over what gets restored.
+
 ### Integration with Cluster Restore
 
 **Correct Approach**: Use BOTH categories
@@ -1267,6 +1270,307 @@ Skipping datacenter.cfg apply
 - Selective: apply only what you need
 - Auditable: each action logged
 - Reversible: changes can be undone via GUI/API
+
+---
+
+## VM/CT Configuration Restore
+
+Complete guide for restoring Virtual Machine and Container configurations from ProxSave backups.
+
+### Overview
+
+ProxSave **always backs up** all VM and CT configuration files from:
+- `/etc/pve/qemu-server/*.conf` (QEMU VMs)
+- `/etc/pve/lxc/*.conf` (LXC Containers)
+
+These configurations are included in every backup and can be restored using **three different methods**.
+
+**Important**: VM/CT **disk images are NOT backed up** by ProxSave. Only configuration files are included. Use Proxmox native backup tools (vzdump) for disk images.
+
+---
+
+### Three Restoration Methods
+
+| Method | Use Case | Safety | Complexity |
+|--------|----------|--------|------------|
+| **pvesh SAFE Apply** | Active cluster, selective restore | High | Low |
+| **Manual Copy** | Review before applying, single VM restore | Medium | Low |
+| **Full Cluster Restore** | Disaster recovery, complete rebuild | Low | High |
+
+---
+
+### Method 1: pvesh SAFE Apply (Recommended)
+
+**Best for**: Active clusters where you want to restore specific VMs without touching the cluster database.
+
+**How it works**:
+1. During restore, select **Cluster SAFE mode**
+2. Configurations are exported to temporary directory
+3. Interactive prompt asks: "Apply all VM/CT configs via pvesh?"
+4. Each config applied via Proxmox API: `pvesh set /nodes/<node>/qemu/<vmid>/config`
+
+**Advantages**:
+✅ Non-destructive (cluster database untouched)
+✅ Works with running cluster
+✅ Selective application (can skip specific VMs)
+✅ Auditable and reversible
+✅ No service interruption required
+
+**Step-by-Step Procedure**:
+
+1. **Run restore workflow**:
+   ```bash
+   ./build/proxmox-backup --restore
+   ```
+
+2. **Select backup and decrypt** (standard workflow)
+
+3. **When prompted for restore mode**, if backup is from cluster node:
+   ```
+   Backup marked as cluster node; enabling guarded restore options
+
+   Cluster restore mode:
+     [1] SAFE mode (export configs + API apply)
+     [2] RECOVERY mode (restore cluster database)
+     [0] Cancel
+
+   Select: 1
+   ```
+
+4. **Select categories** (can choose Custom mode to include pve_config_export)
+
+5. **After extraction completes**, you'll see:
+   ```
+   SAFE cluster restore: applying configs via pvesh (node=pve01)
+
+   Found 5 VM/CT configs for node pve01
+   Apply all VM/CT configs via pvesh? (y/N): y
+   ```
+
+6. **Confirm and watch progress**:
+   ```
+   Applied VM/CT config 100 (webserver)
+   Applied VM/CT config 101 (database)
+   Applied VM/CT config 102 (mailserver)
+   Applied VM/CT config 103 (proxy)
+   Applied VM/CT config 104 (backup)
+   VM/CT apply completed: ok=5 failed=0
+   ```
+
+**Verification**:
+```bash
+# Check VMs are visible in Proxmox
+qm list
+
+# Verify specific VM config
+qm config 100
+
+# Check via web interface
+https://your-pve:8006
+```
+
+**Troubleshooting**:
+- If pvesh apply fails: Check logs for API errors, verify VM IDs don't conflict
+- If VM not visible: Refresh web interface, check node name matches
+- If config incorrect: Edit via GUI or `qm set <vmid> <option>`
+
+---
+
+### Method 2: Manual Copy from Export Directory
+
+**Best for**: Reviewing configs before applying, restoring single specific VM, comparing old vs current.
+
+**How it works**:
+1. Restore with `pve_config_export` category selected (or Cluster SAFE mode)
+2. Configurations extracted to: `/opt/proxmox-backup/pve-config-export-<timestamp>/`
+3. Review exported files
+4. Manually copy desired configs to `/etc/pve/`
+
+**Advantages**:
+✅ Full control over what gets restored
+✅ Review before applying
+✅ Compare with current configs
+✅ Extract individual values without full restore
+
+**Step-by-Step Procedure**:
+
+1. **Run restore and select pve_config_export category**:
+   ```bash
+   ./build/proxmox-backup --restore
+   # Select "Custom" mode
+   # Enable "PVE Config Export" category
+   ```
+
+2. **Locate exported files**:
+   ```bash
+   cd /opt/proxmox-backup/pve-config-export-*/etc/pve/
+
+   # List available VM configs
+   ls qemu-server/
+   # Output: 100.conf  101.conf  102.conf
+
+   # List container configs
+   ls lxc/
+   # Output: 200.conf  201.conf
+   ```
+
+3. **Review configuration before applying**:
+   ```bash
+   # View VM config
+   cat qemu-server/100.conf
+
+   # Compare with current config (if exists)
+   diff qemu-server/100.conf /etc/pve/qemu-server/100.conf
+   ```
+
+4. **Copy desired config to system**:
+   ```bash
+   # Copy specific VM config
+   cp qemu-server/100.conf /etc/pve/qemu-server/100.conf
+
+   # Copy container config
+   cp lxc/200.conf /etc/pve/lxc/200.conf
+
+   # Or restore all VMs at once
+   cp qemu-server/*.conf /etc/pve/qemu-server/
+   ```
+
+   **Note**: Writing to `/etc/pve/` goes through pmxcfs FUSE filesystem, so it's safe and properly synchronized across cluster.
+
+5. **Verify in Proxmox**:
+   ```bash
+   qm list              # List VMs
+   pct list             # List containers
+   qm config 100        # Check specific VM
+   ```
+
+**Extract Specific Values Without Full Restore**:
+```bash
+# Get VM memory setting
+grep "^memory:" qemu-server/100.conf
+
+# Get network configuration
+grep "^net" qemu-server/100.conf
+
+# Get all storage definitions
+grep "^scsi\|^virtio\|^ide\|^sata" qemu-server/100.conf
+```
+
+**Troubleshooting**:
+- If copy fails: Check `/etc/pve/` is mounted (`mount | grep pve`)
+- If VM doesn't appear: Restart pve-cluster service
+- If config malformed: Edit directly in GUI or with `qm set`
+
+---
+
+### Method 3: Full Cluster Database Restore (RECOVERY Mode)
+
+**Best for**: Complete disaster recovery, new hardware installation, total cluster rebuild.
+
+**How it works**:
+- Restores entire `/var/lib/pve-cluster/config.db` database
+- All cluster configuration restored at once (including all VM/CT configs)
+- Requires stopping PVE services and unmounting `/etc/pve/`
+
+**Advantages**:
+✅ Complete restore of entire cluster state
+✅ All VMs, users, storage, settings restored together
+✅ Ideal for disaster recovery
+
+**Disadvantages**:
+⚠️ Service interruption required
+⚠️ Overwrites current cluster state
+⚠️ All-or-nothing (can't selectively restore single VM)
+⚠️ Risk of cluster desynchronization in multi-node setups
+
+**When to Use**:
+- Bare-metal disaster recovery
+- Migration to new hardware
+- Complete cluster rebuild
+- Single-node standalone system
+
+**When NOT to Use**:
+- Active multi-node cluster (use SAFE mode instead)
+- Only need to restore specific VMs (use Manual Copy or pvesh SAFE)
+- Want to preserve current cluster state
+
+**Procedure**: See [Cluster Database Restore](#cluster-database-restore) section for complete workflow.
+
+**Note**: This method is documented in detail in the "Cluster Database Restore" section and [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md).
+
+---
+
+### Decision Tree: Which Method Should I Use?
+
+```
+Are you restoring to an active multi-node cluster?
+├─ YES → Use Method 1: pvesh SAFE Apply
+│        (Non-destructive, no downtime)
+│
+└─ NO → Is this a complete disaster recovery?
+    ├─ YES → Use Method 3: Full Cluster Database Restore
+    │        (Restores everything at once)
+    │
+    └─ NO → Do you need to restore all VMs?
+        ├─ YES → Use Method 1: pvesh SAFE Apply
+        │        (Faster than manual copy)
+        │
+        └─ NO → Use Method 2: Manual Copy
+                 (Review before applying)
+```
+
+**Quick Reference Table**:
+
+| Scenario | Recommended Method | Reason |
+|----------|-------------------|---------|
+| Active cluster, add missing VMs | pvesh SAFE Apply | No downtime, selective |
+| Single-node, restore specific VM | Manual Copy | Full control, review first |
+| New hardware installation | Full Cluster Restore | Complete system rebuild |
+| Migration from old server | Full Cluster Restore | Everything in one operation |
+| Review configs before applying | Manual Copy | Inspect before committing |
+| Restore many VMs quickly | pvesh SAFE Apply | Automated, less error-prone |
+| Multi-node cluster recovery | Full Cluster Restore | Synchronized state |
+
+---
+
+### Important Notes
+
+**VM/CT Disk Images**:
+- ProxSave does **NOT backup disk images** (they're typically hundreds of GB)
+- Only configuration files are backed up
+- For disk restoration, use:
+  - Proxmox vzdump backups
+  - Storage-level replication
+  - ZFS snapshots/replication
+  - Manual disk copies
+
+**After Restore**:
+- VM/CT configs are restored but **VMs remain stopped**
+- Disk images must exist at paths specified in config
+- Storage referenced in config must be configured
+- If disk paths changed, edit configs via GUI
+
+**Configuration vs. Data**:
+```
+What ProxSave Backs Up:
+✅ VM/CT configuration files (*.conf)
+✅ Cluster settings
+✅ Storage definitions
+✅ User/permissions
+✅ Network configuration
+✅ Backup job definitions
+
+What ProxSave Does NOT Back Up:
+❌ VM/CT disk images (*.qcow2, *.raw, etc.)
+❌ Running VM memory state
+❌ Application data inside VMs
+❌ Storage pool data
+```
+
+**Best Practice Recommendation**:
+1. Use ProxSave for **configuration backup** (what it's designed for)
+2. Use Proxmox vzdump for **VM disk backups**
+3. Combine both for complete disaster recovery capability
 
 ---
 
@@ -1808,7 +2112,11 @@ A: **VMs/CTs themselves are NOT affected**:
 - Their disk images remain untouched
 - They continue running (unless services stopped on host)
 - Only their **configuration** is restored
-- VM configs in `/etc/pve/qemu-server/` exported (not directly restored)
+- VM configs in `/etc/pve/qemu-server/` are backed up and can be restored via:
+  - **pvesh SAFE Apply** (automatic via API - recommended)
+  - **Manual copy** from export directory
+  - **Full cluster restore** (disaster recovery)
+- See [VM/CT Configuration Restore](#vmct-configuration-restore) section for complete guide
 
 **Recommended**: Stop all VMs/CTs before cluster restore for safety.
 
@@ -1918,6 +2226,32 @@ diff /opt/proxmox-backup/pve-config-export-*/etc/pve/storage.cfg \
 cp /opt/proxmox-backup/pve-config-export-*/etc/pve/qemu-server/100.conf \
    /etc/pve/qemu-server/100.conf
 ```
+
+---
+
+**Q: How do I restore individual VM/CT configuration files back to the system?**
+
+A: **Three methods available**:
+
+**Method 1: pvesh SAFE Apply (Recommended)**
+```bash
+# During restore, select Cluster SAFE mode
+# Answer "yes" when prompted: "Apply all VM/CT configs via pvesh?"
+# Configs applied automatically via API
+```
+
+**Method 2: Manual Copy**
+```bash
+# After restore with pve_config_export category:
+cd /opt/proxmox-backup/pve-config-export-*/etc/pve/
+cp qemu-server/100.conf /etc/pve/qemu-server/100.conf
+```
+
+**Method 3: Full Cluster Restore**
+- Restores entire cluster database including all VM configs
+- Use for disaster recovery only
+
+See [VM/CT Configuration Restore](#vmct-configuration-restore) for detailed procedures.
 
 ---
 
