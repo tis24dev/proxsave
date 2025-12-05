@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -286,6 +287,65 @@ func TestFormatHelpers(t *testing.T) {
 		t.Fatalf("formatBackupStatusSummary simple = %q; want 3/5", got)
 	}
 }
+
+func TestConvertBackupStatsUsesLogCountsAndCompressionFallback(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	adapter := NewNotificationAdapter(&stubNotifier{name: "Email", enabled: true}, logger)
+
+	// Prepare a temporary log file with known error/warning counts
+	tempDir := t.TempDir()
+	logFile := filepath.Join(tempDir, "notif.log")
+	content := `[2025-11-10 14:30:01] [WARNING] Something minor
+[2025-11-10 14:30:02] [ERROR] Something bad
+`
+	if err := os.WriteFile(logFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write log file: %v", err)
+	}
+
+	stats := &BackupStats{
+		ExitCode:           0,
+		Hostname:           "host",
+		ArchivePath:        "/var/tmp/backup.tar",
+		ArchiveSize:        2000,
+		CompressedSize:     500,
+		UncompressedSize:   1000,
+		SecondaryEnabled:   false,
+		CloudEnabled:       false,
+		MaxLocalBackups:    5,
+		LocalRetentionPolicy: "simple",
+		LogFilePath:        logFile,
+		ErrorCount:         0,
+		WarningCount:       0,
+		Compression:        types.CompressionZstd,
+	}
+
+	data := adapter.convertBackupStatsToNotificationData(stats)
+
+	// Log counts should override stats.ErrorCount/WarningCount
+	if data.ErrorCount != 1 || data.WarningCount != 1 {
+		t.Fatalf("expected error/warning counts from log = 1/1; got %d/%d", data.ErrorCount, data.WarningCount)
+	}
+	if len(data.LogCategories) == 0 {
+		t.Fatalf("expected LogCategories to be populated from log")
+	}
+
+	// Compression ratio should be computed from sizes when explicit savings is <= 0
+	if data.CompressionRatio <= 0 {
+		t.Fatalf("expected CompressionRatio to be computed, got %f", data.CompressionRatio)
+	}
+
+	// With ExitCode 0, local status should default to ok, secondary/cloud to disabled
+	if data.LocalStatus != "ok" {
+		t.Fatalf("LocalStatus = %q; want ok", data.LocalStatus)
+	}
+	if data.SecondaryStatus != "disabled" {
+		t.Fatalf("SecondaryStatus = %q; want disabled", data.SecondaryStatus)
+	}
+	if data.CloudStatus != "disabled" {
+		t.Fatalf("CloudStatus = %q; want disabled", data.CloudStatus)
+	}
+}
+
 func sampleBackupStats() *BackupStats {
 	return &BackupStats{
 		ExitCode:            0,

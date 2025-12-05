@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
@@ -629,6 +630,97 @@ func TestNormalizeAndMergeLists(t *testing.T) {
 	}
 }
 
+func TestLoadEnvOverridesOverridesRaw(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "env_override.env")
+	content := `BACKUP_ENABLED=false
+BACKUP_PATH=/fromfile
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	if err := os.Setenv("BACKUP_ENABLED", "true"); err != nil {
+		t.Fatalf("failed to set env BACKUP_ENABLED: %v", err)
+	}
+	if err := os.Setenv("BACKUP_PATH", "/fromenv"); err != nil {
+		t.Fatalf("failed to set env BACKUP_PATH: %v", err)
+	}
+	defer func() {
+		_ = os.Unsetenv("BACKUP_ENABLED")
+		_ = os.Unsetenv("BACKUP_PATH")
+	}()
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if !cfg.BackupEnabled {
+		t.Fatalf("expected BackupEnabled to be overridden to true by env")
+	}
+	if cfg.BackupPath != "/fromenv" {
+		t.Fatalf("BackupPath = %q; want /fromenv (from env override)", cfg.BackupPath)
+	}
+}
+
+func TestConfigFallbackHelpers(t *testing.T) {
+	cfg := &Config{
+		raw: map[string]string{
+			"STR_PRIMARY": "value1",
+			"STR_EMPTY":   "",
+			"BOOL_YES":    "true",
+			"INT_NUM":     "42",
+			"SLICE_MULTI": "a, b; c\n\"d\"",
+		},
+	}
+
+	if got := cfg.getStringWithFallback([]string{"MISSING", "STR_PRIMARY"}, "def"); got != "value1" {
+		t.Fatalf("getStringWithFallback primary = %q; want value1", got)
+	}
+	if got := cfg.getStringWithFallback([]string{"STR_EMPTY", "MISSING"}, "fallback"); got != "fallback" {
+		t.Fatalf("getStringWithFallback empty = %q; want fallback", got)
+	}
+
+	if got := cfg.getBoolWithFallback([]string{"MISSING", "BOOL_YES"}, false); !got {
+		t.Fatalf("getBoolWithFallback = false; want true")
+	}
+	if got := cfg.getBoolWithFallback([]string{"MISSING"}, true); !got {
+		t.Fatalf("getBoolWithFallback default = false; want true")
+	}
+
+	if got := cfg.getIntWithFallback([]string{"MISSING", "INT_NUM"}, 7); got != 42 {
+		t.Fatalf("getIntWithFallback = %d; want 42", got)
+	}
+	if got := cfg.getIntWithFallback([]string{"MISSING"}, 7); got != 7 {
+		t.Fatalf("getIntWithFallback default = %d; want 7", got)
+	}
+
+	slice := cfg.getStringSliceWithFallback([]string{"SLICE_MULTI"}, nil)
+	if len(slice) != 4 || slice[0] != "a" || slice[1] != "b" || slice[2] != "c" || slice[3] != "d" {
+		t.Fatalf("getStringSliceWithFallback = %#v; want [a b c d]", slice)
+	}
+}
+
+func TestExpandEnvVarsAndBaseDir(t *testing.T) {
+	restoreBase := setBaseDirEnv(t, "/env/base")
+	defer restoreBase()
+
+	if err := os.Setenv("FOO", "bar"); err != nil {
+		t.Fatalf("failed to set FOO: %v", err)
+	}
+	defer func() { _ = os.Unsetenv("FOO") }()
+
+	in := "${FOO}/$FOO/${BASE_DIR}/suffix"
+	got := expandEnvVars(in)
+	if !strings.Contains(got, "bar/bar") {
+		t.Fatalf("expandEnvVars FOO not expanded correctly: %q", got)
+	}
+	if !strings.Contains(got, "/env/base/") {
+		t.Fatalf("expandEnvVars BASE_DIR not expanded from env base dir: %q", got)
+	}
+}
+
 func TestConfigGetIntList(t *testing.T) {
 	cfg := &Config{
 		raw: map[string]string{
@@ -736,5 +828,89 @@ func TestBuildWebhookConfigParsesConfiguredEndpoints(t *testing.T) {
 	}
 	if len(backup.Headers) != 0 {
 		t.Fatalf("expected backup headers to be empty, got %+v", backup.Headers)
+	}
+}
+
+func TestAutoDetectPBSTokenParsesFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenFile := filepath.Join(tmpDir, "pbs_token")
+
+	if err := os.WriteFile(tokenFile, []byte("mytoken=mysecret\n"), 0644); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+
+	token, secret := autoDetectPBSToken(tmpDir)
+	if token != "mytoken" || secret != "mysecret" {
+		t.Fatalf("autoDetectPBSToken pair = (%q,%q); want (\"mytoken\",\"mysecret\")", token, secret)
+	}
+
+	if err := os.WriteFile(tokenFile, []byte("onlysecret\n"), 0644); err != nil {
+		t.Fatalf("failed to overwrite token file: %v", err)
+	}
+
+	token, secret = autoDetectPBSToken(tmpDir)
+	if token != "backup@pbs!go-client" || secret != "onlysecret" {
+		t.Fatalf("autoDetectPBSToken default name = (%q,%q); want (\"backup@pbs!go-client\",\"onlysecret\")", token, secret)
+	}
+}
+
+func TestAutoDetectPBSAuthEnvAndTokenPriority(t *testing.T) {
+	restoreBase := setBaseDirEnv(t, "/pbs/base")
+	defer restoreBase()
+
+	tmpDir := t.TempDir()
+	tokenFile := filepath.Join(tmpDir, "pbs_token")
+	if err := os.WriteFile(tokenFile, []byte("envtoken=envsecret\n"), 0644); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+
+	// Case 1: environment variables have highest priority
+	_ = os.Setenv("PBS_REPOSITORY", "envrepo")
+	_ = os.Setenv("PBS_PASSWORD", "envpass")
+	_ = os.Setenv("PBS_FINGERPRINT", "envfp")
+	defer func() {
+		_ = os.Unsetenv("PBS_REPOSITORY")
+		_ = os.Unsetenv("PBS_PASSWORD")
+		_ = os.Unsetenv("PBS_FINGERPRINT")
+	}()
+
+	cfg := &Config{
+		SecureAccount: tmpDir,
+		raw: map[string]string{
+			"PBS_REPOSITORY":  "filerepo",
+			"PBS_PASSWORD":    "filepass",
+			"PBS_FINGERPRINT": "filefp",
+		},
+	}
+	cfg.autoDetectPBSAuth()
+	if cfg.PBSRepository != "envrepo" || cfg.PBSPassword != "envpass" || cfg.PBSFingerprint != "envfp" {
+		t.Fatalf("autoDetectPBSAuth env priority failed: repo=%q pass=%q fp=%q", cfg.PBSRepository, cfg.PBSPassword, cfg.PBSFingerprint)
+	}
+
+	// Case 2: no env, use raw config values
+	_ = os.Unsetenv("PBS_REPOSITORY")
+	_ = os.Unsetenv("PBS_PASSWORD")
+	_ = os.Unsetenv("PBS_FINGERPRINT")
+
+	cfg2 := &Config{
+		SecureAccount: tmpDir,
+		raw: map[string]string{
+			"PBS_REPOSITORY": "filerepo2",
+			"PBS_PASSWORD":   "filepass2",
+		},
+	}
+	cfg2.autoDetectPBSAuth()
+	if cfg2.PBSRepository != "filerepo2" || cfg2.PBSPassword != "filepass2" {
+		t.Fatalf("autoDetectPBSAuth file priority failed: repo=%q pass=%q", cfg2.PBSRepository, cfg2.PBSPassword)
+	}
+
+	// Case 3: no env and no raw -> token file detection
+	cfg3 := &Config{
+		SecureAccount: tmpDir,
+		raw:           map[string]string{},
+	}
+	cfg3.autoDetectPBSAuth()
+	if cfg3.PBSRepository == "" || cfg3.PBSPassword == "" {
+		t.Fatalf("autoDetectPBSAuth should populate from token file, got repo=%q pass=%q", cfg3.PBSRepository, cfg3.PBSPassword)
 	}
 }
