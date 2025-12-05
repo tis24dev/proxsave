@@ -433,6 +433,67 @@ func TestCloudStorageRemoteHelpersAndBuildArgs(t *testing.T) {
 	}
 }
 
+func TestCloudStorageRemoteNormalizationVariants(t *testing.T) {
+	tests := []struct {
+		name            string
+		cloudRemote     string
+		cloudRemotePath string
+		wantLabel       string
+		wantRoot        string
+		wantRemoteFile  string
+	}{
+		{
+			name:            "remote name plus prefix",
+			cloudRemote:     "remote",
+			cloudRemotePath: "tenants/a",
+			wantLabel:       "remote:tenants/a",
+			wantRoot:        "remote:",
+			wantRemoteFile:  "remote:tenants/a/backup.tar.zst",
+		},
+		{
+			name:            "remote with base path no extra prefix",
+			cloudRemote:     "remote:pbs-backups",
+			cloudRemotePath: "",
+			wantLabel:       "remote:pbs-backups",
+			wantRoot:        "remote:",
+			wantRemoteFile:  "remote:pbs-backups/backup.tar.zst",
+		},
+		{
+			name:            "remote with base path and extra prefix",
+			cloudRemote:     "remote:pbs-backups",
+			cloudRemotePath: "server1",
+			wantLabel:       "remote:pbs-backups/server1",
+			wantRoot:        "remote:",
+			wantRemoteFile:  "remote:pbs-backups/server1/backup.tar.zst",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				CloudEnabled:    true,
+				CloudRemote:     tt.cloudRemote,
+				CloudRemotePath: tt.cloudRemotePath,
+			}
+			cs := newCloudStorageForTest(cfg)
+
+			if got := cs.remoteLabel(); got != tt.wantLabel {
+				t.Fatalf("remoteLabel() = %q; want %q", got, tt.wantLabel)
+			}
+			if got := cs.remoteBase(); got != tt.wantLabel {
+				t.Fatalf("remoteBase() = %q; want %q", got, tt.wantLabel)
+			}
+			if got := cs.remoteRoot(); got != tt.wantRoot {
+				t.Fatalf("remoteRoot() = %q; want %q", got, tt.wantRoot)
+			}
+			if got := cs.remotePathFor("backup.tar.zst"); got != tt.wantRemoteFile {
+				t.Fatalf("remotePathFor() = %q; want %q", got, tt.wantRemoteFile)
+			}
+		})
+	}
+}
+
 func TestSplitRemoteRefAndBaseName(t *testing.T) {
 	tests := []struct {
 		ref          string
