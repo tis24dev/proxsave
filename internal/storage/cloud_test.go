@@ -400,6 +400,97 @@ func TestCloudStorageSkipsCloudLogsWhenPathMissing(t *testing.T) {
 	}
 }
 
+func TestCloudStorageRemoteHelpersAndBuildArgs(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:    true,
+		CloudRemote:     "remote",
+		CloudRemotePath: "tenant/a",
+		RcloneFlags:     []string{"-v", "--fast-list"},
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	if got := cs.remoteLabel(); got != "remote:tenant/a" {
+		t.Fatalf("remoteLabel() = %q; want %q", got, "remote:tenant/a")
+	}
+	if got := cs.remoteBase(); got != "remote:tenant/a" {
+		t.Fatalf("remoteBase() = %q; want %q", got, "remote:tenant/a")
+	}
+	if got := cs.remoteRoot(); got != "remote:" {
+		t.Fatalf("remoteRoot() = %q; want %q", got, "remote:")
+	}
+
+	if got := cs.remotePathFor("../escape/backup.tar.zst"); got != "remote:tenant/a/backup.tar.zst" {
+		t.Fatalf("remotePathFor() sanitized path = %q; want %q", got, "remote:tenant/a/backup.tar.zst")
+	}
+
+	args := cs.buildRcloneArgs("lsf")
+	if len(args) < 4 || args[0] != "rclone" || args[1] != "lsf" {
+		t.Fatalf("buildRcloneArgs prefix = %#v; want [\"rclone\",\"lsf\",...]", args)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-v") || !strings.Contains(joined, "--fast-list") {
+		t.Fatalf("buildRcloneArgs flags missing in %q", joined)
+	}
+}
+
+func TestSplitRemoteRefAndBaseName(t *testing.T) {
+	tests := []struct {
+		ref          string
+		wantRemote   string
+		wantRel      string
+		wantBaseName string
+	}{
+		{"remote:", "remote", "", ""},
+		{"remote:path/to/file.tar.zst", "remote", "path/to/file.tar.zst", "file.tar.zst"},
+		{"remote:/leading/slash.tar", "remote", "/leading/slash.tar", "slash.tar"},
+		{"nocolon", "nocolon", "", ""},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.ref, func(t *testing.T) {
+			gotRemote, gotRel := splitRemoteRef(tt.ref)
+			if gotRemote != tt.wantRemote || gotRel != tt.wantRel {
+				t.Fatalf("splitRemoteRef(%q) = (%q,%q); want (%q,%q)", tt.ref, gotRemote, gotRel, tt.wantRemote, tt.wantRel)
+			}
+			if gotBase := remoteBaseName(tt.ref); gotBase != tt.wantBaseName {
+				t.Fatalf("remoteBaseName(%q) = %q; want %q", tt.ref, gotBase, tt.wantBaseName)
+			}
+		})
+	}
+}
+
+func TestNormalizeRemoteRelativePathAndObjectNotFound(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{".", ""},
+		{" ././foo/bar ", "foo/bar"},
+		{"/", ""},
+		{"../up/../file.tar", "file.tar"},
+	}
+	for _, c := range cases {
+		if got := normalizeRemoteRelativePath(c.in); got != c.want {
+			t.Fatalf("normalizeRemoteRelativePath(%q) = %q; want %q", c.in, got, c.want)
+		}
+	}
+
+	if !isRcloneObjectNotFound("2025/01/01 ERROR : object not found") {
+		t.Fatal("isRcloneObjectNotFound should detect 'object not found'")
+	}
+	if !isRcloneObjectNotFound("file doesn't exist on remote") {
+		t.Fatal("isRcloneObjectNotFound should detect \"doesn't exist\"")
+	}
+	if isRcloneObjectNotFound("permission denied") {
+		t.Fatal("isRcloneObjectNotFound should be false for unrelated errors")
+	}
+	if isRcloneObjectNotFound("") {
+		t.Fatal("isRcloneObjectNotFound should be false for empty string")
+	}
+}
+
 func TestCloudStorageMetadataHelpers(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:    true,

@@ -1,26 +1,26 @@
-# Verifica delle Attestazioni di Provenienza
+# Provenance Attestation Verification
 
-## Introduzione
+## Introduction
 
-Ogni binario di release di Proxmox Backup Go include attestazioni di provenienza firmate crittograficamente che provano:
-- Il binario è stato costruito da questo repository
-- Il binario è stato costruito usando GitHub Actions
-- Il binario non è stato manomesso dopo la build
-- Il processo di build è tracciabile e verificabile
+Every Proxmox Backup Go release binary includes cryptographically signed provenance attestations that prove:
+- The binary was built from this repository
+- The binary was built using GitHub Actions
+- The binary has not been tampered with after the build
+- The build process is traceable and verifiable
 
-Le attestazioni utilizzano lo standard SLSA (Supply-chain Levels for Software Artifacts) e sono registrate in un transparency log pubblico immutabile (Sigstore).
+Attestations use the SLSA (Supply-chain Levels for Software Artifacts) standard and are registered in an immutable public transparency log (Sigstore).
 
-## Perché le Attestazioni sono Importanti
+## Why Attestations Matter
 
-Le attestazioni di provenienza proteggono da:
-- **Supply chain attacks**: Verifica che il binario proviene dal repository ufficiale
-- **Manomissioni**: Garantisce che nessuno ha modificato il binario dopo il build
-- **Compromissioni**: Prova che il binario è stato costruito in un ambiente fidato (GitHub Actions)
-- **Build non autorizzate**: Conferma che solo i maintainer possono creare release
+Provenance attestations protect against:
+- **Supply chain attacks**: Verifies that the binary comes from the official repository
+- **Tampering**: Guarantees that no one has modified the binary after the build
+- **Compromises**: Proves that the binary was built in a trusted environment (GitHub Actions)
+- **Unauthorized builds**: Confirms that only maintainers can create releases
 
-## Prerequisiti
+## Prerequisites
 
-Per verificare le attestazioni è necessario installare GitHub CLI (`gh`).
+To verify attestations, you need to install GitHub CLI (`gh`).
 
 ### Linux
 
@@ -47,31 +47,31 @@ brew install gh
 ### Windows
 
 ```powershell
-# Con winget
+# With winget
 winget install --id GitHub.cli
 
-# Con Chocolatey
+# With Chocolatey
 choco install gh
 
-# Con Scoop
+# With Scoop
 scoop install gh
 ```
 
-## Metodi di Verifica
+## Verification Methods
 
-### Metodo 1: Verifica Rapida (Singolo Binario)
+### Method 1: Quick Verification (Single Binary)
 
-Questo è il metodo più semplice per verificare un singolo binario scaricato.
+This is the simplest method to verify a single downloaded binary.
 
 ```bash
-# Scarica il binario per la tua piattaforma
+# Download the binary for your platform
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 
-# Verifica l'attestazione
+# Verify the attestation
 gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
 ```
 
-**Output atteso:**
+**Expected output:**
 ```
 Loaded digest sha256:abc123... for file://proxmox-backup-linux-amd64
 Loaded 1 attestation from GitHub API
@@ -82,23 +82,23 @@ REPO                        PREDICATE_TYPE                  WORKFLOW
 tis24dev/proxmox-backup     https://slsa.dev/provenance/v1  .github/workflows/release.yml@refs/tags/v0.9.0
 ```
 
-### Metodo 2: Verifica di Tutti gli Artifact
+### Method 2: Verify All Artifacts
 
-Verifica tutti i binari scaricati in una directory.
+Verify all binaries downloaded in a directory.
 
 ```bash
-# Scarica tutti i binari che ti servono
+# Download all the binaries you need
 cd ~/downloads
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-darwin-amd64
 
-# Verifica tutti insieme
+# Verify all together
 gh attestation verify proxmox-backup-* --repo tis24dev/proxmox-backup
 ```
 
-### Metodo 3: Verifica con Output JSON
+### Method 3: Verification with JSON Output
 
-Per integrare la verifica in script o per analisi dettagliate.
+For integrating verification into scripts or for detailed analysis.
 
 ```bash
 gh attestation verify proxmox-backup-linux-amd64 \
@@ -106,7 +106,7 @@ gh attestation verify proxmox-backup-linux-amd64 \
   --format json | jq
 ```
 
-**Output JSON** (esempio):
+**JSON output** (example):
 ```json
 {
   "verificationResult": {
@@ -143,35 +143,35 @@ gh attestation verify proxmox-backup-linux-amd64 \
 }
 ```
 
-### Metodo 4: Verifica Offline (con bundle scaricato)
+### Method 4: Offline Verification (with downloaded bundle)
 
-Utile per ambienti air-gapped o per archiviare le attestazioni.
+Useful for air-gapped environments or for archiving attestations.
 
 ```bash
-# Scarica l'attestazione come bundle
+# Download the attestation as a bundle
 gh attestation download proxmox-backup-linux-amd64 \
   --repo tis24dev/proxmox-backup \
   --output attestation.jsonl
 
-# Verifica offline usando il bundle
+# Verify offline using the bundle
 gh attestation verify proxmox-backup-linux-amd64 \
   --bundle attestation.jsonl \
   --repo tis24dev/proxmox-backup
 ```
 
-## Esempi Pratici Completi
+## Complete Practical Examples
 
-### Esempio 1: Linux - Verifica e Installazione
+### Example 1: Linux - Verification and Installation
 
 ```bash
 #!/bin/bash
 set -e
 
-# 1. Scarica il binario
+# 1. Download the binary
 echo "Downloading binary..."
 wget -q https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 
-# 2. Verifica l'attestazione
+# 2. Verify the attestation
 echo "Verifying attestation..."
 if gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup; then
     echo "✓ Attestation verified successfully!"
@@ -181,17 +181,17 @@ else
     exit 1
 fi
 
-# 3. Rendi eseguibile
+# 3. Make executable
 chmod +x proxmox-backup-linux-amd64
 
-# 4. Sposta in /usr/local/bin
+# 4. Move to /usr/local/bin
 sudo mv proxmox-backup-linux-amd64 /usr/local/bin/proxmox-backup
 
 echo "Installation complete!"
 proxmox-backup --version
 ```
 
-### Esempio 2: macOS - Verifica con Homebrew Alternativa
+### Example 2: macOS - Verification with Homebrew Alternative
 
 ```bash
 #!/bin/bash
@@ -201,11 +201,11 @@ VERSION="v0.9.0"
 BINARY="proxmox-backup-darwin-$(uname -m)"
 URL="https://github.com/tis24dev/proxsave/releases/download/${VERSION}/${BINARY}"
 
-# Scarica
+# Download
 echo "Downloading ${BINARY}..."
 curl -L -o proxmox-backup "${URL}"
 
-# Verifica
+# Verify
 echo "Verifying provenance..."
 gh attestation verify proxmox-backup --repo tis24dev/proxmox-backup || {
     echo "Verification failed!"
@@ -213,13 +213,13 @@ gh attestation verify proxmox-backup --repo tis24dev/proxmox-backup || {
     exit 1
 }
 
-# Installa
+# Install
 chmod +x proxmox-backup
 sudo mv proxmox-backup /usr/local/bin/
 echo "Installed successfully!"
 ```
 
-### Esempio 3: Windows PowerShell - Verifica e Installazione
+### Example 3: Windows PowerShell - Verification and Installation
 
 ```powershell
 # Download binary
@@ -257,174 +257,174 @@ if ($LASTEXITCODE -eq 0) {
 }
 ```
 
-## Cosa Viene Verificato
+## What Gets Verified
 
-Quando esegui `gh attestation verify`, vengono effettuati i seguenti controlli:
+When you run `gh attestation verify`, the following checks are performed:
 
-| Verifica | Descrizione |
-|----------|-------------|
-| ✓ **Repository sorgente** | Conferma che il build proviene da `github.com/tis24dev/proxsave` |
-| ✓ **Commit SHA** | Verifica il commit esatto usato per il build |
-| ✓ **Workflow** | Controlla che sia stato usato `.github/workflows/release.yml` |
-| ✓ **Ambiente di build** | Conferma che il build è avvenuto su GitHub-hosted runner |
-| ✓ **Integrità SHA256** | Calcola l'hash del file e lo confronta con quello attestato |
-| ✓ **Firma crittografica** | Verifica la firma OIDC/Sigstore sull'attestazione |
-| ✓ **Timestamp Rekor** | Controlla il record immutabile nel transparency log |
-| ✓ **Conformità SLSA** | Verifica che l'attestazione rispetti lo standard SLSA v1 |
+| Verification | Description |
+|--------------|-------------|
+| ✓ **Source repository** | Confirms that the build comes from `github.com/tis24dev/proxsave` |
+| ✓ **Commit SHA** | Verifies the exact commit used for the build |
+| ✓ **Workflow** | Checks that `.github/workflows/release.yml` was used |
+| ✓ **Build environment** | Confirms that the build occurred on GitHub-hosted runner |
+| ✓ **SHA256 integrity** | Calculates the file hash and compares it with the attested one |
+| ✓ **Cryptographic signature** | Verifies the OIDC/Sigstore signature on the attestation |
+| ✓ **Rekor timestamp** | Checks the immutable record in the transparency log |
+| ✓ **SLSA compliance** | Verifies that the attestation complies with the SLSA v1 standard |
 
 ## Troubleshooting
 
-### Errore: "no attestations found"
+### Error: "no attestations found"
 
-**Causa**: La release non include attestazioni (release precedente a questa feature).
+**Cause**: The release does not include attestations (release prior to this feature).
 
-**Soluzione**:
+**Solution**:
 ```bash
-# Controlla la versione della release
+# Check the release version
 gh release view v0.9.0 --repo tis24dev/proxmox-backup
 
-# Le attestazioni sono disponibili solo da v0.9.1 in poi
+# Attestations are only available from v0.9.1 onwards
 ```
 
-### Errore: "gh: command not found"
+### Error: "gh: command not found"
 
-**Causa**: GitHub CLI non è installato o non è nel PATH.
+**Cause**: GitHub CLI is not installed or not in PATH.
 
-**Soluzione**: Installare `gh` seguendo le istruzioni nella sezione Prerequisiti sopra.
+**Solution**: Install `gh` following the instructions in the Prerequisites section above.
 
-### Errore: "failed to verify signature"
+### Error: "failed to verify signature"
 
-**Causa**: Il file potrebbe essere stato manomesso o corrotto.
+**Cause**: The file may have been tampered with or corrupted.
 
-**Soluzione**:
+**Solution**:
 ```bash
-# Riscaricare il binario
+# Re-download the binary
 rm proxmox-backup-linux-amd64
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 
-# Ritentare la verifica
+# Retry verification
 gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
 ```
 
-Se il problema persiste, **NON usare il binario** e segnala il problema aprendo una issue su GitHub.
+If the problem persists, **DO NOT use the binary** and report the issue by opening an issue on GitHub.
 
-### Errore: "attestation verification failed: subject digest mismatch"
+### Error: "attestation verification failed: subject digest mismatch"
 
-**Causa**: L'hash SHA256 del file non corrisponde a quello nell'attestazione.
+**Cause**: The SHA256 hash of the file does not match the one in the attestation.
 
-**Possibili cause**:
-- File scaricato parzialmente (download interrotto)
-- File modificato dopo il download
-- File corrotto durante il trasferimento
+**Possible causes**:
+- File downloaded partially (interrupted download)
+- File modified after download
+- File corrupted during transfer
 
-**Soluzione**:
+**Solution**:
 ```bash
-# Verifica dimensione del file
+# Check file size
 ls -lh proxmox-backup-linux-amd64
 
-# Riscaricare completamente
+# Re-download completely
 rm proxmox-backup-linux-amd64
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 
-# Verifica checksum manuale (opzionale)
+# Manual checksum verification (optional)
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS
 sha256sum -c SHA256SUMS
 ```
 
-### Errore: "HTTP 401: Bad credentials"
+### Error: "HTTP 401: Bad credentials"
 
-**Causa**: GitHub CLI non è autenticato o il token è scaduto.
+**Cause**: GitHub CLI is not authenticated or the token has expired.
 
-**Soluzione**:
+**Solution**:
 ```bash
-# Autenticarsi con GitHub
+# Authenticate with GitHub
 gh auth login
 
-# Oppure usare un token
+# Or use a token
 export GITHUB_TOKEN=your_personal_access_token
 ```
 
-### Verifica lenta o timeout
+### Slow verification or timeout
 
-**Causa**: Problemi di connessione al transparency log (Rekor).
+**Cause**: Connection issues to the transparency log (Rekor).
 
-**Soluzione**:
+**Solution**:
 ```bash
-# Usare la verifica offline se hai già scaricato l'attestazione
+# Use offline verification if you've already downloaded the attestation
 gh attestation download proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup -o attestation.jsonl
 gh attestation verify proxmox-backup-linux-amd64 --bundle attestation.jsonl --repo tis24dev/proxmox-backup
 ```
 
-## Considerazioni di Sicurezza
+## Security Considerations
 
 ### Trust Model
 
-Le attestazioni si basano su:
-1. **GitHub Actions OIDC**: GitHub firma le attestazioni usando token OIDC a breve termine
-2. **Sigstore/Rekor**: Transparency log pubblico che registra tutte le attestazioni
-3. **SLSA Framework**: Standard industry per provenance metadata
+Attestations are based on:
+1. **GitHub Actions OIDC**: GitHub signs attestations using short-lived OIDC tokens
+2. **Sigstore/Rekor**: Public transparency log that records all attestations
+3. **SLSA Framework**: Industry standard for provenance metadata
 
-**Cosa significa**: Devi fidarti di GitHub come root of trust. Se GitHub è compromesso, le attestazioni potrebbero essere falsificate.
+**What this means**: You must trust GitHub as the root of trust. If GitHub is compromised, attestations could be forged.
 
 ### Transparency Log (Rekor)
 
-Ogni attestazione è registrata pubblicamente su https://search.sigstore.dev/
+Every attestation is publicly recorded on https://search.sigstore.dev/
 
-**Vantaggi**:
-- Registro immutabile e pubblicamente auditabile
-- Timestamp verificabili
-- Nessun segreto da gestire (keyless signing)
+**Benefits**:
+- Immutable and publicly auditable registry
+- Verifiable timestamps
+- No secrets to manage (keyless signing)
 
-**Cosa puoi controllare**:
+**What you can check**:
 ```bash
-# Cerca attestazioni per questo repository
+# Search for attestations for this repository
 open "https://search.sigstore.dev/?logIndex=&email=&hash=&logEntry=&uuid="
-# Filtra per: tis24dev/proxmox-backup
+# Filter by: tis24dev/proxmox-backup
 ```
 
-### Confronto con GPG Signing
+### Comparison with GPG Signing
 
-| Aspetto | Attestazioni (nuovo) | GPG Signing (vecchio) |
-|---------|----------------------|----------------------|
-| **Gestione chiavi** | Nessuna (keyless) | Richiede gestione chiavi private |
-| **Rotazione chiavi** | Automatica | Manuale e complessa |
-| **Revoca** | Timestamp-based | Require key revocation |
-| **Transparency** | Registro pubblico | Solo se pubblicata su keyserver |
-| **Metadati build** | SLSA provenance completo | Solo firma del checksum |
-| **Verifica** | `gh attestation verify` | `gpg --verify` |
+| Aspect | Attestations (new) | GPG Signing (old) |
+|--------|-------------------|-------------------|
+| **Key management** | None (keyless) | Requires private key management |
+| **Key rotation** | Automatic | Manual and complex |
+| **Revocation** | Timestamp-based | Requires key revocation |
+| **Transparency** | Public registry | Only if published on keyserver |
+| **Build metadata** | Complete SLSA provenance | Only checksum signature |
+| **Verification** | `gh attestation verify` | `gpg --verify` |
 | **Trust model** | GitHub OIDC + Sigstore | Web of trust / keyserver |
 
 ### Best Practices
 
-1. **Verifica sempre prima dell'uso**: Non eseguire binari non verificati
-2. **Usa HTTPS**: Scarica sempre da `https://github.com`
-3. **Verifica il repository**: Assicurati che sia `tis24dev/proxmox-backup`
-4. **Aggiorna gh CLI**: Mantieni GitHub CLI aggiornato per le ultime security features
-5. **Automation**: Integra la verifica nei tuoi script di deployment
-6. **Archivia attestazioni**: Salva le attestazioni per audit futuri
+1. **Always verify before use**: Do not run unverified binaries
+2. **Use HTTPS**: Always download from `https://github.com`
+3. **Verify the repository**: Ensure it's `tis24dev/proxmox-backup`
+4. **Update gh CLI**: Keep GitHub CLI updated for the latest security features
+5. **Automation**: Integrate verification into your deployment scripts
+6. **Archive attestations**: Save attestations for future audits
 
-## Migrazione da GPG
+## Migration from GPG
 
-### Per Utenti che Usavano la Vecchia Firma GPG
+### For Users Who Used Old GPG Signing
 
-**Cosa è cambiato**:
-- ✗ Non generiamo più `SHA256SUMS.asc` (firma GPG)
-- ✓ Generiamo attestazioni SLSA provenance
-- ✓ Continuiamo a generare `SHA256SUMS` (checksum in chiaro)
+**What changed**:
+- ✗ We no longer generate `SHA256SUMS.asc` (GPG signature)
+- ✓ We generate SLSA provenance attestations
+- ✓ We continue to generate `SHA256SUMS` (plain checksums)
 
-**Release precedenti** (v0.9.0 e precedenti):
-- Usano GPG signing (chiave: CD28A21CC11B270E)
-- Verifica con: `gpg --verify SHA256SUMS.asc SHA256SUMS`
+**Previous releases** (v0.9.0 and earlier):
+- Use GPG signing (key: CD28A21CC11B270E)
+- Verify with: `gpg --verify SHA256SUMS.asc SHA256SUMS`
 
-**Release nuove** (v0.9.1+):
-- Usano attestazioni GitHub
-- Verifica con: `gh attestation verify`
+**New releases** (v0.9.1+):
+- Use GitHub attestations
+- Verify with: `gh attestation verify`
 
-### Script di Migrazione
+### Migration Script
 
-Se hai script che usano GPG, ecco come migrarli:
+If you have scripts that use GPG, here's how to migrate them:
 
-**Prima (GPG)**:
+**Before (GPG)**:
 ```bash
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS
@@ -433,15 +433,15 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum -c SHA256SUMS
 ```
 
-**Dopo (Attestazioni)**:
+**After (Attestations)**:
 ```bash
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.1/proxmox-backup-linux-amd64
 gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
 ```
 
-Molto più semplice! 🎉
+Much simpler! 🎉
 
-## Riferimenti
+## References
 
 - [GitHub Docs - Artifact Attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 - [GitHub CLI - attestation verify](https://cli.github.com/manual/gh_attestation_verify)
@@ -452,9 +452,9 @@ Molto più semplice! 🎉
 
 ## Support
 
-Se hai problemi con la verifica delle attestazioni:
-1. Controlla questa documentazione per troubleshooting
-2. Verifica di avere l'ultima versione di `gh` CLI
-3. Apri una issue su https://github.com/tis24dev/proxsave/issues
+If you have problems with attestation verification:
+1. Check this documentation for troubleshooting
+2. Verify you have the latest version of `gh` CLI
+3. Open an issue on https://github.com/tis24dev/proxsave/issues
 
-**Note di sicurezza**: Se sospetti che un'attestazione sia stata falsificata o compromessa, **NON usare il binario** e segnala immediatamente aprendo una security advisory privata su GitHub.
+**Security note**: If you suspect that an attestation has been forged or compromised, **DO NOT use the binary** and immediately report it by opening a private security advisory on GitHub.
