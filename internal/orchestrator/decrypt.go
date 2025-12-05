@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -27,12 +26,6 @@ import (
 
 var ErrDecryptAborted = errors.New("decrypt workflow aborted by user")
 var titleCaser = cases.Title(language.English)
-
-type decryptPathOption struct {
-	Label    string
-	Path     string
-	IsRclone bool
-}
 
 type decryptSourceType int
 
@@ -177,51 +170,16 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	return RunDecryptWorkflowWithDeps(ctx, &deps, version)
 }
 
-func buildDecryptPathOptions(cfg *config.Config) []decryptPathOption {
-	options := make([]decryptPathOption, 0, 3)
-
-	if clean := strings.TrimSpace(cfg.BackupPath); clean != "" {
-		options = append(options, decryptPathOption{
-			Label: "Local backups",
-			Path:  clean,
-		})
-	}
-
-	if cfg.SecondaryEnabled {
-		if clean := strings.TrimSpace(cfg.SecondaryPath); clean != "" {
-			options = append(options, decryptPathOption{
-				Label: "Secondary backups",
-				Path:  clean,
-			})
-		}
-	}
-
-	if cfg.CloudEnabled {
-		cloudRoot := buildCloudRemotePath(cfg.CloudRemote, cfg.CloudRemotePath)
-		if isRcloneRemote(cloudRoot) {
-			// rclone remote (remote:path[/prefix])
-			options = append(options, decryptPathOption{
-				Label:    "Cloud backups (rclone)",
-				Path:     cloudRoot,
-				IsRclone: true,
-			})
-		} else if isLocalFilesystemPath(cloudRoot) {
-			// Local filesystem mount
-			options = append(options, decryptPathOption{
-				Label:    "Cloud backups",
-				Path:     cloudRoot,
-				IsRclone: false,
-			})
-		}
-	}
-
-	return options
-}
-
 func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger) (*decryptCandidate, error) {
 	pathOptions := buildDecryptPathOptions(cfg)
 	if len(pathOptions) == 0 {
 		return nil, fmt.Errorf("no backup paths configured in backup.env")
+	}
+
+	if logger != nil {
+		for _, opt := range pathOptions {
+			logger.Debug("Backup source option prepared: label=%q path=%q isRclone=%v", opt.Label, opt.Path, opt.IsRclone)
+		}
 	}
 
 	var candidates []*decryptCandidate
@@ -233,6 +191,10 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 			return nil, err
 		}
 
+		if logger != nil {
+			logger.Debug("Backup source selected by user: label=%q path=%q isRclone=%v", option.Label, option.Path, option.IsRclone)
+		}
+
 		logger.Info("Scanning %s for backup bundles...", option.Path)
 
 		// Handle rclone remotes differently from filesystem paths
@@ -240,7 +202,15 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 			candidates, err = discoverRcloneBackups(ctx, option.Path, logger)
 			if err != nil {
 				logger.Warning("Failed to inspect cloud remote %s: %v", option.Path, err)
+				// On persistent failures, remove this option so it is no longer offered.
+				pathOptions = removeDecryptPathOption(pathOptions, option)
+				if len(pathOptions) == 0 {
+					return nil, fmt.Errorf("no usable backup sources available")
+				}
 				continue
+			}
+			if logger != nil {
+				logger.Debug("Cloud (rclone): %d candidate bundle(s) returned for %s", len(candidates), option.Path)
 			}
 		} else {
 			info, err := restoreFS.Stat(option.Path)
@@ -256,7 +226,14 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 			}
 		}
 		if len(candidates) == 0 {
-			logger.Warning("No backup bundles found in %s", option.Path)
+			logger.Warning("No backup bundles found in %s – removing from source list", option.Path)
+			if logger != nil {
+				logger.Debug("Removing backup source %q (%s) due to empty candidate list", option.Label, option.Path)
+			}
+			pathOptions = removeDecryptPathOption(pathOptions, option)
+			if len(pathOptions) == 0 {
+				return nil, fmt.Errorf("no usable backup sources available")
+			}
 			continue
 		}
 
@@ -264,8 +241,19 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 		// only encrypted backups are valid candidates for decrypt.
 		encrypted := filterEncryptedCandidates(candidates)
 		if len(encrypted) == 0 {
-			logger.Warning("No encrypted backups found in %s", option.Path)
+			logger.Warning("No encrypted backups found in %s – removing from source list", option.Path)
+			if logger != nil {
+				logger.Debug("Removing backup source %q (%s) because all candidates are plain (non-encrypted)", option.Label, option.Path)
+			}
+			pathOptions = removeDecryptPathOption(pathOptions, option)
+			if len(pathOptions) == 0 {
+				return nil, fmt.Errorf("no usable backup sources available")
+			}
 			continue
+		}
+
+		if logger != nil {
+			logger.Debug("Backup candidates after encryption filter: total=%d encrypted=%d", len(candidates), len(encrypted))
 		}
 
 		candidates = encrypted
@@ -304,131 +292,6 @@ func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []de
 		}
 		return options[idx], nil
 	}
-}
-
-// discoverRcloneBackups lists backup bundles from an rclone remote
-func discoverRcloneBackups(ctx context.Context, remotePath string, logger *logging.Logger) ([]*decryptCandidate, error) {
-	// Build full remote path - ensure it ends with ":" if it's just a remote name
-	fullPath := strings.TrimSpace(remotePath)
-	if !strings.Contains(fullPath, ":") {
-		fullPath = fullPath + ":"
-	}
-
-	// Use rclone lsf to list files inside the backup directory
-	cmd := exec.CommandContext(ctx, "rclone", "lsf", fullPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list rclone remote %s: %w (output: %s)", fullPath, err, string(output))
-	}
-
-	candidates := make([]*decryptCandidate, 0)
-	lines := strings.Split(string(output), "\n")
-
-	for _, line := range lines {
-		filename := strings.TrimSpace(line)
-		if filename == "" {
-			continue
-		}
-
-		// Only process .bundle.tar files (encrypted bundles)
-		if !strings.HasSuffix(filename, ".bundle.tar") {
-			continue
-		}
-
-		remoteFile := fullPath + filename
-
-		manifest, err := inspectRcloneBundleManifest(ctx, remoteFile, logger)
-		if err != nil {
-			logger.Warning("Skipping rclone bundle %s: %v", filename, err)
-			continue
-		}
-
-		candidates = append(candidates, &decryptCandidate{
-			Manifest:    manifest,
-			Source:      sourceBundle,
-			BundlePath:  remoteFile,
-			DisplayBase: filepath.Base(manifest.ArchivePath),
-			IsRclone:    true,
-		})
-	}
-
-	return candidates, nil
-}
-
-func discoverBackupCandidates(logger *logging.Logger, root string) ([]*decryptCandidate, error) {
-	entries, err := restoreFS.ReadDir(root)
-	if err != nil {
-		return nil, fmt.Errorf("read directory %s: %w", root, err)
-	}
-
-	candidates := make([]*decryptCandidate, 0)
-	rawBases := make(map[string]struct{})
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		fullPath := filepath.Join(root, name)
-
-		switch {
-		case strings.HasSuffix(name, ".bundle.tar"):
-			manifest, err := inspectBundleManifest(fullPath)
-			if err != nil {
-				logger.Warning("Skipping bundle %s: %v", name, err)
-				continue
-			}
-			candidates = append(candidates, &decryptCandidate{
-				Manifest:    manifest,
-				Source:      sourceBundle,
-				BundlePath:  fullPath,
-				DisplayBase: filepath.Base(manifest.ArchivePath),
-			})
-		case strings.HasSuffix(name, ".metadata"):
-			baseName := strings.TrimSuffix(name, ".metadata")
-			if _, ok := rawBases[baseName]; ok {
-				continue
-			}
-			archivePath := filepath.Join(root, baseName)
-			if _, err := restoreFS.Stat(archivePath); err != nil {
-				continue
-			}
-			checksumPath := archivePath + ".sha256"
-			hasChecksum := true
-			if _, err := restoreFS.Stat(checksumPath); err != nil {
-				// Checksum missing - allow but warn
-				logger.Warning("Backup %s is missing .sha256 checksum file", baseName)
-				checksumPath = ""
-				hasChecksum = false
-			}
-			manifest, err := backup.LoadManifest(fullPath)
-			if err != nil {
-				logger.Warning("Skipping metadata %s: %v", name, err)
-				continue
-			}
-
-			// If checksum is missing from both file and manifest, warn user
-			if !hasChecksum && manifest.SHA256 == "" {
-				logger.Warning("Backup %s has no checksum verification available", baseName)
-			}
-
-			rawBases[baseName] = struct{}{}
-			candidates = append(candidates, &decryptCandidate{
-				Manifest:        manifest,
-				Source:          sourceRaw,
-				RawArchivePath:  archivePath,
-				RawMetadataPath: fullPath,
-				RawChecksumPath: checksumPath,
-				DisplayBase:     filepath.Base(manifest.ArchivePath),
-			})
-		}
-	}
-
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].Manifest.CreatedAt.After(candidates[j].Manifest.CreatedAt)
-	})
-
-	return candidates, nil
 }
 
 func inspectBundleManifest(bundlePath string) (*backup.Manifest, error) {
@@ -967,65 +830,6 @@ func moveFileSafe(src, dst string) error {
 		return err
 	}
 	return restoreFS.Remove(src)
-}
-
-func isLocalFilesystemPath(path string) bool {
-	clean := strings.TrimSpace(path)
-	if clean == "" {
-		return false
-	}
-	if strings.Contains(clean, ":") && !filepath.IsAbs(clean) {
-		return false
-	}
-	return filepath.IsAbs(clean)
-}
-
-// isRcloneRemote checks if a path is an rclone remote (contains ":" but is not an absolute filesystem path)
-func isRcloneRemote(path string) bool {
-	clean := strings.TrimSpace(path)
-	// Rclone remotes contain ":" and are not absolute filesystem paths
-	return clean != "" &&
-		strings.Contains(clean, ":") &&
-		!filepath.IsAbs(clean)
-}
-
-// buildCloudRemotePath combines CLOUD_REMOTE and CLOUD_REMOTE_PATH into a single
-// rclone reference, matching the semantics used by the cloud storage backend.
-// Examples:
-//
-//	CLOUD_REMOTE=gdrive:pbs-backups, CLOUD_REMOTE_PATH=server1  -> gdrive:pbs-backups/server1
-//	CLOUD_REMOTE=gdrive,           CLOUD_REMOTE_PATH=pbs-backups/server1 -> gdrive:pbs-backups/server1
-//	CLOUD_REMOTE=gdrive:pbs,       CLOUD_REMOTE_PATH=           -> gdrive:pbs
-func buildCloudRemotePath(cloudRemote, cloudRemotePath string) string {
-	base := strings.TrimSpace(cloudRemote)
-	if base == "" {
-		return ""
-	}
-
-	// If CLOUD_REMOTE is an absolute filesystem path (mount point),
-	// treat it as a local directory and combine using filepath.Join.
-	if filepath.IsAbs(base) && !strings.Contains(base, ":") {
-		prefix := strings.Trim(strings.TrimSpace(cloudRemotePath), "/")
-		if prefix == "" {
-			return filepath.Clean(base)
-		}
-		return filepath.Join(base, prefix)
-	}
-
-	parts := strings.SplitN(base, ":", 2)
-	remoteName := parts[0]
-	basePath := ""
-	if len(parts) == 2 {
-		basePath = strings.Trim(strings.TrimSpace(parts[1]), "/")
-	}
-
-	userPrefix := strings.Trim(strings.TrimSpace(cloudRemotePath), "/")
-	fullPath := strings.Trim(path.Join(basePath, userPrefix), "/")
-
-	if fullPath == "" {
-		return remoteName + ":"
-	}
-	return fmt.Sprintf("%s:%s", remoteName, fullPath)
 }
 
 func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, description string) (string, error) {

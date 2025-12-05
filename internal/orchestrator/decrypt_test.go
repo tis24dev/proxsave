@@ -38,9 +38,11 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 				CloudEnabled:     true,
 				CloudRemote:      "/backup/cloud",
 			},
-			wantCount: 3,
-			wantPaths: []string{"/backup/local", "/backup/secondary", "/backup/cloud"},
-			wantLabel: []string{"Local backups", "Secondary backups", "Cloud backups"},
+			// With pre-scan enabled, cloud is only shown if backups exist
+			// Since no actual backups exist, expect only local + secondary
+			wantCount: 2,
+			wantPaths: []string{"/backup/local", "/backup/secondary"},
+			wantLabel: []string{"Local backups", "Secondary backups"},
 		},
 		{
 			name: "only local path",
@@ -91,11 +93,13 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 			cfg: &config.Config{
 				BackupPath:   "/backup/local",
 				CloudEnabled: true,
-				CloudRemote:  "gdrive:backups", // rclone remote, NOW INCLUDED
+				CloudRemote:  "gdrive:backups", // rclone remote
 			},
-			wantCount: 2,
-			wantPaths: []string{"/backup/local", "gdrive:backups"},
-			wantLabel: []string{"Local backups", "Cloud backups (rclone)"},
+			// With pre-scan enabled, cloud is only shown if backups exist
+			// Since no actual backups exist, expect only local
+			wantCount: 1,
+			wantPaths: []string{"/backup/local"},
+			wantLabel: []string{"Local backups"},
 		},
 		{
 			name: "cloud with local absolute path included",
@@ -104,9 +108,11 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 				CloudEnabled: true,
 				CloudRemote:  "/mnt/cloud/backups",
 			},
-			wantCount: 2,
-			wantPaths: []string{"/backup/local", "/mnt/cloud/backups"},
-			wantLabel: []string{"Local backups", "Cloud backups"},
+			// With pre-scan enabled, cloud is only shown if backups exist
+			// Since no actual backups exist, expect only local
+			wantCount: 1,
+			wantPaths: []string{"/backup/local"},
+			wantLabel: []string{"Local backups"},
 		},
 		{
 			name: "secondary enabled but path empty",
@@ -137,9 +143,11 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 				CloudEnabled: true,
 				CloudRemote:  "/mnt/backups:foo",
 			},
-			wantCount: 2,
-			wantPaths: []string{"/backup/local", "/mnt/backups:foo"},
-			wantLabel: []string{"Local backups", "Cloud backups"},
+			// With pre-scan enabled, cloud is only shown if backups exist
+			// Since no actual backups exist, expect only local
+			wantCount: 1,
+			wantPaths: []string{"/backup/local"},
+			wantLabel: []string{"Local backups"},
 		},
 		{
 			name:      "all paths empty",

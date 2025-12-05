@@ -123,18 +123,17 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemotePath = "pbs-backups/server1"
 
 		opts := buildDecryptPathOptions(cfg)
-		if len(opts) != 3 {
-			t.Fatalf("len(options) = %d; want 3", len(opts))
+		// With pre-scan enabled, cloud option is only shown if backups exist
+		// Since no actual backups exist in test environment, expect only local + secondary
+		if len(opts) != 2 {
+			t.Fatalf("len(options) = %d; want 2 (local + secondary, cloud hidden due to no backups)", len(opts))
 		}
-		cloud := opts[2]
-		if cloud.Label != "Cloud backups (rclone)" {
-			t.Fatalf("cloud.Label = %q; want %q", cloud.Label, "Cloud backups (rclone)")
+		// Verify local and secondary are present
+		if opts[0].Path != "/local" {
+			t.Fatalf("opts[0].Path = %q; want /local", opts[0].Path)
 		}
-		if cloud.Path != "gdrive:pbs-backups/server1" {
-			t.Fatalf("cloud.Path = %q; want %q", cloud.Path, "gdrive:pbs-backups/server1")
-		}
-		if !cloud.IsRclone {
-			t.Fatalf("cloud.IsRclone = false; want true")
+		if opts[1].Path != "/secondary" {
+			t.Fatalf("opts[1].Path = %q; want /secondary", opts[1].Path)
 		}
 	})
 
@@ -145,15 +144,10 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemotePath = "server1"
 
 		opts := buildDecryptPathOptions(cfg)
-		if len(opts) != 3 {
-			t.Fatalf("len(options) = %d; want 3", len(opts))
-		}
-		cloud := opts[2]
-		if cloud.Path != "gdrive:pbs-backups/server1" {
-			t.Fatalf("cloud.Path = %q; want %q", cloud.Path, "gdrive:pbs-backups/server1")
-		}
-		if !cloud.IsRclone {
-			t.Fatalf("cloud.IsRclone = false; want true")
+		// With pre-scan enabled, cloud option is only shown if backups exist
+		// Since no actual backups exist in test environment, expect only local + secondary
+		if len(opts) != 2 {
+			t.Fatalf("len(options) = %d; want 2 (local + secondary, cloud hidden due to no backups)", len(opts))
 		}
 	})
 
@@ -164,19 +158,10 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemotePath = "server1"
 
 		opts := buildDecryptPathOptions(cfg)
-		if len(opts) != 3 {
-			t.Fatalf("len(options) = %d; want 3", len(opts))
-		}
-		cloud := opts[2]
-		wantPath := filepath.Join("/mnt/cloud/backups", "server1")
-		if cloud.Path != wantPath {
-			t.Fatalf("cloud.Path = %q; want %q", cloud.Path, wantPath)
-		}
-		if cloud.Label != "Cloud backups" {
-			t.Fatalf("cloud.Label = %q; want %q", cloud.Label, "Cloud backups")
-		}
-		if cloud.IsRclone {
-			t.Fatalf("cloud.IsRclone = true; want false")
+		// With pre-scan enabled, cloud option is only shown if backups exist
+		// Since no actual backups exist in test environment, expect only local + secondary
+		if len(opts) != 2 {
+			t.Fatalf("len(options) = %d; want 2 (local + secondary, cloud hidden due to no backups)", len(opts))
 		}
 	})
 
@@ -203,8 +188,10 @@ func TestBuildDecryptPathOptions_FullConfigOrder(t *testing.T) {
 	}
 
 	opts := buildDecryptPathOptions(cfg)
-	if len(opts) != 3 {
-		t.Fatalf("len(options) = %d; want 3 (local + secondary + cloud)", len(opts))
+	// With pre-scan enabled, cloud option is only shown if backups exist
+	// Since no actual backups exist in test environment, expect only local + secondary
+	if len(opts) != 2 {
+		t.Fatalf("len(options) = %d; want 2 (local + secondary, cloud hidden due to no backups)", len(opts))
 	}
 
 	if opts[0].Label != "Local backups" || opts[0].Path != "/local" {
@@ -212,9 +199,6 @@ func TestBuildDecryptPathOptions_FullConfigOrder(t *testing.T) {
 	}
 	if opts[1].Label != "Secondary backups" || opts[1].Path != "/secondary" {
 		t.Fatalf("opts[1] = %#v; want Label=Secondary backups, Path=/secondary", opts[1])
-	}
-	if opts[2].Label != "Cloud backups (rclone)" || opts[2].Path != "gdrive:pbs-backups/server1" || !opts[2].IsRclone {
-		t.Fatalf("opts[2] = %#v; want Label=Cloud backups (rclone), Path=gdrive:pbs-backups/server1, IsRclone=true", opts[2])
 	}
 }
 
@@ -239,6 +223,130 @@ func TestDiscoverRcloneBackups_ParseFilenames(t *testing.T) {
 
 	if count != expectedCount {
 		t.Errorf("Expected %d .bundle.tar files, got %d", expectedCount, count)
+	}
+}
+
+func TestDiscoverRcloneBackups_ListsAndParsesBundles(t *testing.T) {
+	tmpDir := t.TempDir()
+	bundlePath := filepath.Join(tmpDir, "pbs1-backup-20251205.tar.xz.bundle.tar")
+
+	// Create a minimal bundle with a single manifest entry.
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	tw := tar.NewWriter(f)
+
+	manifest := backup.Manifest{
+		ArchivePath:    "/var/backups/pbs-backup.tar.xz",
+		ProxmoxType:    "pve",
+		ProxmoxVersion: "7.4",
+		CreatedAt:      time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
+		EncryptionMode: "age",
+	}
+	data, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	hdr := &tar.Header{
+		Name: "backup/backup.tar.xz.metadata",
+		Mode: 0o600,
+		Size: int64(len(data)),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close bundle: %v", err)
+	}
+
+	// Fake rclone binary:
+	// - "rclone lsf <remote>" prints one .bundle.tar
+	// - "rclone cat <remote>/<file>" cats the bundle pointed by $BUNDLE_PATH
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+subcmd="$1"
+case "$subcmd" in
+  lsf)
+    # list a single bundle file (with valid backup pattern)
+    printf 'pbs1-backup-20251205.tar.xz.bundle.tar\n'
+    ;;
+  cat)
+    # stream the test bundle
+    cat "$BUNDLE_PATH"
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+
+	if err := os.Setenv("BUNDLE_PATH", bundlePath); err != nil {
+		t.Fatalf("set BUNDLE_PATH: %v", err)
+	}
+	defer os.Unsetenv("BUNDLE_PATH")
+
+	ctx := context.Background()
+	logger := logging.New(types.LogLevelDebug, false)
+
+	// Use a remote path with base directory; discoverRcloneBackups should
+	// normalize it to "<remote>/backup.bundle.tar" for the cat step.
+	candidates, err := discoverRcloneBackups(ctx, "gdrive:pbs-backups/server1", logger)
+	if err != nil {
+		t.Fatalf("discoverRcloneBackups() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("discoverRcloneBackups() returned %d candidates, want 1", len(candidates))
+	}
+	cand := candidates[0]
+	if cand.Manifest == nil {
+		t.Fatal("candidate Manifest is nil")
+	}
+	if cand.Manifest.ArchivePath != manifest.ArchivePath {
+		t.Fatalf("ArchivePath = %q; want %q", cand.Manifest.ArchivePath, manifest.ArchivePath)
+	}
+	if !cand.IsRclone {
+		t.Fatalf("IsRclone = false; want true")
+	}
+}
+
+func TestRemoveDecryptPathOption_RemovesMatchingOption(t *testing.T) {
+	options := []decryptPathOption{
+		{Label: "Local", Path: "/local", IsRclone: false},
+		{Label: "Secondary", Path: "/secondary", IsRclone: false},
+		{Label: "Cloud", Path: "gdrive:pbs-backups", IsRclone: true},
+	}
+
+	target := decryptPathOption{Label: "Secondary", Path: "/secondary", IsRclone: false}
+	got := removeDecryptPathOption(options, target)
+
+	if len(got) != 2 {
+		t.Fatalf("len(options) = %d; want 2 after removal", len(got))
+	}
+	if got[0].Label != "Local" || got[1].Label != "Cloud" {
+		t.Fatalf("unexpected options after removal: %+v", got)
+	}
+
+	// Removing an option that doesn't exist should be a no-op.
+	unchanged := removeDecryptPathOption(got, decryptPathOption{Label: "Missing", Path: "/missing"})
+	if len(unchanged) != len(got) {
+		t.Fatalf("expected no change when removing non-existent option")
 	}
 }
 
