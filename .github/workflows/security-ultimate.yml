@@ -93,6 +93,14 @@ jobs:
           sarif_file: gosec.sarif
 
       ########################################
+      # RESTORE GO 1.25 FOR CODEQL
+      ########################################
+      - name: Restore Go 1.25 for CodeQL
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      ########################################
       # CODEQL
       ########################################
       - name: Initialize CodeQL
