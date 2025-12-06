@@ -242,6 +242,14 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 func (t *TelegramNotifier) buildMessage(data *NotificationData) string {
 	var msg strings.Builder
 
+	// Tool name and version header
+	version := strings.TrimSpace(data.ScriptVersion)
+	if version != "" {
+		msg.WriteString(fmt.Sprintf("ProxSave - v%s\n\n", version))
+	} else {
+		msg.WriteString("ProxSave\n\n")
+	}
+
 	// Header with status and hostname
 	statusEmoji := GetStatusEmoji(data.Status)
 	msg.WriteString(fmt.Sprintf("%s Backup %s - %s\n\n",
@@ -292,6 +300,19 @@ func (t *TelegramNotifier) buildMessage(data *NotificationData) string {
 
 	// Exit code
 	msg.WriteString(fmt.Sprintf("🔢 Exit code: %d", data.ExitCode))
+
+	// Optional version update information
+	if data.NewVersionAvailable && strings.TrimSpace(data.LatestVersion) != "" {
+		msg.WriteString("\n\n⬆️ Update available\n")
+
+		current := strings.TrimSpace(data.CurrentVersion)
+		if current != "" {
+			msg.WriteString(fmt.Sprintf("New version: %s (current: %s)\n", data.LatestVersion, current))
+		} else {
+			msg.WriteString(fmt.Sprintf("New version: %s\n", data.LatestVersion))
+		}
+		msg.WriteString("Run 'proxsave --upgrade'\n")
+	}
 
 	return msg.String()
 }

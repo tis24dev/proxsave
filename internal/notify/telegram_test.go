@@ -161,6 +161,34 @@ func TestTelegramSendPersonal(t *testing.T) {
 	}
 }
 
+func TestTelegramBuildMessageIncludesUpdateInfo(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	notifier, err := NewTelegramNotifier(TelegramConfig{
+		Enabled:  true,
+		Mode:     TelegramModePersonal,
+		BotToken: "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+		ChatID:   "123456",
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error creating notifier: %v", err)
+	}
+
+	data := createTestNotificationData()
+	data.NewVersionAvailable = true
+	data.CurrentVersion = "0.0.0-dev"
+	data.LatestVersion = "0.11.3"
+
+	msg := notifier.buildMessage(data)
+
+	if !strings.Contains(msg, "Update available") {
+		t.Fatalf("expected message to contain update header, got: %s", msg)
+	}
+	if !strings.Contains(msg, "New version: 0.11.3 (current: 0.0.0-dev)") {
+		t.Fatalf("expected message to contain version details, got: %s", msg)
+	}
+}
+
 func TestTelegramSendCentralized(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	data := createTestNotificationData()
