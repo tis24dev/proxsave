@@ -182,10 +182,10 @@ func (f FilesystemType) IsNetworkFilesystem() bool {
 }
 
 // ShouldAutoExclude returns true if this filesystem should be automatically excluded
-// from ownership operations (incompatible filesystems like FAT32)
+// from ownership operations (incompatible filesystems like FAT32/CIFS)
 func (f FilesystemType) ShouldAutoExclude() bool {
 	switch f {
-	case FilesystemFAT32, FilesystemFAT, FilesystemExFAT, FilesystemNTFS:
+	case FilesystemFAT32, FilesystemFAT, FilesystemExFAT, FilesystemNTFS, FilesystemCIFS:
 		return true
 	default:
 		return false

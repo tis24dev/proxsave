@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -190,6 +193,284 @@ func TestLocalStorageApplyRetentionDeletesOldBackups(t *testing.T) {
 	}
 }
 
+func TestLocalStorageLoadMetadataPrefersBundle(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir, BundleAssociatedFiles: true}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	backupPath := filepath.Join(dir, "node-bundle-backup-20240101-010101.tar.zst")
+	if err := os.WriteFile(backupPath, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+	ts := time.Date(2024, 1, 1, 1, 1, 1, 0, time.UTC)
+	bundlePath := backupPath + ".bundle.tar"
+
+	manifest := backup.Manifest{
+		ArchiveSize:     1234,
+		SHA256:          "deadbeef",
+		CreatedAt:       ts,
+		CompressionType: "zstd",
+		ProxmoxType:     "qemu",
+		ScriptVersion:   "1.2.3",
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	header := &tar.Header{
+		Name: filepath.Base(backupPath) + ".metadata",
+		Mode: 0o600,
+		Size: int64(len(data)),
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	meta, err := local.loadMetadata(backupPath)
+	if err != nil {
+		t.Fatalf("loadMetadata() error = %v", err)
+	}
+	if meta.BackupFile != bundlePath {
+		t.Fatalf("BackupFile = %s, want %s", meta.BackupFile, bundlePath)
+	}
+	if !meta.Timestamp.Equal(ts) {
+		t.Fatalf("Timestamp = %v, want %v", meta.Timestamp, ts)
+	}
+	if meta.Size != manifest.ArchiveSize {
+		t.Fatalf("Size = %d, want %d", meta.Size, manifest.ArchiveSize)
+	}
+	if meta.Checksum != manifest.SHA256 {
+		t.Fatalf("Checksum = %s, want %s", meta.Checksum, manifest.SHA256)
+	}
+}
+
+func TestLocalStorageLoadMetadataFallsBackToSidecar(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	backupPath := filepath.Join(dir, "node-sidecar-backup-20240101-020202.tar.zst")
+	payload := []byte("payload")
+	if err := os.WriteFile(backupPath, payload, 0o600); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+	ts := time.Date(2024, 1, 2, 2, 2, 2, 0, time.UTC)
+	if err := os.Chtimes(backupPath, ts, ts); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	manifest := backup.Manifest{
+		ArchiveSize:     0,
+		SHA256:          "cafebabe",
+		CreatedAt:       time.Time{},
+		CompressionType: "zstd",
+		ProxmoxType:     "ct",
+		ScriptVersion:   "9.9.9",
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(backupPath+".metadata", data, 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	meta, err := local.loadMetadata(backupPath)
+	if err != nil {
+		t.Fatalf("loadMetadata() error = %v", err)
+	}
+	if !meta.Timestamp.Equal(ts) {
+		t.Fatalf("Timestamp = %v, want %v", meta.Timestamp, ts)
+	}
+	if meta.Size != int64(len(payload)) {
+		t.Fatalf("Size = %d, want %d", meta.Size, len(payload))
+	}
+	if meta.Checksum != manifest.SHA256 {
+		t.Fatalf("Checksum = %s, want %s", meta.Checksum, manifest.SHA256)
+	}
+	if meta.BackupFile != backupPath {
+		t.Fatalf("BackupFile = %s, want %s", meta.BackupFile, backupPath)
+	}
+}
+
+func TestLocalStorageLoadMetadataMissingFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	backupPath := filepath.Join(dir, "node-nometadata-backup-20240101-030303.tar.zst")
+	if err := os.WriteFile(backupPath, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+
+	if _, err := local.loadMetadata(backupPath); err == nil {
+		t.Fatal("loadMetadata() should fail when metadata file is missing")
+	}
+}
+
+func TestLocalStorageLoadMetadataFromBundleMissingEntry(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	bundlePath := filepath.Join(dir, "node-missing-backup-20240101-040404.tar.zst.bundle.tar")
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	header := &tar.Header{
+		Name: "unrelated.txt",
+		Mode: 0o600,
+		Size: 4,
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write([]byte("test")); err != nil {
+		t.Fatalf("write body: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	if _, err := local.loadMetadataFromBundle(bundlePath); err == nil {
+		t.Fatal("expected loadMetadataFromBundle() to fail when metadata entry missing")
+	}
+}
+
+func TestLocalStorageDeleteAssociatedLogRemovesFile(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	logDir := t.TempDir()
+	cfg := &config.Config{
+		BackupPath: baseDir,
+		LogPath:    logDir,
+	}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	backupPath := filepath.Join(baseDir, "node-backup-20240102-030405.tar.zst")
+	if err := os.WriteFile(backupPath, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+	logPath := filepath.Join(logDir, "backup-node-20240102-030405.log")
+	if err := os.WriteFile(logPath, []byte("log"), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	if !local.deleteAssociatedLog(backupPath) {
+		t.Fatalf("deleteAssociatedLog() = false, want true")
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("expected log %s to be removed, err=%v", logPath, err)
+	}
+	if local.deleteAssociatedLog(backupPath) {
+		t.Fatalf("deleteAssociatedLog() should return false when log already removed")
+	}
+}
+
+func TestLocalStorageCountLogFiles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil receiver", func(t *testing.T) {
+		var local *LocalStorage
+		if local.countLogFiles() != -1 {
+			t.Fatalf("nil receiver should return -1")
+		}
+	})
+
+	t.Run("nil config", func(t *testing.T) {
+		local := &LocalStorage{logger: newTestLogger()}
+		if local.countLogFiles() != -1 {
+			t.Fatalf("nil config should return -1")
+		}
+	})
+
+	t.Run("empty path", func(t *testing.T) {
+		local := &LocalStorage{
+			config: &config.Config{},
+			logger: newTestLogger(),
+		}
+		if local.countLogFiles() != 0 {
+			t.Fatalf("empty log path should return 0")
+		}
+	})
+
+	t.Run("counts files", func(t *testing.T) {
+		logDir := t.TempDir()
+		for i := 0; i < 2; i++ {
+			name := fmt.Sprintf("backup-node-%d.log", i)
+			if err := os.WriteFile(filepath.Join(logDir, name), []byte("log"), 0o600); err != nil {
+				t.Fatalf("write log: %v", err)
+			}
+		}
+		local := &LocalStorage{
+			config: &config.Config{LogPath: logDir},
+			logger: newTestLogger(),
+		}
+		if local.countLogFiles() != 2 {
+			t.Fatalf("countLogFiles() = %d, want 2", local.countLogFiles())
+		}
+	})
+
+	t.Run("glob error", func(t *testing.T) {
+		base := t.TempDir()
+		badDir := filepath.Join(base, "[invalid")
+		if err := os.MkdirAll(badDir, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		local := &LocalStorage{
+			config: &config.Config{LogPath: badDir},
+			logger: newTestLogger(),
+		}
+		if local.countLogFiles() != -1 {
+			t.Fatalf("expected -1 for glob error")
+		}
+	})
+}
+
 func TestSecondaryStorageStoreCopiesBackupAndAssociatedFiles(t *testing.T) {
 	t.Parallel()
 
@@ -323,6 +604,7 @@ func TestFilesystemTypeHelpers(t *testing.T) {
 		{FilesystemNTFS, false, false, true},
 		{FilesystemExFAT, false, false, true},
 		{FilesystemNFS4, false, true, false},
+		{FilesystemCIFS, false, true, true},
 		{FilesystemSMB, false, true, false},
 		{FilesystemFUSE, false, false, false},
 		{FilesystemUnknown, false, false, false},
