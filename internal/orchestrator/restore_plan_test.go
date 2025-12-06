@@ -61,3 +61,19 @@ func TestPlanRestorePBSCategories(t *testing.T) {
 		t.Fatalf("unexpected cluster restore requirement")
 	}
 }
+
+func TestPlanRestoreKeepsExportCategoriesFromFullSelection(t *testing.T) {
+	exportCat := Category{ID: "pve_config_export", ExportOnly: true}
+	normalCat := Category{ID: "network"}
+
+	plan := PlanRestore(nil, []Category{normalCat, exportCat}, SystemTypePVE, RestoreModeFull)
+	if len(plan.NormalCategories) != 1 || plan.NormalCategories[0].ID != "network" {
+		t.Fatalf("expected normal categories to keep network, got %+v", plan.NormalCategories)
+	}
+	if len(plan.ExportCategories) != 1 || plan.ExportCategories[0].ID != "pve_config_export" {
+		t.Fatalf("expected export categories to include pve_config_export, got %+v", plan.ExportCategories)
+	}
+	if plan.NeedsClusterRestore {
+		t.Fatalf("should not require cluster restore without cluster category")
+	}
+}

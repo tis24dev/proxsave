@@ -30,7 +30,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
-	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 const (
@@ -837,11 +836,7 @@ func run() int {
 	// Verify directories
 	logging.Step("Verifying directory structure")
 	checkDir := func(name, path string) {
-		if utils.DirExists(path) {
-			logging.Info("✓ %s exists: %s", name, path)
-		} else {
-			logging.Warning("✗ %s not found: %s", name, path)
-		}
+		ensureDirectoryExists(logger, name, path)
 	}
 
 	checkDir("Backup directory", cfg.BackupPath)

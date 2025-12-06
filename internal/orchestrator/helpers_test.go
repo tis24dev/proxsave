@@ -198,6 +198,24 @@ func TestPathMatchesCategory(t *testing.T) {
 			category: Category{Paths: []string{"./etc/network/"}},
 			want:     false,
 		},
+		{
+			name:     "hostname exact match",
+			filePath: "./etc/hostname",
+			category: Category{Paths: []string{"./etc/network/", "./etc/hostname"}},
+			want:     true,
+		},
+		{
+			name:     "hosts exact match",
+			filePath: "./etc/hosts",
+			category: Category{Paths: []string{"./etc/hosts", "./etc/resolv.conf"}},
+			want:     true,
+		},
+		{
+			name:     "resolv conf exact match without prefix",
+			filePath: "etc/resolv.conf",
+			category: Category{Paths: []string{"./etc/resolv.conf"}},
+			want:     true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -580,6 +598,7 @@ func TestGetCategoriesForMode(t *testing.T) {
 	available := []Category{
 		{ID: "pve_cluster", Type: CategoryTypePVE, IsAvailable: true},
 		{ID: "storage_pve", Type: CategoryTypePVE, IsAvailable: true},
+		{ID: "pve_config_export", Type: CategoryTypePVE, IsAvailable: true, ExportOnly: true},
 		{ID: "network", Type: CategoryTypeCommon, IsAvailable: true},
 		{ID: "ssh", Type: CategoryTypeCommon, IsAvailable: true},
 		{ID: "zfs", Type: CategoryTypeCommon, IsAvailable: true},
@@ -593,7 +612,7 @@ func TestGetCategoriesForMode(t *testing.T) {
 		systemType SystemType
 		wantCount  int
 	}{
-		{"full mode", RestoreModeFull, SystemTypePVE, 7},
+		{"full mode", RestoreModeFull, SystemTypePVE, 8},
 		{"custom mode returns empty", RestoreModeCustom, SystemTypePVE, 0},
 		{"storage mode PBS filters PBS", RestoreModeStorage, SystemTypePBS, 3},
 	}
@@ -604,6 +623,10 @@ func TestGetCategoriesForMode(t *testing.T) {
 			if len(result) != tt.wantCount {
 				t.Errorf("GetCategoriesForMode(%v, %v) returned %d categories; want %d",
 					tt.mode, tt.systemType, len(result), tt.wantCount)
+			}
+
+			if tt.mode == RestoreModeFull && !hasCategoryID(result, "pve_config_export") {
+				t.Errorf("Full mode should include export-only pve_config_export")
 			}
 		})
 	}

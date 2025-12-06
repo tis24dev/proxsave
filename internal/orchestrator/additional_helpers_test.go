@@ -371,6 +371,96 @@ func TestExtractSelectiveArchiveSelectiveExtraction(t *testing.T) {
 	}
 }
 
+func TestExtractSelectiveArchiveRestoresNetworkFiles(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	tmpDir := t.TempDir()
+	tarPath := filepath.Join(tmpDir, "network.tar")
+
+	file, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatalf("create tar file: %v", err)
+	}
+	tw := tar.NewWriter(file)
+
+	writeFile := func(name, content string) {
+		hdr := &tar.Header{
+			Name: name,
+			Mode: 0644,
+			Size: int64(len(content)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatalf("write content: %v", err)
+		}
+	}
+
+	writeFile("./etc/network/interfaces", "auto lo\niface lo inet loopback\n")
+	writeFile("./etc/hostname", "restored-host\n")
+	writeFile("./etc/hosts", "127.0.0.1   localhost restored-host\n")
+	writeFile("./etc/resolv.conf", "nameserver 1.1.1.1\n")
+	writeFile("./var/log/ignored.log", "should-not-restore\n")
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close tar file: %v", err)
+	}
+
+	dest := filepath.Join(tmpDir, "rootfs")
+	staleFiles := map[string]string{
+		"etc/network/interfaces": "old config",
+		"etc/hostname":           "old-host",
+		"etc/hosts":              "127.0.1.1  old-host",
+		"etc/resolv.conf":        "nameserver 8.8.8.8",
+	}
+	for rel, content := range staleFiles {
+		full := filepath.Join(dest, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir stale path: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o640); err != nil {
+			t.Fatalf("write stale file: %v", err)
+		}
+	}
+
+	categories := []Category{
+		{
+			ID:    "network",
+			Paths: []string{"./etc/network/", "./etc/hostname", "./etc/hosts", "./etc/resolv.conf"},
+		},
+	}
+
+	logPath, err := extractSelectiveArchive(context.Background(), tarPath, dest, categories, RestoreModeCustom, logger)
+	if err != nil {
+		t.Fatalf("extractSelectiveArchive error: %v", err)
+	}
+	if logPath == "" {
+		t.Fatalf("expected logPath to be set")
+	}
+
+	checkFile := func(rel, want string) {
+		data, err := os.ReadFile(filepath.Join(dest, rel))
+		if err != nil {
+			t.Fatalf("expected %s to exist: %v", rel, err)
+		}
+		if string(data) != want {
+			t.Fatalf("restored %s mismatch: got %q want %q", rel, string(data), want)
+		}
+	}
+
+	checkFile("etc/network/interfaces", "auto lo\niface lo inet loopback\n")
+	checkFile("etc/hostname", "restored-host\n")
+	checkFile("etc/hosts", "127.0.0.1   localhost restored-host\n")
+	checkFile("etc/resolv.conf", "nameserver 1.1.1.1\n")
+
+	if _, err := os.Stat(filepath.Join(dest, "var/log/ignored.log")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected var/log file extracted")
+	}
+}
+
 func TestResolveRegistryPathUsesEnvAndProcessAlive(t *testing.T) {
 	envPath := filepath.Join(t.TempDir(), "custom.json")
 	t.Setenv(defaultRegistryEnvVar, envPath)

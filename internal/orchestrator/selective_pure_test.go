@@ -50,3 +50,16 @@ func TestPathMatchesPatternVariants(t *testing.T) {
 		}
 	}
 }
+
+func TestAnalyzeArchivePathsDetectsNetworkHostname(t *testing.T) {
+	all := GetAllCategories()
+	paths := []string{
+		"./etc/hostname",
+		"./var/lib/ignore/me",
+	}
+
+	available := AnalyzeArchivePaths(paths, all)
+	if !hasCategoryID(available, "network") {
+		t.Fatalf("network category should be available when hostname is present")
+	}
+}

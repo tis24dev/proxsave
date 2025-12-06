@@ -20,6 +20,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 type ExecInfo struct {
@@ -1114,6 +1115,29 @@ func addPathExclusion(excludes []string, path string) []string {
 	excludes = append(excludes, clean)
 	excludes = append(excludes, filepath.ToSlash(filepath.Join(clean, "**")))
 	return excludes
+}
+
+// ensureDirectoryExists verifies that dirPath exists and attempts to create it when missing.
+// All events are logged using the provided logger.
+func ensureDirectoryExists(logger *logging.Logger, name, path string) {
+	if logger == nil {
+		return
+	}
+	dirPath := strings.TrimSpace(path)
+	if dirPath == "" {
+		return
+	}
+	if utils.DirExists(dirPath) {
+		logger.Info("✓ %s exists: %s", name, dirPath)
+		return
+	}
+
+	logger.Warning("✗ %s not found: %s", name, dirPath)
+	if err := os.MkdirAll(dirPath, defaultDirPerm); err != nil {
+		logger.Warning("Failed to create %s: %v", dirPath, err)
+		return
+	}
+	logger.Info("%s created: %s", name, dirPath)
 }
 
 func isLocalPath(path string) bool {

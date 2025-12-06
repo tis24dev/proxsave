@@ -334,6 +334,10 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		}
 	}
 
+	logger.Info("")
+	logger.Warning("⚠ SYSTEM REBOOT RECOMMENDED")
+	logger.Info("Reboot the node (or at least restart networking and system services) to ensure all restored configurations take effect cleanly.")
+
 	return nil
 }
 

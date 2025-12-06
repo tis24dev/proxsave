@@ -127,14 +127,14 @@ Four predefined modes provide common restoration scenarios, plus custom selectio
 
 ### 1. FULL Restore
 
-**Description**: Restore everything from backup (except export-only categories)
+**Description**: Restore everything from backup, including export-only categories (they are exported to a safe directory instead of being written directly)
 
 **Use Cases**:
 - Complete disaster recovery
 - Migrating to new hardware
 - Restoring after system failure
 
-**Categories Included**: All available categories except `pve_config_export`
+**Categories Included**: All available categories (export-only categories such as `pve_config_export` are extracted to the export directory for manual application)
 
 **Command Flow**:
 ```
@@ -549,6 +549,7 @@ Remove it manually if restore was successful: rm /tmp/proxmox-backup/restore_bac
 
 IMPORTANT: You may need to restart services for changes to take effect.
   PVE services were stopped/restarted during restore; verify status with: pvecm status
+REBOOT RECOMMENDED: Reboot the node (or at least restart networking and core services) so hostname/IP and service changes from the restore are fully applied.
 
 Recreating storage directories from /etc/pve/storage.cfg...
 Created: /mnt/backup/dump/
@@ -1337,7 +1338,7 @@ These configurations are included in every backup and can be restored using **th
    Select: 1
    ```
 
-4. **Select categories** (can choose Custom mode to include pve_config_export)
+4. **Select categories** (Custom mode only needed if you want to exclude components; FULL already includes the `pve_config_export` export)
 
 5. **After extraction completes**, you'll see:
    ```

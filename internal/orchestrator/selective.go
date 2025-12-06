@@ -296,8 +296,8 @@ func ShowCategorySelectionMenu(logger *logging.Logger, availableCategories []Cat
 func GetCategoriesForMode(mode RestoreMode, systemType SystemType, availableCategories []Category) []Category {
 	switch mode {
 	case RestoreModeFull:
-		// Return all available categories
-		return filterOutExportOnly(availableCategories)
+		// Return all available categories, including export-only ones (e.g., /etc/pve)
+		return append([]Category{}, availableCategories...)
 
 	case RestoreModeStorage:
 		// Return storage/datastore categories
