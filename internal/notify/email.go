@@ -132,18 +132,46 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	}
 
 	// Resolve recipient
-	recipient := e.config.Recipient
+	recipient := strings.TrimSpace(e.config.Recipient)
+	autoDetected := false
 	if recipient == "" {
 		e.logger.Debug("Email recipient not configured, attempting auto-detection...")
 		var err error
 		recipient, err = e.detectRecipient(ctx)
 		if err != nil {
 			e.logger.Warning("WARNING: Failed to detect email recipient: %v", err)
-			e.logger.Warning("WARNING: Using fallback recipient: root@localhost")
-			recipient = "root@localhost"
+			e.logger.Warning("WARNING: Email notification skipped because no valid recipient is available")
+			result.Success = false
+			result.Duration = time.Since(startTime)
+			result.Error = fmt.Errorf("no valid email recipient: %w", err)
+			return result, nil
 		} else {
 			e.logger.Debug("Auto-detected email recipient: %s", recipient)
+			autoDetected = true
 		}
+	}
+
+	recipient = strings.TrimSpace(recipient)
+	if recipient == "" {
+		e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
+		e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
+		result.Success = false
+		result.Duration = time.Since(startTime)
+		result.Error = fmt.Errorf("no valid email recipient configured")
+		return result, nil
+	}
+
+	if isRootRecipient(recipient) {
+		if autoDetected {
+			e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and will be rejected", recipient)
+		} else {
+			e.logger.Warning("WARNING: Configured email recipient %s belongs to root and will be rejected", recipient)
+		}
+		e.logger.Info("  Configure EMAIL_RECIPIENT with a non-root mailbox to enable notifications")
+		result.Success = false
+		result.Duration = time.Since(startTime)
+		result.Error = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", recipient)
+		return result, nil
 	}
 
 	// Validate recipient email format
@@ -261,6 +289,19 @@ func describeEmailMethod(method string) string {
 	default:
 		return method
 	}
+}
+
+// isRootRecipient detects if the provided recipient belongs to the root user (root@host).
+func isRootRecipient(recipient string) bool {
+	addr := strings.ToLower(strings.TrimSpace(recipient))
+	if addr == "" {
+		return false
+	}
+	parts := strings.SplitN(addr, "@", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	return parts[0] == "root"
 }
 
 // detectRecipient attempts to auto-detect the email recipient from Proxmox configuration
@@ -938,8 +979,8 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	// Build sendmail arguments
 	args := []string{"-t", "-oi"}
 
-	// Add verbose flag if debug logging is enabled
-	if e.logger.GetLevel() <= types.LogLevelDebug {
+	// Add verbose flag only when logger runs at debug level
+	if e.logger.GetLevel() >= types.LogLevelDebug {
 		args = append(args, "-v")
 		e.logger.Debug("Verbose mode enabled (-v flag)")
 	}

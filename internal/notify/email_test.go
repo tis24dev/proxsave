@@ -137,6 +137,70 @@ func TestEmailNotifierDetectRecipientUnknownType(t *testing.T) {
 	}
 }
 
+func TestIsRootRecipient(t *testing.T) {
+	tests := []struct {
+		addr string
+		want bool
+	}{
+		{"root@example.com", true},
+		{"ROOT@HOST", true},
+		{"admin@example.com", false},
+		{"", false},
+		{"user@root.local", false},
+		{"root@", true},
+	}
+	for _, tt := range tests {
+		if got := isRootRecipient(tt.addr); got != tt.want {
+			t.Fatalf("isRootRecipient(%q)=%v want %v", tt.addr, got, tt.want)
+		}
+	}
+}
+
+func TestEmailNotifierSendRejectsRootRecipient(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:        true,
+		DeliveryMethod: EmailDeliveryRelay,
+		Recipient:      "root@example.com",
+	}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() returned unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Fatalf("Send() should fail when recipient is root")
+	}
+	if result.Error == nil {
+		t.Fatalf("Send() should return an error describing the rejected recipient")
+	}
+}
+
+func TestEmailNotifierSendFailsWhenRecipientMissing(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:        true,
+		DeliveryMethod: EmailDeliveryRelay,
+	}, types.ProxmoxUnknown, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() returned unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Fatalf("Send() should fail when no recipient is available")
+	}
+	if result.Error == nil {
+		t.Fatalf("Send() should include an error when detection fails")
+	}
+}
+
 func mockCmdEnv(t *testing.T, name, output string, exitCode int) {
 	t.Helper()
 
