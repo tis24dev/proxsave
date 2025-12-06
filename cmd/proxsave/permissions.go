@@ -51,6 +51,10 @@ func applyBackupPermissions(cfg *config.Config, logger *logging.Logger) error {
 		if dir == "" {
 			continue
 		}
+		if strings.Contains(dir, ":") && !isLocalPath(dir) {
+			logger.Info("Permissions: skipping remote cloud path (ownership unsupported): %s", dir)
+			continue
+		}
 
 		info, err := os.Stat(dir)
 		if err != nil {

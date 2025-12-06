@@ -877,7 +877,12 @@ func run() int {
 	}
 	checkerConfig.CloudEnabled = cfg.CloudEnabled
 	if cfg.CloudEnabled && strings.TrimSpace(cfg.CloudRemote) != "" {
-		checkerConfig.CloudPath = cfg.CloudRemote
+		if isLocalPath(cfg.CloudRemote) {
+			checkerConfig.CloudPath = cfg.CloudRemote
+		} else {
+			checkerConfig.CloudPath = ""
+			logging.Info("Skipping cloud disk-space check: %s is a remote rclone path (no local mount detected)", cfg.CloudRemote)
+		}
 	} else {
 		checkerConfig.CloudPath = ""
 	}
