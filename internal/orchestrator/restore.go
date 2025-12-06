@@ -23,10 +23,10 @@ import (
 
 var ErrRestoreAborted = errors.New("restore workflow aborted by user")
 
-const (
+var (
 	serviceStopTimeout        = 45 * time.Second
 	serviceStartTimeout       = 30 * time.Second
-	serviceVerifyTimeout      = 5 * time.Second
+	serviceVerifyTimeout      = 30 * time.Second
 	serviceStatusCheckTimeout = 5 * time.Second
 	servicePollInterval       = 500 * time.Millisecond
 	serviceRetryDelay         = 500 * time.Millisecond
@@ -480,9 +480,10 @@ func stopServiceWithRetries(ctx context.Context, logger *logging.Logger, service
 		description string
 		args        []string
 	}{
-		{"stop", []string{"stop", "--no-block", service}},
-		{"retry stop", []string{"stop", "--no-block", service}},
-		{"aggressive stop", []string{"kill", service}},
+		{"stop (no-block)", []string{"stop", "--no-block", service}},
+		{"stop (blocking)", []string{"stop", service}},
+		{"aggressive stop", []string{"kill", "--signal=SIGTERM", "--kill-who=all", service}},
+		{"force kill", []string{"kill", "--signal=SIGKILL", "--kill-who=all", service}},
 	}
 
 	var lastErr error
@@ -505,6 +506,7 @@ func stopServiceWithRetries(ctx context.Context, logger *logging.Logger, service
 			lastErr = err
 			continue
 		}
+		resetFailedService(ctx, logger, service)
 		return nil
 	}
 
@@ -585,6 +587,17 @@ func waitForServiceInactive(ctx context.Context, logger *logging.Logger, service
 	}
 }
 
+func resetFailedService(ctx context.Context, logger *logging.Logger, service string) {
+	resetCtx, cancel := context.WithTimeout(ctx, serviceStatusCheckTimeout)
+	defer cancel()
+
+	if _, err := restoreCmd.Run(resetCtx, "systemctl", "reset-failed", service); err != nil {
+		if logger != nil {
+			logger.Debug("systemctl reset-failed %s ignored: %v", service, err)
+		}
+	}
+}
+
 func isServiceActive(ctx context.Context, service string, timeout time.Duration) (bool, error) {
 	if timeout <= 0 {
 		timeout = serviceStatusCheckTimeout
@@ -604,6 +617,9 @@ func isServiceActive(ctx context.Context, service string, timeout time.Duration)
 		msg = err.Error()
 	}
 	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "deactivating") || strings.Contains(lower, "activating") {
+		return true, nil
+	}
 	if strings.Contains(lower, "inactive") || strings.Contains(lower, "failed") || strings.Contains(lower, "dead") {
 		return false, nil
 	}

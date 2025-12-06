@@ -72,23 +72,30 @@ func TestAnalyzeArchivePaths_Empty(t *testing.T) {
 func TestStopPBSServices_CommandFails(t *testing.T) {
 	orig := restoreCmd
 	defer func() { restoreCmd = orig }()
+	origVerify := serviceVerifyTimeout
+	serviceVerifyTimeout = 100 * time.Millisecond
+	defer func() { serviceVerifyTimeout = origVerify }()
 
 	fake := &FakeCommandRunner{
 		Outputs: map[string][]byte{
-			"which systemctl":                    {},
-			"systemctl is-active proxmox-backup": []byte("inactive"),
+			"which systemctl":                          {},
+			"systemctl is-active proxmox-backup":       []byte("inactive"),
+			"systemctl is-active proxmox-backup-proxy": []byte("inactive"),
 		},
 		Errors: map[string]error{
-			"systemctl stop --no-block proxmox-backup-proxy": fmt.Errorf("fail-proxy"),
-			"systemctl kill proxmox-backup-proxy":            fmt.Errorf("kill-fail"),
-			"systemctl is-active proxmox-backup":             fmt.Errorf("inactive"),
+			"systemctl stop --no-block proxmox-backup-proxy":                          fmt.Errorf("fail-proxy"),
+			"systemctl stop proxmox-backup-proxy":                                     fmt.Errorf("fail-blocking"),
+			"systemctl kill --signal=SIGTERM --kill-who=all proxmox-backup-proxy":     fmt.Errorf("kill-term"),
+			"systemctl kill --signal=SIGKILL --kill-who=all proxmox-backup-proxy":     fmt.Errorf("kill-9"),
+			"systemctl is-active proxmox-backup":                                      fmt.Errorf("inactive"),
+			"systemctl is-active proxmox-backup-proxy":                                fmt.Errorf("inactive"),
 		},
 	}
 	restoreCmd = fake
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 	err := stopPBSServices(context.Background(), logger)
-	if err == nil || !strings.Contains(err.Error(), "kill-fail") {
+	if err == nil || !strings.Contains(err.Error(), "kill-9") {
 		t.Fatalf("expected failure, got %v", err)
 	}
 	if len(fake.Calls) == 0 || fake.Calls[0] != "which systemctl" {
@@ -117,8 +124,8 @@ func TestStopPBSServices_Succeeds(t *testing.T) {
 	if err := stopPBSServices(context.Background(), logger); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
-	if len(fake.Calls) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(fake.Calls))
+	if len(fake.Calls) != 7 {
+		t.Fatalf("expected 7 calls, got %d", len(fake.Calls))
 	}
 }
 
@@ -233,6 +240,7 @@ func TestStopPBSServices_AggressiveRetry(t *testing.T) {
 		},
 		Errors: map[string]error{
 			"systemctl stop --no-block proxmox-backup-proxy": fmt.Errorf("stop failed"),
+			"systemctl stop proxmox-backup-proxy":            fmt.Errorf("stop failed"),
 			"systemctl is-active proxmox-backup-proxy":       fmt.Errorf("inactive"),
 			"systemctl is-active proxmox-backup":             fmt.Errorf("inactive"),
 		},
@@ -246,13 +254,13 @@ func TestStopPBSServices_AggressiveRetry(t *testing.T) {
 
 	foundKill := false
 	for _, call := range fake.Calls {
-		if call == "systemctl kill proxmox-backup-proxy" {
+		if call == "systemctl kill --signal=SIGTERM --kill-who=all proxmox-backup-proxy" {
 			foundKill = true
 			break
 		}
 	}
 	if !foundKill {
-		t.Fatalf("expected systemctl kill proxmox-backup-proxy to be invoked, calls: %#v", fake.Calls)
+		t.Fatalf("expected systemctl kill --signal=SIGTERM --kill-who=all proxmox-backup-proxy to be invoked, calls: %#v", fake.Calls)
 	}
 }
 
@@ -290,6 +298,17 @@ func TestStartPBSServices_AggressiveRetry(t *testing.T) {
 func TestStopPBSServices_VerifyFailure(t *testing.T) {
 	orig := restoreCmd
 	defer func() { restoreCmd = orig }()
+	origVerify := serviceVerifyTimeout
+	origStatus := serviceStatusCheckTimeout
+	origPoll := servicePollInterval
+	serviceVerifyTimeout = 50 * time.Millisecond
+	serviceStatusCheckTimeout = 10 * time.Millisecond
+	servicePollInterval = 5 * time.Millisecond
+	defer func() {
+		serviceVerifyTimeout = origVerify
+		serviceStatusCheckTimeout = origStatus
+		servicePollInterval = origPoll
+	}()
 
 	fake := &FakeCommandRunner{
 		Outputs: map[string][]byte{
