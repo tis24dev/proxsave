@@ -524,7 +524,7 @@ func run() int {
 	// If the installed version is up to date, nothing is printed at INFO/WARNING level
 	// (only a DEBUG message is logged). If a newer version exists, a WARNING is emitted
 	// suggesting the use of --upgrade.
-	checkForUpdates(ctx, logger, toolVersion)
+	updateInfo := checkForUpdates(ctx, logger, toolVersion)
 
 	// Apply backup permissions (optional, Bash-compatible behavior)
 	if cfg.SetBackupPermissions {
@@ -777,6 +777,9 @@ func run() int {
 	orch.SetIdentity(serverIDValue, serverMACValue)
 	orch.SetProxmoxVersion(envInfo.Version)
 	orch.SetStartTime(startTime)
+	if updateInfo != nil {
+		orch.SetUpdateInfo(updateInfo.NewVersion, updateInfo.Current, updateInfo.Latest)
+	}
 
 	// Configure backup paths and compression
 	excludePatterns := append([]string(nil), cfg.ExcludePatterns...)
@@ -1617,19 +1620,28 @@ func disableNetworkFeaturesForRun(cfg *config.Config, bootstrap *logging.Bootstr
 
 }
 
+// UpdateInfo holds information about the version check result.
+type UpdateInfo struct {
+	NewVersion bool
+	Current    string
+	Latest     string
+}
+
 // checkForUpdates performs a best-effort check against the latest GitHub release.
 //   - If the latest version cannot be determined or the current version is already up to date,
 //     only a DEBUG log entry is written (no user-facing output).
 //   - If a newer version is available, a WARNING is logged suggesting the --upgrade command.
-func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion string) {
+//     Additionally, a populated *UpdateInfo is returned so that callers can propagate
+//     structured information into notifications/metrics.
+func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion string) *UpdateInfo {
 	if logger == nil {
-		return
+		return nil
 	}
 
 	currentVersion = strings.TrimSpace(currentVersion)
 	if currentVersion == "" {
 		logger.Debug("Update check skipped: current version is empty")
-		return
+		return nil
 	}
 
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -1638,21 +1650,37 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 	_, latestVersion, err := fetchLatestRelease(checkCtx)
 	if err != nil {
 		logger.Debug("Update check skipped (GitHub unreachable): %v", err)
-		return
+		return &UpdateInfo{
+			NewVersion: false,
+			Current:    currentVersion,
+		}
 	}
 
 	latestVersion = strings.TrimSpace(latestVersion)
 	if latestVersion == "" {
 		logger.Debug("Update check skipped: latest version from GitHub is empty")
-		return
+		return &UpdateInfo{
+			NewVersion: false,
+			Current:    currentVersion,
+		}
 	}
 
 	if !isNewerVersion(currentVersion, latestVersion) {
 		logger.Debug("Update check: current version (%s) is up to date (latest: %s)", currentVersion, latestVersion)
-		return
+		return &UpdateInfo{
+			NewVersion: false,
+			Current:    currentVersion,
+			Latest:     latestVersion,
+		}
 	}
 
 	logger.Warning("A newer ProxSave version is available %s (current %s): consider running 'proxsave --upgrade' to install the latest release.", latestVersion, currentVersion)
+
+	return &UpdateInfo{
+		NewVersion: true,
+		Current:    currentVersion,
+		Latest:     latestVersion,
+	}
 }
 
 // isNewerVersion returns true if latest is strictly newer than current,

@@ -38,7 +38,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 
 	reader := bufio.NewReader(os.Stdin)
-	candidate, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version)
+	candidate, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version, false)
 	if err != nil {
 		return err
 	}

@@ -86,10 +86,8 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 		fullPath = fullPath + ":"
 	}
 
-	if logger != nil {
-		logger.Debug("Cloud (rclone): listing backups under %s", fullPath)
-		logger.Debug("Cloud (rclone): executing: rclone lsf %s", fullPath)
-	}
+	logDebug(logger, "Cloud (rclone): listing backups under %s", fullPath)
+	logDebug(logger, "Cloud (rclone): executing: rclone lsf %s", fullPath)
 
 	// Use rclone lsf to list files inside the backup directory
 	cmd := exec.CommandContext(ctx, "rclone", "lsf", fullPath)
@@ -101,9 +99,7 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 	candidates := make([]*decryptCandidate, 0)
 	lines := strings.Split(string(output), "\n")
 
-	if logger != nil {
-		logger.Debug("Cloud (rclone): scanned %d entries from rclone lsf output", len(lines))
-	}
+	logDebug(logger, "Cloud (rclone): scanned %d entries from rclone lsf output", len(lines))
 
 	for _, line := range lines {
 		filename := strings.TrimSpace(line)
@@ -122,9 +118,7 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 		// Must contain backup indicator in filename
 		isBackup := strings.Contains(filename, "-backup-") || strings.HasPrefix(filename, "proxmox-backup-")
 		if !isBackup {
-			if logger != nil {
-				logger.Debug("Skipping non-backup bundle: %s", filename)
-			}
+			logDebug(logger, "Skipping non-backup bundle: %s", filename)
 			continue
 		}
 
@@ -137,7 +131,7 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 
 		manifest, err := inspectRcloneBundleManifest(ctx, remoteFile, logger)
 		if err != nil {
-			logger.Warning("Skipping rclone bundle %s: %v", filename, err)
+			logWarning(logger, "Skipping rclone bundle %s: %v", filename, err)
 			continue
 		}
 
@@ -148,15 +142,11 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 			DisplayBase: filepath.Base(manifest.ArchivePath),
 			IsRclone:    true,
 		})
-		if logger != nil {
-			logger.Debug("Cloud (rclone): accepted backup bundle: %s", filename)
-		}
+		logDebug(logger, "Cloud (rclone): accepted backup bundle: %s", filename)
 	}
 
-	if logger != nil {
-		logger.Debug("Cloud (rclone): scanned %d files, found %d valid backup bundles", len(lines), len(candidates))
-		logger.Debug("Cloud (rclone): discovered %d bundle candidate(s) in %s", len(candidates), fullPath)
-	}
+	logDebug(logger, "Cloud (rclone): scanned %d files, found %d valid backup bundles", len(lines), len(candidates))
+	logDebug(logger, "Cloud (rclone): discovered %d bundle candidate(s) in %s", len(candidates), fullPath)
 
 	return candidates, nil
 }
@@ -183,7 +173,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) ([]*decryptCa
 		case strings.HasSuffix(name, ".bundle.tar"):
 			manifest, err := inspectBundleManifest(fullPath)
 			if err != nil {
-				logger.Warning("Skipping bundle %s: %v", name, err)
+				logWarning(logger, "Skipping bundle %s: %v", name, err)
 				continue
 			}
 			candidates = append(candidates, &decryptCandidate{
@@ -205,19 +195,19 @@ func discoverBackupCandidates(logger *logging.Logger, root string) ([]*decryptCa
 			hasChecksum := true
 			if _, err := restoreFS.Stat(checksumPath); err != nil {
 				// Checksum missing - allow but warn
-				logger.Warning("Backup %s is missing .sha256 checksum file", baseName)
+				logWarning(logger, "Backup %s is missing .sha256 checksum file", baseName)
 				checksumPath = ""
 				hasChecksum = false
 			}
 			manifest, err := backup.LoadManifest(fullPath)
 			if err != nil {
-				logger.Warning("Skipping metadata %s: %v", name, err)
+				logWarning(logger, "Skipping metadata %s: %v", name, err)
 				continue
 			}
 
 			// If checksum is missing from both file and manifest, warn user
 			if !hasChecksum && manifest.SHA256 == "" {
-				logger.Warning("Backup %s has no checksum verification available", baseName)
+				logWarning(logger, "Backup %s has no checksum verification available", baseName)
 			}
 
 			rawBases[baseName] = struct{}{}
@@ -312,4 +302,18 @@ func buildCloudRemotePath(cloudRemote, cloudRemotePath string) string {
 		return remoteName + ":"
 	}
 	return fmt.Sprintf("%s:%s", remoteName, fullPath)
+}
+
+func logDebug(logger *logging.Logger, format string, args ...interface{}) {
+	if logger == nil {
+		return
+	}
+	logger.Debug(format, args...)
+}
+
+func logWarning(logger *logging.Logger, format string, args ...interface{}) {
+	if logger == nil {
+		return
+	}
+	logger.Warning(format, args...)
 }

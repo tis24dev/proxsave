@@ -160,6 +160,11 @@ type NotificationData struct {
 
 	// Script metadata
 	ScriptVersion string
+
+	// Version update information
+	NewVersionAvailable bool
+	CurrentVersion      string
+	LatestVersion       string
 }
 
 // LogCategory represents a normalized log issue classification.

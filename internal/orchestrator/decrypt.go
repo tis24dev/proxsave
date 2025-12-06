@@ -77,7 +77,7 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	}
 
 	reader := bufio.NewReader(os.Stdin)
-	_, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version)
+	_, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version, true)
 	if err != nil {
 		return err
 	}
@@ -170,7 +170,7 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	return RunDecryptWorkflowWithDeps(ctx, &deps, version)
 }
 
-func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger) (*decryptCandidate, error) {
+func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (*decryptCandidate, error) {
 	pathOptions := buildDecryptPathOptions(cfg)
 	if len(pathOptions) == 0 {
 		return nil, fmt.Errorf("no backup paths configured in backup.env")
@@ -237,31 +237,35 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 			continue
 		}
 
-		// Align CLI behavior with the TUI decrypt flow:
-		// only encrypted backups are valid candidates for decrypt.
-		encrypted := filterEncryptedCandidates(candidates)
-		if len(encrypted) == 0 {
-			logger.Warning("No encrypted backups found in %s – removing from source list", option.Path)
+		if requireEncrypted {
+			encrypted := filterEncryptedCandidates(candidates)
+			if len(encrypted) == 0 {
+				logger.Warning("No encrypted backups found in %s – removing from source list", option.Path)
+				if logger != nil {
+					logger.Debug("Removing backup source %q (%s) because all candidates are plain (non-encrypted)", option.Label, option.Path)
+				}
+				pathOptions = removeDecryptPathOption(pathOptions, option)
+				if len(pathOptions) == 0 {
+					return nil, fmt.Errorf("no usable backup sources available")
+				}
+				continue
+			}
+
 			if logger != nil {
-				logger.Debug("Removing backup source %q (%s) because all candidates are plain (non-encrypted)", option.Label, option.Path)
+				logger.Debug("Backup candidates after encryption filter: total=%d encrypted=%d", len(candidates), len(encrypted))
 			}
-			pathOptions = removeDecryptPathOption(pathOptions, option)
-			if len(pathOptions) == 0 {
-				return nil, fmt.Errorf("no usable backup sources available")
-			}
-			continue
-		}
 
-		if logger != nil {
-			logger.Debug("Backup candidates after encryption filter: total=%d encrypted=%d", len(candidates), len(encrypted))
+			candidates = encrypted
 		}
-
-		candidates = encrypted
 		selectedPath = option.Path
 		break
 	}
 
-	logger.Info("Found %d encrypted backup(s) in %s", len(candidates), selectedPath)
+	if requireEncrypted {
+		logger.Info("Found %d encrypted backup(s) in %s", len(candidates), selectedPath)
+	} else {
+		logger.Info("Found %d backup(s) in %s", len(candidates), selectedPath)
+	}
 	return promptCandidateSelection(ctx, reader, candidates)
 }
 
@@ -586,8 +590,8 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 	}, nil
 }
 
-func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string) (*decryptCandidate, *preparedBundle, error) {
-	candidate, err := selectDecryptCandidate(ctx, reader, cfg, logger)
+func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (*decryptCandidate, *preparedBundle, error) {
+	candidate, err := selectDecryptCandidate(ctx, reader, cfg, logger, requireEncrypted)
 	if err != nil {
 		return nil, nil, err
 	}
