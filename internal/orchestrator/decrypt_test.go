@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // ========================================
@@ -176,6 +179,93 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 				if tt.wantLabel != nil && options[i].Label != tt.wantLabel[i] {
 					t.Errorf("option[%d].Label = %q; want %q", i, options[i].Label, tt.wantLabel[i])
 				}
+			}
+		})
+	}
+}
+
+func TestSelectDecryptCandidateEncryptedFlag(t *testing.T) {
+	createBundleWithMode := func(dir, name, mode string) string {
+		path := filepath.Join(dir, name)
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatalf("create bundle: %v", err)
+		}
+		tw := tar.NewWriter(f)
+		manifest := backup.Manifest{
+			ArchivePath:    "/fake/archive.tar.xz",
+			EncryptionMode: mode,
+		}
+		data, err := json.Marshal(&manifest)
+		if err != nil {
+			t.Fatalf("marshal manifest: %v", err)
+		}
+		hdr := &tar.Header{
+			Name: "fake/backup.metadata",
+			Mode: 0o600,
+			Size: int64(len(data)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			t.Fatalf("write manifest: %v", err)
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatalf("close writer: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("close file: %v", err)
+		}
+		return path
+	}
+
+	tests := []struct {
+		name             string
+		mode             string
+		requireEncrypted bool
+		wantErr          bool
+	}{
+		{
+			name:             "require encrypted rejects plain",
+			mode:             "none",
+			requireEncrypted: true,
+			wantErr:          true,
+		},
+		{
+			name:             "restore accepts plain",
+			mode:             "none",
+			requireEncrypted: false,
+			wantErr:          false,
+		},
+		{
+			name:             "encrypted accepted",
+			mode:             "age",
+			requireEncrypted: true,
+			wantErr:          false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			cfg := &config.Config{BackupPath: tempDir}
+			bundleName := "test.tar.xz.bundle.tar"
+			createBundleWithMode(tempDir, bundleName, tt.mode)
+
+			reader := bufio.NewReader(strings.NewReader("1\n1\n"))
+			ctx := context.Background()
+			logger := logging.New(types.LogLevelDebug, false)
+
+			_, err := selectDecryptCandidate(ctx, reader, cfg, logger, tt.requireEncrypted)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("selectDecryptCandidate error: %v", err)
 			}
 		})
 	}

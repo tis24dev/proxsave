@@ -227,86 +227,12 @@ func TestDiscoverRcloneBackups_ParseFilenames(t *testing.T) {
 }
 
 func TestDiscoverRcloneBackups_ListsAndParsesBundles(t *testing.T) {
-	tmpDir := t.TempDir()
-	bundlePath := filepath.Join(tmpDir, "pbs1-backup-20251205.tar.xz.bundle.tar")
-
-	// Create a minimal bundle with a single manifest entry.
-	f, err := os.Create(bundlePath)
-	if err != nil {
-		t.Fatalf("create bundle: %v", err)
-	}
-	tw := tar.NewWriter(f)
-
-	manifest := backup.Manifest{
-		ArchivePath:    "/var/backups/pbs-backup.tar.xz",
-		ProxmoxType:    "pve",
-		ProxmoxVersion: "7.4",
-		CreatedAt:      time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
-		EncryptionMode: "age",
-	}
-	data, err := json.Marshal(&manifest)
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
-	hdr := &tar.Header{
-		Name: "backup/backup.tar.xz.metadata",
-		Mode: 0o600,
-		Size: int64(len(data)),
-	}
-	if err := tw.WriteHeader(hdr); err != nil {
-		t.Fatalf("write header: %v", err)
-	}
-	if _, err := tw.Write(data); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("close tar writer: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close bundle: %v", err)
-	}
-
-	// Fake rclone binary:
-	// - "rclone lsf <remote>" prints one .bundle.tar
-	// - "rclone cat <remote>/<file>" cats the bundle pointed by $BUNDLE_PATH
-	scriptPath := filepath.Join(tmpDir, "rclone")
-	script := `#!/bin/sh
-subcmd="$1"
-case "$subcmd" in
-  lsf)
-    # list a single bundle file (with valid backup pattern)
-    printf 'pbs1-backup-20251205.tar.xz.bundle.tar\n'
-    ;;
-  cat)
-    # stream the test bundle
-    cat "$BUNDLE_PATH"
-    ;;
-  *)
-    echo "unexpected subcommand: $subcmd" >&2
-    exit 1
-    ;;
-esac
-`
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake rclone: %v", err)
-	}
-
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-
-	if err := os.Setenv("BUNDLE_PATH", bundlePath); err != nil {
-		t.Fatalf("set BUNDLE_PATH: %v", err)
-	}
-	defer os.Unsetenv("BUNDLE_PATH")
-
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelDebug, false)
 
-	// Use a remote path with base directory; discoverRcloneBackups should
-	// normalize it to "<remote>/backup.bundle.tar" for the cat step.
+	manifest, cleanup := setupFakeRcloneListAndCat(t)
+	defer cleanup()
+
 	candidates, err := discoverRcloneBackups(ctx, "gdrive:pbs-backups/server1", logger)
 	if err != nil {
 		t.Fatalf("discoverRcloneBackups() error = %v", err)
@@ -323,6 +249,23 @@ esac
 	}
 	if !cand.IsRclone {
 		t.Fatalf("IsRclone = false; want true")
+	}
+}
+
+func TestDiscoverRcloneBackups_AllowsNilLogger(t *testing.T) {
+	ctx := context.Background()
+	manifest, cleanup := setupFakeRcloneListAndCat(t)
+	defer cleanup()
+
+	candidates, err := discoverRcloneBackups(ctx, "gdrive:pbs-backups/server1", nil)
+	if err != nil {
+		t.Fatalf("discoverRcloneBackups() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("discoverRcloneBackups() returned %d candidates, want 1", len(candidates))
+	}
+	if candidates[0].Manifest.ArchivePath != manifest.ArchivePath {
+		t.Fatalf("ArchivePath = %q; want %q", candidates[0].Manifest.ArchivePath, manifest.ArchivePath)
 	}
 }
 
@@ -426,5 +369,124 @@ func TestInspectRcloneBundleManifest_UsesRcloneCat(t *testing.T) {
 	}
 	if got.EncryptionMode != manifest.EncryptionMode {
 		t.Fatalf("EncryptionMode = %q; want %q", got.EncryptionMode, manifest.EncryptionMode)
+	}
+}
+
+// setupFakeRcloneListAndCat creates a temporary bundle and installs a fake
+// rclone binary that supports `lsf` and `cat`, emulating cloud discovery.
+// It returns the manifest embedded in the bundle and a cleanup function that
+// restores PATH and auxiliary env vars.
+func setupFakeRcloneListAndCat(t *testing.T) (backup.Manifest, func()) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	bundlePath := filepath.Join(tmpDir, "pbs1-backup-20251205.tar.xz.bundle.tar")
+
+	manifest := backup.Manifest{
+		ArchivePath:    "/var/backups/pbs-backup.tar.xz",
+		ProxmoxType:    "pve",
+		ProxmoxVersion: "7.4",
+		CreatedAt:      time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
+		EncryptionMode: "age",
+	}
+
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	data, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	hdr := &tar.Header{
+		Name: "backup/backup.tar.xz.metadata",
+		Mode: 0o600,
+		Size: int64(len(data)),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close bundle: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+subcmd="$1"
+case "$subcmd" in
+  lsf)
+    printf 'pbs1-backup-20251205.tar.xz.bundle.tar\n'
+    ;;
+  cat)
+    cat "$BUNDLE_PATH"
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	if err := os.Setenv("BUNDLE_PATH", bundlePath); err != nil {
+		t.Fatalf("set BUNDLE_PATH: %v", err)
+	}
+
+	cleanup := func() {
+		_ = os.Setenv("PATH", oldPath)
+		_ = os.Unsetenv("BUNDLE_PATH")
+	}
+
+	return manifest, cleanup
+}
+
+func TestDiscoverBackupCandidates_NoLoggerStillCollectsRawArtifacts(t *testing.T) {
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "config.tar.xz")
+	if err := os.WriteFile(archivePath, []byte("dummy"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	meta := backup.Manifest{
+		ArchivePath:    "/etc/pve/config.tar.xz",
+		ProxmoxType:    "pve",
+		CreatedAt:      time.Now(),
+		EncryptionMode: "none",
+	}
+	metaPath := archivePath + ".metadata"
+	data, err := json.Marshal(&meta)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(metaPath, data, 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	// Intentionally skip checksum to exercise warning path with nil logger.
+
+	candidates, err := discoverBackupCandidates(nil, tmpDir)
+	if err != nil {
+		t.Fatalf("discoverBackupCandidates() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("discoverBackupCandidates() returned %d candidates; want 1", len(candidates))
+	}
+	if candidates[0].RawArchivePath != archivePath {
+		t.Fatalf("RawArchivePath = %q; want %q", candidates[0].RawArchivePath, archivePath)
+	}
+	if candidates[0].RawChecksumPath != "" {
+		t.Fatalf("RawChecksumPath should be empty when checksum missing; got %q", candidates[0].RawChecksumPath)
 	}
 }

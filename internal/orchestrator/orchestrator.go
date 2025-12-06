@@ -154,6 +154,11 @@ type BackupStats struct {
 	ScriptVersion  string
 	TelegramStatus string
 	EmailStatus    string
+
+	// Version update information
+	NewVersionAvailable bool
+	CurrentVersion      string
+	LatestVersion       string
 }
 
 // Orchestrator coordinates the backup process using Go components
@@ -191,6 +196,11 @@ type Orchestrator struct {
 	serverMAC string
 
 	startTime time.Time
+
+	// Version update information (from CLI)
+	versionUpdateAvailable bool
+	updateCurrentVersion   string
+	updateLatestVersion    string
 }
 
 const tempDirCleanupAge = 24 * time.Hour
@@ -221,6 +231,18 @@ func (o *Orchestrator) logStep(step int, format string, args ...interface{}) {
 		message = fmt.Sprintf(format, args...)
 	}
 	o.logger.Step("%s", message)
+}
+
+// SetUpdateInfo records version update information discovered by the CLI layer.
+// This allows the orchestrator to propagate structured update data into BackupStats
+// and, transitively, into notifications/metrics.
+func (o *Orchestrator) SetUpdateInfo(newVersion bool, current, latest string) {
+	if o == nil {
+		return
+	}
+	o.versionUpdateAvailable = newVersion
+	o.updateCurrentVersion = strings.TrimSpace(current)
+	o.updateLatestVersion = strings.TrimSpace(latest)
 }
 
 func (o *Orchestrator) logGlobalRetentionPolicy() {
@@ -433,6 +455,14 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	// Get log file path from logger (more reliable than env var)
 	if logFile := o.logger.GetLogFilePath(); logFile != "" {
 		stats.LogFilePath = logFile
+	}
+
+	// Propagate version update information (if any) into stats so that
+	// downstream notification adapters can include it in their payloads.
+	if o.versionUpdateAvailable || o.updateCurrentVersion != "" || o.updateLatestVersion != "" {
+		stats.NewVersionAvailable = o.versionUpdateAvailable
+		stats.CurrentVersion = o.updateCurrentVersion
+		stats.LatestVersion = o.updateLatestVersion
 	}
 
 	metricsStats := stats

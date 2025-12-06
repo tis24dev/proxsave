@@ -114,6 +114,16 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 		"inline": false,
 	})
 
+	// Optional update information
+	if data.NewVersionAvailable && strings.TrimSpace(data.LatestVersion) != "" {
+		updateText := fmt.Sprintf("New version available: %s (current: %s)", data.LatestVersion, strings.TrimSpace(data.CurrentVersion))
+		fields = append(fields, map[string]interface{}{
+			"name":   "Update",
+			"value":  updateText,
+			"inline": false,
+		})
+	}
+
 	logger.Debug("Built %d fields for Discord embed", len(fields))
 
 	// Build embed
@@ -289,6 +299,17 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 		})
 	}
 
+	// Optional update section
+	if data.NewVersionAvailable && strings.TrimSpace(data.LatestVersion) != "" {
+		blocks = append(blocks, map[string]interface{}{
+			"type": "section",
+			"text": map[string]interface{}{
+				"type": "mrkdwn",
+				"text": fmt.Sprintf("*Update:*\nNew version available: %s (current: %s)", data.LatestVersion, strings.TrimSpace(data.CurrentVersion)),
+			},
+		})
+	}
+
 	// Footer context
 	blocks = append(blocks, map[string]interface{}{
 		"type": "context",
@@ -363,6 +384,14 @@ func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[stri
 		map[string]interface{}{"title": "Warnings", "value": fmt.Sprintf("%d", data.WarningCount)},
 		map[string]interface{}{"title": "Exit Code", "value": fmt.Sprintf("%d", data.ExitCode)},
 	)
+
+	// Optional update information
+	if data.NewVersionAvailable && strings.TrimSpace(data.LatestVersion) != "" {
+		facts = append(facts, map[string]interface{}{
+			"title": "Update",
+			"value": fmt.Sprintf("New version available: %s (current: %s)", data.LatestVersion, strings.TrimSpace(data.CurrentVersion)),
+		})
+	}
 
 	logger.Debug("Built %d facts for Teams FactSet", len(facts))
 
@@ -446,6 +475,11 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 		"server_id":      data.ServerID,
 		"server_mac":     data.ServerMAC,
 		"script_version": data.ScriptVersion,
+		"update": map[string]interface{}{
+			"new_version_available": data.NewVersionAvailable,
+			"current_version":       strings.TrimSpace(data.CurrentVersion),
+			"latest_version":        strings.TrimSpace(data.LatestVersion),
+		},
 
 		// Timestamp
 		"timestamp":     data.BackupDate.Unix(),

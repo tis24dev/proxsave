@@ -289,7 +289,10 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		TotalIssues:   totalIssues,
 		LogCategories: logCategories,
 
-		ScriptVersion: stats.ScriptVersion,
+		ScriptVersion:       stats.ScriptVersion,
+		NewVersionAvailable: stats.NewVersionAvailable,
+		CurrentVersion:      stats.CurrentVersion,
+		LatestVersion:       stats.LatestVersion,
 	}
 }
 
