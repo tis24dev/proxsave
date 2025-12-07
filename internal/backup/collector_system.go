@@ -145,6 +145,23 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 			"Network interfaces.d"); err != nil {
 			c.logger.Debug("No /etc/network/interfaces.d found")
 		}
+
+		// Additional network-related overrides frequently used on Proxmox hosts
+		extraNetworkFiles := []struct {
+			path string
+			desc string
+		}{
+			{"/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg", "Cloud-init network override"},
+			{"/etc/dnsmasq.d/lxc-vmbr1.conf", "LXC bridge DNSMasq configuration"},
+		}
+		for _, file := range extraNetworkFiles {
+			if err := c.safeCopyFile(ctx,
+				c.systemPath(file.path),
+				filepath.Join(c.tempDir, strings.TrimPrefix(file.path, "/")),
+				file.desc); err != nil {
+				c.logger.Debug("Failed to collect %s: %v", file.path, err)
+			}
+		}
 	}
 
 	// Hostname and hosts

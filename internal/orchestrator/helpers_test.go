@@ -216,6 +216,18 @@ func TestPathMatchesCategory(t *testing.T) {
 			category: Category{Paths: []string{"./etc/resolv.conf"}},
 			want:     true,
 		},
+		{
+			name:     "cloud-init network override match",
+			filePath: "./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg",
+			category: Category{Paths: []string{"./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg"}},
+			want:     true,
+		},
+		{
+			name:     "dnsmasq lxc bridge config match",
+			filePath: "./etc/dnsmasq.d/lxc-vmbr1.conf",
+			category: Category{Paths: []string{"./etc/dnsmasq.d/lxc-vmbr1.conf"}},
+			want:     true,
+		},
 	}
 
 	for _, tt := range tests {

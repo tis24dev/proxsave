@@ -104,7 +104,7 @@ Restore operations are organized into **15+ categories** that group related conf
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
-| `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf` |
+| `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
 | `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/proxmox-backup/proxy.pem` |
 | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
 | `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |

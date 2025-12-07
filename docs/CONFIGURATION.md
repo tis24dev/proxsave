@@ -953,6 +953,8 @@ SYSTEM_ROOT_PREFIX=                # Optional alternate root for system collecti
 ```bash
 # Network configuration
 BACKUP_NETWORK_CONFIGS=true        # /etc/network/interfaces, /etc/hosts
+# Also captures /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+# and /etc/dnsmasq.d/lxc-vmbr1.conf for LXC bridge overrides
 
 # APT sources
 BACKUP_APT_SOURCES=true            # /etc/apt/sources.list*
