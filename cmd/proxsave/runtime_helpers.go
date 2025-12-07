@@ -1150,3 +1150,16 @@ func isLocalPath(path string) bool {
 	}
 	return filepath.IsAbs(clean)
 }
+
+// extractRemoteName extracts the remote name from CLOUD_REMOTE.
+// For "gdrive" returns "gdrive", for "gdrive:path" returns "gdrive".
+func extractRemoteName(cloudRemote string) string {
+	remote := strings.TrimSpace(cloudRemote)
+	if remote == "" {
+		return ""
+	}
+	if idx := strings.Index(remote, ":"); idx != -1 {
+		return remote[:idx]
+	}
+	return remote
+}

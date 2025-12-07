@@ -59,14 +59,14 @@ The legacy Bash version is available in two locations:
 ### Option 1: Fast Bash Install (One-Liner)
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
 
 **What it does**:
 1. Downloads `install.sh` from main branch
 2. Asks for confirmation to install legacy Bash version
 3. Downloads v0.7.4-bash release
-4. Extracts to `/opt/proxmox-backup/`
+4. Extracts to `/opt/proxsave/`
 5. Runs installation script (creates symlinks, cron jobs)
 6. Prompts to edit `env/backup.env` configuration
 
@@ -93,7 +93,7 @@ mkdir proxmox-backup
 **Step 4: Extract the script files**
 
 ```bash
-tar xzf v0.7.4-bash.tar.gz -C proxmox-backup --strip-components=1 && rm v0.7.4-bash.tar.gz
+tar xzf v0.7.4-bash.tar.gz -C proxsave --strip-components=1 && rm v0.7.4-bash.tar.gz
 ```
 
 **Step 5: Enter the script directory**
@@ -125,7 +125,7 @@ nano env/backup.env
 ### Directory Structure (Bash Version)
 
 ```
-/opt/proxmox-backup/
+/opt/proxsave/
 ├── script/
 │   └── proxmox-backup.sh      # Main Bash script (20,370 lines)
 ├── env/
@@ -187,7 +187,7 @@ If you're currently using the Bash version, see the complete migration guide:
 
 **Summary**:
 1. Build Go version
-2. Run migration tool: `./build/proxmox-backup --env-migration`
+2. Run migration tool: `./build/proxsave --env-migration`
 3. Review semantic changes (2 variables)
 4. Test with `--dry-run`
 5. Run first Go backup
@@ -266,13 +266,13 @@ The legacy Bash version should **only be used** if you have:
 ## FAQ
 
 **Q: Can I use both Bash and Go versions on the same server?**
-A: Yes! They can coexist in `/opt/proxmox-backup/`. The Bash version uses `script/proxmox-backup.sh`, Go uses `build/proxmox-backup`. However, **avoid running both simultaneously**.
+A: Yes! They can coexist in `/opt/proxsave/`. The Bash version uses `script/proxmox-backup.sh`, Go uses `build/proxsave`. However, **avoid running both simultaneously**.
 
 **Q: Will my Bash backups work with Go version?**
 A: Yes! Both use the same backup directory and file format (TAR archives). Go can read existing Bash backups for retention purposes.
 
 **Q: Can I restore Bash backups with Go restore command?**
-A: Yes! The restore archive format is compatible. Use `./build/proxmox-backup --restore` to restore any TAR archive.
+A: Yes! The restore archive format is compatible. Use `./build/proxsave --restore` to restore any TAR archive.
 
 **Q: Is Bash version encryption compatible with Go?**
 A: No. Bash version uses different encryption methods. Go uses AGE encryption. You'll need to decrypt Bash backups with their original method.
@@ -288,11 +288,11 @@ crontab -e
 # (delete the proxmox-backup line)
 
 # Remove directory
-rm -rf /opt/proxmox-backup/
+rm -rf /opt/proxsave/
 
 # Or keep backups
-mv /opt/proxmox-backup/backup /opt/backups-archive
-rm -rf /opt/proxmox-backup/
+mv /opt/proxsave/backup /opt/backups-archive
+rm -rf /opt/proxsave/
 ```
 
 **Q: Can I switch from Bash to Go without reinstalling?**
@@ -302,7 +302,7 @@ A: Yes! Follow the [Migration Guide](MIGRATION_GUIDE.md). The Go binary can be b
 A: GitHub branch `old`: https://github.com/tis24dev/proxsave/tree/old
 
 **Q: Will my configuration work in Go version?**
-A: Most variables (~70) are identical. Some (~16) were renamed. Use the migration tool to convert automatically: `./build/proxmox-backup --env-migration`
+A: Most variables (~70) are identical. Some (~16) were renamed. Use the migration tool to convert automatically: `./build/proxsave --env-migration`
 
 ---
 

@@ -1,6 +1,6 @@
 # Encryption Guide
 
-Complete guide to AGE encryption for Proxmox Backup Go.
+Complete guide to AGE encryption for Proxsave.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ Complete guide to AGE encryption for Proxmox Backup Go.
 
 ## Overview
 
-Proxmox Backup Go uses **[age](https://age-encryption.org/)** (actually, rage) for encryption. AGE is a modern, simple, and secure file encryption format designed to replace GPG for basic use cases.
+Proxsave uses **[age](https://age-encryption.org/)** (actually, rage) for encryption. AGE is a modern, simple, and secure file encryption format designed to replace GPG for basic use cases.
 
 **Key characteristics**:
 - **Streaming encryption**: Backups encrypted as they're created (no plaintext on disk)
@@ -53,7 +53,7 @@ Proxmox Backup Go uses **[age](https://age-encryption.org/)** (actually, rage) f
 **Option A: Interactive wizard** (recommended for beginners):
 
 ```bash
-./build/proxmox-backup --newkey
+./build/proxsave --newkey
 ```
 
 **Option B: Manual generation** with standard AGE tools:
@@ -85,7 +85,7 @@ AGE_IDENTITY_FILE=configs/age-keys.txt  # Optional, only needed for decrypt/rest
 ### 3. Run Encrypted Backup
 
 ```bash
-./build/proxmox-backup
+./build/proxsave
 # Backup will be encrypted with .age extension
 ```
 
@@ -93,10 +93,10 @@ AGE_IDENTITY_FILE=configs/age-keys.txt  # Optional, only needed for decrypt/rest
 
 ```bash
 # Interactive decryption
-./build/proxmox-backup --decrypt
+./build/proxsave --decrypt
 
 # Automatic decryption (requires AGE_IDENTITY_FILE set)
-./build/proxmox-backup --decrypt --auto
+./build/proxsave --decrypt --auto
 ```
 
 ---
@@ -129,7 +129,7 @@ age1scrypt1qyqgzjxy...
 The `--newkey` wizard guides you through key generation:
 
 ```bash
-./build/proxmox-backup --newkey
+./build/proxsave --newkey
 ```
 
 **Wizard flow**:
@@ -237,7 +237,7 @@ Recipient 3/3:
 ### Backup Execution
 
 ```bash
-./build/proxmox-backup
+./build/proxsave
 ```
 
 **Encryption flow**:
@@ -299,7 +299,7 @@ The `--decrypt` command decrypts backups for inspection or manual recovery.
 ### Interactive Decryption
 
 ```bash
-./build/proxmox-backup --decrypt
+./build/proxsave --decrypt
 ```
 
 **Workflow**:
@@ -363,7 +363,7 @@ Decrypting backup.20240115_023000.tar.age...
 Next steps:
   - Inspect:  tar -tf /tmp/backup.20240115_023000.tar.xz
   - Extract:  tar -xf /tmp/backup.20240115_023000.tar.xz -C /path/to/extract
-  - Restore:  ./build/proxmox-backup --restore
+  - Restore:  ./build/proxsave --restore
 ```
 
 ### Automatic Decryption
@@ -375,10 +375,10 @@ For scripted operations, use `--auto` flag:
 export AGE_IDENTITY_FILE=configs/age-keys.txt
 
 # Decrypt latest backup automatically
-./build/proxmox-backup --decrypt --auto
+./build/proxsave --decrypt --auto
 
 # Decrypt specific backup
-./build/proxmox-backup --decrypt --auto --backup=backup.20240115_023000.tar.age
+./build/proxsave --decrypt --auto --backup=backup.20240115_023000.tar.age
 ```
 
 **Use cases**:
@@ -396,7 +396,7 @@ Encrypted backups can be restored using the standard `--restore` command. The de
 
 ```bash
 # Interactive restore (decrypts automatically)
-./build/proxmox-backup --restore
+./build/proxsave --restore
 ```
 
 **Restore workflow with encryption**:
@@ -439,7 +439,7 @@ Rotating encryption keys periodically improves security (recommended annually or
 
 ```bash
 # Run key rotation wizard
-./build/proxmox-backup --newkey
+./build/proxsave --newkey
 ```
 
 **Process**:
@@ -480,13 +480,13 @@ AGE_IDENTITY_FILE=configs/age-keys.txt  # Now points to 2025 key
 **Step 5: Run first backup with new key**
 
 ```bash
-./build/proxmox-backup
+./build/proxsave
 ```
 
 **Step 6: Verify decryption works**
 
 ```bash
-./build/proxmox-backup --decrypt --auto
+./build/proxsave --decrypt --auto
 ```
 
 **⚠️ Important**:
@@ -512,7 +512,7 @@ grep "# public key:" configs/age-keys-2025.txt | cut -d: -f2 | tr -d ' ' >> conf
 
 ```bash
 # Backups now encrypted for BOTH 2024 and 2025 keys
-./build/proxmox-backup
+./build/proxsave
 ```
 
 **Step 3: After retention period, remove old key**
@@ -555,7 +555,7 @@ Periodically verify backups are decryptable:
 
 ```bash
 # Test decryption (creates temporary file)
-./build/proxmox-backup --decrypt --auto
+./build/proxsave --decrypt --auto
 
 # Verify archive integrity
 tar -tzf /tmp/backup.*.tar.xz > /dev/null && echo "✓ Archive valid"
@@ -695,19 +695,19 @@ AGE_RECIPIENT=age1abc123...,age1def456...  # Comma-separated
 
 ```bash
 # Generate new keys
-./build/proxmox-backup --newkey
+./build/proxsave --newkey
 
 # Run encrypted backup
-./build/proxmox-backup
+./build/proxsave
 
 # Decrypt backup (interactive)
-./build/proxmox-backup --decrypt
+./build/proxsave --decrypt
 
 # Decrypt backup (automatic)
-./build/proxmox-backup --decrypt --auto
+./build/proxsave --decrypt --auto
 
 # Restore from encrypted backup
-./build/proxmox-backup --restore
+./build/proxsave --restore
 
 # Verify encryption status
 grep "Encrypted: true" backup/manifest.*.json

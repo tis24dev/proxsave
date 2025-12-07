@@ -139,6 +139,8 @@ func GetAllCategories() []Category {
 				"./etc/hosts",
 				"./etc/hostname",
 				"./etc/resolv.conf",
+				"./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg",
+				"./etc/dnsmasq.d/lxc-vmbr1.conf",
 			},
 		},
 		{

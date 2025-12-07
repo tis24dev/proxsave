@@ -216,6 +216,18 @@ func TestPathMatchesCategory(t *testing.T) {
 			category: Category{Paths: []string{"./etc/resolv.conf"}},
 			want:     true,
 		},
+		{
+			name:     "cloud-init network override match",
+			filePath: "./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg",
+			category: Category{Paths: []string{"./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg"}},
+			want:     true,
+		},
+		{
+			name:     "dnsmasq lxc bridge config match",
+			filePath: "./etc/dnsmasq.d/lxc-vmbr1.conf",
+			category: Category{Paths: []string{"./etc/dnsmasq.d/lxc-vmbr1.conf"}},
+			want:     true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -446,28 +458,84 @@ func TestGetSystemTypeString(t *testing.T) {
 // extensions.go tests
 // ========================================
 
-func TestBuildCloudLogDestination(t *testing.T) {
+func TestResolveCloudPath(t *testing.T) {
 	tests := []struct {
-		name     string
-		basePath string
-		fileName string
-		want     string
+		name        string
+		path        string
+		cloudRemote string
+		want        string
 	}{
-		{"empty base", "", "backup.log", "backup.log"},
-		{"remote only colon", "remote:", "backup.log", "remote:backup.log"},
-		{"remote with path", "remote:/logs", "backup.log", "remote:/logs/backup.log"},
-		{"remote with trailing slash", "remote:/logs/", "backup.log", "remote:/logs/backup.log"},
-		{"local path", "/var/log", "backup.log", "/var/log/backup.log"},
-		{"spaces trimmed", "  remote:/logs  ", "backup.log", "remote:/logs/backup.log"},
-		{"empty filename", "remote:/logs", "", "remote:/logs/"},
+		// New style WITH leading slash
+		{"new style simple", "/logs", "gdrive", "gdrive:/logs"},
+		{"new style subpath", "/proxmox-backup/log", "gdrive", "gdrive:/proxmox-backup/log"},
+		{"new style with leading slash stripped", "/logs", "gdrive", "gdrive:/logs"},
+		{"new style remote has legacy path", "/logs", "gdrive:base", "gdrive:/logs"},
+
+		// New style WITHOUT leading slash (rclone accepts both formats)
+		{"new style no leading slash", "logs", "gdrive", "gdrive:logs"},
+		{"new style subpath no slash", "rclone_gdrive/logs", "gdrive", "gdrive:rclone_gdrive/logs"},
+		{"new style deep path no slash", "proxmox-backup/log", "gdrive", "gdrive:proxmox-backup/log"},
+
+		// Legacy style (path contains ":")
+		{"legacy full path", "gdrive:/logs", "other", "gdrive:/logs"},
+		{"legacy remote only", "gdrive:", "other", "gdrive:"},
+		{"legacy different remote", "b2:/backups", "gdrive", "b2:/backups"},
+
+		// Edge cases
+		{"empty path", "", "gdrive", ""},
+		{"empty remote", "/logs", "", "/logs"},
+		{"spaces trimmed", "  /logs  ", "gdrive", "gdrive:/logs"},
+		{"spaces in remote", "/logs", "  gdrive  ", "gdrive:/logs"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildCloudLogDestination(tt.basePath, tt.fileName)
+			got := resolveCloudPath(tt.path, tt.cloudRemote)
 			if got != tt.want {
-				t.Errorf("buildCloudLogDestination(%q, %q) = %q; want %q",
-					tt.basePath, tt.fileName, got, tt.want)
+				t.Errorf("resolveCloudPath(%q, %q) = %q; want %q",
+					tt.path, tt.cloudRemote, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildCloudLogDestination(t *testing.T) {
+	tests := []struct {
+		name        string
+		basePath    string
+		fileName    string
+		cloudRemote string
+		want        string
+	}{
+		// Legacy format (basePath contains ":")
+		{"empty base", "", "backup.log", "gdrive", "backup.log"},
+		{"remote only colon", "remote:", "backup.log", "other", "remote:backup.log"},
+		{"remote with path", "remote:/logs", "backup.log", "other", "remote:/logs/backup.log"},
+		{"remote with trailing slash", "remote:/logs/", "backup.log", "other", "remote:/logs/backup.log"},
+		{"spaces trimmed", "  remote:/logs  ", "backup.log", "other", "remote:/logs/backup.log"},
+		{"empty filename", "remote:/logs", "", "other", "remote:/logs/"},
+
+		// New format WITH leading slash (basePath without ":", uses cloudRemote)
+		{"new style path", "/logs", "backup.log", "gdrive", "gdrive:/logs/backup.log"},
+		{"new style root", "/", "backup.log", "gdrive", "gdrive:backup.log"},
+		{"new style subpath", "/proxmox-backup/log", "backup.log", "gdrive", "gdrive:/proxmox-backup/log/backup.log"},
+		{"new style with legacy remote", "/logs", "backup.log", "gdrive:base", "gdrive:/logs/backup.log"},
+
+		// New format WITHOUT leading slash (rclone accepts both formats)
+		{"new style no leading slash", "logs", "backup.log", "gdrive", "gdrive:logs/backup.log"},
+		{"new style subpath no slash", "rclone_gdrive/logs", "backup.log", "gdrive", "gdrive:rclone_gdrive/logs/backup.log"},
+
+		// Edge cases
+		{"empty remote new style", "/logs", "backup.log", "", "/logs/backup.log"},
+		{"empty all", "", "", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildCloudLogDestination(tt.basePath, tt.fileName, tt.cloudRemote)
+			if got != tt.want {
+				t.Errorf("buildCloudLogDestination(%q, %q, %q) = %q; want %q",
+					tt.basePath, tt.fileName, tt.cloudRemote, got, tt.want)
 			}
 		})
 	}

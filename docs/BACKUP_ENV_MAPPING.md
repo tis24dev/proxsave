@@ -116,9 +116,9 @@ SECONDARY_BACKUP_PATH      = RENAMED(SECONDARY_PATH) ✅
 *Require manual value conversion*
 
 CLOUD_BACKUP_PATH = SEMANTIC CHANGE → CLOUD_REMOTE_PATH ⚠️
-  **Bash**: `CLOUD_BACKUP_PATH="/proxmox-backup/backup"` (full path)
-  **Go**: `CLOUD_REMOTE_PATH="proxmox-backup"` (prefix that combines with CLOUD_REMOTE)
-  **Migration**: remove the remote name and trailing path from the bash variable
+  **Bash**: `CLOUD_BACKUP_PATH="/proxsave/backup"` (full path)
+  **Go**: `CLOUD_REMOTE="GoogleDrive"` (remote name) + `CLOUD_REMOTE_PATH="/proxsave/backup"` (path within that remote)
+  **Migration**: remove the remote name from the bash variable and move the path into `CLOUD_REMOTE_PATH`
 
 STORAGE_WARNING_THRESHOLD_SECONDARY = SEMANTIC CHANGE → MIN_DISK_SPACE_SECONDARY_GB ⚠️
   **Bash**: `STORAGE_WARNING_THRESHOLD_SECONDARY="90"` (90% used = warning)

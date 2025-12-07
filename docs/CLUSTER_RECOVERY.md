@@ -21,7 +21,7 @@ Advanced disaster recovery procedures for Proxmox VE cluster database restoratio
 
 ## Overview
 
-This guide covers **advanced cluster database recovery** using proxmox-backup-go's restore functionality. These procedures should be performed by experienced administrators familiar with Proxmox VE clustering.
+This guide covers **advanced cluster database recovery** using proxsave's restore functionality. These procedures should be performed by experienced administrators familiar with Proxmox VE clustering.
 
 ### When to Use This Guide
 
@@ -174,7 +174,7 @@ cp backup/etc/pve/storage.cfg /etc/pve/storage.cfg
 **□ 1. Verify Backup Integrity**
 ```bash
 # List available backups
-ls -lh /opt/proxmox-backup/backups/*.bundle.tar
+ls -lh /opt/proxsave/backups/*.bundle.tar
 
 # Check backup date matches expected
 # Verify encryption status
@@ -291,11 +291,11 @@ pvecm status
 #### Step 2: Run Restore Workflow
 
 ```bash
-# Navigate to proxmox-backup-go directory
-cd /opt/proxmox-backup-go
+# Navigate to proxsave directory
+cd /opt/proxsave-go
 
 # Run restore
-./build/proxmox-backup --restore
+./build/proxsave --restore
 ```
 
 #### Step 3: Interactive Selection
@@ -334,7 +334,7 @@ Type "RESTORE" to proceed: RESTORE
 
 ```
 Creating safety backup...
-✓ Safety backup: /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz
+✓ Safety backup: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 
 Preparing system for cluster database restore:
   Stopping pve-cluster... ✓
@@ -401,7 +401,7 @@ ls -la /etc/pve/lxc/
 # pct start <ctid>
 
 # 3. Remove safety backup (after thorough verification)
-rm /tmp/proxmox-backup/restore_backup_*.tar.gz
+rm /tmp/proxsave/restore_backup_*.tar.gz
 
 # 4. Update backups schedule if needed
 cat /etc/pve/vzdump.cron
@@ -450,8 +450,8 @@ hostname
 # reboot
 
 # 2. Run restore (STORAGE or FULL mode)
-cd /opt/proxmox-backup-go
-./build/proxmox-backup --restore
+cd /opt/proxsave-go
+./build/proxsave --restore
 # Select: [2] STORAGE only
 # This restores cluster config, storage, ZFS
 
@@ -730,8 +730,8 @@ pvesm status
 
 ```bash
 # Use CUSTOM mode to restore only specific categories
-cd /opt/proxmox-backup-go
-./build/proxmox-backup --restore
+cd /opt/proxsave-go
+./build/proxsave --restore
 
 # Select: [4] CUSTOM selection
 # Toggle:
@@ -814,8 +814,8 @@ pvecm add <working-node-ip>
 
 ```bash
 # 1. Create fresh backup
-cd /opt/proxmox-backup-go
-./build/proxmox-backup
+cd /opt/proxsave-go
+./build/proxsave
 
 # 2. Document configuration
 pvecm status > /root/old-cluster-status.txt
@@ -823,7 +823,7 @@ pvesm status > /root/old-storage-status.txt
 ip addr show > /root/old-network-config.txt
 
 # 3. Copy backup to new hardware
-scp /opt/proxmox-backup/backups/*.bundle.tar root@new-hardware:/root/
+scp /opt/proxsave/backups/*.bundle.tar root@new-hardware:/root/
 
 # 4. Shut down (but keep around for emergencies)
 shutdown -h now
@@ -849,16 +849,16 @@ reboot
 #### Step 2: Restore on New Hardware
 
 ```bash
-# 1. Copy proxmox-backup-go tool to new hardware
-# scp -r /opt/proxmox-backup-go root@new-hardware:/opt/
+# 1. Copy proxsave tool to new hardware
+# scp -r /opt/proxsave-go root@new-hardware:/opt/
 
 # 2. Place backup in expected location
-mkdir -p /opt/proxmox-backup/backups
-mv /root/*.bundle.tar /opt/proxmox-backup/backups/
+mkdir -p /opt/proxsave/backups
+mv /root/*.bundle.tar /opt/proxsave/backups/
 
 # 3. Run restore
-cd /opt/proxmox-backup-go
-./build/proxmox-backup --restore
+cd /opt/proxsave-go
+./build/proxsave --restore
 
 # Select: [2] STORAGE only (or FULL)
 # Type "RESTORE" to confirm
@@ -983,8 +983,8 @@ vi /etc/hosts
 reboot
 
 # 4. Run restore normally
-cd /opt/proxmox-backup-go
-./build/proxmox-backup --restore
+cd /opt/proxsave-go
+./build/proxsave --restore
 ```
 
 ### Option B: Update Configuration After Restore
@@ -995,8 +995,8 @@ cd /opt/proxmox-backup-go
 
 ```bash
 # Run restore (will work despite hostname mismatch)
-cd /opt/proxmox-backup-go
-./build/proxmox-backup --restore
+cd /opt/proxsave-go
+./build/proxsave --restore
 
 # Select: [2] STORAGE only
 # Continue even though hostname differs
@@ -1383,7 +1383,7 @@ journalctl -xe -u pve-cluster
 ```bash
 # Rollback to safety backup
 systemctl stop pve-cluster
-tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
 systemctl start pve-cluster
 ```
 
@@ -1583,7 +1583,7 @@ umount -f /etc/pve 2>/dev/null
 fusermount -uz /etc/pve 2>/dev/null
 
 # 3. Restore from safety backup
-tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
 
 # 4. Restart services
 systemctl start pve-cluster

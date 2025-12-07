@@ -268,7 +268,7 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 	// Copy to cloud storage
 	if o.cfg.CloudEnabled {
 		if cloudBase := strings.TrimSpace(o.cfg.CloudLogPath); cloudBase != "" {
-			destination := buildCloudLogDestination(cloudBase, logFileName)
+			destination := buildCloudLogDestination(cloudBase, logFileName, o.cfg.CloudRemote)
 			o.logger.Debug("Copying log to cloud: %s", destination)
 
 			if err := o.copyLogToCloud(ctx, logFilePath, destination); err != nil {
@@ -282,10 +282,37 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 	return nil
 }
 
+// resolveCloudPath normalizes a cloud path by prepending the remote name if not present.
+// Supports both new style (/path) and legacy style (remote:/path).
+func resolveCloudPath(path, cloudRemote string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	// If it already contains ":", it's a legacy full path - use as-is
+	if strings.Contains(path, ":") {
+		return path
+	}
+	// Otherwise, use CLOUD_REMOTE
+	remote := strings.TrimSpace(cloudRemote)
+	if remote == "" {
+		return path // fallback, shouldn't happen
+	}
+	// Extract just the remote name (without any legacy path component)
+	if idx := strings.Index(remote, ":"); idx != -1 {
+		remote = remote[:idx]
+	}
+	// Keep the path as-is (including leading slash if present)
+	return remote + ":" + path
+}
+
 // copyLogToCloud copies a log file to cloud storage using rclone
 func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath string) error {
+	// Normalize path using CLOUD_REMOTE if needed
+	destPath = resolveCloudPath(destPath, o.cfg.CloudRemote)
+
 	if !strings.Contains(destPath, ":") {
-		return fmt.Errorf("cloud log path must include an rclone remote (es. remote:/logs): %s", destPath)
+		return fmt.Errorf("CLOUD_LOG_PATH requires CLOUD_REMOTE to be set: %s", destPath)
 	}
 
 	client, err := storage.NewCloudStorage(o.cfg, o.logger)
@@ -296,8 +323,9 @@ func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath 
 	return client.UploadToRemotePath(ctx, sourcePath, destPath, true)
 }
 
-func buildCloudLogDestination(basePath, fileName string) string {
-	base := strings.TrimSpace(basePath)
+func buildCloudLogDestination(basePath, fileName, cloudRemote string) string {
+	// Normalize path using cloudRemote if basePath doesn't contain ":"
+	base := resolveCloudPath(basePath, cloudRemote)
 	if base == "" {
 		return fileName
 	}

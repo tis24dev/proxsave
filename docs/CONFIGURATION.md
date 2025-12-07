@@ -29,12 +29,12 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 
 ## Configuration File Location
 
-**Default**: `/opt/proxmox-backup/configs/backup.env`
+**Default**: `/opt/proxsave/configs/backup.env`
 **Custom**: Specify with `--config` flag
 
 ```bash
 # Use custom config file
-./build/proxmox-backup --config /path/to/my-backup.env
+./build/proxsave --config /path/to/my-backup.env
 ```
 
 ---
@@ -214,7 +214,7 @@ MIN_DISK_SPACE_CLOUD_GB=1          # Cloud storage (not enforced for remote)
 
 ```bash
 # Base directory for all operations
-BASE_DIR=/opt/proxmox-backup
+BASE_DIR=/opt/proxsave
 
 # Lock file directory
 LOCK_PATH=${BASE_DIR}/lock
@@ -421,17 +421,17 @@ SECONDARY_PATH=\\192.168.0.10\backup    # ✗ WRONG - Windows path
 # Enable cloud storage
 CLOUD_ENABLED=false                # true | false
 
-# rclone remote (either NAME or NAME:base/path)
-# Style 1 (remote name + prefix):
-CLOUD_REMOTE=gdrive                # remote name from `rclone config`
-CLOUD_REMOTE_PATH=pbs-backups      # base path inside remote
+# rclone remote (recommended: remote NAME + path via CLOUD_REMOTE_PATH)
+CLOUD_REMOTE=GoogleDrive                   # remote name from `rclone config`
+CLOUD_REMOTE_PATH=/proxsave/backup         # folder path inside the remote
 
-# Style 2 (remote with base path):
-# CLOUD_REMOTE=gdrive:pbs-backups  # equivalent to the combination above
-# CLOUD_REMOTE_PATH=               # optional extra prefix (e.g., "server1")
+# Cloud log path (same remote, optional)
+CLOUD_LOG_PATH=/proxsave/log               # leave empty to disable log uploads
 
-# Cloud log path (full remote path)
-CLOUD_LOG_PATH=                    # e.g., "gdrive:/pbs-logs"
+# Legacy compatibility (still supported):
+# CLOUD_REMOTE=GoogleDrive:/proxsave/backup        # legacy combined syntax
+# CLOUD_REMOTE_PATH=server1                        # extra suffix if needed
+# CLOUD_LOG_PATH=GoogleDrive:/proxsave/log         # legacy explicit remote for logs
 
 # Upload mode
 CLOUD_UPLOAD_MODE=parallel         # sequential | parallel
@@ -507,7 +507,7 @@ Quick comparison to help you choose the right storage configuration:
 | Feature | SECONDARY_PATH | CLOUD_REMOTE (rclone) |
 |---------|----------------|----------------------|
 | **Path Type** | Filesystem-mounted paths only | Network addresses via rclone |
-| **Valid Examples** | `/mnt/nas-backup`<br>`/media/usb-drive`<br>`/backup/secondary` | `gdrive:backups`<br>`s3:my-bucket`<br>`minio:pbs` |
+| **Valid Examples** | `/mnt/nas-backup`<br>`/media/usb-drive`<br>`/backup/secondary` | `CLOUD_REMOTE=GoogleDrive` + `CLOUD_REMOTE_PATH=/backups`<br>`CLOUD_REMOTE=b2` + `CLOUD_REMOTE_PATH=/pbs-prod`<br>`CLOUD_REMOTE=minio` + `CLOUD_REMOTE_PATH=/pbs` |
 | **Invalid Examples** | ❌ `192.168.0.10/folder`<br>❌ `//server/share`<br>❌ `\\192.168.0.10\backup` | N/A (handles network directly) |
 | **Network Storage** | Must mount first via NFS/CIFS/SMB | Direct access via rclone config |
 | **Setup Complexity** | Simple (native Go copy) | Moderate (requires rclone config) |
@@ -515,7 +515,7 @@ Quick comparison to help you choose the right storage configuration:
 | **Speed** | Fast (local filesystem I/O) | Depends on network/cloud |
 | **Use Case** | - Local USB drives<br>- Pre-mounted NAS shares<br>- Additional local disks | - Cloud storage (GDrive, S3, B2)<br>- LAN servers (MinIO, S3)<br>- Remote storage without mounting |
 | **Failure Behavior** | Non-critical (warns, continues) | Non-critical (warns, continues) |
-| **Setup Example** | `sudo mount 192.168.0.10:/share /mnt/nas`<br>`SECONDARY_PATH=/mnt/nas` | `rclone config` (create "minio" remote)<br>`CLOUD_REMOTE=minio:backups` |
+| **Setup Example** | `sudo mount 192.168.0.10:/share /mnt/nas`<br>`SECONDARY_PATH=/mnt/nas` | `rclone config` (create "minio" remote)<br>`CLOUD_REMOTE=minio` + `CLOUD_REMOTE_PATH=/backups` |
 
 ### Decision Guide
 
@@ -953,6 +953,8 @@ SYSTEM_ROOT_PREFIX=                # Optional alternate root for system collecti
 ```bash
 # Network configuration
 BACKUP_NETWORK_CONFIGS=true        # /etc/network/interfaces, /etc/hosts
+# Also captures /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+# and /etc/dnsmasq.d/lxc-vmbr1.conf for LXC bridge overrides
 
 # APT sources
 BACKUP_APT_SOURCES=true            # /etc/apt/sources.list*
@@ -979,13 +981,13 @@ BACKUP_FIREWALL_RULES=true         # iptables, nftables
 BACKUP_INSTALLED_PACKAGES=true     # dpkg -l, apt-mark showmanual
 
 # Custom script directory
-BACKUP_SCRIPT_DIR=true             # /opt/proxmox-backup directory
+BACKUP_SCRIPT_DIR=true             # /opt/proxsave directory
 
 # Critical system files
 BACKUP_CRITICAL_FILES=true         # /etc/fstab, /etc/hostname, /etc/resolv.conf
 
 # SSH keys
-BACKUP_SSH_KEYS=true               # /root/.ssh
+BACKUP_SSH_KEYS=true               # /root/.ssh, /etc/ssh
 
 # ZFS configuration
 BACKUP_ZFS_CONFIG=true             # /etc/zfs, /etc/hostid, zpool cache & properties

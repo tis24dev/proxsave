@@ -123,11 +123,11 @@ You don't have to do anything else.
 For example, on tag `v1.6.0` you will see:
 
 ```
-proxmox-backup_v1.6.0_linux_amd64
-proxmox-backup_v1.6.0_linux_amd64.tar.gz
-proxmox-backup_v1.6.0_linux_arm64
-proxmox-backup_v1.6.0_linux_arm64.tar.gz
-proxmox-backup_v1.6.0_linux_amd64.sbom.cdx.json
+proxsave_v1.6.0_linux_amd64
+proxsave_v1.6.0_linux_amd64.tar.gz
+proxsave_v1.6.0_linux_arm64
+proxsave_v1.6.0_linux_arm64.tar.gz
+proxsave_v1.6.0_linux_amd64.sbom.cdx.json
 SHA256SUMS
 ```
 
@@ -176,7 +176,7 @@ These rules will be used in the future by the autotag system (currently disabled
 If present, users can install your tool with:
 
 ```
-curl -s https://raw.githubusercontent.com/tis24dev/proxmox-backup/main/install.sh | bash
+curl -s https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh | bash
 ```
 
 (Optional, but recommended for user convenience.)

@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Every Proxmox Backup Go release binary includes cryptographically signed provenance attestations that prove:
+Every Proxsave release binary includes cryptographically signed provenance attestations that prove:
 - The binary was built from this repository
 - The binary was built using GitHub Actions
 - The binary has not been tampered with after the build
@@ -65,21 +65,21 @@ This is the simplest method to verify a single downloaded binary.
 
 ```bash
 # Download the binary for your platform
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
 
 # Verify the attestation
-gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
+gh attestation verify proxsave-linux-amd64 --repo tis24dev/proxsave
 ```
 
 **Expected output:**
 ```
-Loaded digest sha256:abc123... for file://proxmox-backup-linux-amd64
+Loaded digest sha256:abc123... for file://proxsave-linux-amd64
 Loaded 1 attestation from GitHub API
 ✓ Verification succeeded!
 
 sha256:abc123... was attested by:
 REPO                        PREDICATE_TYPE                  WORKFLOW
-tis24dev/proxmox-backup     https://slsa.dev/provenance/v1  .github/workflows/release.yml@refs/tags/v0.9.0
+tis24dev/proxsave     https://slsa.dev/provenance/v1  .github/workflows/release.yml@refs/tags/v0.9.0
 ```
 
 ### Method 2: Verify All Artifacts
@@ -89,11 +89,11 @@ Verify all binaries downloaded in a directory.
 ```bash
 # Download all the binaries you need
 cd ~/downloads
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-darwin-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-darwin-amd64
 
 # Verify all together
-gh attestation verify proxmox-backup-* --repo tis24dev/proxmox-backup
+gh attestation verify proxsave-* --repo tis24dev/proxsave
 ```
 
 ### Method 3: Verification with JSON Output
@@ -101,8 +101,8 @@ gh attestation verify proxmox-backup-* --repo tis24dev/proxmox-backup
 For integrating verification into scripts or for detailed analysis.
 
 ```bash
-gh attestation verify proxmox-backup-linux-amd64 \
-  --repo tis24dev/proxmox-backup \
+gh attestation verify proxsave-linux-amd64 \
+  --repo tis24dev/proxsave \
   --format json | jq
 ```
 
@@ -120,7 +120,7 @@ gh attestation verify proxmox-backup-linux-amd64 \
       "_type": "https://in-toto.io/Statement/v1",
       "subject": [
         {
-          "name": "proxmox-backup-linux-amd64",
+          "name": "proxsave-linux-amd64",
           "digest": {
             "sha256": "abc123..."
           }
@@ -149,14 +149,14 @@ Useful for air-gapped environments or for archiving attestations.
 
 ```bash
 # Download the attestation as a bundle
-gh attestation download proxmox-backup-linux-amd64 \
-  --repo tis24dev/proxmox-backup \
+gh attestation download proxsave-linux-amd64 \
+  --repo tis24dev/proxsave \
   --output attestation.jsonl
 
 # Verify offline using the bundle
-gh attestation verify proxmox-backup-linux-amd64 \
+gh attestation verify proxsave-linux-amd64 \
   --bundle attestation.jsonl \
-  --repo tis24dev/proxmox-backup
+  --repo tis24dev/proxsave
 ```
 
 ## Complete Practical Examples
@@ -169,26 +169,26 @@ set -e
 
 # 1. Download the binary
 echo "Downloading binary..."
-wget -q https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
+wget -q https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
 
 # 2. Verify the attestation
 echo "Verifying attestation..."
-if gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup; then
+if gh attestation verify proxsave-linux-amd64 --repo tis24dev/proxsave; then
     echo "✓ Attestation verified successfully!"
 else
     echo "✗ Attestation verification failed!"
-    rm proxmox-backup-linux-amd64
+    rm proxsave-linux-amd64
     exit 1
 fi
 
 # 3. Make executable
-chmod +x proxmox-backup-linux-amd64
+chmod +x proxsave-linux-amd64
 
 # 4. Move to /usr/local/bin
-sudo mv proxmox-backup-linux-amd64 /usr/local/bin/proxmox-backup
+sudo mv proxsave-linux-amd64 /usr/local/bin/proxsave
 
 echo "Installation complete!"
-proxmox-backup --version
+proxsave --version
 ```
 
 ### Example 2: macOS - Verification with Homebrew Alternative
@@ -198,24 +198,24 @@ proxmox-backup --version
 set -e
 
 VERSION="v0.9.0"
-BINARY="proxmox-backup-darwin-$(uname -m)"
+BINARY="proxsave-darwin-$(uname -m)"
 URL="https://github.com/tis24dev/proxsave/releases/download/${VERSION}/${BINARY}"
 
 # Download
 echo "Downloading ${BINARY}..."
-curl -L -o proxmox-backup "${URL}"
+curl -L -o proxsave "${URL}"
 
 # Verify
 echo "Verifying provenance..."
-gh attestation verify proxmox-backup --repo tis24dev/proxmox-backup || {
+gh attestation verify proxsave --repo tis24dev/proxsave || {
     echo "Verification failed!"
-    rm proxmox-backup
+    rm proxsave
     exit 1
 }
 
 # Install
-chmod +x proxmox-backup
-sudo mv proxmox-backup /usr/local/bin/
+chmod +x proxsave
+sudo mv proxsave /usr/local/bin/
 echo "Installed successfully!"
 ```
 
@@ -224,15 +224,15 @@ echo "Installed successfully!"
 ```powershell
 # Download binary
 $version = "v0.9.0"
-$binary = "proxmox-backup-windows-amd64.exe"
+$binary = "proxsave-windows-amd64.exe"
 $url = "https://github.com/tis24dev/proxsave/releases/download/$version/$binary"
 
 Write-Host "Downloading $binary..." -ForegroundColor Cyan
-Invoke-WebRequest -Uri $url -OutFile "proxmox-backup.exe"
+Invoke-WebRequest -Uri $url -OutFile "proxsave.exe"
 
 # Verify attestation
 Write-Host "Verifying attestation..." -ForegroundColor Cyan
-$result = gh attestation verify proxmox-backup.exe --repo tis24dev/proxmox-backup
+$result = gh attestation verify proxsave.exe --repo tis24dev/proxsave
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✓ Attestation verified successfully!" -ForegroundColor Green
@@ -240,7 +240,7 @@ if ($LASTEXITCODE -eq 0) {
     # Move to Program Files
     $destPath = "$env:ProgramFiles\ProxmoxBackup"
     New-Item -ItemType Directory -Force -Path $destPath | Out-Null
-    Move-Item -Path "proxmox-backup.exe" -Destination "$destPath\proxmox-backup.exe" -Force
+    Move-Item -Path "proxsave.exe" -Destination "$destPath\proxsave.exe" -Force
 
     # Add to PATH if not already there
     $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -252,7 +252,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "Installation complete!" -ForegroundColor Green
 } else {
     Write-Host "✗ Attestation verification failed!" -ForegroundColor Red
-    Remove-Item "proxmox-backup.exe"
+    Remove-Item "proxsave.exe"
     exit 1
 }
 ```
@@ -281,7 +281,7 @@ When you run `gh attestation verify`, the following checks are performed:
 **Solution**:
 ```bash
 # Check the release version
-gh release view v0.9.0 --repo tis24dev/proxmox-backup
+gh release view v0.9.0 --repo tis24dev/proxsave
 
 # Attestations are only available from v0.9.1 onwards
 ```
@@ -299,11 +299,11 @@ gh release view v0.9.0 --repo tis24dev/proxmox-backup
 **Solution**:
 ```bash
 # Re-download the binary
-rm proxmox-backup-linux-amd64
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
+rm proxsave-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
 
 # Retry verification
-gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
+gh attestation verify proxsave-linux-amd64 --repo tis24dev/proxsave
 ```
 
 If the problem persists, **DO NOT use the binary** and report the issue by opening an issue on GitHub.
@@ -320,11 +320,11 @@ If the problem persists, **DO NOT use the binary** and report the issue by openi
 **Solution**:
 ```bash
 # Check file size
-ls -lh proxmox-backup-linux-amd64
+ls -lh proxsave-linux-amd64
 
 # Re-download completely
-rm proxmox-backup-linux-amd64
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
+rm proxsave-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
 
 # Manual checksum verification (optional)
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS
@@ -351,8 +351,8 @@ export GITHUB_TOKEN=your_personal_access_token
 **Solution**:
 ```bash
 # Use offline verification if you've already downloaded the attestation
-gh attestation download proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup -o attestation.jsonl
-gh attestation verify proxmox-backup-linux-amd64 --bundle attestation.jsonl --repo tis24dev/proxmox-backup
+gh attestation download proxsave-linux-amd64 --repo tis24dev/proxsave -o attestation.jsonl
+gh attestation verify proxsave-linux-amd64 --bundle attestation.jsonl --repo tis24dev/proxsave
 ```
 
 ## Security Considerations
@@ -379,7 +379,7 @@ Every attestation is publicly recorded on https://search.sigstore.dev/
 ```bash
 # Search for attestations for this repository
 open "https://search.sigstore.dev/?logIndex=&email=&hash=&logEntry=&uuid="
-# Filter by: tis24dev/proxmox-backup
+# Filter by: tis24dev/proxsave
 ```
 
 ### Comparison with GPG Signing
@@ -398,7 +398,7 @@ open "https://search.sigstore.dev/?logIndex=&email=&hash=&logEntry=&uuid="
 
 1. **Always verify before use**: Do not run unverified binaries
 2. **Use HTTPS**: Always download from `https://github.com`
-3. **Verify the repository**: Ensure it's `tis24dev/proxmox-backup`
+3. **Verify the repository**: Ensure it's `tis24dev/proxsave`
 4. **Update gh CLI**: Keep GitHub CLI updated for the latest security features
 5. **Automation**: Integrate verification into your deployment scripts
 6. **Archive attestations**: Save attestations for future audits
@@ -426,7 +426,7 @@ If you have scripts that use GPG, here's how to migrate them:
 
 **Before (GPG)**:
 ```bash
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxmox-backup-linux-amd64
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS
 wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS.asc
 gpg --verify SHA256SUMS.asc SHA256SUMS
@@ -435,8 +435,8 @@ sha256sum -c SHA256SUMS
 
 **After (Attestations)**:
 ```bash
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.1/proxmox-backup-linux-amd64
-gh attestation verify proxmox-backup-linux-amd64 --repo tis24dev/proxmox-backup
+wget https://github.com/tis24dev/proxsave/releases/download/v0.9.1/proxsave-linux-amd64
+gh attestation verify proxsave-linux-amd64 --repo tis24dev/proxsave
 ```
 
 Much simpler! 🎉

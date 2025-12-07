@@ -91,7 +91,7 @@ The `--upgrade` command:
 - ✅ Downloads latest binary from GitHub releases
 - ✅ Verifies integrity with SHA256 checksums
 - ✅ Atomically replaces current binary
-- ✅ Updates symlinks (`/usr/local/bin/proxsave`, `/usr/local/bin/proxmox-backup`)
+- ✅ Updates symlinks (`/usr/local/bin/proxsave`, `/usr/local/bin/proxsave`)
 - ✅ Cleans up legacy Bash script symlinks
 - ✅ Migrates cron entries to new binary while preserving entries that already point to the Go executable
 - ✅ Fixes file permissions
@@ -217,7 +217,7 @@ After completion, edit `configs/backup.env` manually for advanced options.
 
 ## Upgrading from Previous Bash Version (v0.7.4-bash or Earlier)
 
-If you're currently using the Bash version of proxmox-backup (v0.7.4-bash or earlier), you can upgrade to the Go version with minimal effort. The Go version offers significant performance improvements while maintaining backward compatibility for most configuration variables.
+If you're currently using the legacy Bash version (historically called proxmox-backup, v0.7.4-bash or earlier), you can upgrade to the Go-based proxsave release with minimal effort. The Go version offers significant performance improvements while maintaining backward compatibility for most configuration variables.
 
 ### Migration Tools
 
@@ -309,7 +309,7 @@ This guide categorizes every variable:
 
 **Variables requiring conversion:**
 - `STORAGE_WARNING_THRESHOLD_PRIMARY="90"` (% used) ? `MIN_DISK_SPACE_PRIMARY_GB="1"` (GB free)
-- `CLOUD_BACKUP_PATH="/remote:path/folder"` (full path) ? `CLOUD_REMOTE_PATH="folder"` (prefix only)
+- `CLOUD_BACKUP_PATH="/remote:path/folder"` (full path) ? `CLOUD_REMOTE="<remote>"` + `CLOUD_REMOTE_PATH="/folder"`
 
 **New Go-only features available:**
 - GFS retention policies (`RETENTION_POLICY=gfs`)
@@ -328,7 +328,7 @@ This guide categorizes every variable:
 - **Solution**: Convert percentage-based thresholds to GB-based (SEMANTIC CHANGE variables)
 
 **Problem**: Cloud path not working
-- **Solution**: Split `CLOUD_BACKUP_PATH` into `CLOUD_REMOTE` (remote:path) and `CLOUD_REMOTE_PATH` (prefix)
+- **Solution**: Split `CLOUD_BACKUP_PATH` into `CLOUD_REMOTE` (remote name) and `CLOUD_REMOTE_PATH` (full path inside that remote)
 
 **Still having issues?**
 - Review the complete mapping guide: [BACKUP_ENV_MAPPING.md](docs/BACKUP_ENV_MAPPING.md)
@@ -374,7 +374,7 @@ mkdir proxmox-backup
 
 Extract the script files into the newly created directory, then delete the archive
 ```bash
-tar xzf v0.7.4-bash.tar.gz -C proxmox-backup --strip-components=1 && rm v0.7.4-bash.tar.gz
+tar xzf v0.7.4-bash.tar.gz -C proxsave --strip-components=1 && rm v0.7.4-bash.tar.gz
 ```
 
 Enter the script directory

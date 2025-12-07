@@ -520,14 +520,41 @@ func TestEnsureTempRegistryFailsOnInvalidPath(t *testing.T) {
 	}
 }
 
-func TestCopyLogToCloudRejectsLocalPath(t *testing.T) {
-	cfg := &config.Config{CloudEnabled: true}
+func TestCopyLogToCloudRejectsWithoutRemote(t *testing.T) {
+	// When CLOUD_REMOTE is empty and path has no ":", should fail
+	cfg := &config.Config{
+		CloudEnabled: true,
+		CloudRemote:  "", // No remote configured
+	}
 	logger := logging.New(types.LogLevelError, false)
 	o := &Orchestrator{cfg: cfg, logger: logger}
 
 	err := o.copyLogToCloud(context.Background(), "/tmp/source.log", "/tmp/no-remote-prefix")
 	if err == nil {
-		t.Fatalf("expected error for missing remote prefix in dest path")
+		t.Fatalf("expected error when CLOUD_REMOTE is empty and path has no remote")
+	}
+}
+
+func TestCopyLogToCloudResolvesNewStylePath(t *testing.T) {
+	// When CLOUD_REMOTE is set and path has no ":", should resolve path
+	// Note: This test just verifies the path resolution, not actual upload
+	cfg := &config.Config{
+		CloudEnabled: true,
+		CloudRemote:  "gdrive",
+	}
+	logger := logging.New(types.LogLevelError, false)
+	o := &Orchestrator{cfg: cfg, logger: logger}
+
+	// This will fail because we can't actually upload, but it should get past path resolution
+	err := o.copyLogToCloud(context.Background(), "/tmp/nonexistent.log", "/logs/test.log")
+	if err == nil {
+		// If it succeeds, that's unexpected (no actual storage available)
+		// But the key is it didn't fail on path resolution
+		return
+	}
+	// Should not fail with "requires CLOUD_REMOTE" error
+	if strings.Contains(err.Error(), "CLOUD_REMOTE") {
+		t.Fatalf("unexpected error about CLOUD_REMOTE: %v", err)
 	}
 }
 

@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-Complete troubleshooting guide for Proxmox Backup Go with common issues, solutions, and debugging procedures.
+Complete troubleshooting guide for Proxsave with common issues, solutions, and debugging procedures.
 
 ## Table of Contents
 
@@ -19,11 +19,11 @@ Complete troubleshooting guide for Proxmox Backup Go with common issues, solutio
 
 ## Overview
 
-This guide covers the most common issues encountered when using Proxmox Backup Go, along with step-by-step solutions and debugging procedures.
+This guide covers the most common issues encountered when using Proxsave, along with step-by-step solutions and debugging procedures.
 
 **Before troubleshooting**:
-1. Check you're running the latest version: `./build/proxmox-backup --version`
-2. Try dry-run mode first: `./build/proxmox-backup --dry-run --log-level debug`
+1. Check you're running the latest version: `./build/proxsave --version`
+2. Try dry-run mode first: `./build/proxsave --dry-run --log-level debug`
 3. Review logs in `LOG_PATH/backup-$(hostname)-*.log`
 
 ---
@@ -38,7 +38,7 @@ This guide covers the most common issues encountered when using Proxmox Backup G
 
 **Solution**:
 ```bash
-cd /opt/proxmox-backup  # Ensure you're in project root
+cd /opt/proxsave  # Ensure you're in project root
 go mod init github.com/tis24dev/proxsave
 go mod tidy
 make build
@@ -79,8 +79,8 @@ make build
 **Solution**:
 ```bash
 # Fix build directory permissions
-chmod 755 /opt/proxmox-backup/build
-chown $(whoami):$(whoami) /opt/proxmox-backup/build
+chmod 755 /opt/proxsave/build
+chown $(whoami):$(whoami) /opt/proxsave/build
 
 # Rebuild
 make clean
@@ -98,9 +98,9 @@ make build
 **Solution**:
 ```bash
 # Run installer to create config
-./build/proxmox-backup --install
+./build/proxsave --install
 # For a clean reinstall (keeps env/ and identity/), run:
-# ./build/proxmox-backup --new-install
+# ./build/proxsave --new-install
 
 # Or copy template manually
 cp internal/config/templates/backup.env configs/backup.env
@@ -110,7 +110,7 @@ nano configs/backup.env
 **Using custom path**:
 ```bash
 # Specify custom config location
-./build/proxmox-backup --config /etc/pbs/prod.env
+./build/proxsave --config /etc/pbs/prod.env
 ```
 
 ---
@@ -122,9 +122,9 @@ nano configs/backup.env
 **Solution**:
 ```bash
 # Fix permissions manually
-chmod 700 /opt/proxmox-backup/backup
-chmod 700 /opt/proxmox-backup/log
-chmod 600 /opt/proxmox-backup/configs/backup.env
+chmod 700 /opt/proxsave/backup
+chmod 700 /opt/proxsave/log
+chmod 600 /opt/proxsave/configs/backup.env
 
 # Or enable auto-fix in config
 nano configs/backup.env
@@ -133,7 +133,7 @@ AUTO_FIX_PERMISSIONS=true
 
 **Recommended permissions**:
 ```
-/opt/proxmox-backup/           755 (drwxr-xr-x)
+/opt/proxsave/           755 (drwxr-xr-x)
 ├── backup/                    700 (drwx------)
 ├── log/                       700 (drwx------)
 ├── configs/
@@ -161,7 +161,7 @@ COMPRESSION_TYPE=xz    # Valid: xz, zstd, gzip, bzip2, lz4
 
 **Test configuration**:
 ```bash
-./build/proxmox-backup --dry-run --log-level debug
+./build/proxsave --dry-run --log-level debug
 # Check for configuration validation errors
 ```
 
@@ -218,7 +218,10 @@ rclone config show gdrive
 
 # Verify backup.env points to correct remote
 grep CLOUD_REMOTE configs/backup.env
-# Should match: CLOUD_REMOTE=gdrive:pbs-backups
+grep CLOUD_REMOTE_PATH configs/backup.env
+# Should match:
+#   CLOUD_REMOTE=gdrive
+#   CLOUD_REMOTE_PATH=/pbs-backups
 ```
 
 ---
@@ -366,10 +369,10 @@ rm /tmp/test.txt
 **Solution 1: Pre-generate keys**:
 ```bash
 # Run key generation interactively first
-./build/proxmox-backup --newkey
+./build/proxsave --newkey
 
 # Then run backup (uses existing keys)
-./build/proxmox-backup
+./build/proxsave
 ```
 
 **Solution 2: Set recipient directly**:
@@ -444,13 +447,13 @@ age-keygen -y configs/age-keys.txt
 **Solution 1: Clean old backups**:
 ```bash
 # Check disk usage
-df -h /opt/proxmox-backup
+df -h /opt/proxsave
 
 # List backups by size
-ls -lh /opt/proxmox-backup/backup/
+ls -lh /opt/proxsave/backup/
 
 # Clean old backups manually
-rm /opt/proxmox-backup/backup/backup.*.tar.xz
+rm /opt/proxsave/backup/backup.*.tar.xz
 ```
 
 **Solution 2: Adjust retention**:
@@ -501,7 +504,7 @@ MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
 
 ```bash
 # Run with debug level
-./build/proxmox-backup --log-level debug
+./build/proxsave --log-level debug
 
 # Or set in config
 nano configs/backup.env
@@ -561,10 +564,10 @@ rclone about gdrive:
 
 ```bash
 # Check parsed configuration
-grep -E "^CLOUD_|^RCLONE_" /opt/proxmox-backup/configs/backup.env
+grep -E "^CLOUD_|^RCLONE_" /opt/proxsave/configs/backup.env
 
 # Test with dry-run
-./build/proxmox-backup --dry-run --log-level debug
+./build/proxsave --dry-run --log-level debug
 # Check output for loaded config values
 ```
 
@@ -582,31 +585,31 @@ grep -E "^CLOUD_|^RCLONE_" /opt/proxmox-backup/configs/backup.env
 
 ```bash
 # Find latest log
-ls -lt /opt/proxmox-backup/log/
+ls -lt /opt/proxsave/log/
 
 # View log
-cat /opt/proxmox-backup/log/backup-$(hostname)-*.log
+cat /opt/proxsave/log/backup-$(hostname)-*.log
 
 # Filter errors
-grep -i "error\|fail\|warning" /opt/proxmox-backup/log/backup-*.log
+grep -i "error\|fail\|warning" /opt/proxsave/log/backup-*.log
 
 # Filter cloud issues
-grep -i "cloud.*error\|cloud.*fail\|cloud.*warning" /opt/proxmox-backup/log/backup-*.log
+grep -i "cloud.*error\|cloud.*fail\|cloud.*warning" /opt/proxsave/log/backup-*.log
 ```
 
 **Log analysis patterns**:
 ```bash
 # Check backup duration
-grep "Backup completed" /opt/proxmox-backup/log/backup-*.log
+grep "Backup completed" /opt/proxsave/log/backup-*.log
 
 # Check compression ratio
-grep "Compression" /opt/proxmox-backup/log/backup-*.log
+grep "Compression" /opt/proxsave/log/backup-*.log
 
 # Check upload speed
-grep -i "upload.*speed\|transfer.*rate" /opt/proxmox-backup/log/backup-*.log
+grep -i "upload.*speed\|transfer.*rate" /opt/proxsave/log/backup-*.log
 
 # Check retention operations
-grep "Retention" /opt/proxmox-backup/log/backup-*.log
+grep "Retention" /opt/proxsave/log/backup-*.log
 ```
 
 ---
@@ -668,7 +671,7 @@ Before reporting issues, review:
 
 ```bash
 # Capture full debug output
-./build/proxmox-backup --log-level debug 2>&1 | tee /tmp/pbs-debug.log
+./build/proxsave --log-level debug 2>&1 | tee /tmp/pbs-debug.log
 ```
 
 ---
@@ -679,7 +682,7 @@ If problem persists:
 
 **1. Gather information**:
 ```bash
-./build/proxmox-backup --version
+./build/proxsave --version
 rclone version
 go version
 uname -a
@@ -688,7 +691,7 @@ uname -a
 **2. Collect logs**:
 ```bash
 tar -czf /tmp/pbs-debug.tar.gz \
-    /opt/proxmox-backup/log/backup-*.log \
+    /opt/proxsave/log/backup-*.log \
     /tmp/pbs-debug.log
 ```
 
@@ -714,7 +717,7 @@ nano /tmp/backup.env.sanitized
 **Issue template**:
 ```markdown
 **Version**:
-./build/proxmox-backup --version output here
+./build/proxsave --version output here
 
 **Environment**:
 - OS: Proxmox VE 8.x / PBS 3.x / Debian 12
@@ -724,7 +727,8 @@ nano /tmp/backup.env.sanitized
 **Configuration** (sanitized):
 ```bash
 CLOUD_ENABLED=true
-CLOUD_REMOTE=gdrive:pbs-backups
+CLOUD_REMOTE=gdrive
+CLOUD_REMOTE_PATH=/pbs-backups
 COMPRESSION_TYPE=xz
 # ... other relevant settings
 ```
@@ -761,7 +765,7 @@ For complex issues requiring developer assistance:
 
 ```bash
 # Run in support mode (sends debug log to developer)
-./build/proxmox-backup --support
+./build/proxsave --support
 ```
 
 **Support mode workflow**:
@@ -801,23 +805,23 @@ Use this checklist for rapid troubleshooting:
 
 ```bash
 # 1. Check binary exists and is executable
-ls -lh /opt/proxmox-backup/build/proxmox-backup
+ls -lh /opt/proxsave/build/proxsave
 # Should show: -rwxr-xr-x ... proxmox-backup
 
 # 2. Check configuration file exists
-ls -lh /opt/proxmox-backup/configs/backup.env
+ls -lh /opt/proxsave/configs/backup.env
 # Should show: -rw------- ... backup.env
 
 # 3. Test configuration loading
-./build/proxmox-backup --dry-run
+./build/proxsave --dry-run
 # Should NOT error on config parsing
 
 # 4. Check disk space
-df -h /opt/proxmox-backup
+df -h /opt/proxsave
 # Should have >2GB free
 
 # 5. Check permissions
-ls -la /opt/proxmox-backup/backup /opt/proxmox-backup/log
+ls -la /opt/proxsave/backup /opt/proxsave/log
 # backup: drwx------
 # log: drwx------
 
@@ -827,11 +831,11 @@ rclone lsf gdrive:
 # Should list remote without errors
 
 # 7. Check latest log
-tail -50 /opt/proxmox-backup/log/backup-*.log
+tail -50 /opt/proxsave/log/backup-*.log
 # Review for obvious errors
 
 # 8. Run debug mode
-./build/proxmox-backup --dry-run --log-level debug 2>&1 | less
+./build/proxsave --dry-run --log-level debug 2>&1 | less
 # Review detailed output for issues
 ```
 
@@ -843,10 +847,10 @@ tail -50 /opt/proxmox-backup/log/backup-*.log
 A: No. Cloud uploads are non-critical. Local backup succeeded, which is the primary goal. Review cloud configuration and retry.
 
 **Q: How do I test my configuration without running a real backup?**
-A: Use `--dry-run` mode: `./build/proxmox-backup --dry-run --log-level debug`
+A: Use `--dry-run` mode: `./build/proxsave --dry-run --log-level debug`
 
 **Q: Logs show warnings about deprecated variables?**
-A: Update your configuration: `./build/proxmox-backup --upgrade-config`
+A: Update your configuration: `./build/proxsave --upgrade-config`
 
 **Q: Can I run backup while another backup is in progress?**
 A: No. Use a lock file (`BACKUP_PATH/.backup.lock`) to prevent concurrent runs.
