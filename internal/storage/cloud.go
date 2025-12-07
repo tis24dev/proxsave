@@ -1256,7 +1256,7 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 	}
 
 	logName := fmt.Sprintf("backup-%s-%s.log", host, ts)
-	cloudPath := cloudLogPath(base, logName)
+	cloudPath := c.cloudLogPath(base, logName)
 	if strings.TrimSpace(cloudPath) == "" {
 		return false
 	}
@@ -1336,10 +1336,16 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 }
 
 // cloudLogPath builds the full cloud log path, mirroring buildCloudLogDestination logic.
-func cloudLogPath(basePath, fileName string) string {
+// Supports both new style (/path) and legacy style (remote:/path).
+// If basePath doesn't contain ":", uses c.remote as the remote name.
+func (c *CloudStorage) cloudLogPath(basePath, fileName string) string {
 	base := strings.TrimSpace(basePath)
 	if base == "" {
 		return ""
+	}
+	// If basePath doesn't contain ":", prepend c.remote
+	if !strings.Contains(base, ":") && c.remote != "" {
+		base = c.remote + ":" + base
 	}
 	base = strings.TrimRight(base, "/")
 	if strings.HasSuffix(base, ":") {

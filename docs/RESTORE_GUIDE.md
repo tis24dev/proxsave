@@ -1,4 +1,4 @@
-# Proxmox Backup Go - Restore Guide
+# Proxsave - Restore Guide
 
 Complete guide for restoring Proxmox VE and Proxmox Backup Server configurations using the interactive restore workflow.
 
@@ -24,7 +24,7 @@ Complete guide for restoring Proxmox VE and Proxmox Backup Server configurations
 
 ```bash
 # Run the interactive restore workflow
-./build/proxmox-backup --restore
+./build/proxsave --restore
 
 # Follow the prompts:
 # 1. Select backup source location
@@ -255,7 +255,7 @@ Phase 1: Backup Selection
 Phase 2: Decryption (if needed)
   ├─ Detect encryption (AGE)
   ├─ Prompt for key/passphrase
-  ├─ Decrypt to /tmp/proxmox-backup/
+  ├─ Decrypt to /tmp/proxsave/
   └─ Verify SHA256 checksum
 
 Phase 3: Compatibility Check
@@ -336,7 +336,7 @@ Phase 14: Post-Restore Tasks
 **Interactive prompts**:
 ```
 Select backup source:
-  [1] Primary backup path: /opt/proxmox-backup/backups
+  [1] Primary backup path: /opt/proxsave/backups
   [2] Secondary backup path: /mnt/secondary/backups
   [3] Cloud/local path: /mnt/cloud-backups
   [0] Cancel
@@ -458,10 +458,10 @@ Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort:
 ```
 Creating safety backup of existing files...
 Safety backup created successfully.
-Safety backup location: /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz
+Safety backup location: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 
 You can restore from this backup if needed using:
-  tar -xzf /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz -C /
+  tar -xzf /tmp/proxsave/restore_backup_20251120_143052.tar.gz -C /
 ```
 
 #### Phase 9: Service Management (PVE Cluster)
@@ -501,7 +501,7 @@ Continue restore with PBS services still running? (y/N): _
 
 ```
 Extracting selected categories from archive into /
-Detailed restore log: /tmp/proxmox-backup/restore_20251120_143052.log
+Detailed restore log: /tmp/proxsave/restore_20251120_143052.log
 
 Extracting: /var/lib/pve-cluster/config.db
 Extracting: /var/lib/pve-cluster/.version
@@ -509,7 +509,7 @@ Extracting: /etc/vzdump.conf
 ...
 Successfully restored 47 files/directories
 
-Exporting /etc/pve contents to: /opt/proxmox-backup/pve-config-export-20251120-143052
+Exporting /etc/pve contents to: /opt/proxsave/pve-config-export-20251120-143052
 Exported 23 files/directories
 ```
 
@@ -542,10 +542,10 @@ RESTORE COMPLETED
 
 Restore completed successfully.
 Temporary decrypted bundle removed.
-Detailed restore log: /tmp/proxmox-backup/restore_20251120_143052.log
-Exported /etc/pve files: /opt/proxmox-backup/pve-config-export-20251120-143052/
-Safety backup preserved at: /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz
+Detailed restore log: /tmp/proxsave/restore_20251120_143052.log
+Exported /etc/pve files: /opt/proxsave/pve-config-export-20251120-143052/
+Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 
 IMPORTANT: You may need to restart services for changes to take effect.
   PVE services were stopped/restarted during restore; verify status with: pvecm status
@@ -614,7 +614,7 @@ Cluster backup detected. Choose how to restore:
   [1] SAFE: Export cluster files only (apply via API)  ← SELECTED
   [2] RECOVERY: Full database restore
 
-Exporting /etc/pve contents to: /opt/proxmox-backup/pve-config-export-*/
+Exporting /etc/pve contents to: /opt/proxsave/pve-config-export-*/
 
 SAFE cluster restore: applying configs via pvesh (node=pve01)
 Found 5 VM/CT configs for node pve01
@@ -927,7 +927,7 @@ After Restore:
 pvecm delnode <this-node-name>
 
 # Perform restore
-./build/proxmox-backup --restore
+./build/proxsave --restore
 
 # After restore: Rejoin cluster (if applicable)
 # Or accept this node as new standalone cluster
@@ -939,7 +939,7 @@ pvecm delnode <this-node-name>
 systemctl stop corosync
 
 # On PRIMARY node: Perform restore
-./build/proxmox-backup --restore
+./build/proxsave --restore
 
 # On PRIMARY node: Restart corosync
 systemctl start corosync
@@ -955,7 +955,7 @@ pvecm add <primary-node-ip>
 # (Disconnect network cable or firewall rules)
 
 # Perform restore on isolated node
-./build/proxmox-backup --restore
+./build/proxsave --restore
 
 # Test recovered configuration
 # Verify all services working
@@ -977,7 +977,7 @@ journalctl -xe -u pve-cluster
 # - Certificate issues
 
 # Solution: Restore from safety backup
-tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
 ```
 
@@ -1074,7 +1074,7 @@ Pass 1: Normal Categories
   ├─ Destination: / (system root)
   ├─ Categories: All non-export-only
   ├─ Safety backup: Created before extraction
-  └─ Log: /tmp/proxmox-backup/restore_TIMESTAMP.log
+  └─ Log: /tmp/proxsave/restore_TIMESTAMP.log
 
 Pass 2: Export-Only Categories
   ├─ Destination: <BASE_DIR>/pve-config-export-YYYYMMDD-HHMMSS/
@@ -1085,7 +1085,7 @@ Pass 2: Export-Only Categories
 
 **Export Directory Structure**:
 ```
-/opt/proxmox-backup/pve-config-export-20251120-143052/
+/opt/proxsave/pve-config-export-20251120-143052/
 └── etc/
     └── pve/
         ├── datacenter.cfg
@@ -1111,7 +1111,7 @@ Pass 2: Export-Only Categories
 
 1. **Review Exported Files**:
    ```bash
-   cd /opt/proxmox-backup/pve-config-export-YYYYMMDD-HHMMSS/etc/pve/
+   cd /opt/proxsave/pve-config-export-YYYYMMDD-HHMMSS/etc/pve/
 
    # Check cluster configuration
    cat datacenter.cfg
@@ -1126,22 +1126,22 @@ Pass 2: Export-Only Categories
 2. **Compare with Current System**:
    ```bash
    # Compare storage configuration
-   diff /opt/proxmox-backup/pve-config-export-*/etc/pve/storage.cfg \
+   diff /opt/proxsave/pve-config-export-*/etc/pve/storage.cfg \
         /etc/pve/storage.cfg
 
    # Compare user configuration
-   diff /opt/proxmox-backup/pve-config-export-*/etc/pve/user.cfg \
+   diff /opt/proxsave/pve-config-export-*/etc/pve/user.cfg \
         /etc/pve/user.cfg
    ```
 
 3. **Selective Manual Restoration**:
    ```bash
    # Example: Restore a specific VM config
-   cp /opt/proxmox-backup/pve-config-export-*/etc/pve/qemu-server/100.conf \
+   cp /opt/proxsave/pve-config-export-*/etc/pve/qemu-server/100.conf \
       /etc/pve/qemu-server/100.conf
 
    # Example: Restore user configuration
-   cp /opt/proxmox-backup/pve-config-export-*/etc/pve/user.cfg \
+   cp /opt/proxsave/pve-config-export-*/etc/pve/user.cfg \
       /etc/pve/user.cfg
 
    # Note: These writes go through pmxcfs (FUSE), so they're safe
@@ -1151,10 +1151,10 @@ Pass 2: Export-Only Categories
    ```bash
    # Get specific storage definition
    grep -A 10 "dir: backup-storage" \
-     /opt/proxmox-backup/pve-config-export-*/etc/pve/storage.cfg
+     /opt/proxsave/pve-config-export-*/etc/pve/storage.cfg
 
    # Get user list
-   cat /opt/proxmox-backup/pve-config-export-*/etc/pve/user.cfg | grep "user:"
+   cat /opt/proxsave/pve-config-export-*/etc/pve/user.cfg | grep "user:"
    ```
 
 ### Export-Only in Custom Mode
@@ -1175,7 +1175,7 @@ Available categories:
 ```
 Export-only categories (will be extracted to separate directory):
   • PVE Config Export
-    Destination: /opt/proxmox-backup/pve-config-export-20251120-143052/
+    Destination: /opt/proxsave/pve-config-export-20251120-143052/
 ```
 
 **Important**: ProxSave extracts export-only files to the separate directory shown above. The tool **does NOT automatically copy** these files to system paths. Any `cp` commands shown in this documentation are **manual examples** that you must execute yourself after reviewing the exported files. This design prevents accidental overwrites and gives you full control over what gets restored.
@@ -1222,7 +1222,7 @@ For each VM/CT config found in the export:
 #### 2. Storage Configuration Apply
 
 ```
-Storage configuration found: /opt/proxmox-backup/pve-config-export-*/etc/pve/storage.cfg
+Storage configuration found: /opt/proxsave/pve-config-export-*/etc/pve/storage.cfg
 Apply storage.cfg via pvesh? (y/N): y
 ```
 
@@ -1236,7 +1236,7 @@ Parses `storage.cfg` and applies each storage definition:
 #### 3. Datacenter Configuration Apply
 
 ```
-Datacenter configuration found: /opt/proxmox-backup/pve-config-export-*/etc/pve/datacenter.cfg
+Datacenter configuration found: /opt/proxsave/pve-config-export-*/etc/pve/datacenter.cfg
 Apply datacenter.cfg via pvesh? (y/N): y
 ```
 
@@ -1321,7 +1321,7 @@ These configurations are included in every backup and can be restored using **th
 
 1. **Run restore workflow**:
    ```bash
-   ./build/proxmox-backup --restore
+   ./build/proxsave --restore
    ```
 
 2. **Select backup and decrypt** (standard workflow)
@@ -1383,7 +1383,7 @@ https://your-pve:8006
 
 **How it works**:
 1. Restore with `pve_config_export` category selected (or Cluster SAFE mode)
-2. Configurations extracted to: `/opt/proxmox-backup/pve-config-export-<timestamp>/`
+2. Configurations extracted to: `/opt/proxsave/pve-config-export-<timestamp>/`
 3. Review exported files
 4. Manually copy desired configs to `/etc/pve/`
 
@@ -1397,14 +1397,14 @@ https://your-pve:8006
 
 1. **Run restore and select pve_config_export category**:
    ```bash
-   ./build/proxmox-backup --restore
+   ./build/proxsave --restore
    # Select "Custom" mode
    # Enable "PVE Config Export" category
    ```
 
 2. **Locate exported files**:
    ```bash
-   cd /opt/proxmox-backup/pve-config-export-*/etc/pve/
+   cd /opt/proxsave/pve-config-export-*/etc/pve/
 
    # List available VM configs
    ls qemu-server/
@@ -1583,7 +1583,7 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 **Automatic** backup before ANY changes are written.
 
-**Location**: `/tmp/proxmox-backup/restore_backup_YYYYMMDD_HHMMSS.tar.gz`
+**Location**: `/tmp/proxsave/restore_backup_YYYYMMDD_HHMMSS.tar.gz`
 
 **Contents**:
 - All files that will be overwritten by restore
@@ -1592,7 +1592,7 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 **Rollback Command**:
 ```bash
-tar -xzf /tmp/proxmox-backup/restore_backup_20251120_143052.tar.gz -C /
+tar -xzf /tmp/proxsave/restore_backup_20251120_143052.tar.gz -C /
 ```
 
 **If Safety Backup Fails**:
@@ -1667,7 +1667,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 
 ### 6. Comprehensive Logging
 
-**Detailed Log**: `/tmp/proxmox-backup/restore_YYYYMMDD_HHMMSS.log`
+**Detailed Log**: `/tmp/proxsave/restore_YYYYMMDD_HHMMSS.log`
 
 **Contents**:
 ```
@@ -1694,13 +1694,13 @@ SUMMARY:
 **Usage**:
 ```bash
 # Review what was restored
-cat /tmp/proxmox-backup/restore_20251120_143052.log
+cat /tmp/proxsave/restore_20251120_143052.log
 
 # Search for specific file
-grep "storage.cfg" /tmp/proxmox-backup/restore_20251120_143052.log
+grep "storage.cfg" /tmp/proxsave/restore_20251120_143052.log
 
 # Check for failures
-grep "FAILED" /tmp/proxmox-backup/restore_20251120_143052.log
+grep "FAILED" /tmp/proxsave/restore_20251120_143052.log
 ```
 
 ### 7. Checksum Verification
@@ -1740,10 +1740,10 @@ Services stopped → Defer restart scheduled → Restore → (Failure) → Defer
 
 **Solution**:
 ```bash
-sudo ./build/proxmox-backup --restore
+sudo ./build/proxsave --restore
 # Or
 su -
-./build/proxmox-backup --restore
+./build/proxsave --restore
 ```
 
 ---
@@ -1758,8 +1758,8 @@ su -
 df -h /tmp
 
 # Clean up temporary files
-rm -rf /tmp/proxmox-backup/proxmox-decrypt-*
-rm -f /tmp/proxmox-backup/restore_backup_*.tar.gz
+rm -rf /tmp/proxsave/proxmox-decrypt-*
+rm -f /tmp/proxsave/restore_backup_*.tar.gz
 
 # Or expand /tmp (if tmpfs)
 mount -o remount,size=10G /tmp
@@ -1774,13 +1774,13 @@ mount -o remount,size=10G /tmp
 **Solution**:
 ```bash
 # Verify backup location
-ls -la /opt/proxmox-backup/backups/
+ls -la /opt/proxsave/backups/
 
 # Check for .bundle.tar files
-find /opt/proxmox-backup/ -name "*.bundle.tar"
+find /opt/proxsave/ -name "*.bundle.tar"
 
 # Update backup.env if needed
-vi /opt/proxmox-backup-go/configs/backup.env
+vi /opt/proxsave-go/configs/backup.env
 # Set correct BACKUP_PATH
 ```
 
@@ -1796,7 +1796,7 @@ vi /opt/proxmox-backup-go/configs/backup.env
 ```bash
 # Retry with correct passphrase
 # Or use AGE identity file instead
-./build/proxmox-backup --restore
+./build/proxsave --restore
 # Select option [2] Use AGE identity file
 ```
 
@@ -1809,7 +1809,7 @@ vi /opt/proxmox-backup-go/configs/backup.env
 **Solution**:
 ```bash
 # Check for key file
-ls -la /opt/proxmox-backup/age/recipients
+ls -la /opt/proxsave/age/recipients
 
 # If missing, use passphrase instead
 # Or specify correct key file path when prompted
@@ -1846,7 +1846,7 @@ systemctl status pve-cluster
 journalctl -xe -u pve-cluster
 
 # Restore from safety backup
-tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
@@ -1876,7 +1876,7 @@ systemctl restart pve-cluster
 journalctl -u pve-cluster | tail -50
 
 # If config.db corrupted, restore safety backup
-tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster
 ```
 
@@ -2069,7 +2069,7 @@ A: Use the safety backup:
 systemctl stop pve-cluster pvedaemon pveproxy pvestatd
 
 # Extract safety backup
-tar -xzf /tmp/proxmox-backup/restore_backup_*.tar.gz -C /
+tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
@@ -2096,7 +2096,7 @@ A: Yes, two approaches:
 **Approach 2: Decrypt-only mode**
 ```bash
 # Decrypt without restoring
-./build/proxmox-backup --decrypt
+./build/proxsave --decrypt
 
 # Manually inspect decrypted files
 tar -tzf /path/to/decrypted.tar.gz | less
@@ -2149,7 +2149,7 @@ A: Full procedure:
 hostnamectl set-hostname <original-hostname>
 
 # 3. Run restore
-./build/proxmox-backup --restore
+./build/proxsave --restore
 # Select: STORAGE mode or Custom (include pve_cluster)
 
 # 4. Verify services
@@ -2183,7 +2183,7 @@ reboot
 **Option 2: Update cluster config after restore**
 ```bash
 # Restore as normal (hostname will mismatch)
-./build/proxmox-backup --restore
+./build/proxsave --restore
 
 # Update corosync configuration
 vi /etc/pve/corosync.conf
@@ -2217,14 +2217,14 @@ A: For reference and selective manual restoration:
 
 ```bash
 # Review exported files
-ls /opt/proxmox-backup/pve-config-export-*/etc/pve/
+ls /opt/proxsave/pve-config-export-*/etc/pve/
 
 # Compare with current
-diff /opt/proxmox-backup/pve-config-export-*/etc/pve/storage.cfg \
+diff /opt/proxsave/pve-config-export-*/etc/pve/storage.cfg \
      /etc/pve/storage.cfg
 
 # Selectively copy needed files
-cp /opt/proxmox-backup/pve-config-export-*/etc/pve/qemu-server/100.conf \
+cp /opt/proxsave/pve-config-export-*/etc/pve/qemu-server/100.conf \
    /etc/pve/qemu-server/100.conf
 ```
 
@@ -2244,7 +2244,7 @@ A: **Three methods available**:
 **Method 2: Manual Copy**
 ```bash
 # After restore with pve_config_export category:
-cd /opt/proxmox-backup/pve-config-export-*/etc/pve/
+cd /opt/proxsave/pve-config-export-*/etc/pve/
 cp qemu-server/100.conf /etc/pve/qemu-server/100.conf
 ```
 
@@ -2265,7 +2265,7 @@ A: Not directly. Categories are the smallest granularity.
 **Workaround**:
 ```bash
 # Use --decrypt to create plaintext archive
-./build/proxmox-backup --decrypt
+./build/proxsave --decrypt
 
 # Manually extract specific files
 tar -xzf /path/to/decrypted.tar.gz ./specific/file/path
@@ -2306,7 +2306,7 @@ A: Yes, in two ways:
    # Example backup.env
    CLOUD_ENABLED=true
    CLOUD_REMOTE=gdrive
-   CLOUD_REMOTE_PATH=pbs-backups/server1
+   CLOUD_REMOTE_PATH=/pbs-backups/server1
    ```
 
    - During `--decrypt` or `--restore` (CLI o TUI), ProxSave leggerà la stessa
@@ -2346,7 +2346,7 @@ A: AGE encryption only:
 
 **Q: Where are temporary files stored?**
 
-A: All in `/tmp/proxmox-backup/`:
+A: All in `/tmp/proxsave/`:
 - `proxmox-decrypt-*/` - Decryption workspace (deleted after restore)
 - `restore_TIMESTAMP.log` - Detailed restore log (preserved)
 - `restore_backup_TIMESTAMP.tar.gz` - Safety backup (preserved)
@@ -2354,10 +2354,10 @@ A: All in `/tmp/proxmox-backup/`:
 **Cleanup**:
 ```bash
 # Remove safety backup after successful restore
-rm /tmp/proxmox-backup/restore_backup_*.tar.gz
+rm /tmp/proxsave/restore_backup_*.tar.gz
 
 # Remove old logs
-find /tmp/proxmox-backup/ -name "restore_*.log" -mtime +7 -delete
+find /tmp/proxsave/ -name "restore_*.log" -mtime +7 -delete
 ```
 
 ---
@@ -2375,7 +2375,7 @@ find /tmp/proxmox-backup/ -name "restore_*.log" -mtime +7 -delete
 - [Proxmox Backup Server Documentation](https://pbs.proxmox.com/docs/)
 
 **Support**:
-- Project Issues: [GitHub Issues](https://github.com/your-repo/proxmox-backup-go/issues)
+- Project Issues: [GitHub Issues](https://github.com/your-repo/proxsave/issues)
 - Proxmox Forum: [forum.proxmox.com](https://forum.proxmox.com/)
 
 ---

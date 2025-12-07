@@ -1,6 +1,6 @@
 # Practical Examples
 
-Real-world configuration examples for Proxmox Backup Go covering common deployment scenarios.
+Real-world configuration examples for Proxsave covering common deployment scenarios.
 
 ## Table of Contents
 
@@ -52,8 +52,8 @@ This guide provides complete, copy-paste ready configuration examples for common
 ```bash
 # configs/backup.env
 BACKUP_ENABLED=true
-BACKUP_PATH=/opt/proxmox-backup/backup
-LOG_PATH=/opt/proxmox-backup/log
+BACKUP_PATH=/opt/proxsave/backup
+LOG_PATH=/opt/proxsave/log
 
 # Compression
 COMPRESSION_TYPE=xz
@@ -64,14 +64,14 @@ COMPRESSION_MODE=standard
 MAX_LOCAL_BACKUPS=15
 
 # Run backup
-./build/proxmox-backup
+./build/proxsave
 ```
 
 ### Setup Steps
 
 ```bash
 # 1. Install
-./build/proxmox-backup --install
+./build/proxsave --install
 # (use --new-install to wipe everything except env/ and identity/ before installing)
 
 # 2. Edit configuration
@@ -79,10 +79,10 @@ nano configs/backup.env
 # (paste configuration above)
 
 # 3. Test
-./build/proxmox-backup --dry-run
+./build/proxsave --dry-run
 
 # 4. Run first backup
-./build/proxmox-backup
+./build/proxsave
 ```
 
 ### Cron Schedule
@@ -91,13 +91,13 @@ nano configs/backup.env
 # Daily backup at 2 AM
 crontab -e
 
-0 2 * * * /opt/proxmox-backup/build/proxmox-backup >> /var/log/pbs-backup.log 2>&1
+0 2 * * * /opt/proxsave/build/proxsave >> /var/log/pbs-backup.log 2>&1
 ```
 
 ### Expected Results
 
 ```
-Backup directory: /opt/proxmox-backup/backup/
+Backup directory: /opt/proxsave/backup/
 - backup.20240115_020000.tar.xz (856 MB)
 - backup.20240115_020000.tar.xz.sha256
 - manifest.20240115_020000.json
@@ -124,8 +124,8 @@ Backup directory: /opt/proxmox-backup/backup/
 ```bash
 # configs/backup.env
 BACKUP_ENABLED=true
-BACKUP_PATH=/opt/proxmox-backup/backup
-LOG_PATH=/opt/proxmox-backup/log
+BACKUP_PATH=/opt/proxsave/backup
+LOG_PATH=/opt/proxsave/log
 
 # Secondary storage (NAS)
 SECONDARY_ENABLED=true
@@ -137,7 +137,7 @@ MAX_LOCAL_BACKUPS=7        # 1 week local (SSD expensive)
 MAX_SECONDARY_BACKUPS=30   # 1 month secondary (NAS cheap)
 
 # Run backup
-./build/proxmox-backup
+./build/proxsave
 ```
 
 ### Setup Steps
@@ -158,18 +158,18 @@ chmod 700 /mnt/nas/pbs-backup /mnt/nas/pbs-log
 touch /mnt/nas/pbs-backup/test.txt && rm /mnt/nas/pbs-backup/test.txt
 
 # 4. Configure and run
-./build/proxmox-backup --install
+./build/proxsave --install
 # (use --new-install if you want to reset the install dir first, keeping env/identity)
 # (paste configuration above)
-./build/proxmox-backup --dry-run
-./build/proxmox-backup
+./build/proxsave --dry-run
+./build/proxsave
 ```
 
 ### Expected Results
 
 ```
 Local (SSD):
-/opt/proxmox-backup/backup/
+/opt/proxsave/backup/
 - 7 backups retained (latest week)
 
 Secondary (NAS):
@@ -209,8 +209,9 @@ rclone mkdir gdrive:pbs-logs
 
 # Cloud storage
 CLOUD_ENABLED=true
-CLOUD_REMOTE=gdrive:pbs-backups
-CLOUD_LOG_PATH=gdrive:/pbs-logs
+CLOUD_REMOTE=gdrive
+CLOUD_REMOTE_PATH=/pbs-backups
+CLOUD_LOG_PATH=/pbs-logs
 CLOUD_UPLOAD_MODE=parallel
 CLOUD_PARALLEL_MAX_JOBS=3
 CLOUD_PARALLEL_VERIFICATION=true
@@ -235,10 +236,10 @@ RETENTION_YEARLY=3
 
 ```bash
 # Dry-run
-./build/proxmox-backup --dry-run
+./build/proxsave --dry-run
 
 # Real backup
-./build/proxmox-backup
+./build/proxsave
 
 # Verify
 rclone ls gdrive:pbs-backups/
@@ -276,7 +277,7 @@ rclone ls gdrive:/pbs-logs/
 #### Step 1: Generate Encryption Key
 
 ```bash
-./build/proxmox-backup --newkey
+./build/proxsave --newkey
 
 # Wizard:
 # [2] Generate from personal passphrase
@@ -292,21 +293,22 @@ rclone ls gdrive:/pbs-logs/
 
 # Encryption
 AGE_ENABLED=true
-AGE_RECIPIENT_FILE=/opt/proxmox-backup/configs/recipient.txt
+AGE_RECIPIENT_FILE=/opt/proxsave/configs/recipient.txt
 
 # Bundle (recommended with encryption)
 BUNDLE_ASSOCIATED_FILES=true
 
 # Cloud storage
 CLOUD_ENABLED=true
-CLOUD_REMOTE=gdrive:pbs-encrypted
+CLOUD_REMOTE=gdrive
+CLOUD_REMOTE_PATH=/pbs-encrypted
 MAX_CLOUD_BACKUPS=30
 ```
 
 #### Step 3: Run Backup
 
 ```bash
-./build/proxmox-backup
+./build/proxsave
 
 # Result: backup.20240115_020000.tar.xz.age
 ```
@@ -314,7 +316,7 @@ MAX_CLOUD_BACKUPS=30
 #### Step 4: Decrypt (when needed)
 
 ```bash
-./build/proxmox-backup --decrypt
+./build/proxsave --decrypt
 
 # Select backup: [1]
 # Destination: /tmp/decrypt
@@ -369,9 +371,9 @@ rclone config
 
 # Cloud storage
 CLOUD_ENABLED=true
-# Either style is valid; here we use remote with base path:
-CLOUD_REMOTE=b2:pbs-backups
-CLOUD_LOG_PATH=b2:pbs-backups/logs
+CLOUD_REMOTE=b2
+CLOUD_REMOTE_PATH=/pbs-backups
+CLOUD_LOG_PATH=/pbs-backups/logs
 CLOUD_UPLOAD_MODE=sequential
 
 # Slow network tuning
@@ -401,7 +403,7 @@ RETENTION_YEARLY=5
 ```bash
 # Cron: 2 AM daily
 crontab -e
-0 2 * * * /opt/proxmox-backup/build/proxmox-backup
+0 2 * * * /opt/proxsave/build/proxsave
 ```
 
 **Why nightly?**: Slow upload doesn't impact office hours, B2 free egress 1GB/day.
@@ -452,9 +454,9 @@ rclone config
 
 # Cloud storage (MinIO LAN)
 CLOUD_ENABLED=true
-CLOUD_REMOTE=minio:pbs-backups
-CLOUD_REMOTE_PATH=server1          # Organize by server
-CLOUD_LOG_PATH=minio:/pbs-logs
+CLOUD_REMOTE=minio
+CLOUD_REMOTE_PATH=/pbs-backups/server1    # Organize by server
+CLOUD_LOG_PATH=/pbs-logs
 CLOUD_UPLOAD_MODE=parallel
 CLOUD_PARALLEL_MAX_JOBS=4
 CLOUD_WRITE_HEALTHCHECK=true       # Test write access
@@ -479,7 +481,7 @@ MAX_CLOUD_BACKUPS=168
 ```bash
 # Cron: every hour
 crontab -e
-0 * * * * /opt/proxmox-backup/build/proxmox-backup
+0 * * * * /opt/proxsave/build/proxsave
 ```
 
 ### Expected Results
@@ -536,7 +538,7 @@ WEBHOOK_DISCORD_ALERTS_FORMAT=discord
 WEBHOOK_DISCORD_ALERTS_METHOD=POST
 
 # Run backup
-./build/proxmox-backup
+./build/proxsave
 # Result: Notifications sent to Telegram, Email, and Discord
 ```
 
@@ -623,8 +625,8 @@ COMPRESSION_MODE=standard
 COMPRESSION_THREADS=0
 
 # Primary storage
-BACKUP_PATH=/opt/proxmox-backup/backup
-LOG_PATH=/opt/proxmox-backup/log
+BACKUP_PATH=/opt/proxsave/backup
+LOG_PATH=/opt/proxsave/log
 
 # Secondary storage (NAS)
 SECONDARY_ENABLED=true
@@ -633,9 +635,9 @@ SECONDARY_LOG_PATH=/mnt/nas/pbs-log
 
 # Cloud storage (S3)
 CLOUD_ENABLED=true
-CLOUD_REMOTE=s3:company-backups
-CLOUD_REMOTE_PATH=datacenter1/pbs1
-CLOUD_LOG_PATH=s3:company-backups/logs
+CLOUD_REMOTE=s3
+CLOUD_REMOTE_PATH=/company-backups/datacenter1/pbs1
+CLOUD_LOG_PATH=/company-backups/logs
 CLOUD_UPLOAD_MODE=parallel
 CLOUD_PARALLEL_MAX_JOBS=4
 RCLONE_TRANSFERS=8
@@ -651,7 +653,7 @@ RETENTION_YEARLY=7
 # Encryption
 AGE_ENABLED=true
 BUNDLE_ASSOCIATED_FILES=true
-AGE_RECIPIENT_FILE=/opt/proxmox-backup/configs/recipient.txt
+AGE_RECIPIENT_FILE=/opt/proxsave/configs/recipient.txt
 
 # Notifications
 TELEGRAM_ENABLED=true
@@ -685,12 +687,12 @@ BACKUP_ROOT_HOME=true
 # Custom paths
 CUSTOM_BACKUP_PATHS="
 /root/.config/rclone/rclone.conf
-/opt/proxmox-backup/configs/backup.env
+/opt/proxsave/configs/backup.env
 /etc/custom/app.conf
 "
 
 # Run backup
-./build/proxmox-backup
+./build/proxsave
 ```
 
 ### Cron Schedule
@@ -698,7 +700,7 @@ CUSTOM_BACKUP_PATHS="
 ```bash
 # Daily backup at 2 AM
 crontab -e
-0 2 * * * /opt/proxmox-backup/build/proxmox-backup >> /var/log/pbs-backup-cron.log 2>&1
+0 2 * * * /opt/proxsave/build/proxsave >> /var/log/pbs-backup-cron.log 2>&1
 ```
 
 ### Expected Results
@@ -782,7 +784,8 @@ AGE_RECIPIENT_FILE=configs/recipient.txt
 
 # From Example 3: Google Drive + GFS
 CLOUD_ENABLED=true
-CLOUD_REMOTE=gdrive:pbs-backups
+CLOUD_REMOTE=gdrive
+CLOUD_REMOTE_PATH=/pbs-backups
 RETENTION_POLICY=gfs
 RETENTION_DAILY=7
 RETENTION_WEEKLY=4
@@ -864,10 +867,10 @@ ENABLE_GO_BACKUP=true
 mount /dev/vg0/snap /mnt/snapshot-root   # esempio
 
 # 2) Esegui un dry-run
-SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxmox-backup --dry-run
+SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxsave --dry-run
 
 # 3) Esegui il backup reale (opzionale)
-SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxmox-backup
+SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxsave
 ```
 
 ### Expected Results

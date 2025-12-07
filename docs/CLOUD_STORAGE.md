@@ -10,7 +10,7 @@ Complete guide to configuring rclone for cloud backup storage.
 - [Supported Cloud Providers](#supported-cloud-providers)
 - [Configuring rclone](#configuring-rclone)
 - [Securing Configuration](#securing-configuration)
-- [Configure proxmox-backup](#configure-proxmox-backup)
+- [Configure proxsave](#configure-proxsave)
 - [Performance Tuning](#performance-tuning)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
@@ -21,7 +21,7 @@ Complete guide to configuring rclone for cloud backup storage.
 
 ## Overview
 
-Proxmox Backup Go integrates with [rclone](https://rclone.org/) to provide seamless cloud backup storage across 40+ cloud providers. Cloud storage serves as a **non-critical tertiary backup layer** for long-term archival and disaster recovery.
+Proxsave integrates with [rclone](https://rclone.org/) to provide seamless cloud backup storage across 40+ cloud providers. Cloud storage serves as a **non-critical tertiary backup layer** for long-term archival and disaster recovery.
 
 **Key capabilities**:
 - **Multi-provider support**: Google Drive, S3, Backblaze B2, OneDrive, MinIO, and 40+ more
@@ -36,7 +36,7 @@ Proxmox Backup Go integrates with [rclone](https://rclone.org/) to provide seaml
 
 ## Architecture
 
-proxmox-backup uses a **3-tier storage system**:
+Proxsave uses a **3-tier storage system**:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -304,7 +304,7 @@ chown root:root ~/.config/rclone/rclone.conf
 # Add to backup.env
 CUSTOM_BACKUP_PATHS="
 /root/.config/rclone/rclone.conf
-/opt/proxmox-backup/configs/backup.env
+/opt/proxsave/configs/backup.env
 "
 ```
 
@@ -312,20 +312,20 @@ This ensures rclone config is backed up with your system, enabling disaster reco
 
 ---
 
-## Configure proxmox-backup
+## Configure proxsave
 
 ### Minimal Configuration
 
 ```bash
 # Edit backup.env
-nano /opt/proxmox-backup/configs/backup.env
+nano /opt/proxsave/configs/backup.env
 
 # Enable cloud storage
 CLOUD_ENABLED=true
 # rclone remote NAME (from `rclone config`)
-CLOUD_REMOTE=gdrive
-# Base path inside the remote (optional)
-CLOUD_REMOTE_PATH=pbs-backups
+CLOUD_REMOTE=GoogleDrive
+# Full path (or prefix) inside the remote
+CLOUD_REMOTE_PATH=/proxsave/backup
 
 # Retention
 MAX_CLOUD_BACKUPS=30
@@ -338,9 +338,9 @@ This is sufficient to start! Other options use sensible defaults.
 ```bash
 # Cloud storage
 CLOUD_ENABLED=true
-CLOUD_REMOTE=gdrive
-CLOUD_REMOTE_PATH=pbs-backups         # Optional subdirectory
-CLOUD_LOG_PATH=                       # Optional: separate log path (leave empty or set subdirectory)
+CLOUD_REMOTE=GoogleDrive
+CLOUD_REMOTE_PATH=/proxsave/backup   # Complete folder path inside the remote
+CLOUD_LOG_PATH=/proxsave/log         # Optional: log folder inside the same remote
 
 # Upload mode
 CLOUD_UPLOAD_MODE=parallel
@@ -376,9 +376,9 @@ RETENTION_YEARLY=3
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLOUD_ENABLED` | `false` | Enable cloud storage |
-| `CLOUD_REMOTE` | _(required)_ | rclone remote (either `remote` or `remote:path`) |
-| `CLOUD_REMOTE_PATH` | _(empty)_ | Optional subdirectory within remote (e.g., `backups/proxmox`) |
-| `CLOUD_LOG_PATH` | _(empty)_ | Separate path for logs (or empty to disable) |
+| `CLOUD_REMOTE` | _(required)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported) |
+| `CLOUD_REMOTE_PATH` | _(empty)_ | Full folder path/prefix inside the remote (e.g., `/proxsave/backup`) |
+| `CLOUD_LOG_PATH` | _(empty)_ | Optional log folder on the same remote (set `remote:/path` only when using a different remote) |
 | `CLOUD_UPLOAD_MODE` | `parallel` | `parallel` or `sequential` |
 | `CLOUD_PARALLEL_MAX_JOBS` | `2` | Max concurrent uploads (parallel mode) |
 | `CLOUD_PARALLEL_VERIFICATION` | `true` | Verify checksums after upload |
@@ -399,17 +399,15 @@ For complete configuration reference, see: **[Configuration Guide](CONFIGURATION
 
 **How CLOUD_REMOTE and CLOUD_REMOTE_PATH work together**
 
-ProxSave supports both common rclone styles and normalizes them internally:
+1. **Recommended (remote name + full path in `CLOUD_REMOTE_PATH`)**  
+   - `CLOUD_REMOTE=GoogleDrive`  
+   - `CLOUD_REMOTE_PATH=/proxsave/backup/server1`  
+   → backups in: `GoogleDrive:/proxsave/backup/server1`
 
-1. **Remote name + prefix (recommended for new setups)**  
-   - `CLOUD_REMOTE=gdrive`  
-   - `CLOUD_REMOTE_PATH=backups/proxmox/server1`  
-   → backups in: `gdrive:backups/proxmox/server1`
-
-2. **Remote with base path + optional prefix**  
-   - `CLOUD_REMOTE=gdrive:pbs-backups`  
-   - `CLOUD_REMOTE_PATH=server1`  
-   → backups in: `gdrive:pbs-backups/server1`
+2. **Legacy compatibility (remote already contains a base path)**  
+   - `CLOUD_REMOTE=GoogleDrive:/proxsave/backup`  
+   - `CLOUD_REMOTE_PATH=server1` *(optional extra suffix)*  
+   → backups in: `GoogleDrive:/proxsave/backup/server1`
 
 In both cases ProxSave combines the base path and the optional prefix into a single
 path inside the remote, and uses that consistently for:
@@ -537,11 +535,11 @@ CLOUD_BATCH_PAUSE=0
 
 ```bash
 # Build
-cd /opt/proxmox-backup
+cd /opt/proxsave
 make build
 
 # Dry-run test
-DRY_RUN=true ./build/proxmox-backup
+DRY_RUN=true ./build/proxsave
 
 # Check output:
 # ✓ "Cloud storage initialized: gdrive:pbs-backups"
@@ -553,7 +551,7 @@ DRY_RUN=true ./build/proxmox-backup
 
 ```bash
 # Real backup
-./build/proxmox-backup
+./build/proxsave
 
 # Verify upload
 rclone ls gdrive:pbs-backups/
@@ -627,7 +625,7 @@ This creates a temporary test file (`.pbs-backup-healthcheck-<timestamp>`) and d
 
 ```bash
 # Run with debug level
-./build/proxmox-backup --log-level debug
+./build/proxsave --log-level debug
 
 # Or set in config
 nano configs/backup.env
@@ -644,10 +642,10 @@ DEBUG_LEVEL=extreme
 
 ```bash
 # Check parsed configuration
-grep -E "^CLOUD_|^RCLONE_" /opt/proxmox-backup/configs/backup.env
+grep -E "^CLOUD_|^RCLONE_" /opt/proxsave/configs/backup.env
 
 # Test with dry-run
-./build/proxmox-backup --dry-run --log-level debug
+./build/proxsave --dry-run --log-level debug
 # Check output for loaded config values
 ```
 
@@ -655,16 +653,16 @@ grep -E "^CLOUD_|^RCLONE_" /opt/proxmox-backup/configs/backup.env
 
 ```bash
 # Find latest log
-ls -lt /opt/proxmox-backup/log/
+ls -lt /opt/proxsave/log/
 
 # View log
-cat /opt/proxmox-backup/log/backup-$(hostname)-*.log
+cat /opt/proxsave/log/backup-$(hostname)-*.log
 
 # Filter errors
-grep -i "error\|fail\|warning" /opt/proxmox-backup/log/backup-*.log
+grep -i "error\|fail\|warning" /opt/proxsave/log/backup-*.log
 
 # Filter cloud issues
-grep -i "cloud.*error\|cloud.*fail\|cloud.*warning" /opt/proxmox-backup/log/backup-*.log
+grep -i "cloud.*error\|cloud.*fail\|cloud.*warning" /opt/proxsave/log/backup-*.log
 ```
 
 ---
@@ -677,7 +675,7 @@ grep -i "cloud.*error\|cloud.*fail\|cloud.*warning" /opt/proxmox-backup/log/back
 # Save critical configs
 tar -czf /tmp/pbs-config-backup.tar.gz \
     /root/.config/rclone/rclone.conf \
-    /opt/proxmox-backup/configs/backup.env
+    /opt/proxsave/configs/backup.env
 
 # Upload to cloud (manual)
 rclone copy /tmp/pbs-config-backup.tar.gz gdrive:/pbs-disaster-recovery/
@@ -685,7 +683,7 @@ rclone copy /tmp/pbs-config-backup.tar.gz gdrive:/pbs-disaster-recovery/
 # Or automate via backup.env
 CUSTOM_BACKUP_PATHS="
 /root/.config/rclone/rclone.conf
-/opt/proxmox-backup/configs/
+/opt/proxsave/configs/
 "
 ```
 
@@ -800,7 +798,7 @@ Example comparison:
 - ✗ WRONG: `SECONDARY_PATH=192.168.0.10:/backup`
 - ✗ WRONG: `SECONDARY_PATH=//server/share`
 - ✓ RIGHT: Mount first: `sudo mount 192.168.0.10:/backup /mnt/backup`, then `SECONDARY_PATH=/mnt/backup`
-- ✓ ALTERNATIVE: Use `CLOUD_REMOTE=minio:backup` (requires rclone configuration for MinIO/S3 on LAN)
+- ✓ ALTERNATIVE: Use `CLOUD_REMOTE=minio` with `CLOUD_REMOTE_PATH=/backup` (requires rclone configuration for MinIO/S3 on LAN)
 
 **Q: Do cloud logs consume too much space?**
 A: Logs follow backup retention automatically. To disable cloud log upload: `CLOUD_LOG_PATH=""` (empty).
@@ -817,7 +815,7 @@ A: Depends on `RCLONE_TRANSFERS`. Each transfer uses ~10-50MB. With `RCLONE_TRAN
 **Q: Can I test upload without creating backup?**
 A: Yes, use existing file:
 ```bash
-rclone copy /opt/proxmox-backup/backup/existing-backup.tar.xz gdrive:pbs-backups/ --dry-run
+rclone copy /opt/proxsave/backup/existing-backup.tar.xz gdrive:pbs-backups/ --dry-run
 # Remove --dry-run for real upload
 ```
 
@@ -873,7 +871,8 @@ rclone check /local/dir/ gdrive:pbs-backups/ --checksum
 ```bash
 # Essential
 CLOUD_ENABLED=true
-CLOUD_REMOTE=gdrive:pbs-backups
+CLOUD_REMOTE=GoogleDrive
+CLOUD_REMOTE_PATH=/proxsave/backup
 MAX_CLOUD_BACKUPS=30
 
 # Upload tuning

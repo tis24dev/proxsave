@@ -1,4 +1,4 @@
-# Proxmox Backup Go - Restore Technical Documentation
+# Proxsave - Restore Technical Documentation
 
 Technical architecture and implementation details for the restore system.
 
@@ -31,7 +31,7 @@ Technical architecture and implementation details for the restore system.
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    CLI Entry Point                       │
-│              cmd/proxmox-backup/main.go                  │
+│              cmd/proxsave/main.go                  │
 └────────────────────┬────────────────────────────────────┘
                      │
                      ↓
@@ -121,7 +121,7 @@ Completion Summary
 
 | File | Purpose | Key Functions |
 |------|---------|---------------|
-| `cmd/proxmox-backup/main.go` | Entry point, CLI parsing | `main()`, flag handling |
+| `cmd/proxsave/main.go` | Entry point, CLI parsing | `main()`, flag handling |
 | `internal/orchestrator/restore.go` | Main orchestration | `RunRestoreWorkflow()` |
 | `internal/orchestrator/categories.go` | Category definitions | `AllCategories()`, `PathMatchesCategory()` |
 | `internal/orchestrator/selective.go` | Category selection UI | `SelectRestoreMode()`, `ShowRestorePlan()` |
@@ -130,7 +130,7 @@ Completion Summary
 | `internal/orchestrator/backup_safety.go` | Safety backups | `CreateSafetyBackup()` |
 | `internal/orchestrator/directory_recreation.go` | Storage setup | `RecreateDirectoriesFromConfig()` |
 
-### File: cmd/proxmox-backup/main.go
+### File: cmd/proxsave/main.go
 
 **Lines 562-578**: Entry point for restore flag
 
@@ -347,7 +347,7 @@ type Category struct {
 
 #### Phase 1: Initialization
 
-**File**: `cmd/proxmox-backup/main.go:562-578`
+**File**: `cmd/proxsave/main.go:562-578`
 
 ```go
 if args.Restore {
@@ -389,7 +389,7 @@ defer func() {
 1. **Path Selection** (`decrypt.go:166-203`):
    ```go
    Select backup source:
-     [1] Primary: /opt/proxmox-backup/backups
+     [1] Primary: /opt/proxsave/backups
      [2] Secondary: /mnt/secondary/backups
      [3] Cloud: /mnt/cloud-backups
    ```
@@ -406,7 +406,7 @@ defer func() {
 4. **Decryption** (`decrypt.go:399-482`):
    - Check if encrypted (manifest)
    - Prompt for AGE key/passphrase
-   - Decrypt to `/tmp/proxmox-backup/proxmox-decrypt-<random>/`
+   - Decrypt to `/tmp/proxsave/proxmox-decrypt-<random>/`
    - Verify SHA256 checksum
 
 **Data Structure**:
@@ -650,7 +650,7 @@ func CreateSafetyBackup(
     // 1. Create backup archive
     timestamp := time.Now().Format("20060102_150405")
     backupPath := filepath.Join(
-        "/tmp/proxmox-backup",
+        "/tmp/proxsave",
         fmt.Sprintf("restore_backup_%s.tar.gz", timestamp),
     )
 
@@ -844,7 +844,7 @@ func extractSelectiveArchive(
 ) (string, error) {
     // Create log file
     logPath := filepath.Join(
-        "/tmp/proxmox-backup",
+        "/tmp/proxsave",
         fmt.Sprintf("restore_%s.log", time.Now().Format("20060102_150405")),
     )
     logFile, _ := os.Create(logPath)
@@ -1892,13 +1892,13 @@ func TestPathMatchesCategory(t *testing.T) {
 # Test full restore workflow
 
 # 1. Create test backup
-./build/proxmox-backup
+./build/proxsave
 
 # 2. Modify system files
 echo "test" > /etc/hostname
 
 # 3. Run restore (with test responses)
-echo -e "1\n1\n1\nRESTORE\n" | ./build/proxmox-backup --restore
+echo -e "1\n1\n1\nRESTORE\n" | ./build/proxsave --restore
 
 # 4. Verify restoration
 if grep -q "original-hostname" /etc/hostname; then
@@ -1937,14 +1937,14 @@ func (m *MockServiceManager) Stop(service string) error {
 
 ```bash
 # Set log level to debug
-./build/proxmox-backup --restore --log-level=debug
+./build/proxsave --restore --log-level=debug
 ```
 
 ### Review Detailed Logs
 
 ```bash
 # Restore log
-cat /tmp/proxmox-backup/restore_20251120_143052.log
+cat /tmp/proxsave/restore_20251120_143052.log
 
 # Service logs
 journalctl -u pve-cluster --since "10 minutes ago"

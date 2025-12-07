@@ -16,7 +16,7 @@ Complete guide for upgrading from the Bash version (v0.7.4-bash or earlier) to t
 
 ## Overview
 
-If you're currently using the Bash version of proxmox-backup (v0.7.4-bash or earlier), you can upgrade to the Go version with minimal effort. The Go version offers significant performance improvements while maintaining backward compatibility for most configuration variables.
+If you're currently using the legacy Bash version (historically called proxmox-backup, v0.7.4-bash or earlier), you can upgrade to the Go-based proxsave release with minimal effort. The Go version offers significant performance improvements while maintaining backward compatibility for most configuration variables.
 
 **Key benefits of upgrading to Go**:
 - ⚡ **10-100x faster** execution (compiled vs interpreted)
@@ -34,7 +34,7 @@ If you're currently using the Bash version of proxmox-backup (v0.7.4-bash or ear
 
 The migration path is designed to be smooth and safe:
 
-- ✅ **Both versions can coexist**: The Bash and Go versions can run in the same directory (`/opt/proxmox-backup/`) as they use different internal paths and binary names
+- ✅ **Both versions can coexist**: The Bash and Go versions can run in the same directory (`/opt/proxsave/`) as they use different internal paths and binary names
 - ✅ **Most variables work unchanged**: ~70 configuration variables have identical names between Bash and Go
 - ✅ **Automatic fallback support**: 16 renamed variables automatically read old Bash names via fallback mechanism
 - ⚠️ **Some variables require manual conversion**: 2 variables have semantic changes (storage thresholds, cloud path format)
@@ -61,10 +61,10 @@ The fastest way to migrate is using the built-in migration tool:
 
 ```bash
 # Step 1: Preview migration (recommended first step)
-./build/proxmox-backup --env-migration-dry-run
+./build/proxsave --env-migration-dry-run
 
 # Step 2: Execute real migration
-./build/proxmox-backup --env-migration
+./build/proxsave --env-migration
 ```
 
 **What the tool does**:
@@ -83,12 +83,12 @@ The fastest way to migrate is using the built-in migration tool:
   - CLOUD_BACKUP_PATH → CLOUD_REMOTE_PATH
 ℹ Skipped 18 legacy variables (LEGACY category)
 
-Configuration written to: /opt/proxmox-backup/configs/backup.env
-Backup saved to: /opt/proxmox-backup/configs/backup.env.bak-20251117-143022
+Configuration written to: /opt/proxsave/configs/backup.env
+Backup saved to: /opt/proxsave/configs/backup.env.bak-20251117-143022
 
 ⚠ IMPORTANT: Review SEMANTIC CHANGE variables before running backup!
 
-Next step: ./build/proxmox-backup --dry-run
+Next step: ./build/proxsave --dry-run
 ```
 
 ### Option 2: Manual Migration with Reference Guide
@@ -120,12 +120,12 @@ BACKUP_ENV_MAPPING.md
 ### Step 1: Build the Go Version
 
 ```bash
-cd /opt/proxmox-backup
+cd /opt/proxsave
 make build
 
 # Verify binary
-ls -lh build/proxmox-backup
-./build/proxmox-backup --version
+ls -lh build/proxsave
+./build/proxsave --version
 ```
 
 ### Step 2: Migrate Your Configuration
@@ -134,13 +134,13 @@ ls -lh build/proxmox-backup
 
 ```bash
 # Preview migration (safe, no changes)
-./build/proxmox-backup --env-migration-dry-run
+./build/proxsave --env-migration-dry-run
 
 # Review the output carefully
 # Check which variables need manual review
 
 # Execute migration
-./build/proxmox-backup --env-migration
+./build/proxsave --env-migration
 
 # Manual review of SEMANTIC CHANGE variables
 nano configs/backup.env
@@ -151,7 +151,7 @@ nano configs/backup.env
 
 ```bash
 # Copy Bash config to Go config location
-cp /opt/proxmox-backup/env/backup.env /opt/proxmox-backup/configs/backup.env
+cp /opt/proxsave/env/backup.env /opt/proxsave/configs/backup.env
 
 # Edit with BACKUP_ENV_MAPPING.md as reference
 nano configs/backup.env
@@ -159,8 +159,8 @@ nano configs/backup.env
 # Convert SEMANTIC CHANGE variables manually:
 # - STORAGE_WARNING_THRESHOLD_PRIMARY="90" → MIN_DISK_SPACE_PRIMARY_GB="10"
 # - CLOUD_BACKUP_PATH="/gdrive:backups/folder" → split into:
-#   CLOUD_REMOTE="gdrive:backups"
-#   CLOUD_REMOTE_PATH="folder"
+#   CLOUD_REMOTE="gdrive"
+#   CLOUD_REMOTE_PATH="/backups/folder"
 
 # Remove LEGACY variables (optional, they're ignored anyway)
 ```
@@ -169,7 +169,7 @@ nano configs/backup.env
 
 ```bash
 # Dry-run to verify configuration
-./build/proxmox-backup --dry-run
+./build/proxsave --dry-run
 
 # Check the output for any warnings or errors
 # Look for:
@@ -179,14 +179,14 @@ nano configs/backup.env
 # - Any WARNINGS about variables
 
 # View parsed configuration
-./build/proxmox-backup --dry-run --log-level debug | grep -i "config\|warning"
+./build/proxsave --dry-run --log-level debug | grep -i "config\|warning"
 ```
 
 ### Step 4: Run a Test Backup
 
 ```bash
 # First real backup with Go version
-./build/proxmox-backup
+./build/proxsave
 
 # Verify results
 ls -lh backup/
@@ -216,15 +216,15 @@ The old Bash version remains functional and can be used as fallback during the t
 
 ```bash
 # Keep Bash version available
-# /opt/proxmox-backup/script/proxmox-backup.sh (Bash)
-# /opt/proxmox-backup/build/proxmox-backup (Go)
+# /opt/proxsave/script/proxmox-backup.sh (Bash)
+# /opt/proxsave/build/proxsave (Go)
 
 # Test Go version in cron first
 crontab -e
 # Comment Bash line:
-# 0 2 * * * /opt/proxmox-backup/script/proxmox-backup.sh
+# 0 2 * * * /opt/proxsave/script/proxmox-backup.sh
 # Add Go line:
-0 2 * * * /opt/proxmox-backup/build/proxmox-backup
+0 2 * * * /opt/proxsave/build/proxsave
 
 # Monitor for 1-2 weeks, then remove Bash cron completely
 ```
@@ -291,22 +291,21 @@ Go: MIN_DISK_SPACE_PRIMARY_GB="10"
 CLOUD_BACKUP_PATH="/gdrive:pbs-backups/folder"
 ```
 
-**Go version** (split into remote + prefix):
+**Go version** (remote name + path/prefix):
 ```bash
-CLOUD_REMOTE="gdrive:pbs-backups"        # rclone remote + bucket/folder
-CLOUD_REMOTE_PATH="folder"               # Optional subdirectory prefix
-# or
-CLOUD_REMOTE_PATH=""                     # Empty for root
+CLOUD_REMOTE="gdrive"                    # rclone remote name
+CLOUD_REMOTE_PATH="/pbs-backups/folder"  # Full path/prefix inside that remote
+# Optional: add extra suffixes (e.g., "/pbs-backups/folder/server1")
 ```
 
 **Example conversions**:
 
 | Bash `CLOUD_BACKUP_PATH` | Go `CLOUD_REMOTE` | Go `CLOUD_REMOTE_PATH` |
 |--------------------------|-------------------|------------------------|
-| `/gdrive:backups` | `gdrive:backups` | `""` |
-| `/gdrive:backups/pve1` | `gdrive:backups` | `pve1` |
-| `/s3:my-bucket/folder/subfolder` | `s3:my-bucket` | `folder/subfolder` |
-| `/b2:pbs/archives` | `b2:pbs` | `archives` |
+| `/gdrive:backups` | `gdrive` | `/backups` |
+| `/gdrive:backups/pve1` | `gdrive` | `/backups/pve1` |
+| `/s3:my-bucket/folder/subfolder` | `s3` | `/my-bucket/folder/subfolder` |
+| `/b2:pbs/archives` | `b2` | `/pbs/archives` |
 
 ### Legacy Variables (No Longer Needed)
 
@@ -415,7 +414,7 @@ MIN_DISK_SPACE_PRIMARY_GB="10"
 - Cloud uploads fail with "path not found"
 - rclone errors about invalid remote
 
-**Solution**: Split `CLOUD_BACKUP_PATH` into `CLOUD_REMOTE` (remote:path) and `CLOUD_REMOTE_PATH` (prefix).
+**Solution**: Split `CLOUD_BACKUP_PATH` into `CLOUD_REMOTE` (remote name) and `CLOUD_REMOTE_PATH` (full path inside that remote).
 
 **Example**:
 ```bash
@@ -423,8 +422,8 @@ MIN_DISK_SPACE_PRIMARY_GB="10"
 CLOUD_BACKUP_PATH="/gdrive:pbs-backups/server1"
 
 # NEW (Go):
-CLOUD_REMOTE="gdrive:pbs-backups"
-CLOUD_REMOTE_PATH="server1"
+CLOUD_REMOTE="gdrive"
+CLOUD_REMOTE_PATH="/pbs-backups/server1"
 ```
 
 ---
@@ -482,7 +481,7 @@ COMPRESSION_MODE=standard
    ```
 3. **Enable debug logging**:
    ```bash
-   ./build/proxmox-backup --dry-run --log-level debug
+   ./build/proxsave --dry-run --log-level debug
    ```
 4. **Check for SEMANTIC CHANGE variables**:
    ```bash

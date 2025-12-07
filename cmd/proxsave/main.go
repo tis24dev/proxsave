@@ -853,10 +853,17 @@ func run() int {
 		cloudLogPath := strings.TrimSpace(cfg.CloudLogPath)
 		if cloudLogPath == "" {
 			logging.Warning("✗ Cloud log directory not configured (cloud storage enabled)")
-		} else if isLocalPath(cloudLogPath) {
-			checkDir("Cloud log directory", cloudLogPath)
+		} else if strings.Contains(cloudLogPath, ":") {
+			// Legacy format with explicit remote (e.g., "gdrive:/logs")
+			logging.Info("Cloud log path (legacy): %s", cloudLogPath)
 		} else {
-			logging.Info("Skipping local validation for cloud log directory (remote path): %s", cloudLogPath)
+			// New format without remote - will use CLOUD_REMOTE (e.g., "/logs")
+			remoteName := extractRemoteName(cfg.CloudRemote)
+			if remoteName != "" {
+				logging.Info("Cloud log path: %s (using remote: %s)", cloudLogPath, remoteName)
+			} else {
+				logging.Warning("Cloud log path %s requires CLOUD_REMOTE to be set", cloudLogPath)
+			}
 		}
 	}
 	checkDir("Lock directory", cfg.LockPath)

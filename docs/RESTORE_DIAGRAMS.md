@@ -483,7 +483,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Categories Selected]) --> CreatePath[Create /tmp/proxmox-backup/]
+    Start([Categories Selected]) --> CreatePath[Create /tmp/proxsave/]
     CreatePath --> CreateArchive[Create restore_backup_TIMESTAMP.tar.gz]
     CreateArchive --> LoopCats[For Each Category]
 
@@ -510,7 +510,7 @@ flowchart TD
     MoreCats -->|No| CloseTar[Close TAR Archive]
 
     CloseTar --> Success([Safety Backup Created])
-    Success --> DisplayPath["Display:<br/>/tmp/proxmox-backup/restore_backup_TIMESTAMP.tar.gz"]
+    Success --> DisplayPath["Display:<br/>/tmp/proxsave/restore_backup_TIMESTAMP.tar.gz"]
     DisplayPath --> Rollback["Show Rollback Command:<br/>tar -xzf backup.tar.gz -C /"]
 
     style Start fill:#87CEEB
@@ -535,7 +535,7 @@ flowchart TD
     UserChoice -->|2. Identity| GetKey[Get AGE Identity File]
     UserChoice -->|0. Cancel| Abort([Abort])
 
-    GetPass --> PrepareTemp[Prepare /tmp/proxmox-backup/proxmox-decrypt-XXXX/]
+    GetPass --> PrepareTemp[Prepare /tmp/proxsave/proxmox-decrypt-XXXX/]
     GetKey --> PrepareTemp
 
     PrepareTemp --> Decrypt[Run AGE Decrypt]

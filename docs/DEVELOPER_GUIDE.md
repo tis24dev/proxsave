@@ -1,6 +1,6 @@
 # Developer Guide
 
-Guide for contributing to Proxmox Backup Go, including development setup, coding guidelines, and useful commands.
+Guide for contributing to Proxsave, including development setup, coding guidelines, and useful commands.
 
 ## Table of Contents
 
@@ -19,7 +19,7 @@ Guide for contributing to Proxmox Backup Go, including development setup, coding
 
 ## Overview
 
-Proxmox Backup Go is built with modern Go practices, emphasizing:
+Proxsave is built with modern Go practices, emphasizing:
 
 - **Performance**: Compiled binary, concurrent operations
 - **Reliability**: Comprehensive error handling, safe defaults
@@ -59,7 +59,7 @@ age --version
 ```bash
 # Clone from GitHub
 git clone https://github.com/tis24dev/proxsave.git
-cd proxmox-backup
+cd proxsave
 
 # Install dependencies
 go mod tidy
@@ -96,9 +96,9 @@ go test ./...
 ## Project Structure
 
 ```
-proxmox-backup/
+proxsave/
 ├── cmd/
-│   └── proxmox-backup/        # Main entry point
+│   └── proxsave/        # Main entry point
 │       └── main.go
 ├── internal/                  # Private application code
 │   ├── config/                # Configuration management
@@ -124,7 +124,7 @@ proxmox-backup/
 │   └── logger/                # Structured logging
 ├── pkg/                       # Public libraries (if any)
 ├── build/                     # Build artifacts
-│   └── proxmox-backup
+│   └── proxsave
 ├── configs/                   # Configuration files
 │   └── backup.env
 ├── docs/                      # Documentation
@@ -163,18 +163,18 @@ proxmox-backup/
 # Standard development build
 make build
 
-# Output: build/proxmox-backup
+# Output: build/proxsave
 ```
 
 ### Optimized Build
 
 ```bash
 # Optimized build (stripped symbols, smaller binary)
-go build -ldflags="-s -w" -o build/proxmox-backup ./cmd/proxmox-backup
+go build -ldflags="-s -w" -o build/proxsave ./cmd/proxsave
 
 # With version info
 VERSION=$(git describe --tags --always)
-go build -ldflags="-s -w -X main.version=${VERSION}" -o build/proxmox-backup ./cmd/proxmox-backup
+go build -ldflags="-s -w -X main.version=${VERSION}" -o build/proxsave ./cmd/proxsave
 ```
 
 ### Run Without Building
@@ -184,7 +184,7 @@ go build -ldflags="-s -w -X main.version=${VERSION}" -o build/proxmox-backup ./c
 make run
 
 # Or manually
-go run ./cmd/proxmox-backup
+go run ./cmd/proxsave
 ```
 
 ### Clean Build Artifacts
@@ -202,13 +202,13 @@ make build
 
 ```bash
 # Linux AMD64 (default)
-GOOS=linux GOARCH=amd64 go build -o build/proxmox-backup-linux-amd64 ./cmd/proxmox-backup
+GOOS=linux GOARCH=amd64 go build -o build/proxsave-linux-amd64 ./cmd/proxsave
 
 # Linux ARM64 (Raspberry Pi, ARM servers)
-GOOS=linux GOARCH=arm64 go build -o build/proxmox-backup-linux-arm64 ./cmd/proxmox-backup
+GOOS=linux GOARCH=arm64 go build -o build/proxsave-linux-arm64 ./cmd/proxsave
 
 # Linux ARM32 (older Raspberry Pi)
-GOOS=linux GOARCH=arm go build -o build/proxmox-backup-linux-arm ./cmd/proxmox-backup
+GOOS=linux GOARCH=arm go build -o build/proxsave-linux-arm ./cmd/proxsave
 ```
 
 ---
@@ -318,7 +318,7 @@ go list -u -m all
 go mod vendor
 
 # Build with vendor
-go build -mod=vendor -o build/proxmox-backup ./cmd/proxmox-backup
+go build -mod=vendor -o build/proxsave ./cmd/proxsave
 ```
 
 ---
@@ -449,8 +449,8 @@ We welcome contributions! Here's how you can help:
 **1. Fork and clone**:
 ```bash
 # Fork on GitHub, then:
-git clone https://github.com/YOUR_USERNAME/proxmox-backup.git
-cd proxmox-backup
+git clone https://github.com/YOUR_USERNAME/proxsave.git
+cd proxsave
 git remote add upstream https://github.com/tis24dev/proxsave.git
 ```
 
@@ -547,7 +547,7 @@ None. Existing simple retention remains default.
 make build
 
 # Optimized build
-go build -ldflags="-s -w" -o build/proxmox-backup ./cmd/proxmox-backup
+go build -ldflags="-s -w" -o build/proxsave ./cmd/proxsave
 
 # Run without building
 make run
@@ -605,13 +605,13 @@ go mod vendor
 
 ```bash
 # Run with delve debugger
-dlv debug ./cmd/proxmox-backup
+dlv debug ./cmd/proxsave
 
 # Run with race detector
-go run -race ./cmd/proxmox-backup
+go run -race ./cmd/proxsave
 
 # Build with debug symbols
-go build -gcflags="all=-N -l" -o build/proxmox-backup-debug ./cmd/proxmox-backup
+go build -gcflags="all=-N -l" -o build/proxsave-debug ./cmd/proxsave
 ```
 
 ### rclone Utilities (for cloud development)
@@ -758,4 +758,4 @@ This project is licensed under the **MIT License** - see the [LICENSE](../LICENS
 
 ---
 
-Thank you for contributing to Proxmox Backup Go! 🎉
+Thank you for contributing to Proxsave! 🎉
