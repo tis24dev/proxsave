@@ -106,6 +106,35 @@ func TestCollectCustomPathsHonorsContext(t *testing.T) {
 	}
 }
 
+func TestCollectSSHKeysCopiesEtcSSH(t *testing.T) {
+	collector := newTestCollector(t)
+
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+
+	srcDir := filepath.Join(root, "etc", "ssh")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("failed to create fake /etc/ssh: %v", err)
+	}
+	configPath := filepath.Join(srcDir, "sshd_config")
+	if err := os.WriteFile(configPath, []byte("Port 22\n"), 0o600); err != nil {
+		t.Fatalf("failed to write sshd_config: %v", err)
+	}
+
+	if err := collector.collectSSHKeys(context.Background()); err != nil {
+		t.Fatalf("collectSSHKeys failed: %v", err)
+	}
+
+	destPath := filepath.Join(collector.tempDir, "etc", "ssh", "sshd_config")
+	got, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatalf("expected sshd_config copied, got error: %v", err)
+	}
+	if string(got) != "Port 22\n" {
+		t.Fatalf("copied sshd_config mismatch: %q", string(got))
+	}
+}
+
 func TestWriteReportFileCreatesDirectories(t *testing.T) {
 	collector := newTestCollector(t)
 	report := filepath.Join(collector.tempDir, "reports", "test", "report.txt")

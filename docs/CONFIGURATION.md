@@ -987,7 +987,7 @@ BACKUP_SCRIPT_DIR=true             # /opt/proxmox-backup directory
 BACKUP_CRITICAL_FILES=true         # /etc/fstab, /etc/hostname, /etc/resolv.conf
 
 # SSH keys
-BACKUP_SSH_KEYS=true               # /root/.ssh
+BACKUP_SSH_KEYS=true               # /root/.ssh, /etc/ssh
 
 # ZFS configuration
 BACKUP_ZFS_CONFIG=true             # /etc/zfs, /etc/hostid, zpool cache & properties

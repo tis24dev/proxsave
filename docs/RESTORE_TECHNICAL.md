@@ -277,6 +277,12 @@ type Category struct {
    - Common categories only
    - Network, SSL, SSH, services
 
+**SSH Category Coverage**
+
+- `./etc/ssh/` → sshd configuration, host keys, authorized_keys
+- `./root/.ssh/` → root private/public keys and known_hosts
+  (these are the paths matched by the `ssh` category during restore)
+
 ### File: internal/orchestrator/selective.go
 
 **Purpose**: Interactive category selection UI

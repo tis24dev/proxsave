@@ -946,19 +946,14 @@ func (c *Collector) collectSSHKeys(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.logger.Debug("Collecting SSH keys for host, root and users")
+	c.logger.Debug("Collecting SSH configuration and keys for host, root and users")
 
-	// Host keys (public)
-	if matches, err := filepath.Glob(c.systemPath("/etc/ssh/ssh_host_*")); err == nil {
-		for _, file := range matches {
-			if !strings.HasSuffix(file, ".pub") {
-				continue
-			}
-			dest := filepath.Join(c.tempDir, strings.TrimPrefix(file, "/"))
-			if err := c.safeCopyFile(ctx, file, dest, "SSH host key"); err != nil && !errors.Is(err, os.ErrNotExist) {
-				c.logger.Debug("Failed to copy SSH host key %s: %v", file, err)
-			}
-		}
+	// Capture full SSH daemon configuration (sshd_config, host keys, etc.)
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/ssh"),
+		filepath.Join(c.tempDir, "etc/ssh"),
+		"SSH configuration"); err != nil {
+		c.logger.Debug("Failed to copy /etc/ssh: %v", err)
 	}
 
 	// Root SSH keys

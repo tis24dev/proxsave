@@ -186,7 +186,7 @@ Select restore mode:
 **Categories Included**:
 - `network` - Network interfaces, hostname, routing
 - `ssl` - SSL/TLS certificates
-- `ssh` - SSH keys and configuration
+- `ssh` - SSH daemon configuration (`/etc/ssh`) and SSH keys (root/home users)
 - `services` - Systemd service configs and udev rules
 
 **Command Flow**:
