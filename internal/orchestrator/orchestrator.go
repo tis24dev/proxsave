@@ -354,6 +354,14 @@ func (o *Orchestrator) RunPreBackupChecks(ctx context.Context) error {
 			} else {
 				o.logger.Info("✓ %s: %s", result.Name, result.Message)
 			}
+			continue
+		}
+
+		// For failed checks, include the optional result.Code to give more
+		// context (e.g., PERMISSION_DENIED, FS_IO_ERROR) without changing
+		// existing semantics.
+		if result.Code != "" {
+			o.logger.Error("✗ %s (%s): %s", result.Name, result.Code, result.Message)
 		} else {
 			o.logger.Error("✗ %s: %s", result.Name, result.Message)
 		}

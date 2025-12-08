@@ -115,3 +115,15 @@ func TestDiscoverBackupCandidates_EmptyDir(t *testing.T) {
 		t.Fatalf("expected 0 candidates, got %d", len(cands))
 	}
 }
+
+func TestRunDecryptWorkflowWithDepsRequiresConfig(t *testing.T) {
+	if err := RunDecryptWorkflowWithDeps(context.Background(), &Deps{}, "1.0.0"); err == nil {
+		t.Fatalf("expected configuration error")
+	}
+}
+
+func TestRunDecryptWorkflowRequiresConfig(t *testing.T) {
+	if err := RunDecryptWorkflow(context.Background(), nil, nil, "1.0.0"); err == nil {
+		t.Fatalf("expected error when configuration is missing")
+	}
+}

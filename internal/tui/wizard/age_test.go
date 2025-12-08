@@ -1,11 +1,17 @@
 package wizard
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
+
+	"github.com/tis24dev/proxsave/internal/tui"
 )
 
 func TestValidatePublicKey(t *testing.T) {
@@ -191,4 +197,175 @@ func TestSaveAgeRecipientErrors(t *testing.T) {
 	if err := SaveAgeRecipient(target, "age1final"); err == nil || !strings.Contains(err.Error(), "chmod recipient file") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestConfirmRecipientOverwriteSelection(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	tests := []struct {
+		name   string
+		button string
+		want   bool
+	}{
+		{name: "overwrite", button: "Overwrite", want: true},
+		{name: "cancel", button: "Cancel", want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+				done := extractModalDone(focus.(*tview.Modal))
+				done(0, tc.button)
+				return nil
+			}
+
+			got, err := ConfirmRecipientOverwrite("/tmp/recipient.age", "/etc/proxsave/.env", "sig-xyz")
+			if err != nil {
+				t.Fatalf("ConfirmRecipientOverwrite returned error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %v, want %v for button %q", got, tc.want, tc.button)
+			}
+		})
+	}
+}
+
+func TestConfirmRecipientOverwriteModalIncludesRecipientPath(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	var modalText string
+	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		modalText = extractModalText(focus.(*tview.Modal))
+		return nil
+	}
+
+	_, err := ConfirmRecipientOverwrite("/var/lib/proxsave/recipient.age", "/etc/.env", "sig")
+	if err != nil {
+		t.Fatalf("ConfirmRecipientOverwrite returned error: %v", err)
+	}
+	if !strings.Contains(modalText, "/var/lib/proxsave/recipient.age") {
+		t.Fatalf("expected modal to mention recipient path, got %q", modalText)
+	}
+}
+
+func TestConfirmRecipientOverwriteRunnerError(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return errors.New("boom")
+	}
+
+	if _, err := ConfirmRecipientOverwrite("/tmp/recipient.age", "/etc/.env", "sig"); err == nil {
+		t.Fatalf("expected error from runner")
+	}
+}
+
+func TestRunAgeSetupWizardExistingKey(t *testing.T) {
+	data, err := runAgeWizardTest(t, func(form *tview.Form) {
+		drop := form.GetFormItem(0).(*tview.DropDown)
+		drop.SetCurrentOption(0)
+		publicKey := form.GetFormItem(1).(*tview.InputField)
+		publicKey.SetText("age1validkey")
+		pressFormButton(t, form, "Continue")
+	})
+	if err != nil {
+		t.Fatalf("RunAgeSetupWizard returned error: %v", err)
+	}
+	if data.SetupType != "existing" {
+		t.Fatalf("unexpected setup type: %s", data.SetupType)
+	}
+	if data.RecipientKey != "age1validkey" {
+		t.Fatalf("expected recipient key propagated, got %q", data.RecipientKey)
+	}
+}
+
+func TestRunAgeSetupWizardPassphrase(t *testing.T) {
+	data, err := runAgeWizardTest(t, func(form *tview.Form) {
+		drop := form.GetFormItem(0).(*tview.DropDown)
+		drop.SetCurrentOption(1)
+		pass := form.GetFormItem(2).(*tview.InputField)
+		confirm := form.GetFormItem(3).(*tview.InputField)
+		pass.SetText("longenoughpass")
+		confirm.SetText("longenoughpass")
+		pressFormButton(t, form, "Continue")
+	})
+	if err != nil {
+		t.Fatalf("RunAgeSetupWizard returned error: %v", err)
+	}
+	if data.SetupType != "passphrase" {
+		t.Fatalf("unexpected setup type: %s", data.SetupType)
+	}
+	if data.Passphrase != "longenoughpass" {
+		t.Fatalf("expected passphrase saved, got %q", data.Passphrase)
+	}
+	if data.PublicKey != "" || data.PrivateKey != "" {
+		t.Fatalf("unexpected keys for passphrase mode: %+v", data)
+	}
+}
+
+func TestRunAgeSetupWizardPrivateKey(t *testing.T) {
+	data, err := runAgeWizardTest(t, func(form *tview.Form) {
+		drop := form.GetFormItem(0).(*tview.DropDown)
+		drop.SetCurrentOption(2)
+		privateField := form.GetFormItem(4).(*tview.InputField)
+		privateField.SetText("AGE-SECRET-KEY-1valid")
+		pressFormButton(t, form, "Continue")
+	})
+	if err != nil {
+		t.Fatalf("RunAgeSetupWizard returned error: %v", err)
+	}
+	if data.SetupType != "privatekey" {
+		t.Fatalf("unexpected setup type: %s", data.SetupType)
+	}
+	if data.PrivateKey != "AGE-SECRET-KEY-1valid" {
+		t.Fatalf("expected private key saved, got %q", data.PrivateKey)
+	}
+	if data.Passphrase != "" || data.PublicKey != "" {
+		t.Fatalf("unexpected fields populated: %+v", data)
+	}
+}
+
+func TestRunAgeSetupWizardCancel(t *testing.T) {
+	data, err := runAgeWizardTest(t, func(form *tview.Form) {
+		pressFormButton(t, form, "Cancel")
+	})
+	if err != ErrAgeSetupCancelled {
+		t.Fatalf("expected ErrAgeSetupCancelled, got %v", err)
+	}
+	if data != nil {
+		t.Fatalf("expected nil data on cancel")
+	}
+}
+
+func runAgeWizardTest(t *testing.T, configure func(form *tview.Form)) (*AgeSetupData, error) {
+	t.Helper()
+	originalRunner := ageWizardRunner
+	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		form, ok := focus.(*tview.Form)
+		if !ok {
+			t.Fatalf("expected *tview.Form focus, got %T", focus)
+		}
+		configure(form)
+		return nil
+	}
+	t.Cleanup(func() { ageWizardRunner = originalRunner })
+	return RunAgeSetupWizard(context.Background(), "/tmp/recipient.age", "/etc/proxsave/config.env", "sig-test")
+}
+
+func pressFormButton(t *testing.T, form *tview.Form, label string) {
+	t.Helper()
+	index := form.GetButtonIndex(label)
+	if index < 0 {
+		t.Fatalf("button %q not found", label)
+	}
+	button := form.GetButton(index)
+	handler := button.InputHandler()
+	if handler == nil {
+		t.Fatalf("button %q has no input handler", label)
+	}
+	handler(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(p tview.Primitive) {})
 }

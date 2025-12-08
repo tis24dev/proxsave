@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -11,6 +12,11 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
+
+// createTestFile is a small indirection over os.Create used by permission
+// checks to allow tests to inject controlled failures (e.g., EIO) without
+// depending on specific filesystem behavior.
+var createTestFile = os.Create
 
 // Checker performs pre-backup validation checks
 type Checker struct {
@@ -83,6 +89,7 @@ type CheckResult struct {
 	Passed  bool
 	Message string
 	Error   error
+	Code    string
 }
 
 // NewChecker creates a new pre-backup checker
@@ -260,13 +267,17 @@ func (c *Checker) CheckLockFile() CheckResult {
 // CheckPermissions verifies write permissions on required directories
 func (c *Checker) CheckPermissions() CheckResult {
 	result := CheckResult{
-		Name:   "Permissions",
-		Passed: false,
+		Name:    "Permissions",
+		Passed:  false,
+		Code:    "PERMISSION_CHECK",
 	}
 
 	dirs := []string{c.config.BackupPath, c.config.LogPath}
 
-	for _, dir := range dirs {
+	const maxAttempts = 3
+	const retryDelay = 100 * time.Millisecond
+
+		for _, dir := range dirs {
 		// Check if directory is writable
 		testFile := filepath.Join(dir, fmt.Sprintf(".permission_test_%d", os.Getpid()))
 
@@ -275,14 +286,55 @@ func (c *Checker) CheckPermissions() CheckResult {
 			continue
 		}
 
-		f, err := os.Create(testFile)
-		if err != nil {
-			result.Error = fmt.Errorf("no write permission in %s: %w", dir, err)
+		var lastErr error
+
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			f, err := createTestFile(testFile)
+			if err == nil {
+				f.Close()
+				lastErr = nil
+				break
+			}
+
+			lastErr = err
+
+			// Treat filesystem I/O errors as potentially transient and retry
+			if errors.Is(err, syscall.EIO) && attempt < maxAttempts {
+				c.logger.Warning("I/O error while testing write in %s (attempt %d/%d), will retry: %v",
+					dir, attempt, maxAttempts, err)
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			// For non-transient errors or after exhausting retries, stop retrying
+			break
+		}
+
+		if lastErr != nil {
+			err := lastErr
+			var reason string
+			code := "PERMISSION_CHECK_FAILED"
+
+			switch {
+			case errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM):
+				reason = "no write permission"
+				code = "PERMISSION_DENIED"
+			case errors.Is(err, syscall.EROFS):
+				reason = "filesystem is read-only"
+				code = "FS_READONLY"
+			case errors.Is(err, syscall.EIO):
+				reason = "filesystem I/O error while testing write"
+				code = "FS_IO_ERROR"
+			default:
+				reason = "failed to test write permission"
+			}
+
+			result.Code = code
+			result.Error = fmt.Errorf("%s in %s: %w", reason, dir, err)
 			result.Message = result.Error.Error()
 			c.logger.Error("%s", result.Message)
 			return result
 		}
-		f.Close()
 
 		// Clean up test file
 		if err := os.Remove(testFile); err != nil {

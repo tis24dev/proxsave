@@ -1,8 +1,14 @@
 package wizard
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rivo/tview"
+
+	"github.com/tis24dev/proxsave/internal/tui"
 )
 
 func TestSetEnvValueUpdateAndAppend(t *testing.T) {
@@ -97,4 +103,66 @@ func TestApplyInstallDataCronAndNotifications(t *testing.T) {
 	assertContains("CRON_HOUR", "3")
 	assertContains("CRON_MINUTE", "7")
 	assertContains("ENCRYPT_ARCHIVE", "false")
+}
+
+func TestCheckExistingConfigActions(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "prox.env")
+	if err := os.WriteFile(configPath, []byte("base"), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	originalRunner := checkExistingConfigRunner
+	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
+
+	tests := []struct {
+		name   string
+		button string
+		want   ExistingConfigAction
+	}{
+		{name: "overwrite", button: "Overwrite", want: ExistingConfigOverwrite},
+		{name: "edit existing", button: "Edit existing", want: ExistingConfigEdit},
+		{name: "keep", button: "Keep & exit", want: ExistingConfigSkip},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
+				done := extractModalDone(focus.(*tview.Modal))
+				done(0, tc.button)
+				return nil
+			}
+
+			action, err := CheckExistingConfig(configPath, "sig-abc")
+			if err != nil {
+				t.Fatalf("CheckExistingConfig returned error: %v", err)
+			}
+			if action != tc.want {
+				t.Fatalf("got %v, want %v for button %q", action, tc.want, tc.button)
+			}
+		})
+	}
+}
+
+func TestCheckExistingConfigMissingFileDefaultsToOverwrite(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "absent.env")
+	action, err := CheckExistingConfig(configPath, "sig")
+	if err != nil {
+		t.Fatalf("CheckExistingConfig returned error: %v", err)
+	}
+	if action != ExistingConfigOverwrite {
+		t.Fatalf("expected overwrite action when file is missing")
+	}
+}
+
+func TestCheckExistingConfigPropagatesStatErrors(t *testing.T) {
+	pathWithNul := string([]byte{0})
+	action, err := CheckExistingConfig(pathWithNul, "sig")
+	if err == nil {
+		t.Fatalf("expected error for invalid path")
+	}
+	if action != ExistingConfigSkip {
+		t.Fatalf("expected skip action on stat error, got %v", action)
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -147,6 +148,109 @@ func TestCheckPermissions(t *testing.T) {
 	if !result.Passed {
 		t.Errorf("CheckPermissions failed: %s", result.Message)
 	}
+	if result.Code != "PERMISSION_CHECK" {
+		t.Errorf("expected Code PERMISSION_CHECK on success, got %q", result.Code)
+	}
+}
+
+func TestCheckPermissionsPermissionDenied(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	tmpDir := t.TempDir()
+
+	// When running tests as root, permission checks based on chmod may not
+	// behave as expected because root can bypass filesystem permissions.
+	// In that case, skip this test.
+	if os.Geteuid() == 0 {
+		t.Skip("skipping permission-denied check when running as root")
+	}
+
+	// Create a directory that is not writable
+	protectedDir := filepath.Join(tmpDir, "protected")
+	if err := os.Mkdir(protectedDir, 0755); err != nil {
+		t.Fatalf("failed to create protected dir: %v", err)
+	}
+	if err := os.Chmod(protectedDir, 0555); err != nil {
+		t.Fatalf("failed to chmod protected dir: %v", err)
+	}
+
+	config := &CheckerConfig{
+		BackupPath:          protectedDir,
+		LogPath:             tmpDir,
+		LockDirPath:         tmpDir,
+		SkipPermissionCheck: false,
+		DryRun:              false,
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+
+	if result.Passed {
+		t.Fatalf("CheckPermissions should fail for non-writable directory")
+	}
+	if result.Code != "PERMISSION_DENIED" {
+		t.Errorf("expected Code PERMISSION_DENIED, got %q", result.Code)
+	}
+}
+
+func TestCheckPermissionsDryRun(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	tmpDir := t.TempDir()
+
+	config := &CheckerConfig{
+		BackupPath:          tmpDir,
+		LogPath:             tmpDir,
+		LockDirPath:         tmpDir,
+		SkipPermissionCheck: false,
+		DryRun:              true,
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+
+	if !result.Passed {
+		t.Fatalf("CheckPermissions should pass in dry-run mode, got: %s", result.Message)
+	}
+	if result.Code != "PERMISSION_CHECK" {
+		t.Errorf("expected Code PERMISSION_CHECK in dry-run mode, got %q", result.Code)
+	}
+}
+
+func TestCheckPermissionsEIORetryAndFailure(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	tmpDir := t.TempDir()
+
+	// Save and restore original createTestFile to avoid side effects
+	origCreate := createTestFile
+	defer func() {
+		createTestFile = origCreate
+	}()
+
+	attempts := 0
+	createTestFile = func(name string) (*os.File, error) {
+		attempts++
+		return nil, syscall.EIO
+	}
+
+	config := &CheckerConfig{
+		BackupPath:          tmpDir,
+		LogPath:             tmpDir,
+		LockDirPath:         tmpDir,
+		SkipPermissionCheck: false,
+		DryRun:              false,
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+
+	if result.Passed {
+		t.Fatalf("CheckPermissions should fail when all attempts return EIO")
+	}
+	if result.Code != "FS_IO_ERROR" {
+		t.Errorf("expected Code FS_IO_ERROR, got %q", result.Code)
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts on EIO, got %d", attempts)
+	}
 }
 
 func TestCheckDirectories(t *testing.T) {
@@ -255,6 +359,39 @@ func TestRunAllChecks(t *testing.T) {
 
 	// Clean up
 	checker.ReleaseLock()
+}
+
+func TestRunAllChecksSkipPermissionCheck(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	tmpDir := t.TempDir()
+
+	config := &CheckerConfig{
+		BackupPath:          tmpDir,
+		LogPath:             tmpDir,
+		LockDirPath:         tmpDir,
+		MinDiskPrimaryGB:    0.001,
+		MinDiskSecondaryGB:  0,
+		MinDiskCloudGB:      0,
+		LockFilePath:        filepath.Join(tmpDir, ".backup.lock"),
+		MaxLockAge:          1 * time.Hour,
+		SkipPermissionCheck: true,
+		DryRun:              false,
+	}
+
+	checker := NewChecker(logger, config)
+	ctx := context.Background()
+
+	results, err := checker.RunAllChecks(ctx)
+	if err != nil {
+		t.Fatalf("RunAllChecks (SkipPermissionCheck=true) failed unexpectedly: %v", err)
+	}
+
+	// Permissions check should be skipped: assert that no result is named "Permissions".
+	for _, r := range results {
+		if r.Name == "Permissions" {
+			t.Fatalf("expected Permissions check to be skipped, but it was executed")
+		}
+	}
 }
 
 func TestDryRunMode(t *testing.T) {

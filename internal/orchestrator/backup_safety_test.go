@@ -175,6 +175,98 @@ func TestCleanupOldSafetyBackups(t *testing.T) {
 	_ = os.Remove(newBackup)
 }
 
+func TestCreateSafetyBackupArchivesSelectedPaths(t *testing.T) {
+	fake := NewFakeFS()
+	origFS := safetyFS
+	safetyFS = fake
+	t.Cleanup(func() { safetyFS = origFS })
+
+	fixed := time.Date(2024, time.March, 1, 15, 4, 5, 0, time.UTC)
+	origNow := safetyNow
+	safetyNow = func() time.Time { return fixed }
+	t.Cleanup(func() { safetyNow = origNow })
+
+	destRoot := "/restore-target"
+	if err := fake.AddFile(filepath.Join(destRoot, "etc/config.txt"), []byte("config-data")); err != nil {
+		t.Fatalf("add config file: %v", err)
+	}
+	if err := fake.AddDir(filepath.Join(destRoot, "var/lib/app")); err != nil {
+		t.Fatalf("add directory: %v", err)
+	}
+	if err := fake.WriteFile(filepath.Join(destRoot, "var/lib/app/state.txt"), []byte("state"), 0o640); err != nil {
+		t.Fatalf("add state file: %v", err)
+	}
+
+	categories := []Category{
+		{ID: "etc", Paths: []string{"./etc/config.txt"}},
+		{ID: "var", Paths: []string{"./var/lib/app"}},
+	}
+
+	logger := logging.New(types.LogLevelInfo, false)
+
+	result, err := CreateSafetyBackup(logger, categories, destRoot)
+	if err != nil {
+		t.Fatalf("CreateSafetyBackup error: %v", err)
+	}
+
+	expectedName := "restore_backup_" + fixed.Format("20060102_150405") + ".tar.gz"
+	expectedPath := filepath.Join("/tmp", "proxsave", expectedName)
+	if result.BackupPath != expectedPath {
+		t.Fatalf("unexpected backup path: got %s want %s", result.BackupPath, expectedPath)
+	}
+	if !result.Timestamp.Equal(fixed) {
+		t.Fatalf("timestamp mismatch: got %v want %v", result.Timestamp, fixed)
+	}
+	if result.FilesBackedUp != 2 {
+		t.Fatalf("expected 2 files backed up, got %d", result.FilesBackedUp)
+	}
+	if result.TotalSize == 0 {
+		t.Fatalf("expected non-zero total size")
+	}
+
+	archiveFile, err := os.Open(fake.onDisk(result.BackupPath))
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	defer archiveFile.Close()
+
+	gzr, err := gzip.NewReader(archiveFile)
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	defer gzr.Close()
+	tr := tar.NewReader(gzr)
+
+	var entries []string
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+		entries = append(entries, filepath.ToSlash(hdr.Name))
+	}
+
+	assertContains := func(name string) {
+		for _, entry := range entries {
+			if entry == name {
+				return
+			}
+		}
+		t.Fatalf("archive missing %s; entries=%v", name, entries)
+	}
+
+	assertContains("etc/config.txt")
+	assertContains("var/lib/app/state.txt")
+
+	locationData, err := os.ReadFile(fake.onDisk(filepath.Join("/tmp", "proxsave", "restore_backup_location.txt")))
+	if err != nil {
+		t.Fatalf("location file: %v", err)
+	}
+	if strings.TrimSpace(string(locationData)) != result.BackupPath {
+		t.Fatalf("location file contents mismatch: %q", string(locationData))
+	}
+}
+
 func TestRestoreSafetyBackup_MaliciousSymlinks(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 

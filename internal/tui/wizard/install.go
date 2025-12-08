@@ -43,7 +43,10 @@ const (
 
 var (
 	// ErrInstallCancelled is returned when the user aborts the install wizard.
-	ErrInstallCancelled = errors.New("installation aborted by user")
+	ErrInstallCancelled       = errors.New("installation aborted by user")
+	checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return app.SetRoot(root, true).SetFocus(focus).Run()
+	}
 )
 
 // RunInstallWizard runs the TUI-based installation wizard
@@ -594,7 +597,7 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 			SetBackgroundColor(tcell.ColorBlack)
 
 		// Run the modal - ignore errors from normal app termination
-		_ = app.SetRoot(flex, true).SetFocus(modal).Run()
+		_ = checkExistingConfigRunner(app, flex, modal)
 
 		return action, nil
 	} else if !os.IsNotExist(err) {
