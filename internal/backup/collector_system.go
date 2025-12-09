@@ -162,6 +162,30 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 				c.logger.Debug("Failed to collect %s: %v", file.path, err)
 			}
 		}
+
+		// Netplan configs (if present)
+		if err := c.safeCopyDir(ctx,
+			c.systemPath("/etc/netplan"),
+			filepath.Join(c.tempDir, "etc/netplan"),
+			"Netplan configuration"); err != nil {
+			c.logger.Debug("No /etc/netplan found")
+		}
+
+		// systemd-networkd configs (if present)
+		if err := c.safeCopyDir(ctx,
+			c.systemPath("/etc/systemd/network"),
+			filepath.Join(c.tempDir, "etc/systemd/network"),
+			"systemd-networkd configuration"); err != nil {
+			c.logger.Debug("No /etc/systemd/network found")
+		}
+
+		// NetworkManager connections (if present)
+		if err := c.safeCopyDir(ctx,
+			c.systemPath("/etc/NetworkManager/system-connections"),
+			filepath.Join(c.tempDir, "etc/NetworkManager/system-connections"),
+			"NetworkManager connections"); err != nil {
+			c.logger.Debug("No NetworkManager system-connections found")
+		}
 	}
 
 	// Hostname and hosts
@@ -438,6 +462,26 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 		c.logger.Debug("No /etc/logrotate.d found")
 	}
 
+	// DHCP leases (best effort)
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/var/lib/dhcp"),
+		filepath.Join(c.tempDir, "var/lib/dhcp"),
+		"DHCP leases"); err != nil {
+		c.logger.Debug("No /var/lib/dhcp found")
+	}
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/var/lib/NetworkManager"),
+		filepath.Join(c.tempDir, "var/lib/NetworkManager"),
+		"NetworkManager leases"); err != nil {
+		c.logger.Debug("No /var/lib/NetworkManager leases found")
+	}
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/run/systemd/netif/leases"),
+		filepath.Join(c.tempDir, "run/systemd/netif/leases"),
+		"systemd-networkd leases"); err != nil {
+		c.logger.Debug("No /run/systemd/netif/leases found")
+	}
+
 	c.logger.Debug("System directories collected")
 	return nil
 }
@@ -494,6 +538,16 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return err
 	}
 
+	// Policy routing rules
+	if err := c.collectCommandMulti(ctx,
+		"ip rule show",
+		filepath.Join(commandsDir, "ip_rule.txt"),
+		"IP rules",
+		false,
+		filepath.Join(infoDir, "ip_rule.txt")); err != nil {
+		return err
+	}
+
 	// IP routes
 	if err := c.collectCommandMulti(ctx,
 		"ip route show",
@@ -504,12 +558,70 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return err
 	}
 
+	// All routing tables (IPv4/IPv6)
+	c.collectCommandOptional(ctx,
+		"ip -4 route show table all",
+		filepath.Join(commandsDir, "ip_route_all_v4.txt"),
+		"IP routes (all tables v4)",
+		filepath.Join(infoDir, "ip_route_all_v4.txt"))
+	c.collectCommandOptional(ctx,
+		"ip -6 route show table all",
+		filepath.Join(commandsDir, "ip_route_all_v6.txt"),
+		"IP routes (all tables v6)",
+		filepath.Join(infoDir, "ip_route_all_v6.txt"))
+
 	// IP link statistics
 	c.collectCommandOptional(ctx,
 		"ip -s link",
 		filepath.Join(commandsDir, "ip_link.txt"),
 		"IP link statistics",
 		filepath.Join(infoDir, "ip_link.txt"))
+
+	// Neighbors (ARP/NDP)
+	c.safeCmdOutput(ctx,
+		"ip neigh show",
+		filepath.Join(commandsDir, "ip_neigh.txt"),
+		"Neighbor table",
+		false)
+	c.safeCmdOutput(ctx,
+		"ip -6 neigh show",
+		filepath.Join(commandsDir, "ip6_neigh.txt"),
+		"Neighbor table (IPv6)",
+		false)
+
+	// Bridge/VLAN/FDB/MDB state
+	c.collectCommandOptional(ctx,
+		"bridge -d link show",
+		filepath.Join(commandsDir, "bridge_link.txt"),
+		"Bridge links")
+	c.collectCommandOptional(ctx,
+		"bridge vlan show",
+		filepath.Join(commandsDir, "bridge_vlan.txt"),
+		"Bridge VLANs")
+	c.collectCommandOptional(ctx,
+		"bridge fdb show",
+		filepath.Join(commandsDir, "bridge_fdb.txt"),
+		"Bridge FDB")
+	c.collectCommandOptional(ctx,
+		"bridge mdb show",
+		filepath.Join(commandsDir, "bridge_mdb.txt"),
+		"Bridge MDB")
+
+	// Bonding status (/proc/net/bonding/*)
+	if entries, err := os.ReadDir(c.systemPath("/proc/net/bonding")); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			src := c.systemPath(filepath.Join("/proc/net/bonding", entry.Name()))
+			dest := filepath.Join(commandsDir, "bonding_"+entry.Name()+".txt")
+			if err := c.safeCopyFile(ctx, src, dest, "Bonding status"); err != nil && !errors.Is(err, os.ErrNotExist) {
+				c.logger.Debug("Failed to copy bonding status for %s: %v", entry.Name(), err)
+			}
+		}
+	} else {
+		c.logger.Debug("No bonding interfaces found")
+	}
 
 	// DNS resolver
 	resolvPath := c.systemPath("/etc/resolv.conf")
@@ -636,6 +748,11 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 			return err
 		}
 
+		c.collectCommandOptional(ctx,
+			"iptables -t nat -vnL --line-numbers",
+			filepath.Join(commandsDir, "iptables_nat.txt"),
+			"iptables NAT table")
+
 		// ip6tables
 		if err := c.collectCommandMulti(ctx,
 			"ip6tables-save",
@@ -646,12 +763,43 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 			return err
 		}
 
+		c.collectCommandOptional(ctx,
+			"ip6tables -t nat -vnL --line-numbers",
+			filepath.Join(commandsDir, "ip6tables_nat.txt"),
+			"ip6tables NAT table")
+
 		// nftables
 		c.safeCmdOutput(ctx,
 			"nft list ruleset",
 			filepath.Join(commandsDir, "nftables.txt"),
 			"nftables rules",
 			false)
+
+		// UFW status
+		c.collectCommandOptional(ctx,
+			"ufw status verbose",
+			filepath.Join(commandsDir, "ufw_status.txt"),
+			"UFW status")
+
+		// firewalld status
+		c.collectCommandOptional(ctx,
+			"firewall-cmd --state",
+			filepath.Join(commandsDir, "firewalld_state.txt"),
+			"firewalld state")
+		c.collectCommandOptional(ctx,
+			"firewall-cmd --list-all",
+			filepath.Join(commandsDir, "firewalld_list_all.txt"),
+			"firewalld rules")
+
+		// Service state for ufw/firewalld (best effort)
+		c.collectCommandOptional(ctx,
+			"systemctl status --no-pager ufw",
+			filepath.Join(commandsDir, "systemctl_ufw.txt"),
+			"systemctl ufw")
+		c.collectCommandOptional(ctx,
+			"systemctl status --no-pager firewalld",
+			filepath.Join(commandsDir, "systemctl_firewalld.txt"),
+			"systemctl firewalld")
 	}
 
 	// Loaded kernel modules

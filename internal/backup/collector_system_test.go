@@ -188,6 +188,64 @@ func TestSanitizeFilename(t *testing.T) {
 	}
 }
 
+func TestCollectSystemDirectoriesCopiesAltNetConfigsAndLeases(t *testing.T) {
+	collector := newTestCollector(t)
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+
+	// Alternate network configs
+	netplanDir := filepath.Join(root, "etc", "netplan")
+	systemdNetDir := filepath.Join(root, "etc", "systemd", "network")
+	nmDir := filepath.Join(root, "etc", "NetworkManager", "system-connections")
+	for _, dir := range []string{netplanDir, systemdNetDir, nmDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("failed to create %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(netplanDir, "01-netcfg.yaml"), []byte("network: {}\n"), 0o644); err != nil {
+		t.Fatalf("failed to write netplan file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(systemdNetDir, "10-eth0.network"), []byte("[Match]\nName=eth0\n"), 0o644); err != nil {
+		t.Fatalf("failed to write systemd-networkd file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nmDir, "conn.nmconnection"), []byte("[connection]\nid=test\n"), 0o600); err != nil {
+		t.Fatalf("failed to write NetworkManager file: %v", err)
+	}
+
+	// DHCP leases
+	dhcpDirs := []string{
+		filepath.Join(root, "var", "lib", "dhcp"),
+		filepath.Join(root, "var", "lib", "NetworkManager"),
+		filepath.Join(root, "run", "systemd", "netif", "leases"),
+	}
+	for _, dir := range dhcpDirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("failed to create lease dir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "lease.test"), []byte("lease"), 0o644); err != nil {
+			t.Fatalf("failed to write lease in %s: %v", dir, err)
+		}
+	}
+
+	if err := collector.collectSystemDirectories(context.Background()); err != nil {
+		t.Fatalf("collectSystemDirectories failed: %v", err)
+	}
+
+	paths := []string{
+		filepath.Join(collector.tempDir, "etc", "netplan", "01-netcfg.yaml"),
+		filepath.Join(collector.tempDir, "etc", "systemd", "network", "10-eth0.network"),
+		filepath.Join(collector.tempDir, "etc", "NetworkManager", "system-connections", "conn.nmconnection"),
+		filepath.Join(collector.tempDir, "var", "lib", "dhcp", "lease.test"),
+		filepath.Join(collector.tempDir, "var", "lib", "NetworkManager", "lease.test"),
+		filepath.Join(collector.tempDir, "run", "systemd", "netif", "leases", "lease.test"),
+	}
+	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("expected copied file %s: %v", p, err)
+		}
+	}
+}
+
 func newTestCollector(t *testing.T) *Collector {
 	t.Helper()
 	return newTestCollectorWithDeps(t, CollectorDeps{})
