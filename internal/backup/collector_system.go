@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // CollectSystemInfo collects common system information (both PVE and PBS)
@@ -878,6 +879,128 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 	}
 
 	c.logger.Debug("System command output collection finished")
+	if err := c.buildNetworkReport(ctx, commandsDir, infoDir); err != nil {
+		c.logger.Debug("Network report generation failed: %v", err)
+	}
+	return nil
+}
+
+// buildNetworkReport composes a single human-readable network report by aggregating
+// key command outputs and configuration files.
+func (c *Collector) buildNetworkReport(ctx context.Context, commandsDir, infoDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	reportPath := filepath.Join(commandsDir, "network_report.txt")
+	mirrorPath := filepath.Join(infoDir, "network_report.txt")
+
+	var b strings.Builder
+	now := time.Now().Format(time.RFC3339)
+	hostname, _ := os.Hostname()
+	b.WriteString("Proxsave Network Report\n")
+	b.WriteString(fmt.Sprintf("Timestamp: %s\n", now))
+	b.WriteString(fmt.Sprintf("Hostname: %s\n", hostname))
+	b.WriteString("\n")
+
+	appendFile := func(title, path string) {
+		if path == "" {
+			return
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) == 0 {
+			return
+		}
+		b.WriteString(fmt.Sprintf("## %s (%s)\n", title, path))
+		b.Write(data)
+		if !strings.HasSuffix(string(data), "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	appendGlob := func(title, pattern string) {
+		matches, err := filepath.Glob(pattern)
+		if err != nil || len(matches) == 0 {
+			return
+		}
+		for _, m := range matches {
+			appendFile(title, m)
+		}
+	}
+
+	// Config files (best effort)
+	appendFile("interfaces", c.systemPath("/etc/network/interfaces"))
+	appendGlob("interfaces.d", filepath.Join(c.systemPath("/etc/network/interfaces.d"), "*"))
+	appendFile("hostname", c.systemPath("/etc/hostname"))
+	appendFile("hosts", c.systemPath("/etc/hosts"))
+	appendFile("resolv.conf", c.systemPath("/etc/resolv.conf"))
+	appendGlob("netplan", filepath.Join(c.systemPath("/etc/netplan"), "*.yaml"))
+	appendGlob("systemd-networkd", filepath.Join(c.systemPath("/etc/systemd/network"), "*.network"))
+	appendGlob("systemd-networkd", filepath.Join(c.systemPath("/etc/systemd/network"), "*.netdev"))
+	appendGlob("systemd-networkd", filepath.Join(c.systemPath("/etc/systemd/network"), "*.link"))
+	appendGlob("NetworkManager connection", filepath.Join(c.systemPath("/etc/NetworkManager/system-connections"), "*"))
+
+	// Command outputs already collected
+	commandFiles := []struct {
+		title string
+		name  string
+	}{
+		{"IP addresses", "ip_addr.txt"},
+		{"IP routes", "ip_route.txt"},
+		{"IP routes (all tables v4)", "ip_route_all_v4.txt"},
+		{"IP routes (all tables v6)", "ip_route_all_v6.txt"},
+		{"IP rules", "ip_rule.txt"},
+		{"IP links (stats)", "ip_link.txt"},
+		{"Neighbors (ARP/NDP)", "ip_neigh.txt"},
+		{"Neighbors (IPv6)", "ip6_neigh.txt"},
+		{"Bridge links", "bridge_link.txt"},
+		{"Bridge VLANs", "bridge_vlan.txt"},
+		{"Bridge FDB", "bridge_fdb.txt"},
+		{"Bridge MDB", "bridge_mdb.txt"},
+		{"Bonding status", "bonding.txt"},
+		{"iptables-save", "iptables.txt"},
+		{"iptables NAT table", "iptables_nat.txt"},
+		{"ip6tables-save", "ip6tables.txt"},
+		{"ip6tables NAT table", "ip6tables_nat.txt"},
+		{"nftables ruleset", "nftables.txt"},
+		{"UFW status", "ufw_status.txt"},
+		{"firewalld state", "firewalld_state.txt"},
+		{"firewalld rules", "firewalld_list_all.txt"},
+		{"systemctl ufw", "systemctl_ufw.txt"},
+		{"systemctl firewalld", "systemctl_firewalld.txt"},
+	}
+
+	for _, cf := range commandFiles {
+		appendFile(cf.title, filepath.Join(commandsDir, cf.name))
+	}
+
+	// Bonding: include each collected bonding_* file
+	if entries, err := os.ReadDir(commandsDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if strings.HasPrefix(name, "bonding_") {
+				appendFile("Bonding status", filepath.Join(commandsDir, name))
+			}
+		}
+	}
+
+	reportData := []byte(b.String())
+	if len(reportData) == 0 {
+		return nil
+	}
+
+	if err := c.writeReportFile(reportPath, reportData); err != nil {
+		return err
+	}
+	if mirrorPath != "" {
+		if err := c.writeReportFile(mirrorPath, reportData); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

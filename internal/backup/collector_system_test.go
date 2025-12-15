@@ -246,6 +246,75 @@ func TestCollectSystemDirectoriesCopiesAltNetConfigsAndLeases(t *testing.T) {
 	}
 }
 
+func TestBuildNetworkReportAggregatesOutputs(t *testing.T) {
+	collector := newTestCollector(t)
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+
+	// Config files
+	netDir := filepath.Join(root, "etc", "network")
+	if err := os.MkdirAll(netDir, 0o755); err != nil {
+		t.Fatalf("failed to create %s: %v", netDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(netDir, "interfaces"), []byte("auto lo\niface lo inet loopback\n"), 0o644); err != nil {
+		t.Fatalf("failed to write interfaces: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatalf("failed to create /etc in root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "resolv.conf"), []byte("nameserver 1.1.1.1\n"), 0o644); err != nil {
+		t.Fatalf("failed to write resolv.conf: %v", err)
+	}
+
+	commandsDir := filepath.Join(collector.tempDir, "commands")
+	infoDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info")
+	for _, dir := range []string{commandsDir, infoDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("failed to create dir %s: %v", dir, err)
+		}
+	}
+
+	writeCmd := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(commandsDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", name, err)
+		}
+	}
+
+	writeCmd("ip_addr.txt", "1: lo: <LOOPBACK>\n")
+	writeCmd("ip_route.txt", "default via 192.0.2.1 dev eth0\n")
+	writeCmd("ip_rule.txt", "0:	from all lookup local\n")
+	writeCmd("ip_route_all_v4.txt", "local 127.0.0.0/8 dev lo\n")
+	writeCmd("iptables_nat.txt", "PREROUTING\n")
+	writeCmd("iptables.txt", "*nat\nCOMMIT\n")
+	writeCmd("nftables.txt", "table inet filter {}\n")
+	writeCmd("ufw_status.txt", "Status: inactive\n")
+	writeCmd("bridge_link.txt", "2: br0: <BROADCAST>\n")
+	if err := os.WriteFile(filepath.Join(commandsDir, "bonding_eth0.txt"), []byte("Bonding Mode: active-backup\n"), 0o644); err != nil {
+		t.Fatalf("failed to write bonding status: %v", err)
+	}
+
+	if err := collector.buildNetworkReport(context.Background(), commandsDir, infoDir); err != nil {
+		t.Fatalf("buildNetworkReport failed: %v", err)
+	}
+
+	reportPath := filepath.Join(commandsDir, "network_report.txt")
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("expected network_report.txt: %v", err)
+	}
+	text := string(report)
+	for _, want := range []string{"Proxsave Network Report", "ip_addr", "default via", "nameserver 1.1.1.1", "Bonding Mode"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("network report missing %q in:\n%s", want, text)
+		}
+	}
+
+	mirror := filepath.Join(infoDir, "network_report.txt")
+	if _, err := os.Stat(mirror); err != nil {
+		t.Fatalf("expected mirrored report at %s: %v", mirror, err)
+	}
+}
+
 func newTestCollector(t *testing.T) *Collector {
 	t.Helper()
 	return newTestCollectorWithDeps(t, CollectorDeps{})

@@ -54,7 +54,7 @@ var (
 	queueIDRegex = regexp.MustCompile(`queued as ([A-Za-z0-9.-]+)`)
 
 	// Detect queue IDs at the beginning of mailq output lines
-	mailQueueIDLineRegex = regexp.MustCompile(`^[A-Za-z0-9]{5,}[*!]?`)
+	mailQueueIDLineRegex = regexp.MustCompile(`^[A-Za-z0-9]{5,}[*!]?$`)
 
 	// Detect remote acceptance IDs from sendmail verbose transcript
 	remoteAcceptedRegex = regexp.MustCompile(`Sent\s+\(OK\s+id=([A-Za-z0-9\-]+)\)`)

@@ -350,11 +350,6 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 
 	remoteBase := c.remoteBase()
 
-	// First, probe basic connectivity before attempting list/write operations.
-	if err := c.tryConnectivityProbe(ctx, remoteRoot); err != nil {
-		return err
-	}
-
 	// If user explicitly enabled write healthcheck, skip list check entirely
 	if c.config.CloudWriteHealthCheck {
 		c.logger.Debug("CLOUD_WRITE_HEALTHCHECK=true, using write test only")
@@ -389,27 +384,6 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 	// PHASE 4: Both methods failed - return original list error
 	c.logger.Debug("Write test fallback also failed: %v", writeErr)
 	return listErr
-}
-
-// tryConnectivityProbe performs a lightweight connectivity test before list/write checks.
-// Uses `rclone about` where available; if the remote doesn't support the command, the probe is skipped.
-func (c *CloudStorage) tryConnectivityProbe(ctx context.Context, remoteRoot string) error {
-	args := c.buildRcloneArgs("about")
-	args = append(args, remoteRoot)
-	c.logger.Debug("Running (remote connectivity probe): %s", strings.Join(args, " "))
-
-	output, err := c.exec(ctx, args[0], args[1:]...)
-	if err != nil {
-		text := strings.ToLower(strings.TrimSpace(string(output)))
-		if containsAny(text, "not supported", "unsupported", "does not support about") {
-			c.logger.Debug("Connectivity probe not supported by remote; continuing with standard checks")
-			return nil
-		}
-		return classifyRemoteError("connectivity", remoteRoot, err, output)
-	}
-
-	c.logger.Debug("Remote connectivity probe successful")
-	return nil
 }
 
 // tryListCheck performs list-based connectivity check using rclone lsf

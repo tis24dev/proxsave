@@ -361,7 +361,7 @@ func (c *Config) parseGeneralSettings() {
 }
 
 func (c *Config) parseCompressionSettings() {
-	c.CompressionType = c.getCompressionType("COMPRESSION_TYPE", types.CompressionXZ)
+	c.CompressionType = normalizeCompressionType(c.getCompressionType("COMPRESSION_TYPE", types.CompressionXZ))
 	c.CompressionLevel = c.getInt("COMPRESSION_LEVEL", 6)
 	c.CompressionThreads = c.getInt("COMPRESSION_THREADS", 0) // 0 = auto
 	c.CompressionMode = strings.ToLower(c.getString("COMPRESSION_MODE", "standard"))
@@ -369,6 +369,32 @@ func (c *Config) parseCompressionSettings() {
 		c.CompressionMode = "standard"
 	}
 	c.CompressionLevel = adjustLevelForMode(c.CompressionType, c.CompressionMode, c.CompressionLevel)
+}
+
+func normalizeCompressionType(ct types.CompressionType) types.CompressionType {
+	v := strings.ToLower(strings.TrimSpace(string(ct)))
+	switch v {
+	// Common aliases (accept user-friendly names)
+	case "gzip":
+		return types.CompressionGzip
+	case "bzip2":
+		return types.CompressionBzip2
+	case "zstd":
+		return types.CompressionZstd
+
+	// Keep supported values as-is
+	case string(types.CompressionNone),
+		string(types.CompressionGzip),
+		string(types.CompressionPigz),
+		string(types.CompressionBzip2),
+		string(types.CompressionXZ),
+		string(types.CompressionLZMA),
+		string(types.CompressionZstd):
+		return types.CompressionType(v)
+	default:
+		// Preserve unknown values so validation can fail with an explicit error later.
+		return types.CompressionType(v)
+	}
 }
 
 func (c *Config) parseOptimizationSettings() {

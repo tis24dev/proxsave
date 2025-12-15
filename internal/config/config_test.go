@@ -592,6 +592,34 @@ func TestAdjustLevelForMode(t *testing.T) {
 	}
 }
 
+func TestLoadConfigCompressionTypeAliases(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "compression_alias.env")
+	content := `BACKUP_ENABLED=true
+DEBUG_LEVEL=4
+USE_COLOR=true
+COMPRESSION_TYPE=zstd
+COMPRESSION_LEVEL=6
+BACKUP_PATH=/test/backup
+LOG_PATH=/test/log
+LOCK_PATH=/test/lock
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cleanup := setBaseDirEnv(t, "/env/base/dir")
+	defer cleanup()
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.CompressionType != types.CompressionZstd {
+		t.Fatalf("CompressionType = %v; want %v (zstd alias)", cfg.CompressionType, types.CompressionZstd)
+	}
+}
+
 func TestFormatHelpers(t *testing.T) {
 	if got := sanitizeMinDisk(-1); got != 10 {
 		t.Fatalf("sanitizeMinDisk(-1) = %f; want 10", got)

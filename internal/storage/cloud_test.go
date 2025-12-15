@@ -717,8 +717,6 @@ func TestCloudStorageCheckWithListPermissionDeniedFallbackToWrite(t *testing.T) 
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			// Connectivity probe succeeds
-			{name: "rclone", args: []string{"about", "r2:"}},
 			// List check fails with 403 Forbidden
 			{name: "rclone", args: []string{"lsf", "r2:", "--max-depth", "1"},
 				err: errors.New("exit status 3"), out: "403 Forbidden"},
@@ -734,8 +732,8 @@ func TestCloudStorageCheckWithListPermissionDeniedFallbackToWrite(t *testing.T) 
 		t.Fatalf("checkRemoteAccessible() should succeed via fallback, got: %v", err)
 	}
 
-	if len(queue.calls) != 4 {
-		t.Fatalf("expected 4 rclone calls (about + lsf + touch + deletefile), got %d", len(queue.calls))
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls (lsf + touch + deletefile), got %d", len(queue.calls))
 	}
 }
 
@@ -752,16 +750,10 @@ func TestCloudStorageCheckWithTimeoutNoFallback(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			// Attempt 1 connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// List check times out (not a permission error)
 			{name: "rclone", err: errors.New("context deadline exceeded"), out: "timeout"},
-			// Attempt 2 connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// Retry attempt 2 list check
 			{name: "rclone", err: errors.New("context deadline exceeded"), out: "timeout"},
-			// Attempt 3 connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// Retry attempt 3 list check
 			{name: "rclone", err: errors.New("context deadline exceeded"), out: "timeout"},
 		},
@@ -775,8 +767,8 @@ func TestCloudStorageCheckWithTimeoutNoFallback(t *testing.T) {
 	}
 
 	// Should try 3 times (with retries), no fallback to write test
-	if len(queue.calls) != 6 {
-		t.Fatalf("expected 6 rclone calls (about + lsf per attempt), got %d", len(queue.calls))
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls (lsf per attempt), got %d", len(queue.calls))
 	}
 }
 
@@ -793,16 +785,10 @@ func TestCloudStorageCheckWithNetworkErrorNoFallback(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			// Attempt 1 connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// List check fails with network error - attempt 1
 			{name: "rclone", err: errors.New("exit 1"), out: "dial tcp: connection refused"},
-			// Attempt 2 connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// Retry attempt 2
 			{name: "rclone", err: errors.New("exit 1"), out: "dial tcp: connection refused"},
-			// Attempt 3 connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// Retry attempt 3
 			{name: "rclone", err: errors.New("exit 1"), out: "dial tcp: connection refused"},
 		},
@@ -816,8 +802,8 @@ func TestCloudStorageCheckWithNetworkErrorNoFallback(t *testing.T) {
 	}
 
 	// Should try 3 times (with retries), no fallback to write test
-	if len(queue.calls) != 6 {
-		t.Fatalf("expected 6 rclone calls (about + lsf per attempt), got %d", len(queue.calls))
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls (lsf per attempt), got %d", len(queue.calls))
 	}
 }
 
@@ -834,8 +820,6 @@ func TestCloudStorageCheckWriteHealthCheckTrueSkipsList(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			// Connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// Should skip list check entirely, go straight to write test
 			{name: "rclone"}, // touch
 			{name: "rclone"}, // deletefile
@@ -849,13 +833,15 @@ func TestCloudStorageCheckWriteHealthCheckTrueSkipsList(t *testing.T) {
 	}
 
 	// Should only have 2 calls (touch + deletefile), no lsf
-	if len(queue.calls) != 3 {
-		t.Fatalf("expected 3 rclone calls (about + touch + deletefile, no lsf), got %d", len(queue.calls))
+	if len(queue.calls) != 2 {
+		t.Fatalf("expected 2 rclone calls (touch + deletefile, no lsf), got %d", len(queue.calls))
 	}
 
-	// Verify first call is NOT lsf
-	if len(queue.calls) > 0 && strings.Contains(strings.Join(queue.calls[0].args, " "), "lsf") {
-		t.Fatal("expected to skip lsf when CLOUD_WRITE_HEALTHCHECK=true")
+	// Verify no call is lsf
+	for _, call := range queue.calls {
+		if strings.Contains(strings.Join(call.args, " "), "lsf") {
+			t.Fatal("expected to skip lsf when CLOUD_WRITE_HEALTHCHECK=true")
+		}
 	}
 }
 
@@ -872,20 +858,14 @@ func TestCloudStorageCheckBothListAndWriteFail(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			// Attempt 1 connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// List check fails with 401 - triggers fallback
 			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
 			// Fallback write test also fails - triggers retry
 			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
-			// Attempt 2 connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// Attempt 2: List check fails again
 			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
 			// Fallback write test fails again
 			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
-			// Attempt 3 connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// Attempt 3: List check fails again
 			{name: "rclone", err: errors.New("exit 3"), out: "401 Unauthorized"},
 			// Fallback write test fails again
@@ -901,8 +881,8 @@ func TestCloudStorageCheckBothListAndWriteFail(t *testing.T) {
 	}
 
 	// Should try 3 times with fallback each time: 3x(lsf + touch) = 6 calls
-	if len(queue.calls) != 9 {
-		t.Fatalf("expected 9 rclone calls (about + lsf + touch per attempt), got %d", len(queue.calls))
+	if len(queue.calls) != 6 {
+		t.Fatalf("expected 6 rclone calls (lsf + touch per attempt), got %d", len(queue.calls))
 	}
 }
 
@@ -919,8 +899,6 @@ func TestCloudStorageCheckWriteSucceedsButCleanupFails(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			// Connectivity probe
-			{name: "rclone", args: []string{"about", "remote:"}},
 			// List check fails
 			{name: "rclone", args: []string{"lsf", "remote:", "--max-depth", "1"},
 				err: errors.New("exit 3"), out: "403 Forbidden"},
@@ -937,8 +915,8 @@ func TestCloudStorageCheckWriteSucceedsButCleanupFails(t *testing.T) {
 		t.Fatalf("checkRemoteAccessible() should succeed even if cleanup fails, got: %v", err)
 	}
 
-	if len(queue.calls) != 4 {
-		t.Fatalf("expected 4 rclone calls, got %d", len(queue.calls))
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls, got %d", len(queue.calls))
 	}
 }
 
@@ -956,8 +934,6 @@ func TestCloudStorageCheckFallbackWithRemotePath(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			// Connectivity probe
-			{name: "rclone", args: []string{"about", "s3:"}},
 			// Root check succeeds
 			{name: "rclone", args: []string{"lsf", "s3:", "--max-depth", "1"}},
 			// Path mkdir succeeds
@@ -978,7 +954,7 @@ func TestCloudStorageCheckFallbackWithRemotePath(t *testing.T) {
 	}
 
 	// Should have: lsf (root) + mkdir + lsf (path, fails) + touch + deletefile
-	if len(queue.calls) != 6 {
-		t.Fatalf("expected 6 rclone calls, got %d", len(queue.calls))
+	if len(queue.calls) != 5 {
+		t.Fatalf("expected 5 rclone calls, got %d", len(queue.calls))
 	}
 }
