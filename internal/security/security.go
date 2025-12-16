@@ -601,7 +601,12 @@ func fileContainsMarker(path string, markers []string, limit int) (bool, error) 
 }
 
 func (c *Checker) checkFirewall(ctx context.Context) {
-	if _, err := exec.LookPath("iptables"); err != nil {
+	lookPath := c.lookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+
+	if _, err := lookPath("iptables"); err != nil {
 		c.addWarning("iptables not found; firewall check skipped")
 		return
 	}

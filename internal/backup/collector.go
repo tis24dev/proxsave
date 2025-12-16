@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -1045,11 +1046,37 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 			c.incFilesFailed()
 			return nil, fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
 		}
+		exitCode := -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+		outputText := strings.TrimSpace(string(out))
+
+		if parts[0] == "systemctl" && len(parts) >= 2 && parts[1] == "status" {
+			unit := parts[len(parts)-1]
+			if exitCode == 4 || strings.Contains(outputText, "could not be found") {
+				c.logger.Warning("Skipping %s: unit %s.service not found (likely not installed). Non-critical; backup continues. If expected, ignore; otherwise install/enable %s or disable firewall collection.",
+					description,
+					unit,
+					unit,
+				)
+				return nil, nil
+			}
+			if strings.Contains(outputText, "Failed to connect to system scope bus") || strings.Contains(outputText, "System has not been booted with systemd") {
+				c.logger.Warning("Skipping %s: systemd is not available/accessible in this environment. Non-critical; backup continues. Output: %s",
+					description,
+					summarizeCommandOutputText(outputText),
+				)
+				return nil, nil
+			}
+		}
+
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Output: %s",
 			description,
 			cmdString,
 			err,
-			summarizeCommandOutputText(string(out)),
+			summarizeCommandOutputText(outputText),
 		)
 		return nil, nil
 	}

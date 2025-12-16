@@ -851,30 +851,10 @@ func TestIsSafeKernelProcess(t *testing.T) {
 
 // TestCheckFirewall tests firewall checking
 func TestCheckFirewall(t *testing.T) {
-	tests := []struct {
-		name          string
-		iptablesFound bool
-		expectWarning bool
-	}{
-		{
-			name:          "iptables not found",
-			iptablesFound: false,
-			expectWarning: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			checker := newChecker(t, &config.Config{})
-
-			// Mock iptables lookup
-			if !tt.iptablesFound {
-				checker.checkFirewall(context.Background())
-				if !containsIssue(checker.result, "iptables") {
-					t.Error("Expected warning about missing iptables")
-				}
-			}
-		})
+	checker := newCheckerForTest(&config.Config{}, stubLookPath(map[string]bool{}))
+	checker.checkFirewall(context.Background())
+	if !containsIssue(checker.result, "iptables not found") {
+		t.Error("Expected warning about missing iptables")
 	}
 }
 

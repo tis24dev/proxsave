@@ -234,6 +234,10 @@ func parseFilesystemType(fsTypeStr string) FilesystemType {
 		return FilesystemJFS
 	case "reiserfs":
 		return FilesystemReiserFS
+	case "overlay":
+		return FilesystemOverlay
+	case "tmpfs":
+		return FilesystemTmpfs
 	case "vfat", "fat32":
 		return FilesystemFAT32
 	case "fat", "fat16":
