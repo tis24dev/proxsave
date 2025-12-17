@@ -10,6 +10,53 @@ import (
 	"time"
 )
 
+func (c *Collector) detectZFSUsage() (bool, string) {
+	var indicators []string
+
+	// Strong indicator: ZFS filesystems currently mounted.
+	if data, err := os.ReadFile(c.systemPath("/proc/mounts")); err == nil && len(data) > 0 {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 && fields[2] == "zfs" {
+				indicators = append(indicators, "mounted_zfs")
+				break
+			}
+		}
+	}
+
+	// Strong indicator: ZFS pool cache exists.
+	if _, err := os.Stat(c.systemPath("/etc/zfs/zpool.cache")); err == nil {
+		indicators = append(indicators, "zpool_cache")
+	}
+
+	// Medium indicator: fstab references ZFS.
+	if data, err := os.ReadFile(c.systemPath("/etc/fstab")); err == nil && len(data) > 0 {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) >= 3 && fields[2] == "zfs" {
+				indicators = append(indicators, "fstab_zfs")
+				break
+			}
+		}
+	}
+
+	// Strong indicator (PVE): storage.cfg references zfspool.
+	if data, err := os.ReadFile(c.systemPath("/etc/pve/storage.cfg")); err == nil && len(data) > 0 {
+		if strings.Contains(strings.ToLower(string(data)), "zfspool") {
+			indicators = append(indicators, "pve_storage_zfspool")
+		}
+	}
+
+	if len(indicators) == 0 {
+		return false, "none"
+	}
+	return true, strings.Join(indicators, ",")
+}
+
 // CollectSystemInfo collects common system information (both PVE and PBS)
 func (c *Collector) CollectSystemInfo(ctx context.Context) error {
 	c.logger.Info("Collecting system information")
@@ -823,37 +870,44 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 
 	// ZFS pools (if ZFS is present)
 	if c.config.BackupZFSConfig {
-		zfsDir := filepath.Join(infoDir, "zfs")
-		if err := c.ensureDir(zfsDir); err != nil {
-			return fmt.Errorf("failed to create zfs info directory: %w", err)
-		}
+		usesZFS, indicators := c.detectZFSUsage()
+		c.logger.Debug("ZFS usage detected=%t (indicators=%s)", usesZFS, indicators)
+		if !usesZFS {
+			c.logger.Warning("BACKUP_ZFS_CONFIG=true but no ZFS usage detected (indicators=%s); skipping ZFS collection. Consider setting BACKUP_ZFS_CONFIG=false to disable this collector and silence this warning.", indicators)
+		} else {
+			zfsDir := filepath.Join(infoDir, "zfs")
+			if err := c.ensureDir(zfsDir); err != nil {
+				return fmt.Errorf("failed to create zfs info directory: %w", err)
+			}
 
-		if _, err := c.depLookPath("zpool"); err == nil {
-			c.collectCommandOptional(ctx,
-				"zpool status",
-				filepath.Join(commandsDir, "zpool_status.txt"),
-				"ZFS pool status",
-				filepath.Join(zfsDir, "zpool_status.txt"))
+			if _, err := c.depLookPath("zpool"); err == nil {
+				c.collectCommandOptional(ctx,
+					"zpool status",
+					filepath.Join(commandsDir, "zpool_status.txt"),
+					"ZFS pool status",
+					filepath.Join(zfsDir, "zpool_status.txt"))
 
-			c.collectCommandOptional(ctx,
-				"zpool list",
-				filepath.Join(commandsDir, "zpool_list.txt"),
-				"ZFS pool list",
-				filepath.Join(zfsDir, "zpool_list.txt"))
-		}
+				c.collectCommandOptional(ctx,
+					"zpool list",
+					filepath.Join(commandsDir, "zpool_list.txt"),
+					"ZFS pool list",
+					filepath.Join(zfsDir, "zpool_list.txt"))
+			}
 
-		if _, err := c.depLookPath("zfs"); err == nil {
-			c.collectCommandOptional(ctx,
-				"zfs list",
-				filepath.Join(commandsDir, "zfs_list.txt"),
-				"ZFS filesystem list",
-				filepath.Join(zfsDir, "zfs_list.txt"))
+			if _, err := c.depLookPath("zfs"); err == nil {
+				c.collectCommandOptional(ctx,
+					"zfs list",
+					filepath.Join(commandsDir, "zfs_list.txt"),
+					"ZFS filesystem list",
+					filepath.Join(zfsDir, "zfs_list.txt"))
 
-			c.collectCommandOptional(ctx,
-				"zfs get all",
-				filepath.Join(commandsDir, "zfs_get_all.txt"),
-				"ZFS properties",
-				filepath.Join(zfsDir, "zfs_get_all.txt"))
+				c.collectCommandOptional(ctx,
+					"zfs get all",
+					filepath.Join(commandsDir, "zfs_get_all.txt"),
+					"ZFS properties",
+					filepath.Join(zfsDir, "zfs_get_all.txt"),
+				)
+			}
 		}
 	}
 

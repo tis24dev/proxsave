@@ -22,6 +22,8 @@ const (
 	FilesystemZFS      FilesystemType = "zfs"
 	FilesystemJFS      FilesystemType = "jfs"
 	FilesystemReiserFS FilesystemType = "reiserfs"
+	FilesystemOverlay  FilesystemType = "overlay"
+	FilesystemTmpfs    FilesystemType = "tmpfs"
 
 	// Filesystems that do NOT support Unix ownership
 	FilesystemFAT32 FilesystemType = "vfat"
@@ -158,7 +160,7 @@ func (f FilesystemType) SupportsUnixOwnership() bool {
 	switch f {
 	case FilesystemExt4, FilesystemExt3, FilesystemExt2,
 		FilesystemXFS, FilesystemBtrfs, FilesystemZFS,
-		FilesystemJFS, FilesystemReiserFS:
+		FilesystemJFS, FilesystemReiserFS, FilesystemOverlay, FilesystemTmpfs:
 		return true
 	case FilesystemFAT32, FilesystemFAT, FilesystemExFAT,
 		FilesystemNTFS, FilesystemFUSE:

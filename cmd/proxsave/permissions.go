@@ -12,6 +12,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/security"
+	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -46,6 +47,8 @@ func applyBackupPermissions(cfg *config.Config, logger *logging.Logger) error {
 		strings.TrimSpace(cfg.SecondaryLogPath),
 	}
 
+	fsDetector := storage.NewFilesystemDetector(logger)
+
 	for _, dir := range dirs {
 		dir = strings.TrimSpace(dir)
 		if dir == "" {
@@ -67,6 +70,16 @@ func applyBackupPermissions(cfg *config.Config, logger *logging.Logger) error {
 		}
 		if !info.IsDir() {
 			logger.Skip("Permissions: path is not a directory, skipping: %s", dir)
+			continue
+		}
+
+		fsInfo, err := fsDetector.DetectFilesystem(context.Background(), dir)
+		if err != nil {
+			logger.Warning("Permissions: failed to detect filesystem for %s; skipping chown/chmod: %v", dir, err)
+			continue
+		}
+		if fsInfo.Type.ShouldAutoExclude() || !fsInfo.SupportsOwnership {
+			logger.Info("Permissions: skipping chown/chmod for %s (filesystem %s does not support Unix ownership)", dir, fsInfo.Type)
 			continue
 		}
 

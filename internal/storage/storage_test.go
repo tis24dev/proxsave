@@ -601,6 +601,8 @@ func TestFilesystemTypeHelpers(t *testing.T) {
 	}{
 		{FilesystemExt4, true, false, false},
 		{FilesystemZFS, true, false, false},
+		{FilesystemOverlay, true, false, false},
+		{FilesystemTmpfs, true, false, false},
 		{FilesystemNTFS, false, false, true},
 		{FilesystemExFAT, false, false, true},
 		{FilesystemNFS4, false, true, false},
