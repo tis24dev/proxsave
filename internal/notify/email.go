@@ -136,16 +136,22 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	autoDetected := false
 	if recipient == "" {
 		e.logger.Debug("Email recipient not configured, attempting auto-detection...")
-		var err error
-		recipient, err = e.detectRecipient(ctx)
+		detectedRecipient, err := e.detectRecipient(ctx)
 		if err != nil {
+			// Relay requires an explicit recipient, but proxmox-mail-forward does not:
+			// the notification routing is handled by Proxmox (targets/matchers).
+			if e.config.DeliveryMethod == EmailDeliveryRelay {
+				e.logger.Warning("WARNING: Failed to detect email recipient: %v", err)
+				e.logger.Warning("WARNING: Email notification skipped because no valid recipient is available")
+				result.Success = false
+				result.Duration = time.Since(startTime)
+				result.Error = fmt.Errorf("no valid email recipient: %w", err)
+				return result, nil
+			}
 			e.logger.Warning("WARNING: Failed to detect email recipient: %v", err)
-			e.logger.Warning("WARNING: Email notification skipped because no valid recipient is available")
-			result.Success = false
-			result.Duration = time.Since(startTime)
-			result.Error = fmt.Errorf("no valid email recipient: %w", err)
-			return result, nil
+			e.logger.Info("  Proceeding anyway because EMAIL_DELIVERY_METHOD=sendmail uses proxmox-mail-forward targets")
 		} else {
+			recipient = detectedRecipient
 			e.logger.Debug("Auto-detected email recipient: %s", recipient)
 			autoDetected = true
 		}
@@ -153,15 +159,19 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 	recipient = strings.TrimSpace(recipient)
 	if recipient == "" {
+		if e.config.DeliveryMethod == EmailDeliveryRelay {
+			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
+			e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
+			result.Success = false
+			result.Duration = time.Since(startTime)
+			result.Error = fmt.Errorf("no valid email recipient configured")
+			return result, nil
+		}
 		e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
-		e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
-		result.Success = false
-		result.Duration = time.Since(startTime)
-		result.Error = fmt.Errorf("no valid email recipient configured")
-		return result, nil
+		e.logger.Info("  EMAIL_DELIVERY_METHOD=sendmail uses proxmox-mail-forward targets; recipient is not required")
 	}
 
-	if isRootRecipient(recipient) {
+	if e.config.DeliveryMethod == EmailDeliveryRelay && isRootRecipient(recipient) {
 		if autoDetected {
 			e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and will be rejected", recipient)
 		} else {
@@ -175,7 +185,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	}
 
 	// Validate recipient email format
-	if !emailRegex.MatchString(recipient) {
+	if recipient != "" && !emailRegex.MatchString(recipient) {
 		e.logger.Warning("WARNING: Invalid email format: %s", recipient)
 	}
 
@@ -191,15 +201,6 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	var err error
 	var relayErr error // Store original relay error if fallback is used
 
-	// Preflight: if sendmail is involved (primary or fallback), check outbound port 25
-	smtpOK := true
-	needsSendmail := e.config.DeliveryMethod == EmailDeliverySendmail || e.config.FallbackSendmail
-	if needsSendmail {
-		testDomain := deriveTestDomain(recipient)
-		e.logger.Debug("Running outbound SMTP port 25 preflight for domain: %s", testDomain)
-		smtpOK = e.testOutboundPort25(ctx, testDomain)
-	}
-
 	if e.config.DeliveryMethod == EmailDeliveryRelay {
 		result.Method = "email-relay"
 		err = e.sendViaRelay(ctx, recipient, subject, htmlBody, textBody, data)
@@ -209,21 +210,19 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			relayErr = err // Store original relay error
 			e.logger.Warning("WARNING: Cloud relay failed: %v", err)
 
-			if !smtpOK {
-				e.logger.Warning("⚠ Outbound port 25 appears blocked - skipping fallback to sendmail")
-				e.logger.Info("  Fallback disabled: using only cloud relay result for this run")
-				result.Success = false
-				result.Error = fmt.Errorf("relay failed: %w (sendmail fallback skipped, port 25 blocked)", relayErr)
-				return result, nil
-			}
-
 			e.logger.Info("Attempting fallback to sendmail...")
 
 			result.Method = "email-sendmail-fallback"
 			result.UsedFallback = true
-			queueID, sendErr := e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
+			queueID, backend, backendPath, sendErr := e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
 			if queueID != "" {
 				result.Metadata["mail_queue_id"] = queueID
+			}
+			if backend != "" {
+				result.Metadata["email_backend"] = backend
+			}
+			if backendPath != "" {
+				result.Metadata["email_backend_path"] = backendPath
 			}
 			err = sendErr
 
@@ -234,18 +233,17 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		}
 	} else {
 		result.Method = "email-sendmail"
-		var queueID string
-		if !smtpOK {
-			e.logger.Warning("⚠ Outbound port 25 appears blocked - skipping sendmail delivery for this run")
-			e.logger.Info("  Suggestion: switch to EMAIL_DELIVERY_METHOD=relay or fix provider firewall")
-			result.Success = false
-			result.Error = fmt.Errorf("outbound port 25 blocked, sendmail unusable")
-		} else {
-			queueID, err = e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
-			if queueID != "" {
-				result.Metadata["mail_queue_id"] = queueID
-			}
+		queueID, backend, backendPath, sendErr := e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
+		if queueID != "" {
+			result.Metadata["mail_queue_id"] = queueID
 		}
+		if backend != "" {
+			result.Metadata["email_backend"] = backend
+		}
+		if backendPath != "" {
+			result.Metadata["email_backend_path"] = backendPath
+		}
+		err = sendErr
 	}
 
 	// Handle result
@@ -270,8 +268,17 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		// Cloud relay confirmed the request (HTTP 200 from worker)
 		e.logger.Info("Email relay accepted request for %s (%s)", recipient, describeEmailMethod(result.Method))
 	} else {
-		// Local MTA / sendmail path: we only know the message was handed off
-		e.logger.Info("Email notification handed off to %s for %s", describeEmailMethod(result.Method), recipient)
+		// Local delivery path: we only know the message was handed off (not necessarily delivered)
+		backend := describeEmailMethod(result.Method)
+		if v, ok := result.Metadata["email_backend"].(string); ok && strings.TrimSpace(v) != "" {
+			backend = strings.TrimSpace(v)
+		}
+
+		recipientHint := strings.TrimSpace(recipient)
+		if recipientHint == "" {
+			recipientHint = "(recipient not set - routed by Proxmox Notifications)"
+		}
+		e.logger.Info("Email notification handed off to %s for %s", backend, recipientHint)
 	}
 
 	result.Success = true
@@ -806,8 +813,24 @@ func summarizeSendmailTranscript(transcript string) (highlights []string, remote
 }
 
 // sendViaSendmail sends email via local sendmail command
-func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) (string, error) {
+func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) (queueID, backend, backendPath string, err error) {
 	e.logger.Debug("sendViaSendmail() starting for recipient: %s", recipient)
+
+	// Prefer Proxmox's built-in mail forwarding integration when available.
+	//
+	// proxmox-mail-forward reads an email from stdin and forwards it through Proxmox Notifications
+	// (targets/matchers configured in notifications.cfg). It is typically installed to /usr/libexec.
+	var pmfPath string
+	for _, candidate := range []string{
+		"/usr/libexec/proxmox-mail-forward",
+		"/usr/bin/proxmox-mail-forward",
+		"proxmox-mail-forward",
+	} {
+		if path, err := exec.LookPath(candidate); err == nil {
+			pmfPath = path
+			break
+		}
+	}
 
 	// ========================================================================
 	// PRE-FLIGHT MTA DIAGNOSTIC CHECKS
@@ -819,10 +842,14 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 
 	// Check if sendmail exists
 	sendmailPath := "/usr/sbin/sendmail"
-	if _, err := exec.LookPath(sendmailPath); err != nil {
-		return "", fmt.Errorf("sendmail not found at %s - please install postfix or configure email relay", sendmailPath)
+	if pmfPath == "" {
+		if _, err := exec.LookPath(sendmailPath); err != nil {
+			return "", "", "", fmt.Errorf("sendmail not found at %s and proxmox-mail-forward not available - please install postfix/proxmox-mail-forward or configure email relay", sendmailPath)
+		}
+		e.logger.Debug("✓ Sendmail binary found at %s", sendmailPath)
+	} else {
+		e.logger.Debug("✓ Proxmox mail forwarder found at %s", pmfPath)
 	}
-	e.logger.Debug("✓ Sendmail binary found at %s", sendmailPath)
 
 	// Check MTA service status
 	if active, service := e.isMTAServiceActive(ctx); active {
@@ -871,7 +898,11 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 
 	// Build email headers and body
 	var email strings.Builder
-	email.WriteString(fmt.Sprintf("To: %s\n", recipient))
+	toHeader := strings.TrimSpace(recipient)
+	if toHeader == "" {
+		toHeader = "root"
+	}
+	email.WriteString(fmt.Sprintf("To: %s\n", toHeader))
 	email.WriteString(fmt.Sprintf("From: %s\n", e.config.From))
 	email.WriteString(fmt.Sprintf("Subject: =?UTF-8?B?%s?=\n", encodedSubject))
 	email.WriteString("MIME-Version: 1.0\n")
@@ -972,6 +1003,48 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	e.logger.Debug("Email message built (%d bytes)", email.Len())
 
 	// ========================================================================
+	// SEND VIA PROXMOX-MAIL-FORWARD (preferred)
+	// ========================================================================
+	if pmfPath != "" {
+		e.logger.Debug("=== Sending email via proxmox-mail-forward ===")
+		e.logger.Debug("proxmox-mail-forward routing is handled by Proxmox Notifications (notifications.cfg); To=%q is only a mail header", toHeader)
+
+		cmd := exec.CommandContext(ctx, pmfPath)
+		cmd.Stdin = strings.NewReader(email.String())
+
+		var stdoutBuf, stderrBuf strings.Builder
+		cmd.Stdout = &stdoutBuf
+		cmd.Stderr = &stderrBuf
+
+		startTime := time.Now()
+		err = cmd.Run()
+		duration := time.Since(startTime)
+
+		e.logger.Debug("proxmox-mail-forward completed in %v", duration)
+
+		if stdoutBuf.Len() > 0 {
+			stdoutStr := strings.TrimSpace(stdoutBuf.String())
+			if stdoutStr != "" {
+				e.logger.Debug("proxmox-mail-forward stdout: %s", stdoutStr)
+			}
+		}
+		if stderrBuf.Len() > 0 {
+			stderrStr := strings.TrimSpace(stderrBuf.String())
+			if stderrStr != "" {
+				e.logger.Debug("proxmox-mail-forward stderr: %s", stderrStr)
+			}
+		}
+
+		if err != nil {
+			e.logger.Error("❌ proxmox-mail-forward failed: %v", err)
+			return "", "proxmox-mail-forward", pmfPath, fmt.Errorf("proxmox-mail-forward failed: %w (stderr: %s)", err, stderrBuf.String())
+		}
+
+		e.logger.Debug("✅ Email handed off to proxmox-mail-forward successfully")
+		return "", "proxmox-mail-forward", pmfPath, nil
+	}
+
+	// ========================================================================
 	// SEND EMAIL WITH VERBOSE OUTPUT
 	// ========================================================================
 	e.logger.Debug("=== Sending email via sendmail ===")
@@ -994,11 +1067,9 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
-	queueID := ""
-
 	// Execute
 	startTime := time.Now()
-	err := cmd.Run()
+	err = cmd.Run()
 	duration := time.Since(startTime)
 
 	e.logger.Debug("Sendmail command completed in %v", duration)
@@ -1038,7 +1109,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 
 	if err != nil {
 		e.logger.Error("❌ Sendmail command failed: %v", err)
-		return "", fmt.Errorf("sendmail failed: %w (stderr: %s)", err, stderrBuf.String())
+		return "", "sendmail", sendmailPath, fmt.Errorf("sendmail failed: %w (stderr: %s)", err, stderrBuf.String())
 	}
 
 	// ========================================================================
@@ -1120,5 +1191,5 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	e.logger.Info("NOTE: Sendmail exit code 0 means email accepted to queue, not necessarily delivered")
 	e.logger.Info("  To verify actual delivery, check: mailq and /var/log/mail.log")
 
-	return queueID, nil
+	return queueID, "sendmail", sendmailPath, nil
 }

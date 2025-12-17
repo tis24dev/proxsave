@@ -236,9 +236,19 @@ func (c *Checker) buildDependencyList() []dependencyEntry {
 		emailMethod = "relay"
 	}
 	if emailMethod == "sendmail" {
-		deps = append(deps, c.binaryDependency("sendmail", []string{"sendmail"}, true, "email delivery method set to sendmail"))
+		deps = append(deps, c.binaryDependency(
+			"proxmox-mail-forward",
+			[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
+			true,
+			"email delivery method set to sendmail (uses proxmox-mail-forward)",
+		))
 	} else if c.cfg.EmailFallbackSendmail {
-		deps = append(deps, c.binaryDependency("sendmail", []string{"sendmail"}, false, "email relay fallback to sendmail enabled"))
+		deps = append(deps, c.binaryDependency(
+			"proxmox-mail-forward",
+			[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
+			false,
+			"email relay fallback to sendmail enabled (uses proxmox-mail-forward)",
+		))
 	}
 
 	if c.cfg.BackupCephConfig {
