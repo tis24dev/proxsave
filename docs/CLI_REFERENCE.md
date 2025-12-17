@@ -508,7 +508,7 @@ Next step: ./build/proxsave --dry-run
 
 **Requirements**:
 - Existing GitHub issue for tracking
-- Email configuration (uses system SMTP)
+- Working local mail delivery on the node (`/usr/sbin/sendmail` via Postfix/Exim/Sendmail)
 
 **Privacy considerations**:
 - Logs may contain sensitive information (paths, hostnames, file names)

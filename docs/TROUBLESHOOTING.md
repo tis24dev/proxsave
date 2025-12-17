@@ -11,6 +11,7 @@ Complete troubleshooting guide for Proxsave with common issues, solutions, and d
   - [Cloud Storage Issues](#3-cloud-storage-issues)
   - [Encryption Issues](#4-encryption-issues)
   - [Disk Space Issues](#5-disk-space-issues)
+  - [Email Notification Issues](#6-email-notification-issues)
 - [Debug Procedures](#debug-procedures)
 - [Getting Help](#getting-help)
 - [Related Documentation](#related-documentation)
@@ -479,6 +480,40 @@ BACKUP_CRITICAL_FILES=false
 COMPRESSION_TYPE=zstd
 COMPRESSION_LEVEL=3
 ```
+
+---
+
+### 6. Email Notification Issues
+
+#### Symptom: No email notifications received
+
+First, confirm which delivery method you are using:
+
+```bash
+# configs/backup.env
+EMAIL_DELIVERY_METHOD=relay   # cloud relay (outbound HTTPS)
+# or
+EMAIL_DELIVERY_METHOD=sendmail # Proxmox Notifications via proxmox-mail-forward
+```
+
+##### If `EMAIL_DELIVERY_METHOD=relay`
+
+- Ensure outbound HTTPS works from the node (the relay needs network access).
+- Ensure the recipient is configured:
+  - Set `EMAIL_RECIPIENT=...`, or
+  - Leave it empty and set an email for `root@pam` inside Proxmox (auto-detect).
+- Check the proxsave logs for `email-relay` warnings/errors.
+
+##### If `EMAIL_DELIVERY_METHOD=sendmail`
+
+This mode uses Proxmox Notifications via `proxmox-mail-forward` (final recipients are configured in Proxmox, not in proxsave).
+
+- Verify `proxmox-mail-forward` exists:
+  ```bash
+  test -x /usr/libexec/proxmox-mail-forward && echo "proxmox-mail-forward OK" || echo "proxmox-mail-forward not found"
+  ```
+- Verify Proxmox has an email address set for `root@pam` (or a custom Notifications target/matcher for `system-mail`).
+- Check Proxmox Notifications configuration in the UI (`Datacenter -> Notifications`).
 
 ---
 

@@ -32,6 +32,9 @@ type EmailConfig struct {
 	Enabled          bool
 	DeliveryMethod   EmailDeliveryMethod
 	FallbackSendmail bool
+	// DisableProxmoxMailForward forces the legacy /usr/sbin/sendmail backend even if proxmox-mail-forward is installed.
+	// This is useful for cases where the recipient must be respected (e.g. support mode).
+	DisableProxmoxMailForward bool
 	AttachLogFile    bool
 	SubjectOverride  string
 	Recipient        string // Empty = auto-detect
@@ -821,15 +824,19 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	// proxmox-mail-forward reads an email from stdin and forwards it through Proxmox Notifications
 	// (targets/matchers configured in notifications.cfg). It is typically installed to /usr/libexec.
 	var pmfPath string
-	for _, candidate := range []string{
-		"/usr/libexec/proxmox-mail-forward",
-		"/usr/bin/proxmox-mail-forward",
-		"proxmox-mail-forward",
-	} {
-		if path, err := exec.LookPath(candidate); err == nil {
-			pmfPath = path
-			break
+	if !e.config.DisableProxmoxMailForward {
+		for _, candidate := range []string{
+			"/usr/libexec/proxmox-mail-forward",
+			"/usr/bin/proxmox-mail-forward",
+			"proxmox-mail-forward",
+		} {
+			if path, err := exec.LookPath(candidate); err == nil {
+				pmfPath = path
+				break
+			}
 		}
+	} else {
+		e.logger.Debug("proxmox-mail-forward disabled for this notifier instance; using legacy sendmail backend")
 	}
 
 	// ========================================================================

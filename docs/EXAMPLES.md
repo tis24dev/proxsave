@@ -560,11 +560,15 @@ WEBHOOK_DISCORD_ALERTS_METHOD=POST
 #### 2. Email Configuration
 
 ```bash
-# Configure SMTP relay (example: Postfix)
-# Or use external SMTP (Gmail, Office365, etc.)
+# Option A: Cloud relay (outbound HTTPS)
+# - Set EMAIL_DELIVERY_METHOD=relay and configure EMAIL_RECIPIENT (or leave empty for root@pam auto-detect)
+# - No local SMTP/MTA setup required on the node
 
-# Test email
-echo "Test" | mail -s "Test" admin@example.com
+# Option B: Proxmox Notifications via proxmox-mail-forward
+# - Set EMAIL_DELIVERY_METHOD=sendmail
+# - Ensure Proxmox has an email set for root@pam and Notifications targets/matchers are configured
+# - Optional quick check (runs the forwarder directly; run as root):
+printf "To: root\nSubject: proxsave test\n\nHello from proxsave\n" | sudo /usr/libexec/proxmox-mail-forward
 ```
 
 #### 3. Discord Webhook

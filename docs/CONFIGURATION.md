@@ -740,7 +740,7 @@ EMAIL_ENABLED=false                # true | false
 # Delivery method
 EMAIL_DELIVERY_METHOD=relay        # relay | sendmail
 
-# Fallback to sendmail if relay fails
+# Fallback to sendmail (proxmox-mail-forward) if relay fails
 EMAIL_FALLBACK_SENDMAIL=true       # true | false
 
 # Recipient (empty = auto-detect from Proxmox)
@@ -751,8 +751,10 @@ EMAIL_FROM=no-reply@proxmox.tis24.it
 ```
 
 **Delivery methods**:
-- **relay**: Uses SMTP relay (requires server configuration)
-- **sendmail**: Uses local sendmail binary
+- **relay**: Uses cloud relay (outbound HTTPS)
+- **sendmail**: Uses Proxmox built-in `proxmox-mail-forward` (routes via Proxmox Notifications)
+
+**Note**: With `sendmail` (when `proxmox-mail-forward` is available), final delivery recipients are determined by Proxmox Notifications targets/matchers. `EMAIL_RECIPIENT` may be empty (auto-detect) and may not control the final destination.
 
 ### Gotify
 

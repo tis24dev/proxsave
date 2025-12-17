@@ -1367,6 +1367,7 @@ func sendSupportEmail(ctx context.Context, cfg *config.Config, logger *logging.L
 		Enabled:          true,
 		DeliveryMethod:   notify.EmailDeliverySendmail,
 		FallbackSendmail: false,
+		DisableProxmoxMailForward: true,
 		AttachLogFile:    true,
 		Recipient:        "github-support@tis24.it",
 		From:             cfg.EmailFrom,
