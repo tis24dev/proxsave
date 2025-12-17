@@ -131,7 +131,9 @@ func Run(ctx context.Context, logger *logging.Logger, cfg *config.Config, config
 	checker.detectPrivateAgeKeys()
 
 	if cfg.CheckNetworkSecurity {
-		checker.checkFirewall(ctx)
+		if cfg.CheckFirewall {
+			checker.checkFirewall(ctx)
+		}
 		if cfg.CheckOpenPorts {
 			checker.checkOpenPorts(ctx)
 		}
