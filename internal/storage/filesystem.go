@@ -57,20 +57,20 @@ func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) 
 	d.logFilesystemInfo(info)
 
 	// Check if we need to test ownership support for network filesystems
-	if info.IsNetworkFS {
-		supportsOwnership := d.testOwnershipSupport(ctx, path)
-		info.SupportsOwnership = supportsOwnership
-		if supportsOwnership {
-			d.logger.Info("Network filesystem %s supports Unix ownership", fsType)
-		} else {
-			d.logger.Warning("Network filesystem %s does NOT support Unix ownership", fsType)
+		if info.IsNetworkFS {
+			supportsOwnership := d.testOwnershipSupport(ctx, path)
+			info.SupportsOwnership = supportsOwnership
+			if supportsOwnership {
+				d.logger.Info("Network filesystem %s supports Unix ownership", fsType)
+			} else {
+				d.logger.Info("Network filesystem %s does NOT support Unix ownership", fsType)
+			}
 		}
-	}
 
-	// Auto-exclude incompatible filesystems
-	if fsType.ShouldAutoExclude() {
-		d.logger.Warning("Filesystem %s is incompatible with Unix ownership - will skip chown/chmod", fsType)
-	}
+		// Auto-exclude incompatible filesystems
+		if fsType.ShouldAutoExclude() {
+			d.logger.Info("Filesystem %s is incompatible with Unix ownership - will skip chown/chmod", fsType)
+		}
 
 	return info, nil
 }
