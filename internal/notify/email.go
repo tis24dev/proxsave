@@ -5,12 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +23,7 @@ type EmailDeliveryMethod string
 const (
 	EmailDeliveryRelay    EmailDeliveryMethod = "relay"
 	EmailDeliverySendmail EmailDeliveryMethod = "sendmail"
+	EmailDeliveryPMF      EmailDeliveryMethod = "pmf"
 )
 
 // EmailConfig holds email notification configuration
@@ -32,9 +31,6 @@ type EmailConfig struct {
 	Enabled          bool
 	DeliveryMethod   EmailDeliveryMethod
 	FallbackSendmail bool
-	// DisableProxmoxMailForward forces the legacy /usr/sbin/sendmail backend even if proxmox-mail-forward is installed.
-	// This is useful for cases where the recipient must be respected (e.g. support mode).
-	DisableProxmoxMailForward bool
 	AttachLogFile    bool
 	SubjectOverride  string
 	Recipient        string // Empty = auto-detect
@@ -52,6 +48,18 @@ type EmailNotifier struct {
 var (
 	// Email validation regex
 	emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+
+	// sendmailBinaryPath is the binary invoked when EMAIL_DELIVERY_METHOD=sendmail.
+	// It is a variable to allow hermetic tests to override it without touching /usr/sbin.
+	sendmailBinaryPath = "/usr/sbin/sendmail"
+
+	// pmfLookPathCandidates defines the search order for proxmox-mail-forward.
+	// It is a variable to allow hermetic tests to override it and avoid invoking a real system binary.
+	pmfLookPathCandidates = []string{
+		"/usr/libexec/proxmox-mail-forward",
+		"/usr/bin/proxmox-mail-forward",
+		"proxmox-mail-forward",
+	}
 
 	// Detect queue IDs in sendmail verbose output (e.g., "queued as 1234ABCD123")
 	queueIDRegex = regexp.MustCompile(`queued as ([A-Za-z0-9.-]+)`)
@@ -72,9 +80,6 @@ var (
 		"/var/log/maillog",
 		"/var/log/mail.err",
 	}
-
-	// Default domain to test outbound SMTP connectivity if recipient domain is not usable
-	defaultSMTPTestDomain = "gmail.com"
 )
 
 // NewEmailNotifier creates a new Email notifier
@@ -88,8 +93,8 @@ func NewEmailNotifier(config EmailConfig, proxmoxType types.ProxmoxType, logger 
 	}
 
 	// Validate delivery method
-	if config.DeliveryMethod != EmailDeliveryRelay && config.DeliveryMethod != EmailDeliverySendmail {
-		return nil, fmt.Errorf("invalid email delivery method: %s (must be 'relay' or 'sendmail')", config.DeliveryMethod)
+	if config.DeliveryMethod != EmailDeliveryRelay && config.DeliveryMethod != EmailDeliverySendmail && config.DeliveryMethod != EmailDeliveryPMF {
+		return nil, fmt.Errorf("invalid email delivery method: %s (must be 'relay', 'sendmail', or 'pmf')", config.DeliveryMethod)
 	}
 
 	// Validate from address
@@ -134,6 +139,22 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		return result, nil
 	}
 
+	// Always print the configured delivery method at INFO level for operational clarity.
+	switch e.config.DeliveryMethod {
+	case EmailDeliveryRelay:
+		if e.config.FallbackSendmail {
+			e.logger.Info("Email delivery method: relay (fallback: pmf enabled)")
+		} else {
+			e.logger.Info("Email delivery method: relay (fallback: disabled)")
+		}
+	case EmailDeliverySendmail:
+		e.logger.Info("Email delivery method: sendmail (/usr/sbin/sendmail)")
+	case EmailDeliveryPMF:
+		e.logger.Info("Email delivery method: pmf (proxmox-mail-forward)")
+	default:
+		e.logger.Info("Email delivery method: %s", e.config.DeliveryMethod)
+	}
+
 	// Resolve recipient
 	recipient := strings.TrimSpace(e.config.Recipient)
 	autoDetected := false
@@ -141,18 +162,17 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		e.logger.Debug("Email recipient not configured, attempting auto-detection...")
 		detectedRecipient, err := e.detectRecipient(ctx)
 		if err != nil {
-			// Relay requires an explicit recipient, but proxmox-mail-forward does not:
-			// the notification routing is handled by Proxmox (targets/matchers).
-			if e.config.DeliveryMethod == EmailDeliveryRelay {
-				e.logger.Warning("WARNING: Failed to detect email recipient: %v", err)
+			e.logger.Warning("WARNING: Failed to detect email recipient: %v", err)
+			if e.config.DeliveryMethod == EmailDeliveryPMF {
+				e.logger.Info("  Proceeding anyway because EMAIL_DELIVERY_METHOD=pmf routes via Proxmox Notifications; recipient is only used for the To: header")
+			} else {
 				e.logger.Warning("WARNING: Email notification skipped because no valid recipient is available")
+				e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
 				result.Success = false
 				result.Duration = time.Since(startTime)
 				result.Error = fmt.Errorf("no valid email recipient: %w", err)
 				return result, nil
 			}
-			e.logger.Warning("WARNING: Failed to detect email recipient: %v", err)
-			e.logger.Info("  Proceeding anyway because EMAIL_DELIVERY_METHOD=sendmail uses proxmox-mail-forward targets")
 		} else {
 			recipient = detectedRecipient
 			e.logger.Debug("Auto-detected email recipient: %s", recipient)
@@ -162,7 +182,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 	recipient = strings.TrimSpace(recipient)
 	if recipient == "" {
-		if e.config.DeliveryMethod == EmailDeliveryRelay {
+		if e.config.DeliveryMethod == EmailDeliveryRelay || e.config.DeliveryMethod == EmailDeliverySendmail {
 			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
 			e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
 			result.Success = false
@@ -171,7 +191,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			return result, nil
 		}
 		e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
-		e.logger.Info("  EMAIL_DELIVERY_METHOD=sendmail uses proxmox-mail-forward targets; recipient is not required")
+		e.logger.Info("  EMAIL_DELIVERY_METHOD=pmf routes via Proxmox Notifications; recipient is only used for the To: header")
 	}
 
 	if e.config.DeliveryMethod == EmailDeliveryRelay && isRootRecipient(recipient) {
@@ -208,19 +228,16 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		result.Method = "email-relay"
 		err = e.sendViaRelay(ctx, recipient, subject, htmlBody, textBody, data)
 
-		// Fallback to sendmail if relay fails and fallback is enabled
+		// Fallback to PMF if relay fails and fallback is enabled
 		if err != nil && e.config.FallbackSendmail {
 			relayErr = err // Store original relay error
 			e.logger.Warning("WARNING: Cloud relay failed: %v", err)
 
-			e.logger.Info("Attempting fallback to sendmail...")
+			e.logger.Info("Attempting fallback to pmf...")
 
-			result.Method = "email-sendmail-fallback"
+			result.Method = "email-pmf-fallback"
 			result.UsedFallback = true
-			queueID, backend, backendPath, sendErr := e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
-			if queueID != "" {
-				result.Metadata["mail_queue_id"] = queueID
-			}
+			backend, backendPath, sendErr := e.sendViaPMF(ctx, recipient, subject, htmlBody, textBody, data)
 			if backend != "" {
 				result.Metadata["email_backend"] = backend
 			}
@@ -234,6 +251,16 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 				result.Error = relayErr
 			}
 		}
+	} else if e.config.DeliveryMethod == EmailDeliveryPMF {
+		result.Method = "email-pmf"
+		backend, backendPath, sendErr := e.sendViaPMF(ctx, recipient, subject, htmlBody, textBody, data)
+		if backend != "" {
+			result.Metadata["email_backend"] = backend
+		}
+		if backendPath != "" {
+			result.Metadata["email_backend_path"] = backendPath
+		}
+		err = sendErr
 	} else {
 		result.Method = "email-sendmail"
 		queueID, backend, backendPath, sendErr := e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
@@ -294,8 +321,10 @@ func describeEmailMethod(method string) string {
 		return "cloud relay"
 	case "email-sendmail":
 		return "sendmail"
-	case "email-sendmail-fallback":
-		return "sendmail fallback"
+	case "email-pmf":
+		return "proxmox-mail-forward"
+	case "email-pmf-fallback":
+		return "proxmox-mail-forward fallback"
 	default:
 		return method
 	}
@@ -365,50 +394,6 @@ func (e *EmailNotifier) detectRecipient(ctx context.Context) (string, error) {
 	}
 
 	return "", fmt.Errorf("root@pam user not found in Proxmox configuration")
-}
-
-// deriveTestDomain chooses a domain for outbound SMTP port 25 checks based on recipient.
-func deriveTestDomain(recipient string) string {
-	parts := strings.Split(recipient, "@")
-	if len(parts) == 2 {
-		domain := strings.TrimSpace(parts[1])
-		if domain != "" && !strings.HasSuffix(domain, "localhost") {
-			return domain
-		}
-	}
-	return defaultSMTPTestDomain
-}
-
-// testOutboundPort25 verifies TCP connectivity to MX servers of the given domain.
-// It logs diagnostics and returns true if at least one MX host is reachable on port 25.
-func (e *EmailNotifier) testOutboundPort25(ctx context.Context, domain string) bool {
-	mxRecords, err := net.LookupMX(domain)
-	if err != nil || len(mxRecords) == 0 {
-		e.logger.Warning("⚠ SMTP connectivity test: failed to resolve MX for %s: %v", domain, err)
-		e.logger.Info("  This may indicate DNS issues (check /etc/resolv.conf)")
-		return false
-	}
-
-	sort.Slice(mxRecords, func(i, j int) bool { return mxRecords[i].Pref < mxRecords[j].Pref })
-
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	for _, mx := range mxRecords {
-		host := strings.TrimSuffix(mx.Host, ".")
-		addr := net.JoinHostPort(host, "25")
-		e.logger.Debug("SMTP connectivity test: trying %s (pref=%d)...", addr, mx.Pref)
-		conn, err := dialer.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			e.logger.Warning("  ❌ Connect to %s failed: %v", addr, err)
-			continue
-		}
-		_ = conn.Close()
-		e.logger.Info("  ✅ Outbound TCP/25 reachable: %s", addr)
-		return true
-	}
-
-	e.logger.Warning("⚠ Outbound TCP/25 to MX servers of %s failed for all records", domain)
-	e.logger.Info("  Your ISP or firewall may be blocking port 25 towards the Internet")
-	return false
 }
 
 // sendViaRelay sends email via cloud relay
@@ -815,89 +800,7 @@ func summarizeSendmailTranscript(transcript string) (highlights []string, remote
 	return highlights, remoteID, localQueueID
 }
 
-// sendViaSendmail sends email via local sendmail command
-func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) (queueID, backend, backendPath string, err error) {
-	e.logger.Debug("sendViaSendmail() starting for recipient: %s", recipient)
-
-	// Prefer Proxmox's built-in mail forwarding integration when available.
-	//
-	// proxmox-mail-forward reads an email from stdin and forwards it through Proxmox Notifications
-	// (targets/matchers configured in notifications.cfg). It is typically installed to /usr/libexec.
-	var pmfPath string
-	if !e.config.DisableProxmoxMailForward {
-		for _, candidate := range []string{
-			"/usr/libexec/proxmox-mail-forward",
-			"/usr/bin/proxmox-mail-forward",
-			"proxmox-mail-forward",
-		} {
-			if path, err := exec.LookPath(candidate); err == nil {
-				pmfPath = path
-				break
-			}
-		}
-	} else {
-		e.logger.Debug("proxmox-mail-forward disabled for this notifier instance; using legacy sendmail backend")
-	}
-
-	// ========================================================================
-	// PRE-FLIGHT MTA DIAGNOSTIC CHECKS
-	// ========================================================================
-	e.logger.Debug("=== Pre-flight MTA diagnostic checks ===")
-
-	// Track initial mail queue size for post-send comparison
-	initialQueueCount := -1
-
-	// Check if sendmail exists
-	sendmailPath := "/usr/sbin/sendmail"
-	if pmfPath == "" {
-		if _, err := exec.LookPath(sendmailPath); err != nil {
-			return "", "", "", fmt.Errorf("sendmail not found at %s and proxmox-mail-forward not available - please install postfix/proxmox-mail-forward or configure email relay", sendmailPath)
-		}
-		e.logger.Debug("✓ Sendmail binary found at %s", sendmailPath)
-	} else {
-		e.logger.Debug("✓ Proxmox mail forwarder found at %s", pmfPath)
-	}
-
-	// Check MTA service status
-	if active, service := e.isMTAServiceActive(ctx); active {
-		e.logger.Debug("✓ MTA service '%s' is active", service)
-	} else {
-		e.logger.Warning("⚠ No MTA service appears to be running (checked: postfix, sendmail, exim4)")
-		e.logger.Warning("  Emails may be accepted but not delivered. Consider using EMAIL_DELIVERY_METHOD=relay")
-	}
-
-	// Check MTA configuration
-	if hasConfig, mtaType := e.checkMTAConfiguration(); hasConfig {
-		e.logger.Debug("✓ %s configuration found", mtaType)
-
-		// For Postfix, check relay configuration
-		if mtaType == "Postfix" {
-			if hasRelay, relayHost := e.checkRelayHostConfigured(ctx); hasRelay {
-				e.logger.Debug("✓ SMTP relay configured: %s", relayHost)
-			} else {
-				e.logger.Debug("ℹ No relay host configured (using direct delivery)")
-			}
-		}
-	} else {
-		e.logger.Warning("⚠ No MTA configuration file found")
-		e.logger.Warning("  Sendmail may queue emails but not deliver them")
-	}
-
-	// Check current mail queue
-	if queueCount, err := e.checkMailQueue(ctx); err == nil {
-		initialQueueCount = queueCount
-		if queueCount > 0 {
-			e.logger.Warning("⚠ %d message(s) currently in mail queue (previous emails may be stuck)", queueCount)
-			if queueCount > 10 {
-				e.logger.Warning("  Large queue detected - check mail server configuration with 'mailq' and /var/log/mail.log")
-			}
-		} else {
-			e.logger.Debug("Mail queue initially empty before sending email")
-		}
-	} else {
-		e.logger.Debug("Could not inspect mail queue before sending: %v", err)
-	}
-
+func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody string, data *NotificationData) (emailMessage, toHeader string) {
 	e.logger.Debug("=== Building email message ===")
 
 	// Encode subject in Base64 for proper UTF-8 handling
@@ -905,7 +808,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 
 	// Build email headers and body
 	var email strings.Builder
-	toHeader := strings.TrimSpace(recipient)
+	toHeader = strings.TrimSpace(recipient)
 	if toHeader == "" {
 		toHeader = "root"
 	}
@@ -1008,48 +911,124 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	}
 
 	e.logger.Debug("Email message built (%d bytes)", email.Len())
+	return email.String(), toHeader
+}
 
-	// ========================================================================
-	// SEND VIA PROXMOX-MAIL-FORWARD (preferred)
-	// ========================================================================
-	if pmfPath != "" {
-		e.logger.Debug("=== Sending email via proxmox-mail-forward ===")
-		e.logger.Debug("proxmox-mail-forward routing is handled by Proxmox Notifications (notifications.cfg); To=%q is only a mail header", toHeader)
+func (e *EmailNotifier) sendViaPMF(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) (backend, backendPath string, err error) {
+	e.logger.Debug("sendViaPMF() starting")
 
-		cmd := exec.CommandContext(ctx, pmfPath)
-		cmd.Stdin = strings.NewReader(email.String())
-
-		var stdoutBuf, stderrBuf strings.Builder
-		cmd.Stdout = &stdoutBuf
-		cmd.Stderr = &stderrBuf
-
-		startTime := time.Now()
-		err = cmd.Run()
-		duration := time.Since(startTime)
-
-		e.logger.Debug("proxmox-mail-forward completed in %v", duration)
-
-		if stdoutBuf.Len() > 0 {
-			stdoutStr := strings.TrimSpace(stdoutBuf.String())
-			if stdoutStr != "" {
-				e.logger.Debug("proxmox-mail-forward stdout: %s", stdoutStr)
-			}
+	var pmfPath string
+	for _, candidate := range pmfLookPathCandidates {
+		if path, err := exec.LookPath(candidate); err == nil {
+			pmfPath = path
+			break
 		}
-		if stderrBuf.Len() > 0 {
-			stderrStr := strings.TrimSpace(stderrBuf.String())
-			if stderrStr != "" {
-				e.logger.Debug("proxmox-mail-forward stderr: %s", stderrStr)
-			}
-		}
-
-		if err != nil {
-			e.logger.Error("❌ proxmox-mail-forward failed: %v", err)
-			return "", "proxmox-mail-forward", pmfPath, fmt.Errorf("proxmox-mail-forward failed: %w (stderr: %s)", err, stderrBuf.String())
-		}
-
-		e.logger.Debug("✅ Email handed off to proxmox-mail-forward successfully")
-		return "", "proxmox-mail-forward", pmfPath, nil
 	}
+	if pmfPath == "" {
+		return "", "", fmt.Errorf("proxmox-mail-forward not found - please install/configure Proxmox Notifications or use EMAIL_DELIVERY_METHOD=sendmail or relay")
+	}
+	e.logger.Debug("✓ Proxmox mail forwarder found at %s", pmfPath)
+
+	emailMessage, toHeader := e.buildEmailMessage(recipient, subject, htmlBody, textBody, data)
+
+	e.logger.Debug("=== Sending email via proxmox-mail-forward ===")
+	e.logger.Debug("proxmox-mail-forward routing is handled by Proxmox Notifications; To=%q is only a mail header", toHeader)
+
+	cmd := exec.CommandContext(ctx, pmfPath)
+	cmd.Stdin = strings.NewReader(emailMessage)
+
+	var stdoutBuf, stderrBuf strings.Builder
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	startTime := time.Now()
+	err = cmd.Run()
+	duration := time.Since(startTime)
+
+	e.logger.Debug("proxmox-mail-forward completed in %v", duration)
+
+	if stdoutBuf.Len() > 0 {
+		stdoutStr := strings.TrimSpace(stdoutBuf.String())
+		if stdoutStr != "" {
+			e.logger.Debug("proxmox-mail-forward stdout: %s", stdoutStr)
+		}
+	}
+	if stderrBuf.Len() > 0 {
+		stderrStr := strings.TrimSpace(stderrBuf.String())
+		if stderrStr != "" {
+			e.logger.Debug("proxmox-mail-forward stderr: %s", stderrStr)
+		}
+	}
+
+	if err != nil {
+		e.logger.Error("❌ proxmox-mail-forward failed: %v", err)
+		return "proxmox-mail-forward", pmfPath, fmt.Errorf("proxmox-mail-forward failed: %w (stderr: %s)", err, strings.TrimSpace(stderrBuf.String()))
+	}
+
+	e.logger.Debug("✅ Email handed off to proxmox-mail-forward successfully")
+	return "proxmox-mail-forward", pmfPath, nil
+}
+
+// sendViaSendmail sends email via local sendmail command
+func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) (queueID, backend, backendPath string, err error) {
+	e.logger.Debug("sendViaSendmail() starting for recipient: %s", recipient)
+
+	// ========================================================================
+	// PRE-FLIGHT MTA DIAGNOSTIC CHECKS
+	// ========================================================================
+	e.logger.Debug("=== Pre-flight MTA diagnostic checks ===")
+
+	// Track initial mail queue size for post-send comparison
+	initialQueueCount := -1
+
+	// Check if sendmail exists
+	sendmailPath := sendmailBinaryPath
+	if _, err := exec.LookPath(sendmailPath); err != nil {
+		return "", "", "", fmt.Errorf("sendmail not found at %s - please install/configure a local MTA (e.g. postfix) or use EMAIL_DELIVERY_METHOD=relay/pmf", sendmailPath)
+	}
+	e.logger.Debug("✓ Sendmail binary found at %s", sendmailPath)
+
+	// Check MTA service status
+	if active, service := e.isMTAServiceActive(ctx); active {
+		e.logger.Debug("✓ MTA service '%s' is active", service)
+	} else {
+		e.logger.Warning("⚠ No MTA service appears to be running (checked: postfix, sendmail, exim4)")
+		e.logger.Warning("  Emails may be accepted but not delivered. Consider using EMAIL_DELIVERY_METHOD=relay")
+	}
+
+	// Check MTA configuration
+	if hasConfig, mtaType := e.checkMTAConfiguration(); hasConfig {
+		e.logger.Debug("✓ %s configuration found", mtaType)
+
+		// For Postfix, check relay configuration
+		if mtaType == "Postfix" {
+			if hasRelay, relayHost := e.checkRelayHostConfigured(ctx); hasRelay {
+				e.logger.Debug("✓ SMTP relay configured: %s", relayHost)
+			} else {
+				e.logger.Debug("ℹ No relay host configured (using direct delivery)")
+			}
+		}
+	} else {
+		e.logger.Warning("⚠ No MTA configuration file found")
+		e.logger.Warning("  Sendmail may queue emails but not deliver them")
+	}
+
+	// Check current mail queue
+	if queueCount, err := e.checkMailQueue(ctx); err == nil {
+		initialQueueCount = queueCount
+		if queueCount > 0 {
+			e.logger.Warning("⚠ %d message(s) currently in mail queue (previous emails may be stuck)", queueCount)
+			if queueCount > 10 {
+				e.logger.Warning("  Large queue detected - check mail server configuration with 'mailq' and /var/log/mail.log")
+			}
+		} else {
+			e.logger.Debug("Mail queue initially empty before sending email")
+		}
+	} else {
+		e.logger.Debug("Could not inspect mail queue before sending: %v", err)
+	}
+
+	emailMessage, _ := e.buildEmailMessage(recipient, subject, htmlBody, textBody, data)
 
 	// ========================================================================
 	// SEND EMAIL WITH VERBOSE OUTPUT
@@ -1067,7 +1046,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 
 	// Create sendmail command
 	cmd := exec.CommandContext(ctx, sendmailPath, args...)
-	cmd.Stdin = strings.NewReader(email.String())
+	cmd.Stdin = strings.NewReader(emailMessage)
 
 	// Capture stdout and stderr separately
 	var stdoutBuf, stderrBuf strings.Builder

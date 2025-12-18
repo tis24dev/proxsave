@@ -493,7 +493,9 @@ First, confirm which delivery method you are using:
 # configs/backup.env
 EMAIL_DELIVERY_METHOD=relay   # cloud relay (outbound HTTPS)
 # or
-EMAIL_DELIVERY_METHOD=sendmail # Proxmox Notifications via proxmox-mail-forward
+EMAIL_DELIVERY_METHOD=sendmail # /usr/sbin/sendmail (local MTA required)
+# or
+EMAIL_DELIVERY_METHOD=pmf     # Proxmox Notifications via proxmox-mail-forward
 ```
 
 ##### If `EMAIL_DELIVERY_METHOD=relay`
@@ -502,9 +504,20 @@ EMAIL_DELIVERY_METHOD=sendmail # Proxmox Notifications via proxmox-mail-forward
 - Ensure the recipient is configured:
   - Set `EMAIL_RECIPIENT=...`, or
   - Leave it empty and set an email for `root@pam` inside Proxmox (auto-detect).
+- If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to `EMAIL_DELIVERY_METHOD=pmf` when the relay fails.
 - Check the proxsave logs for `email-relay` warnings/errors.
 
 ##### If `EMAIL_DELIVERY_METHOD=sendmail`
+
+This mode uses `/usr/sbin/sendmail`, so your node must have a working local MTA (e.g. postfix).
+
+- Verify `sendmail` exists:
+  ```bash
+  test -x /usr/sbin/sendmail && echo "sendmail OK" || echo "sendmail not found"
+  ```
+- Check your MTA status and queue (`systemctl status postfix`, `mailq`, `/var/log/mail.log`).
+
+##### If `EMAIL_DELIVERY_METHOD=pmf`
 
 This mode uses Proxmox Notifications via `proxmox-mail-forward` (final recipients are configured in Proxmox, not in proxsave).
 
@@ -512,8 +525,7 @@ This mode uses Proxmox Notifications via `proxmox-mail-forward` (final recipient
   ```bash
   test -x /usr/libexec/proxmox-mail-forward && echo "proxmox-mail-forward OK" || echo "proxmox-mail-forward not found"
   ```
-- Verify Proxmox has an email address set for `root@pam` (or a custom Notifications target/matcher for `system-mail`).
-- Check Proxmox Notifications configuration in the UI (`Datacenter -> Notifications`).
+- Verify Proxmox Notifications configuration in the UI (`Datacenter -> Notifications`).
 
 ---
 

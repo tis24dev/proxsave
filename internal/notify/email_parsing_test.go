@@ -11,27 +11,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-func TestDeriveTestDomain(t *testing.T) {
-	tests := []struct {
-		recipient string
-		want      string
-	}{
-		{recipient: "admin@example.com", want: "example.com"},
-		{recipient: " admin@Example.COM ", want: "Example.COM"},
-		{recipient: "root@localhost", want: defaultSMTPTestDomain},
-		{recipient: "root@localhost.localdomain", want: "localhost.localdomain"},
-		{recipient: "no-at-sign", want: defaultSMTPTestDomain},
-		{recipient: "user@", want: defaultSMTPTestDomain},
-		{recipient: "@example.com", want: "example.com"},
-	}
-
-	for _, tt := range tests {
-		if got := deriveTestDomain(tt.recipient); got != tt.want {
-			t.Fatalf("deriveTestDomain(%q)=%q want %q", tt.recipient, got, tt.want)
-		}
-	}
-}
-
 func TestExtractQueueID(t *testing.T) {
 	if got := extractQueueID("", "queued as 1234ABCD123"); got != "1234ABCD123" {
 		t.Fatalf("extractQueueID()=%q want %q", got, "1234ABCD123")

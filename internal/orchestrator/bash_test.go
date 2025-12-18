@@ -190,6 +190,10 @@ type mockNotifier struct {
 	err error
 }
 
+func (m *mockNotifier) Name() string {
+	return "MockNotifier"
+}
+
 func (m *mockNotifier) Notify(ctx context.Context, stats *BackupStats) error {
 	return m.err
 }

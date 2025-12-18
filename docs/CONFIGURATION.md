@@ -738,9 +738,9 @@ TELEGRAM_CHAT_ID=                  # Chat ID (your user ID or group ID)
 EMAIL_ENABLED=false                # true | false
 
 # Delivery method
-EMAIL_DELIVERY_METHOD=relay        # relay | sendmail
+EMAIL_DELIVERY_METHOD=relay        # relay | sendmail | pmf
 
-# Fallback to sendmail (proxmox-mail-forward) if relay fails
+# Fallback to pmf (proxmox-mail-forward) if relay fails
 EMAIL_FALLBACK_SENDMAIL=true       # true | false
 
 # Recipient (empty = auto-detect from Proxmox)
@@ -752,9 +752,12 @@ EMAIL_FROM=no-reply@proxmox.tis24.it
 
 **Delivery methods**:
 - **relay**: Uses cloud relay (outbound HTTPS)
-- **sendmail**: Uses Proxmox built-in `proxmox-mail-forward` (routes via Proxmox Notifications)
+- **sendmail**: Uses `/usr/sbin/sendmail` (requires a working local MTA, e.g. postfix)
+- **pmf**: Uses Proxmox Notifications via `proxmox-mail-forward`
 
-**Note**: With `sendmail` (when `proxmox-mail-forward` is available), final delivery recipients are determined by Proxmox Notifications targets/matchers. `EMAIL_RECIPIENT` may be empty (auto-detect) and may not control the final destination.
+**Notes**:
+- `EMAIL_FALLBACK_SENDMAIL` is a historical name (kept for compatibility). When `EMAIL_DELIVERY_METHOD=relay`, it enables fallback to **pmf**.
+- With `pmf`, final delivery recipients are determined by Proxmox Notifications targets/matchers. `EMAIL_RECIPIENT` is only used for the `To:` header and may be empty.
 
 ### Gotify
 

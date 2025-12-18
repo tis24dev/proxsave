@@ -23,6 +23,10 @@ func NewNotificationAdapter(notifier notify.Notifier, logger *logging.Logger) *N
 	}
 }
 
+func (n *NotificationAdapter) Name() string {
+	return n.notifier.Name()
+}
+
 // Notify implements the NotificationChannel interface
 func (n *NotificationAdapter) Notify(ctx context.Context, stats *BackupStats) error {
 	n.logger.Info("%s: starting", n.notifier.Name())

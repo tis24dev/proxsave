@@ -143,30 +143,30 @@ func TestCheckDependenciesMissingRequiredAddsError(t *testing.T) {
 	}
 }
 
-func TestCheckDependenciesMissingOptionalAddsWarning(t *testing.T) {
-	cfg := &config.Config{
-		CompressionType:       types.CompressionNone, // only tar required
-		EmailDeliveryMethod:   "relay",
-		EmailFallbackSendmail: true, // sendmail becomes optional dependency
-	}
-	checker := newCheckerForTest(cfg, stubLookPath(map[string]bool{
-		"tar": true, // present
-		// sendmail missing -> warning
-	}))
+	func TestCheckDependenciesMissingOptionalAddsWarning(t *testing.T) {
+		cfg := &config.Config{
+			CompressionType:       types.CompressionNone, // only tar required
+			EmailDeliveryMethod:   "relay",
+			EmailFallbackSendmail: true, // pmf becomes optional dependency (relay fallback)
+		}
+		checker := newCheckerForTest(cfg, stubLookPath(map[string]bool{
+			"tar": true, // present
+			// proxmox-mail-forward missing -> warning
+		}))
 
 	checker.checkDependencies()
 
 	if got := checker.result.WarningCount(); got != 1 {
 		t.Fatalf("expected 1 warning, got %d issues=%+v", got, checker.result.Issues)
 	}
-	msg := checker.result.Issues[0].Message
-	if !strings.Contains(msg, "Optional dependency") || !strings.Contains(msg, "sendmail") {
-		t.Fatalf("unexpected warning message: %s", msg)
+		msg := checker.result.Issues[0].Message
+		if !strings.Contains(msg, "Optional dependency") || !strings.Contains(msg, "proxmox-mail-forward") {
+			t.Fatalf("unexpected warning message: %s", msg)
+		}
+		if checker.result.ErrorCount() != 0 {
+			t.Fatalf("expected no errors, got %d", checker.result.ErrorCount())
+		}
 	}
-	if checker.result.ErrorCount() != 0 {
-		t.Fatalf("expected no errors, got %d", checker.result.ErrorCount())
-	}
-}
 
 func TestParseSSLineProgramExtraction(t *testing.T) {
 	line := `tcp   LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=1234,fd=3))`

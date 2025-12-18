@@ -564,9 +564,13 @@ WEBHOOK_DISCORD_ALERTS_METHOD=POST
 # - Set EMAIL_DELIVERY_METHOD=relay and configure EMAIL_RECIPIENT (or leave empty for root@pam auto-detect)
 # - No local SMTP/MTA setup required on the node
 
-# Option B: Proxmox Notifications via proxmox-mail-forward
+# Option B: Local sendmail (/usr/sbin/sendmail)
 # - Set EMAIL_DELIVERY_METHOD=sendmail
-# - Ensure Proxmox has an email set for root@pam and Notifications targets/matchers are configured
+# - Requires a working local MTA (e.g. postfix) on the node
+
+# Option C: Proxmox Notifications via proxmox-mail-forward
+# - Set EMAIL_DELIVERY_METHOD=pmf
+# - Ensure Proxmox Notifications targets/matchers are configured
 # - Optional quick check (runs the forwarder directly; run as root):
 printf "To: root\nSubject: proxsave test\n\nHello from proxsave\n" | sudo /usr/libexec/proxmox-mail-forward
 ```

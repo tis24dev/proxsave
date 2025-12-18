@@ -139,7 +139,7 @@ type Config struct {
 
 	// Email Notifications
 	EmailEnabled          bool
-	EmailDeliveryMethod   string // "relay" or "sendmail"
+	EmailDeliveryMethod   string // "relay", "sendmail", or "pmf"
 	EmailFallbackSendmail bool
 	EmailRecipient        string // Single recipient, empty = auto-detect
 	EmailFrom             string

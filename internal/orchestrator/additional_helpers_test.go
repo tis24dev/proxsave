@@ -572,7 +572,12 @@ func TestFinalizeAndCloseLogWithoutLogFile(t *testing.T) {
 }
 
 type stubNotifierChannel struct {
+	name   string
 	called bool
+}
+
+func (s *stubNotifierChannel) Name() string {
+	return s.name
 }
 
 func (s *stubNotifierChannel) Notify(ctx context.Context, stats *BackupStats) error {
@@ -595,7 +600,7 @@ func TestDispatchNotificationsRespectsConfig(t *testing.T) {
 		logger: logger,
 		cfg:    cfg,
 		notificationChannels: []NotificationChannel{
-			&stubNotifierChannel{}, // Email
+			&stubNotifierChannel{name: "Email"},
 		},
 	}
 	stats := &BackupStats{}
@@ -609,6 +614,85 @@ func TestDispatchNotificationsRespectsConfig(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "Telegram: disabled") {
 		t.Fatalf("expected disabled log entry for Telegram, got: %s", buf.String())
+	}
+}
+
+func TestDispatchNotificationsWarnsWhenEmailEnabledButMissing(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	cfg := &config.Config{
+		EmailEnabled:        true,
+		EmailDeliveryMethod: "pfm",
+		TelegramEnabled:     true,
+		GotifyEnabled:       false,
+		WebhookEnabled:      false,
+	}
+
+	telegram := &stubNotifierChannel{name: "Telegram"}
+	o := &Orchestrator{
+		logger: logger,
+		cfg:    cfg,
+		notificationChannels: []NotificationChannel{
+			telegram, // Email is missing on purpose (e.g. invalid method prevented initialization)
+		},
+	}
+	stats := &BackupStats{}
+
+	o.dispatchNotifications(context.Background(), stats)
+
+	if !telegram.called {
+		t.Fatalf("expected Telegram channel to be called")
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Email: enabled but not initialized") {
+		t.Fatalf("expected warning for missing Email channel, got: %s", out)
+	}
+	if !strings.Contains(out, `EMAIL_DELIVERY_METHOD="pfm"`) {
+		t.Fatalf("expected warning to include configured EMAIL_DELIVERY_METHOD, got: %s", out)
+	}
+	if !strings.Contains(out, "allowed: relay|sendmail|pmf") {
+		t.Fatalf("expected warning to include allowed methods, got: %s", out)
+	}
+	if got := strings.TrimSpace(stats.EmailStatus); got != "error" {
+		t.Fatalf("expected stats.EmailStatus=error when Email is enabled but missing, got %q", got)
+	}
+}
+
+func TestDispatchNotificationsUsesNameMappingNotRegistrationOrder(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	cfg := &config.Config{
+		EmailEnabled:    true,
+		TelegramEnabled: true,
+		GotifyEnabled:   false,
+		WebhookEnabled:  false,
+	}
+
+	telegram := &stubNotifierChannel{name: "Telegram"}
+	email := &stubNotifierChannel{name: "Email"}
+	o := &Orchestrator{
+		logger: logger,
+		cfg:    cfg,
+		notificationChannels: []NotificationChannel{
+			telegram, // intentionally out of the old expected order
+			email,
+		},
+	}
+
+	o.dispatchNotifications(context.Background(), &BackupStats{})
+
+	if !email.called || !telegram.called {
+		t.Fatalf("expected both Email and Telegram channels to be called (email=%v telegram=%v)", email.called, telegram.called)
+	}
+
+	// No warnings should be produced for missing channels.
+	if strings.Contains(buf.String(), "enabled but not initialized") {
+		t.Fatalf("unexpected warning in output: %s", buf.String())
 	}
 }
 

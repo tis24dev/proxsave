@@ -202,7 +202,7 @@ The installation wizard creates your configuration file interactively:
 1. **Configuration file path**: Default `configs/backup.env` (accepts absolute or relative paths within repo)
 2. **Secondary storage**: Optional path for backup/log copies
 3. **Cloud storage**: Optional rclone remote configuration
-4. **Notifications**: Enable Telegram (centralized) and email notifications (relay or sendmail)
+4. **Notifications**: Enable Telegram (centralized) and email notifications (relay, sendmail, or pmf)
 5. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 
 **Features:**

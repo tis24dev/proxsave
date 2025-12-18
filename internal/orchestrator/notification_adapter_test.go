@@ -68,22 +68,22 @@ func TestNotificationAdapter_Success(t *testing.T) {
 	}
 }
 
-func TestNotificationAdapter_FallbackWarning(t *testing.T) {
+	func TestNotificationAdapter_FallbackWarning(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(&bytes.Buffer{})
 
 	stats := sampleBackupStats()
-	notifier := &stubNotifier{
+		notifier := &stubNotifier{
 		name:    "Email",
 		enabled: true,
-		result: &notify.NotificationResult{
-			Success:      true,
-			Method:       "email-sendmail-fallback",
-			UsedFallback: true,
-			Duration:     time.Second,
-			Error:        errors.New("primary relay failed"),
-		},
-	}
+			result: &notify.NotificationResult{
+				Success:      true,
+				Method:       "email-pmf-fallback",
+				UsedFallback: true,
+				Duration:     time.Second,
+				Error:        errors.New("primary relay failed"),
+			},
+		}
 
 	adapter := NewNotificationAdapter(notifier, logger)
 	if err := adapter.Notify(context.Background(), stats); err != nil {

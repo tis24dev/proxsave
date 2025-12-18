@@ -79,18 +79,19 @@ func TestEmailNotifierBasicAccessors(t *testing.T) {
 	}
 }
 
-func TestDescribeEmailMethod(t *testing.T) {
-	tests := []struct {
-		method string
-		want   string
-	}{
-		{"email-relay", "cloud relay"},
-		{"email-sendmail", "sendmail"},
-		{"email-sendmail-fallback", "sendmail fallback"},
-		{"custom", "custom"},
-	}
-	for _, tt := range tests {
-		if got := describeEmailMethod(tt.method); got != tt.want {
+	func TestDescribeEmailMethod(t *testing.T) {
+		tests := []struct {
+			method string
+			want   string
+		}{
+			{"email-relay", "cloud relay"},
+			{"email-sendmail", "sendmail"},
+			{"email-pmf", "proxmox-mail-forward"},
+			{"email-pmf-fallback", "proxmox-mail-forward fallback"},
+			{"custom", "custom"},
+		}
+		for _, tt := range tests {
+			if got := describeEmailMethod(tt.method); got != tt.want {
 			t.Fatalf("describeEmailMethod(%s)=%s want %s", tt.method, got, tt.want)
 		}
 	}
