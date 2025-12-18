@@ -135,7 +135,7 @@ Some interactive commands support two interface modes:
 2. Creates directory structure
 3. Generates default configuration file
 4. Optionally configures encryption (AGE key generation)
-5. Optionally sets up notifications (Telegram, Email, Webhook)
+5. Optionally sets up notifications (Telegram, Email)
 6. Creates systemd service (optional)
 7. Validates configuration
 

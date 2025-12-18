@@ -498,6 +498,8 @@ EMAIL_DELIVERY_METHOD=sendmail # /usr/sbin/sendmail (local MTA required)
 EMAIL_DELIVERY_METHOD=pmf     # Proxmox Notifications via proxmox-mail-forward
 ```
 
+If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVERY_METHOD` is exactly one of: `relay`, `sendmail`, `pmf` (typos will skip Email with a warning).
+
 ##### If `EMAIL_DELIVERY_METHOD=relay`
 
 - Ensure outbound HTTPS works from the node (the relay needs network access).

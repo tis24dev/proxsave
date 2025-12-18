@@ -191,7 +191,7 @@ make build
 The installation wizard creates your configuration file interactively:
 
 ```bash
-./build/prosave --install
+./build/proxsave --install
 
 # Or perform a clean reinstall (keeps env/ and identity/)
 ./build/proxsave --new-install
