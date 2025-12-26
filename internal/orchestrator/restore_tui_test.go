@@ -4,8 +4,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rivo/tview"
+
+	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/tui"
+	"github.com/tis24dev/proxsave/internal/tui/components"
 )
 
 func TestFilterAndSortCategoriesForSystem(t *testing.T) {
@@ -161,6 +166,85 @@ func TestConfirmOverwriteTUI(t *testing.T) {
 	ok, err := confirmOverwriteTUI("cfg", "sig")
 	if err != nil || !ok {
 		t.Fatalf("confirmOverwriteTUI returned %v, %v", ok, err)
+	}
+}
+
+func TestShowRestoreErrorModalAddsWizardPage(t *testing.T) {
+	app := tui.NewApp()
+	pages := tview.NewPages()
+
+	showRestoreErrorModal(app, pages, "cfg", "sig", "boom", nil)
+
+	if !pages.HasPage(restoreErrorModalPage) {
+		t.Fatalf("expected %q page to be present", restoreErrorModalPage)
+	}
+	page := pages.GetPage(restoreErrorModalPage)
+	flex, ok := page.(*tview.Flex)
+	if !ok {
+		t.Fatalf("expected *tview.Flex, got %T", page)
+	}
+	content := flex.GetItem(3)
+	modal, ok := content.(*tview.Modal)
+	if !ok {
+		t.Fatalf("expected *tview.Modal content, got %T", content)
+	}
+	if modal.GetTitle() != " Restore Error " {
+		t.Fatalf("modal title=%q; want %q", modal.GetTitle(), " Restore Error ")
+	}
+}
+
+func TestShowRestoreCandidatePageAddsCandidatesPageWithItems(t *testing.T) {
+	app := tui.NewApp()
+	pages := tview.NewPages()
+
+	now := time.Unix(1700000000, 0)
+	candidates := []*decryptCandidate{
+		{
+			Manifest: &backup.Manifest{
+				CreatedAt:       now,
+				EncryptionMode:  "age",
+				ProxmoxTargets:  []string{"pve"},
+				ProxmoxVersion:  "8.1",
+				CompressionType: "zstd",
+				ClusterMode:     "standalone",
+				ScriptVersion:   "1.0.0",
+			},
+		},
+		{
+			Manifest: &backup.Manifest{
+				CreatedAt:       now.Add(-time.Hour),
+				EncryptionMode:  "age",
+				ProxmoxTargets:  []string{"pbs"},
+				CompressionType: "xz",
+				ScriptVersion:   "1.0.0",
+			},
+		},
+	}
+
+	showRestoreCandidatePage(app, pages, candidates, "cfg", "sig", func(*decryptCandidate) {}, func() {})
+
+	if !pages.HasPage("candidates") {
+		t.Fatalf("expected candidates page to be present")
+	}
+	page := pages.GetPage("candidates")
+	flex, ok := page.(*tview.Flex)
+	if !ok {
+		t.Fatalf("expected *tview.Flex, got %T", page)
+	}
+	content := flex.GetItem(3)
+	form, ok := content.(*tview.Form)
+	if !ok {
+		t.Fatalf("expected *tview.Form content, got %T", content)
+	}
+	if form.GetFormItemCount() != 1 {
+		t.Fatalf("form items=%d; want 1", form.GetFormItemCount())
+	}
+	listItem, ok := form.GetFormItem(0).(*components.ListFormItem)
+	if !ok {
+		t.Fatalf("expected *components.ListFormItem, got %T", form.GetFormItem(0))
+	}
+	if got := listItem.GetItemCount(); got != len(candidates) {
+		t.Fatalf("list items=%d; want %d", got, len(candidates))
 	}
 }
 

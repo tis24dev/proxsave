@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +65,180 @@ func writeTestFile(t *testing.T, path, data string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(data), 0o640); err != nil {
 		t.Fatalf("failed to write %s: %v", path, err)
+	}
+}
+
+func TestCloudStorageDetectFilesystem_RcloneMissingReturnsRecoverableError(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "remote",
+		RcloneTimeoutConnection: 5,
+	}
+	cs := newCloudStorageForTest(cfg)
+	cs.lookPath = func(name string) (string, error) {
+		return "", errors.New("missing")
+	}
+
+	info, err := cs.DetectFilesystem(context.Background())
+	if info != nil {
+		t.Fatalf("DetectFilesystem info=%+v; want nil", info)
+	}
+	var se *StorageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected StorageError, got %T: %v", err, err)
+	}
+	if se.Location != LocationCloud {
+		t.Fatalf("Location=%v; want %v", se.Location, LocationCloud)
+	}
+	if se.IsCritical {
+		t.Fatalf("IsCritical=true; want false")
+	}
+	if !se.Recoverable {
+		t.Fatalf("Recoverable=false; want true")
+	}
+}
+
+func TestRemoteCheckErrorUnwrap(t *testing.T) {
+	base := errors.New("root")
+	err := &remoteCheckError{msg: "wrapped", err: base}
+	if !errors.Is(err, base) {
+		t.Fatalf("expected errors.Is to match wrapped error")
+	}
+
+	var nilErr *remoteCheckError
+	if nilErr.Unwrap() != nil {
+		t.Fatalf("nil Unwrap() should return nil")
+	}
+}
+
+func TestCloudStorageMarkCloudLogPathAvailableClearsMissing(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled: true,
+		CloudRemote:  "remote",
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	cs.markCloudLogPathMissing("remote:logs", "not found")
+	if !cs.isCloudLogPathUnavailable() {
+		t.Fatalf("expected log path to be marked missing")
+	}
+
+	cs.markCloudLogPathAvailable()
+	if cs.isCloudLogPathUnavailable() {
+		t.Fatalf("expected log path missing flag to be cleared")
+	}
+}
+
+func TestDefaultExecCommandReturnsErrorForMissingCommand(t *testing.T) {
+	_, err := defaultExecCommand(context.Background(), "proxsave-command-does-not-exist")
+	if err == nil {
+		t.Fatalf("expected error for missing command")
+	}
+}
+
+func TestCloudStorageVerifyAlternativeSucceeds(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled: true,
+		CloudRemote:  "remote",
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{
+				name: "rclone",
+				args: []string{"ls", "remote:dir"},
+				out:  "123 file.tar\n",
+			},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	ok, err := cs.verifyAlternative(context.Background(), "remote:dir/file.tar", 123, "file.tar")
+	if err != nil || !ok {
+		t.Fatalf("verifyAlternative returned %v, %v; want true, nil", ok, err)
+	}
+}
+
+func TestCloudStorageVerifyAlternativeRejectsSizeMismatch(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled: true,
+		CloudRemote:  "remote",
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{
+				name: "rclone",
+				args: []string{"ls", "remote:"},
+				out:  "124 file.tar\n",
+			},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	ok, err := cs.verifyAlternative(context.Background(), "remote:file.tar", 123, "file.tar")
+	if err == nil || ok {
+		t.Fatalf("verifyAlternative returned %v, %v; want false, error", ok, err)
+	}
+	if !strings.Contains(err.Error(), "size mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCloudStorageUploadTasksParallelRunsAllTasks(t *testing.T) {
+	tmpDir := t.TempDir()
+	local1 := filepath.Join(tmpDir, "one.tar")
+	local2 := filepath.Join(tmpDir, "two.tar")
+	if err := os.WriteFile(local1, []byte("1"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(local2, []byte("2"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg := &config.Config{
+		CloudEnabled:           true,
+		CloudRemote:            "remote",
+		CloudParallelJobs:      2,
+		RcloneRetries:          1,
+		RcloneTimeoutOperation: 5,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	var mu sync.Mutex
+	var calls []commandCall
+	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "rclone" {
+			t.Fatalf("unexpected command %q", name)
+		}
+		if len(args) == 0 || args[0] != "copyto" {
+			t.Fatalf("unexpected rclone args %v", args)
+		}
+		mu.Lock()
+		calls = append(calls, commandCall{name: name, args: append([]string(nil), args...)})
+		mu.Unlock()
+		return []byte("ok"), nil
+	}
+
+	tasks := []uploadTask{
+		{local: local1, remote: "remote:one.tar", verify: false},
+		{local: local2, remote: "remote:two.tar", verify: false},
+	}
+
+	failed, err := cs.uploadTasksParallel(context.Background(), tasks)
+	if err != nil || failed {
+		t.Fatalf("uploadTasksParallel returned %v, %v; want false, nil", failed, err)
+	}
+
+	mu.Lock()
+	gotCalls := len(calls)
+	mu.Unlock()
+	if gotCalls != len(tasks) {
+		t.Fatalf("calls=%d; want %d", gotCalls, len(tasks))
 	}
 }
 
@@ -165,8 +340,8 @@ func TestCloudStorageDeleteSkipsMissingBundleCandidates(t *testing.T) {
 		t.Fatalf("expected 1 backup, got %d", len(backups))
 	}
 
-	if _, err := cs.deleteBackupInternal(context.Background(), backups[0].BackupFile); err != nil {
-		t.Fatalf("deleteBackupInternal() error = %v", err)
+	if err := cs.Delete(context.Background(), backups[0].BackupFile); err != nil {
+		t.Fatalf("Delete() error = %v", err)
 	}
 	if len(queue.calls) != 5 {
 		t.Fatalf("expected 5 rclone calls (list + 4 deletes), got %d", len(queue.calls))

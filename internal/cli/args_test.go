@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"flag"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -198,6 +199,94 @@ func TestPrintVersion(t *testing.T) {
 	}
 	if !strings.Contains(out, "Version: ") || !strings.Contains(out, "Author: tis24dev") {
 		t.Fatalf("version output missing fields: %q", out)
+	}
+}
+
+func TestShowHelpPrintsAndExitsZero(t *testing.T) {
+	origExit := osExit
+	origStderr := os.Stderr
+	origCommandLine := flag.CommandLine
+	origArgs := os.Args
+
+	var exitCode int
+	osExit = func(code int) {
+		exitCode = code
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	flag.CommandLine.SetOutput(w)
+	flag.CommandLine.Bool("dry-run", false, "Perform a dry run")
+	os.Args = []string{"proxsave-test"}
+
+	t.Cleanup(func() {
+		_ = w.Close()
+		_ = r.Close()
+		osExit = origExit
+		os.Stderr = origStderr
+		flag.CommandLine = origCommandLine
+		os.Args = origArgs
+	})
+
+	ShowHelp()
+	_ = w.Close()
+
+	outBytes, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	out := string(outBytes)
+	if !strings.Contains(out, "Usage: proxsave-test [options]") {
+		t.Fatalf("help output missing usage line: %q", out)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d; want 0", exitCode)
+	}
+}
+
+func TestShowVersionPrintsAndExitsZero(t *testing.T) {
+	origExit := osExit
+	origStdout := os.Stdout
+	origArgs := os.Args
+
+	var exitCode int
+	osExit = func(code int) {
+		exitCode = code
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	os.Args = []string{"proxsave-test"}
+
+	t.Cleanup(func() {
+		_ = w.Close()
+		_ = r.Close()
+		osExit = origExit
+		os.Stdout = origStdout
+		os.Args = origArgs
+	})
+
+	ShowVersion()
+	_ = w.Close()
+
+	outBytes, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	out := string(outBytes)
+	if !strings.Contains(out, "ProxSave") || !strings.Contains(out, "Version:") {
+		t.Fatalf("version output missing expected fields: %q", out)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d; want 0", exitCode)
 	}
 }
 

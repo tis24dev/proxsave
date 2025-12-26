@@ -46,6 +46,30 @@ func TestGetDefaultArchiverConfig(t *testing.T) {
 	}
 }
 
+func TestWithLookPathOverrideRestores(t *testing.T) {
+	calls := 0
+	restore := WithLookPathOverride(func(name string) (string, error) {
+		calls++
+		return "/tmp/" + name, nil
+	})
+	t.Cleanup(restore)
+
+	if _, err := lookPath("anything"); err != nil {
+		t.Fatalf("override lookPath returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected override to be invoked once, got %d", calls)
+	}
+
+	restore()
+
+	// Calling lookPath after restore should not invoke the override again.
+	_, _ = lookPath("definitely-not-a-command-xyz")
+	if calls != 1 {
+		t.Fatalf("expected override to be restored (calls=%d)", calls)
+	}
+}
+
 func TestCreateTarArchive(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{

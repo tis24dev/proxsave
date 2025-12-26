@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,16 @@ func (s *stubNotifier) Send(ctx context.Context, data *notify.NotificationData) 
 		return nil, s.err
 	}
 	return s.result, nil
+}
+
+func TestNotificationAdapter_Name(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+
+	adapter := NewNotificationAdapter(&stubNotifier{name: "Email"}, logger)
+	if got := adapter.Name(); got != "Email" {
+		t.Fatalf("Name()=%q; want %q", got, "Email")
+	}
 }
 
 func TestNotificationAdapter_Success(t *testing.T) {
@@ -68,22 +79,22 @@ func TestNotificationAdapter_Success(t *testing.T) {
 	}
 }
 
-	func TestNotificationAdapter_FallbackWarning(t *testing.T) {
+func TestNotificationAdapter_FallbackWarning(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(&bytes.Buffer{})
 
 	stats := sampleBackupStats()
-		notifier := &stubNotifier{
+	notifier := &stubNotifier{
 		name:    "Email",
 		enabled: true,
-			result: &notify.NotificationResult{
-				Success:      true,
-				Method:       "email-pmf-fallback",
-				UsedFallback: true,
-				Duration:     time.Second,
-				Error:        errors.New("primary relay failed"),
-			},
-		}
+		result: &notify.NotificationResult{
+			Success:      true,
+			Method:       "email-pmf-fallback",
+			UsedFallback: true,
+			Duration:     time.Second,
+			Error:        errors.New("primary relay failed"),
+		},
+	}
 
 	adapter := NewNotificationAdapter(notifier, logger)
 	if err := adapter.Notify(context.Background(), stats); err != nil {
@@ -303,20 +314,20 @@ func TestConvertBackupStatsUsesLogCountsAndCompressionFallback(t *testing.T) {
 	}
 
 	stats := &BackupStats{
-		ExitCode:           0,
-		Hostname:           "host",
-		ArchivePath:        "/var/tmp/backup.tar",
-		ArchiveSize:        2000,
-		CompressedSize:     500,
-		UncompressedSize:   1000,
-		SecondaryEnabled:   false,
-		CloudEnabled:       false,
-		MaxLocalBackups:    5,
+		ExitCode:             0,
+		Hostname:             "host",
+		ArchivePath:          "/var/tmp/backup.tar",
+		ArchiveSize:          2000,
+		CompressedSize:       500,
+		UncompressedSize:     1000,
+		SecondaryEnabled:     false,
+		CloudEnabled:         false,
+		MaxLocalBackups:      5,
 		LocalRetentionPolicy: "simple",
-		LogFilePath:        logFile,
-		ErrorCount:         0,
-		WarningCount:       0,
-		Compression:        types.CompressionZstd,
+		LogFilePath:          logFile,
+		ErrorCount:           0,
+		WarningCount:         0,
+		Compression:          types.CompressionZstd,
 	}
 
 	data := adapter.convertBackupStatsToNotificationData(stats)

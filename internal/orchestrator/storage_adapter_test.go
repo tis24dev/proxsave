@@ -120,6 +120,28 @@ func sampleAdapterStats() *BackupStats {
 	}
 }
 
+func TestStorageAdapter_SetFilesystemInfo(t *testing.T) {
+	logger := newStorageAdapterTestLogger()
+
+	backend := &fakeStorageBackend{
+		name:     "backend",
+		location: storage.LocationPrimary,
+		enabled:  true,
+	}
+	adapter := NewStorageAdapter(backend, logger, &config.Config{})
+
+	initial := &storage.FilesystemInfo{Type: storage.FilesystemExt4}
+	adapter.SetFilesystemInfo(initial)
+	if adapter.fsInfo != initial {
+		t.Fatalf("fsInfo was not set to initial pointer")
+	}
+
+	adapter.SetFilesystemInfo(nil)
+	if adapter.fsInfo != initial {
+		t.Fatalf("fsInfo changed after SetFilesystemInfo(nil)")
+	}
+}
+
 func TestStorageAdapterSync_DisabledBackendSetsStatus(t *testing.T) {
 	logger := newStorageAdapterTestLogger()
 

@@ -2,8 +2,10 @@ package checks
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -250,6 +252,103 @@ func TestCheckPermissionsEIORetryAndFailure(t *testing.T) {
 	}
 	if attempts != 3 {
 		t.Errorf("expected 3 attempts on EIO, got %d", attempts)
+	}
+}
+
+func TestCheckerConfigValidate(t *testing.T) {
+	t.Run("defaults LockDirPath to BackupPath", func(t *testing.T) {
+		cfg := &CheckerConfig{
+			BackupPath:       "/tmp/backups",
+			LogPath:          "/tmp/logs",
+			MaxLockAge:       time.Minute,
+			SafetyFactor:     1.0,
+			MinDiskPrimaryGB: 0,
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate returned error: %v", err)
+		}
+		if cfg.LockDirPath != cfg.BackupPath {
+			t.Fatalf("LockDirPath = %q; want %q", cfg.LockDirPath, cfg.BackupPath)
+		}
+	})
+
+	tests := []struct {
+		name string
+		cfg  *CheckerConfig
+		want string
+	}{
+		{"missing backup path", &CheckerConfig{LogPath: "x", MaxLockAge: time.Minute, SafetyFactor: 1.0}, "backup path cannot be empty"},
+		{"missing log path", &CheckerConfig{BackupPath: "x", MaxLockAge: time.Minute, SafetyFactor: 1.0}, "log path cannot be empty"},
+		{"negative primary min", &CheckerConfig{BackupPath: "x", LogPath: "x", MinDiskPrimaryGB: -1, MaxLockAge: time.Minute, SafetyFactor: 1.0}, "primary minimum disk space cannot be negative"},
+		{"negative secondary min", &CheckerConfig{BackupPath: "x", LogPath: "x", MinDiskSecondaryGB: -1, MaxLockAge: time.Minute, SafetyFactor: 1.0}, "secondary minimum disk space cannot be negative"},
+		{"negative cloud min", &CheckerConfig{BackupPath: "x", LogPath: "x", MinDiskCloudGB: -1, MaxLockAge: time.Minute, SafetyFactor: 1.0}, "cloud minimum disk space cannot be negative"},
+		{"invalid safety factor", &CheckerConfig{BackupPath: "x", LogPath: "x", MaxLockAge: time.Minute, SafetyFactor: 0.5}, "safety factor must be >="},
+		{"invalid max lock age", &CheckerConfig{BackupPath: "x", LogPath: "x", MaxLockAge: 0, SafetyFactor: 1.0}, "max lock age must be positive"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q; want substring %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckerDisableCloud(t *testing.T) {
+	var nilChecker *Checker
+	nilChecker.DisableCloud() // should be a no-op
+
+	checker := &Checker{}
+	checker.DisableCloud() // should be a no-op
+
+	cfg := &CheckerConfig{
+		CloudEnabled: true,
+		CloudPath:    "/tmp/cloud",
+	}
+	checker = &Checker{config: cfg}
+	checker.DisableCloud()
+
+	if cfg.CloudEnabled {
+		t.Fatalf("CloudEnabled = true; want false")
+	}
+	if cfg.CloudPath != "" {
+		t.Fatalf("CloudPath = %q; want empty", cfg.CloudPath)
+	}
+}
+
+func TestCheckDiskSpace_WarnsOnNonCriticalDestinations(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	config := &CheckerConfig{
+		BackupPath:         tmpDir,
+		LogPath:            tmpDir,
+		LockDirPath:        tmpDir,
+		SecondaryEnabled:   true,
+		SecondaryPath:      tmpDir,
+		CloudEnabled:       false,
+		MinDiskPrimaryGB:   0.001,
+		MinDiskSecondaryGB: 999999.0, // Force a non-critical warning
+		MinDiskCloudGB:     0,
+		SafetyFactor:       1.0,
+		MaxLockAge:         time.Minute,
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckDiskSpace()
+
+	if !result.Passed {
+		t.Fatalf("CheckDiskSpace should pass with warnings, got: %s", result.Message)
+	}
+	if !strings.Contains(strings.ToLower(result.Message), "warning") {
+		t.Fatalf("expected warning message, got: %q", result.Message)
 	}
 }
 
