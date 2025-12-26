@@ -142,9 +142,8 @@ AUTO_FIX_PERMISSIONS=true
 ├── identity/                  700 (drwx------)
 │   └── age/
 │       ├── recipient.txt      600 (-rw-------)
-│       └── age-keys.txt       600 (-rw-------)
 └── build/
-    └── proxmox-backup         755 (-rwxr-xr-x)
+    └── proxsave               755 (-rwxr-xr-x)
 ```
 
 ---
@@ -498,7 +497,7 @@ EMAIL_DELIVERY_METHOD=sendmail # /usr/sbin/sendmail (local MTA required)
 EMAIL_DELIVERY_METHOD=pmf     # Proxmox Notifications via proxmox-mail-forward
 ```
 
-If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVERY_METHOD` is exactly one of: `relay`, `sendmail`, `pmf` (typos will skip Email with a warning).
+If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVERY_METHOD` is exactly one of: `relay`, `sendmail`, `pmf` (typos will skip Email with a warning like: `Email: enabled but not initialized (...)`).
 
 ##### If `EMAIL_DELIVERY_METHOD=relay`
 
@@ -506,6 +505,7 @@ If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVER
 - Ensure the recipient is configured:
   - Set `EMAIL_RECIPIENT=...`, or
   - Leave it empty and set an email for `root@pam` inside Proxmox (auto-detect).
+- Relay blocks `root@…` recipients; use a real non-root mailbox for `EMAIL_RECIPIENT`.
 - If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to `EMAIL_DELIVERY_METHOD=pmf` when the relay fails.
 - Check the proxsave logs for `email-relay` warnings/errors.
 
@@ -513,6 +513,9 @@ If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVER
 
 This mode uses `/usr/sbin/sendmail`, so your node must have a working local MTA (e.g. postfix).
 
+- Ensure a recipient is available:
+  - Set `EMAIL_RECIPIENT=...`, or
+  - Leave it empty and set an email for `root@pam` inside Proxmox (auto-detect).
 - Verify `sendmail` exists:
   ```bash
   test -x /usr/sbin/sendmail && echo "sendmail OK" || echo "sendmail not found"
@@ -523,6 +526,7 @@ This mode uses `/usr/sbin/sendmail`, so your node must have a working local MTA 
 
 This mode uses Proxmox Notifications via `proxmox-mail-forward` (final recipients are configured in Proxmox, not in proxsave).
 
+- `EMAIL_RECIPIENT` is optional in this mode and is only used for the `To:` header.
 - Verify `proxmox-mail-forward` exists:
   ```bash
   test -x /usr/libexec/proxmox-mail-forward && echo "proxmox-mail-forward OK" || echo "proxmox-mail-forward not found"
@@ -855,7 +859,7 @@ Use this checklist for rapid troubleshooting:
 ```bash
 # 1. Check binary exists and is executable
 ls -lh /opt/proxsave/build/proxsave
-# Should show: -rwxr-xr-x ... proxmox-backup
+# Should show: -rwxr-xr-x ... proxsave
 
 # 2. Check configuration file exists
 ls -lh /opt/proxsave/configs/backup.env

@@ -336,7 +336,7 @@ Phase 14: Post-Restore Tasks
 **Interactive prompts**:
 ```
 Select backup source:
-  [1] Primary backup path: /opt/proxsave/backups
+  [1] Primary backup path: /opt/proxsave/backup
   [2] Secondary backup path: /mnt/secondary/backups
   [3] Cloud/local path: /mnt/cloud-backups
   [0] Cancel
@@ -345,7 +345,7 @@ Select backup source:
 **Backup list display**:
 ```
 Available backups:
-  [1] backup-pve01-20251120-143052.bundle.tar
+  [1] pve01-backup-20251120-143052.tar.xz.bundle.tar
       Created: 2025-11-20 14:30:52
       Encrypted: Yes (AGE)
       Tool Version: v1.2.0
@@ -1774,13 +1774,13 @@ mount -o remount,size=10G /tmp
 **Solution**:
 ```bash
 # Verify backup location
-ls -la /opt/proxsave/backups/
+ls -la /opt/proxsave/backup/
 
 # Check for .bundle.tar files
 find /opt/proxsave/ -name "*.bundle.tar"
 
 # Update backup.env if needed
-vi /opt/proxsave-go/configs/backup.env
+vi /opt/proxsave/configs/backup.env
 # Set correct BACKUP_PATH
 ```
 

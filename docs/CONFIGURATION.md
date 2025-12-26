@@ -743,10 +743,12 @@ EMAIL_DELIVERY_METHOD=relay        # relay | sendmail | pmf
 # Fallback to pmf (proxmox-mail-forward) if relay fails
 EMAIL_FALLBACK_SENDMAIL=true       # true | false
 
-# Recipient (empty = auto-detect from Proxmox)
+# Recipient
+# - relay/sendmail: required (empty = auto-detect from Proxmox root@pam)
+# - pmf: optional (used only for the To: header)
 EMAIL_RECIPIENT=                   # e.g., "admin@example.com"
 
-# From address
+# From address (used by sendmail/pmf; relay may ignore/override it)
 EMAIL_FROM=no-reply@proxmox.tis24.it
 ```
 
@@ -756,7 +758,10 @@ EMAIL_FROM=no-reply@proxmox.tis24.it
 - **pmf**: Uses Proxmox Notifications via `proxmox-mail-forward`
 
 **Notes**:
-- `EMAIL_FALLBACK_SENDMAIL` is a historical name (kept for compatibility). When `EMAIL_DELIVERY_METHOD=relay`, it enables fallback to **pmf**.
+- Allowed values for `EMAIL_DELIVERY_METHOD` are: `relay`, `sendmail`, `pmf` (invalid values will skip Email with a warning).
+- `EMAIL_FALLBACK_SENDMAIL` is a historical name (kept for compatibility). When `EMAIL_DELIVERY_METHOD=relay`, it enables fallback to **pmf** (it will not fall back to `/usr/sbin/sendmail`).
+- `relay` requires a real mailbox recipient and blocks `root@…` recipients; set `EMAIL_RECIPIENT` to a non-root mailbox if needed.
+- `sendmail` requires a recipient and uses `/usr/sbin/sendmail`; ProxSave can auto-detect `root@pam` email from Proxmox if `EMAIL_RECIPIENT` is empty.
 - With `pmf`, final delivery recipients are determined by Proxmox Notifications targets/matchers. `EMAIL_RECIPIENT` is only used for the `To:` header and may be empty.
 
 ### Gotify

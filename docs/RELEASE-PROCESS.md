@@ -1,210 +1,96 @@
-# Release Process for Proxmox Backup (Go Version)
+# Release Process (Proxsave Go)
 
-This document explains the complete, correct, and safe procedure for creating a new release of the **Proxmox Backup Go tool**, using the GitHub workflow you have configured.
+This document describes the safe, repeatable procedure to publish a new **Proxsave** release using the repository’s GitHub Actions workflows.
 
-It ensures:
-- stable development flow
-- clean merges
-- safe tagging
-- correct triggering of GoReleaser
-- predictable, reproducible releases
+## Overview
 
----
-
-# ?? Overview of the Release Flow
-
-The release flow always follows this order:
+Release flow:
 
 ```
-dev ? Pull Request ? main ? tag vX.Y.Z ? GoReleaser builds binaries ? GitHub Release
+dev → Pull Request → main → tag vX.Y.Z → GitHub Actions (GoReleaser) → GitHub Release
 ```
 
-There are **no binaries** in any branch � GoReleaser handles everything.
+No binaries should ever be committed to the repository. All release artifacts are produced by GoReleaser.
 
----
+## Branch model
 
-# 1. ?? Work on the `dev` Branch
+- `dev`: day-to-day development (features, fixes, refactors)
+- `main`: stable branch; releases are tagged from here
 
-All new features, fixes, and changes must be developed on the `dev` branch.
+After a PR is merged into `main`, the `dev` branch is automatically synced to `main` by `.github/workflows/sync-dev.yml`.
 
-### Steps:
-1. Open GitHub Desktop
-2. Select branch: `dev`
-3. Make your changes
-4. Commit using **Conventional Commit** messages:
-   - `feat: ...` ? new feature
-   - `fix: ...` ? bug fix
-   - `refactor: ...` ? code refactor
-   - `feat!: ...` ? breaking change
-5. Push: **Push origin**
+## Step-by-step
 
-> ? No binaries should ever be committed.
+### 1) Work on `dev`
 
----
+- Make changes on `dev`
+- Commit using Conventional Commits (examples):
+  - `feat: ...` (new feature)
+  - `fix: ...` (bug fix)
+  - `refactor: ...` (refactor)
+  - `feat!: ...` or `BREAKING CHANGE:` (breaking change)
+- Push `dev` to origin
 
-# 2. ?? Create a Pull Request (PR) from `dev` to `main`
+### 2) Open a PR `dev` → `main`
 
-In GitHub Desktop:
+- Create a Pull Request from `dev` to `main`
+- Wait for all checks to pass (CI/security/static analysis)
 
-- Click **"Create Pull Request"** (when the banner appears)
+### 3) Merge into `main`
 
-This opens GitHub with the PR ready.
+Merge the PR only when checks are green. The resulting commit on `main` (merge commit or squash commit) is what you will tag.
 
-### PR Guidelines:
-- Title must follow Conventional Commit rules
-- Description optional but recommended
-- Automatic checks (Staticcheck / GoSec / CodeQL) will run
+### 4) Create and push a SemVer tag on `main`
 
-Merge the PR **only when all checks pass**.
+The release workflow triggers on tag pushes matching `v*` and validates a SemVer-like format:
 
----
+- Stable: `vMAJOR.MINOR.PATCH` (example: `v1.6.0`)
+- Prerelease: `vMAJOR.MINOR.PATCH-rc1` / `-beta1` / etc. (example: `v1.6.0-rc1`)
 
-# 3. ? Merge the PR into `main`
+CLI example:
 
-On GitHub (web):
-
-- Click **Merge Pull Request**
-- Choose either:
-  - **Merge Commit** (recommended), or
-  - **Squash and Merge** (clean history)
-
-### Important:
-Merging the PR creates **a new commit on `main`**. This is the commit you will tag.
-
----
-
-# 4. ??? Create a Tag on the `main` Branch
-
-A tag is what triggers GoReleaser. No tag ? no release.
-
-### In GitHub Desktop:
-
-1. Switch branch: **main**
-2. Pull latest changes: **Pull origin**
-3. Go to the **History** tab
-4. Locate the **most recent commit**, typically:
-
-```
-Merge pull request #XX from dev
+```bash
+git checkout main
+git pull --ff-only
+git tag v1.6.0
+git push origin v1.6.0
 ```
 
-5. Right-click that commit ? **Create Tag�**
-6. Enter the version:
-   - Stable release: `v1.6.0`
-   - Beta: `v1.6.0-beta1`
-   - Release candidate: `v1.6.0-rc1`
+### 5) GitHub Actions builds and publishes the release
 
-7. Confirm
-8. Push the tag: **Push origin**
+Once the tag is pushed:
 
----
+- Workflow: `.github/workflows/release.yml`
+- GoReleaser config: `.github/.goreleaser.yml`
+- Output: GitHub Release with binaries, archives, checksums, and SBOMs
+- Provenance: `actions/attest-build-provenance` generates provenance for artifacts matching `build/proxsave_*`
 
-# 5. ?? GoReleaser Builds the Release
+## What you should see in Release assets
 
-As soon as the tag is pushed, GitHub Actions will:
-
-- Validate the tag
-- Run GoReleaser
-- Build binaries
-- Build tar.gz packages
-- Build standalone binaries
-- Generate SBOMs (CycloneDX)
-- Generate SHA256SUMS
-- Generate detailed changelog
-- Publish everything in the GitHub Release
-- Mark it as **pre-release** automatically if the tag contains `-beta` or `-rc`
-
-You don't have to do anything else.
-
----
-
-# 6. ?? What appears in the Release Assets
-
-For example, on tag `v1.6.0` you will see:
+For tag `v1.6.0` (GoReleaser strips the leading `v` for the version in filenames), typical assets include:
 
 ```
-proxsave_v1.6.0_linux_amd64
-proxsave_v1.6.0_linux_amd64.tar.gz
-proxsave_v1.6.0_linux_arm64
-proxsave_v1.6.0_linux_arm64.tar.gz
-proxsave_v1.6.0_linux_amd64.sbom.cdx.json
+proxsave_1.6.0_linux_amd64
+proxsave_1.6.0_linux_amd64.tar.gz
+proxsave_1.6.0_linux_amd64.tar.gz.sbom.cdx.json
 SHA256SUMS
 ```
 
-Everything is automatic.
+## Install script (optional)
 
----
+Users can install the latest `main` version using:
 
-# 7. ?? Notes About Prereleases (beta / rc)
-
-GoReleaser automatically marks a release as **Pre-release** if the version tag contains:
-
-- `-beta`
-- `-rc`
-- any other suffix after the patch
-
-Examples:
-- `v1.8.0-beta1` ? prerelease
-- `v2.0.0-rc1` ? prerelease
-- `v3.1.0` ? stable release
-
----
-
-# 8. ?? Versioning Rules (SemVer)
-
-Use:
-
-- `fix:` ? patch ? `v1.6.1`
-- `feat:` ? minor ? `v1.7.0`
-- `feat!:` or `BREAKING CHANGE:` ? major ? `v2.0.0`
-
-These rules will be used in the future by the autotag system (currently disabled).
-
----
-
-# 9. ?? What **NOT** to do
-
-? Do **not** commit binaries  
-? Do **not** push tags from `dev`  
-? Do **not** create releases manually in GitHub  
-? Do **not** tag old commits � always tag the latest commit from a merged PR  
-
----
-
-# 10. ?? Optional: Using `install.sh`
-
-If present, users can install your tool with:
-
-```
-curl -s https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh | bash
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
 
-(Optional, but recommended for user convenience.)
+## What not to do
 
----
+- Do not commit binaries or the `build/` directory
+- Do not tag commits on `dev`
+- Do not create GitHub Releases manually (the workflow does it)
+- Do not tag old commits; tag the exact commit you want to ship on `main`
 
-# 11. Future Automation: Auto-tagging
+## Notes on future automation (auto-tagging)
 
-An `autotag.yml` workflow exists but is currently disabled.
-When enabled, it will:
-
-- read commits on `main`
-- determine patch/minor/major
-- automatically create tags like `v1.6.2`, `v1.7.0` etc.
-- trigger GoReleaser automatically
-
-For now, tagging remains manual for maximum control.
-
----
-
-# ? Summary
-
-The release flow is:
-
-```
-1. Work on dev
-2. Create PR ? merge to main
-3. Create tag on main
-4. Push tag
-5. GoReleaser builds release
-```
+An auto-tag workflow exists at `.github/workflows/autotag.yml` but is currently disabled (`if: false`). If enabled, it can create tags automatically based on Conventional Commit messages.

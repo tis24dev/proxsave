@@ -174,7 +174,7 @@ cp backup/etc/pve/storage.cfg /etc/pve/storage.cfg
 **□ 1. Verify Backup Integrity**
 ```bash
 # List available backups
-ls -lh /opt/proxsave/backups/*.bundle.tar
+ls -lh /opt/proxsave/backup/*.bundle.tar
 
 # Check backup date matches expected
 # Verify encryption status
@@ -292,7 +292,7 @@ pvecm status
 
 ```bash
 # Navigate to proxsave directory
-cd /opt/proxsave-go
+cd /opt/proxsave
 
 # Run restore
 ./build/proxsave --restore
@@ -450,7 +450,7 @@ hostname
 # reboot
 
 # 2. Run restore (STORAGE or FULL mode)
-cd /opt/proxsave-go
+cd /opt/proxsave
 ./build/proxsave --restore
 # Select: [2] STORAGE only
 # This restores cluster config, storage, ZFS
@@ -730,7 +730,7 @@ pvesm status
 
 ```bash
 # Use CUSTOM mode to restore only specific categories
-cd /opt/proxsave-go
+cd /opt/proxsave
 ./build/proxsave --restore
 
 # Select: [4] CUSTOM selection
@@ -814,7 +814,7 @@ pvecm add <working-node-ip>
 
 ```bash
 # 1. Create fresh backup
-cd /opt/proxsave-go
+cd /opt/proxsave
 ./build/proxsave
 
 # 2. Document configuration
@@ -823,7 +823,7 @@ pvesm status > /root/old-storage-status.txt
 ip addr show > /root/old-network-config.txt
 
 # 3. Copy backup to new hardware
-scp /opt/proxsave/backups/*.bundle.tar root@new-hardware:/root/
+scp /opt/proxsave/backup/*.bundle.tar root@new-hardware:/root/
 
 # 4. Shut down (but keep around for emergencies)
 shutdown -h now
@@ -850,14 +850,14 @@ reboot
 
 ```bash
 # 1. Copy proxsave tool to new hardware
-# scp -r /opt/proxsave-go root@new-hardware:/opt/
+# scp -r /opt/proxsave root@new-hardware:/opt/
 
 # 2. Place backup in expected location
-mkdir -p /opt/proxsave/backups
-mv /root/*.bundle.tar /opt/proxsave/backups/
+mkdir -p /opt/proxsave/backup
+mv /root/*.bundle.tar /opt/proxsave/backup/
 
 # 3. Run restore
-cd /opt/proxsave-go
+cd /opt/proxsave
 ./build/proxsave --restore
 
 # Select: [2] STORAGE only (or FULL)
@@ -983,7 +983,7 @@ vi /etc/hosts
 reboot
 
 # 4. Run restore normally
-cd /opt/proxsave-go
+cd /opt/proxsave
 ./build/proxsave --restore
 ```
 
@@ -995,7 +995,7 @@ cd /opt/proxsave-go
 
 ```bash
 # Run restore (will work despite hostname mismatch)
-cd /opt/proxsave-go
+cd /opt/proxsave
 ./build/proxsave --restore
 
 # Select: [2] STORAGE only

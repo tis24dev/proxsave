@@ -283,7 +283,7 @@ When you run `gh attestation verify`, the following checks are performed:
 # Check the release version
 gh release view v0.9.0 --repo tis24dev/proxsave
 
-# Attestations are only available from v0.9.1 onwards
+# Note: older releases may not include attestations/provenance data.
 ```
 
 ### Error: "gh: command not found"
