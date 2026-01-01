@@ -276,12 +276,12 @@ func TestSplitExportCategoriesAndRedirectCluster(t *testing.T) {
 
 func TestExportDestRootAndHelpers(t *testing.T) {
 	defaultRoot := exportDestRoot("")
-	if !strings.HasPrefix(defaultRoot, "/opt/proxsave/pve-config-export-") {
+	if !strings.HasPrefix(defaultRoot, "/opt/proxsave/proxmox-config-export-") {
 		t.Fatalf("unexpected default export root: %s", defaultRoot)
 	}
 
 	custom := exportDestRoot("/tmp/base")
-	if !strings.HasPrefix(custom, "/tmp/base/pve-config-export-") {
+	if !strings.HasPrefix(custom, "/tmp/base/proxmox-config-export-") {
 		t.Fatalf("unexpected custom export root: %s", custom)
 	}
 

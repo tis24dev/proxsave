@@ -142,6 +142,129 @@ func TestRestoreSafetyBackup(t *testing.T) {
 	}
 }
 
+func TestRestoreSafetyBackup_AllowsAbsoluteSymlinkWithinDestRoot(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "backup.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+	absLinkTarget := filepath.Join(restoreDir, "etc", "config.txt")
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	writeFile := func(name, content string, mode int64) {
+		hdr := &tar.Header{Name: name, Mode: mode, Size: int64(len(content))}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("write header failed: %v", err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatalf("write content failed: %v", err)
+		}
+	}
+
+	if err := tw.WriteHeader(&tar.Header{Name: "etc/", Mode: 0755, Typeflag: tar.TypeDir}); err != nil {
+		t.Fatalf("write dir header failed: %v", err)
+	}
+	writeFile("etc/config.txt", "hello", 0644)
+	if err := tw.WriteHeader(&tar.Header{Name: "abs_link", Typeflag: tar.TypeSymlink, Linkname: absLinkTarget}); err != nil {
+		t.Fatalf("write absolute symlink header failed: %v", err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "abs_escape", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"}); err != nil {
+		t.Fatalf("write escaping symlink header failed: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write archive: %v", err)
+	}
+
+	if err := RestoreSafetyBackup(logger, backupPath, restoreDir); err != nil {
+		t.Fatalf("RestoreSafetyBackup failed: %v", err)
+	}
+
+	linkTarget, err := os.Readlink(filepath.Join(restoreDir, "abs_link"))
+	if err != nil || linkTarget != absLinkTarget {
+		t.Fatalf("absolute symlink not restored correctly: target=%s err=%v", linkTarget, err)
+	}
+
+	if _, err := os.Lstat(filepath.Join(restoreDir, "abs_escape")); err == nil {
+		t.Fatalf("expected escaping absolute symlink to be skipped")
+	}
+}
+
+func TestRestoreSafetyBackup_DoesNotFollowExistingSymlinkTargetPath(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "backup.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+
+	unitPath := filepath.Join(restoreDir, "lib", "systemd", "system", "proxmox-backup.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatalf("mkdir unit dir: %v", err)
+	}
+	const unitData = "unit-file-content"
+	if err := os.WriteFile(unitPath, []byte(unitData), 0o644); err != nil {
+		t.Fatalf("write unit file: %v", err)
+	}
+
+	linkPath := filepath.Join(restoreDir, "etc", "systemd", "system", "multi-user.target.wants", "proxmox-backup.service")
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatalf("mkdir link dir: %v", err)
+	}
+	relTarget, err := filepath.Rel(filepath.Dir(linkPath), unitPath)
+	if err != nil {
+		t.Fatalf("compute relative link target: %v", err)
+	}
+	if err := os.Symlink(relTarget, linkPath); err != nil {
+		t.Fatalf("create existing symlink: %v", err)
+	}
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	if err := tw.WriteHeader(&tar.Header{Name: "etc/systemd/system/multi-user.target.wants/proxmox-backup.service", Typeflag: tar.TypeSymlink, Linkname: relTarget}); err != nil {
+		t.Fatalf("write symlink header failed: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	if err := RestoreSafetyBackup(logger, backupPath, restoreDir); err != nil {
+		t.Fatalf("RestoreSafetyBackup failed: %v", err)
+	}
+
+	unitInfo, err := os.Lstat(unitPath)
+	if err != nil {
+		t.Fatalf("lstat unit file: %v", err)
+	}
+	if unitInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("unit file should remain a regular file, got symlink")
+	}
+	data, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("read unit file: %v", err)
+	}
+	if string(data) != unitData {
+		t.Fatalf("unit file content changed: got %q want %q", string(data), unitData)
+	}
+}
+
 func TestCleanupOldSafetyBackups(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 

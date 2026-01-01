@@ -234,7 +234,7 @@ flowchart LR
 
     subgraph Output
         SystemRoot[System Root /<br/>- /var/lib/pve-cluster/<br/>- /etc/network/<br/>- etc.]
-        ExportDir[Export Directory<br/>BASE_DIR/pve-config-export-TIMESTAMP/<br/>- etc/pve/storage.cfg<br/>- etc/pve/datacenter.cfg<br/>- etc.]
+        ExportDir[Export Directory<br/>BASE_DIR/proxmox-config-export-TIMESTAMP/<br/>- etc/pve/storage.cfg<br/>- etc/pve/datacenter.cfg<br/>- etc.]
     end
 
     Archive --> Open1

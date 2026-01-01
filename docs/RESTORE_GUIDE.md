@@ -313,7 +313,7 @@ Phase 11: File Extraction
 
 Phase 12: Export-Only Extraction
   ├─ Extract export-only categories to timestamped directory
-  ├─ Destination: <BASE_DIR>/pve-config-export-YYYYMMDD-HHMMSS/
+  ├─ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
   └─ Separate detailed log
 
 Phase 13: pvesh SAFE Apply (Cluster SAFE Mode Only)
@@ -509,7 +509,7 @@ Extracting: /etc/vzdump.conf
 ...
 Successfully restored 47 files/directories
 
-Exporting /etc/pve contents to: /opt/proxsave/pve-config-export-20251120-143052
+Exporting 1 export-only category(ies) to: /opt/proxsave/proxmox-config-export-20251120-143052
 Exported 23 files/directories
 ```
 
@@ -543,7 +543,7 @@ RESTORE COMPLETED
 Restore completed successfully.
 Temporary decrypted bundle removed.
 Detailed restore log: /tmp/proxsave/restore_20251120_143052.log
-Exported /etc/pve files: /opt/proxsave/pve-config-export-20251120-143052/
+Export directory: /opt/proxsave/proxmox-config-export-20251120-143052/
 Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 
@@ -614,7 +614,7 @@ Cluster backup detected. Choose how to restore:
   [1] SAFE: Export cluster files only (apply via API)  ← SELECTED
   [2] RECOVERY: Full database restore
 
-Exporting /etc/pve contents to: /opt/proxsave/pve-config-export-*/
+Exporting 1 export-only category(ies) to: /opt/proxsave/proxmox-config-export-*/
 
 SAFE cluster restore: applying configs via pvesh (node=pve01)
 Found 5 VM/CT configs for node pve01
@@ -1077,7 +1077,7 @@ Pass 1: Normal Categories
   └─ Log: /tmp/proxsave/restore_TIMESTAMP.log
 
 Pass 2: Export-Only Categories
-  ├─ Destination: <BASE_DIR>/pve-config-export-YYYYMMDD-HHMMSS/
+  ├─ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
   ├─ Categories: Only export-only (pve_config_export)
   ├─ Safety backup: Not created (not overwriting system)
   └─ Log: Separate section in same log file
@@ -1085,7 +1085,7 @@ Pass 2: Export-Only Categories
 
 **Export Directory Structure**:
 ```
-/opt/proxsave/pve-config-export-20251120-143052/
+/opt/proxsave/proxmox-config-export-20251120-143052/
 └── etc/
     └── pve/
         ├── datacenter.cfg
@@ -1111,7 +1111,7 @@ Pass 2: Export-Only Categories
 
 1. **Review Exported Files**:
    ```bash
-   cd /opt/proxsave/pve-config-export-YYYYMMDD-HHMMSS/etc/pve/
+   cd /opt/proxsave/proxmox-config-export-YYYYMMDD-HHMMSS/etc/pve/
 
    # Check cluster configuration
    cat datacenter.cfg
@@ -1126,22 +1126,22 @@ Pass 2: Export-Only Categories
 2. **Compare with Current System**:
    ```bash
    # Compare storage configuration
-   diff /opt/proxsave/pve-config-export-*/etc/pve/storage.cfg \
+   diff /opt/proxsave/proxmox-config-export-*/etc/pve/storage.cfg \
         /etc/pve/storage.cfg
 
    # Compare user configuration
-   diff /opt/proxsave/pve-config-export-*/etc/pve/user.cfg \
+   diff /opt/proxsave/proxmox-config-export-*/etc/pve/user.cfg \
         /etc/pve/user.cfg
    ```
 
 3. **Selective Manual Restoration**:
    ```bash
    # Example: Restore a specific VM config
-   cp /opt/proxsave/pve-config-export-*/etc/pve/qemu-server/100.conf \
+   cp /opt/proxsave/proxmox-config-export-*/etc/pve/qemu-server/100.conf \
       /etc/pve/qemu-server/100.conf
 
    # Example: Restore user configuration
-   cp /opt/proxsave/pve-config-export-*/etc/pve/user.cfg \
+   cp /opt/proxsave/proxmox-config-export-*/etc/pve/user.cfg \
       /etc/pve/user.cfg
 
    # Note: These writes go through pmxcfs (FUSE), so they're safe
@@ -1151,10 +1151,10 @@ Pass 2: Export-Only Categories
    ```bash
    # Get specific storage definition
    grep -A 10 "dir: backup-storage" \
-     /opt/proxsave/pve-config-export-*/etc/pve/storage.cfg
+     /opt/proxsave/proxmox-config-export-*/etc/pve/storage.cfg
 
    # Get user list
-   cat /opt/proxsave/pve-config-export-*/etc/pve/user.cfg | grep "user:"
+   cat /opt/proxsave/proxmox-config-export-*/etc/pve/user.cfg | grep "user:"
    ```
 
 ### Export-Only in Custom Mode
@@ -1175,7 +1175,7 @@ Available categories:
 ```
 Export-only categories (will be extracted to separate directory):
   • PVE Config Export
-    Destination: /opt/proxsave/pve-config-export-20251120-143052/
+    Destination: /opt/proxsave/proxmox-config-export-20251120-143052/
 ```
 
 **Important**: ProxSave extracts export-only files to the separate directory shown above. The tool **does NOT automatically copy** these files to system paths. Any `cp` commands shown in this documentation are **manual examples** that you must execute yourself after reviewing the exported files. This design prevents accidental overwrites and gives you full control over what gets restored.
@@ -1222,7 +1222,7 @@ For each VM/CT config found in the export:
 #### 2. Storage Configuration Apply
 
 ```
-Storage configuration found: /opt/proxsave/pve-config-export-*/etc/pve/storage.cfg
+Storage configuration found: /opt/proxsave/proxmox-config-export-*/etc/pve/storage.cfg
 Apply storage.cfg via pvesh? (y/N): y
 ```
 
@@ -1236,7 +1236,7 @@ Parses `storage.cfg` and applies each storage definition:
 #### 3. Datacenter Configuration Apply
 
 ```
-Datacenter configuration found: /opt/proxsave/pve-config-export-*/etc/pve/datacenter.cfg
+Datacenter configuration found: /opt/proxsave/proxmox-config-export-*/etc/pve/datacenter.cfg
 Apply datacenter.cfg via pvesh? (y/N): y
 ```
 
@@ -1383,7 +1383,7 @@ https://your-pve:8006
 
 **How it works**:
 1. Restore with `pve_config_export` category selected (or Cluster SAFE mode)
-2. Configurations extracted to: `/opt/proxsave/pve-config-export-<timestamp>/`
+2. Configurations extracted to: `/opt/proxsave/proxmox-config-export-<timestamp>/`
 3. Review exported files
 4. Manually copy desired configs to `/etc/pve/`
 
@@ -1404,7 +1404,7 @@ https://your-pve:8006
 
 2. **Locate exported files**:
    ```bash
-   cd /opt/proxsave/pve-config-export-*/etc/pve/
+   cd /opt/proxsave/proxmox-config-export-*/etc/pve/
 
    # List available VM configs
    ls qemu-server/
@@ -2217,14 +2217,14 @@ A: For reference and selective manual restoration:
 
 ```bash
 # Review exported files
-ls /opt/proxsave/pve-config-export-*/etc/pve/
+ls /opt/proxsave/proxmox-config-export-*/etc/pve/
 
 # Compare with current
-diff /opt/proxsave/pve-config-export-*/etc/pve/storage.cfg \
+diff /opt/proxsave/proxmox-config-export-*/etc/pve/storage.cfg \
      /etc/pve/storage.cfg
 
 # Selectively copy needed files
-cp /opt/proxsave/pve-config-export-*/etc/pve/qemu-server/100.conf \
+cp /opt/proxsave/proxmox-config-export-*/etc/pve/qemu-server/100.conf \
    /etc/pve/qemu-server/100.conf
 ```
 
@@ -2244,7 +2244,7 @@ A: **Three methods available**:
 **Method 2: Manual Copy**
 ```bash
 # After restore with pve_config_export category:
-cd /opt/proxsave/pve-config-export-*/etc/pve/
+cd /opt/proxsave/proxmox-config-export-*/etc/pve/
 cp qemu-server/100.conf /etc/pve/qemu-server/100.conf
 ```
 

@@ -100,12 +100,13 @@ func GetAllCategories() []Category {
 		// PBS Categories
 		{
 			ID:          "pbs_config",
-			Name:        "PBS Configuration",
-			Description: "Proxmox Backup Server main configuration",
+			Name:        "PBS Config Export",
+			Description: "Export-only copy of /etc/proxmox-backup (never written to system paths)",
 			Type:        CategoryTypePBS,
 			Paths: []string{
 				"./etc/proxmox-backup/",
 			},
+			ExportOnly: true,
 		},
 		{
 			ID:          "datastore_pbs",
@@ -114,6 +115,15 @@ func GetAllCategories() []Category {
 			Type:        CategoryTypePBS,
 			Paths: []string{
 				"./etc/proxmox-backup/datastore.cfg",
+			},
+		},
+		{
+			ID:          "maintenance_pbs",
+			Name:        "PBS Maintenance",
+			Description: "Maintenance settings (restore only if environment matches)",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/maintenance.cfg",
 			},
 		},
 		{
@@ -337,9 +347,9 @@ func GetStorageModeCategories(systemType string) []Category {
 			}
 		}
 	} else if systemType == "pbs" {
-		// PBS: config + datastore + jobs + zfs
+		// PBS: config export + datastore + maintenance + jobs + zfs
 		for _, cat := range all {
-			if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "pbs_jobs" || cat.ID == "zfs" {
+			if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "maintenance_pbs" || cat.ID == "pbs_jobs" || cat.ID == "zfs" {
 				categories = append(categories, cat)
 			}
 		}
