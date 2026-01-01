@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -541,6 +542,65 @@ func (c *Collector) ensureDir(path string) error {
 	return nil
 }
 
+func preservedMode(mode os.FileMode) os.FileMode {
+	return mode & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+}
+
+func (c *Collector) applyMetadata(dest string, info os.FileInfo) {
+	if info == nil {
+		return
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if ok {
+		if err := os.Chown(dest, int(stat.Uid), int(stat.Gid)); err != nil {
+			c.logger.Debug("Failed to chown %s: %v", dest, err)
+		}
+	}
+
+	if err := os.Chmod(dest, preservedMode(info.Mode())); err != nil {
+		c.logger.Debug("Failed to chmod %s: %v", dest, err)
+	}
+
+	if ok {
+		atime := time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
+		mtime := time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)
+		if err := os.Chtimes(dest, atime, mtime); err != nil {
+			c.logger.Debug("Failed to set timestamps on %s: %v", dest, err)
+		}
+	}
+}
+
+func lstatOrNil(path string) os.FileInfo {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil
+	}
+	return info
+}
+
+func (c *Collector) applyDirectoryMetadataFromSource(srcDir, destDir string) {
+	if c.tempDir == "" {
+		return
+	}
+
+	rel, err := filepath.Rel(c.tempDir, destDir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return
+	}
+
+	c.applyMetadata(destDir, lstatOrNil(srcDir))
+}
+
+func (c *Collector) applySymlinkOwnership(dest string, info os.FileInfo) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return
+	}
+	if err := os.Lchown(dest, int(stat.Uid), int(stat.Gid)); err != nil {
+		c.logger.Debug("Failed to lchown symlink %s: %v", dest, err)
+	}
+}
+
 func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -581,6 +641,7 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 			c.incFilesFailed()
 			return err
 		}
+		c.applyDirectoryMetadataFromSource(filepath.Dir(src), filepath.Dir(dest))
 
 		// Remove existing file if present
 		if _, err := os.Lstat(dest); err == nil {
@@ -594,6 +655,8 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 			c.incFilesFailed()
 			return fmt.Errorf("failed to create symlink %s -> %s: %w", dest, target, err)
 		}
+
+		c.applySymlinkOwnership(dest, info)
 
 		c.incFilesProcessed()
 		c.logger.Debug("Successfully copied symlink %s -> %s", dest, target)
@@ -611,6 +674,7 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 		c.incFilesFailed()
 		return err
 	}
+	c.applyDirectoryMetadataFromSource(filepath.Dir(src), filepath.Dir(dest))
 
 	// Open source file
 	srcFile, err := os.Open(src)
@@ -620,20 +684,26 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 	}
 	defer srcFile.Close()
 
-	// Create destination file with restrictive permissions
-	destFile, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	// Create destination file with a safe default mode; we'll apply the original metadata after copy.
+	destFile, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		c.incFilesFailed()
 		return fmt.Errorf("failed to create %s: %w", dest, err)
 	}
-	defer destFile.Close()
 
 	// Copy content
 	written, err := io.Copy(destFile, srcFile)
+	closeErr := destFile.Close()
 	if err != nil {
 		c.incFilesFailed()
 		return fmt.Errorf("failed to copy %s: %w", src, err)
 	}
+	if closeErr != nil {
+		c.incFilesFailed()
+		return fmt.Errorf("failed to close %s: %w", dest, closeErr)
+	}
+
+	c.applyMetadata(dest, info)
 
 	c.incFilesProcessed()
 	c.addBytesCollected(int64(written))
@@ -697,7 +767,11 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 		destPath := filepath.Join(dest, relPath)
 
 		if info.IsDir() {
-			return c.ensureDir(destPath)
+			if err := c.ensureDir(destPath); err != nil {
+				return err
+			}
+			c.applyMetadata(destPath, info)
+			return nil
 		}
 
 		return c.safeCopyFile(ctx, path, destPath, filepath.Base(path))
