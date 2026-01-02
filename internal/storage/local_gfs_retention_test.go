@@ -43,7 +43,7 @@ func TestLocalStorageApplyGFSRetentionDeletesOldBackups(t *testing.T) {
 		Daily:   1,
 		Weekly:  0,
 		Monthly: 0,
-		Yearly:  0,
+		Yearly:  -1, // Disable yearly retention to keep this test focused on the daily tier.
 	}
 
 	deleted, err := local.applyGFSRetention(context.Background(), backups, retention)
