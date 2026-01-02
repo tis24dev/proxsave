@@ -169,6 +169,37 @@ func TestShouldRecreateDirectories(t *testing.T) {
 	}
 }
 
+func TestShouldSkipProxmoxSystemRestore(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		wantSkip bool
+	}{
+		{name: "skip domains.cfg", path: "etc/proxmox-backup/domains.cfg", wantSkip: true},
+		{name: "skip user.cfg", path: "etc/proxmox-backup/user.cfg", wantSkip: true},
+		{name: "skip acl.cfg", path: "etc/proxmox-backup/acl.cfg", wantSkip: true},
+		{name: "skip proxy.cfg", path: "etc/proxmox-backup/proxy.cfg", wantSkip: true},
+		{name: "skip proxy.pem", path: "etc/proxmox-backup/proxy.pem", wantSkip: true},
+		{name: "skip ssl subtree", path: "etc/proxmox-backup/ssl/example.pem", wantSkip: true},
+		{name: "skip lock subtree", path: "var/lib/proxmox-backup/lock/lockfile", wantSkip: true},
+		{name: "skip clusterlock", path: "var/lib/proxmox-backup/.clusterlock", wantSkip: true},
+		{name: "allow datastore.cfg", path: "etc/proxmox-backup/datastore.cfg", wantSkip: false},
+		{name: "allow maintenance.cfg", path: "etc/proxmox-backup/maintenance.cfg", wantSkip: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			skip, reason := shouldSkipProxmoxSystemRestore(tc.path)
+			if skip != tc.wantSkip {
+				t.Fatalf("skip=%v want %v (reason=%q)", skip, tc.wantSkip, reason)
+			}
+			if skip && strings.TrimSpace(reason) == "" {
+				t.Fatalf("expected skip reason to be non-empty")
+			}
+		})
+	}
+}
+
 func TestExtractSymlink_SecurityValidation(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	orig := restoreFS
@@ -232,7 +263,7 @@ func TestExtractSymlink_SecurityValidation(t *testing.T) {
 		t.Fatalf("symlink target = %q, want 'etc/config.txt'", linkTarget)
 	}
 
-	// Test 3: Absolute symlink target (should be rejected immediately)
+	// Test 3: Absolute symlink target outside destRoot (should be rejected)
 	absoluteHeader := &tar.Header{
 		Name:     "absolute_link",
 		Typeflag: tar.TypeSymlink,
@@ -246,11 +277,34 @@ func TestExtractSymlink_SecurityValidation(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for absolute symlink target, got nil")
 	}
-	if !strings.Contains(err.Error(), "absolute") {
-		t.Fatalf("expected 'absolute' error, got: %v", err)
+	if !strings.Contains(err.Error(), "escapes root") {
+		t.Fatalf("expected 'escapes root' error, got: %v", err)
 	}
 
-	// Test 4: Symlink in subdirectory pointing to parent (but still within destRoot)
+	// Test 4: Absolute symlink target within destRoot (should be allowed)
+	absoluteWithinHeader := &tar.Header{
+		Name:     "absolute_within_link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: filepath.Join(destRoot, "etc", "config.txt"),
+		Uid:      1000,
+		Gid:      1000,
+	}
+	absoluteWithinTarget := filepath.Join(destRoot, absoluteWithinHeader.Name)
+
+	err = extractSymlink(absoluteWithinTarget, absoluteWithinHeader, destRoot, logger)
+	if err != nil {
+		t.Fatalf("absolute symlink within destRoot should succeed: %v", err)
+	}
+
+	linkTarget, err = os.Readlink(absoluteWithinTarget)
+	if err != nil {
+		t.Fatalf("absolute symlink within destRoot should exist: %v", err)
+	}
+	if linkTarget != absoluteWithinHeader.Linkname {
+		t.Fatalf("symlink target = %q, want %q", linkTarget, absoluteWithinHeader.Linkname)
+	}
+
+	// Test 5: Symlink in subdirectory pointing to parent (but still within destRoot)
 	if err := os.MkdirAll(filepath.Join(destRoot, "subdir"), 0755); err != nil {
 		t.Fatalf("mkdir subdir: %v", err)
 	}
@@ -275,5 +329,70 @@ func TestExtractSymlink_SecurityValidation(t *testing.T) {
 	}
 	if linkTarget != "../etc/config.txt" {
 		t.Fatalf("symlink target = %q, want '../etc/config.txt'", linkTarget)
+	}
+}
+
+func TestExtractTarEntry_DoesNotFollowExistingSymlinkTargetPath(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+
+	destRoot := t.TempDir()
+
+	unitPath := filepath.Join(destRoot, "lib", "systemd", "system", "proxmox-backup.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatalf("mkdir unit dir: %v", err)
+	}
+	const unitData = "unit-file-content"
+	if err := os.WriteFile(unitPath, []byte(unitData), 0o644); err != nil {
+		t.Fatalf("write unit file: %v", err)
+	}
+
+	linkPath := filepath.Join(destRoot, "etc", "systemd", "system", "multi-user.target.wants", "proxmox-backup.service")
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatalf("mkdir link dir: %v", err)
+	}
+
+	relTarget, err := filepath.Rel(filepath.Dir(linkPath), unitPath)
+	if err != nil {
+		t.Fatalf("compute relative link target: %v", err)
+	}
+	if err := os.Symlink(relTarget, linkPath); err != nil {
+		t.Fatalf("create existing symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "etc/systemd/system/multi-user.target.wants/proxmox-backup.service",
+		Typeflag: tar.TypeSymlink,
+		Linkname: relTarget,
+	}
+
+	var tr *tar.Reader
+	if err := extractTarEntry(tr, header, destRoot, logger); err != nil {
+		t.Fatalf("extractTarEntry failed: %v", err)
+	}
+
+	unitInfo, err := os.Lstat(unitPath)
+	if err != nil {
+		t.Fatalf("lstat unit file: %v", err)
+	}
+	if unitInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("unit file should remain a regular file, got symlink")
+	}
+	data, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("read unit file: %v", err)
+	}
+	if string(data) != unitData {
+		t.Fatalf("unit file content changed: got %q want %q", string(data), unitData)
+	}
+
+	createdTarget, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("read restored symlink: %v", err)
+	}
+	if createdTarget != relTarget {
+		t.Fatalf("restored symlink target = %q, want %q", createdTarget, relTarget)
 	}
 }

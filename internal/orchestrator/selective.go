@@ -405,25 +405,25 @@ func ShowRestorePlan(logger *logging.Logger, config *SelectiveRestoreConfig) {
 // ConfirmRestoreOperation asks for user confirmation before proceeding
 func ConfirmRestoreOperation(logger *logging.Logger) (bool, error) {
 	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Println("═══════════════════════════════════════════════════════════════")
+		fmt.Print("Type 'RESTORE' to proceed or 'cancel' to abort: ")
 
-	fmt.Println("═══════════════════════════════════════════════════════════════")
-	fmt.Print("Type 'RESTORE' to proceed or 'cancel' to abort: ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return false, err
+		}
 
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return false, err
+		response := strings.TrimSpace(input)
+
+		if response == "RESTORE" {
+			return true, nil
+		}
+
+		if strings.ToLower(response) == "cancel" || response == "0" {
+			return false, nil
+		}
+
+		fmt.Println("Invalid input. Please type 'RESTORE' or 'cancel'.")
 	}
-
-	response := strings.TrimSpace(input)
-
-	if response == "RESTORE" {
-		return true, nil
-	}
-
-	if strings.ToLower(response) == "cancel" || response == "0" {
-		return false, nil
-	}
-
-	fmt.Println("Invalid input. Please type 'RESTORE' or 'cancel'.")
-	return ConfirmRestoreOperation(logger)
 }

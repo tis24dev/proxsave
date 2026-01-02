@@ -7,7 +7,55 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+func (c *Collector) detectZFSUsage() (bool, string) {
+	var indicators []string
+
+	// Strong indicator: ZFS filesystems currently mounted.
+	if data, err := os.ReadFile(c.systemPath("/proc/mounts")); err == nil && len(data) > 0 {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 && fields[2] == "zfs" {
+				indicators = append(indicators, "mounted_zfs")
+				break
+			}
+		}
+	}
+
+	// Strong indicator: ZFS pool cache exists.
+	if _, err := os.Stat(c.systemPath("/etc/zfs/zpool.cache")); err == nil {
+		indicators = append(indicators, "zpool_cache")
+	}
+
+	// Medium indicator: fstab references ZFS.
+	if data, err := os.ReadFile(c.systemPath("/etc/fstab")); err == nil && len(data) > 0 {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) >= 3 && fields[2] == "zfs" {
+				indicators = append(indicators, "fstab_zfs")
+				break
+			}
+		}
+	}
+
+	// Strong indicator (PVE): storage.cfg references zfspool.
+	if data, err := os.ReadFile(c.systemPath("/etc/pve/storage.cfg")); err == nil && len(data) > 0 {
+		if strings.Contains(strings.ToLower(string(data)), "zfspool") {
+			indicators = append(indicators, "pve_storage_zfspool")
+		}
+	}
+
+	if len(indicators) == 0 {
+		return false, "none"
+	}
+	return true, strings.Join(indicators, ",")
+}
 
 // CollectSystemInfo collects common system information (both PVE and PBS)
 func (c *Collector) CollectSystemInfo(ctx context.Context) error {
@@ -822,37 +870,44 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 
 	// ZFS pools (if ZFS is present)
 	if c.config.BackupZFSConfig {
-		zfsDir := filepath.Join(infoDir, "zfs")
-		if err := c.ensureDir(zfsDir); err != nil {
-			return fmt.Errorf("failed to create zfs info directory: %w", err)
-		}
+		usesZFS, indicators := c.detectZFSUsage()
+		c.logger.Debug("ZFS usage detected=%t (indicators=%s)", usesZFS, indicators)
+		if !usesZFS {
+			c.logger.Warning("BACKUP_ZFS_CONFIG=true but no ZFS usage detected (indicators=%s); skipping ZFS collection. Consider setting BACKUP_ZFS_CONFIG=false to disable this collector and silence this warning.", indicators)
+		} else {
+			zfsDir := filepath.Join(infoDir, "zfs")
+			if err := c.ensureDir(zfsDir); err != nil {
+				return fmt.Errorf("failed to create zfs info directory: %w", err)
+			}
 
-		if _, err := c.depLookPath("zpool"); err == nil {
-			c.collectCommandOptional(ctx,
-				"zpool status",
-				filepath.Join(commandsDir, "zpool_status.txt"),
-				"ZFS pool status",
-				filepath.Join(zfsDir, "zpool_status.txt"))
+			if _, err := c.depLookPath("zpool"); err == nil {
+				c.collectCommandOptional(ctx,
+					"zpool status",
+					filepath.Join(commandsDir, "zpool_status.txt"),
+					"ZFS pool status",
+					filepath.Join(zfsDir, "zpool_status.txt"))
 
-			c.collectCommandOptional(ctx,
-				"zpool list",
-				filepath.Join(commandsDir, "zpool_list.txt"),
-				"ZFS pool list",
-				filepath.Join(zfsDir, "zpool_list.txt"))
-		}
+				c.collectCommandOptional(ctx,
+					"zpool list",
+					filepath.Join(commandsDir, "zpool_list.txt"),
+					"ZFS pool list",
+					filepath.Join(zfsDir, "zpool_list.txt"))
+			}
 
-		if _, err := c.depLookPath("zfs"); err == nil {
-			c.collectCommandOptional(ctx,
-				"zfs list",
-				filepath.Join(commandsDir, "zfs_list.txt"),
-				"ZFS filesystem list",
-				filepath.Join(zfsDir, "zfs_list.txt"))
+			if _, err := c.depLookPath("zfs"); err == nil {
+				c.collectCommandOptional(ctx,
+					"zfs list",
+					filepath.Join(commandsDir, "zfs_list.txt"),
+					"ZFS filesystem list",
+					filepath.Join(zfsDir, "zfs_list.txt"))
 
-			c.collectCommandOptional(ctx,
-				"zfs get all",
-				filepath.Join(commandsDir, "zfs_get_all.txt"),
-				"ZFS properties",
-				filepath.Join(zfsDir, "zfs_get_all.txt"))
+				c.collectCommandOptional(ctx,
+					"zfs get all",
+					filepath.Join(commandsDir, "zfs_get_all.txt"),
+					"ZFS properties",
+					filepath.Join(zfsDir, "zfs_get_all.txt"),
+				)
+			}
 		}
 	}
 
@@ -878,6 +933,128 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 	}
 
 	c.logger.Debug("System command output collection finished")
+	if err := c.buildNetworkReport(ctx, commandsDir, infoDir); err != nil {
+		c.logger.Debug("Network report generation failed: %v", err)
+	}
+	return nil
+}
+
+// buildNetworkReport composes a single human-readable network report by aggregating
+// key command outputs and configuration files.
+func (c *Collector) buildNetworkReport(ctx context.Context, commandsDir, infoDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	reportPath := filepath.Join(commandsDir, "network_report.txt")
+	mirrorPath := filepath.Join(infoDir, "network_report.txt")
+
+	var b strings.Builder
+	now := time.Now().Format(time.RFC3339)
+	hostname, _ := os.Hostname()
+	b.WriteString("Proxsave Network Report\n")
+	b.WriteString(fmt.Sprintf("Timestamp: %s\n", now))
+	b.WriteString(fmt.Sprintf("Hostname: %s\n", hostname))
+	b.WriteString("\n")
+
+	appendFile := func(title, path string) {
+		if path == "" {
+			return
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) == 0 {
+			return
+		}
+		b.WriteString(fmt.Sprintf("## %s (%s)\n", title, path))
+		b.Write(data)
+		if !strings.HasSuffix(string(data), "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	appendGlob := func(title, pattern string) {
+		matches, err := filepath.Glob(pattern)
+		if err != nil || len(matches) == 0 {
+			return
+		}
+		for _, m := range matches {
+			appendFile(title, m)
+		}
+	}
+
+	// Config files (best effort)
+	appendFile("interfaces", c.systemPath("/etc/network/interfaces"))
+	appendGlob("interfaces.d", filepath.Join(c.systemPath("/etc/network/interfaces.d"), "*"))
+	appendFile("hostname", c.systemPath("/etc/hostname"))
+	appendFile("hosts", c.systemPath("/etc/hosts"))
+	appendFile("resolv.conf", c.systemPath("/etc/resolv.conf"))
+	appendGlob("netplan", filepath.Join(c.systemPath("/etc/netplan"), "*.yaml"))
+	appendGlob("systemd-networkd", filepath.Join(c.systemPath("/etc/systemd/network"), "*.network"))
+	appendGlob("systemd-networkd", filepath.Join(c.systemPath("/etc/systemd/network"), "*.netdev"))
+	appendGlob("systemd-networkd", filepath.Join(c.systemPath("/etc/systemd/network"), "*.link"))
+	appendGlob("NetworkManager connection", filepath.Join(c.systemPath("/etc/NetworkManager/system-connections"), "*"))
+
+	// Command outputs already collected
+	commandFiles := []struct {
+		title string
+		name  string
+	}{
+		{"IP addresses", "ip_addr.txt"},
+		{"IP routes", "ip_route.txt"},
+		{"IP routes (all tables v4)", "ip_route_all_v4.txt"},
+		{"IP routes (all tables v6)", "ip_route_all_v6.txt"},
+		{"IP rules", "ip_rule.txt"},
+		{"IP links (stats)", "ip_link.txt"},
+		{"Neighbors (ARP/NDP)", "ip_neigh.txt"},
+		{"Neighbors (IPv6)", "ip6_neigh.txt"},
+		{"Bridge links", "bridge_link.txt"},
+		{"Bridge VLANs", "bridge_vlan.txt"},
+		{"Bridge FDB", "bridge_fdb.txt"},
+		{"Bridge MDB", "bridge_mdb.txt"},
+		{"Bonding status", "bonding.txt"},
+		{"iptables-save", "iptables.txt"},
+		{"iptables NAT table", "iptables_nat.txt"},
+		{"ip6tables-save", "ip6tables.txt"},
+		{"ip6tables NAT table", "ip6tables_nat.txt"},
+		{"nftables ruleset", "nftables.txt"},
+		{"UFW status", "ufw_status.txt"},
+		{"firewalld state", "firewalld_state.txt"},
+		{"firewalld rules", "firewalld_list_all.txt"},
+		{"systemctl ufw", "systemctl_ufw.txt"},
+		{"systemctl firewalld", "systemctl_firewalld.txt"},
+	}
+
+	for _, cf := range commandFiles {
+		appendFile(cf.title, filepath.Join(commandsDir, cf.name))
+	}
+
+	// Bonding: include each collected bonding_* file
+	if entries, err := os.ReadDir(commandsDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if strings.HasPrefix(name, "bonding_") {
+				appendFile("Bonding status", filepath.Join(commandsDir, name))
+			}
+		}
+	}
+
+	reportData := []byte(b.String())
+	if len(reportData) == 0 {
+		return nil
+	}
+
+	if err := c.writeReportFile(reportPath, reportData); err != nil {
+		return err
+	}
+	if mirrorPath != "" {
+		if err := c.writeReportFile(mirrorPath, reportData); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

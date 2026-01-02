@@ -72,7 +72,7 @@ MAX_LOCAL_BACKUPS=15
 ```bash
 # 1. Install
 ./build/proxsave --install
-# (use --new-install to wipe everything except env/ and identity/ before installing)
+# (use --new-install to wipe everything except configs/ and identity/ before installing)
 
 # 2. Edit configuration
 nano configs/backup.env
@@ -98,10 +98,10 @@ crontab -e
 
 ```
 Backup directory: /opt/proxsave/backup/
-- backup.20240115_020000.tar.xz (856 MB)
-- backup.20240115_020000.tar.xz.sha256
-- manifest.20240115_020000.json
+- <hostname>-backup-20240115-020000.tar.xz.bundle.tar
 ```
+
+If you disable bundling (`BUNDLE_ASSOCIATED_FILES=false`), proxsave keeps the raw archive plus sidecar files (`.sha256`, `.metadata`, `.manifest.json`).
 
 **Retention**: Automatically keeps latest 15 backups, deletes older ones.
 
@@ -292,8 +292,8 @@ rclone ls gdrive:/pbs-logs/
 # configs/backup.env
 
 # Encryption
-AGE_ENABLED=true
-AGE_RECIPIENT_FILE=/opt/proxsave/configs/recipient.txt
+ENCRYPT_ARCHIVE=true
+AGE_RECIPIENT_FILE=/opt/proxsave/identity/age/recipient.txt
 
 # Bundle (recommended with encryption)
 BUNDLE_ASSOCIATED_FILES=true
@@ -310,7 +310,7 @@ MAX_CLOUD_BACKUPS=30
 ```bash
 ./build/proxsave
 
-# Result: backup.20240115_020000.tar.xz.age
+# Result (with bundling enabled): pve01-backup-20240115-020000.tar.xz.age.bundle.tar
 ```
 
 #### Step 4: Decrypt (when needed)
@@ -328,9 +328,7 @@ MAX_CLOUD_BACKUPS=30
 
 **Encrypted backup**:
 ```
-backup.20240115_020000.tar.xz.age     # Encrypted archive
-backup.20240115_020000.tar.xz.age.sha256  # Checksum
-manifest.20240115_020000.json         # Metadata (unencrypted)
+pve01-backup-20240115-020000.tar.xz.age.bundle.tar     # Encrypted bundle (archive + metadata + checksum)
 ```
 
 **Security features**:
@@ -560,11 +558,23 @@ WEBHOOK_DISCORD_ALERTS_METHOD=POST
 #### 2. Email Configuration
 
 ```bash
-# Configure SMTP relay (example: Postfix)
-# Or use external SMTP (Gmail, Office365, etc.)
+# Option A: Cloud relay (outbound HTTPS)
+# - Set EMAIL_DELIVERY_METHOD=relay and configure EMAIL_RECIPIENT (or leave empty for root@pam auto-detect)
+# - Relay blocks root@… recipients; use a real non-root mailbox for EMAIL_RECIPIENT
+# - No local SMTP/MTA setup required on the node
+# - Optional: set EMAIL_FALLBACK_SENDMAIL=true to fall back to EMAIL_DELIVERY_METHOD=pmf when the relay fails
 
-# Test email
-echo "Test" | mail -s "Test" admin@example.com
+# Option B: Local sendmail (/usr/sbin/sendmail)
+# - Set EMAIL_DELIVERY_METHOD=sendmail
+# - Requires a working local MTA (e.g. postfix) on the node
+# - EMAIL_RECIPIENT is required (or auto-detected from Proxmox root@pam if configured)
+
+# Option C: Proxmox Notifications via proxmox-mail-forward
+# - Set EMAIL_DELIVERY_METHOD=pmf
+# - Ensure Proxmox Notifications targets/matchers are configured
+# - EMAIL_RECIPIENT is optional (only used for the To: header)
+# - Optional quick check (runs the forwarder directly; run as root):
+printf "To: root\nSubject: proxsave test\n\nHello from proxsave\n" | sudo /usr/libexec/proxmox-mail-forward
 ```
 
 #### 3. Discord Webhook
@@ -651,9 +661,9 @@ RETENTION_MONTHLY=24
 RETENTION_YEARLY=7
 
 # Encryption
-AGE_ENABLED=true
+ENCRYPT_ARCHIVE=true
 BUNDLE_ASSOCIATED_FILES=true
-AGE_RECIPIENT_FILE=/opt/proxsave/configs/recipient.txt
+AGE_RECIPIENT_FILE=/opt/proxsave/identity/age/recipient.txt
 
 # Notifications
 TELEGRAM_ENABLED=true
@@ -779,8 +789,8 @@ SECONDARY_ENABLED=true
 SECONDARY_PATH=/mnt/nas/pbs-backup
 
 # From Example 4: Encryption
-AGE_ENABLED=true
-AGE_RECIPIENT_FILE=configs/recipient.txt
+ENCRYPT_ARCHIVE=true
+AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt
 
 # From Example 3: Google Drive + GFS
 CLOUD_ENABLED=true

@@ -389,7 +389,7 @@ defer func() {
 1. **Path Selection** (`decrypt.go:166-203`):
    ```go
    Select backup source:
-     [1] Primary: /opt/proxsave/backups
+     [1] Primary: /opt/proxsave/backup
      [2] Secondary: /mnt/secondary/backups
      [3] Cloud: /mnt/cloud-backups
    ```

@@ -69,3 +69,26 @@ func TestBootstrapLoggerLevelFiltering(t *testing.T) {
 		t.Fatalf("expected warn and err to be emitted, got %s", out)
 	}
 }
+
+func TestBootstrapLoggerDebugMirrorsAndFlushesAtDebugLevel(t *testing.T) {
+	b := NewBootstrapLogger()
+	b.SetLevel(types.LogLevelDebug)
+
+	var mirrorBuf bytes.Buffer
+	mirror := New(types.LogLevelDebug, false)
+	mirror.SetOutput(&mirrorBuf)
+	b.SetMirrorLogger(mirror)
+
+	b.Debug("debug-%d", 1)
+	if !strings.Contains(mirrorBuf.String(), "debug-1") {
+		t.Fatalf("expected mirror logger to receive debug message, got %q", mirrorBuf.String())
+	}
+
+	var flushBuf bytes.Buffer
+	logger := New(types.LogLevelDebug, false)
+	logger.SetOutput(&flushBuf)
+	b.Flush(logger)
+	if !strings.Contains(flushBuf.String(), "debug-1") {
+		t.Fatalf("expected debug message to be flushed, got %q", flushBuf.String())
+	}
+}

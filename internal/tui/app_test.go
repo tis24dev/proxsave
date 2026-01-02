@@ -17,3 +17,19 @@ func TestNewAppSetsTheme(t *testing.T) {
 		t.Fatalf("expected primary text color %v, got %v", tcell.ColorWhite, tview.Styles.PrimaryTextColor)
 	}
 }
+
+func TestSetRootWithTitleStylesBox(t *testing.T) {
+	app := NewApp()
+	box := tview.NewBox()
+
+	got := app.SetRootWithTitle(box, "Hello")
+	if got != app {
+		t.Fatalf("expected SetRootWithTitle to return app pointer")
+	}
+	if box.GetTitle() != " Hello " {
+		t.Fatalf("title=%q; want %q", box.GetTitle(), " Hello ")
+	}
+	if box.GetBorderColor() != ProxmoxOrange {
+		t.Fatalf("border color=%v; want %v", box.GetBorderColor(), ProxmoxOrange)
+	}
+}

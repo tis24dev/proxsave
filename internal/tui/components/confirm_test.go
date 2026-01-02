@@ -97,6 +97,15 @@ func TestShowSuccessPrefixesSymbol(t *testing.T) {
 	}
 }
 
+func TestShowErrorPrefixesSymbol(t *testing.T) {
+	modal := captureModal(t, func(app *tui.App) {
+		ShowError(app, "Oops", "failure")
+	})
+	if !strings.HasPrefix(modalText(modal), tui.SymbolError) {
+		t.Fatalf("error modal missing prefix symbol: %q", modalText(modal))
+	}
+}
+
 func TestShowErrorInlineRestoresPreviousPrimitive(t *testing.T) {
 	returnTo := &recordingPrimitive{Box: tview.NewBox()}
 	modal := captureModal(t, func(app *tui.App) {

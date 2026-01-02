@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -105,6 +106,27 @@ func TestCollectorSafeCopyFile(t *testing.T) {
 		t.Errorf("Content mismatch: expected %s, got %s", content, destContent)
 	}
 
+	srcInfo, err := os.Stat(srcFile)
+	if err != nil {
+		t.Fatalf("Failed to stat source file: %v", err)
+	}
+	destInfo, err := os.Stat(destFile)
+	if err != nil {
+		t.Fatalf("Failed to stat destination file: %v", err)
+	}
+
+	if srcInfo.Mode().Perm() != destInfo.Mode().Perm() {
+		t.Errorf("Mode mismatch: expected %04o, got %04o", srcInfo.Mode().Perm(), destInfo.Mode().Perm())
+	}
+
+	srcStat, srcOk := srcInfo.Sys().(*syscall.Stat_t)
+	destStat, destOk := destInfo.Sys().(*syscall.Stat_t)
+	if srcOk && destOk {
+		if srcStat.Uid != destStat.Uid || srcStat.Gid != destStat.Gid {
+			t.Errorf("Ownership mismatch: expected %d:%d, got %d:%d", srcStat.Uid, srcStat.Gid, destStat.Uid, destStat.Gid)
+		}
+	}
+
 	if collector.stats.FilesProcessed == 0 {
 		t.Error("FilesProcessed counter not incremented")
 	}
@@ -148,6 +170,12 @@ func TestCollectorSafeCopyDir(t *testing.T) {
 	os.MkdirAll(filepath.Join(srcDir, "subdir"), 0755)
 	os.WriteFile(filepath.Join(srcDir, "file1.txt"), []byte("content1"), 0644)
 	os.WriteFile(filepath.Join(srcDir, "subdir", "file2.txt"), []byte("content2"), 0644)
+	if err := os.Chmod(srcDir, 0700); err != nil {
+		t.Fatalf("Failed to chmod source dir: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(srcDir, "subdir"), 0711); err != nil {
+		t.Fatalf("Failed to chmod source subdir: %v", err)
+	}
 
 	// Copy directory
 	destDir := filepath.Join(tempDir, "dest")
@@ -175,6 +203,40 @@ func TestCollectorSafeCopyDir(t *testing.T) {
 	content2, _ := os.ReadFile(filepath.Join(destDir, "subdir", "file2.txt"))
 	if string(content2) != "content2" {
 		t.Error("file2.txt content mismatch")
+	}
+
+	// Verify directory permissions are preserved
+	destRootInfo, err := os.Stat(destDir)
+	if err != nil {
+		t.Fatalf("Failed to stat dest dir: %v", err)
+	}
+	if destRootInfo.Mode().Perm() != 0700 {
+		t.Errorf("Dest dir mode mismatch: expected %04o, got %04o", 0700, destRootInfo.Mode().Perm())
+	}
+
+	destSubInfo, err := os.Stat(filepath.Join(destDir, "subdir"))
+	if err != nil {
+		t.Fatalf("Failed to stat dest subdir: %v", err)
+	}
+	if destSubInfo.Mode().Perm() != 0711 {
+		t.Errorf("Dest subdir mode mismatch: expected %04o, got %04o", 0711, destSubInfo.Mode().Perm())
+	}
+
+	// Verify file permissions are preserved
+	destFile1Info, err := os.Stat(filepath.Join(destDir, "file1.txt"))
+	if err != nil {
+		t.Fatalf("Failed to stat copied file1.txt: %v", err)
+	}
+	if destFile1Info.Mode().Perm() != 0644 {
+		t.Errorf("file1.txt mode mismatch: expected %04o, got %04o", 0644, destFile1Info.Mode().Perm())
+	}
+
+	destFile2Info, err := os.Stat(filepath.Join(destDir, "subdir", "file2.txt"))
+	if err != nil {
+		t.Fatalf("Failed to stat copied subdir/file2.txt: %v", err)
+	}
+	if destFile2Info.Mode().Perm() != 0644 {
+		t.Errorf("file2.txt mode mismatch: expected %04o, got %04o", 0644, destFile2Info.Mode().Perm())
 	}
 }
 

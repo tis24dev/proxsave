@@ -19,7 +19,10 @@ var safetyNow = time.Now
 // resolveAndCheckPath cleans and resolves symlinks for candidate extraction paths
 // and verifies the resolved path is still within destRoot.
 func resolveAndCheckPath(destRoot, candidate string) (string, error) {
-	joined := filepath.Join(destRoot, candidate)
+	joined := candidate
+	if !filepath.IsAbs(candidate) {
+		joined = filepath.Join(destRoot, candidate)
+	}
 
 	resolved, err := filepath.EvalSymlinks(joined)
 	if err != nil {
@@ -254,7 +257,6 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 
 	tarReader := tar.NewReader(gzReader)
 	filesRestored := 0
-
 	absDestRoot, err := filepath.Abs(destRoot)
 	if err != nil {
 		return fmt.Errorf("resolve destination root: %w", err)
@@ -269,7 +271,7 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 			return fmt.Errorf("read tar entry: %w", err)
 		}
 
-		target, err := resolveAndCheckPath(destRoot, header.Name)
+		target, _, err := sanitizeRestoreEntryTarget(absDestRoot, header.Name)
 		if err != nil {
 			logger.Warning("Skipping archive entry %s: %v", header.Name, err)
 			continue
@@ -303,15 +305,12 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 		if header.Typeflag == tar.TypeSymlink {
 			linkTarget := header.Linkname
 
-			// Reject absolute symlink targets immediately
-			if filepath.IsAbs(linkTarget) {
-				logger.Warning("Skipping symlink %s: absolute target not allowed: %s", target, linkTarget)
-				continue
-			}
-
 			// Resolve intended target relative to the sanitized symlink directory inside the archive
 			sanitizedDir := filepath.Dir(relTarget)
-			resolvedLinkPath := filepath.Join(sanitizedDir, linkTarget)
+			resolvedLinkPath := linkTarget
+			if !filepath.IsAbs(linkTarget) {
+				resolvedLinkPath = filepath.Join(sanitizedDir, linkTarget)
+			}
 
 			if _, pathErr := resolveAndCheckPath(destRoot, resolvedLinkPath); pathErr != nil {
 				logger.Warning("Skipping symlink %s -> %s: target escapes root: %v", target, linkTarget, pathErr)
@@ -337,7 +336,10 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 
 			// Resolve the symlink target relative to the symlink's directory
 			symlinkTargetDir := filepath.Dir(target)
-			resolvedTarget := filepath.Join(symlinkTargetDir, actualTarget)
+			resolvedTarget := actualTarget
+			if !filepath.IsAbs(actualTarget) {
+				resolvedTarget = filepath.Join(symlinkTargetDir, actualTarget)
+			}
 
 			// Validate the resolved target stays within destRoot
 			absDestRoot, err := filepath.Abs(destRoot)

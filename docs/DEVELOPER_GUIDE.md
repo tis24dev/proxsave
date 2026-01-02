@@ -27,7 +27,7 @@ Proxsave is built with modern Go practices, emphasizing:
 - **Testability**: Unit tests, integration tests, mocking
 
 **Technology stack**:
-- **Language**: Go 1.21+
+- **Language**: Go 1.25+
 - **Dependencies**: See `go.mod` for complete list
 - **Build system**: Makefile + Go modules
 - **Compression**: xz, zstd, gzip, bzip2, lz4
@@ -41,7 +41,7 @@ Proxsave is built with modern Go practices, emphasizing:
 ### Prerequisites
 
 ```bash
-# Go 1.21 or later
+# Go 1.25 or later
 go version
 
 # Build tools
@@ -98,45 +98,32 @@ go test ./...
 ```
 proxsave/
 ├── cmd/
-│   └── proxsave/        # Main entry point
-│       └── main.go
+│   └── proxsave/              # Main entry point
 ├── internal/                  # Private application code
-│   ├── config/                # Configuration management
-│   │   ├── config.go
-│   │   └── templates/         # Embedded templates
-│   ├── orchestrator/          # Core backup orchestration
-│   │   ├── orchestrator.go
-│   │   ├── restore.go
-│   │   ├── categories.go
-│   │   ├── selective.go
-│   │   └── decrypt.go
-│   ├── collectors/            # Data collection modules
-│   │   ├── pve/
-│   │   ├── pbs/
-│   │   └── system/
-│   ├── compression/           # Compression algorithms
-│   ├── encryption/            # AGE encryption
-│   ├── storage/               # Storage backends (local/cloud)
-│   ├── retention/             # Retention policies (simple/GFS)
-│   ├── notifications/         # Telegram/Email/Gotify/Webhook
-│   ├── security/              # Security checks, permissions
+│   ├── backup/                # Archiving, manifests, checksums
+│   ├── checks/                # Dependency/system checks
+│   ├── cli/                   # CLI argument parsing
+│   ├── config/                # Configuration management + templates
+│   ├── environment/           # Environment detection
+│   ├── identity/              # Identity helpers
+│   ├── logging/               # Logging
 │   ├── metrics/               # Prometheus metrics export
-│   └── logger/                # Structured logging
+│   ├── notify/                # Notification channels (Telegram/Email/Gotify/Webhook)
+│   ├── orchestrator/          # Backup/restore workflows
+│   ├── pbs/                   # PBS helpers
+│   ├── security/              # Security checks, permissions
+│   ├── storage/               # Storage backends (local/secondary/cloud)
+│   ├── tui/                   # TUI wizards
+│   ├── types/                 # Shared types
+│   └── version/               # Version info
 ├── pkg/                       # Public libraries (if any)
-├── build/                     # Build artifacts
-│   └── proxsave
+├── build/                     # Build artifacts (binary output)
 ├── configs/                   # Configuration files
-│   └── backup.env
 ├── docs/                      # Documentation
-│   ├── CONFIGURATION.md
-│   ├── ENCRYPTION.md
-│   ├── CLOUD_STORAGE.md
-│   └── ...
 ├── go.mod                     # Go module definition
 ├── go.sum                     # Dependency checksums
 ├── Makefile                   # Build automation
-├── README.md                  # Main documentation
-└── LICENSE                    # MIT License
+└── README.md                  # Main documentation
 ```
 
 ### Key Modules
@@ -144,13 +131,10 @@ proxsave/
 | Module | Purpose | Files |
 |--------|---------|-------|
 | **orchestrator** | Core backup/restore orchestration | `internal/orchestrator/*.go` |
-| **collectors** | Data collection from PVE/PBS/System | `internal/collectors/**/*.go` |
 | **config** | Configuration management | `internal/config/config.go` |
 | **storage** | Local/secondary/cloud storage | `internal/storage/*.go` |
-| **retention** | Backup retention policies | `internal/retention/*.go` |
-| **compression** | Compression algorithms | `internal/compression/*.go` |
-| **encryption** | AGE encryption | `internal/encryption/*.go` |
-| **notifications** | All notification channels | `internal/notifications/*.go` |
+| **backup** | Archiving + manifest/checksum helpers | `internal/backup/*.go` |
+| **notify** | Notification channels | `internal/notify/*.go` |
 | **security** | Security checks, permissions | `internal/security/*.go` |
 
 ---

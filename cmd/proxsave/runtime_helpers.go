@@ -273,13 +273,13 @@ func detectFilesystemInfo(ctx context.Context, backend storage.Storage, path str
 		return nil, nil
 	}
 
-	if !fsInfo.SupportsOwnership {
-		if backend != nil && backend.Location() == storage.LocationCloud {
-			logger.Debug("%s [%s] does not support ownership changes (cloud remote); chown/chmod already disabled", path, fsInfo.Type)
-		} else {
-			logger.Warning("%s [%s] does not support ownership changes; chown/chmod will be skipped", path, fsInfo.Type)
+		if !fsInfo.SupportsOwnership {
+			if backend != nil && backend.Location() == storage.LocationCloud {
+				logger.Debug("%s [%s] does not support ownership changes (cloud remote); chown/chmod already disabled", path, fsInfo.Type)
+			} else {
+				logger.Info("%s [%s] does not support ownership changes; chown/chmod will be skipped", path, fsInfo.Type)
+			}
 		}
-	}
 
 	return fsInfo, nil
 }

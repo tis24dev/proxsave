@@ -22,7 +22,7 @@ ProxSave is a project created by enthusiasts, with the aim of simplifying recove
 
 Restoring a PVE or PBS server after a disaster (or even just a migration) is always a process that requires skill, time, and patience, **ProxSave** allows you to save your entire environment and restore it at any time, allowing you to prepare the new installation to accommodate your personal data with as few manual changes as possible.
 
-**ProxSave** allows you to save and restore, integrating advanced features: automatic backups, multi-path saves, intelligent retention, encryption of backups, integrated email and Telegram notifications without configuration, and compatibility with webhooks, Gotify, and Prometheus.
+**ProxSave** allows you to save and restore, integrating advanced features: automatic backups, multi-path saves, intelligent retention, encryption of backups, integrated Telegram and email notifications (cloud relay or Proxmox Notifications), and compatibility with webhooks, Gotify, and Prometheus.
 
 For more information, take a look at our landing page at [proxsave.dev](https://proxsave.dev).
 

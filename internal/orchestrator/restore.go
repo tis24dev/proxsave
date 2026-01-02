@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,6 +31,7 @@ var (
 	serviceStatusCheckTimeout = 5 * time.Second
 	servicePollInterval       = 500 * time.Millisecond
 	serviceRetryDelay         = 500 * time.Millisecond
+	restoreLogSequence        uint64
 )
 
 func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) error {
@@ -221,19 +223,19 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		logger.Info("No system-path categories selected for restore (only export categories will be processed).")
 	}
 
-	// Handle export-only categories (/etc/pve) by extracting them to a separate directory
+	// Handle export-only categories by extracting them to a separate directory
 	exportLogPath := ""
 	exportRoot := ""
 	if len(plan.ExportCategories) > 0 {
 		exportRoot = exportDestRoot(cfg.BaseDir)
 		logger.Info("")
-		logger.Info("Exporting /etc/pve contents to: %s", exportRoot)
+		logger.Info("Exporting %d export-only category(ies) to: %s", len(plan.ExportCategories), exportRoot)
 		if err := restoreFS.MkdirAll(exportRoot, 0o755); err != nil {
 			return fmt.Errorf("failed to create export directory %s: %w", exportRoot, err)
 		}
 
 		if exportLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, exportRoot, plan.ExportCategories, RestoreModeCustom, logger); err != nil {
-			logger.Warning("Export of /etc/pve contents completed with errors: %v", err)
+			logger.Warning("Export completed with errors: %v", err)
 		} else {
 			exportLogPath = exportLog
 		}
@@ -266,8 +268,11 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if detailedLogPath != "" {
 		logger.Info("Detailed restore log: %s", detailedLogPath)
 	}
+	if exportRoot != "" {
+		logger.Info("Export directory: %s", exportRoot)
+	}
 	if exportLogPath != "" {
-		logger.Info("Exported /etc/pve files are available at: %s", exportLogPath)
+		logger.Info("Export detailed log: %s", exportLogPath)
 	}
 
 	if safetyBackup != nil {
@@ -811,7 +816,7 @@ func exportDestRoot(baseDir string) string {
 	if base == "" {
 		base = "/opt/proxsave"
 	}
-	return filepath.Join(base, fmt.Sprintf("pve-config-export-%s", nowRestore().Format("20060102-150405")))
+	return filepath.Join(base, fmt.Sprintf("proxmox-config-export-%s", nowRestore().Format("20060102-150405")))
 }
 
 // runFullRestore performs a full restore without selective options (fallback)
@@ -1217,7 +1222,8 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 
 	// Create detailed log file
 	timestamp := nowRestore().Format("20060102_150405")
-	logPath := filepath.Join(logDir, fmt.Sprintf("restore_%s.log", timestamp))
+	logSeq := atomic.AddUint64(&restoreLogSequence, 1)
+	logPath := filepath.Join(logDir, fmt.Sprintf("restore_%s_%d.log", timestamp, logSeq))
 	logFile, err := restoreFS.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
 	if err != nil {
 		logger.Warning("Could not create detailed log file: %v", err)
@@ -1472,6 +1478,11 @@ func sanitizeRestoreEntryTarget(destRoot, entryName string) (string, string, err
 		cleanDestRoot = string(os.PathSeparator)
 	}
 
+	absDestRoot, err := filepath.Abs(cleanDestRoot)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve destination root: %w", err)
+	}
+
 	name := strings.TrimSpace(entryName)
 	if name == "" {
 		return "", "", fmt.Errorf("empty archive entry name")
@@ -1490,11 +1501,70 @@ func sanitizeRestoreEntryTarget(destRoot, entryName string) (string, string, err
 		return "", "", fmt.Errorf("illegal path: %s", entryName)
 	}
 
-	target, err := resolveAndCheckPath(cleanDestRoot, sanitized)
+	target := filepath.Join(absDestRoot, filepath.FromSlash(sanitized))
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve extraction target: %w", err)
+	}
+
+	rel, err := filepath.Rel(absDestRoot, absTarget)
 	if err != nil {
 		return "", "", fmt.Errorf("illegal path: %s: %w", entryName, err)
 	}
-	return target, cleanDestRoot, nil
+	if strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." || filepath.IsAbs(rel) {
+		return "", "", fmt.Errorf("illegal path: %s", entryName)
+	}
+
+	parentDir := filepath.Dir(absTarget)
+	resolvedParentDir, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		// If the path doesn't exist yet, EvalSymlinks will fail; fallback to the cleaned path.
+		resolvedParentDir = filepath.Clean(parentDir)
+	}
+	absResolvedParentDir, err := filepath.Abs(resolvedParentDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve extraction parent directory: %w", err)
+	}
+
+	relParent, err := filepath.Rel(absDestRoot, absResolvedParentDir)
+	if err != nil {
+		return "", "", fmt.Errorf("illegal path: %s: %w", entryName, err)
+	}
+	if strings.HasPrefix(relParent, ".."+string(os.PathSeparator)) || relParent == ".." || filepath.IsAbs(relParent) {
+		return "", "", fmt.Errorf("illegal path: %s", entryName)
+	}
+
+	return absTarget, absDestRoot, nil
+}
+
+func shouldSkipProxmoxSystemRestore(relTarget string) (bool, string) {
+	rel := filepath.ToSlash(filepath.Clean(strings.TrimSpace(relTarget)))
+	rel = strings.TrimPrefix(rel, "./")
+	rel = strings.TrimPrefix(rel, "/")
+
+	switch rel {
+	case "etc/proxmox-backup/domains.cfg":
+		return true, "PBS auth realms must be recreated (domains.cfg is too fragile to restore raw)"
+	case "etc/proxmox-backup/user.cfg":
+		return true, "PBS users must be recreated (user.cfg should not be restored raw)"
+	case "etc/proxmox-backup/acl.cfg":
+		return true, "PBS permissions must be recreated (acl.cfg should not be restored raw)"
+	case "etc/proxmox-backup/proxy.cfg":
+		return true, "PBS proxy configuration should be recreated (proxy.cfg should not be restored raw)"
+	case "etc/proxmox-backup/proxy.pem":
+		return true, "PBS certificates should be regenerated (proxy.pem should not be restored raw)"
+	case "var/lib/proxmox-backup/.clusterlock":
+		return true, "PBS runtime lock files must not be restored"
+	}
+
+	if strings.HasPrefix(rel, "etc/proxmox-backup/ssl/") {
+		return true, "PBS certificates should be regenerated (ssl/* should not be restored raw)"
+	}
+	if strings.HasPrefix(rel, "var/lib/proxmox-backup/lock/") {
+		return true, "PBS runtime lock files must not be restored"
+	}
+
+	return false, ""
 }
 
 // extractTarEntry extracts a single TAR entry, preserving all attributes including atime/ctime
@@ -1508,6 +1578,17 @@ func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string,
 	if cleanDestRoot == string(os.PathSeparator) && strings.HasPrefix(target, "/etc/pve") {
 		logger.Warning("Skipping restore to %s (writes to /etc/pve are prohibited)", target)
 		return nil
+	}
+
+	if cleanDestRoot == string(os.PathSeparator) {
+		relTarget, err := filepath.Rel(cleanDestRoot, target)
+		if err != nil {
+			return fmt.Errorf("determine restore target for %s: %w", header.Name, err)
+		}
+		if skip, reason := shouldSkipProxmoxSystemRestore(relTarget); skip {
+			logger.Warning("Skipping restore to %s (%s)", target, reason)
+			return nil
+		}
 	}
 
 	// Create parent directories
@@ -1598,11 +1679,6 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 func extractSymlink(target string, header *tar.Header, destRoot string, logger *logging.Logger) error {
 	linkTarget := header.Linkname
 
-	// Reject absolute symlink targets immediately
-	if filepath.IsAbs(linkTarget) {
-		return fmt.Errorf("absolute symlink target not allowed: %s", linkTarget)
-	}
-
 	// Pre-validation: ensure the resolved target would stay within destRoot before creating the symlink
 	relativeTarget, err := filepath.Rel(destRoot, target)
 	if err != nil {
@@ -1617,8 +1693,10 @@ func extractSymlink(target string, header *tar.Header, destRoot string, logger *
 	if symlinkArchiveDir == "." {
 		symlinkArchiveDir = ""
 	}
-	potentialTarget := path.Join(symlinkArchiveDir, linkTarget)
-	potentialTarget = filepath.FromSlash(potentialTarget)
+	potentialTarget := linkTarget
+	if !filepath.IsAbs(linkTarget) {
+		potentialTarget = filepath.FromSlash(path.Join(symlinkArchiveDir, linkTarget))
+	}
 
 	if _, err := resolveAndCheckPath(destRoot, potentialTarget); err != nil {
 		return fmt.Errorf("symlink target escapes root before creation: %s -> %s: %w", header.Name, linkTarget, err)
@@ -1641,7 +1719,10 @@ func extractSymlink(target string, header *tar.Header, destRoot string, logger *
 
 	// Resolve the symlink target relative to the symlink's directory
 	symlinkDir := filepath.Dir(target)
-	resolvedTarget := filepath.Join(symlinkDir, actualTarget)
+	resolvedTarget := actualTarget
+	if !filepath.IsAbs(actualTarget) {
+		resolvedTarget = filepath.Join(symlinkDir, actualTarget)
+	}
 
 	// Validate the resolved target stays within destRoot using absolute paths
 	absDestRoot, err := filepath.Abs(destRoot)

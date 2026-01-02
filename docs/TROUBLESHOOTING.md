@@ -11,6 +11,7 @@ Complete troubleshooting guide for Proxsave with common issues, solutions, and d
   - [Cloud Storage Issues](#3-cloud-storage-issues)
   - [Encryption Issues](#4-encryption-issues)
   - [Disk Space Issues](#5-disk-space-issues)
+  - [Email Notification Issues](#6-email-notification-issues)
 - [Debug Procedures](#debug-procedures)
 - [Getting Help](#getting-help)
 - [Related Documentation](#related-documentation)
@@ -141,9 +142,8 @@ AUTO_FIX_PERMISSIONS=true
 ├── identity/                  700 (drwx------)
 │   └── age/
 │       ├── recipient.txt      600 (-rw-------)
-│       └── age-keys.txt       600 (-rw-------)
 └── build/
-    └── proxmox-backup         755 (-rwxr-xr-x)
+    └── proxsave               755 (-rwxr-xr-x)
 ```
 
 ---
@@ -482,6 +482,59 @@ COMPRESSION_LEVEL=3
 
 ---
 
+### 6. Email Notification Issues
+
+#### Symptom: No email notifications received
+
+First, confirm which delivery method you are using:
+
+```bash
+# configs/backup.env
+EMAIL_DELIVERY_METHOD=relay   # cloud relay (outbound HTTPS)
+# or
+EMAIL_DELIVERY_METHOD=sendmail # /usr/sbin/sendmail (local MTA required)
+# or
+EMAIL_DELIVERY_METHOD=pmf     # Proxmox Notifications via proxmox-mail-forward
+```
+
+If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVERY_METHOD` is exactly one of: `relay`, `sendmail`, `pmf` (typos will skip Email with a warning like: `Email: enabled but not initialized (...)`).
+
+##### If `EMAIL_DELIVERY_METHOD=relay`
+
+- Ensure outbound HTTPS works from the node (the relay needs network access).
+- Ensure the recipient is configured:
+  - Set `EMAIL_RECIPIENT=...`, or
+  - Leave it empty and set an email for `root@pam` inside Proxmox (auto-detect).
+- Relay blocks `root@…` recipients; use a real non-root mailbox for `EMAIL_RECIPIENT`.
+- If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to `EMAIL_DELIVERY_METHOD=pmf` when the relay fails.
+- Check the proxsave logs for `email-relay` warnings/errors.
+
+##### If `EMAIL_DELIVERY_METHOD=sendmail`
+
+This mode uses `/usr/sbin/sendmail`, so your node must have a working local MTA (e.g. postfix).
+
+- Ensure a recipient is available:
+  - Set `EMAIL_RECIPIENT=...`, or
+  - Leave it empty and set an email for `root@pam` inside Proxmox (auto-detect).
+- Verify `sendmail` exists:
+  ```bash
+  test -x /usr/sbin/sendmail && echo "sendmail OK" || echo "sendmail not found"
+  ```
+- Check your MTA status and queue (`systemctl status postfix`, `mailq`, `/var/log/mail.log`).
+
+##### If `EMAIL_DELIVERY_METHOD=pmf`
+
+This mode uses Proxmox Notifications via `proxmox-mail-forward` (final recipients are configured in Proxmox, not in proxsave).
+
+- `EMAIL_RECIPIENT` is optional in this mode and is only used for the `To:` header.
+- Verify `proxmox-mail-forward` exists:
+  ```bash
+  test -x /usr/libexec/proxmox-mail-forward && echo "proxmox-mail-forward OK" || echo "proxmox-mail-forward not found"
+  ```
+- Verify Proxmox Notifications configuration in the UI (`Datacenter -> Notifications`).
+
+---
+
 #### Error: `Backup path full` warnings but backup succeeds
 
 **Cause**: Warning threshold triggered, but backup still fits.
@@ -806,7 +859,7 @@ Use this checklist for rapid troubleshooting:
 ```bash
 # 1. Check binary exists and is executable
 ls -lh /opt/proxsave/build/proxsave
-# Should show: -rwxr-xr-x ... proxmox-backup
+# Should show: -rwxr-xr-x ... proxsave
 
 # 2. Check configuration file exists
 ls -lh /opt/proxsave/configs/backup.env

@@ -346,3 +346,35 @@ NEW_FLAG=true
 		}
 	})
 }
+
+func TestInvertBoolAndBoolToString(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"true", "false"},
+		{"1", "false"},
+		{"yes", "false"},
+		{"enabled", "false"},
+		{"0", "true"},
+		{"no", "true"},
+		{"", "true"},
+	}
+
+	for _, tt := range tests {
+		got, ok := invertBool(tt.in)
+		if !ok {
+			t.Fatalf("invertBool(%q) ok=false; want true", tt.in)
+		}
+		if got != tt.want {
+			t.Fatalf("invertBool(%q)=%q; want %q", tt.in, got, tt.want)
+		}
+	}
+
+	if got := boolToString(true); got != "true" {
+		t.Fatalf("boolToString(true)=%q; want true", got)
+	}
+	if got := boolToString(false); got != "false" {
+		t.Fatalf("boolToString(false)=%q; want false", got)
+	}
+}

@@ -253,19 +253,19 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		logger.Info("No system-path categories selected for restore (only export categories will be processed).")
 	}
 
-	// Handle export-only categories (/etc/pve) by extracting them to a separate directory
+	// Handle export-only categories by extracting them to a separate directory
 	exportLogPath := ""
 	exportRoot := ""
 	if len(plan.ExportCategories) > 0 {
 		exportRoot = exportDestRoot(cfg.BaseDir)
 		logger.Info("")
-		logger.Info("Exporting /etc/pve contents to: %s", exportRoot)
+		logger.Info("Exporting %d export-only category(ies) to: %s", len(plan.ExportCategories), exportRoot)
 		if err := restoreFS.MkdirAll(exportRoot, 0o755); err != nil {
 			return fmt.Errorf("failed to create export directory %s: %w", exportRoot, err)
 		}
 
 		if exportLog, exErr := extractSelectiveArchive(ctx, prepared.ArchivePath, exportRoot, plan.ExportCategories, RestoreModeCustom, logger); exErr != nil {
-			logger.Warning("Export of /etc/pve contents completed with errors: %v", exErr)
+			logger.Warning("Export completed with errors: %v", exErr)
 		} else {
 			exportLogPath = exportLog
 		}
@@ -299,8 +299,11 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	if detailedLogPath != "" {
 		logger.Info("Detailed restore log: %s", detailedLogPath)
 	}
+	if exportRoot != "" {
+		logger.Info("Export directory: %s", exportRoot)
+	}
 	if exportLogPath != "" {
-		logger.Info("Exported /etc/pve files are available at: %s", exportLogPath)
+		logger.Info("Export detailed log: %s", exportLogPath)
 	}
 
 	if safetyBackup != nil {

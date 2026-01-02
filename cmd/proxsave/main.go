@@ -1363,14 +1363,14 @@ func sendSupportEmail(ctx context.Context, cfg *config.Config, logger *logging.L
 		subject = fmt.Sprintf("%s - Build: %s", subject, sig)
 	}
 
-	emailConfig := notify.EmailConfig{
-		Enabled:          true,
-		DeliveryMethod:   notify.EmailDeliverySendmail,
-		FallbackSendmail: false,
-		AttachLogFile:    true,
-		Recipient:        "github-support@tis24.it",
-		From:             cfg.EmailFrom,
-		SubjectOverride:  subject,
+		emailConfig := notify.EmailConfig{
+			Enabled:          true,
+			DeliveryMethod:   notify.EmailDeliverySendmail,
+			FallbackSendmail: false,
+			AttachLogFile:    true,
+			Recipient:        "github-support@tis24.it",
+			From:             cfg.EmailFrom,
+			SubjectOverride:  subject,
 	}
 
 	emailNotifier, err := notify.NewEmailNotifier(emailConfig, proxmoxType, logger)

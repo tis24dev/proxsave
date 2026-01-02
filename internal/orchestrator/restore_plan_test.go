@@ -47,15 +47,15 @@ func TestPlanRestoreClusterSafeToggle(t *testing.T) {
 }
 
 func TestPlanRestorePBSCategories(t *testing.T) {
-	pbsCat := Category{ID: "pbs_config", Type: CategoryTypePBS}
+	pbsCat := Category{ID: "pbs_config", Type: CategoryTypePBS, ExportOnly: true}
 	normalCat := Category{ID: "network", Type: CategoryTypeCommon}
 
 	plan := PlanRestore(nil, []Category{pbsCat, normalCat}, SystemTypePBS, RestoreModeCustom)
-	if len(plan.ExportCategories) != 0 {
-		t.Fatalf("expected no export categories, got %d", len(plan.ExportCategories))
+	if len(plan.ExportCategories) != 1 || !hasCategoryID(plan.ExportCategories, "pbs_config") {
+		t.Fatalf("expected pbs_config to be exported, got %+v", plan.ExportCategories)
 	}
-	if !plan.NeedsPBSServices {
-		t.Fatalf("expected PBS services to be required")
+	if plan.NeedsPBSServices {
+		t.Fatalf("expected PBS services not to be required when only exporting")
 	}
 	if plan.NeedsClusterRestore {
 		t.Fatalf("unexpected cluster restore requirement")

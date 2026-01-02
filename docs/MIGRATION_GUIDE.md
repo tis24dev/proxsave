@@ -1,6 +1,6 @@
 # Migration Guide: Bash to Go
 
-Complete guide for upgrading from the Bash version (v0.7.4-bash or earlier) to the Go version of Proxmox Backup.
+Complete guide for upgrading from the Bash version (v0.7.4-bash or earlier) to the Go version (proxsave).
 
 ## Table of Contents
 
@@ -190,7 +190,7 @@ nano configs/backup.env
 
 # Verify results
 ls -lh backup/
-# Should show new backup file: backup.YYYYMMDD_HHMMSS.tar.xz
+# Typical file (bundling enabled by default): <hostname>-backup-YYYYMMDD-HHMMSS.tar.xz.bundle.tar
 
 # Check log for any issues
 cat log/backup-*.log
@@ -203,8 +203,8 @@ tail -100 log/backup-$(hostname)-*.log | grep -i "error\|warning\|complete"
 # Compare Bash vs Go backup sizes
 ls -lh backup/*.tar.*
 
-# Verify all expected files are backed up
-tar -tzf backup/backup.*.tar.xz | head -50
+# Verify the bundle contents (lists the embedded archive + metadata + checksum)
+tar -tf backup/*-backup-*.bundle.tar | head -50
 
 # Check cloud upload (if enabled)
 rclone ls gdrive:pbs-backups/
@@ -342,8 +342,8 @@ RETENTION_YEARLY=3
 
 **AGE Encryption**:
 ```bash
-AGE_ENABLED=true
-AGE_RECIPIENT_FILE=configs/recipient.txt
+ENCRYPT_ARCHIVE=true
+AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt
 ```
 
 **Parallel Cloud Uploads**:

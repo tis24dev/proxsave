@@ -158,7 +158,7 @@ func TestClassifyBackupsGFS_DailyOnly(t *testing.T) {
 		Daily:   7,
 		Weekly:  0,
 		Monthly: 0,
-		Yearly:  0,
+		Yearly:  -1, // Disable yearly retention to keep this test focused on the daily tier.
 	}
 
 	classification := ClassifyBackupsGFS(backups, config)
@@ -442,7 +442,7 @@ func TestClassifyBackupsGFS_NegativeDaily(t *testing.T) {
 		Daily:   -5, // Negative should be treated as 0
 		Weekly:  0,
 		Monthly: 0,
-		Yearly:  0,
+		Yearly:  -1, // Disable yearly retention so older-year backups aren't implicitly kept.
 	}
 
 	classification := ClassifyBackupsGFS(backups, config)

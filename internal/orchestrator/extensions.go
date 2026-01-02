@@ -18,6 +18,7 @@ type StorageTarget interface {
 
 // NotificationChannel rappresenta un canale di notifica (es. Telegram, email).
 type NotificationChannel interface {
+	Name() string
 	Notify(ctx context.Context, stats *BackupStats) error
 }
 
@@ -63,31 +64,54 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		{name: "Webhook", enabled: cfg != nil && cfg.WebhookEnabled},
 	}
 
-	channelIndex := 0
-	nextChannel := func() NotificationChannel {
-		if channelIndex >= len(o.notificationChannels) {
-			return nil
+	channelsByName := make(map[string]NotificationChannel, len(o.notificationChannels))
+	for _, ch := range o.notificationChannels {
+		if ch == nil {
+			continue
 		}
-		ch := o.notificationChannels[channelIndex]
-		channelIndex++
-		return ch
+		name := strings.TrimSpace(ch.Name())
+		if name == "" {
+			continue
+		}
+		channelsByName[name] = ch
 	}
+
+	usedChannels := make(map[NotificationChannel]bool, len(o.notificationChannels))
 
 	for _, entry := range entries {
 		if !entry.enabled {
 			o.logger.Skip("%s: disabled", entry.name)
 			continue
 		}
-		if channel := nextChannel(); channel != nil {
-			_ = channel.Notify(ctx, stats) // Ignore errors - notifications are non-critical
+
+		channel, ok := channelsByName[entry.name]
+		if !ok || channel == nil {
+			if entry.name == "Email" && cfg != nil {
+				method := strings.TrimSpace(cfg.EmailDeliveryMethod)
+				if method == "" {
+					method = "relay"
+				}
+				o.logger.Warning("%s: enabled but not initialized (EMAIL_DELIVERY_METHOD=%q; allowed: relay|sendmail|pmf)", entry.name, method)
+
+				if stats != nil && strings.TrimSpace(stats.EmailStatus) == "" {
+					stats.EmailStatus = "error"
+				}
+			} else {
+				o.logger.Warning("%s: enabled but not initialized", entry.name)
+			}
+			continue
 		}
+
+		usedChannels[channel] = true
+		_ = channel.Notify(ctx, stats) // Ignore errors - notifications are non-critical
 	}
 
-	// Dispatch any remaining channels (custom or future ones)
-	for channelIndex < len(o.notificationChannels) {
-		if channel := nextChannel(); channel != nil {
-			_ = channel.Notify(ctx, stats)
+	// Dispatch any remaining channels (custom or future ones) that weren't part of the fixed list above.
+	for _, ch := range o.notificationChannels {
+		if ch == nil || usedChannels[ch] {
+			continue
 		}
+		_ = ch.Notify(ctx, stats)
 	}
 }
 

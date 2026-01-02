@@ -42,6 +42,8 @@ type Args struct {
 	LegacyEnvPath     string
 }
 
+var osExit = os.Exit
+
 // Parse parses command-line arguments and returns Args struct
 func Parse() *Args {
 	args := &Args{}
@@ -154,13 +156,13 @@ func parseLogLevel(s string) types.LogLevel {
 // ShowHelp displays help message and exits
 func ShowHelp() {
 	printHelp(os.Stderr, os.Args[0])
-	os.Exit(0)
+	osExit(0)
 }
 
 // ShowVersion displays version information and exits
 func ShowVersion() {
 	printVersion(os.Stdout)
-	os.Exit(0)
+	osExit(0)
 }
 
 func printHelp(w io.Writer, argv0 string) {

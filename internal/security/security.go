@@ -131,7 +131,9 @@ func Run(ctx context.Context, logger *logging.Logger, cfg *config.Config, config
 	checker.detectPrivateAgeKeys()
 
 	if cfg.CheckNetworkSecurity {
-		checker.checkFirewall(ctx)
+		if cfg.CheckFirewall {
+			checker.checkFirewall(ctx)
+		}
 		if cfg.CheckOpenPorts {
 			checker.checkOpenPorts(ctx)
 		}
@@ -230,14 +232,31 @@ func (c *Checker) buildDependencyList() []dependencyEntry {
 	}
 
 	emailMethod := strings.ToLower(strings.TrimSpace(c.cfg.EmailDeliveryMethod))
-	if emailMethod == "" {
-		emailMethod = "relay"
-	}
-	if emailMethod == "sendmail" {
-		deps = append(deps, c.binaryDependency("sendmail", []string{"sendmail"}, true, "email delivery method set to sendmail"))
-	} else if c.cfg.EmailFallbackSendmail {
-		deps = append(deps, c.binaryDependency("sendmail", []string{"sendmail"}, false, "email relay fallback to sendmail enabled"))
-	}
+		if emailMethod == "" {
+			emailMethod = "relay"
+		}
+		if emailMethod == "pmf" {
+			deps = append(deps, c.binaryDependency(
+				"proxmox-mail-forward",
+				[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
+				true,
+				"email delivery method set to pmf (Proxmox Notifications via proxmox-mail-forward)",
+			))
+		} else if emailMethod == "sendmail" {
+			deps = append(deps, c.binaryDependency(
+				"sendmail",
+				[]string{"/usr/sbin/sendmail", "sendmail"},
+				true,
+				"email delivery method set to sendmail (/usr/sbin/sendmail)",
+			))
+		} else if emailMethod == "relay" && c.cfg.EmailFallbackSendmail {
+			deps = append(deps, c.binaryDependency(
+				"proxmox-mail-forward",
+				[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
+				false,
+				"email relay fallback to pmf enabled (uses proxmox-mail-forward)",
+			))
+		}
 
 	if c.cfg.BackupCephConfig {
 		deps = append(deps, c.binaryDependency("ceph", []string{"ceph"}, false, "Ceph configuration collection enabled"))
@@ -601,7 +620,12 @@ func fileContainsMarker(path string, markers []string, limit int) (bool, error) 
 }
 
 func (c *Checker) checkFirewall(ctx context.Context) {
-	if _, err := exec.LookPath("iptables"); err != nil {
+	lookPath := c.lookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+
+	if _, err := lookPath("iptables"); err != nil {
 		c.addWarning("iptables not found; firewall check skipped")
 		return
 	}

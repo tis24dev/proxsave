@@ -1,6 +1,6 @@
 # Legacy Bash Version
 
-Information about the original Bash version (v0.7.4-bash) of Proxmox Backup.
+Information about the original Bash version (v0.7.4-bash) of Proxsave (historically distributed as `proxmox-backup`).
 
 ## Table of Contents
 
@@ -24,7 +24,6 @@ The original Bash script (20,370 lines) has been moved to the `old` branch and i
 **Use cases for legacy version**:
 - Existing installations that cannot be upgraded
 - Compatibility requirements with legacy systems
-- Environments where Go compiler is not available
 - Testing and comparison purposes
 
 ---
@@ -59,16 +58,15 @@ The legacy Bash version is available in two locations:
 ### Option 1: Fast Bash Install (One-Liner)
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/old/install.sh)"
 ```
 
 **What it does**:
-1. Downloads `install.sh` from main branch
-2. Asks for confirmation to install legacy Bash version
-3. Downloads v0.7.4-bash release
-4. Extracts to `/opt/proxsave/`
-5. Runs installation script (creates symlinks, cron jobs)
-6. Prompts to edit `env/backup.env` configuration
+1. Downloads `install.sh` from the `old` branch
+2. Downloads v0.7.4-bash release
+3. Extracts to `/opt/proxsave/`
+4. Runs installation script (creates symlinks, cron jobs)
+5. Prompts to edit `env/backup.env` configuration
 
 ### Option 2: Manual Installation
 
@@ -87,7 +85,7 @@ wget https://github.com/tis24dev/proxsave/archive/refs/tags/v0.7.4-bash.tar.gz
 **Step 3: Create the script directory**
 
 ```bash
-mkdir proxmox-backup
+mkdir -p proxsave
 ```
 
 **Step 4: Extract the script files**
@@ -99,7 +97,7 @@ tar xzf v0.7.4-bash.tar.gz -C proxsave --strip-components=1 && rm v0.7.4-bash.ta
 **Step 5: Enter the script directory**
 
 ```bash
-cd proxmox-backup
+cd proxsave
 ```
 
 **Step 6: Start the installation**
@@ -346,4 +344,4 @@ The legacy Bash version served well from 2020-2024 but has been superseded by th
 
 ---
 
-**Thank you for using Proxmox Backup!** 🎉
+**Thank you for using Proxsave!**

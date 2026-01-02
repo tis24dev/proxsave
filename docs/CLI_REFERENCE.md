@@ -135,7 +135,7 @@ Some interactive commands support two interface modes:
 2. Creates directory structure
 3. Generates default configuration file
 4. Optionally configures encryption (AGE key generation)
-5. Optionally sets up notifications (Telegram, Email, Webhook)
+5. Optionally sets up notifications (Telegram, Email; Email defaults to `EMAIL_DELIVERY_METHOD=relay`)
 6. Creates systemd service (optional)
 7. Validates configuration
 
@@ -341,14 +341,14 @@ Next step: ./build/proxsave --dry-run
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **`--newkey` workflow**:
-1. Backs up existing recipient file (`recipient.txt.bak-YYYYMMDD-HHMMSS`)
-2. Launches interactive AGE wizard
-3. Presents options:
-   - **X25519 key pair**: Most secure, requires private key file
-   - **Passphrase-based**: Easier for manual recovery, slightly weaker
-   - **Multiple recipients**: Add several recipients in one session
-4. Generates keys and saves to `configs/recipient.txt`
-5. Updates `AGE_RECIPIENT_FILE` if necessary
+1. Uses the default recipient file: `${BASE_DIR}/identity/age/recipient.txt` (same as `AGE_RECIPIENT_FILE` in the template)
+2. Prompts for one of:
+   - **Existing public recipient**: paste an `age1...` recipient
+   - **Passphrase-derived**: enter a passphrase (proxsave derives the recipient; the passphrase is **not stored**)
+   - **Private key-derived**: paste an `AGE-SECRET-KEY-...` key (not stored; proxsave stores only the derived public recipient)
+3. Writes/overwrites the recipient file after confirmation
+
+**Note**: In `--cli` mode (text prompts), you can add multiple recipients. The default TUI flow saves a single recipient; you can always add more by editing the recipient file (one per line).
 
 **For complete encryption guide**, see: **[Encryption Guide](ENCRYPTION.md)**
 
@@ -377,11 +377,11 @@ Next step: ./build/proxsave --dry-run
 1. Scans configured storage locations (local/secondary/cloud)
 2. Lists available backups with metadata
 3. Prompts for destination folder (default `./decrypt`)
-4. Requests passphrase or AGE private key
+4. Requests passphrase or AGE private key (`AGE-SECRET-KEY-...`)
 5. Decrypts backup to temporary location
-6. Creates decrypted archive ready for extraction or inspection
+6. Creates a decrypted bundle and moves it to the destination directory
 
-**Output**: Decrypted TAR archive (e.g., `backup.20240115_023000.tar.xz`)
+**Output**: Decrypted bundle (e.g., `pve01-backup-20240115-023000.tar.xz.decrypted.bundle.tar`)
 
 ### Flag Reference
 
@@ -508,7 +508,7 @@ Next step: ./build/proxsave --dry-run
 
 **Requirements**:
 - Existing GitHub issue for tracking
-- Email configuration (uses system SMTP)
+- Working local mail delivery on the node (`/usr/sbin/sendmail` via Postfix/Exim/Sendmail)
 
 **Privacy considerations**:
 - Logs may contain sensitive information (paths, hostnames, file names)

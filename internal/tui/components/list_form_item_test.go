@@ -78,3 +78,15 @@ func TestListFormItemFieldHeightDefaults(t *testing.T) {
 		t.Fatalf("expected default height reset, got %d", got)
 	}
 }
+
+func TestListFormItemLabelAndWidthAccessors(t *testing.T) {
+	item := NewListFormItem(nil)
+	item.SetLabel("Backups").SetFieldWidth(42)
+
+	if got := item.GetLabel(); got != "Backups" {
+		t.Fatalf("GetLabel()=%q; want %q", got, "Backups")
+	}
+	if got := item.GetFieldWidth(); got != 42 {
+		t.Fatalf("GetFieldWidth()=%d; want %d", got, 42)
+	}
+}

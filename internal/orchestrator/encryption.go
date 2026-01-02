@@ -48,6 +48,8 @@ var weakPassphraseList = []string{
 	"monkey",
 }
 
+var readPassword = term.ReadPassword
+
 func (o *Orchestrator) EnsureAgeRecipientsReady(ctx context.Context) error {
 	if o == nil || o.cfg == nil || !o.cfg.EncryptArchive {
 		return nil
@@ -503,7 +505,7 @@ func readPasswordWithContext(ctx context.Context) ([]byte, error) {
 	}
 	ch := make(chan res, 1)
 	go func() {
-		b, e := term.ReadPassword(int(os.Stdin.Fd()))
+		b, e := readPassword(int(os.Stdin.Fd()))
 		ch <- res{b: b, err: mapInputError(e)}
 	}()
 	select {

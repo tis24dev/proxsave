@@ -97,6 +97,25 @@ func TestOrchestrator_SetVersion(t *testing.T) {
 	// The test passes if no panic occurs
 }
 
+func TestOrchestrator_SetUpdateInfo(t *testing.T) {
+	orch := &Orchestrator{}
+
+	orch.SetUpdateInfo(true, " 1.0.0 ", " 2.0.0 ")
+
+	if !orch.versionUpdateAvailable {
+		t.Fatalf("versionUpdateAvailable=false; want true")
+	}
+	if orch.updateCurrentVersion != "1.0.0" {
+		t.Fatalf("updateCurrentVersion=%q; want %q", orch.updateCurrentVersion, "1.0.0")
+	}
+	if orch.updateLatestVersion != "2.0.0" {
+		t.Fatalf("updateLatestVersion=%q; want %q", orch.updateLatestVersion, "2.0.0")
+	}
+
+	var nilOrch *Orchestrator
+	nilOrch.SetUpdateInfo(true, "x", "y") // should not panic
+}
+
 // TestOrchestrator_SetChecker tests SetChecker
 func TestOrchestrator_SetChecker(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)

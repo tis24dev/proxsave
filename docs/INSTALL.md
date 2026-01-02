@@ -1,6 +1,6 @@
 ## 📑 Table of Contents
 
-- [🚀 Fast Install](#fast-instal)
+- [🚀 Fast Install](#fast-install)
   - [Direct Install](#direct-install)
   - [Migration](#migration)
   - [First Backup Workflow](#first-backup-workflow)
@@ -8,7 +8,7 @@
   - [Quick Upgrade](#quick-upgrade)
   - [What Gets Updated](#what-gets-updated)
   - [Full Upgrade Workflow](#full-upgrade-workflow)
-- [💾 Manual Installation](#installation)
+- [💾 Manual Installation](#manual-installation)
   - [Prerequisites](#prerequisites)
   - [Building from Source](#building-from-source)
   - [Interactive Installation Wizard](#interactive-installation-wizard)
@@ -29,7 +29,7 @@
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
 
-or: if you need a fully clean reinstall use: (preserves `env/` and `identity/`)
+or: if you need a fully clean reinstall use: (preserves `configs/` and `identity/`)
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
 ```
@@ -91,7 +91,7 @@ The `--upgrade` command:
 - ✅ Downloads latest binary from GitHub releases
 - ✅ Verifies integrity with SHA256 checksums
 - ✅ Atomically replaces current binary
-- ✅ Updates symlinks (`/usr/local/bin/proxsave`, `/usr/local/bin/proxsave`)
+- ✅ Updates symlinks (`/usr/local/bin/proxsave`, `/usr/local/bin/proxmox-backup`)
 - ✅ Cleans up legacy Bash script symlinks
 - ✅ Migrates cron entries to new binary while preserving entries that already point to the Go executable
 - ✅ Fixes file permissions
@@ -173,9 +173,6 @@ cd /opt/proxsave
 # Copy from github
 git clone --branch main https://github.com/tis24dev/proxsave.git .
 
-# Initialize Go module
-go mod init github.com/tis24dev/proxsave
-
 # Download dependencies
 go mod tidy
 
@@ -191,7 +188,7 @@ make build
 The installation wizard creates your configuration file interactively:
 
 ```bash
-./build/prosave --install
+./build/proxsave --install
 
 # Or perform a clean reinstall (keeps env/ and identity/)
 ./build/proxsave --new-install
@@ -202,7 +199,7 @@ The installation wizard creates your configuration file interactively:
 1. **Configuration file path**: Default `configs/backup.env` (accepts absolute or relative paths within repo)
 2. **Secondary storage**: Optional path for backup/log copies
 3. **Cloud storage**: Optional rclone remote configuration
-4. **Notifications**: Enable Telegram (centralized) and email relay
+4. **Notifications**: Enable Telegram (centralized) and Email notifications (wizard defaults to `EMAIL_DELIVERY_METHOD=relay`; you can switch to `sendmail` or `pmf` later)
 5. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 
 **Features:**
@@ -236,17 +233,17 @@ You can then manually add your custom variables by referring to the mapping guid
 
 The project includes a complete environment variable mapping guide to help you migrate your configuration:
 
-**?? [BACKUP_ENV_MAPPING.md](docs/BACKUP_ENV_MAPPING.md)** - Complete Bash ? Go variable mapping reference
+**[BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)** - Complete Bash → Go variable mapping reference
 
 This guide categorizes every variable:
 - **SAME**: Variables with identical names (just copy them)
-- **RENAMED ?**: Variables with new names but automatic fallback (old names still work)
-- **SEMANTIC CHANGE ??**: Variables requiring value conversion (e.g., percentage ? GB)
+- **RENAMED**: Variables with new names but automatic fallback (old names still work)
+- **SEMANTIC CHANGE**: Variables requiring value conversion (e.g., percentage → GB)
 - **LEGACY**: Bash-only variables no longer needed in Go
 
 **Quick migration workflow:**
 1. Open your Bash `backup.env`
-1. Open your Go `backup.env`
+2. Open your Go `backup.env`
 3. Refer to `BACKUP_ENV_MAPPING.md` while copying your values
 4. Most variables can be copied directly (SAME + RENAMED categories)
 5. Pay attention to SEMANTIC CHANGE variables for manual conversion
@@ -331,7 +328,7 @@ This guide categorizes every variable:
 - **Solution**: Split `CLOUD_BACKUP_PATH` into `CLOUD_REMOTE` (remote name) and `CLOUD_REMOTE_PATH` (full path inside that remote)
 
 **Still having issues?**
-- Review the complete mapping guide: [BACKUP_ENV_MAPPING.md](docs/BACKUP_ENV_MAPPING.md)
+- Review the complete mapping guide: [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)
 - Compare your Bash config with the Go template side-by-side
 - Enable debug logging: `./build/proxsave --dry-run --log-level debug`
 
@@ -369,7 +366,7 @@ wget https://github.com/tis24dev/proxsave/archive/refs/tags/v0.7.4-bash.tar.gz
 
 Create the script directory
 ```bash
-mkdir proxmox-backup
+mkdir -p proxsave
 ```
 
 Extract the script files into the newly created directory, then delete the archive
@@ -379,7 +376,7 @@ tar xzf v0.7.4-bash.tar.gz -C proxsave --strip-components=1 && rm v0.7.4-bash.ta
 
 Enter the script directory
 ```bash
-cd proxmox-backup
+cd proxsave
 ```
 
 Start the installation (runs initial checks, creates symlinks, creates cron)
@@ -401,10 +398,8 @@ Run first backup
 
 **Important Notes:**
 
-- ?? **Manual confirmation required**: The `install.sh` script will ask for explicit confirmation before proceeding with the Bash version installation
-- ?? **Bash version only**: The `install.sh` script installs the **legacy Bash version** (v0.7.4-bash), NOT the new Go version
-- ?? **Why it exists**: The `install.sh` file remains in the `main` branch only to support existing installation URLs that may be circulating in documentation, scripts, or forums
-- ?? **For Go version**: To install the new Go version, follow the [Installation](#installation) section above (build from source)
+- **Bash version only**: The legacy installer (`old` branch) installs the **Bash version** (v0.7.4-bash), not the Go version.
+- **For the Go version**: Use the one-liner in the **Fast Install** section or build from source in **Manual Installation**.
 
 ### Legacy vs Go Version
 
