@@ -61,10 +61,13 @@ func Detect(baseDir string, logger *logging.Logger) (*Info, error) {
 
 	// Attempt to load an existing ID first.
 	logDebug(logger, "Identity: attempting to load existing identity from %s", identityPath)
-	if id, err := loadServerID(identityPath, info.PrimaryMAC, logger); err == nil {
+	if id, boundMAC, err := loadServerID(identityPath, macs, logger); err == nil {
 		if id != "" {
-			logDebug(logger, "Identity: loaded existing server ID %s from %s", id, identityPath)
+			logDebug(logger, "Identity: loaded existing server ID %s from %s (boundMAC=%s)", id, identityPath, boundMAC)
 			info.ServerID = id
+			if strings.TrimSpace(boundMAC) != "" {
+				info.PrimaryMAC = boundMAC
+			}
 			return info, nil
 		}
 		logDebug(logger, "Identity: identity file %s returned empty server ID; generating new one", identityPath)
@@ -127,7 +130,7 @@ func collectMACAddresses() []string {
 	return macs
 }
 
-func loadServerID(path, primaryMAC string, logger *logging.Logger) (string, error) {
+func loadServerID(path string, macs []string, logger *logging.Logger) (string, string, error) {
 	if stat, err := os.Stat(path); err == nil {
 		logDebug(logger, "Identity: identity file stat: path=%s mode=%s size=%d mtime=%s", path, stat.Mode().String(), stat.Size(), stat.ModTime().Format(time.RFC3339))
 	} else {
@@ -136,10 +139,33 @@ func loadServerID(path, primaryMAC string, logger *logging.Logger) (string, erro
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	logDebug(logger, "Identity: read identity file %s (%d bytes)", path, len(data))
-	return decodeProtectedServerID(string(data), primaryMAC, logger)
+
+	content := string(data)
+	if len(macs) == 0 {
+		id, err := decodeProtectedServerID(content, "", logger)
+		if err != nil {
+			return "", "", err
+		}
+		return id, "", nil
+	}
+
+	var lastErr error
+	for idx, mac := range macs {
+		id, err := decodeProtectedServerID(content, mac, logger)
+		if err == nil {
+			return id, mac, nil
+		}
+		lastErr = err
+		logDebug(logger, "Identity: decode attempt failed for mac[%d]=%s: %v", idx, mac, err)
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("unable to decode identity payload")
+	}
+	return "", "", lastErr
 }
 
 func generateServerID(macs []string, primaryMAC string, logger *logging.Logger) (string, string, error) {

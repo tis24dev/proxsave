@@ -164,6 +164,38 @@ func TestDetectUsesExistingIdentityFile(t *testing.T) {
 	}
 }
 
+func TestLoadServerIDTriesAllMACAddresses(t *testing.T) {
+	baseDir := t.TempDir()
+	identityDir := filepath.Join(baseDir, identityDirName)
+	if err := os.MkdirAll(identityDir, 0o755); err != nil {
+		t.Fatalf("failed to create identity dir: %v", err)
+	}
+	identityPath := filepath.Join(identityDir, identityFileName)
+
+	const serverID = "9876543210987654"
+	const boundMAC = "aa:bb:cc:dd:ee:ff"
+	const nonMatchingMAC = "00:11:22:33:44:55"
+
+	content, err := encodeProtectedServerID(serverID, boundMAC, nil)
+	if err != nil {
+		t.Fatalf("encodeProtectedServerID() error = %v", err)
+	}
+	if err := os.WriteFile(identityPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write identity file: %v", err)
+	}
+
+	loadedID, loadedMAC, err := loadServerID(identityPath, []string{nonMatchingMAC, boundMAC}, nil)
+	if err != nil {
+		t.Fatalf("loadServerID() error = %v", err)
+	}
+	if loadedID != serverID {
+		t.Fatalf("ServerID = %q, want %q", loadedID, serverID)
+	}
+	if loadedMAC != boundMAC {
+		t.Fatalf("bound MAC = %q, want %q", loadedMAC, boundMAC)
+	}
+}
+
 func TestDetectErrorsWhenBaseDirEmpty(t *testing.T) {
 	info, err := Detect("", nil)
 	if err == nil {
