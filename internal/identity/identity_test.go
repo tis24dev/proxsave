@@ -347,3 +347,48 @@ func TestDecodeProtectedServerIDInvalidServerIDFormat(t *testing.T) {
 		t.Fatalf("expected error for non-digit serverID")
 	}
 }
+
+func TestLoadServerIDWithEmptyMACSlice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity.conf")
+
+	const serverID = "1234567890123456"
+	content, err := encodeProtectedServerID(serverID, "", nil)
+	if err != nil {
+		t.Fatalf("encodeProtectedServerID() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	loadedID, loadedMAC, err := loadServerID(path, []string{}, nil)
+	if err != nil {
+		t.Fatalf("loadServerID() error = %v", err)
+	}
+	if loadedID != serverID {
+		t.Fatalf("loadedID = %q, want %q", loadedID, serverID)
+	}
+	if loadedMAC != "" {
+		t.Fatalf("loadedMAC = %q, want empty", loadedMAC)
+	}
+}
+
+func TestLoadServerIDFailsAllMACs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity.conf")
+
+	const boundMAC = "aa:bb:cc:dd:ee:ff"
+	content, err := encodeProtectedServerID("1234567890123456", boundMAC, nil)
+	if err != nil {
+		t.Fatalf("encodeProtectedServerID() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	wrongMACs := []string{"00:00:00:00:00:01", "00:00:00:00:00:02"}
+	_, _, err = loadServerID(path, wrongMACs, nil)
+	if err == nil {
+		t.Fatalf("expected error when all MACs fail")
+	}
+}
