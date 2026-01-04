@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,15 +37,23 @@ type Info struct {
 	IdentityFile string
 }
 
+var (
+	hostnameFunc      = os.Hostname
+	readFirstLineFunc = readFirstLine
+)
+
 // Detect resolves the server identity (ID + MAC address) and ensures persistence.
 func Detect(baseDir string, logger *logging.Logger) (*Info, error) {
 	info := &Info{}
 	baseDir = strings.TrimSpace(baseDir)
 	logDebug(logger, "Identity: starting detection (baseDir=%q)", baseDir)
 
-	macs := collectMACAddresses()
+	ifaceCandidates, macs := collectMACCandidates(logger)
 	info.MACAddresses = macs
-	if len(macs) > 0 {
+	if preferredMAC, preferredIface := selectPreferredMAC(ifaceCandidates); preferredMAC != "" {
+		info.PrimaryMAC = preferredMAC
+		logDebug(logger, "Identity: selected primary interface=%s mac=%s", preferredIface, preferredMAC)
+	} else if len(macs) > 0 {
 		info.PrimaryMAC = macs[0]
 	}
 	logDebug(logger, "Identity: detected %d MAC addresses (primary: %s)", len(macs), info.PrimaryMAC)
@@ -65,9 +74,11 @@ func Detect(baseDir string, logger *logging.Logger) (*Info, error) {
 		if id != "" {
 			logDebug(logger, "Identity: loaded existing server ID %s from %s (boundMAC=%s)", id, identityPath, boundMAC)
 			info.ServerID = id
-			if strings.TrimSpace(boundMAC) != "" {
+			// Keep the preferred MAC for display, but fall back to the bound MAC if needed.
+			if strings.TrimSpace(info.PrimaryMAC) == "" && strings.TrimSpace(boundMAC) != "" {
 				info.PrimaryMAC = boundMAC
 			}
+			maybeUpgradeIdentityFile(identityPath, id, info.PrimaryMAC, macs, logger)
 			return info, nil
 		}
 		logDebug(logger, "Identity: identity file %s returned empty server ID; generating new one", identityPath)
@@ -104,14 +115,28 @@ func Detect(baseDir string, logger *logging.Logger) (*Info, error) {
 	return info, nil
 }
 
-func collectMACAddresses() []string {
+type macCandidate struct {
+	Iface                 string
+	MAC                   string
+	AddrAssignType        int
+	IsVirtual             bool
+	IsBridge              bool
+	IsWireless            bool
+	IsLocallyAdministered bool
+}
+
+func collectMACCandidates(logger *logging.Logger) ([]macCandidate, []string) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 
 	seen := make(map[string]struct{})
-	var macs []string
+	var (
+		candidates []macCandidate
+		macs       []string
+	)
+
 	for _, iface := range ifaces {
 		if len(iface.HardwareAddr) == 0 {
 			continue
@@ -120,14 +145,183 @@ func collectMACAddresses() []string {
 			continue
 		}
 		mac := strings.ToLower(iface.HardwareAddr.String())
-		if _, ok := seen[mac]; ok || mac == "" {
+		if mac == "" {
+			continue
+		}
+
+		candidates = append(candidates, macCandidate{
+			Iface:                 iface.Name,
+			MAC:                   mac,
+			AddrAssignType:        readAddrAssignType(iface.Name, logger),
+			IsVirtual:             isVirtualInterface(iface.Name, logger),
+			IsBridge:              isBridgeInterface(iface.Name),
+			IsWireless:            isWirelessInterface(iface.Name),
+			IsLocallyAdministered: isLocallyAdministeredMAC(mac),
+		})
+
+		if _, ok := seen[mac]; ok {
 			continue
 		}
 		seen[mac] = struct{}{}
 		macs = append(macs, mac)
 	}
+
 	sort.Strings(macs)
+	return candidates, macs
+}
+
+func collectMACAddresses() []string {
+	_, macs := collectMACCandidates(nil)
 	return macs
+}
+
+func selectPreferredMAC(candidates []macCandidate) (string, string) {
+	var best *macCandidate
+	for i := range candidates {
+		c := candidates[i]
+		if strings.TrimSpace(c.Iface) == "" || strings.TrimSpace(c.MAC) == "" {
+			continue
+		}
+		if best == nil || isBetterMACCandidate(c, *best) {
+			best = &candidates[i]
+		}
+	}
+	if best == nil {
+		return "", ""
+	}
+	return best.MAC, best.Iface
+}
+
+func isBetterMACCandidate(a, b macCandidate) bool {
+	rankA := candidateRank(a)
+	rankB := candidateRank(b)
+	for i := 0; i < len(rankA) && i < len(rankB); i++ {
+		if rankA[i] == rankB[i] {
+			continue
+		}
+		return rankA[i] < rankB[i]
+	}
+	nameA := strings.ToLower(a.Iface)
+	nameB := strings.ToLower(b.Iface)
+	if nameA != nameB {
+		return nameA < nameB
+	}
+	return a.MAC < b.MAC
+}
+
+func candidateRank(c macCandidate) []int {
+	assignRank := addrAssignRank(c.AddrAssignType)
+	virtualRank := 0
+	if c.IsVirtual {
+		virtualRank = 1
+	}
+	laaRank := 0
+	if c.IsLocallyAdministered {
+		laaRank = 1
+	}
+	return []int{ifaceCategory(c), assignRank, laaRank, virtualRank}
+}
+
+func ifaceCategory(c macCandidate) int {
+	name := strings.ToLower(strings.TrimSpace(c.Iface))
+	switch {
+	case isPreferredWiredIface(name, c):
+		return 0
+	case strings.HasPrefix(name, "vmbr"):
+		return 1
+	case strings.HasPrefix(name, "bridge") || strings.HasPrefix(name, "br") || c.IsBridge:
+		return 2
+	case c.IsWireless || strings.HasPrefix(name, "wlp") || strings.HasPrefix(name, "wl"):
+		return 3
+	default:
+		return 4
+	}
+}
+
+func isPreferredWiredIface(name string, c macCandidate) bool {
+	if c.IsWireless {
+		return false
+	}
+	if strings.HasPrefix(name, "eth") || strings.HasPrefix(name, "en") || strings.HasPrefix(name, "bond") || strings.HasPrefix(name, "team") {
+		return true
+	}
+	return false
+}
+
+func addrAssignRank(v int) int {
+	switch v {
+	case 0: // permanent
+		return 0
+	case 3: // set by userspace
+		return 1
+	case 2: // stolen
+		return 2
+	case 1: // random
+		return 3
+	default:
+		return 4
+	}
+}
+
+func readAddrAssignType(iface string, logger *logging.Logger) int {
+	if runtime.GOOS != "linux" {
+		return -1
+	}
+	path := filepath.Join("/sys/class/net", iface, "addr_assign_type")
+	raw := strings.TrimSpace(readFirstLineFunc(path, 16))
+	if raw == "" {
+		return -1
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		logDebug(logger, "Identity: failed to parse addr_assign_type for %s: %v", iface, err)
+		return -1
+	}
+	return v
+}
+
+func isVirtualInterface(iface string, logger *logging.Logger) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	link, err := os.Readlink(filepath.Join("/sys/class/net", iface))
+	if err != nil {
+		return false
+	}
+	if strings.Contains(link, "/virtual/") {
+		logDebug(logger, "Identity: iface %s is virtual (%s)", iface, link)
+		return true
+	}
+	return false
+}
+
+func isBridgeInterface(iface string) bool {
+	if runtime.GOOS != "linux" {
+		name := strings.ToLower(iface)
+		return strings.HasPrefix(name, "vmbr") || strings.HasPrefix(name, "br") || strings.HasPrefix(name, "bridge")
+	}
+	_, err := os.Stat(filepath.Join("/sys/class/net", iface, "bridge"))
+	return err == nil
+}
+
+func isWirelessInterface(iface string) bool {
+	if runtime.GOOS != "linux" {
+		return strings.HasPrefix(strings.ToLower(iface), "wl")
+	}
+	_, err := os.Stat(filepath.Join("/sys/class/net", iface, "wireless"))
+	return err == nil
+}
+
+func isLocallyAdministeredMAC(mac string) bool {
+	fields := strings.Split(mac, ":")
+	if len(fields) == 0 {
+		return false
+	}
+	b, err := strconv.ParseUint(fields[0], 16, 8)
+	if err != nil {
+		return false
+	}
+	return (b & 0x02) == 0x02
 }
 
 func loadServerID(path string, macs []string, logger *logging.Logger) (string, string, error) {
@@ -145,7 +339,7 @@ func loadServerID(path string, macs []string, logger *logging.Logger) (string, s
 
 	content := string(data)
 	if len(macs) == 0 {
-		id, err := decodeProtectedServerID(content, "", logger)
+		id, _, err := decodeProtectedServerID(content, "", logger)
 		if err != nil {
 			return "", "", err
 		}
@@ -153,13 +347,24 @@ func loadServerID(path string, macs []string, logger *logging.Logger) (string, s
 	}
 
 	var lastErr error
+	var fallbackID string
 	for idx, mac := range macs {
-		id, err := decodeProtectedServerID(content, mac, logger)
+		id, matchedByMAC, err := decodeProtectedServerID(content, mac, logger)
 		if err == nil {
-			return id, mac, nil
+			if matchedByMAC {
+				return id, mac, nil
+			}
+			if fallbackID == "" {
+				fallbackID = id
+			}
+			continue
 		}
 		lastErr = err
 		logDebug(logger, "Identity: decode attempt failed for mac[%d]=%s: %v", idx, mac, err)
+	}
+
+	if fallbackID != "" {
+		return fallbackID, "", nil
 	}
 
 	if lastErr == nil {
@@ -196,7 +401,7 @@ func generateServerID(macs []string, primaryMAC string, logger *logging.Logger) 
 	}
 	logDebug(logger, "Identity: generateServerID: normalized serverID=%s", serverID)
 
-	encoded, err := encodeProtectedServerID(serverID, primaryMAC, logger)
+	encoded, err := encodeProtectedServerIDWithMACs(serverID, macs, primaryMAC, logger)
 	if err != nil {
 		logDebug(logger, "Identity: generateServerID: encodeProtectedServerID failed: %v", err)
 		return "", "", err
@@ -212,10 +417,10 @@ func buildSystemData(macs []string, logger *logging.Logger) string {
 	builder.WriteString(timestamp)
 	logDebug(logger, "Identity: buildSystemData: timestamp=%s", timestamp)
 
-	if machineID := readFirstLine("/etc/machine-id", maxMachineIDBytes); machineID != "" {
+	if machineID := readFirstLineFunc("/etc/machine-id", maxMachineIDBytes); machineID != "" {
 		builder.WriteString(machineID)
 		logDebug(logger, "Identity: buildSystemData: machine-id source=/etc/machine-id len=%d", len(machineID))
-	} else if machineID := readFirstLine("/var/lib/dbus/machine-id", maxMachineIDBytes); machineID != "" {
+	} else if machineID := readFirstLineFunc("/var/lib/dbus/machine-id", maxMachineIDBytes); machineID != "" {
 		builder.WriteString(machineID)
 		logDebug(logger, "Identity: buildSystemData: machine-id source=/var/lib/dbus/machine-id len=%d", len(machineID))
 	} else {
@@ -233,7 +438,7 @@ func buildSystemData(macs []string, logger *logging.Logger) string {
 		logDebug(logger, "Identity: buildSystemData: no MAC addresses detected")
 	}
 
-	hostname, err := os.Hostname()
+	hostname, err := hostnameFunc()
 	if err == nil && hostname != "" {
 		builder.WriteString(hostname)
 		logDebug(logger, "Identity: buildSystemData: hostname=%q len=%d", hostname, len(hostname))
@@ -241,14 +446,14 @@ func buildSystemData(macs []string, logger *logging.Logger) string {
 		logDebug(logger, "Identity: buildSystemData: hostname unavailable (err=%v)", err)
 	}
 
-	if uuid := readFirstLine("/sys/class/dmi/id/product_uuid", maxMachineIDBytes); uuid != "" {
+	if uuid := readFirstLineFunc("/sys/class/dmi/id/product_uuid", maxMachineIDBytes); uuid != "" {
 		builder.WriteString(uuid)
 		logDebug(logger, "Identity: buildSystemData: product_uuid present len=%d", len(uuid))
 	} else {
 		logDebug(logger, "Identity: buildSystemData: product_uuid missing")
 	}
 
-	if version := readFirstLine("/proc/version", maxProcVersionBytes); version != "" {
+	if version := readFirstLineFunc("/proc/version", maxProcVersionBytes); version != "" {
 		builder.WriteString(version)
 		logDebug(logger, "Identity: buildSystemData: /proc/version present len=%d", len(version))
 	} else {
@@ -265,19 +470,24 @@ func buildSystemData(macs []string, logger *logging.Logger) string {
 }
 
 func encodeProtectedServerID(serverID, primaryMAC string, logger *logging.Logger) (string, error) {
+	return encodeProtectedServerIDWithMACs(serverID, []string{primaryMAC}, primaryMAC, logger)
+}
+
+func encodeProtectedServerIDWithMACs(serverID string, macs []string, primaryMAC string, logger *logging.Logger) (string, error) {
 	logDebug(logger, "Identity: encodeProtectedServerID: start (serverID=%s primaryMAC=%s)", serverID, primaryMAC)
-	systemKey := generateSystemKey(primaryMAC, logger)
+	keyField := buildIdentityKeyField(macs, primaryMAC, logger)
 	timestamp := time.Now().Unix()
-	data := fmt.Sprintf("%s:%d:%s", serverID, timestamp, systemKey[:systemKeyPrefixLength])
+	data := fmt.Sprintf("%s:%d:%s", serverID, timestamp, keyField)
 	checksum := sha256.Sum256([]byte(data))
 	finalData := fmt.Sprintf("%s:%s", data, fmt.Sprintf("%x", checksum)[:systemKeyPrefixLength])
 	encoded := base64.StdEncoding.EncodeToString([]byte(finalData))
-	logDebug(logger, "Identity: encodeProtectedServerID: timestamp=%d keyPrefix=%s checksumPrefix=%s payloadLen=%d b64Len=%d", timestamp, systemKey[:systemKeyPrefixLength], fmt.Sprintf("%x", checksum)[:systemKeyPrefixLength], len(finalData), len(encoded))
+	logDebug(logger, "Identity: encodeProtectedServerID: timestamp=%d keyFieldLen=%d checksumPrefix=%s payloadLen=%d b64Len=%d", timestamp, len(keyField), fmt.Sprintf("%x", checksum)[:systemKeyPrefixLength], len(finalData), len(encoded))
 
 	var builder strings.Builder
 	builder.WriteString("# ProxSave Backup System Configuration\n")
 	builder.WriteString(fmt.Sprintf("# Generated: %s\n", time.Now().Format(time.RFC3339)))
 	builder.WriteString("# DO NOT MODIFY THIS FILE MANUALLY\n")
+	builder.WriteString("# Format: proxsave-identity-v2\n")
 	builder.WriteString(fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", encoded))
 	builder.WriteString("# End of configuration\n")
 
@@ -286,7 +496,7 @@ func encodeProtectedServerID(serverID, primaryMAC string, logger *logging.Logger
 	return content, nil
 }
 
-func decodeProtectedServerID(fileContent, primaryMAC string, logger *logging.Logger) (string, error) {
+func decodeProtectedServerID(fileContent, primaryMAC string, logger *logging.Logger) (string, bool, error) {
 	logDebug(logger, "Identity: decodeProtectedServerID: start (primaryMAC=%s fileBytes=%d)", primaryMAC, len(fileContent))
 
 	scanner := bufio.NewScanner(strings.NewReader(fileContent))
@@ -306,89 +516,290 @@ func decodeProtectedServerID(fileContent, primaryMAC string, logger *logging.Log
 	}
 	if encoded == "" {
 		logDebug(logger, "Identity: decodeProtectedServerID: SYSTEM_CONFIG_DATA not found")
-		return "", fmt.Errorf("identity data not found")
+		return "", false, fmt.Errorf("identity data not found")
 	}
 
 	decodedBytes, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		logDebug(logger, "Identity: decodeProtectedServerID: base64 decode failed: %v", err)
-		return "", fmt.Errorf("invalid encoded identity data: %w", err)
+		return "", false, fmt.Errorf("invalid encoded identity data: %w", err)
 	}
 	logDebug(logger, "Identity: decodeProtectedServerID: decoded payload bytes=%d", len(decodedBytes))
 
 	parts := strings.Split(string(decodedBytes), ":")
 	logDebug(logger, "Identity: decodeProtectedServerID: payload parts=%d", len(parts))
 	if len(parts) != 4 {
-		return "", fmt.Errorf("invalid identity payload format")
+		return "", false, fmt.Errorf("invalid identity payload format")
 	}
 
-	serverID, timestamp, systemKey, checksum := parts[0], parts[1], parts[2], parts[3]
-	logDebug(logger, "Identity: decodeProtectedServerID: parsed serverID=%q ts=%q keyPrefix=%q checksumPrefix=%q", serverID, timestamp, systemKey, checksum)
-	data := fmt.Sprintf("%s:%s:%s", serverID, timestamp, systemKey)
+	serverID, timestamp, keyField, checksum := parts[0], parts[1], parts[2], parts[3]
+	logDebug(logger, "Identity: decodeProtectedServerID: parsed serverID=%q ts=%q keyFieldLen=%d checksumPrefix=%q", serverID, timestamp, len(keyField), checksum)
+	data := fmt.Sprintf("%s:%s:%s", serverID, timestamp, keyField)
 	expectedChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(data)))[:systemKeyPrefixLength]
 	if checksum != expectedChecksum {
 		logDebug(logger, "Identity: decodeProtectedServerID: checksum mismatch (stored=%s expected=%s)", checksum, expectedChecksum)
-		return "", fmt.Errorf("identity checksum mismatch")
+		return "", false, fmt.Errorf("identity checksum mismatch")
 	}
 	logDebug(logger, "Identity: decodeProtectedServerID: checksum ok (%s)", expectedChecksum)
 
-	currentKey := generateSystemKey(primaryMAC, logger)
-	if len(systemKey) > len(currentKey) {
-		logDebug(logger, "Identity: decodeProtectedServerID: trimming stored keyPrefix from %d to %d", len(systemKey), len(currentKey))
-		systemKey = systemKey[:len(currentKey)]
+	storedPrefixes := parseKeyFieldPrefixes(keyField)
+	currentPrefixes := computeCurrentIdentityKeyPrefixes(primaryMAC, logger)
+
+	macPrefixes := computeCurrentMACKeyPrefixes(primaryMAC, logger)
+
+	matched := false
+	matchedByMAC := false
+	for _, prefix := range storedPrefixes {
+		if prefix == "" {
+			continue
+		}
+		if currentPrefixes[prefix] {
+			matched = true
+			if macPrefixes[prefix] {
+				matchedByMAC = true
+			}
+			break
+		}
 	}
-	if systemKey != currentKey[:len(systemKey)] {
-		logDebug(logger, "Identity: decodeProtectedServerID: system key mismatch (stored=%s current=%s)", systemKey, currentKey[:len(systemKey)])
-		return "", fmt.Errorf("identity file does not belong to this host")
+	if !matched {
+		logDebug(logger, "Identity: decodeProtectedServerID: no matching identity key prefix found")
+		return "", false, fmt.Errorf("identity file does not belong to this host")
 	}
-	logDebug(logger, "Identity: decodeProtectedServerID: system key ok (prefixLen=%d)", len(systemKey))
 
 	if len(serverID) != serverIDLength || !isAllDigits(serverID) {
 		logDebug(logger, "Identity: decodeProtectedServerID: invalid server ID format (len=%d digits=%v)", len(serverID), isAllDigits(serverID))
-		return "", fmt.Errorf("invalid server ID format")
+		return "", false, fmt.Errorf("invalid server ID format")
 	}
 	logDebug(logger, "Identity: decodeProtectedServerID: server ID format ok (len=%d)", len(serverID))
-	return serverID, nil
+	return serverID, matchedByMAC, nil
 }
 
 func generateSystemKey(primaryMAC string, logger *logging.Logger) string {
-	var builder strings.Builder
+	machineID := readMachineID(logger)
+	hostnamePart := readHostnamePart(logger)
 
-	machineID := readFirstLine("/etc/machine-id", maxMachineIDBytes)
+	macPart := strings.ReplaceAll(primaryMAC, ":", "")
+	key := computeSystemKey(machineID, hostnamePart, macPart)
+	logDebug(logger, "Identity: generateSystemKey: systemKey=%s", key)
+	return key
+}
+
+func buildIdentityKeyField(macs []string, primaryMAC string, logger *logging.Logger) string {
+	machineID := readMachineID(logger)
+	hostnamePart := readHostnamePart(logger)
+	primaryMAC = normalizeMAC(primaryMAC)
+
+	uuid := strings.TrimSpace(readFirstLineFunc("/sys/class/dmi/id/product_uuid", maxMachineIDBytes))
+
+	uniqueMACs := make(map[string]struct{}, len(macs)+1)
+	orderedMACs := make([]string, 0, len(macs)+1)
+	if primaryMAC != "" {
+		uniqueMACs[primaryMAC] = struct{}{}
+		orderedMACs = append(orderedMACs, primaryMAC)
+	}
+	for _, mac := range macs {
+		mac = normalizeMAC(mac)
+		if mac == "" {
+			continue
+		}
+		if _, ok := uniqueMACs[mac]; ok {
+			continue
+		}
+		uniqueMACs[mac] = struct{}{}
+		orderedMACs = append(orderedMACs, mac)
+	}
+	if len(orderedMACs) > 1 {
+		sort.Strings(orderedMACs[1:])
+	}
+
+	entries := make([]string, 0, len(orderedMACs)*2+4)
+	altIndex := 1
+	for _, mac := range orderedMACs {
+		macPart := strings.ReplaceAll(mac, ":", "")
+		prefix := computeSystemKey(machineID, hostnamePart, macPart)[:systemKeyPrefixLength]
+		prefixNoHost := computeSystemKey(machineID, "", macPart)[:systemKeyPrefixLength]
+
+		if primaryMAC != "" && mac == primaryMAC {
+			entries = append(entries, "mac="+prefix, "mac_nohost="+prefixNoHost)
+			continue
+		}
+		entries = append(
+			entries,
+			fmt.Sprintf("mac_alt%d=%s", altIndex, prefix),
+			fmt.Sprintf("mac_alt%d_nohost=%s", altIndex, prefixNoHost),
+		)
+		altIndex++
+	}
+
+	if uuid != "" {
+		uuidPrefix := computeSystemKey(machineID, hostnamePart, uuid)[:systemKeyPrefixLength]
+		uuidNoHostPrefix := computeSystemKey(machineID, "", uuid)[:systemKeyPrefixLength]
+		entries = append(entries, "uuid="+uuidPrefix, "uuid_nohost="+uuidNoHostPrefix)
+	}
+
+	seen := make(map[string]struct{}, len(entries))
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		label := strings.TrimSpace(parts[0])
+		prefix := strings.TrimSpace(parts[1])
+		if label == "" || prefix == "" {
+			continue
+		}
+		key := label + "=" + prefix
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+
+	return strings.Join(out, ",")
+}
+
+func parseKeyFieldPrefixes(keyField string) []string {
+	keyField = strings.TrimSpace(keyField)
+	if keyField == "" {
+		return nil
+	}
+	tokens := strings.Split(keyField, ",")
+	out := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		if idx := strings.IndexByte(token, '='); idx >= 0 {
+			token = strings.TrimSpace(token[idx+1:])
+		}
+		out = append(out, token)
+	}
+	return out
+}
+
+func computeCurrentIdentityKeyPrefixes(primaryMAC string, logger *logging.Logger) map[string]bool {
+	machineID := readMachineID(logger)
+	hostnamePart := readHostnamePart(logger)
+	uuid := strings.TrimSpace(readFirstLineFunc("/sys/class/dmi/id/product_uuid", maxMachineIDBytes))
+
+	primaryMAC = normalizeMAC(primaryMAC)
+	macPart := strings.ReplaceAll(primaryMAC, ":", "")
+
+	out := make(map[string]bool, 4)
+	if macPart != "" {
+		out[computeSystemKey(machineID, hostnamePart, macPart)[:systemKeyPrefixLength]] = true
+		out[computeSystemKey(machineID, "", macPart)[:systemKeyPrefixLength]] = true
+	}
+
+	if uuid != "" {
+		out[computeSystemKey(machineID, hostnamePart, uuid)[:systemKeyPrefixLength]] = true
+		out[computeSystemKey(machineID, "", uuid)[:systemKeyPrefixLength]] = true
+	}
+
+	return out
+}
+
+func computeCurrentMACKeyPrefixes(primaryMAC string, logger *logging.Logger) map[string]bool {
+	machineID := readMachineID(logger)
+	hostnamePart := readHostnamePart(logger)
+	primaryMAC = normalizeMAC(primaryMAC)
+	macPart := strings.ReplaceAll(primaryMAC, ":", "")
+
+	out := make(map[string]bool, 2)
+	if macPart != "" {
+		out[computeSystemKey(machineID, hostnamePart, macPart)[:systemKeyPrefixLength]] = true
+		out[computeSystemKey(machineID, "", macPart)[:systemKeyPrefixLength]] = true
+	}
+	return out
+}
+
+func readMachineID(logger *logging.Logger) string {
+	machineID := readFirstLineFunc("/etc/machine-id", maxMachineIDBytes)
 	machineIDSource := "/etc/machine-id"
 	if machineID == "" {
-		machineID = readFirstLine("/var/lib/dbus/machine-id", maxMachineIDBytes)
+		machineID = readFirstLineFunc("/var/lib/dbus/machine-id", maxMachineIDBytes)
 		machineIDSource = "/var/lib/dbus/machine-id"
 	}
 	if machineID != "" {
-		builder.WriteString(machineID)
-		logDebug(logger, "Identity: generateSystemKey: machine-id source=%s len=%d", machineIDSource, len(machineID))
+		logDebug(logger, "Identity: machine-id source=%s len=%d", machineIDSource, len(machineID))
 	} else {
-		logDebug(logger, "Identity: generateSystemKey: machine-id missing")
+		logDebug(logger, "Identity: machine-id missing")
 	}
+	return machineID
+}
 
-	hostname, err := os.Hostname()
-	if err == nil && hostname != "" {
-		hostnamePart := hostname
-		if len(hostnamePart) > 8 {
-			hostnamePart = hostnamePart[:8]
+func readHostnamePart(logger *logging.Logger) string {
+	hostname, err := hostnameFunc()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		logDebug(logger, "Identity: hostname missing (err=%v)", err)
+		return ""
+	}
+	hostnamePart := hostname
+	if len(hostnamePart) > 8 {
+		hostnamePart = hostnamePart[:8]
+	}
+	logDebug(logger, "Identity: hostnamePart=%q len=%d (origLen=%d)", hostnamePart, len(hostnamePart), len(hostname))
+	return hostnamePart
+}
+
+func computeSystemKey(machineID, hostnamePart, extra string) string {
+	sum := sha256.Sum256([]byte(machineID + hostnamePart + extra))
+	return fmt.Sprintf("%x", sum)[:16]
+}
+
+func maybeUpgradeIdentityFile(path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if identityPayloadHasKeyLabels(string(data), logger) {
+		return
+	}
+	updated, err := encodeProtectedServerIDWithMACs(serverID, macs, primaryMAC, logger)
+	if err != nil {
+		return
+	}
+	if err := writeIdentityFile(path, updated, logger); err != nil {
+		logDebug(logger, "Identity: failed to upgrade identity file format: %v", err)
+	}
+}
+
+func normalizeMAC(mac string) string {
+	mac = strings.TrimSpace(strings.ToLower(mac))
+	if mac == "" {
+		return ""
+	}
+	if hw, err := net.ParseMAC(mac); err == nil {
+		return strings.ToLower(hw.String())
+	}
+	return mac
+}
+
+func identityPayloadHasKeyLabels(fileContent string, logger *logging.Logger) bool {
+	scanner := bufio.NewScanner(strings.NewReader(fileContent))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "SYSTEM_CONFIG_DATA=") {
+			continue
 		}
-		builder.WriteString(hostnamePart)
-		logDebug(logger, "Identity: generateSystemKey: hostnamePart=%q len=%d (origLen=%d)", hostnamePart, len(hostnamePart), len(hostname))
-	} else {
-		logDebug(logger, "Identity: generateSystemKey: hostname missing (err=%v)", err)
+		encoded := strings.Trim(line[len("SYSTEM_CONFIG_DATA="):], "\"")
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return false
+		}
+		parts := strings.Split(string(raw), ":")
+		if len(parts) != 4 {
+			return false
+		}
+		return strings.Contains(parts[2], "=")
 	}
-
-	macPart := strings.ReplaceAll(primaryMAC, ":", "")
-	builder.WriteString(macPart)
-	logDebug(logger, "Identity: generateSystemKey: macPart=%q len=%d", macPart, len(macPart))
-
-	materialLen := builder.Len()
-	sum := sha256.Sum256([]byte(builder.String()))
-	sumHex := fmt.Sprintf("%x", sum)
-	systemKey := sumHex[:16]
-	logDebug(logger, "Identity: generateSystemKey: materialLen=%d sha256=%s systemKey=%s", materialLen, sumHex, systemKey)
-	return systemKey
+	if err := scanner.Err(); err != nil {
+		logDebug(logger, "Identity: identityPayloadHasKeyLabels scanner error: %v", err)
+	}
+	return false
 }
 
 func writeIdentityFile(path, content string, logger *logging.Logger) error {
