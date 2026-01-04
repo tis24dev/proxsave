@@ -2,12 +2,14 @@ package identity
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -22,24 +24,96 @@ func TestEncodeDecodeProtectedServerIDRoundTrip(t *testing.T) {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
 
-	decoded, err := decodeProtectedServerID(content, mac, nil)
+	decoded, matchedByMAC, err := decodeProtectedServerID(content, mac, nil)
 	if err != nil {
 		t.Fatalf("decodeProtectedServerID() error = %v\ncontent:\n%s", err, content)
 	}
 	if decoded != serverID {
 		t.Fatalf("decoded server ID = %s, want %s", decoded, serverID)
 	}
+	if !matchedByMAC {
+		t.Fatalf("expected decode to match by MAC for round trip")
+	}
 }
 
-func TestDecodeProtectedServerIDRejectsDifferentHost(t *testing.T) {
+func TestDecodeProtectedServerIDAcceptsDifferentMACOnSameHost(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "host-one", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-one"
+		case "/sys/class/dmi/id/product_uuid":
+			return "uuid-one"
+		default:
+			return ""
+		}
+	}
+
 	const serverID = "1111222233334444"
 	content, err := encodeProtectedServerID(serverID, "aa:bb:cc:dd:ee:ff", nil)
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
 
-	if _, err := decodeProtectedServerID(content, "00:11:22:33:44:55", nil); err == nil {
-		t.Fatalf("expected mismatch error when decoding with different MAC")
+	decoded, matchedByMAC, err := decodeProtectedServerID(content, "00:11:22:33:44:55", nil)
+	if err != nil {
+		t.Fatalf("expected decode to succeed with different MAC on same host, got %v", err)
+	}
+	if decoded != serverID {
+		t.Fatalf("decoded server ID = %s, want %s", decoded, serverID)
+	}
+	if matchedByMAC {
+		t.Fatalf("expected decode not to match by MAC when using different MAC")
+	}
+}
+
+func TestDecodeProtectedServerIDRejectsDifferentHost(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "host-one", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-one"
+		case "/sys/class/dmi/id/product_uuid":
+			return "uuid-one"
+		default:
+			return ""
+		}
+	}
+
+	const serverID = "1111222233334444"
+	content, err := encodeProtectedServerID(serverID, "aa:bb:cc:dd:ee:ff", nil)
+	if err != nil {
+		t.Fatalf("encodeProtectedServerID() error = %v", err)
+	}
+
+	hostnameFunc = func() (string, error) { return "host-two", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-two"
+		case "/sys/class/dmi/id/product_uuid":
+			return "uuid-two"
+		default:
+			return ""
+		}
+	}
+
+	if _, _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
+		t.Fatalf("expected mismatch error when decoding as different host")
 	}
 }
 
@@ -80,7 +154,7 @@ func TestDecodeProtectedServerIDDetectsCorruptedData(t *testing.T) {
 
 	// Corrupt the checksum line.
 	corrupted := strings.Replace(content, "SYSTEM_CONFIG_DATA=\"", "SYSTEM_CONFIG_DATA=\"corrupt", 1)
-	if _, err := decodeProtectedServerID(corrupted, mac, nil); err == nil {
+	if _, _, err := decodeProtectedServerID(corrupted, mac, nil); err == nil {
 		t.Fatalf("expected checksum mismatch error after corrupting content")
 	}
 }
@@ -176,9 +250,9 @@ func TestLoadServerIDTriesAllMACAddresses(t *testing.T) {
 	const boundMAC = "aa:bb:cc:dd:ee:ff"
 	const nonMatchingMAC = "00:11:22:33:44:55"
 
-	content, err := encodeProtectedServerID(serverID, boundMAC, nil)
+	content, err := encodeProtectedServerIDLegacy(serverID, boundMAC)
 	if err != nil {
-		t.Fatalf("encodeProtectedServerID() error = %v", err)
+		t.Fatalf("encodeProtectedServerIDLegacy() error = %v", err)
 	}
 	if err := os.WriteFile(identityPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("failed to write identity file: %v", err)
@@ -315,14 +389,14 @@ func TestCollectMACAddressesSortedAndUnique(t *testing.T) {
 
 func TestDecodeProtectedServerIDMissingConfigLine(t *testing.T) {
 	content := "# no SYSTEM_CONFIG_DATA here\n"
-	if _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
+	if _, _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
 		t.Fatalf("expected error for missing SYSTEM_CONFIG_DATA line")
 	}
 }
 
 func TestDecodeProtectedServerIDInvalidBase64(t *testing.T) {
 	content := "SYSTEM_CONFIG_DATA=\"!!!not-base64!!!\"\n"
-	if _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
+	if _, _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
 		t.Fatalf("expected error for invalid base64 payload")
 	}
 }
@@ -332,7 +406,7 @@ func TestDecodeProtectedServerIDInvalidPayloadFormat(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte(payload))
 	content := fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", encoded)
 
-	if _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
+	if _, _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
 		t.Fatalf("expected error for invalid payload format")
 	}
 }
@@ -343,12 +417,31 @@ func TestDecodeProtectedServerIDInvalidServerIDFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
-	if _, err := decodeProtectedServerID(content, mac, nil); err == nil {
+	if _, _, err := decodeProtectedServerID(content, mac, nil); err == nil {
 		t.Fatalf("expected error for non-digit serverID")
 	}
 }
 
 func TestLoadServerIDWithEmptyMACSlice(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "host-one", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-one"
+		case "/sys/class/dmi/id/product_uuid":
+			return "uuid-one"
+		default:
+			return ""
+		}
+	}
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "identity.conf")
 
@@ -378,9 +471,9 @@ func TestLoadServerIDFailsAllMACs(t *testing.T) {
 	path := filepath.Join(dir, "identity.conf")
 
 	const boundMAC = "aa:bb:cc:dd:ee:ff"
-	content, err := encodeProtectedServerID("1234567890123456", boundMAC, nil)
+	content, err := encodeProtectedServerIDLegacy("1234567890123456", boundMAC)
 	if err != nil {
-		t.Fatalf("encodeProtectedServerID() error = %v", err)
+		t.Fatalf("encodeProtectedServerIDLegacy() error = %v", err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("failed to write file: %v", err)
@@ -391,4 +484,208 @@ func TestLoadServerIDFailsAllMACs(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when all MACs fail")
 	}
+}
+
+func encodeProtectedServerIDLegacy(serverID, primaryMAC string) (string, error) {
+	systemKey := generateSystemKey(primaryMAC, nil)
+	timestamp := time.Unix(1700000000, 0).Unix()
+	data := fmt.Sprintf("%s:%d:%s", serverID, timestamp, systemKey[:systemKeyPrefixLength])
+	checksum := sha256.Sum256([]byte(data))
+	finalData := fmt.Sprintf("%s:%s", data, fmt.Sprintf("%x", checksum)[:systemKeyPrefixLength])
+	encoded := base64.StdEncoding.EncodeToString([]byte(finalData))
+	return fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", encoded), nil
+}
+
+func TestSelectPreferredMACPreferenceOrder(t *testing.T) {
+	tests := []struct {
+		name      string
+		cands     []macCandidate
+		wantIface string
+		wantMAC   string
+	}{
+		{
+			name: "wired beats vmbr and wireless",
+			cands: []macCandidate{
+				{Iface: "wlp3s0", MAC: "58:1c:f8:11:57:92", IsWireless: true},
+				{Iface: "vmbr0", MAC: "a4:bb:6d:a2:16:b4", IsBridge: true},
+				{Iface: "eno1", MAC: "a4:bb:6d:a2:16:b4"},
+			},
+			wantIface: "eno1",
+			wantMAC:   "a4:bb:6d:a2:16:b4",
+		},
+		{
+			name: "vmbr beats bridge and wireless",
+			cands: []macCandidate{
+				{Iface: "wlp3s0", MAC: "58:1c:f8:11:57:92", IsWireless: true},
+				{Iface: "br0", MAC: "00:11:22:33:44:55", IsBridge: true},
+				{Iface: "vmbr0", MAC: "a4:bb:6d:a2:16:b4", IsBridge: true},
+			},
+			wantIface: "vmbr0",
+			wantMAC:   "a4:bb:6d:a2:16:b4",
+		},
+		{
+			name: "bridge beats wireless",
+			cands: []macCandidate{
+				{Iface: "wlp3s0", MAC: "58:1c:f8:11:57:92", IsWireless: true},
+				{Iface: "br0", MAC: "00:11:22:33:44:55", IsBridge: true},
+			},
+			wantIface: "br0",
+			wantMAC:   "00:11:22:33:44:55",
+		},
+		{
+			name: "wireless beats other",
+			cands: []macCandidate{
+				{Iface: "lo0", MAC: "00:00:00:00:00:00"},
+				{Iface: "wlp3s0", MAC: "58:1c:f8:11:57:92", IsWireless: true},
+				{Iface: "dummy0", MAC: "00:11:22:33:44:55", IsVirtual: true},
+			},
+			wantIface: "wlp3s0",
+			wantMAC:   "58:1c:f8:11:57:92",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMAC, gotIface := selectPreferredMAC(tt.cands)
+			if gotMAC != tt.wantMAC || gotIface != tt.wantIface {
+				t.Fatalf("selectPreferredMAC() = (%q, %q), want (%q, %q)", gotMAC, gotIface, tt.wantMAC, tt.wantIface)
+			}
+		})
+	}
+}
+
+func TestDecodeProtectedServerIDMatchesAlternateMACWhenUUIDMissing(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "host-one", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-one"
+		case "/sys/class/dmi/id/product_uuid":
+			return ""
+		default:
+			return ""
+		}
+	}
+
+	const serverID = "1111222233334444"
+	const macPrimary = "aa:bb:cc:dd:ee:ff"
+	const macAlt = "00:11:22:33:44:55"
+
+	content, err := encodeProtectedServerIDWithMACs(serverID, []string{macPrimary, macAlt}, macPrimary, nil)
+	if err != nil {
+		t.Fatalf("encodeProtectedServerIDWithMACs() error = %v", err)
+	}
+
+	decoded, matchedByMAC, err := decodeProtectedServerID(content, macAlt, nil)
+	if err != nil {
+		t.Fatalf("decodeProtectedServerID() error = %v", err)
+	}
+	if decoded != serverID {
+		t.Fatalf("decoded server ID = %s, want %s", decoded, serverID)
+	}
+	if !matchedByMAC {
+		t.Fatalf("expected decode to match by MAC for alternate MAC")
+	}
+
+	if _, _, err := decodeProtectedServerID(content, "de:ad:be:ef:00:01", nil); err == nil {
+		t.Fatalf("expected decode to fail for unknown MAC when uuid is missing")
+	}
+}
+
+func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "host-one", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-one"
+		case "/sys/class/dmi/id/product_uuid":
+			return ""
+		default:
+			return ""
+		}
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity.conf")
+
+	t.Cleanup(func() {
+		_ = setImmutableAttribute(path, false, nil)
+	})
+
+	const serverID = "1111222233334444"
+	const macPrimary = "aa:bb:cc:dd:ee:ff"
+	const macAlt = "00:11:22:33:44:55"
+
+	legacy, err := encodeProtectedServerIDLegacy(serverID, macPrimary)
+	if err != nil {
+		t.Fatalf("encodeProtectedServerIDLegacy() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("failed to write legacy identity file: %v", err)
+	}
+
+	maybeUpgradeIdentityFile(path, serverID, macPrimary, []string{macPrimary, macAlt}, nil)
+
+	upgraded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read upgraded identity file: %v", err)
+	}
+	upgradedContent := string(upgraded)
+	if !strings.Contains(upgradedContent, "# Format: proxsave-identity-v2") {
+		t.Fatalf("expected upgraded identity file to contain v2 header")
+	}
+	if !identityPayloadHasKeyLabels(upgradedContent, nil) {
+		t.Fatalf("expected upgraded identity payload to contain key labels")
+	}
+
+	keyField := extractIdentityKeyField(t, upgradedContent)
+	if !strings.Contains(keyField, "mac=") {
+		t.Fatalf("expected key field to contain mac= entry, got %q", keyField)
+	}
+	if !strings.Contains(keyField, "mac_alt1=") {
+		t.Fatalf("expected key field to contain mac_alt1= entry, got %q", keyField)
+	}
+
+	if _, matchedByMAC, err := decodeProtectedServerID(upgradedContent, macAlt, nil); err != nil || !matchedByMAC {
+		t.Fatalf("expected upgraded identity to decode via alternate MAC (err=%v matchedByMAC=%v)", err, matchedByMAC)
+	}
+}
+
+func extractIdentityKeyField(t *testing.T, fileContent string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(fileContent, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "SYSTEM_CONFIG_DATA=") {
+			continue
+		}
+
+		encoded := strings.Trim(line[len("SYSTEM_CONFIG_DATA="):], "\"")
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			t.Fatalf("failed to decode SYSTEM_CONFIG_DATA: %v", err)
+		}
+		parts := strings.Split(string(raw), ":")
+		if len(parts) != 4 {
+			t.Fatalf("unexpected payload parts=%d", len(parts))
+		}
+		return parts[2]
+	}
+
+	t.Fatalf("SYSTEM_CONFIG_DATA line not found")
+	return ""
 }
