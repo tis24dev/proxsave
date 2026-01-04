@@ -32,6 +32,7 @@ var (
 	servicePollInterval       = 500 * time.Millisecond
 	serviceRetryDelay         = 500 * time.Millisecond
 	restoreLogSequence        uint64
+	restoreGlob               = filepath.Glob
 )
 
 func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) error {
@@ -679,7 +680,7 @@ func detectConfiguredZFSPools() []string {
 	}
 
 	for _, pattern := range globPatterns {
-		matches, err := filepath.Glob(pattern)
+		matches, err := restoreGlob(pattern)
 		if err != nil {
 			continue
 		}
