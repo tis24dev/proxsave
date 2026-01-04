@@ -78,13 +78,3 @@ Thank you so much!
 ## Repo Activity
 
 ![Alt](https://repobeats.axiom.co/api/embed/53ea60503d80f77590f52ac0e983b2b8af47e20a.svg "Repobeats analytics image")
-
-## Star History
-
-<a href="https://www.star-history.com/#tis24dev/proxsave&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tis24dev/proxsave&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tis24dev/proxsave&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tis24dev/proxsave&type=date&legend=top-left" />
- </picture>
-</a>
