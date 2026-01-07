@@ -498,3 +498,597 @@ mon_host = 10.0.0.1`
 	// May return false or true depending on system state, just verify no panic
 	_ = result2
 }
+
+// TestHasCorosyncClusterConfigDetailed tests corosync cluster configuration detection
+func TestHasCorosyncClusterConfigDetailed(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		expected bool
+	}{
+		{
+			name: "config with cluster_name",
+			content: `totem {
+    cluster_name: testcluster
+}`,
+			expected: true,
+		},
+		{
+			name: "config with nodelist",
+			content: `nodelist {
+    node {
+        ring0_addr: 10.0.0.1
+        name: pve1
+    }
+}`,
+			expected: true,
+		},
+		{
+			name: "config with ring0_addr",
+			content: `totem {
+    interface {
+        ring0_addr: 192.168.1.1
+    }
+}`,
+			expected: true,
+		},
+		{
+			name: "config without cluster keywords",
+			content: `[global]
+logging = debug`,
+			expected: false,
+		},
+		{
+			name:     "empty config",
+			content:  "",
+			expected: false,
+		},
+		{
+			name: "config with uppercase keywords",
+			content: `CLUSTER_NAME: uppercase
+NODELIST {
+}`,
+			expected: true, // Should match case-insensitively
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			pveDir := filepath.Join(tmpDir, "etc", "pve")
+			if err := os.MkdirAll(pveDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			corosyncConf := filepath.Join(pveDir, "corosync.conf")
+			if tt.content != "" {
+				if err := os.WriteFile(corosyncConf, []byte(tt.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			logger := newTestLogger()
+			cfg := GetDefaultCollectorConfig()
+			cfg.PVEConfigPath = pveDir
+			cfg.CorosyncConfigPath = "" // Use default based on PVEConfigPath
+			collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+			result := collector.hasCorosyncClusterConfig()
+			if result != tt.expected {
+				t.Errorf("hasCorosyncClusterConfig() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestHasCorosyncClusterConfigCustomPath tests custom corosync config path
+func TestHasCorosyncClusterConfigCustomPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	pveDir := filepath.Join(tmpDir, "etc", "pve")
+	if err := os.MkdirAll(pveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create custom corosync config in a different location
+	customPath := filepath.Join(tmpDir, "custom", "corosync.conf")
+	if err := os.MkdirAll(filepath.Dir(customPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(customPath, []byte("cluster_name: test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newTestLogger()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = pveDir
+	cfg.CorosyncConfigPath = customPath // Absolute path
+	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+	result := collector.hasCorosyncClusterConfig()
+	if !result {
+		t.Error("hasCorosyncClusterConfig() should return true with custom path")
+	}
+}
+
+// TestHasCorosyncClusterConfigRelativePath tests relative corosync config path
+func TestHasCorosyncClusterConfigRelativePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	pveDir := filepath.Join(tmpDir, "etc", "pve")
+	if err := os.MkdirAll(pveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create corosync config in a subdirectory
+	subDir := filepath.Join(pveDir, "cluster")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "corosync.conf"), []byte("cluster_name: test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newTestLogger()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = pveDir
+	cfg.CorosyncConfigPath = "cluster/corosync.conf" // Relative path
+	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+	result := collector.hasCorosyncClusterConfig()
+	if !result {
+		t.Error("hasCorosyncClusterConfig() should return true with relative path")
+	}
+}
+
+// TestIsClusteredPVE tests cluster detection
+func TestIsClusteredPVE(t *testing.T) {
+	t.Run("detects via corosync config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		if err := os.MkdirAll(pveDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create corosync config with cluster_name
+		if err := os.WriteFile(filepath.Join(pveDir, "corosync.conf"), []byte("cluster_name: test"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		cfg.CorosyncConfigPath = "" // Use default based on PVEConfigPath
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		// Since hasCorosyncClusterConfig should detect this, test it directly
+		if !collector.hasCorosyncClusterConfig() {
+			t.Error("hasCorosyncClusterConfig() should return true when corosync config exists")
+		}
+
+		// isClusteredPVE should detect cluster via corosync config
+		clustered, err := collector.isClusteredPVE(context.Background())
+		if err != nil {
+			t.Fatalf("isClusteredPVE error: %v", err)
+		}
+		if !clustered {
+			t.Error("isClusteredPVE() should return true when corosync config exists")
+		}
+	})
+
+	t.Run("detects via multiple nodes", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		nodesDir := filepath.Join(pveDir, "nodes")
+		if err := os.MkdirAll(filepath.Join(nodesDir, "pve1"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(nodesDir, "pve2"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		cfg.CorosyncConfigPath = ""
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		clustered, err := collector.isClusteredPVE(context.Background())
+		if err != nil {
+			t.Fatalf("isClusteredPVE error: %v", err)
+		}
+		if !clustered {
+			t.Error("isClusteredPVE() should return true with multiple nodes")
+		}
+	})
+
+	t.Run("returns false for standalone", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		nodesDir := filepath.Join(pveDir, "nodes", "single")
+		if err := os.MkdirAll(nodesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		cfg.CorosyncConfigPath = ""
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		clustered, err := collector.isClusteredPVE(context.Background())
+		if err != nil {
+			// pvecm might fail, which is expected
+			t.Logf("isClusteredPVE returned error (expected): %v", err)
+		}
+		if clustered {
+			t.Error("isClusteredPVE() should return false for standalone node")
+		}
+	})
+
+	t.Run("handles context cancellation", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		if err := os.MkdirAll(pveDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		cfg.CorosyncConfigPath = ""
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := collector.isClusteredPVE(ctx)
+		if err != context.Canceled {
+			t.Errorf("expected context.Canceled, got: %v", err)
+		}
+	})
+}
+
+// TestCollectPVEDirectoriesClusteredMode tests directory collection in cluster mode
+func TestCollectPVEDirectoriesClusteredMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	pveDir := filepath.Join(tmpDir, "etc", "pve")
+	if err := os.MkdirAll(pveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create corosync.conf
+	if err := os.WriteFile(filepath.Join(pveDir, "corosync.conf"), []byte("cluster_name: test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create cluster directory
+	clusterDir := filepath.Join(tmpDir, "var", "lib", "pve-cluster")
+	if err := os.MkdirAll(clusterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newTestLogger()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = pveDir
+	cfg.PVEClusterPath = clusterDir
+	cfg.BackupClusterConfig = true
+	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+	err := collector.collectPVEDirectories(context.Background(), true)
+	if err != nil {
+		t.Fatalf("collectPVEDirectories error: %v", err)
+	}
+}
+
+// TestCollectPVEDirectoriesFirewallAsDirectory tests firewall as directory
+func TestCollectPVEDirectoriesFirewallAsDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	pveDir := filepath.Join(tmpDir, "etc", "pve")
+	if err := os.MkdirAll(pveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create firewall as directory with rules
+	firewallDir := filepath.Join(pveDir, "firewall")
+	if err := os.MkdirAll(firewallDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(firewallDir, "cluster.fw"), []byte("RULES"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newTestLogger()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = pveDir
+	cfg.BackupPVEFirewall = true
+	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+	err := collector.collectPVEDirectories(context.Background(), false)
+	if err != nil {
+		t.Fatalf("collectPVEDirectories error: %v", err)
+	}
+}
+
+// TestCollectPVEDirectoriesFirewallAsFile tests firewall as single file
+func TestCollectPVEDirectoriesFirewallAsFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	pveDir := filepath.Join(tmpDir, "etc", "pve")
+	if err := os.MkdirAll(pveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create firewall as single file
+	if err := os.WriteFile(filepath.Join(pveDir, "firewall"), []byte("RULES"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newTestLogger()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = pveDir
+	cfg.BackupPVEFirewall = true
+	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+	err := collector.collectPVEDirectories(context.Background(), false)
+	if err != nil {
+		t.Fatalf("collectPVEDirectories error: %v", err)
+	}
+}
+
+// TestCollectPVEDirectoriesVZDumpConfig tests vzdump config collection
+func TestCollectPVEDirectoriesVZDumpConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	pveDir := filepath.Join(tmpDir, "etc", "pve")
+	if err := os.MkdirAll(pveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create vzdump.conf
+	vzdumpPath := filepath.Join(tmpDir, "etc", "vzdump.conf")
+	if err := os.MkdirAll(filepath.Dir(vzdumpPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vzdumpPath, []byte("compress: zstd"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newTestLogger()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = pveDir
+	cfg.BackupVZDumpConfig = true
+	cfg.VzdumpConfigPath = vzdumpPath
+	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+	err := collector.collectPVEDirectories(context.Background(), false)
+	if err != nil {
+		t.Fatalf("collectPVEDirectories error: %v", err)
+	}
+}
+
+// TestCollectPVEDirectoriesVZDumpRelativePath tests vzdump with relative path
+func TestCollectPVEDirectoriesVZDumpRelativePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	pveDir := filepath.Join(tmpDir, "etc", "pve")
+	if err := os.MkdirAll(pveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create vzdump.conf in pve directory with relative path
+	if err := os.WriteFile(filepath.Join(pveDir, "vzdump.conf"), []byte("compress: lzo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newTestLogger()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = pveDir
+	cfg.BackupVZDumpConfig = true
+	cfg.VzdumpConfigPath = "vzdump.conf" // Relative path
+	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+	err := collector.collectPVEDirectories(context.Background(), false)
+	if err != nil {
+		t.Fatalf("collectPVEDirectories error: %v", err)
+	}
+}
+
+// TestCollectPVEDirectoriesDisabledOptions tests with disabled options
+func TestCollectPVEDirectoriesDisabledOptions(t *testing.T) {
+	tmpDir := t.TempDir()
+	pveDir := filepath.Join(tmpDir, "etc", "pve")
+	if err := os.MkdirAll(pveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newTestLogger()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = pveDir
+	cfg.BackupClusterConfig = false
+	cfg.BackupPVEFirewall = false
+	cfg.BackupVZDumpConfig = false
+	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+	err := collector.collectPVEDirectories(context.Background(), false)
+	if err != nil {
+		t.Fatalf("collectPVEDirectories error: %v", err)
+	}
+}
+
+// TestCollectPVEDirectoriesWithConfigDB tests config.db handling
+func TestCollectPVEDirectoriesWithConfigDB(t *testing.T) {
+	tmpDir := t.TempDir()
+	pveDir := filepath.Join(tmpDir, "etc", "pve")
+	if err := os.MkdirAll(pveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create cluster directory with config.db
+	clusterDir := filepath.Join(tmpDir, "var", "lib", "pve-cluster")
+	if err := os.MkdirAll(clusterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(clusterDir, "config.db"), []byte("sqlite db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := newTestLogger()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = pveDir
+	cfg.PVEClusterPath = clusterDir
+	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+	err := collector.collectPVEDirectories(context.Background(), false)
+	if err != nil {
+		t.Fatalf("collectPVEDirectories error: %v", err)
+	}
+}
+
+// TestHasMultiplePVENodesDetailed tests multiple node detection
+func TestHasMultiplePVENodesDetailed(t *testing.T) {
+	t.Run("single node", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		nodesDir := filepath.Join(pveDir, "nodes")
+		if err := os.MkdirAll(filepath.Join(nodesDir, "node1"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		result := collector.hasMultiplePVENodes()
+		if result {
+			t.Error("hasMultiplePVENodes() should return false for single node")
+		}
+	})
+
+	t.Run("multiple nodes", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		nodesDir := filepath.Join(pveDir, "nodes")
+		if err := os.MkdirAll(filepath.Join(nodesDir, "node1"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(nodesDir, "node2"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		result := collector.hasMultiplePVENodes()
+		if !result {
+			t.Error("hasMultiplePVENodes() should return true for multiple nodes")
+		}
+	})
+
+	t.Run("empty nodes directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		nodesDir := filepath.Join(pveDir, "nodes")
+		if err := os.MkdirAll(nodesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		result := collector.hasMultiplePVENodes()
+		if result {
+			t.Error("hasMultiplePVENodes() should return false for empty nodes dir")
+		}
+	})
+
+	t.Run("nonexistent nodes directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		if err := os.MkdirAll(pveDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Note: nodes directory not created
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		result := collector.hasMultiplePVENodes()
+		if result {
+			t.Error("hasMultiplePVENodes() should return false for missing nodes dir")
+		}
+	})
+
+	t.Run("nodes dir contains files not directories", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		nodesDir := filepath.Join(pveDir, "nodes")
+		if err := os.MkdirAll(nodesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Create files instead of directories
+		if err := os.WriteFile(filepath.Join(nodesDir, "file1.txt"), []byte(""), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(nodesDir, "file2.txt"), []byte(""), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		result := collector.hasMultiplePVENodes()
+		if result {
+			t.Error("hasMultiplePVENodes() should return false when nodes contains only files")
+		}
+	})
+}
+
+// TestEffectivePVEConfigPathDetailed tests effective config path resolution
+func TestEffectivePVEConfigPathDetailed(t *testing.T) {
+	tests := []struct {
+		name       string
+		configPath string
+		expected   string
+	}{
+		{
+			name:       "custom absolute path",
+			configPath: "/custom/pve",
+			expected:   "/custom/pve",
+		},
+		{
+			name:       "empty path uses default",
+			configPath: "",
+			expected:   "/etc/pve",
+		},
+		{
+			name:       "whitespace only uses default",
+			configPath: "   ",
+			expected:   "/etc/pve",
+		},
+		{
+			name:       "path with whitespace gets trimmed",
+			configPath: "  /my/pve  ",
+			expected:   "/my/pve",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			logger := newTestLogger()
+			cfg := GetDefaultCollectorConfig()
+			cfg.PVEConfigPath = tt.configPath
+			collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+			result := collector.effectivePVEConfigPath()
+			if result != tt.expected {
+				t.Errorf("effectivePVEConfigPath() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}

@@ -336,6 +336,94 @@ func TestCollectVMConfigs(t *testing.T) {
 	}
 }
 
+// TestCollectVMConfigsComprehensive tests VM config collection edge cases
+func TestCollectVMConfigsComprehensive(t *testing.T) {
+	t.Run("collects qemu-server directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		qemuDir := filepath.Join(pveDir, "qemu-server")
+		if err := os.MkdirAll(qemuDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(qemuDir, "100.conf"), []byte("cores: 2"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		collector := NewCollector(logger, cfg, t.TempDir(), "pve", false)
+
+		err := collector.collectVMConfigs(context.Background())
+		if err != nil {
+			t.Fatalf("collectVMConfigs failed: %v", err)
+		}
+	})
+
+	t.Run("collects lxc directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		lxcDir := filepath.Join(pveDir, "lxc")
+		if err := os.MkdirAll(lxcDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lxcDir, "101.conf"), []byte("memory: 512"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		collector := NewCollector(logger, cfg, t.TempDir(), "pve", false)
+
+		err := collector.collectVMConfigs(context.Background())
+		if err != nil {
+			t.Fatalf("collectVMConfigs failed: %v", err)
+		}
+	})
+
+	t.Run("handles missing directories gracefully", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		if err := os.MkdirAll(pveDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Note: no qemu-server or lxc directories created
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		collector := NewCollector(logger, cfg, t.TempDir(), "pve", false)
+
+		err := collector.collectVMConfigs(context.Background())
+		if err != nil {
+			t.Fatalf("collectVMConfigs failed: %v", err)
+		}
+	})
+
+	t.Run("handles qemu-server as file not directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		if err := os.MkdirAll(pveDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Create qemu-server as file (not directory)
+		if err := os.WriteFile(filepath.Join(pveDir, "qemu-server"), []byte("not a dir"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		collector := NewCollector(logger, cfg, t.TempDir(), "pve", false)
+
+		err := collector.collectVMConfigs(context.Background())
+		if err != nil {
+			t.Fatalf("collectVMConfigs failed: %v", err)
+		}
+	})
+}
+
 // Test collectPVEDirectories function
 func TestCollectPVEDirectories(t *testing.T) {
 	collector := newPVECollector(t)
@@ -434,6 +522,87 @@ func TestCollectPVEJobs(t *testing.T) {
 	if err != nil {
 		t.Logf("collectPVEJobs returned error (expected in some envs): %v", err)
 	}
+}
+
+// TestCollectPVEJobsComprehensive tests various edge cases for collectPVEJobs
+func TestCollectPVEJobsComprehensive(t *testing.T) {
+	t.Run("skips empty and duplicate node names", func(t *testing.T) {
+		collector := newPVECollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				return []byte(`[]`), nil
+			},
+		})
+
+		ctx := context.Background()
+		// Include empty strings and duplicates
+		nodes := []string{"node1", "", "  ", "node1", "node2", "node2"}
+		err := collector.collectPVEJobs(ctx, nodes)
+		if err != nil {
+			t.Logf("collectPVEJobs returned error: %v", err)
+		}
+	})
+
+	t.Run("handles context cancellation", func(t *testing.T) {
+		collector := newPVECollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				return []byte(`[]`), nil
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := collector.collectPVEJobs(ctx, []string{"node1"})
+		if err != context.Canceled {
+			t.Errorf("expected context.Canceled, got: %v", err)
+		}
+	})
+
+	t.Run("copies vzdump cron if exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cronDir := filepath.Join(tmpDir, "etc", "cron.d")
+		if err := os.MkdirAll(cronDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cronDir, "vzdump"), []byte("0 3 * * * root vzdump"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.SystemRootPrefix = tmpDir
+		collector := NewCollector(logger, cfg, t.TempDir(), "pve", false)
+
+		ctx := context.Background()
+		err := collector.collectPVEJobs(ctx, []string{})
+		if err != nil {
+			t.Logf("collectPVEJobs returned error: %v", err)
+		}
+	})
+
+	t.Run("handles whitespace-padded node names", func(t *testing.T) {
+		collector := newPVECollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				return []byte(`[]`), nil
+			},
+		})
+
+		ctx := context.Background()
+		nodes := []string{"  node1  ", "  node2  "}
+		err := collector.collectPVEJobs(ctx, nodes)
+		if err != nil {
+			t.Logf("collectPVEJobs returned error: %v", err)
+		}
+	})
 }
 
 // Test collectPVESchedules function
