@@ -3,7 +3,10 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +18,201 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+const testAgeRecipient = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
+
+type testStorageTarget struct {
+	err   error
+	calls int
+}
+
+func (f *testStorageTarget) Sync(ctx context.Context, stats *BackupStats) error {
+	f.calls++
+	return f.err
+}
+
+func TestRunGoBackupEndToEnd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping end-to-end backup test in short mode")
+	}
+
+	logger := logging.New(types.LogLevelInfo, false)
+
+	backupDir := t.TempDir()
+	logDir := t.TempDir()
+
+	orch := New(logger, false)
+	orch.SetBackupConfig(backupDir, logDir, types.CompressionNone, 0, 0, "standard", nil)
+
+	checkerConfig := &checks.CheckerConfig{
+		BackupPath:         backupDir,
+		LogPath:            logDir,
+		LockDirPath:        filepath.Join(backupDir, "lock"),
+		MinDiskPrimaryGB:   0.001,
+		MinDiskSecondaryGB: 0,
+		MinDiskCloudGB:     0,
+		SafetyFactor:       1.0,
+		LockFilePath:       filepath.Join(backupDir, "lock", ".backup.lock"),
+		MaxLockAge:         time.Hour,
+	}
+	if err := checkerConfig.Validate(); err != nil {
+		t.Fatalf("checker config validation failed: %v", err)
+	}
+	checker := checks.NewChecker(logger, checkerConfig)
+	orch.SetChecker(checker)
+
+	ctx := context.Background()
+	stats, err := orch.RunGoBackup(ctx, types.ProxmoxUnknown, "test-host")
+	if err != nil {
+		t.Fatalf("RunGoBackup failed: %v", err)
+	}
+
+	if stats.ArchivePath == "" {
+		t.Fatal("ArchivePath should not be empty")
+	}
+	if _, err := os.Stat(stats.ArchivePath); err != nil {
+		t.Fatalf("Expected archive to exist: %v", err)
+	}
+
+	if err := orch.SaveStatsReport(stats); err != nil {
+		t.Fatalf("SaveStatsReport failed: %v", err)
+	}
+
+	if stats.ReportPath == "" {
+		t.Fatal("ReportPath should not be empty")
+	}
+	if _, err := os.Stat(stats.ReportPath); err != nil {
+		t.Fatalf("Expected stats report to exist: %v", err)
+	}
+
+	var report map[string]any
+	data, err := os.ReadFile(stats.ReportPath)
+	if err != nil {
+		t.Fatalf("Failed to read stats report: %v", err)
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("Failed to parse stats report: %v", err)
+	}
+
+	if val, ok := report["archive_path"].(string); !ok || val == "" {
+		t.Error("archive_path missing or empty in report")
+	}
+	if val, ok := report["checksum"].(string); !ok || val == "" {
+		t.Error("checksum missing or empty in report")
+	}
+	if val, ok := report["manifest_path"].(string); !ok || val == "" {
+		t.Error("manifest_path missing or empty in report")
+	} else if _, err := os.Stat(val); err != nil {
+		t.Errorf("expected manifest file to exist: %v", err)
+	}
+	if val, ok := report["requested_compression"].(string); !ok || val == "" {
+		t.Error("requested_compression missing or empty in report")
+	} else if val != string(stats.RequestedCompression) {
+		t.Errorf("requested_compression mismatch: got %s want %s", val, stats.RequestedCompression)
+	}
+	if val, ok := report["compression"].(string); !ok || val == "" {
+		t.Error("compression missing or empty in report")
+	} else if val != string(stats.Compression) {
+		t.Errorf("compression mismatch: got %s want %s", val, stats.Compression)
+	}
+	if val, ok := report["requested_compression_mode"].(string); !ok || val == "" {
+		t.Error("requested_compression_mode missing or empty in report")
+	} else if val != stats.RequestedCompressionMode {
+		t.Errorf("requested_compression_mode mismatch: got %s want %s", val, stats.RequestedCompressionMode)
+	}
+	if val, ok := report["compression_mode"].(string); !ok || val == "" {
+		t.Error("compression_mode missing or empty in report")
+	} else if val != stats.CompressionMode {
+		t.Errorf("compression_mode mismatch: got %s want %s", val, stats.CompressionMode)
+	}
+	if val, ok := report["compression_threads"].(float64); !ok {
+		t.Error("compression_threads missing in report")
+	} else if int(val) != stats.CompressionThreads {
+		t.Errorf("compression_threads mismatch: got %d want %d", int(val), stats.CompressionThreads)
+	}
+
+	if stats.ManifestPath == "" {
+		t.Fatal("ManifestPath should not be empty")
+	}
+	manifest, err := backup.LoadManifest(stats.ManifestPath)
+	if err != nil {
+		t.Fatalf("LoadManifest failed: %v", err)
+	}
+	if manifest.ArchivePath != stats.ArchivePath {
+		t.Errorf("Manifest archive path mismatch: got %s want %s", manifest.ArchivePath, stats.ArchivePath)
+	}
+	if manifest.SHA256 != stats.Checksum {
+		t.Errorf("Manifest checksum mismatch: got %s want %s", manifest.SHA256, stats.Checksum)
+	}
+	if manifest.Hostname != stats.Hostname {
+		t.Errorf("Manifest hostname mismatch: got %s want %s", manifest.Hostname, stats.Hostname)
+	}
+
+	if stats.RequestedCompression != types.CompressionNone {
+		t.Errorf("Expected requested compression none, got %s", stats.RequestedCompression)
+	}
+	if stats.Compression != types.CompressionNone {
+		t.Errorf("Expected effective compression none, got %s", stats.Compression)
+	}
+	if manifest.CompressionMode != stats.CompressionMode {
+		t.Errorf("Manifest compression mode mismatch: got %s want %s", manifest.CompressionMode, stats.CompressionMode)
+	}
+}
+
+func TestRunGoBackupFallbackCompression(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping end-to-end backup test in short mode")
+	}
+
+	logger := logging.New(types.LogLevelInfo, false)
+
+	backupDir := t.TempDir()
+	logDir := t.TempDir()
+
+	orch := New(logger, false)
+	orch.SetBackupConfig(backupDir, logDir, types.CompressionXZ, 6, 0, "ultra", nil)
+
+	checkerConfig := &checks.CheckerConfig{
+		BackupPath:         backupDir,
+		LogPath:            logDir,
+		LockDirPath:        filepath.Join(backupDir, "lock"),
+		MinDiskPrimaryGB:   0.001,
+		MinDiskSecondaryGB: 0,
+		MinDiskCloudGB:     0,
+		SafetyFactor:       1.0,
+		LockFilePath:       filepath.Join(backupDir, "lock", ".backup.lock"),
+		MaxLockAge:         time.Hour,
+	}
+	if err := checkerConfig.Validate(); err != nil {
+		t.Fatalf("checker config validation failed: %v", err)
+	}
+	checker := checks.NewChecker(logger, checkerConfig)
+	orch.SetChecker(checker)
+
+	restore := backup.WithLookPathOverride(func(binary string) (string, error) {
+		if binary == "xz" {
+			return "", errors.New("xz unavailable")
+		}
+		return exec.LookPath(binary)
+	})
+	t.Cleanup(restore)
+
+	ctx := context.Background()
+	stats, err := orch.RunGoBackup(ctx, types.ProxmoxUnknown, "fallback-host")
+	if err != nil {
+		t.Fatalf("RunGoBackup failed: %v", err)
+	}
+
+	if stats.RequestedCompression != types.CompressionXZ {
+		t.Errorf("Requested compression mismatch: got %s want %s", stats.RequestedCompression, types.CompressionXZ)
+	}
+	if stats.Compression != types.CompressionGzip {
+		t.Errorf("Expected fallback to gzip, got %s", stats.Compression)
+	}
+	if !strings.HasSuffix(stats.ArchivePath, ".tar.gz") {
+		t.Errorf("ArchivePath should have .tar.gz suffix, got %s", stats.ArchivePath)
+	}
+}
 
 // TestNew tests Orchestrator creation
 func TestNew(t *testing.T) {
@@ -510,5 +708,165 @@ func TestSaveStatsReportSkipsWithoutLogPath(t *testing.T) {
 	}
 	if stats.ReportPath != "" {
 		t.Fatalf("ReportPath should remain empty when log path is unset, got %s", stats.ReportPath)
+	}
+}
+
+func TestRunGoBackup_EarlyFailureMetricsAndLogParsing(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+
+	logPath := filepath.Join(t.TempDir(), "run.log")
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatalf("OpenLogFile: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = logger.CloseLogFile()
+	})
+
+	logger.Warning("warning test - sample")
+	logger.Error("error test - sample")
+
+	orch := New(logger, false)
+	orch.SetUpdateInfo(true, "1.0.0", "1.1.0")
+	orch.SetBackupConfig(t.TempDir(), t.TempDir(), types.CompressionNone, 0, 0, "standard", nil)
+	orch.SetConfig(&config.Config{
+		MetricsEnabled:        true,
+		MetricsPath:           "",
+		MaxPVEBackupSizeBytes: -1,
+	})
+
+	stats, err := orch.RunGoBackup(context.Background(), types.ProxmoxUnknown, "host-early")
+	if err == nil {
+		t.Fatalf("expected error from RunGoBackup")
+	}
+	if stats == nil {
+		t.Fatalf("expected stats on failure")
+	}
+	if stats.LogFilePath != logPath {
+		t.Fatalf("LogFilePath=%q, want %q", stats.LogFilePath, logPath)
+	}
+	if !stats.NewVersionAvailable || stats.CurrentVersion != "1.0.0" || stats.LatestVersion != "1.1.0" {
+		t.Fatalf("update info not propagated: %#v", stats)
+	}
+	if stats.WarningCount == 0 || stats.ErrorCount == 0 {
+		t.Fatalf("expected warning/error counts from log parsing, got warnings=%d errors=%d", stats.WarningCount, stats.ErrorCount)
+	}
+	if !strings.Contains(buf.String(), "Failed to export Prometheus metrics") {
+		t.Fatalf("expected metrics export warning, got: %s", buf.String())
+	}
+}
+
+func TestRunGoBackup_DryRunParsesLogsAndSkipsDispatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping RunGoBackup dry-run test in short mode")
+	}
+
+	logger := logging.New(types.LogLevelInfo, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+
+	logPath := filepath.Join(t.TempDir(), "run.log")
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatalf("OpenLogFile: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = logger.CloseLogFile()
+	})
+
+	logger.Warning("warning test - sample")
+
+	backupDir := t.TempDir()
+	logDir := t.TempDir()
+
+	orch := New(logger, true)
+	orch.SetBackupConfig(backupDir, logDir, types.CompressionNone, 0, 0, "standard", nil)
+	orch.SetConfig(&config.Config{
+		BackupBlacklist:      []string{"./tmp/blacklist"},
+		BackupNetworkConfigs: true,
+	})
+	orch.RegisterStorageTarget(&testStorageTarget{})
+
+	stats, err := orch.RunGoBackup(context.Background(), types.ProxmoxUnknown, "dry-host")
+	if err != nil {
+		t.Fatalf("RunGoBackup dry run failed: %v", err)
+	}
+	if stats.WarningCount == 0 || stats.ErrorCount != 0 {
+		t.Fatalf("unexpected log counts: warnings=%d errors=%d", stats.WarningCount, stats.ErrorCount)
+	}
+	if stats.ExitCode != types.ExitGenericError.Int() {
+		t.Fatalf("ExitCode=%d, want %d", stats.ExitCode, types.ExitGenericError.Int())
+	}
+	if !strings.Contains(buf.String(), "Storage dispatch skipped (dry run mode)") {
+		t.Fatalf("expected dry-run dispatch log, got: %s", buf.String())
+	}
+}
+
+func TestRunGoBackup_BundleAndDispatchFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping RunGoBackup bundle test in short mode")
+	}
+
+	logger := logging.New(types.LogLevelInfo, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+
+	logPath := filepath.Join(t.TempDir(), "run.log")
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatalf("OpenLogFile: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = logger.CloseLogFile()
+	})
+
+	backupDir := t.TempDir()
+	logDir := t.TempDir()
+
+	orch := New(logger, false)
+	orch.SetBackupConfig(backupDir, logDir, types.CompressionNone, 0, 0, "standard", nil)
+	orch.SetConfig(&config.Config{
+		BundleAssociatedFiles:  true,
+		EncryptArchive:         true,
+		AgeRecipients:          []string{testAgeRecipient},
+		RetentionPolicy:        "simple",
+		LocalRetentionDays:     7,
+		SecondaryRetentionDays: 2,
+		CloudRetentionDays:     1,
+		BackupNetworkConfigs:   true,
+	})
+	orch.RegisterStorageTarget(&testStorageTarget{err: errors.New("sync failed")})
+
+	stats, err := orch.RunGoBackup(context.Background(), types.ProxmoxUnknown, "bundle-host")
+	if err == nil {
+		t.Fatalf("expected RunGoBackup to fail on storage dispatch")
+	}
+	var be *BackupError
+	if !errors.As(err, &be) || be.Phase != "storage" {
+		t.Fatalf("expected storage BackupError, got %v", err)
+	}
+	if stats == nil {
+		t.Fatalf("expected stats on storage failure")
+	}
+	if !stats.BundleCreated {
+		t.Fatalf("expected BundleCreated to be true")
+	}
+	if !strings.HasSuffix(stats.ArchivePath, ".bundle.tar") {
+		t.Fatalf("ArchivePath=%q, want *.bundle.tar", stats.ArchivePath)
+	}
+	if stats.ManifestPath != "" {
+		t.Fatalf("expected ManifestPath to be cleared after bundling, got %q", stats.ManifestPath)
+	}
+	if _, err := os.Stat(stats.ArchivePath); err != nil {
+		t.Fatalf("expected bundle archive to exist: %v", err)
+	}
+	rawArchivePath := strings.TrimSuffix(stats.ArchivePath, ".bundle.tar")
+	if rawArchivePath == stats.ArchivePath {
+		t.Fatalf("expected bundle suffix in archive path: %q", stats.ArchivePath)
+	}
+	if _, err := os.Stat(rawArchivePath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected raw archive to be removed, stat err=%v", err)
+	}
+	if !strings.Contains(buf.String(), "Policy: simple") {
+		t.Fatalf("expected retention policy log, got: %s", buf.String())
 	}
 }
