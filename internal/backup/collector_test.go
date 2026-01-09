@@ -547,3 +547,150 @@ func TestCollectorClusteredPVEFlag(t *testing.T) {
 		t.Fatalf("expected IsClusteredPVE to reflect flag")
 	}
 }
+
+func TestSafeCopyFile_SymlinkRelative(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	config := GetDefaultCollectorConfig()
+	tempDir := t.TempDir()
+
+	collector := NewCollector(logger, config, tempDir, types.ProxmoxVE, false)
+	ctx := context.Background()
+
+	// Create a target file and a symlink to it
+	targetFile := filepath.Join(tempDir, "target.txt")
+	if err := os.WriteFile(targetFile, []byte("target content"), 0644); err != nil {
+		t.Fatalf("Failed to create target file: %v", err)
+	}
+
+	symlinkPath := filepath.Join(tempDir, "symlink.txt")
+	if err := os.Symlink("target.txt", symlinkPath); err != nil {
+		t.Fatalf("Failed to create symlink: %v", err)
+	}
+
+	// Copy the symlink
+	destPath := filepath.Join(tempDir, "dest", "symlink.txt")
+	if err := collector.safeCopyFile(ctx, symlinkPath, destPath, "test symlink"); err != nil {
+		t.Fatalf("safeCopyFile failed for symlink: %v", err)
+	}
+
+	// Verify destination is a symlink
+	info, err := os.Lstat(destPath)
+	if err != nil {
+		t.Fatalf("Failed to stat destination: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Error("Destination is not a symlink")
+	}
+
+	// Verify symlink target
+	target, err := os.Readlink(destPath)
+	if err != nil {
+		t.Fatalf("Failed to read symlink: %v", err)
+	}
+	if target != "target.txt" {
+		t.Errorf("Symlink target mismatch: expected 'target.txt', got '%s'", target)
+	}
+}
+
+func TestSafeCopyFile_SymlinkAbsolute(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	config := GetDefaultCollectorConfig()
+	tempDir := t.TempDir()
+
+	collector := NewCollector(logger, config, tempDir, types.ProxmoxVE, false)
+	ctx := context.Background()
+
+	// Create a target file and a symlink with absolute path
+	targetFile := filepath.Join(tempDir, "target.txt")
+	if err := os.WriteFile(targetFile, []byte("target content"), 0644); err != nil {
+		t.Fatalf("Failed to create target file: %v", err)
+	}
+
+	symlinkPath := filepath.Join(tempDir, "symlink_abs.txt")
+	if err := os.Symlink(targetFile, symlinkPath); err != nil {
+		t.Fatalf("Failed to create symlink: %v", err)
+	}
+
+	// Copy the symlink
+	destPath := filepath.Join(tempDir, "dest", "symlink_abs.txt")
+	if err := collector.safeCopyFile(ctx, symlinkPath, destPath, "test symlink absolute"); err != nil {
+		t.Fatalf("safeCopyFile failed for absolute symlink: %v", err)
+	}
+
+	// Verify destination is a symlink
+	info, err := os.Lstat(destPath)
+	if err != nil {
+		t.Fatalf("Failed to stat destination: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Error("Destination is not a symlink")
+	}
+
+	// Verify symlink target is absolute
+	target, err := os.Readlink(destPath)
+	if err != nil {
+		t.Fatalf("Failed to read symlink: %v", err)
+	}
+	if !filepath.IsAbs(target) {
+		t.Errorf("Expected absolute symlink target, got '%s'", target)
+	}
+}
+
+func TestSafeCopyFile_SymlinkCreationFailure_NonFatal(t *testing.T) {
+	// This test verifies that symlink creation failures are non-fatal
+	// The backup should continue even if a symlink cannot be created
+
+	// Skip if running as root (root bypasses permission checks)
+	if os.Getuid() == 0 {
+		t.Skip("Skipping test when running as root (root bypasses permission checks)")
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&logBuf)
+	config := GetDefaultCollectorConfig()
+	tempDir := t.TempDir()
+
+	collector := NewCollector(logger, config, tempDir, types.ProxmoxVE, false)
+	ctx := context.Background()
+
+	// Create a symlink pointing to a non-existent target (this is valid)
+	symlinkPath := filepath.Join(tempDir, "broken_symlink.txt")
+	if err := os.Symlink("/nonexistent/target", symlinkPath); err != nil {
+		t.Fatalf("Failed to create broken symlink: %v", err)
+	}
+
+	// Create a read-only destination directory to force symlink creation failure
+	destDir := filepath.Join(tempDir, "readonly_dest")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		t.Fatalf("Failed to create dest directory: %v", err)
+	}
+	// Make it read-only after creation
+	if err := os.Chmod(destDir, 0555); err != nil {
+		t.Fatalf("Failed to make directory read-only: %v", err)
+	}
+	// Ensure cleanup restores permissions
+	t.Cleanup(func() {
+		os.Chmod(destDir, 0755)
+	})
+
+	destPath := filepath.Join(destDir, "broken_symlink.txt")
+
+	// The safeCopyFile should NOT return an error for symlink failures
+	// It should log a warning and continue
+	err := collector.safeCopyFile(ctx, symlinkPath, destPath, "test broken symlink")
+	if err != nil {
+		t.Errorf("Expected nil error for symlink failure, got: %v", err)
+	}
+
+	// Verify that FilesFailed was incremented
+	if collector.stats.FilesFailed == 0 {
+		t.Error("FilesFailed counter should be incremented for symlink failure")
+	}
+
+	// Verify that a warning was logged
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "Symlink creation failed") {
+		t.Errorf("Expected warning about symlink creation failure in logs, got: %s", logOutput)
+	}
+}

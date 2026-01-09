@@ -60,7 +60,9 @@ func TestRunDecryptWorkflow_BundleNotFound(t *testing.T) {
 	t.Cleanup(func() { restoreFS = osFS{} })
 
 	logger := logging.New(types.LogLevelInfo, false)
-	if _, err := discoverBackupCandidates(logger, "/nonexistent"); err == nil {
+	// Use a path that definitely does not exist (UUID-based)
+	missingPath := "/tmp/proxsave-test-nonexistent-8f14e45f-ceea-467f-a8f1-9d4e3c6b8a12"
+	if _, err := discoverBackupCandidates(logger, missingPath); err == nil {
 		t.Fatalf("expected error for missing path")
 	}
 }

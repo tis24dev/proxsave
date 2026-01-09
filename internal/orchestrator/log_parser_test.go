@@ -262,7 +262,10 @@ func TestSanitizeLogMessage(t *testing.T) {
 		{"[Warning] something bad", "something bad"},
 		{"[error] details", "details"},
 		{"#123 some code", "some code"},
-		{strings.Repeat("a", 300), strings.Repeat("a", 200)},
+		// Long message gets truncated to 297 chars + "..."
+		{strings.Repeat("a", 400), strings.Repeat("a", 297) + "..."},
+		// Message at exactly 300 chars should not be truncated
+		{strings.Repeat("b", 300), strings.Repeat("b", 300)},
 	}
 	for _, c := range cases {
 		if got := sanitizeLogMessage(c.in); got != c.want {
@@ -272,13 +275,28 @@ func TestSanitizeLogMessage(t *testing.T) {
 }
 
 func TestTruncateString(t *testing.T) {
+	// Test no truncation needed
 	if got := truncateString("short", 10); got != "short" {
 		t.Fatalf("truncateString short = %q; want short", got)
 	}
-	if got := truncateString("longstring", 4); got != "long" {
-		t.Fatalf("truncateString long = %q; want long", got)
-	}
+
+	// Test exact length (no truncation)
 	if got := truncateString("exact", 5); got != "exact" {
 		t.Fatalf("truncateString exact = %q; want exact", got)
+	}
+
+	// Test truncation with ellipsis (max > 3)
+	if got := truncateString("longstring", 7); got != "long..." {
+		t.Fatalf("truncateString long with ellipsis = %q; want 'long...'", got)
+	}
+
+	// Test truncation with very small max (max <= 3, no ellipsis)
+	if got := truncateString("longstring", 3); got != "lon" {
+		t.Fatalf("truncateString with max=3 = %q; want 'lon'", got)
+	}
+
+	// Test zero max
+	if got := truncateString("test", 0); got != "test" {
+		t.Fatalf("truncateString with max=0 = %q; want 'test'", got)
 	}
 }

@@ -167,8 +167,8 @@ func sanitizeLogMessage(msg string) string {
 		msg = strings.TrimSpace(msg[i:])
 	}
 
-	if len(msg) > 200 {
-		msg = msg[:200]
+	if len(msg) > 300 {
+		msg = msg[:297] + "..."
 	}
 	return msg
 }
@@ -191,10 +191,13 @@ func splitCategoryAndExample(msg string) (label, example string) {
 	return label, example
 }
 
-// truncateString truncates a string to a maximum length
+// truncateString truncates a string to a maximum length, adding "..." if truncated
 func truncateString(value string, max int) string {
 	if max <= 0 || len(value) <= max {
 		return value
+	}
+	if max > 3 {
+		return value[:max-3] + "..."
 	}
 	return value[:max]
 }
