@@ -100,6 +100,11 @@ func NewChecker(logger *logging.Logger, config *CheckerConfig) *Checker {
 	}
 }
 
+// ShouldSkipPermissionCheck returns true if permission checks should be skipped
+func (c *Checker) ShouldSkipPermissionCheck() bool {
+	return c.config.SkipPermissionCheck
+}
+
 // RunAllChecks performs all pre-backup validation checks
 // Order is important: directories must exist before we can check disk space,
 // permissions, or create lock files in those directories
@@ -113,6 +118,13 @@ func (c *Checker) RunAllChecks(ctx context.Context) ([]CheckResult, error) {
 	results = append(results, dirResult)
 	if !dirResult.Passed {
 		return results, fmt.Errorf("directory check failed: %s", dirResult.Message)
+	}
+
+	// 1.5. Check temp directory - verify /tmp/proxsave is usable
+	tempDirResult := c.CheckTempDirectory()
+	results = append(results, tempDirResult)
+	if !tempDirResult.Passed {
+		return results, fmt.Errorf("temp directory check failed: %s", tempDirResult.Message)
 	}
 
 	// 2. Check disk space - now that we know directories exist
@@ -167,6 +179,7 @@ func (c *Checker) CheckDiskSpace() CheckResult {
 		if !entry.enabled || entry.path == "" || entry.min <= 0 {
 			continue
 		}
+		c.logger.Debug("Checking disk space on %s: %s", entry.label, entry.path)
 		if err := c.checkSingleDisk(entry.label, entry.path, entry.min); err != nil {
 			if entry.critical {
 				result.Error = err
@@ -202,6 +215,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 	if lockPath == "" {
 		lockPath = filepath.Join(c.config.LockDirPath, ".backup.lock")
 	}
+	c.logger.Debug("Lock file path: %s", lockPath)
 
 	// Check if lock file exists
 	if _, err := os.Stat(lockPath); err == nil {
@@ -231,6 +245,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 
 	// Create new lock file atomically
 	if !c.config.DryRun {
+		c.logger.Debug("Creating lock file with PID %d", os.Getpid())
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0640)
 		if err != nil {
 			if os.IsExist(err) {
@@ -277,7 +292,8 @@ func (c *Checker) CheckPermissions() CheckResult {
 	const maxAttempts = 3
 	const retryDelay = 100 * time.Millisecond
 
-		for _, dir := range dirs {
+	for _, dir := range dirs {
+		c.logger.Debug("Checking permissions: %s", dir)
 		// Check if directory is writable
 		testFile := filepath.Join(dir, fmt.Sprintf(".permission_test_%d", os.Getpid()))
 
@@ -336,6 +352,7 @@ func (c *Checker) CheckPermissions() CheckResult {
 			return result
 		}
 
+		c.logger.Debug("Directory writable: %s", dir)
 		// Clean up test file
 		if err := os.Remove(testFile); err != nil {
 			c.logger.Warning("Failed to remove test file %s: %v", testFile, err)
@@ -376,6 +393,7 @@ func (c *Checker) CheckDirectories() CheckResult {
 	addDir(filepath.Dir(lockPath))
 
 	for dir := range dirs {
+		c.logger.Debug("Checking directory: %s", dir)
 		info, err := os.Stat(dir)
 		if err == nil {
 			if !info.IsDir() {
@@ -384,6 +402,7 @@ func (c *Checker) CheckDirectories() CheckResult {
 				c.logger.Error("%s", result.Message)
 				return result
 			}
+			c.logger.Debug("Directory exists: %s", dir)
 			continue
 		}
 
@@ -411,6 +430,80 @@ func (c *Checker) CheckDirectories() CheckResult {
 	result.Passed = true
 	result.Message = "All required directories exist"
 	c.logger.Debug("%s", result.Message)
+	return result
+}
+
+// CheckTempDirectory verifies /tmp/proxsave exists, is writable, and supports symlinks
+func (c *Checker) CheckTempDirectory() CheckResult {
+	result := CheckResult{
+		Name:   "Temp Directory",
+		Passed: false,
+	}
+
+	tempRoot := filepath.Join("/tmp", "proxsave")
+	c.logger.Debug("Checking temp directory: %s", tempRoot)
+
+	info, err := os.Stat(tempRoot)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			result.Code = "STAT_FAILED"
+			result.Error = fmt.Errorf("Temp directory check failed - path: %s: %w", tempRoot, err)
+			result.Message = result.Error.Error()
+			return result
+		}
+
+		// Directory doesn't exist - create it
+		c.logger.Debug("Temp directory not found, creating: %s", tempRoot)
+		if err := os.MkdirAll(tempRoot, 0o755); err != nil {
+			result.Code = "CREATE_FAILED"
+			result.Error = fmt.Errorf("Temp directory creation failed - path: %s: %w", tempRoot, err)
+			result.Message = result.Error.Error()
+			return result
+		}
+		c.logger.Debug("Temp directory created: %s", tempRoot)
+
+		info, err = os.Stat(tempRoot)
+		if err != nil {
+			result.Code = "VERIFY_FAILED"
+			result.Error = fmt.Errorf("Temp directory verification failed - path: %s: %w", tempRoot, err)
+			result.Message = result.Error.Error()
+			return result
+		}
+	} else {
+		c.logger.Debug("Temp directory exists: %s", tempRoot)
+	}
+
+	if !info.IsDir() {
+		result.Code = "NOT_DIRECTORY"
+		result.Error = fmt.Errorf("Temp path is not a directory - path: %s", tempRoot)
+		result.Message = result.Error.Error()
+		return result
+	}
+
+	// Test write permission
+	c.logger.Debug("Testing write permission: %s", tempRoot)
+	testFile := filepath.Join(tempRoot, ".proxsave-permission-test")
+	if err := os.WriteFile(testFile, []byte("test"), 0o600); err != nil {
+		result.Code = "NOT_WRITABLE"
+		result.Error = fmt.Errorf("Temp directory not writable - path: %s: %w", tempRoot, err)
+		result.Message = result.Error.Error()
+		return result
+	}
+	defer os.Remove(testFile)
+
+	// Test symlink support
+	c.logger.Debug("Testing symlink support: %s", tempRoot)
+	testSymlink := filepath.Join(tempRoot, ".proxsave-symlink-test")
+	if err := os.Symlink(testFile, testSymlink); err != nil {
+		result.Code = "NO_SYMLINK_SUPPORT"
+		result.Error = fmt.Errorf("Temp directory does not support symlinks - path: %s: %w", tempRoot, err)
+		result.Message = result.Error.Error()
+		return result
+	}
+	os.Remove(testSymlink)
+
+	result.Passed = true
+	result.Message = fmt.Sprintf("%s writable with symlink support", tempRoot)
 	return result
 }
 
@@ -529,6 +622,7 @@ func (c *Checker) checkSingleDisk(label, path string, minGB float64) error {
 	if err != nil {
 		return fmt.Errorf("%s disk space check failed (%s): %w", label, path, err)
 	}
+	c.logger.Debug("%s: %.2f GB available, %.2f GB required", label, availableGB, minGB)
 	if availableGB < minGB {
 		return fmt.Errorf("%s disk space insufficient on %s: %.2f GB available, %.2f GB required",
 			label, path, availableGB, minGB)

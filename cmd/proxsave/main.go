@@ -1322,7 +1322,7 @@ func printFinalSummary(finalExitCode int) {
 
 	fmt.Println()
 	fmt.Println("\033[31mEXTRA STEP - IF YOU FIND THIS TOOL USEFUL AND WANT TO THANK ME, A COFFEE IS ALWAYS WELCOME!\033[0m")
-	fmt.Println("https://buymeacoffee.com/tis24dev")
+	fmt.Println("https://github.com/sponsors/tis24dev")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")

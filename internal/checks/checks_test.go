@@ -626,3 +626,96 @@ func TestCheckDiskSpaceForEstimate(t *testing.T) {
 		t.Error("Expected disk space estimate to fail for huge size")
 	}
 }
+
+func TestCheckTempDirectory_Success(t *testing.T) {
+	// Ensure /tmp/proxsave exists for the test
+	tempRoot := filepath.Join("/tmp", "proxsave")
+	os.MkdirAll(tempRoot, 0o755)
+
+	config := GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir())
+	logger := logging.New(types.LogLevelDebug, false)
+	checker := NewChecker(logger, config)
+
+	result := checker.CheckTempDirectory()
+	if !result.Passed {
+		t.Errorf("Expected temp directory check to pass, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "writable with symlink support") {
+		t.Errorf("Expected success message with symlink support, got: %s", result.Message)
+	}
+}
+
+func TestCheckTempDirectory_NotDirectory(t *testing.T) {
+	// This test would require mocking /tmp/proxsave as a file
+	// which is not safe to do. Skip for now and rely on integration tests.
+	t.Skip("Cannot safely test /tmp/proxsave as a file without affecting system")
+}
+
+func TestCheckTempDirectory_NotWritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; cannot validate root permission failure")
+	}
+
+	// This test would require making /tmp/proxsave non-writable
+	// which is not safe to do. Skip for now.
+	t.Skip("Cannot safely test /tmp/proxsave permissions without affecting system")
+}
+
+func TestCheckTempDirectory_SymlinkSupport(t *testing.T) {
+	// Verify that the temp directory check includes symlink validation
+	tempRoot := filepath.Join("/tmp", "proxsave")
+	os.MkdirAll(tempRoot, 0o755)
+
+	config := GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir())
+	logger := logging.New(types.LogLevelDebug, false)
+	checker := NewChecker(logger, config)
+
+	result := checker.CheckTempDirectory()
+	if !result.Passed {
+		t.Errorf("Expected temp directory check to pass, got: %s", result.Message)
+	}
+
+	// Verify test files are cleaned up
+	testFile := filepath.Join(tempRoot, ".proxsave-permission-test")
+	testSymlink := filepath.Join(tempRoot, ".proxsave-symlink-test")
+	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+		t.Errorf("expected test file to be cleaned up")
+	}
+	if _, err := os.Lstat(testSymlink); !os.IsNotExist(err) {
+		t.Errorf("expected test symlink to be cleaned up")
+	}
+}
+
+func TestRunAllChecks_IncludesTempDirectory(t *testing.T) {
+	// Ensure /tmp/proxsave exists
+	os.MkdirAll(filepath.Join("/tmp", "proxsave"), 0o755)
+
+	backupPath := t.TempDir()
+	logPath := t.TempDir()
+	lockDir := t.TempDir()
+
+	config := GetDefaultCheckerConfig(backupPath, logPath, lockDir)
+	config.MinDiskPrimaryGB = 0.001 // Lower disk space requirement for test
+	logger := logging.New(types.LogLevelDebug, false)
+	checker := NewChecker(logger, config)
+
+	results, err := checker.RunAllChecks(context.Background())
+	if err != nil {
+		t.Fatalf("RunAllChecks failed: %v", err)
+	}
+
+	// Verify Temp Directory check is included in results
+	foundTempDir := false
+	for _, r := range results {
+		if r.Name == "Temp Directory" {
+			foundTempDir = true
+			if !r.Passed {
+				t.Errorf("Temp Directory check failed: %s", r.Message)
+			}
+			break
+		}
+	}
+	if !foundTempDir {
+		t.Error("Temp Directory check not found in RunAllChecks results")
+	}
+}

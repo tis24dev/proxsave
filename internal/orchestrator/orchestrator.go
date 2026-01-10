@@ -344,32 +344,58 @@ func (o *Orchestrator) RunPreBackupChecks(ctx context.Context) error {
 
 	o.logger.Step("Pre-backup validation checks")
 
-	results, err := o.checker.RunAllChecks(ctx)
-
-	// Log all check results
-	for _, result := range results {
+	// Helper to log result immediately after each check
+	logResult := func(result checks.CheckResult) {
 		if result.Passed {
 			if result.Name == "Disk Space (Estimated)" {
 				o.logger.Debug("✓ %s: %s", result.Name, result.Message)
 			} else {
 				o.logger.Info("✓ %s: %s", result.Name, result.Message)
 			}
-			continue
-		}
-
-		// For failed checks, include the optional result.Code to give more
-		// context (e.g., PERMISSION_DENIED, FS_IO_ERROR) without changing
-		// existing semantics.
-		if result.Code != "" {
-			o.logger.Error("✗ %s (%s): %s", result.Name, result.Code, result.Message)
 		} else {
-			o.logger.Error("✗ %s: %s", result.Name, result.Message)
+			if result.Code != "" {
+				o.logger.Error("✗ %s (%s): %s", result.Name, result.Code, result.Message)
+			} else {
+				o.logger.Error("✗ %s: %s", result.Name, result.Message)
+			}
 		}
 	}
 
-	if err != nil {
-		o.logger.Error("Pre-backup checks failed: %v", err)
-		return fmt.Errorf("pre-backup checks failed: %w", err)
+	// 1. Check directories FIRST - they must exist for all other checks
+	dirResult := o.checker.CheckDirectories()
+	logResult(dirResult)
+	if !dirResult.Passed {
+		return fmt.Errorf("pre-backup checks failed: %s", dirResult.Message)
+	}
+
+	// 1.5. Check temp directory - verify /tmp/proxsave is usable
+	tempDirResult := o.checker.CheckTempDirectory()
+	logResult(tempDirResult)
+	if !tempDirResult.Passed {
+		return fmt.Errorf("pre-backup checks failed: %s", tempDirResult.Message)
+	}
+
+	// 2. Check disk space - now that we know directories exist
+	diskResult := o.checker.CheckDiskSpace()
+	logResult(diskResult)
+	if !diskResult.Passed {
+		return fmt.Errorf("pre-backup checks failed: %s", diskResult.Message)
+	}
+
+	// 3. Check permissions - verify we can write to directories
+	if !o.checker.ShouldSkipPermissionCheck() {
+		permResult := o.checker.CheckPermissions()
+		logResult(permResult)
+		if !permResult.Passed {
+			return fmt.Errorf("pre-backup checks failed: %s", permResult.Message)
+		}
+	}
+
+	// 4. Check lock file LAST - only after all other prerequisites are met
+	lockResult := o.checker.CheckLockFile()
+	logResult(lockResult)
+	if !lockResult.Passed {
+		return fmt.Errorf("pre-backup checks failed: %s", lockResult.Message)
 	}
 
 	o.logger.Info("All pre-backup checks passed")
@@ -545,10 +571,12 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 
 	o.logger.Debug("Creating temporary directory for collection output")
 	// Create temporary directory for collection (outside backup path)
+	// Note: /tmp/proxsave is validated in pre-backup checks (CheckTempDirectory)
+	// This MkdirAll is a fallback for cases where pre-checks don't run
 	timestampStr := startTime.Format("20060102-150405")
 	tempRoot := filepath.Join("/tmp", "proxsave")
 	if err := fs.MkdirAll(tempRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create temporary root directory: %w", err)
+		return nil, fmt.Errorf("Temp directory creation failed - path: %s: %w", tempRoot, err)
 	}
 	tempDir, err := fs.MkdirTemp(tempRoot, fmt.Sprintf("proxsave-%s-%s-", hostname, timestampStr))
 	if err != nil {
