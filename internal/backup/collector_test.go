@@ -636,18 +636,16 @@ func TestSafeCopyFile_SymlinkAbsolute(t *testing.T) {
 	}
 }
 
-func TestSafeCopyFile_SymlinkCreationFailure_NonFatal(t *testing.T) {
-	// This test verifies that symlink creation failures are non-fatal
-	// The backup should continue even if a symlink cannot be created
+func TestSafeCopyFile_SymlinkCreationFailure_ErrorFormat(t *testing.T) {
+	// This test verifies that symlink creation failures return an error
+	// with a properly formatted message for notification parsing
 
 	// Skip if running as root (root bypasses permission checks)
 	if os.Getuid() == 0 {
 		t.Skip("Skipping test when running as root (root bypasses permission checks)")
 	}
 
-	var logBuf bytes.Buffer
 	logger := logging.New(types.LogLevelDebug, false)
-	logger.SetOutput(&logBuf)
 	config := GetDefaultCollectorConfig()
 	tempDir := t.TempDir()
 
@@ -676,21 +674,20 @@ func TestSafeCopyFile_SymlinkCreationFailure_NonFatal(t *testing.T) {
 
 	destPath := filepath.Join(destDir, "broken_symlink.txt")
 
-	// The safeCopyFile should NOT return an error for symlink failures
-	// It should log a warning and continue
+	// The safeCopyFile should return an error for symlink creation failures
 	err := collector.safeCopyFile(ctx, symlinkPath, destPath, "test broken symlink")
-	if err != nil {
-		t.Errorf("Expected nil error for symlink failure, got: %v", err)
+	if err == nil {
+		t.Fatal("Expected error for symlink creation failure, got nil")
+	}
+
+	// Verify error message uses structured format with " - " separator
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "Symlink creation failed - ") {
+		t.Errorf("Error message should use structured format with ' - ' separator, got: %s", errMsg)
 	}
 
 	// Verify that FilesFailed was incremented
 	if collector.stats.FilesFailed == 0 {
 		t.Error("FilesFailed counter should be incremented for symlink failure")
-	}
-
-	// Verify that a warning was logged
-	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "Symlink creation failed") {
-		t.Errorf("Expected warning about symlink creation failure in logs, got: %s", logOutput)
 	}
 }

@@ -653,11 +653,8 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 
 		if err := os.Symlink(target, dest); err != nil {
 			c.incFilesFailed()
-			// Log warning with structured format for better parsing in notifications
-			// Use non-fatal approach: symlink failures should not block the entire backup
-			c.logger.Warning("Symlink creation failed - source: %s, target: %s, absolute: %v: %v",
+			return fmt.Errorf("Symlink creation failed - source: %s, target: %s, absolute: %v: %w",
 				src, target, filepath.IsAbs(target), err)
-			return nil // Continue backup instead of failing
 		}
 
 		c.applySymlinkOwnership(dest, info)
