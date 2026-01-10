@@ -881,13 +881,13 @@ func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logg
 // runSafeClusterApply applies selected cluster configs via pvesh without touching config.db.
 // It operates on files extracted to exportRoot (e.g. exportDestRoot).
 func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	if _, err := exec.LookPath("pvesh"); err != nil {
 		logger.Warning("pvesh not found in PATH; skipping SAFE cluster apply")
 		return nil
-	}
-
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 
 	currentNode, _ := os.Hostname()

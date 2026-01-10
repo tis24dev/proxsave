@@ -640,11 +640,6 @@ func TestSafeCopyFile_SymlinkCreationFailure_ErrorFormat(t *testing.T) {
 	// This test verifies that symlink creation failures return an error
 	// with a properly formatted message for notification parsing
 
-	// Skip if running as root (root bypasses permission checks)
-	if os.Getuid() == 0 {
-		t.Skip("Skipping test when running as root (root bypasses permission checks)")
-	}
-
 	logger := logging.New(types.LogLevelDebug, false)
 	config := GetDefaultCollectorConfig()
 	tempDir := t.TempDir()
@@ -652,27 +647,17 @@ func TestSafeCopyFile_SymlinkCreationFailure_ErrorFormat(t *testing.T) {
 	collector := NewCollector(logger, config, tempDir, types.ProxmoxVE, false)
 	ctx := context.Background()
 
+	origSymlink := osSymlink
+	t.Cleanup(func() { osSymlink = origSymlink })
+	osSymlink = func(oldname, newname string) error { return syscall.EPERM }
+
 	// Create a symlink pointing to a non-existent target (this is valid)
 	symlinkPath := filepath.Join(tempDir, "broken_symlink.txt")
 	if err := os.Symlink("/nonexistent/target", symlinkPath); err != nil {
 		t.Fatalf("Failed to create broken symlink: %v", err)
 	}
 
-	// Create a read-only destination directory to force symlink creation failure
-	destDir := filepath.Join(tempDir, "readonly_dest")
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		t.Fatalf("Failed to create dest directory: %v", err)
-	}
-	// Make it read-only after creation
-	if err := os.Chmod(destDir, 0555); err != nil {
-		t.Fatalf("Failed to make directory read-only: %v", err)
-	}
-	// Ensure cleanup restores permissions
-	t.Cleanup(func() {
-		os.Chmod(destDir, 0755)
-	})
-
-	destPath := filepath.Join(destDir, "broken_symlink.txt")
+	destPath := filepath.Join(tempDir, "dest", "broken_symlink.txt")
 
 	// The safeCopyFile should return an error for symlink creation failures
 	err := collector.safeCopyFile(ctx, symlinkPath, destPath, "test broken symlink")
