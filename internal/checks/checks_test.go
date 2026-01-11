@@ -2,10 +2,13 @@ package checks
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -13,6 +16,20 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+func TestShouldSkipPermissionCheck(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	cfg := &CheckerConfig{SkipPermissionCheck: true}
+	checker := NewChecker(logger, cfg)
+	if !checker.ShouldSkipPermissionCheck() {
+		t.Fatalf("ShouldSkipPermissionCheck = false; want true")
+	}
+
+	cfg.SkipPermissionCheck = false
+	if checker.ShouldSkipPermissionCheck() {
+		t.Fatalf("ShouldSkipPermissionCheck = true; want false")
+	}
+}
 
 func TestCheckDiskSpace(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
@@ -130,6 +147,113 @@ func TestCheckLockFileStaleLock(t *testing.T) {
 
 	// Clean up
 	checker.ReleaseLock()
+}
+
+func TestCheckLockFile_WritesExpectedContent(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+
+	config := &CheckerConfig{
+		BackupPath:   tmpDir,
+		LogPath:      tmpDir,
+		LockDirPath:  tmpDir,
+		LockFilePath: lockPath,
+		MaxLockAge:   time.Hour,
+		DryRun:       false,
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckLockFile()
+	if !result.Passed {
+		t.Fatalf("CheckLockFile failed: %s", result.Message)
+	}
+	t.Cleanup(func() { _ = checker.ReleaseLock() })
+
+	content, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read lock file: %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, fmt.Sprintf("pid=%d\n", os.Getpid())) {
+		t.Fatalf("lock file content missing pid: %q", text)
+	}
+	if !strings.Contains(text, "host=") {
+		t.Fatalf("lock file content missing host: %q", text)
+	}
+	if !strings.Contains(text, "time=") {
+		t.Fatalf("lock file content missing time: %q", text)
+	}
+
+	var ts string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "time=") {
+			ts = strings.TrimPrefix(line, "time=")
+			break
+		}
+	}
+	if ts == "" {
+		t.Fatalf("lock file content missing time value: %q", text)
+	}
+	if _, err := time.Parse(time.RFC3339, ts); err != nil {
+		t.Fatalf("lock file time not RFC3339: %q: %v", ts, err)
+	}
+}
+
+func TestCheckLockFile_ConcurrentCalls_OnlyOnePasses(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+
+	baseConfig := &CheckerConfig{
+		BackupPath:   tmpDir,
+		LogPath:      tmpDir,
+		LockDirPath:  tmpDir,
+		LockFilePath: lockPath,
+		MaxLockAge:   time.Hour,
+		DryRun:       false,
+	}
+
+	const workers = 20
+	start := make(chan struct{})
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+
+	passed := make(chan bool, workers)
+
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			checker := NewChecker(logger, baseConfig)
+			res := checker.CheckLockFile()
+			passed <- res.Passed
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(passed)
+
+	passedCount := 0
+	for ok := range passed {
+		if ok {
+			passedCount++
+		}
+	}
+
+	if passedCount != 1 {
+		t.Fatalf("expected exactly 1 successful lock acquisition, got %d", passedCount)
+	}
+
+	// Best-effort cleanup (ignore errors).
+	_ = os.Remove(lockPath)
 }
 
 func TestCheckPermissions(t *testing.T) {
@@ -646,19 +770,47 @@ func TestCheckTempDirectory_Success(t *testing.T) {
 }
 
 func TestCheckTempDirectory_NotDirectory(t *testing.T) {
-	// This test would require mocking /tmp/proxsave as a file
-	// which is not safe to do. Skip for now and rely on integration tests.
-	t.Skip("Cannot safely test /tmp/proxsave as a file without affecting system")
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	origTempRoot := tempRootPath
+	t.Cleanup(func() { tempRootPath = origTempRoot })
+
+	tmpDir := t.TempDir()
+	notDir := filepath.Join(tmpDir, "tempRoot")
+	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	tempRootPath = notDir
+
+	config := GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir())
+	checker := NewChecker(logger, config)
+	result := checker.CheckTempDirectory()
+	if result.Passed || result.Code != "NOT_DIRECTORY" {
+		t.Fatalf("expected NOT_DIRECTORY, got passed=%v code=%q err=%v", result.Passed, result.Code, result.Error)
+	}
 }
 
 func TestCheckTempDirectory_NotWritable(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root; cannot validate root permission failure")
-	}
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
 
-	// This test would require making /tmp/proxsave non-writable
-	// which is not safe to do. Skip for now.
-	t.Skip("Cannot safely test /tmp/proxsave permissions without affecting system")
+	origTempRoot := tempRootPath
+	origWrite := osWriteFile
+	t.Cleanup(func() {
+		tempRootPath = origTempRoot
+		osWriteFile = origWrite
+	})
+
+	tempRootPath = t.TempDir()
+	osWriteFile = func(name string, data []byte, perm os.FileMode) error { return syscall.EACCES }
+
+	config := GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir())
+	checker := NewChecker(logger, config)
+	result := checker.CheckTempDirectory()
+	if result.Passed || result.Code != "NOT_WRITABLE" {
+		t.Fatalf("expected NOT_WRITABLE, got passed=%v code=%q err=%v", result.Passed, result.Code, result.Error)
+	}
 }
 
 func TestCheckTempDirectory_SymlinkSupport(t *testing.T) {
@@ -717,5 +869,746 @@ func TestRunAllChecks_IncludesTempDirectory(t *testing.T) {
 	}
 	if !foundTempDir {
 		t.Error("Temp Directory check not found in RunAllChecks results")
+	}
+}
+
+func TestRunAllChecks_FailsOnDirectories(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	backupFile := filepath.Join(tmpDir, "backup-as-file")
+	if err := os.WriteFile(backupFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	config := GetDefaultCheckerConfig(backupFile, tmpDir, tmpDir)
+	config.MinDiskPrimaryGB = 0
+	config.SkipPermissionCheck = true
+	config.LockFilePath = filepath.Join(tmpDir, ".backup.lock")
+	config.MaxLockAge = time.Minute
+
+	checker := NewChecker(logger, config)
+	_, err := checker.RunAllChecks(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "directory check failed") {
+		t.Fatalf("expected directory check failed error, got: %v", err)
+	}
+}
+
+func TestRunAllChecks_FailsOnTempDirectory(t *testing.T) {
+	origTempRoot := tempRootPath
+	t.Cleanup(func() { tempRootPath = origTempRoot })
+
+	tmpDir := t.TempDir()
+	notDir := filepath.Join(tmpDir, "tempRoot")
+	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	tempRootPath = notDir
+
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	config := GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir())
+	config.MinDiskPrimaryGB = 0
+	config.SkipPermissionCheck = true
+	config.LockFilePath = filepath.Join(config.LockDirPath, ".backup.lock")
+	config.MaxLockAge = time.Minute
+
+	checker := NewChecker(logger, config)
+	_, err := checker.RunAllChecks(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "temp directory check failed") {
+		t.Fatalf("expected temp directory check failed error, got: %v", err)
+	}
+}
+
+func TestRunAllChecks_FailsOnDiskSpace(t *testing.T) {
+	origTempRoot := tempRootPath
+	t.Cleanup(func() { tempRootPath = origTempRoot })
+	tempRootPath = t.TempDir()
+
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.MinDiskPrimaryGB = 999999.0
+	config.SkipPermissionCheck = true
+	config.LockFilePath = filepath.Join(tmpDir, ".backup.lock")
+	config.MaxLockAge = time.Minute
+
+	checker := NewChecker(logger, config)
+	_, err := checker.RunAllChecks(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "disk space check failed") {
+		t.Fatalf("expected disk space check failed error, got: %v", err)
+	}
+}
+
+func TestRunAllChecks_FailsOnPermissions(t *testing.T) {
+	origTempRoot := tempRootPath
+	t.Cleanup(func() { tempRootPath = origTempRoot })
+	tempRootPath = t.TempDir()
+
+	origCreate := createTestFile
+	t.Cleanup(func() { createTestFile = origCreate })
+	createTestFile = func(name string) (*os.File, error) {
+		return nil, os.ErrPermission
+	}
+
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.MinDiskPrimaryGB = 0
+	config.SkipPermissionCheck = false
+	config.LockFilePath = filepath.Join(tmpDir, ".backup.lock")
+	config.MaxLockAge = time.Minute
+
+	checker := NewChecker(logger, config)
+	_, err := checker.RunAllChecks(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "permissions check failed") {
+		t.Fatalf("expected permissions check failed error, got: %v", err)
+	}
+}
+
+func TestRunAllChecks_FailsOnLockFile(t *testing.T) {
+	origTempRoot := tempRootPath
+	t.Cleanup(func() { tempRootPath = origTempRoot })
+	tempRootPath = t.TempDir()
+
+	origOpen := osOpenFile
+	t.Cleanup(func() { osOpenFile = origOpen })
+	osOpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		return nil, &os.PathError{Op: "open", Path: name, Err: syscall.EEXIST}
+	}
+
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.MinDiskPrimaryGB = 0
+	config.SkipPermissionCheck = true
+	config.LockFilePath = filepath.Join(tmpDir, ".backup.lock")
+	config.MaxLockAge = time.Minute
+
+	checker := NewChecker(logger, config)
+	_, err := checker.RunAllChecks(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "lock file check failed") {
+		t.Fatalf("expected lock file check failed error, got: %v", err)
+	}
+}
+
+func TestCheckLockFile_StatFailsAfterExistenceCheck(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+	if err := os.WriteFile(lockPath, []byte("lock"), 0o600); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.LockFilePath = lockPath
+	config.MaxLockAge = time.Hour
+
+	origStat := osStat
+	t.Cleanup(func() { osStat = origStat })
+	calls := 0
+	osStat = func(name string) (os.FileInfo, error) {
+		if name == lockPath {
+			calls++
+			if calls == 2 {
+				return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.EIO}
+			}
+		}
+		return origStat(name)
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckLockFile()
+	if result.Passed {
+		t.Fatalf("expected CheckLockFile to fail, got passed")
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "failed to stat lock file") {
+		t.Fatalf("expected stat lock file error, got: %v", result.Error)
+	}
+}
+
+func TestCheckLockFile_RemoveStaleLockFails(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+	if err := os.WriteFile(lockPath, []byte("lock"), 0o600); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+	oldTime := time.Now().Add(-3 * time.Hour)
+	if err := os.Chtimes(lockPath, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.LockFilePath = lockPath
+	config.MaxLockAge = time.Hour
+
+	origRemove := osRemove
+	t.Cleanup(func() { osRemove = origRemove })
+	osRemove = func(name string) error {
+		if name == lockPath {
+			return syscall.EPERM
+		}
+		return origRemove(name)
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckLockFile()
+	if result.Passed {
+		t.Fatalf("expected CheckLockFile to fail, got passed")
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "failed to remove stale lock") {
+		t.Fatalf("expected remove stale lock error, got: %v", result.Error)
+	}
+}
+
+func TestCheckLockFile_WriteFails(t *testing.T) {
+	if _, err := os.Stat("/dev/full"); err != nil {
+		t.Skipf("/dev/full not available: %v", err)
+	}
+
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.LockFilePath = lockPath
+	config.MaxLockAge = time.Hour
+
+	origOpen := osOpenFile
+	t.Cleanup(func() { osOpenFile = origOpen })
+	osOpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		return os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckLockFile()
+	if result.Passed {
+		t.Fatalf("expected CheckLockFile to fail, got passed")
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "failed to write lock file") {
+		t.Fatalf("expected write lock file error, got: %v", result.Error)
+	}
+}
+
+func TestCheckLockFile_SyncWarningDoesNotFail(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.LockFilePath = lockPath
+	config.MaxLockAge = time.Hour
+
+	origSync := syncFile
+	t.Cleanup(func() { syncFile = origSync })
+	syncFile = func(f *os.File) error { return errors.New("sync failed") }
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckLockFile()
+	if !result.Passed {
+		t.Fatalf("expected CheckLockFile to pass despite sync failure, got: %v", result.Error)
+	}
+}
+
+func TestCheckLockFile_DefaultLockPath_DryRun(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.LockFilePath = ""
+	config.LockDirPath = tmpDir
+	config.MaxLockAge = time.Hour
+	config.DryRun = true
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckLockFile()
+	if !result.Passed {
+		t.Fatalf("expected CheckLockFile to pass in dry-run, got: %v", result.Error)
+	}
+
+	// Ensure the default lock path wasn't created in dry-run.
+	if _, err := os.Stat(filepath.Join(tmpDir, ".backup.lock")); !os.IsNotExist(err) {
+		t.Fatalf("expected no lock file to be created in dry-run")
+	}
+}
+
+func TestCheckLockFile_CreateFails(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.LockFilePath = lockPath
+	config.MaxLockAge = time.Hour
+	config.DryRun = false
+
+	origOpen := osOpenFile
+	t.Cleanup(func() { osOpenFile = origOpen })
+	osOpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		return nil, syscall.EPERM
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckLockFile()
+	if result.Passed {
+		t.Fatalf("expected CheckLockFile to fail")
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "failed to create lock file") {
+		t.Fatalf("expected create lock file error, got: %v", result.Error)
+	}
+}
+
+func TestCheckPermissions_ReadOnlyFilesystemCode(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+
+	origCreate := createTestFile
+	t.Cleanup(func() { createTestFile = origCreate })
+	createTestFile = func(name string) (*os.File, error) {
+		return nil, syscall.EROFS
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+	if result.Passed {
+		t.Fatalf("expected CheckPermissions to fail")
+	}
+	if result.Code != "FS_READONLY" {
+		t.Fatalf("Code=%q; want %q", result.Code, "FS_READONLY")
+	}
+}
+
+func TestCheckPermissions_DefaultFailureCode(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+
+	origCreate := createTestFile
+	t.Cleanup(func() { createTestFile = origCreate })
+	createTestFile = func(name string) (*os.File, error) {
+		return nil, errors.New("boom")
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+	if result.Passed {
+		t.Fatalf("expected CheckPermissions to fail")
+	}
+	if result.Code != "PERMISSION_CHECK_FAILED" {
+		t.Fatalf("Code=%q; want %q", result.Code, "PERMISSION_CHECK_FAILED")
+	}
+}
+
+func TestCheckPermissions_DoesNotRetryOnPermissionDenied(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+
+	origCreate := createTestFile
+	t.Cleanup(func() { createTestFile = origCreate })
+
+	attempts := 0
+	createTestFile = func(name string) (*os.File, error) {
+		attempts++
+		return nil, os.ErrPermission
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+	if result.Passed {
+		t.Fatalf("expected CheckPermissions to fail")
+	}
+	if result.Code != "PERMISSION_DENIED" {
+		t.Fatalf("Code=%q; want %q", result.Code, "PERMISSION_DENIED")
+	}
+	if attempts != 1 {
+		t.Fatalf("expected 1 attempt (no retry on permission denied), got %d", attempts)
+	}
+}
+
+func TestCheckPermissions_RetriesOnEIOThenSucceeds(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	backupDir := t.TempDir()
+	logDir := t.TempDir()
+	config := GetDefaultCheckerConfig(backupDir, logDir, t.TempDir())
+
+	origCreate := createTestFile
+	t.Cleanup(func() { createTestFile = origCreate })
+
+	attempts := 0
+	eioAttempts := 0
+	createTestFile = func(name string) (*os.File, error) {
+		attempts++
+		if strings.HasPrefix(name, backupDir+string(os.PathSeparator)) && eioAttempts < 2 {
+			eioAttempts++
+			return nil, syscall.EIO
+		}
+		return os.Create(name)
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+	if !result.Passed {
+		t.Fatalf("expected CheckPermissions to pass after retries, got: %v", result.Error)
+	}
+	if eioAttempts != 2 {
+		t.Fatalf("expected 2 EIO attempts, got %d", eioAttempts)
+	}
+	if attempts != 4 {
+		t.Fatalf("expected 4 attempts total (3 for backup dir, 1 for log dir), got %d", attempts)
+	}
+}
+
+func TestCheckPermissions_RemoveTestFileWarning(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+
+	origRemove := osRemove
+	t.Cleanup(func() { osRemove = origRemove })
+	osRemove = func(name string) error {
+		if strings.Contains(filepath.Base(name), ".permission_test_") {
+			return syscall.EPERM
+		}
+		return origRemove(name)
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+	if !result.Passed {
+		t.Fatalf("expected CheckPermissions to pass, got: %v", result.Error)
+	}
+}
+
+func TestCheckDirectories_SkipRootAndDotPaths(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	cfg := &CheckerConfig{
+		BackupPath:   "/",
+		LogPath:      ".",
+		LockDirPath:  "",
+		LockFilePath: "",
+		DryRun:       false,
+	}
+
+	checker := NewChecker(logger, cfg)
+	result := checker.CheckDirectories()
+	if !result.Passed {
+		t.Fatalf("expected CheckDirectories to pass, got: %v", result.Error)
+	}
+}
+
+func TestCheckDirectories_CreatesLockFileParentDir(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockDir := filepath.Join(tmpDir, "locks", "nested")
+	lockPath := filepath.Join(lockDir, ".backup.lock")
+
+	cfg := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	cfg.LockFilePath = lockPath
+	cfg.DryRun = false
+
+	checker := NewChecker(logger, cfg)
+	result := checker.CheckDirectories()
+	if !result.Passed {
+		t.Fatalf("expected CheckDirectories to pass, got: %v", result.Error)
+	}
+
+	if _, err := os.Stat(lockDir); err != nil {
+		t.Fatalf("expected lock parent dir to exist, stat failed: %v", err)
+	}
+}
+
+func TestCheckDirectories_StatNonExistenceError(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	cfg := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	cfg.BackupPath = filepath.Join(tmpDir, "weird")
+
+	origStat := osStat
+	t.Cleanup(func() { osStat = origStat })
+	osStat = func(name string) (os.FileInfo, error) {
+		if name == cfg.BackupPath {
+			return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.EIO}
+		}
+		return origStat(name)
+	}
+
+	checker := NewChecker(logger, cfg)
+	result := checker.CheckDirectories()
+	if result.Passed {
+		t.Fatalf("expected CheckDirectories to fail")
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "failed to stat directory") {
+		t.Fatalf("expected stat directory error, got: %v", result.Error)
+	}
+}
+
+func TestCheckDirectories_MkdirAllFails(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	missing := filepath.Join(tmpDir, "missing")
+	cfg := GetDefaultCheckerConfig(missing, tmpDir, tmpDir)
+
+	origMkdirAll := osMkdirAll
+	t.Cleanup(func() { osMkdirAll = origMkdirAll })
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return syscall.EPERM
+	}
+
+	checker := NewChecker(logger, cfg)
+	result := checker.CheckDirectories()
+	if result.Passed {
+		t.Fatalf("expected CheckDirectories to fail")
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "failed to create directory") {
+		t.Fatalf("expected mkdir error, got: %v", result.Error)
+	}
+}
+
+func TestCheckTempDirectory_StatFailed(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	origTempRoot := tempRootPath
+	origStat := osStat
+	t.Cleanup(func() {
+		tempRootPath = origTempRoot
+		osStat = origStat
+	})
+
+	tempRootPath = filepath.Join(t.TempDir(), "temp")
+	osStat = func(name string) (os.FileInfo, error) {
+		if name == tempRootPath {
+			return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.EIO}
+		}
+		return origStat(name)
+	}
+
+	checker := NewChecker(logger, GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir()))
+	result := checker.CheckTempDirectory()
+	if result.Passed || result.Code != "STAT_FAILED" {
+		t.Fatalf("expected STAT_FAILED, got passed=%v code=%q err=%v", result.Passed, result.Code, result.Error)
+	}
+}
+
+func TestCheckTempDirectory_CreateFailed(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	origTempRoot := tempRootPath
+	origStat := osStat
+	origMkdirAll := osMkdirAll
+	t.Cleanup(func() {
+		tempRootPath = origTempRoot
+		osStat = origStat
+		osMkdirAll = origMkdirAll
+	})
+
+	tempRootPath = filepath.Join(t.TempDir(), "temp")
+	osStat = func(name string) (os.FileInfo, error) {
+		if name == tempRootPath {
+			return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.ENOENT}
+		}
+		return origStat(name)
+	}
+	osMkdirAll = func(path string, perm os.FileMode) error { return syscall.EACCES }
+
+	checker := NewChecker(logger, GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir()))
+	result := checker.CheckTempDirectory()
+	if result.Passed || result.Code != "CREATE_FAILED" {
+		t.Fatalf("expected CREATE_FAILED, got passed=%v code=%q err=%v", result.Passed, result.Code, result.Error)
+	}
+}
+
+func TestCheckTempDirectory_VerifyFailed(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	origTempRoot := tempRootPath
+	origStat := osStat
+	t.Cleanup(func() {
+		tempRootPath = origTempRoot
+		osStat = origStat
+	})
+
+	tempRootPath = filepath.Join(t.TempDir(), "temp")
+	calls := 0
+	osStat = func(name string) (os.FileInfo, error) {
+		if name == tempRootPath {
+			calls++
+			if calls == 1 {
+				return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.ENOENT}
+			}
+			return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.EIO}
+		}
+		return origStat(name)
+	}
+
+	checker := NewChecker(logger, GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir()))
+	result := checker.CheckTempDirectory()
+	if result.Passed || result.Code != "VERIFY_FAILED" {
+		t.Fatalf("expected VERIFY_FAILED, got passed=%v code=%q err=%v", result.Passed, result.Code, result.Error)
+	}
+}
+
+func TestCheckTempDirectory_NoSymlinkSupport(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	origTempRoot := tempRootPath
+	origSymlink := osSymlink
+	t.Cleanup(func() {
+		tempRootPath = origTempRoot
+		osSymlink = origSymlink
+	})
+
+	tempRootPath = t.TempDir()
+	osSymlink = func(oldname, newname string) error { return syscall.EPERM }
+
+	checker := NewChecker(logger, GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir()))
+	result := checker.CheckTempDirectory()
+	if result.Passed || result.Code != "NO_SYMLINK_SUPPORT" {
+		t.Fatalf("expected NO_SYMLINK_SUPPORT, got passed=%v code=%q err=%v", result.Passed, result.Code, result.Error)
+	}
+}
+
+func TestReleaseLock_DryRunUsesDefaultPath(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	cfg := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	cfg.LockFilePath = ""
+	cfg.DryRun = true
+
+	checker := NewChecker(logger, cfg)
+	if err := checker.ReleaseLock(); err != nil {
+		t.Fatalf("ReleaseLock dry-run returned error: %v", err)
+	}
+}
+
+func TestReleaseLock_RemoveFails(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+	if err := os.WriteFile(lockPath, []byte("lock"), 0o600); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+
+	cfg := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	cfg.LockFilePath = lockPath
+
+	origRemove := osRemove
+	t.Cleanup(func() { osRemove = origRemove })
+	osRemove = func(name string) error { return syscall.EPERM }
+
+	checker := NewChecker(logger, cfg)
+	err := checker.ReleaseLock()
+	if err == nil || !strings.Contains(err.Error(), "failed to release lock") {
+		t.Fatalf("expected failed to release lock error, got: %v", err)
+	}
+}
+
+func TestCheckDiskSpaceForEstimate_PrimaryStatfsFails(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	cfg := GetDefaultCheckerConfig("/nonexistent/path", "/nonexistent/log", "/nonexistent/lock")
+	cfg.MinDiskPrimaryGB = 0.001
+	cfg.SafetyFactor = 1.0
+	cfg.MaxLockAge = time.Minute
+
+	checker := NewChecker(logger, cfg)
+	result := checker.CheckDiskSpaceForEstimate(0.1)
+	if result.Passed {
+		t.Fatalf("expected failure, got passed")
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "disk space check failed") {
+		t.Fatalf("expected disk space check failed error, got: %v", result.Error)
+	}
+}
+
+func TestCheckDiskSpaceForEstimate_WarnsOnNonCriticalErrorsAndInsufficientSpace(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	cfg := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	cfg.MinDiskPrimaryGB = 0.001
+	cfg.SafetyFactor = 1.0
+	cfg.MaxLockAge = time.Minute
+	cfg.SecondaryEnabled = true
+	cfg.SecondaryPath = "/nonexistent/secondary"
+	cfg.MinDiskSecondaryGB = 0.001
+
+	checker := NewChecker(logger, cfg)
+	result := checker.CheckDiskSpaceForEstimate(0.1)
+	if !result.Passed {
+		t.Fatalf("expected pass with warnings, got: %v", result.Error)
+	}
+
+	cfg.SecondaryPath = tmpDir
+	cfg.MinDiskSecondaryGB = 999999999.0
+	result = checker.CheckDiskSpaceForEstimate(0.1)
+	if !result.Passed {
+		t.Fatalf("expected pass with warnings, got: %v", result.Error)
+	}
+}
+
+func TestDiskSpaceGB_ErrorsOnMissingPath(t *testing.T) {
+	if _, err := diskSpaceGB("/nonexistent/path"); err == nil {
+		t.Fatalf("expected diskSpaceGB to error on missing path")
+	}
+}
+
+func TestCheckSingleDisk_ErrorsOnMissingPath(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	cfg := GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir())
+	checker := NewChecker(logger, cfg)
+	if err := checker.checkSingleDisk("Primary", "/nonexistent/path", 0.1); err == nil {
+		t.Fatalf("expected checkSingleDisk to error on missing path")
 	}
 }

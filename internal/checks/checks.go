@@ -18,6 +18,20 @@ import (
 // depending on specific filesystem behavior.
 var createTestFile = os.Create
 
+var (
+	osStat      = os.Stat
+	osRemove    = os.Remove
+	osOpenFile  = os.OpenFile
+	osMkdirAll  = os.MkdirAll
+	osWriteFile = os.WriteFile
+	osSymlink   = os.Symlink
+	syncFile    = func(f *os.File) error { return f.Sync() }
+
+	// tempRootPath is the runtime path used by CheckTempDirectory.
+	// It is a variable to allow tests to use a safe, isolated temporary directory.
+	tempRootPath = filepath.Join("/tmp", "proxsave")
+)
+
 // Checker performs pre-backup validation checks
 type Checker struct {
 	logger *logging.Logger
@@ -218,9 +232,9 @@ func (c *Checker) CheckLockFile() CheckResult {
 	c.logger.Debug("Lock file path: %s", lockPath)
 
 	// Check if lock file exists
-	if _, err := os.Stat(lockPath); err == nil {
+	if _, err := osStat(lockPath); err == nil {
 		// Lock file exists, check its age
-		info, err := os.Stat(lockPath)
+		info, err := osStat(lockPath)
 		if err != nil {
 			result.Error = fmt.Errorf("failed to stat lock file: %w", err)
 			result.Message = result.Error.Error()
@@ -231,7 +245,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 		if age > c.config.MaxLockAge {
 			// Stale lock file, remove it
 			c.logger.Warning("Removing stale lock file (age: %v)", age)
-			if err := os.Remove(lockPath); err != nil {
+			if err := osRemove(lockPath); err != nil {
 				result.Error = fmt.Errorf("failed to remove stale lock: %w", err)
 				result.Message = result.Error.Error()
 				return result
@@ -246,7 +260,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 	// Create new lock file atomically
 	if !c.config.DryRun {
 		c.logger.Debug("Creating lock file with PID %d", os.Getpid())
-		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0640)
+		f, err := osOpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0640)
 		if err != nil {
 			if os.IsExist(err) {
 				result.Message = "Another backup acquired the lock"
@@ -266,7 +280,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 			result.Message = result.Error.Error()
 			return result
 		}
-		if err := f.Sync(); err != nil {
+		if err := syncFile(f); err != nil {
 			c.logger.Warning("Failed to sync lock file %s: %v", lockPath, err)
 		}
 	} else {
@@ -282,9 +296,9 @@ func (c *Checker) CheckLockFile() CheckResult {
 // CheckPermissions verifies write permissions on required directories
 func (c *Checker) CheckPermissions() CheckResult {
 	result := CheckResult{
-		Name:    "Permissions",
-		Passed:  false,
-		Code:    "PERMISSION_CHECK",
+		Name:   "Permissions",
+		Passed: false,
+		Code:   "PERMISSION_CHECK",
 	}
 
 	dirs := []string{c.config.BackupPath, c.config.LogPath}
@@ -354,7 +368,7 @@ func (c *Checker) CheckPermissions() CheckResult {
 
 		c.logger.Debug("Directory writable: %s", dir)
 		// Clean up test file
-		if err := os.Remove(testFile); err != nil {
+		if err := osRemove(testFile); err != nil {
 			c.logger.Warning("Failed to remove test file %s: %v", testFile, err)
 		}
 	}
@@ -394,7 +408,7 @@ func (c *Checker) CheckDirectories() CheckResult {
 
 	for dir := range dirs {
 		c.logger.Debug("Checking directory: %s", dir)
-		info, err := os.Stat(dir)
+		info, err := osStat(dir)
 		if err == nil {
 			if !info.IsDir() {
 				result.Error = fmt.Errorf("required path is not a directory: %s", dir)
@@ -418,7 +432,7 @@ func (c *Checker) CheckDirectories() CheckResult {
 			continue
 		}
 
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := osMkdirAll(dir, 0755); err != nil {
 			result.Error = fmt.Errorf("failed to create directory %s: %w", dir, err)
 			result.Message = result.Error.Error()
 			c.logger.Error("%s", result.Message)
@@ -440,10 +454,10 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 		Passed: false,
 	}
 
-	tempRoot := filepath.Join("/tmp", "proxsave")
+	tempRoot := tempRootPath
 	c.logger.Debug("Checking temp directory: %s", tempRoot)
 
-	info, err := os.Stat(tempRoot)
+	info, err := osStat(tempRoot)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			result.Code = "STAT_FAILED"
@@ -454,7 +468,7 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 
 		// Directory doesn't exist - create it
 		c.logger.Debug("Temp directory not found, creating: %s", tempRoot)
-		if err := os.MkdirAll(tempRoot, 0o755); err != nil {
+		if err := osMkdirAll(tempRoot, 0o755); err != nil {
 			result.Code = "CREATE_FAILED"
 			result.Error = fmt.Errorf("Temp directory creation failed - path: %s: %w", tempRoot, err)
 			result.Message = result.Error.Error()
@@ -462,7 +476,7 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 		}
 		c.logger.Debug("Temp directory created: %s", tempRoot)
 
-		info, err = os.Stat(tempRoot)
+		info, err = osStat(tempRoot)
 		if err != nil {
 			result.Code = "VERIFY_FAILED"
 			result.Error = fmt.Errorf("Temp directory verification failed - path: %s: %w", tempRoot, err)
@@ -483,24 +497,24 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 	// Test write permission
 	c.logger.Debug("Testing write permission: %s", tempRoot)
 	testFile := filepath.Join(tempRoot, ".proxsave-permission-test")
-	if err := os.WriteFile(testFile, []byte("test"), 0o600); err != nil {
+	if err := osWriteFile(testFile, []byte("test"), 0o600); err != nil {
 		result.Code = "NOT_WRITABLE"
 		result.Error = fmt.Errorf("Temp directory not writable - path: %s: %w", tempRoot, err)
 		result.Message = result.Error.Error()
 		return result
 	}
-	defer os.Remove(testFile)
+	defer osRemove(testFile)
 
 	// Test symlink support
 	c.logger.Debug("Testing symlink support: %s", tempRoot)
 	testSymlink := filepath.Join(tempRoot, ".proxsave-symlink-test")
-	if err := os.Symlink(testFile, testSymlink); err != nil {
+	if err := osSymlink(testFile, testSymlink); err != nil {
 		result.Code = "NO_SYMLINK_SUPPORT"
 		result.Error = fmt.Errorf("Temp directory does not support symlinks - path: %s: %w", tempRoot, err)
 		result.Message = result.Error.Error()
 		return result
 	}
-	os.Remove(testSymlink)
+	osRemove(testSymlink)
 
 	result.Passed = true
 	result.Message = fmt.Sprintf("%s writable with symlink support", tempRoot)
@@ -519,7 +533,7 @@ func (c *Checker) ReleaseLock() error {
 		return nil
 	}
 
-	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+	if err := osRemove(lockPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to release lock: %w", err)
 	}
 
