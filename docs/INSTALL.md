@@ -1,3 +1,5 @@
+# ProxSave Installation Guide
+
 ## 📑 Table of Contents
 
 - [🚀 Fast Install](#fast-install)
@@ -19,36 +21,41 @@
   - [Installing the Legacy Bash Version](#installing-the-legacy-bash-version)
 - [⌨️ Legacy vs Go Version](#legacy-vs-go-version)
 
-
 ## Fast Install
 
 ### Direct Install
 
 1. Download & start Install
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
-```
 
-or: if you need a fully clean reinstall use: (preserves `build/`, `env/`, and `identity/`)
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
-```
+   ```bash
+   bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
+   ```
+
+   or: if you need a fully clean reinstall use: (preserves `build/`, `env/`, and `identity/`)
+
+   ```bash
+   bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
+   ```
 
 2. Run your first backup
-```bash
-./build/proxsave
-```
+
+   ```bash
+   ./build/proxsave
+   ```
 
 ### Migration
+
 1. Run migration installation from bash with old env file
-```bash
-./build/proxsave --env-migration
-```
+
+   ```bash
+   ./build/proxsave --env-migration
+   ```
 
 2. Run your first backup again after migration
-```bash
-./build/proxsave
-```
+
+   ```bash
+   ./build/proxsave
+   ```
 
 ### First Backup Workflow
 
@@ -88,6 +95,7 @@ ProxSave provides a built-in upgrade command to update your installation to the 
 ### What Gets Updated
 
 The `--upgrade` command:
+
 - ✅ Downloads latest binary from GitHub releases
 - ✅ Verifies integrity with SHA256 checksums
 - ✅ Atomically replaces current binary
@@ -125,6 +133,7 @@ crontab -l
 ### Troubleshooting
 
 If upgrade fails:
+
 1. Check internet connectivity: `curl -I https://github.com`
 2. Verify GitHub is reachable: `curl -I https://api.github.com`
 3. Check disk space: `df -h /opt/proxsave`
@@ -135,6 +144,7 @@ For more details, see [CLI Reference - Binary Upgrade](CLI_REFERENCE.md#binary-u
 ---
 
 ## Manual Installation
+
 > Allows you to compile your binary file from individual project files.
 
 ### Prerequisites
@@ -204,6 +214,7 @@ The installation wizard creates your configuration file interactively:
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 
 **Features:**
+
 - Input sanitization (no newlines/control characters)
 - Template comment preservation
 - Creates all necessary directories with proper permissions (0700)
@@ -229,7 +240,6 @@ Automatic tool based on variable mapping: BACKUP_ENV_MAPPING.md (we recommend ch
 
 You can then manually add your custom variables by referring to the mapping guide.
 
-
 #### Option 2: Migration Reference Guide
 
 The project includes a complete environment variable mapping guide to help you migrate your configuration:
@@ -237,18 +247,19 @@ The project includes a complete environment variable mapping guide to help you m
 **[BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)** - Complete Bash → Go variable mapping reference
 
 This guide categorizes every variable:
+
 - **SAME**: Variables with identical names (just copy them)
 - **RENAMED**: Variables with new names but automatic fallback (old names still work)
 - **SEMANTIC CHANGE**: Variables requiring value conversion (e.g., percentage → GB)
 - **LEGACY**: Bash-only variables no longer needed in Go
 
 **Quick migration workflow:**
+
 1. Open your Bash `backup.env`
 2. Open your Go `backup.env`
 3. Refer to `BACKUP_ENV_MAPPING.md` while copying your values
 4. Most variables can be copied directly (SAME + RENAMED categories)
 5. Pay attention to SEMANTIC CHANGE variables for manual conversion
-
 
 ### Upgrade Steps
 
@@ -257,6 +268,7 @@ This guide categorizes every variable:
 2. **Migrate your configuration**
 
    **Option A: Automatic migration (recommended for existing users)**
+
    ```bash
    # Step 1: Preview migration (recommended first step)
    ./build/proxsave --env-migration-dry-run
@@ -273,12 +285,14 @@ This guide categorizes every variable:
    ```
 
    **Option B: Manual migration using mapping guide**
+
    ```bash
    # Edit with your Bash settings, using BACKUP_ENV_MAPPING.md as reference
    nano configs/backup.env
    ```
 
 3. **Test the configuration**
+
    ```bash
    # Dry-run to verify configuration
    ./build/proxsave --dry-run
@@ -287,6 +301,7 @@ This guide categorizes every variable:
    ```
 
 4. **Run a test backup**
+
    ```bash
    # First real backup
    ./build/proxsave
@@ -296,20 +311,22 @@ This guide categorizes every variable:
    cat log/backup-*.log
    ```
 
-
 ### Key Migration Notes
 
 **Automatic variable fallbacks** - These old Bash variable names still work in Go:
+
 - `LOCAL_BACKUP_PATH` ? reads as `BACKUP_PATH`
 - `ENABLE_CLOUD_BACKUP` ? reads as `CLOUD_ENABLED`
 - `PROMETHEUS_ENABLED` ? reads as `METRICS_ENABLED`
 - And 13 more (see mapping guide for complete list)
 
 **Variables requiring conversion:**
+
 - `STORAGE_WARNING_THRESHOLD_PRIMARY="90"` (% used) ? `MIN_DISK_SPACE_PRIMARY_GB="1"` (GB free)
 - `CLOUD_BACKUP_PATH="/remote:path/folder"` (full path) ? `CLOUD_REMOTE="<remote>"` + `CLOUD_REMOTE_PATH="/folder"`
 
 **New Go-only features available:**
+
 - GFS retention policies (`RETENTION_POLICY=gfs`)
 - AGE encryption (`ENCRYPT_ARCHIVE=true`)
 - Parallel cloud uploads (`CLOUD_UPLOAD_MODE=parallel`)
@@ -320,15 +337,19 @@ This guide categorizes every variable:
 ### Troubleshooting Migration
 
 **Problem**: "Configuration variable not recognized"
+
 - **Solution**: Check `BACKUP_ENV_MAPPING.md` to see if the variable was renamed or is now LEGACY
 
 **Problem**: Storage threshold warnings incorrect
+
 - **Solution**: Convert percentage-based thresholds to GB-based (SEMANTIC CHANGE variables)
 
 **Problem**: Cloud path not working
+
 - **Solution**: Split `CLOUD_BACKUP_PATH` into `CLOUD_REMOTE` (remote name) and `CLOUD_REMOTE_PATH` (full path inside that remote)
 
 **Still having issues?**
+
 - Review the complete mapping guide: [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)
 - Compare your Bash config with the Go template side-by-side
 - Enable debug logging: `./build/proxsave --dry-run --log-level debug`
@@ -349,6 +370,7 @@ The original Bash script (20,370 lines) has been moved to the `old` branch and i
 The legacy Bash version can still be installed using the original installation command:
 
 #### Option 1: Fast Bash Legacy Install or Update or Reinstall
+
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/old/install.sh)"
 ```
@@ -356,46 +378,52 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/old/in
 #### Option 2: Manual
 
 Enter the /opt directory
+
 ```bash
 cd /opt
 ```
 
 Download the repository (stable release)
+
 ```bash
 wget https://github.com/tis24dev/proxsave/archive/refs/tags/v0.7.4-bash.tar.gz
 ```
 
 Create the script directory
+
 ```bash
 mkdir -p proxsave
 ```
 
 Extract the script files into the newly created directory, then delete the archive
+
 ```bash
 tar xzf v0.7.4-bash.tar.gz -C proxsave --strip-components=1 && rm v0.7.4-bash.tar.gz
 ```
 
 Enter the script directory
+
 ```bash
 cd proxsave
 ```
 
 Start the installation (runs initial checks, creates symlinks, creates cron)
+
 ```bash
 ./install.sh
 ```
 
 Customize your settings
+
 ```bash
 nano env/backup.env
 ```
 
 Run first backup
+
 ```bash
 ./script/proxmox-backup.sh
-
 ```
-
 
 **Important Notes:**
 
@@ -404,12 +432,12 @@ Run first backup
 
 ### Legacy vs Go Version
 
-| Feature | Legacy Bash (v0.7.4) | Go Version (v0.9.0+) |
-|---------|---------------------|---------------------|
-| **Status** | Maintenance mode (old branch) | Active development (main branch) |
-| **Installation** | `install.sh` script | Build from source |
-| **Performance** | Slower (shell overhead) | 10-20x faster (compiled) |
-| **Code size** | 20,370 lines | ~3,000 lines Go code |
-| **Memory usage** | Higher (multiple processes) | Lower (single binary) |
-| **Maintenance** | Archived, critical fixes only | Active development |
-| **Compatibility** | Can coexist with Go version | Can coexist with Bash version |
+|Feature|Legacy Bash (v0.7.4)|Go Version (v0.9.0+)|
+|---|---|---|
+|**Status**|Maintenance mode (old branch)|Active development (main branch)|
+|**Installation**|`install.sh` script|Build from source|
+|**Performance**|Slower (shell overhead)|10-20x faster (compiled)|
+|**Code size**|20,370 lines|~3,000 lines Go code|
+|**Memory usage**|Higher (multiple processes)|Lower (single binary)|
+|**Maintenance**|Archived, critical fixes only|Active development|
+|**Compatibility**|Can coexist with Go version|Can coexist with Bash version|
