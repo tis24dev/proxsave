@@ -1133,9 +1133,8 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		if parts[0] == "systemctl" && len(parts) >= 2 && parts[1] == "status" {
 			unit := parts[len(parts)-1]
 			if exitCode == 4 || strings.Contains(outputText, "could not be found") {
-				c.logger.Warning("Skipping %s: unit %s.service not found (likely not installed). Non-critical; backup continues. If expected, ignore; otherwise install/enable %s or disable firewall collection.",
+				c.logger.Warning("Skipping %s: %s.service not found (not installed?). Set BACKUP_FIREWALL_RULES=false to disable.",
 					description,
-					unit,
 					unit,
 				)
 				return nil, nil
