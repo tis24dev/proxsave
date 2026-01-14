@@ -478,13 +478,19 @@ func (c *CloudStorage) shouldFallbackToWriteTest(err *remoteCheckError, ctx cont
 
 func classifyRemoteError(stage, target string, err error, output []byte) error {
 	text := strings.ToLower(strings.TrimSpace(string(output)))
-	msg := fmt.Sprintf("rclone %s check failed for %s", stage, target)
-
 	kind := detectRemoteErrorKind(text)
+
+	// Clean rclone output to avoid "ERROR :" patterns confusing the log parser
+	cleanOutput := cleanRcloneOutput(string(output))
+
+	msg := fmt.Sprintf("Cloud storage error: rclone %s check failed for %s", stage, target)
+	if cleanOutput != "" {
+		msg = fmt.Sprintf("%s - %s", msg, cleanOutput) // Use " - " instead of ":" to avoid log parser issues
+	}
 
 	return &remoteCheckError{
 		kind: kind,
-		msg:  fmt.Sprintf("%s: %s", msg, strings.TrimSpace(string(output))),
+		msg:  msg,
 		err:  err,
 	}
 }
@@ -527,6 +533,28 @@ func containsAny(text string, substrings ...string) bool {
 		}
 	}
 	return false
+}
+
+// cleanRcloneOutput removes timestamps and "ERROR :" prefixes from rclone output
+// to produce cleaner error messages for logging and email notifications.
+// Example: "2025/01/11 10:00:00 ERROR : remote:path: directory not found"
+// becomes: "directory not found"
+func cleanRcloneOutput(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+
+	// Remove rclone timestamp and ERROR prefix pattern: "YYYY/MM/DD HH:MM:SS ERROR : path: "
+	if idx := strings.Index(output, "ERROR : "); idx != -1 {
+		output = output[idx+8:] // Skip "ERROR : "
+		// Skip the path part (until next ": ")
+		if idx2 := strings.Index(output, ": "); idx2 != -1 {
+			output = output[idx2+2:]
+		}
+	}
+
+	return strings.TrimSpace(output)
 }
 
 // Store uploads a backup file to cloud storage using rclone
