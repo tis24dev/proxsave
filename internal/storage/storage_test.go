@@ -193,22 +193,21 @@ func TestLocalStorageApplyRetentionDeletesOldBackups(t *testing.T) {
 	}
 }
 
-func TestLocalStorageLoadMetadataPrefersBundle(t *testing.T) {
+// TestLocalStorageLoadMetadataFromBundle verifies that when loadMetadata is called
+// with a bundle file (.bundle.tar), it reads metadata from INSIDE the bundle.
+func TestLocalStorageLoadMetadataFromBundle(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	cfg := &config.Config{BackupPath: dir, BundleAssociatedFiles: true}
+	cfg := &config.Config{BackupPath: dir}
 	local, err := NewLocalStorage(cfg, newTestLogger())
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
 
-	backupPath := filepath.Join(dir, "node-bundle-backup-20240101-010101.tar.zst")
-	if err := os.WriteFile(backupPath, []byte("data"), 0o600); err != nil {
-		t.Fatalf("write backup: %v", err)
-	}
+	// Create a bundle file with metadata inside
+	bundlePath := filepath.Join(dir, "node-backup-20240101-010101.tar.zst.bundle.tar")
 	ts := time.Date(2024, 1, 1, 1, 1, 1, 0, time.UTC)
-	bundlePath := backupPath + ".bundle.tar"
 
 	manifest := backup.Manifest{
 		ArchiveSize:     1234,
@@ -228,8 +227,9 @@ func TestLocalStorageLoadMetadataPrefersBundle(t *testing.T) {
 		t.Fatalf("create bundle: %v", err)
 	}
 	tw := tar.NewWriter(f)
+	// Metadata entry name should match the archive name inside bundle
 	header := &tar.Header{
-		Name: filepath.Base(backupPath) + ".metadata",
+		Name: "node-backup-20240101-010101.tar.zst.metadata",
 		Mode: 0o600,
 		Size: int64(len(data)),
 	}
@@ -246,7 +246,8 @@ func TestLocalStorageLoadMetadataPrefersBundle(t *testing.T) {
 		t.Fatalf("close file: %v", err)
 	}
 
-	meta, err := local.loadMetadata(backupPath)
+	// Call loadMetadata with the bundle path directly
+	meta, err := local.loadMetadata(bundlePath)
 	if err != nil {
 		t.Fatalf("loadMetadata() error = %v", err)
 	}

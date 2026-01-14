@@ -226,28 +226,18 @@ func (l *LocalStorage) List(ctx context.Context) ([]*types.BackupMetadata, error
 
 // loadMetadata loads metadata for a backup file
 func (l *LocalStorage) loadMetadata(backupFile string) (*types.BackupMetadata, error) {
-	l.logger.Debug("Local storage: loadMetadata called for %s (isBundle=%v)",
-		backupFile, strings.HasSuffix(backupFile, ".bundle.tar"))
+	isBundle := strings.HasSuffix(backupFile, ".bundle.tar")
+	l.logger.Debug("Local storage: loadMetadata for %s (isBundle=%v)", backupFile, isBundle)
 
-	if strings.HasSuffix(backupFile, ".bundle.tar") {
-		l.logger.Debug("Local storage: delegating to loadMetadataFromBundle(%s)", backupFile)
+	// If file IS a bundle → read metadata from INSIDE the bundle
+	if isBundle {
+		l.logger.Debug("Local storage: reading metadata from inside bundle %s", backupFile)
 		return l.loadMetadataFromBundle(backupFile)
 	}
 
-	// When bundles are enabled, prefer reading metadata from the bundle
-	if l != nil && l.config != nil && l.config.BundleAssociatedFiles {
-		bundlePath := backupFile + ".bundle.tar"
-		l.logger.Debug("Local storage: BundleAssociatedFiles=true, checking bundle %s", bundlePath)
-		if _, err := os.Stat(bundlePath); err == nil {
-			l.logger.Debug("Local storage: using metadata from bundle %s for %s", bundlePath, backupFile)
-			return l.loadMetadataFromBundle(bundlePath)
-		} else {
-			l.logger.Debug("Local storage: bundle %s not found (%v) — falling back to sidecar metadata", bundlePath, err)
-		}
-	}
-
+	// If file is NOT a bundle → read metadata from OUTSIDE (sidecar .metadata file)
 	metadataFile := backupFile + ".metadata"
-	l.logger.Debug("Local storage: using sidecar metadata file %s", metadataFile)
+	l.logger.Debug("Local storage: looking for sidecar metadata %s", metadataFile)
 	if _, err := os.Stat(metadataFile); err != nil {
 		l.logger.Debug("Local storage: sidecar metadata %s missing/inaccessible: %v", metadataFile, err)
 		return nil, err
