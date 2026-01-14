@@ -200,7 +200,7 @@ func (l *LocalStorage) List(ctx context.Context) ([]*types.BackupMetadata, error
 		// Parse metadata if available
 		metadata, err := l.loadMetadata(match)
 		if err != nil {
-			l.logger.Warning("Failed to load metadata for %s: %v", match, err)
+			l.logger.Warning("Missing .metadata for %s - using filename metadata", filepath.Base(match))
 			// Create minimal metadata from filename
 			metadata = &types.BackupMetadata{
 				BackupFile: match,
