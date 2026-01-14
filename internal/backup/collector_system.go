@@ -873,7 +873,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		usesZFS, indicators := c.detectZFSUsage()
 		c.logger.Debug("ZFS usage detected=%t (indicators=%s)", usesZFS, indicators)
 		if !usesZFS {
-			c.logger.Warning("BACKUP_ZFS_CONFIG=true but no ZFS usage detected (indicators=%s); skipping ZFS collection. Consider setting BACKUP_ZFS_CONFIG=false to disable this collector and silence this warning.", indicators)
+			c.logger.Warning("Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=false to disable.")
 		} else {
 			zfsDir := filepath.Join(infoDir, "zfs")
 			if err := c.ensureDir(zfsDir); err != nil {
