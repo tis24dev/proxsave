@@ -57,6 +57,11 @@ type Collector struct {
 }
 
 var osSymlink = os.Symlink
+var osReadlink = os.Readlink
+var osOpen = os.Open
+var osOpenFile = func(name string, flag int, perm os.FileMode) (io.WriteCloser, error) {
+	return os.OpenFile(name, flag, perm)
+}
 
 func (c *Collector) incFilesProcessed() {
 	atomic.AddInt64(&c.stats.FilesProcessed, 1)
@@ -633,7 +638,7 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 
 	// Handle symbolic links by recreating the link
 	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(src)
+		target, err := osReadlink(src)
 		if err != nil {
 			c.incFilesFailed()
 			return fmt.Errorf("Symlink read failed - path: %s: %w", src, err)
@@ -680,7 +685,7 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 	c.applyDirectoryMetadataFromSource(filepath.Dir(src), filepath.Dir(dest))
 
 	// Open source file
-	srcFile, err := os.Open(src)
+	srcFile, err := osOpen(src)
 	if err != nil {
 		c.incFilesFailed()
 		return fmt.Errorf("failed to open %s: %w", src, err)
@@ -688,7 +693,7 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 	defer srcFile.Close()
 
 	// Create destination file with a safe default mode; we'll apply the original metadata after copy.
-	destFile, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	destFile, err := osOpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		c.incFilesFailed()
 		return fmt.Errorf("failed to create %s: %w", dest, err)

@@ -3,15 +3,35 @@ package backup
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+type testFileInfo struct {
+	name    string
+	size    int64
+	mode    os.FileMode
+	modTime time.Time
+	sys     any
+	isDir   bool
+}
+
+func (fi testFileInfo) Name() string       { return fi.name }
+func (fi testFileInfo) Size() int64        { return fi.size }
+func (fi testFileInfo) Mode() os.FileMode  { return fi.mode }
+func (fi testFileInfo) ModTime() time.Time { return fi.modTime }
+func (fi testFileInfo) IsDir() bool        { return fi.isDir }
+func (fi testFileInfo) Sys() any           { return fi.sys }
 
 func TestNewCollector(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
@@ -675,4 +695,1074 @@ func TestSafeCopyFile_SymlinkCreationFailure_ErrorFormat(t *testing.T) {
 	if collector.stats.FilesFailed == 0 {
 		t.Error("FilesFailed counter should be incremented for symlink failure")
 	}
+}
+
+func TestSafeCopyFile_SymlinkReadlinkFailureIncrementsFailure(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	config := GetDefaultCollectorConfig()
+	tempDir := t.TempDir()
+
+	collector := NewCollector(logger, config, tempDir, types.ProxmoxVE, false)
+
+	origReadlink := osReadlink
+	t.Cleanup(func() { osReadlink = origReadlink })
+	osReadlink = func(string) (string, error) { return "", syscall.EPERM }
+
+	symlinkPath := filepath.Join(tempDir, "symlink.txt")
+	if err := os.Symlink("target.txt", symlinkPath); err != nil {
+		t.Fatalf("Failed to create symlink: %v", err)
+	}
+
+	destPath := filepath.Join(tempDir, "dest", "symlink.txt")
+	err := collector.safeCopyFile(context.Background(), symlinkPath, destPath, "symlink readlink failure")
+	if err == nil || !strings.Contains(err.Error(), "Symlink read failed") {
+		t.Fatalf("expected symlink read failure, got %v", err)
+	}
+
+	stats := collector.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestSafeCopyFile_ReturnsErrorWhenSourceOpenFails(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	config := GetDefaultCollectorConfig()
+	tempDir := t.TempDir()
+
+	collector := NewCollector(logger, config, tempDir, types.ProxmoxVE, false)
+
+	src := filepath.Join(tempDir, "source.txt")
+	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(tempDir, "dest", "out.txt")
+
+	origOpen := osOpen
+	t.Cleanup(func() { osOpen = origOpen })
+	osOpen = func(name string) (*os.File, error) {
+		if name == src {
+			return nil, syscall.EPERM
+		}
+		return origOpen(name)
+	}
+
+	err := collector.safeCopyFile(context.Background(), src, dest, "open fail")
+	if err == nil || !strings.Contains(err.Error(), "failed to open") {
+		t.Fatalf("expected open error, got %v", err)
+	}
+	if got := collector.GetStats().FilesFailed; got != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", got)
+	}
+}
+
+type errCloseFile struct {
+	*os.File
+}
+
+func (f errCloseFile) Close() error {
+	_ = f.File.Close()
+	return syscall.EIO
+}
+
+func TestSafeCopyFile_ReturnsErrorWhenDestCloseFails(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	config := GetDefaultCollectorConfig()
+	tempDir := t.TempDir()
+
+	collector := NewCollector(logger, config, tempDir, types.ProxmoxVE, false)
+
+	src := filepath.Join(tempDir, "source.txt")
+	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(tempDir, "dest", "out.txt")
+
+	origOpenFile := osOpenFile
+	t.Cleanup(func() { osOpenFile = origOpenFile })
+	osOpenFile = func(name string, flag int, perm os.FileMode) (io.WriteCloser, error) {
+		f, err := os.OpenFile(name, flag, perm)
+		if err != nil {
+			return nil, err
+		}
+		return errCloseFile{File: f}, nil
+	}
+
+	err := collector.safeCopyFile(context.Background(), src, dest, "close fail")
+	if err == nil || !strings.Contains(err.Error(), "failed to close") {
+		t.Fatalf("expected close error, got %v", err)
+	}
+	if got := collector.GetStats().FilesFailed; got != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", got)
+	}
+}
+
+func TestCaptureCommandOutput_SystemctlStatusUnitNotFound_Skips(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/systemctl", nil },
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			cmd := exec.Command("sh", "-c", "echo 'Unit foo.service could not be found.'; exit 4")
+			out, err := cmd.CombinedOutput()
+			return out, err
+		},
+	}
+
+	collector := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+	outPath := filepath.Join(tmp, "systemctl_status.txt")
+
+	data, err := collector.captureCommandOutput(context.Background(), "systemctl status foo", outPath, "systemctl status", false)
+	if err != nil {
+		t.Fatalf("captureCommandOutput returned error: %v", err)
+	}
+	if data != nil {
+		t.Fatalf("expected nil data when unit not found, got %q", string(data))
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no output file to be created, stat err=%v", err)
+	}
+
+	stats := collector.GetStats()
+	if stats.FilesFailed != 0 {
+		t.Fatalf("expected FilesFailed=0, got %d", stats.FilesFailed)
+	}
+}
+
+func TestCaptureCommandOutput_SystemctlStatusSystemdUnavailable_Skips(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/systemctl", nil },
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			cmd := exec.Command("sh", "-c", "echo 'System has not been booted with systemd as init system (PID 1).'; exit 1")
+			out, err := cmd.CombinedOutput()
+			return out, err
+		},
+	}
+
+	collector := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+	outPath := filepath.Join(tmp, "systemctl_status.txt")
+
+	data, err := collector.captureCommandOutput(context.Background(), "systemctl status ssh", outPath, "systemctl status", false)
+	if err != nil {
+		t.Fatalf("captureCommandOutput returned error: %v", err)
+	}
+	if data != nil {
+		t.Fatalf("expected nil data when systemd is unavailable, got %q", string(data))
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no output file to be created, stat err=%v", err)
+	}
+}
+
+func TestSafeCopyFile_SkipsNonRegularFIFO(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	collector := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+	src := filepath.Join(tmp, "src.fifo")
+	if err := syscall.Mkfifo(src, 0o600); err != nil {
+		t.Skipf("mkfifo not available: %v", err)
+	}
+
+	dest := filepath.Join(tmp, "dest", "dst.fifo")
+	if err := collector.safeCopyFile(context.Background(), src, dest, "fifo"); err != nil {
+		t.Fatalf("safeCopyFile returned error: %v", err)
+	}
+
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("expected fifo not to be copied, stat err=%v", err)
+	}
+
+	stats := collector.GetStats()
+	if stats.FilesFailed != 0 {
+		t.Fatalf("expected FilesFailed=0, got %d", stats.FilesFailed)
+	}
+}
+
+func TestCollectorDepsFallbacksToGlobalFunctions(t *testing.T) {
+	origLookPath := execLookPath
+	origRun := runCommand
+	origRunWithEnv := runCommandWithEnv
+	t.Cleanup(func() {
+		execLookPath = origLookPath
+		runCommand = origRun
+		runCommandWithEnv = origRunWithEnv
+	})
+
+	execLookPath = func(name string) (string, error) {
+		if name != "foo" {
+			return "", errors.New("unexpected name")
+		}
+		return "/bin/foo", nil
+	}
+
+	runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "cmd" || len(args) != 2 || args[0] != "a" || args[1] != "b" {
+			return nil, errors.New("unexpected args")
+		}
+		return []byte("ok"), nil
+	}
+
+	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
+		if name != "cmd-env" || len(args) != 1 || args[0] != "x" {
+			return nil, errors.New("unexpected args")
+		}
+		if len(extraEnv) != 2 || extraEnv[0] != "A=1" || extraEnv[1] != "B=2" {
+			return nil, errors.New("unexpected env")
+		}
+		return []byte("env-ok"), nil
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, CollectorDeps{})
+
+	lp, err := c.depLookPath("foo")
+	if err != nil || lp != "/bin/foo" {
+		t.Fatalf("depLookPath fallback failed: path=%q err=%v", lp, err)
+	}
+
+	out, err := c.depRunCommand(context.Background(), "cmd", "a", "b")
+	if err != nil || string(out) != "ok" {
+		t.Fatalf("depRunCommand fallback failed: out=%q err=%v", string(out), err)
+	}
+
+	out, err = c.depRunCommandWithEnv(context.Background(), []string{"A=1", "B=2"}, "cmd-env", "x")
+	if err != nil || string(out) != "env-ok" {
+		t.Fatalf("depRunCommandWithEnv fallback failed: out=%q err=%v", string(out), err)
+	}
+}
+
+func TestSafeCopyFileHonorsContextCancellation(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	collector := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := collector.safeCopyFile(ctx, filepath.Join(tmp, "missing"), filepath.Join(tmp, "dest"), "canceled")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestSafeCopyFileSkipsWhenExcluded(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	cfg.ExcludePatterns = []string{"*.txt"}
+	tmp := t.TempDir()
+	collector := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source.txt")
+	if err := os.WriteFile(src, []byte("data"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	dest := filepath.Join(tmp, "dest", "copied.txt")
+	if err := collector.safeCopyFile(context.Background(), src, dest, "excluded"); err != nil {
+		t.Fatalf("safeCopyFile returned error: %v", err)
+	}
+
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("expected excluded file not to be copied, stat err=%v", err)
+	}
+
+	stats := collector.GetStats()
+	if stats.FilesProcessed != 0 || stats.FilesFailed != 0 {
+		t.Fatalf("expected stats unchanged, got %+v", stats)
+	}
+}
+
+func TestSafeCopyFileReturnsErrorWhenDestParentIsFile(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	collector := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source.bin")
+	if err := os.WriteFile(src, []byte("data"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	// Block directory creation for filepath.Dir(dest) by placing a regular file.
+	parent := filepath.Join(tmp, "dest-parent")
+	if err := os.WriteFile(parent, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatalf("write parent blocker: %v", err)
+	}
+
+	dest := filepath.Join(parent, "out.bin")
+	if err := collector.safeCopyFile(context.Background(), src, dest, "blocked"); err == nil {
+		t.Fatalf("expected error when destination parent is a file")
+	}
+
+	stats := collector.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestSafeCopyFileReturnsErrorWhenSymlinkDestCannotBeReplaced(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	collector := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	target := filepath.Join(tmp, "target.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	src := filepath.Join(tmp, "link.txt")
+	if err := os.Symlink("target.txt", src); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	dest := filepath.Join(tmp, "dest", "link.txt")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatalf("mkdir dest dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "child"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write child: %v", err)
+	}
+
+	err := collector.safeCopyFile(context.Background(), src, dest, "symlink")
+	if err == nil || !strings.Contains(err.Error(), "File replacement failed - ") {
+		t.Fatalf("expected replacement error, got %v", err)
+	}
+
+	stats := collector.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestSafeCopyFileReturnsErrorWhenDestIsDirectory(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	collector := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source.txt")
+	if err := os.WriteFile(src, []byte("data"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	dest := filepath.Join(tmp, "dest", "as-dir")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatalf("mkdir dest: %v", err)
+	}
+
+	if err := collector.safeCopyFile(context.Background(), src, dest, "dir-dest"); err == nil {
+		t.Fatalf("expected error when destination is a directory")
+	}
+
+	stats := collector.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestApplyMetadataHandlesNilInfo(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	c.applyMetadata(filepath.Join(tmp, "missing"), nil)
+}
+
+func TestApplyMetadataHandlesFailuresGracefully(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	// Use a destination path that does not exist so Chown/Chmod/Chtimes will fail deterministically.
+	dest := filepath.Join(tmp, "nope", "file.txt")
+	info := testFileInfo{
+		name:    "file.txt",
+		mode:    0o600,
+		modTime: time.Now(),
+		sys: &syscall.Stat_t{
+			Uid:  0,
+			Gid:  0,
+			Atim: syscall.Timespec{Sec: 1, Nsec: 2},
+			Mtim: syscall.Timespec{Sec: 3, Nsec: 4},
+		},
+	}
+
+	c.applyMetadata(dest, info)
+}
+
+func TestLstatOrNilReturnsNilOnMissingPath(t *testing.T) {
+	if got := lstatOrNil("/this/path/should/not/exist"); got != nil {
+		t.Fatalf("expected nil, got %#v", got)
+	}
+}
+
+func TestApplyDirectoryMetadataFromSourceSkipsOutsideTempDir(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	srcDir := t.TempDir()
+	destDir := t.TempDir() // not under c.tempDir
+	c.applyDirectoryMetadataFromSource(srcDir, destDir)
+}
+
+func TestApplySymlinkOwnershipSkipsWhenSysIsNotStatT(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	c.applySymlinkOwnership(filepath.Join(tmp, "missing"), testFileInfo{sys: "not-stat"})
+}
+
+func TestApplySymlinkOwnershipHandlesLchownFailureGracefully(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	c.applySymlinkOwnership(filepath.Join(tmp, "missing"), testFileInfo{sys: &syscall.Stat_t{Uid: 0, Gid: 0}})
+}
+
+func TestSafeCopyFileReturnsErrorOnLstatNonNotExist(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	// ENAMETOOLONG is deterministic and triggers the non-IsNotExist error path.
+	src := "/" + strings.Repeat("a", 10000)
+	err := c.safeCopyFile(context.Background(), src, filepath.Join(tmp, "dest"), "too long")
+	if err == nil || !strings.Contains(err.Error(), "failed to stat") {
+		t.Fatalf("expected stat error, got %v", err)
+	}
+
+	stats := c.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestSafeCopyFileSymlinkEnsureDirFailureIncrementsFilesFailed(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	target := filepath.Join(tmp, "target.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	src := filepath.Join(tmp, "link.txt")
+	if err := os.Symlink("target.txt", src); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	parent := filepath.Join(tmp, "dest-parent")
+	if err := os.WriteFile(parent, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatalf("write parent blocker: %v", err)
+	}
+	dest := filepath.Join(parent, "link.txt")
+
+	err := c.safeCopyFile(context.Background(), src, dest, "symlink")
+	if err == nil {
+		t.Fatalf("expected error when ensureDir fails")
+	}
+
+	stats := c.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestSafeCopyFileCopyToDevFullFailsDeterministically(t *testing.T) {
+	// This covers the io.Copy error path in a deterministic way on Linux.
+	if _, err := os.Stat("/dev/full"); err != nil {
+		t.Skipf("/dev/full not available: %v", err)
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source.txt")
+	if err := os.WriteFile(src, []byte("data"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	err := c.safeCopyFile(context.Background(), src, "/dev/full", "devfull")
+	if err == nil || !strings.Contains(err.Error(), "failed to copy") {
+		t.Fatalf("expected copy error, got %v", err)
+	}
+	if got := c.GetStats().FilesFailed; got != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", got)
+	}
+}
+
+func TestSafeCopyDirHonorsContextCancellation(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := c.safeCopyDir(ctx, tmp, filepath.Join(tmp, "dest"), "canceled")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+type errOnSecondCallContext struct {
+	calls int
+}
+
+func (c *errOnSecondCallContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *errOnSecondCallContext) Done() <-chan struct{}       { return nil }
+func (c *errOnSecondCallContext) Err() error {
+	c.calls++
+	if c.calls == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+func (c *errOnSecondCallContext) Value(any) any { return nil }
+
+func TestSafeCopyDirSkipsWhenExcluded(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	cfg.ExcludePatterns = []string{"source"}
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	dest := filepath.Join(tmp, "dest")
+
+	if err := c.safeCopyDir(context.Background(), src, dest, "excluded"); err != nil {
+		t.Fatalf("safeCopyDir returned error: %v", err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("expected dest not to be created, stat err=%v", err)
+	}
+}
+
+func TestSafeCopyDirStopsWhenContextErrorOccursInsideWalk(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write src file: %v", err)
+	}
+
+	dest := filepath.Join(tmp, "dest")
+	err := c.safeCopyDir(&errOnSecondCallContext{}, src, dest, "ctx flip")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled from walk callback, got %v", err)
+	}
+}
+
+func TestSafeCopyDirReturnsErrorWhenDestIsFile(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write src file: %v", err)
+	}
+
+	dest := filepath.Join(tmp, "dest")
+	if err := os.WriteFile(dest, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatalf("write dest blocker: %v", err)
+	}
+
+	if err := c.safeCopyDir(context.Background(), src, dest, "blocked"); err == nil {
+		t.Fatalf("expected error when dest path is a file")
+	}
+}
+
+func TestSafeCopyDirSkipsExcludedFiles(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	cfg.ExcludePatterns = []string{"skip.txt"}
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "keep.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write keep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "skip.txt"), []byte("no"), 0o644); err != nil {
+		t.Fatalf("write skip: %v", err)
+	}
+
+	dest := filepath.Join(tmp, "dest")
+	if err := c.safeCopyDir(context.Background(), src, dest, "skip files"); err != nil {
+		t.Fatalf("safeCopyDir returned error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, "keep.txt")); err != nil {
+		t.Fatalf("expected keep file to be copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "skip.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected excluded file to be skipped, stat err=%v", err)
+	}
+}
+
+func TestSafeCopyDirSkipsExcludedSubdirectories(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	cfg.ExcludePatterns = []string{"skip"}
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source")
+	if err := os.MkdirAll(filepath.Join(src, "keep"), 0o755); err != nil {
+		t.Fatalf("mkdir keep: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "skip", "inner"), 0o755); err != nil {
+		t.Fatalf("mkdir skip: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "keep", "ok.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write keep file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "skip", "inner", "no.txt"), []byte("no"), 0o644); err != nil {
+		t.Fatalf("write skip file: %v", err)
+	}
+
+	dest := filepath.Join(tmp, "dest")
+	if err := c.safeCopyDir(context.Background(), src, dest, "test"); err != nil {
+		t.Fatalf("safeCopyDir returned error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, "keep", "ok.txt")); err != nil {
+		t.Fatalf("expected keep file to be copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "skip", "inner", "no.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected excluded subtree not to be copied, stat err=%v", err)
+	}
+}
+
+func TestSafeCopyDirReturnsErrorWhenDestSubdirCannotBeCreated(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	src := filepath.Join(tmp, "source")
+	if err := os.MkdirAll(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "sub", "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	dest := filepath.Join(tmp, "dest")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatalf("mkdir dest: %v", err)
+	}
+	// Block creation of dest/sub by placing a file there.
+	if err := os.WriteFile(filepath.Join(dest, "sub"), []byte("block"), 0o644); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+
+	if err := c.safeCopyDir(context.Background(), src, dest, "blocked-subdir"); err == nil {
+		t.Fatalf("expected error when dest subdir cannot be created")
+	}
+}
+
+func TestSafeCmdOutputHonorsContextCancellation(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := c.safeCmdOutput(ctx, "echo hi", filepath.Join(tmp, "out.txt"), "canceled", false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestSafeCmdOutputReturnsErrorOnEmptyCommand(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	if err := c.safeCmdOutput(context.Background(), "   ", filepath.Join(tmp, "out.txt"), "empty", false); err == nil {
+		t.Fatalf("expected error for empty command")
+	}
+}
+
+func TestSafeCmdOutputCriticalCommandNotAvailableIncrementsFilesFailed(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "", errors.New("missing") },
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	err := c.safeCmdOutput(context.Background(), "does-not-exist", filepath.Join(tmp, "out.txt"), "critical", true)
+	if err == nil {
+		t.Fatalf("expected error for critical missing command")
+	}
+
+	stats := c.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestSafeCmdOutputWriteFailureIncrementsFilesFailed(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	outDir := filepath.Join(tmp, "output-dir")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir outDir: %v", err)
+	}
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	err := c.safeCmdOutput(context.Background(), "echo hi", outDir, "write-fail", false)
+	if err == nil {
+		t.Fatalf("expected write error when output path is a directory")
+	}
+
+	stats := c.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestSafeCmdOutputEnsureDirFailureReturnsError(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	blocker := filepath.Join(tmp, "blocker")
+	if err := os.WriteFile(blocker, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	output := filepath.Join(blocker, "out.txt")
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	if err := c.safeCmdOutput(context.Background(), "echo hi", output, "ensureDir-fail", false); err == nil {
+		t.Fatalf("expected ensureDir error")
+	}
+}
+
+func TestCaptureCommandOutputReturnsErrorOnEmptyCommand(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	if _, err := c.captureCommandOutput(context.Background(), "   ", filepath.Join(tmp, "out.txt"), "empty", false); err == nil {
+		t.Fatalf("expected error for empty command")
+	}
+}
+
+func TestCaptureCommandOutputHonorsContextCancellation(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := c.captureCommandOutput(ctx, "echo hi", filepath.Join(tmp, "out.txt"), "canceled", false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestCaptureCommandOutputPropagatesWriteReportFileError(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir outDir: %v", err)
+	}
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	// writeReportFile should fail because output path is a directory.
+	if _, err := c.captureCommandOutput(context.Background(), "echo hi", outDir, "desc", false); err == nil {
+		t.Fatalf("expected writeReportFile error")
+	}
+}
+
+func TestCaptureCommandOutputCriticalCommandNotAvailableIncrementsFilesFailed(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "", errors.New("missing") },
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	_, err := c.captureCommandOutput(context.Background(), "missing-cmd arg", filepath.Join(tmp, "out.txt"), "critical", true)
+	if err == nil {
+		t.Fatalf("expected error for critical missing command")
+	}
+	stats := c.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestCaptureCommandOutputNonCriticalFailureReturnsNil(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			cmd := exec.Command("sh", "-c", "echo 'boom'; exit 1")
+			out, err := cmd.CombinedOutput()
+			return out, err
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	outPath := filepath.Join(tmp, "out.txt")
+	data, err := c.captureCommandOutput(context.Background(), "cmd arg", outPath, "noncritical", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data != nil {
+		t.Fatalf("expected nil data on non-critical failure, got %q", string(data))
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no output file, stat err=%v", err)
+	}
+}
+
+func TestCollectCommandMultiRequiresPrimaryOutput(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
+
+	if err := c.collectCommandMulti(context.Background(), "echo hi", "", "desc", false); err == nil {
+		t.Fatalf("expected error when primary output is empty")
+	}
+}
+
+func TestCollectCommandMultiFailsWhenMirrorWriteFails(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("data"), nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	primary := filepath.Join(tmp, "primary.txt")
+	mirrorDir := filepath.Join(tmp, "mirror")
+	if err := os.MkdirAll(mirrorDir, 0o755); err != nil {
+		t.Fatalf("mkdir mirrorDir: %v", err)
+	}
+
+	if err := c.collectCommandMulti(context.Background(), "echo hi", primary, "desc", false, mirrorDir, ""); err == nil {
+		t.Fatalf("expected error when mirror path is a directory")
+	}
+}
+
+func TestCollectCommandMultiSkipsEmptyMirrors(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("data"), nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	primary := filepath.Join(tmp, "primary.txt")
+	if err := c.collectCommandMulti(context.Background(), "echo hi", primary, "desc", false, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(primary); err != nil {
+		t.Fatalf("expected primary file to exist: %v", err)
+	}
+}
+
+func TestCollectCommandOptionalSkipsWhenNoOutputPath(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatalf("RunCommand should not be called")
+			return nil, nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+	c.collectCommandOptional(context.Background(), "echo hi", "", "desc", filepath.Join(tmp, "mirror"))
+}
+
+func TestCollectCommandOptionalDoesNotMirrorEmptyOutput(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte{}, nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	primary := filepath.Join(tmp, "primary.txt")
+	mirror := filepath.Join(tmp, "mirror.txt")
+	c.collectCommandOptional(context.Background(), "echo hi", primary, "desc", mirror)
+
+	if _, err := os.Stat(primary); err != nil {
+		t.Fatalf("expected primary file to exist: %v", err)
+	}
+	if _, err := os.Stat(mirror); !os.IsNotExist(err) {
+		t.Fatalf("expected mirror file not to exist for empty output, stat err=%v", err)
+	}
+}
+
+func TestCollectCommandOptionalSkipsOnCaptureError(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("data"), nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	// Force writeReportFile error by setting output path to a directory.
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir outDir: %v", err)
+	}
+
+	mirror := filepath.Join(tmp, "mirror.txt")
+	c.collectCommandOptional(context.Background(), "echo hi", outDir, "desc", "", mirror)
+	if _, err := os.Stat(mirror); !os.IsNotExist(err) {
+		t.Fatalf("expected mirror to be skipped on capture error, stat err=%v", err)
+	}
+}
+
+func TestCollectCommandOptionalSkipsEmptyMirrorEntries(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("data"), nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	primary := filepath.Join(tmp, "primary.txt")
+	mirror := filepath.Join(tmp, "mirror.txt")
+	c.collectCommandOptional(context.Background(), "echo hi", primary, "desc", "", mirror)
+	if _, err := os.Stat(mirror); err != nil {
+		t.Fatalf("expected mirror file to exist: %v", err)
+	}
+}
+
+func TestCollectCommandOptionalIgnoresMirrorWriteFailures(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/bin/echo", nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("data"), nil
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	primary := filepath.Join(tmp, "primary.txt")
+	mirrorDir := filepath.Join(tmp, "mirror")
+	if err := os.MkdirAll(mirrorDir, 0o755); err != nil {
+		t.Fatalf("mkdir mirrorDir: %v", err)
+	}
+
+	c.collectCommandOptional(context.Background(), "echo hi", primary, "desc", mirrorDir)
 }

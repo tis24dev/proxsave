@@ -153,6 +153,54 @@ func TestWriteReportFileCreatesDirectories(t *testing.T) {
 	}
 }
 
+func TestWriteReportFileIncrementsFilesFailedOnEnsureDirError(t *testing.T) {
+	collector := newTestCollector(t)
+
+	// Block directory creation by placing a regular file where a directory is expected.
+	blocker := filepath.Join(collector.tempDir, "reports")
+	if err := os.WriteFile(blocker, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+
+	report := filepath.Join(blocker, "nested", "report.txt")
+	if err := collector.writeReportFile(report, []byte("data")); err == nil {
+		t.Fatalf("expected writeReportFile to fail when parent path is a file")
+	}
+
+	if _, err := os.Stat(report); err == nil {
+		t.Fatalf("expected no report file to be created")
+	}
+
+	stats := collector.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
+func TestWriteReportFileIncrementsFilesFailedOnWriteError(t *testing.T) {
+	collector := newTestCollector(t)
+
+	parent := filepath.Join(collector.tempDir, "reports", "test")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatalf("mkdir parent: %v", err)
+	}
+
+	// Force os.WriteFile to fail deterministically by making the report path a directory.
+	report := filepath.Join(parent, "report.txt")
+	if err := os.MkdirAll(report, 0o755); err != nil {
+		t.Fatalf("mkdir report dir: %v", err)
+	}
+
+	if err := collector.writeReportFile(report, []byte("data")); err == nil {
+		t.Fatalf("expected writeReportFile to fail when report path is a directory")
+	}
+
+	stats := collector.GetStats()
+	if stats.FilesFailed != 1 {
+		t.Fatalf("expected FilesFailed=1, got %d", stats.FilesFailed)
+	}
+}
+
 func TestWriteReportFileDryRun(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	config := GetDefaultCollectorConfig()
