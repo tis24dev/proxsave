@@ -15,12 +15,16 @@ import (
 )
 
 const (
-	pveVersionFile = "/etc/pve-manager/version"
-	pveLegacyFile  = "/etc/pve/pve.version"
-	pbsVersionFile = "/etc/proxmox-backup/version"
+	defaultPVEVersionFile = "/etc/pve-manager/version"
+	defaultPVELegacyFile  = "/etc/pve/pve.version"
+	defaultPBSVersionFile = "/etc/proxmox-backup/version"
 )
 
 var (
+	pveVersionFile = defaultPVEVersionFile
+	pveLegacyFile  = defaultPVELegacyFile
+	pbsVersionFile = defaultPBSVersionFile
+
 	additionalPaths = []string{"/usr/bin", "/usr/sbin", "/bin", "/sbin"}
 
 	pveDirCandidates = []string{
@@ -41,6 +45,23 @@ var (
 		"/etc/apt/sources.list.d/pbs.list",
 		"/etc/apt/sources.list.d/proxmox.list",
 	}
+
+	lookPathFunc       = exec.LookPath
+	commandContextFunc = exec.CommandContext
+
+	readFileFunc  = os.ReadFile
+	statFunc      = os.Stat
+	mkdirAllFunc  = os.MkdirAll
+	writeFileFunc = os.WriteFile
+	getwdFunc     = os.Getwd
+
+	userCurrentFunc = user.Current
+	timeNowFunc     = time.Now
+
+	commandTimeout = 5 * time.Second
+	debugBaseDir   = "/tmp"
+
+	runCommandFunc = runCommand
 )
 
 // DetectProxmoxType detects whether the system is running Proxmox VE or Proxmox Backup Server
@@ -85,10 +106,6 @@ func Detect() (*EnvironmentInfo, error) {
 		}, fmt.Errorf("unable to detect Proxmox environment")
 	}
 
-	if version == "" {
-		version = "unknown"
-	}
-
 	return &EnvironmentInfo{
 		Type:    pType,
 		Version: version,
@@ -99,16 +116,10 @@ func detectProxmox() (types.ProxmoxType, string, error) {
 	extendPath()
 
 	if version, ok := detectPVE(); ok {
-		if version == "" {
-			version = "unknown"
-		}
 		return types.ProxmoxVE, version, nil
 	}
 
 	if version, ok := detectPBS(); ok {
-		if version == "" {
-			version = "unknown"
-		}
 		return types.ProxmoxBS, version, nil
 	}
 
@@ -160,12 +171,12 @@ func detectPBS() (string, bool) {
 }
 
 func detectPVEViaCommand() (string, bool) {
-	cmdPath, err := exec.LookPath("pveversion")
+	cmdPath, err := lookPathFunc("pveversion")
 	if err != nil {
 		return "", false
 	}
 
-	output, err := runCommand(cmdPath)
+	output, err := runCommandFunc(cmdPath)
 	if err != nil {
 		return "unknown", true
 	}
@@ -178,12 +189,12 @@ func detectPVEViaCommand() (string, bool) {
 }
 
 func detectPBSViaCommand() (string, bool) {
-	cmdPath, err := exec.LookPath("proxmox-backup-manager")
+	cmdPath, err := lookPathFunc("proxmox-backup-manager")
 	if err != nil {
 		return "", false
 	}
 
-	output, err := runCommand(cmdPath, "version")
+	output, err := runCommandFunc(cmdPath, "version")
 	if err != nil {
 		return "unknown", true
 	}
@@ -274,10 +285,10 @@ func extendPath() {
 }
 
 func runCommand(command string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := commandContextFunc(ctx, command, args...)
 	output, err := cmd.Output()
 	if ctx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("command %s timed out", command)
@@ -307,7 +318,7 @@ func extractPBSVersion(output string) string {
 }
 
 func containsAny(path string, tokens []string) bool {
-	data, err := os.ReadFile(path)
+	data, err := readFileFunc(path)
 	if err != nil {
 		return false
 	}
@@ -321,7 +332,7 @@ func containsAny(path string, tokens []string) bool {
 }
 
 func readAndTrim(path string) string {
-	data, err := os.ReadFile(path)
+	data, err := readFileFunc(path)
 	if err != nil {
 		return ""
 	}
@@ -330,7 +341,7 @@ func readAndTrim(path string) string {
 
 // fileExists checks if a file exists
 func fileExists(path string) bool {
-	info, err := os.Stat(path)
+	info, err := statFunc(path)
 	if err != nil {
 		return false
 	}
@@ -338,7 +349,7 @@ func fileExists(path string) bool {
 }
 
 func dirExists(path string) bool {
-	info, err := os.Stat(path)
+	info, err := statFunc(path)
 	if err != nil {
 		return false
 	}
@@ -346,24 +357,24 @@ func dirExists(path string) bool {
 }
 
 func writeDetectionDebug() string {
-	debugDir := filepath.Join("/tmp", "proxsave")
-	if err := os.MkdirAll(debugDir, 0o755); err != nil {
+	debugDir := filepath.Join(debugBaseDir, "proxsave")
+	if err := mkdirAllFunc(debugDir, 0o755); err != nil {
 		return ""
 	}
-	path := filepath.Join(debugDir, fmt.Sprintf("proxmox_detection_debug_%d.log", time.Now().Unix()))
+	now := timeNowFunc()
+	path := filepath.Join(debugDir, fmt.Sprintf("proxmox_detection_debug_%d.log", now.Unix()))
 
 	var builder strings.Builder
-	now := time.Now().Format("2006-01-02 15:04:05")
-	builder.WriteString(fmt.Sprintf("=== Proxmox Detection Failure Debug - %s ===\n", now))
+	builder.WriteString(fmt.Sprintf("=== Proxmox Detection Failure Debug - %s ===\n", now.Format("2006-01-02 15:04:05")))
 	builder.WriteString(fmt.Sprintf("Current PATH: %s\n", os.Getenv("PATH")))
 
-	if u, err := user.Current(); err == nil {
+	if u, err := userCurrentFunc(); err == nil {
 		builder.WriteString(fmt.Sprintf("Current USER: %s\n", u.Username))
 	} else {
 		builder.WriteString("Current USER: unknown\n")
 	}
 
-	if cwd, err := os.Getwd(); err == nil {
+	if cwd, err := getwdFunc(); err == nil {
 		builder.WriteString(fmt.Sprintf("Current PWD: %s\n", cwd))
 	}
 	builder.WriteString(fmt.Sprintf("Shell: %s\n\n", os.Getenv("SHELL")))
@@ -409,14 +420,14 @@ func writeDetectionDebug() string {
 	}
 	builder.WriteString("\n")
 
-	if err := os.WriteFile(path, []byte(builder.String()), 0640); err != nil {
+	if err := writeFileFunc(path, []byte(builder.String()), 0640); err != nil {
 		return ""
 	}
 	return path
 }
 
 func lookPathOrNotFound(binary string) string {
-	if path, err := exec.LookPath(binary); err == nil {
+	if path, err := lookPathFunc(binary); err == nil {
 		return path
 	}
 	return "NOT FOUND"
@@ -430,7 +441,7 @@ func boolToYes(b bool) string {
 }
 
 func isExecutable(path string) bool {
-	info, err := os.Stat(path)
+	info, err := statFunc(path)
 	if err != nil {
 		return false
 	}
