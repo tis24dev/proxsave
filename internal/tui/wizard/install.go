@@ -27,6 +27,7 @@ type InstallWizardData struct {
 	EnableCloudStorage     bool
 	RcloneBackupRemote     string
 	RcloneLogRemote        string
+	BackupFirewallRules    *bool
 	NotificationMode       string // "none", "telegram", "email", "both"
 	CronTime               string // HH:MM
 	EnableEncryption       bool
@@ -51,11 +52,13 @@ var (
 
 // RunInstallWizard runs the TUI-based installation wizard
 func RunInstallWizard(ctx context.Context, configPath string, baseDir string, buildSig string) (*InstallWizardData, error) {
+	defaultFirewallRules := false
 	data := &InstallWizardData{
 		BaseDir:          baseDir,
 		ConfigPath:       configPath,
 		CronTime:         "02:00",
 		EnableEncryption: false, // Default to disabled
+		BackupFirewallRules: &defaultFirewallRules,
 	}
 
 	app := tui.NewApp()
@@ -187,13 +190,34 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetLabel("  └─ Rclone Log Remote").
 		SetText("myremote:pbs-logs").
 		SetFieldWidth(40)
-	rcloneLogField.SetDisabled(true)
-	form.Form.AddFormItem(rcloneLogField)
+		rcloneLogField.SetDisabled(true)
+		form.Form.AddFormItem(rcloneLogField)
 
-	// Notifications (header + two toggles)
-	var telegramEnabled, emailEnabled bool
-	notificationHeader := tview.NewInputField().
-		SetLabel("Notifications").
+		// Firewall rules backup (system collection)
+		firewallEnabled := false
+		firewallDropdown := tview.NewDropDown().
+			SetLabel("Backup Firewall Rules (iptables/nftables)").
+			SetOptions([]string{"No", "Yes"}, func(option string, index int) {
+				firewallEnabled = (option == "Yes")
+				dropdownOpen = false
+			}).
+			SetCurrentOption(0)
+
+		firewallDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			if event.Key() == tcell.KeyEnter {
+				dropdownOpen = !dropdownOpen
+			} else if event.Key() == tcell.KeyEscape {
+				dropdownOpen = false
+			}
+			return event
+		})
+
+		form.Form.AddFormItem(firewallDropdown)
+
+		// Notifications (header + two toggles)
+		var telegramEnabled, emailEnabled bool
+		notificationHeader := tview.NewInputField().
+			SetLabel("Notifications").
 		SetFieldWidth(0).
 		SetText("").
 		SetDisabled(true)
@@ -269,10 +293,10 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	form.Form.AddFormItem(cronField)
 
 	// Set up form submission
-	form.SetOnSubmit(func(values map[string]string) error {
-		// Collect data
-		data.EnableSecondaryStorage = secondaryEnabled
-		if secondaryEnabled {
+		form.SetOnSubmit(func(values map[string]string) error {
+			// Collect data
+			data.EnableSecondaryStorage = secondaryEnabled
+			if secondaryEnabled {
 			data.SecondaryPath = secondaryPathField.GetText()
 			data.SecondaryLogPath = secondaryLogField.GetText()
 
@@ -285,8 +309,8 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 			}
 		}
 
-		data.EnableCloudStorage = cloudEnabled
-		if cloudEnabled {
+			data.EnableCloudStorage = cloudEnabled
+			if cloudEnabled {
 			data.RcloneBackupRemote = rcloneBackupField.GetText()
 			data.RcloneLogRemote = rcloneLogField.GetText()
 
@@ -297,12 +321,14 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 			if !strings.Contains(data.RcloneLogRemote, ":") {
 				return fmt.Errorf("rclone log remote must be in format 'remote:path'")
 			}
-		}
+			}
 
-		// Get notification mode from two toggles
-		switch {
-		case telegramEnabled && emailEnabled:
-			data.NotificationMode = "both"
+			data.BackupFirewallRules = &firewallEnabled
+
+			// Get notification mode from two toggles
+			switch {
+			case telegramEnabled && emailEnabled:
+				data.NotificationMode = "both"
 		case telegramEnabled:
 			data.NotificationMode = "telegram"
 		case emailEnabled:
@@ -452,6 +478,15 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = setEnvValue(template, "CLOUD_ENABLED", "false")
 		template = setEnvValue(template, "CLOUD_REMOTE", "")
 		template = setEnvValue(template, "CLOUD_LOG_PATH", "")
+	}
+
+	// Apply firewall rules backup (optional; keep template default when unset)
+	if data.BackupFirewallRules != nil {
+		if *data.BackupFirewallRules {
+			template = setEnvValue(template, "BACKUP_FIREWALL_RULES", "true")
+		} else {
+			template = setEnvValue(template, "BACKUP_FIREWALL_RULES", "false")
+		}
 	}
 
 	// Apply notifications

@@ -695,7 +695,7 @@ func (c *Config) parseSystemSettings() {
 	c.BackupSSLCerts = c.getBool("BACKUP_SSL_CERTS", true)
 	c.BackupSysctlConfig = c.getBool("BACKUP_SYSCTL_CONFIG", true)
 	c.BackupKernelModules = c.getBool("BACKUP_KERNEL_MODULES", true)
-	c.BackupFirewallRules = c.getBool("BACKUP_FIREWALL_RULES", true)
+	c.BackupFirewallRules = c.getBool("BACKUP_FIREWALL_RULES", false)
 	c.BackupInstalledPackages = c.getBool("BACKUP_INSTALLED_PACKAGES", true)
 	c.BackupScriptDir = c.getBool("BACKUP_SCRIPT_DIR", true)
 	c.BackupCriticalFiles = c.getBool("BACKUP_CRITICAL_FILES", true)

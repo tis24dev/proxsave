@@ -285,6 +285,9 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	if template, err = configureCloudStorage(ctx, reader, template); err != nil {
 		return false, false, wrapInstallError(err)
 	}
+	if template, err = configureFirewallRules(ctx, reader, template); err != nil {
+		return false, false, wrapInstallError(err)
+	}
 	if template, err = configureNotifications(ctx, reader, template); err != nil {
 		return false, false, wrapInstallError(err)
 	}
@@ -488,6 +491,22 @@ func configureCloudStorage(ctx context.Context, reader *bufio.Reader, template s
 		template = setEnvValue(template, "CLOUD_ENABLED", "false")
 		template = setEnvValue(template, "CLOUD_REMOTE", "")
 		template = setEnvValue(template, "CLOUD_LOG_PATH", "")
+	}
+	return template, nil
+}
+
+func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
+	fmt.Println("\n--- Firewall rules ---")
+	fmt.Println("Enable collection of firewall rules (e.g., iptables/nftables).")
+	fmt.Println("(You can change this later in backup.env via BACKUP_FIREWALL_RULES)")
+	enable, err := promptYesNo(ctx, reader, "Backup firewall rules? [y/N]: ", false)
+	if err != nil {
+		return "", err
+	}
+	if enable {
+		template = setEnvValue(template, "BACKUP_FIREWALL_RULES", "true")
+	} else {
+		template = setEnvValue(template, "BACKUP_FIREWALL_RULES", "false")
 	}
 	return template, nil
 }

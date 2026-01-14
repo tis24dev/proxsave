@@ -25,6 +25,7 @@ func TestSetEnvValueUpdateAndAppend(t *testing.T) {
 
 func TestApplyInstallDataRespectsBaseTemplate(t *testing.T) {
 	baseTemplate := "BASE_DIR=\nMARKER=1\nTELEGRAM_ENABLED=false\nEMAIL_ENABLED=false\nENCRYPT_ARCHIVE=false\n"
+	backupFirewallRules := false
 	data := &InstallWizardData{
 		BaseDir:                "/opt/proxsave",
 		EnableSecondaryStorage: true,
@@ -33,6 +34,7 @@ func TestApplyInstallDataRespectsBaseTemplate(t *testing.T) {
 		EnableCloudStorage:     true,
 		RcloneBackupRemote:     "remote:backups",
 		RcloneLogRemote:        "remote:logs",
+		BackupFirewallRules:    &backupFirewallRules,
 		NotificationMode:       "both",
 		EnableEncryption:       true,
 	}
@@ -57,6 +59,7 @@ func TestApplyInstallDataRespectsBaseTemplate(t *testing.T) {
 	assertContains("CLOUD_ENABLED", "true")
 	assertContains("CLOUD_REMOTE", data.RcloneBackupRemote)
 	assertContains("CLOUD_LOG_PATH", data.RcloneLogRemote)
+	assertContains("BACKUP_FIREWALL_RULES", "false")
 	assertContains("TELEGRAM_ENABLED", "true")
 	assertContains("EMAIL_ENABLED", "true")
 	assertContains("ENCRYPT_ARCHIVE", "true")

@@ -112,7 +112,7 @@ Some interactive commands support two interface modes:
 # Interactive installation wizard (CLI mode - for debugging)
 ./build/proxsave --install --cli
 
-# Clean reinstall (wipes install dir except env/identity, then runs wizard)
+# Clean reinstall (wipes install dir except build/env/identity, then runs wizard)
 ./build/proxsave --new-install
 
 # Clean reinstall with CLI mode
@@ -131,13 +131,13 @@ Some interactive commands support two interface modes:
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **Wizard workflow**:
-1. Detects installation environment (PVE, PBS, or standalone)
-2. Creates directory structure
-3. Generates default configuration file
-4. Optionally configures encryption (AGE key generation)
+1. Generates/updates the configuration file (`configs/backup.env` by default)
+2. Optionally configures secondary storage
+3. Optionally configures cloud storage (rclone)
+4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
 5. Optionally sets up notifications (Telegram, Email; Email defaults to `EMAIL_DELIVERY_METHOD=relay`)
-6. Creates systemd service (optional)
-7. Validates configuration
+6. Optionally configures encryption (AGE setup)
+7. Finalizes installation (symlinks, cron migration, permission checks)
 
 ### Configuration Upgrade
 
@@ -306,7 +306,7 @@ Next step: ./build/proxsave --dry-run
 | Flag | Description |
 |------|-------------|
 | `--install` | Interactive installation wizard |
-| `--new-install` | Wipe install directory (preserve env/identity) then launch wizard |
+| `--new-install` | Wipe install directory (preserve build/env/identity) then launch wizard |
 | `--upgrade` | Download and install latest ProxSave binary from GitHub releases |
 | `--upgrade-config` | Merge current config with latest template |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
@@ -702,7 +702,7 @@ crontab -e
 | `--log-level <level>` | `-l` | Set log level (debug\|info\|warning\|error\|critical) |
 | `--cli` | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Interactive installation wizard |
-| `--new-install` | - | Wipe install dir (preserve env/identity) then run wizard |
+| `--new-install` | - | Wipe install dir (preserve build/env/identity) then run wizard |
 | `--upgrade` | - | Download and install latest binary from GitHub releases |
 | `--upgrade-config` | - | Upgrade config from embedded template |
 | `--upgrade-config-dry-run` | - | Preview config upgrade |

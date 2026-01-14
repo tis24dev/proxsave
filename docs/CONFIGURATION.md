@@ -985,7 +985,7 @@ BACKUP_SYSCTL_CONFIG=true          # /etc/sysctl.conf, /etc/sysctl.d/
 BACKUP_KERNEL_MODULES=true         # /etc/modules, /etc/modprobe.d/
 
 # Firewall rules
-BACKUP_FIREWALL_RULES=true         # iptables, nftables
+BACKUP_FIREWALL_RULES=false        # iptables, nftables
 
 # Installed packages
 BACKUP_INSTALLED_PACKAGES=true     # dpkg -l, apt-mark showmanual

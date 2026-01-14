@@ -29,7 +29,7 @@
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
 
-or: if you need a fully clean reinstall use: (preserves `configs/` and `identity/`)
+or: if you need a fully clean reinstall use: (preserves `build/`, `env/`, and `identity/`)
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
 ```
@@ -190,7 +190,7 @@ The installation wizard creates your configuration file interactively:
 ```bash
 ./build/proxsave --install
 
-# Or perform a clean reinstall (keeps env/ and identity/)
+# Or perform a clean reinstall (keeps build/, env/, and identity/)
 ./build/proxsave --new-install
 ```
 
@@ -199,8 +199,9 @@ The installation wizard creates your configuration file interactively:
 1. **Configuration file path**: Default `configs/backup.env` (accepts absolute or relative paths within repo)
 2. **Secondary storage**: Optional path for backup/log copies
 3. **Cloud storage**: Optional rclone remote configuration
-4. **Notifications**: Enable Telegram (centralized) and Email notifications (wizard defaults to `EMAIL_DELIVERY_METHOD=relay`; you can switch to `sendmail` or `pmf` later)
-5. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
+4. **Firewall rules**: Optional firewall rules collection toggle (`BACKUP_FIREWALL_RULES=false` by default; supports iptables/nftables)
+5. **Notifications**: Enable Telegram (centralized) and Email notifications (wizard defaults to `EMAIL_DELIVERY_METHOD=relay`; you can switch to `sendmail` or `pmf` later)
+6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 
 **Features:**
 - Input sanitization (no newlines/control characters)

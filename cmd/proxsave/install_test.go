@@ -282,6 +282,38 @@ func TestConfigureCloudStorageDisabled(t *testing.T) {
 	}
 }
 
+func TestConfigureFirewallRulesDefaultsToDisabled(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("\n"))
+	captureStdout(t, func() {
+		result, err = configureFirewallRules(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureFirewallRules error: %v", err)
+	}
+	if !strings.Contains(result, "BACKUP_FIREWALL_RULES=false") {
+		t.Fatalf("expected disabled flag: %q", result)
+	}
+}
+
+func TestConfigureFirewallRulesDisabled(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("n\n"))
+	captureStdout(t, func() {
+		result, err = configureFirewallRules(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureFirewallRules error: %v", err)
+	}
+	if !strings.Contains(result, "BACKUP_FIREWALL_RULES=false") {
+		t.Fatalf("expected disabled flag: %q", result)
+	}
+}
+
 func TestConfigureNotifications(t *testing.T) {
 	var result string
 	var err error

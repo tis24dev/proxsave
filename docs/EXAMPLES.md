@@ -72,7 +72,7 @@ MAX_LOCAL_BACKUPS=15
 ```bash
 # 1. Install
 ./build/proxsave --install
-# (use --new-install to wipe everything except configs/ and identity/ before installing)
+# (use --new-install to wipe everything except build/, env/, and identity/ before installing)
 
 # 2. Edit configuration
 nano configs/backup.env
