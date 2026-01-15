@@ -641,7 +641,7 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 		target, err := osReadlink(src)
 		if err != nil {
 			c.incFilesFailed()
-			return fmt.Errorf("Symlink read failed - path: %s: %w", src, err)
+			return fmt.Errorf("symlink read failed - path: %s: %w", src, err)
 		}
 
 		if err := c.ensureDir(filepath.Dir(dest)); err != nil {
@@ -654,13 +654,13 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 		if _, err := os.Lstat(dest); err == nil {
 			if err := os.Remove(dest); err != nil {
 				c.incFilesFailed()
-				return fmt.Errorf("File replacement failed - path: %s: %w", dest, err)
+				return fmt.Errorf("file replacement failed - path: %s: %w", dest, err)
 			}
 		}
 
 		if err := osSymlink(target, dest); err != nil {
 			c.incFilesFailed()
-			return fmt.Errorf("Symlink creation failed - source: %s, target: %s, absolute: %v: %w",
+			return fmt.Errorf("symlink creation failed - source: %s, target: %s, absolute: %v: %w",
 				src, target, filepath.IsAbs(target), err)
 		}
 
