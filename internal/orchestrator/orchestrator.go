@@ -456,6 +456,8 @@ func (o *Orchestrator) ensureTempRegistry() *TempDirRegistry {
 
 // RunGoBackup performs the entire backup using Go components (collector + archiver)
 func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType, hostname string) (stats *BackupStats, err error) {
+	done := logging.DebugStart(o.logger, "backup run", "type=%s hostname=%s", pType, hostname)
+	defer func() { done(err) }()
 	o.logger.Info("Starting Go-based backup orchestration for %s", pType)
 
 	// Unified cleanup of previous execution artifacts
@@ -1043,21 +1045,23 @@ func (s *BackupStats) toPrometheusMetrics() *metrics.BackupMetrics {
 	}
 }
 
-func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (string, error) {
+func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bundlePath string, err error) {
 	logger := o.logger
 	fs := o.filesystem()
 	dir := filepath.Dir(archivePath)
 	base := filepath.Base(archivePath)
+	done := logging.DebugStart(logger, "bundle create", "archive=%s", archivePath)
+	defer func() { done(err) }()
 
 	associated := []string{
-		base,
-		base + ".sha256",
 		base + ".metadata",
+		base + ".sha256",
+		base,
 	}
 
 	metaChecksum := base + ".metadata.sha256"
 	if _, err := fs.Stat(filepath.Join(dir, metaChecksum)); err == nil {
-		associated = append(associated, metaChecksum)
+		associated = append([]string{associated[0], metaChecksum}, associated[1:]...)
 	}
 
 	for _, file := range associated[:3] {
@@ -1066,7 +1070,7 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (st
 		}
 	}
 
-	bundlePath := archivePath + ".bundle.tar"
+	bundlePath = archivePath + ".bundle.tar"
 	logger.Debug("Creating bundle with native Go tar: %s (files: %v)", bundlePath, associated)
 
 	// Create tar archive using native Go archive/tar

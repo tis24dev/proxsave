@@ -79,13 +79,16 @@ func buildDecryptPathOptions(cfg *config.Config) []decryptPathOption {
 
 // discoverRcloneBackups lists backup bundles from an rclone remote and returns
 // decrypt candidates backed by that remote.
-func discoverRcloneBackups(ctx context.Context, remotePath string, logger *logging.Logger) ([]*decryptCandidate, error) {
+func discoverRcloneBackups(ctx context.Context, remotePath string, logger *logging.Logger) (candidates []*decryptCandidate, err error) {
+	done := logging.DebugStart(logger, "discover rclone backups", "remote=%s", remotePath)
+	defer func() { done(err) }()
 	// Build full remote path - ensure it ends with ":" if it's just a remote name
 	fullPath := strings.TrimSpace(remotePath)
 	if !strings.Contains(fullPath, ":") {
 		fullPath = fullPath + ":"
 	}
 
+	logging.DebugStep(logger, "discover rclone backups", "listing remote: %s", fullPath)
 	logDebug(logger, "Cloud (rclone): listing backups under %s", fullPath)
 	logDebug(logger, "Cloud (rclone): executing: rclone lsf %s", fullPath)
 
@@ -96,7 +99,7 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 		return nil, fmt.Errorf("failed to list rclone remote %s: %w (output: %s)", fullPath, err, string(output))
 	}
 
-	candidates := make([]*decryptCandidate, 0)
+	candidates = make([]*decryptCandidate, 0)
 	lines := strings.Split(string(output), "\n")
 
 	logDebug(logger, "Cloud (rclone): scanned %d entries from rclone lsf output", len(lines))
@@ -153,13 +156,16 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 
 // discoverBackupCandidates scans a local or mounted directory for backup
 // candidates (bundle or raw triplet: archive + metadata + checksum).
-func discoverBackupCandidates(logger *logging.Logger, root string) ([]*decryptCandidate, error) {
+func discoverBackupCandidates(logger *logging.Logger, root string) (candidates []*decryptCandidate, err error) {
+	done := logging.DebugStart(logger, "discover backup candidates", "root=%s", root)
+	defer func() { done(err) }()
 	entries, err := restoreFS.ReadDir(root)
 	if err != nil {
 		return nil, fmt.Errorf("read directory %s: %w", root, err)
 	}
+	logging.DebugStep(logger, "discover backup candidates", "entries=%d", len(entries))
 
-	candidates := make([]*decryptCandidate, 0)
+	candidates = make([]*decryptCandidate, 0)
 	rawBases := make(map[string]struct{})
 
 	for _, entry := range entries {

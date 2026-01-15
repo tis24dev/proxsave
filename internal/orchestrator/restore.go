@@ -35,10 +35,12 @@ var (
 	restoreGlob               = filepath.Glob
 )
 
-func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) error {
+func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) (err error) {
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
 	}
+	done := logging.DebugStart(logger, "restore workflow (cli)", "version=%s", version)
+	defer func() { done(err) }()
 
 	reader := bufio.NewReader(os.Stdin)
 	candidate, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version, false)
@@ -1206,7 +1208,9 @@ func promptClusterRestoreMode(ctx context.Context, reader *bufio.Reader) (int, e
 }
 
 // extractSelectiveArchive extracts only files matching selected categories
-func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, categories []Category, mode RestoreMode, logger *logging.Logger) (string, error) {
+func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, categories []Category, mode RestoreMode, logger *logging.Logger) (logPath string, err error) {
+	done := logging.DebugStart(logger, "extract selective archive", "archive=%s dest=%s categories=%d mode=%s", archivePath, destRoot, len(categories), mode)
+	defer func() { done(err) }()
 	if err := restoreFS.MkdirAll(destRoot, 0o755); err != nil {
 		return "", fmt.Errorf("create destination directory: %w", err)
 	}
@@ -1224,7 +1228,7 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 	// Create detailed log file
 	timestamp := nowRestore().Format("20060102_150405")
 	logSeq := atomic.AddUint64(&restoreLogSequence, 1)
-	logPath := filepath.Join(logDir, fmt.Sprintf("restore_%s_%d.log", timestamp, logSeq))
+	logPath = filepath.Join(logDir, fmt.Sprintf("restore_%s_%d.log", timestamp, logSeq))
 	logFile, err := restoreFS.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
 	if err != nil {
 		logger.Warning("Could not create detailed log file: %v", err)
@@ -1232,6 +1236,7 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 	} else {
 		defer logFile.Close()
 		logger.Info("Detailed restore log: %s", logPath)
+		logging.DebugStep(logger, "extract selective archive", "log file=%s", logPath)
 	}
 
 	logger.Info("Extracting selected categories from archive %s into %s", filepath.Base(archivePath), destRoot)

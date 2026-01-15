@@ -536,6 +536,36 @@ func backupExistingRecipientFile(path string) error {
 	return nil
 }
 
+// BackupAgeRecipientFile backs up an existing AGE recipient file (if present).
+func BackupAgeRecipientFile(path string) error {
+	return backupExistingRecipientFile(path)
+}
+
+// ValidatePassphraseStrength validates passphrase strength rules used by AGE setup.
+func ValidatePassphraseStrength(passphrase string) error {
+	return validatePassphraseStrength([]byte(passphrase))
+}
+
+// ValidateRecipientString checks whether a recipient string is supported.
+func ValidateRecipientString(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("recipient cannot be empty")
+	}
+	_, err := parseRecipientString(trimmed)
+	return err
+}
+
+// DedupeRecipientStrings removes empty values and duplicates from recipient strings.
+func DedupeRecipientStrings(values []string) []string {
+	return dedupeRecipientStrings(values)
+}
+
+// WriteRecipientFile persists recipients to disk using the standard format.
+func WriteRecipientFile(path string, recipients []string) error {
+	return writeRecipientFile(path, dedupeRecipientStrings(recipients))
+}
+
 // DeriveDeterministicRecipientFromPassphrase derives an AGE recipient from a passphrase (exported for TUI wizard)
 func DeriveDeterministicRecipientFromPassphrase(passphrase string) (string, error) {
 	return deriveDeterministicRecipientFromPassphrase(passphrase)

@@ -60,7 +60,9 @@ func (l *LocalStorage) IsCritical() bool {
 }
 
 // DetectFilesystem detects the filesystem type for the backup path
-func (l *LocalStorage) DetectFilesystem(ctx context.Context) (*FilesystemInfo, error) {
+func (l *LocalStorage) DetectFilesystem(ctx context.Context) (info *FilesystemInfo, err error) {
+	done := logging.DebugStart(l.logger, "local detect filesystem", "path=%s", l.basePath)
+	defer func() { done(err) }()
 	// Ensure directory exists
 	if err := os.MkdirAll(l.basePath, 0700); err != nil {
 		return nil, &StorageError{
@@ -89,7 +91,9 @@ func (l *LocalStorage) DetectFilesystem(ctx context.Context) (*FilesystemInfo, e
 
 // Store stores a backup file to local storage
 // For local storage, this mainly involves setting proper permissions
-func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *types.BackupMetadata) error {
+func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *types.BackupMetadata) (err error) {
+	done := logging.DebugStart(l.logger, "local store", "file=%s", filepath.Base(backupFile))
+	defer func() { done(err) }()
 	l.logger.Debug("Local storage: preparing to store %s", filepath.Base(backupFile))
 	// Check context
 	if err := ctx.Err(); err != nil {
@@ -137,7 +141,9 @@ func (l *LocalStorage) countBackups(ctx context.Context) int {
 }
 
 // List returns all backups in local storage
-func (l *LocalStorage) List(ctx context.Context) ([]*types.BackupMetadata, error) {
+func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadata, err error) {
+	done := logging.DebugStart(l.logger, "local list", "path=%s", l.basePath)
+	defer func() { done(err) }()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -170,7 +176,7 @@ func (l *LocalStorage) List(ctx context.Context) ([]*types.BackupMetadata, error
 		}
 	}
 
-	var backups []*types.BackupMetadata
+	backups = nil
 
 	// Filter and parse backup files
 	for _, match := range matches {
@@ -331,8 +337,10 @@ func (l *LocalStorage) loadMetadataFromBundle(bundlePath string) (*types.BackupM
 }
 
 // Delete removes a backup file and its associated files
-func (l *LocalStorage) Delete(ctx context.Context, backupFile string) error {
-	_, err := l.deleteBackupInternal(ctx, backupFile)
+func (l *LocalStorage) Delete(ctx context.Context, backupFile string) (err error) {
+	done := logging.DebugStart(l.logger, "local delete", "file=%s", backupFile)
+	defer func() { done(err) }()
+	_, err = l.deleteBackupInternal(ctx, backupFile)
 	return err
 }
 
@@ -418,7 +426,9 @@ func (l *LocalStorage) countLogFiles() int {
 
 // ApplyRetention removes old backups according to retention policy
 // Supports both simple (count-based) and GFS (time-distributed) policies
-func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfig) (int, error) {
+func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfig) (deleted int, err error) {
+	done := logging.DebugStart(l.logger, "local retention", "policy=%s max=%d", config.Policy, config.MaxBackups)
+	defer func() { done(err) }()
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -612,13 +622,15 @@ func (l *LocalStorage) VerifyUpload(ctx context.Context, localFile, remoteFile s
 }
 
 // GetStats returns storage statistics
-func (l *LocalStorage) GetStats(ctx context.Context) (*StorageStats, error) {
+func (l *LocalStorage) GetStats(ctx context.Context) (stats *StorageStats, err error) {
+	done := logging.DebugStart(l.logger, "local stats", "path=%s", l.basePath)
+	defer func() { done(err) }()
 	backups, err := l.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	stats := &StorageStats{
+	stats = &StorageStats{
 		TotalBackups: len(backups),
 	}
 

@@ -66,7 +66,7 @@ func (p *preparedBundle) Cleanup() {
 }
 
 // RunDecryptWorkflowWithDeps executes the decrypt workflow using injected dependencies.
-func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string) error {
+func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string) (err error) {
 	if deps == nil || deps.Config == nil {
 		return fmt.Errorf("configuration not available")
 	}
@@ -75,6 +75,8 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	if logger == nil {
 		logger = logging.GetDefaultLogger()
 	}
+	done := logging.DebugStart(logger, "decrypt workflow", "version=%s", version)
+	defer func() { done(err) }()
 
 	reader := bufio.NewReader(os.Stdin)
 	_, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version, true)
@@ -170,7 +172,9 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	return RunDecryptWorkflowWithDeps(ctx, &deps, version)
 }
 
-func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (*decryptCandidate, error) {
+func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *decryptCandidate, err error) {
+	done := logging.DebugStart(logger, "select backup candidate", "requireEncrypted=%v", requireEncrypted)
+	defer func() { done(err) }()
 	pathOptions := buildDecryptPathOptions(cfg)
 	if len(pathOptions) == 0 {
 		return nil, fmt.Errorf("no backup paths configured in backup.env")
@@ -199,6 +203,7 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 
 		// Handle rclone remotes differently from filesystem paths
 		if option.IsRclone {
+			logging.DebugStep(logger, "select backup candidate", "scanning rclone remote: %s", option.Path)
 			candidates, err = discoverRcloneBackups(ctx, option.Path, logger)
 			if err != nil {
 				logger.Warning("Failed to inspect cloud remote %s: %v", option.Path, err)
@@ -213,6 +218,7 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 				logger.Debug("Cloud (rclone): %d candidate bundle(s) returned for %s", len(candidates), option.Path)
 			}
 		} else {
+			logging.DebugStep(logger, "select backup candidate", "scanning filesystem path: %s", option.Path)
 			info, err := restoreFS.Stat(option.Path)
 			if err != nil || !info.IsDir() {
 				logger.Warning("Path %s is not accessible (%v)", option.Path, err)
@@ -266,7 +272,8 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 	} else {
 		logger.Info("Found %d backup(s) in %s", len(candidates), selectedPath)
 	}
-	return promptCandidateSelection(ctx, reader, candidates)
+	candidate, err = promptCandidateSelection(ctx, reader, candidates)
+	return candidate, err
 }
 
 func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []decryptPathOption) (decryptPathOption, error) {
@@ -335,7 +342,9 @@ func inspectBundleManifest(bundlePath string) (*backup.Manifest, error) {
 // inspectRcloneBundleManifest reads the manifest from a bundle stored on an
 // rclone remote by streaming it through "rclone cat" and parsing the tar
 // stream until the manifest entry is found.
-func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger *logging.Logger) (*backup.Manifest, error) {
+func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger *logging.Logger) (manifest *backup.Manifest, err error) {
+	done := logging.DebugStart(logger, "inspect rclone bundle manifest", "remote=%s", remotePath)
+	defer func() { done(err) }()
 	cmd := exec.CommandContext(ctx, "rclone", "cat", remotePath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -348,7 +357,6 @@ func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger 
 	}
 
 	tr := tar.NewReader(stdout)
-	var manifest *backup.Manifest
 
 	for {
 		hdr, err := tr.Next()
@@ -374,6 +382,7 @@ func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger 
 				return nil, fmt.Errorf("parse manifest from remote: %w", err)
 			}
 			manifest = &m
+			logging.DebugStep(logger, "inspect rclone bundle manifest", "manifest entry=%s bytes=%d", hdr.Name, len(data))
 			break
 		}
 	}
@@ -450,7 +459,9 @@ func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config
 }
 
 // downloadRcloneBackup downloads a backup bundle from an rclone remote to a local temp file
-func downloadRcloneBackup(ctx context.Context, remotePath string, logger *logging.Logger) (string, func(), error) {
+func downloadRcloneBackup(ctx context.Context, remotePath string, logger *logging.Logger) (tmpPath string, cleanup func(), err error) {
+	done := logging.DebugStart(logger, "download rclone backup", "remote=%s", remotePath)
+	defer func() { done(err) }()
 	// Ensure /tmp/proxsave exists
 	tempRoot := filepath.Join("/tmp", "proxsave")
 	if err := restoreFS.MkdirAll(tempRoot, 0o755); err != nil {
@@ -462,15 +473,16 @@ func downloadRcloneBackup(ctx context.Context, remotePath string, logger *loggin
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
-	tmpPath := tmpFile.Name()
+	tmpPath = tmpFile.Name()
 	tmpFile.Close()
 
-	cleanup := func() {
+	cleanup = func() {
 		logger.Debug("Removing temporary rclone download: %s", tmpPath)
 		os.Remove(tmpPath)
 	}
 
 	logger.Info("Downloading backup from cloud storage: %s", remotePath)
+	logging.DebugStep(logger, "download rclone backup", "local temp file=%s", tmpPath)
 
 	// Use rclone copyto to download with progress
 	cmd := exec.CommandContext(ctx, "rclone", "copyto", remotePath, tmpPath, "--progress")
@@ -486,7 +498,9 @@ func downloadRcloneBackup(ctx context.Context, remotePath string, logger *loggin
 	return tmpPath, cleanup, nil
 }
 
-func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decryptCandidate, version string, logger *logging.Logger) (*preparedBundle, error) {
+func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decryptCandidate, version string, logger *logging.Logger) (bundle *preparedBundle, err error) {
+	done := logging.DebugStart(logger, "prepare plain bundle", "source=%v rclone=%v", cand.Source, cand.IsRclone)
+	defer func() { done(err) }()
 	// If this is an rclone backup, download it first
 	var rcloneCleanup func()
 	if cand.IsRclone && cand.Source == sourceBundle {
@@ -514,6 +528,7 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 		}
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
+	logging.DebugStep(logger, "prepare plain bundle", "workdir=%s", workDir)
 	cleanup := func() {
 		_ = restoreFS.RemoveAll(workDir)
 		if rcloneCleanup != nil {
@@ -540,6 +555,7 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 	manifestCopy := *cand.Manifest
 	currentEncryption := strings.ToLower(manifestCopy.EncryptionMode)
 
+	logging.DebugStep(logger, "prepare plain bundle", "encryption=%s", currentEncryption)
 	logger.Info("Preparing archive %s for decryption (mode: %s)", manifestCopy.ArchivePath, statusFromManifest(&manifestCopy))
 
 	plainArchiveName := strings.TrimSuffix(filepath.Base(staged.ArchivePath), ".age")
@@ -573,6 +589,7 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 		cleanup()
 		return nil, fmt.Errorf("generate checksum: %w", err)
 	}
+	logging.DebugStep(logger, "prepare plain bundle", "checksum computed")
 
 	manifestCopy.ArchivePath = plainArchivePath
 	manifestCopy.ArchiveSize = archiveInfo.Size()
@@ -582,21 +599,24 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 		manifestCopy.ScriptVersion = version
 	}
 
-	return &preparedBundle{
+	bundle = &preparedBundle{
 		ArchivePath: plainArchivePath,
 		Manifest:    manifestCopy,
 		Checksum:    checksum,
 		cleanup:     cleanup,
-	}, nil
+	}
+	return bundle, nil
 }
 
-func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (*decryptCandidate, *preparedBundle, error) {
-	candidate, err := selectDecryptCandidate(ctx, reader, cfg, logger, requireEncrypted)
+func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (candidate *decryptCandidate, prepared *preparedBundle, err error) {
+	done := logging.DebugStart(logger, "prepare decrypted backup", "requireEncrypted=%v", requireEncrypted)
+	defer func() { done(err) }()
+	candidate, err = selectDecryptCandidate(ctx, reader, cfg, logger, requireEncrypted)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	prepared, err := preparePlainBundle(ctx, reader, candidate, version, logger)
+	prepared, err = preparePlainBundle(ctx, reader, candidate, version, logger)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -628,7 +648,9 @@ func sanitizeBundleEntryName(name string) (string, error) {
 	return base, nil
 }
 
-func extractBundleToWorkdir(bundlePath, workDir string) (stagedFiles, error) {
+func extractBundleToWorkdir(bundlePath, workDir string) (staged stagedFiles, err error) {
+	done := logging.DebugStart(logging.GetDefaultLogger(), "extract bundle", "bundle=%s workdir=%s", bundlePath, workDir)
+	defer func() { done(err) }()
 	file, err := restoreFS.Open(bundlePath)
 	if err != nil {
 		return stagedFiles{}, fmt.Errorf("open bundle: %w", err)
@@ -636,7 +658,6 @@ func extractBundleToWorkdir(bundlePath, workDir string) (stagedFiles, error) {
 	defer file.Close()
 
 	tr := tar.NewReader(file)
-	var staged stagedFiles
 
 	for {
 		hdr, err := tr.Next()
@@ -689,7 +710,9 @@ func extractBundleToWorkdir(bundlePath, workDir string) (stagedFiles, error) {
 	return staged, nil
 }
 
-func copyRawArtifactsToWorkdir(cand *decryptCandidate, workDir string) (stagedFiles, error) {
+func copyRawArtifactsToWorkdir(cand *decryptCandidate, workDir string) (staged stagedFiles, err error) {
+	done := logging.DebugStart(logging.GetDefaultLogger(), "stage raw artifacts", "archive=%s workdir=%s", cand.RawArchivePath, workDir)
+	defer func() { done(err) }()
 	archiveDest := filepath.Join(workDir, filepath.Base(cand.RawArchivePath))
 	if err := copyFile(restoreFS, cand.RawArchivePath, archiveDest); err != nil {
 		return stagedFiles{}, fmt.Errorf("copy archive: %w", err)

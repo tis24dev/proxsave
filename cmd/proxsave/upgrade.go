@@ -47,8 +47,31 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	}
 	_ = os.Setenv("BASE_DIR", baseDir)
 
+	logLevel := types.LogLevelInfo
+	if args.LogLevel != types.LogLevelNone {
+		logLevel = args.LogLevel
+	}
+	if bootstrap != nil {
+		bootstrap.SetLevel(logLevel)
+	}
+
+	sessionLogger, logPath, closeLog, logErr := logging.StartSessionLogger("upgrade", logLevel, false)
+	if logErr == nil {
+		if bootstrap != nil {
+			bootstrap.Info("UPGRADE log: %s", logPath)
+			bootstrap.SetMirrorLogger(sessionLogger)
+		}
+		sessionLogger.SetOutput(io.Discard)
+		defer closeLog()
+	}
+
+	var workflowErr error
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade workflow", "config=%s base=%s", args.ConfigPath, baseDir)
+	defer func() { done(workflowErr) }()
+
 	if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
 		bootstrap.Error("ERROR: %v", err)
+		workflowErr = err
 		return types.ExitConfigError.Int()
 	}
 
@@ -69,6 +92,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	cfg, err := config.LoadConfig(args.ConfigPath)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to load configuration: %v", err)
+		workflowErr = err
 		return types.ExitConfigError.Int()
 	}
 	if strings.TrimSpace(cfg.BaseDir) == "" {
@@ -77,18 +101,23 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 
 	// Discover the latest available release on GitHub and compare with the
 	// currently installed version before proceeding.
+	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "fetching latest release info")
 	tag, latestVersion, err := fetchLatestRelease(ctx)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to check latest release: %v", err)
+		workflowErr = err
 		return types.ExitConfigError.Int()
 	}
 
+	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "current=%s latest=%s", currentVersion, latestVersion)
 	switch compareVersions(currentVersion, latestVersion) {
 	case 0:
 		bootstrap.Printf("You are already running the latest version: %s", currentVersion)
+		workflowErr = nil
 		return types.ExitSuccess.Int()
 	case 1:
 		bootstrap.Printf("Installed version (%s) is newer than latest release (%s); aborting upgrade.", currentVersion, latestVersion)
+		workflowErr = fmt.Errorf("current version newer than latest")
 		return types.ExitConfigError.Int()
 	}
 
@@ -98,23 +127,28 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	confirm, err := promptYesNo(ctx, reader, "Do you want to download and install this version now? [y/N]: ", false)
 	if err != nil {
 		bootstrap.Error("ERROR: %v", err)
+		workflowErr = err
 		return types.ExitConfigError.Int()
 	}
 	if !confirm {
 		bootstrap.Println("Upgrade cancelled by user; no changes were made.")
+		workflowErr = nil
 		return types.ExitSuccess.Int()
 	}
 
 	// Download + install latest binary (confirmed)
 	execInfo := getExecInfo()
 	execPath := execInfo.ExecPath
+	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "executing upgrade for %s", execPath)
 	versionInstalled, upgradeErr := downloadAndInstallLatest(ctx, execPath, bootstrap, tag, latestVersion)
 	if upgradeErr != nil {
 		bootstrap.Error("ERROR: Upgrade failed: %v", upgradeErr)
 		// Continue to footer to show guidance and permission status, but exit with error.
+		workflowErr = upgradeErr
 	}
 
 	// Refresh docs/symlinks/cron/identity without touching backup.env
+	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "refreshing docs and symlinks")
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
 		bootstrap.Warning("Upgrade: failed to refresh documentation: %v", err)
 	}
@@ -122,6 +156,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	ensureGoSymlink(execPath, bootstrap)
 
 	cronSchedule := resolveCronSchedule(nil)
+	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "migrating cron entries")
 	migrateLegacyCronEntries(ctx, baseDir, execPath, bootstrap, cronSchedule)
 
 	telegramCode := ""
@@ -130,7 +165,13 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 			telegramCode = code
 		}
 	}
+	if telegramCode != "" {
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "telegram identity detected")
+	} else {
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "telegram identity not found")
+	}
 
+	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "normalizing permissions")
 	permStatus, permMessage := fixPermissionsAfterInstall(ctx, args.ConfigPath, baseDir, bootstrap)
 
 	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage)
@@ -144,10 +185,15 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 // downloadAndInstallLatest downloads the specified release archive from GitHub,
 // verifies the checksum, extracts the proxsave binary, and installs it to execPath.
 func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *logging.BootstrapLogger, tag, version string) (string, error) {
+	var err error
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade download/install", "tag=%s version=%s", tag, version)
+	defer func() { done(err) }()
+
 	osName, arch, err := detectOSArch()
 	if err != nil {
 		return "", err
 	}
+	logging.DebugStepBootstrap(bootstrap, "upgrade download/install", "platform=%s/%s", osName, arch)
 
 	filename := fmt.Sprintf("proxsave_%s_%s_%s.tar.gz", version, osName, arch)
 	archiveURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, tag, filename)
@@ -160,27 +206,28 @@ func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *l
 		return "", fmt.Errorf("cannot create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
+	logging.DebugStepBootstrap(bootstrap, "upgrade download/install", "temp dir=%s", tmpDir)
 
 	archivePath := filepath.Join(tmpDir, filename)
 	checksumPath := filepath.Join(tmpDir, "SHA256SUMS")
 
-	if err := downloadFile(ctx, archiveURL, archivePath); err != nil {
+	if err := downloadFile(ctx, archiveURL, archivePath, bootstrap); err != nil {
 		return "", fmt.Errorf("failed to download archive: %w", err)
 	}
-	if err := downloadFile(ctx, checksumURL, checksumPath); err != nil {
+	if err := downloadFile(ctx, checksumURL, checksumPath, bootstrap); err != nil {
 		return "", fmt.Errorf("failed to download checksum file: %w", err)
 	}
 
-	if err := verifyChecksum(archivePath, checksumPath, filename); err != nil {
+	if err := verifyChecksum(archivePath, checksumPath, filename, bootstrap); err != nil {
 		return "", err
 	}
 
 	extractedPath := filepath.Join(tmpDir, "proxsave")
-	if err := extractBinaryFromTar(archivePath, "proxsave", extractedPath); err != nil {
+	if err := extractBinaryFromTar(archivePath, "proxsave", extractedPath, bootstrap); err != nil {
 		return "", err
 	}
 
-	if err := installBinary(extractedPath, execPath); err != nil {
+	if err := installBinary(extractedPath, execPath, bootstrap); err != nil {
 		return "", err
 	}
 
@@ -299,7 +346,9 @@ func compareVersions(current, latest string) int {
 	return 0
 }
 
-func downloadFile(ctx context.Context, url, dest string) error {
+func downloadFile(ctx context.Context, url, dest string, bootstrap *logging.BootstrapLogger) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade download", "url=%s dest=%s", url, dest)
+	defer func() { done(err) }()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("cannot create request: %w", err)
@@ -312,6 +361,7 @@ func downloadFile(ctx context.Context, url, dest string) error {
 	}
 	defer resp.Body.Close()
 
+	logging.DebugStepBootstrap(bootstrap, "upgrade download", "status=%s", resp.Status)
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024))
 		return fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(body))
@@ -323,13 +373,17 @@ func downloadFile(ctx context.Context, url, dest string) error {
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	written, err := io.Copy(out, resp.Body)
+	if err != nil {
 		return fmt.Errorf("cannot write file %s: %w", dest, err)
 	}
+	logging.DebugStepBootstrap(bootstrap, "upgrade download", "bytes=%d", written)
 	return nil
 }
 
-func verifyChecksum(archivePath, checksumPath, filename string) error {
+func verifyChecksum(archivePath, checksumPath, filename string, bootstrap *logging.BootstrapLogger) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade checksum", "file=%s", filename)
+	defer func() { done(err) }()
 	checksums, err := os.ReadFile(checksumPath)
 	if err != nil {
 		return fmt.Errorf("cannot read checksum file: %w", err)
@@ -367,6 +421,8 @@ func verifyChecksum(archivePath, checksumPath, filename string) error {
 		return fmt.Errorf("cannot compute checksum: %w", err)
 	}
 	sum := hex.EncodeToString(hasher.Sum(nil))
+	logging.DebugStepBootstrap(bootstrap, "upgrade checksum", "expected=%s", expected)
+	logging.DebugStepBootstrap(bootstrap, "upgrade checksum", "computed=%s", sum)
 
 	if !strings.EqualFold(sum, expected) {
 		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", filename, expected, sum)
@@ -374,7 +430,9 @@ func verifyChecksum(archivePath, checksumPath, filename string) error {
 	return nil
 }
 
-func extractBinaryFromTar(archivePath, targetName, destPath string) error {
+func extractBinaryFromTar(archivePath, targetName, destPath string, bootstrap *logging.BootstrapLogger) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade extract", "archive=%s target=%s", archivePath, targetName)
+	defer func() { done(err) }()
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return fmt.Errorf("cannot open archive: %w", err)
@@ -403,6 +461,7 @@ func extractBinaryFromTar(archivePath, targetName, destPath string) error {
 			continue
 		}
 
+		logging.DebugStepBootstrap(bootstrap, "upgrade extract", "extracting to %s", destPath)
 		tmpFile, err := os.Create(destPath)
 		if err != nil {
 			return fmt.Errorf("cannot create extracted binary: %w", err)
@@ -420,7 +479,9 @@ func extractBinaryFromTar(archivePath, targetName, destPath string) error {
 	return fmt.Errorf("binary %s not found inside archive", targetName)
 }
 
-func installBinary(srcPath, destPath string) error {
+func installBinary(srcPath, destPath string, bootstrap *logging.BootstrapLogger) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade install", "src=%s dest=%s", srcPath, destPath)
+	defer func() { done(err) }()
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return fmt.Errorf("cannot create target directory: %w", err)
 	}

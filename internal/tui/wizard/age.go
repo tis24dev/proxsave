@@ -11,6 +11,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/tui"
 	"github.com/tis24dev/proxsave/internal/tui/components"
 )
@@ -41,23 +42,25 @@ var (
 func validatePublicKey(value string) (string, error) {
 	key := strings.TrimSpace(value)
 	if key == "" {
-		return "", fmt.Errorf("public key cannot be empty")
+		return "", fmt.Errorf("recipient cannot be empty")
 	}
-	if !strings.HasPrefix(key, "age1") {
-		return "", fmt.Errorf("public key must start with 'age1'")
+	if err := orchestrator.ValidateRecipientString(key); err != nil {
+		return "", err
 	}
 	return key, nil
 }
 
 func validatePassphrase(pass, confirm string) (string, error) {
+	pass = strings.TrimSpace(pass)
+	confirm = strings.TrimSpace(confirm)
 	if pass == "" {
 		return "", fmt.Errorf("passphrase cannot be empty")
 	}
-	if len(pass) < 8 {
-		return "", fmt.Errorf("passphrase must be at least 8 characters long")
-	}
 	if pass != confirm {
 		return "", fmt.Errorf("passphrases do not match")
+	}
+	if err := orchestrator.ValidatePassphraseStrength(pass); err != nil {
+		return "", err
 	}
 	return pass, nil
 }
@@ -150,6 +153,85 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 	}
 
 	return overwrite, nil
+}
+
+// ConfirmAddRecipient asks whether to add another AGE recipient.
+func ConfirmAddRecipient(configPath, buildSig string, count int) (bool, error) {
+	app := tui.NewApp()
+	addAnother := false
+
+	welcomeText := tview.NewTextView().
+		SetText("ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n" +
+			"Add one or more AGE recipients for encryption.\n").
+		SetTextColor(tui.ProxmoxLight).
+		SetDynamicColors(true)
+	welcomeText.SetBorder(false)
+
+	navInstructions := tview.NewTextView().
+		SetText("\n[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled").
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	navInstructions.SetBorder(false)
+
+	separator := tview.NewTextView().
+		SetText(strings.Repeat("─", 80)).
+		SetTextColor(tui.ProxmoxOrange)
+	separator.SetBorder(false)
+
+	configPathText := tview.NewTextView().
+		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	configPathText.SetBorder(false)
+
+	buildSigText := tview.NewTextView().
+		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	buildSigText.SetBorder(false)
+
+	message := fmt.Sprintf("Recipient(s) added: %d\n\nAdd another recipient?", count)
+	modal := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Add Another", "Finish"}).
+		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+			if buttonLabel == "Add Another" {
+				addAnother = true
+			}
+			app.Stop()
+		})
+
+	modal.SetBorder(true).
+		SetTitle(" Add Another Recipient ").
+		SetTitleAlign(tview.AlignCenter).
+		SetTitleColor(tui.ProxmoxOrange).
+		SetBorderColor(tui.ProxmoxOrange).
+		SetBackgroundColor(tcell.ColorBlack)
+
+	flex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(welcomeText, 5, 0, false).
+		AddItem(navInstructions, 2, 0, false).
+		AddItem(separator, 1, 0, false).
+		AddItem(modal, 0, 1, true).
+		AddItem(configPathText, 1, 0, false).
+		AddItem(buildSigText, 1, 0, false)
+
+	flex.SetBorder(true).
+		SetTitle(" AGE Encryption Setup ").
+		SetTitleAlign(tview.AlignCenter).
+		SetTitleColor(tui.ProxmoxOrange).
+		SetBorderColor(tui.ProxmoxOrange).
+		SetBackgroundColor(tcell.ColorBlack)
+
+	if err := ageWizardRunner(app, flex, modal); err != nil {
+		return false, err
+	}
+
+	return addAnother, nil
 }
 
 // RunAgeSetupWizard runs the TUI-based AGE encryption setup wizard
@@ -272,7 +354,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 
 	// Public key field (for "existing" type)
 	publicKeyField = tview.NewInputField().
-		SetLabel("  └─ AGE Public Key").
+		SetLabel("  └─ AGE/SSH Recipient").
 		SetText("").
 		SetFieldWidth(70)
 	form.Form.AddFormItem(publicKeyField)

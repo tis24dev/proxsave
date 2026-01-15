@@ -59,7 +59,9 @@ type SafetyBackupResult struct {
 }
 
 // CreateSafetyBackup creates a backup of files that will be overwritten
-func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (*SafetyBackupResult, error) {
+func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (result *SafetyBackupResult, err error) {
+	done := logging.DebugStart(logger, "create safety backup", "dest=%s categories=%d", destRoot, len(selectedCategories))
+	defer func() { done(err) }()
 	timestamp := safetyNow().Format("20060102_150405")
 	baseDir := filepath.Join("/tmp", "proxsave")
 	if err := safetyFS.MkdirAll(baseDir, 0755); err != nil {
@@ -84,7 +86,7 @@ func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	tarWriter := tar.NewWriter(gzWriter)
 	defer tarWriter.Close()
 
-	result := &SafetyBackupResult{
+	result = &SafetyBackupResult{
 		BackupPath: backupArchive,
 		Timestamp:  safetyNow(),
 	}
@@ -240,7 +242,9 @@ func backupDirectory(tw *tar.Writer, sourcePath, archivePath string, result *Saf
 }
 
 // RestoreSafetyBackup restores files from a safety backup (for rollback)
-func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot string) error {
+func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot string) (err error) {
+	done := logging.DebugStart(logger, "restore safety backup", "backup=%s dest=%s", backupPath, destRoot)
+	defer func() { done(err) }()
 	logger.Info("Restoring from safety backup: %s", backupPath)
 
 	file, err := safetyFS.Open(backupPath)

@@ -23,7 +23,9 @@ type SelectiveRestoreConfig struct {
 }
 
 // AnalyzeBackupCategories detects which categories are available in the backup
-func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) ([]Category, error) {
+func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) (categories []Category, err error) {
+	done := logging.DebugStart(logger, "analyze backup categories", "archive=%s", archivePath)
+	defer func() { done(err) }()
 	logger.Info("Analyzing backup categories...")
 
 	// Open the archive and read all entry names

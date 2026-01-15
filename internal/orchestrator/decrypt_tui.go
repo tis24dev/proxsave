@@ -40,7 +40,7 @@ var (
 )
 
 // RunDecryptWorkflowTUI runs the decrypt workflow using a TUI flow.
-func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) error {
+func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) (err error) {
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
 	}
@@ -50,8 +50,10 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	if strings.TrimSpace(buildSig) == "" {
 		buildSig = "n/a"
 	}
+	done := logging.DebugStart(logger, "decrypt workflow (tui)", "version=%s", version)
+	defer func() { done(err) }()
 
-	selection, err := runDecryptSelectionWizard(cfg, configPath, buildSig)
+	selection, err := runDecryptSelectionWizard(ctx, cfg, configPath, buildSig)
 	if err != nil {
 		if errors.Is(err, ErrDecryptAborted) {
 			return ErrDecryptAborted
@@ -131,7 +133,10 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	return nil
 }
 
-func runDecryptSelectionWizard(cfg *config.Config, configPath, buildSig string) (*decryptSelection, error) {
+func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, configPath, buildSig string) (*decryptSelection, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	options := buildDecryptPathOptions(cfg)
 	if len(options) == 0 {
 		return nil, fmt.Errorf("no backup paths configured in backup.env")
@@ -142,6 +147,7 @@ func runDecryptSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 
 	selection := &decryptSelection{}
 	var selectionErr error
+	var scan scanController
 
 	pathList := tview.NewList().ShowSecondaryText(false)
 	pathList.SetMainTextColor(tcell.ColorWhite).
@@ -161,13 +167,19 @@ func runDecryptSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 		selectedOption := options[index]
 		pages.SwitchToPage("loading")
 		go func() {
+			scanCtx, finish := scan.Start(ctx)
+			defer finish()
+
 			var candidates []*decryptCandidate
 			var err error
 
 			if selectedOption.IsRclone {
-				candidates, err = discoverRcloneBackups(context.Background(), selectedOption.Path, logging.GetDefaultLogger())
+				candidates, err = discoverRcloneBackups(scanCtx, selectedOption.Path, logging.GetDefaultLogger())
 			} else {
 				candidates, err = discoverBackupCandidates(logging.GetDefaultLogger(), selectedOption.Path)
+			}
+			if scanCtx.Err() != nil {
+				return
 			}
 			app.QueueUpdateDraw(func() {
 				if err != nil {
@@ -201,6 +213,7 @@ func runDecryptSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 		}()
 	})
 	pathList.SetDoneFunc(func() {
+		scan.Cancel()
 		selectionErr = ErrDecryptAborted
 		app.Stop()
 	})
@@ -220,6 +233,7 @@ func runDecryptSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 	form.Form.SetFocus(0)
 
 	form.SetOnCancel(func() {
+		scan.Cancel()
 		selectionErr = ErrDecryptAborted
 	})
 	form.AddCancelButton("Cancel")
@@ -234,6 +248,7 @@ func runDecryptSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 
 	loadingForm := components.NewForm(app)
 	loadingForm.SetOnCancel(func() {
+		scan.Cancel()
 		selectionErr = ErrDecryptAborted
 	})
 	loadingForm.AddCancelButton("Cancel")

@@ -63,6 +63,7 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 
 	tr := tar.NewReader(bundleFile)
 	foundFiles := make(map[string]bool)
+	order := make([]string, 0, len(testData))
 	expectedFiles := []string{
 		"backup.tar",
 		"backup.tar.sha256",
@@ -80,6 +81,7 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 		}
 
 		foundFiles[header.Name] = true
+		order = append(order, header.Name)
 
 		// Verify file content matches
 		content, err := io.ReadAll(tr)
@@ -99,6 +101,15 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 		if string(content) != expectedContent {
 			t.Errorf("file %s content = %q, want %q", header.Name, content, expectedContent)
 		}
+	}
+
+	if len(order) == 0 || order[0] != "backup.tar.metadata" {
+		t.Fatalf("first bundle entry=%q; want %q", func() string {
+			if len(order) == 0 {
+				return ""
+			}
+			return order[0]
+		}(), "backup.tar.metadata")
 	}
 
 	// Verify all expected files are present

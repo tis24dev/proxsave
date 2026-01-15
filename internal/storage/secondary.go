@@ -61,7 +61,9 @@ func (s *SecondaryStorage) IsCritical() bool {
 }
 
 // DetectFilesystem detects the filesystem type for the secondary path
-func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (*FilesystemInfo, error) {
+func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (info *FilesystemInfo, err error) {
+	done := logging.DebugStart(s.logger, "secondary detect filesystem", "path=%s", s.basePath)
+	defer func() { done(err) }()
 	// Ensure directory exists
 	if err := os.MkdirAll(s.basePath, 0700); err != nil {
 		// Non-critical error - log warning and return
@@ -95,7 +97,9 @@ func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (*FilesystemInf
 }
 
 // Store copies a backup file to secondary storage using an atomic Go-based copy
-func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadata *types.BackupMetadata) error {
+func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadata *types.BackupMetadata) (err error) {
+	done := logging.DebugStart(s.logger, "secondary store", "file=%s", filepath.Base(backupFile))
+	defer func() { done(err) }()
 	s.logger.Debug("Secondary storage: preparing to store %s", filepath.Base(backupFile))
 	// Check context
 	if err := ctx.Err(); err != nil {
@@ -314,7 +318,9 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) error
 }
 
 // List returns all backups in secondary storage
-func (s *SecondaryStorage) List(ctx context.Context) ([]*types.BackupMetadata, error) {
+func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMetadata, err error) {
+	done := logging.DebugStart(s.logger, "secondary list", "path=%s", s.basePath)
+	defer func() { done(err) }()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -349,7 +355,7 @@ func (s *SecondaryStorage) List(ctx context.Context) ([]*types.BackupMetadata, e
 		}
 	}
 
-	var backups []*types.BackupMetadata
+	backups = nil
 
 	// Filter and parse backup files
 	for _, match := range matches {
@@ -395,8 +401,10 @@ func (s *SecondaryStorage) List(ctx context.Context) ([]*types.BackupMetadata, e
 }
 
 // Delete removes a backup file and its associated files
-func (s *SecondaryStorage) Delete(ctx context.Context, backupFile string) error {
-	_, err := s.deleteBackupInternal(ctx, backupFile)
+func (s *SecondaryStorage) Delete(ctx context.Context, backupFile string) (err error) {
+	done := logging.DebugStart(s.logger, "secondary delete", "file=%s", backupFile)
+	defer func() { done(err) }()
+	_, err = s.deleteBackupInternal(ctx, backupFile)
 	return err
 }
 
@@ -483,7 +491,9 @@ func (s *SecondaryStorage) countLogFiles() int {
 
 // ApplyRetention removes old backups according to retention policy
 // Supports both simple (count-based) and GFS (time-distributed) policies
-func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionConfig) (int, error) {
+func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionConfig) (deleted int, err error) {
+	done := logging.DebugStart(s.logger, "secondary retention", "policy=%s max=%d", config.Policy, config.MaxBackups)
+	defer func() { done(err) }()
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -677,14 +687,16 @@ func (s *SecondaryStorage) LastRetentionSummary() RetentionSummary {
 }
 
 // GetStats returns storage statistics
-func (s *SecondaryStorage) GetStats(ctx context.Context) (*StorageStats, error) {
+func (s *SecondaryStorage) GetStats(ctx context.Context) (stats *StorageStats, err error) {
+	done := logging.DebugStart(s.logger, "secondary stats", "path=%s", s.basePath)
+	defer func() { done(err) }()
 	backups, err := s.List(ctx)
 	if err != nil {
 		s.logger.Warning("WARNING: Secondary storage - failed to get stats: %v", err)
 		return nil, err
 	}
 
-	stats := &StorageStats{
+	stats = &StorageStats{
 		TotalBackups: len(backups),
 	}
 

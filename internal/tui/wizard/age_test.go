@@ -2,6 +2,7 @@ package wizard
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,18 +11,22 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
 func TestValidatePublicKey(t *testing.T) {
+	validAge := "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
+	validSSH := generateSSHPublicKey(t)
 	cases := []struct {
 		name    string
 		input   string
 		want    string
 		wantErr bool
 	}{
-		{name: "valid", input: " age1abc  ", want: "age1abc"},
+		{name: "valid", input: " " + validAge + "  ", want: validAge},
+		{name: "valid ssh", input: " " + validSSH + " ", want: validSSH},
 		{name: "empty", input: "", wantErr: true},
 		{name: "missing prefix", input: "abc", wantErr: true},
 	}
@@ -53,7 +58,7 @@ func TestValidatePassphrase(t *testing.T) {
 		confirm string
 		wantErr bool
 	}{
-		{name: "valid", pass: "correct horse", confirm: "correct horse"},
+		{name: "valid", pass: "CorrectHorse1!", confirm: "CorrectHorse1!"},
 		{name: "empty", pass: "", confirm: "", wantErr: true},
 		{name: "short", pass: "short", confirm: "short", wantErr: true},
 		{name: "mismatch", pass: "longenough", confirm: "diff", wantErr: true},
@@ -264,12 +269,65 @@ func TestConfirmRecipientOverwriteRunnerError(t *testing.T) {
 	}
 }
 
+func TestConfirmAddRecipientSelection(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	tests := []struct {
+		name   string
+		button string
+		want   bool
+	}{
+		{name: "add another", button: "Add Another", want: true},
+		{name: "finish", button: "Finish", want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+				done := extractModalDone(focus.(*tview.Modal))
+				done(0, tc.button)
+				return nil
+			}
+
+			got, err := ConfirmAddRecipient("/etc/proxsave/.env", "sig-xyz", 2)
+			if err != nil {
+				t.Fatalf("ConfirmAddRecipient returned error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %v, want %v for button %q", got, tc.want, tc.button)
+			}
+		})
+	}
+}
+
+func TestConfirmAddRecipientModalIncludesCount(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	var modalText string
+	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		modalText = extractModalText(focus.(*tview.Modal))
+		return nil
+	}
+
+	_, err := ConfirmAddRecipient("/etc/proxsave/.env", "sig", 3)
+	if err != nil {
+		t.Fatalf("ConfirmAddRecipient returned error: %v", err)
+	}
+	if !strings.Contains(modalText, "3") {
+		t.Fatalf("expected modal to mention count, got %q", modalText)
+	}
+}
+
 func TestRunAgeSetupWizardExistingKey(t *testing.T) {
+	validAge := "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
 	data, err := runAgeWizardTest(t, func(form *tview.Form) {
 		drop := form.GetFormItem(0).(*tview.DropDown)
 		drop.SetCurrentOption(0)
 		publicKey := form.GetFormItem(1).(*tview.InputField)
-		publicKey.SetText("age1validkey")
+		publicKey.SetText(validAge)
 		pressFormButton(t, form, "Continue")
 	})
 	if err != nil {
@@ -278,7 +336,7 @@ func TestRunAgeSetupWizardExistingKey(t *testing.T) {
 	if data.SetupType != "existing" {
 		t.Fatalf("unexpected setup type: %s", data.SetupType)
 	}
-	if data.RecipientKey != "age1validkey" {
+	if data.RecipientKey != validAge {
 		t.Fatalf("expected recipient key propagated, got %q", data.RecipientKey)
 	}
 }
@@ -289,8 +347,8 @@ func TestRunAgeSetupWizardPassphrase(t *testing.T) {
 		drop.SetCurrentOption(1)
 		pass := form.GetFormItem(2).(*tview.InputField)
 		confirm := form.GetFormItem(3).(*tview.InputField)
-		pass.SetText("longenoughpass")
-		confirm.SetText("longenoughpass")
+		pass.SetText("CorrectHorse1!")
+		confirm.SetText("CorrectHorse1!")
 		pressFormButton(t, form, "Continue")
 	})
 	if err != nil {
@@ -299,7 +357,7 @@ func TestRunAgeSetupWizardPassphrase(t *testing.T) {
 	if data.SetupType != "passphrase" {
 		t.Fatalf("unexpected setup type: %s", data.SetupType)
 	}
-	if data.Passphrase != "longenoughpass" {
+	if data.Passphrase != "CorrectHorse1!" {
 		t.Fatalf("expected passphrase saved, got %q", data.Passphrase)
 	}
 	if data.PublicKey != "" || data.PrivateKey != "" {
@@ -368,4 +426,17 @@ func pressFormButton(t *testing.T, form *tview.Form, label string) {
 		t.Fatalf("button %q has no input handler", label)
 	}
 	handler(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(p tview.Primitive) {})
+}
+
+func generateSSHPublicKey(t *testing.T) string {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate ed25519 key: %v", err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("ssh.NewPublicKey: %v", err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))
 }

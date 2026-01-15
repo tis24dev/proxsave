@@ -32,13 +32,15 @@ var errRestoreBackToMode = errors.New("restore mode back")
 var promptYesNoTUIFunc = promptYesNoTUI
 
 // RunRestoreWorkflowTUI runs the restore workflow using a TUI flow.
-func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) error {
+func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) (err error) {
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
 	}
 	if logger == nil {
 		logger = logging.GetDefaultLogger()
 	}
+	done := logging.DebugStart(logger, "restore workflow (tui)", "version=%s", version)
+	defer func() { done(err) }()
 	if strings.TrimSpace(buildSig) == "" {
 		buildSig = "n/a"
 	}
@@ -345,7 +347,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 }
 
 func prepareDecryptedBackupTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) (*decryptCandidate, *preparedBundle, error) {
-	candidate, err := runRestoreSelectionWizard(cfg, configPath, buildSig)
+	candidate, err := runRestoreSelectionWizard(ctx, cfg, configPath, buildSig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -358,7 +360,10 @@ func prepareDecryptedBackupTUI(ctx context.Context, cfg *config.Config, logger *
 	return candidate, prepared, nil
 }
 
-func runRestoreSelectionWizard(cfg *config.Config, configPath, buildSig string) (*decryptCandidate, error) {
+func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, configPath, buildSig string) (*decryptCandidate, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	options := buildDecryptPathOptions(cfg)
 	if len(options) == 0 {
 		return nil, fmt.Errorf("no backup paths configured in backup.env")
@@ -369,6 +374,7 @@ func runRestoreSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 
 	selection := &restoreSelection{}
 	var selectionErr error
+	var scan scanController
 
 	pathList := tview.NewList().ShowSecondaryText(false)
 	pathList.SetMainTextColor(tcell.ColorWhite).
@@ -388,13 +394,19 @@ func runRestoreSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 		selectedOption := options[index]
 		pages.SwitchToPage("paths-loading")
 		go func() {
+			scanCtx, finish := scan.Start(ctx)
+			defer finish()
+
 			var candidates []*decryptCandidate
 			var err error
 
 			if selectedOption.IsRclone {
-				candidates, err = discoverRcloneBackups(context.Background(), selectedOption.Path, logging.GetDefaultLogger())
+				candidates, err = discoverRcloneBackups(scanCtx, selectedOption.Path, logging.GetDefaultLogger())
 			} else {
 				candidates, err = discoverBackupCandidates(logging.GetDefaultLogger(), selectedOption.Path)
+			}
+			if scanCtx.Err() != nil {
+				return
 			}
 			app.QueueUpdateDraw(func() {
 				if err != nil {
@@ -423,6 +435,7 @@ func runRestoreSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 		}()
 	})
 	pathList.SetDoneFunc(func() {
+		scan.Cancel()
 		selectionErr = ErrRestoreAborted
 		app.Stop()
 	})
@@ -442,6 +455,7 @@ func runRestoreSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 	form.Form.SetFocus(0)
 
 	form.SetOnCancel(func() {
+		scan.Cancel()
 		selectionErr = ErrRestoreAborted
 	})
 	form.AddCancelButton("Cancel")
@@ -456,6 +470,7 @@ func runRestoreSelectionWizard(cfg *config.Config, configPath, buildSig string) 
 
 	loadingForm := components.NewForm(app)
 	loadingForm.SetOnCancel(func() {
+		scan.Cancel()
 		selectionErr = ErrRestoreAborted
 	})
 	loadingForm.AddCancelButton("Cancel")

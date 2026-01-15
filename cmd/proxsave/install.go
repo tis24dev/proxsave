@@ -20,7 +20,8 @@ import (
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
 
-func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) error {
+func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) (err error) {
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "resolving configuration path")
 	resolvedPath, err := resolveInstallConfigPath(configPath)
 	if err != nil {
 		return err
@@ -30,10 +31,14 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	baseDir := deriveBaseDirFromConfig(configPath)
 	_ = os.Setenv("BASE_DIR", baseDir)
 
+	done := logging.DebugStartBootstrap(bootstrap, "install workflow (cli)", "config=%s base=%s", configPath, baseDir)
+	defer func() { done(err) }()
+
 	// Before starting the interactive wizard, perform a best-effort cleanup of any
 	// existing proxsave/proxmox-backup entrypoints so that the installer can recreate a
 	// clean symlink for the Go binary.
 	execInfo := getExecInfo()
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "cleaning legacy entrypoints")
 	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
 
 	if bootstrap != nil {
@@ -43,17 +48,16 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	var telegramCode string
-	var installErr error
 	var permStatus string
 	var permMessage string
 
 	defer func() {
-		printInstallFooter(installErr, configPath, baseDir, telegramCode, permStatus, permMessage)
+		printInstallFooter(err, configPath, baseDir, telegramCode, permStatus, permMessage)
 	}()
 
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "ensuring interactive stdin")
 	if err := ensureInteractiveStdin(); err != nil {
-		installErr = err
-		return installErr
+		return err
 	}
 
 	tmpConfigPath := configPath + ".tmp"
@@ -62,40 +66,51 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	reader := bufio.NewReader(os.Stdin)
 	printInstallBanner(configPath)
 
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "checking legacy install state")
 	if err := handleLegacyInstall(ctx, reader, baseDir); err != nil {
-		installErr = err
-		return installErr
+		return err
 	}
 
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running config wizard")
 	enableEncryption, skipConfigWizard, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
 	if err != nil {
-		installErr = err
-		return installErr
+		return err
 	}
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "config wizard done (encryption=%v skip=%v)", enableEncryption, skipConfigWizard)
 
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "installing support docs")
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
-		installErr = fmt.Errorf("install documentation: %w", err)
-		return installErr
+		return fmt.Errorf("install documentation: %w", err)
 	}
 
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running encryption setup if needed")
 	if err := runEncryptionSetupIfNeeded(ctx, configPath, enableEncryption, skipConfigWizard, bootstrap); err != nil {
-		installErr = err
-		return installErr
+		return err
 	}
 
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
 	runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap)
 
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "detecting telegram identity")
 	telegramCode = detectTelegramCode(baseDir)
+	if telegramCode != "" {
+		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "telegram identity detected")
+	} else {
+		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "telegram identity not found")
+	}
 
 	// Best-effort post-install permission and ownership normalization so that
 	// the environment starts in a consistent state.
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "normalizing permissions")
 	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap)
+	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "permissions status=%s", permStatus)
 
-	installErr = nil
 	return nil
 }
 
-func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, useCLI bool) error {
+func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, useCLI bool) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "new-install workflow", "config=%s", configPath)
+	defer func() { done(err) }()
 	resolvedPath, err := resolveInstallConfigPath(configPath)
 	if err != nil {
 		return err
@@ -103,6 +118,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	baseDir := deriveBaseDirFromConfig(resolvedPath)
 
+	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "ensuring interactive stdin")
 	if err := ensureInteractiveStdin(); err != nil {
 		return err
 	}
@@ -112,6 +128,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 		buildSig = "n/a"
 	}
 
+	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "confirming reset")
 	confirm, err := wizard.ConfirmNewInstall(baseDir, buildSig)
 	if err != nil {
 		return wrapInstallError(err)
@@ -121,6 +138,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 
 	bootstrap.Info("Resetting %s (preserving env/ and identity/)", baseDir)
+	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "resetting base dir")
 	if err := resetInstallBaseDir(baseDir, bootstrap); err != nil {
 		return err
 	}
@@ -197,7 +215,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	}
 	fmt.Println()
 	fmt.Println("\033[31mEXTRA STEP - IF YOU FIND THIS TOOL USEFUL AND WANT TO THANK ME, A COFFEE IS ALWAYS WELCOME!\033[0m")
-		fmt.Println("https://github.com/sponsors/tis24dev")
+	fmt.Println("https://github.com/sponsors/tis24dev")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
@@ -269,7 +287,11 @@ func handleLegacyInstall(ctx context.Context, reader *bufio.Reader, baseDir stri
 	return nil
 }
 
-func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, tmpConfigPath, baseDir string, bootstrap *logging.BootstrapLogger) (bool, bool, error) {
+func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, tmpConfigPath, baseDir string, bootstrap *logging.BootstrapLogger) (enableEncryption bool, skipConfigWizard bool, err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "install config wizard (cli)", "config=%s", configPath)
+	defer func() { done(err) }()
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "preparing base template")
 	template, skipConfigWizard, err := prepareBaseTemplate(ctx, reader, configPath)
 	if err != nil {
 		return false, false, wrapInstallError(err)
@@ -279,20 +301,25 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 		return false, true, nil
 	}
 
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring secondary storage")
 	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
 		return false, false, wrapInstallError(err)
 	}
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cloud storage")
 	if template, err = configureCloudStorage(ctx, reader, template); err != nil {
 		return false, false, wrapInstallError(err)
 	}
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring firewall rules")
 	if template, err = configureFirewallRules(ctx, reader, template); err != nil {
 		return false, false, wrapInstallError(err)
 	}
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring notifications")
 	if template, err = configureNotifications(ctx, reader, template); err != nil {
 		return false, false, wrapInstallError(err)
 	}
 
-	enableEncryption, err := configureEncryption(ctx, reader, &template)
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring encryption")
+	enableEncryption, err = configureEncryption(ctx, reader, &template)
 	if err != nil {
 		return false, false, wrapInstallError(err)
 	}
@@ -301,6 +328,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	// subsequent runs and encryption setup use the same root directory.
 	template = setEnvValue(template, "BASE_DIR", baseDir)
 
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "writing configuration")
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
 		return false, false, err
 	}
@@ -312,8 +340,11 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	return enableEncryption, false, nil
 }
 
-func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEncryption, skipConfigWizard bool, bootstrap *logging.BootstrapLogger) error {
+func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEncryption, skipConfigWizard bool, bootstrap *logging.BootstrapLogger) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "install encryption setup", "config=%s", configPath)
+	defer func() { done(err) }()
 	if skipConfigWizard || !enableEncryption {
+		logging.DebugStepBootstrap(bootstrap, "install encryption setup", "skipped")
 		return nil
 	}
 
@@ -329,21 +360,26 @@ func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEn
 }
 
 func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) {
+	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
+	defer func() { done(nil) }()
 	// Clean up legacy bash-based symlinks that point to the old installer scripts.
 	if bootstrap != nil {
 		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")
 	}
+	logging.DebugStepBootstrap(bootstrap, "post-install setup", "cleaning legacy bash symlinks")
 	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 
 	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary, if not already customized.
 	if bootstrap != nil {
 		bootstrap.Info("Ensuring 'proxsave' and 'proxmox-backup' commands point to the Go binary")
 	}
+	logging.DebugStepBootstrap(bootstrap, "post-install setup", "ensuring go symlink")
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
 	// Migrate legacy cron entries pointing to the bash script to the Go binary.
 	// If no cron entry exists at all, create a default one at 02:00 every day.
 	cronSchedule := resolveCronSchedule(nil)
+	logging.DebugStepBootstrap(bootstrap, "post-install setup", "migrating cron entries")
 	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 }
 
@@ -356,7 +392,9 @@ func detectTelegramCode(baseDir string) string {
 	return code
 }
 
-func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) error {
+func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "reset install base", "base=%s", baseDir)
+	defer func() { done(err) }()
 	baseDir = filepath.Clean(baseDir)
 	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
 		return fmt.Errorf("refusing to reset unsafe base directory: %q", baseDir)
@@ -384,6 +422,7 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) err
 			continue
 		}
 		target := filepath.Join(baseDir, name)
+		logging.DebugStepBootstrap(bootstrap, "reset install base", "removing %s", target)
 		clearImmutableAttributes(target, bootstrap)
 		// Best-effort: ensure write permission before removal
 		if entry.IsDir() {

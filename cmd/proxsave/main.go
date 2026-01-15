@@ -58,6 +58,7 @@ func run() int {
 
 	// Resolve the effective tool version once for the entire run.
 	toolVersion := buildinfo.String()
+	runDone := logging.DebugStartBootstrap(bootstrap, "main run", "version=%s", toolVersion)
 
 	finalExitCode := types.ExitSuccess.Int()
 	showSummary := false
@@ -73,6 +74,8 @@ func run() int {
 	var pendingSupportStats *orchestrator.BackupStats
 
 	defer func() {
+		logging.DebugStepBootstrap(bootstrap, "main run", "exit_code=%d", finalExitCode)
+		runDone(nil)
 		if r := recover(); r != nil {
 			stack := debug.Stack()
 			bootstrap.Error("PANIC: %v", r)
@@ -90,6 +93,7 @@ func run() int {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigChan
+		logging.DebugStepBootstrap(bootstrap, "signal", "received=%v", sig)
 		bootstrap.Warning("\nReceived signal %v, initiating graceful shutdown...", sig)
 		cancel() // Cancel context to stop all operations
 		closeStdinOnce.Do(func() {
@@ -101,6 +105,7 @@ func run() int {
 
 	// Parse command-line arguments
 	args := cli.Parse()
+	logging.DebugStepBootstrap(bootstrap, "main run", "args parsed")
 
 	// Handle version flag
 	if args.ShowVersion {
@@ -115,6 +120,7 @@ func run() int {
 	}
 
 	// Validate support mode compatibility with other CLI modes
+	logging.DebugStepBootstrap(bootstrap, "main run", "support_mode=%v", args.Support)
 	if args.Support {
 		incompatible := make([]string, 0, 6)
 		if args.Restore {
@@ -159,6 +165,7 @@ func run() int {
 	// Resolve configuration path relative to the executable's base directory so
 	// that configs/ is located consistently next to the binary, regardless of
 	// the current working directory.
+	logging.DebugStepBootstrap(bootstrap, "main run", "resolving config path")
 	resolvedConfigPath, err := resolveInstallConfigPath(args.ConfigPath)
 	if err != nil {
 		bootstrap.Error("ERROR: %v", err)
@@ -168,13 +175,19 @@ func run() int {
 
 	// Dedicated upgrade mode (download latest binary, no config changes)
 	if args.Upgrade {
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade")
 		return runUpgrade(ctx, args, bootstrap)
 	}
 
 	newKeyCLI := args.ForceCLI
 	// Dedicated new key mode (no backup run)
 	if args.ForceNewKey {
-		if err := runNewKey(ctx, args.ConfigPath, bootstrap, newKeyCLI); err != nil {
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=newkey cli=%v", newKeyCLI)
+		flowLogLevel := types.LogLevelInfo
+		if args.LogLevel != types.LogLevelNone {
+			flowLogLevel = args.LogLevel
+		}
+		if err := runNewKey(ctx, args.ConfigPath, flowLogLevel, bootstrap, newKeyCLI); err != nil {
 			if isInstallAbortedError(err) || errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
 				return types.ExitSuccess.Int()
 			}
@@ -186,6 +199,7 @@ func run() int {
 
 	decryptCLI := args.ForceCLI
 	if args.Decrypt {
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=decrypt cli=%v", decryptCLI)
 		if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, toolVersion, decryptCLI); err != nil {
 			if errors.Is(err, orchestrator.ErrDecryptAborted) {
 				bootstrap.Info("Decrypt workflow aborted by user")
@@ -200,7 +214,12 @@ func run() int {
 
 	newInstallCLI := args.ForceCLI
 	if args.NewInstall {
-		sessionLogger, cleanupSessionLog := startFlowSessionLog("new-install", bootstrap)
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=new-install cli=%v", newInstallCLI)
+		flowLogLevel := types.LogLevelInfo
+		if args.LogLevel != types.LogLevelNone {
+			flowLogLevel = args.LogLevel
+		}
+		sessionLogger, cleanupSessionLog := startFlowSessionLog("new-install", flowLogLevel, bootstrap)
 		defer cleanupSessionLog()
 		if sessionLogger != nil {
 			sessionLogger.Info("Starting --new-install (config=%s)", args.ConfigPath)
@@ -229,6 +248,7 @@ func run() int {
 
 	// Handle configuration upgrade dry-run (plan-only, no writes).
 	if args.UpgradeConfigDry {
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade-config-dry")
 		if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
 			bootstrap.Error("ERROR: %v", err)
 			return types.ExitConfigError.Int()
@@ -262,7 +282,12 @@ func run() int {
 
 	// Handle install wizard (runs before normal execution)
 	if args.Install {
-		sessionLogger, cleanupSessionLog := startFlowSessionLog("install", bootstrap)
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=install cli=%v", args.ForceCLI)
+		flowLogLevel := types.LogLevelInfo
+		if args.LogLevel != types.LogLevelNone {
+			flowLogLevel = args.LogLevel
+		}
+		sessionLogger, cleanupSessionLog := startFlowSessionLog("install", flowLogLevel, bootstrap)
 		defer cleanupSessionLog()
 		if sessionLogger != nil {
 			sessionLogger.Info("Starting --install (config=%s)", args.ConfigPath)
@@ -326,6 +351,7 @@ func run() int {
 
 	// Handle configuration upgrade (schema-aware merge with embedded template).
 	if args.UpgradeConfig {
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade-config")
 		if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
 			bootstrap.Error("ERROR: %v", err)
 			return types.ExitConfigError.Int()
@@ -364,15 +390,18 @@ func run() int {
 	}
 
 	if args.EnvMigrationDry {
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=env-migration-dry")
 		return runEnvMigrationDry(ctx, args, bootstrap)
 	}
 
 	if args.EnvMigration {
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=env-migration")
 		return runEnvMigration(ctx, args, bootstrap)
 	}
 
 	// Support mode: interactive pre-flight questionnaire (mandatory)
 	if args.Support {
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=support")
 		continueRun, interrupted := runSupportIntro(ctx, bootstrap, args)
 		if !continueRun {
 			if interrupted {
@@ -408,6 +437,7 @@ func run() int {
 	}
 
 	bootstrap.Printf("Loading configuration from: %s", args.ConfigPath)
+	logging.DebugStepBootstrap(bootstrap, "main run", "loading configuration")
 	cfg, err := config.LoadConfig(args.ConfigPath)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to load configuration: %v", err)
@@ -451,7 +481,7 @@ func run() int {
 	// Pre-flight: if features require network, verify basic connectivity
 	if needs, reasons := featuresNeedNetwork(cfg); needs {
 		if cfg.DisableNetworkPreflight {
-			logging.Warning("WARNING: Network preflight disabled via DISABLE_NETWORK_PREFLIGHT; features: %s", strings.Join(reasons, ", "))
+			bootstrap.Warning("WARNING: Network preflight disabled via DISABLE_NETWORK_PREFLIGHT; features: %s", strings.Join(reasons, ", "))
 		} else {
 			if err := checkInternetConnectivity(networkPreflightTimeout); err != nil {
 				bootstrap.Warning("WARNING: Network connectivity unavailable for: %s. %v", strings.Join(reasons, ", "), err)
@@ -469,12 +499,14 @@ func run() int {
 	} else if args.LogLevel != types.LogLevelNone {
 		logLevel = args.LogLevel
 	}
+	logging.DebugStepBootstrap(bootstrap, "main run", "log_level=%s", logLevel.String())
 
 	// Initialize logger with configuration
 	logger := logging.New(logLevel, cfg.UseColor)
 	sessionLogActive := false
 	sessionLogCloser := func() {}
 	if args.Restore {
+		logging.DebugStepBootstrap(bootstrap, "main run", "restore log enabled")
 		if restoreLogger, restoreLogPath, closeFn, err := logging.StartSessionLogger("restore", logLevel, cfg.UseColor); err == nil {
 			logger = restoreLogger
 			sessionLogCloser = closeFn
@@ -523,10 +555,12 @@ func run() int {
 	// If the installed version is up to date, nothing is printed at INFO/WARNING level
 	// (only a DEBUG message is logged). If a newer version exists, a WARNING is emitted
 	// suggesting the use of --upgrade.
+	logging.DebugStep(logger, "main", "checking for updates")
 	updateInfo := checkForUpdates(ctx, logger, toolVersion)
 
 	// Apply backup permissions (optional, Bash-compatible behavior)
 	if cfg.SetBackupPermissions {
+		logging.DebugStep(logger, "main", "applying backup permissions")
 		if err := applyBackupPermissions(cfg, logger); err != nil {
 			logging.Warning("Failed to apply backup permissions: %v", err)
 		}
@@ -690,6 +724,7 @@ func run() int {
 
 	execInfo := getExecInfo()
 	execPath := execInfo.ExecPath
+	logging.DebugStep(logger, "main", "running security checks")
 	if _, secErr := security.Run(ctx, logger, cfg, args.ConfigPath, execPath, envInfo); secErr != nil {
 		logging.Error("Security checks failed: %v", secErr)
 		return finalize(types.ExitSecurityError.Int())
@@ -698,6 +733,7 @@ func run() int {
 
 	restoreCLI := args.ForceCLI
 	if args.Restore {
+		logging.DebugStep(logger, "main", "mode=restore cli=%v", restoreCLI)
 		if restoreCLI {
 			logging.Info("Restore mode enabled - starting CLI workflow...")
 			if err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, toolVersion); err != nil {
@@ -738,6 +774,7 @@ func run() int {
 	}
 
 	if args.Decrypt {
+		logging.DebugStep(logger, "main", "mode=decrypt cli=%v", decryptCLI)
 		if decryptCLI {
 			logging.Info("Decrypt mode enabled - starting CLI workflow...")
 			if err := orchestrator.RunDecryptWorkflow(ctx, cfg, logger, toolVersion); err != nil {
@@ -770,6 +807,7 @@ func run() int {
 
 	// Initialize orchestrator
 	logging.Step("Initializing backup orchestrator")
+	orchInitDone := logging.DebugStart(logger, "orchestrator init", "dry_run=%v", dryRun)
 	orch = orchestrator.New(logger, dryRun)
 	orch.SetVersion(toolVersion)
 	orch.SetConfig(cfg)
@@ -810,6 +848,7 @@ func run() int {
 	})
 
 	if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
+		orchInitDone(err)
 		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
 			logging.Warning("Encryption setup aborted by user. Exiting...")
 			earlyErrorState = &orchestrator.EarlyErrorState{
@@ -829,6 +868,7 @@ func run() int {
 		}
 		return finalize(types.ExitConfigError.Int())
 	}
+	orchInitDone(nil)
 
 	logging.Info("✓ Orchestrator initialized")
 	fmt.Println()
@@ -892,7 +932,9 @@ func run() int {
 	checkerConfig.MinDiskSecondaryGB = cfg.MinDiskSecondaryGB
 	checkerConfig.MinDiskCloudGB = cfg.MinDiskCloudGB
 	checkerConfig.DryRun = dryRun
+	checkerDone := logging.DebugStart(logger, "pre-backup check config", "dry_run=%v", dryRun)
 	if err := checkerConfig.Validate(); err != nil {
+		checkerDone(err)
 		logging.Error("Invalid checker configuration: %v", err)
 		earlyErrorState = &orchestrator.EarlyErrorState{
 			Phase:     "checker_config",
@@ -902,6 +944,7 @@ func run() int {
 		}
 		return finalize(types.ExitConfigError.Int())
 	}
+	checkerDone(nil)
 	checker := checks.NewChecker(logger, checkerConfig)
 	orch.SetChecker(checker)
 
@@ -917,10 +960,13 @@ func run() int {
 
 	// Initialize storage backends
 	logging.Step("Initializing storage backends")
+	storageDone := logging.DebugStart(logger, "storage init", "primary=%s secondary=%v cloud=%v", cfg.BackupPath, cfg.SecondaryEnabled, cfg.CloudEnabled)
 
 	// Primary (local) storage - always enabled
+	logging.DebugStep(logger, "storage init", "primary backend")
 	localBackend, err := storage.NewLocalStorage(cfg, logger)
 	if err != nil {
+		storageDone(err)
 		logging.Error("Failed to initialize local storage: %v", err)
 		earlyErrorState = &orchestrator.EarlyErrorState{
 			Phase:     "storage_init",
@@ -932,6 +978,7 @@ func run() int {
 	}
 	localFS, err := detectFilesystemInfo(ctx, localBackend, cfg.BackupPath, logger)
 	if err != nil {
+		storageDone(err)
 		logging.Error("Failed to prepare primary storage: %v", err)
 		earlyErrorState = &orchestrator.EarlyErrorState{
 			Phase:     "storage_init",
@@ -941,10 +988,12 @@ func run() int {
 		}
 		return finalize(types.ExitConfigError.Int())
 	}
+	logging.DebugStep(logger, "storage init", "primary filesystem=%s", formatDetailedFilesystemLabel(cfg.BackupPath, localFS))
 	logging.Info("Path Primary: %s", formatDetailedFilesystemLabel(cfg.BackupPath, localFS))
 
 	localStats := fetchStorageStats(ctx, localBackend, logger, "Local storage")
 	localBackups := fetchBackupList(ctx, localBackend)
+	logging.DebugStep(logger, "storage init", "primary stats=%v backups=%d", localStats != nil, len(localBackups))
 
 	localAdapter := orchestrator.NewStorageAdapter(localBackend, logger, cfg)
 	localAdapter.SetFilesystemInfo(localFS)
@@ -955,15 +1004,18 @@ func run() int {
 	// Secondary storage - optional
 	var secondaryFS *storage.FilesystemInfo
 	if cfg.SecondaryEnabled {
+		logging.DebugStep(logger, "storage init", "secondary backend")
 		secondaryBackend, err := storage.NewSecondaryStorage(cfg, logger)
 		if err != nil {
 			logging.Warning("Failed to initialize secondary storage: %v", err)
 			logging.Info("Path Secondary: %s", formatDetailedFilesystemLabel(cfg.SecondaryPath, nil))
 		} else {
 			secondaryFS, _ = detectFilesystemInfo(ctx, secondaryBackend, cfg.SecondaryPath, logger)
+			logging.DebugStep(logger, "storage init", "secondary filesystem=%s", formatDetailedFilesystemLabel(cfg.SecondaryPath, secondaryFS))
 			logging.Info("Path Secondary: %s", formatDetailedFilesystemLabel(cfg.SecondaryPath, secondaryFS))
 			secondaryStats := fetchStorageStats(ctx, secondaryBackend, logger, "Secondary storage")
 			secondaryBackups := fetchBackupList(ctx, secondaryBackend)
+			logging.DebugStep(logger, "storage init", "secondary stats=%v backups=%d", secondaryStats != nil, len(secondaryBackups))
 			secondaryAdapter := orchestrator.NewStorageAdapter(secondaryBackend, logger, cfg)
 			secondaryAdapter.SetFilesystemInfo(secondaryFS)
 			secondaryAdapter.SetInitialStats(secondaryStats)
@@ -977,6 +1029,7 @@ func run() int {
 	// Cloud storage - optional
 	var cloudFS *storage.FilesystemInfo
 	if cfg.CloudEnabled {
+		logging.DebugStep(logger, "storage init", "cloud backend")
 		cloudBackend, err := storage.NewCloudStorage(cfg, logger)
 		if err != nil {
 			logging.Warning("Failed to initialize cloud storage: %v", err)
@@ -985,6 +1038,7 @@ func run() int {
 		} else {
 			cloudFS, _ = detectFilesystemInfo(ctx, cloudBackend, cfg.CloudRemote, logger)
 			if cloudFS == nil {
+				logging.DebugStep(logger, "storage init", "cloud unavailable, disabling")
 				cfg.CloudEnabled = false
 				cfg.CloudLogPath = ""
 				if checker != nil {
@@ -993,9 +1047,11 @@ func run() int {
 				logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, nil, nil))
 				logging.Skip("Path Cloud: disabled")
 			} else {
+				logging.DebugStep(logger, "storage init", "cloud filesystem=%s", formatDetailedFilesystemLabel(cfg.CloudRemote, cloudFS))
 				logging.Info("Path Cloud: %s", formatDetailedFilesystemLabel(cfg.CloudRemote, cloudFS))
 				cloudStats := fetchStorageStats(ctx, cloudBackend, logger, "Cloud storage")
 				cloudBackups := fetchBackupList(ctx, cloudBackend)
+				logging.DebugStep(logger, "storage init", "cloud stats=%v backups=%d", cloudStats != nil, len(cloudBackups))
 				cloudAdapter := orchestrator.NewStorageAdapter(cloudBackend, logger, cfg)
 				cloudAdapter.SetFilesystemInfo(cloudFS)
 				cloudAdapter.SetInitialStats(cloudStats)
@@ -1006,14 +1062,17 @@ func run() int {
 	} else {
 		logging.Skip("Path Cloud: disabled")
 	}
+	storageDone(nil)
 
 	fmt.Println()
 
 	// Initialize notification channels
 	logging.Step("Initializing notification channels")
+	notifyDone := logging.DebugStart(logger, "notifications init", "")
 
 	// Email notifications
 	if cfg.EmailEnabled {
+		logging.DebugStep(logger, "notifications init", "email enabled")
 		emailConfig := notify.EmailConfig{
 			Enabled:          true,
 			DeliveryMethod:   notify.EmailDeliveryMethod(cfg.EmailDeliveryMethod),
@@ -1038,11 +1097,13 @@ func run() int {
 			logging.Info("✓ Email initialized (method: %s)", cfg.EmailDeliveryMethod)
 		}
 	} else {
+		logging.DebugStep(logger, "notifications init", "email disabled")
 		logging.Skip("Email: disabled")
 	}
 
 	// Telegram notifications
 	if cfg.TelegramEnabled {
+		logging.DebugStep(logger, "notifications init", "telegram enabled (mode=%s)", cfg.TelegramBotType)
 		telegramConfig := notify.TelegramConfig{
 			Enabled:       true,
 			Mode:          notify.TelegramMode(cfg.TelegramBotType),
@@ -1060,11 +1121,13 @@ func run() int {
 			logging.Info("✓ Telegram initialized (mode: %s)", cfg.TelegramBotType)
 		}
 	} else {
+		logging.DebugStep(logger, "notifications init", "telegram disabled")
 		logging.Skip("Telegram: disabled")
 	}
 
 	// Gotify notifications
 	if cfg.GotifyEnabled {
+		logging.DebugStep(logger, "notifications init", "gotify enabled")
 		gotifyConfig := notify.GotifyConfig{
 			Enabled:         true,
 			ServerURL:       cfg.GotifyServerURL,
@@ -1082,11 +1145,13 @@ func run() int {
 			logging.Info("✓ Gotify initialized")
 		}
 	} else {
+		logging.DebugStep(logger, "notifications init", "gotify disabled")
 		logging.Skip("Gotify: disabled")
 	}
 
 	// Webhook Notifications
 	if cfg.WebhookEnabled {
+		logging.DebugStep(logger, "notifications init", "webhook enabled")
 		logging.Debug("Initializing webhook notifier...")
 		webhookConfig := cfg.BuildWebhookConfig()
 		logging.Debug("Webhook config built: %d endpoints configured", len(webhookConfig.Endpoints))
@@ -1103,8 +1168,10 @@ func run() int {
 			logging.Info("✓ Webhook initialized (%d endpoint(s))", len(webhookConfig.Endpoints))
 		}
 	} else {
+		logging.DebugStep(logger, "notifications init", "webhook disabled")
 		logging.Skip("Webhook: disabled")
 	}
+	notifyDone(nil)
 
 	fmt.Println()
 
@@ -1161,11 +1228,12 @@ func run() int {
 	logging.Info("  Webhook: %v", cfg.WebhookEnabled)
 	logging.Info("  Metrics: %v", cfg.MetricsEnabled)
 	fmt.Println()
-	logging.Debug("Go backup pipeline enabled")
 
 	// Run backup orchestration
 	if cfg.BackupEnabled {
+		preCheckDone := logging.DebugStart(logger, "pre-backup checks", "")
 		if err := orch.RunPreBackupChecks(ctx); err != nil {
+			preCheckDone(err)
 			logging.Error("Pre-backup validation failed: %v", err)
 			earlyErrorState = &orchestrator.EarlyErrorState{
 				Phase:     "pre_backup_checks",
@@ -1175,6 +1243,7 @@ func run() int {
 			}
 			return finalize(types.ExitBackupError.Int())
 		}
+		preCheckDone(nil)
 		fmt.Println()
 
 		logging.Step("Start Go backup orchestration")
@@ -1183,8 +1252,10 @@ func run() int {
 		hostname := resolveHostname()
 
 		// Run Go-based backup (collection + archive)
+		backupDone := logging.DebugStart(logger, "backup run", "proxmox=%s host=%s", envInfo.Type, hostname)
 		stats, err := orch.RunGoBackup(ctx, envInfo.Type, hostname)
 		if err != nil {
+			backupDone(err)
 			// Check if error is due to cancellation
 			if ctx.Err() == context.Canceled {
 				logging.Warning("Backup was canceled")
@@ -1214,6 +1285,7 @@ func run() int {
 			}
 			return finalize(types.ExitBackupError.Int())
 		}
+		backupDone(nil)
 
 		if err := orch.SaveStatsReport(stats); err != nil {
 			logging.Warning("Failed to persist backup statistics: %v", err)
@@ -1363,14 +1435,14 @@ func sendSupportEmail(ctx context.Context, cfg *config.Config, logger *logging.L
 		subject = fmt.Sprintf("%s - Build: %s", subject, sig)
 	}
 
-		emailConfig := notify.EmailConfig{
-			Enabled:          true,
-			DeliveryMethod:   notify.EmailDeliverySendmail,
-			FallbackSendmail: false,
-			AttachLogFile:    true,
-			Recipient:        "github-support@tis24.it",
-			From:             cfg.EmailFrom,
-			SubjectOverride:  subject,
+	emailConfig := notify.EmailConfig{
+		Enabled:          true,
+		DeliveryMethod:   notify.EmailDeliverySendmail,
+		FallbackSendmail: false,
+		AttachLogFile:    true,
+		Recipient:        "github-support@tis24.it",
+		From:             cfg.EmailFrom,
+		SubjectOverride:  subject,
 	}
 
 	emailNotifier, err := notify.NewEmailNotifier(emailConfig, proxmoxType, logger)
