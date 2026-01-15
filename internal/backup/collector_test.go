@@ -687,7 +687,7 @@ func TestSafeCopyFile_SymlinkCreationFailure_ErrorFormat(t *testing.T) {
 
 	// Verify error message uses structured format with " - " separator
 	errMsg := err.Error()
-	if !strings.Contains(errMsg, "Symlink creation failed - ") {
+	if !strings.Contains(errMsg, "symlink creation failed - ") {
 		t.Errorf("Error message should use structured format with ' - ' separator, got: %s", errMsg)
 	}
 
@@ -715,7 +715,7 @@ func TestSafeCopyFile_SymlinkReadlinkFailureIncrementsFailure(t *testing.T) {
 
 	destPath := filepath.Join(tempDir, "dest", "symlink.txt")
 	err := collector.safeCopyFile(context.Background(), symlinkPath, destPath, "symlink readlink failure")
-	if err == nil || !strings.Contains(err.Error(), "Symlink read failed") {
+	if err == nil || !strings.Contains(err.Error(), "symlink read failed") {
 		t.Fatalf("expected symlink read failure, got %v", err)
 	}
 
@@ -1035,7 +1035,7 @@ func TestSafeCopyFileReturnsErrorWhenSymlinkDestCannotBeReplaced(t *testing.T) {
 	}
 
 	err := collector.safeCopyFile(context.Background(), src, dest, "symlink")
-	if err == nil || !strings.Contains(err.Error(), "File replacement failed - ") {
+	if err == nil || !strings.Contains(err.Error(), "file replacement failed - ") {
 		t.Fatalf("expected replacement error, got %v", err)
 	}
 
