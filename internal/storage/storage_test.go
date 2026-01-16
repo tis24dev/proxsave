@@ -123,6 +123,40 @@ func TestLocalStorageListSkipsAssociatedFilesAndSortsByTimestamp(t *testing.T) {
 	}
 }
 
+func TestLocalStorageListSkipsStandaloneWhenBundleExists(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{
+		BackupPath:            dir,
+		BundleAssociatedFiles: true,
+	}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	standalone := filepath.Join(dir, "node-backup-20240101-010101.tar.zst")
+	bundle := standalone + ".bundle.tar"
+	if err := os.WriteFile(standalone, []byte("standalone"), 0o600); err != nil {
+		t.Fatalf("write standalone: %v", err)
+	}
+	if err := os.WriteFile(bundle, []byte("bundle"), 0o600); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+
+	backups, err := local.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if got, want := len(backups), 1; got != want {
+		t.Fatalf("List() returned %d backups, want %d", got, want)
+	}
+	if backups[0].BackupFile != bundle {
+		t.Fatalf("List()[0].BackupFile = %s, want %s", backups[0].BackupFile, bundle)
+	}
+}
+
 func TestLocalStorageApplyRetentionDeletesOldBackups(t *testing.T) {
 	t.Parallel()
 
@@ -190,6 +224,180 @@ func TestLocalStorageApplyRetentionDeletesOldBackups(t *testing.T) {
 				t.Fatalf("expected associated file %s to be deleted", meta.path+suffix)
 			}
 		}
+	}
+}
+
+func TestLocalStorageApplyRetentionNoBackups(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	deleted, err := local.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
+	if err != nil {
+		t.Fatalf("ApplyRetention() error = %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("ApplyRetention() deleted = %d, want 0", deleted)
+	}
+}
+
+func TestLocalStorageApplyRetentionWrapsListError(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	badPath := filepath.Join(base, "[invalid")
+	if err := os.MkdirAll(badPath, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	cfg := &config.Config{BackupPath: badPath}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	_, err = local.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
+	if err == nil {
+		t.Fatal("expected ApplyRetention() to fail when List() fails")
+	}
+	serr, ok := err.(*StorageError)
+	if !ok {
+		t.Fatalf("expected *StorageError, got %T: %v", err, err)
+	}
+	if serr.Operation != "apply_retention" {
+		t.Fatalf("Operation = %q, want %q", serr.Operation, "apply_retention")
+	}
+}
+
+func TestLocalStorageApplyRetentionDisabledMaxBackupsDoesNothing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	backupPath := filepath.Join(dir, "node-backup-20240101-010101.tar.zst")
+	if err := os.WriteFile(backupPath, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+
+	deleted, err := local.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 0})
+	if err != nil {
+		t.Fatalf("ApplyRetention() error = %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("ApplyRetention() deleted = %d, want 0", deleted)
+	}
+	if _, err := os.Stat(backupPath); err != nil {
+		t.Fatalf("expected backup to remain, stat error: %v", err)
+	}
+}
+
+func TestLocalStorageApplyRetentionHasLogInfoFalseWhenLogGlobFails(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	base := t.TempDir()
+	badLogDir := filepath.Join(base, "[invalid")
+	if err := os.MkdirAll(badLogDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	cfg := &config.Config{
+		BackupPath: dir,
+		LogPath:    badLogDir,
+	}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	newest := filepath.Join(dir, "node-backup-20240101-000000.tar.zst")
+	oldest := filepath.Join(dir, "node-backup-20231231-000000.tar.zst")
+	if err := os.WriteFile(newest, []byte("new"), 0o600); err != nil {
+		t.Fatalf("write newest: %v", err)
+	}
+	if err := os.Chtimes(newest, now, now); err != nil {
+		t.Fatalf("chtimes newest: %v", err)
+	}
+	if err := os.WriteFile(oldest, []byte("old"), 0o600); err != nil {
+		t.Fatalf("write oldest: %v", err)
+	}
+	oldTime := now.Add(-24 * time.Hour)
+	if err := os.Chtimes(oldest, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes oldest: %v", err)
+	}
+
+	deleted, err := local.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
+	if err != nil {
+		t.Fatalf("ApplyRetention() error = %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("ApplyRetention() deleted = %d, want 1", deleted)
+	}
+	if _, err := os.Stat(oldest); !os.IsNotExist(err) {
+		t.Fatalf("expected oldest to be deleted, stat err=%v", err)
+	}
+	summary := local.LastRetentionSummary()
+	if summary.HasLogInfo {
+		t.Fatalf("expected HasLogInfo=false when log glob fails, got true (summary=%+v)", summary)
+	}
+}
+
+func TestLocalStorageApplyRetentionGFSInvokesGFSRetention(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	now := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	newest := filepath.Join(dir, "node-backup-20240102-000000.tar.zst")
+	oldest := filepath.Join(dir, "node-backup-20240101-000000.tar.zst")
+	if err := os.WriteFile(newest, []byte("new"), 0o600); err != nil {
+		t.Fatalf("write newest: %v", err)
+	}
+	if err := os.Chtimes(newest, now, now); err != nil {
+		t.Fatalf("chtimes newest: %v", err)
+	}
+	oldTime := now.Add(-24 * time.Hour)
+	if err := os.WriteFile(oldest, []byte("old"), 0o600); err != nil {
+		t.Fatalf("write oldest: %v", err)
+	}
+	if err := os.Chtimes(oldest, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes oldest: %v", err)
+	}
+
+	deleted, err := local.ApplyRetention(context.Background(), RetentionConfig{
+		Policy:  "gfs",
+		Daily:   1,
+		Weekly:  0,
+		Monthly: 0,
+		Yearly:  -1,
+	})
+	if err != nil {
+		t.Fatalf("ApplyRetention() error = %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("ApplyRetention() deleted = %d, want 1", deleted)
+	}
+	if _, err := os.Stat(oldest); !os.IsNotExist(err) {
+		t.Fatalf("expected oldest to be deleted, stat err=%v", err)
+	}
+	if _, err := os.Stat(newest); err != nil {
+		t.Fatalf("expected newest to remain, stat err=%v", err)
 	}
 }
 
@@ -262,6 +470,143 @@ func TestLocalStorageLoadMetadataFromBundle(t *testing.T) {
 	}
 	if meta.Checksum != manifest.SHA256 {
 		t.Fatalf("Checksum = %s, want %s", meta.Checksum, manifest.SHA256)
+	}
+}
+
+func TestLocalStorageLoadMetadataFromBundleOpenError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	if _, err := local.loadMetadataFromBundle(filepath.Join(dir, "missing.bundle.tar")); err == nil {
+		t.Fatal("expected loadMetadataFromBundle() to fail for missing file")
+	}
+}
+
+func TestLocalStorageLoadMetadataFromBundleReadError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	bundlePath := filepath.Join(dir, "node-backup-20240101-010101.tar.zst.bundle.tar")
+	if err := os.WriteFile(bundlePath, []byte("not a tar"), 0o600); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+	if _, err := local.loadMetadataFromBundle(bundlePath); err == nil {
+		t.Fatal("expected loadMetadataFromBundle() to fail for corrupted tar")
+	}
+}
+
+func TestLocalStorageLoadMetadataFromBundleParseError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	bundlePath := filepath.Join(dir, "node-backup-20240101-010101.tar.zst.bundle.tar")
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	header := &tar.Header{
+		Name: "node-backup-20240101-010101.tar.zst.metadata",
+		Mode: 0o600,
+		Size: int64(len("not-json")),
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write([]byte("not-json")); err != nil {
+		t.Fatalf("write body: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	if _, err := local.loadMetadataFromBundle(bundlePath); err == nil {
+		t.Fatal("expected loadMetadataFromBundle() to fail for invalid manifest JSON")
+	}
+}
+
+func TestLocalStorageLoadMetadataFromBundleFallsBackToStat(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage() error = %v", err)
+	}
+
+	bundlePath := filepath.Join(dir, "node-backup-20240101-010101.tar.zst.bundle.tar")
+	manifest := backup.Manifest{
+		ArchiveSize:     0,
+		SHA256:          "deadbeef",
+		CreatedAt:       time.Time{},
+		CompressionType: "zstd",
+		ProxmoxType:     "qemu",
+		ScriptVersion:   "1.2.3",
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	header := &tar.Header{
+		Name: "node-backup-20240101-010101.tar.zst.metadata",
+		Mode: 0o600,
+		Size: int64(len(data)),
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatalf("write body: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	modTime := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(bundlePath, modTime, modTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	meta, err := local.loadMetadataFromBundle(bundlePath)
+	if err != nil {
+		t.Fatalf("loadMetadataFromBundle() error = %v", err)
+	}
+	if !meta.Timestamp.Equal(modTime) {
+		t.Fatalf("Timestamp = %v, want %v", meta.Timestamp, modTime)
+	}
+	if meta.Size <= 0 {
+		t.Fatalf("Size = %d, want > 0", meta.Size)
 	}
 }
 
@@ -409,6 +754,105 @@ func TestLocalStorageDeleteAssociatedLogRemovesFile(t *testing.T) {
 	}
 	if local.deleteAssociatedLog(backupPath) {
 		t.Fatalf("deleteAssociatedLog() should return false when log already removed")
+	}
+}
+
+func TestExtractLogKeyFromBackup(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		backupFile string
+		wantHost   string
+		wantTS     string
+		wantOK     bool
+	}{
+		{
+			name:       "basic",
+			backupFile: "/tmp/node-backup-20240102-030405.tar.zst",
+			wantHost:   "node",
+			wantTS:     "20240102-030405",
+			wantOK:     true,
+		},
+		{
+			name:       "no extension",
+			backupFile: "node-backup-20240102-030405",
+			wantHost:   "node",
+			wantTS:     "20240102-030405",
+			wantOK:     true,
+		},
+		{
+			name:       "bundle suffix",
+			backupFile: "node-backup-20240102-030405.tar.zst.bundle.tar",
+			wantHost:   "node",
+			wantTS:     "20240102-030405",
+			wantOK:     true,
+		},
+		{
+			name:       "marker at start",
+			backupFile: "-backup-20240102-030405.tar.zst",
+			wantOK:     false,
+		},
+		{
+			name:       "missing marker",
+			backupFile: "nodebackup-20240102-030405.tar.zst",
+			wantOK:     false,
+		},
+		{
+			name:       "empty timestamp",
+			backupFile: "node-backup-",
+			wantOK:     false,
+		},
+		{
+			name:       "dot immediately after marker",
+			backupFile: "node-backup-.tar.zst",
+			wantOK:     false,
+		},
+		{
+			name:       "wrong timestamp length",
+			backupFile: "node-backup-20240102-03040.tar.zst",
+			wantOK:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			host, ts, ok := extractLogKeyFromBackup(tt.backupFile)
+			if ok != tt.wantOK {
+				t.Fatalf("ok=%v want %v (host=%q ts=%q)", ok, tt.wantOK, host, ts)
+			}
+			if host != tt.wantHost || ts != tt.wantTS {
+				t.Fatalf("got host=%q ts=%q want host=%q ts=%q", host, ts, tt.wantHost, tt.wantTS)
+			}
+		})
+	}
+}
+
+func TestComputeRemaining(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		initial    int
+		deleted    int
+		wantRemain int
+		wantOK     bool
+	}{
+		{name: "negative initial", initial: -1, deleted: 0, wantRemain: 0, wantOK: false},
+		{name: "simple", initial: 3, deleted: 1, wantRemain: 2, wantOK: true},
+		{name: "clamp negative remaining", initial: 1, deleted: 9, wantRemain: 0, wantOK: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			remain, ok := computeRemaining(tt.initial, tt.deleted)
+			if ok != tt.wantOK || remain != tt.wantRemain {
+				t.Fatalf("computeRemaining(%d,%d)=(%d,%v) want (%d,%v)",
+					tt.initial, tt.deleted, remain, ok, tt.wantRemain, tt.wantOK)
+			}
+		})
 	}
 }
 

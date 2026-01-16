@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -164,13 +165,33 @@ func TestLocalStorage_DetectFilesystem_InvalidPath(t *testing.T) {
 	}
 }
 
+func TestLocalStorage_DetectFilesystem_DetectorError(t *testing.T) {
+	logger := newTestLogger()
+	tempDir := t.TempDir()
+
+	cfg := &config.Config{BackupPath: tempDir}
+	storage, _ := NewLocalStorage(cfg, logger)
+
+	storage.fsDetector.mountPointLookup = func(string) (string, error) {
+		return "", errors.New("boom")
+	}
+
+	_, err := storage.DetectFilesystem(context.Background())
+	if err == nil {
+		t.Fatal("expected DetectFilesystem() error")
+	}
+	if _, ok := err.(*StorageError); !ok {
+		t.Fatalf("expected *StorageError, got %T: %v", err, err)
+	}
+}
+
 // TestLocalStorage_Store tests backup storage
 func TestLocalStorage_Store(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	tempDir := t.TempDir()
 
 	// Create a test backup file
-	backupFile := filepath.Join(tempDir, "test-backup.tar.xz")
+	backupFile := filepath.Join(tempDir, "node-backup-20240101-010101.tar.xz")
 	if err := os.WriteFile(backupFile, []byte("test backup data"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +219,45 @@ func TestLocalStorage_Store(t *testing.T) {
 	// Check permissions (should be readable)
 	if info.Mode().Perm()&0400 == 0 {
 		t.Error("Backup file should be readable")
+	}
+}
+
+func TestLocalStorage_Store_FileNotFound(t *testing.T) {
+	logger := newTestLogger()
+	tempDir := t.TempDir()
+
+	cfg := &config.Config{BackupPath: tempDir}
+	storage, _ := NewLocalStorage(cfg, logger)
+
+	err := storage.Store(context.Background(), filepath.Join(tempDir, "missing.tar.xz"), &types.BackupMetadata{})
+	if err == nil {
+		t.Fatal("expected Store() to fail for missing backup file")
+	}
+	if _, ok := err.(*StorageError); !ok {
+		t.Fatalf("expected *StorageError, got %T: %v", err, err)
+	}
+}
+
+func TestLocalStorage_Store_CountBackupsFailureDoesNotFail(t *testing.T) {
+	logger := newTestLogger()
+
+	backupDir := t.TempDir()
+	backupFile := filepath.Join(backupDir, "node-backup-20240101-010101.tar.xz")
+	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	base := t.TempDir()
+	badPath := filepath.Join(base, "[invalid")
+	if err := os.MkdirAll(badPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{BackupPath: badPath}
+	storage, _ := NewLocalStorage(cfg, logger)
+
+	if err := storage.Store(context.Background(), backupFile, &types.BackupMetadata{}); err != nil {
+		t.Fatalf("Store() returned error: %v", err)
 	}
 }
 
@@ -274,6 +334,37 @@ func TestLocalStorage_Delete_NonExistent(t *testing.T) {
 	}
 }
 
+func TestLocalStorage_Delete_RemoveErrorContinues(t *testing.T) {
+	logger := newTestLogger()
+	tempDir := t.TempDir()
+
+	backupFile := filepath.Join(tempDir, "node-backup-20240101-010101.tar.xz")
+	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	shaDir := backupFile + ".sha256"
+	if err := os.MkdirAll(shaDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shaDir, "child.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{BackupPath: tempDir}
+	storage, _ := NewLocalStorage(cfg, logger)
+
+	if err := storage.Delete(context.Background(), backupFile); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if _, err := os.Stat(backupFile); !os.IsNotExist(err) {
+		t.Fatalf("expected backup file to be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(shaDir); err != nil {
+		t.Fatalf("expected %s to still exist (remove should have failed), stat err=%v", shaDir, err)
+	}
+}
+
 // TestLocalStorage_LastRetentionSummary tests retention summary retrieval
 func TestLocalStorage_LastRetentionSummary(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
@@ -330,15 +421,31 @@ func TestLocalStorage_GetStats(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Create some test files
-	for i := 0; i < 3; i++ {
-		filename := filepath.Join(tempDir, fmt.Sprintf("backup-%d.tar.xz", i))
-		if err := os.WriteFile(filename, []byte("test data"), 0644); err != nil {
+	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	files := []struct {
+		name string
+		when time.Time
+		data []byte
+	}{
+		{name: "node-backup-20240101-000000.tar.zst", when: baseTime.Add(-2 * time.Hour), data: []byte("aa")},
+		{name: "node-backup-20240101-010101.tar.zst", when: baseTime.Add(-1 * time.Hour), data: []byte("bbb")},
+		{name: "node-backup-20240101-020202.tar.zst", when: baseTime.Add(-3 * time.Hour), data: []byte("cccc")},
+	}
+	var wantTotalSize int64
+	for _, f := range files {
+		path := filepath.Join(tempDir, f.name)
+		if err := os.WriteFile(path, f.data, 0o600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chtimes(path, f.when, f.when); err != nil {
+			t.Fatal(err)
+		}
+		wantTotalSize += int64(len(f.data))
 	}
 
 	cfg := &config.Config{BackupPath: tempDir}
 	storage, _ := NewLocalStorage(cfg, logger)
+	storage.fsInfo = &FilesystemInfo{Type: FilesystemExt4}
 
 	ctx := context.Background()
 	stats, err := storage.GetStats(ctx)
@@ -351,9 +458,38 @@ func TestLocalStorage_GetStats(t *testing.T) {
 		t.Fatal("GetStats returned nil stats")
 	}
 
+	if stats.TotalBackups != len(files) {
+		t.Fatalf("TotalBackups = %d, want %d", stats.TotalBackups, len(files))
+	}
+	if stats.TotalSize != wantTotalSize {
+		t.Fatalf("TotalSize = %d, want %d", stats.TotalSize, wantTotalSize)
+	}
+	if stats.OldestBackup == nil || stats.NewestBackup == nil {
+		t.Fatalf("expected oldest/newest backups to be set, got oldest=%v newest=%v", stats.OldestBackup, stats.NewestBackup)
+	}
+	if stats.FilesystemType != FilesystemExt4 {
+		t.Fatalf("FilesystemType = %v, want %v", stats.FilesystemType, FilesystemExt4)
+	}
+
 	// Should have some space statistics
 	if stats.TotalSpace == 0 && stats.AvailableSpace == 0 {
 		t.Error("Expected non-zero space statistics")
+	}
+}
+
+func TestLocalStorage_GetStats_ListError(t *testing.T) {
+	logger := newTestLogger()
+	base := t.TempDir()
+	badPath := filepath.Join(base, "[invalid")
+	if err := os.MkdirAll(badPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{BackupPath: badPath}
+	storage, _ := NewLocalStorage(cfg, logger)
+
+	if _, err := storage.GetStats(context.Background()); err == nil {
+		t.Fatal("expected GetStats() to fail when List() fails")
 	}
 }
 
@@ -426,18 +562,16 @@ func TestLocalStorage_LoadMetadataFromBundle(t *testing.T) {
 	cfg := &config.Config{BackupPath: tempDir}
 	storage, _ := NewLocalStorage(cfg, logger)
 
-	// Create a test bundle file
-	bundlePath := filepath.Join(tempDir, "test-bundle.tar")
-	bundleFile, err := os.Create(bundlePath)
-	if err != nil {
+	// Create a corrupted bundle file to force a tar read error.
+	bundlePath := filepath.Join(tempDir, "node-backup-20240101-010101.tar.zst.bundle.tar")
+	if err := os.WriteFile(bundlePath, []byte("not a tar"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bundleFile.Close()
 
-	// Try to load metadata (will fail for empty bundle, but tests the function)
-	_, err = storage.loadMetadataFromBundle(bundlePath)
+	// Try to load metadata (expected to fail, but shouldn't panic)
+	_, err := storage.loadMetadataFromBundle(bundlePath)
 
-	// Expected to fail for empty bundle, but shouldn't panic
+	// Expected to fail for corrupted bundle, but shouldn't panic
 	if err == nil {
 		t.Log("loadMetadataFromBundle succeeded (unexpected but acceptable)")
 	}
