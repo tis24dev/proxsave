@@ -716,7 +716,7 @@ func preparePlainBundleTUI(ctx context.Context, cand *decryptCandidate, version 
 		staged, err = extractBundleToWorkdirWithLogger(cand.BundlePath, workDir, logger)
 	case sourceRaw:
 		logger.Debug("Staging raw artifacts for %s", filepath.Base(cand.RawArchivePath))
-		staged, err = copyRawArtifactsToWorkdirWithLogger(cand, workDir, logger)
+		staged, err = copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger)
 	default:
 		err = fmt.Errorf("unsupported candidate source")
 	}

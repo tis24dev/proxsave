@@ -123,10 +123,8 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemotePath = "pbs-backups/server1"
 
 		opts := buildDecryptPathOptions(cfg, nil)
-		// With pre-scan enabled, cloud option is only shown if backups exist
-		// Since no actual backups exist in test environment, expect only local + secondary
-		if len(opts) != 2 {
-			t.Fatalf("len(options) = %d; want 2 (local + secondary, cloud hidden due to no backups)", len(opts))
+		if len(opts) != 3 {
+			t.Fatalf("len(options) = %d; want 3 (local + secondary + cloud)", len(opts))
 		}
 		// Verify local and secondary are present
 		if opts[0].Path != "/local" {
@@ -134,6 +132,9 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		}
 		if opts[1].Path != "/secondary" {
 			t.Fatalf("opts[1].Path = %q; want /secondary", opts[1].Path)
+		}
+		if opts[2].IsRclone != true {
+			t.Fatalf("opts[2].IsRclone = %v; want true", opts[2].IsRclone)
 		}
 	})
 
@@ -144,10 +145,8 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemotePath = "server1"
 
 		opts := buildDecryptPathOptions(cfg, nil)
-		// With pre-scan enabled, cloud option is only shown if backups exist
-		// Since no actual backups exist in test environment, expect only local + secondary
-		if len(opts) != 2 {
-			t.Fatalf("len(options) = %d; want 2 (local + secondary, cloud hidden due to no backups)", len(opts))
+		if len(opts) != 3 {
+			t.Fatalf("len(options) = %d; want 3 (local + secondary + cloud)", len(opts))
 		}
 	})
 
@@ -158,10 +157,8 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemotePath = "server1"
 
 		opts := buildDecryptPathOptions(cfg, nil)
-		// With pre-scan enabled, cloud option is only shown if backups exist
-		// Since no actual backups exist in test environment, expect only local + secondary
-		if len(opts) != 2 {
-			t.Fatalf("len(options) = %d; want 2 (local + secondary, cloud hidden due to no backups)", len(opts))
+		if len(opts) != 3 {
+			t.Fatalf("len(options) = %d; want 3 (local + secondary + cloud)", len(opts))
 		}
 	})
 
@@ -171,8 +168,8 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemote = "gdrive:pbs-backups"
 
 		opts := buildDecryptPathOptions(cfg, nil)
-		if len(opts) != 2 {
-			t.Fatalf("len(options) = %d; want 2 (local + secondary)", len(opts))
+		if len(opts) != 3 {
+			t.Fatalf("len(options) = %d; want 3 (local + secondary + cloud)", len(opts))
 		}
 	})
 }
@@ -188,10 +185,8 @@ func TestBuildDecryptPathOptions_FullConfigOrder(t *testing.T) {
 	}
 
 	opts := buildDecryptPathOptions(cfg, nil)
-	// With pre-scan enabled, cloud option is only shown if backups exist
-	// Since no actual backups exist in test environment, expect only local + secondary
-	if len(opts) != 2 {
-		t.Fatalf("len(options) = %d; want 2 (local + secondary, cloud hidden due to no backups)", len(opts))
+	if len(opts) != 3 {
+		t.Fatalf("len(options) = %d; want 3 (local + secondary + cloud)", len(opts))
 	}
 
 	if opts[0].Label != "Local backups" || opts[0].Path != "/local" {
@@ -200,29 +195,8 @@ func TestBuildDecryptPathOptions_FullConfigOrder(t *testing.T) {
 	if opts[1].Label != "Secondary backups" || opts[1].Path != "/secondary" {
 		t.Fatalf("opts[1] = %#v; want Label=Secondary backups, Path=/secondary", opts[1])
 	}
-}
-
-func TestDiscoverRcloneBackups_ParseFilenames(t *testing.T) {
-	// Test the filename filtering logic (independent of rclone invocation)
-	testFiles := []string{
-		"backup-20250115.bundle.tar",
-		"backup-20250114.bundle.tar",
-		"backup-20250113.tar.xz",         // Should be ignored (not .bundle.tar)
-		"log-20250115.log",               // Should be ignored
-		"backup-20250112.bundle.tar.age", // Should be ignored (has .age extension)
-	}
-
-	expectedCount := 2 // Only the two .bundle.tar files
-
-	count := 0
-	for _, filename := range testFiles {
-		if strings.HasSuffix(filename, ".bundle.tar") {
-			count++
-		}
-	}
-
-	if count != expectedCount {
-		t.Errorf("Expected %d .bundle.tar files, got %d", expectedCount, count)
+	if opts[2].Label != "Cloud backups (rclone)" || opts[2].Path != "gdrive:pbs-backups/server1" || !opts[2].IsRclone {
+		t.Fatalf("opts[2] = %#v; want Label=Cloud backups (rclone), Path=gdrive:pbs-backups/server1, IsRclone=true", opts[2])
 	}
 }
 
@@ -249,6 +223,208 @@ func TestDiscoverRcloneBackups_ListsAndParsesBundles(t *testing.T) {
 	}
 	if !cand.IsRclone {
 		t.Fatalf("IsRclone = false; want true")
+	}
+}
+
+func TestDiscoverRcloneBackups_IncludesRawMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifest := backup.Manifest{
+		ArchivePath:    "/var/backups/node-backup-20251205.tar.xz",
+		ProxmoxType:    "pve",
+		ProxmoxVersion: "8.1",
+		CreatedAt:      time.Date(2025, 12, 5, 12, 0, 0, 0, time.UTC),
+		EncryptionMode: "none",
+	}
+	metaBytes, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	metadataPath := filepath.Join(tmpDir, "node-backup-20251205.tar.xz.metadata")
+	if err := os.WriteFile(metadataPath, metaBytes, 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+subcmd="$1"
+case "$subcmd" in
+  lsf)
+    printf 'node-backup-20251205.tar.xz\n'
+    printf 'node-backup-20251205.tar.xz.metadata\n'
+    ;;
+  cat)
+    cat "$METADATA_PATH"
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+
+	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
+		t.Fatalf("set METADATA_PATH: %v", err)
+	}
+	defer os.Unsetenv("METADATA_PATH")
+
+	ctx := context.Background()
+	candidates, err := discoverRcloneBackups(ctx, "gdrive:pbs-backups/server1", nil)
+	if err != nil {
+		t.Fatalf("discoverRcloneBackups() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("discoverRcloneBackups() returned %d candidates; want 1", len(candidates))
+	}
+	cand := candidates[0]
+	if cand.Source != sourceRaw {
+		t.Fatalf("Source = %v; want sourceRaw", cand.Source)
+	}
+	if !cand.IsRclone {
+		t.Fatalf("IsRclone = false; want true")
+	}
+	if cand.Manifest == nil {
+		t.Fatal("Manifest is nil")
+	}
+	if cand.Manifest.ArchivePath != manifest.ArchivePath {
+		t.Fatalf("ArchivePath = %q; want %q", cand.Manifest.ArchivePath, manifest.ArchivePath)
+	}
+	if !strings.HasSuffix(cand.RawArchivePath, "node-backup-20251205.tar.xz") {
+		t.Fatalf("RawArchivePath = %q; want to end with archive name", cand.RawArchivePath)
+	}
+	if !strings.HasSuffix(cand.RawMetadataPath, "node-backup-20251205.tar.xz.metadata") {
+		t.Fatalf("RawMetadataPath = %q; want to end with metadata name", cand.RawMetadataPath)
+	}
+}
+
+func TestDiscoverRcloneBackups_MixedCandidatesSortedByCreatedAt(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1) Raw candidate (newest)
+	rawNewestArchive := filepath.Join(tmpDir, "raw-newest.tar.xz")
+	rawNewestMeta := filepath.Join(tmpDir, "raw-newest.tar.xz.metadata")
+	rawNewest := backup.Manifest{
+		ArchivePath:    "/var/backups/raw-newest.tar.xz",
+		CreatedAt:      time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC),
+		EncryptionMode: "none",
+		ProxmoxType:    "pve",
+	}
+	rawNewestData, _ := json.Marshal(&rawNewest)
+	if err := os.WriteFile(rawNewestMeta, rawNewestData, 0o600); err != nil {
+		t.Fatalf("write raw newest metadata: %v", err)
+	}
+
+	// 2) Bundle candidate (middle)
+	bundlePath := filepath.Join(tmpDir, "bundle-mid.tar.xz.bundle.tar")
+	bundleManifest := backup.Manifest{
+		ArchivePath:    "/var/backups/bundle-mid.tar.xz",
+		CreatedAt:      time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC),
+		EncryptionMode: "age",
+		ProxmoxType:    "pve",
+	}
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	bData, _ := json.Marshal(&bundleManifest)
+	if err := tw.WriteHeader(&tar.Header{Name: "backup/bundle-mid.metadata", Mode: 0o600, Size: int64(len(bData))}); err != nil {
+		t.Fatalf("write bundle header: %v", err)
+	}
+	if _, err := tw.Write(bData); err != nil {
+		t.Fatalf("write bundle body: %v", err)
+	}
+	_ = tw.Close()
+	_ = f.Close()
+
+	// 3) Raw candidate (oldest, with ArchivePath empty to exercise fallback)
+	rawOldArchive := filepath.Join(tmpDir, "raw-old.tar.xz")
+	rawOldMeta := filepath.Join(tmpDir, "raw-old.tar.xz.metadata")
+	rawOld := backup.Manifest{
+		ArchivePath:    "",
+		CreatedAt:      time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		EncryptionMode: "none",
+		ProxmoxType:    "pve",
+	}
+	rawOldData, _ := json.Marshal(&rawOld)
+	if err := os.WriteFile(rawOldMeta, rawOldData, 0o600); err != nil {
+		t.Fatalf("write raw old metadata: %v", err)
+	}
+
+	// Fake rclone that supports lsf + cat for the above files.
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+subcmd="$1"
+target="$2"
+case "$subcmd" in
+  lsf)
+    printf 'raw-newest.tar.xz\n'
+    printf 'raw-newest.tar.xz.metadata\n'
+    printf 'bundle-mid.tar.xz.bundle.tar\n'
+    printf 'raw-old.tar.xz\n'
+    printf 'raw-old.tar.xz.metadata\n'
+    ;;
+  cat)
+    case "$target" in
+      *bundle-mid.tar.xz.bundle.tar) cat "$BUNDLE_PATH" ;;
+      *raw-newest.tar.xz.metadata) cat "$RAW_NEWEST_META" ;;
+      *raw-old.tar.xz.metadata) cat "$RAW_OLD_META" ;;
+      *) echo "unexpected cat target: $target" >&2; exit 1 ;;
+    esac
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+	_ = os.Setenv("BUNDLE_PATH", bundlePath)
+	_ = os.Setenv("RAW_NEWEST_META", rawNewestMeta)
+	_ = os.Setenv("RAW_OLD_META", rawOldMeta)
+	defer os.Unsetenv("BUNDLE_PATH")
+	defer os.Unsetenv("RAW_NEWEST_META")
+	defer os.Unsetenv("RAW_OLD_META")
+
+	// Ensure archives appear in lsf snapshot; their content is not fetched.
+	_ = os.WriteFile(rawNewestArchive, []byte("x"), 0o600)
+	_ = os.WriteFile(rawOldArchive, []byte("x"), 0o600)
+
+	candidates, err := discoverRcloneBackups(context.Background(), "gdrive:backups", nil)
+	if err != nil {
+		t.Fatalf("discoverRcloneBackups error: %v", err)
+	}
+	if len(candidates) != 3 {
+		t.Fatalf("candidates=%d; want 3", len(candidates))
+	}
+	if candidates[0].Manifest.CreatedAt != rawNewest.CreatedAt {
+		t.Fatalf("candidates[0].CreatedAt=%s; want %s", candidates[0].Manifest.CreatedAt, rawNewest.CreatedAt)
+	}
+	if candidates[1].Manifest.CreatedAt != bundleManifest.CreatedAt {
+		t.Fatalf("candidates[1].CreatedAt=%s; want %s", candidates[1].Manifest.CreatedAt, bundleManifest.CreatedAt)
+	}
+	if candidates[2].Manifest.CreatedAt != rawOld.CreatedAt {
+		t.Fatalf("candidates[2].CreatedAt=%s; want %s", candidates[2].Manifest.CreatedAt, rawOld.CreatedAt)
+	}
+	if candidates[2].Manifest.ArchivePath != "gdrive:backups/raw-old.tar.xz" {
+		t.Fatalf("raw-old ArchivePath=%q; want fallback to remote archive", candidates[2].Manifest.ArchivePath)
 	}
 }
 

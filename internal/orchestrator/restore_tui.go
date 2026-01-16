@@ -438,13 +438,13 @@ func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, logger *
 					})
 					return
 				}
-				if len(candidates) == 0 {
-					message := "No backup bundles found in selected path."
-					showRestoreErrorModal(app, pages, configPath, buildSig, message, func() {
-						pages.SwitchToPage("paths")
-					})
-					return
-				}
+					if len(candidates) == 0 {
+						message := "No backups found in selected path."
+						showRestoreErrorModal(app, pages, configPath, buildSig, message, func() {
+							pages.SwitchToPage("paths")
+						})
+						return
+					}
 
 				showRestoreCandidatePage(app, pages, candidates, configPath, buildSig, func(c *decryptCandidate) {
 					selection.Candidate = c

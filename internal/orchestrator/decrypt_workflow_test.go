@@ -67,7 +67,7 @@ func TestRunDecryptWorkflow_BundleNotFound(t *testing.T) {
 	}
 }
 
-func TestPreparePlainBundle_InvalidChecksum(t *testing.T) {
+func TestPreparePlainBundle_AllowsMissingRawChecksumSidecar(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "bad.bundle.tar")
 	if err := os.WriteFile(archive, []byte("data"), 0o640); err != nil {
@@ -83,7 +83,8 @@ func TestPreparePlainBundle_InvalidChecksum(t *testing.T) {
 	if err := os.WriteFile(metaPath, data, 0o640); err != nil {
 		t.Fatalf("write metadata: %v", err)
 	}
-	// No checksum file to trigger error
+	// No checksum file: ProxSave should still allow restore/decrypt to proceed
+	// (it re-computes checksums on the staged/plain archive anyway).
 
 	cand := &decryptCandidate{
 		Manifest:        manifest,
@@ -98,8 +99,8 @@ func TestPreparePlainBundle_InvalidChecksum(t *testing.T) {
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = osFS{} })
 
-	if _, err := preparePlainBundle(context.Background(), reader, cand, "", logging.New(types.LogLevelInfo, false)); err == nil {
-		t.Fatalf("expected error due to missing checksum file")
+	if _, err := preparePlainBundle(context.Background(), reader, cand, "", logging.New(types.LogLevelInfo, false)); err != nil {
+		t.Fatalf("expected missing checksum to be tolerated, got error: %v", err)
 	}
 }
 

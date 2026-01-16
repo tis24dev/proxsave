@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
@@ -208,7 +209,7 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 			logger.Debug("Backup source selected by user: label=%q path=%q isRclone=%v", option.Label, option.Path, option.IsRclone)
 		}
 
-		logger.Info("Scanning %s for backup bundles...", option.Path)
+			logger.Info("Scanning %s for backups...", option.Path)
 
 		// Handle rclone remotes differently from filesystem paths
 		if option.IsRclone {
@@ -241,7 +242,7 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 			}
 		}
 		if len(candidates) == 0 {
-			logger.Warning("No backup bundles found in %s – removing from source list", option.Path)
+				logger.Warning("No backups found in %s – removing from source list", option.Path)
 			if logger != nil {
 				logger.Debug("Removing backup source %q (%s) due to empty candidate list", option.Label, option.Path)
 			}
@@ -413,6 +414,78 @@ func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger 
 	return manifest, nil
 }
 
+// inspectRcloneMetadataManifest reads a sidecar metadata file from an rclone
+// remote by streaming it through "rclone cat" and parsing it as either the
+// JSON manifest format or the legacy KEY=VALUE format.
+func inspectRcloneMetadataManifest(ctx context.Context, remoteMetadataPath, remoteArchivePath string, logger *logging.Logger) (manifest *backup.Manifest, err error) {
+	done := logging.DebugStart(logger, "inspect rclone metadata manifest", "remote=%s", remoteMetadataPath)
+	defer func() { done(err) }()
+	logging.DebugStep(logger, "inspect rclone metadata manifest", "executing: rclone cat %s", remoteMetadataPath)
+
+	cmd := exec.CommandContext(ctx, "rclone", "cat", remoteMetadataPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("rclone cat %s failed: %w (output: %s)", remoteMetadataPath, err, strings.TrimSpace(string(output)))
+	}
+	data := bytes.TrimSpace(output)
+	if len(data) == 0 {
+		return nil, fmt.Errorf("metadata file is empty")
+	}
+
+	var parsed backup.Manifest
+	if err := json.Unmarshal(data, &parsed); err == nil {
+		manifest = &parsed
+		if strings.TrimSpace(manifest.ArchivePath) == "" {
+			manifest.ArchivePath = remoteArchivePath
+		}
+		return manifest, nil
+	}
+
+	// Legacy KEY=VALUE format (best-effort, without archive stat/checksum).
+	legacy := &backup.Manifest{
+		ArchivePath: remoteArchivePath,
+	}
+	for _, rawLine := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		switch key {
+		case "COMPRESSION_TYPE":
+			legacy.CompressionType = value
+		case "COMPRESSION_LEVEL":
+			if lvl, err := strconv.Atoi(value); err == nil {
+				legacy.CompressionLevel = lvl
+			}
+		case "PROXMOX_TYPE":
+			legacy.ProxmoxType = value
+		case "HOSTNAME":
+			legacy.Hostname = value
+		case "SCRIPT_VERSION":
+			legacy.ScriptVersion = value
+		case "ENCRYPTION_MODE":
+			legacy.EncryptionMode = value
+		}
+	}
+	if strings.TrimSpace(legacy.EncryptionMode) == "" {
+		if strings.HasSuffix(remoteArchivePath, ".age") {
+			legacy.EncryptionMode = "age"
+		} else {
+			legacy.EncryptionMode = "plain"
+		}
+	}
+	// Keep CreatedAt stable (zero) rather than guessing.
+	legacy.CreatedAt = time.Time{}
+	return legacy, nil
+}
+
 func promptCandidateSelection(ctx context.Context, reader *bufio.Reader, candidates []*decryptCandidate) (*decryptCandidate, error) {
 	for {
 		fmt.Println("\nAvailable backups:")
@@ -553,7 +626,7 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 		staged, err = extractBundleToWorkdirWithLogger(cand.BundlePath, workDir, logger)
 	case sourceRaw:
 		logger.Info("Staging raw artifacts for %s", filepath.Base(cand.RawArchivePath))
-		staged, err = copyRawArtifactsToWorkdirWithLogger(cand, workDir, logger)
+		staged, err = copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger)
 	default:
 		err = fmt.Errorf("unsupported candidate source")
 	}
@@ -730,28 +803,104 @@ func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *loggin
 	return staged, nil
 }
 
-func copyRawArtifactsToWorkdir(cand *decryptCandidate, workDir string) (staged stagedFiles, err error) {
-	return copyRawArtifactsToWorkdirWithLogger(cand, workDir, nil)
+func copyRawArtifactsToWorkdir(ctx context.Context, cand *decryptCandidate, workDir string) (staged stagedFiles, err error) {
+	return copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, nil)
 }
 
-func copyRawArtifactsToWorkdirWithLogger(cand *decryptCandidate, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
-	done := logging.DebugStart(logger, "stage raw artifacts", "archive=%s workdir=%s", cand.RawArchivePath, workDir)
+func baseNameFromRemoteRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	parts := strings.SplitN(ref, ":", 2)
+	if len(parts) != 2 {
+		return filepath.Base(ref)
+	}
+	rel := strings.Trim(parts[1], "/")
+	if rel == "" {
+		return ""
+	}
+	return path.Base(rel)
+}
+
+func rcloneCopyTo(ctx context.Context, remotePath, localPath string, showProgress bool) error {
+	args := []string{"copyto", remotePath, localPath}
+	if showProgress {
+		args = append(args, "--progress")
+	}
+	cmd := exec.CommandContext(ctx, "rclone", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *decryptCandidate, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
+	done := logging.DebugStart(logger, "stage raw artifacts", "archive=%s workdir=%s rclone=%v", cand.RawArchivePath, workDir, cand.IsRclone)
 	defer func() { done(err) }()
-	archiveDest := filepath.Join(workDir, filepath.Base(cand.RawArchivePath))
-	logging.DebugStep(logger, "stage raw artifacts", "copy archive to %s", archiveDest)
-	if err := copyFile(restoreFS, cand.RawArchivePath, archiveDest); err != nil {
-		return stagedFiles{}, fmt.Errorf("copy archive: %w", err)
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	metadataDest := filepath.Join(workDir, filepath.Base(cand.RawMetadataPath))
-	logging.DebugStep(logger, "stage raw artifacts", "copy metadata to %s", metadataDest)
-	if err := copyFile(restoreFS, cand.RawMetadataPath, metadataDest); err != nil {
-		return stagedFiles{}, fmt.Errorf("copy metadata: %w", err)
+	if cand == nil {
+		return stagedFiles{}, fmt.Errorf("candidate is nil")
 	}
-	checksumDest := filepath.Join(workDir, filepath.Base(cand.RawChecksumPath))
-	logging.DebugStep(logger, "stage raw artifacts", "copy checksum to %s", checksumDest)
-	if err := copyFile(restoreFS, cand.RawChecksumPath, checksumDest); err != nil {
-		return stagedFiles{}, fmt.Errorf("copy checksum: %w", err)
+
+	archiveBase := filepath.Base(cand.RawArchivePath)
+	metaBase := filepath.Base(cand.RawMetadataPath)
+	sumBase := ""
+	if cand.IsRclone {
+		archiveBase = baseNameFromRemoteRef(cand.RawArchivePath)
+		metaBase = baseNameFromRemoteRef(cand.RawMetadataPath)
+		if cand.RawChecksumPath != "" {
+			sumBase = baseNameFromRemoteRef(cand.RawChecksumPath)
+		}
+	} else if cand.RawChecksumPath != "" {
+		sumBase = filepath.Base(cand.RawChecksumPath)
 	}
+	if archiveBase == "" || metaBase == "" {
+		return stagedFiles{}, fmt.Errorf("invalid raw candidate paths")
+	}
+
+	archiveDest := filepath.Join(workDir, archiveBase)
+	metadataDest := filepath.Join(workDir, metaBase)
+	checksumDest := ""
+	if sumBase != "" {
+		checksumDest = filepath.Join(workDir, sumBase)
+	}
+
+	if cand.IsRclone {
+		logging.DebugStep(logger, "stage raw artifacts", "download archive to %s", archiveDest)
+		if err := rcloneCopyTo(ctx, cand.RawArchivePath, archiveDest, true); err != nil {
+			return stagedFiles{}, fmt.Errorf("rclone download archive: %w", err)
+		}
+		logging.DebugStep(logger, "stage raw artifacts", "download metadata to %s", metadataDest)
+		if err := rcloneCopyTo(ctx, cand.RawMetadataPath, metadataDest, false); err != nil {
+			return stagedFiles{}, fmt.Errorf("rclone download metadata: %w", err)
+		}
+		if cand.RawChecksumPath != "" && checksumDest != "" {
+			logging.DebugStep(logger, "stage raw artifacts", "download checksum to %s", checksumDest)
+			if err := rcloneCopyTo(ctx, cand.RawChecksumPath, checksumDest, false); err != nil {
+				logWarning(logger, "Failed to download checksum %s: %v", cand.RawChecksumPath, err)
+				checksumDest = ""
+			}
+		}
+	} else {
+		logging.DebugStep(logger, "stage raw artifacts", "copy archive to %s", archiveDest)
+		if err := copyFile(restoreFS, cand.RawArchivePath, archiveDest); err != nil {
+			return stagedFiles{}, fmt.Errorf("copy archive: %w", err)
+		}
+		logging.DebugStep(logger, "stage raw artifacts", "copy metadata to %s", metadataDest)
+		if err := copyFile(restoreFS, cand.RawMetadataPath, metadataDest); err != nil {
+			return stagedFiles{}, fmt.Errorf("copy metadata: %w", err)
+		}
+		if cand.RawChecksumPath != "" && checksumDest != "" {
+			logging.DebugStep(logger, "stage raw artifacts", "copy checksum to %s", checksumDest)
+			if err := copyFile(restoreFS, cand.RawChecksumPath, checksumDest); err != nil {
+				logWarning(logger, "Failed to copy checksum %s: %v", cand.RawChecksumPath, err)
+				checksumDest = ""
+			}
+		}
+	}
+
 	return stagedFiles{
 		ArchivePath:  archiveDest,
 		MetadataPath: metadataDest,
