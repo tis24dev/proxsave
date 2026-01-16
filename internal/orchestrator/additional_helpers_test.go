@@ -1148,7 +1148,7 @@ func TestShowRestoreModeMenu(t *testing.T) {
 		_, _ = w.WriteString(tt.input)
 		_ = w.Close()
 		os.Stdin = r
-		mode, err := ShowRestoreModeMenu(logger, SystemTypePVE)
+		mode, err := ShowRestoreModeMenu(context.Background(), logger, SystemTypePVE)
 		if err != nil {
 			t.Fatalf("ShowRestoreModeMenu error: %v", err)
 		}
@@ -1162,7 +1162,7 @@ func TestShowRestoreModeMenu(t *testing.T) {
 	_, _ = w.WriteString("0\n")
 	_ = w.Close()
 	os.Stdin = r
-	if _, err := ShowRestoreModeMenu(logger, SystemTypePVE); err == nil {
+	if _, err := ShowRestoreModeMenu(context.Background(), logger, SystemTypePVE); err == nil {
 		t.Fatalf("expected cancel error")
 	}
 }
@@ -1183,7 +1183,7 @@ func TestShowCategorySelectionMenu(t *testing.T) {
 	_, _ = w.WriteString("a\nc\n")
 	_ = w.Close()
 	os.Stdin = r
-	cats, err := ShowCategorySelectionMenu(logger, available, SystemTypePVE)
+	cats, err := ShowCategorySelectionMenu(context.Background(), logger, available, SystemTypePVE)
 	if err != nil {
 		t.Fatalf("ShowCategorySelectionMenu error: %v", err)
 	}
@@ -1196,7 +1196,7 @@ func TestShowCategorySelectionMenu(t *testing.T) {
 	_, _ = w.WriteString("1\n3\nc\n")
 	_ = w.Close()
 	os.Stdin = r
-	cats, err = ShowCategorySelectionMenu(logger, available, SystemTypePVE)
+	cats, err = ShowCategorySelectionMenu(context.Background(), logger, available, SystemTypePVE)
 	if err != nil {
 		t.Fatalf("ShowCategorySelectionMenu toggle error: %v", err)
 	}
@@ -1209,7 +1209,7 @@ func TestShowCategorySelectionMenu(t *testing.T) {
 	_, _ = w.WriteString("0\n")
 	_ = w.Close()
 	os.Stdin = r
-	if _, err := ShowCategorySelectionMenu(logger, available, SystemTypePVE); err == nil {
+	if _, err := ShowCategorySelectionMenu(context.Background(), logger, available, SystemTypePVE); err == nil {
 		t.Fatalf("expected cancel error")
 	}
 }

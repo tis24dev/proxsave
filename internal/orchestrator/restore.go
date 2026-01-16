@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -33,6 +34,7 @@ var (
 	serviceRetryDelay         = 500 * time.Millisecond
 	restoreLogSequence        uint64
 	restoreGlob               = filepath.Glob
+	prepareDecryptedBackupFunc = prepareDecryptedBackup
 )
 
 func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) (err error) {
@@ -41,9 +43,21 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 	done := logging.DebugStart(logger, "restore workflow (cli)", "version=%s", version)
 	defer func() { done(err) }()
+	defer func() {
+		if err == nil {
+			return
+		}
+		if errors.Is(err, input.ErrInputAborted) ||
+			errors.Is(err, ErrDecryptAborted) ||
+			errors.Is(err, ErrAgeRecipientSetupAborted) ||
+			errors.Is(err, context.Canceled) ||
+			(ctx != nil && ctx.Err() != nil) {
+			err = ErrRestoreAborted
+		}
+	}()
 
 	reader := bufio.NewReader(os.Stdin)
-	candidate, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version, false)
+	candidate, prepared, err := prepareDecryptedBackupFunc(ctx, reader, cfg, logger, version, false)
 	if err != nil {
 		return err
 	}
@@ -64,7 +78,10 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		fmt.Println()
 		fmt.Print("Do you want to continue anyway? This may cause system instability. (yes/no): ")
 
-		response, _ := reader.ReadString('\n')
+		response, err := input.ReadLineWithContext(ctx, reader)
+		if err != nil {
+			return err
+		}
 		if strings.TrimSpace(strings.ToLower(response)) != "yes" {
 			return fmt.Errorf("restore aborted due to incompatibility")
 		}
@@ -80,9 +97,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 
 	// Show restore mode selection menu
-	mode, err := restorePrompter.SelectRestoreMode(logger, systemType)
+	mode, err := restorePrompter.SelectRestoreMode(ctx, logger, systemType)
 	if err != nil {
-		if err.Error() == "user cancelled" {
+		if errors.Is(err, ErrRestoreAborted) {
 			return ErrRestoreAborted
 		}
 		return err
@@ -92,9 +109,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	var selectedCategories []Category
 	if mode == RestoreModeCustom {
 		// Interactive category selection
-		selectedCategories, err = restorePrompter.SelectCategories(logger, availableCategories, systemType)
+		selectedCategories, err = restorePrompter.SelectCategories(ctx, logger, availableCategories, systemType)
 		if err != nil {
-			if err.Error() == "user cancelled" {
+			if errors.Is(err, ErrRestoreAborted) {
 				return ErrRestoreAborted
 			}
 			return err
@@ -139,8 +156,11 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	ShowRestorePlan(logger, restoreConfig)
 
 	// Confirm operation
-	confirmed, err := restorePrompter.ConfirmRestore(logger)
+	confirmed, err := restorePrompter.ConfirmRestore(ctx, logger)
 	if err != nil {
+		if errors.Is(err, ErrRestoreAborted) {
+			return ErrRestoreAborted
+		}
 		return err
 	}
 	if !confirmed {
@@ -157,7 +177,10 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 			logger.Warning("Failed to create safety backup: %v", err)
 			fmt.Println()
 			fmt.Print("Continue without safety backup? (yes/no): ")
-			response, _ := reader.ReadString('\n')
+			response, err := input.ReadLineWithContext(ctx, reader)
+			if err != nil {
+				return err
+			}
 			if strings.TrimSpace(strings.ToLower(response)) != "yes" {
 				return fmt.Errorf("restore aborted: safety backup failed")
 			}
@@ -846,11 +869,11 @@ func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *decry
 
 	for {
 		fmt.Print("Confirmation: ")
-		input, err := readLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
 			return err
 		}
-		switch strings.TrimSpace(input) {
+		switch strings.TrimSpace(line) {
 		case "RESTORE":
 			return nil
 		case "0":
@@ -1190,11 +1213,11 @@ func promptClusterRestoreMode(ctx context.Context, reader *bufio.Reader) (int, e
 
 	for {
 		fmt.Print("Choice: ")
-		input, err := readLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
 			return 0, err
 		}
-		switch strings.TrimSpace(input) {
+		switch strings.TrimSpace(choiceLine) {
 		case "1":
 			return 1, nil
 		case "2":

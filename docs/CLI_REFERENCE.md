@@ -493,7 +493,7 @@ Next step: ./build/proxsave --dry-run
 ### Support Mode
 
 ```bash
-# Run backup in support mode: force DEBUG logging and send log to developer
+# Run in support mode: force DEBUG logging and send log to developer
 ./build/proxsave --support
 ```
 
@@ -524,7 +524,7 @@ Next step: ./build/proxsave --dry-run
 
 | Flag | Description |
 |------|-------------|
-| `--support` | Run backup with DEBUG logging and email log to developer |
+| `--support` | Run in support mode (force DEBUG logging and email log to developer). Available for the standard backup run and `--restore` |
 
 ---
 
@@ -713,7 +713,7 @@ crontab -e
 | `--age-newkey` | - | Alias for `--newkey` |
 | `--decrypt` | - | Decrypt existing backup |
 | `--restore` | - | Restore from backup to system |
-| `--support` | - | Run with DEBUG logging and email log |
+| `--support` | - | Run in support mode (force DEBUG logging and email log). Available for the standard backup run and `--restore` |
 
 ### Common Command Patterns
 

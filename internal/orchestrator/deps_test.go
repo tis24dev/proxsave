@@ -195,18 +195,18 @@ type FakePrompter struct {
 	Err        error
 }
 
-func (f *FakePrompter) SelectRestoreMode(logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
+func (f *FakePrompter) SelectRestoreMode(ctx context.Context, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
 	return f.Mode, f.Err
 }
 
-func (f *FakePrompter) SelectCategories(logger *logging.Logger, available []Category, systemType SystemType) ([]Category, error) {
+func (f *FakePrompter) SelectCategories(ctx context.Context, logger *logging.Logger, available []Category, systemType SystemType) ([]Category, error) {
 	if f.Err != nil {
 		return nil, f.Err
 	}
 	return f.Categories, nil
 }
 
-func (f *FakePrompter) ConfirmRestore(logger *logging.Logger) (bool, error) {
+func (f *FakePrompter) ConfirmRestore(ctx context.Context, logger *logging.Logger) (bool, error) {
 	return f.Confirm, f.Err
 }
 

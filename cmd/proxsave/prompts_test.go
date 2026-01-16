@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/input"
 )
 
 func TestPromptYesNo(t *testing.T) {
@@ -64,17 +66,17 @@ func TestReadLineWithContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	reader := bufio.NewReader(strings.NewReader("ignored\n"))
-	if _, err := readLineWithContext(ctx, reader); !errors.Is(err, errInteractiveAborted) {
-		t.Fatalf("expected errInteractiveAborted, got %v", err)
+	if _, err := input.ReadLineWithContext(ctx, reader); !errors.Is(err, input.ErrInputAborted) {
+		t.Fatalf("expected ErrInputAborted, got %v", err)
 	}
 }
 
 func TestReadLineWithContextSuccess(t *testing.T) {
 	ctx := context.Background()
 	reader := bufio.NewReader(strings.NewReader("hello\n"))
-	line, err := readLineWithContext(ctx, reader)
+	line, err := input.ReadLineWithContext(ctx, reader)
 	if err != nil {
-		t.Fatalf("readLineWithContext error: %v", err)
+		t.Fatalf("ReadLineWithContext error: %v", err)
 	}
 	if line != "hello\n" {
 		t.Fatalf("expected full line with newline, got %q", line)

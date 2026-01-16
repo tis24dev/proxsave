@@ -660,7 +660,7 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 
 		if err := osSymlink(target, dest); err != nil {
 			c.incFilesFailed()
-			return fmt.Errorf("symlink creation failed - source: %s, target: %s, absolute: %v: %w",
+			return fmt.Errorf("symlink creation failed - source: %s - target: %s - absolute: %v: %w",
 				src, target, filepath.IsAbs(target), err)
 		}
 

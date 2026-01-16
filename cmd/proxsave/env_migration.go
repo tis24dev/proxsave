@@ -10,6 +10,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -111,15 +112,15 @@ func resolveLegacyEnvPath(ctx context.Context, args *cli.Args, bootstrap *loggin
 	question := fmt.Sprintf("Enter the path to the legacy Bash backup.env [%s]: ", defaultPromptPath)
 	for {
 		fmt.Print(question)
-		input, err := readLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
 			return "", err
 		}
-		input = strings.TrimSpace(input)
-		if input == "" {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			legacyPath = defaultPromptPath
 		} else {
-			legacyPath = input
+			legacyPath = line
 		}
 		if legacyPath == "" {
 			continue

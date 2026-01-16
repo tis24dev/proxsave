@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 
@@ -33,21 +34,19 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 		wantPaths []string
 		wantLabel []string
 	}{
-		{
-			name: "all paths enabled",
-			cfg: &config.Config{
-				BackupPath:       "/backup/local",
-				SecondaryEnabled: true,
-				SecondaryPath:    "/backup/secondary",
-				CloudEnabled:     true,
-				CloudRemote:      "/backup/cloud",
+			{
+				name: "all paths enabled",
+				cfg: &config.Config{
+					BackupPath:       "/backup/local",
+					SecondaryEnabled: true,
+					SecondaryPath:    "/backup/secondary",
+					CloudEnabled:     true,
+					CloudRemote:      "/backup/cloud",
+				},
+				wantCount: 3,
+				wantPaths: []string{"/backup/local", "/backup/secondary", "/backup/cloud"},
+				wantLabel: []string{"Local backups", "Secondary backups", "Cloud backups"},
 			},
-			// With pre-scan enabled, cloud is only shown if backups exist
-			// Since no actual backups exist, expect only local + secondary
-			wantCount: 2,
-			wantPaths: []string{"/backup/local", "/backup/secondary"},
-			wantLabel: []string{"Local backups", "Secondary backups"},
-		},
 		{
 			name: "only local path",
 			cfg: &config.Config{
@@ -92,32 +91,28 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 			wantPaths: []string{"/backup/local"},
 			wantLabel: []string{"Local backups"},
 		},
-		{
-			name: "cloud with rclone remote included",
-			cfg: &config.Config{
-				BackupPath:   "/backup/local",
-				CloudEnabled: true,
-				CloudRemote:  "gdrive:backups", // rclone remote
+			{
+				name: "cloud with rclone remote included",
+				cfg: &config.Config{
+					BackupPath:   "/backup/local",
+					CloudEnabled: true,
+					CloudRemote:  "gdrive:backups", // rclone remote
+				},
+				wantCount: 2,
+				wantPaths: []string{"/backup/local", "gdrive:backups"},
+				wantLabel: []string{"Local backups", "Cloud backups (rclone)"},
 			},
-			// With pre-scan enabled, cloud is only shown if backups exist
-			// Since no actual backups exist, expect only local
-			wantCount: 1,
-			wantPaths: []string{"/backup/local"},
-			wantLabel: []string{"Local backups"},
-		},
-		{
-			name: "cloud with local absolute path included",
-			cfg: &config.Config{
-				BackupPath:   "/backup/local",
-				CloudEnabled: true,
-				CloudRemote:  "/mnt/cloud/backups",
+			{
+				name: "cloud with local absolute path included",
+				cfg: &config.Config{
+					BackupPath:   "/backup/local",
+					CloudEnabled: true,
+					CloudRemote:  "/mnt/cloud/backups",
+				},
+				wantCount: 2,
+				wantPaths: []string{"/backup/local", "/mnt/cloud/backups"},
+				wantLabel: []string{"Local backups", "Cloud backups"},
 			},
-			// With pre-scan enabled, cloud is only shown if backups exist
-			// Since no actual backups exist, expect only local
-			wantCount: 1,
-			wantPaths: []string{"/backup/local"},
-			wantLabel: []string{"Local backups"},
-		},
 		{
 			name: "secondary enabled but path empty",
 			cfg: &config.Config{
@@ -140,19 +135,17 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 			wantPaths: []string{"/backup/local"},
 			wantLabel: []string{"Local backups"},
 		},
-		{
-			name: "cloud absolute with colon allowed",
-			cfg: &config.Config{
-				BackupPath:   "/backup/local",
-				CloudEnabled: true,
-				CloudRemote:  "/mnt/backups:foo",
+			{
+				name: "cloud absolute with colon allowed",
+				cfg: &config.Config{
+					BackupPath:   "/backup/local",
+					CloudEnabled: true,
+					CloudRemote:  "/mnt/backups:foo",
+				},
+				wantCount: 2,
+				wantPaths: []string{"/backup/local", "/mnt/backups:foo"},
+				wantLabel: []string{"Local backups", "Cloud backups"},
 			},
-			// With pre-scan enabled, cloud is only shown if backups exist
-			// Since no actual backups exist, expect only local
-			wantCount: 1,
-			wantPaths: []string{"/backup/local"},
-			wantLabel: []string{"Local backups"},
-		},
 		{
 			name:      "all paths empty",
 			cfg:       &config.Config{},
@@ -163,7 +156,7 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := buildDecryptPathOptions(tt.cfg)
+			options := buildDecryptPathOptions(tt.cfg, nil)
 
 			if len(options) != tt.wantCount {
 				t.Errorf("buildDecryptPathOptions() returned %d options; want %d",
@@ -182,6 +175,180 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBaseNameFromRemoteRef(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"local/file.tar.xz", "file.tar.xz"},
+		{"gdrive:", ""},
+		{"gdrive:backup.tar.xz", "backup.tar.xz"},
+		{"gdrive:dir/sub/backup.tar.xz", "backup.tar.xz"},
+		{"gdrive:/dir/sub/backup.tar.xz", "backup.tar.xz"},
+		{"gdrive:dir/sub/", "sub"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.in, func(t *testing.T) {
+			got := baseNameFromRemoteRef(tt.in)
+			if got != tt.want {
+				t.Fatalf("baseNameFromRemoteRef(%q)=%q; want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInspectRcloneMetadataManifest_JSONArchivePathEmptyUsesRemoteArchivePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	metadataPath := filepath.Join(tmpDir, "backup.tar.xz.metadata")
+
+	createdAt := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	manifest := backup.Manifest{
+		ArchivePath:    "",
+		CreatedAt:      createdAt,
+		ProxmoxType:    "pve",
+		EncryptionMode: "none",
+	}
+	data, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(metadataPath, data, 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := "#!/bin/sh\ncat \"$METADATA_PATH\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+
+	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
+		t.Fatalf("set METADATA_PATH: %v", err)
+	}
+	defer os.Unsetenv("METADATA_PATH")
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+	got, err := inspectRcloneMetadataManifest(context.Background(), "gdrive:backup.tar.xz.metadata", "gdrive:backup.tar.xz", logger)
+	if err != nil {
+		t.Fatalf("inspectRcloneMetadataManifest error: %v", err)
+	}
+	if got.ArchivePath != "gdrive:backup.tar.xz" {
+		t.Fatalf("ArchivePath=%q; want %q", got.ArchivePath, "gdrive:backup.tar.xz")
+	}
+	if !got.CreatedAt.Equal(createdAt) {
+		t.Fatalf("CreatedAt=%s; want %s", got.CreatedAt, createdAt)
+	}
+}
+
+func TestInspectRcloneMetadataManifest_LegacyInfersAgeFromArchiveExt(t *testing.T) {
+	tmpDir := t.TempDir()
+	metadataPath := filepath.Join(tmpDir, "backup.tar.xz.age.metadata")
+
+	legacy := strings.Join([]string{
+		"COMPRESSION_TYPE=xz",
+		"COMPRESSION_LEVEL=6",
+		"PROXMOX_TYPE=pve",
+		"HOSTNAME=node1",
+		"SCRIPT_VERSION=v1.2.3",
+		"",
+	}, "\n")
+	if err := os.WriteFile(metadataPath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := "#!/bin/sh\ncat \"$METADATA_PATH\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+
+	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
+		t.Fatalf("set METADATA_PATH: %v", err)
+	}
+	defer os.Unsetenv("METADATA_PATH")
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+	got, err := inspectRcloneMetadataManifest(context.Background(), "gdrive:backup.tar.xz.age.metadata", "gdrive:backup.tar.xz.age", logger)
+	if err != nil {
+		t.Fatalf("inspectRcloneMetadataManifest error: %v", err)
+	}
+	if got.EncryptionMode != "age" {
+		t.Fatalf("EncryptionMode=%q; want %q", got.EncryptionMode, "age")
+	}
+	if got.CompressionType != "xz" || got.CompressionLevel != 6 {
+		t.Fatalf("compression=%q/%d; want xz/6", got.CompressionType, got.CompressionLevel)
+	}
+	if got.Hostname != "node1" || got.ProxmoxType != "pve" {
+		t.Fatalf("Hostname=%q ProxmoxType=%q; want node1/pve", got.Hostname, got.ProxmoxType)
+	}
+	if got.ScriptVersion != "v1.2.3" {
+		t.Fatalf("ScriptVersion=%q; want %q", got.ScriptVersion, "v1.2.3")
+	}
+}
+
+func TestInspectRcloneBundleManifest_ReturnsErrorWhenManifestMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	bundlePath := filepath.Join(tmpDir, "backup.bundle.tar")
+
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	if err := tw.WriteHeader(&tar.Header{Name: "payload.txt", Mode: 0o600, Size: int64(len("x"))}); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write([]byte("x")); err != nil {
+		t.Fatalf("write body: %v", err)
+	}
+	_ = tw.Close()
+	_ = f.Close()
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := "#!/bin/sh\ncat \"$BUNDLE_PATH\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+
+	if err := os.Setenv("BUNDLE_PATH", bundlePath); err != nil {
+		t.Fatalf("set BUNDLE_PATH: %v", err)
+	}
+	defer os.Unsetenv("BUNDLE_PATH")
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+	_, err = inspectRcloneBundleManifest(context.Background(), "gdrive:backup.bundle.tar", logger)
+	if err == nil {
+		t.Fatalf("expected error for missing manifest entry")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "manifest not found") {
+		t.Fatalf("error=%v; want manifest-not-found", err)
 	}
 }
 
@@ -1787,7 +1954,7 @@ func TestCopyRawArtifactsToWorkdir_Success(t *testing.T) {
 		RawChecksumPath: checksumPath,
 	}
 
-	staged, err := copyRawArtifactsToWorkdir(cand, workDir)
+	staged, err := copyRawArtifactsToWorkdir(context.Background(), cand, workDir)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdir error: %v", err)
 	}
@@ -1807,7 +1974,7 @@ func TestCopyRawArtifactsToWorkdir_ArchiveError(t *testing.T) {
 		RawChecksumPath: "/nonexistent/backup.sha256",
 	}
 
-	_, err := copyRawArtifactsToWorkdir(cand, t.TempDir())
+	_, err := copyRawArtifactsToWorkdir(context.Background(), cand, t.TempDir())
 	if err == nil {
 		t.Fatal("expected error for nonexistent archive")
 	}
@@ -1836,7 +2003,7 @@ func TestCopyRawArtifactsToWorkdir_MetadataError(t *testing.T) {
 		RawChecksumPath: "/nonexistent/backup.sha256",
 	}
 
-	_, err := copyRawArtifactsToWorkdir(cand, workDir)
+	_, err := copyRawArtifactsToWorkdir(context.Background(), cand, workDir)
 	if err == nil {
 		t.Fatal("expected error for nonexistent metadata")
 	}
@@ -1869,12 +2036,102 @@ func TestCopyRawArtifactsToWorkdir_ChecksumError(t *testing.T) {
 		RawChecksumPath: "/nonexistent/backup.sha256",
 	}
 
-	_, err := copyRawArtifactsToWorkdir(cand, workDir)
-	if err == nil {
-		t.Fatal("expected error for nonexistent checksum")
+	staged, err := copyRawArtifactsToWorkdir(context.Background(), cand, workDir)
+	if err != nil {
+		t.Fatalf("expected checksum to be optional, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "copy checksum") {
-		t.Fatalf("expected 'copy checksum' error, got: %v", err)
+	if staged.ChecksumPath != "" {
+		t.Fatalf("ChecksumPath = %q; want empty when checksum missing", staged.ChecksumPath)
+	}
+}
+
+func TestCopyRawArtifactsToWorkdir_RcloneDownloadsRawArtifacts(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	srcDir := t.TempDir()
+	binDir := t.TempDir()
+	workDir := t.TempDir()
+
+	archiveSrc := filepath.Join(srcDir, "backup.tar.xz")
+	if err := os.WriteFile(archiveSrc, []byte("archive data"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	metadataSrc := filepath.Join(srcDir, "backup.tar.xz.metadata")
+	if err := os.WriteFile(metadataSrc, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	checksumSrc := filepath.Join(srcDir, "backup.tar.xz.sha256")
+	if err := os.WriteFile(checksumSrc, []byte("checksum"), 0o644); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	scriptPath := filepath.Join(binDir, "rclone")
+	script := `#!/bin/sh
+subcmd="$1"
+case "$subcmd" in
+  copyto)
+    src="$2"
+    dst="$3"
+    case "$src" in
+      gdrive:backup.tar.xz) cp "$ARCHIVE_SRC" "$dst" ;;
+      gdrive:backup.tar.xz.metadata) cp "$METADATA_SRC" "$dst" ;;
+      gdrive:backup.tar.xz.sha256) cp "$CHECKSUM_SRC" "$dst" ;;
+      *) echo "unexpected copy source: $src" >&2; exit 1 ;;
+    esac
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+
+	if err := os.Setenv("ARCHIVE_SRC", archiveSrc); err != nil {
+		t.Fatalf("set ARCHIVE_SRC: %v", err)
+	}
+	if err := os.Setenv("METADATA_SRC", metadataSrc); err != nil {
+		t.Fatalf("set METADATA_SRC: %v", err)
+	}
+	if err := os.Setenv("CHECKSUM_SRC", checksumSrc); err != nil {
+		t.Fatalf("set CHECKSUM_SRC: %v", err)
+	}
+	defer os.Unsetenv("ARCHIVE_SRC")
+	defer os.Unsetenv("METADATA_SRC")
+	defer os.Unsetenv("CHECKSUM_SRC")
+
+	cand := &decryptCandidate{
+		IsRclone:        true,
+		RawArchivePath:  "gdrive:backup.tar.xz",
+		RawMetadataPath: "gdrive:backup.tar.xz.metadata",
+		RawChecksumPath: "gdrive:backup.tar.xz.sha256",
+	}
+
+	staged, err := copyRawArtifactsToWorkdir(context.Background(), cand, workDir)
+	if err != nil {
+		t.Fatalf("copyRawArtifactsToWorkdir error: %v", err)
+	}
+	if _, err := os.Stat(staged.ArchivePath); err != nil {
+		t.Fatalf("staged archive missing: %v", err)
+	}
+	if _, err := os.Stat(staged.MetadataPath); err != nil {
+		t.Fatalf("staged metadata missing: %v", err)
+	}
+	if staged.ChecksumPath == "" {
+		t.Fatalf("expected checksum path to be set")
+	}
+	if _, err := os.Stat(staged.ChecksumPath); err != nil {
+		t.Fatalf("staged checksum missing: %v", err)
 	}
 }
 

@@ -6,17 +6,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 
 	"filippo.io/age"
 	"filippo.io/age/agessh"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/pkg/bech32"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/scrypt"
@@ -145,27 +143,11 @@ func (o *Orchestrator) runAgeSetupWizard(ctx context.Context, candidatePath stri
 	wizardCtx, wizardCancel := context.WithCancel(ctx)
 	defer wizardCancel()
 
-	// Register local SIGINT handler for wizard - treat Ctrl+C as "Exit setup"
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT)
-	defer signal.Stop(sigChan) // Cleanup: restore normal signal handling after wizard
-
-	// Handle SIGINT as "exit wizard" instead of "graceful shutdown"
-	go func() {
-		select {
-		case <-sigChan:
-			fmt.Println("\n^C detected - exiting setup...")
-			wizardCancel()
-		case <-wizardCtx.Done():
-			// Wizard completed normally or parent context cancelled
-		}
-	}()
-
 	recipientPath := targetPath
 	if o.forceNewAgeRecipient && recipientPath != "" {
 		if _, err := os.Stat(recipientPath); err == nil {
 			fmt.Printf("WARNING: this will remove the existing AGE recipients stored at %s. Existing backups remain decryptable with your old private key.\n", recipientPath)
-			confirm, errPrompt := promptYesNo(wizardCtx, reader, fmt.Sprintf("Delete %s and enter a new recipient? [y/N]: ", recipientPath))
+			confirm, errPrompt := promptYesNoAge(wizardCtx, reader, fmt.Sprintf("Delete %s and enter a new recipient? [y/N]: ", recipientPath))
 			if errPrompt != nil {
 				return nil, "", errPrompt
 			}
@@ -186,7 +168,7 @@ func (o *Orchestrator) runAgeSetupWizard(ctx context.Context, candidatePath stri
 		fmt.Println("[2] Generate an AGE public key using a personal passphrase/password — not stored on the server")
 		fmt.Println("[3] Generate an AGE public key from an existing personal private key — not stored on the server")
 		fmt.Println("[4] Exit setup")
-		option, err := promptOption(wizardCtx, reader, "Select an option [1-4]: ")
+		option, err := promptOptionAge(wizardCtx, reader, "Select an option [1-4]: ")
 		if err != nil {
 			return nil, "", err
 		}
@@ -197,14 +179,14 @@ func (o *Orchestrator) runAgeSetupWizard(ctx context.Context, candidatePath stri
 		var value string
 		switch option {
 		case "1":
-			value, err = promptPublicRecipient(wizardCtx, reader)
+			value, err = promptPublicRecipientAge(wizardCtx, reader)
 		case "2":
-			value, err = promptPassphraseRecipient(wizardCtx)
+			value, err = promptPassphraseRecipientAge(wizardCtx)
 			if err == nil {
 				o.logger.Info("Derived deterministic AGE public key from passphrase (no secrets stored)")
 			}
 		case "3":
-			value, err = promptPrivateKeyRecipient(wizardCtx)
+			value, err = promptPrivateKeyRecipientAge(wizardCtx)
 		}
 		if err != nil {
 			o.logger.Warning("Encryption setup: %v", err)
@@ -214,7 +196,7 @@ func (o *Orchestrator) runAgeSetupWizard(ctx context.Context, candidatePath stri
 			recipients = append(recipients, value)
 		}
 
-		more, err := promptYesNo(wizardCtx, reader, "Add another recipient? [y/N]: ")
+		more, err := promptYesNoAge(wizardCtx, reader, "Add another recipient? [y/N]: ")
 		if err != nil {
 			return nil, "", err
 		}
@@ -247,14 +229,14 @@ func (o *Orchestrator) isInteractiveShell() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-func promptOption(ctx context.Context, reader *bufio.Reader, prompt string) (string, error) {
+func promptOptionAge(ctx context.Context, reader *bufio.Reader, prompt string) (string, error) {
 	for {
 		fmt.Print(prompt)
-		input, err := readLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
-			return "", err
+			return "", mapInputAbortToAgeAbort(err)
 		}
-		sw := strings.TrimSpace(input)
+		sw := strings.TrimSpace(line)
 		switch sw {
 		case "1", "2", "3", "4":
 			return sw, nil
@@ -265,11 +247,11 @@ func promptOption(ctx context.Context, reader *bufio.Reader, prompt string) (str
 	}
 }
 
-func promptPublicRecipient(ctx context.Context, reader *bufio.Reader) (string, error) {
+func promptPublicRecipientAge(ctx context.Context, reader *bufio.Reader) (string, error) {
 	fmt.Print("Paste your AGE public recipient (starts with \"age1...\"). Press Enter when done: ")
-	line, err := readLineWithContext(ctx, reader)
+	line, err := input.ReadLineWithContext(ctx, reader)
 	if err != nil {
-		return "", err
+		return "", mapInputAbortToAgeAbort(err)
 	}
 	value := strings.TrimSpace(line)
 	if value == "" {
@@ -278,12 +260,12 @@ func promptPublicRecipient(ctx context.Context, reader *bufio.Reader) (string, e
 	return value, nil
 }
 
-func promptPrivateKeyRecipient(ctx context.Context) (string, error) {
+func promptPrivateKeyRecipientAge(ctx context.Context) (string, error) {
 	fmt.Print("Paste your AGE private key (not stored; input is not echoed). Press Enter when done: ")
-	secretBytes, err := readPasswordWithContext(ctx)
+	secretBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
-		return "", err
+		return "", mapInputAbortToAgeAbort(err)
 	}
 	defer zeroBytes(secretBytes)
 
@@ -300,8 +282,8 @@ func promptPrivateKeyRecipient(ctx context.Context) (string, error) {
 }
 
 // promptPassphraseRecipient derives a deterministic AGE public key from a passphrase
-func promptPassphraseRecipient(ctx context.Context) (string, error) {
-	pass, err := promptAndConfirmPassphrase(ctx)
+func promptPassphraseRecipientAge(ctx context.Context) (string, error) {
+	pass, err := promptAndConfirmPassphraseAge(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -315,12 +297,12 @@ func promptPassphraseRecipient(ctx context.Context) (string, error) {
 }
 
 // promptAndConfirmPassphrase asks the user to enter a passphrase twice and checks strength.
-func promptAndConfirmPassphrase(ctx context.Context) (string, error) {
+func promptAndConfirmPassphraseAge(ctx context.Context) (string, error) {
 	fmt.Print("Enter the passphrase to derive your AGE public key (input is not echoed). Press Enter when done: ")
-	passBytes, err := readPasswordWithContext(ctx)
+	passBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
-		return "", err
+		return "", mapInputAbortToAgeAbort(err)
 	}
 	defer zeroBytes(passBytes)
 
@@ -335,11 +317,11 @@ func promptAndConfirmPassphrase(ctx context.Context) (string, error) {
 	zeroBytes(trimmed)
 
 	fmt.Print("Re-enter the passphrase to confirm: ")
-	confirmBytes, err := readPasswordWithContext(ctx)
+	confirmBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
 		resetString(&pass)
-		return "", err
+		return "", mapInputAbortToAgeAbort(err)
 	}
 	defer zeroBytes(confirmBytes)
 
@@ -357,13 +339,13 @@ func promptAndConfirmPassphrase(ctx context.Context) (string, error) {
 	return pass, nil
 }
 
-func promptYesNo(ctx context.Context, reader *bufio.Reader, prompt string) (bool, error) {
+func promptYesNoAge(ctx context.Context, reader *bufio.Reader, prompt string) (bool, error) {
 	fmt.Print(prompt)
-	input, err := readLineWithContext(ctx, reader)
+	line, err := input.ReadLineWithContext(ctx, reader)
 	if err != nil {
-		return false, err
+		return false, mapInputAbortToAgeAbort(err)
 	}
-	switch strings.ToLower(strings.TrimSpace(input)) {
+	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return true, nil
 	default:
@@ -462,58 +444,14 @@ func cloneRecipients(src []age.Recipient) []age.Recipient {
 	return dst
 }
 
-func mapInputError(err error) error {
+func mapInputAbortToAgeAbort(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
-		return ErrAgeRecipientSetupAborted
-	}
-	errStr := strings.ToLower(err.Error())
-	if strings.Contains(errStr, "use of closed file") ||
-		strings.Contains(errStr, "bad file descriptor") ||
-		strings.Contains(errStr, "file already closed") {
+	if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
 		return ErrAgeRecipientSetupAborted
 	}
 	return err
-}
-
-// readLineWithContext reads a single line from the reader and supports cancellation.
-func readLineWithContext(ctx context.Context, r *bufio.Reader) (string, error) {
-	type res struct {
-		s   string
-		err error
-	}
-	ch := make(chan res, 1)
-	go func() {
-		s, e := r.ReadString('\n')
-		ch <- res{s: s, err: mapInputError(e)}
-	}()
-	select {
-	case <-ctx.Done():
-		return "", ErrAgeRecipientSetupAborted
-	case out := <-ch:
-		return out.s, out.err
-	}
-}
-
-// readPasswordWithContext reads a password (no echo) and supports cancellation.
-func readPasswordWithContext(ctx context.Context) ([]byte, error) {
-	type res struct {
-		b   []byte
-		err error
-	}
-	ch := make(chan res, 1)
-	go func() {
-		b, e := readPassword(int(os.Stdin.Fd()))
-		ch <- res{b: b, err: mapInputError(e)}
-	}()
-	select {
-	case <-ctx.Done():
-		return nil, ErrAgeRecipientSetupAborted
-	case out := <-ch:
-		return out.b, out.err
-	}
 }
 
 func backupExistingRecipientFile(path string) error {

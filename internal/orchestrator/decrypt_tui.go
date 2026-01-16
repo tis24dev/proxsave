@@ -53,7 +53,7 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	done := logging.DebugStart(logger, "decrypt workflow (tui)", "version=%s", version)
 	defer func() { done(err) }()
 
-	selection, err := runDecryptSelectionWizard(ctx, cfg, configPath, buildSig)
+	selection, err := runDecryptSelectionWizard(ctx, cfg, logger, configPath, buildSig)
 	if err != nil {
 		if errors.Is(err, ErrDecryptAborted) {
 			return ErrDecryptAborted
@@ -133,19 +133,25 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	return nil
 }
 
-func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, configPath, buildSig string) (*decryptSelection, error) {
+func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, logger *logging.Logger, configPath, buildSig string) (selection *decryptSelection, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	options := buildDecryptPathOptions(cfg)
+	done := logging.DebugStart(logger, "decrypt selection wizard", "tui=true")
+	defer func() { done(err) }()
+	options := buildDecryptPathOptions(cfg, logger)
 	if len(options) == 0 {
-		return nil, fmt.Errorf("no backup paths configured in backup.env")
+		err = fmt.Errorf("no backup paths configured in backup.env")
+		return nil, err
+	}
+	for _, opt := range options {
+		logging.DebugStep(logger, "decrypt selection wizard", "option label=%q path=%q rclone=%v", opt.Label, opt.Path, opt.IsRclone)
 	}
 
-	app := tui.NewApp()
+	app := newTUIApp()
 	pages := tview.NewPages()
 
-	selection := &decryptSelection{}
+	selection = &decryptSelection{}
 	var selectionErr error
 	var scan scanController
 
@@ -165,25 +171,30 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 			return
 		}
 		selectedOption := options[index]
+		logging.DebugStep(logger, "decrypt selection wizard", "selected source label=%q path=%q rclone=%v", selectedOption.Label, selectedOption.Path, selectedOption.IsRclone)
 		pages.SwitchToPage("loading")
 		go func() {
 			scanCtx, finish := scan.Start(ctx)
 			defer finish()
 
 			var candidates []*decryptCandidate
-			var err error
+			var scanErr error
+			scanDone := logging.DebugStart(logger, "scan backup source", "path=%s rclone=%v", selectedOption.Path, selectedOption.IsRclone)
+			defer func() { scanDone(scanErr) }()
 
 			if selectedOption.IsRclone {
-				candidates, err = discoverRcloneBackups(scanCtx, selectedOption.Path, logging.GetDefaultLogger())
+				candidates, scanErr = discoverRcloneBackups(scanCtx, selectedOption.Path, logger)
 			} else {
-				candidates, err = discoverBackupCandidates(logging.GetDefaultLogger(), selectedOption.Path)
+				candidates, scanErr = discoverBackupCandidates(logger, selectedOption.Path)
 			}
+			logging.DebugStep(logger, "scan backup source", "candidates=%d", len(candidates))
 			if scanCtx.Err() != nil {
+				scanErr = scanCtx.Err()
 				return
 			}
 			app.QueueUpdateDraw(func() {
-				if err != nil {
-					message := fmt.Sprintf("Failed to inspect %s: %v", selectedOption.Path, err)
+				if scanErr != nil {
+					message := fmt.Sprintf("Failed to inspect %s: %v", selectedOption.Path, scanErr)
 					showErrorModal(app, pages, configPath, buildSig, message, func() {
 						pages.SwitchToPage("paths")
 					})
@@ -213,6 +224,7 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 		}()
 	})
 	pathList.SetDoneFunc(func() {
+		logging.DebugStep(logger, "decrypt selection wizard", "cancel requested (done func)")
 		scan.Cancel()
 		selectionErr = ErrDecryptAborted
 		app.Stop()
@@ -233,6 +245,7 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 	form.Form.SetFocus(0)
 
 	form.SetOnCancel(func() {
+		logging.DebugStep(logger, "decrypt selection wizard", "cancel requested (form)")
 		scan.Cancel()
 		selectionErr = ErrDecryptAborted
 	})
@@ -248,6 +261,7 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 
 	loadingForm := components.NewForm(app)
 	loadingForm.SetOnCancel(func() {
+		logging.DebugStep(logger, "decrypt selection wizard", "cancel requested (loading form)")
 		scan.Cancel()
 		selectionErr = ErrDecryptAborted
 	})
@@ -260,14 +274,17 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 	pages.AddPage("loading", loadingPage, true, false)
 
 	app.SetRoot(pages, true).SetFocus(form.Form)
-	if err := app.Run(); err != nil {
+	if runErr := app.Run(); runErr != nil {
+		err = runErr
 		return nil, err
 	}
 	if selectionErr != nil {
-		return nil, selectionErr
+		err = selectionErr
+		return nil, err
 	}
 	if selection.Candidate == nil || selection.DestDir == "" {
-		return nil, ErrDecryptAborted
+		err = ErrDecryptAborted
+		return nil, err
 	}
 	return selection, nil
 }
@@ -570,7 +587,7 @@ func ensureWritablePathTUI(path, description, configPath, buildSig string) (stri
 }
 
 func promptOverwriteAction(path, description, failureMessage, configPath, buildSig string) (string, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var choice string
 
 	message := fmt.Sprintf("The %s [yellow]%s[white] already exists.\nSelect how you want to proceed.", description, path)
@@ -609,7 +626,7 @@ func promptOverwriteAction(path, description, failureMessage, configPath, buildS
 }
 
 func promptNewPathInput(defaultPath, configPath, buildSig string) (string, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var newPath string
 	var cancelled bool
 
@@ -696,10 +713,10 @@ func preparePlainBundleTUI(ctx context.Context, cand *decryptCandidate, version 
 	switch cand.Source {
 	case sourceBundle:
 		logger.Debug("Extracting bundle %s", filepath.Base(cand.BundlePath))
-		staged, err = extractBundleToWorkdir(cand.BundlePath, workDir)
+		staged, err = extractBundleToWorkdirWithLogger(cand.BundlePath, workDir, logger)
 	case sourceRaw:
 		logger.Debug("Staging raw artifacts for %s", filepath.Base(cand.RawArchivePath))
-		staged, err = copyRawArtifactsToWorkdir(cand, workDir)
+		staged, err = copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger)
 	default:
 		err = fmt.Errorf("unsupported candidate source")
 	}
@@ -782,7 +799,7 @@ func decryptArchiveWithTUIPrompts(ctx context.Context, encryptedPath, outputPath
 }
 
 func promptDecryptIdentity(displayName, configPath, buildSig, errorMessage string) ([]age.Identity, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var (
 		chosenIdentity []age.Identity
 		cancelled      bool

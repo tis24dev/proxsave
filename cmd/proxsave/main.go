@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -28,6 +27,8 @@ import (
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/security"
 	"github.com/tis24dev/proxsave/internal/storage"
+	"github.com/tis24dev/proxsave/internal/support"
+	"github.com/tis24dev/proxsave/internal/tui"
 	"github.com/tis24dev/proxsave/internal/types"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
@@ -87,6 +88,7 @@ func run() int {
 	// Setup signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	tui.SetAbortContext(ctx)
 
 	// Handle SIGINT (Ctrl+C) and SIGTERM
 	sigChan := make(chan os.Signal, 1)
@@ -94,7 +96,7 @@ func run() int {
 	go func() {
 		sig := <-sigChan
 		logging.DebugStepBootstrap(bootstrap, "signal", "received=%v", sig)
-		bootstrap.Warning("\nReceived signal %v, initiating graceful shutdown...", sig)
+		bootstrap.Info("\nReceived signal %v, initiating graceful shutdown...", sig)
 		cancel() // Cancel context to stop all operations
 		closeStdinOnce.Do(func() {
 			if file := os.Stdin; file != nil {
@@ -124,7 +126,7 @@ func run() int {
 	if args.Support {
 		incompatible := make([]string, 0, 6)
 		if args.Restore {
-			incompatible = append(incompatible, "--restore")
+			// allowed
 		}
 		if args.Decrypt {
 			incompatible = append(incompatible, "--decrypt")
@@ -147,7 +149,7 @@ func run() int {
 
 		if len(incompatible) > 0 {
 			bootstrap.Error("Support mode cannot be combined with: %s", strings.Join(incompatible, ", "))
-			bootstrap.Error("--support is only available for the standard backup run.")
+			bootstrap.Error("--support is only available for the standard backup run or --restore.")
 			return types.ExitConfigError.Int()
 		}
 	}
@@ -402,8 +404,11 @@ func run() int {
 	// Support mode: interactive pre-flight questionnaire (mandatory)
 	if args.Support {
 		logging.DebugStepBootstrap(bootstrap, "main run", "mode=support")
-		continueRun, interrupted := runSupportIntro(ctx, bootstrap, args)
-		if !continueRun {
+		meta, continueRun, interrupted := support.RunIntro(ctx, bootstrap)
+		if continueRun {
+			args.SupportGitHubUser = meta.GitHubUser
+			args.SupportIssueID = meta.IssueID
+		} else {
 			if interrupted {
 				// Interrupted by signal (Ctrl+C): set exit code and still show footer.
 				finalize(exitCodeInterrupted)
@@ -603,7 +608,10 @@ func run() int {
 			return
 		}
 		logging.Step("Support mode - sending support email with attached log")
-		sendSupportEmail(ctx, cfg, logger, envInfo.Type, pendingSupportStats, args.SupportGitHubUser, args.SupportIssueID)
+		support.SendEmail(ctx, cfg, logger, envInfo.Type, pendingSupportStats, support.Meta{
+			GitHubUser: args.SupportGitHubUser,
+			IssueID:    args.SupportIssueID,
+		}, buildSignature())
 	}()
 
 	// Defer for early error notifications
@@ -739,15 +747,24 @@ func run() int {
 			if err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, toolVersion); err != nil {
 				if errors.Is(err, orchestrator.ErrRestoreAborted) {
 					logging.Info("Restore workflow aborted by user")
+					if args.Support {
+						pendingSupportStats = support.BuildSupportStats(logger, resolveHostname(), envInfo.Type, envInfo.Version, toolVersion, startTime, time.Now(), exitCodeInterrupted, "restore")
+					}
 					return finalize(exitCodeInterrupted)
 				}
 				logging.Error("Restore workflow failed: %v", err)
+				if args.Support {
+					pendingSupportStats = support.BuildSupportStats(logger, resolveHostname(), envInfo.Type, envInfo.Version, toolVersion, startTime, time.Now(), types.ExitGenericError.Int(), "restore")
+				}
 				return finalize(types.ExitGenericError.Int())
 			}
 			if logger.HasWarnings() {
 				logging.Warning("Restore workflow completed with warnings (see log above)")
 			} else {
 				logging.Info("Restore workflow completed successfully")
+			}
+			if args.Support {
+				pendingSupportStats = support.BuildSupportStats(logger, resolveHostname(), envInfo.Type, envInfo.Version, toolVersion, startTime, time.Now(), types.ExitSuccess.Int(), "restore")
 			}
 			return finalize(types.ExitSuccess.Int())
 		}
@@ -760,15 +777,24 @@ func run() int {
 		if err := orchestrator.RunRestoreWorkflowTUI(ctx, cfg, logger, toolVersion, args.ConfigPath, sig); err != nil {
 			if errors.Is(err, orchestrator.ErrRestoreAborted) || errors.Is(err, orchestrator.ErrDecryptAborted) {
 				logging.Info("Restore workflow aborted by user")
+				if args.Support {
+					pendingSupportStats = support.BuildSupportStats(logger, resolveHostname(), envInfo.Type, envInfo.Version, toolVersion, startTime, time.Now(), exitCodeInterrupted, "restore")
+				}
 				return finalize(exitCodeInterrupted)
 			}
 			logging.Error("Restore workflow failed: %v", err)
+			if args.Support {
+				pendingSupportStats = support.BuildSupportStats(logger, resolveHostname(), envInfo.Type, envInfo.Version, toolVersion, startTime, time.Now(), types.ExitGenericError.Int(), "restore")
+			}
 			return finalize(types.ExitGenericError.Int())
 		}
 		if logger.HasWarnings() {
 			logging.Warning("Restore workflow completed with warnings (see log above)")
 		} else {
 			logging.Info("Restore workflow completed successfully")
+		}
+		if args.Support {
+			pendingSupportStats = support.BuildSupportStats(logger, resolveHostname(), envInfo.Type, envInfo.Version, toolVersion, startTime, time.Now(), types.ExitSuccess.Int(), "restore")
 		}
 		return finalize(types.ExitSuccess.Int())
 	}
@@ -1409,177 +1435,8 @@ func printFinalSummary(finalExitCode int) {
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
-	fmt.Println("  --support          - Run backup in support mode (force debug log level and send email with attached log to github-support@tis24.it)")
+	fmt.Println("  --support          - Run in support mode (force debug log level and send email with attached log to github-support@tis24.it); available for standard backup and --restore")
 	fmt.Println()
-}
-
-func sendSupportEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, proxmoxType types.ProxmoxType, stats *orchestrator.BackupStats, githubUser, issueID string) {
-	if stats == nil {
-		logging.Warning("Support mode: cannot send support email because stats are nil")
-		return
-	}
-
-	subject := "SUPPORT REQUEST"
-	if strings.TrimSpace(githubUser) != "" || strings.TrimSpace(issueID) != "" {
-		subjectParts := []string{"SUPPORT REQUEST"}
-		if strings.TrimSpace(githubUser) != "" {
-			subjectParts = append(subjectParts, fmt.Sprintf("Nickname: %s", strings.TrimSpace(githubUser)))
-		}
-		if strings.TrimSpace(issueID) != "" {
-			subjectParts = append(subjectParts, fmt.Sprintf("Issue: %s", strings.TrimSpace(issueID)))
-		}
-		subject = strings.Join(subjectParts, " - ")
-	}
-
-	if sig := buildSignature(); sig != "" {
-		subject = fmt.Sprintf("%s - Build: %s", subject, sig)
-	}
-
-	emailConfig := notify.EmailConfig{
-		Enabled:          true,
-		DeliveryMethod:   notify.EmailDeliverySendmail,
-		FallbackSendmail: false,
-		AttachLogFile:    true,
-		Recipient:        "github-support@tis24.it",
-		From:             cfg.EmailFrom,
-		SubjectOverride:  subject,
-	}
-
-	emailNotifier, err := notify.NewEmailNotifier(emailConfig, proxmoxType, logger)
-	if err != nil {
-		logging.Warning("Support mode: failed to initialize support email notifier: %v", err)
-		return
-	}
-
-	adapter := orchestrator.NewNotificationAdapter(emailNotifier, logger)
-	if err := adapter.Notify(ctx, stats); err != nil {
-		logging.Critical("Support mode: FAILED to send support email: %v", err)
-		fmt.Println("\033[33m⚠️  CRITICAL: Support email failed to send!\033[0m")
-		return
-	}
-
-	logging.Info("Support mode: support email handed off to local MTA for github-support@tis24.it (check mailq and /var/log/mail.log for delivery)")
-}
-
-func runSupportIntro(ctx context.Context, bootstrap *logging.BootstrapLogger, args *cli.Args) (bool, bool) {
-	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Println()
-	fmt.Println("\033[32m================================================\033[0m")
-	fmt.Println("\033[32m  SUPPORT & ASSISTANCE MODE\033[0m")
-	fmt.Println("\033[32m================================================\033[0m")
-	fmt.Println()
-	fmt.Println("This mode will send the backup log to the developer for debugging.")
-	fmt.Println("\033[33mIf your log contains personal or sensitive information, it will be shared.\033[0m")
-	fmt.Println()
-
-	accepted, err := promptYesNoSupport(reader, "Do you accept and continue? [y/N]: ")
-	if err != nil {
-		if ctx.Err() == context.Canceled {
-			bootstrap.Warning("Support mode interrupted by signal")
-			return false, true
-		}
-		bootstrap.Error("ERROR: %v", err)
-		return false, false
-	}
-	if !accepted {
-		bootstrap.Warning("Support mode aborted by user (consent not granted)")
-		return false, false
-	}
-
-	fmt.Println()
-	fmt.Println("Before proceeding, you must have an open GitHub issue for this problem.")
-	fmt.Println("Emails without a corresponding GitHub issue will not be analyzed.")
-	fmt.Println()
-
-	hasIssue, err := promptYesNoSupport(reader, "Do you confirm that you have already opened a GitHub issue? [y/N]: ")
-	if err != nil {
-		if ctx.Err() == context.Canceled {
-			bootstrap.Warning("Support mode interrupted by signal")
-			return false, true
-		}
-		bootstrap.Error("ERROR: %v", err)
-		return false, false
-	}
-	if !hasIssue {
-		bootstrap.Warning("Support mode aborted: please open a GitHub issue first")
-		return false, false
-	}
-
-	// GitHub nickname
-	for {
-		fmt.Print("Enter your GitHub nickname: ")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if ctx.Err() == context.Canceled {
-				bootstrap.Warning("Support mode interrupted by signal")
-				return false, true
-			}
-			bootstrap.Error("ERROR: Failed to read input: %v", err)
-			return false, false
-		}
-		nickname := strings.TrimSpace(line)
-		if nickname == "" {
-			fmt.Println("GitHub nickname cannot be empty. Please try again.")
-			continue
-		}
-		args.SupportGitHubUser = nickname
-		break
-	}
-
-	// GitHub issue number
-	for {
-		fmt.Print("Enter the GitHub issue number in the format #1234: ")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if ctx.Err() == context.Canceled {
-				bootstrap.Warning("Support mode interrupted by signal")
-				return false, true
-			}
-			bootstrap.Error("ERROR: Failed to read input: %v", err)
-			return false, false
-		}
-		issue := strings.TrimSpace(line)
-		if issue == "" {
-			fmt.Println("Issue number cannot be empty. Please try again.")
-			continue
-		}
-		if !strings.HasPrefix(issue, "#") || len(issue) < 2 {
-			fmt.Println("Issue must start with '#' and contain a numeric ID, for example: #1234.")
-			continue
-		}
-		if _, err := strconv.Atoi(issue[1:]); err != nil {
-			fmt.Println("Issue must be in the format #1234 with a numeric ID. Please try again.")
-			continue
-		}
-		args.SupportIssueID = issue
-		break
-	}
-
-	fmt.Println()
-	fmt.Println("Support mode confirmed.")
-	fmt.Println("The backup will run in DEBUG mode and a support email with the full log will be sent to github-support@tis24.it at the end.")
-	fmt.Println()
-
-	return true, false
-}
-
-func promptYesNoSupport(reader *bufio.Reader, prompt string) (bool, error) {
-	for {
-		fmt.Print(prompt)
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return false, err
-		}
-		answer := strings.TrimSpace(strings.ToLower(line))
-		if answer == "y" || answer == "yes" {
-			return true, nil
-		}
-		if answer == "" || answer == "n" || answer == "no" {
-			return false, nil
-		}
-		fmt.Println("Please answer with 'y' or 'n'.")
-	}
 }
 
 // checkGoRuntimeVersion ensures the running binary was built with at least the specified Go version (semver: major.minor.patch).

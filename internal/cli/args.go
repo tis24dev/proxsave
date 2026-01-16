@@ -66,7 +66,7 @@ func Parse() *Args {
 		"Perform a dry run (shorthand)")
 
 	flag.BoolVar(&args.Support, "support", false,
-		"Run backup in support mode (force debug log level and send a support email with the attached log to github-support@tis24.it)")
+		"Run in support mode (force debug log level and send a support email with the attached log to github-support@tis24.it). Available for the standard backup run and --restore")
 	flag.BoolVar(&args.ForceCLI, "cli", false,
 		"Use CLI prompts instead of TUI for interactive workflows (works with --install/--new-install/--newkey/--decrypt/--restore)")
 

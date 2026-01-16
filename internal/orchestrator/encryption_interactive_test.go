@@ -110,9 +110,9 @@ func TestPromptPrivateKeyRecipient_ParsesSecretKey(t *testing.T) {
 		return []byte(id.String()), nil
 	}
 
-	got, err := promptPrivateKeyRecipient(context.Background())
+	got, err := promptPrivateKeyRecipientAge(context.Background())
 	if err != nil {
-		t.Fatalf("promptPrivateKeyRecipient error: %v", err)
+		t.Fatalf("promptPrivateKeyRecipientAge error: %v", err)
 	}
 	if got != id.Recipient().String() {
 		t.Fatalf("recipient=%q; want %q", got, id.Recipient().String())
@@ -139,7 +139,7 @@ func TestPromptAndConfirmPassphrase_Mismatch(t *testing.T) {
 		return next, nil
 	}
 
-	if _, err := promptAndConfirmPassphrase(context.Background()); err == nil {
+	if _, err := promptAndConfirmPassphraseAge(context.Background()); err == nil {
 		t.Fatalf("expected mismatch error, got nil")
 	}
 }
@@ -164,9 +164,9 @@ func TestPromptPassphraseRecipient_Success(t *testing.T) {
 		return next, nil
 	}
 
-	recipient, err := promptPassphraseRecipient(context.Background())
+	recipient, err := promptPassphraseRecipientAge(context.Background())
 	if err != nil {
-		t.Fatalf("promptPassphraseRecipient error: %v", err)
+		t.Fatalf("promptPassphraseRecipientAge error: %v", err)
 	}
 	if !strings.HasPrefix(recipient, "age1") {
 		t.Fatalf("recipient=%q; want age1... format", recipient)

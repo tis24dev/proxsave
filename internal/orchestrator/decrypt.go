@@ -15,10 +15,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -77,6 +79,14 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	}
 	done := logging.DebugStart(logger, "decrypt workflow", "version=%s", version)
 	defer func() { done(err) }()
+	defer func() {
+		if err == nil {
+			return
+		}
+		if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
+			err = ErrDecryptAborted
+		}
+	}()
 
 	reader := bufio.NewReader(os.Stdin)
 	_, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version, true)
@@ -175,7 +185,7 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *decryptCandidate, err error) {
 	done := logging.DebugStart(logger, "select backup candidate", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
-	pathOptions := buildDecryptPathOptions(cfg)
+	pathOptions := buildDecryptPathOptions(cfg, logger)
 	if len(pathOptions) == 0 {
 		return nil, fmt.Errorf("no backup paths configured in backup.env")
 	}
@@ -199,7 +209,7 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 			logger.Debug("Backup source selected by user: label=%q path=%q isRclone=%v", option.Label, option.Path, option.IsRclone)
 		}
 
-		logger.Info("Scanning %s for backup bundles...", option.Path)
+			logger.Info("Scanning %s for backups...", option.Path)
 
 		// Handle rclone remotes differently from filesystem paths
 		if option.IsRclone {
@@ -232,7 +242,7 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 			}
 		}
 		if len(candidates) == 0 {
-			logger.Warning("No backup bundles found in %s – removing from source list", option.Path)
+				logger.Warning("No backups found in %s – removing from source list", option.Path)
 			if logger != nil {
 				logger.Debug("Removing backup source %q (%s) due to empty candidate list", option.Label, option.Path)
 			}
@@ -285,11 +295,11 @@ func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []de
 		fmt.Println("  [0] Exit")
 
 		fmt.Print("Choice: ")
-		input, err := readLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
 			return decryptPathOption{}, err
 		}
-		trimmed := strings.TrimSpace(input)
+		trimmed := strings.TrimSpace(choiceLine)
 		if trimmed == "0" {
 			return decryptPathOption{}, ErrDecryptAborted
 		}
@@ -345,6 +355,7 @@ func inspectBundleManifest(bundlePath string) (*backup.Manifest, error) {
 func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger *logging.Logger) (manifest *backup.Manifest, err error) {
 	done := logging.DebugStart(logger, "inspect rclone bundle manifest", "remote=%s", remotePath)
 	defer func() { done(err) }()
+	logging.DebugStep(logger, "inspect rclone bundle manifest", "executing: rclone cat %s", remotePath)
 	cmd := exec.CommandContext(ctx, "rclone", "cat", remotePath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -403,6 +414,78 @@ func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger 
 	return manifest, nil
 }
 
+// inspectRcloneMetadataManifest reads a sidecar metadata file from an rclone
+// remote by streaming it through "rclone cat" and parsing it as either the
+// JSON manifest format or the legacy KEY=VALUE format.
+func inspectRcloneMetadataManifest(ctx context.Context, remoteMetadataPath, remoteArchivePath string, logger *logging.Logger) (manifest *backup.Manifest, err error) {
+	done := logging.DebugStart(logger, "inspect rclone metadata manifest", "remote=%s", remoteMetadataPath)
+	defer func() { done(err) }()
+	logging.DebugStep(logger, "inspect rclone metadata manifest", "executing: rclone cat %s", remoteMetadataPath)
+
+	cmd := exec.CommandContext(ctx, "rclone", "cat", remoteMetadataPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("rclone cat %s failed: %w (output: %s)", remoteMetadataPath, err, strings.TrimSpace(string(output)))
+	}
+	data := bytes.TrimSpace(output)
+	if len(data) == 0 {
+		return nil, fmt.Errorf("metadata file is empty")
+	}
+
+	var parsed backup.Manifest
+	if err := json.Unmarshal(data, &parsed); err == nil {
+		manifest = &parsed
+		if strings.TrimSpace(manifest.ArchivePath) == "" {
+			manifest.ArchivePath = remoteArchivePath
+		}
+		return manifest, nil
+	}
+
+	// Legacy KEY=VALUE format (best-effort, without archive stat/checksum).
+	legacy := &backup.Manifest{
+		ArchivePath: remoteArchivePath,
+	}
+	for _, rawLine := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		switch key {
+		case "COMPRESSION_TYPE":
+			legacy.CompressionType = value
+		case "COMPRESSION_LEVEL":
+			if lvl, err := strconv.Atoi(value); err == nil {
+				legacy.CompressionLevel = lvl
+			}
+		case "PROXMOX_TYPE":
+			legacy.ProxmoxType = value
+		case "HOSTNAME":
+			legacy.Hostname = value
+		case "SCRIPT_VERSION":
+			legacy.ScriptVersion = value
+		case "ENCRYPTION_MODE":
+			legacy.EncryptionMode = value
+		}
+	}
+	if strings.TrimSpace(legacy.EncryptionMode) == "" {
+		if strings.HasSuffix(remoteArchivePath, ".age") {
+			legacy.EncryptionMode = "age"
+		} else {
+			legacy.EncryptionMode = "plain"
+		}
+	}
+	// Keep CreatedAt stable (zero) rather than guessing.
+	legacy.CreatedAt = time.Time{}
+	return legacy, nil
+}
+
 func promptCandidateSelection(ctx context.Context, reader *bufio.Reader, candidates []*decryptCandidate) (*decryptCandidate, error) {
 	for {
 		fmt.Println("\nAvailable backups:")
@@ -419,11 +502,11 @@ func promptCandidateSelection(ctx context.Context, reader *bufio.Reader, candida
 		fmt.Println("  [0] Exit")
 
 		fmt.Print("Choice: ")
-		input, err := readLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
 			return nil, err
 		}
-		trimmed := strings.TrimSpace(input)
+		trimmed := strings.TrimSpace(choiceLine)
 		if trimmed == "0" {
 			return nil, ErrDecryptAborted
 		}
@@ -447,11 +530,11 @@ func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config
 		}
 	}
 	fmt.Printf("\nEnter destination directory for decrypted bundle [press Enter to use %s]: ", defaultDir)
-	input, err := readLineWithContext(ctx, reader)
+	inputLine, err := input.ReadLineWithContext(ctx, reader)
 	if err != nil {
 		return "", err
 	}
-	trimmed := strings.TrimSpace(input)
+	trimmed := strings.TrimSpace(inputLine)
 	if trimmed == "" {
 		trimmed = defaultDir
 	}
@@ -540,10 +623,10 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 	switch cand.Source {
 	case sourceBundle:
 		logger.Info("Extracting bundle %s", filepath.Base(cand.BundlePath))
-		staged, err = extractBundleToWorkdir(cand.BundlePath, workDir)
+		staged, err = extractBundleToWorkdirWithLogger(cand.BundlePath, workDir, logger)
 	case sourceRaw:
 		logger.Info("Staging raw artifacts for %s", filepath.Base(cand.RawArchivePath))
-		staged, err = copyRawArtifactsToWorkdir(cand, workDir)
+		staged, err = copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger)
 	default:
 		err = fmt.Errorf("unsupported candidate source")
 	}
@@ -649,7 +732,11 @@ func sanitizeBundleEntryName(name string) (string, error) {
 }
 
 func extractBundleToWorkdir(bundlePath, workDir string) (staged stagedFiles, err error) {
-	done := logging.DebugStart(logging.GetDefaultLogger(), "extract bundle", "bundle=%s workdir=%s", bundlePath, workDir)
+	return extractBundleToWorkdirWithLogger(bundlePath, workDir, nil)
+}
+
+func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
+	done := logging.DebugStart(logger, "extract bundle", "bundle=%s workdir=%s", bundlePath, workDir)
 	defer func() { done(err) }()
 	file, err := restoreFS.Open(bundlePath)
 	if err != nil {
@@ -658,6 +745,7 @@ func extractBundleToWorkdir(bundlePath, workDir string) (staged stagedFiles, err
 	defer file.Close()
 
 	tr := tar.NewReader(file)
+	extracted := 0
 
 	for {
 		hdr, err := tr.Next()
@@ -693,38 +781,126 @@ func extractBundleToWorkdir(bundlePath, workDir string) (staged stagedFiles, err
 			return stagedFiles{}, fmt.Errorf("write %s: %w", hdr.Name, err)
 		}
 		out.Close()
+		extracted++
 
 		switch {
 		case strings.HasSuffix(target, ".metadata"):
 			staged.MetadataPath = target
+			logging.DebugStep(logger, "extract bundle", "found metadata=%s", filepath.Base(target))
 		case strings.HasSuffix(target, ".sha256"):
 			staged.ChecksumPath = target
+			logging.DebugStep(logger, "extract bundle", "found checksum=%s", filepath.Base(target))
 		default:
 			staged.ArchivePath = target
+			logging.DebugStep(logger, "extract bundle", "found archive=%s", filepath.Base(target))
 		}
 	}
 
 	if staged.ArchivePath == "" || staged.MetadataPath == "" || staged.ChecksumPath == "" {
 		return stagedFiles{}, fmt.Errorf("bundle missing required files")
 	}
+	logging.DebugStep(logger, "extract bundle", "entries_extracted=%d", extracted)
 	return staged, nil
 }
 
-func copyRawArtifactsToWorkdir(cand *decryptCandidate, workDir string) (staged stagedFiles, err error) {
-	done := logging.DebugStart(logging.GetDefaultLogger(), "stage raw artifacts", "archive=%s workdir=%s", cand.RawArchivePath, workDir)
+func copyRawArtifactsToWorkdir(ctx context.Context, cand *decryptCandidate, workDir string) (staged stagedFiles, err error) {
+	return copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, nil)
+}
+
+func baseNameFromRemoteRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	parts := strings.SplitN(ref, ":", 2)
+	if len(parts) != 2 {
+		return filepath.Base(ref)
+	}
+	rel := strings.Trim(parts[1], "/")
+	if rel == "" {
+		return ""
+	}
+	return path.Base(rel)
+}
+
+func rcloneCopyTo(ctx context.Context, remotePath, localPath string, showProgress bool) error {
+	args := []string{"copyto", remotePath, localPath}
+	if showProgress {
+		args = append(args, "--progress")
+	}
+	cmd := exec.CommandContext(ctx, "rclone", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *decryptCandidate, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
+	done := logging.DebugStart(logger, "stage raw artifacts", "archive=%s workdir=%s rclone=%v", cand.RawArchivePath, workDir, cand.IsRclone)
 	defer func() { done(err) }()
-	archiveDest := filepath.Join(workDir, filepath.Base(cand.RawArchivePath))
-	if err := copyFile(restoreFS, cand.RawArchivePath, archiveDest); err != nil {
-		return stagedFiles{}, fmt.Errorf("copy archive: %w", err)
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	metadataDest := filepath.Join(workDir, filepath.Base(cand.RawMetadataPath))
-	if err := copyFile(restoreFS, cand.RawMetadataPath, metadataDest); err != nil {
-		return stagedFiles{}, fmt.Errorf("copy metadata: %w", err)
+	if cand == nil {
+		return stagedFiles{}, fmt.Errorf("candidate is nil")
 	}
-	checksumDest := filepath.Join(workDir, filepath.Base(cand.RawChecksumPath))
-	if err := copyFile(restoreFS, cand.RawChecksumPath, checksumDest); err != nil {
-		return stagedFiles{}, fmt.Errorf("copy checksum: %w", err)
+
+	archiveBase := filepath.Base(cand.RawArchivePath)
+	metaBase := filepath.Base(cand.RawMetadataPath)
+	sumBase := ""
+	if cand.IsRclone {
+		archiveBase = baseNameFromRemoteRef(cand.RawArchivePath)
+		metaBase = baseNameFromRemoteRef(cand.RawMetadataPath)
+		if cand.RawChecksumPath != "" {
+			sumBase = baseNameFromRemoteRef(cand.RawChecksumPath)
+		}
+	} else if cand.RawChecksumPath != "" {
+		sumBase = filepath.Base(cand.RawChecksumPath)
 	}
+	if archiveBase == "" || metaBase == "" {
+		return stagedFiles{}, fmt.Errorf("invalid raw candidate paths")
+	}
+
+	archiveDest := filepath.Join(workDir, archiveBase)
+	metadataDest := filepath.Join(workDir, metaBase)
+	checksumDest := ""
+	if sumBase != "" {
+		checksumDest = filepath.Join(workDir, sumBase)
+	}
+
+	if cand.IsRclone {
+		logging.DebugStep(logger, "stage raw artifacts", "download archive to %s", archiveDest)
+		if err := rcloneCopyTo(ctx, cand.RawArchivePath, archiveDest, true); err != nil {
+			return stagedFiles{}, fmt.Errorf("rclone download archive: %w", err)
+		}
+		logging.DebugStep(logger, "stage raw artifacts", "download metadata to %s", metadataDest)
+		if err := rcloneCopyTo(ctx, cand.RawMetadataPath, metadataDest, false); err != nil {
+			return stagedFiles{}, fmt.Errorf("rclone download metadata: %w", err)
+		}
+		if cand.RawChecksumPath != "" && checksumDest != "" {
+			logging.DebugStep(logger, "stage raw artifacts", "download checksum to %s", checksumDest)
+			if err := rcloneCopyTo(ctx, cand.RawChecksumPath, checksumDest, false); err != nil {
+				logWarning(logger, "Failed to download checksum %s: %v", cand.RawChecksumPath, err)
+				checksumDest = ""
+			}
+		}
+	} else {
+		logging.DebugStep(logger, "stage raw artifacts", "copy archive to %s", archiveDest)
+		if err := copyFile(restoreFS, cand.RawArchivePath, archiveDest); err != nil {
+			return stagedFiles{}, fmt.Errorf("copy archive: %w", err)
+		}
+		logging.DebugStep(logger, "stage raw artifacts", "copy metadata to %s", metadataDest)
+		if err := copyFile(restoreFS, cand.RawMetadataPath, metadataDest); err != nil {
+			return stagedFiles{}, fmt.Errorf("copy metadata: %w", err)
+		}
+		if cand.RawChecksumPath != "" && checksumDest != "" {
+			logging.DebugStep(logger, "stage raw artifacts", "copy checksum to %s", checksumDest)
+			if err := copyFile(restoreFS, cand.RawChecksumPath, checksumDest); err != nil {
+				logWarning(logger, "Failed to copy checksum %s: %v", cand.RawChecksumPath, err)
+				checksumDest = ""
+			}
+		}
+	}
+
 	return stagedFiles{
 		ArchivePath:  archiveDest,
 		MetadataPath: metadataDest,
@@ -735,7 +911,7 @@ func copyRawArtifactsToWorkdir(cand *decryptCandidate, workDir string) (staged s
 func decryptArchiveWithPrompts(ctx context.Context, reader *bufio.Reader, encryptedPath, outputPath string, logger *logging.Logger) error {
 	for {
 		fmt.Print("Enter decryption key or passphrase (0 = exit): ")
-		inputBytes, err := readPasswordWithContext(ctx)
+		inputBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
 		fmt.Println()
 		if err != nil {
 			return err
@@ -870,27 +1046,27 @@ func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, descrip
 
 		fmt.Printf("%s %s already exists.\n", titleCaser.String(description), current)
 		fmt.Println("  [1] Overwrite")
-		fmt.Println("  [2] Enter a different path")
-		fmt.Println("  [0] Exit")
-		fmt.Print("Choice: ")
+			fmt.Println("  [2] Enter a different path")
+			fmt.Println("  [0] Exit")
+			fmt.Print("Choice: ")
 
-		input, err := readLineWithContext(ctx, reader)
-		if err != nil {
-			return "", err
-		}
-		switch strings.TrimSpace(input) {
-		case "1":
-			if err := restoreFS.Remove(current); err != nil {
-				fmt.Printf("Failed to remove existing file: %v\n", err)
-				continue
-			}
-			return current, nil
-		case "2":
-			fmt.Print("Enter new path: ")
-			newPath, err := readLineWithContext(ctx, reader)
+			inputLine, err := input.ReadLineWithContext(ctx, reader)
 			if err != nil {
 				return "", err
 			}
+			switch strings.TrimSpace(inputLine) {
+			case "1":
+				if err := restoreFS.Remove(current); err != nil {
+					fmt.Printf("Failed to remove existing file: %v\n", err)
+					continue
+				}
+				return current, nil
+			case "2":
+				fmt.Print("Enter new path: ")
+				newPath, err := input.ReadLineWithContext(ctx, reader)
+				if err != nil {
+					return "", err
+				}
 			trimmed := strings.TrimSpace(newPath)
 			if trimmed == "" {
 				continue
