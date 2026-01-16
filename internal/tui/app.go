@@ -8,6 +8,7 @@ import (
 // App wraps tview.Application with Proxmox-specific configuration
 type App struct {
 	*tview.Application
+	stopHook func()
 }
 
 // NewApp creates a new TUI application with Proxmox theme
@@ -34,6 +35,19 @@ func NewApp() *App {
 
 	bindAbortContext(app)
 	return app
+}
+
+func (a *App) Stop() {
+	if a == nil {
+		return
+	}
+	if a.stopHook != nil {
+		a.stopHook()
+		return
+	}
+	if a.Application != nil {
+		a.Application.Stop()
+	}
 }
 
 // SetRootWithTitle sets the root primitive with a styled title

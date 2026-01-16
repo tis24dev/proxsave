@@ -23,6 +23,10 @@ type Meta struct {
 	IssueID    string
 }
 
+var newEmailNotifier = func(config notify.EmailConfig, proxmoxType types.ProxmoxType, logger *logging.Logger) (notify.Notifier, error) {
+	return notify.NewEmailNotifier(config, proxmoxType, logger)
+}
+
 // RunIntro prompts for consent and GitHub metadata.
 // ok=false means the user declined or aborted; interrupted=true means context cancel / Ctrl+C.
 func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Meta, ok bool, interrupted bool) {
@@ -214,7 +218,7 @@ func SendEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, 
 		SubjectOverride:  subject,
 	}
 
-	emailNotifier, err := notify.NewEmailNotifier(emailConfig, proxmoxType, logger)
+	emailNotifier, err := newEmailNotifier(emailConfig, proxmoxType, logger)
 	if err != nil {
 		logging.Warning("Support mode: failed to initialize support email notifier: %v", err)
 		return

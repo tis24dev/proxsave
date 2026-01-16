@@ -47,6 +47,7 @@ var weakPassphraseList = []string{
 }
 
 var readPassword = term.ReadPassword
+var isTerminal = term.IsTerminal
 
 func (o *Orchestrator) EnsureAgeRecipientsReady(ctx context.Context) error {
 	if o == nil || o.cfg == nil || !o.cfg.EncryptArchive {
@@ -226,7 +227,7 @@ func (o *Orchestrator) defaultAgeRecipientFile() string {
 }
 
 func (o *Orchestrator) isInteractiveShell() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	return isTerminal(int(os.Stdin.Fd())) && isTerminal(int(os.Stdout.Fd()))
 }
 
 func promptOptionAge(ctx context.Context, reader *bufio.Reader, prompt string) (string, error) {
