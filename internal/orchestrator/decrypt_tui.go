@@ -148,7 +148,7 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, logger *
 		logging.DebugStep(logger, "decrypt selection wizard", "option label=%q path=%q rclone=%v", opt.Label, opt.Path, opt.IsRclone)
 	}
 
-	app := tui.NewApp()
+	app := newTUIApp()
 	pages := tview.NewPages()
 
 	selection = &decryptSelection{}
@@ -587,7 +587,7 @@ func ensureWritablePathTUI(path, description, configPath, buildSig string) (stri
 }
 
 func promptOverwriteAction(path, description, failureMessage, configPath, buildSig string) (string, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var choice string
 
 	message := fmt.Sprintf("The %s [yellow]%s[white] already exists.\nSelect how you want to proceed.", description, path)
@@ -626,7 +626,7 @@ func promptOverwriteAction(path, description, failureMessage, configPath, buildS
 }
 
 func promptNewPathInput(defaultPath, configPath, buildSig string) (string, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var newPath string
 	var cancelled bool
 
@@ -799,7 +799,7 @@ func decryptArchiveWithTUIPrompts(ctx context.Context, encryptedPath, outputPath
 }
 
 func promptDecryptIdentity(displayName, configPath, buildSig, errorMessage string) ([]age.Identity, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var (
 		chosenIdentity []age.Identity
 		cancelled      bool

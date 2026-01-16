@@ -386,7 +386,7 @@ func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, logger *
 		logging.DebugStep(logger, "restore selection wizard", "option label=%q path=%q rclone=%v", opt.Label, opt.Path, opt.IsRclone)
 	}
 
-	app := tui.NewApp()
+	app := newTUIApp()
 	pages := tview.NewPages()
 
 	selection := &restoreSelection{}
@@ -671,7 +671,7 @@ func showRestoreCandidatePage(app *tui.App, pages *tview.Pages, candidates []*de
 }
 
 func selectRestoreModeTUI(systemType SystemType, configPath, buildSig, backupSummary string) (RestoreMode, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var selected RestoreMode
 	var aborted bool
 
@@ -796,7 +796,7 @@ func selectCategoriesTUI(available []Category, systemType SystemType, configPath
 		return nil, fmt.Errorf("no categories available for this system type")
 	}
 
-	app := tui.NewApp()
+	app := newTUIApp()
 	form := components.NewForm(app)
 	var dropdownOpen bool
 
@@ -933,7 +933,7 @@ func promptContinueWithPBSServicesTUI(configPath, buildSig string) (bool, error)
 }
 
 func promptClusterRestoreModeTUI(configPath, buildSig string) (int, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var choice int
 	var aborted bool
 
@@ -1054,7 +1054,7 @@ func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig str
 		SetWrap(false).
 		SetTextColor(tcell.ColorWhite)
 
-	app := tui.NewApp()
+	app := newTUIApp()
 	form := components.NewForm(app)
 	var proceed bool
 	var aborted bool
@@ -1088,7 +1088,7 @@ func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig str
 }
 
 func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var confirmed bool
 	var aborted bool
 
@@ -1144,7 +1144,7 @@ func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepare
 		return fmt.Errorf("invalid restore candidate")
 	}
 
-	app := tui.NewApp()
+	app := newTUIApp()
 	manifest := candidate.Manifest
 
 	var b strings.Builder
@@ -1207,7 +1207,7 @@ func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepare
 }
 
 func promptYesNoTUI(title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
-	app := tui.NewApp()
+	app := newTUIApp()
 	var result bool
 	var cancelled bool
 

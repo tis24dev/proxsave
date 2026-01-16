@@ -34,6 +34,7 @@ var (
 	serviceRetryDelay         = 500 * time.Millisecond
 	restoreLogSequence        uint64
 	restoreGlob               = filepath.Glob
+	prepareDecryptedBackupFunc = prepareDecryptedBackup
 )
 
 func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) (err error) {
@@ -56,7 +57,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}()
 
 	reader := bufio.NewReader(os.Stdin)
-	candidate, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version, false)
+	candidate, prepared, err := prepareDecryptedBackupFunc(ctx, reader, cfg, logger, version, false)
 	if err != nil {
 		return err
 	}
