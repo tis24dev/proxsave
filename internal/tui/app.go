@@ -32,6 +32,7 @@ func NewApp() *App {
 	tview.Styles.InverseTextColor = tcell.ColorBlack
 	tview.Styles.ContrastSecondaryTextColor = tcell.ColorWhite
 
+	bindAbortContext(app)
 	return app
 }
 

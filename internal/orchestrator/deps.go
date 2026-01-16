@@ -34,9 +34,9 @@ type FS interface {
 
 // Prompter encapsulates interactive prompts.
 type Prompter interface {
-	SelectRestoreMode(logger *logging.Logger, systemType SystemType) (RestoreMode, error)
-	SelectCategories(logger *logging.Logger, available []Category, systemType SystemType) ([]Category, error)
-	ConfirmRestore(logger *logging.Logger) (bool, error)
+	SelectRestoreMode(ctx context.Context, logger *logging.Logger, systemType SystemType) (RestoreMode, error)
+	SelectCategories(ctx context.Context, logger *logging.Logger, available []Category, systemType SystemType) ([]Category, error)
+	ConfirmRestore(ctx context.Context, logger *logging.Logger) (bool, error)
 }
 
 // SystemDetector abstracts system-type detection.
@@ -93,16 +93,16 @@ func (osFS) Rename(oldpath, newpath string) error          { return os.Rename(ol
 
 type consolePrompter struct{}
 
-func (consolePrompter) SelectRestoreMode(logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
-	return ShowRestoreModeMenu(logger, systemType)
+func (consolePrompter) SelectRestoreMode(ctx context.Context, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
+	return ShowRestoreModeMenu(ctx, logger, systemType)
 }
 
-func (consolePrompter) SelectCategories(logger *logging.Logger, available []Category, systemType SystemType) ([]Category, error) {
-	return ShowCategorySelectionMenu(logger, available, systemType)
+func (consolePrompter) SelectCategories(ctx context.Context, logger *logging.Logger, available []Category, systemType SystemType) ([]Category, error) {
+	return ShowCategorySelectionMenu(ctx, logger, available, systemType)
 }
 
-func (consolePrompter) ConfirmRestore(logger *logging.Logger) (bool, error) {
-	return ConfirmRestoreOperation(logger)
+func (consolePrompter) ConfirmRestore(ctx context.Context, logger *logging.Logger) (bool, error) {
+	return ConfirmRestoreOperation(ctx, logger)
 }
 
 type realSystemDetector struct{}

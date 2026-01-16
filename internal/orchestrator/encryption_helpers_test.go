@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"github.com/tis24dev/proxsave/internal/input"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -287,31 +288,31 @@ func TestMapInputError(t *testing.T) {
 			name:     "EOF error",
 			input:    io.EOF,
 			wantNil:  false,
-			wantType: ErrAgeRecipientSetupAborted,
+			wantType: input.ErrInputAborted,
 		},
 		{
 			name:     "ErrClosed",
 			input:    os.ErrClosed,
 			wantNil:  false,
-			wantType: ErrAgeRecipientSetupAborted,
+			wantType: input.ErrInputAborted,
 		},
 		{
 			name:     "use of closed file",
 			input:    errors.New("use of closed file"),
 			wantNil:  false,
-			wantType: ErrAgeRecipientSetupAborted,
+			wantType: input.ErrInputAborted,
 		},
 		{
 			name:     "bad file descriptor",
 			input:    errors.New("bad file descriptor"),
 			wantNil:  false,
-			wantType: ErrAgeRecipientSetupAborted,
+			wantType: input.ErrInputAborted,
 		},
 		{
 			name:     "file already closed",
 			input:    errors.New("file already closed"),
 			wantNil:  false,
-			wantType: ErrAgeRecipientSetupAborted,
+			wantType: input.ErrInputAborted,
 		},
 		{
 			name:    "other error passed through",
@@ -322,22 +323,22 @@ func TestMapInputError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mapInputError(tt.input)
+			got := input.MapInputError(tt.input)
 
 			if tt.wantNil {
 				if got != nil {
-					t.Errorf("mapInputError(%v) = %v; want nil", tt.input, got)
+					t.Errorf("MapInputError(%v) = %v; want nil", tt.input, got)
 				}
 				return
 			}
 
 			if got == nil {
-				t.Errorf("mapInputError(%v) = nil; want non-nil", tt.input)
+				t.Errorf("MapInputError(%v) = nil; want non-nil", tt.input)
 				return
 			}
 
 			if tt.wantType != nil && !errors.Is(got, tt.wantType) {
-				t.Errorf("mapInputError(%v) = %v; want %v", tt.input, got, tt.wantType)
+				t.Errorf("MapInputError(%v) = %v; want %v", tt.input, got, tt.wantType)
 			}
 		})
 	}

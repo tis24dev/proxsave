@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/input"
 )
 
 // ============================================================
@@ -347,22 +348,22 @@ func TestAddPathExclusion_DuplicateAddsAgain(t *testing.T) {
 // prompts.go tests
 // ============================================================
 
-func TestMapPromptInputError(t *testing.T) {
+func TestInputMapInputError(t *testing.T) {
 	tests := []struct {
 		name     string
 		err      error
 		expected error
 	}{
 		{"nil error", nil, nil},
-		{"EOF", io.EOF, errPromptInputClosed},
-		{"closed file", errors.New("use of closed file"), errPromptInputClosed},
-		{"bad fd", errors.New("bad file descriptor"), errPromptInputClosed},
+		{"EOF", io.EOF, input.ErrInputAborted},
+		{"closed file", errors.New("use of closed file"), input.ErrInputAborted},
+		{"bad fd", errors.New("bad file descriptor"), input.ErrInputAborted},
 		{"other error", errors.New("something else"), errors.New("something else")},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := mapPromptInputError(tc.err)
+			result := input.MapInputError(tc.err)
 
 			if tc.expected == nil {
 				if result != nil {
@@ -371,9 +372,9 @@ func TestMapPromptInputError(t *testing.T) {
 				return
 			}
 
-			if errors.Is(tc.expected, errPromptInputClosed) {
-				if !errors.Is(result, errPromptInputClosed) {
-					t.Errorf("expected errPromptInputClosed, got %v", result)
+			if errors.Is(tc.expected, input.ErrInputAborted) {
+				if !errors.Is(result, input.ErrInputAborted) {
+					t.Errorf("expected ErrInputAborted, got %v", result)
 				}
 				return
 			}

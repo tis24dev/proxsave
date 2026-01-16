@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -136,7 +138,7 @@ func pathMatchesPattern(archivePath, pattern string) bool {
 }
 
 // ShowRestoreModeMenu displays the restore mode selection menu
-func ShowRestoreModeMenu(logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
+func ShowRestoreModeMenu(ctx context.Context, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println()
@@ -156,32 +158,35 @@ func ShowRestoreModeMenu(logger *logging.Logger, systemType SystemType) (Restore
 	fmt.Println("  [0] Cancel")
 	fmt.Print("Choice: ")
 
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
+	for {
+		line, err := input.ReadLineWithContext(ctx, reader)
+		if err != nil {
+			if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
+				return "", ErrRestoreAborted
+			}
+			return "", err
+		}
 
-	choice := strings.TrimSpace(input)
-
-	switch choice {
-	case "1":
-		return RestoreModeFull, nil
-	case "2":
-		return RestoreModeStorage, nil
-	case "3":
-		return RestoreModeBase, nil
-	case "4":
-		return RestoreModeCustom, nil
-	case "0":
-		return "", fmt.Errorf("user cancelled")
-	default:
-		fmt.Println("Invalid choice. Please try again.")
-		return ShowRestoreModeMenu(logger, systemType)
+		switch strings.TrimSpace(line) {
+		case "1":
+			return RestoreModeFull, nil
+		case "2":
+			return RestoreModeStorage, nil
+		case "3":
+			return RestoreModeBase, nil
+		case "4":
+			return RestoreModeCustom, nil
+		case "0":
+			return "", ErrRestoreAborted
+		default:
+			fmt.Println("Invalid choice. Please try again.")
+			fmt.Print("Choice: ")
+		}
 	}
 }
 
 // ShowCategorySelectionMenu displays an interactive category selection menu
-func ShowCategorySelectionMenu(logger *logging.Logger, availableCategories []Category, systemType SystemType) ([]Category, error) {
+func ShowCategorySelectionMenu(ctx context.Context, logger *logging.Logger, availableCategories []Category, systemType SystemType) ([]Category, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	// Filter categories by system type
@@ -237,12 +242,15 @@ func ShowCategorySelectionMenu(logger *logging.Logger, availableCategories []Cat
 		fmt.Println("  0      - Cancel")
 		fmt.Print("\nChoice: ")
 
-		input, err := reader.ReadString('\n')
+		inputLine, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
+			if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
+				return nil, ErrRestoreAborted
+			}
 			return nil, err
 		}
 
-		choice := strings.TrimSpace(strings.ToLower(input))
+		choice := strings.TrimSpace(strings.ToLower(inputLine))
 
 		switch choice {
 		case "a":
@@ -277,7 +285,7 @@ func ShowCategorySelectionMenu(logger *logging.Logger, availableCategories []Cat
 			return selectedCategories, nil
 
 		case "0":
-			return nil, fmt.Errorf("user cancelled")
+			return nil, ErrRestoreAborted
 
 		default:
 			// Try to parse as a number
@@ -405,18 +413,21 @@ func ShowRestorePlan(logger *logging.Logger, config *SelectiveRestoreConfig) {
 }
 
 // ConfirmRestoreOperation asks for user confirmation before proceeding
-func ConfirmRestoreOperation(logger *logging.Logger) (bool, error) {
+func ConfirmRestoreOperation(ctx context.Context, logger *logging.Logger) (bool, error) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Print("Type 'RESTORE' to proceed or 'cancel' to abort: ")
 
-		input, err := reader.ReadString('\n')
+		inputLine, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
+			if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
+				return false, ErrRestoreAborted
+			}
 			return false, err
 		}
 
-		response := strings.TrimSpace(input)
+		response := strings.TrimSpace(inputLine)
 
 		if response == "RESTORE" {
 			return true, nil

@@ -41,6 +41,17 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	}
 	done := logging.DebugStart(logger, "restore workflow (tui)", "version=%s", version)
 	defer func() { done(err) }()
+	defer func() {
+		if err == nil {
+			return
+		}
+		if errors.Is(err, ErrDecryptAborted) ||
+			errors.Is(err, ErrAgeRecipientSetupAborted) ||
+			errors.Is(err, context.Canceled) ||
+			(ctx != nil && ctx.Err() != nil) {
+			err = ErrRestoreAborted
+		}
+	}()
 	if strings.TrimSpace(buildSig) == "" {
 		buildSig = "n/a"
 	}

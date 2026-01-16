@@ -23,11 +23,13 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/security"
 	"github.com/tis24dev/proxsave/internal/storage"
+	"github.com/tis24dev/proxsave/internal/tui"
 	"github.com/tis24dev/proxsave/internal/types"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
@@ -87,6 +89,7 @@ func run() int {
 	// Setup signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	tui.SetAbortContext(ctx)
 
 	// Handle SIGINT (Ctrl+C) and SIGTERM
 	sigChan := make(chan os.Signal, 1)
@@ -94,7 +97,7 @@ func run() int {
 	go func() {
 		sig := <-sigChan
 		logging.DebugStepBootstrap(bootstrap, "signal", "received=%v", sig)
-		bootstrap.Warning("\nReceived signal %v, initiating graceful shutdown...", sig)
+		bootstrap.Info("\nReceived signal %v, initiating graceful shutdown...", sig)
 		cancel() // Cancel context to stop all operations
 		closeStdinOnce.Do(func() {
 			if file := os.Stdin; file != nil {
@@ -1473,9 +1476,9 @@ func runSupportIntro(ctx context.Context, bootstrap *logging.BootstrapLogger, ar
 	fmt.Println("\033[33mIf your log contains personal or sensitive information, it will be shared.\033[0m")
 	fmt.Println()
 
-	accepted, err := promptYesNoSupport(reader, "Do you accept and continue? [y/N]: ")
+	accepted, err := promptYesNoSupport(ctx, reader, "Do you accept and continue? [y/N]: ")
 	if err != nil {
-		if ctx.Err() == context.Canceled {
+		if errors.Is(err, errInteractiveAborted) || ctx.Err() == context.Canceled {
 			bootstrap.Warning("Support mode interrupted by signal")
 			return false, true
 		}
@@ -1492,9 +1495,9 @@ func runSupportIntro(ctx context.Context, bootstrap *logging.BootstrapLogger, ar
 	fmt.Println("Emails without a corresponding GitHub issue will not be analyzed.")
 	fmt.Println()
 
-	hasIssue, err := promptYesNoSupport(reader, "Do you confirm that you have already opened a GitHub issue? [y/N]: ")
+	hasIssue, err := promptYesNoSupport(ctx, reader, "Do you confirm that you have already opened a GitHub issue? [y/N]: ")
 	if err != nil {
-		if ctx.Err() == context.Canceled {
+		if errors.Is(err, errInteractiveAborted) || ctx.Err() == context.Canceled {
 			bootstrap.Warning("Support mode interrupted by signal")
 			return false, true
 		}
@@ -1509,9 +1512,9 @@ func runSupportIntro(ctx context.Context, bootstrap *logging.BootstrapLogger, ar
 	// GitHub nickname
 	for {
 		fmt.Print("Enter your GitHub nickname: ")
-		line, err := reader.ReadString('\n')
+		line, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
-			if ctx.Err() == context.Canceled {
+			if errors.Is(err, errInteractiveAborted) || ctx.Err() == context.Canceled {
 				bootstrap.Warning("Support mode interrupted by signal")
 				return false, true
 			}
@@ -1530,9 +1533,9 @@ func runSupportIntro(ctx context.Context, bootstrap *logging.BootstrapLogger, ar
 	// GitHub issue number
 	for {
 		fmt.Print("Enter the GitHub issue number in the format #1234: ")
-		line, err := reader.ReadString('\n')
+		line, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
-			if ctx.Err() == context.Canceled {
+			if errors.Is(err, errInteractiveAborted) || ctx.Err() == context.Canceled {
 				bootstrap.Warning("Support mode interrupted by signal")
 				return false, true
 			}
@@ -1564,10 +1567,10 @@ func runSupportIntro(ctx context.Context, bootstrap *logging.BootstrapLogger, ar
 	return true, false
 }
 
-func promptYesNoSupport(reader *bufio.Reader, prompt string) (bool, error) {
+func promptYesNoSupport(ctx context.Context, reader *bufio.Reader, prompt string) (bool, error) {
 	for {
 		fmt.Print(prompt)
-		line, err := reader.ReadString('\n')
+		line, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
 			return false, err
 		}

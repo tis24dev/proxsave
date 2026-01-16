@@ -19,6 +19,7 @@ import (
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -77,6 +78,14 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	}
 	done := logging.DebugStart(logger, "decrypt workflow", "version=%s", version)
 	defer func() { done(err) }()
+	defer func() {
+		if err == nil {
+			return
+		}
+		if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
+			err = ErrDecryptAborted
+		}
+	}()
 
 	reader := bufio.NewReader(os.Stdin)
 	_, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version, true)
@@ -285,11 +294,11 @@ func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []de
 		fmt.Println("  [0] Exit")
 
 		fmt.Print("Choice: ")
-		input, err := readLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
 			return decryptPathOption{}, err
 		}
-		trimmed := strings.TrimSpace(input)
+		trimmed := strings.TrimSpace(choiceLine)
 		if trimmed == "0" {
 			return decryptPathOption{}, ErrDecryptAborted
 		}
@@ -420,11 +429,11 @@ func promptCandidateSelection(ctx context.Context, reader *bufio.Reader, candida
 		fmt.Println("  [0] Exit")
 
 		fmt.Print("Choice: ")
-		input, err := readLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithContext(ctx, reader)
 		if err != nil {
 			return nil, err
 		}
-		trimmed := strings.TrimSpace(input)
+		trimmed := strings.TrimSpace(choiceLine)
 		if trimmed == "0" {
 			return nil, ErrDecryptAborted
 		}
@@ -448,11 +457,11 @@ func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config
 		}
 	}
 	fmt.Printf("\nEnter destination directory for decrypted bundle [press Enter to use %s]: ", defaultDir)
-	input, err := readLineWithContext(ctx, reader)
+	inputLine, err := input.ReadLineWithContext(ctx, reader)
 	if err != nil {
 		return "", err
 	}
-	trimmed := strings.TrimSpace(input)
+	trimmed := strings.TrimSpace(inputLine)
 	if trimmed == "" {
 		trimmed = defaultDir
 	}
@@ -753,7 +762,7 @@ func copyRawArtifactsToWorkdirWithLogger(cand *decryptCandidate, workDir string,
 func decryptArchiveWithPrompts(ctx context.Context, reader *bufio.Reader, encryptedPath, outputPath string, logger *logging.Logger) error {
 	for {
 		fmt.Print("Enter decryption key or passphrase (0 = exit): ")
-		inputBytes, err := readPasswordWithContext(ctx)
+		inputBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
 		fmt.Println()
 		if err != nil {
 			return err
@@ -888,27 +897,27 @@ func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, descrip
 
 		fmt.Printf("%s %s already exists.\n", titleCaser.String(description), current)
 		fmt.Println("  [1] Overwrite")
-		fmt.Println("  [2] Enter a different path")
-		fmt.Println("  [0] Exit")
-		fmt.Print("Choice: ")
+			fmt.Println("  [2] Enter a different path")
+			fmt.Println("  [0] Exit")
+			fmt.Print("Choice: ")
 
-		input, err := readLineWithContext(ctx, reader)
-		if err != nil {
-			return "", err
-		}
-		switch strings.TrimSpace(input) {
-		case "1":
-			if err := restoreFS.Remove(current); err != nil {
-				fmt.Printf("Failed to remove existing file: %v\n", err)
-				continue
-			}
-			return current, nil
-		case "2":
-			fmt.Print("Enter new path: ")
-			newPath, err := readLineWithContext(ctx, reader)
+			inputLine, err := input.ReadLineWithContext(ctx, reader)
 			if err != nil {
 				return "", err
 			}
+			switch strings.TrimSpace(inputLine) {
+			case "1":
+				if err := restoreFS.Remove(current); err != nil {
+					fmt.Printf("Failed to remove existing file: %v\n", err)
+					continue
+				}
+				return current, nil
+			case "2":
+				fmt.Print("Enter new path: ")
+				newPath, err := input.ReadLineWithContext(ctx, reader)
+				if err != nil {
+					return "", err
+				}
 			trimmed := strings.TrimSpace(newPath)
 			if trimmed == "" {
 				continue

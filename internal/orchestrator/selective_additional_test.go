@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"os"
 	"testing"
 
@@ -85,7 +86,7 @@ func TestConfirmRestoreOperation(t *testing.T) {
 			os.Stdin = r
 			defer r.Close()
 
-			got, err := ConfirmRestoreOperation(logger)
+			got, err := ConfirmRestoreOperation(context.Background(), logger)
 			if err != nil {
 				t.Fatalf("ConfirmRestoreOperation returned error: %v", err)
 			}

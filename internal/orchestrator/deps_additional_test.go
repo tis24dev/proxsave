@@ -118,7 +118,7 @@ func TestConsolePrompterWrappers(t *testing.T) {
 		os.Stdin = r
 		defer r.Close()
 
-		mode, err := (consolePrompter{}).SelectRestoreMode(logger, SystemTypePVE)
+		mode, err := (consolePrompter{}).SelectRestoreMode(context.Background(), logger, SystemTypePVE)
 		if err != nil {
 			t.Fatalf("SelectRestoreMode error: %v", err)
 		}
@@ -143,7 +143,7 @@ func TestConsolePrompterWrappers(t *testing.T) {
 		os.Stdin = r
 		defer r.Close()
 
-		cats, err := (consolePrompter{}).SelectCategories(logger, available, SystemTypePVE)
+		cats, err := (consolePrompter{}).SelectCategories(context.Background(), logger, available, SystemTypePVE)
 		if err != nil {
 			t.Fatalf("SelectCategories error: %v", err)
 		}
@@ -162,7 +162,7 @@ func TestConsolePrompterWrappers(t *testing.T) {
 		os.Stdin = r
 		defer r.Close()
 
-		ok, err := (consolePrompter{}).ConfirmRestore(logger)
+		ok, err := (consolePrompter{}).ConfirmRestore(context.Background(), logger)
 		if err != nil {
 			t.Fatalf("ConfirmRestore error: %v", err)
 		}
