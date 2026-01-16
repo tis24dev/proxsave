@@ -26,14 +26,14 @@ import (
 var ErrRestoreAborted = errors.New("restore workflow aborted by user")
 
 var (
-	serviceStopTimeout        = 45 * time.Second
-	serviceStartTimeout       = 30 * time.Second
-	serviceVerifyTimeout      = 30 * time.Second
-	serviceStatusCheckTimeout = 5 * time.Second
-	servicePollInterval       = 500 * time.Millisecond
-	serviceRetryDelay         = 500 * time.Millisecond
-	restoreLogSequence        uint64
-	restoreGlob               = filepath.Glob
+	serviceStopTimeout         = 45 * time.Second
+	serviceStartTimeout        = 30 * time.Second
+	serviceVerifyTimeout       = 30 * time.Second
+	serviceStatusCheckTimeout  = 5 * time.Second
+	servicePollInterval        = 500 * time.Millisecond
+	serviceRetryDelay          = 500 * time.Millisecond
+	restoreLogSequence         uint64
+	restoreGlob                = filepath.Glob
 	prepareDecryptedBackupFunc = prepareDecryptedBackup
 )
 
@@ -889,7 +889,8 @@ func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logg
 		return fmt.Errorf("create destination directory: %w", err)
 	}
 
-	if destRoot == "/" && os.Geteuid() != 0 {
+	// Only enforce root privileges when writing to the real system root.
+	if destRoot == "/" && isRealRestoreFS(restoreFS) && os.Geteuid() != 0 {
 		return fmt.Errorf("restore to %s requires root privileges", destRoot)
 	}
 
@@ -1238,7 +1239,8 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 		return "", fmt.Errorf("create destination directory: %w", err)
 	}
 
-	if destRoot == "/" && os.Geteuid() != 0 {
+	// Only enforce root privileges when writing to the real system root.
+	if destRoot == "/" && isRealRestoreFS(restoreFS) && os.Geteuid() != 0 {
 		return "", fmt.Errorf("restore to %s requires root privileges", destRoot)
 	}
 
@@ -1436,6 +1438,15 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 	}
 
 	return nil
+}
+
+func isRealRestoreFS(fs FS) bool {
+	switch fs.(type) {
+	case osFS, *osFS:
+		return true
+	default:
+		return false
+	}
 }
 
 // createDecompressionReader creates appropriate decompression reader based on file extension
