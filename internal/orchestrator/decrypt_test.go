@@ -163,7 +163,7 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := buildDecryptPathOptions(tt.cfg)
+			options := buildDecryptPathOptions(tt.cfg, nil)
 
 			if len(options) != tt.wantCount {
 				t.Errorf("buildDecryptPathOptions() returned %d options; want %d",

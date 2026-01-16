@@ -25,55 +25,90 @@ type decryptPathOption struct {
 
 // buildDecryptPathOptions builds the list of available backup sources
 // (primary, secondary, cloud) from the loaded configuration.
-func buildDecryptPathOptions(cfg *config.Config) []decryptPathOption {
-	options := make([]decryptPathOption, 0, 3)
+func buildDecryptPathOptions(cfg *config.Config, logger *logging.Logger) (options []decryptPathOption) {
+	if cfg == nil {
+		logging.DebugStep(logger, "build backup source options", "skip (cfg=nil)")
+		return nil
+	}
+	done := logging.DebugStart(logger, "build backup source options", "secondary=%v cloud=%v", cfg.SecondaryEnabled, cfg.CloudEnabled)
+	defer func() { done(nil) }()
+	options = make([]decryptPathOption, 0, 3)
 
 	if clean := strings.TrimSpace(cfg.BackupPath); clean != "" {
+		logging.DebugStep(logger, "build backup source options", "add local path=%q", clean)
 		options = append(options, decryptPathOption{
 			Label: "Local backups",
 			Path:  clean,
 		})
+	} else {
+		logging.DebugStep(logger, "build backup source options", "skip local (empty)")
 	}
 
 	if cfg.SecondaryEnabled {
 		if clean := strings.TrimSpace(cfg.SecondaryPath); clean != "" {
+			logging.DebugStep(logger, "build backup source options", "add secondary path=%q", clean)
 			options = append(options, decryptPathOption{
 				Label: "Secondary backups",
 				Path:  clean,
 			})
+		} else {
+			logging.DebugStep(logger, "build backup source options", "skip secondary (enabled but path empty)")
 		}
+	} else {
+		logging.DebugStep(logger, "build backup source options", "skip secondary (disabled)")
 	}
 
 	if cfg.CloudEnabled {
 		cloudRoot := buildCloudRemotePath(cfg.CloudRemote, cfg.CloudRemotePath)
+		logging.DebugStep(logger, "build backup source options", "cloud root=%q", cloudRoot)
 		if isRcloneRemote(cloudRoot) {
 			// rclone remote (remote:path[/prefix])
 			// Pre-scan: verify backups exist before adding option
-			scanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			timeout := 10 * time.Second
+			scanCtx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 
-			candidates, err := discoverRcloneBackups(scanCtx, cloudRoot, nil)
+			prescanDone := logging.DebugStart(logger, "cloud prescan", "mode=rclone root=%s timeout=%s", cloudRoot, timeout)
+			candidates, err := discoverRcloneBackups(scanCtx, cloudRoot, logger)
+			prescanDone(err)
 			if err == nil && len(candidates) > 0 {
+				logging.DebugStep(logger, "build backup source options", "add cloud rclone (candidates=%d)", len(candidates))
 				options = append(options, decryptPathOption{
 					Label:    "Cloud backups (rclone)",
 					Path:     cloudRoot,
 					IsRclone: true,
 				})
+			} else if err != nil {
+				logging.DebugStep(logger, "build backup source options", "skip cloud rclone (scan error=%v)", err)
+			} else {
+				logging.DebugStep(logger, "build backup source options", "skip cloud rclone (no candidates)")
 			}
 		} else if isLocalFilesystemPath(cloudRoot) {
 			// Local filesystem mount
 			// Pre-scan: verify backups exist before adding option
-			candidates, err := discoverBackupCandidates(nil, cloudRoot)
+			prescanDone := logging.DebugStart(logger, "cloud prescan", "mode=filesystem root=%s", cloudRoot)
+			candidates, err := discoverBackupCandidates(logger, cloudRoot)
+			prescanDone(err)
 			if err == nil && len(candidates) > 0 {
+				logging.DebugStep(logger, "build backup source options", "add cloud filesystem (candidates=%d)", len(candidates))
 				options = append(options, decryptPathOption{
 					Label:    "Cloud backups",
 					Path:     cloudRoot,
 					IsRclone: false,
 				})
+			} else if err != nil {
+				logging.DebugStep(logger, "build backup source options", "skip cloud filesystem (scan error=%v)", err)
+			} else {
+				logging.DebugStep(logger, "build backup source options", "skip cloud filesystem (no candidates)")
 			}
+		} else {
+			logging.DebugStep(logger, "build backup source options", "skip cloud (unrecognized root)")
 		}
+	} else {
+		logging.DebugStep(logger, "build backup source options", "skip cloud (disabled)")
 	}
 
+	logging.DebugStep(logger, "build backup source options", "final options=%d", len(options))
 	return options
 }
 
@@ -89,6 +124,7 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 	}
 
 	logging.DebugStep(logger, "discover rclone backups", "listing remote: %s", fullPath)
+	logging.DebugStep(logger, "discover rclone backups", "filters=bundle.tar + backup indicator (-backup- or proxmox-backup-)")
 	logDebug(logger, "Cloud (rclone): listing backups under %s", fullPath)
 	logDebug(logger, "Cloud (rclone): executing: rclone lsf %s", fullPath)
 
@@ -98,15 +134,22 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 	if err != nil {
 		return nil, fmt.Errorf("failed to list rclone remote %s: %w (output: %s)", fullPath, err, string(output))
 	}
+	logging.DebugStep(logger, "discover rclone backups", "rclone lsf output bytes=%d", len(output))
 
 	candidates = make([]*decryptCandidate, 0)
 	lines := strings.Split(string(output), "\n")
 
-	logDebug(logger, "Cloud (rclone): scanned %d entries from rclone lsf output", len(lines))
+	totalEntries := len(lines)
+	emptyEntries := 0
+	nonBundleEntries := 0
+	nonBackupEntries := 0
+	manifestErrors := 0
+	logDebug(logger, "Cloud (rclone): scanned %d entries from rclone lsf output", totalEntries)
 
 	for _, line := range lines {
 		filename := strings.TrimSpace(line)
 		if filename == "" {
+			emptyEntries++
 			continue
 		}
 
@@ -115,12 +158,14 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 		//   - *.tar.{gz|xz|zst}.bundle.tar       (plain bundle)
 		//   - *.tar.{gz|xz|zst}.age.bundle.tar   (age-encrypted bundle)
 		if !strings.Contains(filename, ".bundle.tar") {
+			nonBundleEntries++
 			continue
 		}
 
 		// Must contain backup indicator in filename
 		isBackup := strings.Contains(filename, "-backup-") || strings.HasPrefix(filename, "proxmox-backup-")
 		if !isBackup {
+			nonBackupEntries++
 			logDebug(logger, "Skipping non-backup bundle: %s", filename)
 			continue
 		}
@@ -134,6 +179,7 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 
 		manifest, err := inspectRcloneBundleManifest(ctx, remoteFile, logger)
 		if err != nil {
+			manifestErrors++
 			logWarning(logger, "Skipping rclone bundle %s: %v", filename, err)
 			continue
 		}
@@ -148,6 +194,17 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 		logDebug(logger, "Cloud (rclone): accepted backup bundle: %s", filename)
 	}
 
+	logging.DebugStep(
+		logger,
+		"discover rclone backups",
+		"summary entries=%d empty=%d non_bundle=%d non_backup=%d manifest_errors=%d accepted=%d",
+		totalEntries,
+		emptyEntries,
+		nonBundleEntries,
+		nonBackupEntries,
+		manifestErrors,
+		len(candidates),
+	)
 	logDebug(logger, "Cloud (rclone): scanned %d files, found %d valid backup bundles", len(lines), len(candidates))
 	logDebug(logger, "Cloud (rclone): discovered %d bundle candidate(s) in %s", len(candidates), fullPath)
 
@@ -167,21 +224,36 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 
 	candidates = make([]*decryptCandidate, 0)
 	rawBases := make(map[string]struct{})
+	filesSeen := 0
+	dirsSkipped := 0
+	bundleSeen := 0
+	bundleManifestErrors := 0
+	metadataSeen := 0
+	metadataDuplicate := 0
+	metadataMissingArchive := 0
+	metadataManifestErrors := 0
+	checksumMissing := 0
 
 	for _, entry := range entries {
 		if entry.IsDir() {
+			dirsSkipped++
 			continue
 		}
+		filesSeen++
 		name := entry.Name()
 		fullPath := filepath.Join(root, name)
 
 		switch {
 		case strings.HasSuffix(name, ".bundle.tar"):
+			bundleSeen++
+			logging.DebugStep(logger, "discover backup candidates", "inspect bundle manifest: %s", name)
 			manifest, err := inspectBundleManifest(fullPath)
 			if err != nil {
+				bundleManifestErrors++
 				logWarning(logger, "Skipping bundle %s: %v", name, err)
 				continue
 			}
+			logging.DebugStep(logger, "discover backup candidates", "bundle accepted: %s created_at=%s", name, manifest.CreatedAt.Format(time.RFC3339))
 			candidates = append(candidates, &decryptCandidate{
 				Manifest:    manifest,
 				Source:      sourceBundle,
@@ -189,27 +261,35 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 				DisplayBase: filepath.Base(manifest.ArchivePath),
 			})
 		case strings.HasSuffix(name, ".metadata"):
+			metadataSeen++
 			baseName := strings.TrimSuffix(name, ".metadata")
 			if _, ok := rawBases[baseName]; ok {
+				metadataDuplicate++
 				continue
 			}
 			archivePath := filepath.Join(root, baseName)
 			if _, err := restoreFS.Stat(archivePath); err != nil {
+				metadataMissingArchive++
+				logging.DebugStep(logger, "discover backup candidates", "skip metadata %s (missing archive %s)", name, baseName)
 				continue
 			}
 			checksumPath := archivePath + ".sha256"
 			hasChecksum := true
 			if _, err := restoreFS.Stat(checksumPath); err != nil {
 				// Checksum missing - allow but warn
+				checksumMissing++
 				logWarning(logger, "Backup %s is missing .sha256 checksum file", baseName)
 				checksumPath = ""
 				hasChecksum = false
 			}
+			logging.DebugStep(logger, "discover backup candidates", "load manifest: %s", name)
 			manifest, err := backup.LoadManifest(fullPath)
 			if err != nil {
+				metadataManifestErrors++
 				logWarning(logger, "Skipping metadata %s: %v", name, err)
 				continue
 			}
+			logging.DebugStep(logger, "discover backup candidates", "raw candidate accepted: %s created_at=%s", name, manifest.CreatedAt.Format(time.RFC3339))
 
 			// If checksum is missing from both file and manifest, warn user
 			if !hasChecksum && manifest.SHA256 == "" {
@@ -232,6 +312,22 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 		return candidates[i].Manifest.CreatedAt.After(candidates[j].Manifest.CreatedAt)
 	})
 
+	logging.DebugStep(
+		logger,
+		"discover backup candidates",
+		"summary entries=%d files=%d dirs=%d bundles=%d bundle_manifest_errors=%d metadata=%d metadata_duplicate=%d metadata_missing_archive=%d metadata_manifest_errors=%d checksum_missing=%d candidates=%d",
+		len(entries),
+		filesSeen,
+		dirsSkipped,
+		bundleSeen,
+		bundleManifestErrors,
+		metadataSeen,
+		metadataDuplicate,
+		metadataMissingArchive,
+		metadataManifestErrors,
+		checksumMissing,
+		len(candidates),
+	)
 	return candidates, nil
 }
 

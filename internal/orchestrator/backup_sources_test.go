@@ -122,7 +122,7 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemote = "gdrive"
 		cfg.CloudRemotePath = "pbs-backups/server1"
 
-		opts := buildDecryptPathOptions(cfg)
+		opts := buildDecryptPathOptions(cfg, nil)
 		// With pre-scan enabled, cloud option is only shown if backups exist
 		// Since no actual backups exist in test environment, expect only local + secondary
 		if len(opts) != 2 {
@@ -143,7 +143,7 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemote = "gdrive:pbs-backups"
 		cfg.CloudRemotePath = "server1"
 
-		opts := buildDecryptPathOptions(cfg)
+		opts := buildDecryptPathOptions(cfg, nil)
 		// With pre-scan enabled, cloud option is only shown if backups exist
 		// Since no actual backups exist in test environment, expect only local + secondary
 		if len(opts) != 2 {
@@ -157,7 +157,7 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudRemote = "/mnt/cloud/backups"
 		cfg.CloudRemotePath = "server1"
 
-		opts := buildDecryptPathOptions(cfg)
+		opts := buildDecryptPathOptions(cfg, nil)
 		// With pre-scan enabled, cloud option is only shown if backups exist
 		// Since no actual backups exist in test environment, expect only local + secondary
 		if len(opts) != 2 {
@@ -170,7 +170,7 @@ func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {
 		cfg.CloudEnabled = false
 		cfg.CloudRemote = "gdrive:pbs-backups"
 
-		opts := buildDecryptPathOptions(cfg)
+		opts := buildDecryptPathOptions(cfg, nil)
 		if len(opts) != 2 {
 			t.Fatalf("len(options) = %d; want 2 (local + secondary)", len(opts))
 		}
@@ -187,7 +187,7 @@ func TestBuildDecryptPathOptions_FullConfigOrder(t *testing.T) {
 		CloudRemotePath:  "pbs-backups/server1",
 	}
 
-	opts := buildDecryptPathOptions(cfg)
+	opts := buildDecryptPathOptions(cfg, nil)
 	// With pre-scan enabled, cloud option is only shown if backups exist
 	// Since no actual backups exist in test environment, expect only local + secondary
 	if len(opts) != 2 {

@@ -347,7 +347,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 }
 
 func prepareDecryptedBackupTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) (*decryptCandidate, *preparedBundle, error) {
-	candidate, err := runRestoreSelectionWizard(ctx, cfg, configPath, buildSig)
+	candidate, err := runRestoreSelectionWizard(ctx, cfg, logger, configPath, buildSig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -360,13 +360,19 @@ func prepareDecryptedBackupTUI(ctx context.Context, cfg *config.Config, logger *
 	return candidate, prepared, nil
 }
 
-func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, configPath, buildSig string) (*decryptCandidate, error) {
+func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, logger *logging.Logger, configPath, buildSig string) (candidate *decryptCandidate, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	options := buildDecryptPathOptions(cfg)
+	done := logging.DebugStart(logger, "restore selection wizard", "tui=true")
+	defer func() { done(err) }()
+	options := buildDecryptPathOptions(cfg, logger)
 	if len(options) == 0 {
-		return nil, fmt.Errorf("no backup paths configured in backup.env")
+		err = fmt.Errorf("no backup paths configured in backup.env")
+		return nil, err
+	}
+	for _, opt := range options {
+		logging.DebugStep(logger, "restore selection wizard", "option label=%q path=%q rclone=%v", opt.Label, opt.Path, opt.IsRclone)
 	}
 
 	app := tui.NewApp()
@@ -392,25 +398,30 @@ func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 			return
 		}
 		selectedOption := options[index]
+		logging.DebugStep(logger, "restore selection wizard", "selected source label=%q path=%q rclone=%v", selectedOption.Label, selectedOption.Path, selectedOption.IsRclone)
 		pages.SwitchToPage("paths-loading")
 		go func() {
 			scanCtx, finish := scan.Start(ctx)
 			defer finish()
 
 			var candidates []*decryptCandidate
-			var err error
+			var scanErr error
+			scanDone := logging.DebugStart(logger, "scan backup source", "path=%s rclone=%v", selectedOption.Path, selectedOption.IsRclone)
+			defer func() { scanDone(scanErr) }()
 
 			if selectedOption.IsRclone {
-				candidates, err = discoverRcloneBackups(scanCtx, selectedOption.Path, logging.GetDefaultLogger())
+				candidates, scanErr = discoverRcloneBackups(scanCtx, selectedOption.Path, logger)
 			} else {
-				candidates, err = discoverBackupCandidates(logging.GetDefaultLogger(), selectedOption.Path)
+				candidates, scanErr = discoverBackupCandidates(logger, selectedOption.Path)
 			}
+			logging.DebugStep(logger, "scan backup source", "candidates=%d", len(candidates))
 			if scanCtx.Err() != nil {
+				scanErr = scanCtx.Err()
 				return
 			}
 			app.QueueUpdateDraw(func() {
-				if err != nil {
-					message := fmt.Sprintf("Failed to inspect %s: %v", selectedOption.Path, err)
+				if scanErr != nil {
+					message := fmt.Sprintf("Failed to inspect %s: %v", selectedOption.Path, scanErr)
 					showRestoreErrorModal(app, pages, configPath, buildSig, message, func() {
 						pages.SwitchToPage("paths")
 					})
@@ -435,6 +446,7 @@ func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 		}()
 	})
 	pathList.SetDoneFunc(func() {
+		logging.DebugStep(logger, "restore selection wizard", "cancel requested (done func)")
 		scan.Cancel()
 		selectionErr = ErrRestoreAborted
 		app.Stop()
@@ -455,6 +467,7 @@ func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 	form.Form.SetFocus(0)
 
 	form.SetOnCancel(func() {
+		logging.DebugStep(logger, "restore selection wizard", "cancel requested (form)")
 		scan.Cancel()
 		selectionErr = ErrRestoreAborted
 	})
@@ -470,6 +483,7 @@ func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 
 	loadingForm := components.NewForm(app)
 	loadingForm.SetOnCancel(func() {
+		logging.DebugStep(logger, "restore selection wizard", "cancel requested (loading form)")
 		scan.Cancel()
 		selectionErr = ErrRestoreAborted
 	})
@@ -482,16 +496,20 @@ func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, configPa
 	pages.AddPage("paths-loading", loadingPage, true, false)
 
 	app.SetRoot(pages, true).SetFocus(form.Form)
-	if err := app.Run(); err != nil {
+	if runErr := app.Run(); runErr != nil {
+		err = runErr
 		return nil, err
 	}
 	if selectionErr != nil {
-		return nil, selectionErr
+		err = selectionErr
+		return nil, err
 	}
 	if selection.Candidate == nil {
-		return nil, ErrRestoreAborted
+		err = ErrRestoreAborted
+		return nil, err
 	}
-	return selection.Candidate, nil
+	candidate = selection.Candidate
+	return candidate, nil
 }
 
 func showRestoreErrorModal(app *tui.App, pages *tview.Pages, configPath, buildSig, message string, onDismiss func()) {

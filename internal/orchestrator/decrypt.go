@@ -175,7 +175,7 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *decryptCandidate, err error) {
 	done := logging.DebugStart(logger, "select backup candidate", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
-	pathOptions := buildDecryptPathOptions(cfg)
+	pathOptions := buildDecryptPathOptions(cfg, logger)
 	if len(pathOptions) == 0 {
 		return nil, fmt.Errorf("no backup paths configured in backup.env")
 	}
@@ -345,6 +345,7 @@ func inspectBundleManifest(bundlePath string) (*backup.Manifest, error) {
 func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger *logging.Logger) (manifest *backup.Manifest, err error) {
 	done := logging.DebugStart(logger, "inspect rclone bundle manifest", "remote=%s", remotePath)
 	defer func() { done(err) }()
+	logging.DebugStep(logger, "inspect rclone bundle manifest", "executing: rclone cat %s", remotePath)
 	cmd := exec.CommandContext(ctx, "rclone", "cat", remotePath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -540,10 +541,10 @@ func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decrypt
 	switch cand.Source {
 	case sourceBundle:
 		logger.Info("Extracting bundle %s", filepath.Base(cand.BundlePath))
-		staged, err = extractBundleToWorkdir(cand.BundlePath, workDir)
+		staged, err = extractBundleToWorkdirWithLogger(cand.BundlePath, workDir, logger)
 	case sourceRaw:
 		logger.Info("Staging raw artifacts for %s", filepath.Base(cand.RawArchivePath))
-		staged, err = copyRawArtifactsToWorkdir(cand, workDir)
+		staged, err = copyRawArtifactsToWorkdirWithLogger(cand, workDir, logger)
 	default:
 		err = fmt.Errorf("unsupported candidate source")
 	}
@@ -649,7 +650,11 @@ func sanitizeBundleEntryName(name string) (string, error) {
 }
 
 func extractBundleToWorkdir(bundlePath, workDir string) (staged stagedFiles, err error) {
-	done := logging.DebugStart(logging.GetDefaultLogger(), "extract bundle", "bundle=%s workdir=%s", bundlePath, workDir)
+	return extractBundleToWorkdirWithLogger(bundlePath, workDir, nil)
+}
+
+func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
+	done := logging.DebugStart(logger, "extract bundle", "bundle=%s workdir=%s", bundlePath, workDir)
 	defer func() { done(err) }()
 	file, err := restoreFS.Open(bundlePath)
 	if err != nil {
@@ -658,6 +663,7 @@ func extractBundleToWorkdir(bundlePath, workDir string) (staged stagedFiles, err
 	defer file.Close()
 
 	tr := tar.NewReader(file)
+	extracted := 0
 
 	for {
 		hdr, err := tr.Next()
@@ -693,35 +699,47 @@ func extractBundleToWorkdir(bundlePath, workDir string) (staged stagedFiles, err
 			return stagedFiles{}, fmt.Errorf("write %s: %w", hdr.Name, err)
 		}
 		out.Close()
+		extracted++
 
 		switch {
 		case strings.HasSuffix(target, ".metadata"):
 			staged.MetadataPath = target
+			logging.DebugStep(logger, "extract bundle", "found metadata=%s", filepath.Base(target))
 		case strings.HasSuffix(target, ".sha256"):
 			staged.ChecksumPath = target
+			logging.DebugStep(logger, "extract bundle", "found checksum=%s", filepath.Base(target))
 		default:
 			staged.ArchivePath = target
+			logging.DebugStep(logger, "extract bundle", "found archive=%s", filepath.Base(target))
 		}
 	}
 
 	if staged.ArchivePath == "" || staged.MetadataPath == "" || staged.ChecksumPath == "" {
 		return stagedFiles{}, fmt.Errorf("bundle missing required files")
 	}
+	logging.DebugStep(logger, "extract bundle", "entries_extracted=%d", extracted)
 	return staged, nil
 }
 
 func copyRawArtifactsToWorkdir(cand *decryptCandidate, workDir string) (staged stagedFiles, err error) {
-	done := logging.DebugStart(logging.GetDefaultLogger(), "stage raw artifacts", "archive=%s workdir=%s", cand.RawArchivePath, workDir)
+	return copyRawArtifactsToWorkdirWithLogger(cand, workDir, nil)
+}
+
+func copyRawArtifactsToWorkdirWithLogger(cand *decryptCandidate, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
+	done := logging.DebugStart(logger, "stage raw artifacts", "archive=%s workdir=%s", cand.RawArchivePath, workDir)
 	defer func() { done(err) }()
 	archiveDest := filepath.Join(workDir, filepath.Base(cand.RawArchivePath))
+	logging.DebugStep(logger, "stage raw artifacts", "copy archive to %s", archiveDest)
 	if err := copyFile(restoreFS, cand.RawArchivePath, archiveDest); err != nil {
 		return stagedFiles{}, fmt.Errorf("copy archive: %w", err)
 	}
 	metadataDest := filepath.Join(workDir, filepath.Base(cand.RawMetadataPath))
+	logging.DebugStep(logger, "stage raw artifacts", "copy metadata to %s", metadataDest)
 	if err := copyFile(restoreFS, cand.RawMetadataPath, metadataDest); err != nil {
 		return stagedFiles{}, fmt.Errorf("copy metadata: %w", err)
 	}
 	checksumDest := filepath.Join(workDir, filepath.Base(cand.RawChecksumPath))
+	logging.DebugStep(logger, "stage raw artifacts", "copy checksum to %s", checksumDest)
 	if err := copyFile(restoreFS, cand.RawChecksumPath, checksumDest); err != nil {
 		return stagedFiles{}, fmt.Errorf("copy checksum: %w", err)
 	}
