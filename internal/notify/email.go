@@ -80,6 +80,10 @@ var (
 		"/var/log/maillog",
 		"/var/log/mail.err",
 	}
+
+	// postfixMainCFPath points to the Postfix main configuration file.
+	// It is a variable to allow hermetic tests to override it.
+	postfixMainCFPath = "/etc/postfix/main.cf"
 )
 
 // NewEmailNotifier creates a new Email notifier
@@ -455,12 +459,11 @@ func (e *EmailNotifier) checkMTAConfiguration() (bool, string) {
 
 // checkRelayHostConfigured checks if Postfix relay host is configured
 func (e *EmailNotifier) checkRelayHostConfigured(ctx context.Context) (bool, string) {
-	configPath := "/etc/postfix/main.cf"
-	if _, err := os.Stat(configPath); err != nil {
+	if _, err := os.Stat(postfixMainCFPath); err != nil {
 		return false, "main.cf not found"
 	}
 
-	content, err := os.ReadFile(configPath)
+	content, err := os.ReadFile(postfixMainCFPath)
 	if err != nil {
 		e.logger.Debug("Failed to read postfix config: %v", err)
 		return false, "cannot read config"
@@ -729,7 +732,7 @@ func (e *EmailNotifier) logMailLogStatus(queueID, status, matchedLine, logPath s
 	}
 
 	if matchedLine != "" {
-		if e.logger.GetLevel() <= types.LogLevelDebug {
+		if e.logger.GetLevel() >= types.LogLevelDebug {
 			e.logger.Debug("Mail log entry: %s", matchedLine)
 		} else if status != "sent" {
 			// Surface a truncated version even outside debug when status is problematic
@@ -1066,7 +1069,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 		if stdoutStr != "" {
 			e.logger.Debug("Sendmail stdout: %s", stdoutStr)
 			highlights, _, derivedQueueID := summarizeSendmailTranscript(stdoutStr)
-			if len(highlights) > 0 && e.logger.GetLevel() <= types.LogLevelDebug {
+			if len(highlights) > 0 && e.logger.GetLevel() >= types.LogLevelDebug {
 				for _, msg := range highlights {
 					e.logger.Debug("SMTP summary: %s", msg)
 				}
@@ -1129,7 +1132,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 		e.logger.Warning("⚠ Recent mail log entries indicate potential delivery issues (found %d error-like lines)", len(recentErrors))
 		e.logger.Info("  Suggestion: inspect /var/log/mail.log (or maillog/mail.err) on this host for details")
 
-		if e.logger.GetLevel() <= types.LogLevelDebug {
+		if e.logger.GetLevel() >= types.LogLevelDebug {
 			if len(recentErrors) <= 5 {
 				e.logger.Debug("Recent mail log entries (%d found):", len(recentErrors))
 				for _, errLine := range recentErrors {
@@ -1160,7 +1163,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 			if detectedID != "" {
 				queueID = detectedID
 				e.logger.Info("Detected queue ID %s for %s by inspecting mail queue output", queueID, recipient)
-				if queueLine != "" && e.logger.GetLevel() <= types.LogLevelDebug {
+				if queueLine != "" && e.logger.GetLevel() >= types.LogLevelDebug {
 					e.logger.Debug("Mail queue entry: %s", queueLine)
 				}
 				status, matchedLine, logPath := e.inspectMailLogStatus(queueID)
