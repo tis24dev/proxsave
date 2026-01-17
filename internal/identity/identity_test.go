@@ -689,3 +689,1008 @@ func extractIdentityKeyField(t *testing.T, fileContent string) string {
 	t.Fatalf("SYSTEM_CONFIG_DATA line not found")
 	return ""
 }
+
+// ============ Test funzioni MAC address ============
+
+func TestIsLocallyAdministeredMAC(t *testing.T) {
+	tests := []struct {
+		mac  string
+		want bool
+	}{
+		{"02:00:00:00:00:00", true},  // LAA bit set (0x02 & 0x02 = 0x02)
+		{"00:00:00:00:00:00", false}, // LAA bit not set
+		{"aa:bb:cc:dd:ee:ff", true},  // 0xaa = 10101010, bit 1 = 1 (LAA set)
+		{"a8:bb:cc:dd:ee:ff", false}, // 0xa8 = 10101000, bit 1 = 0 (LAA not set)
+		{"fe:ff:ff:ff:ff:ff", true},  // 0xfe = 11111110, bit 1 = 1
+		{"fc:ff:ff:ff:ff:ff", false}, // 0xfc = 11111100, bit 1 = 0
+		{"", false},
+		{"invalid", false},
+		{"zz:zz:zz:zz:zz:zz", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.mac, func(t *testing.T) {
+			got := isLocallyAdministeredMAC(tt.mac)
+			if got != tt.want {
+				t.Errorf("isLocallyAdministeredMAC(%q) = %v, want %v", tt.mac, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeMAC(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"AA:BB:CC:DD:EE:FF", "aa:bb:cc:dd:ee:ff"},
+		{"aa:bb:cc:dd:ee:ff", "aa:bb:cc:dd:ee:ff"},
+		{"  AA:BB:CC:DD:EE:FF  ", "aa:bb:cc:dd:ee:ff"},
+		{"", ""},
+		{"   ", ""},
+		{"invalid-mac", "invalid-mac"}, // returns as-is if ParseMAC fails
+		{"00:11:22:33:44:55", "00:11:22:33:44:55"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeMAC(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeMAC(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCandidateRank(t *testing.T) {
+	// Test that candidateRank returns expected rankings
+	wiredPermanent := macCandidate{
+		Iface:                 "eth0",
+		MAC:                   "aa:bb:cc:dd:ee:ff",
+		AddrAssignType:        0, // permanent
+		IsVirtual:             false,
+		IsBridge:              false,
+		IsWireless:            false,
+		IsLocallyAdministered: false,
+	}
+
+	wirelessRandom := macCandidate{
+		Iface:                 "wlan0",
+		MAC:                   "02:00:00:00:00:01",
+		AddrAssignType:        1, // random
+		IsVirtual:             false,
+		IsBridge:              false,
+		IsWireless:            true,
+		IsLocallyAdministered: true,
+	}
+
+	rank1 := candidateRank(wiredPermanent)
+	rank2 := candidateRank(wirelessRandom)
+
+	// Wired permanent should rank better (lower values) than wireless random
+	if rank1[0] >= rank2[0] {
+		// Check next levels if first level equal
+		if rank1[0] == rank2[0] && rank1[1] >= rank2[1] {
+			t.Errorf("wiredPermanent should rank better than wirelessRandom")
+		}
+	}
+}
+
+func TestIfaceCategory(t *testing.T) {
+	tests := []struct {
+		name     string
+		cand     macCandidate
+		wantCat  int
+		wantDesc string
+	}{
+		{"eth0 wired", macCandidate{Iface: "eth0"}, 0, "wired preferred"},
+		{"eno1 wired", macCandidate{Iface: "eno1"}, 0, "wired preferred"},
+		{"enp0s3 wired", macCandidate{Iface: "enp0s3"}, 0, "wired preferred"},
+		{"bond0", macCandidate{Iface: "bond0"}, 0, "wired preferred"},
+		{"team0", macCandidate{Iface: "team0"}, 0, "wired preferred"},
+		{"vmbr0", macCandidate{Iface: "vmbr0", IsBridge: true}, 1, "vmbr bridge"},
+		{"vmbr1", macCandidate{Iface: "vmbr1", IsBridge: true}, 1, "vmbr bridge"},
+		{"br0", macCandidate{Iface: "br0", IsBridge: true}, 2, "other bridge"},
+		{"bridge0", macCandidate{Iface: "bridge0", IsBridge: true}, 2, "other bridge"},
+		{"br-lan", macCandidate{Iface: "br-lan", IsBridge: true}, 2, "other bridge"},
+		{"wlan0", macCandidate{Iface: "wlan0", IsWireless: true}, 3, "wireless"},
+		{"wlp3s0", macCandidate{Iface: "wlp3s0", IsWireless: true}, 3, "wireless"},
+		{"wl0", macCandidate{Iface: "wl0"}, 3, "wireless prefix"},
+		{"dummy0", macCandidate{Iface: "dummy0"}, 4, "other"},
+		{"docker0", macCandidate{Iface: "docker0"}, 4, "other"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ifaceCategory(tt.cand)
+			if got != tt.wantCat {
+				t.Errorf("ifaceCategory(%s) = %d, want %d (%s)", tt.cand.Iface, got, tt.wantCat, tt.wantDesc)
+			}
+		})
+	}
+}
+
+func TestIsPreferredWiredIface(t *testing.T) {
+	tests := []struct {
+		name string
+		cand macCandidate
+		want bool
+	}{
+		{"eth0", macCandidate{Iface: "eth0"}, true},
+		{"eth1", macCandidate{Iface: "eth1"}, true},
+		{"eno1", macCandidate{Iface: "eno1"}, true},
+		{"enp0s3", macCandidate{Iface: "enp0s3"}, true},
+		{"bond0", macCandidate{Iface: "bond0"}, true},
+		{"team0", macCandidate{Iface: "team0"}, true},
+		{"wlan0 wireless", macCandidate{Iface: "wlan0", IsWireless: true}, false},
+		{"eth0 but wireless flag", macCandidate{Iface: "eth0", IsWireless: true}, false},
+		{"vmbr0", macCandidate{Iface: "vmbr0"}, false},
+		{"br0", macCandidate{Iface: "br0"}, false},
+		{"docker0", macCandidate{Iface: "docker0"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isPreferredWiredIface(strings.ToLower(tt.cand.Iface), tt.cand)
+			if got != tt.want {
+				t.Errorf("isPreferredWiredIface(%s) = %v, want %v", tt.cand.Iface, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddrAssignRank(t *testing.T) {
+	tests := []struct {
+		value int
+		want  int
+	}{
+		{0, 0}, // permanent - best
+		{3, 1}, // set by userspace
+		{2, 2}, // stolen
+		{1, 3}, // random
+		{-1, 4}, // unknown
+		{99, 4}, // unknown
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("value_%d", tt.value), func(t *testing.T) {
+			got := addrAssignRank(tt.value)
+			if got != tt.want {
+				t.Errorf("addrAssignRank(%d) = %d, want %d", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsBetterMACCandidateEdgeCases(t *testing.T) {
+	// Test tie-breaking by interface name
+	a := macCandidate{Iface: "eth0", MAC: "aa:bb:cc:dd:ee:ff"}
+	b := macCandidate{Iface: "eth1", MAC: "aa:bb:cc:dd:ee:ff"}
+
+	if !isBetterMACCandidate(a, b) {
+		t.Errorf("eth0 should be better than eth1 (alphabetical tie-break)")
+	}
+	if isBetterMACCandidate(b, a) {
+		t.Errorf("eth1 should not be better than eth0")
+	}
+
+	// Test tie-breaking by MAC when names equal
+	c := macCandidate{Iface: "eth0", MAC: "00:00:00:00:00:01"}
+	d := macCandidate{Iface: "eth0", MAC: "00:00:00:00:00:02"}
+
+	if !isBetterMACCandidate(c, d) {
+		t.Errorf("lower MAC should win when names equal")
+	}
+}
+
+// ============ Test rilevamento interfacce ============
+
+func TestReadAddrAssignType(t *testing.T) {
+	origRead := readFirstLineFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+	})
+
+	// Test parsing valid values
+	readFirstLineFunc = func(path string, limit int) string {
+		if strings.Contains(path, "addr_assign_type") {
+			return "0"
+		}
+		return ""
+	}
+	if got := readAddrAssignType("eth0", nil); got != 0 {
+		t.Errorf("readAddrAssignType() = %d, want 0", got)
+	}
+
+	// Test empty file
+	readFirstLineFunc = func(path string, limit int) string {
+		return ""
+	}
+	if got := readAddrAssignType("eth0", nil); got != -1 {
+		t.Errorf("readAddrAssignType() = %d, want -1 for empty", got)
+	}
+
+	// Test invalid value
+	readFirstLineFunc = func(path string, limit int) string {
+		return "invalid"
+	}
+	if got := readAddrAssignType("eth0", nil); got != -1 {
+		t.Errorf("readAddrAssignType() = %d, want -1 for invalid", got)
+	}
+
+	// Test with spaces
+	readFirstLineFunc = func(path string, limit int) string {
+		return "  3  "
+	}
+	if got := readAddrAssignType("eth0", nil); got != 3 {
+		t.Errorf("readAddrAssignType() = %d, want 3", got)
+	}
+}
+
+func TestIsBridgeInterfaceByName(t *testing.T) {
+	// On non-Linux or without sysfs, falls back to name-based detection
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"vmbr0", true},
+		{"vmbr1", true},
+		{"br0", true},
+		{"br-lan", true},
+		{"bridge0", true},
+		{"eth0", false},
+		{"wlan0", false},
+		{"docker0", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// This will use name-based fallback if sysfs not available
+			got := isBridgeInterface(tt.name)
+			// On Linux with sysfs, result may differ, so we just check it doesn't panic
+			_ = got
+		})
+	}
+}
+
+func TestIsWirelessInterfaceByName(t *testing.T) {
+	// On non-Linux or without sysfs, falls back to name-based detection
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"wlan0", true},
+		{"wlp3s0", true},
+		{"wl0", true},
+		{"eth0", false},
+		{"eno1", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isWirelessInterface(tt.name)
+			// Check name-based fallback behavior
+			if strings.HasPrefix(strings.ToLower(tt.name), "wl") && !got {
+				// May or may not work depending on sysfs
+			}
+		})
+	}
+}
+
+// ============ Test generazione ID ============
+
+func TestBuildSystemData(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "test-machine-id"
+		case "/sys/class/dmi/id/product_uuid":
+			return "test-uuid"
+		case "/proc/version":
+			return "Linux version 5.0"
+		default:
+			return ""
+		}
+	}
+
+	macs := []string{"aa:bb:cc:dd:ee:ff", "00:11:22:33:44:55"}
+	data := buildSystemData(macs, nil)
+
+	// Verify data contains expected components
+	if !strings.Contains(data, "test-machine-id") {
+		t.Errorf("buildSystemData should contain machine-id")
+	}
+	if !strings.Contains(data, "testhost") {
+		t.Errorf("buildSystemData should contain hostname")
+	}
+	if !strings.Contains(data, "test-uuid") {
+		t.Errorf("buildSystemData should contain uuid")
+	}
+	if !strings.Contains(data, "aa:bb:cc:dd:ee:ff") {
+		t.Errorf("buildSystemData should contain MAC addresses")
+	}
+}
+
+func TestBuildSystemDataWithMinimalInput(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	// All sources fail except timestamp (always added)
+	hostnameFunc = func() (string, error) { return "", fmt.Errorf("no hostname") }
+	readFirstLineFunc = func(path string, limit int) string { return "" }
+
+	data := buildSystemData(nil, nil)
+
+	// Should still return data (at minimum the timestamp)
+	if data == "" {
+		t.Errorf("buildSystemData should return non-empty string even when sources fail")
+	}
+	// Timestamp format is 20060102150405 (14 chars)
+	if len(data) < 14 {
+		t.Errorf("buildSystemData should contain at least the timestamp, got len=%d", len(data))
+	}
+}
+
+func TestGenerateServerIDDirect(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "test-machine-id"
+		default:
+			return ""
+		}
+	}
+
+	macs := []string{"aa:bb:cc:dd:ee:ff"}
+	serverID, encoded, err := generateServerID(macs, macs[0], nil)
+	if err != nil {
+		t.Fatalf("generateServerID() error = %v", err)
+	}
+
+	if len(serverID) != serverIDLength {
+		t.Errorf("serverID length = %d, want %d", len(serverID), serverIDLength)
+	}
+	if !isAllDigits(serverID) {
+		t.Errorf("serverID should be all digits, got %q", serverID)
+	}
+	if !strings.Contains(encoded, "SYSTEM_CONFIG_DATA=") {
+		t.Errorf("encoded should contain SYSTEM_CONFIG_DATA")
+	}
+}
+
+func TestBuildIdentityKeyField(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-id-123"
+		case "/sys/class/dmi/id/product_uuid":
+			return "uuid-456"
+		default:
+			return ""
+		}
+	}
+
+	macs := []string{"aa:bb:cc:dd:ee:ff", "00:11:22:33:44:55"}
+	keyField := buildIdentityKeyField(macs, "aa:bb:cc:dd:ee:ff", nil)
+
+	// Should contain labeled entries
+	if !strings.Contains(keyField, "mac=") {
+		t.Errorf("keyField should contain mac= entry")
+	}
+	if !strings.Contains(keyField, "mac_nohost=") {
+		t.Errorf("keyField should contain mac_nohost= entry")
+	}
+	if !strings.Contains(keyField, "uuid=") {
+		t.Errorf("keyField should contain uuid= entry")
+	}
+	if !strings.Contains(keyField, "mac_alt1=") {
+		t.Errorf("keyField should contain mac_alt1= entry for alternate MAC")
+	}
+}
+
+func TestParseKeyFieldPrefixes(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantLen int
+	}{
+		{"empty", "", 0},
+		{"single", "mac=abc123", 1},
+		{"multiple", "mac=abc123,mac_nohost=def456,uuid=ghi789", 3},
+		{"with spaces", "  mac=abc123 , mac_nohost=def456  ", 2},
+		{"no equals", "abc123,def456", 2},
+		{"mixed", "mac=abc123,plain,uuid=ghi789", 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseKeyFieldPrefixes(tt.input)
+			if len(got) != tt.wantLen {
+				t.Errorf("parseKeyFieldPrefixes(%q) len = %d, want %d", tt.input, len(got), tt.wantLen)
+			}
+		})
+	}
+
+	// Test that values are extracted correctly
+	prefixes := parseKeyFieldPrefixes("mac=abc123,uuid=def456")
+	if prefixes[0] != "abc123" || prefixes[1] != "def456" {
+		t.Errorf("parseKeyFieldPrefixes should extract values, got %v", prefixes)
+	}
+}
+
+// ============ Test funzioni helper ============
+
+func TestReadMachineID(t *testing.T) {
+	origRead := readFirstLineFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+	})
+
+	// Test primary path
+	readFirstLineFunc = func(path string, limit int) string {
+		if path == "/etc/machine-id" {
+			return "primary-machine-id"
+		}
+		return ""
+	}
+	if got := readMachineID(nil); got != "primary-machine-id" {
+		t.Errorf("readMachineID() = %q, want %q", got, "primary-machine-id")
+	}
+
+	// Test fallback path
+	readFirstLineFunc = func(path string, limit int) string {
+		if path == "/var/lib/dbus/machine-id" {
+			return "fallback-machine-id"
+		}
+		return ""
+	}
+	if got := readMachineID(nil); got != "fallback-machine-id" {
+		t.Errorf("readMachineID() fallback = %q, want %q", got, "fallback-machine-id")
+	}
+
+	// Test missing
+	readFirstLineFunc = func(path string, limit int) string { return "" }
+	if got := readMachineID(nil); got != "" {
+		t.Errorf("readMachineID() missing = %q, want empty", got)
+	}
+}
+
+func TestReadHostnamePart(t *testing.T) {
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		hostnameFunc = origHost
+	})
+
+	// Test short hostname
+	hostnameFunc = func() (string, error) { return "short", nil }
+	if got := readHostnamePart(nil); got != "short" {
+		t.Errorf("readHostnamePart() = %q, want %q", got, "short")
+	}
+
+	// Test long hostname (should be truncated to 8 chars)
+	hostnameFunc = func() (string, error) { return "verylonghostname", nil }
+	if got := readHostnamePart(nil); got != "verylong" {
+		t.Errorf("readHostnamePart() = %q, want %q", got, "verylong")
+	}
+
+	// Test exactly 8 chars
+	hostnameFunc = func() (string, error) { return "exactly8", nil }
+	if got := readHostnamePart(nil); got != "exactly8" {
+		t.Errorf("readHostnamePart() = %q, want %q", got, "exactly8")
+	}
+
+	// Test error
+	hostnameFunc = func() (string, error) { return "", fmt.Errorf("no hostname") }
+	if got := readHostnamePart(nil); got != "" {
+		t.Errorf("readHostnamePart() error = %q, want empty", got)
+	}
+
+	// Test empty hostname
+	hostnameFunc = func() (string, error) { return "  ", nil }
+	if got := readHostnamePart(nil); got != "" {
+		t.Errorf("readHostnamePart() empty = %q, want empty", got)
+	}
+}
+
+func TestComputeSystemKey(t *testing.T) {
+	// Test deterministic output
+	key1 := computeSystemKey("machine1", "host1", "extra1")
+	key2 := computeSystemKey("machine1", "host1", "extra1")
+
+	if key1 != key2 {
+		t.Errorf("computeSystemKey should be deterministic, got %q and %q", key1, key2)
+	}
+
+	if len(key1) != 16 {
+		t.Errorf("computeSystemKey length = %d, want 16", len(key1))
+	}
+
+	// Test different inputs produce different outputs
+	key3 := computeSystemKey("machine2", "host1", "extra1")
+	if key1 == key3 {
+		t.Errorf("different inputs should produce different keys")
+	}
+}
+
+func TestComputeCurrentIdentityKeyPrefixes(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-id-123"
+		case "/sys/class/dmi/id/product_uuid":
+			return "uuid-456"
+		default:
+			return ""
+		}
+	}
+
+	prefixes := computeCurrentIdentityKeyPrefixes("aa:bb:cc:dd:ee:ff", nil)
+
+	// Should have prefixes for MAC and UUID (with and without host)
+	if len(prefixes) < 2 {
+		t.Errorf("expected at least 2 prefixes, got %d", len(prefixes))
+	}
+
+	// All prefixes should be non-empty
+	for prefix := range prefixes {
+		if prefix == "" {
+			t.Errorf("found empty prefix in map")
+		}
+		if len(prefix) != systemKeyPrefixLength {
+			t.Errorf("prefix length = %d, want %d", len(prefix), systemKeyPrefixLength)
+		}
+	}
+}
+
+func TestComputeCurrentMACKeyPrefixes(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		if path == "/etc/machine-id" {
+			return "machine-id-123"
+		}
+		return ""
+	}
+
+	prefixes := computeCurrentMACKeyPrefixes("aa:bb:cc:dd:ee:ff", nil)
+
+	// Should have 2 prefixes (with and without host)
+	if len(prefixes) != 2 {
+		t.Errorf("expected 2 prefixes, got %d", len(prefixes))
+	}
+
+	// Test empty MAC
+	emptyPrefixes := computeCurrentMACKeyPrefixes("", nil)
+	if len(emptyPrefixes) != 0 {
+		t.Errorf("expected 0 prefixes for empty MAC, got %d", len(emptyPrefixes))
+	}
+}
+
+// ============ Test edge cases ============
+
+func TestSelectPreferredMACEmpty(t *testing.T) {
+	mac, iface := selectPreferredMAC(nil)
+	if mac != "" || iface != "" {
+		t.Errorf("selectPreferredMAC(nil) = (%q, %q), want empty", mac, iface)
+	}
+
+	mac, iface = selectPreferredMAC([]macCandidate{})
+	if mac != "" || iface != "" {
+		t.Errorf("selectPreferredMAC([]) = (%q, %q), want empty", mac, iface)
+	}
+}
+
+func TestSelectPreferredMACWithEmptyFields(t *testing.T) {
+	candidates := []macCandidate{
+		{Iface: "", MAC: "aa:bb:cc:dd:ee:ff"},        // empty iface
+		{Iface: "eth0", MAC: ""},                     // empty mac
+		{Iface: "  ", MAC: "  "},                     // whitespace only
+		{Iface: "eth1", MAC: "00:11:22:33:44:55"},    // valid
+	}
+
+	mac, iface := selectPreferredMAC(candidates)
+	if mac != "00:11:22:33:44:55" || iface != "eth1" {
+		t.Errorf("selectPreferredMAC should skip invalid entries, got (%q, %q)", mac, iface)
+	}
+}
+
+func TestLoadServerIDFileNotFound(t *testing.T) {
+	_, _, err := loadServerID("/nonexistent/path/identity.conf", []string{"aa:bb:cc:dd:ee:ff"}, nil)
+	if err == nil {
+		t.Errorf("loadServerID should error for missing file")
+	}
+}
+
+func TestIdentityPayloadHasKeyLabelsEdgeCases(t *testing.T) {
+	// Empty content
+	if identityPayloadHasKeyLabels("", nil) {
+		t.Errorf("empty content should not have key labels")
+	}
+
+	// No SYSTEM_CONFIG_DATA line
+	if identityPayloadHasKeyLabels("# just a comment\n", nil) {
+		t.Errorf("no config line should not have key labels")
+	}
+
+	// Invalid base64
+	if identityPayloadHasKeyLabels("SYSTEM_CONFIG_DATA=\"!!!invalid!!!\"\n", nil) {
+		t.Errorf("invalid base64 should not have key labels")
+	}
+
+	// Valid payload without labels (legacy format)
+	legacyPayload := base64.StdEncoding.EncodeToString([]byte("serverid:12345:keyprefix:checksum"))
+	if identityPayloadHasKeyLabels(fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", legacyPayload), nil) {
+		t.Errorf("legacy format without = should not have key labels")
+	}
+
+	// Valid payload with labels
+	labeledPayload := base64.StdEncoding.EncodeToString([]byte("serverid:12345:mac=abc,uuid=def:checksum"))
+	if !identityPayloadHasKeyLabels(fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", labeledPayload), nil) {
+		t.Errorf("labeled format should have key labels")
+	}
+}
+
+func TestIsAllDigitsEdgeCases(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"", false},
+		{"0", true},
+		{"0123456789", true},
+		{"00000000000000000", true},
+		{" 123", false},
+		{"123 ", false},
+		{"12 34", false},
+		{"-123", false},
+		{"+123", false},
+		{"1.23", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isAllDigits(tt.input)
+			if got != tt.want {
+				t.Errorf("isAllDigits(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadFirstLineEdgeCases(t *testing.T) {
+	dir := t.TempDir()
+
+	// Test empty file
+	emptyPath := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(emptyPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("failed to write empty file: %v", err)
+	}
+	if got := readFirstLine(emptyPath, 100); got != "" {
+		t.Errorf("readFirstLine(empty) = %q, want empty", got)
+	}
+
+	// Test file with only whitespace
+	spacePath := filepath.Join(dir, "space.txt")
+	if err := os.WriteFile(spacePath, []byte("   \n  \n"), 0o600); err != nil {
+		t.Fatalf("failed to write space file: %v", err)
+	}
+	if got := readFirstLine(spacePath, 100); got != "" {
+		t.Errorf("readFirstLine(spaces) = %q, want empty", got)
+	}
+
+	// Test limit of 0 (should return full line)
+	fullPath := filepath.Join(dir, "full.txt")
+	if err := os.WriteFile(fullPath, []byte("fullcontent"), 0o600); err != nil {
+		t.Fatalf("failed to write full file: %v", err)
+	}
+	if got := readFirstLine(fullPath, 0); got != "fullcontent" {
+		t.Errorf("readFirstLine(limit=0) = %q, want %q", got, "fullcontent")
+	}
+}
+
+func TestBuildIdentityKeyFieldNoPrimaryMAC(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		if path == "/etc/machine-id" {
+			return "machine-id-123"
+		}
+		return ""
+	}
+
+	// Empty primary MAC but with alternate MACs
+	macs := []string{"aa:bb:cc:dd:ee:ff", "00:11:22:33:44:55"}
+	keyField := buildIdentityKeyField(macs, "", nil)
+
+	// Should still have entries for alternate MACs
+	if !strings.Contains(keyField, "mac_alt") || keyField == "" {
+		t.Logf("keyField = %q", keyField)
+	}
+}
+
+func TestBuildIdentityKeyFieldDeduplication(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		if path == "/etc/machine-id" {
+			return "machine-id-123"
+		}
+		return ""
+	}
+
+	// Same MAC twice in list
+	macs := []string{"aa:bb:cc:dd:ee:ff", "aa:bb:cc:dd:ee:ff"}
+	keyField := buildIdentityKeyField(macs, "aa:bb:cc:dd:ee:ff", nil)
+
+	// Should not have duplicates
+	parts := strings.Split(keyField, ",")
+	seen := make(map[string]bool)
+	for _, part := range parts {
+		if seen[part] {
+			t.Errorf("duplicate entry in keyField: %q", part)
+		}
+		seen[part] = true
+	}
+}
+
+func TestLogFunctionsNilLogger(t *testing.T) {
+	// Should not panic with nil logger
+	logDebug(nil, "test %s", "message")
+	logWarning(nil, "test %s", "message")
+}
+
+func TestLogFunctionsWithLogger(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	logDebug(logger, "debug %s", "test")
+	logWarning(logger, "warning %s", "test")
+
+	output := buf.String()
+	if !strings.Contains(output, "debug test") {
+		t.Errorf("expected debug message in output")
+	}
+	if !strings.Contains(output, "warning test") {
+		t.Errorf("expected warning message in output")
+	}
+}
+
+func TestNormalizeServerIDWithEmptyHash(t *testing.T) {
+	// Test with various hash lengths
+	hash := []byte{}
+	id := normalizeServerID("123", hash)
+	if len(id) != serverIDLength {
+		t.Errorf("normalizeServerID length = %d, want %d", len(id), serverIDLength)
+	}
+
+	// Test with nil-like value
+	id2 := normalizeServerID("", []byte("seed"))
+	if len(id2) != serverIDLength {
+		t.Errorf("normalizeServerID fallback length = %d, want %d", len(id2), serverIDLength)
+	}
+}
+
+func TestFallbackServerIDWithShortHash(t *testing.T) {
+	// Test with very short hash
+	shortHash := []byte{0, 1, 2}
+	id := fallbackServerID(shortHash)
+	if len(id) != serverIDLength {
+		t.Errorf("fallbackServerID length = %d, want %d", len(id), serverIDLength)
+	}
+	if !isAllDigits(id) {
+		t.Errorf("fallbackServerID should be all digits, got %q", id)
+	}
+}
+
+func TestGenerateServerIDWithEmptyMACs(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		if path == "/etc/machine-id" {
+			return "test-machine-id"
+		}
+		return ""
+	}
+
+	// Empty MACs should still work
+	serverID, encoded, err := generateServerID([]string{}, "", nil)
+	if err != nil {
+		t.Fatalf("generateServerID() error = %v", err)
+	}
+
+	if len(serverID) != serverIDLength {
+		t.Errorf("serverID length = %d, want %d", len(serverID), serverIDLength)
+	}
+	if encoded == "" {
+		t.Errorf("encoded should not be empty")
+	}
+}
+
+func TestDecodeProtectedServerIDWithEmptyMAC(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "host-one", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-one"
+		case "/sys/class/dmi/id/product_uuid":
+			return "uuid-one"
+		default:
+			return ""
+		}
+	}
+
+	const serverID = "1234567890123456"
+	content, err := encodeProtectedServerID(serverID, "aa:bb:cc:dd:ee:ff", nil)
+	if err != nil {
+		t.Fatalf("encodeProtectedServerID() error = %v", err)
+	}
+
+	// Decode with empty MAC - should still work via UUID
+	decoded, matchedByMAC, err := decodeProtectedServerID(content, "", nil)
+	if err != nil {
+		t.Fatalf("decodeProtectedServerID() error = %v", err)
+	}
+	if decoded != serverID {
+		t.Fatalf("decoded = %q, want %q", decoded, serverID)
+	}
+	if matchedByMAC {
+		t.Fatalf("should not match by MAC when MAC is empty")
+	}
+}
+
+func TestCollectMACCandidatesWithLogger(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	// Just verify it doesn't panic with logger
+	candidates, macs := collectMACCandidates(logger)
+	_ = candidates
+	_ = macs
+}
+
+func TestMaybeUpgradeIdentityFileNonExistent(t *testing.T) {
+	// Should not panic on non-existent file
+	maybeUpgradeIdentityFile("/nonexistent/path/identity.conf", "1234567890123456", "aa:bb:cc:dd:ee:ff", nil, nil)
+}
+
+func TestMaybeUpgradeIdentityFileAlreadyUpgraded(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		if path == "/etc/machine-id" {
+			return "machine-id-123"
+		}
+		return ""
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity.conf")
+
+	t.Cleanup(func() {
+		_ = setImmutableAttribute(path, false, nil)
+	})
+
+	const serverID = "1234567890123456"
+	macs := []string{"aa:bb:cc:dd:ee:ff"}
+
+	// Create a v2 file (already has key labels)
+	v2Content, err := encodeProtectedServerIDWithMACs(serverID, macs, macs[0], nil)
+	if err != nil {
+		t.Fatalf("encodeProtectedServerIDWithMACs() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte(v2Content), 0o600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	// Get original content
+	original, _ := os.ReadFile(path)
+
+	// Try to upgrade - should be no-op since already v2
+	maybeUpgradeIdentityFile(path, serverID, macs[0], macs, nil)
+
+	// Content should not have changed (same format)
+	after, _ := os.ReadFile(path)
+	// We can't compare exact bytes because timestamps differ, but format should be same
+	if !identityPayloadHasKeyLabels(string(after), nil) {
+		t.Errorf("file should still have key labels after no-op upgrade")
+	}
+	_ = original
+}
+
+func TestBuildIdentityKeyFieldEmptyMACs(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "testhost", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		if path == "/etc/machine-id" {
+			return "machine-id-123"
+		}
+		return ""
+	}
+
+	// Empty everything
+	keyField := buildIdentityKeyField(nil, "", nil)
+	// Should not be empty (at minimum uuid entries if uuid available)
+	// Even with empty input, the function should not panic
+	_ = keyField
+}

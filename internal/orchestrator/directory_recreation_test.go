@@ -189,3 +189,296 @@ func TestRecreateDirectoriesFromConfigRoutes(t *testing.T) {
 		}
 	})
 }
+
+// Test: RecreateStorageDirectories quando il file non esiste
+func TestRecreateStorageDirectoriesFileNotExist(t *testing.T) {
+	logger := newDirTestLogger()
+	_, restore := overridePath(t, &storageCfgPath, "nonexistent.cfg")
+	defer restore()
+	// Non creiamo il file, quindi non esiste
+
+	err := RecreateStorageDirectories(logger)
+	if err != nil {
+		t.Fatalf("expected nil error when file doesn't exist, got: %v", err)
+	}
+}
+
+// Test: RecreateStorageDirectories salta commenti e linee vuote
+func TestRecreateStorageDirectoriesSkipsCommentsAndEmptyLines(t *testing.T) {
+	logger := newDirTestLogger()
+	baseDir := filepath.Join(t.TempDir(), "storage1")
+	cfg := fmt.Sprintf(`# This is a comment
+dir: storage1
+    # Another comment
+    path %s
+
+# Empty line above and comment
+
+`, baseDir)
+	cfgPath, restore := overridePath(t, &storageCfgPath, "storage.cfg")
+	defer restore()
+	writeFile(t, cfgPath, cfg)
+
+	if err := RecreateStorageDirectories(logger); err != nil {
+		t.Fatalf("RecreateStorageDirectories error: %v", err)
+	}
+
+	// Verifica che le directory siano state create nonostante commenti e linee vuote
+	if _, err := os.Stat(filepath.Join(baseDir, "dump")); err != nil {
+		t.Fatalf("expected dump subdir to exist: %v", err)
+	}
+}
+
+// Test: RecreateStorageDirectories con multiple storage entries
+func TestRecreateStorageDirectoriesMultipleEntries(t *testing.T) {
+	logger := newDirTestLogger()
+	tmpDir := t.TempDir()
+	dir1 := filepath.Join(tmpDir, "local1")
+	dir2 := filepath.Join(tmpDir, "nfs1")
+	dir3 := filepath.Join(tmpDir, "cifs1")
+
+	cfg := fmt.Sprintf(`dir: local1
+    path %s
+
+nfs: nfs1
+    path %s
+
+cifs: cifs1
+    path %s
+`, dir1, dir2, dir3)
+
+	cfgPath, restore := overridePath(t, &storageCfgPath, "storage.cfg")
+	defer restore()
+	writeFile(t, cfgPath, cfg)
+
+	if err := RecreateStorageDirectories(logger); err != nil {
+		t.Fatalf("RecreateStorageDirectories error: %v", err)
+	}
+
+	// Verifica dir type (ha 5 subdirs)
+	for _, sub := range []string{"dump", "images", "template", "snippets", "private"} {
+		if _, err := os.Stat(filepath.Join(dir1, sub)); err != nil {
+			t.Fatalf("expected dir1 subdir %s to exist: %v", sub, err)
+		}
+	}
+
+	// Verifica nfs type (ha 3 subdirs)
+	for _, sub := range []string{"dump", "images", "template"} {
+		if _, err := os.Stat(filepath.Join(dir2, sub)); err != nil {
+			t.Fatalf("expected nfs subdir %s to exist: %v", sub, err)
+		}
+	}
+
+	// Verifica cifs type (ha 3 subdirs)
+	for _, sub := range []string{"dump", "images", "template"} {
+		if _, err := os.Stat(filepath.Join(dir3, sub)); err != nil {
+			t.Fatalf("expected cifs subdir %s to exist: %v", sub, err)
+		}
+	}
+}
+
+// Test: createPVEStorageStructure per CIFS type
+func TestCreatePVEStorageStructureCIFS(t *testing.T) {
+	logger := newDirTestLogger()
+	baseCIFS := filepath.Join(t.TempDir(), "cifs")
+	if err := createPVEStorageStructure(baseCIFS, "cifs", logger); err != nil {
+		t.Fatalf("createPVEStorageStructure(cifs): %v", err)
+	}
+	for _, sub := range []string{"dump", "images", "template"} {
+		if _, err := os.Stat(filepath.Join(baseCIFS, sub)); err != nil {
+			t.Fatalf("expected cifs subdir %s: %v", sub, err)
+		}
+	}
+	// Verifica che non abbia creato snippets e private (specifici per dir)
+	for _, sub := range []string{"snippets", "private"} {
+		if _, err := os.Stat(filepath.Join(baseCIFS, sub)); !os.IsNotExist(err) {
+			t.Fatalf("expected cifs to NOT have subdir %s", sub)
+		}
+	}
+}
+
+// Test: RecreateDatastoreDirectories quando il file non esiste
+func TestRecreateDatastoreDirectoriesFileNotExist(t *testing.T) {
+	logger := newDirTestLogger()
+	_, restore := overridePath(t, &datastoreCfgPath, "nonexistent.cfg")
+	defer restore()
+	// Non creiamo il file
+
+	err := RecreateDatastoreDirectories(logger)
+	if err != nil {
+		t.Fatalf("expected nil error when file doesn't exist, got: %v", err)
+	}
+}
+
+// Test: RecreateDatastoreDirectories salta commenti e linee vuote
+func TestRecreateDatastoreDirectoriesSkipsCommentsAndEmptyLines(t *testing.T) {
+	logger := newDirTestLogger()
+	baseDir := filepath.Join(t.TempDir(), "ds1")
+	cfg := fmt.Sprintf(`# Datastore configuration
+datastore: ds1
+    # Path comment
+    path %s
+
+# Another comment
+
+`, baseDir)
+	cfgPath, restore := overridePath(t, &datastoreCfgPath, "datastore.cfg")
+	defer restore()
+	writeFile(t, cfgPath, cfg)
+
+	_, cacheRestore := overridePath(t, &zpoolCachePath, "zpool.cache")
+	defer cacheRestore()
+	// Non creiamo il cache file per evitare ZFS detection
+
+	if err := RecreateDatastoreDirectories(logger); err != nil {
+		t.Fatalf("RecreateDatastoreDirectories error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(baseDir, ".chunks")); err != nil {
+		t.Fatalf("expected .chunks subdir to exist: %v", err)
+	}
+}
+
+// Test: RecreateDatastoreDirectories con multiple datastore entries
+func TestRecreateDatastoreDirectoriesMultipleEntries(t *testing.T) {
+	logger := newDirTestLogger()
+	tmpDir := t.TempDir()
+	dir1 := filepath.Join(tmpDir, "ds1")
+	dir2 := filepath.Join(tmpDir, "ds2")
+
+	cfg := fmt.Sprintf(`datastore: ds1
+    path %s
+
+datastore: ds2
+    path %s
+`, dir1, dir2)
+
+	cfgPath, restore := overridePath(t, &datastoreCfgPath, "datastore.cfg")
+	defer restore()
+	writeFile(t, cfgPath, cfg)
+
+	_, cacheRestore := overridePath(t, &zpoolCachePath, "zpool.cache")
+	defer cacheRestore()
+	// Non creiamo il cache file
+
+	if err := RecreateDatastoreDirectories(logger); err != nil {
+		t.Fatalf("RecreateDatastoreDirectories error: %v", err)
+	}
+
+	for _, dir := range []string{dir1, dir2} {
+		for _, sub := range []string{".chunks", ".lock"} {
+			if _, err := os.Stat(filepath.Join(dir, sub)); err != nil {
+				t.Fatalf("expected %s/%s to exist: %v", dir, sub, err)
+			}
+		}
+	}
+}
+
+// Test: isLikelyZFSMountPoint con path senza match
+func TestIsLikelyZFSMountPointNoMatch(t *testing.T) {
+	logger := newDirTestLogger()
+	cachePath, restore := overridePath(t, &zpoolCachePath, "zpool.cache")
+	defer restore()
+	writeFile(t, cachePath, "cache")
+
+	// Path che non matcha nessun pattern ZFS
+	if isLikelyZFSMountPoint("/var/lib/something", logger) {
+		t.Fatalf("expected false for path without ZFS patterns")
+	}
+	if isLikelyZFSMountPoint("/opt/storage", logger) {
+		t.Fatalf("expected false for /opt/storage")
+	}
+}
+
+// Test: isLikelyZFSMountPoint con path contenente "datastore"
+func TestIsLikelyZFSMountPointDatastorePath(t *testing.T) {
+	logger := newDirTestLogger()
+	cachePath, restore := overridePath(t, &zpoolCachePath, "zpool.cache")
+	defer restore()
+	writeFile(t, cachePath, "cache")
+
+	// Path con "datastore" nel nome dovrebbe matchare
+	if !isLikelyZFSMountPoint("/var/lib/datastore", logger) {
+		t.Fatalf("expected true for path containing 'datastore'")
+	}
+	if !isLikelyZFSMountPoint("/DATASTORE/pool", logger) {
+		t.Fatalf("expected true for path containing 'DATASTORE' (case insensitive)")
+	}
+}
+
+// Test: createPVEStorageStructure ritorna errore se base directory non creabile
+func TestCreatePVEStorageStructureBaseError(t *testing.T) {
+	logger := newDirTestLogger()
+	// Path con carattere nullo non è valido
+	invalidPath := "/dev/null/cannot/create/here"
+	err := createPVEStorageStructure(invalidPath, "dir", logger)
+	if err == nil {
+		t.Fatalf("expected error for invalid base path")
+	}
+}
+
+// Test: createPBSDatastoreStructure ritorna errore se base directory non creabile
+func TestCreatePBSDatastoreStructureBaseError(t *testing.T) {
+	logger := newDirTestLogger()
+	// Override zpoolCachePath per evitare ZFS detection
+	_, cacheRestore := overridePath(t, &zpoolCachePath, "zpool.cache")
+	defer cacheRestore()
+
+	invalidPath := "/dev/null/cannot/create/here"
+	err := createPBSDatastoreStructure(invalidPath, "ds", logger)
+	if err == nil {
+		t.Fatalf("expected error for invalid base path")
+	}
+}
+
+// Test: RecreateDirectoriesFromConfig propaga errore da RecreateStorageDirectories
+func TestRecreateDirectoriesFromConfigPVEStatError(t *testing.T) {
+	logger := newDirTestLogger()
+	// Creiamo una directory e la rendiamo non leggibile per causare errore stat
+	tmpDir := t.TempDir()
+	cfgDir := filepath.Join(tmpDir, "noperm")
+	if err := os.MkdirAll(cfgDir, 0o000); err != nil {
+		t.Skipf("cannot create restricted directory: %v", err)
+	}
+	defer os.Chmod(cfgDir, 0o755)
+
+	cfgPath := filepath.Join(cfgDir, "storage.cfg")
+	prev := storageCfgPath
+	storageCfgPath = cfgPath
+	defer func() { storageCfgPath = prev }()
+
+	err := RecreateDirectoriesFromConfig(SystemTypePVE, logger)
+	// Se siamo root, il test non funziona come previsto
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user")
+	}
+	if err == nil {
+		t.Fatalf("expected error from stat on restricted path")
+	}
+}
+
+// Test: RecreateDirectoriesFromConfig propaga errore da RecreateDatastoreDirectories
+func TestRecreateDirectoriesFromConfigPBSStatError(t *testing.T) {
+	logger := newDirTestLogger()
+	// Creiamo una directory e la rendiamo non leggibile
+	tmpDir := t.TempDir()
+	cfgDir := filepath.Join(tmpDir, "noperm")
+	if err := os.MkdirAll(cfgDir, 0o000); err != nil {
+		t.Skipf("cannot create restricted directory: %v", err)
+	}
+	defer os.Chmod(cfgDir, 0o755)
+
+	cfgPath := filepath.Join(cfgDir, "datastore.cfg")
+	prev := datastoreCfgPath
+	datastoreCfgPath = cfgPath
+	defer func() { datastoreCfgPath = prev }()
+
+	err := RecreateDirectoriesFromConfig(SystemTypePBS, logger)
+	// Se siamo root, il test non funziona come previsto
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user")
+	}
+	if err == nil {
+		t.Fatalf("expected error from stat on restricted path")
+	}
+}
