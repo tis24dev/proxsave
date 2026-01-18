@@ -385,8 +385,45 @@ func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *l
 		logger.Debug("NIC mapping details:\n%s", plan.Mapping.Details())
 	}
 
+	if !plan.Mapping.IsEmpty() {
+		logging.DebugStep(logger, "NIC repair", "Detect persistent NIC naming overrides (udev/systemd)")
+		overrides, err := detectNICNamingOverrideRules(logger)
+		if err != nil {
+			logger.Debug("NIC naming override detection failed: %v", err)
+		} else if overrides.Empty() {
+			logging.DebugStep(logger, "NIC repair", "No persistent NIC naming overrides detected")
+		} else {
+			logger.Warning("%s", overrides.Summary())
+			logging.DebugStep(logger, "NIC repair", "Naming override details:\n%s", overrides.Details(32))
+			fmt.Println()
+			fmt.Println("WARNING: Persistent NIC naming rules detected (udev/systemd).")
+			fmt.Println("If you use custom rules to keep legacy interface names (e.g. enp3s0 -> eth0), ProxSave NIC repair may rewrite /etc/network/interfaces* to different names.")
+			if details := strings.TrimSpace(overrides.Details(8)); details != "" {
+				fmt.Println(details)
+			}
+			skip, err := promptYesNo(ctx, reader, "Skip NIC name repair and keep restored interface names? (y/N): ")
+			if err != nil {
+				logger.Warning("NIC naming override prompt failed: %v", err)
+			} else if skip {
+				logging.DebugStep(logger, "NIC repair", "User choice: skip NIC repair due to naming overrides")
+				logger.Info("NIC name repair skipped due to persistent naming rules")
+				return &nicRepairResult{AppliedAt: nowRestore(), SkippedReason: "skipped due to persistent NIC naming rules (user choice)"}
+			} else {
+				logging.DebugStep(logger, "NIC repair", "User choice: proceed with NIC repair despite naming overrides")
+			}
+		}
+	}
+
 	includeConflicts := false
 	if len(plan.Conflicts) > 0 {
+		logging.DebugStep(logger, "NIC repair", "Conflicts detected: %d", len(plan.Conflicts))
+		for i, conflict := range plan.Conflicts {
+			if i >= 32 {
+				logging.DebugStep(logger, "NIC repair", "Conflict details truncated (showing first 32)")
+				break
+			}
+			logging.DebugStep(logger, "NIC repair", "Conflict: %s", conflict.Details())
+		}
 		fmt.Println("NIC name conflicts detected:")
 		for _, conflict := range plan.Conflicts {
 			fmt.Println(conflict.Details())

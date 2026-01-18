@@ -249,13 +249,60 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	var detailedLogPath string
 	if len(plan.NormalCategories) > 0 {
 		logger.Info("")
-		detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, plan.NormalCategories, mode, logger)
-		if err != nil {
-			logger.Error("Restore failed: %v", err)
-			if safetyBackup != nil {
-				logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+		categoriesForExtraction := plan.NormalCategories
+		if needsClusterRestore {
+			logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: sanitize categories to avoid /etc/pve shadow writes")
+			sanitized, removed := sanitizeCategoriesForClusterRecovery(categoriesForExtraction)
+			removedPaths := 0
+			for _, paths := range removed {
+				removedPaths += len(paths)
 			}
-			return err
+			logging.DebugStep(
+				logger,
+				"restore",
+				"Cluster RECOVERY shadow-guard: categories_before=%d categories_after=%d removed_categories=%d removed_paths=%d",
+				len(categoriesForExtraction),
+				len(sanitized),
+				len(removed),
+				removedPaths,
+			)
+			if len(removed) > 0 {
+				logger.Warning("Cluster RECOVERY restore: skipping direct restore of /etc/pve paths to prevent shadowing while pmxcfs is stopped/unmounted")
+				for _, cat := range categoriesForExtraction {
+					if paths, ok := removed[cat.ID]; ok && len(paths) > 0 {
+						logger.Warning("  - %s (%s): %s", cat.Name, cat.ID, strings.Join(paths, ", "))
+					}
+				}
+				logger.Info("These paths are expected to be restored from config.db and become visible after /etc/pve is remounted.")
+			} else {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: no /etc/pve paths detected in selected categories")
+			}
+			categoriesForExtraction = sanitized
+			var extractionIDs []string
+			for _, cat := range categoriesForExtraction {
+				if id := strings.TrimSpace(cat.ID); id != "" {
+					extractionIDs = append(extractionIDs, id)
+				}
+			}
+			if len(extractionIDs) > 0 {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=%s", strings.Join(extractionIDs, ","))
+			} else {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=<none>")
+			}
+		}
+
+		if len(categoriesForExtraction) == 0 {
+			logging.DebugStep(logger, "restore", "Skip system-path extraction: no categories remain after shadow-guard")
+			logger.Info("No system-path categories remain after cluster shadow-guard; skipping system-path extraction.")
+		} else {
+			detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, categoriesForExtraction, mode, logger)
+			if err != nil {
+				logger.Error("Restore failed: %v", err)
+				if safetyBackup != nil {
+					logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+				}
+				return err
+			}
 		}
 	} else {
 		logger.Info("")
@@ -924,33 +971,105 @@ func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logg
 
 // runSafeClusterApply applies selected cluster configs via pvesh without touching config.db.
 // It operates on files extracted to exportRoot (e.g. exportDestRoot).
-func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) error {
+func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) (err error) {
+	done := logging.DebugStart(logger, "safe cluster apply", "export_root=%s", exportRoot)
+	defer func() { done(err) }()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	if _, err := exec.LookPath("pvesh"); err != nil {
+	pveshPath, lookErr := exec.LookPath("pvesh")
+	if lookErr != nil {
 		logger.Warning("pvesh not found in PATH; skipping SAFE cluster apply")
 		return nil
 	}
+	logging.DebugStep(logger, "safe cluster apply", "pvesh=%s", pveshPath)
 
 	currentNode, _ := os.Hostname()
 	currentNode = shortHost(currentNode)
+	if strings.TrimSpace(currentNode) == "" {
+		currentNode = "localhost"
+	}
+	logging.DebugStep(logger, "safe cluster apply", "current_node=%s", currentNode)
 
 	logger.Info("")
 	logger.Info("SAFE cluster restore: applying configs via pvesh (node=%s)", currentNode)
 
-	vmEntries, vmErr := scanVMConfigs(exportRoot, currentNode)
-	if vmErr != nil {
-		logger.Warning("Failed to scan VM configs: %v", vmErr)
+	sourceNode := currentNode
+	logging.DebugStep(logger, "safe cluster apply", "List exported node directories under %s", filepath.Join(exportRoot, "etc/pve/nodes"))
+	exportNodes, nodesErr := listExportNodeDirs(exportRoot)
+	if nodesErr != nil {
+		logger.Warning("Failed to inspect exported node directories: %v", nodesErr)
+	} else if len(exportNodes) > 0 {
+		logging.DebugStep(logger, "safe cluster apply", "export_nodes=%s", strings.Join(exportNodes, ","))
+	} else {
+		logging.DebugStep(logger, "safe cluster apply", "No exported node directories found")
+	}
+
+	if len(exportNodes) > 0 && !stringSliceContains(exportNodes, sourceNode) {
+		logging.DebugStep(logger, "safe cluster apply", "Node mismatch: current_node=%s export_nodes=%s", currentNode, strings.Join(exportNodes, ","))
+		logger.Warning("SAFE cluster restore: VM/CT configs not found for current node %s in export; available nodes: %s", currentNode, strings.Join(exportNodes, ", "))
+		if len(exportNodes) == 1 {
+			sourceNode = exportNodes[0]
+			logging.DebugStep(logger, "safe cluster apply", "Auto-select source node: %s", sourceNode)
+			logger.Info("SAFE cluster restore: using exported node %s as VM/CT source, applying to current node %s", sourceNode, currentNode)
+		} else {
+			for _, node := range exportNodes {
+				qemuCount, lxcCount := countVMConfigsForNode(exportRoot, node)
+				logging.DebugStep(logger, "safe cluster apply", "Export node candidate: %s (qemu=%d, lxc=%d)", node, qemuCount, lxcCount)
+			}
+			selected, selErr := promptExportNodeSelection(ctx, reader, exportRoot, currentNode, exportNodes)
+			if selErr != nil {
+				return selErr
+			}
+			if strings.TrimSpace(selected) == "" {
+				logging.DebugStep(logger, "safe cluster apply", "User selected: skip VM/CT apply (no source node)")
+				logger.Info("Skipping VM/CT apply (no source node selected)")
+				sourceNode = ""
+			} else {
+				sourceNode = selected
+				logging.DebugStep(logger, "safe cluster apply", "User selected source node: %s", sourceNode)
+				logger.Info("SAFE cluster restore: selected exported node %s as VM/CT source, applying to current node %s", sourceNode, currentNode)
+			}
+		}
+	}
+	logging.DebugStep(logger, "safe cluster apply", "Selected VM/CT source node: %q (current_node=%q)", sourceNode, currentNode)
+
+	var vmEntries []vmEntry
+	if strings.TrimSpace(sourceNode) != "" {
+		logging.DebugStep(logger, "safe cluster apply", "Scan VM/CT configs in export (source_node=%s)", sourceNode)
+		var vmErr error
+		vmEntries, vmErr = scanVMConfigs(exportRoot, sourceNode)
+		if vmErr != nil {
+			logger.Warning("Failed to scan VM configs: %v", vmErr)
+		} else {
+			logging.DebugStep(logger, "safe cluster apply", "VM/CT configs found=%d (source_node=%s)", len(vmEntries), sourceNode)
+			qemuCount := 0
+			lxcCount := 0
+			for _, entry := range vmEntries {
+				switch entry.Kind {
+				case "qemu":
+					qemuCount++
+				case "lxc":
+					lxcCount++
+				}
+			}
+			logging.DebugStep(logger, "safe cluster apply", "VM/CT breakdown: qemu=%d lxc=%d", qemuCount, lxcCount)
+		}
 	}
 	if len(vmEntries) > 0 {
 		fmt.Println()
-		fmt.Printf("Found %d VM/CT configs for node %s\n", len(vmEntries), currentNode)
-		applyVMs, err := promptYesNo(ctx, reader, "Apply all VM/CT configs via pvesh?")
-		if err != nil {
-			return err
+		if sourceNode == currentNode {
+			fmt.Printf("Found %d VM/CT configs for node %s\n", len(vmEntries), currentNode)
+		} else {
+			fmt.Printf("Found %d VM/CT configs for exported node %s (will apply to current node %s)\n", len(vmEntries), sourceNode, currentNode)
 		}
+		applyVMs, promptErr := promptYesNo(ctx, reader, "Apply all VM/CT configs via pvesh? ")
+		if promptErr != nil {
+			return promptErr
+		}
+		logging.DebugStep(logger, "safe cluster apply", "User choice: apply_vms=%v (entries=%d)", applyVMs, len(vmEntries))
 		if applyVMs {
 			applied, failed := applyVMConfigs(ctx, vmEntries, logger)
 			logger.Info("VM/CT apply completed: ok=%d failed=%d", applied, failed)
@@ -958,20 +1077,30 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 			logger.Info("Skipping VM/CT apply")
 		}
 	} else {
-		logger.Info("No VM/CT configs found for node %s in export", currentNode)
+		if strings.TrimSpace(sourceNode) == "" {
+			logger.Info("No VM/CT configs applied (no source node selected)")
+		} else {
+			logger.Info("No VM/CT configs found for node %s in export", sourceNode)
+		}
 	}
 
 	// Storage configuration
 	storageCfg := filepath.Join(exportRoot, "etc/pve/storage.cfg")
-	if info, err := restoreFS.Stat(storageCfg); err == nil && !info.IsDir() {
+	logging.DebugStep(logger, "safe cluster apply", "Check export: storage.cfg (%s)", storageCfg)
+	storageInfo, storageErr := restoreFS.Stat(storageCfg)
+	if storageErr == nil && !storageInfo.IsDir() {
+		logging.DebugStep(logger, "safe cluster apply", "storage.cfg found (size=%d)", storageInfo.Size())
 		fmt.Println()
 		fmt.Printf("Storage configuration found: %s\n", storageCfg)
 		applyStorage, err := promptYesNo(ctx, reader, "Apply storage.cfg via pvesh?")
 		if err != nil {
 			return err
 		}
+		logging.DebugStep(logger, "safe cluster apply", "User choice: apply_storage=%v", applyStorage)
 		if applyStorage {
+			logging.DebugStep(logger, "safe cluster apply", "Apply storage.cfg via pvesh")
 			applied, failed, err := applyStorageCfg(ctx, storageCfg, logger)
+			logging.DebugStep(logger, "safe cluster apply", "Storage apply result: ok=%d failed=%d err=%v", applied, failed, err)
 			if err != nil {
 				logger.Warning("Storage apply encountered errors: %v", err)
 			}
@@ -980,19 +1109,25 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 			logger.Info("Skipping storage.cfg apply")
 		}
 	} else {
+		logging.DebugStep(logger, "safe cluster apply", "storage.cfg not found (err=%v)", storageErr)
 		logger.Info("No storage.cfg found in export")
 	}
 
 	// Datacenter configuration
 	dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
-	if info, err := restoreFS.Stat(dcCfg); err == nil && !info.IsDir() {
+	logging.DebugStep(logger, "safe cluster apply", "Check export: datacenter.cfg (%s)", dcCfg)
+	dcInfo, dcErr := restoreFS.Stat(dcCfg)
+	if dcErr == nil && !dcInfo.IsDir() {
+		logging.DebugStep(logger, "safe cluster apply", "datacenter.cfg found (size=%d)", dcInfo.Size())
 		fmt.Println()
 		fmt.Printf("Datacenter configuration found: %s\n", dcCfg)
 		applyDC, err := promptYesNo(ctx, reader, "Apply datacenter.cfg via pvesh?")
 		if err != nil {
 			return err
 		}
+		logging.DebugStep(logger, "safe cluster apply", "User choice: apply_datacenter=%v", applyDC)
 		if applyDC {
+			logging.DebugStep(logger, "safe cluster apply", "Apply datacenter.cfg via pvesh")
 			if err := runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", dcCfg}); err != nil {
 				logger.Warning("Failed to apply datacenter.cfg: %v", err)
 			} else {
@@ -1002,6 +1137,7 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 			logger.Info("Skipping datacenter.cfg apply")
 		}
 	} else {
+		logging.DebugStep(logger, "safe cluster apply", "datacenter.cfg not found (err=%v)", dcErr)
 		logger.Info("No datacenter.cfg found in export")
 	}
 
@@ -1055,6 +1191,98 @@ func scanVMConfigs(exportRoot, node string) ([]vmEntry, error) {
 	}
 
 	return entries, nil
+}
+
+func listExportNodeDirs(exportRoot string) ([]string, error) {
+	nodesRoot := filepath.Join(exportRoot, "etc/pve/nodes")
+	entries, err := restoreFS.ReadDir(nodesRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var nodes []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" {
+			continue
+		}
+		nodes = append(nodes, name)
+	}
+	sort.Strings(nodes)
+	return nodes, nil
+}
+
+func countVMConfigsForNode(exportRoot, node string) (qemuCount, lxcCount int) {
+	base := filepath.Join(exportRoot, "etc/pve/nodes", node)
+
+	countInDir := func(dir string) int {
+		entries, err := restoreFS.ReadDir(dir)
+		if err != nil {
+			return 0
+		}
+		n := 0
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(entry.Name(), ".conf") {
+				n++
+			}
+		}
+		return n
+	}
+
+	qemuCount = countInDir(filepath.Join(base, "qemu-server"))
+	lxcCount = countInDir(filepath.Join(base, "lxc"))
+	return qemuCount, lxcCount
+}
+
+func promptExportNodeSelection(ctx context.Context, reader *bufio.Reader, exportRoot, currentNode string, exportNodes []string) (string, error) {
+	for {
+		fmt.Println()
+		fmt.Printf("WARNING: VM/CT configs in this backup are stored under different node names.\n")
+		fmt.Printf("Current node: %s\n", currentNode)
+		fmt.Println("Select which exported node to import VM/CT configs from (they will be applied to the current node):")
+		for idx, node := range exportNodes {
+			qemuCount, lxcCount := countVMConfigsForNode(exportRoot, node)
+			fmt.Printf("  [%d] %s (qemu=%d, lxc=%d)\n", idx+1, node, qemuCount, lxcCount)
+		}
+		fmt.Println("  [0] Skip VM/CT apply")
+
+		fmt.Print("Choice: ")
+		line, err := input.ReadLineWithContext(ctx, reader)
+		if err != nil {
+			return "", err
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "0" {
+			return "", nil
+		}
+		if trimmed == "" {
+			continue
+		}
+		idx, err := parseMenuIndex(trimmed, len(exportNodes))
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		return exportNodes[idx], nil
+	}
+}
+
+func stringSliceContains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func readVMName(confPath string) string {

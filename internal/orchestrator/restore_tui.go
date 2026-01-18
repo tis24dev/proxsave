@@ -267,13 +267,60 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	var detailedLogPath string
 	if len(plan.NormalCategories) > 0 {
 		logger.Info("")
-		detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, plan.NormalCategories, mode, logger)
-		if err != nil {
-			logger.Error("Restore failed: %v", err)
-			if safetyBackup != nil {
-				logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+		categoriesForExtraction := plan.NormalCategories
+		if needsClusterRestore {
+			logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: sanitize categories to avoid /etc/pve shadow writes")
+			sanitized, removed := sanitizeCategoriesForClusterRecovery(categoriesForExtraction)
+			removedPaths := 0
+			for _, paths := range removed {
+				removedPaths += len(paths)
 			}
-			return err
+			logging.DebugStep(
+				logger,
+				"restore",
+				"Cluster RECOVERY shadow-guard: categories_before=%d categories_after=%d removed_categories=%d removed_paths=%d",
+				len(categoriesForExtraction),
+				len(sanitized),
+				len(removed),
+				removedPaths,
+			)
+			if len(removed) > 0 {
+				logger.Warning("Cluster RECOVERY restore: skipping direct restore of /etc/pve paths to prevent shadowing while pmxcfs is stopped/unmounted")
+				for _, cat := range categoriesForExtraction {
+					if paths, ok := removed[cat.ID]; ok && len(paths) > 0 {
+						logger.Warning("  - %s (%s): %s", cat.Name, cat.ID, strings.Join(paths, ", "))
+					}
+				}
+				logger.Info("These paths are expected to be restored from config.db and become visible after /etc/pve is remounted.")
+			} else {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: no /etc/pve paths detected in selected categories")
+			}
+			categoriesForExtraction = sanitized
+			var extractionIDs []string
+			for _, cat := range categoriesForExtraction {
+				if id := strings.TrimSpace(cat.ID); id != "" {
+					extractionIDs = append(extractionIDs, id)
+				}
+			}
+			if len(extractionIDs) > 0 {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=%s", strings.Join(extractionIDs, ","))
+			} else {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=<none>")
+			}
+		}
+
+		if len(categoriesForExtraction) == 0 {
+			logging.DebugStep(logger, "restore", "Skip system-path extraction: no categories remain after shadow-guard")
+			logger.Info("No system-path categories remain after cluster shadow-guard; skipping system-path extraction.")
+		} else {
+			detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, categoriesForExtraction, mode, logger)
+			if err != nil {
+				logger.Error("Restore failed: %v", err)
+				if safetyBackup != nil {
+					logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+				}
+				return err
+			}
 		}
 	} else {
 		logger.Info("")
@@ -1225,9 +1272,55 @@ func maybeRepairNICNamesTUI(ctx context.Context, logger *logging.Logger, archive
 		return &nicRepairResult{AppliedAt: nowRestore(), SkippedReason: plan.SkippedReason}
 	}
 
+	if plan != nil && !plan.Mapping.IsEmpty() {
+		logging.DebugStep(logger, "NIC repair", "Detect persistent NIC naming overrides (udev/systemd)")
+		overrides, err := detectNICNamingOverrideRules(logger)
+		if err != nil {
+			logger.Debug("NIC naming override detection failed: %v", err)
+		} else if overrides.Empty() {
+			logging.DebugStep(logger, "NIC repair", "No persistent NIC naming overrides detected")
+		} else {
+			logging.DebugStep(logger, "NIC repair", "Naming overrides detected: %s", overrides.Summary())
+			logging.DebugStep(logger, "NIC repair", "Naming override details:\n%s", overrides.Details(32))
+			var b strings.Builder
+			b.WriteString("Detected persistent NIC naming rules (udev/systemd).\n\n")
+			b.WriteString("If these rules are intended to keep legacy interface names, ProxSave NIC repair may rewrite /etc/network/interfaces* to different names.\n\n")
+			if details := strings.TrimSpace(overrides.Details(8)); details != "" {
+				b.WriteString(details)
+				b.WriteString("\n\n")
+			}
+			b.WriteString("Skip NIC name repair and keep restored interface names?")
+
+			skip, err := promptYesNoTUIFunc(
+				"NIC naming overrides",
+				configPath,
+				buildSig,
+				b.String(),
+				"Skip NIC repair",
+				"Proceed",
+			)
+			if err != nil {
+				logger.Warning("NIC naming override prompt failed: %v", err)
+			} else if skip {
+				logging.DebugStep(logger, "NIC repair", "User choice: skip NIC repair due to naming overrides")
+				logger.Info("NIC name repair skipped due to persistent naming rules")
+				return &nicRepairResult{AppliedAt: nowRestore(), SkippedReason: "skipped due to persistent NIC naming rules (user choice)"}
+			} else {
+				logging.DebugStep(logger, "NIC repair", "User choice: proceed with NIC repair despite naming overrides")
+			}
+		}
+	}
+
 	includeConflicts := false
 	if len(plan.Conflicts) > 0 {
 		logging.DebugStep(logger, "NIC repair", "Conflicts detected: %d", len(plan.Conflicts))
+		for i, conflict := range plan.Conflicts {
+			if i >= 32 {
+				logging.DebugStep(logger, "NIC repair", "Conflict details truncated (showing first 32)")
+				break
+			}
+			logging.DebugStep(logger, "NIC repair", "Conflict: %s", conflict.Details())
+		}
 		var b strings.Builder
 		b.WriteString("Detected NIC name conflicts.\n\n")
 		b.WriteString("These interface names exist on the current system but map to different NICs in the backup inventory:\n\n")
