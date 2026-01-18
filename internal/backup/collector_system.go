@@ -585,6 +585,11 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(infoDir, "ip_addr.txt")); err != nil {
 		return err
 	}
+	c.collectCommandOptional(ctx,
+		"ip -j addr show",
+		filepath.Join(commandsDir, "ip_addr.json"),
+		"IP addresses (json)",
+		filepath.Join(infoDir, "ip_addr.json"))
 
 	// Policy routing rules
 	if err := c.collectCommandMulti(ctx,
@@ -595,6 +600,11 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(infoDir, "ip_rule.txt")); err != nil {
 		return err
 	}
+	c.collectCommandOptional(ctx,
+		"ip -j rule show",
+		filepath.Join(commandsDir, "ip_rule.json"),
+		"IP rules (json)",
+		filepath.Join(infoDir, "ip_rule.json"))
 
 	// IP routes
 	if err := c.collectCommandMulti(ctx,
@@ -605,6 +615,11 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(infoDir, "ip_route.txt")); err != nil {
 		return err
 	}
+	c.collectCommandOptional(ctx,
+		"ip -j route show",
+		filepath.Join(commandsDir, "ip_route.json"),
+		"IP routes (json)",
+		filepath.Join(infoDir, "ip_route.json"))
 
 	// All routing tables (IPv4/IPv6)
 	c.collectCommandOptional(ctx,
@@ -624,6 +639,11 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(commandsDir, "ip_link.txt"),
 		"IP link statistics",
 		filepath.Join(infoDir, "ip_link.txt"))
+	c.collectCommandOptional(ctx,
+		"ip -j link",
+		filepath.Join(commandsDir, "ip_link.json"),
+		"IP links (json)",
+		filepath.Join(infoDir, "ip_link.json"))
 
 	// Neighbors (ARP/NDP)
 	c.safeCmdOutput(ctx,
@@ -654,6 +674,10 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		"bridge mdb show",
 		filepath.Join(commandsDir, "bridge_mdb.txt"),
 		"Bridge MDB")
+
+	if err := c.collectNetworkInventory(ctx, commandsDir, infoDir); err != nil {
+		c.logger.Debug("Network inventory collection failed: %v", err)
+	}
 
 	// Bonding status (/proc/net/bonding/*)
 	if entries, err := os.ReadDir(c.systemPath("/proc/net/bonding")); err == nil {
@@ -1006,6 +1030,7 @@ func (c *Collector) buildNetworkReport(ctx context.Context, commandsDir, infoDir
 		{"IP routes (all tables v6)", "ip_route_all_v6.txt"},
 		{"IP rules", "ip_rule.txt"},
 		{"IP links (stats)", "ip_link.txt"},
+		{"Network inventory", "network_inventory.json"},
 		{"Neighbors (ARP/NDP)", "ip_neigh.txt"},
 		{"Neighbors (IPv6)", "ip6_neigh.txt"},
 		{"Bridge links", "bridge_link.txt"},

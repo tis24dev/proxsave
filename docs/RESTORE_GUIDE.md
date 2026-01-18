@@ -323,6 +323,7 @@ Phase 13: pvesh SAFE Apply (Cluster SAFE Mode Only)
   └─ Offer to apply datacenter.cfg via pvesh
 
 Phase 14: Post-Restore Tasks
+  ├─ Optional: Apply restored network config with rollback timer (requires COMMIT)
   ├─ Recreate storage/datastore directories
   ├─ Check ZFS pool status (PBS only)
   ├─ Restart PVE/PBS services (if stopped)
@@ -1638,6 +1639,38 @@ Backup source: Proxmox Virtual Environment (PVE)
 ⚠ WARNING: Potential incompatibility detected!
 Type "yes" to continue anyway or "no" to abort: _
 ```
+
+### 4. Network Safe Apply (Optional)
+
+If the **network** category is restored, ProxSave can optionally apply the
+new network configuration immediately using a **transactional rollback timer**.
+
+**How it works**:
+- ProxSave arms a local rollback job **before** applying changes
+- Rollback restores **only network-related files** using a dedicated archive under `/tmp/proxsave/network_rollback_backup_*` (so it won’t undo other restored categories)
+- Rollback also prunes network config files that were **created after** the backup (e.g. extra files under `/etc/network/interfaces.d/`), so rollback returns to the exact pre-restore state
+- The user has **90 seconds** to type `COMMIT`
+- If `COMMIT` is not received, the previous configuration is restored automatically
+- If the network-only rollback archive is not available, ProxSave prompts before falling back to the full safety backup (or skipping live apply)
+
+This protects SSH/GUI access during network changes.
+
+**Health checks**:
+- After applying changes, ProxSave runs local checks (SSH route if available, default route, link state, IP addresses, gateway ping, DNS config/resolve, local web UI port)
+- On PVE systems, additional checks are included for cluster networking: `/etc/pve` (pmxcfs) mount status, `pve-cluster` / `corosync` service state, and `pvecm status` quorum
+- The result is shown to help decide whether to type `COMMIT`
+- A before/after snapshot (`ip link/addr/route`) and the health report are saved under `/tmp/proxsave/network_apply_*` for troubleshooting
+
+**NIC name repair**:
+- If physical NIC names changed after reinstall (e.g. `eno1` → `enp3s0`), ProxSave attempts an automatic mapping using backup network inventory (permanent MAC / MAC / PCI path / udev IDs like `ID_PATH`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT`, `ID_SERIAL`)
+- When a safe mapping is found, `/etc/network/interfaces` and `/etc/network/interfaces.d/*` are rewritten before applying the network config
+- You can run NIC repair even if you skip live network apply (recommended before rebooting)
+- If a mapping would overwrite an interface name that already exists on the current system, ProxSave prompts before applying it (conflict-safe)
+- A backup of the pre-repair files is stored under `/tmp/proxsave/nic_repair_*`
+
+**Preflight validation**:
+- After NIC repair, ProxSave validates the ifupdown configuration before reloading networking (e.g. `ifquery --check -a` / ifupdown2 check mode)
+- If validation fails, live apply is aborted and the validator output is saved under `/tmp/proxsave/network_apply_*/preflight.txt`
 
 ### 4. Hard Guards
 

@@ -170,6 +170,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 	// Create safety backup of current configuration (only for categories that will write to system paths)
 	var safetyBackup *SafetyBackupResult
+	var networkRollbackBackup *SafetyBackupResult
 	if len(plan.NormalCategories) > 0 {
 		logger.Info("")
 		safetyBackup, err = CreateSafetyBackup(logger, plan.NormalCategories, destRoot)
@@ -187,6 +188,18 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		} else {
 			logger.Info("Safety backup location: %s", safetyBackup.BackupPath)
 			logger.Info("You can restore from this backup if needed using: tar -xzf %s -C /", safetyBackup.BackupPath)
+		}
+	}
+
+	if hasCategoryID(plan.NormalCategories, "network") {
+		logger.Info("")
+		logging.DebugStep(logger, "restore", "Create network-only rollback backup for transactional network apply")
+		networkRollbackBackup, err = CreateNetworkRollbackBackup(logger, plan.NormalCategories, destRoot)
+		if err != nil {
+			logger.Warning("Failed to create network rollback backup: %v", err)
+		} else if networkRollbackBackup != nil && strings.TrimSpace(networkRollbackBackup.BackupPath) != "" {
+			logger.Info("Network rollback backup location: %s", networkRollbackBackup.BackupPath)
+			logger.Info("This backup is used for the 90s network rollback timer and only includes network paths.")
 		}
 	}
 
@@ -285,6 +298,11 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 	} else {
 		logger.Debug("Skipping datastore/storage directory recreation (category not selected)")
+	}
+
+	logger.Info("")
+	if err := maybeApplyNetworkConfigCLI(ctx, reader, logger, plan, safetyBackup, networkRollbackBackup, prepared.ArchivePath, cfg.DryRun); err != nil {
+		logger.Warning("Network apply step skipped or failed: %v", err)
 	}
 
 	logger.Info("")

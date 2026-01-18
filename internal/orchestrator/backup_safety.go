@@ -16,6 +16,13 @@ import (
 var safetyFS FS = osFS{}
 var safetyNow = time.Now
 
+type safetyBackupSpec struct {
+	ArchivePrefix     string
+	LocationFileName  string
+	HumanDescription  string
+	WriteLocationFile bool
+}
+
 // resolveAndCheckPath cleans and resolves symlinks for candidate extraction paths
 // and verifies the resolved path is still within destRoot.
 func resolveAndCheckPath(destRoot, candidate string) (string, error) {
@@ -58,22 +65,31 @@ type SafetyBackupResult struct {
 	Timestamp     time.Time
 }
 
-// CreateSafetyBackup creates a backup of files that will be overwritten
-func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (result *SafetyBackupResult, err error) {
-	done := logging.DebugStart(logger, "create safety backup", "dest=%s categories=%d", destRoot, len(selectedCategories))
+func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, destRoot string, spec safetyBackupSpec) (result *SafetyBackupResult, err error) {
+	desc := strings.TrimSpace(spec.HumanDescription)
+	if desc == "" {
+		desc = "Safety backup"
+	}
+	prefix := strings.TrimSpace(spec.ArchivePrefix)
+	if prefix == "" {
+		prefix = "restore_backup"
+	}
+	locationFileName := strings.TrimSpace(spec.LocationFileName)
+
+	done := logging.DebugStart(logger, "create "+strings.ToLower(desc), "dest=%s categories=%d", destRoot, len(selectedCategories))
 	defer func() { done(err) }()
+
 	timestamp := safetyNow().Format("20060102_150405")
 	baseDir := filepath.Join("/tmp", "proxsave")
 	if err := safetyFS.MkdirAll(baseDir, 0755); err != nil {
 		return nil, fmt.Errorf("create safety backup directory: %w", err)
 	}
-	backupDir := filepath.Join(baseDir, fmt.Sprintf("restore_backup_%s", timestamp))
+	backupDir := filepath.Join(baseDir, fmt.Sprintf("%s_%s", prefix, timestamp))
 	backupArchive := backupDir + ".tar.gz"
 
-	logger.Info("Creating safety backup of current configuration...")
-	logger.Debug("Safety backup will be saved to: %s", backupArchive)
+	logger.Info("Creating %s of current configuration...", strings.ToLower(desc))
+	logger.Debug("%s will be saved to: %s", desc, backupArchive)
 
-	// Create backup archive
 	file, err := safetyFS.Create(backupArchive)
 	if err != nil {
 		return nil, fmt.Errorf("create backup archive: %w", err)
@@ -91,34 +107,27 @@ func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 		Timestamp:  safetyNow(),
 	}
 
-	// Collect all paths to backup
 	pathsToBackup := GetSelectedPaths(selectedCategories)
 
 	for _, catPath := range pathsToBackup {
-		// Convert archive path to filesystem path
 		fsPath := strings.TrimPrefix(catPath, "./")
 		fullPath := filepath.Join(destRoot, fsPath)
 
-		// Check if path exists
 		info, err := safetyFS.Stat(fullPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				// Path doesn't exist, skip
 				continue
 			}
 			logger.Warning("Cannot stat %s: %v", fullPath, err)
 			continue
 		}
 
-		// Backup the path
 		if info.IsDir() {
-			// Backup directory recursively
 			err = backupDirectory(tarWriter, fullPath, fsPath, result, logger)
 			if err != nil {
 				logger.Warning("Failed to backup directory %s: %v", fullPath, err)
 			}
 		} else {
-			// Backup single file
 			err = backupFile(tarWriter, fullPath, fsPath, result, logger)
 			if err != nil {
 				logger.Warning("Failed to backup file %s: %v", fullPath, err)
@@ -126,20 +135,45 @@ func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 		}
 	}
 
-	logger.Info("Safety backup created: %s (%d files, %.2f MB)",
+	logger.Info("%s created: %s (%d files, %.2f MB)",
+		desc,
 		backupArchive,
 		result.FilesBackedUp,
 		float64(result.TotalSize)/(1024*1024))
 
-	// Write backup location to a file for easy reference
-	locationFile := filepath.Join(baseDir, "restore_backup_location.txt")
-	if err := safetyFS.WriteFile(locationFile, []byte(backupArchive), 0644); err != nil {
-		logger.Warning("Could not write backup location file: %v", err)
-	} else {
-		logger.Info("Backup location saved to: %s", locationFile)
+	if spec.WriteLocationFile && locationFileName != "" {
+		locationFile := filepath.Join(baseDir, locationFileName)
+		if err := safetyFS.WriteFile(locationFile, []byte(backupArchive), 0644); err != nil {
+			logger.Warning("Could not write backup location file: %v", err)
+		} else {
+			logger.Info("Backup location saved to: %s", locationFile)
+		}
 	}
 
 	return result, nil
+}
+
+// CreateSafetyBackup creates a backup of files that will be overwritten
+func CreateSafetyBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (result *SafetyBackupResult, err error) {
+	return createSafetyBackup(logger, selectedCategories, destRoot, safetyBackupSpec{
+		ArchivePrefix:     "restore_backup",
+		LocationFileName:  "restore_backup_location.txt",
+		HumanDescription:  "Safety backup",
+		WriteLocationFile: true,
+	})
+}
+
+func CreateNetworkRollbackBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (*SafetyBackupResult, error) {
+	networkCat := GetCategoryByID("network", selectedCategories)
+	if networkCat == nil {
+		return nil, nil
+	}
+	return createSafetyBackup(logger, []Category{*networkCat}, destRoot, safetyBackupSpec{
+		ArchivePrefix:     "network_rollback_backup",
+		LocationFileName:  "network_rollback_backup_location.txt",
+		HumanDescription:  "Network rollback backup",
+		WriteLocationFile: true,
+	})
 }
 
 // backupFile adds a single file to the tar archive
