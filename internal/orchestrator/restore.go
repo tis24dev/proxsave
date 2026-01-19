@@ -143,6 +143,16 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 	}
 
+	// Staging is designed to protect live systems. In test runs (fake filesystem) or non-root targets,
+	// extract staged categories directly to the destination to keep restore semantics predictable.
+	if destRoot != "/" || !isRealRestoreFS(restoreFS) {
+		if len(plan.StagedCategories) > 0 {
+			logging.DebugStep(logger, "restore", "Staging disabled (destRoot=%s realFS=%v): extracting %d staged category(ies) directly", destRoot, isRealRestoreFS(restoreFS), len(plan.StagedCategories))
+			plan.NormalCategories = append(plan.NormalCategories, plan.StagedCategories...)
+			plan.StagedCategories = nil
+		}
+	}
+
 	// Create restore configuration
 	restoreConfig := &SelectiveRestoreConfig{
 		Mode:       mode,
@@ -150,6 +160,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		Metadata:   candidate.Manifest,
 	}
 	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.NormalCategories...)
+	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.StagedCategories...)
 	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.ExportCategories...)
 
 	// Show detailed restore plan
@@ -171,9 +182,11 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	// Create safety backup of current configuration (only for categories that will write to system paths)
 	var safetyBackup *SafetyBackupResult
 	var networkRollbackBackup *SafetyBackupResult
-	if len(plan.NormalCategories) > 0 {
+	systemWriteCategories := append([]Category{}, plan.NormalCategories...)
+	systemWriteCategories = append(systemWriteCategories, plan.StagedCategories...)
+	if len(systemWriteCategories) > 0 {
 		logger.Info("")
-		safetyBackup, err = CreateSafetyBackup(logger, plan.NormalCategories, destRoot)
+		safetyBackup, err = CreateSafetyBackup(logger, systemWriteCategories, destRoot)
 		if err != nil {
 			logger.Warning("Failed to create safety backup: %v", err)
 			fmt.Println()
@@ -191,10 +204,10 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 	}
 
-	if hasCategoryID(plan.NormalCategories, "network") {
+	if plan.HasCategoryID("network") {
 		logger.Info("")
 		logging.DebugStep(logger, "restore", "Create network-only rollback backup for transactional network apply")
-		networkRollbackBackup, err = CreateNetworkRollbackBackup(logger, plan.NormalCategories, destRoot)
+		networkRollbackBackup, err = CreateNetworkRollbackBackup(logger, systemWriteCategories, destRoot)
 		if err != nil {
 			logger.Warning("Failed to create network rollback backup: %v", err)
 		} else if networkRollbackBackup != nil && strings.TrimSpace(networkRollbackBackup.BackupPath) != "" {
@@ -336,9 +349,42 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 	}
 
-	// Recreate directory structures from configuration files if relevant categories were restored
-	logger.Info("")
-	if shouldRecreateDirectories(systemType, plan.NormalCategories) {
+	// Stage sensitive categories (network, PBS datastore/jobs) to a temporary directory and apply them safely later.
+	stageLogPath := ""
+	stageRoot := ""
+		if len(plan.StagedCategories) > 0 {
+			stageRoot = stageDestRoot()
+			logger.Info("")
+			logger.Info("Staging %d sensitive category(ies) to: %s", len(plan.StagedCategories), stageRoot)
+			if err := restoreFS.MkdirAll(stageRoot, 0o755); err != nil {
+			return fmt.Errorf("failed to create staging directory %s: %w", stageRoot, err)
+		}
+
+		if stageLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, stageRoot, plan.StagedCategories, RestoreModeCustom, logger); err != nil {
+			logger.Warning("Staging completed with errors: %v", err)
+		} else {
+			stageLogPath = stageLog
+		}
+
+		logger.Info("")
+		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+				logger.Warning("PBS staged config apply: %v", err)
+			}
+		}
+
+		stageRootForNetworkApply := stageRoot
+		if installed, err := maybeInstallNetworkConfigFromStage(ctx, logger, plan, stageRoot, prepared.ArchivePath, networkRollbackBackup, cfg.DryRun); err != nil {
+			logger.Warning("Network staged install: %v", err)
+		} else if installed {
+			stageRootForNetworkApply = ""
+			logging.DebugStep(logger, "restore", "Network staged install completed: configuration written to /etc (no reload); live apply will use system paths")
+		}
+
+		// Recreate directory structures from configuration files if relevant categories were restored
+		logger.Info("")
+		categoriesForDirRecreate := append([]Category{}, plan.NormalCategories...)
+		categoriesForDirRecreate = append(categoriesForDirRecreate, plan.StagedCategories...)
+		if shouldRecreateDirectories(systemType, categoriesForDirRecreate) {
 		if err := RecreateDirectoriesFromConfig(systemType, logger); err != nil {
 			logger.Warning("Failed to recreate directory structures: %v", err)
 			logger.Warning("You may need to manually create storage/datastore directories")
@@ -348,12 +394,20 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 
 	logger.Info("")
-	if err := maybeApplyNetworkConfigCLI(ctx, reader, logger, plan, safetyBackup, networkRollbackBackup, prepared.ArchivePath, cfg.DryRun); err != nil {
-		logger.Warning("Network apply step skipped or failed: %v", err)
-	}
+	if plan.HasCategoryID("network") {
+		logger.Info("")
+		if err := maybeRepairResolvConfAfterRestore(ctx, logger, prepared.ArchivePath, cfg.DryRun); err != nil {
+			logger.Warning("DNS resolver repair: %v", err)
+		}
+		}
 
-	logger.Info("")
-	logger.Info("Restore completed successfully.")
+		logger.Info("")
+		if err := maybeApplyNetworkConfigCLI(ctx, reader, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, cfg.DryRun); err != nil {
+			logger.Warning("Network apply step skipped or failed: %v", err)
+		}
+
+		logger.Info("")
+		logger.Info("Restore completed successfully.")
 	logger.Info("Temporary decrypted bundle removed.")
 
 	if detailedLogPath != "" {
@@ -364,6 +418,12 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 	if exportLogPath != "" {
 		logger.Info("Export detailed log: %s", exportLogPath)
+	}
+	if stageRoot != "" {
+		logger.Info("Staging directory: %s", stageRoot)
+	}
+	if stageLogPath != "" {
+		logger.Info("Staging detailed log: %s", stageLogPath)
 	}
 
 	if safetyBackup != nil {

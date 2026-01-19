@@ -7,6 +7,7 @@ type RestorePlan struct {
 	Mode                RestoreMode
 	SystemType          SystemType
 	NormalCategories    []Category
+	StagedCategories    []Category
 	ExportCategories    []Category
 	ClusterSafeMode     bool
 	NeedsClusterRestore bool
@@ -20,17 +21,18 @@ func PlanRestore(
 	systemType SystemType,
 	mode RestoreMode,
 ) *RestorePlan {
-	normal, export := splitExportCategories(selectedCategories)
+	normal, staged, export := splitRestoreCategories(selectedCategories)
 
 	plan := &RestorePlan{
 		Mode:             mode,
 		SystemType:       systemType,
 		NormalCategories: normal,
+		StagedCategories: staged,
 		ExportCategories: export,
 	}
 
 	plan.NeedsClusterRestore = systemType == SystemTypePVE && hasCategoryID(normal, "pve_cluster")
-	plan.NeedsPBSServices = systemType == SystemTypePBS && shouldStopPBSServices(normal)
+	plan.NeedsPBSServices = systemType == SystemTypePBS && shouldStopPBSServices(append(append([]Category{}, normal...), staged...))
 
 	applyClusterSafety(plan)
 
@@ -53,13 +55,22 @@ func applyClusterSafety(plan *RestorePlan) {
 
 	// Rebuild from current selections to allow toggling both ways.
 	all := append([]Category{}, plan.NormalCategories...)
+	all = append(all, plan.StagedCategories...)
 	all = append(all, plan.ExportCategories...)
-	normal, export := splitExportCategories(all)
+	normal, staged, export := splitRestoreCategories(all)
 	if plan.ClusterSafeMode {
 		normal, export = redirectClusterCategoryToExport(normal, export)
 	}
 	plan.NormalCategories = normal
+	plan.StagedCategories = staged
 	plan.ExportCategories = export
 	plan.NeedsClusterRestore = plan.SystemType == SystemTypePVE && hasCategoryID(plan.NormalCategories, "pve_cluster")
-	plan.NeedsPBSServices = plan.SystemType == SystemTypePBS && shouldStopPBSServices(plan.NormalCategories)
+	plan.NeedsPBSServices = plan.SystemType == SystemTypePBS && shouldStopPBSServices(append(append([]Category{}, plan.NormalCategories...), plan.StagedCategories...))
+}
+
+func (p *RestorePlan) HasCategoryID(id string) bool {
+	if p == nil {
+		return false
+	}
+	return hasCategoryID(p.NormalCategories, id) || hasCategoryID(p.StagedCategories, id) || hasCategoryID(p.ExportCategories, id)
 }

@@ -67,8 +67,8 @@ func TestPlanRestoreKeepsExportCategoriesFromFullSelection(t *testing.T) {
 	normalCat := Category{ID: "network"}
 
 	plan := PlanRestore(nil, []Category{normalCat, exportCat}, SystemTypePVE, RestoreModeFull)
-	if len(plan.NormalCategories) != 1 || plan.NormalCategories[0].ID != "network" {
-		t.Fatalf("expected normal categories to keep network, got %+v", plan.NormalCategories)
+	if len(plan.StagedCategories) != 1 || plan.StagedCategories[0].ID != "network" {
+		t.Fatalf("expected staged categories to keep network, got %+v", plan.StagedCategories)
 	}
 	if len(plan.ExportCategories) != 1 || plan.ExportCategories[0].ID != "pve_config_export" {
 		t.Fatalf("expected export categories to include pve_config_export, got %+v", plan.ExportCategories)

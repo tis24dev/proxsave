@@ -42,10 +42,10 @@ func shouldAttemptNetworkApply(plan *RestorePlan) bool {
 	if plan == nil {
 		return false
 	}
-	return hasCategoryID(plan.NormalCategories, "network")
+	return plan.HasCategoryID("network")
 }
 
-func maybeApplyNetworkConfigCLI(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, plan *RestorePlan, safetyBackup, networkRollbackBackup *SafetyBackupResult, archivePath string, dryRun bool) (err error) {
+func maybeApplyNetworkConfigCLI(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, plan *RestorePlan, safetyBackup, networkRollbackBackup *SafetyBackupResult, stageRoot, archivePath string, dryRun bool) (err error) {
 	if !shouldAttemptNetworkApply(plan) {
 		if logger != nil {
 			logger.Debug("Network safe apply (CLI): skipped (network category not selected)")
@@ -80,6 +80,10 @@ func maybeApplyNetworkConfigCLI(ctx context.Context, reader *bufio.Reader, logge
 	logging.DebugStep(logger, "network safe apply (cli)", "Rollback backup resolved: network=%q full=%q", networkRollbackPath, fullRollbackPath)
 	if networkRollbackPath == "" && fullRollbackPath == "" {
 		logger.Warning("Skipping live network apply: rollback backup not available")
+		if strings.TrimSpace(stageRoot) != "" {
+			logger.Info("Network configuration is staged; skipping NIC repair/apply due to missing rollback backup.")
+			return nil
+		}
 		repairNow, err := promptYesNo(ctx, reader, "Attempt NIC name repair in restored network config files now (no reload)? (y/N): ")
 		if err != nil {
 			return err
@@ -99,15 +103,19 @@ func maybeApplyNetworkConfigCLI(ctx context.Context, reader *bufio.Reader, logge
 	}
 	logging.DebugStep(logger, "network safe apply (cli)", "User choice: applyNow=%v", applyNow)
 	if !applyNow {
-		repairNow, err := promptYesNo(ctx, reader, "Attempt NIC name repair in restored network config files now (no reload)? (y/N): ")
-		if err != nil {
-			return err
+		if strings.TrimSpace(stageRoot) == "" {
+			repairNow, err := promptYesNo(ctx, reader, "Attempt NIC name repair in restored network config files now (no reload)? (y/N): ")
+			if err != nil {
+				return err
+			}
+			logging.DebugStep(logger, "network safe apply (cli)", "User choice: repairNow=%v", repairNow)
+			if repairNow {
+				_ = maybeRepairNICNamesCLI(ctx, reader, logger, archivePath)
+			}
+		} else {
+			logger.Info("Network configuration is staged (not yet written to /etc); skipping NIC repair prompt.")
 		}
-		logging.DebugStep(logger, "network safe apply (cli)", "User choice: repairNow=%v", repairNow)
-		if repairNow {
-			_ = maybeRepairNICNamesCLI(ctx, reader, logger, archivePath)
-		}
-		logger.Info("Skipping live network apply (you can reboot or apply manually later).")
+		logger.Info("Skipping live network apply (you can apply later).")
 		return nil
 	}
 
@@ -143,14 +151,23 @@ func maybeApplyNetworkConfigCLI(ctx context.Context, reader *bufio.Reader, logge
 	if plan != nil {
 		systemType = plan.SystemType
 	}
-	if err := applyNetworkWithRollbackCLI(ctx, reader, logger, rollbackPath, archivePath, defaultNetworkRollbackTimeout, systemType); err != nil {
+	if err := applyNetworkWithRollbackCLI(ctx, reader, logger, rollbackPath, networkRollbackPath, stageRoot, archivePath, defaultNetworkRollbackTimeout, systemType); err != nil {
 		return err
 	}
 	return nil
 }
 
-func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, backupPath, archivePath string, timeout time.Duration, systemType SystemType) (err error) {
-	done := logging.DebugStart(logger, "network safe apply (cli)", "rollbackBackup=%s timeout=%s systemType=%s", strings.TrimSpace(backupPath), timeout, systemType)
+func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, rollbackBackupPath, networkRollbackPath, stageRoot, archivePath string, timeout time.Duration, systemType SystemType) (err error) {
+	done := logging.DebugStart(
+		logger,
+		"network safe apply (cli)",
+		"rollbackBackup=%s networkRollback=%s timeout=%s systemType=%s stage=%s",
+		strings.TrimSpace(rollbackBackupPath),
+		strings.TrimSpace(networkRollbackPath),
+		timeout,
+		systemType,
+		strings.TrimSpace(stageRoot),
+	)
 	defer func() { done(err) }()
 
 	logging.DebugStep(logger, "network safe apply (cli)", "Create diagnostics directory")
@@ -177,6 +194,17 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 		}
 	}
 
+	if strings.TrimSpace(stageRoot) != "" {
+		logging.DebugStep(logger, "network safe apply (cli)", "Apply staged network files to system paths (before NIC repair)")
+		applied, err := applyNetworkFilesFromStage(logger, stageRoot)
+		if err != nil {
+			return err
+		}
+		if len(applied) > 0 {
+			logging.DebugStep(logger, "network safe apply (cli)", "Staged network files written: %d", len(applied))
+		}
+	}
+
 	logging.DebugStep(logger, "network safe apply (cli)", "NIC name repair (optional)")
 	_ = maybeRepairNICNamesCLI(ctx, reader, logger, archivePath)
 
@@ -198,11 +226,51 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 		if diagnosticsDir != "" {
 			fmt.Printf("Network diagnostics saved under: %s\n", diagnosticsDir)
 		}
+		if strings.TrimSpace(stageRoot) != "" && strings.TrimSpace(networkRollbackPath) != "" {
+			logging.DebugStep(logger, "network safe apply (cli)", "Preflight failed in staged mode: rolling back network files automatically")
+			rollbackLog, rbErr := rollbackNetworkFilesNow(ctx, logger, networkRollbackPath, diagnosticsDir)
+			if strings.TrimSpace(rollbackLog) != "" {
+				logger.Info("Network rollback log: %s", rollbackLog)
+			}
+			if rbErr != nil {
+				logger.Warning("Network rollback failed: %v", rbErr)
+				return fmt.Errorf("network preflight validation failed; rollback attempt failed: %w", rbErr)
+			}
+			logger.Warning("Network files rolled back to pre-restore configuration due to preflight failure")
+			return fmt.Errorf("network preflight validation failed; network files rolled back")
+		}
+		if !preflight.Skipped && preflight.ExitError != nil && strings.TrimSpace(networkRollbackPath) != "" {
+			fmt.Println()
+			fmt.Println("WARNING: Network preflight failed. The restored network configuration may break connectivity on reboot.")
+			rollbackNow, perr := promptYesNoWithDefault(
+				ctx,
+				reader,
+				"Roll back restored network config files to the pre-restore configuration now? (Y/n): ",
+				true,
+			)
+			if perr != nil {
+				return perr
+			}
+			logging.DebugStep(logger, "network safe apply (cli)", "User choice: rollbackNow=%v", rollbackNow)
+			if rollbackNow {
+				logging.DebugStep(logger, "network safe apply (cli)", "Rollback network files now (backup=%s)", strings.TrimSpace(networkRollbackPath))
+				rollbackLog, rbErr := rollbackNetworkFilesNow(ctx, logger, networkRollbackPath, diagnosticsDir)
+				if strings.TrimSpace(rollbackLog) != "" {
+					logger.Info("Network rollback log: %s", rollbackLog)
+				}
+				if rbErr != nil {
+					logger.Warning("Network rollback failed: %v", rbErr)
+					return fmt.Errorf("network preflight validation failed; rollback attempt failed: %w", rbErr)
+				}
+				logger.Warning("Network files rolled back to pre-restore configuration due to preflight failure")
+				return fmt.Errorf("network preflight validation failed; network files rolled back")
+			}
+		}
 		return fmt.Errorf("network preflight validation failed; aborting live network apply")
 	}
 
 	logging.DebugStep(logger, "network safe apply (cli)", "Arm rollback timer BEFORE applying changes")
-	handle, err := armNetworkRollback(ctx, logger, backupPath, timeout, diagnosticsDir)
+	handle, err := armNetworkRollback(ctx, logger, rollbackBackupPath, timeout, diagnosticsDir)
 	if err != nil {
 		return err
 	}
@@ -305,7 +373,7 @@ func armNetworkRollback(ctx context.Context, logger *logging.Logger, backupPath 
 	}
 
 	logging.DebugStep(logger, "arm network rollback", "Write rollback script: %s", handle.scriptPath)
-	script := buildRollbackScript(handle.markerPath, backupPath, handle.logPath)
+	script := buildRollbackScript(handle.markerPath, backupPath, handle.logPath, true)
 	if err := restoreFS.WriteFile(handle.scriptPath, []byte(script), 0o640); err != nil {
 		return nil, fmt.Errorf("write rollback script: %w", err)
 	}
@@ -603,7 +671,59 @@ func promptNetworkCommitWithCountdown(ctx context.Context, reader *bufio.Reader,
 	}
 }
 
-func buildRollbackScript(markerPath, backupPath, logPath string) string {
+func rollbackNetworkFilesNow(ctx context.Context, logger *logging.Logger, backupPath, workDir string) (logPath string, err error) {
+	done := logging.DebugStart(logger, "rollback network files", "backup=%s workDir=%s", strings.TrimSpace(backupPath), strings.TrimSpace(workDir))
+	defer func() { done(err) }()
+
+	if strings.TrimSpace(backupPath) == "" {
+		return "", fmt.Errorf("empty rollback backup path")
+	}
+
+	baseDir := strings.TrimSpace(workDir)
+	perm := os.FileMode(0o755)
+	if baseDir == "" {
+		baseDir = "/tmp/proxsave"
+	} else {
+		perm = 0o700
+	}
+	if err := restoreFS.MkdirAll(baseDir, perm); err != nil {
+		return "", fmt.Errorf("create rollback directory: %w", err)
+	}
+
+	timestamp := nowRestore().Format("20060102_150405")
+	markerPath := filepath.Join(baseDir, fmt.Sprintf("network_rollback_now_pending_%s", timestamp))
+	scriptPath := filepath.Join(baseDir, fmt.Sprintf("network_rollback_now_%s.sh", timestamp))
+	logPath = filepath.Join(baseDir, fmt.Sprintf("network_rollback_now_%s.log", timestamp))
+
+	logging.DebugStep(logger, "rollback network files", "Write rollback marker: %s", markerPath)
+	if err := restoreFS.WriteFile(markerPath, []byte("pending\n"), 0o640); err != nil {
+		return "", fmt.Errorf("write rollback marker: %w", err)
+	}
+
+	logging.DebugStep(logger, "rollback network files", "Write rollback script: %s", scriptPath)
+	script := buildRollbackScript(markerPath, backupPath, logPath, false)
+	if err := restoreFS.WriteFile(scriptPath, []byte(script), 0o640); err != nil {
+		_ = restoreFS.Remove(markerPath)
+		return "", fmt.Errorf("write rollback script: %w", err)
+	}
+
+	logging.DebugStep(logger, "rollback network files", "Run rollback script now: %s", scriptPath)
+	output, runErr := restoreCmd.Run(ctx, "sh", scriptPath)
+	if len(output) > 0 {
+		logger.Debug("Rollback script output: %s", strings.TrimSpace(string(output)))
+	}
+
+	if err := restoreFS.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logger.Debug("Failed to remove rollback marker %s: %v", markerPath, err)
+	}
+
+	if runErr != nil {
+		return logPath, fmt.Errorf("rollback script failed: %w", runErr)
+	}
+	return logPath, nil
+}
+
+func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworking bool) string {
 	lines := []string{
 		"#!/bin/sh",
 		"set -eu",
@@ -673,14 +793,24 @@ func buildRollbackScript(markerPath, backupPath, logPath string) string {
 		`    rm -f "$MANIFEST_ALL" "$MANIFEST" "$CANDIDATES" "$CLEANUP"`,
 		`  ) >> "$LOG" 2>&1 || true`,
 		`fi`,
-		`echo "Restart networking after rollback" >> "$LOG"`,
-		`if command -v ifreload >/dev/null 2>&1; then ifreload -a >> "$LOG" 2>&1 || true;`,
-		`elif command -v systemctl >/dev/null 2>&1; then systemctl restart networking >> "$LOG" 2>&1 || true;`,
-		`elif command -v ifup >/dev/null 2>&1; then ifup -a >> "$LOG" 2>&1 || true;`,
-		`fi`,
+	}
+
+	if restartNetworking {
+		lines = append(lines,
+			`echo "Restart networking after rollback" >> "$LOG"`,
+			`if command -v ifreload >/dev/null 2>&1; then ifreload -a >> "$LOG" 2>&1 || true;`,
+			`elif command -v systemctl >/dev/null 2>&1; then systemctl restart networking >> "$LOG" 2>&1 || true;`,
+			`elif command -v ifup >/dev/null 2>&1; then ifup -a >> "$LOG" 2>&1 || true;`,
+			`fi`,
+		)
+	} else {
+		lines = append(lines, `echo "Restart networking after rollback: skipped (manual)" >> "$LOG"`)
+	}
+
+	lines = append(lines,
 		`rm -f "$MARKER"`,
 		`echo "Rollback finished at $(date -Is)" >> "$LOG"`,
-	}
+	)
 	return strings.Join(lines, "\n") + "\n"
 }
 

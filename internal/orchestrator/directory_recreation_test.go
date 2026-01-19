@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -94,10 +95,20 @@ func TestRecreateDatastoreDirectoriesCreatesStructure(t *testing.T) {
 		t.Fatalf("RecreateDatastoreDirectories error: %v", err)
 	}
 
-	for _, sub := range []string{".chunks", ".lock"} {
-		if _, err := os.Stat(filepath.Join(baseDir, sub)); err != nil {
-			t.Fatalf("expected datastore subdir %s: %v", sub, err)
-		}
+	chunksInfo, err := os.Stat(filepath.Join(baseDir, ".chunks"))
+	if err != nil {
+		t.Fatalf("expected .chunks to exist: %v", err)
+	}
+	if !chunksInfo.IsDir() {
+		t.Fatalf("expected .chunks to be a directory")
+	}
+
+	lockInfo, err := os.Stat(filepath.Join(baseDir, ".lock"))
+	if err != nil {
+		t.Fatalf("expected .lock to exist: %v", err)
+	}
+	if !lockInfo.Mode().IsRegular() {
+		t.Fatalf("expected .lock to be a file, got mode=%s", lockInfo.Mode())
 	}
 }
 
@@ -141,6 +152,38 @@ func TestSetDatastoreOwnershipNoop(t *testing.T) {
 	logger := newDirTestLogger()
 	if err := setDatastoreOwnership(t.TempDir(), logger); err != nil {
 		t.Fatalf("setDatastoreOwnership returned error: %v", err)
+	}
+}
+
+func TestNormalizePBSDatastoreCfgContentFixesIndentation(t *testing.T) {
+	input := strings.TrimSpace(`
+datastore: Data1
+gc-schedule 0/2:00
+path /mnt/datastore/Data1
+`)
+	got, fixed := normalizePBSDatastoreCfgContent(input)
+	if fixed != 2 {
+		t.Fatalf("fixed=%d; want 2", fixed)
+	}
+	if strings.Contains(got, "\ngc-schedule ") {
+		t.Fatalf("expected gc-schedule to be indented, got:\n%s", got)
+	}
+	if strings.Contains(got, "\npath ") {
+		t.Fatalf("expected path to be indented, got:\n%s", got)
+	}
+	if !strings.Contains(got, "\n    gc-schedule ") || !strings.Contains(got, "\n    path ") {
+		t.Fatalf("expected normalized config to include indented properties, got:\n%s", got)
+	}
+}
+
+func TestNormalizePBSDatastoreCfgContentNoChangesWhenValid(t *testing.T) {
+	input := "datastore: Data1\n    gc-schedule 0/2:00\n    path /mnt/datastore/Data1\n"
+	got, fixed := normalizePBSDatastoreCfgContent(input)
+	if fixed != 0 {
+		t.Fatalf("fixed=%d; want 0", fixed)
+	}
+	if got != input {
+		t.Fatalf("unexpected change.\nGot:\n%s\nWant:\n%s", got, input)
 	}
 }
 
@@ -366,10 +409,20 @@ datastore: ds2
 	}
 
 	for _, dir := range []string{dir1, dir2} {
-		for _, sub := range []string{".chunks", ".lock"} {
-			if _, err := os.Stat(filepath.Join(dir, sub)); err != nil {
-				t.Fatalf("expected %s/%s to exist: %v", dir, sub, err)
-			}
+		chunksInfo, err := os.Stat(filepath.Join(dir, ".chunks"))
+		if err != nil {
+			t.Fatalf("expected %s/.chunks to exist: %v", dir, err)
+		}
+		if !chunksInfo.IsDir() {
+			t.Fatalf("expected %s/.chunks to be a directory", dir)
+		}
+
+		lockInfo, err := os.Stat(filepath.Join(dir, ".lock"))
+		if err != nil {
+			t.Fatalf("expected %s/.lock to exist: %v", dir, err)
+		}
+		if !lockInfo.Mode().IsRegular() {
+			t.Fatalf("expected %s/.lock to be a file, got mode=%s", dir, lockInfo.Mode())
 		}
 	}
 }
@@ -425,7 +478,7 @@ func TestCreatePBSDatastoreStructureBaseError(t *testing.T) {
 	defer cacheRestore()
 
 	invalidPath := "/dev/null/cannot/create/here"
-	err := createPBSDatastoreStructure(invalidPath, "ds", logger)
+	_, err := createPBSDatastoreStructure(invalidPath, "ds", logger)
 	if err == nil {
 		t.Fatalf("expected error for invalid base path")
 	}
