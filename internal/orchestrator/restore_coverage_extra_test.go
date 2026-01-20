@@ -213,7 +213,7 @@ func TestRunFullRestore_ExtractsArchiveToDestination(t *testing.T) {
 	}
 	prepared := &preparedBundle{ArchivePath: archivePath}
 
-	if err := runFullRestore(context.Background(), reader, cand, prepared, destRoot, newTestLogger()); err != nil {
+	if err := runFullRestore(context.Background(), reader, cand, prepared, destRoot, newTestLogger(), false); err != nil {
 		t.Fatalf("runFullRestore error: %v", err)
 	}
 

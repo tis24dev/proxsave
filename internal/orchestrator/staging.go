@@ -38,4 +38,3 @@ func stageDestRoot() string {
 	seq := atomic.AddUint64(&restoreStageSequence, 1)
 	return filepath.Join(base, fmt.Sprintf("restore-stage-%s_%d", nowRestore().Format("20060102-150405"), seq))
 }
-

@@ -862,7 +862,7 @@ func TestExtractArchiveNativeSymlinkAndHardlink(t *testing.T) {
 	}
 
 	dest := filepath.Join(tmpDir, "dest")
-	if err := extractArchiveNative(context.Background(), tarPath, dest, logger, nil, RestoreModeFull, nil, ""); err != nil {
+	if err := extractArchiveNative(context.Background(), tarPath, dest, logger, nil, RestoreModeFull, nil, "", nil); err != nil {
 		t.Fatalf("extractArchiveNative error: %v", err)
 	}
 
@@ -1240,7 +1240,7 @@ func TestExtractArchiveNativeBlocksTraversal(t *testing.T) {
 	_ = f.Close()
 
 	dest := filepath.Join(tmpDir, "dest")
-	if err := extractArchiveNative(context.Background(), tarPath, dest, logger, nil, RestoreModeFull, nil, ""); err != nil {
+	if err := extractArchiveNative(context.Background(), tarPath, dest, logger, nil, RestoreModeFull, nil, "", nil); err != nil {
 		t.Fatalf("extractArchiveNative error: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "../etc/passwd")); err == nil {

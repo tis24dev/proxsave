@@ -93,7 +93,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if err != nil {
 		logger.Warning("Could not analyze categories: %v", err)
 		logger.Info("Falling back to full restore mode")
-		return runFullRestore(ctx, reader, candidate, prepared, destRoot, logger)
+		return runFullRestore(ctx, reader, candidate, prepared, destRoot, logger, cfg.DryRun)
 	}
 
 	// Show restore mode selection menu
@@ -260,6 +260,22 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 	// Perform selective extraction for normal categories
 	var detailedLogPath string
+
+	// Intercept filesystem category to handle it via Smart Merge
+	needsFilesystemRestore := false
+	if plan.HasCategoryID("filesystem") {
+		needsFilesystemRestore = true
+		// Filter it out from normal categories to prevent blind overwrite
+		var filtered []Category
+		for _, cat := range plan.NormalCategories {
+			if cat.ID != "filesystem" {
+				filtered = append(filtered, cat)
+			}
+		}
+		plan.NormalCategories = filtered
+		logging.DebugStep(logger, "restore", "Filesystem category intercepted: enabling Smart Merge workflow (skipping generic extraction)")
+	}
+
 	if len(plan.NormalCategories) > 0 {
 		logger.Info("")
 		categoriesForExtraction := plan.NormalCategories
@@ -352,11 +368,11 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	// Stage sensitive categories (network, PBS datastore/jobs) to a temporary directory and apply them safely later.
 	stageLogPath := ""
 	stageRoot := ""
-		if len(plan.StagedCategories) > 0 {
-			stageRoot = stageDestRoot()
-			logger.Info("")
-			logger.Info("Staging %d sensitive category(ies) to: %s", len(plan.StagedCategories), stageRoot)
-			if err := restoreFS.MkdirAll(stageRoot, 0o755); err != nil {
+	if len(plan.StagedCategories) > 0 {
+		stageRoot = stageDestRoot()
+		logger.Info("")
+		logger.Info("Staging %d sensitive category(ies) to: %s", len(plan.StagedCategories), stageRoot)
+		if err := restoreFS.MkdirAll(stageRoot, 0o755); err != nil {
 			return fmt.Errorf("failed to create staging directory %s: %w", stageRoot, err)
 		}
 
@@ -368,23 +384,23 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 		logger.Info("")
 		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
-				logger.Warning("PBS staged config apply: %v", err)
-			}
+			logger.Warning("PBS staged config apply: %v", err)
 		}
+	}
 
-		stageRootForNetworkApply := stageRoot
-		if installed, err := maybeInstallNetworkConfigFromStage(ctx, logger, plan, stageRoot, prepared.ArchivePath, networkRollbackBackup, cfg.DryRun); err != nil {
-			logger.Warning("Network staged install: %v", err)
-		} else if installed {
-			stageRootForNetworkApply = ""
-			logging.DebugStep(logger, "restore", "Network staged install completed: configuration written to /etc (no reload); live apply will use system paths")
-		}
+	stageRootForNetworkApply := stageRoot
+	if installed, err := maybeInstallNetworkConfigFromStage(ctx, logger, plan, stageRoot, prepared.ArchivePath, networkRollbackBackup, cfg.DryRun); err != nil {
+		logger.Warning("Network staged install: %v", err)
+	} else if installed {
+		stageRootForNetworkApply = ""
+		logging.DebugStep(logger, "restore", "Network staged install completed: configuration written to /etc (no reload); live apply will use system paths")
+	}
 
-		// Recreate directory structures from configuration files if relevant categories were restored
-		logger.Info("")
-		categoriesForDirRecreate := append([]Category{}, plan.NormalCategories...)
-		categoriesForDirRecreate = append(categoriesForDirRecreate, plan.StagedCategories...)
-		if shouldRecreateDirectories(systemType, categoriesForDirRecreate) {
+	// Recreate directory structures from configuration files if relevant categories were restored
+	logger.Info("")
+	categoriesForDirRecreate := append([]Category{}, plan.NormalCategories...)
+	categoriesForDirRecreate = append(categoriesForDirRecreate, plan.StagedCategories...)
+	if shouldRecreateDirectories(systemType, categoriesForDirRecreate) {
 		if err := RecreateDirectoriesFromConfig(systemType, logger); err != nil {
 			logger.Warning("Failed to recreate directory structures: %v", err)
 			logger.Warning("You may need to manually create storage/datastore directories")
@@ -393,21 +409,50 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		logger.Debug("Skipping datastore/storage directory recreation (category not selected)")
 	}
 
+	// Smart Filesystem Merge
+	if needsFilesystemRestore {
+		logger.Info("")
+		// Extract fstab to a temporary location
+		fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
+		if err != nil {
+			logger.Warning("Failed to create temp dir for fstab merge: %v", err)
+		} else {
+			defer restoreFS.RemoveAll(fsTempDir)
+			// Construct a temporary category for extraction
+			fsCat := GetCategoryByID("filesystem", availableCategories)
+			if fsCat == nil {
+				logger.Warning("Filesystem category not available in analyzed backup contents; skipping fstab merge")
+			} else {
+				fsCategory := []Category{*fsCat}
+				if _, err := extractSelectiveArchive(ctx, prepared.ArchivePath, fsTempDir, fsCategory, RestoreModeCustom, logger); err != nil {
+					logger.Warning("Failed to extract filesystem config for merge: %v", err)
+				} else {
+					// Perform Smart Merge
+					currentFstab := filepath.Join(destRoot, "etc", "fstab")
+					backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
+					if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, cfg.DryRun); err != nil {
+						logger.Warning("Smart Fstab Merge failed: %v", err)
+					}
+				}
+			}
+		}
+	}
+
 	logger.Info("")
 	if plan.HasCategoryID("network") {
 		logger.Info("")
 		if err := maybeRepairResolvConfAfterRestore(ctx, logger, prepared.ArchivePath, cfg.DryRun); err != nil {
 			logger.Warning("DNS resolver repair: %v", err)
 		}
-		}
+	}
 
-		logger.Info("")
-		if err := maybeApplyNetworkConfigCLI(ctx, reader, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, cfg.DryRun); err != nil {
-			logger.Warning("Network apply step skipped or failed: %v", err)
-		}
+	logger.Info("")
+	if err := maybeApplyNetworkConfigCLI(ctx, reader, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, cfg.DryRun); err != nil {
+		logger.Warning("Network apply step skipped or failed: %v", err)
+	}
 
-		logger.Info("")
-		logger.Info("Restore completed successfully.")
+	logger.Info("")
+	logger.Info("Restore completed successfully.")
 	logger.Info("Temporary decrypted bundle removed.")
 
 	if detailedLogPath != "" {
@@ -971,13 +1016,53 @@ func exportDestRoot(baseDir string) string {
 }
 
 // runFullRestore performs a full restore without selective options (fallback)
-func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger) error {
+func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool) error {
 	if err := confirmRestoreAction(ctx, reader, candidate, destRoot); err != nil {
 		return err
 	}
 
-	if err := extractPlainArchive(ctx, prepared.ArchivePath, destRoot, logger); err != nil {
+	safeFstabMerge := destRoot == "/" && isRealRestoreFS(restoreFS)
+	skipFn := func(name string) bool {
+		if !safeFstabMerge {
+			return false
+		}
+		clean := strings.TrimPrefix(strings.TrimSpace(name), "./")
+		clean = strings.TrimPrefix(clean, "/")
+		return clean == "etc/fstab"
+	}
+
+	if safeFstabMerge {
+		logger.Warning("Full restore safety: /etc/fstab will not be overwritten; Smart Merge will be applied after extraction.")
+	}
+
+	if err := extractPlainArchive(ctx, prepared.ArchivePath, destRoot, logger, skipFn); err != nil {
 		return err
+	}
+
+	if safeFstabMerge {
+		logger.Info("")
+		fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
+		if err != nil {
+			logger.Warning("Failed to create temp dir for fstab merge: %v", err)
+		} else {
+			defer restoreFS.RemoveAll(fsTempDir)
+			fsCategory := []Category{{
+				ID:   "filesystem",
+				Name: "Filesystem Configuration",
+				Paths: []string{
+					"./etc/fstab",
+				},
+			}}
+			if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, fsCategory, RestoreModeCustom, nil, "", nil); err != nil {
+				logger.Warning("Failed to extract filesystem config for merge: %v", err)
+			} else {
+				currentFstab := filepath.Join(destRoot, "etc", "fstab")
+				backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
+				if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, dryRun); err != nil {
+					logger.Warning("Smart Fstab Merge failed: %v", err)
+				}
+			}
+		}
 	}
 
 	logger.Info("Restore completed successfully.")
@@ -1009,7 +1094,7 @@ func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *decry
 	}
 }
 
-func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logger *logging.Logger) error {
+func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, skipFn func(entryName string) bool) error {
 	if err := restoreFS.MkdirAll(destRoot, 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
@@ -1022,7 +1107,7 @@ func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logg
 	logger.Info("Extracting archive %s into %s", filepath.Base(archivePath), destRoot)
 
 	// Use native Go extraction to preserve atime/ctime from PAX headers
-	if err := extractArchiveNative(ctx, archivePath, destRoot, logger, nil, RestoreModeFull, nil, ""); err != nil {
+	if err := extractArchiveNative(ctx, archivePath, destRoot, logger, nil, RestoreModeFull, nil, "", skipFn); err != nil {
 		return fmt.Errorf("archive extraction failed: %w", err)
 	}
 
@@ -1573,7 +1658,7 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 	logger.Info("Extracting selected categories from archive %s into %s", filepath.Base(archivePath), destRoot)
 
 	// Use native Go extraction with category filter
-	if err := extractArchiveNative(ctx, archivePath, destRoot, logger, categories, mode, logFile, logPath); err != nil {
+	if err := extractArchiveNative(ctx, archivePath, destRoot, logger, categories, mode, logFile, logPath, nil); err != nil {
 		return logPath, err
 	}
 
@@ -1582,7 +1667,7 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 
 // extractArchiveNative extracts TAR archives natively in Go, preserving all timestamps
 // If categories is nil, all files are extracted. Otherwise, only files matching the categories are extracted.
-func extractArchiveNative(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, categories []Category, mode RestoreMode, logFile *os.File, logFilePath string) error {
+func extractArchiveNative(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, categories []Category, mode RestoreMode, logFile *os.File, logFilePath string, skipFn func(entryName string) bool) error {
 	// Open the archive file
 	file, err := restoreFS.Open(archivePath)
 	if err != nil {
@@ -1661,6 +1746,14 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 		}
 		if err != nil {
 			return fmt.Errorf("read tar header: %w", err)
+		}
+
+		if skipFn != nil && skipFn(header.Name) {
+			filesSkipped++
+			if skippedTemp != nil {
+				fmt.Fprintf(skippedTemp, "SKIPPED: %s (skipped by restore policy)\n", header.Name)
+			}
+			continue
 		}
 
 		// Check if file should be extracted (selective mode)

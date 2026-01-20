@@ -86,12 +86,12 @@ func TestStopPBSServices_CommandFails(t *testing.T) {
 			"systemctl is-active proxmox-backup-proxy": []byte("inactive"),
 		},
 		Errors: map[string]error{
-			"systemctl stop --no-block proxmox-backup-proxy":                          fmt.Errorf("fail-proxy"),
-			"systemctl stop proxmox-backup-proxy":                                     fmt.Errorf("fail-blocking"),
-			"systemctl kill --signal=SIGTERM --kill-who=all proxmox-backup-proxy":     fmt.Errorf("kill-term"),
-			"systemctl kill --signal=SIGKILL --kill-who=all proxmox-backup-proxy":     fmt.Errorf("kill-9"),
-			"systemctl is-active proxmox-backup":                                      fmt.Errorf("inactive"),
-			"systemctl is-active proxmox-backup-proxy":                                fmt.Errorf("inactive"),
+			"systemctl stop --no-block proxmox-backup-proxy":                      fmt.Errorf("fail-proxy"),
+			"systemctl stop proxmox-backup-proxy":                                 fmt.Errorf("fail-blocking"),
+			"systemctl kill --signal=SIGTERM --kill-who=all proxmox-backup-proxy": fmt.Errorf("kill-term"),
+			"systemctl kill --signal=SIGKILL --kill-who=all proxmox-backup-proxy": fmt.Errorf("kill-9"),
+			"systemctl is-active proxmox-backup":                                  fmt.Errorf("inactive"),
+			"systemctl is-active proxmox-backup-proxy":                            fmt.Errorf("inactive"),
 		},
 	}
 	restoreCmd = fake
@@ -796,15 +796,15 @@ type ErrorInjectingFS struct {
 	linkErr     error
 }
 
-func (f *ErrorInjectingFS) Stat(path string) (os.FileInfo, error)      { return f.base.Stat(path) }
-func (f *ErrorInjectingFS) ReadFile(path string) ([]byte, error)       { return f.base.ReadFile(path) }
-func (f *ErrorInjectingFS) Open(path string) (*os.File, error)         { return f.base.Open(path) }
-func (f *ErrorInjectingFS) Create(name string) (*os.File, error)       { return f.base.Create(name) }
+func (f *ErrorInjectingFS) Stat(path string) (os.FileInfo, error) { return f.base.Stat(path) }
+func (f *ErrorInjectingFS) ReadFile(path string) ([]byte, error)  { return f.base.ReadFile(path) }
+func (f *ErrorInjectingFS) Open(path string) (*os.File, error)    { return f.base.Open(path) }
+func (f *ErrorInjectingFS) Create(name string) (*os.File, error)  { return f.base.Create(name) }
 func (f *ErrorInjectingFS) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return f.base.WriteFile(path, data, perm)
 }
-func (f *ErrorInjectingFS) Remove(path string) error         { return f.base.Remove(path) }
-func (f *ErrorInjectingFS) RemoveAll(path string) error      { return f.base.RemoveAll(path) }
+func (f *ErrorInjectingFS) Remove(path string) error                   { return f.base.Remove(path) }
+func (f *ErrorInjectingFS) RemoveAll(path string) error                { return f.base.RemoveAll(path) }
 func (f *ErrorInjectingFS) ReadDir(path string) ([]os.DirEntry, error) { return f.base.ReadDir(path) }
 func (f *ErrorInjectingFS) CreateTemp(dir, pattern string) (*os.File, error) {
 	return f.base.CreateTemp(dir, pattern)
@@ -812,7 +812,9 @@ func (f *ErrorInjectingFS) CreateTemp(dir, pattern string) (*os.File, error) {
 func (f *ErrorInjectingFS) MkdirTemp(dir, pattern string) (string, error) {
 	return f.base.MkdirTemp(dir, pattern)
 }
-func (f *ErrorInjectingFS) Rename(oldpath, newpath string) error { return f.base.Rename(oldpath, newpath) }
+func (f *ErrorInjectingFS) Rename(oldpath, newpath string) error {
+	return f.base.Rename(oldpath, newpath)
+}
 
 func (f *ErrorInjectingFS) MkdirAll(path string, perm os.FileMode) error {
 	if f.mkdirAllErr != nil {
@@ -1063,7 +1065,7 @@ func TestExtractPlainArchive_MkdirAllFails(t *testing.T) {
 	}
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	err := extractPlainArchive(context.Background(), "/archive.tar", "/dest", logger)
+	err := extractPlainArchive(context.Background(), "/archive.tar", "/dest", logger, nil)
 	if err == nil || !strings.Contains(err.Error(), "create destination directory") {
 		t.Fatalf("expected MkdirAll error, got: %v", err)
 	}
@@ -1331,7 +1333,7 @@ func TestRunFullRestore_ExtractError(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("RESTORE\n"))
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 
-	err := runFullRestore(context.Background(), reader, cand, prepared, fakeFS.Root, logger)
+	err := runFullRestore(context.Background(), reader, cand, prepared, fakeFS.Root, logger, false)
 	if err == nil {
 		t.Fatalf("expected error from bad archive")
 	}
@@ -1744,7 +1746,7 @@ func TestExtractArchiveNative_OpenError(t *testing.T) {
 	restoreFS = osFS{}
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	err := extractArchiveNative(context.Background(), "/nonexistent/archive.tar", "/tmp", logger, nil, RestoreModeFull, nil, "")
+	err := extractArchiveNative(context.Background(), "/nonexistent/archive.tar", "/tmp", logger, nil, RestoreModeFull, nil, "", nil)
 	if err == nil || !strings.Contains(err.Error(), "open archive") {
 		t.Fatalf("expected open error, got: %v", err)
 	}

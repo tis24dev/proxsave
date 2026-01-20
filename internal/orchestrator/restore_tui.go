@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -88,7 +89,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	if err != nil {
 		logger.Warning("Could not analyze categories: %v", err)
 		logger.Info("Falling back to full restore mode")
-		return runFullRestoreTUI(ctx, candidate, prepared, destRoot, logger, configPath, buildSig)
+		return runFullRestoreTUI(ctx, candidate, prepared, destRoot, logger, cfg.DryRun, configPath, buildSig)
 	}
 
 	// Restore mode selection (loop to allow going back from category selection)
@@ -371,11 +372,11 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	// Stage sensitive categories (network, PBS datastore/jobs) to a temporary directory and apply them safely later.
 	stageLogPath := ""
 	stageRoot := ""
-		if len(plan.StagedCategories) > 0 {
-			stageRoot = stageDestRoot()
-			logger.Info("")
-			logger.Info("Staging %d sensitive category(ies) to: %s", len(plan.StagedCategories), stageRoot)
-			if err := restoreFS.MkdirAll(stageRoot, 0o755); err != nil {
+	if len(plan.StagedCategories) > 0 {
+		stageRoot = stageDestRoot()
+		logger.Info("")
+		logger.Info("Staging %d sensitive category(ies) to: %s", len(plan.StagedCategories), stageRoot)
+		if err := restoreFS.MkdirAll(stageRoot, 0o755); err != nil {
 			return fmt.Errorf("failed to create staging directory %s: %w", stageRoot, err)
 		}
 
@@ -387,23 +388,23 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 
 		logger.Info("")
 		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
-				logger.Warning("PBS staged config apply: %v", err)
-			}
+			logger.Warning("PBS staged config apply: %v", err)
 		}
+	}
 
-		stageRootForNetworkApply := stageRoot
-		if installed, err := maybeInstallNetworkConfigFromStage(ctx, logger, plan, stageRoot, prepared.ArchivePath, networkRollbackBackup, cfg.DryRun); err != nil {
-			logger.Warning("Network staged install: %v", err)
-		} else if installed {
-			stageRootForNetworkApply = ""
-			logging.DebugStep(logger, "restore", "Network staged install completed: configuration written to /etc (no reload); live apply will use system paths")
-		}
+	stageRootForNetworkApply := stageRoot
+	if installed, err := maybeInstallNetworkConfigFromStage(ctx, logger, plan, stageRoot, prepared.ArchivePath, networkRollbackBackup, cfg.DryRun); err != nil {
+		logger.Warning("Network staged install: %v", err)
+	} else if installed {
+		stageRootForNetworkApply = ""
+		logging.DebugStep(logger, "restore", "Network staged install completed: configuration written to /etc (no reload); live apply will use system paths")
+	}
 
-		// Recreate directory structures from configuration files if relevant categories were restored
-		logger.Info("")
-		categoriesForDirRecreate := append([]Category{}, plan.NormalCategories...)
-		categoriesForDirRecreate = append(categoriesForDirRecreate, plan.StagedCategories...)
-		if shouldRecreateDirectories(systemType, categoriesForDirRecreate) {
+	// Recreate directory structures from configuration files if relevant categories were restored
+	logger.Info("")
+	categoriesForDirRecreate := append([]Category{}, plan.NormalCategories...)
+	categoriesForDirRecreate = append(categoriesForDirRecreate, plan.StagedCategories...)
+	if shouldRecreateDirectories(systemType, categoriesForDirRecreate) {
 		if err := RecreateDirectoriesFromConfig(systemType, logger); err != nil {
 			logger.Warning("Failed to recreate directory structures: %v", err)
 			logger.Warning("You may need to manually create storage/datastore directories")
@@ -418,15 +419,15 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		if err := maybeRepairResolvConfAfterRestore(ctx, logger, prepared.ArchivePath, cfg.DryRun); err != nil {
 			logger.Warning("DNS resolver repair: %v", err)
 		}
-		}
+	}
 
-		logger.Info("")
-		if err := maybeApplyNetworkConfigTUI(ctx, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, configPath, buildSig, cfg.DryRun); err != nil {
-			logger.Warning("Network apply step skipped or failed: %v", err)
-		}
+	logger.Info("")
+	if err := maybeApplyNetworkConfigTUI(ctx, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, configPath, buildSig, cfg.DryRun); err != nil {
+		logger.Warning("Network apply step skipped or failed: %v", err)
+	}
 
-		logger.Info("")
-		logger.Info("Restore completed successfully.")
+	logger.Info("")
+	logger.Info("Restore completed successfully.")
 	logger.Info("Temporary decrypted bundle removed.")
 
 	if detailedLogPath != "" {
@@ -1707,7 +1708,7 @@ func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
 	return true, nil
 }
 
-func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, configPath, buildSig string) error {
+func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool, configPath, buildSig string) error {
 	if candidate == nil || prepared == nil || prepared.Manifest.ArchivePath == "" {
 		return fmt.Errorf("invalid restore candidate")
 	}
@@ -1766,8 +1767,87 @@ func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepare
 		return ErrRestoreAborted
 	}
 
-	if err := extractPlainArchive(ctx, prepared.ArchivePath, destRoot, logger); err != nil {
+	safeFstabMerge := destRoot == "/" && isRealRestoreFS(restoreFS)
+	skipFn := func(name string) bool {
+		if !safeFstabMerge {
+			return false
+		}
+		clean := strings.TrimPrefix(strings.TrimSpace(name), "./")
+		clean = strings.TrimPrefix(clean, "/")
+		return clean == "etc/fstab"
+	}
+
+	if safeFstabMerge {
+		logger.Warning("Full restore safety: /etc/fstab will not be overwritten; Smart Merge will be offered after extraction.")
+	}
+
+	if err := extractPlainArchive(ctx, prepared.ArchivePath, destRoot, logger, skipFn); err != nil {
 		return err
+	}
+
+	if safeFstabMerge {
+		fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
+		if err != nil {
+			logger.Warning("Failed to create temp dir for fstab merge: %v", err)
+		} else {
+			defer restoreFS.RemoveAll(fsTempDir)
+			fsCategory := []Category{{
+				ID:   "filesystem",
+				Name: "Filesystem Configuration",
+				Paths: []string{
+					"./etc/fstab",
+				},
+			}}
+			if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, fsCategory, RestoreModeCustom, nil, "", nil); err != nil {
+				logger.Warning("Failed to extract filesystem config for merge: %v", err)
+			} else {
+				currentFstab := filepath.Join(destRoot, "etc", "fstab")
+				backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
+				currentEntries, currentRaw, err := parseFstab(currentFstab)
+				if err != nil {
+					logger.Warning("Failed to parse current fstab: %v", err)
+				} else if backupEntries, _, err := parseFstab(backupFstab); err != nil {
+					logger.Warning("Failed to parse backup fstab: %v", err)
+				} else {
+					analysis := analyzeFstabMerge(logger, currentEntries, backupEntries)
+					if len(analysis.ProposedMounts) == 0 {
+						logger.Info("No new safe mounts found to restore. Keeping current fstab.")
+					} else {
+						var msg strings.Builder
+						msg.WriteString("ProxSave ha trovato mount mancanti in /etc/fstab.\n\n")
+						if analysis.RootComparable && !analysis.RootMatch {
+							msg.WriteString("⚠ Root UUID mismatch: il backup sembra provenire da una macchina diversa.\n")
+						}
+						if analysis.SwapComparable && !analysis.SwapMatch {
+							msg.WriteString("⚠ Swap mismatch: verrà mantenuta la configurazione swap attuale.\n")
+						}
+						msg.WriteString("\nMount proposti (sicuri):\n")
+						for _, m := range analysis.ProposedMounts {
+							fmt.Fprintf(&msg, "  - %s -> %s (%s)\n", m.Device, m.MountPoint, m.Type)
+						}
+						if len(analysis.SkippedMounts) > 0 {
+							msg.WriteString("\nMount trovati ma non proposti automaticamente:\n")
+							for _, m := range analysis.SkippedMounts {
+								fmt.Fprintf(&msg, "  - %s -> %s (%s)\n", m.Device, m.MountPoint, m.Type)
+							}
+							msg.WriteString("\nSuggerimento: verifica dischi/UUID e opzioni (nofail/_netdev) prima di aggiungerli.\n")
+						}
+
+						apply, perr := promptYesNoTUIFunc("Smart fstab merge", configPath, buildSig, msg.String(), "Apply", "Skip")
+						if perr != nil {
+							return perr
+						}
+						if apply {
+							if err := applyFstabMerge(ctx, logger, currentRaw, currentFstab, analysis.ProposedMounts, dryRun); err != nil {
+								logger.Warning("Smart Fstab Merge failed: %v", err)
+							}
+						} else {
+							logger.Info("Fstab merge skipped by user.")
+						}
+					}
+				}
+			}
+		}
 	}
 
 	logger.Info("Restore completed successfully.")
