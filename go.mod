@@ -6,9 +6,9 @@ toolchain go1.25.5
 
 require (
 	filippo.io/age v1.3.1
-	github.com/gdamore/tcell/v2 v2.13.6
+	github.com/gdamore/tcell/v2 v2.13.7
 	github.com/rivo/tview v0.42.0
-	golang.org/x/crypto v0.46.0
+	golang.org/x/crypto v0.47.0
 	golang.org/x/term v0.39.0
 	golang.org/x/text v0.33.0
 )

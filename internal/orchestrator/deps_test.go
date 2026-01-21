@@ -15,18 +15,22 @@ import (
 // FakeFS is a sandboxed filesystem rooted at a temporary directory.
 // Paths are mapped under Root to avoid touching the real FS.
 type FakeFS struct {
-	Root       string
-	StatErr    map[string]error
-	StatErrors map[string]error
-	WriteErr   error
+	Root         string
+	StatErr      map[string]error
+	StatErrors   map[string]error
+	WriteErr     error
+	MkdirAllErr  error
+	MkdirTempErr error
+	OpenFileErr  map[string]error
 }
 
 func NewFakeFS() *FakeFS {
 	root, _ := os.MkdirTemp("", "fakefs-*")
 	return &FakeFS{
-		Root:       root,
-		StatErr:    make(map[string]error),
-		StatErrors: make(map[string]error),
+		Root:        root,
+		StatErr:     make(map[string]error),
+		StatErrors:  make(map[string]error),
+		OpenFileErr: make(map[string]error),
 	}
 }
 
@@ -65,6 +69,9 @@ func (f *FakeFS) Open(path string) (*os.File, error) {
 }
 
 func (f *FakeFS) OpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+	if err, ok := f.OpenFileErr[filepath.Clean(path)]; ok {
+		return nil, err
+	}
 	return os.OpenFile(f.onDisk(path), flag, perm)
 }
 
@@ -83,6 +90,9 @@ func (f *FakeFS) WriteFile(path string, data []byte, perm os.FileMode) error {
 }
 
 func (f *FakeFS) MkdirAll(path string, perm os.FileMode) error {
+	if f.MkdirAllErr != nil {
+		return f.MkdirAllErr
+	}
 	return os.MkdirAll(f.onDisk(path), perm)
 }
 
@@ -124,6 +134,9 @@ func (f *FakeFS) CreateTemp(dir, pattern string) (*os.File, error) {
 }
 
 func (f *FakeFS) MkdirTemp(dir, pattern string) (string, error) {
+	if f.MkdirTempErr != nil {
+		return "", f.MkdirTempErr
+	}
 	if dir == "" {
 		dir = f.Root
 	} else {

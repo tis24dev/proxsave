@@ -12,6 +12,7 @@ Complete troubleshooting guide for Proxsave with common issues, solutions, and d
   - [Encryption Issues](#4-encryption-issues)
   - [Disk Space Issues](#5-disk-space-issues)
   - [Email Notification Issues](#6-email-notification-issues)
+  - [Restore Issues](#7-restore-issues)
 - [Debug Procedures](#debug-procedures)
 - [Getting Help](#getting-help)
 - [Related Documentation](#related-documentation)
@@ -548,6 +549,24 @@ MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
 # Or increase disk space
 # Add more storage or clean unnecessary files
 ```
+
+---
+### 7. Restore Issues
+
+#### Error during network preflight: `addr_add_dry_run() got an unexpected keyword argument 'nodad'`
+
+**Symptoms**:
+- Restore networking preflight fails when running `ifup -n -a`
+- Log contains: `NetlinkListenerWithCache.addr_add_dry_run() got an unexpected keyword argument 'nodad'`
+
+**Cause**:
+- A Proxmox-packaged `ifupdown2` version may ship a Python signature mismatch between `addr_add()` and `addr_add_dry_run()` (dry-run path), which crashes `ifup -n` when `nodad` is used.
+
+**What ProxSave does**:
+- During restore, ProxSave can apply a guarded hotfix (only when needed) by patching `/usr/share/ifupdown2/lib/nlcache.py` and writing a timestamped `.bak.*` backup first.
+
+**Recovery / rollback**:
+- To revert the hotfix, restore the `.bak.*` copy back onto `nlcache.py`, or upgrade `ifupdown2` when Proxmox publishes a fixed build.
 
 ---
 

@@ -98,6 +98,11 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 			return nil
 		}
 
+		rel, relErr := filepath.Rel(root, path)
+		if relErr == nil && shouldSkipDedupPath(rel) {
+			return nil
+		}
+
 		info, err := d.Info()
 		if err != nil {
 			return nil
@@ -131,6 +136,19 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 
 	logger.Info("Deduplication completed: %d duplicates replaced", duplicates)
 	return nil
+}
+
+func shouldSkipDedupPath(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	switch rel {
+	case "etc/resolv.conf",
+		"etc/hostname",
+		"etc/hosts",
+		"etc/fstab":
+		return true
+	default:
+		return false
+	}
 }
 
 func hashFile(path string) (string, error) {

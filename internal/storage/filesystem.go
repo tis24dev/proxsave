@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -15,6 +16,11 @@ import (
 // FilesystemDetector provides methods to detect and validate filesystem types
 type FilesystemDetector struct {
 	logger *logging.Logger
+
+	// Test hooks (nil in production).
+	mountPointLookup     func(path string) (string, error)
+	filesystemTypeLookup func(ctx context.Context, mountPoint string) (FilesystemType, string, error)
+	ownershipSupportTest func(ctx context.Context, path string) bool
 }
 
 // NewFilesystemDetector creates a new filesystem detector
@@ -33,13 +39,25 @@ func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) 
 	}
 
 	// Get mount point for this path
-	mountPoint, err := d.getMountPoint(path)
+	var mountPoint string
+	var err error
+	if d.mountPointLookup != nil {
+		mountPoint, err = d.mountPointLookup(path)
+	} else {
+		mountPoint, err = d.getMountPoint(path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get mount point for %s: %w", path, err)
 	}
 
 	// Get filesystem type using df command
-	fsType, device, err := d.getFilesystemType(ctx, mountPoint)
+	var fsType FilesystemType
+	var device string
+	if d.filesystemTypeLookup != nil {
+		fsType, device, err = d.filesystemTypeLookup(ctx, mountPoint)
+	} else {
+		fsType, device, err = d.getFilesystemType(ctx, mountPoint)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect filesystem type for %s: %w", path, err)
 	}
@@ -57,20 +75,24 @@ func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) 
 	d.logFilesystemInfo(info)
 
 	// Check if we need to test ownership support for network filesystems
-		if info.IsNetworkFS {
-			supportsOwnership := d.testOwnershipSupport(ctx, path)
-			info.SupportsOwnership = supportsOwnership
-			if supportsOwnership {
-				d.logger.Info("Network filesystem %s supports Unix ownership", fsType)
-			} else {
-				d.logger.Info("Network filesystem %s does NOT support Unix ownership", fsType)
-			}
+	if info.IsNetworkFS {
+		testFn := d.testOwnershipSupport
+		if d.ownershipSupportTest != nil {
+			testFn = d.ownershipSupportTest
 		}
+		supportsOwnership := testFn(ctx, path)
+		info.SupportsOwnership = supportsOwnership
+		if supportsOwnership {
+			d.logger.Info("Network filesystem %s supports Unix ownership", fsType)
+		} else {
+			d.logger.Info("Network filesystem %s does NOT support Unix ownership", fsType)
+		}
+	}
 
-		// Auto-exclude incompatible filesystems
-		if fsType.ShouldAutoExclude() {
-			d.logger.Info("Filesystem %s is incompatible with Unix ownership - will skip chown/chmod", fsType)
-		}
+	// Auto-exclude incompatible filesystems
+	if fsType.ShouldAutoExclude() {
+		d.logger.Info("Filesystem %s is incompatible with Unix ownership - will skip chown/chmod", fsType)
+	}
 
 	return info, nil
 }
@@ -266,13 +288,22 @@ func unescapeOctal(s string) string {
 	i := 0
 	for i < len(s) {
 		if s[i] == '\\' && i+3 < len(s) {
-			// Try to parse octal sequence
+			// Try to parse octal sequence (exactly 3 octal digits)
 			octal := s[i+1 : i+4]
-			var val int
-			if _, err := fmt.Sscanf(octal, "%o", &val); err == nil {
-				result.WriteByte(byte(val))
-				i += 4
-				continue
+			valid := true
+			for j := 0; j < 3; j++ {
+				if octal[j] < '0' || octal[j] > '7' {
+					valid = false
+					break
+				}
+			}
+			if valid {
+				val, err := strconv.ParseUint(octal, 8, 8)
+				if err == nil {
+					result.WriteByte(byte(val))
+					i += 4
+					continue
+				}
 			}
 		}
 		result.WriteByte(s[i])

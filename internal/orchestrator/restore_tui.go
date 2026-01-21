@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -87,7 +89,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	if err != nil {
 		logger.Warning("Could not analyze categories: %v", err)
 		logger.Info("Falling back to full restore mode")
-		return runFullRestoreTUI(ctx, candidate, prepared, destRoot, logger, configPath, buildSig)
+		return runFullRestoreTUI(ctx, candidate, prepared, destRoot, logger, cfg.DryRun, configPath, buildSig)
 	}
 
 	// Restore mode selection (loop to allow going back from category selection)
@@ -155,6 +157,16 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		}
 	}
 
+	// Staging is designed to protect live systems. In test runs (fake filesystem) or non-root targets,
+	// extract staged categories directly to the destination to keep restore semantics predictable.
+	if destRoot != "/" || !isRealRestoreFS(restoreFS) {
+		if len(plan.StagedCategories) > 0 {
+			logging.DebugStep(logger, "restore", "Staging disabled (destRoot=%s realFS=%v): extracting %d staged category(ies) directly", destRoot, isRealRestoreFS(restoreFS), len(plan.StagedCategories))
+			plan.NormalCategories = append(plan.NormalCategories, plan.StagedCategories...)
+			plan.StagedCategories = nil
+		}
+	}
+
 	// Create restore configuration
 	restoreConfig := &SelectiveRestoreConfig{
 		Mode:       mode,
@@ -162,6 +174,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		Metadata:   candidate.Manifest,
 	}
 	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.NormalCategories...)
+	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.StagedCategories...)
 	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.ExportCategories...)
 
 	// Show detailed restore plan
@@ -184,9 +197,12 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 
 	// Create safety backup of current configuration (only for categories that will write to system paths)
 	var safetyBackup *SafetyBackupResult
-	if len(plan.NormalCategories) > 0 {
+	var networkRollbackBackup *SafetyBackupResult
+	systemWriteCategories := append([]Category{}, plan.NormalCategories...)
+	systemWriteCategories = append(systemWriteCategories, plan.StagedCategories...)
+	if len(systemWriteCategories) > 0 {
 		logger.Info("")
-		safetyBackup, err = CreateSafetyBackup(logger, plan.NormalCategories, destRoot)
+		safetyBackup, err = CreateSafetyBackup(logger, systemWriteCategories, destRoot)
 		if err != nil {
 			logger.Warning("Failed to create safety backup: %v", err)
 			cont, perr := promptContinueWithoutSafetyBackupTUI(configPath, buildSig, err)
@@ -199,6 +215,18 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		} else {
 			logger.Info("Safety backup location: %s", safetyBackup.BackupPath)
 			logger.Info("You can restore from this backup if needed using: tar -xzf %s -C /", safetyBackup.BackupPath)
+		}
+	}
+
+	if plan.HasCategoryID("network") {
+		logger.Info("")
+		logging.DebugStep(logger, "restore", "Create network-only rollback backup for transactional network apply")
+		networkRollbackBackup, err = CreateNetworkRollbackBackup(logger, systemWriteCategories, destRoot)
+		if err != nil {
+			logger.Warning("Failed to create network rollback backup: %v", err)
+		} else if networkRollbackBackup != nil && strings.TrimSpace(networkRollbackBackup.BackupPath) != "" {
+			logger.Info("Network rollback backup location: %s", networkRollbackBackup.BackupPath)
+			logger.Info("This backup is used for the %ds network rollback timer and only includes network paths.", int(defaultNetworkRollbackTimeout.Seconds()))
 		}
 	}
 
@@ -253,13 +281,60 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	var detailedLogPath string
 	if len(plan.NormalCategories) > 0 {
 		logger.Info("")
-		detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, plan.NormalCategories, mode, logger)
-		if err != nil {
-			logger.Error("Restore failed: %v", err)
-			if safetyBackup != nil {
-				logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+		categoriesForExtraction := plan.NormalCategories
+		if needsClusterRestore {
+			logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: sanitize categories to avoid /etc/pve shadow writes")
+			sanitized, removed := sanitizeCategoriesForClusterRecovery(categoriesForExtraction)
+			removedPaths := 0
+			for _, paths := range removed {
+				removedPaths += len(paths)
 			}
-			return err
+			logging.DebugStep(
+				logger,
+				"restore",
+				"Cluster RECOVERY shadow-guard: categories_before=%d categories_after=%d removed_categories=%d removed_paths=%d",
+				len(categoriesForExtraction),
+				len(sanitized),
+				len(removed),
+				removedPaths,
+			)
+			if len(removed) > 0 {
+				logger.Warning("Cluster RECOVERY restore: skipping direct restore of /etc/pve paths to prevent shadowing while pmxcfs is stopped/unmounted")
+				for _, cat := range categoriesForExtraction {
+					if paths, ok := removed[cat.ID]; ok && len(paths) > 0 {
+						logger.Warning("  - %s (%s): %s", cat.Name, cat.ID, strings.Join(paths, ", "))
+					}
+				}
+				logger.Info("These paths are expected to be restored from config.db and become visible after /etc/pve is remounted.")
+			} else {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: no /etc/pve paths detected in selected categories")
+			}
+			categoriesForExtraction = sanitized
+			var extractionIDs []string
+			for _, cat := range categoriesForExtraction {
+				if id := strings.TrimSpace(cat.ID); id != "" {
+					extractionIDs = append(extractionIDs, id)
+				}
+			}
+			if len(extractionIDs) > 0 {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=%s", strings.Join(extractionIDs, ","))
+			} else {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=<none>")
+			}
+		}
+
+		if len(categoriesForExtraction) == 0 {
+			logging.DebugStep(logger, "restore", "Skip system-path extraction: no categories remain after shadow-guard")
+			logger.Info("No system-path categories remain after cluster shadow-guard; skipping system-path extraction.")
+		} else {
+			detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, categoriesForExtraction, mode, logger)
+			if err != nil {
+				logger.Error("Restore failed: %v", err)
+				if safetyBackup != nil {
+					logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+				}
+				return err
+			}
 		}
 	} else {
 		logger.Info("")
@@ -294,15 +369,61 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		}
 	}
 
+	// Stage sensitive categories (network, PBS datastore/jobs) to a temporary directory and apply them safely later.
+	stageLogPath := ""
+	stageRoot := ""
+	if len(plan.StagedCategories) > 0 {
+		stageRoot = stageDestRoot()
+		logger.Info("")
+		logger.Info("Staging %d sensitive category(ies) to: %s", len(plan.StagedCategories), stageRoot)
+		if err := restoreFS.MkdirAll(stageRoot, 0o755); err != nil {
+			return fmt.Errorf("failed to create staging directory %s: %w", stageRoot, err)
+		}
+
+		if stageLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, stageRoot, plan.StagedCategories, RestoreModeCustom, logger); err != nil {
+			logger.Warning("Staging completed with errors: %v", err)
+		} else {
+			stageLogPath = stageLog
+		}
+
+		logger.Info("")
+		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+			logger.Warning("PBS staged config apply: %v", err)
+		}
+	}
+
+	stageRootForNetworkApply := stageRoot
+	if installed, err := maybeInstallNetworkConfigFromStage(ctx, logger, plan, stageRoot, prepared.ArchivePath, networkRollbackBackup, cfg.DryRun); err != nil {
+		logger.Warning("Network staged install: %v", err)
+	} else if installed {
+		stageRootForNetworkApply = ""
+		logging.DebugStep(logger, "restore", "Network staged install completed: configuration written to /etc (no reload); live apply will use system paths")
+	}
+
 	// Recreate directory structures from configuration files if relevant categories were restored
 	logger.Info("")
-	if shouldRecreateDirectories(systemType, plan.NormalCategories) {
+	categoriesForDirRecreate := append([]Category{}, plan.NormalCategories...)
+	categoriesForDirRecreate = append(categoriesForDirRecreate, plan.StagedCategories...)
+	if shouldRecreateDirectories(systemType, categoriesForDirRecreate) {
 		if err := RecreateDirectoriesFromConfig(systemType, logger); err != nil {
 			logger.Warning("Failed to recreate directory structures: %v", err)
 			logger.Warning("You may need to manually create storage/datastore directories")
 		}
 	} else {
 		logger.Debug("Skipping datastore/storage directory recreation (category not selected)")
+	}
+
+	logger.Info("")
+	if plan.HasCategoryID("network") {
+		logger.Info("")
+		if err := maybeRepairResolvConfAfterRestore(ctx, logger, prepared.ArchivePath, cfg.DryRun); err != nil {
+			logger.Warning("DNS resolver repair: %v", err)
+		}
+	}
+
+	logger.Info("")
+	if err := maybeApplyNetworkConfigTUI(ctx, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, configPath, buildSig, cfg.DryRun); err != nil {
+		logger.Warning("Network apply step skipped or failed: %v", err)
 	}
 
 	logger.Info("")
@@ -317,6 +438,12 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	}
 	if exportLogPath != "" {
 		logger.Info("Export detailed log: %s", exportLogPath)
+	}
+	if stageRoot != "" {
+		logger.Info("Staging directory: %s", stageRoot)
+	}
+	if stageLogPath != "" {
+		logger.Info("Staging detailed log: %s", stageLogPath)
 	}
 
 	if safetyBackup != nil {
@@ -438,13 +565,13 @@ func runRestoreSelectionWizard(ctx context.Context, cfg *config.Config, logger *
 					})
 					return
 				}
-					if len(candidates) == 0 {
-						message := "No backups found in selected path."
-						showRestoreErrorModal(app, pages, configPath, buildSig, message, func() {
-							pages.SwitchToPage("paths")
-						})
-						return
-					}
+				if len(candidates) == 0 {
+					message := "No backups found in selected path."
+					showRestoreErrorModal(app, pages, configPath, buildSig, message, func() {
+						pages.SwitchToPage("paths")
+					})
+					return
+				}
 
 				showRestoreCandidatePage(app, pages, candidates, configPath, buildSig, func(c *decryptCandidate) {
 					selection.Candidate = c
@@ -932,6 +1059,530 @@ func promptContinueWithPBSServicesTUI(configPath, buildSig string) (bool, error)
 	)
 }
 
+func maybeApplyNetworkConfigTUI(ctx context.Context, logger *logging.Logger, plan *RestorePlan, safetyBackup, networkRollbackBackup *SafetyBackupResult, stageRoot, archivePath, configPath, buildSig string, dryRun bool) (err error) {
+	if !shouldAttemptNetworkApply(plan) {
+		if logger != nil {
+			logger.Debug("Network safe apply (TUI): skipped (network category not selected)")
+		}
+		return nil
+	}
+	done := logging.DebugStart(logger, "network safe apply (tui)", "dryRun=%v euid=%d stage=%s archive=%s", dryRun, os.Geteuid(), strings.TrimSpace(stageRoot), strings.TrimSpace(archivePath))
+	defer func() { done(err) }()
+
+	if !isRealRestoreFS(restoreFS) {
+		logger.Debug("Skipping live network apply: non-system filesystem in use")
+		return nil
+	}
+	if dryRun {
+		logger.Info("Dry run enabled: skipping live network apply")
+		return nil
+	}
+	if os.Geteuid() != 0 {
+		logger.Warning("Skipping live network apply: requires root privileges")
+		return nil
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Resolve rollback backup paths")
+	networkRollbackPath := ""
+	if networkRollbackBackup != nil {
+		networkRollbackPath = strings.TrimSpace(networkRollbackBackup.BackupPath)
+	}
+	fullRollbackPath := ""
+	if safetyBackup != nil {
+		fullRollbackPath = strings.TrimSpace(safetyBackup.BackupPath)
+	}
+	logging.DebugStep(logger, "network safe apply (tui)", "Rollback backup resolved: network=%q full=%q", networkRollbackPath, fullRollbackPath)
+	if networkRollbackPath == "" && fullRollbackPath == "" {
+		logger.Warning("Skipping live network apply: rollback backup not available")
+		if strings.TrimSpace(stageRoot) != "" {
+			logger.Info("Network configuration is staged; skipping NIC repair/apply due to missing rollback backup.")
+			return nil
+		}
+		repairNow, err := promptYesNoTUIFunc(
+			"NIC name repair (recommended)",
+			configPath,
+			buildSig,
+			"Attempt NIC name repair in restored network config files now (no reload)?\n\nThis will only rewrite /etc/network/interfaces and /etc/network/interfaces.d/* when safe mappings are found.",
+			"Repair now",
+			"Skip repair",
+		)
+		if err != nil {
+			return err
+		}
+		logging.DebugStep(logger, "network safe apply (tui)", "User choice: repairNow=%v", repairNow)
+		if repairNow {
+			if repair := maybeRepairNICNamesTUI(ctx, logger, archivePath, configPath, buildSig); repair != nil {
+				_ = promptOkTUI("NIC repair result", configPath, buildSig, repair.Details(), "OK")
+			}
+		}
+		logger.Info("Skipping live network apply (you can reboot or apply manually later).")
+		return nil
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Prompt: apply network now with rollback timer")
+	message := fmt.Sprintf(
+		"Apply restored network configuration now with an automatic rollback timer (%ds).\n\nIf you do not commit the changes, the previous network configuration will be restored automatically.\n\nProceed with live network apply?",
+		int(defaultNetworkRollbackTimeout.Seconds()),
+	)
+	applyNow, err := promptYesNoTUIFunc(
+		"Apply network configuration",
+		configPath,
+		buildSig,
+		message,
+		"Apply now",
+		"Skip apply",
+	)
+	if err != nil {
+		return err
+	}
+	logging.DebugStep(logger, "network safe apply (tui)", "User choice: applyNow=%v", applyNow)
+	if !applyNow {
+		if strings.TrimSpace(stageRoot) == "" {
+			repairNow, err := promptYesNoTUIFunc(
+				"NIC name repair (recommended)",
+				configPath,
+				buildSig,
+				"Attempt NIC name repair in restored network config files now (no reload)?\n\nThis will only rewrite /etc/network/interfaces and /etc/network/interfaces.d/* when safe mappings are found.",
+				"Repair now",
+				"Skip repair",
+			)
+			if err != nil {
+				return err
+			}
+			logging.DebugStep(logger, "network safe apply (tui)", "User choice: repairNow=%v", repairNow)
+			if repairNow {
+				if repair := maybeRepairNICNamesTUI(ctx, logger, archivePath, configPath, buildSig); repair != nil {
+					_ = promptOkTUI("NIC repair result", configPath, buildSig, repair.Details(), "OK")
+				}
+			}
+		} else {
+			logger.Info("Network configuration is staged (not yet written to /etc); skipping NIC repair prompt.")
+		}
+		logger.Info("Skipping live network apply (you can apply later).")
+		return nil
+	}
+
+	rollbackPath := networkRollbackPath
+	if rollbackPath == "" {
+		logging.DebugStep(logger, "network safe apply (tui)", "Prompt: network-only rollback missing; allow full rollback backup fallback")
+		ok, err := promptYesNoTUIFunc(
+			"Network-only rollback not available",
+			configPath,
+			buildSig,
+			"Network-only rollback backup is not available.\n\nIf you proceed, the rollback timer will use the full safety backup, which may revert other restored categories.\n\nProceed anyway?",
+			"Proceed with full rollback",
+			"Skip apply",
+		)
+		if err != nil {
+			return err
+		}
+		logging.DebugStep(logger, "network safe apply (tui)", "User choice: allowFullRollback=%v", ok)
+		if !ok {
+			repairNow, err := promptYesNoTUIFunc(
+				"NIC name repair (recommended)",
+				configPath,
+				buildSig,
+				"Attempt NIC name repair in restored network config files now (no reload)?\n\nThis will only rewrite /etc/network/interfaces and /etc/network/interfaces.d/* when safe mappings are found.",
+				"Repair now",
+				"Skip repair",
+			)
+			if err != nil {
+				return err
+			}
+			logging.DebugStep(logger, "network safe apply (tui)", "User choice: repairNow=%v", repairNow)
+			if repairNow {
+				if repair := maybeRepairNICNamesTUI(ctx, logger, archivePath, configPath, buildSig); repair != nil {
+					_ = promptOkTUI("NIC repair result", configPath, buildSig, repair.Details(), "OK")
+				}
+			}
+			logger.Info("Skipping live network apply (you can reboot or apply manually later).")
+			return nil
+		}
+		rollbackPath = fullRollbackPath
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Selected rollback backup: %s", rollbackPath)
+	if err := applyNetworkWithRollbackTUI(ctx, logger, rollbackPath, networkRollbackPath, stageRoot, archivePath, configPath, buildSig, defaultNetworkRollbackTimeout, plan.SystemType); err != nil {
+		return err
+	}
+	return nil
+}
+
+func applyNetworkWithRollbackTUI(ctx context.Context, logger *logging.Logger, rollbackBackupPath, networkRollbackPath, stageRoot, archivePath, configPath, buildSig string, timeout time.Duration, systemType SystemType) (err error) {
+	done := logging.DebugStart(
+		logger,
+		"network safe apply (tui)",
+		"rollbackBackup=%s networkRollback=%s timeout=%s systemType=%s stage=%s",
+		strings.TrimSpace(rollbackBackupPath),
+		strings.TrimSpace(networkRollbackPath),
+		timeout,
+		systemType,
+		strings.TrimSpace(stageRoot),
+	)
+	defer func() { done(err) }()
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Create diagnostics directory")
+	diagnosticsDir, err := createNetworkDiagnosticsDir()
+	if err != nil {
+		logger.Warning("Network diagnostics disabled: %v", err)
+		diagnosticsDir = ""
+	} else {
+		logger.Info("Network diagnostics directory: %s", diagnosticsDir)
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Detect management interface (SSH/default route)")
+	iface, source := detectManagementInterface(ctx, logger)
+	if iface != "" {
+		logger.Info("Detected management interface: %s (%s)", iface, source)
+	}
+
+	if diagnosticsDir != "" {
+		logging.DebugStep(logger, "network safe apply (tui)", "Capture network snapshot (before)")
+		if snap, err := writeNetworkSnapshot(ctx, logger, diagnosticsDir, "before", 3*time.Second); err != nil {
+			logger.Debug("Network snapshot before apply failed: %v", err)
+		} else {
+			logger.Debug("Network snapshot (before): %s", snap)
+		}
+
+		logging.DebugStep(logger, "network safe apply (tui)", "Run baseline health checks (before)")
+		healthBefore := runNetworkHealthChecks(ctx, networkHealthOptions{
+			SystemType:         systemType,
+			Logger:             logger,
+			CommandTimeout:     3 * time.Second,
+			EnableGatewayPing:  false,
+			ForceSSHRouteCheck: false,
+			EnableDNSResolve:   false,
+		})
+		if path, err := writeNetworkHealthReportFileNamed(diagnosticsDir, "health_before.txt", healthBefore); err != nil {
+			logger.Debug("Failed to write network health (before) report: %v", err)
+		} else {
+			logger.Debug("Network health (before) report: %s", path)
+		}
+	}
+
+	if strings.TrimSpace(stageRoot) != "" {
+		logging.DebugStep(logger, "network safe apply (tui)", "Apply staged network files to system paths (before NIC repair)")
+		applied, err := applyNetworkFilesFromStage(logger, stageRoot)
+		if err != nil {
+			return err
+		}
+		if len(applied) > 0 {
+			logging.DebugStep(logger, "network safe apply (tui)", "Staged network files written: %d", len(applied))
+		}
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "NIC name repair (optional)")
+	nicRepair := maybeRepairNICNamesTUI(ctx, logger, archivePath, configPath, buildSig)
+	if nicRepair != nil {
+		if nicRepair.Applied() || nicRepair.SkippedReason != "" {
+			logger.Info("%s", nicRepair.Summary())
+		} else {
+			logger.Debug("%s", nicRepair.Summary())
+		}
+	}
+
+	if strings.TrimSpace(iface) != "" {
+		if cur, err := currentNetworkEndpoint(ctx, iface, 2*time.Second); err == nil {
+			if tgt, err := targetNetworkEndpointFromConfig(logger, iface); err == nil {
+				logger.Info("Network plan: %s -> %s", cur.summary(), tgt.summary())
+			}
+		}
+	}
+
+	if diagnosticsDir != "" {
+		logging.DebugStep(logger, "network safe apply (tui)", "Write network plan (current -> target)")
+		if planText, err := buildNetworkPlanReport(ctx, logger, iface, source, 2*time.Second); err != nil {
+			logger.Debug("Network plan build failed: %v", err)
+		} else if strings.TrimSpace(planText) != "" {
+			if path, err := writeNetworkTextReportFile(diagnosticsDir, "plan.txt", planText+"\n"); err != nil {
+				logger.Debug("Network plan write failed: %v", err)
+			} else {
+				logger.Debug("Network plan: %s", path)
+			}
+		}
+
+		logging.DebugStep(logger, "network safe apply (tui)", "Run ifquery diagnostic (pre-apply)")
+		ifqueryPre := runNetworkIfqueryDiagnostic(ctx, 5*time.Second, logger)
+		if !ifqueryPre.Skipped {
+			if path, err := writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, "ifquery_pre_apply.txt", ifqueryPre); err != nil {
+				logger.Debug("Failed to write ifquery (pre-apply) report: %v", err)
+			} else {
+				logger.Debug("ifquery (pre-apply) report: %s", path)
+			}
+		}
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Network preflight validation (ifupdown/ifupdown2)")
+	preflight := runNetworkPreflightValidation(ctx, 5*time.Second, logger)
+	if diagnosticsDir != "" {
+		if path, err := writeNetworkPreflightReportFile(diagnosticsDir, preflight); err != nil {
+			logger.Debug("Failed to write network preflight report: %v", err)
+		} else {
+			logger.Debug("Network preflight report: %s", path)
+		}
+	}
+	if !preflight.Ok() {
+		message := preflight.Summary()
+		if strings.TrimSpace(diagnosticsDir) != "" {
+			message += "\n\nDiagnostics saved under:\n" + diagnosticsDir
+		}
+		if out := strings.TrimSpace(preflight.Output); out != "" {
+			message += "\n\nOutput:\n" + out
+		}
+		if strings.TrimSpace(stageRoot) != "" && strings.TrimSpace(networkRollbackPath) != "" {
+			logging.DebugStep(logger, "network safe apply (tui)", "Preflight failed in staged mode: rolling back network files automatically")
+			rollbackLog, rbErr := rollbackNetworkFilesNow(ctx, logger, networkRollbackPath, diagnosticsDir)
+			if strings.TrimSpace(rollbackLog) != "" {
+				logger.Info("Network rollback log: %s", rollbackLog)
+			}
+			if rbErr != nil {
+				logger.Error("Network apply aborted: preflight validation failed (%s) and rollback failed: %v", preflight.CommandLine(), rbErr)
+				_ = promptOkTUI("Network rollback failed", configPath, buildSig, rbErr.Error(), "OK")
+				return fmt.Errorf("network preflight validation failed; rollback attempt failed: %w", rbErr)
+			}
+			if diagnosticsDir != "" {
+				logging.DebugStep(logger, "network safe apply (tui)", "Capture network snapshot (after rollback)")
+				if snap, err := writeNetworkSnapshot(ctx, logger, diagnosticsDir, "after_rollback", 3*time.Second); err != nil {
+					logger.Debug("Network snapshot after rollback failed: %v", err)
+				} else {
+					logger.Debug("Network snapshot (after rollback): %s", snap)
+				}
+				logging.DebugStep(logger, "network safe apply (tui)", "Run ifquery diagnostic (after rollback)")
+				ifqueryAfterRollback := runNetworkIfqueryDiagnostic(ctx, 5*time.Second, logger)
+				if !ifqueryAfterRollback.Skipped {
+					if path, err := writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, "ifquery_after_rollback.txt", ifqueryAfterRollback); err != nil {
+						logger.Debug("Failed to write ifquery (after rollback) report: %v", err)
+					} else {
+						logger.Debug("ifquery (after rollback) report: %s", path)
+					}
+				}
+			}
+			logger.Warning(
+				"Network apply aborted: preflight validation failed (%s). Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s).",
+				preflight.CommandLine(),
+				strings.TrimSpace(networkRollbackPath),
+			)
+			_ = promptOkTUI(
+				"Network preflight failed",
+				configPath,
+				buildSig,
+				fmt.Sprintf("Network configuration failed preflight and was rolled back automatically.\n\nRollback log:\n%s", strings.TrimSpace(rollbackLog)),
+				"OK",
+			)
+			return fmt.Errorf("network preflight validation failed; network files rolled back")
+		}
+		if !preflight.Skipped && preflight.ExitError != nil && strings.TrimSpace(networkRollbackPath) != "" {
+			message += "\n\nRollback restored network config files to the pre-restore configuration now? (recommended)"
+			rollbackNow, err := promptYesNoTUIFunc(
+				"Network preflight failed",
+				configPath,
+				buildSig,
+				message,
+				"Rollback now",
+				"Keep restored files",
+			)
+			if err != nil {
+				return err
+			}
+			logging.DebugStep(logger, "network safe apply (tui)", "User choice: rollbackNow=%v", rollbackNow)
+			if rollbackNow {
+				logging.DebugStep(logger, "network safe apply (tui)", "Rollback network files now (backup=%s)", strings.TrimSpace(networkRollbackPath))
+				rollbackLog, rbErr := rollbackNetworkFilesNow(ctx, logger, networkRollbackPath, diagnosticsDir)
+				if strings.TrimSpace(rollbackLog) != "" {
+					logger.Info("Network rollback log: %s", rollbackLog)
+				}
+				if rbErr != nil {
+					_ = promptOkTUI("Network rollback failed", configPath, buildSig, rbErr.Error(), "OK")
+					return fmt.Errorf("network preflight validation failed; rollback attempt failed: %w", rbErr)
+				}
+				_ = promptOkTUI(
+					"Network rollback completed",
+					configPath,
+					buildSig,
+					fmt.Sprintf("Network files rolled back to pre-restore configuration.\n\nRollback log:\n%s", strings.TrimSpace(rollbackLog)),
+					"OK",
+				)
+				return fmt.Errorf("network preflight validation failed; network files rolled back")
+			}
+		} else {
+			_ = promptOkTUI("Network preflight failed", configPath, buildSig, message, "OK")
+		}
+		return fmt.Errorf("network preflight validation failed; aborting live network apply")
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Arm rollback timer BEFORE applying changes")
+	handle, err := armNetworkRollback(ctx, logger, rollbackBackupPath, timeout, diagnosticsDir)
+	if err != nil {
+		return err
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Apply network configuration now")
+	if err := applyNetworkConfig(ctx, logger); err != nil {
+		logger.Warning("Network apply failed: %v", err)
+		return err
+	}
+
+	if diagnosticsDir != "" {
+		logging.DebugStep(logger, "network safe apply (tui)", "Capture network snapshot (after)")
+		if snap, err := writeNetworkSnapshot(ctx, logger, diagnosticsDir, "after", 3*time.Second); err != nil {
+			logger.Debug("Network snapshot after apply failed: %v", err)
+		} else {
+			logger.Debug("Network snapshot (after): %s", snap)
+		}
+
+		logging.DebugStep(logger, "network safe apply (tui)", "Run ifquery diagnostic (post-apply)")
+		ifqueryPost := runNetworkIfqueryDiagnostic(ctx, 5*time.Second, logger)
+		if !ifqueryPost.Skipped {
+			if path, err := writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, "ifquery_post_apply.txt", ifqueryPost); err != nil {
+				logger.Debug("Failed to write ifquery (post-apply) report: %v", err)
+			} else {
+				logger.Debug("ifquery (post-apply) report: %s", path)
+			}
+		}
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Run post-apply health checks")
+	health := runNetworkHealthChecks(ctx, networkHealthOptions{
+		SystemType:         systemType,
+		Logger:             logger,
+		CommandTimeout:     3 * time.Second,
+		EnableGatewayPing:  true,
+		ForceSSHRouteCheck: false,
+		EnableDNSResolve:   true,
+		LocalPortChecks:    defaultNetworkPortChecks(systemType),
+	})
+	logNetworkHealthReport(logger, health)
+	if diagnosticsDir != "" {
+		if path, err := writeNetworkHealthReportFile(diagnosticsDir, health); err != nil {
+			logger.Debug("Failed to write network health report: %v", err)
+		} else {
+			logger.Debug("Network health report: %s", path)
+		}
+	}
+
+	remaining := handle.remaining(time.Now())
+	if remaining <= 0 {
+		logger.Warning("Rollback window already expired; leaving rollback armed")
+		return nil
+	}
+
+	logging.DebugStep(logger, "network safe apply (tui)", "Wait for COMMIT (rollback in %ds)", int(remaining.Seconds()))
+	committed, err := promptNetworkCommitTUI(remaining, health, nicRepair, diagnosticsDir, configPath, buildSig)
+	if err != nil {
+		logger.Warning("Commit prompt error: %v", err)
+	}
+	logging.DebugStep(logger, "network safe apply (tui)", "User commit result: committed=%v", committed)
+	if committed {
+		disarmNetworkRollback(ctx, logger, handle)
+		logger.Info("Network configuration committed successfully.")
+		return nil
+	}
+	logger.Warning("Network configuration not committed; rollback will run automatically.")
+	return nil
+}
+
+func maybeRepairNICNamesTUI(ctx context.Context, logger *logging.Logger, archivePath, configPath, buildSig string) *nicRepairResult {
+	logging.DebugStep(logger, "NIC repair", "Plan NIC name repair (archive=%s)", strings.TrimSpace(archivePath))
+	plan, err := planNICNameRepair(ctx, archivePath)
+	if err != nil {
+		logger.Warning("NIC name repair plan failed: %v", err)
+		return nil
+	}
+	if plan == nil {
+		return nil
+	}
+	logging.DebugStep(logger, "NIC repair", "Plan result: mappingEntries=%d safe=%d conflicts=%d skippedReason=%q", len(plan.Mapping.Entries), len(plan.SafeMappings), len(plan.Conflicts), strings.TrimSpace(plan.SkippedReason))
+
+	if plan.SkippedReason != "" && !plan.HasWork() {
+		return &nicRepairResult{AppliedAt: nowRestore(), SkippedReason: plan.SkippedReason}
+	}
+
+	if plan != nil && !plan.Mapping.IsEmpty() {
+		logging.DebugStep(logger, "NIC repair", "Detect persistent NIC naming overrides (udev/systemd)")
+		overrides, err := detectNICNamingOverrideRules(logger)
+		if err != nil {
+			logger.Debug("NIC naming override detection failed: %v", err)
+		} else if overrides.Empty() {
+			logging.DebugStep(logger, "NIC repair", "No persistent NIC naming overrides detected")
+		} else {
+			logging.DebugStep(logger, "NIC repair", "Naming overrides detected: %s", overrides.Summary())
+			logging.DebugStep(logger, "NIC repair", "Naming override details:\n%s", overrides.Details(32))
+			var b strings.Builder
+			b.WriteString("Detected persistent NIC naming rules (udev/systemd).\n\n")
+			b.WriteString("If these rules are intended to keep legacy interface names, ProxSave NIC repair may rewrite /etc/network/interfaces* to different names.\n\n")
+			if details := strings.TrimSpace(overrides.Details(8)); details != "" {
+				b.WriteString(details)
+				b.WriteString("\n\n")
+			}
+			b.WriteString("Skip NIC name repair and keep restored interface names?")
+
+			skip, err := promptYesNoTUIFunc(
+				"NIC naming overrides",
+				configPath,
+				buildSig,
+				b.String(),
+				"Skip NIC repair",
+				"Proceed",
+			)
+			if err != nil {
+				logger.Warning("NIC naming override prompt failed: %v", err)
+			} else if skip {
+				logging.DebugStep(logger, "NIC repair", "User choice: skip NIC repair due to naming overrides")
+				logger.Info("NIC name repair skipped due to persistent naming rules")
+				return &nicRepairResult{AppliedAt: nowRestore(), SkippedReason: "skipped due to persistent NIC naming rules (user choice)"}
+			} else {
+				logging.DebugStep(logger, "NIC repair", "User choice: proceed with NIC repair despite naming overrides")
+			}
+		}
+	}
+
+	includeConflicts := false
+	if len(plan.Conflicts) > 0 {
+		logging.DebugStep(logger, "NIC repair", "Conflicts detected: %d", len(plan.Conflicts))
+		for i, conflict := range plan.Conflicts {
+			if i >= 32 {
+				logging.DebugStep(logger, "NIC repair", "Conflict details truncated (showing first 32)")
+				break
+			}
+			logging.DebugStep(logger, "NIC repair", "Conflict: %s", conflict.Details())
+		}
+		var b strings.Builder
+		b.WriteString("Detected NIC name conflicts.\n\n")
+		b.WriteString("These interface names exist on the current system but map to different NICs in the backup inventory:\n\n")
+		for _, conflict := range plan.Conflicts {
+			b.WriteString(conflict.Details())
+			b.WriteString("\n")
+		}
+		b.WriteString("\nApply NIC rename mapping even for conflicts?")
+
+		ok, err := promptYesNoTUIFunc(
+			"NIC name conflicts",
+			configPath,
+			buildSig,
+			b.String(),
+			"Apply conflicts",
+			"Skip conflicts",
+		)
+		if err != nil {
+			logger.Warning("NIC conflict prompt failed: %v", err)
+		} else if ok {
+			includeConflicts = true
+		}
+	}
+	logging.DebugStep(logger, "NIC repair", "Apply conflicts=%v (conflictCount=%d)", includeConflicts, len(plan.Conflicts))
+
+	logging.DebugStep(logger, "NIC repair", "Apply NIC rename mapping to /etc/network/interfaces*")
+	result, err := applyNICNameRepair(logger, plan, includeConflicts)
+	if err != nil {
+		logger.Warning("NIC name repair failed: %v", err)
+		return nil
+	}
+	if result != nil {
+		logging.DebugStep(logger, "NIC repair", "Result: applied=%v changedFiles=%d skippedReason=%q", result.Applied(), len(result.ChangedFiles), strings.TrimSpace(result.SkippedReason))
+	}
+	return result
+}
+
 func promptClusterRestoreModeTUI(configPath, buildSig string) (int, error) {
 	app := newTUIApp()
 	var choice int
@@ -1139,7 +1790,7 @@ func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
 	return true, nil
 }
 
-func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, configPath, buildSig string) error {
+func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool, configPath, buildSig string) error {
 	if candidate == nil || prepared == nil || prepared.Manifest.ArchivePath == "" {
 		return fmt.Errorf("invalid restore candidate")
 	}
@@ -1198,8 +1849,87 @@ func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepare
 		return ErrRestoreAborted
 	}
 
-	if err := extractPlainArchive(ctx, prepared.ArchivePath, destRoot, logger); err != nil {
+	safeFstabMerge := destRoot == "/" && isRealRestoreFS(restoreFS)
+	skipFn := func(name string) bool {
+		if !safeFstabMerge {
+			return false
+		}
+		clean := strings.TrimPrefix(strings.TrimSpace(name), "./")
+		clean = strings.TrimPrefix(clean, "/")
+		return clean == "etc/fstab"
+	}
+
+	if safeFstabMerge {
+		logger.Warning("Full restore safety: /etc/fstab will not be overwritten; Smart Merge will be offered after extraction.")
+	}
+
+	if err := extractPlainArchive(ctx, prepared.ArchivePath, destRoot, logger, skipFn); err != nil {
 		return err
+	}
+
+	if safeFstabMerge {
+		fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
+		if err != nil {
+			logger.Warning("Failed to create temp dir for fstab merge: %v", err)
+		} else {
+			defer restoreFS.RemoveAll(fsTempDir)
+			fsCategory := []Category{{
+				ID:   "filesystem",
+				Name: "Filesystem Configuration",
+				Paths: []string{
+					"./etc/fstab",
+				},
+			}}
+			if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, fsCategory, RestoreModeCustom, nil, "", nil); err != nil {
+				logger.Warning("Failed to extract filesystem config for merge: %v", err)
+			} else {
+				currentFstab := filepath.Join(destRoot, "etc", "fstab")
+				backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
+				currentEntries, currentRaw, err := parseFstab(currentFstab)
+				if err != nil {
+					logger.Warning("Failed to parse current fstab: %v", err)
+				} else if backupEntries, _, err := parseFstab(backupFstab); err != nil {
+					logger.Warning("Failed to parse backup fstab: %v", err)
+				} else {
+					analysis := analyzeFstabMerge(logger, currentEntries, backupEntries)
+					if len(analysis.ProposedMounts) == 0 {
+						logger.Info("No new safe mounts found to restore. Keeping current fstab.")
+					} else {
+						var msg strings.Builder
+						msg.WriteString("ProxSave ha trovato mount mancanti in /etc/fstab.\n\n")
+						if analysis.RootComparable && !analysis.RootMatch {
+							msg.WriteString("⚠ Root UUID mismatch: il backup sembra provenire da una macchina diversa.\n")
+						}
+						if analysis.SwapComparable && !analysis.SwapMatch {
+							msg.WriteString("⚠ Swap mismatch: verrà mantenuta la configurazione swap attuale.\n")
+						}
+						msg.WriteString("\nMount proposti (sicuri):\n")
+						for _, m := range analysis.ProposedMounts {
+							fmt.Fprintf(&msg, "  - %s -> %s (%s)\n", m.Device, m.MountPoint, m.Type)
+						}
+						if len(analysis.SkippedMounts) > 0 {
+							msg.WriteString("\nMount trovati ma non proposti automaticamente:\n")
+							for _, m := range analysis.SkippedMounts {
+								fmt.Fprintf(&msg, "  - %s -> %s (%s)\n", m.Device, m.MountPoint, m.Type)
+							}
+							msg.WriteString("\nSuggerimento: verifica dischi/UUID e opzioni (nofail/_netdev) prima di aggiungerli.\n")
+						}
+
+						apply, perr := promptYesNoTUIFunc("Smart fstab merge", configPath, buildSig, msg.String(), "Apply", "Skip")
+						if perr != nil {
+							return perr
+						}
+						if apply {
+							if err := applyFstabMerge(ctx, logger, currentRaw, currentFstab, analysis.ProposedMounts, dryRun); err != nil {
+								logger.Warning("Smart Fstab Merge failed: %v", err)
+							}
+						} else {
+							logger.Info("Fstab merge skipped by user.")
+						}
+					}
+				}
+			}
+		}
 	}
 
 	logger.Info("Restore completed successfully.")
@@ -1244,6 +1974,184 @@ func promptYesNoTUI(title, configPath, buildSig, message, yesLabel, noLabel stri
 		return false, nil
 	}
 	return result, nil
+}
+
+func promptOkTUI(title, configPath, buildSig, message, okLabel string) error {
+	app := newTUIApp()
+
+	infoText := tview.NewTextView().
+		SetText(message).
+		SetWrap(true).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true)
+
+	form := components.NewForm(app)
+	form.SetOnSubmit(func(values map[string]string) error {
+		return nil
+	})
+	form.SetOnCancel(func() {})
+	form.AddSubmitButton(okLabel)
+	form.AddCancelButton("Close")
+	enableFormNavigation(form, nil)
+
+	content := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(infoText, 0, 1, false).
+		AddItem(form.Form, 3, 0, true)
+
+	page := buildRestoreWizardPage(title, configPath, buildSig, content)
+	form.SetParentView(page)
+
+	return app.SetRoot(page, true).SetFocus(form.Form).Run()
+}
+
+func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir, configPath, buildSig string) (bool, error) {
+	app := newTUIApp()
+	var committed bool
+	var cancelled bool
+	var timedOut bool
+
+	remaining := int(timeout.Seconds())
+	if remaining <= 0 {
+		return false, nil
+	}
+
+	infoText := tview.NewTextView().
+		SetWrap(true).
+		SetTextColor(tcell.ColorWhite).
+		SetDynamicColors(true)
+
+	healthColor := func(sev networkHealthSeverity) string {
+		switch sev {
+		case networkHealthCritical:
+			return "red"
+		case networkHealthWarn:
+			return "yellow"
+		default:
+			return "green"
+		}
+	}
+
+	healthDetails := func(report networkHealthReport) string {
+		var b strings.Builder
+		for _, check := range report.Checks {
+			color := healthColor(check.Severity)
+			b.WriteString(fmt.Sprintf("- [%s]%s[white] %s: %s\n", color, check.Severity.String(), check.Name, check.Message))
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	repairHeader := func(r *nicRepairResult) string {
+		if r == nil {
+			return ""
+		}
+		if r.Applied() {
+			return fmt.Sprintf("NIC repair: [green]APPLIED[white] (%d file(s))", len(r.ChangedFiles))
+		}
+		if r.SkippedReason != "" {
+			return fmt.Sprintf("NIC repair: [yellow]SKIPPED[white] (%s)", r.SkippedReason)
+		}
+		return ""
+	}
+
+	repairDetails := func(r *nicRepairResult) string {
+		if r == nil || len(r.AppliedNICMap) == 0 {
+			return ""
+		}
+		var b strings.Builder
+		for _, m := range r.AppliedNICMap {
+			b.WriteString(fmt.Sprintf("- %s -> %s\n", m.OldName, m.NewName))
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	updateText := func(value int) {
+		repairInfo := repairHeader(nicRepair)
+		if details := repairDetails(nicRepair); details != "" {
+			repairInfo += "\n" + details
+		}
+		if repairInfo != "" {
+			repairInfo += "\n\n"
+		}
+
+		recommendation := ""
+		if health.Severity == networkHealthCritical {
+			recommendation = "\n\n[red]Recommendation:[white] do NOT commit (let rollback run)."
+		}
+
+		diagInfo := ""
+		if strings.TrimSpace(diagnosticsDir) != "" {
+			diagInfo = fmt.Sprintf("\n\nDiagnostics saved under:\n%s", diagnosticsDir)
+		}
+
+		infoText.SetText(fmt.Sprintf("Rollback in [yellow]%ds[white].\n\n%sNetwork health: [%s]%s[white]\n%s%s\n\nType COMMIT or press the button to keep the new network configuration.\nIf you do nothing, rollback will be automatic.",
+			value,
+			repairInfo,
+			healthColor(health.Severity),
+			health.Severity.String(),
+			healthDetails(health)+recommendation,
+			diagInfo,
+		))
+	}
+	updateText(remaining)
+
+	form := components.NewForm(app)
+	form.SetOnSubmit(func(values map[string]string) error {
+		committed = true
+		return nil
+	})
+	form.SetOnCancel(func() {
+		cancelled = true
+	})
+	form.AddSubmitButton("COMMIT")
+	form.AddCancelButton("Let rollback run")
+	enableFormNavigation(form, nil)
+
+	content := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(infoText, 0, 1, false).
+		AddItem(form.Form, 3, 0, true)
+
+	page := buildRestoreWizardPage("Network apply", configPath, buildSig, content)
+	form.SetParentView(page)
+
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	ticker := time.NewTicker(1 * time.Second)
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ticker.C:
+				remaining--
+				if remaining <= 0 {
+					timedOut = true
+					app.Stop()
+					return
+				}
+				value := remaining
+				app.QueueUpdateDraw(func() {
+					updateText(value)
+				})
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+
+	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+		close(stopCh)
+		ticker.Stop()
+		return false, err
+	}
+	close(stopCh)
+	ticker.Stop()
+	<-done
+
+	if timedOut || cancelled {
+		return false, nil
+	}
+	return committed, nil
 }
 
 func confirmOverwriteTUI(configPath, buildSig string) (bool, error) {

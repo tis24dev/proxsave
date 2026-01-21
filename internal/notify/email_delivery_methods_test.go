@@ -1,7 +1,9 @@
 package notify
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -196,4 +198,155 @@ func TestEmailNotifier_RelayFallback_UsesPMFOnly(t *testing.T) {
 	if !strings.Contains(string(got), "To: admin@example.com\n") {
 		t.Fatalf("expected To: admin@example.com header in PMF message")
 	}
+}
+
+func TestEmailNotifierBuildEmailMessage_AttachesLogWhenConfigured(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "backup.log")
+	if err := os.WriteFile(logPath, []byte("log contents"), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:        true,
+		DeliveryMethod: EmailDeliverySendmail,
+		From:           "no-reply@proxmox.example.com",
+		AttachLogFile:  true,
+	}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	data := createTestNotificationData()
+	data.LogFilePath = logPath
+
+	emailMessage, toHeader := notifier.buildEmailMessage("admin@example.com", "subject", "<b>html</b>", "text", data)
+	if toHeader != "admin@example.com" {
+		t.Fatalf("toHeader=%q want %q", toHeader, "admin@example.com")
+	}
+	if !strings.Contains(emailMessage, "Content-Type: multipart/mixed") {
+		t.Fatalf("expected multipart/mixed email, got:\n%s", emailMessage)
+	}
+	if !strings.Contains(emailMessage, "Content-Disposition: attachment") {
+		t.Fatalf("expected attachment, got:\n%s", emailMessage)
+	}
+	if !strings.Contains(emailMessage, "name=\"backup.log\"") {
+		t.Fatalf("expected attachment filename backup.log, got:\n%s", emailMessage)
+	}
+}
+
+func TestEmailNotifierBuildEmailMessage_FallsBackWhenLogUnreadable(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:        true,
+		DeliveryMethod: EmailDeliverySendmail,
+		From:           "no-reply@proxmox.example.com",
+		AttachLogFile:  true,
+	}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	data := createTestNotificationData()
+	data.LogFilePath = filepath.Join(t.TempDir(), "missing.log")
+
+	emailMessage, _ := notifier.buildEmailMessage("admin@example.com", "subject", "<b>html</b>", "text", data)
+	if !strings.Contains(emailMessage, "Content-Type: multipart/alternative") {
+		t.Fatalf("expected multipart/alternative fallback, got:\n%s", emailMessage)
+	}
+}
+
+func TestEmailNotifierIsMTAServiceActive_SystemctlMissing(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+	notifier, err := NewEmailNotifier(EmailConfig{Enabled: true, DeliveryMethod: EmailDeliverySendmail}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error=%v", err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	active, msg := notifier.isMTAServiceActive(context.Background())
+	if active {
+		t.Fatalf("expected active=false when systemctl missing, got true (%s)", msg)
+	}
+	if msg != "systemctl not available" {
+		t.Fatalf("msg=%q want %q", msg, "systemctl not available")
+	}
+}
+
+func TestEmailNotifierIsMTAServiceActive_ServiceDetected(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+	notifier, err := NewEmailNotifier(EmailConfig{Enabled: true, DeliveryMethod: EmailDeliverySendmail}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error=%v", err)
+	}
+
+	dir := t.TempDir()
+	writeCmd(t, dir, "systemctl", "#!/bin/sh\nset -eu\nif [ \"$1\" = \"is-active\" ] && [ \"$2\" = \"postfix\" ]; then exit 0; fi\nexit 3\n")
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+origPath)
+
+	active, service := notifier.isMTAServiceActive(context.Background())
+	if !active || service != "postfix" {
+		t.Fatalf("isMTAServiceActive()=(%v,%q) want (true,\"postfix\")", active, service)
+	}
+}
+
+func TestEmailNotifierCheckRelayHostConfigured_Variants(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+	notifier, err := NewEmailNotifier(EmailConfig{Enabled: true, DeliveryMethod: EmailDeliverySendmail}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error=%v", err)
+	}
+
+	origPath := postfixMainCFPath
+	t.Cleanup(func() { postfixMainCFPath = origPath })
+
+	t.Run("missing file", func(t *testing.T) {
+		postfixMainCFPath = filepath.Join(t.TempDir(), "missing.cf")
+		ok, reason := notifier.checkRelayHostConfigured(context.Background())
+		if ok || reason != "main.cf not found" {
+			t.Fatalf("checkRelayHostConfigured()=(%v,%q) want (false,%q)", ok, reason, "main.cf not found")
+		}
+	})
+
+	t.Run("unreadable (is dir)", func(t *testing.T) {
+		postfixMainCFPath = t.TempDir()
+		ok, reason := notifier.checkRelayHostConfigured(context.Background())
+		if ok || reason != "cannot read config" {
+			t.Fatalf("checkRelayHostConfigured()=(%v,%q) want (false,%q)", ok, reason, "cannot read config")
+		}
+	})
+
+	t.Run("relayhost empty", func(t *testing.T) {
+		dir := t.TempDir()
+		postfixMainCFPath = filepath.Join(dir, "main.cf")
+		if err := os.WriteFile(postfixMainCFPath, []byte("relayhost = []\n"), 0o600); err != nil {
+			t.Fatalf("write main.cf: %v", err)
+		}
+		ok, reason := notifier.checkRelayHostConfigured(context.Background())
+		if ok || reason != "no relay host" {
+			t.Fatalf("checkRelayHostConfigured()=(%v,%q) want (false,%q)", ok, reason, "no relay host")
+		}
+	})
+
+	t.Run("relayhost set", func(t *testing.T) {
+		dir := t.TempDir()
+		postfixMainCFPath = filepath.Join(dir, "main.cf")
+		if err := os.WriteFile(postfixMainCFPath, []byte("relayhost = smtp.example.com:587\n"), 0o600); err != nil {
+			t.Fatalf("write main.cf: %v", err)
+		}
+		ok, host := notifier.checkRelayHostConfigured(context.Background())
+		if !ok || host != "smtp.example.com:587" {
+			t.Fatalf("checkRelayHostConfigured()=(%v,%q) want (true,%q)", ok, host, "smtp.example.com:587")
+		}
+	})
 }

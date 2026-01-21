@@ -860,6 +860,7 @@ func extractSelectiveArchive(
         mode,
         logFile,
         logPath,
+        nil, // skipFn (optional)
     )
 
     return logPath, err
@@ -1247,6 +1248,7 @@ func extractArchiveNative(
     mode RestoreMode,
     logFile *os.File,
     logFilePath string,
+    skipFn func(entryName string) bool,
 ) error {
     // 1. Open archive with decompression
     file, _ := os.Open(archivePath)

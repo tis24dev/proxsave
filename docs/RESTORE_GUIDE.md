@@ -323,6 +323,7 @@ Phase 13: pvesh SAFE Apply (Cluster SAFE Mode Only)
   └─ Offer to apply datacenter.cfg via pvesh
 
 Phase 14: Post-Restore Tasks
+  ├─ Optional: Apply restored network config with rollback timer (requires COMMIT)
   ├─ Recreate storage/datastore directories
   ├─ Check ZFS pool status (PBS only)
   ├─ Restart PVE/PBS services (if stopped)
@@ -709,7 +710,8 @@ Cluster backup detected. Choose how to restore the cluster database:
 
 **Post-restore actions (SAFE mode)**:
 After export, the workflow offers interactive options to apply configurations via `pvesh`:
-1. **VM/CT configs**: Scans exported configs and applies them via `pvesh set /nodes/<node>/qemu/<vmid>/config`
+1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and applies them via `pvesh set /nodes/<node>/qemu/<vmid>/config`
+   - If the target node hostname differs from the hostname stored in the backup (common after hardware migration / reinstall), ProxSave detects the mismatch and prompts you to select the exported node directory to import from (instead of silently reporting “No VM/CT configs found”).
 2. **Storage configuration**: Applies `storage.cfg` entries via `pvesh set /cluster/storage/<id>`
 3. **Datacenter configuration**: Applies `datacenter.cfg` via `pvesh set /cluster/config`
 
@@ -722,6 +724,7 @@ Each action prompts for confirmation before execution.
 - Unmounts `/etc/pve` FUSE filesystem
 - Writes directly to `/var/lib/pve-cluster/config.db`
 - Restarts services with restored configuration
+- Avoids restoring files under `/etc/pve/*` while pmxcfs is stopped/unmounted (to prevent "shadowed" writes on the underlying disk). Those files are expected to come from the restored `config.db`.
 
 **When to use**:
 - Complete disaster recovery
@@ -1348,6 +1351,21 @@ These configurations are included in every backup and can be restored using **th
    Apply all VM/CT configs via pvesh? (y/N): y
    ```
 
+   **If the node name changed** (example: backup from `pve-old`, restore on `pve-new`), ProxSave prompts for the exported source node:
+   ```
+   SAFE cluster restore: applying configs via pvesh (node=pve-new)
+
+   WARNING: VM/CT configs in this backup are stored under different node names.
+   Current node: pve-new
+   Select which exported node to import VM/CT configs from (they will be applied to the current node):
+     [1] pve-old (qemu=12, lxc=3)
+     [0] Skip VM/CT apply
+   Choice: 1
+
+   Found 15 VM/CT configs for exported node pve-old (will apply to current node pve-new)
+   Apply all VM/CT configs via pvesh? (y/N): y
+   ```
+
 6. **Confirm and watch progress**:
    ```
    Applied VM/CT config 100 (webserver)
@@ -1638,6 +1656,53 @@ Backup source: Proxmox Virtual Environment (PVE)
 ⚠ WARNING: Potential incompatibility detected!
 Type "yes" to continue anyway or "no" to abort: _
 ```
+
+### 4. Network Safe Apply (Optional)
+
+If the **network** category is restored, ProxSave can optionally apply the
+new network configuration immediately using a **transactional rollback timer**.
+
+**Important (console recommended)**:
+- Run the live network apply/commit step from the **local console** (physical console, IPMI/iDRAC/iLO, Proxmox console, or hypervisor console), not from SSH.
+- If the restored network config changes the management IP or routes, your SSH session will drop and you may be unable to type `COMMIT`.
+- In that case, ProxSave will treat the lack of `COMMIT` as “not confirmed” and will restore the previous network settings (rollback).
+
+**How it works**:
+- On live restores (writing to `/`), ProxSave **stages** network files first under `/tmp/proxsave/restore-stage-*` and does **not** overwrite `/etc/network/*` during archive extraction.
+- After extraction, ProxSave performs a prevention-first **staged install**: it writes the staged files to disk (no reload), runs safe NIC repair + preflight validation, and **rolls back automatically** if validation fails (leaving the staged copy for review).
+- If rollback backup creation fails (or ProxSave is not running as root), ProxSave keeps network files staged and avoids writing to `/etc`.
+- When you choose to apply live, ProxSave (re)validates and reloads networking inside the rollback timer window.
+- ProxSave arms a local rollback job **before** applying changes
+- Rollback restores **only network-related files** using a dedicated archive under `/tmp/proxsave/network_rollback_backup_*` (so it won’t undo other restored categories)
+- Rollback also prunes network config files that were **created after** the backup (e.g. extra files under `/etc/network/interfaces.d/`), so rollback returns to the exact pre-restore state
+- The user has **180 seconds** to type `COMMIT`
+- If `COMMIT` is not received, ProxSave triggers the rollback and restores the pre-restore network configuration
+- If the network-only rollback archive is not available, ProxSave prompts before falling back to the full safety backup (or skipping live apply)
+
+This protects SSH/GUI access during network changes.
+
+**Health checks**:
+- After applying changes, ProxSave runs local checks (SSH route if available, default route, link state, IP addresses, gateway ping, DNS config/resolve, local web UI port)
+- On PVE systems, additional checks are included for cluster networking: `/etc/pve` (pmxcfs) mount status, `pve-cluster` / `corosync` service state, and `pvecm status` quorum
+- The result is shown to help decide whether to type `COMMIT`
+- Diagnostics are saved under `/tmp/proxsave/network_apply_*` (snapshots `before.txt` / `after.txt` / `after_rollback.txt` when relevant, `health_before.txt` / `health_after.txt`, `preflight.txt`, `plan.txt`, and `ifquery_*`)
+
+**NIC name repair**:
+- If physical NIC names changed after reinstall (e.g. `eno1` → `enp3s0`), ProxSave attempts an automatic mapping using backup network inventory (permanent MAC / MAC / PCI path / udev IDs like `ID_PATH`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT`, `ID_SERIAL`)
+- When a safe mapping is found, `/etc/network/interfaces` and `/etc/network/interfaces.d/*` are rewritten before applying the network config
+- If you skip live network apply, ProxSave may still install the staged config to disk (no reload) after safe NIC repair + preflight; if validation fails, it rolls back and keeps the staged copy.
+- If a mapping would overwrite an interface name that already exists on the current system, ProxSave prompts before applying it (conflict-safe)
+- If persistent NIC naming rules are detected (custom udev `NAME=` rules or systemd `.link` files), ProxSave warns and prompts before applying NIC repair to avoid conflicts with user-intended naming
+- A backup of the pre-repair files is stored under `/tmp/proxsave/nic_repair_*`
+
+**Preflight validation**:
+- After NIC repair, ProxSave runs a **gate** validation of the ifupdown configuration before reloading networking (e.g. `ifup -n -a` / `ifup --no-act -a` / `ifreload --syntax-check -a`)
+- If validation fails, live apply is aborted and the validator output is saved under `/tmp/proxsave/network_apply_*/preflight.txt`
+- Additionally (diagnostics-only), ProxSave can run `ifquery --check -a` **before and after apply** to show how the runtime state matches the target config. Its output is saved under `/tmp/proxsave/network_apply_*/ifquery_*`. Note that `ifquery --check` can show `[fail]` **before apply** even when the config is valid (because the running state still reflects the old config).
+- On staged installs/applies, a failed preflight triggers an **automatic rollback of network files** (no prompt), returning to the pre-restore state and keeping the staged copy for review.
+
+**Result reporting**:
+- If you do not type `COMMIT`, ProxSave completes the restore with warnings and reports that the original network settings were restored (including the current IP, when detectable), plus the rollback log path.
 
 ### 4. Hard Guards
 
@@ -2002,9 +2067,105 @@ zfs list
 # If ZFS, import pool
 zpool import <pool-name>
 
-# If directory, create it
-mkdir -p /mnt/datastore/{.chunks,.lock}
-chown backup:backup /mnt/datastore -R
+# If directory-based datastore (non-ZFS), verify permissions for backup user
+# NOTE:
+# - On live restores, ProxSave stages PBS datastore/job configuration first under `/tmp/proxsave/restore-stage-*`
+#   and applies it safely after checking the current system state.
+# - If a datastore path looks like a mountpoint location (e.g. under `/mnt`) but resolves to the root filesystem,
+#   ProxSave will **defer** that datastore definition (it will NOT be written to `datastore.cfg`), to avoid ending up
+#   with a broken datastore entry that blocks re-creation on a new/empty disk. Deferred entries are saved under
+#   `/tmp/proxsave/datastore.cfg.deferred.*` for manual review.
+# - ProxSave may create missing datastore directories and fix `.lock`/ownership, but it will NOT format disks.
+# - To avoid accidental writes to the wrong disk, ProxSave will skip datastore directory initialization if the
+#   datastore path looks like a mountpoint location (e.g. under /mnt) but resolves to the root filesystem.
+#   In that case, mount/import the datastore disk/pool first, then restart PBS (or re-run restore).
+# - If the datastore path is not empty and contains unexpected files/directories, ProxSave will not touch it.
+ls -ld /mnt/datastore /mnt/datastore/<DatastoreName> 2>/dev/null
+namei -l /mnt/datastore/<DatastoreName> 2>/dev/null || true
+
+# Common fix (adjust to your datastore path)
+chown backup:backup /mnt/datastore && chmod 750 /mnt/datastore
+chown -R backup:backup /mnt/datastore/<DatastoreName> && chmod 750 /mnt/datastore/<DatastoreName>
+```
+
+---
+
+**Issue: "Bad Request (400) unable to read /etc/resolv.conf (No such file or directory)"**
+
+**Cause**: `/etc/resolv.conf` is missing or a broken symlink. This can happen after a restore if a previous backup contained an invalid symlink (e.g. pointing to `../commands/resolv_conf.txt`), or if the target system uses `systemd-resolved` and the expected `/run/systemd/resolve/*` files are not present.
+
+**Solution**:
+```bash
+ls -la /etc/resolv.conf
+readlink /etc/resolv.conf 2>/dev/null || true
+
+# If the link is broken or points to commands/resolv_conf.txt, replace it:
+rm -f /etc/resolv.conf
+
+if [ -e /run/systemd/resolve/resolv.conf ]; then
+  ln -s /run/systemd/resolve/resolv.conf /etc/resolv.conf
+elif [ -e /run/systemd/resolve/stub-resolv.conf ]; then
+  ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+else
+  # Fallback: static DNS (adjust to your environment)
+  printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\noptions timeout:2 attempts:2\n" > /etc/resolv.conf
+  chmod 644 /etc/resolv.conf
+fi
+```
+
+Note: newer ProxSave versions attempt to auto-repair `/etc/resolv.conf` during restore when the `network` category is selected.
+
+---
+
+**Issue: "Bad Request (400) parsing /etc/proxmox-backup/datastore.cfg (expected section properties)"**
+
+**Cause**: In PBS, properties inside a `datastore:` section must be indented. A malformed file (often from manual edits or very old configs) will prevent PBS from loading datastore config.
+
+**Solution**:
+```bash
+# ProxSave will attempt to auto-normalize datastore.cfg during restore and store a backup under /tmp/proxsave/,
+# but you can also fix it manually:
+cp -a /etc/proxmox-backup/datastore.cfg /root/datastore.cfg.bak.$(date +%F_%H%M%S)
+
+# Example of correct indentation:
+# datastore: Data1
+#     gc-schedule 0/2:00
+#     path /mnt/datastore/Data1
+
+editor /etc/proxmox-backup/datastore.cfg
+systemctl restart proxmox-backup proxmox-backup-proxy
+```
+
+---
+
+**Issue: "unable to read prune/verification job config ... syntax error (expected header)"**
+
+**Cause**: PBS job config files (`/etc/proxmox-backup/prune.cfg`, `/etc/proxmox-backup/verification.cfg`) are empty or malformed. PBS expects a section header at the first non-comment line; an empty file can trigger parse errors.
+
+**Restore behavior**:
+- On live restores, ProxSave stages PBS job config files and will **remove** empty staged job configs instead of writing a 0-byte file (to avoid breaking PBS parsing).
+
+**Manual fix**:
+```bash
+rm -f /etc/proxmox-backup/prune.cfg /etc/proxmox-backup/verification.cfg
+systemctl restart proxmox-backup proxmox-backup-proxy
+```
+
+---
+
+**Issue: "Datastore error: Is a directory (os error 21)"**
+
+**Cause**: PBS expects a lock file at `<datastore-path>/.lock`. If `.lock` is a directory (common after manual fixes or incorrect initialization), PBS will fail to open it and the datastore becomes unavailable.
+
+**Solution**:
+```bash
+P=/mnt/datastore/<DatastoreName>
+ls -ld "$P/.lock"
+
+# If .lock is a directory, replace it with a file:
+rm -rf "$P/.lock" && touch "$P/.lock" && chown backup:backup "$P/.lock"
+
+systemctl restart proxmox-backup proxmox-backup-proxy
 ```
 
 ---

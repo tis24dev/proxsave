@@ -26,14 +26,15 @@ import (
 var ErrRestoreAborted = errors.New("restore workflow aborted by user")
 
 var (
-	serviceStopTimeout        = 45 * time.Second
-	serviceStartTimeout       = 30 * time.Second
-	serviceVerifyTimeout      = 30 * time.Second
-	serviceStatusCheckTimeout = 5 * time.Second
-	servicePollInterval       = 500 * time.Millisecond
-	serviceRetryDelay         = 500 * time.Millisecond
-	restoreLogSequence        uint64
-	restoreGlob               = filepath.Glob
+	serviceStopTimeout         = 45 * time.Second
+	serviceStopNoBlockTimeout  = 15 * time.Second
+	serviceStartTimeout        = 30 * time.Second
+	serviceVerifyTimeout       = 30 * time.Second
+	serviceStatusCheckTimeout  = 5 * time.Second
+	servicePollInterval        = 500 * time.Millisecond
+	serviceRetryDelay          = 500 * time.Millisecond
+	restoreLogSequence         uint64
+	restoreGlob                = filepath.Glob
 	prepareDecryptedBackupFunc = prepareDecryptedBackup
 )
 
@@ -43,6 +44,8 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 	done := logging.DebugStart(logger, "restore workflow (cli)", "version=%s", version)
 	defer func() { done(err) }()
+
+	restoreHadWarnings := false
 	defer func() {
 		if err == nil {
 			return
@@ -93,7 +96,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if err != nil {
 		logger.Warning("Could not analyze categories: %v", err)
 		logger.Info("Falling back to full restore mode")
-		return runFullRestore(ctx, reader, candidate, prepared, destRoot, logger)
+		return runFullRestore(ctx, reader, candidate, prepared, destRoot, logger, cfg.DryRun)
 	}
 
 	// Show restore mode selection menu
@@ -143,6 +146,16 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 	}
 
+	// Staging is designed to protect live systems. In test runs (fake filesystem) or non-root targets,
+	// extract staged categories directly to the destination to keep restore semantics predictable.
+	if destRoot != "/" || !isRealRestoreFS(restoreFS) {
+		if len(plan.StagedCategories) > 0 {
+			logging.DebugStep(logger, "restore", "Staging disabled (destRoot=%s realFS=%v): extracting %d staged category(ies) directly", destRoot, isRealRestoreFS(restoreFS), len(plan.StagedCategories))
+			plan.NormalCategories = append(plan.NormalCategories, plan.StagedCategories...)
+			plan.StagedCategories = nil
+		}
+	}
+
 	// Create restore configuration
 	restoreConfig := &SelectiveRestoreConfig{
 		Mode:       mode,
@@ -150,6 +163,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		Metadata:   candidate.Manifest,
 	}
 	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.NormalCategories...)
+	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.StagedCategories...)
 	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.ExportCategories...)
 
 	// Show detailed restore plan
@@ -170,9 +184,12 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 	// Create safety backup of current configuration (only for categories that will write to system paths)
 	var safetyBackup *SafetyBackupResult
-	if len(plan.NormalCategories) > 0 {
+	var networkRollbackBackup *SafetyBackupResult
+	systemWriteCategories := append([]Category{}, plan.NormalCategories...)
+	systemWriteCategories = append(systemWriteCategories, plan.StagedCategories...)
+	if len(systemWriteCategories) > 0 {
 		logger.Info("")
-		safetyBackup, err = CreateSafetyBackup(logger, plan.NormalCategories, destRoot)
+		safetyBackup, err = CreateSafetyBackup(logger, systemWriteCategories, destRoot)
 		if err != nil {
 			logger.Warning("Failed to create safety backup: %v", err)
 			fmt.Println()
@@ -187,6 +204,18 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		} else {
 			logger.Info("Safety backup location: %s", safetyBackup.BackupPath)
 			logger.Info("You can restore from this backup if needed using: tar -xzf %s -C /", safetyBackup.BackupPath)
+		}
+	}
+
+	if plan.HasCategoryID("network") {
+		logger.Info("")
+		logging.DebugStep(logger, "restore", "Create network-only rollback backup for transactional network apply")
+		networkRollbackBackup, err = CreateNetworkRollbackBackup(logger, systemWriteCategories, destRoot)
+		if err != nil {
+			logger.Warning("Failed to create network rollback backup: %v", err)
+		} else if networkRollbackBackup != nil && strings.TrimSpace(networkRollbackBackup.BackupPath) != "" {
+			logger.Info("Network rollback backup location: %s", networkRollbackBackup.BackupPath)
+			logger.Info("This backup is used for the %ds network rollback timer and only includes network paths.", int(defaultNetworkRollbackTimeout.Seconds()))
 		}
 	}
 
@@ -234,15 +263,78 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 	// Perform selective extraction for normal categories
 	var detailedLogPath string
+
+	// Intercept filesystem category to handle it via Smart Merge
+	needsFilesystemRestore := false
+	if plan.HasCategoryID("filesystem") {
+		needsFilesystemRestore = true
+		// Filter it out from normal categories to prevent blind overwrite
+		var filtered []Category
+		for _, cat := range plan.NormalCategories {
+			if cat.ID != "filesystem" {
+				filtered = append(filtered, cat)
+			}
+		}
+		plan.NormalCategories = filtered
+		logging.DebugStep(logger, "restore", "Filesystem category intercepted: enabling Smart Merge workflow (skipping generic extraction)")
+	}
+
 	if len(plan.NormalCategories) > 0 {
 		logger.Info("")
-		detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, plan.NormalCategories, mode, logger)
-		if err != nil {
-			logger.Error("Restore failed: %v", err)
-			if safetyBackup != nil {
-				logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+		categoriesForExtraction := plan.NormalCategories
+		if needsClusterRestore {
+			logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: sanitize categories to avoid /etc/pve shadow writes")
+			sanitized, removed := sanitizeCategoriesForClusterRecovery(categoriesForExtraction)
+			removedPaths := 0
+			for _, paths := range removed {
+				removedPaths += len(paths)
 			}
-			return err
+			logging.DebugStep(
+				logger,
+				"restore",
+				"Cluster RECOVERY shadow-guard: categories_before=%d categories_after=%d removed_categories=%d removed_paths=%d",
+				len(categoriesForExtraction),
+				len(sanitized),
+				len(removed),
+				removedPaths,
+			)
+			if len(removed) > 0 {
+				logger.Warning("Cluster RECOVERY restore: skipping direct restore of /etc/pve paths to prevent shadowing while pmxcfs is stopped/unmounted")
+				for _, cat := range categoriesForExtraction {
+					if paths, ok := removed[cat.ID]; ok && len(paths) > 0 {
+						logger.Warning("  - %s (%s): %s", cat.Name, cat.ID, strings.Join(paths, ", "))
+					}
+				}
+				logger.Info("These paths are expected to be restored from config.db and become visible after /etc/pve is remounted.")
+			} else {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: no /etc/pve paths detected in selected categories")
+			}
+			categoriesForExtraction = sanitized
+			var extractionIDs []string
+			for _, cat := range categoriesForExtraction {
+				if id := strings.TrimSpace(cat.ID); id != "" {
+					extractionIDs = append(extractionIDs, id)
+				}
+			}
+			if len(extractionIDs) > 0 {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=%s", strings.Join(extractionIDs, ","))
+			} else {
+				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=<none>")
+			}
+		}
+
+		if len(categoriesForExtraction) == 0 {
+			logging.DebugStep(logger, "restore", "Skip system-path extraction: no categories remain after shadow-guard")
+			logger.Info("No system-path categories remain after cluster shadow-guard; skipping system-path extraction.")
+		} else {
+			detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, categoriesForExtraction, mode, logger)
+			if err != nil {
+				logger.Error("Restore failed: %v", err)
+				if safetyBackup != nil {
+					logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
+				}
+				return err
+			}
 		}
 	} else {
 		logger.Info("")
@@ -276,9 +368,42 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 	}
 
+	// Stage sensitive categories (network, PBS datastore/jobs) to a temporary directory and apply them safely later.
+	stageLogPath := ""
+	stageRoot := ""
+	if len(plan.StagedCategories) > 0 {
+		stageRoot = stageDestRoot()
+		logger.Info("")
+		logger.Info("Staging %d sensitive category(ies) to: %s", len(plan.StagedCategories), stageRoot)
+		if err := restoreFS.MkdirAll(stageRoot, 0o755); err != nil {
+			return fmt.Errorf("failed to create staging directory %s: %w", stageRoot, err)
+		}
+
+		if stageLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, stageRoot, plan.StagedCategories, RestoreModeCustom, logger); err != nil {
+			logger.Warning("Staging completed with errors: %v", err)
+		} else {
+			stageLogPath = stageLog
+		}
+
+		logger.Info("")
+		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+			logger.Warning("PBS staged config apply: %v", err)
+		}
+	}
+
+	stageRootForNetworkApply := stageRoot
+	if installed, err := maybeInstallNetworkConfigFromStage(ctx, logger, plan, stageRoot, prepared.ArchivePath, networkRollbackBackup, cfg.DryRun); err != nil {
+		logger.Warning("Network staged install: %v", err)
+	} else if installed {
+		stageRootForNetworkApply = ""
+		logging.DebugStep(logger, "restore", "Network staged install completed: configuration written to /etc (no reload); live apply will use system paths")
+	}
+
 	// Recreate directory structures from configuration files if relevant categories were restored
 	logger.Info("")
-	if shouldRecreateDirectories(systemType, plan.NormalCategories) {
+	categoriesForDirRecreate := append([]Category{}, plan.NormalCategories...)
+	categoriesForDirRecreate = append(categoriesForDirRecreate, plan.StagedCategories...)
+	if shouldRecreateDirectories(systemType, categoriesForDirRecreate) {
 		if err := RecreateDirectoriesFromConfig(systemType, logger); err != nil {
 			logger.Warning("Failed to recreate directory structures: %v", err)
 			logger.Warning("You may need to manually create storage/datastore directories")
@@ -287,8 +412,72 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		logger.Debug("Skipping datastore/storage directory recreation (category not selected)")
 	}
 
+	// Smart Filesystem Merge
+	if needsFilesystemRestore {
+		logger.Info("")
+		// Extract fstab to a temporary location
+		fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
+		if err != nil {
+			logger.Warning("Failed to create temp dir for fstab merge: %v", err)
+		} else {
+			defer restoreFS.RemoveAll(fsTempDir)
+			// Construct a temporary category for extraction
+			fsCat := GetCategoryByID("filesystem", availableCategories)
+			if fsCat == nil {
+				logger.Warning("Filesystem category not available in analyzed backup contents; skipping fstab merge")
+			} else {
+				fsCategory := []Category{*fsCat}
+				if _, err := extractSelectiveArchive(ctx, prepared.ArchivePath, fsTempDir, fsCategory, RestoreModeCustom, logger); err != nil {
+					logger.Warning("Failed to extract filesystem config for merge: %v", err)
+				} else {
+					// Perform Smart Merge
+					currentFstab := filepath.Join(destRoot, "etc", "fstab")
+					backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
+					if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, cfg.DryRun); err != nil {
+						logger.Warning("Smart Fstab Merge failed: %v", err)
+					}
+				}
+			}
+		}
+	}
+
 	logger.Info("")
-	logger.Info("Restore completed successfully.")
+	if plan.HasCategoryID("network") {
+		logger.Info("")
+		if err := maybeRepairResolvConfAfterRestore(ctx, logger, prepared.ArchivePath, cfg.DryRun); err != nil {
+			restoreHadWarnings = true
+			logger.Warning("DNS resolver repair: %v", err)
+		}
+	}
+
+	logger.Info("")
+	if err := maybeApplyNetworkConfigCLI(ctx, reader, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, cfg.DryRun); err != nil {
+		restoreHadWarnings = true
+		if errors.Is(err, ErrNetworkApplyNotCommitted) {
+			var notCommitted *NetworkApplyNotCommittedError
+			restoredIP := "unknown"
+			rollbackLog := ""
+			if errors.As(err, &notCommitted) && notCommitted != nil {
+				if strings.TrimSpace(notCommitted.RestoredIP) != "" {
+					restoredIP = strings.TrimSpace(notCommitted.RestoredIP)
+				}
+				rollbackLog = strings.TrimSpace(notCommitted.RollbackLog)
+			}
+			logger.Warning("Network apply not committed and original settings restored. IP: %s", restoredIP)
+			if rollbackLog != "" {
+				logger.Info("Rollback log: %s", rollbackLog)
+			}
+		} else {
+			logger.Warning("Network apply step skipped or failed: %v", err)
+		}
+	}
+
+	logger.Info("")
+	if restoreHadWarnings {
+		logger.Warning("Restore completed with warnings.")
+	} else {
+		logger.Info("Restore completed successfully.")
+	}
 	logger.Info("Temporary decrypted bundle removed.")
 
 	if detailedLogPath != "" {
@@ -299,6 +488,12 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 	if exportLogPath != "" {
 		logger.Info("Export detailed log: %s", exportLogPath)
+	}
+	if stageRoot != "" {
+		logger.Info("Staging directory: %s", stageRoot)
+	}
+	if stageLogPath != "" {
+		logger.Info("Staging detailed log: %s", stageLogPath)
 	}
 
 	if safetyBackup != nil {
@@ -510,11 +705,12 @@ func stopServiceWithRetries(ctx context.Context, logger *logging.Logger, service
 	attempts := []struct {
 		description string
 		args        []string
+		timeout     time.Duration
 	}{
-		{"stop (no-block)", []string{"stop", "--no-block", service}},
-		{"stop (blocking)", []string{"stop", service}},
-		{"aggressive stop", []string{"kill", "--signal=SIGTERM", "--kill-who=all", service}},
-		{"force kill", []string{"kill", "--signal=SIGKILL", "--kill-who=all", service}},
+		{"stop (no-block)", []string{"stop", "--no-block", service}, serviceStopNoBlockTimeout},
+		{"stop (blocking)", []string{"stop", service}, serviceStopTimeout},
+		{"aggressive stop", []string{"kill", "--signal=SIGTERM", "--kill-who=all", service}, serviceStopTimeout},
+		{"force kill", []string{"kill", "--signal=SIGKILL", "--kill-who=all", service}, serviceStopTimeout},
 	}
 
 	var lastErr error
@@ -529,7 +725,7 @@ func stopServiceWithRetries(ctx context.Context, logger *logging.Logger, service
 			logger.Debug("Attempting %s for %s (%d/%d)", attempt.description, service, i+1, len(attempts))
 		}
 
-		if err := runCommandWithTimeout(ctx, logger, serviceStopTimeout, "systemctl", attempt.args...); err != nil {
+		if err := runCommandWithTimeoutCountdown(ctx, logger, attempt.timeout, service, attempt.description, "systemctl", attempt.args...); err != nil {
 			lastErr = err
 			continue
 		}
@@ -582,14 +778,97 @@ func startServiceWithRetries(ctx context.Context, logger *logging.Logger, servic
 	return lastErr
 }
 
+func runCommandWithTimeoutCountdown(ctx context.Context, logger *logging.Logger, timeout time.Duration, service, action, name string, args ...string) error {
+	if timeout <= 0 {
+		return execCommand(ctx, logger, timeout, name, args...)
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	type result struct {
+		out []byte
+		err error
+	}
+
+	resultCh := make(chan result, 1)
+	go func() {
+		out, err := restoreCmd.Run(execCtx, name, args...)
+		resultCh <- result{out: out, err: err}
+	}()
+
+	progressEnabled := isTerminal(int(os.Stderr.Fd()))
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	writeProgress := func(left time.Duration) {
+		if !progressEnabled {
+			return
+		}
+		seconds := int(left.Round(time.Second).Seconds())
+		if seconds < 0 {
+			seconds = 0
+		}
+		fmt.Fprintf(os.Stderr, "\rStopping %s: %s (attempt timeout in %ds)...", service, action, seconds)
+	}
+
+	for {
+		select {
+		case r := <-resultCh:
+			if progressEnabled {
+				fmt.Fprint(os.Stderr, "\r")
+				fmt.Fprintln(os.Stderr, strings.Repeat(" ", 80))
+				fmt.Fprint(os.Stderr, "\r")
+			}
+			msg := strings.TrimSpace(string(r.out))
+			if r.err != nil {
+				if errors.Is(execCtx.Err(), context.DeadlineExceeded) || errors.Is(r.err, context.DeadlineExceeded) {
+					return fmt.Errorf("%s %s timed out after %s", name, strings.Join(args, " "), timeout)
+				}
+				if msg != "" {
+					return fmt.Errorf("%s %s failed: %s", name, strings.Join(args, " "), msg)
+				}
+				return fmt.Errorf("%s %s failed: %w", name, strings.Join(args, " "), r.err)
+			}
+			if msg != "" && logger != nil {
+				logger.Debug("%s %s: %s", name, strings.Join(args, " "), msg)
+			}
+			return nil
+		case <-ticker.C:
+			writeProgress(time.Until(deadline))
+		case <-execCtx.Done():
+			writeProgress(0)
+			if progressEnabled {
+				fmt.Fprintln(os.Stderr)
+			}
+			select {
+			case r := <-resultCh:
+				msg := strings.TrimSpace(string(r.out))
+				if msg != "" && logger != nil {
+					logger.Debug("%s %s: %s", name, strings.Join(args, " "), msg)
+				}
+			default:
+			}
+			return fmt.Errorf("%s %s timed out after %s", name, strings.Join(args, " "), timeout)
+		}
+	}
+}
+
 func waitForServiceInactive(ctx context.Context, logger *logging.Logger, service string, timeout time.Duration) error {
 	if timeout <= 0 {
 		return nil
 	}
 	deadline := time.Now().Add(timeout)
+	progressEnabled := isTerminal(int(os.Stderr.Fd()))
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			if progressEnabled {
+				fmt.Fprintln(os.Stderr)
+			}
 			return fmt.Errorf("%s still active after %s", service, timeout)
 		}
 
@@ -612,8 +891,22 @@ func waitForServiceInactive(ctx context.Context, logger *logging.Logger, service
 			if !timer.Stop() {
 				<-timer.C
 			}
+			if progressEnabled {
+				fmt.Fprintln(os.Stderr)
+			}
 			return ctx.Err()
 		case <-timer.C:
+		}
+		select {
+		case <-ticker.C:
+			if progressEnabled {
+				seconds := int(remaining.Round(time.Second).Seconds())
+				if seconds < 0 {
+					seconds = 0
+				}
+				fmt.Fprintf(os.Stderr, "\rWaiting for %s to stop (%ds remaining)...", service, seconds)
+			}
+		default:
 		}
 	}
 }
@@ -846,13 +1139,53 @@ func exportDestRoot(baseDir string) string {
 }
 
 // runFullRestore performs a full restore without selective options (fallback)
-func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger) error {
+func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool) error {
 	if err := confirmRestoreAction(ctx, reader, candidate, destRoot); err != nil {
 		return err
 	}
 
-	if err := extractPlainArchive(ctx, prepared.ArchivePath, destRoot, logger); err != nil {
+	safeFstabMerge := destRoot == "/" && isRealRestoreFS(restoreFS)
+	skipFn := func(name string) bool {
+		if !safeFstabMerge {
+			return false
+		}
+		clean := strings.TrimPrefix(strings.TrimSpace(name), "./")
+		clean = strings.TrimPrefix(clean, "/")
+		return clean == "etc/fstab"
+	}
+
+	if safeFstabMerge {
+		logger.Warning("Full restore safety: /etc/fstab will not be overwritten; Smart Merge will be applied after extraction.")
+	}
+
+	if err := extractPlainArchive(ctx, prepared.ArchivePath, destRoot, logger, skipFn); err != nil {
 		return err
+	}
+
+	if safeFstabMerge {
+		logger.Info("")
+		fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
+		if err != nil {
+			logger.Warning("Failed to create temp dir for fstab merge: %v", err)
+		} else {
+			defer restoreFS.RemoveAll(fsTempDir)
+			fsCategory := []Category{{
+				ID:   "filesystem",
+				Name: "Filesystem Configuration",
+				Paths: []string{
+					"./etc/fstab",
+				},
+			}}
+			if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, fsCategory, RestoreModeCustom, nil, "", nil); err != nil {
+				logger.Warning("Failed to extract filesystem config for merge: %v", err)
+			} else {
+				currentFstab := filepath.Join(destRoot, "etc", "fstab")
+				backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
+				if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, dryRun); err != nil {
+					logger.Warning("Smart Fstab Merge failed: %v", err)
+				}
+			}
+		}
 	}
 
 	logger.Info("Restore completed successfully.")
@@ -884,19 +1217,20 @@ func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *decry
 	}
 }
 
-func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logger *logging.Logger) error {
+func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, skipFn func(entryName string) bool) error {
 	if err := restoreFS.MkdirAll(destRoot, 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
 
-	if destRoot == "/" && os.Geteuid() != 0 {
+	// Only enforce root privileges when writing to the real system root.
+	if destRoot == "/" && isRealRestoreFS(restoreFS) && os.Geteuid() != 0 {
 		return fmt.Errorf("restore to %s requires root privileges", destRoot)
 	}
 
 	logger.Info("Extracting archive %s into %s", filepath.Base(archivePath), destRoot)
 
 	// Use native Go extraction to preserve atime/ctime from PAX headers
-	if err := extractArchiveNative(ctx, archivePath, destRoot, logger, nil, RestoreModeFull, nil, ""); err != nil {
+	if err := extractArchiveNative(ctx, archivePath, destRoot, logger, nil, RestoreModeFull, nil, "", skipFn); err != nil {
 		return fmt.Errorf("archive extraction failed: %w", err)
 	}
 
@@ -905,33 +1239,105 @@ func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logg
 
 // runSafeClusterApply applies selected cluster configs via pvesh without touching config.db.
 // It operates on files extracted to exportRoot (e.g. exportDestRoot).
-func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) error {
+func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) (err error) {
+	done := logging.DebugStart(logger, "safe cluster apply", "export_root=%s", exportRoot)
+	defer func() { done(err) }()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	if _, err := exec.LookPath("pvesh"); err != nil {
+	pveshPath, lookErr := exec.LookPath("pvesh")
+	if lookErr != nil {
 		logger.Warning("pvesh not found in PATH; skipping SAFE cluster apply")
 		return nil
 	}
+	logging.DebugStep(logger, "safe cluster apply", "pvesh=%s", pveshPath)
 
 	currentNode, _ := os.Hostname()
 	currentNode = shortHost(currentNode)
+	if strings.TrimSpace(currentNode) == "" {
+		currentNode = "localhost"
+	}
+	logging.DebugStep(logger, "safe cluster apply", "current_node=%s", currentNode)
 
 	logger.Info("")
 	logger.Info("SAFE cluster restore: applying configs via pvesh (node=%s)", currentNode)
 
-	vmEntries, vmErr := scanVMConfigs(exportRoot, currentNode)
-	if vmErr != nil {
-		logger.Warning("Failed to scan VM configs: %v", vmErr)
+	sourceNode := currentNode
+	logging.DebugStep(logger, "safe cluster apply", "List exported node directories under %s", filepath.Join(exportRoot, "etc/pve/nodes"))
+	exportNodes, nodesErr := listExportNodeDirs(exportRoot)
+	if nodesErr != nil {
+		logger.Warning("Failed to inspect exported node directories: %v", nodesErr)
+	} else if len(exportNodes) > 0 {
+		logging.DebugStep(logger, "safe cluster apply", "export_nodes=%s", strings.Join(exportNodes, ","))
+	} else {
+		logging.DebugStep(logger, "safe cluster apply", "No exported node directories found")
+	}
+
+	if len(exportNodes) > 0 && !stringSliceContains(exportNodes, sourceNode) {
+		logging.DebugStep(logger, "safe cluster apply", "Node mismatch: current_node=%s export_nodes=%s", currentNode, strings.Join(exportNodes, ","))
+		logger.Warning("SAFE cluster restore: VM/CT configs not found for current node %s in export; available nodes: %s", currentNode, strings.Join(exportNodes, ", "))
+		if len(exportNodes) == 1 {
+			sourceNode = exportNodes[0]
+			logging.DebugStep(logger, "safe cluster apply", "Auto-select source node: %s", sourceNode)
+			logger.Info("SAFE cluster restore: using exported node %s as VM/CT source, applying to current node %s", sourceNode, currentNode)
+		} else {
+			for _, node := range exportNodes {
+				qemuCount, lxcCount := countVMConfigsForNode(exportRoot, node)
+				logging.DebugStep(logger, "safe cluster apply", "Export node candidate: %s (qemu=%d, lxc=%d)", node, qemuCount, lxcCount)
+			}
+			selected, selErr := promptExportNodeSelection(ctx, reader, exportRoot, currentNode, exportNodes)
+			if selErr != nil {
+				return selErr
+			}
+			if strings.TrimSpace(selected) == "" {
+				logging.DebugStep(logger, "safe cluster apply", "User selected: skip VM/CT apply (no source node)")
+				logger.Info("Skipping VM/CT apply (no source node selected)")
+				sourceNode = ""
+			} else {
+				sourceNode = selected
+				logging.DebugStep(logger, "safe cluster apply", "User selected source node: %s", sourceNode)
+				logger.Info("SAFE cluster restore: selected exported node %s as VM/CT source, applying to current node %s", sourceNode, currentNode)
+			}
+		}
+	}
+	logging.DebugStep(logger, "safe cluster apply", "Selected VM/CT source node: %q (current_node=%q)", sourceNode, currentNode)
+
+	var vmEntries []vmEntry
+	if strings.TrimSpace(sourceNode) != "" {
+		logging.DebugStep(logger, "safe cluster apply", "Scan VM/CT configs in export (source_node=%s)", sourceNode)
+		var vmErr error
+		vmEntries, vmErr = scanVMConfigs(exportRoot, sourceNode)
+		if vmErr != nil {
+			logger.Warning("Failed to scan VM configs: %v", vmErr)
+		} else {
+			logging.DebugStep(logger, "safe cluster apply", "VM/CT configs found=%d (source_node=%s)", len(vmEntries), sourceNode)
+			qemuCount := 0
+			lxcCount := 0
+			for _, entry := range vmEntries {
+				switch entry.Kind {
+				case "qemu":
+					qemuCount++
+				case "lxc":
+					lxcCount++
+				}
+			}
+			logging.DebugStep(logger, "safe cluster apply", "VM/CT breakdown: qemu=%d lxc=%d", qemuCount, lxcCount)
+		}
 	}
 	if len(vmEntries) > 0 {
 		fmt.Println()
-		fmt.Printf("Found %d VM/CT configs for node %s\n", len(vmEntries), currentNode)
-		applyVMs, err := promptYesNo(ctx, reader, "Apply all VM/CT configs via pvesh?")
-		if err != nil {
-			return err
+		if sourceNode == currentNode {
+			fmt.Printf("Found %d VM/CT configs for node %s\n", len(vmEntries), currentNode)
+		} else {
+			fmt.Printf("Found %d VM/CT configs for exported node %s (will apply to current node %s)\n", len(vmEntries), sourceNode, currentNode)
 		}
+		applyVMs, promptErr := promptYesNo(ctx, reader, "Apply all VM/CT configs via pvesh? ")
+		if promptErr != nil {
+			return promptErr
+		}
+		logging.DebugStep(logger, "safe cluster apply", "User choice: apply_vms=%v (entries=%d)", applyVMs, len(vmEntries))
 		if applyVMs {
 			applied, failed := applyVMConfigs(ctx, vmEntries, logger)
 			logger.Info("VM/CT apply completed: ok=%d failed=%d", applied, failed)
@@ -939,20 +1345,30 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 			logger.Info("Skipping VM/CT apply")
 		}
 	} else {
-		logger.Info("No VM/CT configs found for node %s in export", currentNode)
+		if strings.TrimSpace(sourceNode) == "" {
+			logger.Info("No VM/CT configs applied (no source node selected)")
+		} else {
+			logger.Info("No VM/CT configs found for node %s in export", sourceNode)
+		}
 	}
 
 	// Storage configuration
 	storageCfg := filepath.Join(exportRoot, "etc/pve/storage.cfg")
-	if info, err := restoreFS.Stat(storageCfg); err == nil && !info.IsDir() {
+	logging.DebugStep(logger, "safe cluster apply", "Check export: storage.cfg (%s)", storageCfg)
+	storageInfo, storageErr := restoreFS.Stat(storageCfg)
+	if storageErr == nil && !storageInfo.IsDir() {
+		logging.DebugStep(logger, "safe cluster apply", "storage.cfg found (size=%d)", storageInfo.Size())
 		fmt.Println()
 		fmt.Printf("Storage configuration found: %s\n", storageCfg)
 		applyStorage, err := promptYesNo(ctx, reader, "Apply storage.cfg via pvesh?")
 		if err != nil {
 			return err
 		}
+		logging.DebugStep(logger, "safe cluster apply", "User choice: apply_storage=%v", applyStorage)
 		if applyStorage {
+			logging.DebugStep(logger, "safe cluster apply", "Apply storage.cfg via pvesh")
 			applied, failed, err := applyStorageCfg(ctx, storageCfg, logger)
+			logging.DebugStep(logger, "safe cluster apply", "Storage apply result: ok=%d failed=%d err=%v", applied, failed, err)
 			if err != nil {
 				logger.Warning("Storage apply encountered errors: %v", err)
 			}
@@ -961,19 +1377,25 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 			logger.Info("Skipping storage.cfg apply")
 		}
 	} else {
+		logging.DebugStep(logger, "safe cluster apply", "storage.cfg not found (err=%v)", storageErr)
 		logger.Info("No storage.cfg found in export")
 	}
 
 	// Datacenter configuration
 	dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
-	if info, err := restoreFS.Stat(dcCfg); err == nil && !info.IsDir() {
+	logging.DebugStep(logger, "safe cluster apply", "Check export: datacenter.cfg (%s)", dcCfg)
+	dcInfo, dcErr := restoreFS.Stat(dcCfg)
+	if dcErr == nil && !dcInfo.IsDir() {
+		logging.DebugStep(logger, "safe cluster apply", "datacenter.cfg found (size=%d)", dcInfo.Size())
 		fmt.Println()
 		fmt.Printf("Datacenter configuration found: %s\n", dcCfg)
 		applyDC, err := promptYesNo(ctx, reader, "Apply datacenter.cfg via pvesh?")
 		if err != nil {
 			return err
 		}
+		logging.DebugStep(logger, "safe cluster apply", "User choice: apply_datacenter=%v", applyDC)
 		if applyDC {
+			logging.DebugStep(logger, "safe cluster apply", "Apply datacenter.cfg via pvesh")
 			if err := runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", dcCfg}); err != nil {
 				logger.Warning("Failed to apply datacenter.cfg: %v", err)
 			} else {
@@ -983,6 +1405,7 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 			logger.Info("Skipping datacenter.cfg apply")
 		}
 	} else {
+		logging.DebugStep(logger, "safe cluster apply", "datacenter.cfg not found (err=%v)", dcErr)
 		logger.Info("No datacenter.cfg found in export")
 	}
 
@@ -1036,6 +1459,98 @@ func scanVMConfigs(exportRoot, node string) ([]vmEntry, error) {
 	}
 
 	return entries, nil
+}
+
+func listExportNodeDirs(exportRoot string) ([]string, error) {
+	nodesRoot := filepath.Join(exportRoot, "etc/pve/nodes")
+	entries, err := restoreFS.ReadDir(nodesRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var nodes []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" {
+			continue
+		}
+		nodes = append(nodes, name)
+	}
+	sort.Strings(nodes)
+	return nodes, nil
+}
+
+func countVMConfigsForNode(exportRoot, node string) (qemuCount, lxcCount int) {
+	base := filepath.Join(exportRoot, "etc/pve/nodes", node)
+
+	countInDir := func(dir string) int {
+		entries, err := restoreFS.ReadDir(dir)
+		if err != nil {
+			return 0
+		}
+		n := 0
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(entry.Name(), ".conf") {
+				n++
+			}
+		}
+		return n
+	}
+
+	qemuCount = countInDir(filepath.Join(base, "qemu-server"))
+	lxcCount = countInDir(filepath.Join(base, "lxc"))
+	return qemuCount, lxcCount
+}
+
+func promptExportNodeSelection(ctx context.Context, reader *bufio.Reader, exportRoot, currentNode string, exportNodes []string) (string, error) {
+	for {
+		fmt.Println()
+		fmt.Printf("WARNING: VM/CT configs in this backup are stored under different node names.\n")
+		fmt.Printf("Current node: %s\n", currentNode)
+		fmt.Println("Select which exported node to import VM/CT configs from (they will be applied to the current node):")
+		for idx, node := range exportNodes {
+			qemuCount, lxcCount := countVMConfigsForNode(exportRoot, node)
+			fmt.Printf("  [%d] %s (qemu=%d, lxc=%d)\n", idx+1, node, qemuCount, lxcCount)
+		}
+		fmt.Println("  [0] Skip VM/CT apply")
+
+		fmt.Print("Choice: ")
+		line, err := input.ReadLineWithContext(ctx, reader)
+		if err != nil {
+			return "", err
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "0" {
+			return "", nil
+		}
+		if trimmed == "" {
+			continue
+		}
+		idx, err := parseMenuIndex(trimmed, len(exportNodes))
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		return exportNodes[idx], nil
+	}
+}
+
+func stringSliceContains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func readVMName(confPath string) string {
@@ -1238,7 +1753,8 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 		return "", fmt.Errorf("create destination directory: %w", err)
 	}
 
-	if destRoot == "/" && os.Geteuid() != 0 {
+	// Only enforce root privileges when writing to the real system root.
+	if destRoot == "/" && isRealRestoreFS(restoreFS) && os.Geteuid() != 0 {
 		return "", fmt.Errorf("restore to %s requires root privileges", destRoot)
 	}
 
@@ -1265,7 +1781,7 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 	logger.Info("Extracting selected categories from archive %s into %s", filepath.Base(archivePath), destRoot)
 
 	// Use native Go extraction with category filter
-	if err := extractArchiveNative(ctx, archivePath, destRoot, logger, categories, mode, logFile, logPath); err != nil {
+	if err := extractArchiveNative(ctx, archivePath, destRoot, logger, categories, mode, logFile, logPath, nil); err != nil {
 		return logPath, err
 	}
 
@@ -1274,7 +1790,7 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 
 // extractArchiveNative extracts TAR archives natively in Go, preserving all timestamps
 // If categories is nil, all files are extracted. Otherwise, only files matching the categories are extracted.
-func extractArchiveNative(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, categories []Category, mode RestoreMode, logFile *os.File, logFilePath string) error {
+func extractArchiveNative(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, categories []Category, mode RestoreMode, logFile *os.File, logFilePath string, skipFn func(entryName string) bool) error {
 	// Open the archive file
 	file, err := restoreFS.Open(archivePath)
 	if err != nil {
@@ -1353,6 +1869,14 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 		}
 		if err != nil {
 			return fmt.Errorf("read tar header: %w", err)
+		}
+
+		if skipFn != nil && skipFn(header.Name) {
+			filesSkipped++
+			if skippedTemp != nil {
+				fmt.Fprintf(skippedTemp, "SKIPPED: %s (skipped by restore policy)\n", header.Name)
+			}
+			continue
 		}
 
 		// Check if file should be extracted (selective mode)
@@ -1436,6 +1960,15 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 	}
 
 	return nil
+}
+
+func isRealRestoreFS(fs FS) bool {
+	switch fs.(type) {
+	case osFS, *osFS:
+		return true
+	default:
+		return false
+	}
 }
 
 // createDecompressionReader creates appropriate decompression reader based on file extension

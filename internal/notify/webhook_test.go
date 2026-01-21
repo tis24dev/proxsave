@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -329,6 +330,72 @@ func TestWebhookNotifier_Send_Retry(t *testing.T) {
 	}
 }
 
+func TestWebhookNotifier_Send_DisabledDoesNotPanic(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	cfg := config.WebhookConfig{Enabled: false}
+	notifier, err := NewWebhookNotifier(&cfg, logger)
+	if err != nil {
+		t.Fatalf("NewWebhookNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if result.Success {
+		t.Fatalf("expected Success=false when disabled, got %+v", result)
+	}
+	if result.Error == nil {
+		t.Fatalf("expected result.Error to be set when disabled")
+	}
+}
+
+func TestWebhookNotifier_Send_PartialSuccess(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okServer.Close()
+
+	cfg := config.WebhookConfig{
+		Enabled:       true,
+		DefaultFormat: "generic",
+		MaxRetries:    0,
+		Endpoints: []config.WebhookEndpoint{
+			{
+				Name:   "bad",
+				URL:    "ftp://example.com",
+				Method: "POST",
+				Auth:   config.WebhookAuth{Type: "none"},
+			},
+			{
+				Name:   "good",
+				URL:    okServer.URL,
+				Method: "POST",
+				Auth:   config.WebhookAuth{Type: "none"},
+			},
+		},
+	}
+
+	notifier, err := NewWebhookNotifier(&cfg, logger)
+	if err != nil {
+		t.Fatalf("NewWebhookNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected Success=true when at least one endpoint succeeds, got %+v", result)
+	}
+	if result.Error != nil {
+		t.Fatalf("expected result.Error=nil on partial success, got %v", result.Error)
+	}
+}
+
 func TestWebhookNotifier_Authentication_Bearer(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	expectedToken := "test-bearer-token-12345"
@@ -440,6 +507,308 @@ func TestWebhookNotifier_Authentication_HMAC(t *testing.T) {
 	if !result.Success {
 		t.Error("Send() should succeed with HMAC authentication")
 	}
+}
+
+func TestWebhookNotifier_Authentication_Basic(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authHeader, "Basic ") {
+			t.Fatalf("expected Basic auth, got %q", authHeader)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := config.WebhookConfig{
+		Enabled:       true,
+		DefaultFormat: "generic",
+		MaxRetries:    0,
+		Endpoints: []config.WebhookEndpoint{
+			{
+				Name:   "basic",
+				URL:    server.URL,
+				Format: "generic",
+				Method: "POST",
+				Auth: config.WebhookAuth{
+					Type: "basic",
+					User: "user",
+					Pass: "pass",
+				},
+			},
+		},
+	}
+
+	notifier, err := NewWebhookNotifier(&cfg, logger)
+	if err != nil {
+		t.Fatalf("NewWebhookNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected Success=true, got %+v", result)
+	}
+}
+
+func TestWebhookNotifier_Authentication_Errors(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	w, err := NewWebhookNotifier(&config.WebhookConfig{
+		Enabled:       true,
+		DefaultFormat: "generic",
+		MaxRetries:    0,
+		Endpoints: []config.WebhookEndpoint{
+			{Name: "x", URL: "https://example.com", Auth: config.WebhookAuth{Type: "none"}},
+		},
+	}, logger)
+	if err != nil {
+		t.Fatalf("NewWebhookNotifier() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "https://example.com", nil)
+
+	if err := w.applyAuthentication(req, config.WebhookAuth{Type: "bearer", Token: ""}, []byte("x")); err == nil {
+		t.Fatal("expected bearer empty token error")
+	}
+	if err := w.applyAuthentication(req, config.WebhookAuth{Type: "basic", User: "", Pass: "x"}, []byte("x")); err == nil {
+		t.Fatal("expected basic empty user/pass error")
+	}
+	if err := w.applyAuthentication(req, config.WebhookAuth{Type: "hmac", Secret: ""}, []byte("x")); err == nil {
+		t.Fatal("expected hmac empty secret error")
+	}
+	if err := w.applyAuthentication(req, config.WebhookAuth{Type: "unknown"}, []byte("x")); err == nil {
+		t.Fatal("expected unknown auth type error")
+	}
+
+	if err := w.applyAuthentication(req, config.WebhookAuth{Type: ""}, []byte("x")); err != nil {
+		t.Fatalf("expected no error for empty auth type, got %v", err)
+	}
+}
+
+func TestWebhookNotifier_buildPayload_CoversFormats(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	notifier, err := NewWebhookNotifier(&config.WebhookConfig{
+		Enabled:       true,
+		DefaultFormat: "generic",
+		Endpoints: []config.WebhookEndpoint{
+			{Name: "x", URL: "https://example.com"},
+		},
+	}, logger)
+	if err != nil {
+		t.Fatalf("NewWebhookNotifier() error = %v", err)
+	}
+
+	data := createTestNotificationData()
+	formats := []string{"discord", "slack", "teams", "generic", "unknown"}
+	for _, format := range formats {
+		format := format
+		t.Run(format, func(t *testing.T) {
+			payload, err := notifier.buildPayload(format, data)
+			if err != nil {
+				t.Fatalf("buildPayload(%q) error = %v", format, err)
+			}
+			if payload == nil {
+				t.Fatalf("buildPayload(%q) returned nil payload", format)
+			}
+		})
+	}
+}
+
+type failingReadCloser struct{}
+
+func (failingReadCloser) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+func (failingReadCloser) Close() error             { return nil }
+
+func TestWebhookNotifier_sendToEndpoint_CoversErrorBranches(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+
+	notifier, err := NewWebhookNotifier(&config.WebhookConfig{
+		Enabled:       true,
+		DefaultFormat: "generic",
+		MaxRetries:    0,
+		Endpoints: []config.WebhookEndpoint{
+			{Name: "x", URL: "https://example.com"},
+		},
+	}, logger)
+	if err != nil {
+		t.Fatalf("NewWebhookNotifier() error = %v", err)
+	}
+
+	t.Run("invalid url parse", func(t *testing.T) {
+		endpoint := config.WebhookEndpoint{Name: "bad", URL: "http://[::1", Method: "POST"}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err == nil {
+			t.Fatal("expected error for invalid URL")
+		}
+	})
+
+	t.Run("invalid scheme", func(t *testing.T) {
+		endpoint := config.WebhookEndpoint{Name: "bad", URL: "ftp://example.com", Method: "POST"}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err == nil {
+			t.Fatal("expected error for invalid scheme")
+		}
+	})
+
+	t.Run("client do error", func(t *testing.T) {
+		notifier.client = &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return nil, errors.New("dial failed")
+			}),
+		}
+		endpoint := config.WebhookEndpoint{Name: "doerr", URL: "https://example.com", Method: "POST"}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err == nil {
+			t.Fatal("expected error for client.Do failure")
+		}
+	})
+
+	t.Run("response read error", func(t *testing.T) {
+		notifier.client = &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       failingReadCloser{},
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		}
+		endpoint := config.WebhookEndpoint{Name: "readerr", URL: "https://example.com", Method: "POST"}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err == nil {
+			t.Fatal("expected error for response body read failure")
+		}
+	})
+
+	t.Run("http 400 no retry", func(t *testing.T) {
+		notifier.client = &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusBadRequest,
+					Body:       io.NopCloser(strings.NewReader("bad")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		}
+		endpoint := config.WebhookEndpoint{Name: "400", URL: "https://example.com", Method: "POST"}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err == nil {
+			t.Fatal("expected error for HTTP 400")
+		}
+	})
+
+	t.Run("http 401 no retry", func(t *testing.T) {
+		notifier.client = &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusUnauthorized,
+					Body:       io.NopCloser(strings.NewReader("nope")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		}
+		endpoint := config.WebhookEndpoint{Name: "401", URL: "https://example.com", Method: "POST"}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err == nil {
+			t.Fatal("expected error for HTTP 401")
+		}
+	})
+
+	t.Run("http 403 no retry", func(t *testing.T) {
+		notifier.client = &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusForbidden,
+					Body:       io.NopCloser(strings.NewReader("forbidden")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		}
+		endpoint := config.WebhookEndpoint{Name: "403", URL: "https://example.com", Method: "POST"}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err == nil {
+			t.Fatal("expected error for HTTP 403")
+		}
+	})
+
+	t.Run("http 404 no retry", func(t *testing.T) {
+		notifier.client = &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Body:       io.NopCloser(strings.NewReader("missing")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		}
+		endpoint := config.WebhookEndpoint{Name: "404", URL: "https://example.com", Method: "POST"}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err == nil {
+			t.Fatal("expected error for HTTP 404")
+		}
+	})
+
+	t.Run("http 429 no sleep when no retries", func(t *testing.T) {
+		notifier.client = &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Body:       io.NopCloser(strings.NewReader("rate")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		}
+		endpoint := config.WebhookEndpoint{Name: "429", URL: "https://example.com", Method: "POST"}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err == nil {
+			t.Fatal("expected error for HTTP 429")
+		}
+	})
+
+	t.Run("custom headers + GET omit body", func(t *testing.T) {
+		notifier.client = &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet {
+					t.Fatalf("expected GET, got %s", req.Method)
+				}
+				if ct := req.Header.Get("Content-Type"); ct != "" {
+					t.Fatalf("expected no Content-Type for GET, got %q", ct)
+				}
+				if ua := req.Header.Get("User-Agent"); ua == "" {
+					t.Fatalf("expected User-Agent to be set")
+				}
+				if got := req.Header.Get("X-Custom"); got != "ok" {
+					t.Fatalf("expected X-Custom header, got %q", got)
+				}
+				if got := req.Header.Get("Host"); got != "" {
+					t.Fatalf("expected Host header not to be set explicitly, got %q", got)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("ok")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		}
+		endpoint := config.WebhookEndpoint{
+			Name:   "get",
+			URL:    "https://example.com",
+			Method: "GET",
+			Headers: map[string]string{
+				"":             "skip",
+				"Content-Type": "blocked",
+				"Host":         "blocked",
+				"X-Custom":     "ok",
+			},
+		}
+		if err := notifier.sendToEndpoint(context.Background(), endpoint, data); err != nil {
+			t.Fatalf("expected success for GET endpoint, got %v", err)
+		}
+	})
 }
 
 func TestBuildDiscordPayload(t *testing.T) {
@@ -590,6 +959,10 @@ func TestMaskURL(t *testing.T) {
 			input:    "http://example.com/webhook",
 			expected: "http://example.com/***MASKED***",
 		},
+		{
+			input:    "://bad",
+			expected: "***INVALID_URL***",
+		},
 	}
 
 	for _, tt := range tests {
@@ -617,6 +990,11 @@ func TestMaskHeaderValue(t *testing.T) {
 			key:      "X-API-Token",
 			value:    "secret-token-12345",
 			expected: "secr***MASKED***",
+		},
+		{
+			key:      "X-API-Token",
+			value:    "short",
+			expected: "***MASKED***",
 		},
 		{
 			key:      "Content-Type",

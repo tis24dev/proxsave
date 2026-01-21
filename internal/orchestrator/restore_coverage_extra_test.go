@@ -213,7 +213,7 @@ func TestRunFullRestore_ExtractsArchiveToDestination(t *testing.T) {
 	}
 	prepared := &preparedBundle{ArchivePath: archivePath}
 
-	if err := runFullRestore(context.Background(), reader, cand, prepared, destRoot, newTestLogger()); err != nil {
+	if err := runFullRestore(context.Background(), reader, cand, prepared, destRoot, newTestLogger(), false); err != nil {
 		t.Fatalf("runFullRestore error: %v", err)
 	}
 
@@ -327,6 +327,127 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 		}
 		if !found {
 			t.Fatalf("expected a call with prefix %q; calls=%#v", prefix, runner.calls)
+		}
+	}
+}
+
+func TestRunSafeClusterApply_UsesSingleExportedNodeWhenHostnameMismatch(t *testing.T) {
+	origCmd := restoreCmd
+	origFS := restoreFS
+	t.Cleanup(func() {
+		restoreCmd = origCmd
+		restoreFS = origFS
+	})
+	restoreFS = osFS{}
+
+	pathDir := t.TempDir()
+	pveshPath := filepath.Join(pathDir, "pvesh")
+	if err := os.WriteFile(pveshPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write pvesh: %v", err)
+	}
+	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	runner := &recordingRunner{}
+	restoreCmd = runner
+
+	exportRoot := t.TempDir()
+	targetNode, _ := os.Hostname()
+	targetNode = shortHost(targetNode)
+	if targetNode == "" {
+		targetNode = "localhost"
+	}
+	sourceNode := targetNode + "-old"
+
+	qemuDir := filepath.Join(exportRoot, "etc", "pve", "nodes", sourceNode, "qemu-server")
+	if err := os.MkdirAll(qemuDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", qemuDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(qemuDir, "100.conf"), []byte("name: vm100\n"), 0o640); err != nil {
+		t.Fatalf("write vm config: %v", err)
+	}
+
+	reader := bufio.NewReader(strings.NewReader("yes\n"))
+	if err := runSafeClusterApply(context.Background(), reader, exportRoot, newTestLogger()); err != nil {
+		t.Fatalf("runSafeClusterApply error: %v", err)
+	}
+
+	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/100/config --filename "
+	wantSourceSuffix := filepath.Join("etc", "pve", "nodes", sourceNode, "qemu-server", "100.conf")
+	found := false
+	for _, call := range runner.calls {
+		if strings.HasPrefix(call, wantPrefix) && strings.Contains(call, wantSourceSuffix) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a call with prefix %q using source %q; calls=%#v", wantPrefix, sourceNode, runner.calls)
+	}
+}
+
+func TestRunSafeClusterApply_PromptsForSourceNodeWhenMultipleExportNodes(t *testing.T) {
+	origCmd := restoreCmd
+	origFS := restoreFS
+	t.Cleanup(func() {
+		restoreCmd = origCmd
+		restoreFS = origFS
+	})
+	restoreFS = osFS{}
+
+	pathDir := t.TempDir()
+	pveshPath := filepath.Join(pathDir, "pvesh")
+	if err := os.WriteFile(pveshPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write pvesh: %v", err)
+	}
+	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	runner := &recordingRunner{}
+	restoreCmd = runner
+
+	exportRoot := t.TempDir()
+	targetNode, _ := os.Hostname()
+	targetNode = shortHost(targetNode)
+	if targetNode == "" {
+		targetNode = "localhost"
+	}
+
+	sourceNode1 := targetNode + "-a"
+	sourceNode2 := targetNode + "-b"
+
+	qemuDir1 := filepath.Join(exportRoot, "etc", "pve", "nodes", sourceNode1, "qemu-server")
+	qemuDir2 := filepath.Join(exportRoot, "etc", "pve", "nodes", sourceNode2, "qemu-server")
+	for _, dir := range []string{qemuDir1, qemuDir2} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(qemuDir1, "100.conf"), []byte("name: vm100\n"), 0o640); err != nil {
+		t.Fatalf("write vm config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(qemuDir2, "101.conf"), []byte("name: vm101\n"), 0o640); err != nil {
+		t.Fatalf("write vm config: %v", err)
+	}
+
+	reader := bufio.NewReader(strings.NewReader("2\nyes\n"))
+	if err := runSafeClusterApply(context.Background(), reader, exportRoot, newTestLogger()); err != nil {
+		t.Fatalf("runSafeClusterApply error: %v", err)
+	}
+
+	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/101/config --filename "
+	wantSourceSuffix := filepath.Join("etc", "pve", "nodes", sourceNode2, "qemu-server", "101.conf")
+	found := false
+	for _, call := range runner.calls {
+		if strings.HasPrefix(call, wantPrefix) && strings.Contains(call, wantSourceSuffix) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a call with prefix %q using source %q; calls=%#v", wantPrefix, sourceNode2, runner.calls)
+	}
+	for _, call := range runner.calls {
+		if strings.Contains(call, "/qemu/100/config") {
+			t.Fatalf("expected not to apply vmid=100 from %s; call=%q", sourceNode1, call)
 		}
 	}
 }

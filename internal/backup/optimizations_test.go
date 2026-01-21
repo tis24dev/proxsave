@@ -110,3 +110,45 @@ func TestApplyOptimizationsRunsAllStages(t *testing.T) {
 		t.Fatalf("expected first chunk at %s: %v", chunkPath, err)
 	}
 }
+
+func TestDedupDoesNotReplaceCriticalFilesWithSymlinks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "commands"), 0o755); err != nil {
+		t.Fatalf("mkdir commands: %v", err)
+	}
+
+	resolvPath := filepath.Join(root, "etc", "resolv.conf")
+	resolvContent := []byte("nameserver 1.1.1.1\n")
+	if err := os.WriteFile(resolvPath, resolvContent, 0o644); err != nil {
+		t.Fatalf("write resolv.conf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "commands", "resolv_conf.txt"), resolvContent, 0o644); err != nil {
+		t.Fatalf("write commands/resolv_conf.txt: %v", err)
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	cfg := OptimizationConfig{
+		EnableDeduplication: true,
+	}
+	if err := ApplyOptimizations(context.Background(), logger, root, cfg); err != nil {
+		t.Fatalf("ApplyOptimizations: %v", err)
+	}
+
+	info, err := os.Lstat(resolvPath)
+	if err != nil {
+		t.Fatalf("lstat resolv.conf: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("expected %s to remain a regular file (critical path), got symlink", resolvPath)
+	}
+	got, err := os.ReadFile(resolvPath)
+	if err != nil {
+		t.Fatalf("read resolv.conf: %v", err)
+	}
+	if string(got) != string(resolvContent) {
+		t.Fatalf("resolv.conf content mismatch: got %q want %q", got, resolvContent)
+	}
+}
