@@ -22,6 +22,7 @@ var ErrNetworkApplyNotCommitted = errors.New("network configuration not committe
 type NetworkApplyNotCommittedError struct {
 	RollbackLog string
 	RestoredIP  string
+	RollbackArmed bool
 }
 
 func (e *NetworkApplyNotCommittedError) Error() string {
@@ -427,32 +428,25 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 		return nil
 	}
 
-	// Timer window expired: run rollback now so the restore summary can report the final state.
-	if output, rbErr := restoreCmd.Run(ctx, "sh", handle.scriptPath); rbErr != nil {
-		if len(output) > 0 {
-			logger.Debug("Rollback script output: %s", strings.TrimSpace(string(output)))
-		}
-		return fmt.Errorf("network apply not committed; rollback failed (log: %s): %w", strings.TrimSpace(handle.logPath), rbErr)
-	} else if len(output) > 0 {
-		logger.Debug("Rollback script output: %s", strings.TrimSpace(string(output)))
-	}
-	disarmNetworkRollback(ctx, logger, handle)
-
+	// Not committed: keep rollback ARMED. Do not disarm.
+	// The rollback script will run via systemd-run/nohup when the timer expires.
 	restoredIP := "unknown"
 	if strings.TrimSpace(iface) != "" {
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			ep, err := currentNetworkEndpoint(ctx, iface, 1*time.Second)
-			if err == nil && len(ep.Addresses) > 0 {
-				restoredIP = strings.Join(ep.Addresses, ", ")
-				break
-			}
-			time.Sleep(300 * time.Millisecond)
+		if ep, err := currentNetworkEndpoint(ctx, iface, 1*time.Second); err == nil && len(ep.Addresses) > 0 {
+			restoredIP = strings.Join(ep.Addresses, ", ")
+		}
+	}
+	rollbackArmed := true
+	if handle.markerPath != "" {
+		if _, statErr := restoreFS.Stat(handle.markerPath); statErr != nil {
+			// Marker missing => rollback likely already executed (or was manually removed).
+			rollbackArmed = false
 		}
 	}
 	return &NetworkApplyNotCommittedError{
 		RollbackLog: strings.TrimSpace(handle.logPath),
 		RestoredIP:  strings.TrimSpace(restoredIP),
+		RollbackArmed: rollbackArmed,
 	}
 }
 
@@ -546,8 +540,11 @@ func disarmNetworkRollback(ctx context.Context, logger *logging.Logger, handle *
 		}
 	}
 	if handle.unitName != "" && commandAvailable("systemctl") {
-		if output, err := restoreCmd.Run(ctx, "systemctl", "stop", handle.unitName); err != nil {
-			logger.Debug("Failed to stop rollback unit %s: %v (output: %s)", handle.unitName, err, strings.TrimSpace(string(output)))
+		// systemd-run --on-active creates both <unit>.timer and <unit>.service; stop both.
+		for _, unit := range []string{handle.unitName + ".timer", handle.unitName + ".service"} {
+			if output, err := restoreCmd.Run(ctx, "systemctl", "stop", unit); err != nil {
+				logger.Debug("Failed to stop rollback unit %s: %v (output: %s)", unit, err, strings.TrimSpace(string(output)))
+			}
 		}
 	}
 }

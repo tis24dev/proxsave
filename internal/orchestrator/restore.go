@@ -455,15 +455,21 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		restoreHadWarnings = true
 		if errors.Is(err, ErrNetworkApplyNotCommitted) {
 			var notCommitted *NetworkApplyNotCommittedError
-			restoredIP := "unknown"
+			observedIP := "unknown"
 			rollbackLog := ""
+			rollbackArmed := false
 			if errors.As(err, &notCommitted) && notCommitted != nil {
 				if strings.TrimSpace(notCommitted.RestoredIP) != "" {
-					restoredIP = strings.TrimSpace(notCommitted.RestoredIP)
+					observedIP = strings.TrimSpace(notCommitted.RestoredIP)
 				}
 				rollbackLog = strings.TrimSpace(notCommitted.RollbackLog)
+				rollbackArmed = notCommitted.RollbackArmed
 			}
-			logger.Warning("Network apply not committed and original settings restored. IP: %s", restoredIP)
+			if rollbackArmed {
+				logger.Warning("Network apply not committed; rollback is ARMED and will run automatically. Current IP: %s", observedIP)
+			} else {
+				logger.Warning("Network apply not committed; rollback has executed (or marker cleared). Current IP: %s", observedIP)
+			}
 			if rollbackLog != "" {
 				logger.Info("Rollback log: %s", rollbackLog)
 			}
