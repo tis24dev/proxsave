@@ -47,7 +47,7 @@ func TestExtractPlainArchive_CorruptedTar(t *testing.T) {
 		t.Fatalf("write archive: %v", err)
 	}
 
-	err := extractPlainArchive(context.Background(), archive, filepath.Join(dir, "dest"), logger, nil)
+	err := extractPlainArchive(context.Background(), archive, filepath.Join(dir, "dest"), logger)
 	if err == nil {
 		t.Fatalf("expected error for corrupted tar.gz")
 	}
