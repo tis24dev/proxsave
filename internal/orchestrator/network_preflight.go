@@ -68,7 +68,17 @@ func (r networkPreflightResult) Details() string {
 }
 
 func runNetworkPreflightValidation(ctx context.Context, timeout time.Duration, logger *logging.Logger) networkPreflightResult {
+	// Work around a known ifupdown2 dry-run crash on some Proxmox builds (nodad kwarg mismatch).
+	// This keeps preflight validation functional during restore without requiring manual intervention.
+	maybePatchIfupdown2NodadBug(ctx, logger)
 	return runNetworkPreflightValidationWithDeps(ctx, timeout, logger, commandAvailable, restoreCmd.Run)
+}
+
+// runNetworkIfqueryDiagnostic runs a non-blocking diagnostic check using ifupdown2's ifquery --check -a.
+// NOTE: This command reports "differences" between the running state and the config, so it must NOT be
+// used as a hard gate before applying a new configuration.
+func runNetworkIfqueryDiagnostic(ctx context.Context, timeout time.Duration, logger *logging.Logger) networkPreflightResult {
+	return runNetworkIfqueryDiagnosticWithDeps(ctx, timeout, logger, commandAvailable, restoreCmd.Run)
 }
 
 func runNetworkPreflightValidationWithDeps(
@@ -114,12 +124,11 @@ func runNetworkPreflightValidationWithDeps(
 	}
 
 	candidates := []candidate{
-		{Tool: "ifquery", Args: []string{"--check", "-a"}, UnsupportedOption: "--check"},
-		{Tool: "ifreload", Args: []string{"--check", "-a"}, UnsupportedOption: "--check"},
-		{Tool: "ifup", Args: []string{"--no-act", "-a"}, UnsupportedOption: "--no-act"},
 		{Tool: "ifup", Args: []string{"-n", "-a"}, UnsupportedOption: "-n"},
+		{Tool: "ifup", Args: []string{"--no-act", "-a"}, UnsupportedOption: "--no-act"},
+		{Tool: "ifreload", Args: []string{"--syntax-check", "-a"}, UnsupportedOption: "--syntax-check"},
 	}
-	logging.DebugStep(logger, "network preflight", "Validator order: ifquery --check -a -> ifreload --check -a -> ifup --no-act -a -> ifup -n -a")
+	logging.DebugStep(logger, "network preflight", "Validator order (gate): ifup -n -a -> ifup --no-act -a -> ifreload --syntax-check -a")
 
 	var foundAny bool
 	now := nowRestore()
@@ -171,7 +180,7 @@ func runNetworkPreflightValidationWithDeps(
 		logging.DebugStep(logger, "network preflight", "Skipped: no validator binary available")
 		result = networkPreflightResult{
 			Skipped:    true,
-			SkipReason: "no validator binary available (ifquery/ifreload/ifup)",
+			SkipReason: "no validator binary available (ifreload/ifup)",
 			CheckedAt:  now,
 		}
 		return result
@@ -184,6 +193,83 @@ func runNetworkPreflightValidationWithDeps(
 		CheckedAt:   now,
 		CommandHint: "Install ifupdown2 (ifquery/ifreload) or ifupdown tools to enable validation.",
 		ExitError:   errors.New("no compatible validator"),
+	}
+	return result
+}
+
+func runNetworkIfqueryDiagnosticWithDeps(
+	ctx context.Context,
+	timeout time.Duration,
+	logger *logging.Logger,
+	available func(string) bool,
+	run func(context.Context, string, ...string) ([]byte, error),
+) (result networkPreflightResult) {
+	done := logging.DebugStart(logger, "network ifquery diagnostic", "timeout=%s", timeout)
+	defer func() {
+		if result.Ok() {
+			done(nil)
+			return
+		}
+		if result.Skipped {
+			done(nil)
+			return
+		}
+		if result.ExitError != nil {
+			done(result.ExitError)
+			return
+		}
+		done(errors.New("ifquery diagnostic failed"))
+	}()
+
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	now := nowRestore()
+
+	if available == nil || run == nil {
+		result = networkPreflightResult{
+			Skipped:    true,
+			SkipReason: "validator dependencies not available",
+			CheckedAt:  now,
+		}
+		return result
+	}
+
+	if !available("ifquery") {
+		result = networkPreflightResult{
+			Skipped:    true,
+			SkipReason: "ifquery not available",
+			CheckedAt:  now,
+		}
+		return result
+	}
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
+	output, err := run(ctxTimeout, "ifquery", "--check", "-a")
+	cancel()
+
+	outText := strings.TrimSpace(string(output))
+	if err != nil && looksLikeUnsupportedOption(outText, "--check") {
+		result = networkPreflightResult{
+			Tool:       "ifquery",
+			Args:       []string{"--check", "-a"},
+			Output:     outText,
+			Skipped:    true,
+			SkipReason: "ifquery does not support --check",
+			CheckedAt:  now,
+		}
+		return result
+	}
+
+	result = networkPreflightResult{
+		Tool:      "ifquery",
+		Args:      []string{"--check", "-a"},
+		Output:    outText,
+		ExitError: err,
+		CheckedAt: now,
 	}
 	return result
 }

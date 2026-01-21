@@ -91,11 +91,15 @@ func maybeInstallNetworkConfigFromStage(
 		logger.Info("Network rollback log: %s", rollbackLog)
 	}
 	if rbErr != nil {
-		logger.Warning("Network rollback failed: %v", rbErr)
+		logger.Error("Network restore aborted: staged configuration failed validation (%s) and rollback failed: %v", preflight.CommandLine(), rbErr)
 		return false, fmt.Errorf("network staged install preflight failed; rollback attempt failed: %w", rbErr)
 	}
 
-	logger.Warning("Network restore skipped: staged configuration failed preflight and was rolled back to pre-restore state.")
+	logger.Warning(
+		"Network restore aborted: staged configuration failed validation (%s). Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s).",
+		preflight.CommandLine(),
+		rollbackPath,
+	)
 	logger.Info("Staged network files remain available under: %s", stageRoot)
 	return false, fmt.Errorf("network staged install preflight failed; network files rolled back")
 }
@@ -136,4 +140,3 @@ func maybeRepairNICNamesAuto(ctx context.Context, logger *logging.Logger, archiv
 	}
 	return result
 }
-

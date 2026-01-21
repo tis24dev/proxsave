@@ -32,15 +32,20 @@ func TestApplyNetworkWithRollbackCLI_RollsBackFilesOnPreflightFailure(t *testing
 	if err := os.WriteFile(ifqueryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("write ifquery: %v", err)
 	}
+	ifupPath := filepath.Join(pathDir, "ifup")
+	if err := os.WriteFile(ifupPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write ifup: %v", err)
+	}
 	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	fake := &FakeCommandRunner{
 		Outputs: map[string][]byte{
 			"ip route show default": []byte("default via 192.168.1.1 dev nic1\n"),
-			"ifquery --check -a":    []byte("error: interface enp4s4 not found\n"),
+			"ifquery --check -a":    []byte("ifquery check output\n"),
+			"ifup -n -a":            []byte("error: invalid config\n"),
 		},
 		Errors: map[string]error{
-			"ifquery --check -a": fmt.Errorf("exit 1"),
+			"ifup -n -a": fmt.Errorf("exit 1"),
 		},
 	}
 	restoreCmd = fake
@@ -57,25 +62,25 @@ func TestApplyNetworkWithRollbackCLI_RollsBackFilesOnPreflightFailure(t *testing
 		rollbackBackup,
 		"",
 		"",
-		90*time.Second,
+		defaultNetworkRollbackTimeout,
 		SystemTypePBS,
 	)
 	if err == nil || !strings.Contains(err.Error(), "network preflight validation failed") {
 		t.Fatalf("expected preflight error, got %v", err)
 	}
 
-	foundIfquery := false
+	foundIfupPreflight := false
 	foundRollbackSh := false
 	for _, call := range fake.CallsList() {
-		if call == "ifquery --check -a" {
-			foundIfquery = true
+		if call == "ifup -n -a" {
+			foundIfupPreflight = true
 		}
 		if strings.HasPrefix(call, "sh ") && strings.Contains(call, "network_rollback_now_") {
 			foundRollbackSh = true
 		}
 	}
-	if !foundIfquery {
-		t.Fatalf("expected ifquery preflight to run; calls=%#v", fake.CallsList())
+	if !foundIfupPreflight {
+		t.Fatalf("expected ifup preflight to run; calls=%#v", fake.CallsList())
 	}
 	if !foundRollbackSh {
 		t.Fatalf("expected rollback script to be invoked via sh; calls=%#v", fake.CallsList())

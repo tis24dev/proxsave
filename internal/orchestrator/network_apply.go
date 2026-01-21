@@ -15,7 +15,25 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-const defaultNetworkRollbackTimeout = 90 * time.Second
+const defaultNetworkRollbackTimeout = 180 * time.Second
+
+var ErrNetworkApplyNotCommitted = errors.New("network configuration not committed")
+
+type NetworkApplyNotCommittedError struct {
+	RollbackLog string
+	RestoredIP  string
+}
+
+func (e *NetworkApplyNotCommittedError) Error() string {
+	if e == nil {
+		return ErrNetworkApplyNotCommitted.Error()
+	}
+	return ErrNetworkApplyNotCommitted.Error()
+}
+
+func (e *NetworkApplyNotCommittedError) Unwrap() error {
+	return ErrNetworkApplyNotCommitted
+}
 
 type networkRollbackHandle struct {
 	workDir    string
@@ -97,7 +115,11 @@ func maybeApplyNetworkConfigCLI(ctx context.Context, reader *bufio.Reader, logge
 	}
 
 	logging.DebugStep(logger, "network safe apply (cli)", "Prompt: apply network now with rollback timer")
-	applyNow, err := promptYesNo(ctx, reader, "Apply restored network configuration now with automatic rollback (90s)? (y/N): ")
+	applyNowPrompt := fmt.Sprintf(
+		"Apply restored network configuration now with automatic rollback (%ds)? (y/N): ",
+		int(defaultNetworkRollbackTimeout.Seconds()),
+	)
+	applyNow, err := promptYesNo(ctx, reader, applyNowPrompt)
 	if err != nil {
 		return err
 	}
@@ -192,6 +214,21 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 		} else {
 			logger.Debug("Network snapshot (before): %s", snap)
 		}
+
+		logging.DebugStep(logger, "network safe apply (cli)", "Run baseline health checks (before)")
+		healthBefore := runNetworkHealthChecks(ctx, networkHealthOptions{
+			SystemType:         systemType,
+			Logger:             logger,
+			CommandTimeout:     3 * time.Second,
+			EnableGatewayPing:  false,
+			ForceSSHRouteCheck: false,
+			EnableDNSResolve:   false,
+		})
+		if path, err := writeNetworkHealthReportFileNamed(diagnosticsDir, "health_before.txt", healthBefore); err != nil {
+			logger.Debug("Failed to write network health (before) report: %v", err)
+		} else {
+			logger.Debug("Network health (before) report: %s", path)
+		}
 	}
 
 	if strings.TrimSpace(stageRoot) != "" {
@@ -208,6 +245,37 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 	logging.DebugStep(logger, "network safe apply (cli)", "NIC name repair (optional)")
 	_ = maybeRepairNICNamesCLI(ctx, reader, logger, archivePath)
 
+	if strings.TrimSpace(iface) != "" {
+		if cur, err := currentNetworkEndpoint(ctx, iface, 2*time.Second); err == nil {
+			if tgt, err := targetNetworkEndpointFromConfig(logger, iface); err == nil {
+				logger.Info("Network plan: %s -> %s", cur.summary(), tgt.summary())
+			}
+		}
+	}
+
+	if diagnosticsDir != "" {
+		logging.DebugStep(logger, "network safe apply (cli)", "Write network plan (current -> target)")
+		if planText, err := buildNetworkPlanReport(ctx, logger, iface, source, 2*time.Second); err != nil {
+			logger.Debug("Network plan build failed: %v", err)
+		} else if strings.TrimSpace(planText) != "" {
+			if path, err := writeNetworkTextReportFile(diagnosticsDir, "plan.txt", planText+"\n"); err != nil {
+				logger.Debug("Network plan write failed: %v", err)
+			} else {
+				logger.Debug("Network plan: %s", path)
+			}
+		}
+
+		logging.DebugStep(logger, "network safe apply (cli)", "Run ifquery diagnostic (pre-apply)")
+		ifqueryPre := runNetworkIfqueryDiagnostic(ctx, 5*time.Second, logger)
+		if !ifqueryPre.Skipped {
+			if path, err := writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, "ifquery_pre_apply.txt", ifqueryPre); err != nil {
+				logger.Debug("Failed to write ifquery (pre-apply) report: %v", err)
+			} else {
+				logger.Debug("ifquery (pre-apply) report: %s", path)
+			}
+		}
+	}
+
 	logging.DebugStep(logger, "network safe apply (cli)", "Network preflight validation (ifupdown/ifupdown2)")
 	preflight := runNetworkPreflightValidation(ctx, 5*time.Second, logger)
 	if diagnosticsDir != "" {
@@ -219,12 +287,8 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 	}
 	if !preflight.Ok() {
 		logger.Warning("%s", preflight.Summary())
-		if details := strings.TrimSpace(preflight.Output); details != "" {
-			fmt.Println("Network preflight output:")
-			fmt.Println(details)
-		}
 		if diagnosticsDir != "" {
-			fmt.Printf("Network diagnostics saved under: %s\n", diagnosticsDir)
+			logger.Info("Network diagnostics saved under: %s", diagnosticsDir)
 		}
 		if strings.TrimSpace(stageRoot) != "" && strings.TrimSpace(networkRollbackPath) != "" {
 			logging.DebugStep(logger, "network safe apply (cli)", "Preflight failed in staged mode: rolling back network files automatically")
@@ -233,10 +297,31 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 				logger.Info("Network rollback log: %s", rollbackLog)
 			}
 			if rbErr != nil {
-				logger.Warning("Network rollback failed: %v", rbErr)
+				logger.Error("Network apply aborted: preflight validation failed (%s) and rollback failed: %v", preflight.CommandLine(), rbErr)
 				return fmt.Errorf("network preflight validation failed; rollback attempt failed: %w", rbErr)
 			}
-			logger.Warning("Network files rolled back to pre-restore configuration due to preflight failure")
+			if diagnosticsDir != "" {
+				logging.DebugStep(logger, "network safe apply (cli)", "Capture network snapshot (after rollback)")
+				if snap, err := writeNetworkSnapshot(ctx, logger, diagnosticsDir, "after_rollback", 3*time.Second); err != nil {
+					logger.Debug("Network snapshot after rollback failed: %v", err)
+				} else {
+					logger.Debug("Network snapshot (after rollback): %s", snap)
+				}
+				logging.DebugStep(logger, "network safe apply (cli)", "Run ifquery diagnostic (after rollback)")
+				ifqueryAfterRollback := runNetworkIfqueryDiagnostic(ctx, 5*time.Second, logger)
+				if !ifqueryAfterRollback.Skipped {
+					if path, err := writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, "ifquery_after_rollback.txt", ifqueryAfterRollback); err != nil {
+						logger.Debug("Failed to write ifquery (after rollback) report: %v", err)
+					} else {
+						logger.Debug("ifquery (after rollback) report: %s", path)
+					}
+				}
+			}
+			logger.Warning(
+				"Network apply aborted: preflight validation failed (%s). Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s).",
+				preflight.CommandLine(),
+				strings.TrimSpace(networkRollbackPath),
+			)
 			return fmt.Errorf("network preflight validation failed; network files rolled back")
 		}
 		if !preflight.Skipped && preflight.ExitError != nil && strings.TrimSpace(networkRollbackPath) != "" {
@@ -288,6 +373,16 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 		} else {
 			logger.Debug("Network snapshot (after): %s", snap)
 		}
+
+		logging.DebugStep(logger, "network safe apply (cli)", "Run ifquery diagnostic (post-apply)")
+		ifqueryPost := runNetworkIfqueryDiagnostic(ctx, 5*time.Second, logger)
+		if !ifqueryPost.Skipped {
+			if path, err := writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, "ifquery_post_apply.txt", ifqueryPost); err != nil {
+				logger.Debug("Failed to write ifquery (post-apply) report: %v", err)
+			} else {
+				logger.Debug("ifquery (post-apply) report: %s", path)
+			}
+		}
 	}
 
 	logging.DebugStep(logger, "network safe apply (cli)", "Run post-apply health checks")
@@ -331,8 +426,34 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 		logger.Info("Network configuration committed successfully.")
 		return nil
 	}
-	logger.Warning("Network configuration not committed; rollback will run automatically.")
-	return nil
+
+	// Timer window expired: run rollback now so the restore summary can report the final state.
+	if output, rbErr := restoreCmd.Run(ctx, "sh", handle.scriptPath); rbErr != nil {
+		if len(output) > 0 {
+			logger.Debug("Rollback script output: %s", strings.TrimSpace(string(output)))
+		}
+		return fmt.Errorf("network apply not committed; rollback failed (log: %s): %w", strings.TrimSpace(handle.logPath), rbErr)
+	} else if len(output) > 0 {
+		logger.Debug("Rollback script output: %s", strings.TrimSpace(string(output)))
+	}
+	disarmNetworkRollback(ctx, logger, handle)
+
+	restoredIP := "unknown"
+	if strings.TrimSpace(iface) != "" {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			ep, err := currentNetworkEndpoint(ctx, iface, 1*time.Second)
+			if err == nil && len(ep.Addresses) > 0 {
+				restoredIP = strings.Join(ep.Addresses, ", ")
+				break
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+	return &NetworkApplyNotCommittedError{
+		RollbackLog: strings.TrimSpace(handle.logPath),
+		RestoredIP:  strings.TrimSpace(restoredIP),
+	}
 }
 
 func armNetworkRollback(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (handle *networkRollbackHandle, err error) {

@@ -226,7 +226,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 			logger.Warning("Failed to create network rollback backup: %v", err)
 		} else if networkRollbackBackup != nil && strings.TrimSpace(networkRollbackBackup.BackupPath) != "" {
 			logger.Info("Network rollback backup location: %s", networkRollbackBackup.BackupPath)
-			logger.Info("This backup is used for the 90s network rollback timer and only includes network paths.")
+			logger.Info("This backup is used for the %ds network rollback timer and only includes network paths.", int(defaultNetworkRollbackTimeout.Seconds()))
 		}
 	}
 
@@ -1120,7 +1120,10 @@ func maybeApplyNetworkConfigTUI(ctx context.Context, logger *logging.Logger, pla
 	}
 
 	logging.DebugStep(logger, "network safe apply (tui)", "Prompt: apply network now with rollback timer")
-	message := "Apply restored network configuration now with an automatic rollback timer (90s).\n\nIf you do not commit the changes, the previous network configuration will be restored automatically.\n\nProceed with live network apply?"
+	message := fmt.Sprintf(
+		"Apply restored network configuration now with an automatic rollback timer (%ds).\n\nIf you do not commit the changes, the previous network configuration will be restored automatically.\n\nProceed with live network apply?",
+		int(defaultNetworkRollbackTimeout.Seconds()),
+	)
 	applyNow, err := promptYesNoTUIFunc(
 		"Apply network configuration",
 		configPath,
@@ -1240,6 +1243,21 @@ func applyNetworkWithRollbackTUI(ctx context.Context, logger *logging.Logger, ro
 		} else {
 			logger.Debug("Network snapshot (before): %s", snap)
 		}
+
+		logging.DebugStep(logger, "network safe apply (tui)", "Run baseline health checks (before)")
+		healthBefore := runNetworkHealthChecks(ctx, networkHealthOptions{
+			SystemType:         systemType,
+			Logger:             logger,
+			CommandTimeout:     3 * time.Second,
+			EnableGatewayPing:  false,
+			ForceSSHRouteCheck: false,
+			EnableDNSResolve:   false,
+		})
+		if path, err := writeNetworkHealthReportFileNamed(diagnosticsDir, "health_before.txt", healthBefore); err != nil {
+			logger.Debug("Failed to write network health (before) report: %v", err)
+		} else {
+			logger.Debug("Network health (before) report: %s", path)
+		}
 	}
 
 	if strings.TrimSpace(stageRoot) != "" {
@@ -1260,6 +1278,37 @@ func applyNetworkWithRollbackTUI(ctx context.Context, logger *logging.Logger, ro
 			logger.Info("%s", nicRepair.Summary())
 		} else {
 			logger.Debug("%s", nicRepair.Summary())
+		}
+	}
+
+	if strings.TrimSpace(iface) != "" {
+		if cur, err := currentNetworkEndpoint(ctx, iface, 2*time.Second); err == nil {
+			if tgt, err := targetNetworkEndpointFromConfig(logger, iface); err == nil {
+				logger.Info("Network plan: %s -> %s", cur.summary(), tgt.summary())
+			}
+		}
+	}
+
+	if diagnosticsDir != "" {
+		logging.DebugStep(logger, "network safe apply (tui)", "Write network plan (current -> target)")
+		if planText, err := buildNetworkPlanReport(ctx, logger, iface, source, 2*time.Second); err != nil {
+			logger.Debug("Network plan build failed: %v", err)
+		} else if strings.TrimSpace(planText) != "" {
+			if path, err := writeNetworkTextReportFile(diagnosticsDir, "plan.txt", planText+"\n"); err != nil {
+				logger.Debug("Network plan write failed: %v", err)
+			} else {
+				logger.Debug("Network plan: %s", path)
+			}
+		}
+
+		logging.DebugStep(logger, "network safe apply (tui)", "Run ifquery diagnostic (pre-apply)")
+		ifqueryPre := runNetworkIfqueryDiagnostic(ctx, 5*time.Second, logger)
+		if !ifqueryPre.Skipped {
+			if path, err := writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, "ifquery_pre_apply.txt", ifqueryPre); err != nil {
+				logger.Debug("Failed to write ifquery (pre-apply) report: %v", err)
+			} else {
+				logger.Debug("ifquery (pre-apply) report: %s", path)
+			}
 		}
 	}
 
@@ -1287,9 +1336,32 @@ func applyNetworkWithRollbackTUI(ctx context.Context, logger *logging.Logger, ro
 				logger.Info("Network rollback log: %s", rollbackLog)
 			}
 			if rbErr != nil {
+				logger.Error("Network apply aborted: preflight validation failed (%s) and rollback failed: %v", preflight.CommandLine(), rbErr)
 				_ = promptOkTUI("Network rollback failed", configPath, buildSig, rbErr.Error(), "OK")
 				return fmt.Errorf("network preflight validation failed; rollback attempt failed: %w", rbErr)
 			}
+			if diagnosticsDir != "" {
+				logging.DebugStep(logger, "network safe apply (tui)", "Capture network snapshot (after rollback)")
+				if snap, err := writeNetworkSnapshot(ctx, logger, diagnosticsDir, "after_rollback", 3*time.Second); err != nil {
+					logger.Debug("Network snapshot after rollback failed: %v", err)
+				} else {
+					logger.Debug("Network snapshot (after rollback): %s", snap)
+				}
+				logging.DebugStep(logger, "network safe apply (tui)", "Run ifquery diagnostic (after rollback)")
+				ifqueryAfterRollback := runNetworkIfqueryDiagnostic(ctx, 5*time.Second, logger)
+				if !ifqueryAfterRollback.Skipped {
+					if path, err := writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, "ifquery_after_rollback.txt", ifqueryAfterRollback); err != nil {
+						logger.Debug("Failed to write ifquery (after rollback) report: %v", err)
+					} else {
+						logger.Debug("ifquery (after rollback) report: %s", path)
+					}
+				}
+			}
+			logger.Warning(
+				"Network apply aborted: preflight validation failed (%s). Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s).",
+				preflight.CommandLine(),
+				strings.TrimSpace(networkRollbackPath),
+			)
 			_ = promptOkTUI(
 				"Network preflight failed",
 				configPath,
@@ -1356,6 +1428,16 @@ func applyNetworkWithRollbackTUI(ctx context.Context, logger *logging.Logger, ro
 			logger.Debug("Network snapshot after apply failed: %v", err)
 		} else {
 			logger.Debug("Network snapshot (after): %s", snap)
+		}
+
+		logging.DebugStep(logger, "network safe apply (tui)", "Run ifquery diagnostic (post-apply)")
+		ifqueryPost := runNetworkIfqueryDiagnostic(ctx, 5*time.Second, logger)
+		if !ifqueryPost.Skipped {
+			if path, err := writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, "ifquery_post_apply.txt", ifqueryPost); err != nil {
+				logger.Debug("Failed to write ifquery (post-apply) report: %v", err)
+			} else {
+				logger.Debug("ifquery (post-apply) report: %s", path)
+			}
 		}
 	}
 

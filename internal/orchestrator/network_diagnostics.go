@@ -83,10 +83,18 @@ func writeNetworkSnapshot(ctx context.Context, logger *logging.Logger, diagnosti
 }
 
 func writeNetworkHealthReportFile(diagnosticsDir string, report networkHealthReport) (string, error) {
+	return writeNetworkHealthReportFileNamed(diagnosticsDir, "health_after.txt", report)
+}
+
+func writeNetworkHealthReportFileNamed(diagnosticsDir, filename string, report networkHealthReport) (string, error) {
 	if strings.TrimSpace(diagnosticsDir) == "" {
 		return "", fmt.Errorf("empty diagnostics directory")
 	}
-	path := filepath.Join(diagnosticsDir, "health_after.txt")
+	name := strings.TrimSpace(filename)
+	if name == "" {
+		name = "health.txt"
+	}
+	path := filepath.Join(diagnosticsDir, name)
 	if err := restoreFS.WriteFile(path, []byte(report.Details()+"\n"), 0o600); err != nil {
 		return "", err
 	}
@@ -99,6 +107,41 @@ func writeNetworkPreflightReportFile(diagnosticsDir string, report networkPrefli
 	}
 	path := filepath.Join(diagnosticsDir, "preflight.txt")
 	if err := restoreFS.WriteFile(path, []byte(report.Details()+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, filename string, report networkPreflightResult) (string, error) {
+	if strings.TrimSpace(diagnosticsDir) == "" {
+		return "", fmt.Errorf("empty diagnostics directory")
+	}
+	name := strings.TrimSpace(filename)
+	if name == "" {
+		name = "ifquery_check.txt"
+	}
+	path := filepath.Join(diagnosticsDir, name)
+	var b strings.Builder
+	b.WriteString("NOTE: ifquery --check compares the running state vs the config.\n")
+	b.WriteString("It may show [fail] before apply (expected) when the target config differs from the current runtime.\n\n")
+	b.WriteString(report.Details())
+	b.WriteString("\n")
+	if err := restoreFS.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func writeNetworkTextReportFile(diagnosticsDir, filename, content string) (string, error) {
+	if strings.TrimSpace(diagnosticsDir) == "" {
+		return "", fmt.Errorf("empty diagnostics directory")
+	}
+	name := strings.TrimSpace(filename)
+	if name == "" {
+		name = "report.txt"
+	}
+	path := filepath.Join(diagnosticsDir, name)
+	if err := restoreFS.WriteFile(path, []byte(content), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil

@@ -1662,6 +1662,11 @@ Type "yes" to continue anyway or "no" to abort: _
 If the **network** category is restored, ProxSave can optionally apply the
 new network configuration immediately using a **transactional rollback timer**.
 
+**Important (console recommended)**:
+- Run the live network apply/commit step from the **local console** (physical console, IPMI/iDRAC/iLO, Proxmox console, or hypervisor console), not from SSH.
+- If the restored network config changes the management IP or routes, your SSH session will drop and you may be unable to type `COMMIT`.
+- In that case, ProxSave will treat the lack of `COMMIT` as “not confirmed” and will restore the previous network settings (rollback).
+
 **How it works**:
 - On live restores (writing to `/`), ProxSave **stages** network files first under `/tmp/proxsave/restore-stage-*` and does **not** overwrite `/etc/network/*` during archive extraction.
 - After extraction, ProxSave performs a prevention-first **staged install**: it writes the staged files to disk (no reload), runs safe NIC repair + preflight validation, and **rolls back automatically** if validation fails (leaving the staged copy for review).
@@ -1670,8 +1675,8 @@ new network configuration immediately using a **transactional rollback timer**.
 - ProxSave arms a local rollback job **before** applying changes
 - Rollback restores **only network-related files** using a dedicated archive under `/tmp/proxsave/network_rollback_backup_*` (so it won’t undo other restored categories)
 - Rollback also prunes network config files that were **created after** the backup (e.g. extra files under `/etc/network/interfaces.d/`), so rollback returns to the exact pre-restore state
-- The user has **90 seconds** to type `COMMIT`
-- If `COMMIT` is not received, the previous configuration is restored automatically
+- The user has **180 seconds** to type `COMMIT`
+- If `COMMIT` is not received, ProxSave triggers the rollback and restores the pre-restore network configuration
 - If the network-only rollback archive is not available, ProxSave prompts before falling back to the full safety backup (or skipping live apply)
 
 This protects SSH/GUI access during network changes.
@@ -1680,7 +1685,7 @@ This protects SSH/GUI access during network changes.
 - After applying changes, ProxSave runs local checks (SSH route if available, default route, link state, IP addresses, gateway ping, DNS config/resolve, local web UI port)
 - On PVE systems, additional checks are included for cluster networking: `/etc/pve` (pmxcfs) mount status, `pve-cluster` / `corosync` service state, and `pvecm status` quorum
 - The result is shown to help decide whether to type `COMMIT`
-- A before/after snapshot (`ip link/addr/route`) and the health report are saved under `/tmp/proxsave/network_apply_*` for troubleshooting
+- Diagnostics are saved under `/tmp/proxsave/network_apply_*` (snapshots `before.txt` / `after.txt` / `after_rollback.txt` when relevant, `health_before.txt` / `health_after.txt`, `preflight.txt`, `plan.txt`, and `ifquery_*`)
 
 **NIC name repair**:
 - If physical NIC names changed after reinstall (e.g. `eno1` → `enp3s0`), ProxSave attempts an automatic mapping using backup network inventory (permanent MAC / MAC / PCI path / udev IDs like `ID_PATH`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT`, `ID_SERIAL`)
@@ -1691,9 +1696,13 @@ This protects SSH/GUI access during network changes.
 - A backup of the pre-repair files is stored under `/tmp/proxsave/nic_repair_*`
 
 **Preflight validation**:
-- After NIC repair, ProxSave validates the ifupdown configuration before reloading networking (e.g. `ifquery --check -a` / ifupdown2 check mode)
+- After NIC repair, ProxSave runs a **gate** validation of the ifupdown configuration before reloading networking (e.g. `ifup -n -a` / `ifup --no-act -a` / `ifreload --syntax-check -a`)
 - If validation fails, live apply is aborted and the validator output is saved under `/tmp/proxsave/network_apply_*/preflight.txt`
+- Additionally (diagnostics-only), ProxSave can run `ifquery --check -a` **before and after apply** to show how the runtime state matches the target config. Its output is saved under `/tmp/proxsave/network_apply_*/ifquery_*`. Note that `ifquery --check` can show `[fail]` **before apply** even when the config is valid (because the running state still reflects the old config).
 - On staged installs/applies, a failed preflight triggers an **automatic rollback of network files** (no prompt), returning to the pre-restore state and keeping the staged copy for review.
+
+**Result reporting**:
+- If you do not type `COMMIT`, ProxSave completes the restore with warnings and reports that the original network settings were restored (including the current IP, when detectable), plus the rollback log path.
 
 ### 4. Hard Guards
 

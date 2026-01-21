@@ -27,6 +27,7 @@ var ErrRestoreAborted = errors.New("restore workflow aborted by user")
 
 var (
 	serviceStopTimeout         = 45 * time.Second
+	serviceStopNoBlockTimeout  = 15 * time.Second
 	serviceStartTimeout        = 30 * time.Second
 	serviceVerifyTimeout       = 30 * time.Second
 	serviceStatusCheckTimeout  = 5 * time.Second
@@ -43,6 +44,8 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	}
 	done := logging.DebugStart(logger, "restore workflow (cli)", "version=%s", version)
 	defer func() { done(err) }()
+
+	restoreHadWarnings := false
 	defer func() {
 		if err == nil {
 			return
@@ -212,7 +215,7 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 			logger.Warning("Failed to create network rollback backup: %v", err)
 		} else if networkRollbackBackup != nil && strings.TrimSpace(networkRollbackBackup.BackupPath) != "" {
 			logger.Info("Network rollback backup location: %s", networkRollbackBackup.BackupPath)
-			logger.Info("This backup is used for the 90s network rollback timer and only includes network paths.")
+			logger.Info("This backup is used for the %ds network rollback timer and only includes network paths.", int(defaultNetworkRollbackTimeout.Seconds()))
 		}
 	}
 
@@ -442,17 +445,39 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if plan.HasCategoryID("network") {
 		logger.Info("")
 		if err := maybeRepairResolvConfAfterRestore(ctx, logger, prepared.ArchivePath, cfg.DryRun); err != nil {
+			restoreHadWarnings = true
 			logger.Warning("DNS resolver repair: %v", err)
 		}
 	}
 
 	logger.Info("")
 	if err := maybeApplyNetworkConfigCLI(ctx, reader, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, cfg.DryRun); err != nil {
-		logger.Warning("Network apply step skipped or failed: %v", err)
+		restoreHadWarnings = true
+		if errors.Is(err, ErrNetworkApplyNotCommitted) {
+			var notCommitted *NetworkApplyNotCommittedError
+			restoredIP := "unknown"
+			rollbackLog := ""
+			if errors.As(err, &notCommitted) && notCommitted != nil {
+				if strings.TrimSpace(notCommitted.RestoredIP) != "" {
+					restoredIP = strings.TrimSpace(notCommitted.RestoredIP)
+				}
+				rollbackLog = strings.TrimSpace(notCommitted.RollbackLog)
+			}
+			logger.Warning("Network apply not committed and original settings restored. IP: %s", restoredIP)
+			if rollbackLog != "" {
+				logger.Info("Rollback log: %s", rollbackLog)
+			}
+		} else {
+			logger.Warning("Network apply step skipped or failed: %v", err)
+		}
 	}
 
 	logger.Info("")
-	logger.Info("Restore completed successfully.")
+	if restoreHadWarnings {
+		logger.Warning("Restore completed with warnings.")
+	} else {
+		logger.Info("Restore completed successfully.")
+	}
 	logger.Info("Temporary decrypted bundle removed.")
 
 	if detailedLogPath != "" {
@@ -680,11 +705,12 @@ func stopServiceWithRetries(ctx context.Context, logger *logging.Logger, service
 	attempts := []struct {
 		description string
 		args        []string
+		timeout     time.Duration
 	}{
-		{"stop (no-block)", []string{"stop", "--no-block", service}},
-		{"stop (blocking)", []string{"stop", service}},
-		{"aggressive stop", []string{"kill", "--signal=SIGTERM", "--kill-who=all", service}},
-		{"force kill", []string{"kill", "--signal=SIGKILL", "--kill-who=all", service}},
+		{"stop (no-block)", []string{"stop", "--no-block", service}, serviceStopNoBlockTimeout},
+		{"stop (blocking)", []string{"stop", service}, serviceStopTimeout},
+		{"aggressive stop", []string{"kill", "--signal=SIGTERM", "--kill-who=all", service}, serviceStopTimeout},
+		{"force kill", []string{"kill", "--signal=SIGKILL", "--kill-who=all", service}, serviceStopTimeout},
 	}
 
 	var lastErr error
@@ -699,7 +725,7 @@ func stopServiceWithRetries(ctx context.Context, logger *logging.Logger, service
 			logger.Debug("Attempting %s for %s (%d/%d)", attempt.description, service, i+1, len(attempts))
 		}
 
-		if err := runCommandWithTimeout(ctx, logger, serviceStopTimeout, "systemctl", attempt.args...); err != nil {
+		if err := runCommandWithTimeoutCountdown(ctx, logger, attempt.timeout, service, attempt.description, "systemctl", attempt.args...); err != nil {
 			lastErr = err
 			continue
 		}
@@ -752,14 +778,97 @@ func startServiceWithRetries(ctx context.Context, logger *logging.Logger, servic
 	return lastErr
 }
 
+func runCommandWithTimeoutCountdown(ctx context.Context, logger *logging.Logger, timeout time.Duration, service, action, name string, args ...string) error {
+	if timeout <= 0 {
+		return execCommand(ctx, logger, timeout, name, args...)
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	type result struct {
+		out []byte
+		err error
+	}
+
+	resultCh := make(chan result, 1)
+	go func() {
+		out, err := restoreCmd.Run(execCtx, name, args...)
+		resultCh <- result{out: out, err: err}
+	}()
+
+	progressEnabled := isTerminal(int(os.Stderr.Fd()))
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	writeProgress := func(left time.Duration) {
+		if !progressEnabled {
+			return
+		}
+		seconds := int(left.Round(time.Second).Seconds())
+		if seconds < 0 {
+			seconds = 0
+		}
+		fmt.Fprintf(os.Stderr, "\rStopping %s: %s (attempt timeout in %ds)...", service, action, seconds)
+	}
+
+	for {
+		select {
+		case r := <-resultCh:
+			if progressEnabled {
+				fmt.Fprint(os.Stderr, "\r")
+				fmt.Fprintln(os.Stderr, strings.Repeat(" ", 80))
+				fmt.Fprint(os.Stderr, "\r")
+			}
+			msg := strings.TrimSpace(string(r.out))
+			if r.err != nil {
+				if errors.Is(execCtx.Err(), context.DeadlineExceeded) || errors.Is(r.err, context.DeadlineExceeded) {
+					return fmt.Errorf("%s %s timed out after %s", name, strings.Join(args, " "), timeout)
+				}
+				if msg != "" {
+					return fmt.Errorf("%s %s failed: %s", name, strings.Join(args, " "), msg)
+				}
+				return fmt.Errorf("%s %s failed: %w", name, strings.Join(args, " "), r.err)
+			}
+			if msg != "" && logger != nil {
+				logger.Debug("%s %s: %s", name, strings.Join(args, " "), msg)
+			}
+			return nil
+		case <-ticker.C:
+			writeProgress(time.Until(deadline))
+		case <-execCtx.Done():
+			writeProgress(0)
+			if progressEnabled {
+				fmt.Fprintln(os.Stderr)
+			}
+			select {
+			case r := <-resultCh:
+				msg := strings.TrimSpace(string(r.out))
+				if msg != "" && logger != nil {
+					logger.Debug("%s %s: %s", name, strings.Join(args, " "), msg)
+				}
+			default:
+			}
+			return fmt.Errorf("%s %s timed out after %s", name, strings.Join(args, " "), timeout)
+		}
+	}
+}
+
 func waitForServiceInactive(ctx context.Context, logger *logging.Logger, service string, timeout time.Duration) error {
 	if timeout <= 0 {
 		return nil
 	}
 	deadline := time.Now().Add(timeout)
+	progressEnabled := isTerminal(int(os.Stderr.Fd()))
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			if progressEnabled {
+				fmt.Fprintln(os.Stderr)
+			}
 			return fmt.Errorf("%s still active after %s", service, timeout)
 		}
 
@@ -782,8 +891,22 @@ func waitForServiceInactive(ctx context.Context, logger *logging.Logger, service
 			if !timer.Stop() {
 				<-timer.C
 			}
+			if progressEnabled {
+				fmt.Fprintln(os.Stderr)
+			}
 			return ctx.Err()
 		case <-timer.C:
+		}
+		select {
+		case <-ticker.C:
+			if progressEnabled {
+				seconds := int(remaining.Round(time.Second).Seconds())
+				if seconds < 0 {
+					seconds = 0
+				}
+				fmt.Fprintf(os.Stderr, "\rWaiting for %s to stop (%ds remaining)...", service, seconds)
+			}
+		default:
 		}
 	}
 }
