@@ -336,7 +336,7 @@ func TestGetStorageModeCategories(t *testing.T) {
 	pveCategories := GetStorageModeCategories("pve")
 	pbsCategories := GetStorageModeCategories("pbs")
 
-	// PVE should include pve_cluster, storage_pve, filesystem
+	// PVE should include pve_cluster, storage_pve
 	pveIDs := make(map[string]bool)
 	for _, cat := range pveCategories {
 		pveIDs[cat.ID] = true
@@ -344,20 +344,14 @@ func TestGetStorageModeCategories(t *testing.T) {
 	if !pveIDs["pve_cluster"] {
 		t.Error("PVE storage mode should include pve_cluster")
 	}
-	if !pveIDs["filesystem"] {
-		t.Error("PVE storage mode should include filesystem")
-	}
 
-	// PBS should include pbs_config, datastore_pbs, filesystem
+	// PBS should include pbs_config, datastore_pbs
 	pbsIDs := make(map[string]bool)
 	for _, cat := range pbsCategories {
 		pbsIDs[cat.ID] = true
 	}
 	if !pbsIDs["pbs_config"] {
 		t.Error("PBS storage mode should include pbs_config")
-	}
-	if !pbsIDs["filesystem"] {
-		t.Error("PBS storage mode should include filesystem")
 	}
 }
 
@@ -369,7 +363,7 @@ func TestGetBaseModeCategories(t *testing.T) {
 		ids[cat.ID] = true
 	}
 
-	expectedIDs := []string{"network", "ssl", "ssh", "services", "filesystem"}
+	expectedIDs := []string{"network", "ssl", "ssh", "services"}
 	for _, expected := range expectedIDs {
 		if !ids[expected] {
 			t.Errorf("Base mode should include %s", expected)
@@ -676,7 +670,6 @@ func TestGetCategoriesForMode(t *testing.T) {
 		{ID: "network", Type: CategoryTypeCommon, IsAvailable: true},
 		{ID: "ssh", Type: CategoryTypeCommon, IsAvailable: true},
 		{ID: "zfs", Type: CategoryTypeCommon, IsAvailable: true},
-		{ID: "filesystem", Type: CategoryTypeCommon, IsAvailable: true},
 		{ID: "datastore_pbs", Type: CategoryTypePBS, IsAvailable: true},
 		{ID: "pbs_config", Type: CategoryTypePBS, IsAvailable: true},
 	}
@@ -687,9 +680,9 @@ func TestGetCategoriesForMode(t *testing.T) {
 		systemType SystemType
 		wantCount  int
 	}{
-		{"full mode", RestoreModeFull, SystemTypePVE, 9},
+		{"full mode", RestoreModeFull, SystemTypePVE, 8},
 		{"custom mode returns empty", RestoreModeCustom, SystemTypePVE, 0},
-		{"storage mode PBS filters PBS", RestoreModeStorage, SystemTypePBS, 4},
+		{"storage mode PBS filters PBS", RestoreModeStorage, SystemTypePBS, 3},
 	}
 
 	for _, tt := range tests {

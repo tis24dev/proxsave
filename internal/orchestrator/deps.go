@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -118,16 +117,8 @@ func (realTimeProvider) Now() time.Time { return time.Now() }
 
 type osCommandRunner struct{}
 
-const defaultCommandWaitDelay = 3 * time.Second
-
 func (osCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.WaitDelay = defaultCommandWaitDelay
-	out, err := cmd.CombinedOutput()
-	if err != nil && errors.Is(err, exec.ErrWaitDelay) {
-		return out, nil
-	}
-	return out, err
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
 // RunStream returns a stdout pipe for streaming commands that read from stdin.

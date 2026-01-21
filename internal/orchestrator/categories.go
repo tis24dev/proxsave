@@ -140,15 +140,6 @@ func GetAllCategories() []Category {
 
 		// Common Categories
 		{
-			ID:          "filesystem",
-			Name:        "Filesystem Configuration",
-			Description: "Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot",
-			Type:        CategoryTypeCommon,
-			Paths: []string{
-				"./etc/fstab",
-			},
-		},
-		{
 			ID:          "network",
 			Name:        "Network Configuration",
 			Description: "Network interfaces and routing",
@@ -349,16 +340,16 @@ func GetStorageModeCategories(systemType string) []Category {
 	var categories []Category
 
 	if systemType == "pve" {
-		// PVE: cluster + storage + jobs + zfs + filesystem
+		// PVE: cluster + storage + jobs + zfs
 		for _, cat := range all {
-			if cat.ID == "pve_cluster" || cat.ID == "storage_pve" || cat.ID == "pve_jobs" || cat.ID == "zfs" || cat.ID == "filesystem" {
+			if cat.ID == "pve_cluster" || cat.ID == "storage_pve" || cat.ID == "pve_jobs" || cat.ID == "zfs" {
 				categories = append(categories, cat)
 			}
 		}
 	} else if systemType == "pbs" {
-		// PBS: config export + datastore + maintenance + jobs + zfs + filesystem
+		// PBS: config export + datastore + maintenance + jobs + zfs
 		for _, cat := range all {
-			if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "maintenance_pbs" || cat.ID == "pbs_jobs" || cat.ID == "zfs" || cat.ID == "filesystem" {
+			if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "maintenance_pbs" || cat.ID == "pbs_jobs" || cat.ID == "zfs" {
 				categories = append(categories, cat)
 			}
 		}
@@ -372,9 +363,9 @@ func GetBaseModeCategories() []Category {
 	all := GetAllCategories()
 	var categories []Category
 
-	// Base mode: network, SSL, SSH, services, filesystem
+	// Base mode: network, SSL, SSH, services
 	for _, cat := range all {
-		if cat.ID == "network" || cat.ID == "ssl" || cat.ID == "ssh" || cat.ID == "services" || cat.ID == "filesystem" {
+		if cat.ID == "network" || cat.ID == "ssl" || cat.ID == "ssh" || cat.ID == "services" {
 			categories = append(categories, cat)
 		}
 	}
