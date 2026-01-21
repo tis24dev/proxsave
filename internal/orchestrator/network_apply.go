@@ -420,9 +420,15 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 	committed, err := promptNetworkCommitWithCountdown(ctx, reader, logger, remaining)
 	if err != nil {
 		logger.Warning("Commit prompt error: %v", err)
+		logger.Info("Commit input lost; rollback remains ARMED and will proceed automatically.")
+		return buildNetworkApplyNotCommittedError(ctx, iface, handle)
 	}
 	logging.DebugStep(logger, "network safe apply (cli)", "User commit result: committed=%v", committed)
 	if committed {
+		if rollbackAlreadyRunning(ctx, handle) {
+			logger.Warning("Commit received too late: rollback already running. Network configuration NOT committed.")
+			return buildNetworkApplyNotCommittedError(ctx, iface, handle)
+		}
 		disarmNetworkRollback(ctx, logger, handle)
 		logger.Info("Network configuration committed successfully.")
 		return nil
@@ -430,24 +436,50 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 
 	// Not committed: keep rollback ARMED. Do not disarm.
 	// The rollback script will run via systemd-run/nohup when the timer expires.
+	return buildNetworkApplyNotCommittedError(ctx, iface, handle)
+}
+
+func buildNetworkApplyNotCommittedError(ctx context.Context, iface string, handle *networkRollbackHandle) *NetworkApplyNotCommittedError {
 	restoredIP := "unknown"
 	if strings.TrimSpace(iface) != "" {
 		if ep, err := currentNetworkEndpoint(ctx, iface, 1*time.Second); err == nil && len(ep.Addresses) > 0 {
 			restoredIP = strings.Join(ep.Addresses, ", ")
 		}
 	}
+
 	rollbackArmed := true
-	if handle.markerPath != "" {
+	if handle == nil {
+		rollbackArmed = false
+	} else if strings.TrimSpace(handle.markerPath) != "" {
 		if _, statErr := restoreFS.Stat(handle.markerPath); statErr != nil {
 			// Marker missing => rollback likely already executed (or was manually removed).
 			rollbackArmed = false
 		}
 	}
+
+	rollbackLog := ""
+	if handle != nil {
+		rollbackLog = strings.TrimSpace(handle.logPath)
+	}
 	return &NetworkApplyNotCommittedError{
-		RollbackLog: strings.TrimSpace(handle.logPath),
-		RestoredIP:  strings.TrimSpace(restoredIP),
+		RollbackLog:   rollbackLog,
+		RestoredIP:    strings.TrimSpace(restoredIP),
 		RollbackArmed: rollbackArmed,
 	}
+}
+
+func rollbackAlreadyRunning(ctx context.Context, handle *networkRollbackHandle) bool {
+	if handle == nil || strings.TrimSpace(handle.unitName) == "" || !commandAvailable("systemctl") {
+		return false
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := restoreCmd.Run(checkCtx, "systemctl", "is-active", strings.TrimSpace(handle.unitName)+".service")
+	if err != nil {
+		return false
+	}
+	state := strings.TrimSpace(string(out))
+	return state == "active" || state == "activating"
 }
 
 func armNetworkRollback(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (handle *networkRollbackHandle, err error) {
@@ -534,18 +566,19 @@ func disarmNetworkRollback(ctx context.Context, logger *logging.Logger, handle *
 		return
 	}
 	logging.DebugStep(logger, "disarm network rollback", "Disarming rollback (marker=%s unit=%s)", strings.TrimSpace(handle.markerPath), strings.TrimSpace(handle.unitName))
-	if handle.markerPath != "" {
+	// Remove marker first so that even if the timer triggers concurrently the rollback script exits early.
+	if strings.TrimSpace(handle.markerPath) != "" {
 		if err := restoreFS.Remove(handle.markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logger.Debug("Failed to remove rollback marker %s: %v", handle.markerPath, err)
 		}
 	}
-	if handle.unitName != "" && commandAvailable("systemctl") {
-		// systemd-run --on-active creates both <unit>.timer and <unit>.service; stop both.
-		for _, unit := range []string{handle.unitName + ".timer", handle.unitName + ".service"} {
-			if output, err := restoreCmd.Run(ctx, "systemctl", "stop", unit); err != nil {
-				logger.Debug("Failed to stop rollback unit %s: %v (output: %s)", unit, err, strings.TrimSpace(string(output)))
-			}
+	if strings.TrimSpace(handle.unitName) != "" && commandAvailable("systemctl") {
+		// Stop the timer only. If the service already started, let it finish.
+		timerUnit := strings.TrimSpace(handle.unitName) + ".timer"
+		if output, err := restoreCmd.Run(ctx, "systemctl", "stop", timerUnit); err != nil {
+			logger.Debug("Failed to stop rollback timer %s: %v (output: %s)", timerUnit, err, strings.TrimSpace(string(output)))
 		}
+		_, _ = restoreCmd.Run(ctx, "systemctl", "reset-failed", strings.TrimSpace(handle.unitName)+".service", timerUnit)
 	}
 }
 
@@ -914,16 +947,49 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 	}
 
 	if restartNetworking {
-		lines = append(lines,
-			`echo "Restart networking after rollback" >> "$LOG"`,
-			`if command -v ifreload >/dev/null 2>&1; then ifreload -a >> "$LOG" 2>&1 || true;`,
-			`elif command -v systemctl >/dev/null 2>&1; then systemctl restart networking >> "$LOG" 2>&1 || true;`,
-			`elif command -v ifup >/dev/null 2>&1; then ifup -a >> "$LOG" 2>&1 || true;`,
+			lines = append(lines,
+				`echo "Restart networking after rollback" >> "$LOG"`,
+				`echo "Live state before reload:" >> "$LOG"`,
+				`ip -br addr >> "$LOG" 2>&1 || true`,
+				`ip route show >> "$LOG" 2>&1 || true`,
+			`RELOAD_OK=0`,
+			`if command -v ifreload >/dev/null 2>&1; then`,
+			`  echo "Executing: ifreload -a" >> "$LOG"`,
+			`  if ifreload -a >> "$LOG" 2>&1; then`,
+			`    RELOAD_OK=1`,
+			`    echo "ifreload: OK" >> "$LOG"`,
+			`  else`,
+			`    RC=$?`,
+			`    echo "ERROR: ifreload -a failed (exit=$RC)" >> "$LOG"`,
+			`  fi`,
 			`fi`,
-		)
-	} else {
-		lines = append(lines, `echo "Restart networking after rollback: skipped (manual)" >> "$LOG"`)
-	}
+			`if [ "$RELOAD_OK" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then`,
+			`  echo "Executing fallback: systemctl restart networking" >> "$LOG"`,
+			`  if systemctl restart networking >> "$LOG" 2>&1; then`,
+			`    RELOAD_OK=1`,
+			`    echo "systemctl restart networking: OK" >> "$LOG"`,
+			`  else`,
+			`    RC=$?`,
+			`    echo "ERROR: systemctl restart networking failed (exit=$RC)" >> "$LOG"`,
+			`  fi`,
+			`fi`,
+			`if [ "$RELOAD_OK" -eq 0 ] && command -v ifup >/dev/null 2>&1; then`,
+			`  echo "Executing fallback: ifup -a" >> "$LOG"`,
+			`  if ifup -a >> "$LOG" 2>&1; then`,
+			`    RELOAD_OK=1`,
+			`    echo "ifup -a: OK" >> "$LOG"`,
+			`  else`,
+			`    RC=$?`,
+			`    echo "ERROR: ifup -a failed (exit=$RC)" >> "$LOG"`,
+			`  fi`,
+				`fi`,
+				`echo "Live state after reload:" >> "$LOG"`,
+				`ip -br addr >> "$LOG" 2>&1 || true`,
+				`ip route show >> "$LOG" 2>&1 || true`,
+			)
+		} else {
+			lines = append(lines, `echo "Restart networking after rollback: skipped (manual)" >> "$LOG"`)
+		}
 
 	lines = append(lines,
 		`rm -f "$MARKER"`,
