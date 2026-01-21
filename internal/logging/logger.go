@@ -10,20 +10,20 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// Logger gestisce il logging dell'applicazione
+// Logger handles application logging.
 type Logger struct {
 	mu           sync.Mutex
 	level        types.LogLevel
 	useColor     bool
 	output       io.Writer
 	timeFormat   string
-	logFile      *os.File // File di log (opzionale)
+	logFile      *os.File // Log file (optional)
 	warningCount int64
 	errorCount   int64
 	exitFunc     func(int)
 }
 
-// New crea un nuovo logger
+// New creates a new logger.
 func New(level types.LogLevel, useColor bool) *Logger {
 	return &Logger{
 		level:      level,
@@ -34,7 +34,7 @@ func New(level types.LogLevel, useColor bool) *Logger {
 	}
 }
 
-// SetOutput imposta l'output writer del logger
+// SetOutput sets the logger output writer.
 func (l *Logger) SetOutput(w io.Writer) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -45,7 +45,7 @@ func (l *Logger) SetOutput(w io.Writer) {
 	l.output = w
 }
 
-// SetLevel imposta il livello di logging
+// SetLevel sets the logging level.
 func (l *Logger) SetLevel(level types.LogLevel) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -64,17 +64,17 @@ func (l *Logger) SetExitFunc(fn func(int)) {
 	l.exitFunc = fn
 }
 
-// OpenLogFile apre un file di log e inizia la scrittura real-time
+// OpenLogFile opens a log file and starts real-time writing.
 func (l *Logger) OpenLogFile(logPath string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	// Se c'è già un file aperto, chiudilo prima
+	// If a log file is already open, close it first.
 	if l.logFile != nil {
 		l.logFile.Close()
 	}
 
-	// Crea il file di log (O_CREATE|O_WRONLY|O_APPEND)
-	// O_SYNC forza la scrittura immediata su disco (real-time, nessun buffer)
+	// Create the log file (O_CREATE|O_WRONLY|O_APPEND).
+	// O_SYNC forces immediate writes to disk (real-time, no buffering).
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open log file %s: %w", logPath, err)
@@ -84,7 +84,7 @@ func (l *Logger) OpenLogFile(logPath string) error {
 	return nil
 }
 
-// CloseLogFile chiude il file di log (da chiamare dopo le notifiche)
+// CloseLogFile closes the log file (call after notifications).
 func (l *Logger) CloseLogFile() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -97,7 +97,7 @@ func (l *Logger) CloseLogFile() error {
 	return err
 }
 
-// GetLogFilePath restituisce il path del file di log attualmente aperto (o "" se nessuno)
+// GetLogFilePath returns the path of the currently open log file (or "" if none).
 func (l *Logger) GetLogFilePath() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -112,14 +112,14 @@ func (l *Logger) UsesColor() bool {
 	return l.useColor
 }
 
-// GetLevel restituisce il livello corrente
+// GetLevel returns the current log level.
 func (l *Logger) GetLevel() types.LogLevel {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.level
 }
 
-// log è il metodo interno per scrivere i log
+// log is the internal method used to write logs.
 func (l *Logger) log(level types.LogLevel, format string, args ...interface{}) {
 	l.logWithLabel(level, "", "", format, args...)
 }
@@ -169,7 +169,7 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		}
 	}
 
-	// Formato per stdout (con colori se abilitati)
+	// Format for stdout (with colors if enabled).
 	outputStdout := fmt.Sprintf("[%s] %s%-8s%s %s\n",
 		timestamp,
 		colorCode,
@@ -178,17 +178,17 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		message,
 	)
 
-	// Formato per file (senza colori)
+	// Format for file (without colors).
 	outputFile := fmt.Sprintf("[%s] %-8s %s\n",
 		timestamp,
 		levelStr,
 		message,
 	)
 
-	// Scrivi su stdout con colori
+	// Write to stdout with colors.
 	fmt.Fprint(l.output, outputStdout)
 
-	// Se c'è un file di log, scrivi anche lì (senza colori)
+	// If a log file is open, write there too (without colors).
 	if l.logFile != nil {
 		fmt.Fprint(l.logFile, outputFile)
 	}
@@ -208,7 +208,7 @@ func (l *Logger) HasErrors() bool {
 	return l.errorCount > 0
 }
 
-// Debug scrive un log di debug
+// Debug writes a debug log.
 func (l *Logger) Debug(format string, args ...interface{}) {
 	l.log(types.LogLevelDebug, format, args...)
 }
@@ -254,17 +254,17 @@ func (l *Logger) Skip(format string, args ...interface{}) {
 	l.logWithLabel(types.LogLevelInfo, "SKIP", colorOverride, format, args...)
 }
 
-// Warning scrive un log di warning
+// Warning writes a warning log.
 func (l *Logger) Warning(format string, args ...interface{}) {
 	l.log(types.LogLevelWarning, format, args...)
 }
 
-// Error scrive un log di errore
+// Error writes an error log.
 func (l *Logger) Error(format string, args ...interface{}) {
 	l.log(types.LogLevelError, format, args...)
 }
 
-// Critical scrive un log critico
+// Critical writes a critical log.
 func (l *Logger) Critical(format string, args ...interface{}) {
 	l.log(types.LogLevelCritical, format, args...)
 }
@@ -305,19 +305,19 @@ func init() {
 	defaultLogger = New(types.LogLevelInfo, true)
 }
 
-// SetDefaultLogger imposta il logger di default
+// SetDefaultLogger sets the default logger.
 func SetDefaultLogger(logger *Logger) {
 	defaultLogger = logger
 }
 
-// GetDefaultLogger restituisce il logger di default
+// GetDefaultLogger returns the default logger.
 func GetDefaultLogger() *Logger {
 	return defaultLogger
 }
 
 // Package-level convenience functions
 
-// Debug scrive un log di debug usando il logger di default
+// Debug writes a debug log using the default logger.
 func Debug(format string, args ...interface{}) {
 	defaultLogger.Debug(format, args...)
 }
@@ -327,27 +327,27 @@ func Info(format string, args ...interface{}) {
 	defaultLogger.Info(format, args...)
 }
 
-// Step scrive un log STEP usando il logger di default
+// Step writes a STEP log using the default logger.
 func Step(format string, args ...interface{}) {
 	defaultLogger.Step(format, args...)
 }
 
-// Skip scrive un log SKIP usando il logger di default
+// Skip writes a SKIP log using the default logger.
 func Skip(format string, args ...interface{}) {
 	defaultLogger.Skip(format, args...)
 }
 
-// Warning scrive un log di warning usando il logger di default
+// Warning writes a warning log using the default logger.
 func Warning(format string, args ...interface{}) {
 	defaultLogger.Warning(format, args...)
 }
 
-// Error scrive un log di errore usando il logger di default
+// Error writes an error log using the default logger.
 func Error(format string, args ...interface{}) {
 	defaultLogger.Error(format, args...)
 }
 
-// Critical scrive un log critico usando il logger di default
+// Critical writes a critical log using the default logger.
 func Critical(format string, args ...interface{}) {
 	defaultLogger.Critical(format, args...)
 }

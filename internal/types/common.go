@@ -2,7 +2,7 @@ package types
 
 import "time"
 
-// ProxmoxType rappresenta il tipo di ambiente Proxmox
+// ProxmoxType represents the type of Proxmox environment.
 type ProxmoxType string
 
 const (
@@ -12,67 +12,67 @@ const (
 	// ProxmoxBS - Proxmox Backup Server
 	ProxmoxBS ProxmoxType = "pbs"
 
-	// ProxmoxUnknown - Tipo sconosciuto o non rilevato
+	// ProxmoxUnknown - Unknown or undetected type
 	ProxmoxUnknown ProxmoxType = "unknown"
 )
 
-// String restituisce la rappresentazione stringa del tipo Proxmox
+// String returns the string representation of the Proxmox type.
 func (p ProxmoxType) String() string {
 	return string(p)
 }
 
-// CompressionType rappresenta il tipo di compressione
+// CompressionType represents the compression type.
 type CompressionType string
 
 const (
-	// CompressionGzip - Compressione gzip
+	// CompressionGzip - gzip compression
 	CompressionGzip CompressionType = "gz"
 
-	// CompressionPigz - Compressione gzip parallela (pigz)
+	// CompressionPigz - parallel gzip compression (pigz)
 	CompressionPigz CompressionType = "pigz"
 
-	// CompressionBzip2 - Compressione bzip2
+	// CompressionBzip2 - bzip2 compression
 	CompressionBzip2 CompressionType = "bz2"
 
-	// CompressionXZ - Compressione xz (LZMA)
+	// CompressionXZ - xz compression (LZMA)
 	CompressionXZ CompressionType = "xz"
 
-	// CompressionLZMA - Compressione lzma classica
+	// CompressionLZMA - classic lzma compression
 	CompressionLZMA CompressionType = "lzma"
 
-	// CompressionZstd - Compressione zstd
+	// CompressionZstd - zstd compression
 	CompressionZstd CompressionType = "zst"
 
-	// CompressionNone - Nessuna compressione
+	// CompressionNone - no compression
 	CompressionNone CompressionType = "none"
 )
 
-// String restituisce la rappresentazione stringa del tipo di compressione
+// String returns the string representation of the compression type.
 func (c CompressionType) String() string {
 	return string(c)
 }
 
-// BackupInfo contiene informazioni su un backup
+// BackupInfo contains information about a backup.
 type BackupInfo struct {
-	// Timestamp del backup
+	// Backup timestamp
 	Timestamp time.Time
 
-	// Nome del file di backup
+	// Backup file name
 	Filename string
 
-	// Dimensione del file in bytes
+	// File size in bytes
 	Size int64
 
-	// Checksum SHA256
+	// SHA256 checksum
 	Checksum string
 
-	// Tipo di compressione usata
+	// Compression type used
 	Compression CompressionType
 
-	// Path completo del file
+	// Full file path
 	Path string
 
-	// Tipo di ambiente Proxmox
+	// Proxmox environment type
 	ProxmoxType ProxmoxType
 }
 
@@ -101,49 +101,49 @@ type BackupMetadata struct {
 	Version string
 }
 
-// StorageLocation rappresenta una destinazione di storage
+// StorageLocation represents a storage destination.
 type StorageLocation string
 
 const (
-	// StorageLocal - Storage locale
+	// StorageLocal - Local storage
 	StorageLocal StorageLocation = "local"
 
-	// StorageSecondary - Storage secondario
+	// StorageSecondary - Secondary storage
 	StorageSecondary StorageLocation = "secondary"
 
-	// StorageCloud - Storage cloud (rclone)
+	// StorageCloud - Cloud storage (rclone)
 	StorageCloud StorageLocation = "cloud"
 )
 
-// String restituisce la rappresentazione stringa della location
+// String returns the string representation of the location.
 func (s StorageLocation) String() string {
 	return string(s)
 }
 
-// LogLevel rappresenta il livello di logging
+// LogLevel represents the logging level.
 type LogLevel int
 
 const (
-	// LogLevelDebug - Log di debug (massimo dettaglio)
+	// LogLevelDebug - Debug logs (maximum detail)
 	LogLevelDebug LogLevel = 5
 
-	// LogLevelInfo - Informazioni generali
+	// LogLevelInfo - General information
 	LogLevelInfo LogLevel = 4
 
-	// LogLevelWarning - Avvisi
+	// LogLevelWarning - Warnings
 	LogLevelWarning LogLevel = 3
 
-	// LogLevelError - Errori
+	// LogLevelError - Errors
 	LogLevelError LogLevel = 2
 
-	// LogLevelCritical - Errori critici
+	// LogLevelCritical - Critical errors
 	LogLevelCritical LogLevel = 1
 
-	// LogLevelNone - Nessun log
+	// LogLevelNone - No logs
 	LogLevelNone LogLevel = 0
 )
 
-// String restituisce la rappresentazione stringa del log level
+// String returns the string representation of the log level.
 func (l LogLevel) String() string {
 	switch l {
 	case LogLevelDebug:

@@ -175,9 +175,9 @@ func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, early
 	return stats
 }
 
-// dispatchNotificationsAndLogs esegue la fase di notifiche e gestione file di log.
-// Viene usata sia nel percorso di successo che in quello di errore, così che
-// le notifiche vengano comunque inviate e il log venga sempre chiuso/ruotato.
+// dispatchNotificationsAndLogs runs the notification phase and log-file management.
+// It is used both on success and on error paths, so notifications still go out
+// and the log is always closed/rotated.
 func (o *Orchestrator) dispatchNotificationsAndLogs(ctx context.Context, stats *BackupStats) {
 	if o == nil || o.logger == nil {
 		return

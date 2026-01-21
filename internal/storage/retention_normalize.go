@@ -4,10 +4,10 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-// NormalizeGFSRetentionConfig applica le correzioni necessarie alla configurazione
-// GFS prima di eseguire la retention. Attualmente:
-//   - garantisce che il tier DAILY abbia almeno valore 1 (minimo accettato)
-//     se la policy è gfs e RETENTION_DAILY è <= 0.
+// NormalizeGFSRetentionConfig applies the required adjustments to the GFS configuration
+// before running retention. Currently:
+//   - ensures the DAILY tier is at least 1 (minimum accepted value)
+//     when the policy is gfs and RETENTION_DAILY is <= 0.
 //   - emits a log line to document the adjustment.
 func NormalizeGFSRetentionConfig(logger *logging.Logger, backendName string, cfg RetentionConfig) RetentionConfig {
 	if cfg.Policy != "gfs" {

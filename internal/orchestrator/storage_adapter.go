@@ -184,8 +184,8 @@ func (s *StorageAdapter) logCurrentBackupCount() {
 		return
 	}
 
-	// Il backend cloud logga già il conteggio corrente durante ApplyRetention
-	// riutilizzando la stessa lista; evitiamo una seconda chiamata rclone lsl.
+	// The cloud backend already logs the current count during ApplyRetention
+	// by reusing the same list; avoid a second rclone lsl call.
 	if s.backend.Location() == storage.LocationCloud {
 		return
 	}

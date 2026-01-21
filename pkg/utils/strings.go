@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// FormatBytes converte bytes in formato human-readable (KB, MB, GB, ecc.)
+// FormatBytes converts bytes to a human-readable format (KB, MB, GB, etc.).
 func FormatBytes(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -21,13 +21,13 @@ func FormatBytes(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
-// ParseBool converte una stringa in booleano (supporta vari formati)
+// ParseBool converts a string to a boolean (supports multiple formats).
 func ParseBool(s string) bool {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return s == "true" || s == "1" || s == "yes" || s == "on" || s == "enabled"
 }
 
-// TrimQuotes rimuove le virgolette da una stringa
+// TrimQuotes removes surrounding quotes from a string.
 func TrimQuotes(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) >= 2 {
@@ -38,8 +38,8 @@ func TrimQuotes(s string) string {
 	return s
 }
 
-// SplitKeyValue divide una stringa "key=value" in key e value
-// Supporta anche commenti inline: KEY="value" # comment
+// SplitKeyValue splits a "key=value" string into key and value.
+// Supports inline comments too: KEY="value" # comment
 func SplitKeyValue(line string) (string, string, bool) {
 	parts := strings.SplitN(line, "=", 2)
 	if len(parts) != 2 {
@@ -70,7 +70,7 @@ func SplitKeyValue(line string) (string, string, bool) {
 	return key, value, true
 }
 
-// IsComment verifica se una linea è un commento (inizia con #)
+// IsComment checks whether a line is a comment (starts with #).
 func IsComment(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	return strings.HasPrefix(trimmed, "#") || trimmed == ""

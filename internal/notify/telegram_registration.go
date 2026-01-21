@@ -29,14 +29,14 @@ func truncateTelegramRegistrationBody(body []byte, max int) string {
 	return text
 }
 
-// TelegramRegistrationStatus rappresenta l'esito dell'handshake con il server Telegram centralizzato.
+// TelegramRegistrationStatus represents the result of the handshake with the centralized Telegram server.
 type TelegramRegistrationStatus struct {
 	Code    int
 	Message string
 	Error   error
 }
 
-// CheckTelegramRegistration verifica lo stato della registrazione sul server centralizzato.
+// CheckTelegramRegistration checks the registration status on the centralized server.
 func CheckTelegramRegistration(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) TelegramRegistrationStatus {
 	logTelegramRegistrationDebug(logger, "Telegram registration: start (serverAPIHost=%q serverID=%q len=%d)", serverAPIHost, serverID, len(serverID))
 
@@ -44,7 +44,7 @@ func CheckTelegramRegistration(ctx context.Context, serverAPIHost, serverID stri
 		logTelegramRegistrationDebug(logger, "Telegram registration: missing serverID (empty string)")
 		return TelegramRegistrationStatus{
 			Code:    0,
-			Message: "SERVER_ID non disponibile",
+			Message: "SERVER_ID not available",
 			Error:   fmt.Errorf("server ID missing"),
 		}
 	}

@@ -67,7 +67,7 @@ func SmartMergeFstab(ctx context.Context, logger *logging.Logger, reader *bufio.
 	}
 
 	defaultYes := analysis.RootComparable && analysis.RootMatch && (!analysis.SwapComparable || analysis.SwapMatch)
-	confirmMsg := "Vuoi aggiungere i mount mancanti (NFS/CIFS e dati su UUID/LABEL verificati)?"
+	confirmMsg := "Do you want to add the missing mounts (NFS/CIFS and data mounts with verified UUID/LABEL)?"
 	confirmed, err := confirmLocal(ctx, reader, confirmMsg, defaultYes)
 	if err != nil {
 		return err
@@ -304,13 +304,13 @@ func isSafeMountCandidate(e FstabEntry) bool {
 
 func printFstabAnalysis(logger *logging.Logger, res FstabAnalysisResult) {
 	fmt.Println()
-	logger.Info("Analisi fstab:")
+	logger.Info("fstab analysis:")
 
 	// Root Status
 	if !res.RootComparable {
-		logger.Warning("! Root filesystem: non determinabile (entry mancante in current/backup fstab)")
+		logger.Warning("! Root filesystem: undetermined (missing entry in current/backup fstab)")
 	} else if res.RootMatch {
-		logger.Info("✓ Root filesystem: compatibile (UUID kept from system)")
+		logger.Info("✓ Root filesystem: compatible (UUID kept from system)")
 	} else {
 		// ANSI Yellow/Red might be nice, but stick to standard logger for now.
 		logger.Warning("! Root UUID mismatch: Backup is from a different machine (System info preserved)")
@@ -319,9 +319,9 @@ func printFstabAnalysis(logger *logging.Logger, res FstabAnalysisResult) {
 
 	// Swap Status
 	if !res.SwapComparable {
-		logger.Info("Swap: non determinabile (entry mancante in current/backup fstab)")
+		logger.Info("Swap: undetermined (missing entry in current/backup fstab)")
 	} else if res.SwapMatch {
-		logger.Info("✓ Swap: compatibile")
+		logger.Info("✓ Swap: compatible")
 	} else {
 		logger.Warning("! Swap mismatch: keeping current swap configuration")
 		logger.Debug("  Details: Current=%s, Backup=%s", res.SwapDeviceCurrent, res.SwapDeviceBackup)
@@ -329,20 +329,20 @@ func printFstabAnalysis(logger *logging.Logger, res FstabAnalysisResult) {
 
 	// New Entries
 	if len(res.ProposedMounts) > 0 {
-		logger.Info("+ %d mount(s) sicuri trovati nel backup ma non nel sistema attuale:", len(res.ProposedMounts))
+		logger.Info("+ %d safe mount(s) found in the backup but missing from the current system:", len(res.ProposedMounts))
 		for _, m := range res.ProposedMounts {
 			logger.Info("  %s -> %s (%s)", m.Device, m.MountPoint, m.Type)
 		}
 	} else {
-		logger.Info("✓ Nessun mount aggiuntivo trovato nel backup.")
+		logger.Info("✓ No additional mounts found in the backup.")
 	}
 
 	if len(res.SkippedMounts) > 0 {
-		logger.Warning("! %d mount(s) trovati ma NON proposti automaticamente (potenzialmente rischiosi):", len(res.SkippedMounts))
+		logger.Warning("! %d mount(s) found but NOT auto-proposed (potentially risky):", len(res.SkippedMounts))
 		for _, m := range res.SkippedMounts {
 			logger.Warning("  %s -> %s (%s)", m.Device, m.MountPoint, m.Type)
 		}
-		logger.Info("  Suggerimento: verifica dischi/UUID e opzioni (nofail/_netdev) prima di aggiungerli a /etc/fstab.")
+		logger.Info("  Hint: verify disks/UUIDs and options (nofail/_netdev) before adding them to /etc/fstab.")
 	}
 	fmt.Println()
 }

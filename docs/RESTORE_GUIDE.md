@@ -2470,24 +2470,24 @@ A: Yes, in two ways:
    CLOUD_REMOTE_PATH=/pbs-backups/server1
    ```
 
-   - During `--decrypt` or `--restore` (CLI o TUI), ProxSave leggerà la stessa
-     combinazione `CLOUD_REMOTE` / `CLOUD_REMOTE_PATH` e mostrerà una voce:
+   - During `--decrypt` or `--restore` (CLI or TUI), ProxSave will read the same
+     `CLOUD_REMOTE` / `CLOUD_REMOTE_PATH` combination and show an entry:
        - `Cloud backups (rclone)`
-   - Selezionandola, il tool:
-     - elenca i bundle `.bundle.tar` sul remote con `rclone lsf`;
-     - legge i metadata/manifest tramite `rclone cat` (senza scaricare tutto);
-     - quando scegli un backup, lo scarica in `/tmp/proxsave` e procede al decrypt/restore.
+   - When selected, the tool:
+     - lists `.bundle.tar` bundles on the remote with `rclone lsf`;
+     - reads metadata/manifest via `rclone cat` (without downloading everything);
+     - when you pick a backup, downloads it to `/tmp/proxsave` and proceeds with decrypt/restore.
 
-2. **Da mount locale rclone (solo restore)**  
-   Se preferisci montare il backend rclone come filesystem locale:
+2. **From a local rclone mount (restore-only)**  
+   If you prefer to mount the rclone backend as a local filesystem:
 
    ```bash
    # Mount cloud storage locally
    rclone mount remote:bucket /mnt/cloud &
 
    # Configure in backup.env (restore-only scenario)
-   CLOUD_ENABLED=false                      # cloud upload disabilitato
-   # Usa BACKUP_PATH / SECONDARY_PATH oppure naviga il mount direttamente
+   CLOUD_ENABLED=false                      # cloud upload disabled
+   # Use BACKUP_PATH / SECONDARY_PATH or browse the mount directly
    ```
 
    In questo caso puoi:

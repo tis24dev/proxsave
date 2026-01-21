@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-// FileExists verifica se un file esiste
+// FileExists checks whether a file exists.
 func FileExists(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -17,7 +17,7 @@ func FileExists(path string) bool {
 	return !info.IsDir()
 }
 
-// DirExists verifica se una directory esiste
+// DirExists checks whether a directory exists.
 func DirExists(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -26,7 +26,7 @@ func DirExists(path string) bool {
 	return info.IsDir()
 }
 
-// EnsureDir crea una directory se non esiste
+// EnsureDir creates a directory if it doesn't exist.
 func EnsureDir(path string) error {
 	if DirExists(path) {
 		return nil
@@ -34,7 +34,7 @@ func EnsureDir(path string) error {
 	return os.MkdirAll(path, 0755)
 }
 
-// ComputeSHA256 calcola il checksum SHA256 di un file
+// ComputeSHA256 computes the SHA256 checksum of a file.
 func ComputeSHA256(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -50,7 +50,7 @@ func ComputeSHA256(filePath string) (string, error) {
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
-// GetFileSize restituisce la dimensione di un file in bytes
+// GetFileSize returns the file size in bytes.
 func GetFileSize(filePath string) (int64, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -59,7 +59,7 @@ func GetFileSize(filePath string) (int64, error) {
 	return info.Size(), nil
 }
 
-// AbsPath restituisce il path assoluto di un file
+// AbsPath returns the absolute path of a file.
 func AbsPath(path string) (string, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -68,7 +68,7 @@ func AbsPath(path string) (string, error) {
 	return absPath, nil
 }
 
-// IsAbsPath verifica se un path è assoluto
+// IsAbsPath checks whether a path is absolute.
 func IsAbsPath(path string) bool {
 	return filepath.IsAbs(path)
 }

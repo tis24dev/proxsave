@@ -853,39 +853,39 @@ CLOUD_LOG_PATH=
 
 ## Example 9: Test in a Chroot/Fixture
 
-**Scenario**: Esegui la raccolta su un root alternativo (chroot, snapshot montato, fixture di test) senza toccare il filesystem live.
+**Scenario**: Run collection against an alternate system root (chroot, mounted snapshot, test fixture) without touching the live filesystem.
 
 **Use case**:
-- CI/test di backup in ambiente isolato
-- Analisi offline di un'immagine/snapshot montata
-- Esecuzione in container che monta un root diverso
+- CI/test backups in an isolated environment
+- Offline analysis of a mounted image/snapshot
+- Running inside a container that mounts a different root
 
 ### Configuration
 
 ```bash
 # configs/backup.env
-SYSTEM_ROOT_PREFIX=/mnt/snapshot-root   # punta al root alternativo
+SYSTEM_ROOT_PREFIX=/mnt/snapshot-root   # points to the alternate root
 BACKUP_ENABLED=true
 ENABLE_GO_BACKUP=true
-# /etc, /var, /root, /home vengono risolti sotto il prefisso
+# /etc, /var, /root, /home are resolved under the prefix
 ```
 
 ### Setup Steps
 
 ```bash
-# 1) Monta o prepara il root alternativo
-mount /dev/vg0/snap /mnt/snapshot-root   # esempio
+# 1) Mount or prepare the alternate root
+mount /dev/vg0/snap /mnt/snapshot-root   # example
 
-# 2) Esegui un dry-run
+# 2) Run a dry-run
 SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxsave --dry-run
 
-# 3) Esegui il backup reale (opzionale)
+# 3) Run the actual backup (optional)
 SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxsave
 ```
 
 ### Expected Results
-- I file raccolti riflettono il contenuto di `/mnt/snapshot-root/etc`, `/var`, `/root`, `/home`, ecc.
-- Nessuna scrittura sul filesystem live del nodo.
+- Collected files reflect the contents of `/mnt/snapshot-root/etc`, `/var`, `/root`, `/home`, etc.
+- No writes to the node's live filesystem.
 
 ---
 

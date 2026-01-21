@@ -15,8 +15,8 @@ type bootstrapEntry struct {
 	raw     bool
 }
 
-// BootstrapLogger accumula i log generati prima che il logger principale sia
-// inizializzato, così da poterli riversare nel log finale.
+// BootstrapLogger accumulates logs generated before the main logger is initialized,
+// so they can be flushed into the final log.
 type BootstrapLogger struct {
 	mu       sync.Mutex
 	entries  []bootstrapEntry
@@ -25,35 +25,35 @@ type BootstrapLogger struct {
 	mirror   *Logger
 }
 
-// NewBootstrapLogger crea un nuovo bootstrap logger con livello INFO di default.
+// NewBootstrapLogger creates a new bootstrap logger with INFO level by default.
 func NewBootstrapLogger() *BootstrapLogger {
 	return &BootstrapLogger{
 		minLevel: types.LogLevelInfo,
 	}
 }
 
-// SetLevel aggiorna il livello minimo che verrà usato al flush.
+// SetLevel updates the minimum level used during Flush.
 func (b *BootstrapLogger) SetLevel(level types.LogLevel) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.minLevel = level
 }
 
-// Println registra una riga “raw” (usata per banner/testo senza header).
+// Println records a raw line (used for banners/text without a header).
 func (b *BootstrapLogger) Println(message string) {
 	fmt.Println(message)
 	b.mirrorLog(types.LogLevelInfo, message)
 	b.recordRaw(message)
 }
 
-// Debug registra un messaggio di debug senza stamparlo a console.
+// Debug records a debug message without printing it to the console.
 func (b *BootstrapLogger) Debug(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	b.mirrorLog(types.LogLevelDebug, msg)
 	b.record(types.LogLevelDebug, msg)
 }
 
-// Printf registra una riga formattata come raw.
+// Printf records a formatted line as raw.
 func (b *BootstrapLogger) Printf(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	fmt.Println(msg)
@@ -69,7 +69,7 @@ func (b *BootstrapLogger) Info(format string, args ...interface{}) {
 	b.record(types.LogLevelInfo, msg)
 }
 
-// Warning registra un messaggio di warning precoce (stampato su stderr).
+// Warning records an early warning message (printed to stderr).
 func (b *BootstrapLogger) Warning(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	if !strings.HasSuffix(msg, "\n") {
@@ -81,7 +81,7 @@ func (b *BootstrapLogger) Warning(format string, args ...interface{}) {
 	b.record(types.LogLevelWarning, msg)
 }
 
-// Error registra un messaggio di errore precoce (stderr).
+// Error records an early error message (stderr).
 func (b *BootstrapLogger) Error(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	if !strings.HasSuffix(msg, "\n") {
@@ -112,7 +112,7 @@ func (b *BootstrapLogger) recordRaw(message string) {
 	})
 }
 
-// Flush riversa le entry accumulate nel logger principale (solo la prima volta).
+// Flush flushes accumulated entries into the main logger (only the first time).
 func (b *BootstrapLogger) Flush(logger *Logger) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

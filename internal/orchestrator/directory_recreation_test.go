@@ -443,14 +443,14 @@ func TestIsLikelyZFSMountPointNoMatch(t *testing.T) {
 	}
 }
 
-// Test: isLikelyZFSMountPoint con path contenente "datastore"
+// Test: isLikelyZFSMountPoint with a path containing "datastore"
 func TestIsLikelyZFSMountPointDatastorePath(t *testing.T) {
 	logger := newDirTestLogger()
 	cachePath, restore := overridePath(t, &zpoolCachePath, "zpool.cache")
 	defer restore()
 	writeFile(t, cachePath, "cache")
 
-	// Path con "datastore" nel nome dovrebbe matchare
+	// A path with "datastore" in the name should match
 	if !isLikelyZFSMountPoint("/var/lib/datastore", logger) {
 		t.Fatalf("expected true for path containing 'datastore'")
 	}
@@ -459,10 +459,10 @@ func TestIsLikelyZFSMountPointDatastorePath(t *testing.T) {
 	}
 }
 
-// Test: createPVEStorageStructure ritorna errore se base directory non creabile
+// Test: createPVEStorageStructure returns an error if the base directory can't be created
 func TestCreatePVEStorageStructureBaseError(t *testing.T) {
 	logger := newDirTestLogger()
-	// Path con carattere nullo non è valido
+	// A path containing a NUL byte is invalid
 	invalidPath := "/dev/null/cannot/create/here"
 	err := createPVEStorageStructure(invalidPath, "dir", logger)
 	if err == nil {
@@ -470,10 +470,10 @@ func TestCreatePVEStorageStructureBaseError(t *testing.T) {
 	}
 }
 
-// Test: createPBSDatastoreStructure ritorna errore se base directory non creabile
+// Test: createPBSDatastoreStructure returns an error if the base directory can't be created
 func TestCreatePBSDatastoreStructureBaseError(t *testing.T) {
 	logger := newDirTestLogger()
-	// Override zpoolCachePath per evitare ZFS detection
+	// Override zpoolCachePath to avoid ZFS detection
 	_, cacheRestore := overridePath(t, &zpoolCachePath, "zpool.cache")
 	defer cacheRestore()
 
@@ -484,10 +484,10 @@ func TestCreatePBSDatastoreStructureBaseError(t *testing.T) {
 	}
 }
 
-// Test: RecreateDirectoriesFromConfig propaga errore da RecreateStorageDirectories
+// Test: RecreateDirectoriesFromConfig propagates an error from RecreateStorageDirectories
 func TestRecreateDirectoriesFromConfigPVEStatError(t *testing.T) {
 	logger := newDirTestLogger()
-	// Creiamo una directory e la rendiamo non leggibile per causare errore stat
+	// Create a directory and make it unreadable to trigger a stat error
 	tmpDir := t.TempDir()
 	cfgDir := filepath.Join(tmpDir, "noperm")
 	if err := os.MkdirAll(cfgDir, 0o000); err != nil {
@@ -501,7 +501,7 @@ func TestRecreateDirectoriesFromConfigPVEStatError(t *testing.T) {
 	defer func() { storageCfgPath = prev }()
 
 	err := RecreateDirectoriesFromConfig(SystemTypePVE, logger)
-	// Se siamo root, il test non funziona come previsto
+	// If we're root, the test won't behave as expected
 	if os.Getuid() == 0 {
 		t.Skip("test requires non-root user")
 	}
@@ -510,10 +510,10 @@ func TestRecreateDirectoriesFromConfigPVEStatError(t *testing.T) {
 	}
 }
 
-// Test: RecreateDirectoriesFromConfig propaga errore da RecreateDatastoreDirectories
+// Test: RecreateDirectoriesFromConfig propagates an error from RecreateDatastoreDirectories
 func TestRecreateDirectoriesFromConfigPBSStatError(t *testing.T) {
 	logger := newDirTestLogger()
-	// Creiamo una directory e la rendiamo non leggibile
+	// Create a directory and make it unreadable
 	tmpDir := t.TempDir()
 	cfgDir := filepath.Join(tmpDir, "noperm")
 	if err := os.MkdirAll(cfgDir, 0o000); err != nil {
@@ -527,7 +527,7 @@ func TestRecreateDirectoriesFromConfigPBSStatError(t *testing.T) {
 	defer func() { datastoreCfgPath = prev }()
 
 	err := RecreateDirectoriesFromConfig(SystemTypePBS, logger)
-	// Se siamo root, il test non funziona come previsto
+	// If we're root, the test won't behave as expected
 	if os.Getuid() == 0 {
 		t.Skip("test requires non-root user")
 	}

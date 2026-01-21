@@ -1896,23 +1896,23 @@ func runFullRestoreTUI(ctx context.Context, candidate *decryptCandidate, prepare
 						logger.Info("No new safe mounts found to restore. Keeping current fstab.")
 					} else {
 						var msg strings.Builder
-						msg.WriteString("ProxSave ha trovato mount mancanti in /etc/fstab.\n\n")
+						msg.WriteString("ProxSave found missing mounts in /etc/fstab.\n\n")
 						if analysis.RootComparable && !analysis.RootMatch {
-							msg.WriteString("⚠ Root UUID mismatch: il backup sembra provenire da una macchina diversa.\n")
+							msg.WriteString("⚠ Root UUID mismatch: the backup appears to come from a different machine.\n")
 						}
 						if analysis.SwapComparable && !analysis.SwapMatch {
-							msg.WriteString("⚠ Swap mismatch: verrà mantenuta la configurazione swap attuale.\n")
+							msg.WriteString("⚠ Swap mismatch: the current swap configuration will be kept.\n")
 						}
-						msg.WriteString("\nMount proposti (sicuri):\n")
+						msg.WriteString("\nProposed mounts (safe):\n")
 						for _, m := range analysis.ProposedMounts {
 							fmt.Fprintf(&msg, "  - %s -> %s (%s)\n", m.Device, m.MountPoint, m.Type)
 						}
 						if len(analysis.SkippedMounts) > 0 {
-							msg.WriteString("\nMount trovati ma non proposti automaticamente:\n")
+							msg.WriteString("\nMounts found but not auto-proposed:\n")
 							for _, m := range analysis.SkippedMounts {
 								fmt.Fprintf(&msg, "  - %s -> %s (%s)\n", m.Device, m.MountPoint, m.Type)
 							}
-							msg.WriteString("\nSuggerimento: verifica dischi/UUID e opzioni (nofail/_netdev) prima di aggiungerli.\n")
+							msg.WriteString("\nHint: verify disks/UUIDs and options (nofail/_netdev) before adding them.\n")
 						}
 
 						apply, perr := promptYesNoTUIFunc("Smart fstab merge", configPath, buildSig, msg.String(), "Apply", "Skip")
