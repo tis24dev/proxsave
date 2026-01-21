@@ -298,7 +298,7 @@ func unescapeOctal(s string) string {
 				}
 			}
 			if valid {
-				val, err := strconv.ParseInt(octal, 8, 8)
+				val, err := strconv.ParseUint(octal, 8, 8)
 				if err == nil {
 					result.WriteByte(byte(val))
 					i += 4
