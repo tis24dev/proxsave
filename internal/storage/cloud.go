@@ -1271,6 +1271,10 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 	if base == "" {
 		return false
 	}
+	baseForWarning := c.cloudLogBase(base)
+	if baseForWarning == "" {
+		baseForWarning = base
+	}
 
 	host, ts, ok := extractLogKeyFromBackup(backupFile)
 	if !ok {
@@ -1296,7 +1300,7 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 		msg := strings.TrimSpace(string(output))
 		if isRcloneObjectNotFound(msg) || isRcloneObjectNotFound(err.Error()) {
 			if strings.Contains(strings.ToLower(msg), "directory") {
-				c.markCloudLogPathMissing(base, msg)
+				c.markCloudLogPathMissing(baseForWarning, msg)
 			} else {
 				c.logger.Debug("Cloud logs: log already removed %s (%s)", cloudPath, msg)
 			}
@@ -1317,7 +1321,7 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 	if c == nil || c.config == nil {
 		return -1
 	}
-	base := strings.TrimSpace(c.config.CloudLogPath)
+	base := c.cloudLogBase(c.config.CloudLogPath)
 	if base == "" {
 		return 0
 	}
@@ -1355,6 +1359,18 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 		}
 	}
 	return count
+}
+
+func (c *CloudStorage) cloudLogBase(basePath string) string {
+	base := strings.TrimSpace(basePath)
+	if base == "" {
+		return ""
+	}
+	if !strings.Contains(base, ":") && c != nil && strings.TrimSpace(c.remote) != "" {
+		base = strings.TrimSpace(c.remote) + ":" + base
+	}
+	base = strings.TrimRight(base, "/")
+	return base
 }
 
 // cloudLogPath builds the full cloud log path, mirroring buildCloudLogDestination logic.

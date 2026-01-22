@@ -575,6 +575,67 @@ func TestCloudStorageSkipsCloudLogsWhenPathMissing(t *testing.T) {
 	}
 }
 
+func TestCloudStorageCountLogFiles_NormalizesPathOnlyCloudLogPath(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:  true,
+		CloudRemote:   "remote:base-prefix",
+		CloudLogPath:  "/logs/",
+		RcloneRetries: 1,
+	}
+	cs := newCloudStorageForTest(cfg)
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{
+				name: "rclone",
+				args: []string{"lsf", "remote:/logs", "--files-only"},
+				out:  "backup-host-20250101-010101.log\n",
+			},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	if got := cs.countLogFiles(context.Background()); got != 1 {
+		t.Fatalf("countLogFiles() = %d; want 1", got)
+	}
+}
+
+func TestCloudStorageSkipsCloudLogsWhenPathOnlyLogDirMissing(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:  true,
+		CloudRemote:   "remote",
+		CloudLogPath:  "/logs",
+		RcloneRetries: 1,
+	}
+	cs := newCloudStorageForTest(cfg)
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{
+				name: "rclone",
+				args: []string{"lsf", "remote:/logs", "--files-only"},
+				out:  "2025/11/16 22:11:47 ERROR : remote:/logs: directory not found",
+				err:  errors.New("exit status 3"),
+			},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	if got := cs.countLogFiles(context.Background()); got != -1 {
+		t.Fatalf("countLogFiles() = %d; want -1", got)
+	}
+	if len(queue.calls) != 1 {
+		t.Fatalf("expected 1 rclone call, got %d", len(queue.calls))
+	}
+
+	if got := cs.countLogFiles(context.Background()); got != -1 {
+		t.Fatalf("countLogFiles() second call = %d; want -1", got)
+	}
+	if len(queue.calls) != 1 {
+		t.Fatalf("expected no additional rclone calls, got %d", len(queue.calls))
+	}
+}
+
 func TestCloudStorageRemoteHelpersAndBuildArgs(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:    true,
