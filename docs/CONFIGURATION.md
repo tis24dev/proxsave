@@ -425,7 +425,11 @@ CLOUD_ENABLED=false                # true | false
 CLOUD_REMOTE=GoogleDrive                   # remote name from `rclone config`
 CLOUD_REMOTE_PATH=/proxsave/backup         # folder path inside the remote
 
-# Cloud log path (same remote, optional)
+# Cloud log path (optional)
+# Recommended (same remote): path-only (no remote prefix) and no trailing slash
+# CLOUD_LOG_PATH=proxsave/log
+# Legacy / different remote: explicit remote:path
+# CLOUD_LOG_PATH=OtherRemote:proxsave/log
 CLOUD_LOG_PATH=/proxsave/log               # leave empty to disable log uploads
 
 # Legacy compatibility (still supported):
@@ -444,6 +448,20 @@ CLOUD_PARALLEL_VERIFICATION=true   # true | false
 
 # Preflight connectivity check
 CLOUD_WRITE_HEALTHCHECK=false      # true | false (auto-fallback mode vs force write test)
+```
+
+### Recommended Remote Path Formats (Cloud)
+
+To avoid ambiguity, prefer consistent formats:
+- `CLOUD_REMOTE`: remote **name** only (no `:`), e.g. `nextcloud` or `GoogleDrive`.
+- `CLOUD_REMOTE_PATH`: path **inside** the remote (no remote prefix), **no trailing slash** (leading `/` is accepted).
+- `CLOUD_LOG_PATH`: log **folder path**. When logs are on the same remote as backups, prefer **path-only** here too; use `otherremote:/path` only when logs must go to a different remote.
+
+Example (same remote for backups + logs):
+```bash
+CLOUD_REMOTE=nextcloud-katerasrael
+CLOUD_REMOTE_PATH=B+K/BACKUP/marcellus
+CLOUD_LOG_PATH=B+K/BACKUP/marcellus/logs
 ```
 
 ### Connectivity Check Modes

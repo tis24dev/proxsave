@@ -1715,6 +1715,76 @@ This protects SSH/GUI access during network changes.
 **Result reporting**:
 - If you do not type `COMMIT`, ProxSave completes the restore with warnings and reports that the original network settings were restored (including the current IP, when detectable), plus the rollback log path.
 
+#### Ctrl+C footer: `NETWORK ROLLBACK` status
+
+If you interrupt ProxSave with **Ctrl+C** and a live network apply/rollback timer was involved, the CLI footer can print a `NETWORK ROLLBACK` block with a recommended reconnection IP and the rollback log path.
+
+The status can be one of:
+- **ARMED**: rollback is still pending and will execute automatically at the deadline (a short countdown may be shown).
+- **DISARMED/CLEARED**: rollback will **not** run (the marker was removed before the deadline; this can happen if it was manually cleared/disarmed).
+- **EXECUTED**: rollback already ran (marker removed after the deadline).
+
+**Which IP should I use?**
+- **ARMED**: prepare to reconnect using the **pre-apply IP** once rollback runs.
+- **EXECUTED**: reconnect using the **pre-apply IP** (the system should be back on the previous network config).
+- **DISARMED/CLEARED**: reconnect using the **post-apply IP** (the applied config remains active).
+
+Notes:
+- *Pre-apply IP* is derived from the `before.txt` snapshot in `/tmp/proxsave/network_apply_*` and may be `unknown` if it cannot be parsed.
+- *Post-apply IP* is what ProxSave could observe on the management interface after applying the new config; it may include CIDR suffixes (for example `10.0.0.4/24`) or multiple addresses.
+
+**Example outputs**
+
+The `NETWORK ROLLBACK` block is printed just before the standard ProxSave footer (the footer color reflects the exit status, e.g. magenta on Ctrl+C).
+
+Example 1 — **ARMED** (rollback pending, countdown shown for a few seconds):
+```text
+===========================================
+NETWORK ROLLBACK
+
+  Status: ARMED (will execute automatically)
+  Pre-apply IP (from snapshot): 192.168.1.100
+  Post-apply IP (observed): 10.0.0.4/24
+  Rollback log: /tmp/proxsave/network_rollback_20260122_153012.log
+
+Connection will be temporarily interrupted during restore.
+Remember to reconnect using the pre-apply IP: 192.168.1.100
+  Remaining: 147s
+===========================================
+
+===========================================
+ProxSave - Go - <build signature>
+===========================================
+```
+
+Example 2 — **EXECUTED** (rollback already ran, no countdown):
+```text
+===========================================
+NETWORK ROLLBACK
+
+  Status: EXECUTED (marker removed)
+  Pre-apply IP (from snapshot): 192.168.1.100
+  Post-apply IP (observed): 10.0.0.4/24
+  Rollback log: /tmp/proxsave/network_rollback_20260122_153012.log
+
+Rollback executed: reconnect using the pre-apply IP: 192.168.1.100
+===========================================
+```
+
+Example 3 — **DISARMED/CLEARED** (rollback will not run, applied config remains active):
+```text
+===========================================
+NETWORK ROLLBACK
+
+  Status: DISARMED/CLEARED (marker removed before deadline)
+  Pre-apply IP (from snapshot): 192.168.1.100
+  Post-apply IP (observed): 10.0.0.4/24
+  Rollback log: /tmp/proxsave/network_rollback_20260122_153012.log
+
+Rollback will NOT run: reconnect using the post-apply IP: 10.0.0.4/24
+===========================================
+```
+
 ### 5. Smart `/etc/fstab` Merge (Optional)
 
 If the restore includes filesystem configuration (notably `/etc/fstab`), ProxSave can run a **smart merge** instead of blindly overwriting your current `fstab`.

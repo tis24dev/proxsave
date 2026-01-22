@@ -553,6 +553,23 @@ MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
 ---
 ### 7. Restore Issues
 
+#### Restore drops SSH / IP changes during network restore
+
+**Symptoms**:
+- SSH/Web UI disconnects during restore when the `network` category is applied live
+- You see a `NETWORK ROLLBACK` block in the footer (especially after Ctrl+C)
+
+**Explanation**:
+- Live network apply can change IP/routes immediately.
+- ProxSave protects access by arming a rollback timer that can revert network-related files automatically if `COMMIT` is not received in time.
+
+**What to do**:
+- Prefer running restore from the **local console/IPMI**, not over SSH.
+- If the footer says **ARMED**, reconnect using the **pre-apply IP** once rollback runs.
+- If it says **EXECUTED**, reconnect using the **pre-apply IP** (rollback already ran).
+- If it says **DISARMED/CLEARED**, reconnect using the **post-apply IP** (new config remains active).
+- Check the rollback log path printed in the footer for details.
+
 #### Error during network preflight: `addr_add_dry_run() got an unexpected keyword argument 'nodad'`
 
 **Symptoms**:
