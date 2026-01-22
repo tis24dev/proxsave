@@ -42,7 +42,7 @@ func MapInputError(err error) error {
 }
 
 // ReadLineWithContext reads a single line and supports cancellation. On ctx cancellation
-// or stdin closure it returns ErrInputAborted.
+// or stdin closure it returns ErrInputAborted. On ctx deadline it returns context.DeadlineExceeded.
 func ReadLineWithContext(ctx context.Context, reader *bufio.Reader) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -58,6 +58,9 @@ func ReadLineWithContext(ctx context.Context, reader *bufio.Reader) (string, err
 	}()
 	select {
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", context.DeadlineExceeded
+		}
 		return "", ErrInputAborted
 	case res := <-ch:
 		return res.line, res.err
@@ -65,7 +68,8 @@ func ReadLineWithContext(ctx context.Context, reader *bufio.Reader) (string, err
 }
 
 // ReadPasswordWithContext reads a password (no echo) and supports cancellation. On ctx
-// cancellation or stdin closure it returns ErrInputAborted.
+// cancellation or stdin closure it returns ErrInputAborted. On ctx deadline it returns
+// context.DeadlineExceeded.
 func ReadPasswordWithContext(ctx context.Context, readPassword func(int) ([]byte, error), fd int) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -84,6 +88,9 @@ func ReadPasswordWithContext(ctx context.Context, readPassword func(int) ([]byte
 	}()
 	select {
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, context.DeadlineExceeded
+		}
 		return nil, ErrInputAborted
 	case res := <-ch:
 		return res.b, res.err

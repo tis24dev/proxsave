@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/input"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestPromptYesNo(t *testing.T) {
@@ -48,5 +52,51 @@ func TestPromptYesNo_ContextCanceledReturnsAbortError(t *testing.T) {
 	}
 	if !errors.Is(err, input.ErrInputAborted) {
 		t.Fatalf("err=%v; want %v", err, input.ErrInputAborted)
+	}
+}
+
+func TestPromptYesNoWithCountdown_ZeroTimeoutUsesDefault(test *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("\n"))
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	result, err := promptYesNoWithCountdown(context.Background(), reader, logger, "Proceed?", 0, true)
+	if err != nil {
+		test.Fatalf("unexpected error: %v", err)
+	}
+	if !result {
+		test.Fatalf("expected true for default yes")
+	}
+}
+
+func TestPromptYesNoWithCountdown_InputYes(test *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("yes\n"))
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	result, err := promptYesNoWithCountdown(context.Background(), reader, logger, "Proceed?", 2*time.Second, false)
+	if err != nil {
+		test.Fatalf("unexpected error: %v", err)
+	}
+	if !result {
+		test.Fatalf("expected true for yes input")
+	}
+}
+
+func TestPromptYesNoWithCountdown_TimeoutReturnsNo(test *testing.T) {
+	pipeReader, pipeWriter := io.Pipe()
+	defer pipeReader.Close()
+	defer pipeWriter.Close()
+
+	reader := bufio.NewReader(pipeReader)
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	result, err := promptYesNoWithCountdown(context.Background(), reader, logger, "Proceed?", 100*time.Millisecond, true)
+	if err != nil {
+		test.Fatalf("unexpected error: %v", err)
+	}
+	if result {
+		test.Fatalf("expected false on timeout")
 	}
 }
