@@ -15,6 +15,15 @@ import (
 // Callers should translate this into the appropriate workflow-level abort error.
 var ErrInputAborted = errors.New("input aborted")
 
+// IsAborted reports whether an operation was aborted by the user (typically via Ctrl+C),
+// by checking for ErrInputAborted and context cancellation.
+func IsAborted(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrInputAborted) || errors.Is(err, context.Canceled)
+}
+
 // MapInputError normalizes common stdin errors (EOF/closed fd) into ErrInputAborted.
 func MapInputError(err error) error {
 	if err == nil {

@@ -1642,6 +1642,14 @@ Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort: _
 - Case-sensitive
 - Prevents accidental restoration
 
+**Prompt timeouts (auto-skip)**:
+- Some interactive prompts include a visible countdown (currently **90 seconds**) to avoid getting “stuck” waiting for input in remote/automated scenarios.
+- If the user does not answer before the countdown reaches 0, ProxSave proceeds with a **safe default** (no destructive action) and logs the decision.
+
+Current auto-skip prompts:
+- **Smart `/etc/fstab` merge**: defaults to **Skip** (no changes).
+- **Live network apply** (“Apply restored network configuration now…”): defaults to **No** (stays staged/on-disk only; no live reload).
+
 ### 3. Compatibility Validation
 
 **System Type Detection**:
@@ -1661,6 +1669,9 @@ Type "yes" to continue anyway or "no" to abort: _
 
 If the **network** category is restored, ProxSave can optionally apply the
 new network configuration immediately using a **transactional rollback timer**.
+
+**Apply prompt auto-skip**:
+- The “apply now” prompt includes a **90-second** countdown; if you do not answer in time, ProxSave defaults to **No** and skips the live reload.
 
 **Important (console recommended)**:
 - Run the live network apply/commit step from the **local console** (physical console, IPMI/iDRAC/iLO, Proxmox console, or hypervisor console), not from SSH.
@@ -1704,7 +1715,20 @@ This protects SSH/GUI access during network changes.
 **Result reporting**:
 - If you do not type `COMMIT`, ProxSave completes the restore with warnings and reports that the original network settings were restored (including the current IP, when detectable), plus the rollback log path.
 
-### 4. Hard Guards
+### 5. Smart `/etc/fstab` Merge (Optional)
+
+If the restore includes filesystem configuration (notably `/etc/fstab`), ProxSave can run a **smart merge** instead of blindly overwriting your current `fstab`.
+
+**What it does**:
+- Compares the current `/etc/fstab` with the backup copy.
+- Keeps existing critical entries (for example, root and swap) when they already match the running system.
+- Detects **safe mount candidates** from the backup (for example, additional NFS mounts) and offers to add them.
+
+**Safety behavior**:
+- The user is prompted before any change is written.
+- The prompt includes a **90-second** countdown; if you do not answer in time, ProxSave defaults to **Skip** (no changes).
+
+### 6. Hard Guards
 
 **Path Traversal Prevention**:
 - All extracted paths validated
@@ -1721,7 +1745,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 ```
 - Absolute prevention of `/etc/pve` corruption
 
-### 5. Service Management Fail-Fast
+### 7. Service Management Fail-Fast
 
 **Service Stop**: If ANY service fails to stop → ABORT entire restore
 
@@ -1730,7 +1754,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 - Better to fail safely than corrupt database
 - User can investigate and retry
 
-### 6. Comprehensive Logging
+### 8. Comprehensive Logging
 
 **Detailed Log**: `/tmp/proxsave/restore_YYYYMMDD_HHMMSS.log`
 
@@ -1768,7 +1792,7 @@ grep "storage.cfg" /tmp/proxsave/restore_20251120_143052.log
 grep "FAILED" /tmp/proxsave/restore_20251120_143052.log
 ```
 
-### 7. Checksum Verification
+### 9. Checksum Verification
 
 **SHA256 Verification**:
 - Backup checksum verified after decryption
@@ -1783,7 +1807,7 @@ Actual:   a1b2c3...
 ✓ Checksum verified successfully.
 ```
 
-### 8. Deferred Service Restart
+### 10. Deferred Service Restart
 
 **Go defer pattern** ensures services restart even if restore fails:
 

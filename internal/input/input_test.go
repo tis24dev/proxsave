@@ -39,6 +39,21 @@ func TestMapInputError(t *testing.T) {
 	}
 }
 
+func TestIsAborted(t *testing.T) {
+	if IsAborted(nil) {
+		t.Fatalf("expected false for nil")
+	}
+	if !IsAborted(ErrInputAborted) {
+		t.Fatalf("expected true for ErrInputAborted")
+	}
+	if !IsAborted(context.Canceled) {
+		t.Fatalf("expected true for context.Canceled")
+	}
+	if IsAborted(errors.New("other")) {
+		t.Fatalf("expected false for non-abort errors")
+	}
+}
+
 func TestReadLineWithContext_ReturnsLine(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("hello\n"))
 	got, err := ReadLineWithContext(context.Background(), reader)
@@ -145,4 +160,3 @@ func TestReadPasswordWithContext_CancelledReturnsAborted(t *testing.T) {
 		t.Fatalf("err=%v; want %v", err, ErrInputAborted)
 	}
 }
-

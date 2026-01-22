@@ -232,7 +232,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 		clusterServicesStopped = true
 		defer func() {
-			if err := startPVEClusterServices(ctx, logger); err != nil {
+			restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
+			defer cancel()
+			if err := startPVEClusterServices(restartCtx, logger); err != nil {
 				logger.Warning("Failed to restart PVE services after restore: %v", err)
 			}
 		}()
@@ -254,7 +256,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		} else {
 			pbsServicesStopped = true
 			defer func() {
-				if err := startPBSServices(ctx, logger); err != nil {
+				restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
+				defer cancel()
+				if err := startPBSServices(restartCtx, logger); err != nil {
 					logger.Warning("Failed to restart PBS services after restore: %v", err)
 				}
 			}()
@@ -353,6 +357,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 
 		if exportLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, exportRoot, plan.ExportCategories, RestoreModeCustom, logger); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
 			logger.Warning("Export completed with errors: %v", err)
 		} else {
 			exportLogPath = exportLog
@@ -364,6 +371,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		if exportRoot == "" {
 			logger.Warning("Cluster SAFE mode selected but export directory not available; skipping automatic pvesh apply")
 		} else if err := runSafeClusterApply(ctx, reader, exportRoot, logger); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
 			logger.Warning("Cluster SAFE apply completed with errors: %v", err)
 		}
 	}
@@ -380,6 +390,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 		}
 
 		if stageLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, stageRoot, plan.StagedCategories, RestoreModeCustom, logger); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
 			logger.Warning("Staging completed with errors: %v", err)
 		} else {
 			stageLogPath = stageLog
@@ -387,12 +400,18 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 		logger.Info("")
 		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
 			logger.Warning("PBS staged config apply: %v", err)
 		}
 	}
 
 	stageRootForNetworkApply := stageRoot
 	if installed, err := maybeInstallNetworkConfigFromStage(ctx, logger, plan, stageRoot, prepared.ArchivePath, networkRollbackBackup, cfg.DryRun); err != nil {
+		if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+			return err
+		}
 		logger.Warning("Network staged install: %v", err)
 	} else if installed {
 		stageRootForNetworkApply = ""
@@ -428,12 +447,20 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 			} else {
 				fsCategory := []Category{*fsCat}
 				if _, err := extractSelectiveArchive(ctx, prepared.ArchivePath, fsTempDir, fsCategory, RestoreModeCustom, logger); err != nil {
+					if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+						return err
+					}
 					logger.Warning("Failed to extract filesystem config for merge: %v", err)
 				} else {
 					// Perform Smart Merge
 					currentFstab := filepath.Join(destRoot, "etc", "fstab")
 					backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
 					if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, cfg.DryRun); err != nil {
+						if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+							logger.Info("Restore aborted by user during Smart Filesystem Configuration Merge.")
+							return err
+						}
+						restoreHadWarnings = true
 						logger.Warning("Smart Fstab Merge failed: %v", err)
 					}
 				}
@@ -445,6 +472,9 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if plan.HasCategoryID("network") {
 		logger.Info("")
 		if err := maybeRepairResolvConfAfterRestore(ctx, logger, prepared.ArchivePath, cfg.DryRun); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
 			restoreHadWarnings = true
 			logger.Warning("DNS resolver repair: %v", err)
 		}
@@ -452,6 +482,10 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 
 	logger.Info("")
 	if err := maybeApplyNetworkConfigCLI(ctx, reader, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, cfg.DryRun); err != nil {
+		if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+			logger.Info("Restore aborted by user during network apply prompt.")
+			return err
+		}
 		restoreHadWarnings = true
 		if errors.Is(err, ErrNetworkApplyNotCommitted) {
 			var notCommitted *NetworkApplyNotCommittedError
@@ -1188,6 +1222,10 @@ func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryp
 				currentFstab := filepath.Join(destRoot, "etc", "fstab")
 				backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
 				if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, dryRun); err != nil {
+					if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+						logger.Info("Restore aborted by user during Smart Filesystem Configuration Merge.")
+						return err
+					}
 					logger.Warning("Smart Fstab Merge failed: %v", err)
 				}
 			}

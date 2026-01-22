@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -68,7 +68,7 @@ func SmartMergeFstab(ctx context.Context, logger *logging.Logger, reader *bufio.
 
 	defaultYes := analysis.RootComparable && analysis.RootMatch && (!analysis.SwapComparable || analysis.SwapMatch)
 	confirmMsg := "Do you want to add the missing mounts (NFS/CIFS and data mounts with verified UUID/LABEL)?"
-	confirmed, err := confirmLocal(ctx, reader, confirmMsg, defaultYes)
+	confirmed, err := promptYesNoWithCountdown(ctx, reader, logger, confirmMsg, 90*time.Second, defaultYes)
 	if err != nil {
 		return err
 	}
@@ -80,26 +80,6 @@ func SmartMergeFstab(ctx context.Context, logger *logging.Logger, reader *bufio.
 
 	// 4. Execution
 	return applyFstabMerge(ctx, logger, currentRaw, currentFstabPath, analysis.ProposedMounts, dryRun)
-}
-
-// confirmLocal prompts for yes/no
-func confirmLocal(ctx context.Context, reader *bufio.Reader, prompt string, defaultYes bool) (bool, error) {
-	defStr := "[Y/n]"
-	if !defaultYes {
-		defStr = "[y/N]"
-	}
-	fmt.Printf("%s %s ", prompt, defStr)
-
-	line, err := input.ReadLineWithContext(ctx, reader)
-	if err != nil {
-		return false, err
-	}
-
-	trimmed := strings.TrimSpace(strings.ToLower(line))
-	if trimmed == "" {
-		return defaultYes, nil
-	}
-	return trimmed == "y" || trimmed == "yes", nil
 }
 
 func parseFstab(path string) ([]FstabEntry, []string, error) {
