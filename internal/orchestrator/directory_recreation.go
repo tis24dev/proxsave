@@ -777,6 +777,13 @@ func isLikelyZFSMountPoint(path string, logger *logging.Logger) bool {
 
 // setDatastoreOwnership sets ownership to backup:backup for PBS datastores
 func setDatastoreOwnership(path string, logger *logging.Logger) error {
+	if os.Geteuid() != 0 {
+		// Ownership/permission adjustments are best-effort and should not block
+		// directory recreation when running without privileges (common in CI/tests).
+		logger.Debug("PBS datastore ownership: running as non-root (euid=%d); skipping chown/chmod for %s", os.Geteuid(), path)
+		return nil
+	}
+
 	backupUser, err := user.Lookup("backup")
 	if err != nil {
 		// On non-PBS systems the user may not exist; treat as non-fatal.
@@ -794,6 +801,10 @@ func setDatastoreOwnership(path string, logger *logging.Logger) error {
 
 	logger.Debug("PBS datastore ownership: chown %s to backup:backup (uid=%d gid=%d)", path, uid, gid)
 	if err := os.Chown(path, uid, gid); err != nil {
+		if isIgnorableOwnershipError(err) {
+			logger.Warning("PBS datastore ownership: unable to chown %s to backup:backup (uid=%d gid=%d): %v (continuing)", path, uid, gid, err)
+			return nil
+		}
 		return fmt.Errorf("chown %s: %w", path, err)
 	}
 
@@ -809,12 +820,23 @@ func setDatastoreOwnership(path string, logger *logging.Logger) error {
 		if desired != current {
 			logger.Debug("PBS datastore permissions: chmod %s from %o to %o", path, current, desired)
 			if err := os.Chmod(path, desired); err != nil {
+				if isIgnorableOwnershipError(err) {
+					logger.Warning("PBS datastore permissions: unable to chmod %s from %o to %o: %v (continuing)", path, current, desired, err)
+					return nil
+				}
 				return fmt.Errorf("chmod %s: %w", path, err)
 			}
 		}
 	}
 
 	return nil
+}
+
+func isIgnorableOwnershipError(err error) bool {
+	// Common "can't chown/chmod here" situations:
+	// - EPERM/EACCES: not permitted (non-root, user namespace restrictions, etc.)
+	// - EROFS: read-only filesystem
+	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EROFS)
 }
 
 // RecreateDirectoriesFromConfig recreates storage/datastore directories based on system type
