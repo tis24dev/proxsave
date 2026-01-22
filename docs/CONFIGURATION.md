@@ -548,7 +548,7 @@ Quick comparison to help you choose the right storage configuration:
 
 ```bash
 # Connection timeout (seconds)
-RCLONE_TIMEOUT_CONNECTION=30       # Remote accessibility check
+RCLONE_TIMEOUT_CONNECTION=30       # Remote accessibility check (also used for restore/decrypt cloud scan)
 
 # Operation timeout (seconds)
 RCLONE_TIMEOUT_OPERATION=300       # Upload/download operations (5 minutes default)
@@ -571,7 +571,7 @@ RCLONE_FLAGS="--checkers=4 --stats=0 --drive-use-trash=false --drive-pacer-min-s
 
 ### Timeout Tuning
 
-- **CONNECTION**: Short timeout for quick accessibility check (default 30s)
+- **CONNECTION**: Short timeout for quick accessibility check (default 30s); also caps restore/decrypt cloud scanning (listing backups + reading manifests)
 - **OPERATION**: Long timeout for large file uploads (increase for slow networks)
 
 ### Bandwidth Limit Format

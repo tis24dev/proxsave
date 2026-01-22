@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"filippo.io/age"
 	"github.com/gdamore/tcell/v2"
@@ -154,6 +156,7 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, logger *
 	selection = &decryptSelection{}
 	var selectionErr error
 	var scan scanController
+	var scanSeq uint64
 
 	pathList := tview.NewList().ShowSecondaryText(false)
 	pathList.SetMainTextColor(tcell.ColorWhite).
@@ -171,6 +174,7 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, logger *
 			return
 		}
 		selectedOption := options[index]
+		scanID := atomic.AddUint64(&scanSeq, 1)
 		logging.DebugStep(logger, "decrypt selection wizard", "selected source label=%q path=%q rclone=%v", selectedOption.Label, selectedOption.Path, selectedOption.IsRclone)
 		pages.SwitchToPage("loading")
 		go func() {
@@ -179,11 +183,18 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, logger *
 
 			var candidates []*decryptCandidate
 			var scanErr error
-			scanDone := logging.DebugStart(logger, "scan backup source", "path=%s rclone=%v", selectedOption.Path, selectedOption.IsRclone)
+			scanDone := logging.DebugStart(logger, "scan backup source", "id=%d path=%s rclone=%v", scanID, selectedOption.Path, selectedOption.IsRclone)
 			defer func() { scanDone(scanErr) }()
 
 			if selectedOption.IsRclone {
-				candidates, scanErr = discoverRcloneBackups(scanCtx, selectedOption.Path, logger)
+				timeout := 30 * time.Second
+				if cfg != nil && cfg.RcloneTimeoutConnection > 0 {
+					timeout = time.Duration(cfg.RcloneTimeoutConnection) * time.Second
+				}
+				logging.DebugStep(logger, "scan backup source", "id=%d rclone_timeout=%s", scanID, timeout)
+				rcloneCtx, cancel := context.WithTimeout(scanCtx, timeout)
+				defer cancel()
+				candidates, scanErr = discoverRcloneBackups(rcloneCtx, selectedOption.Path, logger)
 			} else {
 				candidates, scanErr = discoverBackupCandidates(logger, selectedOption.Path)
 			}
@@ -195,6 +206,9 @@ func runDecryptSelectionWizard(ctx context.Context, cfg *config.Config, logger *
 			app.QueueUpdateDraw(func() {
 				if scanErr != nil {
 					message := fmt.Sprintf("Failed to inspect %s: %v", selectedOption.Path, scanErr)
+					if selectedOption.IsRclone && errors.Is(scanErr, context.DeadlineExceeded) {
+						message = fmt.Sprintf("Timed out while scanning %s (rclone). Check connectivity/rclone config or increase RCLONE_TIMEOUT_CONNECTION. (%v)", selectedOption.Path, scanErr)
+					}
 					showErrorModal(app, pages, configPath, buildSig, message, func() {
 						pages.SwitchToPage("paths")
 					})

@@ -87,6 +87,7 @@ func buildDecryptPathOptions(cfg *config.Config, logger *logging.Logger) (option
 func discoverRcloneBackups(ctx context.Context, remotePath string, logger *logging.Logger) (candidates []*decryptCandidate, err error) {
 	done := logging.DebugStart(logger, "discover rclone backups", "remote=%s", remotePath)
 	defer func() { done(err) }()
+	start := time.Now()
 	// Build full remote path - ensure it ends with ":" if it's just a remote name
 	fullPath := strings.TrimSpace(remotePath)
 	if !strings.Contains(fullPath, ":") {
@@ -100,11 +101,12 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 
 	// Use rclone lsf to list files inside the backup directory
 	cmd := exec.CommandContext(ctx, "rclone", "lsf", fullPath)
+	lsfStart := time.Now()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list rclone remote %s: %w (output: %s)", fullPath, err, string(output))
 	}
-	logging.DebugStep(logger, "discover rclone backups", "rclone lsf output bytes=%d", len(output))
+	logging.DebugStep(logger, "discover rclone backups", "rclone lsf output bytes=%d elapsed=%s", len(output), time.Since(lsfStart))
 
 	candidates = make([]*decryptCandidate, 0)
 	lines := strings.Split(string(output), "\n")
@@ -227,12 +229,13 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 	logging.DebugStep(
 		logger,
 		"discover rclone backups",
-		"summary entries=%d empty=%d non_candidate=%d manifest_errors=%d accepted=%d",
+		"summary entries=%d empty=%d non_candidate=%d manifest_errors=%d accepted=%d elapsed=%s",
 		totalEntries,
 		emptyEntries,
 		nonCandidateEntries,
 		manifestErrors,
 		len(candidates),
+		time.Since(start),
 	)
 	logDebug(logger, "Cloud (rclone): scanned %d entries, found %d valid backup candidate(s)", len(lines), len(candidates))
 	logDebug(logger, "Cloud (rclone): discovered %d bundle candidate(s) in %s", len(candidates), fullPath)

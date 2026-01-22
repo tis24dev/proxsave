@@ -2571,6 +2571,7 @@ A: Yes, in two ways:
      - lists `.bundle.tar` bundles on the remote with `rclone lsf`;
      - reads metadata/manifest via `rclone cat` (without downloading everything);
      - when you pick a backup, downloads it to `/tmp/proxsave` and proceeds with decrypt/restore.
+   - If scanning times out (slow remote / huge directory), increase `RCLONE_TIMEOUT_CONNECTION` and retry.
 
 2. **From a local rclone mount (restore-only)**  
    If you prefer to mount the rclone backend as a local filesystem:

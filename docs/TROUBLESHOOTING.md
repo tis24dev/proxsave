@@ -277,6 +277,28 @@ iptables -L -n | grep -i drop
 
 ---
 
+#### Restore/Decrypt: stuck on “Scanning backup path…” or timeout (cloud/rclone)
+
+**Cause**: The tool scans cloud backups by listing the remote (`rclone lsf`) and reading each backup manifest (`rclone cat`). On slow remotes or very large directories this can time out.
+
+**Solution**:
+```bash
+# Increase scan timeout
+nano configs/backup.env
+RCLONE_TIMEOUT_CONNECTION=120
+
+# Re-run restore with debug logs (restore log path is printed on start)
+./build/proxsave --restore --log-level debug
+```
+
+If it still fails, run the equivalent manual checks:
+```bash
+rclone lsf <remote:path>
+rclone cat <remote:path>/<backup>.bundle.tar | head
+```
+
+---
+
 #### Error: `operation timeout (300s exceeded)`
 
 **Cause**: Large backup file + slow upload speed.

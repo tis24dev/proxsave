@@ -355,19 +355,32 @@ func inspectBundleManifest(bundlePath string) (*backup.Manifest, error) {
 func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger *logging.Logger) (manifest *backup.Manifest, err error) {
 	done := logging.DebugStart(logger, "inspect rclone bundle manifest", "remote=%s", remotePath)
 	defer func() { done(err) }()
+	start := time.Now()
+
+	// Use a child context so we can stop rclone once the manifest is found.
+	// This avoids a deadlock when the manifest is near the beginning of the tar:
+	// if we stop reading stdout early and still Wait(), rclone can block writing
+	// the remaining bytes into a full pipe.
+	cmdCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	logging.DebugStep(logger, "inspect rclone bundle manifest", "executing: rclone cat %s", remotePath)
-	cmd := exec.CommandContext(ctx, "rclone", "cat", remotePath)
+	cmd := exec.CommandContext(cmdCtx, "rclone", "cat", remotePath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("open rclone stream: %w", err)
 	}
-	cmd.Stderr = os.Stderr
+	defer stdout.Close()
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start rclone cat: %w", err)
 	}
 
 	tr := tar.NewReader(stdout)
+	cancelledEarly := false
 
 	for {
 		hdr, err := tr.Next()
@@ -394,6 +407,8 @@ func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger 
 			}
 			manifest = &m
 			logging.DebugStep(logger, "inspect rclone bundle manifest", "manifest entry=%s bytes=%d", hdr.Name, len(data))
+			cancelledEarly = true
+			cancel()
 			break
 		}
 	}
@@ -402,13 +417,25 @@ func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger 
 	// because stopping early may cause rclone to see a broken pipe.
 	waitErr := cmd.Wait()
 	if manifest == nil {
+		stderrMsg := strings.TrimSpace(stderr.String())
 		if waitErr != nil {
+			if stderrMsg != "" {
+				return nil, fmt.Errorf("manifest not found inside remote bundle (rclone exited with error): %w (stderr: %s)", waitErr, stderrMsg)
+			}
 			return nil, fmt.Errorf("manifest not found inside remote bundle (rclone exited with error): %w", waitErr)
+		}
+		if stderrMsg != "" {
+			return nil, fmt.Errorf("manifest not found inside remote bundle %s (stderr: %s)", filepath.Base(remotePath), stderrMsg)
 		}
 		return nil, fmt.Errorf("manifest not found inside remote bundle %s", filepath.Base(remotePath))
 	}
 	if waitErr != nil {
-		logger.Debug("rclone cat %s completed with non-zero status after manifest read: %v", remotePath, waitErr)
+		// If we cancelled early, rclone is expected to exit non-zero (broken pipe / killed).
+		if cancelledEarly {
+			logDebug(logger, "rclone cat %s stopped early after manifest read: %v (elapsed=%s stderr=%q)", remotePath, waitErr, time.Since(start), strings.TrimSpace(stderr.String()))
+		} else {
+			logDebug(logger, "rclone cat %s completed with non-zero status after manifest read: %v (elapsed=%s stderr=%q)", remotePath, waitErr, time.Since(start), strings.TrimSpace(stderr.String()))
+		}
 	}
 
 	return manifest, nil
