@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,9 +21,12 @@ const defaultNetworkRollbackTimeout = 180 * time.Second
 var ErrNetworkApplyNotCommitted = errors.New("network configuration not committed")
 
 type NetworkApplyNotCommittedError struct {
-	RollbackLog   string
-	RestoredIP    string
-	RollbackArmed bool
+	RollbackLog      string
+	RollbackMarker   string
+	RestoredIP       string
+	OriginalIP       string // IP from backup file (will be restored by rollback)
+	RollbackArmed    bool
+	RollbackDeadline time.Time // when rollback will execute
 }
 
 func (e *NetworkApplyNotCommittedError) Error() string {
@@ -444,6 +448,64 @@ func applyNetworkWithRollbackCLI(ctx context.Context, reader *bufio.Reader, logg
 	return buildNetworkApplyNotCommittedError(ctx, logger, iface, handle)
 }
 
+// extractIPFromSnapshot reads the IP address for a given interface from a network snapshot report file.
+// It searches the output section that follows the "$ ip -br addr" command written by writeNetworkSnapshot.
+func extractIPFromSnapshot(path, iface string) string {
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(iface) == "" {
+		return "unknown"
+	}
+	data, err := restoreFS.ReadFile(path)
+	if err != nil {
+		return "unknown"
+	}
+
+	lines := strings.Split(string(data), "\n")
+	inAddrSection := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "$ ip -br addr" {
+			inAddrSection = true
+			continue
+		}
+		if strings.HasPrefix(line, "$ ") {
+			if inAddrSection {
+				break
+			}
+			continue
+		}
+		if !inAddrSection || line == "" || strings.HasPrefix(line, "ERROR:") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != iface {
+			continue
+		}
+
+		// "ip -br addr" can print multiple addresses; prefer IPv4 when available.
+		firstIPv6 := ""
+		for _, token := range fields[2:] {
+			ip := strings.Split(token, "/")[0]
+			parsed := net.ParseIP(ip)
+			if parsed == nil {
+				continue
+			}
+			if parsed.To4() != nil {
+				return ip
+			}
+			if firstIPv6 == "" {
+				firstIPv6 = ip
+			}
+		}
+		if firstIPv6 != "" {
+			return firstIPv6
+		}
+		return "unknown"
+	}
+
+	return "unknown"
+}
+
 func buildNetworkApplyNotCommittedError(ctx context.Context, logger *logging.Logger, iface string, handle *networkRollbackHandle) *NetworkApplyNotCommittedError {
 	logging.DebugStep(logger, "build not-committed error", "Start: iface=%s handle=%v", iface, handle != nil)
 
@@ -474,15 +536,31 @@ func buildNetworkApplyNotCommittedError(ctx context.Context, logger *logging.Log
 	}
 
 	rollbackLog := ""
+	rollbackMarker := ""
+	originalIP := "unknown"
+	var rollbackDeadline time.Time
 	if handle != nil {
 		rollbackLog = strings.TrimSpace(handle.logPath)
+		rollbackMarker = strings.TrimSpace(handle.markerPath)
+		// Read original IP from before.txt snapshot (IP that will be restored by rollback)
+		if strings.TrimSpace(handle.workDir) != "" {
+			beforePath := filepath.Join(handle.workDir, "before.txt")
+			originalIP = extractIPFromSnapshot(beforePath, iface)
+			logging.DebugStep(logger, "build not-committed error", "Original IP from %s: %s", beforePath, originalIP)
+		}
+		// Calculate rollback deadline
+		rollbackDeadline = handle.armedAt.Add(handle.timeout)
+		logging.DebugStep(logger, "build not-committed error", "Rollback deadline: %s", rollbackDeadline.Format(time.RFC3339))
 	}
 
-	logging.DebugStep(logger, "build not-committed error", "Result: ip=%s armed=%v log=%s", restoredIP, rollbackArmed, rollbackLog)
+	logging.DebugStep(logger, "build not-committed error", "Result: ip=%s originalIP=%s armed=%v log=%s", restoredIP, originalIP, rollbackArmed, rollbackLog)
 	return &NetworkApplyNotCommittedError{
-		RollbackLog:   rollbackLog,
-		RestoredIP:    strings.TrimSpace(restoredIP),
-		RollbackArmed: rollbackArmed,
+		RollbackLog:      rollbackLog,
+		RollbackMarker:   rollbackMarker,
+		RestoredIP:       strings.TrimSpace(restoredIP),
+		OriginalIP:       originalIP,
+		RollbackArmed:    rollbackArmed,
+		RollbackDeadline: rollbackDeadline,
 	}
 }
 
@@ -1099,8 +1177,12 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 	}
 
 	lines = append(lines,
+		`echo "[DEBUG] Removing marker file..." >> "$LOG"`,
 		`rm -f "$MARKER"`,
-		`echo "Rollback finished at $(date -Is)" >> "$LOG"`,
+		`echo "[INFO] ========================================" >> "$LOG"`,
+		`echo "[INFO] NETWORK ROLLBACK SCRIPT FINISHED" >> "$LOG"`,
+		`echo "[INFO] Timestamp: $(date -Is)" >> "$LOG"`,
+		`echo "[INFO] ========================================" >> "$LOG"`,
 	)
 	return strings.Join(lines, "\n") + "\n"
 }

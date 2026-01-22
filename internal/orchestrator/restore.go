@@ -38,6 +38,28 @@ var (
 	prepareDecryptedBackupFunc = prepareDecryptedBackup
 )
 
+// RestoreAbortInfo contains information about an aborted restore with network rollback.
+type RestoreAbortInfo struct {
+	NetworkRollbackArmed  bool
+	NetworkRollbackLog    string
+	NetworkRollbackMarker string
+	OriginalIP            string    // IP from backup file (will be restored by rollback)
+	CurrentIP             string    // IP after apply (before rollback)
+	RollbackDeadline      time.Time // when rollback will execute
+}
+
+var lastRestoreAbortInfo *RestoreAbortInfo
+
+// GetLastRestoreAbortInfo returns info about the last restore abort, if any.
+func GetLastRestoreAbortInfo() *RestoreAbortInfo {
+	return lastRestoreAbortInfo
+}
+
+// ClearRestoreAbortInfo clears the stored abort info.
+func ClearRestoreAbortInfo() {
+	lastRestoreAbortInfo = nil
+}
+
 func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) (err error) {
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
@@ -498,6 +520,15 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 				}
 				rollbackLog = strings.TrimSpace(notCommitted.RollbackLog)
 				rollbackArmed = notCommitted.RollbackArmed
+				// Save abort info for footer display
+				lastRestoreAbortInfo = &RestoreAbortInfo{
+					NetworkRollbackArmed:  rollbackArmed,
+					NetworkRollbackLog:    rollbackLog,
+					NetworkRollbackMarker: strings.TrimSpace(notCommitted.RollbackMarker),
+					OriginalIP:            notCommitted.OriginalIP,
+					CurrentIP:             observedIP,
+					RollbackDeadline:      notCommitted.RollbackDeadline,
+				}
 			}
 			if rollbackArmed {
 				logger.Warning("Network apply not committed; rollback is ARMED and will run automatically. Current IP: %s", observedIP)

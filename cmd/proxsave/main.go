@@ -603,6 +603,15 @@ func run() int {
 		}
 	}()
 
+	// Defer for network rollback countdown (LIFO: executes BEFORE footer)
+	defer func() {
+		if finalExitCode == exitCodeInterrupted {
+			if abortInfo := orchestrator.GetLastRestoreAbortInfo(); abortInfo != nil {
+				printNetworkRollbackCountdown(abortInfo)
+			}
+		}
+	}()
+
 	defer func() {
 		if !args.Support || pendingSupportStats == nil {
 			return
@@ -746,7 +755,7 @@ func run() int {
 			logging.Info("Restore mode enabled - starting CLI workflow...")
 			if err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, toolVersion); err != nil {
 				if errors.Is(err, orchestrator.ErrRestoreAborted) {
-					logging.Info("Restore workflow aborted by user")
+					logging.Warning("Restore workflow aborted by user")
 					if args.Support {
 						pendingSupportStats = support.BuildSupportStats(logger, resolveHostname(), envInfo.Type, envInfo.Version, toolVersion, startTime, time.Now(), exitCodeInterrupted, "restore")
 					}
@@ -776,7 +785,7 @@ func run() int {
 		}
 		if err := orchestrator.RunRestoreWorkflowTUI(ctx, cfg, logger, toolVersion, args.ConfigPath, sig); err != nil {
 			if errors.Is(err, orchestrator.ErrRestoreAborted) || errors.Is(err, orchestrator.ErrDecryptAborted) {
-				logging.Info("Restore workflow aborted by user")
+				logging.Warning("Restore workflow aborted by user")
 				if args.Support {
 					pendingSupportStats = support.BuildSupportStats(logger, resolveHostname(), envInfo.Type, envInfo.Version, toolVersion, startTime, time.Now(), exitCodeInterrupted, "restore")
 				}
@@ -1380,6 +1389,102 @@ func run() int {
 	}
 
 	return finalExitCode
+}
+
+const rollbackCountdownDisplayDuration = 10 * time.Second
+
+func printNetworkRollbackCountdown(abortInfo *orchestrator.RestoreAbortInfo) {
+	if abortInfo == nil {
+		return
+	}
+
+	color := "\033[33m" // yellow
+	colorReset := "\033[0m"
+
+	markerExists := false
+	if strings.TrimSpace(abortInfo.NetworkRollbackMarker) != "" {
+		if _, err := os.Stat(strings.TrimSpace(abortInfo.NetworkRollbackMarker)); err == nil {
+			markerExists = true
+		}
+	}
+
+	status := "UNKNOWN"
+	switch {
+	case markerExists:
+		status = "ARMED (will execute automatically)"
+	case !abortInfo.RollbackDeadline.IsZero() && time.Now().After(abortInfo.RollbackDeadline):
+		status = "EXECUTED (marker removed)"
+	case strings.TrimSpace(abortInfo.NetworkRollbackMarker) != "":
+		status = "DISARMED/CLEARED (marker removed before deadline)"
+	case abortInfo.NetworkRollbackArmed:
+		status = "ARMED (status from snapshot)"
+	default:
+		status = "NOT ARMED"
+	}
+
+	fmt.Println()
+	fmt.Printf("%s===========================================\n", color)
+	fmt.Printf("NETWORK ROLLBACK%s\n", colorReset)
+	fmt.Println()
+
+	// Static info
+	fmt.Printf("  Status: %s\n", status)
+	if strings.TrimSpace(abortInfo.OriginalIP) != "" && abortInfo.OriginalIP != "unknown" {
+		fmt.Printf("  Pre-apply IP (from snapshot): %s\n", strings.TrimSpace(abortInfo.OriginalIP))
+	}
+	if strings.TrimSpace(abortInfo.CurrentIP) != "" && abortInfo.CurrentIP != "unknown" {
+		fmt.Printf("  Post-apply IP (observed): %s\n", strings.TrimSpace(abortInfo.CurrentIP))
+	}
+	if strings.TrimSpace(abortInfo.NetworkRollbackLog) != "" {
+		fmt.Printf("  Rollback log: %s\n", strings.TrimSpace(abortInfo.NetworkRollbackLog))
+	}
+	fmt.Println()
+
+	switch {
+	case markerExists && !abortInfo.RollbackDeadline.IsZero() && time.Until(abortInfo.RollbackDeadline) > 0:
+		fmt.Println("Connection will be temporarily interrupted during restore.")
+		if strings.TrimSpace(abortInfo.OriginalIP) != "" && abortInfo.OriginalIP != "unknown" {
+			fmt.Printf("Remember to reconnect using the pre-apply IP: %s\n", strings.TrimSpace(abortInfo.OriginalIP))
+		}
+	case !markerExists && !abortInfo.RollbackDeadline.IsZero() && time.Now().After(abortInfo.RollbackDeadline):
+		if strings.TrimSpace(abortInfo.OriginalIP) != "" && abortInfo.OriginalIP != "unknown" {
+			fmt.Printf("Rollback executed: reconnect using the pre-apply IP: %s\n", strings.TrimSpace(abortInfo.OriginalIP))
+		}
+	case !markerExists && strings.TrimSpace(abortInfo.NetworkRollbackMarker) != "":
+		if strings.TrimSpace(abortInfo.CurrentIP) != "" && abortInfo.CurrentIP != "unknown" {
+			fmt.Printf("Rollback will NOT run: reconnect using the post-apply IP: %s\n", strings.TrimSpace(abortInfo.CurrentIP))
+		}
+	}
+
+	// Live countdown for max 10 seconds (only when rollback is still armed).
+	if !markerExists || abortInfo.RollbackDeadline.IsZero() {
+		fmt.Printf("%s===========================================%s\n", color, colorReset)
+		return
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	displayEnd := time.Now().Add(rollbackCountdownDisplayDuration)
+
+	for {
+		remaining := time.Until(abortInfo.RollbackDeadline)
+		if remaining <= 0 {
+			fmt.Printf("\r  Remaining: Rollback executing now...          \n")
+			break
+		}
+		if time.Now().After(displayEnd) {
+			fmt.Printf("\r  Remaining: %ds (exiting, rollback will proceed)\n", int(remaining.Seconds()))
+			break
+		}
+		fmt.Printf("\r  Remaining: %ds   ", int(remaining.Seconds()))
+
+		select {
+		case <-ticker.C:
+			continue
+		}
+	}
+
+	fmt.Printf("%s===========================================%s\n", color, colorReset)
 }
 
 func printFinalSummary(finalExitCode int) {
