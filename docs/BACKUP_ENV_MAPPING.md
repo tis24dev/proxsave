@@ -18,7 +18,6 @@ This file documents the mapping between variables from the **old Bash `backup.en
 AUTO_UPDATE_HASHES        = SAME
 BACKUP_BLACKLIST          = SAME
 BACKUP_CEPH_CONFIG        = SAME
-BACKUP_CLUSTER_CONFIG     = SAME
 BACKUP_CRITICAL_FILES     = SAME
 BACKUP_INSTALLED_PACKAGES = SAME
 BACKUP_PVE_BACKUP_FILES   = SAME
@@ -119,6 +118,11 @@ CLOUD_BACKUP_PATH = SEMANTIC CHANGE → CLOUD_REMOTE_PATH ⚠️
   **Bash**: `CLOUD_BACKUP_PATH="/proxsave/backup"` (full path)
   **Go**: `CLOUD_REMOTE="GoogleDrive"` (remote name) + `CLOUD_REMOTE_PATH="/proxsave/backup"` (path within that remote)
   **Migration**: remove the remote name from the bash variable and move the path into `CLOUD_REMOTE_PATH`
+
+BACKUP_CLUSTER_CONFIG = SEMANTIC CHANGE ⚠️
+  **Bash/legacy expectation**: skip only cluster config files.
+  **Go (current)**: also disables cluster runtime collection (`pvecm status`, `pvecm nodes`, HA status).
+  **Impact**: if you previously disabled cluster file backup but still wanted runtime status collection, re-enable `BACKUP_CLUSTER_CONFIG` (or introduce a separate runtime flag if needed).
 
 STORAGE_WARNING_THRESHOLD_SECONDARY = SEMANTIC CHANGE → MIN_DISK_SPACE_SECONDARY_GB ⚠️
   **Bash**: `STORAGE_WARNING_THRESHOLD_SECONDARY="90"` (90% used = warning)

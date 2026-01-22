@@ -828,7 +828,7 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 			c.incFilesFailed()
 			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
 		}
-		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the PBS CLI is available and has proper permissions. Output: %s",
+		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the required CLI is available and has proper permissions. Output: %s",
 			description,
 			cmdString,
 			err,

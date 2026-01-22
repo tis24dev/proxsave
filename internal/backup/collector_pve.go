@@ -346,7 +346,7 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 	}
 
 	// Cluster commands (if clustered)
-	if clustered {
+	if clustered && c.config.BackupClusterConfig {
 		c.safeCmdOutput(ctx,
 			"pvecm status",
 			filepath.Join(commandsDir, "cluster_status.txt"),
@@ -365,6 +365,8 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 			filepath.Join(commandsDir, "ha_status.json"),
 			"HA status",
 			false)
+	} else if clustered && !c.config.BackupClusterConfig {
+		c.logger.Debug("Skipping cluster runtime commands: BACKUP_CLUSTER_CONFIG=false (clustered=%v)", clustered)
 	}
 
 	// Storage status
@@ -1651,25 +1653,53 @@ func (c *Collector) isClusteredPVE(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
+	corosyncPath := c.effectiveCorosyncConfigPath()
+	corosyncExists := false
+	if corosyncPath != "" {
+		if _, err := c.depStat(corosyncPath); err == nil {
+			corosyncExists = true
+		}
+	}
+	c.logger.Debug("Cluster detection: corosyncPath=%q exists=%v", corosyncPath, corosyncExists)
+
 	if c.hasCorosyncClusterConfig() {
 		c.logger.Debug("Detected cluster via corosync configuration")
 		return true, nil
 	}
 
-	if c.hasMultiplePVENodes() {
-		c.logger.Debug("Detected cluster via nodes directory count")
-		return true, nil
+	nodeCount, nodeErr := c.pveNodesDirCount()
+	if nodeErr != nil {
+		c.logger.Debug("Cluster detection: nodes directory count unavailable: %v", nodeErr)
+	} else {
+		c.logger.Debug("Cluster detection: nodes directory count=%d", nodeCount)
+		if nodeCount > 1 {
+			if corosyncExists {
+				c.logger.Debug("Detected cluster via nodes directory count (corosync config present)")
+				return true, nil
+			}
+			c.logger.Debug("Cluster detection: nodes directory suggests cluster, but corosync config missing; deferring to service/pvecm checks")
+		}
 	}
 
-	if c.isServiceActive(ctx, "corosync.service") {
-		c.logger.Debug("Detected cluster via corosync.service state")
-		return true, nil
+	corosyncActive := c.isServiceActive(ctx, "corosync.service")
+	c.logger.Debug("Cluster detection: corosync.service active=%v", corosyncActive)
+	if corosyncActive {
+		if corosyncExists {
+			c.logger.Debug("Detected cluster via corosync.service state (corosync config present)")
+			return true, nil
+		}
+		c.logger.Debug("Cluster detection: corosync.service active but corosync config missing; deferring to pvecm check")
 	}
 
 	// Fallback to pvecm status
 	if _, err := c.depLookPath("pvecm"); err == nil {
 		output, err := c.depRunCommand(ctx, "pvecm", "status")
 		if err != nil {
+			outText := strings.TrimSpace(string(output))
+			if isPvecmMissingCorosyncConfig(outText) {
+				c.logger.Debug("Cluster detection: pvecm status indicates no corosync configuration; treating as standalone. Output: %s", summarizeCommandOutputText(outText))
+				return false, nil
+			}
 			return false, fmt.Errorf("pvecm status failed: %w", err)
 		}
 		clustered := strings.Contains(string(output), "Cluster information")
@@ -1691,12 +1721,7 @@ func shortHostname(host string) string {
 }
 
 func (c *Collector) hasCorosyncClusterConfig() bool {
-	corosyncPath := c.config.CorosyncConfigPath
-	if corosyncPath == "" {
-		corosyncPath = filepath.Join(c.effectivePVEConfigPath(), "corosync.conf")
-	} else if !filepath.IsAbs(corosyncPath) {
-		corosyncPath = filepath.Join(c.effectivePVEConfigPath(), corosyncPath)
-	}
+	corosyncPath := c.effectiveCorosyncConfigPath()
 	data, err := os.ReadFile(corosyncPath)
 	if err != nil {
 		return false
@@ -1710,22 +1735,43 @@ func (c *Collector) hasCorosyncClusterConfig() bool {
 	return false
 }
 
+func (c *Collector) effectiveCorosyncConfigPath() string {
+	corosyncPath := strings.TrimSpace(c.config.CorosyncConfigPath)
+	if corosyncPath == "" {
+		return filepath.Join(c.effectivePVEConfigPath(), "corosync.conf")
+	}
+	if filepath.IsAbs(corosyncPath) {
+		return corosyncPath
+	}
+	return filepath.Join(c.effectivePVEConfigPath(), corosyncPath)
+}
+
 func (c *Collector) hasMultiplePVENodes() bool {
+	count, err := c.pveNodesDirCount()
+	return err == nil && count > 1
+}
+
+func (c *Collector) pveNodesDirCount() (int, error) {
 	nodesDir := filepath.Join(c.effectivePVEConfigPath(), "nodes")
 	entries, err := os.ReadDir(nodesDir)
 	if err != nil {
-		return false
+		return 0, err
 	}
 	count := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			count++
-			if count > 1 {
-				return true
-			}
 		}
 	}
-	return false
+	return count, nil
+}
+
+func isPvecmMissingCorosyncConfig(output string) bool {
+	if output == "" {
+		return false
+	}
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "corosync config") && strings.Contains(lower, "does not exist")
 }
 
 func (c *Collector) isServiceActive(ctx context.Context, service string) bool {

@@ -684,6 +684,9 @@ func TestIsClusteredPVE(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(nodesDir, "pve2"), 0o755); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(pveDir, "corosync.conf"), []byte("nodelist {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		logger := newTestLogger()
 		cfg := GetDefaultCollectorConfig()
@@ -696,7 +699,33 @@ func TestIsClusteredPVE(t *testing.T) {
 			t.Fatalf("isClusteredPVE error: %v", err)
 		}
 		if !clustered {
-			t.Error("isClusteredPVE() should return true with multiple nodes")
+			t.Error("isClusteredPVE() should return true when multiple nodes exist and corosync config is present")
+		}
+	})
+
+	t.Run("does not detect via multiple nodes alone", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		pveDir := filepath.Join(tmpDir, "etc", "pve")
+		nodesDir := filepath.Join(pveDir, "nodes")
+		if err := os.MkdirAll(filepath.Join(nodesDir, "pve1"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(nodesDir, "pve2"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		logger := newTestLogger()
+		cfg := GetDefaultCollectorConfig()
+		cfg.PVEConfigPath = pveDir
+		cfg.CorosyncConfigPath = ""
+		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+
+		clustered, err := collector.isClusteredPVE(context.Background())
+		if err != nil {
+			t.Fatalf("isClusteredPVE error: %v", err)
+		}
+		if clustered {
+			t.Error("isClusteredPVE() should return false when only multiple node directories exist without corosync config")
 		}
 	})
 

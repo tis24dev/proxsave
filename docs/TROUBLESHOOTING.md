@@ -299,6 +299,8 @@ BACKUP_CLUSTER_CONFIG=false
 BACKUP_ROOT_HOME=false
 ```
 
+> Note: `BACKUP_CLUSTER_CONFIG=false` also skips cluster runtime collection (`pvecm status`, `pvecm nodes`, HA status), which helps avoid non-critical cluster warnings on standalone nodes.
+
 ---
 
 #### Error: `429 Too Many Requests` (API rate limiting)

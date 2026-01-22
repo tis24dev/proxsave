@@ -49,6 +49,44 @@ func TestIsClusteredPVEFallbackToPvecm(t *testing.T) {
 	}
 }
 
+func TestIsClusteredPVEMissingCorosyncConfigIsStandalone(t *testing.T) {
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			switch cmd {
+			case "pvecm":
+				return "/usr/bin/pvecm", nil
+			case "systemctl":
+				return "", fmt.Errorf("missing systemctl")
+			default:
+				return "", fmt.Errorf("unexpected lookPath for %s", cmd)
+			}
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "pvecm" {
+				return nil, fmt.Errorf("unexpected command %s", name)
+			}
+			if len(args) != 1 || args[0] != "status" {
+				return nil, fmt.Errorf("unexpected args %v", args)
+			}
+			return []byte("Error: Corosync config '/etc/pve/corosync.conf' does not exist - is this node part of a cluster?\n"), fmt.Errorf("exit status 2")
+		},
+	})
+	collector.config.CorosyncConfigPath = ""
+
+	nodesDir := filepath.Join(collector.config.PVEConfigPath, "nodes", "single")
+	if err := os.MkdirAll(nodesDir, 0o755); err != nil {
+		t.Fatalf("failed to create nodes dir: %v", err)
+	}
+
+	clustered, err := collector.isClusteredPVE(context.Background())
+	if err != nil {
+		t.Fatalf("isClusteredPVE returned error: %v", err)
+	}
+	if clustered {
+		t.Fatal("expected clustered=false when pvecm reports missing corosync config")
+	}
+}
+
 func TestIsServiceActive(t *testing.T) {
 	t.Run("missing systemctl", func(t *testing.T) {
 		collector := newPVECollectorWithDeps(t, CollectorDeps{
@@ -138,6 +176,29 @@ func TestCephStorageConfigured(t *testing.T) {
 			t.Fatal("expected false when command fails")
 		}
 	})
+}
+
+func TestCollectPVECommandsSkipsClusterRuntimeWhenBackupClusterConfigDisabled(t *testing.T) {
+	pvecmCalls := 0
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name == "pvecm" {
+				pvecmCalls++
+			}
+			return []byte{}, nil
+		},
+	})
+	collector.config.BackupClusterConfig = false
+
+	if _, err := collector.collectPVECommands(context.Background(), true); err != nil {
+		t.Fatalf("collectPVECommands returned error: %v", err)
+	}
+	if pvecmCalls != 0 {
+		t.Fatalf("expected pvecm not to be called when BACKUP_CLUSTER_CONFIG=false, got %d calls", pvecmCalls)
+	}
 }
 
 func TestCephStatusAvailable(t *testing.T) {

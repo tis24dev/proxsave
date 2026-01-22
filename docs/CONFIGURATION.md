@@ -886,7 +886,7 @@ METRICS_PATH=${BASE_DIR}/metrics   # Empty = /var/lib/prometheus/node-exporter
 
 ```bash
 # Cluster configuration
-BACKUP_CLUSTER_CONFIG=true         # /etc/pve/cluster files
+BACKUP_CLUSTER_CONFIG=true         # Cluster config + runtime (corosync, pvecm status/nodes, HA status)
 
 # PVE firewall rules
 BACKUP_PVE_FIREWALL=true           # PVE firewall configuration
