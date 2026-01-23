@@ -177,6 +177,12 @@ func TestClassifyLogLine(t *testing.T) {
 			wantType:    "",
 			wantMessage: "",
 		},
+		{
+			name:        "DEBUG line with Error text (should be ignored)",
+			line:        "[2025-11-10 14:30:00] DEBUG Something failed: Error: Corosync config does not exist",
+			wantType:    "",
+			wantMessage: "",
+		},
 	}
 
 	for _, tt := range tests {
