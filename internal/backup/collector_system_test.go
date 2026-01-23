@@ -135,6 +135,64 @@ func TestCollectSSHKeysCopiesEtcSSH(t *testing.T) {
 	}
 }
 
+func TestCollectRootHomeSkipsSSHKeysWhenDisabled(t *testing.T) {
+	collector := newTestCollector(t)
+
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+	collector.config.BackupSSHKeys = false
+
+	sshDir := filepath.Join(root, "root", ".ssh")
+	if err := os.MkdirAll(sshDir, 0o755); err != nil {
+		t.Fatalf("mkdir /root/.ssh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "id_rsa"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("write id_rsa: %v", err)
+	}
+
+	if err := collector.collectRootHome(context.Background()); err != nil {
+		t.Fatalf("collectRootHome failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "root", ".ssh")); err == nil {
+		t.Fatalf("expected /root/.ssh excluded when BACKUP_SSH_KEYS=false")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat /root/.ssh: %v", err)
+	}
+}
+
+func TestCollectUserHomesSkipsSSHKeysWhenDisabled(t *testing.T) {
+	collector := newTestCollector(t)
+
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+	collector.config.BackupSSHKeys = false
+
+	userHome := filepath.Join(root, "home", "alice")
+	if err := os.MkdirAll(filepath.Join(userHome, ".ssh"), 0o755); err != nil {
+		t.Fatalf("mkdir alice .ssh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userHome, ".ssh", "id_rsa"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("write alice id_rsa: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userHome, "note.txt"), []byte("note"), 0o644); err != nil {
+		t.Fatalf("write note.txt: %v", err)
+	}
+
+	if err := collector.collectUserHomes(context.Background()); err != nil {
+		t.Fatalf("collectUserHomes failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "users", "alice", "note.txt")); err != nil {
+		t.Fatalf("expected note.txt copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "users", "alice", ".ssh")); err == nil {
+		t.Fatalf("expected alice .ssh excluded when BACKUP_SSH_KEYS=false")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat alice .ssh: %v", err)
+	}
+}
+
 func TestWriteReportFileCreatesDirectories(t *testing.T) {
 	collector := newTestCollector(t)
 	report := filepath.Join(collector.tempDir, "reports", "test", "report.txt")

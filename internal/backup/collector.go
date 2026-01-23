@@ -27,6 +27,8 @@ import (
 type CollectionStats struct {
 	FilesProcessed int64
 	FilesFailed    int64
+	FilesNotFound  int64
+	FilesSkipped   int64
 	DirsCreated    int64
 	BytesCollected int64
 }
@@ -54,6 +56,11 @@ type Collector struct {
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
+
+	// Manifest tracking for backup contents
+	pbsManifest    map[string]ManifestEntry
+	pveManifest    map[string]ManifestEntry
+	systemManifest map[string]ManifestEntry
 }
 
 var osSymlink = os.Symlink
@@ -69,6 +76,14 @@ func (c *Collector) incFilesProcessed() {
 
 func (c *Collector) incFilesFailed() {
 	atomic.AddInt64(&c.stats.FilesFailed, 1)
+}
+
+func (c *Collector) incFilesNotFound() {
+	atomic.AddInt64(&c.stats.FilesNotFound, 1)
+}
+
+func (c *Collector) incFilesSkipped() {
+	atomic.AddInt64(&c.stats.FilesSkipped, 1)
 }
 
 func (c *Collector) incDirsCreated() {
@@ -424,6 +439,38 @@ func (c *Collector) shouldExclude(path string) bool {
 		}
 	}
 	return false
+}
+
+func (c *Collector) withTemporaryExcludes(extra []string, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	if c == nil || c.config == nil || len(extra) == 0 {
+		return fn()
+	}
+
+	seen := make(map[string]struct{}, len(extra))
+	normalized := make([]string, 0, len(extra))
+	for _, pattern := range extra {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if _, ok := seen[pattern]; ok {
+			continue
+		}
+		seen[pattern] = struct{}{}
+		normalized = append(normalized, pattern)
+	}
+	if len(normalized) == 0 {
+		return fn()
+	}
+
+	original := append([]string(nil), c.config.ExcludePatterns...)
+	c.config.ExcludePatterns = append(c.config.ExcludePatterns, normalized...)
+	defer func() { c.config.ExcludePatterns = original }()
+
+	return fn()
 }
 
 func uniqueCandidates(path, tempDir string) []string {

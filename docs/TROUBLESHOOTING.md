@@ -279,7 +279,7 @@ iptables -L -n | grep -i drop
 
 #### Restore/Decrypt: stuck on “Scanning backup path…” or timeout (cloud/rclone)
 
-**Cause**: The tool scans cloud backups by listing the remote (`rclone lsf`) and reading each backup manifest (`rclone cat`). On slow remotes or very large directories this can time out.
+**Cause**: ProxSave scans cloud backups by listing the remote (`rclone lsf`) and inspecting each candidate by reading the manifest/metadata (`rclone cat`). Each rclone call is protected by `RCLONE_TIMEOUT_CONNECTION` (the timer resets per command). On slow remotes or very large directories this can time out.
 
 **Solution**:
 ```bash
@@ -287,8 +287,12 @@ iptables -L -n | grep -i drop
 nano configs/backup.env
 RCLONE_TIMEOUT_CONNECTION=120
 
-# Re-run restore with debug logs (restore log path is printed on start)
+# Ensure you selected the remote directory that contains the backups (scan is non-recursive),
+# then re-run restore with debug logs (restore log path is printed on start)
 ./build/proxsave --restore --log-level debug
+
+# Or use support mode to capture full diagnostics
+./build/proxsave --restore --support
 ```
 
 If it still fails, run the equivalent manual checks:

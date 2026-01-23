@@ -30,6 +30,47 @@ func (c *Collector) pbsConfigPath() string {
 	return c.systemPath("/etc/proxmox-backup")
 }
 
+// collectPBSConfigFile collects a single PBS configuration file with detailed logging
+func (c *Collector) collectPBSConfigFile(ctx context.Context, root, filename, description string, enabled bool) ManifestEntry {
+	if !enabled {
+		c.logger.Debug("Skipping %s: disabled by configuration", filename)
+		c.logger.Info("  %s: disabled", description)
+		return ManifestEntry{Status: StatusDisabled}
+	}
+
+	srcPath := filepath.Join(root, filename)
+	destPath := filepath.Join(c.tempDir, "etc/proxmox-backup", filename)
+
+	c.logger.Debug("Checking %s: %s", filename, srcPath)
+
+	info, err := os.Stat(srcPath)
+	if os.IsNotExist(err) {
+		c.incFilesNotFound()
+		c.logger.Debug("  File not found: %v", err)
+		c.logger.Info("  %s: not configured", description)
+		return ManifestEntry{Status: StatusNotFound}
+	}
+	if err != nil {
+		c.incFilesFailed()
+		c.logger.Debug("  Stat error: %v", err)
+		c.logger.Warning("  %s: failed - %v", description, err)
+		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
+	}
+
+	// Log file details in debug mode
+	c.logger.Debug("  File exists, size=%d, mode=%s, mtime=%s",
+		info.Size(), info.Mode(), info.ModTime().Format(time.RFC3339))
+	c.logger.Debug("  Copying to %s", destPath)
+
+	if err := c.safeCopyFile(ctx, srcPath, destPath, description); err != nil {
+		c.logger.Warning("  %s: failed - %v", description, err)
+		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
+	}
+
+	c.logger.Info("  %s: collected (%s)", description, FormatBytes(info.Size()))
+	return ManifestEntry{Status: StatusCollected, Size: info.Size()}
+}
+
 // CollectPBSConfigs collects Proxmox Backup Server specific configurations
 func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 	c.logger.Info("Collecting PBS configurations")
@@ -116,116 +157,115 @@ func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 		c.logger.Skip("PBS PXAR metadata collection disabled.")
 	}
 
+	// Print collection summary
+	c.logger.Info("PBS collection summary:")
+	c.logger.Info("  Files collected: %d", c.stats.FilesProcessed)
+	c.logger.Info("  Files not found: %d", c.stats.FilesNotFound)
+	if c.stats.FilesFailed > 0 {
+		c.logger.Warning("  Files failed: %d", c.stats.FilesFailed)
+	}
+	c.logger.Debug("  Files skipped: %d", c.stats.FilesSkipped)
+	c.logger.Debug("  Bytes collected: %d", c.stats.BytesCollected)
+
 	c.logger.Info("PBS configuration collection completed")
 	return nil
 }
 
 // collectPBSDirectories collects PBS-specific directories
 func (c *Collector) collectPBSDirectories(ctx context.Context, root string) error {
-	c.logger.Debug("Collecting PBS directories (%s, configs, schedules)", root)
-	// PBS main configuration directory
-	if err := c.safeCopyDir(ctx,
-		root,
-		filepath.Join(c.tempDir, "etc/proxmox-backup"),
-		"PBS configuration"); err != nil {
+	c.logger.Debug("Collecting PBS directories (source=%s, dest=%s)",
+		root, filepath.Join(c.tempDir, "etc/proxmox-backup"))
+
+	// Even though we keep a full snapshot of /etc/proxmox-backup (or PBS_CONFIG_PATH),
+	// treat per-feature flags as exclusions so users can selectively omit sensitive files
+	// while still capturing unknown/new PBS config files.
+	//
+	// NOTE: These patterns are applied only for the duration of the directory snapshot to
+	// avoid impacting other collectors.
+	var extraExclude []string
+	if !c.config.BackupDatastoreConfigs {
+		extraExclude = append(extraExclude, "datastore.cfg")
+	}
+	if !c.config.BackupUserConfigs {
+		// User-related configs are intentionally excluded together.
+		extraExclude = append(extraExclude, "user.cfg", "acl.cfg", "domains.cfg")
+	}
+	if !c.config.BackupRemoteConfigs {
+		extraExclude = append(extraExclude, "remote.cfg")
+	}
+	if !c.config.BackupSyncJobs {
+		extraExclude = append(extraExclude, "sync.cfg")
+	}
+	if !c.config.BackupVerificationJobs {
+		extraExclude = append(extraExclude, "verification.cfg")
+	}
+	if !c.config.BackupTapeConfigs {
+		extraExclude = append(extraExclude, "tape.cfg", "media-pool.cfg")
+	}
+	if !c.config.BackupNetworkConfigs {
+		extraExclude = append(extraExclude, "network.cfg")
+	}
+	if !c.config.BackupPruneSchedules {
+		extraExclude = append(extraExclude, "prune.cfg")
+	}
+
+	// PBS main configuration directory (full backup)
+	if len(extraExclude) > 0 {
+		c.logger.Debug("PBS config exclusions enabled (disabled features): %s", strings.Join(extraExclude, ", "))
+	}
+	if err := c.withTemporaryExcludes(extraExclude, func() error {
+		return c.safeCopyDir(ctx,
+			root,
+			filepath.Join(c.tempDir, "etc/proxmox-backup"),
+			"PBS configuration")
+	}); err != nil {
 		return err
 	}
 
+	// Initialize manifest for PBS configs
+	c.pbsManifest = make(map[string]ManifestEntry)
+
+	c.logger.Info("Collecting PBS configuration files:")
+
 	// Datastore configuration
-	if c.config.BackupDatastoreConfigs {
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "datastore.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/datastore.cfg"),
-			"Datastore configuration"); err != nil {
-			c.logger.Debug("No datastore.cfg found")
-		}
-	}
+	c.pbsManifest["datastore.cfg"] = c.collectPBSConfigFile(ctx, root, "datastore.cfg",
+		"Datastore configuration", c.config.BackupDatastoreConfigs)
 
 	// User configuration
-	if c.config.BackupUserConfigs {
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "user.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/user.cfg"),
-			"User configuration"); err != nil {
-			c.logger.Debug("No user.cfg found")
-		}
+	c.pbsManifest["user.cfg"] = c.collectPBSConfigFile(ctx, root, "user.cfg",
+		"User configuration", c.config.BackupUserConfigs)
 
-		// ACL configuration
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "acl.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/acl.cfg"),
-			"ACL configuration"); err != nil {
-			c.logger.Debug("No acl.cfg found")
-		}
-	}
+	// ACL configuration (under user configs flag)
+	c.pbsManifest["acl.cfg"] = c.collectPBSConfigFile(ctx, root, "acl.cfg",
+		"ACL configuration", c.config.BackupUserConfigs)
 
 	// Remote configuration (for sync jobs)
-	if c.config.BackupRemoteConfigs {
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "remote.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/remote.cfg"),
-			"Remote configuration"); err != nil {
-			c.logger.Debug("No remote.cfg found")
-		}
-	}
+	c.pbsManifest["remote.cfg"] = c.collectPBSConfigFile(ctx, root, "remote.cfg",
+		"Remote configuration", c.config.BackupRemoteConfigs)
 
 	// Sync jobs configuration
-	if c.config.BackupSyncJobs {
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "sync.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/sync.cfg"),
-			"Sync configuration"); err != nil {
-			c.logger.Debug("No sync.cfg found")
-		}
-	}
+	c.pbsManifest["sync.cfg"] = c.collectPBSConfigFile(ctx, root, "sync.cfg",
+		"Sync jobs", c.config.BackupSyncJobs)
 
 	// Verification jobs configuration
-	if c.config.BackupVerificationJobs {
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "verification.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/verification.cfg"),
-			"Verification configuration"); err != nil {
-			c.logger.Debug("No verification.cfg found")
-		}
-	}
+	c.pbsManifest["verification.cfg"] = c.collectPBSConfigFile(ctx, root, "verification.cfg",
+		"Verification jobs", c.config.BackupVerificationJobs)
 
-	// Tape backup configuration (if applicable)
-	if c.config.BackupTapeConfigs {
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "tape.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/tape.cfg"),
-			"Tape configuration"); err != nil {
-			c.logger.Debug("No tape.cfg found")
-		}
+	// Tape backup configuration
+	c.pbsManifest["tape.cfg"] = c.collectPBSConfigFile(ctx, root, "tape.cfg",
+		"Tape configuration", c.config.BackupTapeConfigs)
 
-		// Media pool configuration
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "media-pool.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/media-pool.cfg"),
-			"Media pool configuration"); err != nil {
-			c.logger.Debug("No media-pool.cfg found")
-		}
-	}
+	// Media pool configuration (under tape configs flag)
+	c.pbsManifest["media-pool.cfg"] = c.collectPBSConfigFile(ctx, root, "media-pool.cfg",
+		"Media pool configuration", c.config.BackupTapeConfigs)
 
 	// Network configuration
-	if c.config.BackupNetworkConfigs {
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "network.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/network.cfg"),
-			"Network configuration"); err != nil {
-			c.logger.Debug("No network.cfg found")
-		}
-	}
+	c.pbsManifest["network.cfg"] = c.collectPBSConfigFile(ctx, root, "network.cfg",
+		"Network configuration", c.config.BackupNetworkConfigs)
 
 	// Prune/GC schedules
-	if c.config.BackupPruneSchedules {
-		if err := c.safeCopyFile(ctx,
-			filepath.Join(root, "prune.cfg"),
-			filepath.Join(c.tempDir, "etc/proxmox-backup/prune.cfg"),
-			"Prune configuration"); err != nil {
-			c.logger.Debug("No prune.cfg found")
-		}
-	}
+	c.pbsManifest["prune.cfg"] = c.collectPBSConfigFile(ctx, root, "prune.cfg",
+		"Prune schedules", c.config.BackupPruneSchedules)
 
 	c.logger.Debug("PBS directory collection finished")
 	return nil

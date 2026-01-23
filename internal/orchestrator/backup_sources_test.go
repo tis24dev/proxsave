@@ -207,7 +207,7 @@ func TestDiscoverRcloneBackups_ListsAndParsesBundles(t *testing.T) {
 	manifest, cleanup := setupFakeRcloneListAndCat(t)
 	defer cleanup()
 
-	candidates, err := discoverRcloneBackups(ctx, "gdrive:pbs-backups/server1", logger)
+	candidates, err := discoverRcloneBackups(ctx, nil, "gdrive:pbs-backups/server1", logger, nil)
 	if err != nil {
 		t.Fatalf("discoverRcloneBackups() error = %v", err)
 	}
@@ -278,7 +278,7 @@ esac
 	defer os.Unsetenv("METADATA_PATH")
 
 	ctx := context.Background()
-	candidates, err := discoverRcloneBackups(ctx, "gdrive:pbs-backups/server1", nil)
+	candidates, err := discoverRcloneBackups(ctx, nil, "gdrive:pbs-backups/server1", nil, nil)
 	if err != nil {
 		t.Fatalf("discoverRcloneBackups() error = %v", err)
 	}
@@ -407,7 +407,7 @@ esac
 	_ = os.WriteFile(rawNewestArchive, []byte("x"), 0o600)
 	_ = os.WriteFile(rawOldArchive, []byte("x"), 0o600)
 
-	candidates, err := discoverRcloneBackups(context.Background(), "gdrive:backups", nil)
+	candidates, err := discoverRcloneBackups(context.Background(), nil, "gdrive:backups", nil, nil)
 	if err != nil {
 		t.Fatalf("discoverRcloneBackups error: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestDiscoverRcloneBackups_AllowsNilLogger(t *testing.T) {
 	manifest, cleanup := setupFakeRcloneListAndCat(t)
 	defer cleanup()
 
-	candidates, err := discoverRcloneBackups(ctx, "gdrive:pbs-backups/server1", nil)
+	candidates, err := discoverRcloneBackups(ctx, nil, "gdrive:pbs-backups/server1", nil, nil)
 	if err != nil {
 		t.Fatalf("discoverRcloneBackups() error = %v", err)
 	}

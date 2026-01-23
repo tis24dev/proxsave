@@ -1440,8 +1440,13 @@ func (c *Collector) collectRootHome(ctx context.Context) error {
 	}
 
 	// Only copy security-critical directories; custom paths must be configured explicitly.
-	if err := c.safeCopyDir(ctx, c.systemPath("/root/.ssh"), filepath.Join(target, ".ssh"), "root SSH directory"); err != nil && !errors.Is(err, os.ErrNotExist) {
-		c.logger.Debug("Failed to copy root SSH directory: %v", err)
+	// Respect BACKUP_SSH_KEYS to allow backing up /root without including SSH keys.
+	if c.config.BackupSSHKeys {
+		if err := c.safeCopyDir(ctx, c.systemPath("/root/.ssh"), filepath.Join(target, ".ssh"), "root SSH directory"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.logger.Debug("Failed to copy root SSH directory: %v", err)
+		}
+	} else {
+		c.logger.Debug("Skipping /root/.ssh in root home: BACKUP_SSH_KEYS=false")
 	}
 
 	// Copy full root .config directory (for CLI tools, editors, and other configs)
@@ -1489,7 +1494,13 @@ func (c *Collector) collectUserHomes(ctx context.Context) error {
 		}
 
 		if info.IsDir() {
-			if err := c.safeCopyDir(ctx, src, dest, fmt.Sprintf("home directory for %s", name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			extraExclude := []string(nil)
+			if !c.config.BackupSSHKeys {
+				extraExclude = append(extraExclude, ".ssh")
+			}
+			if err := c.withTemporaryExcludes(extraExclude, func() error {
+				return c.safeCopyDir(ctx, src, dest, fmt.Sprintf("home directory for %s", name))
+			}); err != nil && !errors.Is(err, os.ErrNotExist) {
 				c.logger.Debug("Failed to copy home for %s: %v", name, err)
 			}
 			continue

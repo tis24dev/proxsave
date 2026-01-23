@@ -139,7 +139,13 @@ func pathMatchesPattern(archivePath, pattern string) bool {
 
 // ShowRestoreModeMenu displays the restore mode selection menu
 func ShowRestoreModeMenu(ctx context.Context, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
-	reader := bufio.NewReader(os.Stdin)
+	return ShowRestoreModeMenuWithReader(ctx, bufio.NewReader(os.Stdin), logger, systemType)
+}
+
+func ShowRestoreModeMenuWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
+	if reader == nil {
+		reader = bufio.NewReader(os.Stdin)
+	}
 
 	fmt.Println()
 	fmt.Println("Select restore mode:")
@@ -187,7 +193,13 @@ func ShowRestoreModeMenu(ctx context.Context, logger *logging.Logger, systemType
 
 // ShowCategorySelectionMenu displays an interactive category selection menu
 func ShowCategorySelectionMenu(ctx context.Context, logger *logging.Logger, availableCategories []Category, systemType SystemType) ([]Category, error) {
-	reader := bufio.NewReader(os.Stdin)
+	return ShowCategorySelectionMenuWithReader(ctx, bufio.NewReader(os.Stdin), logger, availableCategories, systemType)
+}
+
+func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, availableCategories []Category, systemType SystemType) ([]Category, error) {
+	if reader == nil {
+		reader = bufio.NewReader(os.Stdin)
+	}
 
 	// Filter categories by system type
 	relevantCategories := make([]Category, 0)
@@ -414,7 +426,13 @@ func ShowRestorePlan(logger *logging.Logger, config *SelectiveRestoreConfig) {
 
 // ConfirmRestoreOperation asks for user confirmation before proceeding
 func ConfirmRestoreOperation(ctx context.Context, logger *logging.Logger) (bool, error) {
-	reader := bufio.NewReader(os.Stdin)
+	return ConfirmRestoreOperationWithReader(ctx, bufio.NewReader(os.Stdin), logger)
+}
+
+func ConfirmRestoreOperationWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger) (bool, error) {
+	if reader == nil {
+		reader = bufio.NewReader(os.Stdin)
+	}
 	for {
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Print("Type 'RESTORE' to proceed or 'cancel' to abort: ")

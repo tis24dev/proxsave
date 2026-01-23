@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"io/fs"
@@ -35,21 +34,19 @@ func (f failWritePathFS) WriteFile(path string, data []byte, perm fs.FileMode) e
 func TestRunRestoreWorkflow_FstabMergeFails_ContinuesWithWarnings(t *testing.T) {
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
-	origRestorePrompter := restorePrompter
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
 	origCompatFS := compatFS
-	origPrepare := prepareDecryptedBackupFunc
+	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
 	t.Cleanup(func() {
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
-		restorePrompter = origRestorePrompter
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
 		compatFS = origCompatFS
-		prepareDecryptedBackupFunc = origPrepare
+		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
 	})
@@ -92,13 +89,7 @@ func TestRunRestoreWorkflow_FstabMergeFails_ContinuesWithWarnings(t *testing.T) 
 		t.Fatalf("fakeFS.WriteFile(/bundle.tar): %v", err)
 	}
 
-	restorePrompter = fakeRestorePrompter{
-		mode:       RestoreModeCustom,
-		categories: []Category{mustCategoryByID(t, "filesystem")},
-		confirmed:  true,
-	}
-
-	prepareDecryptedBackupFunc = func(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (*decryptCandidate, *preparedBundle, error) {
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 		cand := &decryptCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
@@ -123,50 +114,17 @@ func TestRunRestoreWorkflow_FstabMergeFails_ContinuesWithWarnings(t *testing.T) 
 		failErr:  errors.New("disk full"),
 	}
 
-	// Provide input to accept defaultYes (blank line).
-	oldIn := os.Stdin
-	oldOut := os.Stdout
-	oldErr := os.Stderr
-	t.Cleanup(func() {
-		os.Stdin = oldIn
-		os.Stdout = oldOut
-		os.Stderr = oldErr
-	})
-	inR, inW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	out, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o666)
-	if err != nil {
-		_ = inR.Close()
-		_ = inW.Close()
-		t.Fatalf("OpenFile(%s): %v", os.DevNull, err)
-	}
-	errOut, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o666)
-	if err != nil {
-		_ = inR.Close()
-		_ = inW.Close()
-		_ = out.Close()
-		t.Fatalf("OpenFile(%s): %v", os.DevNull, err)
-	}
-	os.Stdin = inR
-	os.Stdout = out
-	os.Stderr = errOut
-	t.Cleanup(func() {
-		_ = inR.Close()
-		_ = out.Close()
-		_ = errOut.Close()
-	})
-	if _, err := inW.WriteString("\n"); err != nil {
-		t.Fatalf("WriteString: %v", err)
-	}
-	_ = inW.Close()
-
 	logger := logging.New(types.LogLevelWarning, false)
 	cfg := &config.Config{BaseDir: "/base"}
+	ui := &fakeRestoreWorkflowUI{
+		mode:              RestoreModeCustom,
+		categories:        []Category{mustCategoryByID(t, "filesystem")},
+		confirmRestore:    true,
+		confirmFstabMerge: true,
+	}
 
-	if err := RunRestoreWorkflow(context.Background(), cfg, logger, "vtest"); err != nil {
-		t.Fatalf("RunRestoreWorkflow error: %v", err)
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 	if !logger.HasWarnings() {
 		t.Fatalf("expected warnings")

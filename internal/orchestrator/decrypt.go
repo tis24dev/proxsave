@@ -79,94 +79,9 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	}
 	done := logging.DebugStart(logger, "decrypt workflow", "version=%s", version)
 	defer func() { done(err) }()
-	defer func() {
-		if err == nil {
-			return
-		}
-		if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
-			err = ErrDecryptAborted
-		}
-	}()
 
-	reader := bufio.NewReader(os.Stdin)
-	_, prepared, err := prepareDecryptedBackup(ctx, reader, cfg, logger, version, true)
-	if err != nil {
-		return err
-	}
-	defer prepared.Cleanup()
-
-	// Ask for destination directory (where the final decrypted bundle will live)
-	destDir, err := promptDestinationDir(ctx, reader, cfg)
-	if err != nil {
-		return err
-	}
-	if err := restoreFS.MkdirAll(destDir, 0o755); err != nil {
-		return fmt.Errorf("create destination directory: %w", err)
-	}
-	destDir, _ = filepath.Abs(destDir)
-	logger.Info("Destination directory: %s", destDir)
-
-	// Determine the logical decrypted archive path for naming purposes.
-	// This keeps the same defaults and prompts as before, but the archive
-	// itself stays in the temporary working directory.
-	destArchivePath := filepath.Join(destDir, filepath.Base(prepared.ArchivePath))
-	destArchivePath, err = ensureWritablePath(ctx, reader, destArchivePath, "decrypted archive")
-	if err != nil {
-		return err
-	}
-
-	// Work exclusively inside the temporary directory created by preparePlainBundle.
-	workDir := filepath.Dir(prepared.ArchivePath)
-	archiveBase := filepath.Base(destArchivePath)
-	tempArchivePath := filepath.Join(workDir, archiveBase)
-
-	// Ensure the staged archive in the temp dir has the desired basename.
-	if tempArchivePath != prepared.ArchivePath {
-		if err := moveFileSafe(prepared.ArchivePath, tempArchivePath); err != nil {
-			return fmt.Errorf("move decrypted archive within temp dir: %w", err)
-		}
-	}
-
-	manifestCopy := prepared.Manifest
-	// Keep manifest path consistent with previous behavior: it refers to the
-	// archive location in the destination directory, even though the archive
-	// itself is not written there during the decrypt process.
-	manifestCopy.ArchivePath = destArchivePath
-
-	metadataPath := tempArchivePath + ".metadata"
-	if err := backup.CreateManifest(ctx, logger, &manifestCopy, metadataPath); err != nil {
-		return fmt.Errorf("write metadata: %w", err)
-	}
-
-	checksumPath := tempArchivePath + ".sha256"
-	if err := restoreFS.WriteFile(checksumPath, []byte(fmt.Sprintf("%s  %s\n", prepared.Checksum, filepath.Base(tempArchivePath))), 0o640); err != nil {
-		return fmt.Errorf("write checksum file: %w", err)
-	}
-
-	logger.Info("Creating decrypted bundle...")
-	bundlePath, err := createBundle(ctx, logger, tempArchivePath)
-	if err != nil {
-		return err
-	}
-
-	// Only the final decrypted bundle is moved into the destination directory.
-	// All temporary plain artifacts remain confined to the temp workdir and
-	// are removed by prepared.Cleanup().
-	logicalBundlePath := destArchivePath + ".bundle.tar"
-	targetBundlePath := strings.TrimSuffix(logicalBundlePath, ".bundle.tar") + ".decrypted.bundle.tar"
-	targetBundlePath, err = ensureWritablePath(ctx, reader, targetBundlePath, "decrypted bundle")
-	if err != nil {
-		return err
-	}
-	if err := restoreFS.Remove(targetBundlePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		logger.Warning("Failed to remove existing bundle target: %v", err)
-	}
-	if err := moveFileSafe(bundlePath, targetBundlePath); err != nil {
-		return fmt.Errorf("move decrypted bundle: %w", err)
-	}
-
-	logger.Info("Decrypted bundle created: %s", targetBundlePath)
-	return nil
+		ui := newCLIWorkflowUI(bufio.NewReader(os.Stdin), logger)
+		return runDecryptWorkflowWithUI(ctx, cfg, logger, version, ui)
 }
 
 // RunDecryptWorkflow is the legacy entrypoint that builds default deps.
@@ -185,105 +100,9 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *decryptCandidate, err error) {
 	done := logging.DebugStart(logger, "select backup candidate", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
-	pathOptions := buildDecryptPathOptions(cfg, logger)
-	if len(pathOptions) == 0 {
-		return nil, fmt.Errorf("no backup paths configured in backup.env")
-	}
 
-	if logger != nil {
-		for _, opt := range pathOptions {
-			logger.Debug("Backup source option prepared: label=%q path=%q isRclone=%v", opt.Label, opt.Path, opt.IsRclone)
-		}
-	}
-
-	var candidates []*decryptCandidate
-	var selectedPath string
-
-	for {
-		option, err := promptPathSelection(ctx, reader, pathOptions)
-		if err != nil {
-			return nil, err
-		}
-
-		if logger != nil {
-			logger.Debug("Backup source selected by user: label=%q path=%q isRclone=%v", option.Label, option.Path, option.IsRclone)
-		}
-
-			logger.Info("Scanning %s for backups...", option.Path)
-
-		// Handle rclone remotes differently from filesystem paths
-		if option.IsRclone {
-			logging.DebugStep(logger, "select backup candidate", "scanning rclone remote: %s", option.Path)
-			candidates, err = discoverRcloneBackups(ctx, option.Path, logger)
-			if err != nil {
-				logger.Warning("Failed to inspect cloud remote %s: %v", option.Path, err)
-				// On persistent failures, remove this option so it is no longer offered.
-				pathOptions = removeDecryptPathOption(pathOptions, option)
-				if len(pathOptions) == 0 {
-					return nil, fmt.Errorf("no usable backup sources available")
-				}
-				continue
-			}
-			if logger != nil {
-				logger.Debug("Cloud (rclone): %d candidate bundle(s) returned for %s", len(candidates), option.Path)
-			}
-		} else {
-			logging.DebugStep(logger, "select backup candidate", "scanning filesystem path: %s", option.Path)
-			info, err := restoreFS.Stat(option.Path)
-			if err != nil || !info.IsDir() {
-				logger.Warning("Path %s is not accessible (%v)", option.Path, err)
-				continue
-			}
-
-			candidates, err = discoverBackupCandidates(logger, option.Path)
-			if err != nil {
-				logger.Warning("Failed to inspect %s: %v", option.Path, err)
-				continue
-			}
-		}
-		if len(candidates) == 0 {
-				logger.Warning("No backups found in %s – removing from source list", option.Path)
-			if logger != nil {
-				logger.Debug("Removing backup source %q (%s) due to empty candidate list", option.Label, option.Path)
-			}
-			pathOptions = removeDecryptPathOption(pathOptions, option)
-			if len(pathOptions) == 0 {
-				return nil, fmt.Errorf("no usable backup sources available")
-			}
-			continue
-		}
-
-		if requireEncrypted {
-			encrypted := filterEncryptedCandidates(candidates)
-			if len(encrypted) == 0 {
-				logger.Warning("No encrypted backups found in %s – removing from source list", option.Path)
-				if logger != nil {
-					logger.Debug("Removing backup source %q (%s) because all candidates are plain (non-encrypted)", option.Label, option.Path)
-				}
-				pathOptions = removeDecryptPathOption(pathOptions, option)
-				if len(pathOptions) == 0 {
-					return nil, fmt.Errorf("no usable backup sources available")
-				}
-				continue
-			}
-
-			if logger != nil {
-				logger.Debug("Backup candidates after encryption filter: total=%d encrypted=%d", len(candidates), len(encrypted))
-			}
-
-			candidates = encrypted
-		}
-		selectedPath = option.Path
-		break
-	}
-
-	if requireEncrypted {
-		logger.Info("Found %d encrypted backup(s) in %s", len(candidates), selectedPath)
-	} else {
-		logger.Info("Found %d backup(s) in %s", len(candidates), selectedPath)
-	}
-	candidate, err = promptCandidateSelection(ctx, reader, candidates)
-	return candidate, err
+	ui := newCLIWorkflowUI(reader, logger)
+	return selectBackupCandidateWithUI(ctx, ui, cfg, logger, requireEncrypted)
 }
 
 func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []decryptPathOption) (decryptPathOption, error) {
@@ -609,113 +428,8 @@ func downloadRcloneBackup(ctx context.Context, remotePath string, logger *loggin
 }
 
 func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decryptCandidate, version string, logger *logging.Logger) (bundle *preparedBundle, err error) {
-	done := logging.DebugStart(logger, "prepare plain bundle", "source=%v rclone=%v", cand.Source, cand.IsRclone)
-	defer func() { done(err) }()
-	// If this is an rclone backup, download it first
-	var rcloneCleanup func()
-	if cand.IsRclone && cand.Source == sourceBundle {
-		logger.Debug("Detected rclone backup, downloading...")
-		localPath, cleanup, err := downloadRcloneBackup(ctx, cand.BundlePath, logger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to download rclone backup: %w", err)
-		}
-		rcloneCleanup = cleanup
-		// Update candidate to use local path
-		cand.BundlePath = localPath
-	}
-
-	tempRoot := filepath.Join("/tmp", "proxsave")
-	if err := restoreFS.MkdirAll(tempRoot, 0o755); err != nil {
-		if rcloneCleanup != nil {
-			rcloneCleanup()
-		}
-		return nil, fmt.Errorf("create temp root: %w", err)
-	}
-	workDir, err := restoreFS.MkdirTemp(tempRoot, "proxmox-decrypt-*")
-	if err != nil {
-		if rcloneCleanup != nil {
-			rcloneCleanup()
-		}
-		return nil, fmt.Errorf("create temp dir: %w", err)
-	}
-	logging.DebugStep(logger, "prepare plain bundle", "workdir=%s", workDir)
-	cleanup := func() {
-		_ = restoreFS.RemoveAll(workDir)
-		if rcloneCleanup != nil {
-			rcloneCleanup()
-		}
-	}
-
-	var staged stagedFiles
-	switch cand.Source {
-	case sourceBundle:
-		logger.Info("Extracting bundle %s", filepath.Base(cand.BundlePath))
-		staged, err = extractBundleToWorkdirWithLogger(cand.BundlePath, workDir, logger)
-	case sourceRaw:
-		logger.Info("Staging raw artifacts for %s", filepath.Base(cand.RawArchivePath))
-		staged, err = copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger)
-	default:
-		err = fmt.Errorf("unsupported candidate source")
-	}
-	if err != nil {
-		cleanup()
-		return nil, err
-	}
-
-	manifestCopy := *cand.Manifest
-	currentEncryption := strings.ToLower(manifestCopy.EncryptionMode)
-
-	logging.DebugStep(logger, "prepare plain bundle", "encryption=%s", currentEncryption)
-	logger.Info("Preparing archive %s for decryption (mode: %s)", manifestCopy.ArchivePath, statusFromManifest(&manifestCopy))
-
-	plainArchiveName := strings.TrimSuffix(filepath.Base(staged.ArchivePath), ".age")
-	plainArchivePath := filepath.Join(workDir, plainArchiveName)
-
-	if currentEncryption == "age" {
-		if err := decryptArchiveWithPrompts(ctx, reader, staged.ArchivePath, plainArchivePath, logger); err != nil {
-			cleanup()
-			return nil, err
-		}
-	} else {
-		// For plain archives, only copy if source and destination are different
-		// to avoid truncating the file when copying to itself
-		if staged.ArchivePath != plainArchivePath {
-			if err := copyFile(restoreFS, staged.ArchivePath, plainArchivePath); err != nil {
-				cleanup()
-				return nil, fmt.Errorf("copy archive: %w", err)
-			}
-		}
-		// If paths are identical, file is already in the correct location
-	}
-
-	archiveInfo, err := restoreFS.Stat(plainArchivePath)
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("stat decrypted archive: %w", err)
-	}
-
-	checksum, err := backup.GenerateChecksum(ctx, logger, plainArchivePath)
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("generate checksum: %w", err)
-	}
-	logging.DebugStep(logger, "prepare plain bundle", "checksum computed")
-
-	manifestCopy.ArchivePath = plainArchivePath
-	manifestCopy.ArchiveSize = archiveInfo.Size()
-	manifestCopy.SHA256 = checksum
-	manifestCopy.EncryptionMode = "none"
-	if version != "" {
-		manifestCopy.ScriptVersion = version
-	}
-
-	bundle = &preparedBundle{
-		ArchivePath: plainArchivePath,
-		Manifest:    manifestCopy,
-		Checksum:    checksum,
-		cleanup:     cleanup,
-	}
-	return bundle, nil
+	ui := newCLIWorkflowUI(reader, logger)
+	return preparePlainBundleWithUI(ctx, cand, version, logger, ui)
 }
 
 func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (candidate *decryptCandidate, prepared *preparedBundle, err error) {
@@ -936,43 +650,9 @@ func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *decryptCandi
 }
 
 func decryptArchiveWithPrompts(ctx context.Context, reader *bufio.Reader, encryptedPath, outputPath string, logger *logging.Logger) error {
-	for {
-		fmt.Print("Enter decryption key or passphrase (0 = exit): ")
-		inputBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
-		fmt.Println()
-		if err != nil {
-			return err
-		}
-		trimmed := bytes.TrimSpace(inputBytes)
-		if len(trimmed) == 0 {
-			zeroBytes(inputBytes)
-			logger.Warning("Input cannot be empty")
-			continue
-		}
-		input := string(trimmed)
-		zeroBytes(trimmed)
-		zeroBytes(inputBytes)
-		if input == "0" {
-			return ErrDecryptAborted
-		}
-
-		identities, err := parseIdentityInput(input)
-		resetString(&input)
-		if err != nil {
-			logger.Warning("Invalid key/passphrase: %v", err)
-			continue
-		}
-
-		if err := decryptWithIdentity(encryptedPath, outputPath, identities...); err != nil {
-			var noMatch *age.NoIdentityMatchError
-			if errors.Is(err, age.ErrIncorrectIdentity) || errors.As(err, &noMatch) {
-				logger.Warning("Provided key or passphrase does not match this archive. Try again or press 0 to exit.")
-				continue
-			}
-			return err
-		}
-		return nil
-	}
+	ui := newCLIWorkflowUI(reader, logger)
+	displayName := filepath.Base(encryptedPath)
+	return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, logger, ui.PromptDecryptSecret)
 }
 
 func parseIdentityInput(input string) ([]age.Identity, error) {
@@ -1063,48 +743,8 @@ func moveFileSafe(src, dst string) error {
 }
 
 func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, description string) (string, error) {
-	current := filepath.Clean(path)
-	for {
-		if _, err := restoreFS.Stat(current); errors.Is(err, os.ErrNotExist) {
-			return current, nil
-		} else if err != nil && !errors.Is(err, os.ErrExist) {
-			return "", fmt.Errorf("stat %s: %w", current, err)
-		}
-
-		fmt.Printf("%s %s already exists.\n", titleCaser.String(description), current)
-		fmt.Println("  [1] Overwrite")
-			fmt.Println("  [2] Enter a different path")
-			fmt.Println("  [0] Exit")
-			fmt.Print("Choice: ")
-
-			inputLine, err := input.ReadLineWithContext(ctx, reader)
-			if err != nil {
-				return "", err
-			}
-			switch strings.TrimSpace(inputLine) {
-			case "1":
-				if err := restoreFS.Remove(current); err != nil {
-					fmt.Printf("Failed to remove existing file: %v\n", err)
-					continue
-				}
-				return current, nil
-			case "2":
-				fmt.Print("Enter new path: ")
-				newPath, err := input.ReadLineWithContext(ctx, reader)
-				if err != nil {
-					return "", err
-				}
-			trimmed := strings.TrimSpace(newPath)
-			if trimmed == "" {
-				continue
-			}
-			current = filepath.Clean(trimmed)
-		case "0":
-			return "", ErrDecryptAborted
-		default:
-			fmt.Println("Please enter 1, 2 or 0.")
-		}
-	}
+	ui := newCLIWorkflowUI(reader, nil)
+	return ensureWritablePathWithUI(ctx, ui, path, description)
 }
 
 func formatClusterMode(value string) string {

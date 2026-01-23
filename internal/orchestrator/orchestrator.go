@@ -63,6 +63,7 @@ type BackupStats struct {
 	EndTime                   time.Time
 	FilesCollected            int
 	FilesFailed               int
+	FilesNotFound             int
 	DirsCreated               int
 	BytesCollected            int64
 	ArchiveSize               int64
@@ -654,10 +655,11 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	collStats := collector.GetStats()
 	stats.FilesCollected = int(collStats.FilesProcessed)
 	stats.FilesFailed = int(collStats.FilesFailed)
+	stats.FilesNotFound = int(collStats.FilesNotFound)
 	stats.DirsCreated = int(collStats.DirsCreated)
 	stats.BytesCollected = collStats.BytesCollected
 	stats.FilesIncluded = int(collStats.FilesProcessed)
-	stats.FilesMissing = int(collStats.FilesFailed)
+	stats.FilesMissing = int(collStats.FilesNotFound)
 	stats.UncompressedSize = collStats.BytesCollected
 	if pType == types.ProxmoxVE {
 		if collector.IsClusteredPVE() {
@@ -669,6 +671,11 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 
 	if err := o.writeBackupMetadata(tempDir, stats); err != nil {
 		o.logger.Debug("Failed to write backup metadata: %v", err)
+	}
+
+	// Write backup manifest with file status details
+	if err := collector.WriteManifest(hostname); err != nil {
+		o.logger.Debug("Failed to write backup manifest: %v", err)
 	}
 
 	o.logger.Info("Collection completed: %d files (%s), %d failed, %d dirs created",

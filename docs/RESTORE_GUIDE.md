@@ -2568,10 +2568,10 @@ A: Yes, in two ways:
      `CLOUD_REMOTE` / `CLOUD_REMOTE_PATH` combination and show an entry:
        - `Cloud backups (rclone)`
    - When selected, the tool:
-     - lists `.bundle.tar` bundles on the remote with `rclone lsf`;
-     - reads metadata/manifest via `rclone cat` (without downloading everything);
+     - lists backup candidates on the remote with `rclone lsf` (`.bundle.tar` bundles and legacy `.metadata`+archive pairs);
+     - reads the manifest/metadata via `rclone cat` (without downloading full archives; for bundles the manifest is at the beginning, so this is typically fast);
      - when you pick a backup, downloads it to `/tmp/proxsave` and proceeds with decrypt/restore.
-   - If scanning times out (slow remote / huge directory), increase `RCLONE_TIMEOUT_CONNECTION` and retry.
+   - Cloud scan applies `RCLONE_TIMEOUT_CONNECTION` per rclone command (the timer resets on each list/inspect step). If scanning times out (slow remote / huge directory), increase `RCLONE_TIMEOUT_CONNECTION` and retry. Also ensure the selected remote path points directly to the directory that contains the backups (scan is non-recursive).
 
 2. **From a local rclone mount (restore-only)**  
    If you prefer to mount the rclone backend as a local filesystem:

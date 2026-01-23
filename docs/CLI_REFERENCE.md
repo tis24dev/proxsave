@@ -414,6 +414,7 @@ Next step: ./build/proxsave --dry-run
 ```
 
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
+**Note**: CLI and TUI run the same workflow logic; `--cli` only changes the interface (prompts/progress rendering), not the restore/decrypt behavior.
 
 **`--restore` workflow** (14 phases):
 1. Scans configured storage locations (local/secondary/cloud)

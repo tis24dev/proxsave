@@ -156,10 +156,34 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 	c.logger.Debug("Snapshotting PVE directories (clustered=%v)", clustered)
 
 	pveConfigPath := c.effectivePVEConfigPath()
-	if err := c.safeCopyDir(ctx,
-		pveConfigPath,
-		c.targetPathFor(pveConfigPath),
-		"PVE configuration"); err != nil {
+	var extraExclude []string
+	if !c.config.BackupVMConfigs {
+		extraExclude = append(extraExclude, "qemu-server", "lxc")
+	}
+	if !c.config.BackupPVEFirewall {
+		// Rules can exist both under /etc/pve/firewall and under /etc/pve/nodes/*.
+		extraExclude = append(extraExclude, "firewall", "host.fw")
+	}
+	if !c.config.BackupPVEACL {
+		extraExclude = append(extraExclude, "user.cfg", "acl.cfg", "domains.cfg")
+	}
+	if !c.config.BackupPVEJobs {
+		extraExclude = append(extraExclude, "jobs.cfg", "vzdump.cron")
+	}
+	if !c.config.BackupClusterConfig {
+		// Keep /etc/pve snapshot but omit cluster-specific config files when disabled.
+		extraExclude = append(extraExclude, "corosync.conf")
+	}
+
+	if len(extraExclude) > 0 {
+		c.logger.Debug("PVE config exclusions enabled (disabled features): %s", strings.Join(extraExclude, ", "))
+	}
+	if err := c.withTemporaryExcludes(extraExclude, func() error {
+		return c.safeCopyDir(ctx,
+			pveConfigPath,
+			c.targetPathFor(pveConfigPath),
+			"PVE configuration")
+	}); err != nil {
 		return err
 	}
 
@@ -203,16 +227,20 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 		}
 	}
 
-	// Always attempt to capture config.db even on standalone nodes
-	configDB := filepath.Join(clusterPath, "config.db")
-	if info, err := os.Stat(configDB); err == nil && !info.IsDir() {
-		target := c.targetPathFor(configDB)
-		c.logger.Debug("Copying PVE cluster database %s to %s", configDB, target)
-		if err := c.safeCopyFile(ctx, configDB, target, "PVE cluster database"); err != nil {
-			c.logger.Warning("Failed to copy PVE cluster database %s: %v", configDB, err)
+	if c.config.BackupClusterConfig {
+		// Always attempt to capture config.db even on standalone nodes when cluster config is enabled.
+		configDB := filepath.Join(clusterPath, "config.db")
+		if info, err := os.Stat(configDB); err == nil && !info.IsDir() {
+			target := c.targetPathFor(configDB)
+			c.logger.Debug("Copying PVE cluster database %s to %s", configDB, target)
+			if err := c.safeCopyFile(ctx, configDB, target, "PVE cluster database"); err != nil {
+				c.logger.Warning("Failed to copy PVE cluster database %s: %v", configDB, err)
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.logger.Warning("Failed to stat PVE cluster database %s: %v", configDB, err)
 		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		c.logger.Warning("Failed to stat PVE cluster database %s: %v", configDB, err)
+	} else {
+		c.logger.Debug("Skipping PVE cluster database capture: BACKUP_CLUSTER_CONFIG=false")
 	}
 
 	// Firewall configuration

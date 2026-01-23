@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"archive/tar"
-	"bufio"
 	"context"
 	"os"
 	"path/filepath"
@@ -19,28 +18,6 @@ type fakeSystemDetector struct {
 }
 
 func (f fakeSystemDetector) DetectCurrentSystem() SystemType { return f.systemType }
-
-type fakeRestorePrompter struct {
-	mode       RestoreMode
-	categories []Category
-	confirmed  bool
-
-	modeErr       error
-	categoriesErr error
-	confirmErr    error
-}
-
-func (f fakeRestorePrompter) SelectRestoreMode(ctx context.Context, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
-	return f.mode, f.modeErr
-}
-
-func (f fakeRestorePrompter) SelectCategories(ctx context.Context, logger *logging.Logger, available []Category, systemType SystemType) ([]Category, error) {
-	return f.categories, f.categoriesErr
-}
-
-func (f fakeRestorePrompter) ConfirmRestore(ctx context.Context, logger *logging.Logger) (bool, error) {
-	return f.confirmed, f.confirmErr
-}
 
 func writeMinimalTar(t *testing.T, dir string) string {
 	t.Helper()
@@ -77,14 +54,12 @@ func writeMinimalTar(t *testing.T, dir string) string {
 
 func TestRunRestoreWorkflow_CustomModeNoCategories_Succeeds(t *testing.T) {
 	origCompatFS := compatFS
-	origPrompter := restorePrompter
 	origSystem := restoreSystem
-	origPrepare := prepareDecryptedBackupFunc
+	origPrepare := prepareRestoreBundleFunc
 	t.Cleanup(func() {
 		compatFS = origCompatFS
-		restorePrompter = origPrompter
 		restoreSystem = origSystem
-		prepareDecryptedBackupFunc = origPrepare
+		prepareRestoreBundleFunc = origPrepare
 	})
 
 	fakeCompat := NewFakeFS()
@@ -95,15 +70,10 @@ func TestRunRestoreWorkflow_CustomModeNoCategories_Succeeds(t *testing.T) {
 	compatFS = fakeCompat
 
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
-	restorePrompter = fakeRestorePrompter{
-		mode:       RestoreModeCustom,
-		categories: nil,
-		confirmed:  true,
-	}
 
 	tmp := t.TempDir()
 	archivePath := writeMinimalTar(t, tmp)
-	prepareDecryptedBackupFunc = func(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (*decryptCandidate, *preparedBundle, error) {
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 		cand := &decryptCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
@@ -122,22 +92,25 @@ func TestRunRestoreWorkflow_CustomModeNoCategories_Succeeds(t *testing.T) {
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 	cfg := &config.Config{BaseDir: tmp}
+	ui := &fakeRestoreWorkflowUI{
+		mode:           RestoreModeCustom,
+		categories:     nil,
+		confirmRestore: true,
+	}
 
-	if err := RunRestoreWorkflow(context.Background(), cfg, logger, "vtest"); err != nil {
-		t.Fatalf("RunRestoreWorkflow error: %v", err)
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 }
 
 func TestRunRestoreWorkflow_ConfirmFalseAborts(t *testing.T) {
 	origCompatFS := compatFS
-	origPrompter := restorePrompter
 	origSystem := restoreSystem
-	origPrepare := prepareDecryptedBackupFunc
+	origPrepare := prepareRestoreBundleFunc
 	t.Cleanup(func() {
 		compatFS = origCompatFS
-		restorePrompter = origPrompter
 		restoreSystem = origSystem
-		prepareDecryptedBackupFunc = origPrepare
+		prepareRestoreBundleFunc = origPrepare
 	})
 
 	fakeCompat := NewFakeFS()
@@ -148,15 +121,10 @@ func TestRunRestoreWorkflow_ConfirmFalseAborts(t *testing.T) {
 	compatFS = fakeCompat
 
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
-	restorePrompter = fakeRestorePrompter{
-		mode:       RestoreModeCustom,
-		categories: nil,
-		confirmed:  false,
-	}
 
 	tmp := t.TempDir()
 	archivePath := writeMinimalTar(t, tmp)
-	prepareDecryptedBackupFunc = func(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (*decryptCandidate, *preparedBundle, error) {
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 		cand := &decryptCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
@@ -175,8 +143,13 @@ func TestRunRestoreWorkflow_ConfirmFalseAborts(t *testing.T) {
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 	cfg := &config.Config{BaseDir: tmp}
+	ui := &fakeRestoreWorkflowUI{
+		mode:           RestoreModeCustom,
+		categories:     nil,
+		confirmRestore: false,
+	}
 
-	err := RunRestoreWorkflow(context.Background(), cfg, logger, "vtest")
+	err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui)
 	if err != ErrRestoreAborted {
 		t.Fatalf("err=%v; want %v", err, ErrRestoreAborted)
 	}
