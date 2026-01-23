@@ -55,6 +55,7 @@ type Archiver struct {
 	requestedCompression types.CompressionType
 	encryptArchive       bool
 	ageRecipients        []age.Recipient
+	excludePatterns      []string
 	deps                 ArchiverDeps
 }
 
@@ -67,6 +68,7 @@ type ArchiverConfig struct {
 	DryRun             bool
 	EncryptArchive     bool
 	AgeRecipients      []age.Recipient
+	ExcludePatterns    []string
 }
 
 // CompressionError rappresenta un errore di compressione esterna (xz/zstd)
@@ -149,6 +151,7 @@ func NewArchiver(logger *logging.Logger, config *ArchiverConfig) *Archiver {
 		requestedCompression: config.Compression,
 		encryptArchive:       config.EncryptArchive,
 		ageRecipients:        append([]age.Recipient(nil), config.AgeRecipients...),
+		excludePatterns:      append([]string(nil), config.ExcludePatterns...),
 		deps:                 defaultArchiverDeps(),
 	}
 }
@@ -790,6 +793,16 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 		// Skip the root directory itself
 		if relPath == "." {
 			return nil
+		}
+
+		if len(a.excludePatterns) > 0 {
+			if excluded, pattern := FindExcludeMatch(a.excludePatterns, path, sourceDir, ""); excluded {
+				a.logger.Debug("Excluding from archive: %s (matches pattern %s)", relPath, pattern)
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 
 		// Use Lstat to get symlink info without following it

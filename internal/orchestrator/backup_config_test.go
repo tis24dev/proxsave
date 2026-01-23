@@ -17,7 +17,8 @@ func TestBuildArchiverConfig(t *testing.T) {
 		t.Fatalf("NewScryptRecipient: %v", err)
 	}
 	recipients := []age.Recipient{recipient}
-	cfg := BuildArchiverConfig(types.CompressionZstd, 3, 4, "fast", true, true, recipients)
+	exclude := []string{"commands/**", "/etc/ssh/**"}
+	cfg := BuildArchiverConfig(types.CompressionZstd, 3, 4, "fast", true, true, recipients, exclude)
 
 	expected := &backup.ArchiverConfig{
 		Compression:        types.CompressionZstd,
@@ -27,6 +28,7 @@ func TestBuildArchiverConfig(t *testing.T) {
 		DryRun:             true,
 		EncryptArchive:     true,
 		AgeRecipients:      recipients,
+		ExcludePatterns:    exclude,
 	}
 
 	if !reflect.DeepEqual(cfg, expected) {

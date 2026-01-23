@@ -147,8 +147,129 @@ func (c *Collector) CollectPVEConfigs(ctx context.Context) error {
 		c.logger.Warning("Failed to create PVE info aliases: %v", err)
 	}
 
+	c.populatePVEManifest()
+
 	c.logger.Info("PVE configuration collection completed")
 	return nil
+}
+
+func (c *Collector) populatePVEManifest() {
+	if c == nil || c.config == nil {
+		return
+	}
+	if c.pveManifest == nil {
+		c.pveManifest = make(map[string]ManifestEntry)
+	}
+
+	record := func(src string, enabled bool) {
+		if src == "" {
+			return
+		}
+		dest := c.targetPathFor(src)
+		key := pveManifestKey(c.tempDir, dest)
+		c.pveManifest[key] = c.describePathForManifest(src, dest, enabled)
+	}
+
+	pveConfigPath := c.effectivePVEConfigPath()
+	if pveConfigPath == "" {
+		return
+	}
+
+	// VM/CT configuration directories.
+	record(filepath.Join(pveConfigPath, "qemu-server"), c.config.BackupVMConfigs)
+	record(filepath.Join(pveConfigPath, "lxc"), c.config.BackupVMConfigs)
+
+	// Firewall configuration.
+	record(filepath.Join(pveConfigPath, "firewall"), c.config.BackupPVEFirewall)
+	if c.config.BackupPVEFirewall {
+		nodesDir := filepath.Join(pveConfigPath, "nodes")
+		if entries, err := os.ReadDir(nodesDir); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				node := strings.TrimSpace(entry.Name())
+				if node == "" {
+					continue
+				}
+				record(filepath.Join(nodesDir, node, "host.fw"), true)
+			}
+		}
+	}
+
+	// ACL configuration.
+	record(filepath.Join(pveConfigPath, "user.cfg"), c.config.BackupPVEACL)
+	record(filepath.Join(pveConfigPath, "acl.cfg"), c.config.BackupPVEACL)
+	record(filepath.Join(pveConfigPath, "domains.cfg"), c.config.BackupPVEACL)
+
+	// Scheduled jobs.
+	record(filepath.Join(pveConfigPath, "jobs.cfg"), c.config.BackupPVEJobs)
+	record(filepath.Join(pveConfigPath, "vzdump.cron"), c.config.BackupPVEJobs)
+
+	// Cluster configuration.
+	record(c.effectiveCorosyncConfigPath(), c.config.BackupClusterConfig)
+	record(filepath.Join(c.effectivePVEClusterPath(), "config.db"), c.config.BackupClusterConfig)
+	record("/etc/corosync/authkey", c.config.BackupClusterConfig)
+
+	// VZDump configuration.
+	vzdumpPath := c.config.VzdumpConfigPath
+	if vzdumpPath == "" {
+		vzdumpPath = "/etc/vzdump.conf"
+	} else if !filepath.IsAbs(vzdumpPath) {
+		vzdumpPath = filepath.Join(pveConfigPath, vzdumpPath)
+	}
+	record(vzdumpPath, c.config.BackupVZDumpConfig)
+}
+
+func pveManifestKey(tempDir, dest string) string {
+	if tempDir == "" || dest == "" {
+		return filepath.ToSlash(dest)
+	}
+	rel, err := filepath.Rel(tempDir, dest)
+	if err != nil {
+		return filepath.ToSlash(dest)
+	}
+	rel = strings.TrimSpace(rel)
+	if rel == "" || rel == "." {
+		return filepath.ToSlash(dest)
+	}
+	return filepath.ToSlash(rel)
+}
+
+func (c *Collector) describePathForManifest(src, dest string, enabled bool) ManifestEntry {
+	if !enabled {
+		return ManifestEntry{Status: StatusDisabled}
+	}
+	if c.shouldExclude(src) || c.shouldExclude(dest) {
+		return ManifestEntry{Status: StatusSkipped}
+	}
+
+	info, err := os.Lstat(src)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ManifestEntry{Status: StatusNotFound}
+		}
+		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
+	}
+
+	if c.dryRun {
+		if info.Mode().IsRegular() {
+			return ManifestEntry{Status: StatusCollected, Size: info.Size()}
+		}
+		return ManifestEntry{Status: StatusCollected}
+	}
+
+	if _, err := os.Lstat(dest); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ManifestEntry{Status: StatusFailed, Error: "not present in temp directory after collection"}
+		}
+		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
+	}
+
+	if info.Mode().IsRegular() {
+		return ManifestEntry{Status: StatusCollected, Size: info.Size()}
+	}
+	return ManifestEntry{Status: StatusCollected}
 }
 
 // collectPVEDirectories collects PVE-specific directories

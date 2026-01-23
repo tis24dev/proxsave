@@ -752,6 +752,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		o.dryRun,
 		o.cfg != nil && o.cfg.EncryptArchive,
 		ageRecipients,
+		collectorConfig.ExcludePatterns,
 	)
 
 	if err := archiverConfig.Validate(); err != nil {
@@ -1416,10 +1417,10 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) error {
 	fs := o.filesystem()
-	infoDir := filepath.Join(tempDir, "var/lib/proxsave-info")
-	if err := fs.MkdirAll(infoDir, 0755); err != nil {
-		return err
+	if o.dryRun {
+		return nil
 	}
+	infoDir := filepath.Join(tempDir, "var/lib/proxsave-info")
 
 	version := strings.TrimSpace(stats.Version)
 	if version == "" {
@@ -1440,6 +1441,18 @@ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) e
 	builder.WriteString("BACKUP_FEATURES=selective_restore,category_mapping,version_detection,auto_directory_creation\n")
 
 	target := filepath.Join(infoDir, "backup_metadata.txt")
+	patterns := append([]string(nil), o.excludePatterns...)
+	if o.cfg != nil && len(o.cfg.BackupBlacklist) > 0 {
+		patterns = append(patterns, o.cfg.BackupBlacklist...)
+	}
+	if excluded, pattern := backup.FindExcludeMatch(patterns, target, tempDir, ""); excluded {
+		o.logger.Debug("Skipping backup metadata %s (matches pattern %s)", target, pattern)
+		return nil
+	}
+
+	if err := fs.MkdirAll(infoDir, 0755); err != nil {
+		return err
+	}
 	if err := fs.WriteFile(target, []byte(builder.String()), 0640); err != nil {
 		return err
 	}

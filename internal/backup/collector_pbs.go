@@ -41,6 +41,13 @@ func (c *Collector) collectPBSConfigFile(ctx context.Context, root, filename, de
 	srcPath := filepath.Join(root, filename)
 	destPath := filepath.Join(c.tempDir, "etc/proxmox-backup", filename)
 
+	if c.shouldExclude(srcPath) || c.shouldExclude(destPath) {
+		c.logger.Debug("Skipping %s: excluded by pattern", filename)
+		c.logger.Info("  %s: skipped (excluded)", description)
+		c.incFilesSkipped()
+		return ManifestEntry{Status: StatusSkipped}
+	}
+
 	c.logger.Debug("Checking %s: %s", filename, srcPath)
 
 	info, err := os.Stat(srcPath)
@@ -505,24 +512,28 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
 // using CLI first, then filesystem fallback.
 func (c *Collector) collectDatastoreNamespaces(ds pbsDatastore, datastoreDir string) error {
 	c.logger.Debug("Collecting namespaces for datastore %s (path: %s)", ds.Name, ds.Path)
+	// Write location is deterministic; if excluded, skip the whole operation.
+	outputPath := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.Name))
+	if c.shouldExclude(outputPath) {
+		c.incFilesSkipped()
+		return nil
+	}
+
 	namespaces, fromFallback, err := listNamespacesFunc(ds.Name, ds.Path)
 	if err != nil {
 		return err
 	}
 
 	// Write namespaces to JSON file
-	outputPath := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.Name))
 	data, err := json.MarshalIndent(namespaces, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal namespaces: %w", err)
 	}
 
-	if err := os.WriteFile(outputPath, data, 0640); err != nil {
-		c.incFilesFailed()
+	if err := c.writeReportFile(outputPath, data); err != nil {
 		return fmt.Errorf("failed to write namespaces file: %w", err)
 	}
 
-	c.incFilesProcessed()
 	if fromFallback {
 		c.logger.Debug("Successfully collected %d namespaces for datastore %s via filesystem fallback", len(namespaces), ds.Name)
 	} else {
@@ -592,7 +603,12 @@ func (c *Collector) collectUserTokens(ctx context.Context, usersDir string) {
 		return
 	}
 
-	if err := os.WriteFile(filepath.Join(usersDir, "tokens.json"), buffer, 0640); err != nil {
+	target := filepath.Join(usersDir, "tokens.json")
+	if c.shouldExclude(target) {
+		c.incFilesSkipped()
+		return
+	}
+	if err := c.writeReportFile(target, buffer); err != nil {
 		c.logger.Debug("Failed to write aggregated tokens.json: %v", err)
 	}
 	c.logger.Debug("Aggregated PBS token export completed (%d users)", len(aggregated))

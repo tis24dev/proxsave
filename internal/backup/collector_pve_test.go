@@ -363,6 +363,39 @@ func TestCollectPVEConfigsIntegration(t *testing.T) {
 	}
 }
 
+func TestCollectPVEConfigsPopulatesManifestSkippedForExcludedACL(t *testing.T) {
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("{}"), nil
+		},
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+	})
+
+	pveConfigPath := collector.config.PVEConfigPath
+	if err := os.WriteFile(filepath.Join(pveConfigPath, "user.cfg"), []byte("user"), 0o644); err != nil {
+		t.Fatalf("write user.cfg: %v", err)
+	}
+	collector.config.BackupPVEACL = true
+	collector.config.ExcludePatterns = []string{"user.cfg"}
+
+	if err := collector.CollectPVEConfigs(context.Background()); err != nil {
+		t.Fatalf("CollectPVEConfigs failed: %v", err)
+	}
+
+	src := filepath.Join(collector.effectivePVEConfigPath(), "user.cfg")
+	dest := collector.targetPathFor(src)
+	key := pveManifestKey(collector.tempDir, dest)
+	entry, ok := collector.pveManifest[key]
+	if !ok {
+		t.Fatalf("expected manifest entry for %s (key=%s)", src, key)
+	}
+	if entry.Status != StatusSkipped {
+		t.Fatalf("expected %s status, got %s", StatusSkipped, entry.Status)
+	}
+}
+
 // Test collectVMConfigs function
 func TestCollectVMConfigs(t *testing.T) {
 	collector := newPVECollector(t)

@@ -270,3 +270,27 @@ func TestCollectPBSConfigsExcludesDisabledPBSConfigFiles(t *testing.T) {
 		t.Fatalf("expected remote_list.json excluded when BACKUP_REMOTE_CONFIGS=false")
 	}
 }
+
+func TestCollectPBSConfigFileReturnsSkippedWhenExcluded(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "remote.cfg"), []byte("remote"), 0o644); err != nil {
+		t.Fatalf("write remote.cfg: %v", err)
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = root
+	cfg.ExcludePatterns = []string{"remote.cfg"}
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
+
+	entry := collector.collectPBSConfigFile(context.Background(), root, "remote.cfg", "Remote configuration", true)
+	if entry.Status != StatusSkipped {
+		t.Fatalf("expected StatusSkipped, got %s", entry.Status)
+	}
+
+	target := filepath.Join(collector.tempDir, "etc", "proxmox-backup", "remote.cfg")
+	_, err := os.Stat(target)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected %s not to exist, stat err=%v", target, err)
+	}
+}

@@ -2,7 +2,6 @@ package backup
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -71,5 +70,5 @@ func (c *Collector) WriteManifest(hostname string) error {
 	}
 
 	manifestPath := filepath.Join(c.tempDir, "manifest.json")
-	return os.WriteFile(manifestPath, data, 0644)
+	return c.writeReportFile(manifestPath, data)
 }
