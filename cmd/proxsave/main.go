@@ -560,7 +560,6 @@ func run() int {
 	// If the installed version is up to date, nothing is printed at INFO/WARNING level
 	// (only a DEBUG message is logged). If a newer version exists, a WARNING is emitted
 	// suggesting the use of --upgrade.
-	logging.DebugStep(logger, "main", "checking for updates")
 	updateInfo := checkForUpdates(ctx, logger, toolVersion)
 
 	// Apply backup permissions (optional, Bash-compatible behavior)
@@ -990,7 +989,7 @@ func run() int {
 		}
 	}()
 
-	logging.Debug("✓ Pre-backup checks configured")
+	logging.Info("✓ Pre-backup checks configured")
 	fmt.Println()
 
 	// Initialize storage backends
@@ -1688,9 +1687,14 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	logger.Debug("Checking for ProxSave updates (current: %s)", currentVersion)
+
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo)
+	logger.Debug("Fetching latest release from GitHub: %s", apiURL)
+
 	_, latestVersion, err := fetchLatestRelease(checkCtx)
 	if err != nil {
-		logger.Debug("Update check skipped (GitHub unreachable): %v", err)
+		logger.Debug("Update check skipped: GitHub unreachable: %v", err)
 		return &UpdateInfo{
 			NewVersion: false,
 			Current:    currentVersion,
@@ -1707,7 +1711,7 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 	}
 
 	if !isNewerVersion(currentVersion, latestVersion) {
-		logger.Debug("Update check: current version (%s) is up to date (latest: %s)", currentVersion, latestVersion)
+		logger.Debug("Update check completed: latest=%s current=%s (up to date)", latestVersion, currentVersion)
 		return &UpdateInfo{
 			NewVersion: false,
 			Current:    currentVersion,
@@ -1715,7 +1719,8 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 		}
 	}
 
-	logger.Warning("A newer ProxSave version is available %s (current %s): consider running 'proxsave --upgrade' to install the latest release.", latestVersion, currentVersion)
+	logger.Debug("Update check completed: latest=%s current=%s (new version available)", latestVersion, currentVersion)
+	logger.Warning("New ProxSave version %s (current %s): run 'proxsave --upgrade' to install.", latestVersion, currentVersion)
 
 	return &UpdateInfo{
 		NewVersion: true,
