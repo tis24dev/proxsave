@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,6 +48,11 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	restoreHadWarnings := false
 	defer func() {
 		if err == nil {
+			return
+		}
+		if err == io.EOF {
+			logger.Warning("Restore input closed unexpectedly (EOF). This usually means the interactive UI lost access to stdin/TTY (e.g., SSH disconnect or non-interactive execution). Re-run with --restore --cli from an interactive shell.")
+			err = ErrRestoreAborted
 			return
 		}
 		if errors.Is(err, input.ErrInputAborted) ||

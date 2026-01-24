@@ -300,6 +300,14 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 	logDebug(logger, "Cloud (rclone): scanned %d entries, found %d valid backup candidate(s)", len(lines), len(candidates))
 	logDebug(logger, "Cloud (rclone): discovered %d bundle candidate(s) in %s", len(candidates), fullPath)
 
+	if manifestErrors > 0 {
+		if len(candidates) > 0 {
+			logWarning(logger, "Cloud scan summary: %d usable backup(s), %d candidate(s) skipped due to manifest/metadata errors (see warnings above)", len(candidates), manifestErrors)
+		} else if len(items) > 0 {
+			return nil, fmt.Errorf("no usable cloud backups found under %s: %d candidate(s) skipped due to manifest/metadata read errors (timeout=%s). This can happen with slow remotes, rclone failures, or older bundle layouts where metadata is not stored at the beginning. Consider creating a fresh backup or increasing RCLONE_TIMEOUT_CONNECTION; see warnings above for details", fullPath, manifestErrors, timeout)
+		}
+	}
+
 	return candidates, nil
 }
 
