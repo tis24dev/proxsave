@@ -73,7 +73,7 @@ The `--restore` command provides an **interactive, category-based restoration sy
 - VM/CT disk images (use Proxmox native tools)
 - Application data (databases, user data)
 - System packages (use apt/dpkg)
-- Active cluster filesystem (`/etc/pve` - export-only)
+- Direct writes to the pmxcfs mount (`/etc/pve`) in SAFE mode (export-only + staged API apply are used instead)
 
 ---
 
@@ -81,7 +81,15 @@ The `--restore` command provides an **interactive, category-based restoration sy
 
 Restore operations are organized into **15+ categories** that group related configuration files.
 
-### PVE-Specific Categories (6 categories)
+### Category Handling Types
+
+Each category is handled in one of three ways:
+
+- **Normal**: extracted directly to `/` (system paths) after safety backup
+- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or `pvesh`)
+- **Export-only**: extracted to an export directory for manual review (never written to system paths)
+
+### PVE-Specific Categories (8 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
@@ -89,21 +97,28 @@ Restore operations are organized into **15+ categories** that group related conf
 | `pve_cluster` | PVE Cluster Configuration | Cluster configuration and database | `./var/lib/pve-cluster/` |
 | `storage_pve` | PVE Storage Configuration | Storage definitions | `./etc/vzdump.conf` |
 | `pve_jobs` | PVE Backup Jobs | Scheduled backup jobs | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
+| `pve_notifications` | PVE Notifications | **Staged** notification targets and matchers (applied via API) | `./etc/pve/notifications.cfg`<br>`./etc/pve/priv/notifications.cfg` |
+| `pve_access_control` | PVE Access Control | **Staged** users/roles/groups/ACLs/realms (applied via API; secrets regenerated) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg`<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
 | `corosync` | Corosync Configuration | Cluster communication settings | `./etc/corosync/` |
 | `ceph` | Ceph Configuration | Ceph storage cluster config | `./etc/ceph/` |
 
-### PBS-Specific Categories (3 categories)
+### PBS-Specific Categories (7 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
-| `pbs_config` | PBS Configuration | Main PBS configuration | `./etc/proxmox-backup/` |
-| `datastore_pbs` | PBS Datastore Configuration | Datastore definitions | `./etc/proxmox-backup/datastore.cfg` |
-| `pbs_jobs` | PBS Jobs | Sync, verify, prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
+| `pbs_config` | PBS Config Export | **Export-only** copy of /etc/proxmox-backup (never written to system) | `./etc/proxmox-backup/` |
+| `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions | `./etc/proxmox-backup/datastore.cfg` |
+| `maintenance_pbs` | PBS Maintenance | Maintenance settings | `./etc/proxmox-backup/maintenance.cfg` |
+| `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
+| `pbs_remotes` | PBS Remotes | **Staged** remotes for sync/verify (may include credentials) | `./etc/proxmox-backup/remote.cfg` |
+| `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers | `./etc/proxmox-backup/notifications.cfg`<br>`./etc/proxmox-backup/notifications-priv.cfg` |
+| `pbs_access_control` | PBS Access Control | **Staged** users/realms/ACLs and secrets | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json` |
 
-### Common Categories (7 categories)
+### Common Categories (8 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
+| `filesystem` | Filesystem Configuration | Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot | `./etc/fstab` |
 | `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
 | `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/proxmox-backup/proxy.pem` |
 | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
@@ -118,6 +133,19 @@ Not all categories are available in every backup. The restore workflow:
 1. Analyzes the backup archive
 2. Detects which categories contain files
 3. Displays only available categories for selection
+
+### PVE SAFE-Mode Secrets (pve_access_control)
+
+When restoring `pve_access_control` in **SAFE mode**, ProxSave applies users/roles/groups/ACLs/realms via `pvesh`.
+If you restore the cluster database (`pve_cluster` in **RECOVERY mode**), ProxSave restores `config.db` and skips this SAFE-mode apply path.
+Some secrets cannot be imported 1:1, so ProxSave regenerates them and writes a local report file:
+
+- `/tmp/proxsave/restore-stage-*/pve_access_control_secrets.json` (mode `0600`)
+
+The report contains:
+- Regenerated passwords for local users (`*@pve`)
+- Newly created API tokens (new secret values)
+- `tfa_reset_required`: users that must re-enroll TFA after restore
 
 ---
 
@@ -134,7 +162,10 @@ Four predefined modes provide common restoration scenarios, plus custom selectio
 - Migrating to new hardware
 - Restoring after system failure
 
-**Categories Included**: All available categories (export-only categories such as `pve_config_export` are extracted to the export directory for manual application)
+**Categories Included**: All available categories
+- **Normal** categories are restored to system paths
+- **Staged** categories are extracted under `/tmp/proxsave/restore-stage-*` and applied automatically (API/file apply)
+- **Export-only** categories (e.g. `pve_config_export`, `pbs_config`) are extracted to the export directory for manual review/application
 
 **Command Flow**:
 ```
@@ -158,12 +189,15 @@ Select restore mode:
 - `storage_pve` - Storage definitions
 - `pve_jobs` - Backup jobs
 - `zfs` - ZFS configuration
+- `filesystem` - /etc/fstab
 
 **PBS Categories**:
-- `pbs_config` - PBS configuration
-- `datastore_pbs` - Datastore definitions
-- `pbs_jobs` - Sync/verify/prune jobs
+- `pbs_config` - PBS config export (export-only)
+- `datastore_pbs` - Datastore definitions (staged apply)
+- `maintenance_pbs` - Maintenance settings
+- `pbs_jobs` - Sync/verify/prune jobs (staged apply)
 - `zfs` - ZFS configuration
+- `filesystem` - /etc/fstab
 
 **Command Flow**:
 ```
@@ -188,6 +222,7 @@ Select restore mode:
 - `ssl` - SSL/TLS certificates
 - `ssh` - SSH daemon configuration (`/etc/ssh`) and SSH keys (root/home users)
 - `services` - Systemd service configs and udev rules
+- `filesystem` - /etc/fstab (Smart merge prompt)
 
 **Command Flow**:
 ```
@@ -1069,9 +1104,15 @@ Hard guard in code prevents ANY write to /etc/pve when restoring to /
 (see internal/orchestrator/restore.go:880-884)
 ```
 
+### Export-Only Category: pbs_config
+
+**Category**: `pbs_config`  
+**Path**: `./etc/proxmox-backup/`  
+**Reason**: The full PBS configuration directory contains high-risk and secret-bearing files; ProxSave restores specific subsets via staged categories (e.g. `pbs_access_control`, `pbs_notifications`, `pbs_remotes`) and leaves the full directory as export-only for manual review.
+
 ### Export Process
 
-**Two-Pass Extraction**:
+**Extraction Passes**:
 ```
 Pass 1: Normal Categories
   ├─ Destination: / (system root)
@@ -1081,9 +1122,14 @@ Pass 1: Normal Categories
 
 Pass 2: Export-Only Categories
   ├─ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
-  ├─ Categories: Only export-only (pve_config_export)
+  ├─ Categories: Export-only (e.g. pve_config_export, pbs_config)
   ├─ Safety backup: Not created (not overwriting system)
   └─ Log: Separate section in same log file
+
+Pass 3: Staged Categories
+  ├─ Destination: /tmp/proxsave/restore-stage-*
+  ├─ Categories: Sensitive staged apply (e.g. network, notifications, access control)
+  └─ Apply: Written after extraction via safe file/API apply steps
 ```
 
 **Export Directory Structure**:

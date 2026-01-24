@@ -79,6 +79,29 @@ func GetAllCategories() []Category {
 			},
 		},
 		{
+			ID:          "pve_notifications",
+			Name:        "PVE Notifications",
+			Description: "Datacenter notification targets and matchers (applied via API)",
+			Type:        CategoryTypePVE,
+			Paths: []string{
+				"./etc/pve/notifications.cfg",
+				"./etc/pve/priv/notifications.cfg",
+			},
+		},
+		{
+			ID:          "pve_access_control",
+			Name:        "PVE Access Control",
+			Description: "Users, roles, groups, ACLs and realms (applied via API)",
+			Type:        CategoryTypePVE,
+			Paths: []string{
+				"./etc/pve/user.cfg",
+				"./etc/pve/domains.cfg",
+				"./etc/pve/priv/shadow.cfg",
+				"./etc/pve/priv/token.cfg",
+				"./etc/pve/priv/tfa.cfg",
+			},
+		},
+		{
 			ID:          "corosync",
 			Name:        "Corosync Configuration",
 			Description: "Cluster communication and quorum settings",
@@ -135,6 +158,40 @@ func GetAllCategories() []Category {
 				"./etc/proxmox-backup/sync.cfg",
 				"./etc/proxmox-backup/verification.cfg",
 				"./etc/proxmox-backup/prune.cfg",
+			},
+		},
+		{
+			ID:          "pbs_remotes",
+			Name:        "PBS Remotes",
+			Description: "Remote definitions for sync/verify jobs (may include credentials)",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/remote.cfg",
+			},
+		},
+		{
+			ID:          "pbs_notifications",
+			Name:        "PBS Notifications",
+			Description: "Notification targets and matchers",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/notifications.cfg",
+				"./etc/proxmox-backup/notifications-priv.cfg",
+			},
+		},
+		{
+			ID:          "pbs_access_control",
+			Name:        "PBS Access Control",
+			Description: "Users, realms and permissions",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/user.cfg",
+				"./etc/proxmox-backup/domains.cfg",
+				"./etc/proxmox-backup/acl.cfg",
+				"./etc/proxmox-backup/token.cfg",
+				"./etc/proxmox-backup/shadow.json",
+				"./etc/proxmox-backup/token.shadow",
+				"./etc/proxmox-backup/tfa.json",
 			},
 		},
 

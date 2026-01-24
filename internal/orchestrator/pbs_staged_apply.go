@@ -15,7 +15,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if plan == nil || plan.SystemType != SystemTypePBS {
 		return nil
 	}
-	if !plan.HasCategoryID("datastore_pbs") && !plan.HasCategoryID("pbs_jobs") {
+	if !plan.HasCategoryID("datastore_pbs") && !plan.HasCategoryID("pbs_jobs") && !plan.HasCategoryID("pbs_remotes") {
 		return nil
 	}
 	if strings.TrimSpace(stageRoot) == "" {
@@ -49,7 +49,19 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 			logger.Warning("PBS staged apply: job configs: %v", err)
 		}
 	}
+	if plan.HasCategoryID("pbs_remotes") {
+		if err := applyPBSRemoteCfgFromStage(ctx, logger, stageRoot); err != nil {
+			logger.Warning("PBS staged apply: remote.cfg: %v", err)
+		}
+	}
 	return nil
+}
+
+func applyPBSRemoteCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
+	done := logging.DebugStart(logger, "pbs staged apply remote.cfg", "stage=%s", stageRoot)
+	defer func() { done(err) }()
+
+	return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/remote.cfg")
 }
 
 type pbsDatastoreBlock struct {
