@@ -22,7 +22,9 @@ func TestApplyNetworkWithRollbackWithUI_RollsBackFilesOnPreflightFailure(t *test
 		networkDiagnosticsSequence = origSeq
 	})
 
-	restoreFS = NewFakeFS()
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
 	restoreTime = &FakeTime{Current: time.Date(2026, 1, 18, 13, 47, 6, 0, time.UTC)}
 	networkDiagnosticsSequence = 0
 

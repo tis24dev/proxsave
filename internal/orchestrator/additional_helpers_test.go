@@ -1112,6 +1112,7 @@ func makeRegistryEntriesStale(t *testing.T, registryPath string) {
 
 func TestCopyFileUsesProvidedFS(t *testing.T) {
 	fs := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fs.Root) })
 	src := "src/config.txt"
 	dest := "dest/clone.txt"
 	if err := fs.AddFile(src, []byte("payload")); err != nil {

@@ -12,6 +12,7 @@ func TestValidateCompatibility_Mismatch(t *testing.T) {
 	defer func() { compatFS = orig }()
 
 	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
 	compatFS = fake
 	if err := os.MkdirAll(fake.onDisk("/etc/pve"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -26,7 +27,9 @@ func TestValidateCompatibility_Mismatch(t *testing.T) {
 func TestDetectCurrentSystem_Unknown(t *testing.T) {
 	orig := compatFS
 	defer func() { compatFS = orig }()
-	compatFS = NewFakeFS()
+	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
+	compatFS = fake
 
 	if got := DetectCurrentSystem(); got != SystemTypeUnknown {
 		t.Fatalf("expected unknown system, got %s", got)
@@ -38,6 +41,7 @@ func TestGetSystemInfoDetectsPVE(t *testing.T) {
 	defer func() { compatFS = orig }()
 
 	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
 	compatFS = fake
 	if err := fake.AddDir("/etc/pve"); err != nil {
 		t.Fatalf("add dir: %v", err)
@@ -69,6 +73,7 @@ func TestGetSystemInfoDetectsPBS(t *testing.T) {
 	defer func() { compatFS = orig }()
 
 	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
 	compatFS = fake
 	if err := fake.AddDir("/etc/proxmox-backup"); err != nil {
 		t.Fatalf("add dir: %v", err)

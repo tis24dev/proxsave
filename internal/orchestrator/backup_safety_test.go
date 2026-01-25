@@ -435,6 +435,7 @@ func TestCleanupOldSafetyBackups(t *testing.T) {
 
 func TestCreateSafetyBackupArchivesSelectedPaths(t *testing.T) {
 	fake := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
 	origFS := safetyFS
 	safetyFS = fake
 	t.Cleanup(func() { safetyFS = origFS })
@@ -720,6 +721,7 @@ func TestWalkFS_CallbackError(t *testing.T) {
 
 func TestWalkFS_StatError(t *testing.T) {
 	mock := newMockFS()
+	t.Cleanup(func() { _ = os.RemoveAll(mock.Root) })
 	nonExistentPath := "/nonexistent/path"
 
 	var callbackCalled bool
@@ -1646,6 +1648,7 @@ func TestBackupFile_SpecialModes(t *testing.T) {
 
 func TestCreateSafetyBackup_NonExistentPaths(t *testing.T) {
 	fake := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
 	origFS := safetyFS
 	safetyFS = fake
 	t.Cleanup(func() { safetyFS = origFS })
@@ -1680,6 +1683,7 @@ func TestCreateSafetyBackup_NonExistentPaths(t *testing.T) {
 
 func TestCreateSafetyBackup_MixedExistentNonExistent(t *testing.T) {
 	fake := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
 	origFS := safetyFS
 	safetyFS = fake
 	t.Cleanup(func() { safetyFS = origFS })
@@ -1714,6 +1718,7 @@ func TestCreateSafetyBackup_MixedExistentNonExistent(t *testing.T) {
 
 func TestCreateSafetyBackup_StatError(t *testing.T) {
 	mock := newMockFS()
+	t.Cleanup(func() { _ = os.RemoveAll(mock.Root) })
 	origFS := safetyFS
 	safetyFS = mock
 	t.Cleanup(func() { safetyFS = origFS })

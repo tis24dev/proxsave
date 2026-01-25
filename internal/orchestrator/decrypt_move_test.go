@@ -45,6 +45,7 @@ func TestMoveFileSafe_RenameFailsFallsBackToCopy(t *testing.T) {
 	orig := restoreFS
 	defer func() { restoreFS = orig }()
 	fake := &fakeFSRenameFail{NewFakeFS()}
+	defer func() { _ = os.RemoveAll(fake.Root) }()
 	restoreFS = fake
 
 	src := "/src/file.txt"

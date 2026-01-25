@@ -106,6 +106,32 @@ func TestCollectCustomPathsHonorsContext(t *testing.T) {
 	}
 }
 
+func TestCollectCriticalFilesIncludesCrypttab(t *testing.T) {
+	collector := newTestCollector(t)
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "crypttab"), []byte("crypt1 UUID=deadbeef none luks\n"), 0o600); err != nil {
+		t.Fatalf("write crypttab: %v", err)
+	}
+
+	if err := collector.collectCriticalFiles(context.Background()); err != nil {
+		t.Fatalf("collectCriticalFiles error: %v", err)
+	}
+
+	dest := filepath.Join(collector.tempDir, "etc", "crypttab")
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("expected crypttab copied, got %v", err)
+	}
+	if string(data) != "crypt1 UUID=deadbeef none luks\n" {
+		t.Fatalf("crypttab content mismatch: %q", string(data))
+	}
+}
+
 func TestCollectSSHKeysCopiesEtcSSH(t *testing.T) {
 	collector := newTestCollector(t)
 

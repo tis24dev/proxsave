@@ -1178,6 +1178,7 @@ func (c *Collector) collectCriticalFiles(ctx context.Context) error {
 	c.logger.Debug("Collecting critical files (passwd/shadow/fstab/etc.)")
 	criticalFiles := []string{
 		"/etc/fstab",
+		"/etc/crypttab",
 		"/etc/passwd",
 		"/etc/group",
 		"/etc/shadow",

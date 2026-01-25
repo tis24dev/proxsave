@@ -159,7 +159,9 @@ func TestCheckZFSPoolsAfterRestore_ReportsImportablePools(t *testing.T) {
 		restoreGlob = origGlob
 	})
 
-	restoreFS = NewFakeFS()
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
 	restoreGlob = func(pattern string) ([]string, error) { return nil, nil }
 
 	fake := &FakeCommandRunner{

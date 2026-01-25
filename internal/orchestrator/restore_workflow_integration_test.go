@@ -70,7 +70,9 @@ func TestRunSafeClusterApply_PveshNotFound(t *testing.T) {
 func TestDetectConfiguredZFSPools_Empty(t *testing.T) {
 	orig := restoreFS
 	defer func() { restoreFS = orig }()
-	restoreFS = NewFakeFS()
+	fakeFS := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fakeFS.Root) }()
+	restoreFS = fakeFS
 	if pools := detectConfiguredZFSPools(); len(pools) != 0 {
 		t.Fatalf("expected no pools, got %v", pools)
 	}

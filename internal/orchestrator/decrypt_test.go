@@ -1805,6 +1805,7 @@ func TestEnsureWritablePath_StatError(t *testing.T) {
 	fakeFS.StatErrors["/fake/path"] = fmt.Errorf("permission denied")
 	restoreFS = fakeFS
 	t.Cleanup(func() { restoreFS = origFS })
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 
 	reader := bufio.NewReader(strings.NewReader(""))
 	_, err := ensureWritablePath(context.Background(), reader, "/fake/path", "test file")
@@ -2163,6 +2164,7 @@ func TestExtractBundleToWorkdir_WithFakeFS(t *testing.T) {
 	fakeFS := NewFakeFS()
 	restoreFS = fakeFS
 	t.Cleanup(func() { restoreFS = origFS })
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 
 	// Create a bundle in the fakeFS using the real os module
 	dir := t.TempDir()
@@ -3311,6 +3313,7 @@ func TestPromptCandidateSelection_Exit(t *testing.T) {
 
 func TestPreparePlainBundle_MkdirAllError(t *testing.T) {
 	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
 	fake.MkdirAllErr = os.ErrPermission
 	orig := restoreFS
 	restoreFS = fake
@@ -3336,6 +3339,7 @@ func TestPreparePlainBundle_MkdirAllError(t *testing.T) {
 
 func TestPreparePlainBundle_MkdirTempError(t *testing.T) {
 	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
 	fake.MkdirTempErr = os.ErrPermission
 	orig := restoreFS
 	restoreFS = fake
@@ -3407,6 +3411,7 @@ func TestExtractBundleToWorkdir_OpenFileErrorOnExtract(t *testing.T) {
 
 	// Use fake FS with OpenFile error for the archive target
 	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
 	fake.OpenFileErr[filepath.Join(workDir, "backup.tar.xz")] = os.ErrPermission
 	// Copy bundle to fake FS
 	bundleContent, _ := os.ReadFile(bundlePath)
@@ -3775,6 +3780,7 @@ func TestPreparePlainBundle_StatErrorAfterExtract(t *testing.T) {
 
 	// Create FakeFS that will fail on stat for the extracted archive
 	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
 
 	// Copy bundle to fake FS
 	bundleContent, _ := os.ReadFile(bundlePath)
@@ -4069,6 +4075,7 @@ func TestPreparePlainBundle_CopyFileError(t *testing.T) {
 
 	// Use FakeFS
 	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
 	bundleContent, _ := os.ReadFile(bundlePath)
 	if err := fake.WriteFile(bundlePath, bundleContent, 0o640); err != nil {
 		t.Fatalf("copy bundle to fake: %v", err)

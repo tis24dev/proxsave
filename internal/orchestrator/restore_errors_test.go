@@ -21,7 +21,9 @@ import (
 func TestAnalyzeBackupCategories_OpenError(t *testing.T) {
 	orig := restoreFS
 	defer func() { restoreFS = orig }()
-	restoreFS = NewFakeFS()
+	fakeFS := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fakeFS.Root) }()
+	restoreFS = fakeFS
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 
 	_, err := AnalyzeBackupCategories("/missing/archive.tar", logger)
