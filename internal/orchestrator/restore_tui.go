@@ -64,13 +64,13 @@ func selectRestoreModeTUI(systemType SystemType, configPath, buildSig, backupSum
 	storageText := ""
 	switch systemType {
 	case SystemTypePVE:
-		storageText = "STORAGE only - PVE cluster + storage configuration + VM configs + jobs"
+		storageText = "STORAGE only - PVE cluster + storage + jobs + mounts"
 	case SystemTypePBS:
-		storageText = "DATASTORE only - PBS config + datastore definitions + sync/verify/prune jobs"
+		storageText = "DATASTORE only - PBS datastore definitions + sync/verify/prune jobs + mounts"
 	default:
 		storageText = "STORAGE/DATASTORE only - Storage or datastore configuration"
 	}
-	baseText := "SYSTEM BASE only - Network + SSL + SSH + services"
+	baseText := "SYSTEM BASE only - Network + SSL + SSH + services + filesystem"
 	customText := "CUSTOM selection - Choose specific categories"
 
 	list.AddItem("1) "+fullText, "", 0, nil)
@@ -487,12 +487,12 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 		modeName = "FULL restore (all categories)"
 	case RestoreModeStorage:
 		if config.SystemType == SystemTypePVE {
-			modeName = "STORAGE only (PVE cluster + storage + jobs)"
+			modeName = "STORAGE only (cluster + storage + jobs + mounts)"
 		} else {
-			modeName = "DATASTORE only (PBS config + datastores + jobs)"
+			modeName = "DATASTORE only (datastores + jobs + mounts)"
 		}
 	case RestoreModeBase:
-		modeName = "SYSTEM BASE only (network + SSL + SSH + services)"
+		modeName = "SYSTEM BASE only (network + SSL + SSH + services + filesystem)"
 	case RestoreModeCustom:
 		modeName = fmt.Sprintf("CUSTOM selection (%d categories)", len(config.SelectedCategories))
 	default:

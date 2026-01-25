@@ -160,7 +160,7 @@ func TestPathMatchesCategory(t *testing.T) {
 			name:     "absolute path match",
 			filePath: "/etc/hosts",
 			category: Category{Paths: []string{"/etc/hosts"}},
-			want:     false, // current implementation expects ./-prefixed matches
+			want:     true, // absolute paths are normalized to ./ for matching
 		},
 		{
 			name:     "exact match with prefix",

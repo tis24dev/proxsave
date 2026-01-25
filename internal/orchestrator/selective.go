@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,6 +118,12 @@ func pathMatchesPattern(archivePath, pattern string) bool {
 		normPattern = "./" + normPattern
 	}
 
+	if strings.ContainsAny(normPattern, "*?[") && !strings.HasSuffix(normPattern, "/") {
+		if ok, err := path.Match(normPattern, normArchive); err == nil && ok {
+			return true
+		}
+	}
+
 	// Exact match
 	if normArchive == normPattern {
 		return true
@@ -152,14 +159,14 @@ func ShowRestoreModeMenuWithReader(ctx context.Context, reader *bufio.Reader, lo
 	fmt.Println("  [1] FULL restore - Restore everything from backup")
 
 	if systemType == SystemTypePVE {
-		fmt.Println("  [2] STORAGE only - PVE cluster + storage configuration + VM configs + jobs")
+		fmt.Println("  [2] STORAGE only - PVE cluster + storage + jobs + mounts")
 	} else if systemType == SystemTypePBS {
-		fmt.Println("  [2] DATASTORE only - PBS config + datastore definitions + sync/verify/prune jobs")
+		fmt.Println("  [2] DATASTORE only - PBS datastore definitions + sync/verify/prune jobs + mounts")
 	} else {
 		fmt.Println("  [2] STORAGE/DATASTORE only - Storage or datastore configuration")
 	}
 
-	fmt.Println("  [3] SYSTEM BASE only - Network + SSL + SSH + services")
+	fmt.Println("  [3] SYSTEM BASE only - Network + SSL + SSH + services + filesystem")
 	fmt.Println("  [4] CUSTOM selection - Choose specific categories")
 	fmt.Println("  [0] Cancel")
 	fmt.Print("Choice: ")
@@ -382,12 +389,12 @@ func ShowRestorePlan(logger *logging.Logger, config *SelectiveRestoreConfig) {
 		modeName = "FULL restore (all categories)"
 	case RestoreModeStorage:
 		if config.SystemType == SystemTypePVE {
-			modeName = "STORAGE only (PVE cluster + storage + jobs)"
+			modeName = "STORAGE only (cluster + storage + jobs + mounts)"
 		} else {
-			modeName = "DATASTORE only (PBS config + datastores + jobs)"
+			modeName = "DATASTORE only (datastores + jobs + mounts)"
 		}
 	case RestoreModeBase:
-		modeName = "SYSTEM BASE only (network + SSL + SSH + services)"
+		modeName = "SYSTEM BASE only (network + SSL + SSH + services + filesystem)"
 	case RestoreModeCustom:
 		modeName = fmt.Sprintf("CUSTOM selection (%d categories)", len(config.SelectedCategories))
 	}

@@ -41,15 +41,25 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 		t.Fatalf("collectPBSCommands error: %v", err)
 	}
 
-	commandsDir := filepath.Join(collector.tempDir, "commands")
-	stateDir := filepath.Join(collector.tempDir, "var/lib/proxmox-backup")
+	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
 
 	for _, rel := range []string{
 		"pbs_version.txt",
 		"node_config.json",
 		"datastore_list.json",
 		"datastore_store1_status.json",
+		"acme_accounts.json",
+		"acme_plugins.json",
+		"notification_targets.json",
+		"notification_matchers.json",
+		"notification_endpoints_smtp.json",
+		"notification_endpoints_sendmail.json",
+		"notification_endpoints_gotify.json",
+		"notification_endpoints_webhook.json",
 		"user_list.json",
+		"realms_ldap.json",
+		"realms_ad.json",
+		"realms_openid.json",
 		"acl_list.json",
 		"remote_list.json",
 		"sync_jobs.json",
@@ -64,17 +74,11 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 		"cert_info.txt",
 		"traffic_control.json",
 		"recent_tasks.json",
+		"s3_endpoints.json",
 	} {
 		if _, err := os.Stat(filepath.Join(commandsDir, rel)); err != nil {
 			t.Fatalf("expected %s to exist: %v", rel, err)
 		}
-	}
-
-	if _, err := os.Stat(filepath.Join(stateDir, "version.txt")); err != nil {
-		t.Fatalf("expected version mirror to exist: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(stateDir, "datastore_list.json")); err != nil {
-		t.Fatalf("expected datastore_list mirror to exist: %v", err)
 	}
 
 	version, err := os.ReadFile(filepath.Join(commandsDir, "pbs_version.txt"))
@@ -140,7 +144,7 @@ func TestCollectPBSPxarMetadataProcessesMultipleDatastores(t *testing.T) {
 		t.Fatalf("collectPBSPxarMetadata error: %v", err)
 	}
 
-	metaDir := filepath.Join(tmp, "var/lib/proxmox-backup/pxar_metadata")
+	metaDir := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata")
 	for _, tc := range []struct {
 		ds     pbsDatastore
 		dsPath string
@@ -220,7 +224,7 @@ func TestCollectDatastoreConfigsCreatesConfigAndNamespaceFiles(t *testing.T) {
 		t.Fatalf("collectDatastoreConfigs error: %v", err)
 	}
 
-	datastoreDir := filepath.Join(tmp, "datastores")
+	datastoreDir := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "datastores")
 	if _, err := os.Stat(filepath.Join(datastoreDir, "store_config.json")); err != nil {
 		t.Fatalf("expected config file: %v", err)
 	}
@@ -233,8 +237,8 @@ func TestCollectUserTokensSkipsInvalidUserListJSON(t *testing.T) {
 	tmp := t.TempDir()
 	collector := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
 
-	commandsDir := filepath.Join(tmp, "commands")
-	usersDir := filepath.Join(tmp, "users")
+	commandsDir := filepath.Join(tmp, "var/lib/proxsave-info", "commands", "pbs")
+	usersDir := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "access-control")
 	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
 		t.Fatalf("mkdir commands: %v", err)
 	}
@@ -273,7 +277,7 @@ func TestCollectPBSCommandsSkipsTapeDetailsWhenHasTapeSupportErrors(t *testing.T
 		t.Fatalf("collectPBSCommands error: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "commands", "tape_drives.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "tape_drives.json")); err == nil {
 		t.Fatalf("tape_drives.json should not be created when tape support check fails")
 	}
 }
@@ -346,15 +350,15 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 		t.Fatalf("expected etc/proxmox-backup to be copied: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "datastores", "store_config.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "var/lib/proxsave-info", "pbs", "datastores", "store_config.json")); err != nil {
 		t.Fatalf("expected datastore config to be collected: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "users", "tokens.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "var/lib/proxsave-info", "pbs", "access-control", "tokens.json")); err != nil {
 		t.Fatalf("expected tokens.json to be aggregated: %v", err)
 	}
 
-	pxarMeta := filepath.Join(collector.tempDir, "var/lib/proxmox-backup/pxar_metadata", "store", "metadata.json")
+	pxarMeta := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "pbs", "pxar", "metadata", "store", "metadata.json")
 	if _, err := os.Stat(pxarMeta); err != nil {
 		t.Fatalf("expected PXAR metadata to be collected: %v", err)
 	}
@@ -400,7 +404,7 @@ func TestCollectPBSPxarMetadataStopsOnFirstDatastoreError(t *testing.T) {
 
 	collector := NewCollector(newTestLogger(), cfg, tmp, types.ProxmoxBS, false)
 
-	metaRoot := filepath.Join(tmp, "var/lib/proxmox-backup/pxar_metadata")
+	metaRoot := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata")
 	if err := os.MkdirAll(metaRoot, 0o755); err != nil {
 		t.Fatalf("mkdir metaRoot: %v", err)
 	}

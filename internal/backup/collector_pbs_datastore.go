@@ -31,7 +31,7 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
 	}
 	c.logger.Debug("Collecting datastore details for %d datastores", len(datastores))
 
-	datastoreDir := filepath.Join(c.tempDir, "datastores")
+	datastoreDir := c.proxsaveInfoDir("pbs", "datastores")
 	if err := c.ensureDir(datastoreDir); err != nil {
 		return fmt.Errorf("failed to create datastores directory: %w", err)
 	}
@@ -111,17 +111,18 @@ func (c *Collector) collectPBSPxarMetadata(ctx context.Context, datastores []pbs
 	}
 	c.logger.Debug("PXAR metadata concurrency: datastores=%s, per-datastore workers=%d", mode, intraWorkers)
 
-	metaRoot := filepath.Join(c.tempDir, "var/lib/proxmox-backup/pxar_metadata")
+	pxarRoot := c.proxsaveInfoDir("pbs", "pxar")
+	metaRoot := filepath.Join(pxarRoot, "metadata")
 	if err := c.ensureDir(metaRoot); err != nil {
 		return fmt.Errorf("failed to create PXAR metadata directory: %w", err)
 	}
 
-	selectedRoot := filepath.Join(c.tempDir, "var/lib/proxmox-backup/selected_pxar")
+	selectedRoot := filepath.Join(pxarRoot, "selected")
 	if err := c.ensureDir(selectedRoot); err != nil {
 		return fmt.Errorf("failed to create selected_pxar directory: %w", err)
 	}
 
-	smallRoot := filepath.Join(c.tempDir, "var/lib/proxmox-backup/small_pxar")
+	smallRoot := filepath.Join(pxarRoot, "small")
 	if err := c.ensureDir(smallRoot); err != nil {
 		return fmt.Errorf("failed to create small_pxar directory: %w", err)
 	}

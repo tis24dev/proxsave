@@ -354,7 +354,7 @@ BACKUP_EXCLUDE_PATTERNS="*/cache/**, /var/tmp/**, *.log"
 
 ### Exclusion Behavior (Guaranteed)
 
-- Exclusions are enforced consistently for anything that would end up inside the backup archive (files/directories copied from the host, full PVE/PBS snapshots, command outputs under `commands/`, and generated metadata such as `manifest.json` and `var/lib/proxsave-info/backup_metadata.txt`).
+- Exclusions are enforced consistently for anything that would end up inside the backup archive (files/directories copied from the host, full PVE/PBS snapshots, command outputs under `var/lib/proxsave-info/commands/`, and generated metadata such as `manifest.json` and `var/lib/proxsave-info/backup_metadata.txt`).
 - Patterns are matched against both:
   - the original host path (e.g. `/etc/pve/nodes/node1/qemu-server/100.conf`), and
   - the path inside the backup archive (e.g. `etc/pve/nodes/node1/qemu-server/100.conf`).

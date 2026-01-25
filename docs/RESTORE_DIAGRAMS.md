@@ -98,15 +98,15 @@ flowchart TD
     Mode -->|4. CUSTOM| Custom[CUSTOM Mode]
 
     Full --> SystemFull{System Type?}
-    SystemFull -->|PVE| PVEFull[PVE Categories:<br/>- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- corosync<br/>- ceph<br/>+ Common]
-    SystemFull -->|PBS| PBSFull[PBS Categories:<br/>- pbs_config<br/>- datastore_pbs<br/>- pbs_jobs<br/>+ Common]
-    SystemFull -->|Unknown| CommonFull[Common Only:<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- zfs]
+    SystemFull -->|PVE| PVEFull[PVE Categories:<br/>- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- pve_notifications<br/>- pve_access_control<br/>- corosync<br/>- ceph<br/>+ Common]
+    SystemFull -->|PBS| PBSFull[PBS Categories:<br/>- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- pbs_notifications<br/>- pbs_access_control<br/>+ Common]
+    SystemFull -->|Unknown| CommonFull[Common Only:<br/>- filesystem<br/>- storage_stack<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- user_data<br/>- zfs<br/>- proxsave_info]
 
     Storage --> SystemStorage{System Type?}
-    SystemStorage -->|PVE| PVEStorage[- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- zfs]
-    SystemStorage -->|PBS| PBSStorage[- pbs_config<br/>- datastore_pbs<br/>- pbs_jobs<br/>- zfs]
+    SystemStorage -->|PVE| PVEStorage[- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- filesystem<br/>- storage_stack<br/>- zfs]
+    SystemStorage -->|PBS| PBSStorage[- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- filesystem<br/>- storage_stack<br/>- zfs]
 
-    Base --> BaseCats[- network<br/>- ssl<br/>- ssh<br/>- services]
+    Base --> BaseCats[- network<br/>- ssl<br/>- ssh<br/>- services<br/>- filesystem]
 
     Custom --> CheckboxMenu[Interactive Menu]
     CheckboxMenu --> ToggleLoop{Toggle Categories}

@@ -209,10 +209,10 @@ func TestCollectUserHomesSkipsSSHKeysWhenDisabled(t *testing.T) {
 		t.Fatalf("collectUserHomes failed: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "users", "alice", "note.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "home", "alice", "note.txt")); err != nil {
 		t.Fatalf("expected note.txt copied: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "users", "alice", ".ssh")); err == nil {
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "home", "alice", ".ssh")); err == nil {
 		t.Fatalf("expected alice .ssh excluded when BACKUP_SSH_KEYS=false")
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat alice .ssh: %v", err)
@@ -367,9 +367,9 @@ func TestCollectSystemDirectoriesCopiesAltNetConfigsAndLeases(t *testing.T) {
 		filepath.Join(collector.tempDir, "etc", "netplan", "01-netcfg.yaml"),
 		filepath.Join(collector.tempDir, "etc", "systemd", "network", "10-eth0.network"),
 		filepath.Join(collector.tempDir, "etc", "NetworkManager", "system-connections", "conn.nmconnection"),
-		filepath.Join(collector.tempDir, "var", "lib", "dhcp", "lease.test"),
-		filepath.Join(collector.tempDir, "var", "lib", "NetworkManager", "lease.test"),
-		filepath.Join(collector.tempDir, "run", "systemd", "netif", "leases", "lease.test"),
+		filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "runtime", "var", "lib", "dhcp", "lease.test"),
+		filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "runtime", "var", "lib", "NetworkManager", "lease.test"),
+		filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "runtime", "run", "systemd", "netif", "leases", "lease.test"),
 	}
 	for _, p := range paths {
 		if _, err := os.Stat(p); err != nil {
@@ -398,12 +398,9 @@ func TestBuildNetworkReportAggregatesOutputs(t *testing.T) {
 		t.Fatalf("failed to write resolv.conf: %v", err)
 	}
 
-	commandsDir := filepath.Join(collector.tempDir, "commands")
-	infoDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info")
-	for _, dir := range []string{commandsDir, infoDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("failed to create dir %s: %v", dir, err)
-		}
+	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "system")
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatalf("failed to create dir %s: %v", commandsDir, err)
 	}
 
 	writeCmd := func(name, content string) {
@@ -425,7 +422,7 @@ func TestBuildNetworkReportAggregatesOutputs(t *testing.T) {
 		t.Fatalf("failed to write bonding status: %v", err)
 	}
 
-	if err := collector.buildNetworkReport(context.Background(), commandsDir, infoDir); err != nil {
+	if err := collector.buildNetworkReport(context.Background(), commandsDir); err != nil {
 		t.Fatalf("buildNetworkReport failed: %v", err)
 	}
 
@@ -441,10 +438,7 @@ func TestBuildNetworkReportAggregatesOutputs(t *testing.T) {
 		}
 	}
 
-	mirror := filepath.Join(infoDir, "network_report.txt")
-	if _, err := os.Stat(mirror); err != nil {
-		t.Fatalf("expected mirrored report at %s: %v", mirror, err)
-	}
+	// Report is written only to the primary directory (no secondary mirror).
 }
 
 func newTestCollector(t *testing.T) *Collector {

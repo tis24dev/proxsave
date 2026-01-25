@@ -71,7 +71,7 @@ The `--restore` command provides an **interactive, category-based restoration sy
 ### What Does NOT Get Restored
 
 - VM/CT disk images (use Proxmox native tools)
-- Application data (databases, user data)
+- Application data (databases and app state under `/var/lib/*`)
 - System packages (use apt/dpkg)
 - Direct writes to the pmxcfs mount (`/etc/pve`) in SAFE mode (export-only + staged API apply are used instead)
 
@@ -79,7 +79,7 @@ The `--restore` command provides an **interactive, category-based restoration sy
 
 ## Category System
 
-Restore operations are organized into **15+ categories** that group related configuration files.
+Restore operations are organized into **18–19 categories** (depending on PVE vs PBS) that group related configuration files.
 
 ### Category Handling Types
 
@@ -114,18 +114,21 @@ Each category is handled in one of three ways:
 | `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers | `./etc/proxmox-backup/notifications.cfg`<br>`./etc/proxmox-backup/notifications-priv.cfg` |
 | `pbs_access_control` | PBS Access Control | **Staged** users/realms/ACLs and secrets | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json` |
 
-### Common Categories (8 categories)
+### Common Categories (11 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
 | `filesystem` | Filesystem Configuration | Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot | `./etc/fstab` |
-| `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
-| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/proxmox-backup/proxy.pem` |
+| `storage_stack` | Storage Stack (Mounts/Targets) | Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab) | `./etc/crypttab`<br>`./etc/iscsi/`<br>`./var/lib/iscsi/`<br>`./etc/multipath/`<br>`./etc/multipath.conf`<br>`./etc/mdadm/`<br>`./etc/lvm/backup/`<br>`./etc/lvm/archive/`<br>`./etc/autofs.conf`<br>`./etc/auto.master`<br>`./etc/auto.master.d/`<br>`./etc/auto.*` |
+| `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/netplan/`<br>`./etc/systemd/network/`<br>`./etc/NetworkManager/system-connections/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
+| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/ssl/`<br>`./etc/proxmox-backup/proxy.pem` |
 | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
 | `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
 | `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |
-| `services` | System Services | Systemd service configs and udev rules | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/` |
+| `services` | System Services | Systemd service configs and related system settings | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/`<br>`./etc/apt/`<br>`./etc/logrotate.d/`<br>`./etc/timezone`<br>`./etc/sysctl.conf`<br>`./etc/sysctl.d/`<br>`./etc/modprobe.d/`<br>`./etc/modules`<br>`./etc/iptables/`<br>`./etc/nftables.conf`<br>`./etc/nftables.d/` |
+| `user_data` | User Data (Home Directories) | Root and user home directories (/root and /home) | `./root/`<br>`./home/` |
 | `zfs` | ZFS Configuration | ZFS pool cache and configs | `./etc/zfs/`<br>`./etc/hostid` |
+| `proxsave_info` | ProxSave Diagnostics (Export Only) | **Export-only** ProxSave command outputs and inventory reports (never written to system) | `./var/lib/proxsave-info/`<br>`./manifest.json` |
 
 ### Category Availability
 
@@ -188,16 +191,17 @@ Select restore mode:
 - `pve_cluster` - Cluster configuration
 - `storage_pve` - Storage definitions
 - `pve_jobs` - Backup jobs
-- `zfs` - ZFS configuration
 - `filesystem` - /etc/fstab
+- `storage_stack` - Storage stack config (mount prerequisites)
+- `zfs` - ZFS configuration
 
 **PBS Categories**:
-- `pbs_config` - PBS config export (export-only)
 - `datastore_pbs` - Datastore definitions (staged apply)
 - `maintenance_pbs` - Maintenance settings
 - `pbs_jobs` - Sync/verify/prune jobs (staged apply)
-- `zfs` - ZFS configuration
 - `filesystem` - /etc/fstab
+- `storage_stack` - Storage stack config (mount prerequisites)
+- `zfs` - ZFS configuration
 
 **Command Flow**:
 ```
@@ -459,24 +463,41 @@ See [Cluster Restore Modes](#cluster-restore-modes-safe-vs-recovery) for detaile
 RESTORE PLAN
 ═══════════════════════════════════════════════════════════════
 
-Restore mode: STORAGE only (4 categories)
+Restore mode: STORAGE only (cluster + storage + jobs + mounts)
 System type:  Proxmox Virtual Environment (PVE)
 
 Categories to restore:
   1. PVE Cluster Configuration
      Proxmox VE cluster configuration and database
   2. PVE Storage Configuration
-     Storage definitions and backup jobs
+     Storage definitions and backup job configurations
   3. PVE Backup Jobs
-     Scheduled backup jobs
-  4. ZFS Configuration
-     ZFS pool cache and configs
+     Scheduled backup job definitions
+  4. Filesystem Configuration
+     Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot
+  5. Storage Stack (Mounts/Targets)
+     Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab)
+  6. ZFS Configuration
+     ZFS pool cache and configuration files
 
 Files/directories that will be restored:
   • /var/lib/pve-cluster/
   • /etc/vzdump.conf
   • /etc/pve/jobs.cfg
   • /etc/pve/vzdump.cron
+  • /etc/fstab
+  • /etc/crypttab
+  • /etc/iscsi/
+  • /var/lib/iscsi/
+  • /etc/multipath/
+  • /etc/multipath.conf
+  • /etc/mdadm/
+  • /etc/lvm/backup/
+  • /etc/lvm/archive/
+  • /etc/autofs.conf
+  • /etc/auto.master
+  • /etc/auto.master.d/
+  • /etc/auto.*
   • /etc/zfs/
   • /etc/hostid
 
@@ -1209,8 +1230,9 @@ Pass 3: Staged Categories
 ### Export-Only in Custom Mode
 
 **Visibility**:
-- Export-only categories **NOT shown** in Full/Storage/Base modes
-- **Only available** in Custom selection mode
+- In **FULL restore**, export-only categories are included automatically (but extracted to a separate export directory)
+- In **STORAGE** and **SYSTEM BASE** modes, export-only categories are not included
+- In **CUSTOM selection**, you can explicitly select export-only categories
 
 **Selection**:
 ```
@@ -2232,14 +2254,14 @@ chown -R backup:backup /mnt/datastore/<DatastoreName> && chmod 750 /mnt/datastor
 
 **Issue: "Bad Request (400) unable to read /etc/resolv.conf (No such file or directory)"**
 
-**Cause**: `/etc/resolv.conf` is missing or a broken symlink. This can happen after a restore if a previous backup contained an invalid symlink (e.g. pointing to `../commands/resolv_conf.txt`), or if the target system uses `systemd-resolved` and the expected `/run/systemd/resolve/*` files are not present.
+**Cause**: `/etc/resolv.conf` is missing or a broken symlink. This can happen after a restore if a previous backup contained an invalid symlink (e.g. pointing to `../var/lib/proxsave-info/commands/system/resolv_conf.txt` or legacy `../commands/resolv_conf.txt`), or if the target system uses `systemd-resolved` and the expected `/run/systemd/resolve/*` files are not present.
 
 **Solution**:
 ```bash
 ls -la /etc/resolv.conf
 readlink /etc/resolv.conf 2>/dev/null || true
 
-# If the link is broken or points to commands/resolv_conf.txt, replace it:
+# If the link is broken or points to a proxsave diagnostics file, replace it:
 rm -f /etc/resolv.conf
 
 if [ -e /run/systemd/resolve/resolv.conf ]; then

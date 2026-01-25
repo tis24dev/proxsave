@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -206,12 +208,35 @@ func GetAllCategories() []Category {
 			},
 		},
 		{
+			ID:          "storage_stack",
+			Name:        "Storage Stack (Mounts/Targets)",
+			Description: "Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab)",
+			Type:        CategoryTypeCommon,
+			Paths: []string{
+				"./etc/crypttab",
+				"./etc/iscsi/",
+				"./var/lib/iscsi/",
+				"./etc/multipath/",
+				"./etc/multipath.conf",
+				"./etc/mdadm/",
+				"./etc/lvm/backup/",
+				"./etc/lvm/archive/",
+				"./etc/autofs.conf",
+				"./etc/auto.master",
+				"./etc/auto.master.d/",
+				"./etc/auto.*",
+			},
+		},
+		{
 			ID:          "network",
 			Name:        "Network Configuration",
 			Description: "Network interfaces and routing",
 			Type:        CategoryTypeCommon,
 			Paths: []string{
 				"./etc/network/",
+				"./etc/netplan/",
+				"./etc/systemd/network/",
+				"./etc/NetworkManager/system-connections/",
 				"./etc/hosts",
 				"./etc/hostname",
 				"./etc/resolv.conf",
@@ -225,6 +250,7 @@ func GetAllCategories() []Category {
 			Description: "SSL/TLS certificates and private keys",
 			Type:        CategoryTypeCommon,
 			Paths: []string{
+				"./etc/ssl/",
 				"./etc/proxmox-backup/proxy.pem",
 			},
 		},
@@ -268,6 +294,26 @@ func GetAllCategories() []Category {
 				"./etc/systemd/system/",
 				"./etc/default/",
 				"./etc/udev/rules.d/",
+				"./etc/apt/",
+				"./etc/logrotate.d/",
+				"./etc/timezone",
+				"./etc/sysctl.conf",
+				"./etc/sysctl.d/",
+				"./etc/modprobe.d/",
+				"./etc/modules",
+				"./etc/iptables/",
+				"./etc/nftables.conf",
+				"./etc/nftables.d/",
+			},
+		},
+		{
+			ID:          "user_data",
+			Name:        "User Data (Home Directories)",
+			Description: "Root and user home directories (/root and /home)",
+			Type:        CategoryTypeCommon,
+			Paths: []string{
+				"./root/",
+				"./home/",
 			},
 		},
 		{
@@ -279,6 +325,17 @@ func GetAllCategories() []Category {
 				"./etc/zfs/",
 				"./etc/hostid",
 			},
+		},
+		{
+			ID:          "proxsave_info",
+			Name:        "ProxSave Diagnostics (Export Only)",
+			Description: "ProxSave command outputs and inventory reports (export-only; never written to system paths)",
+			Type:        CategoryTypeCommon,
+			Paths: []string{
+				"./var/lib/proxsave-info/",
+				"./manifest.json",
+			},
+			ExportOnly: true,
 		},
 	}
 }
@@ -348,22 +405,37 @@ func PathMatchesCategory(filePath string, category Category) bool {
 	if !strings.HasPrefix(normalized, "./") && !strings.HasPrefix(normalized, "../") {
 		normalized = "./" + normalized
 	}
+	normalized = filepath.ToSlash(normalized)
 
 	for _, catPath := range category.Paths {
+		if catPath == "" {
+			continue
+		}
+		normalizedCat := catPath
+		if !strings.HasPrefix(normalizedCat, "./") && !strings.HasPrefix(normalizedCat, "../") {
+			normalizedCat = "./" + normalizedCat
+		}
+		normalizedCat = filepath.ToSlash(normalizedCat)
+
+		if strings.ContainsAny(normalizedCat, "*?[") && !strings.HasSuffix(normalizedCat, "/") {
+			if ok, err := path.Match(normalizedCat, normalized); err == nil && ok {
+				return true
+			}
+		}
 		// Check for exact match
-		if normalized == catPath {
+		if normalized == normalizedCat {
 			return true
 		}
 
 		// Check if the file is under a category directory
-		if strings.HasSuffix(catPath, "/") {
+		if strings.HasSuffix(normalizedCat, "/") {
 			// Handle directory path both with and without trailing slash
-			dirPath := strings.TrimSuffix(catPath, "/")
+			dirPath := strings.TrimSuffix(normalizedCat, "/")
 			if normalized == dirPath {
 				return true
 			}
 
-			if strings.HasPrefix(normalized, catPath) {
+			if strings.HasPrefix(normalized, normalizedCat) {
 				return true
 			}
 		}
@@ -406,16 +478,16 @@ func GetStorageModeCategories(systemType string) []Category {
 	var categories []Category
 
 	if systemType == "pve" {
-		// PVE: cluster + storage + jobs + zfs + filesystem
+		// PVE: cluster + storage + jobs + zfs + filesystem + storage stack
 		for _, cat := range all {
-			if cat.ID == "pve_cluster" || cat.ID == "storage_pve" || cat.ID == "pve_jobs" || cat.ID == "zfs" || cat.ID == "filesystem" {
+			if cat.ID == "pve_cluster" || cat.ID == "storage_pve" || cat.ID == "pve_jobs" || cat.ID == "zfs" || cat.ID == "filesystem" || cat.ID == "storage_stack" {
 				categories = append(categories, cat)
 			}
 		}
 	} else if systemType == "pbs" {
-		// PBS: config export + datastore + maintenance + jobs + zfs + filesystem
+		// PBS: config export + datastore + maintenance + jobs + zfs + filesystem + storage stack
 		for _, cat := range all {
-			if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "maintenance_pbs" || cat.ID == "pbs_jobs" || cat.ID == "zfs" || cat.ID == "filesystem" {
+			if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "maintenance_pbs" || cat.ID == "pbs_jobs" || cat.ID == "zfs" || cat.ID == "filesystem" || cat.ID == "storage_stack" {
 				categories = append(categories, cat)
 			}
 		}

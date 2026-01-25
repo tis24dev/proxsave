@@ -417,7 +417,7 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 
 // collectPVECommands collects output from PVE commands and returns runtime info
 func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pveRuntimeInfo, error) {
-	commandsDir := filepath.Join(c.tempDir, "commands")
+	commandsDir := c.proxsaveCommandsDir("pve")
 	if err := c.ensureDir(commandsDir); err != nil {
 		return nil, fmt.Errorf("failed to create commands directory: %w", err)
 	}
@@ -643,7 +643,7 @@ func (c *Collector) collectVMConfigs(ctx context.Context) error {
 	}
 
 	// Collect VMs/CTs list
-	commandsDir := filepath.Join(c.tempDir, "commands")
+	commandsDir := c.proxsaveCommandsDir("pve")
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
 	if nodeName == "" {
@@ -1352,23 +1352,23 @@ func (c *Collector) createPVEInfoAliases(ctx context.Context) error {
 		target string
 	}{
 		{
-			source: filepath.Join(c.tempDir, "commands", "nodes_status.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "nodes_status.json"),
 			target: filepath.Join(baseInfoDir, "nodes_status.json"),
 		},
 		{
-			source: filepath.Join(c.tempDir, "commands", "storage_status.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "storage_status.json"),
 			target: filepath.Join(baseInfoDir, "storage_status.json"),
 		},
 		{
-			source: filepath.Join(c.tempDir, "commands", "pve_users.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "pve_users.json"),
 			target: filepath.Join(baseInfoDir, "user_list.json"),
 		},
 		{
-			source: filepath.Join(c.tempDir, "commands", "pve_groups.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "pve_groups.json"),
 			target: filepath.Join(baseInfoDir, "group_list.json"),
 		},
 		{
-			source: filepath.Join(c.tempDir, "commands", "pve_roles.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "pve_roles.json"),
 			target: filepath.Join(baseInfoDir, "role_list.json"),
 		},
 	}

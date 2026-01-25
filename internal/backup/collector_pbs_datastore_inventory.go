@@ -94,7 +94,7 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 		return err
 	}
 
-	commandsDir := filepath.Join(c.tempDir, "commands")
+	commandsDir := c.proxsaveCommandsDir("pbs")
 	if err := c.ensureDir(commandsDir); err != nil {
 		return fmt.Errorf("ensure commands dir: %w", err)
 	}
@@ -116,6 +116,10 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 		{src: "/etc/iscsi", dest: filepath.Join(c.tempDir, "etc/iscsi"), desc: "iSCSI configuration"},
 		{src: "/var/lib/iscsi", dest: filepath.Join(c.tempDir, "var/lib/iscsi"), desc: "iSCSI runtime state"},
 		{src: "/etc/multipath", dest: filepath.Join(c.tempDir, "etc/multipath"), desc: "multipath configuration"},
+		{src: "/etc/mdadm", dest: filepath.Join(c.tempDir, "etc/mdadm"), desc: "mdadm configuration"},
+		{src: "/etc/lvm/backup", dest: filepath.Join(c.tempDir, "etc/lvm/backup"), desc: "LVM metadata backups"},
+		{src: "/etc/lvm/archive", dest: filepath.Join(c.tempDir, "etc/lvm/archive"), desc: "LVM metadata archives"},
+		{src: "/etc/zfs", dest: filepath.Join(c.tempDir, "etc/zfs"), desc: "ZFS configuration/cache"},
 	} {
 		if err := c.safeCopyDir(ctx, c.systemPath(dir.src), dir.dest, dir.desc); err != nil {
 			c.logger.Warning("Failed to collect %s (%s): %v", dir.desc, dir.src, err)
@@ -151,10 +155,37 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 	report.Files["mdadm_conf"] = c.captureInventoryFile(c.systemPath("/etc/mdadm/mdadm.conf"), "/etc/mdadm/mdadm.conf")
 	report.Files["iscsi_initiatorname"] = c.captureInventoryFile(c.systemPath("/etc/iscsi/initiatorname.iscsi"), "/etc/iscsi/initiatorname.iscsi")
 	report.Files["iscsi_iscsid_conf"] = c.captureInventoryFile(c.systemPath("/etc/iscsi/iscsid.conf"), "/etc/iscsi/iscsid.conf")
+	report.Files["autofs_master"] = c.captureInventoryFile(c.systemPath("/etc/auto.master"), "/etc/auto.master")
+	report.Files["autofs_conf"] = c.captureInventoryFile(c.systemPath("/etc/autofs.conf"), "/etc/autofs.conf")
+	report.Files["zfs_zpool_cache"] = c.captureInventoryFile(c.systemPath("/etc/zfs/zpool.cache"), "/etc/zfs/zpool.cache")
 
 	report.Dirs["iscsi_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/iscsi"), "/etc/iscsi")
 	report.Dirs["iscsi_var_lib"] = c.captureInventoryDir(ctx, c.systemPath("/var/lib/iscsi"), "/var/lib/iscsi")
 	report.Dirs["multipath_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/multipath"), "/etc/multipath")
+	report.Dirs["mdadm_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/mdadm"), "/etc/mdadm")
+	report.Dirs["lvm_backup"] = c.captureInventoryDir(ctx, c.systemPath("/etc/lvm/backup"), "/etc/lvm/backup")
+	report.Dirs["lvm_archive"] = c.captureInventoryDir(ctx, c.systemPath("/etc/lvm/archive"), "/etc/lvm/archive")
+	report.Dirs["zfs_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/zfs"), "/etc/zfs")
+	report.Dirs["autofs_master_d"] = c.captureInventoryDir(ctx, c.systemPath("/etc/auto.master.d"), "/etc/auto.master.d")
+
+	// Capture systemd mount units (common for remote storage mounts outside /etc/fstab).
+	report.Dirs["systemd_mount_units"] = c.captureInventoryDirFiltered(
+		ctx,
+		c.systemPath("/etc/systemd/system"),
+		"/etc/systemd/system",
+		func(rel string, info os.FileInfo) bool {
+			name := strings.ToLower(filepath.Base(rel))
+			return strings.HasSuffix(name, ".mount") || strings.HasSuffix(name, ".automount")
+		},
+	)
+	if err := c.safeCopySystemdMountUnitFiles(ctx); err != nil {
+		c.logger.Warning("Failed to collect systemd mount units: %v", err)
+	}
+
+	// Capture common autofs map files and copy them into the backup tree (best effort).
+	if err := c.safeCopyAutofsMapFiles(ctx); err != nil {
+		c.logger.Warning("Failed to collect autofs map files: %v", err)
+	}
 
 	// Best-effort: capture and copy referenced key/credential files from crypttab/fstab.
 	for _, ref := range uniqueSortedStrings(append(
@@ -246,8 +277,8 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 	}
 
 	// Include already collected PBS command outputs if available (best-effort).
-	report.Commands["pbs_version_file"] = c.captureInventoryCommandFromFile(filepath.Join(commandsDir, "pbs_version.txt"), "commands/pbs_version.txt")
-	report.Commands["datastore_list_file"] = c.captureInventoryCommandFromFile(filepath.Join(commandsDir, "datastore_list.json"), "commands/datastore_list.json")
+	report.Commands["pbs_version_file"] = c.captureInventoryCommandFromFile(filepath.Join(commandsDir, "pbs_version.txt"), "var/lib/proxsave-info/commands/pbs/pbs_version.txt")
+	report.Commands["datastore_list_file"] = c.captureInventoryCommandFromFile(filepath.Join(commandsDir, "datastore_list.json"), "var/lib/proxsave-info/commands/pbs/datastore_list.json")
 
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -627,6 +658,7 @@ func extractFstabReferencedFiles(content string) []string {
 		"passwd":      {},
 		"passfile":    {},
 		"keyfile":     {},
+		"identityfile": {},
 	}
 
 	var out []string
@@ -648,7 +680,7 @@ func extractFstabReferencedFiles(content string) []string {
 				continue
 			}
 			parts := strings.SplitN(opt, "=", 2)
-			key := strings.TrimSpace(parts[0])
+			key := strings.ToLower(strings.TrimSpace(parts[0]))
 			val := strings.TrimSpace(parts[1])
 			if key == "" || val == "" {
 				continue
@@ -662,4 +694,176 @@ func extractFstabReferencedFiles(content string) []string {
 		}
 	}
 	return uniqueSortedStrings(out)
+}
+
+func (c *Collector) safeCopySystemdMountUnitFiles(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	base := c.systemPath("/etc/systemd/system")
+	info, err := os.Stat(base)
+	if err != nil {
+		return nil
+	}
+	if !info.IsDir() {
+		return nil
+	}
+
+	destBase := filepath.Join(c.tempDir, "etc/systemd/system")
+	if c.shouldExclude(base) || c.shouldExclude(destBase) {
+		c.incFilesSkipped()
+		return nil
+	}
+
+	if c.dryRun {
+		return nil
+	}
+	if err := c.ensureDir(destBase); err != nil {
+		return err
+	}
+
+	return filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+		if errCtx := ctx.Err(); errCtx != nil {
+			return errCtx
+		}
+		if err != nil {
+			return err
+		}
+		if info == nil || info.IsDir() {
+			return nil
+		}
+		name := strings.ToLower(info.Name())
+		if !strings.HasSuffix(name, ".mount") && !strings.HasSuffix(name, ".automount") {
+			return nil
+		}
+		rel, err := filepath.Rel(base, path)
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(destBase, rel)
+		if c.shouldExclude(path) || c.shouldExclude(dest) {
+			return nil
+		}
+		return c.safeCopyFile(ctx, path, dest, "systemd mount unit")
+	})
+}
+
+func (c *Collector) safeCopyAutofsMapFiles(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	for _, path := range []string{
+		"/etc/auto.master",
+		"/etc/autofs.conf",
+	} {
+		src := c.systemPath(path)
+		dest := filepath.Join(c.tempDir, strings.TrimPrefix(path, "/"))
+		if err := c.safeCopyFile(ctx, src, dest, "autofs config"); err != nil {
+			// Non-critical; safeCopyFile already counts failures when appropriate.
+			continue
+		}
+	}
+
+	// /etc/auto.* maps (e.g. /etc/auto.nfs, /etc/auto.cifs)
+	glob := c.systemPath("/etc/auto.*")
+	matches, _ := filepath.Glob(glob)
+	for _, src := range matches {
+		base := filepath.Base(src)
+		if base == "auto.master" {
+			continue
+		}
+		rel := filepath.Join("etc", base)
+		dest := filepath.Join(c.tempDir, rel)
+		_ = c.safeCopyFile(ctx, src, dest, "autofs map")
+	}
+
+	// /etc/auto.master.d (drop-in directory)
+	_ = c.safeCopyDir(ctx, c.systemPath("/etc/auto.master.d"), filepath.Join(c.tempDir, "etc/auto.master.d"), "autofs drop-in configs")
+	return nil
+}
+
+func (c *Collector) captureInventoryDirFiltered(ctx context.Context, sourcePath, logicalPath string, include func(rel string, info os.FileInfo) bool) inventoryDirSnapshot {
+	snap := inventoryDirSnapshot{
+		LogicalPath: logicalPath,
+		SourcePath:  sourcePath,
+	}
+
+	if c.shouldExclude(sourcePath) {
+		snap.Skipped = true
+		snap.Reason = "excluded by pattern"
+		return snap
+	}
+
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return snap
+		}
+		snap.Error = err.Error()
+		return snap
+	}
+	if !info.IsDir() {
+		snap.Exists = true
+		snap.Error = "not a directory"
+		return snap
+	}
+	snap.Exists = true
+
+	var files []inventoryDirEntry
+	walkErr := filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
+		if errCtx := ctx.Err(); errCtx != nil {
+			return errCtx
+		}
+		if err != nil {
+			return err
+		}
+		if info == nil || info.IsDir() {
+			return nil
+		}
+
+		rel, err := filepath.Rel(sourcePath, path)
+		if err != nil {
+			return err
+		}
+		if include != nil && !include(rel, info) {
+			return nil
+		}
+
+		entry := inventoryDirEntry{
+			RelativePath: rel,
+			SizeBytes:    info.Size(),
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			entry.IsSymlink = true
+			if target, err := os.Readlink(path); err == nil {
+				entry.SymlinkTarget = target
+			} else {
+				entry.Error = err.Error()
+			}
+			files = append(files, entry)
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			entry.Error = err.Error()
+		} else {
+			entry.SHA256 = sha256Hex(data)
+		}
+
+		files = append(files, entry)
+		return nil
+	})
+	if walkErr != nil {
+		snap.Error = walkErr.Error()
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].RelativePath < files[j].RelativePath
+	})
+	snap.Files = files
+	return snap
 }

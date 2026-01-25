@@ -327,7 +327,7 @@ func TestCollectDatastoreConfigsDryRun(t *testing.T) {
 		t.Fatalf("collectDatastoreConfigs failed: %v", err)
 	}
 
-	nsFile := filepath.Join(collector.tempDir, "datastores", "store1_namespaces.json")
+	nsFile := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "datastores", "store1_namespaces.json")
 	if _, err := os.Stat(nsFile); err != nil {
 		t.Fatalf("expected namespaces file, got %v", err)
 	}
@@ -352,7 +352,7 @@ func TestCollectUserConfigsWithTokens(t *testing.T) {
 			return []byte(`[{"tokenid":"mytoken"}]`), nil
 		},
 	})
-	commandsDir := filepath.Join(collector.tempDir, "commands")
+	commandsDir := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "commands", "pbs")
 	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
 		t.Fatalf("failed to create commands dir: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestCollectUserConfigsWithTokens(t *testing.T) {
 		t.Fatalf("collectUserConfigs failed: %v", err)
 	}
 
-	tokensPath := filepath.Join(collector.tempDir, "users", "tokens.json")
+	tokensPath := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "access-control", "tokens.json")
 	data, err := os.ReadFile(tokensPath)
 	if err != nil {
 		t.Fatalf("tokens.json not created: %v", err)
@@ -389,7 +389,7 @@ func TestCollectUserConfigsMissingUserList(t *testing.T) {
 		t.Fatalf("collectUserConfigs failed: %v", err)
 	}
 
-	tokensPath := filepath.Join(collector.tempDir, "users", "tokens.json")
+	tokensPath := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "access-control", "tokens.json")
 	if _, err := os.Stat(tokensPath); !os.IsNotExist(err) {
 		t.Fatalf("expected no tokens.json, got err=%v", err)
 	}

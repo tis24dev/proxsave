@@ -410,7 +410,7 @@ func TestCollectSystemInfo(t *testing.T) {
 	}
 
 	// Verify commands directory was created (new implementation)
-	commandsDir := filepath.Join(tempDir, "commands")
+	commandsDir := filepath.Join(tempDir, "var/lib/proxsave-info", "commands", "system")
 	if _, err := os.Stat(commandsDir); os.IsNotExist(err) {
 		t.Error("commands directory was not created")
 	}

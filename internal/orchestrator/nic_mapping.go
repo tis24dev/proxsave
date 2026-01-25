@@ -296,6 +296,7 @@ func applyNICNameRepair(logger *logging.Logger, plan *nicRepairPlan, includeConf
 
 func loadBackupNetworkInventoryFromArchive(ctx context.Context, archivePath string) (*archivedNetworkInventory, string, error) {
 	candidates := []string{
+		"./var/lib/proxsave-info/commands/system/network_inventory.json",
 		"./commands/network_inventory.json",
 		"./var/lib/proxsave-info/network_inventory.json",
 	}

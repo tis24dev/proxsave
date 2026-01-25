@@ -128,7 +128,7 @@ func TestCollectUserTokensAggregates(t *testing.T) {
 		},
 	})
 
-	commandsDir := filepath.Join(tmp, "commands")
+	commandsDir := filepath.Join(tmp, "var/lib/proxsave-info", "commands", "pbs")
 	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
 		t.Fatalf("mkdir commands: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestCollectUserTokensAggregates(t *testing.T) {
 		t.Fatalf("collectUserConfigs error: %v", err)
 	}
 
-	aggPath := filepath.Join(tmp, "users", "tokens.json")
+	aggPath := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "access-control", "tokens.json")
 	if _, err := os.Stat(aggPath); err != nil {
 		t.Fatalf("expected aggregated tokens.json, got %v", err)
 	}
@@ -181,7 +181,7 @@ func TestCollectPBSConfigsWithCustomRoot(t *testing.T) {
 		t.Fatalf("CollectPBSConfigs failed with custom root: %v", err)
 	}
 
-	commandsDir := filepath.Join(collector.tempDir, "commands")
+	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
 	if _, err := os.Stat(commandsDir); err != nil {
 		t.Fatalf("expected commands directory, got err: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestCollectPBSConfigsExcludesDisabledPBSConfigFiles(t *testing.T) {
 	}
 
 	// Ensure related command output is also excluded when the feature flag is disabled.
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "commands", "remote_list.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "remote_list.json")); err == nil {
 		t.Fatalf("expected remote_list.json excluded when BACKUP_REMOTE_CONFIGS=false")
 	}
 }

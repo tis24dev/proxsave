@@ -275,25 +275,18 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 
 // collectPBSCommands collects output from PBS commands
 func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsDatastore) error {
-	commandsDir := filepath.Join(c.tempDir, "commands")
+	commandsDir := c.proxsaveCommandsDir("pbs")
 	if err := c.ensureDir(commandsDir); err != nil {
 		return fmt.Errorf("failed to create commands directory: %w", err)
 	}
 	c.logger.Debug("Collecting PBS command outputs into %s", commandsDir)
-
-	stateDir := filepath.Join(c.tempDir, "var/lib/proxmox-backup")
-	if err := c.ensureDir(stateDir); err != nil {
-		return fmt.Errorf("failed to create PBS state directory: %w", err)
-	}
-	c.logger.Debug("PBS state snapshots will be stored in %s", stateDir)
 
 	// PBS version (CRITICAL)
 	if err := c.collectCommandMulti(ctx,
 		"proxmox-backup-manager version",
 		filepath.Join(commandsDir, "pbs_version.txt"),
 		"PBS version",
-		true,
-		filepath.Join(stateDir, "version.txt")); err != nil {
+		true); err != nil {
 		return fmt.Errorf("failed to get PBS version (critical): %w", err)
 	}
 
@@ -309,8 +302,7 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		"proxmox-backup-manager datastore list --output-format=json",
 		filepath.Join(commandsDir, "datastore_list.json"),
 		"Datastore list",
-		false,
-		filepath.Join(stateDir, "datastore_list.json")); err != nil {
+		false); err != nil {
 		return err
 	}
 
@@ -325,24 +317,31 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		}
 	}
 
+	// ACME (accounts, plugins)
+	c.collectPBSAcmeSnapshots(ctx, commandsDir)
+
+	// Notifications (targets, matchers, endpoints)
+	c.collectPBSNotificationSnapshots(ctx, commandsDir)
+
 	// User list
 	if c.config.BackupUserConfigs {
 		if err := c.collectCommandMulti(ctx,
 			"proxmox-backup-manager user list --output-format=json",
 			filepath.Join(commandsDir, "user_list.json"),
 			"User list",
-			false,
-			filepath.Join(stateDir, "user_list.json")); err != nil {
+			false); err != nil {
 			return err
 		}
+
+		// Authentication realms (LDAP/AD/OpenID)
+		c.collectPBSRealmSnapshots(ctx, commandsDir)
 
 		// ACL list
 		if err := c.collectCommandMulti(ctx,
 			"proxmox-backup-manager acl list --output-format=json",
 			filepath.Join(commandsDir, "acl_list.json"),
 			"ACL list",
-			false,
-			filepath.Join(stateDir, "acl_list.json")); err != nil {
+			false); err != nil {
 			return err
 		}
 	}
@@ -353,8 +352,7 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			"proxmox-backup-manager remote list --output-format=json",
 			filepath.Join(commandsDir, "remote_list.json"),
 			"Remote list",
-			false,
-			filepath.Join(stateDir, "remote_list.json")); err != nil {
+			false); err != nil {
 			return err
 		}
 	}
@@ -365,8 +363,7 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			"proxmox-backup-manager sync-job list --output-format=json",
 			filepath.Join(commandsDir, "sync_jobs.json"),
 			"Sync jobs",
-			false,
-			filepath.Join(stateDir, "sync_jobs.json")); err != nil {
+			false); err != nil {
 			return err
 		}
 	}
@@ -377,8 +374,7 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			"proxmox-backup-manager verify-job list --output-format=json",
 			filepath.Join(commandsDir, "verification_jobs.json"),
 			"Verification jobs",
-			false,
-			filepath.Join(stateDir, "verify_jobs.json")); err != nil {
+			false); err != nil {
 			return err
 		}
 	}
@@ -389,8 +385,7 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			"proxmox-backup-manager prune-job list --output-format=json",
 			filepath.Join(commandsDir, "prune_jobs.json"),
 			"Prune jobs",
-			false,
-			filepath.Join(stateDir, "prune_jobs.json")); err != nil {
+			false); err != nil {
 			return err
 		}
 	}
@@ -450,8 +445,7 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		"proxmox-backup-manager cert info",
 		filepath.Join(commandsDir, "cert_info.txt"),
 		"Certificate information",
-		false,
-		filepath.Join(stateDir, "cert_info.txt")); err != nil {
+		false); err != nil {
 		return err
 	}
 
@@ -469,13 +463,170 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		"Recent tasks",
 		false)
 
+	// S3 endpoints (optional, may be unavailable on older PBS versions)
+	c.collectPBSS3Snapshots(ctx, commandsDir)
+
 	return nil
+}
+
+func (c *Collector) collectPBSAcmeSnapshots(ctx context.Context, commandsDir string) {
+	accountsPath := filepath.Join(commandsDir, "acme_accounts.json")
+	if err := c.collectCommandMulti(ctx,
+		"proxmox-backup-manager acme account list --output-format=json",
+		accountsPath,
+		"ACME accounts",
+		false,
+	); err != nil {
+		c.logger.Debug("ACME accounts snapshot skipped: %v", err)
+	}
+
+	pluginsPath := filepath.Join(commandsDir, "acme_plugins.json")
+	if err := c.collectCommandMulti(ctx,
+		"proxmox-backup-manager acme plugin list --output-format=json",
+		pluginsPath,
+		"ACME plugins",
+		false,
+	); err != nil {
+		c.logger.Debug("ACME plugins snapshot skipped: %v", err)
+	}
+
+	type acmeAccount struct {
+		Name string `json:"name"`
+	}
+	if raw, err := os.ReadFile(accountsPath); err == nil && len(raw) > 0 {
+		var accounts []acmeAccount
+		if err := json.Unmarshal(raw, &accounts); err == nil {
+			for _, account := range accounts {
+				name := strings.TrimSpace(account.Name)
+				if name == "" {
+					continue
+				}
+				out := filepath.Join(commandsDir, fmt.Sprintf("acme_account_%s_info.json", sanitizeFilename(name)))
+				_ = c.collectCommandMulti(ctx,
+					fmt.Sprintf("proxmox-backup-manager acme account info %s --output-format=json", name),
+					out,
+					fmt.Sprintf("ACME account info (%s)", name),
+					false)
+			}
+		}
+	}
+
+	type acmePlugin struct {
+		ID string `json:"id"`
+	}
+	if raw, err := os.ReadFile(pluginsPath); err == nil && len(raw) > 0 {
+		var plugins []acmePlugin
+		if err := json.Unmarshal(raw, &plugins); err == nil {
+			for _, plugin := range plugins {
+				id := strings.TrimSpace(plugin.ID)
+				if id == "" {
+					continue
+				}
+				out := filepath.Join(commandsDir, fmt.Sprintf("acme_plugin_%s_config.json", sanitizeFilename(id)))
+				_ = c.collectCommandMulti(ctx,
+					fmt.Sprintf("proxmox-backup-manager acme plugin config %s --output-format=json", id),
+					out,
+					fmt.Sprintf("ACME plugin config (%s)", id),
+					false)
+			}
+		}
+	}
+}
+
+func (c *Collector) collectPBSNotificationSnapshots(ctx context.Context, commandsDir string) {
+	_ = c.collectCommandMulti(ctx,
+		"proxmox-backup-manager notification target list --output-format=json",
+		filepath.Join(commandsDir, "notification_targets.json"),
+		"Notification targets",
+		false)
+
+	_ = c.collectCommandMulti(ctx,
+		"proxmox-backup-manager notification matcher list --output-format=json",
+		filepath.Join(commandsDir, "notification_matchers.json"),
+		"Notification matchers",
+		false)
+
+	for _, typ := range []string{"smtp", "sendmail", "gotify", "webhook"} {
+		_ = c.collectCommandMulti(ctx,
+			fmt.Sprintf("proxmox-backup-manager notification endpoint %s list --output-format=json", typ),
+			filepath.Join(commandsDir, fmt.Sprintf("notification_endpoints_%s.json", typ)),
+			fmt.Sprintf("Notification endpoints (%s)", typ),
+			false)
+	}
+}
+
+func (c *Collector) collectPBSRealmSnapshots(ctx context.Context, commandsDir string) {
+	for _, realm := range []struct {
+		cmd  string
+		out  string
+		desc string
+	}{
+		{
+			cmd:  "proxmox-backup-manager ldap list --output-format=json",
+			out:  "realms_ldap.json",
+			desc: "LDAP realms",
+		},
+		{
+			cmd:  "proxmox-backup-manager ad list --output-format=json",
+			out:  "realms_ad.json",
+			desc: "Active Directory realms",
+		},
+		{
+			cmd:  "proxmox-backup-manager openid list --output-format=json",
+			out:  "realms_openid.json",
+			desc: "OpenID realms",
+		},
+	} {
+		_ = c.collectCommandMulti(ctx,
+			realm.cmd,
+			filepath.Join(commandsDir, realm.out),
+			realm.desc,
+			false)
+	}
+}
+
+func (c *Collector) collectPBSS3Snapshots(ctx context.Context, commandsDir string) {
+	endpointsPath := filepath.Join(commandsDir, "s3_endpoints.json")
+	if err := c.collectCommandMulti(ctx,
+		"proxmox-backup-manager s3 endpoint list --output-format=json",
+		endpointsPath,
+		"S3 endpoints",
+		false,
+	); err != nil {
+		c.logger.Debug("S3 endpoints snapshot skipped: %v", err)
+	}
+
+	type s3Endpoint struct {
+		ID string `json:"id"`
+	}
+	raw, err := os.ReadFile(endpointsPath)
+	if err != nil || len(raw) == 0 {
+		return
+	}
+	var endpoints []s3Endpoint
+	if err := json.Unmarshal(raw, &endpoints); err != nil {
+		return
+	}
+
+	for _, endpoint := range endpoints {
+		id := strings.TrimSpace(endpoint.ID)
+		if id == "" {
+			continue
+		}
+		// Best-effort: may require network and may not exist on older versions.
+		out := filepath.Join(commandsDir, fmt.Sprintf("s3_endpoint_%s_buckets.json", sanitizeFilename(id)))
+		_ = c.collectCommandMulti(ctx,
+			fmt.Sprintf("proxmox-backup-manager s3 endpoint list-buckets %s --output-format=json", id),
+			out,
+			fmt.Sprintf("S3 endpoint buckets (%s)", id),
+			false)
+	}
 }
 
 // collectUserConfigs collects user and ACL configurations
 func (c *Collector) collectUserConfigs(ctx context.Context) error {
 	c.logger.Debug("Collecting PBS user and ACL information")
-	usersDir := filepath.Join(c.tempDir, "users")
+	usersDir := c.proxsaveInfoDir("pbs", "access-control")
 	if err := c.ensureDir(usersDir); err != nil {
 		return fmt.Errorf("failed to create users directory: %w", err)
 	}
@@ -488,7 +639,7 @@ func (c *Collector) collectUserConfigs(ctx context.Context) error {
 
 func (c *Collector) collectUserTokens(ctx context.Context, usersDir string) {
 	c.logger.Debug("Collecting PBS API tokens for configured users")
-	userListPath := filepath.Join(c.tempDir, "commands", "user_list.json")
+	userListPath := filepath.Join(c.proxsaveCommandsDir("pbs"), "user_list.json")
 	data, err := os.ReadFile(userListPath)
 	if err != nil {
 		c.logger.Debug("User list not available for token export: %v", err)

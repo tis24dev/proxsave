@@ -35,7 +35,7 @@ datastore: Synology-Archive
 	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
 		t.Fatalf("mkdir etc: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "etc", "fstab"), []byte("UUID=1 / ext4 defaults 0 1\n//server/share /mnt/cifs cifs credentials=/etc/cifs-creds 0 0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "etc", "fstab"), []byte("UUID=1 / ext4 defaults 0 1\n//server/share /mnt/cifs cifs credentials=/etc/cifs-creds 0 0\nsshfs#example:/ /mnt/ssh fuse.sshfs defaults,_netdev,IdentityFile=/root/.ssh/id_rsa 0 0\n"), 0o644); err != nil {
 		t.Fatalf("write fstab: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "etc", "crypttab"), []byte("crypt1 UUID=deadbeef /etc/keys/crypt1.key luks\n"), 0o600); err != nil {
@@ -49,6 +49,12 @@ datastore: Synology-Archive
 	}
 	if err := os.WriteFile(filepath.Join(root, "etc", "cifs-creds"), []byte("username=alice\npassword=secret\n"), 0o600); err != nil {
 		t.Fatalf("write cifs creds: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "root", ".ssh"), 0o700); err != nil {
+		t.Fatalf("mkdir /root/.ssh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "root", ".ssh", "id_rsa"), []byte("PRIVATEKEY\n"), 0o600); err != nil {
+		t.Fatalf("write ssh identity file: %v", err)
 	}
 
 	// iSCSI + multipath config data (secrets included in the backing files).
@@ -75,6 +81,34 @@ datastore: Synology-Archive
 		t.Fatalf("write var/lib/iscsi example: %v", err)
 	}
 
+	// systemd mount units + autofs maps (additional mount sources)
+	unitPath := filepath.Join(root, "etc", "systemd", "system", "mnt-synology_nfs-pbs_backup.mount")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatalf("mkdir systemd dir: %v", err)
+	}
+	if err := os.WriteFile(unitPath, []byte("[Mount]\nWhat=server:/export\nWhere=/mnt/Synology_NFS/PBS_Backup\nType=nfs\n"), 0o644); err != nil {
+		t.Fatalf("write mount unit: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "auto.master"), []byte("/- /etc/auto.pbs\n"), 0o644); err != nil {
+		t.Fatalf("write auto.master: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "auto.pbs"), []byte("/mnt/autofs -fstype=nfs4 server:/export\n"), 0o644); err != nil {
+		t.Fatalf("write auto.pbs: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "etc", "lvm", "backup"), 0o755); err != nil {
+		t.Fatalf("mkdir lvm backup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "lvm", "backup", "vg0"), []byte("contents\n"), 0o600); err != nil {
+		t.Fatalf("write lvm backup: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "etc", "zfs"), 0o755); err != nil {
+		t.Fatalf("mkdir zfs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "zfs", "zpool.cache"), []byte("cache\n"), 0o600); err != nil {
+		t.Fatalf("write zpool cache: %v", err)
+	}
+
 	for _, dsPath := range []string{
 		filepath.Join(root, "mnt", "datastore", "Data1"),
 		filepath.Join(root, "mnt", "Synology_NFS", "PBS_Backup"),
@@ -95,7 +129,7 @@ datastore: Synology-Archive
 		t.Fatalf("collectPBSDatastoreInventory error: %v", err)
 	}
 
-	reportPath := filepath.Join(collector.tempDir, "commands", "pbs_datastore_inventory.json")
+	reportPath := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "pbs_datastore_inventory.json")
 	raw, err := os.ReadFile(reportPath)
 	if err != nil {
 		t.Fatalf("read report: %v", err)
@@ -122,6 +156,18 @@ datastore: Synology-Archive
 	if dir, ok := report.Dirs["iscsi_etc"]; !ok || !dir.Exists || len(dir.Files) == 0 {
 		t.Fatalf("expected iscsi dir snapshot, got: %+v", dir)
 	}
+	if dir, ok := report.Dirs["systemd_mount_units"]; !ok || !dir.Exists || len(dir.Files) == 0 {
+		t.Fatalf("expected systemd mount units snapshot, got: %+v", dir)
+	}
+	if snap, ok := report.Files["autofs_master"]; !ok || !snap.Exists || snap.Content == "" {
+		t.Fatalf("expected autofs master snapshot, got: %+v", snap)
+	}
+	if snap, ok := report.Files["zfs_zpool_cache"]; !ok || !snap.Exists || snap.Content == "" {
+		t.Fatalf("expected zpool cache snapshot, got: %+v", snap)
+	}
+	if dir, ok := report.Dirs["lvm_backup"]; !ok || !dir.Exists || len(dir.Files) == 0 {
+		t.Fatalf("expected lvm backup snapshot, got: %+v", dir)
+	}
 
 	// Ensure iSCSI config was copied into the backup tree.
 	copiedNodesFile := filepath.Join(collector.tempDir, "etc", "iscsi", "nodes", "iqn.2026-01.test:target1", "127.0.0.1,3260,1", "default")
@@ -133,6 +179,15 @@ datastore: Synology-Archive
 	}
 	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "cifs-creds")); err != nil {
 		t.Fatalf("expected copied fstab credentials file, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "root", ".ssh", "id_rsa")); err != nil {
+		t.Fatalf("expected copied ssh identity file, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "systemd", "system", "mnt-synology_nfs-pbs_backup.mount")); err != nil {
+		t.Fatalf("expected copied systemd mount unit file, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "auto.pbs")); err != nil {
+		t.Fatalf("expected copied autofs map file, got %v", err)
 	}
 
 	if len(report.Datastores) != 2 {
@@ -170,6 +225,13 @@ func TestCollectPBSDatastoreInventoryCapturesHostCommands(t *testing.T) {
 	cfg.ExcludePatterns = append(cfg.ExcludePatterns,
 		"**/etc/fstab",
 		"**/etc/crypttab",
+		"**/etc/systemd/**",
+		"**/etc/auto.*",
+		"**/etc/auto.master.d/**",
+		"**/etc/autofs.conf",
+		"**/etc/mdadm/**",
+		"**/etc/lvm/**",
+		"**/etc/zfs/**",
 		"**/etc/iscsi/**",
 		"**/var/lib/iscsi/**",
 		"**/etc/multipath/**",
@@ -209,7 +271,7 @@ func TestCollectPBSDatastoreInventoryCapturesHostCommands(t *testing.T) {
 		t.Fatalf("collectPBSDatastoreInventory error: %v", err)
 	}
 
-	reportPath := filepath.Join(collector.tempDir, "commands", "pbs_datastore_inventory.json")
+	reportPath := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "pbs_datastore_inventory.json")
 	raw, err := os.ReadFile(reportPath)
 	if err != nil {
 		t.Fatalf("read report: %v", err)
