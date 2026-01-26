@@ -123,28 +123,42 @@ func GetAllCategories() []Category {
 		},
 
 		// PBS Categories
-		{
-			ID:          "pbs_config",
-			Name:        "PBS Config Export",
-			Description: "Export-only copy of /etc/proxmox-backup (never written to system paths)",
-			Type:        CategoryTypePBS,
-			Paths: []string{
-				"./etc/proxmox-backup/",
+			{
+				ID:          "pbs_config",
+				Name:        "PBS Config Export",
+				Description: "Export-only copy of /etc/proxmox-backup (never written to system paths)",
+				Type:        CategoryTypePBS,
+				Paths: []string{
+					"./etc/proxmox-backup/",
+				},
+				ExportOnly: true,
 			},
-			ExportOnly: true,
-		},
-		{
-			ID:          "datastore_pbs",
-			Name:        "PBS Datastore Configuration",
-			Description: "Datastore definitions and settings",
-			Type:        CategoryTypePBS,
-			Paths: []string{
-				"./etc/proxmox-backup/datastore.cfg",
+			{
+				ID:          "pbs_host",
+				Name:        "PBS Host & Integrations",
+				Description: "Node settings, ACME configuration, external metric servers and traffic control rules",
+				Type:        CategoryTypePBS,
+				Paths: []string{
+					"./etc/proxmox-backup/node.cfg",
+					"./etc/proxmox-backup/acme/accounts.cfg",
+					"./etc/proxmox-backup/acme/plugins.cfg",
+					"./etc/proxmox-backup/metricserver.cfg",
+					"./etc/proxmox-backup/traffic-control.cfg",
+				},
 			},
-		},
-		{
-			ID:          "maintenance_pbs",
-			Name:        "PBS Maintenance",
+			{
+				ID:          "datastore_pbs",
+				Name:        "PBS Datastore Configuration",
+				Description: "Datastore definitions and settings (including S3 endpoint definitions)",
+				Type:        CategoryTypePBS,
+				Paths: []string{
+					"./etc/proxmox-backup/datastore.cfg",
+					"./etc/proxmox-backup/s3.cfg",
+				},
+			},
+			{
+				ID:          "maintenance_pbs",
+				Name:        "PBS Maintenance",
 			Description: "Maintenance settings (restore only if environment matches)",
 			Type:        CategoryTypePBS,
 			Paths: []string{
@@ -181,11 +195,11 @@ func GetAllCategories() []Category {
 				"./etc/proxmox-backup/notifications-priv.cfg",
 			},
 		},
-		{
-			ID:          "pbs_access_control",
-			Name:        "PBS Access Control",
-			Description: "Users, realms and permissions",
-			Type:        CategoryTypePBS,
+			{
+				ID:          "pbs_access_control",
+				Name:        "PBS Access Control",
+				Description: "Users, realms and permissions",
+				Type:        CategoryTypePBS,
 			Paths: []string{
 				"./etc/proxmox-backup/user.cfg",
 				"./etc/proxmox-backup/domains.cfg",
@@ -193,11 +207,23 @@ func GetAllCategories() []Category {
 				"./etc/proxmox-backup/token.cfg",
 				"./etc/proxmox-backup/shadow.json",
 				"./etc/proxmox-backup/token.shadow",
-				"./etc/proxmox-backup/tfa.json",
+					"./etc/proxmox-backup/tfa.json",
+				},
 			},
-		},
+			{
+				ID:          "pbs_tape",
+				Name:        "PBS Tape Backup",
+				Description: "Tape jobs, pools, changers and tape encryption keys",
+				Type:        CategoryTypePBS,
+				Paths: []string{
+					"./etc/proxmox-backup/tape.cfg",
+					"./etc/proxmox-backup/tape-job.cfg",
+					"./etc/proxmox-backup/media-pool.cfg",
+					"./etc/proxmox-backup/tape-encryption-keys.json",
+				},
+			},
 
-		// Common Categories
+			// Common Categories
 		{
 			ID:          "filesystem",
 			Name:        "Filesystem Configuration",
@@ -244,16 +270,17 @@ func GetAllCategories() []Category {
 				"./etc/dnsmasq.d/lxc-vmbr1.conf",
 			},
 		},
-		{
-			ID:          "ssl",
-			Name:        "SSL Certificates",
-			Description: "SSL/TLS certificates and private keys",
-			Type:        CategoryTypeCommon,
-			Paths: []string{
-				"./etc/ssl/",
-				"./etc/proxmox-backup/proxy.pem",
+			{
+				ID:          "ssl",
+				Name:        "SSL Certificates",
+				Description: "SSL/TLS certificates and private keys",
+				Type:        CategoryTypeCommon,
+				Paths: []string{
+					"./etc/ssl/",
+					"./etc/proxmox-backup/proxy.pem",
+					"./etc/proxmox-backup/proxy.key",
+				},
 			},
-		},
 		{
 			ID:          "ssh",
 			Name:        "SSH Configuration",
@@ -484,14 +511,14 @@ func GetStorageModeCategories(systemType string) []Category {
 				categories = append(categories, cat)
 			}
 		}
-	} else if systemType == "pbs" {
-		// PBS: config export + datastore + maintenance + jobs + zfs + filesystem + storage stack
-		for _, cat := range all {
-			if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "maintenance_pbs" || cat.ID == "pbs_jobs" || cat.ID == "zfs" || cat.ID == "filesystem" || cat.ID == "storage_stack" {
-				categories = append(categories, cat)
+		} else if systemType == "pbs" {
+			// PBS: config export + datastore + maintenance + jobs + remotes + zfs + filesystem + storage stack
+			for _, cat := range all {
+				if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "maintenance_pbs" || cat.ID == "pbs_jobs" || cat.ID == "pbs_remotes" || cat.ID == "zfs" || cat.ID == "filesystem" || cat.ID == "storage_stack" {
+					categories = append(categories, cat)
+				}
 			}
 		}
-	}
 
 	return categories
 }

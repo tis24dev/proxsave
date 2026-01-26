@@ -15,7 +15,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if plan == nil || plan.SystemType != SystemTypePBS {
 		return nil
 	}
-	if !plan.HasCategoryID("datastore_pbs") && !plan.HasCategoryID("pbs_jobs") && !plan.HasCategoryID("pbs_remotes") {
+	if !plan.HasCategoryID("datastore_pbs") && !plan.HasCategoryID("pbs_jobs") && !plan.HasCategoryID("pbs_remotes") && !plan.HasCategoryID("pbs_host") && !plan.HasCategoryID("pbs_tape") {
 		return nil
 	}
 	if strings.TrimSpace(stageRoot) == "" {
@@ -40,6 +40,9 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	}
 
 	if plan.HasCategoryID("datastore_pbs") {
+		if err := applyPBSS3CfgFromStage(ctx, logger, stageRoot); err != nil {
+			logger.Warning("PBS staged apply: s3.cfg: %v", err)
+		}
 		if err := applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot); err != nil {
 			logger.Warning("PBS staged apply: datastore.cfg: %v", err)
 		}
@@ -54,6 +57,16 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 			logger.Warning("PBS staged apply: remote.cfg: %v", err)
 		}
 	}
+	if plan.HasCategoryID("pbs_host") {
+		if err := applyPBSHostConfigsFromStage(ctx, logger, stageRoot); err != nil {
+			logger.Warning("PBS staged apply: host configs: %v", err)
+		}
+	}
+	if plan.HasCategoryID("pbs_tape") {
+		if err := applyPBSTapeConfigsFromStage(ctx, logger, stageRoot); err != nil {
+			logger.Warning("PBS staged apply: tape configs: %v", err)
+		}
+	}
 	return nil
 }
 
@@ -62,6 +75,56 @@ func applyPBSRemoteCfgFromStage(ctx context.Context, logger *logging.Logger, sta
 	defer func() { done(err) }()
 
 	return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/remote.cfg")
+}
+
+func applyPBSS3CfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
+	done := logging.DebugStart(logger, "pbs staged apply s3.cfg", "stage=%s", stageRoot)
+	defer func() { done(err) }()
+
+	return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/s3.cfg")
+}
+
+func applyPBSHostConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
+	done := logging.DebugStart(logger, "pbs staged apply host configs", "stage=%s", stageRoot)
+	defer func() { done(err) }()
+
+	// ACME should be applied before node.cfg (node.cfg references ACME account/plugins).
+	paths := []string{
+		"etc/proxmox-backup/acme/accounts.cfg",
+		"etc/proxmox-backup/acme/plugins.cfg",
+		"etc/proxmox-backup/metricserver.cfg",
+		"etc/proxmox-backup/traffic-control.cfg",
+		"etc/proxmox-backup/node.cfg",
+	}
+	for _, rel := range paths {
+		if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
+			logger.Warning("PBS staged apply: %s: %v", rel, err)
+		}
+	}
+	return nil
+}
+
+func applyPBSTapeConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
+	done := logging.DebugStart(logger, "pbs staged apply tape configs", "stage=%s", stageRoot)
+	defer func() { done(err) }()
+
+	paths := []string{
+		"etc/proxmox-backup/tape.cfg",
+		"etc/proxmox-backup/tape-job.cfg",
+		"etc/proxmox-backup/media-pool.cfg",
+	}
+	for _, rel := range paths {
+		if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
+			logger.Warning("PBS staged apply: %s: %v", rel, err)
+		}
+	}
+
+	// Tape encryption keys are JSON (no section headers) and should be applied as a sensitive file.
+	if err := applySensitiveFileFromStage(logger, stageRoot, "etc/proxmox-backup/tape-encryption-keys.json", "/etc/proxmox-backup/tape-encryption-keys.json", 0o600); err != nil {
+		logger.Warning("PBS staged apply: tape-encryption-keys.json: %v", err)
+	}
+
+	return nil
 }
 
 type pbsDatastoreBlock struct {

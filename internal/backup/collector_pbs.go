@@ -198,15 +198,15 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 	if !c.config.BackupSyncJobs {
 		extraExclude = append(extraExclude, "sync.cfg")
 	}
-	if !c.config.BackupVerificationJobs {
-		extraExclude = append(extraExclude, "verification.cfg")
-	}
-	if !c.config.BackupTapeConfigs {
-		extraExclude = append(extraExclude, "tape.cfg", "media-pool.cfg")
-	}
-	if !c.config.BackupNetworkConfigs {
-		extraExclude = append(extraExclude, "network.cfg")
-	}
+		if !c.config.BackupVerificationJobs {
+			extraExclude = append(extraExclude, "verification.cfg")
+		}
+		if !c.config.BackupTapeConfigs {
+			extraExclude = append(extraExclude, "tape.cfg", "tape-job.cfg", "media-pool.cfg", "tape-encryption-keys.json")
+		}
+		if !c.config.BackupNetworkConfigs {
+			extraExclude = append(extraExclude, "network.cfg")
+		}
 	if !c.config.BackupPruneSchedules {
 		extraExclude = append(extraExclude, "prune.cfg")
 	}
@@ -229,13 +229,35 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 
 	c.logger.Info("Collecting PBS configuration files:")
 
-	// Datastore configuration
-	c.pbsManifest["datastore.cfg"] = c.collectPBSConfigFile(ctx, root, "datastore.cfg",
-		"Datastore configuration", c.config.BackupDatastoreConfigs)
+		// Datastore configuration
+		c.pbsManifest["datastore.cfg"] = c.collectPBSConfigFile(ctx, root, "datastore.cfg",
+			"Datastore configuration", c.config.BackupDatastoreConfigs)
 
-	// User configuration
-	c.pbsManifest["user.cfg"] = c.collectPBSConfigFile(ctx, root, "user.cfg",
-		"User configuration", c.config.BackupUserConfigs)
+		// S3 endpoint configuration (used by S3 datastores)
+		c.pbsManifest["s3.cfg"] = c.collectPBSConfigFile(ctx, root, "s3.cfg",
+			"S3 endpoints", c.config.BackupDatastoreConfigs)
+
+		// Node configuration (global PBS settings)
+		c.pbsManifest["node.cfg"] = c.collectPBSConfigFile(ctx, root, "node.cfg",
+			"Node configuration", true)
+
+		// ACME configuration (accounts/plugins)
+		c.pbsManifest["acme/accounts.cfg"] = c.collectPBSConfigFile(ctx, root, filepath.Join("acme", "accounts.cfg"),
+			"ACME accounts", true)
+		c.pbsManifest["acme/plugins.cfg"] = c.collectPBSConfigFile(ctx, root, filepath.Join("acme", "plugins.cfg"),
+			"ACME plugins", true)
+
+		// External metric servers
+		c.pbsManifest["metricserver.cfg"] = c.collectPBSConfigFile(ctx, root, "metricserver.cfg",
+			"External metric servers", true)
+
+		// Traffic control
+		c.pbsManifest["traffic-control.cfg"] = c.collectPBSConfigFile(ctx, root, "traffic-control.cfg",
+			"Traffic control rules", true)
+
+		// User configuration
+		c.pbsManifest["user.cfg"] = c.collectPBSConfigFile(ctx, root, "user.cfg",
+			"User configuration", c.config.BackupUserConfigs)
 
 	// ACL configuration (under user configs flag)
 	c.pbsManifest["acl.cfg"] = c.collectPBSConfigFile(ctx, root, "acl.cfg",
@@ -253,13 +275,21 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 	c.pbsManifest["verification.cfg"] = c.collectPBSConfigFile(ctx, root, "verification.cfg",
 		"Verification jobs", c.config.BackupVerificationJobs)
 
-	// Tape backup configuration
-	c.pbsManifest["tape.cfg"] = c.collectPBSConfigFile(ctx, root, "tape.cfg",
-		"Tape configuration", c.config.BackupTapeConfigs)
+		// Tape backup configuration
+		c.pbsManifest["tape.cfg"] = c.collectPBSConfigFile(ctx, root, "tape.cfg",
+			"Tape configuration", c.config.BackupTapeConfigs)
 
-	// Media pool configuration (under tape configs flag)
-	c.pbsManifest["media-pool.cfg"] = c.collectPBSConfigFile(ctx, root, "media-pool.cfg",
-		"Media pool configuration", c.config.BackupTapeConfigs)
+		// Tape jobs (under tape configs flag)
+		c.pbsManifest["tape-job.cfg"] = c.collectPBSConfigFile(ctx, root, "tape-job.cfg",
+			"Tape jobs", c.config.BackupTapeConfigs)
+
+		// Media pool configuration (under tape configs flag)
+		c.pbsManifest["media-pool.cfg"] = c.collectPBSConfigFile(ctx, root, "media-pool.cfg",
+			"Media pool configuration", c.config.BackupTapeConfigs)
+
+		// Tape encryption keys (under tape configs flag)
+		c.pbsManifest["tape-encryption-keys.json"] = c.collectPBSConfigFile(ctx, root, "tape-encryption-keys.json",
+			"Tape encryption keys", c.config.BackupTapeConfigs)
 
 	// Network configuration
 	c.pbsManifest["network.cfg"] = c.collectPBSConfigFile(ctx, root, "network.cfg",

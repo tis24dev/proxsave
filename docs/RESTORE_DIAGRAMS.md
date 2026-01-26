@@ -99,12 +99,12 @@ flowchart TD
 
     Full --> SystemFull{System Type?}
     SystemFull -->|PVE| PVEFull[PVE Categories:<br/>- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- pve_notifications<br/>- pve_access_control<br/>- corosync<br/>- ceph<br/>+ Common]
-    SystemFull -->|PBS| PBSFull[PBS Categories:<br/>- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- pbs_notifications<br/>- pbs_access_control<br/>+ Common]
+    SystemFull -->|PBS| PBSFull[PBS Categories:<br/>- pbs_host<br/>- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- pbs_notifications<br/>- pbs_access_control<br/>- pbs_tape<br/>+ Common]
     SystemFull -->|Unknown| CommonFull[Common Only:<br/>- filesystem<br/>- storage_stack<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- user_data<br/>- zfs<br/>- proxsave_info]
 
     Storage --> SystemStorage{System Type?}
     SystemStorage -->|PVE| PVEStorage[- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- filesystem<br/>- storage_stack<br/>- zfs]
-    SystemStorage -->|PBS| PBSStorage[- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- filesystem<br/>- storage_stack<br/>- zfs]
+    SystemStorage -->|PBS| PBSStorage[- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- filesystem<br/>- storage_stack<br/>- zfs]
 
     Base --> BaseCats[- network<br/>- ssl<br/>- ssh<br/>- services<br/>- filesystem]
 

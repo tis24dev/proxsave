@@ -79,7 +79,7 @@ The `--restore` command provides an **interactive, category-based restoration sy
 
 ## Category System
 
-Restore operations are organized into **18–19 categories** (depending on PVE vs PBS) that group related configuration files.
+Restore operations are organized into **19–20 categories** (depending on PVE vs PBS) that group related configuration files.
 
 ### Category Handling Types
 
@@ -102,17 +102,19 @@ Each category is handled in one of three ways:
 | `corosync` | Corosync Configuration | Cluster communication settings | `./etc/corosync/` |
 | `ceph` | Ceph Configuration | Ceph storage cluster config | `./etc/ceph/` |
 
-### PBS-Specific Categories (7 categories)
+### PBS-Specific Categories (9 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
 | `pbs_config` | PBS Config Export | **Export-only** copy of /etc/proxmox-backup (never written to system) | `./etc/proxmox-backup/` |
-| `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions | `./etc/proxmox-backup/datastore.cfg` |
+| `pbs_host` | PBS Host & Integrations | **Staged** node settings, ACME, metric servers and traffic control | `./etc/proxmox-backup/node.cfg`<br>`./etc/proxmox-backup/acme/accounts.cfg`<br>`./etc/proxmox-backup/acme/plugins.cfg`<br>`./etc/proxmox-backup/metricserver.cfg`<br>`./etc/proxmox-backup/traffic-control.cfg` |
+| `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions (incl. S3 endpoints) | `./etc/proxmox-backup/datastore.cfg`<br>`./etc/proxmox-backup/s3.cfg` |
 | `maintenance_pbs` | PBS Maintenance | Maintenance settings | `./etc/proxmox-backup/maintenance.cfg` |
 | `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
 | `pbs_remotes` | PBS Remotes | **Staged** remotes for sync/verify (may include credentials) | `./etc/proxmox-backup/remote.cfg` |
 | `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers | `./etc/proxmox-backup/notifications.cfg`<br>`./etc/proxmox-backup/notifications-priv.cfg` |
 | `pbs_access_control` | PBS Access Control | **Staged** users/realms/ACLs and secrets | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json` |
+| `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`<br>`./etc/proxmox-backup/tape-job.cfg`<br>`./etc/proxmox-backup/media-pool.cfg`<br>`./etc/proxmox-backup/tape-encryption-keys.json` |
 
 ### Common Categories (11 categories)
 
@@ -121,7 +123,7 @@ Each category is handled in one of three ways:
 | `filesystem` | Filesystem Configuration | Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot | `./etc/fstab` |
 | `storage_stack` | Storage Stack (Mounts/Targets) | Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab) | `./etc/crypttab`<br>`./etc/iscsi/`<br>`./var/lib/iscsi/`<br>`./etc/multipath/`<br>`./etc/multipath.conf`<br>`./etc/mdadm/`<br>`./etc/lvm/backup/`<br>`./etc/lvm/archive/`<br>`./etc/autofs.conf`<br>`./etc/auto.master`<br>`./etc/auto.master.d/`<br>`./etc/auto.*` |
 | `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/netplan/`<br>`./etc/systemd/network/`<br>`./etc/NetworkManager/system-connections/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
-| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/ssl/`<br>`./etc/proxmox-backup/proxy.pem` |
+| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/ssl/`<br>`./etc/proxmox-backup/proxy.pem`<br>`./etc/proxmox-backup/proxy.key` |
 | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
 | `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
 | `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |
@@ -199,6 +201,7 @@ Select restore mode:
 - `datastore_pbs` - Datastore definitions (staged apply)
 - `maintenance_pbs` - Maintenance settings
 - `pbs_jobs` - Sync/verify/prune jobs (staged apply)
+- `pbs_remotes` - Remotes for sync jobs (staged apply)
 - `filesystem` - /etc/fstab
 - `storage_stack` - Storage stack config (mount prerequisites)
 - `zfs` - ZFS configuration

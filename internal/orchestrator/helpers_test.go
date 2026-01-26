@@ -356,6 +356,9 @@ func TestGetStorageModeCategories(t *testing.T) {
 	if !pbsIDs["pbs_config"] {
 		t.Error("PBS storage mode should include pbs_config")
 	}
+	if !pbsIDs["pbs_remotes"] {
+		t.Error("PBS storage mode should include pbs_remotes (sync jobs depend on remotes)")
+	}
 	if !pbsIDs["filesystem"] {
 		t.Error("PBS storage mode should include filesystem")
 	}
