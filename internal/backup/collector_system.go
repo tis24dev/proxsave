@@ -710,6 +710,18 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return err
 	}
 
+	// Block devices (JSON) - used for stable device mapping during restore (fstab remap).
+	c.collectCommandOptional(ctx,
+		"lsblk -J -O",
+		filepath.Join(commandsDir, "lsblk_json.json"),
+		"Block devices (JSON)")
+
+	// Block device identifiers (UUID/PARTUUID/LABEL) - used for stable device mapping during restore.
+	c.collectCommandOptional(ctx,
+		"blkid",
+		filepath.Join(commandsDir, "blkid.txt"),
+		"Block device identifiers (blkid)")
+
 	// Memory information
 	if err := c.collectCommandMulti(ctx,
 		"free -h",

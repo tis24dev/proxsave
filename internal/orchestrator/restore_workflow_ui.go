@@ -344,6 +344,22 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 					restoreHadWarnings = true
 					logger.Warning("Failed to extract filesystem config for merge: %v", err)
 				} else {
+					// Best-effort: extract ProxSave inventory files used for stable fstab device remapping.
+					// (e.g., blkid/lsblk JSON from var/lib/proxsave-info).
+					invCategory := []Category{{
+						ID:   "fstab_inventory",
+						Name: "Fstab inventory (device mapping)",
+						Paths: []string{
+							"./var/lib/proxsave-info/commands/system/blkid.txt",
+							"./var/lib/proxsave-info/commands/system/lsblk_json.json",
+							"./var/lib/proxsave-info/commands/system/lsblk.txt",
+							"./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json",
+						},
+					}}
+					if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, invCategory, RestoreModeCustom, nil, "", nil); err != nil {
+						logger.Debug("Failed to extract fstab inventory data (continuing): %v", err)
+					}
+
 					currentFstab := filepath.Join(destRoot, "etc", "fstab")
 					backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
 					if err := smartMergeFstabWithUI(ctx, logger, ui, currentFstab, backupFstab, cfg.DryRun); err != nil {
@@ -822,6 +838,18 @@ func smartMergeFstabWithUI(ctx context.Context, logger *logging.Logger, ui Resto
 		return fmt.Errorf("failed to parse backup fstab: %w", err)
 	}
 
+	remappedCount := 0
+	backupRoot := fstabBackupRootFromPath(backupFstabPath)
+	if backupRoot != "" {
+		if remapped, count := remapFstabDevicesFromInventory(logger, backupEntries, backupRoot); count > 0 {
+			backupEntries = remapped
+			remappedCount = count
+			logger.Info("Fstab device remap: converted %d entry(ies) from /dev/* to stable UUID/PARTUUID/LABEL based on ProxSave inventory", count)
+		} else {
+			backupEntries = remapped
+		}
+	}
+
 	analysis := analyzeFstabMerge(logger, currentEntries, backupEntries)
 	if len(analysis.ProposedMounts) == 0 {
 		logger.Info("No new safe mounts found to restore. Keeping current fstab.")
@@ -837,6 +865,9 @@ func smartMergeFstabWithUI(ctx context.Context, logger *logging.Logger, ui Resto
 	}
 	if analysis.SwapComparable && !analysis.SwapMatch {
 		msg.WriteString("⚠ Swap mismatch: the current swap configuration will be kept.\n")
+	}
+	if remappedCount > 0 {
+		fmt.Fprintf(&msg, "✓ Remapped %d fstab entry(ies) from /dev/* to stable UUID/PARTUUID/LABEL using ProxSave inventory.\n", remappedCount)
 	}
 	msg.WriteString("\nProposed mounts (safe):\n")
 	for _, mount := range analysis.ProposedMounts {

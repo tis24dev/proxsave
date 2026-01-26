@@ -11,11 +11,13 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 const pbsMountGuardBaseDir = "/var/lib/proxsave/guards"
+const pbsMountGuardMountAttemptTimeout = 10 * time.Second
 
 func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot, destRoot string, dryRun bool) error {
 	if plan == nil || plan.SystemType != SystemTypePBS || !plan.HasCategoryID("datastore_pbs") {
@@ -149,6 +151,40 @@ func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logg
 				logger.Debug("PBS mount guard: mountpoint %s already mounted, skipping guard", guardTarget)
 			}
 			continue
+		}
+
+		// Best-effort attempt to mount now (the entry may have just been restored to /etc/fstab).
+		// If the storage is online, this avoids applying guards on mountpoints that would mount cleanly.
+		mountCtx, cancel := context.WithTimeout(ctx, pbsMountGuardMountAttemptTimeout)
+		out, attemptErr := restoreCmd.Run(mountCtx, "mount", guardTarget)
+		cancel()
+		if attemptErr == nil {
+			onRootFSNow, _, devErrNow := isPathOnRootFilesystem(guardTarget)
+			if devErrNow == nil && !onRootFSNow {
+				if logger != nil {
+					logger.Info("PBS mount guard: mountpoint %s is now mounted (mount attempt succeeded)", guardTarget)
+				}
+				continue
+			}
+			if mountedNow, mountErrNow := isMounted(guardTarget); mountErrNow == nil && mountedNow {
+				if logger != nil {
+					logger.Info("PBS mount guard: mountpoint %s is now mounted (mount attempt succeeded)", guardTarget)
+				}
+				continue
+			}
+		} else {
+			if logger != nil {
+				if errors.Is(mountCtx.Err(), context.DeadlineExceeded) {
+					logger.Warning("PBS mount guard: mount attempt timed out for %s after %s", guardTarget, pbsMountGuardMountAttemptTimeout)
+				} else {
+					trimmed := strings.TrimSpace(string(out))
+					if trimmed != "" {
+						logger.Debug("PBS mount guard: mount attempt failed for %s: %v (output=%s)", guardTarget, attemptErr, trimmed)
+					} else {
+						logger.Debug("PBS mount guard: mount attempt failed for %s: %v", guardTarget, attemptErr)
+					}
+				}
+			}
 		}
 
 		if logger != nil {

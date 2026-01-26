@@ -720,6 +720,21 @@ func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryp
 			if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, fsCategory, RestoreModeCustom, nil, "", nil); err != nil {
 				logger.Warning("Failed to extract filesystem config for merge: %v", err)
 			} else {
+				// Best-effort: extract ProxSave inventory files used for stable fstab device remapping.
+				invCategory := []Category{{
+					ID:   "fstab_inventory",
+					Name: "Fstab inventory (device mapping)",
+					Paths: []string{
+						"./var/lib/proxsave-info/commands/system/blkid.txt",
+						"./var/lib/proxsave-info/commands/system/lsblk_json.json",
+						"./var/lib/proxsave-info/commands/system/lsblk.txt",
+						"./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json",
+					},
+				}}
+				if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, invCategory, RestoreModeCustom, nil, "", nil); err != nil {
+					logger.Debug("Failed to extract fstab inventory data (continuing): %v", err)
+				}
+
 				currentFstab := filepath.Join(destRoot, "etc", "fstab")
 				backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
 				if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, dryRun); err != nil {
