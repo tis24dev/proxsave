@@ -107,7 +107,7 @@ Each category is handled in one of three ways:
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
 | `pbs_config` | PBS Config Export | **Export-only** copy of /etc/proxmox-backup (never written to system) | `./etc/proxmox-backup/` |
-| `pbs_host` | PBS Host & Integrations | **Staged** node settings, ACME, metric servers and traffic control | `./etc/proxmox-backup/node.cfg`<br>`./etc/proxmox-backup/acme/accounts.cfg`<br>`./etc/proxmox-backup/acme/plugins.cfg`<br>`./etc/proxmox-backup/metricserver.cfg`<br>`./etc/proxmox-backup/traffic-control.cfg` |
+| `pbs_host` | PBS Host & Integrations | **Staged** node settings, ACME, proxy, metric servers and traffic control | `./etc/proxmox-backup/node.cfg`<br>`./etc/proxmox-backup/proxy.cfg`<br>`./etc/proxmox-backup/acme/accounts.cfg`<br>`./etc/proxmox-backup/acme/plugins.cfg`<br>`./etc/proxmox-backup/metricserver.cfg`<br>`./etc/proxmox-backup/traffic-control.cfg` |
 | `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions (incl. S3 endpoints) | `./etc/proxmox-backup/datastore.cfg`<br>`./etc/proxmox-backup/s3.cfg` |
 | `maintenance_pbs` | PBS Maintenance | Maintenance settings | `./etc/proxmox-backup/maintenance.cfg` |
 | `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
@@ -123,7 +123,7 @@ Each category is handled in one of three ways:
 | `filesystem` | Filesystem Configuration | Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot | `./etc/fstab` |
 | `storage_stack` | Storage Stack (Mounts/Targets) | Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab) | `./etc/crypttab`<br>`./etc/iscsi/`<br>`./var/lib/iscsi/`<br>`./etc/multipath/`<br>`./etc/multipath.conf`<br>`./etc/mdadm/`<br>`./etc/lvm/backup/`<br>`./etc/lvm/archive/`<br>`./etc/autofs.conf`<br>`./etc/auto.master`<br>`./etc/auto.master.d/`<br>`./etc/auto.*` |
 | `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/netplan/`<br>`./etc/systemd/network/`<br>`./etc/NetworkManager/system-connections/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
-| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/ssl/`<br>`./etc/proxmox-backup/proxy.pem`<br>`./etc/proxmox-backup/proxy.key` |
+| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/ssl/`<br>`./etc/proxmox-backup/proxy.pem`<br>`./etc/proxmox-backup/proxy.key`<br>`./etc/proxmox-backup/ssl/` |
 | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
 | `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
 | `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |

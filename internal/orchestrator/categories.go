@@ -136,10 +136,11 @@ func GetAllCategories() []Category {
 			{
 				ID:          "pbs_host",
 				Name:        "PBS Host & Integrations",
-				Description: "Node settings, ACME configuration, external metric servers and traffic control rules",
+				Description: "Node settings, ACME configuration, proxy, external metric servers and traffic control rules",
 				Type:        CategoryTypePBS,
 				Paths: []string{
 					"./etc/proxmox-backup/node.cfg",
+					"./etc/proxmox-backup/proxy.cfg",
 					"./etc/proxmox-backup/acme/accounts.cfg",
 					"./etc/proxmox-backup/acme/plugins.cfg",
 					"./etc/proxmox-backup/metricserver.cfg",
@@ -279,6 +280,7 @@ func GetAllCategories() []Category {
 					"./etc/ssl/",
 					"./etc/proxmox-backup/proxy.pem",
 					"./etc/proxmox-backup/proxy.key",
+					"./etc/proxmox-backup/ssl/",
 				},
 			},
 		{

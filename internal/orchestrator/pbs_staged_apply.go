@@ -94,6 +94,7 @@ func applyPBSHostConfigsFromStage(ctx context.Context, logger *logging.Logger, s
 		"etc/proxmox-backup/acme/plugins.cfg",
 		"etc/proxmox-backup/metricserver.cfg",
 		"etc/proxmox-backup/traffic-control.cfg",
+		"etc/proxmox-backup/proxy.cfg",
 		"etc/proxmox-backup/node.cfg",
 	}
 	for _, rel := range paths {

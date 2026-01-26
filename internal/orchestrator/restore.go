@@ -643,6 +643,13 @@ func shouldStopPBSServices(categories []Category) bool {
 		if cat.Type == CategoryTypePBS {
 			return true
 		}
+		// Some common categories (e.g. SSL) include PBS paths that require restarting PBS services.
+		for _, p := range cat.Paths {
+			p = strings.TrimSpace(p)
+			if strings.HasPrefix(p, "./etc/proxmox-backup/") || strings.HasPrefix(p, "./var/lib/proxmox-backup/") {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -1506,17 +1513,10 @@ func shouldSkipProxmoxSystemRestore(relTarget string) (bool, string) {
 		return true, "PBS users must be recreated (user.cfg should not be restored raw)"
 	case "etc/proxmox-backup/acl.cfg":
 		return true, "PBS permissions must be recreated (acl.cfg should not be restored raw)"
-	case "etc/proxmox-backup/proxy.cfg":
-		return true, "PBS proxy configuration should be recreated (proxy.cfg should not be restored raw)"
-	case "etc/proxmox-backup/proxy.pem":
-		return true, "PBS certificates should be regenerated (proxy.pem should not be restored raw)"
 	case "var/lib/proxmox-backup/.clusterlock":
 		return true, "PBS runtime lock files must not be restored"
 	}
 
-	if strings.HasPrefix(rel, "etc/proxmox-backup/ssl/") {
-		return true, "PBS certificates should be regenerated (ssl/* should not be restored raw)"
-	}
 	if strings.HasPrefix(rel, "var/lib/proxmox-backup/lock/") {
 		return true, "PBS runtime lock files must not be restored"
 	}
