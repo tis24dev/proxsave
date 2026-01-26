@@ -1718,7 +1718,7 @@ Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort: _
 - If the user does not answer before the countdown reaches 0, ProxSave proceeds with a **safe default** (no destructive action) and logs the decision.
 
 Current auto-skip prompts:
-- **Smart `/etc/fstab` merge**: defaults to **Skip** (no changes).
+- **Smart `/etc/fstab` merge**: defaults to **Skip** unless the backup root (and swap, when comparable) match the current system; when they match, the default is **Yes**.
 - **Live network apply** (“Apply restored network configuration now…”): defaults to **No** (stays staged/on-disk only; no live reload).
 
 ### 3. Compatibility Validation
@@ -1864,10 +1864,12 @@ If the restore includes filesystem configuration (notably `/etc/fstab`), ProxSav
 - Compares the current `/etc/fstab` with the backup copy.
 - Keeps existing critical entries (for example, root and swap) when they already match the running system.
 - Detects **safe mount candidates** from the backup (for example, additional NFS mounts) and offers to add them.
+- If ProxSave inventory data is present in the backup, ProxSave can remap **unstable** `/dev/*` devices from the backup (for example `/dev/sdb1`) to stable `UUID=`/`PARTUUID=`/`LABEL=` references **on the restore host** (only when the stable reference exists on the system).
+- Normalizes restored entries by adding `nofail` (and `_netdev` for network mounts) so offline storage does not block boot/restore.
 
 **Safety behavior**:
 - The user is prompted before any change is written.
-- The prompt includes a **90-second** countdown; if you do not answer in time, ProxSave defaults to **Skip** (no changes).
+- The prompt includes a **90-second** countdown; if you do not answer in time, ProxSave uses a safe default (**Skip** unless root/swap match, in which case the default is **Yes**).
 
 ### 6. Hard Guards
 
@@ -1885,6 +1887,11 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 }
 ```
 - Absolute prevention of `/etc/pve` corruption
+
+**PBS Datastore Mount Guards**:
+- When restoring PBS datastore definitions, ProxSave can apply a temporary mount guard (read-only bind mount; fallback `chattr +i`) on mount roots that currently resolve to the root filesystem.
+- Purpose: prevent accidental writes to `/` if a datastore mountpoint is missing/offline at restore time (PBS will show the datastore as unavailable until storage is mounted).
+- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview).
 
 ### 7. Service Management Fail-Fast
 
@@ -2234,19 +2241,21 @@ zpool import <pool-name>
 
 # If directory-based datastore (non-ZFS), verify permissions for backup user
 # NOTE:
-# - On live restores, ProxSave stages PBS datastore/job configuration first under `/tmp/proxsave/restore-stage-*`
-#   and applies it safely after checking the current system state.
-# - If a datastore path looks like a mountpoint location (e.g. under `/mnt`) but resolves to the root filesystem,
-#   ProxSave will **defer** that datastore definition (it will NOT be written to `datastore.cfg`), to avoid ending up
-#   with a broken datastore entry that blocks re-creation on a new/empty disk. Deferred entries are saved under
-#   `/tmp/proxsave/datastore.cfg.deferred.*` for manual review.
-# - ProxSave may create missing datastore directories and fix `.lock`/ownership, but it will NOT format disks.
-# - To avoid accidental writes to the wrong disk, ProxSave will skip datastore directory initialization if the
-#   datastore path looks like a mountpoint location (e.g. under /mnt) but resolves to the root filesystem.
-#   In that case, mount/import the datastore disk/pool first, then restart PBS (or re-run restore).
-# - If the datastore path is not empty and contains unexpected files/directories, ProxSave will not touch it.
+# - ProxSave runs filesystem mount restore (Smart `/etc/fstab` merge) before applying PBS datastore configuration.
+# - Datastore definitions are applied even if the underlying storage is offline/not mounted (PBS will show them as unavailable),
+#   so you do not lose datastore entries after a restore.
+# - If a datastore path looks like a mount-root location (e.g. under `/mnt`) but currently resolves to the root filesystem,
+#   ProxSave applies a temporary **mount guard** (read-only bind mount; fallback `chattr +i`) on the mount root to prevent writes to `/`
+#   until the storage becomes available. When the real storage is mounted later, it overlays the guard and the datastore becomes available.
+# - If the datastore path is not empty and contains unexpected files/directories (not a PBS datastore), ProxSave will defer that datastore block
+#   and save it under `/tmp/proxsave/datastore.cfg.deferred.*` for manual review.
+# - ProxSave does not format disks or import ZFS pools: mount/import the underlying storage first, then restart PBS.
 ls -ld /mnt/datastore /mnt/datastore/<DatastoreName> 2>/dev/null
 namei -l /mnt/datastore/<DatastoreName> 2>/dev/null || true
+
+# If you need to remove ProxSave mount guards (optional / troubleshooting, run as root):
+./build/proxsave --cleanup-guards --dry-run
+./build/proxsave --cleanup-guards
 
 # Common fix (adjust to your datastore path)
 chown backup:backup /mnt/datastore && chmod 750 /mnt/datastore

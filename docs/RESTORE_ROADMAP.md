@@ -4,8 +4,11 @@ This document tracks which Proxmox configuration areas are currently restored by
 
 ## Implemented
 
+### Common (automatic)
+- Filesystem mounts: **Smart `/etc/fstab` merge** (interactive) that adds only safe candidates and normalizes restored entries with `nofail` (and `_netdev` for network mounts). If ProxSave inventory is present in the backup, it can remap unstable `/dev/*` devices (e.g. `/dev/sdb1`) to stable `UUID=`/`PARTUUID=`/`LABEL=` references on the restore host.
+
 ### PBS (automatic)
-- Datastores: staged apply (`/etc/proxmox-backup/datastore.cfg`) with safety checks (may defer unsafe definitions).
+- Datastores: staged apply (`/etc/proxmox-backup/datastore.cfg`) with safety checks. Datastore definitions are applied even if the underlying mount is offline (PBS will show them as unavailable). If a datastore path looks like a mount root but resolves to the root filesystem, ProxSave applies a temporary mount guard to prevent writes to `/`. Definitions are only deferred when the path is invalid or contains unexpected entries; deferred blocks are written to `/tmp/proxsave/datastore.cfg.deferred.*`.
 - Host & Integrations: staged apply (`/etc/proxmox-backup/{node,s3,metricserver,traffic-control}.cfg` + `/etc/proxmox-backup/acme/{accounts,plugins}.cfg`).
 - Maintenance: file-based restore (`/etc/proxmox-backup/maintenance.cfg`).
 - Jobs: staged apply (`/etc/proxmox-backup/{sync,verification,prune}.cfg`).
