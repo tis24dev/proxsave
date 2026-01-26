@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -49,15 +50,20 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		}
 
 		// In cluster RECOVERY mode, config.db restoration owns storage.cfg/datacenter.cfg.
+		// Still apply mount guards because they only protect mountpoints from accidental writes.
 		if plan.NeedsClusterRestore {
 			logging.DebugStep(logger, "pve staged apply", "Skip PVE storage/datacenter apply: cluster RECOVERY restores config.db")
 		} else {
-			if err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, plan, stageRoot, destRoot); err != nil {
-				logger.Warning("PVE staged apply: mount guards: %v", err)
-			}
 			if err := applyPVEStorageCfgFromStage(ctx, logger, stageRoot); err != nil {
 				logger.Warning("PVE staged apply: storage.cfg: %v", err)
 			}
+		}
+
+		if err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, plan, stageRoot, destRoot); err != nil {
+			logger.Warning("PVE staged apply: mount guards: %v", err)
+		}
+
+		if !plan.NeedsClusterRestore {
 			if err := applyPVEDatacenterCfgFromStage(ctx, logger, stageRoot); err != nil {
 				logger.Warning("PVE staged apply: datacenter.cfg: %v", err)
 			}
@@ -276,8 +282,9 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 	if err != nil {
 		return fmt.Errorf("parse storage.cfg: %w", err)
 	}
-	storagePaths := pveDirStoragePathsFromSections(sections)
-	if len(storagePaths) == 0 {
+
+	candidates := pveStorageMountGuardCandidatesFromSections(sections)
+	if len(candidates) == 0 {
 		return nil
 	}
 
@@ -285,30 +292,28 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 	mounts, err := fstabMountpointsSet(currentFstab)
 	if err != nil {
 		if logger != nil {
-			logger.Warning("PVE mount guard: unable to parse current fstab %s: %v (skipping guards)", currentFstab, err)
+			logger.Warning("PVE mount guard: unable to parse current fstab %s: %v (continuing without fstab cross-check)", currentFstab, err)
 		}
-		return nil
 	}
 	var mountCandidates []string
-	for mp := range mounts {
-		if mp == "" || mp == "." || mp == string(os.PathSeparator) {
-			continue
+	if len(mounts) > 0 {
+		for mp := range mounts {
+			if mp == "" || mp == "." || mp == string(os.PathSeparator) {
+				continue
+			}
+			mountCandidates = append(mountCandidates, mp)
 		}
-		if !isConfirmableDatastoreMountRoot(mp) {
-			continue
-		}
-		mountCandidates = append(mountCandidates, mp)
+		sortByLengthDesc(mountCandidates)
 	}
-	sortByLengthDesc(mountCandidates)
 
-	guardTargets := pveGuardTargetsForStoragePaths(storagePaths, mountCandidates)
-	if len(guardTargets) == 0 {
-		return nil
+	pvesmAvailable := false
+	if _, err := restoreCmd.Run(ctx, "which", "pvesm"); err == nil {
+		pvesmAvailable = true
 	}
 
 	protected := make(map[string]struct{})
-	for _, guardTarget := range guardTargets {
-		guardTarget = filepath.Clean(strings.TrimSpace(guardTarget))
+	for _, item := range pveStorageMountGuardItems(candidates, mountCandidates, mounts) {
+		guardTarget := filepath.Clean(strings.TrimSpace(item.GuardTarget))
 		if guardTarget == "" || guardTarget == "." || guardTarget == string(os.PathSeparator) {
 			continue
 		}
@@ -316,6 +321,14 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 			continue
 		}
 		protected[guardTarget] = struct{}{}
+
+		// Safety: only guard typical mount roots (prevent accidental rootfs directory shadowing).
+		if !isConfirmableDatastoreMountRoot(guardTarget) {
+			if logger != nil {
+				logger.Debug("PVE mount guard: skip unsafe mount root %s (storage=%s type=%s)", guardTarget, item.StorageID, item.StorageType)
+			}
+			continue
+		}
 
 		if err := os.MkdirAll(guardTarget, 0o755); err != nil {
 			if logger != nil {
@@ -340,22 +353,40 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 			continue
 		}
 
+		// Best-effort mount/activate attempt (avoid guarding mountpoints that would mount cleanly).
 		mountCtx, cancel := context.WithTimeout(ctx, mountGuardMountAttemptTimeout)
-		_, attemptErr := restoreCmd.Run(mountCtx, "mount", guardTarget)
+		var attemptErr error
+		if item.IsNetwork && pvesmAvailable && item.StorageID != "" {
+			_, attemptErr = restoreCmd.Run(mountCtx, "pvesm", "activate", item.StorageID)
+		} else {
+			_, attemptErr = restoreCmd.Run(mountCtx, "mount", guardTarget)
+		}
 		cancel()
+
 		if attemptErr == nil {
 			onRootFSNow, _, devErrNow := isPathOnRootFilesystem(guardTarget)
 			if devErrNow == nil && !onRootFSNow {
+				if logger != nil {
+					logger.Info("PVE mount guard: mountpoint %s is now mounted (activation/mount attempt succeeded)", guardTarget)
+				}
 				continue
 			}
 			if mountedNow, mountErrNow := isMounted(guardTarget); mountErrNow == nil && mountedNow {
+				if logger != nil {
+					logger.Info("PVE mount guard: mountpoint %s is now mounted (activation/mount attempt succeeded)", guardTarget)
+				}
 				continue
 			}
 		}
 
 		if logger != nil {
-			logger.Info("PVE mount guard: mountpoint %s offline, applying guard bind mount", guardTarget)
+			if item.IsNetwork {
+				logger.Info("PVE mount guard: storage %s (%s) offline, applying guard bind mount on %s", item.StorageID, item.StorageType, guardTarget)
+			} else {
+				logger.Info("PVE mount guard: mountpoint %s offline, applying guard bind mount", guardTarget)
+			}
 		}
+
 		if err := guardMountPoint(ctx, guardTarget); err != nil {
 			if logger != nil {
 				logger.Warning("PVE mount guard: failed to bind-mount guard on %s: %v; falling back to chattr +i", guardTarget, err)
@@ -379,53 +410,97 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 	return nil
 }
 
-func pveDirStoragePathsFromSections(sections []proxmoxNotificationSection) []string {
-	var out []string
+type pveStorageMountGuardCandidate struct {
+	StorageID   string
+	StorageType string
+	Path        string
+}
+
+func pveStorageMountGuardCandidatesFromSections(sections []proxmoxNotificationSection) []pveStorageMountGuardCandidate {
+	out := make([]pveStorageMountGuardCandidate, 0, len(sections))
 	for _, s := range sections {
-		if !strings.EqualFold(strings.TrimSpace(s.Type), "storage") {
+		storageType := strings.ToLower(strings.TrimSpace(s.Type))
+		storageID := strings.TrimSpace(s.Name)
+		if storageType == "" || storageID == "" {
 			continue
 		}
-		typ := ""
-		path := ""
-		for _, kv := range s.Entries {
-			key := strings.TrimSpace(kv.Key)
-			val := strings.TrimSpace(kv.Value)
-			switch key {
-			case "type":
-				typ = val
-			case "path":
-				path = val
+
+		c := pveStorageMountGuardCandidate{
+			StorageID:   storageID,
+			StorageType: storageType,
+		}
+		if storageType == "dir" {
+			for _, kv := range s.Entries {
+				if strings.EqualFold(strings.TrimSpace(kv.Key), "path") {
+					c.Path = filepath.Clean(strings.TrimSpace(kv.Value))
+					break
+				}
 			}
 		}
-		if strings.EqualFold(strings.TrimSpace(typ), "dir") && strings.TrimSpace(path) != "" {
-			out = append(out, filepath.Clean(path))
-		}
+		out = append(out, c)
 	}
 	return out
 }
 
-func pveGuardTargetsForStoragePaths(storagePaths, mountCandidates []string) []string {
-	out := make([]string, 0, len(storagePaths))
-	seen := make(map[string]struct{}, len(storagePaths))
-	for _, sp := range storagePaths {
-		sp = filepath.Clean(strings.TrimSpace(sp))
-		if sp == "" || sp == "." || sp == string(os.PathSeparator) {
+type pveStorageMountGuardItem struct {
+	GuardTarget  string
+	StorageID    string
+	StorageType  string
+	IsNetwork    bool
+	RequiresFstab bool
+}
+
+func pveStorageMountGuardItems(candidates []pveStorageMountGuardCandidate, mountCandidates []string, fstabMounts map[string]struct{}) []pveStorageMountGuardItem {
+	out := make([]pveStorageMountGuardItem, 0, len(candidates))
+	for _, c := range candidates {
+		storageType := strings.ToLower(strings.TrimSpace(c.StorageType))
+		storageID := strings.TrimSpace(c.StorageID)
+		if storageType == "" || storageID == "" {
 			continue
 		}
-		target := firstFstabMountpointMatch(sp, mountCandidates)
-		if target == "" {
-			target = pbsMountGuardRootForDatastorePath(sp)
+
+		switch storageType {
+		case "nfs", "cifs", "cephfs", "glusterfs":
+			out = append(out, pveStorageMountGuardItem{
+				GuardTarget:  filepath.Join("/mnt/pve", storageID),
+				StorageID:    storageID,
+				StorageType:  storageType,
+				IsNetwork:    true,
+				RequiresFstab: false,
+			})
+
+		case "dir":
+			path := filepath.Clean(strings.TrimSpace(c.Path))
+			if path == "" || path == "." || path == string(os.PathSeparator) {
+				continue
+			}
+			target := firstFstabMountpointMatch(path, mountCandidates)
+			if target == "" {
+				target = pbsMountGuardRootForDatastorePath(path)
+			}
+			target = filepath.Clean(strings.TrimSpace(target))
+			if target == "" || target == "." || target == string(os.PathSeparator) {
+				continue
+			}
+			// Only guard dir-backed storage if the mountpoint is present in fstab (avoid making rootfs dirs immutable).
+			if fstabMounts == nil {
+				continue
+			}
+			if _, ok := fstabMounts[target]; !ok {
+				continue
+			}
+			out = append(out, pveStorageMountGuardItem{
+				GuardTarget:  target,
+				StorageID:    storageID,
+				StorageType:  storageType,
+				IsNetwork:    false,
+				RequiresFstab: true,
+			})
 		}
-		target = filepath.Clean(strings.TrimSpace(target))
-		if target == "" || target == "." || target == string(os.PathSeparator) {
-			continue
-		}
-		if _, ok := seen[target]; ok {
-			continue
-		}
-		seen[target] = struct{}{}
-		out = append(out, target)
 	}
-	sortByLengthDesc(out)
+
+	sort.Slice(out, func(i, j int) bool {
+		return len(out[i].GuardTarget) > len(out[j].GuardTarget)
+	})
 	return out
 }

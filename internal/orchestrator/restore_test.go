@@ -808,12 +808,13 @@ func TestParseStorageBlocks_MultipleBlocks(t *testing.T) {
 	restoreFS = osFS{}
 
 	cfgPath := filepath.Join(t.TempDir(), "storage.cfg")
-	content := `storage: local
+	content := `dir: local
 	path /var/lib/vz
 	content images,rootdir
 
-storage: nfs-backup
-	path /mnt/pbs
+nfs: nfs-backup
+	server 192.168.1.10
+	export /mnt/pbs
 	content backup
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
@@ -829,6 +830,33 @@ storage: nfs-backup
 	}
 	if blocks[0].ID != "local" || blocks[1].ID != "nfs-backup" {
 		t.Fatalf("unexpected block IDs: %v, %v", blocks[0].ID, blocks[1].ID)
+	}
+}
+
+func TestParseStorageBlocks_LegacyStoragePrefix(t *testing.T) {
+	orig := restoreFS
+	t.Cleanup(func() { restoreFS = orig })
+	restoreFS = osFS{}
+
+	cfgPath := filepath.Join(t.TempDir(), "storage.cfg")
+	content := `storage: local
+	type dir
+	path /var/lib/vz
+	content images,rootdir
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	blocks, err := parseStorageBlocks(cfgPath)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	if blocks[0].ID != "local" {
+		t.Fatalf("unexpected block ID: %v", blocks[0].ID)
 	}
 }
 

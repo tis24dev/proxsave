@@ -1500,6 +1500,18 @@ For PBS datastores whose paths live under typical mount roots (for example `/mnt
 Optional maintenance:
 - `proxsave --cleanup-guards` removes guard bind mounts and the guard directory when they are still visible on mountpoints.
 
+#### PVE Storage Mount Guards (Offline Storage)
+
+For PVE storages that use mountpoints (notably `nfs`, `cifs`, `cephfs`, `glusterfs`, and `dir` storages on dedicated mountpoints), ProxSave applies the same “restore even if offline” safety model:
+
+- Network storages use `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>` with a short timeout.
+- If the mountpoint still resolves to the root filesystem afterwards (mount missing/offline), ProxSave applies a **temporary mount guard** on the mountpoint:
+  - Preferred: read-only bind-mount guard
+  - Fallback: `chattr +i` on the mountpoint directory
+- For `dir` storages, guards are only applied when the storage `path` can be associated with a mountpoint present in `/etc/fstab` (to avoid guarding local root filesystem paths).
+
+This prevents accidental writes into the root filesystem when storage is offline at restore time. When the real mount comes back, it overlays the guard and normal operation resumes.
+
 ### 5. Root Privilege Check
 
 **Pre-Extraction Check** (`restore.go:568-570`, `588-590`):

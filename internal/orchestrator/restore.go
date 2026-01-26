@@ -1075,10 +1075,13 @@ func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
 			flush()
 			continue
 		}
-		if strings.HasPrefix(trimmed, "storage:") {
+
+		// storage.cfg blocks use `<type>: <id>` (e.g. `dir: local`, `nfs: backup`).
+		// Older exports may still use `storage: <id>` blocks.
+		_, name, ok := parseProxmoxNotificationHeader(trimmed)
+		if ok {
 			flush()
-			id := strings.TrimSpace(strings.TrimPrefix(trimmed, "storage:"))
-			current = &storageBlock{ID: id, data: []string{line}}
+			current = &storageBlock{ID: name, data: []string{line}}
 			continue
 		}
 		if current != nil {

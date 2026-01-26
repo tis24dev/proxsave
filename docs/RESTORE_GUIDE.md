@@ -1895,6 +1895,13 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 - Purpose: prevent accidental writes to `/` if a datastore mountpoint is missing/offline at restore time (PBS will show the datastore as unavailable until storage is mounted).
 - Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview).
 
+**PVE Storage Mount Guards**:
+- When restoring PVE storage definitions (from `storage.cfg`), ProxSave applies the same “restore even if offline” strategy for mount-backed storage:
+  - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use mountpoints under `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary mount guard (read-only bind mount; fallback `chattr +i`).
+  - `dir` storages are guarded only when their `path` lives under a mountpoint restored via `/etc/fstab` (to avoid guarding local root filesystem paths).
+- Purpose: prevent PVE from writing into `/mnt/pve/...` (or other mount roots) when the backing storage is offline at restore time.
+- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview).
+
 ### 7. Service Management Fail-Fast
 
 **Service Stop**: If ANY service fails to stop → ABORT entire restore

@@ -6,28 +6,36 @@ import (
 	"testing"
 )
 
-func TestPVEGuardTargetsForStoragePaths_UsesFstabMountpoints(t *testing.T) {
+func TestPVEStorageMountGuardItems_BuildsExpectedTargets(t *testing.T) {
 	t.Parallel()
 
-	storagePaths := []string{
-		"/mnt/datastore/Data1",
-		"/mnt/Synology_NFS/PBS_Backup",
-		"/var/lib/vz",
+	candidates := []pveStorageMountGuardCandidate{
+		{StorageID: "Data1", StorageType: "dir", Path: "/mnt/datastore/Data1"},
+		{StorageID: "Synology-Archive", StorageType: "dir", Path: "/mnt/Synology_NFS/PBS_Backup"},
+		{StorageID: "local", StorageType: "dir", Path: "/var/lib/vz"},
+		{StorageID: "nfs-backup", StorageType: "nfs"},
 	}
-	mountCandidates := []string{
-		"/mnt/datastore",
-		"/mnt/Synology_NFS",
+	mountCandidates := []string{"/mnt/datastore", "/mnt/Synology_NFS", "/"}
+	fstabMounts := map[string]struct{}{
+		"/mnt/datastore":    {},
+		"/mnt/Synology_NFS": {},
+		"/":                {},
 	}
 
-	got := pveGuardTargetsForStoragePaths(storagePaths, mountCandidates)
-	want := []string{"/mnt/Synology_NFS", "/mnt/datastore"}
-	if len(got) != len(want) {
-		t.Fatalf("got=%v want=%v", got, want)
+	items := pveStorageMountGuardItems(candidates, mountCandidates, fstabMounts)
+	got := make(map[string]pveStorageMountGuardItem, len(items))
+	for _, item := range items {
+		got[item.GuardTarget] = item
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got=%v want=%v", got, want)
+
+	wantTargets := []string{"/mnt/datastore", "/mnt/Synology_NFS", "/mnt/pve/nfs-backup"}
+	for _, target := range wantTargets {
+		if _, ok := got[target]; !ok {
+			t.Fatalf("missing guard target %s; got=%v", target, got)
 		}
+	}
+	if len(got) != len(wantTargets) {
+		t.Fatalf("unexpected number of guard targets: got=%v want=%v", got, wantTargets)
 	}
 }
 
