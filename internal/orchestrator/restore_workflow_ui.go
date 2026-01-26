@@ -399,7 +399,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	if plan.ClusterSafeMode {
 		if exportRoot == "" {
 			logger.Warning("Cluster SAFE mode selected but export directory not available; skipping automatic pvesh apply")
-		} else if err := runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger); err != nil {
+		} else if err := runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger, plan); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
 				return err
 			}
@@ -443,6 +443,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			}
 			restoreHadWarnings = true
 			logger.Warning("PBS staged config apply: %v", err)
+		}
+		if err := maybeApplyPVEConfigsFromStage(ctx, logger, plan, stageRoot, destRoot, cfg.DryRun); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
+			restoreHadWarnings = true
+			logger.Warning("PVE staged config apply: %v", err)
 		}
 		if err := maybeApplyAccessControlFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
@@ -667,7 +674,7 @@ func runFullRestoreWithUI(ctx context.Context, ui RestoreWorkflowUI, candidate *
 	return nil
 }
 
-func runSafeClusterApplyWithUI(ctx context.Context, ui RestoreWorkflowUI, exportRoot string, logger *logging.Logger) (err error) {
+func runSafeClusterApplyWithUI(ctx context.Context, ui RestoreWorkflowUI, exportRoot string, logger *logging.Logger, plan *RestorePlan) (err error) {
 	done := logging.DebugStart(logger, "safe cluster apply (ui)", "export_root=%s", exportRoot)
 	defer func() { done(err) }()
 
@@ -766,6 +773,11 @@ func runSafeClusterApplyWithUI(ctx context.Context, ui RestoreWorkflowUI, export
 		} else {
 			logger.Info("No VM/CT configs found for node %s in export", sourceNode)
 		}
+	}
+
+	if plan != nil && plan.HasCategoryID("storage_pve") {
+		logging.DebugStep(logger, "safe cluster apply (ui)", "Skip storage/datacenter apply: handled by storage_pve staged restore")
+		return nil
 	}
 
 	storageCfg := filepath.Join(exportRoot, "etc/pve/storage.cfg")

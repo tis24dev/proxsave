@@ -17,6 +17,8 @@ func isStagedCategoryID(id string) bool {
 		"pbs_remotes",
 		"pbs_host",
 		"pbs_tape",
+		"storage_pve",
+		"pve_jobs",
 		"pve_notifications",
 		"pbs_notifications",
 		"pve_access_control",

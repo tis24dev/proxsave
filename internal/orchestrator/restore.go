@@ -811,7 +811,7 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 		logger = logging.GetDefaultLogger()
 	}
 	ui := newCLIWorkflowUI(reader, logger)
-	return runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger)
+	return runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger, nil)
 }
 
 type vmEntry struct {

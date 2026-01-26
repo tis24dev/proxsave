@@ -11,7 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-// CleanupMountGuards removes ProxSave mount guards created under pbsMountGuardBaseDir.
+// CleanupMountGuards removes ProxSave mount guards created under mountGuardBaseDir.
 //
 // Safety: this will only unmount guard bind mounts when they are the currently-visible
 // mount on the mountpoint (i.e. the mountpoint resolves to the root filesystem device).
@@ -27,9 +27,9 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 		return fmt.Errorf("cleanup guards requires root privileges")
 	}
 
-	if _, err := os.Stat(pbsMountGuardBaseDir); err != nil {
+	if _, err := os.Stat(mountGuardBaseDir); err != nil {
 		if os.IsNotExist(err) {
-			logger.Info("No guard directory found at %s", pbsMountGuardBaseDir)
+			logger.Info("No guard directory found at %s", mountGuardBaseDir)
 			return nil
 		}
 		return fmt.Errorf("stat guards dir: %w", err)
@@ -43,13 +43,13 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 	guardMountpoints := guardMountpointsFromMountinfo(string(mountinfo))
 	if len(guardMountpoints) == 0 {
 		if dryRun {
-			logger.Info("DRY RUN: would remove %s", pbsMountGuardBaseDir)
+			logger.Info("DRY RUN: would remove %s", mountGuardBaseDir)
 			return nil
 		}
-		if err := os.RemoveAll(pbsMountGuardBaseDir); err != nil {
+		if err := os.RemoveAll(mountGuardBaseDir); err != nil {
 			return fmt.Errorf("remove guards dir: %w", err)
 		}
-		logger.Info("Removed guard directory %s", pbsMountGuardBaseDir)
+		logger.Info("Removed guard directory %s", mountGuardBaseDir)
 		return nil
 	}
 
@@ -103,7 +103,7 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 	}
 
 	if dryRun {
-		logger.Info("DRY RUN: would remove %s", pbsMountGuardBaseDir)
+		logger.Info("DRY RUN: would remove %s", mountGuardBaseDir)
 		return nil
 	}
 
@@ -112,20 +112,20 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 	if err == nil {
 		remaining := guardMountpointsFromMountinfo(string(after))
 		if len(remaining) > 0 {
-			logger.Warning("Guard cleanup: %d guard mount(s) still present; not removing %s", len(remaining), pbsMountGuardBaseDir)
+			logger.Warning("Guard cleanup: %d guard mount(s) still present; not removing %s", len(remaining), mountGuardBaseDir)
 			return nil
 		}
 	}
 
-	if err := os.RemoveAll(pbsMountGuardBaseDir); err != nil {
+	if err := os.RemoveAll(mountGuardBaseDir); err != nil {
 		return fmt.Errorf("remove guards dir: %w", err)
 	}
-	logger.Info("Removed guard directory %s (unmounted=%d)", pbsMountGuardBaseDir, unmounted)
+	logger.Info("Removed guard directory %s (unmounted=%d)", mountGuardBaseDir, unmounted)
 	return nil
 }
 
 func guardMountpointsFromMountinfo(mountinfo string) []string {
-	prefix := pbsMountGuardBaseDir + string(os.PathSeparator)
+	prefix := mountGuardBaseDir + string(os.PathSeparator)
 	var out []string
 	for _, line := range strings.Split(mountinfo, "\n") {
 		line = strings.TrimSpace(line)

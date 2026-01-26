@@ -1166,7 +1166,7 @@ func redirectClusterCategoryToExport(normal []Category, export []Category) ([]Ca
 
 ### pvesh SAFE Apply
 
-After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restoration:
+After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restoration (primarily VM/CT configs). When the user selects the `storage_pve` category, storage.cfg + datacenter.cfg are applied later via the staged restore pipeline and SAFE apply will skip prompting for them.
 
 **Key Functions**:
 - `scanVMConfigs()`: Scans `<export>/etc/pve/nodes/<node>/qemu-server/` and `lxc/`

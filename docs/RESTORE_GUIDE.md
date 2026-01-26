@@ -95,8 +95,8 @@ Each category is handled in one of three ways:
 |----------|------|-------------|-------|
 | `pve_config_export` | PVE Config Export | **Export-only** copy of /etc/pve (never written to system) | `./etc/pve/` |
 | `pve_cluster` | PVE Cluster Configuration | Cluster configuration and database | `./var/lib/pve-cluster/` |
-| `storage_pve` | PVE Storage Configuration | Storage definitions | `./etc/vzdump.conf` |
-| `pve_jobs` | PVE Backup Jobs | Scheduled backup jobs | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
+| `storage_pve` | PVE Storage Configuration | **Staged** storage definitions (applied via API) + VZDump config | `./etc/pve/storage.cfg`<br>`./etc/pve/datacenter.cfg`<br>`./etc/vzdump.conf` |
+| `pve_jobs` | PVE Backup Jobs | **Staged** scheduled backup jobs (applied via API) | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
 | `pve_notifications` | PVE Notifications | **Staged** notification targets and matchers (applied via API) | `./etc/pve/notifications.cfg`<br>`./etc/pve/priv/notifications.cfg` |
 | `pve_access_control` | PVE Access Control | **Staged** users/roles/groups/ACLs/realms (applied via API; secrets regenerated) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg`<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
 | `corosync` | Corosync Configuration | Cluster communication settings | `./etc/corosync/` |
@@ -191,7 +191,7 @@ Select restore mode:
 
 **PVE Categories**:
 - `pve_cluster` - Cluster configuration
-- `storage_pve` - Storage definitions
+- `storage_pve` - Storage + datacenter + vzdump config (staged apply)
 - `pve_jobs` - Backup jobs
 - `filesystem` - /etc/fstab
 - `storage_stack` - Storage stack config (mount prerequisites)
@@ -361,8 +361,8 @@ Phase 12: Export-Only Extraction
 Phase 13: pvesh SAFE Apply (Cluster SAFE Mode Only)
   ├─ Scan exported VM/CT configs
   ├─ Offer to apply via pvesh API
-  ├─ Offer to apply storage.cfg via pvesh
-  └─ Offer to apply datacenter.cfg via pvesh
+  ├─ Offer to apply storage/datacenter via pvesh (only if `storage_pve` is NOT selected)
+  └─ Otherwise handled by `storage_pve` staged restore
 
 Phase 14: Post-Restore Tasks
   ├─ Optional: Apply restored network config with rollback timer (requires COMMIT)
@@ -472,8 +472,8 @@ System type:  Proxmox Virtual Environment (PVE)
 Categories to restore:
   1. PVE Cluster Configuration
      Proxmox VE cluster configuration and database
-  2. PVE Storage Configuration
-     Storage definitions and backup job configurations
+	  2. PVE Storage Configuration
+	     Storage definitions (applied via API) and VZDump configuration
   3. PVE Backup Jobs
      Scheduled backup job definitions
   4. Filesystem Configuration
@@ -483,12 +483,14 @@ Categories to restore:
   6. ZFS Configuration
      ZFS pool cache and configuration files
 
-Files/directories that will be restored:
-  • /var/lib/pve-cluster/
-  • /etc/vzdump.conf
-  • /etc/pve/jobs.cfg
-  • /etc/pve/vzdump.cron
-  • /etc/fstab
+	Files/directories that will be restored:
+	  • /var/lib/pve-cluster/
+	  • /etc/pve/storage.cfg
+	  • /etc/pve/datacenter.cfg
+	  • /etc/vzdump.conf
+	  • /etc/pve/jobs.cfg
+	  • /etc/pve/vzdump.cron
+	  • /etc/fstab
   • /etc/crypttab
   • /etc/iscsi/
   • /var/lib/iscsi/
