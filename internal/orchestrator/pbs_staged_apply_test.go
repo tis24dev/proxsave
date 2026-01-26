@@ -60,3 +60,19 @@ func TestApplyPBSRemoteCfgFromStage_RemovesWhenEmpty(t *testing.T) {
 		t.Fatalf("expected remote.cfg removed")
 	}
 }
+
+func TestShouldApplyPBSDatastoreBlock_AllowsMountLikePathsOnRootFS(t *testing.T) {
+	t.Parallel()
+
+	dir, err := os.MkdirTemp("/mnt", "proxsave-test-ds-")
+	if err != nil {
+		t.Skipf("cannot create temp dir under /mnt: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	block := pbsDatastoreBlock{Name: "ds", Path: dir}
+	ok, reason := shouldApplyPBSDatastoreBlock(block, newTestLogger())
+	if !ok {
+		t.Fatalf("expected datastore block to be applied, got ok=false reason=%q", reason)
+	}
+}

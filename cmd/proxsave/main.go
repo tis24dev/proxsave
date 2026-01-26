@@ -121,6 +121,54 @@ func run() int {
 		return types.ExitSuccess.Int()
 	}
 
+	if args.CleanupGuards {
+		incompatible := make([]string, 0, 8)
+		if args.Support {
+			incompatible = append(incompatible, "--support")
+		}
+		if args.Restore {
+			incompatible = append(incompatible, "--restore")
+		}
+		if args.Decrypt {
+			incompatible = append(incompatible, "--decrypt")
+		}
+		if args.Install {
+			incompatible = append(incompatible, "--install")
+		}
+		if args.NewInstall {
+			incompatible = append(incompatible, "--new-install")
+		}
+		if args.Upgrade {
+			incompatible = append(incompatible, "--upgrade")
+		}
+		if args.ForceNewKey {
+			incompatible = append(incompatible, "--newkey")
+		}
+		if args.EnvMigration || args.EnvMigrationDry {
+			incompatible = append(incompatible, "--env-migration/--env-migration-dry-run")
+		}
+		if args.UpgradeConfig || args.UpgradeConfigDry {
+			incompatible = append(incompatible, "--upgrade-config/--upgrade-config-dry-run")
+		}
+
+		if len(incompatible) > 0 {
+			bootstrap.Error("--cleanup-guards cannot be combined with: %s", strings.Join(incompatible, ", "))
+			return types.ExitConfigError.Int()
+		}
+
+		level := types.LogLevelInfo
+		if args.LogLevel != types.LogLevelNone {
+			level = args.LogLevel
+		}
+		logger := logging.New(level, false)
+
+		if err := orchestrator.CleanupMountGuards(ctx, logger, args.DryRun); err != nil {
+			bootstrap.Error("ERROR: %v", err)
+			return types.ExitGenericError.Int()
+		}
+		return types.ExitSuccess.Int()
+	}
+
 	// Validate support mode compatibility with other CLI modes
 	logging.DebugStepBootstrap(bootstrap, "main run", "support_mode=%v", args.Support)
 	if args.Support {

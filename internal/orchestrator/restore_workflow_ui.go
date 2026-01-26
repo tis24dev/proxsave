@@ -323,6 +323,42 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		logger.Info("No system-path categories selected for restore (only export categories will be processed).")
 	}
 
+	// Mount-first: restore /etc/fstab (Smart Merge) before applying PBS datastore configs.
+	if needsFilesystemRestore {
+		logger.Info("")
+		fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
+		if err != nil {
+			restoreHadWarnings = true
+			logger.Warning("Failed to create temp dir for fstab merge: %v", err)
+		} else {
+			defer restoreFS.RemoveAll(fsTempDir)
+			fsCat := GetCategoryByID("filesystem", availableCategories)
+			if fsCat == nil {
+				logger.Warning("Filesystem category not available in analyzed backup contents; skipping fstab merge")
+			} else {
+				fsCategory := []Category{*fsCat}
+				if _, err := extractSelectiveArchive(ctx, prepared.ArchivePath, fsTempDir, fsCategory, RestoreModeCustom, logger); err != nil {
+					if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+						return err
+					}
+					restoreHadWarnings = true
+					logger.Warning("Failed to extract filesystem config for merge: %v", err)
+				} else {
+					currentFstab := filepath.Join(destRoot, "etc", "fstab")
+					backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
+					if err := smartMergeFstabWithUI(ctx, logger, ui, currentFstab, backupFstab, cfg.DryRun); err != nil {
+						if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+							logger.Info("Restore aborted by user during Smart Filesystem Configuration Merge.")
+							return err
+						}
+						restoreHadWarnings = true
+						logger.Warning("Smart Fstab Merge failed: %v", err)
+					}
+				}
+			}
+		}
+	}
+
 	exportLogPath := ""
 	exportRoot := ""
 	if len(plan.ExportCategories) > 0 {
@@ -376,6 +412,14 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			stageLogPath = stageLog
 		}
 
+		if err := maybeApplyPBSDatastoreMountGuards(ctx, logger, plan, stageRoot, destRoot, cfg.DryRun); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
+			restoreHadWarnings = true
+			logger.Warning("PBS mount guard: %v", err)
+		}
+
 		logger.Info("")
 		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
@@ -423,41 +467,6 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 	} else {
 		logger.Debug("Skipping datastore/storage directory recreation (category not selected)")
-	}
-
-	if needsFilesystemRestore {
-		logger.Info("")
-		fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
-		if err != nil {
-			restoreHadWarnings = true
-			logger.Warning("Failed to create temp dir for fstab merge: %v", err)
-		} else {
-			defer restoreFS.RemoveAll(fsTempDir)
-			fsCat := GetCategoryByID("filesystem", availableCategories)
-			if fsCat == nil {
-				logger.Warning("Filesystem category not available in analyzed backup contents; skipping fstab merge")
-			} else {
-				fsCategory := []Category{*fsCat}
-				if _, err := extractSelectiveArchive(ctx, prepared.ArchivePath, fsTempDir, fsCategory, RestoreModeCustom, logger); err != nil {
-					if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-						return err
-					}
-					restoreHadWarnings = true
-					logger.Warning("Failed to extract filesystem config for merge: %v", err)
-				} else {
-					currentFstab := filepath.Join(destRoot, "etc", "fstab")
-					backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
-					if err := smartMergeFstabWithUI(ctx, logger, ui, currentFstab, backupFstab, cfg.DryRun); err != nil {
-						if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-							logger.Info("Restore aborted by user during Smart Filesystem Configuration Merge.")
-							return err
-						}
-						restoreHadWarnings = true
-						logger.Warning("Smart Fstab Merge failed: %v", err)
-					}
-				}
-			}
-		}
 	}
 
 	logger.Info("")

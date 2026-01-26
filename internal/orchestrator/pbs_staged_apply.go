@@ -286,7 +286,12 @@ func shouldApplyPBSDatastoreBlock(block pbsDatastoreBlock, logger *logging.Logge
 		return false, fmt.Sprintf("filesystem identity check failed: %v", devErr)
 	}
 	if onRootFS && isSuspiciousDatastoreMountLocation(path) && !hasData {
-		return false, "path resolves to root filesystem (mount missing?)"
+		// On fresh restores the mount backing this path may be offline/not mounted yet.
+		// We still apply the datastore definition 1:1 so PBS shows the datastore as unavailable
+		// rather than silently dropping it from datastore.cfg.
+		if logger != nil {
+			logger.Warning("PBS staged apply: datastore %s path %s resolves to root filesystem (mount missing?) — applying definition anyway", block.Name, path)
+		}
 	}
 
 	if hasData {

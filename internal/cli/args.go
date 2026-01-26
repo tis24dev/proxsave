@@ -39,6 +39,7 @@ type Args struct {
 	UpgradeConfigDry  bool
 	EnvMigration      bool
 	EnvMigrationDry   bool
+	CleanupGuards     bool
 	LegacyEnvPath     string
 }
 
@@ -99,6 +100,8 @@ func Parse() *Args {
 		"Run the installer and migrate a legacy Bash backup.env to the Go template")
 	flag.BoolVar(&args.EnvMigrationDry, "env-migration-dry-run", false,
 		"Preview the installer + legacy env migration without writing files")
+	flag.BoolVar(&args.CleanupGuards, "cleanup-guards", false,
+		"Cleanup ProxSave guard bind mounts and directories (/var/lib/proxsave/guards). Use with --dry-run to preview")
 	flag.StringVar(&args.LegacyEnvPath, "old-env", "",
 		"Path to the legacy Bash backup.env used during --env-migration")
 
