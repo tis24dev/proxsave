@@ -73,7 +73,7 @@ The `--restore` command provides an **interactive, category-based restoration sy
 - VM/CT disk images (use Proxmox native tools)
 - Application data (databases and app state under `/var/lib/*`)
 - System packages (use apt/dpkg)
-- Direct writes to the pmxcfs mount (`/etc/pve`) in SAFE mode (export-only + staged API apply are used instead)
+- Direct tar extraction writes to the pmxcfs mount (`/etc/pve`) (ProxSave uses staged apply: API or controlled pmxcfs file apply)
 
 ---
 
@@ -98,7 +98,7 @@ Each category is handled in one of three ways:
 | `storage_pve` | PVE Storage Configuration | **Staged** storage definitions (applied via API) + VZDump config | `./etc/pve/storage.cfg`<br>`./etc/pve/datacenter.cfg`<br>`./etc/vzdump.conf` |
 | `pve_jobs` | PVE Backup Jobs | **Staged** scheduled backup jobs (applied via API) | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
 | `pve_notifications` | PVE Notifications | **Staged** notification targets and matchers (applied via API) | `./etc/pve/notifications.cfg`<br>`./etc/pve/priv/notifications.cfg` |
-| `pve_access_control` | PVE Access Control | **Staged** users/roles/groups/ACLs/realms (applied via API; secrets regenerated) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg`<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
+| `pve_access_control` | PVE Access Control | **Staged** access control + secrets restored 1:1 via pmxcfs file apply (root@pam safety rail) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg`<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
 | `corosync` | Corosync Configuration | Cluster communication settings | `./etc/corosync/` |
 | `ceph` | Ceph Configuration | Ceph storage cluster config | `./etc/ceph/` |
 
@@ -139,18 +139,21 @@ Not all categories are available in every backup. The restore workflow:
 2. Detects which categories contain files
 3. Displays only available categories for selection
 
-### PVE SAFE-Mode Secrets (pve_access_control)
+### PVE Access Control 1:1 (pve_access_control)
 
-When restoring `pve_access_control` in **SAFE mode**, ProxSave applies users/roles/groups/ACLs/realms via `pvesh`.
-If you restore the cluster database (`pve_cluster` in **RECOVERY mode**), ProxSave restores `config.db` and skips this SAFE-mode apply path.
-Some secrets cannot be imported 1:1, so ProxSave regenerates them and writes a local report file:
+On standalone PVE restores (non-cluster backups), ProxSave restores `pve_access_control` **1:1** by applying staged files directly to the pmxcfs mount (`/etc/pve`):
+- `/etc/pve/user.cfg` + `/etc/pve/domains.cfg`
+- `/etc/pve/priv/{shadow,token,tfa}.cfg`
 
-- `/tmp/proxsave/restore-stage-*/pve_access_control_secrets.json` (mode `0600`)
+**Root safety rail**:
+- `root@pam` is preserved from the fresh install (not imported from the backup).
+- ProxSave forces `root@pam` to keep `Administrator` on `/` (propagate), to prevent lockout.
 
-The report contains:
-- Regenerated passwords for local users (`*@pve`)
-- Newly created API tokens (new secret values)
-- `tfa_reset_required`: users that must re-enroll TFA after restore
+**Cluster backups**:
+- In cluster SAFE mode, ProxSave does **not** auto-apply 1:1 access control (including secrets). Use cluster RECOVERY (isolated/offline) for full fidelity.
+
+**TFA**:
+- Restored 1:1. Default behavior is **warn** (do not disable users). Some methods (notably WebAuthn) may require re-enrollment if the hostname/FQDN/origin changes.
 
 ---
 

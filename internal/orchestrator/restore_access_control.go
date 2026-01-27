@@ -2,39 +2,22 @@ package orchestrator
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-type pveAccessControlSecretsReport struct {
-	GeneratedAt      string            `json:"generated_at"`
-	System           string            `json:"system"`
-	Notes            []string          `json:"notes,omitempty"`
-	Users            []pveUserPassword `json:"users,omitempty"`
-	APITokens        []pveAPIToken     `json:"api_tokens,omitempty"`
-	TFAResetRequired []string          `json:"tfa_reset_required,omitempty"`
-}
-
-type pveUserPassword struct {
-	UserID   string `json:"userid"`
-	Password string `json:"password"`
-}
-
-type pveAPIToken struct {
-	UserID      string `json:"userid"`
-	TokenID     string `json:"tokenid"`
-	FullTokenID string `json:"full_tokenid"`
-	Value       string `json:"value"`
-}
+const (
+	pveUserCfgPath    = "/etc/pve/user.cfg"
+	pveDomainsCfgPath = "/etc/pve/domains.cfg"
+	pveShadowCfgPath  = "/etc/pve/priv/shadow.cfg"
+	pveTokenCfgPath   = "/etc/pve/priv/token.cfg"
+	pveTFACfgPath     = "/etc/pve/priv/tfa.cfg"
+)
 
 func maybeApplyAccessControlFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
 	if plan == nil {
@@ -45,6 +28,16 @@ func maybeApplyAccessControlFromStage(ctx context.Context, logger *logging.Logge
 		return nil
 	}
 	if !plan.HasCategoryID("pve_access_control") && !plan.HasCategoryID("pbs_access_control") {
+		return nil
+	}
+
+	// Cluster backups: avoid applying PVE access control in SAFE mode.
+	// Full-fidelity access control + secrets restore requires cluster RECOVERY (config.db) on an isolated/offline cluster.
+	if plan.SystemType == SystemTypePVE &&
+		plan.HasCategoryID("pve_access_control") &&
+		plan.ClusterBackup &&
+		!plan.NeedsClusterRestore {
+		logger.Warning("PVE access control: cluster backup detected; skipping 1:1 access control apply in SAFE mode (use cluster RECOVERY for full fidelity)")
 		return nil
 	}
 
@@ -74,14 +67,13 @@ func maybeApplyAccessControlFromStage(ctx context.Context, logger *logging.Logge
 		if !plan.HasCategoryID("pve_access_control") {
 			return nil
 		}
+
+		// In cluster RECOVERY mode, config.db restoration owns access control state (including secrets).
 		if plan.NeedsClusterRestore {
 			logging.DebugStep(logger, "access control staged apply", "Skip PVE access control apply: cluster RECOVERY restores config.db")
 			return nil
 		}
-		if _, err := restoreCmd.Run(ctx, "which", "pvesh"); err != nil {
-			logger.Warning("pvesh not found; skipping PVE access control apply")
-			return nil
-		}
+
 		return applyPVEAccessControlFromStage(ctx, logger, stageRoot)
 	default:
 		return nil
@@ -151,489 +143,399 @@ func applySensitiveFileFromStage(logger *logging.Logger, stageRoot, relPath, des
 		return removeIfExists(destPath)
 	}
 
-	if err := restoreFS.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		return fmt.Errorf("ensure %s: %w", filepath.Dir(destPath), err)
-	}
-	if err := restoreFS.WriteFile(destPath, []byte(trimmed+"\n"), perm); err != nil {
-		return fmt.Errorf("write %s: %w", destPath, err)
-	}
-	logging.DebugStep(logger, "access control staged apply file", "Applied %s -> %s", relPath, destPath)
-	return nil
+	return writeFileAtomic(destPath, []byte(trimmed+"\n"), perm)
 }
 
-func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
-	userCfgPath := filepath.Join(stageRoot, "etc/pve/user.cfg")
-	userCfgData, err := restoreFS.ReadFile(userCfgPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			logging.DebugStep(logger, "pve access control apply", "Skipped: user.cfg not present in staging directory")
-			return nil
+func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
+	done := logging.DebugStart(logger, "pve access control apply", "stage=%s", stageRoot)
+	defer func() { done(err) }()
+
+	// Safety: only apply to the real pmxcfs mount. If /etc/pve is not mounted, writing here would
+	// shadow files on the root filesystem and can break a fresh install.
+	if isRealRestoreFS(restoreFS) {
+		mounted, mountErr := isMounted("/etc/pve")
+		if mountErr != nil {
+			logger.Warning("PVE access control: unable to check pmxcfs mount status for /etc/pve: %v", mountErr)
+		} else if !mounted {
+			return fmt.Errorf("refusing PVE access control apply: /etc/pve is not mounted (pmxcfs not available)")
 		}
-		return fmt.Errorf("read staged user.cfg: %w", err)
 	}
-	userCfgRaw := strings.TrimSpace(string(userCfgData))
-	if userCfgRaw == "" {
-		logging.DebugStep(logger, "pve access control apply", "Skipped: user.cfg is empty")
+
+	userCfgRaw, userCfgPresent, err := readStageFileOptional(stageRoot, "etc/pve/user.cfg")
+	if err != nil {
+		return err
+	}
+	domainsCfgRaw, domainsCfgPresent, err := readStageFileOptional(stageRoot, "etc/pve/domains.cfg")
+	if err != nil {
+		return err
+	}
+	shadowRaw, shadowPresent, err := readStageFileOptional(stageRoot, "etc/pve/priv/shadow.cfg")
+	if err != nil {
+		return err
+	}
+	tokenRaw, tokenPresent, err := readStageFileOptional(stageRoot, "etc/pve/priv/token.cfg")
+	if err != nil {
+		return err
+	}
+	tfaRaw, tfaPresent, err := readStageFileOptional(stageRoot, "etc/pve/priv/tfa.cfg")
+	if err != nil {
+		return err
+	}
+
+	if !userCfgPresent && !domainsCfgPresent && !shadowPresent && !tokenPresent && !tfaPresent {
+		logging.DebugStep(logger, "pve access control apply", "No PVE access control files found in staging; skipping")
 		return nil
 	}
 
-	userSections, err := parseProxmoxNotificationSections(userCfgRaw)
+	backupUserSections, err := parseProxmoxNotificationSections(userCfgRaw)
 	if err != nil {
-		return fmt.Errorf("parse user.cfg: %w", err)
+		return fmt.Errorf("parse staged user.cfg: %w", err)
 	}
-
-	domainCfgPath := filepath.Join(stageRoot, "etc/pve/domains.cfg")
-	domainCfgRaw := ""
-	if domainCfgData, err := restoreFS.ReadFile(domainCfgPath); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("read staged domains.cfg: %w", err)
-		}
-	} else {
-		domainCfgRaw = strings.TrimSpace(string(domainCfgData))
-	}
-	domainSections, err := parseProxmoxNotificationSections(domainCfgRaw)
+	backupDomainSections, err := parseProxmoxNotificationSections(domainsCfgRaw)
 	if err != nil {
-		return fmt.Errorf("parse domains.cfg: %w", err)
+		return fmt.Errorf("parse staged domains.cfg: %w", err)
 	}
-
-	tfaCfgRaw, err := readOptionalStageFile(stageRoot, "etc/pve/priv/tfa.cfg")
+	backupShadowSections, err := parseProxmoxNotificationSections(shadowRaw)
 	if err != nil {
-		return err
+		return fmt.Errorf("parse staged priv/shadow.cfg: %w", err)
 	}
-	tfaUsers := extractUserIDsFromTFAConfig(tfaCfgRaw)
-
-	tokenCfgRaw, err := readOptionalStageFile(stageRoot, "etc/pve/priv/token.cfg")
+	backupTokenSections, err := parseProxmoxNotificationSections(tokenRaw)
 	if err != nil {
-		return err
+		return fmt.Errorf("parse staged priv/token.cfg: %w", err)
 	}
-	tokenSections, err := parseProxmoxNotificationSections(tokenCfgRaw)
+	backupTFASections, err := parseProxmoxNotificationSections(tfaRaw)
 	if err != nil {
-		return fmt.Errorf("parse token.cfg: %w", err)
+		return fmt.Errorf("parse staged priv/tfa.cfg: %w", err)
 	}
 
-	secretsReport := &pveAccessControlSecretsReport{
-		GeneratedAt: nowRestore().UTC().Format(time.RFC3339),
-		System:      "pve",
-		Notes: []string{
-			"SAFE mode applies PVE access control via API (pvesh).",
-			"Passwords and API token secrets cannot be imported 1:1; ProxSave regenerates them (local users *@pve and API tokens).",
-			"Users listed under tfa_reset_required must re-enroll TFA after restore.",
-			"Review and store this file securely; delete it after use.",
-		},
-	}
-	hadSecrets := false
+	currentUserSections, _ := readProxmoxConfigSectionsOptional(pveUserCfgPath)
+	currentDomainSections, _ := readProxmoxConfigSectionsOptional(pveDomainsCfgPath)
+	currentShadowSections, _ := readProxmoxConfigSectionsOptional(pveShadowCfgPath)
+	currentTokenSections, _ := readProxmoxConfigSectionsOptional(pveTokenCfgPath)
+	currentTFASections, _ := readProxmoxConfigSectionsOptional(pveTFACfgPath)
 
-	var domains []proxmoxNotificationSection
-	for _, s := range domainSections {
-		if strings.TrimSpace(s.Type) == "" || strings.TrimSpace(s.Name) == "" {
+	rootUser := findSection(currentUserSections, "user", "root@pam")
+	if rootUser == nil {
+		rootUser = &proxmoxNotificationSection{
+			Type: "user",
+			Name: "root@pam",
+			Entries: []proxmoxNotificationEntry{
+				{Key: "enable", Value: "1"},
+			},
+		}
+	}
+
+	// Merge user.cfg: restore 1:1 except root@pam (preserve from fresh install), and ensure root has Administrator on "/".
+	mergedUser := make([]proxmoxNotificationSection, 0, len(backupUserSections)+2)
+	for _, s := range backupUserSections {
+		if strings.EqualFold(strings.TrimSpace(s.Type), "user") && strings.TrimSpace(s.Name) == "root@pam" {
 			continue
 		}
-		domains = append(domains, s)
+		mergedUser = append(mergedUser, s)
+	}
+	mergedUser = append(mergedUser, *rootUser)
+	if !hasRootAdminOnRoot(mergedUser) {
+		mergedUser = append(mergedUser, proxsaveRootAdminACLSection())
 	}
 
-	var roles []proxmoxNotificationSection
-	var groups []proxmoxNotificationSection
-	var users []proxmoxNotificationSection
-	var tokens []proxmoxNotificationSection
-	var acls []proxmoxNotificationSection
-	for _, s := range userSections {
-		switch strings.TrimSpace(s.Type) {
-		case "role":
-			roles = append(roles, s)
-		case "group":
-			groups = append(groups, s)
-		case "user":
-			users = append(users, s)
-		case "acl":
-			acls = append(acls, s)
-		default:
-			logger.Warning("PVE access control apply: unknown section %q (%s); skipping", s.Type, s.Name)
+	needsPVERealm := anyUserInRealm(mergedUser, "pve")
+	mergedDomains := mergeRequiredRealms(backupDomainSections, currentDomainSections, []string{"pam"}, needsPVERealm)
+
+	// Merge secrets: restore 1:1 except root@pam token/TFA entries (preserve from fresh install).
+	mergedTokens := mergeUserBoundSectionsExcludeRoot(backupTokenSections, currentTokenSections, tokenSectionUserID, "root@pam")
+	mergedTFA := mergeUserBoundSectionsExcludeRoot(backupTFASections, currentTFASections, tfaSectionUserID, "root@pam")
+	mergedShadow := mergeUserBoundSectionsExcludeRoot(backupShadowSections, currentShadowSections, shadowSectionUserID, "root@pam")
+
+	if domainsCfgPresent {
+		if err := writeFileAtomic(pveDomainsCfgPath, []byte(renderProxmoxConfig(mergedDomains)), 0o640); err != nil {
+			return fmt.Errorf("write %s: %w", pveDomainsCfgPath, err)
 		}
 	}
-
-	for _, s := range tokenSections {
-		switch strings.TrimSpace(s.Type) {
-		case "token":
-			tokens = append(tokens, s)
-		case "":
-			continue
-		default:
-			logger.Warning("PVE access control apply: unknown token section %q (%s); skipping", s.Type, s.Name)
+	if userCfgPresent {
+		if err := writeFileAtomic(pveUserCfgPath, []byte(renderProxmoxConfig(mergedUser)), 0o640); err != nil {
+			return fmt.Errorf("write %s: %w", pveUserCfgPath, err)
 		}
 	}
-
-	sortSectionsByName(domains)
-	sortSectionsByName(roles)
-	sortSectionsByName(groups)
-	sortSectionsByName(users)
-	sortSectionsByName(tokens)
-	sortSectionsByName(acls)
-
-	failed := 0
-	for _, s := range domains {
-		if err := applyPVEDomainSection(ctx, logger, s); err != nil {
-			failed++
-			logger.Warning("PVE access control apply: domain %s:%s: %v", s.Type, s.Name, err)
+	if shadowPresent {
+		if err := writeFileAtomic(pveShadowCfgPath, []byte(renderProxmoxConfig(mergedShadow)), 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", pveShadowCfgPath, err)
 		}
 	}
-	for _, s := range roles {
-		if err := applyPVERoleSection(ctx, logger, s); err != nil {
-			failed++
-			logger.Warning("PVE access control apply: role %s: %v", s.Name, err)
+	if tokenPresent {
+		if err := writeFileAtomic(pveTokenCfgPath, []byte(renderProxmoxConfig(mergedTokens)), 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", pveTokenCfgPath, err)
+		}
+	}
+	if tfaPresent {
+		if err := writeFileAtomic(pveTFACfgPath, []byte(renderProxmoxConfig(mergedTFA)), 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", pveTFACfgPath, err)
 		}
 	}
 
-	groupBaseSkip := map[string]struct{}{
-		"users": {},
-	}
-	for _, s := range groups {
-		base := s
-		base.Entries = filterSectionEntries(s.Entries, groupBaseSkip)
-		if err := applyPVEGroupSection(ctx, logger, base); err != nil {
-			failed++
-			logger.Warning("PVE access control apply: group %s: %v", s.Name, err)
-		}
-	}
-	for _, s := range users {
-		userID := strings.TrimSpace(s.Name)
-		password := ""
-		if isLocalPVEUser(userID) {
-			pw, genErr := generateRandomPassword(24)
-			if genErr != nil {
-				failed++
-				logger.Warning("PVE access control apply: user %s: password generation failed: %v", userID, genErr)
-			} else {
-				password = pw
-			}
-		}
-
-		passwordApplied, err := applyPVEUserSection(ctx, logger, s, password)
-		if err != nil {
-			failed++
-			logger.Warning("PVE access control apply: user %s: %v", userID, err)
-			continue
-		}
-		if passwordApplied && strings.TrimSpace(password) != "" {
-			hadSecrets = true
-			secretsReport.Users = append(secretsReport.Users, pveUserPassword{UserID: userID, Password: password})
-		}
-	}
-	for _, s := range groups {
-		usersList := strings.TrimSpace(findSectionEntryValue(s.Entries, "users"))
-		if usersList == "" {
-			continue
-		}
-		if err := setPVEGroupUsers(ctx, logger, strings.TrimSpace(s.Name), usersList); err != nil {
-			failed++
-			logger.Warning("PVE access control apply: group membership %s: %v", s.Name, err)
-		}
-	}
-	for _, s := range tokens {
-		userID, tokenID, ok := splitPVETokenSectionName(strings.TrimSpace(s.Name))
-		if !ok {
-			failed++
-			logger.Warning("PVE access control apply: token %s: invalid token section name", s.Name)
-			continue
-		}
-		token, err := createPVEToken(ctx, logger, userID, tokenID, s.Entries)
-		if err != nil {
-			failed++
-			logger.Warning("PVE access control apply: token %s!%s: %v", userID, tokenID, err)
-			continue
-		}
-		hadSecrets = true
-		secretsReport.APITokens = append(secretsReport.APITokens, token)
-	}
-	for _, s := range acls {
-		if err := applyPVEACLSection(ctx, logger, s); err != nil {
-			failed++
-			logger.Warning("PVE access control apply: acl %s: %v", s.Name, err)
-		}
-	}
-
-	if len(tfaUsers) > 0 {
-		hadSecrets = true
-		secretsReport.TFAResetRequired = append([]string(nil), tfaUsers...)
-	}
-	if hadSecrets {
-		path := filepath.Join(stageRoot, "pve_access_control_secrets.json")
-		if err := writeSecretsReport(path, secretsReport); err != nil {
-			logger.Warning("PVE access control: failed to write regenerated secrets report: %v", err)
-		} else {
-			logger.Warning("PVE access control: regenerated secrets saved to %s (mode 0600)", path)
-		}
-	}
-
-	if failed > 0 {
-		return fmt.Errorf("PVE access control apply: %d item(s) failed", failed)
-	}
-	logger.Info("PVE access control applied: domains=%d roles=%d groups=%d users=%d tokens=%d acls=%d", len(domains), len(roles), len(groups), len(users), len(tokens), len(acls))
+	logger.Warning("PVE access control: restored 1:1 from backup via pmxcfs; root@pam preserved from fresh install and kept Administrator on /")
+	logger.Warning("PVE access control: TFA was restored 1:1; users with WebAuthn may require re-enrollment if origin/hostname changed (default behavior is warn, not disable)")
 	return nil
 }
 
-func sortSectionsByName(sections []proxmoxNotificationSection) {
-	sort.Slice(sections, func(i, j int) bool {
-		return strings.TrimSpace(sections[i].Name) < strings.TrimSpace(sections[j].Name)
-	})
+func readStageFileOptional(stageRoot, relPath string) (content string, present bool, err error) {
+	stagePath := filepath.Join(stageRoot, relPath)
+	data, err := restoreFS.ReadFile(stagePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read staged %s: %w", relPath, err)
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return "", true, nil
+	}
+	return trimmed, true, nil
 }
 
-func filterSectionEntries(entries []proxmoxNotificationEntry, skip map[string]struct{}) []proxmoxNotificationEntry {
-	if len(entries) == 0 || len(skip) == 0 {
-		return entries
+func readProxmoxConfigSectionsOptional(path string) ([]proxmoxNotificationSection, error) {
+	data, err := restoreFS.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	out := make([]proxmoxNotificationEntry, 0, len(entries))
-	for _, e := range entries {
-		if _, ok := skip[strings.TrimSpace(e.Key)]; ok {
+	raw := strings.TrimSpace(string(data))
+	if raw == "" {
+		return nil, nil
+	}
+	return parseProxmoxNotificationSections(raw)
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := restoreFS.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	tmpPath := fmt.Sprintf("%s.proxsave.tmp.%d", path, nowRestore().UnixNano())
+	f, err := restoreFS.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+
+	writeErr := func() error {
+		if len(data) == 0 {
+			return nil
+		}
+		_, err := f.Write(data)
+		return err
+	}()
+	closeErr := f.Close()
+	if writeErr != nil {
+		_ = restoreFS.Remove(tmpPath)
+		return writeErr
+	}
+	if closeErr != nil {
+		_ = restoreFS.Remove(tmpPath)
+		return closeErr
+	}
+
+	if err := restoreFS.Rename(tmpPath, path); err != nil {
+		_ = restoreFS.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func renderProxmoxConfig(sections []proxmoxNotificationSection) string {
+	if len(sections) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, s := range sections {
+		typ := strings.TrimSpace(s.Type)
+		name := strings.TrimSpace(s.Name)
+		if typ == "" || name == "" {
 			continue
 		}
-		out = append(out, e)
+		if i > 0 && b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "%s: %s\n", typ, name)
+		for _, kv := range s.Entries {
+			key := strings.TrimSpace(kv.Key)
+			if key == "" {
+				continue
+			}
+			val := strings.TrimSpace(kv.Value)
+			if val == "" {
+				fmt.Fprintf(&b, "  %s\n", key)
+				continue
+			}
+			fmt.Fprintf(&b, "  %s %s\n", key, val)
+		}
+	}
+	out := b.String()
+	if strings.TrimSpace(out) == "" {
+		return ""
+	}
+	if !strings.HasSuffix(out, "\n") {
+		out += "\n"
 	}
 	return out
 }
 
-func findSectionEntryValue(entries []proxmoxNotificationEntry, key string) string {
-	match := strings.TrimSpace(key)
-	for _, e := range entries {
-		if strings.TrimSpace(e.Key) == match {
-			return strings.TrimSpace(e.Value)
+func findSection(sections []proxmoxNotificationSection, typ, name string) *proxmoxNotificationSection {
+	typ = strings.TrimSpace(typ)
+	name = strings.TrimSpace(name)
+	for i := range sections {
+		if strings.EqualFold(strings.TrimSpace(sections[i].Type), typ) && strings.TrimSpace(sections[i].Name) == name {
+			return &sections[i]
 		}
 	}
-	return ""
+	return nil
 }
 
-func applyPVEDomainSection(ctx context.Context, logger *logging.Logger, section proxmoxNotificationSection) error {
-	typ := strings.TrimSpace(section.Type)
-	realm := strings.TrimSpace(section.Name)
-	if typ == "" || realm == "" {
-		return fmt.Errorf("invalid domain section")
+func anyUserInRealm(sections []proxmoxNotificationSection, realm string) bool {
+	realm = strings.TrimSpace(realm)
+	if realm == "" {
+		return false
 	}
-	setPath := fmt.Sprintf("/access/domains/%s", realm)
-	createPath := "/access/domains"
-	args := buildPveshArgs(section.Entries)
-	return applyPveshObjectWithIDFlag(ctx, logger, setPath, createPath, "--realm", realm, []string{"--type", typ}, args)
-}
-
-func applyPVERoleSection(ctx context.Context, logger *logging.Logger, section proxmoxNotificationSection) error {
-	roleID := strings.TrimSpace(section.Name)
-	if strings.TrimSpace(section.Type) != "role" || roleID == "" {
-		return fmt.Errorf("invalid role section")
-	}
-	setPath := fmt.Sprintf("/access/roles/%s", roleID)
-	createPath := "/access/roles"
-	args := buildPveshArgs(section.Entries)
-	return applyPveshObjectWithIDFlag(ctx, logger, setPath, createPath, "--roleid", roleID, nil, args)
-}
-
-func applyPVEGroupSection(ctx context.Context, logger *logging.Logger, section proxmoxNotificationSection) error {
-	groupID := strings.TrimSpace(section.Name)
-	if strings.TrimSpace(section.Type) != "group" || groupID == "" {
-		return fmt.Errorf("invalid group section")
-	}
-	setPath := fmt.Sprintf("/access/groups/%s", groupID)
-	createPath := "/access/groups"
-	args := buildPveshArgs(section.Entries)
-	return applyPveshObjectWithIDFlag(ctx, logger, setPath, createPath, "--groupid", groupID, nil, args)
-}
-
-func applyPVEUserSection(ctx context.Context, logger *logging.Logger, section proxmoxNotificationSection, password string) (bool, error) {
-	userID := strings.TrimSpace(section.Name)
-	if strings.TrimSpace(section.Type) != "user" || userID == "" {
-		return false, fmt.Errorf("invalid user section")
-	}
-	setPath := fmt.Sprintf("/access/users/%s", userID)
-	createPath := "/access/users"
-	args := buildPveshArgs(section.Entries)
-
-	// First try applying as update (does not include secrets).
-	if err := runPvesh(ctx, logger, append([]string{"set", setPath}, args...)); err == nil {
-		if strings.TrimSpace(password) == "" || !isLocalPVEUser(userID) {
-			return false, nil
+	for _, s := range sections {
+		if !strings.EqualFold(strings.TrimSpace(s.Type), "user") {
+			continue
 		}
-		if err := setPVEUserPassword(ctx, logger, userID, password); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-
-	// Create (include password only for local users).
-	createArgs := []string{"create", createPath, "--userid", userID}
-	if strings.TrimSpace(password) != "" && isLocalPVEUser(userID) {
-		createArgs = append(createArgs, "--password", password)
-	}
-	createArgs = append(createArgs, args...)
-
-	if strings.TrimSpace(password) != "" && isLocalPVEUser(userID) {
-		if _, err := runPveshSensitive(ctx, logger, createArgs, "--password"); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-	if err := runPvesh(ctx, logger, createArgs); err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
-func setPVEGroupUsers(ctx context.Context, logger *logging.Logger, groupID, users string) error {
-	groupID = strings.TrimSpace(groupID)
-	if groupID == "" {
-		return fmt.Errorf("invalid group id")
-	}
-	setPath := fmt.Sprintf("/access/groups/%s", groupID)
-	return runPvesh(ctx, logger, []string{"set", setPath, "--users", users})
-}
-
-func applyPVEACLSection(ctx context.Context, logger *logging.Logger, section proxmoxNotificationSection) error {
-	if strings.TrimSpace(section.Type) != "acl" {
-		return fmt.Errorf("invalid acl section")
-	}
-
-	path := strings.TrimSpace(findSectionEntryValue(section.Entries, "path"))
-	if path == "" {
-		path = aclPathFromSectionName(section.Name)
-	}
-	if path == "" {
-		return fmt.Errorf("missing acl path")
-	}
-
-	args := buildPveshArgs(section.Entries)
-	if !sliceHasFlag(args, "--path") {
-		args = append([]string{"--path", path}, args...)
-	}
-	return runPvesh(ctx, logger, append([]string{"set", "/access/acl"}, args...))
-}
-
-func aclPathFromSectionName(name string) string {
-	for _, field := range strings.Fields(strings.TrimSpace(name)) {
-		if strings.HasPrefix(field, "/") {
-			return field
-		}
-	}
-	return ""
-}
-
-func sliceHasFlag(args []string, flag string) bool {
-	for _, a := range args {
-		if a == flag {
+		if strings.EqualFold(userRealm(strings.TrimSpace(s.Name)), realm) {
 			return true
 		}
 	}
 	return false
 }
 
-func applyPveshObjectWithIDFlag(ctx context.Context, logger *logging.Logger, setPath, createPath, idFlag, id string, createExtra, args []string) error {
-	if err := runPvesh(ctx, logger, append([]string{"set", setPath}, args...)); err == nil {
-		return nil
-	}
-
-	createArgs := []string{"create", createPath, idFlag, id}
-	createArgs = append(createArgs, createExtra...)
-	createArgs = append(createArgs, args...)
-	return runPvesh(ctx, logger, createArgs)
-}
-
-func readOptionalStageFile(stageRoot, relPath string) (string, error) {
-	stagePath := filepath.Join(stageRoot, relPath)
-	data, err := restoreFS.ReadFile(stagePath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		return "", fmt.Errorf("read staged %s: %w", relPath, err)
-	}
-	return strings.TrimSpace(string(data)), nil
-}
-
-func writeSecretsReport(path string, report *pveAccessControlSecretsReport) error {
-	if report == nil {
-		return fmt.Errorf("invalid secrets report")
-	}
-	data, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
-	return restoreFS.WriteFile(path, append(data, '\n'), 0o600)
-}
-
-func isLocalPVEUser(userID string) bool {
+func userRealm(userID string) string {
 	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return false
-	}
 	idx := strings.LastIndex(userID, "@")
 	if idx < 0 || idx+1 >= len(userID) {
-		return false
+		return ""
 	}
-	return strings.TrimSpace(userID[idx+1:]) == "pve"
+	return strings.TrimSpace(userID[idx+1:])
 }
 
-func generateRandomPassword(length int) (string, error) {
-	if length <= 0 {
-		length = 24
+func mergeRequiredRealms(backup, current []proxmoxNotificationSection, always []string, includePVE bool) []proxmoxNotificationSection {
+	type key struct {
+		typ  string
+		name string
 	}
-	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, length)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	for i := range b {
-		b[i] = alphabet[int(b[i])%len(alphabet)]
-	}
-	return string(b), nil
-}
+	seen := make(map[key]struct{})
+	out := make([]proxmoxNotificationSection, 0, len(backup)+2)
 
-func extractUserIDsFromTFAConfig(raw string) []string {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil
-	}
-	sections, err := parseProxmoxNotificationSections(trimmed)
-	if err != nil || len(sections) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	var out []string
-	for _, s := range sections {
-		name := strings.TrimSpace(s.Name)
-		if strings.Contains(name, "@") {
-			if _, ok := seen[name]; !ok {
-				seen[name] = struct{}{}
-				out = append(out, name)
-			}
+	appendUnique := func(s proxmoxNotificationSection) {
+		k := key{typ: strings.ToLower(strings.TrimSpace(s.Type)), name: strings.TrimSpace(s.Name)}
+		if k.typ == "" || k.name == "" {
+			return
 		}
-		if user := strings.TrimSpace(findSectionEntryValue(s.Entries, "user")); strings.Contains(user, "@") {
-			if _, ok := seen[user]; !ok {
-				seen[user] = struct{}{}
-				out = append(out, user)
-			}
+		if _, ok := seen[k]; ok {
+			return
 		}
+		seen[k] = struct{}{}
+		out = append(out, s)
 	}
-	sort.Strings(out)
+
+	// Start from backup (1:1).
+	for _, s := range backup {
+		appendUnique(s)
+	}
+
+	required := append([]string(nil), always...)
+	if includePVE {
+		required = append(required, "pve")
+	}
+
+	for _, realm := range required {
+		realm = strings.TrimSpace(realm)
+		if realm == "" {
+			continue
+		}
+
+		// Domain section keys are `<type>: <realm>` (e.g. `pam: pam`, `pve: pve`, `ldap: myldap`).
+		cur := findSection(current, realm, realm)
+		if cur == nil {
+			appendUnique(proxmoxNotificationSection{Type: realm, Name: realm})
+			continue
+		}
+
+		// Override backup with the live realm definition for safety rail.
+		k := key{typ: strings.ToLower(strings.TrimSpace(cur.Type)), name: strings.TrimSpace(cur.Name)}
+		if k.typ == "" || k.name == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			for i := range out {
+				if strings.EqualFold(strings.TrimSpace(out[i].Type), realm) && strings.TrimSpace(out[i].Name) == realm {
+					out[i] = *cur
+					break
+				}
+			}
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, *cur)
+	}
+
 	return out
 }
 
-func setPVEUserPassword(ctx context.Context, logger *logging.Logger, userID, password string) error {
-	userID = strings.TrimSpace(userID)
-	if userID == "" || strings.TrimSpace(password) == "" {
-		return fmt.Errorf("invalid user password request")
+func mergeUserBoundSectionsExcludeRoot(backup, current []proxmoxNotificationSection, userIDFn func(proxmoxNotificationSection) string, rootUserID string) []proxmoxNotificationSection {
+	rootUserID = strings.TrimSpace(rootUserID)
+	out := make([]proxmoxNotificationSection, 0, len(backup))
+	for _, s := range backup {
+		if strings.TrimSpace(rootUserID) != "" && strings.TrimSpace(userIDFn(s)) == rootUserID {
+			continue
+		}
+		out = append(out, s)
 	}
-
-	candidates := [][]string{
-		{"set", fmt.Sprintf("/access/users/%s", userID), "--password", password},
-		{"create", fmt.Sprintf("/access/users/%s/password", userID), "--password", password},
-		{"set", "/access/password", "--userid", userID, "--password", password},
-		{"create", "/access/password", "--userid", userID, "--password", password},
-	}
-
-	var lastErr error
-	for _, args := range candidates {
-		if _, err := runPveshSensitive(ctx, logger, args, "--password"); err == nil {
-			return nil
-		} else {
-			lastErr = err
+	for _, s := range current {
+		if strings.TrimSpace(rootUserID) != "" && strings.TrimSpace(userIDFn(s)) == rootUserID {
+			out = append(out, s)
 		}
 	}
-	return fmt.Errorf("unable to set password for %s via pvesh: %w", userID, lastErr)
+	return out
+}
+
+func tokenSectionUserID(s proxmoxNotificationSection) string {
+	if strings.TrimSpace(s.Type) != "token" {
+		return ""
+	}
+	userID, _, ok := splitPVETokenSectionName(strings.TrimSpace(s.Name))
+	if !ok {
+		return ""
+	}
+	return userID
+}
+
+func tfaSectionUserID(s proxmoxNotificationSection) string {
+	name := strings.TrimSpace(s.Name)
+	if strings.Contains(name, "@") {
+		return name
+	}
+	for _, kv := range s.Entries {
+		if strings.EqualFold(strings.TrimSpace(kv.Key), "user") && strings.Contains(strings.TrimSpace(kv.Value), "@") {
+			return strings.TrimSpace(kv.Value)
+		}
+	}
+	return ""
+}
+
+func shadowSectionUserID(s proxmoxNotificationSection) string {
+	if strings.EqualFold(strings.TrimSpace(s.Type), "user") && strings.Contains(strings.TrimSpace(s.Name), "@") {
+		return strings.TrimSpace(s.Name)
+	}
+	if strings.Contains(strings.TrimSpace(s.Name), "@") {
+		return strings.TrimSpace(s.Name)
+	}
+	for _, kv := range s.Entries {
+		if strings.EqualFold(strings.TrimSpace(kv.Key), "userid") && strings.Contains(strings.TrimSpace(kv.Value), "@") {
+			return strings.TrimSpace(kv.Value)
+		}
+	}
+	return ""
 }
 
 func splitPVETokenSectionName(name string) (userID, tokenID string, ok bool) {
@@ -653,177 +555,74 @@ func splitPVETokenSectionName(name string) (userID, tokenID string, ok bool) {
 	return userID, tokenID, true
 }
 
-func createPVEToken(ctx context.Context, logger *logging.Logger, userID, tokenID string, entries []proxmoxNotificationEntry) (pveAPIToken, error) {
-	userID = strings.TrimSpace(userID)
-	tokenID = strings.TrimSpace(tokenID)
-	if userID == "" || tokenID == "" {
-		return pveAPIToken{}, fmt.Errorf("invalid token request")
-	}
-
-	args := buildPveshArgs(entries)
-
-	token, err := tryCreatePVEToken(ctx, logger, userID, tokenID, args)
-	if err == nil {
-		return token, nil
-	}
-	_ = deletePVEToken(ctx, logger, userID, tokenID)
-	token, retryErr := tryCreatePVEToken(ctx, logger, userID, tokenID, args)
-	if retryErr == nil {
-		return token, nil
-	}
-	return pveAPIToken{}, retryErr
-}
-
-func tryCreatePVEToken(ctx context.Context, logger *logging.Logger, userID, tokenID string, args []string) (pveAPIToken, error) {
-	fullTokenID := fmt.Sprintf("%s!%s", userID, tokenID)
-	tokenPath := fmt.Sprintf("/access/users/%s/token/%s", userID, tokenID)
-	tokenBasePath := fmt.Sprintf("/access/users/%s/token", userID)
-
-	candidates := [][]string{
-		append([]string{"--output-format", "json", "create", tokenPath}, args...),
-		append([]string{"create", tokenPath}, args...),
-		append([]string{"--output-format", "json", "create", tokenBasePath, "--tokenid", tokenID}, args...),
-		append([]string{"create", tokenBasePath, "--tokenid", tokenID}, args...),
-	}
-
-	var lastErr error
-	for _, createArgs := range candidates {
-		output, err := runPveshSensitive(ctx, logger, createArgs)
-		if err != nil {
-			lastErr = err
+func hasRootAdminOnRoot(sections []proxmoxNotificationSection) bool {
+	for _, s := range sections {
+		if strings.TrimSpace(s.Type) != "acl" {
 			continue
 		}
-		outFull, value, ok := parsePVETokenCreateOutput(output)
-		if !ok {
-			return pveAPIToken{}, fmt.Errorf("token %s created but secret could not be parsed from pvesh output", fullTokenID)
+		path := strings.TrimSpace(findSectionEntryValue(s.Entries, "path"))
+		if path == "" {
+			path = aclPathFromSectionName(s.Name)
 		}
-		if strings.TrimSpace(outFull) == "" {
-			outFull = fullTokenID
-		}
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return pveAPIToken{}, fmt.Errorf("token %s created but secret is empty", fullTokenID)
-		}
-		return pveAPIToken{
-			UserID:      userID,
-			TokenID:     tokenID,
-			FullTokenID: outFull,
-			Value:       value,
-		}, nil
-	}
-	if lastErr != nil {
-		return pveAPIToken{}, fmt.Errorf("unable to create token %s via pvesh: %w", fullTokenID, lastErr)
-	}
-	return pveAPIToken{}, fmt.Errorf("unable to create token %s via pvesh", fullTokenID)
-}
-
-func deletePVEToken(ctx context.Context, logger *logging.Logger, userID, tokenID string) error {
-	userID = strings.TrimSpace(userID)
-	tokenID = strings.TrimSpace(tokenID)
-	if userID == "" || tokenID == "" {
-		return fmt.Errorf("invalid token delete request")
-	}
-
-	tokenPath := fmt.Sprintf("/access/users/%s/token/%s", userID, tokenID)
-	tokenBasePath := fmt.Sprintf("/access/users/%s/token", userID)
-	candidates := [][]string{
-		{"delete", tokenPath},
-		{"delete", tokenBasePath, "--tokenid", tokenID},
-	}
-
-	var lastErr error
-	for _, args := range candidates {
-		if err := runPvesh(ctx, logger, args); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("token delete failed")
-	}
-	return lastErr
-}
-
-func parsePVETokenCreateOutput(output []byte) (fullTokenID, value string, ok bool) {
-	trimmed := strings.TrimSpace(string(output))
-	if trimmed == "" {
-		return "", "", false
-	}
-
-	var wrapper struct {
-		Data json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(trimmed), &wrapper); err == nil && len(wrapper.Data) > 0 {
-		if full, val, ok := parsePVETokenCreateOutput(wrapper.Data); ok {
-			return full, val, true
-		}
-	}
-
-	var str string
-	if err := json.Unmarshal([]byte(trimmed), &str); err == nil {
-		str = strings.TrimSpace(str)
-		if str != "" {
-			return "", str, true
-		}
-	}
-
-	var obj struct {
-		Value       string `json:"value"`
-		Token       string `json:"token"`
-		FullTokenID string `json:"full-tokenid"`
-	}
-	if err := json.Unmarshal([]byte(trimmed), &obj); err == nil {
-		secret := strings.TrimSpace(obj.Value)
-		if secret == "" {
-			secret = strings.TrimSpace(obj.Token)
-		}
-		if secret != "" {
-			return strings.TrimSpace(obj.FullTokenID), secret, true
-		}
-	}
-
-	var lineValue string
-	var lineFull string
-	for _, line := range strings.Split(trimmed, "\n") {
-		l := strings.TrimSpace(line)
-		if l == "" {
+		if path != "/" {
 			continue
 		}
-		fields := strings.Fields(l)
-		if len(fields) >= 2 {
-			key := strings.TrimSuffix(fields[0], ":")
-			switch key {
-			case "value":
-				lineValue = fields[len(fields)-1]
-			case "full-tokenid":
-				lineFull = fields[len(fields)-1]
-			}
+
+		users := strings.TrimSpace(findSectionEntryValue(s.Entries, "users"))
+		roles := strings.TrimSpace(findSectionEntryValue(s.Entries, "roles"))
+		if listContains(users, "root@pam") && listContains(roles, "Administrator") {
+			return true
 		}
 	}
-	if strings.TrimSpace(lineValue) != "" {
-		return strings.TrimSpace(lineFull), strings.TrimSpace(lineValue), true
-	}
-	if looksLikePVETokenSecret(trimmed) {
-		return "", trimmed, true
-	}
-	return "", "", false
+	return false
 }
 
-func looksLikePVETokenSecret(secret string) bool {
-	secret = strings.TrimSpace(secret)
-	if len(secret) < 16 {
+func proxsaveRootAdminACLSection() proxmoxNotificationSection {
+	return proxmoxNotificationSection{
+		Type: "acl",
+		Name: "proxsave-root-admin",
+		Entries: []proxmoxNotificationEntry{
+			{Key: "path", Value: "/"},
+			{Key: "users", Value: "root@pam"},
+			{Key: "roles", Value: "Administrator"},
+			{Key: "propagate", Value: "1"},
+		},
+	}
+}
+
+func findSectionEntryValue(entries []proxmoxNotificationEntry, key string) string {
+	match := strings.TrimSpace(key)
+	for _, e := range entries {
+		if strings.TrimSpace(e.Key) == match {
+			return strings.TrimSpace(e.Value)
+		}
+	}
+	return ""
+}
+
+func listContains(raw, item string) bool {
+	item = strings.TrimSpace(item)
+	if item == "" {
 		return false
 	}
-	for _, r := range secret {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '-' || r == '_' || r == '.' || r == '+' || r == '/' || r == '=':
-		default:
-			return false
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	trimmed = strings.ReplaceAll(trimmed, ",", " ")
+	for _, field := range strings.Fields(trimmed) {
+		if strings.TrimSpace(field) == item {
+			return true
 		}
 	}
-	return true
+	return false
+}
+
+func aclPathFromSectionName(name string) string {
+	for _, field := range strings.Fields(strings.TrimSpace(name)) {
+		if strings.HasPrefix(field, "/") {
+			return field
+		}
+	}
+	return ""
 }
