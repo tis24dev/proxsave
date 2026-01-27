@@ -120,6 +120,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		break
 	}
 
+	if mode == RestoreModeCustom {
+		selectedCategories, err = maybeAddRecommendedCategoriesForTFA(ctx, ui, logger, selectedCategories, availableCategories)
+		if err != nil {
+			return err
+		}
+	}
+
 	plan := PlanRestore(candidate.Manifest, selectedCategories, systemType, mode)
 
 	clusterBackup := strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster")
@@ -140,6 +147,16 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			logger.Warning("Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated")
 		default:
 			return fmt.Errorf("invalid cluster restore mode selected")
+		}
+	}
+
+	if plan.HasCategoryID("pve_access_control") || plan.HasCategoryID("pbs_access_control") {
+		currentHost, hostErr := os.Hostname()
+		if hostErr == nil && strings.TrimSpace(candidate.Manifest.Hostname) != "" && strings.TrimSpace(currentHost) != "" {
+			backupHost := strings.TrimSpace(candidate.Manifest.Hostname)
+			if !strings.EqualFold(strings.TrimSpace(currentHost), backupHost) {
+				logger.Warning("Access control/TFA: backup hostname=%s current hostname=%s; WebAuthn users may require re-enrollment if the UI origin (FQDN/port) changes", backupHost, currentHost)
+			}
 		}
 	}
 
@@ -603,6 +620,80 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	logger.Info("Reboot the node (or at least restart networking and system services) to ensure all restored configurations take effect cleanly.")
 
 	return nil
+}
+
+func maybeAddRecommendedCategoriesForTFA(ctx context.Context, ui RestoreWorkflowUI, logger *logging.Logger, selected []Category, available []Category) ([]Category, error) {
+	if ui == nil || logger == nil {
+		return selected, nil
+	}
+	if !hasCategoryID(selected, "pve_access_control") && !hasCategoryID(selected, "pbs_access_control") {
+		return selected, nil
+	}
+
+	var missing []string
+	if !hasCategoryID(selected, "network") {
+		missing = append(missing, "network")
+	}
+	if !hasCategoryID(selected, "ssl") {
+		missing = append(missing, "ssl")
+	}
+	if len(missing) == 0 {
+		return selected, nil
+	}
+
+	var addCategories []Category
+	var addNames []string
+	for _, id := range missing {
+		cat := GetCategoryByID(id, available)
+		if cat == nil || !cat.IsAvailable || cat.ExportOnly {
+			continue
+		}
+		addCategories = append(addCategories, *cat)
+		addNames = append(addNames, cat.Name)
+	}
+	if len(addCategories) == 0 {
+		return selected, nil
+	}
+
+	message := fmt.Sprintf(
+		"You selected Access Control without restoring: %s\n\n"+
+			"If TFA includes WebAuthn/FIDO2, changing the UI origin (FQDN/hostname or port) may require re-enrollment.\n\n"+
+			"For maximum 1:1 compatibility, ProxSave recommends restoring these categories too.\n\n"+
+			"Add recommended categories now?",
+		strings.Join(addNames, ", "),
+	)
+	addNow, err := ui.ConfirmAction(ctx, "TFA/WebAuthn compatibility", message, "Add recommended", "Keep current", 0, true)
+	if err != nil {
+		return nil, err
+	}
+	if !addNow {
+		logger.Warning("Access control selected without %s; WebAuthn users may require re-enrollment if the UI origin changes", strings.Join(addNames, ", "))
+		return selected, nil
+	}
+
+	selected = append(selected, addCategories...)
+	return dedupeCategoriesByID(selected), nil
+}
+
+func dedupeCategoriesByID(categories []Category) []Category {
+	if len(categories) == 0 {
+		return categories
+	}
+	seen := make(map[string]struct{}, len(categories))
+	out := make([]Category, 0, len(categories))
+	for _, cat := range categories {
+		id := strings.TrimSpace(cat.ID)
+		if id == "" {
+			out = append(out, cat)
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, cat)
+	}
+	return out
 }
 
 func runFullRestoreWithUI(ctx context.Context, ui RestoreWorkflowUI, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool) error {

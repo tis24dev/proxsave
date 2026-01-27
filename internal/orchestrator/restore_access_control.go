@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -199,7 +200,7 @@ func applyPBSAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 	}
 
 	logger.Warning("PBS access control: restored 1:1 from backup; root@pam preserved from fresh install and kept Admin on /")
-	logger.Warning("PBS access control: TFA was restored 1:1; users with WebAuthn may require re-enrollment if origin/hostname changed (default behavior is warn, not disable)")
+	logger.Warning("PBS access control: TFA was restored 1:1; users with WebAuthn may require re-enrollment if origin/hostname changed (for best compatibility, keep the same FQDN/origin and restore network+ssl; default behavior is warn, not disable)")
 
 	return nil
 }
@@ -628,6 +629,11 @@ func applyPBSTFAJSONFromStage(logger *logging.Logger, stageRoot string) error {
 			backupUsers[userID] = payload
 		}
 	}
+
+	webauthnUsers := extractWebAuthnUsersFromPBSTFAUsers(backupUsers)
+	if len(webauthnUsers) > 0 {
+		logger.Warning("PBS TFA/WebAuthn: detected %d enrolled user(s): %s", len(webauthnUsers), summarizeUserIDs(webauthnUsers, 8))
+	}
 	backup["users"] = mustMarshalRaw(backupUsers)
 
 	out, err := json.Marshal(backup)
@@ -791,7 +797,13 @@ func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 	}
 
 	logger.Warning("PVE access control: restored 1:1 from backup via pmxcfs; root@pam preserved from fresh install and kept Administrator on /")
-	logger.Warning("PVE access control: TFA was restored 1:1; users with WebAuthn may require re-enrollment if origin/hostname changed (default behavior is warn, not disable)")
+	logger.Warning("PVE access control: TFA was restored 1:1; users with WebAuthn may require re-enrollment if origin/hostname changed (for best compatibility, keep the same FQDN/origin and restore network+ssl; default behavior is warn, not disable)")
+	if tfaPresent {
+		webauthnUsers := extractWebAuthnUsersFromPVETFA(mergedTFA)
+		if len(webauthnUsers) > 0 {
+			logger.Warning("PVE TFA/WebAuthn: detected %d enrolled user(s): %s", len(webauthnUsers), summarizeUserIDs(webauthnUsers, 8))
+		}
+	}
 	return nil
 }
 
@@ -1138,4 +1150,76 @@ func aclPathFromSectionName(name string) string {
 		}
 	}
 	return ""
+}
+
+func extractWebAuthnUsersFromPVETFA(sections []proxmoxNotificationSection) []string {
+	if len(sections) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 8)
+	for _, s := range sections {
+		typ := strings.ToLower(strings.TrimSpace(s.Type))
+		if typ != "webauthn" && typ != "u2f" {
+			continue
+		}
+		userID := strings.TrimSpace(tfaSectionUserID(s))
+		if userID == "" || userID == "root@pam" {
+			continue
+		}
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		out = append(out, userID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func extractWebAuthnUsersFromPBSTFAUsers(users map[string]json.RawMessage) []string {
+	if len(users) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 8)
+	for userID, payload := range users {
+		if isRootPBSUserID(userID) {
+			continue
+		}
+		var methods map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &methods); err != nil {
+			continue
+		}
+		if jsonRawNonNull(methods["webauthn"]) || jsonRawNonNull(methods["u2f"]) {
+			if _, ok := seen[userID]; ok {
+				continue
+			}
+			seen[userID] = struct{}{}
+			out = append(out, userID)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func jsonRawNonNull(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" || trimmed == "{}" || trimmed == "[]" {
+		return false
+	}
+	return true
+}
+
+func summarizeUserIDs(userIDs []string, max int) string {
+	if len(userIDs) == 0 {
+		return ""
+	}
+	if max <= 0 {
+		max = 10
+	}
+	if len(userIDs) <= max {
+		return strings.Join(userIDs, ", ")
+	}
+	return fmt.Sprintf("%s (+%d more)", strings.Join(userIDs[:max], ", "), len(userIDs)-max)
 }

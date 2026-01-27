@@ -154,6 +154,8 @@ On standalone PVE restores (non-cluster backups), ProxSave restores `pve_access_
 
 **TFA**:
 - Restored 1:1. Default behavior is **warn** (do not disable users). Some methods (notably WebAuthn) may require re-enrollment if the hostname/FQDN/origin changes.
+- For maximum 1:1, keep the same URL origin (same FQDN/hostname and port), restore `network` + `ssl`, and avoid accessing the UI via raw IP.
+- In CUSTOM mode, if you select access control without `network`/`ssl`, ProxSave suggests adding them to maximize WebAuthn compatibility.
 
 ---
 
@@ -170,6 +172,8 @@ ProxSave restores `pbs_access_control` by applying staged files to `/etc/proxmox
 
 **TFA**:
 - Restored 1:1. Default behavior is **warn** (do not disable users). Some methods (notably WebAuthn) may require re-enrollment if the hostname/FQDN/origin changes.
+- For maximum 1:1, keep the same URL origin (same FQDN/hostname and port), restore `network` + `ssl`, and avoid accessing the UI via raw IP.
+- In CUSTOM mode, if you select access control without `network`/`ssl`, ProxSave suggests adding them to maximize WebAuthn compatibility.
 
 ---
 

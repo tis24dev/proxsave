@@ -428,6 +428,10 @@ func ShowRestorePlan(logger *logging.Logger, config *SelectiveRestoreConfig) {
 	fmt.Println("  • Existing files at these locations will be OVERWRITTEN")
 	fmt.Println("  • A safety backup will be created before restoration")
 	fmt.Println("  • Services may need to be restarted after restoration")
+	if (hasCategoryID(config.SelectedCategories, "pve_access_control") || hasCategoryID(config.SelectedCategories, "pbs_access_control")) &&
+		(!hasCategoryID(config.SelectedCategories, "network") || !hasCategoryID(config.SelectedCategories, "ssl")) {
+		fmt.Println("  • TFA/WebAuthn: for best 1:1 compatibility keep the same UI origin (FQDN/hostname and port) and restore 'network' + 'ssl'")
+	}
 	fmt.Println()
 }
 

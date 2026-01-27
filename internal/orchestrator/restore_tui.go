@@ -520,6 +520,10 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 	b.WriteString("  • Existing files at these locations will be OVERWRITTEN\n")
 	b.WriteString("  • A safety backup will be created before restoration\n")
 	b.WriteString("  • Services may need to be restarted after restoration\n\n")
+	if (hasCategoryID(config.SelectedCategories, "pve_access_control") || hasCategoryID(config.SelectedCategories, "pbs_access_control")) &&
+		(!hasCategoryID(config.SelectedCategories, "network") || !hasCategoryID(config.SelectedCategories, "ssl")) {
+		b.WriteString("  • TFA/WebAuthn: for best 1:1 compatibility keep the same UI origin (FQDN/hostname and port) and restore 'network' + 'ssl'\n\n")
+	}
 
 	return b.String()
 }
