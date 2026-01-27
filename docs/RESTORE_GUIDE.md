@@ -113,7 +113,7 @@ Each category is handled in one of three ways:
 | `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
 | `pbs_remotes` | PBS Remotes | **Staged** remotes for sync/verify (may include credentials) | `./etc/proxmox-backup/remote.cfg` |
 | `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers | `./etc/proxmox-backup/notifications.cfg`<br>`./etc/proxmox-backup/notifications-priv.cfg` |
-| `pbs_access_control` | PBS Access Control | **Staged** users/realms/ACLs and secrets | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json` |
+| `pbs_access_control` | PBS Access Control | **Staged** access control + secrets restored 1:1 (root@pam safety rail) | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json` |
 | `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`<br>`./etc/proxmox-backup/tape-job.cfg`<br>`./etc/proxmox-backup/media-pool.cfg`<br>`./etc/proxmox-backup/tape-encryption-keys.json` |
 
 ### Common Categories (11 categories)
@@ -151,6 +151,22 @@ On standalone PVE restores (non-cluster backups), ProxSave restores `pve_access_
 
 **Cluster backups**:
 - In cluster SAFE mode, ProxSave does **not** auto-apply 1:1 access control (including secrets). Use cluster RECOVERY (isolated/offline) for full fidelity.
+
+**TFA**:
+- Restored 1:1. Default behavior is **warn** (do not disable users). Some methods (notably WebAuthn) may require re-enrollment if the hostname/FQDN/origin changes.
+
+---
+
+### PBS Access Control 1:1 (pbs_access_control)
+
+ProxSave restores `pbs_access_control` by applying staged files to `/etc/proxmox-backup`:
+- `/etc/proxmox-backup/{user,domains,token}.cfg` (when present)
+- `/etc/proxmox-backup/acl.cfg`
+- `/etc/proxmox-backup/{shadow.json,token.shadow,tfa.json}` (when present)
+
+**Root safety rail**:
+- `root@pam` is preserved from the fresh install (not imported from the backup).
+- ProxSave forces `root@pam` to keep `Admin` on `/`, to prevent lockout.
 
 **TFA**:
 - Restored 1:1. Default behavior is **warn** (do not disable users). Some methods (notably WebAuthn) may require re-enrollment if the hostname/FQDN/origin changes.

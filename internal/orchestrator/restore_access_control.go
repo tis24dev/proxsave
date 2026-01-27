@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +18,14 @@ const (
 	pveShadowCfgPath  = "/etc/pve/priv/shadow.cfg"
 	pveTokenCfgPath   = "/etc/pve/priv/token.cfg"
 	pveTFACfgPath     = "/etc/pve/priv/tfa.cfg"
+
+	pbsUserCfgPath     = "/etc/proxmox-backup/user.cfg"
+	pbsDomainsCfgPath  = "/etc/proxmox-backup/domains.cfg"
+	pbsACLCfgPath      = "/etc/proxmox-backup/acl.cfg"
+	pbsTokenCfgPath    = "/etc/proxmox-backup/token.cfg"
+	pbsShadowJSONPath  = "/etc/proxmox-backup/shadow.json"
+	pbsTokenShadowPath = "/etc/proxmox-backup/token.shadow"
+	pbsTFAJSONPath     = "/etc/proxmox-backup/tfa.json"
 )
 
 func maybeApplyAccessControlFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
@@ -84,44 +93,113 @@ func applyPBSAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 	done := logging.DebugStart(logger, "pbs access control apply", "stage=%s", stageRoot)
 	defer func() { done(err) }()
 
-	cfgPaths := []string{
-		"etc/proxmox-backup/user.cfg",
-		"etc/proxmox-backup/domains.cfg",
-		"etc/proxmox-backup/acl.cfg",
-		"etc/proxmox-backup/token.cfg",
+	stagedUserRaw, userPresent, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/user.cfg")
+	if err != nil {
+		return err
 	}
-	for _, rel := range cfgPaths {
-		if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-			return err
+	stagedDomainsRaw, domainsPresent, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/domains.cfg")
+	if err != nil {
+		return err
+	}
+	stagedACLRaw, aclPresent, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/acl.cfg")
+	if err != nil {
+		return err
+	}
+	stagedTokenCfgRaw, tokenCfgPresent, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/token.cfg")
+	if err != nil {
+		return err
+	}
+
+	if userPresent || domainsPresent || aclPresent || tokenCfgPresent {
+		currentUserSections, _ := readProxmoxConfigSectionsOptional(pbsUserCfgPath)
+		currentDomainSections, _ := readProxmoxConfigSectionsOptional(pbsDomainsCfgPath)
+		currentTokenCfgSections, _ := readProxmoxConfigSectionsOptional(pbsTokenCfgPath)
+
+		backupUserSections, err := parseProxmoxNotificationSections(stagedUserRaw)
+		if err != nil {
+			return fmt.Errorf("parse staged user.cfg: %w", err)
+		}
+		backupDomainSections, err := parseProxmoxNotificationSections(stagedDomainsRaw)
+		if err != nil {
+			return fmt.Errorf("parse staged domains.cfg: %w", err)
+		}
+		backupTokenCfgSections, err := parseProxmoxNotificationSections(stagedTokenCfgRaw)
+		if err != nil {
+			return fmt.Errorf("parse staged token.cfg: %w", err)
+		}
+
+		rootUser := findPBSRootUserSection(currentUserSections)
+		if rootUser == nil {
+			rootUser = &proxmoxNotificationSection{
+				Type: "user",
+				Name: "root@pam",
+				Entries: []proxmoxNotificationEntry{
+					{Key: "enable", Value: "1"},
+				},
+			}
+		}
+		rootTokens := findPBSRootTokenSections(currentUserSections)
+
+		// Merge user.cfg: restore 1:1 except root users/tokens (preserve from fresh install).
+		mergedUser := make([]proxmoxNotificationSection, 0, len(backupUserSections)+1+len(rootTokens))
+		for _, s := range backupUserSections {
+			if strings.EqualFold(strings.TrimSpace(s.Type), "user") && isRootPBSUserID(strings.TrimSpace(s.Name)) {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(s.Type), "token") && isRootPBSAuthID(strings.TrimSpace(s.Name)) {
+				continue
+			}
+			mergedUser = append(mergedUser, s)
+		}
+		mergedUser = append(mergedUser, *rootUser)
+		mergedUser = append(mergedUser, rootTokens...)
+
+		needsPBSRealm := anyUserInRealm(mergedUser, "pbs")
+		requiredRealms := []string{"pam"}
+		if needsPBSRealm {
+			requiredRealms = append(requiredRealms, "pbs")
+		}
+		mergedDomains := mergeRequiredRealms(backupDomainSections, currentDomainSections, requiredRealms)
+
+		// Merge token.cfg (if present): restore 1:1 except root-bound entries (preserve from fresh install).
+		mergedTokenCfg := mergeUserBoundSectionsExcludeRoot(backupTokenCfgSections, currentTokenCfgSections, tokenSectionUserID, "root@pam")
+
+		if domainsPresent {
+			if err := writeFileAtomic(pbsDomainsCfgPath, []byte(renderProxmoxConfig(mergedDomains)), 0o640); err != nil {
+				return fmt.Errorf("write %s: %w", pbsDomainsCfgPath, err)
+			}
+		}
+		if userPresent {
+			if err := writeFileAtomic(pbsUserCfgPath, []byte(renderProxmoxConfig(mergedUser)), 0o640); err != nil {
+				return fmt.Errorf("write %s: %w", pbsUserCfgPath, err)
+			}
+		}
+		if tokenCfgPresent {
+			if err := writeFileAtomic(pbsTokenCfgPath, []byte(renderProxmoxConfig(mergedTokenCfg)), 0o640); err != nil {
+				return fmt.Errorf("write %s: %w", pbsTokenCfgPath, err)
+			}
+		}
+
+		if aclPresent {
+			if err := applyPBSACLFromStage(logger, stagedACLRaw); err != nil {
+				return err
+			}
 		}
 	}
 
-	secretPaths := []struct {
-		rel  string
-		dest string
-		mode os.FileMode
-	}{
-		{
-			rel:  "etc/proxmox-backup/shadow.json",
-			dest: "/etc/proxmox-backup/shadow.json",
-			mode: 0o600,
-		},
-		{
-			rel:  "etc/proxmox-backup/token.shadow",
-			dest: "/etc/proxmox-backup/token.shadow",
-			mode: 0o600,
-		},
-		{
-			rel:  "etc/proxmox-backup/tfa.json",
-			dest: "/etc/proxmox-backup/tfa.json",
-			mode: 0o600,
-		},
+	// Restore secrets 1:1 except root@pam (preserve from fresh install).
+	if err := applyPBSShadowJSONFromStage(logger, stageRoot); err != nil {
+		return err
 	}
-	for _, item := range secretPaths {
-		if err := applySensitiveFileFromStage(logger, stageRoot, item.rel, item.dest, item.mode); err != nil {
-			return err
-		}
+	if err := applyPBSTokenShadowFromStage(logger, stageRoot); err != nil {
+		return err
 	}
+	if err := applyPBSTFAJSONFromStage(logger, stageRoot); err != nil {
+		return err
+	}
+
+	logger.Warning("PBS access control: restored 1:1 from backup; root@pam preserved from fresh install and kept Admin on /")
+	logger.Warning("PBS access control: TFA was restored 1:1; users with WebAuthn may require re-enrollment if origin/hostname changed (default behavior is warn, not disable)")
 
 	return nil
 }
@@ -144,6 +222,442 @@ func applySensitiveFileFromStage(logger *logging.Logger, stageRoot, relPath, des
 	}
 
 	return writeFileAtomic(destPath, []byte(trimmed+"\n"), perm)
+}
+
+func isRootPBSUserID(userID string) bool {
+	trimmed := strings.TrimSpace(userID)
+	if trimmed == "" {
+		return false
+	}
+	if idx := strings.Index(trimmed, "@"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	return strings.TrimSpace(trimmed) == "root"
+}
+
+func isRootPBSAuthID(authID string) bool {
+	trimmed := strings.TrimSpace(authID)
+	if trimmed == "" {
+		return false
+	}
+	if idx := strings.Index(trimmed, "!"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	return isRootPBSUserID(trimmed)
+}
+
+func findPBSRootUserSection(sections []proxmoxNotificationSection) *proxmoxNotificationSection {
+	for i := range sections {
+		if !strings.EqualFold(strings.TrimSpace(sections[i].Type), "user") {
+			continue
+		}
+		if isRootPBSUserID(strings.TrimSpace(sections[i].Name)) {
+			return &sections[i]
+		}
+	}
+	return nil
+}
+
+func findPBSRootTokenSections(sections []proxmoxNotificationSection) []proxmoxNotificationSection {
+	var out []proxmoxNotificationSection
+	for _, s := range sections {
+		if !strings.EqualFold(strings.TrimSpace(s.Type), "token") {
+			continue
+		}
+		if isRootPBSAuthID(strings.TrimSpace(s.Name)) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func applyPBSACLFromStage(logger *logging.Logger, stagedACL string) error {
+	raw := strings.TrimSpace(stagedACL)
+	if raw == "" {
+		logger.Warning("PBS access control: staged acl.cfg is empty; removing %s", pbsACLCfgPath)
+		return removeIfExists(pbsACLCfgPath)
+	}
+
+	// PBS supports two ACL formats across versions:
+	// - header-style (section + indented keys)
+	// - colon-delimited line format (acl:<propagate>:<path>:<userlist>:<rolelist>)
+	if pbsConfigHasHeader(raw) {
+		return applyPBSACLSectionFormat(logger, raw)
+	}
+	if isPBSACLLineFormat(raw) {
+		return applyPBSACLLineFormat(logger, raw)
+	}
+
+	logger.Warning("PBS access control: staged acl.cfg has unknown format; skipping apply")
+	return nil
+}
+
+func applyPBSACLSectionFormat(logger *logging.Logger, raw string) error {
+	backupSections, err := parseProxmoxNotificationSections(raw)
+	if err != nil {
+		return fmt.Errorf("parse staged acl.cfg: %w", err)
+	}
+
+	var merged []proxmoxNotificationSection
+	for _, s := range backupSections {
+		if !strings.EqualFold(strings.TrimSpace(s.Type), "acl") {
+			merged = append(merged, s)
+			continue
+		}
+		users := findSectionEntryValue(s.Entries, "users")
+		filtered, ok := filterPBSACLUsers(users)
+		if !ok {
+			continue
+		}
+		s.Entries = setSectionEntryValue(s.Entries, "users", filtered)
+		merged = append(merged, s)
+	}
+
+	if !hasPBSRootAdminOnRootSectionFormat(merged) {
+		merged = append(merged, proxsavePBSRootAdminACLSection())
+	}
+
+	if err := writeFileAtomic(pbsACLCfgPath, []byte(renderProxmoxConfig(merged)), 0o640); err != nil {
+		return fmt.Errorf("write %s: %w", pbsACLCfgPath, err)
+	}
+	return nil
+}
+
+type pbsACLLine struct {
+	Propagate string
+	Path      string
+	UserList  string
+	Roles     string
+	Raw       string
+}
+
+func isPBSACLLineFormat(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "acl:") {
+			return false
+		}
+		parts := strings.SplitN(trimmed, ":", 5)
+		return len(parts) == 5
+	}
+	return false
+}
+
+func parsePBSACLLine(line string) (pbsACLLine, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return pbsACLLine{}, false
+	}
+	if !strings.HasPrefix(trimmed, "acl:") {
+		return pbsACLLine{Raw: trimmed}, true
+	}
+
+	parts := strings.SplitN(trimmed, ":", 5)
+	if len(parts) != 5 || strings.TrimSpace(parts[0]) != "acl" {
+		return pbsACLLine{Raw: trimmed}, true
+	}
+	return pbsACLLine{
+		Propagate: strings.TrimSpace(parts[1]),
+		Path:      strings.TrimSpace(parts[2]),
+		UserList:  strings.TrimSpace(parts[3]),
+		Roles:     strings.TrimSpace(parts[4]),
+		Raw:       trimmed,
+	}, true
+}
+
+func applyPBSACLLineFormat(logger *logging.Logger, raw string) error {
+	var outLines []string
+	var hasRootAdmin bool
+
+	for _, line := range strings.Split(raw, "\n") {
+		entry, ok := parsePBSACLLine(line)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(entry.Raw) != "" && !strings.HasPrefix(entry.Raw, "acl:") {
+			// Preserve unknown non-empty lines verbatim.
+			outLines = append(outLines, entry.Raw)
+			continue
+		}
+
+		filteredUsers, ok := filterPBSACLUsers(entry.UserList)
+		if !ok {
+			continue
+		}
+		entry.UserList = filteredUsers
+
+		if entry.Path == "/" && entry.Propagate == "1" && listContains(entry.UserList, "root@pam") && listContains(entry.Roles, "Admin") {
+			hasRootAdmin = true
+		}
+
+		outLines = append(outLines, fmt.Sprintf("acl:%s:%s:%s:%s", entry.Propagate, entry.Path, entry.UserList, entry.Roles))
+	}
+
+	if !hasRootAdmin {
+		outLines = append(outLines, "acl:1:/:root@pam:Admin")
+	}
+
+	content := strings.TrimSpace(strings.Join(outLines, "\n"))
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if err := writeFileAtomic(pbsACLCfgPath, []byte(content), 0o640); err != nil {
+		return fmt.Errorf("write %s: %w", pbsACLCfgPath, err)
+	}
+	return nil
+}
+
+func filterPBSACLUsers(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+
+	trimmed = strings.ReplaceAll(trimmed, ",", " ")
+	var kept []string
+	for _, field := range strings.Fields(trimmed) {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		if isRootPBSAuthID(field) {
+			continue
+		}
+		kept = append(kept, field)
+	}
+	if len(kept) == 0 {
+		return "", false
+	}
+	return strings.Join(kept, ","), true
+}
+
+func setSectionEntryValue(entries []proxmoxNotificationEntry, key, value string) []proxmoxNotificationEntry {
+	match := strings.TrimSpace(key)
+	if match == "" {
+		return entries
+	}
+	out := make([]proxmoxNotificationEntry, 0, len(entries)+1)
+	found := false
+	for _, e := range entries {
+		if strings.TrimSpace(e.Key) == match {
+			if !found {
+				out = append(out, proxmoxNotificationEntry{Key: match, Value: strings.TrimSpace(value)})
+				found = true
+			}
+			continue
+		}
+		out = append(out, e)
+	}
+	if !found {
+		out = append(out, proxmoxNotificationEntry{Key: match, Value: strings.TrimSpace(value)})
+	}
+	return out
+}
+
+func hasPBSRootAdminOnRootSectionFormat(sections []proxmoxNotificationSection) bool {
+	for _, s := range sections {
+		if strings.TrimSpace(s.Type) != "acl" {
+			continue
+		}
+		path := strings.TrimSpace(findSectionEntryValue(s.Entries, "path"))
+		if path == "" {
+			path = aclPathFromSectionName(s.Name)
+		}
+		if path != "/" {
+			continue
+		}
+
+		users := strings.TrimSpace(findSectionEntryValue(s.Entries, "users"))
+		roles := strings.TrimSpace(findSectionEntryValue(s.Entries, "roles"))
+		if listContains(users, "root@pam") && listContains(roles, "Admin") {
+			return true
+		}
+	}
+	return false
+}
+
+func proxsavePBSRootAdminACLSection() proxmoxNotificationSection {
+	return proxmoxNotificationSection{
+		Type: "acl",
+		Name: "proxsave-root-admin",
+		Entries: []proxmoxNotificationEntry{
+			{Key: "path", Value: "/"},
+			{Key: "users", Value: "root@pam"},
+			{Key: "roles", Value: "Admin"},
+			{Key: "propagate", Value: "1"},
+		},
+	}
+}
+
+func applyPBSShadowJSONFromStage(logger *logging.Logger, stageRoot string) error {
+	stagePath := filepath.Join(stageRoot, "etc/proxmox-backup/shadow.json")
+	backupBytes, err := restoreFS.ReadFile(stagePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read staged shadow.json: %w", err)
+	}
+	trimmed := strings.TrimSpace(string(backupBytes))
+	if trimmed == "" {
+		logger.Warning("PBS access control: staged shadow.json is empty; removing %s", pbsShadowJSONPath)
+		return removeIfExists(pbsShadowJSONPath)
+	}
+
+	var backup map[string]string
+	if err := json.Unmarshal([]byte(trimmed), &backup); err != nil {
+		return fmt.Errorf("parse staged shadow.json: %w", err)
+	}
+
+	currentBytes, err := restoreFS.ReadFile(pbsShadowJSONPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read current shadow.json: %w", err)
+	}
+	var current map[string]string
+	if len(currentBytes) > 0 {
+		_ = json.Unmarshal(currentBytes, &current)
+	}
+
+	for userID := range backup {
+		if isRootPBSUserID(userID) {
+			delete(backup, userID)
+		}
+	}
+	for userID, hash := range current {
+		if isRootPBSUserID(userID) {
+			backup[userID] = hash
+		}
+	}
+
+	out, err := json.Marshal(backup)
+	if err != nil {
+		return fmt.Errorf("marshal shadow.json: %w", err)
+	}
+	return writeFileAtomic(pbsShadowJSONPath, append(out, '\n'), 0o600)
+}
+
+func applyPBSTokenShadowFromStage(logger *logging.Logger, stageRoot string) error {
+	stagePath := filepath.Join(stageRoot, "etc/proxmox-backup/token.shadow")
+	backupBytes, err := restoreFS.ReadFile(stagePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read staged token.shadow: %w", err)
+	}
+	trimmed := strings.TrimSpace(string(backupBytes))
+	if trimmed == "" {
+		logger.Warning("PBS access control: staged token.shadow is empty; removing %s", pbsTokenShadowPath)
+		return removeIfExists(pbsTokenShadowPath)
+	}
+
+	var backup map[string]string
+	if err := json.Unmarshal([]byte(trimmed), &backup); err != nil {
+		return fmt.Errorf("parse staged token.shadow: %w", err)
+	}
+
+	currentBytes, err := restoreFS.ReadFile(pbsTokenShadowPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read current token.shadow: %w", err)
+	}
+	var current map[string]string
+	if len(currentBytes) > 0 {
+		_ = json.Unmarshal(currentBytes, &current)
+	}
+
+	for tokenID := range backup {
+		if isRootPBSAuthID(tokenID) {
+			delete(backup, tokenID)
+		}
+	}
+	for tokenID, secret := range current {
+		if isRootPBSAuthID(tokenID) {
+			backup[tokenID] = secret
+		}
+	}
+
+	out, err := json.Marshal(backup)
+	if err != nil {
+		return fmt.Errorf("marshal token.shadow: %w", err)
+	}
+	return writeFileAtomic(pbsTokenShadowPath, append(out, '\n'), 0o600)
+}
+
+func applyPBSTFAJSONFromStage(logger *logging.Logger, stageRoot string) error {
+	stagePath := filepath.Join(stageRoot, "etc/proxmox-backup/tfa.json")
+	backupBytes, err := restoreFS.ReadFile(stagePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read staged tfa.json: %w", err)
+	}
+	trimmed := strings.TrimSpace(string(backupBytes))
+	if trimmed == "" {
+		logger.Warning("PBS access control: staged tfa.json is empty; removing %s", pbsTFAJSONPath)
+		return removeIfExists(pbsTFAJSONPath)
+	}
+
+	var backup map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &backup); err != nil {
+		return fmt.Errorf("parse staged tfa.json: %w", err)
+	}
+
+	currentBytes, err := restoreFS.ReadFile(pbsTFAJSONPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read current tfa.json: %w", err)
+	}
+	var current map[string]json.RawMessage
+	if len(currentBytes) > 0 {
+		_ = json.Unmarshal(currentBytes, &current)
+	}
+
+	backupUsers := parseTFAUsersMap(backup)
+	currentUsers := parseTFAUsersMap(current)
+
+	for userID := range backupUsers {
+		if isRootPBSUserID(userID) {
+			delete(backupUsers, userID)
+		}
+	}
+	for userID, payload := range currentUsers {
+		if isRootPBSUserID(userID) {
+			backupUsers[userID] = payload
+		}
+	}
+	backup["users"] = mustMarshalRaw(backupUsers)
+
+	out, err := json.Marshal(backup)
+	if err != nil {
+		return fmt.Errorf("marshal tfa.json: %w", err)
+	}
+	return writeFileAtomic(pbsTFAJSONPath, append(out, '\n'), 0o600)
+}
+
+func parseTFAUsersMap(obj map[string]json.RawMessage) map[string]json.RawMessage {
+	if obj == nil {
+		return map[string]json.RawMessage{}
+	}
+	raw, ok := obj["users"]
+	if !ok || len(raw) == 0 {
+		return map[string]json.RawMessage{}
+	}
+	var users map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &users); err != nil || users == nil {
+		return map[string]json.RawMessage{}
+	}
+	return users
+}
+
+func mustMarshalRaw(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage([]byte("{}"))
+	}
+	return json.RawMessage(b)
 }
 
 func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
@@ -239,7 +753,11 @@ func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 	}
 
 	needsPVERealm := anyUserInRealm(mergedUser, "pve")
-	mergedDomains := mergeRequiredRealms(backupDomainSections, currentDomainSections, []string{"pam"}, needsPVERealm)
+	requiredRealms := []string{"pam"}
+	if needsPVERealm {
+		requiredRealms = append(requiredRealms, "pve")
+	}
+	mergedDomains := mergeRequiredRealms(backupDomainSections, currentDomainSections, requiredRealms)
 
 	// Merge secrets: restore 1:1 except root@pam token/TFA entries (preserve from fresh install).
 	mergedTokens := mergeUserBoundSectionsExcludeRoot(backupTokenSections, currentTokenSections, tokenSectionUserID, "root@pam")
@@ -418,7 +936,7 @@ func userRealm(userID string) string {
 	return strings.TrimSpace(userID[idx+1:])
 }
 
-func mergeRequiredRealms(backup, current []proxmoxNotificationSection, always []string, includePVE bool) []proxmoxNotificationSection {
+func mergeRequiredRealms(backup, current []proxmoxNotificationSection, required []string) []proxmoxNotificationSection {
 	type key struct {
 		typ  string
 		name string
@@ -441,11 +959,6 @@ func mergeRequiredRealms(backup, current []proxmoxNotificationSection, always []
 	// Start from backup (1:1).
 	for _, s := range backup {
 		appendUnique(s)
-	}
-
-	required := append([]string(nil), always...)
-	if includePVE {
-		required = append(required, "pve")
 	}
 
 	for _, realm := range required {

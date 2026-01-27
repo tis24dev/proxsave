@@ -217,6 +217,185 @@ func TestMaybeApplyAccessControlFromStage_SkipsClusterBackupInSafeMode(t *testin
 	}
 }
 
+func TestApplyPBSAccessControlFromStage_Restores1To1ExceptRoot(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	stageRoot := "/stage"
+
+	// Fresh-install baseline (must be preserved for root@pam safety rail).
+	currentDomains := `
+pam: pam
+  comment freshpam
+
+pbs: pbs
+  comment freshpbs
+`
+	currentUser := `
+user: root@pam
+  comment FreshRoot
+  enable 1
+
+token: root@pam!fresh
+  comment fresh-token
+
+user: keepme@pbs
+  enable 1
+`
+	currentTokenShadow := `{"root@pam!fresh":"fresh-secret"}`
+	currentTFA := `{"users":{"root@pam":{"totp":[9]}},"webauthn":{"rp":"fresh"}}`
+
+	if err := fakeFS.WriteFile(pbsDomainsCfgPath, []byte(currentDomains), 0o640); err != nil {
+		t.Fatalf("write current domains.cfg: %v", err)
+	}
+	if err := fakeFS.WriteFile(pbsUserCfgPath, []byte(currentUser), 0o640); err != nil {
+		t.Fatalf("write current user.cfg: %v", err)
+	}
+	if err := fakeFS.WriteFile(pbsTokenShadowPath, []byte(currentTokenShadow), 0o600); err != nil {
+		t.Fatalf("write current token.shadow: %v", err)
+	}
+	if err := fakeFS.WriteFile(pbsTFAJSONPath, []byte(currentTFA), 0o600); err != nil {
+		t.Fatalf("write current tfa.json: %v", err)
+	}
+
+	// Backup/stage includes a conflicting root@pam definition (must NOT be applied), plus a @pbs user.
+	stagedDomains := `
+pam: pam
+  comment backup-pam-should-not-win
+
+ldap: myldap
+  base_dn dc=example,dc=com
+`
+	stagedUser := `
+user: root@pam
+  enable 0
+
+token: root@pam!old
+  comment old-token-should-not-win
+
+user: alice@pbs
+  enable 1
+`
+	stagedACL := `
+acl:1:/:root@pam:Admin
+acl:1:/:root@pam!old:Admin
+acl:1:/:alice@pbs:Admin
+`
+	stagedShadow := `{"root@pbs":"old-root-hash","alice@pbs":"alice-hash"}`
+	stagedTokenShadow := `{"root@pam!old":"old-secret","alice@pbs!tok":"alice-secret"}`
+	stagedTFA := `{"users":{"root@pam":{"totp":[1]},"alice@pbs":{"totp":[2]}},"webauthn":{"rp":"backup"}}`
+
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/domains.cfg", []byte(stagedDomains), 0o640); err != nil {
+		t.Fatalf("write staged domains.cfg: %v", err)
+	}
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/user.cfg", []byte(stagedUser), 0o640); err != nil {
+		t.Fatalf("write staged user.cfg: %v", err)
+	}
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/acl.cfg", []byte(stagedACL), 0o640); err != nil {
+		t.Fatalf("write staged acl.cfg: %v", err)
+	}
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/shadow.json", []byte(stagedShadow), 0o600); err != nil {
+		t.Fatalf("write staged shadow.json: %v", err)
+	}
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/token.shadow", []byte(stagedTokenShadow), 0o600); err != nil {
+		t.Fatalf("write staged token.shadow: %v", err)
+	}
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/tfa.json", []byte(stagedTFA), 0o600); err != nil {
+		t.Fatalf("write staged tfa.json: %v", err)
+	}
+
+	if err := applyPBSAccessControlFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
+		t.Fatalf("applyPBSAccessControlFromStage error: %v", err)
+	}
+
+	// Root realm safety: pam realm must be preserved from fresh install.
+	gotDomains, err := fakeFS.ReadFile(pbsDomainsCfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", pbsDomainsCfgPath, err)
+	}
+	if !strings.Contains(string(gotDomains), "comment freshpam") {
+		t.Fatalf("expected fresh pam realm to be preserved, got:\n%s", string(gotDomains))
+	}
+	if !strings.Contains(string(gotDomains), "ldap: myldap") {
+		t.Fatalf("expected ldap realm restored, got:\n%s", string(gotDomains))
+	}
+	// pbs realm should be present because alice@pbs exists.
+	if !strings.Contains(string(gotDomains), "pbs: pbs") {
+		t.Fatalf("expected pbs realm to be present, got:\n%s", string(gotDomains))
+	}
+
+	// Root user safety: root@pam must be preserved from currentUser and not disabled.
+	gotUser, err := fakeFS.ReadFile(pbsUserCfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", pbsUserCfgPath, err)
+	}
+	if !strings.Contains(string(gotUser), "comment FreshRoot") {
+		t.Fatalf("expected root@pam section preserved from fresh install, got:\n%s", string(gotUser))
+	}
+	if strings.Contains(string(gotUser), "user: root@pam\n  enable 0") {
+		t.Fatalf("expected staged root@pam not to be applied, got:\n%s", string(gotUser))
+	}
+	// Root token safety: keep fresh root token, do not import staged root token.
+	if !strings.Contains(string(gotUser), "token: root@pam!fresh") {
+		t.Fatalf("expected fresh root token to be preserved, got:\n%s", string(gotUser))
+	}
+	if strings.Contains(string(gotUser), "token: root@pam!old") {
+		t.Fatalf("expected staged root token to be excluded, got:\n%s", string(gotUser))
+	}
+	if !strings.Contains(string(gotUser), "user: alice@pbs") {
+		t.Fatalf("expected alice user to be restored, got:\n%s", string(gotUser))
+	}
+
+	// ACL safety rail: ensure root has Admin on / and root token ACLs from backup are excluded.
+	gotACL, err := fakeFS.ReadFile(pbsACLCfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", pbsACLCfgPath, err)
+	}
+	if !strings.Contains(string(gotACL), "acl:1:/:root@pam:Admin") {
+		t.Fatalf("expected root admin ACL to be present, got:\n%s", string(gotACL))
+	}
+	if strings.Contains(string(gotACL), "root@pam!old") {
+		t.Fatalf("expected staged root token ACL to be excluded, got:\n%s", string(gotACL))
+	}
+	if !strings.Contains(string(gotACL), "alice@pbs") {
+		t.Fatalf("expected alice ACL to be restored, got:\n%s", string(gotACL))
+	}
+
+	// token.shadow safety rail: keep fresh root token secret, restore alice token secret, exclude staged root token secret.
+	gotTokenShadow, err := fakeFS.ReadFile(pbsTokenShadowPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", pbsTokenShadowPath, err)
+	}
+	if strings.Contains(string(gotTokenShadow), "root@pam!old") {
+		t.Fatalf("expected staged root token secret to be excluded, got:\n%s", string(gotTokenShadow))
+	}
+	if !strings.Contains(string(gotTokenShadow), "root@pam!fresh") {
+		t.Fatalf("expected fresh root token secret to be preserved, got:\n%s", string(gotTokenShadow))
+	}
+	if !strings.Contains(string(gotTokenShadow), "alice@pbs!tok") {
+		t.Fatalf("expected alice token secret to be restored, got:\n%s", string(gotTokenShadow))
+	}
+
+	// tfa.json safety rail: keep fresh root TFA, restore alice TFA, preserve backup webauthn config.
+	gotTFA, err := fakeFS.ReadFile(pbsTFAJSONPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", pbsTFAJSONPath, err)
+	}
+	if !strings.Contains(string(gotTFA), "\"root@pam\"") || strings.Contains(string(gotTFA), "\"totp\":[1]") {
+		t.Fatalf("expected staged root TFA to be excluded and fresh root TFA preserved, got:\n%s", string(gotTFA))
+	}
+	if !strings.Contains(string(gotTFA), "\"alice@pbs\"") {
+		t.Fatalf("expected alice TFA to be restored, got:\n%s", string(gotTFA))
+	}
+	if !strings.Contains(string(gotTFA), "\"rp\":\"backup\"") {
+		t.Fatalf("expected backup webauthn config to be preserved, got:\n%s", string(gotTFA))
+	}
+}
+
 func TestApplyPBSAccessControlFromStage_WritesFilesWithPermissions(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
@@ -243,10 +422,10 @@ func TestApplyPBSAccessControlFromStage_WritesFilesWithPermissions(t *testing.T)
 	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/shadow.json", []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write staged shadow.json: %v", err)
 	}
-	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/token.shadow", []byte("token"), 0o600); err != nil {
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/token.shadow", []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write staged token.shadow: %v", err)
 	}
-	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/tfa.json", []byte("[]"), 0o600); err != nil {
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/tfa.json", []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write staged tfa.json: %v", err)
 	}
 
@@ -272,4 +451,3 @@ func TestApplyPBSAccessControlFromStage_WritesFilesWithPermissions(t *testing.T)
 	expectPerm("/etc/proxmox-backup/token.shadow", 0o600)
 	expectPerm("/etc/proxmox-backup/tfa.json", 0o600)
 }
-
