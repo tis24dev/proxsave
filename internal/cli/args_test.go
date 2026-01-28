@@ -88,7 +88,7 @@ func TestParseDefaults(t *testing.T) {
 	}
 	if args.DryRun || args.ShowVersion || args.ShowHelp || args.ForceNewKey || args.Decrypt ||
 		args.Restore || args.Install || args.NewInstall || args.EnvMigration || args.EnvMigrationDry || args.UpgradeConfig ||
-		args.UpgradeConfigDry {
+		args.UpgradeConfigDry || args.CleanupGuards {
 		t.Fatal("all boolean flags should default to false")
 	}
 }
@@ -108,6 +108,7 @@ func TestParseCustomFlags(t *testing.T) {
 		"--new-install",
 		"--env-migration",
 		"--env-migration-dry-run",
+		"--cleanup-guards",
 		"--upgrade-config",
 		"--upgrade-config-dry-run",
 		"--old-env", "/legacy.env",
@@ -125,7 +126,7 @@ func TestParseCustomFlags(t *testing.T) {
 	if !args.DryRun || !args.Support || !args.ShowVersion || !args.ShowHelp ||
 		!args.ForceNewKey || !args.Decrypt || !args.Restore || !args.Install || !args.NewInstall ||
 		!args.EnvMigration || !args.EnvMigrationDry || !args.UpgradeConfig ||
-		!args.UpgradeConfigDry {
+		!args.UpgradeConfigDry || !args.CleanupGuards {
 		t.Fatal("expected boolean flags to be set")
 	}
 	if args.LegacyEnvPath != "/legacy.env" {

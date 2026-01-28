@@ -105,6 +105,34 @@ func TestReadLineWithContext_CancelledReturnsAborted(t *testing.T) {
 	_ = pw.Close()
 }
 
+func TestReadLineWithContext_DeadlineReturnsDeadlineExceeded(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	defer pw.Close()
+
+	reader := bufio.NewReader(pr)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	var err error
+	go func() {
+		defer close(done)
+		_, err = ReadLineWithContext(ctx, reader)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("ReadLineWithContext did not return after deadline")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v; want %v", err, context.DeadlineExceeded)
+	}
+
+	_ = pw.Close()
+}
+
 func TestReadPasswordWithContext_NilReadPasswordErrors(t *testing.T) {
 	_, err := ReadPasswordWithContext(context.Background(), nil, 0)
 	if err == nil {
@@ -158,5 +186,25 @@ func TestReadPasswordWithContext_CancelledReturnsAborted(t *testing.T) {
 	}
 	if !errors.Is(err, ErrInputAborted) {
 		t.Fatalf("err=%v; want %v", err, ErrInputAborted)
+	}
+}
+
+func TestReadPasswordWithContext_DeadlineReturnsDeadlineExceeded(t *testing.T) {
+	unblock := make(chan struct{})
+	readPassword := func(fd int) ([]byte, error) {
+		<-unblock
+		return []byte("secret"), nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	got, err := ReadPasswordWithContext(ctx, readPassword, 0)
+	close(unblock)
+	if got != nil {
+		t.Fatalf("expected nil bytes on deadline")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v; want %v", err, context.DeadlineExceeded)
 	}
 }

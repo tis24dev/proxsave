@@ -128,7 +128,7 @@ func TestCollectUserTokensAggregates(t *testing.T) {
 		},
 	})
 
-	commandsDir := filepath.Join(tmp, "commands")
+	commandsDir := filepath.Join(tmp, "var/lib/proxsave-info", "commands", "pbs")
 	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
 		t.Fatalf("mkdir commands: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestCollectUserTokensAggregates(t *testing.T) {
 		t.Fatalf("collectUserConfigs error: %v", err)
 	}
 
-	aggPath := filepath.Join(tmp, "users", "tokens.json")
+	aggPath := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "access-control", "tokens.json")
 	if _, err := os.Stat(aggPath); err != nil {
 		t.Fatalf("expected aggregated tokens.json, got %v", err)
 	}
@@ -181,8 +181,116 @@ func TestCollectPBSConfigsWithCustomRoot(t *testing.T) {
 		t.Fatalf("CollectPBSConfigs failed with custom root: %v", err)
 	}
 
-	commandsDir := filepath.Join(collector.tempDir, "commands")
+	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
 	if _, err := os.Stat(commandsDir); err != nil {
 		t.Fatalf("expected commands directory, got err: %v", err)
+	}
+}
+
+func TestCollectPBSConfigsExcludesDisabledPBSConfigFiles(t *testing.T) {
+	root := t.TempDir()
+	mustWrite := func(name, contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	mustWrite("dummy.cfg", "ok")
+	mustWrite("datastore.cfg", "datastore")
+	mustWrite("user.cfg", "user")
+	mustWrite("acl.cfg", "acl")
+	mustWrite("domains.cfg", "domains")
+	mustWrite("remote.cfg", "remote")
+	mustWrite("sync.cfg", "sync")
+	mustWrite("verification.cfg", "verify")
+	mustWrite("tape.cfg", "tape")
+	mustWrite("media-pool.cfg", "media")
+	mustWrite("network.cfg", "net")
+	mustWrite("prune.cfg", "prune")
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = root
+	cfg.BackupDatastoreConfigs = false
+	cfg.BackupUserConfigs = false
+	cfg.BackupRemoteConfigs = false
+	cfg.BackupSyncJobs = false
+	cfg.BackupVerificationJobs = false
+	cfg.BackupTapeConfigs = false
+	cfg.BackupPruneSchedules = false
+	cfg.BackupNetworkConfigs = false
+	cfg.BackupPxarFiles = false
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			if name == "proxmox-backup-manager" && len(args) >= 3 && args[0] == "datastore" && args[1] == "list" {
+				return []byte(`[{"name":"store1","path":"/fake"}]`), nil
+			}
+			return []byte("ok"), nil
+		},
+	})
+
+	if err := collector.CollectPBSConfigs(context.Background()); err != nil {
+		t.Fatalf("CollectPBSConfigs failed: %v", err)
+	}
+
+	destDir := filepath.Join(collector.tempDir, "etc", "proxmox-backup")
+
+	if _, err := os.Stat(filepath.Join(destDir, "dummy.cfg")); err != nil {
+		t.Fatalf("expected dummy.cfg collected, got %v", err)
+	}
+
+	for _, excluded := range []string{
+		"datastore.cfg",
+		"user.cfg",
+		"acl.cfg",
+		"domains.cfg",
+		"remote.cfg",
+		"sync.cfg",
+		"verification.cfg",
+		"tape.cfg",
+		"media-pool.cfg",
+		"network.cfg",
+		"prune.cfg",
+	} {
+		_, err := os.Stat(filepath.Join(destDir, excluded))
+		if err == nil {
+			t.Fatalf("expected %s excluded from PBS config snapshot", excluded)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat %s: %v", excluded, err)
+		}
+	}
+
+	// Ensure related command output is also excluded when the feature flag is disabled.
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "remote_list.json")); err == nil {
+		t.Fatalf("expected remote_list.json excluded when BACKUP_REMOTE_CONFIGS=false")
+	}
+}
+
+func TestCollectPBSConfigFileReturnsSkippedWhenExcluded(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "remote.cfg"), []byte("remote"), 0o644); err != nil {
+		t.Fatalf("write remote.cfg: %v", err)
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = root
+	cfg.ExcludePatterns = []string{"remote.cfg"}
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
+
+	entry := collector.collectPBSConfigFile(context.Background(), root, "remote.cfg", "Remote configuration", true)
+	if entry.Status != StatusSkipped {
+		t.Fatalf("expected StatusSkipped, got %s", entry.Status)
+	}
+
+	target := filepath.Join(collector.tempDir, "etc", "proxmox-backup", "remote.cfg")
+	_, err := os.Stat(target)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected %s not to exist, stat err=%v", target, err)
 	}
 }

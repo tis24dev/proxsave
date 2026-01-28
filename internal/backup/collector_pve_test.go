@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -362,6 +363,39 @@ func TestCollectPVEConfigsIntegration(t *testing.T) {
 	}
 }
 
+func TestCollectPVEConfigsPopulatesManifestSkippedForExcludedACL(t *testing.T) {
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("{}"), nil
+		},
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+	})
+
+	pveConfigPath := collector.config.PVEConfigPath
+	if err := os.WriteFile(filepath.Join(pveConfigPath, "user.cfg"), []byte("user"), 0o644); err != nil {
+		t.Fatalf("write user.cfg: %v", err)
+	}
+	collector.config.BackupPVEACL = true
+	collector.config.ExcludePatterns = []string{"user.cfg"}
+
+	if err := collector.CollectPVEConfigs(context.Background()); err != nil {
+		t.Fatalf("CollectPVEConfigs failed: %v", err)
+	}
+
+	src := filepath.Join(collector.effectivePVEConfigPath(), "user.cfg")
+	dest := collector.targetPathFor(src)
+	key := pveManifestKey(collector.tempDir, dest)
+	entry, ok := collector.pveManifest[key]
+	if !ok {
+		t.Fatalf("expected manifest entry for %s (key=%s)", src, key)
+	}
+	if entry.Status != StatusSkipped {
+		t.Fatalf("expected %s status, got %s", StatusSkipped, entry.Status)
+	}
+}
+
 // Test collectVMConfigs function
 func TestCollectVMConfigs(t *testing.T) {
 	collector := newPVECollector(t)
@@ -694,6 +728,86 @@ func TestCollectPVEReplication(t *testing.T) {
 	err := collector.collectPVEReplication(ctx, nodes)
 	if err != nil {
 		t.Logf("collectPVEReplication returned error: %v", err)
+	}
+}
+
+func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
+	collector := newPVECollector(t)
+	pveRoot := collector.config.PVEConfigPath
+
+	mustMkdir := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	mustWrite := func(path, contents string) {
+		t.Helper()
+		dir := filepath.Dir(path)
+		if dir != "" && dir != "." {
+			mustMkdir(dir)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	// Create representative PVE config files and directories that are normally covered by a full /etc/pve snapshot.
+	mustWrite(filepath.Join(pveRoot, "dummy.cfg"), "ok")
+	mustWrite(filepath.Join(pveRoot, "corosync.conf"), "corosync")
+	mustWrite(filepath.Join(pveRoot, "user.cfg"), "user")
+	mustWrite(filepath.Join(pveRoot, "acl.cfg"), "acl")
+	mustWrite(filepath.Join(pveRoot, "domains.cfg"), "domains")
+	mustWrite(filepath.Join(pveRoot, "jobs.cfg"), "jobs")
+	mustWrite(filepath.Join(pveRoot, "vzdump.cron"), "cron")
+	mustWrite(filepath.Join(pveRoot, "qemu-server", "100.conf"), "vm")
+	mustWrite(filepath.Join(pveRoot, "lxc", "101.conf"), "ct")
+	mustWrite(filepath.Join(pveRoot, "firewall", "cluster.fw"), "fw")
+	mustWrite(filepath.Join(pveRoot, "nodes", "node1", "host.fw"), "hostfw")
+
+	clusterPath := filepath.Join(t.TempDir(), "pve-cluster")
+	mustWrite(filepath.Join(clusterPath, "config.db"), "db")
+	collector.config.PVEClusterPath = clusterPath
+
+	collector.config.BackupVMConfigs = false
+	collector.config.BackupPVEFirewall = false
+	collector.config.BackupPVEACL = false
+	collector.config.BackupPVEJobs = false
+	collector.config.BackupClusterConfig = false
+
+	if err := collector.collectPVEDirectories(context.Background(), false); err != nil {
+		t.Fatalf("collectPVEDirectories error: %v", err)
+	}
+
+	destPVE := collector.targetPathFor(pveRoot)
+	if _, err := os.Stat(filepath.Join(destPVE, "dummy.cfg")); err != nil {
+		t.Fatalf("expected dummy.cfg collected, got %v", err)
+	}
+
+	for _, excluded := range []string{
+		"corosync.conf",
+		"user.cfg",
+		"acl.cfg",
+		"domains.cfg",
+		"jobs.cfg",
+		"vzdump.cron",
+		filepath.Join("qemu-server", "100.conf"),
+		filepath.Join("lxc", "101.conf"),
+		filepath.Join("firewall", "cluster.fw"),
+		filepath.Join("nodes", "node1", "host.fw"),
+	} {
+		_, err := os.Stat(filepath.Join(destPVE, excluded))
+		if err == nil {
+			t.Fatalf("expected %s excluded from PVE config snapshot", excluded)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat %s: %v", excluded, err)
+		}
+	}
+
+	destDB := collector.targetPathFor(filepath.Join(clusterPath, "config.db"))
+	if _, err := os.Stat(destDB); err == nil {
+		t.Fatalf("expected config.db excluded when BACKUP_CLUSTER_CONFIG=false")
 	}
 }
 

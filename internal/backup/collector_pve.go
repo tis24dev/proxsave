@@ -147,8 +147,129 @@ func (c *Collector) CollectPVEConfigs(ctx context.Context) error {
 		c.logger.Warning("Failed to create PVE info aliases: %v", err)
 	}
 
+	c.populatePVEManifest()
+
 	c.logger.Info("PVE configuration collection completed")
 	return nil
+}
+
+func (c *Collector) populatePVEManifest() {
+	if c == nil || c.config == nil {
+		return
+	}
+	if c.pveManifest == nil {
+		c.pveManifest = make(map[string]ManifestEntry)
+	}
+
+	record := func(src string, enabled bool) {
+		if src == "" {
+			return
+		}
+		dest := c.targetPathFor(src)
+		key := pveManifestKey(c.tempDir, dest)
+		c.pveManifest[key] = c.describePathForManifest(src, dest, enabled)
+	}
+
+	pveConfigPath := c.effectivePVEConfigPath()
+	if pveConfigPath == "" {
+		return
+	}
+
+	// VM/CT configuration directories.
+	record(filepath.Join(pveConfigPath, "qemu-server"), c.config.BackupVMConfigs)
+	record(filepath.Join(pveConfigPath, "lxc"), c.config.BackupVMConfigs)
+
+	// Firewall configuration.
+	record(filepath.Join(pveConfigPath, "firewall"), c.config.BackupPVEFirewall)
+	if c.config.BackupPVEFirewall {
+		nodesDir := filepath.Join(pveConfigPath, "nodes")
+		if entries, err := os.ReadDir(nodesDir); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				node := strings.TrimSpace(entry.Name())
+				if node == "" {
+					continue
+				}
+				record(filepath.Join(nodesDir, node, "host.fw"), true)
+			}
+		}
+	}
+
+	// ACL configuration.
+	record(filepath.Join(pveConfigPath, "user.cfg"), c.config.BackupPVEACL)
+	record(filepath.Join(pveConfigPath, "acl.cfg"), c.config.BackupPVEACL)
+	record(filepath.Join(pveConfigPath, "domains.cfg"), c.config.BackupPVEACL)
+
+	// Scheduled jobs.
+	record(filepath.Join(pveConfigPath, "jobs.cfg"), c.config.BackupPVEJobs)
+	record(filepath.Join(pveConfigPath, "vzdump.cron"), c.config.BackupPVEJobs)
+
+	// Cluster configuration.
+	record(c.effectiveCorosyncConfigPath(), c.config.BackupClusterConfig)
+	record(filepath.Join(c.effectivePVEClusterPath(), "config.db"), c.config.BackupClusterConfig)
+	record("/etc/corosync/authkey", c.config.BackupClusterConfig)
+
+	// VZDump configuration.
+	vzdumpPath := c.config.VzdumpConfigPath
+	if vzdumpPath == "" {
+		vzdumpPath = "/etc/vzdump.conf"
+	} else if !filepath.IsAbs(vzdumpPath) {
+		vzdumpPath = filepath.Join(pveConfigPath, vzdumpPath)
+	}
+	record(vzdumpPath, c.config.BackupVZDumpConfig)
+}
+
+func pveManifestKey(tempDir, dest string) string {
+	if tempDir == "" || dest == "" {
+		return filepath.ToSlash(dest)
+	}
+	rel, err := filepath.Rel(tempDir, dest)
+	if err != nil {
+		return filepath.ToSlash(dest)
+	}
+	rel = strings.TrimSpace(rel)
+	if rel == "" || rel == "." {
+		return filepath.ToSlash(dest)
+	}
+	return filepath.ToSlash(rel)
+}
+
+func (c *Collector) describePathForManifest(src, dest string, enabled bool) ManifestEntry {
+	if !enabled {
+		return ManifestEntry{Status: StatusDisabled}
+	}
+	if c.shouldExclude(src) || c.shouldExclude(dest) {
+		return ManifestEntry{Status: StatusSkipped}
+	}
+
+	info, err := os.Lstat(src)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ManifestEntry{Status: StatusNotFound}
+		}
+		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
+	}
+
+	if c.dryRun {
+		if info.Mode().IsRegular() {
+			return ManifestEntry{Status: StatusCollected, Size: info.Size()}
+		}
+		return ManifestEntry{Status: StatusCollected}
+	}
+
+	if _, err := os.Lstat(dest); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ManifestEntry{Status: StatusFailed, Error: "not present in temp directory after collection"}
+		}
+		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
+	}
+
+	if info.Mode().IsRegular() {
+		return ManifestEntry{Status: StatusCollected, Size: info.Size()}
+	}
+	return ManifestEntry{Status: StatusCollected}
 }
 
 // collectPVEDirectories collects PVE-specific directories
@@ -156,10 +277,34 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 	c.logger.Debug("Snapshotting PVE directories (clustered=%v)", clustered)
 
 	pveConfigPath := c.effectivePVEConfigPath()
-	if err := c.safeCopyDir(ctx,
-		pveConfigPath,
-		c.targetPathFor(pveConfigPath),
-		"PVE configuration"); err != nil {
+	var extraExclude []string
+	if !c.config.BackupVMConfigs {
+		extraExclude = append(extraExclude, "qemu-server", "lxc")
+	}
+	if !c.config.BackupPVEFirewall {
+		// Rules can exist both under /etc/pve/firewall and under /etc/pve/nodes/*.
+		extraExclude = append(extraExclude, "firewall", "host.fw")
+	}
+	if !c.config.BackupPVEACL {
+		extraExclude = append(extraExclude, "user.cfg", "acl.cfg", "domains.cfg")
+	}
+	if !c.config.BackupPVEJobs {
+		extraExclude = append(extraExclude, "jobs.cfg", "vzdump.cron")
+	}
+	if !c.config.BackupClusterConfig {
+		// Keep /etc/pve snapshot but omit cluster-specific config files when disabled.
+		extraExclude = append(extraExclude, "corosync.conf")
+	}
+
+	if len(extraExclude) > 0 {
+		c.logger.Debug("PVE config exclusions enabled (disabled features): %s", strings.Join(extraExclude, ", "))
+	}
+	if err := c.withTemporaryExcludes(extraExclude, func() error {
+		return c.safeCopyDir(ctx,
+			pveConfigPath,
+			c.targetPathFor(pveConfigPath),
+			"PVE configuration")
+	}); err != nil {
 		return err
 	}
 
@@ -203,16 +348,20 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 		}
 	}
 
-	// Always attempt to capture config.db even on standalone nodes
-	configDB := filepath.Join(clusterPath, "config.db")
-	if info, err := os.Stat(configDB); err == nil && !info.IsDir() {
-		target := c.targetPathFor(configDB)
-		c.logger.Debug("Copying PVE cluster database %s to %s", configDB, target)
-		if err := c.safeCopyFile(ctx, configDB, target, "PVE cluster database"); err != nil {
-			c.logger.Warning("Failed to copy PVE cluster database %s: %v", configDB, err)
+	if c.config.BackupClusterConfig {
+		// Always attempt to capture config.db even on standalone nodes when cluster config is enabled.
+		configDB := filepath.Join(clusterPath, "config.db")
+		if info, err := os.Stat(configDB); err == nil && !info.IsDir() {
+			target := c.targetPathFor(configDB)
+			c.logger.Debug("Copying PVE cluster database %s to %s", configDB, target)
+			if err := c.safeCopyFile(ctx, configDB, target, "PVE cluster database"); err != nil {
+				c.logger.Warning("Failed to copy PVE cluster database %s: %v", configDB, err)
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.logger.Warning("Failed to stat PVE cluster database %s: %v", configDB, err)
 		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		c.logger.Warning("Failed to stat PVE cluster database %s: %v", configDB, err)
+	} else {
+		c.logger.Debug("Skipping PVE cluster database capture: BACKUP_CLUSTER_CONFIG=false")
 	}
 
 	// Firewall configuration
@@ -268,7 +417,7 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 
 // collectPVECommands collects output from PVE commands and returns runtime info
 func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pveRuntimeInfo, error) {
-	commandsDir := filepath.Join(c.tempDir, "commands")
+	commandsDir := c.proxsaveCommandsDir("pve")
 	if err := c.ensureDir(commandsDir); err != nil {
 		return nil, fmt.Errorf("failed to create commands directory: %w", err)
 	}
@@ -494,7 +643,7 @@ func (c *Collector) collectVMConfigs(ctx context.Context) error {
 	}
 
 	// Collect VMs/CTs list
-	commandsDir := filepath.Join(c.tempDir, "commands")
+	commandsDir := c.proxsaveCommandsDir("pve")
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
 	if nodeName == "" {
@@ -1203,23 +1352,23 @@ func (c *Collector) createPVEInfoAliases(ctx context.Context) error {
 		target string
 	}{
 		{
-			source: filepath.Join(c.tempDir, "commands", "nodes_status.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "nodes_status.json"),
 			target: filepath.Join(baseInfoDir, "nodes_status.json"),
 		},
 		{
-			source: filepath.Join(c.tempDir, "commands", "storage_status.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "storage_status.json"),
 			target: filepath.Join(baseInfoDir, "storage_status.json"),
 		},
 		{
-			source: filepath.Join(c.tempDir, "commands", "pve_users.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "pve_users.json"),
 			target: filepath.Join(baseInfoDir, "user_list.json"),
 		},
 		{
-			source: filepath.Join(c.tempDir, "commands", "pve_groups.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "pve_groups.json"),
 			target: filepath.Join(baseInfoDir, "group_list.json"),
 		},
 		{
-			source: filepath.Join(c.tempDir, "commands", "pve_roles.json"),
+			source: filepath.Join(c.proxsaveCommandsDir("pve"), "pve_roles.json"),
 			target: filepath.Join(baseInfoDir, "role_list.json"),
 		},
 	}

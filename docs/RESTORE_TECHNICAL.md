@@ -1166,7 +1166,7 @@ func redirectClusterCategoryToExport(normal []Category, export []Category) ([]Ca
 
 ### pvesh SAFE Apply
 
-After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restoration:
+After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restoration (primarily VM/CT configs). When the user selects the `storage_pve` category, storage.cfg + datacenter.cfg are applied later via the staged restore pipeline and SAFE apply will skip prompting for them.
 
 **Key Functions**:
 - `scanVMConfigs()`: Scans `<export>/etc/pve/nodes/<node>/qemu-server/` and `lxc/`
@@ -1469,7 +1469,50 @@ if cleanDestRoot == string(os.PathSeparator) &&
 **Does NOT apply**:
 - Export-only extraction (different `destRoot`)
 
-### 3. Root Privilege Check
+### 3. Smart `/etc/fstab` Merge + Device Remap
+
+When restoring to the real system root (`/`), ProxSave avoids blindly overwriting `/etc/fstab`. Instead, it can run a **Smart Merge** workflow:
+
+- Extracts the backup copy of `/etc/fstab` into a temporary directory.
+- Compares it against the current system `/etc/fstab`.
+- Proposes only **safe candidates**:
+  - Network mounts (NFS/CIFS style entries)
+  - Data mounts that use stable references (`UUID=`/`LABEL=`/`PARTUUID=` or `/dev/disk/by-*`) that exist on the restore host
+
+**Device remap** (newer backups):
+- If the backup contains ProxSave inventory (`var/lib/proxsave-info/commands/system/{blkid.txt,lsblk_json.json,lsblk.txt}` or PBS datastore inventory),
+  ProxSave can remap unstable device paths from the backup (e.g. `/dev/sdb1`) to stable references (`UUID=`/`PARTUUID=`/`LABEL=`) **when the stable reference exists on the restore host**.
+- This reduces the risk of mounting the wrong disk after a reinstall where `/dev/sdX` ordering changes.
+
+**Normalization**:
+- Entries written by the merge are normalized to include `nofail` (and `_netdev` for network mounts) to prevent offline storage from blocking boot/restore.
+
+### 4. PBS Datastore Mount Guards (Offline Storage)
+
+For PBS datastores whose paths live under typical mount roots (for example `/mnt/...`), ProxSave aims for a “restore even if offline” behavior:
+
+- PBS datastore definitions are applied even when the underlying storage is offline/not mounted, so PBS shows them as **unavailable** rather than silently dropping them.
+- When a mountpoint used by a datastore currently resolves to the root filesystem (mount missing), ProxSave applies a **temporary mount guard** on the mount root:
+  - Preferred: read-only bind-mount guard
+  - Fallback: `chattr +i` on the mountpoint directory
+- Guards prevent PBS from writing into `/` if the storage is missing at restore time. When the real storage is mounted later, it overlays the guard and the datastore becomes available again.
+
+Optional maintenance:
+- `proxsave --cleanup-guards` removes guard bind mounts and the guard directory when they are still visible on mountpoints.
+
+#### PVE Storage Mount Guards (Offline Storage)
+
+For PVE storages that use mountpoints (notably `nfs`, `cifs`, `cephfs`, `glusterfs`, and `dir` storages on dedicated mountpoints), ProxSave applies the same “restore even if offline” safety model:
+
+- Network storages use `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>` with a short timeout.
+- If the mountpoint still resolves to the root filesystem afterwards (mount missing/offline), ProxSave applies a **temporary mount guard** on the mountpoint:
+  - Preferred: read-only bind-mount guard
+  - Fallback: `chattr +i` on the mountpoint directory
+- For `dir` storages, guards are only applied when the storage `path` can be associated with a mountpoint present in `/etc/fstab` (to avoid guarding local root filesystem paths).
+
+This prevents accidental writes into the root filesystem when storage is offline at restore time. When the real mount comes back, it overlays the guard and normal operation resumes.
+
+### 5. Root Privilege Check
 
 **Pre-Extraction Check** (`restore.go:568-570`, `588-590`):
 
@@ -1480,7 +1523,7 @@ if destRoot == "/" && os.Geteuid() != 0 {
 }
 ```
 
-### 4. Checksum Verification
+### 6. Checksum Verification
 
 **After Decryption** (`decrypt.go:272-289`):
 
@@ -1506,7 +1549,7 @@ if checksumFile exists {
 }
 ```
 
-### 5. Interactive Confirmation Gates
+### 7. Interactive Confirmation Gates
 
 **Multiple abort points**:
 

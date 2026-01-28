@@ -1,0 +1,845 @@
+warning: in the working copy of 'docs/CONFIGURATION.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/backup/archiver.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/backup/archiver_test.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/backup/collector.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/backup/collector_config_extra_test.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/backup/collector_manifest.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/backup/collector_pbs.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/backup/collector_pbs_extra_test.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/backup/collector_pve.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/backup/collector_pve_test.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/.backup.lock', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/additional_helpers_test.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/backup_config.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/backup_config_test.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/orchestrator.go', LF will be replaced by CRLF the next time Git touches it
+diff --git a/docs/CONFIGURATION.md b/docs/CONFIGURATION.md
+index 83c55ee..5d88fea 100644
+--- a/docs/CONFIGURATION.md
++++ b/docs/CONFIGURATION.md
+@@ -352,6 +352,14 @@ BACKUP_EXCLUDE_PATTERNS="*/cache/**, /var/tmp/**, *.log"
+ - `**`: Match any directory recursively
+ - Example: `*/cache/**` excludes all `cache/` subdirectories
+ 
++### Exclusion Behavior (Guaranteed)
++
++- Exclusions are enforced consistently for anything that would end up inside the backup archive (files/directories copied from the host, full PVE/PBS snapshots, command outputs under `commands/`, and generated metadata such as `manifest.json` and `var/lib/proxsave-info/backup_metadata.txt`).
++- Patterns are matched against both:
++  - the original host path (e.g. `/etc/pve/nodes/node1/qemu-server/100.conf`), and
++  - the path inside the backup archive (e.g. `etc/pve/nodes/node1/qemu-server/100.conf`).
++  This means you can write patterns with or without a leading `/` and get consistent results.
++
+ ---
+ 
+ ## Secondary Storage
+diff --git a/internal/backup/archiver.go b/internal/backup/archiver.go
+index a6fd8f9..1369edb 100644
+--- a/internal/backup/archiver.go
++++ b/internal/backup/archiver.go
+@@ -55,6 +55,7 @@ type Archiver struct {
+ 	requestedCompression types.CompressionType
+ 	encryptArchive       bool
+ 	ageRecipients        []age.Recipient
++	excludePatterns      []string
+ 	deps                 ArchiverDeps
+ }
+ 
+@@ -67,6 +68,7 @@ type ArchiverConfig struct {
+ 	DryRun             bool
+ 	EncryptArchive     bool
+ 	AgeRecipients      []age.Recipient
++	ExcludePatterns    []string
+ }
+ 
+ // CompressionError rappresenta un errore di compressione esterna (xz/zstd)
+@@ -149,6 +151,7 @@ func NewArchiver(logger *logging.Logger, config *ArchiverConfig) *Archiver {
+ 		requestedCompression: config.Compression,
+ 		encryptArchive:       config.EncryptArchive,
+ 		ageRecipients:        append([]age.Recipient(nil), config.AgeRecipients...),
++		excludePatterns:      append([]string(nil), config.ExcludePatterns...),
+ 		deps:                 defaultArchiverDeps(),
+ 	}
+ }
+@@ -792,6 +795,16 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
+ 			return nil
+ 		}
+ 
++		if len(a.excludePatterns) > 0 {
++			if excluded, pattern := FindExcludeMatch(a.excludePatterns, path, sourceDir, ""); excluded {
++				a.logger.Debug("Excluding from archive: %s (matches pattern %s)", relPath, pattern)
++				if info.IsDir() {
++					return filepath.SkipDir
++				}
++				return nil
++			}
++		}
++
+ 		// Use Lstat to get symlink info without following it
+ 		linkInfo, err := os.Lstat(path)
+ 		if err != nil {
+diff --git a/internal/backup/archiver_test.go b/internal/backup/archiver_test.go
+index 39a128e..6a29842 100644
+--- a/internal/backup/archiver_test.go
++++ b/internal/backup/archiver_test.go
+@@ -106,6 +106,65 @@ func TestCreateTarArchive(t *testing.T) {
+ 	}
+ }
+ 
++func TestCreateTarArchiveRespectsExcludePatterns(t *testing.T) {
++	logger := logging.New(types.LogLevelError, false)
++	config := &ArchiverConfig{
++		Compression:     types.CompressionNone,
++		ExcludePatterns: []string{"/skip.txt", "dir/**"},
++	}
++	archiver := NewArchiver(logger, config)
++
++	tempDir := t.TempDir()
++	sourceDir := filepath.Join(tempDir, "source")
++	if err := os.MkdirAll(filepath.Join(sourceDir, "dir"), 0o755); err != nil {
++		t.Fatalf("mkdir: %v", err)
++	}
++	if err := os.WriteFile(filepath.Join(sourceDir, "keep.txt"), []byte("keep"), 0o644); err != nil {
++		t.Fatalf("write keep: %v", err)
++	}
++	if err := os.WriteFile(filepath.Join(sourceDir, "skip.txt"), []byte("skip"), 0o644); err != nil {
++		t.Fatalf("write skip: %v", err)
++	}
++	if err := os.WriteFile(filepath.Join(sourceDir, "dir", "inner.txt"), []byte("inner"), 0o644); err != nil {
++		t.Fatalf("write inner: %v", err)
++	}
++
++	outputPath := filepath.Join(tempDir, "test.tar")
++	if err := archiver.CreateArchive(context.Background(), sourceDir, outputPath); err != nil {
++		t.Fatalf("CreateArchive failed: %v", err)
++	}
++
++	f, err := os.Open(outputPath)
++	if err != nil {
++		t.Fatalf("open archive: %v", err)
++	}
++	defer f.Close()
++
++	found := map[string]bool{}
++	tr := tar.NewReader(f)
++	for {
++		hdr, err := tr.Next()
++		if errors.Is(err, io.EOF) {
++			break
++		}
++		if err != nil {
++			t.Fatalf("read tar: %v", err)
++		}
++		name := strings.TrimPrefix(hdr.Name, "./")
++		found[name] = true
++	}
++
++	if !found["keep.txt"] {
++		t.Fatalf("expected keep.txt in archive")
++	}
++	if found["skip.txt"] {
++		t.Fatalf("expected skip.txt to be excluded from archive")
++	}
++	if found["dir/inner.txt"] {
++		t.Fatalf("expected dir/inner.txt to be excluded from archive")
++	}
++}
++
+ func TestCreateGzipArchive(t *testing.T) {
+ 	logger := logging.New(types.LogLevelInfo, false)
+ 	config := &ArchiverConfig{
+diff --git a/internal/backup/collector.go b/internal/backup/collector.go
+index 21886d1..ea6a4c3 100644
+--- a/internal/backup/collector.go
++++ b/internal/backup/collector.go
+@@ -423,22 +423,35 @@ func (c *Collector) CollectAll(ctx context.Context) error {
+ 
+ // Helper functions
+ 
+-func (c *Collector) shouldExclude(path string) bool {
+-	if len(c.config.ExcludePatterns) == 0 {
+-		return false
++func FindExcludeMatch(patterns []string, path, tempDir, systemRootPrefix string) (bool, string) {
++	if len(patterns) == 0 {
++		return false, ""
+ 	}
+ 
+-	candidates := uniqueCandidates(path, c.tempDir)
++	candidates := uniqueCandidates(path, tempDir, systemRootPrefix)
++	if len(candidates) == 0 {
++		return false, ""
++	}
+ 
+-	for _, pattern := range c.config.ExcludePatterns {
++	for _, pattern := range patterns {
+ 		for _, candidate := range candidates {
+ 			if matchesGlob(pattern, candidate) {
+-				c.logger.Debug("Excluding %s (matches pattern %s)", path, pattern)
+-				return true
++				return true, pattern
+ 			}
+ 		}
+ 	}
+-	return false
++	return false, ""
++}
++
++func (c *Collector) shouldExclude(path string) bool {
++	if c == nil || c.config == nil {
++		return false
++	}
++	excluded, pattern := FindExcludeMatch(c.config.ExcludePatterns, path, c.tempDir, c.config.SystemRootPrefix)
++	if excluded {
++		c.logger.Debug("Excluding %s (matches pattern %s)", path, pattern)
++	}
++	return excluded
+ }
+ 
+ func (c *Collector) withTemporaryExcludes(extra []string, fn func() error) error {
+@@ -473,7 +486,7 @@ func (c *Collector) withTemporaryExcludes(extra []string, fn func() error) error
+ 	return fn()
+ }
+ 
+-func uniqueCandidates(path, tempDir string) []string {
++func uniqueCandidates(path, tempDir, systemRootPrefix string) []string {
+ 	base := filepath.Base(path)
+ 	candidates := []string{path}
+ 	if base != "" && base != "." && base != string(filepath.Separator) {
+@@ -486,10 +499,23 @@ func uniqueCandidates(path, tempDir string) []string {
+ 		}
+ 	}
+ 
++	if systemRootPrefix != "" && systemRootPrefix != string(filepath.Separator) {
++		prefix := filepath.Clean(systemRootPrefix)
++		clean := filepath.Clean(path)
++		if clean == prefix || strings.HasPrefix(clean, prefix+string(filepath.Separator)) {
++			if relPrefix, err := filepath.Rel(prefix, clean); err == nil {
++				if relPrefix != "." && relPrefix != "" && relPrefix != ".." && !strings.HasPrefix(relPrefix, ".."+string(filepath.Separator)) {
++					candidates = append(candidates, filepath.Join(string(filepath.Separator), relPrefix))
++				}
++			}
++		}
++	}
++
+ 	if tempDir != "" {
+ 		if relTemp, err := filepath.Rel(tempDir, path); err == nil {
+ 			if relTemp != "." && relTemp != "" && relTemp != ".." {
+ 				candidates = append(candidates, relTemp)
++				candidates = append(candidates, filepath.Join(string(filepath.Separator), relTemp))
+ 			}
+ 		}
+ 	}
+@@ -673,7 +699,8 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
+ 	}
+ 
+ 	// Check if this file should be excluded
+-	if c.shouldExclude(src) {
++	if c.shouldExclude(src) || c.shouldExclude(dest) {
++		c.incFilesSkipped()
+ 		return nil
+ 	}
+ 
+@@ -774,8 +801,9 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
+ 
+ 	c.logger.Debug("Collecting directory %s: %s -> %s", description, src, dest)
+ 
+-	if c.shouldExclude(src) {
++	if c.shouldExclude(src) || c.shouldExclude(dest) {
+ 		c.logger.Debug("Skipping directory %s due to exclusion pattern", src)
++		c.incFilesSkipped()
+ 		return nil
+ 	}
+ 
+@@ -804,8 +832,15 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
+ 			return err
+ 		}
+ 
++		// Calculate relative path and destination path for archive matching.
++		relPath, err := filepath.Rel(src, path)
++		if err != nil {
++			return err
++		}
++		destPath := filepath.Join(dest, relPath)
++
+ 		// Check if this path should be excluded
+-		if c.shouldExclude(path) {
++		if c.shouldExclude(path) || c.shouldExclude(destPath) {
+ 			// If it's a directory, skip it entirely
+ 			if info.IsDir() {
+ 				return filepath.SkipDir
+@@ -813,14 +848,6 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
+ 			return nil
+ 		}
+ 
+-		// Calculate relative path
+-		relPath, err := filepath.Rel(src, path)
+-		if err != nil {
+-			return err
+-		}
+-
+-		destPath := filepath.Join(dest, relPath)
+-
+ 		if info.IsDir() {
+ 			if err := c.ensureDir(destPath); err != nil {
+ 				return err
+@@ -846,6 +873,12 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description
+ 		return err
+ 	}
+ 
++	if output != "" && c.shouldExclude(output) {
++		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
++		c.incFilesSkipped()
++		return nil
++	}
++
+ 	c.logger.Debug("Collecting %s via command: %s > %s", description, cmd, output)
+ 
+ 	cmdParts := strings.Fields(cmd)
+@@ -884,17 +917,11 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description
+ 		return nil // Non-critical failure
+ 	}
+ 
+-	if err := c.ensureDir(filepath.Dir(output)); err != nil {
++	if err := c.writeReportFile(output, out); err != nil {
+ 		return err
+ 	}
+-	if err := os.WriteFile(output, out, 0640); err != nil {
+-		c.incFilesFailed()
+-		return fmt.Errorf("failed to write output %s: %w", output, err)
+-	}
+ 
+-	c.incFilesProcessed()
+ 	c.logger.Debug("Successfully collected %s via command: %s", description, cmdString)
+-
+ 	return nil
+ }
+ 
+@@ -905,6 +932,12 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
+ 		return err
+ 	}
+ 
++	if output != "" && c.shouldExclude(output) {
++		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
++		c.incFilesSkipped()
++		return nil
++	}
++
+ 	cmdParts := strings.Fields(cmd)
+ 	if len(cmdParts) == 0 {
+ 		return fmt.Errorf("empty command")
+@@ -961,16 +994,9 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
+ 		return nil // Non-critical failure
+ 	}
+ 
+-	if err := c.ensureDir(filepath.Dir(output)); err != nil {
++	if err := c.writeReportFile(output, out); err != nil {
+ 		return err
+ 	}
+-
+-	if err := os.WriteFile(output, out, 0640); err != nil {
+-		c.incFilesFailed()
+-		return fmt.Errorf("failed to write output %s: %w", output, err)
+-	}
+-
+-	c.incFilesProcessed()
+ 	c.logger.Debug("Successfully collected %s via PBS-authenticated command: %s", description, cmdString)
+ 
+ 	return nil
+@@ -983,6 +1009,12 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
+ 		return err
+ 	}
+ 
++	if output != "" && c.shouldExclude(output) {
++		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
++		c.incFilesSkipped()
++		return nil
++	}
++
+ 	cmdParts := strings.Fields(cmd)
+ 	if len(cmdParts) == 0 {
+ 		return fmt.Errorf("empty command")
+@@ -1059,15 +1091,9 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
+ 		return nil // Non-critical failure
+ 	}
+ 
+-	if err := c.ensureDir(filepath.Dir(output)); err != nil {
++	if err := c.writeReportFile(output, out); err != nil {
+ 		return err
+ 	}
+-	if err := os.WriteFile(output, out, 0640); err != nil {
+-		c.incFilesFailed()
+-		return fmt.Errorf("failed to write output %s: %w", output, err)
+-	}
+-
+-	c.incFilesProcessed()
+ 	c.logger.Debug("Successfully collected %s via PBS-authenticated command for datastore %s: %s", description, datastoreName, cmdString)
+ 
+ 	return nil
+@@ -1123,6 +1149,12 @@ func (c *Collector) IsClusteredPVE() bool {
+ }
+ 
+ func (c *Collector) writeReportFile(path string, data []byte) error {
++	if c.shouldExclude(path) {
++		c.logger.Debug("Skipping report file %s due to exclusion pattern", path)
++		c.incFilesSkipped()
++		return nil
++	}
++
+ 	if c.dryRun {
+ 		c.logger.Debug("[DRY RUN] Would write report file: %s (%d bytes)", path, len(data))
+ 		return nil
+@@ -1149,6 +1181,12 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
+ 		return nil, err
+ 	}
+ 
++	if output != "" && c.shouldExclude(output) {
++		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
++		c.incFilesSkipped()
++		return nil, nil
++	}
++
+ 	parts := strings.Fields(cmd)
+ 	if len(parts) == 0 {
+ 		return nil, fmt.Errorf("empty command")
+diff --git a/internal/backup/collector_config_extra_test.go b/internal/backup/collector_config_extra_test.go
+index f1a4158..ae15aa4 100644
+--- a/internal/backup/collector_config_extra_test.go
++++ b/internal/backup/collector_config_extra_test.go
+@@ -89,7 +89,7 @@ func TestCollectorConfigValidateRequiresAbsoluteSystemRootPrefix(t *testing.T) {
+ }
+ 
+ func TestUniqueCandidatesSkipsEmptyEntries(t *testing.T) {
+-	got := uniqueCandidates("", "")
++	got := uniqueCandidates("", "", "")
+ 	if len(got) != 0 {
+ 		t.Fatalf("expected no candidates for empty input, got %#v", got)
+ 	}
+diff --git a/internal/backup/collector_manifest.go b/internal/backup/collector_manifest.go
+index c6da181..072d886 100644
+--- a/internal/backup/collector_manifest.go
++++ b/internal/backup/collector_manifest.go
+@@ -2,7 +2,6 @@ package backup
+ 
+ import (
+ 	"encoding/json"
+-	"os"
+ 	"path/filepath"
+ 	"time"
+ )
+@@ -71,5 +70,5 @@ func (c *Collector) WriteManifest(hostname string) error {
+ 	}
+ 
+ 	manifestPath := filepath.Join(c.tempDir, "manifest.json")
+-	return os.WriteFile(manifestPath, data, 0644)
++	return c.writeReportFile(manifestPath, data)
+ }
+diff --git a/internal/backup/collector_pbs.go b/internal/backup/collector_pbs.go
+index cac4f8a..3f374ce 100644
+--- a/internal/backup/collector_pbs.go
++++ b/internal/backup/collector_pbs.go
+@@ -41,6 +41,13 @@ func (c *Collector) collectPBSConfigFile(ctx context.Context, root, filename, de
+ 	srcPath := filepath.Join(root, filename)
+ 	destPath := filepath.Join(c.tempDir, "etc/proxmox-backup", filename)
+ 
++	if c.shouldExclude(srcPath) || c.shouldExclude(destPath) {
++		c.logger.Debug("Skipping %s: excluded by pattern", filename)
++		c.logger.Info("  %s: skipped (excluded)", description)
++		c.incFilesSkipped()
++		return ManifestEntry{Status: StatusSkipped}
++	}
++
+ 	c.logger.Debug("Checking %s: %s", filename, srcPath)
+ 
+ 	info, err := os.Stat(srcPath)
+@@ -505,24 +512,28 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
+ // using CLI first, then filesystem fallback.
+ func (c *Collector) collectDatastoreNamespaces(ds pbsDatastore, datastoreDir string) error {
+ 	c.logger.Debug("Collecting namespaces for datastore %s (path: %s)", ds.Name, ds.Path)
++	// Write location is deterministic; if excluded, skip the whole operation.
++	outputPath := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.Name))
++	if c.shouldExclude(outputPath) {
++		c.incFilesSkipped()
++		return nil
++	}
++
+ 	namespaces, fromFallback, err := listNamespacesFunc(ds.Name, ds.Path)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+ 	// Write namespaces to JSON file
+-	outputPath := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.Name))
+ 	data, err := json.MarshalIndent(namespaces, "", "  ")
+ 	if err != nil {
+ 		return fmt.Errorf("failed to marshal namespaces: %w", err)
+ 	}
+ 
+-	if err := os.WriteFile(outputPath, data, 0640); err != nil {
+-		c.incFilesFailed()
++	if err := c.writeReportFile(outputPath, data); err != nil {
+ 		return fmt.Errorf("failed to write namespaces file: %w", err)
+ 	}
+ 
+-	c.incFilesProcessed()
+ 	if fromFallback {
+ 		c.logger.Debug("Successfully collected %d namespaces for datastore %s via filesystem fallback", len(namespaces), ds.Name)
+ 	} else {
+@@ -592,7 +603,12 @@ func (c *Collector) collectUserTokens(ctx context.Context, usersDir string) {
+ 		return
+ 	}
+ 
+-	if err := os.WriteFile(filepath.Join(usersDir, "tokens.json"), buffer, 0640); err != nil {
++	target := filepath.Join(usersDir, "tokens.json")
++	if c.shouldExclude(target) {
++		c.incFilesSkipped()
++		return
++	}
++	if err := c.writeReportFile(target, buffer); err != nil {
+ 		c.logger.Debug("Failed to write aggregated tokens.json: %v", err)
+ 	}
+ 	c.logger.Debug("Aggregated PBS token export completed (%d users)", len(aggregated))
+diff --git a/internal/backup/collector_pbs_extra_test.go b/internal/backup/collector_pbs_extra_test.go
+index 1587c99..0b84ee1 100644
+--- a/internal/backup/collector_pbs_extra_test.go
++++ b/internal/backup/collector_pbs_extra_test.go
+@@ -270,3 +270,27 @@ func TestCollectPBSConfigsExcludesDisabledPBSConfigFiles(t *testing.T) {
+ 		t.Fatalf("expected remote_list.json excluded when BACKUP_REMOTE_CONFIGS=false")
+ 	}
+ }
++
++func TestCollectPBSConfigFileReturnsSkippedWhenExcluded(t *testing.T) {
++	root := t.TempDir()
++	if err := os.WriteFile(filepath.Join(root, "remote.cfg"), []byte("remote"), 0o644); err != nil {
++		t.Fatalf("write remote.cfg: %v", err)
++	}
++
++	cfg := GetDefaultCollectorConfig()
++	cfg.PBSConfigPath = root
++	cfg.ExcludePatterns = []string{"remote.cfg"}
++
++	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
++
++	entry := collector.collectPBSConfigFile(context.Background(), root, "remote.cfg", "Remote configuration", true)
++	if entry.Status != StatusSkipped {
++		t.Fatalf("expected StatusSkipped, got %s", entry.Status)
++	}
++
++	target := filepath.Join(collector.tempDir, "etc", "proxmox-backup", "remote.cfg")
++	_, err := os.Stat(target)
++	if err == nil || !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("expected %s not to exist, stat err=%v", target, err)
++	}
++}
+diff --git a/internal/backup/collector_pve.go b/internal/backup/collector_pve.go
+index b6eaaf6..db28b71 100644
+--- a/internal/backup/collector_pve.go
++++ b/internal/backup/collector_pve.go
+@@ -147,10 +147,131 @@ func (c *Collector) CollectPVEConfigs(ctx context.Context) error {
+ 		c.logger.Warning("Failed to create PVE info aliases: %v", err)
+ 	}
+ 
++	c.populatePVEManifest()
++
+ 	c.logger.Info("PVE configuration collection completed")
+ 	return nil
+ }
+ 
++func (c *Collector) populatePVEManifest() {
++	if c == nil || c.config == nil {
++		return
++	}
++	if c.pveManifest == nil {
++		c.pveManifest = make(map[string]ManifestEntry)
++	}
++
++	record := func(src string, enabled bool) {
++		if src == "" {
++			return
++		}
++		dest := c.targetPathFor(src)
++		key := pveManifestKey(c.tempDir, dest)
++		c.pveManifest[key] = c.describePathForManifest(src, dest, enabled)
++	}
++
++	pveConfigPath := c.effectivePVEConfigPath()
++	if pveConfigPath == "" {
++		return
++	}
++
++	// VM/CT configuration directories.
++	record(filepath.Join(pveConfigPath, "qemu-server"), c.config.BackupVMConfigs)
++	record(filepath.Join(pveConfigPath, "lxc"), c.config.BackupVMConfigs)
++
++	// Firewall configuration.
++	record(filepath.Join(pveConfigPath, "firewall"), c.config.BackupPVEFirewall)
++	if c.config.BackupPVEFirewall {
++		nodesDir := filepath.Join(pveConfigPath, "nodes")
++		if entries, err := os.ReadDir(nodesDir); err == nil {
++			for _, entry := range entries {
++				if !entry.IsDir() {
++					continue
++				}
++				node := strings.TrimSpace(entry.Name())
++				if node == "" {
++					continue
++				}
++				record(filepath.Join(nodesDir, node, "host.fw"), true)
++			}
++		}
++	}
++
++	// ACL configuration.
++	record(filepath.Join(pveConfigPath, "user.cfg"), c.config.BackupPVEACL)
++	record(filepath.Join(pveConfigPath, "acl.cfg"), c.config.BackupPVEACL)
++	record(filepath.Join(pveConfigPath, "domains.cfg"), c.config.BackupPVEACL)
++
++	// Scheduled jobs.
++	record(filepath.Join(pveConfigPath, "jobs.cfg"), c.config.BackupPVEJobs)
++	record(filepath.Join(pveConfigPath, "vzdump.cron"), c.config.BackupPVEJobs)
++
++	// Cluster configuration.
++	record(c.effectiveCorosyncConfigPath(), c.config.BackupClusterConfig)
++	record(filepath.Join(c.effectivePVEClusterPath(), "config.db"), c.config.BackupClusterConfig)
++	record("/etc/corosync/authkey", c.config.BackupClusterConfig)
++
++	// VZDump configuration.
++	vzdumpPath := c.config.VzdumpConfigPath
++	if vzdumpPath == "" {
++		vzdumpPath = "/etc/vzdump.conf"
++	} else if !filepath.IsAbs(vzdumpPath) {
++		vzdumpPath = filepath.Join(pveConfigPath, vzdumpPath)
++	}
++	record(vzdumpPath, c.config.BackupVZDumpConfig)
++}
++
++func pveManifestKey(tempDir, dest string) string {
++	if tempDir == "" || dest == "" {
++		return filepath.ToSlash(dest)
++	}
++	rel, err := filepath.Rel(tempDir, dest)
++	if err != nil {
++		return filepath.ToSlash(dest)
++	}
++	rel = strings.TrimSpace(rel)
++	if rel == "" || rel == "." {
++		return filepath.ToSlash(dest)
++	}
++	return filepath.ToSlash(rel)
++}
++
++func (c *Collector) describePathForManifest(src, dest string, enabled bool) ManifestEntry {
++	if !enabled {
++		return ManifestEntry{Status: StatusDisabled}
++	}
++	if c.shouldExclude(src) || c.shouldExclude(dest) {
++		return ManifestEntry{Status: StatusSkipped}
++	}
++
++	info, err := os.Lstat(src)
++	if err != nil {
++		if errors.Is(err, os.ErrNotExist) {
++			return ManifestEntry{Status: StatusNotFound}
++		}
++		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
++	}
++
++	if c.dryRun {
++		if info.Mode().IsRegular() {
++			return ManifestEntry{Status: StatusCollected, Size: info.Size()}
++		}
++		return ManifestEntry{Status: StatusCollected}
++	}
++
++	if _, err := os.Lstat(dest); err != nil {
++		if errors.Is(err, os.ErrNotExist) {
++			return ManifestEntry{Status: StatusFailed, Error: "not present in temp directory after collection"}
++		}
++		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
++	}
++
++	if info.Mode().IsRegular() {
++		return ManifestEntry{Status: StatusCollected, Size: info.Size()}
++	}
++	return ManifestEntry{Status: StatusCollected}
++}
++
+ // collectPVEDirectories collects PVE-specific directories
+ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) error {
+ 	c.logger.Debug("Snapshotting PVE directories (clustered=%v)", clustered)
+diff --git a/internal/backup/collector_pve_test.go b/internal/backup/collector_pve_test.go
+index 568ad30..4c0e309 100644
+--- a/internal/backup/collector_pve_test.go
++++ b/internal/backup/collector_pve_test.go
+@@ -363,6 +363,39 @@ func TestCollectPVEConfigsIntegration(t *testing.T) {
+ 	}
+ }
+ 
++func TestCollectPVEConfigsPopulatesManifestSkippedForExcludedACL(t *testing.T) {
++	collector := newPVECollectorWithDeps(t, CollectorDeps{
++		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
++			return []byte("{}"), nil
++		},
++		LookPath: func(cmd string) (string, error) {
++			return "/usr/bin/" + cmd, nil
++		},
++	})
++
++	pveConfigPath := collector.config.PVEConfigPath
++	if err := os.WriteFile(filepath.Join(pveConfigPath, "user.cfg"), []byte("user"), 0o644); err != nil {
++		t.Fatalf("write user.cfg: %v", err)
++	}
++	collector.config.BackupPVEACL = true
++	collector.config.ExcludePatterns = []string{"user.cfg"}
++
++	if err := collector.CollectPVEConfigs(context.Background()); err != nil {
++		t.Fatalf("CollectPVEConfigs failed: %v", err)
++	}
++
++	src := filepath.Join(collector.effectivePVEConfigPath(), "user.cfg")
++	dest := collector.targetPathFor(src)
++	key := pveManifestKey(collector.tempDir, dest)
++	entry, ok := collector.pveManifest[key]
++	if !ok {
++		t.Fatalf("expected manifest entry for %s (key=%s)", src, key)
++	}
++	if entry.Status != StatusSkipped {
++		t.Fatalf("expected %s status, got %s", StatusSkipped, entry.Status)
++	}
++}
++
+ // Test collectVMConfigs function
+ func TestCollectVMConfigs(t *testing.T) {
+ 	collector := newPVECollector(t)
+diff --git a/internal/orchestrator/.backup.lock b/internal/orchestrator/.backup.lock
+index 4813a89..fbdaaaa 100644
+--- a/internal/orchestrator/.backup.lock
++++ b/internal/orchestrator/.backup.lock
+@@ -1,3 +1,3 @@
+-pid=4950
++pid=23129
+ host=pve
+-time=2026-01-23T10:01:54+01:00
++time=2026-01-23T11:19:45+01:00
+diff --git a/internal/orchestrator/additional_helpers_test.go b/internal/orchestrator/additional_helpers_test.go
+index 76a22ba..8f0be23 100644
+--- a/internal/orchestrator/additional_helpers_test.go
++++ b/internal/orchestrator/additional_helpers_test.go
+@@ -746,6 +746,32 @@ func TestWriteBackupMetadata(t *testing.T) {
+ 	}
+ }
+ 
++func TestWriteBackupMetadataSkipsWhenExcluded(t *testing.T) {
++	logger := logging.New(types.LogLevelError, false)
++	o := &Orchestrator{
++		logger:          logger,
++		excludePatterns: []string{"var/lib/proxsave-info/**"},
++	}
++	tempDir := t.TempDir()
++
++	stats := &BackupStats{
++		Version:     "1.0.0",
++		ProxmoxType: types.ProxmoxVE,
++		Timestamp:   time.Now(),
++		Hostname:    "host1",
++	}
++
++	if err := o.writeBackupMetadata(tempDir, stats); err != nil {
++		t.Fatalf("writeBackupMetadata error: %v", err)
++	}
++
++	metaPath := filepath.Join(tempDir, "var/lib/proxsave-info/backup_metadata.txt")
++	_, err := os.Stat(metaPath)
++	if err == nil || !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("expected metadata file to be excluded, stat err=%v", err)
++	}
++}
++
+ func TestNewTempDirRegistryRejectsEmptyPath(t *testing.T) {
+ 	_, err := NewTempDirRegistry(logging.New(types.LogLevelError, false), "")
+ 	if err == nil {
+diff --git a/internal/orchestrator/backup_config.go b/internal/orchestrator/backup_config.go
+index adfed39..5b04797 100644
+--- a/internal/orchestrator/backup_config.go
++++ b/internal/orchestrator/backup_config.go
+@@ -19,6 +19,7 @@ func BuildArchiverConfig(
+ 	dryRun bool,
+ 	encryptArchive bool,
+ 	ageRecipients []age.Recipient,
++	excludePatterns []string,
+ ) *backup.ArchiverConfig {
+ 	return &backup.ArchiverConfig{
+ 		Compression:        compressionType,
+@@ -28,6 +29,7 @@ func BuildArchiverConfig(
+ 		DryRun:             dryRun,
+ 		EncryptArchive:     encryptArchive,
+ 		AgeRecipients:      ageRecipients,
++		ExcludePatterns:    append([]string(nil), excludePatterns...),
+ 	}
+ }
+ 
+diff --git a/internal/orchestrator/backup_config_test.go b/internal/orchestrator/backup_config_test.go
+index daef17d..4f5d533 100644
+--- a/internal/orchestrator/backup_config_test.go
++++ b/internal/orchestrator/backup_config_test.go
+@@ -17,7 +17,8 @@ func TestBuildArchiverConfig(t *testing.T) {
+ 		t.Fatalf("NewScryptRecipient: %v", err)
+ 	}
+ 	recipients := []age.Recipient{recipient}
+-	cfg := BuildArchiverConfig(types.CompressionZstd, 3, 4, "fast", true, true, recipients)
++	exclude := []string{"commands/**", "/etc/ssh/**"}
++	cfg := BuildArchiverConfig(types.CompressionZstd, 3, 4, "fast", true, true, recipients, exclude)
+ 
+ 	expected := &backup.ArchiverConfig{
+ 		Compression:        types.CompressionZstd,
+@@ -27,6 +28,7 @@ func TestBuildArchiverConfig(t *testing.T) {
+ 		DryRun:             true,
+ 		EncryptArchive:     true,
+ 		AgeRecipients:      recipients,
++		ExcludePatterns:    exclude,
+ 	}
+ 
+ 	if !reflect.DeepEqual(cfg, expected) {
+diff --git a/internal/orchestrator/orchestrator.go b/internal/orchestrator/orchestrator.go
+index d252bed..6bc4db6 100644
+--- a/internal/orchestrator/orchestrator.go
++++ b/internal/orchestrator/orchestrator.go
+@@ -752,6 +752,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
+ 		o.dryRun,
+ 		o.cfg != nil && o.cfg.EncryptArchive,
+ 		ageRecipients,
++		collectorConfig.ExcludePatterns,
+ 	)
+ 
+ 	if err := archiverConfig.Validate(); err != nil {
+@@ -1416,10 +1417,10 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
+ 
+ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) error {
+ 	fs := o.filesystem()
+-	infoDir := filepath.Join(tempDir, "var/lib/proxsave-info")
+-	if err := fs.MkdirAll(infoDir, 0755); err != nil {
+-		return err
++	if o.dryRun {
++		return nil
+ 	}
++	infoDir := filepath.Join(tempDir, "var/lib/proxsave-info")
+ 
+ 	version := strings.TrimSpace(stats.Version)
+ 	if version == "" {
+@@ -1440,6 +1441,18 @@ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) e
+ 	builder.WriteString("BACKUP_FEATURES=selective_restore,category_mapping,version_detection,auto_directory_creation\n")
+ 
+ 	target := filepath.Join(infoDir, "backup_metadata.txt")
++	patterns := append([]string(nil), o.excludePatterns...)
++	if o.cfg != nil && len(o.cfg.BackupBlacklist) > 0 {
++		patterns = append(patterns, o.cfg.BackupBlacklist...)
++	}
++	if excluded, pattern := backup.FindExcludeMatch(patterns, target, tempDir, ""); excluded {
++		o.logger.Debug("Skipping backup metadata %s (matches pattern %s)", target, pattern)
++		return nil
++	}
++
++	if err := fs.MkdirAll(infoDir, 0755); err != nil {
++		return err
++	}
+ 	if err := fs.WriteFile(target, []byte(builder.String()), 0640); err != nil {
+ 		return err
+ 	}

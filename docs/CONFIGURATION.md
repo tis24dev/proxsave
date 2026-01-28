@@ -352,6 +352,14 @@ BACKUP_EXCLUDE_PATTERNS="*/cache/**, /var/tmp/**, *.log"
 - `**`: Match any directory recursively
 - Example: `*/cache/**` excludes all `cache/` subdirectories
 
+### Exclusion Behavior (Guaranteed)
+
+- Exclusions are enforced consistently for anything that would end up inside the backup archive (files/directories copied from the host, full PVE/PBS snapshots, command outputs under `var/lib/proxsave-info/commands/`, and generated metadata such as `manifest.json` and `var/lib/proxsave-info/backup_metadata.txt`).
+- Patterns are matched against both:
+  - the original host path (e.g. `/etc/pve/nodes/node1/qemu-server/100.conf`), and
+  - the path inside the backup archive (e.g. `etc/pve/nodes/node1/qemu-server/100.conf`).
+  This means you can write patterns with or without a leading `/` and get consistent results.
+
 ---
 
 ## Secondary Storage
@@ -548,7 +556,7 @@ Quick comparison to help you choose the right storage configuration:
 
 ```bash
 # Connection timeout (seconds)
-RCLONE_TIMEOUT_CONNECTION=30       # Remote accessibility check (also used for restore/decrypt cloud scan)
+RCLONE_TIMEOUT_CONNECTION=30       # Remote accessibility check (also used as per-command timeout for restore/decrypt cloud scan)
 
 # Operation timeout (seconds)
 RCLONE_TIMEOUT_OPERATION=300       # Upload/download operations (5 minutes default)
@@ -571,7 +579,7 @@ RCLONE_FLAGS="--checkers=4 --stats=0 --drive-use-trash=false --drive-pacer-min-s
 
 ### Timeout Tuning
 
-- **CONNECTION**: Short timeout for quick accessibility check (default 30s); also caps restore/decrypt cloud scanning (listing backups + reading manifests)
+- **CONNECTION**: Short timeout for quick accessibility check (default 30s); also applies per rclone command during restore/decrypt cloud scanning (listing backups + reading manifests)
 - **OPERATION**: Long timeout for large file uploads (increase for slow networks)
 
 ### Bandwidth Limit Format
@@ -918,6 +926,8 @@ CEPH_CONFIG_PATH=/etc/ceph         # Ceph config directory
 BACKUP_VM_CONFIGS=true             # VM/CT config files
 ```
 
+**Note (PVE snapshot behavior)**: ProxSave snapshots `PVE_CONFIG_PATH` for completeness. When a PVE feature is disabled, proxsave also excludes its well-known files from that snapshot to avoid “still included via full directory copy” surprises (e.g. `qemu-server/` + `lxc/` for `BACKUP_VM_CONFIGS=false`, `firewall/` + `host.fw` for `BACKUP_PVE_FIREWALL=false`, `user.cfg`/`acl.cfg`/`domains.cfg` for `BACKUP_PVE_ACL=false`, `jobs.cfg` + `vzdump.cron` for `BACKUP_PVE_JOBS=false`, `corosync.conf` (and `config.db` capture) for `BACKUP_CLUSTER_CONFIG=false`).
+
 ### PBS-Specific
 
 ```bash
@@ -954,6 +964,8 @@ PXAR_ENUM_BUDGET_MS=0              # Time budget for enumeration (0=disabled)
 PXAR_FILE_INCLUDE_PATTERN=         # Include patterns (default: *.pxar, catalog.pxar*)
 PXAR_FILE_EXCLUDE_PATTERN=         # Exclude patterns (e.g., *.tmp, *.lock)
 ```
+
+**Note (PBS snapshot behavior)**: ProxSave snapshots `PBS_CONFIG_PATH` (`/etc/proxmox-backup`) for completeness. When a PBS feature is disabled, proxsave excludes the corresponding well-known config files from that snapshot (for example, `remote.cfg` is excluded when `BACKUP_REMOTE_CONFIGS=false`) and also skips the related command outputs.
 
 **PXAR scanning**: Collects metadata from Proxmox Backup Server .pxar archives.
 
@@ -1029,6 +1041,8 @@ BACKUP_SCRIPT_REPOSITORY=false     # Include .git directory
 # Backup configuration file
 BACKUP_CONFIG_FILE=true            # Include this backup.env configuration file in the backup
 ```
+
+**Note (SSH keys)**: `BACKUP_SSH_KEYS=false` also suppresses `.ssh/` directories when collecting home directories (root and users), so keys aren’t included indirectly via `BACKUP_ROOT_HOME`/home collection.
 
 **Note**: `BACKUP_CONFIG_FILE=true` automatically includes the `configs/backup.env` file in the backup archive. This is highly recommended for disaster recovery, as it allows you to restore your exact backup configuration along with the system files. If you have sensitive credentials in `backup.env`, ensure your backups are encrypted (`ENCRYPT_ARCHIVE=true`).
 

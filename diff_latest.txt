@@ -1,0 +1,320 @@
+warning: in the working copy of 'docs/RESTORE_GUIDE.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/.backup.lock', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/categories.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/pbs_staged_apply.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/restore_workflow_ui.go', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/orchestrator/staging.go', LF will be replaced by CRLF the next time Git touches it
+diff --git a/docs/RESTORE_GUIDE.md b/docs/RESTORE_GUIDE.md
+index 67f36a0..1f495f8 100644
+--- a/docs/RESTORE_GUIDE.md
++++ b/docs/RESTORE_GUIDE.md
+@@ -73,7 +73,7 @@ The `--restore` command provides an **interactive, category-based restoration sy
+ - VM/CT disk images (use Proxmox native tools)
+ - Application data (databases, user data)
+ - System packages (use apt/dpkg)
+-- Active cluster filesystem (`/etc/pve` - export-only)
++- Direct writes to the pmxcfs mount (`/etc/pve`) in SAFE mode (export-only + staged API apply are used instead)
+ 
+ ---
+ 
+@@ -81,7 +81,15 @@ The `--restore` command provides an **interactive, category-based restoration sy
+ 
+ Restore operations are organized into **15+ categories** that group related configuration files.
+ 
+-### PVE-Specific Categories (6 categories)
++### Category Handling Types
++
++Each category is handled in one of three ways:
++
++- **Normal**: extracted directly to `/` (system paths) after safety backup
++- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or `pvesh`)
++- **Export-only**: extracted to an export directory for manual review (never written to system paths)
++
++### PVE-Specific Categories (8 categories)
+ 
+ | Category | Name | Description | Paths |
+ |----------|------|-------------|-------|
+@@ -89,21 +97,28 @@ Restore operations are organized into **15+ categories** that group related conf
+ | `pve_cluster` | PVE Cluster Configuration | Cluster configuration and database | `./var/lib/pve-cluster/` |
+ | `storage_pve` | PVE Storage Configuration | Storage definitions | `./etc/vzdump.conf` |
+ | `pve_jobs` | PVE Backup Jobs | Scheduled backup jobs | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
++| `pve_notifications` | PVE Notifications | **Staged** notification targets and matchers (applied via API) | `./etc/pve/notifications.cfg`<br>`./etc/pve/priv/notifications.cfg` |
++| `pve_access_control` | PVE Access Control | **Staged** users/roles/groups/ACLs/realms (applied via API; secrets regenerated) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg`<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
+ | `corosync` | Corosync Configuration | Cluster communication settings | `./etc/corosync/` |
+ | `ceph` | Ceph Configuration | Ceph storage cluster config | `./etc/ceph/` |
+ 
+-### PBS-Specific Categories (3 categories)
++### PBS-Specific Categories (7 categories)
+ 
+ | Category | Name | Description | Paths |
+ |----------|------|-------------|-------|
+-| `pbs_config` | PBS Configuration | Main PBS configuration | `./etc/proxmox-backup/` |
+-| `datastore_pbs` | PBS Datastore Configuration | Datastore definitions | `./etc/proxmox-backup/datastore.cfg` |
+-| `pbs_jobs` | PBS Jobs | Sync, verify, prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
++| `pbs_config` | PBS Config Export | **Export-only** copy of /etc/proxmox-backup (never written to system) | `./etc/proxmox-backup/` |
++| `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions | `./etc/proxmox-backup/datastore.cfg` |
++| `maintenance_pbs` | PBS Maintenance | Maintenance settings | `./etc/proxmox-backup/maintenance.cfg` |
++| `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
++| `pbs_remotes` | PBS Remotes | **Staged** remotes for sync/verify (may include credentials) | `./etc/proxmox-backup/remote.cfg` |
++| `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers | `./etc/proxmox-backup/notifications.cfg`<br>`./etc/proxmox-backup/notifications-priv.cfg` |
++| `pbs_access_control` | PBS Access Control | **Staged** users/realms/ACLs and secrets | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json` |
+ 
+-### Common Categories (7 categories)
++### Common Categories (8 categories)
+ 
+ | Category | Name | Description | Paths |
+ |----------|------|-------------|-------|
++| `filesystem` | Filesystem Configuration | Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot | `./etc/fstab` |
+ | `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
+ | `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/proxmox-backup/proxy.pem` |
+ | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
+@@ -119,6 +134,19 @@ Not all categories are available in every backup. The restore workflow:
+ 2. Detects which categories contain files
+ 3. Displays only available categories for selection
+ 
++### PVE SAFE-Mode Secrets (pve_access_control)
++
++When restoring `pve_access_control` in **SAFE mode**, ProxSave applies users/roles/groups/ACLs/realms via `pvesh`.
++If you restore the cluster database (`pve_cluster` in **RECOVERY mode**), ProxSave restores `config.db` and skips this SAFE-mode apply path.
++Some secrets cannot be imported 1:1, so ProxSave regenerates them and writes a local report file:
++
++- `/tmp/proxsave/restore-stage-*/pve_access_control_secrets.json` (mode `0600`)
++
++The report contains:
++- Regenerated passwords for local users (`*@pve`)
++- Newly created API tokens (new secret values)
++- `tfa_reset_required`: users that must re-enroll TFA after restore
++
+ ---
+ 
+ ## Restore Modes
+@@ -134,7 +162,10 @@ Four predefined modes provide common restoration scenarios, plus custom selectio
+ - Migrating to new hardware
+ - Restoring after system failure
+ 
+-**Categories Included**: All available categories (export-only categories such as `pve_config_export` are extracted to the export directory for manual application)
++**Categories Included**: All available categories
++- **Normal** categories are restored to system paths
++- **Staged** categories are extracted under `/tmp/proxsave/restore-stage-*` and applied automatically (API/file apply)
++- **Export-only** categories (e.g. `pve_config_export`, `pbs_config`) are extracted to the export directory for manual review/application
+ 
+ **Command Flow**:
+ ```
+@@ -158,12 +189,15 @@ Select restore mode:
+ - `storage_pve` - Storage definitions
+ - `pve_jobs` - Backup jobs
+ - `zfs` - ZFS configuration
++- `filesystem` - /etc/fstab
+ 
+ **PBS Categories**:
+-- `pbs_config` - PBS configuration
+-- `datastore_pbs` - Datastore definitions
+-- `pbs_jobs` - Sync/verify/prune jobs
++- `pbs_config` - PBS config export (export-only)
++- `datastore_pbs` - Datastore definitions (staged apply)
++- `maintenance_pbs` - Maintenance settings
++- `pbs_jobs` - Sync/verify/prune jobs (staged apply)
+ - `zfs` - ZFS configuration
++- `filesystem` - /etc/fstab
+ 
+ **Command Flow**:
+ ```
+@@ -188,6 +222,7 @@ Select restore mode:
+ - `ssl` - SSL/TLS certificates
+ - `ssh` - SSH daemon configuration (`/etc/ssh`) and SSH keys (root/home users)
+ - `services` - Systemd service configs and udev rules
++- `filesystem` - /etc/fstab (Smart merge prompt)
+ 
+ **Command Flow**:
+ ```
+@@ -1069,9 +1104,15 @@ Hard guard in code prevents ANY write to /etc/pve when restoring to /
+ (see internal/orchestrator/restore.go:880-884)
+ ```
+ 
++### Export-Only Category: pbs_config
++
++**Category**: `pbs_config`  
++**Path**: `./etc/proxmox-backup/`  
++**Reason**: The full PBS configuration directory contains high-risk and secret-bearing files; ProxSave restores specific subsets via staged categories (e.g. `pbs_access_control`, `pbs_notifications`, `pbs_remotes`) and leaves the full directory as export-only for manual review.
++
+ ### Export Process
+ 
+-**Two-Pass Extraction**:
++**Extraction Passes**:
+ ```
+ Pass 1: Normal Categories
+   Ôö£ÔöÇ Destination: / (system root)
+@@ -1081,9 +1122,14 @@ Pass 1: Normal Categories
+ 
+ Pass 2: Export-Only Categories
+   Ôö£ÔöÇ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
+-  Ôö£ÔöÇ Categories: Only export-only (pve_config_export)
++  Ôö£ÔöÇ Categories: Export-only (e.g. pve_config_export, pbs_config)
+   Ôö£ÔöÇ Safety backup: Not created (not overwriting system)
+   ÔööÔöÇ Log: Separate section in same log file
++
++Pass 3: Staged Categories
++  Ôö£ÔöÇ Destination: /tmp/proxsave/restore-stage-*
++  Ôö£ÔöÇ Categories: Sensitive staged apply (e.g. network, notifications, access control)
++  ÔööÔöÇ Apply: Written after extraction via safe file/API apply steps
+ ```
+ 
+ **Export Directory Structure**:
+diff --git a/internal/orchestrator/.backup.lock b/internal/orchestrator/.backup.lock
+index a1effa9..d361406 100644
+--- a/internal/orchestrator/.backup.lock
++++ b/internal/orchestrator/.backup.lock
+@@ -1,3 +1,3 @@
+-pid=74227
++pid=889075
+ host=pve
+-time=2026-01-23T12:50:38+01:00
++time=2026-01-24T14:52:39+01:00
+diff --git a/internal/orchestrator/categories.go b/internal/orchestrator/categories.go
+index cf9e34d..9f69656 100644
+--- a/internal/orchestrator/categories.go
++++ b/internal/orchestrator/categories.go
+@@ -78,6 +78,29 @@ func GetAllCategories() []Category {
+ 				"./etc/pve/vzdump.cron",
+ 			},
+ 		},
++		{
++			ID:          "pve_notifications",
++			Name:        "PVE Notifications",
++			Description: "Datacenter notification targets and matchers (applied via API)",
++			Type:        CategoryTypePVE,
++			Paths: []string{
++				"./etc/pve/notifications.cfg",
++				"./etc/pve/priv/notifications.cfg",
++			},
++		},
++		{
++			ID:          "pve_access_control",
++			Name:        "PVE Access Control",
++			Description: "Users, roles, groups, ACLs and realms (applied via API)",
++			Type:        CategoryTypePVE,
++			Paths: []string{
++				"./etc/pve/user.cfg",
++				"./etc/pve/domains.cfg",
++				"./etc/pve/priv/shadow.cfg",
++				"./etc/pve/priv/token.cfg",
++				"./etc/pve/priv/tfa.cfg",
++			},
++		},
+ 		{
+ 			ID:          "corosync",
+ 			Name:        "Corosync Configuration",
+@@ -137,6 +160,40 @@ func GetAllCategories() []Category {
+ 				"./etc/proxmox-backup/prune.cfg",
+ 			},
+ 		},
++		{
++			ID:          "pbs_remotes",
++			Name:        "PBS Remotes",
++			Description: "Remote definitions for sync/verify jobs (may include credentials)",
++			Type:        CategoryTypePBS,
++			Paths: []string{
++				"./etc/proxmox-backup/remote.cfg",
++			},
++		},
++		{
++			ID:          "pbs_notifications",
++			Name:        "PBS Notifications",
++			Description: "Notification targets and matchers",
++			Type:        CategoryTypePBS,
++			Paths: []string{
++				"./etc/proxmox-backup/notifications.cfg",
++				"./etc/proxmox-backup/notifications-priv.cfg",
++			},
++		},
++		{
++			ID:          "pbs_access_control",
++			Name:        "PBS Access Control",
++			Description: "Users, realms and permissions",
++			Type:        CategoryTypePBS,
++			Paths: []string{
++				"./etc/proxmox-backup/user.cfg",
++				"./etc/proxmox-backup/domains.cfg",
++				"./etc/proxmox-backup/acl.cfg",
++				"./etc/proxmox-backup/token.cfg",
++				"./etc/proxmox-backup/shadow.json",
++				"./etc/proxmox-backup/token.shadow",
++				"./etc/proxmox-backup/tfa.json",
++			},
++		},
+ 
+ 		// Common Categories
+ 		{
+diff --git a/internal/orchestrator/pbs_staged_apply.go b/internal/orchestrator/pbs_staged_apply.go
+index dbfd1c4..de27ad0 100644
+--- a/internal/orchestrator/pbs_staged_apply.go
++++ b/internal/orchestrator/pbs_staged_apply.go
+@@ -15,7 +15,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger,
+ 	if plan == nil || plan.SystemType != SystemTypePBS {
+ 		return nil
+ 	}
+-	if !plan.HasCategoryID("datastore_pbs") && !plan.HasCategoryID("pbs_jobs") {
++	if !plan.HasCategoryID("datastore_pbs") && !plan.HasCategoryID("pbs_jobs") && !plan.HasCategoryID("pbs_remotes") {
+ 		return nil
+ 	}
+ 	if strings.TrimSpace(stageRoot) == "" {
+@@ -49,9 +49,21 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger,
+ 			logger.Warning("PBS staged apply: job configs: %v", err)
+ 		}
+ 	}
++	if plan.HasCategoryID("pbs_remotes") {
++		if err := applyPBSRemoteCfgFromStage(ctx, logger, stageRoot); err != nil {
++			logger.Warning("PBS staged apply: remote.cfg: %v", err)
++		}
++	}
+ 	return nil
+ }
+ 
++func applyPBSRemoteCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
++	done := logging.DebugStart(logger, "pbs staged apply remote.cfg", "stage=%s", stageRoot)
++	defer func() { done(err) }()
++
++	return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/remote.cfg")
++}
++
+ type pbsDatastoreBlock struct {
+ 	Name  string
+ 	Path  string
+diff --git a/internal/orchestrator/restore_workflow_ui.go b/internal/orchestrator/restore_workflow_ui.go
+index 272cd11..5f48c1c 100644
+--- a/internal/orchestrator/restore_workflow_ui.go
++++ b/internal/orchestrator/restore_workflow_ui.go
+@@ -378,6 +378,20 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
+ 			restoreHadWarnings = true
+ 			logger.Warning("PBS staged config apply: %v", err)
+ 		}
++		if err := maybeApplyAccessControlFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
++			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
++				return err
++			}
++			restoreHadWarnings = true
++			logger.Warning("Access control staged apply: %v", err)
++		}
++		if err := maybeApplyNotificationsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
++			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
++				return err
++			}
++			restoreHadWarnings = true
++			logger.Warning("Notifications staged apply: %v", err)
++		}
+ 	}
+ 
+ 	stageRootForNetworkApply := stageRoot
+diff --git a/internal/orchestrator/staging.go b/internal/orchestrator/staging.go
+index 6e5bd5f..3067973 100644
+--- a/internal/orchestrator/staging.go
++++ b/internal/orchestrator/staging.go
+@@ -11,7 +11,7 @@ var restoreStageSequence uint64
+ 
+ func isStagedCategoryID(id string) bool {
+ 	switch strings.TrimSpace(id) {
+-	case "network", "datastore_pbs", "pbs_jobs":
++	case "network", "datastore_pbs", "pbs_jobs", "pbs_remotes", "pve_notifications", "pbs_notifications", "pve_access_control", "pbs_access_control":
+ 		return true
+ 	default:
+ 		return false

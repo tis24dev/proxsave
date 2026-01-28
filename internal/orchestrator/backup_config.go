@@ -19,6 +19,7 @@ func BuildArchiverConfig(
 	dryRun bool,
 	encryptArchive bool,
 	ageRecipients []age.Recipient,
+	excludePatterns []string,
 ) *backup.ArchiverConfig {
 	return &backup.ArchiverConfig{
 		Compression:        compressionType,
@@ -28,6 +29,7 @@ func BuildArchiverConfig(
 		DryRun:             dryRun,
 		EncryptArchive:     encryptArchive,
 		AgeRecipients:      ageRecipients,
+		ExcludePatterns:    append([]string(nil), excludePatterns...),
 	}
 }
 

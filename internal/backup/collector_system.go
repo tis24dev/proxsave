@@ -513,20 +513,20 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	// DHCP leases (best effort)
 	if err := c.safeCopyDir(ctx,
 		c.systemPath("/var/lib/dhcp"),
-		filepath.Join(c.tempDir, "var/lib/dhcp"),
-		"DHCP leases"); err != nil {
+		c.proxsaveRuntimeDir("var/lib/dhcp"),
+		"DHCP leases (runtime snapshot)"); err != nil {
 		c.logger.Debug("No /var/lib/dhcp found")
 	}
 	if err := c.safeCopyDir(ctx,
 		c.systemPath("/var/lib/NetworkManager"),
-		filepath.Join(c.tempDir, "var/lib/NetworkManager"),
-		"NetworkManager leases"); err != nil {
+		c.proxsaveRuntimeDir("var/lib/NetworkManager"),
+		"NetworkManager leases (runtime snapshot)"); err != nil {
 		c.logger.Debug("No /var/lib/NetworkManager leases found")
 	}
 	if err := c.safeCopyDir(ctx,
 		c.systemPath("/run/systemd/netif/leases"),
-		filepath.Join(c.tempDir, "run/systemd/netif/leases"),
-		"systemd-networkd leases"); err != nil {
+		c.proxsaveRuntimeDir("run/systemd/netif/leases"),
+		"systemd-networkd leases (runtime snapshot)"); err != nil {
 		c.logger.Debug("No /run/systemd/netif/leases found")
 	}
 
@@ -536,17 +536,11 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 
 // collectSystemCommands collects output from system commands
 func (c *Collector) collectSystemCommands(ctx context.Context) error {
-	commandsDir := filepath.Join(c.tempDir, "commands")
+	commandsDir := c.proxsaveCommandsDir("system")
 	if err := c.ensureDir(commandsDir); err != nil {
 		return fmt.Errorf("failed to create commands directory: %w", err)
 	}
 	c.logger.Debug("Collecting system command outputs into %s", commandsDir)
-
-	infoDir := filepath.Join(c.tempDir, "var/lib/proxsave-info")
-	if err := c.ensureDir(infoDir); err != nil {
-		return fmt.Errorf("failed to create system info directory: %w", err)
-	}
-	c.logger.Debug("System info snapshots will be stored in %s", infoDir)
 
 	// OS release information (CRITICAL)
 	osReleasePath := c.systemPath("/etc/os-release")
@@ -554,8 +548,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		fmt.Sprintf("cat %s", osReleasePath),
 		filepath.Join(commandsDir, "os_release.txt"),
 		"OS release",
-		true,
-		filepath.Join(infoDir, "os-release.txt")); err != nil {
+		true); err != nil {
 		return fmt.Errorf("failed to get OS release (critical): %w", err)
 	}
 
@@ -564,8 +557,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		"uname -a",
 		filepath.Join(commandsDir, "uname.txt"),
 		"Kernel version",
-		true,
-		filepath.Join(infoDir, "uname.txt")); err != nil {
+		true); err != nil {
 		return fmt.Errorf("failed to get kernel version (critical): %w", err)
 	}
 
@@ -581,69 +573,59 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		"ip addr show",
 		filepath.Join(commandsDir, "ip_addr.txt"),
 		"IP addresses",
-		false,
-		filepath.Join(infoDir, "ip_addr.txt")); err != nil {
+		false); err != nil {
 		return err
 	}
 	c.collectCommandOptional(ctx,
 		"ip -j addr show",
 		filepath.Join(commandsDir, "ip_addr.json"),
-		"IP addresses (json)",
-		filepath.Join(infoDir, "ip_addr.json"))
+		"IP addresses (json)")
 
 	// Policy routing rules
 	if err := c.collectCommandMulti(ctx,
 		"ip rule show",
 		filepath.Join(commandsDir, "ip_rule.txt"),
 		"IP rules",
-		false,
-		filepath.Join(infoDir, "ip_rule.txt")); err != nil {
+		false); err != nil {
 		return err
 	}
 	c.collectCommandOptional(ctx,
 		"ip -j rule show",
 		filepath.Join(commandsDir, "ip_rule.json"),
-		"IP rules (json)",
-		filepath.Join(infoDir, "ip_rule.json"))
+		"IP rules (json)")
 
 	// IP routes
 	if err := c.collectCommandMulti(ctx,
 		"ip route show",
 		filepath.Join(commandsDir, "ip_route.txt"),
 		"IP routes",
-		false,
-		filepath.Join(infoDir, "ip_route.txt")); err != nil {
+		false); err != nil {
 		return err
 	}
 	c.collectCommandOptional(ctx,
 		"ip -j route show",
 		filepath.Join(commandsDir, "ip_route.json"),
-		"IP routes (json)",
-		filepath.Join(infoDir, "ip_route.json"))
+		"IP routes (json)")
 
 	// All routing tables (IPv4/IPv6)
 	c.collectCommandOptional(ctx,
 		"ip -4 route show table all",
 		filepath.Join(commandsDir, "ip_route_all_v4.txt"),
-		"IP routes (all tables v4)",
-		filepath.Join(infoDir, "ip_route_all_v4.txt"))
+		"IP routes (all tables v4)")
 	c.collectCommandOptional(ctx,
 		"ip -6 route show table all",
 		filepath.Join(commandsDir, "ip_route_all_v6.txt"),
-		"IP routes (all tables v6)",
-		filepath.Join(infoDir, "ip_route_all_v6.txt"))
+		"IP routes (all tables v6)")
 
 	// IP link statistics
 	c.collectCommandOptional(ctx,
 		"ip -s link",
 		filepath.Join(commandsDir, "ip_link.txt"),
-		"IP link statistics",
-		filepath.Join(infoDir, "ip_link.txt"))
+		"IP link statistics")
 	c.collectCommandOptional(ctx,
 		"ip -j link",
 		filepath.Join(commandsDir, "ip_link.json"),
-		"IP links (json)",
-		filepath.Join(infoDir, "ip_link.json"))
+		"IP links (json)")
 
 	// Neighbors (ARP/NDP)
 	c.safeCmdOutput(ctx,
@@ -675,7 +657,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(commandsDir, "bridge_mdb.txt"),
 		"Bridge MDB")
 
-	if err := c.collectNetworkInventory(ctx, commandsDir, infoDir); err != nil {
+	if err := c.collectNetworkInventory(ctx, commandsDir, ""); err != nil {
 		c.logger.Debug("Network inventory collection failed: %v", err)
 	}
 
@@ -708,8 +690,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		"df -h",
 		filepath.Join(commandsDir, "df.txt"),
 		"Disk usage",
-		false,
-		filepath.Join(infoDir, "disk_space.txt")); err != nil {
+		false); err != nil {
 		return err
 	}
 
@@ -725,18 +706,28 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		"lsblk -f",
 		filepath.Join(commandsDir, "lsblk.txt"),
 		"Block devices",
-		false,
-		filepath.Join(infoDir, "lsblk.txt")); err != nil {
+		false); err != nil {
 		return err
 	}
+
+	// Block devices (JSON) - used for stable device mapping during restore (fstab remap).
+	c.collectCommandOptional(ctx,
+		"lsblk -J -O",
+		filepath.Join(commandsDir, "lsblk_json.json"),
+		"Block devices (JSON)")
+
+	// Block device identifiers (UUID/PARTUUID/LABEL) - used for stable device mapping during restore.
+	c.collectCommandOptional(ctx,
+		"blkid",
+		filepath.Join(commandsDir, "blkid.txt"),
+		"Block device identifiers (blkid)")
 
 	// Memory information
 	if err := c.collectCommandMulti(ctx,
 		"free -h",
 		filepath.Join(commandsDir, "free.txt"),
 		"Memory usage",
-		false,
-		filepath.Join(infoDir, "memory.txt")); err != nil {
+		false); err != nil {
 		return err
 	}
 
@@ -745,8 +736,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		"lscpu",
 		filepath.Join(commandsDir, "lscpu.txt"),
 		"CPU information",
-		false,
-		filepath.Join(infoDir, "lscpu.txt")); err != nil {
+		false); err != nil {
 		return err
 	}
 
@@ -755,8 +745,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		"lspci -v",
 		filepath.Join(commandsDir, "lspci.txt"),
 		"PCI devices",
-		false,
-		filepath.Join(infoDir, "lspci.txt")); err != nil {
+		false); err != nil {
 		return err
 	}
 
@@ -773,8 +762,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 			"systemctl list-units --type=service --all",
 			filepath.Join(commandsDir, "systemctl_services.txt"),
 			"Systemd services",
-			false,
-			filepath.Join(infoDir, "services.txt")); err != nil {
+			false); err != nil {
 			return err
 		}
 
@@ -785,17 +773,16 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 
 	// Installed packages
 	if c.config.BackupInstalledPackages {
-		packagesDir := filepath.Join(infoDir, "packages")
+		packagesDir := filepath.Join(commandsDir, "packages")
 		if err := c.ensureDir(packagesDir); err != nil {
 			return fmt.Errorf("failed to create packages directory: %w", err)
 		}
 
 		if err := c.collectCommandMulti(ctx,
 			"dpkg -l",
-			filepath.Join(commandsDir, "dpkg_list.txt"),
+			filepath.Join(packagesDir, "dpkg_list.txt"),
 			"Installed packages",
-			false,
-			filepath.Join(packagesDir, "dpkg_list.txt")); err != nil {
+			false); err != nil {
 			return err
 		}
 	}
@@ -815,8 +802,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 			"iptables-save",
 			filepath.Join(commandsDir, "iptables.txt"),
 			"iptables rules",
-			false,
-			filepath.Join(infoDir, "iptables.txt")); err != nil {
+			false); err != nil {
 			return err
 		}
 
@@ -830,8 +816,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 			"ip6tables-save",
 			filepath.Join(commandsDir, "ip6tables.txt"),
 			"ip6tables rules",
-			false,
-			filepath.Join(infoDir, "ip6tables.txt")); err != nil {
+			false); err != nil {
 			return err
 		}
 
@@ -899,7 +884,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		if !usesZFS {
 			c.logger.Warning("Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=false to disable.")
 		} else {
-			zfsDir := filepath.Join(infoDir, "zfs")
+			zfsDir := filepath.Join(commandsDir, "zfs")
 			if err := c.ensureDir(zfsDir); err != nil {
 				return fmt.Errorf("failed to create zfs info directory: %w", err)
 			}
@@ -907,29 +892,25 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 			if _, err := c.depLookPath("zpool"); err == nil {
 				c.collectCommandOptional(ctx,
 					"zpool status",
-					filepath.Join(commandsDir, "zpool_status.txt"),
-					"ZFS pool status",
-					filepath.Join(zfsDir, "zpool_status.txt"))
+					filepath.Join(zfsDir, "zpool_status.txt"),
+					"ZFS pool status")
 
 				c.collectCommandOptional(ctx,
 					"zpool list",
-					filepath.Join(commandsDir, "zpool_list.txt"),
-					"ZFS pool list",
-					filepath.Join(zfsDir, "zpool_list.txt"))
+					filepath.Join(zfsDir, "zpool_list.txt"),
+					"ZFS pool list")
 			}
 
 			if _, err := c.depLookPath("zfs"); err == nil {
 				c.collectCommandOptional(ctx,
 					"zfs list",
-					filepath.Join(commandsDir, "zfs_list.txt"),
-					"ZFS filesystem list",
-					filepath.Join(zfsDir, "zfs_list.txt"))
+					filepath.Join(zfsDir, "zfs_list.txt"),
+					"ZFS filesystem list")
 
 				c.collectCommandOptional(ctx,
 					"zfs get all",
-					filepath.Join(commandsDir, "zfs_get_all.txt"),
-					"ZFS properties",
 					filepath.Join(zfsDir, "zfs_get_all.txt"),
+					"ZFS properties",
 				)
 			}
 		}
@@ -957,7 +938,7 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 	}
 
 	c.logger.Debug("System command output collection finished")
-	if err := c.buildNetworkReport(ctx, commandsDir, infoDir); err != nil {
+	if err := c.buildNetworkReport(ctx, commandsDir); err != nil {
 		c.logger.Debug("Network report generation failed: %v", err)
 	}
 	return nil
@@ -965,13 +946,12 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 
 // buildNetworkReport composes a single human-readable network report by aggregating
 // key command outputs and configuration files.
-func (c *Collector) buildNetworkReport(ctx context.Context, commandsDir, infoDir string) error {
+func (c *Collector) buildNetworkReport(ctx context.Context, commandsDir string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	reportPath := filepath.Join(commandsDir, "network_report.txt")
-	mirrorPath := filepath.Join(infoDir, "network_report.txt")
 
 	var b strings.Builder
 	now := time.Now().Format(time.RFC3339)
@@ -1075,11 +1055,6 @@ func (c *Collector) buildNetworkReport(ctx context.Context, commandsDir, infoDir
 	if err := c.writeReportFile(reportPath, reportData); err != nil {
 		return err
 	}
-	if mirrorPath != "" {
-		if err := c.writeReportFile(mirrorPath, reportData); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -1118,7 +1093,7 @@ func ensureSystemPath() {
 
 // collectKernelInfo collects kernel-specific information
 func (c *Collector) collectKernelInfo(ctx context.Context) error {
-	commandsDir := filepath.Join(c.tempDir, "commands")
+	commandsDir := c.proxsaveCommandsDir("system")
 	c.logger.Debug("Collecting kernel information into %s", commandsDir)
 
 	// Kernel command line
@@ -1141,7 +1116,7 @@ func (c *Collector) collectKernelInfo(ctx context.Context) error {
 
 // collectHardwareInfo collects hardware information
 func (c *Collector) collectHardwareInfo(ctx context.Context) error {
-	commandsDir := filepath.Join(c.tempDir, "commands")
+	commandsDir := c.proxsaveCommandsDir("system")
 	c.logger.Debug("Collecting hardware inventory into %s", commandsDir)
 
 	// DMI decode (requires root)
@@ -1178,6 +1153,7 @@ func (c *Collector) collectCriticalFiles(ctx context.Context) error {
 	c.logger.Debug("Collecting critical files (passwd/shadow/fstab/etc.)")
 	criticalFiles := []string{
 		"/etc/fstab",
+		"/etc/crypttab",
 		"/etc/passwd",
 		"/etc/group",
 		"/etc/shadow",
@@ -1347,7 +1323,7 @@ func (c *Collector) collectScriptRepository(ctx context.Context) error {
 		return nil
 	}
 
-	target := filepath.Join(c.tempDir, "script-repository", filepath.Base(base))
+	target := c.proxsaveInfoDir("script-repository", filepath.Base(base))
 	c.logger.Debug("Collecting script repository from %s", base)
 
 	if err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
@@ -1440,8 +1416,13 @@ func (c *Collector) collectRootHome(ctx context.Context) error {
 	}
 
 	// Only copy security-critical directories; custom paths must be configured explicitly.
-	if err := c.safeCopyDir(ctx, c.systemPath("/root/.ssh"), filepath.Join(target, ".ssh"), "root SSH directory"); err != nil && !errors.Is(err, os.ErrNotExist) {
-		c.logger.Debug("Failed to copy root SSH directory: %v", err)
+	// Respect BACKUP_SSH_KEYS to allow backing up /root without including SSH keys.
+	if c.config.BackupSSHKeys {
+		if err := c.safeCopyDir(ctx, c.systemPath("/root/.ssh"), filepath.Join(target, ".ssh"), "root SSH directory"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.logger.Debug("Failed to copy root SSH directory: %v", err)
+		}
+	} else {
+		c.logger.Debug("Skipping /root/.ssh in root home: BACKUP_SSH_KEYS=false")
 	}
 
 	// Copy full root .config directory (for CLI tools, editors, and other configs)
@@ -1481,7 +1462,7 @@ func (c *Collector) collectUserHomes(ctx context.Context) error {
 			continue
 		}
 		src := filepath.Join(c.systemPath("/home"), name)
-		dest := filepath.Join(c.tempDir, "users", name)
+		dest := filepath.Join(c.tempDir, "home", name)
 
 		info, err := entry.Info()
 		if err != nil {
@@ -1489,7 +1470,13 @@ func (c *Collector) collectUserHomes(ctx context.Context) error {
 		}
 
 		if info.IsDir() {
-			if err := c.safeCopyDir(ctx, src, dest, fmt.Sprintf("home directory for %s", name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			extraExclude := []string(nil)
+			if !c.config.BackupSSHKeys {
+				extraExclude = append(extraExclude, ".ssh")
+			}
+			if err := c.withTemporaryExcludes(extraExclude, func() error {
+				return c.safeCopyDir(ctx, src, dest, fmt.Sprintf("home directory for %s", name))
+			}); err != nil && !errors.Is(err, os.ErrNotExist) {
 				c.logger.Debug("Failed to copy home for %s: %v", name, err)
 			}
 			continue

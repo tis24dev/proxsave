@@ -106,6 +106,65 @@ func TestCreateTarArchive(t *testing.T) {
 	}
 }
 
+func TestCreateTarArchiveRespectsExcludePatterns(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	config := &ArchiverConfig{
+		Compression:     types.CompressionNone,
+		ExcludePatterns: []string{"/skip.txt", "dir/**"},
+	}
+	archiver := NewArchiver(logger, config)
+
+	tempDir := t.TempDir()
+	sourceDir := filepath.Join(tempDir, "source")
+	if err := os.MkdirAll(filepath.Join(sourceDir, "dir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write keep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "skip.txt"), []byte("skip"), 0o644); err != nil {
+		t.Fatalf("write skip: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "dir", "inner.txt"), []byte("inner"), 0o644); err != nil {
+		t.Fatalf("write inner: %v", err)
+	}
+
+	outputPath := filepath.Join(tempDir, "test.tar")
+	if err := archiver.CreateArchive(context.Background(), sourceDir, outputPath); err != nil {
+		t.Fatalf("CreateArchive failed: %v", err)
+	}
+
+	f, err := os.Open(outputPath)
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	defer f.Close()
+
+	found := map[string]bool{}
+	tr := tar.NewReader(f)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read tar: %v", err)
+		}
+		name := strings.TrimPrefix(hdr.Name, "./")
+		found[name] = true
+	}
+
+	if !found["keep.txt"] {
+		t.Fatalf("expected keep.txt in archive")
+	}
+	if found["skip.txt"] {
+		t.Fatalf("expected skip.txt to be excluded from archive")
+	}
+	if found["dir/inner.txt"] {
+		t.Fatalf("expected dir/inner.txt to be excluded from archive")
+	}
+}
+
 func TestCreateGzipArchive(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{

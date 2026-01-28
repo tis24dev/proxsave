@@ -118,31 +118,91 @@ func classifyLogLine(line string) (entryType, message string) {
 		return "", ""
 	}
 
-	// Try to match both formats:
-	// - Go format: "[2025-11-14 10:30:45] WARNING  message"
-	// - Bash format: "[WARNING] message"
-	for _, tag := range []struct {
-		Type string
-		Tags []string
-	}{
-		{"error", []string{"[ERROR]", "[Error]", "[error]", "ERROR", "Error"}},
-		{"warning", []string{"[WARNING]", "[Warning]", "[warning]", "WARNING", "Warning"}},
-	} {
-		for _, marker := range tag.Tags {
-			if idx := strings.Index(line, marker); idx != -1 {
-				// Extract message after the marker
-				afterMarker := idx + len(marker)
-				if afterMarker < len(line) {
-					msg := strings.TrimSpace(line[afterMarker:])
-					msg = sanitizeLogMessage(msg)
-					if msg != "" {
-						return tag.Type, msg
-					}
+	// Only count issues from non-debug lines.
+	//
+	// Supported formats:
+	// - Go file logger: "[2025-11-14 10:30:45] WARNING  message"
+	// - Legacy/Bash:    "[WARNING] message"
+	// - Mixed:          "[2025-11-14 10:30:45] [WARNING] message"
+
+	// 1) Pure bracketed legacy format (no timestamp).
+	if t, msg := classifyBracketedIssueLine(line); t != "" {
+		return t, msg
+	}
+
+	// 2) Go logger format with timestamp prefix.
+	if strings.HasPrefix(line, "[") {
+		if closeIdx := strings.Index(line, "]"); closeIdx != -1 {
+			rest := strings.TrimSpace(line[closeIdx+1:])
+			if rest == "" {
+				return "", ""
+			}
+
+			// Timestamp + "[WARNING]/[ERROR]" legacy style.
+			if t, msg := classifyBracketedIssueLine(rest); t != "" {
+				return t, msg
+			}
+
+			levelToken, msg := splitFirstToken(rest)
+			if levelToken == "" {
+				return "", ""
+			}
+
+			switch strings.ToUpper(levelToken) {
+			case "DEBUG":
+				return "", ""
+			case "WARNING":
+				msg = sanitizeLogMessage(msg)
+				if msg == "" {
+					return "", ""
 				}
+				return "warning", msg
+			case "ERROR", "CRITICAL":
+				msg = sanitizeLogMessage(msg)
+				if msg == "" {
+					return "", ""
+				}
+				return "error", msg
+			default:
+				return "", ""
 			}
 		}
 	}
+
 	return "", ""
+}
+
+func classifyBracketedIssueLine(line string) (entryType, message string) {
+	if strings.HasPrefix(line, "[ERROR]") || strings.HasPrefix(line, "[Error]") || strings.HasPrefix(line, "[error]") {
+		msg := strings.TrimSpace(line[strings.Index(line, "]")+1:])
+		msg = sanitizeLogMessage(msg)
+		if msg == "" {
+			return "", ""
+		}
+		return "error", msg
+	}
+	if strings.HasPrefix(line, "[WARNING]") || strings.HasPrefix(line, "[Warning]") || strings.HasPrefix(line, "[warning]") {
+		msg := strings.TrimSpace(line[strings.Index(line, "]")+1:])
+		msg = sanitizeLogMessage(msg)
+		if msg == "" {
+			return "", ""
+		}
+		return "warning", msg
+	}
+	return "", ""
+}
+
+func splitFirstToken(value string) (token, rest string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ""
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] == ' ' || value[i] == '\t' || value[i] == '\n' || value[i] == '\r' {
+			return value[:i], strings.TrimSpace(value[i:])
+		}
+	}
+	return value, ""
 }
 
 // sanitizeLogMessage cleans up log messages

@@ -746,6 +746,32 @@ func TestWriteBackupMetadata(t *testing.T) {
 	}
 }
 
+func TestWriteBackupMetadataSkipsWhenExcluded(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	o := &Orchestrator{
+		logger:          logger,
+		excludePatterns: []string{"var/lib/proxsave-info/**"},
+	}
+	tempDir := t.TempDir()
+
+	stats := &BackupStats{
+		Version:     "1.0.0",
+		ProxmoxType: types.ProxmoxVE,
+		Timestamp:   time.Now(),
+		Hostname:    "host1",
+	}
+
+	if err := o.writeBackupMetadata(tempDir, stats); err != nil {
+		t.Fatalf("writeBackupMetadata error: %v", err)
+	}
+
+	metaPath := filepath.Join(tempDir, "var/lib/proxsave-info/backup_metadata.txt")
+	_, err := os.Stat(metaPath)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected metadata file to be excluded, stat err=%v", err)
+	}
+}
+
 func TestNewTempDirRegistryRejectsEmptyPath(t *testing.T) {
 	_, err := NewTempDirRegistry(logging.New(types.LogLevelError, false), "")
 	if err == nil {
@@ -1086,6 +1112,7 @@ func makeRegistryEntriesStale(t *testing.T, registryPath string) {
 
 func TestCopyFileUsesProvidedFS(t *testing.T) {
 	fs := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fs.Root) })
 	src := "src/config.txt"
 	dest := "dest/clone.txt"
 	if err := fs.AddFile(src, []byte("payload")); err != nil {

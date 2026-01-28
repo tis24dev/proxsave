@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -55,6 +57,16 @@ func SmartMergeFstab(ctx context.Context, logger *logging.Logger, reader *bufio.
 		return fmt.Errorf("failed to parse backup fstab: %w", err)
 	}
 
+	backupRoot := fstabBackupRootFromPath(backupFstabPath)
+	if backupRoot != "" {
+		if remapped, count := remapFstabDevicesFromInventory(logger, backupEntries, backupRoot); count > 0 {
+			backupEntries = remapped
+			logger.Info("Fstab device remap: converted %d entry(ies) from /dev/* to stable UUID/PARTUUID/LABEL based on ProxSave inventory", count)
+		} else {
+			backupEntries = remapped
+		}
+	}
+
 	// 2. Analysis
 	analysis := analyzeFstabMerge(logger, currentEntries, backupEntries)
 
@@ -80,6 +92,368 @@ func SmartMergeFstab(ctx context.Context, logger *logging.Logger, reader *bufio.
 
 	// 4. Execution
 	return applyFstabMerge(ctx, logger, currentRaw, currentFstabPath, analysis.ProposedMounts, dryRun)
+}
+
+type fstabDeviceIdentity struct {
+	UUID     string
+	PartUUID string
+	Label    string
+}
+
+type pbsDatastoreInventoryLite struct {
+	Commands map[string]struct {
+		Output string `json:"output"`
+	} `json:"commands"`
+}
+
+type lsblkReport struct {
+	BlockDevices []lsblkDevice `json:"blockdevices"`
+}
+
+type lsblkDevice struct {
+	Name     string       `json:"name"`
+	Path     string       `json:"path"`
+	UUID     string       `json:"uuid"`
+	PartUUID string       `json:"partuuid"`
+	Label    string       `json:"label"`
+	Children []lsblkDevice `json:"children"`
+}
+
+func fstabBackupRootFromPath(backupFstabPath string) string {
+	p := filepath.Clean(strings.TrimSpace(backupFstabPath))
+	if p == "" || p == "." || p == string(os.PathSeparator) {
+		return ""
+	}
+	return filepath.Dir(filepath.Dir(p))
+}
+
+func remapFstabDevicesFromInventory(logger *logging.Logger, entries []FstabEntry, backupRoot string) ([]FstabEntry, int) {
+	inventory := loadFstabDeviceInventory(logger, backupRoot)
+	if len(inventory) == 0 || len(entries) == 0 {
+		return entries, 0
+	}
+
+	out := make([]FstabEntry, len(entries))
+	copy(out, entries)
+
+	remapped := 0
+	for i := range out {
+		device := strings.TrimSpace(out[i].Device)
+		if !isLikelyUnstableDevicePath(device) {
+			continue
+		}
+
+		id, ok := inventory[filepath.Clean(device)]
+		if !ok {
+			continue
+		}
+
+		for _, candidate := range []struct {
+			prefix string
+			value  string
+		}{
+			{prefix: "UUID=", value: id.UUID},
+			{prefix: "PARTUUID=", value: id.PartUUID},
+			{prefix: "LABEL=", value: id.Label},
+		} {
+			if strings.TrimSpace(candidate.value) == "" {
+				continue
+			}
+			newRef := candidate.prefix + strings.TrimSpace(candidate.value)
+			if isVerifiedStableDeviceRef(newRef) {
+				if logger != nil {
+					logger.Debug("[FSTAB_MERGE] Remap device %s -> %s", device, newRef)
+				}
+				out[i].Device = newRef
+				out[i].RawLine = ""
+				remapped++
+				break
+			}
+		}
+	}
+
+	return out, remapped
+}
+
+func loadFstabDeviceInventory(logger *logging.Logger, backupRoot string) map[string]fstabDeviceIdentity {
+	root := filepath.Clean(strings.TrimSpace(backupRoot))
+	if root == "" || root == "." {
+		return nil
+	}
+
+	out := make(map[string]fstabDeviceIdentity)
+
+	merge := func(src map[string]fstabDeviceIdentity) {
+		for dev, id := range src {
+			dev = filepath.Clean(strings.TrimSpace(dev))
+			if dev == "" || dev == "." {
+				continue
+			}
+			existing := out[dev]
+			if existing.UUID == "" {
+				existing.UUID = id.UUID
+			}
+			if existing.PartUUID == "" {
+				existing.PartUUID = id.PartUUID
+			}
+			if existing.Label == "" {
+				existing.Label = id.Label
+			}
+			out[dev] = existing
+		}
+	}
+
+	// Prefer structured lsblk JSON if available.
+	if data, err := restoreFS.ReadFile(filepath.Join(root, "var/lib/proxsave-info/commands/system/lsblk_json.json")); err == nil && len(data) > 0 {
+		merge(parseLsblkJSONInventory(string(data)))
+	}
+	// Then blkid output from system collection.
+	if data, err := restoreFS.ReadFile(filepath.Join(root, "var/lib/proxsave-info/commands/system/blkid.txt")); err == nil && len(data) > 0 {
+		merge(parseBlkidInventory(string(data)))
+	}
+	// Fallback for older PBS backups: datastore inventory embeds blkid/lsblk output.
+	if data, err := restoreFS.ReadFile(filepath.Join(root, "var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json")); err == nil && len(data) > 0 {
+		merge(parsePBSDatastoreInventoryForDevices(logger, string(data)))
+	}
+	// Last resort: plain-text lsblk -f (less reliable, but may still provide UUID/LABEL).
+	if data, err := restoreFS.ReadFile(filepath.Join(root, "var/lib/proxsave-info/commands/system/lsblk.txt")); err == nil && len(data) > 0 {
+		merge(parseLsblkTextInventory(string(data)))
+	}
+
+	return out
+}
+
+func parsePBSDatastoreInventoryForDevices(logger *logging.Logger, content string) map[string]fstabDeviceIdentity {
+	out := make(map[string]fstabDeviceIdentity)
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return out
+	}
+
+	var report pbsDatastoreInventoryLite
+	if err := json.Unmarshal([]byte(trimmed), &report); err != nil {
+		if logger != nil {
+			logger.Debug("[FSTAB_MERGE] Unable to parse pbs_datastore_inventory.json: %v", err)
+		}
+		return out
+	}
+	if report.Commands == nil {
+		return out
+	}
+
+	if blkid := strings.TrimSpace(report.Commands["blkid"].Output); blkid != "" {
+		for dev, id := range parseBlkidInventory(blkid) {
+			out[dev] = id
+		}
+	}
+	if lsblk := strings.TrimSpace(report.Commands["lsblk_json"].Output); lsblk != "" {
+		for dev, id := range parseLsblkJSONInventory(lsblk) {
+			existing := out[dev]
+			if existing.UUID == "" {
+				existing.UUID = id.UUID
+			}
+			if existing.PartUUID == "" {
+				existing.PartUUID = id.PartUUID
+			}
+			if existing.Label == "" {
+				existing.Label = id.Label
+			}
+			out[dev] = existing
+		}
+	}
+
+	return out
+}
+
+func parseLsblkJSONInventory(content string) map[string]fstabDeviceIdentity {
+	out := make(map[string]fstabDeviceIdentity)
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return out
+	}
+
+	var report lsblkReport
+	if err := json.Unmarshal([]byte(trimmed), &report); err != nil {
+		return out
+	}
+
+	var walk func(dev lsblkDevice)
+	walk = func(dev lsblkDevice) {
+		path := strings.TrimSpace(dev.Path)
+		if path == "" && strings.TrimSpace(dev.Name) != "" {
+			path = filepath.Join("/dev", strings.TrimSpace(dev.Name))
+		}
+		path = filepath.Clean(path)
+		if path != "" && path != "." {
+			out[path] = fstabDeviceIdentity{
+				UUID:     strings.TrimSpace(dev.UUID),
+				PartUUID: strings.TrimSpace(dev.PartUUID),
+				Label:    strings.TrimSpace(dev.Label),
+			}
+		}
+		for _, child := range dev.Children {
+			walk(child)
+		}
+	}
+
+	for _, dev := range report.BlockDevices {
+		walk(dev)
+	}
+
+	return out
+}
+
+var blkidKVRe = regexp.MustCompile(`([A-Za-z0-9_]+)=\"([^\"]*)\"`)
+
+func parseBlkidInventory(content string) map[string]fstabDeviceIdentity {
+	out := make(map[string]fstabDeviceIdentity)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Example: /dev/sdb1: UUID="..." TYPE="ext4" PARTUUID="..."
+		colon := strings.Index(line, ":")
+		if colon <= 0 {
+			continue
+		}
+
+		device := strings.TrimSpace(line[:colon])
+		rest := strings.TrimSpace(line[colon+1:])
+		if device == "" || rest == "" {
+			continue
+		}
+
+		id := fstabDeviceIdentity{}
+		for _, match := range blkidKVRe.FindAllStringSubmatch(rest, -1) {
+			if len(match) != 3 {
+				continue
+			}
+			key := strings.ToUpper(strings.TrimSpace(match[1]))
+			val := strings.TrimSpace(match[2])
+			switch key {
+			case "UUID":
+				id.UUID = val
+			case "PARTUUID":
+				id.PartUUID = val
+			case "LABEL":
+				id.Label = val
+			}
+		}
+
+		if id.UUID == "" && id.PartUUID == "" && id.Label == "" {
+			continue
+		}
+
+		out[filepath.Clean(device)] = id
+	}
+	return out
+}
+
+func parseLsblkTextInventory(content string) map[string]fstabDeviceIdentity {
+	out := make(map[string]fstabDeviceIdentity)
+	lines := strings.Split(content, "\n")
+	headerIdx := -1
+	var headerFields []string
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		headerFields = strings.Fields(line)
+		if len(headerFields) >= 2 && strings.EqualFold(headerFields[0], "NAME") {
+			headerIdx = i
+			break
+		}
+	}
+	if headerIdx == -1 || len(headerFields) == 0 {
+		return out
+	}
+
+	uuidCol := -1
+	labelCol := -1
+	for i, field := range headerFields {
+		switch strings.ToUpper(strings.TrimSpace(field)) {
+		case "UUID":
+			uuidCol = i
+		case "LABEL":
+			labelCol = i
+		}
+	}
+	if uuidCol == -1 && labelCol == -1 {
+		return out
+	}
+
+	for _, raw := range lines[headerIdx+1:] {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		fields := strings.Fields(raw)
+		if len(fields) == 0 {
+			continue
+		}
+
+		name := sanitizeLsblkName(fields[0])
+		if name == "" {
+			continue
+		}
+		path := filepath.Join("/dev", name)
+
+		id := fstabDeviceIdentity{}
+		if uuidCol >= 0 && uuidCol < len(fields) {
+			id.UUID = strings.TrimSpace(fields[uuidCol])
+		}
+		if labelCol >= 0 && labelCol < len(fields) {
+			id.Label = strings.TrimSpace(fields[labelCol])
+		}
+		if id.UUID == "" && id.Label == "" {
+			continue
+		}
+		out[filepath.Clean(path)] = id
+	}
+
+	return out
+}
+
+func sanitizeLsblkName(field string) string {
+	s := strings.TrimSpace(field)
+	if s == "" {
+		return ""
+	}
+
+	// Drop any tree prefix runes (├─, └─, │, etc.) by finding the first ASCII alnum.
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			return s[i:]
+		}
+	}
+	return ""
+}
+
+func isLikelyUnstableDevicePath(device string) bool {
+	dev := strings.TrimSpace(device)
+	if !strings.HasPrefix(dev, "/dev/") {
+		return false
+	}
+	if strings.HasPrefix(dev, "/dev/disk/by-") || strings.HasPrefix(dev, "/dev/mapper/") {
+		return false
+	}
+
+	base := filepath.Base(dev)
+	switch {
+	case strings.HasPrefix(base, "sd"),
+		strings.HasPrefix(base, "vd"),
+		strings.HasPrefix(base, "xvd"),
+		strings.HasPrefix(base, "hd"),
+		strings.HasPrefix(base, "nvme"),
+		strings.HasPrefix(base, "mmcblk"):
+		return true
+	default:
+		return false
+	}
 }
 
 func parseFstab(path string) ([]FstabEntry, []string, error) {
@@ -282,6 +656,48 @@ func isSafeMountCandidate(e FstabEntry) bool {
 	return isVerifiedStableDeviceRef(e.Device)
 }
 
+func normalizeFstabEntryForRestore(e FstabEntry) FstabEntry {
+	e.Options = normalizeFstabOptionsForRestore(e.Options)
+	if isNetworkMountEntry(e) {
+		e.Options = ensureFstabOption(e.Options, "_netdev")
+	}
+	e.Options = ensureFstabOption(e.Options, "nofail")
+
+	if strings.TrimSpace(e.Dump) == "" {
+		e.Dump = "0"
+	}
+	if strings.TrimSpace(e.Pass) == "" {
+		e.Pass = "0"
+	}
+	return e
+}
+
+func normalizeFstabOptionsForRestore(options string) string {
+	opts := strings.TrimSpace(options)
+	if opts == "" {
+		return "defaults"
+	}
+	return opts
+}
+
+func ensureFstabOption(options, option string) string {
+	opts := strings.TrimSpace(options)
+	opt := strings.TrimSpace(option)
+	if opt == "" {
+		return opts
+	}
+	if opts == "" {
+		return opt
+	}
+
+	for _, part := range strings.Split(opts, ",") {
+		if strings.TrimSpace(part) == opt {
+			return opts
+		}
+	}
+	return opts + "," + opt
+}
+
 func printFstabAnalysis(logger *logging.Logger, res FstabAnalysisResult) {
 	fmt.Println()
 	logger.Info("fstab analysis:")
@@ -353,12 +769,9 @@ func applyFstabMerge(ctx context.Context, logger *logging.Logger, currentRaw []s
 
 	buffer.WriteString("\n# --- ProxSave Restore Merge ---\n")
 	for _, e := range newEntries {
-		if e.RawLine != "" {
-			buffer.WriteString(e.RawLine + "\n")
-		} else {
-			line := fmt.Sprintf("%-36s %-20s %-8s %-16s %s %s", e.Device, e.MountPoint, e.Type, e.Options, e.Dump, e.Pass)
-			buffer.WriteString(line + "\n")
-		}
+		e = normalizeFstabEntryForRestore(e)
+		line := fmt.Sprintf("%-36s %-20s %-8s %-16s %s %s", e.Device, e.MountPoint, e.Type, e.Options, e.Dump, e.Pass)
+		buffer.WriteString(line + "\n")
 	}
 
 	// 3. Atomic write (temp file + rename)
