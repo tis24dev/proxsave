@@ -192,6 +192,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	var safetyBackup *SafetyBackupResult
 	var networkRollbackBackup *SafetyBackupResult
+	var firewallRollbackBackup *SafetyBackupResult
 	systemWriteCategories := append([]Category{}, plan.NormalCategories...)
 	systemWriteCategories = append(systemWriteCategories, plan.StagedCategories...)
 	if len(systemWriteCategories) > 0 {
@@ -221,6 +222,17 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		} else if networkRollbackBackup != nil && strings.TrimSpace(networkRollbackBackup.BackupPath) != "" {
 			logger.Info("Network rollback backup location: %s", networkRollbackBackup.BackupPath)
 			logger.Info("This backup is used for the %ds network rollback timer and only includes network paths.", int(defaultNetworkRollbackTimeout.Seconds()))
+		}
+	}
+	if plan.HasCategoryID("pve_firewall") {
+		logger.Info("")
+		logging.DebugStep(logger, "restore", "Create firewall-only rollback backup for transactional firewall apply")
+		firewallRollbackBackup, err = CreateFirewallRollbackBackup(logger, systemWriteCategories, destRoot)
+		if err != nil {
+			logger.Warning("Failed to create firewall rollback backup: %v", err)
+		} else if firewallRollbackBackup != nil && strings.TrimSpace(firewallRollbackBackup.BackupPath) != "" {
+			logger.Info("Firewall rollback backup location: %s", firewallRollbackBackup.BackupPath)
+			logger.Info("This backup is used for the %ds firewall rollback timer and only includes firewall paths.", int(defaultFirewallRollbackTimeout.Seconds()))
 		}
 	}
 
@@ -558,6 +570,39 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			}
 		} else {
 			logger.Warning("Network apply step skipped or failed: %v", err)
+		}
+	}
+
+	logger.Info("")
+	if err := maybeApplyPVEFirewallWithUI(ctx, ui, logger, plan, safetyBackup, firewallRollbackBackup, stageRoot, cfg.DryRun); err != nil {
+		if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+			logger.Info("Restore aborted by user during firewall apply prompt.")
+			return err
+		}
+		restoreHadWarnings = true
+		if errors.Is(err, ErrFirewallApplyNotCommitted) {
+			var notCommitted *FirewallApplyNotCommittedError
+			rollbackLog := ""
+			rollbackArmed := false
+			deadline := time.Time{}
+			if errors.As(err, &notCommitted) && notCommitted != nil {
+				rollbackLog = strings.TrimSpace(notCommitted.RollbackLog)
+				rollbackArmed = notCommitted.RollbackArmed
+				deadline = notCommitted.RollbackDeadline
+			}
+			if rollbackArmed {
+				logger.Warning("Firewall apply not committed; rollback is ARMED and will run automatically.")
+			} else {
+				logger.Warning("Firewall apply not committed; rollback has executed (or marker cleared).")
+			}
+			if !deadline.IsZero() {
+				logger.Info("Rollback deadline: %s", deadline.Format(time.RFC3339))
+			}
+			if rollbackLog != "" {
+				logger.Info("Rollback log: %s", rollbackLog)
+			}
+		} else {
+			logger.Warning("Firewall apply step skipped or failed: %v", err)
 		}
 	}
 

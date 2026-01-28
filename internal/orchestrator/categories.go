@@ -106,6 +106,16 @@ func GetAllCategories() []Category {
 			},
 		},
 		{
+			ID:          "pve_firewall",
+			Name:        "PVE Firewall",
+			Description: "Firewall rules and options (staged; applied with rollback safety)",
+			Type:        CategoryTypePVE,
+			Paths: []string{
+				"./etc/pve/firewall/",
+				"./etc/pve/nodes/*/host.fw",
+			},
+		},
+		{
 			ID:          "corosync",
 			Name:        "Corosync Configuration",
 			Description: "Cluster communication and quorum settings",

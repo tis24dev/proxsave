@@ -111,6 +111,49 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 
 	for _, catPath := range pathsToBackup {
 		fsPath := strings.TrimPrefix(catPath, "./")
+		if strings.ContainsAny(fsPath, "*?[") {
+			pattern := filepath.Join(destRoot, fsPath)
+			matches, err := globFS(safetyFS, pattern)
+			if err != nil {
+				logger.Warning("Cannot expand glob %s: %v", pattern, err)
+				continue
+			}
+			for _, match := range matches {
+				info, err := safetyFS.Stat(match)
+				if err != nil {
+					if os.IsNotExist(err) {
+						continue
+					}
+					logger.Warning("Cannot stat %s: %v", match, err)
+					continue
+				}
+
+				relPath, err := filepath.Rel(destRoot, match)
+				if err != nil {
+					logger.Warning("Cannot compute relative path for %s: %v", match, err)
+					continue
+				}
+				relPath = filepath.Clean(relPath)
+				if relPath == "." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) || relPath == ".." {
+					logger.Warning("Skipping glob match %s: relative path escapes root (%s)", match, relPath)
+					continue
+				}
+
+				if info.IsDir() {
+					err = backupDirectory(tarWriter, match, relPath, result, logger)
+					if err != nil {
+						logger.Warning("Failed to backup directory %s: %v", match, err)
+					}
+				} else {
+					err = backupFile(tarWriter, match, relPath, result, logger)
+					if err != nil {
+						logger.Warning("Failed to backup file %s: %v", match, err)
+					}
+				}
+			}
+			continue
+		}
+
 		fullPath := filepath.Join(destRoot, fsPath)
 
 		info, err := safetyFS.Stat(fullPath)
@@ -172,6 +215,19 @@ func CreateNetworkRollbackBackup(logger *logging.Logger, selectedCategories []Ca
 		ArchivePrefix:     "network_rollback_backup",
 		LocationFileName:  "network_rollback_backup_location.txt",
 		HumanDescription:  "Network rollback backup",
+		WriteLocationFile: true,
+	})
+}
+
+func CreateFirewallRollbackBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (*SafetyBackupResult, error) {
+	firewallCat := GetCategoryByID("pve_firewall", selectedCategories)
+	if firewallCat == nil {
+		return nil, nil
+	}
+	return createSafetyBackup(logger, []Category{*firewallCat}, destRoot, safetyBackupSpec{
+		ArchivePrefix:     "firewall_rollback_backup",
+		LocationFileName:  "firewall_rollback_backup_location.txt",
+		HumanDescription:  "Firewall rollback backup",
 		WriteLocationFile: true,
 	})
 }
@@ -463,6 +519,88 @@ func CleanupOldSafetyBackups(logger *logging.Logger, olderThan time.Duration) er
 	}
 
 	return nil
+}
+
+func globFS(fs FS, pattern string) ([]string, error) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return nil, nil
+	}
+
+	clean := filepath.Clean(pattern)
+	sep := string(os.PathSeparator)
+	abs := filepath.IsAbs(clean)
+
+	parts := strings.Split(clean, sep)
+	if abs && len(parts) > 0 && parts[0] == "" {
+		parts = parts[1:]
+	}
+
+	paths := []string{""}
+	if abs {
+		paths = []string{sep}
+	}
+
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || part == "." {
+			continue
+		}
+		isLast := i == len(parts)-1
+
+		var next []string
+		for _, base := range paths {
+			dir := base
+			if dir == "" {
+				dir = "."
+			}
+
+			if strings.ContainsAny(part, "*?[") {
+				entries, err := fs.ReadDir(dir)
+				if err != nil {
+					if os.IsNotExist(err) {
+						continue
+					}
+					return nil, err
+				}
+				for _, entry := range entries {
+					if entry == nil {
+						continue
+					}
+					name := strings.TrimSpace(entry.Name())
+					if name == "" {
+						continue
+					}
+					ok, err := filepath.Match(part, name)
+					if err != nil || !ok {
+						continue
+					}
+					candidate := filepath.Join(dir, name)
+					if !isLast && !entry.IsDir() {
+						continue
+					}
+					next = append(next, candidate)
+				}
+				continue
+			}
+
+			candidate := filepath.Join(dir, part)
+			if _, err := fs.Stat(candidate); err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, err
+			}
+			next = append(next, candidate)
+		}
+
+		paths = next
+		if len(paths) == 0 {
+			break
+		}
+	}
+
+	return paths, nil
 }
 
 // walkFS recursively walks a filesystem using the provided FS implementation.
