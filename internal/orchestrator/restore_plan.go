@@ -1,6 +1,10 @@
 package orchestrator
 
-import "github.com/tis24dev/proxsave/internal/backup"
+import (
+	"strings"
+
+	"github.com/tis24dev/proxsave/internal/backup"
+)
 
 // RestorePlan contains a pure, side-effect-free description of a restore run.
 type RestorePlan struct {
@@ -9,6 +13,7 @@ type RestorePlan struct {
 	NormalCategories    []Category
 	StagedCategories    []Category
 	ExportCategories    []Category
+	ClusterBackup       bool
 	ClusterSafeMode     bool
 	NeedsClusterRestore bool
 	NeedsPBSServices    bool
@@ -29,6 +34,7 @@ func PlanRestore(
 		NormalCategories: normal,
 		StagedCategories: staged,
 		ExportCategories: export,
+		ClusterBackup:    manifest != nil && strings.EqualFold(strings.TrimSpace(manifest.ClusterMode), "cluster"),
 	}
 
 	plan.NeedsClusterRestore = systemType == SystemTypePVE && hasCategoryID(normal, "pve_cluster")
@@ -74,3 +80,4 @@ func (p *RestorePlan) HasCategoryID(id string) bool {
 	}
 	return hasCategoryID(p.NormalCategories, id) || hasCategoryID(p.StagedCategories, id) || hasCategoryID(p.ExportCategories, id)
 }
+

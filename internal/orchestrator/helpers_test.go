@@ -160,7 +160,7 @@ func TestPathMatchesCategory(t *testing.T) {
 			name:     "absolute path match",
 			filePath: "/etc/hosts",
 			category: Category{Paths: []string{"/etc/hosts"}},
-			want:     false, // current implementation expects ./-prefixed matches
+			want:     true, // absolute paths are normalized to ./ for matching
 		},
 		{
 			name:     "exact match with prefix",
@@ -355,6 +355,9 @@ func TestGetStorageModeCategories(t *testing.T) {
 	}
 	if !pbsIDs["pbs_config"] {
 		t.Error("PBS storage mode should include pbs_config")
+	}
+	if !pbsIDs["pbs_remotes"] {
+		t.Error("PBS storage mode should include pbs_remotes (sync jobs depend on remotes)")
 	}
 	if !pbsIDs["filesystem"] {
 		t.Error("PBS storage mode should include filesystem")

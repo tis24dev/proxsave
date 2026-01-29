@@ -63,6 +63,7 @@ type BackupStats struct {
 	EndTime                   time.Time
 	FilesCollected            int
 	FilesFailed               int
+	FilesNotFound             int
 	DirsCreated               int
 	BytesCollected            int64
 	ArchiveSize               int64
@@ -654,10 +655,11 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	collStats := collector.GetStats()
 	stats.FilesCollected = int(collStats.FilesProcessed)
 	stats.FilesFailed = int(collStats.FilesFailed)
+	stats.FilesNotFound = int(collStats.FilesNotFound)
 	stats.DirsCreated = int(collStats.DirsCreated)
 	stats.BytesCollected = collStats.BytesCollected
 	stats.FilesIncluded = int(collStats.FilesProcessed)
-	stats.FilesMissing = int(collStats.FilesFailed)
+	stats.FilesMissing = int(collStats.FilesNotFound)
 	stats.UncompressedSize = collStats.BytesCollected
 	if pType == types.ProxmoxVE {
 		if collector.IsClusteredPVE() {
@@ -669,6 +671,11 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 
 	if err := o.writeBackupMetadata(tempDir, stats); err != nil {
 		o.logger.Debug("Failed to write backup metadata: %v", err)
+	}
+
+	// Write backup manifest with file status details
+	if err := collector.WriteManifest(hostname); err != nil {
+		o.logger.Debug("Failed to write backup manifest: %v", err)
 	}
 
 	o.logger.Info("Collection completed: %d files (%s), %d failed, %d dirs created",
@@ -745,6 +752,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		o.dryRun,
 		o.cfg != nil && o.cfg.EncryptArchive,
 		ageRecipients,
+		collectorConfig.ExcludePatterns,
 	)
 
 	if err := archiverConfig.Validate(); err != nil {
@@ -1409,10 +1417,10 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) error {
 	fs := o.filesystem()
-	infoDir := filepath.Join(tempDir, "var/lib/proxsave-info")
-	if err := fs.MkdirAll(infoDir, 0755); err != nil {
-		return err
+	if o.dryRun {
+		return nil
 	}
+	infoDir := filepath.Join(tempDir, "var/lib/proxsave-info")
 
 	version := strings.TrimSpace(stats.Version)
 	if version == "" {
@@ -1433,6 +1441,18 @@ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) e
 	builder.WriteString("BACKUP_FEATURES=selective_restore,category_mapping,version_detection,auto_directory_creation\n")
 
 	target := filepath.Join(infoDir, "backup_metadata.txt")
+	patterns := append([]string(nil), o.excludePatterns...)
+	if o.cfg != nil && len(o.cfg.BackupBlacklist) > 0 {
+		patterns = append(patterns, o.cfg.BackupBlacklist...)
+	}
+	if excluded, pattern := backup.FindExcludeMatch(patterns, target, tempDir, ""); excluded {
+		o.logger.Debug("Skipping backup metadata %s (matches pattern %s)", target, pattern)
+		return nil
+	}
+
+	if err := fs.MkdirAll(infoDir, 0755); err != nil {
+		return err
+	}
 	if err := fs.WriteFile(target, []byte(builder.String()), 0640); err != nil {
 		return err
 	}

@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"os"
@@ -30,21 +29,19 @@ func mustCategoryByID(t *testing.T, id string) Category {
 func TestRunRestoreWorkflow_ClusterBackupSafeMode_ExportsClusterAndRestoresNetwork(t *testing.T) {
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
-	origRestorePrompter := restorePrompter
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
 	origCompatFS := compatFS
-	origPrepare := prepareDecryptedBackupFunc
+	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
 	t.Cleanup(func() {
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
-		restorePrompter = origRestorePrompter
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
 		compatFS = origCompatFS
-		prepareDecryptedBackupFunc = origPrepare
+		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
 	})
@@ -84,17 +81,7 @@ func TestRunRestoreWorkflow_ClusterBackupSafeMode_ExportsClusterAndRestoresNetwo
 		t.Fatalf("fakeFS.WriteFile: %v", err)
 	}
 
-	restorePrompter = fakeRestorePrompter{
-		mode: RestoreModeCustom,
-		categories: []Category{
-			mustCategoryByID(t, "network"),
-			mustCategoryByID(t, "pve_cluster"),
-			mustCategoryByID(t, "pve_config_export"),
-		},
-		confirmed: true,
-	}
-
-	prepareDecryptedBackupFunc = func(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (*decryptCandidate, *preparedBundle, error) {
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 		cand := &decryptCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
@@ -112,42 +99,23 @@ func TestRunRestoreWorkflow_ClusterBackupSafeMode_ExportsClusterAndRestoresNetwo
 		return cand, prepared, nil
 	}
 
-	oldIn := os.Stdin
-	oldOut := os.Stdout
-	t.Cleanup(func() {
-		os.Stdin = oldIn
-		os.Stdout = oldOut
-	})
-	inR, inW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	out, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o666)
-	if err != nil {
-		_ = inR.Close()
-		_ = inW.Close()
-		t.Fatalf("OpenFile(%s): %v", os.DevNull, err)
-	}
-	os.Stdin = inR
-	os.Stdout = out
-	t.Cleanup(func() {
-		_ = inR.Close()
-		_ = out.Close()
-	})
-
-	// Cluster restore prompt -> SAFE mode.
-	if _, err := inW.WriteString("1\n"); err != nil {
-		t.Fatalf("WriteString: %v", err)
-	}
-	_ = inW.Close()
-
 	t.Setenv("PATH", "") // ensure pvesh is not found for SAFE apply
 
 	logger := logging.New(types.LogLevelError, false)
 	cfg := &config.Config{BaseDir: "/base"}
+	ui := &fakeRestoreWorkflowUI{
+		mode: RestoreModeCustom,
+		categories: []Category{
+			mustCategoryByID(t, "network"),
+			mustCategoryByID(t, "pve_cluster"),
+			mustCategoryByID(t, "pve_config_export"),
+		},
+		confirmRestore: true,
+		clusterMode:    ClusterRestoreSafe,
+	}
 
-	if err := RunRestoreWorkflow(context.Background(), cfg, logger, "vtest"); err != nil {
-		t.Fatalf("RunRestoreWorkflow error: %v", err)
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 
 	hosts, err := fakeFS.ReadFile("/etc/hosts")
@@ -173,21 +141,19 @@ func TestRunRestoreWorkflow_ClusterBackupSafeMode_ExportsClusterAndRestoresNetwo
 func TestRunRestoreWorkflow_PBSStopsServicesAndChecksZFSWhenSelected(t *testing.T) {
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
-	origRestorePrompter := restorePrompter
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
 	origCompatFS := compatFS
-	origPrepare := prepareDecryptedBackupFunc
+	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
 	t.Cleanup(func() {
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
-		restorePrompter = origRestorePrompter
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
 		compatFS = origCompatFS
-		prepareDecryptedBackupFunc = origPrepare
+		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
 	})
@@ -240,16 +206,7 @@ func TestRunRestoreWorkflow_PBSStopsServicesAndChecksZFSWhenSelected(t *testing.
 		t.Fatalf("fakeFS.WriteFile: %v", err)
 	}
 
-	restorePrompter = fakeRestorePrompter{
-		mode: RestoreModeCustom,
-		categories: []Category{
-			mustCategoryByID(t, "pbs_jobs"),
-			mustCategoryByID(t, "zfs"),
-		},
-		confirmed: true,
-	}
-
-	prepareDecryptedBackupFunc = func(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (*decryptCandidate, *preparedBundle, error) {
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 		cand := &decryptCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
@@ -269,9 +226,17 @@ func TestRunRestoreWorkflow_PBSStopsServicesAndChecksZFSWhenSelected(t *testing.
 
 	logger := logging.New(types.LogLevelError, false)
 	cfg := &config.Config{BaseDir: "/base"}
+	ui := &fakeRestoreWorkflowUI{
+		mode: RestoreModeCustom,
+		categories: []Category{
+			mustCategoryByID(t, "pbs_jobs"),
+			mustCategoryByID(t, "zfs"),
+		},
+		confirmRestore: true,
+	}
 
-	if err := RunRestoreWorkflow(context.Background(), cfg, logger, "vtest"); err != nil {
-		t.Fatalf("RunRestoreWorkflow error: %v", err)
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 
 	if _, err := fakeFS.ReadFile("/etc/proxmox-backup/sync.cfg"); err != nil {
@@ -314,21 +279,19 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
-	origRestorePrompter := restorePrompter
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
 	origCompatFS := compatFS
-	origPrepare := prepareDecryptedBackupFunc
+	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
 	t.Cleanup(func() {
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
-		restorePrompter = origRestorePrompter
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
 		compatFS = origCompatFS
-		prepareDecryptedBackupFunc = origPrepare
+		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
 	})
@@ -370,15 +333,7 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 		t.Fatalf("restoreSandbox.WriteFile: %v", err)
 	}
 
-	restorePrompter = fakeRestorePrompter{
-		mode: RestoreModeCustom,
-		categories: []Category{
-			mustCategoryByID(t, "network"),
-		},
-		confirmed: true,
-	}
-
-	prepareDecryptedBackupFunc = func(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (*decryptCandidate, *preparedBundle, error) {
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 		cand := &decryptCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
@@ -396,40 +351,18 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 		return cand, prepared, nil
 	}
 
-	oldIn := os.Stdin
-	oldOut := os.Stdout
-	t.Cleanup(func() {
-		os.Stdin = oldIn
-		os.Stdout = oldOut
-	})
-	inR, inW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	out, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o666)
-	if err != nil {
-		_ = inR.Close()
-		_ = inW.Close()
-		t.Fatalf("OpenFile(%s): %v", os.DevNull, err)
-	}
-	os.Stdin = inR
-	os.Stdout = out
-	t.Cleanup(func() {
-		_ = inR.Close()
-		_ = out.Close()
-	})
-
-	// Compatibility prompt -> continue; safety backup failure prompt -> continue.
-	if _, err := inW.WriteString("yes\nyes\n"); err != nil {
-		t.Fatalf("WriteString: %v", err)
-	}
-	_ = inW.Close()
-
 	logger := logging.New(types.LogLevelError, false)
 	cfg := &config.Config{BaseDir: "/base"}
+	ui := &fakeRestoreWorkflowUI{
+		mode:              RestoreModeCustom,
+		categories:        []Category{mustCategoryByID(t, "network")},
+		confirmRestore:    true,
+		confirmCompatible: true,
+		continueNoSafety:  true,
+	}
 
-	if err := RunRestoreWorkflow(context.Background(), cfg, logger, "vtest"); err != nil {
-		t.Fatalf("RunRestoreWorkflow error: %v", err)
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 
 	if _, err := restoreSandbox.ReadFile("/etc/hosts"); err != nil {
@@ -440,21 +373,19 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testing.T) {
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
-	origRestorePrompter := restorePrompter
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
 	origCompatFS := compatFS
-	origPrepare := prepareDecryptedBackupFunc
+	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
 	t.Cleanup(func() {
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
-		restorePrompter = origRestorePrompter
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
 		compatFS = origCompatFS
-		prepareDecryptedBackupFunc = origPrepare
+		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
 	})
@@ -506,16 +437,7 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 		t.Fatalf("fakeFS.WriteFile: %v", err)
 	}
 
-	restorePrompter = fakeRestorePrompter{
-		mode: RestoreModeCustom,
-		categories: []Category{
-			mustCategoryByID(t, "network"),
-			mustCategoryByID(t, "pve_cluster"),
-		},
-		confirmed: true,
-	}
-
-	prepareDecryptedBackupFunc = func(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (*decryptCandidate, *preparedBundle, error) {
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 		cand := &decryptCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
@@ -533,40 +455,20 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 		return cand, prepared, nil
 	}
 
-	oldIn := os.Stdin
-	oldOut := os.Stdout
-	t.Cleanup(func() {
-		os.Stdin = oldIn
-		os.Stdout = oldOut
-	})
-	inR, inW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	out, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o666)
-	if err != nil {
-		_ = inR.Close()
-		_ = inW.Close()
-		t.Fatalf("OpenFile(%s): %v", os.DevNull, err)
-	}
-	os.Stdin = inR
-	os.Stdout = out
-	t.Cleanup(func() {
-		_ = inR.Close()
-		_ = out.Close()
-	})
-
-	// Cluster restore prompt -> RECOVERY mode.
-	if _, err := inW.WriteString("2\n"); err != nil {
-		t.Fatalf("WriteString: %v", err)
-	}
-	_ = inW.Close()
-
 	logger := logging.New(types.LogLevelError, false)
 	cfg := &config.Config{BaseDir: "/base"}
+	ui := &fakeRestoreWorkflowUI{
+		mode: RestoreModeCustom,
+		categories: []Category{
+			mustCategoryByID(t, "network"),
+			mustCategoryByID(t, "pve_cluster"),
+		},
+		confirmRestore: true,
+		clusterMode:    ClusterRestoreRecovery,
+	}
 
-	if err := RunRestoreWorkflow(context.Background(), cfg, logger, "vtest"); err != nil {
-		t.Fatalf("RunRestoreWorkflow error: %v", err)
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 
 	for _, want := range []string{

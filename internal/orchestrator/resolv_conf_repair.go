@@ -77,17 +77,23 @@ func maybeRepairResolvConfAfterRestore(ctx context.Context, logger *logging.Logg
 	}
 
 	if strings.TrimSpace(archivePath) != "" {
-		data, err := readTarEntry(ctx, archivePath, "commands/resolv_conf.txt", maxResolvConfSize)
-		if err == nil && hasNameserverEntries(string(data)) {
-			logging.DebugStep(logger, "resolv.conf repair", "Using DNS resolver content from archive commands/resolv_conf.txt")
-			if err := restoreFS.WriteFile(resolvConfPath, normalizeResolvConf(data), 0o644); err != nil {
-				return fmt.Errorf("write %s: %w", resolvConfPath, err)
-			}
-			logger.Info("DNS resolver repaired: restored %s from archive diagnostics", resolvConfPath)
-			return nil
+		candidates := []string{
+			"var/lib/proxsave-info/commands/system/resolv_conf.txt",
+			"commands/resolv_conf.txt",
 		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			logger.Debug("DNS resolver repair: could not read commands/resolv_conf.txt from archive: %v", err)
+		for _, candidate := range candidates {
+			data, err := readTarEntry(ctx, archivePath, candidate, maxResolvConfSize)
+			if err == nil && hasNameserverEntries(string(data)) {
+				logging.DebugStep(logger, "resolv.conf repair", "Using DNS resolver content from archive %s", candidate)
+				if err := restoreFS.WriteFile(resolvConfPath, normalizeResolvConf(data), 0o644); err != nil {
+					return fmt.Errorf("write %s: %w", resolvConfPath, err)
+				}
+				logger.Info("DNS resolver repaired: restored %s from archive diagnostics", resolvConfPath)
+				return nil
+			}
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				logger.Debug("DNS resolver repair: could not read %s from archive: %v", candidate, err)
+			}
 		}
 	}
 
@@ -102,7 +108,8 @@ func maybeRepairResolvConfAfterRestore(ctx context.Context, logger *logging.Logg
 
 func isProxsaveCommandsSymlink(target string) bool {
 	target = filepath.ToSlash(strings.TrimSpace(target))
-	return strings.Contains(target, "commands/resolv_conf.txt")
+	return strings.Contains(target, "var/lib/proxsave-info/commands/system/resolv_conf.txt") ||
+		strings.Contains(target, "commands/resolv_conf.txt")
 }
 
 func removeResolvConfIfPresent() error {

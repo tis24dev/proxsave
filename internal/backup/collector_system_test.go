@@ -106,6 +106,32 @@ func TestCollectCustomPathsHonorsContext(t *testing.T) {
 	}
 }
 
+func TestCollectCriticalFilesIncludesCrypttab(t *testing.T) {
+	collector := newTestCollector(t)
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "crypttab"), []byte("crypt1 UUID=deadbeef none luks\n"), 0o600); err != nil {
+		t.Fatalf("write crypttab: %v", err)
+	}
+
+	if err := collector.collectCriticalFiles(context.Background()); err != nil {
+		t.Fatalf("collectCriticalFiles error: %v", err)
+	}
+
+	dest := filepath.Join(collector.tempDir, "etc", "crypttab")
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("expected crypttab copied, got %v", err)
+	}
+	if string(data) != "crypt1 UUID=deadbeef none luks\n" {
+		t.Fatalf("crypttab content mismatch: %q", string(data))
+	}
+}
+
 func TestCollectSSHKeysCopiesEtcSSH(t *testing.T) {
 	collector := newTestCollector(t)
 
@@ -132,6 +158,64 @@ func TestCollectSSHKeysCopiesEtcSSH(t *testing.T) {
 	}
 	if string(got) != "Port 22\n" {
 		t.Fatalf("copied sshd_config mismatch: %q", string(got))
+	}
+}
+
+func TestCollectRootHomeSkipsSSHKeysWhenDisabled(t *testing.T) {
+	collector := newTestCollector(t)
+
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+	collector.config.BackupSSHKeys = false
+
+	sshDir := filepath.Join(root, "root", ".ssh")
+	if err := os.MkdirAll(sshDir, 0o755); err != nil {
+		t.Fatalf("mkdir /root/.ssh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "id_rsa"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("write id_rsa: %v", err)
+	}
+
+	if err := collector.collectRootHome(context.Background()); err != nil {
+		t.Fatalf("collectRootHome failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "root", ".ssh")); err == nil {
+		t.Fatalf("expected /root/.ssh excluded when BACKUP_SSH_KEYS=false")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat /root/.ssh: %v", err)
+	}
+}
+
+func TestCollectUserHomesSkipsSSHKeysWhenDisabled(t *testing.T) {
+	collector := newTestCollector(t)
+
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+	collector.config.BackupSSHKeys = false
+
+	userHome := filepath.Join(root, "home", "alice")
+	if err := os.MkdirAll(filepath.Join(userHome, ".ssh"), 0o755); err != nil {
+		t.Fatalf("mkdir alice .ssh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userHome, ".ssh", "id_rsa"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("write alice id_rsa: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userHome, "note.txt"), []byte("note"), 0o644); err != nil {
+		t.Fatalf("write note.txt: %v", err)
+	}
+
+	if err := collector.collectUserHomes(context.Background()); err != nil {
+		t.Fatalf("collectUserHomes failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "home", "alice", "note.txt")); err != nil {
+		t.Fatalf("expected note.txt copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "home", "alice", ".ssh")); err == nil {
+		t.Fatalf("expected alice .ssh excluded when BACKUP_SSH_KEYS=false")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat alice .ssh: %v", err)
 	}
 }
 
@@ -283,9 +367,9 @@ func TestCollectSystemDirectoriesCopiesAltNetConfigsAndLeases(t *testing.T) {
 		filepath.Join(collector.tempDir, "etc", "netplan", "01-netcfg.yaml"),
 		filepath.Join(collector.tempDir, "etc", "systemd", "network", "10-eth0.network"),
 		filepath.Join(collector.tempDir, "etc", "NetworkManager", "system-connections", "conn.nmconnection"),
-		filepath.Join(collector.tempDir, "var", "lib", "dhcp", "lease.test"),
-		filepath.Join(collector.tempDir, "var", "lib", "NetworkManager", "lease.test"),
-		filepath.Join(collector.tempDir, "run", "systemd", "netif", "leases", "lease.test"),
+		filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "runtime", "var", "lib", "dhcp", "lease.test"),
+		filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "runtime", "var", "lib", "NetworkManager", "lease.test"),
+		filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "runtime", "run", "systemd", "netif", "leases", "lease.test"),
 	}
 	for _, p := range paths {
 		if _, err := os.Stat(p); err != nil {
@@ -314,12 +398,9 @@ func TestBuildNetworkReportAggregatesOutputs(t *testing.T) {
 		t.Fatalf("failed to write resolv.conf: %v", err)
 	}
 
-	commandsDir := filepath.Join(collector.tempDir, "commands")
-	infoDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info")
-	for _, dir := range []string{commandsDir, infoDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("failed to create dir %s: %v", dir, err)
-		}
+	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "system")
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatalf("failed to create dir %s: %v", commandsDir, err)
 	}
 
 	writeCmd := func(name, content string) {
@@ -341,7 +422,7 @@ func TestBuildNetworkReportAggregatesOutputs(t *testing.T) {
 		t.Fatalf("failed to write bonding status: %v", err)
 	}
 
-	if err := collector.buildNetworkReport(context.Background(), commandsDir, infoDir); err != nil {
+	if err := collector.buildNetworkReport(context.Background(), commandsDir); err != nil {
 		t.Fatalf("buildNetworkReport failed: %v", err)
 	}
 
@@ -357,10 +438,7 @@ func TestBuildNetworkReportAggregatesOutputs(t *testing.T) {
 		}
 	}
 
-	mirror := filepath.Join(infoDir, "network_report.txt")
-	if _, err := os.Stat(mirror); err != nil {
-		t.Fatalf("expected mirrored report at %s: %v", mirror, err)
-	}
+	// Report is written only to the primary directory (no secondary mirror).
 }
 
 func newTestCollector(t *testing.T) *Collector {

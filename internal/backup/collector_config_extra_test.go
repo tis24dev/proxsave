@@ -89,7 +89,7 @@ func TestCollectorConfigValidateRequiresAbsoluteSystemRootPrefix(t *testing.T) {
 }
 
 func TestUniqueCandidatesSkipsEmptyEntries(t *testing.T) {
-	got := uniqueCandidates("", "")
+	got := uniqueCandidates("", "", "")
 	if len(got) != 0 {
 		t.Fatalf("expected no candidates for empty input, got %#v", got)
 	}

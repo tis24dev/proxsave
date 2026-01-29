@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path"
@@ -84,10 +85,16 @@ func buildDecryptPathOptions(cfg *config.Config, logger *logging.Logger) (option
 
 // discoverRcloneBackups lists backup candidates from an rclone remote and returns
 // decrypt candidates backed by that remote (bundles and raw archives).
-func discoverRcloneBackups(ctx context.Context, remotePath string, logger *logging.Logger) (candidates []*decryptCandidate, err error) {
+func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath string, logger *logging.Logger, report ProgressReporter) (candidates []*decryptCandidate, err error) {
 	done := logging.DebugStart(logger, "discover rclone backups", "remote=%s", remotePath)
 	defer func() { done(err) }()
 	start := time.Now()
+
+	timeout := 30 * time.Second
+	if cfg != nil && cfg.RcloneTimeoutConnection > 0 {
+		timeout = time.Duration(cfg.RcloneTimeoutConnection) * time.Second
+	}
+	logging.DebugStep(logger, "discover rclone backups", "per_command_timeout=%s", timeout)
 	// Build full remote path - ensure it ends with ":" if it's just a remote name
 	fullPath := strings.TrimSpace(remotePath)
 	if !strings.Contains(fullPath, ":") {
@@ -98,12 +105,20 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 	logging.DebugStep(logger, "discover rclone backups", "filters=bundle.tar and raw .metadata")
 	logDebug(logger, "Cloud (rclone): listing backups under %s", fullPath)
 	logDebug(logger, "Cloud (rclone): executing: rclone lsf %s", fullPath)
+	if report != nil {
+		report(fmt.Sprintf("Listing cloud path: %s", fullPath))
+	}
 
 	// Use rclone lsf to list files inside the backup directory
-	cmd := exec.CommandContext(ctx, "rclone", "lsf", fullPath)
+	lsfCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(lsfCtx, "rclone", "lsf", fullPath)
 	lsfStart := time.Now()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if errors.Is(lsfCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("timed out while listing rclone remote %s (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w (output: %s)", fullPath, timeout, err, strings.TrimSpace(string(output)))
+		}
 		return nil, fmt.Errorf("failed to list rclone remote %s: %w (output: %s)", fullPath, err, string(output))
 	}
 	logging.DebugStep(logger, "discover rclone backups", "rclone lsf output bytes=%d elapsed=%s", len(output), time.Since(lsfStart))
@@ -140,36 +155,25 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 		return remoteFile + rel
 	}
 
+	type inspectItem struct {
+		kind           decryptSourceType
+		filename       string
+		remoteBundle   string
+		remoteArchive  string
+		remoteMetadata string
+		remoteChecksum string
+	}
+
+	items := make([]inspectItem, 0)
 	for _, filename := range ordered {
-		// Only process bundle files (both plain and age-encrypted)
-		// Valid patterns:
-		//   - *.tar.{gz|xz|zst}.bundle.tar       (plain bundle)
-		//   - *.tar.{gz|xz|zst}.age.bundle.tar   (age-encrypted bundle)
 		switch {
 		case strings.HasSuffix(filename, ".bundle.tar"):
-			remoteFile := joinRemote(fullPath, filename)
-			manifest, err := inspectRcloneBundleManifest(ctx, remoteFile, logger)
-			if err != nil {
-				manifestErrors++
-				logWarning(logger, "Skipping rclone bundle %s: %v", filename, err)
-				continue
-			}
-
-			displayBase := filepath.Base(manifest.ArchivePath)
-			if strings.TrimSpace(displayBase) == "" {
-				displayBase = filepath.Base(filename)
-			}
-			candidates = append(candidates, &decryptCandidate{
-				Manifest:    manifest,
-				Source:      sourceBundle,
-				BundlePath:  remoteFile,
-				DisplayBase: displayBase,
-				IsRclone:    true,
+			items = append(items, inspectItem{
+				kind:         sourceBundle,
+				filename:     filename,
+				remoteBundle: joinRemote(fullPath, filename),
 			})
-			logDebug(logger, "Cloud (rclone): accepted backup bundle: %s", filename)
-
 		case strings.HasSuffix(filename, ".metadata"):
-			// Raw backups: archive + .metadata (+ optional .sha256).
 			archiveName := strings.TrimSuffix(filename, ".metadata")
 			if !strings.Contains(archiveName, ".tar") {
 				nonCandidateEntries++
@@ -186,28 +190,84 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 			if _, ok := snapshot[archiveName+".sha256"]; ok {
 				remoteChecksum = joinRemote(fullPath, archiveName+".sha256")
 			}
+			items = append(items, inspectItem{
+				kind:           sourceRaw,
+				filename:       filename,
+				remoteArchive:  remoteArchive,
+				remoteMetadata: remoteMetadata,
+				remoteChecksum: remoteChecksum,
+			})
+		default:
+			nonCandidateEntries++
+		}
+	}
 
-			manifest, err := inspectRcloneMetadataManifest(ctx, remoteMetadata, remoteArchive, logger)
-			if err != nil {
+	if report != nil {
+		report(fmt.Sprintf("Inspecting %d candidate(s)...", len(items)))
+	}
+
+	for idx, item := range items {
+		if report != nil {
+			report(fmt.Sprintf("Inspecting %d/%d: %s", idx+1, len(items), item.filename))
+		}
+
+		itemCtx, cancel := context.WithTimeout(ctx, timeout)
+		switch item.kind {
+		case sourceBundle:
+			manifest, perr := inspectRcloneBundleManifest(itemCtx, item.remoteBundle, logger)
+			cancel()
+			if perr != nil {
+				if errors.Is(perr, context.DeadlineExceeded) {
+					return nil, fmt.Errorf("timed out while inspecting %s (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w", item.filename, timeout, perr)
+				}
+				if errors.Is(perr, context.Canceled) {
+					return nil, perr
+				}
 				manifestErrors++
-				logWarning(logger, "Skipping rclone metadata %s: %v", filename, err)
+				logWarning(logger, "Skipping rclone bundle %s: %v", item.filename, perr)
+				continue
+			}
+
+			displayBase := filepath.Base(manifest.ArchivePath)
+			if strings.TrimSpace(displayBase) == "" {
+				displayBase = filepath.Base(item.filename)
+			}
+			candidates = append(candidates, &decryptCandidate{
+				Manifest:    manifest,
+				Source:      sourceBundle,
+				BundlePath:  item.remoteBundle,
+				DisplayBase: displayBase,
+				IsRclone:    true,
+			})
+			logDebug(logger, "Cloud (rclone): accepted backup bundle: %s", item.filename)
+
+		case sourceRaw:
+			manifest, perr := inspectRcloneMetadataManifest(itemCtx, item.remoteMetadata, item.remoteArchive, logger)
+			cancel()
+			if perr != nil {
+				if errors.Is(perr, context.DeadlineExceeded) {
+					return nil, fmt.Errorf("timed out while inspecting %s (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w", item.filename, timeout, perr)
+				}
+				if errors.Is(perr, context.Canceled) {
+					return nil, perr
+				}
+				manifestErrors++
+				logWarning(logger, "Skipping rclone metadata %s: %v", item.filename, perr)
 				continue
 			}
 			displayBase := filepath.Base(manifest.ArchivePath)
 			if strings.TrimSpace(displayBase) == "" {
-				displayBase = filepath.Base(archiveName)
+				displayBase = filepath.Base(baseNameFromRemoteRef(item.remoteArchive))
 			}
 			candidates = append(candidates, &decryptCandidate{
 				Manifest:        manifest,
 				Source:          sourceRaw,
-				RawArchivePath:  remoteArchive,
-				RawMetadataPath: remoteMetadata,
-				RawChecksumPath: remoteChecksum,
+				RawArchivePath:  item.remoteArchive,
+				RawMetadataPath: item.remoteMetadata,
+				RawChecksumPath: item.remoteChecksum,
 				DisplayBase:     displayBase,
 				IsRclone:        true,
 			})
-		default:
-			nonCandidateEntries++
 		}
 	}
 
@@ -239,6 +299,14 @@ func discoverRcloneBackups(ctx context.Context, remotePath string, logger *loggi
 	)
 	logDebug(logger, "Cloud (rclone): scanned %d entries, found %d valid backup candidate(s)", len(lines), len(candidates))
 	logDebug(logger, "Cloud (rclone): discovered %d bundle candidate(s) in %s", len(candidates), fullPath)
+
+	if manifestErrors > 0 {
+		if len(candidates) > 0 {
+			logWarning(logger, "Cloud scan summary: %d usable backup(s), %d candidate(s) skipped due to manifest/metadata errors (see warnings above)", len(candidates), manifestErrors)
+		} else if len(items) > 0 {
+			return nil, fmt.Errorf("no usable cloud backups found under %s: %d candidate(s) skipped due to manifest/metadata read errors (timeout=%s). This can happen with slow remotes, rclone failures, or older bundle layouts where metadata is not stored at the beginning. Consider creating a fresh backup or increasing RCLONE_TIMEOUT_CONNECTION; see warnings above for details", fullPath, manifestErrors, timeout)
+		}
+	}
 
 	return candidates, nil
 }

@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -11,7 +10,7 @@ import (
 	"time"
 )
 
-func TestApplyNetworkWithRollbackCLI_RollsBackFilesOnPreflightFailure(t *testing.T) {
+func TestApplyNetworkWithRollbackWithUI_RollsBackFilesOnPreflightFailure(t *testing.T) {
 	origFS := restoreFS
 	origCmd := restoreCmd
 	origTime := restoreTime
@@ -23,7 +22,9 @@ func TestApplyNetworkWithRollbackCLI_RollsBackFilesOnPreflightFailure(t *testing
 		networkDiagnosticsSequence = origSeq
 	})
 
-	restoreFS = NewFakeFS()
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
 	restoreTime = &FakeTime{Current: time.Date(2026, 1, 18, 13, 47, 6, 0, time.UTC)}
 	networkDiagnosticsSequence = 0
 
@@ -50,13 +51,13 @@ func TestApplyNetworkWithRollbackCLI_RollsBackFilesOnPreflightFailure(t *testing
 	}
 	restoreCmd = fake
 
-	reader := bufio.NewReader(strings.NewReader("\n"))
 	logger := newTestLogger()
 	rollbackBackup := "/tmp/proxsave/network_rollback_backup_20260118_134651.tar.gz"
 
-	err := applyNetworkWithRollbackCLI(
+	ui := &fakeRestoreWorkflowUI{confirmAction: true}
+	err := applyNetworkWithRollbackWithUI(
 		context.Background(),
-		reader,
+		ui,
 		logger,
 		rollbackBackup,
 		rollbackBackup,

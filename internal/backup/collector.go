@@ -27,6 +27,8 @@ import (
 type CollectionStats struct {
 	FilesProcessed int64
 	FilesFailed    int64
+	FilesNotFound  int64
+	FilesSkipped   int64
 	DirsCreated    int64
 	BytesCollected int64
 }
@@ -54,6 +56,11 @@ type Collector struct {
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
+
+	// Manifest tracking for backup contents
+	pbsManifest    map[string]ManifestEntry
+	pveManifest    map[string]ManifestEntry
+	systemManifest map[string]ManifestEntry
 }
 
 var osSymlink = os.Symlink
@@ -69,6 +76,14 @@ func (c *Collector) incFilesProcessed() {
 
 func (c *Collector) incFilesFailed() {
 	atomic.AddInt64(&c.stats.FilesFailed, 1)
+}
+
+func (c *Collector) incFilesNotFound() {
+	atomic.AddInt64(&c.stats.FilesNotFound, 1)
+}
+
+func (c *Collector) incFilesSkipped() {
+	atomic.AddInt64(&c.stats.FilesSkipped, 1)
 }
 
 func (c *Collector) incDirsCreated() {
@@ -408,25 +423,70 @@ func (c *Collector) CollectAll(ctx context.Context) error {
 
 // Helper functions
 
-func (c *Collector) shouldExclude(path string) bool {
-	if len(c.config.ExcludePatterns) == 0 {
-		return false
+func FindExcludeMatch(patterns []string, path, tempDir, systemRootPrefix string) (bool, string) {
+	if len(patterns) == 0 {
+		return false, ""
 	}
 
-	candidates := uniqueCandidates(path, c.tempDir)
+	candidates := uniqueCandidates(path, tempDir, systemRootPrefix)
+	if len(candidates) == 0 {
+		return false, ""
+	}
 
-	for _, pattern := range c.config.ExcludePatterns {
+	for _, pattern := range patterns {
 		for _, candidate := range candidates {
 			if matchesGlob(pattern, candidate) {
-				c.logger.Debug("Excluding %s (matches pattern %s)", path, pattern)
-				return true
+				return true, pattern
 			}
 		}
 	}
-	return false
+	return false, ""
 }
 
-func uniqueCandidates(path, tempDir string) []string {
+func (c *Collector) shouldExclude(path string) bool {
+	if c == nil || c.config == nil {
+		return false
+	}
+	excluded, pattern := FindExcludeMatch(c.config.ExcludePatterns, path, c.tempDir, c.config.SystemRootPrefix)
+	if excluded {
+		c.logger.Debug("Excluding %s (matches pattern %s)", path, pattern)
+	}
+	return excluded
+}
+
+func (c *Collector) withTemporaryExcludes(extra []string, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	if c == nil || c.config == nil || len(extra) == 0 {
+		return fn()
+	}
+
+	seen := make(map[string]struct{}, len(extra))
+	normalized := make([]string, 0, len(extra))
+	for _, pattern := range extra {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if _, ok := seen[pattern]; ok {
+			continue
+		}
+		seen[pattern] = struct{}{}
+		normalized = append(normalized, pattern)
+	}
+	if len(normalized) == 0 {
+		return fn()
+	}
+
+	original := append([]string(nil), c.config.ExcludePatterns...)
+	c.config.ExcludePatterns = append(c.config.ExcludePatterns, normalized...)
+	defer func() { c.config.ExcludePatterns = original }()
+
+	return fn()
+}
+
+func uniqueCandidates(path, tempDir, systemRootPrefix string) []string {
 	base := filepath.Base(path)
 	candidates := []string{path}
 	if base != "" && base != "." && base != string(filepath.Separator) {
@@ -439,10 +499,23 @@ func uniqueCandidates(path, tempDir string) []string {
 		}
 	}
 
+	if systemRootPrefix != "" && systemRootPrefix != string(filepath.Separator) {
+		prefix := filepath.Clean(systemRootPrefix)
+		clean := filepath.Clean(path)
+		if clean == prefix || strings.HasPrefix(clean, prefix+string(filepath.Separator)) {
+			if relPrefix, err := filepath.Rel(prefix, clean); err == nil {
+				if relPrefix != "." && relPrefix != "" && relPrefix != ".." && !strings.HasPrefix(relPrefix, ".."+string(filepath.Separator)) {
+					candidates = append(candidates, filepath.Join(string(filepath.Separator), relPrefix))
+				}
+			}
+		}
+	}
+
 	if tempDir != "" {
 		if relTemp, err := filepath.Rel(tempDir, path); err == nil {
 			if relTemp != "." && relTemp != "" && relTemp != ".." {
 				candidates = append(candidates, relTemp)
+				candidates = append(candidates, filepath.Join(string(filepath.Separator), relTemp))
 			}
 		}
 	}
@@ -626,7 +699,8 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 	}
 
 	// Check if this file should be excluded
-	if c.shouldExclude(src) {
+	if c.shouldExclude(src) || c.shouldExclude(dest) {
+		c.incFilesSkipped()
 		return nil
 	}
 
@@ -727,8 +801,9 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 
 	c.logger.Debug("Collecting directory %s: %s -> %s", description, src, dest)
 
-	if c.shouldExclude(src) {
+	if c.shouldExclude(src) || c.shouldExclude(dest) {
 		c.logger.Debug("Skipping directory %s due to exclusion pattern", src)
+		c.incFilesSkipped()
 		return nil
 	}
 
@@ -757,22 +832,21 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 			return err
 		}
 
+		// Calculate relative path and destination path for archive matching.
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		destPath := filepath.Join(dest, relPath)
+
 		// Check if this path should be excluded
-		if c.shouldExclude(path) {
+		if c.shouldExclude(path) || c.shouldExclude(destPath) {
 			// If it's a directory, skip it entirely
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-
-		// Calculate relative path
-		relPath, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-
-		destPath := filepath.Join(dest, relPath)
 
 		if info.IsDir() {
 			if err := c.ensureDir(destPath); err != nil {
@@ -797,6 +871,12 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description string, critical bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+
+	if output != "" && c.shouldExclude(output) {
+		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
+		c.incFilesSkipped()
+		return nil
 	}
 
 	c.logger.Debug("Collecting %s via command: %s > %s", description, cmd, output)
@@ -837,17 +917,11 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 		return nil // Non-critical failure
 	}
 
-	if err := c.ensureDir(filepath.Dir(output)); err != nil {
+	if err := c.writeReportFile(output, out); err != nil {
 		return err
 	}
-	if err := os.WriteFile(output, out, 0640); err != nil {
-		c.incFilesFailed()
-		return fmt.Errorf("failed to write output %s: %w", output, err)
-	}
 
-	c.incFilesProcessed()
 	c.logger.Debug("Successfully collected %s via command: %s", description, cmdString)
-
 	return nil
 }
 
@@ -856,6 +930,12 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, description string, critical bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+
+	if output != "" && c.shouldExclude(output) {
+		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
+		c.incFilesSkipped()
+		return nil
 	}
 
 	cmdParts := strings.Fields(cmd)
@@ -914,16 +994,9 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 		return nil // Non-critical failure
 	}
 
-	if err := c.ensureDir(filepath.Dir(output)); err != nil {
+	if err := c.writeReportFile(output, out); err != nil {
 		return err
 	}
-
-	if err := os.WriteFile(output, out, 0640); err != nil {
-		c.incFilesFailed()
-		return fmt.Errorf("failed to write output %s: %w", output, err)
-	}
-
-	c.incFilesProcessed()
 	c.logger.Debug("Successfully collected %s via PBS-authenticated command: %s", description, cmdString)
 
 	return nil
@@ -934,6 +1007,12 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cmd, output, description, datastoreName string, critical bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+
+	if output != "" && c.shouldExclude(output) {
+		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
+		c.incFilesSkipped()
+		return nil
 	}
 
 	cmdParts := strings.Fields(cmd)
@@ -1012,15 +1091,9 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
 		return nil // Non-critical failure
 	}
 
-	if err := c.ensureDir(filepath.Dir(output)); err != nil {
+	if err := c.writeReportFile(output, out); err != nil {
 		return err
 	}
-	if err := os.WriteFile(output, out, 0640); err != nil {
-		c.incFilesFailed()
-		return fmt.Errorf("failed to write output %s: %w", output, err)
-	}
-
-	c.incFilesProcessed()
 	c.logger.Debug("Successfully collected %s via PBS-authenticated command for datastore %s: %s", description, datastoreName, cmdString)
 
 	return nil
@@ -1076,6 +1149,12 @@ func (c *Collector) IsClusteredPVE() bool {
 }
 
 func (c *Collector) writeReportFile(path string, data []byte) error {
+	if c.shouldExclude(path) {
+		c.logger.Debug("Skipping report file %s due to exclusion pattern", path)
+		c.incFilesSkipped()
+		return nil
+	}
+
 	if c.dryRun {
 		c.logger.Debug("[DRY RUN] Would write report file: %s (%d bytes)", path, len(data))
 		return nil
@@ -1100,6 +1179,12 @@ func (c *Collector) writeReportFile(path string, data []byte) error {
 func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, description string, critical bool) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	if output != "" && c.shouldExclude(output) {
+		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
+		c.incFilesSkipped()
+		return nil, nil
 	}
 
 	parts := strings.Fields(cmd)

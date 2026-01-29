@@ -383,7 +383,7 @@ RETENTION_YEARLY=3
 | `CLOUD_PARALLEL_MAX_JOBS` | `2` | Max concurrent uploads (parallel mode) |
 | `CLOUD_PARALLEL_VERIFICATION` | `true` | Verify checksums after upload |
 | `CLOUD_WRITE_HEALTHCHECK` | `false` | Use write test for connectivity check |
-| `RCLONE_TIMEOUT_CONNECTION` | `30` | Connection timeout (seconds). Also used by restore/decrypt when scanning cloud backups (list + manifest read). |
+| `RCLONE_TIMEOUT_CONNECTION` | `30` | Per-command timeout (seconds). Also used by restore/decrypt cloud scan (`rclone lsf` + per-backup manifest/metadata read). |
 | `RCLONE_TIMEOUT_OPERATION` | `300` | Operation timeout (seconds) |
 | `RCLONE_BANDWIDTH_LIMIT` | _(empty)_ | Upload rate limit (e.g., `5M` = 5 MB/s) |
 | `RCLONE_TRANSFERS` | `4` | Number of parallel transfers |
@@ -437,7 +437,7 @@ path inside the remote, and uses that consistently for:
 - **uploads** (cloud backend);
 - **cloud retention**;
 - **restore / decrypt menus** (entry “Cloud backups (rclone)”).
-  - Restore/decrypt cloud scanning is protected by `RCLONE_TIMEOUT_CONNECTION` (increase it on slow remotes or very large directories).
+  - Restore/decrypt cloud scanning applies `RCLONE_TIMEOUT_CONNECTION` per rclone command (the timer resets on each `lsf`/manifest read).
 
 You can choose the style you prefer; they are equivalent from the tool’s point of view.
 
@@ -617,7 +617,7 @@ rm /tmp/test*.txt
 | `couldn't find configuration section 'gdrive'` | Remote not configured | `rclone config` → create remote |
 | `401 unauthorized` | Credentials expired | `rclone config reconnect gdrive` or regenerate keys |
 | `connection timeout (30s)` | Slow network | Increase `RCLONE_TIMEOUT_CONNECTION=60` |
-| `Timed out while scanning ... (rclone)` | Slow remote / huge directory | Increase `RCLONE_TIMEOUT_CONNECTION` and re-try restore/decrypt scan |
+| `Timed out while scanning ... (rclone)` | Slow remote / huge directory | Increase `RCLONE_TIMEOUT_CONNECTION` and ensure the remote path points to the directory that contains the backups (scan is non-recursive) |
 | `operation timeout (300s exceeded)` | Large file + slow network | Increase `RCLONE_TIMEOUT_OPERATION=900` |
 | `429 Too Many Requests` | API rate limiting | Reduce `RCLONE_TRANSFERS=2`, increase `CLOUD_BATCH_PAUSE=3` |
 | `directory not found` | Path doesn't exist | `rclone mkdir gdrive:pbs-backups` |

@@ -121,6 +121,54 @@ func run() int {
 		return types.ExitSuccess.Int()
 	}
 
+	if args.CleanupGuards {
+		incompatible := make([]string, 0, 8)
+		if args.Support {
+			incompatible = append(incompatible, "--support")
+		}
+		if args.Restore {
+			incompatible = append(incompatible, "--restore")
+		}
+		if args.Decrypt {
+			incompatible = append(incompatible, "--decrypt")
+		}
+		if args.Install {
+			incompatible = append(incompatible, "--install")
+		}
+		if args.NewInstall {
+			incompatible = append(incompatible, "--new-install")
+		}
+		if args.Upgrade {
+			incompatible = append(incompatible, "--upgrade")
+		}
+		if args.ForceNewKey {
+			incompatible = append(incompatible, "--newkey")
+		}
+		if args.EnvMigration || args.EnvMigrationDry {
+			incompatible = append(incompatible, "--env-migration/--env-migration-dry-run")
+		}
+		if args.UpgradeConfig || args.UpgradeConfigDry {
+			incompatible = append(incompatible, "--upgrade-config/--upgrade-config-dry-run")
+		}
+
+		if len(incompatible) > 0 {
+			bootstrap.Error("--cleanup-guards cannot be combined with: %s", strings.Join(incompatible, ", "))
+			return types.ExitConfigError.Int()
+		}
+
+		level := types.LogLevelInfo
+		if args.LogLevel != types.LogLevelNone {
+			level = args.LogLevel
+		}
+		logger := logging.New(level, false)
+
+		if err := orchestrator.CleanupMountGuards(ctx, logger, args.DryRun); err != nil {
+			bootstrap.Error("ERROR: %v", err)
+			return types.ExitGenericError.Int()
+		}
+		return types.ExitSuccess.Int()
+	}
+
 	// Validate support mode compatibility with other CLI modes
 	logging.DebugStepBootstrap(bootstrap, "main run", "support_mode=%v", args.Support)
 	if args.Support {
@@ -560,7 +608,6 @@ func run() int {
 	// If the installed version is up to date, nothing is printed at INFO/WARNING level
 	// (only a DEBUG message is logged). If a newer version exists, a WARNING is emitted
 	// suggesting the use of --upgrade.
-	logging.DebugStep(logger, "main", "checking for updates")
 	updateInfo := checkForUpdates(ctx, logger, toolVersion)
 
 	// Apply backup permissions (optional, Bash-compatible behavior)
@@ -990,7 +1037,7 @@ func run() int {
 		}
 	}()
 
-	logging.Debug("✓ Pre-backup checks configured")
+	logging.Info("✓ Pre-backup checks configured")
 	fmt.Println()
 
 	// Initialize storage backends
@@ -1688,9 +1735,14 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	logger.Debug("Checking for ProxSave updates (current: %s)", currentVersion)
+
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo)
+	logger.Debug("Fetching latest release from GitHub: %s", apiURL)
+
 	_, latestVersion, err := fetchLatestRelease(checkCtx)
 	if err != nil {
-		logger.Debug("Update check skipped (GitHub unreachable): %v", err)
+		logger.Debug("Update check skipped: GitHub unreachable: %v", err)
 		return &UpdateInfo{
 			NewVersion: false,
 			Current:    currentVersion,
@@ -1707,7 +1759,7 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 	}
 
 	if !isNewerVersion(currentVersion, latestVersion) {
-		logger.Debug("Update check: current version (%s) is up to date (latest: %s)", currentVersion, latestVersion)
+		logger.Debug("Update check completed: latest=%s current=%s (up to date)", latestVersion, currentVersion)
 		return &UpdateInfo{
 			NewVersion: false,
 			Current:    currentVersion,
@@ -1715,7 +1767,8 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 		}
 	}
 
-	logger.Warning("A newer ProxSave version is available %s (current %s): consider running 'proxsave --upgrade' to install the latest release.", latestVersion, currentVersion)
+	logger.Debug("Update check completed: latest=%s current=%s (new version available)", latestVersion, currentVersion)
+	logger.Warning("New ProxSave version %s (current %s): run 'proxsave --upgrade' to install.", latestVersion, currentVersion)
 
 	return &UpdateInfo{
 		NewVersion: true,

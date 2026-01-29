@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 
 func TestPatchIfupdown2NlcacheNodadSignature_AppliesAndBacksUp(t *testing.T) {
 	fs := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fs.Root) })
 
 	const nlcachePath = "/usr/share/ifupdown2/lib/nlcache.py"
 	orig := []byte("x\n" +
@@ -51,6 +53,7 @@ func TestPatchIfupdown2NlcacheNodadSignature_AppliesAndBacksUp(t *testing.T) {
 
 func TestPatchIfupdown2NlcacheNodadSignature_SkipsIfAlreadyPatched(t *testing.T) {
 	fs := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fs.Root) })
 
 	const nlcachePath = "/usr/share/ifupdown2/lib/nlcache.py"
 	orig := []byte("def addr_add_dry_run(self, ifname, addr, broadcast=None, peer=None, scope=None, preferred_lifetime=None, metric=None, nodad=False):\n")

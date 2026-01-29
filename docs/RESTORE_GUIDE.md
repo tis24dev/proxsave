@@ -71,46 +71,68 @@ The `--restore` command provides an **interactive, category-based restoration sy
 ### What Does NOT Get Restored
 
 - VM/CT disk images (use Proxmox native tools)
-- Application data (databases, user data)
+- Application data (databases and app state under `/var/lib/*`)
 - System packages (use apt/dpkg)
-- Active cluster filesystem (`/etc/pve` - export-only)
+- Direct tar extraction writes to the pmxcfs mount (`/etc/pve`) (ProxSave uses staged apply: API or controlled pmxcfs file apply)
 
 ---
 
 ## Category System
 
-Restore operations are organized into **15+ categories** that group related configuration files.
+Restore operations are organized into **20–21 categories** (depending on PVE vs PBS) that group related configuration files.
 
-### PVE-Specific Categories (6 categories)
+### Category Handling Types
+
+Each category is handled in one of three ways:
+
+- **Normal**: extracted directly to `/` (system paths) after safety backup
+- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or `pvesh`)
+- **Export-only**: extracted to an export directory for manual review (never written to system paths)
+
+### PVE-Specific Categories (10 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
 | `pve_config_export` | PVE Config Export | **Export-only** copy of /etc/pve (never written to system) | `./etc/pve/` |
 | `pve_cluster` | PVE Cluster Configuration | Cluster configuration and database | `./var/lib/pve-cluster/` |
-| `storage_pve` | PVE Storage Configuration | Storage definitions | `./etc/vzdump.conf` |
-| `pve_jobs` | PVE Backup Jobs | Scheduled backup jobs | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
+| `storage_pve` | PVE Storage Configuration | **Staged** storage definitions (applied via API) + VZDump config | `./etc/pve/storage.cfg`<br>`./etc/pve/datacenter.cfg`<br>`./etc/vzdump.conf` |
+| `pve_jobs` | PVE Backup Jobs | **Staged** scheduled backup jobs (applied via API) | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
+| `pve_notifications` | PVE Notifications | **Staged** notification targets and matchers (applied via API) | `./etc/pve/notifications.cfg`<br>`./etc/pve/priv/notifications.cfg` |
+| `pve_access_control` | PVE Access Control | **Staged** access control + secrets restored 1:1 via pmxcfs file apply (root@pam safety rail) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg`<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
+| `pve_firewall` | PVE Firewall | **Staged** firewall rules and node host firewall (pmxcfs file apply + rollback timer) | `./etc/pve/firewall/`<br>`./etc/pve/nodes/*/host.fw` |
+| `pve_ha` | PVE High Availability (HA) | **Staged** HA resources/groups/rules (pmxcfs file apply + rollback timer) | `./etc/pve/ha/resources.cfg`<br>`./etc/pve/ha/groups.cfg`<br>`./etc/pve/ha/rules.cfg` |
 | `corosync` | Corosync Configuration | Cluster communication settings | `./etc/corosync/` |
 | `ceph` | Ceph Configuration | Ceph storage cluster config | `./etc/ceph/` |
 
-### PBS-Specific Categories (3 categories)
+### PBS-Specific Categories (9 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
-| `pbs_config` | PBS Configuration | Main PBS configuration | `./etc/proxmox-backup/` |
-| `datastore_pbs` | PBS Datastore Configuration | Datastore definitions | `./etc/proxmox-backup/datastore.cfg` |
-| `pbs_jobs` | PBS Jobs | Sync, verify, prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
+| `pbs_config` | PBS Config Export | **Export-only** copy of /etc/proxmox-backup (never written to system) | `./etc/proxmox-backup/` |
+| `pbs_host` | PBS Host & Integrations | **Staged** node settings, ACME, proxy, metric servers and traffic control | `./etc/proxmox-backup/node.cfg`<br>`./etc/proxmox-backup/proxy.cfg`<br>`./etc/proxmox-backup/acme/accounts.cfg`<br>`./etc/proxmox-backup/acme/plugins.cfg`<br>`./etc/proxmox-backup/metricserver.cfg`<br>`./etc/proxmox-backup/traffic-control.cfg` |
+| `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions (incl. S3 endpoints) | `./etc/proxmox-backup/datastore.cfg`<br>`./etc/proxmox-backup/s3.cfg` |
+| `maintenance_pbs` | PBS Maintenance | Maintenance settings | `./etc/proxmox-backup/maintenance.cfg` |
+| `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
+| `pbs_remotes` | PBS Remotes | **Staged** remotes for sync/verify (may include credentials) | `./etc/proxmox-backup/remote.cfg` |
+| `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers | `./etc/proxmox-backup/notifications.cfg`<br>`./etc/proxmox-backup/notifications-priv.cfg` |
+| `pbs_access_control` | PBS Access Control | **Staged** access control + secrets restored 1:1 (root@pam safety rail) | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json` |
+| `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`<br>`./etc/proxmox-backup/tape-job.cfg`<br>`./etc/proxmox-backup/media-pool.cfg`<br>`./etc/proxmox-backup/tape-encryption-keys.json` |
 
-### Common Categories (7 categories)
+### Common Categories (11 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
-| `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
-| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/proxmox-backup/proxy.pem` |
+| `filesystem` | Filesystem Configuration | Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot | `./etc/fstab` |
+| `storage_stack` | Storage Stack (Mounts/Targets) | Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab) | `./etc/crypttab`<br>`./etc/iscsi/`<br>`./var/lib/iscsi/`<br>`./etc/multipath/`<br>`./etc/multipath.conf`<br>`./etc/mdadm/`<br>`./etc/lvm/backup/`<br>`./etc/lvm/archive/`<br>`./etc/autofs.conf`<br>`./etc/auto.master`<br>`./etc/auto.master.d/`<br>`./etc/auto.*` |
+| `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/netplan/`<br>`./etc/systemd/network/`<br>`./etc/NetworkManager/system-connections/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
+| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/ssl/`<br>`./etc/proxmox-backup/proxy.pem`<br>`./etc/proxmox-backup/proxy.key`<br>`./etc/proxmox-backup/ssl/` |
 | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
 | `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
 | `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |
-| `services` | System Services | Systemd service configs and udev rules | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/` |
+| `services` | System Services | Systemd service configs and related system settings | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/`<br>`./etc/apt/`<br>`./etc/logrotate.d/`<br>`./etc/timezone`<br>`./etc/sysctl.conf`<br>`./etc/sysctl.d/`<br>`./etc/modprobe.d/`<br>`./etc/modules`<br>`./etc/iptables/`<br>`./etc/nftables.conf`<br>`./etc/nftables.d/` |
+| `user_data` | User Data (Home Directories) | Root and user home directories (/root and /home) | `./root/`<br>`./home/` |
 | `zfs` | ZFS Configuration | ZFS pool cache and configs | `./etc/zfs/`<br>`./etc/hostid` |
+| `proxsave_info` | ProxSave Diagnostics (Export Only) | **Export-only** ProxSave command outputs and inventory reports (never written to system) | `./var/lib/proxsave-info/`<br>`./manifest.json` |
 
 ### Category Availability
 
@@ -118,6 +140,42 @@ Not all categories are available in every backup. The restore workflow:
 1. Analyzes the backup archive
 2. Detects which categories contain files
 3. Displays only available categories for selection
+
+### PVE Access Control 1:1 (pve_access_control)
+
+On standalone PVE restores (non-cluster backups), ProxSave restores `pve_access_control` **1:1** by applying staged files directly to the pmxcfs mount (`/etc/pve`):
+- `/etc/pve/user.cfg` + `/etc/pve/domains.cfg`
+- `/etc/pve/priv/{shadow,token,tfa}.cfg`
+
+**Root safety rail**:
+- `root@pam` is preserved from the fresh install (not imported from the backup).
+- ProxSave forces `root@pam` to keep `Administrator` on `/` (propagate), to prevent lockout.
+
+**Cluster backups**:
+- In cluster SAFE mode, ProxSave does **not** auto-apply 1:1 access control (including secrets). Use cluster RECOVERY (isolated/offline) for full fidelity.
+
+**TFA**:
+- Restored 1:1. Default behavior is **warn** (do not disable users). Some methods (notably WebAuthn) may require re-enrollment if the hostname/FQDN/origin changes.
+- For maximum 1:1, keep the same URL origin (same FQDN/hostname and port), restore `network` + `ssl`, and avoid accessing the UI via raw IP.
+- In CUSTOM mode, if you select access control without `network`/`ssl`, ProxSave suggests adding them to maximize WebAuthn compatibility.
+
+---
+
+### PBS Access Control 1:1 (pbs_access_control)
+
+ProxSave restores `pbs_access_control` by applying staged files to `/etc/proxmox-backup`:
+- `/etc/proxmox-backup/{user,domains,token}.cfg` (when present)
+- `/etc/proxmox-backup/acl.cfg`
+- `/etc/proxmox-backup/{shadow.json,token.shadow,tfa.json}` (when present)
+
+**Root safety rail**:
+- `root@pam` is preserved from the fresh install (not imported from the backup).
+- ProxSave forces `root@pam` to keep `Admin` on `/`, to prevent lockout.
+
+**TFA**:
+- Restored 1:1. Default behavior is **warn** (do not disable users). Some methods (notably WebAuthn) may require re-enrollment if the hostname/FQDN/origin changes.
+- For maximum 1:1, keep the same URL origin (same FQDN/hostname and port), restore `network` + `ssl`, and avoid accessing the UI via raw IP.
+- In CUSTOM mode, if you select access control without `network`/`ssl`, ProxSave suggests adding them to maximize WebAuthn compatibility.
 
 ---
 
@@ -134,7 +192,10 @@ Four predefined modes provide common restoration scenarios, plus custom selectio
 - Migrating to new hardware
 - Restoring after system failure
 
-**Categories Included**: All available categories (export-only categories such as `pve_config_export` are extracted to the export directory for manual application)
+**Categories Included**: All available categories
+- **Normal** categories are restored to system paths
+- **Staged** categories are extracted under `/tmp/proxsave/restore-stage-*` and applied automatically (API/file apply)
+- **Export-only** categories (e.g. `pve_config_export`, `pbs_config`) are extracted to the export directory for manual review/application
 
 **Command Flow**:
 ```
@@ -155,14 +216,19 @@ Select restore mode:
 
 **PVE Categories**:
 - `pve_cluster` - Cluster configuration
-- `storage_pve` - Storage definitions
+- `storage_pve` - Storage + datacenter + vzdump config (staged apply)
 - `pve_jobs` - Backup jobs
+- `filesystem` - /etc/fstab
+- `storage_stack` - Storage stack config (mount prerequisites)
 - `zfs` - ZFS configuration
 
 **PBS Categories**:
-- `pbs_config` - PBS configuration
-- `datastore_pbs` - Datastore definitions
-- `pbs_jobs` - Sync/verify/prune jobs
+- `datastore_pbs` - Datastore definitions (staged apply)
+- `maintenance_pbs` - Maintenance settings
+- `pbs_jobs` - Sync/verify/prune jobs (staged apply)
+- `pbs_remotes` - Remotes for sync jobs (staged apply)
+- `filesystem` - /etc/fstab
+- `storage_stack` - Storage stack config (mount prerequisites)
 - `zfs` - ZFS configuration
 
 **Command Flow**:
@@ -188,6 +254,7 @@ Select restore mode:
 - `ssl` - SSL/TLS certificates
 - `ssh` - SSH daemon configuration (`/etc/ssh`) and SSH keys (root/home users)
 - `services` - Systemd service configs and udev rules
+- `filesystem` - /etc/fstab (Smart merge prompt)
 
 **Command Flow**:
 ```
@@ -319,8 +386,8 @@ Phase 12: Export-Only Extraction
 Phase 13: pvesh SAFE Apply (Cluster SAFE Mode Only)
   ├─ Scan exported VM/CT configs
   ├─ Offer to apply via pvesh API
-  ├─ Offer to apply storage.cfg via pvesh
-  └─ Offer to apply datacenter.cfg via pvesh
+  ├─ Offer to apply storage/datacenter via pvesh (only if `storage_pve` is NOT selected)
+  └─ Otherwise handled by `storage_pve` staged restore
 
 Phase 14: Post-Restore Tasks
   ├─ Optional: Apply restored network config with rollback timer (requires COMMIT)
@@ -424,24 +491,43 @@ See [Cluster Restore Modes](#cluster-restore-modes-safe-vs-recovery) for detaile
 RESTORE PLAN
 ═══════════════════════════════════════════════════════════════
 
-Restore mode: STORAGE only (4 categories)
+Restore mode: STORAGE only (cluster + storage + jobs + mounts)
 System type:  Proxmox Virtual Environment (PVE)
 
 Categories to restore:
   1. PVE Cluster Configuration
      Proxmox VE cluster configuration and database
-  2. PVE Storage Configuration
-     Storage definitions and backup jobs
+	  2. PVE Storage Configuration
+	     Storage definitions (applied via API) and VZDump configuration
   3. PVE Backup Jobs
-     Scheduled backup jobs
-  4. ZFS Configuration
-     ZFS pool cache and configs
+     Scheduled backup job definitions
+  4. Filesystem Configuration
+     Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot
+  5. Storage Stack (Mounts/Targets)
+     Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab)
+  6. ZFS Configuration
+     ZFS pool cache and configuration files
 
-Files/directories that will be restored:
-  • /var/lib/pve-cluster/
-  • /etc/vzdump.conf
-  • /etc/pve/jobs.cfg
-  • /etc/pve/vzdump.cron
+	Files/directories that will be restored:
+	  • /var/lib/pve-cluster/
+	  • /etc/pve/storage.cfg
+	  • /etc/pve/datacenter.cfg
+	  • /etc/vzdump.conf
+	  • /etc/pve/jobs.cfg
+	  • /etc/pve/vzdump.cron
+	  • /etc/fstab
+  • /etc/crypttab
+  • /etc/iscsi/
+  • /var/lib/iscsi/
+  • /etc/multipath/
+  • /etc/multipath.conf
+  • /etc/mdadm/
+  • /etc/lvm/backup/
+  • /etc/lvm/archive/
+  • /etc/autofs.conf
+  • /etc/auto.master
+  • /etc/auto.master.d/
+  • /etc/auto.*
   • /etc/zfs/
   • /etc/hostid
 
@@ -1069,9 +1155,15 @@ Hard guard in code prevents ANY write to /etc/pve when restoring to /
 (see internal/orchestrator/restore.go:880-884)
 ```
 
+### Export-Only Category: pbs_config
+
+**Category**: `pbs_config`  
+**Path**: `./etc/proxmox-backup/`  
+**Reason**: The full PBS configuration directory contains high-risk and secret-bearing files; ProxSave restores specific subsets via staged categories (e.g. `pbs_access_control`, `pbs_notifications`, `pbs_remotes`) and leaves the full directory as export-only for manual review.
+
 ### Export Process
 
-**Two-Pass Extraction**:
+**Extraction Passes**:
 ```
 Pass 1: Normal Categories
   ├─ Destination: / (system root)
@@ -1081,9 +1173,14 @@ Pass 1: Normal Categories
 
 Pass 2: Export-Only Categories
   ├─ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
-  ├─ Categories: Only export-only (pve_config_export)
+  ├─ Categories: Export-only (e.g. pve_config_export, pbs_config)
   ├─ Safety backup: Not created (not overwriting system)
   └─ Log: Separate section in same log file
+
+Pass 3: Staged Categories
+  ├─ Destination: /tmp/proxsave/restore-stage-*
+  ├─ Categories: Sensitive staged apply (e.g. network, notifications, access control)
+  └─ Apply: Written after extraction via safe file/API apply steps
 ```
 
 **Export Directory Structure**:
@@ -1163,8 +1260,9 @@ Pass 2: Export-Only Categories
 ### Export-Only in Custom Mode
 
 **Visibility**:
-- Export-only categories **NOT shown** in Full/Storage/Base modes
-- **Only available** in Custom selection mode
+- In **FULL restore**, export-only categories are included automatically (but extracted to a separate export directory)
+- In **STORAGE** and **SYSTEM BASE** modes, export-only categories are not included
+- In **CUSTOM selection**, you can explicitly select export-only categories
 
 **Selection**:
 ```
@@ -1647,7 +1745,7 @@ Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort: _
 - If the user does not answer before the countdown reaches 0, ProxSave proceeds with a **safe default** (no destructive action) and logs the decision.
 
 Current auto-skip prompts:
-- **Smart `/etc/fstab` merge**: defaults to **Skip** (no changes).
+- **Smart `/etc/fstab` merge**: defaults to **Skip** unless the backup root (and swap, when comparable) match the current system; when they match, the default is **Yes**.
 - **Live network apply** (“Apply restored network configuration now…”): defaults to **No** (stays staged/on-disk only; no live reload).
 
 ### 3. Compatibility Validation
@@ -1793,10 +1891,12 @@ If the restore includes filesystem configuration (notably `/etc/fstab`), ProxSav
 - Compares the current `/etc/fstab` with the backup copy.
 - Keeps existing critical entries (for example, root and swap) when they already match the running system.
 - Detects **safe mount candidates** from the backup (for example, additional NFS mounts) and offers to add them.
+- If ProxSave inventory data is present in the backup, ProxSave can remap **unstable** `/dev/*` devices from the backup (for example `/dev/sdb1`) to stable `UUID=`/`PARTUUID=`/`LABEL=` references **on the restore host** (only when the stable reference exists on the system).
+- Normalizes restored entries by adding `nofail` (and `_netdev` for network mounts) so offline storage does not block boot/restore.
 
 **Safety behavior**:
 - The user is prompted before any change is written.
-- The prompt includes a **90-second** countdown; if you do not answer in time, ProxSave defaults to **Skip** (no changes).
+- The prompt includes a **90-second** countdown; if you do not answer in time, ProxSave uses a safe default (**Skip** unless root/swap match, in which case the default is **Yes**).
 
 ### 6. Hard Guards
 
@@ -1814,6 +1914,18 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 }
 ```
 - Absolute prevention of `/etc/pve` corruption
+
+**PBS Datastore Mount Guards**:
+- When restoring PBS datastore definitions, ProxSave can apply a temporary mount guard (read-only bind mount; fallback `chattr +i`) on mount roots that currently resolve to the root filesystem.
+- Purpose: prevent accidental writes to `/` if a datastore mountpoint is missing/offline at restore time (PBS will show the datastore as unavailable until storage is mounted).
+- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview).
+
+**PVE Storage Mount Guards**:
+- When restoring PVE storage definitions (from `storage.cfg`), ProxSave applies the same “restore even if offline” strategy for mount-backed storage:
+  - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use mountpoints under `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary mount guard (read-only bind mount; fallback `chattr +i`).
+  - `dir` storages are guarded only when their `path` lives under a mountpoint restored via `/etc/fstab` (to avoid guarding local root filesystem paths).
+- Purpose: prevent PVE from writing into `/mnt/pve/...` (or other mount roots) when the backing storage is offline at restore time.
+- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview).
 
 ### 7. Service Management Fail-Fast
 
@@ -2163,19 +2275,21 @@ zpool import <pool-name>
 
 # If directory-based datastore (non-ZFS), verify permissions for backup user
 # NOTE:
-# - On live restores, ProxSave stages PBS datastore/job configuration first under `/tmp/proxsave/restore-stage-*`
-#   and applies it safely after checking the current system state.
-# - If a datastore path looks like a mountpoint location (e.g. under `/mnt`) but resolves to the root filesystem,
-#   ProxSave will **defer** that datastore definition (it will NOT be written to `datastore.cfg`), to avoid ending up
-#   with a broken datastore entry that blocks re-creation on a new/empty disk. Deferred entries are saved under
-#   `/tmp/proxsave/datastore.cfg.deferred.*` for manual review.
-# - ProxSave may create missing datastore directories and fix `.lock`/ownership, but it will NOT format disks.
-# - To avoid accidental writes to the wrong disk, ProxSave will skip datastore directory initialization if the
-#   datastore path looks like a mountpoint location (e.g. under /mnt) but resolves to the root filesystem.
-#   In that case, mount/import the datastore disk/pool first, then restart PBS (or re-run restore).
-# - If the datastore path is not empty and contains unexpected files/directories, ProxSave will not touch it.
+# - ProxSave runs filesystem mount restore (Smart `/etc/fstab` merge) before applying PBS datastore configuration.
+# - Datastore definitions are applied even if the underlying storage is offline/not mounted (PBS will show them as unavailable),
+#   so you do not lose datastore entries after a restore.
+# - If a datastore path looks like a mount-root location (e.g. under `/mnt`) but currently resolves to the root filesystem,
+#   ProxSave applies a temporary **mount guard** (read-only bind mount; fallback `chattr +i`) on the mount root to prevent writes to `/`
+#   until the storage becomes available. When the real storage is mounted later, it overlays the guard and the datastore becomes available.
+# - If the datastore path is not empty and contains unexpected files/directories (not a PBS datastore), ProxSave will defer that datastore block
+#   and save it under `/tmp/proxsave/datastore.cfg.deferred.*` for manual review.
+# - ProxSave does not format disks or import ZFS pools: mount/import the underlying storage first, then restart PBS.
 ls -ld /mnt/datastore /mnt/datastore/<DatastoreName> 2>/dev/null
 namei -l /mnt/datastore/<DatastoreName> 2>/dev/null || true
+
+# If you need to remove ProxSave mount guards (optional / troubleshooting, run as root):
+./build/proxsave --cleanup-guards --dry-run
+./build/proxsave --cleanup-guards
 
 # Common fix (adjust to your datastore path)
 chown backup:backup /mnt/datastore && chmod 750 /mnt/datastore
@@ -2186,14 +2300,14 @@ chown -R backup:backup /mnt/datastore/<DatastoreName> && chmod 750 /mnt/datastor
 
 **Issue: "Bad Request (400) unable to read /etc/resolv.conf (No such file or directory)"**
 
-**Cause**: `/etc/resolv.conf` is missing or a broken symlink. This can happen after a restore if a previous backup contained an invalid symlink (e.g. pointing to `../commands/resolv_conf.txt`), or if the target system uses `systemd-resolved` and the expected `/run/systemd/resolve/*` files are not present.
+**Cause**: `/etc/resolv.conf` is missing or a broken symlink. This can happen after a restore if a previous backup contained an invalid symlink (e.g. pointing to `../var/lib/proxsave-info/commands/system/resolv_conf.txt` or legacy `../commands/resolv_conf.txt`), or if the target system uses `systemd-resolved` and the expected `/run/systemd/resolve/*` files are not present.
 
 **Solution**:
 ```bash
 ls -la /etc/resolv.conf
 readlink /etc/resolv.conf 2>/dev/null || true
 
-# If the link is broken or points to commands/resolv_conf.txt, replace it:
+# If the link is broken or points to a proxsave diagnostics file, replace it:
 rm -f /etc/resolv.conf
 
 if [ -e /run/systemd/resolve/resolv.conf ]; then
@@ -2568,10 +2682,10 @@ A: Yes, in two ways:
      `CLOUD_REMOTE` / `CLOUD_REMOTE_PATH` combination and show an entry:
        - `Cloud backups (rclone)`
    - When selected, the tool:
-     - lists `.bundle.tar` bundles on the remote with `rclone lsf`;
-     - reads metadata/manifest via `rclone cat` (without downloading everything);
+     - lists backup candidates on the remote with `rclone lsf` (`.bundle.tar` bundles and legacy `.metadata`+archive pairs);
+     - reads the manifest/metadata via `rclone cat` (without downloading full archives; for bundles the manifest is at the beginning, so this is typically fast);
      - when you pick a backup, downloads it to `/tmp/proxsave` and proceeds with decrypt/restore.
-   - If scanning times out (slow remote / huge directory), increase `RCLONE_TIMEOUT_CONNECTION` and retry.
+   - Cloud scan applies `RCLONE_TIMEOUT_CONNECTION` per rclone command (the timer resets on each list/inspect step). If scanning times out (slow remote / huge directory), increase `RCLONE_TIMEOUT_CONNECTION` and retry. Also ensure the selected remote path points directly to the directory that contains the backups (scan is non-recursive).
 
 2. **From a local rclone mount (restore-only)**  
    If you prefer to mount the rclone backend as a local filesystem:

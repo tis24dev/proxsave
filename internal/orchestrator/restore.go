@@ -64,545 +64,15 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
 	}
+
+	if logger == nil {
+		logger = logging.GetDefaultLogger()
+	}
 	done := logging.DebugStart(logger, "restore workflow (cli)", "version=%s", version)
 	defer func() { done(err) }()
 
-	restoreHadWarnings := false
-	defer func() {
-		if err == nil {
-			return
-		}
-		if errors.Is(err, input.ErrInputAborted) ||
-			errors.Is(err, ErrDecryptAborted) ||
-			errors.Is(err, ErrAgeRecipientSetupAborted) ||
-			errors.Is(err, context.Canceled) ||
-			(ctx != nil && ctx.Err() != nil) {
-			err = ErrRestoreAborted
-		}
-	}()
-
-	reader := bufio.NewReader(os.Stdin)
-	candidate, prepared, err := prepareDecryptedBackupFunc(ctx, reader, cfg, logger, version, false)
-	if err != nil {
-		return err
-	}
-	defer prepared.Cleanup()
-
-	destRoot := "/"
-	logger.Info("Restore target: system root (/) — files will be written back to their original paths")
-
-	// Detect system type
-	systemType := restoreSystem.DetectCurrentSystem()
-	logger.Info("Detected system type: %s", GetSystemTypeString(systemType))
-
-	// Validate compatibility
-	if err := ValidateCompatibility(candidate.Manifest); err != nil {
-		logger.Warning("Compatibility check: %v", err)
-		fmt.Println()
-		fmt.Printf("⚠ %v\n", err)
-		fmt.Println()
-		fmt.Print("Do you want to continue anyway? This may cause system instability. (yes/no): ")
-
-		response, err := input.ReadLineWithContext(ctx, reader)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(strings.ToLower(response)) != "yes" {
-			return fmt.Errorf("restore aborted due to incompatibility")
-		}
-	}
-
-	// Analyze available categories in the backup
-	logger.Info("Analyzing backup contents...")
-	availableCategories, err := AnalyzeBackupCategories(prepared.ArchivePath, logger)
-	if err != nil {
-		logger.Warning("Could not analyze categories: %v", err)
-		logger.Info("Falling back to full restore mode")
-		return runFullRestore(ctx, reader, candidate, prepared, destRoot, logger, cfg.DryRun)
-	}
-
-	// Show restore mode selection menu
-	mode, err := restorePrompter.SelectRestoreMode(ctx, logger, systemType)
-	if err != nil {
-		if errors.Is(err, ErrRestoreAborted) {
-			return ErrRestoreAborted
-		}
-		return err
-	}
-
-	// Determine selected categories based on mode
-	var selectedCategories []Category
-	if mode == RestoreModeCustom {
-		// Interactive category selection
-		selectedCategories, err = restorePrompter.SelectCategories(ctx, logger, availableCategories, systemType)
-		if err != nil {
-			if errors.Is(err, ErrRestoreAborted) {
-				return ErrRestoreAborted
-			}
-			return err
-		}
-	} else {
-		// Pre-defined mode (Full, Storage, Base)
-		selectedCategories = GetCategoriesForMode(mode, systemType, availableCategories)
-	}
-
-	plan := PlanRestore(candidate.Manifest, selectedCategories, systemType, mode)
-
-	// Cluster safety prompt: if backup proviene da cluster e vogliamo ripristinare pve_cluster, chiedi come procedere.
-	clusterBackup := strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster")
-	if plan.NeedsClusterRestore && clusterBackup {
-		logger.Info("Backup marked as cluster node; enabling guarded restore options for pve_cluster")
-		choice, promptErr := promptClusterRestoreMode(ctx, reader)
-		if promptErr != nil {
-			return promptErr
-		}
-		if choice == 0 {
-			return ErrRestoreAborted
-		}
-		if choice == 1 {
-			plan.ApplyClusterSafeMode(true)
-			logger.Info("Selected SAFE cluster restore: /var/lib/pve-cluster will be exported only, not written to system")
-		} else {
-			plan.ApplyClusterSafeMode(false)
-			logger.Warning("Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated")
-		}
-	}
-
-	// Staging is designed to protect live systems. In test runs (fake filesystem) or non-root targets,
-	// extract staged categories directly to the destination to keep restore semantics predictable.
-	if destRoot != "/" || !isRealRestoreFS(restoreFS) {
-		if len(plan.StagedCategories) > 0 {
-			logging.DebugStep(logger, "restore", "Staging disabled (destRoot=%s realFS=%v): extracting %d staged category(ies) directly", destRoot, isRealRestoreFS(restoreFS), len(plan.StagedCategories))
-			plan.NormalCategories = append(plan.NormalCategories, plan.StagedCategories...)
-			plan.StagedCategories = nil
-		}
-	}
-
-	// Create restore configuration
-	restoreConfig := &SelectiveRestoreConfig{
-		Mode:       mode,
-		SystemType: systemType,
-		Metadata:   candidate.Manifest,
-	}
-	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.NormalCategories...)
-	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.StagedCategories...)
-	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, plan.ExportCategories...)
-
-	// Show detailed restore plan
-	ShowRestorePlan(logger, restoreConfig)
-
-	// Confirm operation
-	confirmed, err := restorePrompter.ConfirmRestore(ctx, logger)
-	if err != nil {
-		if errors.Is(err, ErrRestoreAborted) {
-			return ErrRestoreAborted
-		}
-		return err
-	}
-	if !confirmed {
-		logger.Info("Restore operation cancelled by user")
-		return ErrRestoreAborted
-	}
-
-	// Create safety backup of current configuration (only for categories that will write to system paths)
-	var safetyBackup *SafetyBackupResult
-	var networkRollbackBackup *SafetyBackupResult
-	systemWriteCategories := append([]Category{}, plan.NormalCategories...)
-	systemWriteCategories = append(systemWriteCategories, plan.StagedCategories...)
-	if len(systemWriteCategories) > 0 {
-		logger.Info("")
-		safetyBackup, err = CreateSafetyBackup(logger, systemWriteCategories, destRoot)
-		if err != nil {
-			logger.Warning("Failed to create safety backup: %v", err)
-			fmt.Println()
-			fmt.Print("Continue without safety backup? (yes/no): ")
-			response, err := input.ReadLineWithContext(ctx, reader)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(strings.ToLower(response)) != "yes" {
-				return fmt.Errorf("restore aborted: safety backup failed")
-			}
-		} else {
-			logger.Info("Safety backup location: %s", safetyBackup.BackupPath)
-			logger.Info("You can restore from this backup if needed using: tar -xzf %s -C /", safetyBackup.BackupPath)
-		}
-	}
-
-	if plan.HasCategoryID("network") {
-		logger.Info("")
-		logging.DebugStep(logger, "restore", "Create network-only rollback backup for transactional network apply")
-		networkRollbackBackup, err = CreateNetworkRollbackBackup(logger, systemWriteCategories, destRoot)
-		if err != nil {
-			logger.Warning("Failed to create network rollback backup: %v", err)
-		} else if networkRollbackBackup != nil && strings.TrimSpace(networkRollbackBackup.BackupPath) != "" {
-			logger.Info("Network rollback backup location: %s", networkRollbackBackup.BackupPath)
-			logger.Info("This backup is used for the %ds network rollback timer and only includes network paths.", int(defaultNetworkRollbackTimeout.Seconds()))
-		}
-	}
-
-	// If we are restoring cluster database, stop PVE services and unmount /etc/pve before writing
-	needsClusterRestore := plan.NeedsClusterRestore
-	clusterServicesStopped := false
-	pbsServicesStopped := false
-	needsPBSServices := plan.NeedsPBSServices
-	if needsClusterRestore {
-		logger.Info("")
-		logger.Info("Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve")
-		if err := stopPVEClusterServices(ctx, logger); err != nil {
-			return err
-		}
-		clusterServicesStopped = true
-		defer func() {
-			restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
-			defer cancel()
-			if err := startPVEClusterServices(restartCtx, logger); err != nil {
-				logger.Warning("Failed to restart PVE services after restore: %v", err)
-			}
-		}()
-
-		if err := unmountEtcPVE(ctx, logger); err != nil {
-			logger.Warning("Could not unmount /etc/pve: %v", err)
-		}
-	}
-
-	// For PBS restores, stop PBS services before applying configuration/datastore changes if relevant categories are selected
-	if needsPBSServices {
-		logger.Info("")
-		logger.Info("Preparing PBS system for restore: stopping proxmox-backup services")
-		if err := stopPBSServices(ctx, logger); err != nil {
-			logger.Warning("Unable to stop PBS services automatically: %v", err)
-			fmt.Println()
-			fmt.Println("⚠ PBS services are still running. Continuing restore may leave proxmox-backup processes active.")
-			logger.Info("Continuing restore without stopping PBS services")
-		} else {
-			pbsServicesStopped = true
-			defer func() {
-				restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
-				defer cancel()
-				if err := startPBSServices(restartCtx, logger); err != nil {
-					logger.Warning("Failed to restart PBS services after restore: %v", err)
-				}
-			}()
-		}
-	}
-
-	// Perform selective extraction for normal categories
-	var detailedLogPath string
-
-	// Intercept filesystem category to handle it via Smart Merge
-	needsFilesystemRestore := false
-	if plan.HasCategoryID("filesystem") {
-		needsFilesystemRestore = true
-		// Filter it out from normal categories to prevent blind overwrite
-		var filtered []Category
-		for _, cat := range plan.NormalCategories {
-			if cat.ID != "filesystem" {
-				filtered = append(filtered, cat)
-			}
-		}
-		plan.NormalCategories = filtered
-		logging.DebugStep(logger, "restore", "Filesystem category intercepted: enabling Smart Merge workflow (skipping generic extraction)")
-	}
-
-	if len(plan.NormalCategories) > 0 {
-		logger.Info("")
-		categoriesForExtraction := plan.NormalCategories
-		if needsClusterRestore {
-			logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: sanitize categories to avoid /etc/pve shadow writes")
-			sanitized, removed := sanitizeCategoriesForClusterRecovery(categoriesForExtraction)
-			removedPaths := 0
-			for _, paths := range removed {
-				removedPaths += len(paths)
-			}
-			logging.DebugStep(
-				logger,
-				"restore",
-				"Cluster RECOVERY shadow-guard: categories_before=%d categories_after=%d removed_categories=%d removed_paths=%d",
-				len(categoriesForExtraction),
-				len(sanitized),
-				len(removed),
-				removedPaths,
-			)
-			if len(removed) > 0 {
-				logger.Warning("Cluster RECOVERY restore: skipping direct restore of /etc/pve paths to prevent shadowing while pmxcfs is stopped/unmounted")
-				for _, cat := range categoriesForExtraction {
-					if paths, ok := removed[cat.ID]; ok && len(paths) > 0 {
-						logger.Warning("  - %s (%s): %s", cat.Name, cat.ID, strings.Join(paths, ", "))
-					}
-				}
-				logger.Info("These paths are expected to be restored from config.db and become visible after /etc/pve is remounted.")
-			} else {
-				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: no /etc/pve paths detected in selected categories")
-			}
-			categoriesForExtraction = sanitized
-			var extractionIDs []string
-			for _, cat := range categoriesForExtraction {
-				if id := strings.TrimSpace(cat.ID); id != "" {
-					extractionIDs = append(extractionIDs, id)
-				}
-			}
-			if len(extractionIDs) > 0 {
-				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=%s", strings.Join(extractionIDs, ","))
-			} else {
-				logging.DebugStep(logger, "restore", "Cluster RECOVERY shadow-guard: extraction_categories=<none>")
-			}
-		}
-
-		if len(categoriesForExtraction) == 0 {
-			logging.DebugStep(logger, "restore", "Skip system-path extraction: no categories remain after shadow-guard")
-			logger.Info("No system-path categories remain after cluster shadow-guard; skipping system-path extraction.")
-		} else {
-			detailedLogPath, err = extractSelectiveArchive(ctx, prepared.ArchivePath, destRoot, categoriesForExtraction, mode, logger)
-			if err != nil {
-				logger.Error("Restore failed: %v", err)
-				if safetyBackup != nil {
-					logger.Info("You can rollback using the safety backup at: %s", safetyBackup.BackupPath)
-				}
-				return err
-			}
-		}
-	} else {
-		logger.Info("")
-		logger.Info("No system-path categories selected for restore (only export categories will be processed).")
-	}
-
-	// Handle export-only categories by extracting them to a separate directory
-	exportLogPath := ""
-	exportRoot := ""
-	if len(plan.ExportCategories) > 0 {
-		exportRoot = exportDestRoot(cfg.BaseDir)
-		logger.Info("")
-		logger.Info("Exporting %d export-only category(ies) to: %s", len(plan.ExportCategories), exportRoot)
-		if err := restoreFS.MkdirAll(exportRoot, 0o755); err != nil {
-			return fmt.Errorf("failed to create export directory %s: %w", exportRoot, err)
-		}
-
-		if exportLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, exportRoot, plan.ExportCategories, RestoreModeCustom, logger); err != nil {
-			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-				return err
-			}
-			logger.Warning("Export completed with errors: %v", err)
-		} else {
-			exportLogPath = exportLog
-		}
-	}
-
-	// SAFE cluster mode: offer applying configs via pvesh without touching config.db
-	if plan.ClusterSafeMode {
-		if exportRoot == "" {
-			logger.Warning("Cluster SAFE mode selected but export directory not available; skipping automatic pvesh apply")
-		} else if err := runSafeClusterApply(ctx, reader, exportRoot, logger); err != nil {
-			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-				return err
-			}
-			logger.Warning("Cluster SAFE apply completed with errors: %v", err)
-		}
-	}
-
-	// Stage sensitive categories (network, PBS datastore/jobs) to a temporary directory and apply them safely later.
-	stageLogPath := ""
-	stageRoot := ""
-	if len(plan.StagedCategories) > 0 {
-		stageRoot = stageDestRoot()
-		logger.Info("")
-		logger.Info("Staging %d sensitive category(ies) to: %s", len(plan.StagedCategories), stageRoot)
-		if err := restoreFS.MkdirAll(stageRoot, 0o755); err != nil {
-			return fmt.Errorf("failed to create staging directory %s: %w", stageRoot, err)
-		}
-
-		if stageLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, stageRoot, plan.StagedCategories, RestoreModeCustom, logger); err != nil {
-			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-				return err
-			}
-			logger.Warning("Staging completed with errors: %v", err)
-		} else {
-			stageLogPath = stageLog
-		}
-
-		logger.Info("")
-		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
-			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-				return err
-			}
-			logger.Warning("PBS staged config apply: %v", err)
-		}
-	}
-
-	stageRootForNetworkApply := stageRoot
-	if installed, err := maybeInstallNetworkConfigFromStage(ctx, logger, plan, stageRoot, prepared.ArchivePath, networkRollbackBackup, cfg.DryRun); err != nil {
-		if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-			return err
-		}
-		logger.Warning("Network staged install: %v", err)
-	} else if installed {
-		stageRootForNetworkApply = ""
-		logging.DebugStep(logger, "restore", "Network staged install completed: configuration written to /etc (no reload); live apply will use system paths")
-	}
-
-	// Recreate directory structures from configuration files if relevant categories were restored
-	logger.Info("")
-	categoriesForDirRecreate := append([]Category{}, plan.NormalCategories...)
-	categoriesForDirRecreate = append(categoriesForDirRecreate, plan.StagedCategories...)
-	if shouldRecreateDirectories(systemType, categoriesForDirRecreate) {
-		if err := RecreateDirectoriesFromConfig(systemType, logger); err != nil {
-			logger.Warning("Failed to recreate directory structures: %v", err)
-			logger.Warning("You may need to manually create storage/datastore directories")
-		}
-	} else {
-		logger.Debug("Skipping datastore/storage directory recreation (category not selected)")
-	}
-
-	// Smart Filesystem Merge
-	if needsFilesystemRestore {
-		logger.Info("")
-		// Extract fstab to a temporary location
-		fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
-		if err != nil {
-			logger.Warning("Failed to create temp dir for fstab merge: %v", err)
-		} else {
-			defer restoreFS.RemoveAll(fsTempDir)
-			// Construct a temporary category for extraction
-			fsCat := GetCategoryByID("filesystem", availableCategories)
-			if fsCat == nil {
-				logger.Warning("Filesystem category not available in analyzed backup contents; skipping fstab merge")
-			} else {
-				fsCategory := []Category{*fsCat}
-				if _, err := extractSelectiveArchive(ctx, prepared.ArchivePath, fsTempDir, fsCategory, RestoreModeCustom, logger); err != nil {
-					if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-						return err
-					}
-					logger.Warning("Failed to extract filesystem config for merge: %v", err)
-				} else {
-					// Perform Smart Merge
-					currentFstab := filepath.Join(destRoot, "etc", "fstab")
-					backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
-					if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, cfg.DryRun); err != nil {
-						if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-							logger.Info("Restore aborted by user during Smart Filesystem Configuration Merge.")
-							return err
-						}
-						restoreHadWarnings = true
-						logger.Warning("Smart Fstab Merge failed: %v", err)
-					}
-				}
-			}
-		}
-	}
-
-	logger.Info("")
-	if plan.HasCategoryID("network") {
-		logger.Info("")
-		if err := maybeRepairResolvConfAfterRestore(ctx, logger, prepared.ArchivePath, cfg.DryRun); err != nil {
-			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-				return err
-			}
-			restoreHadWarnings = true
-			logger.Warning("DNS resolver repair: %v", err)
-		}
-	}
-
-	logger.Info("")
-	if err := maybeApplyNetworkConfigCLI(ctx, reader, logger, plan, safetyBackup, networkRollbackBackup, stageRootForNetworkApply, prepared.ArchivePath, cfg.DryRun); err != nil {
-		if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-			logger.Info("Restore aborted by user during network apply prompt.")
-			return err
-		}
-		restoreHadWarnings = true
-		if errors.Is(err, ErrNetworkApplyNotCommitted) {
-			var notCommitted *NetworkApplyNotCommittedError
-			observedIP := "unknown"
-			rollbackLog := ""
-			rollbackArmed := false
-			if errors.As(err, &notCommitted) && notCommitted != nil {
-				if strings.TrimSpace(notCommitted.RestoredIP) != "" {
-					observedIP = strings.TrimSpace(notCommitted.RestoredIP)
-				}
-				rollbackLog = strings.TrimSpace(notCommitted.RollbackLog)
-				rollbackArmed = notCommitted.RollbackArmed
-				// Save abort info for footer display
-				lastRestoreAbortInfo = &RestoreAbortInfo{
-					NetworkRollbackArmed:  rollbackArmed,
-					NetworkRollbackLog:    rollbackLog,
-					NetworkRollbackMarker: strings.TrimSpace(notCommitted.RollbackMarker),
-					OriginalIP:            notCommitted.OriginalIP,
-					CurrentIP:             observedIP,
-					RollbackDeadline:      notCommitted.RollbackDeadline,
-				}
-			}
-			if rollbackArmed {
-				logger.Warning("Network apply not committed; rollback is ARMED and will run automatically. Current IP: %s", observedIP)
-			} else {
-				logger.Warning("Network apply not committed; rollback has executed (or marker cleared). Current IP: %s", observedIP)
-			}
-			if rollbackLog != "" {
-				logger.Info("Rollback log: %s", rollbackLog)
-			}
-		} else {
-			logger.Warning("Network apply step skipped or failed: %v", err)
-		}
-	}
-
-	logger.Info("")
-	if restoreHadWarnings {
-		logger.Warning("Restore completed with warnings.")
-	} else {
-		logger.Info("Restore completed successfully.")
-	}
-	logger.Info("Temporary decrypted bundle removed.")
-
-	if detailedLogPath != "" {
-		logger.Info("Detailed restore log: %s", detailedLogPath)
-	}
-	if exportRoot != "" {
-		logger.Info("Export directory: %s", exportRoot)
-	}
-	if exportLogPath != "" {
-		logger.Info("Export detailed log: %s", exportLogPath)
-	}
-	if stageRoot != "" {
-		logger.Info("Staging directory: %s", stageRoot)
-	}
-	if stageLogPath != "" {
-		logger.Info("Staging detailed log: %s", stageLogPath)
-	}
-
-	if safetyBackup != nil {
-		logger.Info("Safety backup preserved at: %s", safetyBackup.BackupPath)
-		logger.Info("Remove it manually if restore was successful: rm %s", safetyBackup.BackupPath)
-	}
-
-	logger.Info("")
-	logger.Info("IMPORTANT: You may need to restart services for changes to take effect.")
-	if systemType == SystemTypePVE {
-		if needsClusterRestore && clusterServicesStopped {
-			logger.Info("  PVE services were stopped/restarted during restore; verify status with: pvecm status")
-		} else {
-			logger.Info("  PVE services: systemctl restart pve-cluster pvedaemon pveproxy")
-		}
-	} else if systemType == SystemTypePBS {
-		if pbsServicesStopped {
-			logger.Info("  PBS services were stopped/restarted during restore; verify status with: systemctl status proxmox-backup proxmox-backup-proxy")
-		} else {
-			logger.Info("  PBS services: systemctl restart proxmox-backup-proxy proxmox-backup")
-		}
-
-		// Check ZFS pool status for PBS systems only when ZFS category was restored
-		if hasCategoryID(plan.NormalCategories, "zfs") {
-			logger.Info("")
-			if err := checkZFSPoolsAfterRestore(logger); err != nil {
-				logger.Warning("ZFS pool check: %v", err)
-			}
-		} else {
-			logger.Debug("Skipping ZFS pool verification (ZFS category not selected)")
-		}
-	}
-
-	logger.Info("")
-	logger.Warning("⚠ SYSTEM REBOOT RECOMMENDED")
-	logger.Info("Reboot the node (or at least restart networking and system services) to ensure all restored configurations take effect cleanly.")
-
-	return nil
+	ui := newCLIWorkflowUI(bufio.NewReader(os.Stdin), logger)
+	return runRestoreWorkflowWithUI(ctx, cfg, logger, version, ui)
 }
 
 // checkZFSPoolsAfterRestore checks if ZFS pools need to be imported after restore
@@ -1173,6 +643,13 @@ func shouldStopPBSServices(categories []Category) bool {
 		if cat.Type == CategoryTypePBS {
 			return true
 		}
+		// Some common categories (e.g. SSL) include PBS paths that require restarting PBS services.
+		for _, p := range cat.Paths {
+			p = strings.TrimSpace(p)
+			if strings.HasPrefix(p, "./etc/proxmox-backup/") || strings.HasPrefix(p, "./var/lib/proxmox-backup/") {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -1250,6 +727,21 @@ func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryp
 			if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, fsCategory, RestoreModeCustom, nil, "", nil); err != nil {
 				logger.Warning("Failed to extract filesystem config for merge: %v", err)
 			} else {
+				// Best-effort: extract ProxSave inventory files used for stable fstab device remapping.
+				invCategory := []Category{{
+					ID:   "fstab_inventory",
+					Name: "Fstab inventory (device mapping)",
+					Paths: []string{
+						"./var/lib/proxsave-info/commands/system/blkid.txt",
+						"./var/lib/proxsave-info/commands/system/lsblk_json.json",
+						"./var/lib/proxsave-info/commands/system/lsblk.txt",
+						"./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json",
+					},
+				}}
+				if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, invCategory, RestoreModeCustom, nil, "", nil); err != nil {
+					logger.Debug("Failed to extract fstab inventory data (continuing): %v", err)
+				}
+
 				currentFstab := filepath.Join(destRoot, "etc", "fstab")
 				backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
 				if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, dryRun); err != nil {
@@ -1315,176 +807,11 @@ func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logg
 // runSafeClusterApply applies selected cluster configs via pvesh without touching config.db.
 // It operates on files extracted to exportRoot (e.g. exportDestRoot).
 func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) (err error) {
-	done := logging.DebugStart(logger, "safe cluster apply", "export_root=%s", exportRoot)
-	defer func() { done(err) }()
-
-	if err := ctx.Err(); err != nil {
-		return err
+	if logger == nil {
+		logger = logging.GetDefaultLogger()
 	}
-
-	pveshPath, lookErr := exec.LookPath("pvesh")
-	if lookErr != nil {
-		logger.Warning("pvesh not found in PATH; skipping SAFE cluster apply")
-		return nil
-	}
-	logging.DebugStep(logger, "safe cluster apply", "pvesh=%s", pveshPath)
-
-	currentNode, _ := os.Hostname()
-	currentNode = shortHost(currentNode)
-	if strings.TrimSpace(currentNode) == "" {
-		currentNode = "localhost"
-	}
-	logging.DebugStep(logger, "safe cluster apply", "current_node=%s", currentNode)
-
-	logger.Info("")
-	logger.Info("SAFE cluster restore: applying configs via pvesh (node=%s)", currentNode)
-
-	sourceNode := currentNode
-	logging.DebugStep(logger, "safe cluster apply", "List exported node directories under %s", filepath.Join(exportRoot, "etc/pve/nodes"))
-	exportNodes, nodesErr := listExportNodeDirs(exportRoot)
-	if nodesErr != nil {
-		logger.Warning("Failed to inspect exported node directories: %v", nodesErr)
-	} else if len(exportNodes) > 0 {
-		logging.DebugStep(logger, "safe cluster apply", "export_nodes=%s", strings.Join(exportNodes, ","))
-	} else {
-		logging.DebugStep(logger, "safe cluster apply", "No exported node directories found")
-	}
-
-	if len(exportNodes) > 0 && !stringSliceContains(exportNodes, sourceNode) {
-		logging.DebugStep(logger, "safe cluster apply", "Node mismatch: current_node=%s export_nodes=%s", currentNode, strings.Join(exportNodes, ","))
-		logger.Warning("SAFE cluster restore: VM/CT configs not found for current node %s in export; available nodes: %s", currentNode, strings.Join(exportNodes, ", "))
-		if len(exportNodes) == 1 {
-			sourceNode = exportNodes[0]
-			logging.DebugStep(logger, "safe cluster apply", "Auto-select source node: %s", sourceNode)
-			logger.Info("SAFE cluster restore: using exported node %s as VM/CT source, applying to current node %s", sourceNode, currentNode)
-		} else {
-			for _, node := range exportNodes {
-				qemuCount, lxcCount := countVMConfigsForNode(exportRoot, node)
-				logging.DebugStep(logger, "safe cluster apply", "Export node candidate: %s (qemu=%d, lxc=%d)", node, qemuCount, lxcCount)
-			}
-			selected, selErr := promptExportNodeSelection(ctx, reader, exportRoot, currentNode, exportNodes)
-			if selErr != nil {
-				return selErr
-			}
-			if strings.TrimSpace(selected) == "" {
-				logging.DebugStep(logger, "safe cluster apply", "User selected: skip VM/CT apply (no source node)")
-				logger.Info("Skipping VM/CT apply (no source node selected)")
-				sourceNode = ""
-			} else {
-				sourceNode = selected
-				logging.DebugStep(logger, "safe cluster apply", "User selected source node: %s", sourceNode)
-				logger.Info("SAFE cluster restore: selected exported node %s as VM/CT source, applying to current node %s", sourceNode, currentNode)
-			}
-		}
-	}
-	logging.DebugStep(logger, "safe cluster apply", "Selected VM/CT source node: %q (current_node=%q)", sourceNode, currentNode)
-
-	var vmEntries []vmEntry
-	if strings.TrimSpace(sourceNode) != "" {
-		logging.DebugStep(logger, "safe cluster apply", "Scan VM/CT configs in export (source_node=%s)", sourceNode)
-		var vmErr error
-		vmEntries, vmErr = scanVMConfigs(exportRoot, sourceNode)
-		if vmErr != nil {
-			logger.Warning("Failed to scan VM configs: %v", vmErr)
-		} else {
-			logging.DebugStep(logger, "safe cluster apply", "VM/CT configs found=%d (source_node=%s)", len(vmEntries), sourceNode)
-			qemuCount := 0
-			lxcCount := 0
-			for _, entry := range vmEntries {
-				switch entry.Kind {
-				case "qemu":
-					qemuCount++
-				case "lxc":
-					lxcCount++
-				}
-			}
-			logging.DebugStep(logger, "safe cluster apply", "VM/CT breakdown: qemu=%d lxc=%d", qemuCount, lxcCount)
-		}
-	}
-	if len(vmEntries) > 0 {
-		fmt.Println()
-		if sourceNode == currentNode {
-			fmt.Printf("Found %d VM/CT configs for node %s\n", len(vmEntries), currentNode)
-		} else {
-			fmt.Printf("Found %d VM/CT configs for exported node %s (will apply to current node %s)\n", len(vmEntries), sourceNode, currentNode)
-		}
-		applyVMs, promptErr := promptYesNo(ctx, reader, "Apply all VM/CT configs via pvesh? ")
-		if promptErr != nil {
-			return promptErr
-		}
-		logging.DebugStep(logger, "safe cluster apply", "User choice: apply_vms=%v (entries=%d)", applyVMs, len(vmEntries))
-		if applyVMs {
-			applied, failed := applyVMConfigs(ctx, vmEntries, logger)
-			logger.Info("VM/CT apply completed: ok=%d failed=%d", applied, failed)
-		} else {
-			logger.Info("Skipping VM/CT apply")
-		}
-	} else {
-		if strings.TrimSpace(sourceNode) == "" {
-			logger.Info("No VM/CT configs applied (no source node selected)")
-		} else {
-			logger.Info("No VM/CT configs found for node %s in export", sourceNode)
-		}
-	}
-
-	// Storage configuration
-	storageCfg := filepath.Join(exportRoot, "etc/pve/storage.cfg")
-	logging.DebugStep(logger, "safe cluster apply", "Check export: storage.cfg (%s)", storageCfg)
-	storageInfo, storageErr := restoreFS.Stat(storageCfg)
-	if storageErr == nil && !storageInfo.IsDir() {
-		logging.DebugStep(logger, "safe cluster apply", "storage.cfg found (size=%d)", storageInfo.Size())
-		fmt.Println()
-		fmt.Printf("Storage configuration found: %s\n", storageCfg)
-		applyStorage, err := promptYesNo(ctx, reader, "Apply storage.cfg via pvesh?")
-		if err != nil {
-			return err
-		}
-		logging.DebugStep(logger, "safe cluster apply", "User choice: apply_storage=%v", applyStorage)
-		if applyStorage {
-			logging.DebugStep(logger, "safe cluster apply", "Apply storage.cfg via pvesh")
-			applied, failed, err := applyStorageCfg(ctx, storageCfg, logger)
-			logging.DebugStep(logger, "safe cluster apply", "Storage apply result: ok=%d failed=%d err=%v", applied, failed, err)
-			if err != nil {
-				logger.Warning("Storage apply encountered errors: %v", err)
-			}
-			logger.Info("Storage apply completed: ok=%d failed=%d", applied, failed)
-		} else {
-			logger.Info("Skipping storage.cfg apply")
-		}
-	} else {
-		logging.DebugStep(logger, "safe cluster apply", "storage.cfg not found (err=%v)", storageErr)
-		logger.Info("No storage.cfg found in export")
-	}
-
-	// Datacenter configuration
-	dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
-	logging.DebugStep(logger, "safe cluster apply", "Check export: datacenter.cfg (%s)", dcCfg)
-	dcInfo, dcErr := restoreFS.Stat(dcCfg)
-	if dcErr == nil && !dcInfo.IsDir() {
-		logging.DebugStep(logger, "safe cluster apply", "datacenter.cfg found (size=%d)", dcInfo.Size())
-		fmt.Println()
-		fmt.Printf("Datacenter configuration found: %s\n", dcCfg)
-		applyDC, err := promptYesNo(ctx, reader, "Apply datacenter.cfg via pvesh?")
-		if err != nil {
-			return err
-		}
-		logging.DebugStep(logger, "safe cluster apply", "User choice: apply_datacenter=%v", applyDC)
-		if applyDC {
-			logging.DebugStep(logger, "safe cluster apply", "Apply datacenter.cfg via pvesh")
-			if err := runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", dcCfg}); err != nil {
-				logger.Warning("Failed to apply datacenter.cfg: %v", err)
-			} else {
-				logger.Info("datacenter.cfg applied successfully")
-			}
-		} else {
-			logger.Info("Skipping datacenter.cfg apply")
-		}
-	} else {
-		logging.DebugStep(logger, "safe cluster apply", "datacenter.cfg not found (err=%v)", dcErr)
-		logger.Info("No datacenter.cfg found in export")
-	}
-
-	return nil
+	ui := newCLIWorkflowUI(reader, logger)
+	return runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger, nil)
 }
 
 type vmEntry struct {
@@ -1748,10 +1075,13 @@ func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
 			flush()
 			continue
 		}
-		if strings.HasPrefix(trimmed, "storage:") {
+
+		// storage.cfg blocks use `<type>: <id>` (e.g. `dir: local`, `nfs: backup`).
+		// Older exports may still use `storage: <id>` blocks.
+		_, name, ok := parseProxmoxNotificationHeader(trimmed)
+		if ok {
 			flush()
-			id := strings.TrimSpace(strings.TrimPrefix(trimmed, "storage:"))
-			current = &storageBlock{ID: id, data: []string{line}}
+			current = &storageBlock{ID: name, data: []string{line}}
 			continue
 		}
 		if current != nil {
@@ -2186,17 +1516,10 @@ func shouldSkipProxmoxSystemRestore(relTarget string) (bool, string) {
 		return true, "PBS users must be recreated (user.cfg should not be restored raw)"
 	case "etc/proxmox-backup/acl.cfg":
 		return true, "PBS permissions must be recreated (acl.cfg should not be restored raw)"
-	case "etc/proxmox-backup/proxy.cfg":
-		return true, "PBS proxy configuration should be recreated (proxy.cfg should not be restored raw)"
-	case "etc/proxmox-backup/proxy.pem":
-		return true, "PBS certificates should be regenerated (proxy.pem should not be restored raw)"
 	case "var/lib/proxmox-backup/.clusterlock":
 		return true, "PBS runtime lock files must not be restored"
 	}
 
-	if strings.HasPrefix(rel, "etc/proxmox-backup/ssl/") {
-		return true, "PBS certificates should be regenerated (ssl/* should not be restored raw)"
-	}
 	if strings.HasPrefix(rel, "var/lib/proxmox-backup/lock/") {
 		return true, "PBS runtime lock files must not be restored"
 	}

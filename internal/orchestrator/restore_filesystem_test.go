@@ -133,7 +133,7 @@ func TestSmartMergeFstab_DefaultYesOnMatch_BlankApplies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile current: %v", err)
 	}
-	if !strings.Contains(string(got), "ProxSave Restore Merge") || !strings.Contains(string(got), "server:/export /mnt/nas") {
+	if !strings.Contains(string(got), "ProxSave Restore Merge") || !strings.Contains(string(got), "server:/export") || !strings.Contains(string(got), "/mnt/nas") {
 		t.Fatalf("expected merged fstab to include marker and mount, got:\n%s", string(got))
 	}
 
@@ -195,6 +195,65 @@ func TestSmartMergeFstab_DryRunDoesNotWrite(t *testing.T) {
 	}
 	if len(fakeCmd.Calls) != 0 {
 		t.Fatalf("expected no command calls in dry-run, got calls=%v", fakeCmd.Calls)
+	}
+}
+
+func TestSmartMergeFstab_RemapsUnstableDeviceToUUIDWhenInventoryMatches(t *testing.T) {
+	origFS := restoreFS
+	origCmd := restoreCmd
+	origTime := restoreTime
+	t.Cleanup(func() {
+		restoreFS = origFS
+		restoreCmd = origCmd
+		restoreTime = origTime
+	})
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	restoreCmd = &FakeCommandRunner{}
+	restoreTime = &FakeTime{Current: time.Date(2026, 1, 20, 12, 34, 56, 0, time.UTC)}
+
+	// Simulate target device presence (stable ref).
+	if err := fakeFS.AddDir("/dev/disk/by-uuid"); err != nil {
+		t.Fatalf("AddDir: %v", err)
+	}
+	if err := fakeFS.AddFile("/dev/disk/by-uuid/data-uuid", []byte("")); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+
+	currentPath := "/etc/fstab"
+	backupPath := "/backup/etc/fstab"
+	if err := fakeFS.AddFile(currentPath, []byte("UUID=same-root / ext4 defaults 0 1\nUUID=same-swap none swap sw 0 0\n")); err != nil {
+		t.Fatalf("AddFile current: %v", err)
+	}
+	if err := fakeFS.AddFile(backupPath, []byte("UUID=same-root / ext4 defaults 0 1\nUUID=same-swap none swap sw 0 0\n/dev/sdb1 /mnt/data ext4 defaults 0 2\n")); err != nil {
+		t.Fatalf("AddFile backup: %v", err)
+	}
+
+	// Backup inventory maps /dev/sdb1 to UUID=data-uuid.
+	invPath := "/backup/var/lib/proxsave-info/commands/system/blkid.txt"
+	if err := fakeFS.AddFile(invPath, []byte("/dev/sdb1: UUID=\"data-uuid\" TYPE=\"ext4\"\n")); err != nil {
+		t.Fatalf("AddFile inventory: %v", err)
+	}
+
+	reader := bufio.NewReader(strings.NewReader("\n")) // blank -> defaultYes on match
+	if err := SmartMergeFstab(context.Background(), newTestLogger(), reader, currentPath, backupPath, false); err != nil {
+		t.Fatalf("SmartMergeFstab error: %v", err)
+	}
+
+	got, err := fakeFS.ReadFile(currentPath)
+	if err != nil {
+		t.Fatalf("ReadFile current: %v", err)
+	}
+	if strings.Contains(string(got), "/dev/sdb1") {
+		t.Fatalf("expected /dev/sdb1 to be remapped, got:\n%s", string(got))
+	}
+	if !strings.Contains(string(got), "UUID=data-uuid") || !strings.Contains(string(got), "/mnt/data") {
+		t.Fatalf("expected remapped mount entry to be present, got:\n%s", string(got))
+	}
+	if !strings.Contains(string(got), "nofail") {
+		t.Fatalf("expected nofail to be set on restored entry, got:\n%s", string(got))
 	}
 }
 

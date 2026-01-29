@@ -414,6 +414,7 @@ Next step: ./build/proxsave --dry-run
 ```
 
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
+**Note**: CLI and TUI run the same workflow logic; `--cli` only changes the interface (prompts/progress rendering), not the restore/decrypt behavior.
 
 **`--restore` workflow** (14 phases):
 1. Scans configured storage locations (local/secondary/cloud)
@@ -449,8 +450,23 @@ Next step: ./build/proxsave --dry-run
 | Flag | Description |
 |------|-------------|
 | `--restore` | Run interactive restore workflow (select bundle, decrypt if needed, apply to system) |
+| `--cleanup-guards` | Cleanup ProxSave mount guards under `/var/lib/proxsave/guards` (useful after restores with offline mountpoints; use with `--dry-run` to preview) |
 
 ---
+
+### Cleanup Mount Guards (Optional)
+
+During some restores (notably PBS datastores on mountpoints under `/mnt`), ProxSave may apply **mount guards** to prevent accidental writes to `/` when the underlying storage is offline/not mounted yet.
+
+If you want to remove those guards manually (optional):
+
+```bash
+# Preview (no changes)
+./build/proxsave --cleanup-guards --dry-run --log-level debug
+
+# Apply cleanup (requires root)
+./build/proxsave --cleanup-guards
+```
 
 ## Logging
 

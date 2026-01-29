@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,6 +118,12 @@ func pathMatchesPattern(archivePath, pattern string) bool {
 		normPattern = "./" + normPattern
 	}
 
+	if strings.ContainsAny(normPattern, "*?[") && !strings.HasSuffix(normPattern, "/") {
+		if ok, err := path.Match(normPattern, normArchive); err == nil && ok {
+			return true
+		}
+	}
+
 	// Exact match
 	if normArchive == normPattern {
 		return true
@@ -139,21 +146,27 @@ func pathMatchesPattern(archivePath, pattern string) bool {
 
 // ShowRestoreModeMenu displays the restore mode selection menu
 func ShowRestoreModeMenu(ctx context.Context, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
-	reader := bufio.NewReader(os.Stdin)
+	return ShowRestoreModeMenuWithReader(ctx, bufio.NewReader(os.Stdin), logger, systemType)
+}
+
+func ShowRestoreModeMenuWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
+	if reader == nil {
+		reader = bufio.NewReader(os.Stdin)
+	}
 
 	fmt.Println()
 	fmt.Println("Select restore mode:")
 	fmt.Println("  [1] FULL restore - Restore everything from backup")
 
 	if systemType == SystemTypePVE {
-		fmt.Println("  [2] STORAGE only - PVE cluster + storage configuration + VM configs + jobs")
+		fmt.Println("  [2] STORAGE only - PVE cluster + storage + jobs + mounts")
 	} else if systemType == SystemTypePBS {
-		fmt.Println("  [2] DATASTORE only - PBS config + datastore definitions + sync/verify/prune jobs")
+		fmt.Println("  [2] DATASTORE only - PBS datastore definitions + sync/verify/prune jobs + mounts")
 	} else {
 		fmt.Println("  [2] STORAGE/DATASTORE only - Storage or datastore configuration")
 	}
 
-	fmt.Println("  [3] SYSTEM BASE only - Network + SSL + SSH + services")
+	fmt.Println("  [3] SYSTEM BASE only - Network + SSL + SSH + services + filesystem")
 	fmt.Println("  [4] CUSTOM selection - Choose specific categories")
 	fmt.Println("  [0] Cancel")
 	fmt.Print("Choice: ")
@@ -187,7 +200,13 @@ func ShowRestoreModeMenu(ctx context.Context, logger *logging.Logger, systemType
 
 // ShowCategorySelectionMenu displays an interactive category selection menu
 func ShowCategorySelectionMenu(ctx context.Context, logger *logging.Logger, availableCategories []Category, systemType SystemType) ([]Category, error) {
-	reader := bufio.NewReader(os.Stdin)
+	return ShowCategorySelectionMenuWithReader(ctx, bufio.NewReader(os.Stdin), logger, availableCategories, systemType)
+}
+
+func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, availableCategories []Category, systemType SystemType) ([]Category, error) {
+	if reader == nil {
+		reader = bufio.NewReader(os.Stdin)
+	}
 
 	// Filter categories by system type
 	relevantCategories := make([]Category, 0)
@@ -370,12 +389,12 @@ func ShowRestorePlan(logger *logging.Logger, config *SelectiveRestoreConfig) {
 		modeName = "FULL restore (all categories)"
 	case RestoreModeStorage:
 		if config.SystemType == SystemTypePVE {
-			modeName = "STORAGE only (PVE cluster + storage + jobs)"
+			modeName = "STORAGE only (cluster + storage + jobs + mounts)"
 		} else {
-			modeName = "DATASTORE only (PBS config + datastores + jobs)"
+			modeName = "DATASTORE only (datastores + jobs + mounts)"
 		}
 	case RestoreModeBase:
-		modeName = "SYSTEM BASE only (network + SSL + SSH + services)"
+		modeName = "SYSTEM BASE only (network + SSL + SSH + services + filesystem)"
 	case RestoreModeCustom:
 		modeName = fmt.Sprintf("CUSTOM selection (%d categories)", len(config.SelectedCategories))
 	}
@@ -409,12 +428,22 @@ func ShowRestorePlan(logger *logging.Logger, config *SelectiveRestoreConfig) {
 	fmt.Println("  • Existing files at these locations will be OVERWRITTEN")
 	fmt.Println("  • A safety backup will be created before restoration")
 	fmt.Println("  • Services may need to be restarted after restoration")
+	if (hasCategoryID(config.SelectedCategories, "pve_access_control") || hasCategoryID(config.SelectedCategories, "pbs_access_control")) &&
+		(!hasCategoryID(config.SelectedCategories, "network") || !hasCategoryID(config.SelectedCategories, "ssl")) {
+		fmt.Println("  • TFA/WebAuthn: for best 1:1 compatibility keep the same UI origin (FQDN/hostname and port) and restore 'network' + 'ssl'")
+	}
 	fmt.Println()
 }
 
 // ConfirmRestoreOperation asks for user confirmation before proceeding
 func ConfirmRestoreOperation(ctx context.Context, logger *logging.Logger) (bool, error) {
-	reader := bufio.NewReader(os.Stdin)
+	return ConfirmRestoreOperationWithReader(ctx, bufio.NewReader(os.Stdin), logger)
+}
+
+func ConfirmRestoreOperationWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger) (bool, error) {
+	if reader == nil {
+		reader = bufio.NewReader(os.Stdin)
+	}
 	for {
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Print("Type 'RESTORE' to proceed or 'cancel' to abort: ")
