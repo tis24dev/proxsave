@@ -232,6 +232,19 @@ func CreateFirewallRollbackBackup(logger *logging.Logger, selectedCategories []C
 	})
 }
 
+func CreateHARollbackBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (*SafetyBackupResult, error) {
+	haCat := GetCategoryByID("pve_ha", selectedCategories)
+	if haCat == nil {
+		return nil, nil
+	}
+	return createSafetyBackup(logger, []Category{*haCat}, destRoot, safetyBackupSpec{
+		ArchivePrefix:     "ha_rollback_backup",
+		LocationFileName:  "ha_rollback_backup_location.txt",
+		HumanDescription:  "HA rollback backup",
+		WriteLocationFile: true,
+	})
+}
+
 // backupFile adds a single file to the tar archive
 func backupFile(tw *tar.Writer, sourcePath, archivePath string, result *SafetyBackupResult, logger *logging.Logger) error {
 	file, err := safetyFS.Open(sourcePath)

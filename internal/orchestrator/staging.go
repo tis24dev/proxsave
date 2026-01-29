@@ -23,7 +23,8 @@ func isStagedCategoryID(id string) bool {
 		"pbs_notifications",
 		"pve_access_control",
 		"pbs_access_control",
-		"pve_firewall":
+		"pve_firewall",
+		"pve_ha":
 		return true
 	default:
 		return false

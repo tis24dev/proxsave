@@ -116,6 +116,17 @@ func GetAllCategories() []Category {
 			},
 		},
 		{
+			ID:          "pve_ha",
+			Name:        "PVE High Availability (HA)",
+			Description: "HA resources/groups/rules (staged; applied with rollback safety)",
+			Type:        CategoryTypePVE,
+			Paths: []string{
+				"./etc/pve/ha/resources.cfg",
+				"./etc/pve/ha/groups.cfg",
+				"./etc/pve/ha/rules.cfg",
+			},
+		},
+		{
 			ID:          "corosync",
 			Name:        "Corosync Configuration",
 			Description: "Cluster communication and quorum settings",

@@ -193,6 +193,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	var safetyBackup *SafetyBackupResult
 	var networkRollbackBackup *SafetyBackupResult
 	var firewallRollbackBackup *SafetyBackupResult
+	var haRollbackBackup *SafetyBackupResult
 	systemWriteCategories := append([]Category{}, plan.NormalCategories...)
 	systemWriteCategories = append(systemWriteCategories, plan.StagedCategories...)
 	if len(systemWriteCategories) > 0 {
@@ -233,6 +234,17 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		} else if firewallRollbackBackup != nil && strings.TrimSpace(firewallRollbackBackup.BackupPath) != "" {
 			logger.Info("Firewall rollback backup location: %s", firewallRollbackBackup.BackupPath)
 			logger.Info("This backup is used for the %ds firewall rollback timer and only includes firewall paths.", int(defaultFirewallRollbackTimeout.Seconds()))
+		}
+	}
+	if plan.HasCategoryID("pve_ha") {
+		logger.Info("")
+		logging.DebugStep(logger, "restore", "Create HA-only rollback backup for transactional HA apply")
+		haRollbackBackup, err = CreateHARollbackBackup(logger, systemWriteCategories, destRoot)
+		if err != nil {
+			logger.Warning("Failed to create HA rollback backup: %v", err)
+		} else if haRollbackBackup != nil && strings.TrimSpace(haRollbackBackup.BackupPath) != "" {
+			logger.Info("HA rollback backup location: %s", haRollbackBackup.BackupPath)
+			logger.Info("This backup is used for the %ds HA rollback timer and only includes HA paths.", int(defaultHARollbackTimeout.Seconds()))
 		}
 	}
 
@@ -603,6 +615,39 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			}
 		} else {
 			logger.Warning("Firewall apply step skipped or failed: %v", err)
+		}
+	}
+
+	logger.Info("")
+	if err := maybeApplyPVEHAWithUI(ctx, ui, logger, plan, safetyBackup, haRollbackBackup, stageRoot, cfg.DryRun); err != nil {
+		if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+			logger.Info("Restore aborted by user during HA apply prompt.")
+			return err
+		}
+		restoreHadWarnings = true
+		if errors.Is(err, ErrHAApplyNotCommitted) {
+			var notCommitted *HAApplyNotCommittedError
+			rollbackLog := ""
+			rollbackArmed := false
+			deadline := time.Time{}
+			if errors.As(err, &notCommitted) && notCommitted != nil {
+				rollbackLog = strings.TrimSpace(notCommitted.RollbackLog)
+				rollbackArmed = notCommitted.RollbackArmed
+				deadline = notCommitted.RollbackDeadline
+			}
+			if rollbackArmed {
+				logger.Warning("HA apply not committed; rollback is ARMED and will run automatically.")
+			} else {
+				logger.Warning("HA apply not committed; rollback has executed (or marker cleared).")
+			}
+			if !deadline.IsZero() {
+				logger.Info("Rollback deadline: %s", deadline.Format(time.RFC3339))
+			}
+			if rollbackLog != "" {
+				logger.Info("Rollback log: %s", rollbackLog)
+			}
+		} else {
+			logger.Warning("HA apply step skipped or failed: %v", err)
 		}
 	}
 
