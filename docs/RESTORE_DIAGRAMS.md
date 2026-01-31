@@ -98,7 +98,7 @@ flowchart TD
     Mode -->|4. CUSTOM| Custom[CUSTOM Mode]
 
     Full --> SystemFull{System Type?}
-    SystemFull -->|PVE| PVEFull[PVE Categories:<br/>- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- pve_notifications<br/>- pve_access_control<br/>- corosync<br/>- ceph<br/>+ Common]
+    SystemFull -->|PVE| PVEFull[PVE Categories:<br/>- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- pve_notifications<br/>- pve_access_control<br/>- pve_firewall<br/>- pve_ha<br/>- pve_sdn<br/>- corosync<br/>- ceph<br/>+ Common]
     SystemFull -->|PBS| PBSFull[PBS Categories:<br/>- pbs_host<br/>- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- pbs_notifications<br/>- pbs_access_control<br/>- pbs_tape<br/>+ Common]
     SystemFull -->|Unknown| CommonFull[Common Only:<br/>- filesystem<br/>- storage_stack<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- user_data<br/>- zfs<br/>- proxsave_info]
 

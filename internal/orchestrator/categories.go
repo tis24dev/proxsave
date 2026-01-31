@@ -127,6 +127,16 @@ func GetAllCategories() []Category {
 			},
 		},
 		{
+			ID:          "pve_sdn",
+			Name:        "PVE SDN",
+			Description: "Software-defined networking configuration (staged; applied to pmxcfs)",
+			Type:        CategoryTypePVE,
+			Paths: []string{
+				"./etc/pve/sdn/",
+				"./etc/pve/sdn.cfg",
+			},
+		},
+		{
 			ID:          "corosync",
 			Name:        "Corosync Configuration",
 			Description: "Cluster communication and quorum settings",

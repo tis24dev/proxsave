@@ -79,7 +79,7 @@ The `--restore` command provides an **interactive, category-based restoration sy
 
 ## Category System
 
-Restore operations are organized into **20–21 categories** (depending on PVE vs PBS) that group related configuration files.
+Restore operations are organized into **20–22 categories** (PBS = 20, PVE = 22) that group related configuration files.
 
 ### Category Handling Types
 
@@ -89,7 +89,7 @@ Each category is handled in one of three ways:
 - **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or `pvesh`)
 - **Export-only**: extracted to an export directory for manual review (never written to system paths)
 
-### PVE-Specific Categories (10 categories)
+### PVE-Specific Categories (11 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
@@ -101,6 +101,7 @@ Each category is handled in one of three ways:
 | `pve_access_control` | PVE Access Control | **Staged** access control + secrets restored 1:1 via pmxcfs file apply (root@pam safety rail) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg`<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
 | `pve_firewall` | PVE Firewall | **Staged** firewall rules and node host firewall (pmxcfs file apply + rollback timer) | `./etc/pve/firewall/`<br>`./etc/pve/nodes/*/host.fw` |
 | `pve_ha` | PVE High Availability (HA) | **Staged** HA resources/groups/rules (pmxcfs file apply + rollback timer) | `./etc/pve/ha/resources.cfg`<br>`./etc/pve/ha/groups.cfg`<br>`./etc/pve/ha/rules.cfg` |
+| `pve_sdn` | PVE SDN | **Staged** SDN definitions (pmxcfs file apply; definitions only) | `./etc/pve/sdn/`<br>`./etc/pve/sdn.cfg` |
 | `corosync` | Corosync Configuration | Cluster communication settings | `./etc/corosync/` |
 | `ceph` | Ceph Configuration | Ceph storage cluster config | `./etc/ceph/` |
 

@@ -492,6 +492,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			restoreHadWarnings = true
 			logger.Warning("PVE staged config apply: %v", err)
 		}
+		if err := maybeApplyPVESDNFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
+			restoreHadWarnings = true
+			logger.Warning("PVE SDN staged apply: %v", err)
+		}
 		if err := maybeApplyAccessControlFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
 				return err
