@@ -82,8 +82,7 @@ echo "--------------------------------------------"
 ###############################################
 LATEST_TAG="$(
   curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' \
-    | head -n1 \
+    | { grep -m1 '"tag_name"' && cat >/dev/null; } \
     | cut -d '"' -f4
 )"
 
