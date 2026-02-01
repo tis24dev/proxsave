@@ -333,6 +333,118 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 	}
 }
 
+func TestRunSafeClusterApply_AppliesPoolsFromUserCfg(t *testing.T) {
+	origCmd := restoreCmd
+	origFS := restoreFS
+	t.Cleanup(func() {
+		restoreCmd = origCmd
+		restoreFS = origFS
+	})
+	restoreFS = osFS{}
+
+	pathDir := t.TempDir()
+	for _, name := range []string{"pvesh", "pveum"} {
+		binPath := filepath.Join(pathDir, name)
+		if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	runner := &recordingRunner{}
+	restoreCmd = runner
+
+	exportRoot := t.TempDir()
+	userCfgPath := filepath.Join(exportRoot, "etc", "pve", "user.cfg")
+	if err := os.MkdirAll(filepath.Dir(userCfgPath), 0o755); err != nil {
+		t.Fatalf("mkdir user.cfg dir: %v", err)
+	}
+	userCfg := strings.Join([]string{
+		"pool: dev",
+		"    comment Dev pool",
+		"    vms 100,101",
+		"    storage local,backup_ext",
+		"",
+	}, "\n")
+	if err := os.WriteFile(userCfgPath, []byte(userCfg), 0o640); err != nil {
+		t.Fatalf("write user.cfg: %v", err)
+	}
+
+	// Prompts:
+	// - Apply pools? yes
+	// - Allow move? no
+	reader := bufio.NewReader(strings.NewReader("yes\nno\n"))
+	if err := runSafeClusterApply(context.Background(), reader, exportRoot, newTestLogger()); err != nil {
+		t.Fatalf("runSafeClusterApply error: %v", err)
+	}
+
+	wantPrefixes := []string{
+		"pveum pool add dev",
+		"pveum pool modify dev --comment Dev pool",
+		"pveum pool modify dev --vms 100,101 --storage backup_ext,local",
+	}
+	for _, prefix := range wantPrefixes {
+		found := false
+		for _, call := range runner.calls {
+			if strings.HasPrefix(call, prefix) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected a call with prefix %q; calls=%#v", prefix, runner.calls)
+		}
+	}
+}
+
+func TestRunSafeClusterApply_AppliesResourceMappingsFromProxsaveInfo(t *testing.T) {
+	origCmd := restoreCmd
+	origFS := restoreFS
+	t.Cleanup(func() {
+		restoreCmd = origCmd
+		restoreFS = origFS
+	})
+	restoreFS = osFS{}
+
+	pathDir := t.TempDir()
+	pveshPath := filepath.Join(pathDir, "pvesh")
+	if err := os.WriteFile(pveshPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write pvesh: %v", err)
+	}
+	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	runner := &recordingRunner{}
+	restoreCmd = runner
+
+	exportRoot := t.TempDir()
+	mappingPath := filepath.Join(exportRoot, "var", "lib", "proxsave-info", "commands", "pve", "mapping_pci.json")
+	if err := os.MkdirAll(filepath.Dir(mappingPath), 0o755); err != nil {
+		t.Fatalf("mkdir mapping dir: %v", err)
+	}
+	if err := os.WriteFile(mappingPath, []byte(strings.TrimSpace(`[
+  {"id":"device1","comment":"GPU","map":[{"node":"pve01","path":"0000:01:00.0"}]}
+]`)), 0o640); err != nil {
+		t.Fatalf("write mapping_pci.json: %v", err)
+	}
+
+	reader := bufio.NewReader(strings.NewReader("yes\n"))
+	if err := runSafeClusterApply(context.Background(), reader, exportRoot, newTestLogger()); err != nil {
+		t.Fatalf("runSafeClusterApply error: %v", err)
+	}
+
+	wantPrefix := "pvesh create /cluster/mapping/pci --id device1 --comment GPU --map node=pve01,path=0000:01:00.0"
+	found := false
+	for _, call := range runner.calls {
+		if strings.HasPrefix(call, wantPrefix) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a call with prefix %q; calls=%#v", wantPrefix, runner.calls)
+	}
+}
+
 func TestRunSafeClusterApply_UsesSingleExportedNodeWhenHostnameMismatch(t *testing.T) {
 	origCmd := restoreCmd
 	origFS := restoreFS

@@ -245,6 +245,19 @@ func CreateHARollbackBackup(logger *logging.Logger, selectedCategories []Categor
 	})
 }
 
+func CreatePVEAccessControlRollbackBackup(logger *logging.Logger, selectedCategories []Category, destRoot string) (*SafetyBackupResult, error) {
+	acCat := GetCategoryByID("pve_access_control", selectedCategories)
+	if acCat == nil {
+		return nil, nil
+	}
+	return createSafetyBackup(logger, []Category{*acCat}, destRoot, safetyBackupSpec{
+		ArchivePrefix:     "pve_access_control_rollback_backup",
+		LocationFileName:  "pve_access_control_rollback_backup_location.txt",
+		HumanDescription:  "PVE access control rollback backup",
+		WriteLocationFile: true,
+	})
+}
+
 // backupFile adds a single file to the tar archive
 func backupFile(tw *tar.Writer, sourcePath, archivePath string, result *SafetyBackupResult, logger *logging.Logger) error {
 	file, err := safetyFS.Open(sourcePath)

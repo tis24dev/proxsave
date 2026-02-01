@@ -194,6 +194,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	var networkRollbackBackup *SafetyBackupResult
 	var firewallRollbackBackup *SafetyBackupResult
 	var haRollbackBackup *SafetyBackupResult
+	var accessControlRollbackBackup *SafetyBackupResult
 	systemWriteCategories := append([]Category{}, plan.NormalCategories...)
 	systemWriteCategories = append(systemWriteCategories, plan.StagedCategories...)
 	if len(systemWriteCategories) > 0 {
@@ -245,6 +246,17 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		} else if haRollbackBackup != nil && strings.TrimSpace(haRollbackBackup.BackupPath) != "" {
 			logger.Info("HA rollback backup location: %s", haRollbackBackup.BackupPath)
 			logger.Info("This backup is used for the %ds HA rollback timer and only includes HA paths.", int(defaultHARollbackTimeout.Seconds()))
+		}
+	}
+	if plan.SystemType == SystemTypePVE && plan.ClusterBackup && !plan.NeedsClusterRestore && plan.HasCategoryID("pve_access_control") {
+		logger.Info("")
+		logging.DebugStep(logger, "restore", "Create access-control-only rollback backup for optional cluster-safe access control apply")
+		accessControlRollbackBackup, err = CreatePVEAccessControlRollbackBackup(logger, systemWriteCategories, destRoot)
+		if err != nil {
+			logger.Warning("Failed to create access control rollback backup: %v", err)
+		} else if accessControlRollbackBackup != nil && strings.TrimSpace(accessControlRollbackBackup.BackupPath) != "" {
+			logger.Info("Access control rollback backup location: %s", accessControlRollbackBackup.BackupPath)
+			logger.Info("This backup is used for the %ds access control rollback timer and only includes access control paths.", int(defaultAccessControlRollbackTimeout.Seconds()))
 		}
 	}
 
@@ -440,12 +452,30 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	if plan.ClusterSafeMode {
 		if exportRoot == "" {
 			logger.Warning("Cluster SAFE mode selected but export directory not available; skipping automatic pvesh apply")
-		} else if err := runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger, plan); err != nil {
+		} else {
+			// Best-effort: extract extra SAFE apply inventory (pools/mappings) used by pvesh apply workflows.
+			// This keeps SAFE apply usable even when the user did not explicitly export proxsave_info or /etc/pve.
+			safeInvCategory := []Category{{
+				ID:   "safe_apply_inventory",
+				Name: "SAFE apply inventory (pools/mappings)",
+				Paths: []string{
+					"./etc/pve/user.cfg",
+					"./var/lib/proxsave-info/commands/pve/mapping_pci.json",
+					"./var/lib/proxsave-info/commands/pve/mapping_usb.json",
+					"./var/lib/proxsave-info/commands/pve/mapping_dir.json",
+				},
+			}}
+			if err := extractArchiveNative(ctx, prepared.ArchivePath, exportRoot, logger, safeInvCategory, RestoreModeCustom, nil, "", nil); err != nil {
+				logger.Debug("Failed to extract SAFE apply inventory (continuing): %v", err)
+			}
+
+			if err := runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger, plan); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
 				return err
 			}
 			restoreHadWarnings = true
 			logger.Warning("Cluster SAFE apply completed with errors: %v", err)
+		}
 		}
 	}
 
@@ -499,12 +529,35 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			restoreHadWarnings = true
 			logger.Warning("PVE SDN staged apply: %v", err)
 		}
-		if err := maybeApplyAccessControlFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+		if err := maybeApplyAccessControlWithUI(ctx, ui, logger, plan, safetyBackup, accessControlRollbackBackup, stageRoot, cfg.DryRun); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
 				return err
 			}
 			restoreHadWarnings = true
-			logger.Warning("Access control staged apply: %v", err)
+			if errors.Is(err, ErrAccessControlApplyNotCommitted) {
+				var notCommitted *AccessControlApplyNotCommittedError
+				rollbackLog := ""
+				rollbackArmed := false
+				deadline := time.Time{}
+				if errors.As(err, &notCommitted) && notCommitted != nil {
+					rollbackLog = strings.TrimSpace(notCommitted.RollbackLog)
+					rollbackArmed = notCommitted.RollbackArmed
+					deadline = notCommitted.RollbackDeadline
+				}
+				if rollbackArmed {
+					logger.Warning("Access control apply not committed; rollback is ARMED and will run automatically.")
+				} else {
+					logger.Warning("Access control apply not committed; rollback has executed (or marker cleared).")
+				}
+				if !deadline.IsZero() {
+					logger.Info("Rollback deadline: %s", deadline.Format(time.RFC3339))
+				}
+				if rollbackLog != "" {
+					logger.Info("Rollback log: %s", rollbackLog)
+				}
+			} else {
+				logger.Warning("Access control staged apply: %v", err)
+			}
 		}
 		if err := maybeApplyNotificationsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
@@ -891,6 +944,47 @@ func runSafeClusterApplyWithUI(ctx context.Context, ui RestoreWorkflowUI, export
 	logger.Info("")
 	logger.Info("SAFE cluster restore: applying configs via pvesh (node=%s)", currentNode)
 
+	// Datacenter-wide objects (SAFE apply):
+	// - resource mappings (used by VM configs via mapping=<id>)
+	// - resource pools (definitions + membership)
+	if mapErr := maybeApplyPVEClusterResourceMappingsWithUI(ctx, ui, logger, exportRoot); mapErr != nil {
+		logger.Warning("SAFE apply: resource mappings: %v", mapErr)
+	}
+
+	pools, poolsErr := readPVEPoolsFromExportUserCfg(exportRoot)
+	if poolsErr != nil {
+		logger.Warning("SAFE apply: failed to parse pools from export: %v", poolsErr)
+		pools = nil
+	}
+	applyPools := false
+	allowPoolMove := false
+	if len(pools) > 0 {
+		poolNames := summarizePoolIDs(pools, 10)
+		message := fmt.Sprintf("Found %d pool(s) in exported user.cfg.\n\nPools: %s\n\nApply pool definitions now? (Membership will be applied later in this SAFE apply flow.)", len(pools), poolNames)
+		ok, promptErr := ui.ConfirmAction(ctx, "Apply PVE resource pools (merge)", message, "Apply now", "Skip apply", 0, false)
+		if promptErr != nil {
+			return promptErr
+		}
+		applyPools = ok
+		logging.DebugStep(logger, "safe cluster apply (ui)", "User choice: apply_pools=%v (pools=%d)", applyPools, len(pools))
+		if applyPools {
+			if anyPoolHasVMs(pools) {
+				moveMsg := "Allow moving guests from other pools to match the backup? This may change the current pool assignment of existing VMs/CTs."
+				move, moveErr := ui.ConfirmAction(ctx, "Pools: allow move (VM/CT)", moveMsg, "Allow move", "Don't move", 0, false)
+				if moveErr != nil {
+					return moveErr
+				}
+				allowPoolMove = move
+			}
+
+			applied, failed, applyErr := applyPVEPoolsDefinitions(ctx, logger, pools)
+			if applyErr != nil {
+				logger.Warning("Pools apply (definitions) encountered errors: %v", applyErr)
+			}
+			logger.Info("Pools apply (definitions) completed: ok=%d failed=%d", applied, failed)
+		}
+	}
+
 	sourceNode := currentNode
 	logging.DebugStep(logger, "safe cluster apply (ui)", "List exported node directories under %s", filepath.Join(exportRoot, "etc/pve/nodes"))
 	exportNodes, nodesErr := listExportNodeDirs(exportRoot)
@@ -963,59 +1057,69 @@ func runSafeClusterApplyWithUI(ctx context.Context, ui RestoreWorkflowUI, export
 		}
 	}
 
-	if plan != nil && plan.HasCategoryID("storage_pve") {
+	skipStorageDatacenter := plan != nil && plan.HasCategoryID("storage_pve")
+	if skipStorageDatacenter {
 		logging.DebugStep(logger, "safe cluster apply (ui)", "Skip storage/datacenter apply: handled by storage_pve staged restore")
-		return nil
-	}
-
-	storageCfg := filepath.Join(exportRoot, "etc/pve/storage.cfg")
-	logging.DebugStep(logger, "safe cluster apply (ui)", "Check export: storage.cfg (%s)", storageCfg)
-	storageInfo, storageErr := restoreFS.Stat(storageCfg)
-	if storageErr == nil && !storageInfo.IsDir() {
-		logging.DebugStep(logger, "safe cluster apply (ui)", "storage.cfg found (size=%d)", storageInfo.Size())
-		applyStorage, promptErr := ui.ConfirmApplyStorageCfg(ctx, storageCfg)
-		if promptErr != nil {
-			return promptErr
-		}
-		logging.DebugStep(logger, "safe cluster apply (ui)", "User choice: apply_storage=%v", applyStorage)
-		if applyStorage {
-			applied, failed, err := applyStorageCfg(ctx, storageCfg, logger)
-			logging.DebugStep(logger, "safe cluster apply (ui)", "Storage apply result: ok=%d failed=%d err=%v", applied, failed, err)
-			if err != nil {
-				logger.Warning("Storage apply encountered errors: %v", err)
-			}
-			logger.Info("Storage apply completed: ok=%d failed=%d", applied, failed)
-		} else {
-			logger.Info("Skipping storage.cfg apply")
-		}
+		logger.Info("Skipping storage/datacenter apply (handled by storage_pve staged restore)")
 	} else {
-		logging.DebugStep(logger, "safe cluster apply (ui)", "storage.cfg not found (err=%v)", storageErr)
-		logger.Info("No storage.cfg found in export")
-	}
-
-	dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
-	logging.DebugStep(logger, "safe cluster apply (ui)", "Check export: datacenter.cfg (%s)", dcCfg)
-	dcInfo, dcErr := restoreFS.Stat(dcCfg)
-	if dcErr == nil && !dcInfo.IsDir() {
-		logging.DebugStep(logger, "safe cluster apply (ui)", "datacenter.cfg found (size=%d)", dcInfo.Size())
-		applyDC, promptErr := ui.ConfirmApplyDatacenterCfg(ctx, dcCfg)
-		if promptErr != nil {
-			return promptErr
-		}
-		logging.DebugStep(logger, "safe cluster apply (ui)", "User choice: apply_datacenter=%v", applyDC)
-		if applyDC {
-			logging.DebugStep(logger, "safe cluster apply (ui)", "Apply datacenter.cfg via pvesh")
-			if err := runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", dcCfg}); err != nil {
-				logger.Warning("Failed to apply datacenter.cfg: %v", err)
+		storageCfg := filepath.Join(exportRoot, "etc/pve/storage.cfg")
+		logging.DebugStep(logger, "safe cluster apply (ui)", "Check export: storage.cfg (%s)", storageCfg)
+		storageInfo, storageErr := restoreFS.Stat(storageCfg)
+		if storageErr == nil && !storageInfo.IsDir() {
+			logging.DebugStep(logger, "safe cluster apply (ui)", "storage.cfg found (size=%d)", storageInfo.Size())
+			applyStorage, promptErr := ui.ConfirmApplyStorageCfg(ctx, storageCfg)
+			if promptErr != nil {
+				return promptErr
+			}
+			logging.DebugStep(logger, "safe cluster apply (ui)", "User choice: apply_storage=%v", applyStorage)
+			if applyStorage {
+				applied, failed, err := applyStorageCfg(ctx, storageCfg, logger)
+				logging.DebugStep(logger, "safe cluster apply (ui)", "Storage apply result: ok=%d failed=%d err=%v", applied, failed, err)
+				if err != nil {
+					logger.Warning("Storage apply encountered errors: %v", err)
+				}
+				logger.Info("Storage apply completed: ok=%d failed=%d", applied, failed)
 			} else {
-				logger.Info("datacenter.cfg applied successfully")
+				logger.Info("Skipping storage.cfg apply")
 			}
 		} else {
-			logger.Info("Skipping datacenter.cfg apply")
+			logging.DebugStep(logger, "safe cluster apply (ui)", "storage.cfg not found (err=%v)", storageErr)
+			logger.Info("No storage.cfg found in export")
 		}
-	} else {
-		logging.DebugStep(logger, "safe cluster apply (ui)", "datacenter.cfg not found (err=%v)", dcErr)
-		logger.Info("No datacenter.cfg found in export")
+
+		dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
+		logging.DebugStep(logger, "safe cluster apply (ui)", "Check export: datacenter.cfg (%s)", dcCfg)
+		dcInfo, dcErr := restoreFS.Stat(dcCfg)
+		if dcErr == nil && !dcInfo.IsDir() {
+			logging.DebugStep(logger, "safe cluster apply (ui)", "datacenter.cfg found (size=%d)", dcInfo.Size())
+			applyDC, promptErr := ui.ConfirmApplyDatacenterCfg(ctx, dcCfg)
+			if promptErr != nil {
+				return promptErr
+			}
+			logging.DebugStep(logger, "safe cluster apply (ui)", "User choice: apply_datacenter=%v", applyDC)
+			if applyDC {
+				logging.DebugStep(logger, "safe cluster apply (ui)", "Apply datacenter.cfg via pvesh")
+				if err := runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", dcCfg}); err != nil {
+					logger.Warning("Failed to apply datacenter.cfg: %v", err)
+				} else {
+					logger.Info("datacenter.cfg applied successfully")
+				}
+			} else {
+				logger.Info("Skipping datacenter.cfg apply")
+			}
+		} else {
+			logging.DebugStep(logger, "safe cluster apply (ui)", "datacenter.cfg not found (err=%v)", dcErr)
+			logger.Info("No datacenter.cfg found in export")
+		}
+	}
+
+	// Apply pool membership after VM configs and storage/datacenter apply.
+	if applyPools && len(pools) > 0 {
+		applied, failed, applyErr := applyPVEPoolsMembership(ctx, logger, pools, allowPoolMove)
+		if applyErr != nil {
+			logger.Warning("Pools apply (membership) encountered errors: %v", applyErr)
+		}
+		logger.Info("Pools apply (membership) completed: ok=%d failed=%d", applied, failed)
 	}
 
 	return nil

@@ -492,6 +492,13 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 			filepath.Join(commandsDir, "pve_roles.json"),
 			"PVE roles",
 			false)
+
+		// Resource pools (datacenter-wide objects; may be useful for SAFE restore apply).
+		c.safeCmdOutput(ctx,
+			"pveum pool list --output-format=json",
+			filepath.Join(commandsDir, "pools.json"),
+			"PVE resource pools",
+			false)
 	}
 
 	// Cluster commands (if clustered)
@@ -513,6 +520,23 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 			"pvesh get /cluster/ha/status --output-format=json",
 			filepath.Join(commandsDir, "ha_status.json"),
 			"HA status",
+			false)
+
+		// Resource mappings (datacenter-wide objects; used by VM configs via mapping=<id>).
+		c.safeCmdOutput(ctx,
+			"pvesh get /cluster/mapping/pci --output-format=json",
+			filepath.Join(commandsDir, "mapping_pci.json"),
+			"PCI resource mappings",
+			false)
+		c.safeCmdOutput(ctx,
+			"pvesh get /cluster/mapping/usb --output-format=json",
+			filepath.Join(commandsDir, "mapping_usb.json"),
+			"USB resource mappings",
+			false)
+		c.safeCmdOutput(ctx,
+			"pvesh get /cluster/mapping/dir --output-format=json",
+			filepath.Join(commandsDir, "mapping_dir.json"),
+			"Directory resource mappings",
 			false)
 	} else if clustered && !c.config.BackupClusterConfig {
 		c.logger.Debug("Skipping cluster runtime commands: BACKUP_CLUSTER_CONFIG=false (clustered=%v)", clustered)

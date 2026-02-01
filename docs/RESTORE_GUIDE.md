@@ -153,7 +153,7 @@ On standalone PVE restores (non-cluster backups), ProxSave restores `pve_access_
 - ProxSave forces `root@pam` to keep `Administrator` on `/` (propagate), to prevent lockout.
 
 **Cluster backups**:
-- In cluster SAFE mode, ProxSave does **not** auto-apply 1:1 access control (including secrets). Use cluster RECOVERY (isolated/offline) for full fidelity.
+- In cluster SAFE mode (no `config.db` restore), ProxSave prompts you to either **skip** access control (recommended) or apply it **1:1 cluster-wide** (including secrets) with a rollback timer.
 
 **TFA**:
 - Restored 1:1. Default behavior is **warn** (do not disable users). Some methods (notably WebAuthn) may require re-enrollment if the hostname/FQDN/origin changes.
@@ -384,9 +384,11 @@ Phase 12: Export-Only Extraction
   ├─ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
   └─ Separate detailed log
 
-Phase 13: pvesh SAFE Apply (Cluster SAFE Mode Only)
-  ├─ Scan exported VM/CT configs
-  ├─ Offer to apply via pvesh API
+Phase 13: SAFE Apply (Cluster SAFE Mode Only)
+  ├─ Scan exported datacenter objects (mappings, pools, VM/CT configs)
+  ├─ Offer to apply resource mappings via pvesh (`/cluster/mapping/*`)
+  ├─ Offer to apply pools via pveum (`pveum pool add/modify`)
+  ├─ Offer to apply VM/CT configs via pvesh API
   ├─ Offer to apply storage/datacenter via pvesh (only if `storage_pve` is NOT selected)
   └─ Otherwise handled by `storage_pve` staged restore
 
@@ -1303,11 +1305,24 @@ Result:
 
 ### pvesh SAFE Apply (Cluster SAFE Mode)
 
-When using **SAFE cluster restore mode**, the workflow offers to apply exported configurations via the Proxmox VE API (`pvesh`). This allows you to restore individual configurations without replacing the entire cluster database.
+When using **SAFE cluster restore mode**, the workflow offers to apply exported configurations and datacenter-wide objects via the Proxmox VE tooling (`pvesh` / `pveum`). This allows you to restore individual configurations without replacing the entire cluster database.
 
 **Available Actions**:
 
-#### 1. VM/CT Configuration Apply
+#### 1. Resource Mappings Apply (PCI/USB/Dir)
+
+If your VM/CT configs use `mapping=<id>` (notably for PCI/USB passthrough), ProxSave can apply the cluster resource mappings first:
+- Applied via `pvesh` to `/cluster/mapping/{pci,usb,dir}` (when present in the backup)
+- Recommended to run **before** VM/CT apply to avoid missing-mapping errors
+
+#### 2. Resource Pools Apply (Pools)
+
+ProxSave can restore pool definitions and membership (merge semantics):
+- Pools are parsed from the exported `user.cfg`
+- Applied via `pveum pool add` / `pveum pool modify`
+- Membership (VMIDs + storages) is applied later in the SAFE apply flow (after VM/CT configs and storage)
+
+#### 3. VM/CT Configuration Apply
 
 ```
 Found 5 VM/CT configs for node pve01
@@ -1321,7 +1336,7 @@ For each VM/CT config found in the export:
 
 **Note**: This creates or updates VM configurations in the cluster. Disk images are NOT affected.
 
-#### 2. Storage Configuration Apply
+#### 4. Storage Configuration Apply
 
 ```
 Storage configuration found: /opt/proxsave/proxmox-config-export-*/etc/pve/storage.cfg
@@ -1335,7 +1350,7 @@ Parses `storage.cfg` and applies each storage definition:
 
 **Note**: Storage directories are NOT created automatically. Run `pvesm status` to verify, then create missing directories manually.
 
-#### 3. Datacenter Configuration Apply
+#### 5. Datacenter Configuration Apply
 
 ```
 Datacenter configuration found: /opt/proxsave/proxmox-config-export-*/etc/pve/datacenter.cfg
@@ -1349,6 +1364,12 @@ Applies datacenter-wide settings:
 **Interactive Flow**:
 ```
 SAFE cluster restore: applying configs via pvesh (node=pve01)
+
+Apply PVE resource mappings (pvesh)? (y/N): y
+Applied pci mapping device1
+
+Apply PVE resource pools (merge)? (y/N): y
+Applied pool definition dev
 
 Found 3 VM/CT configs for node pve01
 Apply all VM/CT configs via pvesh? (y/N): y
@@ -1366,6 +1387,8 @@ Storage apply completed: ok=2 failed=0
 Datacenter configuration found: .../etc/pve/datacenter.cfg
 Apply datacenter.cfg via pvesh? (y/N): n
 Skipping datacenter.cfg apply
+
+Pools apply (membership) completed: ok=1 failed=0
 ```
 
 **Benefits of pvesh Apply**:
