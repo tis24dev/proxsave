@@ -31,6 +31,8 @@ import (
 
 const (
 	githubRepo = "tis24dev/proxsave"
+
+	maxUpgradeConfigJSONPreviewLength = 4000
 )
 
 type releaseInfo struct {
@@ -125,7 +127,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	bootstrap.Printf("Latest available version: %s (current: %s)", latestVersion, currentVersion)
 
 	reader := bufio.NewReader(os.Stdin)
-	confirm, err := promptYesNo(ctx, reader, "Do you want to download and install this version now? [y/N]: ", false)
+	confirm, err := promptYesNo(ctx, reader, "Do you want to download and install this version now? (backup.env will be updated with any missing keys; a backup will be created) [y/N]: ", false)
 	if err != nil {
 		bootstrap.Error("ERROR: %v", err)
 		workflowErr = err
@@ -648,8 +650,8 @@ func upgradeConfigWithBinary(ctx context.Context, execPath, configPath string) (
 	var result config.UpgradeResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		preview := strings.TrimSpace(stdout.String())
-		if len(preview) > 4000 {
-			preview = preview[:4000] + "…"
+		if len(preview) > maxUpgradeConfigJSONPreviewLength {
+			preview = preview[:maxUpgradeConfigJSONPreviewLength] + "…"
 		}
 		return nil, fmt.Errorf("invalid JSON from upgrade-config-json: %w (stdout=%q)", err, preview)
 	}

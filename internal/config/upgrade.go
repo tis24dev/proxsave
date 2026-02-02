@@ -157,7 +157,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	// 1. Collect user values: for each KEY we store all VALUE entries in order.
 	userValues, userKeyOrder, err := parseEnvValues(originalLines)
 	if err != nil {
-		return result, "", originalContent, err
+		return result, "", originalContent, fmt.Errorf("failed to parse config %s: %w", configPath, err)
 	}
 
 	// 2. Walk the template line-by-line, merging values.
@@ -291,7 +291,7 @@ func parseEnvValues(lines []string) (map[string][]envValue, []string, error) {
 			blockLines := make([]string, 0)
 			blockEnd, err := findClosingQuoteLine(lines, i+1)
 			if err != nil {
-				return nil, nil, fmt.Errorf("unterminated multi-line value for %s", key)
+				return nil, nil, fmt.Errorf("unterminated multi-line value for %s starting at line %d", key, i+1)
 			}
 			blockLines = append(blockLines, lines[i+1:blockEnd]...)
 

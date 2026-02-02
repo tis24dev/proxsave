@@ -186,12 +186,11 @@ CUSTOM_BACKUP_PATHS="
 		if err != nil {
 			t.Fatalf("failed to read upgraded config: %v", err)
 		}
-		content := string(data)
+		content := strings.ReplaceAll(string(data), "\r\n", "\n")
 		if !strings.Contains(content, "BACKUP_PATH=/legacy/backup") {
 			t.Fatalf("upgraded config missing preserved BACKUP_PATH:\n%s", content)
 		}
-		if !strings.Contains(content, "CUSTOM_BACKUP_PATHS=\"\n/etc/custom.conf\n\"\n") &&
-			!strings.Contains(content, "CUSTOM_BACKUP_PATHS=\"\r\n/etc/custom.conf\r\n\"\r\n") {
+		if !strings.Contains(content, "CUSTOM_BACKUP_PATHS=\"\n/etc/custom.conf\n\"\n") {
 			t.Fatalf("upgraded config missing preserved CUSTOM_BACKUP_PATHS block:\n%s", content)
 		}
 		if strings.Contains(content, "# /template/example") {
