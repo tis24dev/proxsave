@@ -78,14 +78,41 @@ echo " Dir:  ${TARGET_DIR}"
 echo "--------------------------------------------"
 
 ###############################################
-# 4) Fetch latest release tag
+# 4) HTTP helper (curl/wget)
 ###############################################
-LATEST_TAG="$(
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' \
-    | head -n1 \
-    | cut -d '"' -f4
-)"
+fetch() {
+  local url="$1"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${url}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O - "${url}"
+  else
+    echo "❌ Neither curl nor wget is installed" >&2
+    exit 1
+  fi
+}
+
+download() {
+  local url="$1"
+  local out="$2"
+
+  fetch "${url}" > "${out}"
+}
+
+###############################################
+# 5) Fetch latest release tag
+###############################################
+LATEST_JSON="$(fetch "https://api.github.com/repos/${REPO}/releases/latest")"
+
+LATEST_TAG=""
+if command -v jq >/dev/null 2>&1; then
+  LATEST_TAG="$(jq -r '.tag_name // empty' <<<"${LATEST_JSON}" 2>/dev/null || true)"
+fi
+
+if [ -z "${LATEST_TAG}" ] && [[ ${LATEST_JSON} =~ \"tag_name\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+  LATEST_TAG="${BASH_REMATCH[1]}"
+fi
 
 if [ -z "${LATEST_TAG}" ]; then
   echo "❌ Could not detect latest release tag"
@@ -97,7 +124,7 @@ echo "📦 Latest tag: ${LATEST_TAG}"
 VERSION="${LATEST_TAG#v}"
 
 ###############################################
-# 5) Build correct filename (ARCHIVE)
+# 6) Build correct filename (ARCHIVE)
 ###############################################
 FILENAME="proxsave_${VERSION}_${OS}_${ARCH}.tar.gz"
 
@@ -108,7 +135,7 @@ echo "➡ Archive URL:  ${BINARY_URL}"
 echo "➡ Checksum URL: ${CHECKSUM_URL}"
 
 ###############################################
-# 6) Prepare directories
+# 7) Prepare directories
 ###############################################
 mkdir -p "${BUILD_DIR}"
 
@@ -116,22 +143,8 @@ TMP_DIR="$(mktemp -d)"
 cd "${TMP_DIR}"
 
 ###############################################
-# 7) Download helper
+# 8) Download archive and checksum
 ###############################################
-download() {
-  local url="$1"
-  local out="$2"
-
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -o "${out}" "${url}"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "${out}" "${url}"
-  else
-    echo "❌ Neither curl nor wget is installed"
-    exit 1
-  fi
-}
-
 echo "[+] Downloading archive..."
 download "${BINARY_URL}" "${FILENAME}"
 
@@ -139,7 +152,7 @@ echo "[+] Downloading SHA256SUMS..."
 download "${CHECKSUM_URL}" "SHA256SUMS"
 
 ###############################################
-# 8) Verify checksum
+# 9) Verify checksum
 ###############################################
 echo "[+] Verifying checksum..."
 grep " ${FILENAME}\$" SHA256SUMS > CHECK || {
@@ -151,7 +164,7 @@ sha256sum -c CHECK
 echo "✔ Checksum OK"
 
 ###############################################
-# 9) Extract ONLY the binary
+# 10) Extract ONLY the binary
 ###############################################
 echo "[+] Extracting binary from tar.gz..."
 tar -xzf "${FILENAME}" proxsave
@@ -162,14 +175,14 @@ if [ ! -f proxsave ]; then
 fi
 
 ###############################################
-# 10) Install binary
+# 11) Install binary
 ###############################################
 echo "[+] Installing binary -> ${TARGET_BIN}"
 mv proxsave "${TARGET_BIN}"
 chmod +x "${TARGET_BIN}"
 
 ###############################################
-# 11) Run internal installer (--install or --new-install)
+# 12) Run internal installer (--install or --new-install)
 ###############################################
 cd "${TARGET_DIR}"
 
@@ -182,7 +195,7 @@ echo "[+] Running: ${TARGET_BIN} ${BINARY_ARGS[*]}"
 "${TARGET_BIN}" "${BINARY_ARGS[@]}"
 
 ###############################################
-# 12) Cleanup
+# 13) Cleanup
 ###############################################
 rm -rf "${TMP_DIR}"
 
