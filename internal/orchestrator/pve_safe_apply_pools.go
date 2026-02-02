@@ -101,6 +101,43 @@ func anyPoolHasVMs(pools []pvePoolSpec) bool {
 	return false
 }
 
+func listPVEPoolIDs(ctx context.Context) (map[string]struct{}, error) {
+	output, err := restoreCmd.Run(ctx, "pveum", "pool", "list")
+	raw := strings.TrimSpace(string(output))
+	if raw == "" {
+		if err != nil {
+			return nil, fmt.Errorf("pveum pool list failed: %w", err)
+		}
+		return nil, nil
+	}
+
+	out := make(map[string]struct{})
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 0 {
+			continue
+		}
+		if strings.EqualFold(fields[0], "poolid") {
+			continue
+		}
+		out[strings.TrimSpace(fields[0])] = struct{}{}
+	}
+	if err != nil {
+		return out, fmt.Errorf("pveum pool list failed: %w", err)
+	}
+	return out, nil
+}
+
+func pvePoolAlreadyExists(existing map[string]struct{}, id string, addOutput []byte) bool {
+	if existing != nil {
+		if _, ok := existing[id]; ok {
+			return true
+		}
+	}
+	msg := strings.ToLower(strings.TrimSpace(string(addOutput)))
+	return strings.Contains(msg, "already exists") || strings.Contains(msg, "already exist")
+}
+
 func applyPVEPoolsDefinitions(ctx context.Context, logger *logging.Logger, pools []pvePoolSpec) (applied, failed int, err error) {
 	if len(pools) == 0 {
 		return 0, 0, nil
@@ -112,6 +149,11 @@ func applyPVEPoolsDefinitions(ctx context.Context, logger *logging.Logger, pools
 	done := logging.DebugStart(logger, "pve pools apply (definitions)", "pools=%d", len(pools))
 	defer func() { done(err) }()
 
+	existingPools, listErr := listPVEPoolIDs(ctx)
+	if listErr != nil {
+		logger.Debug("Pools: unable to list existing pools: %v", listErr)
+	}
+
 	for _, pool := range pools {
 		if err := ctx.Err(); err != nil {
 			return applied, failed, err
@@ -121,21 +163,29 @@ func applyPVEPoolsDefinitions(ctx context.Context, logger *logging.Logger, pools
 			continue
 		}
 
+		comment := strings.TrimSpace(pool.Comment)
 		ok := false
 
 		addArgs := []string{"pool", "add", id}
-		if strings.TrimSpace(pool.Comment) != "" {
-			addArgs = append(addArgs, "--comment", strings.TrimSpace(pool.Comment))
+		if comment != "" {
+			addArgs = append(addArgs, "--comment", comment)
 		}
-		if _, addErr := restoreCmd.Run(ctx, "pveum", addArgs...); addErr != nil {
+		addOut, addErr := restoreCmd.Run(ctx, "pveum", addArgs...)
+		if addErr != nil {
 			logger.Debug("Pools: add %s failed (may already exist): %v", id, addErr)
+			if comment == "" && pvePoolAlreadyExists(existingPools, id, addOut) {
+				ok = true
+			}
 		} else {
 			ok = true
+			if existingPools != nil {
+				existingPools[id] = struct{}{}
+			}
 		}
 
 		// Ensure comment is applied even if the pool already existed.
-		if strings.TrimSpace(pool.Comment) != "" {
-			modArgs := []string{"pool", "modify", id, "--comment", strings.TrimSpace(pool.Comment)}
+		if comment != "" {
+			modArgs := []string{"pool", "modify", id, "--comment", comment}
 			if _, modErr := restoreCmd.Run(ctx, "pveum", modArgs...); modErr != nil {
 				logger.Warning("Pools: failed to set comment for %s: %v", id, modErr)
 			} else {
@@ -249,4 +299,3 @@ func uniqueSortedStrings(items []string) []string {
 	sort.Strings(out)
 	return out
 }
-
