@@ -17,9 +17,10 @@ type proxmoxNotificationEntry struct {
 }
 
 type proxmoxNotificationSection struct {
-	Type    string
-	Name    string
-	Entries []proxmoxNotificationEntry
+	Type        string
+	Name        string
+	Entries     []proxmoxNotificationEntry
+	RedactFlags []string
 }
 
 func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
@@ -134,12 +135,14 @@ func applyPVENotificationsFromStage(ctx context.Context, logger *logging.Logger,
 	}
 
 	privByKey := make(map[string][]proxmoxNotificationEntry)
+	privRedactFlagsByKey := make(map[string][]string)
 	for _, s := range privSections {
 		if strings.TrimSpace(s.Type) == "" || strings.TrimSpace(s.Name) == "" {
 			continue
 		}
 		key := fmt.Sprintf("%s:%s", s.Type, s.Name)
 		privByKey[key] = append([]proxmoxNotificationEntry{}, s.Entries...)
+		privRedactFlagsByKey[key] = append([]string(nil), notificationRedactFlagsFromEntries(s.Entries)...)
 	}
 
 	var endpoints []proxmoxNotificationSection
@@ -150,6 +153,9 @@ func applyPVENotificationsFromStage(ctx context.Context, logger *logging.Logger,
 			key := fmt.Sprintf("%s:%s", s.Type, s.Name)
 			if priv, ok := privByKey[key]; ok && len(priv) > 0 {
 				s.Entries = append(s.Entries, priv...)
+			}
+			if redactFlags := privRedactFlagsByKey[key]; len(redactFlags) > 0 {
+				s.RedactFlags = append(s.RedactFlags, redactFlags...)
 			}
 			endpoints = append(endpoints, s)
 		case "matcher":
@@ -193,7 +199,7 @@ func applyPVEEndpointSection(ctx context.Context, logger *logging.Logger, sectio
 	setPath := fmt.Sprintf("/cluster/notifications/endpoints/%s/%s", typ, name)
 	createPath := fmt.Sprintf("/cluster/notifications/endpoints/%s", typ)
 	args := buildPveshArgs(section.Entries)
-	return applyPveshObject(ctx, logger, setPath, createPath, name, args)
+	return applyPveshObject(ctx, logger, setPath, createPath, name, args, notificationRedactFlags(section))
 }
 
 func applyPVEMatcherSection(ctx context.Context, logger *logging.Logger, section proxmoxNotificationSection) error {
@@ -204,20 +210,26 @@ func applyPVEMatcherSection(ctx context.Context, logger *logging.Logger, section
 	setPath := fmt.Sprintf("/cluster/notifications/matchers/%s", name)
 	createPath := "/cluster/notifications/matchers"
 	args := buildPveshArgs(section.Entries)
-	return applyPveshObject(ctx, logger, setPath, createPath, name, args)
+	return applyPveshObject(ctx, logger, setPath, createPath, name, args, nil)
 }
 
-func applyPveshObject(ctx context.Context, logger *logging.Logger, setPath, createPath, name string, args []string) error {
-	if err := runPvesh(ctx, logger, append([]string{"set", setPath}, args...)); err == nil {
+func applyPveshObject(ctx context.Context, logger *logging.Logger, setPath, createPath, name string, args []string, redactFlags []string) error {
+	setArgs := append([]string{"set", setPath}, args...)
+	if len(redactFlags) > 0 {
+		if _, err := runPveshSensitive(ctx, logger, setArgs, redactFlags...); err == nil {
+			return nil
+		}
+	} else if err := runPvesh(ctx, logger, setArgs); err == nil {
 		return nil
 	}
 
 	createArgs := []string{"create", createPath, "--name", name}
 	createArgs = append(createArgs, args...)
-	if err := runPvesh(ctx, logger, createArgs); err != nil {
+	if len(redactFlags) > 0 {
+		_, err := runPveshSensitive(ctx, logger, createArgs, redactFlags...)
 		return err
 	}
-	return nil
+	return runPvesh(ctx, logger, createArgs)
 }
 
 func buildPveshArgs(entries []proxmoxNotificationEntry) []string {
@@ -234,6 +246,63 @@ func buildPveshArgs(entries []proxmoxNotificationEntry) []string {
 		args = append(args, entry.Value)
 	}
 	return args
+}
+
+func notificationRedactFlagsFromEntries(entries []proxmoxNotificationEntry) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+	var out []string
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		key := strings.TrimSpace(entry.Key)
+		if key == "" || key == "name" || key == "digest" {
+			continue
+		}
+		flag := "--" + key
+		if _, ok := seen[flag]; ok {
+			continue
+		}
+		seen[flag] = struct{}{}
+		out = append(out, flag)
+	}
+	return out
+}
+
+func notificationRedactFlags(section proxmoxNotificationSection) []string {
+	out := make([]string, 0, len(section.RedactFlags)+8)
+	seen := make(map[string]struct{}, len(section.RedactFlags)+8)
+	add := func(flag string) {
+		flag = strings.TrimSpace(flag)
+		if flag == "" {
+			return
+		}
+		if _, ok := seen[flag]; ok {
+			return
+		}
+		seen[flag] = struct{}{}
+		out = append(out, flag)
+	}
+
+	for _, flag := range section.RedactFlags {
+		add(flag)
+	}
+
+	// Default set for notification endpoints; protects against secrets accidentally present in non-priv config.
+	for _, flag := range []string{"--password", "--token", "--secret", "--apikey", "--api-key"} {
+		add(flag)
+	}
+
+	// If the config uses alternative key names, still try to redact common secret-like fields.
+	for _, entry := range section.Entries {
+		key := strings.ToLower(strings.TrimSpace(entry.Key))
+		switch key {
+		case "password", "token", "secret", "apikey", "api-key":
+			add("--" + strings.TrimSpace(entry.Key))
+		}
+	}
+
+	return out
 }
 
 func applyConfigFileFromStage(logger *logging.Logger, stageRoot, relPath, destPath string, perm os.FileMode) error {

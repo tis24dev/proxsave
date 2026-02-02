@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -173,6 +174,36 @@ smtp: example
 		if fmt.Sprintf("%#v", runner.calls[i].args) != fmt.Sprintf("%#v", want[i].args) {
 			t.Fatalf("call[%d].args=%#v want %#v", i, runner.calls[i].args, want[i].args)
 		}
+	}
+}
+
+func TestApplyPVEEndpointSection_RedactsSecretsInError(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+
+	runner := &FakeCommandRunner{
+		Errors: map[string]error{
+			"pvesh set /cluster/notifications/endpoints/smtp/example --password somepassword":           fmt.Errorf("boom"),
+			"pvesh create /cluster/notifications/endpoints/smtp --name example --password somepassword": fmt.Errorf("boom"),
+		},
+	}
+	restoreCmd = runner
+
+	section := proxmoxNotificationSection{
+		Type:    "smtp",
+		Name:    "example",
+		Entries: []proxmoxNotificationEntry{{Key: "password", Value: "somepassword"}},
+	}
+
+	err := applyPVEEndpointSection(context.Background(), newTestLogger(), section)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if strings.Contains(err.Error(), "somepassword") {
+		t.Fatalf("expected password to be redacted from error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "<redacted>") {
+		t.Fatalf("expected <redacted> placeholder in error, got: %v", err)
 	}
 }
 
