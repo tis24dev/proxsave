@@ -223,7 +223,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
 	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
-	fmt.Println("  --upgrade          - Update proxsave binary to latest release (no config changes)")
+	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")

@@ -154,3 +154,82 @@ KEY3=default3
 		}
 	})
 }
+
+func TestUpgradeConfigPreservesBlockValues(t *testing.T) {
+	template := `BACKUP_PATH=/default/backup
+LOG_PATH=/default/log
+CUSTOM_BACKUP_PATHS="
+# /template/example
+"
+`
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		userConfig := `BACKUP_PATH=/legacy/backup
+CUSTOM_BACKUP_PATHS="
+/etc/custom.conf
+"
+`
+		if err := os.WriteFile(configPath, []byte(userConfig), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when template has missing keys")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		content := string(data)
+		if !strings.Contains(content, "BACKUP_PATH=/legacy/backup") {
+			t.Fatalf("upgraded config missing preserved BACKUP_PATH:\n%s", content)
+		}
+		if !strings.Contains(content, "CUSTOM_BACKUP_PATHS=\"\n/etc/custom.conf\n\"\n") &&
+			!strings.Contains(content, "CUSTOM_BACKUP_PATHS=\"\r\n/etc/custom.conf\r\n\"\r\n") {
+			t.Fatalf("upgraded config missing preserved CUSTOM_BACKUP_PATHS block:\n%s", content)
+		}
+		if strings.Contains(content, "# /template/example") {
+			t.Fatalf("template example unexpectedly present in preserved block:\n%s", content)
+		}
+	})
+}
+
+func TestPlanUpgradeConfigTracksMissingBlockKey(t *testing.T) {
+	template := `BACKUP_PATH=/default/backup
+CUSTOM_BACKUP_PATHS="
+# /template/example
+"
+`
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		userConfig := "BACKUP_PATH=/legacy/backup\n"
+		if err := os.WriteFile(configPath, []byte(userConfig), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		result, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when keys are missing")
+		}
+		found := false
+		for _, key := range result.MissingKeys {
+			if key == "CUSTOM_BACKUP_PATHS" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("MissingKeys=%v; expected CUSTOM_BACKUP_PATHS", result.MissingKeys)
+		}
+	})
+}

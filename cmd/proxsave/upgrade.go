@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -38,7 +39,7 @@ type releaseInfo struct {
 
 // runUpgrade orchestrates the upgrade flow:
 //   - downloads and installs the latest binary release
-//   - keeps the existing backup.env untouched
+//   - upgrades backup.env by adding missing keys from the new template (preserving existing values)
 //   - refreshes symlinks/cron/docs and normalizes permissions/ownership
 func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) int {
 	baseDir := filepath.Dir(filepath.Dir(args.ConfigPath))
@@ -147,7 +148,17 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 		workflowErr = upgradeErr
 	}
 
-	// Refresh docs/symlinks/cron/identity without touching backup.env
+	var cfgUpgradeResult *config.UpgradeResult
+	var cfgUpgradeErr error
+	if upgradeErr == nil {
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "upgrading configuration with newly installed binary")
+		cfgUpgradeResult, cfgUpgradeErr = upgradeConfigWithBinary(ctx, execPath, args.ConfigPath)
+		if cfgUpgradeErr != nil {
+			bootstrap.Warning("Upgrade: configuration upgrade failed: %v", cfgUpgradeErr)
+		}
+	}
+
+	// Refresh docs/symlinks/cron/identity (configuration upgrade is handled separately)
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "refreshing docs and symlinks")
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
 		bootstrap.Warning("Upgrade: failed to refresh documentation: %v", err)
@@ -174,7 +185,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "normalizing permissions")
 	permStatus, permMessage := fixPermissionsAfterInstall(ctx, args.ConfigPath, baseDir, bootstrap)
 
-	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage)
+	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr)
 
 	if upgradeErr != nil {
 		return types.ExitGenericError.Int()
@@ -512,7 +523,7 @@ func installBinary(srcPath, destPath string, bootstrap *logging.BootstrapLogger)
 	return nil
 }
 
-func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string) {
+func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error) {
 	colorReset := "\033[0m"
 
 	title := "Go-based upgrade completed"
@@ -549,11 +560,38 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 		fmt.Println()
 	}
 
+	if cfgUpgradeErr != nil {
+		fmt.Printf("Configuration: ERROR - failed to upgrade %s\n", configPath)
+		fmt.Printf("  Details: %v\n", cfgUpgradeErr)
+		fmt.Println("  Action: Review the configuration file and run: proxsave --upgrade-config")
+		fmt.Println()
+	} else if cfgUpgradeResult != nil {
+		if cfgUpgradeResult.Changed {
+			if len(cfgUpgradeResult.MissingKeys) > 0 {
+				fmt.Printf("Configuration: updated (added %d missing key(s))\n", len(cfgUpgradeResult.MissingKeys))
+				fmt.Printf("  Added keys: %s\n", strings.Join(cfgUpgradeResult.MissingKeys, ", "))
+				fmt.Println("  Action: Review these keys in backup.env and adjust values as needed.")
+			} else {
+				fmt.Println("Configuration: updated (no new keys were required)")
+				if len(cfgUpgradeResult.ExtraKeys) > 0 {
+					fmt.Printf("  Preserved %d custom key(s) not present in the template.\n", len(cfgUpgradeResult.ExtraKeys))
+				}
+			}
+			if cfgUpgradeResult.BackupPath != "" {
+				fmt.Printf("  Backup saved to: %s\n", cfgUpgradeResult.BackupPath)
+			}
+			fmt.Println()
+		} else {
+			fmt.Println("Configuration: already up to date with the latest template (no changes).")
+			fmt.Println()
+		}
+	}
+
 	fmt.Println("Next steps:")
 	if strings.TrimSpace(configPath) != "" {
-		fmt.Printf("1. Verify configuration (unchanged): %s\n", configPath)
+		fmt.Printf("1. Verify configuration: %s\n", configPath)
 	} else {
-		fmt.Println("1. Verify configuration (unchanged)")
+		fmt.Println("1. Verify configuration")
 	}
 	if strings.TrimSpace(baseDir) != "" {
 		fmt.Println("2. Run backup: proxsave")
@@ -569,7 +607,7 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 
 	fmt.Println("Commands:")
 	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
-	fmt.Println("  --upgrade          - Update proxsave binary to latest release (no config changes)")
+	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
 	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
@@ -578,4 +616,42 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 	if upgradeErr != nil {
 		fmt.Println("Upgrade reported an error; please review the log above.")
 	}
+}
+
+func upgradeConfigWithBinary(ctx context.Context, execPath, configPath string) (*config.UpgradeResult, error) {
+	execPath = strings.TrimSpace(execPath)
+	configPath = strings.TrimSpace(configPath)
+	if execPath == "" {
+		return nil, fmt.Errorf("exec path is empty")
+	}
+	if configPath == "" {
+		return nil, fmt.Errorf("configuration path is empty")
+	}
+
+	cmd := exec.CommandContext(ctx, execPath, "--config", configPath, "--upgrade-config-json")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		details := strings.TrimSpace(stderr.String())
+		if details == "" {
+			details = strings.TrimSpace(stdout.String())
+		}
+		if details != "" {
+			return nil, fmt.Errorf("upgrade-config-json failed: %w: %s", err, details)
+		}
+		return nil, fmt.Errorf("upgrade-config-json failed: %w", err)
+	}
+
+	var result config.UpgradeResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		preview := strings.TrimSpace(stdout.String())
+		if len(preview) > 4000 {
+			preview = preview[:4000] + "…"
+		}
+		return nil, fmt.Errorf("invalid JSON from upgrade-config-json: %w (stdout=%q)", err, preview)
+	}
+	return &result, nil
 }

@@ -9,6 +9,19 @@ import (
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
+type envValueKind int
+
+const (
+	envValueKindLine envValueKind = iota
+	envValueKindBlock
+)
+
+type envValue struct {
+	kind       envValueKind
+	rawValue   string
+	blockLines []string
+}
+
 // UpgradeResult describes the outcome of a configuration upgrade.
 type UpgradeResult struct {
 	// BackupPath is the path of the backup created from the previous config.
@@ -142,21 +155,9 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	originalLines := strings.Split(normalizedOriginal, "\n")
 
 	// 1. Collect user values: for each KEY we store all VALUE entries in order.
-	userValues := make(map[string][]string)
-	userKeyOrder := make([]string, 0)
-
-	for _, line := range originalLines {
-		if utils.IsComment(line) {
-			continue
-		}
-		key, value, ok := utils.SplitKeyValue(line)
-		if !ok || key == "" {
-			continue
-		}
-		if _, seen := userValues[key]; !seen {
-			userKeyOrder = append(userKeyOrder, key)
-		}
-		userValues[key] = append(userValues[key], value)
+	userValues, userKeyOrder, err := parseEnvValues(originalLines)
+	if err != nil {
+		return result, "", originalContent, err
 	}
 
 	// 2. Walk the template line-by-line, merging values.
@@ -168,14 +169,15 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	missingKeys := make([]string, 0)
 	newLines := make([]string, 0, len(templateLines)+len(userValues))
 
-	for _, line := range templateLines {
+	for i := 0; i < len(templateLines); i++ {
+		line := templateLines[i]
 		trimmed := strings.TrimSpace(line)
 		if utils.IsComment(trimmed) {
 			newLines = append(newLines, line)
 			continue
 		}
 
-		key, _, ok := utils.SplitKeyValue(line)
+		key, _, ok := splitKeyValueRaw(line)
 		if !ok || key == "" {
 			newLines = append(newLines, line)
 			continue
@@ -183,10 +185,28 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 
 		templateKeys[key] = true
 
+		if blockValueKeys[key] && trimmed == fmt.Sprintf("%s=\"", key) {
+			blockEnd, err := findClosingQuoteLine(templateLines, i+1)
+			if err != nil {
+				return result, "", originalContent, fmt.Errorf("template %s block invalid: %w", key, err)
+			}
+
+			if values, ok := userValues[key]; ok && len(values) > 0 {
+				for _, v := range values {
+					newLines = append(newLines, renderEnvValue(key, v)...)
+				}
+			} else {
+				missingKeys = append(missingKeys, key)
+				newLines = append(newLines, templateLines[i:blockEnd+1]...)
+			}
+
+			i = blockEnd
+			continue
+		}
+
 		if values, ok := userValues[key]; ok && len(values) > 0 {
-			// Preserve all user-defined values for this key.
 			for _, v := range values {
-				newLines = append(newLines, fmt.Sprintf("%s=%s", key, v))
+				newLines = append(newLines, renderEnvValue(key, v)...)
 			}
 		} else {
 			// Key missing in user config: keep template default and record it.
@@ -209,7 +229,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		}
 		extraKeys = append(extraKeys, key)
 		for _, v := range values {
-			extraLines = append(extraLines, fmt.Sprintf("%s=%s", key, v))
+			extraLines = append(extraLines, renderEnvValue(key, v)...)
 		}
 	}
 
@@ -249,4 +269,93 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	result.PreservedValues = preserved
 	result.Changed = true
 	return result, newContent, originalContent, nil
+}
+
+func parseEnvValues(lines []string) (map[string][]envValue, []string, error) {
+	userValues := make(map[string][]envValue)
+	userKeyOrder := make([]string, 0)
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if utils.IsComment(trimmed) {
+			continue
+		}
+
+		key, rawValue, ok := splitKeyValueRaw(line)
+		if !ok || key == "" {
+			continue
+		}
+
+		if blockValueKeys[key] && trimmed == fmt.Sprintf("%s=\"", key) {
+			blockLines := make([]string, 0)
+			blockEnd, err := findClosingQuoteLine(lines, i+1)
+			if err != nil {
+				return nil, nil, fmt.Errorf("unterminated multi-line value for %s", key)
+			}
+			blockLines = append(blockLines, lines[i+1:blockEnd]...)
+
+			if _, seen := userValues[key]; !seen {
+				userKeyOrder = append(userKeyOrder, key)
+			}
+			userValues[key] = append(userValues[key], envValue{kind: envValueKindBlock, blockLines: blockLines})
+
+			i = blockEnd
+			continue
+		}
+
+		if _, seen := userValues[key]; !seen {
+			userKeyOrder = append(userKeyOrder, key)
+		}
+		userValues[key] = append(userValues[key], envValue{kind: envValueKindLine, rawValue: rawValue})
+	}
+
+	return userValues, userKeyOrder, nil
+}
+
+func splitKeyValueRaw(line string) (string, string, bool) {
+	parts := strings.SplitN(line, "=", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+
+	key := strings.TrimSpace(parts[0])
+	valuePart := strings.TrimSpace(parts[1])
+
+	// Remove inline comments (but respect quotes)
+	value := valuePart
+	if strings.HasPrefix(valuePart, "\"") || strings.HasPrefix(valuePart, "'") {
+		quote := valuePart[0]
+		endIdx := strings.IndexByte(valuePart[1:], quote)
+		if endIdx >= 0 {
+			value = valuePart[:endIdx+2]
+		}
+		return key, value, true
+	}
+
+	// Not quoted, remove everything after #
+	if idx := strings.Index(valuePart, "#"); idx >= 0 {
+		value = strings.TrimSpace(valuePart[:idx])
+	}
+
+	return key, value, true
+}
+
+func findClosingQuoteLine(lines []string, start int) (int, error) {
+	for i := start; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "\"" {
+			return i, nil
+		}
+	}
+	return 0, fmt.Errorf("closing quote not found")
+}
+
+func renderEnvValue(key string, value envValue) []string {
+	if value.kind == envValueKindBlock {
+		lines := []string{fmt.Sprintf("%s=\"", key)}
+		lines = append(lines, value.blockLines...)
+		lines = append(lines, "\"")
+		return lines
+	}
+	return []string{fmt.Sprintf("%s=%s", key, value.rawValue)}
 }

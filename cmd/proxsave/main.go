@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -147,8 +148,8 @@ func run() int {
 		if args.EnvMigration || args.EnvMigrationDry {
 			incompatible = append(incompatible, "--env-migration/--env-migration-dry-run")
 		}
-		if args.UpgradeConfig || args.UpgradeConfigDry {
-			incompatible = append(incompatible, "--upgrade-config/--upgrade-config-dry-run")
+		if args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON {
+			incompatible = append(incompatible, "--upgrade-config/--upgrade-config-dry-run/--upgrade-config-json")
 		}
 
 		if len(incompatible) > 0 {
@@ -188,7 +189,7 @@ func run() int {
 		if args.EnvMigration || args.EnvMigrationDry {
 			incompatible = append(incompatible, "--env-migration")
 		}
-		if args.UpgradeConfig || args.UpgradeConfigDry {
+		if args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON {
 			incompatible = append(incompatible, "--upgrade-config")
 		}
 		if args.ForceNewKey {
@@ -223,7 +224,30 @@ func run() int {
 	}
 	args.ConfigPath = resolvedConfigPath
 
-	// Dedicated upgrade mode (download latest binary, no config changes)
+	if args.UpgradeConfigJSON {
+		if _, err := os.Stat(args.ConfigPath); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: configuration file not found: %v\n", err)
+			return types.ExitConfigError.Int()
+		}
+
+		result, err := config.UpgradeConfigFile(args.ConfigPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: Failed to upgrade configuration: %v\n", err)
+			return types.ExitConfigError.Int()
+		}
+		if result == nil {
+			result = &config.UpgradeResult{}
+		}
+
+		enc := json.NewEncoder(os.Stdout)
+		if err := enc.Encode(result); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: Failed to encode JSON: %v\n", err)
+			return types.ExitGenericError.Int()
+		}
+		return types.ExitSuccess.Int()
+	}
+
+	// Dedicated upgrade mode (download latest binary and upgrade config keys)
 	if args.Upgrade {
 		logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade")
 		return runUpgrade(ctx, args, bootstrap)
@@ -1582,7 +1606,7 @@ func printFinalSummary(finalExitCode int) {
 	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
 	fmt.Println("  --env-migration    - Run installer and migrate legacy Bash backup.env to Go template")
 	fmt.Println("  --env-migration-dry-run - Preview installer/migration without writing files")
-	fmt.Println("  --upgrade          - Update proxsave binary to latest release (no config changes)")
+	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")

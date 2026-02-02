@@ -37,6 +37,7 @@ type Args struct {
 	NewInstall        bool
 	UpgradeConfig     bool
 	UpgradeConfigDry  bool
+	UpgradeConfigJSON bool
 	EnvMigration      bool
 	EnvMigrationDry   bool
 	CleanupGuards     bool
@@ -95,7 +96,7 @@ func Parse() *Args {
 	flag.BoolVar(&args.NewInstall, "new-install", false,
 		"Reset the installation directory (preserving env/identity) and launch the interactive installer")
 	flag.BoolVar(&args.Upgrade, "upgrade", false,
-		"Download and install the latest ProxSave binary (without modifying backup.env)")
+		"Download and install the latest ProxSave binary (also upgrades backup.env by adding missing keys from the new template)")
 	flag.BoolVar(&args.EnvMigration, "env-migration", false,
 		"Run the installer and migrate a legacy Bash backup.env to the Go template")
 	flag.BoolVar(&args.EnvMigrationDry, "env-migration-dry-run", false,
@@ -110,6 +111,9 @@ func Parse() *Args {
 
 	flag.BoolVar(&args.UpgradeConfigDry, "upgrade-config-dry-run", false,
 		"Plan configuration upgrade using the embedded template without modifying the file (reports missing and custom keys)")
+
+	flag.BoolVar(&args.UpgradeConfigJSON, "upgrade-config-json", false,
+		"Upgrade configuration file using the embedded template and print JSON summary to stdout (for internal use by --upgrade)")
 
 	// Custom usage message
 	flag.Usage = func() {
