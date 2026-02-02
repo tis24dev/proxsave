@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -338,7 +337,7 @@ func isMountedFromProcMounts(path string) (bool, error) {
 
 func unescapeProcPath(s string) string {
 	// /proc/self/mountinfo uses octal escapes: \040, \011, \012, \134.
-	// Keep it minimal: decode any \XYZ sequence where XYZ are octal digits.
+	// Keep it minimal: decode any \XYZ sequence where XYZ are octal digits and the value fits into a byte (0-255).
 	if !strings.Contains(s, "\\") {
 		return s
 	}
@@ -359,8 +358,8 @@ func unescapeProcPath(s string) string {
 			continue
 		}
 
-		val, err := strconv.ParseInt(oct, 8, 32)
-		if err != nil {
+		val := (int(oct[0]-'0') << 6) | (int(oct[1]-'0') << 3) | int(oct[2]-'0')
+		if val > 255 {
 			_ = b.WriteByte(s[i])
 			i++
 			continue
