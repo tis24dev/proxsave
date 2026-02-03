@@ -233,6 +233,49 @@ CUSTOM_BACKUP_PATHS="
 	})
 }
 
+func TestPlanUpgradeConfigHandlesExportWhitespace(t *testing.T) {
+	template := "KEY1=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "export    KEY1=custom\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if len(result.MissingKeys) != 0 {
+			t.Fatalf("MissingKeys = %v; want []", result.MissingKeys)
+		}
+	})
+}
+
+func TestPlanUpgradeConfigDoesNotStripExporterKey(t *testing.T) {
+	template := "exporter=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "exporter=custom\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if len(result.MissingKeys) != 0 {
+			t.Fatalf("MissingKeys = %v; want []", result.MissingKeys)
+		}
+		if len(result.ExtraKeys) != 0 {
+			t.Fatalf("ExtraKeys = %v; want []", result.ExtraKeys)
+		}
+	})
+}
+
 func TestPlanUpgradeConfigWarnsOnCaseCollision(t *testing.T) {
 	template := "BACKUP_PATH=/default/backup\n"
 	withTemplate(t, template, func() {

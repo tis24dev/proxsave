@@ -394,13 +394,9 @@ func splitKeyValueRaw(line string) (string, string, string, bool) {
 	}
 
 	key := strings.TrimSpace(parts[0])
-	// Handle legacy "export KEY=VALUE" lines
-	if strings.HasPrefix(key, "export ") {
-		key = strings.TrimSpace(strings.TrimPrefix(key, "export "))
-	}
-	// Also handle tab separation just in case "export\tKEY"
-	if strings.HasPrefix(key, "export\t") {
-		key = strings.TrimSpace(strings.TrimPrefix(key, "export\t"))
+	// Handle legacy "export KEY=VALUE" lines with arbitrary whitespace
+	if fields := strings.Fields(key); len(fields) >= 2 && fields[0] == "export" {
+		key = fields[1]
 	}
 
 	valuePart := strings.TrimSpace(parts[1])
