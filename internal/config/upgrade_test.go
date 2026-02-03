@@ -413,7 +413,6 @@ Custom_Backup_Paths="
 		if err != nil {
 			t.Fatalf("failed to read upgraded config: %v", err)
 		}
-		// strings.ReplaceAll might not be available if "strings" isn't imported, but it is imported in upgrade_test.go
 		content := strings.ReplaceAll(string(data), "\r\n", "\n")
 
 		expectedBlock := "CUSTOM_BACKUP_PATHS=\"\n/etc/custom.conf\n\"\n"

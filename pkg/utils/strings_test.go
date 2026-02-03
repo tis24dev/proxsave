@@ -180,6 +180,13 @@ func TestSetEnvValue(t *testing.T) {
 			value:    "new",
 			expected: `FOO=new # trailing`,
 		},
+		{
+			name:     "preserve export prefix",
+			input:    "export    FOO=old # comment",
+			key:      "FOO",
+			value:    "new",
+			expected: "export FOO=new # comment",
+		},
 	}
 
 	for _, tt := range tests {

@@ -128,7 +128,17 @@ func SetEnvValue(template, key, value string) string {
 		}
 
 		parts := strings.SplitN(trimmed, "=", 2)
-		if len(parts) >= 1 && strings.TrimSpace(parts[0]) == key {
+		if len(parts) >= 1 {
+			parsedKey := strings.TrimSpace(parts[0])
+			exportPrefix := ""
+			if fields := strings.Fields(parsedKey); len(fields) >= 2 && fields[0] == "export" {
+				parsedKey = fields[1]
+				exportPrefix = "export "
+			}
+
+			if parsedKey != key {
+				continue
+			}
 			// Found match.
 			leadingLen := len(line) - len(strings.TrimLeft(line, " \t"))
 			leading := ""
@@ -150,7 +160,7 @@ func SetEnvValue(template, key, value string) string {
 				}
 			}
 
-			newLine := leading + key + "=" + value
+			newLine := leading + exportPrefix + key + "=" + value
 			if comment != "" {
 				spacing := commentSpacing
 				if spacing == "" {
