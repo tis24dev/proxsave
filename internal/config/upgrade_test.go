@@ -308,6 +308,35 @@ func TestUpgradeConfigPreservesInlineComments(t *testing.T) {
 	})
 }
 
+func TestUpgradeConfigPreservesBlockComments(t *testing.T) {
+	template := "CUSTOM_BACKUP_PATHS=\"\n# template comment\n\"\nKEY1=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		userConfig := "CUSTOM_BACKUP_PATHS=\"\n# keep this\n/path/one\n# keep too\n\"\n"
+		if err := os.WriteFile(configPath, []byte(userConfig), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when keys missing")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		content := strings.ReplaceAll(string(data), "\r\n", "\n")
+		if !strings.Contains(content, "# keep this\n/path/one\n# keep too\n") {
+			t.Fatalf("expected block comments preserved, got:\n%s", content)
+		}
+	})
+}
+
 func TestPlanUpgradeConfigWarnsOnCaseCollision(t *testing.T) {
 	template := "BACKUP_PATH=/default/backup\n"
 	withTemplate(t, template, func() {
