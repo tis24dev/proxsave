@@ -232,3 +232,192 @@ CUSTOM_BACKUP_PATHS="
 		}
 	})
 }
+
+func TestPlanUpgradeConfigHandlesExportWhitespace(t *testing.T) {
+	template := "KEY1=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "export    KEY1=custom\nexport\t\tKEY1=custom-tabbed\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if len(result.MissingKeys) != 0 {
+			t.Fatalf("MissingKeys = %v; want []", result.MissingKeys)
+		}
+	})
+}
+
+func TestPlanUpgradeConfigDoesNotStripExporterKey(t *testing.T) {
+	template := "exporter=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "exporter=custom\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if len(result.MissingKeys) != 0 {
+			t.Fatalf("MissingKeys = %v; want []", result.MissingKeys)
+		}
+		if len(result.ExtraKeys) != 0 {
+			t.Fatalf("ExtraKeys = %v; want []", result.ExtraKeys)
+		}
+	})
+}
+
+func TestUpgradeConfigPreservesInlineComments(t *testing.T) {
+	template := "KEY1=default1\nKEY2=default2\nKEY3=default3\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		userConfig := "KEY1=value # keep\nKEY2=\"quoted # keep\" # trailing\n"
+		if err := os.WriteFile(configPath, []byte(userConfig), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when keys missing")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		content := string(data)
+		if !strings.Contains(content, "KEY1=value # keep") {
+			t.Fatalf("expected inline comment preserved for KEY1, got:\n%s", content)
+		}
+		if !strings.Contains(content, "KEY2=\"quoted # keep\" # trailing") {
+			t.Fatalf("expected inline comment preserved for KEY2, got:\n%s", content)
+		}
+	})
+}
+
+func TestUpgradeConfigPreservesBlockComments(t *testing.T) {
+	template := "CUSTOM_BACKUP_PATHS=\"\n# template comment\n\"\nKEY1=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		userConfig := "CUSTOM_BACKUP_PATHS=\"\n# keep this\n/path/one\n# keep too\n\"\n"
+		if err := os.WriteFile(configPath, []byte(userConfig), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when keys missing")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		content := strings.ReplaceAll(string(data), "\r\n", "\n")
+		if !strings.Contains(content, "# keep this\n/path/one\n# keep too\n") {
+			t.Fatalf("expected block comments preserved, got:\n%s", content)
+		}
+	})
+}
+
+func TestPlanUpgradeConfigWarnsOnCaseCollision(t *testing.T) {
+	template := "BACKUP_PATH=/default/backup\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "backup_path=/lower\nBACKUP_PATH=/upper\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if len(result.ExtraKeys) != 1 || result.ExtraKeys[0] != "backup_path" {
+			t.Fatalf("ExtraKeys = %v; want [backup_path]", result.ExtraKeys)
+		}
+		warnings := strings.Join(result.Warnings, "\n")
+		if !strings.Contains(warnings, "Duplicate keys differ only by case") {
+			t.Fatalf("expected case-collision warning, got: %s", warnings)
+		}
+	})
+}
+
+func TestPlanUpgradeConfigWarnsOnIgnoredLine(t *testing.T) {
+	template := "BACKUP_PATH=/default/backup\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "BACKUP_PATH=/legacy\nNOT_A_KEY\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		warnings := strings.Join(result.Warnings, "\n")
+		if !strings.Contains(warnings, "Ignored line 2") {
+			t.Fatalf("expected ignored-line warning, got: %s", warnings)
+		}
+	})
+}
+
+func TestUpgradeConfigPreservesBlockValuesCaseInsensitive(t *testing.T) {
+	template := `BACKUP_PATH=/default/backup
+LOG_PATH=/default/log
+CUSTOM_BACKUP_PATHS="
+# /template/example
+"
+`
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		userConfig := `BACKUP_PATH=/legacy/backup
+Custom_Backup_Paths="
+/etc/custom.conf
+"
+`
+		if err := os.WriteFile(configPath, []byte(userConfig), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when template has missing keys")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		content := strings.ReplaceAll(string(data), "\r\n", "\n")
+
+		expectedBlock := "CUSTOM_BACKUP_PATHS=\"\n/etc/custom.conf\n\"\n"
+		if !strings.Contains(content, expectedBlock) {
+			t.Fatalf("upgraded config missing preserved block with fixed casing:\nGot:\n%s\nWant contains:\n%s", content, expectedBlock)
+		}
+	})
+}

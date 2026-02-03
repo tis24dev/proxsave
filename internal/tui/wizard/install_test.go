@@ -23,6 +23,28 @@ func TestSetEnvValueUpdateAndAppend(t *testing.T) {
 	}
 }
 
+func TestSetEnvValuePreservesComments(t *testing.T) {
+	template := "FOO=old  # comment"
+	updated := setEnvValue(template, "FOO", "new")
+	if !strings.Contains(updated, "FOO=new") {
+		t.Fatalf("expected FOO updated, got %q", updated)
+	}
+	if !strings.Contains(updated, "# comment") {
+		t.Fatalf("expected comment preserved, got %q", updated)
+	}
+}
+
+func TestSetEnvValuePreservesCommentAfterQuotedValue(t *testing.T) {
+	template := `FOO="old # keep"  # trailing comment`
+	updated := setEnvValue(template, "FOO", "new")
+	if !strings.Contains(updated, "FOO=new") {
+		t.Fatalf("expected FOO updated, got %q", updated)
+	}
+	if !strings.Contains(updated, "# trailing comment") {
+		t.Fatalf("expected trailing comment preserved, got %q", updated)
+	}
+}
+
 func TestApplyInstallDataRespectsBaseTemplate(t *testing.T) {
 	baseTemplate := "BASE_DIR=\nMARKER=1\nTELEGRAM_ENABLED=false\nEMAIL_ENABLED=false\nENCRYPT_ARCHIVE=false\n"
 	backupFirewallRules := false

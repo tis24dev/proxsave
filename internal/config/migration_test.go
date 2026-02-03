@@ -50,6 +50,60 @@ BACKUP_BLACKLIST="
 	}
 }
 
+func TestParseEnvFileHandlesLowercaseKeys(t *testing.T) {
+	tmpDir := t.TempDir()
+	envFile := filepath.Join(tmpDir, "legacy.env")
+	content := `
+custom_backup_paths="
+/etc/custom
+"
+backup_blacklist="
+/tmp
+"
+backup_exclude_patterns=*.log
+backup_exclude_patterns=*.tmp
+`
+	if err := os.WriteFile(envFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write temp legacy env: %v", err)
+	}
+
+	values, err := parseEnvFile(envFile)
+	if err != nil {
+		t.Fatalf("parseEnvFile returned error: %v", err)
+	}
+
+	if got := values["CUSTOM_BACKUP_PATHS"]; got != "/etc/custom" {
+		t.Fatalf("CUSTOM_BACKUP_PATHS = %q; want block content", got)
+	}
+	if got := values["BACKUP_BLACKLIST"]; got != "/tmp" {
+		t.Fatalf("BACKUP_BLACKLIST = %q; want block content", got)
+	}
+	if got := values["BACKUP_EXCLUDE_PATTERNS"]; got != "*.log\n*.tmp" {
+		t.Fatalf("BACKUP_EXCLUDE_PATTERNS = %q; want \"*.log\\n*.tmp\"", got)
+	}
+}
+
+func TestParseEnvFileHandlesExportLines(t *testing.T) {
+	tmpDir := t.TempDir()
+	envFile := filepath.Join(tmpDir, "legacy.env")
+	content := "export    BACKUP_PATH=/data\nexport\t\tLOG_PATH=/logs\n"
+	if err := os.WriteFile(envFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write temp legacy env: %v", err)
+	}
+
+	values, err := parseEnvFile(envFile)
+	if err != nil {
+		t.Fatalf("parseEnvFile returned error: %v", err)
+	}
+
+	if got := values["BACKUP_PATH"]; got != "/data" {
+		t.Fatalf("BACKUP_PATH = %q; want %q", got, "/data")
+	}
+	if got := values["LOG_PATH"]; got != "/logs" {
+		t.Fatalf("LOG_PATH = %q; want %q", got, "/logs")
+	}
+}
+
 const testTemplate = `# test template
 BACKUP_PATH=/default/backup
 LOG_PATH=/default/log

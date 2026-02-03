@@ -1218,8 +1218,12 @@ func parseEnvFile(path string) (map[string]string, error) {
 		if !ok {
 			continue
 		}
+		if fields := strings.Fields(key); len(fields) >= 2 && fields[0] == "export" {
+			key = fields[1]
+		}
+		upperKey := strings.ToUpper(key)
 
-		if blockValueKeys[key] && trimmed == fmt.Sprintf("%s=\"", key) {
+		if blockValueKeys[upperKey] && trimmed == fmt.Sprintf("%s=\"", key) {
 			var blockLines []string
 			terminated := false
 			for scanner.Scan() {
@@ -1228,23 +1232,25 @@ func parseEnvFile(path string) (map[string]string, error) {
 					terminated = true
 					break
 				}
-				blockLines = append(blockLines, next)
+				if !utils.IsComment(strings.TrimSpace(next)) {
+					blockLines = append(blockLines, next)
+				}
 			}
 			if !terminated {
 				return nil, fmt.Errorf("unterminated multi-line value for %s", key)
 			}
-			raw[key] = strings.Join(blockLines, "\n")
+			raw[upperKey] = strings.Join(blockLines, "\n")
 			continue
 		}
 
-		if multiValueKeys[key] {
-			if existing, ok := raw[key]; ok && existing != "" {
-				raw[key] = existing + "\n" + value
+		if multiValueKeys[upperKey] {
+			if existing, ok := raw[upperKey]; ok && existing != "" {
+				raw[upperKey] = existing + "\n" + value
 			} else {
-				raw[key] = value
+				raw[upperKey] = value
 			}
 		} else {
-			raw[key] = value
+			raw[upperKey] = value
 		}
 	}
 

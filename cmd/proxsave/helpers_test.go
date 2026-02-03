@@ -36,6 +36,24 @@ func TestSetEnvValue_PreserveComment(t *testing.T) {
 	assertContains(t, result, "# this is a comment")
 }
 
+func TestSetEnvValue_PreserveCommentAfterQuotedValue(t *testing.T) {
+	template := `FOO="old # keep"  # trailing comment`
+
+	result := setEnvValue(template, "FOO", "new")
+
+	assertContains(t, result, "FOO=new")
+	assertContains(t, result, "# trailing comment")
+}
+
+func TestSetEnvValue_PreserveCommentWithEscapedHash(t *testing.T) {
+	template := `FOO=old\#keep # trailing comment`
+
+	result := setEnvValue(template, "FOO", "new")
+
+	assertContains(t, result, "FOO=new")
+	assertContains(t, result, "# trailing comment")
+}
+
 func TestSetEnvValue_AddNew(t *testing.T) {
 	template := "FOO=bar"
 

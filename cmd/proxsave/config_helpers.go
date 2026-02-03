@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 type configStatusLogger interface {
@@ -47,43 +49,7 @@ func ensureConfigExists(path string, logger configStatusLogger) error {
 }
 
 func setEnvValue(template, key, value string) string {
-	target := key + "="
-	lines := strings.Split(template, "\n")
-	replaced := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, target) {
-			leadingLen := len(line) - len(strings.TrimLeft(line, " \t"))
-			leading := ""
-			if leadingLen > 0 {
-				leading = line[:leadingLen]
-			}
-			rest := line[leadingLen:]
-			commentSpacing := ""
-			comment := ""
-			if idx := strings.Index(rest, "#"); idx >= 0 {
-				before := rest[:idx]
-				comment = rest[idx:]
-				trimmedBefore := strings.TrimRight(before, " \t")
-				commentSpacing = before[len(trimmedBefore):]
-				rest = trimmedBefore
-			}
-			newLine := leading + key + "=" + value
-			if comment != "" {
-				spacing := commentSpacing
-				if spacing == "" {
-					spacing = " "
-				}
-				newLine += spacing + comment
-			}
-			lines[i] = newLine
-			replaced = true
-		}
-	}
-	if !replaced {
-		lines = append(lines, key+"="+value)
-	}
-	return strings.Join(lines, "\n")
+	return utils.SetEnvValue(template, key, value)
 }
 
 func sanitizeEnvValue(value string) string {
