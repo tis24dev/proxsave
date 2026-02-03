@@ -232,3 +232,48 @@ CUSTOM_BACKUP_PATHS="
 		}
 	})
 }
+
+func TestPlanUpgradeConfigWarnsOnCaseCollision(t *testing.T) {
+	template := "BACKUP_PATH=/default/backup\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "backup_path=/lower\nBACKUP_PATH=/upper\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if len(result.ExtraKeys) != 1 || result.ExtraKeys[0] != "backup_path" {
+			t.Fatalf("ExtraKeys = %v; want [backup_path]", result.ExtraKeys)
+		}
+		warnings := strings.Join(result.Warnings, "\n")
+		if !strings.Contains(warnings, "Duplicate keys differ only by case") {
+			t.Fatalf("expected case-collision warning, got: %s", warnings)
+		}
+	})
+}
+
+func TestPlanUpgradeConfigWarnsOnIgnoredLine(t *testing.T) {
+	template := "BACKUP_PATH=/default/backup\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "BACKUP_PATH=/legacy\nNOT_A_KEY\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		warnings := strings.Join(result.Warnings, "\n")
+		if !strings.Contains(warnings, "Ignored line 2") {
+			t.Fatalf("expected ignored-line warning, got: %s", warnings)
+		}
+	})
+}

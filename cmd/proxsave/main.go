@@ -334,6 +334,12 @@ func run() int {
 			bootstrap.Error("ERROR: Failed to plan configuration upgrade: %v", err)
 			return types.ExitConfigError.Int()
 		}
+		if len(result.Warnings) > 0 {
+			bootstrap.Warning("Config upgrade warnings (%d):", len(result.Warnings))
+			for _, warning := range result.Warnings {
+				bootstrap.Warning("  - %s", warning)
+			}
+		}
 		if !result.Changed {
 			bootstrap.Println("Configuration is already up to date with the embedded template; no changes are required.")
 			return types.ExitSuccess.Int()
@@ -436,6 +442,12 @@ func run() int {
 		if err != nil {
 			bootstrap.Error("ERROR: Failed to upgrade configuration: %v", err)
 			return types.ExitConfigError.Int()
+		}
+		if len(result.Warnings) > 0 {
+			bootstrap.Warning("Config upgrade warnings (%d):", len(result.Warnings))
+			for _, warning := range result.Warnings {
+				bootstrap.Warning("  - %s", warning)
+			}
 		}
 		if !result.Changed {
 			bootstrap.Println("Configuration is already up to date with the embedded template; no changes were made.")

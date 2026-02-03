@@ -589,6 +589,14 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 		}
 	}
 
+	if cfgUpgradeResult != nil && len(cfgUpgradeResult.Warnings) > 0 {
+		fmt.Printf("Configuration warnings (%d):\n", len(cfgUpgradeResult.Warnings))
+		for _, warning := range cfgUpgradeResult.Warnings {
+			fmt.Printf("  - %s\n", warning)
+		}
+		fmt.Println()
+	}
+
 	fmt.Println("Next steps:")
 	if strings.TrimSpace(configPath) != "" {
 		fmt.Printf("1. Verify configuration: %s\n", configPath)

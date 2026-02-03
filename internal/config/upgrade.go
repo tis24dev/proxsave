@@ -33,6 +33,8 @@ type UpgradeResult struct {
 	// ExtraKeys are keys that were present in the user's config but not in the
 	// template. They are preserved in a dedicated "Custom keys" section.
 	ExtraKeys []string
+	// Warnings includes non-fatal parsing or merge issues detected while upgrading.
+	Warnings []string
 	// PreservedValues is the number of existing key=value pairs from the user's
 	// configuration that were kept during the merge for keys present in the
 	// template.
@@ -156,7 +158,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	originalLines := strings.Split(normalizedOriginal, "\n")
 
 	// 1. Collect user values: for each KEY we store all VALUE entries in order.
-	userValues, userKeyOrder, caseMap, err := parseEnvValues(originalLines)
+	userValues, userKeyOrder, caseMap, caseConflicts, warnings, err := parseEnvValues(originalLines)
 	if err != nil {
 		return result, "", originalContent, fmt.Errorf("failed to parse config %s: %w", configPath, err)
 	}
@@ -167,6 +169,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	templateLines := strings.Split(normalizedTemplate, "\n")
 
 	templateKeys := make(map[string]bool)
+	templateKeyByUpper := make(map[string]string)
 	missingKeys := make([]string, 0)
 	newLines := make([]string, 0, len(templateLines)+len(userValues))
 	processedUserKeys := make(map[string]bool) // Track which user keys (original case) have been used
@@ -186,6 +189,14 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		}
 
 		templateKeys[key] = true
+		upperKey := strings.ToUpper(key)
+		if existing, ok := templateKeyByUpper[upperKey]; ok {
+			if existing != key {
+				warnings = append(warnings, fmt.Sprintf("Template contains duplicate keys differing only by case: %q and %q", existing, key))
+			}
+		} else {
+			templateKeyByUpper[upperKey] = key
+		}
 
 		// Logic to find the user's values for this key.
 		// 1. Try exact match
@@ -252,6 +263,13 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		// So `processedUserKeys["Backup_Enabled"]` is true. We skip.
 		// Correct.
 
+		upperKey := strings.ToUpper(key)
+		if templateKey, ok := templateKeyByUpper[upperKey]; ok && templateKey != key {
+			if caseConflicts == nil || !caseConflicts[upperKey] {
+				warnings = append(warnings, fmt.Sprintf("Key %q differs only by case from template key %q; preserved as custom entry", key, templateKey))
+			}
+		}
+
 		values := userValues[key]
 		if len(values) == 0 {
 			continue
@@ -293,6 +311,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 
 	if newContent == string(originalContent) {
 		result.Changed = false
+		result.Warnings = warnings
 		result.PreservedValues = preserved
 		return result, "", originalContent, nil
 	}
@@ -300,14 +319,17 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	result.MissingKeys = missingKeys
 	result.ExtraKeys = extraKeys
 	result.PreservedValues = preserved
+	result.Warnings = warnings
 	result.Changed = true
 	return result, newContent, originalContent, nil
 }
 
-func parseEnvValues(lines []string) (map[string][]envValue, []string, map[string]string, error) {
+func parseEnvValues(lines []string) (map[string][]envValue, []string, map[string]string, map[string]bool, []string, error) {
 	userValues := make(map[string][]envValue)
 	userKeyOrder := make([]string, 0)
 	caseMap := make(map[string]string) // UPPER -> original
+	caseConflicts := make(map[string]bool)
+	warnings := make([]string, 0)
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
@@ -318,20 +340,30 @@ func parseEnvValues(lines []string) (map[string][]envValue, []string, map[string
 
 		key, rawValue, comment, ok := splitKeyValueRaw(line)
 		if !ok || key == "" {
+			if trimmed != "" {
+				warnings = append(warnings, fmt.Sprintf("Ignored line %d: not a KEY=VALUE entry", i+1))
+			}
 			continue
 		}
+
+		upperKey := strings.ToUpper(key)
+		if existing, ok := caseMap[upperKey]; ok && existing != key {
+			caseConflicts[upperKey] = true
+			warnings = append(warnings, fmt.Sprintf("Duplicate keys differ only by case: %q and %q (using last occurrence %q)", existing, key, key))
+		}
+
+		caseMap[upperKey] = key
 
 		if blockValueKeys[key] && trimmed == fmt.Sprintf("%s=\"", key) {
 			blockLines := make([]string, 0)
 			blockEnd, err := findClosingQuoteLine(lines, i+1)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("unterminated multi-line value for %s starting at line %d", key, i+1)
+				return nil, nil, nil, nil, nil, fmt.Errorf("unterminated multi-line value for %s starting at line %d", key, i+1)
 			}
 			blockLines = append(blockLines, lines[i+1:blockEnd]...)
 
 			if _, seen := userValues[key]; !seen {
 				userKeyOrder = append(userKeyOrder, key)
-				caseMap[strings.ToUpper(key)] = key
 			}
 			userValues[key] = append(userValues[key], envValue{kind: envValueKindBlock, blockLines: blockLines})
 
@@ -341,12 +373,11 @@ func parseEnvValues(lines []string) (map[string][]envValue, []string, map[string
 
 		if _, seen := userValues[key]; !seen {
 			userKeyOrder = append(userKeyOrder, key)
-			caseMap[strings.ToUpper(key)] = key
 		}
 		userValues[key] = append(userValues[key], envValue{kind: envValueKindLine, rawValue: rawValue, comment: comment})
 	}
 
-	return userValues, userKeyOrder, caseMap, nil
+	return userValues, userKeyOrder, caseMap, caseConflicts, warnings, nil
 }
 
 func splitKeyValueRaw(line string) (string, string, string, bool) {
