@@ -238,7 +238,7 @@ func TestPlanUpgradeConfigHandlesExportWhitespace(t *testing.T) {
 	withTemplate(t, template, func() {
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "backup.env")
-		content := "export    KEY1=custom\n"
+		content := "export    KEY1=custom\nexport\t\tKEY1=custom-tabbed\n"
 		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
 			t.Fatalf("failed to write config: %v", err)
 		}
