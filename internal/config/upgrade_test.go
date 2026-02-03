@@ -276,6 +276,38 @@ func TestPlanUpgradeConfigDoesNotStripExporterKey(t *testing.T) {
 	})
 }
 
+func TestUpgradeConfigPreservesInlineComments(t *testing.T) {
+	template := "KEY1=default1\nKEY2=default2\nKEY3=default3\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		userConfig := "KEY1=value # keep\nKEY2=\"quoted # keep\" # trailing\n"
+		if err := os.WriteFile(configPath, []byte(userConfig), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when keys missing")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		content := string(data)
+		if !strings.Contains(content, "KEY1=value # keep") {
+			t.Fatalf("expected inline comment preserved for KEY1, got:\n%s", content)
+		}
+		if !strings.Contains(content, "KEY2=\"quoted # keep\" # trailing") {
+			t.Fatalf("expected inline comment preserved for KEY2, got:\n%s", content)
+		}
+	})
+}
+
 func TestPlanUpgradeConfigWarnsOnCaseCollision(t *testing.T) {
 	template := "BACKUP_PATH=/default/backup\n"
 	withTemplate(t, template, func() {
