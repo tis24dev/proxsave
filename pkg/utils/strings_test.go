@@ -92,6 +92,8 @@ func TestSplitKeyValue(t *testing.T) {
 		{"empty value", "KEY=", "KEY", "", true},
 		{"inline comment", "KEY=value # comment", "KEY", "value", true},
 		{"quoted hash", `KEY="value # keep"`, "KEY", "value # keep", true},
+		{"escaped hash", `KEY=value\#keep`, "KEY", `value\#keep`, true},
+		{"escaped quote", `KEY="value\"quoted" # comment`, "KEY", `value\"quoted`, true},
 	}
 
 	for _, tt := range tests {
@@ -107,6 +109,84 @@ func TestSplitKeyValue(t *testing.T) {
 				if value != tt.expectedValue {
 					t.Errorf("SplitKeyValue(%q) value = %q; want %q", tt.input, value, tt.expectedValue)
 				}
+			}
+		})
+	}
+}
+
+func TestFindInlineCommentIndex(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		expected int
+	}{
+		{"no comment", "KEY=value", -1},
+		{"simple comment", "KEY=value # comment", 10},
+		{"quoted hash", `KEY="value # keep"`, -1},
+		{"escaped hash", `KEY=value\#keep # comment`, 16},
+		{"escaped quote", `KEY="value\"#still" # comment`, 20},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FindInlineCommentIndex(tt.line)
+			if got != tt.expected {
+				t.Errorf("FindInlineCommentIndex(%q) = %d; want %d", tt.line, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSetEnvValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		key      string
+		value    string
+		expected string
+	}{
+		{
+			name:     "update existing",
+			input:    "FOO=old\nBAR=keep",
+			key:      "FOO",
+			value:    "new",
+			expected: "FOO=new\nBAR=keep",
+		},
+		{
+			name:     "append new",
+			input:    "FOO=old",
+			key:      "BAR",
+			value:    "val",
+			expected: "FOO=old\nBAR=val",
+		},
+		{
+			name:     "preserve indentation and comment spacing",
+			input:    "  FOO=old   # comment",
+			key:      "FOO",
+			value:    "new",
+			expected: "  FOO=new   # comment",
+		},
+		{
+			name:     "preserve comment after quoted hash",
+			input:    `FOO="old # keep"  # trailing`,
+			key:      "FOO",
+			value:    "new",
+			expected: `FOO=new  # trailing`,
+		},
+		{
+			name:     "preserve comment after escaped hash",
+			input:    `FOO=old\#keep # trailing`,
+			key:      "FOO",
+			value:    "new",
+			expected: `FOO=new # trailing`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SetEnvValue(tt.input, tt.key, tt.value)
+			if got != tt.expected {
+				t.Fatalf("SetEnvValue() = %q; want %q", got, tt.expected)
 			}
 		})
 	}

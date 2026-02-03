@@ -277,3 +277,44 @@ func TestPlanUpgradeConfigWarnsOnIgnoredLine(t *testing.T) {
 		}
 	})
 }
+
+func TestUpgradeConfigPreservesBlockValuesCaseInsensitive(t *testing.T) {
+	template := `BACKUP_PATH=/default/backup
+LOG_PATH=/default/log
+CUSTOM_BACKUP_PATHS="
+# /template/example
+"
+`
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		userConfig := `BACKUP_PATH=/legacy/backup
+Custom_Backup_Paths="
+/etc/custom.conf
+"
+`
+		if err := os.WriteFile(configPath, []byte(userConfig), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when template has missing keys")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		// strings.ReplaceAll might not be available if "strings" isn't imported, but it is imported in upgrade_test.go
+		content := strings.ReplaceAll(string(data), "\r\n", "\n")
+
+		expectedBlock := "CUSTOM_BACKUP_PATHS=\"\n/etc/custom.conf\n\"\n"
+		if !strings.Contains(content, expectedBlock) {
+			t.Fatalf("upgraded config missing preserved block with fixed casing:\nGot:\n%s\nWant contains:\n%s", content, expectedBlock)
+		}
+	})
+}

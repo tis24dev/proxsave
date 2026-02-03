@@ -209,7 +209,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		}
 
 		// Handle block values
-		if blockValueKeys[key] && trimmed == fmt.Sprintf("%s=\"", key) {
+		if blockValueKeys[upperKey] && trimmed == fmt.Sprintf("%s=\"", key) {
 			blockEnd, err := findClosingQuoteLine(templateLines, i+1)
 			if err != nil {
 				return result, "", originalContent, fmt.Errorf("template %s block invalid: %w", key, err)
@@ -354,7 +354,7 @@ func parseEnvValues(lines []string) (map[string][]envValue, []string, map[string
 
 		caseMap[upperKey] = key
 
-		if blockValueKeys[key] && trimmed == fmt.Sprintf("%s=\"", key) {
+		if blockValueKeys[upperKey] && trimmed == fmt.Sprintf("%s=\"", key) {
 			blockLines := make([]string, 0)
 			blockEnd, err := findClosingQuoteLine(lines, i+1)
 			if err != nil {
@@ -381,7 +381,14 @@ func parseEnvValues(lines []string) (map[string][]envValue, []string, map[string
 }
 
 func splitKeyValueRaw(line string) (string, string, string, bool) {
-	parts := strings.SplitN(line, "=", 2)
+	comment := ""
+	body := line
+	if commentIdx := utils.FindInlineCommentIndex(line); commentIdx >= 0 {
+		comment = strings.TrimSpace(line[commentIdx:])
+		body = line[:commentIdx]
+	}
+
+	parts := strings.SplitN(body, "=", 2)
 	if len(parts) != 2 {
 		return "", "", "", false
 	}
@@ -398,28 +405,12 @@ func splitKeyValueRaw(line string) (string, string, string, bool) {
 
 	valuePart := strings.TrimSpace(parts[1])
 
-	// Remove inline comments (but respect quotes)
 	value := valuePart
-	comment := ""
-
 	if strings.HasPrefix(valuePart, "\"") || strings.HasPrefix(valuePart, "'") {
 		quote := valuePart[0]
-		endIdx := strings.IndexByte(valuePart[1:], quote)
-		if endIdx >= 0 {
-			value = valuePart[:endIdx+2]
-			// Check for comment after quote
-			rest := valuePart[endIdx+2:]
-			if idx := strings.Index(rest, "#"); idx >= 0 {
-				comment = strings.TrimSpace(rest[idx:])
-			}
+		if endIdx := utils.FindClosingQuoteIndex(valuePart, quote); endIdx >= 0 {
+			value = valuePart[:endIdx+1]
 		}
-		return key, value, comment, true
-	}
-
-	// Not quoted, remove everything after #
-	if idx := strings.Index(valuePart, "#"); idx >= 0 {
-		value = strings.TrimSpace(valuePart[:idx])
-		comment = strings.TrimSpace(valuePart[idx:])
 	}
 
 	return key, value, comment, true

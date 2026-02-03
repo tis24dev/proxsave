@@ -15,6 +15,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/tui"
 	"github.com/tis24dev/proxsave/internal/tui/components"
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 // InstallWizardData holds the collected installation data
@@ -54,10 +55,10 @@ var (
 func RunInstallWizard(ctx context.Context, configPath string, baseDir string, buildSig string) (*InstallWizardData, error) {
 	defaultFirewallRules := false
 	data := &InstallWizardData{
-		BaseDir:          baseDir,
-		ConfigPath:       configPath,
-		CronTime:         "02:00",
-		EnableEncryption: false, // Default to disabled
+		BaseDir:             baseDir,
+		ConfigPath:          configPath,
+		CronTime:            "02:00",
+		EnableEncryption:    false, // Default to disabled
 		BackupFirewallRules: &defaultFirewallRules,
 	}
 
@@ -190,34 +191,34 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetLabel("  └─ Rclone Log Remote").
 		SetText("myremote:pbs-logs").
 		SetFieldWidth(40)
-		rcloneLogField.SetDisabled(true)
-		form.Form.AddFormItem(rcloneLogField)
+	rcloneLogField.SetDisabled(true)
+	form.Form.AddFormItem(rcloneLogField)
 
-		// Firewall rules backup (system collection)
-		firewallEnabled := false
-		firewallDropdown := tview.NewDropDown().
-			SetLabel("Backup Firewall Rules (iptables/nftables)").
-			SetOptions([]string{"No", "Yes"}, func(option string, index int) {
-				firewallEnabled = (option == "Yes")
-				dropdownOpen = false
-			}).
-			SetCurrentOption(0)
+	// Firewall rules backup (system collection)
+	firewallEnabled := false
+	firewallDropdown := tview.NewDropDown().
+		SetLabel("Backup Firewall Rules (iptables/nftables)").
+		SetOptions([]string{"No", "Yes"}, func(option string, index int) {
+			firewallEnabled = (option == "Yes")
+			dropdownOpen = false
+		}).
+		SetCurrentOption(0)
 
-		firewallDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			if event.Key() == tcell.KeyEnter {
-				dropdownOpen = !dropdownOpen
-			} else if event.Key() == tcell.KeyEscape {
-				dropdownOpen = false
-			}
-			return event
-		})
+	firewallDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEnter {
+			dropdownOpen = !dropdownOpen
+		} else if event.Key() == tcell.KeyEscape {
+			dropdownOpen = false
+		}
+		return event
+	})
 
-		form.Form.AddFormItem(firewallDropdown)
+	form.Form.AddFormItem(firewallDropdown)
 
-		// Notifications (header + two toggles)
-		var telegramEnabled, emailEnabled bool
-		notificationHeader := tview.NewInputField().
-			SetLabel("Notifications").
+	// Notifications (header + two toggles)
+	var telegramEnabled, emailEnabled bool
+	notificationHeader := tview.NewInputField().
+		SetLabel("Notifications").
 		SetFieldWidth(0).
 		SetText("").
 		SetDisabled(true)
@@ -293,10 +294,10 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	form.Form.AddFormItem(cronField)
 
 	// Set up form submission
-		form.SetOnSubmit(func(values map[string]string) error {
-			// Collect data
-			data.EnableSecondaryStorage = secondaryEnabled
-			if secondaryEnabled {
+	form.SetOnSubmit(func(values map[string]string) error {
+		// Collect data
+		data.EnableSecondaryStorage = secondaryEnabled
+		if secondaryEnabled {
 			data.SecondaryPath = secondaryPathField.GetText()
 			data.SecondaryLogPath = secondaryLogField.GetText()
 
@@ -309,8 +310,8 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 			}
 		}
 
-			data.EnableCloudStorage = cloudEnabled
-			if cloudEnabled {
+		data.EnableCloudStorage = cloudEnabled
+		if cloudEnabled {
 			data.RcloneBackupRemote = rcloneBackupField.GetText()
 			data.RcloneLogRemote = rcloneLogField.GetText()
 
@@ -321,14 +322,14 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 			if !strings.Contains(data.RcloneLogRemote, ":") {
 				return fmt.Errorf("rclone log remote must be in format 'remote:path'")
 			}
-			}
+		}
 
-			data.BackupFirewallRules = &firewallEnabled
+		data.BackupFirewallRules = &firewallEnabled
 
-			// Get notification mode from two toggles
-			switch {
-			case telegramEnabled && emailEnabled:
-				data.NotificationMode = "both"
+		// Get notification mode from two toggles
+		switch {
+		case telegramEnabled && emailEnabled:
+			data.NotificationMode = "both"
 		case telegramEnabled:
 			data.NotificationMode = "telegram"
 		case emailEnabled:
@@ -530,24 +531,7 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 
 // setEnvValue sets or updates an environment variable in the template
 func setEnvValue(template, key, value string) string {
-	lines := strings.Split(template, "\n")
-	found := false
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, key+"=") {
-			lines[i] = key + "=" + value
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		// Add at the end
-		lines = append(lines, key+"="+value)
-	}
-
-	return strings.Join(lines, "\n")
+	return utils.SetEnvValue(template, key, value)
 }
 
 // CheckExistingConfig checks if config file exists and asks how to proceed

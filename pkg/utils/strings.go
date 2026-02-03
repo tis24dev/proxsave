@@ -38,6 +38,62 @@ func TrimQuotes(s string) string {
 	return s
 }
 
+// FindInlineCommentIndex returns the index of a # that starts an inline comment.
+// A # inside quotes or escaped with a backslash is ignored.
+func FindInlineCommentIndex(line string) int {
+	inQuote := false
+	var quoteChar byte
+	escaped := false
+
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if inQuote {
+			if ch == quoteChar {
+				inQuote = false
+			}
+			continue
+		}
+		if ch == '"' || ch == '\'' {
+			inQuote = true
+			quoteChar = ch
+			continue
+		}
+		if ch == '#' {
+			return i
+		}
+	}
+	return -1
+}
+
+// FindClosingQuoteIndex returns the index of the closing quote in s,
+// honoring backslash escapes. Assumes s[0] is the opening quote.
+func FindClosingQuoteIndex(s string, quote byte) int {
+	escaped := false
+	for i := 1; i < len(s); i++ {
+		ch := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if ch == quote {
+			return i
+		}
+	}
+	return -1
+}
+
 // SplitKeyValue splits a "key=value" string into key and value.
 // Supports inline comments too: KEY="value" # comment
 func SplitKeyValue(line string) (string, string, bool) {
@@ -48,26 +104,68 @@ func SplitKeyValue(line string) (string, string, bool) {
 	key := strings.TrimSpace(parts[0])
 	valuePart := strings.TrimSpace(parts[1])
 
-	// Remove inline comments (but respect quotes)
-	// If the value is quoted, take everything inside quotes
-	// Otherwise, stop at the first #
-	value := valuePart
 	if strings.HasPrefix(valuePart, "\"") || strings.HasPrefix(valuePart, "'") {
-		// Find the closing quote
 		quote := valuePart[0]
-		endIdx := strings.IndexByte(valuePart[1:], quote)
-		if endIdx >= 0 {
-			value = valuePart[:endIdx+2] // Include both quotes
+		if endIdx := FindClosingQuoteIndex(valuePart, quote); endIdx >= 0 {
+			valuePart = valuePart[:endIdx+1]
 		}
-	} else {
-		// Not quoted, remove everything after #
-		if idx := strings.Index(valuePart, "#"); idx >= 0 {
-			value = strings.TrimSpace(valuePart[:idx])
-		}
+	} else if idx := FindInlineCommentIndex(valuePart); idx >= 0 {
+		valuePart = strings.TrimSpace(valuePart[:idx])
 	}
 
-	value = TrimQuotes(strings.TrimSpace(value))
+	value := TrimQuotes(strings.TrimSpace(valuePart))
 	return key, value, true
+}
+
+// SetEnvValue sets or updates a KEY=VALUE line in a template, preserving indentation and comments.
+func SetEnvValue(template, key, value string) string {
+	lines := strings.Split(template, "\n")
+	replaced := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if IsComment(trimmed) {
+			continue
+		}
+
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) >= 1 && strings.TrimSpace(parts[0]) == key {
+			// Found match.
+			leadingLen := len(line) - len(strings.TrimLeft(line, " \t"))
+			leading := ""
+			if leadingLen > 0 {
+				leading = line[:leadingLen]
+			}
+
+			comment := ""
+			commentSpacing := ""
+
+			commentIdx := FindInlineCommentIndex(line)
+			if commentIdx >= 0 {
+				comment = line[commentIdx:]
+
+				beforeComment := line[:commentIdx]
+				trimmedBefore := strings.TrimRight(beforeComment, " \t")
+				if len(trimmedBefore) < len(beforeComment) {
+					commentSpacing = beforeComment[len(trimmedBefore):]
+				}
+			}
+
+			newLine := leading + key + "=" + value
+			if comment != "" {
+				spacing := commentSpacing
+				if spacing == "" {
+					spacing = " "
+				}
+				newLine += spacing + comment
+			}
+			lines[i] = newLine
+			replaced = true
+		}
+	}
+	if !replaced {
+		lines = append(lines, key+"="+value)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // IsComment checks whether a line is a comment (starts with #).
