@@ -1228,7 +1228,9 @@ func parseEnvFile(path string) (map[string]string, error) {
 					terminated = true
 					break
 				}
-				blockLines = append(blockLines, next)
+				if !utils.IsComment(strings.TrimSpace(next)) {
+					blockLines = append(blockLines, next)
+				}
 			}
 			if !terminated {
 				return nil, fmt.Errorf("unterminated multi-line value for %s", key)
