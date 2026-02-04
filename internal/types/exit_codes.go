@@ -89,7 +89,7 @@ func (e ExitCode) String() string {
 	}
 }
 
-// Int restituisce il codice di uscita come intero
+// Int returns the exit code as an integer.
 func (e ExitCode) Int() int {
 	return int(e)
 }

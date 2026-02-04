@@ -34,8 +34,8 @@ func defaultArchiverDeps() ArchiverDeps {
 	}
 }
 
-// WithLookPathOverride temporaneamente sostituisce lookPath (per i test) e
-// restituisce una funzione di ripristino da invocare con defer.
+// WithLookPathOverride temporarily replaces lookPath (for tests) and
+// returns a restore function to call with defer.
 func WithLookPathOverride(fn func(string) (string, error)) func() {
 	original := lookPath
 	lookPath = fn
@@ -71,7 +71,7 @@ type ArchiverConfig struct {
 	ExcludePatterns    []string
 }
 
-// CompressionError rappresenta un errore di compressione esterna (xz/zstd)
+// CompressionError represents an external compression error (xz/zstd).
 type CompressionError struct {
 	Algorithm string
 	Err       error

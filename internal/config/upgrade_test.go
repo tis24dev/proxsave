@@ -79,7 +79,7 @@ func TestPlanUpgradeTracksExtraKeys(t *testing.T) {
 	})
 }
 
-func TestUpgradeConfigCreatesBackupAndCustomSection(t *testing.T) {
+func TestUpgradeConfigCreatesBackupAndPreservesExtraKeys(t *testing.T) {
 	withTemplate(t, upgradeTemplate, func() {
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "backup.env")
@@ -108,9 +108,6 @@ func TestUpgradeConfigCreatesBackupAndCustomSection(t *testing.T) {
 			t.Fatalf("failed to read upgraded config: %v", err)
 		}
 		content := string(updated)
-		if !strings.Contains(content, "Custom keys preserved") {
-			t.Fatalf("expected custom section header, got: %s", content)
-		}
 		if !strings.Contains(content, "EXTRA_KEY=value") {
 			t.Fatalf("expected EXTRA_KEY preserved, got: %s", content)
 		}
@@ -351,8 +348,8 @@ func TestPlanUpgradeConfigWarnsOnCaseCollision(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
 		}
-		if len(result.ExtraKeys) != 1 || result.ExtraKeys[0] != "backup_path" {
-			t.Fatalf("ExtraKeys = %v; want [backup_path]", result.ExtraKeys)
+		if len(result.CaseConflictKeys) != 1 || result.CaseConflictKeys[0] != "backup_path" {
+			t.Fatalf("CaseConflictKeys = %v; want [backup_path]", result.CaseConflictKeys)
 		}
 		warnings := strings.Join(result.Warnings, "\n")
 		if !strings.Contains(warnings, "Duplicate keys differ only by case") {
@@ -415,9 +412,41 @@ Custom_Backup_Paths="
 		}
 		content := strings.ReplaceAll(string(data), "\r\n", "\n")
 
-		expectedBlock := "CUSTOM_BACKUP_PATHS=\"\n/etc/custom.conf\n\"\n"
+		expectedBlock := "Custom_Backup_Paths=\"\n/etc/custom.conf\n\"\n"
 		if !strings.Contains(content, expectedBlock) {
-			t.Fatalf("upgraded config missing preserved block with fixed casing:\nGot:\n%s\nWant contains:\n%s", content, expectedBlock)
+			t.Fatalf("upgraded config missing preserved block with original casing:\nGot:\n%s\nWant contains:\n%s", content, expectedBlock)
+		}
+	})
+}
+
+func TestUpgradeConfigAddsMissingKeysUnderUpgradeSectionWhenNoAnchor(t *testing.T) {
+	template := "KEY1=default\nKEY2=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		legacy := "EXTRA=value\n"
+		if err := os.WriteFile(configPath, []byte(legacy), 0600); err != nil {
+			t.Fatalf("failed to write legacy config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when keys are missing")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		content := strings.ReplaceAll(string(data), "\r\n", "\n")
+		if !strings.Contains(content, "EXTRA=value") {
+			t.Fatalf("expected EXTRA to remain, got:\n%s", content)
+		}
+		if !strings.Contains(content, "# Added by upgrade\nKEY1=default\nKEY2=default\n") {
+			t.Fatalf("expected missing keys under upgrade section, got:\n%s", content)
 		}
 	})
 }

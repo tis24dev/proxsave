@@ -200,7 +200,7 @@ func commandKey(name string, args []string) string {
 	return fmt.Sprintf("%s %s", name, strings.Join(args, " "))
 }
 
-// FakePrompter simula le scelte utente.
+// FakePrompter simulates user choices.
 type FakePrompter struct {
 	Mode       RestoreMode
 	Categories []Category
