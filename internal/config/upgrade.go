@@ -281,6 +281,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	if len(missingKeys) == 0 {
 		result.Changed = false
 		result.Warnings = warnings
+		result.MissingKeys = missingKeys
 		result.ExtraKeys = extraKeys
 		result.CaseConflictKeys = caseConflictKeys
 		result.PreservedValues = preserved
