@@ -37,8 +37,11 @@ type UpgradeResult struct {
 	// user's config; template defaults were added for these.
 	MissingKeys []string
 	// ExtraKeys are keys that were present in the user's config but not in the
-	// template. They are preserved in a dedicated "Custom keys" section.
+	// template. They are preserved in-place.
 	ExtraKeys []string
+	// CaseConflictKeys are keys that differ only by case from template keys.
+	// They are preserved in-place with their original casing.
+	CaseConflictKeys []string
 	// Warnings includes non-fatal parsing or merge issues detected while upgrading.
 	Warnings []string
 	// PreservedValues is the number of existing key=value pairs from the user's
@@ -123,7 +126,8 @@ func UpgradeConfigFile(configPath string) (*UpgradeResult, error) {
 //
 // It returns an UpgradeResult populated with:
 //   - MissingKeys: keys that would be added from the template.
-//   - ExtraKeys: keys that would be preserved in the custom section.
+//   - ExtraKeys: keys not present in the template (preserved in-place).
+//   - CaseConflictKeys: keys that differ only by case from template keys.
 //   - Changed: true if an upgrade would actually modify the file.
 //
 // BackupPath is always empty in dry-run mode.
@@ -138,7 +142,7 @@ func PlanUpgradeConfigFile(configPath string) (*UpgradeResult, error) {
 }
 
 // computeConfigUpgrade performs the core merge logic and returns:
-//   - UpgradeResult (MissingKeys, ExtraKeys, Changed)
+//   - UpgradeResult (MissingKeys, ExtraKeys, CaseConflictKeys, Changed)
 //   - newContent: the upgraded file content (only meaningful if Changed=true)
 //   - originalContent: the original file content as read from disk
 func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, error) {
@@ -227,7 +231,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		})
 	}
 
-	// 3. Compute missing and extra keys.
+	// 3. Compute missing, extra, and case-conflict keys.
 	missingKeys := make([]string, 0)
 	missingEntries := make([]templateEntry, 0)
 	for _, entry := range templateEntries {
@@ -245,18 +249,23 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	}
 
 	extraKeys := make([]string, 0)
+	caseConflictKeys := make([]string, 0)
 	for _, key := range userKeyOrder {
 		upperKey := strings.ToUpper(key)
-		if _, ok := templateKeyByUpper[upperKey]; !ok {
+		templateKey, ok := templateKeyByUpper[upperKey]
+		if !ok {
 			extraKeys = append(extraKeys, key)
 			continue
 		}
 		if caseConflicts[upperKey] && caseMap[upperKey] != key {
-			extraKeys = append(extraKeys, key)
+			caseConflictKeys = append(caseConflictKeys, key)
 			continue
 		}
-		if templateKey, ok := templateKeyByUpper[upperKey]; ok && templateKey != key && !caseConflicts[upperKey] {
-			warnings = append(warnings, fmt.Sprintf("Key %q differs only by case from template key %q; preserved with original casing", key, templateKey))
+		if templateKey != key {
+			caseConflictKeys = append(caseConflictKeys, key)
+			if !caseConflicts[upperKey] {
+				warnings = append(warnings, fmt.Sprintf("Key %q differs only by case from template key %q; preserved with original casing", key, templateKey))
+			}
 		}
 	}
 
@@ -273,6 +282,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		result.Changed = false
 		result.Warnings = warnings
 		result.ExtraKeys = extraKeys
+		result.CaseConflictKeys = caseConflictKeys
 		result.PreservedValues = preserved
 		return result, "", originalContent, nil
 	}
@@ -391,6 +401,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 
 	result.MissingKeys = missingKeys
 	result.ExtraKeys = extraKeys
+	result.CaseConflictKeys = caseConflictKeys
 	result.PreservedValues = preserved
 	result.Warnings = warnings
 	result.Changed = true

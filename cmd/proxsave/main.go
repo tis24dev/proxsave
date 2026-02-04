@@ -356,6 +356,10 @@ func run() int {
 			bootstrap.Printf("Custom keys that would be preserved (not present in template) (%d): %s",
 				len(result.ExtraKeys), strings.Join(result.ExtraKeys, ", "))
 		}
+		if len(result.CaseConflictKeys) > 0 {
+			bootstrap.Printf("Keys that differ only by case from the template (%d): %s",
+				len(result.CaseConflictKeys), strings.Join(result.CaseConflictKeys, ", "))
+		}
 		bootstrap.Println("Dry run only: no files were modified. Use --upgrade-config to apply these changes.")
 		return types.ExitSuccess.Int()
 	}
@@ -467,6 +471,10 @@ func run() int {
 		if len(result.ExtraKeys) > 0 {
 			bootstrap.Printf("- Kept %d custom key(s) not present in the template: %s",
 				len(result.ExtraKeys), strings.Join(result.ExtraKeys, ", "))
+		}
+		if len(result.CaseConflictKeys) > 0 {
+			bootstrap.Printf("- Preserved %d key(s) that differ only by case: %s",
+				len(result.CaseConflictKeys), strings.Join(result.CaseConflictKeys, ", "))
 		}
 		if result.BackupPath != "" {
 			bootstrap.Printf("- Backup saved to: %s", result.BackupPath)

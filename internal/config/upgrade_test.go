@@ -348,8 +348,8 @@ func TestPlanUpgradeConfigWarnsOnCaseCollision(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
 		}
-		if len(result.ExtraKeys) != 1 || result.ExtraKeys[0] != "backup_path" {
-			t.Fatalf("ExtraKeys = %v; want [backup_path]", result.ExtraKeys)
+		if len(result.CaseConflictKeys) != 1 || result.CaseConflictKeys[0] != "backup_path" {
+			t.Fatalf("CaseConflictKeys = %v; want [backup_path]", result.CaseConflictKeys)
 		}
 		warnings := strings.Join(result.Warnings, "\n")
 		if !strings.Contains(warnings, "Duplicate keys differ only by case") {

@@ -581,6 +581,9 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 				if len(cfgUpgradeResult.ExtraKeys) > 0 {
 					fmt.Printf("  Preserved %d custom key(s) not present in the template.\n", len(cfgUpgradeResult.ExtraKeys))
 				}
+				if len(cfgUpgradeResult.CaseConflictKeys) > 0 {
+					fmt.Printf("  Preserved %d key(s) that differ only by case from the template.\n", len(cfgUpgradeResult.CaseConflictKeys))
+				}
 			}
 			if cfgUpgradeResult.BackupPath != "" {
 				fmt.Printf("  Backup saved to: %s\n", cfgUpgradeResult.BackupPath)
