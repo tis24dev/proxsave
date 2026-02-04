@@ -394,9 +394,11 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	newContent := strings.Join(newLines, lineEnding)
 	if newContent == string(originalContent) {
 		result.Changed = false
-		result.Warnings = warnings
+		result.MissingKeys = missingKeys
 		result.ExtraKeys = extraKeys
+		result.CaseConflictKeys = caseConflictKeys
 		result.PreservedValues = preserved
+		result.Warnings = warnings
 		return result, "", originalContent, nil
 	}
 

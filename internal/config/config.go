@@ -328,8 +328,6 @@ func (c *Config) loadEnvOverrides() {
 
 // parse interprets raw configuration values.
 // It supports both legacy and new backup.env formats.
-// parse interprets raw configuration values.
-// It supports both legacy and new backup.env formats.
 func (c *Config) parse() error {
 	c.parseGeneralSettings()
 	c.parseCompressionSettings()
