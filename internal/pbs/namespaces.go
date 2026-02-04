@@ -11,7 +11,7 @@ import (
 
 var execCommand = exec.Command
 
-// Namespace rappresenta un singolo namespace PBS.
+// Namespace represents a single PBS namespace.
 type Namespace struct {
 	Ns      string `json:"ns"`
 	Path    string `json:"path"`
@@ -24,8 +24,8 @@ type listNamespacesResponse struct {
 	Data []Namespace `json:"data"`
 }
 
-// ListNamespaces prova prima a usare la CLI PBS e, se fallisce,
-// effettua il fallback su filesystem per dedurre i namespace.
+// ListNamespaces tries the PBS CLI first and, if it fails,
+// falls back to the filesystem to infer namespaces.
 func ListNamespaces(datastoreName, datastorePath string) ([]Namespace, bool, error) {
 	if namespaces, err := listNamespacesViaCLI(datastoreName); err == nil {
 		return namespaces, false, nil

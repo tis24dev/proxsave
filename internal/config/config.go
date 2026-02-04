@@ -26,7 +26,7 @@ var (
 	}
 )
 
-// Config contiene tutta la configurazione del sistema di backup
+// Config contains the full backup system configuration.
 type Config struct {
 	// General settings
 	BackupEnabled            bool
@@ -254,7 +254,7 @@ type Config struct {
 	raw map[string]string
 }
 
-// LoadConfig legge il file di configurazione backup.env
+// LoadConfig reads the backup.env configuration file.
 func LoadConfig(configPath string) (*Config, error) {
 	if !utils.FileExists(configPath) {
 		return nil, fmt.Errorf("configuration file not found: %s", configPath)
@@ -326,10 +326,10 @@ func (c *Config) loadEnvOverrides() {
 	}
 }
 
-// parse interpreta i valori raw della configurazione
-// Supporta sia il formato legacy che quello nuovo del backup.env
-// parse interpreta i valori raw della configurazione
-// Supporta sia il formato legacy che quello nuovo del backup.env
+// parse interprets raw configuration values.
+// It supports both legacy and new backup.env formats.
+// parse interprets raw configuration values.
+// It supports both legacy and new backup.env formats.
 func (c *Config) parse() error {
 	c.parseGeneralSettings()
 	c.parseCompressionSettings()
@@ -1034,13 +1034,13 @@ func sanitizeMinDisk(value float64) float64 {
 	return value
 }
 
-// Get restituisce un valore raw dalla configurazione
+// Get returns a raw value from the configuration.
 func (c *Config) Get(key string) (string, bool) {
 	val, ok := c.raw[key]
 	return val, ok
 }
 
-// Set imposta un valore nella configurazione
+// Set sets a value in the configuration.
 func (c *Config) Set(key, value string) {
 	c.raw[key] = value
 }

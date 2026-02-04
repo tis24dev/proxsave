@@ -2723,10 +2723,10 @@ A: Yes, in two ways:
    # Use BACKUP_PATH / SECONDARY_PATH or browse the mount directly
    ```
 
-   In questo caso puoi:
-   - copiare i bundle dal mount (`/mnt/cloud/...`) nella cartella di backup locale;
-   - oppure indicare il path montato quando il tool chiede il percorso dei backup
-     (CLI) o sfogliare la directory montata prima di lanciare ProxSave.
+   In this case you can:
+   - copy the bundles from the mount (`/mnt/cloud/...`) into the local backup directory;
+   - or provide the mounted path when the tool asks for the backup location
+     (CLI) or browse the mounted directory before launching ProxSave.
 
 ---
 

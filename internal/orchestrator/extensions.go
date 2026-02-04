@@ -11,18 +11,18 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// StorageTarget rappresenta una destinazione esterna (es. storage secondario, cloud).
+// StorageTarget represents an external destination (e.g., secondary storage, cloud).
 type StorageTarget interface {
 	Sync(ctx context.Context, stats *BackupStats) error
 }
 
-// NotificationChannel rappresenta un canale di notifica (es. Telegram, email).
+// NotificationChannel represents a notification channel (e.g., Telegram, email).
 type NotificationChannel interface {
 	Name() string
 	Notify(ctx context.Context, stats *BackupStats) error
 }
 
-// RegisterStorageTarget aggiunge una destinazione da eseguire dopo il backup.
+// RegisterStorageTarget adds a destination to run after the backup.
 func (o *Orchestrator) RegisterStorageTarget(target StorageTarget) {
 	if target == nil {
 		return
@@ -30,7 +30,7 @@ func (o *Orchestrator) RegisterStorageTarget(target StorageTarget) {
 	o.storageTargets = append(o.storageTargets, target)
 }
 
-// RegisterNotificationChannel aggiunge un canale di notifica da eseguire dopo il backup.
+// RegisterNotificationChannel adds a notification channel to run after the backup.
 func (o *Orchestrator) RegisterNotificationChannel(channel NotificationChannel) {
 	if channel == nil {
 		return
