@@ -159,6 +159,9 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 			bootstrap.Warning("Upgrade: configuration upgrade failed: %v", cfgUpgradeErr)
 		}
 	}
+	if sessionLogger != nil && cfgUpgradeResult != nil && len(cfgUpgradeResult.MissingKeys) > 0 {
+		sessionLogger.Info("Upgrade: configuration updated with %d missing key(s): %s", len(cfgUpgradeResult.MissingKeys), strings.Join(cfgUpgradeResult.MissingKeys, ", "))
+	}
 
 	// Refresh docs/symlinks/cron/identity (configuration upgrade is handled separately)
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "refreshing docs and symlinks")
