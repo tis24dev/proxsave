@@ -256,7 +256,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 			continue
 		}
 		if templateKey, ok := templateKeyByUpper[upperKey]; ok && templateKey != key && !caseConflicts[upperKey] {
-			warnings = append(warnings, fmt.Sprintf("Key %q differs only by case from template key %q; preserved as custom entry", key, templateKey))
+			warnings = append(warnings, fmt.Sprintf("Key %q differs only by case from template key %q; preserved with original casing", key, templateKey))
 		}
 	}
 
