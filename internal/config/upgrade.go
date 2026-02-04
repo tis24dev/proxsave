@@ -178,6 +178,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		key   string
 		upper string
 		lines []string
+		index int
 	}
 
 	templateEntries := make([]templateEntry, 0)
@@ -213,6 +214,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 				key:   key,
 				upper: upperKey,
 				lines: templateLines[i : blockEnd+1],
+				index: len(templateEntries),
 			})
 			i = blockEnd
 			continue
@@ -221,6 +223,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 			key:   key,
 			upper: upperKey,
 			lines: []string{line},
+			index: len(templateEntries),
 		})
 	}
 
@@ -323,32 +326,36 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		return 0, false
 	}
 
-	findNextAnchor := func(entryIndex int) (int, bool) {
-		for i := entryIndex + 1; i < len(templateEntries); i++ {
-			if userKey, ok := resolveUserKey(templateEntries[i]); ok {
-				ranges := userRanges[userKey]
-				if len(ranges) == 0 {
-					continue
-				}
-				return ranges[0].start, true
-			}
-		}
-		return 0, false
-	}
-
 	ops := make([]insertOp, 0, len(missingEntries))
-	for idx, entry := range missingEntries {
+	unanchored := make([]templateEntry, 0)
+	for _, entry := range missingEntries {
 		insertIndex := appendIndex
-		if prev, ok := findPrevAnchor(idx); ok {
+		if prev, ok := findPrevAnchor(entry.index); ok {
 			insertIndex = prev
-		} else if next, ok := findNextAnchor(idx); ok {
-			insertIndex = next
+		} else {
+			unanchored = append(unanchored, entry)
+			continue
 		}
 		insertIndex = normalizeInsertIndex(insertIndex)
 		ops = append(ops, insertOp{
 			index: insertIndex,
 			lines: entry.lines,
-			order: idx,
+			order: entry.index,
+		})
+	}
+
+	if len(unanchored) > 0 {
+		section := []string{"# Added by upgrade"}
+		if appendIndex > 0 && strings.TrimSpace(originalLines[appendIndex-1]) != "" {
+			section = append([]string{""}, section...)
+		}
+		for _, entry := range unanchored {
+			section = append(section, entry.lines...)
+		}
+		ops = append(ops, insertOp{
+			index: normalizeInsertIndex(appendIndex),
+			lines: section,
+			order: len(templateEntries),
 		})
 	}
 

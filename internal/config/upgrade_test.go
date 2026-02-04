@@ -418,3 +418,35 @@ Custom_Backup_Paths="
 		}
 	})
 }
+
+func TestUpgradeConfigAddsMissingKeysUnderUpgradeSectionWhenNoAnchor(t *testing.T) {
+	template := "KEY1=default\nKEY2=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		legacy := "EXTRA=value\n"
+		if err := os.WriteFile(configPath, []byte(legacy), 0600); err != nil {
+			t.Fatalf("failed to write legacy config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when keys are missing")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		content := strings.ReplaceAll(string(data), "\r\n", "\n")
+		if !strings.Contains(content, "EXTRA=value") {
+			t.Fatalf("expected EXTRA to remain, got:\n%s", content)
+		}
+		if !strings.Contains(content, "# Added by upgrade\nKEY1=default\nKEY2=default\n") {
+			t.Fatalf("expected missing keys under upgrade section, got:\n%s", content)
+		}
+	})
+}
