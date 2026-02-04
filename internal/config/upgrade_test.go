@@ -79,7 +79,7 @@ func TestPlanUpgradeTracksExtraKeys(t *testing.T) {
 	})
 }
 
-func TestUpgradeConfigCreatesBackupAndCustomSection(t *testing.T) {
+func TestUpgradeConfigCreatesBackupAndPreservesExtraKeys(t *testing.T) {
 	withTemplate(t, upgradeTemplate, func() {
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "backup.env")
@@ -108,9 +108,6 @@ func TestUpgradeConfigCreatesBackupAndCustomSection(t *testing.T) {
 			t.Fatalf("failed to read upgraded config: %v", err)
 		}
 		content := string(updated)
-		if !strings.Contains(content, "Custom keys preserved") {
-			t.Fatalf("expected custom section header, got: %s", content)
-		}
 		if !strings.Contains(content, "EXTRA_KEY=value") {
 			t.Fatalf("expected EXTRA_KEY preserved, got: %s", content)
 		}
@@ -415,9 +412,9 @@ Custom_Backup_Paths="
 		}
 		content := strings.ReplaceAll(string(data), "\r\n", "\n")
 
-		expectedBlock := "CUSTOM_BACKUP_PATHS=\"\n/etc/custom.conf\n\"\n"
+		expectedBlock := "Custom_Backup_Paths=\"\n/etc/custom.conf\n\"\n"
 		if !strings.Contains(content, expectedBlock) {
-			t.Fatalf("upgraded config missing preserved block with fixed casing:\nGot:\n%s\nWant contains:\n%s", content, expectedBlock)
+			t.Fatalf("upgraded config missing preserved block with original casing:\nGot:\n%s\nWant contains:\n%s", content, expectedBlock)
 		}
 	})
 }
