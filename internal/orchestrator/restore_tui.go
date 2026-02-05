@@ -683,12 +683,13 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 		SetDynamicColors(true)
 
 	deadline := time.Now().Add(timeout)
+	deadlineHHMMSS := deadline.Format("15:04:05")
 	updateCountdown := func() {
 		left := time.Until(deadline)
 		if left < 0 {
 			left = 0
 		}
-		countdownText.SetText(fmt.Sprintf("Auto-skip in %ds (default: %s)", int(left.Seconds()), noLabel))
+		countdownText.SetText(fmt.Sprintf("Auto-skip in %ds (at %s, default: %s)", int(left.Seconds()), deadlineHHMMSS, noLabel))
 	}
 	updateCountdown()
 
@@ -795,6 +796,8 @@ func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, n
 		return false, nil
 	}
 
+	deadlineHHMMSS := time.Now().Add(timeout).Format("15:04:05")
+
 	infoText := tview.NewTextView().
 		SetWrap(true).
 		SetTextColor(tcell.ColorWhite).
@@ -863,8 +866,9 @@ func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, n
 			diagInfo = fmt.Sprintf("\n\nDiagnostics saved under:\n%s", diagnosticsDir)
 		}
 
-		infoText.SetText(fmt.Sprintf("Rollback in [yellow]%ds[white].\n\n%sNetwork health: [%s]%s[white]\n%s%s\n\nType COMMIT or press the button to keep the new network configuration.\nIf you do nothing, rollback will be automatic.",
+		infoText.SetText(fmt.Sprintf("Rollback in [yellow]%ds[white] (deadline: [yellow]%s[white]).\n\n%sNetwork health: [%s]%s[white]\n%s%s\n\nType COMMIT or press the button to keep the new network configuration.\nIf you do nothing, rollback will be automatic.",
 			value,
+			deadlineHHMMSS,
 			repairInfo,
 			healthColor(health.Severity),
 			health.Severity.String(),
