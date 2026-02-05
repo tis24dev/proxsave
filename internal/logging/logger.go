@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ type Logger struct {
 	logFile      *os.File // Log file (optional)
 	warningCount int64
 	errorCount   int64
+	issueLines   []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
 	exitFunc     func(int)
 }
 
@@ -185,6 +187,15 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		message,
 	)
 
+	// Capture warnings/errors for final summary output (single-line).
+	switch level {
+	case types.LogLevelWarning, types.LogLevelError, types.LogLevelCritical:
+		issue := fmt.Sprintf("[%s] %-8s %s", timestamp, levelStr, message)
+		issue = strings.ReplaceAll(issue, "\r", " ")
+		issue = strings.ReplaceAll(issue, "\n", " ")
+		l.issueLines = append(l.issueLines, issue)
+	}
+
 	// Write to stdout with colors.
 	fmt.Fprint(l.output, outputStdout)
 
@@ -206,6 +217,33 @@ func (l *Logger) HasErrors() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.errorCount > 0
+}
+
+// WarningCount returns the total number of WARNING log entries emitted.
+func (l *Logger) WarningCount() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.warningCount
+}
+
+// ErrorCount returns the total number of ERROR/CRITICAL log entries emitted.
+func (l *Logger) ErrorCount() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.errorCount
+}
+
+// IssueLines returns a copy of captured WARNING/ERROR/CRITICAL log lines in
+// chronological order. Intended for end-of-run summaries.
+func (l *Logger) IssueLines() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.issueLines) == 0 {
+		return nil
+	}
+	out := make([]string, len(l.issueLines))
+	copy(out, l.issueLines)
+	return out
 }
 
 // Debug writes a debug log.
