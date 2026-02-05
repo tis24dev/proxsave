@@ -1476,11 +1476,18 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.CephConfigPath = cfg.CephConfigPath
 
 	cc.BackupDatastoreConfigs = cfg.BackupDatastoreConfigs
+	cc.BackupPBSS3Endpoints = cfg.BackupPBSS3Endpoints
+	cc.BackupPBSNodeConfig = cfg.BackupPBSNodeConfig
+	cc.BackupPBSAcmeAccounts = cfg.BackupPBSAcmeAccounts
+	cc.BackupPBSAcmePlugins = cfg.BackupPBSAcmePlugins
+	cc.BackupPBSMetricServers = cfg.BackupPBSMetricServers
+	cc.BackupPBSTrafficControl = cfg.BackupPBSTrafficControl
 	cc.BackupUserConfigs = cfg.BackupUserConfigs
 	cc.BackupRemoteConfigs = cfg.BackupRemoteConfigs
 	cc.BackupSyncJobs = cfg.BackupSyncJobs
 	cc.BackupVerificationJobs = cfg.BackupVerificationJobs
 	cc.BackupTapeConfigs = cfg.BackupTapeConfigs
+	cc.BackupPBSNetworkConfig = cfg.BackupPBSNetworkConfig
 	cc.BackupPruneSchedules = cfg.BackupPruneSchedules
 	cc.BackupPxarFiles = cfg.BackupPxarFiles
 

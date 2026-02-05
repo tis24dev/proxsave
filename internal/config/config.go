@@ -200,11 +200,18 @@ type Config struct {
 
 	// PBS-specific collection options
 	BackupDatastoreConfigs   bool
+	BackupPBSS3Endpoints     bool
+	BackupPBSNodeConfig      bool
+	BackupPBSAcmeAccounts    bool
+	BackupPBSAcmePlugins     bool
+	BackupPBSMetricServers   bool
+	BackupPBSTrafficControl  bool
 	BackupUserConfigs        bool
 	BackupRemoteConfigs      bool
 	BackupSyncJobs           bool
 	BackupVerificationJobs   bool
 	BackupTapeConfigs        bool
+	BackupPBSNetworkConfig   bool
 	BackupPruneSchedules     bool
 	BackupPxarFiles          bool
 	PxarDatastoreConcurrency int
@@ -667,11 +674,19 @@ func (c *Config) parsePVESettings() error {
 
 func (c *Config) parsePBSSettings() {
 	c.BackupDatastoreConfigs = c.getBool("BACKUP_DATASTORE_CONFIGS", true)
+	c.BackupPBSS3Endpoints = c.getBool("BACKUP_PBS_S3_ENDPOINTS", c.BackupDatastoreConfigs)
+	c.BackupPBSNodeConfig = c.getBool("BACKUP_PBS_NODE_CONFIG", true)
+	c.BackupPBSAcmeAccounts = c.getBool("BACKUP_PBS_ACME_ACCOUNTS", true)
+	c.BackupPBSAcmePlugins = c.getBool("BACKUP_PBS_ACME_PLUGINS", true)
+	c.BackupPBSMetricServers = c.getBool("BACKUP_PBS_METRIC_SERVERS", true)
+	c.BackupPBSTrafficControl = c.getBool("BACKUP_PBS_TRAFFIC_CONTROL", true)
 	c.BackupUserConfigs = c.getBool("BACKUP_USER_CONFIGS", true)
 	c.BackupRemoteConfigs = c.getBoolWithFallback([]string{"BACKUP_REMOTE_CONFIGS", "BACKUP_REMOTE_CFG"}, true)
 	c.BackupSyncJobs = c.getBool("BACKUP_SYNC_JOBS", true)
 	c.BackupVerificationJobs = c.getBool("BACKUP_VERIFICATION_JOBS", true)
 	c.BackupTapeConfigs = c.getBool("BACKUP_TAPE_CONFIGS", true)
+	networkFallback := c.getBoolWithFallback([]string{"BACKUP_NETWORK_CONFIGS", "BACKUP_NETWORK_CONFIG"}, true)
+	c.BackupPBSNetworkConfig = c.getBool("BACKUP_PBS_NETWORK_CONFIG", networkFallback)
 	c.BackupPruneSchedules = c.getBool("BACKUP_PRUNE_SCHEDULES", true)
 	c.BackupPxarFiles = c.getBoolWithFallback([]string{"PXAR_SCAN_ENABLE", "BACKUP_PXAR_FILES"}, true)
 	c.PxarDatastoreConcurrency = c.getInt("PXAR_SCAN_DS_CONCURRENCY", 3)

@@ -1581,6 +1581,24 @@ func printNetworkRollbackCountdown(abortInfo *orchestrator.RestoreAbortInfo) {
 func printFinalSummary(finalExitCode int) {
 	fmt.Println()
 
+	// Print a flat list of all WARNING/ERROR/CRITICAL log entries that occurred during the run.
+	// This makes it easy to spot the root cause(s) behind a WARNING/ERROR exit status without
+	// scrolling through the full log.
+	logger := logging.GetDefaultLogger()
+	if logger != nil {
+		issues := logger.IssueLines()
+		if len(issues) > 0 {
+			fmt.Println("===========================================")
+			fmt.Printf("WARNINGS/ERRORS DURING RUN (warnings=%d errors=%d)\n", logger.WarningCount(), logger.ErrorCount())
+			fmt.Println()
+			for _, line := range issues {
+				fmt.Println(line)
+			}
+			fmt.Println("===========================================")
+			fmt.Println()
+		}
+	}
+
 	summarySig := buildSignature()
 	if summarySig == "" {
 		summarySig = "unknown"
@@ -1588,7 +1606,6 @@ func printFinalSummary(finalExitCode int) {
 
 	colorReset := "\033[0m"
 	color := ""
-	logger := logging.GetDefaultLogger()
 	hasWarnings := logger != nil && logger.HasWarnings()
 
 	switch {

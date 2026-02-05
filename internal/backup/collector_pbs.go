@@ -18,10 +18,14 @@ func (c *Collector) pbsConfigPath() string {
 }
 
 // collectPBSConfigFile collects a single PBS configuration file with detailed logging
-func (c *Collector) collectPBSConfigFile(ctx context.Context, root, filename, description string, enabled bool) ManifestEntry {
+func (c *Collector) collectPBSConfigFile(ctx context.Context, root, filename, description string, enabled bool, disableHint string) ManifestEntry {
 	if !enabled {
 		c.logger.Debug("Skipping %s: disabled by configuration", filename)
-		c.logger.Info("  %s: disabled", description)
+		if strings.TrimSpace(disableHint) != "" {
+			c.logger.Info("  %s: disabled (%s=false)", description, disableHint)
+		} else {
+			c.logger.Info("  %s: disabled", description)
+		}
 		return ManifestEntry{Status: StatusDisabled}
 	}
 
@@ -41,7 +45,11 @@ func (c *Collector) collectPBSConfigFile(ctx context.Context, root, filename, de
 	if os.IsNotExist(err) {
 		c.incFilesNotFound()
 		c.logger.Debug("  File not found: %v", err)
-		c.logger.Info("  %s: not configured", description)
+		if strings.TrimSpace(disableHint) != "" {
+			c.logger.Warning("  %s: not configured. If unused, set %s=false to disable.", description, disableHint)
+		} else {
+			c.logger.Warning("  %s: not configured", description)
+		}
 		return ManifestEntry{Status: StatusNotFound}
 	}
 	if err != nil {
@@ -188,6 +196,24 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 	if !c.config.BackupDatastoreConfigs {
 		extraExclude = append(extraExclude, "datastore.cfg")
 	}
+	if !c.config.BackupDatastoreConfigs || !c.config.BackupPBSS3Endpoints {
+		extraExclude = append(extraExclude, "s3.cfg")
+	}
+	if !c.config.BackupPBSNodeConfig {
+		extraExclude = append(extraExclude, "node.cfg")
+	}
+	if !c.config.BackupPBSAcmeAccounts {
+		extraExclude = append(extraExclude, "**/acme/accounts.cfg")
+	}
+	if !c.config.BackupPBSAcmePlugins {
+		extraExclude = append(extraExclude, "**/acme/plugins.cfg")
+	}
+	if !c.config.BackupPBSMetricServers {
+		extraExclude = append(extraExclude, "metricserver.cfg")
+	}
+	if !c.config.BackupPBSTrafficControl {
+		extraExclude = append(extraExclude, "traffic-control.cfg")
+	}
 	if !c.config.BackupUserConfigs {
 		// User-related configs are intentionally excluded together.
 		extraExclude = append(extraExclude, "user.cfg", "acl.cfg", "domains.cfg")
@@ -198,15 +224,15 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 	if !c.config.BackupSyncJobs {
 		extraExclude = append(extraExclude, "sync.cfg")
 	}
-		if !c.config.BackupVerificationJobs {
-			extraExclude = append(extraExclude, "verification.cfg")
-		}
-		if !c.config.BackupTapeConfigs {
-			extraExclude = append(extraExclude, "tape.cfg", "tape-job.cfg", "media-pool.cfg", "tape-encryption-keys.json")
-		}
-		if !c.config.BackupNetworkConfigs {
-			extraExclude = append(extraExclude, "network.cfg")
-		}
+	if !c.config.BackupVerificationJobs {
+		extraExclude = append(extraExclude, "verification.cfg")
+	}
+	if !c.config.BackupTapeConfigs {
+		extraExclude = append(extraExclude, "tape.cfg", "tape-job.cfg", "media-pool.cfg", "tape-encryption-keys.json")
+	}
+	if !c.config.BackupPBSNetworkConfig {
+		extraExclude = append(extraExclude, "network.cfg")
+	}
 	if !c.config.BackupPruneSchedules {
 		extraExclude = append(extraExclude, "prune.cfg")
 	}
@@ -229,75 +255,75 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 
 	c.logger.Info("Collecting PBS configuration files:")
 
-		// Datastore configuration
-		c.pbsManifest["datastore.cfg"] = c.collectPBSConfigFile(ctx, root, "datastore.cfg",
-			"Datastore configuration", c.config.BackupDatastoreConfigs)
+	// Datastore configuration
+	c.pbsManifest["datastore.cfg"] = c.collectPBSConfigFile(ctx, root, "datastore.cfg",
+		"Datastore configuration", c.config.BackupDatastoreConfigs, "BACKUP_DATASTORE_CONFIGS")
 
-		// S3 endpoint configuration (used by S3 datastores)
-		c.pbsManifest["s3.cfg"] = c.collectPBSConfigFile(ctx, root, "s3.cfg",
-			"S3 endpoints", c.config.BackupDatastoreConfigs)
+	// S3 endpoint configuration (used by S3 datastores)
+	c.pbsManifest["s3.cfg"] = c.collectPBSConfigFile(ctx, root, "s3.cfg",
+		"S3 endpoints", c.config.BackupDatastoreConfigs && c.config.BackupPBSS3Endpoints, "BACKUP_PBS_S3_ENDPOINTS")
 
-		// Node configuration (global PBS settings)
-		c.pbsManifest["node.cfg"] = c.collectPBSConfigFile(ctx, root, "node.cfg",
-			"Node configuration", true)
+	// Node configuration (global PBS settings)
+	c.pbsManifest["node.cfg"] = c.collectPBSConfigFile(ctx, root, "node.cfg",
+		"Node configuration", c.config.BackupPBSNodeConfig, "BACKUP_PBS_NODE_CONFIG")
 
-		// ACME configuration (accounts/plugins)
-		c.pbsManifest["acme/accounts.cfg"] = c.collectPBSConfigFile(ctx, root, filepath.Join("acme", "accounts.cfg"),
-			"ACME accounts", true)
-		c.pbsManifest["acme/plugins.cfg"] = c.collectPBSConfigFile(ctx, root, filepath.Join("acme", "plugins.cfg"),
-			"ACME plugins", true)
+	// ACME configuration (accounts/plugins)
+	c.pbsManifest["acme/accounts.cfg"] = c.collectPBSConfigFile(ctx, root, filepath.Join("acme", "accounts.cfg"),
+		"ACME accounts", c.config.BackupPBSAcmeAccounts, "BACKUP_PBS_ACME_ACCOUNTS")
+	c.pbsManifest["acme/plugins.cfg"] = c.collectPBSConfigFile(ctx, root, filepath.Join("acme", "plugins.cfg"),
+		"ACME plugins", c.config.BackupPBSAcmePlugins, "BACKUP_PBS_ACME_PLUGINS")
 
-		// External metric servers
-		c.pbsManifest["metricserver.cfg"] = c.collectPBSConfigFile(ctx, root, "metricserver.cfg",
-			"External metric servers", true)
+	// External metric servers
+	c.pbsManifest["metricserver.cfg"] = c.collectPBSConfigFile(ctx, root, "metricserver.cfg",
+		"External metric servers", c.config.BackupPBSMetricServers, "BACKUP_PBS_METRIC_SERVERS")
 
-		// Traffic control
-		c.pbsManifest["traffic-control.cfg"] = c.collectPBSConfigFile(ctx, root, "traffic-control.cfg",
-			"Traffic control rules", true)
+	// Traffic control
+	c.pbsManifest["traffic-control.cfg"] = c.collectPBSConfigFile(ctx, root, "traffic-control.cfg",
+		"Traffic control rules", c.config.BackupPBSTrafficControl, "BACKUP_PBS_TRAFFIC_CONTROL")
 
-		// User configuration
-		c.pbsManifest["user.cfg"] = c.collectPBSConfigFile(ctx, root, "user.cfg",
-			"User configuration", c.config.BackupUserConfigs)
+	// User configuration
+	c.pbsManifest["user.cfg"] = c.collectPBSConfigFile(ctx, root, "user.cfg",
+		"User configuration", c.config.BackupUserConfigs, "BACKUP_USER_CONFIGS")
 
 	// ACL configuration (under user configs flag)
 	c.pbsManifest["acl.cfg"] = c.collectPBSConfigFile(ctx, root, "acl.cfg",
-		"ACL configuration", c.config.BackupUserConfigs)
+		"ACL configuration", c.config.BackupUserConfigs, "BACKUP_USER_CONFIGS")
 
 	// Remote configuration (for sync jobs)
 	c.pbsManifest["remote.cfg"] = c.collectPBSConfigFile(ctx, root, "remote.cfg",
-		"Remote configuration", c.config.BackupRemoteConfigs)
+		"Remote configuration", c.config.BackupRemoteConfigs, "BACKUP_REMOTE_CONFIGS")
 
 	// Sync jobs configuration
 	c.pbsManifest["sync.cfg"] = c.collectPBSConfigFile(ctx, root, "sync.cfg",
-		"Sync jobs", c.config.BackupSyncJobs)
+		"Sync jobs", c.config.BackupSyncJobs, "BACKUP_SYNC_JOBS")
 
 	// Verification jobs configuration
 	c.pbsManifest["verification.cfg"] = c.collectPBSConfigFile(ctx, root, "verification.cfg",
-		"Verification jobs", c.config.BackupVerificationJobs)
+		"Verification jobs", c.config.BackupVerificationJobs, "BACKUP_VERIFICATION_JOBS")
 
-		// Tape backup configuration
-		c.pbsManifest["tape.cfg"] = c.collectPBSConfigFile(ctx, root, "tape.cfg",
-			"Tape configuration", c.config.BackupTapeConfigs)
+	// Tape backup configuration
+	c.pbsManifest["tape.cfg"] = c.collectPBSConfigFile(ctx, root, "tape.cfg",
+		"Tape configuration", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
 
-		// Tape jobs (under tape configs flag)
-		c.pbsManifest["tape-job.cfg"] = c.collectPBSConfigFile(ctx, root, "tape-job.cfg",
-			"Tape jobs", c.config.BackupTapeConfigs)
+	// Tape jobs (under tape configs flag)
+	c.pbsManifest["tape-job.cfg"] = c.collectPBSConfigFile(ctx, root, "tape-job.cfg",
+		"Tape jobs", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
 
-		// Media pool configuration (under tape configs flag)
-		c.pbsManifest["media-pool.cfg"] = c.collectPBSConfigFile(ctx, root, "media-pool.cfg",
-			"Media pool configuration", c.config.BackupTapeConfigs)
+	// Media pool configuration (under tape configs flag)
+	c.pbsManifest["media-pool.cfg"] = c.collectPBSConfigFile(ctx, root, "media-pool.cfg",
+		"Media pool configuration", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
 
-		// Tape encryption keys (under tape configs flag)
-		c.pbsManifest["tape-encryption-keys.json"] = c.collectPBSConfigFile(ctx, root, "tape-encryption-keys.json",
-			"Tape encryption keys", c.config.BackupTapeConfigs)
+	// Tape encryption keys (under tape configs flag)
+	c.pbsManifest["tape-encryption-keys.json"] = c.collectPBSConfigFile(ctx, root, "tape-encryption-keys.json",
+		"Tape encryption keys", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
 
 	// Network configuration
 	c.pbsManifest["network.cfg"] = c.collectPBSConfigFile(ctx, root, "network.cfg",
-		"Network configuration", c.config.BackupNetworkConfigs)
+		"Network configuration", c.config.BackupPBSNetworkConfig, "BACKUP_PBS_NETWORK_CONFIG")
 
 	// Prune/GC schedules
 	c.pbsManifest["prune.cfg"] = c.collectPBSConfigFile(ctx, root, "prune.cfg",
-		"Prune schedules", c.config.BackupPruneSchedules)
+		"Prune schedules", c.config.BackupPruneSchedules, "BACKUP_PRUNE_SCHEDULES")
 
 	c.logger.Debug("PBS directory collection finished")
 	return nil
@@ -321,11 +347,13 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 	}
 
 	// Node configuration
-	c.safeCmdOutput(ctx,
-		"proxmox-backup-manager node show --output-format=json",
-		filepath.Join(commandsDir, "node_config.json"),
-		"Node configuration",
-		false)
+	if c.config.BackupPBSNodeConfig {
+		c.safeCmdOutput(ctx,
+			"proxmox-backup-manager node show --output-format=json",
+			filepath.Join(commandsDir, "node_config.json"),
+			"Node configuration",
+			false)
+	}
 
 	// Datastore status
 	if err := c.collectCommandMulti(ctx,
@@ -348,7 +376,9 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 	}
 
 	// ACME (accounts, plugins)
-	c.collectPBSAcmeSnapshots(ctx, commandsDir)
+	if c.config.BackupPBSAcmeAccounts || c.config.BackupPBSAcmePlugins {
+		c.collectPBSAcmeSnapshots(ctx, commandsDir)
+	}
 
 	// Notifications (targets, matchers, endpoints)
 	c.collectPBSNotificationSnapshots(ctx, commandsDir)
@@ -456,7 +486,7 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 	}
 
 	// Network configuration
-	if c.config.BackupNetworkConfigs {
+	if c.config.BackupPBSNetworkConfig {
 		c.safeCmdOutput(ctx,
 			"proxmox-backup-manager network list --output-format=json",
 			filepath.Join(commandsDir, "network_list.json"),
@@ -480,11 +510,13 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 	}
 
 	// Traffic control rules
-	c.safeCmdOutput(ctx,
-		"proxmox-backup-manager traffic-control list --output-format=json",
-		filepath.Join(commandsDir, "traffic_control.json"),
-		"Traffic control rules",
-		false)
+	if c.config.BackupPBSTrafficControl {
+		c.safeCmdOutput(ctx,
+			"proxmox-backup-manager traffic-control list --output-format=json",
+			filepath.Join(commandsDir, "traffic_control.json"),
+			"Traffic control rules",
+			false)
+	}
 
 	// Task log summary
 	c.safeCmdOutput(ctx,
@@ -494,7 +526,9 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		false)
 
 	// S3 endpoints (optional, may be unavailable on older PBS versions)
-	c.collectPBSS3Snapshots(ctx, commandsDir)
+	if c.config.BackupDatastoreConfigs && c.config.BackupPBSS3Endpoints {
+		c.collectPBSS3Snapshots(ctx, commandsDir)
+	}
 
 	return nil
 }

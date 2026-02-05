@@ -219,6 +219,7 @@ func TestCollectPBSConfigsExcludesDisabledPBSConfigFiles(t *testing.T) {
 	cfg.BackupTapeConfigs = false
 	cfg.BackupPruneSchedules = false
 	cfg.BackupNetworkConfigs = false
+	cfg.BackupPBSNetworkConfig = false
 	cfg.BackupPxarFiles = false
 
 	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
@@ -283,7 +284,7 @@ func TestCollectPBSConfigFileReturnsSkippedWhenExcluded(t *testing.T) {
 
 	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
 
-	entry := collector.collectPBSConfigFile(context.Background(), root, "remote.cfg", "Remote configuration", true)
+	entry := collector.collectPBSConfigFile(context.Background(), root, "remote.cfg", "Remote configuration", true, "BACKUP_REMOTE_CONFIGS")
 	if entry.Status != StatusSkipped {
 		t.Fatalf("expected StatusSkipped, got %s", entry.Status)
 	}
