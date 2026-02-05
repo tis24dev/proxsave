@@ -173,6 +173,47 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		return result, "", originalContent, fmt.Errorf("failed to parse config %s: %w", configPath, err)
 	}
 
+	// Prune deprecated keys that are now auto-detected at runtime.
+	//
+	// BASE_DIR is derived from the executable/config location.
+	// CRON_* scheduling is managed via crontab, not backup.env.
+	deprecatedUpperKeys := map[string]struct{}{
+		"BASE_DIR":      {},
+		"CRON_SCHEDULE": {},
+		"CRON_HOUR":     {},
+		"CRON_MINUTE":   {},
+	}
+	skipOriginalLines := make([]bool, len(originalLines))
+	prunedLineCount := 0
+	prunedKeys := make(map[string]struct{})
+	for key, ranges := range userRanges {
+		upperKey := strings.ToUpper(key)
+		if _, ok := deprecatedUpperKeys[upperKey]; !ok {
+			continue
+		}
+		prunedKeys[upperKey] = struct{}{}
+		for _, r := range ranges {
+			for i := r.start; i <= r.end && i < len(skipOriginalLines); i++ {
+				if i < 0 {
+					continue
+				}
+				if skipOriginalLines[i] {
+					continue
+				}
+				skipOriginalLines[i] = true
+				prunedLineCount++
+			}
+		}
+	}
+	if len(prunedKeys) > 0 {
+		keys := make([]string, 0, len(prunedKeys))
+		for k := range prunedKeys {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		warnings = append(warnings, fmt.Sprintf("Removed deprecated keys from backup.env: %s (BASE_DIR is auto-detected; cron is managed via crontab)", strings.Join(keys, ", ")))
+	}
+
 	// 2. Walk the template line-by-line and collect template entries.
 	template := DefaultEnvTemplate()
 	normalizedTemplate := strings.ReplaceAll(template, "\r\n", "\n")
@@ -252,6 +293,10 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	caseConflictKeys := make([]string, 0)
 	for _, key := range userKeyOrder {
 		upperKey := strings.ToUpper(key)
+		if _, ok := deprecatedUpperKeys[upperKey]; ok {
+			// This key is explicitly pruned and should not be reported as preserved.
+			continue
+		}
 		templateKey, ok := templateKeyByUpper[upperKey]
 		if !ok {
 			extraKeys = append(extraKeys, key)
@@ -277,8 +322,8 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		}
 	}
 
-	// If nothing is missing, do not rewrite the file.
-	if len(missingKeys) == 0 {
+	// If nothing is missing and nothing is pruned, do not rewrite the file.
+	if len(missingKeys) == 0 && prunedLineCount == 0 {
 		result.Changed = false
 		result.Warnings = warnings
 		result.MissingKeys = missingKeys
@@ -383,6 +428,9 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		for opIdx < len(ops) && ops[opIdx].index == i {
 			newLines = append(newLines, ops[opIdx].lines...)
 			opIdx++
+		}
+		if i < len(skipOriginalLines) && skipOriginalLines[i] {
+			continue
 		}
 		newLines = append(newLines, originalLines[i])
 	}

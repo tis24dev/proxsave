@@ -213,8 +213,9 @@ MIN_DISK_SPACE_CLOUD_GB=1          # Cloud storage (not enforced for remote)
 ## Storage Paths
 
 ```bash
-# Base directory for all operations
-BASE_DIR=/opt/proxsave
+# Base directory for all operations (auto-detected at runtime)
+# BASE_DIR is derived from the executable/config location, so it is usually not
+# written in backup.env.
 
 # Lock file directory
 LOCK_PATH=${BASE_DIR}/lock
