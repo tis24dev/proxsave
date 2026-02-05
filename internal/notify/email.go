@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -84,6 +85,20 @@ var (
 	// postfixMainCFPath points to the Postfix main configuration file.
 	// It is a variable to allow hermetic tests to override it.
 	postfixMainCFPath = "/etc/postfix/main.cf"
+
+	// pveUserCfgPath is the Proxmox VE user configuration file used as a last-resort fallback
+	// for recipient auto-detection when CLI/API tools are unavailable or broken.
+	// It is a variable to allow hermetic tests to override it.
+	pveUserCfgPath = "/etc/pve/user.cfg"
+
+	// pbsUserCfgPath is the Proxmox Backup Server user configuration file used as a last-resort fallback
+	// for recipient auto-detection when CLI/API tools are unavailable or broken.
+	// It is a variable to allow hermetic tests to override it.
+	pbsUserCfgPath = "/etc/proxmox-backup/user.cfg"
+
+	// recipientDetectMaxDiagBytes limits how much combined output is included in debug logs
+	// when a recipient auto-detection strategy fails.
+	recipientDetectMaxDiagBytes = 2048
 )
 
 // NewEmailNotifier creates a new Email notifier
@@ -179,7 +194,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			}
 		} else {
 			recipient = detectedRecipient
-			e.logger.Debug("Auto-detected email recipient: %s", recipient)
+			e.logger.Debug("Auto-detected email recipient: %s", redactEmail(recipient))
 			autoDetected = true
 		}
 	}
@@ -347,57 +362,232 @@ func isRootRecipient(recipient string) bool {
 	return parts[0] == "root"
 }
 
-// detectRecipient attempts to auto-detect the email recipient from Proxmox configuration
-// Replicates Bash logic: jq -r '.[] | select(.userid=="root@pam") | .email'
+func redactEmail(addr string) string {
+	trimmed := strings.TrimSpace(addr)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.SplitN(trimmed, "@", 2)
+	if len(parts) != 2 {
+		return trimmed
+	}
+	local := parts[0]
+	domain := parts[1]
+	if local == "" {
+		return "***@" + domain
+	}
+	if len(local) == 1 {
+		return local + "***@" + domain
+	}
+	return local[:1] + "***@" + domain
+}
+
+// detectRecipient attempts to auto-detect the email recipient from Proxmox configuration.
+// Strategy order (professional default):
+//  1. PVE: API via pvesh (/access/users/root@pam) to match the UI source of truth
+//  2. Legacy CLI: pveum / proxmox-backup-manager user list
+//  3. Last resort: parse user.cfg directly (PVE: /etc/pve/user.cfg, PBS: /etc/proxmox-backup/user.cfg)
 func (e *EmailNotifier) detectRecipient(ctx context.Context) (string, error) {
-	var cmd *exec.Cmd
+	const targetUserID = "root@pam"
+	e.logger.Debug("Recipient auto-detection: looking up email for %s (proxmox=%s)", targetUserID, e.proxmoxType)
 
 	switch e.proxmoxType {
 	case types.ProxmoxVE:
-		// Try to get root user email from PVE
-		cmd = exec.CommandContext(ctx, "pveum", "user", "list", "--output-format", "json")
+		return e.detectRecipientPVE(ctx, targetUserID)
 
 	case types.ProxmoxBS:
-		// Try to get root user email from PBS
-		cmd = exec.CommandContext(ctx, "proxmox-backup-manager", "user", "list", "--output-format", "json")
+		return e.detectRecipientPBS(ctx, targetUserID)
 
 	default:
 		return "", fmt.Errorf("unknown Proxmox type: %s", e.proxmoxType)
 	}
+}
 
-	// Execute command
-	output, err := cmd.Output()
+type proxmoxUserListEntry struct {
+	UserID string `json:"userid"`
+	Email  string `json:"email"`
+}
+
+func (e *EmailNotifier) detectRecipientPVE(ctx context.Context, targetUserID string) (string, error) {
+	var failures []string
+
+	// 1) Primary: API via pvesh (matches Proxmox UI source of truth)
+	email, err := e.detectRecipientPVEViaPvesh(ctx, targetUserID)
+	if err == nil && strings.TrimSpace(email) != "" {
+		e.logger.Debug("Recipient auto-detection: resolved via pvesh API for %s", targetUserID)
+		return email, nil
+	}
 	if err != nil {
-		return "", fmt.Errorf("failed to query Proxmox user list: %w", err)
+		failures = append(failures, fmt.Sprintf("pvesh: %v", err))
 	}
 
-	// Parse JSON array to find root@pam user
-	// Replicates: jq -r '.[] | select(.userid=="root@pam") | .email'
-	var users []map[string]interface{}
-	if err := json.Unmarshal(output, &users); err != nil {
-		return "", fmt.Errorf("failed to parse user list JSON: %w", err)
+	// 2) Secondary: legacy CLI via pveum (kept for compatibility)
+	email, err = e.detectRecipientViaUserListCLI(ctx, "pveum", []string{"user", "list", "--output-format", "json"}, targetUserID)
+	if err == nil && strings.TrimSpace(email) != "" {
+		e.logger.Debug("Recipient auto-detection: resolved via pveum for %s", targetUserID)
+		return email, nil
+	}
+	if err != nil {
+		failures = append(failures, fmt.Sprintf("pveum: %v", err))
 	}
 
-	// Search for root@pam user specifically
-	for _, user := range users {
-		userid, useridOk := user["userid"].(string)
-		if !useridOk {
+	// 3) Last resort: parse /etc/pve/user.cfg directly (independent from Proxmox CLI tooling)
+	email, err = e.detectRecipientViaUserCfg(pveUserCfgPath, targetUserID)
+	if err == nil && strings.TrimSpace(email) != "" {
+		e.logger.Debug("Recipient auto-detection: resolved via user.cfg for %s (path=%s)", targetUserID, pveUserCfgPath)
+		return email, nil
+	}
+	if err != nil {
+		failures = append(failures, fmt.Sprintf("user.cfg: %v", err))
+	}
+
+	return "", fmt.Errorf("recipient auto-detection failed for %s (pve): %s", targetUserID, strings.Join(failures, "; "))
+}
+
+func (e *EmailNotifier) detectRecipientPBS(ctx context.Context, targetUserID string) (string, error) {
+	var failures []string
+
+	// PBS does not ship pvesh; the management CLI is the supported on-node entrypoint.
+	email, err := e.detectRecipientViaUserListCLI(ctx, "proxmox-backup-manager", []string{"user", "list", "--output-format", "json"}, targetUserID)
+	if err == nil && strings.TrimSpace(email) != "" {
+		e.logger.Debug("Recipient auto-detection: resolved via proxmox-backup-manager for %s", targetUserID)
+		return email, nil
+	}
+	if err != nil {
+		failures = append(failures, fmt.Sprintf("proxmox-backup-manager: %v", err))
+	}
+
+	// Last resort: parse /etc/proxmox-backup/user.cfg directly.
+	email, err = e.detectRecipientViaUserCfg(pbsUserCfgPath, targetUserID)
+	if err == nil && strings.TrimSpace(email) != "" {
+		e.logger.Debug("Recipient auto-detection: resolved via user.cfg for %s (path=%s)", targetUserID, pbsUserCfgPath)
+		return email, nil
+	}
+	if err != nil {
+		failures = append(failures, fmt.Sprintf("user.cfg: %v", err))
+	}
+
+	return "", fmt.Errorf("recipient auto-detection failed for %s (pbs): %s", targetUserID, strings.Join(failures, "; "))
+}
+
+func (e *EmailNotifier) detectRecipientPVEViaPvesh(ctx context.Context, targetUserID string) (string, error) {
+	// Prefer the single-user endpoint to avoid parsing the full list and to match the UI/API source of truth.
+	endpoint := "/access/users/" + targetUserID
+	cmdName := "pvesh"
+	args := []string{"get", endpoint, "--output-format=json"}
+
+	out, err := runCombinedOutput(ctx, cmdName, args...)
+	if err != nil {
+		e.logger.Debug("Recipient auto-detection: pvesh call failed (cmd=%s %s): %v", cmdName, strings.Join(args, " "), err)
+		if diag := strings.TrimSpace(string(out)); diag != "" {
+			e.logger.Debug("Recipient auto-detection: pvesh diagnostic output: %s", truncateForLog(diag, recipientDetectMaxDiagBytes))
+		}
+		return "", fmt.Errorf("pvesh API query failed: %w", err)
+	}
+
+	var payload struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		e.logger.Debug("Recipient auto-detection: pvesh JSON parse failed for %s: %v", endpoint, err)
+		return "", fmt.Errorf("failed to parse pvesh JSON response: %w", err)
+	}
+
+	email := strings.TrimSpace(payload.Email)
+	if email == "" {
+		return "", fmt.Errorf("%s exists but has no email configured (pvesh)", targetUserID)
+	}
+	e.logger.Debug("Recipient auto-detection: pvesh returned an email for %s: %s", targetUserID, redactEmail(email))
+	return email, nil
+}
+
+func (e *EmailNotifier) detectRecipientViaUserListCLI(ctx context.Context, cmdName string, args []string, targetUserID string) (string, error) {
+	out, err := runCombinedOutput(ctx, cmdName, args...)
+	if err != nil {
+		// Command not found or non-zero exit status: include diagnostics in debug logs.
+		if errors.Is(err, exec.ErrNotFound) {
+			e.logger.Debug("Recipient auto-detection: %s not found in PATH (args=%s)", cmdName, strings.Join(args, " "))
+		} else {
+			e.logger.Debug("Recipient auto-detection: %s command failed (args=%s): %v", cmdName, strings.Join(args, " "), err)
+		}
+		if diag := strings.TrimSpace(string(out)); diag != "" {
+			e.logger.Debug("Recipient auto-detection: %s diagnostic output: %s", cmdName, truncateForLog(diag, recipientDetectMaxDiagBytes))
+		}
+		return "", fmt.Errorf("failed to query Proxmox user list via %s: %w", cmdName, err)
+	}
+
+	var users []proxmoxUserListEntry
+	if err := json.Unmarshal(out, &users); err != nil {
+		return "", fmt.Errorf("failed to parse user list JSON from %s: %w", cmdName, err)
+	}
+
+	for _, u := range users {
+		if strings.TrimSpace(u.UserID) != targetUserID {
+			continue
+		}
+		email := strings.TrimSpace(u.Email)
+		if email == "" {
+			return "", fmt.Errorf("%s user exists but has no email configured (%s)", targetUserID, cmdName)
+		}
+		e.logger.Debug("Recipient auto-detection: %s returned an email for %s: %s", cmdName, targetUserID, redactEmail(email))
+		return email, nil
+	}
+
+	return "", fmt.Errorf("%s user not found in Proxmox configuration (%s)", targetUserID, cmdName)
+}
+
+func (e *EmailNotifier) detectRecipientViaUserCfg(cfgPath string, targetUserID string) (string, error) {
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read %s: %w", cfgPath, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		// Check if this is the root@pam user
-		if userid == "root@pam" {
-			email, emailOk := user["email"].(string)
-			if emailOk && email != "" {
-				e.logger.Debug("Found root@pam email: %s", email)
-				return email, nil
-			}
-			// root@pam found but no email configured
-			return "", fmt.Errorf("root@pam user exists but has no email configured")
+		// Expected format (PVE/PBS): user:<userid>:<enable>:<expire>:<firstname>:<lastname>:<email>:...
+		// Example: user:root@pam:1:0:::info@tis24.it::
+		if !strings.HasPrefix(line, "user:") {
+			continue
 		}
+		parts := strings.Split(line, ":")
+		if len(parts) < 7 {
+			continue
+		}
+		userID := strings.TrimSpace(parts[1])
+		if userID != targetUserID {
+			continue
+		}
+
+		email := strings.TrimSpace(parts[6])
+		if email == "" {
+			return "", fmt.Errorf("%s user exists but has no email configured (user.cfg)", targetUserID)
+		}
+		e.logger.Debug("Recipient auto-detection: user.cfg contains an email for %s: %s", targetUserID, redactEmail(email))
+		return email, nil
 	}
 
-	return "", fmt.Errorf("root@pam user not found in Proxmox configuration")
+	return "", fmt.Errorf("%s user not found in %s", targetUserID, cfgPath)
+}
+
+func runCombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func truncateForLog(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	return s[:maxBytes] + "...(truncated)"
 }
 
 // sendViaRelay sends email via cloud relay

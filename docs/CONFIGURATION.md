@@ -788,7 +788,10 @@ EMAIL_FROM=no-reply@proxmox.tis24.it
 - Allowed values for `EMAIL_DELIVERY_METHOD` are: `relay`, `sendmail`, `pmf` (invalid values will skip Email with a warning).
 - `EMAIL_FALLBACK_SENDMAIL` is a historical name (kept for compatibility). When `EMAIL_DELIVERY_METHOD=relay`, it enables fallback to **pmf** (it will not fall back to `/usr/sbin/sendmail`).
 - `relay` requires a real mailbox recipient and blocks `root@…` recipients; set `EMAIL_RECIPIENT` to a non-root mailbox if needed.
-- `sendmail` requires a recipient and uses `/usr/sbin/sendmail`; ProxSave can auto-detect `root@pam` email from Proxmox if `EMAIL_RECIPIENT` is empty.
+- If `EMAIL_RECIPIENT` is empty, ProxSave auto-detects the recipient from the `root@pam` user:
+  - **PVE**: Proxmox API via `pvesh get /access/users/root@pam` → fallback to `pveum user list` → fallback to `/etc/pve/user.cfg`
+  - **PBS**: `proxmox-backup-manager user list` → fallback to `/etc/proxmox-backup/user.cfg`
+- `sendmail` requires a recipient and uses `/usr/sbin/sendmail` (auto-detect applies if `EMAIL_RECIPIENT` is empty, as described above).
 - With `pmf`, final delivery recipients are determined by Proxmox Notifications targets/matchers. `EMAIL_RECIPIENT` is only used for the `To:` header and may be empty.
 
 ### Gotify
