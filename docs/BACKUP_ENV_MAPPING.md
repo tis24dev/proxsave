@@ -88,6 +88,13 @@ WEBHOOK_TIMEOUT           = SAME
 ## Go-only variables (new)
 
 SYSTEM_ROOT_PREFIX = NEW (Go-only) → Override system root for collection (testing/chroot). Empty or "/" uses the real root.
+BACKUP_PBS_S3_ENDPOINTS = NEW (Go-only) → Collect `s3.cfg` and S3 endpoint snapshots (PBS).
+BACKUP_PBS_NODE_CONFIG = NEW (Go-only) → Collect `node.cfg` and node snapshots (PBS).
+BACKUP_PBS_ACME_ACCOUNTS = NEW (Go-only) → Collect `acme/accounts.cfg` and ACME account snapshots (PBS).
+BACKUP_PBS_ACME_PLUGINS = NEW (Go-only) → Collect `acme/plugins.cfg` and ACME plugin snapshots (PBS).
+BACKUP_PBS_METRIC_SERVERS = NEW (Go-only) → Collect `metricserver.cfg` (PBS).
+BACKUP_PBS_TRAFFIC_CONTROL = NEW (Go-only) → Collect `traffic-control.cfg` and traffic-control snapshots (PBS).
+BACKUP_PBS_NETWORK_CONFIG = NEW (Go-only) → Collect `network.cfg` and network snapshots (PBS), independent from BACKUP_NETWORK_CONFIGS (system).
 
 ## Renamed variables / Supported aliases in Go
 

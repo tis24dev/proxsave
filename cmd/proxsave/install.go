@@ -324,10 +324,6 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 		return false, false, wrapInstallError(err)
 	}
 
-	// Ensure BASE_DIR is explicitly present in the generated env file so that
-	// subsequent runs and encryption setup use the same root directory.
-	template = setEnvValue(template, "BASE_DIR", baseDir)
-
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "writing configuration")
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
 		return false, false, err

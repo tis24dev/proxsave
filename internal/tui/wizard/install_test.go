@@ -74,7 +74,9 @@ func TestApplyInstallDataRespectsBaseTemplate(t *testing.T) {
 	}
 
 	assertContains("MARKER", "1")
-	assertContains("BASE_DIR", data.BaseDir)
+	if strings.Contains(result, "BASE_DIR=") {
+		t.Fatalf("expected BASE_DIR to be removed, got:\n%s", result)
+	}
 	assertContains("SECONDARY_ENABLED", "true")
 	assertContains("SECONDARY_PATH", data.SecondaryPath)
 	assertContains("SECONDARY_LOG_PATH", data.SecondaryLogPath)
@@ -95,8 +97,8 @@ func TestApplyInstallDataDefaultsBaseTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyInstallData returned error: %v", err)
 	}
-	if !strings.Contains(result, "BASE_DIR="+data.BaseDir) {
-		t.Fatalf("expected BASE_DIR to be set in default template")
+	if strings.Contains(result, "BASE_DIR=") {
+		t.Fatalf("expected BASE_DIR not to be written in default template")
 	}
 }
 
@@ -124,9 +126,9 @@ func TestApplyInstallDataCronAndNotifications(t *testing.T) {
 	assertContains("TELEGRAM_ENABLED", "false")
 	assertContains("EMAIL_ENABLED", "true")
 	assertContains("EMAIL_DELIVERY_METHOD", "relay")
-	assertContains("CRON_SCHEDULE", "7 3 * * *")
-	assertContains("CRON_HOUR", "3")
-	assertContains("CRON_MINUTE", "7")
+	if strings.Contains(result, "CRON_SCHEDULE=") || strings.Contains(result, "CRON_HOUR=") || strings.Contains(result, "CRON_MINUTE=") {
+		t.Fatalf("expected CRON_* keys to be removed from backup.env, got:\n%s", result)
+	}
 	assertContains("ENCRYPT_ARCHIVE", "false")
 }
 

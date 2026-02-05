@@ -79,19 +79,19 @@ func TestEmailNotifierBasicAccessors(t *testing.T) {
 	}
 }
 
-	func TestDescribeEmailMethod(t *testing.T) {
-		tests := []struct {
-			method string
-			want   string
-		}{
-			{"email-relay", "cloud relay"},
-			{"email-sendmail", "sendmail"},
-			{"email-pmf", "proxmox-mail-forward"},
-			{"email-pmf-fallback", "proxmox-mail-forward fallback"},
-			{"custom", "custom"},
-		}
-		for _, tt := range tests {
-			if got := describeEmailMethod(tt.method); got != tt.want {
+func TestDescribeEmailMethod(t *testing.T) {
+	tests := []struct {
+		method string
+		want   string
+	}{
+		{"email-relay", "cloud relay"},
+		{"email-sendmail", "sendmail"},
+		{"email-pmf", "proxmox-mail-forward"},
+		{"email-pmf-fallback", "proxmox-mail-forward fallback"},
+		{"custom", "custom"},
+	}
+	for _, tt := range tests {
+		if got := describeEmailMethod(tt.method); got != tt.want {
 			t.Fatalf("describeEmailMethod(%s)=%s want %s", tt.method, got, tt.want)
 		}
 	}
@@ -103,7 +103,55 @@ func TestEmailNotifierDetectRecipientPVE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEmailNotifier() error = %v", err)
 	}
+	// Ensure we don't accidentally hit the real system pvesh during tests.
+	mockCmdEnv(t, "pvesh", "", 1)
 	mockCmdEnv(t, "pveum", `[{"userid":"root@pam","email":"root@example.com"}]`, 0)
+
+	recipient, err := notifier.detectRecipient(context.Background())
+	if err != nil {
+		t.Fatalf("detectRecipient() error = %v", err)
+	}
+	if recipient != "root@example.com" {
+		t.Fatalf("detectRecipient()=%s want root@example.com", recipient)
+	}
+}
+
+func TestEmailNotifierDetectRecipientPVEViaPvesh(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, err := NewEmailNotifier(EmailConfig{}, types.ProxmoxVE, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+	mockCmdEnv(t, "pvesh", `{"email":"root@example.com"}`, 0)
+
+	recipient, err := notifier.detectRecipient(context.Background())
+	if err != nil {
+		t.Fatalf("detectRecipient() error = %v", err)
+	}
+	if recipient != "root@example.com" {
+		t.Fatalf("detectRecipient()=%s want root@example.com", recipient)
+	}
+}
+
+func TestEmailNotifierDetectRecipientPVEViaUserCfgFallback(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, err := NewEmailNotifier(EmailConfig{}, types.ProxmoxVE, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	origUserCfgPath := pveUserCfgPath
+	t.Cleanup(func() { pveUserCfgPath = origUserCfgPath })
+
+	tempDir := t.TempDir()
+	pveUserCfgPath = filepath.Join(tempDir, "user.cfg")
+	if err := os.WriteFile(pveUserCfgPath, []byte("user:root@pam:1:0:::root@example.com::\n"), 0o600); err != nil {
+		t.Fatalf("write user.cfg: %v", err)
+	}
+
+	// Force both primary and secondary strategies to fail so the user.cfg fallback is exercised.
+	mockCmdEnv(t, "pvesh", "", 1)
+	mockCmdEnv(t, "pveum", "", 2)
 
 	recipient, err := notifier.detectRecipient(context.Background())
 	if err != nil {

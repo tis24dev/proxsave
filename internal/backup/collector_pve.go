@@ -157,17 +157,63 @@ func (c *Collector) populatePVEManifest() {
 	if c == nil || c.config == nil {
 		return
 	}
-	if c.pveManifest == nil {
-		c.pveManifest = make(map[string]ManifestEntry)
+	c.pveManifest = make(map[string]ManifestEntry)
+
+	type manifestLogOpts struct {
+		description   string
+		disableHint   string
+		log           bool
+		countNotFound bool
 	}
 
-	record := func(src string, enabled bool) {
+	logEntry := func(opts manifestLogOpts, entry ManifestEntry) {
+		if !opts.log || strings.TrimSpace(opts.description) == "" {
+			return
+		}
+		switch entry.Status {
+		case StatusCollected:
+			if entry.Size > 0 {
+				c.logger.Info("  %s: collected (%s)", opts.description, FormatBytes(entry.Size))
+			} else {
+				c.logger.Info("  %s: collected", opts.description)
+			}
+		case StatusDisabled:
+			if strings.TrimSpace(opts.disableHint) != "" {
+				c.logger.Info("  %s: disabled (%s=false)", opts.description, opts.disableHint)
+			} else {
+				c.logger.Info("  %s: disabled", opts.description)
+			}
+		case StatusSkipped:
+			c.logger.Info("  %s: skipped (excluded)", opts.description)
+		case StatusNotFound:
+			if strings.TrimSpace(opts.disableHint) != "" {
+				c.logger.Warning("  %s: not configured. If unused, set %s=false to disable.", opts.description, opts.disableHint)
+			} else {
+				c.logger.Warning("  %s: not configured", opts.description)
+			}
+		case StatusFailed:
+			if strings.TrimSpace(entry.Error) != "" {
+				c.logger.Warning("  %s: failed - %s", opts.description, entry.Error)
+			} else {
+				c.logger.Warning("  %s: failed", opts.description)
+			}
+		default:
+			c.logger.Warning("  %s: failed - unknown status %s", opts.description, entry.Status)
+		}
+	}
+
+	record := func(src string, enabled bool, opts manifestLogOpts) {
 		if src == "" {
 			return
 		}
 		dest := c.targetPathFor(src)
 		key := pveManifestKey(c.tempDir, dest)
-		c.pveManifest[key] = c.describePathForManifest(src, dest, enabled)
+		entry := c.describePathForManifest(src, dest, enabled)
+		c.pveManifest[key] = entry
+		if opts.countNotFound && entry.Status == StatusNotFound {
+			c.incFilesNotFound()
+		}
+		logEntry(opts, entry)
 	}
 
 	pveConfigPath := c.effectivePVEConfigPath()
@@ -175,12 +221,29 @@ func (c *Collector) populatePVEManifest() {
 		return
 	}
 
+	c.logger.Info("Collecting PVE configuration files:")
+
 	// VM/CT configuration directories.
-	record(filepath.Join(pveConfigPath, "qemu-server"), c.config.BackupVMConfigs)
-	record(filepath.Join(pveConfigPath, "lxc"), c.config.BackupVMConfigs)
+	record(filepath.Join(pveConfigPath, "qemu-server"), c.config.BackupVMConfigs, manifestLogOpts{
+		description:   "VM configurations",
+		disableHint:   "BACKUP_VM_CONFIGS",
+		log:           true,
+		countNotFound: true,
+	})
+	record(filepath.Join(pveConfigPath, "lxc"), c.config.BackupVMConfigs, manifestLogOpts{
+		description:   "Container configurations",
+		disableHint:   "BACKUP_VM_CONFIGS",
+		log:           true,
+		countNotFound: true,
+	})
 
 	// Firewall configuration.
-	record(filepath.Join(pveConfigPath, "firewall"), c.config.BackupPVEFirewall)
+	record(filepath.Join(pveConfigPath, "firewall"), c.config.BackupPVEFirewall, manifestLogOpts{
+		description:   "Firewall configuration",
+		disableHint:   "BACKUP_PVE_FIREWALL",
+		log:           true,
+		countNotFound: true,
+	})
 	if c.config.BackupPVEFirewall {
 		nodesDir := filepath.Join(pveConfigPath, "nodes")
 		if entries, err := os.ReadDir(nodesDir); err == nil {
@@ -192,24 +255,64 @@ func (c *Collector) populatePVEManifest() {
 				if node == "" {
 					continue
 				}
-				record(filepath.Join(nodesDir, node, "host.fw"), true)
+				record(filepath.Join(nodesDir, node, "host.fw"), true, manifestLogOpts{log: false})
 			}
 		}
 	}
 
 	// ACL configuration.
-	record(filepath.Join(pveConfigPath, "user.cfg"), c.config.BackupPVEACL)
-	record(filepath.Join(pveConfigPath, "acl.cfg"), c.config.BackupPVEACL)
-	record(filepath.Join(pveConfigPath, "domains.cfg"), c.config.BackupPVEACL)
+	record(filepath.Join(pveConfigPath, "user.cfg"), c.config.BackupPVEACL, manifestLogOpts{
+		description:   "User configuration",
+		disableHint:   "BACKUP_PVE_ACL",
+		log:           true,
+		countNotFound: true,
+	})
+	record(filepath.Join(pveConfigPath, "acl.cfg"), c.config.BackupPVEACL, manifestLogOpts{
+		description:   "ACL configuration",
+		disableHint:   "BACKUP_PVE_ACL",
+		log:           true,
+		countNotFound: true,
+	})
+	record(filepath.Join(pveConfigPath, "domains.cfg"), c.config.BackupPVEACL, manifestLogOpts{
+		description:   "Domain configuration",
+		disableHint:   "BACKUP_PVE_ACL",
+		log:           true,
+		countNotFound: true,
+	})
 
 	// Scheduled jobs.
-	record(filepath.Join(pveConfigPath, "jobs.cfg"), c.config.BackupPVEJobs)
-	record(filepath.Join(pveConfigPath, "vzdump.cron"), c.config.BackupPVEJobs)
+	record(filepath.Join(pveConfigPath, "jobs.cfg"), c.config.BackupPVEJobs, manifestLogOpts{
+		description:   "Job configuration",
+		disableHint:   "BACKUP_PVE_JOBS",
+		log:           true,
+		countNotFound: true,
+	})
+	record(filepath.Join(pveConfigPath, "vzdump.cron"), c.config.BackupPVEJobs, manifestLogOpts{
+		description:   "VZDump cron",
+		disableHint:   "BACKUP_PVE_JOBS",
+		log:           true,
+		countNotFound: true,
+	})
 
 	// Cluster configuration.
-	record(c.effectiveCorosyncConfigPath(), c.config.BackupClusterConfig)
-	record(filepath.Join(c.effectivePVEClusterPath(), "config.db"), c.config.BackupClusterConfig)
-	record("/etc/corosync/authkey", c.config.BackupClusterConfig)
+	record(c.effectiveCorosyncConfigPath(), c.config.BackupClusterConfig, manifestLogOpts{
+		description:   "Corosync configuration",
+		disableHint:   "BACKUP_CLUSTER_CONFIG",
+		log:           true,
+		countNotFound: true,
+	})
+	record(filepath.Join(c.effectivePVEClusterPath(), "config.db"), c.config.BackupClusterConfig, manifestLogOpts{
+		description:   "PVE cluster database",
+		disableHint:   "BACKUP_CLUSTER_CONFIG",
+		log:           true,
+		countNotFound: true,
+	})
+	record(c.systemPath("/etc/corosync/authkey"), c.config.BackupClusterConfig, manifestLogOpts{
+		description:   "Corosync authkey",
+		disableHint:   "BACKUP_CLUSTER_CONFIG",
+		log:           true,
+		countNotFound: true,
+	})
 
 	// VZDump configuration.
 	vzdumpPath := c.config.VzdumpConfigPath
@@ -218,7 +321,12 @@ func (c *Collector) populatePVEManifest() {
 	} else if !filepath.IsAbs(vzdumpPath) {
 		vzdumpPath = filepath.Join(pveConfigPath, vzdumpPath)
 	}
-	record(vzdumpPath, c.config.BackupVZDumpConfig)
+	record(vzdumpPath, c.config.BackupVZDumpConfig, manifestLogOpts{
+		description:   "VZDump configuration",
+		disableHint:   "BACKUP_VZDUMP_CONFIG",
+		log:           true,
+		countNotFound: true,
+	})
 }
 
 func pveManifestKey(tempDir, dest string) string {
@@ -310,7 +418,7 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 
 	// Cluster configuration (if clustered)
 	clusterPath := c.effectivePVEClusterPath()
-	if c.config.BackupClusterConfig && clustered {
+	if c.config.BackupClusterConfig {
 		corosyncPath := c.config.CorosyncConfigPath
 		if corosyncPath == "" {
 			corosyncPath = filepath.Join(pveConfigPath, "corosync.conf")
@@ -324,31 +432,31 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 			c.logger.Warning("Failed to copy corosync.conf: %v", err)
 		}
 
-		authkeySrc := "/etc/corosync/authkey"
-		if err := c.safeCopyFile(ctx,
-			authkeySrc,
-			c.targetPathFor(authkeySrc),
-			"Corosync authkey"); err != nil && !errors.Is(err, os.ErrNotExist) {
-			c.logger.Warning("Failed to copy Corosync authkey: %v", err)
-		}
-
-		// Cluster directory
-		if err := c.safeCopyDir(ctx,
-			clusterPath,
-			c.targetPathFor(clusterPath),
-			"PVE cluster data"); err != nil {
-			c.logger.Warning("Failed to copy cluster data: %v", err)
+		if clustered {
+			// Cluster directory
+			if err := c.safeCopyDir(ctx,
+				clusterPath,
+				c.targetPathFor(clusterPath),
+				"PVE cluster data"); err != nil {
+				c.logger.Warning("Failed to copy cluster data: %v", err)
+			}
+		} else {
+			c.logger.Debug("PVE cluster not configured (single node) - skipping cluster data directory snapshot")
 		}
 	} else {
-		if !c.config.BackupClusterConfig {
-			c.logger.Skip("PVE cluster backup disabled")
-			c.logger.Skip("Corosync configuration")
-		} else {
-			c.logger.Info("PVE cluster not configured (single node) - skipping Corosync configuration")
-		}
+		c.logger.Skip("PVE cluster backup disabled")
+		c.logger.Skip("Corosync configuration")
 	}
 
 	if c.config.BackupClusterConfig {
+		authkeySrc := c.systemPath("/etc/corosync/authkey")
+		if err := c.safeCopyFile(ctx,
+			authkeySrc,
+			c.targetPathFor(authkeySrc),
+			"Corosync authkey"); err != nil {
+			c.logger.Warning("Failed to copy Corosync authkey: %v", err)
+		}
+
 		// Always attempt to capture config.db even on standalone nodes when cluster config is enabled.
 		configDB := filepath.Join(clusterPath, "config.db")
 		if info, err := os.Stat(configDB); err == nil && !info.IsDir() {
@@ -384,7 +492,7 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 				}
 			}
 		} else if errors.Is(err, os.ErrNotExist) {
-			c.logger.Info("PVE firewall configuration not found (no rules configured) - skipping")
+			c.logger.Debug("PVE firewall configuration not found (no rules configured) - skipping")
 		} else {
 			c.logger.Warning("Failed to access firewall configuration %s: %v", firewallSrc, err)
 		}
@@ -405,7 +513,7 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 			vzdumpPath,
 			c.targetPathFor(vzdumpPath),
 			"VZDump configuration"); err != nil {
-			c.logger.Debug("No vzdump.conf found")
+			c.logger.Warning("Failed to copy VZDump configuration: %v", err)
 		}
 	} else {
 		c.logger.Skip("VZDump configuration backup disabled.")
@@ -1313,7 +1421,7 @@ func (c *Collector) collectPVECephInfo(ctx context.Context) error {
 	}
 
 	if !c.isCephConfigured(ctx) {
-		c.logger.Debug("Ceph not detected on this node, skipping Ceph collection")
+		c.logger.Warning("Skipping Ceph collection: not detected. If unused, set BACKUP_CEPH_CONFIG=false to disable.")
 		return nil
 	}
 

@@ -114,6 +114,109 @@ func TestUpgradeConfigCreatesBackupAndPreservesExtraKeys(t *testing.T) {
 	})
 }
 
+func TestUpgradeConfigPrunesBaseDir(t *testing.T) {
+	template := "KEY1=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "BASE_DIR=/opt/proxsave\nKEY1=custom\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		plan, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if !plan.Changed {
+			t.Fatal("expected result.Changed=true when BASE_DIR is pruned")
+		}
+		if len(plan.MissingKeys) != 0 {
+			t.Fatalf("MissingKeys = %v; want []", plan.MissingKeys)
+		}
+		if len(plan.ExtraKeys) != 0 {
+			t.Fatalf("ExtraKeys = %v; want [] (BASE_DIR should be pruned, not preserved)", plan.ExtraKeys)
+		}
+		warnings := strings.Join(plan.Warnings, "\n")
+		if !strings.Contains(warnings, "BASE_DIR") {
+			t.Fatalf("expected warnings to mention BASE_DIR pruning, got: %s", warnings)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when BASE_DIR is pruned")
+		}
+		if result.BackupPath == "" {
+			t.Fatal("expected BackupPath to be populated after pruning")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		updated := string(data)
+		if strings.Contains(updated, "BASE_DIR=") {
+			t.Fatalf("expected BASE_DIR to be removed, got:\n%s", updated)
+		}
+		if !strings.Contains(updated, "KEY1=custom") {
+			t.Fatalf("expected KEY1 preserved, got:\n%s", updated)
+		}
+	})
+}
+
+func TestUpgradeConfigPrunesCronKeys(t *testing.T) {
+	template := "KEY1=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "CRON_SCHEDULE=00 02 * * *\nCRON_HOUR=02\nCRON_MINUTE=00\nKEY1=custom\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		plan, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if !plan.Changed {
+			t.Fatal("expected result.Changed=true when CRON_* keys are pruned")
+		}
+		if len(plan.MissingKeys) != 0 {
+			t.Fatalf("MissingKeys = %v; want []", plan.MissingKeys)
+		}
+		if len(plan.ExtraKeys) != 0 {
+			t.Fatalf("ExtraKeys = %v; want [] (CRON_* should be pruned, not preserved)", plan.ExtraKeys)
+		}
+		warnings := strings.Join(plan.Warnings, "\n")
+		if !strings.Contains(warnings, "CRON_SCHEDULE") {
+			t.Fatalf("expected warnings to mention CRON_* pruning, got: %s", warnings)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when CRON_* keys are pruned")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		updated := string(data)
+		if strings.Contains(updated, "CRON_SCHEDULE=") || strings.Contains(updated, "CRON_HOUR=") || strings.Contains(updated, "CRON_MINUTE=") {
+			t.Fatalf("expected CRON_* keys to be removed, got:\n%s", updated)
+		}
+		if !strings.Contains(updated, "KEY1=custom") {
+			t.Fatalf("expected KEY1 preserved, got:\n%s", updated)
+		}
+	})
+}
+
 func TestPlanUpgradeEmptyPath(t *testing.T) {
 	if _, err := PlanUpgradeConfigFile("   "); err == nil {
 		t.Fatal("expected error for empty config path")

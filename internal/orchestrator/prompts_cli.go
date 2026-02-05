@@ -70,63 +70,45 @@ func promptYesNoWithCountdown(ctx context.Context, reader *bufio.Reader, logger 
 	ctxTimeout, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 
-	inputCh := make(chan string, 1)
-	errCh := make(chan error, 1)
+	deadlineHHMMSS := deadline.Format("15:04:05")
+	timeoutSeconds := int(timeout.Seconds())
+	defaultLabel := "No"
+	if defaultYes {
+		defaultLabel = "Yes"
+	}
 
-	go func() {
-		line, err := input.ReadLineWithContext(ctxTimeout, reader)
-		if err != nil {
-			errCh <- err
-			return
+	// Print a single prompt line to avoid interfering with interactive input on
+	// terminals that don't handle repeated carriage-return updates well (e.g. IPMI/serial).
+	fmt.Fprintf(os.Stderr, "Auto-skip in %ds (at %s, default: %s)... %s %s ", timeoutSeconds, deadlineHHMMSS, defaultLabel, question, defStr)
+
+	logging.DebugStep(logger, "prompt yes/no", "Waiting for user input (no live countdown)")
+	line, err := input.ReadLineWithContext(ctxTimeout, reader)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			logging.DebugStep(logger, "prompt yes/no", "Input timed out: proceeding with No")
+			logger.Info("No response within %ds; proceeding with No.", int(timeout.Seconds()))
+			return false, nil
 		}
-		inputCh <- line
-	}()
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			left := time.Until(deadline)
-			if left < 0 {
-				left = 0
-			}
-			fmt.Fprintf(os.Stderr, "\rAuto-skip in %ds... %s %s ", int(left.Seconds()), question, defStr)
-			if left <= 0 {
-				fmt.Fprintln(os.Stderr)
-				logging.DebugStep(logger, "prompt yes/no", "Timeout expired: proceeding with No")
-				logger.Info("No response within %ds; proceeding with No.", int(timeout.Seconds()))
-				return false, nil
-			}
-		case line := <-inputCh:
-			fmt.Fprintln(os.Stderr)
-			trimmed := strings.ToLower(strings.TrimSpace(line))
-			logging.DebugStep(logger, "prompt yes/no", "User input received: %q", trimmed)
-			switch trimmed {
-			case "":
-				return defaultYes, nil
-			case "y", "yes":
-				return true, nil
-			case "n", "no":
-				return false, nil
-			default:
-				logger.Info("Unrecognized input %q; proceeding with No.", strings.TrimSpace(line))
-				return false, nil
-			}
-		case err := <-errCh:
-			fmt.Fprintln(os.Stderr)
-			if errors.Is(err, context.DeadlineExceeded) {
-				logging.DebugStep(logger, "prompt yes/no", "Input timed out: proceeding with No")
-				logger.Info("No response within %ds; proceeding with No.", int(timeout.Seconds()))
-				return false, nil
-			}
-			if errors.Is(err, context.Canceled) {
-				logging.DebugStep(logger, "prompt yes/no", "Input canceled: %v", err)
-				return false, err
-			}
-			logging.DebugStep(logger, "prompt yes/no", "Input error: %v", err)
+		if errors.Is(err, context.Canceled) {
+			logging.DebugStep(logger, "prompt yes/no", "Input canceled: %v", err)
 			return false, err
 		}
+		logging.DebugStep(logger, "prompt yes/no", "Input error: %v", err)
+		return false, err
+	}
+
+	trimmed := strings.ToLower(strings.TrimSpace(line))
+	logging.DebugStep(logger, "prompt yes/no", "User input received: %q", trimmed)
+	switch trimmed {
+	case "":
+		return defaultYes, nil
+	case "y", "yes":
+		return true, nil
+	case "n", "no":
+		return false, nil
+	default:
+		logger.Info("Unrecognized input %q; proceeding with No.", strings.TrimSpace(line))
+		return false, nil
 	}
 }

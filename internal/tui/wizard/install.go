@@ -458,8 +458,12 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = config.DefaultEnvTemplate()
 	}
 
-	// Apply BASE_DIR
-	template = setEnvValue(template, "BASE_DIR", data.BaseDir)
+	// BASE_DIR is auto-detected at runtime from the executable/config location.
+	// Keep it out of backup.env to avoid pinning the installation to a specific path.
+	template = unsetEnvValue(template, "BASE_DIR")
+	template = unsetEnvValue(template, "CRON_SCHEDULE")
+	template = unsetEnvValue(template, "CRON_HOUR")
+	template = unsetEnvValue(template, "CRON_MINUTE")
 
 	// Apply secondary storage
 	if data.EnableSecondaryStorage {
@@ -506,19 +510,6 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = setEnvValue(template, "EMAIL_ENABLED", "false")
 	}
 
-	// Apply cron schedule
-	cron := strings.TrimSpace(data.CronTime)
-	if cron == "" {
-		cron = "02:00"
-	}
-	if parts := strings.Split(cron, ":"); len(parts) == 2 {
-		min := strings.TrimSpace(parts[1])
-		hr := strings.TrimSpace(parts[0])
-		template = setEnvValue(template, "CRON_SCHEDULE", fmt.Sprintf("%s %s * * *", min, hr))
-		template = setEnvValue(template, "CRON_HOUR", hr)
-		template = setEnvValue(template, "CRON_MINUTE", min)
-	}
-
 	// Apply encryption
 	if data.EnableEncryption {
 		template = setEnvValue(template, "ENCRYPT_ARCHIVE", "true")
@@ -532,6 +523,41 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 // setEnvValue sets or updates an environment variable in the template
 func setEnvValue(template, key, value string) string {
 	return utils.SetEnvValue(template, key, value)
+}
+
+func unsetEnvValue(template, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return template
+	}
+
+	lines := strings.Split(template, "\n")
+	out := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if utils.IsComment(trimmed) {
+			out = append(out, line)
+			continue
+		}
+
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) != 2 {
+			out = append(out, line)
+			continue
+		}
+
+		parsedKey := strings.TrimSpace(parts[0])
+		if fields := strings.Fields(parsedKey); len(fields) >= 2 && fields[0] == "export" {
+			parsedKey = fields[1]
+		}
+		if strings.EqualFold(parsedKey, key) {
+			continue
+		}
+		out = append(out, line)
+	}
+
+	return strings.Join(out, "\n")
 }
 
 // CheckExistingConfig checks if config file exists and asks how to proceed

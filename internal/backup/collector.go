@@ -155,14 +155,21 @@ type CollectorConfig struct {
 	CephConfigPath          string
 
 	// PBS-specific collection options
-	BackupDatastoreConfigs bool
-	BackupUserConfigs      bool
-	BackupRemoteConfigs    bool
-	BackupSyncJobs         bool
-	BackupVerificationJobs bool
-	BackupTapeConfigs      bool
-	BackupPruneSchedules   bool
-	BackupPxarFiles        bool
+	BackupDatastoreConfigs  bool
+	BackupPBSS3Endpoints    bool
+	BackupPBSNodeConfig     bool
+	BackupPBSAcmeAccounts   bool
+	BackupPBSAcmePlugins    bool
+	BackupPBSMetricServers  bool
+	BackupPBSTrafficControl bool
+	BackupUserConfigs       bool
+	BackupRemoteConfigs     bool
+	BackupSyncJobs          bool
+	BackupVerificationJobs  bool
+	BackupTapeConfigs       bool
+	BackupPBSNetworkConfig  bool
+	BackupPruneSchedules    bool
+	BackupPxarFiles         bool
 
 	// System collection options
 	BackupNetworkConfigs    bool
@@ -242,9 +249,11 @@ func (c *CollectorConfig) Validate() error {
 		c.BackupPVEFirewall || c.BackupVZDumpConfig || c.BackupPVEACL ||
 		c.BackupPVEJobs || c.BackupPVESchedules || c.BackupPVEReplication ||
 		c.BackupPVEBackupFiles || c.BackupCephConfig ||
-		c.BackupDatastoreConfigs || c.BackupUserConfigs || c.BackupRemoteConfigs ||
+		c.BackupDatastoreConfigs || c.BackupPBSS3Endpoints || c.BackupPBSNodeConfig ||
+		c.BackupPBSAcmeAccounts || c.BackupPBSAcmePlugins || c.BackupPBSMetricServers ||
+		c.BackupPBSTrafficControl || c.BackupUserConfigs || c.BackupRemoteConfigs ||
 		c.BackupSyncJobs || c.BackupVerificationJobs || c.BackupTapeConfigs ||
-		c.BackupPruneSchedules || c.BackupPxarFiles ||
+		c.BackupPBSNetworkConfig || c.BackupPruneSchedules || c.BackupPxarFiles ||
 		c.BackupNetworkConfigs || c.BackupAptSources || c.BackupCronJobs ||
 		c.BackupSystemdServices || c.BackupSSLCerts || c.BackupSysctlConfig ||
 		c.BackupKernelModules || c.BackupFirewallRules ||
@@ -322,14 +331,21 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		CephConfigPath:          "/etc/ceph",
 
 		// PBS-specific (all enabled by default)
-		BackupDatastoreConfigs: true,
-		BackupUserConfigs:      true,
-		BackupRemoteConfigs:    true,
-		BackupSyncJobs:         true,
-		BackupVerificationJobs: true,
-		BackupTapeConfigs:      true,
-		BackupPruneSchedules:   true,
-		BackupPxarFiles:        true,
+		BackupDatastoreConfigs:  true,
+		BackupPBSS3Endpoints:    true,
+		BackupPBSNodeConfig:     true,
+		BackupPBSAcmeAccounts:   true,
+		BackupPBSAcmePlugins:    true,
+		BackupPBSMetricServers:  true,
+		BackupPBSTrafficControl: true,
+		BackupUserConfigs:       true,
+		BackupRemoteConfigs:     true,
+		BackupSyncJobs:          true,
+		BackupVerificationJobs:  true,
+		BackupTapeConfigs:       true,
+		BackupPBSNetworkConfig:  true,
+		BackupPruneSchedules:    true,
+		BackupPxarFiles:         true,
 
 		// System collection (all enabled by default)
 		BackupNetworkConfigs:    true,

@@ -68,7 +68,8 @@ func shouldAttemptNetworkApply(plan *RestorePlan) bool {
 	return plan.HasCategoryID("network")
 }
 
-// extractIPFromSnapshot reads the IP address for a given interface from a network snapshot report file.
+// extractIPFromSnapshot reads the primary address (including CIDR) for a given interface
+// from a network snapshot report file.
 // It searches the output section that follows the "$ ip -br addr" command written by writeNetworkSnapshot.
 func extractIPFromSnapshot(path, iface string) string {
 	if strings.TrimSpace(path) == "" || strings.TrimSpace(iface) == "" {
@@ -105,16 +106,24 @@ func extractIPFromSnapshot(path, iface string) string {
 		// "ip -br addr" can print multiple addresses; prefer IPv4 when available.
 		firstIPv6 := ""
 		for _, token := range fields[2:] {
-			ip := strings.Split(token, "/")[0]
-			parsed := net.ParseIP(ip)
+			token = strings.TrimSpace(token)
+			if token == "" {
+				continue
+			}
+
+			ipPart := token
+			if strings.Contains(ipPart, "/") {
+				ipPart = strings.SplitN(ipPart, "/", 2)[0]
+			}
+			parsed := net.ParseIP(ipPart)
 			if parsed == nil {
 				continue
 			}
 			if parsed.To4() != nil {
-				return ip
+				return token
 			}
 			if firstIPv6 == "" {
-				firstIPv6 = ip
+				firstIPv6 = token
 			}
 		}
 		if firstIPv6 != "" {
@@ -529,63 +538,35 @@ func promptNetworkCommitWithCountdown(ctx context.Context, reader *bufio.Reader,
 
 	deadline := time.Now().Add(remaining)
 	logging.DebugStep(logger, "prompt commit", "Deadline set: %s", deadline.Format(time.RFC3339))
+	deadlineHHMMSS := deadline.Format("15:04:05")
+	timeoutSeconds := int(remaining.Seconds())
 
-	fmt.Printf("Type COMMIT within %d seconds to keep the new network configuration.\n", int(remaining.Seconds()))
+	fmt.Printf("Type COMMIT within %d seconds (deadline: %s) to keep the new network configuration.\n", timeoutSeconds, deadlineHHMMSS)
 	ctxTimeout, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 
-	inputCh := make(chan string, 1)
-	errCh := make(chan error, 1)
-
-	logging.DebugStep(logger, "prompt commit", "Starting input reader goroutine")
-	go func() {
-		line, err := input.ReadLineWithContext(ctxTimeout, reader)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		inputCh <- line
-	}()
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	logging.DebugStep(logger, "prompt commit", "Waiting for user input...")
-
-	for {
-		select {
-		case <-ticker.C:
-			left := time.Until(deadline)
-			if left < 0 {
-				left = 0
-			}
-			fmt.Fprintf(os.Stderr, "\rRollback in %ds... Type COMMIT to keep: ", int(left.Seconds()))
-			if left <= 0 {
-				fmt.Fprintln(os.Stderr)
-				logging.DebugStep(logger, "prompt commit", "Timeout expired, returning DeadlineExceeded")
-				return false, context.DeadlineExceeded
-			}
-		case line := <-inputCh:
-			fmt.Fprintln(os.Stderr)
-			trimmedLine := strings.TrimSpace(line)
-			logging.DebugStep(logger, "prompt commit", "User input received: %q", trimmedLine)
-			if strings.EqualFold(trimmedLine, "commit") {
-				logging.DebugStep(logger, "prompt commit", "Result: COMMITTED")
-				return true, nil
-			}
-			logging.DebugStep(logger, "prompt commit", "Result: NOT COMMITTED (input was not 'commit')")
-			return false, nil
-		case err := <-errCh:
-			fmt.Fprintln(os.Stderr)
-			logging.DebugStep(logger, "prompt commit", "Input error received: %v", err)
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-				logging.DebugStep(logger, "prompt commit", "Result: context deadline/canceled")
-				return false, err
-			}
-			logging.DebugStep(logger, "prompt commit", "Result: NOT COMMITTED (input error)")
+	fmt.Fprint(os.Stderr, "Type COMMIT to keep: ")
+	logging.DebugStep(logger, "prompt commit", "Waiting for user input (no live countdown)")
+	line, err := input.ReadLineWithContext(ctxTimeout, reader)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		logging.DebugStep(logger, "prompt commit", "Input error received: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			logging.DebugStep(logger, "prompt commit", "Result: context deadline/canceled")
 			return false, err
 		}
+		logging.DebugStep(logger, "prompt commit", "Result: NOT COMMITTED (input error)")
+		return false, err
 	}
+
+	trimmedLine := strings.TrimSpace(line)
+	logging.DebugStep(logger, "prompt commit", "User input received: %q", trimmedLine)
+	if strings.EqualFold(trimmedLine, "commit") {
+		logging.DebugStep(logger, "prompt commit", "Result: COMMITTED")
+		return true, nil
+	}
+	logging.DebugStep(logger, "prompt commit", "Result: NOT COMMITTED (input was not 'commit')")
+	return false, nil
 }
 
 func rollbackNetworkFilesNow(ctx context.Context, logger *logging.Logger, backupPath, workDir string) (logPath string, err error) {

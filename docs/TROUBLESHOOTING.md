@@ -534,9 +534,33 @@ If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVER
 - Ensure the recipient is configured:
   - Set `EMAIL_RECIPIENT=...`, or
   - Leave it empty and set an email for `root@pam` inside Proxmox (auto-detect).
+- Recipient auto-detection details (when `EMAIL_RECIPIENT` is empty):
+  - **PVE**: `pvesh get /access/users/root@pam` → fallback to `pveum user list` → fallback to `/etc/pve/user.cfg`
+  - **PBS**: `proxmox-backup-manager user list` → fallback to `/etc/proxmox-backup/user.cfg`
 - Relay blocks `root@…` recipients; use a real non-root mailbox for `EMAIL_RECIPIENT`.
 - If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to `EMAIL_DELIVERY_METHOD=pmf` when the relay fails.
 - Check the proxsave logs for `email-relay` warnings/errors.
+
+Quick checks for auto-detect:
+
+```bash
+# Run only the relevant block for your platform (PVE vs PBS).
+
+# PVE (preferred: API via pvesh)
+pvesh get /access/users/root@pam --output-format json
+
+# PVE (fallback: legacy CLI)
+pveum user list --output-format json
+
+# PVE (last resort: config file)
+grep -n '^user:root@pam:' /etc/pve/user.cfg
+
+# PBS (CLI)
+proxmox-backup-manager user list --output-format json
+
+# PBS (config file)
+grep -n '^user:root@pam:' /etc/proxmox-backup/user.cfg
+```
 
 ##### If `EMAIL_DELIVERY_METHOD=sendmail`
 
@@ -545,6 +569,7 @@ This mode uses `/usr/sbin/sendmail`, so your node must have a working local MTA 
 - Ensure a recipient is available:
   - Set `EMAIL_RECIPIENT=...`, or
   - Leave it empty and set an email for `root@pam` inside Proxmox (auto-detect).
+- If auto-detection fails, run the quick checks above and review proxsave debug logs (they include diagnostic output from failed Proxmox CLI/API calls).
 - Verify `sendmail` exists:
   ```bash
   test -x /usr/sbin/sendmail && echo "sendmail OK" || echo "sendmail not found"

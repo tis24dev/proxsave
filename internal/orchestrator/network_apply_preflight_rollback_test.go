@@ -65,6 +65,7 @@ func TestApplyNetworkWithRollbackWithUI_RollsBackFilesOnPreflightFailure(t *test
 		"",
 		defaultNetworkRollbackTimeout,
 		SystemTypePBS,
+		false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "network preflight validation failed") {
 		t.Fatalf("expected preflight error, got %v", err)
