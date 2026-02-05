@@ -172,22 +172,27 @@ func maybeApplyNetworkConfigWithUI(ctx context.Context, ui RestoreWorkflowUI, lo
 	logging.DebugStep(logger, "network safe apply (ui)", "Selected rollback backup: %s", rollbackPath)
 
 	systemType := SystemTypeUnknown
+	suppressPVEChecks := false
 	if plan != nil {
 		systemType = plan.SystemType
+		// In cluster RECOVERY restores, PVE services are intentionally stopped and /etc/pve is unmounted
+		// until the end of the workflow. PVE UI (8006) and corosync/quorum checks are not meaningful here.
+		suppressPVEChecks = plan.SystemType == SystemTypePVE && plan.NeedsClusterRestore
 	}
-	return applyNetworkWithRollbackWithUI(ctx, ui, logger, rollbackPath, networkRollbackPath, stageRoot, archivePath, defaultNetworkRollbackTimeout, systemType)
+	return applyNetworkWithRollbackWithUI(ctx, ui, logger, rollbackPath, networkRollbackPath, stageRoot, archivePath, defaultNetworkRollbackTimeout, systemType, suppressPVEChecks)
 }
 
-func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, logger *logging.Logger, rollbackBackupPath, networkRollbackPath, stageRoot, archivePath string, timeout time.Duration, systemType SystemType) (err error) {
+func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, logger *logging.Logger, rollbackBackupPath, networkRollbackPath, stageRoot, archivePath string, timeout time.Duration, systemType SystemType, suppressPVEChecks bool) (err error) {
 	done := logging.DebugStart(
 		logger,
 		"network safe apply (ui)",
-		"rollbackBackup=%s networkRollback=%s timeout=%s systemType=%s stage=%s",
+		"rollbackBackup=%s networkRollback=%s timeout=%s systemType=%s stage=%s suppressPVEChecks=%v",
 		strings.TrimSpace(rollbackBackupPath),
 		strings.TrimSpace(networkRollbackPath),
 		timeout,
 		systemType,
 		strings.TrimSpace(stageRoot),
+		suppressPVEChecks,
 	)
 	defer func() { done(err) }()
 
@@ -401,7 +406,7 @@ func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, l
 	}
 
 	logging.DebugStep(logger, "network safe apply (ui)", "Run post-apply health checks")
-	health := runNetworkHealthChecks(ctx, networkHealthOptions{
+	healthOptions := networkHealthOptions{
 		SystemType:         systemType,
 		Logger:             logger,
 		CommandTimeout:     3 * time.Second,
@@ -409,7 +414,15 @@ func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, l
 		ForceSSHRouteCheck: false,
 		EnableDNSResolve:   true,
 		LocalPortChecks:    defaultNetworkPortChecks(systemType),
-	})
+	}
+	if suppressPVEChecks {
+		healthOptions.SystemType = SystemTypeUnknown
+		healthOptions.LocalPortChecks = nil
+	}
+	health := runNetworkHealthChecks(ctx, healthOptions)
+	if suppressPVEChecks {
+		health.add("PVE service checks", networkHealthOK, "skipped (cluster database restore in progress; services will be restarted after restore completes)")
+	}
 	logNetworkHealthReport(logger, health)
 	if diagnosticsDir != "" {
 		if path, err := writeNetworkHealthReportFile(diagnosticsDir, health); err != nil {
@@ -443,10 +456,52 @@ func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, l
 	}
 
 	// Not committed: keep rollback ARMED.
+	notCommittedErr := buildNetworkApplyNotCommittedError(ctx, logger, iface, handle)
 	if strings.TrimSpace(diagnosticsDir) != "" {
-		_ = ui.ShowMessage(ctx, "Network rollback armed", fmt.Sprintf("Network configuration not committed.\n\nRollback will run automatically.\n\nDiagnostics saved under:\n%s", diagnosticsDir))
+		rollbackState := "Rollback is ARMED and will run automatically."
+		if notCommittedErr != nil && !notCommittedErr.RollbackArmed {
+			rollbackState = "Rollback has executed (or marker cleared)."
+		}
+
+		observed := "unknown"
+		original := "unknown"
+		if notCommittedErr != nil {
+			if v := strings.TrimSpace(notCommittedErr.RestoredIP); v != "" {
+				observed = v
+			}
+			if v := strings.TrimSpace(notCommittedErr.OriginalIP); v != "" {
+				original = v
+			}
+		}
+
+		reconnectHost := ""
+		if original != "" && original != "unknown" {
+			reconnectHost = original
+			if i := strings.Index(reconnectHost, ","); i >= 0 {
+				reconnectHost = reconnectHost[:i]
+			}
+			if i := strings.Index(reconnectHost, "/"); i >= 0 {
+				reconnectHost = reconnectHost[:i]
+			}
+			reconnectHost = strings.TrimSpace(reconnectHost)
+		}
+
+		var b strings.Builder
+		b.WriteString("Network configuration not committed.\n\n")
+		b.WriteString(rollbackState + "\n\n")
+		b.WriteString(fmt.Sprintf("IP now (after apply): %s\n", observed))
+		if original != "unknown" {
+			b.WriteString(fmt.Sprintf("Expected after rollback: %s\n", original))
+		}
+		if reconnectHost != "" && reconnectHost != "unknown" {
+			b.WriteString(fmt.Sprintf("Reconnect using: %s\n", reconnectHost))
+		}
+		b.WriteString("\nDiagnostics saved under:\n")
+		b.WriteString(strings.TrimSpace(diagnosticsDir))
+
+		_ = ui.ShowMessage(ctx, "Network rollback", b.String())
 	}
-	return buildNetworkApplyNotCommittedError(ctx, logger, iface, handle)
+	return notCommittedErr
 }
 
 func (c *cliWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
@@ -515,4 +570,3 @@ func (u *tuiWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.
 	}
 	return committed, err
 }
-

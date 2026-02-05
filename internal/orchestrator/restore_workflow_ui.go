@@ -470,12 +470,12 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			}
 
 			if err := runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger, plan); err != nil {
-			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-				return err
+				if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+					return err
+				}
+				restoreHadWarnings = true
+				logger.Warning("Cluster SAFE apply completed with errors: %v", err)
 			}
-			restoreHadWarnings = true
-			logger.Warning("Cluster SAFE apply completed with errors: %v", err)
-		}
 		}
 	}
 
@@ -615,11 +615,24 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		if errors.Is(err, ErrNetworkApplyNotCommitted) {
 			var notCommitted *NetworkApplyNotCommittedError
 			observedIP := "unknown"
+			originalIP := "unknown"
+			reconnectHost := ""
 			rollbackLog := ""
 			rollbackArmed := false
 			if errors.As(err, &notCommitted) && notCommitted != nil {
 				if strings.TrimSpace(notCommitted.RestoredIP) != "" {
 					observedIP = strings.TrimSpace(notCommitted.RestoredIP)
+				}
+				if strings.TrimSpace(notCommitted.OriginalIP) != "" {
+					originalIP = strings.TrimSpace(notCommitted.OriginalIP)
+					reconnectHost = originalIP
+					if i := strings.Index(reconnectHost, ","); i >= 0 {
+						reconnectHost = reconnectHost[:i]
+					}
+					if i := strings.Index(reconnectHost, "/"); i >= 0 {
+						reconnectHost = reconnectHost[:i]
+					}
+					reconnectHost = strings.TrimSpace(reconnectHost)
 				}
 				rollbackLog = strings.TrimSpace(notCommitted.RollbackLog)
 				rollbackArmed = notCommitted.RollbackArmed
@@ -633,9 +646,16 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 				}
 			}
 			if rollbackArmed {
-				logger.Warning("Network apply not committed; rollback is ARMED and will run automatically. Current IP: %s", observedIP)
+				logger.Warning("Network apply not committed; rollback is ARMED and will run automatically.")
 			} else {
-				logger.Warning("Network apply not committed; rollback has executed (or marker cleared). Current IP: %s", observedIP)
+				logger.Warning("Network apply not committed; rollback has executed (or marker cleared).")
+			}
+			if reconnectHost != "" && reconnectHost != "unknown" && originalIP != "unknown" {
+				logger.Warning("IP now (after apply): %s. Expected after rollback: %s. Reconnect using: %s", observedIP, originalIP, reconnectHost)
+			} else if originalIP != "unknown" {
+				logger.Warning("IP now (after apply): %s. Expected after rollback: %s", observedIP, originalIP)
+			} else {
+				logger.Warning("IP now (after apply): %s", observedIP)
 			}
 			if rollbackLog != "" {
 				logger.Info("Rollback log: %s", rollbackLog)

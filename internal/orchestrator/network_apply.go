@@ -68,7 +68,8 @@ func shouldAttemptNetworkApply(plan *RestorePlan) bool {
 	return plan.HasCategoryID("network")
 }
 
-// extractIPFromSnapshot reads the IP address for a given interface from a network snapshot report file.
+// extractIPFromSnapshot reads the primary address (including CIDR) for a given interface
+// from a network snapshot report file.
 // It searches the output section that follows the "$ ip -br addr" command written by writeNetworkSnapshot.
 func extractIPFromSnapshot(path, iface string) string {
 	if strings.TrimSpace(path) == "" || strings.TrimSpace(iface) == "" {
@@ -105,16 +106,24 @@ func extractIPFromSnapshot(path, iface string) string {
 		// "ip -br addr" can print multiple addresses; prefer IPv4 when available.
 		firstIPv6 := ""
 		for _, token := range fields[2:] {
-			ip := strings.Split(token, "/")[0]
-			parsed := net.ParseIP(ip)
+			token = strings.TrimSpace(token)
+			if token == "" {
+				continue
+			}
+
+			ipPart := token
+			if strings.Contains(ipPart, "/") {
+				ipPart = strings.SplitN(ipPart, "/", 2)[0]
+			}
+			parsed := net.ParseIP(ipPart)
 			if parsed == nil {
 				continue
 			}
 			if parsed.To4() != nil {
-				return ip
+				return token
 			}
 			if firstIPv6 == "" {
-				firstIPv6 = ip
+				firstIPv6 = token
 			}
 		}
 		if firstIPv6 != "" {
