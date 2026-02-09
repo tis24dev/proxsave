@@ -487,6 +487,33 @@ BACKUP_PATH=${BASE_DIR}/backup-data
 	}
 }
 
+func TestLoadConfigExpandsConfigVarReferences(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config_vars.env")
+
+	content := `COROSYNC_CONFIG_PATH=${PVE_CONFIG_PATH}/corosync.conf
+PVE_CONFIG_PATH=/etc/pve
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	cleanup := setBaseDirEnv(t, "/config-vars/base")
+	defer cleanup()
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if cfg.PVEConfigPath != "/etc/pve" {
+		t.Errorf("PVEConfigPath = %q; want %q", cfg.PVEConfigPath, "/etc/pve")
+	}
+	if cfg.CorosyncConfigPath != "/etc/pve/corosync.conf" {
+		t.Errorf("CorosyncConfigPath = %q; want %q", cfg.CorosyncConfigPath, "/etc/pve/corosync.conf")
+	}
+}
+
 func TestRetentionPolicyDefaultAndExplicit(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "retention_policy.env")

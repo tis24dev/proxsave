@@ -724,8 +724,9 @@ func (c *Config) parseSystemSettings() {
 // Helper methods per ottenere valori tipizzati
 
 func (c *Config) getString(key, defaultValue string) string {
-	if val, ok := c.raw[key]; ok {
-		return expandEnvVars(val)
+	upperKey := strings.ToUpper(key)
+	if val, ok := c.raw[upperKey]; ok {
+		return c.expandConfigVars(val)
 	}
 	return defaultValue
 }
@@ -901,10 +902,81 @@ func expandEnvVars(s string) string {
 	return result
 }
 
+type configVarExpander struct {
+	raw        map[string]string
+	cache      map[string]string
+	inProgress map[string]bool
+}
+
+func newConfigVarExpander(raw map[string]string) *configVarExpander {
+	return &configVarExpander{
+		raw:        raw,
+		cache:      make(map[string]string),
+		inProgress: make(map[string]bool),
+	}
+}
+
+func (e *configVarExpander) expand(s string) string {
+	return os.Expand(s, func(key string) string {
+		return e.resolve(key)
+	})
+}
+
+func (e *configVarExpander) resolve(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	upperKey := strings.ToUpper(key)
+
+	if cached, ok := e.cache[upperKey]; ok {
+		return cached
+	}
+	if e.inProgress[upperKey] {
+		return ""
+	}
+	e.inProgress[upperKey] = true
+	defer delete(e.inProgress, upperKey)
+
+	// Keep the historical behavior where BASE_DIR expands even when it's not set
+	// in the config or environment.
+	if upperKey == "BASE_DIR" {
+		if rawVal, ok := e.raw[upperKey]; ok && strings.TrimSpace(rawVal) != "" {
+			expanded := e.expand(rawVal)
+			e.cache[upperKey] = expanded
+			return expanded
+		}
+		expanded := defaultBaseDir()
+		e.cache[upperKey] = expanded
+		return expanded
+	}
+
+	if rawVal, ok := e.raw[upperKey]; ok {
+		expanded := e.expand(rawVal)
+		e.cache[upperKey] = expanded
+		return expanded
+	}
+
+	if envVal, ok := os.LookupEnv(upperKey); ok {
+		e.cache[upperKey] = envVal
+		return envVal
+	}
+
+	return ""
+}
+
+func (c *Config) expandConfigVars(s string) string {
+	if strings.IndexByte(s, '$') == -1 {
+		return s
+	}
+	return newConfigVarExpander(c.raw).expand(s)
+}
+
 func (c *Config) getStringWithFallback(keys []string, defaultValue string) string {
 	for _, key := range keys {
-		if val, ok := c.raw[key]; ok && val != "" {
-			return expandEnvVars(val)
+		upperKey := strings.ToUpper(key)
+		if val, ok := c.raw[upperKey]; ok && val != "" {
+			return c.expandConfigVars(val)
 		}
 	}
 	return defaultValue

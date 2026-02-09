@@ -230,7 +230,7 @@ BACKUP_PATH=${BASE_DIR}/backup
 LOG_PATH=${BASE_DIR}/log
 ```
 
-**Path resolution**: `${BASE_DIR}` expands automatically. Use absolute paths or relative to `BASE_DIR`.
+**Path resolution**: `${BASE_DIR}` expands automatically. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables).
 
 ---
 
@@ -989,6 +989,8 @@ PBS_DATASTORE_PATH=                # e.g., "/mnt/pbs1,/mnt/pbs2"
 SYSTEM_ROOT_PREFIX=                # Optional alternate root for system collection. Empty or "/" = real root.
 # Use this to point the collector at a chroot/test fixture without touching the host FS.
 ```
+
+**Note**: `${PVE_CONFIG_PATH}` (and other `${VAR}` references) are resolved from the same `backup.env` file too — you don’t need to `export` them.
 
 **Use case**: Working with mounted snapshots or mirrors at non-standard paths.
 
