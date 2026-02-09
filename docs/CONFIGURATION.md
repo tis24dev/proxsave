@@ -230,7 +230,7 @@ BACKUP_PATH=${BASE_DIR}/backup
 LOG_PATH=${BASE_DIR}/log
 ```
 
-**Path resolution**: `${BASE_DIR}` expands automatically. Use absolute paths or relative to `BASE_DIR`.
+**Path resolution**: `${BASE_DIR}` expands automatically. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables).
 
 ---
 
@@ -930,7 +930,7 @@ CEPH_CONFIG_PATH=/etc/ceph         # Ceph config directory
 BACKUP_VM_CONFIGS=true             # VM/CT config files
 ```
 
-**Note (PVE snapshot behavior)**: ProxSave snapshots `PVE_CONFIG_PATH` for completeness. When a PVE feature is disabled, proxsave also excludes its well-known files from that snapshot to avoid “still included via full directory copy” surprises (e.g. `qemu-server/` + `lxc/` for `BACKUP_VM_CONFIGS=false`, `firewall/` + `host.fw` for `BACKUP_PVE_FIREWALL=false`, `user.cfg`/`acl.cfg`/`domains.cfg` for `BACKUP_PVE_ACL=false`, `jobs.cfg` + `vzdump.cron` for `BACKUP_PVE_JOBS=false`, `corosync.conf` (and `config.db` capture) for `BACKUP_CLUSTER_CONFIG=false`).
+**Note (PVE snapshot behavior)**: ProxSave snapshots `PVE_CONFIG_PATH` for completeness. When a PVE feature is disabled, proxsave also excludes its well-known files from that snapshot to avoid “still included via full directory copy” surprises (e.g. `qemu-server/` + `lxc/` for `BACKUP_VM_CONFIGS=false`, `firewall/` + `host.fw` for `BACKUP_PVE_FIREWALL=false`, `user.cfg`/`domains.cfg` for `BACKUP_PVE_ACL=false` (ACLs are stored in `user.cfg` on PVE), `jobs.cfg` + `vzdump.cron` for `BACKUP_PVE_JOBS=false`, `corosync.conf` (and `config.db` capture) for `BACKUP_CLUSTER_CONFIG=false`).
 
 ### PBS-Specific
 
@@ -989,6 +989,8 @@ PBS_DATASTORE_PATH=                # e.g., "/mnt/pbs1,/mnt/pbs2"
 SYSTEM_ROOT_PREFIX=                # Optional alternate root for system collection. Empty or "/" = real root.
 # Use this to point the collector at a chroot/test fixture without touching the host FS.
 ```
+
+**Note**: `${PVE_CONFIG_PATH}` (and other `${VAR}` references) are resolved from the same `backup.env` file too — you don’t need to `export` them.
 
 **Use case**: Working with mounted snapshots or mirrors at non-standard paths.
 

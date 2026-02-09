@@ -756,7 +756,6 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 	mustWrite(filepath.Join(pveRoot, "dummy.cfg"), "ok")
 	mustWrite(filepath.Join(pveRoot, "corosync.conf"), "corosync")
 	mustWrite(filepath.Join(pveRoot, "user.cfg"), "user")
-	mustWrite(filepath.Join(pveRoot, "acl.cfg"), "acl")
 	mustWrite(filepath.Join(pveRoot, "domains.cfg"), "domains")
 	mustWrite(filepath.Join(pveRoot, "jobs.cfg"), "jobs")
 	mustWrite(filepath.Join(pveRoot, "vzdump.cron"), "cron")
@@ -787,7 +786,6 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 	for _, excluded := range []string{
 		"corosync.conf",
 		"user.cfg",
-		"acl.cfg",
 		"domains.cfg",
 		"jobs.cfg",
 		"vzdump.cron",
