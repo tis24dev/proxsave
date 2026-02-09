@@ -98,7 +98,7 @@ Each category is handled in one of three ways:
 | `storage_pve` | PVE Storage Configuration | **Staged** storage definitions (applied via API) + VZDump config | `./etc/pve/storage.cfg`<br>`./etc/pve/datacenter.cfg`<br>`./etc/vzdump.conf` |
 | `pve_jobs` | PVE Backup Jobs | **Staged** scheduled backup jobs (applied via API) | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
 | `pve_notifications` | PVE Notifications | **Staged** notification targets and matchers (applied via API) | `./etc/pve/notifications.cfg`<br>`./etc/pve/priv/notifications.cfg` |
-| `pve_access_control` | PVE Access Control | **Staged** access control + secrets restored 1:1 via pmxcfs file apply (root@pam safety rail) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg`<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
+| `pve_access_control` | PVE Access Control | **Staged** access control + secrets restored 1:1 via pmxcfs file apply (root@pam safety rail) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg` (when present)<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
 | `pve_firewall` | PVE Firewall | **Staged** firewall rules and node host firewall (pmxcfs file apply + rollback timer) | `./etc/pve/firewall/`<br>`./etc/pve/nodes/*/host.fw` |
 | `pve_ha` | PVE High Availability (HA) | **Staged** HA resources/groups/rules (pmxcfs file apply + rollback timer) | `./etc/pve/ha/resources.cfg`<br>`./etc/pve/ha/groups.cfg`<br>`./etc/pve/ha/rules.cfg` |
 | `pve_sdn` | PVE SDN | **Staged** SDN definitions (pmxcfs file apply; definitions only) | `./etc/pve/sdn/`<br>`./etc/pve/sdn.cfg` |
@@ -145,8 +145,9 @@ Not all categories are available in every backup. The restore workflow:
 ### PVE Access Control 1:1 (pve_access_control)
 
 On standalone PVE restores (non-cluster backups), ProxSave restores `pve_access_control` **1:1** by applying staged files directly to the pmxcfs mount (`/etc/pve`):
-- `/etc/pve/user.cfg` + `/etc/pve/domains.cfg`
-- `/etc/pve/priv/{shadow,token,tfa}.cfg`
+- `/etc/pve/user.cfg` (includes users/roles/groups/ACL)
+- `/etc/pve/domains.cfg` (realms, when present)
+- `/etc/pve/priv/{shadow,token,tfa}.cfg` (when present)
 
 **Root safety rail**:
 - `root@pam` is preserved from the fresh install (not imported from the backup).

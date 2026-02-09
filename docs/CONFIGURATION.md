@@ -907,7 +907,7 @@ BACKUP_PVE_FIREWALL=true           # PVE firewall configuration
 BACKUP_VZDUMP_CONFIG=true          # /etc/vzdump.conf
 
 # Access control lists
-BACKUP_PVE_ACL=true                # User permissions
+BACKUP_PVE_ACL=true                # Access control (users/roles/groups/ACL; realms when configured)
 
 # Scheduled jobs
 BACKUP_PVE_JOBS=true               # Backup jobs configuration

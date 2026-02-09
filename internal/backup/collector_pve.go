@@ -164,6 +164,9 @@ func (c *Collector) populatePVEManifest() {
 		disableHint   string
 		log           bool
 		countNotFound bool
+		// suppressNotFoundLog suppresses any log output when a file is not found.
+		// This is useful for optional files that may not exist on a default installation.
+		suppressNotFoundLog bool
 	}
 
 	logEntry := func(opts manifestLogOpts, entry ManifestEntry) {
@@ -186,6 +189,9 @@ func (c *Collector) populatePVEManifest() {
 		case StatusSkipped:
 			c.logger.Info("  %s: skipped (excluded)", opts.description)
 		case StatusNotFound:
+			if opts.suppressNotFoundLog {
+				return
+			}
 			if strings.TrimSpace(opts.disableHint) != "" {
 				c.logger.Warning("  %s: not configured. If unused, set %s=false to disable.", opts.description, opts.disableHint)
 			} else {
@@ -268,10 +274,13 @@ func (c *Collector) populatePVEManifest() {
 		countNotFound: true,
 	})
 	record(filepath.Join(pveConfigPath, "domains.cfg"), c.config.BackupPVEACL, manifestLogOpts{
-		description:   "Domain configuration",
-		disableHint:   "BACKUP_PVE_ACL",
-		log:           true,
-		countNotFound: true,
+		description: "Domain configuration",
+		disableHint: "BACKUP_PVE_ACL",
+		log:         true,
+		// domains.cfg may not exist on a default standalone PVE install (built-in realms only).
+		// Don't warn or count as "missing" in that case.
+		countNotFound:       false,
+		suppressNotFoundLog: true,
 	})
 
 	// Scheduled jobs.
