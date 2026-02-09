@@ -260,15 +260,9 @@ func (c *Collector) populatePVEManifest() {
 		}
 	}
 
-	// ACL configuration.
+	// Access control configuration (PVE stores ACLs inside user.cfg).
 	record(filepath.Join(pveConfigPath, "user.cfg"), c.config.BackupPVEACL, manifestLogOpts{
-		description:   "User configuration",
-		disableHint:   "BACKUP_PVE_ACL",
-		log:           true,
-		countNotFound: true,
-	})
-	record(filepath.Join(pveConfigPath, "acl.cfg"), c.config.BackupPVEACL, manifestLogOpts{
-		description:   "ACL configuration",
+		description:   "User/ACL configuration",
 		disableHint:   "BACKUP_PVE_ACL",
 		log:           true,
 		countNotFound: true,
@@ -394,7 +388,7 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 		extraExclude = append(extraExclude, "firewall", "host.fw")
 	}
 	if !c.config.BackupPVEACL {
-		extraExclude = append(extraExclude, "user.cfg", "acl.cfg", "domains.cfg")
+		extraExclude = append(extraExclude, "user.cfg", "domains.cfg")
 	}
 	if !c.config.BackupPVEJobs {
 		extraExclude = append(extraExclude, "jobs.cfg", "vzdump.cron")
