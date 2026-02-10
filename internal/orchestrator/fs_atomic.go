@@ -9,6 +9,13 @@ import (
 	"syscall"
 )
 
+var (
+	atomicGeteuid   = os.Geteuid
+	atomicFileChown = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+	atomicFileChmod = func(f *os.File, perm os.FileMode) error { return f.Chmod(perm) }
+	atomicFileSync  = func(f *os.File) error { return f.Sync() }
+)
+
 type uidGid struct {
 	uid int
 	gid int
@@ -130,13 +137,13 @@ func ensureDirExistsWithInheritedMeta(dir string) error {
 			return fmt.Errorf("open dir %s: %w", p, err)
 		}
 
-		if os.Geteuid() == 0 && owner.ok {
-			if err := f.Chown(owner.uid, owner.gid); err != nil {
+		if atomicGeteuid() == 0 && owner.ok {
+			if err := atomicFileChown(f, owner.uid, owner.gid); err != nil {
 				_ = f.Close()
 				return fmt.Errorf("chown dir %s: %w", p, err)
 			}
 		}
-		if err := f.Chmod(perm); err != nil {
+		if err := atomicFileChmod(f, perm); err != nil {
 			_ = f.Close()
 			return fmt.Errorf("chmod dir %s: %w", p, err)
 		}
@@ -214,7 +221,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 			return fmt.Errorf("open dir %s: %w", dir, err)
 		}
 
-		syncErr := df.Sync()
+		syncErr := atomicFileSync(df)
 		closeErr := df.Close()
 		if syncErr != nil {
 			if errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP) {
@@ -236,18 +243,18 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}()
 	if writeErr == nil {
-		if os.Geteuid() == 0 && owner.ok {
-			if err := f.Chown(owner.uid, owner.gid); err != nil {
+		if atomicGeteuid() == 0 && owner.ok {
+			if err := atomicFileChown(f, owner.uid, owner.gid); err != nil {
 				writeErr = err
 			}
 		}
 		if writeErr == nil {
-			if err := f.Chmod(perm); err != nil {
+			if err := atomicFileChmod(f, perm); err != nil {
 				writeErr = err
 			}
 		}
 		if writeErr == nil {
-			if err := f.Sync(); err != nil {
+			if err := atomicFileSync(f); err != nil {
 				writeErr = err
 			}
 		}
