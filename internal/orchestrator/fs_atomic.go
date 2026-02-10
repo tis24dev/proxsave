@@ -72,24 +72,77 @@ func ensureDirExistsWithInheritedMeta(dir string) error {
 		return fmt.Errorf("stat %s: %w", dir, err)
 	}
 
-	owner, perm := findNearestExistingDirMeta(filepath.Dir(dir))
-	if err := restoreFS.MkdirAll(dir, perm); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dir, err)
-	}
-
-	f, err := restoreFS.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open dir %s: %w", dir, err)
-	}
-	defer f.Close()
-
-	if os.Geteuid() == 0 && owner.ok {
-		if err := f.Chown(owner.uid, owner.gid); err != nil {
-			return fmt.Errorf("chown dir %s: %w", dir, err)
+	existing := ""
+	candidate := dir
+	for {
+		info, err := restoreFS.Stat(candidate)
+		if err == nil && info != nil {
+			if info.IsDir() {
+				existing = candidate
+				break
+			}
+			return fmt.Errorf("path exists but is not a directory: %s", candidate)
 		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat %s: %w", candidate, err)
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate || parent == "." || parent == "" {
+			break
+		}
+		candidate = parent
 	}
-	if err := f.Chmod(perm); err != nil {
-		return fmt.Errorf("chmod dir %s: %w", dir, err)
+	if existing == "" {
+		existing = "."
+	}
+
+	var toCreate []string
+	cur := dir
+	for {
+		if cur == existing || cur == "" || cur == "." {
+			break
+		}
+		toCreate = append([]string{cur}, toCreate...)
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+
+	for _, p := range toCreate {
+		if info, err := restoreFS.Stat(p); err == nil {
+			if info != nil && info.IsDir() {
+				continue
+			}
+			return fmt.Errorf("path exists but is not a directory: %s", p)
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat %s: %w", p, err)
+		}
+
+		owner, perm := findNearestExistingDirMeta(filepath.Dir(p))
+		if err := restoreFS.MkdirAll(p, perm); err != nil {
+			return fmt.Errorf("mkdir %s: %w", p, err)
+		}
+
+		f, err := restoreFS.Open(p)
+		if err != nil {
+			return fmt.Errorf("open dir %s: %w", p, err)
+		}
+
+		if os.Geteuid() == 0 && owner.ok {
+			if err := f.Chown(owner.uid, owner.gid); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("chown dir %s: %w", p, err)
+			}
+		}
+		if err := f.Chmod(perm); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("chmod dir %s: %w", p, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close dir %s: %w", p, err)
+		}
 	}
 	return nil
 }
@@ -100,18 +153,30 @@ func desiredOwnershipForAtomicWrite(destPath string) uidGid {
 		return uidGid{}
 	}
 
-	if info, err := restoreFS.Stat(destPath); err == nil && info != nil && !info.IsDir() {
-		return uidGidFromFileInfo(info)
-	}
-
 	parent := filepath.Dir(destPath)
+	parentOwner := uidGid{}
 	if info, err := restoreFS.Stat(parent); err == nil && info != nil && info.IsDir() {
-		parentOwner := uidGidFromFileInfo(info)
-		if parentOwner.ok {
-			return uidGid{uid: 0, gid: parentOwner.gid, ok: true}
-		}
+		parentOwner = uidGidFromFileInfo(info)
 	}
 
+	if info, err := restoreFS.Stat(destPath); err == nil && info != nil && !info.IsDir() {
+		existing := uidGidFromFileInfo(info)
+		if !existing.ok {
+			if parentOwner.ok {
+				return uidGid{uid: 0, gid: parentOwner.gid, ok: true}
+			}
+			return uidGid{}
+		}
+
+		if parentOwner.ok && existing.gid == 0 && parentOwner.gid != 0 {
+			return uidGid{uid: existing.uid, gid: parentOwner.gid, ok: true}
+		}
+		return existing
+	}
+
+	if parentOwner.ok {
+		return uidGid{uid: 0, gid: parentOwner.gid, ok: true}
+	}
 	return uidGid{}
 }
 
