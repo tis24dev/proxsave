@@ -413,9 +413,24 @@ func TestOrchestrator_RunPreBackupChecks(t *testing.T) {
 
 	orch := New(logger, false)
 
-	checkerCfg := &checks.CheckerConfig{}
+	backupDir := t.TempDir()
+	logDir := t.TempDir()
+	lockDir := filepath.Join(backupDir, "lock")
+	checkerCfg := &checks.CheckerConfig{
+		BackupPath:       backupDir,
+		LogPath:          logDir,
+		LockDirPath:      lockDir,
+		LockFilePath:     filepath.Join(lockDir, ".backup.lock"),
+		MinDiskPrimaryGB: 0,
+		SafetyFactor:     1.0,
+		MaxLockAge:       time.Hour,
+	}
+	if err := checkerCfg.Validate(); err != nil {
+		t.Fatalf("checker config validation failed: %v", err)
+	}
 	checker := checks.NewChecker(logger, checkerCfg)
 	orch.SetChecker(checker)
+	t.Cleanup(func() { _ = orch.ReleaseBackupLock() })
 
 	ctx := context.Background()
 	err := orch.RunPreBackupChecks(ctx)
@@ -432,9 +447,24 @@ func TestOrchestrator_RunPreBackupChecks_ContextCancellation(t *testing.T) {
 
 	orch := New(logger, false)
 
-	checkerCfg := &checks.CheckerConfig{}
+	backupDir := t.TempDir()
+	logDir := t.TempDir()
+	lockDir := filepath.Join(backupDir, "lock")
+	checkerCfg := &checks.CheckerConfig{
+		BackupPath:       backupDir,
+		LogPath:          logDir,
+		LockDirPath:      lockDir,
+		LockFilePath:     filepath.Join(lockDir, ".backup.lock"),
+		MinDiskPrimaryGB: 0,
+		SafetyFactor:     1.0,
+		MaxLockAge:       time.Hour,
+	}
+	if err := checkerCfg.Validate(); err != nil {
+		t.Fatalf("checker config validation failed: %v", err)
+	}
 	checker := checks.NewChecker(logger, checkerCfg)
 	orch.SetChecker(checker)
+	t.Cleanup(func() { _ = orch.ReleaseBackupLock() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
