@@ -205,10 +205,7 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 	}
 
 	destPath := "/etc/proxmox-backup/datastore.cfg"
-	if err := restoreFS.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		return fmt.Errorf("ensure %s: %w", filepath.Dir(destPath), err)
-	}
-	if err := restoreFS.WriteFile(destPath, []byte(out.String()), 0o640); err != nil {
+	if err := writeFileAtomic(destPath, []byte(out.String()), 0o640); err != nil {
 		return fmt.Errorf("write %s: %w", destPath, err)
 	}
 
@@ -380,10 +377,7 @@ func applyPBSConfigFileFromStage(ctx context.Context, logger *logging.Logger, st
 		return nil
 	}
 
-	if err := restoreFS.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		return fmt.Errorf("ensure %s: %w", filepath.Dir(destPath), err)
-	}
-	if err := restoreFS.WriteFile(destPath, []byte(trimmed+"\n"), 0o640); err != nil {
+	if err := writeFileAtomic(destPath, []byte(trimmed+"\n"), 0o640); err != nil {
 		return fmt.Errorf("write %s: %w", destPath, err)
 	}
 

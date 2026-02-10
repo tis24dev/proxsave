@@ -613,8 +613,8 @@ func syncDirExact(srcDir, destDir string) ([]string, error) {
 		return nil, nil
 	}
 
-	if err := restoreFS.MkdirAll(destDir, 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir %s: %w", destDir, err)
+	if err := ensureDirExistsWithInheritedMeta(destDir); err != nil {
+		return nil, fmt.Errorf("ensure %s: %w", destDir, err)
 	}
 
 	stageFiles := make(map[string]struct{})
@@ -661,8 +661,8 @@ func syncDirExact(srcDir, destDir string) ([]string, error) {
 				if err != nil {
 					return fmt.Errorf("readlink %s: %w", src, err)
 				}
-				if err := restoreFS.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-					return fmt.Errorf("mkdir %s: %w", filepath.Dir(dest), err)
+				if err := ensureDirExistsWithInheritedMeta(filepath.Dir(dest)); err != nil {
+					return fmt.Errorf("ensure %s: %w", filepath.Dir(dest), err)
 				}
 				_ = restoreFS.Remove(dest)
 				if err := restoreFS.Symlink(target, dest); err != nil {
@@ -674,8 +674,8 @@ func syncDirExact(srcDir, destDir string) ([]string, error) {
 
 			if info.IsDir() {
 				stageDirs[rel] = struct{}{}
-				if err := restoreFS.MkdirAll(dest, 0o755); err != nil {
-					return fmt.Errorf("mkdir %s: %w", dest, err)
+				if err := ensureDirExistsWithInheritedMeta(dest); err != nil {
+					return fmt.Errorf("ensure %s: %w", dest, err)
 				}
 				if err := walkStage(src); err != nil {
 					return err

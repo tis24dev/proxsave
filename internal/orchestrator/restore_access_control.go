@@ -838,42 +838,6 @@ func readProxmoxConfigSectionsOptional(path string) ([]proxmoxNotificationSectio
 	return parseProxmoxNotificationSections(raw)
 }
 
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := restoreFS.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	tmpPath := fmt.Sprintf("%s.proxsave.tmp.%d", path, nowRestore().UnixNano())
-	f, err := restoreFS.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL|os.O_TRUNC, perm)
-	if err != nil {
-		return err
-	}
-
-	writeErr := func() error {
-		if len(data) == 0 {
-			return nil
-		}
-		_, err := f.Write(data)
-		return err
-	}()
-	closeErr := f.Close()
-	if writeErr != nil {
-		_ = restoreFS.Remove(tmpPath)
-		return writeErr
-	}
-	if closeErr != nil {
-		_ = restoreFS.Remove(tmpPath)
-		return closeErr
-	}
-
-	if err := restoreFS.Rename(tmpPath, path); err != nil {
-		_ = restoreFS.Remove(tmpPath)
-		return err
-	}
-	return nil
-}
-
 func renderProxmoxConfig(sections []proxmoxNotificationSection) string {
 	if len(sections) == 0 {
 		return ""

@@ -296,8 +296,8 @@ func applyPVEHAFromStage(logger *logging.Logger, stageRoot string) (applied []st
 
 	stageHA := filepath.Join(stageRoot, "etc", "pve", "ha")
 	destHA := "/etc/pve/ha"
-	if err := restoreFS.MkdirAll(destHA, 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir %s: %w", destHA, err)
+	if err := ensureDirExistsWithInheritedMeta(destHA); err != nil {
+		return nil, fmt.Errorf("ensure %s: %w", destHA, err)
 	}
 
 	// Only prune config files if the stage actually contains HA config.
@@ -488,4 +488,3 @@ func buildHARollbackScript(markerPath, backupPath, logPath string) string {
 	}
 	return strings.Join(lines, "\n") + "\n"
 }
-

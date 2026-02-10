@@ -326,10 +326,7 @@ func applyConfigFileFromStage(logger *logging.Logger, stageRoot, relPath, destPa
 		return nil
 	}
 
-	if err := restoreFS.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		return fmt.Errorf("ensure %s: %w", filepath.Dir(destPath), err)
-	}
-	if err := restoreFS.WriteFile(destPath, []byte(trimmed+"\n"), perm); err != nil {
+	if err := writeFileAtomic(destPath, []byte(trimmed+"\n"), perm); err != nil {
 		return fmt.Errorf("write %s: %w", destPath, err)
 	}
 	logging.DebugStep(logger, "notifications staged apply file", "Applied %s -> %s", relPath, destPath)

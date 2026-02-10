@@ -75,6 +75,31 @@ Thank you so much!
 ## Recognitions
 <a href="https://www.xda-developers.com/i-use-this-free-tool-with-proxmox-backup-server/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/XDA%20Developers-Article-blue?logo=android" style="height:25px;"/></a>
 
+## Release Testing & Feedback
+A special thanks to the community members who help by testing releases and reporting issues. 💙
+<table align="left">
+  <tr>
+    <td align="center" width="160">
+      <a href="https://github.com/NukeThemTillTheyGlow">
+        <img src="https://github.com/NukeThemTillTheyGlow.png?size=96" width="56" alt="@NukeThemTillTheyGlow" />
+      </a>
+      <br />
+      <a href="https://github.com/NukeThemTillTheyGlow"><sub><b>@NukeThemTillTheyGlow</b></sub></a>
+      <br />
+      <sub>release testing</sub>
+    </td>
+    <td align="center" width="160">
+      <a href="https://github.com/marc6901">
+        <img src="https://github.com/marc6901.png?size=96" width="56" alt="@marc6901" />
+      </a>
+      <br />
+      <a href="https://github.com/marc6901"><sub><b>@marc6901</b></sub></a>
+      <br />
+      <sub>release testing</sub>
+    </td>
+  </tr>
+</table>
+
 ## Repo Activity
 
 ![Alt](https://repobeats.axiom.co/api/embed/d9565d6d1ed8222a5da5fedf25c18a9c8beab382.svg "Repobeats analytics image")

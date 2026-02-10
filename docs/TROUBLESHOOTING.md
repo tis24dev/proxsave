@@ -623,6 +623,32 @@ MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
 - If it says **DISARMED/CLEARED**, reconnect using the **post-apply IP** (new config remains active).
 - Check the rollback log path printed in the footer for details.
 
+#### PBS UI/API fails after restore: `proxmox-backup-proxy` permission denied
+
+**Symptoms**:
+- PBS web UI login fails or API requests return authentication errors
+- `systemctl status proxmox-backup-proxy` shows a restart loop
+- Journal contains errors like:
+  - `unable to read "/etc/proxmox-backup/user.cfg" - Permission denied (os error 13)`
+  - `unable to read "/etc/proxmox-backup/authkey.pub" - Permission denied (os error 13)`
+  - `configuration directory '/etc/proxmox-backup' permission problem`
+
+**Cause**:
+- PBS services (notably `proxmox-backup-proxy`) run as user `backup` and require specific ownership/permissions under `/etc/proxmox-backup`.
+- If staged restore (or manual file copy) rewrites these files with the wrong owner/group/mode, the services cannot read them and may refuse to start.
+
+**What to do**:
+1. Ensure you're running the latest ProxSave build and rerun restore for the staged PBS categories you selected (e.g. `pbs_access_control`, `pbs_jobs`, `pbs_remotes`, `pbs_host`, `pbs_notifications`, `datastore_pbs`). ProxSave applies staged files atomically and enforces final permissions/ownership (not left to `umask`).
+2. If PBS is already broken and you need a quick recovery:
+   - Identify the blocking path component with `namei -l /etc/proxmox-backup/user.cfg`.
+   - Restore package defaults (recommended): reinstall `proxmox-backup-server` and restart services. Example:
+     ```bash
+     apt-get update
+     apt-get install --reinstall proxmox-backup-server
+     systemctl restart proxmox-backup proxmox-backup-proxy
+     ```
+   - Or fix ownership/permissions to match a clean install of your PBS version (verify `/etc/proxmox-backup` and the files referenced in the journal are readable by user `backup`).
+
 #### Error during network preflight: `addr_add_dry_run() got an unexpected keyword argument 'nodad'`
 
 **Symptoms**:

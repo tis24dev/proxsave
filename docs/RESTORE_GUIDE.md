@@ -86,7 +86,7 @@ Restore operations are organized into **20–22 categories** (PBS = 20, PVE = 22
 Each category is handled in one of three ways:
 
 - **Normal**: extracted directly to `/` (system paths) after safety backup
-- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or `pvesh`)
+- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or `pvesh`); when staged files are written to system paths, ProxSave applies them **atomically** and enforces the final permissions/ownership (i.e. not left to `umask`)
 - **Export-only**: extracted to an export directory for manual review (never written to system paths)
 
 ### PVE-Specific Categories (11 categories)
@@ -2669,11 +2669,10 @@ tar -xzf /path/to/decrypted.tar.gz ./specific/file/path
 
 **Q: Does restore preserve file permissions and ownership?**
 
-A: Yes, completely:
-- **Ownership**: UID/GID preserved
-- **Permissions**: Mode bits preserved
-- **Timestamps**: mtime and atime preserved
-- **ctime**: Cannot be set (kernel-managed)
+A: Yes:
+- **Extraction**: ProxSave preserves UID/GID, mode bits and timestamps (mtime/atime) for extracted entries.
+- **Staged categories**: files are extracted under `/tmp/proxsave/restore-stage-*` and then applied to system paths using atomic replace; ProxSave explicitly applies mode bits (not left to `umask`) and preserves/derives ownership/group to match expected system defaults (important on PBS, where `proxmox-backup-proxy` runs as `backup`).
+- **ctime**: Cannot be set (kernel-managed).
 
 ---
 

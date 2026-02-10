@@ -102,10 +102,7 @@ func applyPVEVzdumpConfFromStage(logger *logging.Logger, stageRoot string) error
 		return removeIfExists(destPath)
 	}
 
-	if err := restoreFS.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		return fmt.Errorf("ensure %s: %w", filepath.Dir(destPath), err)
-	}
-	if err := restoreFS.WriteFile(destPath, []byte(trimmed+"\n"), 0o644); err != nil {
+	if err := writeFileAtomic(destPath, []byte(trimmed+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", destPath, err)
 	}
 
@@ -443,10 +440,10 @@ func pveStorageMountGuardCandidatesFromSections(sections []proxmoxNotificationSe
 }
 
 type pveStorageMountGuardItem struct {
-	GuardTarget  string
-	StorageID    string
-	StorageType  string
-	IsNetwork    bool
+	GuardTarget   string
+	StorageID     string
+	StorageType   string
+	IsNetwork     bool
 	RequiresFstab bool
 }
 
@@ -462,10 +459,10 @@ func pveStorageMountGuardItems(candidates []pveStorageMountGuardCandidate, mount
 		switch storageType {
 		case "nfs", "cifs", "cephfs", "glusterfs":
 			out = append(out, pveStorageMountGuardItem{
-				GuardTarget:  filepath.Join("/mnt/pve", storageID),
-				StorageID:    storageID,
-				StorageType:  storageType,
-				IsNetwork:    true,
+				GuardTarget:   filepath.Join("/mnt/pve", storageID),
+				StorageID:     storageID,
+				StorageType:   storageType,
+				IsNetwork:     true,
 				RequiresFstab: false,
 			})
 
@@ -490,10 +487,10 @@ func pveStorageMountGuardItems(candidates []pveStorageMountGuardCandidate, mount
 				continue
 			}
 			out = append(out, pveStorageMountGuardItem{
-				GuardTarget:  target,
-				StorageID:    storageID,
-				StorageType:  storageType,
-				IsNetwork:    false,
+				GuardTarget:   target,
+				StorageID:     storageID,
+				StorageType:   storageType,
+				IsNetwork:     false,
 				RequiresFstab: true,
 			})
 		}

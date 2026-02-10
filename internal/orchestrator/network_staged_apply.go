@@ -70,8 +70,8 @@ func copyDirOverlay(srcDir, destDir string) ([]string, error) {
 		return nil, nil
 	}
 
-	if err := restoreFS.MkdirAll(destDir, 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir %s: %w", destDir, err)
+	if err := ensureDirExistsWithInheritedMeta(destDir); err != nil {
+		return nil, fmt.Errorf("ensure %s: %w", destDir, err)
 	}
 
 	var applied []string
@@ -132,17 +132,12 @@ func copyFileOverlay(src, dest string) (bool, error) {
 		return false, fmt.Errorf("read %s: %w", src, err)
 	}
 
-	if err := restoreFS.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return false, fmt.Errorf("mkdir %s: %w", filepath.Dir(dest), err)
-	}
-
 	mode := os.FileMode(0o644)
 	if info != nil {
 		mode = info.Mode().Perm()
 	}
-	if err := restoreFS.WriteFile(dest, data, mode); err != nil {
+	if err := writeFileAtomic(dest, data, mode); err != nil {
 		return false, fmt.Errorf("write %s: %w", dest, err)
 	}
 	return true, nil
 }
-
