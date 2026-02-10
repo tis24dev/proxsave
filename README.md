@@ -77,6 +77,7 @@ Thank you so much!
 
 ## Release Testing & Feedback
 A special thanks to the community members who help by testing releases and reporting issues. 💙
+
 <table align="left">
   <tr>
     <td align="center" width="160">
@@ -100,6 +101,7 @@ A special thanks to the community members who help by testing releases and repor
   </tr>
 </table>
 
-## Repo Activity
+<br clear="all" />
 
+## Repo Activity
 ![Alt](https://repobeats.axiom.co/api/embed/d9565d6d1ed8222a5da5fedf25c18a9c8beab382.svg "Repobeats analytics image")
