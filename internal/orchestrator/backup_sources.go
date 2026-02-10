@@ -268,6 +268,9 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 				DisplayBase:     displayBase,
 				IsRclone:        true,
 			})
+		default:
+			cancel()
+			continue
 		}
 	}
 

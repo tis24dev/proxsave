@@ -203,6 +203,31 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 
+	syncDir := func(dir string) error {
+		dir = filepath.Clean(strings.TrimSpace(dir))
+		if dir == "" {
+			dir = "."
+		}
+
+		df, err := restoreFS.Open(dir)
+		if err != nil {
+			return fmt.Errorf("open dir %s: %w", dir, err)
+		}
+
+		syncErr := df.Sync()
+		closeErr := df.Close()
+		if syncErr != nil {
+			if errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP) {
+				return closeErr
+			}
+			return fmt.Errorf("fsync dir %s: %w", dir, syncErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close dir %s: %w", dir, closeErr)
+		}
+		return nil
+	}
+
 	writeErr := func() error {
 		if len(data) == 0 {
 			return nil
@@ -221,6 +246,11 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 				writeErr = err
 			}
 		}
+		if writeErr == nil {
+			if err := f.Sync(); err != nil {
+				writeErr = err
+			}
+		}
 	}
 
 	closeErr := f.Close()
@@ -235,6 +265,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 
 	if err := restoreFS.Rename(tmpPath, path); err != nil {
 		_ = restoreFS.Remove(tmpPath)
+		return err
+	}
+
+	if err := syncDir(dir); err != nil {
 		return err
 	}
 	return nil
