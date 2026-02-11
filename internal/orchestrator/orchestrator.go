@@ -1482,6 +1482,8 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.BackupPBSAcmePlugins = cfg.BackupPBSAcmePlugins
 	cc.BackupPBSMetricServers = cfg.BackupPBSMetricServers
 	cc.BackupPBSTrafficControl = cfg.BackupPBSTrafficControl
+	cc.BackupPBSNotifications = cfg.BackupPBSNotifications
+	cc.BackupPBSNotificationsPriv = cfg.BackupPBSNotificationsPriv
 	cc.BackupUserConfigs = cfg.BackupUserConfigs
 	cc.BackupRemoteConfigs = cfg.BackupRemoteConfigs
 	cc.BackupSyncJobs = cfg.BackupSyncJobs

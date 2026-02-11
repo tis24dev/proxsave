@@ -138,6 +138,8 @@ flowchart TD
     style CheckboxMenu fill:#87CEEB
 ```
 
+**Note (PBS)**: Staged PBS categories can be applied either by writing staged `*.cfg` files back to `/etc/proxmox-backup` or via `proxmox-backup-manager`, depending on `RESTORE_PBS_APPLY_MODE`.
+
 ---
 
 ## Service Management Flow

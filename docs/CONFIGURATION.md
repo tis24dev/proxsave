@@ -6,6 +6,7 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 
 - [Configuration File Location](#configuration-file-location)
 - [General Settings](#general-settings)
+- [Restore (PBS)](#restore-pbs)
 - [Security Settings](#security-settings)
 - [Disk Space](#disk-space)
 - [Storage Paths](#storage-paths)
@@ -71,6 +72,48 @@ PROFILING_ENABLED=true             # true | false (profiles written under LOG_PA
 | `standard` | Basic operation logging |
 | `advanced` | Detailed command execution, file operations |
 | `extreme` | Full verbose output including rclone/compression internals |
+
+---
+
+## Restore (PBS)
+
+These options affect **restore behavior on PBS hosts only**.
+
+```bash
+# How to apply PBS configuration during restore:
+# - file: restore staged *.cfg files to /etc/proxmox-backup (legacy behavior)
+# - api:  apply via proxmox-backup-manager where possible
+# - auto: prefer API; fall back to file-based apply on failures
+RESTORE_PBS_APPLY_MODE=auto   # file | api | auto
+
+# When true, remove PBS objects not present in the backup (1:1 reconciliation).
+# WARNING: Destructive when used with api/auto (it may delete existing objects).
+RESTORE_PBS_STRICT=false      # true | false
+```
+
+### RESTORE_PBS_APPLY_MODE
+
+- `file`: Always restores by applying staged files under `/tmp/proxsave/restore-stage-*` back to `/etc/proxmox-backup`.
+- `api`: Prefers **API-based apply** via `proxmox-backup-manager` (fails if the API apply is unavailable or errors).
+- `auto` (default): Tries `api` first and falls back to `file` on failures (service start failures, missing `proxmox-backup-manager`, command errors).
+
+**Current API coverage** (when `api`/`auto`):
+- Node + traffic control (`pbs_host`)
+- Datastores + S3 endpoints (`datastore_pbs`)
+- Remotes (`pbs_remotes`)
+- Jobs (sync/verify/prune) (`pbs_jobs`)
+- Notifications endpoints/matchers (`pbs_notifications`)
+
+Configs with file-only apply remain file-based (e.g. access control, tape, proxy/ACME/metricserver).
+
+### RESTORE_PBS_STRICT (1:1)
+
+When `true` and **API apply** is used, ProxSave attempts a 1:1 reconciliation by removing objects that exist on the restore host but are **not present in the backup** (for the supported PBS categories above).
+
+Use cases:
+- Disaster recovery or rebuild where the goal is **restore 1:1** on a clean PBS install.
+
+Avoid enabling `RESTORE_PBS_STRICT=true` for migrations or partial restores unless you explicitly want ProxSave to delete existing PBS objects.
 
 ---
 
@@ -321,7 +364,29 @@ PREFILTER_MAX_FILE_SIZE_MB=8       # Skip prefilter for files >8MB
 
 - **Smart chunking**: Splits large files for parallel processing
 - **Deduplication**: Detects duplicate data blocks (reduces storage)
-- **Prefilter**: Analyzes small files before compression (optimizes algorithm selection)
+- **Prefilter**: Applies safe, semantic-preserving normalization to small text/JSON files to improve compression (e.g. removes CR from CRLF line endings and minifies JSON). It does **not** reorder, de-indent, or strip structured configuration files, and it avoids touching Proxmox/PBS structured config paths (e.g. `etc/pve/**`, `etc/proxmox-backup/**`).
+
+### Prefilter (`ENABLE_PREFILTER`) — details and risks
+
+**What it does** (on the *staged* backup tree, before compression):
+- Removes `\r` from CRLF text files (`.txt`, `.log`, `.md`, `.conf`, `.cfg`, `.ini`) to normalize line endings
+- Minifies JSON (`.json`) while keeping valid JSON semantics
+
+**What it does not do**:
+- It does **not** reorder lines, remove indentation, or otherwise rewrite whitespace/ordering-sensitive structured configs.
+- It does **not** follow symlinks (symlinks are skipped).
+- It skips Proxmox/PBS structured configuration paths where formatting/order matters, such as:
+  - `etc/pve/**`
+  - `etc/proxmox-backup/**`
+  - `etc/systemd/system/**`
+  - `etc/ssh/**`
+  - `etc/pam.d/**`
+
+**Why you might disable it** (even though it's safe):
+- If you need maximum fidelity (bit-for-bit) of text/JSON formatting as originally collected (CRLF preservation, JSON pretty-printing, etc.)
+- If you prefer the most conservative pipeline possible (forensics/compliance)
+
+**Important**: Prefilter never edits files on the host system — it only operates on the temporary staging directory that will be archived.
 
 ---
 
@@ -938,6 +1003,24 @@ BACKUP_VM_CONFIGS=true             # VM/CT config files
 # PBS datastore configs
 BACKUP_DATASTORE_CONFIGS=true      # Datastore definitions
 
+# S3 endpoints (used by S3 datastores)
+BACKUP_PBS_S3_ENDPOINTS=true       # s3.cfg (S3 endpoints, used by S3 datastores)
+
+# Node/global config
+BACKUP_PBS_NODE_CONFIG=true        # node.cfg (global PBS settings)
+
+# ACME
+BACKUP_PBS_ACME_ACCOUNTS=true      # acme/accounts.cfg
+BACKUP_PBS_ACME_PLUGINS=true       # acme/plugins.cfg
+
+# Integrations
+BACKUP_PBS_METRIC_SERVERS=true     # metricserver.cfg
+BACKUP_PBS_TRAFFIC_CONTROL=true    # traffic-control.cfg
+
+# Notifications
+BACKUP_PBS_NOTIFICATIONS=true      # notifications.cfg (targets/matchers/endpoints)
+BACKUP_PBS_NOTIFICATIONS_PRIV=true # notifications-priv.cfg (secrets/credentials for endpoints)
+
 # User and permissions
 BACKUP_USER_CONFIGS=true           # PBS users and tokens
 
@@ -952,6 +1035,9 @@ BACKUP_VERIFICATION_JOBS=true      # Backup verification schedules
 
 # Tape backup
 BACKUP_TAPE_CONFIGS=true           # Tape library configuration
+
+# Network configuration (PBS)
+BACKUP_PBS_NETWORK_CONFIG=true     # network.cfg (PBS), independent from BACKUP_NETWORK_CONFIGS (system)
 
 # Prune schedules
 BACKUP_PRUNE_SCHEDULES=true        # Retention prune schedules

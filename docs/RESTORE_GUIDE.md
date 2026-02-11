@@ -86,7 +86,7 @@ Restore operations are organized into **20–22 categories** (PBS = 20, PVE = 22
 Each category is handled in one of three ways:
 
 - **Normal**: extracted directly to `/` (system paths) after safety backup
-- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or `pvesh`); when staged files are written to system paths, ProxSave applies them **atomically** and enforces the final permissions/ownership (including for any created parent directories; not left to `umask`)
+- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or API apply: `pvesh`/`pveum` on PVE, `proxmox-backup-manager` on PBS); when staged files are written to system paths, ProxSave applies them **atomically** and enforces the final permissions/ownership (including for any created parent directories; not left to `umask`)
 - **Export-only**: extracted to an export directory for manual review (never written to system paths)
 
 ### PVE-Specific Categories (11 categories)
@@ -107,17 +107,19 @@ Each category is handled in one of three ways:
 
 ### PBS-Specific Categories (9 categories)
 
+**PBS staged apply mode**: For staged PBS categories, the apply method is controlled by `RESTORE_PBS_APPLY_MODE` (`auto` by default). When using `api`/`auto`, ProxSave applies supported PBS categories via `proxmox-backup-manager` and can optionally do strict 1:1 reconciliation with `RESTORE_PBS_STRICT=true`.
+
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
 | `pbs_config` | PBS Config Export | **Export-only** copy of /etc/proxmox-backup (never written to system) | `./etc/proxmox-backup/` |
-| `pbs_host` | PBS Host & Integrations | **Staged** node settings, ACME, proxy, metric servers and traffic control | `./etc/proxmox-backup/node.cfg`<br>`./etc/proxmox-backup/proxy.cfg`<br>`./etc/proxmox-backup/acme/accounts.cfg`<br>`./etc/proxmox-backup/acme/plugins.cfg`<br>`./etc/proxmox-backup/metricserver.cfg`<br>`./etc/proxmox-backup/traffic-control.cfg` |
-| `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions (incl. S3 endpoints) | `./etc/proxmox-backup/datastore.cfg`<br>`./etc/proxmox-backup/s3.cfg` |
+| `pbs_host` | PBS Host & Integrations | **Staged** node settings, ACME, proxy, metric servers and traffic control (API/file apply) | `./etc/proxmox-backup/node.cfg`<br>`./etc/proxmox-backup/proxy.cfg`<br>`./etc/proxmox-backup/acme/accounts.cfg`<br>`./etc/proxmox-backup/acme/plugins.cfg`<br>`./etc/proxmox-backup/metricserver.cfg`<br>`./etc/proxmox-backup/traffic-control.cfg`<br>`./var/lib/proxsave-info/commands/pbs/node_config.json`<br>`./var/lib/proxsave-info/commands/pbs/acme_accounts.json`<br>`./var/lib/proxsave-info/commands/pbs/acme_plugins.json`<br>`./var/lib/proxsave-info/commands/pbs/acme_account_*_info.json`<br>`./var/lib/proxsave-info/commands/pbs/acme_plugin_*_config.json`<br>`./var/lib/proxsave-info/commands/pbs/traffic_control.json` |
+| `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions (incl. S3 endpoints) (API/file apply) | `./etc/proxmox-backup/datastore.cfg`<br>`./etc/proxmox-backup/s3.cfg`<br>`./var/lib/proxsave-info/commands/pbs/datastore_list.json`<br>`./var/lib/proxsave-info/commands/pbs/datastore_*_status.json`<br>`./var/lib/proxsave-info/commands/pbs/s3_endpoints.json`<br>`./var/lib/proxsave-info/commands/pbs/s3_endpoint_*_buckets.json`<br>`./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json` |
 | `maintenance_pbs` | PBS Maintenance | Maintenance settings | `./etc/proxmox-backup/maintenance.cfg` |
-| `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg` |
-| `pbs_remotes` | PBS Remotes | **Staged** remotes for sync/verify (may include credentials) | `./etc/proxmox-backup/remote.cfg` |
-| `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers | `./etc/proxmox-backup/notifications.cfg`<br>`./etc/proxmox-backup/notifications-priv.cfg` |
-| `pbs_access_control` | PBS Access Control | **Staged** access control + secrets restored 1:1 (root@pam safety rail) | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json` |
-| `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`<br>`./etc/proxmox-backup/tape-job.cfg`<br>`./etc/proxmox-backup/media-pool.cfg`<br>`./etc/proxmox-backup/tape-encryption-keys.json` |
+| `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs (API/file apply) | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg`<br>`./var/lib/proxsave-info/commands/pbs/sync_jobs.json`<br>`./var/lib/proxsave-info/commands/pbs/verification_jobs.json`<br>`./var/lib/proxsave-info/commands/pbs/prune_jobs.json`<br>`./var/lib/proxsave-info/commands/pbs/gc_jobs.json` |
+| `pbs_remotes` | PBS Remotes | **Staged** remotes for sync/verify (may include credentials) (API/file apply) | `./etc/proxmox-backup/remote.cfg`<br>`./var/lib/proxsave-info/commands/pbs/remote_list.json` |
+| `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers (API/file apply) | `./etc/proxmox-backup/notifications.cfg`<br>`./etc/proxmox-backup/notifications-priv.cfg`<br>`./var/lib/proxsave-info/commands/pbs/notification_targets.json`<br>`./var/lib/proxsave-info/commands/pbs/notification_matchers.json`<br>`./var/lib/proxsave-info/commands/pbs/notification_endpoints_*.json` |
+| `pbs_access_control` | PBS Access Control | **Staged** access control + secrets restored 1:1 (root@pam safety rail) | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json`<br>`./var/lib/proxsave-info/commands/pbs/user_list.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ldap.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ad.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_openid.json`<br>`./var/lib/proxsave-info/commands/pbs/acl_list.json` |
+| `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`<br>`./etc/proxmox-backup/tape-job.cfg`<br>`./etc/proxmox-backup/media-pool.cfg`<br>`./etc/proxmox-backup/tape-encryption-keys.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_drives.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_changers.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_pools.json` |
 
 ### Common Categories (11 categories)
 
@@ -225,10 +227,10 @@ Select restore mode:
 - `zfs` - ZFS configuration
 
 **PBS Categories**:
-- `datastore_pbs` - Datastore definitions (staged apply)
+- `datastore_pbs` - Datastore definitions (staged apply; API/file controlled by `RESTORE_PBS_APPLY_MODE`)
 - `maintenance_pbs` - Maintenance settings
-- `pbs_jobs` - Sync/verify/prune jobs (staged apply)
-- `pbs_remotes` - Remotes for sync jobs (staged apply)
+- `pbs_jobs` - Sync/verify/prune jobs (staged apply; API/file controlled by `RESTORE_PBS_APPLY_MODE`)
+- `pbs_remotes` - Remotes for sync jobs (staged apply; API/file controlled by `RESTORE_PBS_APPLY_MODE`)
 - `filesystem` - /etc/fstab
 - `storage_stack` - Storage stack config (mount prerequisites)
 - `zfs` - ZFS configuration
@@ -2371,6 +2373,28 @@ systemctl restart proxmox-backup proxmox-backup-proxy
 
 ---
 
+**Issue: "Bad Request (400) parsing /etc/proxmox-backup/datastore.cfg ... duplicate property 'gc-schedule'"**
+
+**Cause**: `datastore.cfg` is malformed (multiple datastore definitions merged into a single block). This typically happens if the file lost its structure (header/order/indentation), leading PBS to interpret keys like `gc-schedule`, `notification-mode`, or `path` as duplicated **within the same datastore**.
+
+**Restore behavior**:
+- ProxSave detects this condition during staged apply.
+- If `var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json` is available in the backup, ProxSave will use its embedded snapshot of the original `datastore.cfg` to recover a valid configuration.
+- If recovery is not possible, ProxSave will **leave the existing** `/etc/proxmox-backup/datastore.cfg` unchanged to avoid breaking PBS.
+
+**Manual diagnosis**:
+```bash
+nl -ba /etc/proxmox-backup/datastore.cfg | sed -n '1,120p'
+
+# Look for duplicate keys inside the same datastore block:
+awk '
+/^datastore: /{ds=$2; delete seen}
+/^[[:space:]]*[A-Za-z0-9-]+[[:space:]]+/{key=$1; if(seen[key]++) printf "DUP datastore=%s key=%s line=%d: %s\n", ds, key, NR, $0}
+' /etc/proxmox-backup/datastore.cfg
+```
+
+---
+
 **Issue: "unable to read prune/verification job config ... syntax error (expected header)"**
 
 **Cause**: PBS job config files (`/etc/proxmox-backup/prune.cfg`, `/etc/proxmox-backup/verification.cfg`) are empty or malformed. PBS expects a section header at the first non-comment line; an empty file can trigger parse errors.
@@ -2671,7 +2695,7 @@ tar -xzf /path/to/decrypted.tar.gz ./specific/file/path
 
 A: Yes:
 - **Extraction**: ProxSave preserves UID/GID, mode bits and timestamps (mtime/atime) for extracted entries.
-- **Staged categories**: files are extracted under `/tmp/proxsave/restore-stage-*` and then applied to system paths using atomic replace; ProxSave explicitly applies mode bits (not left to `umask`) and preserves/derives ownership/group to match expected system defaults (important on PBS, where `proxmox-backup-proxy` runs as `backup`; ProxSave also repairs common `root:root` group regressions by inheriting the destination parent directory's group).
+- **Staged categories**: files are extracted under `/tmp/proxsave/restore-stage-*` and then applied to system paths using atomic replace; ProxSave explicitly applies mode bits (not left to `umask`) and preserves/derives ownership/group to match expected system defaults (important on PBS, where `proxmox-backup-proxy` runs as `backup`; ProxSave also repairs common `root:root` group regressions by inheriting the destination parent directory's group). On supported filesystems, staged writes also `fsync()` the temporary file and the destination directory to reduce the risk of incomplete writes after a crash/power loss.
 - **ctime**: Cannot be set (kernel-managed).
 
 ---

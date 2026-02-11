@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -23,7 +24,7 @@ type proxmoxNotificationSection struct {
 	RedactFlags []string
 }
 
-func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
+func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, cfg *config.Config, stageRoot string, dryRun bool) (err error) {
 	if plan == nil {
 		return nil
 	}
@@ -56,7 +57,27 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 		if !plan.HasCategoryID("pbs_notifications") {
 			return nil
 		}
-		return applyPBSNotificationsFromStage(ctx, logger, stageRoot)
+		mode := normalizePBSApplyMode(cfg)
+		strict := pbsStrictRestore(cfg)
+		if mode == pbsApplyModeFile {
+			return applyPBSNotificationsFromStage(ctx, logger, stageRoot)
+		}
+		if err := ensurePBSServicesForAPI(ctx, logger); err != nil {
+			if mode == pbsApplyModeAuto {
+				logger.Warning("PBS notifications API apply unavailable; falling back to file-based apply: %v", err)
+				return applyPBSNotificationsFromStage(ctx, logger, stageRoot)
+			}
+			return err
+		}
+		if err := applyPBSNotificationsViaAPI(ctx, logger, stageRoot, strict); err != nil {
+			if mode == pbsApplyModeAuto {
+				logger.Warning("PBS notifications API apply failed; falling back to file-based apply: %v", err)
+				return applyPBSNotificationsFromStage(ctx, logger, stageRoot)
+			}
+			return err
+		}
+		logger.Info("PBS notifications applied via API")
+		return nil
 	case SystemTypePVE:
 		if !plan.HasCategoryID("pve_notifications") {
 			return nil

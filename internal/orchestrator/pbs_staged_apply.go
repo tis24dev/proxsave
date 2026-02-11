@@ -9,10 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
+func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, cfg *config.Config, stageRoot string, dryRun bool) (err error) {
 	if plan == nil || plan.SystemType != SystemTypePBS {
 		return nil
 	}
@@ -40,34 +41,148 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		return nil
 	}
 
-	if plan.HasCategoryID("datastore_pbs") {
-		if err := applyPBSS3CfgFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: s3.cfg: %v", err)
-		}
-		if err := applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: datastore.cfg: %v", err)
-		}
-	}
-	if plan.HasCategoryID("pbs_jobs") {
-		if err := applyPBSJobConfigsFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: job configs: %v", err)
-		}
-	}
-	if plan.HasCategoryID("pbs_remotes") {
-		if err := applyPBSRemoteCfgFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: remote.cfg: %v", err)
+	mode := normalizePBSApplyMode(cfg)
+	strict := pbsStrictRestore(cfg)
+
+	needsAPI := mode != pbsApplyModeFile && (plan.HasCategoryID("pbs_host") || plan.HasCategoryID("datastore_pbs") || plan.HasCategoryID("pbs_remotes") || plan.HasCategoryID("pbs_jobs"))
+	if needsAPI {
+		if err := ensurePBSServicesForAPI(ctx, logger); err != nil {
+			if mode == pbsApplyModeAuto {
+				logger.Warning("PBS API apply unavailable; falling back to file-based staged apply: %v", err)
+				mode = pbsApplyModeFile
+			} else {
+				return err
+			}
 		}
 	}
+
 	if plan.HasCategoryID("pbs_host") {
-		if err := applyPBSHostConfigsFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: host configs: %v", err)
+		// Always restore file-only configs (no stable API coverage yet).
+		// ACME should be applied before node config (node.cfg references ACME accounts/plugins).
+		for _, rel := range []string{
+			"etc/proxmox-backup/acme/accounts.cfg",
+			"etc/proxmox-backup/acme/plugins.cfg",
+			"etc/proxmox-backup/metricserver.cfg",
+			"etc/proxmox-backup/proxy.cfg",
+		} {
+			if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
+				logger.Warning("PBS staged apply: %s: %v", rel, err)
+			}
+		}
+
+		if mode != pbsApplyModeFile {
+			if err := applyPBSTrafficControlCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				if mode == pbsApplyModeAuto {
+					logger.Warning("PBS API apply: traffic-control failed; falling back to file-based: %v", err)
+					_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/traffic-control.cfg")
+				} else {
+					return err
+				}
+			}
+			if err := applyPBSNodeCfgViaAPI(ctx, logger, stageRoot); err != nil {
+				if mode == pbsApplyModeAuto {
+					logger.Warning("PBS API apply: node config failed; falling back to file-based: %v", err)
+					_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/node.cfg")
+				} else {
+					return err
+				}
+			}
+		} else {
+			for _, rel := range []string{
+				"etc/proxmox-backup/traffic-control.cfg",
+				"etc/proxmox-backup/node.cfg",
+			} {
+				if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
+					logger.Warning("PBS staged apply: %s: %v", rel, err)
+				}
+			}
 		}
 	}
+
+	if plan.HasCategoryID("datastore_pbs") {
+		if mode != pbsApplyModeFile {
+			if err := applyPBSS3CfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				if mode == pbsApplyModeAuto {
+					logger.Warning("PBS API apply: s3.cfg failed; falling back to file-based: %v", err)
+					_ = applyPBSS3CfgFromStage(ctx, logger, stageRoot)
+				} else {
+					return err
+				}
+			}
+			if err := applyPBSDatastoreCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				if mode == pbsApplyModeAuto {
+					logger.Warning("PBS API apply: datastore.cfg failed; falling back to file-based: %v", err)
+					_ = applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot)
+				} else {
+					return err
+				}
+			}
+		} else {
+			if err := applyPBSS3CfgFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: s3.cfg: %v", err)
+			}
+			if err := applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: datastore.cfg: %v", err)
+			}
+		}
+	}
+
+	if plan.HasCategoryID("pbs_remotes") {
+		if mode != pbsApplyModeFile {
+			if err := applyPBSRemoteCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				if mode == pbsApplyModeAuto {
+					logger.Warning("PBS API apply: remote.cfg failed; falling back to file-based: %v", err)
+					_ = applyPBSRemoteCfgFromStage(ctx, logger, stageRoot)
+				} else {
+					return err
+				}
+			}
+		} else {
+			if err := applyPBSRemoteCfgFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: remote.cfg: %v", err)
+			}
+		}
+	}
+
+	if plan.HasCategoryID("pbs_jobs") {
+		if mode != pbsApplyModeFile {
+			if err := applyPBSSyncCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				if mode == pbsApplyModeAuto {
+					logger.Warning("PBS API apply: sync jobs failed; falling back to file-based: %v", err)
+					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
+				} else {
+					return err
+				}
+			}
+			if err := applyPBSVerificationCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				if mode == pbsApplyModeAuto {
+					logger.Warning("PBS API apply: verification jobs failed; falling back to file-based: %v", err)
+					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
+				} else {
+					return err
+				}
+			}
+			if err := applyPBSPruneCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				if mode == pbsApplyModeAuto {
+					logger.Warning("PBS API apply: prune jobs failed; falling back to file-based: %v", err)
+					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
+				} else {
+					return err
+				}
+			}
+		} else {
+			if err := applyPBSJobConfigsFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: job configs: %v", err)
+			}
+		}
+	}
+
 	if plan.HasCategoryID("pbs_tape") {
 		if err := applyPBSTapeConfigsFromStage(ctx, logger, stageRoot); err != nil {
 			logger.Warning("PBS staged apply: tape configs: %v", err)
 		}
 	}
+
 	return nil
 }
 

@@ -88,12 +88,16 @@ WEBHOOK_TIMEOUT           = SAME
 ## Go-only variables (new)
 
 SYSTEM_ROOT_PREFIX = NEW (Go-only) → Override system root for collection (testing/chroot). Empty or "/" uses the real root.
+RESTORE_PBS_APPLY_MODE = NEW (Go-only) → Restore: apply staged PBS configuration using `file`, `api`, or `auto` (default: `auto`).
+RESTORE_PBS_STRICT = NEW (Go-only) → Restore: when API apply is used, remove PBS objects not present in the backup (1:1 reconciliation; destructive).
 BACKUP_PBS_S3_ENDPOINTS = NEW (Go-only) → Collect `s3.cfg` and S3 endpoint snapshots (PBS).
 BACKUP_PBS_NODE_CONFIG = NEW (Go-only) → Collect `node.cfg` and node snapshots (PBS).
 BACKUP_PBS_ACME_ACCOUNTS = NEW (Go-only) → Collect `acme/accounts.cfg` and ACME account snapshots (PBS).
 BACKUP_PBS_ACME_PLUGINS = NEW (Go-only) → Collect `acme/plugins.cfg` and ACME plugin snapshots (PBS).
 BACKUP_PBS_METRIC_SERVERS = NEW (Go-only) → Collect `metricserver.cfg` (PBS).
 BACKUP_PBS_TRAFFIC_CONTROL = NEW (Go-only) → Collect `traffic-control.cfg` and traffic-control snapshots (PBS).
+BACKUP_PBS_NOTIFICATIONS = NEW (Go-only) → Collect `notifications.cfg` and notification snapshots (PBS).
+BACKUP_PBS_NOTIFICATIONS_PRIV = NEW (Go-only) → Collect `notifications-priv.cfg` (PBS notification secrets/credentials).
 BACKUP_PBS_NETWORK_CONFIG = NEW (Go-only) → Collect `network.cfg` and network snapshots (PBS), independent from BACKUP_NETWORK_CONFIGS (system).
 
 ## Renamed variables / Supported aliases in Go

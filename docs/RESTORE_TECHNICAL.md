@@ -869,6 +869,30 @@ func extractSelectiveArchive(
 
 ---
 
+#### Phase 10: Staged Apply (PVE/PBS)
+
+After extraction, **staged categories** are applied from the staging directory under `/tmp/proxsave/restore-stage-*`.
+
+**PBS staged apply**:
+- Controlled by `RESTORE_PBS_APPLY_MODE` (`file` | `api` | `auto`) and `RESTORE_PBS_STRICT`.
+- `file`: applies the staged `*.cfg` files back to `/etc/proxmox-backup` (legacy behavior).
+- `api`: applies supported PBS categories via `proxmox-backup-manager` (create/update/remove, with optional strict 1:1 reconciliation).
+- `auto` (default): prefers `api`, falls back to `file` on failures (e.g. services cannot be started, missing CLI binary, command errors).
+
+**Current PBS API coverage** (when `api`/`auto`):
+- `pbs_host`: node + traffic control
+- `datastore_pbs`: datastores + S3 endpoints
+- `pbs_remotes`: remotes
+- `pbs_jobs`: sync/verify/prune jobs
+- `pbs_notifications`: notification endpoints/matchers
+
+Other PBS categories remain file-based (e.g. access control, tape, proxy/ACME/metricserver).
+
+**Key code paths**:
+- `internal/orchestrator/pbs_staged_apply.go` (`maybeApplyPBSConfigsFromStage`)
+- `internal/orchestrator/restore_notifications.go` (`maybeApplyNotificationsFromStage`, `pbs_notifications`)
+- `internal/orchestrator/pbs_api_apply.go` / `internal/orchestrator/pbs_notifications_api_apply.go` (API apply engines)
+
 ## Category System
 
 ### Category Definition Structure
@@ -1071,6 +1095,8 @@ func shouldStopPBSServices(categories []Category) bool {
     return false
 }
 ```
+
+**API apply note**: When `RESTORE_PBS_APPLY_MODE` is `api`/`auto`, ProxSave may start PBS services again during the **staged apply** phase to run `proxmox-backup-manager` commands (even if services were stopped earlier for safe file extraction).
 
 ### Error Handling Philosophy
 

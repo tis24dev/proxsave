@@ -789,6 +789,13 @@ CONFIG_FILE=/etc/pbs/prod.env ./build/proxsave
 # Force dry-run mode
 DRY_RUN=true ./build/proxsave
 
+# PBS restore behavior (optional)
+# Prefer API-based apply for PBS staged categories (falls back when RESTORE_PBS_APPLY_MODE=auto)
+RESTORE_PBS_APPLY_MODE=api ./build/proxsave --restore
+
+# Strict 1:1 reconciliation for PBS (WARNING: destructive)
+RESTORE_PBS_STRICT=true RESTORE_PBS_APPLY_MODE=api ./build/proxsave --restore
+
 # Set debug level
 DEBUG_LEVEL=extreme ./build/proxsave --log-level debug
 

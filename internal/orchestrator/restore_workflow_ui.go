@@ -508,12 +508,12 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 
 		logger.Info("")
-		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
-			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-				return err
-			}
-			restoreHadWarnings = true
-			logger.Warning("PBS staged config apply: %v", err)
+			if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, cfg, stageRoot, cfg.DryRun); err != nil {
+				if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+					return err
+				}
+				restoreHadWarnings = true
+				logger.Warning("PBS staged config apply: %v", err)
 		}
 		if err := maybeApplyPVEConfigsFromStage(ctx, logger, plan, stageRoot, destRoot, cfg.DryRun); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
@@ -559,12 +559,12 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 				logger.Warning("Access control staged apply: %v", err)
 			}
 		}
-		if err := maybeApplyNotificationsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
-			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-				return err
-			}
-			restoreHadWarnings = true
-			logger.Warning("Notifications staged apply: %v", err)
+			if err := maybeApplyNotificationsFromStage(ctx, logger, plan, cfg, stageRoot, cfg.DryRun); err != nil {
+				if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+					return err
+				}
+				restoreHadWarnings = true
+				logger.Warning("Notifications staged apply: %v", err)
 		}
 	}
 
