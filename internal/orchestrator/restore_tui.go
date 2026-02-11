@@ -143,6 +143,90 @@ func selectRestoreModeTUI(systemType SystemType, configPath, buildSig, backupSum
 	return selected, nil
 }
 
+func selectPBSRestoreBehaviorTUI(configPath, buildSig, backupSummary string) (PBSRestoreBehavior, error) {
+	app := newTUIApp()
+	var selected PBSRestoreBehavior
+	var aborted bool
+
+	list := tview.NewList().ShowSecondaryText(true)
+	list.SetMainTextColor(tcell.ColorWhite).
+		SetSelectedTextColor(tcell.ColorWhite).
+		SetSelectedBackgroundColor(tui.ProxmoxOrange)
+
+	list.AddItem(
+		"1) Merge (existing PBS)",
+		"Restore onto an already operational PBS. Avoids API-side deletions of existing PBS objects that are not in the backup.",
+		0,
+		nil,
+	)
+	list.AddItem(
+		"2) Clean 1:1 (fresh PBS install)",
+		"Restore onto a new, clean PBS installation. Tries to make PBS configuration match the backup (may remove objects not in the backup).",
+		0,
+		nil,
+	)
+
+	list.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+		switch index {
+		case 0:
+			selected = PBSRestoreBehaviorMerge
+		case 1:
+			selected = PBSRestoreBehaviorClean
+		default:
+			selected = PBSRestoreBehaviorUnspecified
+		}
+		if selected != PBSRestoreBehaviorUnspecified {
+			app.Stop()
+		}
+	})
+	list.SetDoneFunc(func() {
+		aborted = true
+		app.Stop()
+	})
+
+	form := components.NewForm(app)
+	listItem := components.NewListFormItem(list).
+		SetLabel("Select PBS restore behavior").
+		SetFieldHeight(6)
+	form.Form.AddFormItem(listItem)
+	form.Form.SetFocus(0)
+
+	form.SetOnCancel(func() {
+		aborted = true
+	})
+	form.AddCancelButton("Cancel")
+	enableFormNavigation(form, nil)
+
+	// Selected backup summary
+	summaryText := strings.TrimSpace(backupSummary)
+	var summaryView tview.Primitive
+	if summaryText != "" {
+		summary := tview.NewTextView().
+			SetText(fmt.Sprintf("Selected backup: %s", summaryText)).
+			SetWrap(true).
+			SetTextColor(tcell.ColorWhite)
+		summary.SetBorder(false)
+		summaryView = summary
+	} else {
+		summaryView = tview.NewBox()
+	}
+
+	content := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(summaryView, 2, 0, false).
+		AddItem(form.Form, 0, 1, true)
+
+	page := buildRestoreWizardPage("PBS restore behavior", configPath, buildSig, content)
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.Run(); err != nil {
+		return PBSRestoreBehaviorUnspecified, err
+	}
+	if aborted || selected == PBSRestoreBehaviorUnspecified {
+		return PBSRestoreBehaviorUnspecified, ErrRestoreAborted
+	}
+	return selected, nil
+}
+
 func filterAndSortCategoriesForSystem(available []Category, systemType SystemType) []Category {
 	relevant := make([]Category, 0, len(available))
 	for _, cat := range available {

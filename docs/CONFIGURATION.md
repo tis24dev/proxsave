@@ -77,43 +77,20 @@ PROFILING_ENABLED=true             # true | false (profiles written under LOG_PA
 
 ## Restore (PBS)
 
-These options affect **restore behavior on PBS hosts only**.
+PBS restore behavior is chosen **interactively at restore time** on PBS hosts (not via `backup.env`).
 
-```bash
-# How to apply PBS configuration during restore:
-# - file: restore staged *.cfg files to /etc/proxmox-backup (legacy behavior)
-# - api:  apply via proxmox-backup-manager where possible
-# - auto: prefer API; fall back to file-based apply on failures
-RESTORE_PBS_APPLY_MODE=auto   # file | api | auto
+You will be asked to choose a behavior:
+- **Merge (existing PBS)**: intended for restoring onto an already operational PBS; ProxSave applies supported PBS categories via `proxmox-backup-manager` without deleting existing objects that are not in the backup.
+- **Clean 1:1 (fresh PBS install)**: intended for restoring onto a new, clean PBS; ProxSave attempts to make supported PBS objects match the backup (may remove objects that exist on the system but are not in the backup).
 
-# When true, remove PBS objects not present in the backup (1:1 reconciliation).
-# WARNING: Destructive when used with api/auto (it may delete existing objects).
-RESTORE_PBS_STRICT=false      # true | false
-```
+ProxSave applies supported PBS staged categories via API automatically (and may fall back to file-based staged apply only in **Clean 1:1** mode).
 
-### RESTORE_PBS_APPLY_MODE
-
-- `file`: Always restores by applying staged files under `/tmp/proxsave/restore-stage-*` back to `/etc/proxmox-backup`.
-- `api`: Prefers **API-based apply** via `proxmox-backup-manager` (fails if the API apply is unavailable or errors).
-- `auto` (default): Tries `api` first and falls back to `file` on failures (service start failures, missing `proxmox-backup-manager`, command errors).
-
-**Current API coverage** (when `api`/`auto`):
+**Current API coverage**:
 - Node + traffic control (`pbs_host`)
 - Datastores + S3 endpoints (`datastore_pbs`)
 - Remotes (`pbs_remotes`)
 - Jobs (sync/verify/prune) (`pbs_jobs`)
 - Notifications endpoints/matchers (`pbs_notifications`)
-
-Configs with file-only apply remain file-based (e.g. access control, tape, proxy/ACME/metricserver).
-
-### RESTORE_PBS_STRICT (1:1)
-
-When `true` and **API apply** is used, ProxSave attempts a 1:1 reconciliation by removing objects that exist on the restore host but are **not present in the backup** (for the supported PBS categories above).
-
-Use cases:
-- Disaster recovery or rebuild where the goal is **restore 1:1** on a clean PBS install.
-
-Avoid enabling `RESTORE_PBS_STRICT=true` for migrations or partial restores unless you explicitly want ProxSave to delete existing PBS objects.
 
 ---
 

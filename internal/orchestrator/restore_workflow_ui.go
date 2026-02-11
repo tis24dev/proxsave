@@ -129,6 +129,22 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	plan := PlanRestore(candidate.Manifest, selectedCategories, systemType, mode)
 
+	if plan.SystemType == SystemTypePBS &&
+		(plan.HasCategoryID("pbs_host") ||
+			plan.HasCategoryID("datastore_pbs") ||
+			plan.HasCategoryID("pbs_remotes") ||
+			plan.HasCategoryID("pbs_jobs") ||
+			plan.HasCategoryID("pbs_notifications") ||
+			plan.HasCategoryID("pbs_access_control") ||
+			plan.HasCategoryID("pbs_tape")) {
+		behavior, err := ui.SelectPBSRestoreBehavior(ctx)
+		if err != nil {
+			return err
+		}
+		plan.PBSRestoreBehavior = behavior
+		logger.Info("PBS restore behavior: %s", behavior.DisplayName())
+	}
+
 	clusterBackup := strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster")
 	if plan.NeedsClusterRestore && clusterBackup {
 		logger.Info("Backup marked as cluster node; enabling guarded restore options for pve_cluster")
@@ -508,12 +524,12 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 
 		logger.Info("")
-			if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, cfg, stageRoot, cfg.DryRun); err != nil {
-				if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-					return err
-				}
-				restoreHadWarnings = true
-				logger.Warning("PBS staged config apply: %v", err)
+		if err := maybeApplyPBSConfigsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
+			restoreHadWarnings = true
+			logger.Warning("PBS staged config apply: %v", err)
 		}
 		if err := maybeApplyPVEConfigsFromStage(ctx, logger, plan, stageRoot, destRoot, cfg.DryRun); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
@@ -559,12 +575,12 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 				logger.Warning("Access control staged apply: %v", err)
 			}
 		}
-			if err := maybeApplyNotificationsFromStage(ctx, logger, plan, cfg, stageRoot, cfg.DryRun); err != nil {
-				if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-					return err
-				}
-				restoreHadWarnings = true
-				logger.Warning("Notifications staged apply: %v", err)
+		if err := maybeApplyNotificationsFromStage(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
+			restoreHadWarnings = true
+			logger.Warning("Notifications staged apply: %v", err)
 		}
 	}
 

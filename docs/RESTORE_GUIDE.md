@@ -107,7 +107,11 @@ Each category is handled in one of three ways:
 
 ### PBS-Specific Categories (9 categories)
 
-**PBS staged apply mode**: For staged PBS categories, the apply method is controlled by `RESTORE_PBS_APPLY_MODE` (`auto` by default). When using `api`/`auto`, ProxSave applies supported PBS categories via `proxmox-backup-manager` and can optionally do strict 1:1 reconciliation with `RESTORE_PBS_STRICT=true`.
+**PBS staged apply behavior**: During restore on PBS, ProxSave prompts you to choose how to reconcile PBS objects:
+- **Merge (existing PBS)**: intended for restoring onto an already operational PBS; applies supported PBS categories via `proxmox-backup-manager` without deleting existing objects that are not in the backup.
+- **Clean 1:1 (fresh PBS install)**: intended for restoring onto a new, clean PBS; attempts to make supported PBS objects match the backup (may remove objects not in the backup).
+
+API apply is automatic for supported PBS staged categories; ProxSave may fall back to file-based staged apply only in **Clean 1:1** mode.
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
@@ -227,10 +231,10 @@ Select restore mode:
 - `zfs` - ZFS configuration
 
 **PBS Categories**:
-- `datastore_pbs` - Datastore definitions (staged apply; API/file controlled by `RESTORE_PBS_APPLY_MODE`)
+- `datastore_pbs` - Datastore definitions (staged apply; API preferred, file fallback in Clean 1:1)
 - `maintenance_pbs` - Maintenance settings
-- `pbs_jobs` - Sync/verify/prune jobs (staged apply; API/file controlled by `RESTORE_PBS_APPLY_MODE`)
-- `pbs_remotes` - Remotes for sync jobs (staged apply; API/file controlled by `RESTORE_PBS_APPLY_MODE`)
+- `pbs_jobs` - Sync/verify/prune jobs (staged apply; API preferred, file fallback in Clean 1:1)
+- `pbs_remotes` - Remotes for sync jobs (staged apply; API preferred, file fallback in Clean 1:1)
 - `filesystem` - /etc/fstab
 - `storage_stack` - Storage stack config (mount prerequisites)
 - `zfs` - ZFS configuration

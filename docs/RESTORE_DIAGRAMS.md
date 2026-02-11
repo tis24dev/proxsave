@@ -138,7 +138,7 @@ flowchart TD
     style CheckboxMenu fill:#87CEEB
 ```
 
-**Note (PBS)**: Staged PBS categories can be applied either by writing staged `*.cfg` files back to `/etc/proxmox-backup` or via `proxmox-backup-manager`, depending on `RESTORE_PBS_APPLY_MODE`.
+**Note (PBS)**: ProxSave applies supported PBS staged categories via `proxmox-backup-manager` by default. In **Clean 1:1** mode it may fall back to writing staged `*.cfg` files back to `/etc/proxmox-backup` when API apply is unavailable or fails.
 
 ---
 

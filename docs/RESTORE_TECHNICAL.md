@@ -874,12 +874,13 @@ func extractSelectiveArchive(
 After extraction, **staged categories** are applied from the staging directory under `/tmp/proxsave/restore-stage-*`.
 
 **PBS staged apply**:
-- Controlled by `RESTORE_PBS_APPLY_MODE` (`file` | `api` | `auto`) and `RESTORE_PBS_STRICT`.
-- `file`: applies the staged `*.cfg` files back to `/etc/proxmox-backup` (legacy behavior).
-- `api`: applies supported PBS categories via `proxmox-backup-manager` (create/update/remove, with optional strict 1:1 reconciliation).
-- `auto` (default): prefers `api`, falls back to `file` on failures (e.g. services cannot be started, missing CLI binary, command errors).
+- Selected interactively during restore on PBS hosts: **Merge (existing PBS)** vs **Clean 1:1 (fresh PBS install)**.
+- ProxSave applies supported PBS categories via `proxmox-backup-manager`.
+  - **Merge**: create/update only (no deletions of existing objects not in the backup).
+  - **Clean 1:1**: attempts 1:1 reconciliation (may remove objects not present in the backup).
+- If API apply is unavailable or fails, ProxSave may fall back to applying staged `*.cfg` files back to `/etc/proxmox-backup` (**Clean 1:1 only**).
 
-**Current PBS API coverage** (when `api`/`auto`):
+**Current PBS API coverage**:
 - `pbs_host`: node + traffic control
 - `datastore_pbs`: datastores + S3 endpoints
 - `pbs_remotes`: remotes
@@ -1096,7 +1097,7 @@ func shouldStopPBSServices(categories []Category) bool {
 }
 ```
 
-**API apply note**: When `RESTORE_PBS_APPLY_MODE` is `api`/`auto`, ProxSave may start PBS services again during the **staged apply** phase to run `proxmox-backup-manager` commands (even if services were stopped earlier for safe file extraction).
+**API apply note**: When ProxSave applies PBS staged categories via API (`proxmox-backup-manager`), it may start PBS services again during the **staged apply** phase (even if services were stopped earlier for safe file extraction).
 
 ### Error Handling Philosophy
 

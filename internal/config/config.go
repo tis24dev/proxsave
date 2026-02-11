@@ -199,32 +199,32 @@ type Config struct {
 	CephConfigPath          string
 
 	// PBS-specific collection options
-	BackupDatastoreConfigs   bool
-	BackupPBSS3Endpoints     bool
-	BackupPBSNodeConfig      bool
-	BackupPBSAcmeAccounts    bool
-	BackupPBSAcmePlugins     bool
-	BackupPBSMetricServers   bool
-	BackupPBSTrafficControl  bool
-	BackupPBSNotifications   bool
+	BackupDatastoreConfigs     bool
+	BackupPBSS3Endpoints       bool
+	BackupPBSNodeConfig        bool
+	BackupPBSAcmeAccounts      bool
+	BackupPBSAcmePlugins       bool
+	BackupPBSMetricServers     bool
+	BackupPBSTrafficControl    bool
+	BackupPBSNotifications     bool
 	BackupPBSNotificationsPriv bool
-	BackupUserConfigs        bool
-	BackupRemoteConfigs      bool
-	BackupSyncJobs           bool
-	BackupVerificationJobs   bool
-	BackupTapeConfigs        bool
-	BackupPBSNetworkConfig   bool
-	BackupPruneSchedules     bool
-	BackupPxarFiles          bool
-	PxarDatastoreConcurrency int
-	PxarIntraConcurrency     int
-	PxarScanFanoutLevel      int
-	PxarScanMaxRoots         int
-	PxarStopOnCap            bool
-	PxarEnumWorkers          int
-	PxarEnumBudgetMs         int
-	PxarFileIncludePatterns  []string
-	PxarFileExcludePatterns  []string
+	BackupUserConfigs          bool
+	BackupRemoteConfigs        bool
+	BackupSyncJobs             bool
+	BackupVerificationJobs     bool
+	BackupTapeConfigs          bool
+	BackupPBSNetworkConfig     bool
+	BackupPruneSchedules       bool
+	BackupPxarFiles            bool
+	PxarDatastoreConcurrency   int
+	PxarIntraConcurrency       int
+	PxarScanFanoutLevel        int
+	PxarScanMaxRoots           int
+	PxarStopOnCap              bool
+	PxarEnumWorkers            int
+	PxarEnumBudgetMs           int
+	PxarFileIncludePatterns    []string
+	PxarFileExcludePatterns    []string
 
 	// System collection options
 	BackupNetworkConfigs    bool
@@ -258,15 +258,6 @@ type Config struct {
 	PBSRepository  string // Auto-detected from environment or generated
 	PBSPassword    string // Auto-detected API token secret
 	PBSFingerprint string // Auto-detected from PBS certificate
-
-	// Restore settings
-	// RestorePBSApplyMode controls how PBS config is applied during restore:
-	// - "file": write staged *.cfg files to /etc/proxmox-backup (legacy behavior)
-	// - "api":  apply via proxmox-backup-manager / proxmox-tape where possible
-	// - "auto": prefer API; fall back to file-based apply on failures
-	RestorePBSApplyMode string
-	// RestorePBSStrict enables 1:1 reconciliation for PBS categories (remove items not present in backup).
-	RestorePBSStrict bool
 
 	// raw configuration map
 	raw map[string]string
@@ -303,15 +294,14 @@ func LoadConfig(configPath string) (*Config, error) {
 // This allows environment variables to take precedence over file configuration
 func (c *Config) loadEnvOverrides() {
 	// List of all configuration keys that can be overridden by environment variables
-		envKeys := []string{
-			"BACKUP_ENABLED", "DRY_RUN", "DEBUG_LEVEL", "USE_COLOR", "COLORIZE_STEP_LOGS",
-			"PROFILING_ENABLED",
-			"RESTORE_PBS_APPLY_MODE", "RESTORE_PBS_STRICT",
-			"COMPRESSION_TYPE", "COMPRESSION_LEVEL", "COMPRESSION_THREADS", "COMPRESSION_MODE",
-			"ENABLE_SMART_CHUNKING", "ENABLE_DEDUPLICATION", "ENABLE_PREFILTER",
-			"CHUNK_SIZE_MB", "CHUNK_THRESHOLD_MB", "PREFILTER_MAX_FILE_SIZE_MB",
-			"BACKUP_PATH", "LOG_PATH", "LOCK_PATH", "SECURE_ACCOUNT",
-			"SECONDARY_ENABLED", "SECONDARY_PATH", "SECONDARY_LOG_PATH",
+	envKeys := []string{
+		"BACKUP_ENABLED", "DRY_RUN", "DEBUG_LEVEL", "USE_COLOR", "COLORIZE_STEP_LOGS",
+		"PROFILING_ENABLED",
+		"COMPRESSION_TYPE", "COMPRESSION_LEVEL", "COMPRESSION_THREADS", "COMPRESSION_MODE",
+		"ENABLE_SMART_CHUNKING", "ENABLE_DEDUPLICATION", "ENABLE_PREFILTER",
+		"CHUNK_SIZE_MB", "CHUNK_THRESHOLD_MB", "PREFILTER_MAX_FILE_SIZE_MB",
+		"BACKUP_PATH", "LOG_PATH", "LOCK_PATH", "SECURE_ACCOUNT",
+		"SECONDARY_ENABLED", "SECONDARY_PATH", "SECONDARY_LOG_PATH",
 		"CLOUD_ENABLED", "CLOUD_REMOTE", "CLOUD_REMOTE_PATH", "CLOUD_LOG_PATH",
 		"CLOUD_UPLOAD_MODE", "CLOUD_PARALLEL_MAX_JOBS", "CLOUD_PARALLEL_VERIFICATION",
 		"CLOUD_WRITE_HEALTHCHECK",
@@ -359,7 +349,6 @@ func (c *Config) parse() error {
 	if err := c.parseCollectionSettings(); err != nil {
 		return err
 	}
-	c.parseRestoreSettings()
 	c.autoDetectPBSAuth()
 	return nil
 }
@@ -376,17 +365,6 @@ func (c *Config) parseGeneralSettings() {
 		c.UseColor = c.getBool("USE_COLOR", true)
 	}
 	c.ColorizeStepLogs = c.getBool("COLORIZE_STEP_LOGS", true) && c.UseColor
-}
-
-func (c *Config) parseRestoreSettings() {
-	mode := strings.ToLower(strings.TrimSpace(c.getString("RESTORE_PBS_APPLY_MODE", "auto")))
-	switch mode {
-	case "file", "api", "auto":
-	default:
-		mode = "auto"
-	}
-	c.RestorePBSApplyMode = mode
-	c.RestorePBSStrict = c.getBool("RESTORE_PBS_STRICT", false)
 }
 
 func (c *Config) parseCompressionSettings() {

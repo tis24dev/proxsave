@@ -88,8 +88,7 @@ WEBHOOK_TIMEOUT           = SAME
 ## Go-only variables (new)
 
 SYSTEM_ROOT_PREFIX = NEW (Go-only) → Override system root for collection (testing/chroot). Empty or "/" uses the real root.
-RESTORE_PBS_APPLY_MODE = NEW (Go-only) → Restore: apply staged PBS configuration using `file`, `api`, or `auto` (default: `auto`).
-RESTORE_PBS_STRICT = NEW (Go-only) → Restore: when API apply is used, remove PBS objects not present in the backup (1:1 reconciliation; destructive).
+NOTE: PBS restore behavior is selected interactively during `--restore` and is intentionally not configured via `backup.env`.
 BACKUP_PBS_S3_ENDPOINTS = NEW (Go-only) → Collect `s3.cfg` and S3 endpoint snapshots (PBS).
 BACKUP_PBS_NODE_CONFIG = NEW (Go-only) → Collect `node.cfg` and node snapshots (PBS).
 BACKUP_PBS_ACME_ACCOUNTS = NEW (Go-only) → Collect `acme/accounts.cfg` and ACME account snapshots (PBS).

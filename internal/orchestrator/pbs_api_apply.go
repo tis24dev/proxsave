@@ -9,32 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
-
-const (
-	pbsApplyModeFile = "file"
-	pbsApplyModeAPI  = "api"
-	pbsApplyModeAuto = "auto"
-)
-
-func normalizePBSApplyMode(cfg *config.Config) string {
-	if cfg == nil {
-		return pbsApplyModeAuto
-	}
-	mode := strings.ToLower(strings.TrimSpace(cfg.RestorePBSApplyMode))
-	switch mode {
-	case pbsApplyModeFile, pbsApplyModeAPI, pbsApplyModeAuto:
-		return mode
-	default:
-		return pbsApplyModeAuto
-	}
-}
-
-func pbsStrictRestore(cfg *config.Config) bool {
-	return cfg != nil && cfg.RestorePBSStrict
-}
 
 func normalizeProxmoxCfgKey(key string) string {
 	key = strings.ToLower(strings.TrimSpace(key))
@@ -417,7 +393,7 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 					}
 					continue
 				}
-				logger.Warning("PBS API apply: datastore %s path mismatch (%s != %s); leaving path unchanged (enable RESTORE_PBS_STRICT=true for 1:1)", name, currentPath, path)
+				logger.Warning("PBS API apply: datastore %s path mismatch (%s != %s); leaving path unchanged (use Clean 1:1 restore to enforce 1:1)", name, currentPath, path)
 			}
 
 			updateArgs := append([]string{"datastore", "update", name}, flags...)
@@ -704,96 +680,5 @@ func applyPBSNodeCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoo
 	if _, err := runPBSManager(ctx, args...); err != nil {
 		return err
 	}
-	return nil
-}
-
-func applyPBSCategoriesViaAPI(ctx context.Context, logger *logging.Logger, plan *RestorePlan, cfg *config.Config, stageRoot string) error {
-	if plan == nil || plan.SystemType != SystemTypePBS {
-		return nil
-	}
-	mode := normalizePBSApplyMode(cfg)
-	if mode == pbsApplyModeFile {
-		return nil
-	}
-
-	strict := pbsStrictRestore(cfg)
-
-	if err := ensurePBSServicesForAPI(ctx, logger); err != nil {
-		if mode == pbsApplyModeAuto {
-			logger.Warning("PBS API apply unavailable; falling back to file-based apply: %v", err)
-			return nil
-		}
-		return err
-	}
-
-	// Apply in dependency-safe order.
-	if plan.HasCategoryID("pbs_host") {
-		if err := applyPBSNodeCfgViaAPI(ctx, logger, stageRoot); err != nil {
-			if mode == pbsApplyModeAuto {
-				logger.Warning("PBS API apply: node.cfg failed (continuing with file-based apply): %v", err)
-			} else {
-				return err
-			}
-		}
-		if err := applyPBSTrafficControlCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			if mode == pbsApplyModeAuto {
-				logger.Warning("PBS API apply: traffic-control.cfg failed (continuing with file-based apply): %v", err)
-			} else {
-				return err
-			}
-		}
-	}
-
-	if plan.HasCategoryID("datastore_pbs") {
-		if err := applyPBSS3CfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			if mode == pbsApplyModeAuto {
-				logger.Warning("PBS API apply: s3.cfg failed (continuing with file-based apply): %v", err)
-			} else {
-				return err
-			}
-		}
-		if err := applyPBSDatastoreCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			if mode == pbsApplyModeAuto {
-				logger.Warning("PBS API apply: datastore.cfg failed (continuing with file-based apply): %v", err)
-			} else {
-				return err
-			}
-		}
-	}
-
-	if plan.HasCategoryID("pbs_remotes") {
-		if err := applyPBSRemoteCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			if mode == pbsApplyModeAuto {
-				logger.Warning("PBS API apply: remote.cfg failed (continuing with file-based apply): %v", err)
-			} else {
-				return err
-			}
-		}
-	}
-
-	if plan.HasCategoryID("pbs_jobs") {
-		if err := applyPBSSyncCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			if mode == pbsApplyModeAuto {
-				logger.Warning("PBS API apply: sync.cfg failed (continuing with file-based apply): %v", err)
-			} else {
-				return err
-			}
-		}
-		if err := applyPBSVerificationCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			if mode == pbsApplyModeAuto {
-				logger.Warning("PBS API apply: verification.cfg failed (continuing with file-based apply): %v", err)
-			} else {
-				return err
-			}
-		}
-		if err := applyPBSPruneCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			if mode == pbsApplyModeAuto {
-				logger.Warning("PBS API apply: prune.cfg failed (continuing with file-based apply): %v", err)
-			} else {
-				return err
-			}
-		}
-	}
-
 	return nil
 }
