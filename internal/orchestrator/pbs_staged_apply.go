@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -170,6 +171,32 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 		return nil
 	}
 
+	if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
+		logger.Warning("PBS staged apply: staged datastore.cfg looks invalid (%s); attempting recovery from pbs_datastore_inventory.json", reason)
+		if recovered, src, recErr := loadPBSDatastoreCfgFromInventory(stageRoot); recErr != nil {
+			logger.Warning("PBS staged apply: unable to recover datastore.cfg from inventory (%v); leaving current configuration unchanged", recErr)
+			return nil
+		} else if strings.TrimSpace(recovered) == "" {
+			logger.Warning("PBS staged apply: recovered datastore.cfg from %s is empty; leaving current configuration unchanged", src)
+			return nil
+		} else {
+			normalized, fixed = normalizePBSDatastoreCfgContent(recovered)
+			if fixed > 0 {
+				logger.Warning("PBS staged apply: recovered datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", fixed)
+			}
+			blocks, err = parsePBSDatastoreCfgBlocks(normalized)
+			if err != nil {
+				logger.Warning("PBS staged apply: recovered datastore.cfg from %s is still invalid (%v); leaving current configuration unchanged", src, err)
+				return nil
+			}
+			if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
+				logger.Warning("PBS staged apply: recovered datastore.cfg from %s still looks invalid (%s); leaving current configuration unchanged", src, reason)
+				return nil
+			}
+			logger.Info("PBS staged apply: datastore.cfg recovered from %s", src)
+		}
+	}
+
 	var applyBlocks []pbsDatastoreBlock
 	var deferred []pbsDatastoreBlock
 	for _, b := range blocks {
@@ -211,6 +238,90 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 
 	logger.Info("PBS staged apply: datastore.cfg applied (%d datastore(s)); deferred=%d", len(applyBlocks), len(deferred))
 	return nil
+}
+
+type pbsDatastoreInventoryRestoreLite struct {
+	Files map[string]struct {
+		Content string `json:"content"`
+	} `json:"files"`
+	Datastores []struct {
+		Name    string `json:"name"`
+		Path    string `json:"path"`
+		Comment string `json:"comment"`
+	} `json:"datastores"`
+}
+
+func loadPBSDatastoreCfgFromInventory(stageRoot string) (string, string, error) {
+	inventoryPath := filepath.Join(stageRoot, "var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json")
+	raw, err := restoreFS.ReadFile(inventoryPath)
+	if err != nil {
+		return "", "", fmt.Errorf("read inventory %s: %w", inventoryPath, err)
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "", "", fmt.Errorf("inventory %s is empty", inventoryPath)
+	}
+
+	var report pbsDatastoreInventoryRestoreLite
+	if err := json.Unmarshal([]byte(trimmed), &report); err != nil {
+		return "", "", fmt.Errorf("parse inventory %s: %w", inventoryPath, err)
+	}
+
+	if report.Files != nil {
+		if snap := strings.TrimSpace(report.Files["pbs_datastore_cfg"].Content); snap != "" {
+			return report.Files["pbs_datastore_cfg"].Content, "pbs_datastore_inventory.json.files[pbs_datastore_cfg].content", nil
+		}
+	}
+
+	// Fallback: generate a minimal datastore.cfg from the inventory's datastore list.
+	var out strings.Builder
+	for _, ds := range report.Datastores {
+		name := strings.TrimSpace(ds.Name)
+		path := strings.TrimSpace(ds.Path)
+		if name == "" || path == "" {
+			continue
+		}
+		if out.Len() > 0 {
+			out.WriteString("\n")
+		}
+		out.WriteString(fmt.Sprintf("datastore: %s\n", name))
+		if comment := strings.TrimSpace(ds.Comment); comment != "" {
+			out.WriteString(fmt.Sprintf("    comment %s\n", comment))
+		}
+		out.WriteString(fmt.Sprintf("    path %s\n", path))
+	}
+
+	generated := strings.TrimSpace(out.String())
+	if generated == "" {
+		return "", "", fmt.Errorf("inventory %s contains no usable datastore definitions", inventoryPath)
+	}
+	return out.String(), "pbs_datastore_inventory.json.datastores", nil
+}
+
+func detectPBSDatastoreCfgDuplicateKeys(blocks []pbsDatastoreBlock) string {
+	for _, block := range blocks {
+		seen := map[string]int{}
+		for _, line := range block.Lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "datastore:") {
+				continue
+			}
+
+			fields := strings.Fields(trimmed)
+			if len(fields) == 0 {
+				continue
+			}
+			key := strings.TrimSpace(fields[0])
+			if key == "" {
+				continue
+			}
+			seen[key]++
+			if seen[key] > 1 {
+				return fmt.Sprintf("datastore %s has duplicate key %q", strings.TrimSpace(block.Name), key)
+			}
+		}
+	}
+	return ""
 }
 
 func parsePBSDatastoreCfgBlocks(content string) ([]pbsDatastoreBlock, error) {
