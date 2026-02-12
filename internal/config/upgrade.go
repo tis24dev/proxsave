@@ -558,17 +558,3 @@ func findClosingQuoteLine(lines []string, start int) (int, error) {
 	}
 	return 0, fmt.Errorf("closing quote not found")
 }
-
-func renderEnvValue(key string, value envValue) []string {
-	if value.kind == envValueKindBlock {
-		lines := []string{fmt.Sprintf("%s=\"", key)}
-		lines = append(lines, value.blockLines...)
-		lines = append(lines, "\"")
-		return lines
-	}
-	line := fmt.Sprintf("%s=%s", key, value.rawValue)
-	if value.comment != "" {
-		line += " " + value.comment
-	}
-	return []string{line}
-}

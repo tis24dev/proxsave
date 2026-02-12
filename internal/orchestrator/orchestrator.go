@@ -231,7 +231,7 @@ func (o *Orchestrator) logStep(step int, format string, args ...interface{}) {
 	if len(args) > 0 {
 		message = fmt.Sprintf(format, args...)
 	}
-	o.logger.Step("%s", message)
+	o.logger.Step("[%d] %s", step, message)
 }
 
 // SetUpdateInfo records version update information discovered by the CLI layer.
@@ -1054,6 +1054,13 @@ func (s *BackupStats) toPrometheusMetrics() *metrics.BackupMetrics {
 }
 
 func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bundlePath string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	logger := o.logger
 	fs := o.filesystem()
 	dir := filepath.Dir(archivePath)
@@ -1073,6 +1080,9 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bu
 	}
 
 	for _, file := range associated[:3] {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if _, err := fs.Stat(filepath.Join(dir, file)); err != nil {
 			return "", fmt.Errorf("associated file not found: %s: %w", file, err)
 		}
@@ -1093,6 +1103,9 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bu
 
 	// Add each associated file to the tar archive
 	for _, filename := range associated {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		filePath := filepath.Join(dir, filename)
 
 		// Get file info
@@ -1119,7 +1132,7 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bu
 			return "", fmt.Errorf("failed to open %s: %w", filename, err)
 		}
 
-		if _, err := io.Copy(tw, file); err != nil {
+		if _, err := io.Copy(tw, &contextReader{ctx: ctx, r: file}); err != nil {
 			file.Close()
 			return "", fmt.Errorf("failed to write %s to tar: %w", filename, err)
 		}
@@ -1142,6 +1155,18 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bu
 
 	logger.Debug("Bundle created successfully: %s", bundlePath)
 	return bundlePath, nil
+}
+
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (cr *contextReader) Read(p []byte) (int, error) {
+	if err := cr.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return cr.r.Read(p)
 }
 
 func (o *Orchestrator) removeAssociatedFiles(archivePath string) error {

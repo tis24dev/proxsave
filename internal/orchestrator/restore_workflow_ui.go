@@ -778,13 +778,14 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	logger.Info("")
 	logger.Info("IMPORTANT: You may need to restart services for changes to take effect.")
-	if systemType == SystemTypePVE {
+	switch systemType {
+	case SystemTypePVE:
 		if needsClusterRestore && clusterServicesStopped {
 			logger.Info("  PVE services were stopped/restarted during restore; verify status with: pvecm status")
 		} else {
 			logger.Info("  PVE services: systemctl restart pve-cluster pvedaemon pveproxy")
 		}
-	} else if systemType == SystemTypePBS {
+	case SystemTypePBS:
 		if pbsServicesStopped {
 			logger.Info("  PBS services were stopped/restarted during restore; verify status with: systemctl status proxmox-backup proxmox-backup-proxy")
 		} else {

@@ -166,41 +166,41 @@ func GetAllCategories() []Category {
 			},
 			ExportOnly: true,
 		},
-			{
-				ID:          "pbs_host",
-				Name:        "PBS Host & Integrations",
-				Description: "Node settings, ACME configuration, proxy, external metric servers and traffic control rules",
-				Type:        CategoryTypePBS,
-				Paths: []string{
-					"./etc/proxmox-backup/node.cfg",
-					"./etc/proxmox-backup/proxy.cfg",
-					"./etc/proxmox-backup/acme/accounts.cfg",
-					"./etc/proxmox-backup/acme/plugins.cfg",
-					"./etc/proxmox-backup/metricserver.cfg",
-					"./etc/proxmox-backup/traffic-control.cfg",
-					"./var/lib/proxsave-info/commands/pbs/node_config.json",
-					"./var/lib/proxsave-info/commands/pbs/acme_accounts.json",
-					"./var/lib/proxsave-info/commands/pbs/acme_plugins.json",
-					"./var/lib/proxsave-info/commands/pbs/acme_account_*_info.json",
-					"./var/lib/proxsave-info/commands/pbs/acme_plugin_*_config.json",
-					"./var/lib/proxsave-info/commands/pbs/traffic_control.json",
-				},
+		{
+			ID:          "pbs_host",
+			Name:        "PBS Host & Integrations",
+			Description: "Node settings, ACME configuration, proxy, external metric servers and traffic control rules",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/node.cfg",
+				"./etc/proxmox-backup/proxy.cfg",
+				"./etc/proxmox-backup/acme/accounts.cfg",
+				"./etc/proxmox-backup/acme/plugins.cfg",
+				"./etc/proxmox-backup/metricserver.cfg",
+				"./etc/proxmox-backup/traffic-control.cfg",
+				"./var/lib/proxsave-info/commands/pbs/node_config.json",
+				"./var/lib/proxsave-info/commands/pbs/acme_accounts.json",
+				"./var/lib/proxsave-info/commands/pbs/acme_plugins.json",
+				"./var/lib/proxsave-info/commands/pbs/acme_account_*_info.json",
+				"./var/lib/proxsave-info/commands/pbs/acme_plugin_*_config.json",
+				"./var/lib/proxsave-info/commands/pbs/traffic_control.json",
 			},
-			{
-				ID:          "datastore_pbs",
-				Name:        "PBS Datastore Configuration",
-				Description: "Datastore definitions and settings (including S3 endpoint definitions)",
-				Type:        CategoryTypePBS,
-				Paths: []string{
-					"./etc/proxmox-backup/datastore.cfg",
-					"./etc/proxmox-backup/s3.cfg",
-					"./var/lib/proxsave-info/commands/pbs/datastore_list.json",
-					"./var/lib/proxsave-info/commands/pbs/datastore_*_status.json",
-					"./var/lib/proxsave-info/commands/pbs/s3_endpoints.json",
-					"./var/lib/proxsave-info/commands/pbs/s3_endpoint_*_buckets.json",
-					"./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json",
-				},
+		},
+		{
+			ID:          "datastore_pbs",
+			Name:        "PBS Datastore Configuration",
+			Description: "Datastore definitions and settings (including S3 endpoint definitions)",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/datastore.cfg",
+				"./etc/proxmox-backup/s3.cfg",
+				"./var/lib/proxsave-info/commands/pbs/datastore_list.json",
+				"./var/lib/proxsave-info/commands/pbs/datastore_*_status.json",
+				"./var/lib/proxsave-info/commands/pbs/s3_endpoints.json",
+				"./var/lib/proxsave-info/commands/pbs/s3_endpoint_*_buckets.json",
+				"./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json",
 			},
+		},
 		{
 			ID:          "maintenance_pbs",
 			Name:        "PBS Maintenance",
@@ -210,79 +210,79 @@ func GetAllCategories() []Category {
 				"./etc/proxmox-backup/maintenance.cfg",
 			},
 		},
-			{
-				ID:          "pbs_jobs",
-				Name:        "PBS Jobs",
-				Description: "Sync, verify, and prune job configurations",
-				Type:        CategoryTypePBS,
-				Paths: []string{
-					"./etc/proxmox-backup/sync.cfg",
-					"./etc/proxmox-backup/verification.cfg",
-					"./etc/proxmox-backup/prune.cfg",
-					"./var/lib/proxsave-info/commands/pbs/sync_jobs.json",
-					"./var/lib/proxsave-info/commands/pbs/verification_jobs.json",
-					"./var/lib/proxsave-info/commands/pbs/prune_jobs.json",
-					"./var/lib/proxsave-info/commands/pbs/gc_jobs.json",
-				},
+		{
+			ID:          "pbs_jobs",
+			Name:        "PBS Jobs",
+			Description: "Sync, verify, and prune job configurations",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/sync.cfg",
+				"./etc/proxmox-backup/verification.cfg",
+				"./etc/proxmox-backup/prune.cfg",
+				"./var/lib/proxsave-info/commands/pbs/sync_jobs.json",
+				"./var/lib/proxsave-info/commands/pbs/verification_jobs.json",
+				"./var/lib/proxsave-info/commands/pbs/prune_jobs.json",
+				"./var/lib/proxsave-info/commands/pbs/gc_jobs.json",
 			},
-			{
-				ID:          "pbs_remotes",
-				Name:        "PBS Remotes",
-				Description: "Remote definitions for sync/verify jobs (may include credentials)",
-				Type:        CategoryTypePBS,
-				Paths: []string{
-					"./etc/proxmox-backup/remote.cfg",
-					"./var/lib/proxsave-info/commands/pbs/remote_list.json",
-				},
+		},
+		{
+			ID:          "pbs_remotes",
+			Name:        "PBS Remotes",
+			Description: "Remote definitions for sync/verify jobs (may include credentials)",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/remote.cfg",
+				"./var/lib/proxsave-info/commands/pbs/remote_list.json",
 			},
-			{
-				ID:          "pbs_notifications",
-				Name:        "PBS Notifications",
-				Description: "Notification targets and matchers",
-				Type:        CategoryTypePBS,
-				Paths: []string{
-					"./etc/proxmox-backup/notifications.cfg",
-					"./etc/proxmox-backup/notifications-priv.cfg",
-					"./var/lib/proxsave-info/commands/pbs/notification_targets.json",
-					"./var/lib/proxsave-info/commands/pbs/notification_matchers.json",
-					"./var/lib/proxsave-info/commands/pbs/notification_endpoints_*.json",
-				},
+		},
+		{
+			ID:          "pbs_notifications",
+			Name:        "PBS Notifications",
+			Description: "Notification targets and matchers",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/notifications.cfg",
+				"./etc/proxmox-backup/notifications-priv.cfg",
+				"./var/lib/proxsave-info/commands/pbs/notification_targets.json",
+				"./var/lib/proxsave-info/commands/pbs/notification_matchers.json",
+				"./var/lib/proxsave-info/commands/pbs/notification_endpoints_*.json",
 			},
-			{
-				ID:          "pbs_access_control",
-				Name:        "PBS Access Control",
-				Description: "Users, realms and permissions",
-				Type:        CategoryTypePBS,
-				Paths: []string{
-					"./etc/proxmox-backup/user.cfg",
-					"./etc/proxmox-backup/domains.cfg",
-					"./etc/proxmox-backup/acl.cfg",
-					"./etc/proxmox-backup/token.cfg",
-					"./etc/proxmox-backup/shadow.json",
-					"./etc/proxmox-backup/token.shadow",
-					"./etc/proxmox-backup/tfa.json",
-					"./var/lib/proxsave-info/commands/pbs/user_list.json",
-					"./var/lib/proxsave-info/commands/pbs/realms_ldap.json",
-					"./var/lib/proxsave-info/commands/pbs/realms_ad.json",
-					"./var/lib/proxsave-info/commands/pbs/realms_openid.json",
-					"./var/lib/proxsave-info/commands/pbs/acl_list.json",
-				},
+		},
+		{
+			ID:          "pbs_access_control",
+			Name:        "PBS Access Control",
+			Description: "Users, realms and permissions",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/user.cfg",
+				"./etc/proxmox-backup/domains.cfg",
+				"./etc/proxmox-backup/acl.cfg",
+				"./etc/proxmox-backup/token.cfg",
+				"./etc/proxmox-backup/shadow.json",
+				"./etc/proxmox-backup/token.shadow",
+				"./etc/proxmox-backup/tfa.json",
+				"./var/lib/proxsave-info/commands/pbs/user_list.json",
+				"./var/lib/proxsave-info/commands/pbs/realms_ldap.json",
+				"./var/lib/proxsave-info/commands/pbs/realms_ad.json",
+				"./var/lib/proxsave-info/commands/pbs/realms_openid.json",
+				"./var/lib/proxsave-info/commands/pbs/acl_list.json",
 			},
-			{
-				ID:          "pbs_tape",
-				Name:        "PBS Tape Backup",
-				Description: "Tape jobs, pools, changers and tape encryption keys",
-				Type:        CategoryTypePBS,
-				Paths: []string{
-					"./etc/proxmox-backup/tape.cfg",
-					"./etc/proxmox-backup/tape-job.cfg",
-					"./etc/proxmox-backup/media-pool.cfg",
-					"./etc/proxmox-backup/tape-encryption-keys.json",
-					"./var/lib/proxsave-info/commands/pbs/tape_drives.json",
-					"./var/lib/proxsave-info/commands/pbs/tape_changers.json",
-					"./var/lib/proxsave-info/commands/pbs/tape_pools.json",
-				},
+		},
+		{
+			ID:          "pbs_tape",
+			Name:        "PBS Tape Backup",
+			Description: "Tape jobs, pools, changers and tape encryption keys",
+			Type:        CategoryTypePBS,
+			Paths: []string{
+				"./etc/proxmox-backup/tape.cfg",
+				"./etc/proxmox-backup/tape-job.cfg",
+				"./etc/proxmox-backup/media-pool.cfg",
+				"./etc/proxmox-backup/tape-encryption-keys.json",
+				"./var/lib/proxsave-info/commands/pbs/tape_drives.json",
+				"./var/lib/proxsave-info/commands/pbs/tape_changers.json",
+				"./var/lib/proxsave-info/commands/pbs/tape_pools.json",
 			},
+		},
 
 		// Common Categories
 		{
@@ -470,14 +470,17 @@ func GetCategoriesForSystem(systemType string) []Category {
 	all := GetAllCategories()
 	var categories []Category
 
-	for _, cat := range all {
-		if systemType == "pve" {
-			// PVE system: include PVE and common categories
+	switch systemType {
+	case "pve":
+		// PVE system: include PVE and common categories
+		for _, cat := range all {
 			if cat.Type == CategoryTypePVE || cat.Type == CategoryTypeCommon {
 				categories = append(categories, cat)
 			}
-		} else if systemType == "pbs" {
-			// PBS system: include PBS and common categories
+		}
+	case "pbs":
+		// PBS system: include PBS and common categories
+		for _, cat := range all {
 			if cat.Type == CategoryTypePBS || cat.Type == CategoryTypeCommon {
 				categories = append(categories, cat)
 			}
@@ -566,14 +569,15 @@ func GetStorageModeCategories(systemType string) []Category {
 	all := GetAllCategories()
 	var categories []Category
 
-	if systemType == "pve" {
+	switch systemType {
+	case "pve":
 		// PVE: cluster + storage + jobs + zfs + filesystem + storage stack
 		for _, cat := range all {
 			if cat.ID == "pve_cluster" || cat.ID == "storage_pve" || cat.ID == "pve_jobs" || cat.ID == "zfs" || cat.ID == "filesystem" || cat.ID == "storage_stack" {
 				categories = append(categories, cat)
 			}
 		}
-	} else if systemType == "pbs" {
+	case "pbs":
 		// PBS: config export + datastore + maintenance + jobs + remotes + zfs + filesystem + storage stack
 		for _, cat := range all {
 			if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "maintenance_pbs" || cat.ID == "pbs_jobs" || cat.ID == "pbs_remotes" || cat.ID == "zfs" || cat.ID == "filesystem" || cat.ID == "storage_stack" {
