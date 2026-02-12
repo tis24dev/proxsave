@@ -220,6 +220,13 @@ func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logg
 }
 
 func guardMountPoint(ctx context.Context, guardTarget string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	target := filepath.Clean(strings.TrimSpace(guardTarget))
 	if target == "" || target == "." || target == string(os.PathSeparator) {
 		return fmt.Errorf("invalid guard target: %q", guardTarget)

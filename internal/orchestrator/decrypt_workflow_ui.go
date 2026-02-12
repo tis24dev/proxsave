@@ -137,7 +137,7 @@ func ensureWritablePathWithUI(ctx context.Context, ui DecryptWorkflowUI, targetP
 	}
 }
 
-func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPath, displayName string, logger *logging.Logger, prompt func(ctx context.Context, displayName, previousError string) (string, error)) error {
+func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPath, displayName string, prompt func(ctx context.Context, displayName, previousError string) (string, error)) error {
 	promptError := ""
 	for {
 		secret, err := prompt(ctx, displayName, promptError)
@@ -246,7 +246,7 @@ func preparePlainBundleWithUI(ctx context.Context, cand *decryptCandidate, versi
 		if strings.TrimSpace(displayName) == "" {
 			displayName = filepath.Base(manifestCopy.ArchivePath)
 		}
-		if err := decryptArchiveWithSecretPrompt(ctx, staged.ArchivePath, plainArchivePath, displayName, logger, ui.PromptDecryptSecret); err != nil {
+		if err := decryptArchiveWithSecretPrompt(ctx, staged.ArchivePath, plainArchivePath, displayName, ui.PromptDecryptSecret); err != nil {
 			cleanup()
 			return nil, err
 		}

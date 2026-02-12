@@ -267,7 +267,7 @@ func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, l
 
 	if strings.TrimSpace(iface) != "" {
 		if cur, err := currentNetworkEndpoint(ctx, iface, 2*time.Second); err == nil {
-			if tgt, err := targetNetworkEndpointFromConfig(logger, iface); err == nil {
+			if tgt, err := targetNetworkEndpointFromConfig(iface); err == nil {
 				logger.Info("Network plan: %s -> %s", cur.summary(), tgt.summary())
 			}
 		}
@@ -275,7 +275,7 @@ func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, l
 
 	if diagnosticsDir != "" {
 		logging.DebugStep(logger, "network safe apply (ui)", "Write network plan (current -> target)")
-		if planText, err := buildNetworkPlanReport(ctx, logger, iface, source, 2*time.Second); err != nil {
+		if planText, err := buildNetworkPlanReport(ctx, iface, source, 2*time.Second); err != nil {
 			logger.Debug("Network plan build failed: %v", err)
 		} else if strings.TrimSpace(planText) != "" {
 			if path, err := writeNetworkTextReportFile(diagnosticsDir, "plan.txt", planText+"\n"); err != nil {

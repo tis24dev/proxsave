@@ -659,7 +659,7 @@ func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger
 	return nil
 }
 
-func applyPBSNodeCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string) error {
+func applyPBSNodeCfgViaAPI(ctx context.Context, stageRoot string) error {
 	raw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/node.cfg")
 	if err != nil {
 		return err

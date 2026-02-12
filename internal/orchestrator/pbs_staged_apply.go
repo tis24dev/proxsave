@@ -80,7 +80,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 					_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/traffic-control.cfg")
 				}
 			}
-			if err := applyPBSNodeCfgViaAPI(ctx, logger, stageRoot); err != nil {
+			if err := applyPBSNodeCfgViaAPI(ctx, stageRoot); err != nil {
 				logger.Warning("PBS API apply: node config failed: %v", err)
 				if allowFileFallback {
 					logger.Warning("PBS staged apply: falling back to file-based node.cfg")
@@ -200,27 +200,6 @@ func applyPBSS3CfgFromStage(ctx context.Context, logger *logging.Logger, stageRo
 	defer func() { done(err) }()
 
 	return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/s3.cfg")
-}
-
-func applyPBSHostConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
-	done := logging.DebugStart(logger, "pbs staged apply host configs", "stage=%s", stageRoot)
-	defer func() { done(err) }()
-
-	// ACME should be applied before node.cfg (node.cfg references ACME account/plugins).
-	paths := []string{
-		"etc/proxmox-backup/acme/accounts.cfg",
-		"etc/proxmox-backup/acme/plugins.cfg",
-		"etc/proxmox-backup/metricserver.cfg",
-		"etc/proxmox-backup/traffic-control.cfg",
-		"etc/proxmox-backup/proxy.cfg",
-		"etc/proxmox-backup/node.cfg",
-	}
-	for _, rel := range paths {
-		if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-			logger.Warning("PBS staged apply: %s: %v", rel, err)
-		}
-	}
-	return nil
 }
 
 func applyPBSTapeConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
@@ -521,7 +500,7 @@ func shouldApplyPBSDatastoreBlock(block pbsDatastoreBlock, logger *logging.Logge
 	}
 
 	if hasData {
-		if warn := validatePBSDatastoreReadOnly(path, logger); warn != "" {
+		if warn := validatePBSDatastoreReadOnly(path); warn != "" && logger != nil {
 			logger.Warning("PBS datastore preflight: %s", warn)
 		}
 		return true, ""
