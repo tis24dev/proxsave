@@ -184,6 +184,32 @@ func (u *cliWorkflowUI) SelectCategories(ctx context.Context, available []Catego
 	return ShowCategorySelectionMenuWithReader(ctx, u.reader, u.logger, available, systemType)
 }
 
+func (u *cliWorkflowUI) SelectPBSRestoreBehavior(ctx context.Context) (PBSRestoreBehavior, error) {
+	fmt.Println()
+	fmt.Println("PBS restore reconciliation:")
+	fmt.Println("  [1] Merge (existing PBS) - Restore onto an already operational PBS (avoids API-side deletions of existing PBS objects not in the backup).")
+	fmt.Println("  [2] Clean 1:1 (fresh PBS install) - Restore onto a new, clean PBS and try to make configuration match the backup (may remove existing PBS objects not in the backup).")
+	fmt.Println("  [0] Exit")
+
+	for {
+		fmt.Print("Choice: ")
+		line, err := input.ReadLineWithContext(ctx, u.reader)
+		if err != nil {
+			return PBSRestoreBehaviorUnspecified, err
+		}
+		switch strings.TrimSpace(line) {
+		case "1":
+			return PBSRestoreBehaviorMerge, nil
+		case "2":
+			return PBSRestoreBehaviorClean, nil
+		case "0":
+			return PBSRestoreBehaviorUnspecified, ErrRestoreAborted
+		default:
+			fmt.Println("Please enter 1, 2 or 0.")
+		}
+	}
+}
+
 func (u *cliWorkflowUI) ShowRestorePlan(ctx context.Context, config *SelectiveRestoreConfig) error {
 	ShowRestorePlan(u.logger, config)
 	return nil

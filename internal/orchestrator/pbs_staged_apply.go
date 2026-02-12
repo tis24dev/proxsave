@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -39,34 +40,151 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		return nil
 	}
 
-	if plan.HasCategoryID("datastore_pbs") {
-		if err := applyPBSS3CfgFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: s3.cfg: %v", err)
-		}
-		if err := applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: datastore.cfg: %v", err)
+	behavior := plan.PBSRestoreBehavior
+	strict := behavior == PBSRestoreBehaviorClean
+	allowFileFallback := behavior == PBSRestoreBehaviorClean
+
+	needsAPI := plan.HasCategoryID("pbs_host") || plan.HasCategoryID("datastore_pbs") || plan.HasCategoryID("pbs_remotes") || plan.HasCategoryID("pbs_jobs")
+	apiAvailable := false
+	if needsAPI {
+		if err := ensurePBSServicesForAPI(ctx, logger); err != nil {
+			if allowFileFallback {
+				logger.Warning("PBS API apply unavailable; falling back to file-based staged apply where possible: %v", err)
+			} else {
+				logger.Warning("PBS API apply unavailable; skipping API-applied PBS categories (merge mode): %v", err)
+			}
+		} else {
+			apiAvailable = true
 		}
 	}
-	if plan.HasCategoryID("pbs_jobs") {
-		if err := applyPBSJobConfigsFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: job configs: %v", err)
-		}
-	}
-	if plan.HasCategoryID("pbs_remotes") {
-		if err := applyPBSRemoteCfgFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: remote.cfg: %v", err)
-		}
-	}
+
 	if plan.HasCategoryID("pbs_host") {
-		if err := applyPBSHostConfigsFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: host configs: %v", err)
+		// Always restore file-only configs (no stable API coverage yet).
+		// ACME should be applied before node config (node.cfg references ACME accounts/plugins).
+		for _, rel := range []string{
+			"etc/proxmox-backup/acme/accounts.cfg",
+			"etc/proxmox-backup/acme/plugins.cfg",
+			"etc/proxmox-backup/metricserver.cfg",
+			"etc/proxmox-backup/proxy.cfg",
+		} {
+			if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
+				logger.Warning("PBS staged apply: %s: %v", rel, err)
+			}
+		}
+
+		if apiAvailable {
+			if err := applyPBSTrafficControlCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: traffic-control failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based traffic-control.cfg")
+					_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/traffic-control.cfg")
+				}
+			}
+			if err := applyPBSNodeCfgViaAPI(ctx, stageRoot); err != nil {
+				logger.Warning("PBS API apply: node config failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based node.cfg")
+					_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/node.cfg")
+				}
+			}
+		} else if allowFileFallback {
+			for _, rel := range []string{
+				"etc/proxmox-backup/traffic-control.cfg",
+				"etc/proxmox-backup/node.cfg",
+			} {
+				if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
+					logger.Warning("PBS staged apply: %s: %v", rel, err)
+				}
+			}
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping node.cfg/traffic-control.cfg: merge mode requires PBS API apply")
 		}
 	}
+
+	if plan.HasCategoryID("datastore_pbs") {
+		if apiAvailable {
+			if err := applyPBSS3CfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: s3.cfg failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based s3.cfg")
+					_ = applyPBSS3CfgFromStage(ctx, logger, stageRoot)
+				}
+			}
+			if err := applyPBSDatastoreCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based datastore.cfg")
+					_ = applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot)
+				}
+			}
+		} else if allowFileFallback {
+			if err := applyPBSS3CfgFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: s3.cfg: %v", err)
+			}
+			if err := applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: datastore.cfg: %v", err)
+			}
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping datastore.cfg/s3.cfg: merge mode requires PBS API apply")
+		}
+	}
+
+	if plan.HasCategoryID("pbs_remotes") {
+		if apiAvailable {
+			if err := applyPBSRemoteCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: remote.cfg failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based remote.cfg")
+					_ = applyPBSRemoteCfgFromStage(ctx, logger, stageRoot)
+				}
+			}
+		} else if allowFileFallback {
+			if err := applyPBSRemoteCfgFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: remote.cfg: %v", err)
+			}
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping remote.cfg: merge mode requires PBS API apply")
+		}
+	}
+
+	if plan.HasCategoryID("pbs_jobs") {
+		if apiAvailable {
+			if err := applyPBSSyncCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: sync jobs failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based job configs")
+					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
+				}
+			}
+			if err := applyPBSVerificationCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: verification jobs failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based job configs")
+					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
+				}
+			}
+			if err := applyPBSPruneCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: prune jobs failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based job configs")
+					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
+				}
+			}
+		} else if allowFileFallback {
+			if err := applyPBSJobConfigsFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: job configs: %v", err)
+			}
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping sync/verification/prune configs: merge mode requires PBS API apply")
+		}
+	}
+
 	if plan.HasCategoryID("pbs_tape") {
 		if err := applyPBSTapeConfigsFromStage(ctx, logger, stageRoot); err != nil {
 			logger.Warning("PBS staged apply: tape configs: %v", err)
 		}
 	}
+
 	return nil
 }
 
@@ -82,27 +200,6 @@ func applyPBSS3CfgFromStage(ctx context.Context, logger *logging.Logger, stageRo
 	defer func() { done(err) }()
 
 	return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/s3.cfg")
-}
-
-func applyPBSHostConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
-	done := logging.DebugStart(logger, "pbs staged apply host configs", "stage=%s", stageRoot)
-	defer func() { done(err) }()
-
-	// ACME should be applied before node.cfg (node.cfg references ACME account/plugins).
-	paths := []string{
-		"etc/proxmox-backup/acme/accounts.cfg",
-		"etc/proxmox-backup/acme/plugins.cfg",
-		"etc/proxmox-backup/metricserver.cfg",
-		"etc/proxmox-backup/traffic-control.cfg",
-		"etc/proxmox-backup/proxy.cfg",
-		"etc/proxmox-backup/node.cfg",
-	}
-	for _, rel := range paths {
-		if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-			logger.Warning("PBS staged apply: %s: %v", rel, err)
-		}
-	}
-	return nil
 }
 
 func applyPBSTapeConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
@@ -170,6 +267,32 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 		return nil
 	}
 
+	if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
+		logger.Warning("PBS staged apply: staged datastore.cfg looks invalid (%s); attempting recovery from pbs_datastore_inventory.json", reason)
+		if recovered, src, recErr := loadPBSDatastoreCfgFromInventory(stageRoot); recErr != nil {
+			logger.Warning("PBS staged apply: unable to recover datastore.cfg from inventory (%v); leaving current configuration unchanged", recErr)
+			return nil
+		} else if strings.TrimSpace(recovered) == "" {
+			logger.Warning("PBS staged apply: recovered datastore.cfg from %s is empty; leaving current configuration unchanged", src)
+			return nil
+		} else {
+			normalized, fixed = normalizePBSDatastoreCfgContent(recovered)
+			if fixed > 0 {
+				logger.Warning("PBS staged apply: recovered datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", fixed)
+			}
+			blocks, err = parsePBSDatastoreCfgBlocks(normalized)
+			if err != nil {
+				logger.Warning("PBS staged apply: recovered datastore.cfg from %s is still invalid (%v); leaving current configuration unchanged", src, err)
+				return nil
+			}
+			if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
+				logger.Warning("PBS staged apply: recovered datastore.cfg from %s still looks invalid (%s); leaving current configuration unchanged", src, reason)
+				return nil
+			}
+			logger.Info("PBS staged apply: datastore.cfg recovered from %s", src)
+		}
+	}
+
 	var applyBlocks []pbsDatastoreBlock
 	var deferred []pbsDatastoreBlock
 	for _, b := range blocks {
@@ -211,6 +334,90 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 
 	logger.Info("PBS staged apply: datastore.cfg applied (%d datastore(s)); deferred=%d", len(applyBlocks), len(deferred))
 	return nil
+}
+
+type pbsDatastoreInventoryRestoreLite struct {
+	Files map[string]struct {
+		Content string `json:"content"`
+	} `json:"files"`
+	Datastores []struct {
+		Name    string `json:"name"`
+		Path    string `json:"path"`
+		Comment string `json:"comment"`
+	} `json:"datastores"`
+}
+
+func loadPBSDatastoreCfgFromInventory(stageRoot string) (string, string, error) {
+	inventoryPath := filepath.Join(stageRoot, "var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json")
+	raw, err := restoreFS.ReadFile(inventoryPath)
+	if err != nil {
+		return "", "", fmt.Errorf("read inventory %s: %w", inventoryPath, err)
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "", "", fmt.Errorf("inventory %s is empty", inventoryPath)
+	}
+
+	var report pbsDatastoreInventoryRestoreLite
+	if err := json.Unmarshal([]byte(trimmed), &report); err != nil {
+		return "", "", fmt.Errorf("parse inventory %s: %w", inventoryPath, err)
+	}
+
+	if report.Files != nil {
+		if snap := strings.TrimSpace(report.Files["pbs_datastore_cfg"].Content); snap != "" {
+			return report.Files["pbs_datastore_cfg"].Content, "pbs_datastore_inventory.json.files[pbs_datastore_cfg].content", nil
+		}
+	}
+
+	// Fallback: generate a minimal datastore.cfg from the inventory's datastore list.
+	var out strings.Builder
+	for _, ds := range report.Datastores {
+		name := strings.TrimSpace(ds.Name)
+		path := strings.TrimSpace(ds.Path)
+		if name == "" || path == "" {
+			continue
+		}
+		if out.Len() > 0 {
+			out.WriteString("\n")
+		}
+		out.WriteString(fmt.Sprintf("datastore: %s\n", name))
+		if comment := strings.TrimSpace(ds.Comment); comment != "" {
+			out.WriteString(fmt.Sprintf("    comment %s\n", comment))
+		}
+		out.WriteString(fmt.Sprintf("    path %s\n", path))
+	}
+
+	generated := strings.TrimSpace(out.String())
+	if generated == "" {
+		return "", "", fmt.Errorf("inventory %s contains no usable datastore definitions", inventoryPath)
+	}
+	return out.String(), "pbs_datastore_inventory.json.datastores", nil
+}
+
+func detectPBSDatastoreCfgDuplicateKeys(blocks []pbsDatastoreBlock) string {
+	for _, block := range blocks {
+		seen := map[string]int{}
+		for _, line := range block.Lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "datastore:") {
+				continue
+			}
+
+			fields := strings.Fields(trimmed)
+			if len(fields) == 0 {
+				continue
+			}
+			key := strings.TrimSpace(fields[0])
+			if key == "" {
+				continue
+			}
+			seen[key]++
+			if seen[key] > 1 {
+				return fmt.Sprintf("datastore %s has duplicate key %q", strings.TrimSpace(block.Name), key)
+			}
+		}
+	}
+	return ""
 }
 
 func parsePBSDatastoreCfgBlocks(content string) ([]pbsDatastoreBlock, error) {
@@ -293,7 +500,7 @@ func shouldApplyPBSDatastoreBlock(block pbsDatastoreBlock, logger *logging.Logge
 	}
 
 	if hasData {
-		if warn := validatePBSDatastoreReadOnly(path, logger); warn != "" {
+		if warn := validatePBSDatastoreReadOnly(path); warn != "" && logger != nil {
 			logger.Warning("PBS datastore preflight: %s", warn)
 		}
 		return true, ""

@@ -197,7 +197,6 @@ func NewWithDeps(deps Deps) *Orchestrator {
 		base.Time = deps.Time
 	}
 	if deps.Config != nil {
-		base.Config = deps.Config
 		base.DryRun = deps.Config.DryRun
 	}
 

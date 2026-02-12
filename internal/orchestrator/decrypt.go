@@ -80,8 +80,8 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	done := logging.DebugStart(logger, "decrypt workflow", "version=%s", version)
 	defer func() { done(err) }()
 
-		ui := newCLIWorkflowUI(bufio.NewReader(os.Stdin), logger)
-		return runDecryptWorkflowWithUI(ctx, cfg, logger, version, ui)
+	ui := newCLIWorkflowUI(bufio.NewReader(os.Stdin), logger)
+	return runDecryptWorkflowWithUI(ctx, cfg, logger, version, ui)
 }
 
 // RunDecryptWorkflow is the legacy entrypoint that builds default deps.
@@ -652,7 +652,7 @@ func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *decryptCandi
 func decryptArchiveWithPrompts(ctx context.Context, reader *bufio.Reader, encryptedPath, outputPath string, logger *logging.Logger) error {
 	ui := newCLIWorkflowUI(reader, logger)
 	displayName := filepath.Base(encryptedPath)
-	return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, logger, ui.PromptDecryptSecret)
+	return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, ui.PromptDecryptSecret)
 }
 
 func parseIdentityInput(input string) ([]age.Identity, error) {

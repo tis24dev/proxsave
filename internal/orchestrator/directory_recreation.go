@@ -294,7 +294,7 @@ func createPBSDatastoreStructure(basePath, datastoreName string, logger *logging
 	// If the datastore already contains chunk/index data, avoid any modifications to prevent touching real backup data.
 	// We only validate and report issues.
 	if hasData {
-		if warn := validatePBSDatastoreReadOnly(basePath, logger); warn != "" {
+		if warn := validatePBSDatastoreReadOnly(basePath); warn != "" {
 			logger.Warning("PBS datastore preflight: %s", warn)
 		}
 		logger.Info("PBS datastore preflight: datastore %s appears to contain data; skipping directory/permission changes to avoid risking datastore contents", datastoreName)
@@ -371,7 +371,7 @@ func createPBSDatastoreStructure(basePath, datastoreName string, logger *logging
 	return changed, nil
 }
 
-func validatePBSDatastoreReadOnly(datastorePath string, logger *logging.Logger) string {
+func validatePBSDatastoreReadOnly(datastorePath string) string {
 	if datastorePath == "" {
 		return "datastore path is empty"
 	}
@@ -843,15 +843,16 @@ func isIgnorableOwnershipError(err error) bool {
 func RecreateDirectoriesFromConfig(systemType SystemType, logger *logging.Logger) error {
 	logger.Info("Recreating directory structures from configuration...")
 
-	if systemType == SystemTypePVE {
+	switch systemType {
+	case SystemTypePVE:
 		if err := RecreateStorageDirectories(logger); err != nil {
 			return fmt.Errorf("recreate PVE storage directories: %w", err)
 		}
-	} else if systemType == SystemTypePBS {
+	case SystemTypePBS:
 		if err := RecreateDatastoreDirectories(logger); err != nil {
 			return fmt.Errorf("recreate PBS datastore directories: %w", err)
 		}
-	} else {
+	default:
 		logger.Debug("Unknown system type, skipping directory recreation")
 	}
 

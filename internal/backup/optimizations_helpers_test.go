@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,8 +47,10 @@ func TestNormalizeTextFileAndConfigAndJSON(t *testing.T) {
 	if err := os.WriteFile(textPath, []byte("line1\r\nline2\r\n"), 0o640); err != nil {
 		t.Fatalf("write text: %v", err)
 	}
-	if err := normalizeTextFile(textPath); err != nil {
+	if changed, err := normalizeTextFile(textPath); err != nil {
 		t.Fatalf("normalizeTextFile: %v", err)
+	} else if !changed {
+		t.Fatalf("expected text to be normalized")
 	}
 	data, _ := os.ReadFile(textPath)
 	if bytes.Contains(data, []byte("\r")) {
@@ -55,24 +58,31 @@ func TestNormalizeTextFileAndConfigAndJSON(t *testing.T) {
 	}
 
 	cfgPath := filepath.Join(tmp, "app.conf")
-	cfgContent := "#comment\nz=1\n\n;ignored\na=2\n"
+	cfgContent := "#comment\r\nz=1\r\n\r\n;ignored\r\na=2\r\n"
 	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o640); err != nil {
 		t.Fatalf("write conf: %v", err)
 	}
-	if err := normalizeConfigFile(cfgPath); err != nil {
+	if changed, err := normalizeConfigFile(cfgPath); err != nil {
 		t.Fatalf("normalizeConfigFile: %v", err)
+	} else if !changed {
+		t.Fatalf("expected config to be normalized")
 	}
 	cfgData, _ := os.ReadFile(cfgPath)
-	if string(cfgData) != "a=2\nz=1" {
-		t.Fatalf("config not normalized/sorted, got %q", cfgData)
+	if bytes.Contains(cfgData, []byte("\r")) {
+		t.Fatalf("expected CR removed from config, got %q", cfgData)
+	}
+	if string(cfgData) != strings.ReplaceAll(cfgContent, "\r", "") {
+		t.Fatalf("config contents changed unexpectedly, got %q", cfgData)
 	}
 
 	jsonPath := filepath.Join(tmp, "data.json")
 	if err := os.WriteFile(jsonPath, []byte("{\n \"a\": 1,\n \"b\": 2\n}\n"), 0o640); err != nil {
 		t.Fatalf("write json: %v", err)
 	}
-	if err := minifyJSON(jsonPath); err != nil {
+	if changed, err := minifyJSON(jsonPath); err != nil {
 		t.Fatalf("minifyJSON: %v", err)
+	} else if !changed {
+		t.Fatalf("expected JSON to be minified")
 	}
 	jdata, _ := os.ReadFile(jsonPath)
 	if bytes.Contains(jdata, []byte(" ")) || bytes.Contains(jdata, []byte("\n")) {
@@ -82,7 +92,7 @@ func TestNormalizeTextFileAndConfigAndJSON(t *testing.T) {
 	if err := os.WriteFile(jsonPath, []byte("{invalid"), 0o640); err != nil {
 		t.Fatalf("write invalid json: %v", err)
 	}
-	if err := minifyJSON(jsonPath); err == nil {
+	if _, err := minifyJSON(jsonPath); err == nil {
 		t.Fatalf("expected error for invalid json")
 	}
 }
@@ -95,8 +105,10 @@ func TestMinifyJSONKeepsData(t *testing.T) {
 	if err := os.WriteFile(path, payload, 0o640); err != nil {
 		t.Fatalf("write json: %v", err)
 	}
-	if err := minifyJSON(path); err != nil {
+	if changed, err := minifyJSON(path); err != nil {
 		t.Fatalf("minifyJSON: %v", err)
+	} else if !changed {
+		t.Fatalf("expected JSON to be minified")
 	}
 	roundTrip, _ := os.ReadFile(path)
 	var decoded map[string]int

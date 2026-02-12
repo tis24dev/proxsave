@@ -7,40 +7,46 @@ import (
 )
 
 type fakeRestoreWorkflowUI struct {
-	mode               RestoreMode
-	categories         []Category
-	confirmRestore     bool
-	confirmCompatible  bool
-	clusterMode        ClusterRestoreMode
-	continueNoSafety   bool
+	mode                RestoreMode
+	categories          []Category
+	pbsBehavior         PBSRestoreBehavior
+	confirmRestore      bool
+	confirmCompatible   bool
+	clusterMode         ClusterRestoreMode
+	continueNoSafety    bool
 	continuePBSServices bool
-	confirmFstabMerge  bool
-	exportNode         string
-	applyVMConfigs     bool
-	applyStorageCfg    bool
-	applyDatacenterCfg bool
-	confirmAction      bool
-	networkCommit      bool
+	confirmFstabMerge   bool
+	exportNode          string
+	applyVMConfigs      bool
+	applyStorageCfg     bool
+	applyDatacenterCfg  bool
+	confirmAction       bool
+	networkCommit       bool
 
-	modeErr               error
-	categoriesErr         error
-	confirmRestoreErr     error
-	confirmCompatibleErr  error
-	clusterModeErr        error
-	continueNoSafetyErr   error
+	modeErr                error
+	categoriesErr          error
+	pbsBehaviorErr         error
+	confirmRestoreErr      error
+	confirmCompatibleErr   error
+	clusterModeErr         error
+	continueNoSafetyErr    error
 	continuePBSServicesErr error
-	confirmFstabMergeErr  error
-	confirmActionErr      error
-	repairNICNamesErr     error
-	networkCommitErr      error
+	confirmFstabMergeErr   error
+	confirmActionErr       error
+	repairNICNamesErr      error
+	networkCommitErr       error
 }
 
 func (f *fakeRestoreWorkflowUI) RunTask(ctx context.Context, title, initialMessage string, run func(ctx context.Context, report ProgressReporter) error) error {
 	return run(ctx, nil)
 }
 
-func (f *fakeRestoreWorkflowUI) ShowMessage(ctx context.Context, title, message string) error { return nil }
-func (f *fakeRestoreWorkflowUI) ShowError(ctx context.Context, title, message string) error   { return nil }
+func (f *fakeRestoreWorkflowUI) ShowMessage(ctx context.Context, title, message string) error {
+	return nil
+}
+func (f *fakeRestoreWorkflowUI) ShowError(ctx context.Context, title, message string) error {
+	return nil
+}
 
 func (f *fakeRestoreWorkflowUI) SelectBackupSource(ctx context.Context, options []decryptPathOption) (decryptPathOption, error) {
 	return decryptPathOption{}, fmt.Errorf("unexpected SelectBackupSource call")
@@ -62,7 +68,16 @@ func (f *fakeRestoreWorkflowUI) SelectCategories(ctx context.Context, available 
 	return f.categories, f.categoriesErr
 }
 
-func (f *fakeRestoreWorkflowUI) ShowRestorePlan(ctx context.Context, config *SelectiveRestoreConfig) error { return nil }
+func (f *fakeRestoreWorkflowUI) SelectPBSRestoreBehavior(ctx context.Context) (PBSRestoreBehavior, error) {
+	if f.pbsBehavior == PBSRestoreBehaviorUnspecified && f.pbsBehaviorErr == nil {
+		return PBSRestoreBehaviorClean, nil
+	}
+	return f.pbsBehavior, f.pbsBehaviorErr
+}
+
+func (f *fakeRestoreWorkflowUI) ShowRestorePlan(ctx context.Context, config *SelectiveRestoreConfig) error {
+	return nil
+}
 
 func (f *fakeRestoreWorkflowUI) ConfirmRestore(ctx context.Context) (bool, error) {
 	return f.confirmRestore, f.confirmRestoreErr
@@ -115,4 +130,3 @@ func (f *fakeRestoreWorkflowUI) RepairNICNames(ctx context.Context, archivePath 
 func (f *fakeRestoreWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir string) (bool, error) {
 	return f.networkCommit, f.networkCommitErr
 }
-

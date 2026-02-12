@@ -199,30 +199,32 @@ type Config struct {
 	CephConfigPath          string
 
 	// PBS-specific collection options
-	BackupDatastoreConfigs   bool
-	BackupPBSS3Endpoints     bool
-	BackupPBSNodeConfig      bool
-	BackupPBSAcmeAccounts    bool
-	BackupPBSAcmePlugins     bool
-	BackupPBSMetricServers   bool
-	BackupPBSTrafficControl  bool
-	BackupUserConfigs        bool
-	BackupRemoteConfigs      bool
-	BackupSyncJobs           bool
-	BackupVerificationJobs   bool
-	BackupTapeConfigs        bool
-	BackupPBSNetworkConfig   bool
-	BackupPruneSchedules     bool
-	BackupPxarFiles          bool
-	PxarDatastoreConcurrency int
-	PxarIntraConcurrency     int
-	PxarScanFanoutLevel      int
-	PxarScanMaxRoots         int
-	PxarStopOnCap            bool
-	PxarEnumWorkers          int
-	PxarEnumBudgetMs         int
-	PxarFileIncludePatterns  []string
-	PxarFileExcludePatterns  []string
+	BackupDatastoreConfigs     bool
+	BackupPBSS3Endpoints       bool
+	BackupPBSNodeConfig        bool
+	BackupPBSAcmeAccounts      bool
+	BackupPBSAcmePlugins       bool
+	BackupPBSMetricServers     bool
+	BackupPBSTrafficControl    bool
+	BackupPBSNotifications     bool
+	BackupPBSNotificationsPriv bool
+	BackupUserConfigs          bool
+	BackupRemoteConfigs        bool
+	BackupSyncJobs             bool
+	BackupVerificationJobs     bool
+	BackupTapeConfigs          bool
+	BackupPBSNetworkConfig     bool
+	BackupPruneSchedules       bool
+	BackupPxarFiles            bool
+	PxarDatastoreConcurrency   int
+	PxarIntraConcurrency       int
+	PxarScanFanoutLevel        int
+	PxarScanMaxRoots           int
+	PxarStopOnCap              bool
+	PxarEnumWorkers            int
+	PxarEnumBudgetMs           int
+	PxarFileIncludePatterns    []string
+	PxarFileExcludePatterns    []string
 
 	// System collection options
 	BackupNetworkConfigs    bool
@@ -680,6 +682,8 @@ func (c *Config) parsePBSSettings() {
 	c.BackupPBSAcmePlugins = c.getBool("BACKUP_PBS_ACME_PLUGINS", true)
 	c.BackupPBSMetricServers = c.getBool("BACKUP_PBS_METRIC_SERVERS", true)
 	c.BackupPBSTrafficControl = c.getBool("BACKUP_PBS_TRAFFIC_CONTROL", true)
+	c.BackupPBSNotifications = c.getBool("BACKUP_PBS_NOTIFICATIONS", true)
+	c.BackupPBSNotificationsPriv = c.getBool("BACKUP_PBS_NOTIFICATIONS_PRIV", c.BackupPBSNotifications)
 	c.BackupUserConfigs = c.getBool("BACKUP_USER_CONFIGS", true)
 	c.BackupRemoteConfigs = c.getBoolWithFallback([]string{"BACKUP_REMOTE_CONFIGS", "BACKUP_REMOTE_CFG"}, true)
 	c.BackupSyncJobs = c.getBool("BACKUP_SYNC_JOBS", true)

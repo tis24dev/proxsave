@@ -162,6 +162,8 @@ type CollectorConfig struct {
 	BackupPBSAcmePlugins    bool
 	BackupPBSMetricServers  bool
 	BackupPBSTrafficControl bool
+	BackupPBSNotifications  bool
+	BackupPBSNotificationsPriv bool
 	BackupUserConfigs       bool
 	BackupRemoteConfigs     bool
 	BackupSyncJobs          bool
@@ -251,7 +253,7 @@ func (c *CollectorConfig) Validate() error {
 		c.BackupPVEBackupFiles || c.BackupCephConfig ||
 		c.BackupDatastoreConfigs || c.BackupPBSS3Endpoints || c.BackupPBSNodeConfig ||
 		c.BackupPBSAcmeAccounts || c.BackupPBSAcmePlugins || c.BackupPBSMetricServers ||
-		c.BackupPBSTrafficControl || c.BackupUserConfigs || c.BackupRemoteConfigs ||
+		c.BackupPBSTrafficControl || c.BackupPBSNotifications || c.BackupUserConfigs || c.BackupRemoteConfigs ||
 		c.BackupSyncJobs || c.BackupVerificationJobs || c.BackupTapeConfigs ||
 		c.BackupPBSNetworkConfig || c.BackupPruneSchedules || c.BackupPxarFiles ||
 		c.BackupNetworkConfigs || c.BackupAptSources || c.BackupCronJobs ||
@@ -334,15 +336,17 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		BackupDatastoreConfigs:  true,
 		BackupPBSS3Endpoints:    true,
 		BackupPBSNodeConfig:     true,
-		BackupPBSAcmeAccounts:   true,
-		BackupPBSAcmePlugins:    true,
-		BackupPBSMetricServers:  true,
-		BackupPBSTrafficControl: true,
-		BackupUserConfigs:       true,
-		BackupRemoteConfigs:     true,
-		BackupSyncJobs:          true,
-		BackupVerificationJobs:  true,
-		BackupTapeConfigs:       true,
+			BackupPBSAcmeAccounts:   true,
+			BackupPBSAcmePlugins:    true,
+			BackupPBSMetricServers:  true,
+			BackupPBSTrafficControl: true,
+			BackupPBSNotifications:  true,
+			BackupPBSNotificationsPriv: true,
+			BackupUserConfigs:       true,
+			BackupRemoteConfigs:     true,
+			BackupSyncJobs:          true,
+			BackupVerificationJobs:  true,
+			BackupTapeConfigs:       true,
 		BackupPBSNetworkConfig:  true,
 		BackupPruneSchedules:    true,
 		BackupPxarFiles:         true,

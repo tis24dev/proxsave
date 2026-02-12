@@ -789,6 +789,9 @@ CONFIG_FILE=/etc/pbs/prod.env ./build/proxsave
 # Force dry-run mode
 DRY_RUN=true ./build/proxsave
 
+# PBS restore behavior
+# Selected interactively during `--restore` on PBS hosts (Merge vs Clean 1:1).
+
 # Set debug level
 DEBUG_LEVEL=extreme ./build/proxsave --log-level debug
 

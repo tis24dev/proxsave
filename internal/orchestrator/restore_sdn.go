@@ -12,6 +12,8 @@ import (
 )
 
 func maybeApplyPVESDNFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
+	_ = ctx // reserved for future timeouts/cancellation hooks
+
 	if plan == nil || plan.SystemType != SystemTypePVE || !plan.HasCategoryID("pve_sdn") {
 		return nil
 	}
@@ -94,7 +96,7 @@ func applyPVESDNFromStage(logger *logging.Logger, stageRoot string) (applied []s
 				applied = append(applied, destSDN)
 			}
 		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return applied, fmt.Errorf("stat staged sdn %s: %w", stageSDN, err)
 	}
 

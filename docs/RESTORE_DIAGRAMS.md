@@ -138,6 +138,8 @@ flowchart TD
     style CheckboxMenu fill:#87CEEB
 ```
 
+**Note (PBS)**: ProxSave applies supported PBS staged categories via `proxmox-backup-manager` by default. In **Clean 1:1** mode it may fall back to writing staged `*.cfg` files back to `/etc/proxmox-backup` when API apply is unavailable or fails.
+
 ---
 
 ## Service Management Flow

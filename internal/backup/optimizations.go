@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -310,7 +309,37 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 	}
 	logger.Debug("Prefiltering files under %s (max size %d bytes)", root, maxSize)
 
-	var processed int
+	type prefilterStats struct {
+		scanned           int
+		optimized         int
+		skippedStructured int
+		skippedSymlink    int
+	}
+	var stats prefilterStats
+
+	isStructuredConfigPath := func(path string) bool {
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return false
+		}
+		rel = filepath.ToSlash(filepath.Clean(rel))
+		rel = strings.TrimPrefix(rel, "./")
+		switch {
+		case strings.HasPrefix(rel, "etc/proxmox-backup/"):
+			return true
+		case strings.HasPrefix(rel, "etc/pve/"):
+			return true
+		case strings.HasPrefix(rel, "etc/ssh/"):
+			return true
+		case strings.HasPrefix(rel, "etc/pam.d/"):
+			return true
+		case strings.HasPrefix(rel, "etc/systemd/system/"):
+			return true
+		default:
+			return false
+		}
+	}
+
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -322,27 +351,39 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 			return nil
 		}
 
-		info, err := d.Info()
-		if err != nil {
+		info, err := os.Lstat(path)
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			stats.skippedSymlink++
+			return nil
+		}
+		if !info.Mode().IsRegular() {
 			return nil
 		}
 		if info.Size() == 0 || info.Size() > maxSize {
 			return nil
 		}
 
+		stats.scanned++
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
 		case ".txt", ".log", ".md":
-			if err := normalizeTextFile(path); err == nil {
-				processed++
+			if changed, err := normalizeTextFile(path); err == nil && changed {
+				stats.optimized++
 			}
 		case ".conf", ".cfg", ".ini":
-			if err := normalizeConfigFile(path); err == nil {
-				processed++
+			if isStructuredConfigPath(path) {
+				stats.skippedStructured++
+				return nil
+			}
+			if changed, err := normalizeConfigFile(path); err == nil && changed {
+				stats.optimized++
 			}
 		case ".json":
-			if err := minifyJSON(path); err == nil {
-				processed++
+			if changed, err := minifyJSON(path); err == nil && changed {
+				stats.optimized++
 			}
 		}
 		return nil
@@ -352,52 +393,43 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 		return fmt.Errorf("prefilter walk failed: %w", err)
 	}
 
-	logger.Info("Prefilter completed: %d files optimized", processed)
+	logger.Info("Prefilter completed: optimized=%d scanned=%d skipped_structured=%d skipped_symlink=%d", stats.optimized, stats.scanned, stats.skippedStructured, stats.skippedSymlink)
 	return nil
 }
 
-func normalizeTextFile(path string) error {
+func normalizeTextFile(path string) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return false, err
 	}
 	normalized := bytes.ReplaceAll(data, []byte("\r"), nil)
 	if bytes.Equal(data, normalized) {
-		return nil
+		return false, nil
 	}
-	return os.WriteFile(path, normalized, defaultChunkFilePerm)
+	return true, os.WriteFile(path, normalized, defaultChunkFilePerm)
 }
 
-func normalizeConfigFile(path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	lines := strings.Split(string(data), "\n")
-	filtered := lines[:0]
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-	sort.Strings(filtered)
-	return os.WriteFile(path, []byte(strings.Join(filtered, "\n")), defaultChunkFilePerm)
+func normalizeConfigFile(path string) (bool, error) {
+	// Config files can be whitespace/ordering-sensitive (e.g. section headers).
+	// Only perform safe, semantic-preserving normalization here.
+	return normalizeTextFile(path)
 }
 
-func minifyJSON(path string) error {
+func minifyJSON(path string) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var tmp any
 	if err := json.Unmarshal(data, &tmp); err != nil {
-		return err
+		return false, err
 	}
 	minified, err := json.Marshal(tmp)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return os.WriteFile(path, minified, defaultChunkFilePerm)
+	if bytes.Equal(bytes.TrimSpace(data), minified) {
+		return false, nil
+	}
+	return true, os.WriteFile(path, minified, defaultChunkFilePerm)
 }

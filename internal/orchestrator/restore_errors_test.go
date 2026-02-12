@@ -1011,8 +1011,7 @@ func TestExtractHardlink_AbsoluteTargetRejectedError(t *testing.T) {
 		Typeflag: tar.TypeLink,
 	}
 
-	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	err := extractHardlink("/tmp/link", header, "/tmp", logger)
+	err := extractHardlink("/tmp/link", header, "/tmp")
 	if err == nil || !strings.Contains(err.Error(), "absolute hardlink target not allowed") {
 		t.Fatalf("expected absolute target error, got: %v", err)
 	}
@@ -1043,8 +1042,7 @@ func TestExtractHardlink_LinkCreationFails(t *testing.T) {
 	}
 
 	linkPath := filepath.Join(fakeFS.Root, "link")
-	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	err := extractHardlink(linkPath, header, fakeFS.Root, logger)
+	err := extractHardlink(linkPath, header, fakeFS.Root)
 	if err == nil || !strings.Contains(err.Error(), "hardlink") {
 		t.Fatalf("expected link creation error, got: %v", err)
 	}

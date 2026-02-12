@@ -75,7 +75,7 @@ func ensureDirExistsWithInheritedMeta(dir string) error {
 			return nil
 		}
 		return fmt.Errorf("path exists but is not a directory: %s", dir)
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat %s: %w", dir, err)
 	}
 
@@ -123,7 +123,7 @@ func ensureDirExistsWithInheritedMeta(dir string) error {
 				continue
 			}
 			return fmt.Errorf("path exists but is not a directory: %s", p)
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("stat %s: %w", p, err)
 		}
 

@@ -34,19 +34,19 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 		wantPaths []string
 		wantLabel []string
 	}{
-			{
-				name: "all paths enabled",
-				cfg: &config.Config{
-					BackupPath:       "/backup/local",
-					SecondaryEnabled: true,
-					SecondaryPath:    "/backup/secondary",
-					CloudEnabled:     true,
-					CloudRemote:      "/backup/cloud",
-				},
-				wantCount: 3,
-				wantPaths: []string{"/backup/local", "/backup/secondary", "/backup/cloud"},
-				wantLabel: []string{"Local backups", "Secondary backups", "Cloud backups"},
+		{
+			name: "all paths enabled",
+			cfg: &config.Config{
+				BackupPath:       "/backup/local",
+				SecondaryEnabled: true,
+				SecondaryPath:    "/backup/secondary",
+				CloudEnabled:     true,
+				CloudRemote:      "/backup/cloud",
 			},
+			wantCount: 3,
+			wantPaths: []string{"/backup/local", "/backup/secondary", "/backup/cloud"},
+			wantLabel: []string{"Local backups", "Secondary backups", "Cloud backups"},
+		},
 		{
 			name: "only local path",
 			cfg: &config.Config{
@@ -91,28 +91,28 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 			wantPaths: []string{"/backup/local"},
 			wantLabel: []string{"Local backups"},
 		},
-			{
-				name: "cloud with rclone remote included",
-				cfg: &config.Config{
-					BackupPath:   "/backup/local",
-					CloudEnabled: true,
-					CloudRemote:  "gdrive:backups", // rclone remote
-				},
-				wantCount: 2,
-				wantPaths: []string{"/backup/local", "gdrive:backups"},
-				wantLabel: []string{"Local backups", "Cloud backups (rclone)"},
+		{
+			name: "cloud with rclone remote included",
+			cfg: &config.Config{
+				BackupPath:   "/backup/local",
+				CloudEnabled: true,
+				CloudRemote:  "gdrive:backups", // rclone remote
 			},
-			{
-				name: "cloud with local absolute path included",
-				cfg: &config.Config{
-					BackupPath:   "/backup/local",
-					CloudEnabled: true,
-					CloudRemote:  "/mnt/cloud/backups",
-				},
-				wantCount: 2,
-				wantPaths: []string{"/backup/local", "/mnt/cloud/backups"},
-				wantLabel: []string{"Local backups", "Cloud backups"},
+			wantCount: 2,
+			wantPaths: []string{"/backup/local", "gdrive:backups"},
+			wantLabel: []string{"Local backups", "Cloud backups (rclone)"},
+		},
+		{
+			name: "cloud with local absolute path included",
+			cfg: &config.Config{
+				BackupPath:   "/backup/local",
+				CloudEnabled: true,
+				CloudRemote:  "/mnt/cloud/backups",
 			},
+			wantCount: 2,
+			wantPaths: []string{"/backup/local", "/mnt/cloud/backups"},
+			wantLabel: []string{"Local backups", "Cloud backups"},
+		},
 		{
 			name: "secondary enabled but path empty",
 			cfg: &config.Config{
@@ -135,17 +135,17 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 			wantPaths: []string{"/backup/local"},
 			wantLabel: []string{"Local backups"},
 		},
-			{
-				name: "cloud absolute with colon allowed",
-				cfg: &config.Config{
-					BackupPath:   "/backup/local",
-					CloudEnabled: true,
-					CloudRemote:  "/mnt/backups:foo",
-				},
-				wantCount: 2,
-				wantPaths: []string{"/backup/local", "/mnt/backups:foo"},
-				wantLabel: []string{"Local backups", "Cloud backups"},
+		{
+			name: "cloud absolute with colon allowed",
+			cfg: &config.Config{
+				BackupPath:   "/backup/local",
+				CloudEnabled: true,
+				CloudRemote:  "/mnt/backups:foo",
 			},
+			wantCount: 2,
+			wantPaths: []string{"/backup/local", "/mnt/backups:foo"},
+			wantLabel: []string{"Local backups", "Cloud backups"},
+		},
 		{
 			name:      "all paths empty",
 			cfg:       &config.Config{},
@@ -2588,7 +2588,7 @@ func TestInspectRcloneMetadataManifest_RcloneFails(t *testing.T) {
 // copyRawArtifactsToWorkdirWithLogger coverage tests
 // =====================================
 
-func TestCopyRawArtifactsToWorkdir_NilContext(t *testing.T) {
+func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
 	origFS := restoreFS
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = origFS })
@@ -2612,8 +2612,7 @@ func TestCopyRawArtifactsToWorkdir_NilContext(t *testing.T) {
 		RawChecksumPath: "",
 	}
 
-	// Pass nil context - function should use context.Background()
-	staged, err := copyRawArtifactsToWorkdirWithLogger(nil, cand, workDir, nil)
+	staged, err := copyRawArtifactsToWorkdirWithLogger(context.TODO(), cand, workDir, nil)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdirWithLogger error: %v", err)
 	}

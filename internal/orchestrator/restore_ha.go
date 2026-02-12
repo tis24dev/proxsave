@@ -278,7 +278,7 @@ func stageHasPVEHAConfig(stageRoot string) (bool, error) {
 	for _, candidate := range candidates {
 		if _, err := restoreFS.Stat(candidate); err == nil {
 			return true, nil
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return false, fmt.Errorf("stat %s: %w", candidate, err)
 		}
 	}

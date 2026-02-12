@@ -13,6 +13,7 @@ type RestorePlan struct {
 	NormalCategories    []Category
 	StagedCategories    []Category
 	ExportCategories    []Category
+	PBSRestoreBehavior  PBSRestoreBehavior
 	ClusterBackup       bool
 	ClusterSafeMode     bool
 	NeedsClusterRestore bool
@@ -80,4 +81,3 @@ func (p *RestorePlan) HasCategoryID(id string) bool {
 	}
 	return hasCategoryID(p.NormalCategories, id) || hasCategoryID(p.StagedCategories, id) || hasCategoryID(p.ExportCategories, id)
 }
-

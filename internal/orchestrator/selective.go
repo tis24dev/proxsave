@@ -158,11 +158,12 @@ func ShowRestoreModeMenuWithReader(ctx context.Context, reader *bufio.Reader, lo
 	fmt.Println("Select restore mode:")
 	fmt.Println("  [1] FULL restore - Restore everything from backup")
 
-	if systemType == SystemTypePVE {
+	switch systemType {
+	case SystemTypePVE:
 		fmt.Println("  [2] STORAGE only - PVE cluster + storage + jobs + mounts")
-	} else if systemType == SystemTypePBS {
+	case SystemTypePBS:
 		fmt.Println("  [2] DATASTORE only - PBS datastore definitions + sync/verify/prune jobs + mounts")
-	} else {
+	default:
 		fmt.Println("  [2] STORAGE/DATASTORE only - Storage or datastore configuration")
 	}
 

@@ -512,28 +512,26 @@ func TestExtractDirectory_Success(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestExtractHardlink_AbsoluteTargetRejected(t *testing.T) {
-	logger := logging.New(types.LogLevelDebug, false)
 	header := &tar.Header{
 		Name:     "link",
 		Linkname: "/absolute/path",
 		Typeflag: tar.TypeLink,
 	}
 
-	err := extractHardlink("/tmp/dest", header, "/tmp/dest", logger)
+	err := extractHardlink("/tmp/dest", header, "/tmp/dest")
 	if err == nil || !strings.Contains(err.Error(), "absolute hardlink target not allowed") {
 		t.Fatalf("expected absolute target error, got: %v", err)
 	}
 }
 
 func TestExtractHardlink_EscapesRoot(t *testing.T) {
-	logger := logging.New(types.LogLevelDebug, false)
 	header := &tar.Header{
 		Name:     "link",
 		Linkname: "../../../etc/passwd",
 		Typeflag: tar.TypeLink,
 	}
 
-	err := extractHardlink("/tmp/dest/link", header, "/tmp/dest", logger)
+	err := extractHardlink("/tmp/dest/link", header, "/tmp/dest")
 	if err == nil || !strings.Contains(err.Error(), "escapes root") {
 		t.Fatalf("expected escape error, got: %v", err)
 	}
@@ -544,7 +542,6 @@ func TestExtractHardlink_Success(t *testing.T) {
 	t.Cleanup(func() { restoreFS = orig })
 	restoreFS = osFS{}
 
-	logger := logging.New(types.LogLevelDebug, false)
 	destRoot := t.TempDir()
 	originalFile := filepath.Join(destRoot, "original.txt")
 	linkFile := filepath.Join(destRoot, "link.txt")
@@ -559,7 +556,7 @@ func TestExtractHardlink_Success(t *testing.T) {
 		Typeflag: tar.TypeLink,
 	}
 
-	if err := extractHardlink(linkFile, header, destRoot, logger); err != nil {
+	if err := extractHardlink(linkFile, header, destRoot); err != nil {
 		t.Fatalf("extractHardlink failed: %v", err)
 	}
 
@@ -1002,10 +999,7 @@ func TestReadVMName_FileNotFound(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestDetectNodeForVM_ReturnsHostname(t *testing.T) {
-	entry := vmEntry{
-		Path: "/export/etc/pve/nodes/node1/qemu-server/100.conf",
-	}
-	node := detectNodeForVM(entry)
+	node := detectNodeForVM()
 	// detectNodeForVM returns the current hostname, not the node from path
 	if node == "" {
 		t.Fatalf("expected non-empty node from hostname")

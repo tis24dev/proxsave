@@ -26,16 +26,15 @@ import (
 var ErrRestoreAborted = errors.New("restore workflow aborted by user")
 
 var (
-	serviceStopTimeout         = 45 * time.Second
-	serviceStopNoBlockTimeout  = 15 * time.Second
-	serviceStartTimeout        = 30 * time.Second
-	serviceVerifyTimeout       = 30 * time.Second
-	serviceStatusCheckTimeout  = 5 * time.Second
-	servicePollInterval        = 500 * time.Millisecond
-	serviceRetryDelay          = 500 * time.Millisecond
-	restoreLogSequence         uint64
-	restoreGlob                = filepath.Glob
-	prepareDecryptedBackupFunc = prepareDecryptedBackup
+	serviceStopTimeout        = 45 * time.Second
+	serviceStopNoBlockTimeout = 15 * time.Second
+	serviceStartTimeout       = 30 * time.Second
+	serviceVerifyTimeout      = 30 * time.Second
+	serviceStatusCheckTimeout = 5 * time.Second
+	servicePollInterval       = 500 * time.Millisecond
+	serviceRetryDelay         = 500 * time.Millisecond
+	restoreLogSequence        uint64
+	restoreGlob               = filepath.Glob
 )
 
 // RestoreAbortInfo contains information about an aborted restore with network rollback.
@@ -763,8 +762,17 @@ func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *decry
 	manifest := cand.Manifest
 	fmt.Println()
 	fmt.Printf("Selected backup: %s (%s)\n", cand.DisplayBase, manifest.CreatedAt.Format("2006-01-02 15:04:05"))
-	fmt.Println("Restore destination: / (system root; original paths will be preserved)")
-	fmt.Println("WARNING: This operation will overwrite configuration files on this system.")
+	cleanDest := filepath.Clean(strings.TrimSpace(dest))
+	if cleanDest == "" || cleanDest == "." {
+		cleanDest = string(os.PathSeparator)
+	}
+	if cleanDest == string(os.PathSeparator) {
+		fmt.Println("Restore destination: / (system root; original paths will be preserved)")
+		fmt.Println("WARNING: This operation will overwrite configuration files on this system.")
+	} else {
+		fmt.Printf("Restore destination: %s (original paths will be preserved under this directory)\n", cleanDest)
+		fmt.Printf("WARNING: This operation will overwrite existing files under %s.\n", cleanDest)
+	}
 	fmt.Println("Type RESTORE to proceed or 0 to cancel.")
 
 	for {
@@ -978,7 +986,7 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			logger.Warning("VM apply aborted: %v", err)
 			return applied, failed
 		}
-		target := fmt.Sprintf("/nodes/%s/%s/%s/config", detectNodeForVM(vm), vm.Kind, vm.VMID)
+		target := fmt.Sprintf("/nodes/%s/%s/%s/config", detectNodeForVM(), vm.Kind, vm.VMID)
 		args := []string{"set", target, "--filename", vm.Path}
 		if err := runPvesh(ctx, logger, args); err != nil {
 			logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
@@ -995,7 +1003,7 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 	return applied, failed
 }
 
-func detectNodeForVM(vm vmEntry) string {
+func detectNodeForVM() string {
 	host, _ := os.Hostname()
 	host = shortHost(host)
 	if host != "" {
@@ -1564,7 +1572,7 @@ func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string,
 	case tar.TypeSymlink:
 		return extractSymlink(target, header, cleanDestRoot, logger)
 	case tar.TypeLink:
-		return extractHardlink(target, header, cleanDestRoot, logger)
+		return extractHardlink(target, header, cleanDestRoot)
 	default:
 		logger.Debug("Skipping unsupported file type %d: %s", header.Typeflag, header.Name)
 		return nil
@@ -1715,7 +1723,7 @@ func extractSymlink(target string, header *tar.Header, destRoot string, logger *
 }
 
 // extractHardlink creates a hard link
-func extractHardlink(target string, header *tar.Header, destRoot string, logger *logging.Logger) error {
+func extractHardlink(target string, header *tar.Header, destRoot string) error {
 	// Validate hard link target
 	linkName := header.Linkname
 

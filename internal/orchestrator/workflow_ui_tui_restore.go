@@ -21,6 +21,10 @@ func (u *tuiWorkflowUI) SelectCategories(ctx context.Context, available []Catego
 	return selectCategoriesTUI(available, systemType, u.configPath, u.buildSig)
 }
 
+func (u *tuiWorkflowUI) SelectPBSRestoreBehavior(ctx context.Context) (PBSRestoreBehavior, error) {
+	return selectPBSRestoreBehaviorTUI(u.configPath, u.buildSig, strings.TrimSpace(u.selectedBackupSummary))
+}
+
 func (u *tuiWorkflowUI) ShowRestorePlan(ctx context.Context, config *SelectiveRestoreConfig) error {
 	return showRestorePlanTUI(config, u.configPath, u.buildSig)
 }
@@ -147,4 +151,3 @@ func (u *tuiWorkflowUI) ConfirmApplyDatacenterCfg(ctx context.Context, datacente
 	message := fmt.Sprintf("Datacenter configuration found:\n\n%s\n\nApply datacenter.cfg via pvesh now?", strings.TrimSpace(datacenterCfgPath))
 	return promptYesNoTUIFunc("Apply datacenter.cfg", u.configPath, u.buildSig, message, "Apply via API", "Skip")
 }
-

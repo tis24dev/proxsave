@@ -55,6 +55,7 @@ type RestoreWorkflowUI interface {
 	PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error)
 	SelectRestoreMode(ctx context.Context, systemType SystemType) (RestoreMode, error)
 	SelectCategories(ctx context.Context, available []Category, systemType SystemType) ([]Category, error)
+	SelectPBSRestoreBehavior(ctx context.Context) (PBSRestoreBehavior, error)
 
 	ShowRestorePlan(ctx context.Context, config *SelectiveRestoreConfig) error
 	ConfirmRestore(ctx context.Context) (bool, error)

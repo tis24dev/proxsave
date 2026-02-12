@@ -59,9 +59,9 @@ func TestCollectorCollectAll_PVEBranchWrapsCollectionError(t *testing.T) {
 	collector := NewCollector(logger, cfg, t.TempDir(), types.ProxmoxVE, false)
 	err := collector.CollectAll(context.Background())
 	if err == nil {
-		t.Fatalf("expected error, got %v", err)
+		t.Fatalf("expected error, got nil")
 	}
-	if err == nil || !strings.Contains(err.Error(), "PVE collection failed:") {
+	if !strings.Contains(err.Error(), "PVE collection failed:") {
 		t.Fatalf("expected wrapped PVE collection error, got %v", err)
 	}
 }
