@@ -135,6 +135,42 @@ func applyPBSNotificationsViaAPI(ctx context.Context, logger *logging.Logger, st
 		}
 	}
 
+	// In strict mode, remove matchers first so endpoint cleanup isn't blocked by references.
+	desiredMatchers := make(map[string]proxmoxNotificationSection, len(matchers))
+	for _, m := range matchers {
+		name := strings.TrimSpace(m.Name)
+		if name == "" {
+			continue
+		}
+		desiredMatchers[name] = m
+	}
+
+	matcherNames := make([]string, 0, len(desiredMatchers))
+	for name := range desiredMatchers {
+		matcherNames = append(matcherNames, name)
+	}
+	sort.Strings(matcherNames)
+
+	if strict {
+		out, err := runPBSManager(ctx, "notification", "matcher", "list", "--output-format=json")
+		if err != nil {
+			return err
+		}
+		current, err := parsePBSListIDs(out, "name", "id")
+		if err != nil {
+			return fmt.Errorf("parse matcher list: %w", err)
+		}
+		for _, name := range current {
+			if _, ok := desiredMatchers[name]; ok {
+				continue
+			}
+			if _, err := runPBSManager(ctx, "notification", "matcher", "remove", name); err != nil {
+				// Built-in matchers may not be removable; keep going.
+				logger.Warning("PBS notifications API apply: matcher remove %s failed (continuing): %v", name, err)
+			}
+		}
+	}
+
 	// Endpoints first (matchers refer to targets/endpoints).
 	for _, typ := range []string{"smtp", "sendmail", "gotify", "webhook"} {
 		desiredNames := make(map[string]endpointSection)
@@ -191,41 +227,6 @@ func applyPBSNotificationsViaAPI(ctx context.Context, logger *logging.Logger, st
 	}
 
 	// Then matchers.
-	desiredMatchers := make(map[string]proxmoxNotificationSection, len(matchers))
-	for _, m := range matchers {
-		name := strings.TrimSpace(m.Name)
-		if name == "" {
-			continue
-		}
-		desiredMatchers[name] = m
-	}
-
-	matcherNames := make([]string, 0, len(desiredMatchers))
-	for name := range desiredMatchers {
-		matcherNames = append(matcherNames, name)
-	}
-	sort.Strings(matcherNames)
-
-	if strict {
-		out, err := runPBSManager(ctx, "notification", "matcher", "list", "--output-format=json")
-		if err != nil {
-			return err
-		}
-		current, err := parsePBSListIDs(out, "name", "id")
-		if err != nil {
-			return fmt.Errorf("parse matcher list: %w", err)
-		}
-		for _, name := range current {
-			if _, ok := desiredMatchers[name]; ok {
-				continue
-			}
-			if _, err := runPBSManager(ctx, "notification", "matcher", "remove", name); err != nil {
-				// Built-in matchers may not be removable; keep going.
-				logger.Warning("PBS notifications API apply: matcher remove %s failed (continuing): %v", name, err)
-			}
-		}
-	}
-
 	for _, name := range matcherNames {
 		m := desiredMatchers[name]
 		flags := buildProxmoxManagerFlags(m.Entries)

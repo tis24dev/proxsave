@@ -115,6 +115,18 @@ func parsePBSListIDs(raw []byte, candidateKeys ...string) ([]string, error) {
 		return nil, nil
 	}
 
+	keys := make([]string, 0, len(candidateKeys))
+	for _, k := range candidateKeys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no candidate keys provided for PBS list ID parsing")
+	}
+
 	var rows []map[string]any
 	if err := json.Unmarshal(data, &rows); err != nil {
 		return nil, err
@@ -122,30 +134,29 @@ func parsePBSListIDs(raw []byte, candidateKeys ...string) ([]string, error) {
 
 	out := make([]string, 0, len(rows))
 	seen := make(map[string]struct{}, len(rows))
-	for _, row := range rows {
+	for idx, row := range rows {
 		id := ""
-		for _, k := range candidateKeys {
-			k = strings.TrimSpace(k)
-			if k == "" {
+		for _, k := range keys {
+			v, ok := row[k]
+			if !ok || v == nil {
 				continue
 			}
-			if v, ok := row[k]; ok {
-				if s, ok := v.(string); ok {
-					id = strings.TrimSpace(s)
-					break
-				}
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			id = strings.TrimSpace(s)
+			if id != "" {
+				break
 			}
 		}
 		if id == "" {
-			for _, v := range row {
-				if s, ok := v.(string); ok {
-					id = strings.TrimSpace(s)
-					break
-				}
+			available := make([]string, 0, len(row))
+			for k := range row {
+				available = append(available, k)
 			}
-		}
-		if id == "" {
-			continue
+			sort.Strings(available)
+			return nil, fmt.Errorf("failed to parse PBS list row %d: none of %v present as non-empty string (available keys: %v)", idx, keys, available)
 		}
 		if _, ok := seen[id]; ok {
 			continue
