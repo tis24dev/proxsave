@@ -1326,7 +1326,7 @@ func (pw *patternWriter) Write(path string, info os.FileInfo) error {
 func (pw *patternWriter) Close() error {
 	var err error
 	if pw.writer != nil {
-		if flushErr := pw.writer.Flush(); flushErr != nil && err == nil {
+		if flushErr := pw.writer.Flush(); flushErr != nil {
 			err = flushErr
 		}
 	}
@@ -1556,6 +1556,9 @@ func (c *Collector) copyIfExists(source, target, description string) error {
 }
 
 func (c *Collector) aggregateBackupHistory(ctx context.Context, jobsDir, target string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(jobsDir)
 	if err != nil {
 		return err
@@ -1563,6 +1566,9 @@ func (c *Collector) aggregateBackupHistory(ctx context.Context, jobsDir, target 
 
 	var buffers []json.RawMessage
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if entry.IsDir() {
 			continue
 		}
@@ -1599,6 +1605,9 @@ func (c *Collector) aggregateBackupHistory(ctx context.Context, jobsDir, target 
 }
 
 func (c *Collector) aggregateReplicationStatus(ctx context.Context, replicationDir, target string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(replicationDir)
 	if err != nil {
 		return err
@@ -1606,6 +1615,9 @@ func (c *Collector) aggregateReplicationStatus(ctx context.Context, replicationD
 
 	var buffers []json.RawMessage
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if entry.IsDir() {
 			continue
 		}

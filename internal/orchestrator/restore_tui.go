@@ -412,7 +412,7 @@ func maybeRepairNICNamesTUI(ctx context.Context, logger *logging.Logger, archive
 		return &nicRepairResult{AppliedAt: nowRestore(), SkippedReason: plan.SkippedReason}
 	}
 
-	if plan != nil && !plan.Mapping.IsEmpty() {
+	if !plan.Mapping.IsEmpty() {
 		logging.DebugStep(logger, "NIC repair", "Detect persistent NIC naming overrides (udev/systemd)")
 		overrides, err := detectNICNamingOverrideRules(logger)
 		if err != nil {
@@ -838,35 +838,6 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 		return false, nil
 	}
 	return result, nil
-}
-
-func promptOkTUI(title, configPath, buildSig, message, okLabel string) error {
-	app := newTUIApp()
-
-	infoText := tview.NewTextView().
-		SetText(message).
-		SetWrap(true).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true)
-
-	form := components.NewForm(app)
-	form.SetOnSubmit(func(values map[string]string) error {
-		return nil
-	})
-	form.SetOnCancel(func() {})
-	form.AddSubmitButton(okLabel)
-	form.AddCancelButton("Close")
-	enableFormNavigation(form, nil)
-
-	content := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(infoText, 0, 1, false).
-		AddItem(form.Form, 3, 0, true)
-
-	page := buildRestoreWizardPage(title, configPath, buildSig, content)
-	form.SetParentView(page)
-
-	return app.SetRoot(page, true).SetFocus(form.Form).Run()
 }
 
 func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir, configPath, buildSig string) (bool, error) {
