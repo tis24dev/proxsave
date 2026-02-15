@@ -11,7 +11,8 @@ func TestAnalyzeArchivePaths(t *testing.T) {
 
 	paths := []string{
 		"./etc/pve/storage.cfg",
-		"./etc/network/interfaces",
+		"./etc/network/interfaces.chunked",
+		"./chunked_files/etc/network/interfaces.001.chunk",
 		"./random/file",
 	}
 
@@ -40,6 +41,8 @@ func TestPathMatchesPatternVariants(t *testing.T) {
 	}{
 		{"etc/pve/storage.cfg", "./etc/pve/", true},
 		{"./etc/network/interfaces", "./etc/network/interfaces", true},
+		{"./etc/network/interfaces.chunked", "./etc/network/interfaces", true},
+		{"./chunked_files/etc/network/interfaces.001.chunk", "./etc/network/interfaces", true},
 		{"./etc/network/interfaces.d/foo", "./etc/network/interfaces", false},
 		{"./var/log/syslog", "./etc/network/", false},
 	}

@@ -2,11 +2,15 @@ package backup
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestSplitFileAndChunks(t *testing.T) {
@@ -18,8 +22,15 @@ func TestSplitFileAndChunks(t *testing.T) {
 	}
 
 	destBase := filepath.Join(tmp, "chunks", "data.bin")
-	if err := splitFile(source, destBase, 16); err != nil {
+	res, err := splitFile(source, destBase, 16)
+	if err != nil {
 		t.Fatalf("splitFile: %v", err)
+	}
+	if res.ChunkCount != 3 {
+		t.Fatalf("chunk count %d, want 3", res.ChunkCount)
+	}
+	if res.SizeBytes != int64(len(content)) {
+		t.Fatalf("split size %d, want %d", res.SizeBytes, len(content))
 	}
 
 	chunks := []string{
@@ -117,5 +128,233 @@ func TestMinifyJSONKeepsData(t *testing.T) {
 	}
 	if decoded["a"] != 1 || decoded["b"] != 2 {
 		t.Fatalf("unexpected decoded content: %+v", decoded)
+	}
+}
+
+// TestMinifyJSONPreservesLargeIntegers verifies that json.Compact preserves
+// numeric values that exceed float64 precision (integers > 2^53).
+func TestMinifyJSONPreservesLargeIntegers(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "data.json")
+	// 9007199254740993 is 2^53 + 1, which loses precision under float64.
+	input := `{"id": 9007199254740993, "name": "test"}`
+	if err := os.WriteFile(path, []byte(input), 0o640); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := minifyJSON(path); err != nil {
+		t.Fatalf("minifyJSON: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if !bytes.Contains(got, []byte("9007199254740993")) {
+		t.Fatalf("large integer lost precision: got %q", got)
+	}
+}
+
+// TestMinifyJSONPreservesKeyOrder verifies that json.Compact does not
+// reorder object keys (unlike json.Marshal on map[string]any).
+func TestMinifyJSONPreservesKeyOrder(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "data.json")
+	// Keys deliberately in reverse alphabetical order.
+	input := "{\n  \"z\": 1,\n  \"a\": 2\n}\n"
+	if err := os.WriteFile(path, []byte(input), 0o640); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := minifyJSON(path); err != nil {
+		t.Fatalf("minifyJSON: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	expected := `{"z":1,"a":2}`
+	if string(got) != expected {
+		t.Fatalf("key order changed: expected %q, got %q", expected, string(got))
+	}
+}
+
+// TestMinifyJSONNoopOnAlreadyCompact verifies no disk write when file is
+// already compact.
+func TestMinifyJSONNoopOnAlreadyCompact(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "data.json")
+	compact := `{"a":1,"b":2}`
+	if err := os.WriteFile(path, []byte(compact), 0o640); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	info1, _ := os.Stat(path)
+	if _, err := minifyJSON(path); err != nil {
+		t.Fatalf("minifyJSON: %v", err)
+	}
+	info2, _ := os.Stat(path)
+	if !info1.ModTime().Equal(info2.ModTime()) {
+		t.Fatalf("file was rewritten even though already compact")
+	}
+}
+
+// TestReassembleChunkedFilesRoundTrip verifies that chunk + reassemble is a
+// lossless round-trip: the reassembled file is byte-identical to the original.
+func TestReassembleChunkedFilesRoundTrip(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a file that will be chunked (96 bytes, threshold 64, chunk size 16).
+	original := bytes.Repeat([]byte("ABCDEFGHIJKLMNOP"), 6) // 96 bytes
+	bigFile := filepath.Join(root, "subdir", "large.bin")
+	if err := os.MkdirAll(filepath.Dir(bigFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bigFile, original, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	cfg := OptimizationConfig{
+		EnableChunking:      true,
+		ChunkSizeBytes:      16,
+		ChunkThresholdBytes: 64,
+	}
+
+	// Apply optimizations (only chunking enabled).
+	if err := ApplyOptimizations(context.Background(), logger, root, cfg); err != nil {
+		t.Fatalf("ApplyOptimizations: %v", err)
+	}
+
+	// Verify the original is gone and the marker exists.
+	if _, err := os.Stat(bigFile); !os.IsNotExist(err) {
+		t.Fatalf("expected original removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(bigFile + ".chunked"); err != nil {
+		t.Fatalf("chunk marker missing: %v", err)
+	}
+	// Regression: if file size is an exact multiple of chunk size, we must not
+	// create an extra empty chunk.
+	if _, err := os.Stat(filepath.Join(root, "chunked_files", "subdir", "large.bin.006.chunk")); err != nil {
+		t.Fatalf("expected last chunk to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "chunked_files", "subdir", "large.bin.007.chunk")); !os.IsNotExist(err) {
+		t.Fatalf("expected no extra empty chunk, stat err=%v", err)
+	}
+
+	// Reassemble.
+	if err := ReassembleChunkedFiles(logger, root); err != nil {
+		t.Fatalf("ReassembleChunkedFiles: %v", err)
+	}
+
+	// Verify byte-identical round-trip.
+	reassembled, err := os.ReadFile(bigFile)
+	if err != nil {
+		t.Fatalf("read reassembled: %v", err)
+	}
+	if !bytes.Equal(reassembled, original) {
+		t.Fatalf("reassembled content differs: got %d bytes, want %d bytes", len(reassembled), len(original))
+	}
+
+	// Verify cleanup: marker removed, chunked_files dir removed.
+	if _, err := os.Stat(bigFile + ".chunked"); !os.IsNotExist(err) {
+		t.Fatalf("chunk marker should be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "chunked_files")); !os.IsNotExist(err) {
+		t.Fatalf("chunked_files dir should be removed, stat err=%v", err)
+	}
+}
+
+// TestReassembleNoopWithoutChunks verifies ReassembleChunkedFiles is a no-op
+// when the directory contains no chunked files.
+func TestReassembleNoopWithoutChunks(t *testing.T) {
+	root := t.TempDir()
+	filePath := filepath.Join(root, "normal.txt")
+	if err := os.WriteFile(filePath, []byte("hello"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	logger := logging.New(types.LogLevelError, false)
+	if err := ReassembleChunkedFiles(logger, root); err != nil {
+		t.Fatalf("ReassembleChunkedFiles on clean dir: %v", err)
+	}
+	got, _ := os.ReadFile(filePath)
+	if string(got) != "hello" {
+		t.Fatalf("file modified unexpectedly: %q", got)
+	}
+}
+
+// TestNormalizeConfigFileSafeOperations verifies each of the four safe
+// operations performed by normalizeConfigFile individually and combined.
+func TestNormalizeConfigFileSafeOperations(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "BOM removal",
+			input:    "\xef\xbb\xbf[section]\n\tkey = value\n",
+			expected: "[section]\n\tkey = value\n",
+		},
+		{
+			name:     "trailing whitespace per line",
+			input:    "datastore: Data1\n\tpath /mnt/data  \n\tgc-schedule 05:00\t\n",
+			expected: "datastore: Data1\n\tpath /mnt/data\n\tgc-schedule 05:00\n",
+		},
+		{
+			name:     "trailing newlines consolidated",
+			input:    "[section]\n\tkey = value\n\n\n\n",
+			expected: "[section]\n\tkey = value\n",
+		},
+		{
+			name:     "CRLF normalized to LF",
+			input:    "datastore: X\r\n\tpath /tmp\r\n",
+			expected: "datastore: X\n\tpath /tmp\n",
+		},
+		{
+			name:     "stray CR normalized to LF",
+			input:    "line1\rline2\n",
+			expected: "line1\nline2\n",
+		},
+		{
+			name:     "all operations combined",
+			input:    "\xef\xbb\xbfdatastore: D1\r\n\tpath /mnt/d1  \r\n\tgc 05:00\t\r\n\n\n",
+			expected: "datastore: D1\n\tpath /mnt/d1\n\tgc 05:00\n",
+		},
+		{
+			name:     "clean file unchanged",
+			input:    "datastore: Data1\n\tpath /mnt/data\n\tgc-schedule 05:00\n",
+			expected: "datastore: Data1\n\tpath /mnt/data\n\tgc-schedule 05:00\n",
+		},
+		{
+			name:     "preserves leading indentation",
+			input:    "\t\tdeep indent\n\t\t\tdeeper\n",
+			expected: "\t\tdeep indent\n\t\t\tdeeper\n",
+		},
+		{
+			name:     "preserves blank lines between sections",
+			input:    "datastore: A\n\tpath /a\n\ndatastore: B\n\tpath /b\n",
+			expected: "datastore: A\n\tpath /a\n\ndatastore: B\n\tpath /b\n",
+		},
+		{
+			name:     "preserves comments",
+			input:    "# main config\n; alt comment\nkey = value\n",
+			expected: "# main config\n; alt comment\nkey = value\n",
+		},
+		{
+			name:     "empty file stays empty",
+			input:    "",
+			expected: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			path := filepath.Join(tmp, "test.cfg")
+			if err := os.WriteFile(path, []byte(tc.input), 0o640); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if _, err := normalizeConfigFile(path); err != nil {
+				t.Fatalf("normalizeConfigFile: %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if string(got) != tc.expected {
+				t.Fatalf("mismatch\ninput:    %q\nexpected: %q\ngot:      %q", tc.input, tc.expected, string(got))
+			}
+		})
 	}
 }

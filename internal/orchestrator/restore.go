@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -1296,7 +1297,7 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 		if selectiveMode {
 			shouldExtract := false
 			for _, cat := range categories {
-				if PathMatchesCategory(header.Name, cat) {
+				if archiveEntryMatchesCategory(header.Name, cat) {
 					shouldExtract = true
 					break
 				}
@@ -1324,6 +1325,12 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 		if filesExtracted%100 == 0 {
 			logger.Debug("Extracted %d files...", filesExtracted)
 		}
+	}
+
+	// Reassemble any files that were split into chunks during backup optimization.
+	// This is a no-op when the archive contains no chunked files.
+	if err := backup.ReassembleChunkedFiles(logger, destRoot); err != nil {
+		logger.Warning("Chunk reassembly failed: %v", err)
 	}
 
 	// Write detailed log
@@ -1373,6 +1380,35 @@ func extractArchiveNative(ctx context.Context, archivePath, destRoot string, log
 	}
 
 	return nil
+}
+
+func archiveEntryMatchesCategory(entryName string, category Category) bool {
+	if PathMatchesCategory(entryName, category) {
+		return true
+	}
+
+	clean := strings.TrimPrefix(strings.TrimSpace(entryName), "./")
+
+	// Marker files created by smart chunking: <original>.chunked
+	if strings.HasSuffix(clean, ".chunked") {
+		original := strings.TrimSuffix(clean, ".chunked")
+		if original != clean && PathMatchesCategory(original, category) {
+			return true
+		}
+	}
+
+	// Chunk files stored under chunked_files/<original>.<idx>.chunk
+	if strings.HasPrefix(clean, "chunked_files/") {
+		trimmed := strings.TrimPrefix(clean, "chunked_files/")
+		if PathMatchesCategory(trimmed, category) {
+			return true
+		}
+		if original, ok := originalPathFromChunk(trimmed); ok && PathMatchesCategory(original, category) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func isRealRestoreFS(fs FS) bool {
