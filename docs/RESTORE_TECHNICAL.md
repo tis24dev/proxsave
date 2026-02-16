@@ -871,7 +871,7 @@ func extractSelectiveArchive(
 
 #### Phase 10: Staged Apply (PVE/PBS)
 
-After extraction, **staged categories** are applied from the staging directory under `/tmp/proxsave/restore-stage-*`.
+After extraction, **staged categories** are applied from the staging directory under `/tmp/proxsave/restore-stage-*` (permissions `0700`). On clean restores, ProxSave removes the staging directory automatically (override: `PROXSAVE_PRESERVE_RESTORE_STAGING=1`).
 
 **PBS staged apply**:
 - Selected interactively during restore on PBS hosts: **Merge (existing PBS)** vs **Clean 1:1 (fresh PBS install)**.
