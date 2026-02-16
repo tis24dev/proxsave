@@ -42,7 +42,10 @@ func TestCollectArchivePaths(t *testing.T) {
 	}
 
 	tr := tar.NewReader(bytes.NewReader(buf.Bytes()))
-	got := collectArchivePaths(tr)
+	got, err := collectArchivePaths(tr)
+	if err != nil {
+		t.Fatalf("collectArchivePaths() error: %v", err)
+	}
 
 	if len(got) != len(entries) {
 		t.Fatalf("collectArchivePaths() len=%d; want %d (paths=%v)", len(got), len(entries), got)

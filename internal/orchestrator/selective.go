@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sort"
@@ -25,11 +26,16 @@ type SelectiveRestoreConfig struct {
 	Metadata           *backup.Manifest
 }
 
-// AnalyzeBackupCategories detects which categories are available in the backup
-func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) (categories []Category, err error) {
+// AnalyzeBackupCategories detects which categories are available in the backup.
+// It scans the archive streamingly (O(1) memory) and supports cancellation via ctx.
+func AnalyzeBackupCategories(ctx context.Context, archivePath string, logger *logging.Logger) (categories []Category, err error) {
 	done := logging.DebugStart(logger, "analyze backup categories", "archive=%s", archivePath)
 	defer func() { done(err) }()
 	logger.Info("Analyzing backup categories...")
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Open the archive and read all entry names
 	file, err := restoreFS.Open(archivePath)
@@ -39,22 +45,63 @@ func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) (catego
 	defer file.Close()
 
 	// Create appropriate reader based on compression
-	reader, err := createDecompressionReader(context.Background(), file, archivePath)
+	reader, err := createDecompressionReader(ctx, file, archivePath)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if closer, ok := reader.(interface{ Close() error }); ok {
-			closer.Close()
+	if closer, ok := reader.(interface{ Close() error }); ok {
+		// When the archive isn't compressed, createDecompressionReader returns the same *os.File.
+		// Avoid double-closing; the underlying file is already closed by the defer above.
+		if rf, ok := reader.(*os.File); !ok || rf != file {
+			defer closer.Close()
 		}
-	}()
+	}
 
 	tarReader := tar.NewReader(reader)
 
-	archivePaths := collectArchivePaths(tarReader)
-	logger.Debug("Found %d entries in archive", len(archivePaths))
+	allCategories := GetAllCategories()
+	if len(allCategories) == 0 {
+		return nil, nil
+	}
+	found := make([]bool, len(allCategories))
+	foundCount := 0
+	entriesScanned := 0
+scanLoop:
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		header, err := tarReader.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("read archive entries: %w", err)
+		}
+		entriesScanned++
 
-	availableCategories := AnalyzeArchivePaths(archivePaths, GetAllCategories())
+		for i := range allCategories {
+			if found[i] {
+				continue
+			}
+			if archiveEntryMatchesCategory(header.Name, allCategories[i]) {
+				found[i] = true
+				allCategories[i].IsAvailable = true
+				foundCount++
+				if foundCount == len(allCategories) {
+					break scanLoop
+				}
+			}
+		}
+	}
+	logger.Debug("Scanned %d entries in archive", entriesScanned)
+
+	availableCategories := make([]Category, 0, foundCount)
+	for i, cat := range allCategories {
+		if found[i] {
+			availableCategories = append(availableCategories, cat)
+		}
+	}
 	for _, cat := range availableCategories {
 		logger.Debug("Category available: %s (%s)", cat.ID, cat.Name)
 	}
@@ -93,16 +140,18 @@ func AnalyzeArchivePaths(archivePaths []string, allCategories []Category) []Cate
 	return availableCategories
 }
 
-func collectArchivePaths(tarReader *tar.Reader) []string {
+func collectArchivePaths(tarReader *tar.Reader) ([]string, error) {
 	var archivePaths []string
 	for {
 		header, err := tarReader.Next()
 		if err != nil {
-			break // EOF or error
+			if errors.Is(err, io.EOF) {
+				return archivePaths, nil
+			}
+			return archivePaths, err
 		}
 		archivePaths = append(archivePaths, header.Name)
 	}
-	return archivePaths
 }
 
 // pathMatchesPattern checks if an archive path matches a category pattern

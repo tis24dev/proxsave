@@ -26,9 +26,49 @@ func TestAnalyzeBackupCategories_OpenError(t *testing.T) {
 	restoreFS = fakeFS
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 
-	_, err := AnalyzeBackupCategories("/missing/archive.tar", logger)
+	_, err := AnalyzeBackupCategories(context.Background(), "/missing/archive.tar", logger)
 	if err == nil {
 		t.Fatalf("expected error when archive cannot be opened")
+	}
+}
+
+func TestAnalyzeBackupCategories_TarReadError(t *testing.T) {
+	orig := restoreFS
+	defer func() { restoreFS = orig }()
+	fakeFS := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fakeFS.Root) }()
+	restoreFS = fakeFS
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+
+	payload := bytes.Repeat([]byte("a"), 2048)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "etc/hosts", Mode: 0o644, Size: int64(len(payload))}); err != nil {
+		t.Fatalf("WriteHeader: %v", err)
+	}
+	if _, err := tw.Write(payload); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	full := buf.Bytes()
+	if len(full) < 700 {
+		t.Fatalf("unexpected tar size: %d", len(full))
+	}
+	truncated := full[:700]
+
+	if err := fakeFS.AddFile("/broken.tar", truncated); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+
+	_, err := AnalyzeBackupCategories(context.Background(), "/broken.tar", logger)
+	if err == nil {
+		t.Fatalf("expected error for truncated tar archive")
+	}
+	if !strings.Contains(err.Error(), "read archive entries") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

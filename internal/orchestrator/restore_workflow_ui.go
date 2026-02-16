@@ -17,6 +17,7 @@ import (
 )
 
 var prepareRestoreBundleFunc = prepareRestoreBundleWithUI
+var analyzeBackupCategoriesFunc = AnalyzeBackupCategories
 
 func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, false)
@@ -92,42 +93,63 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	}
 
 	logger.Info("Analyzing backup contents...")
-	availableCategories, err := AnalyzeBackupCategories(prepared.ArchivePath, logger)
-	if err != nil {
-		logger.Warning("Could not analyze categories: %v", err)
-		logger.Info("Falling back to full restore mode")
-		return runFullRestoreWithUI(ctx, ui, candidate, prepared, destRoot, logger, cfg.DryRun)
-	}
+	availableCategories, analysisErr := analyzeBackupCategoriesFunc(ctx, prepared.ArchivePath, logger)
 
 	var (
 		mode               RestoreMode
 		selectedCategories []Category
 	)
-	for {
-		mode, err = ui.SelectRestoreMode(ctx, systemType)
-		if err != nil {
+
+	if analysisErr != nil {
+		logger.Warning("Backup category analysis failed: %v", analysisErr)
+		if err := ui.ShowMessage(ctx, "Safe full restore (analysis unavailable)",
+			"Backup category analysis failed.\n\n"+
+				"ProxSave will proceed with a SAFE full restore.\n\n"+
+				"Safety features remain enabled (staging, transactional apply with rollback timers, and safety backups).\n\n"+
+				"Note: Categories missing from the archive will be skipped automatically."); err != nil {
 			return err
 		}
 
-		if mode != RestoreModeCustom {
-			selectedCategories = GetCategoriesForMode(mode, systemType, availableCategories)
+		mode = RestoreModeFull
+
+		backupType := DetectBackupType(candidate.Manifest)
+		switch backupType {
+		case SystemTypePVE, SystemTypePBS:
+			availableCategories = GetCategoriesForSystem(string(backupType))
+			if len(availableCategories) == 0 {
+				availableCategories = GetAllCategories()
+			}
+		default:
+			availableCategories = GetAllCategories()
+		}
+		selectedCategories = append([]Category{}, availableCategories...)
+	} else {
+		for {
+			mode, err = ui.SelectRestoreMode(ctx, systemType)
+			if err != nil {
+				return err
+			}
+
+			if mode != RestoreModeCustom {
+				selectedCategories = GetCategoriesForMode(mode, systemType, availableCategories)
+				break
+			}
+
+			selectedCategories, err = ui.SelectCategories(ctx, availableCategories, systemType)
+			if err != nil {
+				if errors.Is(err, errRestoreBackToMode) {
+					continue
+				}
+				return err
+			}
 			break
 		}
 
-		selectedCategories, err = ui.SelectCategories(ctx, availableCategories, systemType)
-		if err != nil {
-			if errors.Is(err, errRestoreBackToMode) {
-				continue
+		if mode == RestoreModeCustom {
+			selectedCategories, err = maybeAddRecommendedCategoriesForTFA(ctx, ui, logger, selectedCategories, availableCategories)
+			if err != nil {
+				return err
 			}
-			return err
-		}
-		break
-	}
-
-	if mode == RestoreModeCustom {
-		selectedCategories, err = maybeAddRecommendedCategoriesForTFA(ctx, ui, logger, selectedCategories, availableCategories)
-		if err != nil {
-			return err
 		}
 	}
 
