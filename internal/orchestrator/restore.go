@@ -36,6 +36,7 @@ var (
 	serviceRetryDelay         = 500 * time.Millisecond
 	restoreLogSequence        uint64
 	restoreGlob               = filepath.Glob
+	pveClusterServices        = [...]string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
 )
 
 // RestoreAbortInfo contains information about an aborted restore with network rollback.
@@ -141,8 +142,8 @@ func checkZFSPoolsAfterRestore(logger *logging.Logger) error {
 }
 
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
-	for _, service := range services {
+	for i := len(pveClusterServices) - 1; i >= 0; i-- {
+		service := pveClusterServices[i]
 		if err := stopServiceWithRetries(ctx, logger, service); err != nil {
 			return fmt.Errorf("failed to stop PVE services (%s): %w", service, err)
 		}
@@ -151,8 +152,7 @@ func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
 }
 
 func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
-	for _, service := range services {
+	for _, service := range pveClusterServices {
 		if err := startServiceWithRetries(ctx, logger, service); err != nil {
 			return fmt.Errorf("failed to start PVE services (%s): %w", service, err)
 		}

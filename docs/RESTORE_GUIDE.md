@@ -916,10 +916,10 @@ Before Restore:
   └─────────────┘
 
 Stop Phase:
-  systemctl stop pve-cluster  ← /etc/pve unmounted
-  systemctl stop pvedaemon
-  systemctl stop pveproxy
   systemctl stop pvestatd
+  systemctl stop pveproxy
+  systemctl stop pvedaemon
+  systemctl stop pve-cluster  ← /etc/pve unmounted
   umount /etc/pve (if needed)
 
 Restore Phase:
@@ -2486,12 +2486,12 @@ Use Ctrl+C carefully - wait for current file to finish.
 **Q: How do I rollback a failed restore?**
 
 A: Use the safety backup:
-```bash
-# Stop services (if cluster restore)
-systemctl stop pve-cluster pvedaemon pveproxy pvestatd
+	```bash
+	# Stop services (if cluster restore)
+	systemctl stop pvestatd pveproxy pvedaemon pve-cluster
 
-# Extract safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+	# Extract safety backup
+	tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd

@@ -156,16 +156,15 @@ sequenceDiagram
     Restore->>Restore: Detect needsClusterRestore = true
 
     Note over Restore,Services: Service Stop Phase
-    Restore->>Services: systemctl stop pve-cluster
-    Services->>FS: Unmount /etc/pve (FUSE)
-    Services->>DB: Close file handles
-    Services-->>Restore: Stopped
-
-    Restore->>Services: systemctl stop pvedaemon
+    Restore->>Services: systemctl stop pvestatd
     Services-->>Restore: Stopped
     Restore->>Services: systemctl stop pveproxy
     Services-->>Restore: Stopped
-    Restore->>Services: systemctl stop pvestatd
+    Restore->>Services: systemctl stop pvedaemon
+    Services-->>Restore: Stopped
+    Restore->>Services: systemctl stop pve-cluster
+    Services->>FS: Unmount /etc/pve (FUSE)
+    Services->>DB: Close file handles
     Services-->>Restore: Stopped
 
     Note over Restore,FS: Unmount Phase
@@ -281,15 +280,15 @@ stateDiagram-v2
     Running --> Stopping: User initiates restore
 
     state Stopping {
-        [*] --> StopCluster
-        StopCluster: systemctl stop pve-cluster
-        StopCluster --> StopDaemon
-        StopDaemon: systemctl stop pvedaemon
-        StopDaemon --> StopProxy
-        StopProxy: systemctl stop pveproxy
-        StopProxy --> StopStatd
+        [*] --> StopStatd
         StopStatd: systemctl stop pvestatd
-        StopStatd --> UnmountPVE
+        StopStatd --> StopProxy
+        StopProxy: systemctl stop pveproxy
+        StopProxy --> StopDaemon
+        StopDaemon: systemctl stop pvedaemon
+        StopDaemon --> StopCluster
+        StopCluster: systemctl stop pve-cluster
+        StopCluster --> UnmountPVE
         UnmountPVE: umount /etc/pve
         UnmountPVE --> [*]
     }

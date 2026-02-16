@@ -191,23 +191,30 @@ func TestStopPVEClusterServices_UsesNoBlock(t *testing.T) {
 		t.Fatalf("expected success stopping PVE services, got %v", err)
 	}
 
-	wantStops := []string{
-		"systemctl stop --no-block pve-cluster",
-		"systemctl stop --no-block pvedaemon",
-		"systemctl stop --no-block pveproxy",
+	wantStopOrder := []string{
 		"systemctl stop --no-block pvestatd",
+		"systemctl stop --no-block pveproxy",
+		"systemctl stop --no-block pvedaemon",
+		"systemctl stop --no-block pve-cluster",
 	}
-	for _, cmd := range wantStops {
-		found := false
-		for _, call := range fake.Calls {
-			if call == cmd {
-				found = true
-				break
+	indexOfCall := func(calls []string, want string) int {
+		for i, call := range calls {
+			if call == want {
+				return i
 			}
 		}
-		if !found {
+		return -1
+	}
+	prevIdx := -1
+	for _, cmd := range wantStopOrder {
+		idx := indexOfCall(fake.Calls, cmd)
+		if idx < 0 {
 			t.Fatalf("expected %s to be called, calls: %#v", cmd, fake.Calls)
 		}
+		if idx <= prevIdx {
+			t.Fatalf("expected %s to be called after previous stop command, calls: %#v", cmd, fake.Calls)
+		}
+		prevIdx = idx
 	}
 }
 
