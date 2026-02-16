@@ -602,6 +602,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			restoreHadWarnings = true
 			logger.Warning("Notifications staged apply: %v", err)
 		}
+		if err := maybeApplyPBSConfigsViaAPIFromStage(ctx, logger, plan, stageRoot, cfg.DryRun, pbsServicesStopped); err != nil {
+			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
+				return err
+			}
+			restoreHadWarnings = true
+			logger.Warning("PBS staged API apply: %v", err)
+		}
 	}
 
 	stageRootForNetworkApply := stageRoot
