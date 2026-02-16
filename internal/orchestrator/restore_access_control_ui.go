@@ -357,12 +357,16 @@ func armAccessControlRollback(ctx context.Context, logger *logging.Logger, backu
 		timeout:    timeout,
 	}
 
-	if err := restoreFS.WriteFile(handle.markerPath, []byte("pending\n"), 0o640); err != nil {
+	if err := restoreFS.WriteFile(handle.logPath, []byte(""), 0o600); err != nil {
+		return nil, fmt.Errorf("create rollback log: %w", err)
+	}
+
+	if err := restoreFS.WriteFile(handle.markerPath, []byte("pending\n"), 0o600); err != nil {
 		return nil, fmt.Errorf("write rollback marker: %w", err)
 	}
 
 	script := buildAccessControlRollbackScript(handle.markerPath, backupPath, handle.logPath)
-	if err := restoreFS.WriteFile(handle.scriptPath, []byte(script), 0o640); err != nil {
+	if err := restoreFS.WriteFile(handle.scriptPath, []byte(script), 0o600); err != nil {
 		return nil, fmt.Errorf("write rollback script: %w", err)
 	}
 
@@ -427,7 +431,6 @@ func buildAccessControlRollbackScript(markerPath, backupPath, logPath string) st
 	}
 
 	lines := []string{
-		"#!/bin/sh",
 		"set -eu",
 		fmt.Sprintf("LOG=%s", shellQuote(logPath)),
 		fmt.Sprintf("MARKER=%s", shellQuote(markerPath)),
@@ -488,4 +491,3 @@ func buildAccessControlRollbackScript(markerPath, backupPath, logPath string) st
 	)
 	return strings.Join(lines, "\n") + "\n"
 }
-

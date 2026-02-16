@@ -90,7 +90,7 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	logger.Info("Creating %s of current configuration...", strings.ToLower(desc))
 	logger.Debug("%s will be saved to: %s", desc, backupArchive)
 
-	file, err := safetyFS.Create(backupArchive)
+	file, err := safetyFS.OpenFile(backupArchive, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create backup archive: %w", err)
 	}
@@ -186,7 +186,7 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 
 	if spec.WriteLocationFile && locationFileName != "" {
 		locationFile := filepath.Join(baseDir, locationFileName)
-		if err := safetyFS.WriteFile(locationFile, []byte(backupArchive), 0644); err != nil {
+		if err := safetyFS.WriteFile(locationFile, []byte(backupArchive), 0o600); err != nil {
 			logger.Warning("Could not write backup location file: %v", err)
 		} else {
 			logger.Info("Backup location saved to: %s", locationFile)
