@@ -46,16 +46,39 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 
 	needsAPI := plan.HasCategoryID("pbs_host") || plan.HasCategoryID("datastore_pbs") || plan.HasCategoryID("pbs_remotes") || plan.HasCategoryID("pbs_jobs")
 	apiAvailable := false
+	var apiUnavailableErr error
 	if needsAPI {
-		if err := ensurePBSServicesForAPI(ctx, logger); err != nil {
+		if apiErr := ensurePBSServicesForAPI(ctx, logger); apiErr != nil {
+			apiUnavailableErr = apiErr
 			if allowFileFallback {
-				logger.Warning("PBS API apply unavailable; falling back to file-based staged apply where possible: %v", err)
+				logger.Warning("PBS API apply unavailable; falling back to file-based staged apply where possible: %v", apiErr)
 			} else {
-				logger.Warning("PBS API apply unavailable; skipping API-applied PBS categories (merge mode): %v", err)
+				logging.DebugStep(logger, "pbs staged apply", "PBS API apply unavailable; merge mode will skip API-applied PBS categories: %v", apiErr)
 			}
 		} else {
 			apiAvailable = true
 		}
+	}
+
+	var mergeAPISkipErr error
+	if needsAPI && !apiAvailable && !allowFileFallback && apiUnavailableErr != nil {
+		var skipped []string
+		if plan.HasCategoryID("pbs_host") {
+			skipped = append(skipped, "pbs_host (node.cfg/traffic-control.cfg)")
+		}
+		if plan.HasCategoryID("datastore_pbs") {
+			skipped = append(skipped, "datastore_pbs")
+		}
+		if plan.HasCategoryID("pbs_remotes") {
+			skipped = append(skipped, "pbs_remotes")
+		}
+		if plan.HasCategoryID("pbs_jobs") {
+			skipped = append(skipped, "pbs_jobs")
+		}
+		if len(skipped) == 0 {
+			skipped = append(skipped, "PBS API categories")
+		}
+		mergeAPISkipErr = fmt.Errorf("PBS API apply unavailable in %s; skipped %s: %w", behavior.DisplayName(), strings.Join(skipped, ", "), apiUnavailableErr)
 	}
 
 	if plan.HasCategoryID("pbs_host") {
@@ -185,7 +208,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		}
 	}
 
-	return nil
+	return mergeAPISkipErr
 }
 
 func applyPBSRemoteCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {

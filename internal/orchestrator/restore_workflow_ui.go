@@ -748,7 +748,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	}
 
 	logger.Info("")
-	if restoreHadWarnings {
+	if restoreHadWarnings || (logger != nil && logger.HasWarnings()) {
 		logger.Warning("Restore completed with warnings.")
 	} else {
 		logger.Info("Restore completed successfully.")
