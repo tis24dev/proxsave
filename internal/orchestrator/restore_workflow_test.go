@@ -80,6 +80,7 @@ func TestRunRestoreWorkflow_CustomModeNoCategories_Succeeds(t *testing.T) {
 			Manifest: &backup.Manifest{
 				CreatedAt:     time.Unix(1700000000, 0),
 				ClusterMode:   "standalone",
+				ProxmoxType:   "pve",
 				ScriptVersion: "1.0.0",
 			},
 		}
@@ -131,6 +132,7 @@ func TestRunRestoreWorkflow_ConfirmFalseAborts(t *testing.T) {
 			Manifest: &backup.Manifest{
 				CreatedAt:     time.Unix(1700000000, 0),
 				ClusterMode:   "standalone",
+				ProxmoxType:   "pve",
 				ScriptVersion: "1.0.0",
 			},
 		}

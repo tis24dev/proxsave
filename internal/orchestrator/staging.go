@@ -5,13 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
-
-var restoreStageSequence uint64
 
 func isStagedCategoryID(id string) bool {
 	switch strings.TrimSpace(id) {
@@ -51,21 +48,16 @@ func splitRestoreCategories(categories []Category) (normal []Category, staged []
 	return normal, staged, export
 }
 
-func stageDestRoot() string {
-	base := "/tmp/proxsave"
-	seq := atomic.AddUint64(&restoreStageSequence, 1)
-	return filepath.Join(base, fmt.Sprintf("restore-stage-%s_pid%d_%d", nowRestore().Format("20060102-150405"), os.Getpid(), seq))
-}
-
 func createRestoreStageDir() (string, error) {
 	base := "/tmp/proxsave"
 	if err := restoreFS.MkdirAll(base, 0o755); err != nil {
 		return "", fmt.Errorf("ensure staging base directory %s: %w", base, err)
 	}
 
-	dir := stageDestRoot()
-	if err := restoreFS.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create staging directory %s: %w", dir, err)
+	pattern := fmt.Sprintf("restore-stage-%s_pid%d-", nowRestore().Format("20060102-150405"), os.Getpid())
+	dir, err := restoreFS.MkdirTemp(base, pattern)
+	if err != nil {
+		return "", fmt.Errorf("create staging directory under %s: %w", base, err)
 	}
 	return dir, nil
 }

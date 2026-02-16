@@ -10,24 +10,21 @@ import (
 func TestCreateRestoreStageDir_Creates0700Directory(t *testing.T) {
 	origFS := restoreFS
 	origTime := restoreTime
-	origSeq := restoreStageSequence
 	t.Cleanup(func() {
 		restoreFS = origFS
 		restoreTime = origTime
-		restoreStageSequence = origSeq
 	})
 
 	fake := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
 	restoreFS = fake
 	restoreTime = &FakeTime{Current: time.Unix(1700000000, 0)}
-	restoreStageSequence = 0
 
 	stageRoot, err := createRestoreStageDir()
 	if err != nil {
 		t.Fatalf("createRestoreStageDir error: %v", err)
 	}
-	if !strings.HasPrefix(stageRoot, "/tmp/proxsave/restore-stage-") {
+	if !strings.Contains(stageRoot, "/tmp/proxsave/restore-stage-") {
 		t.Fatalf("stageRoot=%q; want under /tmp/proxsave/restore-stage-*", stageRoot)
 	}
 
@@ -40,6 +37,32 @@ func TestCreateRestoreStageDir_Creates0700Directory(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o700 {
 		t.Fatalf("stageRoot perm=%#o; want %#o", perm, 0o700)
+	}
+}
+
+func TestCreateRestoreStageDir_UniqueBetweenCalls(t *testing.T) {
+	origFS := restoreFS
+	origTime := restoreTime
+	t.Cleanup(func() {
+		restoreFS = origFS
+		restoreTime = origTime
+	})
+
+	fake := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
+	restoreFS = fake
+	restoreTime = &FakeTime{Current: time.Unix(1700000000, 0)}
+
+	first, err := createRestoreStageDir()
+	if err != nil {
+		t.Fatalf("first createRestoreStageDir error: %v", err)
+	}
+	second, err := createRestoreStageDir()
+	if err != nil {
+		t.Fatalf("second createRestoreStageDir error: %v", err)
+	}
+	if first == second {
+		t.Fatalf("stageRoot collision: %q", first)
 	}
 }
 

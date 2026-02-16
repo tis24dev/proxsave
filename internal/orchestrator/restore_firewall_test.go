@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"os"
 	"testing"
 )
@@ -43,6 +44,34 @@ func TestSyncDirExact_PrunesExtraneousFiles(t *testing.T) {
 
 	if _, err := fakeFS.Stat(dest + "/old.fw"); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("expected old.fw to be removed; stat err=%v", err)
+	}
+}
+
+func TestDisarmFirewallRollback_RemovesMarkerAndScript(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := NewFakeFS()
+	restoreFS = fakeFS
+
+	handle := &firewallRollbackHandle{
+		markerPath: "/tmp/proxsave/firewall_rollback_pending_test",
+		scriptPath: "/tmp/proxsave/firewall_rollback_test.sh",
+	}
+	if err := fakeFS.AddFile(handle.markerPath, []byte("pending\n")); err != nil {
+		t.Fatalf("add marker: %v", err)
+	}
+	if err := fakeFS.AddFile(handle.scriptPath, []byte("#!/bin/sh\nexit 0\n")); err != nil {
+		t.Fatalf("add script: %v", err)
+	}
+
+	disarmFirewallRollback(context.Background(), newTestLogger(), handle)
+
+	if _, err := fakeFS.Stat(handle.markerPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected marker to be removed; stat err=%v", err)
+	}
+	if _, err := fakeFS.Stat(handle.scriptPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected script to be removed; stat err=%v", err)
 	}
 }
 

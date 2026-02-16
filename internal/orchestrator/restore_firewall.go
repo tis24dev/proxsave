@@ -491,6 +491,12 @@ func disarmFirewallRollback(ctx context.Context, logger *logging.Logger, handle 
 		_, _ = restoreCmd.Run(ctx, "systemctl", "stop", timerUnit)
 		_, _ = restoreCmd.Run(ctx, "systemctl", "reset-failed", strings.TrimSpace(handle.unitName)+".service", timerUnit)
 	}
+
+	if strings.TrimSpace(handle.scriptPath) != "" {
+		if err := restoreFS.Remove(handle.scriptPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logger.Warning("Failed to remove firewall rollback script %s: %v", handle.scriptPath, err)
+		}
+	}
 }
 
 func buildFirewallRollbackScript(markerPath, backupPath, logPath string) string {

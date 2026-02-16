@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/backup"
@@ -21,6 +22,25 @@ func TestValidateCompatibility_Mismatch(t *testing.T) {
 	manifest := &backup.Manifest{ProxmoxType: "pbs"}
 	if err := ValidateCompatibility(manifest); err == nil {
 		t.Fatalf("expected incompatibility error")
+	}
+}
+
+func TestValidateCompatibility_UnknownBackupTypeWarns(t *testing.T) {
+	orig := compatFS
+	defer func() { compatFS = orig }()
+
+	fake := NewFakeFS()
+	defer func() { _ = os.RemoveAll(fake.Root) }()
+	compatFS = fake
+	if err := fake.AddDir("/etc/pve"); err != nil {
+		t.Fatalf("add dir: %v", err)
+	}
+
+	manifest := &backup.Manifest{}
+	if err := ValidateCompatibility(manifest); err == nil {
+		t.Fatalf("expected warning for unknown backup type")
+	} else if !strings.Contains(err.Error(), "cannot detect backup type") {
+		t.Fatalf("unexpected warning: %v", err)
 	}
 }
 
