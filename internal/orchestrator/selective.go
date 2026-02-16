@@ -312,10 +312,7 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 			selected = make(map[int]bool)
 		case "c":
 			// Continue - check if at least one category is selected
-			selectedCount := 0
-			for range selected {
-				selectedCount++
-			}
+			selectedCount := len(selected)
 
 			if selectedCount == 0 {
 				fmt.Println()
@@ -346,7 +343,11 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 
 			// Toggle selection
 			index := num - 1
-			selected[index] = !selected[index]
+			if selected[index] {
+				delete(selected, index)
+			} else {
+				selected[index] = true
+			}
 		}
 	}
 }

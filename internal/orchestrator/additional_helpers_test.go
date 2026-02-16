@@ -1231,6 +1231,22 @@ func TestShowCategorySelectionMenu(t *testing.T) {
 		t.Fatalf("expected 2 categories after toggle, got %d", len(cats))
 	}
 
+	// Toggle category 1 twice, attempt continue with none selected, then select 1 and continue
+	r, w, _ = os.Pipe()
+	_, _ = w.WriteString("1\n1\nc\n1\nc\n")
+	_ = w.Close()
+	os.Stdin = r
+	cats, err = ShowCategorySelectionMenu(context.Background(), logger, available, SystemTypePVE)
+	if err != nil {
+		t.Fatalf("ShowCategorySelectionMenu deselect-all error: %v", err)
+	}
+	if len(cats) != 1 {
+		t.Fatalf("expected 1 category after re-select, got %d", len(cats))
+	}
+	if cats[0].ID != "pve_cluster" {
+		t.Fatalf("expected pve_cluster selected, got %q", cats[0].ID)
+	}
+
 	// Cancel
 	r, w, _ = os.Pipe()
 	_, _ = w.WriteString("0\n")
