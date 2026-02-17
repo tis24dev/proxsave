@@ -155,23 +155,23 @@ type CollectorConfig struct {
 	CephConfigPath          string
 
 	// PBS-specific collection options
-	BackupDatastoreConfigs  bool
-	BackupPBSS3Endpoints    bool
-	BackupPBSNodeConfig     bool
-	BackupPBSAcmeAccounts   bool
-	BackupPBSAcmePlugins    bool
-	BackupPBSMetricServers  bool
-	BackupPBSTrafficControl bool
-	BackupPBSNotifications  bool
+	BackupDatastoreConfigs     bool
+	BackupPBSS3Endpoints       bool
+	BackupPBSNodeConfig        bool
+	BackupPBSAcmeAccounts      bool
+	BackupPBSAcmePlugins       bool
+	BackupPBSMetricServers     bool
+	BackupPBSTrafficControl    bool
+	BackupPBSNotifications     bool
 	BackupPBSNotificationsPriv bool
-	BackupUserConfigs       bool
-	BackupRemoteConfigs     bool
-	BackupSyncJobs          bool
-	BackupVerificationJobs  bool
-	BackupTapeConfigs       bool
-	BackupPBSNetworkConfig  bool
-	BackupPruneSchedules    bool
-	BackupPxarFiles         bool
+	BackupUserConfigs          bool
+	BackupRemoteConfigs        bool
+	BackupSyncJobs             bool
+	BackupVerificationJobs     bool
+	BackupTapeConfigs          bool
+	BackupPBSNetworkConfig     bool
+	BackupPruneSchedules       bool
+	BackupPxarFiles            bool
 
 	// System collection options
 	BackupNetworkConfigs    bool
@@ -333,23 +333,23 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		CephConfigPath:          "/etc/ceph",
 
 		// PBS-specific (all enabled by default)
-		BackupDatastoreConfigs:  true,
-		BackupPBSS3Endpoints:    true,
-		BackupPBSNodeConfig:     true,
-			BackupPBSAcmeAccounts:   true,
-			BackupPBSAcmePlugins:    true,
-			BackupPBSMetricServers:  true,
-			BackupPBSTrafficControl: true,
-			BackupPBSNotifications:  true,
-			BackupPBSNotificationsPriv: true,
-			BackupUserConfigs:       true,
-			BackupRemoteConfigs:     true,
-			BackupSyncJobs:          true,
-			BackupVerificationJobs:  true,
-			BackupTapeConfigs:       true,
-		BackupPBSNetworkConfig:  true,
-		BackupPruneSchedules:    true,
-		BackupPxarFiles:         true,
+		BackupDatastoreConfigs:     true,
+		BackupPBSS3Endpoints:       true,
+		BackupPBSNodeConfig:        true,
+		BackupPBSAcmeAccounts:      true,
+		BackupPBSAcmePlugins:       true,
+		BackupPBSMetricServers:     true,
+		BackupPBSTrafficControl:    true,
+		BackupPBSNotifications:     true,
+		BackupPBSNotificationsPriv: true,
+		BackupUserConfigs:          true,
+		BackupRemoteConfigs:        true,
+		BackupSyncJobs:             true,
+		BackupVerificationJobs:     true,
+		BackupTapeConfigs:          true,
+		BackupPBSNetworkConfig:     true,
+		BackupPruneSchedules:       true,
+		BackupPxarFiles:            true,
 
 		// System collection (all enabled by default)
 		BackupNetworkConfigs:    true,
@@ -928,11 +928,36 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 			c.incFilesFailed()
 			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
 		}
+
+		exitCode := -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+		outputText := strings.TrimSpace(string(out))
+		if ctxInfo := c.depDetectUnprivilegedContainer(); ctxInfo.Detected {
+			if reason := privilegeSensitiveFailureReason(cmdParts[0], exitCode, outputText); reason != "" {
+				details := strings.TrimSpace(ctxInfo.Details)
+				if details != "" {
+					details = " (" + details + ")"
+				}
+				c.logger.Skip("Skipping %s: command `%s` failed (%v). Expected in unprivileged containers%s (%s). Non-critical; backup continues.",
+					description,
+					cmdString,
+					err,
+					details,
+					reason,
+				)
+				c.logger.Debug("Skip details for %s: output: %s", description, summarizeCommandOutputText(outputText))
+				return nil
+			}
+		}
+
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the required CLI is available and has proper permissions. Output: %s",
 			description,
 			cmdString,
 			err,
-			summarizeCommandOutputText(string(out)),
+			summarizeCommandOutputText(outputText),
 		)
 		return nil // Non-critical failure
 	}
@@ -1254,6 +1279,24 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 					description,
 					summarizeCommandOutputText(outputText),
 				)
+				return nil, nil
+			}
+		}
+
+		if ctxInfo := c.depDetectUnprivilegedContainer(); ctxInfo.Detected {
+			if reason := privilegeSensitiveFailureReason(parts[0], exitCode, outputText); reason != "" {
+				details := strings.TrimSpace(ctxInfo.Details)
+				if details != "" {
+					details = " (" + details + ")"
+				}
+				c.logger.Skip("Skipping %s: command `%s` failed (%v). Expected in unprivileged containers%s (%s). Non-critical; backup continues.",
+					description,
+					cmdString,
+					err,
+					details,
+					reason,
+				)
+				c.logger.Debug("Skip details for %s: output: %s", description, summarizeCommandOutputText(outputText))
 				return nil, nil
 			}
 		}

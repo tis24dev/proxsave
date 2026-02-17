@@ -1922,7 +1922,7 @@ If the restore includes filesystem configuration (notably `/etc/fstab`), ProxSav
 - Compares the current `/etc/fstab` with the backup copy.
 - Keeps existing critical entries (for example, root and swap) when they already match the running system.
 - Detects **safe mount candidates** from the backup (for example, additional NFS mounts) and offers to add them.
-- If ProxSave inventory data is present in the backup, ProxSave can remap **unstable** `/dev/*` devices from the backup (for example `/dev/sdb1`) to stable `UUID=`/`PARTUUID=`/`LABEL=` references **on the restore host** (only when the stable reference exists on the system).
+- If ProxSave inventory data is present in the backup, ProxSave can remap **unstable** `/dev/*` devices from the backup (for example `/dev/sdb1`) to stable `UUID=`/`PARTUUID=`/`LABEL=` references **on the restore host** (only when the stable reference exists on the system). Note: backups taken from an **unprivileged container/rootless** environment may not include usable block-device inventory, so automated remap can be limited/unavailable.
 - Normalizes restored entries by adding `nofail` (and `_netdev` for network mounts) so offline storage does not block boot/restore.
 
 **Safety behavior**:
