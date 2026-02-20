@@ -37,7 +37,7 @@ func TestWritePxarListReportWithFiles(t *testing.T) {
 	ds := pbsDatastore{Name: "ds1", Path: filepath.Join(tmp, "ds1")}
 	target := filepath.Join(tmp, "list.txt")
 	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
-	if err := c.writePxarListReport(target, ds, "ct"); err != nil {
+	if err := c.writePxarListReport(context.Background(), target, ds, "ct", 0); err != nil {
 		t.Fatalf("writePxarListReport: %v", err)
 	}
 	content, err := os.ReadFile(target)

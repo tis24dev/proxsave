@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 // createTestFile is a small indirection over os.Create used by permission
@@ -28,7 +29,7 @@ var (
 	osWriteFile = os.WriteFile
 	osSymlink   = os.Symlink
 	syncFile    = func(f *os.File) error { return f.Sync() }
-	killFunc    = func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) }
+	killFunc    = syscall.Kill
 
 	// tempRootPath is the runtime path used by CheckTempDirectory.
 	// It is a variable to allow tests to use a safe, isolated temporary directory.
@@ -64,6 +65,7 @@ type CheckerConfig struct {
 	MinDiskSecondaryGB  float64
 	MinDiskCloudGB      float64
 	SafetyFactor        float64 // Multiplier for estimated size (e.g., 1.5 = 50% buffer)
+	FsIoTimeout         time.Duration
 	LockDirPath         string
 	LockFilePath        string
 	MaxLockAge          time.Duration
@@ -93,6 +95,9 @@ func (c *CheckerConfig) Validate() error {
 	}
 	if c.SafetyFactor < 1.0 {
 		return fmt.Errorf("safety factor must be >= 1.0, got %.2f", c.SafetyFactor)
+	}
+	if c.FsIoTimeout < 0 {
+		return fmt.Errorf("filesystem I/O timeout must be >= 0")
 	}
 	if c.MaxLockAge <= 0 {
 		return fmt.Errorf("max lock age must be positive")
@@ -341,20 +346,18 @@ func (c *Checker) CheckLockFile() CheckResult {
 					return result
 				}
 			}
-		} else {
-			// No usable PID/host metadata; fall back to age-based stale detection.
-			if age > c.config.MaxLockAge {
-				c.logger.Warning("Removing stale lock file (age: %v)", age)
-				if err := osRemove(lockPath); err != nil {
-					result.Error = fmt.Errorf("failed to remove stale lock: %w", err)
-					result.Message = result.Error.Error()
-					return result
-				}
-			} else {
-				result.Message = formatInProgress(age, meta)
-				c.logger.Error("%s", result.Message)
+		} else if age > c.config.MaxLockAge {
+			// Stale lock file, remove it
+			c.logger.Warning("Removing stale lock file (age: %v)", age)
+			if err := osRemove(lockPath); err != nil {
+				result.Error = fmt.Errorf("failed to remove stale lock: %w", err)
+				result.Message = result.Error.Error()
 				return result
 			}
+		} else {
+			result.Message = formatInProgress(age, meta)
+			c.logger.Error("%s", result.Message)
+			return result
 		}
 	}
 
@@ -655,6 +658,7 @@ func GetDefaultCheckerConfig(backupPath, logPath, lockDir string) *CheckerConfig
 		MinDiskSecondaryGB:  10.0,
 		MinDiskCloudGB:      10.0,
 		SafetyFactor:        1.5, // 50% buffer over estimated size
+		FsIoTimeout:         30 * time.Second,
 		LockDirPath:         lockDir,
 		LockFilePath:        filepath.Join(lockDir, ".backup.lock"),
 		MaxLockAge:          2 * time.Hour,
@@ -690,7 +694,7 @@ func (c *Checker) CheckDiskSpaceForEstimate(estimatedSizeGB float64) CheckResult
 		}
 		requiredGB := math.Max(entry.min, estimatedSizeGB*c.config.SafetyFactor)
 
-		availableGB, err := diskSpaceGB(entry.path)
+		availableGB, err := c.diskSpaceGB(entry.path)
 		if err != nil {
 			errMsg := fmt.Sprintf("%s disk space check failed (%s): %v", entry.label, entry.path, err)
 			wrappedErr := fmt.Errorf("%s disk space check failed (%s): %w", entry.label, entry.path, err)
@@ -733,7 +737,7 @@ func (c *Checker) CheckDiskSpaceForEstimate(estimatedSizeGB float64) CheckResult
 }
 
 func (c *Checker) checkSingleDisk(label, path string, minGB float64) error {
-	availableGB, err := diskSpaceGB(path)
+	availableGB, err := c.diskSpaceGB(path)
 	if err != nil {
 		return fmt.Errorf("%s disk space check failed (%s): %w", label, path, err)
 	}
@@ -745,10 +749,14 @@ func (c *Checker) checkSingleDisk(label, path string, minGB float64) error {
 	return nil
 }
 
-func diskSpaceGB(path string) (float64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
+func (c *Checker) diskSpaceGB(path string) (float64, error) {
+	timeout := time.Duration(0)
+	if c != nil && c.config != nil {
+		timeout = c.config.FsIoTimeout
+	}
+	stat, err := safefs.Statfs(context.Background(), path, timeout)
+	if err != nil {
 		return 0, err
 	}
-	return float64(stat.Bavail*uint64(stat.Bsize)) / (1024 * 1024 * 1024), nil
+	return float64(stat.Bavail) * float64(stat.Bsize) / (1024 * 1024 * 1024), nil
 }

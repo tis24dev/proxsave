@@ -155,46 +155,40 @@ func TestCheckLockFile_RemovesLockWhenProcessIsGone(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	lockPath := filepath.Join(tmpDir, ".backup.lock")
-	host, _ := os.Hostname()
 
-	// Create a "fresh" lock file that references a non-existent PID.
-	content := fmt.Sprintf("pid=99999\nhost=%s\ntime=%s\n", host, time.Now().Format(time.RFC3339))
-	if err := os.WriteFile(lockPath, []byte(content), 0644); err != nil {
-		t.Fatalf("Failed to create test lock file: %v", err)
-	}
-	now := time.Now()
-	if err := os.Chtimes(lockPath, now, now); err != nil {
-		t.Fatalf("Failed to set lock file time: %v", err)
+	hostname, _ := os.Hostname()
+	lockContent := fmt.Sprintf("pid=%d\nhost=%s\ntime=%s\n", 999999, hostname, time.Now().Format(time.RFC3339))
+	if err := os.WriteFile(lockPath, []byte(lockContent), 0o640); err != nil {
+		t.Fatalf("write lock file: %v", err)
 	}
 
-	oldKill := killFunc
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.LockFilePath = lockPath
+	config.MaxLockAge = 24 * time.Hour
+	config.DryRun = false
+
+	origKill := killFunc
+	t.Cleanup(func() { killFunc = origKill })
 	killFunc = func(pid int, sig syscall.Signal) error {
-		return syscall.ESRCH
+		if pid == 999999 && sig == 0 {
+			return syscall.ESRCH
+		}
+		return origKill(pid, sig)
 	}
-	t.Cleanup(func() { killFunc = oldKill })
 
-	config := &CheckerConfig{
-		BackupPath:   tmpDir,
-		LogPath:      tmpDir,
-		LockDirPath:  tmpDir,
-		LockFilePath: lockPath,
-		MaxLockAge:   1 * time.Hour,
-		DryRun:       false,
-	}
 	checker := NewChecker(logger, config)
-
 	result := checker.CheckLockFile()
 	if !result.Passed {
 		t.Fatalf("CheckLockFile should succeed after removing stale lock: %s", result.Message)
 	}
 	t.Cleanup(func() { _ = checker.ReleaseLock() })
 
-	data, err := os.ReadFile(lockPath)
+	content, err := os.ReadFile(lockPath)
 	if err != nil {
 		t.Fatalf("read lock file: %v", err)
 	}
-	if !strings.Contains(string(data), fmt.Sprintf("pid=%d\n", os.Getpid())) {
-		t.Fatalf("expected new lock file to contain current pid, got: %q", string(data))
+	if !strings.Contains(string(content), fmt.Sprintf("pid=%d\n", os.Getpid())) {
+		t.Fatalf("lock file not recreated with current pid; got:\n%s", string(content))
 	}
 }
 
@@ -1642,7 +1636,13 @@ func TestCheckDiskSpaceForEstimate_WarnsOnNonCriticalErrorsAndInsufficientSpace(
 }
 
 func TestDiskSpaceGB_ErrorsOnMissingPath(t *testing.T) {
-	if _, err := diskSpaceGB("/nonexistent/path"); err == nil {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	cfg := GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir())
+	checker := NewChecker(logger, cfg)
+
+	if _, err := checker.diskSpaceGB("/nonexistent/path"); err == nil {
 		t.Fatalf("expected diskSpaceGB to error on missing path")
 	}
 }

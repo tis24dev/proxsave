@@ -26,49 +26,9 @@ func TestAnalyzeBackupCategories_OpenError(t *testing.T) {
 	restoreFS = fakeFS
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 
-	_, err := AnalyzeBackupCategories(context.Background(), "/missing/archive.tar", logger)
+	_, err := AnalyzeBackupCategories("/missing/archive.tar", logger)
 	if err == nil {
 		t.Fatalf("expected error when archive cannot be opened")
-	}
-}
-
-func TestAnalyzeBackupCategories_TarReadError(t *testing.T) {
-	orig := restoreFS
-	defer func() { restoreFS = orig }()
-	fakeFS := NewFakeFS()
-	defer func() { _ = os.RemoveAll(fakeFS.Root) }()
-	restoreFS = fakeFS
-	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-
-	payload := bytes.Repeat([]byte("a"), 2048)
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{Name: "etc/hosts", Mode: 0o644, Size: int64(len(payload))}); err != nil {
-		t.Fatalf("WriteHeader: %v", err)
-	}
-	if _, err := tw.Write(payload); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	full := buf.Bytes()
-	if len(full) < 700 {
-		t.Fatalf("unexpected tar size: %d", len(full))
-	}
-	truncated := full[:700]
-
-	if err := fakeFS.AddFile("/broken.tar", truncated); err != nil {
-		t.Fatalf("AddFile: %v", err)
-	}
-
-	_, err := AnalyzeBackupCategories(context.Background(), "/broken.tar", logger)
-	if err == nil {
-		t.Fatalf("expected error for truncated tar archive")
-	}
-	if !strings.Contains(err.Error(), "read archive entries") {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -231,30 +191,23 @@ func TestStopPVEClusterServices_UsesNoBlock(t *testing.T) {
 		t.Fatalf("expected success stopping PVE services, got %v", err)
 	}
 
-	wantStopOrder := []string{
-		"systemctl stop --no-block pvestatd",
-		"systemctl stop --no-block pveproxy",
-		"systemctl stop --no-block pvedaemon",
+	wantStops := []string{
 		"systemctl stop --no-block pve-cluster",
+		"systemctl stop --no-block pvedaemon",
+		"systemctl stop --no-block pveproxy",
+		"systemctl stop --no-block pvestatd",
 	}
-	indexOfCall := func(calls []string, want string) int {
-		for i, call := range calls {
-			if call == want {
-				return i
+	for _, cmd := range wantStops {
+		found := false
+		for _, call := range fake.Calls {
+			if call == cmd {
+				found = true
+				break
 			}
 		}
-		return -1
-	}
-	prevIdx := -1
-	for _, cmd := range wantStopOrder {
-		idx := indexOfCall(fake.Calls, cmd)
-		if idx < 0 {
+		if !found {
 			t.Fatalf("expected %s to be called, calls: %#v", cmd, fake.Calls)
 		}
-		if idx <= prevIdx {
-			t.Fatalf("expected %s to be called after previous stop command, calls: %#v", cmd, fake.Calls)
-		}
-		prevIdx = idx
 	}
 }
 

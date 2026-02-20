@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/pbs"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 type pbsDatastore struct {
@@ -45,7 +46,7 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
 			false)
 
 		// Get namespace list using CLI/Filesystem fallback
-		if err := c.collectDatastoreNamespaces(ds, datastoreDir); err != nil {
+		if err := c.collectDatastoreNamespaces(ctx, ds, datastoreDir); err != nil {
 			c.logger.Debug("Failed to collect namespaces for datastore %s: %v", ds.Name, err)
 		}
 	}
@@ -56,7 +57,7 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
 
 // collectDatastoreNamespaces collects namespace information for a datastore
 // using CLI first, then filesystem fallback.
-func (c *Collector) collectDatastoreNamespaces(ds pbsDatastore, datastoreDir string) error {
+func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatastore, datastoreDir string) error {
 	c.logger.Debug("Collecting namespaces for datastore %s (path: %s)", ds.Name, ds.Path)
 	// Write location is deterministic; if excluded, skip the whole operation.
 	outputPath := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.Name))
@@ -65,7 +66,12 @@ func (c *Collector) collectDatastoreNamespaces(ds pbsDatastore, datastoreDir str
 		return nil
 	}
 
-	namespaces, fromFallback, err := listNamespacesFunc(ds.Name, ds.Path)
+	ioTimeout := time.Duration(0)
+	if c.config != nil && c.config.FsIoTimeoutSeconds > 0 {
+		ioTimeout = time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
+	}
+
+	namespaces, fromFallback, err := listNamespacesFunc(ctx, ds.Name, ds.Path, ioTimeout)
 	if err != nil {
 		return err
 	}
@@ -190,9 +196,22 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 		return nil
 	}
 
-	stat, err := os.Stat(ds.Path)
-	if err != nil || !stat.IsDir() {
-		c.logger.Debug("Skipping PXAR metadata for datastore %s (path not accessible: %s)", ds.Name, ds.Path)
+	ioTimeout := time.Duration(0)
+	if c.config != nil && c.config.FsIoTimeoutSeconds > 0 {
+		ioTimeout = time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
+	}
+
+	stat, err := safefs.Stat(ctx, ds.Path, ioTimeout)
+	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): filesystem probe timed out (%v)", ds.Name, ds.Path, err)
+			return nil
+		}
+		c.logger.Debug("Skipping PXAR metadata for datastore %s (path not accessible: %s): %v", ds.Name, ds.Path, err)
+		return nil
+	}
+	if !stat.IsDir() {
+		c.logger.Debug("Skipping PXAR metadata for datastore %s (path not a directory: %s)", ds.Name, ds.Path)
 		return nil
 	}
 
@@ -229,7 +248,10 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 		ScannedAt: time.Now(),
 	}
 
-	if dirs, err := c.sampleDirectories(ctx, ds.Path, 2, 30); err == nil && len(dirs) > 0 {
+	if dirs, err := c.sampleDirectoriesBounded(ctx, ds.Path, 2, 30, ioTimeout); errors.Is(err, safefs.ErrTimeout) {
+		c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): directory sampling timed out (%v)", ds.Name, ds.Path, err)
+		return nil
+	} else if err == nil && len(dirs) > 0 {
 		meta.SampleDirectories = dirs
 		c.logger.Debug("PXAR: datastore %s -> selected %d sample directories", ds.Name, len(dirs))
 	} else if err != nil {
@@ -241,7 +263,10 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 		includePatterns = []string{"*.pxar", "*.pxar.*", "catalog.pxar", "catalog.pxar.*"}
 	}
 	excludePatterns := c.config.PxarFileExcludePatterns
-	if files, err := c.sampleFiles(ctx, ds.Path, includePatterns, excludePatterns, 8, 200); err == nil && len(files) > 0 {
+	if files, err := c.sampleFilesBounded(ctx, ds.Path, includePatterns, excludePatterns, 8, 200, ioTimeout); errors.Is(err, safefs.ErrTimeout) {
+		c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): file sampling timed out (%v)", ds.Name, ds.Path, err)
+		return nil
+	} else if err == nil && len(files) > 0 {
 		meta.SamplePxarFiles = files
 		c.logger.Debug("PXAR: datastore %s -> selected %d sample pxar files", ds.Name, len(files))
 	} else if err != nil {
@@ -257,15 +282,27 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 		return err
 	}
 
-	if err := c.writePxarSubdirReport(filepath.Join(dsDir, fmt.Sprintf("%s_subdirs.txt", ds.Name)), ds); err != nil {
+	if err := c.writePxarSubdirReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_subdirs.txt", ds.Name)), ds, ioTimeout); err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): subdir report timed out (%v)", ds.Name, ds.Path, err)
+			return nil
+		}
 		return err
 	}
 
-	if err := c.writePxarListReport(filepath.Join(dsDir, fmt.Sprintf("%s_vm_pxar_list.txt", ds.Name)), ds, "vm"); err != nil {
+	if err := c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_vm_pxar_list.txt", ds.Name)), ds, "vm", ioTimeout); err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): VM list report timed out (%v)", ds.Name, ds.Path, err)
+			return nil
+		}
 		return err
 	}
 
-	if err := c.writePxarListReport(filepath.Join(dsDir, fmt.Sprintf("%s_ct_pxar_list.txt", ds.Name)), ds, "ct"); err != nil {
+	if err := c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_ct_pxar_list.txt", ds.Name)), ds, "ct", ioTimeout); err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): CT list report timed out (%v)", ds.Name, ds.Path, err)
+			return nil
+		}
 		return err
 	}
 
@@ -273,14 +310,17 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 	return nil
 }
 
-func (c *Collector) writePxarSubdirReport(target string, ds pbsDatastore) error {
+func (c *Collector) writePxarSubdirReport(ctx context.Context, target string, ds pbsDatastore, ioTimeout time.Duration) error {
 	c.logger.Debug("Writing PXAR subdirectory report for datastore %s", ds.Name)
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("# Datastore subdirectories in %s generated on %s\n", ds.Path, time.Now().Format(time.RFC1123)))
 	builder.WriteString(fmt.Sprintf("# Datastore: %s\n", ds.Name))
 
-	entries, err := os.ReadDir(ds.Path)
+	entries, err := safefs.ReadDir(ctx, ds.Path, ioTimeout)
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			return err
+		}
 		builder.WriteString(fmt.Sprintf("# Unable to read datastore path: %v\n", err))
 		return c.writeReportFile(target, []byte(builder.String()))
 	}
@@ -305,7 +345,7 @@ func (c *Collector) writePxarSubdirReport(target string, ds pbsDatastore) error 
 	return nil
 }
 
-func (c *Collector) writePxarListReport(target string, ds pbsDatastore, subDir string) error {
+func (c *Collector) writePxarListReport(ctx context.Context, target string, ds pbsDatastore, subDir string, ioTimeout time.Duration) error {
 	c.logger.Debug("Writing PXAR file list for datastore %s subdir %s", ds.Name, subDir)
 	basePath := filepath.Join(ds.Path, subDir)
 
@@ -314,8 +354,11 @@ func (c *Collector) writePxarListReport(target string, ds pbsDatastore, subDir s
 	builder.WriteString(fmt.Sprintf("# Datastore: %s, Subdirectory: %s\n", ds.Name, subDir))
 	builder.WriteString("# Format: permissions size date name\n")
 
-	entries, err := os.ReadDir(basePath)
+	entries, err := safefs.ReadDir(ctx, basePath, ioTimeout)
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			return err
+		}
 		builder.WriteString(fmt.Sprintf("# Unable to read directory: %v\n", err))
 		if writeErr := c.writeReportFile(target, []byte(builder.String())); writeErr != nil {
 			return writeErr
@@ -339,8 +382,13 @@ func (c *Collector) writePxarListReport(target string, ds pbsDatastore, subDir s
 		if !strings.HasSuffix(entry.Name(), ".pxar") {
 			continue
 		}
-		info, err := entry.Info()
+
+		fullPath := filepath.Join(basePath, entry.Name())
+		info, err := safefs.Stat(ctx, fullPath, ioTimeout)
 		if err != nil {
+			if errors.Is(err, safefs.ErrTimeout) {
+				return err
+			}
 			continue
 		}
 		files = append(files, infoEntry{

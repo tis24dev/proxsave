@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/pbs"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -50,18 +51,18 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 		"datastore_store1_status.json",
 		"acme_accounts.json",
 		"acme_plugins.json",
-			"notification_targets.json",
-			"notification_matchers.json",
-			"notification_endpoints_smtp.json",
-			"notification_endpoints_sendmail.json",
-			"notification_endpoints_gotify.json",
-			"notification_endpoints_webhook.json",
-			"notifications_summary.json",
-			"user_list.json",
-			"realms_ldap.json",
-			"realms_ad.json",
-			"realms_openid.json",
-			"acl_list.json",
+		"notification_targets.json",
+		"notification_matchers.json",
+		"notification_endpoints_smtp.json",
+		"notification_endpoints_sendmail.json",
+		"notification_endpoints_gotify.json",
+		"notification_endpoints_webhook.json",
+		"notifications_summary.json",
+		"user_list.json",
+		"realms_ldap.json",
+		"realms_ad.json",
+		"realms_openid.json",
+		"acl_list.json",
 		"remote_list.json",
 		"sync_jobs.json",
 		"verification_jobs.json",
@@ -206,7 +207,7 @@ func TestCollectPBSPxarMetadataReturnsErrorWhenTempVarIsFile(t *testing.T) {
 func TestCollectDatastoreConfigsCreatesConfigAndNamespaceFiles(t *testing.T) {
 	origList := listNamespacesFunc
 	t.Cleanup(func() { listNamespacesFunc = origList })
-	listNamespacesFunc = func(name, path string) ([]pbs.Namespace, bool, error) {
+	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
 		return []pbs.Namespace{{Ns: "root", Path: "/"}}, false, nil
 	}
 
@@ -314,7 +315,7 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 
 	origList := listNamespacesFunc
 	t.Cleanup(func() { listNamespacesFunc = origList })
-	listNamespacesFunc = func(name, path string) ([]pbs.Namespace, bool, error) {
+	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
 		return []pbs.Namespace{{Ns: "root", Path: "/"}}, false, nil
 	}
 

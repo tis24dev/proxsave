@@ -496,22 +496,6 @@ If you want to remove those guards manually (optional):
 - `--log-level` (CLI flag): Controls logging verbosity
 - `DEBUG_LEVEL` (config): Controls operation detail level (`standard`/`advanced`/`extreme`)
 
-### Log Labels (PHASE/STEP/SKIP)
-
-Some log lines use a label to make the output easier to scan:
-
-| Label | Level | Meaning |
-|-------|-------|---------|
-| `PHASE` | `info` | High-level workflow phase marker |
-| `STEP` | `info` | A notable step within a phase |
-| `SKIP` | `info` | Optional item intentionally skipped or not applicable |
-
-**Common `SKIP` examples**:
-- A feature is disabled by configuration.
-- A non-critical CLI tool is not installed.
-- Running in an **unprivileged container/rootless** environment where low-level inventory commands are expected to fail (for example `dmidecode` or `blkid`). In this case, ProxSave still attempts the collection, but logs a `SKIP` (not a `WARNING`) when the failure matches known “missing privileges” patterns.
-  - For `blkid`, the skip reason also includes a restore hint: automated `/etc/fstab` device remap (UUID/PARTUUID/LABEL) may be limited.
-
 ### Flag Reference
 
 | Flag | Short | Description |

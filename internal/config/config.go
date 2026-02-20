@@ -197,7 +197,8 @@ type Config struct {
 	PVEBackupIncludePattern string
 	BackupCephConfig        bool
 	CephConfigPath          string
-	PveshTimeoutSeconds     int // Timeout for pvesh commands (seconds). 0 disables the timeout.
+	PveshTimeoutSeconds     int
+	FsIoTimeoutSeconds      int
 
 	// PBS-specific collection options
 	BackupDatastoreConfigs     bool
@@ -658,6 +659,10 @@ func (c *Config) parsePVESettings() error {
 	c.PveshTimeoutSeconds = c.getInt("PVESH_TIMEOUT", 15)
 	if c.PveshTimeoutSeconds < 0 {
 		c.PveshTimeoutSeconds = 15
+	}
+	c.FsIoTimeoutSeconds = c.getInt("FS_IO_TIMEOUT", 30)
+	if c.FsIoTimeoutSeconds < 0 {
+		c.FsIoTimeoutSeconds = 30
 	}
 	c.BackupSmallPVEBackups = c.getBool("BACKUP_SMALL_PVE_BACKUPS", false)
 	if rawSize := strings.TrimSpace(c.getString("MAX_PVE_BACKUP_SIZE", "")); rawSize != "" {

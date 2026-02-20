@@ -154,6 +154,7 @@ type CollectorConfig struct {
 	BackupCephConfig        bool
 	CephConfigPath          string
 	PveshTimeoutSeconds     int
+	FsIoTimeoutSeconds      int
 
 	// PBS-specific collection options
 	BackupDatastoreConfigs     bool
@@ -288,6 +289,12 @@ func (c *CollectorConfig) Validate() error {
 	if c.MaxPVEBackupSizeBytes < 0 {
 		return fmt.Errorf("MAX_PVE_BACKUP_SIZE must be >= 0")
 	}
+	if c.PveshTimeoutSeconds < 0 {
+		c.PveshTimeoutSeconds = 15
+	}
+	if c.FsIoTimeoutSeconds < 0 {
+		c.FsIoTimeoutSeconds = 30
+	}
 	if c.SystemRootPrefix != "" && !filepath.IsAbs(c.SystemRootPrefix) {
 		return fmt.Errorf("system root prefix must be an absolute path")
 	}
@@ -333,6 +340,7 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		BackupCephConfig:        true,
 		CephConfigPath:          "/etc/ceph",
 		PveshTimeoutSeconds:     15,
+		FsIoTimeoutSeconds:      30,
 
 		// PBS-specific (all enabled by default)
 		BackupDatastoreConfigs:     true,
@@ -925,47 +933,25 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 
 	cmdString := strings.Join(cmdParts, " ")
 	runCtx := ctx
-	cancel := func() {}
+	var cancel context.CancelFunc
 	if cmdParts[0] == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.PveshTimeoutSeconds)*time.Second)
 	}
-	defer cancel()
+	if cancel != nil {
+		defer cancel()
+	}
+
 	out, err := c.depRunCommand(runCtx, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		if critical {
 			c.incFilesFailed()
 			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
 		}
-
-		exitCode := -1
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		}
-		outputText := strings.TrimSpace(string(out))
-		if ctxInfo := c.depDetectUnprivilegedContainer(); ctxInfo.Detected {
-			if reason := privilegeSensitiveFailureReason(cmdParts[0], exitCode, outputText); reason != "" {
-				details := strings.TrimSpace(ctxInfo.Details)
-				if details != "" {
-					details = " (" + details + ")"
-				}
-				c.logger.Skip("Skipping %s: command `%s` failed (%v). Expected in unprivileged containers%s (%s). Non-critical; backup continues.",
-					description,
-					cmdString,
-					err,
-					details,
-					reason,
-				)
-				c.logger.Debug("Skip details for %s: output: %s", description, summarizeCommandOutputText(outputText))
-				return nil
-			}
-		}
-
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the required CLI is available and has proper permissions. Output: %s",
 			description,
 			cmdString,
 			err,
-			summarizeCommandOutputText(outputText),
+			summarizeCommandOutputText(string(out)),
 		)
 		return nil // Non-critical failure
 	}
@@ -1260,11 +1246,13 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 	}
 
 	runCtx := ctx
-	cancel := func() {}
+	var cancel context.CancelFunc
 	if parts[0] == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.PveshTimeoutSeconds)*time.Second)
 	}
-	defer cancel()
+	if cancel != nil {
+		defer cancel()
+	}
 
 	out, err := c.depRunCommand(runCtx, parts[0], parts[1:]...)
 	if err != nil {
@@ -1294,24 +1282,6 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 					description,
 					summarizeCommandOutputText(outputText),
 				)
-				return nil, nil
-			}
-		}
-
-		if ctxInfo := c.depDetectUnprivilegedContainer(); ctxInfo.Detected {
-			if reason := privilegeSensitiveFailureReason(parts[0], exitCode, outputText); reason != "" {
-				details := strings.TrimSpace(ctxInfo.Details)
-				if details != "" {
-					details = " (" + details + ")"
-				}
-				c.logger.Skip("Skipping %s: command `%s` failed (%v). Expected in unprivileged containers%s (%s). Non-critical; backup continues.",
-					description,
-					cmdString,
-					err,
-					details,
-					reason,
-				)
-				c.logger.Debug("Skip details for %s: output: %s", description, summarizeCommandOutputText(outputText))
 				return nil, nil
 			}
 		}

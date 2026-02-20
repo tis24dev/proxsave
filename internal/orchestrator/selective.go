@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"sort"
@@ -26,16 +25,11 @@ type SelectiveRestoreConfig struct {
 	Metadata           *backup.Manifest
 }
 
-// AnalyzeBackupCategories detects which categories are available in the backup.
-// It scans the archive streamingly (O(1) memory) and supports cancellation via ctx.
-func AnalyzeBackupCategories(ctx context.Context, archivePath string, logger *logging.Logger) (categories []Category, err error) {
+// AnalyzeBackupCategories detects which categories are available in the backup
+func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) (categories []Category, err error) {
 	done := logging.DebugStart(logger, "analyze backup categories", "archive=%s", archivePath)
 	defer func() { done(err) }()
 	logger.Info("Analyzing backup categories...")
-
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	// Open the archive and read all entry names
 	file, err := restoreFS.Open(archivePath)
@@ -45,63 +39,22 @@ func AnalyzeBackupCategories(ctx context.Context, archivePath string, logger *lo
 	defer file.Close()
 
 	// Create appropriate reader based on compression
-	reader, err := createDecompressionReader(ctx, file, archivePath)
+	reader, err := createDecompressionReader(context.Background(), file, archivePath)
 	if err != nil {
 		return nil, err
 	}
-	if closer, ok := reader.(interface{ Close() error }); ok {
-		// When the archive isn't compressed, createDecompressionReader returns the same *os.File.
-		// Avoid double-closing; the underlying file is already closed by the defer above.
-		if rf, ok := reader.(*os.File); !ok || rf != file {
-			defer closer.Close()
+	defer func() {
+		if closer, ok := reader.(interface{ Close() error }); ok {
+			closer.Close()
 		}
-	}
+	}()
 
 	tarReader := tar.NewReader(reader)
 
-	allCategories := GetAllCategories()
-	if len(allCategories) == 0 {
-		return nil, nil
-	}
-	found := make([]bool, len(allCategories))
-	foundCount := 0
-	entriesScanned := 0
-scanLoop:
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		header, err := tarReader.Next()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, fmt.Errorf("read archive entries: %w", err)
-		}
-		entriesScanned++
+	archivePaths := collectArchivePaths(tarReader)
+	logger.Debug("Found %d entries in archive", len(archivePaths))
 
-		for i := range allCategories {
-			if found[i] {
-				continue
-			}
-			if archiveEntryMatchesCategory(header.Name, allCategories[i]) {
-				found[i] = true
-				allCategories[i].IsAvailable = true
-				foundCount++
-				if foundCount == len(allCategories) {
-					break scanLoop
-				}
-			}
-		}
-	}
-	logger.Debug("Scanned %d entries in archive", entriesScanned)
-
-	availableCategories := make([]Category, 0, foundCount)
-	for i, cat := range allCategories {
-		if found[i] {
-			availableCategories = append(availableCategories, cat)
-		}
-	}
+	availableCategories := AnalyzeArchivePaths(archivePaths, GetAllCategories())
 	for _, cat := range availableCategories {
 		logger.Debug("Category available: %s (%s)", cat.ID, cat.Name)
 	}
@@ -140,83 +93,52 @@ func AnalyzeArchivePaths(archivePaths []string, allCategories []Category) []Cate
 	return availableCategories
 }
 
-func collectArchivePaths(tarReader *tar.Reader) ([]string, error) {
+func collectArchivePaths(tarReader *tar.Reader) []string {
 	var archivePaths []string
 	for {
 		header, err := tarReader.Next()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return archivePaths, nil
-			}
-			return archivePaths, err
+			break // EOF or error
 		}
 		archivePaths = append(archivePaths, header.Name)
 	}
+	return archivePaths
 }
 
 // pathMatchesPattern checks if an archive path matches a category pattern
 func pathMatchesPattern(archivePath, pattern string) bool {
-	match := func(archivePath, pattern string) bool {
-		// Normalize paths
-		normArchive := archivePath
-		if !strings.HasPrefix(normArchive, "./") {
-			normArchive = "./" + normArchive
-		}
-
-		normPattern := pattern
-		if !strings.HasPrefix(normPattern, "./") {
-			normPattern = "./" + normPattern
-		}
-
-		if strings.ContainsAny(normPattern, "*?[") && !strings.HasSuffix(normPattern, "/") {
-			if ok, err := path.Match(normPattern, normArchive); err == nil && ok {
-				return true
-			}
-		}
-
-		// Exact match
-		if normArchive == normPattern {
-			return true
-		}
-
-		// Directory prefix match
-		if strings.HasSuffix(normPattern, "/") {
-			if strings.HasPrefix(normArchive, normPattern) {
-				return true
-			}
-		}
-
-		// Parent directory match
-		if strings.HasPrefix(normArchive, strings.TrimSuffix(normPattern, "/")+"/") {
-			return true
-		}
-
-		return false
+	// Normalize paths
+	normArchive := archivePath
+	if !strings.HasPrefix(normArchive, "./") {
+		normArchive = "./" + normArchive
 	}
 
-	// Smart chunking stores large files as:
-	// - <original>.chunked (marker file)
-	// - chunked_files/<original>.<idx>.chunk (chunk store)
-	// For category analysis, map these artifacts back to the original path.
-	candidates := []string{archivePath}
-	clean := strings.TrimPrefix(strings.TrimSpace(archivePath), "./")
-
-	if strings.HasSuffix(clean, ".chunked") {
-		candidates = append(candidates, strings.TrimSuffix(clean, ".chunked"))
+	normPattern := pattern
+	if !strings.HasPrefix(normPattern, "./") {
+		normPattern = "./" + normPattern
 	}
 
-	if strings.HasPrefix(clean, "chunked_files/") {
-		trimmed := strings.TrimPrefix(clean, "chunked_files/")
-		candidates = append(candidates, trimmed)
-		if original, ok := originalPathFromChunk(trimmed); ok {
-			candidates = append(candidates, original)
+	if strings.ContainsAny(normPattern, "*?[") && !strings.HasSuffix(normPattern, "/") {
+		if ok, err := path.Match(normPattern, normArchive); err == nil && ok {
+			return true
 		}
 	}
 
-	for _, candidate := range candidates {
-		if match(candidate, pattern) {
+	// Exact match
+	if normArchive == normPattern {
+		return true
+	}
+
+	// Directory prefix match
+	if strings.HasSuffix(normPattern, "/") {
+		if strings.HasPrefix(normArchive, normPattern) {
 			return true
 		}
+	}
+
+	// Parent directory match
+	if strings.HasPrefix(normArchive, strings.TrimSuffix(normPattern, "/")+"/") {
+		return true
 	}
 
 	return false
@@ -361,7 +283,10 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 			selected = make(map[int]bool)
 		case "c":
 			// Continue - check if at least one category is selected
-			selectedCount := len(selected)
+			selectedCount := 0
+			for range selected {
+				selectedCount++
+			}
 
 			if selectedCount == 0 {
 				fmt.Println()
@@ -392,11 +317,7 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 
 			// Toggle selection
 			index := num - 1
-			if selected[index] {
-				delete(selected, index)
-			} else {
-				selected[index] = true
-			}
+			selected[index] = !selected[index]
 		}
 	}
 }

@@ -1425,17 +1425,6 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 		}
 	}
 
-	// Phase 5: Cleanup old restore staging directories under /tmp/proxsave
-	stageRemoved, stageFailed := cleanupOldRestoreStageDirs(fs, o.logger, o.now(), tempDirCleanupAge)
-	if stageRemoved > 0 || stageFailed > 0 {
-		if !cleanupStarted {
-			o.logger.Debug("Starting cleanup of previous execution files...")
-			cleanupStarted = true
-		}
-		removedDirs += stageRemoved
-		failedFiles += stageFailed
-	}
-
 	// Final summary - only show if cleanup was actually performed
 	if cleanupStarted {
 		if removedFiles > 0 || removedDirs > 0 {
@@ -1511,6 +1500,7 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.BackupCephConfig = cfg.BackupCephConfig
 	cc.CephConfigPath = cfg.CephConfigPath
 	cc.PveshTimeoutSeconds = cfg.PveshTimeoutSeconds
+	cc.FsIoTimeoutSeconds = cfg.FsIoTimeoutSeconds
 
 	cc.BackupDatastoreConfigs = cfg.BackupDatastoreConfigs
 	cc.BackupPBSS3Endpoints = cfg.BackupPBSS3Endpoints

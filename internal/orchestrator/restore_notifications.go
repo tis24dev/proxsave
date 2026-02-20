@@ -53,8 +53,31 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 
 	switch plan.SystemType {
 	case SystemTypePBS:
-		// PBS notification restore is applied as part of the final PBS API staged apply phase
-		// to avoid restarting PBS services before other file-based staged apply steps complete.
+		if !plan.HasCategoryID("pbs_notifications") {
+			return nil
+		}
+		behavior := plan.PBSRestoreBehavior
+		strict := behavior == PBSRestoreBehaviorClean
+		allowFileFallback := behavior == PBSRestoreBehaviorClean
+
+		if err := ensurePBSServicesForAPI(ctx, logger); err != nil {
+			if allowFileFallback {
+				logger.Warning("PBS notifications API apply unavailable; falling back to file-based apply: %v", err)
+				return applyPBSNotificationsFromStage(ctx, logger, stageRoot)
+			}
+			logger.Warning("PBS notifications API apply unavailable; skipping apply (merge mode): %v", err)
+			return nil
+		}
+
+		if err := applyPBSNotificationsViaAPI(ctx, logger, stageRoot, strict); err != nil {
+			if allowFileFallback {
+				logger.Warning("PBS notifications API apply failed; falling back to file-based apply: %v", err)
+				return applyPBSNotificationsFromStage(ctx, logger, stageRoot)
+			}
+			logger.Warning("PBS notifications API apply failed; skipping apply (merge mode): %v", err)
+			return nil
+		}
+		logger.Info("PBS notifications applied via API (%s)", behavior.DisplayName())
 		return nil
 	case SystemTypePVE:
 		if !plan.HasCategoryID("pve_notifications") {

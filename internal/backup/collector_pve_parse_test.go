@@ -8,7 +8,6 @@ import (
 
 // TestParseNodeStorageList tests parsing PVE storage entries from JSON
 func TestParseNodeStorageList(t *testing.T) {
-	boolPtr := func(v bool) *bool { return &v }
 	tests := []struct {
 		name        string
 		input       string
@@ -100,26 +99,14 @@ func TestParseNodeStorageList(t *testing.T) {
 		{
 			name: "mixed valid and empty entries",
 			input: `[
-					{"storage": "storage1", "path": "/path1", "type": "dir", "content": "iso"},
-					{"storage": "", "path": "/path2", "type": "dir", "content": "backup"},
-					{"storage": "storage2", "path": "/path3", "type": "nfs", "content": "images"}
-				]`,
+				{"storage": "storage1", "path": "/path1", "type": "dir", "content": "iso"},
+				{"storage": "", "path": "/path2", "type": "dir", "content": "backup"},
+				{"storage": "storage2", "path": "/path3", "type": "nfs", "content": "images"}
+			]`,
 			expectError: false,
 			expected: []pveStorageEntry{
 				{Name: "storage1", Path: "/path1", Type: "dir", Content: "iso"},
 				{Name: "storage2", Path: "/path3", Type: "nfs", Content: "images"},
-			},
-		},
-		{
-			name: "runtime status fields",
-			input: `[
-					{"storage": "nfs-backup", "path": "/mnt/backup", "type": "nfs", "content": "backup", "active": 0, "enabled": 1, "status": "unknown"},
-					{"storage": "local", "path": "/var/lib/vz", "type": "dir", "content": "iso", "active": true, "enabled": "true", "status": "available"}
-				]`,
-			expectError: false,
-			expected: []pveStorageEntry{
-				{Name: "nfs-backup", Path: "/mnt/backup", Type: "nfs", Content: "backup", Active: boolPtr(false), Enabled: boolPtr(true), Status: "unknown"},
-				{Name: "local", Path: "/var/lib/vz", Type: "dir", Content: "iso", Active: boolPtr(true), Enabled: boolPtr(true), Status: "available"},
 			},
 		},
 	}
@@ -158,17 +145,31 @@ func TestParseNodeStorageList(t *testing.T) {
 				if entry.Content != tt.expected[i].Content {
 					t.Errorf("entry[%d].Content = %q, want %q", i, entry.Content, tt.expected[i].Content)
 				}
-				if got, want := entry.Status, tt.expected[i].Status; got != want {
-					t.Errorf("entry[%d].Status = %q, want %q", i, got, want)
-				}
-				if got, want := entry.Active, tt.expected[i].Active; (got == nil) != (want == nil) || (got != nil && want != nil && *got != *want) {
-					t.Errorf("entry[%d].Active = %v, want %v", i, got, want)
-				}
-				if got, want := entry.Enabled, tt.expected[i].Enabled; (got == nil) != (want == nil) || (got != nil && want != nil && *got != *want) {
-					t.Errorf("entry[%d].Enabled = %v, want %v", i, got, want)
-				}
 			}
 		})
+	}
+}
+
+func TestParseNodeStorageList_RuntimeFields(t *testing.T) {
+	input := `[
+		{"storage": "nfs1", "path": "/mnt/nfs", "type": "nfs", "content": "backup", "active": 1, "enabled": 0, "status": "available"}
+	]`
+	result, err := parseNodeStorageList([]byte(input))
+	if err != nil {
+		t.Fatalf("parseNodeStorageList() unexpected error = %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("parseNodeStorageList() returned %d entries, want 1", len(result))
+	}
+	got := result[0]
+	if got.Active == nil || *got.Active != true {
+		t.Fatalf("entry.Active = %#v; want true", got.Active)
+	}
+	if got.Enabled == nil || *got.Enabled != false {
+		t.Fatalf("entry.Enabled = %#v; want false", got.Enabled)
+	}
+	if got.Status != "available" {
+		t.Fatalf("entry.Status = %q; want %q", got.Status, "available")
 	}
 }
 

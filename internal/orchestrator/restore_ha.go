@@ -364,16 +364,12 @@ func armHARollback(ctx context.Context, logger *logging.Logger, backupPath strin
 		timeout:    timeout,
 	}
 
-	if err := restoreFS.WriteFile(handle.logPath, []byte(""), 0o600); err != nil {
-		return nil, fmt.Errorf("create rollback log: %w", err)
-	}
-
-	if err := restoreFS.WriteFile(handle.markerPath, []byte("pending\n"), 0o600); err != nil {
+	if err := restoreFS.WriteFile(handle.markerPath, []byte("pending\n"), 0o640); err != nil {
 		return nil, fmt.Errorf("write rollback marker: %w", err)
 	}
 
 	script := buildHARollbackScript(handle.markerPath, backupPath, handle.logPath)
-	if err := restoreFS.WriteFile(handle.scriptPath, []byte(script), 0o600); err != nil {
+	if err := restoreFS.WriteFile(handle.scriptPath, []byte(script), 0o640); err != nil {
 		return nil, fmt.Errorf("write rollback script: %w", err)
 	}
 
@@ -430,6 +426,7 @@ func disarmHARollback(ctx context.Context, logger *logging.Logger, handle *haRol
 
 func buildHARollbackScript(markerPath, backupPath, logPath string) string {
 	lines := []string{
+		"#!/bin/sh",
 		"set -eu",
 		fmt.Sprintf("LOG=%s", shellQuote(logPath)),
 		fmt.Sprintf("MARKER=%s", shellQuote(markerPath)),

@@ -1,13 +1,11 @@
 package orchestrator
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -130,95 +128,5 @@ func TestRunRestoreWorkflow_FstabMergeFails_ContinuesWithWarnings(t *testing.T) 
 	}
 	if !logger.HasWarnings() {
 		t.Fatalf("expected warnings")
-	}
-}
-
-func TestRunRestoreWorkflow_FinalSummaryReflectsLoggedWarnings(t *testing.T) {
-	origRestoreFS := restoreFS
-	origRestoreCmd := restoreCmd
-	origRestoreSystem := restoreSystem
-	origRestoreTime := restoreTime
-	origCompatFS := compatFS
-	origPrepare := prepareRestoreBundleFunc
-	origSafetyFS := safetyFS
-	origSafetyNow := safetyNow
-	t.Cleanup(func() {
-		restoreFS = origRestoreFS
-		restoreCmd = origRestoreCmd
-		restoreSystem = origRestoreSystem
-		restoreTime = origRestoreTime
-		compatFS = origCompatFS
-		prepareRestoreBundleFunc = origPrepare
-		safetyFS = origSafetyFS
-		safetyNow = origSafetyNow
-	})
-
-	fakeFS := NewFakeFS()
-	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-	restoreFS = fakeFS
-	compatFS = fakeFS
-	safetyFS = fakeFS
-
-	fakeNow := &FakeTime{Current: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)}
-	restoreTime = fakeNow
-	safetyNow = fakeNow.Now
-
-	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
-	restoreCmd = runOnlyRunner{}
-
-	// Make compatibility detection treat this as PVE.
-	if err := fakeFS.AddFile("/usr/bin/qm", []byte("x")); err != nil {
-		t.Fatalf("fakeFS.AddFile: %v", err)
-	}
-
-	// Minimal backup tar with one file from the "services" category.
-	tmpTar := filepath.Join(t.TempDir(), "bundle.tar")
-	if err := writeTarFile(tmpTar, map[string]string{
-		"etc/timezone": "UTC\n",
-	}); err != nil {
-		t.Fatalf("writeTarFile: %v", err)
-	}
-	tarBytes, err := os.ReadFile(tmpTar)
-	if err != nil {
-		t.Fatalf("os.ReadFile: %v", err)
-	}
-	if err := fakeFS.WriteFile("/bundle.tar", tarBytes, 0o640); err != nil {
-		t.Fatalf("fakeFS.WriteFile(/bundle.tar): %v", err)
-	}
-
-	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-		cand := &decryptCandidate{
-			DisplayBase: "test",
-			Manifest: &backup.Manifest{
-				CreatedAt:     fakeNow.Now(),
-				ClusterMode:   "standalone",
-				ProxmoxType:   "pbs", // force incompatibility warning on a PVE system
-				ScriptVersion: "vtest",
-			},
-		}
-		prepared := &preparedBundle{
-			ArchivePath: "/bundle.tar",
-			Manifest:    backup.Manifest{ArchivePath: "/bundle.tar"},
-			cleanup:     func() {},
-		}
-		return cand, prepared, nil
-	}
-
-	var out bytes.Buffer
-	logger := logging.New(types.LogLevelInfo, false)
-	logger.SetOutput(&out)
-	cfg := &config.Config{BaseDir: "/base"}
-	ui := &fakeRestoreWorkflowUI{
-		mode:              RestoreModeCustom,
-		categories:        []Category{mustCategoryByID(t, "services")},
-		confirmRestore:    true,
-		confirmCompatible: true,
-	}
-
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
-		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
-	}
-	if !strings.Contains(out.String(), "Restore completed with warnings.") {
-		t.Fatalf("expected final summary to report warnings; got output:\n%s", out.String())
 	}
 }

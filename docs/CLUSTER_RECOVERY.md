@@ -1575,7 +1575,7 @@ curl -k https://localhost:8006
 
 ```bash
 # 1. Stop everything
-systemctl stop pvestatd pveproxy pvedaemon pve-cluster
+systemctl stop pve-cluster pvedaemon pveproxy pvestatd
 killall pmxcfs 2>/dev/null
 
 # 2. Force unmount /etc/pve
@@ -1598,7 +1598,7 @@ pvecm status
 
 ```bash
 # 1. Stop and disable services
-systemctl stop pvestatd pveproxy pvedaemon pve-cluster
+systemctl stop pve-cluster pvedaemon pveproxy pvestatd
 systemctl disable pve-cluster
 
 # 2. Force unmount

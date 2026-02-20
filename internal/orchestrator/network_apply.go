@@ -254,20 +254,15 @@ func armNetworkRollback(ctx context.Context, logger *logging.Logger, backupPath 
 	}
 	logging.DebugStep(logger, "arm network rollback", "Handle created: marker=%s script=%s log=%s", handle.markerPath, handle.scriptPath, handle.logPath)
 
-	logging.DebugStep(logger, "arm network rollback", "Create rollback log: %s", handle.logPath)
-	if err := restoreFS.WriteFile(handle.logPath, []byte(""), 0o600); err != nil {
-		return nil, fmt.Errorf("create rollback log: %w", err)
-	}
-
 	logging.DebugStep(logger, "arm network rollback", "Write rollback marker: %s", handle.markerPath)
-	if err := restoreFS.WriteFile(handle.markerPath, []byte("pending\n"), 0o600); err != nil {
+	if err := restoreFS.WriteFile(handle.markerPath, []byte("pending\n"), 0o640); err != nil {
 		return nil, fmt.Errorf("write rollback marker: %w", err)
 	}
 	logging.DebugStep(logger, "arm network rollback", "Marker written successfully")
 
 	logging.DebugStep(logger, "arm network rollback", "Write rollback script: %s", handle.scriptPath)
 	script := buildRollbackScript(handle.markerPath, backupPath, handle.logPath, true)
-	if err := restoreFS.WriteFile(handle.scriptPath, []byte(script), 0o600); err != nil {
+	if err := restoreFS.WriteFile(handle.scriptPath, []byte(script), 0o640); err != nil {
 		return nil, fmt.Errorf("write rollback script: %w", err)
 	}
 	logging.DebugStep(logger, "arm network rollback", "Script written successfully (%d bytes)", len(script))
@@ -598,19 +593,14 @@ func rollbackNetworkFilesNow(ctx context.Context, logger *logging.Logger, backup
 	scriptPath := filepath.Join(baseDir, fmt.Sprintf("network_rollback_now_%s.sh", timestamp))
 	logPath = filepath.Join(baseDir, fmt.Sprintf("network_rollback_now_%s.log", timestamp))
 
-	logging.DebugStep(logger, "rollback network files", "Create rollback log: %s", logPath)
-	if err := restoreFS.WriteFile(logPath, []byte(""), 0o600); err != nil {
-		return "", fmt.Errorf("create rollback log: %w", err)
-	}
-
 	logging.DebugStep(logger, "rollback network files", "Write rollback marker: %s", markerPath)
-	if err := restoreFS.WriteFile(markerPath, []byte("pending\n"), 0o600); err != nil {
+	if err := restoreFS.WriteFile(markerPath, []byte("pending\n"), 0o640); err != nil {
 		return "", fmt.Errorf("write rollback marker: %w", err)
 	}
 
 	logging.DebugStep(logger, "rollback network files", "Write rollback script: %s", scriptPath)
 	script := buildRollbackScript(markerPath, backupPath, logPath, false)
-	if err := restoreFS.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+	if err := restoreFS.WriteFile(scriptPath, []byte(script), 0o640); err != nil {
 		_ = restoreFS.Remove(markerPath)
 		return "", fmt.Errorf("write rollback script: %w", err)
 	}
@@ -633,6 +623,7 @@ func rollbackNetworkFilesNow(ctx context.Context, logger *logging.Logger, backup
 
 func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworking bool) string {
 	lines := []string{
+		"#!/bin/sh",
 		"set -eu",
 		fmt.Sprintf("LOG=%s", shellQuote(logPath)),
 		fmt.Sprintf("MARKER=%s", shellQuote(markerPath)),

@@ -253,7 +253,7 @@ func TestHasTapeSupportHasDrives(t *testing.T) {
 }
 
 func TestCollectDatastoreNamespacesSuccess(t *testing.T) {
-	stubListNamespaces(t, func(name, path string) ([]pbs.Namespace, bool, error) {
+	stubListNamespaces(t, func(_ context.Context, name, path string, _ time.Duration) ([]pbs.Namespace, bool, error) {
 		if name != "store1" || path != "/fake" {
 			t.Fatalf("unexpected datastore %s %s", name, path)
 		}
@@ -270,7 +270,7 @@ func TestCollectDatastoreNamespacesSuccess(t *testing.T) {
 	}
 
 	ds := pbsDatastore{Name: "store1", Path: "/fake"}
-	if err := collector.collectDatastoreNamespaces(ds, dsDir); err != nil {
+	if err := collector.collectDatastoreNamespaces(context.Background(), ds, dsDir); err != nil {
 		t.Fatalf("collectDatastoreNamespaces failed: %v", err)
 	}
 
@@ -289,7 +289,7 @@ func TestCollectDatastoreNamespacesSuccess(t *testing.T) {
 }
 
 func TestCollectDatastoreNamespacesError(t *testing.T) {
-	stubListNamespaces(t, func(string, string) ([]pbs.Namespace, bool, error) {
+	stubListNamespaces(t, func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
 		return nil, false, fmt.Errorf("boom")
 	})
 
@@ -299,14 +299,14 @@ func TestCollectDatastoreNamespacesError(t *testing.T) {
 		t.Fatalf("failed to create datastore dir: %v", err)
 	}
 
-	err := collector.collectDatastoreNamespaces(pbsDatastore{Name: "store1"}, dsDir)
+	err := collector.collectDatastoreNamespaces(context.Background(), pbsDatastore{Name: "store1"}, dsDir)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected error from list namespaces, got %v", err)
 	}
 }
 
 func TestCollectDatastoreConfigsDryRun(t *testing.T) {
-	stubListNamespaces(t, func(string, string) ([]pbs.Namespace, bool, error) {
+	stubListNamespaces(t, func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
 		return []pbs.Namespace{{Ns: ""}}, false, nil
 	})
 
@@ -395,7 +395,7 @@ func TestCollectUserConfigsMissingUserList(t *testing.T) {
 	}
 }
 
-func stubListNamespaces(t *testing.T, fn func(string, string) ([]pbs.Namespace, bool, error)) {
+func stubListNamespaces(t *testing.T, fn func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error)) {
 	t.Helper()
 	orig := listNamespacesFunc
 	listNamespacesFunc = fn

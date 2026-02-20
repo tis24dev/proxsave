@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/pbs"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -95,7 +96,7 @@ func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
 	}
 
 	origList := listNamespacesFunc
-	listNamespacesFunc = func(name, path string) ([]pbs.Namespace, bool, error) {
+	listNamespacesFunc = func(_ context.Context, name, path string, _ time.Duration) ([]pbs.Namespace, bool, error) {
 		if name != ds.Name || path != ds.Path {
 			t.Fatalf("unexpected args %s %s", name, path)
 		}
@@ -103,7 +104,7 @@ func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
 	}
 	t.Cleanup(func() { listNamespacesFunc = origList })
 
-	if err := c.collectDatastoreNamespaces(ds, targetDir); err != nil {
+	if err := c.collectDatastoreNamespaces(context.Background(), ds, targetDir); err != nil {
 		t.Fatalf("collectDatastoreNamespaces error: %v", err)
 	}
 	nsPath := filepath.Join(targetDir, "store_namespaces.json")
@@ -111,10 +112,10 @@ func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
 		t.Fatalf("expected namespaces file, got %v", err)
 	}
 
-	listNamespacesFunc = func(string, string) ([]pbs.Namespace, bool, error) {
+	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
 		return nil, false, errors.New("fail")
 	}
-	if err := c.collectDatastoreNamespaces(ds, targetDir); err == nil {
+	if err := c.collectDatastoreNamespaces(context.Background(), ds, targetDir); err == nil {
 		t.Fatalf("expected error when namespace listing fails")
 	}
 }

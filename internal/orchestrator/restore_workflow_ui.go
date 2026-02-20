@@ -17,7 +17,6 @@ import (
 )
 
 var prepareRestoreBundleFunc = prepareRestoreBundleWithUI
-var analyzeBackupCategoriesFunc = AnalyzeBackupCategories
 
 func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, false)
@@ -45,10 +44,6 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	done := logging.DebugStart(logger, "restore workflow (ui)", "version=%s", version)
 	defer func() { done(err) }()
-
-	if removed, failed := cleanupOldRestoreStageDirs(restoreFS, logger, nowRestore(), tempDirCleanupAge); removed > 0 || failed > 0 {
-		logger.Debug("Restore staging cleanup (older than %s): removed=%d failed=%d", tempDirCleanupAge, removed, failed)
-	}
 
 	restoreHadWarnings := false
 	defer func() {
@@ -93,63 +88,42 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	}
 
 	logger.Info("Analyzing backup contents...")
-	availableCategories, analysisErr := analyzeBackupCategoriesFunc(ctx, prepared.ArchivePath, logger)
+	availableCategories, err := AnalyzeBackupCategories(prepared.ArchivePath, logger)
+	if err != nil {
+		logger.Warning("Could not analyze categories: %v", err)
+		logger.Info("Falling back to full restore mode")
+		return runFullRestoreWithUI(ctx, ui, candidate, prepared, destRoot, logger, cfg.DryRun)
+	}
 
 	var (
 		mode               RestoreMode
 		selectedCategories []Category
 	)
-
-	if analysisErr != nil {
-		logger.Warning("Backup category analysis failed: %v", analysisErr)
-		if err := ui.ShowMessage(ctx, "Safe full restore (analysis unavailable)",
-			"Backup category analysis failed.\n\n"+
-				"ProxSave will proceed with a SAFE full restore.\n\n"+
-				"Safety features remain enabled (staging, transactional apply with rollback timers, and safety backups).\n\n"+
-				"Note: Categories missing from the archive will be skipped automatically."); err != nil {
+	for {
+		mode, err = ui.SelectRestoreMode(ctx, systemType)
+		if err != nil {
 			return err
 		}
 
-		mode = RestoreModeFull
-
-		backupType := DetectBackupType(candidate.Manifest)
-		switch backupType {
-		case SystemTypePVE, SystemTypePBS:
-			availableCategories = GetCategoriesForSystem(string(backupType))
-			if len(availableCategories) == 0 {
-				availableCategories = GetAllCategories()
-			}
-		default:
-			availableCategories = GetAllCategories()
-		}
-		selectedCategories = append([]Category{}, availableCategories...)
-	} else {
-		for {
-			mode, err = ui.SelectRestoreMode(ctx, systemType)
-			if err != nil {
-				return err
-			}
-
-			if mode != RestoreModeCustom {
-				selectedCategories = GetCategoriesForMode(mode, systemType, availableCategories)
-				break
-			}
-
-			selectedCategories, err = ui.SelectCategories(ctx, availableCategories, systemType)
-			if err != nil {
-				if errors.Is(err, errRestoreBackToMode) {
-					continue
-				}
-				return err
-			}
+		if mode != RestoreModeCustom {
+			selectedCategories = GetCategoriesForMode(mode, systemType, availableCategories)
 			break
 		}
 
-		if mode == RestoreModeCustom {
-			selectedCategories, err = maybeAddRecommendedCategoriesForTFA(ctx, ui, logger, selectedCategories, availableCategories)
-			if err != nil {
-				return err
+		selectedCategories, err = ui.SelectCategories(ctx, availableCategories, systemType)
+		if err != nil {
+			if errors.Is(err, errRestoreBackToMode) {
+				continue
 			}
+			return err
+		}
+		break
+	}
+
+	if mode == RestoreModeCustom {
+		selectedCategories, err = maybeAddRecommendedCategoriesForTFA(ctx, ui, logger, selectedCategories, availableCategories)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -523,29 +497,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	stageLogPath := ""
 	stageRoot := ""
-	stageWarningsStart := int64(0)
-	stageNetworkInstalled := false
-	preserveStage := preserveRestoreStagingFromEnv() || cfg.DryRun
 	if len(plan.StagedCategories) > 0 {
-		stageRoot, err = createRestoreStageDir()
-		if err != nil {
-			return fmt.Errorf("failed to create staging directory: %w", err)
-		}
+		stageRoot = stageDestRoot()
 		logger.Info("")
 		logger.Info("Staging %d sensitive category(ies) to: %s", len(plan.StagedCategories), stageRoot)
-		if logger != nil {
-			stageWarningsStart = logger.WarningCount()
+		if err := restoreFS.MkdirAll(stageRoot, 0o755); err != nil {
+			return fmt.Errorf("failed to create staging directory %s: %w", stageRoot, err)
 		}
-		defer func() {
-			if strings.TrimSpace(stageRoot) == "" || preserveStage {
-				return
-			}
-			if cleanupErr := restoreFS.RemoveAll(stageRoot); cleanupErr != nil {
-				logger.Warning("Failed to remove staging directory %s: %v", stageRoot, cleanupErr)
-			} else {
-				logger.Debug("Staging directory removed: %s", stageRoot)
-			}
-		}()
 
 		if stageLog, err := extractSelectiveArchive(ctx, prepared.ArchivePath, stageRoot, plan.StagedCategories, RestoreModeCustom, logger); err != nil {
 			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
@@ -624,13 +582,6 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			restoreHadWarnings = true
 			logger.Warning("Notifications staged apply: %v", err)
 		}
-		if err := maybeApplyPBSConfigsViaAPIFromStage(ctx, logger, plan, stageRoot, cfg.DryRun, pbsServicesStopped); err != nil {
-			if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-				return err
-			}
-			restoreHadWarnings = true
-			logger.Warning("PBS staged API apply: %v", err)
-		}
 	}
 
 	stageRootForNetworkApply := stageRoot
@@ -641,7 +592,6 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		restoreHadWarnings = true
 		logger.Warning("Network staged install: %v", err)
 	} else if installed {
-		stageNetworkInstalled = true
 		stageRootForNetworkApply = ""
 		logging.DebugStep(logger, "restore", "Network staged install completed: configuration written to /etc (no reload); live apply will use system paths")
 	}
@@ -797,17 +747,8 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 	}
 
-	if strings.TrimSpace(stageRoot) != "" {
-		if plan != nil && plan.HasCategoryID("network") && !stageNetworkInstalled {
-			preserveStage = true
-		}
-		if logger != nil && logger.WarningCount() > stageWarningsStart {
-			preserveStage = true
-		}
-	}
-
 	logger.Info("")
-	if restoreHadWarnings || (logger != nil && logger.HasWarnings()) {
+	if restoreHadWarnings {
 		logger.Warning("Restore completed with warnings.")
 	} else {
 		logger.Info("Restore completed successfully.")
@@ -824,12 +765,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		logger.Info("Export detailed log: %s", exportLogPath)
 	}
 	if stageRoot != "" {
-		if preserveStage {
-			logger.Info("Staging directory (preserved): %s", stageRoot)
-			logger.Warning("Staging directory contains sensitive files. Remove it when no longer needed: rm -rf %s", stageRoot)
-		} else {
-			logger.Info("Staging directory (auto-cleanup): %s", stageRoot)
-		}
+		logger.Info("Staging directory: %s", stageRoot)
 	}
 	if stageLogPath != "" {
 		logger.Info("Staging detailed log: %s", stageLogPath)

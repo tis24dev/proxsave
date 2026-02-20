@@ -36,12 +36,6 @@ func NewFakeFS() *FakeFS {
 
 func (f *FakeFS) onDisk(path string) string {
 	clean := filepath.Clean(path)
-	// Allow passing already-mapped on-disk paths back into FakeFS methods.
-	// This is important for helpers that return OS paths (e.g., MkdirTemp/CreateTemp)
-	// which are then reused by other FS operations in tests.
-	if clean == f.Root || strings.HasPrefix(clean, f.Root+string(filepath.Separator)) {
-		return clean
-	}
 	clean = strings.TrimPrefix(clean, string(filepath.Separator))
 	return filepath.Join(f.Root, clean)
 }

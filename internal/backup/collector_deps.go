@@ -26,11 +26,10 @@ var (
 
 // CollectorDeps allows injecting external dependencies for the Collector.
 type CollectorDeps struct {
-	LookPath                    func(string) (string, error)
-	RunCommandWithEnv           func(context.Context, []string, string, ...string) ([]byte, error)
-	RunCommand                  func(context.Context, string, ...string) ([]byte, error)
-	Stat                        func(string) (os.FileInfo, error)
-	DetectUnprivilegedContainer func() (bool, string)
+	LookPath          func(string) (string, error)
+	RunCommandWithEnv func(context.Context, []string, string, ...string) ([]byte, error)
+	RunCommand        func(context.Context, string, ...string) ([]byte, error)
+	Stat              func(string) (os.FileInfo, error)
 }
 
 func defaultCollectorDeps() CollectorDeps {

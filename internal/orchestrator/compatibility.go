@@ -70,16 +70,14 @@ func ValidateCompatibility(manifest *backup.Manifest) error {
 	currentSystem := DetectCurrentSystem()
 	backupType := DetectBackupType(manifest)
 
-	// If we can't detect the system types, issue a warning but allow.
+	// If we can't detect either, issue a warning but allow
 	if currentSystem == SystemTypeUnknown {
-		if backupType == SystemTypeUnknown {
-			return fmt.Errorf("warning: cannot detect current system type nor backup type - compatibility cannot be validated")
-		}
-		return fmt.Errorf("warning: cannot detect current system type (backup appears to be %s) - restoration may fail", strings.ToUpper(string(backupType)))
+		return fmt.Errorf("warning: cannot detect current system type - restoration may fail")
 	}
 
 	if backupType == SystemTypeUnknown {
-		return fmt.Errorf("warning: cannot detect backup type from manifest (current system is %s) - compatibility cannot be validated", strings.ToUpper(string(currentSystem)))
+		// If backup type is unknown, we can't validate - issue warning
+		return nil // Allow but warn in calling code
 	}
 
 	// Check for incompatibility
