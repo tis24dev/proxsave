@@ -20,6 +20,13 @@ type pveStorageEntry struct {
 	Path    string
 	Type    string
 	Content string
+
+	// Runtime status fields from `pvesh get /nodes/<node>/storage`.
+	// These are optional and may be nil/empty depending on the data source
+	// (e.g. storage.cfg parsing has no runtime status).
+	Active  *bool
+	Enabled *bool
+	Status  string
 }
 
 type pveRuntimeInfo struct {
@@ -653,17 +660,11 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 		c.logger.Debug("Skipping cluster runtime commands: BACKUP_CLUSTER_CONFIG=false (clustered=%v)", clustered)
 	}
 
-	// Storage status
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
 	if nodeName == "" {
 		nodeName = hostname
 	}
-	c.safeCmdOutput(ctx,
-		fmt.Sprintf("pvesh get /nodes/%s/storage --output-format=json", nodeName),
-		filepath.Join(commandsDir, "storage_status.json"),
-		"Storage status",
-		false)
 
 	// Disk list
 	c.safeCmdOutput(ctx,
@@ -718,15 +719,46 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 
 func parseNodeStorageList(data []byte) ([]pveStorageEntry, error) {
 	var raw []struct {
-		Storage string `json:"storage"`
-		Name    string `json:"name"`
-		Path    string `json:"path"`
-		Type    string `json:"type"`
-		Content string `json:"content"`
+		Storage string          `json:"storage"`
+		Name    string          `json:"name"`
+		Path    string          `json:"path"`
+		Type    string          `json:"type"`
+		Content string          `json:"content"`
+		Active  json.RawMessage `json:"active"`
+		Enabled json.RawMessage `json:"enabled"`
+		Status  string          `json:"status"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, err
 	}
+
+	parseBool := func(raw json.RawMessage) *bool {
+		if len(raw) == 0 {
+			return nil
+		}
+		var b bool
+		if err := json.Unmarshal(raw, &b); err == nil {
+			return &b
+		}
+		var i int
+		if err := json.Unmarshal(raw, &i); err == nil {
+			v := i != 0
+			return &v
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			switch strings.ToLower(strings.TrimSpace(s)) {
+			case "1", "true", "yes", "on":
+				v := true
+				return &v
+			case "0", "false", "no", "off":
+				v := false
+				return &v
+			}
+		}
+		return nil
+	}
+
 	seen := make(map[string]struct{})
 	entries := make([]pveStorageEntry, 0, len(raw))
 	for _, item := range raw {
@@ -746,6 +778,9 @@ func parseNodeStorageList(data []byte) ([]pveStorageEntry, error) {
 			Path:    strings.TrimSpace(item.Path),
 			Type:    strings.TrimSpace(item.Type),
 			Content: strings.TrimSpace(item.Content),
+			Active:  parseBool(item.Active),
+			Enabled: parseBool(item.Enabled),
+			Status:  strings.TrimSpace(item.Status),
 		})
 	}
 	return entries, nil
@@ -992,6 +1027,41 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 	summary.WriteString("\n# Format: NAME|PATH|TYPE|CONTENT\n\n")
 
 	processed := 0
+	formatRuntime := func(storage pveStorageEntry) string {
+		parts := make([]string, 0, 3)
+		if status := strings.TrimSpace(storage.Status); status != "" {
+			parts = append(parts, "status="+status)
+		}
+		if storage.Active != nil {
+			parts = append(parts, fmt.Sprintf("active=%v", *storage.Active))
+		}
+		if storage.Enabled != nil {
+			parts = append(parts, fmt.Sprintf("enabled=%v", *storage.Enabled))
+		}
+		if len(parts) == 0 {
+			return ""
+		}
+		return " (" + strings.Join(parts, " ") + ")"
+	}
+	unavailableReason := func(storage pveStorageEntry) string {
+		if storage.Enabled != nil && !*storage.Enabled {
+			return "enabled=false"
+		}
+		if storage.Active != nil && !*storage.Active {
+			return "active=false"
+		}
+		if status := strings.ToLower(strings.TrimSpace(storage.Status)); status != "" {
+			switch status {
+			case "available", "active", "ok":
+				// Known-good states
+			case "unknown", "inactive", "disabled", "unavailable", "error":
+				return "status=" + status
+			default:
+				// Unknown status: do not skip based on this field alone.
+			}
+		}
+		return ""
+	}
 	for _, storage := range storages {
 		if storage.Path == "" {
 			continue
@@ -999,6 +1069,14 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if reason := unavailableReason(storage); reason != "" {
+			c.logger.Warning("Skipping datastore %s (path=%s)%s: not available (%s)", storage.Name, storage.Path, formatRuntime(storage), reason)
+			continue
+		}
+
+		// NOTE: os.Stat() on an unreachable mount can hang inside the kernel.
+		// The availability filter above reduces the likelihood by skipping inactive/unavailable storages reported by PVE.
+		c.logger.Info("Processing datastore %s (path=%s)%s", storage.Name, storage.Path, formatRuntime(storage))
 		if stat, err := os.Stat(storage.Path); err != nil || !stat.IsDir() {
 			c.logger.Debug("Skipping datastore %s (path not accessible: %s)", storage.Name, storage.Path)
 			continue

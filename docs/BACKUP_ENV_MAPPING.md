@@ -88,6 +88,7 @@ WEBHOOK_TIMEOUT           = SAME
 ## Go-only variables (new)
 
 SYSTEM_ROOT_PREFIX = NEW (Go-only) → Override system root for collection (testing/chroot). Empty or "/" uses the real root.
+PVESH_TIMEOUT = NEW (Go-only) → Timeout in seconds for `pvesh` calls during PVE collection (0 disables).
 NOTE: PBS restore behavior is selected interactively during `--restore` and is intentionally not configured via `backup.env`.
 BACKUP_PBS_S3_ENDPOINTS = NEW (Go-only) → Collect `s3.cfg` and S3 endpoint snapshots (PBS).
 BACKUP_PBS_NODE_CONFIG = NEW (Go-only) → Collect `node.cfg` and node snapshots (PBS).

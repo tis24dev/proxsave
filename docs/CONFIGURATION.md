@@ -958,6 +958,9 @@ BACKUP_PVE_SCHEDULES=true          # Cron schedules
 # Replication
 BACKUP_PVE_REPLICATION=true        # VM/CT replication config
 
+# pvesh timeout
+PVESH_TIMEOUT=15                   # Timeout for pvesh calls during PVE collection (seconds; 0 disables)
+
 # PVE backup files
 BACKUP_PVE_BACKUP_FILES=true       # Include backup files from /var/lib/vz/dump
 BACKUP_SMALL_PVE_BACKUPS=false     # Include small backups only

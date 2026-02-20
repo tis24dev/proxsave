@@ -1510,6 +1510,7 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.PVEBackupIncludePattern = cfg.PVEBackupIncludePattern
 	cc.BackupCephConfig = cfg.BackupCephConfig
 	cc.CephConfigPath = cfg.CephConfigPath
+	cc.PveshTimeoutSeconds = cfg.PveshTimeoutSeconds
 
 	cc.BackupDatastoreConfigs = cfg.BackupDatastoreConfigs
 	cc.BackupPBSS3Endpoints = cfg.BackupPBSS3Endpoints

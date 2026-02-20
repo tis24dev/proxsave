@@ -153,6 +153,7 @@ type CollectorConfig struct {
 	PVEBackupIncludePattern string
 	BackupCephConfig        bool
 	CephConfigPath          string
+	PveshTimeoutSeconds     int
 
 	// PBS-specific collection options
 	BackupDatastoreConfigs     bool
@@ -331,6 +332,7 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		PVEBackupIncludePattern: "",
 		BackupCephConfig:        true,
 		CephConfigPath:          "/etc/ceph",
+		PveshTimeoutSeconds:     15,
 
 		// PBS-specific (all enabled by default)
 		BackupDatastoreConfigs:     true,
@@ -922,7 +924,13 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 	}
 
 	cmdString := strings.Join(cmdParts, " ")
-	out, err := c.depRunCommand(ctx, cmdParts[0], cmdParts[1:]...)
+	runCtx := ctx
+	cancel := func() {}
+	if cmdParts[0] == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.PveshTimeoutSeconds)*time.Second)
+	}
+	defer cancel()
+	out, err := c.depRunCommand(runCtx, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		if critical {
 			c.incFilesFailed()
@@ -1251,7 +1259,14 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		return nil, nil
 	}
 
-	out, err := c.depRunCommand(ctx, parts[0], parts[1:]...)
+	runCtx := ctx
+	cancel := func() {}
+	if parts[0] == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.PveshTimeoutSeconds)*time.Second)
+	}
+	defer cancel()
+
+	out, err := c.depRunCommand(runCtx, parts[0], parts[1:]...)
 	if err != nil {
 		cmdString := strings.Join(parts, " ")
 		if critical {

@@ -149,6 +149,55 @@ func TestCheckLockFileStaleLock(t *testing.T) {
 	checker.ReleaseLock()
 }
 
+func TestCheckLockFile_RemovesLockWhenProcessIsGone(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+	host, _ := os.Hostname()
+
+	// Create a "fresh" lock file that references a non-existent PID.
+	content := fmt.Sprintf("pid=99999\nhost=%s\ntime=%s\n", host, time.Now().Format(time.RFC3339))
+	if err := os.WriteFile(lockPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test lock file: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(lockPath, now, now); err != nil {
+		t.Fatalf("Failed to set lock file time: %v", err)
+	}
+
+	oldKill := killFunc
+	killFunc = func(pid int, sig syscall.Signal) error {
+		return syscall.ESRCH
+	}
+	t.Cleanup(func() { killFunc = oldKill })
+
+	config := &CheckerConfig{
+		BackupPath:   tmpDir,
+		LogPath:      tmpDir,
+		LockDirPath:  tmpDir,
+		LockFilePath: lockPath,
+		MaxLockAge:   1 * time.Hour,
+		DryRun:       false,
+	}
+	checker := NewChecker(logger, config)
+
+	result := checker.CheckLockFile()
+	if !result.Passed {
+		t.Fatalf("CheckLockFile should succeed after removing stale lock: %s", result.Message)
+	}
+	t.Cleanup(func() { _ = checker.ReleaseLock() })
+
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read lock file: %v", err)
+	}
+	if !strings.Contains(string(data), fmt.Sprintf("pid=%d\n", os.Getpid())) {
+		t.Fatalf("expected new lock file to contain current pid, got: %q", string(data))
+	}
+}
+
 func TestCheckLockFile_WritesExpectedContent(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(io.Discard)
@@ -1000,7 +1049,7 @@ func TestRunAllChecks_FailsOnLockFile(t *testing.T) {
 	}
 }
 
-func TestCheckLockFile_StatFailsAfterExistenceCheck(t *testing.T) {
+func TestCheckLockFile_StatFails(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(io.Discard)
 
@@ -1016,13 +1065,9 @@ func TestCheckLockFile_StatFailsAfterExistenceCheck(t *testing.T) {
 
 	origStat := osStat
 	t.Cleanup(func() { osStat = origStat })
-	calls := 0
 	osStat = func(name string) (os.FileInfo, error) {
 		if name == lockPath {
-			calls++
-			if calls == 2 {
-				return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.EIO}
-			}
+			return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.EIO}
 		}
 		return origStat(name)
 	}

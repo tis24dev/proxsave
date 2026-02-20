@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +28,7 @@ var (
 	osWriteFile = os.WriteFile
 	osSymlink   = os.Symlink
 	syncFile    = func(f *os.File) error { return f.Sync() }
+	killFunc    = func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) }
 
 	// tempRootPath is the runtime path used by CheckTempDirectory.
 	// It is a variable to allow tests to use a safe, isolated temporary directory.
@@ -218,6 +221,48 @@ func (c *Checker) CheckDiskSpace() CheckResult {
 	return result
 }
 
+type lockFileMetadata struct {
+	PID       int
+	Host      string
+	Timestamp string
+}
+
+func parseLockFileMetadata(content []byte) lockFileMetadata {
+	meta := lockFileMetadata{}
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "pid="):
+			if pid, err := strconv.Atoi(strings.TrimPrefix(line, "pid=")); err == nil && pid > 0 {
+				meta.PID = pid
+			}
+		case strings.HasPrefix(line, "host="):
+			meta.Host = strings.TrimSpace(strings.TrimPrefix(line, "host="))
+		case strings.HasPrefix(line, "time="):
+			meta.Timestamp = strings.TrimSpace(strings.TrimPrefix(line, "time="))
+		}
+	}
+	return meta
+}
+
+func sameHost(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	short := func(s string) string {
+		if idx := strings.IndexByte(s, '.'); idx > 0 {
+			return s[:idx]
+		}
+		return s
+	}
+	return short(a) == short(b)
+}
+
 // CheckLockFile checks for stale lock files and creates a new lock
 func (c *Checker) CheckLockFile() CheckResult {
 	result := CheckResult{
@@ -231,29 +276,85 @@ func (c *Checker) CheckLockFile() CheckResult {
 	}
 	c.logger.Debug("Lock file path: %s", lockPath)
 
+	info, statErr := osStat(lockPath)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		result.Error = fmt.Errorf("failed to stat lock file: %w", statErr)
+		result.Message = result.Error.Error()
+		return result
+	}
+
 	// Check if lock file exists
-	if _, err := osStat(lockPath); err == nil {
-		// Lock file exists, check its age
-		info, err := osStat(lockPath)
-		if err != nil {
-			result.Error = fmt.Errorf("failed to stat lock file: %w", err)
-			result.Message = result.Error.Error()
-			return result
+	if statErr == nil {
+		age := time.Since(info.ModTime())
+
+		formatInProgress := func(age time.Duration, meta lockFileMetadata) string {
+			parts := []string{fmt.Sprintf("lock age: %v", age)}
+			if meta.PID > 0 {
+				parts = append(parts, fmt.Sprintf("pid=%d", meta.PID))
+			}
+			if meta.Host != "" {
+				parts = append(parts, fmt.Sprintf("host=%s", meta.Host))
+			}
+			if meta.Timestamp != "" {
+				parts = append(parts, fmt.Sprintf("time=%s", meta.Timestamp))
+			}
+			return "Another backup is in progress (" + strings.Join(parts, ", ") + ")"
 		}
 
-		age := time.Since(info.ModTime())
-		if age > c.config.MaxLockAge {
-			// Stale lock file, remove it
-			c.logger.Warning("Removing stale lock file (age: %v)", age)
-			if err := osRemove(lockPath); err != nil {
-				result.Error = fmt.Errorf("failed to remove stale lock: %w", err)
-				result.Message = result.Error.Error()
+		var meta lockFileMetadata
+		if content, rerr := os.ReadFile(lockPath); rerr == nil {
+			meta = parseLockFileMetadata(content)
+		} else {
+			c.logger.Debug("Failed to read lock file %s: %v", lockPath, rerr)
+		}
+
+		hostname, _ := os.Hostname()
+		if meta.PID > 0 && sameHost(meta.Host, hostname) {
+			// Only perform PID liveness checks when the lock host matches the current host.
+			// This avoids false positives/negatives when the lock file resides on shared storage.
+			killErr := killFunc(meta.PID, 0)
+			if killErr == nil || errors.Is(killErr, syscall.EPERM) {
+				result.Message = formatInProgress(age, meta)
+				c.logger.Error("%s", result.Message)
 				return result
 			}
+			if errors.Is(killErr, syscall.ESRCH) {
+				c.logger.Warning("Removing stale lock file (pid %d not running, age: %v)", meta.PID, age)
+				if err := osRemove(lockPath); err != nil {
+					result.Error = fmt.Errorf("failed to remove stale lock: %w", err)
+					result.Message = result.Error.Error()
+					return result
+				}
+			} else {
+				// Unexpected error: fall back to age-based detection.
+				c.logger.Debug("Lock file liveness check failed (pid=%d): %v", meta.PID, killErr)
+				if age > c.config.MaxLockAge {
+					c.logger.Warning("Removing stale lock file (age: %v)", age)
+					if err := osRemove(lockPath); err != nil {
+						result.Error = fmt.Errorf("failed to remove stale lock: %w", err)
+						result.Message = result.Error.Error()
+						return result
+					}
+				} else {
+					result.Message = formatInProgress(age, meta)
+					c.logger.Error("%s", result.Message)
+					return result
+				}
+			}
 		} else {
-			result.Message = fmt.Sprintf("Another backup is in progress (lock age: %v)", age)
-			c.logger.Error("%s", result.Message)
-			return result
+			// No usable PID/host metadata; fall back to age-based stale detection.
+			if age > c.config.MaxLockAge {
+				c.logger.Warning("Removing stale lock file (age: %v)", age)
+				if err := osRemove(lockPath); err != nil {
+					result.Error = fmt.Errorf("failed to remove stale lock: %w", err)
+					result.Message = result.Error.Error()
+					return result
+				}
+			} else {
+				result.Message = formatInProgress(age, meta)
+				c.logger.Error("%s", result.Message)
+				return result
+			}
 		}
 	}
 
