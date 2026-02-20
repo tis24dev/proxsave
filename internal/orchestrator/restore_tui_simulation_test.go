@@ -145,4 +145,3 @@ func TestSelectCategoriesTUI_CancelReturnsAborted(t *testing.T) {
 		t.Fatalf("err=%v; want %v", err, ErrRestoreAborted)
 	}
 }
-

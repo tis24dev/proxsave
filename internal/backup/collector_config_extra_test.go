@@ -28,7 +28,7 @@ func TestCollectorConfigValidateDefaultsAndErrors(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("unexpected error for minimal valid config: %v", err)
 	}
-	if cfg.PxarDatastoreConcurrency != 3 || cfg.PxarIntraConcurrency != 4 || cfg.PxarScanFanoutLevel != 1 || cfg.PxarScanMaxRoots != 2048 || cfg.PxarEnumWorkers != 4 {
+	if cfg.PxarDatastoreConcurrency != 3 {
 		t.Fatalf("defaults not applied correctly: %+v", cfg)
 	}
 }
@@ -66,17 +66,6 @@ func TestCollectorConfigValidateEmptyExcludePattern(t *testing.T) {
 	cfg.ExcludePatterns = []string{""}
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected error for empty exclude pattern")
-	}
-}
-
-func TestCollectorConfigValidateNormalizesNegativeBudget(t *testing.T) {
-	cfg := &CollectorConfig{BackupVMConfigs: true}
-	cfg.PxarEnumBudgetMs = -1
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.PxarEnumBudgetMs != 0 {
-		t.Fatalf("expected PxarEnumBudgetMs to be normalized to 0, got %d", cfg.PxarEnumBudgetMs)
 	}
 }
 

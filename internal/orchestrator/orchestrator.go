@@ -1541,22 +1541,6 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	if cfg.PxarDatastoreConcurrency > 0 {
 		cc.PxarDatastoreConcurrency = cfg.PxarDatastoreConcurrency
 	}
-	if cfg.PxarIntraConcurrency > 0 {
-		cc.PxarIntraConcurrency = cfg.PxarIntraConcurrency
-	}
-	if cfg.PxarScanFanoutLevel > 0 {
-		cc.PxarScanFanoutLevel = cfg.PxarScanFanoutLevel
-	}
-	if cfg.PxarScanMaxRoots > 0 {
-		cc.PxarScanMaxRoots = cfg.PxarScanMaxRoots
-	}
-	cc.PxarStopOnCap = cfg.PxarStopOnCap
-	if cfg.PxarEnumWorkers > 0 {
-		cc.PxarEnumWorkers = cfg.PxarEnumWorkers
-	}
-	if cfg.PxarEnumBudgetMs >= 0 {
-		cc.PxarEnumBudgetMs = cfg.PxarEnumBudgetMs
-	}
 	cc.PxarFileIncludePatterns = append([]string(nil), cfg.PxarFileIncludePatterns...)
 	cc.PxarFileExcludePatterns = append([]string(nil), cfg.PxarFileExcludePatterns...)
 

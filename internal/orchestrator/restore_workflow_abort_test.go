@@ -93,10 +93,10 @@ func TestRunRestoreWorkflow_FstabPromptInputAborted_AbortsWorkflow(t *testing.T)
 	logger := logging.New(types.LogLevelError, false)
 	cfg := &config.Config{BaseDir: "/base"}
 	ui := &fakeRestoreWorkflowUI{
-		mode:              RestoreModeCustom,
-		categories:        []Category{mustCategoryByID(t, "filesystem")},
-		confirmRestore:    true,
-		confirmFstabMerge: false,
+		mode:                 RestoreModeCustom,
+		categories:           []Category{mustCategoryByID(t, "filesystem")},
+		confirmRestore:       true,
+		confirmFstabMerge:    false,
 		confirmFstabMergeErr: input.ErrInputAborted,
 	}
 

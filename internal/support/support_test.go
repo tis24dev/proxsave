@@ -25,9 +25,9 @@ type fakeNotifier struct {
 	err     error
 }
 
-func (f *fakeNotifier) Name() string                          { return "fake-email" }
-func (f *fakeNotifier) IsEnabled() bool                       { return f.enabled }
-func (f *fakeNotifier) IsCritical() bool                      { return false }
+func (f *fakeNotifier) Name() string     { return "fake-email" }
+func (f *fakeNotifier) IsEnabled() bool  { return f.enabled }
+func (f *fakeNotifier) IsCritical() bool { return false }
 func (f *fakeNotifier) Send(ctx context.Context, data *notify.NotificationData) (*notify.NotificationResult, error) {
 	f.sent++
 	f.last = data
@@ -84,9 +84,9 @@ func TestRunIntro_DeclinedConsent(t *testing.T) {
 
 func TestRunIntro_FullFlowWithRetries(t *testing.T) {
 	withStdinFile(t, strings.Join([]string{
-		"y",   // accept
-		"y",   // has issue
-		"",    // empty nickname -> retry
+		"y",    // accept
+		"y",    // has issue
+		"",     // empty nickname -> retry
 		"user", // nickname
 		"abc",  // invalid issue (missing #)
 		"#no",  // invalid issue (non-numeric)

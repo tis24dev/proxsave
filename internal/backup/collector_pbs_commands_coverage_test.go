@@ -119,7 +119,6 @@ func TestCollectPBSPxarMetadataProcessesMultipleDatastores(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := GetDefaultCollectorConfig()
 	cfg.PxarDatastoreConcurrency = 2
-	cfg.PxarIntraConcurrency = 1
 
 	collector := NewCollector(newTestLogger(), cfg, tmp, types.ProxmoxBS, false)
 
@@ -322,7 +321,6 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 	cfg := GetDefaultCollectorConfig()
 	cfg.PBSConfigPath = pbsRoot
 	cfg.PxarDatastoreConcurrency = 2
-	cfg.PxarIntraConcurrency = 1
 
 	deps := CollectorDeps{
 		LookPath: func(name string) (string, error) { return "/bin/" + name, nil },
@@ -402,7 +400,6 @@ func TestCollectPBSPxarMetadataStopsOnFirstDatastoreError(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := GetDefaultCollectorConfig()
 	cfg.PxarDatastoreConcurrency = 2
-	cfg.PxarIntraConcurrency = 1
 
 	collector := NewCollector(newTestLogger(), cfg, tmp, types.ProxmoxBS, false)
 

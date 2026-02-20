@@ -11,13 +11,13 @@ import (
 )
 
 type pbsNotificationSnapshotSummary struct {
-	Present  bool     `json:"present"`
-	Bytes    int64    `json:"bytes,omitempty"`
-	Total    int      `json:"total,omitempty"`
-	BuiltIn  int      `json:"built_in,omitempty"`
-	Custom   int      `json:"custom,omitempty"`
-	Names    []string `json:"names,omitempty"`
-	Error    string   `json:"error,omitempty"`
+	Present bool     `json:"present"`
+	Bytes   int64    `json:"bytes,omitempty"`
+	Total   int      `json:"total,omitempty"`
+	BuiltIn int      `json:"built_in,omitempty"`
+	Custom  int      `json:"custom,omitempty"`
+	Names   []string `json:"names,omitempty"`
+	Error   string   `json:"error,omitempty"`
 }
 
 type pbsNotificationsConfigFilesSummary struct {

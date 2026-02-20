@@ -107,15 +107,11 @@ func (c *Collector) collectPBSPxarMetadata(ctx context.Context, datastores []pbs
 	if dsWorkers <= 0 {
 		dsWorkers = 1
 	}
-	intraWorkers := c.config.PxarIntraConcurrency
-	if intraWorkers <= 0 {
-		intraWorkers = 1
-	}
 	mode := "sequential"
 	if dsWorkers > 1 {
 		mode = fmt.Sprintf("parallel (%d workers)", dsWorkers)
 	}
-	c.logger.Debug("PXAR metadata concurrency: datastores=%s, per-datastore workers=%d", mode, intraWorkers)
+	c.logger.Debug("PXAR metadata concurrency: datastores=%s", mode)
 
 	pxarRoot := c.proxsaveInfoDir("pbs", "pxar")
 	metaRoot := filepath.Join(pxarRoot, "metadata")

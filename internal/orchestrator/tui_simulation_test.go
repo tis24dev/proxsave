@@ -30,19 +30,19 @@ func withSimAppSequence(t *testing.T, keys []simKey) {
 		app.SetScreen(screen)
 
 		go func() {
-		// Wait for app.Run() to start event processing.
-		time.Sleep(50 * time.Millisecond)
-		for _, k := range keys {
-			mod := k.Mod
-			if mod == 0 {
-				mod = tcell.ModNone
+			// Wait for app.Run() to start event processing.
+			time.Sleep(50 * time.Millisecond)
+			for _, k := range keys {
+				mod := k.Mod
+				if mod == 0 {
+					mod = tcell.ModNone
+				}
+				screen.InjectKey(k.Key, k.R, mod)
+				time.Sleep(10 * time.Millisecond)
 			}
-			screen.InjectKey(k.Key, k.R, mod)
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
-	return app
-}
+		}()
+		return app
+	}
 
 	t.Cleanup(func() {
 		newTUIApp = orig

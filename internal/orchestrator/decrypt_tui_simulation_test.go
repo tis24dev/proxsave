@@ -34,4 +34,3 @@ func TestPromptDecryptIdentity_PassphraseReturnsIdentity(t *testing.T) {
 		t.Fatalf("expected at least one identity")
 	}
 }
-

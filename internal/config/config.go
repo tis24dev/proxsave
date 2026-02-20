@@ -219,12 +219,6 @@ type Config struct {
 	BackupPruneSchedules       bool
 	BackupPxarFiles            bool
 	PxarDatastoreConcurrency   int
-	PxarIntraConcurrency       int
-	PxarScanFanoutLevel        int
-	PxarScanMaxRoots           int
-	PxarStopOnCap              bool
-	PxarEnumWorkers            int
-	PxarEnumBudgetMs           int
 	PxarFileIncludePatterns    []string
 	PxarFileExcludePatterns    []string
 
@@ -704,12 +698,6 @@ func (c *Config) parsePBSSettings() {
 	c.BackupPruneSchedules = c.getBool("BACKUP_PRUNE_SCHEDULES", true)
 	c.BackupPxarFiles = c.getBoolWithFallback([]string{"PXAR_SCAN_ENABLE", "BACKUP_PXAR_FILES"}, true)
 	c.PxarDatastoreConcurrency = c.getInt("PXAR_SCAN_DS_CONCURRENCY", 3)
-	c.PxarIntraConcurrency = c.getInt("PXAR_SCAN_INTRA_CONCURRENCY", 4)
-	c.PxarScanFanoutLevel = c.getInt("PXAR_SCAN_FANOUT_LEVEL", 2)
-	c.PxarScanMaxRoots = c.getInt("PXAR_SCAN_MAX_ROOTS", 2048)
-	c.PxarStopOnCap = c.getBool("PXAR_STOP_ON_CAP", false)
-	c.PxarEnumWorkers = c.getInt("PXAR_ENUM_READDIR_WORKERS", 4)
-	c.PxarEnumBudgetMs = c.getInt("PXAR_ENUM_BUDGET_MS", 0)
 	c.PxarFileIncludePatterns = normalizeList(c.getStringSliceWithFallback([]string{"PXAR_FILE_INCLUDE_PATTERN", "PXAR_INCLUDE_PATTERN"}, nil))
 	c.PxarFileExcludePatterns = normalizeList(c.getStringSlice("PXAR_FILE_EXCLUDE_PATTERN", nil))
 }
