@@ -49,4 +49,3 @@ func TestMaybeAddRecommendedCategoriesForTFA_DoesNotAddWhenDeclined(t *testing.T
 		t.Fatalf("expected no categories to be added, got=%v", got)
 	}
 }
-

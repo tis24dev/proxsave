@@ -233,7 +233,7 @@ func maybeApplyPVEFirewallWithUI(
 		return nil
 	}
 
-	if err := restartPVEFirewallService(ctx, logger); err != nil {
+	if err := restartPVEFirewallService(ctx); err != nil {
 		logger.Warning("PVE firewall restore: reload/restart failed: %v", err)
 	}
 
@@ -300,7 +300,7 @@ func applyPVEFirewallFromStage(logger *logging.Logger, stageRoot string) (applie
 				applied = append(applied, destFirewall)
 			}
 		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return applied, fmt.Errorf("stat staged firewall config %s: %w", stageFirewall, err)
 	}
 
@@ -382,7 +382,7 @@ func selectStageHostFirewall(logger *logging.Logger, stageRoot string) (path str
 	return "", "", false, nil
 }
 
-func restartPVEFirewallService(ctx context.Context, logger *logging.Logger) error {
+func restartPVEFirewallService(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 

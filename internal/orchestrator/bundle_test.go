@@ -90,11 +90,12 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 		}
 
 		expectedContent := testData[""]
-		if header.Name == "backup.tar.sha256" {
+		switch header.Name {
+		case "backup.tar.sha256":
 			expectedContent = testData[".sha256"]
-		} else if header.Name == "backup.tar.metadata" {
+		case "backup.tar.metadata":
 			expectedContent = testData[".metadata"]
-		} else if header.Name == "backup.tar.metadata.sha256" {
+		case "backup.tar.metadata.sha256":
 			expectedContent = testData[".metadata.sha256"]
 		}
 

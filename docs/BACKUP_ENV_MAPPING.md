@@ -68,7 +68,6 @@ PORT_WHITELIST            = SAME
 PVE_BACKUP_INCLUDE_PATTERN = SAME
 PVE_CLUSTER_PATH          = SAME
 PVE_CONFIG_PATH           = SAME
-PXAR_STOP_ON_CAP          = SAME
 RCLONE_BANDWIDTH_LIMIT    = SAME
 RCLONE_FLAGS              = SAME
 SECONDARY_LOG_PATH        = SAME
@@ -88,12 +87,17 @@ WEBHOOK_TIMEOUT           = SAME
 ## Go-only variables (new)
 
 SYSTEM_ROOT_PREFIX = NEW (Go-only) → Override system root for collection (testing/chroot). Empty or "/" uses the real root.
+PVESH_TIMEOUT = NEW (Go-only) → Timeout (seconds) for each `pvesh` command execution (0=disabled).
+FS_IO_TIMEOUT = NEW (Go-only) → Timeout (seconds) for filesystem probes (stat/readdir/statfs) on storages (0=disabled). Helps avoid hangs on unreachable network mounts.
+NOTE: PBS restore behavior is selected interactively during `--restore` and is intentionally not configured via `backup.env`.
 BACKUP_PBS_S3_ENDPOINTS = NEW (Go-only) → Collect `s3.cfg` and S3 endpoint snapshots (PBS).
 BACKUP_PBS_NODE_CONFIG = NEW (Go-only) → Collect `node.cfg` and node snapshots (PBS).
 BACKUP_PBS_ACME_ACCOUNTS = NEW (Go-only) → Collect `acme/accounts.cfg` and ACME account snapshots (PBS).
 BACKUP_PBS_ACME_PLUGINS = NEW (Go-only) → Collect `acme/plugins.cfg` and ACME plugin snapshots (PBS).
 BACKUP_PBS_METRIC_SERVERS = NEW (Go-only) → Collect `metricserver.cfg` (PBS).
 BACKUP_PBS_TRAFFIC_CONTROL = NEW (Go-only) → Collect `traffic-control.cfg` and traffic-control snapshots (PBS).
+BACKUP_PBS_NOTIFICATIONS = NEW (Go-only) → Collect `notifications.cfg` and notification snapshots (PBS).
+BACKUP_PBS_NOTIFICATIONS_PRIV = NEW (Go-only) → Collect `notifications-priv.cfg` (PBS notification secrets/credentials).
 BACKUP_PBS_NETWORK_CONFIG = NEW (Go-only) → Collect `network.cfg` and network snapshots (PBS), independent from BACKUP_NETWORK_CONFIGS (system).
 
 ## Renamed variables / Supported aliases in Go
@@ -140,17 +144,18 @@ STORAGE_WARNING_THRESHOLD_SECONDARY = SEMANTIC CHANGE → MIN_DISK_SPACE_SECONDA
 
 AUTO_DETECT_DATASTORES    = LEGACY (Bash only, auto-detect handled internally in Go)
 BACKUP_COROSYNC_CONFIG    = LEGACY (Go always uses COROSYNC_CONFIG_PATH / cluster)
-BACKUP_SMALL_PXAR         = LEGACY (in Go, PXAR tuning is more granular via PXAR_*_*)
+BACKUP_SMALL_PXAR         = LEGACY (no equivalent in Go; PXAR metadata sampling is bounded)
 CLOUD_BACKUP_REQUIRED     = LEGACY (secondary is always optional = warning only, non-blocking)
 CLOUD_PARALLEL_UPLOAD_TIMEOUT = LEGACY (in Go, timeouts are RCLONE_TIMEOUT_*)
 ENABLE_EMOJI_LOG          = LEGACY (log formatting handled internally in Go)
 ENABLE_LOG_MANAGEMENT     = LEGACY (log management in Go via LogPath/retention)
 MAX_CLOUD_LOGS            = LEGACY (Bash only; in Go log retention follows MAX_CLOUD_BACKUPS/CloudRetentionDays)
 MAX_LOCAL_LOGS            = LEGACY (Bash only; in Go log retention follows MAX_LOCAL_BACKUPS/LocalRetentionDays)
-MAX_PXAR_SIZE             = LEGACY (in Go there are PXAR_SCAN_MAX_ROOTS / budget, not the same semantics)
+MAX_PXAR_SIZE             = LEGACY (no equivalent in Go)
 MAX_SECONDARY_LOGS        = LEGACY (Bash only; in Go log retention follows MAX_SECONDARY_BACKUPS/SecondaryRetentionDays)
 MIN_BASH_VERSION          = LEGACY (specific only to Bash script)
 MULTI_STORAGE_PARALLEL    = LEGACY (in Go there is parallel storage management, not controlled by this variable)
+PXAR_STOP_ON_CAP          = LEGACY (Go no longer uses this tuning knob)
 REMOVE_UNAUTHORIZED_FILES = LEGACY (in Go there is no hard delete flag; checks are more conservative)
 SECONDARY_BACKUP_REQUIRED = LEGACY (secondary is always optional = warning only, non-blocking)
 SKIP_CLOUD_VERIFICATION   = LEGACY (verifications always performed)

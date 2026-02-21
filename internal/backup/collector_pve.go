@@ -11,8 +11,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 type pveStorageEntry struct {
@@ -20,6 +21,13 @@ type pveStorageEntry struct {
 	Path    string
 	Type    string
 	Content string
+
+	// Runtime status fields from `pvesh get /nodes/<node>/storage`.
+	// These are optional and may be nil/empty depending on the data source
+	// (e.g. storage.cfg parsing has no runtime status).
+	Active  *bool
+	Enabled *bool
+	Status  string
 }
 
 type pveRuntimeInfo struct {
@@ -659,11 +667,6 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 	if nodeName == "" {
 		nodeName = hostname
 	}
-	c.safeCmdOutput(ctx,
-		fmt.Sprintf("pvesh get /nodes/%s/storage --output-format=json", nodeName),
-		filepath.Join(commandsDir, "storage_status.json"),
-		"Storage status",
-		false)
 
 	// Disk list
 	c.safeCmdOutput(ctx,
@@ -717,12 +720,46 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 }
 
 func parseNodeStorageList(data []byte) ([]pveStorageEntry, error) {
+	parseOptionalBool := func(value any) *bool {
+		if value == nil {
+			return nil
+		}
+		switch v := value.(type) {
+		case bool:
+			b := v
+			return &b
+		case float64:
+			b := v != 0
+			return &b
+		case string:
+			s := strings.ToLower(strings.TrimSpace(v))
+			if s == "" {
+				return nil
+			}
+			switch s {
+			case "1", "true", "yes", "on":
+				b := true
+				return &b
+			case "0", "false", "no", "off":
+				b := false
+				return &b
+			default:
+				return nil
+			}
+		default:
+			return nil
+		}
+	}
+
 	var raw []struct {
 		Storage string `json:"storage"`
 		Name    string `json:"name"`
 		Path    string `json:"path"`
 		Type    string `json:"type"`
 		Content string `json:"content"`
+		Active  any    `json:"active"`
+		Enabled any    `json:"enabled"`
+		Status  string `json:"status"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, err
@@ -746,6 +783,9 @@ func parseNodeStorageList(data []byte) ([]pveStorageEntry, error) {
 			Path:    strings.TrimSpace(item.Path),
 			Type:    strings.TrimSpace(item.Type),
 			Content: strings.TrimSpace(item.Content),
+			Active:  parseOptionalBool(item.Active),
+			Enabled: parseOptionalBool(item.Enabled),
+			Status:  strings.TrimSpace(item.Status),
 		})
 	}
 	return entries, nil
@@ -991,6 +1031,48 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 	summary.WriteString(time.Now().Format(time.RFC3339))
 	summary.WriteString("\n# Format: NAME|PATH|TYPE|CONTENT\n\n")
 
+	ioTimeout := time.Duration(0)
+	if c.config != nil && c.config.FsIoTimeoutSeconds > 0 {
+		ioTimeout = time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
+	}
+
+	formatRuntime := func(storage pveStorageEntry) string {
+		parts := make([]string, 0, 3)
+		if storage.Active != nil {
+			parts = append(parts, fmt.Sprintf("active=%v", *storage.Active))
+		}
+		if storage.Enabled != nil {
+			parts = append(parts, fmt.Sprintf("enabled=%v", *storage.Enabled))
+		}
+		if status := strings.TrimSpace(storage.Status); status != "" {
+			parts = append(parts, "status="+status)
+		}
+		if len(parts) == 0 {
+			return ""
+		}
+		return " (" + strings.Join(parts, " ") + ")"
+	}
+
+	unavailableReason := func(storage pveStorageEntry) string {
+		if storage.Enabled != nil && !*storage.Enabled {
+			return "enabled=false"
+		}
+		if storage.Active != nil && !*storage.Active {
+			return "active=false"
+		}
+		if status := strings.ToLower(strings.TrimSpace(storage.Status)); status != "" {
+			switch status {
+			case "available", "active", "ok":
+				// Known-good states
+			case "unknown", "inactive", "disabled", "unavailable", "error":
+				return "status=" + status
+			default:
+				// Unknown status: do not skip based on this field alone.
+			}
+		}
+		return ""
+	}
+
 	processed := 0
 	for _, storage := range storages {
 		if storage.Path == "" {
@@ -999,8 +1081,24 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if stat, err := os.Stat(storage.Path); err != nil || !stat.IsDir() {
-			c.logger.Debug("Skipping datastore %s (path not accessible: %s)", storage.Name, storage.Path)
+
+		if reason := unavailableReason(storage); reason != "" {
+			c.logger.Warning("Skipping datastore %s (path=%s)%s: not available (%s)", storage.Name, storage.Path, formatRuntime(storage), reason)
+			continue
+		}
+
+		c.logger.Info("Probing datastore %s (path=%s)%s", storage.Name, storage.Path, formatRuntime(storage))
+		stat, err := safefs.Stat(ctx, storage.Path, ioTimeout)
+		if err != nil {
+			if errors.Is(err, safefs.ErrTimeout) {
+				c.logger.Warning("Skipping datastore %s (path=%s)%s: filesystem probe timed out (%v)", storage.Name, storage.Path, formatRuntime(storage), err)
+			} else {
+				c.logger.Debug("Skipping datastore %s (path not accessible: %s): %v", storage.Name, storage.Path, err)
+			}
+			continue
+		}
+		if !stat.IsDir() {
+			c.logger.Debug("Skipping datastore %s (path not a directory: %s)", storage.Name, storage.Path)
 			continue
 		}
 
@@ -1034,7 +1132,11 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 			ScannedAt: time.Now(),
 		}
 
-		dirSamples, dirSampleErr := c.sampleDirectories(ctx, storage.Path, 2, 20)
+		dirSamples, dirSampleErr := c.sampleDirectoriesBounded(ctx, storage.Path, 2, 20, ioTimeout)
+		if errors.Is(dirSampleErr, safefs.ErrTimeout) {
+			c.logger.Warning("Skipping datastore %s (path=%s)%s: directory sampling timed out (%v)", storage.Name, storage.Path, formatRuntime(storage), dirSampleErr)
+			continue
+		}
 		if dirSampleErr != nil {
 			c.logger.Debug("Directory sample for datastore %s failed: %v", storage.Name, dirSampleErr)
 		}
@@ -1042,7 +1144,11 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 			meta.SampleDirectories = dirSamples
 		}
 
-		diskUsageText, diskUsageErr := c.describeDiskUsage(storage.Path)
+		diskUsageText, diskUsageErr := c.describeDiskUsage(ctx, storage.Path, ioTimeout)
+		if errors.Is(diskUsageErr, safefs.ErrTimeout) {
+			c.logger.Warning("Skipping datastore %s (path=%s)%s: disk usage probe timed out (%v)", storage.Name, storage.Path, formatRuntime(storage), diskUsageErr)
+			continue
+		}
 		if diskUsageErr != nil {
 			c.logger.Debug("Disk usage summary for %s failed: %v", storage.Name, diskUsageErr)
 		} else {
@@ -1059,7 +1165,11 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 		}
 		excludePatterns := c.config.PxarFileExcludePatterns
 
-		fileSummaries, sampleFileErr := c.sampleFiles(ctx, storage.Path, includePatterns, excludePatterns, 3, 100)
+		fileSummaries, sampleFileErr := c.sampleFilesBounded(ctx, storage.Path, includePatterns, excludePatterns, 3, 100, ioTimeout)
+		if errors.Is(sampleFileErr, safefs.ErrTimeout) {
+			c.logger.Warning("Skipping datastore %s (path=%s)%s: file sampling timed out (%v)", storage.Name, storage.Path, formatRuntime(storage), sampleFileErr)
+			continue
+		}
 		if sampleFileErr != nil {
 			c.logger.Debug("Backup file sample for %s failed: %v", storage.Name, sampleFileErr)
 		} else if len(fileSummaries) > 0 {
@@ -1075,7 +1185,11 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 			return err
 		}
 
-		fileSampleLines, fileSampleErr := c.sampleMetadataFileStats(ctx, storage.Path, 3, 10)
+		fileSampleLines, fileSampleErr := c.sampleMetadataFileStats(ctx, storage.Path, 3, 10, ioTimeout)
+		if errors.Is(fileSampleErr, safefs.ErrTimeout) {
+			c.logger.Warning("Skipping datastore %s (path=%s)%s: metadata sampling timed out (%v)", storage.Name, storage.Path, formatRuntime(storage), fileSampleErr)
+			continue
+		}
 		if fileSampleErr != nil {
 			c.logger.Debug("General file sampling for %s failed: %v", storage.Name, fileSampleErr)
 		}
@@ -1086,7 +1200,7 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 
 		if c.config.BackupPVEBackupFiles {
 			c.logger.Info("Analyzing PVE backup files in datastore: %s", storage.Name)
-			if err := c.collectDetailedPVEBackups(ctx, storage, metaDir); err != nil {
+			if err := c.collectDetailedPVEBackups(ctx, storage, metaDir, ioTimeout); err != nil {
 				c.logger.Warning("Detailed backup analysis for %s failed: %v", storage.Name, err)
 			}
 		} else {
@@ -1105,7 +1219,7 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 	return nil
 }
 
-func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveStorageEntry, metaDir string) error {
+func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveStorageEntry, metaDir string, ioTimeout time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1156,56 +1270,86 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 		}
 	}
 
-	walkErr := filepath.WalkDir(storage.Path, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			c.logger.Debug("Skipping %s: %v", path, walkErr)
-			return nil
-		}
+	type dirItem struct {
+		path string
+	}
+	stack := []dirItem{{path: storage.Path}}
+
+	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if d.IsDir() {
-			return nil
+
+		item := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		if c.shouldExclude(item.path) {
+			continue
 		}
 
-		info, err := d.Info()
+		entries, err := safefs.ReadDir(ctx, item.path, ioTimeout)
 		if err != nil {
-			c.logger.Debug("Failed to stat %s: %v", path, err)
-			return nil
+			if errors.Is(err, safefs.ErrTimeout) {
+				return err
+			}
+			c.logger.Debug("Skipping %s: %v", item.path, err)
+			continue
 		}
 
-		base := filepath.Base(path)
-		matched := false
-		for _, w := range writers {
-			if matchPattern(base, w.pattern) {
-				matched = true
-				if err := w.Write(path, info); err != nil {
-					c.logger.Debug("Failed to log %s for pattern %s: %v", path, w.pattern, err)
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
+			name := entry.Name()
+			fullPath := filepath.Join(item.path, name)
+			if c.shouldExclude(fullPath) {
+				continue
+			}
+			if entry.IsDir() {
+				stack = append(stack, dirItem{path: fullPath})
+				continue
+			}
+
+			matchedWriters := make([]*patternWriter, 0, 2)
+			for _, w := range writers {
+				if matchPattern(name, w.pattern) {
+					matchedWriters = append(matchedWriters, w)
+				}
+			}
+			if len(matchedWriters) == 0 {
+				continue
+			}
+
+			info, err := safefs.Stat(ctx, fullPath, ioTimeout)
+			if err != nil {
+				if errors.Is(err, safefs.ErrTimeout) {
+					return err
+				}
+				c.logger.Debug("Failed to stat %s: %v", fullPath, err)
+				continue
+			}
+
+			for _, w := range matchedWriters {
+				if err := w.Write(fullPath, info); err != nil {
+					c.logger.Debug("Failed to log %s for pattern %s: %v", fullPath, w.pattern, err)
+				}
+			}
+
+			totalFiles++
+			totalSize += info.Size()
+
+			if smallDir != "" && info.Size() <= c.config.MaxPVEBackupSizeBytes {
+				if err := c.copyBackupSample(ctx, fullPath, smallDir, fmt.Sprintf("small PVE backup %s", name)); err != nil {
+					c.logger.Debug("Failed to copy small backup %s: %v", fullPath, err)
+				}
+			}
+			if includeDir != "" && strings.Contains(fullPath, includePattern) {
+				if err := c.copyBackupSample(ctx, fullPath, includeDir, fmt.Sprintf("selected PVE backup %s", name)); err != nil {
+					c.logger.Debug("Failed to copy pattern backup %s: %v", fullPath, err)
 				}
 			}
 		}
-
-		if !matched {
-			return nil
-		}
-
-		totalFiles++
-		totalSize += info.Size()
-
-		if smallDir != "" && info.Size() <= c.config.MaxPVEBackupSizeBytes {
-			if err := c.copyBackupSample(ctx, path, smallDir, fmt.Sprintf("small PVE backup %s", filepath.Base(path))); err != nil {
-				c.logger.Debug("Failed to copy small backup %s: %v", path, err)
-			}
-		}
-		if includeDir != "" && strings.Contains(path, includePattern) {
-			if err := c.copyBackupSample(ctx, path, includeDir, fmt.Sprintf("selected PVE backup %s", filepath.Base(path))); err != nil {
-				c.logger.Debug("Failed to copy pattern backup %s: %v", path, err)
-			}
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return walkErr
 	}
 
 	if err := c.writePatternSummary(storage, analysisDir, writers, totalFiles, totalSize); err != nil {
@@ -1326,7 +1470,7 @@ func (pw *patternWriter) Write(path string, info os.FileInfo) error {
 func (pw *patternWriter) Close() error {
 	var err error
 	if pw.writer != nil {
-		if flushErr := pw.writer.Flush(); flushErr != nil && err == nil {
+		if flushErr := pw.writer.Flush(); flushErr != nil {
 			err = flushErr
 		}
 	}
@@ -1556,6 +1700,9 @@ func (c *Collector) copyIfExists(source, target, description string) error {
 }
 
 func (c *Collector) aggregateBackupHistory(ctx context.Context, jobsDir, target string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(jobsDir)
 	if err != nil {
 		return err
@@ -1563,6 +1710,9 @@ func (c *Collector) aggregateBackupHistory(ctx context.Context, jobsDir, target 
 
 	var buffers []json.RawMessage
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if entry.IsDir() {
 			continue
 		}
@@ -1599,6 +1749,9 @@ func (c *Collector) aggregateBackupHistory(ctx context.Context, jobsDir, target 
 }
 
 func (c *Collector) aggregateReplicationStatus(ctx context.Context, replicationDir, target string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(replicationDir)
 	if err != nil {
 		return err
@@ -1606,6 +1759,9 @@ func (c *Collector) aggregateReplicationStatus(ctx context.Context, replicationD
 
 	var buffers []json.RawMessage
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if entry.IsDir() {
 			continue
 		}
@@ -1763,9 +1919,9 @@ func (c *Collector) parseStorageConfigEntries() []pveStorageEntry {
 	return entries
 }
 
-func (c *Collector) describeDiskUsage(path string) (string, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
+func (c *Collector) describeDiskUsage(ctx context.Context, path string, ioTimeout time.Duration) (string, error) {
+	stat, err := safefs.Statfs(ctx, path, ioTimeout)
+	if err != nil {
 		return "", err
 	}
 	total := int64(stat.Blocks) * int64(stat.Bsize)
@@ -1781,50 +1937,64 @@ func (c *Collector) describeDiskUsage(path string) (string, error) {
 	), nil
 }
 
-func (c *Collector) sampleMetadataFileStats(ctx context.Context, root string, maxDepth, limit int) ([]string, error) {
+func (c *Collector) sampleMetadataFileStats(ctx context.Context, root string, maxDepth, limit int, ioTimeout time.Duration) ([]string, error) {
 	lines := make([]string, 0, limit)
-	if limit <= 0 {
+	if limit <= 0 || maxDepth <= 0 {
 		return lines, nil
 	}
 
 	root = filepath.Clean(root)
-	stopErr := errors.New("metadata sample limit reached")
-
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		depth := relativeDepth(root, path)
-		if d.IsDir() {
-			if depth >= maxDepth {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-
-		line := fmt.Sprintf("%s %d %s",
-			info.ModTime().Format(time.RFC3339),
-			info.Size(),
-			path,
-		)
-		lines = append(lines, line)
-		if len(lines) >= limit {
-			return stopErr
-		}
-		return nil
-	})
-
-	if err != nil && !errors.Is(err, stopErr) {
-		return lines, err
+	type dirItem struct {
+		path  string
+		depth int
 	}
+	stack := []dirItem{{path: root, depth: 0}}
+
+	for len(stack) > 0 && len(lines) < limit {
+		if err := ctx.Err(); err != nil {
+			return lines, err
+		}
+
+		item := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		entries, err := safefs.ReadDir(ctx, item.path, ioTimeout)
+		if err != nil {
+			return lines, err
+		}
+
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return lines, err
+			}
+
+			full := filepath.Join(item.path, entry.Name())
+			if entry.IsDir() {
+				if item.depth+1 >= maxDepth {
+					continue
+				}
+				stack = append(stack, dirItem{path: full, depth: item.depth + 1})
+				continue
+			}
+
+			info, err := safefs.Stat(ctx, full, ioTimeout)
+			if err != nil {
+				if errors.Is(err, safefs.ErrTimeout) {
+					return lines, err
+				}
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("%s %d %s",
+				info.ModTime().Format(time.RFC3339),
+				info.Size(),
+				full,
+			))
+			if len(lines) >= limit {
+				break
+			}
+		}
+	}
+
 	return lines, nil
 }
 

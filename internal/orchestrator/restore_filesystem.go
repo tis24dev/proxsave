@@ -111,11 +111,11 @@ type lsblkReport struct {
 }
 
 type lsblkDevice struct {
-	Name     string       `json:"name"`
-	Path     string       `json:"path"`
-	UUID     string       `json:"uuid"`
-	PartUUID string       `json:"partuuid"`
-	Label    string       `json:"label"`
+	Name     string        `json:"name"`
+	Path     string        `json:"path"`
+	UUID     string        `json:"uuid"`
+	PartUUID string        `json:"partuuid"`
+	Label    string        `json:"label"`
 	Children []lsblkDevice `json:"children"`
 }
 

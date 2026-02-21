@@ -844,10 +844,10 @@ func TestAddrAssignRank(t *testing.T) {
 		value int
 		want  int
 	}{
-		{0, 0}, // permanent - best
-		{3, 1}, // set by userspace
-		{2, 2}, // stolen
-		{1, 3}, // random
+		{0, 0},  // permanent - best
+		{3, 1},  // set by userspace
+		{2, 2},  // stolen
+		{1, 3},  // random
 		{-1, 4}, // unknown
 		{99, 4}, // unknown
 	}
@@ -1324,10 +1324,10 @@ func TestSelectPreferredMACEmpty(t *testing.T) {
 
 func TestSelectPreferredMACWithEmptyFields(t *testing.T) {
 	candidates := []macCandidate{
-		{Iface: "", MAC: "aa:bb:cc:dd:ee:ff"},        // empty iface
-		{Iface: "eth0", MAC: ""},                     // empty mac
-		{Iface: "  ", MAC: "  "},                     // whitespace only
-		{Iface: "eth1", MAC: "00:11:22:33:44:55"},    // valid
+		{Iface: "", MAC: "aa:bb:cc:dd:ee:ff"},     // empty iface
+		{Iface: "eth0", MAC: ""},                  // empty mac
+		{Iface: "  ", MAC: "  "},                  // whitespace only
+		{Iface: "eth1", MAC: "00:11:22:33:44:55"}, // valid
 	}
 
 	mac, iface := selectPreferredMAC(candidates)

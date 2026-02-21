@@ -2,14 +2,18 @@ package pbs
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
+
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
-var execCommand = exec.Command
+var execCommand = exec.CommandContext
 
 // Namespace represents a single PBS namespace.
 type Namespace struct {
@@ -26,12 +30,15 @@ type listNamespacesResponse struct {
 
 // ListNamespaces tries the PBS CLI first and, if it fails,
 // falls back to the filesystem to infer namespaces.
-func ListNamespaces(datastoreName, datastorePath string) ([]Namespace, bool, error) {
-	if namespaces, err := listNamespacesViaCLI(datastoreName); err == nil {
+func ListNamespaces(ctx context.Context, datastoreName, datastorePath string, ioTimeout time.Duration) ([]Namespace, bool, error) {
+	if namespaces, err := listNamespacesViaCLI(ctx, datastoreName); err == nil {
 		return namespaces, false, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 
-	namespaces, err := discoverNamespacesFromFilesystem(datastorePath)
+	namespaces, err := discoverNamespacesFromFilesystem(ctx, datastorePath, ioTimeout)
 	if err != nil {
 		return nil, false, err
 	}
@@ -39,8 +46,13 @@ func ListNamespaces(datastoreName, datastorePath string) ([]Namespace, bool, err
 	return namespaces, true, nil
 }
 
-func listNamespacesViaCLI(datastore string) ([]Namespace, error) {
+func listNamespacesViaCLI(ctx context.Context, datastore string) ([]Namespace, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	cmd := execCommand(
+		ctx,
 		"proxmox-backup-manager",
 		"datastore",
 		"namespace",
@@ -65,12 +77,12 @@ func listNamespacesViaCLI(datastore string) ([]Namespace, error) {
 	return parsed.Data, nil
 }
 
-func discoverNamespacesFromFilesystem(datastorePath string) ([]Namespace, error) {
+func discoverNamespacesFromFilesystem(ctx context.Context, datastorePath string, ioTimeout time.Duration) ([]Namespace, error) {
 	if datastorePath == "" {
 		return nil, fmt.Errorf("datastore path is empty")
 	}
 
-	entries, err := os.ReadDir(datastorePath)
+	entries, err := safefs.ReadDir(ctx, datastorePath, ioTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read datastore path %s: %w", datastorePath, err)
 	}
@@ -91,12 +103,14 @@ func discoverNamespacesFromFilesystem(datastorePath string) ([]Namespace, error)
 
 		subPath := filepath.Join(datastorePath, entry.Name())
 		for _, chk := range checkDirs {
-			if _, err := os.Stat(filepath.Join(subPath, chk)); err == nil {
+			if _, err := safefs.Stat(ctx, filepath.Join(subPath, chk), ioTimeout); err == nil {
 				namespaces = append(namespaces, Namespace{
 					Ns:   entry.Name(),
 					Path: subPath,
 				})
 				break
+			} else if errors.Is(err, safefs.ErrTimeout) {
+				return nil, err
 			}
 		}
 	}

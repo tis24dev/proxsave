@@ -214,6 +214,11 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 	if !c.config.BackupPBSTrafficControl {
 		extraExclude = append(extraExclude, "traffic-control.cfg")
 	}
+	if !c.config.BackupPBSNotifications {
+		extraExclude = append(extraExclude, "notifications.cfg", "notifications-priv.cfg")
+	} else if !c.config.BackupPBSNotificationsPriv {
+		extraExclude = append(extraExclude, "notifications-priv.cfg")
+	}
 	if !c.config.BackupUserConfigs {
 		// User-related configs are intentionally excluded together.
 		extraExclude = append(extraExclude, "user.cfg", "acl.cfg", "domains.cfg")
@@ -280,6 +285,17 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 	// Traffic control
 	c.pbsManifest["traffic-control.cfg"] = c.collectPBSConfigFile(ctx, root, "traffic-control.cfg",
 		"Traffic control rules", c.config.BackupPBSTrafficControl, "BACKUP_PBS_TRAFFIC_CONTROL")
+
+	// Notifications (targets/endpoints + matcher routing; secrets are stored in notifications-priv.cfg)
+	c.pbsManifest["notifications.cfg"] = c.collectPBSConfigFile(ctx, root, "notifications.cfg",
+		"Notifications configuration", c.config.BackupPBSNotifications, "BACKUP_PBS_NOTIFICATIONS")
+	privEnabled := c.config.BackupPBSNotifications && c.config.BackupPBSNotificationsPriv
+	privDisableHint := "BACKUP_PBS_NOTIFICATIONS_PRIV"
+	if !c.config.BackupPBSNotifications {
+		privDisableHint = "BACKUP_PBS_NOTIFICATIONS"
+	}
+	c.pbsManifest["notifications-priv.cfg"] = c.collectPBSConfigFile(ctx, root, "notifications-priv.cfg",
+		"Notifications secrets", privEnabled, privDisableHint)
 
 	// User configuration
 	c.pbsManifest["user.cfg"] = c.collectPBSConfigFile(ctx, root, "user.cfg",
@@ -381,7 +397,10 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 	}
 
 	// Notifications (targets, matchers, endpoints)
-	c.collectPBSNotificationSnapshots(ctx, commandsDir)
+	if c.config.BackupPBSNotifications {
+		c.collectPBSNotificationSnapshots(ctx, commandsDir)
+		c.writePBSNotificationSummary(commandsDir)
+	}
 
 	// User list
 	if c.config.BackupUserConfigs {

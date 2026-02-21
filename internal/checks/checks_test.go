@@ -149,6 +149,49 @@ func TestCheckLockFileStaleLock(t *testing.T) {
 	checker.ReleaseLock()
 }
 
+func TestCheckLockFile_RemovesLockWhenProcessIsGone(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+
+	hostname, _ := os.Hostname()
+	lockContent := fmt.Sprintf("pid=%d\nhost=%s\ntime=%s\n", 999999, hostname, time.Now().Format(time.RFC3339))
+	if err := os.WriteFile(lockPath, []byte(lockContent), 0o640); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.LockFilePath = lockPath
+	config.MaxLockAge = 24 * time.Hour
+	config.DryRun = false
+
+	origKill := killFunc
+	t.Cleanup(func() { killFunc = origKill })
+	killFunc = func(pid int, sig syscall.Signal) error {
+		if pid == 999999 && sig == 0 {
+			return syscall.ESRCH
+		}
+		return origKill(pid, sig)
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckLockFile()
+	if !result.Passed {
+		t.Fatalf("CheckLockFile should succeed after removing stale lock: %s", result.Message)
+	}
+	t.Cleanup(func() { _ = checker.ReleaseLock() })
+
+	content, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read lock file: %v", err)
+	}
+	if !strings.Contains(string(content), fmt.Sprintf("pid=%d\n", os.Getpid())) {
+		t.Fatalf("lock file not recreated with current pid; got:\n%s", string(content))
+	}
+}
+
 func TestCheckLockFile_WritesExpectedContent(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(io.Discard)
@@ -1000,7 +1043,7 @@ func TestRunAllChecks_FailsOnLockFile(t *testing.T) {
 	}
 }
 
-func TestCheckLockFile_StatFailsAfterExistenceCheck(t *testing.T) {
+func TestCheckLockFile_StatFails(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(io.Discard)
 
@@ -1016,13 +1059,9 @@ func TestCheckLockFile_StatFailsAfterExistenceCheck(t *testing.T) {
 
 	origStat := osStat
 	t.Cleanup(func() { osStat = origStat })
-	calls := 0
 	osStat = func(name string) (os.FileInfo, error) {
 		if name == lockPath {
-			calls++
-			if calls == 2 {
-				return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.EIO}
-			}
+			return nil, &os.PathError{Op: "stat", Path: name, Err: syscall.EIO}
 		}
 		return origStat(name)
 	}
@@ -1597,7 +1636,13 @@ func TestCheckDiskSpaceForEstimate_WarnsOnNonCriticalErrorsAndInsufficientSpace(
 }
 
 func TestDiskSpaceGB_ErrorsOnMissingPath(t *testing.T) {
-	if _, err := diskSpaceGB("/nonexistent/path"); err == nil {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	cfg := GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir())
+	checker := NewChecker(logger, cfg)
+
+	if _, err := checker.diskSpaceGB("/nonexistent/path"); err == nil {
 		t.Fatalf("expected diskSpaceGB to error on missing path")
 	}
 }

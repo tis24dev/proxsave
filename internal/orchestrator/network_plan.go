@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 type networkEndpoint struct {
@@ -33,7 +31,7 @@ func (e networkEndpoint) summary() string {
 	return fmt.Sprintf("iface=%s ip=%s gw=%s", iface, addrs, gw)
 }
 
-func buildNetworkPlanReport(ctx context.Context, logger *logging.Logger, iface, source string, timeout time.Duration) (string, error) {
+func buildNetworkPlanReport(ctx context.Context, iface, source string, timeout time.Duration) (string, error) {
 	if strings.TrimSpace(iface) == "" {
 		return fmt.Sprintf("Network plan\n\n- Management interface: n/a\n- Detection source: %s\n", strings.TrimSpace(source)), nil
 	}
@@ -42,7 +40,7 @@ func buildNetworkPlanReport(ctx context.Context, logger *logging.Logger, iface, 
 	}
 
 	current, _ := currentNetworkEndpoint(ctx, iface, timeout)
-	target, _ := targetNetworkEndpointFromConfig(logger, iface)
+	target, _ := targetNetworkEndpointFromConfig(iface)
 
 	var b strings.Builder
 	b.WriteString("Network plan\n\n")
@@ -77,7 +75,7 @@ func currentNetworkEndpoint(ctx context.Context, iface string, timeout time.Dura
 	return ep, nil
 }
 
-func targetNetworkEndpointFromConfig(logger *logging.Logger, iface string) (networkEndpoint, error) {
+func targetNetworkEndpointFromConfig(iface string) (networkEndpoint, error) {
 	ep := networkEndpoint{Interface: strings.TrimSpace(iface)}
 	if ep.Interface == "" {
 		return ep, fmt.Errorf("empty interface")

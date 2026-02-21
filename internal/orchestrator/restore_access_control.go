@@ -91,6 +91,13 @@ func maybeApplyAccessControlFromStage(ctx context.Context, logger *logging.Logge
 }
 
 func applyPBSAccessControlFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	done := logging.DebugStart(logger, "pbs access control apply", "stage=%s", stageRoot)
 	defer func() { done(err) }()
 
@@ -283,17 +290,17 @@ func applyPBSACLFromStage(logger *logging.Logger, stagedACL string) error {
 	// - header-style (section + indented keys)
 	// - colon-delimited line format (acl:<propagate>:<path>:<userlist>:<rolelist>)
 	if pbsConfigHasHeader(raw) {
-		return applyPBSACLSectionFormat(logger, raw)
+		return applyPBSACLSectionFormat(raw)
 	}
 	if isPBSACLLineFormat(raw) {
-		return applyPBSACLLineFormat(logger, raw)
+		return applyPBSACLLineFormat(raw)
 	}
 
 	logger.Warning("PBS access control: staged acl.cfg has unknown format; skipping apply")
 	return nil
 }
 
-func applyPBSACLSectionFormat(logger *logging.Logger, raw string) error {
+func applyPBSACLSectionFormat(raw string) error {
 	backupSections, err := parseProxmoxNotificationSections(raw)
 	if err != nil {
 		return fmt.Errorf("parse staged acl.cfg: %w", err)
@@ -369,7 +376,7 @@ func parsePBSACLLine(line string) (pbsACLLine, bool) {
 	}, true
 }
 
-func applyPBSACLLineFormat(logger *logging.Logger, raw string) error {
+func applyPBSACLLineFormat(raw string) error {
 	var outLines []string
 	var hasRootAdmin bool
 
@@ -667,6 +674,13 @@ func mustMarshalRaw(v any) json.RawMessage {
 }
 
 func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	done := logging.DebugStart(logger, "pve access control apply", "stage=%s", stageRoot)
 	defer func() { done(err) }()
 

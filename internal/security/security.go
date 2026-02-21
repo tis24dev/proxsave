@@ -232,31 +232,31 @@ func (c *Checker) buildDependencyList() []dependencyEntry {
 	}
 
 	emailMethod := strings.ToLower(strings.TrimSpace(c.cfg.EmailDeliveryMethod))
-		if emailMethod == "" {
-			emailMethod = "relay"
-		}
-		if emailMethod == "pmf" {
-			deps = append(deps, c.binaryDependency(
-				"proxmox-mail-forward",
-				[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
-				true,
-				"email delivery method set to pmf (Proxmox Notifications via proxmox-mail-forward)",
-			))
-		} else if emailMethod == "sendmail" {
-			deps = append(deps, c.binaryDependency(
-				"sendmail",
-				[]string{"/usr/sbin/sendmail", "sendmail"},
-				true,
-				"email delivery method set to sendmail (/usr/sbin/sendmail)",
-			))
-		} else if emailMethod == "relay" && c.cfg.EmailFallbackSendmail {
-			deps = append(deps, c.binaryDependency(
-				"proxmox-mail-forward",
-				[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
-				false,
-				"email relay fallback to pmf enabled (uses proxmox-mail-forward)",
-			))
-		}
+	if emailMethod == "" {
+		emailMethod = "relay"
+	}
+	if emailMethod == "pmf" {
+		deps = append(deps, c.binaryDependency(
+			"proxmox-mail-forward",
+			[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
+			true,
+			"email delivery method set to pmf (Proxmox Notifications via proxmox-mail-forward)",
+		))
+	} else if emailMethod == "sendmail" {
+		deps = append(deps, c.binaryDependency(
+			"sendmail",
+			[]string{"/usr/sbin/sendmail", "sendmail"},
+			true,
+			"email delivery method set to sendmail (/usr/sbin/sendmail)",
+		))
+	} else if emailMethod == "relay" && c.cfg.EmailFallbackSendmail {
+		deps = append(deps, c.binaryDependency(
+			"proxmox-mail-forward",
+			[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
+			false,
+			"email relay fallback to pmf enabled (uses proxmox-mail-forward)",
+		))
+	}
 
 	if c.cfg.BackupCephConfig {
 		deps = append(deps, c.binaryDependency("ceph", []string{"ceph"}, false, "Ceph configuration collection enabled"))

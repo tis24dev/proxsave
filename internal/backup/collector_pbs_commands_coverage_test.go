@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/pbs"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -56,6 +57,7 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 		"notification_endpoints_sendmail.json",
 		"notification_endpoints_gotify.json",
 		"notification_endpoints_webhook.json",
+		"notifications_summary.json",
 		"user_list.json",
 		"realms_ldap.json",
 		"realms_ad.json",
@@ -117,7 +119,6 @@ func TestCollectPBSPxarMetadataProcessesMultipleDatastores(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := GetDefaultCollectorConfig()
 	cfg.PxarDatastoreConcurrency = 2
-	cfg.PxarIntraConcurrency = 1
 
 	collector := NewCollector(newTestLogger(), cfg, tmp, types.ProxmoxBS, false)
 
@@ -205,7 +206,7 @@ func TestCollectPBSPxarMetadataReturnsErrorWhenTempVarIsFile(t *testing.T) {
 func TestCollectDatastoreConfigsCreatesConfigAndNamespaceFiles(t *testing.T) {
 	origList := listNamespacesFunc
 	t.Cleanup(func() { listNamespacesFunc = origList })
-	listNamespacesFunc = func(name, path string) ([]pbs.Namespace, bool, error) {
+	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
 		return []pbs.Namespace{{Ns: "root", Path: "/"}}, false, nil
 	}
 
@@ -313,14 +314,13 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 
 	origList := listNamespacesFunc
 	t.Cleanup(func() { listNamespacesFunc = origList })
-	listNamespacesFunc = func(name, path string) ([]pbs.Namespace, bool, error) {
+	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
 		return []pbs.Namespace{{Ns: "root", Path: "/"}}, false, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
 	cfg.PBSConfigPath = pbsRoot
 	cfg.PxarDatastoreConcurrency = 2
-	cfg.PxarIntraConcurrency = 1
 
 	deps := CollectorDeps{
 		LookPath: func(name string) (string, error) { return "/bin/" + name, nil },
@@ -400,7 +400,6 @@ func TestCollectPBSPxarMetadataStopsOnFirstDatastoreError(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := GetDefaultCollectorConfig()
 	cfg.PxarDatastoreConcurrency = 2
-	cfg.PxarIntraConcurrency = 1
 
 	collector := NewCollector(newTestLogger(), cfg, tmp, types.ProxmoxBS, false)
 

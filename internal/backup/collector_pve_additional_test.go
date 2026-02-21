@@ -166,7 +166,7 @@ func TestCollectDetailedPVEBackups(t *testing.T) {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 
-		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir)
+		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir, 0)
 		if err != nil {
 			t.Fatalf("collectDetailedPVEBackups error: %v", err)
 		}
@@ -201,7 +201,7 @@ func TestCollectDetailedPVEBackups(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
 
-		err := collector.collectDetailedPVEBackups(ctx, storage, metaDir)
+		err := collector.collectDetailedPVEBackups(ctx, storage, metaDir, 0)
 		if err == nil || err != context.Canceled {
 			t.Errorf("expected context.Canceled error, got: %v", err)
 		}
@@ -229,7 +229,7 @@ func TestCollectDetailedPVEBackups(t *testing.T) {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 
-		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir)
+		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir, 0)
 		if err != nil {
 			t.Fatalf("collectDetailedPVEBackups error: %v", err)
 		}
@@ -266,7 +266,7 @@ func TestCollectDetailedPVEBackups(t *testing.T) {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 
-		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir)
+		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir, 0)
 		if err != nil {
 			t.Fatalf("collectDetailedPVEBackups error: %v", err)
 		}
@@ -305,7 +305,7 @@ func TestCollectDetailedPVEBackups(t *testing.T) {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 
-		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir)
+		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir, 0)
 		if err != nil {
 			t.Fatalf("collectDetailedPVEBackups error: %v", err)
 		}
@@ -339,7 +339,7 @@ func TestCollectDetailedPVEBackups(t *testing.T) {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 
-		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir)
+		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir, 0)
 		if err != nil {
 			t.Fatalf("collectDetailedPVEBackups error: %v", err)
 		}
@@ -368,7 +368,7 @@ func TestCollectDetailedPVEBackups(t *testing.T) {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 
-		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir)
+		err := collector.collectDetailedPVEBackups(context.Background(), storage, metaDir, 0)
 		if err != nil {
 			t.Fatalf("collectDetailedPVEBackups error: %v", err)
 		}
@@ -504,7 +504,7 @@ func TestSampleMetadataFileStats(t *testing.T) {
 		cfg := GetDefaultCollectorConfig()
 		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-		lines, err := collector.sampleMetadataFileStats(context.Background(), tmpDir, 3, 10)
+		lines, err := collector.sampleMetadataFileStats(context.Background(), tmpDir, 3, 10, 0)
 		if err != nil {
 			t.Fatalf("sampleMetadataFileStats error: %v", err)
 		}
@@ -535,7 +535,7 @@ func TestSampleMetadataFileStats(t *testing.T) {
 		cfg := GetDefaultCollectorConfig()
 		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-		lines, err := collector.sampleMetadataFileStats(context.Background(), tmpDir, 2, 100)
+		lines, err := collector.sampleMetadataFileStats(context.Background(), tmpDir, 2, 100, 0)
 		if err != nil {
 			t.Fatalf("sampleMetadataFileStats error: %v", err)
 		}
@@ -554,7 +554,7 @@ func TestSampleMetadataFileStats(t *testing.T) {
 		cfg := GetDefaultCollectorConfig()
 		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-		lines, err := collector.sampleMetadataFileStats(context.Background(), tmpDir, 3, 10)
+		lines, err := collector.sampleMetadataFileStats(context.Background(), tmpDir, 3, 10, 0)
 		if err != nil {
 			t.Fatalf("sampleMetadataFileStats error: %v", err)
 		}
@@ -577,7 +577,7 @@ func TestSampleMetadataFileStats(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		_, err := collector.sampleMetadataFileStats(ctx, tmpDir, 3, 10)
+		_, err := collector.sampleMetadataFileStats(ctx, tmpDir, 3, 10, 0)
 		if err == nil {
 			t.Error("expected context cancelled error")
 		}
@@ -593,7 +593,7 @@ func TestSampleMetadataFileStats(t *testing.T) {
 		cfg := GetDefaultCollectorConfig()
 		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-		lines, err := collector.sampleMetadataFileStats(context.Background(), tmpDir, 3, 0)
+		lines, err := collector.sampleMetadataFileStats(context.Background(), tmpDir, 3, 0, 0)
 		if err != nil {
 			t.Fatalf("sampleMetadataFileStats error: %v", err)
 		}

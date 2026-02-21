@@ -209,11 +209,11 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 
 	logger.Info("")
 	message := fmt.Sprintf(
-		"Cluster backup detected.\n\n"+
-			"Applying PVE access control will modify users/roles/groups/ACLs and secrets cluster-wide.\n\n"+
-			"WARNING: This may lock you out or break API tokens/automation.\n\n"+
-			"Safety rail: root@pam is preserved from the current system and kept Administrator on /.\n\n"+
-			"Recommendation: do this from local console/IPMI, not over SSH.\n\n"+
+		"Cluster backup detected.\n\n" +
+			"Applying PVE access control will modify users/roles/groups/ACLs and secrets cluster-wide.\n\n" +
+			"WARNING: This may lock you out or break API tokens/automation.\n\n" +
+			"Safety rail: root@pam is preserved from the current system and kept Administrator on /.\n\n" +
+			"Recommendation: do this from local console/IPMI, not over SSH.\n\n" +
 			"Apply 1:1 PVE access control now?",
 	)
 	applyNow, err := ui.ConfirmAction(ctx, "Apply PVE access control (cluster-wide)", message, "Apply 1:1 (expert)", "Skip apply", 90*time.Second, false)
@@ -488,4 +488,3 @@ func buildAccessControlRollbackScript(markerPath, backupPath, logPath string) st
 	)
 	return strings.Join(lines, "\n") + "\n"
 }
-

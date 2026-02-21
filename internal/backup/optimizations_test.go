@@ -40,7 +40,8 @@ func TestApplyOptimizationsRunsAllStages(t *testing.T) {
 	dupB := mustWriteFile(filepath.Join("dup", "two.txt"), "identical data")
 
 	logFile := mustWriteFile(filepath.Join("logs", "app.log"), "line one\r\nline two\r\n")
-	confFile := mustWriteFile(filepath.Join("conf", "settings.conf"), "# comment\nkey=value\n\n;ignored\nalpha=beta\n")
+	confOriginal := "# comment\nkey=value\n\n;ignored\nalpha=beta\n"
+	confFile := mustWriteFile(filepath.Join("conf", "settings.conf"), confOriginal)
 	jsonFile := mustWriteFile(filepath.Join("meta", "data.json"), "{\n  \"a\": 1,\n  \"b\": 2\n}\n")
 
 	chunkTarget := mustWriteFile("chunk.bin", string(bytes.Repeat([]byte("x"), 96)))
@@ -75,7 +76,7 @@ func TestApplyOptimizationsRunsAllStages(t *testing.T) {
 		t.Fatalf("symlink data mismatch, got %q", data)
 	}
 
-	// Prefilter should strip CR characters and comments/sort config files.
+	// Prefilter should strip CR characters and keep config files semantically intact.
 	logContents, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatalf("read log file: %v", err)
@@ -87,7 +88,7 @@ func TestApplyOptimizationsRunsAllStages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read config file: %v", err)
 	}
-	if string(confContents) != "alpha=beta\nkey=value" {
+	if string(confContents) != confOriginal {
 		t.Fatalf("unexpected config contents: %q", confContents)
 	}
 	jsonContents, err := os.ReadFile(jsonFile)

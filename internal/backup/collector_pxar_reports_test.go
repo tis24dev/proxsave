@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +17,7 @@ func TestWritePxarSubdirReportHandlesMissingPath(t *testing.T) {
 	ds := pbsDatastore{Name: "ds1", Path: filepath.Join(tmp, "missing")}
 
 	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
-	if err := c.writePxarSubdirReport(target, ds); err != nil {
+	if err := c.writePxarSubdirReport(context.Background(), target, ds, 0); err != nil {
 		t.Fatalf("writePxarSubdirReport error: %v", err)
 	}
 	content, err := os.ReadFile(target)
@@ -39,7 +40,7 @@ func TestWritePxarListReportNoFiles(t *testing.T) {
 	target := filepath.Join(tmp, "list.txt")
 
 	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
-	if err := c.writePxarListReport(target, ds, "vm"); err != nil {
+	if err := c.writePxarListReport(context.Background(), target, ds, "vm", 0); err != nil {
 		t.Fatalf("writePxarListReport error: %v", err)
 	}
 	content, err := os.ReadFile(target)

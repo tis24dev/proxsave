@@ -2588,7 +2588,7 @@ func TestInspectRcloneMetadataManifest_RcloneFails(t *testing.T) {
 // copyRawArtifactsToWorkdirWithLogger coverage tests
 // =====================================
 
-func TestCopyRawArtifactsToWorkdir_NilContext(t *testing.T) {
+func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
 	origFS := restoreFS
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = origFS })
@@ -2612,8 +2612,7 @@ func TestCopyRawArtifactsToWorkdir_NilContext(t *testing.T) {
 		RawChecksumPath: "",
 	}
 
-	// Pass nil context - function should use context.Background()
-	staged, err := copyRawArtifactsToWorkdirWithLogger(nil, cand, workDir, nil)
+	staged, err := copyRawArtifactsToWorkdirWithLogger(context.TODO(), cand, workDir, nil)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdirWithLogger error: %v", err)
 	}

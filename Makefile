@@ -5,7 +5,25 @@ COVERAGE_THRESHOLD ?= 50.0
 # Build del progetto
 build:
 	@echo "Building proxsave..."
-	@VERSION=$$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0-dev); \
+	@VERSION=$$( \
+		if git describe --tags --exact-match >/dev/null 2>&1 && [ -z "$$(git status --porcelain 2>/dev/null)" ]; then \
+			git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0-dev; \
+		else \
+			desc=$$(git describe --tags --long --dirty --always 2>/dev/null || echo dev); \
+			dirty=""; \
+			case "$$desc" in *-dirty) dirty=".dirty"; desc=$${desc%-dirty};; esac; \
+			sha_part=$${desc##*-}; \
+			sha=$${sha_part#g}; \
+			rest=$${desc%-*}; \
+			n=$${rest##*-}; \
+			tag=$${rest%-*}; \
+			if [ "$$tag" = "$$desc" ] || [ -z "$$n" ] || [ -z "$$sha" ] || [ "$$sha_part" = "$$desc" ]; then \
+				echo "0.0.0-dev.0+g$${desc}$$dirty"; \
+			else \
+				echo "$$tag-dev.$$n+g$$sha$$dirty"; \
+			fi; \
+		fi \
+	); \
 	COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo dev); \
 	BUILD_TIME=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
 	go build -ldflags="-X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME'" -o build/proxsave ./cmd/proxsave
@@ -13,7 +31,25 @@ build:
 # Build ottimizzato per release
 build-release:
 	@echo "Building release..."
-	@VERSION=$$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0-dev); \
+	@VERSION=$$( \
+		if git describe --tags --exact-match >/dev/null 2>&1 && [ -z "$$(git status --porcelain 2>/dev/null)" ]; then \
+			git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0-dev; \
+		else \
+			desc=$$(git describe --tags --long --dirty --always 2>/dev/null || echo dev); \
+			dirty=""; \
+			case "$$desc" in *-dirty) dirty=".dirty"; desc=$${desc%-dirty};; esac; \
+			sha_part=$${desc##*-}; \
+			sha=$${sha_part#g}; \
+			rest=$${desc%-*}; \
+			n=$${rest##*-}; \
+			tag=$${rest%-*}; \
+			if [ "$$tag" = "$$desc" ] || [ -z "$$n" ] || [ -z "$$sha" ] || [ "$$sha_part" = "$$desc" ]; then \
+				echo "0.0.0-dev.0+g$${desc}$$dirty"; \
+			else \
+				echo "$$tag-dev.$$n+g$$sha$$dirty"; \
+			fi; \
+		fi \
+	); \
 	COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo dev); \
 	BUILD_TIME=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
 	go build -ldflags="-s -w -X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME'" -o build/proxsave ./cmd/proxsave

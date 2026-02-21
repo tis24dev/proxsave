@@ -84,4 +84,3 @@ func TestApplyPVEHAFromStage_DoesNotPruneWhenStageMissing(t *testing.T) {
 		t.Fatalf("unexpected resources.cfg content: %q", string(data))
 	}
 }
-

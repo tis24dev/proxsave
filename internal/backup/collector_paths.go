@@ -20,4 +20,3 @@ func (c *Collector) proxsaveCommandsDir(component string) string {
 func (c *Collector) proxsaveRuntimeDir(component string) string {
 	return c.proxsaveInfoDir("runtime", component)
 }
-

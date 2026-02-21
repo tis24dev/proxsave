@@ -653,11 +653,11 @@ func extractFstabReferencedFiles(content string) []string {
 	}
 
 	keys := map[string]struct{}{
-		"credentials": {},
-		"cred":        {},
-		"passwd":      {},
-		"passfile":    {},
-		"keyfile":     {},
+		"credentials":  {},
+		"cred":         {},
+		"passwd":       {},
+		"passfile":     {},
+		"keyfile":      {},
 		"identityfile": {},
 	}
 

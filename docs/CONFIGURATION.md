@@ -6,6 +6,7 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 
 - [Configuration File Location](#configuration-file-location)
 - [General Settings](#general-settings)
+- [Restore (PBS)](#restore-pbs)
 - [Security Settings](#security-settings)
 - [Disk Space](#disk-space)
 - [Storage Paths](#storage-paths)
@@ -71,6 +72,25 @@ PROFILING_ENABLED=true             # true | false (profiles written under LOG_PA
 | `standard` | Basic operation logging |
 | `advanced` | Detailed command execution, file operations |
 | `extreme` | Full verbose output including rclone/compression internals |
+
+---
+
+## Restore (PBS)
+
+PBS restore behavior is chosen **interactively at restore time** on PBS hosts (not via `backup.env`).
+
+You will be asked to choose a behavior:
+- **Merge (existing PBS)**: intended for restoring onto an already operational PBS; ProxSave applies supported PBS categories via `proxmox-backup-manager` without deleting existing objects that are not in the backup.
+- **Clean 1:1 (fresh PBS install)**: intended for restoring onto a new, clean PBS; ProxSave attempts to make supported PBS objects match the backup (may remove objects that exist on the system but are not in the backup).
+
+ProxSave applies supported PBS staged categories via API automatically (and may fall back to file-based staged apply only in **Clean 1:1** mode).
+
+**Current API coverage**:
+- Node + traffic control (`pbs_host`)
+- Datastores + S3 endpoints (`datastore_pbs`)
+- Remotes (`pbs_remotes`)
+- Jobs (sync/verify/prune) (`pbs_jobs`)
+- Notifications endpoints/matchers (`pbs_notifications`)
 
 ---
 
@@ -321,7 +341,29 @@ PREFILTER_MAX_FILE_SIZE_MB=8       # Skip prefilter for files >8MB
 
 - **Smart chunking**: Splits large files for parallel processing
 - **Deduplication**: Detects duplicate data blocks (reduces storage)
-- **Prefilter**: Analyzes small files before compression (optimizes algorithm selection)
+- **Prefilter**: Applies safe, semantic-preserving normalization to small text/JSON files to improve compression (e.g. removes CR from CRLF line endings and minifies JSON). It does **not** reorder, de-indent, or strip structured configuration files, and it avoids touching Proxmox/PBS structured config paths (e.g. `etc/pve/**`, `etc/proxmox-backup/**`).
+
+### Prefilter (`ENABLE_PREFILTER`) — details and risks
+
+**What it does** (on the *staged* backup tree, before compression):
+- Removes `\r` from CRLF text files (`.txt`, `.log`, `.md`, `.conf`, `.cfg`, `.ini`) to normalize line endings
+- Minifies JSON (`.json`) while keeping valid JSON semantics
+
+**What it does not do**:
+- It does **not** reorder lines, remove indentation, or otherwise rewrite whitespace/ordering-sensitive structured configs.
+- It does **not** follow symlinks (symlinks are skipped).
+- It skips Proxmox/PBS structured configuration paths where formatting/order matters, such as:
+  - `etc/pve/**`
+  - `etc/proxmox-backup/**`
+  - `etc/systemd/system/**`
+  - `etc/ssh/**`
+  - `etc/pam.d/**`
+
+**Why you might disable it** (even though it's safe):
+- If you need maximum fidelity (bit-for-bit) of text/JSON formatting as originally collected (CRLF preservation, JSON pretty-printing, etc.)
+- If you prefer the most conservative pipeline possible (forensics/compliance)
+
+**Important**: Prefilter never edits files on the host system — it only operates on the temporary staging directory that will be archived.
 
 ---
 
@@ -918,6 +960,8 @@ BACKUP_PVE_REPLICATION=true        # VM/CT replication config
 
 # PVE backup files
 BACKUP_PVE_BACKUP_FILES=true       # Include backup files from /var/lib/vz/dump
+PVESH_TIMEOUT=15                   # Timeout (seconds) for each `pvesh` call (0=disabled)
+FS_IO_TIMEOUT=30                   # Timeout (seconds) for filesystem probes on storages (stat/readdir/statfs). Helps avoid hangs on unreachable network mounts (0=disabled)
 BACKUP_SMALL_PVE_BACKUPS=false     # Include small backups only
 MAX_PVE_BACKUP_SIZE=100M           # Max size for "small" backups
 PVE_BACKUP_INCLUDE_PATTERN=        # Glob patterns to include
@@ -938,6 +982,24 @@ BACKUP_VM_CONFIGS=true             # VM/CT config files
 # PBS datastore configs
 BACKUP_DATASTORE_CONFIGS=true      # Datastore definitions
 
+# S3 endpoints (used by S3 datastores)
+BACKUP_PBS_S3_ENDPOINTS=true       # s3.cfg (S3 endpoints, used by S3 datastores)
+
+# Node/global config
+BACKUP_PBS_NODE_CONFIG=true        # node.cfg (global PBS settings)
+
+# ACME
+BACKUP_PBS_ACME_ACCOUNTS=true      # acme/accounts.cfg
+BACKUP_PBS_ACME_PLUGINS=true       # acme/plugins.cfg
+
+# Integrations
+BACKUP_PBS_METRIC_SERVERS=true     # metricserver.cfg
+BACKUP_PBS_TRAFFIC_CONTROL=true    # traffic-control.cfg
+
+# Notifications
+BACKUP_PBS_NOTIFICATIONS=true      # notifications.cfg (targets/matchers/endpoints)
+BACKUP_PBS_NOTIFICATIONS_PRIV=true # notifications-priv.cfg (secrets/credentials for endpoints)
+
 # User and permissions
 BACKUP_USER_CONFIGS=true           # PBS users and tokens
 
@@ -953,25 +1015,24 @@ BACKUP_VERIFICATION_JOBS=true      # Backup verification schedules
 # Tape backup
 BACKUP_TAPE_CONFIGS=true           # Tape library configuration
 
+# Network configuration (PBS)
+BACKUP_PBS_NETWORK_CONFIG=true     # network.cfg (PBS), independent from BACKUP_NETWORK_CONFIGS (system)
+
 # Prune schedules
 BACKUP_PRUNE_SCHEDULES=true        # Retention prune schedules
 
 # PXAR metadata scanning
 PXAR_SCAN_ENABLE=false             # Enable PXAR file metadata collection
 PXAR_SCAN_DS_CONCURRENCY=3         # Datastores scanned in parallel
-PXAR_SCAN_INTRA_CONCURRENCY=4      # Workers per datastore
-PXAR_SCAN_FANOUT_LEVEL=2           # Directory depth for fan-out
-PXAR_SCAN_MAX_ROOTS=2048           # Max worker roots per datastore
-PXAR_STOP_ON_CAP=false             # Stop enumeration at max roots
-PXAR_ENUM_READDIR_WORKERS=4        # Parallel ReadDir workers
-PXAR_ENUM_BUDGET_MS=0              # Time budget for enumeration (0=disabled)
-PXAR_FILE_INCLUDE_PATTERN=         # Include patterns (default: *.pxar, catalog.pxar*)
+PXAR_FILE_INCLUDE_PATTERN=         # Include patterns (default: *.pxar, *.pxar.*, catalog.pxar*)
 PXAR_FILE_EXCLUDE_PATTERN=         # Exclude patterns (e.g., *.tmp, *.lock)
 ```
 
 **Note (PBS snapshot behavior)**: ProxSave snapshots `PBS_CONFIG_PATH` (`/etc/proxmox-backup`) for completeness. When a PBS feature is disabled, proxsave excludes the corresponding well-known config files from that snapshot (for example, `remote.cfg` is excluded when `BACKUP_REMOTE_CONFIGS=false`) and also skips the related command outputs.
 
 **PXAR scanning**: Collects metadata from Proxmox Backup Server .pxar archives.
+
+**Note**: `PXAR_FILE_INCLUDE_PATTERN` and `PXAR_FILE_EXCLUDE_PATTERN` are also reused for file sampling in PVE datastore metadata. Leave them empty to use the built-in defaults per platform.
 
 ### Override Collection Paths
 

@@ -340,12 +340,21 @@ func preparePlainBundleTUI(ctx context.Context, cand *decryptCandidate, version 
 
 func decryptArchiveWithTUIPrompts(ctx context.Context, encryptedPath, outputPath, displayName, configPath, buildSig string, logger *logging.Logger) error {
 	var promptError string
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		identities, err := promptDecryptIdentity(displayName, configPath, buildSig, promptError)
 		if err != nil {
 			return err
 		}
 
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := decryptWithIdentity(encryptedPath, outputPath, identities...); err != nil {
 			var noMatch *age.NoIdentityMatchError
 			if errors.Is(err, age.ErrIncorrectIdentity) || errors.As(err, &noMatch) {

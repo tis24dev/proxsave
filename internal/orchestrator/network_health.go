@@ -89,17 +89,6 @@ type networkHealthOptions struct {
 	LocalPortChecks    []tcpPortCheck
 }
 
-func defaultNetworkHealthOptions() networkHealthOptions {
-	return networkHealthOptions{
-		SystemType:         SystemTypeUnknown,
-		Logger:             nil,
-		CommandTimeout:     3 * time.Second,
-		EnableGatewayPing:  true,
-		ForceSSHRouteCheck: false,
-		EnableDNSResolve:   true,
-	}
-}
-
 type tcpPortCheck struct {
 	Name    string
 	Address string

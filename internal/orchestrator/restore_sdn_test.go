@@ -80,4 +80,3 @@ func TestApplyPVESDNFromStage_NoStageData_NoChanges(t *testing.T) {
 		t.Fatalf("expected no applied paths, got=%v", applied)
 	}
 }
-

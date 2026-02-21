@@ -129,6 +129,22 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	plan := PlanRestore(candidate.Manifest, selectedCategories, systemType, mode)
 
+	if plan.SystemType == SystemTypePBS &&
+		(plan.HasCategoryID("pbs_host") ||
+			plan.HasCategoryID("datastore_pbs") ||
+			plan.HasCategoryID("pbs_remotes") ||
+			plan.HasCategoryID("pbs_jobs") ||
+			plan.HasCategoryID("pbs_notifications") ||
+			plan.HasCategoryID("pbs_access_control") ||
+			plan.HasCategoryID("pbs_tape")) {
+		behavior, err := ui.SelectPBSRestoreBehavior(ctx)
+		if err != nil {
+			return err
+		}
+		plan.PBSRestoreBehavior = behavior
+		logger.Info("PBS restore behavior: %s", behavior.DisplayName())
+	}
+
 	clusterBackup := strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster")
 	if plan.NeedsClusterRestore && clusterBackup {
 		logger.Info("Backup marked as cluster node; enabling guarded restore options for pve_cluster")
@@ -776,13 +792,14 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	logger.Info("")
 	logger.Info("IMPORTANT: You may need to restart services for changes to take effect.")
-	if systemType == SystemTypePVE {
+	switch systemType {
+	case SystemTypePVE:
 		if needsClusterRestore && clusterServicesStopped {
 			logger.Info("  PVE services were stopped/restarted during restore; verify status with: pvecm status")
 		} else {
 			logger.Info("  PVE services: systemctl restart pve-cluster pvedaemon pveproxy")
 		}
-	} else if systemType == SystemTypePBS {
+	case SystemTypePBS:
 		if pbsServicesStopped {
 			logger.Info("  PBS services were stopped/restarted during restore; verify status with: systemctl status proxmox-backup proxmox-backup-proxy")
 		} else {

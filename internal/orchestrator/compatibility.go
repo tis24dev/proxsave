@@ -124,11 +124,12 @@ func GetSystemInfo() map[string]string {
 	info["type_name"] = GetSystemTypeString(systemType)
 
 	// Get version information
-	if systemType == SystemTypePVE {
+	switch systemType {
+	case SystemTypePVE:
 		if content, err := compatFS.ReadFile("/etc/pve-release"); err == nil {
 			info["version"] = strings.TrimSpace(string(content))
 		}
-	} else if systemType == SystemTypePBS {
+	case SystemTypePBS:
 		if content, err := compatFS.ReadFile("/etc/proxmox-backup-release"); err == nil {
 			info["version"] = strings.TrimSpace(string(content))
 		}

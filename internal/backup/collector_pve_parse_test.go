@@ -150,6 +150,29 @@ func TestParseNodeStorageList(t *testing.T) {
 	}
 }
 
+func TestParseNodeStorageList_RuntimeFields(t *testing.T) {
+	input := `[
+		{"storage": "nfs1", "path": "/mnt/nfs", "type": "nfs", "content": "backup", "active": 1, "enabled": 0, "status": "available"}
+	]`
+	result, err := parseNodeStorageList([]byte(input))
+	if err != nil {
+		t.Fatalf("parseNodeStorageList() unexpected error = %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("parseNodeStorageList() returned %d entries, want 1", len(result))
+	}
+	got := result[0]
+	if got.Active == nil || *got.Active != true {
+		t.Fatalf("entry.Active = %#v; want true", got.Active)
+	}
+	if got.Enabled == nil || *got.Enabled != false {
+		t.Fatalf("entry.Enabled = %#v; want false", got.Enabled)
+	}
+	if got.Status != "available" {
+		t.Fatalf("entry.Status = %q; want %q", got.Status, "available")
+	}
+}
+
 // TestParseStorageConfigEntries tests parsing PVE storage.cfg file
 func TestParseStorageConfigEntries(t *testing.T) {
 	tests := []struct {

@@ -1021,7 +1021,10 @@ A: Use `--dry-run` mode: `./build/proxsave --dry-run --log-level debug`
 A: Update your configuration: `./build/proxsave --upgrade-config`
 
 **Q: Can I run backup while another backup is in progress?**
-A: No. Use a lock file (`BACKUP_PATH/.backup.lock`) to prevent concurrent runs.
+A: No. Proxsave uses a lock file (`BACKUP_PATH/.backup.lock`) to prevent concurrent runs. The lock stores `pid/host/time`; on the same host, proxsave checks PID liveness to avoid “stuck” locks after an interrupted run.
+
+**Q: Backup hangs during PVE datastore detection when a network storage is unreachable.**
+A: Set `FS_IO_TIMEOUT` to cap how long proxsave waits for filesystem probes (stat/readdir/statfs), and `PVESH_TIMEOUT` to cap `pvesh` calls. This reduces the likelihood of indefinite hangs when a storage becomes unreachable mid-run.
 
 **Q: How do I recover from a failed backup?**
 A: Delete the incomplete backup file and re-run. The system automatically handles cleanup.
