@@ -3540,14 +3540,14 @@ fi
 count=$((count + 1))
 echo $count > "%s"
 
-# First call (archive) succeeds, second call (metadata) fails
-if [ "$count" -eq 1 ]; then
-    # Create the target file for archive
-    target="${@: -1}"
-    echo "archive content" > "$target"
-    exit 0
-else
-    exit 1
+	# First call (archive) succeeds, second call (metadata) fails
+	if [ "$count" -eq 1 ]; then
+	    # Create the target file for archive
+	    target="$3"
+	    echo "archive content" > "$target"
+	    exit 0
+	else
+	    exit 1
 fi
 `, callCount, callCount, callCount)
 	if err := os.WriteFile(rcloneScript, []byte(script), 0o755); err != nil {

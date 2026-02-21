@@ -216,8 +216,9 @@ func TestApplyPBSNotificationsFromStage_WritesFilesWithPermissions(t *testing.T)
 	restoreFS = fakeFS
 
 	stageRoot := "/stage"
-	cfg := "sendmail: example\n  mailto-user root@pam\n"
-	priv := "sendmail: example\n  secret token\n"
+	// Real-world configs may include key/value lines before the first header (e.g. user edits).
+	cfg := "comment Authenticated Gmail Relay, password: <redacted>\n\nsendmail: example\n  mailto-user root@pam\n"
+	priv := "password <redacted>\nsendmail: example\n  secret token\n"
 
 	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/notifications.cfg", []byte(cfg), 0o640); err != nil {
 		t.Fatalf("write staged notifications.cfg: %v", err)
@@ -246,5 +247,81 @@ func TestApplyPBSNotificationsFromStage_WritesFilesWithPermissions(t *testing.T)
 		t.Fatalf("stat notifications-priv.cfg: %v", err)
 	} else if info.Mode().Perm() != 0o600 {
 		t.Fatalf("notifications-priv.cfg mode=%#o want %#o", info.Mode().Perm(), 0o600)
+	}
+}
+
+func TestApplyPBSNotificationsViaProxmoxBackupManager_CreatesEndpointsAndMatchers(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+
+	cfg := `
+smtp: example
+  mailto-user root@pam
+  server mail.example.com
+  from-address pbs1@example.com
+
+matcher: default-matcher
+  target example
+  comment route
+`
+	priv := `
+smtp: example
+  password somepassword
+`
+
+	updateEndpoint := "proxmox-backup-manager notification endpoint smtp update example --mailto-user root@pam --server mail.example.com --from-address pbs1@example.com --password somepassword"
+	updateMatcher := "proxmox-backup-manager notification matcher update default-matcher --target example --comment route"
+
+	runner := &FakeCommandRunner{
+		Errors: map[string]error{
+			updateEndpoint: fmt.Errorf("not found"),
+			updateMatcher:  fmt.Errorf("not found"),
+		},
+	}
+	restoreCmd = runner
+
+	if err := applyPBSNotificationsViaProxmoxBackupManager(context.Background(), newTestLogger(), cfg, priv); err != nil {
+		t.Fatalf("applyPBSNotificationsViaProxmoxBackupManager error: %v", err)
+	}
+
+	want := []string{
+		updateEndpoint,
+		"proxmox-backup-manager notification endpoint smtp create example --mailto-user root@pam --server mail.example.com --from-address pbs1@example.com --password somepassword",
+		updateMatcher,
+		"proxmox-backup-manager notification matcher create default-matcher --target example --comment route",
+	}
+
+	if fmt.Sprintf("%#v", runner.Calls) != fmt.Sprintf("%#v", want) {
+		t.Fatalf("calls=%#v want %#v", runner.Calls, want)
+	}
+}
+
+func TestApplyPBSEndpointSection_RedactsSecretsInError(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+
+	runner := &FakeCommandRunner{
+		Errors: map[string]error{
+			"proxmox-backup-manager notification endpoint smtp update example --password somepassword": fmt.Errorf("boom"),
+			"proxmox-backup-manager notification endpoint smtp create example --password somepassword": fmt.Errorf("boom"),
+		},
+	}
+	restoreCmd = runner
+
+	section := proxmoxNotificationSection{
+		Type:    "smtp",
+		Name:    "example",
+		Entries: []proxmoxNotificationEntry{{Key: "password", Value: "somepassword"}},
+	}
+
+	err := applyPBSEndpointSection(context.Background(), newTestLogger(), section)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if strings.Contains(err.Error(), "somepassword") {
+		t.Fatalf("expected password to be redacted from error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "<redacted>") {
+		t.Fatalf("expected <redacted> placeholder in error, got: %v", err)
 	}
 }

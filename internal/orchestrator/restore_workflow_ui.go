@@ -276,6 +276,9 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 	}
 
+	stageLogPath := ""
+	stageRoot := ""
+
 	needsClusterRestore := plan.NeedsClusterRestore
 	clusterServicesStopped := false
 	pbsServicesStopped := false
@@ -321,6 +324,10 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 				defer cancel()
 				if err := startPBSServices(restartCtx, logger); err != nil {
 					logger.Warning("Failed to restart PBS services after restore: %v", err)
+					return
+				}
+				if err := maybeVerifyAndRepairPBSNotificationsAfterRestore(restartCtx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+					logger.Warning("PBS notifications verification/repair: %v", err)
 				}
 			}()
 		}
@@ -495,8 +502,8 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 	}
 
-	stageLogPath := ""
-	stageRoot := ""
+	stageLogPath = ""
+	stageRoot = ""
 	if len(plan.StagedCategories) > 0 {
 		stageRoot = stageDestRoot()
 		logger.Info("")
@@ -581,6 +588,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			}
 			restoreHadWarnings = true
 			logger.Warning("Notifications staged apply: %v", err)
+		}
+	}
+
+	if plan.SystemType == SystemTypePBS && plan.HasCategoryID("pbs_notifications") && !pbsServicesStopped {
+		if err := maybeVerifyAndRepairPBSNotificationsAfterRestore(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
+			restoreHadWarnings = true
+			logger.Warning("PBS notifications verification/repair: %v", err)
 		}
 	}
 

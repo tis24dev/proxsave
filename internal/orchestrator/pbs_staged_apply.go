@@ -603,13 +603,31 @@ func pbsConfigHasHeader(content string) bool {
 			continue
 		}
 		head := strings.TrimSpace(fields[0])
-		if !strings.HasSuffix(head, ":") {
-			return false
+		key := ""
+
+		switch {
+		case strings.HasSuffix(head, ":"):
+			if len(fields) < 2 {
+				continue
+			}
+			key = strings.TrimSuffix(head, ":")
+		case strings.Count(head, ":") == 1 && !strings.ContainsAny(head, " \t"):
+			parts := strings.SplitN(head, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			if strings.TrimSpace(parts[1]) == "" {
+				continue
+			}
+			key = strings.TrimSpace(parts[0])
+		default:
+			continue
 		}
-		key := strings.TrimSuffix(head, ":")
+
 		if key == "" {
-			return false
+			continue
 		}
+		valid := true
 		for _, r := range key {
 			switch {
 			case r >= 'a' && r <= 'z':
@@ -617,10 +635,15 @@ func pbsConfigHasHeader(content string) bool {
 			case r >= '0' && r <= '9':
 			case r == '-' || r == '_':
 			default:
-				return false
+				valid = false
+			}
+			if !valid {
+				break
 			}
 		}
-		return true
+		if valid {
+			return true
+		}
 	}
 	return false
 }
