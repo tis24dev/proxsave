@@ -86,7 +86,7 @@ Restore operations are organized into **20–22 categories** (PBS = 20, PVE = 22
 Each category is handled in one of three ways:
 
 - **Normal**: extracted directly to `/` (system paths) after safety backup
-- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` (permissions `0700`) and then applied in a controlled way (file copy/validation or API apply: `pvesh`/`pveum` on PVE, `proxmox-backup-manager` on PBS); when staged files are written to system paths, ProxSave applies them **atomically** and enforces the final permissions/ownership (including for any created parent directories; not left to `umask`). On clean restores, the staging directory is removed automatically; set `PROXSAVE_PRESERVE_RESTORE_STAGING=1` to keep it.
+- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or API apply: `pvesh`/`pveum` on PVE, `proxmox-backup-manager` on PBS); when staged files are written to system paths, ProxSave applies them **atomically** and enforces the final permissions/ownership (including for any created parent directories; not left to `umask`)
 - **Export-only**: extracted to an export directory for manual review (never written to system paths)
 
 ### PVE-Specific Categories (11 categories)
@@ -916,10 +916,10 @@ Before Restore:
   └─────────────┘
 
 Stop Phase:
-  systemctl stop pvestatd
-  systemctl stop pveproxy
-  systemctl stop pvedaemon
   systemctl stop pve-cluster  ← /etc/pve unmounted
+  systemctl stop pvedaemon
+  systemctl stop pveproxy
+  systemctl stop pvestatd
   umount /etc/pve (if needed)
 
 Restore Phase:
@@ -2486,12 +2486,12 @@ Use Ctrl+C carefully - wait for current file to finish.
 **Q: How do I rollback a failed restore?**
 
 A: Use the safety backup:
-	```bash
-	# Stop services (if cluster restore)
-	systemctl stop pvestatd pveproxy pvedaemon pve-cluster
+```bash
+# Stop services (if cluster restore)
+systemctl stop pve-cluster pvedaemon pveproxy pvestatd
 
-	# Extract safety backup
-	tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+# Extract safety backup
+tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
@@ -2699,7 +2699,7 @@ tar -xzf /path/to/decrypted.tar.gz ./specific/file/path
 
 A: Yes:
 - **Extraction**: ProxSave preserves UID/GID, mode bits and timestamps (mtime/atime) for extracted entries.
-- **Staged categories**: files are extracted under `/tmp/proxsave/restore-stage-*` (permissions `0700`) and then applied to system paths using atomic replace; ProxSave explicitly applies mode bits (not left to `umask`) and preserves/derives ownership/group to match expected system defaults (important on PBS, where `proxmox-backup-proxy` runs as `backup`; ProxSave also repairs common `root:root` group regressions by inheriting the destination parent directory's group). On supported filesystems, staged writes also `fsync()` the temporary file and the destination directory to reduce the risk of incomplete writes after a crash/power loss. On clean restores, the staging directory is removed automatically (override: `PROXSAVE_PRESERVE_RESTORE_STAGING=1`).
+- **Staged categories**: files are extracted under `/tmp/proxsave/restore-stage-*` and then applied to system paths using atomic replace; ProxSave explicitly applies mode bits (not left to `umask`) and preserves/derives ownership/group to match expected system defaults (important on PBS, where `proxmox-backup-proxy` runs as `backup`; ProxSave also repairs common `root:root` group regressions by inheriting the destination parent directory's group). On supported filesystems, staged writes also `fsync()` the temporary file and the destination directory to reduce the risk of incomplete writes after a crash/power loss.
 - **ctime**: Cannot be set (kernel-managed).
 
 ---

@@ -19,7 +19,7 @@ func TestPVEStorageMountGuardItems_BuildsExpectedTargets(t *testing.T) {
 	fstabMounts := map[string]struct{}{
 		"/mnt/datastore":    {},
 		"/mnt/Synology_NFS": {},
-		"/":                {},
+		"/":                 {},
 	}
 
 	items := pveStorageMountGuardItems(candidates, mountCandidates, fstabMounts)

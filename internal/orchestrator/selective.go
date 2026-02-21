@@ -107,67 +107,38 @@ func collectArchivePaths(tarReader *tar.Reader) []string {
 
 // pathMatchesPattern checks if an archive path matches a category pattern
 func pathMatchesPattern(archivePath, pattern string) bool {
-	match := func(archivePath, pattern string) bool {
-		// Normalize paths
-		normArchive := archivePath
-		if !strings.HasPrefix(normArchive, "./") {
-			normArchive = "./" + normArchive
-		}
-
-		normPattern := pattern
-		if !strings.HasPrefix(normPattern, "./") {
-			normPattern = "./" + normPattern
-		}
-
-		if strings.ContainsAny(normPattern, "*?[") && !strings.HasSuffix(normPattern, "/") {
-			if ok, err := path.Match(normPattern, normArchive); err == nil && ok {
-				return true
-			}
-		}
-
-		// Exact match
-		if normArchive == normPattern {
-			return true
-		}
-
-		// Directory prefix match
-		if strings.HasSuffix(normPattern, "/") {
-			if strings.HasPrefix(normArchive, normPattern) {
-				return true
-			}
-		}
-
-		// Parent directory match
-		if strings.HasPrefix(normArchive, strings.TrimSuffix(normPattern, "/")+"/") {
-			return true
-		}
-
-		return false
+	// Normalize paths
+	normArchive := archivePath
+	if !strings.HasPrefix(normArchive, "./") {
+		normArchive = "./" + normArchive
 	}
 
-	// Smart chunking stores large files as:
-	// - <original>.chunked (marker file)
-	// - chunked_files/<original>.<idx>.chunk (chunk store)
-	// For category analysis, map these artifacts back to the original path.
-	candidates := []string{archivePath}
-	clean := strings.TrimPrefix(strings.TrimSpace(archivePath), "./")
-
-	if strings.HasSuffix(clean, ".chunked") {
-		candidates = append(candidates, strings.TrimSuffix(clean, ".chunked"))
+	normPattern := pattern
+	if !strings.HasPrefix(normPattern, "./") {
+		normPattern = "./" + normPattern
 	}
 
-	if strings.HasPrefix(clean, "chunked_files/") {
-		trimmed := strings.TrimPrefix(clean, "chunked_files/")
-		candidates = append(candidates, trimmed)
-		if original, ok := originalPathFromChunk(trimmed); ok {
-			candidates = append(candidates, original)
+	if strings.ContainsAny(normPattern, "*?[") && !strings.HasSuffix(normPattern, "/") {
+		if ok, err := path.Match(normPattern, normArchive); err == nil && ok {
+			return true
 		}
 	}
 
-	for _, candidate := range candidates {
-		if match(candidate, pattern) {
+	// Exact match
+	if normArchive == normPattern {
+		return true
+	}
+
+	// Directory prefix match
+	if strings.HasSuffix(normPattern, "/") {
+		if strings.HasPrefix(normArchive, normPattern) {
 			return true
 		}
+	}
+
+	// Parent directory match
+	if strings.HasPrefix(normArchive, strings.TrimSuffix(normPattern, "/")+"/") {
+		return true
 	}
 
 	return false
@@ -312,7 +283,10 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 			selected = make(map[int]bool)
 		case "c":
 			// Continue - check if at least one category is selected
-			selectedCount := len(selected)
+			selectedCount := 0
+			for range selected {
+				selectedCount++
+			}
 
 			if selectedCount == 0 {
 				fmt.Println()
@@ -343,11 +317,7 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 
 			// Toggle selection
 			index := num - 1
-			if selected[index] {
-				delete(selected, index)
-			} else {
-				selected[index] = true
-			}
+			selected[index] = !selected[index]
 		}
 	}
 }

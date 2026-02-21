@@ -871,7 +871,7 @@ func extractSelectiveArchive(
 
 #### Phase 10: Staged Apply (PVE/PBS)
 
-After extraction, **staged categories** are applied from the staging directory under `/tmp/proxsave/restore-stage-*` (permissions `0700`). On clean restores, ProxSave removes the staging directory automatically (override: `PROXSAVE_PRESERVE_RESTORE_STAGING=1`).
+After extraction, **staged categories** are applied from the staging directory under `/tmp/proxsave/restore-stage-*`.
 
 **PBS staged apply**:
 - Selected interactively during restore on PBS hosts: **Merge (existing PBS)** vs **Clean 1:1 (fresh PBS install)**.
@@ -879,7 +879,6 @@ After extraction, **staged categories** are applied from the staging directory u
   - **Merge**: create/update only (no deletions of existing objects not in the backup).
   - **Clean 1:1**: attempts 1:1 reconciliation (may remove objects not present in the backup).
 - If API apply is unavailable or fails, ProxSave may fall back to applying staged `*.cfg` files back to `/etc/proxmox-backup` (**Clean 1:1 only**).
-- PBS services are kept stopped while file-based staged configs are written; API-backed categories are applied in a final API phase with services started temporarily.
 
 **Current PBS API coverage**:
 - `pbs_host`: node + traffic control
@@ -891,8 +890,8 @@ After extraction, **staged categories** are applied from the staging directory u
 Other PBS categories remain file-based (e.g. access control, tape, proxy/ACME/metricserver).
 
 **Key code paths**:
-- `internal/orchestrator/pbs_staged_apply.go` (`maybeApplyPBSConfigsFromStage`, `maybeApplyPBSConfigsViaAPIFromStage`)
-- `internal/orchestrator/restore_notifications.go` (`maybeApplyNotificationsFromStage`, `pve_notifications`)
+- `internal/orchestrator/pbs_staged_apply.go` (`maybeApplyPBSConfigsFromStage`)
+- `internal/orchestrator/restore_notifications.go` (`maybeApplyNotificationsFromStage`, `pbs_notifications`)
 - `internal/orchestrator/pbs_api_apply.go` / `internal/orchestrator/pbs_notifications_api_apply.go` (API apply engines)
 
 ## Category System

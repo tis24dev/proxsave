@@ -60,4 +60,3 @@ func TestApplyPBSNotificationsViaAPI_CreatesEndpointAndMatcher(t *testing.T) {
 		t.Fatalf("calls=%v want %v", runner.calls, want)
 	}
 }
-

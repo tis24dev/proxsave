@@ -1057,6 +1057,7 @@ func run() int {
 	checkerConfig.MinDiskPrimaryGB = cfg.MinDiskPrimaryGB
 	checkerConfig.MinDiskSecondaryGB = cfg.MinDiskSecondaryGB
 	checkerConfig.MinDiskCloudGB = cfg.MinDiskCloudGB
+	checkerConfig.FsIoTimeout = time.Duration(cfg.FsIoTimeoutSeconds) * time.Second
 	checkerConfig.DryRun = dryRun
 	checkerDone := logging.DebugStart(logger, "pre-backup check config", "dry_run=%v", dryRun)
 	if err := checkerConfig.Validate(); err != nil {

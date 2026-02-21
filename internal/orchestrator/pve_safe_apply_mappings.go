@@ -315,4 +315,3 @@ func renderMappingEntry(entry map[string]string) string {
 	}
 	return strings.Join(parts, ",")
 }
-

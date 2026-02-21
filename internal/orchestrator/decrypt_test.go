@@ -3543,12 +3543,7 @@ echo $count > "%s"
 # First call (archive) succeeds, second call (metadata) fails
 if [ "$count" -eq 1 ]; then
     # Create the target file for archive
-    # rclone copyto <src> <dst> [flags...]
-    target="$3"
-    if [[ -z "$target" || "$target" == --* ]]; then
-        echo "invalid rclone dst: $target" >&2
-        exit 2
-    fi
+    target="${@: -1}"
     echo "archive content" > "$target"
     exit 0
 else

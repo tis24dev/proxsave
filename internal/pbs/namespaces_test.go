@@ -1,6 +1,7 @@
 package pbs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -65,7 +66,7 @@ func TestDiscoverNamespacesFromFilesystem_DetectsSupportedDirs(t *testing.T) {
 	mustMkdirAll(t, filepath.Join(tmpDir, "host-ns", "host"))
 	mustMkdirAll(t, filepath.Join(tmpDir, "nested-ns", "namespace"))
 
-	namespaces, err := discoverNamespacesFromFilesystem(tmpDir)
+	namespaces, err := discoverNamespacesFromFilesystem(context.Background(), tmpDir, 0)
 	if err != nil {
 		t.Fatalf("discover failed: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestDiscoverNamespacesFromFilesystem_IgnoresNonDirectories(t *testing.T) {
 	mustWriteFile(t, filepath.Join(tmpDir, "some-file.txt"), []byte("ignore me"))
 	mustMkdirAll(t, filepath.Join(tmpDir, "valid-ns", "vm"))
 
-	namespaces, err := discoverNamespacesFromFilesystem(tmpDir)
+	namespaces, err := discoverNamespacesFromFilesystem(context.Background(), tmpDir, 0)
 	if err != nil {
 		t.Fatalf("discover failed: %v", err)
 	}
@@ -119,12 +120,12 @@ func TestDiscoverNamespacesFromFilesystem_IgnoresNonDirectories(t *testing.T) {
 }
 
 func TestDiscoverNamespacesFromFilesystem_Errors(t *testing.T) {
-	if _, err := discoverNamespacesFromFilesystem(""); err == nil || !strings.Contains(err.Error(), "datastore path is empty") {
+	if _, err := discoverNamespacesFromFilesystem(context.Background(), "", 0); err == nil || !strings.Contains(err.Error(), "datastore path is empty") {
 		t.Fatalf("expected error for empty path, got %v", err)
 	}
 
 	missing := filepath.Join(t.TempDir(), "missing")
-	if _, err := discoverNamespacesFromFilesystem(missing); err == nil || !strings.Contains(err.Error(), "cannot read datastore path") {
+	if _, err := discoverNamespacesFromFilesystem(context.Background(), missing, 0); err == nil || !strings.Contains(err.Error(), "cannot read datastore path") {
 		t.Fatalf("expected error for missing path, got %v", err)
 	}
 }
@@ -132,7 +133,7 @@ func TestDiscoverNamespacesFromFilesystem_Errors(t *testing.T) {
 func TestListNamespaces_CLISuccess(t *testing.T) {
 	setExecCommandStub(t, "cli-success")
 
-	namespaces, usedFallback, err := ListNamespaces("dummy", t.TempDir())
+	namespaces, usedFallback, err := ListNamespaces(context.Background(), "dummy", t.TempDir(), 0)
 	if err != nil {
 		t.Fatalf("ListNamespaces failed: %v", err)
 	}
@@ -155,7 +156,7 @@ func TestListNamespaces_CLIFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(tmpDir, "local", "vm"))
 
-	namespaces, usedFallback, err := ListNamespaces("dummy", tmpDir)
+	namespaces, usedFallback, err := ListNamespaces(context.Background(), "dummy", tmpDir, 0)
 	if err != nil {
 		t.Fatalf("ListNamespaces failed: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestListNamespaces_CLIFallback(t *testing.T) {
 
 func TestListNamespacesViaCLI_ErrorIncludesStderr(t *testing.T) {
 	setExecCommandStub(t, "cli-error")
-	if _, err := listNamespacesViaCLI("dummy"); err == nil || !strings.Contains(err.Error(), "stderr: CLI exploded") {
+	if _, err := listNamespacesViaCLI(context.Background(), "dummy"); err == nil || !strings.Contains(err.Error(), "stderr: CLI exploded") {
 		t.Fatalf("expected stderr text in error, got %v", err)
 	}
 }
@@ -197,7 +198,7 @@ func TestHelperProcess(t *testing.T) {
 func setExecCommandStub(t *testing.T, scenario string) {
 	t.Helper()
 	original := execCommand
-	execCommand = func(string, ...string) *exec.Cmd {
+	execCommand = func(context.Context, string, ...string) *exec.Cmd {
 		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--")
 		cmd.Env = append(os.Environ(),
 			"GO_WANT_HELPER_PROCESS=1",

@@ -609,12 +609,6 @@ func TestApplyCollectorOverridesCopiesConfig(t *testing.T) {
 		BaseDir:                 "/opt/proxsave",
 
 		PxarDatastoreConcurrency: 3,
-		PxarIntraConcurrency:     4,
-		PxarScanFanoutLevel:      2,
-		PxarScanMaxRoots:         512,
-		PxarStopOnCap:            true,
-		PxarEnumWorkers:          5,
-		PxarEnumBudgetMs:         100,
 		PxarFileIncludePatterns:  []string{"*.conf"},
 		PxarFileExcludePatterns:  []string{"*.tmp"},
 
@@ -653,15 +647,8 @@ func TestApplyCollectorOverridesCopiesConfig(t *testing.T) {
 	if cc.ScriptRepositoryPath != cfg.BaseDir {
 		t.Fatalf("ScriptRepositoryPath = %s, want %s", cc.ScriptRepositoryPath, cfg.BaseDir)
 	}
-	if cc.PxarDatastoreConcurrency != cfg.PxarDatastoreConcurrency ||
-		cc.PxarIntraConcurrency != cfg.PxarIntraConcurrency ||
-		cc.PxarScanFanoutLevel != cfg.PxarScanFanoutLevel ||
-		cc.PxarScanMaxRoots != cfg.PxarScanMaxRoots ||
-		cc.PxarEnumWorkers != cfg.PxarEnumWorkers {
-		t.Fatalf("Pxar concurrency fields not copied correctly")
-	}
-	if !cc.PxarStopOnCap || cc.PxarEnumBudgetMs != cfg.PxarEnumBudgetMs {
-		t.Fatalf("PxarStopOnCap or PxarEnumBudgetMs not copied")
+	if cc.PxarDatastoreConcurrency != cfg.PxarDatastoreConcurrency {
+		t.Fatalf("PxarDatastoreConcurrency not copied correctly")
 	}
 	if len(cc.PxarFileIncludePatterns) != 1 || cc.PxarFileIncludePatterns[0] != "*.conf" {
 		t.Fatalf("PxarFileIncludePatterns not copied as expected: %#v", cc.PxarFileIncludePatterns)

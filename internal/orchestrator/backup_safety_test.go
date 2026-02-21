@@ -1938,10 +1938,10 @@ func TestRestoreSafetyBackup_ComplexStructure(t *testing.T) {
 
 	// Add files in various directories
 	files := map[string]string{
-		"etc/config.conf":    "config content",
-		"etc/app/app.conf":   "app config",
-		"var/lib/app/data":   "app data",
-		"root.txt":           "root file",
+		"etc/config.conf":  "config content",
+		"etc/app/app.conf": "app config",
+		"var/lib/app/data": "app data",
+		"root.txt":         "root file",
 	}
 	for name, content := range files {
 		hdr := &tar.Header{Name: name, Mode: 0644, Size: int64(len(content))}

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -42,9 +41,25 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	}
 
 	behavior := plan.PBSRestoreBehavior
+	strict := behavior == PBSRestoreBehaviorClean
+	allowFileFallback := behavior == PBSRestoreBehaviorClean
+
+	needsAPI := plan.HasCategoryID("pbs_host") || plan.HasCategoryID("datastore_pbs") || plan.HasCategoryID("pbs_remotes") || plan.HasCategoryID("pbs_jobs")
+	apiAvailable := false
+	if needsAPI {
+		if err := ensurePBSServicesForAPI(ctx, logger); err != nil {
+			if allowFileFallback {
+				logger.Warning("PBS API apply unavailable; falling back to file-based staged apply where possible: %v", err)
+			} else {
+				logger.Warning("PBS API apply unavailable; skipping API-applied PBS categories (merge mode): %v", err)
+			}
+		} else {
+			apiAvailable = true
+		}
+	}
 
 	if plan.HasCategoryID("pbs_host") {
-		// Restore file-only configs (no stable API coverage yet).
+		// Always restore file-only configs (no stable API coverage yet).
 		// ACME should be applied before node config (node.cfg references ACME accounts/plugins).
 		for _, rel := range []string{
 			"etc/proxmox-backup/acme/accounts.cfg",
@@ -56,212 +71,117 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				logger.Warning("PBS staged apply: %s: %v", rel, err)
 			}
 		}
+
+		if apiAvailable {
+			if err := applyPBSTrafficControlCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: traffic-control failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based traffic-control.cfg")
+					_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/traffic-control.cfg")
+				}
+			}
+			if err := applyPBSNodeCfgViaAPI(ctx, stageRoot); err != nil {
+				logger.Warning("PBS API apply: node config failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based node.cfg")
+					_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/node.cfg")
+				}
+			}
+		} else if allowFileFallback {
+			for _, rel := range []string{
+				"etc/proxmox-backup/traffic-control.cfg",
+				"etc/proxmox-backup/node.cfg",
+			} {
+				if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
+					logger.Warning("PBS staged apply: %s: %v", rel, err)
+				}
+			}
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping node.cfg/traffic-control.cfg: merge mode requires PBS API apply")
+		}
+	}
+
+	if plan.HasCategoryID("datastore_pbs") {
+		if apiAvailable {
+			if err := applyPBSS3CfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: s3.cfg failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based s3.cfg")
+					_ = applyPBSS3CfgFromStage(ctx, logger, stageRoot)
+				}
+			}
+			if err := applyPBSDatastoreCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based datastore.cfg")
+					_ = applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot)
+				}
+			}
+		} else if allowFileFallback {
+			if err := applyPBSS3CfgFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: s3.cfg: %v", err)
+			}
+			if err := applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: datastore.cfg: %v", err)
+			}
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping datastore.cfg/s3.cfg: merge mode requires PBS API apply")
+		}
+	}
+
+	if plan.HasCategoryID("pbs_remotes") {
+		if apiAvailable {
+			if err := applyPBSRemoteCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: remote.cfg failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based remote.cfg")
+					_ = applyPBSRemoteCfgFromStage(ctx, logger, stageRoot)
+				}
+			}
+		} else if allowFileFallback {
+			if err := applyPBSRemoteCfgFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: remote.cfg: %v", err)
+			}
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping remote.cfg: merge mode requires PBS API apply")
+		}
+	}
+
+	if plan.HasCategoryID("pbs_jobs") {
+		if apiAvailable {
+			if err := applyPBSSyncCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: sync jobs failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based job configs")
+					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
+				}
+			}
+			if err := applyPBSVerificationCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: verification jobs failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based job configs")
+					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
+				}
+			}
+			if err := applyPBSPruneCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+				logger.Warning("PBS API apply: prune jobs failed: %v", err)
+				if allowFileFallback {
+					logger.Warning("PBS staged apply: falling back to file-based job configs")
+					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
+				}
+			}
+		} else if allowFileFallback {
+			if err := applyPBSJobConfigsFromStage(ctx, logger, stageRoot); err != nil {
+				logger.Warning("PBS staged apply: job configs: %v", err)
+			}
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping sync/verification/prune configs: merge mode requires PBS API apply")
+		}
 	}
 
 	if plan.HasCategoryID("pbs_tape") {
 		if err := applyPBSTapeConfigsFromStage(ctx, logger, stageRoot); err != nil {
 			logger.Warning("PBS staged apply: tape configs: %v", err)
-		}
-	}
-
-	if behavior == PBSRestoreBehaviorUnspecified {
-		logging.DebugStep(logger, "pbs staged apply", "PBS restore behavior is unspecified; API-backed PBS categories (node/datastores/remotes/jobs/notifications) will be applied in the final staged API phase")
-	}
-
-	return nil
-}
-
-func maybeApplyPBSConfigsViaAPIFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool, stopServicesAfter bool) (err error) {
-	if plan == nil || plan.SystemType != SystemTypePBS {
-		return nil
-	}
-	if strings.TrimSpace(stageRoot) == "" {
-		logging.DebugStep(logger, "pbs staged apply (api)", "Skipped: staging directory not available")
-		return nil
-	}
-	// API-backed PBS categories.
-	if !plan.HasCategoryID("pbs_host") &&
-		!plan.HasCategoryID("datastore_pbs") &&
-		!plan.HasCategoryID("pbs_remotes") &&
-		!plan.HasCategoryID("pbs_jobs") &&
-		!plan.HasCategoryID("pbs_notifications") {
-		return nil
-	}
-
-	done := logging.DebugStart(logger, "pbs staged apply (api)", "dryRun=%v stage=%s", dryRun, stageRoot)
-	defer func() { done(err) }()
-
-	if dryRun {
-		logger.Info("Dry run enabled: skipping staged PBS API apply")
-		return nil
-	}
-	if !isRealRestoreFS(restoreFS) {
-		logger.Debug("Skipping staged PBS API apply: non-system filesystem in use")
-		return nil
-	}
-	if os.Geteuid() != 0 {
-		logger.Warning("Skipping staged PBS API apply: requires root privileges")
-		return nil
-	}
-
-	behavior := plan.PBSRestoreBehavior
-	strict := behavior == PBSRestoreBehaviorClean
-	allowFileFallback := behavior == PBSRestoreBehaviorClean
-
-	ensureAttempted := false
-	defer func() {
-		if !stopServicesAfter || !ensureAttempted {
-			return
-		}
-		stopCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStopTimeout+2*serviceVerifyTimeout+10*time.Second)
-		defer cancel()
-		if stopErr := stopPBSServices(stopCtx, logger); stopErr != nil {
-			logger.Warning("Failed to stop PBS services after staged API apply: %v", stopErr)
-		}
-	}()
-
-	ensureAttempted = true
-	if apiErr := ensurePBSServicesForAPI(ctx, logger); apiErr != nil {
-		if allowFileFallback {
-			logger.Warning("PBS API apply unavailable; falling back to file-based staged apply where possible: %v", apiErr)
-			if plan.HasCategoryID("pbs_host") {
-				for _, rel := range []string{
-					"etc/proxmox-backup/traffic-control.cfg",
-					"etc/proxmox-backup/node.cfg",
-				} {
-					if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-						logger.Warning("PBS staged apply: %s: %v", rel, err)
-					}
-				}
-			}
-			if plan.HasCategoryID("datastore_pbs") {
-				if err := applyPBSS3CfgFromStage(ctx, logger, stageRoot); err != nil {
-					logger.Warning("PBS staged apply: s3.cfg: %v", err)
-				}
-				if err := applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot); err != nil {
-					logger.Warning("PBS staged apply: datastore.cfg: %v", err)
-				}
-			}
-			if plan.HasCategoryID("pbs_remotes") {
-				if err := applyPBSRemoteCfgFromStage(ctx, logger, stageRoot); err != nil {
-					logger.Warning("PBS staged apply: remote.cfg: %v", err)
-				}
-			}
-			if plan.HasCategoryID("pbs_jobs") {
-				if err := applyPBSJobConfigsFromStage(ctx, logger, stageRoot); err != nil {
-					logger.Warning("PBS staged apply: job configs: %v", err)
-				}
-			}
-			if plan.HasCategoryID("pbs_notifications") {
-				if err := applyPBSNotificationsFromStage(ctx, logger, stageRoot); err != nil {
-					logger.Warning("PBS staged apply: notifications: %v", err)
-				}
-			}
-			return nil
-		}
-
-		var skipped []string
-		if plan.HasCategoryID("pbs_host") {
-			skipped = append(skipped, "pbs_host (node.cfg/traffic-control.cfg)")
-		}
-		if plan.HasCategoryID("datastore_pbs") {
-			skipped = append(skipped, "datastore_pbs")
-		}
-		if plan.HasCategoryID("pbs_remotes") {
-			skipped = append(skipped, "pbs_remotes")
-		}
-		if plan.HasCategoryID("pbs_jobs") {
-			skipped = append(skipped, "pbs_jobs")
-		}
-		if plan.HasCategoryID("pbs_notifications") {
-			skipped = append(skipped, "pbs_notifications")
-		}
-		if len(skipped) == 0 {
-			skipped = append(skipped, "PBS API categories")
-		}
-		return fmt.Errorf("PBS API apply unavailable in %s; skipped %s: %w", behavior.DisplayName(), strings.Join(skipped, ", "), apiErr)
-	}
-
-	if plan.HasCategoryID("pbs_host") {
-		if err := applyPBSTrafficControlCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			logger.Warning("PBS API apply: traffic-control failed: %v", err)
-			if allowFileFallback {
-				logger.Warning("PBS staged apply: falling back to file-based traffic-control.cfg")
-				_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/traffic-control.cfg")
-			}
-		}
-		if err := applyPBSNodeCfgViaAPI(ctx, stageRoot); err != nil {
-			logger.Warning("PBS API apply: node config failed: %v", err)
-			if allowFileFallback {
-				logger.Warning("PBS staged apply: falling back to file-based node.cfg")
-				_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/node.cfg")
-			}
-		}
-	}
-
-	if plan.HasCategoryID("datastore_pbs") {
-		if err := applyPBSS3CfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			logger.Warning("PBS API apply: s3.cfg failed: %v", err)
-			if allowFileFallback {
-				logger.Warning("PBS staged apply: falling back to file-based s3.cfg")
-				_ = applyPBSS3CfgFromStage(ctx, logger, stageRoot)
-			}
-		}
-		if err := applyPBSDatastoreCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
-			if allowFileFallback {
-				logger.Warning("PBS staged apply: falling back to file-based datastore.cfg")
-				_ = applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot)
-			}
-		}
-	}
-
-	if plan.HasCategoryID("pbs_remotes") {
-		if err := applyPBSRemoteCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			logger.Warning("PBS API apply: remote.cfg failed: %v", err)
-			if allowFileFallback {
-				logger.Warning("PBS staged apply: falling back to file-based remote.cfg")
-				_ = applyPBSRemoteCfgFromStage(ctx, logger, stageRoot)
-			}
-		}
-	}
-
-	if plan.HasCategoryID("pbs_jobs") {
-		fallbackApplied := false
-		applyFallback := func() {
-			if !allowFileFallback || fallbackApplied {
-				return
-			}
-			fallbackApplied = true
-			logger.Warning("PBS staged apply: falling back to file-based job configs")
-			_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
-		}
-
-		if err := applyPBSSyncCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			logger.Warning("PBS API apply: sync jobs failed: %v", err)
-			applyFallback()
-		}
-		if err := applyPBSVerificationCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			logger.Warning("PBS API apply: verification jobs failed: %v", err)
-			applyFallback()
-		}
-		if err := applyPBSPruneCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			logger.Warning("PBS API apply: prune jobs failed: %v", err)
-			applyFallback()
-		}
-	}
-
-	if plan.HasCategoryID("pbs_notifications") {
-		if err := applyPBSNotificationsViaAPI(ctx, logger, stageRoot, strict); err != nil {
-			logger.Warning("PBS notifications API apply failed: %v", err)
-			if allowFileFallback {
-				logger.Warning("PBS notifications API apply failed; falling back to file-based apply")
-				_ = applyPBSNotificationsFromStage(ctx, logger, stageRoot)
-			} else {
-				logger.Warning("PBS notifications API apply failed; skipping apply (merge mode)")
-			}
-		} else {
-			logger.Info("PBS notifications applied via API (%s)", behavior.DisplayName())
 		}
 	}
 

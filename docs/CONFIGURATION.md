@@ -960,6 +960,8 @@ BACKUP_PVE_REPLICATION=true        # VM/CT replication config
 
 # PVE backup files
 BACKUP_PVE_BACKUP_FILES=true       # Include backup files from /var/lib/vz/dump
+PVESH_TIMEOUT=15                   # Timeout (seconds) for each `pvesh` call (0=disabled)
+FS_IO_TIMEOUT=30                   # Timeout (seconds) for filesystem probes on storages (stat/readdir/statfs). Helps avoid hangs on unreachable network mounts (0=disabled)
 BACKUP_SMALL_PVE_BACKUPS=false     # Include small backups only
 MAX_PVE_BACKUP_SIZE=100M           # Max size for "small" backups
 PVE_BACKUP_INCLUDE_PATTERN=        # Glob patterns to include
@@ -1022,19 +1024,15 @@ BACKUP_PRUNE_SCHEDULES=true        # Retention prune schedules
 # PXAR metadata scanning
 PXAR_SCAN_ENABLE=false             # Enable PXAR file metadata collection
 PXAR_SCAN_DS_CONCURRENCY=3         # Datastores scanned in parallel
-PXAR_SCAN_INTRA_CONCURRENCY=4      # Workers per datastore
-PXAR_SCAN_FANOUT_LEVEL=2           # Directory depth for fan-out
-PXAR_SCAN_MAX_ROOTS=2048           # Max worker roots per datastore
-PXAR_STOP_ON_CAP=false             # Stop enumeration at max roots
-PXAR_ENUM_READDIR_WORKERS=4        # Parallel ReadDir workers
-PXAR_ENUM_BUDGET_MS=0              # Time budget for enumeration (0=disabled)
-PXAR_FILE_INCLUDE_PATTERN=         # Include patterns (default: *.pxar, catalog.pxar*)
+PXAR_FILE_INCLUDE_PATTERN=         # Include patterns (default: *.pxar, *.pxar.*, catalog.pxar*)
 PXAR_FILE_EXCLUDE_PATTERN=         # Exclude patterns (e.g., *.tmp, *.lock)
 ```
 
 **Note (PBS snapshot behavior)**: ProxSave snapshots `PBS_CONFIG_PATH` (`/etc/proxmox-backup`) for completeness. When a PBS feature is disabled, proxsave excludes the corresponding well-known config files from that snapshot (for example, `remote.cfg` is excluded when `BACKUP_REMOTE_CONFIGS=false`) and also skips the related command outputs.
 
 **PXAR scanning**: Collects metadata from Proxmox Backup Server .pxar archives.
+
+**Note**: `PXAR_FILE_INCLUDE_PATTERN` and `PXAR_FILE_EXCLUDE_PATTERN` are also reused for file sampling in PVE datastore metadata. Leave them empty to use the built-in defaults per platform.
 
 ### Override Collection Paths
 
