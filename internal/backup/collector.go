@@ -40,14 +40,16 @@ type FileSummary struct {
 
 // Collector handles backup data collection
 type Collector struct {
-	logger   *logging.Logger
-	config   *CollectorConfig
-	stats    *CollectionStats
-	statsMu  sync.Mutex
-	tempDir  string
-	proxType types.ProxmoxType
-	dryRun   bool
-	deps     CollectorDeps
+	logger           *logging.Logger
+	config           *CollectorConfig
+	stats            *CollectionStats
+	statsMu          sync.Mutex
+	tempDir          string
+	proxType         types.ProxmoxType
+	dryRun           bool
+	deps             CollectorDeps
+	unprivilegedOnce sync.Once
+	unprivilegedCtx  unprivilegedContainerContext
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
@@ -915,11 +917,47 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 			c.incFilesFailed()
 			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
 		}
+		exitCode := -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+		outputText := strings.TrimSpace(string(out))
+
+		c.logger.Debug("Non-critical command failed (safeCmdOutput): description=%q cmd=%q exitCode=%d err=%v", description, cmdString, exitCode, err)
+		c.logger.Debug("Non-critical command output summary (safeCmdOutput): %s", summarizeCommandOutputText(outputText))
+
+		ctxInfo := c.depDetectUnprivilegedContainer()
+		c.logger.Debug("Unprivileged context evaluation: detected=%t details=%q", ctxInfo.Detected, strings.TrimSpace(ctxInfo.Details))
+
+		reason := ""
+		if ctxInfo.Detected {
+			c.logger.Debug("Privilege-sensitive allowlist: command=%q allowlisted=%t", cmdParts[0], isPrivilegeSensitiveCommand(cmdParts[0]))
+			match := privilegeSensitiveFailureMatch(cmdParts[0], exitCode, outputText)
+			reason = match.Reason
+			c.logger.Debug("Privilege-sensitive classification: command=%q matched=%t match=%q reason=%q", cmdParts[0], reason != "", match.Match, reason)
+		} else {
+			c.logger.Debug("Privilege-sensitive downgrade not considered: unprivileged context not detected (command=%q)", cmdParts[0])
+		}
+
+		if ctxInfo.Detected && reason != "" {
+			c.logger.Debug("Downgrading WARNING->SKIP: description=%q cmd=%q exitCode=%d", description, cmdString, exitCode)
+
+			c.logger.Skip("Skipping %s: %s (Expected in unprivileged containers).", description, reason)
+			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v unprivilegedDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
+			c.logger.Debug("SKIP output summary for %s: %s", description, summarizeCommandOutputText(outputText))
+			return nil
+		}
+
+		if ctxInfo.Detected {
+			c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; emitting WARNING", cmdParts[0])
+		}
+
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the required CLI is available and has proper permissions. Output: %s",
 			description,
 			cmdString,
 			err,
-			summarizeCommandOutputText(string(out)),
+			summarizeCommandOutputText(outputText),
 		)
 		return nil // Non-critical failure
 	}
@@ -1235,6 +1273,35 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 			exitCode = exitErr.ExitCode()
 		}
 		outputText := strings.TrimSpace(string(out))
+
+		c.logger.Debug("Non-critical command failed (captureCommandOutput): description=%q cmd=%q exitCode=%d err=%v", description, cmdString, exitCode, err)
+		c.logger.Debug("Non-critical command output summary (captureCommandOutput): %s", summarizeCommandOutputText(outputText))
+
+		ctxInfo := c.depDetectUnprivilegedContainer()
+		c.logger.Debug("Unprivileged context evaluation: detected=%t details=%q", ctxInfo.Detected, strings.TrimSpace(ctxInfo.Details))
+
+		reason := ""
+		if ctxInfo.Detected {
+			c.logger.Debug("Privilege-sensitive allowlist: command=%q allowlisted=%t", parts[0], isPrivilegeSensitiveCommand(parts[0]))
+			match := privilegeSensitiveFailureMatch(parts[0], exitCode, outputText)
+			reason = match.Reason
+			c.logger.Debug("Privilege-sensitive classification: command=%q matched=%t match=%q reason=%q", parts[0], reason != "", match.Match, reason)
+		} else {
+			c.logger.Debug("Privilege-sensitive downgrade not considered: unprivileged context not detected (command=%q)", parts[0])
+		}
+
+		if ctxInfo.Detected && reason != "" {
+			c.logger.Debug("Downgrading WARNING->SKIP: description=%q cmd=%q exitCode=%d", description, cmdString, exitCode)
+
+			c.logger.Skip("Skipping %s: %s (Expected in unprivileged containers).", description, reason)
+			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v unprivilegedDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
+			c.logger.Debug("SKIP output summary for %s: %s", description, summarizeCommandOutputText(outputText))
+			return nil, nil
+		}
+
+		if ctxInfo.Detected {
+			c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; continuing with standard handling", parts[0])
+		}
 
 		if parts[0] == "systemctl" && len(parts) >= 2 && parts[1] == "status" {
 			unit := parts[len(parts)-1]
