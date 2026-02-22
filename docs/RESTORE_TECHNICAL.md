@@ -1510,6 +1510,7 @@ When restoring to the real system root (`/`), ProxSave avoids blindly overwritin
 - If the backup contains ProxSave inventory (`var/lib/proxsave-info/commands/system/{blkid.txt,lsblk_json.json,lsblk.txt}` or PBS datastore inventory),
   ProxSave can remap unstable device paths from the backup (e.g. `/dev/sdb1`) to stable references (`UUID=`/`PARTUUID=`/`LABEL=`) **when the stable reference exists on the restore host**.
 - This reduces the risk of mounting the wrong disk after a reinstall where `/dev/sdX` ordering changes.
+- Note: backups taken from an **unprivileged container/rootless** environment may not include usable block-device inventory (for example `blkid` output can be empty/skipped). In that case, automated device remap is limited/unavailable and `/etc/fstab` entries may require manual review during restore.
 
 **Normalization**:
 - Entries written by the merge are normalized to include `nofail` (and `_netdev` for network mounts) to prevent offline storage from blocking boot/restore.

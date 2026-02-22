@@ -168,6 +168,35 @@ COMPRESSION_TYPE=xz    # Valid: xz, zstd, gzip, bzip2, lz4
 
 ---
 
+#### Notice: `SKIP ... Expected in unprivileged containers` (LXC/rootless)
+
+**Symptoms**:
+- Running ProxSave inside an **unprivileged** LXC container (or a rootless container) produces log lines like:
+  - `SKIP Skipping Hardware DMI information: command \`dmidecode\` failed (...). Expected in unprivileged containers (...) (DMI tables not accessible). Non-critical; backup continues.`
+  - `SKIP Skipping Block device identifiers (blkid): command \`blkid\` failed (...). Expected in unprivileged containers (...) (block devices not accessible; restore hint: automated fstab device remap (UUID/PARTUUID/LABEL) may be limited). Non-critical; backup continues.`
+
+**Cause**: In unprivileged containers, access to low-level system interfaces is intentionally restricted (for example `/dev/mem` and most block devices). Some inventory commands can fail even though the backup itself is working correctly.
+
+**Behavior**:
+- ProxSave still attempts the collection.
+- Only a small allowlist of **privilege-sensitive** commands is downgraded from `WARNING` to `SKIP` when failure is expected in this environment (`dmidecode`, `blkid`, `sensors`, `smartctl`).
+- Other failures are **not** downgraded and still appear as warnings/errors.
+
+**Impact**:
+- Hardware inventory output may be missing/empty.
+- If `blkid` is skipped, ProxSave restore may have **limited** ability to automatically remap `/etc/fstab` devices (UUID/PARTUUID/LABEL). You may need to review mounts manually during restore.
+
+**How to verify** (shifted user namespace mapping):
+```bash
+cat /proc/self/uid_map
+cat /proc/self/gid_map
+# If the second column is non-zero (e.g. "0 100000 65536"), you're in a shifted/unprivileged mapping.
+```
+
+**Optional**: If you want to hide `SKIP` lines on the console, run with `--log-level warning` (this also hides normal info logs).
+
+---
+
 ### 3. Cloud Storage Issues
 
 #### Error: `rclone not found in PATH`
