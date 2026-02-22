@@ -15,11 +15,15 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+func encodeProtectedServerIDForTest(serverID, primaryMAC string, logger *logging.Logger) (string, error) {
+	return encodeProtectedServerIDWithMACs(serverID, []string{primaryMAC}, primaryMAC, logger)
+}
+
 func TestEncodeDecodeProtectedServerIDRoundTrip(t *testing.T) {
 	const serverID = "1234567890123456"
 	const mac = "aa:bb:cc:dd:ee:ff"
 
-	content, err := encodeProtectedServerID(serverID, mac, nil)
+	content, err := encodeProtectedServerIDForTest(serverID, mac, nil)
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
@@ -57,7 +61,7 @@ func TestDecodeProtectedServerIDAcceptsDifferentMACOnSameHost(t *testing.T) {
 	}
 
 	const serverID = "1111222233334444"
-	content, err := encodeProtectedServerID(serverID, "aa:bb:cc:dd:ee:ff", nil)
+	content, err := encodeProtectedServerIDForTest(serverID, "aa:bb:cc:dd:ee:ff", nil)
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
@@ -95,7 +99,7 @@ func TestDecodeProtectedServerIDRejectsDifferentHost(t *testing.T) {
 	}
 
 	const serverID = "1111222233334444"
-	content, err := encodeProtectedServerID(serverID, "aa:bb:cc:dd:ee:ff", nil)
+	content, err := encodeProtectedServerIDForTest(serverID, "aa:bb:cc:dd:ee:ff", nil)
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
@@ -147,7 +151,7 @@ func TestDecodeProtectedServerIDDetectsCorruptedData(t *testing.T) {
 	const serverID = "5555666677778888"
 	const mac = "aa:aa:aa:aa:aa:aa"
 
-	content, err := encodeProtectedServerID(serverID, mac, nil)
+	content, err := encodeProtectedServerIDForTest(serverID, mac, nil)
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
@@ -204,14 +208,14 @@ func TestDetectUsesExistingIdentityFile(t *testing.T) {
 	}
 	identityPath := filepath.Join(identityDir, identityFileName)
 
-	macs := collectMACAddresses()
+	_, macs := collectMACCandidates(nil)
 	if len(macs) == 0 {
 		t.Skip("no non-loopback MACs available on this system")
 	}
 	primary := macs[0]
 
 	const serverID = "1234567890123456"
-	content, err := encodeProtectedServerID(serverID, primary, nil)
+	content, err := encodeProtectedServerIDForTest(serverID, primary, nil)
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
@@ -354,21 +358,8 @@ func TestFallbackServerIDFormat(t *testing.T) {
 	}
 }
 
-func TestGenerateSystemKeyStableAndLength(t *testing.T) {
-	const mac = "aa:bb:cc:dd:ee:ff"
-	k1 := generateSystemKey(mac, nil)
-	k2 := generateSystemKey(mac, nil)
-
-	if len(k1) != 16 {
-		t.Fatalf("generateSystemKey length = %d, want 16", len(k1))
-	}
-	if k1 != k2 {
-		t.Fatalf("generateSystemKey should be stable, got %q and %q", k1, k2)
-	}
-}
-
 func TestCollectMACAddressesSortedAndUnique(t *testing.T) {
-	macs := collectMACAddresses()
+	_, macs := collectMACCandidates(nil)
 	for i := 0; i < len(macs); i++ {
 		if macs[i] == "" {
 			t.Fatalf("unexpected empty MAC at index %d", i)
@@ -413,7 +404,7 @@ func TestDecodeProtectedServerIDInvalidPayloadFormat(t *testing.T) {
 
 func TestDecodeProtectedServerIDInvalidServerIDFormat(t *testing.T) {
 	const mac = "aa:bb:cc:dd:ee:ff"
-	content, err := encodeProtectedServerID("AAAAAAAAAAAAAAAA", mac, nil)
+	content, err := encodeProtectedServerIDForTest("AAAAAAAAAAAAAAAA", mac, nil)
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
@@ -446,7 +437,7 @@ func TestLoadServerIDWithEmptyMACSlice(t *testing.T) {
 	path := filepath.Join(dir, "identity.conf")
 
 	const serverID = "1234567890123456"
-	content, err := encodeProtectedServerID(serverID, "", nil)
+	content, err := encodeProtectedServerIDForTest(serverID, "", nil)
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
@@ -487,7 +478,10 @@ func TestLoadServerIDFailsAllMACs(t *testing.T) {
 }
 
 func encodeProtectedServerIDLegacy(serverID, primaryMAC string) (string, error) {
-	systemKey := generateSystemKey(primaryMAC, nil)
+	machineID := readMachineID(nil)
+	hostnamePart := readHostnamePart(nil)
+	macPart := strings.ReplaceAll(primaryMAC, ":", "")
+	systemKey := computeSystemKey(machineID, hostnamePart, macPart)
 	timestamp := time.Unix(1700000000, 0).Unix()
 	data := fmt.Sprintf("%s:%d:%s", serverID, timestamp, systemKey[:systemKeyPrefixLength])
 	checksum := sha256.Sum256([]byte(data))
@@ -1588,7 +1582,7 @@ func TestDecodeProtectedServerIDWithEmptyMAC(t *testing.T) {
 	}
 
 	const serverID = "1234567890123456"
-	content, err := encodeProtectedServerID(serverID, "aa:bb:cc:dd:ee:ff", nil)
+	content, err := encodeProtectedServerIDForTest(serverID, "aa:bb:cc:dd:ee:ff", nil)
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}

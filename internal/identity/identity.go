@@ -170,11 +170,6 @@ func collectMACCandidates(logger *logging.Logger) ([]macCandidate, []string) {
 	return candidates, macs
 }
 
-func collectMACAddresses() []string {
-	_, macs := collectMACCandidates(nil)
-	return macs
-}
-
 func selectPreferredMAC(candidates []macCandidate) (string, string) {
 	var best *macCandidate
 	for i := range candidates {
@@ -469,10 +464,6 @@ func buildSystemData(macs []string, logger *logging.Logger) string {
 	return builder.String()
 }
 
-func encodeProtectedServerID(serverID, primaryMAC string, logger *logging.Logger) (string, error) {
-	return encodeProtectedServerIDWithMACs(serverID, []string{primaryMAC}, primaryMAC, logger)
-}
-
 func encodeProtectedServerIDWithMACs(serverID string, macs []string, primaryMAC string, logger *logging.Logger) (string, error) {
 	logDebug(logger, "Identity: encodeProtectedServerID: start (serverID=%s primaryMAC=%s)", serverID, primaryMAC)
 	keyField := buildIdentityKeyField(macs, primaryMAC, logger)
@@ -572,16 +563,6 @@ func decodeProtectedServerID(fileContent, primaryMAC string, logger *logging.Log
 	}
 	logDebug(logger, "Identity: decodeProtectedServerID: server ID format ok (len=%d)", len(serverID))
 	return serverID, matchedByMAC, nil
-}
-
-func generateSystemKey(primaryMAC string, logger *logging.Logger) string {
-	machineID := readMachineID(logger)
-	hostnamePart := readHostnamePart(logger)
-
-	macPart := strings.ReplaceAll(primaryMAC, ":", "")
-	key := computeSystemKey(machineID, hostnamePart, macPart)
-	logDebug(logger, "Identity: generateSystemKey: systemKey=%s", key)
-	return key
 }
 
 func buildIdentityKeyField(macs []string, primaryMAC string, logger *logging.Logger) string {

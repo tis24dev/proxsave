@@ -1302,13 +1302,6 @@ func run() int {
 
 	fmt.Println()
 
-	if !cfg.EnableGoBackup && !args.Support {
-		logging.Warning("ENABLE_GO_BACKUP=false is ignored; the Go backup pipeline is always used.")
-	} else {
-		logging.Debug("Go backup pipeline enabled")
-	}
-	fmt.Println()
-
 	// Storage info
 	logging.Info("Storage configuration:")
 	logging.Info("  Primary: %s", formatStorageLabel(cfg.BackupPath, localFS))
