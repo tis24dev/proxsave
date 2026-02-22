@@ -510,7 +510,7 @@ Some log lines use a label to make the output easier to scan:
 - A feature is disabled by configuration.
 - A non-critical CLI tool is not installed.
 - Running in an **unprivileged container/rootless** environment where low-level inventory commands are expected to fail (for example `dmidecode` or `blkid`). In this case, ProxSave still attempts the collection, but logs a `SKIP` (not a `WARNING`) when the failure matches known “missing privileges” patterns.
-  - For `blkid`, the skip reason also includes a restore hint: automated `/etc/fstab` device remap (UUID/PARTUUID/LABEL) may be limited.
+  - For `blkid`, the skip reason also includes a restore hint: `/etc/fstab` remap may be limited.
 
 ### Flag Reference
 

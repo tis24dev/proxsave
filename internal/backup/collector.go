@@ -943,18 +943,9 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 		if ctxInfo.Detected && reason != "" {
 			c.logger.Debug("Downgrading WARNING->SKIP: description=%q cmd=%q exitCode=%d", description, cmdString, exitCode)
 
-			details := strings.TrimSpace(ctxInfo.Details)
-			if details != "" {
-				details = " (" + details + ")"
-			}
-			c.logger.Skip("Skipping %s: command `%s` failed (%v). Expected in unprivileged containers%s (%s). Non-critical; backup continues.",
-				description,
-				cmdString,
-				err,
-				details,
-				reason,
-			)
-			c.logger.Debug("Skip details for %s: output: %s", description, summarizeCommandOutputText(outputText))
+			c.logger.Skip("Skipping %s: %s (Expected in unprivileged containers).", description, reason)
+			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v unprivilegedDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
+			c.logger.Debug("SKIP output summary for %s: %s", description, summarizeCommandOutputText(outputText))
 			return nil
 		}
 
@@ -1302,18 +1293,9 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		if ctxInfo.Detected && reason != "" {
 			c.logger.Debug("Downgrading WARNING->SKIP: description=%q cmd=%q exitCode=%d", description, cmdString, exitCode)
 
-			details := strings.TrimSpace(ctxInfo.Details)
-			if details != "" {
-				details = " (" + details + ")"
-			}
-			c.logger.Skip("Skipping %s: command `%s` failed (%v). Expected in unprivileged containers%s (%s). Non-critical; backup continues.",
-				description,
-				cmdString,
-				err,
-				details,
-				reason,
-			)
-			c.logger.Debug("Skip details for %s: output: %s", description, summarizeCommandOutputText(outputText))
+			c.logger.Skip("Skipping %s: %s (Expected in unprivileged containers).", description, reason)
+			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v unprivilegedDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
+			c.logger.Debug("SKIP output summary for %s: %s", description, summarizeCommandOutputText(outputText))
 			return nil, nil
 		}
 

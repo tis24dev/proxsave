@@ -41,20 +41,21 @@ func privilegeSensitiveFailureMatch(command string, exitCode int, outputText str
 		return privilegeSensitiveMatch{}
 	case "blkid":
 		// In unprivileged LXC, blkid often exits 2 with empty output when block devices are not accessible.
+		const blkidReason = "block devices not accessible (restore hint: fstab remap may be limited)"
 		switch {
 		case exitCode == 2 && outputText == "":
 			return privilegeSensitiveMatch{
-				Reason: "block devices not accessible; restore hint: automated fstab device remap (UUID/PARTUUID/LABEL) may be limited",
+				Reason: blkidReason,
 				Match:  "exit=2 and empty output",
 			}
 		case strings.Contains(lower, "permission denied"):
 			return privilegeSensitiveMatch{
-				Reason: "block devices not accessible; restore hint: automated fstab device remap (UUID/PARTUUID/LABEL) may be limited",
+				Reason: blkidReason,
 				Match:  "stderr contains permission denied",
 			}
 		case strings.Contains(lower, "operation not permitted"):
 			return privilegeSensitiveMatch{
-				Reason: "block devices not accessible; restore hint: automated fstab device remap (UUID/PARTUUID/LABEL) may be limited",
+				Reason: blkidReason,
 				Match:  "stderr contains operation not permitted",
 			}
 		}

@@ -172,8 +172,8 @@ COMPRESSION_TYPE=xz    # Valid: xz, zstd, gzip, bzip2, lz4
 
 **Symptoms**:
 - Running ProxSave inside an **unprivileged** LXC container (or a rootless container) produces log lines like:
-  - `SKIP Skipping Hardware DMI information: command \`dmidecode\` failed (...). Expected in unprivileged containers (...) (DMI tables not accessible). Non-critical; backup continues.`
-  - `SKIP Skipping Block device identifiers (blkid): command \`blkid\` failed (...). Expected in unprivileged containers (...) (block devices not accessible; restore hint: automated fstab device remap (UUID/PARTUUID/LABEL) may be limited). Non-critical; backup continues.`
+  - `SKIP Skipping Hardware DMI information: DMI tables not accessible (Expected in unprivileged containers).`
+  - `SKIP Skipping Block device identifiers (blkid): block devices not accessible (restore hint: fstab remap may be limited) (Expected in unprivileged containers).`
 
 **Cause**: In unprivileged containers, access to low-level system interfaces is intentionally restricted (for example `/dev/mem` and most block devices). Some inventory commands can fail even though the backup itself is working correctly.
 

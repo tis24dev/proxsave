@@ -91,7 +91,7 @@ func TestCaptureCommandOutput_Unprivileged_DowngradesBlkidToSkipWithRestoreHint(
 	if !strings.Contains(logText, "Expected in unprivileged containers") {
 		t.Fatalf("expected unprivileged hint in logs, got: %s", logText)
 	}
-	if !strings.Contains(logText, "restore hint: automated fstab device remap") {
+	if !strings.Contains(logText, "restore hint: fstab remap may be limited") {
 		t.Fatalf("expected restore hint in logs, got: %s", logText)
 	}
 }
@@ -177,7 +177,7 @@ func TestSafeCmdOutput_Unprivileged_DowngradesSmartctlToSkip(t *testing.T) {
 }
 
 func TestPrivilegeSensitiveFailureReason(t *testing.T) {
-	const blkidReason = "block devices not accessible; restore hint: automated fstab device remap (UUID/PARTUUID/LABEL) may be limited"
+	const blkidReason = "block devices not accessible (restore hint: fstab remap may be limited)"
 
 	tests := []struct {
 		name     string
