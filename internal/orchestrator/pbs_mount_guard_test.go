@@ -13,6 +13,7 @@ func TestPBSMountGuardRootForDatastorePath(t *testing.T) {
 		{name: "mnt nested", in: "/mnt/datastore/Data1", want: "/mnt/datastore"},
 		{name: "mnt deep", in: "/mnt/Synology_NFS/PBS_Backup", want: "/mnt/Synology_NFS"},
 		{name: "media", in: "/media/USB/PBS", want: "/media/USB"},
+		{name: "run media root", in: "/run/media/root", want: "/run/media/root"},
 		{name: "run media", in: "/run/media/root/USB/PBS", want: "/run/media/root/USB"},
 		{name: "not mount style", in: "/srv/pbs", want: ""},
 		{name: "empty", in: "", want: ""},

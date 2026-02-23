@@ -18,6 +18,18 @@ import (
 const mountGuardBaseDir = "/var/lib/proxsave/guards"
 const mountGuardMountAttemptTimeout = 10 * time.Second
 
+var (
+	mountGuardGeteuid                = os.Geteuid
+	mountGuardReadFile               = os.ReadFile
+	mountGuardMkdirAll               = os.MkdirAll
+	mountGuardReadDir                = os.ReadDir
+	mountGuardSysMount               = syscall.Mount
+	mountGuardSysUnmount             = syscall.Unmount
+	mountGuardFstabMountpointsSet    = fstabMountpointsSet
+	mountGuardIsPathOnRootFilesystem = isPathOnRootFilesystem
+	mountGuardParsePBSDatastoreCfg   = parsePBSDatastoreCfgBlocks
+)
+
 func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot, destRoot string, dryRun bool) error {
 	if plan == nil || plan.SystemType != SystemTypePBS || !plan.HasCategoryID("datastore_pbs") {
 		return nil
@@ -44,7 +56,7 @@ func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logg
 		}
 		return nil
 	}
-	if os.Geteuid() != 0 {
+	if mountGuardGeteuid() != 0 {
 		if logger != nil {
 			logger.Warning("Skipping PBS mount guards: requires root privileges")
 		}
@@ -64,7 +76,7 @@ func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logg
 	}
 
 	normalized, _ := normalizePBSDatastoreCfgContent(string(data))
-	blocks, err := parsePBSDatastoreCfgBlocks(normalized)
+	blocks, err := mountGuardParsePBSDatastoreCfg(normalized)
 	if err != nil {
 		return err
 	}
@@ -75,7 +87,7 @@ func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logg
 	var fstabMounts map[string]struct{}
 	var mountpointCandidates []string
 	currentFstab := filepath.Join(destRoot, "etc", "fstab")
-	if mounts, err := fstabMountpointsSet(currentFstab); err != nil {
+	if mounts, err := mountGuardFstabMountpointsSet(currentFstab); err != nil {
 		if logger != nil {
 			logger.Warning("PBS mount guard: unable to parse current fstab %s: %v (continuing without fstab cross-check)", currentFstab, err)
 		}
@@ -123,14 +135,14 @@ func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logg
 			}
 		}
 
-		if err := os.MkdirAll(guardTarget, 0o755); err != nil {
+		if err := mountGuardMkdirAll(guardTarget, 0o755); err != nil {
 			if logger != nil {
 				logger.Warning("PBS mount guard: unable to create mountpoint directory %s: %v", guardTarget, err)
 			}
 			continue
 		}
 
-		onRootFS, _, devErr := isPathOnRootFilesystem(guardTarget)
+		onRootFS, _, devErr := mountGuardIsPathOnRootFilesystem(guardTarget)
 		if devErr != nil {
 			if logger != nil {
 				logger.Warning("PBS mount guard: unable to determine filesystem device for %s: %v", guardTarget, devErr)
@@ -158,7 +170,7 @@ func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logg
 		out, attemptErr := restoreCmd.Run(mountCtx, "mount", guardTarget)
 		cancel()
 		if attemptErr == nil {
-			onRootFSNow, _, devErrNow := isPathOnRootFilesystem(guardTarget)
+			onRootFSNow, _, devErrNow := mountGuardIsPathOnRootFilesystem(guardTarget)
 			if devErrNow == nil && !onRootFSNow {
 				if logger != nil {
 					logger.Info("PBS mount guard: mountpoint %s is now mounted (mount attempt succeeded)", guardTarget)
@@ -209,7 +221,7 @@ func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logg
 
 		protected[guardTarget] = struct{}{}
 		if logger != nil {
-			if entries, err := os.ReadDir(guardTarget); err == nil && len(entries) > 0 {
+			if entries, err := mountGuardReadDir(guardTarget); err == nil && len(entries) > 0 {
 				logger.Warning("PBS mount guard: guard mount point %s is not empty (entries=%d)", guardTarget, len(entries))
 			}
 			logger.Warning("PBS mount guard: %s resolves to root filesystem (mount missing?) — bind-mounted a read-only guard to prevent writes until storage is available", guardTarget)
@@ -241,22 +253,22 @@ func guardMountPoint(ctx context.Context, guardTarget string) error {
 	}
 
 	guardDir := guardDirForTarget(target)
-	if err := os.MkdirAll(guardDir, 0o755); err != nil {
+	if err := mountGuardMkdirAll(guardDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir guard dir: %w", err)
 	}
-	if err := os.MkdirAll(target, 0o755); err != nil {
+	if err := mountGuardMkdirAll(target, 0o755); err != nil {
 		return fmt.Errorf("mkdir target: %w", err)
 	}
 
 	// Bind mount guard directory over the mountpoint to avoid writes to the underlying rootfs path.
-	if err := syscall.Mount(guardDir, target, "", syscall.MS_BIND, ""); err != nil {
+	if err := mountGuardSysMount(guardDir, target, "", syscall.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind mount guard: %w", err)
 	}
 
 	// Make the bind mount read-only to ensure PBS cannot write backup data to the guard directory.
 	remountFlags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY | syscall.MS_NODEV | syscall.MS_NOSUID | syscall.MS_NOEXEC)
-	if err := syscall.Mount("", target, "", remountFlags, ""); err != nil {
-		_ = syscall.Unmount(target, 0)
+	if err := mountGuardSysMount("", target, "", remountFlags, ""); err != nil {
+		_ = mountGuardSysUnmount(target, 0)
 		return fmt.Errorf("remount guard read-only: %w", err)
 	}
 
@@ -274,7 +286,7 @@ func guardDirForTarget(target string) string {
 }
 
 func isMounted(path string) (bool, error) {
-	data, err := os.ReadFile("/proc/self/mountinfo")
+	data, err := mountGuardReadFile("/proc/self/mountinfo")
 	if err == nil {
 		return isMountedFromMountinfo(string(data), path), nil
 	}
@@ -315,7 +327,7 @@ func isMountedFromMountinfo(mountinfo, path string) bool {
 }
 
 func isMountedFromProcMounts(path string) (bool, error) {
-	data, err := os.ReadFile("/proc/mounts")
+	data, err := mountGuardReadFile("/proc/mounts")
 	if err != nil {
 		return false, err
 	}
@@ -408,9 +420,6 @@ func pbsMountGuardRootForDatastorePath(path string) string {
 	case strings.HasPrefix(p, "/run/media/"):
 		rest := strings.TrimPrefix(p, "/run/media/")
 		parts := splitPath(rest)
-		if len(parts) == 0 {
-			return ""
-		}
 		if len(parts) == 1 {
 			return filepath.Join("/run/media", parts[0])
 		}
