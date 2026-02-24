@@ -179,6 +179,14 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
 	}
 
+	// Optional post-install audit: run a dry-run and offer to disable unused collectors
+	// based on actionable warning hints like "set BACKUP_*=false to disable".
+	if _, auditErr := wizard.RunPostInstallAuditWizard(ctx, execInfo.ExecPath, configPath, buildSig); auditErr != nil {
+		if bootstrap != nil {
+			bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
+		}
+	}
+
 	// Clean up legacy bash-based symlinks
 	if bootstrap != nil {
 		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")

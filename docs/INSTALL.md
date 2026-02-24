@@ -218,6 +218,7 @@ If the configuration file already exists, the **TUI wizard** will ask whether to
 5. **Notifications**: Enable Telegram (centralized) and Email notifications (wizard defaults to `EMAIL_DELIVERY_METHOD=relay`; you can switch to `sendmail` or `pmf` later)
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 7. **Cron schedule**: Choose cron time (HH:MM) for the `proxsave` cron entry (TUI mode only)
+8. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
 
 **Features:**
 
@@ -225,6 +226,7 @@ If the configuration file already exists, the **TUI wizard** will ask whether to
 - Template comment preservation
 - Creates all necessary directories with proper permissions (0700)
 - Immediate AGE key generation if encryption is enabled
+- Optional post-install audit to disable unused collectors (keeps changes explicit; nothing is disabled silently)
 
 After completion, edit `configs/backup.env` manually for advanced options.
 

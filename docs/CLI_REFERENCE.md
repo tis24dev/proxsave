@@ -142,7 +142,8 @@ Some interactive commands support two interface modes:
 5. Optionally sets up notifications (Telegram, Email; Email defaults to `EMAIL_DELIVERY_METHOD=relay`)
 6. Optionally configures encryption (AGE setup)
 7. (TUI) Optionally selects a cron time (HH:MM) for the `proxsave` cron entry
-8. Finalizes installation (symlinks, cron migration, permission checks)
+8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)
+9. Finalizes installation (symlinks, cron migration, permission checks)
 
 ### Configuration Upgrade
 

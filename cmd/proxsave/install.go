@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -88,6 +89,14 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		return err
 	}
 
+	// Optional post-install audit: run a dry-run and offer to disable unused collectors.
+	if !skipConfigWizard {
+		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "post-install audit")
+		if err := runPostInstallAuditCLI(ctx, reader, execInfo.ExecPath, configPath, bootstrap); err != nil {
+			return err
+		}
+	}
+
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
 	runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap)
 
@@ -105,6 +114,80 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap)
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "permissions status=%s", permStatus)
 
+	return nil
+}
+
+func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath, configPath string, bootstrap *logging.BootstrapLogger) error {
+	fmt.Println("\n--- Post-install check (optional) ---")
+	run, err := promptYesNo(ctx, reader, "Run a dry-run to detect unused components and reduce warnings? [Y/n]: ", true)
+	if err != nil {
+		return wrapInstallError(err)
+	}
+	if !run {
+		return nil
+	}
+
+	if bootstrap != nil {
+		bootstrap.Info("Running post-install dry-run audit (this may take a minute)")
+	}
+
+	suggestions, err := wizard.CollectPostInstallDisableSuggestions(ctx, execPath, configPath)
+	if err != nil {
+		fmt.Printf("WARNING: Post-install check failed (non-blocking): %v\n", err)
+		return nil
+	}
+	if len(suggestions) == 0 {
+		fmt.Println("No unused components detected. No changes required.")
+		return nil
+	}
+
+	fmt.Printf("Detected %d unused/optional component(s) that may cause WARNINGs.\n", len(suggestions))
+	for _, s := range suggestions {
+		reason := ""
+		if len(s.Messages) > 0 {
+			reason = strings.TrimSpace(s.Messages[0])
+		}
+		if reason != "" {
+			fmt.Printf("  - %s: %s\n", s.Key, reason)
+		} else {
+			fmt.Printf("  - %s\n", s.Key)
+		}
+	}
+	fmt.Println()
+
+	disableAll, err := promptYesNo(ctx, reader, "Disable all suggested components now (set KEY=false)? [y/N]: ", false)
+	if err != nil {
+		return wrapInstallError(err)
+	}
+	if !disableAll {
+		fmt.Println("No changes applied. You can disable unused components later by editing backup.env.")
+		return nil
+	}
+
+	contentBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		fmt.Printf("ERROR: Unable to update configuration (read failed): %v\n", err)
+		return nil
+	}
+	content := string(contentBytes)
+
+	keys := make([]string, 0, len(suggestions))
+	for _, s := range suggestions {
+		keys = append(keys, s.Key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		content = setEnvValue(content, key, "false")
+	}
+
+	tmpAuditPath := configPath + ".tmp.audit"
+	defer cleanupTempConfig(tmpAuditPath)
+	if err := writeConfigFile(configPath, tmpAuditPath, content); err != nil {
+		fmt.Printf("ERROR: Unable to update configuration (write failed): %v\n", err)
+		return nil
+	}
+
+	fmt.Printf("✓ Updated %s: disabled %d component(s).\n", configPath, len(keys))
 	return nil
 }
 
