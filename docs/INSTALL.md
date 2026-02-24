@@ -204,14 +204,20 @@ The installation wizard creates your configuration file interactively:
 ./build/proxsave --new-install
 ```
 
+If the configuration file already exists, the **TUI wizard** will ask whether to:
+- **Overwrite** (start from the embedded template)
+- **Edit existing** (use the current file as base and pre-fill the wizard fields)
+- **Keep & exit** (leave the file untouched and exit)
+
 **Wizard prompts:**
 
 1. **Configuration file path**: Default `configs/backup.env` (accepts absolute or relative paths within repo)
 2. **Secondary storage**: Optional path for backup/log copies
-3. **Cloud storage**: Optional rclone remote configuration
+3. **Cloud storage (rclone)**: Optional rclone configuration (supports `CLOUD_REMOTE` as a remote name (recommended) or legacy `remote:path`; `CLOUD_LOG_PATH` supports path-only (recommended) or `otherremote:/path`)
 4. **Firewall rules**: Optional firewall rules collection toggle (`BACKUP_FIREWALL_RULES=false` by default; supports iptables/nftables)
 5. **Notifications**: Enable Telegram (centralized) and Email notifications (wizard defaults to `EMAIL_DELIVERY_METHOD=relay`; you can switch to `sendmail` or `pmf` later)
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
+7. **Cron schedule**: Choose cron time (HH:MM) for the `proxsave` cron entry (TUI mode only)
 
 **Features:**
 
