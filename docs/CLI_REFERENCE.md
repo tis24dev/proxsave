@@ -130,6 +130,10 @@ Some interactive commands support two interface modes:
 
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
+**Existing configuration**:
+- If the configuration file already exists, the **TUI wizard** prompts you to **Overwrite**, **Edit existing** (uses the current file as base and pre-fills the wizard fields), or **Keep & exit**.
+- In **CLI mode** (`--cli`), you will be prompted to overwrite; choosing "No" keeps the file and skips the configuration wizard.
+
 **Wizard workflow**:
 1. Generates/updates the configuration file (`configs/backup.env` by default)
 2. Optionally configures secondary storage
@@ -137,7 +141,11 @@ Some interactive commands support two interface modes:
 4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
 5. Optionally sets up notifications (Telegram, Email; Email defaults to `EMAIL_DELIVERY_METHOD=relay`)
 6. Optionally configures encryption (AGE setup)
-7. Finalizes installation (symlinks, cron migration, permission checks)
+7. (TUI) Optionally selects a cron time (HH:MM) for the `proxsave` cron entry
+8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (TUI: checklist; CLI: per-key prompts; actionable hints like `set BACKUP_*=false to disable`)
+9. Finalizes installation (symlinks, cron migration, permission checks)
+
+**Install log**: The installer writes a session log under `/tmp/proxsave/install-*.log` (includes post-install audit suggestions and any accepted disables).
 
 ### Configuration Upgrade
 

@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +18,19 @@ import (
 	"github.com/tis24dev/proxsave/internal/tui/components"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
+
+type installWizardPrefill struct {
+	SecondaryEnabled   bool
+	SecondaryPath      string
+	SecondaryLogPath   string
+	CloudEnabled       bool
+	CloudRemote        string
+	CloudLogPath       string
+	FirewallEnabled    bool
+	TelegramEnabled    bool
+	EmailEnabled       bool
+	EncryptionEnabled  bool
+}
 
 // InstallWizardData holds the collected installation data
 type InstallWizardData struct {
@@ -52,7 +66,7 @@ var (
 )
 
 // RunInstallWizard runs the TUI-based installation wizard
-func RunInstallWizard(ctx context.Context, configPath string, baseDir string, buildSig string) (*InstallWizardData, error) {
+func RunInstallWizard(ctx context.Context, configPath string, baseDir string, buildSig string, baseTemplate string) (*InstallWizardData, error) {
 	defaultFirewallRules := false
 	data := &InstallWizardData{
 		BaseDir:             baseDir,
@@ -63,6 +77,8 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	}
 
 	app := tui.NewApp()
+
+	prefill := deriveInstallWizardPrefill(baseTemplate)
 
 	// Build the form
 	form := components.NewForm(app)
@@ -94,7 +110,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	var dropdownOpen bool
 
 	// Secondary Storage section
-	var secondaryEnabled bool
+	secondaryEnabled := prefill.SecondaryEnabled
 	var secondaryPathField, secondaryLogField *tview.InputField
 
 	secondaryDropdown := tview.NewDropDown().
@@ -110,7 +126,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 			}
 			dropdownOpen = false
 		}).
-		SetCurrentOption(0)
+		SetCurrentOption(boolToOptionIndex(secondaryEnabled))
 
 	secondaryDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEnter {
@@ -134,18 +150,24 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetLabel("  └─ Secondary Backup Path").
 		SetText("/mnt/secondary-backup").
 		SetFieldWidth(40)
-	secondaryPathField.SetDisabled(true)
+	if prefill.SecondaryPath != "" {
+		secondaryPathField.SetText(prefill.SecondaryPath)
+	}
+	secondaryPathField.SetDisabled(!secondaryEnabled)
 	form.Form.AddFormItem(secondaryPathField)
 
 	secondaryLogField = tview.NewInputField().
 		SetLabel("  └─ Secondary Log Path").
 		SetText("/mnt/secondary-backup/logs").
 		SetFieldWidth(40)
-	secondaryLogField.SetDisabled(true)
+	if prefill.SecondaryLogPath != "" {
+		secondaryLogField.SetText(prefill.SecondaryLogPath)
+	}
+	secondaryLogField.SetDisabled(!secondaryEnabled)
 	form.Form.AddFormItem(secondaryLogField)
 
 	// Cloud Storage section
-	var cloudEnabled bool
+	cloudEnabled := prefill.CloudEnabled
 	var rcloneBackupField, rcloneLogField *tview.InputField
 
 	cloudDropdown := tview.NewDropDown().
@@ -160,7 +182,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 			}
 			dropdownOpen = false
 		}).
-		SetCurrentOption(0)
+		SetCurrentOption(boolToOptionIndex(cloudEnabled))
 
 	cloudDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEnter {
@@ -174,7 +196,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	form.Form.AddFormItem(cloudDropdown)
 
 	cloudHint := tview.NewInputField().
-		SetLabel("  Tip: remotename:path (via 'rclone config'), e.g. myremote:pbs-backups").
+		SetLabel("  Tip: remote name (via 'rclone config'), e.g. myremote (or myremote:path)").
 		SetFieldWidth(0).
 		SetText("")
 	cloudHint.SetDisabled(true)
@@ -184,25 +206,31 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetLabel("  └─ Rclone Backup Remote").
 		SetText("myremote:pbs-backups").
 		SetFieldWidth(40)
-	rcloneBackupField.SetDisabled(true)
+	if prefill.CloudRemote != "" {
+		rcloneBackupField.SetText(prefill.CloudRemote)
+	}
+	rcloneBackupField.SetDisabled(!cloudEnabled)
 	form.Form.AddFormItem(rcloneBackupField)
 
 	rcloneLogField = tview.NewInputField().
-		SetLabel("  └─ Rclone Log Remote").
+		SetLabel("  └─ Rclone Log Path").
 		SetText("myremote:pbs-logs").
 		SetFieldWidth(40)
-	rcloneLogField.SetDisabled(true)
+	if prefill.CloudLogPath != "" {
+		rcloneLogField.SetText(prefill.CloudLogPath)
+	}
+	rcloneLogField.SetDisabled(!cloudEnabled)
 	form.Form.AddFormItem(rcloneLogField)
 
 	// Firewall rules backup (system collection)
-	firewallEnabled := false
+	firewallEnabled := prefill.FirewallEnabled
 	firewallDropdown := tview.NewDropDown().
 		SetLabel("Backup Firewall Rules (iptables/nftables)").
 		SetOptions([]string{"No", "Yes"}, func(option string, index int) {
 			firewallEnabled = (option == "Yes")
 			dropdownOpen = false
 		}).
-		SetCurrentOption(0)
+		SetCurrentOption(boolToOptionIndex(firewallEnabled))
 
 	firewallDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEnter {
@@ -216,7 +244,8 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	form.Form.AddFormItem(firewallDropdown)
 
 	// Notifications (header + two toggles)
-	var telegramEnabled, emailEnabled bool
+	telegramEnabled := prefill.TelegramEnabled
+	emailEnabled := prefill.EmailEnabled
 	notificationHeader := tview.NewInputField().
 		SetLabel("Notifications").
 		SetFieldWidth(0).
@@ -230,7 +259,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 			telegramEnabled = (option == "Yes")
 			dropdownOpen = false
 		}).
-		SetCurrentOption(0)
+		SetCurrentOption(boolToOptionIndex(telegramEnabled))
 	telegramDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEnter {
 			dropdownOpen = !dropdownOpen
@@ -247,7 +276,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 			emailEnabled = (option == "Yes")
 			dropdownOpen = false
 		}).
-		SetCurrentOption(0)
+		SetCurrentOption(boolToOptionIndex(emailEnabled))
 	emailDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEnter {
 			dropdownOpen = !dropdownOpen
@@ -264,7 +293,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetOptions([]string{"No", "Yes"}, func(option string, index int) {
 			dropdownOpen = false
 		}).
-		SetCurrentOption(0)
+		SetCurrentOption(boolToOptionIndex(prefill.EncryptionEnabled))
 
 	encryptionDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEnter {
@@ -312,15 +341,15 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 
 		data.EnableCloudStorage = cloudEnabled
 		if cloudEnabled {
-			data.RcloneBackupRemote = rcloneBackupField.GetText()
-			data.RcloneLogRemote = rcloneLogField.GetText()
+			data.RcloneBackupRemote = strings.TrimSpace(rcloneBackupField.GetText())
+			data.RcloneLogRemote = strings.TrimSpace(rcloneLogField.GetText())
 
-			// Validate rclone remotes
-			if !strings.Contains(data.RcloneBackupRemote, ":") {
-				return fmt.Errorf("rclone backup remote must be in format 'remote:path'")
+			// Validate rclone inputs (allow both "remote" and "remote:path", logs can also be path-only)
+			if data.RcloneBackupRemote == "" {
+				return fmt.Errorf("rclone backup remote cannot be empty")
 			}
-			if !strings.Contains(data.RcloneLogRemote, ":") {
-				return fmt.Errorf("rclone log remote must be in format 'remote:path'")
+			if data.RcloneLogRemote == "" {
+				return fmt.Errorf("rclone log path cannot be empty")
 			}
 		}
 
@@ -454,6 +483,11 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 // If baseTemplate is empty, the embedded default template is used.
 func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, error) {
 	template := baseTemplate
+	editingExisting := strings.TrimSpace(baseTemplate) != ""
+	existingValues := map[string]string{}
+	if editingExisting {
+		existingValues = parseEnvTemplate(baseTemplate)
+	}
 	if strings.TrimSpace(template) == "" {
 		template = config.DefaultEnvTemplate()
 	}
@@ -497,15 +531,23 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	// Apply notifications
 	if data.NotificationMode == "telegram" || data.NotificationMode == "both" {
 		template = setEnvValue(template, "TELEGRAM_ENABLED", "true")
-		template = setEnvValue(template, "BOT_TELEGRAM_TYPE", "centralized")
+		// Preserve existing telegram mode when editing an existing config.
+		if !editingExisting || strings.TrimSpace(existingValues["BOT_TELEGRAM_TYPE"]) == "" {
+			template = setEnvValue(template, "BOT_TELEGRAM_TYPE", "centralized")
+		}
 	} else {
 		template = setEnvValue(template, "TELEGRAM_ENABLED", "false")
 	}
 
 	if data.NotificationMode == "email" || data.NotificationMode == "both" {
 		template = setEnvValue(template, "EMAIL_ENABLED", "true")
-		template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", "relay")
-		template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", "true")
+		// Preserve existing delivery preferences when editing an existing config.
+		if !editingExisting || strings.TrimSpace(existingValues["EMAIL_DELIVERY_METHOD"]) == "" {
+			template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", "relay")
+		}
+		if !editingExisting || strings.TrimSpace(existingValues["EMAIL_FALLBACK_SENDMAIL"]) == "" {
+			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", "true")
+		}
 	} else {
 		template = setEnvValue(template, "EMAIL_ENABLED", "false")
 	}
@@ -558,6 +600,87 @@ func unsetEnvValue(template, key string) string {
 	}
 
 	return strings.Join(out, "\n")
+}
+
+func boolToOptionIndex(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func deriveInstallWizardPrefill(baseTemplate string) installWizardPrefill {
+	out := installWizardPrefill{}
+	if strings.TrimSpace(baseTemplate) == "" {
+		return out
+	}
+	values := parseEnvTemplate(baseTemplate)
+
+	out.SecondaryEnabled = readTemplateBool(values, "SECONDARY_ENABLED", "ENABLE_SECONDARY_BACKUP")
+	out.SecondaryPath = readTemplateString(values, "SECONDARY_PATH", "SECONDARY_BACKUP_PATH")
+	out.SecondaryLogPath = readTemplateString(values, "SECONDARY_LOG_PATH")
+
+	out.CloudEnabled = readTemplateBool(values, "CLOUD_ENABLED", "ENABLE_CLOUD_BACKUP")
+	out.CloudRemote = readTemplateString(values, "CLOUD_REMOTE", "RCLONE_REMOTE")
+	out.CloudLogPath = readTemplateString(values, "CLOUD_LOG_PATH")
+
+	out.FirewallEnabled = readTemplateBool(values, "BACKUP_FIREWALL_RULES")
+
+	out.TelegramEnabled = readTemplateBool(values, "TELEGRAM_ENABLED")
+	out.EmailEnabled = readTemplateBool(values, "EMAIL_ENABLED")
+
+	out.EncryptionEnabled = readTemplateBool(values, "ENCRYPT_ARCHIVE")
+
+	return out
+}
+
+func parseEnvTemplate(template string) map[string]string {
+	values := make(map[string]string)
+
+	scanner := bufio.NewScanner(strings.NewReader(template))
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		trimmed := strings.TrimSpace(line)
+		if utils.IsComment(trimmed) {
+			continue
+		}
+
+		key, value, ok := utils.SplitKeyValue(line)
+		if !ok {
+			continue
+		}
+		if fields := strings.Fields(key); len(fields) >= 2 && fields[0] == "export" {
+			key = fields[1]
+		}
+		key = strings.ToUpper(strings.TrimSpace(key))
+		if key == "" {
+			continue
+		}
+		values[key] = strings.TrimSpace(value)
+	}
+
+	return values
+}
+
+func readTemplateString(values map[string]string, keys ...string) string {
+	for _, key := range keys {
+		key = strings.ToUpper(strings.TrimSpace(key))
+		if key == "" {
+			continue
+		}
+		if val, ok := values[key]; ok {
+			return strings.TrimSpace(val)
+		}
+	}
+	return ""
+}
+
+func readTemplateBool(values map[string]string, keys ...string) bool {
+	raw := readTemplateString(values, keys...)
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	return utils.ParseBool(raw)
 }
 
 // CheckExistingConfig checks if config file exists and asks how to proceed

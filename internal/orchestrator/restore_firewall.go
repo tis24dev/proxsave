@@ -17,6 +17,18 @@ const defaultFirewallRollbackTimeout = 180 * time.Second
 
 var ErrFirewallApplyNotCommitted = errors.New("firewall configuration not committed")
 
+var (
+	firewallApplyGeteuid    = os.Geteuid
+	firewallHostname        = os.Hostname
+	firewallIsMounted       = isMounted
+	firewallIsRealRestoreFS = isRealRestoreFS
+
+	firewallArmRollback    = armFirewallRollback
+	firewallDisarmRollback = disarmFirewallRollback
+	firewallApplyFromStage = applyPVEFirewallFromStage
+	firewallRestartService = restartPVEFirewallService
+)
+
 type FirewallApplyNotCommittedError struct {
 	RollbackLog      string
 	RollbackMarker   string
@@ -99,7 +111,7 @@ func maybeApplyPVEFirewallWithUI(
 	if ui == nil {
 		return fmt.Errorf("restore UI not available")
 	}
-	if !isRealRestoreFS(restoreFS) {
+	if !firewallIsRealRestoreFS(restoreFS) {
 		logger.Debug("Skipping PVE firewall restore: non-system filesystem in use")
 		return nil
 	}
@@ -107,7 +119,7 @@ func maybeApplyPVEFirewallWithUI(
 		logger.Info("Dry run enabled: skipping PVE firewall restore")
 		return nil
 	}
-	if os.Geteuid() != 0 {
+	if firewallApplyGeteuid() != 0 {
 		logger.Warning("Skipping PVE firewall restore: requires root privileges")
 		return nil
 	}
@@ -123,7 +135,7 @@ func maybeApplyPVEFirewallWithUI(
 	}
 
 	etcPVE := "/etc/pve"
-	mounted, mountErr := isMounted(etcPVE)
+	mounted, mountErr := firewallIsMounted(etcPVE)
 	if mountErr != nil {
 		logger.Warning("PVE firewall restore: unable to check pmxcfs mount (%s): %v", etcPVE, mountErr)
 	}
@@ -214,26 +226,26 @@ func maybeApplyPVEFirewallWithUI(
 	if rollbackPath != "" {
 		logger.Info("")
 		logger.Info("Arming firewall rollback timer (%ds)...", int(defaultFirewallRollbackTimeout.Seconds()))
-		rollbackHandle, err = armFirewallRollback(ctx, logger, rollbackPath, defaultFirewallRollbackTimeout, "/tmp/proxsave")
+		rollbackHandle, err = firewallArmRollback(ctx, logger, rollbackPath, defaultFirewallRollbackTimeout, "/tmp/proxsave")
 		if err != nil {
 			return fmt.Errorf("arm firewall rollback: %w", err)
 		}
 		logger.Info("Firewall rollback log: %s", rollbackHandle.logPath)
 	}
 
-	applied, err := applyPVEFirewallFromStage(logger, stageRoot)
+	applied, err := firewallApplyFromStage(logger, stageRoot)
 	if err != nil {
 		return err
 	}
 	if len(applied) == 0 {
 		logger.Info("PVE firewall restore: no changes applied (stage contained no firewall entries)")
 		if rollbackHandle != nil {
-			disarmFirewallRollback(ctx, logger, rollbackHandle)
+			firewallDisarmRollback(ctx, logger, rollbackHandle)
 		}
 		return nil
 	}
 
-	if err := restartPVEFirewallService(ctx); err != nil {
+	if err := firewallRestartService(ctx); err != nil {
 		logger.Warning("PVE firewall restore: reload/restart failed: %v", err)
 	}
 
@@ -242,7 +254,7 @@ func maybeApplyPVEFirewallWithUI(
 		return nil
 	}
 
-	remaining := rollbackHandle.remaining(time.Now())
+	remaining := rollbackHandle.remaining(nowRestore())
 	if remaining <= 0 {
 		return buildFirewallApplyNotCommittedError(rollbackHandle)
 	}
@@ -264,7 +276,7 @@ func maybeApplyPVEFirewallWithUI(
 	}
 
 	if commit {
-		disarmFirewallRollback(ctx, logger, rollbackHandle)
+		firewallDisarmRollback(ctx, logger, rollbackHandle)
 		logger.Info("Firewall changes committed.")
 		return nil
 	}
@@ -309,7 +321,7 @@ func applyPVEFirewallFromStage(logger *logging.Logger, stageRoot string) (applie
 		return applied, err
 	}
 	if ok {
-		currentNode, _ := os.Hostname()
+		currentNode, _ := firewallHostname()
 		currentNode = shortHost(currentNode)
 		if strings.TrimSpace(currentNode) == "" {
 			currentNode = "localhost"
@@ -331,7 +343,7 @@ func applyPVEFirewallFromStage(logger *logging.Logger, stageRoot string) (applie
 }
 
 func selectStageHostFirewall(logger *logging.Logger, stageRoot string) (path string, sourceNode string, ok bool, err error) {
-	currentNode, _ := os.Hostname()
+	currentNode, _ := firewallHostname()
 	currentNode = shortHost(currentNode)
 	if strings.TrimSpace(currentNode) == "" {
 		currentNode = "localhost"
@@ -430,7 +442,7 @@ func armFirewallRollback(ctx context.Context, logger *logging.Logger, backupPath
 		markerPath: filepath.Join(baseDir, fmt.Sprintf("firewall_rollback_pending_%s", timestamp)),
 		scriptPath: filepath.Join(baseDir, fmt.Sprintf("firewall_rollback_%s.sh", timestamp)),
 		logPath:    filepath.Join(baseDir, fmt.Sprintf("firewall_rollback_%s.log", timestamp)),
-		armedAt:    time.Now(),
+		armedAt:    nowRestore(),
 		timeout:    timeout,
 	}
 

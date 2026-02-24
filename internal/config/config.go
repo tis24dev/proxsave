@@ -33,7 +33,6 @@ type Config struct {
 	DebugLevel               types.LogLevel
 	UseColor                 bool
 	ColorizeStepLogs         bool
-	EnableGoBackup           bool
 	ProfilingEnabled         bool
 	BaseDir                  string
 	DryRun                   bool
@@ -423,7 +422,6 @@ func (c *Config) parseOptimizationSettings() {
 }
 
 func (c *Config) parseSecuritySettings() {
-	c.EnableGoBackup = c.getBoolWithFallback([]string{"ENABLE_GO_BACKUP", "ENABLE_GO_PIPELINE"}, true)
 	c.DisableNetworkPreflight = c.getBool("DISABLE_NETWORK_PREFLIGHT", false)
 
 	// Base directory

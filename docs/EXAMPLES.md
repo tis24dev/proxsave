@@ -866,7 +866,6 @@ CLOUD_LOG_PATH=
 # configs/backup.env
 SYSTEM_ROOT_PREFIX=/mnt/snapshot-root   # points to the alternate root
 BACKUP_ENABLED=true
-ENABLE_GO_BACKUP=true
 # /etc, /var, /root, /home are resolved under the prefix
 ```
 

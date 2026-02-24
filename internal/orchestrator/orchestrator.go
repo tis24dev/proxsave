@@ -1192,12 +1192,6 @@ func (o *Orchestrator) removeAssociatedFiles(archivePath string) error {
 	return nil
 }
 
-// Legacy compatibility wrapper for callers that used the package-level createBundle function.
-func createBundle(ctx context.Context, logger *logging.Logger, archivePath string) (string, error) {
-	o := &Orchestrator{logger: logger, fs: osFS{}, clock: realTimeProvider{}}
-	return o.createBundle(ctx, archivePath)
-}
-
 // encryptArchive was replaced by streaming encryption inside the archiver.
 
 // SaveStatsReport writes a JSON report with backup statistics to the log directory.

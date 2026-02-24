@@ -17,6 +17,16 @@ const defaultAccessControlRollbackTimeout = 180 * time.Second
 
 var ErrAccessControlApplyNotCommitted = errors.New("access control changes not committed")
 
+var (
+	accessControlApplyGeteuid    = os.Geteuid
+	accessControlIsMounted       = isMounted
+	accessControlIsRealRestoreFS = isRealRestoreFS
+
+	accessControlArmRollback    = armAccessControlRollback
+	accessControlDisarmRollback = disarmAccessControlRollback
+	accessControlApplyFromStage = applyPVEAccessControlFromStage
+)
+
 type AccessControlApplyNotCommittedError struct {
 	RollbackLog      string
 	RollbackMarker   string
@@ -155,7 +165,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 	stageRoot string,
 	dryRun bool,
 ) (err error) {
-	if plan == nil || plan.SystemType != SystemTypePVE || !plan.HasCategoryID("pve_access_control") || !plan.ClusterBackup || plan.NeedsClusterRestore {
+	if plan == nil || plan.SystemType != SystemTypePVE || !plan.HasCategoryID("pve_access_control") || !plan.ClusterBackup {
 		return nil
 	}
 
@@ -165,7 +175,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 	if ui == nil {
 		return fmt.Errorf("restore UI not available")
 	}
-	if !isRealRestoreFS(restoreFS) {
+	if !accessControlIsRealRestoreFS(restoreFS) {
 		logger.Debug("Skipping PVE access control apply (cluster backup): non-system filesystem in use")
 		return nil
 	}
@@ -173,7 +183,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 		logger.Info("Dry run enabled: skipping PVE access control apply (cluster backup)")
 		return nil
 	}
-	if os.Geteuid() != 0 {
+	if accessControlApplyGeteuid() != 0 {
 		logger.Warning("Skipping PVE access control apply (cluster backup): requires root privileges")
 		return nil
 	}
@@ -198,7 +208,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 	}
 
 	etcPVE := "/etc/pve"
-	mounted, mountErr := isMounted(etcPVE)
+	mounted, mountErr := accessControlIsMounted(etcPVE)
 	if mountErr != nil {
 		logger.Warning("PVE access control apply: unable to check pmxcfs mount (%s): %v", etcPVE, mountErr)
 	}
@@ -279,14 +289,14 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 	if rollbackPath != "" {
 		logger.Info("")
 		logger.Info("Arming access control rollback timer (%ds)...", int(defaultAccessControlRollbackTimeout.Seconds()))
-		rollbackHandle, err = armAccessControlRollback(ctx, logger, rollbackPath, defaultAccessControlRollbackTimeout, "/tmp/proxsave")
+		rollbackHandle, err = accessControlArmRollback(ctx, logger, rollbackPath, defaultAccessControlRollbackTimeout, "/tmp/proxsave")
 		if err != nil {
 			return fmt.Errorf("arm access control rollback: %w", err)
 		}
 		logger.Info("Access control rollback log: %s", rollbackHandle.logPath)
 	}
 
-	if err := applyPVEAccessControlFromStage(ctx, logger, stageRoot); err != nil {
+	if err := accessControlApplyFromStage(ctx, logger, stageRoot); err != nil {
 		return err
 	}
 
@@ -295,7 +305,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 		return nil
 	}
 
-	remaining := rollbackHandle.remaining(time.Now())
+	remaining := rollbackHandle.remaining(nowRestore())
 	if remaining <= 0 {
 		return buildAccessControlApplyNotCommittedError(rollbackHandle)
 	}
@@ -317,7 +327,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 	}
 
 	if commit {
-		disarmAccessControlRollback(ctx, logger, rollbackHandle)
+		accessControlDisarmRollback(ctx, logger, rollbackHandle)
 		logger.Info("Access control changes committed.")
 		return nil
 	}
@@ -353,7 +363,7 @@ func armAccessControlRollback(ctx context.Context, logger *logging.Logger, backu
 		markerPath: filepath.Join(baseDir, fmt.Sprintf("access_control_rollback_pending_%s", timestamp)),
 		scriptPath: filepath.Join(baseDir, fmt.Sprintf("access_control_rollback_%s.sh", timestamp)),
 		logPath:    filepath.Join(baseDir, fmt.Sprintf("access_control_rollback_%s.log", timestamp)),
-		armedAt:    time.Now(),
+		armedAt:    nowRestore(),
 		timeout:    timeout,
 	}
 

@@ -12,6 +12,8 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
+var pbsAPIApplyGeteuid = os.Geteuid
+
 func normalizeProxmoxCfgKey(key string) string {
 	key = strings.ToLower(strings.TrimSpace(key))
 	key = strings.ReplaceAll(key, "_", "-")
@@ -176,7 +178,7 @@ func ensurePBSServicesForAPI(ctx context.Context, logger *logging.Logger) error 
 	if !isRealRestoreFS(restoreFS) {
 		return fmt.Errorf("non-system filesystem in use")
 	}
-	if os.Geteuid() != 0 {
+	if pbsAPIApplyGeteuid() != 0 {
 		return fmt.Errorf("requires root privileges")
 	}
 

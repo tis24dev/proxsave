@@ -4250,22 +4250,6 @@ exit 0
 	os.Setenv("PATH", tmp+":"+origPath)
 	defer os.Setenv("PATH", origPath)
 
-	// Create a filesystem wrapper that allows download but fails MkdirAll for tempRoot
-	type fakeMkdirAllFailOnTempRoot struct {
-		osFS
-	}
-	fake := &struct {
-		osFS
-		mkdirCalls int
-	}{}
-
-	// Use osFS with a hook to fail on the second MkdirAll (tempRoot creation)
-	type osFSWithMkdirHook struct {
-		osFS
-		mkdirCalls int
-	}
-	hookFS := &osFSWithMkdirHook{}
-
 	orig := restoreFS
 	// Use regular osFS - the download will work, then MkdirAll for /tmp/proxsave should succeed
 	// but we can trigger error by making /tmp/proxsave unwritable after download
@@ -4289,27 +4273,6 @@ exit 0
 	}
 	// If download succeeds and extraction succeeds, that's fine - we've tested the path
 	_ = err
-	_ = fake
-	_ = hookFS
-}
-
-// fakeChecksumFailFS wraps osFS to make the plain archive unreadable after extraction
-// This triggers GenerateChecksum error (lines 670-673)
-type fakeChecksumFailFS struct {
-	osFS
-	extractDone bool
-}
-
-func (f *fakeChecksumFailFS) OpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
-	file, err := os.OpenFile(path, flag, perm)
-	if err != nil {
-		return nil, err
-	}
-	// After extracting, make the archive unreadable for checksum
-	if f.extractDone && strings.Contains(path, "proxmox-decrypt") && strings.HasSuffix(path, ".tar.xz") {
-		os.Chmod(path, 0o000)
-	}
-	return file, nil
 }
 
 // fakeStatThenRemoveFS removes the file after stat succeeds

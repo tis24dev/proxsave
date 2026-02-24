@@ -427,35 +427,8 @@ func TestConfigDefaults(t *testing.T) {
 		t.Errorf("Default LocalRetentionDays = %d; want 7", cfg.LocalRetentionDays)
 	}
 
-	if !cfg.EnableGoBackup {
-		t.Error("Expected default EnableGoBackup to be true")
-	}
-
 	if cfg.BaseDir != "/defaults/base" {
 		t.Errorf("Default BaseDir = %q; want %q", cfg.BaseDir, "/defaults/base")
-	}
-}
-
-func TestEnableGoBackupFlag(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "go_pipeline.env")
-
-	content := `ENABLE_GO_BACKUP=false
-`
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		t.Fatalf("Failed to create test config: %v", err)
-	}
-
-	cleanup := setBaseDirEnv(t, "/flag/base")
-	defer cleanup()
-
-	cfg, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
-	}
-
-	if cfg.EnableGoBackup {
-		t.Error("Expected EnableGoBackup to be false when explicitly disabled")
 	}
 }
 

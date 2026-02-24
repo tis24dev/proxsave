@@ -361,7 +361,8 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	}
 
 	logger.Info("Creating decrypted bundle...")
-	bundlePath, err := createBundle(ctx, logger, tempArchivePath)
+	o := &Orchestrator{logger: logger, fs: osFS{}}
+	bundlePath, err := o.createBundle(ctx, tempArchivePath)
 	if err != nil {
 		return err
 	}

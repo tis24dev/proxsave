@@ -20,6 +20,7 @@ import (
 const maxArchiveInventoryBytes = 10 << 20 // 10 MiB
 
 var nicRepairSequence uint64
+var sysClassNetPath = "/sys/class/net"
 
 type archivedNetworkInventory struct {
 	GeneratedAt string                     `json:"generated_at,omitempty"`
@@ -371,7 +372,7 @@ func readArchiveEntry(ctx context.Context, archivePath string, candidates []stri
 }
 
 func collectCurrentNetworkInventory(ctx context.Context) (*archivedNetworkInventory, error) {
-	sysNet := "/sys/class/net"
+	sysNet := sysClassNetPath
 	entries, err := os.ReadDir(sysNet)
 	if err != nil {
 		return nil, err

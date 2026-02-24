@@ -46,9 +46,6 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 # Enable/disable backup system
 BACKUP_ENABLED=true                # true | false
 
-# Enable Go pipeline (vs legacy Bash)
-ENABLE_GO_BACKUP=true              # true | false
-
 # Colored output in terminal
 USE_COLOR=true                     # true | false
 
@@ -921,8 +918,6 @@ METRICS_ENABLED=false              # true | false
 # Metrics export path (textfile collector format)
 METRICS_PATH=${BASE_DIR}/metrics   # Empty = /var/lib/prometheus/node-exporter
 ```
-
-> ℹ️ Metrics export is available only for the Go pipeline (`ENABLE_GO_BACKUP=true`).
 
 **Output**: Creates `proxmox_backup.prom` in `METRICS_PATH` with:
 - Backup duration and start/end timestamps

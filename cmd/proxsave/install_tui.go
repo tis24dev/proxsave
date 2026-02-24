@@ -93,7 +93,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	if !skipConfigWizard {
 		// Run the wizard
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "running install wizard")
-		wizardData, err = wizard.RunInstallWizard(ctx, configPath, baseDir, buildSig)
+		wizardData, err = wizard.RunInstallWizard(ctx, configPath, baseDir, buildSig, baseTemplate)
 		if err != nil {
 			if errors.Is(err, wizard.ErrInstallCancelled) {
 				return wrapInstallError(errInteractiveAborted)
@@ -177,6 +177,35 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		bootstrap.Info("AGE encryption configured successfully")
 		bootstrap.Info("Recipient saved to: %s", recipientPath)
 		bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
+	}
+
+	// Optional post-install audit: run a dry-run and offer to disable unused collectors
+	// based on actionable warning hints like "set BACKUP_*=false to disable".
+	auditRes, auditErr := wizard.RunPostInstallAuditWizard(ctx, execInfo.ExecPath, configPath, buildSig)
+	if bootstrap != nil {
+		if auditErr != nil {
+			bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
+		} else {
+			switch {
+			case !auditRes.Ran:
+				bootstrap.Info("Post-install audit: skipped by user")
+			case auditRes.CollectErr != nil:
+				bootstrap.Warning("Post-install audit failed (non-blocking): %v", auditRes.CollectErr)
+			case len(auditRes.Suggestions) == 0:
+				bootstrap.Info("Post-install audit: no unused components detected")
+			default:
+				keys := make([]string, 0, len(auditRes.Suggestions))
+				for _, s := range auditRes.Suggestions {
+					keys = append(keys, s.Key)
+				}
+				bootstrap.Info("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
+				if len(auditRes.AppliedKeys) > 0 {
+					bootstrap.Info("Post-install audit: disabled (%d): %s", len(auditRes.AppliedKeys), strings.Join(auditRes.AppliedKeys, ", "))
+				} else {
+					bootstrap.Info("Post-install audit: no disables applied")
+				}
+			}
+		}
 	}
 
 	// Clean up legacy bash-based symlinks
