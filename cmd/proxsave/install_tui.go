@@ -93,7 +93,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	if !skipConfigWizard {
 		// Run the wizard
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "running install wizard")
-		wizardData, err = wizard.RunInstallWizard(ctx, configPath, baseDir, buildSig)
+		wizardData, err = wizard.RunInstallWizard(ctx, configPath, baseDir, buildSig, baseTemplate)
 		if err != nil {
 			if errors.Is(err, wizard.ErrInstallCancelled) {
 				return wrapInstallError(errInteractiveAborted)
