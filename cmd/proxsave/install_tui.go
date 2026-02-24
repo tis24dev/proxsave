@@ -181,9 +181,30 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors
 	// based on actionable warning hints like "set BACKUP_*=false to disable".
-	if _, auditErr := wizard.RunPostInstallAuditWizard(ctx, execInfo.ExecPath, configPath, buildSig); auditErr != nil {
-		if bootstrap != nil {
+	auditRes, auditErr := wizard.RunPostInstallAuditWizard(ctx, execInfo.ExecPath, configPath, buildSig)
+	if bootstrap != nil {
+		if auditErr != nil {
 			bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
+		} else {
+			switch {
+			case !auditRes.Ran:
+				bootstrap.Info("Post-install audit: skipped by user")
+			case auditRes.CollectErr != nil:
+				bootstrap.Warning("Post-install audit failed (non-blocking): %v", auditRes.CollectErr)
+			case len(auditRes.Suggestions) == 0:
+				bootstrap.Info("Post-install audit: no unused components detected")
+			default:
+				keys := make([]string, 0, len(auditRes.Suggestions))
+				for _, s := range auditRes.Suggestions {
+					keys = append(keys, s.Key)
+				}
+				bootstrap.Info("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
+				if len(auditRes.AppliedKeys) > 0 {
+					bootstrap.Info("Post-install audit: disabled (%d): %s", len(auditRes.AppliedKeys), strings.Join(auditRes.AppliedKeys, ", "))
+				} else {
+					bootstrap.Info("Post-install audit: no disables applied")
+				}
+			}
 		}
 	}
 

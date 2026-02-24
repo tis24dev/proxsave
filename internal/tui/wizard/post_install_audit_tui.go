@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -20,14 +21,25 @@ var (
 	}
 )
 
+type PostInstallAuditResult struct {
+	// Ran indicates whether the user chose to run the post-install check.
+	Ran bool
+	// Suggestions contains the disable suggestions extracted from the dry-run output.
+	Suggestions []PostInstallAuditSuggestion
+	// AppliedKeys contains the keys written as KEY=false into backup.env.
+	AppliedKeys []string
+	// CollectErr is set when the dry-run/suggestion collection failed.
+	CollectErr error
+}
+
 // RunPostInstallAuditWizard runs an optional post-installation check that:
 //  1. runs proxsave --dry-run
 //  2. extracts actionable "set KEY=false" hints from warnings
 //  3. lets the user disable unused BACKUP_* collectors in backup.env
 //
-// It returns the list of applied keys (may be empty). Errors are returned only for
-// unexpected failures (e.g., UI setup issues).
-func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildSig string) (applied []string, err error) {
+// It returns the audit result. Errors are returned only for unexpected failures
+// (e.g., UI setup issues).
+func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildSig string) (result PostInstallAuditResult, err error) {
 	app := tui.NewApp()
 
 	titleText := tview.NewTextView().
@@ -67,6 +79,10 @@ func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildS
 	pages := tview.NewPages()
 
 	confirmRun := false
+	var mu sync.Mutex
+	var collectedSuggestions []PostInstallAuditSuggestion
+	var collectErr error
+	applied := []string{}
 	confirm := tview.NewModal().
 		SetText("Run the post-install check now?\n\n" +
 			"ProxSave will execute a dry-run and collect WARNING messages that include a hint like:\n" +
@@ -81,10 +97,14 @@ func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildS
 			}
 			pages.SwitchToPage("running")
 			go func() {
-				suggestions, collectErr := CollectPostInstallDisableSuggestions(ctx, execPath, configPath)
+				suggestions, suggestionErr := CollectPostInstallDisableSuggestions(ctx, execPath, configPath)
 				app.QueueUpdateDraw(func() {
-					if collectErr != nil {
-						showAuditDoneModal(app, pages, "Post-install check failed:\n\n"+collectErr.Error())
+					mu.Lock()
+					collectedSuggestions = suggestions
+					collectErr = suggestionErr
+					mu.Unlock()
+					if suggestionErr != nil {
+						showAuditDoneModal(app, pages, "Post-install check failed:\n\n"+suggestionErr.Error())
 						return
 					}
 					if len(suggestions) == 0 {
@@ -134,11 +154,16 @@ func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildS
 		SetBackgroundColor(tcell.ColorBlack)
 
 	if runErr := postInstallAuditWizardRunner(app, layout, confirm); runErr != nil {
-		return nil, runErr
+		return PostInstallAuditResult{}, runErr
 	}
-	// If user skipped, confirmRun is false; applied will be nil/empty.
-	_ = confirmRun
-	return applied, nil
+
+	result.Ran = confirmRun
+	mu.Lock()
+	result.Suggestions = collectedSuggestions
+	result.CollectErr = collectErr
+	mu.Unlock()
+	result.AppliedKeys = applied
+	return result, nil
 }
 
 func showAuditDoneModal(app *tui.App, pages *tview.Pages, message string) {

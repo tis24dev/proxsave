@@ -227,6 +227,7 @@ If the configuration file already exists, the **TUI wizard** will ask whether to
 - Creates all necessary directories with proper permissions (0700)
 - Immediate AGE key generation if encryption is enabled
 - Optional post-install audit to disable unused collectors (keeps changes explicit; nothing is disabled silently)
+- Install session log under `/tmp/proxsave/install-*.log` (includes post-install audit suggestions and any accepted disables)
 
 After completion, edit `configs/backup.env` manually for advanced options.
 

@@ -124,24 +124,40 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 		return wrapInstallError(err)
 	}
 	if !run {
+		if bootstrap != nil {
+			bootstrap.Info("Post-install audit: skipped by user")
+		}
 		return nil
 	}
 
 	if bootstrap != nil {
-		bootstrap.Info("Running post-install dry-run audit (this may take a minute)")
+		bootstrap.Info("Post-install audit: running dry-run (this may take a minute)")
 	}
 
 	suggestions, err := wizard.CollectPostInstallDisableSuggestions(ctx, execPath, configPath)
 	if err != nil {
 		fmt.Printf("WARNING: Post-install check failed (non-blocking): %v\n", err)
+		if bootstrap != nil {
+			bootstrap.Warning("Post-install audit failed (non-blocking): %v", err)
+		}
 		return nil
 	}
 	if len(suggestions) == 0 {
 		fmt.Println("No unused components detected. No changes required.")
+		if bootstrap != nil {
+			bootstrap.Info("Post-install audit: no unused components detected")
+		}
 		return nil
 	}
 
 	fmt.Printf("Detected %d unused/optional component(s) that may cause WARNINGs.\n", len(suggestions))
+	if bootstrap != nil {
+		keys := make([]string, 0, len(suggestions))
+		for _, s := range suggestions {
+			keys = append(keys, s.Key)
+		}
+		bootstrap.Info("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
+	}
 	for _, s := range suggestions {
 		reason := ""
 		if len(s.Messages) > 0 {
@@ -155,26 +171,46 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	}
 	fmt.Println()
 
-	disableAll, err := promptYesNo(ctx, reader, "Disable all suggested components now (set KEY=false)? [y/N]: ", false)
+	disableAny, err := promptYesNo(ctx, reader, "Disable any of the suggested components now (set KEY=false)? [y/N]: ", false)
 	if err != nil {
 		return wrapInstallError(err)
 	}
-	if !disableAll {
+	if !disableAny {
 		fmt.Println("No changes applied. You can disable unused components later by editing backup.env.")
+		if bootstrap != nil {
+			bootstrap.Info("Post-install audit: no disables applied")
+		}
+		return nil
+	}
+
+	keys := make([]string, 0, len(suggestions))
+	for _, s := range suggestions {
+		disable, err := promptYesNo(ctx, reader, fmt.Sprintf("Disable %s? [y/N]: ", s.Key), false)
+		if err != nil {
+			return wrapInstallError(err)
+		}
+		if disable {
+			keys = append(keys, s.Key)
+		}
+	}
+	if len(keys) == 0 {
+		fmt.Println("No changes selected. Nothing was modified.")
+		if bootstrap != nil {
+			bootstrap.Info("Post-install audit: no disables selected")
+		}
 		return nil
 	}
 
 	contentBytes, err := os.ReadFile(configPath)
 	if err != nil {
 		fmt.Printf("ERROR: Unable to update configuration (read failed): %v\n", err)
+		if bootstrap != nil {
+			bootstrap.Warning("Post-install audit: unable to update configuration (read failed): %v", err)
+		}
 		return nil
 	}
 	content := string(contentBytes)
 
-	keys := make([]string, 0, len(suggestions))
-	for _, s := range suggestions {
-		keys = append(keys, s.Key)
-	}
 	sort.Strings(keys)
 	for _, key := range keys {
 		content = setEnvValue(content, key, "false")
@@ -184,10 +220,16 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	defer cleanupTempConfig(tmpAuditPath)
 	if err := writeConfigFile(configPath, tmpAuditPath, content); err != nil {
 		fmt.Printf("ERROR: Unable to update configuration (write failed): %v\n", err)
+		if bootstrap != nil {
+			bootstrap.Warning("Post-install audit: unable to update configuration (write failed): %v", err)
+		}
 		return nil
 	}
 
-	fmt.Printf("✓ Updated %s: disabled %d component(s).\n", configPath, len(keys))
+	fmt.Printf("✓ Updated %s: disabled %d component(s): %s\n", configPath, len(keys), strings.Join(keys, ", "))
+	if bootstrap != nil {
+		bootstrap.Info("Post-install audit: disabled (%d): %s", len(keys), strings.Join(keys, ", "))
+	}
 	return nil
 }
 
