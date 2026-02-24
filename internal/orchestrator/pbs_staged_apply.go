@@ -12,6 +12,21 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
+// Hookable functions for testing staged PBS apply logic without touching the real system/API.
+var (
+	pbsStagedApplyIsRealRestoreFSFn         = isRealRestoreFS
+	pbsStagedApplyGeteuidFn                 = os.Geteuid
+	pbsStagedApplyEnsurePBSServicesForAPIFn = ensurePBSServicesForAPI
+	pbsStagedApplyTrafficControlCfgViaAPIFn = applyPBSTrafficControlCfgViaAPI
+	pbsStagedApplyNodeCfgViaAPIFn           = applyPBSNodeCfgViaAPI
+	pbsStagedApplyS3CfgViaAPIFn             = applyPBSS3CfgViaAPI
+	pbsStagedApplyDatastoreCfgViaAPIFn      = applyPBSDatastoreCfgViaAPI
+	pbsStagedApplyRemoteCfgViaAPIFn         = applyPBSRemoteCfgViaAPI
+	pbsStagedApplySyncCfgViaAPIFn           = applyPBSSyncCfgViaAPI
+	pbsStagedApplyVerificationCfgViaAPIFn   = applyPBSVerificationCfgViaAPI
+	pbsStagedApplyPruneCfgViaAPIFn          = applyPBSPruneCfgViaAPI
+)
+
 func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
 	if plan == nil || plan.SystemType != SystemTypePBS {
 		return nil
@@ -31,11 +46,11 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		logger.Info("Dry run enabled: skipping staged PBS config apply")
 		return nil
 	}
-	if !isRealRestoreFS(restoreFS) {
+	if !pbsStagedApplyIsRealRestoreFSFn(restoreFS) {
 		logger.Debug("Skipping staged PBS config apply: non-system filesystem in use")
 		return nil
 	}
-	if os.Geteuid() != 0 {
+	if pbsStagedApplyGeteuidFn() != 0 {
 		logger.Warning("Skipping staged PBS config apply: requires root privileges")
 		return nil
 	}
@@ -47,7 +62,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	needsAPI := plan.HasCategoryID("pbs_host") || plan.HasCategoryID("datastore_pbs") || plan.HasCategoryID("pbs_remotes") || plan.HasCategoryID("pbs_jobs")
 	apiAvailable := false
 	if needsAPI {
-		if err := ensurePBSServicesForAPI(ctx, logger); err != nil {
+		if err := pbsStagedApplyEnsurePBSServicesForAPIFn(ctx, logger); err != nil {
 			if allowFileFallback {
 				logger.Warning("PBS API apply unavailable; falling back to file-based staged apply where possible: %v", err)
 			} else {
@@ -73,14 +88,14 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		}
 
 		if apiAvailable {
-			if err := applyPBSTrafficControlCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+			if err := pbsStagedApplyTrafficControlCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
 				logger.Warning("PBS API apply: traffic-control failed: %v", err)
 				if allowFileFallback {
 					logger.Warning("PBS staged apply: falling back to file-based traffic-control.cfg")
 					_ = applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/traffic-control.cfg")
 				}
 			}
-			if err := applyPBSNodeCfgViaAPI(ctx, stageRoot); err != nil {
+			if err := pbsStagedApplyNodeCfgViaAPIFn(ctx, stageRoot); err != nil {
 				logger.Warning("PBS API apply: node config failed: %v", err)
 				if allowFileFallback {
 					logger.Warning("PBS staged apply: falling back to file-based node.cfg")
@@ -103,14 +118,14 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 
 	if plan.HasCategoryID("datastore_pbs") {
 		if apiAvailable {
-			if err := applyPBSS3CfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+			if err := pbsStagedApplyS3CfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
 				logger.Warning("PBS API apply: s3.cfg failed: %v", err)
 				if allowFileFallback {
 					logger.Warning("PBS staged apply: falling back to file-based s3.cfg")
 					_ = applyPBSS3CfgFromStage(ctx, logger, stageRoot)
 				}
 			}
-			if err := applyPBSDatastoreCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+			if err := pbsStagedApplyDatastoreCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
 				logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
 				if allowFileFallback {
 					logger.Warning("PBS staged apply: falling back to file-based datastore.cfg")
@@ -131,7 +146,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 
 	if plan.HasCategoryID("pbs_remotes") {
 		if apiAvailable {
-			if err := applyPBSRemoteCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+			if err := pbsStagedApplyRemoteCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
 				logger.Warning("PBS API apply: remote.cfg failed: %v", err)
 				if allowFileFallback {
 					logger.Warning("PBS staged apply: falling back to file-based remote.cfg")
@@ -149,21 +164,21 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 
 	if plan.HasCategoryID("pbs_jobs") {
 		if apiAvailable {
-			if err := applyPBSSyncCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+			if err := pbsStagedApplySyncCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
 				logger.Warning("PBS API apply: sync jobs failed: %v", err)
 				if allowFileFallback {
 					logger.Warning("PBS staged apply: falling back to file-based job configs")
 					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
 				}
 			}
-			if err := applyPBSVerificationCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+			if err := pbsStagedApplyVerificationCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
 				logger.Warning("PBS API apply: verification jobs failed: %v", err)
 				if allowFileFallback {
 					logger.Warning("PBS staged apply: falling back to file-based job configs")
 					_ = applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
 				}
 			}
-			if err := applyPBSPruneCfgViaAPI(ctx, logger, stageRoot, strict); err != nil {
+			if err := pbsStagedApplyPruneCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
 				logger.Warning("PBS API apply: prune jobs failed: %v", err)
 				if allowFileFallback {
 					logger.Warning("PBS staged apply: falling back to file-based job configs")
