@@ -208,6 +208,34 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		}
 	}
 
+	// Telegram setup (centralized bot): if enabled during install, guide the user through
+	// pairing and allow an explicit verification step with retry + skip.
+	if wizardData != nil && (wizardData.NotificationMode == "telegram" || wizardData.NotificationMode == "both") {
+		telegramRes, telegramErr := wizard.RunTelegramSetupWizard(ctx, baseDir, configPath, buildSig)
+		if telegramErr != nil && bootstrap != nil {
+			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)
+		}
+		if bootstrap != nil && telegramRes.Shown {
+			if telegramRes.ConfigError != "" {
+				bootstrap.Warning("Telegram setup: failed to load config (non-blocking): %s", telegramRes.ConfigError)
+			}
+			if telegramRes.IdentityDetectError != "" {
+				bootstrap.Warning("Telegram setup: identity detection issue (non-blocking): %s", telegramRes.IdentityDetectError)
+			}
+			if telegramRes.TelegramMode == "personal" {
+				bootstrap.Info("Telegram setup: personal mode selected (no centralized pairing check)")
+			} else if telegramRes.Verified {
+				bootstrap.Info("Telegram setup: verified (code=%d)", telegramRes.LastStatusCode)
+			} else if telegramRes.SkippedVerification {
+				bootstrap.Info("Telegram setup: verification skipped by user")
+			} else if telegramRes.CheckAttempts > 0 {
+				bootstrap.Info("Telegram setup: not verified (attempts=%d last=%d %s)", telegramRes.CheckAttempts, telegramRes.LastStatusCode, telegramRes.LastStatusMessage)
+			} else {
+				bootstrap.Info("Telegram setup: not verified (no check performed)")
+			}
+		}
+	}
+
 	// Clean up legacy bash-based symlinks
 	if bootstrap != nil {
 		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")
