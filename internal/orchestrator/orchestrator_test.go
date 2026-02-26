@@ -314,6 +314,30 @@ func TestOrchestrator_SetUpdateInfo(t *testing.T) {
 	nilOrch.SetUpdateInfo(true, "x", "y") // should not panic
 }
 
+func TestOrchestrator_SetUnprivilegedContainerContext(t *testing.T) {
+	orch := &Orchestrator{}
+	deps := orch.collectorDeps()
+	if deps.DetectUnprivilegedContainer != nil {
+		t.Fatal("expected nil DetectUnprivilegedContainer by default")
+	}
+
+	orch.SetUnprivilegedContainerContext(true, " sentinel ")
+	deps = orch.collectorDeps()
+	if deps.DetectUnprivilegedContainer == nil {
+		t.Fatal("expected DetectUnprivilegedContainer to be set")
+	}
+	detected, details := deps.DetectUnprivilegedContainer()
+	if !detected {
+		t.Fatalf("detected=false; want true (details=%q)", details)
+	}
+	if details != "sentinel" {
+		t.Fatalf("details=%q; want %q", details, "sentinel")
+	}
+
+	var nilOrch *Orchestrator
+	nilOrch.SetUnprivilegedContainerContext(true, "x") // should not panic
+}
+
 // TestOrchestrator_SetChecker tests SetChecker
 func TestOrchestrator_SetChecker(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)

@@ -2,6 +2,7 @@ package environment
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,15 @@ func TestDetectUnprivilegedContainer(t *testing.T) {
 		if !info.Detected {
 			t.Fatalf("Detected=false, want true (details=%q)", info.Details)
 		}
+		if !info.UIDMap.OK || info.UIDMap.Outside0 != 100000 {
+			t.Fatalf("unexpected UIDMap: ok=%v outside0=%d details=%q", info.UIDMap.OK, info.UIDMap.Outside0, info.Details)
+		}
+		if !info.GIDMap.OK || info.GIDMap.Outside0 != 100000 {
+			t.Fatalf("unexpected GIDMap: ok=%v outside0=%d details=%q", info.GIDMap.OK, info.GIDMap.Outside0, info.Details)
+		}
+		if !info.SystemdContainer.OK || info.SystemdContainer.Value != "lxc" {
+			t.Fatalf("unexpected SystemdContainer: ok=%v value=%q details=%q", info.SystemdContainer.OK, info.SystemdContainer.Value, info.Details)
+		}
 		if !strings.Contains(info.Details, "uid_map=0->100000") {
 			t.Fatalf("expected uid_map details, got %q", info.Details)
 		}
@@ -98,6 +108,75 @@ func TestDetectUnprivilegedContainer(t *testing.T) {
 		info := DetectUnprivilegedContainer()
 		if info.Detected {
 			t.Fatalf("Detected=true, want false (details=%q)", info.Details)
+		}
+		if !info.UIDMap.OK || info.UIDMap.Outside0 != 0 {
+			t.Fatalf("unexpected UIDMap: ok=%v outside0=%d details=%q", info.UIDMap.OK, info.UIDMap.Outside0, info.Details)
+		}
+		if !info.GIDMap.OK || info.GIDMap.Outside0 != 0 {
+			t.Fatalf("unexpected GIDMap: ok=%v outside0=%d details=%q", info.GIDMap.OK, info.GIDMap.Outside0, info.Details)
+		}
+	})
+
+	t.Run("maps unavailable", func(t *testing.T) {
+		setValue(t, &readFileFunc, func(path string) ([]byte, error) {
+			switch path {
+			case selfUIDMapPath, selfGIDMapPath, systemdContainerPath:
+				return nil, os.ErrNotExist
+			default:
+				return nil, errors.New("not found")
+			}
+		})
+
+		info := DetectUnprivilegedContainer()
+		if info.Detected {
+			t.Fatalf("Detected=true, want false (details=%q)", info.Details)
+		}
+		if info.UIDMap.OK || info.GIDMap.OK {
+			t.Fatalf("expected UID/GID maps to be unavailable (details=%q)", info.Details)
+		}
+		if info.SystemdContainer.OK {
+			t.Fatalf("expected container to be unavailable (details=%q)", info.Details)
+		}
+		if !strings.Contains(info.Details, "uid_map=unavailable(err=not found)") {
+			t.Fatalf("expected uid_map unavailable detail, got %q", info.Details)
+		}
+		if !strings.Contains(info.Details, "gid_map=unavailable(err=not found)") {
+			t.Fatalf("expected gid_map unavailable detail, got %q", info.Details)
+		}
+		if !strings.Contains(info.Details, "container=unavailable(err=not found)") {
+			t.Fatalf("expected container unavailable detail, got %q", info.Details)
+		}
+	})
+
+	t.Run("unparseable uid_map falls back to gid_map", func(t *testing.T) {
+		setValue(t, &readFileFunc, func(path string) ([]byte, error) {
+			switch path {
+			case selfUIDMapPath:
+				return []byte("not a map\n"), nil
+			case selfGIDMapPath:
+				return []byte("0 100000 65536\n"), nil
+			case systemdContainerPath:
+				return []byte("\n"), nil
+			default:
+				return nil, errors.New("not found")
+			}
+		})
+
+		info := DetectUnprivilegedContainer()
+		if !info.Detected {
+			t.Fatalf("Detected=false, want true (details=%q)", info.Details)
+		}
+		if info.UIDMap.OK || info.UIDMap.ParseError == "" {
+			t.Fatalf("expected UIDMap parse error, got ok=%v parseErr=%q (details=%q)", info.UIDMap.OK, info.UIDMap.ParseError, info.Details)
+		}
+		if !info.GIDMap.OK || info.GIDMap.Outside0 != 100000 {
+			t.Fatalf("unexpected GIDMap: ok=%v outside0=%d (details=%q)", info.GIDMap.OK, info.GIDMap.Outside0, info.Details)
+		}
+		if !strings.Contains(info.Details, "uid_map=unparseable") {
+			t.Fatalf("expected uid_map unparseable detail, got %q", info.Details)
+		}
+		if !strings.Contains(info.Details, "container=empty") {
+			t.Fatalf("expected empty container detail, got %q", info.Details)
 		}
 	})
 }

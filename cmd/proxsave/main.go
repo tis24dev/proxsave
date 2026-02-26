@@ -770,6 +770,8 @@ func run() int {
 
 	// Log environment info
 	logging.Info("Environment: %s %s", envInfo.Type, envInfo.Version)
+	unprivilegedInfo := environment.DetectUnprivilegedContainer()
+	logUserNamespaceContext(logger, unprivilegedInfo)
 	logging.Info("Backup enabled: %v", cfg.BackupEnabled)
 	logging.Info("Debug level: %s", logLevel.String())
 	logging.Info("Compression: %s (level %d, mode %s)", cfg.CompressionType, cfg.CompressionLevel, cfg.CompressionMode)
@@ -935,6 +937,7 @@ func run() int {
 	logging.Step("Initializing backup orchestrator")
 	orchInitDone := logging.DebugStart(logger, "orchestrator init", "dry_run=%v", dryRun)
 	orch = orchestrator.New(logger, dryRun)
+	orch.SetUnprivilegedContainerContext(unprivilegedInfo.Detected, unprivilegedInfo.Details)
 	orch.SetVersion(toolVersion)
 	orch.SetConfig(cfg)
 	orch.SetIdentity(serverIDValue, serverMACValue)
