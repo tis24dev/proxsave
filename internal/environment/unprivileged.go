@@ -12,6 +12,17 @@ const (
 	selfUIDMapPath       = "/proc/self/uid_map"
 	selfGIDMapPath       = "/proc/self/gid_map"
 	systemdContainerPath = "/run/systemd/container"
+
+	proc1CgroupPath = "/proc/1/cgroup"
+	selfCgroupPath  = "/proc/self/cgroup"
+
+	dockerMarkerPath = "/.dockerenv"
+	podmanMarkerPath = "/run/.containerenv"
+)
+
+var (
+	getEUIDFunc   = os.Geteuid
+	lookupEnvFunc = os.LookupEnv
 )
 
 // IDMapOutsideZeroInfo describes the mapping information for inside ID 0
@@ -34,10 +45,28 @@ type FileValueInfo struct {
 	Source    string
 }
 
+// FilePresenceInfo describes whether a file exists, based on a best-effort
+// stat call.
+type FilePresenceInfo struct {
+	OK        bool
+	Present   bool
+	StatError string
+	Source    string
+}
+
+// EnvVarInfo describes a best-effort environment variable lookup.
+type EnvVarInfo struct {
+	Key   string
+	Set   bool
+	Value string
+}
+
 // UnprivilegedContainerInfo describes whether the current process appears to be
-// running in an unprivileged (shifted user namespace) environment.
+// running in an environment with limited system privileges.
 //
-// This is commonly true for unprivileged LXC containers and rootless containers.
+// This can be true for unprivileged LXC containers (shifted user namespace),
+// rootless containers, non-root execution, and many container runtimes where
+// access to low-level system interfaces is intentionally restricted.
 type UnprivilegedContainerInfo struct {
 	Detected bool
 	Details  string
@@ -45,33 +74,71 @@ type UnprivilegedContainerInfo struct {
 	UIDMap           IDMapOutsideZeroInfo
 	GIDMap           IDMapOutsideZeroInfo
 	SystemdContainer FileValueInfo
+
+	EnvContainer EnvVarInfo
+
+	DockerMarker FilePresenceInfo
+	PodmanMarker FilePresenceInfo
+
+	Proc1CgroupHint FileValueInfo
+	SelfCgroupHint  FileValueInfo
+
+	ContainerRuntime string
+	ContainerSource  string
+
+	EUID int
 }
 
 // DetectUnprivilegedContainer detects whether the current process appears to be
-// running in an unprivileged (shifted user namespace) environment.
+// running in an environment with limited system privileges.
 //
 // Detection is based on /proc/self/{uid_map,gid_map}. When the mapping for
 // inside-ID 0 maps to a non-zero outside-ID, the process is in a shifted user
 // namespace and likely lacks low-level hardware/block-device privileges.
 //
+// In addition, best-effort container heuristics are used to reduce false
+// negatives on container runtimes where uid_map is not shifted (for example,
+// rootful Docker/Podman or privileged LXC with restricted device access).
+//
 // The return value is intentionally best-effort and never returns an error.
 func DetectUnprivilegedContainer() UnprivilegedContainerInfo {
 	uidInfo := readIDMapOutsideZeroInfo(selfUIDMapPath)
 	gidInfo := readIDMapOutsideZeroInfo(selfGIDMapPath)
-	containerInfo := readFileValueInfo(systemdContainerPath)
+	systemdContainer := readFileValueInfo(systemdContainerPath)
+	envContainer := readEnvVarInfo("container")
+	dockerMarker := readFilePresenceInfo(dockerMarkerPath)
+	podmanMarker := readFilePresenceInfo(podmanMarkerPath)
+	proc1CgroupHint := readCgroupHintInfo(proc1CgroupPath)
+	selfCgroupHint := readCgroupHintInfo(selfCgroupPath)
 
-	detected := (uidInfo.OK && uidInfo.Outside0 != 0) || (gidInfo.OK && gidInfo.Outside0 != 0)
-	details := make([]string, 0, 3)
+	containerRuntime, containerSource := computeContainerRuntime(systemdContainer, envContainer, dockerMarker, podmanMarker, proc1CgroupHint, selfCgroupHint)
+	containerRuntime = sanitizeToken(containerRuntime)
+	containerSource = sanitizeToken(containerSource)
 
+	euid := getEUIDFunc()
+	shifted := (uidInfo.OK && uidInfo.Outside0 != 0) || (gidInfo.OK && gidInfo.Outside0 != 0)
+	detected := shifted || euid != 0 || strings.TrimSpace(containerRuntime) != ""
+
+	details := make([]string, 0, 6)
 	details = append(details, formatIDMapDetails("uid_map", uidInfo))
 	details = append(details, formatIDMapDetails("gid_map", gidInfo))
-	details = append(details, formatFileValueDetails("container", containerInfo))
+	details = append(details, formatSimpleDetails("container", containerRuntime, "none"))
+	details = append(details, formatSimpleDetails("container_src", containerSource, "none"))
+	details = append(details, formatSimpleDetails("euid", fmt.Sprintf("%d", euid), "unknown"))
 
 	out := UnprivilegedContainerInfo{
 		Detected:         detected,
 		UIDMap:           uidInfo,
 		GIDMap:           gidInfo,
-		SystemdContainer: containerInfo,
+		SystemdContainer: systemdContainer,
+		EnvContainer:     envContainer,
+		DockerMarker:     dockerMarker,
+		PodmanMarker:     podmanMarker,
+		Proc1CgroupHint:  proc1CgroupHint,
+		SelfCgroupHint:   selfCgroupHint,
+		ContainerRuntime: containerRuntime,
+		ContainerSource:  containerSource,
+		EUID:             euid,
 	}
 	out.Details = strings.Join(details, ", ")
 	return out
@@ -136,6 +203,107 @@ func readFileValueInfo(path string) FileValueInfo {
 	return info
 }
 
+func readFilePresenceInfo(path string) FilePresenceInfo {
+	info := FilePresenceInfo{Source: path}
+	if strings.TrimSpace(path) == "" {
+		info.StatError = "invalid path"
+		return info
+	}
+	_, err := statFunc(path)
+	switch {
+	case err == nil:
+		info.OK = true
+		info.Present = true
+		return info
+	case errors.Is(err, os.ErrNotExist):
+		info.OK = true
+		info.Present = false
+		return info
+	default:
+		info.StatError = summarizeReadError(err)
+		return info
+	}
+}
+
+func readEnvVarInfo(key string) EnvVarInfo {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return EnvVarInfo{}
+	}
+	value, ok := lookupEnvFunc(key)
+	return EnvVarInfo{
+		Key:   key,
+		Set:   ok,
+		Value: strings.TrimSpace(value),
+	}
+}
+
+func readCgroupHintInfo(path string) FileValueInfo {
+	info := FileValueInfo{Source: path}
+	data, err := readFileFunc(path)
+	if err != nil {
+		info.ReadError = summarizeReadError(err)
+		return info
+	}
+	info.OK = true
+	info.Value = strings.TrimSpace(containerHintFromCgroup(string(data)))
+	return info
+}
+
+func computeContainerRuntime(systemdContainer FileValueInfo, envContainer EnvVarInfo, dockerMarker FilePresenceInfo, podmanMarker FilePresenceInfo, proc1CgroupHint FileValueInfo, selfCgroupHint FileValueInfo) (runtime, source string) {
+	if systemdContainer.OK {
+		if v := strings.TrimSpace(systemdContainer.Value); v != "" {
+			return v, "systemd"
+		}
+	}
+
+	if envContainer.Set {
+		if v := strings.TrimSpace(envContainer.Value); v != "" {
+			return v, "env"
+		}
+	}
+
+	if dockerMarker.OK && dockerMarker.Present {
+		return "docker", "marker"
+	}
+	if podmanMarker.OK && podmanMarker.Present {
+		return "podman", "marker"
+	}
+
+	if proc1CgroupHint.OK {
+		if v := strings.TrimSpace(proc1CgroupHint.Value); v != "" {
+			return v, "cgroup"
+		}
+	}
+	if selfCgroupHint.OK {
+		if v := strings.TrimSpace(selfCgroupHint.Value); v != "" {
+			return v, "cgroup"
+		}
+	}
+
+	return "", ""
+}
+
+func containerHintFromCgroup(content string) string {
+	lower := strings.ToLower(content)
+	switch {
+	case strings.Contains(lower, "kubepods"):
+		return "kubernetes"
+	case strings.Contains(lower, "docker"):
+		return "docker"
+	case strings.Contains(lower, "libpod"):
+		return "podman"
+	case strings.Contains(lower, "podman"):
+		return "podman"
+	case strings.Contains(lower, "lxc"):
+		return "lxc"
+	case strings.Contains(lower, "containerd"):
+		return "containerd"
+	default:
+		return ""
+	}
+}
+
 func summarizeReadError(err error) string {
 	if err == nil {
 		return ""
@@ -182,4 +350,48 @@ func formatFileValueDetails(label string, info FileValueInfo) string {
 	default:
 		return fmt.Sprintf("%s=unavailable", label)
 	}
+}
+
+func formatSimpleDetails(label, value, emptyValue string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = "value"
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = strings.TrimSpace(emptyValue)
+	}
+	if value == "" {
+		value = "unknown"
+	}
+	return fmt.Sprintf("%s=%s", label, value)
+}
+
+func sanitizeToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = strings.ToLower(value)
+
+	const maxLen = 64
+	var b strings.Builder
+	b.Grow(len(value))
+	for _, r := range value {
+		if b.Len() >= maxLen {
+			break
+		}
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == '.' || r == ':' || r == '/':
+			b.WriteRune(r)
+		default:
+			// Normalize all other characters.
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }

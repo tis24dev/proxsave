@@ -13,7 +13,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-func TestSafeCmdOutput_Unprivileged_DowngradesDmidecodeToSkip(t *testing.T) {
+func TestSafeCmdOutput_LimitedPrivileges_DowngradesDmidecodeToSkip(t *testing.T) {
 	buf := &bytes.Buffer{}
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(buf)
@@ -45,15 +45,15 @@ func TestSafeCmdOutput_Unprivileged_DowngradesDmidecodeToSkip(t *testing.T) {
 	if !strings.Contains(logText, "] SKIP") {
 		t.Fatalf("expected SKIP log line, got: %s", logText)
 	}
-	if !strings.Contains(logText, "Expected in unprivileged containers") {
-		t.Fatalf("expected unprivileged hint in logs, got: %s", logText)
+	if !strings.Contains(logText, "Expected with limited privileges") {
+		t.Fatalf("expected limited-privileges hint in logs, got: %s", logText)
 	}
 	if !strings.Contains(logText, "DMI tables not accessible") {
 		t.Fatalf("expected reason in logs, got: %s", logText)
 	}
 }
 
-func TestCaptureCommandOutput_Unprivileged_DowngradesBlkidToSkipWithRestoreHint(t *testing.T) {
+func TestCaptureCommandOutput_LimitedPrivileges_DowngradesBlkidToSkipWithRestoreHint(t *testing.T) {
 	buf := &bytes.Buffer{}
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(buf)
@@ -88,15 +88,15 @@ func TestCaptureCommandOutput_Unprivileged_DowngradesBlkidToSkipWithRestoreHint(
 	if !strings.Contains(logText, "] SKIP") {
 		t.Fatalf("expected SKIP log line, got: %s", logText)
 	}
-	if !strings.Contains(logText, "Expected in unprivileged containers") {
-		t.Fatalf("expected unprivileged hint in logs, got: %s", logText)
+	if !strings.Contains(logText, "Expected with limited privileges") {
+		t.Fatalf("expected limited-privileges hint in logs, got: %s", logText)
 	}
 	if !strings.Contains(logText, "restore hint: fstab remap may be limited") {
 		t.Fatalf("expected restore hint in logs, got: %s", logText)
 	}
 }
 
-func TestSafeCmdOutput_Unprivileged_DowngradesSensorsToSkip(t *testing.T) {
+func TestSafeCmdOutput_LimitedPrivileges_DowngradesSensorsToSkip(t *testing.T) {
 	buf := &bytes.Buffer{}
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(buf)
@@ -128,15 +128,15 @@ func TestSafeCmdOutput_Unprivileged_DowngradesSensorsToSkip(t *testing.T) {
 	if !strings.Contains(logText, "] SKIP") {
 		t.Fatalf("expected SKIP log line, got: %s", logText)
 	}
-	if !strings.Contains(logText, "Expected in unprivileged containers") {
-		t.Fatalf("expected unprivileged hint in logs, got: %s", logText)
+	if !strings.Contains(logText, "Expected with limited privileges") {
+		t.Fatalf("expected limited-privileges hint in logs, got: %s", logText)
 	}
 	if !strings.Contains(logText, "hardware sensors not accessible") {
 		t.Fatalf("expected reason in logs, got: %s", logText)
 	}
 }
 
-func TestSafeCmdOutput_Unprivileged_DowngradesSmartctlToSkip(t *testing.T) {
+func TestSafeCmdOutput_LimitedPrivileges_DowngradesSmartctlToSkip(t *testing.T) {
 	buf := &bytes.Buffer{}
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(buf)
@@ -168,8 +168,8 @@ func TestSafeCmdOutput_Unprivileged_DowngradesSmartctlToSkip(t *testing.T) {
 	if !strings.Contains(logText, "] SKIP") {
 		t.Fatalf("expected SKIP log line, got: %s", logText)
 	}
-	if !strings.Contains(logText, "Expected in unprivileged containers") {
-		t.Fatalf("expected unprivileged hint in logs, got: %s", logText)
+	if !strings.Contains(logText, "Expected with limited privileges") {
+		t.Fatalf("expected limited-privileges hint in logs, got: %s", logText)
 	}
 	if !strings.Contains(logText, "SMART devices not accessible") {
 		t.Fatalf("expected reason in logs, got: %s", logText)

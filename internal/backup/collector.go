@@ -928,7 +928,7 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 		c.logger.Debug("Non-critical command output summary (safeCmdOutput): %s", summarizeCommandOutputText(outputText))
 
 		ctxInfo := c.depDetectUnprivilegedContainer()
-		c.logger.Debug("Unprivileged context evaluation: detected=%t details=%q", ctxInfo.Detected, strings.TrimSpace(ctxInfo.Details))
+		c.logger.Debug("Privilege context evaluation: detected=%t details=%q", ctxInfo.Detected, strings.TrimSpace(ctxInfo.Details))
 
 		reason := ""
 		if ctxInfo.Detected {
@@ -937,14 +937,14 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 			reason = match.Reason
 			c.logger.Debug("Privilege-sensitive classification: command=%q matched=%t match=%q reason=%q", cmdParts[0], reason != "", match.Match, reason)
 		} else {
-			c.logger.Debug("Privilege-sensitive downgrade not considered: unprivileged context not detected (command=%q)", cmdParts[0])
+			c.logger.Debug("Privilege-sensitive downgrade not considered: limited-privilege context not detected (command=%q)", cmdParts[0])
 		}
 
 		if ctxInfo.Detected && reason != "" {
 			c.logger.Debug("Downgrading WARNING->SKIP: description=%q cmd=%q exitCode=%d", description, cmdString, exitCode)
 
-			c.logger.Skip("Skipping %s: %s (Expected in unprivileged containers).", description, reason)
-			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v unprivilegedDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
+			c.logger.Skip("Skipping %s: %s (Expected with limited privileges).", description, reason)
+			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v contextDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
 			c.logger.Debug("SKIP output summary for %s: %s", description, summarizeCommandOutputText(outputText))
 			return nil
 		}
@@ -1278,7 +1278,7 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		c.logger.Debug("Non-critical command output summary (captureCommandOutput): %s", summarizeCommandOutputText(outputText))
 
 		ctxInfo := c.depDetectUnprivilegedContainer()
-		c.logger.Debug("Unprivileged context evaluation: detected=%t details=%q", ctxInfo.Detected, strings.TrimSpace(ctxInfo.Details))
+		c.logger.Debug("Privilege context evaluation: detected=%t details=%q", ctxInfo.Detected, strings.TrimSpace(ctxInfo.Details))
 
 		reason := ""
 		if ctxInfo.Detected {
@@ -1287,14 +1287,14 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 			reason = match.Reason
 			c.logger.Debug("Privilege-sensitive classification: command=%q matched=%t match=%q reason=%q", parts[0], reason != "", match.Match, reason)
 		} else {
-			c.logger.Debug("Privilege-sensitive downgrade not considered: unprivileged context not detected (command=%q)", parts[0])
+			c.logger.Debug("Privilege-sensitive downgrade not considered: limited-privilege context not detected (command=%q)", parts[0])
 		}
 
 		if ctxInfo.Detected && reason != "" {
 			c.logger.Debug("Downgrading WARNING->SKIP: description=%q cmd=%q exitCode=%d", description, cmdString, exitCode)
 
-			c.logger.Skip("Skipping %s: %s (Expected in unprivileged containers).", description, reason)
-			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v unprivilegedDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
+			c.logger.Skip("Skipping %s: %s (Expected with limited privileges).", description, reason)
+			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v contextDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
 			c.logger.Debug("SKIP output summary for %s: %s", description, summarizeCommandOutputText(outputText))
 			return nil, nil
 		}
