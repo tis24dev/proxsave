@@ -85,6 +85,9 @@ ProxSave provides a built-in upgrade command to update your installation to the 
 # Upgrade to latest version
 ./build/proxsave --upgrade
 
+# Non-interactive upgrade (auto-confirm)
+./build/proxsave --upgrade y
+
 # Optionally update configuration template
 ./build/proxsave --upgrade-config
 

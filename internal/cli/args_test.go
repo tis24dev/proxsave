@@ -152,6 +152,23 @@ func TestParseAliasFlags(t *testing.T) {
 	}
 }
 
+func TestParseUpgradeAutoYes(t *testing.T) {
+	args := parseWithArgs(t, []string{
+		"--upgrade", "y",
+		"--log-level", "debug",
+	})
+
+	if !args.Upgrade {
+		t.Fatal("Upgrade should be true when --upgrade is provided")
+	}
+	if !args.UpgradeAutoYes {
+		t.Fatal("UpgradeAutoYes should be true when --upgrade y is provided")
+	}
+	if args.LogLevel != types.LogLevelDebug {
+		t.Fatalf("LogLevel = %v, want debug", args.LogLevel)
+	}
+}
+
 func parseWithArgs(t *testing.T, cliArgs []string) *Args {
 	t.Helper()
 	origCommandLine := flag.CommandLine

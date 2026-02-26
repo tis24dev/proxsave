@@ -174,6 +174,9 @@ Some interactive commands support two interface modes:
 # Upgrade binary to latest version
 ./build/proxsave --upgrade
 
+# Non-interactive upgrade (auto-confirm)
+./build/proxsave --upgrade y
+
 # Full upgrade including configuration
 ./build/proxsave --upgrade
 ./build/proxsave --upgrade-config
