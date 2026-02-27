@@ -70,7 +70,7 @@ jobs:
       # GORELEASER
       ########################################
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: latest
           workdir: ${{ github.workspace }}
