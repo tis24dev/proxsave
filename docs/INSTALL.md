@@ -85,6 +85,9 @@ ProxSave provides a built-in upgrade command to update your installation to the 
 # Upgrade to latest version
 ./build/proxsave --upgrade
 
+# Non-interactive upgrade (auto-confirm)
+./build/proxsave --upgrade y
+
 # Optionally update configuration template
 ./build/proxsave --upgrade-config
 
@@ -219,6 +222,36 @@ If the configuration file already exists, the **TUI wizard** will ask whether to
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 7. **Cron schedule**: Choose cron time (HH:MM) for the `proxsave` cron entry (TUI mode only)
 8. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
+9. **Telegram pairing (optional)**: If Telegram (centralized) is enabled, shows your Server ID and lets you verify pairing with the bot (retry/skip supported)
+
+#### Telegram pairing wizard (TUI)
+
+If you enable Telegram notifications during `--install` (centralized bot), the installer opens an additional **Telegram Setup** screen after the post-install check.
+
+It does **not** modify your `backup.env`. It only:
+- Computes/loads the **Server ID** and persists it (identity file)
+- Guides you through pairing with the centralized bot
+- Lets you verify pairing immediately (retry supported)
+
+**What you see:**
+- **Instructions**: steps to start the bot and send the Server ID
+- **Server ID**: digits-only identifier + identity file path/persistence status
+- **Status**: live feedback from the pairing check
+- **Actions**:
+  - `Check`: verify pairing (press again to retry)
+  - `Continue`: available only after a successful check (centralized mode), or immediately in personal mode / when the Server ID is unavailable
+  - `Skip`: leave without verification (in centralized mode, `ESC` behaves like Skip when not verified)
+
+**Where the Server ID is stored:**
+- `<BASE_DIR>/identity/.server_identity`
+
+**If `Check` fails:**
+- `403` / `409`: start the bot, send the Server ID, then try again
+- `422`: the Server ID looks invalid; re-run the installer or regenerate the identity file
+- Other errors: temporary server/network issue; retry or skip and pair later
+
+**CLI mode:**
+- With `--install --cli`, the installer prints the Server ID and asks whether to run the check now (with a retry loop).
 
 **Features:**
 
@@ -227,7 +260,8 @@ If the configuration file already exists, the **TUI wizard** will ask whether to
 - Creates all necessary directories with proper permissions (0700)
 - Immediate AGE key generation if encryption is enabled
 - Optional post-install audit to disable unused collectors (keeps changes explicit; nothing is disabled silently)
-- Install session log under `/tmp/proxsave/install-*.log` (includes post-install audit suggestions and any accepted disables)
+- Optional Telegram pairing wizard (centralized mode) that displays Server ID and verifies the bot registration (retry/skip supported)
+- Install session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome)
 
 After completion, edit `configs/backup.env` manually for advanced options.
 

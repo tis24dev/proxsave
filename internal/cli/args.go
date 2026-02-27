@@ -30,6 +30,7 @@ type Args struct {
 	ShowVersion       bool
 	ShowHelp          bool
 	Upgrade           bool
+	UpgradeAutoYes    bool
 	ForceNewKey       bool
 	Decrypt           bool
 	Restore           bool
@@ -96,7 +97,7 @@ func Parse() *Args {
 	flag.BoolVar(&args.NewInstall, "new-install", false,
 		"Reset the installation directory (preserving env/identity) and launch the interactive installer")
 	flag.BoolVar(&args.Upgrade, "upgrade", false,
-		"Download and install the latest ProxSave binary (also upgrades backup.env by adding missing keys from the new template)")
+		"Download and install the latest ProxSave binary (also upgrades backup.env by adding missing keys from the new template). Append 'y' to auto-confirm (e.g., --upgrade y)")
 	flag.BoolVar(&args.EnvMigration, "env-migration", false,
 		"Run the installer and migrate a legacy Bash backup.env to the Go template")
 	flag.BoolVar(&args.EnvMigrationDry, "env-migration-dry-run", false,
@@ -121,7 +122,13 @@ func Parse() *Args {
 	}
 
 	// Parse flags
-	flag.Parse()
+	processedArgs, upgradeAutoYes := extractUpgradeAutoYesArgs(os.Args)
+	args.UpgradeAutoYes = upgradeAutoYes
+	if len(processedArgs) > 1 {
+		_ = flag.CommandLine.Parse(processedArgs[1:])
+	} else {
+		_ = flag.CommandLine.Parse(nil)
+	}
 
 	args.ConfigPath = configFlag.value
 	if configFlag.set {
@@ -138,6 +145,36 @@ func Parse() *Args {
 	}
 
 	return args
+}
+
+func extractUpgradeAutoYesArgs(argv []string) ([]string, bool) {
+	if len(argv) == 0 {
+		return argv, false
+	}
+
+	processed := make([]string, 0, len(argv))
+	processed = append(processed, argv[0])
+	autoYes := false
+
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "--" {
+			processed = append(processed, argv[i:]...)
+			break
+		}
+
+		processed = append(processed, arg)
+		if arg != "--upgrade" && arg != "-upgrade" {
+			continue
+		}
+
+		if i+1 < len(argv) && strings.EqualFold(argv[i+1], "y") {
+			autoYes = true
+			i++
+		}
+	}
+
+	return processed, autoYes
 }
 
 // parseLogLevel converts string to LogLevel

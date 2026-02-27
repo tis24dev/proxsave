@@ -168,14 +168,14 @@ COMPRESSION_TYPE=xz    # Valid: xz, zstd, gzip, bzip2, lz4
 
 ---
 
-#### Notice: `SKIP ... Expected in unprivileged containers` (LXC/rootless)
+#### Notice: `SKIP ... Expected with limited privileges` (containers/non-root)
 
 **Symptoms**:
-- Running ProxSave inside an **unprivileged** LXC container (or a rootless container) produces log lines like:
-  - `SKIP Skipping Hardware DMI information: DMI tables not accessible (Expected in unprivileged containers).`
-  - `SKIP Skipping Block device identifiers (blkid): block devices not accessible (restore hint: fstab remap may be limited) (Expected in unprivileged containers).`
+- Running ProxSave in an environment with **limited privileges** (for example a container or non-root execution) can produce log lines like:
+  - `SKIP Skipping Hardware DMI information: DMI tables not accessible (Expected with limited privileges).`
+  - `SKIP Skipping Block device identifiers (blkid): block devices not accessible (restore hint: fstab remap may be limited) (Expected with limited privileges).`
 
-**Cause**: In unprivileged containers, access to low-level system interfaces is intentionally restricted (for example `/dev/mem` and most block devices). Some inventory commands can fail even though the backup itself is working correctly.
+**Cause**: With limited privileges, access to low-level system interfaces is intentionally restricted (for example `/dev/mem` and most block devices). Some inventory commands can fail even though the backup itself is working correctly.
 
 **Behavior**:
 - ProxSave still attempts the collection.
@@ -186,7 +186,9 @@ COMPRESSION_TYPE=xz    # Valid: xz, zstd, gzip, bzip2, lz4
 - Hardware inventory output may be missing/empty.
 - If `blkid` is skipped, ProxSave restore may have **limited** ability to automatically remap `/etc/fstab` devices (UUID/PARTUUID/LABEL). You may need to review mounts manually during restore.
 
-**How to verify** (shifted user namespace mapping):
+**How to verify**:
+- Check the startup log line: `INFO Privilege context: ...`
+- If you suspect an unprivileged/shifted user namespace mapping:
 ```bash
 cat /proc/self/uid_map
 cat /proc/self/gid_map

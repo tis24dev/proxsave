@@ -20,7 +20,7 @@ func (c *Collector) depDetectUnprivilegedContainer() unprivilegedContainerContex
 				Details:  details,
 			}
 			if c.logger != nil {
-				c.logger.Debug("Unprivileged container detection (deps override): detected=%t details=%q", c.unprivilegedCtx.Detected, c.unprivilegedCtx.Details)
+				c.logger.Debug("Privilege context detection (deps override): detected=%t details=%q", c.unprivilegedCtx.Detected, c.unprivilegedCtx.Details)
 			}
 			return
 		}
@@ -31,7 +31,7 @@ func (c *Collector) depDetectUnprivilegedContainer() unprivilegedContainerContex
 			Details:  info.Details,
 		}
 		if c.logger != nil {
-			c.logger.Debug("Unprivileged container detection: detected=%t details=%q", c.unprivilegedCtx.Detected, c.unprivilegedCtx.Details)
+			c.logger.Debug("Privilege context detection: detected=%t details=%q", c.unprivilegedCtx.Detected, c.unprivilegedCtx.Details)
 		}
 	})
 

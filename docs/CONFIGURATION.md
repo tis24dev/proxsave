@@ -791,6 +791,19 @@ TELEGRAM_CHAT_ID=                  # Chat ID (your user ID or group ID)
 - **centralized**: Uses organization-wide bot (configured server-side)
 - **personal**: Uses your own bot (requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`)
 
+**Centralized mode pairing**:
+1. Enable Telegram (`TELEGRAM_ENABLED=true`, `BOT_TELEGRAM_TYPE=centralized`)
+2. Get your **Server ID**:
+   - Shown during `--install` (TUI/CLI Telegram setup step)
+   - Persisted in `<BASE_DIR>/identity/.server_identity` and reused on next runs
+   - Also printed in the normal run logs
+3. Open Telegram and start `@ProxmoxAN_bot`
+4. Send the Server ID to the bot
+5. Verify pairing:
+   - **TUI installer**: press `Check` (retry supported). `Continue` appears only after success; use `Skip` (or `ESC`) to proceed without verification.
+   - **CLI installer**: opt into the check and retry when prompted.
+   - Normal runs also verify automatically and will skip Telegram if not paired yet.
+
 **Setup personal bot**:
 1. Message @BotFather on Telegram: `/newbot`
 2. Copy token to `TELEGRAM_BOT_TOKEN`

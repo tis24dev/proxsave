@@ -142,10 +142,11 @@ Some interactive commands support two interface modes:
 5. Optionally sets up notifications (Telegram, Email; Email defaults to `EMAIL_DELIVERY_METHOD=relay`)
 6. Optionally configures encryption (AGE setup)
 7. (TUI) Optionally selects a cron time (HH:MM) for the `proxsave` cron entry
-8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (TUI: checklist; CLI: per-key prompts; actionable hints like `set BACKUP_*=false to disable`)
-9. Finalizes installation (symlinks, cron migration, permission checks)
+8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)
+9. (If Telegram enabled) Shows Server ID and offers pairing verification (retry/skip supported)
+10. Finalizes installation (symlinks, cron migration, permission checks)
 
-**Install log**: The installer writes a session log under `/tmp/proxsave/install-*.log` (includes post-install audit suggestions and any accepted disables).
+**Install log**: The installer writes a session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome).
 
 ### Configuration Upgrade
 
@@ -172,6 +173,9 @@ Some interactive commands support two interface modes:
 ```bash
 # Upgrade binary to latest version
 ./build/proxsave --upgrade
+
+# Non-interactive upgrade (auto-confirm)
+./build/proxsave --upgrade y
 
 # Full upgrade including configuration
 ./build/proxsave --upgrade

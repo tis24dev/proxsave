@@ -202,6 +202,9 @@ type Orchestrator struct {
 	versionUpdateAvailable bool
 	updateCurrentVersion   string
 	updateLatestVersion    string
+
+	// Unprivileged container context (computed once by CLI and injected into collectors).
+	unprivilegedContainerDetector func() (bool, string)
 }
 
 const tempDirCleanupAge = 24 * time.Hour
@@ -436,6 +439,31 @@ func (o *Orchestrator) SetTempDirRegistry(reg *TempDirRegistry) {
 	o.tempRegistry = reg
 }
 
+// SetUnprivilegedContainerContext injects the precomputed unprivileged-container
+// detection result into the orchestrator so that collectors can reuse it without
+// re-reading /proc and related files.
+//
+// The "details" string is intended for DEBUG logs.
+func (o *Orchestrator) SetUnprivilegedContainerContext(detected bool, details string) {
+	if o == nil {
+		return
+	}
+	d := detected
+	s := strings.TrimSpace(details)
+	o.unprivilegedContainerDetector = func() (bool, string) {
+		return d, s
+	}
+}
+
+func (o *Orchestrator) collectorDeps() backup.CollectorDeps {
+	if o == nil || o.unprivilegedContainerDetector == nil {
+		return backup.CollectorDeps{}
+	}
+	return backup.CollectorDeps{
+		DetectUnprivilegedContainer: o.unprivilegedContainerDetector,
+	}
+}
+
 func (o *Orchestrator) describeTelegramConfig() string {
 	return describeTelegramStatus(o.cfg)
 }
@@ -639,7 +667,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		}
 	}
 
-	collector := backup.NewCollector(o.logger, collectorConfig, tempDir, pType, o.dryRun)
+	collector := backup.NewCollectorWithDeps(o.logger, collectorConfig, tempDir, pType, o.dryRun, o.collectorDeps())
 
 	o.logger.Debug("Starting collector run (type=%s)", pType)
 	if err := collector.CollectAll(ctx); err != nil {

@@ -126,12 +126,18 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 
 	bootstrap.Printf("Latest available version: %s (current: %s)", latestVersion, currentVersion)
 
-	reader := bufio.NewReader(os.Stdin)
-	confirm, err := promptYesNo(ctx, reader, "Do you want to download and install this version now? (backup.env will be updated with any missing keys; a backup will be created) [y/N]: ", false)
-	if err != nil {
-		bootstrap.Error("ERROR: %v", err)
-		workflowErr = err
-		return types.ExitConfigError.Int()
+	confirm := args.UpgradeAutoYes
+	if confirm {
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "auto-confirm enabled (--upgrade y)")
+	} else {
+		reader := bufio.NewReader(os.Stdin)
+		var err error
+		confirm, err = promptYesNo(ctx, reader, "Do you want to download and install this version now? (backup.env will be updated with any missing keys; a backup will be created) [y/N]: ", false)
+		if err != nil {
+			bootstrap.Error("ERROR: %v", err)
+			workflowErr = err
+			return types.ExitConfigError.Int()
+		}
 	}
 	if !confirm {
 		bootstrap.Println("Upgrade cancelled by user; no changes were made.")

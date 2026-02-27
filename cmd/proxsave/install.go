@@ -15,6 +15,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -95,6 +96,13 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		if err := runPostInstallAuditCLI(ctx, reader, execInfo.ExecPath, configPath, bootstrap); err != nil {
 			return err
 		}
+
+		// Telegram setup (centralized bot): if enabled, guide the user through pairing
+		// and allow an explicit verification step with retry + skip.
+		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "telegram setup")
+		if err := runTelegramSetupCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
+			return err
+		}
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
@@ -115,6 +123,123 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "permissions status=%s", permStatus)
 
 	return nil
+}
+
+func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, configPath string, bootstrap *logging.BootstrapLogger) error {
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		if bootstrap != nil {
+			bootstrap.Warning("Telegram setup: unable to load config (skipping): %v", err)
+		}
+		return nil
+	}
+	if cfg == nil || !cfg.TelegramEnabled {
+		return nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(cfg.TelegramBotType))
+	if mode == "" {
+		mode = "centralized"
+	}
+	if mode == "personal" {
+		// No centralized pairing check exists for personal mode.
+		if bootstrap != nil {
+			bootstrap.Info("Telegram setup: personal mode selected (no centralized pairing check)")
+		}
+		return nil
+	}
+
+	fmt.Println("\n--- Telegram setup (optional) ---")
+	fmt.Println("You enabled Telegram notifications (centralized bot).")
+
+	info, idErr := identity.Detect(baseDir, nil)
+	if idErr != nil {
+		fmt.Printf("WARNING: Unable to compute server identity (non-blocking): %v\n", idErr)
+		if bootstrap != nil {
+			bootstrap.Warning("Telegram setup: identity detection failed (non-blocking): %v", idErr)
+		}
+		return nil
+	}
+
+	serverID := ""
+	if info != nil {
+		serverID = strings.TrimSpace(info.ServerID)
+	}
+	if serverID == "" {
+		fmt.Println("WARNING: Server ID unavailable; skipping Telegram setup.")
+		if bootstrap != nil {
+			bootstrap.Warning("Telegram setup: server ID unavailable; skipping")
+		}
+		return nil
+	}
+
+	fmt.Printf("Server ID: %s\n", serverID)
+	if info != nil && strings.TrimSpace(info.IdentityFile) != "" {
+		fmt.Printf("Identity file: %s\n", strings.TrimSpace(info.IdentityFile))
+	}
+	fmt.Println()
+	fmt.Println("1) Open Telegram and start @ProxmoxAN_bot")
+	fmt.Println("2) Send the Server ID above (digits only)")
+	fmt.Println("3) Verify pairing (recommended)")
+	fmt.Println()
+
+	check, err := promptYesNo(ctx, reader, "Check Telegram pairing now? [Y/n]: ", true)
+	if err != nil {
+		return wrapInstallError(err)
+	}
+	if !check {
+		fmt.Println("Skipped verification. You can verify later by running proxsave.")
+		if bootstrap != nil {
+			bootstrap.Info("Telegram setup: verification skipped by user")
+		}
+		return nil
+	}
+
+	serverHost := strings.TrimSpace(cfg.TelegramServerAPIHost)
+	if serverHost == "" {
+		serverHost = "https://bot.tis24.it:1443"
+	}
+
+	attempts := 0
+	for {
+		attempts++
+		status := notify.CheckTelegramRegistration(ctx, serverHost, serverID, nil)
+		if status.Code == 200 && status.Error == nil {
+			fmt.Println("✓ Telegram linked successfully.")
+			if bootstrap != nil {
+				bootstrap.Info("Telegram setup: verified (attempts=%d)", attempts)
+			}
+			return nil
+		}
+
+		msg := strings.TrimSpace(status.Message)
+		if msg == "" {
+			msg = "Registration not active yet"
+		}
+		fmt.Printf("Telegram: %s\n", msg)
+		switch status.Code {
+		case 403, 409:
+			fmt.Println("Hint: Start the bot, send the Server ID, then retry.")
+		case 422:
+			fmt.Println("Hint: The Server ID appears invalid. If this persists, re-run the installer.")
+		default:
+			if status.Error != nil {
+				fmt.Printf("Hint: Check failed: %v\n", status.Error)
+			}
+		}
+
+		retry, err := promptYesNo(ctx, reader, "Check again? [y/N]: ", false)
+		if err != nil {
+			return wrapInstallError(err)
+		}
+		if !retry {
+			fmt.Println("Verification not completed. You can retry later by running proxsave.")
+			if bootstrap != nil {
+				bootstrap.Info("Telegram setup: not verified (attempts=%d last=%d %s)", attempts, status.Code, msg)
+			}
+			return nil
+		}
+	}
 }
 
 func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath, configPath string, bootstrap *logging.BootstrapLogger) error {
