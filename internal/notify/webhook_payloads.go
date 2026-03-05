@@ -3,6 +3,7 @@ package notify
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -166,6 +167,55 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	logger.Debug("Discord payload built successfully with 1 embed and %d fields", len(fields))
 	return payload, nil
+}
+
+const discordMaxContentLength = 2000
+
+func buildDiscordContentSummary(data *NotificationData) string {
+	statusEmoji := GetStatusEmoji(data.Status)
+	proxmoxType := strings.ToUpper(data.ProxmoxType.String())
+	status := strings.ToUpper(data.Status.String())
+
+	headline := fmt.Sprintf("%s %s backup %s on %s", statusEmoji, proxmoxType, status, data.Hostname)
+
+	details := []string{}
+	if strings.TrimSpace(data.BackupSizeHR) != "" {
+		details = append(details, fmt.Sprintf("size %s", strings.TrimSpace(data.BackupSizeHR)))
+	}
+	if data.BackupDuration > 0 {
+		details = append(details, fmt.Sprintf("duration %s", FormatDuration(data.BackupDuration)))
+	}
+	if data.ErrorCount > 0 || data.WarningCount > 0 {
+		details = append(details, fmt.Sprintf("errors %d, warnings %d", data.ErrorCount, data.WarningCount))
+	}
+
+	if len(details) == 0 {
+		return headline
+	}
+	return headline + " • " + strings.Join(details, " • ")
+}
+
+func truncateDiscordContent(content string) (string, bool) {
+	if utf8.RuneCountInString(content) <= discordMaxContentLength {
+		return content, false
+	}
+
+	if discordMaxContentLength <= 1 {
+		return "…", true
+	}
+
+	var b strings.Builder
+	b.Grow(len(content))
+	count := 0
+	for _, r := range content {
+		if count >= discordMaxContentLength-1 {
+			break
+		}
+		b.WriteRune(r)
+		count++
+	}
+	b.WriteRune('…')
+	return b.String(), true
 }
 
 // buildSlackPayload builds a Slack-formatted webhook payload with blocks

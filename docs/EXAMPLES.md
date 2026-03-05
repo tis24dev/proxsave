@@ -535,6 +535,9 @@ WEBHOOK_DISCORD_ALERTS_URL=https://discord.com/api/webhooks/XXXX/YYYY
 WEBHOOK_DISCORD_ALERTS_FORMAT=discord
 WEBHOOK_DISCORD_ALERTS_METHOD=POST
 
+# Optional (Discord): uncomment if embeds look empty on some clients
+# WEBHOOK_DISCORD_ALERTS_DISCORD_CONTENT_ENABLED=true
+
 # Run backup
 ./build/proxsave
 # Result: Notifications sent to Telegram, Email, and Discord

@@ -1262,6 +1262,11 @@ func (c *Config) BuildWebhookConfig() *WebhookConfig {
 			}
 		}
 
+		discordOpts := WebhookDiscordOptions{
+			ContentEnabled: c.getBool(prefix+"DISCORD_CONTENT_ENABLED", false),
+			Content:        c.getString(prefix+"DISCORD_CONTENT", ""),
+		}
+
 		endpoints = append(endpoints, WebhookEndpoint{
 			Name:    name,
 			URL:     url,
@@ -1269,6 +1274,7 @@ func (c *Config) BuildWebhookConfig() *WebhookConfig {
 			Method:  method,
 			Headers: headers,
 			Auth:    auth,
+			Discord: discordOpts,
 		})
 	}
 
@@ -1363,7 +1369,20 @@ type WebhookEndpoint struct {
 	Method       string
 	Headers      map[string]string
 	Auth         WebhookAuth
+	Discord      WebhookDiscordOptions
 	CustomFields map[string]interface{}
+}
+
+// WebhookDiscordOptions holds Discord-specific webhook options.
+// These options are ignored for non-Discord formats.
+type WebhookDiscordOptions struct {
+	// ContentEnabled adds a short "content" text alongside embeds.
+	// This helps clients that don't render embeds reliably.
+	ContentEnabled bool
+
+	// Content overrides the fallback text when ContentEnabled is true.
+	// If empty, ProxSave generates an automatic summary.
+	Content string
 }
 
 // WebhookAuth holds authentication configuration for a webhook

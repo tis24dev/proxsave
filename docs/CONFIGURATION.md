@@ -912,6 +912,10 @@ WEBHOOK_DISCORD_ALERTS_AUTH_TOKEN=     # Bearer token
 WEBHOOK_DISCORD_ALERTS_AUTH_USER=      # Basic auth username
 WEBHOOK_DISCORD_ALERTS_AUTH_PASS=      # Basic auth password
 WEBHOOK_DISCORD_ALERTS_AUTH_SECRET=    # HMAC secret key
+
+# Discord-only: optional text fallback (helps if embeds are hidden on some clients)
+WEBHOOK_DISCORD_ALERTS_DISCORD_CONTENT_ENABLED=false  # true | false (default false)
+WEBHOOK_DISCORD_ALERTS_DISCORD_CONTENT=               # Optional; empty = auto-summary (max 2000 chars)
 ```
 
 **Supported formats**:

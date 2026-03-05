@@ -790,6 +790,8 @@ func TestBuildWebhookConfigParsesConfiguredEndpoints(t *testing.T) {
 			"WEBHOOK_ALERT_URL":         "https://example.com/alert",
 			"WEBHOOK_ALERT_FORMAT":      "lines",
 			"WEBHOOK_ALERT_METHOD":      "PUT",
+			"WEBHOOK_ALERT_DISCORD_CONTENT_ENABLED": "true",
+			"WEBHOOK_ALERT_DISCORD_CONTENT":         "Hello from ProxSave",
 			"WEBHOOK_ALERT_AUTH_TYPE":   "bearer",
 			"WEBHOOK_ALERT_AUTH_TOKEN":  "tok-123",
 			"WEBHOOK_ALERT_AUTH_USER":   "admin",
@@ -837,6 +839,13 @@ func TestBuildWebhookConfigParsesConfiguredEndpoints(t *testing.T) {
 	if alert.Auth.Type != "bearer" || alert.Auth.Token != "tok-123" || alert.Auth.User != "admin" || alert.Auth.Pass != "pass-123" || alert.Auth.Secret != "secret-xyz" {
 		t.Fatalf("alert auth = %+v; want bearer token-user-pass-secret", alert.Auth)
 	}
+	if !alert.Discord.ContentEnabled {
+		t.Fatalf("expected alert Discord.ContentEnabled to be true")
+	}
+	if alert.Discord.Content != "Hello from ProxSave" {
+		t.Fatalf("alert Discord.Content = %q; want %q", alert.Discord.Content, "Hello from ProxSave")
+	}
+
 	if alert.Headers["X-Trace"] != "12345" || alert.Headers["Authorization"] != "Bearer token123" {
 		t.Fatalf("alert headers = %+v; want parsed header values", alert.Headers)
 	}
@@ -853,6 +862,12 @@ func TestBuildWebhookConfigParsesConfiguredEndpoints(t *testing.T) {
 	}
 	if backup.Auth.Type != "none" {
 		t.Fatalf("backup auth type = %q; want none", backup.Auth.Type)
+	}
+	if backup.Discord.ContentEnabled {
+		t.Fatalf("expected backup Discord.ContentEnabled to be false by default")
+	}
+	if backup.Discord.Content != "" {
+		t.Fatalf("expected backup Discord.Content to be empty by default, got %q", backup.Discord.Content)
 	}
 	if len(backup.Headers) != 0 {
 		t.Fatalf("expected backup headers to be empty, got %+v", backup.Headers)
