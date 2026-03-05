@@ -1,6 +1,8 @@
 .PHONY: build test clean run build-release test-coverage lint fmt deps help coverage coverage-check
 
 COVERAGE_THRESHOLD ?= 50.0
+TOOLCHAIN_FROM_MOD := $(shell awk '/^toolchain /{print $$2}' go.mod 2>/dev/null)
+COVER_GOTOOLCHAIN := $(if $(TOOLCHAIN_FROM_MOD),$(TOOLCHAIN_FROM_MOD)+auto,auto)
 
 # Build del progetto
 build:
@@ -60,20 +62,20 @@ test:
 
 # Test con coverage
 test-coverage:
-	go test -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out
+	GOTOOLCHAIN=$(COVER_GOTOOLCHAIN) go test -coverprofile=coverage.out ./...
+	GOTOOLCHAIN=$(COVER_GOTOOLCHAIN) go tool cover -html=coverage.out
 
 # Full coverage report (all packages)
 coverage:
 	@echo "Running coverage across all packages..."
-	@go test -coverpkg=./... -coverprofile=coverage.out ./...
-	@go tool cover -func=coverage.out | tail -n 1
+	@GOTOOLCHAIN=$(COVER_GOTOOLCHAIN) go test -coverpkg=./... -coverprofile=coverage.out ./...
+	@GOTOOLCHAIN=$(COVER_GOTOOLCHAIN) go tool cover -func=coverage.out | tail -n 1
 
 # Enforce minimum coverage threshold
 coverage-check:
 	@echo "Running coverage check (threshold $(COVERAGE_THRESHOLD)% )..."
-	@go test -coverpkg=./... -coverprofile=coverage.out ./...
-	@total=$$(go tool cover -func=coverage.out | grep total: | awk '{print $$3}' | sed 's/%//'); \
+	@GOTOOLCHAIN=$(COVER_GOTOOLCHAIN) go test -coverpkg=./... -coverprofile=coverage.out ./...
+	@total=$$(GOTOOLCHAIN=$(COVER_GOTOOLCHAIN) go tool cover -func=coverage.out | grep total: | awk '{print $$3}' | sed 's/%//'); \
 		echo "Total coverage: $$total%"; \
 		if awk -v total="$$total" -v threshold="$(COVERAGE_THRESHOLD)" 'BEGIN { exit !(total+0 >= threshold+0) }'; then \
 			echo "Coverage check passed."; \
