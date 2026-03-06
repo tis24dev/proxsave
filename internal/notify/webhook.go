@@ -184,28 +184,6 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 		return fmt.Errorf("failed to build payload: %w", err)
 	}
 
-	if strings.EqualFold(format, "discord") && endpoint.Discord.ContentEnabled {
-		payloadMap, ok := payload.(map[string]interface{})
-		if !ok {
-			w.logger.Warning("Discord content enabled for '%s' but payload type is %T; skipping content", endpoint.Name, payload)
-		} else {
-			content := endpoint.Discord.Content
-			if strings.TrimSpace(content) == "" {
-				content = buildDiscordContentSummary(data)
-			}
-
-			content, truncated := truncateDiscordContent(content)
-			if truncated {
-				w.logger.Warning("Discord content for '%s' exceeded 2000 characters; truncated", endpoint.Name)
-			}
-
-			if strings.TrimSpace(content) != "" {
-				payloadMap["content"] = content
-				payload = payloadMap
-			}
-		}
-	}
-
 	payloadDuration := time.Since(payloadStart)
 	w.logger.Debug("Payload built successfully in %dms", payloadDuration.Milliseconds())
 
