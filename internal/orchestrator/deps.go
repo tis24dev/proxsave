@@ -16,6 +16,7 @@ import (
 // FS abstracts filesystem operations to simplify testing.
 type FS interface {
 	Stat(path string) (os.FileInfo, error)
+	Lstat(path string) (os.FileInfo, error)
 	ReadFile(path string) ([]byte, error)
 	Open(path string) (*os.File, error)
 	OpenFile(path string, flag int, perm fs.FileMode) (*os.File, error)
@@ -69,9 +70,10 @@ type Deps struct {
 
 type osFS struct{}
 
-func (osFS) Stat(path string) (os.FileInfo, error) { return os.Stat(path) }
-func (osFS) ReadFile(path string) ([]byte, error)  { return os.ReadFile(path) }
-func (osFS) Open(path string) (*os.File, error)    { return os.Open(path) }
+func (osFS) Stat(path string) (os.FileInfo, error)  { return os.Stat(path) }
+func (osFS) Lstat(path string) (os.FileInfo, error) { return os.Lstat(path) }
+func (osFS) ReadFile(path string) ([]byte, error)   { return os.ReadFile(path) }
+func (osFS) Open(path string) (*os.File, error)     { return os.Open(path) }
 func (osFS) OpenFile(path string, flag int, perm fs.FileMode) (*os.File, error) {
 	return os.OpenFile(path, flag, perm)
 }
