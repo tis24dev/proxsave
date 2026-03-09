@@ -400,6 +400,51 @@ func TestRestoreSafetyBackup_DoesNotFollowExistingSymlinkTargetPath(t *testing.T
 	}
 }
 
+func TestRestoreSafetyBackup_RejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "broken-escape.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+	outside := t.TempDir()
+
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore dir: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(restoreDir, "escape-link")); err != nil {
+		t.Fatalf("create escape symlink: %v", err)
+	}
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+	if err := tw.WriteHeader(&tar.Header{Name: "escape-link/missing/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+		t.Fatalf("write dir header failed: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive failed: %v", err)
+	}
+
+	if err := RestoreSafetyBackup(logger, backupPath, restoreDir); err != nil {
+		t.Fatalf("RestoreSafetyBackup failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(outside, "missing")); !os.IsNotExist(err) {
+		t.Fatalf("outside path should not be created, got err=%v", err)
+	}
+	if !strings.Contains(logBuf.String(), "Skipping archive entry") {
+		t.Fatalf("expected archive entry skip warning, logs=%q", logBuf.String())
+	}
+}
+
 func TestCleanupOldSafetyBackups(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 
@@ -664,6 +709,18 @@ func TestResolveAndCheckPathRejectsSymlinkEscape(t *testing.T) {
 
 	if _, err := resolveAndCheckPath(root, filepath.Join("escape-link", "data.txt")); err == nil {
 		t.Fatalf("expected symlink escape to be rejected")
+	}
+}
+
+func TestResolveAndCheckPathRejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape-link")); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	if _, err := resolveAndCheckPath(root, filepath.Join("escape-link", "missing", "data.txt")); err == nil {
+		t.Fatalf("expected broken symlink escape to be rejected")
 	}
 }
 

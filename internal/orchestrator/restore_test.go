@@ -334,6 +334,64 @@ func TestExtractSymlink_SecurityValidation(t *testing.T) {
 	}
 }
 
+func TestExtractTarEntry_RejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+
+	destRoot := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(destRoot, "escape-link")); err != nil {
+		t.Fatalf("create escape symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "escape-link/missing",
+		Typeflag: tar.TypeDir,
+		Mode:     0o755,
+	}
+
+	var tr *tar.Reader
+	err := extractTarEntry(tr, header, destRoot, logger)
+	if err == nil || !strings.Contains(err.Error(), "illegal path") {
+		t.Fatalf("expected illegal path error, got %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(outside, "missing")); !os.IsNotExist(err) {
+		t.Fatalf("outside path should not be created, got err=%v", err)
+	}
+}
+
+func TestExtractSymlink_RejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+
+	destRoot := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(destRoot, "escape-link")); err != nil {
+		t.Fatalf("create escape symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "escape-link/missing/file.txt",
+	}
+	target := filepath.Join(destRoot, header.Name)
+
+	err := extractSymlink(target, header, destRoot, logger)
+	if err == nil || !strings.Contains(err.Error(), "escapes root") {
+		t.Fatalf("expected escapes root error, got %v", err)
+	}
+
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("symlink should not be created, got err=%v", err)
+	}
+}
+
 func TestExtractTarEntry_DoesNotFollowExistingSymlinkTargetPath(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	orig := restoreFS
