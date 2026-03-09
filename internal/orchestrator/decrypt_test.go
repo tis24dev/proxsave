@@ -1575,14 +1575,15 @@ func TestPreparePlainBundle_SourceBundleSuccess(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create bundle with required files
+	archiveData := []byte("archive data")
 	manifestData, _ := json.Marshal(&backup.Manifest{
 		ArchivePath:    filepath.Join(dir, "archive.tar.xz"),
 		EncryptionMode: "none",
 	})
 	bundlePath := createTestBundle(t, []bundleEntry{
-		{name: "archive.tar.xz", data: []byte("archive data")},
+		{name: "archive.tar.xz", data: archiveData},
 		{name: "backup.metadata", data: manifestData},
-		{name: "backup.sha256", data: []byte("abc123  archive.tar.xz")},
+		{name: "backup.sha256", data: checksumLineForBytes("archive.tar.xz", archiveData)},
 	})
 
 	cand := &decryptCandidate{
@@ -2819,7 +2820,7 @@ func TestPreparePlainBundle_CopyFileSamePath(t *testing.T) {
 		t.Fatalf("write metadata: %v", err)
 	}
 	checksumPath := archivePath + ".sha256"
-	if err := os.WriteFile(checksumPath, []byte("abc123  backup.tar.xz"), 0o644); err != nil {
+	if err := os.WriteFile(checksumPath, checksumLineForBytes("backup.tar.xz", []byte("archive content")), 0o644); err != nil {
 		t.Fatalf("write checksum: %v", err)
 	}
 
@@ -2890,7 +2891,7 @@ func TestPreparePlainBundle_AgeDecryptionWithRclone(t *testing.T) {
 	tw.Write(manifestData)
 
 	// Add checksum
-	checksumData := []byte("abc123  backup.tar.xz.age")
+	checksumData := checksumLineForBytes("backup.tar.xz.age", archiveContent)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksumData)), Mode: 0o600})
 	tw.Write(checksumData)
 
@@ -3017,7 +3018,7 @@ func TestPreparePlainBundle_SourceBundleAdditional(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(manifestData)), Mode: 0o600})
 	tw.Write(manifestData)
 
-	checksumData := []byte("abc123  backup.tar.xz")
+	checksumData := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksumData)), Mode: 0o600})
 	tw.Write(checksumData)
 
@@ -3393,7 +3394,7 @@ func TestExtractBundleToWorkdir_OpenFileErrorOnExtract(t *testing.T) {
 	}
 
 	// Add checksum
-	checksum := []byte("checksum  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	if err := tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640}); err != nil {
 		t.Fatalf("write checksum header: %v", err)
 	}
@@ -3608,7 +3609,7 @@ func TestSelectDecryptCandidate_RequireEncryptedAllPlain(t *testing.T) {
 	tw.Write(metaJSON)
 
 	// Add checksum
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -3720,7 +3721,7 @@ exit 1
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -3771,7 +3772,7 @@ func TestPreparePlainBundle_StatErrorAfterExtract(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -3869,8 +3870,9 @@ func TestPreparePlainBundle_MkdirTempErrorWithRcloneCleanup(t *testing.T) {
 	metaJSON, _ := json.Marshal(backup.Manifest{EncryptionMode: "none", ArchivePath: "backup.tar.xz"})
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: 5, Mode: 0o640})
-	tw.Write([]byte("hash\n"))
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
+	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
+	tw.Write(checksum)
 	tw.Close()
 	bundleFile.Close()
 
@@ -4066,7 +4068,7 @@ func TestPreparePlainBundle_CopyFileError(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -4175,7 +4177,7 @@ func TestPreparePlainBundle_StatErrorOnPlainArchive(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -4311,7 +4313,7 @@ func TestPreparePlainBundle_GenerateChecksumErrorPath(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()

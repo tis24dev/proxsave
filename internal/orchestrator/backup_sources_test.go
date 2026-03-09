@@ -235,6 +235,7 @@ func TestDiscoverRcloneBackups_IncludesRawMetadata(t *testing.T) {
 		ProxmoxVersion: "8.1",
 		CreatedAt:      time.Date(2025, 12, 5, 12, 0, 0, 0, time.UTC),
 		EncryptionMode: "none",
+		SHA256:         checksumHexForBytes([]byte("node-backup-20251205")),
 	}
 	metaBytes, err := json.Marshal(&manifest)
 	if err != nil {
@@ -317,6 +318,7 @@ func TestDiscoverRcloneBackups_MixedCandidatesSortedByCreatedAt(t *testing.T) {
 		CreatedAt:      time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC),
 		EncryptionMode: "none",
 		ProxmoxType:    "pve",
+		SHA256:         checksumHexForBytes([]byte("x")),
 	}
 	rawNewestData, _ := json.Marshal(&rawNewest)
 	if err := os.WriteFile(rawNewestMeta, rawNewestData, 0o600); err != nil {
@@ -354,6 +356,7 @@ func TestDiscoverRcloneBackups_MixedCandidatesSortedByCreatedAt(t *testing.T) {
 		CreatedAt:      time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		EncryptionMode: "none",
 		ProxmoxType:    "pve",
+		SHA256:         checksumHexForBytes([]byte("x")),
 	}
 	rawOldData, _ := json.Marshal(&rawOld)
 	if err := os.WriteFile(rawOldMeta, rawOldData, 0o600); err != nil {
@@ -629,7 +632,7 @@ esac
 	return manifest, cleanup
 }
 
-func TestDiscoverBackupCandidates_NoLoggerStillCollectsRawArtifacts(t *testing.T) {
+func TestDiscoverBackupCandidates_NoLoggerSkipsRawArtifactsWithoutChecksumVerification(t *testing.T) {
 	tmpDir := t.TempDir()
 	archivePath := filepath.Join(tmpDir, "config.tar.xz")
 	if err := os.WriteFile(archivePath, []byte("dummy"), 0o600); err != nil {
@@ -656,13 +659,7 @@ func TestDiscoverBackupCandidates_NoLoggerStillCollectsRawArtifacts(t *testing.T
 	if err != nil {
 		t.Fatalf("discoverBackupCandidates() error = %v", err)
 	}
-	if len(candidates) != 1 {
-		t.Fatalf("discoverBackupCandidates() returned %d candidates; want 1", len(candidates))
-	}
-	if candidates[0].RawArchivePath != archivePath {
-		t.Fatalf("RawArchivePath = %q; want %q", candidates[0].RawArchivePath, archivePath)
-	}
-	if candidates[0].RawChecksumPath != "" {
-		t.Fatalf("RawChecksumPath should be empty when checksum missing; got %q", candidates[0].RawChecksumPath)
+	if len(candidates) != 0 {
+		t.Fatalf("discoverBackupCandidates() returned %d candidates; want 0", len(candidates))
 	}
 }

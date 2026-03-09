@@ -18,7 +18,8 @@ import (
 func writeRawBackup(t *testing.T, dir, name string) *backup.Manifest {
 	t.Helper()
 	archive := filepath.Join(dir, name)
-	if err := os.WriteFile(archive, []byte("data"), 0o640); err != nil {
+	archiveData := []byte("data")
+	if err := os.WriteFile(archive, archiveData, 0o640); err != nil {
 		t.Fatalf("write archive: %v", err)
 	}
 	manifest := &backup.Manifest{
@@ -31,7 +32,7 @@ func writeRawBackup(t *testing.T, dir, name string) *backup.Manifest {
 	if err := os.WriteFile(manifestPath, data, 0o640); err != nil {
 		t.Fatalf("write metadata: %v", err)
 	}
-	if err := os.WriteFile(archive+".sha256", []byte("checksum  file"), 0o640); err != nil {
+	if err := os.WriteFile(archive+".sha256", checksumLineForBytes(filepath.Base(archive), archiveData), 0o640); err != nil {
 		t.Fatalf("write checksum: %v", err)
 	}
 	return manifest
@@ -70,21 +71,23 @@ func TestRunDecryptWorkflow_BundleNotFound(t *testing.T) {
 func TestPreparePlainBundle_AllowsMissingRawChecksumSidecar(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "bad.bundle.tar")
-	if err := os.WriteFile(archive, []byte("data"), 0o640); err != nil {
+	archiveData := []byte("data")
+	if err := os.WriteFile(archive, archiveData, 0o640); err != nil {
 		t.Fatalf("write archive: %v", err)
 	}
 	manifest := &backup.Manifest{
 		ArchivePath: archive,
 		CreatedAt:   time.Now(),
 		Hostname:    "host",
+		SHA256:      checksumHexForBytes(archiveData),
 	}
 	metaPath := archive + ".metadata"
 	data, _ := json.Marshal(manifest)
 	if err := os.WriteFile(metaPath, data, 0o640); err != nil {
 		t.Fatalf("write metadata: %v", err)
 	}
-	// No checksum file: ProxSave should still allow restore/decrypt to proceed
-	// (it re-computes checksums on the staged/plain archive anyway).
+	// No checksum sidecar: restore/decrypt should still proceed when the manifest
+	// already carries the expected archive checksum.
 
 	cand := &decryptCandidate{
 		Manifest:        manifest,
@@ -100,7 +103,7 @@ func TestPreparePlainBundle_AllowsMissingRawChecksumSidecar(t *testing.T) {
 	t.Cleanup(func() { restoreFS = osFS{} })
 
 	if _, err := preparePlainBundle(context.Background(), reader, cand, "", logging.New(types.LogLevelInfo, false)); err != nil {
-		t.Fatalf("expected missing checksum to be tolerated, got error: %v", err)
+		t.Fatalf("expected manifest checksum to cover missing sidecar, got error: %v", err)
 	}
 }
 

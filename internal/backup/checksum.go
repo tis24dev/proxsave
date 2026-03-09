@@ -35,6 +35,30 @@ type Manifest struct {
 	ClusterMode      string    `json:"cluster_mode,omitempty"`
 }
 
+// NormalizeChecksum validates and normalizes a SHA256 checksum string.
+func NormalizeChecksum(value string) (string, error) {
+	checksum := strings.ToLower(strings.TrimSpace(value))
+	if checksum == "" {
+		return "", fmt.Errorf("checksum is empty")
+	}
+	if len(checksum) != sha256.Size*2 {
+		return "", fmt.Errorf("checksum must be %d hex characters, got %d", sha256.Size*2, len(checksum))
+	}
+	if _, err := hex.DecodeString(checksum); err != nil {
+		return "", fmt.Errorf("checksum is not valid hex: %w", err)
+	}
+	return checksum, nil
+}
+
+// ParseChecksumData extracts a SHA256 checksum from checksum file contents.
+func ParseChecksumData(data []byte) (string, error) {
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("checksum file is empty")
+	}
+	return NormalizeChecksum(fields[0])
+}
+
 // GenerateChecksum calculates SHA256 checksum of a file
 func GenerateChecksum(ctx context.Context, logger *logging.Logger, filePath string) (string, error) {
 	logger.Debug("Generating SHA256 checksum for: %s", filePath)
@@ -105,16 +129,21 @@ func CreateManifest(ctx context.Context, logger *logging.Logger, manifest *Manif
 func VerifyChecksum(ctx context.Context, logger *logging.Logger, filePath, expectedChecksum string) (bool, error) {
 	logger.Debug("Verifying checksum for: %s", filePath)
 
+	normalizedExpected, err := NormalizeChecksum(expectedChecksum)
+	if err != nil {
+		return false, fmt.Errorf("invalid expected checksum: %w", err)
+	}
+
 	actualChecksum, err := GenerateChecksum(ctx, logger, filePath)
 	if err != nil {
 		return false, fmt.Errorf("failed to generate checksum: %w", err)
 	}
 
-	matches := actualChecksum == expectedChecksum
+	matches := actualChecksum == normalizedExpected
 	if matches {
 		logger.Debug("Checksum verification passed")
 	} else {
-		logger.Warning("Checksum mismatch! Expected: %s, Got: %s", expectedChecksum, actualChecksum)
+		logger.Warning("Checksum mismatch! Expected: %s, Got: %s", normalizedExpected, actualChecksum)
 	}
 
 	return matches, nil
@@ -205,9 +234,8 @@ func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) {
 func loadLegacyChecksum(archivePath string, legacy *Manifest) {
 	// Attempt to load checksum from legacy .sha256 file
 	if shaData, err := os.ReadFile(archivePath + ".sha256"); err == nil {
-		fields := strings.Fields(string(shaData))
-		if len(fields) > 0 {
-			legacy.SHA256 = fields[0]
+		if checksum, parseErr := ParseChecksumData(shaData); parseErr == nil {
+			legacy.SHA256 = checksum
 		}
 	}
 }

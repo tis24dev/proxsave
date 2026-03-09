@@ -145,8 +145,9 @@ ENCRYPTION_MODE=age
 	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
 		t.Fatalf("failed to write metadata: %v", err)
 	}
+	expectedSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	shaPath := archivePath + ".sha256"
-	if err := os.WriteFile(shaPath, []byte("deadbeef "+filepath.Base(archivePath)), 0644); err != nil {
+	if err := os.WriteFile(shaPath, []byte(expectedSHA+" "+filepath.Base(archivePath)), 0644); err != nil {
 		t.Fatalf("failed to write sha file: %v", err)
 	}
 
@@ -163,7 +164,7 @@ ENCRYPTION_MODE=age
 	if manifest.Hostname != "legacy-host" || manifest.ScriptVersion != "legacy-1.0" {
 		t.Fatalf("legacy metadata not parsed correctly: %+v", manifest)
 	}
-	if manifest.SHA256 != "deadbeef" {
+	if manifest.SHA256 != expectedSHA {
 		t.Fatalf("expected SHA256 from sidecar, got %q", manifest.SHA256)
 	}
 	if manifest.EncryptionMode != "age" {

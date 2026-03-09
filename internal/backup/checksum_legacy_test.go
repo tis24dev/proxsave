@@ -28,7 +28,8 @@ func TestLoadLegacyManifestWithShaAndFallbackEncryption(t *testing.T) {
 		t.Fatalf("write metadata: %v", err)
 	}
 
-	shaLine := "deadbeef  " + filepath.Base(archive) + "\n"
+	expectedSHA := strings.Repeat("a", 64)
+	shaLine := expectedSHA + "  " + filepath.Base(archive) + "\n"
 	if err := os.WriteFile(archive+".sha256", []byte(shaLine), 0o640); err != nil {
 		t.Fatalf("write sha256: %v", err)
 	}
@@ -50,8 +51,8 @@ func TestLoadLegacyManifestWithShaAndFallbackEncryption(t *testing.T) {
 	if m.EncryptionMode != "plain" {
 		t.Fatalf("expected fallback encryption mode plain, got %s", m.EncryptionMode)
 	}
-	if m.SHA256 != "deadbeef" {
-		t.Fatalf("expected sha256 deadbeef, got %s", m.SHA256)
+	if m.SHA256 != expectedSHA {
+		t.Fatalf("expected sha256 %s, got %s", expectedSHA, m.SHA256)
 	}
 	if time.Since(m.CreatedAt) > time.Minute {
 		t.Fatalf("unexpected CreatedAt too old: %v", m.CreatedAt)

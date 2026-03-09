@@ -204,7 +204,7 @@ func TestPreparePlainBundleTUICopiesRawArtifacts(t *testing.T) {
 	if err := os.WriteFile(rawMetadata, []byte(`{"manifest":true}`), 0o640); err != nil {
 		t.Fatalf("write metadata: %v", err)
 	}
-	if err := os.WriteFile(rawChecksum, []byte("checksum  backup.tar\n"), 0o640); err != nil {
+	if err := os.WriteFile(rawChecksum, checksumLineForBytes("backup.tar", []byte("payload-data")), 0o640); err != nil {
 		t.Fatalf("write checksum: %v", err)
 	}
 

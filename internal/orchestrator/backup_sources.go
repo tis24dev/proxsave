@@ -130,6 +130,7 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 	emptyEntries := 0
 	nonCandidateEntries := 0
 	manifestErrors := 0
+	integrityMissing := 0
 	logDebug(logger, "Cloud (rclone): scanned %d entries from rclone lsf output", totalEntries)
 
 	snapshot := make(map[string]struct{}, len(lines))
@@ -259,6 +260,11 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 			if strings.TrimSpace(displayBase) == "" {
 				displayBase = filepath.Base(baseNameFromRemoteRef(item.remoteArchive))
 			}
+			if item.remoteChecksum == "" && strings.TrimSpace(manifest.SHA256) == "" {
+				integrityMissing++
+				logWarning(logger, "Skipping rclone backup %s: no checksum verification available", item.filename)
+				continue
+			}
 			candidates = append(candidates, &decryptCandidate{
 				Manifest:        manifest,
 				Source:          sourceRaw,
@@ -292,11 +298,12 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 	logging.DebugStep(
 		logger,
 		"discover rclone backups",
-		"summary entries=%d empty=%d non_candidate=%d manifest_errors=%d accepted=%d elapsed=%s",
+		"summary entries=%d empty=%d non_candidate=%d manifest_errors=%d integrity_missing=%d accepted=%d elapsed=%s",
 		totalEntries,
 		emptyEntries,
 		nonCandidateEntries,
 		manifestErrors,
+		integrityMissing,
 		len(candidates),
 		time.Since(start),
 	)
@@ -336,6 +343,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 	metadataMissingArchive := 0
 	metadataManifestErrors := 0
 	checksumMissing := 0
+	integrityUnavailable := 0
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -394,9 +402,10 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 			}
 			logging.DebugStep(logger, "discover backup candidates", "raw candidate accepted: %s created_at=%s", name, manifest.CreatedAt.Format(time.RFC3339))
 
-			// If checksum is missing from both file and manifest, warn user
 			if !hasChecksum && manifest.SHA256 == "" {
-				logWarning(logger, "Backup %s has no checksum verification available", baseName)
+				integrityUnavailable++
+				logWarning(logger, "Skipping backup %s: no checksum verification available", baseName)
+				continue
 			}
 
 			rawBases[baseName] = struct{}{}
@@ -418,7 +427,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 	logging.DebugStep(
 		logger,
 		"discover backup candidates",
-		"summary entries=%d files=%d dirs=%d bundles=%d bundle_manifest_errors=%d metadata=%d metadata_duplicate=%d metadata_missing_archive=%d metadata_manifest_errors=%d checksum_missing=%d candidates=%d",
+		"summary entries=%d files=%d dirs=%d bundles=%d bundle_manifest_errors=%d metadata=%d metadata_duplicate=%d metadata_missing_archive=%d metadata_manifest_errors=%d checksum_missing=%d integrity_unavailable=%d candidates=%d",
 		len(entries),
 		filesSeen,
 		dirsSkipped,
@@ -429,6 +438,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 		metadataMissingArchive,
 		metadataManifestErrors,
 		checksumMissing,
+		integrityUnavailable,
 		len(candidates),
 	)
 	return candidates, nil
