@@ -4,17 +4,35 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 )
 
+func waitForSignal(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timeout waiting for %s", name)
+	}
+}
+
 func TestStat_ReturnsTimeoutError(t *testing.T) {
 	prev := osStat
-	defer func() { osStat = prev }()
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	defer func() {
+		close(unblock)
+		waitForSignal(t, finished, "stat completion")
+		osStat = prev
+	}()
 
 	osStat = func(string) (os.FileInfo, error) {
-		select {}
+		<-unblock
+		close(finished)
+		return nil, os.ErrNotExist
 	}
 
 	start := time.Now()
@@ -29,10 +47,18 @@ func TestStat_ReturnsTimeoutError(t *testing.T) {
 
 func TestReadDir_ReturnsTimeoutError(t *testing.T) {
 	prev := osReadDir
-	defer func() { osReadDir = prev }()
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	defer func() {
+		close(unblock)
+		waitForSignal(t, finished, "readdir completion")
+		osReadDir = prev
+	}()
 
 	osReadDir = func(string) ([]os.DirEntry, error) {
-		select {}
+		<-unblock
+		close(finished)
+		return nil, nil
 	}
 
 	start := time.Now()
@@ -47,10 +73,18 @@ func TestReadDir_ReturnsTimeoutError(t *testing.T) {
 
 func TestStatfs_ReturnsTimeoutError(t *testing.T) {
 	prev := syscallStatfs
-	defer func() { syscallStatfs = prev }()
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	defer func() {
+		close(unblock)
+		waitForSignal(t, finished, "statfs completion")
+		syscallStatfs = prev
+	}()
 
 	syscallStatfs = func(string, *syscall.Statfs_t) error {
-		select {}
+		<-unblock
+		close(finished)
+		return nil
 	}
 
 	start := time.Now()
@@ -71,4 +105,47 @@ func TestStat_PropagatesContextCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Stat err = %v; want context.Canceled", err)
 	}
+}
+
+func TestStat_DoesNotSpawnPastLimiterCapacity(t *testing.T) {
+	prevStat := osStat
+	prevLimiter := fsOpLimiter
+	defer func() {
+		osStat = prevStat
+		fsOpLimiter = prevLimiter
+	}()
+
+	fsOpLimiter = newOperationLimiter(1)
+
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	var calls atomic.Int32
+	osStat = func(string) (os.FileInfo, error) {
+		calls.Add(1)
+		<-unblock
+		close(finished)
+		return nil, os.ErrNotExist
+	}
+
+	_, err := Stat(context.Background(), "/first", 25*time.Millisecond)
+	if err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("first Stat err = %v; want timeout", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("calls after first timeout = %d; want 1", got)
+	}
+	if got := fsOpLimiter.inflight(); got != 1 {
+		t.Fatalf("inflight after first timeout = %d; want 1", got)
+	}
+
+	_, err = Stat(context.Background(), "/second", 25*time.Millisecond)
+	if err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("second Stat err = %v; want timeout", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("calls after limiter saturation = %d; want 1", got)
+	}
+
+	close(unblock)
+	waitForSignal(t, finished, "limited stat completion")
 }
