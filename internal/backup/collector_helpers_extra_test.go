@@ -1,6 +1,9 @@
 package backup
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSummarizeCommandOutputText(t *testing.T) {
 	if got := summarizeCommandOutputText(""); got != "(no stdout/stderr)" {
@@ -36,5 +39,27 @@ func TestSanitizeFilenameExtra(t *testing.T) {
 		if got := sanitizeFilename(in); got != expected {
 			t.Fatalf("sanitizeFilename(%s)=%s want %s", in, got, expected)
 		}
+	}
+}
+
+func TestCollectorPathKey(t *testing.T) {
+	if got := collectorPathKey("store1"); got != "store1" {
+		t.Fatalf("collectorPathKey(store1)=%q want %q", got, "store1")
+	}
+
+	unsafe := "../evil"
+	got := collectorPathKey(unsafe)
+	if got == unsafe {
+		t.Fatalf("collectorPathKey(%q) should not keep unsafe value", unsafe)
+	}
+	if got == sanitizeFilename(unsafe) {
+		t.Fatalf("collectorPathKey(%q) should add a disambiguating suffix", unsafe)
+	}
+	if !strings.HasPrefix(got, "__evil") {
+		t.Fatalf("collectorPathKey(%q)=%q should start with sanitized prefix", unsafe, got)
+	}
+
+	if a, b := collectorPathKey("a/b"), collectorPathKey("a_b"); a == b {
+		t.Fatalf("collectorPathKey should avoid collisions: %q == %q", a, b)
 	}
 }

@@ -30,6 +30,10 @@ type pveStorageEntry struct {
 	Status  string
 }
 
+func (s pveStorageEntry) pathKey() string {
+	return collectorPathKey(s.Name)
+}
+
 type pveRuntimeInfo struct {
 	Nodes    []string
 	Storages []pveStorageEntry
@@ -1176,7 +1180,7 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 			storage.Path,
 			storage.Content))
 
-		metaDir := filepath.Join(baseDir, storage.Name)
+		metaDir := filepath.Join(baseDir, storage.pathKey())
 		if err := c.ensureDir(metaDir); err != nil {
 			c.logger.Warning("Failed to create metadata directory for %s: %v", storage.Name, err)
 			continue
@@ -1318,9 +1322,11 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 	var totalFiles int64
 	var totalSize int64
 
+	storageKey := storage.pathKey()
+
 	var smallDir string
 	if c.config.BackupSmallPVEBackups && c.config.MaxPVEBackupSizeBytes > 0 {
-		smallDir = filepath.Join(c.tempDir, "var/lib/pve-cluster/small_backups", storage.Name)
+		smallDir = filepath.Join(c.tempDir, "var/lib/pve-cluster/small_backups", storageKey)
 		if err := c.ensureDir(smallDir); err != nil {
 			c.logger.Warning("Cannot create small backups directory %s: %v", smallDir, err)
 			smallDir = ""
@@ -1330,7 +1336,7 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 	includePattern := strings.TrimSpace(c.config.PVEBackupIncludePattern)
 	var includeDir string
 	if includePattern != "" {
-		includeDir = filepath.Join(c.tempDir, "var/lib/pve-cluster/selected_backups", storage.Name)
+		includeDir = filepath.Join(c.tempDir, "var/lib/pve-cluster/selected_backups", storageKey)
 		if err := c.ensureDir(includeDir); err != nil {
 			c.logger.Warning("Cannot create selected backups directory %s: %v", includeDir, err)
 			includeDir = ""
@@ -1467,7 +1473,7 @@ type patternWriter struct {
 
 func newPatternWriter(storageName, storagePath, analysisDir, pattern string, dryRun bool) (*patternWriter, error) {
 	clean := cleanPatternName(pattern)
-	filename := fmt.Sprintf("%s_%s_list.txt", storageName, clean)
+	filename := fmt.Sprintf("%s_%s_list.txt", collectorPathKey(storageName), clean)
 	filePath := filepath.Join(analysisDir, filename)
 
 	// In dry-run mode, create a writer without an actual file
@@ -1593,7 +1599,7 @@ func (c *Collector) writePatternSummary(storage pveStorageEntry, analysisDir str
 		return nil
 	}
 
-	summaryPath := filepath.Join(analysisDir, fmt.Sprintf("%s_backup_summary.txt", storage.Name))
+	summaryPath := filepath.Join(analysisDir, fmt.Sprintf("%s_backup_summary.txt", storage.pathKey()))
 	file, err := os.OpenFile(summaryPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0640)
 	if err != nil {
 		return err

@@ -830,6 +830,54 @@ func TestCollectPVEStorageMetadata(t *testing.T) {
 	}
 }
 
+func TestCollectPVEStorageMetadata_UsesPathSafeKeyForUnsafeStorageName(t *testing.T) {
+	collector := newPVECollector(t)
+	collector.config.BackupSmallPVEBackups = true
+	collector.config.MaxPVEBackupSizeBytes = 1024 * 1024
+	collector.config.PVEBackupIncludePattern = "vm-100"
+
+	ctx := context.Background()
+	storageDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(storageDir, "vm-100-backup.vma"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("write backup file: %v", err)
+	}
+
+	storage := pveStorageEntry{Name: "../escape", Path: storageDir, Type: "dir"}
+	if err := collector.collectPVEStorageMetadata(ctx, []pveStorageEntry{storage}); err != nil {
+		t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
+	}
+
+	key := collectorPathKey(storage.Name)
+	baseDir := filepath.Join(collector.tempDir, "var/lib/pve-cluster/info/datastores", key)
+	for _, path := range []string{
+		filepath.Join(baseDir, "metadata.json"),
+		filepath.Join(baseDir, "backup_analysis", fmt.Sprintf("%s_backup_summary.txt", key)),
+		filepath.Join(baseDir, "backup_analysis", fmt.Sprintf("%s__vma_list.txt", key)),
+		filepath.Join(collector.tempDir, "var/lib/pve-cluster/small_backups", key, "vm-100-backup.vma"),
+		filepath.Join(collector.tempDir, "var/lib/pve-cluster/selected_backups", key, "vm-100-backup.vma"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected safe output %s: %v", path, err)
+		}
+	}
+
+	metaPath := filepath.Join(baseDir, "metadata.json")
+	metaBytes, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read metadata.json: %v", err)
+	}
+	if !strings.Contains(string(metaBytes), storage.Name) {
+		t.Fatalf("metadata should keep raw storage name, got %s", string(metaBytes))
+	}
+
+	rawMetaPath := filepath.Join(collector.tempDir, "var/lib/pve-cluster/info/datastores", storage.Name, "metadata.json")
+	if rawMetaPath != metaPath {
+		if _, err := os.Stat(rawMetaPath); !os.IsNotExist(err) {
+			t.Fatalf("raw storage metadata path should not exist (%s), got err=%v", rawMetaPath, err)
+		}
+	}
+}
+
 func TestCollectPVEStorageMetadata_SkipReasonsAreUserFriendly(t *testing.T) {
 	boolPtr := func(v bool) *bool {
 		b := v

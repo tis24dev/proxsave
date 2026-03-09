@@ -383,9 +383,10 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 	// Datastore usage details
 	if c.config.BackupDatastoreConfigs && len(datastores) > 0 {
 		for _, ds := range datastores {
+			dsKey := ds.pathKey()
 			c.safeCmdOutput(ctx,
 				fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", ds.Name),
-				filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", ds.Name)),
+				filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", dsKey)),
 				fmt.Sprintf("Datastore %s status", ds.Name),
 				false)
 		}

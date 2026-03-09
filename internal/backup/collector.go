@@ -3,6 +3,8 @@ package backup
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -1178,6 +1180,21 @@ func sanitizeFilename(name string) string {
 		clean = "entry"
 	}
 	return clean
+}
+
+func collectorPathKey(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return "entry"
+	}
+
+	safe := sanitizeFilename(trimmed)
+	if safe == trimmed {
+		return safe
+	}
+
+	sum := sha256.Sum256([]byte(trimmed))
+	return fmt.Sprintf("%s_%s", safe, hex.EncodeToString(sum[:4]))
 }
 
 // GetStats returns current collection statistics

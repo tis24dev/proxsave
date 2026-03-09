@@ -22,6 +22,10 @@ type pbsDatastore struct {
 	Comment string
 }
 
+func (ds pbsDatastore) pathKey() string {
+	return collectorPathKey(ds.Name)
+}
+
 var listNamespacesFunc = pbs.ListNamespaces
 
 // collectDatastoreConfigs collects detailed datastore configurations
@@ -38,10 +42,12 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
 	}
 
 	for _, ds := range datastores {
+		dsKey := ds.pathKey()
+
 		// Get datastore configuration details
 		c.safeCmdOutput(ctx,
 			fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", ds.Name),
-			filepath.Join(datastoreDir, fmt.Sprintf("%s_config.json", ds.Name)),
+			filepath.Join(datastoreDir, fmt.Sprintf("%s_config.json", dsKey)),
 			fmt.Sprintf("Datastore %s configuration", ds.Name),
 			false)
 
@@ -60,7 +66,7 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
 func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatastore, datastoreDir string) error {
 	c.logger.Debug("Collecting namespaces for datastore %s (path: %s)", ds.Name, ds.Path)
 	// Write location is deterministic; if excluded, skip the whole operation.
-	outputPath := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.Name))
+	outputPath := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.pathKey()))
 	if c.shouldExclude(outputPath) {
 		c.incFilesSkipped()
 		return nil
@@ -214,16 +220,17 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 	start := time.Now()
 	c.logger.Debug("PXAR: scanning datastore %s at %s", ds.Name, ds.Path)
 
-	dsDir := filepath.Join(metaRoot, ds.Name)
+	dsKey := ds.pathKey()
+	dsDir := filepath.Join(metaRoot, dsKey)
 	if err := c.ensureDir(dsDir); err != nil {
 		return fmt.Errorf("failed to create PXAR metadata directory for %s: %w", ds.Name, err)
 	}
 
 	for _, base := range []string{
-		filepath.Join(selectedRoot, ds.Name, "vm"),
-		filepath.Join(selectedRoot, ds.Name, "ct"),
-		filepath.Join(smallRoot, ds.Name, "vm"),
-		filepath.Join(smallRoot, ds.Name, "ct"),
+		filepath.Join(selectedRoot, dsKey, "vm"),
+		filepath.Join(selectedRoot, dsKey, "ct"),
+		filepath.Join(smallRoot, dsKey, "vm"),
+		filepath.Join(smallRoot, dsKey, "ct"),
 	} {
 		if err := c.ensureDir(base); err != nil {
 			c.logger.Debug("Failed to prepare PXAR directory %s: %v", base, err)
@@ -278,7 +285,7 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 		return err
 	}
 
-	if err := c.writePxarSubdirReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_subdirs.txt", ds.Name)), ds, ioTimeout); err != nil {
+	if err := c.writePxarSubdirReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_subdirs.txt", dsKey)), ds, ioTimeout); err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
 			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): subdir report timed out (%v)", ds.Name, ds.Path, err)
 			return nil
@@ -286,7 +293,7 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 		return err
 	}
 
-	if err := c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_vm_pxar_list.txt", ds.Name)), ds, "vm", ioTimeout); err != nil {
+	if err := c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_vm_pxar_list.txt", dsKey)), ds, "vm", ioTimeout); err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
 			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): VM list report timed out (%v)", ds.Name, ds.Path, err)
 			return nil
@@ -294,7 +301,7 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 		return err
 	}
 
-	if err := c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_ct_pxar_list.txt", ds.Name)), ds, "ct", ioTimeout); err != nil {
+	if err := c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_ct_pxar_list.txt", dsKey)), ds, "ct", ioTimeout); err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
 			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): CT list report timed out (%v)", ds.Name, ds.Path, err)
 			return nil

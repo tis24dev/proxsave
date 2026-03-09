@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/pbs"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestGetDatastoreListSuccessWithOverrides(t *testing.T) {
@@ -330,6 +331,166 @@ func TestCollectDatastoreConfigsDryRun(t *testing.T) {
 	nsFile := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "datastores", "store1_namespaces.json")
 	if _, err := os.Stat(nsFile); err != nil {
 		t.Fatalf("expected namespaces file, got %v", err)
+	}
+}
+
+func TestCollectDatastoreConfigs_UsesPathSafeKeyForUnsafeDatastoreName(t *testing.T) {
+	unsafeName := "../escape"
+	expectedKey := collectorPathKey(unsafeName)
+
+	stubListNamespaces(t, func(_ context.Context, name, path string, _ time.Duration) ([]pbs.Namespace, bool, error) {
+		if name != unsafeName || path != "/fake" {
+			t.Fatalf("unexpected datastore args name=%q path=%q", name, path)
+		}
+		return []pbs.Namespace{{Ns: ""}}, false, nil
+	})
+
+	var seenArgs []string
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			if name != "proxmox-backup-manager" {
+				return nil, fmt.Errorf("unexpected command %s", name)
+			}
+			seenArgs = append([]string(nil), args...)
+			return []byte(`{"ok":true}`), nil
+		},
+	})
+
+	ds := pbsDatastore{Name: unsafeName, Path: "/fake"}
+	if err := collector.collectDatastoreConfigs(context.Background(), []pbsDatastore{ds}); err != nil {
+		t.Fatalf("collectDatastoreConfigs failed: %v", err)
+	}
+
+	if len(seenArgs) < 3 || seenArgs[0] != "datastore" || seenArgs[1] != "show" || seenArgs[2] != unsafeName {
+		t.Fatalf("expected raw datastore name in command args, got %v", seenArgs)
+	}
+
+	datastoreDir := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "datastores")
+	safeConfig := filepath.Join(datastoreDir, fmt.Sprintf("%s_config.json", expectedKey))
+	safeNamespaces := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", expectedKey))
+	for _, path := range []string{safeConfig, safeNamespaces} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected safe output %s: %v", path, err)
+		}
+	}
+
+	rawConfig := filepath.Join(datastoreDir, fmt.Sprintf("%s_config.json", unsafeName))
+	rawNamespaces := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", unsafeName))
+	for _, path := range []string{rawConfig, rawNamespaces} {
+		if path == safeConfig || path == safeNamespaces {
+			continue
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("raw output path should not exist (%s), got err=%v", path, err)
+		}
+	}
+}
+
+func TestCollectPBSPxarMetadata_UsesPathSafeKeyForUnsafeDatastoreName(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := GetDefaultCollectorConfig()
+	collector := NewCollector(newTestLogger(), cfg, tmp, types.ProxmoxBS, false)
+
+	dsPath := filepath.Join(tmp, "datastore")
+	for _, sub := range []string{"vm", "ct"} {
+		if err := os.MkdirAll(filepath.Join(dsPath, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dsPath, "vm", "backup1.pxar"), []byte("data"), 0o640); err != nil {
+		t.Fatalf("write vm pxar: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dsPath, "ct", "backup2.pxar"), []byte("data"), 0o640); err != nil {
+		t.Fatalf("write ct pxar: %v", err)
+	}
+
+	ds := pbsDatastore{Name: "../escape", Path: dsPath, Comment: "unsafe"}
+	if err := collector.collectPBSPxarMetadata(context.Background(), []pbsDatastore{ds}); err != nil {
+		t.Fatalf("collectPBSPxarMetadata failed: %v", err)
+	}
+
+	dsKey := collectorPathKey(ds.Name)
+	base := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata", dsKey)
+	for _, path := range []string{
+		filepath.Join(base, "metadata.json"),
+		filepath.Join(base, fmt.Sprintf("%s_subdirs.txt", dsKey)),
+		filepath.Join(base, fmt.Sprintf("%s_vm_pxar_list.txt", dsKey)),
+		filepath.Join(base, fmt.Sprintf("%s_ct_pxar_list.txt", dsKey)),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected safe PXAR output %s: %v", path, err)
+		}
+	}
+
+	metaBytes, err := os.ReadFile(filepath.Join(base, "metadata.json"))
+	if err != nil {
+		t.Fatalf("read metadata.json: %v", err)
+	}
+	if !strings.Contains(string(metaBytes), ds.Name) {
+		t.Fatalf("metadata should keep raw datastore name, got %s", string(metaBytes))
+	}
+
+	selectedVM := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "selected", dsKey, "vm")
+	smallVM := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "small", dsKey, "vm")
+	for _, path := range []string{selectedVM, smallVM} {
+		if info, err := os.Stat(path); err != nil || !info.IsDir() {
+			t.Fatalf("expected safe PXAR directory %s, got err=%v", path, err)
+		}
+	}
+
+	rawBase := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata", ds.Name)
+	if rawBase != base {
+		if _, err := os.Stat(rawBase); !os.IsNotExist(err) {
+			t.Fatalf("raw PXAR directory should not exist (%s), got err=%v", rawBase, err)
+		}
+	}
+}
+
+func TestCollectPBSCommands_UsesPathSafeKeyForUnsafeDatastoreName(t *testing.T) {
+	pbsRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pbsRoot, "tape.cfg"), []byte("ok"), 0o640); err != nil {
+		t.Fatalf("write tape.cfg: %v", err)
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = pbsRoot
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			return "/bin/" + name, nil
+		},
+		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			return []byte(fmt.Sprintf("%s %s", name, strings.Join(args, " "))), nil
+		},
+	})
+
+	ds := pbsDatastore{Name: "../escape", Path: "/data/escape"}
+	if err := collector.collectPBSCommands(context.Background(), []pbsDatastore{ds}); err != nil {
+		t.Fatalf("collectPBSCommands error: %v", err)
+	}
+
+	key := collectorPathKey(ds.Name)
+	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
+	safePath := filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", key))
+	if _, err := os.Stat(safePath); err != nil {
+		t.Fatalf("expected safe datastore status file: %v", err)
+	}
+	data, err := os.ReadFile(safePath)
+	if err != nil {
+		t.Fatalf("read datastore status file: %v", err)
+	}
+	if !strings.Contains(string(data), ds.Name) {
+		t.Fatalf("status file should reflect raw datastore name in command output, got %s", string(data))
+	}
+
+	rawPath := filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", ds.Name))
+	if rawPath != safePath {
+		if _, err := os.Stat(rawPath); !os.IsNotExist(err) {
+			t.Fatalf("raw datastore status path should not exist (%s), got err=%v", rawPath, err)
+		}
 	}
 }
 
