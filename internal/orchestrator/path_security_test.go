@@ -52,6 +52,48 @@ func TestResolvePathWithinRootFS_RejectsSymlinkLoop(t *testing.T) {
 	}
 }
 
+func TestResolvePathWithinRootFS_ClassifiesPathComponentNotDirectoryAsOperational(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "deep")
+	if err := os.WriteFile(blocker, []byte("block"), 0o644); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+
+	_, err := resolvePathWithinRootFS(osFS{}, root, filepath.Join("deep", "nested", "file.txt"))
+	if err == nil {
+		t.Fatal("expected error for non-directory path component")
+	}
+	if !isPathOperationalError(err) {
+		t.Fatalf("expected operational error classification, got %v", err)
+	}
+	if isPathSecurityError(err) {
+		t.Fatalf("expected non-security error classification, got %v", err)
+	}
+}
+
+func TestResolvePathWithinRootFS_ClassifiesPermissionDeniedAsOperational(t *testing.T) {
+	fsys := NewFakeFS()
+	root := filepath.Join(string(os.PathSeparator), "restore-root")
+	if err := fsys.AddDir(root); err != nil {
+		t.Fatalf("add root dir: %v", err)
+	}
+	if err := fsys.AddDir(filepath.Join(root, "subdir")); err != nil {
+		t.Fatalf("add subdir: %v", err)
+	}
+	fsys.StatErrors[filepath.Clean(filepath.Join(root, "subdir", "file.txt"))] = os.ErrPermission
+
+	_, err := resolvePathWithinRootFS(fsys, root, filepath.Join("subdir", "file.txt"))
+	if err == nil {
+		t.Fatal("expected permission error")
+	}
+	if !isPathOperationalError(err) {
+		t.Fatalf("expected operational error classification, got %v", err)
+	}
+	if isPathSecurityError(err) {
+		t.Fatalf("expected non-security error classification, got %v", err)
+	}
+}
+
 func TestResolvePathWithinRootFS_AllowsAbsoluteSymlinkTargetViaLexicalRoot(t *testing.T) {
 	parent := t.TempDir()
 	realRoot := filepath.Join(parent, "real-root")

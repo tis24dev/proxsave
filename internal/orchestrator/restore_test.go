@@ -363,6 +363,31 @@ func TestExtractTarEntry_RejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestSanitizeRestoreEntryTargetWithFS_AllowsOperationalResolverErrorsWithinRoot(t *testing.T) {
+	fsys := NewFakeFS()
+	destRoot := filepath.Join(string(os.PathSeparator), "restore-root")
+	if err := fsys.AddDir(destRoot); err != nil {
+		t.Fatalf("add root dir: %v", err)
+	}
+	if err := fsys.AddDir(filepath.Join(destRoot, "subdir")); err != nil {
+		t.Fatalf("add subdir: %v", err)
+	}
+	fsys.StatErrors[filepath.Clean(filepath.Join(destRoot, "subdir", "file.txt"))] = os.ErrPermission
+
+	target, cleanRoot, err := sanitizeRestoreEntryTargetWithFS(fsys, destRoot, filepath.Join("subdir", "file.txt"))
+	if err != nil {
+		t.Fatalf("sanitizeRestoreEntryTargetWithFS returned error: %v", err)
+	}
+
+	wantTarget := filepath.Join(destRoot, "subdir", "file.txt")
+	if target != wantTarget {
+		t.Fatalf("target = %q, want %q", target, wantTarget)
+	}
+	if cleanRoot != filepath.Clean(destRoot) {
+		t.Fatalf("cleanRoot = %q, want %q", cleanRoot, filepath.Clean(destRoot))
+	}
+}
+
 func TestExtractSymlink_RejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	orig := restoreFS

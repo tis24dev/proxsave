@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,62 @@ import (
 )
 
 const maxPathSecuritySymlinkHops = 40
+
+type pathResolutionErrorKind string
+
+const (
+	pathResolutionErrorSecurity    pathResolutionErrorKind = "security"
+	pathResolutionErrorOperational pathResolutionErrorKind = "operational"
+)
+
+type pathResolutionError struct {
+	kind  pathResolutionErrorKind
+	msg   string
+	cause error
+}
+
+func (e *pathResolutionError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.cause != nil {
+		return fmt.Sprintf("%s: %v", e.msg, e.cause)
+	}
+	return e.msg
+}
+
+func (e *pathResolutionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func newPathResolutionError(kind pathResolutionErrorKind, cause error, format string, args ...any) error {
+	return &pathResolutionError{
+		kind:  kind,
+		msg:   fmt.Sprintf(format, args...),
+		cause: cause,
+	}
+}
+
+func newPathSecurityError(format string, args ...any) error {
+	return newPathResolutionError(pathResolutionErrorSecurity, nil, format, args...)
+}
+
+func wrapPathOperationalError(cause error, format string, args ...any) error {
+	return newPathResolutionError(pathResolutionErrorOperational, cause, format, args...)
+}
+
+func isPathSecurityError(err error) bool {
+	var target *pathResolutionError
+	return errors.As(err, &target) && target.kind == pathResolutionErrorSecurity
+}
+
+func isPathOperationalError(err error) bool {
+	var target *pathResolutionError
+	return errors.As(err, &target) && target.kind == pathResolutionErrorOperational
+}
 
 func resolvePathWithinRootFS(fsys FS, destRoot, candidate string) (string, error) {
 	lexicalRoot, canonicalRoot, err := prepareRootPathsFS(fsys, destRoot)
@@ -93,7 +150,7 @@ func normalizeAbsolutePathWithinRoot(lexicalRoot, canonicalRoot, candidateAbs st
 		return filepath.Clean(filepath.Join(canonicalRoot, rel)), nil
 	}
 
-	return "", fmt.Errorf("resolved path escapes destination: %s", candidateAbs)
+	return "", newPathSecurityError("resolved path escapes destination: %s", candidateAbs)
 }
 
 func resolvePathFromFilesystemRootFS(fsys FS, candidateAbs string, allowMissingTail bool, hopsRemaining int) (string, error) {
@@ -123,7 +180,7 @@ func resolvePathWithinPreparedRootFS(fsys FS, lexicalRoot, canonicalRoot, candid
 		return "", fmt.Errorf("cannot compute relative path: %w", err)
 	}
 	if !ok {
-		return "", fmt.Errorf("resolved path escapes destination: %s", candidateAbs)
+		return "", newPathSecurityError("resolved path escapes destination: %s", candidateAbs)
 	}
 	if rel == "." {
 		return canonicalRoot, nil
@@ -138,16 +195,16 @@ func resolvePathWithinPreparedRootFS(fsys FS, lexicalRoot, canonicalRoot, candid
 			if allowMissingTail && os.IsNotExist(err) {
 				return filepath.Clean(filepath.Join(current, filepath.Join(parts[idx:]...))), nil
 			}
-			return "", fmt.Errorf("lstat %s: %w", next, err)
+			return "", wrapPathOperationalError(err, "lstat %s", next)
 		}
 
 		if info.Mode()&os.ModeSymlink != 0 {
 			if hopsRemaining <= 0 {
-				return "", fmt.Errorf("too many symlink resolutions for %s", candidateAbs)
+				return "", newPathSecurityError("too many symlink resolutions for %s", candidateAbs)
 			}
 			target, err := fsys.Readlink(next)
 			if err != nil {
-				return "", fmt.Errorf("readlink %s: %w", next, err)
+				return "", wrapPathOperationalError(err, "readlink %s", next)
 			}
 
 			var resolvedLink string
@@ -164,7 +221,7 @@ func resolvePathWithinPreparedRootFS(fsys FS, lexicalRoot, canonicalRoot, candid
 			if _, ok, err := relativePathWithinRoot(canonicalRoot, resolvedLink); err != nil {
 				return "", fmt.Errorf("cannot compute relative path: %w", err)
 			} else if !ok {
-				return "", fmt.Errorf("resolved path escapes destination: %s", resolvedLink)
+				return "", newPathSecurityError("resolved path escapes destination: %s", resolvedLink)
 			}
 
 			remainder := filepath.Join(parts[idx+1:]...)
@@ -176,7 +233,7 @@ func resolvePathWithinPreparedRootFS(fsys FS, lexicalRoot, canonicalRoot, candid
 		}
 
 		if !info.IsDir() && idx < len(parts)-1 {
-			return "", fmt.Errorf("path component is not a directory: %s", next)
+			return "", newPathResolutionError(pathResolutionErrorOperational, nil, "path component is not a directory: %s", next)
 		}
 
 		current = next

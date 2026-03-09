@@ -1495,7 +1495,12 @@ func sanitizeRestoreEntryTargetWithFS(fsys FS, destRoot, entryName string) (stri
 	}
 
 	if _, err := resolvePathWithinRootFS(fsys, absDestRoot, absTarget); err != nil {
-		return "", "", fmt.Errorf("illegal path: %s: %w", entryName, err)
+		if isPathSecurityError(err) {
+			return "", "", fmt.Errorf("illegal path: %s: %w", entryName, err)
+		}
+		if !isPathOperationalError(err) {
+			return "", "", fmt.Errorf("resolve extraction target: %w", err)
+		}
 	}
 
 	return absTarget, absDestRoot, nil
