@@ -41,12 +41,8 @@ func DetectBackupType(manifest *backup.Manifest) SystemType {
 
 	// Check ProxmoxType field if present
 	if manifest.ProxmoxType != "" {
-		proxmoxType := strings.ToLower(manifest.ProxmoxType)
-		if strings.Contains(proxmoxType, "pve") || strings.Contains(proxmoxType, "proxmox-ve") {
-			return SystemTypePVE
-		}
-		if strings.Contains(proxmoxType, "pbs") || strings.Contains(proxmoxType, "proxmox-backup") {
-			return SystemTypePBS
+		if backupType := parseSystemTypeString(manifest.ProxmoxType); backupType != SystemTypeUnknown {
+			return backupType
 		}
 	}
 
@@ -65,12 +61,20 @@ func DetectBackupType(manifest *backup.Manifest) SystemType {
 	return SystemTypeUnknown
 }
 
-// ValidateCompatibility checks if a backup is compatible with the current system
-func ValidateCompatibility(manifest *backup.Manifest) error {
-	currentSystem := DetectCurrentSystem()
-	backupType := DetectBackupType(manifest)
+func parseSystemTypeString(value string) SystemType {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch {
+	case strings.Contains(normalized, "pve"), strings.Contains(normalized, "proxmox-ve"):
+		return SystemTypePVE
+	case strings.Contains(normalized, "pbs"), strings.Contains(normalized, "proxmox-backup"):
+		return SystemTypePBS
+	default:
+		return SystemTypeUnknown
+	}
+}
 
-	// If we can't detect either, issue a warning but allow
+// ValidateCompatibility checks if a backup is compatible with the current system.
+func ValidateCompatibility(currentSystem, backupType SystemType) error {
 	if currentSystem == SystemTypeUnknown {
 		return fmt.Errorf("warning: cannot detect current system type - restoration may fail")
 	}

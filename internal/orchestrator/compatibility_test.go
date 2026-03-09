@@ -3,8 +3,6 @@ package orchestrator
 import (
 	"os"
 	"testing"
-
-	"github.com/tis24dev/proxsave/internal/backup"
 )
 
 func TestValidateCompatibility_Mismatch(t *testing.T) {
@@ -18,8 +16,7 @@ func TestValidateCompatibility_Mismatch(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	manifest := &backup.Manifest{ProxmoxType: "pbs"}
-	if err := ValidateCompatibility(manifest); err == nil {
+	if err := ValidateCompatibility(SystemTypePVE, SystemTypePBS); err == nil {
 		t.Fatalf("expected incompatibility error")
 	}
 }

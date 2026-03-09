@@ -35,6 +35,10 @@ type fakeRestoreWorkflowUI struct {
 	confirmActionErr       error
 	repairNICNamesErr      error
 	networkCommitErr       error
+
+	confirmCompatibilityCalls int
+	clusterRestoreModeCalls   int
+	lastCompatibilityWarning  error
 }
 
 func (f *fakeRestoreWorkflowUI) RunTask(ctx context.Context, title, initialMessage string, run func(ctx context.Context, report ProgressReporter) error) error {
@@ -84,10 +88,13 @@ func (f *fakeRestoreWorkflowUI) ConfirmRestore(ctx context.Context) (bool, error
 }
 
 func (f *fakeRestoreWorkflowUI) ConfirmCompatibility(ctx context.Context, warning error) (bool, error) {
+	f.confirmCompatibilityCalls++
+	f.lastCompatibilityWarning = warning
 	return f.confirmCompatible, f.confirmCompatibleErr
 }
 
 func (f *fakeRestoreWorkflowUI) SelectClusterRestoreMode(ctx context.Context) (ClusterRestoreMode, error) {
+	f.clusterRestoreModeCalls++
 	return f.clusterMode, f.clusterModeErr
 }
 

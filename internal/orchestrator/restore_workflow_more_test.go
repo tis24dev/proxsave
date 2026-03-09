@@ -321,7 +321,8 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 
 	tmpTar := filepath.Join(t.TempDir(), "bundle.tar")
 	if err := writeTarFile(tmpTar, map[string]string{
-		"etc/hosts": "127.0.0.1 localhost\n",
+		"etc/hosts":                   "127.0.0.1 localhost\n",
+		"etc/proxmox-backup/sync.cfg": "sync\n",
 	}); err != nil {
 		t.Fatalf("writeTarFile: %v", err)
 	}

@@ -1,0 +1,273 @@
+package orchestrator
+
+import (
+	"archive/tar"
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"path"
+	"strings"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+)
+
+// RestoreDecisionSource describes where trusted restore facts were derived from.
+type RestoreDecisionSource string
+
+const (
+	RestoreDecisionSourceUnknown          RestoreDecisionSource = "unknown"
+	RestoreDecisionSourceInternalMetadata RestoreDecisionSource = "internal_metadata"
+	RestoreDecisionSourceCategories       RestoreDecisionSource = "categories"
+	RestoreDecisionSourceAmbiguous        RestoreDecisionSource = "ambiguous"
+)
+
+// RestoreDecisionInfo contains the archive-derived facts used for restore decisions.
+type RestoreDecisionInfo struct {
+	BackupType     SystemType
+	ClusterPayload bool
+	BackupHostname string
+	Source         RestoreDecisionSource
+}
+
+type restoreDecisionMetadata struct {
+	BackupType  SystemType
+	ClusterMode string
+	Hostname    string
+}
+
+type restoreArchiveInspection struct {
+	AvailableCategories []Category
+	Decision            *RestoreDecisionInfo
+}
+
+const restoreDecisionMetadataPath = "var/lib/proxsave-info/backup_metadata.txt"
+
+// AnalyzeRestoreArchive inspects the archive once and derives trusted restore facts
+// from archive contents plus internal backup metadata when present.
+func AnalyzeRestoreArchive(archivePath string, logger *logging.Logger) (categories []Category, decision *RestoreDecisionInfo, err error) {
+	if logger == nil {
+		logger = logging.GetDefaultLogger()
+	}
+
+	done := logging.DebugStart(logger, "analyze restore archive", "archive=%s", archivePath)
+	defer func() { done(err) }()
+	logger.Info("Analyzing backup contents...")
+
+	inspection, err := inspectRestoreArchiveContents(archivePath, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, cat := range inspection.AvailableCategories {
+		logger.Debug("Category available: %s (%s)", cat.ID, cat.Name)
+	}
+	logger.Info("Detected %d available categories", len(inspection.AvailableCategories))
+	if inspection.Decision != nil {
+		logger.Debug(
+			"Restore decision facts: backup_type=%s cluster_payload=%v hostname=%q source=%s",
+			inspection.Decision.BackupType,
+			inspection.Decision.ClusterPayload,
+			inspection.Decision.BackupHostname,
+			inspection.Decision.Source,
+		)
+	}
+
+	return inspection.AvailableCategories, inspection.Decision, nil
+}
+
+func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (*restoreArchiveInspection, error) {
+	file, err := restoreFS.Open(archivePath)
+	if err != nil {
+		return nil, fmt.Errorf("open archive: %w", err)
+	}
+	defer file.Close()
+
+	reader, err := createDecompressionReader(context.Background(), file, archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closer, ok := reader.(interface{ Close() error }); ok {
+			closer.Close()
+		}
+	}()
+
+	tarReader := tar.NewReader(reader)
+	archivePaths, metadata, metadataErr, err := collectRestoreArchiveFacts(tarReader)
+	if err != nil {
+		return nil, fmt.Errorf("inspect archive: %w", err)
+	}
+	if metadataErr != nil {
+		logger.Warning("Could not parse internal backup metadata: %v", metadataErr)
+	}
+
+	logger.Debug("Found %d entries in archive", len(archivePaths))
+	availableCategories := AnalyzeArchivePaths(archivePaths, GetAllCategories())
+
+	decision := buildRestoreDecisionInfo(metadata, availableCategories, logger)
+	return &restoreArchiveInspection{
+		AvailableCategories: availableCategories,
+		Decision:            decision,
+	}, nil
+}
+
+func collectRestoreArchiveFacts(tarReader *tar.Reader) ([]string, *restoreDecisionMetadata, error, error) {
+	var (
+		archivePaths []string
+		metadata     *restoreDecisionMetadata
+		metadataErr  error
+	)
+
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		archivePaths = append(archivePaths, header.Name)
+		if metadata != nil || header.FileInfo().IsDir() {
+			continue
+		}
+		if !isRestoreDecisionMetadataEntry(header.Name) {
+			continue
+		}
+
+		data, err := io.ReadAll(tarReader)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		parsed, parseErr := parseRestoreDecisionMetadata(data)
+		if parseErr != nil {
+			metadataErr = parseErr
+			continue
+		}
+		metadata = parsed
+	}
+
+	return archivePaths, metadata, metadataErr, nil
+}
+
+func isRestoreDecisionMetadataEntry(entryName string) bool {
+	return normalizeRestoreEntryPath(entryName) == restoreDecisionMetadataPath
+}
+
+func normalizeRestoreEntryPath(entryName string) string {
+	clean := strings.TrimSpace(strings.ReplaceAll(entryName, "\\", "/"))
+	if clean == "" {
+		return ""
+	}
+
+	clean = path.Clean(clean)
+	clean = strings.TrimPrefix(clean, "./")
+	clean = strings.TrimPrefix(clean, "/")
+	if clean == "." {
+		return ""
+	}
+	return clean
+}
+
+func parseRestoreDecisionMetadata(data []byte) (*restoreDecisionMetadata, error) {
+	meta := &restoreDecisionMetadata{}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		switch key {
+		case "BACKUP_TYPE":
+			meta.BackupType = parseSystemTypeString(value)
+		case "PVE_CLUSTER_MODE", "CLUSTER_MODE":
+			meta.ClusterMode = value
+		case "HOSTNAME":
+			meta.Hostname = value
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return meta, nil
+}
+
+func buildRestoreDecisionInfo(metadata *restoreDecisionMetadata, categories []Category, logger *logging.Logger) *RestoreDecisionInfo {
+	if logger == nil {
+		logger = logging.GetDefaultLogger()
+	}
+
+	info := &RestoreDecisionInfo{
+		BackupType:     SystemTypeUnknown,
+		ClusterPayload: hasCategoryID(categories, "pve_cluster"),
+		Source:         RestoreDecisionSourceUnknown,
+	}
+
+	if metadata != nil {
+		info.BackupHostname = strings.TrimSpace(metadata.Hostname)
+	}
+
+	categoryType, ambiguousType := detectBackupTypeFromCategories(categories)
+	switch {
+	case ambiguousType:
+		logger.Warning("Archive contains both PVE and PBS-specific payloads; treating backup type as unknown for compatibility checks")
+		info.Source = RestoreDecisionSourceAmbiguous
+	case metadata != nil && metadata.BackupType != SystemTypeUnknown && categoryType == SystemTypeUnknown:
+		info.BackupType = metadata.BackupType
+		info.Source = RestoreDecisionSourceInternalMetadata
+	case metadata != nil && metadata.BackupType != SystemTypeUnknown && categoryType != SystemTypeUnknown && metadata.BackupType != categoryType:
+		logger.Warning("Internal backup metadata and archive payload disagree on backup type; using archive-derived type %s", strings.ToUpper(string(categoryType)))
+		info.BackupType = categoryType
+		info.Source = RestoreDecisionSourceCategories
+	case categoryType != SystemTypeUnknown:
+		info.BackupType = categoryType
+		info.Source = RestoreDecisionSourceCategories
+	case metadata != nil && metadata.BackupType != SystemTypeUnknown:
+		info.BackupType = metadata.BackupType
+		info.Source = RestoreDecisionSourceInternalMetadata
+	}
+
+	if metadata != nil {
+		metadataCluster := strings.EqualFold(strings.TrimSpace(metadata.ClusterMode), "cluster")
+		switch {
+		case metadataCluster && !info.ClusterPayload:
+			logger.Warning("Internal backup metadata reports cluster mode, but no pve_cluster payload was found; guarded cluster restore remains disabled")
+		case !metadataCluster && info.ClusterPayload:
+			logger.Warning("Cluster payload detected in archive despite metadata reporting non-cluster backup; guarded cluster restore remains enabled")
+		}
+	}
+
+	return info
+}
+
+func detectBackupTypeFromCategories(categories []Category) (SystemType, bool) {
+	var hasPVE, hasPBS bool
+	for _, cat := range categories {
+		switch cat.Type {
+		case CategoryTypePVE:
+			hasPVE = true
+		case CategoryTypePBS:
+			hasPBS = true
+		}
+	}
+
+	switch {
+	case hasPVE && hasPBS:
+		return SystemTypeUnknown, true
+	case hasPVE:
+		return SystemTypePVE, false
+	case hasPBS:
+		return SystemTypePBS, false
+	default:
+		return SystemTypeUnknown, false
+	}
+}

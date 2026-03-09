@@ -76,7 +76,17 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	systemType := restoreSystem.DetectCurrentSystem()
 	logger.Info("Detected system type: %s", GetSystemTypeString(systemType))
 
-	if warn := ValidateCompatibility(candidate.Manifest); warn != nil {
+	availableCategories, decisionInfo, err := AnalyzeRestoreArchive(prepared.ArchivePath, logger)
+	if err != nil {
+		logger.Warning("Could not analyze categories: %v", err)
+		logger.Info("Falling back to full restore mode")
+		return runFullRestoreWithUI(ctx, ui, candidate, prepared, destRoot, logger, cfg.DryRun)
+	}
+	if decisionInfo == nil {
+		decisionInfo = &RestoreDecisionInfo{}
+	}
+
+	if warn := ValidateCompatibility(systemType, decisionInfo.BackupType); warn != nil {
 		logger.Warning("Compatibility check: %v", warn)
 		proceed, perr := ui.ConfirmCompatibility(ctx, warn)
 		if perr != nil {
@@ -85,14 +95,6 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		if !proceed {
 			return ErrRestoreAborted
 		}
-	}
-
-	logger.Info("Analyzing backup contents...")
-	availableCategories, err := AnalyzeBackupCategories(prepared.ArchivePath, logger)
-	if err != nil {
-		logger.Warning("Could not analyze categories: %v", err)
-		logger.Info("Falling back to full restore mode")
-		return runFullRestoreWithUI(ctx, ui, candidate, prepared, destRoot, logger, cfg.DryRun)
 	}
 
 	var (
@@ -127,7 +129,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 	}
 
-	plan := PlanRestore(candidate.Manifest, selectedCategories, systemType, mode)
+	plan := PlanRestore(decisionInfo.ClusterPayload, selectedCategories, systemType, mode)
 
 	if plan.SystemType == SystemTypePBS &&
 		(plan.HasCategoryID("pbs_host") ||
@@ -145,9 +147,8 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		logger.Info("PBS restore behavior: %s", behavior.DisplayName())
 	}
 
-	clusterBackup := strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster")
-	if plan.NeedsClusterRestore && clusterBackup {
-		logger.Info("Backup marked as cluster node; enabling guarded restore options for pve_cluster")
+	if plan.NeedsClusterRestore && plan.ClusterBackup {
+		logger.Info("Cluster payload detected in backup; enabling guarded restore options for pve_cluster")
 		choice, promptErr := ui.SelectClusterRestoreMode(ctx)
 		if promptErr != nil {
 			return promptErr
@@ -168,8 +169,8 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	if plan.HasCategoryID("pve_access_control") || plan.HasCategoryID("pbs_access_control") {
 		currentHost, hostErr := os.Hostname()
-		if hostErr == nil && strings.TrimSpace(candidate.Manifest.Hostname) != "" && strings.TrimSpace(currentHost) != "" {
-			backupHost := strings.TrimSpace(candidate.Manifest.Hostname)
+		if hostErr == nil && strings.TrimSpace(decisionInfo.BackupHostname) != "" && strings.TrimSpace(currentHost) != "" {
+			backupHost := strings.TrimSpace(decisionInfo.BackupHostname)
 			if !strings.EqualFold(strings.TrimSpace(currentHost), backupHost) {
 				logger.Warning("Access control/TFA: backup hostname=%s current hostname=%s; WebAuthn users may require re-enrollment if the UI origin (FQDN/port) changes", backupHost, currentHost)
 			}
