@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -41,7 +42,10 @@ type restoreArchiveInspection struct {
 	Decision            *RestoreDecisionInfo
 }
 
-const restoreDecisionMetadataPath = "var/lib/proxsave-info/backup_metadata.txt"
+const (
+	restoreDecisionMetadataPath     = "var/lib/proxsave-info/backup_metadata.txt"
+	restoreDecisionMetadataMaxBytes = 8 * 1024
+)
 
 // AnalyzeRestoreArchive inspects the archive once and derives trusted restore facts
 // from archive contents plus internal backup metadata when present.
@@ -136,9 +140,10 @@ func collectRestoreArchiveFacts(tarReader *tar.Reader) ([]string, *restoreDecisi
 			continue
 		}
 
-		data, err := io.ReadAll(tarReader)
-		if err != nil {
-			return nil, nil, nil, err
+		data, readErr := readRestoreDecisionMetadata(tarReader, header)
+		if readErr != nil {
+			metadataErr = readErr
+			continue
 		}
 		parsed, parseErr := parseRestoreDecisionMetadata(data)
 		if parseErr != nil {
@@ -149,6 +154,29 @@ func collectRestoreArchiveFacts(tarReader *tar.Reader) ([]string, *restoreDecisi
 	}
 
 	return archivePaths, metadata, metadataErr, nil
+}
+
+func readRestoreDecisionMetadata(tarReader *tar.Reader, header *tar.Header) ([]byte, error) {
+	if header == nil {
+		return nil, fmt.Errorf("restore metadata entry is missing a tar header")
+	}
+	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		return nil, fmt.Errorf("archive entry %s is not a regular file", header.Name)
+	}
+
+	limited := io.LimitReader(tarReader, restoreDecisionMetadataMaxBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > restoreDecisionMetadataMaxBytes {
+		size := header.Size
+		if size <= 0 {
+			size = int64(len(data))
+		}
+		return nil, fmt.Errorf("archive entry %s too large (%d bytes)", header.Name, size)
+	}
+	return data, nil
 }
 
 func isRestoreDecisionMetadataEntry(entryName string) bool {
@@ -172,7 +200,7 @@ func normalizeRestoreEntryPath(entryName string) string {
 
 func parseRestoreDecisionMetadata(data []byte) (*restoreDecisionMetadata, error) {
 	meta := &restoreDecisionMetadata{}
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
