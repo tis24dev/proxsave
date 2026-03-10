@@ -64,9 +64,14 @@ func DetectBackupType(manifest *backup.Manifest) SystemType {
 func parseSystemTypeString(value string) SystemType {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	switch {
-	case strings.Contains(normalized, "pve"), strings.Contains(normalized, "proxmox-ve"):
+	case strings.Contains(normalized, "pve"),
+		strings.Contains(normalized, "proxmox-ve"),
+		strings.Contains(normalized, "proxmox ve"):
 		return SystemTypePVE
-	case strings.Contains(normalized, "pbs"), strings.Contains(normalized, "proxmox-backup"):
+	case strings.Contains(normalized, "pbs"),
+		strings.Contains(normalized, "proxmox-backup"),
+		strings.Contains(normalized, "proxmox backup"),
+		strings.Contains(normalized, "proxmox backup server"):
 		return SystemTypePBS
 	default:
 		return SystemTypeUnknown

@@ -33,6 +33,38 @@ func TestDetectCurrentSystem_Unknown(t *testing.T) {
 	}
 }
 
+func TestParseSystemTypeString_AcceptsFullNames(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  SystemType
+	}{
+		{
+			name:  "pve full name with space",
+			input: "Proxmox VE",
+			want:  SystemTypePVE,
+		},
+		{
+			name:  "pbs generic full name",
+			input: "Proxmox Backup",
+			want:  SystemTypePBS,
+		},
+		{
+			name:  "pbs full server name",
+			input: "Proxmox Backup Server",
+			want:  SystemTypePBS,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseSystemTypeString(tt.input); got != tt.want {
+				t.Fatalf("parseSystemTypeString(%q) = %v; want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGetSystemInfoDetectsPVE(t *testing.T) {
 	orig := compatFS
 	defer func() { compatFS = orig }()
