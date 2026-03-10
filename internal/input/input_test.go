@@ -124,6 +124,26 @@ func assertSamePasswordInflight(t *testing.T, fd int, want *passwordInflight) {
 	}
 }
 
+func assertLineInflightCleared(t *testing.T, reader *bufio.Reader) {
+	t.Helper()
+	state := getLineState(reader)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.inflight != nil {
+		t.Fatalf("line inflight=%p; want nil", state.inflight)
+	}
+}
+
+func assertPasswordInflightCleared(t *testing.T, fd int) {
+	t.Helper()
+	state := getPasswordState(fd)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.inflight != nil {
+		t.Fatalf("password inflight=%p; want nil", state.inflight)
+	}
+}
+
 func TestMapInputError(t *testing.T) {
 	if MapInputError(nil) != nil {
 		t.Fatalf("expected nil")
@@ -518,4 +538,74 @@ func TestReadPasswordWithContext_PreservesCompletedReadForNextRetryAfterTimeout(
 	if gotCalls := calls.Load(); gotCalls != 1 {
 		t.Fatalf("readPassword calls after completed retry=%d; want 1", gotCalls)
 	}
+}
+
+func TestReadLineWithContext_ClearsInflightAfterCompletedRetryConsumesResult(t *testing.T) {
+	src := &blockingLineReader{
+		release:  make(chan struct{}),
+		returned: make(chan struct{}, 1),
+		payload:  "hello\n",
+	}
+	reader := bufio.NewReader(src)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	_, err := ReadLineWithContext(ctx, reader)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first err=%v; want %v", err, context.DeadlineExceeded)
+	}
+
+	inflight := currentLineInflight(t, reader)
+	close(src.release)
+	waitForSignal(t, src.returned, "underlying line read return")
+	waitForSignal(t, inflight.completed, "line inflight completion")
+	assertSameLineInflight(t, reader, inflight)
+
+	line, err := ReadLineWithContext(context.Background(), reader)
+	if err != nil {
+		t.Fatalf("retry ReadLineWithContext error: %v", err)
+	}
+	if line != "hello\n" {
+		t.Fatalf("line=%q; want %q", line, "hello\n")
+	}
+	assertLineInflightCleared(t, reader)
+}
+
+func TestReadPasswordWithContext_ClearsInflightAfterCompletedRetryConsumesResult(t *testing.T) {
+	release := make(chan struct{})
+	returned := make(chan struct{}, 1)
+	var calls atomic.Int32
+	readPassword := func(fd int) ([]byte, error) {
+		calls.Add(1)
+		<-release
+		signalNonBlocking(returned)
+		return []byte("secret"), nil
+	}
+
+	const fd = 43
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	got, err := ReadPasswordWithContext(ctx, readPassword, fd)
+	if got != nil {
+		t.Fatalf("expected nil bytes on first deadline")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first err=%v; want %v", err, context.DeadlineExceeded)
+	}
+
+	inflight := currentPasswordInflight(t, fd)
+	close(release)
+	waitForSignal(t, returned, "underlying password read return")
+	waitForSignal(t, inflight.completed, "password inflight completion")
+	assertSamePasswordInflight(t, fd, inflight)
+
+	got, err = ReadPasswordWithContext(context.Background(), readPassword, fd)
+	if err != nil {
+		t.Fatalf("retry ReadPasswordWithContext error: %v", err)
+	}
+	if string(got) != "secret" {
+		t.Fatalf("got=%q; want %q", string(got), "secret")
+	}
+	assertPasswordInflightCleared(t, fd)
 }
