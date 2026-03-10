@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -72,6 +73,199 @@ func buildPBSOverrideOutputKey(path string) string {
 	return fmt.Sprintf("%s_%s", sanitizeFilename(label), hex.EncodeToString(sum[:4]))
 }
 
+func pbsOutputKeyDigest(seed string) string {
+	sum := sha256.Sum256([]byte(seed))
+	return hex.EncodeToString(sum[:4])
+}
+
+func pbsDatastoreIdentityKey(ds pbsDatastore) string {
+	if ds.isOverride() {
+		if normalized := ds.normalizedPath(); normalized != "" {
+			return "override-path:" + normalized
+		}
+		if path := strings.TrimSpace(ds.Path); path != "" {
+			return "override-path:" + path
+		}
+		return ""
+	}
+
+	name := strings.TrimSpace(ds.Name)
+	if name == "" {
+		return ""
+	}
+	return "name:" + name
+}
+
+func pbsDatastoreDefinitionIdentityKey(def pbsDatastoreDefinition) string {
+	if strings.TrimSpace(def.Origin) == pbsDatastoreSourceOverride {
+		if normalized := normalizePBSDatastorePath(def.Path); normalized != "" {
+			return "override-path:" + normalized
+		}
+		if path := strings.TrimSpace(def.Path); path != "" {
+			return "override-path:" + path
+		}
+		return ""
+	}
+
+	name := strings.TrimSpace(def.Name)
+	if name == "" {
+		name = strings.TrimSpace(def.CLIName)
+	}
+	if name == "" {
+		return ""
+	}
+	return "name:" + name
+}
+
+func pbsDatastoreCandidateOutputKey(ds pbsDatastore) string {
+	if ds.isOverride() {
+		if normalized := ds.normalizedPath(); normalized != "" {
+			return buildPBSOverrideOutputKey(normalized)
+		}
+		return buildPBSOverrideOutputKey(ds.Path)
+	}
+	return collectorPathKey(ds.Name)
+}
+
+func pbsDatastoreDefinitionCandidateOutputKey(def pbsDatastoreDefinition) string {
+	if strings.TrimSpace(def.Origin) == pbsDatastoreSourceOverride {
+		if normalized := normalizePBSDatastorePath(def.Path); normalized != "" {
+			return buildPBSOverrideOutputKey(normalized)
+		}
+		return buildPBSOverrideOutputKey(def.Path)
+	}
+
+	name := strings.TrimSpace(def.Name)
+	if name == "" {
+		name = strings.TrimSpace(def.CLIName)
+	}
+	return collectorPathKey(name)
+}
+
+func pbsOutputKeyPriority(origin string) int {
+	if strings.TrimSpace(origin) == pbsDatastoreSourceOverride {
+		return 1
+	}
+	return 0
+}
+
+type pbsOutputKeyAssignment struct {
+	Index    int
+	Identity string
+	BaseKey  string
+	Priority int
+}
+
+func assignUniquePBSOutputKeys[T any](items []T, identityFn func(T) string, baseKeyFn func(T) string, priorityFn func(T) int, assignFn func(*T, string)) {
+	if len(items) == 0 {
+		return
+	}
+
+	grouped := make(map[string][]pbsOutputKeyAssignment, len(items))
+	baseKeys := make([]string, 0, len(items))
+	for idx, item := range items {
+		baseKey := strings.TrimSpace(baseKeyFn(item))
+		if baseKey == "" {
+			baseKey = "entry"
+		}
+
+		identity := strings.TrimSpace(identityFn(item))
+		if identity == "" {
+			identity = fmt.Sprintf("anonymous:%s:%d", baseKey, idx)
+		}
+
+		if _, ok := grouped[baseKey]; !ok {
+			baseKeys = append(baseKeys, baseKey)
+		}
+		grouped[baseKey] = append(grouped[baseKey], pbsOutputKeyAssignment{
+			Index:    idx,
+			Identity: identity,
+			BaseKey:  baseKey,
+			Priority: priorityFn(item),
+		})
+	}
+
+	sort.Strings(baseKeys)
+
+	usedKeys := make(map[string]string, len(items))
+	identityKeys := make(map[string]string, len(items))
+
+	for _, baseKey := range baseKeys {
+		assignments := grouped[baseKey]
+		sort.SliceStable(assignments, func(i, j int) bool {
+			if assignments[i].Priority != assignments[j].Priority {
+				return assignments[i].Priority < assignments[j].Priority
+			}
+			if assignments[i].Identity != assignments[j].Identity {
+				return assignments[i].Identity < assignments[j].Identity
+			}
+			return assignments[i].Index < assignments[j].Index
+		})
+
+		for pos, assignment := range assignments {
+			if existing := strings.TrimSpace(identityKeys[assignment.Identity]); existing != "" {
+				assignFn(&items[assignment.Index], existing)
+				continue
+			}
+
+			preferBase := pos == 0
+			for attempt := 0; ; attempt++ {
+				candidate := assignment.BaseKey
+				if !preferBase || attempt > 0 {
+					seed := assignment.Identity
+					if attempt > 0 {
+						seed = fmt.Sprintf("%s#%d", assignment.Identity, attempt)
+					}
+					candidate = fmt.Sprintf("%s_%s", assignment.BaseKey, pbsOutputKeyDigest(seed))
+				}
+
+				if owner, ok := usedKeys[candidate]; ok && owner != assignment.Identity {
+					continue
+				}
+
+				usedKeys[candidate] = assignment.Identity
+				identityKeys[assignment.Identity] = candidate
+				assignFn(&items[assignment.Index], candidate)
+				break
+			}
+		}
+	}
+}
+
+func assignUniquePBSDatastoreOutputKeys(datastores []pbsDatastore) {
+	assignUniquePBSOutputKeys(datastores,
+		pbsDatastoreIdentityKey,
+		pbsDatastoreCandidateOutputKey,
+		func(ds pbsDatastore) int {
+			return pbsOutputKeyPriority(ds.Source)
+		},
+		func(ds *pbsDatastore, key string) {
+			ds.OutputKey = key
+		})
+}
+
+func assignUniquePBSDatastoreDefinitionOutputKeys(defs []pbsDatastoreDefinition) {
+	assignUniquePBSOutputKeys(defs,
+		pbsDatastoreDefinitionIdentityKey,
+		pbsDatastoreDefinitionCandidateOutputKey,
+		func(def pbsDatastoreDefinition) int {
+			return pbsOutputKeyPriority(def.Origin)
+		},
+		func(def *pbsDatastoreDefinition, key string) {
+			def.OutputKey = key
+		})
+}
+
+func clonePBSDatastores(in []pbsDatastore) []pbsDatastore {
+	if len(in) == 0 {
+		return nil
+	}
+
+	out := make([]pbsDatastore, len(in))
+	copy(out, in)
+	return out
+}
+
 func (ds pbsDatastore) normalizedPath() string {
 	if path := strings.TrimSpace(ds.NormalizedPath); path != "" {
 		return path
@@ -83,7 +277,7 @@ func (ds pbsDatastore) pathKey() string {
 	if key := strings.TrimSpace(ds.OutputKey); key != "" {
 		return key
 	}
-	return collectorPathKey(ds.Name)
+	return pbsDatastoreCandidateOutputKey(ds)
 }
 
 func (ds pbsDatastore) cliName() string {
@@ -110,6 +304,8 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
 		c.logger.Debug("No datastores found")
 		return nil
 	}
+	datastores = clonePBSDatastores(datastores)
+	assignUniquePBSDatastoreOutputKeys(datastores)
 	c.logger.Debug("Collecting datastore details for %d datastores", len(datastores))
 
 	datastoreDir := c.proxsaveInfoDir("pbs", "datastores")
@@ -198,6 +394,8 @@ func (c *Collector) collectPBSPxarMetadata(ctx context.Context, datastores []pbs
 	if len(datastores) == 0 {
 		return nil
 	}
+	datastores = clonePBSDatastores(datastores)
+	assignUniquePBSDatastoreOutputKeys(datastores)
 	c.logger.Debug("Collecting PXAR metadata for %d datastores", len(datastores))
 	dsWorkers := c.config.PxarDatastoreConcurrency
 	if dsWorkers <= 0 {
@@ -592,6 +790,8 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 			})
 		}
 	}
+
+	assignUniquePBSDatastoreOutputKeys(datastores)
 
 	c.logger.Debug("Detected %d configured datastores", len(datastores))
 	return datastores, nil

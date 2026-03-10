@@ -466,21 +466,7 @@ func mergePBSDatastoreDefinitions(cli, config []pbsDatastore) []pbsDatastoreDefi
 	merged := make(map[string]*pbsDatastoreDefinition)
 
 	defKey := func(ds pbsDatastore) string {
-		if ds.isOverride() {
-			if normalized := ds.normalizedPath(); normalized != "" {
-				return "override-path:" + normalized
-			}
-			if path := strings.TrimSpace(ds.Path); path != "" {
-				return "override-path:" + path
-			}
-			return ""
-		}
-
-		name := strings.TrimSpace(ds.Name)
-		if name == "" {
-			return ""
-		}
-		return "name:" + name
+		return pbsDatastoreIdentityKey(ds)
 	}
 
 	add := func(ds pbsDatastore, source string) {
@@ -554,6 +540,7 @@ func mergePBSDatastoreDefinitions(cli, config []pbsDatastore) []pbsDatastoreDefi
 		v.Sources = uniqueSortedStrings(v.Sources)
 		out = append(out, *v)
 	}
+	assignUniquePBSDatastoreDefinitionOutputKeys(out)
 
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name != out[j].Name {

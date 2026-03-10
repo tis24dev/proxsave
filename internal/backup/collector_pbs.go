@@ -347,6 +347,11 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 
 // collectPBSCommands collects output from PBS commands
 func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsDatastore) error {
+	if len(datastores) > 0 {
+		datastores = clonePBSDatastores(datastores)
+		assignUniquePBSDatastoreOutputKeys(datastores)
+	}
+
 	commandsDir := c.proxsaveCommandsDir("pbs")
 	if err := c.ensureDir(commandsDir); err != nil {
 		return fmt.Errorf("failed to create commands directory: %w", err)
