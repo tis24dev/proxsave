@@ -13,20 +13,115 @@ import (
 )
 
 type blockingLineReader struct {
-	release chan struct{}
-	payload string
-	calls   atomic.Int32
+	release  chan struct{}
+	finish   chan struct{}
+	returned chan struct{}
+	payload  string
+	calls    atomic.Int32
 }
 
 func (r *blockingLineReader) Read(p []byte) (int, error) {
 	r.calls.Add(1)
 	<-r.release
+	if r.finish != nil {
+		<-r.finish
+	}
 	if r.payload == "" {
+		signalNonBlocking(r.returned)
 		return 0, io.EOF
 	}
 	n := copy(p, r.payload)
 	r.payload = r.payload[n:]
+	signalNonBlocking(r.returned)
 	return n, nil
+}
+
+type lineCallResult struct {
+	line string
+	err  error
+}
+
+type passwordCallResult struct {
+	b   []byte
+	err error
+}
+
+func signalNonBlocking(ch chan struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func waitForSignal(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for %s", name)
+	}
+}
+
+func waitForCondition(t *testing.T, name string, cond func() bool) {
+	t.Helper()
+	deadline := time.After(500 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if cond() {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", name)
+		case <-ticker.C:
+		}
+	}
+}
+
+func currentLineInflight(t *testing.T, reader *bufio.Reader) *lineInflight {
+	t.Helper()
+	state := getLineState(reader)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.inflight == nil {
+		t.Fatalf("expected line inflight state")
+	}
+	return state.inflight
+}
+
+func currentPasswordInflight(t *testing.T, fd int) *passwordInflight {
+	t.Helper()
+	state := getPasswordState(fd)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.inflight == nil {
+		t.Fatalf("expected password inflight state")
+	}
+	return state.inflight
+}
+
+func assertSameLineInflight(t *testing.T, reader *bufio.Reader, want *lineInflight) {
+	t.Helper()
+	state := getLineState(reader)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.inflight != want {
+		t.Fatalf("line inflight=%p; want %p", state.inflight, want)
+	}
+}
+
+func assertSamePasswordInflight(t *testing.T, fd int, want *passwordInflight) {
+	t.Helper()
+	state := getPasswordState(fd)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.inflight != want {
+		t.Fatalf("password inflight=%p; want %p", state.inflight, want)
+	}
 }
 
 func TestMapInputError(t *testing.T) {
@@ -227,10 +322,12 @@ func TestReadPasswordWithContext_DeadlineReturnsDeadlineExceeded(t *testing.T) {
 	}
 }
 
-func TestReadLineWithContext_ReusesInflightReadAfterTimeout(t *testing.T) {
+func TestReadLineWithContext_ReusesInflightReadWhilePendingAfterTimeout(t *testing.T) {
 	src := &blockingLineReader{
-		release: make(chan struct{}),
-		payload: "hello\n",
+		release:  make(chan struct{}),
+		finish:   make(chan struct{}),
+		returned: make(chan struct{}, 1),
+		payload:  "hello\n",
 	}
 	reader := bufio.NewReader(src)
 
@@ -252,26 +349,80 @@ func TestReadLineWithContext_ReusesInflightReadAfterTimeout(t *testing.T) {
 		t.Fatalf("underlying Read calls=%d; want 1", got)
 	}
 
+	resultCh := make(chan lineCallResult, 1)
+	go func() {
+		line, err := ReadLineWithContext(context.Background(), reader)
+		resultCh <- lineCallResult{line: line, err: err}
+	}()
+
+	state := getLineState(reader)
+	waitForCondition(t, "line retry to block on inflight read", func() bool {
+		if state.mu.TryLock() {
+			state.mu.Unlock()
+			return false
+		}
+		return true
+	})
+
 	close(src.release)
+	close(src.finish)
+	waitForSignal(t, src.returned, "underlying line read completion")
+
+	res := <-resultCh
+	if res.err != nil {
+		t.Fatalf("retry ReadLineWithContext error: %v", res.err)
+	}
+	if res.line != "hello\n" {
+		t.Fatalf("line=%q; want %q", res.line, "hello\n")
+	}
+	if got := src.calls.Load(); got != 1 {
+		t.Fatalf("underlying Read calls after pending retry=%d; want 1", got)
+	}
+}
+
+func TestReadLineWithContext_PreservesCompletedReadForNextRetryAfterTimeout(t *testing.T) {
+	src := &blockingLineReader{
+		release:  make(chan struct{}),
+		returned: make(chan struct{}, 1),
+		payload:  "hello\n",
+	}
+	reader := bufio.NewReader(src)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	_, err := ReadLineWithContext(ctx, reader)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first err=%v; want %v", err, context.DeadlineExceeded)
+	}
+
+	inflight := currentLineInflight(t, reader)
+	close(src.release)
+	waitForSignal(t, src.returned, "underlying line read return")
+	waitForSignal(t, inflight.completed, "line inflight completion")
+	assertSameLineInflight(t, reader, inflight)
 
 	line, err := ReadLineWithContext(context.Background(), reader)
 	if err != nil {
-		t.Fatalf("third ReadLineWithContext error: %v", err)
+		t.Fatalf("retry ReadLineWithContext error: %v", err)
 	}
 	if line != "hello\n" {
 		t.Fatalf("line=%q; want %q", line, "hello\n")
 	}
 	if got := src.calls.Load(); got != 1 {
-		t.Fatalf("underlying Read calls after release=%d; want 1", got)
+		t.Fatalf("underlying Read calls after completed retry=%d; want 1", got)
 	}
 }
 
-func TestReadPasswordWithContext_ReusesInflightReadAfterTimeout(t *testing.T) {
-	unblock := make(chan struct{})
+func TestReadPasswordWithContext_ReusesInflightReadWhilePendingAfterTimeout(t *testing.T) {
+	release := make(chan struct{})
+	finish := make(chan struct{})
+	returned := make(chan struct{}, 1)
 	var calls atomic.Int32
 	readPassword := func(fd int) ([]byte, error) {
 		calls.Add(1)
-		<-unblock
+		<-release
+		<-finish
+		signalNonBlocking(returned)
 		return []byte("secret"), nil
 	}
 
@@ -299,16 +450,72 @@ func TestReadPasswordWithContext_ReusesInflightReadAfterTimeout(t *testing.T) {
 		t.Fatalf("readPassword calls=%d; want 1", gotCalls)
 	}
 
-	close(unblock)
+	resultCh := make(chan passwordCallResult, 1)
+	go func() {
+		got, err := ReadPasswordWithContext(context.Background(), readPassword, 42)
+		resultCh <- passwordCallResult{b: got, err: err}
+	}()
+
+	state := getPasswordState(42)
+	waitForCondition(t, "password retry to block on inflight read", func() bool {
+		if state.mu.TryLock() {
+			state.mu.Unlock()
+			return false
+		}
+		return true
+	})
+
+	close(release)
+	close(finish)
+	waitForSignal(t, returned, "underlying password read completion")
+
+	res := <-resultCh
+	if res.err != nil {
+		t.Fatalf("retry ReadPasswordWithContext error: %v", res.err)
+	}
+	if string(res.b) != "secret" {
+		t.Fatalf("got=%q; want %q", string(res.b), "secret")
+	}
+	if gotCalls := calls.Load(); gotCalls != 1 {
+		t.Fatalf("readPassword calls after pending retry=%d; want 1", gotCalls)
+	}
+}
+
+func TestReadPasswordWithContext_PreservesCompletedReadForNextRetryAfterTimeout(t *testing.T) {
+	release := make(chan struct{})
+	returned := make(chan struct{}, 1)
+	var calls atomic.Int32
+	readPassword := func(fd int) ([]byte, error) {
+		calls.Add(1)
+		<-release
+		signalNonBlocking(returned)
+		return []byte("secret"), nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	got, err := ReadPasswordWithContext(ctx, readPassword, 42)
+	if got != nil {
+		t.Fatalf("expected nil bytes on first deadline")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first err=%v; want %v", err, context.DeadlineExceeded)
+	}
+
+	inflight := currentPasswordInflight(t, 42)
+	close(release)
+	waitForSignal(t, returned, "underlying password read return")
+	waitForSignal(t, inflight.completed, "password inflight completion")
+	assertSamePasswordInflight(t, 42, inflight)
 
 	got, err = ReadPasswordWithContext(context.Background(), readPassword, 42)
 	if err != nil {
-		t.Fatalf("third ReadPasswordWithContext error: %v", err)
+		t.Fatalf("retry ReadPasswordWithContext error: %v", err)
 	}
 	if string(got) != "secret" {
 		t.Fatalf("got=%q; want %q", string(got), "secret")
 	}
 	if gotCalls := calls.Load(); gotCalls != 1 {
-		t.Fatalf("readPassword calls after release=%d; want 1", gotCalls)
+		t.Fatalf("readPassword calls after completed retry=%d; want 1", gotCalls)
 	}
 }

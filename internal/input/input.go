@@ -27,7 +27,8 @@ type lineState struct {
 }
 
 type lineInflight struct {
-	done chan lineResult
+	done      chan lineResult
+	completed chan struct{}
 }
 
 type passwordResult struct {
@@ -41,7 +42,8 @@ type passwordState struct {
 }
 
 type passwordInflight struct {
-	done chan passwordResult
+	done      chan passwordResult
+	completed chan struct{}
 }
 
 var (
@@ -107,6 +109,7 @@ func getPasswordState(fd int) *passwordState {
 // or stdin closure it returns ErrInputAborted. On ctx deadline it returns context.DeadlineExceeded.
 // Cancellation stops waiting but does not interrupt an already-started reader.ReadString call;
 // at most one in-flight read is kept per reader to avoid goroutine buildup across retries.
+// A completed in-flight read remains attached to the reader until a later caller consumes it.
 func ReadLineWithContext(ctx context.Context, reader *bufio.Reader) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -122,16 +125,15 @@ func ReadLineWithContext(ctx context.Context, reader *bufio.Reader) (string, err
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.inflight == nil {
-		inflight := &lineInflight{done: make(chan lineResult, 1)}
+		inflight := &lineInflight{
+			done:      make(chan lineResult, 1),
+			completed: make(chan struct{}),
+		}
 		state.inflight = inflight
 		go func() {
 			line, err := reader.ReadString('\n')
 			inflight.done <- lineResult{line: line, err: MapInputError(err)}
-			state.mu.Lock()
-			if state.inflight == inflight {
-				state.inflight = nil
-			}
-			state.mu.Unlock()
+			close(inflight.completed)
 		}()
 	}
 	inflight := state.inflight
@@ -155,6 +157,7 @@ func ReadLineWithContext(ctx context.Context, reader *bufio.Reader) (string, err
 // context.DeadlineExceeded.
 // Cancellation stops waiting but does not interrupt an already-started password read;
 // at most one in-flight password read is kept per file descriptor to avoid goroutine buildup.
+// A completed in-flight password read remains attached until a later caller consumes it.
 func ReadPasswordWithContext(ctx context.Context, readPassword func(int) ([]byte, error), fd int) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -170,16 +173,15 @@ func ReadPasswordWithContext(ctx context.Context, readPassword func(int) ([]byte
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.inflight == nil {
-		inflight := &passwordInflight{done: make(chan passwordResult, 1)}
+		inflight := &passwordInflight{
+			done:      make(chan passwordResult, 1),
+			completed: make(chan struct{}),
+		}
 		state.inflight = inflight
 		go func() {
 			b, err := readPassword(fd)
 			inflight.done <- passwordResult{b: b, err: MapInputError(err)}
-			state.mu.Lock()
-			if state.inflight == inflight {
-				state.inflight = nil
-			}
-			state.mu.Unlock()
+			close(inflight.completed)
 		}()
 	}
 	inflight := state.inflight
