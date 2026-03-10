@@ -90,7 +90,22 @@ func resolvePathRelativeToBaseWithinRootFS(fsys FS, destRoot, baseDir, candidate
 	if err != nil {
 		return "", fmt.Errorf("resolve base directory: %w", err)
 	}
-	canonicalBaseDir, err := normalizeAbsolutePathWithinRoot(lexicalRoot, canonicalRoot, baseAbs)
+	normalizedBaseDir, err := normalizeAbsolutePathWithinRoot(lexicalRoot, canonicalRoot, baseAbs)
+	if err != nil {
+		return "", err
+	}
+
+	// Resolve symlinks already present in the base directory before validating
+	// a relative target against it. The kernel creates the new symlink under the
+	// resolved parent directory, not the lexical parent path.
+	canonicalBaseDir, err := resolvePathWithinPreparedRootFS(
+		fsys,
+		lexicalRoot,
+		canonicalRoot,
+		normalizedBaseDir,
+		true,
+		maxPathSecuritySymlinkHops,
+	)
 	if err != nil {
 		return "", err
 	}

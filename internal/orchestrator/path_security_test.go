@@ -118,3 +118,67 @@ func TestResolvePathWithinRootFS_AllowsAbsoluteSymlinkTargetViaLexicalRoot(t *te
 		t.Fatalf("resolved path = %q, want %q", resolved, want)
 	}
 }
+
+func TestResolvePathRelativeToBaseWithinRootFS_RejectsEscapeViaSymlinkedBaseDir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink(".", filepath.Join(root, "linkdir")); err != nil {
+		t.Fatalf("create base symlink: %v", err)
+	}
+
+	_, err := resolvePathRelativeToBaseWithinRootFS(osFS{}, root, filepath.Join(root, "linkdir"), "../outside")
+	if err == nil || !strings.Contains(err.Error(), "escapes destination") {
+		t.Fatalf("expected escape rejection, got %v", err)
+	}
+}
+
+func TestResolvePathRelativeToBaseWithinRootFS_AllowsRelativeTargetAfterSafeBaseResolution(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
+	if err := os.Symlink("subdir", filepath.Join(root, "linkdir")); err != nil {
+		t.Fatalf("create base symlink: %v", err)
+	}
+
+	resolved, err := resolvePathRelativeToBaseWithinRootFS(osFS{}, root, filepath.Join(root, "linkdir"), "file.txt")
+	if err != nil {
+		t.Fatalf("resolvePathRelativeToBaseWithinRootFS returned error: %v", err)
+	}
+
+	want := filepath.Join(root, "subdir", "file.txt")
+	if resolved != want {
+		t.Fatalf("resolved path = %q, want %q", resolved, want)
+	}
+}
+
+func TestResolvePathRelativeToBaseWithinRootFS_RejectsBaseDirSymlinkOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "linkdir")); err != nil {
+		t.Fatalf("create base symlink: %v", err)
+	}
+
+	_, err := resolvePathRelativeToBaseWithinRootFS(osFS{}, root, filepath.Join(root, "linkdir"), "file.txt")
+	if err == nil || !strings.Contains(err.Error(), "escapes destination") {
+		t.Fatalf("expected escape rejection, got %v", err)
+	}
+}
+
+func TestResolvePathRelativeToBaseWithinRootFS_PreservesAbsoluteCandidateBehavior(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
+	if err := os.Symlink("subdir", filepath.Join(root, "linkdir")); err != nil {
+		t.Fatalf("create base symlink: %v", err)
+	}
+
+	candidate := filepath.Join(root, "subdir", "file.txt")
+	resolved, err := resolvePathRelativeToBaseWithinRootFS(osFS{}, root, filepath.Join(root, "linkdir"), candidate)
+	if err != nil {
+		t.Fatalf("resolvePathRelativeToBaseWithinRootFS returned error: %v", err)
+	}
+	if resolved != candidate {
+		t.Fatalf("resolved path = %q, want %q", resolved, candidate)
+	}
+}

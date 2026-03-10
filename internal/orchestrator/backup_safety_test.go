@@ -445,6 +445,107 @@ func TestRestoreSafetyBackup_RejectsBrokenIntermediateSymlinkEscape(t *testing.T
 	}
 }
 
+func TestRestoreSafetyBackup_RejectsEscapeWhenParentPathIsSymlink(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "symlinked-parent-escape.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	if err := tw.WriteHeader(&tar.Header{Name: "linkdir", Typeflag: tar.TypeSymlink, Linkname: "."}); err != nil {
+		t.Fatalf("write parent symlink header failed: %v", err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "linkdir/escape", Typeflag: tar.TypeSymlink, Linkname: "../outside"}); err != nil {
+		t.Fatalf("write escaping symlink header failed: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive failed: %v", err)
+	}
+
+	if err := RestoreSafetyBackup(logger, backupPath, restoreDir); err != nil {
+		t.Fatalf("RestoreSafetyBackup failed: %v", err)
+	}
+
+	linkTarget, err := os.Readlink(filepath.Join(restoreDir, "linkdir"))
+	if err != nil {
+		t.Fatalf("parent symlink should exist: %v", err)
+	}
+	if linkTarget != "." {
+		t.Fatalf("parent symlink target = %q, want %q", linkTarget, ".")
+	}
+
+	if _, err := os.Lstat(filepath.Join(restoreDir, "escape")); !os.IsNotExist(err) {
+		t.Fatalf("escaping symlink should not be created, got err=%v", err)
+	}
+	if !strings.Contains(logBuf.String(), "Skipping symlink") {
+		t.Fatalf("expected symlink skip warning, logs=%q", logBuf.String())
+	}
+}
+
+func TestRestoreSafetyBackup_AllowsSafeTargetWhenParentPathIsSymlink(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "symlinked-parent-safe.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+		t.Fatalf("write subdir header failed: %v", err)
+	}
+	content := []byte("ok")
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/file.txt", Mode: 0o644, Size: int64(len(content))}); err != nil {
+		t.Fatalf("write file header failed: %v", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatalf("write file content failed: %v", err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "linkdir", Typeflag: tar.TypeSymlink, Linkname: "subdir"}); err != nil {
+		t.Fatalf("write parent symlink header failed: %v", err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "linkdir/ok", Typeflag: tar.TypeSymlink, Linkname: "file.txt"}); err != nil {
+		t.Fatalf("write safe symlink header failed: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive failed: %v", err)
+	}
+
+	if err := RestoreSafetyBackup(logger, backupPath, restoreDir); err != nil {
+		t.Fatalf("RestoreSafetyBackup failed: %v", err)
+	}
+
+	linkTarget, err := os.Readlink(filepath.Join(restoreDir, "subdir", "ok"))
+	if err != nil {
+		t.Fatalf("safe symlink should exist: %v", err)
+	}
+	if linkTarget != "file.txt" {
+		t.Fatalf("safe symlink target = %q, want %q", linkTarget, "file.txt")
+	}
+}
+
 func TestCleanupOldSafetyBackups(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 
