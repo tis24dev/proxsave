@@ -673,12 +673,16 @@ func syncDirExact(srcDir, destDir string) ([]string, error) {
 				if err != nil {
 					return fmt.Errorf("readlink %s: %w", src, err)
 				}
+				validatedTarget, err := validateOverlaySymlinkTargetWithinRoot(destDir, dest, target)
+				if err != nil {
+					return fmt.Errorf("unsafe symlink target %s -> %s: %w", dest, target, err)
+				}
 				if err := ensureDirExistsWithInheritedMeta(filepath.Dir(dest)); err != nil {
 					return fmt.Errorf("ensure %s: %w", filepath.Dir(dest), err)
 				}
 				_ = restoreFS.Remove(dest)
-				if err := restoreFS.Symlink(target, dest); err != nil {
-					return fmt.Errorf("symlink %s -> %s: %w", dest, target, err)
+				if err := restoreFS.Symlink(validatedTarget, dest); err != nil {
+					return fmt.Errorf("symlink %s -> %s: %w", dest, validatedTarget, err)
 				}
 				applied = append(applied, dest)
 				continue

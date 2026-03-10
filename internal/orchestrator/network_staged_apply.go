@@ -202,7 +202,7 @@ func copySymlinkOverlayWithinRoot(src, dest, destRoot string) (bool, error) {
 		return false, fmt.Errorf("readlink %s: %w", src, err)
 	}
 
-	validatedTarget, err := validateNetworkOverlaySymlinkTarget(destRoot, dest, target)
+	validatedTarget, err := validateOverlaySymlinkTargetWithinRoot(destRoot, dest, target)
 	if err != nil {
 		return false, fmt.Errorf("unsafe symlink target %s -> %s: %w", dest, target, err)
 	}
@@ -228,7 +228,7 @@ func copySymlinkOverlayWithinRoot(src, dest, destRoot string) (bool, error) {
 	return true, nil
 }
 
-func validateNetworkOverlaySymlinkTarget(destRoot, dest, target string) (string, error) {
+func validateOverlaySymlinkTargetWithinRoot(destRoot, dest, target string) (string, error) {
 	destRoot = filepath.Clean(strings.TrimSpace(destRoot))
 	dest = filepath.Clean(strings.TrimSpace(dest))
 
