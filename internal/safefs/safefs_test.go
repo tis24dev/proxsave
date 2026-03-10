@@ -10,6 +10,32 @@ import (
 	"time"
 )
 
+type stagedDeadlineContext struct {
+	deadline time.Time
+	done     <-chan struct{}
+	errCalls int
+}
+
+func (c *stagedDeadlineContext) Deadline() (time.Time, bool) {
+	return c.deadline, true
+}
+
+func (c *stagedDeadlineContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *stagedDeadlineContext) Err() error {
+	c.errCalls++
+	if c.errCalls == 1 {
+		return nil
+	}
+	return context.DeadlineExceeded
+}
+
+func (c *stagedDeadlineContext) Value(any) any {
+	return nil
+}
+
 func waitForSignal(t *testing.T, ch <-chan struct{}, name string) {
 	t.Helper()
 	select {
@@ -108,6 +134,28 @@ func TestStat_PropagatesContextCancellation(t *testing.T) {
 	_, err := Stat(ctx, "/does/not/matter", 50*time.Millisecond)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Stat err = %v; want context.Canceled", err)
+	}
+}
+
+func TestRunLimited_ReturnsTimeoutErrorWhenDeadlineExpiresBeforeNoTimeoutPath(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	ctx := &stagedDeadlineContext{
+		deadline: time.Now().Add(-time.Millisecond),
+		done:     done,
+	}
+
+	called := false
+	_, err := runLimited(ctx, 50*time.Millisecond, &TimeoutError{Op: "stat", Path: "/does/not/matter"}, func() (int, error) {
+		called = true
+		return 1, nil
+	})
+
+	if called {
+		t.Fatal("run called; want timeout before execution")
+	}
+	if err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("runLimited err = %v; want timeout", err)
 	}
 }
 

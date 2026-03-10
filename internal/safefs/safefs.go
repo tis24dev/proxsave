@@ -101,6 +101,12 @@ func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *T
 	}
 	timeout = effectiveTimeout(ctx, timeout)
 	if timeout <= 0 {
+		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return zero, timeoutErr
+			}
+			return zero, err
+		}
 		return run()
 	}
 
