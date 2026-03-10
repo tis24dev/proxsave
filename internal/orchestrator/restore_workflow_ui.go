@@ -11,12 +11,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 var prepareRestoreBundleFunc = prepareRestoreBundleWithUI
+var analyzeRestoreArchiveFunc = AnalyzeRestoreArchive
+
+func fallbackRestoreDecisionInfoFromManifest(manifest *backup.Manifest) *RestoreDecisionInfo {
+	info := &RestoreDecisionInfo{Source: RestoreDecisionSourceUnknown}
+	if manifest == nil {
+		return info
+	}
+
+	info.BackupType = DetectBackupType(manifest)
+	info.ClusterPayload = strings.EqualFold(strings.TrimSpace(manifest.ClusterMode), "cluster")
+	info.BackupHostname = strings.TrimSpace(manifest.Hostname)
+	return info
+}
 
 func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, false)
@@ -76,11 +90,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	systemType := restoreSystem.DetectCurrentSystem()
 	logger.Info("Detected system type: %s", GetSystemTypeString(systemType))
 
-	availableCategories, decisionInfo, err := AnalyzeRestoreArchive(prepared.ArchivePath, logger)
+	availableCategories, decisionInfo, err := analyzeRestoreArchiveFunc(prepared.ArchivePath, logger)
+	fallbackToFullRestore := false
 	if err != nil {
 		logger.Warning("Could not analyze categories: %v", err)
-		logger.Info("Falling back to full restore mode")
-		return runFullRestoreWithUI(ctx, ui, candidate, prepared, destRoot, logger, cfg.DryRun)
+		availableCategories = nil
+		decisionInfo = fallbackRestoreDecisionInfoFromManifest(candidate.Manifest)
+		fallbackToFullRestore = true
 	}
 	if decisionInfo == nil {
 		decisionInfo = &RestoreDecisionInfo{}
@@ -95,6 +111,10 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		if !proceed {
 			return ErrRestoreAborted
 		}
+	}
+	if fallbackToFullRestore {
+		logger.Info("Falling back to full restore mode")
+		return runFullRestoreWithUI(ctx, ui, candidate, prepared, destRoot, logger, cfg.DryRun)
 	}
 
 	var (
