@@ -13,20 +13,29 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-func TestGetDatastoreListNoBinary(t *testing.T) {
-	collector := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
+func TestGetDatastoreListNoBinaryStillIncludesOverrides(t *testing.T) {
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSDatastorePaths = []string{"/override/no-cli"}
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
 		LookPath: func(string) (string, error) { return "", errors.New("not found") },
 	})
 	ds, err := collector.getDatastoreList(context.Background())
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if len(ds) != 0 {
-		t.Fatalf("expected empty datastores when binary missing")
+	if len(ds) != 1 {
+		t.Fatalf("expected override datastore when binary missing, got %+v", ds)
+	}
+	if ds[0].Name != "no-cli" || ds[0].Path != "/override/no-cli" || ds[0].Source != pbsDatastoreSourceOverride {
+		t.Fatalf("unexpected override datastore when binary missing: %+v", ds[0])
 	}
 }
 
-func TestGetDatastoreListCommandErrorAndParseError(t *testing.T) {
+func TestGetDatastoreListCommandErrorAndParseErrorStillIncludeOverrides(t *testing.T) {
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSDatastorePaths = []string{"/override/fallback"}
+
 	deps := CollectorDeps{
 		LookPath: func(string) (string, error) { return "/bin/true", nil },
 		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
@@ -34,17 +43,25 @@ func TestGetDatastoreListCommandErrorAndParseError(t *testing.T) {
 		},
 	}
 
-	c := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, deps)
-	if _, err := c.getDatastoreList(context.Background()); err == nil {
-		t.Fatalf("expected error when command fails")
+	c := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, deps)
+	ds, err := c.getDatastoreList(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error on command failure, got %v", err)
+	}
+	if len(ds) != 1 || ds[0].Path != "/override/fallback" || ds[0].Source != pbsDatastoreSourceOverride {
+		t.Fatalf("expected override fallback on command failure, got %+v", ds)
 	}
 
 	// Now simulate parse error
 	c.deps.RunCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("{invalid"), nil
 	}
-	if _, err := c.getDatastoreList(context.Background()); err == nil {
-		t.Fatalf("expected parse error for invalid JSON")
+	ds, err = c.getDatastoreList(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error on parse failure, got %v", err)
+	}
+	if len(ds) != 1 || ds[0].Path != "/override/fallback" || ds[0].Source != pbsDatastoreSourceOverride {
+		t.Fatalf("expected override fallback on parse failure, got %+v", ds)
 	}
 }
 

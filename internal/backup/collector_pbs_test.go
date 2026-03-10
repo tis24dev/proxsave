@@ -189,10 +189,17 @@ func TestGetDatastoreListCommandError(t *testing.T) {
 			return nil, fmt.Errorf("command failed")
 		},
 	})
+	collector.config.PBSDatastorePaths = []string{"/override/from-error"}
 
-	_, err := collector.getDatastoreList(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "datastore list failed") {
-		t.Fatalf("expected datastore list error, got %v", err)
+	datastores, err := collector.getDatastoreList(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(datastores) != 1 {
+		t.Fatalf("expected only override datastore, got %+v", datastores)
+	}
+	if datastores[0].Name != "from-error" || datastores[0].Path != "/override/from-error" || datastores[0].Source != pbsDatastoreSourceOverride {
+		t.Fatalf("unexpected override datastore after command failure: %+v", datastores[0])
 	}
 }
 
@@ -205,10 +212,17 @@ func TestGetDatastoreListBadJSON(t *testing.T) {
 			return []byte("not-json"), nil
 		},
 	})
+	collector.config.PBSDatastorePaths = []string{"/override/from-parse"}
 
-	_, err := collector.getDatastoreList(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "failed to parse datastore list JSON") {
-		t.Fatalf("expected parse error, got %v", err)
+	datastores, err := collector.getDatastoreList(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(datastores) != 1 {
+		t.Fatalf("expected only override datastore, got %+v", datastores)
+	}
+	if datastores[0].Name != "from-parse" || datastores[0].Path != "/override/from-parse" || datastores[0].Source != pbsDatastoreSourceOverride {
+		t.Fatalf("unexpected override datastore after parse failure: %+v", datastores[0])
 	}
 }
 

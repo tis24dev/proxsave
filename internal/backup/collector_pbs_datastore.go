@@ -722,40 +722,45 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 	}
 	c.logger.Debug("Enumerating PBS datastores via proxmox-backup-manager")
 
-	if _, err := c.depLookPath("proxmox-backup-manager"); err != nil {
-		return nil, nil
-	}
-
-	output, err := c.depRunCommand(ctx, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
-	if err != nil {
-		return nil, fmt.Errorf("proxmox-backup-manager datastore list failed: %w", err)
-	}
-
 	type datastoreEntry struct {
 		Name    string `json:"name"`
 		Path    string `json:"path"`
 		Comment string `json:"comment"`
 	}
 
-	var entries []datastoreEntry
-	if err := json.Unmarshal(output, &entries); err != nil {
-		return nil, fmt.Errorf("failed to parse datastore list JSON: %w", err)
-	}
-
-	datastores := make([]pbsDatastore, 0, len(entries))
-	for _, entry := range entries {
-		name := strings.TrimSpace(entry.Name)
-		if name != "" {
-			path := strings.TrimSpace(entry.Path)
-			datastores = append(datastores, pbsDatastore{
-				Name:           name,
-				Path:           path,
-				Comment:        strings.TrimSpace(entry.Comment),
-				Source:         pbsDatastoreSourceCLI,
-				CLIName:        name,
-				NormalizedPath: normalizePBSDatastorePath(path),
-				OutputKey:      collectorPathKey(name),
-			})
+	datastores := make([]pbsDatastore, 0, len(c.config.PBSDatastorePaths))
+	if _, err := c.depLookPath("proxmox-backup-manager"); err != nil {
+		c.logger.Debug("Skipping PBS datastore CLI enumeration: proxmox-backup-manager not available: %v", err)
+	} else {
+		output, err := c.depRunCommand(ctx, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			c.logger.Debug("PBS datastore CLI enumeration failed: %v", err)
+		} else {
+			var entries []datastoreEntry
+			if err := json.Unmarshal(output, &entries); err != nil {
+				c.logger.Debug("Failed to parse PBS datastore list JSON: %v", err)
+			} else {
+				datastores = make([]pbsDatastore, 0, len(entries)+len(c.config.PBSDatastorePaths))
+				for _, entry := range entries {
+					name := strings.TrimSpace(entry.Name)
+					if name == "" {
+						continue
+					}
+					path := strings.TrimSpace(entry.Path)
+					datastores = append(datastores, pbsDatastore{
+						Name:           name,
+						Path:           path,
+						Comment:        strings.TrimSpace(entry.Comment),
+						Source:         pbsDatastoreSourceCLI,
+						CLIName:        name,
+						NormalizedPath: normalizePBSDatastorePath(path),
+						OutputKey:      collectorPathKey(name),
+					})
+				}
+			}
 		}
 	}
 
