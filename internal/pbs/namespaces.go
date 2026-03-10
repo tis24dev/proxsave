@@ -46,6 +46,12 @@ func ListNamespaces(ctx context.Context, datastoreName, datastorePath string, io
 	return namespaces, true, nil
 }
 
+// DiscoverNamespacesFromFilesystem skips the PBS CLI and infers namespaces
+// directly from the datastore filesystem layout.
+func DiscoverNamespacesFromFilesystem(ctx context.Context, datastorePath string, ioTimeout time.Duration) ([]Namespace, error) {
+	return discoverNamespacesFromFilesystem(ctx, datastorePath, ioTimeout)
+}
+
 func listNamespacesViaCLI(ctx context.Context, datastore string) ([]Namespace, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

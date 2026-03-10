@@ -295,3 +295,57 @@ func TestCollectPBSDatastoreInventoryCapturesHostCommands(t *testing.T) {
 		t.Fatalf("expected findmnt output to be captured")
 	}
 }
+
+func TestMergePBSDatastoreDefinitionsKeepsOverridesSeparate(t *testing.T) {
+	config := []pbsDatastore{{
+		Name:           "backup",
+		Path:           "/real/backup",
+		Comment:        "primary",
+		Source:         pbsDatastoreSourceConfig,
+		CLIName:        "backup",
+		NormalizedPath: normalizePBSDatastorePath("/real/backup"),
+		OutputKey:      collectorPathKey("backup"),
+	}}
+	cli := []pbsDatastore{
+		{
+			Name:           "backup",
+			Path:           "/real/backup",
+			Comment:        "runtime",
+			Source:         pbsDatastoreSourceCLI,
+			CLIName:        "backup",
+			NormalizedPath: normalizePBSDatastorePath("/real/backup"),
+			OutputKey:      collectorPathKey("backup"),
+		},
+		{
+			Name:           "backup",
+			Path:           "/mnt/a/backup",
+			Comment:        "configured via PBS_DATASTORE_PATH",
+			Source:         pbsDatastoreSourceOverride,
+			NormalizedPath: normalizePBSDatastorePath("/mnt/a/backup"),
+			OutputKey:      buildPBSOverrideOutputKey("/mnt/a/backup"),
+		},
+		{
+			Name:           "backup",
+			Path:           "/srv/b/backup",
+			Comment:        "configured via PBS_DATASTORE_PATH",
+			Source:         pbsDatastoreSourceOverride,
+			NormalizedPath: normalizePBSDatastorePath("/srv/b/backup"),
+			OutputKey:      buildPBSOverrideOutputKey("/srv/b/backup"),
+		},
+	}
+
+	merged := mergePBSDatastoreDefinitions(cli, config)
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 merged entries, got %d: %+v", len(merged), merged)
+	}
+
+	if merged[0].Origin != pbsDatastoreOriginMerged || merged[0].Path != "/real/backup" {
+		t.Fatalf("expected real datastore entry first, got %+v", merged[0])
+	}
+	if merged[1].Origin != pbsDatastoreSourceOverride || merged[2].Origin != pbsDatastoreSourceOverride {
+		t.Fatalf("expected override entries after real datastore, got %+v", merged)
+	}
+	if merged[1].OutputKey == merged[2].OutputKey {
+		t.Fatalf("override output keys should differ, got %+v", merged)
+	}
+}

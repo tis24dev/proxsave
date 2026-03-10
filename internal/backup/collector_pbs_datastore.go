@@ -2,6 +2,8 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,17 +18,91 @@ import (
 	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
+const (
+	pbsDatastoreSourceCLI      = "cli"
+	pbsDatastoreSourceOverride = "override"
+	pbsDatastoreSourceConfig   = "config"
+	pbsDatastoreOriginMerged   = "merged"
+)
+
+var (
+	pbsDatastoreNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	listNamespacesFunc      = pbs.ListNamespaces
+	discoverNamespacesFunc  = pbs.DiscoverNamespacesFromFilesystem
+)
+
 type pbsDatastore struct {
-	Name    string
-	Path    string
-	Comment string
+	Name           string
+	Path           string
+	Comment        string
+	Source         string
+	CLIName        string
+	NormalizedPath string
+	OutputKey      string
+}
+
+func normalizePBSDatastorePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	return filepath.Clean(trimmed)
+}
+
+func buildPBSOverrideDisplayName(path string, idx int) string {
+	name := filepath.Base(normalizePBSDatastorePath(path))
+	if name == "" || name == "." || name == string(os.PathSeparator) || !pbsDatastoreNamePattern.MatchString(name) {
+		return fmt.Sprintf("datastore_%d", idx+1)
+	}
+	return name
+}
+
+func buildPBSOverrideOutputKey(path string) string {
+	normalized := normalizePBSDatastorePath(path)
+	if normalized == "" {
+		return "entry"
+	}
+
+	label := filepath.Base(normalized)
+	if label == "" || label == "." || label == string(os.PathSeparator) || !pbsDatastoreNamePattern.MatchString(label) {
+		label = "datastore"
+	}
+
+	sum := sha256.Sum256([]byte(normalized))
+	return fmt.Sprintf("%s_%s", sanitizeFilename(label), hex.EncodeToString(sum[:4]))
+}
+
+func (ds pbsDatastore) normalizedPath() string {
+	if path := strings.TrimSpace(ds.NormalizedPath); path != "" {
+		return path
+	}
+	return normalizePBSDatastorePath(ds.Path)
 }
 
 func (ds pbsDatastore) pathKey() string {
+	if key := strings.TrimSpace(ds.OutputKey); key != "" {
+		return key
+	}
 	return collectorPathKey(ds.Name)
 }
 
-var listNamespacesFunc = pbs.ListNamespaces
+func (ds pbsDatastore) cliName() string {
+	if name := strings.TrimSpace(ds.CLIName); name != "" {
+		return name
+	}
+	return strings.TrimSpace(ds.Name)
+}
+
+func (ds pbsDatastore) isOverride() bool {
+	return strings.TrimSpace(ds.Source) == pbsDatastoreSourceOverride
+}
+
+func (ds pbsDatastore) inventoryOrigin() string {
+	if origin := strings.TrimSpace(ds.Source); origin != "" {
+		return origin
+	}
+	return pbsDatastoreSourceCLI
+}
 
 // collectDatastoreConfigs collects detailed datastore configurations
 func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pbsDatastore) error {
@@ -44,12 +120,16 @@ func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pb
 	for _, ds := range datastores {
 		dsKey := ds.pathKey()
 
-		// Get datastore configuration details
-		c.safeCmdOutput(ctx,
-			fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", ds.Name),
-			filepath.Join(datastoreDir, fmt.Sprintf("%s_config.json", dsKey)),
-			fmt.Sprintf("Datastore %s configuration", ds.Name),
-			false)
+		if cliName := ds.cliName(); cliName != "" && !ds.isOverride() {
+			// Get datastore configuration details for CLI-backed datastores only.
+			c.safeCmdOutput(ctx,
+				fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", cliName),
+				filepath.Join(datastoreDir, fmt.Sprintf("%s_config.json", dsKey)),
+				fmt.Sprintf("Datastore %s configuration", ds.Name),
+				false)
+		} else {
+			c.logger.Debug("Skipping datastore CLI config for %s (path=%s): no PBS datastore identity", ds.Name, ds.Path)
+		}
 
 		// Get namespace list using CLI/Filesystem fallback
 		if err := c.collectDatastoreNamespaces(ctx, ds, datastoreDir); err != nil {
@@ -77,7 +157,17 @@ func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatast
 		ioTimeout = time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
 	}
 
-	namespaces, fromFallback, err := listNamespacesFunc(ctx, ds.Name, ds.Path, ioTimeout)
+	var (
+		namespaces   []pbs.Namespace
+		fromFallback bool
+		err          error
+	)
+	if ds.isOverride() {
+		namespaces, err = discoverNamespacesFunc(ctx, ds.normalizedPath(), ioTimeout)
+		fromFallback = true
+	} else {
+		namespaces, fromFallback, err = listNamespacesFunc(ctx, ds.cliName(), ds.Path, ioTimeout)
+	}
 	if err != nil {
 		return err
 	}
@@ -458,10 +548,15 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 	for _, entry := range entries {
 		name := strings.TrimSpace(entry.Name)
 		if name != "" {
+			path := strings.TrimSpace(entry.Path)
 			datastores = append(datastores, pbsDatastore{
-				Name:    name,
-				Path:    strings.TrimSpace(entry.Path),
-				Comment: strings.TrimSpace(entry.Comment),
+				Name:           name,
+				Path:           path,
+				Comment:        strings.TrimSpace(entry.Comment),
+				Source:         pbsDatastoreSourceCLI,
+				CLIName:        name,
+				NormalizedPath: normalizePBSDatastorePath(path),
+				OutputKey:      collectorPathKey(name),
 			})
 		}
 	}
@@ -469,27 +564,31 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 	if len(c.config.PBSDatastorePaths) > 0 {
 		existing := make(map[string]struct{}, len(datastores))
 		for _, ds := range datastores {
-			if ds.Path != "" {
-				existing[ds.Path] = struct{}{}
+			if normalized := ds.normalizedPath(); normalized != "" {
+				existing[normalized] = struct{}{}
 			}
 		}
-		validName := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 		for idx, override := range c.config.PBSDatastorePaths {
 			override = strings.TrimSpace(override)
 			if override == "" {
 				continue
 			}
-			if _, ok := existing[override]; ok {
+			normalized := normalizePBSDatastorePath(override)
+			if normalized == "" {
 				continue
 			}
-			name := filepath.Base(filepath.Clean(override))
-			if name == "" || name == "." || name == string(os.PathSeparator) || !validName.MatchString(name) {
-				name = fmt.Sprintf("datastore_%d", idx+1)
+			if _, ok := existing[normalized]; ok {
+				continue
 			}
+			existing[normalized] = struct{}{}
+			name := buildPBSOverrideDisplayName(normalized, idx)
 			datastores = append(datastores, pbsDatastore{
-				Name:    name,
-				Path:    override,
-				Comment: "configured via PBS_DATASTORE_PATH",
+				Name:           name,
+				Path:           override,
+				Comment:        "configured via PBS_DATASTORE_PATH",
+				Source:         pbsDatastoreSourceOverride,
+				NormalizedPath: normalized,
+				OutputKey:      buildPBSOverrideOutputKey(normalized),
 			})
 		}
 	}

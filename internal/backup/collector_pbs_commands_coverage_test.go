@@ -92,6 +92,42 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 	}
 }
 
+func TestCollectPBSCommandsSkipsStatusForOverrideOnlyEntries(t *testing.T) {
+	pbsRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pbsRoot, "tape.cfg"), []byte("ok"), 0o640); err != nil {
+		t.Fatalf("write tape.cfg: %v", err)
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = pbsRoot
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			return "/bin/" + name, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte(fmt.Sprintf("%s %s", name, strings.Join(args, " "))), nil
+		},
+	})
+
+	override := pbsDatastore{
+		Name:           "backup",
+		Path:           "/mnt/a/backup",
+		Source:         pbsDatastoreSourceOverride,
+		NormalizedPath: normalizePBSDatastorePath("/mnt/a/backup"),
+		OutputKey:      buildPBSOverrideOutputKey("/mnt/a/backup"),
+	}
+	if err := collector.collectPBSCommands(context.Background(), []pbsDatastore{override}); err != nil {
+		t.Fatalf("collectPBSCommands error: %v", err)
+	}
+
+	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
+	statusPath := filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", override.pathKey()))
+	if _, err := os.Stat(statusPath); !os.IsNotExist(err) {
+		t.Fatalf("override datastore status file should not exist (%s), got err=%v", statusPath, err)
+	}
+}
+
 func TestCollectPBSCommandsReturnsErrorWhenCriticalVersionFails(t *testing.T) {
 	cfg := GetDefaultCollectorConfig()
 	cfg.PBSConfigPath = t.TempDir()
@@ -189,6 +225,50 @@ func TestCollectPBSPxarMetadataProcessesMultipleDatastores(t *testing.T) {
 	}
 }
 
+func TestCollectPBSPxarMetadataSeparatesOverrideBasenameCollisions(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := GetDefaultCollectorConfig()
+	cfg.PxarDatastoreConcurrency = 2
+
+	collector := NewCollector(newTestLogger(), cfg, tmp, types.ProxmoxBS, false)
+
+	makeOverride := func(path string) pbsDatastore {
+		for _, sub := range []string{"vm", "ct"} {
+			if err := os.MkdirAll(filepath.Join(path, sub), 0o755); err != nil {
+				t.Fatalf("mkdir %s: %v", sub, err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(path, "vm", "backup.pxar"), []byte("data"), 0o640); err != nil {
+			t.Fatalf("write pxar: %v", err)
+		}
+		return pbsDatastore{
+			Name:           "backup",
+			Path:           path,
+			Comment:        "configured via PBS_DATASTORE_PATH",
+			Source:         pbsDatastoreSourceOverride,
+			NormalizedPath: normalizePBSDatastorePath(path),
+			OutputKey:      buildPBSOverrideOutputKey(path),
+		}
+	}
+
+	ds1 := makeOverride(filepath.Join(tmp, "mnt", "a", "backup"))
+	ds2 := makeOverride(filepath.Join(tmp, "srv", "b", "backup"))
+	if ds1.pathKey() == ds2.pathKey() {
+		t.Fatalf("expected distinct path keys, got %q", ds1.pathKey())
+	}
+
+	if err := collector.collectPBSPxarMetadata(context.Background(), []pbsDatastore{ds1, ds2}); err != nil {
+		t.Fatalf("collectPBSPxarMetadata error: %v", err)
+	}
+
+	for _, ds := range []pbsDatastore{ds1, ds2} {
+		base := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata", ds.pathKey())
+		if _, err := os.Stat(filepath.Join(base, "metadata.json")); err != nil {
+			t.Fatalf("expected metadata for %s: %v", ds.pathKey(), err)
+		}
+	}
+}
+
 func TestCollectPBSPxarMetadataReturnsErrorWhenTempVarIsFile(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, "var"), []byte("not-a-dir"), 0o640); err != nil {
@@ -231,6 +311,42 @@ func TestCollectDatastoreConfigsCreatesConfigAndNamespaceFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(datastoreDir, "store_namespaces.json")); err != nil {
 		t.Fatalf("expected namespaces file: %v", err)
+	}
+}
+
+func TestCollectDatastoreConfigsCreatesDistinctNamespaceFilesForOverrideCollisions(t *testing.T) {
+	cfg := GetDefaultCollectorConfig()
+	tmp := t.TempDir()
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, tmp, types.ProxmoxBS, false, CollectorDeps{})
+
+	makeOverride := func(path string) pbsDatastore {
+		if err := os.MkdirAll(filepath.Join(path, "local", "vm"), 0o755); err != nil {
+			t.Fatalf("mkdir override namespace fixture: %v", err)
+		}
+		return pbsDatastore{
+			Name:           "backup",
+			Path:           path,
+			Comment:        "configured via PBS_DATASTORE_PATH",
+			Source:         pbsDatastoreSourceOverride,
+			NormalizedPath: normalizePBSDatastorePath(path),
+			OutputKey:      buildPBSOverrideOutputKey(path),
+		}
+	}
+
+	ds1 := makeOverride(filepath.Join(tmp, "mnt", "a", "backup"))
+	ds2 := makeOverride(filepath.Join(tmp, "srv", "b", "backup"))
+	if err := collector.collectDatastoreConfigs(context.Background(), []pbsDatastore{ds1, ds2}); err != nil {
+		t.Fatalf("collectDatastoreConfigs error: %v", err)
+	}
+
+	datastoreDir := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "datastores")
+	for _, ds := range []pbsDatastore{ds1, ds2} {
+		if _, err := os.Stat(filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.pathKey()))); err != nil {
+			t.Fatalf("expected namespaces file for %s: %v", ds.pathKey(), err)
+		}
+		if _, err := os.Stat(filepath.Join(datastoreDir, fmt.Sprintf("%s_config.json", ds.pathKey()))); !os.IsNotExist(err) {
+			t.Fatalf("override config file should not exist for %s, got err=%v", ds.pathKey(), err)
+		}
 	}
 }
 

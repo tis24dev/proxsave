@@ -359,6 +359,8 @@ type pbsDatastoreInventoryRestoreLite struct {
 		Name    string `json:"name"`
 		Path    string `json:"path"`
 		Comment string `json:"comment"`
+		Origin  string `json:"origin"`
+		CLIName string `json:"cli_name"`
 	} `json:"datastores"`
 }
 
@@ -387,7 +389,14 @@ func loadPBSDatastoreCfgFromInventory(stageRoot string) (string, string, error) 
 	// Fallback: generate a minimal datastore.cfg from the inventory's datastore list.
 	var out strings.Builder
 	for _, ds := range report.Datastores {
+		if strings.TrimSpace(ds.Origin) == "override" {
+			continue
+		}
+
 		name := strings.TrimSpace(ds.Name)
+		if name == "" {
+			name = strings.TrimSpace(ds.CLIName)
+		}
 		path := strings.TrimSpace(ds.Path)
 		if name == "" || path == "" {
 			continue

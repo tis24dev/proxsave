@@ -130,6 +130,21 @@ func TestDiscoverNamespacesFromFilesystem_Errors(t *testing.T) {
 	}
 }
 
+func TestDiscoverNamespacesFromFilesystemExportedHelper(t *testing.T) {
+	tmpDir := t.TempDir()
+	mustMkdirAll(t, filepath.Join(tmpDir, "prod", "vm"))
+
+	namespaces, err := DiscoverNamespacesFromFilesystem(context.Background(), tmpDir, 0)
+	if err != nil {
+		t.Fatalf("DiscoverNamespacesFromFilesystem failed: %v", err)
+	}
+
+	got := namespacesToMap(namespaces)
+	if _, ok := got["prod"]; !ok {
+		t.Fatalf("expected exported helper to discover namespace, got %+v", namespaces)
+	}
+}
+
 func TestListNamespaces_CLISuccess(t *testing.T) {
 	setExecCommandStub(t, "cli-success")
 

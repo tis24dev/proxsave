@@ -66,6 +66,9 @@ type pbsDatastoreInventoryEntry struct {
 	Path      string                  `json:"path,omitempty"`
 	Comment   string                  `json:"comment,omitempty"`
 	Sources   []string                `json:"sources,omitempty"`
+	Origin    string                  `json:"origin,omitempty"`
+	CLIName   string                  `json:"cli_name,omitempty"`
+	OutputKey string                  `json:"output_key,omitempty"`
 	StatPath  string                  `json:"stat_path,omitempty"`
 	PathOK    bool                    `json:"path_ok,omitempty"`
 	PathIsDir bool                    `json:"path_is_dir,omitempty"`
@@ -216,10 +219,13 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 
 	for _, def := range merged {
 		entry := pbsDatastoreInventoryEntry{
-			Name:    def.Name,
-			Path:    def.Path,
-			Comment: def.Comment,
-			Sources: append([]string(nil), def.Sources...),
+			Name:      def.Name,
+			Path:      def.Path,
+			Comment:   def.Comment,
+			Sources:   append([]string(nil), def.Sources...),
+			Origin:    def.Origin,
+			CLIName:   def.CLIName,
+			OutputKey: def.OutputKey,
 		}
 
 		statPath := def.Path
@@ -447,34 +453,85 @@ func (c *Collector) captureInventoryCommand(ctx context.Context, pretty string, 
 }
 
 type pbsDatastoreDefinition struct {
-	Name    string
-	Path    string
-	Comment string
-	Sources []string
+	Name      string
+	Path      string
+	Comment   string
+	Sources   []string
+	Origin    string
+	CLIName   string
+	OutputKey string
 }
 
 func mergePBSDatastoreDefinitions(cli, config []pbsDatastore) []pbsDatastoreDefinition {
 	merged := make(map[string]*pbsDatastoreDefinition)
 
-	add := func(ds pbsDatastore, source string) {
+	defKey := func(ds pbsDatastore) string {
+		if ds.isOverride() {
+			if normalized := ds.normalizedPath(); normalized != "" {
+				return "override-path:" + normalized
+			}
+			if path := strings.TrimSpace(ds.Path); path != "" {
+				return "override-path:" + path
+			}
+			return ""
+		}
+
 		name := strings.TrimSpace(ds.Name)
 		if name == "" {
+			return ""
+		}
+		return "name:" + name
+	}
+
+	add := func(ds pbsDatastore, source string) {
+		key := defKey(ds)
+		if key == "" {
 			return
 		}
 
-		entry := merged[name]
+		name := strings.TrimSpace(ds.Name)
+		path := strings.TrimSpace(ds.Path)
+		comment := strings.TrimSpace(ds.Comment)
+		origin := ds.inventoryOrigin()
+		cliName := strings.TrimSpace(ds.cliName())
+		entry := merged[key]
 		if entry == nil {
-			entry = &pbsDatastoreDefinition{Name: name}
-			merged[name] = entry
+			entry = &pbsDatastoreDefinition{
+				Name:      name,
+				Origin:    origin,
+				CLIName:   cliName,
+				OutputKey: strings.TrimSpace(ds.pathKey()),
+			}
+			merged[key] = entry
 		}
 
 		entry.Sources = append(entry.Sources, source)
 
-		if entry.Path == "" && strings.TrimSpace(ds.Path) != "" {
-			entry.Path = strings.TrimSpace(ds.Path)
+		if entry.Name == "" && name != "" {
+			entry.Name = name
 		}
-		if entry.Comment == "" && strings.TrimSpace(ds.Comment) != "" {
-			entry.Comment = strings.TrimSpace(ds.Comment)
+		if entry.Path == "" && path != "" {
+			entry.Path = path
+		}
+		if entry.Comment == "" && comment != "" {
+			entry.Comment = comment
+		}
+		if entry.CLIName == "" && !ds.isOverride() && cliName != "" {
+			entry.CLIName = cliName
+		}
+		if entry.OutputKey == "" {
+			entry.OutputKey = strings.TrimSpace(ds.pathKey())
+		}
+
+		switch {
+		case entry.Origin == "":
+			entry.Origin = origin
+		case entry.Origin == pbsDatastoreSourceOverride || origin == pbsDatastoreSourceOverride:
+			if entry.Origin == "" {
+				entry.Origin = pbsDatastoreSourceOverride
+			}
+		case entry.Origin != origin:
+			entry.Origin = pbsDatastoreOriginMerged
 		}
 	}
 
@@ -482,7 +539,11 @@ func mergePBSDatastoreDefinitions(cli, config []pbsDatastore) []pbsDatastoreDefi
 		add(ds, "datastore.cfg")
 	}
 	for _, ds := range cli {
-		add(ds, "cli")
+		source := "cli"
+		if ds.isOverride() {
+			source = "override"
+		}
+		add(ds, source)
 	}
 
 	out := make([]pbsDatastoreDefinition, 0, len(merged))
@@ -495,9 +556,36 @@ func mergePBSDatastoreDefinitions(cli, config []pbsDatastore) []pbsDatastoreDefi
 	}
 
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		if p1, p2 := pbsDatastoreOriginSortPriority(out[i].Origin), pbsDatastoreOriginSortPriority(out[j].Origin); p1 != p2 {
+			return p1 < p2
+		}
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		if out[i].OutputKey != out[j].OutputKey {
+			return out[i].OutputKey < out[j].OutputKey
+		}
+		return out[i].CLIName < out[j].CLIName
 	})
 	return out
+}
+
+func pbsDatastoreOriginSortPriority(origin string) int {
+	switch strings.TrimSpace(origin) {
+	case pbsDatastoreOriginMerged:
+		return 0
+	case pbsDatastoreSourceConfig:
+		return 1
+	case pbsDatastoreSourceCLI:
+		return 2
+	case pbsDatastoreSourceOverride:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func parsePBSDatastoreCfg(contents string) []pbsDatastore {
@@ -536,7 +624,12 @@ func parsePBSDatastoreCfg(contents string) []pbsDatastore {
 			if name == "" {
 				continue
 			}
-			current = &pbsDatastore{Name: name}
+			current = &pbsDatastore{
+				Name:      name,
+				Source:    pbsDatastoreSourceConfig,
+				CLIName:   name,
+				OutputKey: collectorPathKey(name),
+			}
 			continue
 		}
 
@@ -559,6 +652,10 @@ func parsePBSDatastoreCfg(contents string) []pbsDatastore {
 		}
 	}
 	flush()
+
+	for i := range out {
+		out[i].NormalizedPath = normalizePBSDatastorePath(out[i].Path)
+	}
 
 	return out
 }

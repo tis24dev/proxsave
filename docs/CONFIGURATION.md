@@ -1053,6 +1053,8 @@ VZDUMP_CONFIG_PATH=/etc/vzdump.conf
 
 # PBS datastore paths (comma/space separated)
 PBS_DATASTORE_PATH=                # e.g., "/mnt/pbs1,/mnt/pbs2"
+# Extra filesystem scan roots for datastore/PXAR discovery; these do not create
+# real PBS datastore definitions and may use path-derived output keys.
 
 # System root override (testing/chroot)
 SYSTEM_ROOT_PREFIX=                # Optional alternate root for system collection. Empty or "/" = real root.

@@ -63,6 +63,47 @@ func TestGetDatastoreListSuccessWithOverrides(t *testing.T) {
 	if datastores[2].Comment != "configured via PBS_DATASTORE_PATH" {
 		t.Fatalf("expected override comment, got %q", datastores[2].Comment)
 	}
+	if datastores[0].Source != pbsDatastoreSourceCLI || datastores[0].CLIName != "primary" || datastores[0].OutputKey != "primary" {
+		t.Fatalf("expected CLI datastore metadata, got %+v", datastores[0])
+	}
+	if datastores[1].Source != pbsDatastoreSourceOverride || datastores[1].CLIName != "" || datastores[1].OutputKey == "" {
+		t.Fatalf("expected override datastore metadata, got %+v", datastores[1])
+	}
+}
+
+func TestGetDatastoreListOverrideCollisionsUseDistinctOutputKeys(t *testing.T) {
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte(`[{"name":"primary","path":"/data/primary/","comment":"main"}]`), nil
+		},
+	})
+	collector.config.PBSDatastorePaths = []string{
+		"/mnt/a/backup",
+		"/srv/b/backup",
+		"/srv/b/backup/",
+		"/data/primary",
+	}
+
+	datastores, err := collector.getDatastoreList(context.Background())
+	if err != nil {
+		t.Fatalf("getDatastoreList failed: %v", err)
+	}
+	if len(datastores) != 3 {
+		t.Fatalf("expected 3 datastores after normalized dedupe, got %d: %+v", len(datastores), datastores)
+	}
+
+	if datastores[1].Name != "backup" || datastores[2].Name != "backup" {
+		t.Fatalf("expected colliding override display names, got %+v", datastores)
+	}
+	if datastores[1].OutputKey == datastores[2].OutputKey {
+		t.Fatalf("override output keys should differ, got %q", datastores[1].OutputKey)
+	}
+	if datastores[1].NormalizedPath == datastores[2].NormalizedPath {
+		t.Fatalf("override normalized paths should differ, got %+v", datastores)
+	}
 }
 
 func TestGetDatastoreListContextCanceled(t *testing.T) {
@@ -306,6 +347,50 @@ func TestCollectDatastoreNamespacesError(t *testing.T) {
 	}
 }
 
+func TestCollectDatastoreNamespacesOverrideUsesFilesystemOnly(t *testing.T) {
+	origList := listNamespacesFunc
+	t.Cleanup(func() { listNamespacesFunc = origList })
+	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
+		t.Fatal("CLI namespace discovery should not be used for override paths")
+		return nil, false, nil
+	}
+
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
+	dsDir := filepath.Join(collector.tempDir, "datastores")
+	if err := os.MkdirAll(dsDir, 0o755); err != nil {
+		t.Fatalf("failed to create datastore dir: %v", err)
+	}
+
+	dsPath := filepath.Join(collector.tempDir, "override")
+	if err := os.MkdirAll(filepath.Join(dsPath, "local", "vm"), 0o755); err != nil {
+		t.Fatalf("failed to create override namespace fixture: %v", err)
+	}
+
+	ds := pbsDatastore{
+		Name:           "backup",
+		Path:           dsPath,
+		Source:         pbsDatastoreSourceOverride,
+		NormalizedPath: normalizePBSDatastorePath(dsPath),
+		OutputKey:      buildPBSOverrideOutputKey(dsPath),
+	}
+	if err := collector.collectDatastoreNamespaces(context.Background(), ds, dsDir); err != nil {
+		t.Fatalf("collectDatastoreNamespaces failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dsDir, fmt.Sprintf("%s_namespaces.json", ds.pathKey())))
+	if err != nil {
+		t.Fatalf("namespaces file not created: %v", err)
+	}
+
+	var namespaces []pbs.Namespace
+	if err := json.Unmarshal(data, &namespaces); err != nil {
+		t.Fatalf("failed to decode namespaces: %v", err)
+	}
+	if len(namespaces) != 2 || namespaces[1].Ns != "local" {
+		t.Fatalf("unexpected override namespaces: %+v", namespaces)
+	}
+}
+
 func TestCollectDatastoreConfigsDryRun(t *testing.T) {
 	stubListNamespaces(t, func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
 		return []pbs.Namespace{{Ns: ""}}, false, nil
@@ -386,6 +471,54 @@ func TestCollectDatastoreConfigs_UsesPathSafeKeyForUnsafeDatastoreName(t *testin
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("raw output path should not exist (%s), got err=%v", path, err)
 		}
+	}
+}
+
+func TestCollectDatastoreConfigsSkipsCLIConfigForOverridePaths(t *testing.T) {
+	origList := listNamespacesFunc
+	t.Cleanup(func() { listNamespacesFunc = origList })
+	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
+		t.Fatal("CLI namespace discovery should not be used for override paths")
+		return nil, false, nil
+	}
+
+	dsPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dsPath, "vm"), 0o755); err != nil {
+		t.Fatalf("mkdir vm: %v", err)
+	}
+
+	var runCalls int
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			runCalls++
+			return []byte(`{"ok":true}`), nil
+		},
+	})
+
+	ds := pbsDatastore{
+		Name:           "backup",
+		Path:           dsPath,
+		Comment:        "configured via PBS_DATASTORE_PATH",
+		Source:         pbsDatastoreSourceOverride,
+		NormalizedPath: normalizePBSDatastorePath(dsPath),
+		OutputKey:      buildPBSOverrideOutputKey(dsPath),
+	}
+	if err := collector.collectDatastoreConfigs(context.Background(), []pbsDatastore{ds}); err != nil {
+		t.Fatalf("collectDatastoreConfigs failed: %v", err)
+	}
+
+	datastoreDir := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "datastores")
+	if _, err := os.Stat(filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.pathKey()))); err != nil {
+		t.Fatalf("expected override namespaces file, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(datastoreDir, fmt.Sprintf("%s_config.json", ds.pathKey()))); !os.IsNotExist(err) {
+		t.Fatalf("override config file should not exist, got err=%v", err)
+	}
+	if runCalls != 0 {
+		t.Fatalf("expected no CLI datastore show calls for override, got %d", runCalls)
 	}
 }
 
