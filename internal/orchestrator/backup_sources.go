@@ -244,8 +244,8 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 
 		case sourceRaw:
 			manifest, perr := inspectRcloneMetadataManifest(itemCtx, item.remoteMetadata, item.remoteArchive, logger)
-			cancel()
 			if perr != nil {
+				cancel()
 				if errors.Is(perr, context.DeadlineExceeded) {
 					return nil, fmt.Errorf("timed out while inspecting %s (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w", item.filename, timeout, perr)
 				}
@@ -256,14 +256,39 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 				logWarning(logger, "Skipping rclone metadata %s: %v", item.filename, perr)
 				continue
 			}
+			manifestChecksum, perr := normalizeCandidateManifestChecksum(manifest)
+			if perr != nil {
+				cancel()
+				integrityMissing++
+				logWarning(logger, "Skipping rclone backup %s: invalid manifest checksum: %v", item.filename, perr)
+				continue
+			}
+			checksumFromFile := ""
+			if item.remoteChecksum != "" {
+				checksumFromFile, perr = inspectRcloneChecksumFile(itemCtx, item.remoteChecksum, logger)
+				if perr != nil {
+					cancel()
+					if errors.Is(perr, context.DeadlineExceeded) {
+						return nil, fmt.Errorf("timed out while inspecting %s checksum (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w", item.filename, timeout, perr)
+					}
+					if errors.Is(perr, context.Canceled) {
+						return nil, perr
+					}
+					integrityMissing++
+					logWarning(logger, "Skipping rclone backup %s: invalid checksum file: %v", item.filename, perr)
+					continue
+				}
+			}
+			expectation, perr := resolveIntegrityExpectationValues(checksumFromFile, manifestChecksum)
+			cancel()
+			if perr != nil {
+				integrityMissing++
+				logWarning(logger, "Skipping rclone backup %s: %v", item.filename, perr)
+				continue
+			}
 			displayBase := filepath.Base(manifest.ArchivePath)
 			if strings.TrimSpace(displayBase) == "" {
 				displayBase = filepath.Base(baseNameFromRemoteRef(item.remoteArchive))
-			}
-			if item.remoteChecksum == "" && strings.TrimSpace(manifest.SHA256) == "" {
-				integrityMissing++
-				logWarning(logger, "Skipping rclone backup %s: no checksum verification available", item.filename)
-				continue
 			}
 			candidates = append(candidates, &decryptCandidate{
 				Manifest:        manifest,
@@ -271,6 +296,7 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 				RawArchivePath:  item.remoteArchive,
 				RawMetadataPath: item.remoteMetadata,
 				RawChecksumPath: item.remoteChecksum,
+				Integrity:       expectation,
 				DisplayBase:     displayBase,
 				IsRclone:        true,
 			})
@@ -400,11 +426,25 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 				logWarning(logger, "Skipping metadata %s: %v", name, err)
 				continue
 			}
-			logging.DebugStep(logger, "discover backup candidates", "raw candidate accepted: %s created_at=%s", name, manifest.CreatedAt.Format(time.RFC3339))
-
-			if !hasChecksum && manifest.SHA256 == "" {
+			manifestChecksum, err := normalizeCandidateManifestChecksum(manifest)
+			if err != nil {
 				integrityUnavailable++
-				logWarning(logger, "Skipping backup %s: no checksum verification available", baseName)
+				logWarning(logger, "Skipping backup %s: invalid manifest checksum: %v", baseName, err)
+				continue
+			}
+			checksumFromFile := ""
+			if hasChecksum {
+				checksumFromFile, err = parseLocalChecksumFile(checksumPath)
+				if err != nil {
+					integrityUnavailable++
+					logWarning(logger, "Skipping backup %s: invalid checksum file: %v", baseName, err)
+					continue
+				}
+			}
+			expectation, err := resolveIntegrityExpectationValues(checksumFromFile, manifestChecksum)
+			if err != nil {
+				integrityUnavailable++
+				logWarning(logger, "Skipping backup %s: %v", baseName, err)
 				continue
 			}
 
@@ -415,8 +455,10 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 				RawArchivePath:  archivePath,
 				RawMetadataPath: fullPath,
 				RawChecksumPath: checksumPath,
+				Integrity:       expectation,
 				DisplayBase:     filepath.Base(manifest.ArchivePath),
 			})
+			logging.DebugStep(logger, "discover backup candidates", "raw candidate accepted: %s created_at=%s", name, manifest.CreatedAt.Format(time.RFC3339))
 		}
 	}
 
@@ -442,6 +484,47 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 		len(candidates),
 	)
 	return candidates, nil
+}
+
+func normalizeCandidateManifestChecksum(manifest *backup.Manifest) (string, error) {
+	if manifest == nil || strings.TrimSpace(manifest.SHA256) == "" {
+		return "", nil
+	}
+	normalized, err := backup.NormalizeChecksum(manifest.SHA256)
+	if err != nil {
+		return "", err
+	}
+	manifest.SHA256 = normalized
+	return normalized, nil
+}
+
+func parseLocalChecksumFile(checksumPath string) (string, error) {
+	data, err := restoreFS.ReadFile(checksumPath)
+	if err != nil {
+		return "", fmt.Errorf("read checksum file %s: %w", checksumPath, err)
+	}
+	checksum, err := backup.ParseChecksumData(data)
+	if err != nil {
+		return "", fmt.Errorf("parse checksum file %s: %w", checksumPath, err)
+	}
+	return checksum, nil
+}
+
+func inspectRcloneChecksumFile(ctx context.Context, remotePath string, logger *logging.Logger) (checksum string, err error) {
+	done := logging.DebugStart(logger, "inspect rclone checksum", "remote=%s", remotePath)
+	defer func() { done(err) }()
+	logging.DebugStep(logger, "inspect rclone checksum", "executing: rclone cat %s", remotePath)
+
+	cmd := exec.CommandContext(ctx, "rclone", "cat", remotePath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, err, strings.TrimSpace(string(output)))
+	}
+	checksum, err = backup.ParseChecksumData(output)
+	if err != nil {
+		return "", fmt.Errorf("parse checksum file %s: %w", remotePath, err)
+	}
+	return checksum, nil
 }
 
 // isLocalFilesystemPath returns true if the given value represents an absolute

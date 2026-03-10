@@ -43,6 +43,7 @@ type decryptCandidate struct {
 	RawArchivePath  string
 	RawMetadataPath string
 	RawChecksumPath string
+	Integrity       *stagedIntegrityExpectation
 	DisplayBase     string
 	IsRclone        bool
 }

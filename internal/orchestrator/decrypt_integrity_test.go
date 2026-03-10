@@ -129,3 +129,32 @@ func TestPreparePlainBundle_RejectsChecksumMismatch(t *testing.T) {
 		t.Fatalf("expected checksum mismatch error, got %v", err)
 	}
 }
+
+func TestVerifyStagedArchiveIntegrity_UsesCandidateIntegrityExpectation(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	dir := t.TempDir()
+	archiveData := []byte("archive")
+	archivePath := dir + "/backup.tar"
+	if err := os.WriteFile(archivePath, archiveData, 0o640); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	got, err := verifyStagedArchiveIntegrity(context.Background(), logging.New(types.LogLevelError, false), stagedFiles{
+		ArchivePath: archivePath,
+	}, &decryptCandidate{
+		Integrity: &stagedIntegrityExpectation{
+			Checksum: strings.ToUpper(checksumHexForBytes(archiveData)),
+			Source:   "checksum file",
+		},
+	})
+	if err != nil {
+		t.Fatalf("verifyStagedArchiveIntegrity() error = %v", err)
+	}
+	want := checksumHexForBytes(archiveData)
+	if got != want {
+		t.Fatalf("verifyStagedArchiveIntegrity() = %q; want %q", got, want)
+	}
+}

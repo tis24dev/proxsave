@@ -70,7 +70,7 @@ func preparePlainBundleCommon(ctx context.Context, cand *decryptCandidate, versi
 		return nil, err
 	}
 
-	sourceChecksum, err := verifyStagedArchiveIntegrity(ctx, logger, staged, cand.Manifest)
+	sourceChecksum, err := verifyStagedArchiveIntegrity(ctx, logger, staged, cand)
 	if err != nil {
 		cleanup()
 		return nil, err
