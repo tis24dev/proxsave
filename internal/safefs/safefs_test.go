@@ -19,15 +19,23 @@ func waitForSignal(t *testing.T, ch <-chan struct{}, name string) {
 	}
 }
 
+func registerBlockedOpCleanup(t *testing.T, name string, unblock chan struct{}, finished <-chan struct{}, restore func()) {
+	t.Helper()
+
+	t.Cleanup(restore)
+	t.Cleanup(func() {
+		close(unblock)
+		waitForSignal(t, finished, name)
+	})
+}
+
 func TestStat_ReturnsTimeoutError(t *testing.T) {
 	prev := osStat
 	unblock := make(chan struct{})
 	finished := make(chan struct{})
-	defer func() {
-		close(unblock)
-		waitForSignal(t, finished, "stat completion")
+	registerBlockedOpCleanup(t, "stat completion", unblock, finished, func() {
 		osStat = prev
-	}()
+	})
 
 	osStat = func(string) (os.FileInfo, error) {
 		<-unblock
@@ -49,11 +57,9 @@ func TestReadDir_ReturnsTimeoutError(t *testing.T) {
 	prev := osReadDir
 	unblock := make(chan struct{})
 	finished := make(chan struct{})
-	defer func() {
-		close(unblock)
-		waitForSignal(t, finished, "readdir completion")
+	registerBlockedOpCleanup(t, "readdir completion", unblock, finished, func() {
 		osReadDir = prev
-	}()
+	})
 
 	osReadDir = func(string) ([]os.DirEntry, error) {
 		<-unblock
@@ -75,11 +81,9 @@ func TestStatfs_ReturnsTimeoutError(t *testing.T) {
 	prev := syscallStatfs
 	unblock := make(chan struct{})
 	finished := make(chan struct{})
-	defer func() {
-		close(unblock)
-		waitForSignal(t, finished, "statfs completion")
+	registerBlockedOpCleanup(t, "statfs completion", unblock, finished, func() {
 		syscallStatfs = prev
-	}()
+	})
 
 	syscallStatfs = func(string, *syscall.Statfs_t) error {
 		<-unblock
@@ -110,15 +114,15 @@ func TestStat_PropagatesContextCancellation(t *testing.T) {
 func TestStat_DoesNotSpawnPastLimiterCapacity(t *testing.T) {
 	prevStat := osStat
 	prevLimiter := fsOpLimiter
-	defer func() {
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	registerBlockedOpCleanup(t, "limited stat completion", unblock, finished, func() {
 		osStat = prevStat
 		fsOpLimiter = prevLimiter
-	}()
+	})
 
 	fsOpLimiter = newOperationLimiter(1)
 
-	unblock := make(chan struct{})
-	finished := make(chan struct{})
 	var calls atomic.Int32
 	osStat = func(string) (os.FileInfo, error) {
 		calls.Add(1)
@@ -145,7 +149,4 @@ func TestStat_DoesNotSpawnPastLimiterCapacity(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("calls after limiter saturation = %d; want 1", got)
 	}
-
-	close(unblock)
-	waitForSignal(t, finished, "limited stat completion")
 }

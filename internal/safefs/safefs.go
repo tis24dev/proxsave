@@ -107,7 +107,8 @@ func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *T
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	if err := fsOpLimiter.acquire(ctx, timer.C); err != nil {
+	limiter := fsOpLimiter
+	if err := limiter.acquire(ctx, timer.C); err != nil {
 		if errors.Is(err, ErrTimeout) {
 			return zero, timeoutErr
 		}
@@ -120,7 +121,7 @@ func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *T
 	}
 	ch := make(chan result, 1)
 	go func() {
-		defer fsOpLimiter.release()
+		defer limiter.release()
 		value, err := run()
 		ch <- result{value: value, err: err}
 	}()
@@ -136,21 +137,24 @@ func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *T
 }
 
 func Stat(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
+	stat := osStat
 	return runLimited(ctx, timeout, &TimeoutError{Op: "stat", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (fs.FileInfo, error) {
-		return osStat(path)
+		return stat(path)
 	})
 }
 
 func ReadDir(ctx context.Context, path string, timeout time.Duration) ([]os.DirEntry, error) {
+	readDir := osReadDir
 	return runLimited(ctx, timeout, &TimeoutError{Op: "readdir", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() ([]os.DirEntry, error) {
-		return osReadDir(path)
+		return readDir(path)
 	})
 }
 
 func Statfs(ctx context.Context, path string, timeout time.Duration) (syscall.Statfs_t, error) {
+	statfs := syscallStatfs
 	return runLimited(ctx, timeout, &TimeoutError{Op: "statfs", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (syscall.Statfs_t, error) {
 		var stat syscall.Statfs_t
-		err := syscallStatfs(path, &stat)
+		err := statfs(path, &stat)
 		return stat, err
 	})
 }
