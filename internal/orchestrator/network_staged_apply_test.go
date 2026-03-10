@@ -22,7 +22,7 @@ func (f *preservingSymlinkFS) Symlink(oldname, newname string) error {
 	return os.Symlink(oldname, f.onDisk(newname))
 }
 
-func TestApplyNetworkFilesFromStage_PreservesSymlinkEntries(t *testing.T) {
+func TestApplyNetworkFilesFromStage_RewritesSafeAbsoluteSymlinkTargetsWithinDestinationRoot(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
 
@@ -33,7 +33,7 @@ func TestApplyNetworkFilesFromStage_PreservesSymlinkEntries(t *testing.T) {
 	if err := fakeFS.MkdirAll("/stage/etc/network", 0o755); err != nil {
 		t.Fatalf("create stage dir: %v", err)
 	}
-	if err := fakeFS.Symlink("/stage/etc/network/interfaces.real", "/stage/etc/network/interfaces"); err != nil {
+	if err := fakeFS.Symlink("/etc/network/interfaces.real", "/stage/etc/network/interfaces"); err != nil {
 		t.Fatalf("create staged symlink: %v", err)
 	}
 
@@ -54,8 +54,8 @@ func TestApplyNetworkFilesFromStage_PreservesSymlinkEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readlink dest symlink: %v", err)
 	}
-	if gotTarget != "/stage/etc/network/interfaces.real" {
-		t.Fatalf("symlink target=%q, want %q", gotTarget, "/stage/etc/network/interfaces.real")
+	if gotTarget != "interfaces.real" {
+		t.Fatalf("symlink target=%q, want %q", gotTarget, "interfaces.real")
 	}
 
 	found := false
@@ -67,6 +67,48 @@ func TestApplyNetworkFilesFromStage_PreservesSymlinkEntries(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected applied paths to include /etc/network/interfaces, got %#v", applied)
+	}
+}
+
+func TestApplyNetworkFilesFromStage_RejectsEscapingSymlinkTargets(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := newPreservingSymlinkFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	if err := fakeFS.MkdirAll("/stage/etc/network", 0o755); err != nil {
+		t.Fatalf("create stage dir: %v", err)
+	}
+	if err := fakeFS.Symlink("/stage/etc/network/interfaces.real", "/stage/etc/network/interfaces"); err != nil {
+		t.Fatalf("create staged symlink: %v", err)
+	}
+
+	_, err := applyNetworkFilesFromStage(newTestLogger(), "/stage")
+	if err == nil || !strings.Contains(err.Error(), "unsafe symlink target") {
+		t.Fatalf("expected unsafe symlink target error, got %v", err)
+	}
+}
+
+func TestApplyNetworkFilesFromStage_RejectsRelativeSymlinkTargetsThatEscapeDestinationRoot(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := newPreservingSymlinkFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	if err := fakeFS.MkdirAll("/stage/etc/network/interfaces.d", 0o755); err != nil {
+		t.Fatalf("create stage dir: %v", err)
+	}
+	if err := fakeFS.Symlink("../../shadow", "/stage/etc/network/interfaces.d/uplink"); err != nil {
+		t.Fatalf("create staged symlink: %v", err)
+	}
+
+	_, err := applyNetworkFilesFromStage(newTestLogger(), "/stage")
+	if err == nil || !strings.Contains(err.Error(), "unsafe symlink target") {
+		t.Fatalf("expected unsafe symlink target error, got %v", err)
 	}
 }
 
