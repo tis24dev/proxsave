@@ -737,6 +737,79 @@ func TestCollectPBSCommands_UsesPathSafeKeyForUnsafeDatastoreName(t *testing.T) 
 	}
 }
 
+func TestCollectPBSCommands_DisambiguatesStatusFilesForCollidingDatastoreKeys(t *testing.T) {
+	pbsRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pbsRoot, "tape.cfg"), []byte("ok"), 0o640); err != nil {
+		t.Fatalf("write tape.cfg: %v", err)
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = pbsRoot
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			return "/bin/" + name, nil
+		},
+		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			return []byte(fmt.Sprintf("%s %s", name, strings.Join(args, " "))), nil
+		},
+	})
+
+	unsafeName := "../escape"
+	baseKey := collectorPathKey(unsafeName)
+	datastores := []pbsDatastore{
+		{Name: unsafeName, Path: "/data/unsafe"},
+		{Name: baseKey, Path: "/data/colliding"},
+	}
+	if got := pbsDatastoreCandidateOutputKey(datastores[1]); got != baseKey {
+		t.Fatalf("expected second datastore to preserve colliding base key %q, got %q", baseKey, got)
+	}
+
+	resolved := clonePBSDatastores(datastores)
+	assignUniquePBSDatastoreOutputKeys(resolved)
+	if resolved[0].OutputKey == resolved[1].OutputKey {
+		t.Fatalf("expected distinct output keys for colliding datastores, got %+v", resolved)
+	}
+
+	baseCount := 0
+	suffixedCount := 0
+	for _, ds := range resolved {
+		switch {
+		case ds.OutputKey == baseKey:
+			baseCount++
+		case strings.HasPrefix(ds.OutputKey, baseKey+"_"):
+			suffixedCount++
+		}
+	}
+	if baseCount != 1 || suffixedCount != 1 {
+		t.Fatalf("expected one base key and one suffixed key from collision, got %+v", resolved)
+	}
+
+	if err := collector.collectPBSCommands(context.Background(), datastores); err != nil {
+		t.Fatalf("collectPBSCommands error: %v", err)
+	}
+
+	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
+	statusFiles, err := filepath.Glob(filepath.Join(commandsDir, "datastore_*_status.json"))
+	if err != nil {
+		t.Fatalf("glob status files: %v", err)
+	}
+	if len(statusFiles) != 2 {
+		t.Fatalf("expected 2 datastore status files, got %d: %v", len(statusFiles), statusFiles)
+	}
+
+	for _, ds := range resolved {
+		statusPath := filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", ds.OutputKey))
+		data, err := os.ReadFile(statusPath)
+		if err != nil {
+			t.Fatalf("read datastore status file %s: %v", statusPath, err)
+		}
+		if !strings.Contains(string(data), ds.Name) {
+			t.Fatalf("status file %s should contain datastore name %q, got %s", statusPath, ds.Name, string(data))
+		}
+	}
+}
+
 func TestCollectUserConfigsWithTokens(t *testing.T) {
 	collector := newTestCollectorWithDeps(t, CollectorDeps{
 		LookPath: func(cmd string) (string, error) {
