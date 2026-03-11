@@ -2,6 +2,10 @@ package orchestrator
 
 import (
 	"archive/tar"
+	"bytes"
+	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +13,54 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
+
+type closeErrorReadCloser struct {
+	*bytes.Reader
+	closeErr error
+}
+
+func (r *closeErrorReadCloser) Close() error {
+	return r.closeErr
+}
+
+type streamCommandRunner struct {
+	stream io.ReadCloser
+	calls  []string
+}
+
+func (r *streamCommandRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	return nil, nil
+}
+
+func (r *streamCommandRunner) RunStream(_ context.Context, name string, _ io.Reader, args ...string) (io.ReadCloser, error) {
+	r.calls = append(r.calls, commandKey(name, args))
+	return r.stream, nil
+}
+
+func tarBytes(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for name, content := range files {
+		data := []byte(content)
+		hdr := &tar.Header{
+			Name: name,
+			Mode: 0o640,
+			Size: int64(len(data)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("WriteHeader(%s): %v", name, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			t.Fatalf("Write(%s): %v", name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close tar writer: %v", err)
+	}
+	return buf.Bytes()
+}
 
 func TestAnalyzeRestoreArchive_UsesInternalMetadataWhenCategoriesAreCommonOnly(t *testing.T) {
 	origRestoreFS := restoreFS
@@ -152,5 +204,78 @@ func TestAnalyzeRestoreArchive_IgnoresOversizedInternalMetadata(t *testing.T) {
 	}
 	if decision.BackupHostname != "" {
 		t.Fatalf("BackupHostname=%q; want empty string when metadata is oversized", decision.BackupHostname)
+	}
+}
+
+func TestAnalyzeRestoreArchive_PropagatesDecompressionCloseError(t *testing.T) {
+	origRestoreFS := restoreFS
+	origRestoreCmd := restoreCmd
+	t.Cleanup(func() {
+		restoreFS = origRestoreFS
+		restoreCmd = origRestoreCmd
+	})
+	restoreFS = osFS{}
+
+	closeErr := errors.New("decompressor wait failed")
+	restoreCmd = &streamCommandRunner{
+		stream: &closeErrorReadCloser{
+			Reader:   bytes.NewReader(tarBytes(t, map[string]string{"etc/hosts": "127.0.0.1 localhost\n"})),
+			closeErr: closeErr,
+		},
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "backup.tar.zst")
+	if err := os.WriteFile(archivePath, []byte("compressed payload"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	categories, decision, err := AnalyzeRestoreArchive(archivePath, logger)
+	if categories != nil {
+		t.Fatalf("categories = %#v; want nil on close error", categories)
+	}
+	if decision != nil {
+		t.Fatalf("decision = %#v; want nil on close error", decision)
+	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("AnalyzeRestoreArchive() err = %v; want close error", err)
+	}
+}
+
+func TestInspectRestoreArchiveContents_PrefersInspectErrorOverCloseError(t *testing.T) {
+	origRestoreFS := restoreFS
+	origRestoreCmd := restoreCmd
+	t.Cleanup(func() {
+		restoreFS = origRestoreFS
+		restoreCmd = origRestoreCmd
+	})
+	restoreFS = osFS{}
+
+	closeErr := errors.New("decompressor wait failed")
+	restoreCmd = &streamCommandRunner{
+		stream: &closeErrorReadCloser{
+			Reader:   bytes.NewReader([]byte("not a tar archive")),
+			closeErr: closeErr,
+		},
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "backup.tar.zst")
+	if err := os.WriteFile(archivePath, []byte("compressed payload"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	inspection, err := inspectRestoreArchiveContents(archivePath, logger)
+	if inspection != nil {
+		t.Fatalf("inspection = %#v; want nil on inspect error", inspection)
+	}
+	if err == nil {
+		t.Fatal("inspectRestoreArchiveContents() err = nil; want inspect error")
+	}
+	if errors.Is(err, closeErr) {
+		t.Fatalf("inspectRestoreArchiveContents() err = %v; want inspect error to take precedence over close error", err)
+	}
+	if !strings.Contains(err.Error(), "inspect archive") {
+		t.Fatalf("inspectRestoreArchiveContents() err = %v; want inspect archive context", err)
 	}
 }

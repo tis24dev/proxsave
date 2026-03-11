@@ -80,7 +80,7 @@ func AnalyzeRestoreArchive(archivePath string, logger *logging.Logger) (categori
 	return inspection.AvailableCategories, inspection.Decision, nil
 }
 
-func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (*restoreArchiveInspection, error) {
+func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (inspection *restoreArchiveInspection, err error) {
 	file, err := restoreFS.Open(archivePath)
 	if err != nil {
 		return nil, fmt.Errorf("open archive: %w", err)
@@ -91,16 +91,19 @@ func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if closer, ok := reader.(interface{ Close() error }); ok {
-			closer.Close()
-		}
-	}()
+	if closer, ok := reader.(interface{ Close() error }); ok {
+		defer func() {
+			if closeErr := closer.Close(); closeErr != nil && err == nil {
+				inspection = nil
+				err = fmt.Errorf("inspect archive: %w", closeErr)
+			}
+		}()
+	}
 
 	tarReader := tar.NewReader(reader)
-	archivePaths, metadata, metadataErr, err := collectRestoreArchiveFacts(tarReader)
-	if err != nil {
-		return nil, fmt.Errorf("inspect archive: %w", err)
+	archivePaths, metadata, metadataErr, collectErr := collectRestoreArchiveFacts(tarReader)
+	if collectErr != nil {
+		return nil, fmt.Errorf("inspect archive: %w", collectErr)
 	}
 	if metadataErr != nil {
 		logger.Warning("Could not parse internal backup metadata: %v", metadataErr)
@@ -110,10 +113,11 @@ func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (
 	availableCategories := AnalyzeArchivePaths(archivePaths, GetAllCategories())
 
 	decision := buildRestoreDecisionInfo(metadata, availableCategories, logger)
-	return &restoreArchiveInspection{
+	inspection = &restoreArchiveInspection{
 		AvailableCategories: availableCategories,
 		Decision:            decision,
-	}, nil
+	}
+	return inspection, nil
 }
 
 func collectRestoreArchiveFacts(tarReader *tar.Reader) ([]string, *restoreDecisionMetadata, error, error) {
