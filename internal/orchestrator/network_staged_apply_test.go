@@ -132,3 +132,31 @@ func TestApplyNetworkFilesFromStage_RejectsSymlinkStageDirectory(t *testing.T) {
 		t.Fatalf("expected staged directory symlink error, got %v", err)
 	}
 }
+
+func TestValidateOverlaySymlinkTargetWithinRoot_RewritesAbsoluteTargetFromResolvedParent(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := newPreservingSymlinkFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	if err := fakeFS.MkdirAll("/dest/materialized/network", 0o755); err != nil {
+		t.Fatalf("create materialized dir: %v", err)
+	}
+	if err := fakeFS.Symlink("/dest/materialized", "/dest/etc"); err != nil {
+		t.Fatalf("create parent symlink: %v", err)
+	}
+
+	rewritten, err := validateOverlaySymlinkTargetWithinRoot(
+		"/dest",
+		"/dest/etc/network/interfaces",
+		"/dest/materialized/network/interfaces.real",
+	)
+	if err != nil {
+		t.Fatalf("validateOverlaySymlinkTargetWithinRoot error: %v", err)
+	}
+	if rewritten != "interfaces.real" {
+		t.Fatalf("rewritten target = %q, want %q", rewritten, "interfaces.real")
+	}
+}

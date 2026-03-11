@@ -241,7 +241,12 @@ func validateOverlaySymlinkTargetWithinRoot(destRoot, dest, target string) (stri
 		return target, nil
 	}
 
-	rewrittenTarget, err := filepath.Rel(filepath.Dir(dest), resolved)
+	resolvedParent, err := resolvePathRelativeToBaseWithinRootFS(restoreFS, destRoot, filepath.Dir(dest), ".")
+	if err != nil {
+		return "", err
+	}
+
+	rewrittenTarget, err := filepath.Rel(resolvedParent, resolved)
 	if err != nil {
 		return "", fmt.Errorf("rewrite symlink target %s -> %s: %w", dest, resolved, err)
 	}
