@@ -871,6 +871,99 @@ esac
 	}
 }
 
+func TestDiscoverRcloneBackups_UsesFreshTimeoutForChecksumFetch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	archiveData := []byte("archive")
+	checksum := checksumHexForBytes(archiveData)
+	manifest := backup.Manifest{
+		ArchivePath:    "/var/backups/node-backup.tar.xz",
+		ProxmoxType:    "pve",
+		CreatedAt:      time.Date(2025, 12, 5, 12, 0, 0, 0, time.UTC),
+		EncryptionMode: "none",
+		SHA256:         checksum,
+	}
+	metaBytes, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	metadataPath := filepath.Join(tmpDir, "node-backup.tar.xz.metadata")
+	if err := os.WriteFile(metadataPath, metaBytes, 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	checksumPath := filepath.Join(tmpDir, "node-backup.tar.xz.sha256")
+	checksumLine := checksum + "  node-backup.tar.xz\n"
+	if err := os.WriteFile(checksumPath, []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+subcmd="$1"
+target="$2"
+case "$subcmd" in
+  lsf)
+    printf 'node-backup.tar.xz\n'
+    printf 'node-backup.tar.xz.metadata\n'
+    printf 'node-backup.tar.xz.sha256\n'
+    ;;
+  cat)
+    case "$target" in
+      *node-backup.tar.xz.metadata)
+        sleep 2
+        cat "$METADATA_PATH"
+        ;;
+      *node-backup.tar.xz.sha256)
+        sleep 2
+        cat "$CHECKSUM_PATH"
+        ;;
+      *)
+        echo "unexpected cat target: $target" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
+		t.Fatalf("set METADATA_PATH: %v", err)
+	}
+	defer os.Unsetenv("METADATA_PATH")
+	if err := os.Setenv("CHECKSUM_PATH", checksumPath); err != nil {
+		t.Fatalf("set CHECKSUM_PATH: %v", err)
+	}
+	defer os.Unsetenv("CHECKSUM_PATH")
+
+	cfg := &config.Config{RcloneTimeoutConnection: 3}
+	candidates, err := discoverRcloneBackups(context.Background(), cfg, "gdrive:pbs-backups/server1", nil, nil)
+	if err != nil {
+		t.Fatalf("discoverRcloneBackups() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("discoverRcloneBackups() returned %d candidates; want 1", len(candidates))
+	}
+	cand := candidates[0]
+	if cand.Integrity == nil {
+		t.Fatal("candidate Integrity is nil")
+	}
+	if cand.Integrity.Checksum != checksum {
+		t.Fatalf("Integrity.Checksum = %q; want %q", cand.Integrity.Checksum, checksum)
+	}
+}
+
 func TestDiscoverRcloneBackups_RejectsMalformedOrConflictingChecksums(t *testing.T) {
 	tests := []struct {
 		name           string

@@ -212,10 +212,10 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 			report(fmt.Sprintf("Inspecting %d/%d: %s", idx+1, len(items), item.filename))
 		}
 
-		itemCtx, cancel := context.WithTimeout(ctx, timeout)
 		switch item.kind {
 		case sourceBundle:
-			manifest, perr := inspectRcloneBundleManifest(itemCtx, item.remoteBundle, logger)
+			bundleCtx, cancel := context.WithTimeout(ctx, timeout)
+			manifest, perr := inspectRcloneBundleManifest(bundleCtx, item.remoteBundle, logger)
 			cancel()
 			if perr != nil {
 				if errors.Is(perr, context.DeadlineExceeded) {
@@ -243,9 +243,10 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 			logDebug(logger, "Cloud (rclone): accepted backup bundle: %s", item.filename)
 
 		case sourceRaw:
-			manifest, perr := inspectRcloneMetadataManifest(itemCtx, item.remoteMetadata, item.remoteArchive, logger)
+			manifestCtx, manifestCancel := context.WithTimeout(ctx, timeout)
+			manifest, perr := inspectRcloneMetadataManifest(manifestCtx, item.remoteMetadata, item.remoteArchive, logger)
+			manifestCancel()
 			if perr != nil {
-				cancel()
 				if errors.Is(perr, context.DeadlineExceeded) {
 					return nil, fmt.Errorf("timed out while inspecting %s (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w", item.filename, timeout, perr)
 				}
@@ -258,16 +259,16 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 			}
 			manifestChecksum, perr := normalizeCandidateManifestChecksum(manifest)
 			if perr != nil {
-				cancel()
 				integrityMissing++
 				logWarning(logger, "Skipping rclone backup %s: invalid manifest checksum: %v", item.filename, perr)
 				continue
 			}
 			checksumFromFile := ""
 			if item.remoteChecksum != "" {
-				checksumFromFile, perr = inspectRcloneChecksumFile(itemCtx, item.remoteChecksum, logger)
+				checksumCtx, checksumCancel := context.WithTimeout(ctx, timeout)
+				checksumFromFile, perr = inspectRcloneChecksumFile(checksumCtx, item.remoteChecksum, logger)
+				checksumCancel()
 				if perr != nil {
-					cancel()
 					if errors.Is(perr, context.DeadlineExceeded) {
 						return nil, fmt.Errorf("timed out while inspecting %s checksum (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w", item.filename, timeout, perr)
 					}
@@ -280,7 +281,6 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 				}
 			}
 			expectation, perr := resolveIntegrityExpectationValues(checksumFromFile, manifestChecksum)
-			cancel()
 			if perr != nil {
 				integrityMissing++
 				logWarning(logger, "Skipping rclone backup %s: %v", item.filename, perr)
@@ -301,7 +301,6 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 				IsRclone:        true,
 			})
 		default:
-			cancel()
 			continue
 		}
 	}
