@@ -1,9 +1,12 @@
 package orchestrator
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -497,8 +500,34 @@ func normalizeCandidateManifestChecksum(manifest *backup.Manifest) (string, erro
 	return normalized, nil
 }
 
+const checksumFileReadLimit = 4 * 1024
+
+func readBoundedChecksumLine(reader io.Reader) ([]byte, bool, error) {
+	limited := io.LimitReader(reader, checksumFileReadLimit+1)
+	line, err := bufio.NewReaderSize(limited, checksumFileReadLimit+1).ReadSlice('\n')
+	if err == nil {
+		return append([]byte(nil), line...), true, nil
+	}
+	if errors.Is(err, bufio.ErrBufferFull) || len(line) > checksumFileReadLimit {
+		return nil, true, fmt.Errorf("checksum file exceeds %d bytes before newline", checksumFileReadLimit)
+	}
+	if errors.Is(err, io.EOF) {
+		if len(line) == 0 {
+			return nil, false, fmt.Errorf("checksum file is empty")
+		}
+		return append([]byte(nil), line...), false, nil
+	}
+	return nil, false, err
+}
+
 func parseLocalChecksumFile(checksumPath string) (string, error) {
-	data, err := restoreFS.ReadFile(checksumPath)
+	file, err := restoreFS.Open(checksumPath)
+	if err != nil {
+		return "", fmt.Errorf("read checksum file %s: %w", checksumPath, err)
+	}
+	defer file.Close()
+
+	data, _, err := readBoundedChecksumLine(file)
 	if err != nil {
 		return "", fmt.Errorf("read checksum file %s: %w", checksumPath, err)
 	}
@@ -515,11 +544,31 @@ func inspectRcloneChecksumFile(ctx context.Context, remotePath string, logger *l
 	logging.DebugStep(logger, "inspect rclone checksum", "executing: rclone cat %s", remotePath)
 
 	cmd := exec.CommandContext(ctx, "rclone", "cat", remotePath)
-	output, err := cmd.CombinedOutput()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("start rclone cat %s: %w", remotePath, err)
 	}
-	checksum, err = backup.ParseChecksumData(output)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("start rclone cat %s: %w", remotePath, err)
+	}
+
+	data, closedEarly, readErr := readBoundedChecksumLine(stdout)
+	if closedEarly {
+		_ = stdout.Close()
+	}
+	waitErr := cmd.Wait()
+	if readErr != nil {
+		if waitErr != nil && !closedEarly {
+			return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, waitErr, strings.TrimSpace(stderr.String()))
+		}
+		return "", fmt.Errorf("read checksum file %s: %w", remotePath, readErr)
+	}
+	if waitErr != nil && !closedEarly {
+		return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, waitErr, strings.TrimSpace(stderr.String()))
+	}
+	checksum, err = backup.ParseChecksumData(data)
 	if err != nil {
 		return "", fmt.Errorf("parse checksum file %s: %w", remotePath, err)
 	}

@@ -779,6 +779,46 @@ func TestDiscoverBackupCandidates_RejectsMalformedOrConflictingChecksums(t *test
 	}
 }
 
+func TestParseLocalChecksumFile_RejectsOversizedInput(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	checksumPath := filepath.Join(t.TempDir(), "config.tar.xz.sha256")
+	oversized := strings.Repeat("a", checksumFileReadLimit+1) + "\n"
+	if err := os.WriteFile(checksumPath, []byte(oversized), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	_, err := parseLocalChecksumFile(checksumPath)
+	if err == nil {
+		t.Fatal("parseLocalChecksumFile() error = nil; want oversize error")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("parseLocalChecksumFile() error = %v; want oversize error", err)
+	}
+}
+
+func TestParseLocalChecksumFile_AcceptsBoundedInputWithoutTrailingNewline(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	checksumPath := filepath.Join(t.TempDir(), "config.tar.xz.sha256")
+	want := checksumHexForBytes([]byte("archive"))
+	if err := os.WriteFile(checksumPath, checksumLineForBytes("config.tar.xz", []byte("archive")), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	got, err := parseLocalChecksumFile(checksumPath)
+	if err != nil {
+		t.Fatalf("parseLocalChecksumFile() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("parseLocalChecksumFile() = %q; want %q", got, want)
+	}
+}
+
 func TestDiscoverRcloneBackups_NormalizesAndStoresIntegrityExpectation(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -1059,5 +1099,69 @@ esac
 				t.Fatalf("discoverRcloneBackups() returned %d candidates; want 0", len(candidates))
 			}
 		})
+	}
+}
+
+func TestInspectRcloneChecksumFile_RejectsOversizedInput(t *testing.T) {
+	tmpDir := t.TempDir()
+	checksumPath := filepath.Join(tmpDir, "node-backup.tar.xz.sha256")
+	oversized := strings.Repeat("a", checksumFileReadLimit+1) + "\n"
+	if err := os.WriteFile(checksumPath, []byte(oversized), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+if [ "$1" != "cat" ]; then
+  echo "unexpected subcommand: $1" >&2
+  exit 1
+fi
+cat "$CHECKSUM_PATH"
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	t.Setenv("PATH", tmpDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CHECKSUM_PATH", checksumPath)
+
+	_, err := inspectRcloneChecksumFile(context.Background(), "gdrive:node-backup.tar.xz.sha256", nil)
+	if err == nil {
+		t.Fatal("inspectRcloneChecksumFile() error = nil; want oversize error")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("inspectRcloneChecksumFile() error = %v; want oversize error", err)
+	}
+}
+
+func TestInspectRcloneChecksumFile_AcceptsBoundedInputWithoutTrailingNewline(t *testing.T) {
+	tmpDir := t.TempDir()
+	checksumPath := filepath.Join(tmpDir, "node-backup.tar.xz.sha256")
+	want := checksumHexForBytes([]byte("archive"))
+	if err := os.WriteFile(checksumPath, checksumLineForBytes("node-backup.tar.xz", []byte("archive")), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+if [ "$1" != "cat" ]; then
+  echo "unexpected subcommand: $1" >&2
+  exit 1
+fi
+cat "$CHECKSUM_PATH"
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	t.Setenv("PATH", tmpDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CHECKSUM_PATH", checksumPath)
+
+	got, err := inspectRcloneChecksumFile(context.Background(), "gdrive:node-backup.tar.xz.sha256", nil)
+	if err != nil {
+		t.Fatalf("inspectRcloneChecksumFile() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("inspectRcloneChecksumFile() = %q; want %q", got, want)
 	}
 }
