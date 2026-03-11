@@ -496,7 +496,7 @@ func mergePBSDatastoreDefinitions(cli, config []pbsDatastore) []pbsDatastoreDefi
 		if entry.Name == "" && name != "" {
 			entry.Name = name
 		}
-		if entry.Path == "" && path != "" {
+		if path != "" && (entry.Path == "" || origin == pbsDatastoreSourceCLI) {
 			entry.Path = path
 		}
 		if entry.Comment == "" && comment != "" {

@@ -351,6 +351,39 @@ func TestMergePBSDatastoreDefinitionsKeepsOverridesSeparate(t *testing.T) {
 	}
 }
 
+func TestMergePBSDatastoreDefinitionsPrefersCLIPathOverConfigPath(t *testing.T) {
+	config := []pbsDatastore{{
+		Name:           "backup",
+		Path:           "/config/backup",
+		Comment:        "from config",
+		Source:         pbsDatastoreSourceConfig,
+		CLIName:        "backup",
+		NormalizedPath: normalizePBSDatastorePath("/config/backup"),
+		OutputKey:      collectorPathKey("backup"),
+	}}
+	cli := []pbsDatastore{{
+		Name:           "backup",
+		Path:           "/runtime/backup",
+		Comment:        "from cli",
+		Source:         pbsDatastoreSourceCLI,
+		CLIName:        "backup",
+		NormalizedPath: normalizePBSDatastorePath("/runtime/backup"),
+		OutputKey:      collectorPathKey("backup"),
+	}}
+
+	merged := mergePBSDatastoreDefinitions(cli, config)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 merged entry, got %d: %+v", len(merged), merged)
+	}
+
+	if merged[0].Origin != pbsDatastoreOriginMerged {
+		t.Fatalf("expected merged origin, got %+v", merged[0])
+	}
+	if merged[0].Path != "/runtime/backup" {
+		t.Fatalf("expected CLI path to win, got %+v", merged[0])
+	}
+}
+
 func TestMergePBSDatastoreDefinitionsDisambiguatesCLIAndOverrideOutputKeyCollisions(t *testing.T) {
 	overridePath := "/mnt/a/backup"
 	collidingKey := buildPBSOverrideOutputKey(overridePath)
