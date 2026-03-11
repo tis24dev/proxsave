@@ -59,12 +59,19 @@ func applyNetworkFilesFromStage(logger *logging.Logger, stageRoot string) (appli
 }
 
 func copyDirOverlay(srcDir, destDir string) ([]string, error) {
-	info, err := restoreFS.Stat(srcDir)
+	return copyDirOverlayWithinRoot(srcDir, destDir, destDir)
+}
+
+func copyDirOverlayWithinRoot(srcDir, destDir, destRoot string) ([]string, error) {
+	info, err := restoreFS.Lstat(srcDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("stat %s: %w", srcDir, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("staged directory must not be a symlink: %s", srcDir)
 	}
 	if !info.IsDir() {
 		return nil, nil
@@ -91,8 +98,27 @@ func copyDirOverlay(srcDir, destDir string) ([]string, error) {
 		src := filepath.Join(srcDir, name)
 		dest := filepath.Join(destDir, name)
 
-		if entry.IsDir() {
-			paths, err := copyDirOverlay(src, dest)
+		info, err := restoreFS.Lstat(src)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return applied, fmt.Errorf("stat %s: %w", src, err)
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			ok, err := copySymlinkOverlayWithinRoot(src, dest, destRoot)
+			if err != nil {
+				return applied, err
+			}
+			if ok {
+				applied = append(applied, dest)
+			}
+			continue
+		}
+
+		if info.IsDir() {
+			paths, err := copyDirOverlayWithinRoot(src, dest, destRoot)
 			if err != nil {
 				return applied, err
 			}
@@ -100,7 +126,7 @@ func copyDirOverlay(srcDir, destDir string) ([]string, error) {
 			continue
 		}
 
-		ok, err := copyFileOverlay(src, dest)
+		ok, err := copyFileOverlayWithinRoot(src, dest, destRoot)
 		if err != nil {
 			return applied, err
 		}
@@ -113,15 +139,25 @@ func copyDirOverlay(srcDir, destDir string) ([]string, error) {
 }
 
 func copyFileOverlay(src, dest string) (bool, error) {
-	info, err := restoreFS.Stat(src)
+	return copyFileOverlayWithinRoot(src, dest, filepath.Dir(dest))
+}
+
+func copyFileOverlayWithinRoot(src, dest, destRoot string) (bool, error) {
+	info, err := restoreFS.Lstat(src)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("stat %s: %w", src, err)
 	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return copySymlinkOverlayWithinRoot(src, dest, destRoot)
+	}
 	if info.IsDir() {
 		return false, nil
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("unsupported staged file type %s (mode=%s)", src, info.Mode())
 	}
 
 	data, err := restoreFS.ReadFile(src)
@@ -140,4 +176,103 @@ func copyFileOverlay(src, dest string) (bool, error) {
 		return false, fmt.Errorf("write %s: %w", dest, err)
 	}
 	return true, nil
+}
+
+func copySymlinkOverlay(src, dest string) (bool, error) {
+	return copySymlinkOverlayWithinRoot(src, dest, filepath.Dir(dest))
+}
+
+func copySymlinkOverlayWithinRoot(src, dest, destRoot string) (bool, error) {
+	info, err := restoreFS.Lstat(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat %s: %w", src, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return false, fmt.Errorf("source is not a symlink: %s", src)
+	}
+
+	target, err := restoreFS.Readlink(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("readlink %s: %w", src, err)
+	}
+
+	validatedTarget, err := validateOverlaySymlinkTargetWithinRoot(destRoot, dest, target)
+	if err != nil {
+		return false, fmt.Errorf("unsafe symlink target %s -> %s: %w", dest, target, err)
+	}
+
+	if err := ensureDirExistsWithInheritedMeta(filepath.Dir(dest)); err != nil {
+		return false, fmt.Errorf("ensure %s: %w", filepath.Dir(dest), err)
+	}
+
+	if existing, err := restoreFS.Lstat(dest); err == nil {
+		if existing.IsDir() {
+			return false, fmt.Errorf("destination exists as directory: %s", dest)
+		}
+		if err := restoreFS.Remove(dest); err != nil && !os.IsNotExist(err) {
+			return false, fmt.Errorf("remove %s: %w", dest, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("stat %s: %w", dest, err)
+	}
+
+	if err := restoreFS.Symlink(validatedTarget, dest); err != nil {
+		return false, fmt.Errorf("symlink %s -> %s: %w", dest, validatedTarget, err)
+	}
+	if err := verifyCreatedSymlinkWithinRootFS(restoreFS, destRoot, dest); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// verifyCreatedSymlinkWithinRootFS re-reads a newly created symlink and ensures
+// its effective target still resolves within destRoot. On validation failure it
+// removes the symlink, mirroring extractSymlink's cleanup-on-failure behavior.
+func verifyCreatedSymlinkWithinRootFS(fsys FS, destRoot, dest string) error {
+	destRoot = filepath.Clean(strings.TrimSpace(destRoot))
+	dest = filepath.Clean(strings.TrimSpace(dest))
+
+	actualTarget, err := fsys.Readlink(dest)
+	if err != nil {
+		_ = fsys.Remove(dest)
+		return fmt.Errorf("read created symlink %s: %w", dest, err)
+	}
+
+	if _, err := resolvePathRelativeToBaseWithinRootFS(fsys, destRoot, filepath.Dir(dest), actualTarget); err != nil {
+		_ = fsys.Remove(dest)
+		return fmt.Errorf("symlink target escapes root after creation: %s -> %s: %w", dest, actualTarget, err)
+	}
+
+	return nil
+}
+
+func validateOverlaySymlinkTargetWithinRoot(destRoot, dest, target string) (string, error) {
+	destRoot = filepath.Clean(strings.TrimSpace(destRoot))
+	dest = filepath.Clean(strings.TrimSpace(dest))
+
+	resolved, err := resolvePathRelativeToBaseWithinRootFS(restoreFS, destRoot, filepath.Dir(dest), target)
+	if err != nil {
+		return "", err
+	}
+
+	if !filepath.IsAbs(target) {
+		return target, nil
+	}
+
+	resolvedParent, err := resolvePathRelativeToBaseWithinRootFS(restoreFS, destRoot, filepath.Dir(dest), ".")
+	if err != nil {
+		return "", err
+	}
+
+	rewrittenTarget, err := filepath.Rel(resolvedParent, resolved)
+	if err != nil {
+		return "", fmt.Errorf("rewrite symlink target %s -> %s: %w", dest, resolved, err)
+	}
+	return filepath.Clean(rewrittenTarget), nil
 }

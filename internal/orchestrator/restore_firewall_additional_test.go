@@ -372,14 +372,14 @@ func TestSyncDirExact_CopiesSymlinks(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
 
-	fakeFS := NewFakeFS()
+	fakeFS := newPreservingSymlinkFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
 
-	if err := fakeFS.AddFile("/stage/target", []byte("x")); err != nil {
-		t.Fatalf("add target: %v", err)
+	if err := fakeFS.AddDir("/stage"); err != nil {
+		t.Fatalf("add stage dir: %v", err)
 	}
-	if err := fakeFS.Symlink("/stage/target", "/stage/link"); err != nil {
+	if err := fakeFS.Symlink("/dest/target", "/stage/link"); err != nil {
 		t.Fatalf("add symlink: %v", err)
 	}
 
@@ -392,8 +392,8 @@ func TestSyncDirExact_CopiesSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read dest symlink: %v", err)
 	}
-	if strings.TrimSpace(destTarget) == "" {
-		t.Fatalf("expected non-empty symlink target")
+	if destTarget != "target" {
+		t.Fatalf("dest symlink target=%q want %q", destTarget, "target")
 	}
 	found := false
 	for _, p := range applied {
@@ -404,6 +404,70 @@ func TestSyncDirExact_CopiesSymlinks(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected /dest/link to be reported as applied, got %#v", applied)
+	}
+}
+
+func TestSyncDirExact_RejectsEscapingSymlinkTargets(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := newPreservingSymlinkFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	if err := fakeFS.AddDir("/stage"); err != nil {
+		t.Fatalf("add stage dir: %v", err)
+	}
+	if err := fakeFS.Symlink("/stage/target", "/stage/link"); err != nil {
+		t.Fatalf("add symlink: %v", err)
+	}
+
+	if _, err := syncDirExact("/stage", "/dest"); err == nil || !strings.Contains(err.Error(), "unsafe symlink target") {
+		t.Fatalf("expected unsafe symlink target error, got %v", err)
+	}
+}
+
+func TestSyncDirExact_RejectsRelativeSymlinkTargetsThatEscapeDestinationRoot(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := newPreservingSymlinkFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	if err := fakeFS.AddDir("/stage/sub"); err != nil {
+		t.Fatalf("add stage dir: %v", err)
+	}
+	if err := fakeFS.Symlink("../../outside", "/stage/sub/link"); err != nil {
+		t.Fatalf("add symlink: %v", err)
+	}
+
+	if _, err := syncDirExact("/stage", "/dest"); err == nil || !strings.Contains(err.Error(), "unsafe symlink target") {
+		t.Fatalf("expected unsafe symlink target error, got %v", err)
+	}
+}
+
+func TestSyncDirExact_CleansUpWhenCreatedSymlinkReadbackFails(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := newPreservingSymlinkFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+
+	if err := fakeFS.AddDir("/stage"); err != nil {
+		t.Fatalf("add stage dir: %v", err)
+	}
+	if err := fakeFS.Symlink("/dest/target", "/stage/link"); err != nil {
+		t.Fatalf("add symlink: %v", err)
+	}
+
+	restoreFS = readlinkFailFS{FS: fakeFS, failPath: "/dest/link", err: fmt.Errorf("boom")}
+
+	if _, err := syncDirExact("/stage", "/dest"); err == nil || !strings.Contains(err.Error(), "read created symlink /dest/link") {
+		t.Fatalf("expected post-create readlink error, got %v", err)
+	}
+	if _, err := fakeFS.Lstat("/dest/link"); !os.IsNotExist(err) {
+		t.Fatalf("expected created symlink cleanup, lstat err = %v", err)
 	}
 }
 
@@ -1975,13 +2039,13 @@ func TestSyncDirExact_AdditionalEdgeCases(t *testing.T) {
 	})
 
 	t.Run("symlink parent ensure error bubbles", func(t *testing.T) {
-		fakeFS := NewFakeFS()
+		fakeFS := newPreservingSymlinkFS()
 		t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 
 		if err := fakeFS.AddDir("/stage"); err != nil {
 			t.Fatalf("add stage dir: %v", err)
 		}
-		if err := fakeFS.Symlink("/stage/target", "/stage/link"); err != nil {
+		if err := fakeFS.Symlink("target", "/stage/link"); err != nil {
 			t.Fatalf("add stage symlink: %v", err)
 		}
 		if err := fakeFS.AddDir("/dest"); err != nil {
@@ -1995,13 +2059,13 @@ func TestSyncDirExact_AdditionalEdgeCases(t *testing.T) {
 	})
 
 	t.Run("symlink creation error bubbles", func(t *testing.T) {
-		fakeFS := NewFakeFS()
+		fakeFS := newPreservingSymlinkFS()
 		t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 
 		if err := fakeFS.AddDir("/stage"); err != nil {
 			t.Fatalf("add stage dir: %v", err)
 		}
-		if err := fakeFS.Symlink("/stage/target", "/stage/link"); err != nil {
+		if err := fakeFS.Symlink("target", "/stage/link"); err != nil {
 			t.Fatalf("add stage symlink: %v", err)
 		}
 

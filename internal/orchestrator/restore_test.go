@@ -334,6 +334,155 @@ func TestExtractSymlink_SecurityValidation(t *testing.T) {
 	}
 }
 
+func TestExtractTarEntry_RejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+
+	destRoot := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(destRoot, "escape-link")); err != nil {
+		t.Fatalf("create escape symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "escape-link/missing",
+		Typeflag: tar.TypeDir,
+		Mode:     0o755,
+	}
+
+	var tr *tar.Reader
+	err := extractTarEntry(tr, header, destRoot, logger)
+	if err == nil || !strings.Contains(err.Error(), "illegal path") {
+		t.Fatalf("expected illegal path error, got %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(outside, "missing")); !os.IsNotExist(err) {
+		t.Fatalf("outside path should not be created, got err=%v", err)
+	}
+}
+
+func TestSanitizeRestoreEntryTargetWithFS_AllowsOperationalResolverErrorsWithinRoot(t *testing.T) {
+	fsys := NewFakeFS()
+	destRoot := filepath.Join(string(os.PathSeparator), "restore-root")
+	if err := fsys.AddDir(destRoot); err != nil {
+		t.Fatalf("add root dir: %v", err)
+	}
+	if err := fsys.AddDir(filepath.Join(destRoot, "subdir")); err != nil {
+		t.Fatalf("add subdir: %v", err)
+	}
+	fsys.StatErrors[filepath.Clean(filepath.Join(destRoot, "subdir", "file.txt"))] = os.ErrPermission
+
+	target, cleanRoot, err := sanitizeRestoreEntryTargetWithFS(fsys, destRoot, filepath.Join("subdir", "file.txt"))
+	if err != nil {
+		t.Fatalf("sanitizeRestoreEntryTargetWithFS returned error: %v", err)
+	}
+
+	wantTarget := filepath.Join(destRoot, "subdir", "file.txt")
+	if target != wantTarget {
+		t.Fatalf("target = %q, want %q", target, wantTarget)
+	}
+	if cleanRoot != filepath.Clean(destRoot) {
+		t.Fatalf("cleanRoot = %q, want %q", cleanRoot, filepath.Clean(destRoot))
+	}
+}
+
+func TestExtractSymlink_RejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+
+	destRoot := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(destRoot, "escape-link")); err != nil {
+		t.Fatalf("create escape symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "escape-link/missing/file.txt",
+	}
+	target := filepath.Join(destRoot, header.Name)
+
+	err := extractSymlink(target, header, destRoot, logger)
+	if err == nil || !strings.Contains(err.Error(), "escapes root") {
+		t.Fatalf("expected escapes root error, got %v", err)
+	}
+
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("symlink should not be created, got err=%v", err)
+	}
+}
+
+func TestExtractSymlink_RejectsEscapeWhenParentPathIsSymlink(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+
+	destRoot := t.TempDir()
+	if err := os.Symlink(".", filepath.Join(destRoot, "linkdir")); err != nil {
+		t.Fatalf("create parent symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "linkdir/escape",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "../outside",
+	}
+	target := filepath.Join(destRoot, header.Name)
+
+	err := extractSymlink(target, header, destRoot, logger)
+	if err == nil || !strings.Contains(err.Error(), "escapes root") {
+		t.Fatalf("expected escapes root error, got %v", err)
+	}
+
+	if _, err := os.Lstat(filepath.Join(destRoot, "escape")); !os.IsNotExist(err) {
+		t.Fatalf("escaping symlink should not be created, got err=%v", err)
+	}
+}
+
+func TestExtractSymlink_AllowsSafeTargetWhenParentPathIsSymlink(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+
+	destRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(destRoot, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
+	if err := os.Symlink("subdir", filepath.Join(destRoot, "linkdir")); err != nil {
+		t.Fatalf("create parent symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "linkdir/ok",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "file.txt",
+	}
+	target := filepath.Join(destRoot, header.Name)
+
+	if err := extractSymlink(target, header, destRoot, logger); err != nil {
+		t.Fatalf("safe symlink should succeed: %v", err)
+	}
+
+	linkTarget, err := os.Readlink(target)
+	if err != nil {
+		t.Fatalf("safe symlink should exist: %v", err)
+	}
+	if linkTarget != "file.txt" {
+		t.Fatalf("symlink target = %q, want %q", linkTarget, "file.txt")
+	}
+
+	if _, err := os.Lstat(filepath.Join(destRoot, "subdir", "ok")); err != nil {
+		t.Fatalf("expected symlink at resolved parent path: %v", err)
+	}
+}
+
 func TestExtractTarEntry_DoesNotFollowExistingSymlinkTargetPath(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	orig := restoreFS

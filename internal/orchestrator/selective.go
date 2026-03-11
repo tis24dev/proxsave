@@ -27,40 +27,8 @@ type SelectiveRestoreConfig struct {
 
 // AnalyzeBackupCategories detects which categories are available in the backup
 func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) (categories []Category, err error) {
-	done := logging.DebugStart(logger, "analyze backup categories", "archive=%s", archivePath)
-	defer func() { done(err) }()
-	logger.Info("Analyzing backup categories...")
-
-	// Open the archive and read all entry names
-	file, err := restoreFS.Open(archivePath)
-	if err != nil {
-		return nil, fmt.Errorf("open archive: %w", err)
-	}
-	defer file.Close()
-
-	// Create appropriate reader based on compression
-	reader, err := createDecompressionReader(context.Background(), file, archivePath)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if closer, ok := reader.(interface{ Close() error }); ok {
-			closer.Close()
-		}
-	}()
-
-	tarReader := tar.NewReader(reader)
-
-	archivePaths := collectArchivePaths(tarReader)
-	logger.Debug("Found %d entries in archive", len(archivePaths))
-
-	availableCategories := AnalyzeArchivePaths(archivePaths, GetAllCategories())
-	for _, cat := range availableCategories {
-		logger.Debug("Category available: %s (%s)", cat.ID, cat.Name)
-	}
-
-	logger.Info("Detected %d available categories", len(availableCategories))
-	return availableCategories, nil
+	availableCategories, _, err := AnalyzeRestoreArchive(archivePath, logger)
+	return availableCategories, err
 }
 
 // AnalyzeArchivePaths determines available categories from the provided archive entries.

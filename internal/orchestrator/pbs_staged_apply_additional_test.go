@@ -280,6 +280,40 @@ func TestLoadPBSDatastoreCfgFromInventory_FallsBackToDatastoreList(t *testing.T)
 	}
 }
 
+func TestLoadPBSDatastoreCfgFromInventory_IgnoresOverrideEntries(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	stageRoot := "/stage"
+	inventory := `{"datastores":[{"name":"DS1","path":"/mnt/ds1","comment":"primary","origin":"merged"},{"name":"DS1","path":"/mnt/scan-root","comment":"configured via PBS_DATASTORE_PATH","origin":"override"}]}`
+	if err := fakeFS.WriteFile(stageRoot+"/var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json", []byte(inventory), 0o640); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+
+	content, src, err := loadPBSDatastoreCfgFromInventory(stageRoot)
+	if err != nil {
+		t.Fatalf("loadPBSDatastoreCfgFromInventory: %v", err)
+	}
+	if src != "pbs_datastore_inventory.json.datastores" {
+		t.Fatalf("src=%q", src)
+	}
+	if strings.Contains(content, "/mnt/scan-root") {
+		t.Fatalf("override entry should not be present in generated datastore.cfg: %s", content)
+	}
+
+	blocks, err := parsePBSDatastoreCfgBlocks(content)
+	if err != nil {
+		t.Fatalf("parsePBSDatastoreCfgBlocks: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0].Name != "DS1" || blocks[0].Path != "/mnt/ds1" {
+		t.Fatalf("unexpected blocks: %+v", blocks)
+	}
+}
+
 func TestLoadPBSDatastoreCfgFromInventory_PropagatesErrors(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })

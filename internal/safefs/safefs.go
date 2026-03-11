@@ -14,6 +14,7 @@ var (
 	osStat        = os.Stat
 	osReadDir     = os.ReadDir
 	syscallStatfs = syscall.Statfs
+	fsOpLimiter   = newOperationLimiter(32)
 )
 
 // ErrTimeout is a sentinel error used to classify filesystem operations that did not
@@ -56,100 +57,118 @@ func effectiveTimeout(ctx context.Context, timeout time.Duration) time.Duration 
 	return timeout
 }
 
-func Stat(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+func normalizeContextErr(ctx context.Context, deadlineErr error) error {
+	err := ctx.Err()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return deadlineErr
+	}
+	return err
+}
+
+// operationLimiter bounds the number of in-flight filesystem goroutines whose
+// callers may already have returned due to timeout/cancellation.
+type operationLimiter struct {
+	slots chan struct{}
+}
+
+func newOperationLimiter(capacity int) *operationLimiter {
+	if capacity < 1 {
+		capacity = 1
+	}
+	return &operationLimiter{
+		slots: make(chan struct{}, capacity),
+	}
+}
+
+func (l *operationLimiter) acquire(ctx context.Context, timer <-chan time.Time) error {
+	select {
+	case l.slots <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return normalizeContextErr(ctx, ErrTimeout)
+	case <-timer:
+		return ErrTimeout
+	}
+}
+
+func (l *operationLimiter) release() {
+	select {
+	case <-l.slots:
+	default:
+	}
+}
+
+func (l *operationLimiter) inflight() int {
+	return len(l.slots)
+}
+
+func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *TimeoutError, run func() (T, error)) (T, error) {
+	var zero T
+	if err := normalizeContextErr(ctx, timeoutErr); err != nil {
+		return zero, err
 	}
 	timeout = effectiveTimeout(ctx, timeout)
 	if timeout <= 0 {
-		return osStat(path)
+		if err := normalizeContextErr(ctx, timeoutErr); err != nil {
+			return zero, err
+		}
+		return run()
 	}
-
-	type result struct {
-		info fs.FileInfo
-		err  error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		info, err := osStat(path)
-		ch <- result{info: info, err: err}
-	}()
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
+	limiter := fsOpLimiter
+	if err := limiter.acquire(ctx, timer.C); err != nil {
+		if errors.Is(err, ErrTimeout) {
+			return zero, timeoutErr
+		}
+		return zero, err
+	}
+
+	type result struct {
+		value T
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		defer limiter.release()
+		value, err := run()
+		ch <- result{value: value, err: err}
+	}()
+
 	select {
 	case r := <-ch:
-		return r.info, r.err
+		return r.value, r.err
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return zero, normalizeContextErr(ctx, timeoutErr)
 	case <-timer.C:
-		return nil, &TimeoutError{Op: "stat", Path: path, Timeout: timeout}
+		return zero, timeoutErr
 	}
+}
+
+func Stat(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
+	stat := osStat
+	return runLimited(ctx, timeout, &TimeoutError{Op: "stat", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (fs.FileInfo, error) {
+		return stat(path)
+	})
 }
 
 func ReadDir(ctx context.Context, path string, timeout time.Duration) ([]os.DirEntry, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	timeout = effectiveTimeout(ctx, timeout)
-	if timeout <= 0 {
-		return osReadDir(path)
-	}
-
-	type result struct {
-		entries []os.DirEntry
-		err     error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		entries, err := osReadDir(path)
-		ch <- result{entries: entries, err: err}
-	}()
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	select {
-	case r := <-ch:
-		return r.entries, r.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-timer.C:
-		return nil, &TimeoutError{Op: "readdir", Path: path, Timeout: timeout}
-	}
+	readDir := osReadDir
+	return runLimited(ctx, timeout, &TimeoutError{Op: "readdir", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() ([]os.DirEntry, error) {
+		return readDir(path)
+	})
 }
 
 func Statfs(ctx context.Context, path string, timeout time.Duration) (syscall.Statfs_t, error) {
-	if err := ctx.Err(); err != nil {
-		return syscall.Statfs_t{}, err
-	}
-	timeout = effectiveTimeout(ctx, timeout)
-	if timeout <= 0 {
+	statfs := syscallStatfs
+	return runLimited(ctx, timeout, &TimeoutError{Op: "statfs", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (syscall.Statfs_t, error) {
 		var stat syscall.Statfs_t
-		return stat, syscallStatfs(path, &stat)
-	}
-
-	type result struct {
-		stat syscall.Statfs_t
-		err  error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		var stat syscall.Statfs_t
-		err := syscallStatfs(path, &stat)
-		ch <- result{stat: stat, err: err}
-	}()
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	select {
-	case r := <-ch:
-		return r.stat, r.err
-	case <-ctx.Done():
-		return syscall.Statfs_t{}, ctx.Err()
-	case <-timer.C:
-		return syscall.Statfs_t{}, &TimeoutError{Op: "statfs", Path: path, Timeout: timeout}
-	}
+		err := statfs(path, &stat)
+		return stat, err
+	})
 }

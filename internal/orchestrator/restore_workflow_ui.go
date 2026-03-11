@@ -11,12 +11,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 var prepareRestoreBundleFunc = prepareRestoreBundleWithUI
+var analyzeRestoreArchiveFunc = AnalyzeRestoreArchive
+
+func fallbackRestoreDecisionInfoFromManifest(manifest *backup.Manifest) *RestoreDecisionInfo {
+	info := &RestoreDecisionInfo{Source: RestoreDecisionSourceUnknown}
+	if manifest == nil {
+		return info
+	}
+
+	info.BackupType = DetectBackupType(manifest)
+	info.ClusterPayload = strings.EqualFold(strings.TrimSpace(manifest.ClusterMode), "cluster")
+	info.BackupHostname = strings.TrimSpace(manifest.Hostname)
+	return info
+}
 
 func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
 	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, false)
@@ -76,7 +90,19 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	systemType := restoreSystem.DetectCurrentSystem()
 	logger.Info("Detected system type: %s", GetSystemTypeString(systemType))
 
-	if warn := ValidateCompatibility(candidate.Manifest); warn != nil {
+	availableCategories, decisionInfo, err := analyzeRestoreArchiveFunc(prepared.ArchivePath, logger)
+	fallbackToFullRestore := false
+	if err != nil {
+		logger.Warning("Could not analyze categories: %v", err)
+		availableCategories = nil
+		decisionInfo = fallbackRestoreDecisionInfoFromManifest(candidate.Manifest)
+		fallbackToFullRestore = true
+	}
+	if decisionInfo == nil {
+		decisionInfo = &RestoreDecisionInfo{}
+	}
+
+	if warn := ValidateCompatibility(systemType, decisionInfo.BackupType); warn != nil {
 		logger.Warning("Compatibility check: %v", warn)
 		proceed, perr := ui.ConfirmCompatibility(ctx, warn)
 		if perr != nil {
@@ -86,11 +112,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			return ErrRestoreAborted
 		}
 	}
-
-	logger.Info("Analyzing backup contents...")
-	availableCategories, err := AnalyzeBackupCategories(prepared.ArchivePath, logger)
-	if err != nil {
-		logger.Warning("Could not analyze categories: %v", err)
+	if fallbackToFullRestore {
 		logger.Info("Falling back to full restore mode")
 		return runFullRestoreWithUI(ctx, ui, candidate, prepared, destRoot, logger, cfg.DryRun)
 	}
@@ -127,7 +149,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 	}
 
-	plan := PlanRestore(candidate.Manifest, selectedCategories, systemType, mode)
+	plan := PlanRestore(decisionInfo.ClusterPayload, selectedCategories, systemType, mode)
 
 	if plan.SystemType == SystemTypePBS &&
 		(plan.HasCategoryID("pbs_host") ||
@@ -145,9 +167,8 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		logger.Info("PBS restore behavior: %s", behavior.DisplayName())
 	}
 
-	clusterBackup := strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster")
-	if plan.NeedsClusterRestore && clusterBackup {
-		logger.Info("Backup marked as cluster node; enabling guarded restore options for pve_cluster")
+	if plan.NeedsClusterRestore && plan.ClusterBackup {
+		logger.Info("Cluster payload detected in backup; enabling guarded restore options for pve_cluster")
 		choice, promptErr := ui.SelectClusterRestoreMode(ctx)
 		if promptErr != nil {
 			return promptErr
@@ -168,8 +189,8 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	if plan.HasCategoryID("pve_access_control") || plan.HasCategoryID("pbs_access_control") {
 		currentHost, hostErr := os.Hostname()
-		if hostErr == nil && strings.TrimSpace(candidate.Manifest.Hostname) != "" && strings.TrimSpace(currentHost) != "" {
-			backupHost := strings.TrimSpace(candidate.Manifest.Hostname)
+		if hostErr == nil && strings.TrimSpace(decisionInfo.BackupHostname) != "" && strings.TrimSpace(currentHost) != "" {
+			backupHost := strings.TrimSpace(decisionInfo.BackupHostname)
 			if !strings.EqualFold(strings.TrimSpace(currentHost), backupHost) {
 				logger.Warning("Access control/TFA: backup hostname=%s current hostname=%s; WebAuthn users may require re-enrollment if the UI origin (FQDN/port) changes", backupHost, currentHost)
 			}

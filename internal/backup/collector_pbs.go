@@ -347,6 +347,11 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 
 // collectPBSCommands collects output from PBS commands
 func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsDatastore) error {
+	if len(datastores) > 0 {
+		datastores = clonePBSDatastores(datastores)
+		assignUniquePBSDatastoreOutputKeys(datastores)
+	}
+
 	commandsDir := c.proxsaveCommandsDir("pbs")
 	if err := c.ensureDir(commandsDir); err != nil {
 		return fmt.Errorf("failed to create commands directory: %w", err)
@@ -383,9 +388,19 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 	// Datastore usage details
 	if c.config.BackupDatastoreConfigs && len(datastores) > 0 {
 		for _, ds := range datastores {
+			if ds.isOverride() {
+				c.logger.Debug("Skipping datastore status for %s (path=%s): no PBS datastore identity", ds.Name, ds.Path)
+				continue
+			}
+			cliName := ds.cliName()
+			if cliName == "" {
+				c.logger.Debug("Skipping datastore status for %s (path=%s): empty PBS datastore identity", ds.Name, ds.Path)
+				continue
+			}
+			dsKey := ds.pathKey()
 			c.safeCmdOutput(ctx,
-				fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", ds.Name),
-				filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", ds.Name)),
+				fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", cliName),
+				filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", dsKey)),
 				fmt.Sprintf("Datastore %s status", ds.Name),
 				false)
 		}

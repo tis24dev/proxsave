@@ -1448,6 +1448,10 @@ func runRestoreCommandStream(ctx context.Context, name string, stdin io.Reader, 
 }
 
 func sanitizeRestoreEntryTarget(destRoot, entryName string) (string, string, error) {
+	return sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, entryName)
+}
+
+func sanitizeRestoreEntryTargetWithFS(fsys FS, destRoot, entryName string) (string, string, error) {
 	cleanDestRoot := filepath.Clean(destRoot)
 	if cleanDestRoot == "" {
 		cleanDestRoot = string(os.PathSeparator)
@@ -1490,23 +1494,13 @@ func sanitizeRestoreEntryTarget(destRoot, entryName string) (string, string, err
 		return "", "", fmt.Errorf("illegal path: %s", entryName)
 	}
 
-	parentDir := filepath.Dir(absTarget)
-	resolvedParentDir, err := filepath.EvalSymlinks(parentDir)
-	if err != nil {
-		// If the path doesn't exist yet, EvalSymlinks will fail; fallback to the cleaned path.
-		resolvedParentDir = filepath.Clean(parentDir)
-	}
-	absResolvedParentDir, err := filepath.Abs(resolvedParentDir)
-	if err != nil {
-		return "", "", fmt.Errorf("resolve extraction parent directory: %w", err)
-	}
-
-	relParent, err := filepath.Rel(absDestRoot, absResolvedParentDir)
-	if err != nil {
-		return "", "", fmt.Errorf("illegal path: %s: %w", entryName, err)
-	}
-	if strings.HasPrefix(relParent, ".."+string(os.PathSeparator)) || relParent == ".." || filepath.IsAbs(relParent) {
-		return "", "", fmt.Errorf("illegal path: %s", entryName)
+	if _, err := resolvePathWithinRootFS(fsys, absDestRoot, absTarget); err != nil {
+		if isPathSecurityError(err) {
+			return "", "", fmt.Errorf("illegal path: %s: %w", entryName, err)
+		}
+		if !isPathOperationalError(err) {
+			return "", "", fmt.Errorf("resolve extraction target: %w", err)
+		}
 	}
 
 	return absTarget, absDestRoot, nil
@@ -1537,7 +1531,7 @@ func shouldSkipProxmoxSystemRestore(relTarget string) (bool, string) {
 
 // extractTarEntry extracts a single TAR entry, preserving all attributes including atime/ctime
 func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string, logger *logging.Logger) error {
-	target, cleanDestRoot, err := sanitizeRestoreEntryTarget(destRoot, header.Name)
+	target, cleanDestRoot, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, header.Name)
 	if err != nil {
 		return err
 	}
@@ -1647,26 +1641,8 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 func extractSymlink(target string, header *tar.Header, destRoot string, logger *logging.Logger) error {
 	linkTarget := header.Linkname
 
-	// Pre-validation: ensure the resolved target would stay within destRoot before creating the symlink
-	relativeTarget, err := filepath.Rel(destRoot, target)
-	if err != nil {
-		return fmt.Errorf("determine relative path for symlink %s: %w", target, err)
-	}
-	if strings.HasPrefix(relativeTarget, ".."+string(os.PathSeparator)) || relativeTarget == ".." {
-		return fmt.Errorf("sanitized symlink path escapes root: %s", target)
-	}
-
-	symlinkArchivePath := path.Clean(filepath.ToSlash(relativeTarget))
-	symlinkArchiveDir := path.Dir(symlinkArchivePath)
-	if symlinkArchiveDir == "." {
-		symlinkArchiveDir = ""
-	}
-	potentialTarget := linkTarget
-	if !filepath.IsAbs(linkTarget) {
-		potentialTarget = filepath.FromSlash(path.Join(symlinkArchiveDir, linkTarget))
-	}
-
-	if _, err := resolveAndCheckPath(destRoot, potentialTarget); err != nil {
+	// Pre-validation: ensure the symlink target resolves within destRoot before creation.
+	if _, err := resolvePathRelativeToBaseWithinRootFS(restoreFS, destRoot, filepath.Dir(target), linkTarget); err != nil {
 		return fmt.Errorf("symlink target escapes root before creation: %s -> %s: %w", header.Name, linkTarget, err)
 	}
 
@@ -1685,32 +1661,9 @@ func extractSymlink(target string, header *tar.Header, destRoot string, logger *
 		return fmt.Errorf("read created symlink %s: %w", target, err)
 	}
 
-	// Resolve the symlink target relative to the symlink's directory
-	symlinkDir := filepath.Dir(target)
-	resolvedTarget := actualTarget
-	if !filepath.IsAbs(actualTarget) {
-		resolvedTarget = filepath.Join(symlinkDir, actualTarget)
-	}
-
-	// Validate the resolved target stays within destRoot using absolute paths
-	absDestRoot, err := filepath.Abs(destRoot)
-	if err != nil {
+	if _, err := resolvePathRelativeToBaseWithinRootFS(restoreFS, destRoot, filepath.Dir(target), actualTarget); err != nil {
 		restoreFS.Remove(target)
-		return fmt.Errorf("resolve destination root: %w", err)
-	}
-
-	absResolvedTarget, err := filepath.Abs(resolvedTarget)
-	if err != nil {
-		restoreFS.Remove(target)
-		return fmt.Errorf("resolve symlink target: %w", err)
-	}
-
-	// Check if resolved target is within destRoot
-	rel, err := filepath.Rel(absDestRoot, absResolvedTarget)
-	if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
-		restoreFS.Remove(target)
-		return fmt.Errorf("symlink target escapes root after creation: %s -> %s (resolves to %s)",
-			header.Name, linkTarget, absResolvedTarget)
+		return fmt.Errorf("symlink target escapes root after creation: %s -> %s: %w", header.Name, actualTarget, err)
 	}
 
 	// Set ownership (on the symlink itself, not the target)
@@ -1733,7 +1686,7 @@ func extractHardlink(target string, header *tar.Header, destRoot string) error {
 	}
 
 	// Validate the hard link target stays within extraction root
-	if _, err := resolveAndCheckPath(destRoot, linkName); err != nil {
+	if _, err := resolvePathWithinRootFS(restoreFS, destRoot, linkName); err != nil {
 		return fmt.Errorf("hardlink target escapes root: %s -> %s: %w", header.Name, linkName, err)
 	}
 

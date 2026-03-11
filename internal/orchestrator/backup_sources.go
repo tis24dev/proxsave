@@ -1,9 +1,12 @@
 package orchestrator
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -130,6 +133,7 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 	emptyEntries := 0
 	nonCandidateEntries := 0
 	manifestErrors := 0
+	integrityMissing := 0
 	logDebug(logger, "Cloud (rclone): scanned %d entries from rclone lsf output", totalEntries)
 
 	snapshot := make(map[string]struct{}, len(lines))
@@ -211,10 +215,10 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 			report(fmt.Sprintf("Inspecting %d/%d: %s", idx+1, len(items), item.filename))
 		}
 
-		itemCtx, cancel := context.WithTimeout(ctx, timeout)
 		switch item.kind {
 		case sourceBundle:
-			manifest, perr := inspectRcloneBundleManifest(itemCtx, item.remoteBundle, logger)
+			bundleCtx, cancel := context.WithTimeout(ctx, timeout)
+			manifest, perr := inspectRcloneBundleManifest(bundleCtx, item.remoteBundle, logger)
 			cancel()
 			if perr != nil {
 				if errors.Is(perr, context.DeadlineExceeded) {
@@ -242,8 +246,9 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 			logDebug(logger, "Cloud (rclone): accepted backup bundle: %s", item.filename)
 
 		case sourceRaw:
-			manifest, perr := inspectRcloneMetadataManifest(itemCtx, item.remoteMetadata, item.remoteArchive, logger)
-			cancel()
+			manifestCtx, manifestCancel := context.WithTimeout(ctx, timeout)
+			manifest, perr := inspectRcloneMetadataManifest(manifestCtx, item.remoteMetadata, item.remoteArchive, logger)
+			manifestCancel()
 			if perr != nil {
 				if errors.Is(perr, context.DeadlineExceeded) {
 					return nil, fmt.Errorf("timed out while inspecting %s (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w", item.filename, timeout, perr)
@@ -253,6 +258,35 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 				}
 				manifestErrors++
 				logWarning(logger, "Skipping rclone metadata %s: %v", item.filename, perr)
+				continue
+			}
+			manifestChecksum, perr := normalizeCandidateManifestChecksum(manifest)
+			if perr != nil {
+				integrityMissing++
+				logWarning(logger, "Skipping rclone backup %s: invalid manifest checksum: %v", item.filename, perr)
+				continue
+			}
+			checksumFromFile := ""
+			if item.remoteChecksum != "" {
+				checksumCtx, checksumCancel := context.WithTimeout(ctx, timeout)
+				checksumFromFile, perr = inspectRcloneChecksumFile(checksumCtx, item.remoteChecksum, logger)
+				checksumCancel()
+				if perr != nil {
+					if errors.Is(perr, context.DeadlineExceeded) {
+						return nil, fmt.Errorf("timed out while inspecting %s checksum (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w", item.filename, timeout, perr)
+					}
+					if errors.Is(perr, context.Canceled) {
+						return nil, perr
+					}
+					integrityMissing++
+					logWarning(logger, "Skipping rclone backup %s: invalid checksum file: %v", item.filename, perr)
+					continue
+				}
+			}
+			expectation, perr := resolveIntegrityExpectationValues(checksumFromFile, manifestChecksum)
+			if perr != nil {
+				integrityMissing++
+				logWarning(logger, "Skipping rclone backup %s: %v", item.filename, perr)
 				continue
 			}
 			displayBase := filepath.Base(manifest.ArchivePath)
@@ -265,11 +299,11 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 				RawArchivePath:  item.remoteArchive,
 				RawMetadataPath: item.remoteMetadata,
 				RawChecksumPath: item.remoteChecksum,
+				Integrity:       expectation,
 				DisplayBase:     displayBase,
 				IsRclone:        true,
 			})
 		default:
-			cancel()
 			continue
 		}
 	}
@@ -292,11 +326,12 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 	logging.DebugStep(
 		logger,
 		"discover rclone backups",
-		"summary entries=%d empty=%d non_candidate=%d manifest_errors=%d accepted=%d elapsed=%s",
+		"summary entries=%d empty=%d non_candidate=%d manifest_errors=%d integrity_missing=%d accepted=%d elapsed=%s",
 		totalEntries,
 		emptyEntries,
 		nonCandidateEntries,
 		manifestErrors,
+		integrityMissing,
 		len(candidates),
 		time.Since(start),
 	)
@@ -336,6 +371,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 	metadataMissingArchive := 0
 	metadataManifestErrors := 0
 	checksumMissing := 0
+	integrityUnavailable := 0
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -392,11 +428,26 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 				logWarning(logger, "Skipping metadata %s: %v", name, err)
 				continue
 			}
-			logging.DebugStep(logger, "discover backup candidates", "raw candidate accepted: %s created_at=%s", name, manifest.CreatedAt.Format(time.RFC3339))
-
-			// If checksum is missing from both file and manifest, warn user
-			if !hasChecksum && manifest.SHA256 == "" {
-				logWarning(logger, "Backup %s has no checksum verification available", baseName)
+			manifestChecksum, err := normalizeCandidateManifestChecksum(manifest)
+			if err != nil {
+				integrityUnavailable++
+				logWarning(logger, "Skipping backup %s: invalid manifest checksum: %v", baseName, err)
+				continue
+			}
+			checksumFromFile := ""
+			if hasChecksum {
+				checksumFromFile, err = parseLocalChecksumFile(checksumPath)
+				if err != nil {
+					integrityUnavailable++
+					logWarning(logger, "Skipping backup %s: invalid checksum file: %v", baseName, err)
+					continue
+				}
+			}
+			expectation, err := resolveIntegrityExpectationValues(checksumFromFile, manifestChecksum)
+			if err != nil {
+				integrityUnavailable++
+				logWarning(logger, "Skipping backup %s: %v", baseName, err)
+				continue
 			}
 
 			rawBases[baseName] = struct{}{}
@@ -406,8 +457,10 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 				RawArchivePath:  archivePath,
 				RawMetadataPath: fullPath,
 				RawChecksumPath: checksumPath,
+				Integrity:       expectation,
 				DisplayBase:     filepath.Base(manifest.ArchivePath),
 			})
+			logging.DebugStep(logger, "discover backup candidates", "raw candidate accepted: %s created_at=%s", name, manifest.CreatedAt.Format(time.RFC3339))
 		}
 	}
 
@@ -418,7 +471,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 	logging.DebugStep(
 		logger,
 		"discover backup candidates",
-		"summary entries=%d files=%d dirs=%d bundles=%d bundle_manifest_errors=%d metadata=%d metadata_duplicate=%d metadata_missing_archive=%d metadata_manifest_errors=%d checksum_missing=%d candidates=%d",
+		"summary entries=%d files=%d dirs=%d bundles=%d bundle_manifest_errors=%d metadata=%d metadata_duplicate=%d metadata_missing_archive=%d metadata_manifest_errors=%d checksum_missing=%d integrity_unavailable=%d candidates=%d",
 		len(entries),
 		filesSeen,
 		dirsSkipped,
@@ -429,9 +482,99 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 		metadataMissingArchive,
 		metadataManifestErrors,
 		checksumMissing,
+		integrityUnavailable,
 		len(candidates),
 	)
 	return candidates, nil
+}
+
+func normalizeCandidateManifestChecksum(manifest *backup.Manifest) (string, error) {
+	if manifest == nil || strings.TrimSpace(manifest.SHA256) == "" {
+		return "", nil
+	}
+	normalized, err := backup.NormalizeChecksum(manifest.SHA256)
+	if err != nil {
+		return "", err
+	}
+	manifest.SHA256 = normalized
+	return normalized, nil
+}
+
+const checksumFileReadLimit = 4 * 1024
+
+func readBoundedChecksumLine(reader io.Reader) ([]byte, bool, error) {
+	limited := io.LimitReader(reader, checksumFileReadLimit+1)
+	line, err := bufio.NewReaderSize(limited, checksumFileReadLimit+1).ReadSlice('\n')
+	if err == nil {
+		return append([]byte(nil), line...), true, nil
+	}
+	if errors.Is(err, bufio.ErrBufferFull) || len(line) > checksumFileReadLimit {
+		return nil, true, fmt.Errorf("checksum file exceeds %d bytes before newline", checksumFileReadLimit)
+	}
+	if errors.Is(err, io.EOF) {
+		if len(line) == 0 {
+			return nil, false, fmt.Errorf("checksum file is empty")
+		}
+		return append([]byte(nil), line...), false, nil
+	}
+	return nil, false, err
+}
+
+func parseLocalChecksumFile(checksumPath string) (string, error) {
+	file, err := restoreFS.Open(checksumPath)
+	if err != nil {
+		return "", fmt.Errorf("read checksum file %s: %w", checksumPath, err)
+	}
+	defer file.Close()
+
+	data, _, err := readBoundedChecksumLine(file)
+	if err != nil {
+		return "", fmt.Errorf("read checksum file %s: %w", checksumPath, err)
+	}
+	checksum, err := backup.ParseChecksumData(data)
+	if err != nil {
+		return "", fmt.Errorf("parse checksum file %s: %w", checksumPath, err)
+	}
+	return checksum, nil
+}
+
+func inspectRcloneChecksumFile(ctx context.Context, remotePath string, logger *logging.Logger) (checksum string, err error) {
+	done := logging.DebugStart(logger, "inspect rclone checksum", "remote=%s", remotePath)
+	defer func() { done(err) }()
+	logging.DebugStep(logger, "inspect rclone checksum", "executing: rclone cat %s", remotePath)
+
+	cmd := exec.CommandContext(ctx, "rclone", "cat", remotePath)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("start rclone cat %s: %w", remotePath, err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("start rclone cat %s: %w", remotePath, err)
+	}
+
+	data, closedEarly, readErr := readBoundedChecksumLine(stdout)
+	if closedEarly {
+		_ = stdout.Close()
+	}
+	waitErr := cmd.Wait()
+	stderrOutput := strings.TrimSpace(stderr.String())
+	ignoreWaitErr := closedEarly && stderrOutput == ""
+	if readErr != nil {
+		if waitErr != nil && !ignoreWaitErr {
+			return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, waitErr, stderrOutput)
+		}
+		return "", fmt.Errorf("read checksum file %s: %w", remotePath, readErr)
+	}
+	if waitErr != nil && !ignoreWaitErr {
+		return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, waitErr, stderrOutput)
+	}
+	checksum, err = backup.ParseChecksumData(data)
+	if err != nil {
+		return "", fmt.Errorf("parse checksum file %s: %w", remotePath, err)
+	}
+	return checksum, nil
 }
 
 // isLocalFilesystemPath returns true if the given value represents an absolute

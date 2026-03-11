@@ -43,6 +43,7 @@ type decryptCandidate struct {
 	RawArchivePath  string
 	RawMetadataPath string
 	RawChecksumPath string
+	Integrity       *stagedIntegrityExpectation
 	DisplayBase     string
 	IsRclone        bool
 }
@@ -54,10 +55,11 @@ type stagedFiles struct {
 }
 
 type preparedBundle struct {
-	ArchivePath string
-	Manifest    backup.Manifest
-	Checksum    string
-	cleanup     func()
+	ArchivePath    string
+	Manifest       backup.Manifest
+	Checksum       string
+	SourceChecksum string
+	cleanup        func()
 }
 
 func (p *preparedBundle) Cleanup() {

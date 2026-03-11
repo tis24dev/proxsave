@@ -70,7 +70,7 @@ jobs:
       # GORELEASER
       ########################################
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: latest
           workdir: ${{ github.workspace }}
@@ -82,6 +82,6 @@ jobs:
       # ATTESTAZIONE PROVENIENZA BUILD
       ########################################
       - name: Attest Build Provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: build/proxsave_*

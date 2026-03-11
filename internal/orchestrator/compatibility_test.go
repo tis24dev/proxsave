@@ -3,8 +3,6 @@ package orchestrator
 import (
 	"os"
 	"testing"
-
-	"github.com/tis24dev/proxsave/internal/backup"
 )
 
 func TestValidateCompatibility_Mismatch(t *testing.T) {
@@ -18,8 +16,7 @@ func TestValidateCompatibility_Mismatch(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	manifest := &backup.Manifest{ProxmoxType: "pbs"}
-	if err := ValidateCompatibility(manifest); err == nil {
+	if err := ValidateCompatibility(SystemTypePVE, SystemTypePBS); err == nil {
 		t.Fatalf("expected incompatibility error")
 	}
 }
@@ -33,6 +30,38 @@ func TestDetectCurrentSystem_Unknown(t *testing.T) {
 
 	if got := DetectCurrentSystem(); got != SystemTypeUnknown {
 		t.Fatalf("expected unknown system, got %s", got)
+	}
+}
+
+func TestParseSystemTypeString_AcceptsFullNames(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  SystemType
+	}{
+		{
+			name:  "pve full name with space",
+			input: "Proxmox VE",
+			want:  SystemTypePVE,
+		},
+		{
+			name:  "pbs generic full name",
+			input: "Proxmox Backup",
+			want:  SystemTypePBS,
+		},
+		{
+			name:  "pbs full server name",
+			input: "Proxmox Backup Server",
+			want:  SystemTypePBS,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseSystemTypeString(tt.input); got != tt.want {
+				t.Fatalf("parseSystemTypeString(%q) = %v; want %v", tt.input, got, tt.want)
+			}
+		})
 	}
 }
 

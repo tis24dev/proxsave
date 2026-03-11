@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
@@ -293,5 +294,144 @@ func TestCollectPBSDatastoreInventoryCapturesHostCommands(t *testing.T) {
 	}
 	if got := report.Datastores[0].Findmnt.Output; got == "" {
 		t.Fatalf("expected findmnt output to be captured")
+	}
+}
+
+func TestMergePBSDatastoreDefinitionsKeepsOverridesSeparate(t *testing.T) {
+	config := []pbsDatastore{{
+		Name:           "backup",
+		Path:           "/real/backup",
+		Comment:        "primary",
+		Source:         pbsDatastoreSourceConfig,
+		CLIName:        "backup",
+		NormalizedPath: normalizePBSDatastorePath("/real/backup"),
+		OutputKey:      collectorPathKey("backup"),
+	}}
+	cli := []pbsDatastore{
+		{
+			Name:           "backup",
+			Path:           "/real/backup",
+			Comment:        "runtime",
+			Source:         pbsDatastoreSourceCLI,
+			CLIName:        "backup",
+			NormalizedPath: normalizePBSDatastorePath("/real/backup"),
+			OutputKey:      collectorPathKey("backup"),
+		},
+		{
+			Name:           "backup",
+			Path:           "/mnt/a/backup",
+			Comment:        "configured via PBS_DATASTORE_PATH",
+			Source:         pbsDatastoreSourceOverride,
+			NormalizedPath: normalizePBSDatastorePath("/mnt/a/backup"),
+			OutputKey:      buildPBSOverrideOutputKey("/mnt/a/backup"),
+		},
+		{
+			Name:           "backup",
+			Path:           "/srv/b/backup",
+			Comment:        "configured via PBS_DATASTORE_PATH",
+			Source:         pbsDatastoreSourceOverride,
+			NormalizedPath: normalizePBSDatastorePath("/srv/b/backup"),
+			OutputKey:      buildPBSOverrideOutputKey("/srv/b/backup"),
+		},
+	}
+
+	merged := mergePBSDatastoreDefinitions(cli, config)
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 merged entries, got %d: %+v", len(merged), merged)
+	}
+
+	if merged[0].Origin != pbsDatastoreOriginMerged || merged[0].Path != "/real/backup" {
+		t.Fatalf("expected real datastore entry first, got %+v", merged[0])
+	}
+	if merged[1].Origin != pbsDatastoreSourceOverride || merged[2].Origin != pbsDatastoreSourceOverride {
+		t.Fatalf("expected override entries after real datastore, got %+v", merged)
+	}
+	if merged[1].OutputKey == merged[2].OutputKey {
+		t.Fatalf("override output keys should differ, got %+v", merged)
+	}
+}
+
+func TestMergePBSDatastoreDefinitionsPrefersCLIPathOverConfigPath(t *testing.T) {
+	config := []pbsDatastore{{
+		Name:           "backup",
+		Path:           "/config/backup",
+		Comment:        "from config",
+		Source:         pbsDatastoreSourceConfig,
+		CLIName:        "backup",
+		NormalizedPath: normalizePBSDatastorePath("/config/backup"),
+		OutputKey:      collectorPathKey("backup"),
+	}}
+	cli := []pbsDatastore{{
+		Name:           "backup",
+		Path:           "/runtime/backup",
+		Comment:        "from cli",
+		Source:         pbsDatastoreSourceCLI,
+		CLIName:        "backup",
+		NormalizedPath: normalizePBSDatastorePath("/runtime/backup"),
+		OutputKey:      collectorPathKey("backup"),
+	}}
+
+	merged := mergePBSDatastoreDefinitions(cli, config)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 merged entry, got %d: %+v", len(merged), merged)
+	}
+
+	if merged[0].Origin != pbsDatastoreOriginMerged {
+		t.Fatalf("expected merged origin, got %+v", merged[0])
+	}
+	if merged[0].Path != "/runtime/backup" {
+		t.Fatalf("expected CLI path to win, got %+v", merged[0])
+	}
+}
+
+func TestMergePBSDatastoreDefinitionsDisambiguatesCLIAndOverrideOutputKeyCollisions(t *testing.T) {
+	overridePath := "/mnt/a/backup"
+	collidingKey := buildPBSOverrideOutputKey(overridePath)
+
+	cli := []pbsDatastore{
+		{
+			Name:           collidingKey,
+			Path:           "/real/runtime",
+			Comment:        "runtime",
+			Source:         pbsDatastoreSourceCLI,
+			CLIName:        collidingKey,
+			NormalizedPath: normalizePBSDatastorePath("/real/runtime"),
+			OutputKey:      collidingKey,
+		},
+		{
+			Name:           "backup",
+			Path:           overridePath,
+			Comment:        "configured via PBS_DATASTORE_PATH",
+			Source:         pbsDatastoreSourceOverride,
+			NormalizedPath: normalizePBSDatastorePath(overridePath),
+			OutputKey:      buildPBSOverrideOutputKey(overridePath),
+		},
+	}
+
+	merged := mergePBSDatastoreDefinitions(cli, nil)
+	if len(merged) != 2 {
+		t.Fatalf("expected 2 merged entries, got %d: %+v", len(merged), merged)
+	}
+
+	var cliEntry, overrideEntry *pbsDatastoreDefinition
+	for i := range merged {
+		switch merged[i].Origin {
+		case pbsDatastoreSourceCLI:
+			cliEntry = &merged[i]
+		case pbsDatastoreSourceOverride:
+			overrideEntry = &merged[i]
+		}
+	}
+	if cliEntry == nil || overrideEntry == nil {
+		t.Fatalf("expected one CLI and one override entry, got %+v", merged)
+	}
+	if cliEntry.OutputKey != collidingKey {
+		t.Fatalf("CLI datastore should keep base key %q, got %+v", collidingKey, merged)
+	}
+	if overrideEntry.OutputKey == collidingKey {
+		t.Fatalf("override output key should be disambiguated, got %+v", merged)
+	}
+	if !strings.HasPrefix(overrideEntry.OutputKey, collidingKey+"_") {
+		t.Fatalf("override output key should extend colliding base key, got %+v", merged)
 	}
 }

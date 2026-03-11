@@ -1,11 +1,13 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -814,13 +816,146 @@ func TestCollectPVEStorageMetadata(t *testing.T) {
 	collector := newPVECollector(t)
 
 	ctx := context.Background()
+	storageDir := t.TempDir()
 	storages := []pveStorageEntry{
-		{Name: "local", Path: "/var/lib/vz", Type: "dir"},
+		{Name: "local", Path: storageDir, Type: "dir"},
 	}
-	err := collector.collectPVEStorageMetadata(ctx, storages)
+	if err := collector.collectPVEStorageMetadata(ctx, storages); err != nil {
+		t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
+	}
+
+	metaPath := filepath.Join(collector.tempDir, "var/lib/pve-cluster/info/datastores", "local", "metadata.json")
+	if _, err := os.Stat(metaPath); err != nil {
+		t.Fatalf("expected %s created, got %v", metaPath, err)
+	}
+}
+
+func TestCollectPVEStorageMetadata_UsesPathSafeKeyForUnsafeStorageName(t *testing.T) {
+	collector := newPVECollector(t)
+	collector.config.BackupSmallPVEBackups = true
+	collector.config.MaxPVEBackupSizeBytes = 1024 * 1024
+	collector.config.PVEBackupIncludePattern = "vm-100"
+
+	ctx := context.Background()
+	storageDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(storageDir, "vm-100-backup.vma"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("write backup file: %v", err)
+	}
+
+	storage := pveStorageEntry{Name: "../escape", Path: storageDir, Type: "dir"}
+	if err := collector.collectPVEStorageMetadata(ctx, []pveStorageEntry{storage}); err != nil {
+		t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
+	}
+
+	key := collectorPathKey(storage.Name)
+	baseDir := filepath.Join(collector.tempDir, "var/lib/pve-cluster/info/datastores", key)
+	for _, path := range []string{
+		filepath.Join(baseDir, "metadata.json"),
+		filepath.Join(baseDir, "backup_analysis", fmt.Sprintf("%s_backup_summary.txt", key)),
+		filepath.Join(baseDir, "backup_analysis", fmt.Sprintf("%s__vma_list.txt", key)),
+		filepath.Join(collector.tempDir, "var/lib/pve-cluster/small_backups", key, "vm-100-backup.vma"),
+		filepath.Join(collector.tempDir, "var/lib/pve-cluster/selected_backups", key, "vm-100-backup.vma"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected safe output %s: %v", path, err)
+		}
+	}
+
+	metaPath := filepath.Join(baseDir, "metadata.json")
+	metaBytes, err := os.ReadFile(metaPath)
 	if err != nil {
-		t.Logf("collectPVEStorageMetadata returned error: %v", err)
+		t.Fatalf("read metadata.json: %v", err)
 	}
+	if !strings.Contains(string(metaBytes), storage.Name) {
+		t.Fatalf("metadata should keep raw storage name, got %s", string(metaBytes))
+	}
+
+	rawMetaPath := filepath.Join(collector.tempDir, "var/lib/pve-cluster/info/datastores", storage.Name, "metadata.json")
+	if rawMetaPath != metaPath {
+		if _, err := os.Stat(rawMetaPath); !os.IsNotExist(err) {
+			t.Fatalf("raw storage metadata path should not exist (%s), got err=%v", rawMetaPath, err)
+		}
+	}
+}
+
+func TestCollectPVEStorageMetadata_SkipReasonsAreUserFriendly(t *testing.T) {
+	boolPtr := func(v bool) *bool {
+		b := v
+		return &b
+	}
+	ctx := context.Background()
+
+	t.Run("disabled storage uses SKIP with debug details", func(t *testing.T) {
+		collector := newPVECollector(t)
+		var out bytes.Buffer
+		collector.logger.SetOutput(&out)
+
+		storages := []pveStorageEntry{
+			{Name: "HDD1", Path: "/mnt/pve/HDD1", Active: boolPtr(false), Enabled: boolPtr(false)},
+		}
+		if err := collector.collectPVEStorageMetadata(ctx, storages); err != nil {
+			t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
+		}
+
+		logText := out.String()
+		if collector.logger.WarningCount() != 0 {
+			t.Fatalf("expected 0 warnings, got %d", collector.logger.WarningCount())
+		}
+		if !strings.Contains(logText, "SKIP") || !strings.Contains(logText, "disabled in Proxmox") {
+			t.Fatalf("expected user-friendly SKIP message for disabled storage, got logs:\n%s", logText)
+		}
+		if !strings.Contains(logText, "PVE datastore skip details:") {
+			t.Fatalf("expected debug details for skipped storage, got logs:\n%s", logText)
+		}
+	})
+
+	t.Run("offline storage uses WARNING with debug details", func(t *testing.T) {
+		collector := newPVECollector(t)
+		var out bytes.Buffer
+		collector.logger.SetOutput(&out)
+
+		storages := []pveStorageEntry{
+			{Name: "HDD2", Path: "/mnt/pve/HDD2", Active: boolPtr(false), Enabled: boolPtr(true)},
+		}
+		if err := collector.collectPVEStorageMetadata(ctx, storages); err != nil {
+			t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
+		}
+
+		logText := out.String()
+		if collector.logger.WarningCount() != 1 {
+			t.Fatalf("expected 1 warning, got %d", collector.logger.WarningCount())
+		}
+		if !strings.Contains(logText, "WARNING") || !strings.Contains(logText, "storage is offline") {
+			t.Fatalf("expected warning message for offline storage, got logs:\n%s", logText)
+		}
+		if !strings.Contains(logText, "PVE datastore skip details:") {
+			t.Fatalf("expected debug details for skipped storage, got logs:\n%s", logText)
+		}
+	})
+
+	t.Run("non-existent path uses WARNING with debug details", func(t *testing.T) {
+		collector := newPVECollector(t)
+		var out bytes.Buffer
+		collector.logger.SetOutput(&out)
+
+		storages := []pveStorageEntry{
+			{Name: "MISSING", Path: filepath.Join(t.TempDir(), "does-not-exist"), Type: "dir"},
+		}
+		if err := collector.collectPVEStorageMetadata(ctx, storages); err != nil {
+			t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
+		}
+
+		logText := out.String()
+		if collector.logger.WarningCount() != 1 {
+			t.Fatalf("expected 1 warning, got %d", collector.logger.WarningCount())
+		}
+		if !strings.Contains(logText, "not accessible") {
+			t.Fatalf("expected warning for missing path, got logs:\n%s", logText)
+		}
+		if !strings.Contains(logText, "reason=path_not_accessible") {
+			t.Fatalf("expected debug details including reason, got logs:\n%s", logText)
+		}
+	})
 }
 
 // Test collectPVECephInfo function

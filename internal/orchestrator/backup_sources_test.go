@@ -235,6 +235,7 @@ func TestDiscoverRcloneBackups_IncludesRawMetadata(t *testing.T) {
 		ProxmoxVersion: "8.1",
 		CreatedAt:      time.Date(2025, 12, 5, 12, 0, 0, 0, time.UTC),
 		EncryptionMode: "none",
+		SHA256:         checksumHexForBytes([]byte("node-backup-20251205")),
 	}
 	metaBytes, err := json.Marshal(&manifest)
 	if err != nil {
@@ -317,6 +318,7 @@ func TestDiscoverRcloneBackups_MixedCandidatesSortedByCreatedAt(t *testing.T) {
 		CreatedAt:      time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC),
 		EncryptionMode: "none",
 		ProxmoxType:    "pve",
+		SHA256:         checksumHexForBytes([]byte("x")),
 	}
 	rawNewestData, _ := json.Marshal(&rawNewest)
 	if err := os.WriteFile(rawNewestMeta, rawNewestData, 0o600); err != nil {
@@ -354,6 +356,7 @@ func TestDiscoverRcloneBackups_MixedCandidatesSortedByCreatedAt(t *testing.T) {
 		CreatedAt:      time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		EncryptionMode: "none",
 		ProxmoxType:    "pve",
+		SHA256:         checksumHexForBytes([]byte("x")),
 	}
 	rawOldData, _ := json.Marshal(&rawOld)
 	if err := os.WriteFile(rawOldMeta, rawOldData, 0o600); err != nil {
@@ -629,7 +632,7 @@ esac
 	return manifest, cleanup
 }
 
-func TestDiscoverBackupCandidates_NoLoggerStillCollectsRawArtifacts(t *testing.T) {
+func TestDiscoverBackupCandidates_NoLoggerSkipsRawArtifactsWithoutChecksumVerification(t *testing.T) {
 	tmpDir := t.TempDir()
 	archivePath := filepath.Join(tmpDir, "config.tar.xz")
 	if err := os.WriteFile(archivePath, []byte("dummy"), 0o600); err != nil {
@@ -656,13 +659,545 @@ func TestDiscoverBackupCandidates_NoLoggerStillCollectsRawArtifacts(t *testing.T
 	if err != nil {
 		t.Fatalf("discoverBackupCandidates() error = %v", err)
 	}
+	if len(candidates) != 0 {
+		t.Fatalf("discoverBackupCandidates() returned %d candidates; want 0", len(candidates))
+	}
+}
+
+func TestDiscoverBackupCandidates_NormalizesAndStoresIntegrityExpectation(t *testing.T) {
+	tmpDir := t.TempDir()
+	archiveData := []byte("archive")
+	archivePath := filepath.Join(tmpDir, "config.tar.xz")
+	if err := os.WriteFile(archivePath, archiveData, 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	checksum := checksumHexForBytes(archiveData)
+	manifest := backup.Manifest{
+		ArchivePath:    "/etc/pve/config.tar.xz",
+		ProxmoxType:    "pve",
+		CreatedAt:      time.Now().UTC(),
+		EncryptionMode: "none",
+		SHA256:         "  " + strings.ToUpper(checksum) + "  ",
+	}
+	metaPath := archivePath + ".metadata"
+	data, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(metaPath, data, 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	checksumLine := strings.ToUpper(checksum) + "  " + filepath.Base(archivePath) + "\n"
+	if err := os.WriteFile(archivePath+".sha256", []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	candidates, err := discoverBackupCandidates(nil, tmpDir)
+	if err != nil {
+		t.Fatalf("discoverBackupCandidates() error = %v", err)
+	}
 	if len(candidates) != 1 {
 		t.Fatalf("discoverBackupCandidates() returned %d candidates; want 1", len(candidates))
 	}
-	if candidates[0].RawArchivePath != archivePath {
-		t.Fatalf("RawArchivePath = %q; want %q", candidates[0].RawArchivePath, archivePath)
+	cand := candidates[0]
+	if cand.Manifest == nil {
+		t.Fatal("candidate Manifest is nil")
 	}
-	if candidates[0].RawChecksumPath != "" {
-		t.Fatalf("RawChecksumPath should be empty when checksum missing; got %q", candidates[0].RawChecksumPath)
+	if cand.Manifest.SHA256 != checksum {
+		t.Fatalf("Manifest.SHA256 = %q; want %q", cand.Manifest.SHA256, checksum)
+	}
+	if cand.Integrity == nil {
+		t.Fatal("candidate Integrity is nil")
+	}
+	if cand.Integrity.Checksum != checksum {
+		t.Fatalf("Integrity.Checksum = %q; want %q", cand.Integrity.Checksum, checksum)
+	}
+	if cand.Integrity.Source != "checksum file and manifest" {
+		t.Fatalf("Integrity.Source = %q; want %q", cand.Integrity.Source, "checksum file and manifest")
+	}
+}
+
+func TestDiscoverBackupCandidates_RejectsMalformedOrConflictingChecksums(t *testing.T) {
+	tests := []struct {
+		name           string
+		manifestSHA256 string
+		checksumData   string
+	}{
+		{
+			name:           "invalid manifest checksum",
+			manifestSHA256: "not-a-checksum",
+			checksumData:   string(checksumLineForBytes("config.tar.xz", []byte("archive"))),
+		},
+		{
+			name:           "invalid checksum file",
+			manifestSHA256: checksumHexForBytes([]byte("archive")),
+			checksumData:   "not-a-checksum  config.tar.xz\n",
+		},
+		{
+			name:           "conflicting valid checksums",
+			manifestSHA256: checksumHexForBytes([]byte("archive")),
+			checksumData:   string(checksumLineForBytes("config.tar.xz", []byte("different"))),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			archivePath := filepath.Join(tmpDir, "config.tar.xz")
+			if err := os.WriteFile(archivePath, []byte("archive"), 0o600); err != nil {
+				t.Fatalf("write archive: %v", err)
+			}
+
+			manifest := backup.Manifest{
+				ArchivePath:    "/etc/pve/config.tar.xz",
+				ProxmoxType:    "pve",
+				CreatedAt:      time.Now().UTC(),
+				EncryptionMode: "none",
+				SHA256:         tt.manifestSHA256,
+			}
+			metaPath := archivePath + ".metadata"
+			data, err := json.Marshal(&manifest)
+			if err != nil {
+				t.Fatalf("marshal manifest: %v", err)
+			}
+			if err := os.WriteFile(metaPath, data, 0o600); err != nil {
+				t.Fatalf("write metadata: %v", err)
+			}
+			if err := os.WriteFile(archivePath+".sha256", []byte(tt.checksumData), 0o600); err != nil {
+				t.Fatalf("write checksum: %v", err)
+			}
+
+			candidates, err := discoverBackupCandidates(nil, tmpDir)
+			if err != nil {
+				t.Fatalf("discoverBackupCandidates() error = %v", err)
+			}
+			if len(candidates) != 0 {
+				t.Fatalf("discoverBackupCandidates() returned %d candidates; want 0", len(candidates))
+			}
+		})
+	}
+}
+
+func TestParseLocalChecksumFile_RejectsOversizedInput(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	checksumPath := filepath.Join(t.TempDir(), "config.tar.xz.sha256")
+	oversized := strings.Repeat("a", checksumFileReadLimit+1) + "\n"
+	if err := os.WriteFile(checksumPath, []byte(oversized), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	_, err := parseLocalChecksumFile(checksumPath)
+	if err == nil {
+		t.Fatal("parseLocalChecksumFile() error = nil; want oversize error")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("parseLocalChecksumFile() error = %v; want oversize error", err)
+	}
+}
+
+func TestParseLocalChecksumFile_AcceptsBoundedInputWithoutTrailingNewline(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	checksumPath := filepath.Join(t.TempDir(), "config.tar.xz.sha256")
+	want := checksumHexForBytes([]byte("archive"))
+	if err := os.WriteFile(checksumPath, checksumLineForBytes("config.tar.xz", []byte("archive")), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	got, err := parseLocalChecksumFile(checksumPath)
+	if err != nil {
+		t.Fatalf("parseLocalChecksumFile() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("parseLocalChecksumFile() = %q; want %q", got, want)
+	}
+}
+
+func TestDiscoverRcloneBackups_NormalizesAndStoresIntegrityExpectation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	archiveData := []byte("archive")
+	checksum := checksumHexForBytes(archiveData)
+	manifest := backup.Manifest{
+		ArchivePath:    "/var/backups/node-backup.tar.xz",
+		ProxmoxType:    "pve",
+		CreatedAt:      time.Date(2025, 12, 5, 12, 0, 0, 0, time.UTC),
+		EncryptionMode: "none",
+		SHA256:         "  " + strings.ToUpper(checksum) + "  ",
+	}
+	metaBytes, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	metadataPath := filepath.Join(tmpDir, "node-backup.tar.xz.metadata")
+	if err := os.WriteFile(metadataPath, metaBytes, 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	checksumPath := filepath.Join(tmpDir, "node-backup.tar.xz.sha256")
+	checksumLine := strings.ToUpper(checksum) + "  node-backup.tar.xz\n"
+	if err := os.WriteFile(checksumPath, []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+subcmd="$1"
+target="$2"
+case "$subcmd" in
+  lsf)
+    printf 'node-backup.tar.xz\n'
+    printf 'node-backup.tar.xz.metadata\n'
+    printf 'node-backup.tar.xz.sha256\n'
+    ;;
+  cat)
+    case "$target" in
+      *node-backup.tar.xz.metadata) cat "$METADATA_PATH" ;;
+      *node-backup.tar.xz.sha256) cat "$CHECKSUM_PATH" ;;
+      *) echo "unexpected cat target: $target" >&2; exit 1 ;;
+    esac
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
+		t.Fatalf("set METADATA_PATH: %v", err)
+	}
+	defer os.Unsetenv("METADATA_PATH")
+	if err := os.Setenv("CHECKSUM_PATH", checksumPath); err != nil {
+		t.Fatalf("set CHECKSUM_PATH: %v", err)
+	}
+	defer os.Unsetenv("CHECKSUM_PATH")
+
+	candidates, err := discoverRcloneBackups(context.Background(), nil, "gdrive:pbs-backups/server1", nil, nil)
+	if err != nil {
+		t.Fatalf("discoverRcloneBackups() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("discoverRcloneBackups() returned %d candidates; want 1", len(candidates))
+	}
+	cand := candidates[0]
+	if cand.Manifest == nil {
+		t.Fatal("candidate Manifest is nil")
+	}
+	if cand.Manifest.SHA256 != checksum {
+		t.Fatalf("Manifest.SHA256 = %q; want %q", cand.Manifest.SHA256, checksum)
+	}
+	if cand.Integrity == nil {
+		t.Fatal("candidate Integrity is nil")
+	}
+	if cand.Integrity.Checksum != checksum {
+		t.Fatalf("Integrity.Checksum = %q; want %q", cand.Integrity.Checksum, checksum)
+	}
+	if cand.Integrity.Source != "checksum file and manifest" {
+		t.Fatalf("Integrity.Source = %q; want %q", cand.Integrity.Source, "checksum file and manifest")
+	}
+}
+
+func TestDiscoverRcloneBackups_UsesFreshTimeoutForChecksumFetch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	archiveData := []byte("archive")
+	checksum := checksumHexForBytes(archiveData)
+	manifest := backup.Manifest{
+		ArchivePath:    "/var/backups/node-backup.tar.xz",
+		ProxmoxType:    "pve",
+		CreatedAt:      time.Date(2025, 12, 5, 12, 0, 0, 0, time.UTC),
+		EncryptionMode: "none",
+		SHA256:         checksum,
+	}
+	metaBytes, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	metadataPath := filepath.Join(tmpDir, "node-backup.tar.xz.metadata")
+	if err := os.WriteFile(metadataPath, metaBytes, 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	checksumPath := filepath.Join(tmpDir, "node-backup.tar.xz.sha256")
+	checksumLine := checksum + "  node-backup.tar.xz\n"
+	if err := os.WriteFile(checksumPath, []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+subcmd="$1"
+target="$2"
+case "$subcmd" in
+  lsf)
+    printf 'node-backup.tar.xz\n'
+    printf 'node-backup.tar.xz.metadata\n'
+    printf 'node-backup.tar.xz.sha256\n'
+    ;;
+  cat)
+    case "$target" in
+      *node-backup.tar.xz.metadata)
+        sleep 2
+        cat "$METADATA_PATH"
+        ;;
+      *node-backup.tar.xz.sha256)
+        sleep 2
+        cat "$CHECKSUM_PATH"
+        ;;
+      *)
+        echo "unexpected cat target: $target" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer os.Setenv("PATH", oldPath)
+	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
+		t.Fatalf("set METADATA_PATH: %v", err)
+	}
+	defer os.Unsetenv("METADATA_PATH")
+	if err := os.Setenv("CHECKSUM_PATH", checksumPath); err != nil {
+		t.Fatalf("set CHECKSUM_PATH: %v", err)
+	}
+	defer os.Unsetenv("CHECKSUM_PATH")
+
+	cfg := &config.Config{RcloneTimeoutConnection: 3}
+	candidates, err := discoverRcloneBackups(context.Background(), cfg, "gdrive:pbs-backups/server1", nil, nil)
+	if err != nil {
+		t.Fatalf("discoverRcloneBackups() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("discoverRcloneBackups() returned %d candidates; want 1", len(candidates))
+	}
+	cand := candidates[0]
+	if cand.Integrity == nil {
+		t.Fatal("candidate Integrity is nil")
+	}
+	if cand.Integrity.Checksum != checksum {
+		t.Fatalf("Integrity.Checksum = %q; want %q", cand.Integrity.Checksum, checksum)
+	}
+}
+
+func TestDiscoverRcloneBackups_RejectsMalformedOrConflictingChecksums(t *testing.T) {
+	tests := []struct {
+		name           string
+		manifestSHA256 string
+		checksumData   string
+	}{
+		{
+			name:           "invalid manifest checksum",
+			manifestSHA256: "not-a-checksum",
+			checksumData:   string(checksumLineForBytes("node-backup.tar.xz", []byte("archive"))),
+		},
+		{
+			name:           "invalid checksum file",
+			manifestSHA256: checksumHexForBytes([]byte("archive")),
+			checksumData:   "not-a-checksum  node-backup.tar.xz\n",
+		},
+		{
+			name:           "conflicting valid checksums",
+			manifestSHA256: checksumHexForBytes([]byte("archive")),
+			checksumData:   string(checksumLineForBytes("node-backup.tar.xz", []byte("different"))),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			manifest := backup.Manifest{
+				ArchivePath:    "/var/backups/node-backup.tar.xz",
+				ProxmoxType:    "pve",
+				CreatedAt:      time.Date(2025, 12, 5, 12, 0, 0, 0, time.UTC),
+				EncryptionMode: "none",
+				SHA256:         tt.manifestSHA256,
+			}
+			metaBytes, err := json.Marshal(&manifest)
+			if err != nil {
+				t.Fatalf("marshal manifest: %v", err)
+			}
+			metadataPath := filepath.Join(tmpDir, "node-backup.tar.xz.metadata")
+			if err := os.WriteFile(metadataPath, metaBytes, 0o600); err != nil {
+				t.Fatalf("write metadata: %v", err)
+			}
+			checksumPath := filepath.Join(tmpDir, "node-backup.tar.xz.sha256")
+			if err := os.WriteFile(checksumPath, []byte(tt.checksumData), 0o600); err != nil {
+				t.Fatalf("write checksum: %v", err)
+			}
+
+			scriptPath := filepath.Join(tmpDir, "rclone")
+			script := `#!/bin/sh
+subcmd="$1"
+target="$2"
+case "$subcmd" in
+  lsf)
+    printf 'node-backup.tar.xz\n'
+    printf 'node-backup.tar.xz.metadata\n'
+    printf 'node-backup.tar.xz.sha256\n'
+    ;;
+  cat)
+    case "$target" in
+      *node-backup.tar.xz.metadata) cat "$METADATA_PATH" ;;
+      *node-backup.tar.xz.sha256) cat "$CHECKSUM_PATH" ;;
+      *) echo "unexpected cat target: $target" >&2; exit 1 ;;
+    esac
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+			if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+				t.Fatalf("write fake rclone: %v", err)
+			}
+
+			oldPath := os.Getenv("PATH")
+			if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
+				t.Fatalf("set PATH: %v", err)
+			}
+			defer os.Setenv("PATH", oldPath)
+			if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
+				t.Fatalf("set METADATA_PATH: %v", err)
+			}
+			defer os.Unsetenv("METADATA_PATH")
+			if err := os.Setenv("CHECKSUM_PATH", checksumPath); err != nil {
+				t.Fatalf("set CHECKSUM_PATH: %v", err)
+			}
+			defer os.Unsetenv("CHECKSUM_PATH")
+
+			candidates, err := discoverRcloneBackups(context.Background(), nil, "gdrive:pbs-backups/server1", nil, nil)
+			if err != nil {
+				t.Fatalf("discoverRcloneBackups() error = %v", err)
+			}
+			if len(candidates) != 0 {
+				t.Fatalf("discoverRcloneBackups() returned %d candidates; want 0", len(candidates))
+			}
+		})
+	}
+}
+
+func TestInspectRcloneChecksumFile_RejectsOversizedInput(t *testing.T) {
+	tmpDir := t.TempDir()
+	checksumPath := filepath.Join(tmpDir, "node-backup.tar.xz.sha256")
+	oversized := strings.Repeat("a", checksumFileReadLimit+1) + "\n"
+	if err := os.WriteFile(checksumPath, []byte(oversized), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+if [ "$1" != "cat" ]; then
+  echo "unexpected subcommand: $1" >&2
+  exit 1
+fi
+cat "$CHECKSUM_PATH"
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	t.Setenv("PATH", tmpDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CHECKSUM_PATH", checksumPath)
+
+	_, err := inspectRcloneChecksumFile(context.Background(), "gdrive:node-backup.tar.xz.sha256", nil)
+	if err == nil {
+		t.Fatal("inspectRcloneChecksumFile() error = nil; want oversize error")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("inspectRcloneChecksumFile() error = %v; want oversize error", err)
+	}
+}
+
+func TestInspectRcloneChecksumFile_AcceptsBoundedInputWithoutTrailingNewline(t *testing.T) {
+	tmpDir := t.TempDir()
+	checksumPath := filepath.Join(tmpDir, "node-backup.tar.xz.sha256")
+	want := checksumHexForBytes([]byte("archive"))
+	if err := os.WriteFile(checksumPath, checksumLineForBytes("node-backup.tar.xz", []byte("archive")), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+if [ "$1" != "cat" ]; then
+  echo "unexpected subcommand: $1" >&2
+  exit 1
+fi
+cat "$CHECKSUM_PATH"
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	t.Setenv("PATH", tmpDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CHECKSUM_PATH", checksumPath)
+
+	got, err := inspectRcloneChecksumFile(context.Background(), "gdrive:node-backup.tar.xz.sha256", nil)
+	if err != nil {
+		t.Fatalf("inspectRcloneChecksumFile() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("inspectRcloneChecksumFile() = %q; want %q", got, want)
+	}
+}
+
+func TestInspectRcloneChecksumFile_SurfacesRcloneFailureAfterValidFirstLine(t *testing.T) {
+	tmpDir := t.TempDir()
+	checksumPath := filepath.Join(tmpDir, "node-backup.tar.xz.sha256")
+	if err := os.WriteFile(checksumPath, append(checksumLineForBytes("node-backup.tar.xz", []byte("archive")), '\n'), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+if [ "$1" != "cat" ]; then
+  echo "unexpected subcommand: $1" >&2
+  exit 1
+fi
+cat "$CHECKSUM_PATH"
+echo "simulated rclone failure" >&2
+exit 1
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	t.Setenv("PATH", tmpDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CHECKSUM_PATH", checksumPath)
+
+	_, err := inspectRcloneChecksumFile(context.Background(), "gdrive:node-backup.tar.xz.sha256", nil)
+	if err == nil {
+		t.Fatal("inspectRcloneChecksumFile() error = nil; want rclone failure")
+	}
+	if !strings.Contains(err.Error(), "rclone cat gdrive:node-backup.tar.xz.sha256 failed") {
+		t.Fatalf("inspectRcloneChecksumFile() error = %v; want rclone failure", err)
+	}
+	if !strings.Contains(err.Error(), "simulated rclone failure") {
+		t.Fatalf("inspectRcloneChecksumFile() error = %v; want stderr output", err)
 	}
 }

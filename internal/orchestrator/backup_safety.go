@@ -23,38 +23,8 @@ type safetyBackupSpec struct {
 	WriteLocationFile bool
 }
 
-// resolveAndCheckPath cleans and resolves symlinks for candidate extraction paths
-// and verifies the resolved path is still within destRoot.
 func resolveAndCheckPath(destRoot, candidate string) (string, error) {
-	joined := candidate
-	if !filepath.IsAbs(candidate) {
-		joined = filepath.Join(destRoot, candidate)
-	}
-
-	resolved, err := filepath.EvalSymlinks(joined)
-	if err != nil {
-		// If the path doesn't exist yet, EvalSymlinks will fail; fallback to the cleaned path.
-		resolved = filepath.Clean(joined)
-	}
-
-	absDestRoot, err := filepath.Abs(destRoot)
-	if err != nil {
-		return "", fmt.Errorf("cannot resolve destination root: %w", err)
-	}
-	absResolved, err := filepath.Abs(resolved)
-	if err != nil {
-		return "", fmt.Errorf("cannot resolve candidate path: %w", err)
-	}
-
-	rel, err := filepath.Rel(absDestRoot, absResolved)
-	if err != nil {
-		return "", fmt.Errorf("cannot compute relative path: %w", err)
-	}
-	if strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("resolved path escapes destination: %s", absResolved)
-	}
-
-	return absResolved, nil
+	return resolvePathWithinRootFS(safetyFS, destRoot, candidate)
 }
 
 // SafetyBackupResult contains information about the safety backup
@@ -391,7 +361,7 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 			return fmt.Errorf("read tar entry: %w", err)
 		}
 
-		target, _, err := sanitizeRestoreEntryTarget(absDestRoot, header.Name)
+		target, _, err := sanitizeRestoreEntryTargetWithFS(safetyFS, absDestRoot, header.Name)
 		if err != nil {
 			logger.Warning("Skipping archive entry %s: %v", header.Name, err)
 			continue
@@ -425,16 +395,12 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 		if header.Typeflag == tar.TypeSymlink {
 			linkTarget := header.Linkname
 
-			// Resolve intended target relative to the sanitized symlink directory inside the archive
-			sanitizedDir := filepath.Dir(relTarget)
-			resolvedLinkPath := linkTarget
-			if !filepath.IsAbs(linkTarget) {
-				resolvedLinkPath = filepath.Join(sanitizedDir, linkTarget)
-			}
-
-			if _, pathErr := resolveAndCheckPath(destRoot, resolvedLinkPath); pathErr != nil {
-				logger.Warning("Skipping symlink %s -> %s: target escapes root: %v", target, linkTarget, pathErr)
-				continue
+			if _, pathErr := resolvePathRelativeToBaseWithinRootFS(safetyFS, absDestRoot, filepath.Dir(target), linkTarget); pathErr != nil {
+				if isPathSecurityError(pathErr) {
+					logger.Warning("Skipping symlink %s -> %s: target escapes root: %v", target, linkTarget, pathErr)
+					continue
+				}
+				return fmt.Errorf("validate symlink %s -> %s before creation: %w", target, linkTarget, pathErr)
 			}
 
 			// Remove existing file/symlink before creating new one
@@ -454,35 +420,14 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 				continue
 			}
 
-			// Resolve the symlink target relative to the symlink's directory
-			symlinkTargetDir := filepath.Dir(target)
-			resolvedTarget := actualTarget
-			if !filepath.IsAbs(actualTarget) {
-				resolvedTarget = filepath.Join(symlinkTargetDir, actualTarget)
-			}
-
-			// Validate the resolved target stays within destRoot
-			absDestRoot, err := filepath.Abs(destRoot)
-			if err != nil {
-				logger.Warning("Cannot resolve destination root: %v", err)
+			if _, err := resolvePathRelativeToBaseWithinRootFS(safetyFS, absDestRoot, filepath.Dir(target), actualTarget); err != nil {
 				safetyFS.Remove(target)
-				continue
-			}
-
-			absResolvedTarget, err := filepath.Abs(resolvedTarget)
-			if err != nil {
-				logger.Warning("Cannot resolve symlink target: %v", err)
-				safetyFS.Remove(target)
-				continue
-			}
-
-			// Check if resolved target is within destRoot
-			rel, err := filepath.Rel(absDestRoot, absResolvedTarget)
-			if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
-				logger.Warning("Removing symlink %s -> %s: target escapes root after creation (resolves to %s)",
-					target, actualTarget, absResolvedTarget)
-				safetyFS.Remove(target)
-				continue
+				if isPathSecurityError(err) {
+					logger.Warning("Removing symlink %s -> %s: target escapes root after creation: %v",
+						target, actualTarget, err)
+					continue
+				}
+				return fmt.Errorf("validate symlink %s -> %s after creation: %w", target, actualTarget, err)
 			}
 
 			logger.Debug("Created safe symlink: %s -> %s", header.Name, linkTarget)

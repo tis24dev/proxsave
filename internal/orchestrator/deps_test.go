@@ -60,6 +60,16 @@ func (f *FakeFS) Stat(path string) (os.FileInfo, error) {
 	return os.Stat(f.onDisk(path))
 }
 
+func (f *FakeFS) Lstat(path string) (os.FileInfo, error) {
+	if err, ok := f.StatErr[filepath.Clean(path)]; ok {
+		return nil, err
+	}
+	if err, ok := f.StatErrors[filepath.Clean(path)]; ok {
+		return nil, err
+	}
+	return os.Lstat(f.onDisk(path))
+}
+
 func (f *FakeFS) ReadFile(path string) ([]byte, error) {
 	return os.ReadFile(f.onDisk(path))
 }

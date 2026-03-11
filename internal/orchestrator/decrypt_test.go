@@ -1575,14 +1575,15 @@ func TestPreparePlainBundle_SourceBundleSuccess(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create bundle with required files
+	archiveData := []byte("archive data")
 	manifestData, _ := json.Marshal(&backup.Manifest{
 		ArchivePath:    filepath.Join(dir, "archive.tar.xz"),
 		EncryptionMode: "none",
 	})
 	bundlePath := createTestBundle(t, []bundleEntry{
-		{name: "archive.tar.xz", data: []byte("archive data")},
+		{name: "archive.tar.xz", data: archiveData},
 		{name: "backup.metadata", data: manifestData},
-		{name: "backup.sha256", data: []byte("abc123  archive.tar.xz")},
+		{name: "backup.sha256", data: checksumLineForBytes("archive.tar.xz", archiveData)},
 	})
 
 	cand := &decryptCandidate{
@@ -2819,7 +2820,7 @@ func TestPreparePlainBundle_CopyFileSamePath(t *testing.T) {
 		t.Fatalf("write metadata: %v", err)
 	}
 	checksumPath := archivePath + ".sha256"
-	if err := os.WriteFile(checksumPath, []byte("abc123  backup.tar.xz"), 0o644); err != nil {
+	if err := os.WriteFile(checksumPath, checksumLineForBytes("backup.tar.xz", []byte("archive content")), 0o644); err != nil {
 		t.Fatalf("write checksum: %v", err)
 	}
 
@@ -2890,7 +2891,7 @@ func TestPreparePlainBundle_AgeDecryptionWithRclone(t *testing.T) {
 	tw.Write(manifestData)
 
 	// Add checksum
-	checksumData := []byte("abc123  backup.tar.xz.age")
+	checksumData := checksumLineForBytes("backup.tar.xz.age", archiveContent)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksumData)), Mode: 0o600})
 	tw.Write(checksumData)
 
@@ -2936,6 +2937,196 @@ esac
 
 	if prepared.Manifest.EncryptionMode != "none" {
 		t.Fatalf("expected encryption mode 'none', got %q", prepared.Manifest.EncryptionMode)
+	}
+}
+
+func TestPreparePlainBundleCommon_TrimmedAgeEncryptionTriggersDecrypt(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	dir := t.TempDir()
+	workArchive := filepath.Join(dir, "backup.tar.xz.age")
+	if err := os.WriteFile(workArchive, []byte("ciphertext"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	manifestPath := filepath.Join(dir, "backup.metadata")
+	if err := os.WriteFile(manifestPath, []byte(`{"encryption_mode":"  age "}`), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	checksumPath := filepath.Join(dir, "backup.sha256")
+	checksumLine := checksumLineForBytes(filepath.Base(workArchive), []byte("ciphertext"))
+	if err := os.WriteFile(checksumPath, []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	cand := &decryptCandidate{
+		Manifest: &backup.Manifest{
+			ArchivePath:    workArchive,
+			EncryptionMode: "  age ",
+		},
+		Source:          sourceRaw,
+		RawArchivePath:  workArchive,
+		RawMetadataPath: manifestPath,
+		RawChecksumPath: checksumPath,
+		DisplayBase:     "backup.tar.xz.age",
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+
+	decryptCalled := false
+	prepared, err := preparePlainBundleCommon(context.Background(), cand, "1.0.0", logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
+		decryptCalled = true
+		if encryptedPath == outputPath {
+			t.Fatalf("decrypt callback received identical input/output path %q", encryptedPath)
+		}
+		if displayName != "backup.tar.xz.age" {
+			t.Fatalf("displayName=%q; want %q", displayName, "backup.tar.xz.age")
+		}
+		return os.WriteFile(outputPath, []byte("plaintext"), 0o600)
+	})
+	if err != nil {
+		t.Fatalf("preparePlainBundleCommon error: %v", err)
+	}
+	defer prepared.Cleanup()
+
+	if !decryptCalled {
+		t.Fatal("expected decrypt callback to be invoked for trimmed age encryption mode")
+	}
+	if prepared.Manifest.EncryptionMode != "none" {
+		t.Fatalf("prepared manifest EncryptionMode=%q; want %q", prepared.Manifest.EncryptionMode, "none")
+	}
+	data, err := os.ReadFile(prepared.ArchivePath)
+	if err != nil {
+		t.Fatalf("read prepared archive: %v", err)
+	}
+	if string(data) != "plaintext" {
+		t.Fatalf("prepared archive content=%q; want %q", string(data), "plaintext")
+	}
+}
+
+func TestPreparePlainBundleCommon_AgeModeRequiresAgeSuffix(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	dir := t.TempDir()
+	workArchive := filepath.Join(dir, "backup.tar.xz")
+	if err := os.WriteFile(workArchive, []byte("ciphertext"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	manifestPath := filepath.Join(dir, "backup.metadata")
+	if err := os.WriteFile(manifestPath, []byte(`{"encryption_mode":"age"}`), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	checksumPath := filepath.Join(dir, "backup.sha256")
+	checksumLine := checksumLineForBytes(filepath.Base(workArchive), []byte("ciphertext"))
+	if err := os.WriteFile(checksumPath, []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	cand := &decryptCandidate{
+		Manifest: &backup.Manifest{
+			ArchivePath:    workArchive,
+			EncryptionMode: "age",
+		},
+		Source:          sourceRaw,
+		RawArchivePath:  workArchive,
+		RawMetadataPath: manifestPath,
+		RawChecksumPath: checksumPath,
+		DisplayBase:     "backup.tar.xz",
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+
+	decryptCalled := false
+	_, err := preparePlainBundleCommon(context.Background(), cand, "1.0.0", logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
+		decryptCalled = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("preparePlainBundleCommon error = nil; want missing .age suffix error")
+	}
+	if !strings.Contains(err.Error(), "missing .age suffix") {
+		t.Fatalf("preparePlainBundleCommon error = %v; want missing .age suffix error", err)
+	}
+	if decryptCalled {
+		t.Fatal("decrypt callback was called for archive without .age suffix")
+	}
+}
+
+func TestPreparePlainBundleCommon_NonAgeRejectsAgeSuffix(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	dir := t.TempDir()
+	workArchive := filepath.Join(dir, "backup.tar.xz.age")
+	if err := os.WriteFile(workArchive, []byte("ciphertext"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	manifestPath := filepath.Join(dir, "backup.metadata")
+	if err := os.WriteFile(manifestPath, []byte(`{"encryption_mode":"none"}`), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	checksumPath := filepath.Join(dir, "backup.sha256")
+	checksumLine := checksumLineForBytes(filepath.Base(workArchive), []byte("ciphertext"))
+	if err := os.WriteFile(checksumPath, []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	cand := &decryptCandidate{
+		Manifest: &backup.Manifest{
+			ArchivePath:    workArchive,
+			EncryptionMode: "none",
+		},
+		Source:          sourceRaw,
+		RawArchivePath:  workArchive,
+		RawMetadataPath: manifestPath,
+		RawChecksumPath: checksumPath,
+		DisplayBase:     "backup.tar.xz.age",
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+
+	_, err := preparePlainBundleCommon(context.Background(), cand, "1.0.0", logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
+		t.Fatal("decrypt callback should not be called for non-age archive handling")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("preparePlainBundleCommon error = nil; want .age suffix mismatch error")
+	}
+	if !strings.Contains(err.Error(), "has .age suffix but encryption mode is none") {
+		t.Fatalf("preparePlainBundleCommon error = %v; want .age suffix mismatch error", err)
+	}
+}
+
+func TestResolvePreparedArchivePath_AgeFallbackUsesUniqueOutput(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	workDir := t.TempDir()
+	stagedArchivePath := filepath.Join(workDir, ".age")
+
+	got, err := resolvePreparedArchivePath(workDir, stagedArchivePath, "age")
+	if err != nil {
+		t.Fatalf("resolvePreparedArchivePath error: %v", err)
+	}
+	if got == stagedArchivePath {
+		t.Fatalf("resolvePreparedArchivePath() = %q; want unique output path", got)
+	}
+	if got == workDir {
+		t.Fatalf("resolvePreparedArchivePath() = %q; want file path inside workdir", got)
+	}
+	if filepath.Dir(got) != workDir {
+		t.Fatalf("resolvePreparedArchivePath() dir = %q; want %q", filepath.Dir(got), workDir)
+	}
+	if !strings.HasPrefix(filepath.Base(got), ".age.decrypted-") {
+		t.Fatalf("resolvePreparedArchivePath() base = %q; want .age.decrypted-*", filepath.Base(got))
 	}
 }
 
@@ -3017,7 +3208,7 @@ func TestPreparePlainBundle_SourceBundleAdditional(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(manifestData)), Mode: 0o600})
 	tw.Write(manifestData)
 
-	checksumData := []byte("abc123  backup.tar.xz")
+	checksumData := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksumData)), Mode: 0o600})
 	tw.Write(checksumData)
 
@@ -3393,7 +3584,7 @@ func TestExtractBundleToWorkdir_OpenFileErrorOnExtract(t *testing.T) {
 	}
 
 	// Add checksum
-	checksum := []byte("checksum  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	if err := tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640}); err != nil {
 		t.Fatalf("write checksum header: %v", err)
 	}
@@ -3608,7 +3799,7 @@ func TestSelectDecryptCandidate_RequireEncryptedAllPlain(t *testing.T) {
 	tw.Write(metaJSON)
 
 	// Add checksum
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -3720,7 +3911,7 @@ exit 1
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -3771,7 +3962,7 @@ func TestPreparePlainBundle_StatErrorAfterExtract(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -3869,8 +4060,9 @@ func TestPreparePlainBundle_MkdirTempErrorWithRcloneCleanup(t *testing.T) {
 	metaJSON, _ := json.Marshal(backup.Manifest{EncryptionMode: "none", ArchivePath: "backup.tar.xz"})
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: 5, Mode: 0o640})
-	tw.Write([]byte("hash\n"))
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
+	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
+	tw.Write(checksum)
 	tw.Close()
 	bundleFile.Close()
 
@@ -4066,7 +4258,7 @@ func TestPreparePlainBundle_CopyFileError(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -4175,7 +4367,7 @@ func TestPreparePlainBundle_StatErrorOnPlainArchive(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()
@@ -4311,7 +4503,7 @@ func TestPreparePlainBundle_GenerateChecksumErrorPath(t *testing.T) {
 	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
 	tw.Write(metaJSON)
 
-	checksum := []byte("abc123  backup.tar.xz\n")
+	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
 	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
 	tw.Write(checksum)
 	tw.Close()

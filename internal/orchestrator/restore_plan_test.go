@@ -2,16 +2,13 @@ package orchestrator
 
 import (
 	"testing"
-
-	"github.com/tis24dev/proxsave/internal/backup"
 )
 
 func TestPlanRestoreClusterSafeToggle(t *testing.T) {
 	clusterCat := Category{ID: "pve_cluster", Type: CategoryTypePVE}
 	storageCat := Category{ID: "storage_pve", Type: CategoryTypePVE}
-	manifest := &backup.Manifest{ClusterMode: "cluster"}
 
-	plan := PlanRestore(manifest, []Category{clusterCat, storageCat}, SystemTypePVE, RestoreModeCustom)
+	plan := PlanRestore(true, []Category{clusterCat, storageCat}, SystemTypePVE, RestoreModeCustom)
 
 	if !plan.NeedsClusterRestore {
 		t.Fatalf("expected NeedsClusterRestore true")
@@ -50,7 +47,7 @@ func TestPlanRestorePBSCategories(t *testing.T) {
 	pbsCat := Category{ID: "pbs_config", Type: CategoryTypePBS, ExportOnly: true}
 	normalCat := Category{ID: "network", Type: CategoryTypeCommon}
 
-	plan := PlanRestore(nil, []Category{pbsCat, normalCat}, SystemTypePBS, RestoreModeCustom)
+	plan := PlanRestore(false, []Category{pbsCat, normalCat}, SystemTypePBS, RestoreModeCustom)
 	if len(plan.ExportCategories) != 1 || !hasCategoryID(plan.ExportCategories, "pbs_config") {
 		t.Fatalf("expected pbs_config to be exported, got %+v", plan.ExportCategories)
 	}
@@ -66,7 +63,7 @@ func TestPlanRestoreKeepsExportCategoriesFromFullSelection(t *testing.T) {
 	exportCat := Category{ID: "pve_config_export", ExportOnly: true}
 	normalCat := Category{ID: "network"}
 
-	plan := PlanRestore(nil, []Category{normalCat, exportCat}, SystemTypePVE, RestoreModeFull)
+	plan := PlanRestore(false, []Category{normalCat, exportCat}, SystemTypePVE, RestoreModeFull)
 	if len(plan.StagedCategories) != 1 || plan.StagedCategories[0].ID != "network" {
 		t.Fatalf("expected staged categories to keep network, got %+v", plan.StagedCategories)
 	}

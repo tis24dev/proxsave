@@ -136,6 +136,36 @@ func (r *readDirMockFS) ReadDir(path string) ([]os.DirEntry, error) {
 	return r.osFS.ReadDir(path)
 }
 
+type restorePathValidationMockFS struct {
+	osFS
+	lstatErr    map[string]error
+	symlinkHook func(oldname, newname string)
+}
+
+func newRestorePathValidationMockFS() *restorePathValidationMockFS {
+	return &restorePathValidationMockFS{
+		lstatErr: make(map[string]error),
+	}
+}
+
+func (r *restorePathValidationMockFS) Lstat(path string) (os.FileInfo, error) {
+	cleanPath := filepath.Clean(path)
+	if err, ok := r.lstatErr[cleanPath]; ok {
+		return nil, err
+	}
+	return r.osFS.Lstat(path)
+}
+
+func (r *restorePathValidationMockFS) Symlink(oldname, newname string) error {
+	if err := r.osFS.Symlink(oldname, newname); err != nil {
+		return err
+	}
+	if r.symlinkHook != nil {
+		r.symlinkHook(oldname, newname)
+	}
+	return nil
+}
+
 // fakeDirEntry implements os.DirEntry for testing.
 type fakeDirEntry struct {
 	name    string
@@ -397,6 +427,152 @@ func TestRestoreSafetyBackup_DoesNotFollowExistingSymlinkTargetPath(t *testing.T
 	}
 	if string(data) != unitData {
 		t.Fatalf("unit file content changed: got %q want %q", string(data), unitData)
+	}
+}
+
+func TestRestoreSafetyBackup_RejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "broken-escape.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+	outside := t.TempDir()
+
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore dir: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(restoreDir, "escape-link")); err != nil {
+		t.Fatalf("create escape symlink: %v", err)
+	}
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+	if err := tw.WriteHeader(&tar.Header{Name: "escape-link/missing/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+		t.Fatalf("write dir header failed: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive failed: %v", err)
+	}
+
+	if err := RestoreSafetyBackup(logger, backupPath, restoreDir); err != nil {
+		t.Fatalf("RestoreSafetyBackup failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(outside, "missing")); !os.IsNotExist(err) {
+		t.Fatalf("outside path should not be created, got err=%v", err)
+	}
+	if !strings.Contains(logBuf.String(), "Skipping archive entry") {
+		t.Fatalf("expected archive entry skip warning, logs=%q", logBuf.String())
+	}
+}
+
+func TestRestoreSafetyBackup_RejectsEscapeWhenParentPathIsSymlink(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "symlinked-parent-escape.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	if err := tw.WriteHeader(&tar.Header{Name: "linkdir", Typeflag: tar.TypeSymlink, Linkname: "."}); err != nil {
+		t.Fatalf("write parent symlink header failed: %v", err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "linkdir/escape", Typeflag: tar.TypeSymlink, Linkname: "../outside"}); err != nil {
+		t.Fatalf("write escaping symlink header failed: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive failed: %v", err)
+	}
+
+	if err := RestoreSafetyBackup(logger, backupPath, restoreDir); err != nil {
+		t.Fatalf("RestoreSafetyBackup failed: %v", err)
+	}
+
+	linkTarget, err := os.Readlink(filepath.Join(restoreDir, "linkdir"))
+	if err != nil {
+		t.Fatalf("parent symlink should exist: %v", err)
+	}
+	if linkTarget != "." {
+		t.Fatalf("parent symlink target = %q, want %q", linkTarget, ".")
+	}
+
+	if _, err := os.Lstat(filepath.Join(restoreDir, "escape")); !os.IsNotExist(err) {
+		t.Fatalf("escaping symlink should not be created, got err=%v", err)
+	}
+	if !strings.Contains(logBuf.String(), "Skipping symlink") {
+		t.Fatalf("expected symlink skip warning, logs=%q", logBuf.String())
+	}
+}
+
+func TestRestoreSafetyBackup_AllowsSafeTargetWhenParentPathIsSymlink(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "symlinked-parent-safe.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+		t.Fatalf("write subdir header failed: %v", err)
+	}
+	content := []byte("ok")
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/file.txt", Mode: 0o644, Size: int64(len(content))}); err != nil {
+		t.Fatalf("write file header failed: %v", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatalf("write file content failed: %v", err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "linkdir", Typeflag: tar.TypeSymlink, Linkname: "subdir"}); err != nil {
+		t.Fatalf("write parent symlink header failed: %v", err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "linkdir/ok", Typeflag: tar.TypeSymlink, Linkname: "file.txt"}); err != nil {
+		t.Fatalf("write safe symlink header failed: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive failed: %v", err)
+	}
+
+	if err := RestoreSafetyBackup(logger, backupPath, restoreDir); err != nil {
+		t.Fatalf("RestoreSafetyBackup failed: %v", err)
+	}
+
+	linkTarget, err := os.Readlink(filepath.Join(restoreDir, "subdir", "ok"))
+	if err != nil {
+		t.Fatalf("safe symlink should exist: %v", err)
+	}
+	if linkTarget != "file.txt" {
+		t.Fatalf("safe symlink target = %q, want %q", linkTarget, "file.txt")
 	}
 }
 
@@ -664,6 +840,18 @@ func TestResolveAndCheckPathRejectsSymlinkEscape(t *testing.T) {
 
 	if _, err := resolveAndCheckPath(root, filepath.Join("escape-link", "data.txt")); err == nil {
 		t.Fatalf("expected symlink escape to be rejected")
+	}
+}
+
+func TestResolveAndCheckPathRejectsBrokenIntermediateSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape-link")); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	if _, err := resolveAndCheckPath(root, filepath.Join("escape-link", "missing", "data.txt")); err == nil {
+		t.Fatalf("expected broken symlink escape to be rejected")
 	}
 }
 
@@ -1407,6 +1595,108 @@ func TestRestoreSafetyBackup_SymlinkExistsRemoveAndCreate(t *testing.T) {
 	}
 	if target != "new_target" {
 		t.Fatalf("expected new_target, got %s", target)
+	}
+}
+
+func TestRestoreSafetyBackup_SymlinkValidationOperationalErrorBeforeCreationFails(t *testing.T) {
+	fs := newRestorePathValidationMockFS()
+	origFS := safetyFS
+	safetyFS = fs
+	t.Cleanup(func() { safetyFS = origFS })
+
+	logger := logging.New(types.LogLevelInfo, false)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "backup.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+	operationalErr := errors.New("permission denied")
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     "nested/link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "target.txt",
+	}); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	fs.lstatErr[filepath.Join(restoreDir, "nested")] = operationalErr
+
+	err := RestoreSafetyBackup(logger, backupPath, restoreDir)
+	if err == nil {
+		t.Fatal("expected restore failure")
+	}
+	if !strings.Contains(err.Error(), "validate symlink") || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, statErr := os.Lstat(filepath.Join(restoreDir, "nested", "link")); !os.IsNotExist(statErr) {
+		t.Fatalf("symlink should not exist, got err=%v", statErr)
+	}
+}
+
+func TestRestoreSafetyBackup_SymlinkValidationOperationalErrorAfterCreationFails(t *testing.T) {
+	fs := newRestorePathValidationMockFS()
+	origFS := safetyFS
+	safetyFS = fs
+	t.Cleanup(func() { safetyFS = origFS })
+
+	logger := logging.New(types.LogLevelInfo, false)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "backup.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+	operationalErr := errors.New("permission denied")
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     "link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "target.txt",
+	}); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	fs.symlinkHook = func(_, _ string) {
+		fs.lstatErr[filepath.Join(restoreDir, "target.txt")] = operationalErr
+	}
+
+	err := RestoreSafetyBackup(logger, backupPath, restoreDir)
+	if err == nil {
+		t.Fatal("expected restore failure")
+	}
+	if !strings.Contains(err.Error(), "validate symlink") || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, statErr := os.Lstat(filepath.Join(restoreDir, "link")); !os.IsNotExist(statErr) {
+		t.Fatalf("symlink should have been removed, got err=%v", statErr)
 	}
 }
 

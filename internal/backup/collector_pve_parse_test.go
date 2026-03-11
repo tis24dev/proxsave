@@ -8,6 +8,11 @@ import (
 
 // TestParseNodeStorageList tests parsing PVE storage entries from JSON
 func TestParseNodeStorageList(t *testing.T) {
+	boolPtr := func(v bool) *bool {
+		b := v
+		return &b
+	}
+
 	tests := []struct {
 		name        string
 		input       string
@@ -24,6 +29,24 @@ func TestParseNodeStorageList(t *testing.T) {
 			expected: []pveStorageEntry{
 				{Name: "local", Path: "/var/lib/vz", Type: "dir", Content: "vztmpl,iso"},
 				{Name: "local-lvm", Path: "", Type: "lvmthin", Content: "images,rootdir"},
+			},
+		},
+		{
+			name: "storage with runtime flags",
+			input: `[
+				{"storage": "HDD1", "path": "/mnt/pve/HDD1", "type": "dir", "content": "backup", "active": 0, "enabled": 0, "status": "disabled"},
+				{"storage": "HDD2", "path": "/mnt/pve/HDD2", "type": "nfs", "content": "backup", "active": 0, "enabled": 1, "status": "unavailable"},
+				{"storage": "HDD3", "path": "/mnt/pve/HDD3", "type": "dir", "content": "backup", "active": true, "enabled": true, "status": "ok"},
+				{"storage": "HDD4", "path": "/mnt/pve/HDD4", "type": "dir", "content": "backup", "active": "0", "enabled": "1", "status": "unknown"},
+				{"storage": "HDD5", "path": "/mnt/pve/HDD5", "type": "dir", "content": "backup", "active": null, "enabled": null, "status": ""}
+			]`,
+			expectError: false,
+			expected: []pveStorageEntry{
+				{Name: "HDD1", Path: "/mnt/pve/HDD1", Type: "dir", Content: "backup", Active: boolPtr(false), Enabled: boolPtr(false), Status: "disabled"},
+				{Name: "HDD2", Path: "/mnt/pve/HDD2", Type: "nfs", Content: "backup", Active: boolPtr(false), Enabled: boolPtr(true), Status: "unavailable"},
+				{Name: "HDD3", Path: "/mnt/pve/HDD3", Type: "dir", Content: "backup", Active: boolPtr(true), Enabled: boolPtr(true), Status: "ok"},
+				{Name: "HDD4", Path: "/mnt/pve/HDD4", Type: "dir", Content: "backup", Active: boolPtr(false), Enabled: boolPtr(true), Status: "unknown"},
+				{Name: "HDD5", Path: "/mnt/pve/HDD5", Type: "dir", Content: "backup", Active: nil, Enabled: nil, Status: ""},
 			},
 		},
 		{
@@ -144,6 +167,19 @@ func TestParseNodeStorageList(t *testing.T) {
 				}
 				if entry.Content != tt.expected[i].Content {
 					t.Errorf("entry[%d].Content = %q, want %q", i, entry.Content, tt.expected[i].Content)
+				}
+				if (entry.Active == nil) != (tt.expected[i].Active == nil) {
+					t.Errorf("entry[%d].Active nilness = %v, want %v", i, entry.Active == nil, tt.expected[i].Active == nil)
+				} else if entry.Active != nil && tt.expected[i].Active != nil && *entry.Active != *tt.expected[i].Active {
+					t.Errorf("entry[%d].Active = %v, want %v", i, *entry.Active, *tt.expected[i].Active)
+				}
+				if (entry.Enabled == nil) != (tt.expected[i].Enabled == nil) {
+					t.Errorf("entry[%d].Enabled nilness = %v, want %v", i, entry.Enabled == nil, tt.expected[i].Enabled == nil)
+				} else if entry.Enabled != nil && tt.expected[i].Enabled != nil && *entry.Enabled != *tt.expected[i].Enabled {
+					t.Errorf("entry[%d].Enabled = %v, want %v", i, *entry.Enabled, *tt.expected[i].Enabled)
+				}
+				if entry.Status != tt.expected[i].Status {
+					t.Errorf("entry[%d].Status = %q, want %q", i, entry.Status, tt.expected[i].Status)
 				}
 			}
 		})

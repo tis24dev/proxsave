@@ -30,6 +30,10 @@ type pveStorageEntry struct {
 	Status  string
 }
 
+func (s pveStorageEntry) pathKey() string {
+	return collectorPathKey(s.Name)
+}
+
 type pveRuntimeInfo struct {
 	Nodes    []string
 	Storages []pveStorageEntry
@@ -1029,7 +1033,7 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 	var summary strings.Builder
 	summary.WriteString("# PVE datastores detected on ")
 	summary.WriteString(time.Now().Format(time.RFC3339))
-	summary.WriteString("\n# Format: NAME|PATH|TYPE|CONTENT\n\n")
+	summary.WriteString("\n# Format: TYPE|NAME|PATH|CONTENT\n\n")
 
 	ioTimeout := time.Duration(0)
 	if c.config != nil && c.config.FsIoTimeoutSeconds > 0 {
@@ -1073,6 +1077,45 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 		return ""
 	}
 
+	describeOptionalBool := func(v *bool) string {
+		if v == nil {
+			return "unknown"
+		}
+		if *v {
+			return "true"
+		}
+		return "false"
+	}
+
+	logSkipDetails := func(storage pveStorageEntry, reason string, err error) {
+		if err != nil {
+			c.logger.Debug(
+				"PVE datastore skip details: name=%s path=%s type=%s content=%s active=%s enabled=%s status=%s reason=%s err=%v",
+				storage.Name,
+				storage.Path,
+				storage.Type,
+				storage.Content,
+				describeOptionalBool(storage.Active),
+				describeOptionalBool(storage.Enabled),
+				strings.TrimSpace(storage.Status),
+				reason,
+				err,
+			)
+			return
+		}
+		c.logger.Debug(
+			"PVE datastore skip details: name=%s path=%s type=%s content=%s active=%s enabled=%s status=%s reason=%s",
+			storage.Name,
+			storage.Path,
+			storage.Type,
+			storage.Content,
+			describeOptionalBool(storage.Active),
+			describeOptionalBool(storage.Enabled),
+			strings.TrimSpace(storage.Status),
+			reason,
+		)
+	}
+
 	processed := 0
 	for _, storage := range storages {
 		if storage.Path == "" {
@@ -1083,7 +1126,32 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 		}
 
 		if reason := unavailableReason(storage); reason != "" {
-			c.logger.Warning("Skipping datastore %s (path=%s)%s: not available (%s)", storage.Name, storage.Path, formatRuntime(storage), reason)
+			status := strings.TrimPrefix(reason, "status=")
+			switch {
+			case reason == "enabled=false" || status == "disabled":
+				c.logger.Skip(
+					"PVE datastore %s ignored: disabled in Proxmox. Not scanning %s for vzdump backup files (PVE config backup continues).",
+					storage.Name, storage.Path,
+				)
+			case reason == "active=false" || status == "inactive" || status == "unavailable":
+				c.logger.Warning(
+					"PVE datastore %s skipped: storage is offline. Not scanning %s for vzdump backup files. Mount/activate it, or disable it in Proxmox if unused.",
+					storage.Name, storage.Path,
+				)
+			default:
+				if status != reason {
+					c.logger.Warning(
+						"PVE datastore %s skipped: Proxmox reports storage status %q. Not scanning %s for vzdump backup files. Fix storage status, or disable it in Proxmox if unused.",
+						storage.Name, status, storage.Path,
+					)
+				} else {
+					c.logger.Warning(
+						"PVE datastore %s skipped: Proxmox reports the storage is not available. Not scanning %s for vzdump backup files. Fix storage status, or disable it in Proxmox if unused.",
+						storage.Name, storage.Path,
+					)
+				}
+			}
+			logSkipDetails(storage, reason, nil)
 			continue
 		}
 
@@ -1091,14 +1159,17 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 		stat, err := safefs.Stat(ctx, storage.Path, ioTimeout)
 		if err != nil {
 			if errors.Is(err, safefs.ErrTimeout) {
-				c.logger.Warning("Skipping datastore %s (path=%s)%s: filesystem probe timed out (%v)", storage.Name, storage.Path, formatRuntime(storage), err)
+				c.logger.Warning("PVE datastore %s skipped: filesystem probe timed out for %s (%v). Not scanning for vzdump backup files.", storage.Name, storage.Path, err)
+				logSkipDetails(storage, "filesystem_probe_timeout", err)
 			} else {
-				c.logger.Debug("Skipping datastore %s (path not accessible: %s): %v", storage.Name, storage.Path, err)
+				c.logger.Warning("PVE datastore %s skipped: path %s not accessible (%v). Not scanning for vzdump backup files.", storage.Name, storage.Path, err)
+				logSkipDetails(storage, "path_not_accessible", err)
 			}
 			continue
 		}
 		if !stat.IsDir() {
-			c.logger.Debug("Skipping datastore %s (path not a directory: %s)", storage.Name, storage.Path)
+			c.logger.Warning("PVE datastore %s skipped: path %s is not a directory. Not scanning for vzdump backup files.", storage.Name, storage.Path)
+			logSkipDetails(storage, "path_not_directory", nil)
 			continue
 		}
 
@@ -1109,7 +1180,7 @@ func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pv
 			storage.Path,
 			storage.Content))
 
-		metaDir := filepath.Join(baseDir, storage.Name)
+		metaDir := filepath.Join(baseDir, storage.pathKey())
 		if err := c.ensureDir(metaDir); err != nil {
 			c.logger.Warning("Failed to create metadata directory for %s: %v", storage.Name, err)
 			continue
@@ -1251,9 +1322,11 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 	var totalFiles int64
 	var totalSize int64
 
+	storageKey := storage.pathKey()
+
 	var smallDir string
 	if c.config.BackupSmallPVEBackups && c.config.MaxPVEBackupSizeBytes > 0 {
-		smallDir = filepath.Join(c.tempDir, "var/lib/pve-cluster/small_backups", storage.Name)
+		smallDir = filepath.Join(c.tempDir, "var/lib/pve-cluster/small_backups", storageKey)
 		if err := c.ensureDir(smallDir); err != nil {
 			c.logger.Warning("Cannot create small backups directory %s: %v", smallDir, err)
 			smallDir = ""
@@ -1263,7 +1336,7 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 	includePattern := strings.TrimSpace(c.config.PVEBackupIncludePattern)
 	var includeDir string
 	if includePattern != "" {
-		includeDir = filepath.Join(c.tempDir, "var/lib/pve-cluster/selected_backups", storage.Name)
+		includeDir = filepath.Join(c.tempDir, "var/lib/pve-cluster/selected_backups", storageKey)
 		if err := c.ensureDir(includeDir); err != nil {
 			c.logger.Warning("Cannot create selected backups directory %s: %v", includeDir, err)
 			includeDir = ""
@@ -1400,7 +1473,7 @@ type patternWriter struct {
 
 func newPatternWriter(storageName, storagePath, analysisDir, pattern string, dryRun bool) (*patternWriter, error) {
 	clean := cleanPatternName(pattern)
-	filename := fmt.Sprintf("%s_%s_list.txt", storageName, clean)
+	filename := fmt.Sprintf("%s_%s_list.txt", collectorPathKey(storageName), clean)
 	filePath := filepath.Join(analysisDir, filename)
 
 	// In dry-run mode, create a writer without an actual file
@@ -1526,7 +1599,7 @@ func (c *Collector) writePatternSummary(storage pveStorageEntry, analysisDir str
 		return nil
 	}
 
-	summaryPath := filepath.Join(analysisDir, fmt.Sprintf("%s_backup_summary.txt", storage.Name))
+	summaryPath := filepath.Join(analysisDir, fmt.Sprintf("%s_backup_summary.txt", storage.pathKey()))
 	file, err := os.OpenFile(summaryPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0640)
 	if err != nil {
 		return err

@@ -798,10 +798,11 @@ type ErrorInjectingFS struct {
 	linkErr     error
 }
 
-func (f *ErrorInjectingFS) Stat(path string) (os.FileInfo, error) { return f.base.Stat(path) }
-func (f *ErrorInjectingFS) ReadFile(path string) ([]byte, error)  { return f.base.ReadFile(path) }
-func (f *ErrorInjectingFS) Open(path string) (*os.File, error)    { return f.base.Open(path) }
-func (f *ErrorInjectingFS) Create(name string) (*os.File, error)  { return f.base.Create(name) }
+func (f *ErrorInjectingFS) Stat(path string) (os.FileInfo, error)  { return f.base.Stat(path) }
+func (f *ErrorInjectingFS) Lstat(path string) (os.FileInfo, error) { return f.base.Lstat(path) }
+func (f *ErrorInjectingFS) ReadFile(path string) ([]byte, error)   { return f.base.ReadFile(path) }
+func (f *ErrorInjectingFS) Open(path string) (*os.File, error)     { return f.base.Open(path) }
+func (f *ErrorInjectingFS) Create(name string) (*os.File, error)   { return f.base.Create(name) }
 func (f *ErrorInjectingFS) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return f.base.WriteFile(path, data, perm)
 }
