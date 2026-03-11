@@ -27,8 +27,8 @@ type lineState struct {
 }
 
 type lineInflight struct {
-	done      chan lineResult
-	completed chan struct{}
+	done   chan struct{}
+	result lineResult
 }
 
 type passwordResult struct {
@@ -42,8 +42,8 @@ type passwordState struct {
 }
 
 type passwordInflight struct {
-	done      chan passwordResult
-	completed chan struct{}
+	done   chan struct{}
+	result passwordResult
 }
 
 var (
@@ -114,40 +114,48 @@ func ReadLineWithContext(ctx context.Context, reader *bufio.Reader) (string, err
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := mapContextInputError(ctx); err != nil {
-		return "", err
-	}
 	if reader == nil {
 		return "", errors.New("reader is nil")
 	}
 	state := getLineState(reader)
 
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.inflight == nil {
-		inflight := &lineInflight{
-			done:      make(chan lineResult, 1),
-			completed: make(chan struct{}),
+	for {
+		if err := mapContextInputError(ctx); err != nil {
+			return "", err
 		}
-		state.inflight = inflight
-		go func() {
-			line, err := reader.ReadString('\n')
-			inflight.done <- lineResult{line: line, err: MapInputError(err)}
-			close(inflight.completed)
-		}()
-	}
-	inflight := state.inflight
 
-	select {
-	case <-ctx.Done():
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return "", context.DeadlineExceeded
+		state.mu.Lock()
+		inflight := state.inflight
+		if inflight == nil {
+			inflight = &lineInflight{
+				done: make(chan struct{}),
+			}
+			state.inflight = inflight
+			go func(inflight *lineInflight) {
+				line, err := reader.ReadString('\n')
+				inflight.result = lineResult{line: line, err: MapInputError(err)}
+				close(inflight.done)
+			}(inflight)
 		}
-		return "", ErrInputAborted
-	case res := <-inflight.done:
-		if state.inflight == inflight {
-			state.inflight = nil
+		state.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return "", context.DeadlineExceeded
+			}
+			return "", ErrInputAborted
+		case <-inflight.done:
 		}
+
+		state.mu.Lock()
+		if state.inflight != inflight {
+			state.mu.Unlock()
+			continue
+		}
+		state.inflight = nil
+		res := inflight.result
+		state.mu.Unlock()
 		return res.line, res.err
 	}
 }
@@ -162,40 +170,48 @@ func ReadPasswordWithContext(ctx context.Context, readPassword func(int) ([]byte
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := mapContextInputError(ctx); err != nil {
-		return nil, err
-	}
 	if readPassword == nil {
 		return nil, errors.New("readPassword function is nil")
 	}
 	state := getPasswordState(fd)
 
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.inflight == nil {
-		inflight := &passwordInflight{
-			done:      make(chan passwordResult, 1),
-			completed: make(chan struct{}),
+	for {
+		if err := mapContextInputError(ctx); err != nil {
+			return nil, err
 		}
-		state.inflight = inflight
-		go func() {
-			b, err := readPassword(fd)
-			inflight.done <- passwordResult{b: b, err: MapInputError(err)}
-			close(inflight.completed)
-		}()
-	}
-	inflight := state.inflight
 
-	select {
-	case <-ctx.Done():
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, context.DeadlineExceeded
+		state.mu.Lock()
+		inflight := state.inflight
+		if inflight == nil {
+			inflight = &passwordInflight{
+				done: make(chan struct{}),
+			}
+			state.inflight = inflight
+			go func(inflight *passwordInflight) {
+				b, err := readPassword(fd)
+				inflight.result = passwordResult{b: b, err: MapInputError(err)}
+				close(inflight.done)
+			}(inflight)
 		}
-		return nil, ErrInputAborted
-	case res := <-inflight.done:
-		if state.inflight == inflight {
-			state.inflight = nil
+		state.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, context.DeadlineExceeded
+			}
+			return nil, ErrInputAborted
+		case <-inflight.done:
 		}
+
+		state.mu.Lock()
+		if state.inflight != inflight {
+			state.mu.Unlock()
+			continue
+		}
+		state.inflight = nil
+		res := inflight.result
+		state.mu.Unlock()
 		return res.b, res.err
 	}
 }

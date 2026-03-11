@@ -46,6 +46,24 @@ type passwordCallResult struct {
 	err error
 }
 
+func assertNoLineResultYet(t *testing.T, ch <-chan lineCallResult) {
+	t.Helper()
+	select {
+	case res := <-ch:
+		t.Fatalf("unexpected line result before release: %+v", res)
+	default:
+	}
+}
+
+func assertNoPasswordResultYet(t *testing.T, ch <-chan passwordCallResult) {
+	t.Helper()
+	select {
+	case res := <-ch:
+		t.Fatalf("unexpected password result before release: %+v", res)
+	default:
+	}
+}
+
 func signalNonBlocking(ch chan struct{}) {
 	if ch == nil {
 		return
@@ -266,6 +284,59 @@ func TestReadLineWithContext_DeadlineReturnsDeadlineExceeded(t *testing.T) {
 	_ = pw.Close()
 }
 
+func TestReadLineWithContext_ConcurrentCancelledCallerReturnsWhileReadPending(t *testing.T) {
+	src := &blockingLineReader{
+		release:  make(chan struct{}),
+		returned: make(chan struct{}, 1),
+		payload:  "hello\n",
+	}
+	reader := bufio.NewReader(src)
+
+	firstResultCh := make(chan lineCallResult, 1)
+	go func() {
+		line, err := ReadLineWithContext(context.Background(), reader)
+		firstResultCh <- lineCallResult{line: line, err: err}
+	}()
+
+	waitForCondition(t, "underlying line read to start", func() bool {
+		return src.calls.Load() == 1
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	secondResultCh := make(chan lineCallResult, 1)
+	go func() {
+		line, err := ReadLineWithContext(ctx, reader)
+		secondResultCh <- lineCallResult{line: line, err: err}
+	}()
+
+	select {
+	case res := <-secondResultCh:
+		if res.line != "" {
+			t.Fatalf("cancelled line=%q; want empty", res.line)
+		}
+		if !errors.Is(res.err, ErrInputAborted) {
+			t.Fatalf("cancelled err=%v; want %v", res.err, ErrInputAborted)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("concurrent cancelled line read did not return while inflight read was pending")
+	}
+
+	assertNoLineResultYet(t, firstResultCh)
+
+	close(src.release)
+	waitForSignal(t, src.returned, "underlying line read completion")
+
+	res := <-firstResultCh
+	if res.err != nil {
+		t.Fatalf("first ReadLineWithContext error: %v", res.err)
+	}
+	if res.line != "hello\n" {
+		t.Fatalf("first line=%q; want %q", res.line, "hello\n")
+	}
+}
+
 func TestReadPasswordWithContext_NilReadPasswordErrors(t *testing.T) {
 	_, err := ReadPasswordWithContext(context.Background(), nil, 0)
 	if err == nil {
@@ -342,6 +413,59 @@ func TestReadPasswordWithContext_DeadlineReturnsDeadlineExceeded(t *testing.T) {
 	}
 }
 
+func TestReadPasswordWithContext_ConcurrentCancelledCallerReturnsWhileReadPending(t *testing.T) {
+	release := make(chan struct{})
+	var calls atomic.Int32
+	readPassword := func(fd int) ([]byte, error) {
+		calls.Add(1)
+		<-release
+		return []byte("secret"), nil
+	}
+
+	firstResultCh := make(chan passwordCallResult, 1)
+	go func() {
+		got, err := ReadPasswordWithContext(context.Background(), readPassword, 42)
+		firstResultCh <- passwordCallResult{b: got, err: err}
+	}()
+
+	waitForCondition(t, "underlying password read to start", func() bool {
+		return calls.Load() == 1
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	secondResultCh := make(chan passwordCallResult, 1)
+	go func() {
+		got, err := ReadPasswordWithContext(ctx, readPassword, 42)
+		secondResultCh <- passwordCallResult{b: got, err: err}
+	}()
+
+	select {
+	case res := <-secondResultCh:
+		if res.b != nil {
+			t.Fatalf("cancelled password=%q; want nil", string(res.b))
+		}
+		if !errors.Is(res.err, ErrInputAborted) {
+			t.Fatalf("cancelled err=%v; want %v", res.err, ErrInputAborted)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("concurrent cancelled password read did not return while inflight read was pending")
+	}
+
+	assertNoPasswordResultYet(t, firstResultCh)
+
+	close(release)
+
+	res := <-firstResultCh
+	if res.err != nil {
+		t.Fatalf("first ReadPasswordWithContext error: %v", res.err)
+	}
+	if string(res.b) != "secret" {
+		t.Fatalf("first password=%q; want %q", string(res.b), "secret")
+	}
+}
+
 func TestReadLineWithContext_ReusesInflightReadWhilePendingAfterTimeout(t *testing.T) {
 	src := &blockingLineReader{
 		release:  make(chan struct{}),
@@ -370,19 +494,14 @@ func TestReadLineWithContext_ReusesInflightReadWhilePendingAfterTimeout(t *testi
 	}
 
 	resultCh := make(chan lineCallResult, 1)
+	started := make(chan struct{})
 	go func() {
+		close(started)
 		line, err := ReadLineWithContext(context.Background(), reader)
 		resultCh <- lineCallResult{line: line, err: err}
 	}()
-
-	state := getLineState(reader)
-	waitForCondition(t, "line retry to block on inflight read", func() bool {
-		if state.mu.TryLock() {
-			state.mu.Unlock()
-			return false
-		}
-		return true
-	})
+	waitForSignal(t, started, "line retry start")
+	assertNoLineResultYet(t, resultCh)
 
 	close(src.release)
 	close(src.finish)
@@ -418,7 +537,7 @@ func TestReadLineWithContext_PreservesCompletedReadForNextRetryAfterTimeout(t *t
 	inflight := currentLineInflight(t, reader)
 	close(src.release)
 	waitForSignal(t, src.returned, "underlying line read return")
-	waitForSignal(t, inflight.completed, "line inflight completion")
+	waitForSignal(t, inflight.done, "line inflight completion")
 	assertSameLineInflight(t, reader, inflight)
 
 	line, err := ReadLineWithContext(context.Background(), reader)
@@ -471,19 +590,14 @@ func TestReadPasswordWithContext_ReusesInflightReadWhilePendingAfterTimeout(t *t
 	}
 
 	resultCh := make(chan passwordCallResult, 1)
+	started := make(chan struct{})
 	go func() {
+		close(started)
 		got, err := ReadPasswordWithContext(context.Background(), readPassword, 42)
 		resultCh <- passwordCallResult{b: got, err: err}
 	}()
-
-	state := getPasswordState(42)
-	waitForCondition(t, "password retry to block on inflight read", func() bool {
-		if state.mu.TryLock() {
-			state.mu.Unlock()
-			return false
-		}
-		return true
-	})
+	waitForSignal(t, started, "password retry start")
+	assertNoPasswordResultYet(t, resultCh)
 
 	close(release)
 	close(finish)
@@ -525,7 +639,7 @@ func TestReadPasswordWithContext_PreservesCompletedReadForNextRetryAfterTimeout(
 	inflight := currentPasswordInflight(t, 42)
 	close(release)
 	waitForSignal(t, returned, "underlying password read return")
-	waitForSignal(t, inflight.completed, "password inflight completion")
+	waitForSignal(t, inflight.done, "password inflight completion")
 	assertSamePasswordInflight(t, 42, inflight)
 
 	got, err = ReadPasswordWithContext(context.Background(), readPassword, 42)
@@ -558,7 +672,7 @@ func TestReadLineWithContext_ClearsInflightAfterCompletedRetryConsumesResult(t *
 	inflight := currentLineInflight(t, reader)
 	close(src.release)
 	waitForSignal(t, src.returned, "underlying line read return")
-	waitForSignal(t, inflight.completed, "line inflight completion")
+	waitForSignal(t, inflight.done, "line inflight completion")
 	assertSameLineInflight(t, reader, inflight)
 
 	line, err := ReadLineWithContext(context.Background(), reader)
@@ -597,7 +711,7 @@ func TestReadPasswordWithContext_ClearsInflightAfterCompletedRetryConsumesResult
 	inflight := currentPasswordInflight(t, fd)
 	close(release)
 	waitForSignal(t, returned, "underlying password read return")
-	waitForSignal(t, inflight.completed, "password inflight completion")
+	waitForSignal(t, inflight.done, "password inflight completion")
 	assertSamePasswordInflight(t, fd, inflight)
 
 	got, err = ReadPasswordWithContext(context.Background(), readPassword, fd)
