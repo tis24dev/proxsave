@@ -447,6 +447,30 @@ func TestSyncDirExact_RejectsRelativeSymlinkTargetsThatEscapeDestinationRoot(t *
 	}
 }
 
+func TestSyncDirExact_CleansUpWhenCreatedSymlinkReadbackFails(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := newPreservingSymlinkFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+
+	if err := fakeFS.AddDir("/stage"); err != nil {
+		t.Fatalf("add stage dir: %v", err)
+	}
+	if err := fakeFS.Symlink("/dest/target", "/stage/link"); err != nil {
+		t.Fatalf("add symlink: %v", err)
+	}
+
+	restoreFS = readlinkFailFS{FS: fakeFS, failPath: "/dest/link", err: fmt.Errorf("boom")}
+
+	if _, err := syncDirExact("/stage", "/dest"); err == nil || !strings.Contains(err.Error(), "read created symlink /dest/link") {
+		t.Fatalf("expected post-create readlink error, got %v", err)
+	}
+	if _, err := fakeFS.Lstat("/dest/link"); !os.IsNotExist(err) {
+		t.Fatalf("expected created symlink cleanup, lstat err = %v", err)
+	}
+}
+
 func TestSelectStageHostFirewall_ErrorsOnReadDirFailure(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })

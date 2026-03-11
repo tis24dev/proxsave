@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,19 @@ func (f *preservingSymlinkFS) Symlink(oldname, newname string) error {
 		return err
 	}
 	return os.Symlink(oldname, f.onDisk(newname))
+}
+
+type tamperSymlinkFS struct {
+	FS
+	destPath string
+	target   string
+}
+
+func (f tamperSymlinkFS) Symlink(oldname, newname string) error {
+	if filepath.Clean(newname) == filepath.Clean(f.destPath) {
+		return f.FS.Symlink(f.target, newname)
+	}
+	return f.FS.Symlink(oldname, newname)
 }
 
 func TestApplyNetworkFilesFromStage_RewritesSafeAbsoluteSymlinkTargetsWithinDestinationRoot(t *testing.T) {
@@ -158,5 +172,69 @@ func TestValidateOverlaySymlinkTargetWithinRoot_RewritesAbsoluteTargetFromResolv
 	}
 	if rewritten != "interfaces.real" {
 		t.Fatalf("rewritten target = %q, want %q", rewritten, "interfaces.real")
+	}
+}
+
+func TestCopySymlinkOverlayWithinRoot_CleansUpWhenCreatedSymlinkReadbackFails(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := newPreservingSymlinkFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+
+	if err := fakeFS.MkdirAll("/stage", 0o755); err != nil {
+		t.Fatalf("create stage dir: %v", err)
+	}
+	if err := fakeFS.Symlink("/dest/target", "/stage/link"); err != nil {
+		t.Fatalf("create staged symlink: %v", err)
+	}
+
+	restoreFS = readlinkFailFS{
+		FS:       fakeFS,
+		failPath: "/dest/link",
+		err:      errors.New("boom"),
+	}
+
+	ok, err := copySymlinkOverlayWithinRoot("/stage/link", "/dest/link", "/dest")
+	if ok {
+		t.Fatal("copySymlinkOverlayWithinRoot reported success; want failure")
+	}
+	if err == nil || !strings.Contains(err.Error(), "read created symlink /dest/link") {
+		t.Fatalf("expected readback validation error, got %v", err)
+	}
+	if _, statErr := fakeFS.Lstat("/dest/link"); !os.IsNotExist(statErr) {
+		t.Fatalf("expected created symlink cleanup, lstat err = %v", statErr)
+	}
+}
+
+func TestCopySymlinkOverlayWithinRoot_CleansUpWhenCreatedSymlinkEscapesAfterCreation(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := newPreservingSymlinkFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+
+	if err := fakeFS.MkdirAll("/stage", 0o755); err != nil {
+		t.Fatalf("create stage dir: %v", err)
+	}
+	if err := fakeFS.Symlink("/dest/target", "/stage/link"); err != nil {
+		t.Fatalf("create staged symlink: %v", err)
+	}
+
+	restoreFS = tamperSymlinkFS{
+		FS:       fakeFS,
+		destPath: "/dest/link",
+		target:   "/outside/evil",
+	}
+
+	ok, err := copySymlinkOverlayWithinRoot("/stage/link", "/dest/link", "/dest")
+	if ok {
+		t.Fatal("copySymlinkOverlayWithinRoot reported success; want failure")
+	}
+	if err == nil || !strings.Contains(err.Error(), "escapes root after creation") {
+		t.Fatalf("expected post-create escape error, got %v", err)
+	}
+	if _, statErr := fakeFS.Lstat("/dest/link"); !os.IsNotExist(statErr) {
+		t.Fatalf("expected created symlink cleanup, lstat err = %v", statErr)
 	}
 }

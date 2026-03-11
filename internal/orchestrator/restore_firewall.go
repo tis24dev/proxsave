@@ -684,6 +684,9 @@ func syncDirExact(srcDir, destDir string) ([]string, error) {
 				if err := restoreFS.Symlink(validatedTarget, dest); err != nil {
 					return fmt.Errorf("symlink %s -> %s: %w", dest, validatedTarget, err)
 				}
+				if err := verifyCreatedSymlinkWithinRootFS(restoreFS, destDir, dest); err != nil {
+					return err
+				}
 				applied = append(applied, dest)
 				continue
 			}

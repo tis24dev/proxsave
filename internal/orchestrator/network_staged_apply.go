@@ -225,7 +225,31 @@ func copySymlinkOverlayWithinRoot(src, dest, destRoot string) (bool, error) {
 	if err := restoreFS.Symlink(validatedTarget, dest); err != nil {
 		return false, fmt.Errorf("symlink %s -> %s: %w", dest, validatedTarget, err)
 	}
+	if err := verifyCreatedSymlinkWithinRootFS(restoreFS, destRoot, dest); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+// verifyCreatedSymlinkWithinRootFS re-reads a newly created symlink and ensures
+// its effective target still resolves within destRoot. On validation failure it
+// removes the symlink, mirroring extractSymlink's cleanup-on-failure behavior.
+func verifyCreatedSymlinkWithinRootFS(fsys FS, destRoot, dest string) error {
+	destRoot = filepath.Clean(strings.TrimSpace(destRoot))
+	dest = filepath.Clean(strings.TrimSpace(dest))
+
+	actualTarget, err := fsys.Readlink(dest)
+	if err != nil {
+		_ = fsys.Remove(dest)
+		return fmt.Errorf("read created symlink %s: %w", dest, err)
+	}
+
+	if _, err := resolvePathRelativeToBaseWithinRootFS(fsys, destRoot, filepath.Dir(dest), actualTarget); err != nil {
+		_ = fsys.Remove(dest)
+		return fmt.Errorf("symlink target escapes root after creation: %s -> %s: %w", dest, actualTarget, err)
+	}
+
+	return nil
 }
 
 func validateOverlaySymlinkTargetWithinRoot(destRoot, dest, target string) (string, error) {
