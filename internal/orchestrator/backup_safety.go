@@ -396,8 +396,11 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 			linkTarget := header.Linkname
 
 			if _, pathErr := resolvePathRelativeToBaseWithinRootFS(safetyFS, absDestRoot, filepath.Dir(target), linkTarget); pathErr != nil {
-				logger.Warning("Skipping symlink %s -> %s: target escapes root: %v", target, linkTarget, pathErr)
-				continue
+				if isPathSecurityError(pathErr) {
+					logger.Warning("Skipping symlink %s -> %s: target escapes root: %v", target, linkTarget, pathErr)
+					continue
+				}
+				return fmt.Errorf("validate symlink %s -> %s before creation: %w", target, linkTarget, pathErr)
 			}
 
 			// Remove existing file/symlink before creating new one
@@ -418,10 +421,13 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 			}
 
 			if _, err := resolvePathRelativeToBaseWithinRootFS(safetyFS, absDestRoot, filepath.Dir(target), actualTarget); err != nil {
-				logger.Warning("Removing symlink %s -> %s: target escapes root after creation: %v",
-					target, actualTarget, err)
 				safetyFS.Remove(target)
-				continue
+				if isPathSecurityError(err) {
+					logger.Warning("Removing symlink %s -> %s: target escapes root after creation: %v",
+						target, actualTarget, err)
+					continue
+				}
+				return fmt.Errorf("validate symlink %s -> %s after creation: %w", target, actualTarget, err)
 			}
 
 			logger.Debug("Created safe symlink: %s -> %s", header.Name, linkTarget)
