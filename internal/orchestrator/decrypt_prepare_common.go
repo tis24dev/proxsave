@@ -12,6 +12,56 @@ import (
 
 type archiveDecryptFunc func(ctx context.Context, encryptedPath, outputPath, displayName string) error
 
+func createUniquePreparedArchivePath(workDir, baseName string) (string, error) {
+	pattern := strings.TrimSpace(baseName)
+	if pattern == "" {
+		pattern = "archive"
+	}
+	tempFile, err := restoreFS.CreateTemp(workDir, pattern+".decrypted-*")
+	if err != nil {
+		return "", fmt.Errorf("create archive output path: %w", err)
+	}
+	path := tempFile.Name()
+	if err := tempFile.Close(); err != nil {
+		return "", fmt.Errorf("close archive output path: %w", err)
+	}
+	return path, nil
+}
+
+func resolvePreparedArchivePath(workDir, stagedArchivePath, currentEncryption string) (string, error) {
+	archiveBase := filepath.Base(stagedArchivePath)
+	if archiveBase == "." || archiveBase == string(filepath.Separator) || strings.TrimSpace(archiveBase) == "" {
+		return "", fmt.Errorf("invalid staged archive path %s", stagedArchivePath)
+	}
+
+	if currentEncryption == "age" {
+		if !strings.HasSuffix(archiveBase, ".age") {
+			return "", fmt.Errorf("encrypted archive %s is missing .age suffix", stagedArchivePath)
+		}
+
+		plainArchiveName := strings.TrimSuffix(archiveBase, ".age")
+		if strings.TrimSpace(plainArchiveName) == "" {
+			return createUniquePreparedArchivePath(workDir, archiveBase)
+		}
+
+		plainArchivePath := filepath.Join(workDir, plainArchiveName)
+		if plainArchivePath == stagedArchivePath {
+			return createUniquePreparedArchivePath(workDir, plainArchiveName)
+		}
+		return plainArchivePath, nil
+	}
+
+	if strings.HasSuffix(archiveBase, ".age") {
+		mode := currentEncryption
+		if mode == "" {
+			mode = "plain"
+		}
+		return "", fmt.Errorf("archive %s has .age suffix but encryption mode is %s", stagedArchivePath, mode)
+	}
+
+	return filepath.Join(workDir, archiveBase), nil
+}
+
 func preparePlainBundleCommon(ctx context.Context, cand *decryptCandidate, version string, logger *logging.Logger, decryptArchive archiveDecryptFunc) (bundle *preparedBundle, err error) {
 	if cand == nil || cand.Manifest == nil {
 		return nil, fmt.Errorf("invalid backup candidate")
@@ -80,8 +130,11 @@ func preparePlainBundleCommon(ctx context.Context, cand *decryptCandidate, versi
 	currentEncryption := strings.ToLower(strings.TrimSpace(manifestCopy.EncryptionMode))
 	logger.Info("Preparing archive %s for decryption (mode: %s)", manifestCopy.ArchivePath, statusFromManifest(&manifestCopy))
 
-	plainArchiveName := strings.TrimSuffix(filepath.Base(staged.ArchivePath), ".age")
-	plainArchivePath := filepath.Join(workDir, plainArchiveName)
+	plainArchivePath, err := resolvePreparedArchivePath(workDir, staged.ArchivePath, currentEncryption)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
 
 	if currentEncryption == "age" {
 		if decryptArchive == nil {

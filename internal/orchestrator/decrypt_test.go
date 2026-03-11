@@ -3006,6 +3006,130 @@ func TestPreparePlainBundleCommon_TrimmedAgeEncryptionTriggersDecrypt(t *testing
 	}
 }
 
+func TestPreparePlainBundleCommon_AgeModeRequiresAgeSuffix(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	dir := t.TempDir()
+	workArchive := filepath.Join(dir, "backup.tar.xz")
+	if err := os.WriteFile(workArchive, []byte("ciphertext"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	manifestPath := filepath.Join(dir, "backup.metadata")
+	if err := os.WriteFile(manifestPath, []byte(`{"encryption_mode":"age"}`), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	checksumPath := filepath.Join(dir, "backup.sha256")
+	checksumLine := checksumLineForBytes(filepath.Base(workArchive), []byte("ciphertext"))
+	if err := os.WriteFile(checksumPath, []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	cand := &decryptCandidate{
+		Manifest: &backup.Manifest{
+			ArchivePath:    workArchive,
+			EncryptionMode: "age",
+		},
+		Source:          sourceRaw,
+		RawArchivePath:  workArchive,
+		RawMetadataPath: manifestPath,
+		RawChecksumPath: checksumPath,
+		DisplayBase:     "backup.tar.xz",
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+
+	decryptCalled := false
+	_, err := preparePlainBundleCommon(context.Background(), cand, "1.0.0", logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
+		decryptCalled = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("preparePlainBundleCommon error = nil; want missing .age suffix error")
+	}
+	if !strings.Contains(err.Error(), "missing .age suffix") {
+		t.Fatalf("preparePlainBundleCommon error = %v; want missing .age suffix error", err)
+	}
+	if decryptCalled {
+		t.Fatal("decrypt callback was called for archive without .age suffix")
+	}
+}
+
+func TestPreparePlainBundleCommon_NonAgeRejectsAgeSuffix(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	dir := t.TempDir()
+	workArchive := filepath.Join(dir, "backup.tar.xz.age")
+	if err := os.WriteFile(workArchive, []byte("ciphertext"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	manifestPath := filepath.Join(dir, "backup.metadata")
+	if err := os.WriteFile(manifestPath, []byte(`{"encryption_mode":"none"}`), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	checksumPath := filepath.Join(dir, "backup.sha256")
+	checksumLine := checksumLineForBytes(filepath.Base(workArchive), []byte("ciphertext"))
+	if err := os.WriteFile(checksumPath, []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	cand := &decryptCandidate{
+		Manifest: &backup.Manifest{
+			ArchivePath:    workArchive,
+			EncryptionMode: "none",
+		},
+		Source:          sourceRaw,
+		RawArchivePath:  workArchive,
+		RawMetadataPath: manifestPath,
+		RawChecksumPath: checksumPath,
+		DisplayBase:     "backup.tar.xz.age",
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+
+	_, err := preparePlainBundleCommon(context.Background(), cand, "1.0.0", logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
+		t.Fatal("decrypt callback should not be called for non-age archive handling")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("preparePlainBundleCommon error = nil; want .age suffix mismatch error")
+	}
+	if !strings.Contains(err.Error(), "has .age suffix but encryption mode is none") {
+		t.Fatalf("preparePlainBundleCommon error = %v; want .age suffix mismatch error", err)
+	}
+}
+
+func TestResolvePreparedArchivePath_AgeFallbackUsesUniqueOutput(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	workDir := t.TempDir()
+	stagedArchivePath := filepath.Join(workDir, ".age")
+
+	got, err := resolvePreparedArchivePath(workDir, stagedArchivePath, "age")
+	if err != nil {
+		t.Fatalf("resolvePreparedArchivePath error: %v", err)
+	}
+	if got == stagedArchivePath {
+		t.Fatalf("resolvePreparedArchivePath() = %q; want unique output path", got)
+	}
+	if got == workDir {
+		t.Fatalf("resolvePreparedArchivePath() = %q; want file path inside workdir", got)
+	}
+	if filepath.Dir(got) != workDir {
+		t.Fatalf("resolvePreparedArchivePath() dir = %q; want %q", filepath.Dir(got), workDir)
+	}
+	if !strings.HasPrefix(filepath.Base(got), ".age.decrypted-") {
+		t.Fatalf("resolvePreparedArchivePath() base = %q; want .age.decrypted-*", filepath.Base(got))
+	}
+}
+
 // =====================================
 // extractBundleToWorkdirWithLogger coverage tests
 // =====================================
