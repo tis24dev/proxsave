@@ -36,6 +36,32 @@ func (c *stagedDeadlineContext) Value(any) any {
 	return nil
 }
 
+type fixedErrContext struct {
+	done <-chan struct{}
+	err  error
+}
+
+func (c *fixedErrContext) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+func (c *fixedErrContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *fixedErrContext) Err() error {
+	select {
+	case <-c.done:
+		return c.err
+	default:
+		return nil
+	}
+}
+
+func (c *fixedErrContext) Value(any) any {
+	return nil
+}
+
 func waitForSignal(t *testing.T, ch <-chan struct{}, name string) {
 	t.Helper()
 	select {
@@ -156,6 +182,106 @@ func TestRunLimited_ReturnsTimeoutErrorWhenDeadlineExpiresBeforeNoTimeoutPath(t 
 	}
 	if err == nil || !errors.Is(err, ErrTimeout) {
 		t.Fatalf("runLimited err = %v; want timeout", err)
+	}
+}
+
+func TestRunLimited_NormalizesExpiredDeadlineAtEntry(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	ctx := &fixedErrContext{
+		done: done,
+		err:  context.DeadlineExceeded,
+	}
+
+	called := false
+	_, err := runLimited(ctx, 50*time.Millisecond, &TimeoutError{Op: "stat", Path: "/does/not/matter"}, func() (int, error) {
+		called = true
+		return 1, nil
+	})
+
+	if called {
+		t.Fatal("run called; want timeout before execution")
+	}
+	if err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("runLimited err = %v; want timeout", err)
+	}
+}
+
+func TestRunLimited_NormalizesDeadlineFromDoneBranch(t *testing.T) {
+	done := make(chan struct{})
+	ctx := &fixedErrContext{
+		done: done,
+		err:  context.DeadlineExceeded,
+	}
+
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	t.Cleanup(func() {
+		close(unblock)
+		waitForSignal(t, finished, "runLimited completion")
+	})
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		close(done)
+	}()
+
+	_, err := runLimited(ctx, time.Second, &TimeoutError{Op: "stat", Path: "/does/not/matter"}, func() (int, error) {
+		defer close(finished)
+		<-unblock
+		return 1, nil
+	})
+
+	if err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("runLimited err = %v; want timeout", err)
+	}
+}
+
+func TestOperationLimiterAcquire_NormalizesDeadlineExceeded(t *testing.T) {
+	limiter := newOperationLimiter(1)
+	limiter.slots <- struct{}{}
+
+	done := make(chan struct{})
+	ctx := &fixedErrContext{
+		done: done,
+		err:  context.DeadlineExceeded,
+	}
+
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		close(done)
+	}()
+
+	err := limiter.acquire(ctx, timer.C)
+	if err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("acquire err = %v; want timeout", err)
+	}
+}
+
+func TestOperationLimiterAcquire_PropagatesCancellation(t *testing.T) {
+	limiter := newOperationLimiter(1)
+	limiter.slots <- struct{}{}
+
+	done := make(chan struct{})
+	ctx := &fixedErrContext{
+		done: done,
+		err:  context.Canceled,
+	}
+
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		close(done)
+	}()
+
+	err := limiter.acquire(ctx, timer.C)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("acquire err = %v; want context.Canceled", err)
 	}
 }
 

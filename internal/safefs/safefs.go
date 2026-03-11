@@ -57,6 +57,17 @@ func effectiveTimeout(ctx context.Context, timeout time.Duration) time.Duration 
 	return timeout
 }
 
+func normalizeContextErr(ctx context.Context, deadlineErr error) error {
+	err := ctx.Err()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return deadlineErr
+	}
+	return err
+}
+
 // operationLimiter bounds the number of in-flight filesystem goroutines whose
 // callers may already have returned due to timeout/cancellation.
 type operationLimiter struct {
@@ -77,7 +88,7 @@ func (l *operationLimiter) acquire(ctx context.Context, timer <-chan time.Time) 
 	case l.slots <- struct{}{}:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return normalizeContextErr(ctx, ErrTimeout)
 	case <-timer:
 		return ErrTimeout
 	}
@@ -96,15 +107,12 @@ func (l *operationLimiter) inflight() int {
 
 func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *TimeoutError, run func() (T, error)) (T, error) {
 	var zero T
-	if err := ctx.Err(); err != nil {
+	if err := normalizeContextErr(ctx, timeoutErr); err != nil {
 		return zero, err
 	}
 	timeout = effectiveTimeout(ctx, timeout)
 	if timeout <= 0 {
-		if err := ctx.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return zero, timeoutErr
-			}
+		if err := normalizeContextErr(ctx, timeoutErr); err != nil {
 			return zero, err
 		}
 		return run()
@@ -136,7 +144,7 @@ func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *T
 	case r := <-ch:
 		return r.value, r.err
 	case <-ctx.Done():
-		return zero, ctx.Err()
+		return zero, normalizeContextErr(ctx, timeoutErr)
 	case <-timer.C:
 		return zero, timeoutErr
 	}
