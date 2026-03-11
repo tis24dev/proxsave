@@ -559,14 +559,16 @@ func inspectRcloneChecksumFile(ctx context.Context, remotePath string, logger *l
 		_ = stdout.Close()
 	}
 	waitErr := cmd.Wait()
+	stderrOutput := strings.TrimSpace(stderr.String())
+	ignoreWaitErr := closedEarly && stderrOutput == ""
 	if readErr != nil {
-		if waitErr != nil && !closedEarly {
-			return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, waitErr, strings.TrimSpace(stderr.String()))
+		if waitErr != nil && !ignoreWaitErr {
+			return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, waitErr, stderrOutput)
 		}
 		return "", fmt.Errorf("read checksum file %s: %w", remotePath, readErr)
 	}
-	if waitErr != nil && !closedEarly {
-		return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, waitErr, strings.TrimSpace(stderr.String()))
+	if waitErr != nil && !ignoreWaitErr {
+		return "", fmt.Errorf("rclone cat %s failed: %w (output: %s)", remotePath, waitErr, stderrOutput)
 	}
 	checksum, err = backup.ParseChecksumData(data)
 	if err != nil {
