@@ -2940,6 +2940,72 @@ esac
 	}
 }
 
+func TestPreparePlainBundleCommon_TrimmedAgeEncryptionTriggersDecrypt(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	dir := t.TempDir()
+	workArchive := filepath.Join(dir, "backup.tar.xz.age")
+	if err := os.WriteFile(workArchive, []byte("ciphertext"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	manifestPath := filepath.Join(dir, "backup.metadata")
+	if err := os.WriteFile(manifestPath, []byte(`{"encryption_mode":"  age "}`), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	checksumPath := filepath.Join(dir, "backup.sha256")
+	checksumLine := checksumLineForBytes(filepath.Base(workArchive), []byte("ciphertext"))
+	if err := os.WriteFile(checksumPath, []byte(checksumLine), 0o600); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	cand := &decryptCandidate{
+		Manifest: &backup.Manifest{
+			ArchivePath:    workArchive,
+			EncryptionMode: "  age ",
+		},
+		Source:          sourceRaw,
+		RawArchivePath:  workArchive,
+		RawMetadataPath: manifestPath,
+		RawChecksumPath: checksumPath,
+		DisplayBase:     "backup.tar.xz.age",
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+
+	decryptCalled := false
+	prepared, err := preparePlainBundleCommon(context.Background(), cand, "1.0.0", logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
+		decryptCalled = true
+		if encryptedPath == outputPath {
+			t.Fatalf("decrypt callback received identical input/output path %q", encryptedPath)
+		}
+		if displayName != "backup.tar.xz.age" {
+			t.Fatalf("displayName=%q; want %q", displayName, "backup.tar.xz.age")
+		}
+		return os.WriteFile(outputPath, []byte("plaintext"), 0o600)
+	})
+	if err != nil {
+		t.Fatalf("preparePlainBundleCommon error: %v", err)
+	}
+	defer prepared.Cleanup()
+
+	if !decryptCalled {
+		t.Fatal("expected decrypt callback to be invoked for trimmed age encryption mode")
+	}
+	if prepared.Manifest.EncryptionMode != "none" {
+		t.Fatalf("prepared manifest EncryptionMode=%q; want %q", prepared.Manifest.EncryptionMode, "none")
+	}
+	data, err := os.ReadFile(prepared.ArchivePath)
+	if err != nil {
+		t.Fatalf("read prepared archive: %v", err)
+	}
+	if string(data) != "plaintext" {
+		t.Fatalf("prepared archive content=%q; want %q", string(data), "plaintext")
+	}
+}
+
 // =====================================
 // extractBundleToWorkdirWithLogger coverage tests
 // =====================================

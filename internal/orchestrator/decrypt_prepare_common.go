@@ -77,7 +77,7 @@ func preparePlainBundleCommon(ctx context.Context, cand *decryptCandidate, versi
 	}
 
 	manifestCopy := *cand.Manifest
-	currentEncryption := strings.ToLower(manifestCopy.EncryptionMode)
+	currentEncryption := strings.ToLower(strings.TrimSpace(manifestCopy.EncryptionMode))
 	logger.Info("Preparing archive %s for decryption (mode: %s)", manifestCopy.ArchivePath, statusFromManifest(&manifestCopy))
 
 	plainArchiveName := strings.TrimSuffix(filepath.Base(staged.ArchivePath), ".age")
