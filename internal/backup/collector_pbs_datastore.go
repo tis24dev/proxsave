@@ -780,6 +780,10 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 			if normalized == "" {
 				continue
 			}
+			if !filepath.IsAbs(normalized) {
+				c.logger.Warning("Skipping PBS_DATASTORE_PATH override %q: path must be absolute", override)
+				continue
+			}
 			if _, ok := existing[normalized]; ok {
 				continue
 			}

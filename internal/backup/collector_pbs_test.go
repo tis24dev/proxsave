@@ -71,6 +71,32 @@ func TestGetDatastoreListSuccessWithOverrides(t *testing.T) {
 	}
 }
 
+func TestGetDatastoreListSkipsRelativeOverrides(t *testing.T) {
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte(`[]`), nil
+		},
+	})
+	collector.config.PBSDatastorePaths = []string{"relative/store", "./local/store", "/valid/store"}
+
+	datastores, err := collector.getDatastoreList(context.Background())
+	if err != nil {
+		t.Fatalf("getDatastoreList failed: %v", err)
+	}
+	if len(datastores) != 1 {
+		t.Fatalf("expected only absolute overrides, got %d: %+v", len(datastores), datastores)
+	}
+	if datastores[0].Path != "/valid/store" || datastores[0].NormalizedPath != "/valid/store" {
+		t.Fatalf("unexpected absolute override retained: %+v", datastores[0])
+	}
+	if datastores[0].Source != pbsDatastoreSourceOverride {
+		t.Fatalf("expected override source, got %+v", datastores[0])
+	}
+}
+
 func TestGetDatastoreListOverrideCollisionsUseDistinctOutputKeys(t *testing.T) {
 	collector := newTestCollectorWithDeps(t, CollectorDeps{
 		LookPath: func(cmd string) (string, error) {
