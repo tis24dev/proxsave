@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestConfirmNewInstallContinue(t *testing.T) {
 		return nil
 	}
 
-	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123")
+	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", []string{"build", "env", "identity"})
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestConfirmNewInstallCancel(t *testing.T) {
 		return nil
 	}
 
-	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123")
+	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", []string{"build", "env", "identity"})
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -57,11 +58,45 @@ func TestConfirmNewInstallMessageIncludesBaseDir(t *testing.T) {
 		return nil
 	}
 
-	_, err := ConfirmNewInstall("/var/lib/data", "build-sig")
+	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", []string{"build", "env", "identity"})
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
 	if !strings.Contains(captured, "/var/lib/data") {
 		t.Fatalf("expected modal text to mention base dir, got %q", captured)
+	}
+}
+
+func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
+	originalRunner := confirmNewInstallRunner
+	defer func() { confirmNewInstallRunner = originalRunner }()
+
+	var captured string
+	confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		captured = extractModalText(focus.(*tview.Modal))
+		return nil
+	}
+
+	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", []string{"build", "env", "identity"})
+	if err != nil {
+		t.Fatalf("ConfirmNewInstall error: %v", err)
+	}
+	if !strings.Contains(captured, "build/ env/ identity/") {
+		t.Fatalf("expected modal text to mention preserved entries, got %q", captured)
+	}
+}
+
+func TestConfirmNewInstallPropagatesRunnerError(t *testing.T) {
+	originalRunner := confirmNewInstallRunner
+	defer func() { confirmNewInstallRunner = originalRunner }()
+
+	expectedErr := errors.New("runner failed")
+	confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return expectedErr
+	}
+
+	_, err := ConfirmNewInstall("/opt/proxmox", "sig-123", []string{"build", "env", "identity"})
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected error %v, got %v", expectedErr, err)
 	}
 }

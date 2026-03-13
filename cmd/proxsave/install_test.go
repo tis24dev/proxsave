@@ -105,7 +105,7 @@ func TestIsInstallAbortedError(t *testing.T) {
 	}
 }
 
-func TestResetInstallBaseDirPreservesEnvAndIdentity(t *testing.T) {
+func TestResetInstallBaseDirPreservesCoreDirectories(t *testing.T) {
 	base := t.TempDir()
 
 	// setup contents
@@ -134,6 +134,15 @@ func TestResetInstallBaseDirPreservesEnvAndIdentity(t *testing.T) {
 		t.Fatalf("setup identity file: %v", err)
 	}
 
+	buildDir := filepath.Join(base, "build")
+	if err := os.Mkdir(buildDir, 0o755); err != nil {
+		t.Fatalf("setup build: %v", err)
+	}
+	buildFile := filepath.Join(buildDir, "keep.txt")
+	if err := os.WriteFile(buildFile, []byte("build"), 0o600); err != nil {
+		t.Fatalf("setup build file: %v", err)
+	}
+
 	logger := logging.NewBootstrapLogger()
 	if err := resetInstallBaseDir(base, logger); err != nil {
 		t.Fatalf("resetInstallBaseDir returned error: %v", err)
@@ -156,6 +165,44 @@ func TestResetInstallBaseDirPreservesEnvAndIdentity(t *testing.T) {
 	}
 	if _, err := os.Stat(idFile); err != nil {
 		t.Fatalf("identity file should remain: %v", err)
+	}
+	if _, err := os.Stat(buildDir); err != nil {
+		t.Fatalf("build dir should remain: %v", err)
+	}
+	if _, err := os.Stat(buildFile); err != nil {
+		t.Fatalf("build file should remain: %v", err)
+	}
+}
+
+func TestResetInstallBaseDirRespectsSharedPreserveSet(t *testing.T) {
+	base := t.TempDir()
+	for _, entry := range newInstallPreservedEntries() {
+		dirPath := filepath.Join(base, entry)
+		if err := os.MkdirAll(dirPath, 0o755); err != nil {
+			t.Fatalf("setup %s: %v", entry, err)
+		}
+		filePath := filepath.Join(dirPath, "keep.txt")
+		if err := os.WriteFile(filePath, []byte(entry), 0o600); err != nil {
+			t.Fatalf("setup %s file: %v", entry, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(base, "drop.txt"), []byte("drop"), 0o600); err != nil {
+		t.Fatalf("setup drop file: %v", err)
+	}
+
+	logger := logging.NewBootstrapLogger()
+	if err := resetInstallBaseDir(base, logger); err != nil {
+		t.Fatalf("resetInstallBaseDir returned error: %v", err)
+	}
+
+	for _, entry := range newInstallPreservedEntries() {
+		filePath := filepath.Join(base, entry, "keep.txt")
+		if _, err := os.Stat(filePath); err != nil {
+			t.Fatalf("expected preserved file for %s, got %v", entry, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(base, "drop.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected drop.txt removed, got err=%v", err)
 	}
 }
 

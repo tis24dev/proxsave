@@ -1637,7 +1637,7 @@ func printFinalSummary(finalExitCode int) {
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
-	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
+	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
 	fmt.Println("  --env-migration    - Run installer and migrate legacy Bash backup.env to Go template")
 	fmt.Println("  --env-migration-dry-run - Preview installer/migration without writing files")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")

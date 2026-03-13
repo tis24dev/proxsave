@@ -14,10 +14,26 @@ var confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) er
 	return app.SetRoot(root, true).SetFocus(focus).Run()
 }
 
+func formatPreservedEntries(entries []string) string {
+	formatted := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		formatted = append(formatted, trimmed+"/")
+	}
+	if len(formatted) == 0 {
+		return "(none)"
+	}
+	return strings.Join(formatted, " ")
+}
+
 // ConfirmNewInstall shows a TUI confirmation before wiping baseDir for --new-install.
-func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
+func ConfirmNewInstall(baseDir string, buildSig string, preservedEntries []string) (bool, error) {
 	app := tui.NewApp()
 	proceed := false
+	preservedText := formatPreservedEntries(preservedEntries)
 
 	// Header text (align with main install wizard)
 	welcomeText := tview.NewTextView().
@@ -51,7 +67,7 @@ func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
 
 	// Confirmation modal
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]build/ env/ identity/[white]\nbut deletes everything else.\n\nContinue?", baseDir)).
+		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]%s[white]\nbut deletes everything else.\n\nContinue?", baseDir, preservedText)).
 		AddButtons([]string{"Continue", "Cancel"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Continue" {
@@ -83,8 +99,9 @@ func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
 		SetBorderColor(tui.ProxmoxOrange).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	// Run the app - ignore errors from normal app termination
-	_ = confirmNewInstallRunner(app, flex, modal)
+	if err := confirmNewInstallRunner(app, flex, modal); err != nil {
+		return false, err
+	}
 
 	return proceed, nil
 }

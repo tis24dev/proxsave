@@ -631,7 +631,7 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
-	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
+	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
 	fmt.Println()
 

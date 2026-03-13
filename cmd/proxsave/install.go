@@ -22,6 +22,14 @@ import (
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
 
+var (
+	newInstallEnsureInteractiveStdin = ensureInteractiveStdin
+	newInstallConfirmCLI             = confirmNewInstallCLI
+	newInstallConfirmTUI             = wizard.ConfirmNewInstall
+	newInstallRunInstall             = runInstall
+	newInstallRunInstallTUI          = runInstallTUI
+)
+
 func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) (err error) {
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "resolving configuration path")
 	resolvedPath, err := resolveInstallConfigPath(configPath)
@@ -361,25 +369,25 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, useCLI bool) (err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "new-install workflow", "config=%s", configPath)
 	defer func() { done(err) }()
-	resolvedPath, err := resolveInstallConfigPath(configPath)
+
+	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "ensuring interactive stdin")
+	if err := newInstallEnsureInteractiveStdin(); err != nil {
+		return err
+	}
+
+	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "building reset plan")
+	plan, err := buildNewInstallPlan(configPath)
 	if err != nil {
 		return err
 	}
 
-	baseDir := deriveBaseDirFromConfig(resolvedPath)
-
-	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "ensuring interactive stdin")
-	if err := ensureInteractiveStdin(); err != nil {
-		return err
-	}
-
-	buildSig := buildSignature()
-	if strings.TrimSpace(buildSig) == "" {
-		buildSig = "n/a"
-	}
-
 	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "confirming reset")
-	confirm, err := wizard.ConfirmNewInstall(baseDir, buildSig)
+	var confirm bool
+	if useCLI {
+		confirm, err = newInstallConfirmCLI(ctx, bufio.NewReader(os.Stdin), plan)
+	} else {
+		confirm, err = newInstallConfirmTUI(plan.BaseDir, plan.BuildSignature, plan.PreservedEntries)
+	}
 	if err != nil {
 		return wrapInstallError(err)
 	}
@@ -387,16 +395,18 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return wrapInstallError(errInteractiveAborted)
 	}
 
-	bootstrap.Info("Resetting %s (preserving env/ and identity/)", baseDir)
+	if bootstrap != nil {
+		bootstrap.Info("Resetting %s (preserving %s)", plan.BaseDir, formatNewInstallPreservedEntries(plan.PreservedEntries))
+	}
 	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "resetting base dir")
-	if err := resetInstallBaseDir(baseDir, bootstrap); err != nil {
+	if err := resetInstallBaseDir(plan.BaseDir, bootstrap); err != nil {
 		return err
 	}
 
 	if useCLI {
-		return runInstall(ctx, resolvedPath, bootstrap)
+		return newInstallRunInstall(ctx, plan.ResolvedConfigPath, bootstrap)
 	}
-	return runInstallTUI(ctx, resolvedPath, bootstrap)
+	return newInstallRunInstallTUI(ctx, plan.ResolvedConfigPath, bootstrap)
 }
 
 func printInstallFooter(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
@@ -472,7 +482,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
-	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
+	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
@@ -655,11 +665,7 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) (er
 		return fmt.Errorf("failed to list base directory %s: %w", baseDir, err)
 	}
 
-	preserve := map[string]struct{}{
-		"env":      {},
-		"identity": {},
-		"build":    {},
-	}
+	preserve := newInstallPreserveSet()
 
 	for _, entry := range entries {
 		name := entry.Name()
