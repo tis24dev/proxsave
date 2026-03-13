@@ -126,6 +126,40 @@ func TestApplyInstallDataAllowsEmptySecondaryLogPath(t *testing.T) {
 	}
 }
 
+func TestApplyInstallDataDisabledSecondaryClearsExistingValues(t *testing.T) {
+	baseTemplate := strings.Join([]string{
+		"SECONDARY_ENABLED=true",
+		"SECONDARY_PATH=/mnt/old-secondary",
+		"SECONDARY_LOG_PATH=/mnt/old-secondary/logs",
+		"TELEGRAM_ENABLED=false",
+		"EMAIL_ENABLED=false",
+		"ENCRYPT_ARCHIVE=false",
+		"",
+	}, "\n")
+	data := &InstallWizardData{
+		BaseDir:                "/tmp/base",
+		EnableSecondaryStorage: false,
+	}
+
+	result, err := ApplyInstallData(baseTemplate, data)
+	if err != nil {
+		t.Fatalf("ApplyInstallData returned error: %v", err)
+	}
+
+	for _, needle := range []string{
+		"SECONDARY_ENABLED=false",
+		"SECONDARY_PATH=",
+		"SECONDARY_LOG_PATH=",
+	} {
+		if !strings.Contains(result, needle) {
+			t.Fatalf("expected %q in result:\n%s", needle, result)
+		}
+	}
+	if strings.Contains(result, "/mnt/old-secondary") {
+		t.Fatalf("expected old secondary values to be cleared:\n%s", result)
+	}
+}
+
 func TestApplyInstallDataRejectsInvalidSecondaryPath(t *testing.T) {
 	data := &InstallWizardData{
 		BaseDir:                "/tmp/base",

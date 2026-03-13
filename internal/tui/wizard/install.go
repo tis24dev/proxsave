@@ -498,13 +498,12 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	template = unsetEnvValue(template, "CRON_MINUTE")
 
 	// Apply secondary storage
-	if data.EnableSecondaryStorage {
-		template = setEnvValue(template, "SECONDARY_ENABLED", "true")
-		template = setEnvValue(template, "SECONDARY_PATH", strings.TrimSpace(data.SecondaryPath))
-		template = setEnvValue(template, "SECONDARY_LOG_PATH", strings.TrimSpace(data.SecondaryLogPath))
-	} else {
-		template = setEnvValue(template, "SECONDARY_ENABLED", "false")
-	}
+	template = config.ApplySecondaryStorageSettings(
+		template,
+		data.EnableSecondaryStorage,
+		data.SecondaryPath,
+		data.SecondaryLogPath,
+	)
 
 	// Apply cloud storage
 	if data.EnableCloudStorage {

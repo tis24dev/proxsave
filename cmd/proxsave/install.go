@@ -637,13 +637,9 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 			}
 			break
 		}
-		template = setEnvValue(template, "SECONDARY_ENABLED", "true")
-		template = setEnvValue(template, "SECONDARY_PATH", secondaryPath)
-		template = setEnvValue(template, "SECONDARY_LOG_PATH", secondaryLog)
+		template = config.ApplySecondaryStorageSettings(template, true, secondaryPath, secondaryLog)
 	} else {
-		template = setEnvValue(template, "SECONDARY_ENABLED", "false")
-		template = setEnvValue(template, "SECONDARY_PATH", "")
-		template = setEnvValue(template, "SECONDARY_LOG_PATH", "")
+		template = config.ApplySecondaryStorageSettings(template, false, "", "")
 	}
 	return template, nil
 }

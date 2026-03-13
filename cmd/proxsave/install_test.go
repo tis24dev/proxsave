@@ -372,6 +372,38 @@ func TestConfigureSecondaryStorageDisabled(t *testing.T) {
 	if !strings.Contains(result, "SECONDARY_ENABLED=false") {
 		t.Fatalf("expected disabled flag in template: %q", result)
 	}
+	if !strings.Contains(result, "SECONDARY_PATH=") {
+		t.Fatalf("expected cleared secondary path in template: %q", result)
+	}
+	if !strings.Contains(result, "SECONDARY_LOG_PATH=") {
+		t.Fatalf("expected cleared secondary log path in template: %q", result)
+	}
+}
+
+func TestConfigureSecondaryStorageDisabledClearsExistingValues(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("n\n"))
+	template := "SECONDARY_ENABLED=true\nSECONDARY_PATH=/mnt/old-secondary\nSECONDARY_LOG_PATH=/mnt/old-secondary/logs\n"
+	captureStdout(t, func() {
+		result, err = configureSecondaryStorage(ctx, reader, template)
+	})
+	if err != nil {
+		t.Fatalf("configureSecondaryStorage error: %v", err)
+	}
+	for _, needle := range []string{
+		"SECONDARY_ENABLED=false",
+		"SECONDARY_PATH=",
+		"SECONDARY_LOG_PATH=",
+	} {
+		if !strings.Contains(result, needle) {
+			t.Fatalf("expected %q in template: %q", needle, result)
+		}
+	}
+	if strings.Contains(result, "/mnt/old-secondary") {
+		t.Fatalf("expected old secondary values to be cleared: %q", result)
+	}
 }
 
 func TestConfigureCloudStorageEnabled(t *testing.T) {
