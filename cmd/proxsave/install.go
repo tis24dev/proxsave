@@ -25,6 +25,7 @@ var (
 	newInstallConfirmTUI             = wizard.ConfirmNewInstall
 	newInstallRunInstall             = runInstall
 	newInstallRunInstallTUI          = runInstallTUI
+	configureCronTimeFunc            = configureCronTime
 )
 
 type installConfigResult struct {
@@ -484,7 +485,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cron time")
-	cronTime, err := configureCronTime(ctx, reader, cronutil.DefaultTime)
+	cronTime, err := configureCronTimeFunc(ctx, reader, cronutil.DefaultTime)
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}

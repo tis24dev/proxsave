@@ -59,7 +59,10 @@ const (
 
 var (
 	// ErrInstallCancelled is returned when the user aborts the install wizard.
-	ErrInstallCancelled       = errors.New("installation aborted by user")
+	ErrInstallCancelled    = errors.New("installation aborted by user")
+	runInstallWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return app.SetRoot(root, true).SetFocus(focus).Run()
+	}
 	checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
 		return app.SetRoot(root, true).SetFocus(focus).Run()
 	}
@@ -451,8 +454,9 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetBorderColor(tui.ProxmoxOrange).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	// Run the app - ignore errors from normal app termination
-	_ = app.SetRoot(flex, true).SetFocus(form.Form).Run()
+	if err := runInstallWizardRunner(app, flex, form.Form); err != nil {
+		return nil, err
+	}
 
 	if data == nil {
 		return nil, ErrInstallCancelled

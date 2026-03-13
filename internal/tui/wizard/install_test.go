@@ -7,8 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
@@ -221,6 +223,37 @@ func TestApplyInstallDataCronAndNotifications(t *testing.T) {
 		t.Fatalf("expected CRON_* keys to be removed from backup.env, got:\n%s", result)
 	}
 	assertContains("ENCRYPT_ARCHIVE", "false")
+}
+
+func TestRunInstallWizardBlankCronIgnoresEnvOverride(t *testing.T) {
+	t.Setenv("CRON_SCHEDULE", "5 1 * * *")
+
+	originalRunner := runInstallWizardRunner
+	t.Cleanup(func() { runInstallWizardRunner = originalRunner })
+
+	runInstallWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		form, ok := focus.(*tview.Form)
+		if !ok {
+			t.Fatalf("focus primitive = %T, want *tview.Form", focus)
+		}
+		button := form.GetButton(0)
+		if button == nil {
+			t.Fatal("expected install button")
+		}
+		button.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), nil)
+		return nil
+	}
+
+	data, err := RunInstallWizard(t.Context(), "/tmp/proxsave/backup.env", "/opt/proxsave", "sig", "")
+	if err != nil {
+		t.Fatalf("RunInstallWizard returned error: %v", err)
+	}
+	if data == nil {
+		t.Fatal("expected wizard data")
+	}
+	if data.CronTime != cronutil.DefaultTime {
+		t.Fatalf("CronTime = %q, want %q", data.CronTime, cronutil.DefaultTime)
+	}
 }
 
 func TestCheckExistingConfigActions(t *testing.T) {

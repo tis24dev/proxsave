@@ -629,6 +629,31 @@ func TestRunConfigWizardCLISkipLeavesCronScheduleEmpty(t *testing.T) {
 	}
 }
 
+func TestRunConfigWizardCLIAbortAtCronPromptDoesNotWriteConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "env", "backup.env")
+	tmpConfigPath := configPath + ".tmp"
+
+	originalConfigureCronTime := configureCronTimeFunc
+	t.Cleanup(func() { configureCronTimeFunc = originalConfigureCronTime })
+
+	configureCronTimeFunc = func(ctx context.Context, reader *bufio.Reader, defaultCron string) (string, error) {
+		return "", errInteractiveAborted
+	}
+
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n"))
+
+	_, err := runConfigWizardCLI(context.Background(), reader, configPath, tmpConfigPath, "/opt/proxsave", nil)
+	if !errors.Is(err, errInteractiveAborted) {
+		t.Fatalf("expected errInteractiveAborted, got %v", err)
+	}
+	if _, statErr := os.Stat(configPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected config file not to exist, got err=%v", statErr)
+	}
+	if _, statErr := os.Stat(tmpConfigPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected temp config file not to exist, got err=%v", statErr)
+	}
+}
+
 func createTempFile(t *testing.T, content string) string {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "config-*.env")
