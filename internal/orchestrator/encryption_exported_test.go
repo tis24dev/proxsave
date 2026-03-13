@@ -249,9 +249,13 @@ func TestRunAgeSetupWizard_ExitReturnsAborted(t *testing.T) {
 
 func TestRunAgeSetupWizard_Option1WritesFile(t *testing.T) {
 	tmp := t.TempDir()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
 	inputFile := filepath.Join(tmp, "stdin.txt")
 	// Option 1 -> recipient -> no more recipients.
-	if err := os.WriteFile(inputFile, []byte("1\nage1alpha\nn\n"), 0o600); err != nil {
+	if err := os.WriteFile(inputFile, []byte("1\n"+id.Recipient().String()+"\nn\n"), 0o600); err != nil {
 		t.Fatalf("write stdin: %v", err)
 	}
 	f, err := os.Open(inputFile)
@@ -272,14 +276,14 @@ func TestRunAgeSetupWizard_Option1WritesFile(t *testing.T) {
 	if savedPath == "" {
 		t.Fatalf("expected saved path")
 	}
-	if len(out) != 1 || out[0] != "age1alpha" {
-		t.Fatalf("out=%v; want %v", out, []string{"age1alpha"})
+	if len(out) != 1 || out[0] != id.Recipient().String() {
+		t.Fatalf("out=%v; want %v", out, []string{id.Recipient().String()})
 	}
 	data, err := os.ReadFile(savedPath)
 	if err != nil {
 		t.Fatalf("read saved: %v", err)
 	}
-	if string(data) != "age1alpha\n" {
-		t.Fatalf("saved content=%q; want %q", string(data), "age1alpha\n")
+	if string(data) != id.Recipient().String()+"\n" {
+		t.Fatalf("saved content=%q; want %q", string(data), id.Recipient().String()+"\n")
 	}
 }

@@ -133,7 +133,7 @@ You can create/update recipients in two ways:
 # Dedicated wizard (TUI by default)
 ./build/proxsave --newkey
 
-# Use CLI prompts instead of TUI (useful for debugging and multi-recipient setups)
+# Use CLI prompts instead of TUI (useful for debugging or when TUI rendering is unavailable)
 ./build/proxsave --newkey --cli
 ```
 
@@ -147,7 +147,7 @@ If `ENCRYPT_ARCHIVE=true` and no recipients are configured, proxsave will start 
 **Notes**:
 - Proxsave stores **only recipients** (public keys) in `${BASE_DIR}/identity/age/recipient.txt`. Keep private keys and passphrases offline.
 - `AGE_RECIPIENT` and `AGE_RECIPIENT_FILE` are **merged and de-duplicated**.
-- The CLI setup supports multiple recipients; otherwise you can add multiple recipients by editing the file (one per line).
+- Both TUI and CLI setup flows support multiple recipients and de-duplicate repeated entries before saving.
 
 ---
 

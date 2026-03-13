@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,9 +15,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
-	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
-	"github.com/tis24dev/proxsave/internal/types"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
 
@@ -866,25 +863,6 @@ func writeConfigFile(configPath, tmpConfigPath, content string) error {
 	}
 	if err := os.Rename(tmpConfigPath, configPath); err != nil {
 		return fmt.Errorf("failed to finalize configuration file: %w", err)
-	}
-	return nil
-}
-
-func runInitialEncryptionSetup(ctx context.Context, configPath string) error {
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to reload configuration after install: %w", err)
-	}
-	logger := logging.New(types.LogLevelError, false)
-	logger.SetOutput(io.Discard)
-	orch := orchestrator.New(logger, false)
-	orch.SetConfig(cfg)
-	if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
-		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
-			// Treat AGE wizard abort as an interactive abort for install UX
-			return fmt.Errorf("encryption setup aborted by user: %w", errInteractiveAborted)
-		}
-		return fmt.Errorf("encryption setup failed: %w", err)
 	}
 	return nil
 }

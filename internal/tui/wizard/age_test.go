@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"filippo.io/age"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"golang.org/x/crypto/ssh"
@@ -82,15 +83,21 @@ func TestValidatePassphrase(t *testing.T) {
 }
 
 func TestValidatePrivateKey(t *testing.T) {
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+
 	cases := []struct {
 		name    string
 		input   string
 		want    string
 		wantErr bool
 	}{
-		{name: "valid", input: " AGE-SECRET-KEY-1abc  ", want: "AGE-SECRET-KEY-1abc"},
+		{name: "valid", input: " " + identity.String() + "  ", want: identity.String()},
 		{name: "empty", input: "", wantErr: true},
 		{name: "wrong prefix", input: "SECRET", wantErr: true},
+		{name: "invalid body", input: "AGE-SECRET-KEY-1invalid", wantErr: true},
 	}
 
 	for _, tc := range cases {
@@ -366,11 +373,16 @@ func TestRunAgeSetupWizardPassphrase(t *testing.T) {
 }
 
 func TestRunAgeSetupWizardPrivateKey(t *testing.T) {
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+
 	data, err := runAgeWizardTest(t, func(form *tview.Form) {
 		drop := form.GetFormItem(0).(*tview.DropDown)
 		drop.SetCurrentOption(2)
 		privateField := form.GetFormItem(4).(*tview.InputField)
-		privateField.SetText("AGE-SECRET-KEY-1valid")
+		privateField.SetText(identity.String())
 		pressFormButton(t, form, "Continue")
 	})
 	if err != nil {
@@ -379,7 +391,7 @@ func TestRunAgeSetupWizardPrivateKey(t *testing.T) {
 	if data.SetupType != "privatekey" {
 		t.Fatalf("unexpected setup type: %s", data.SetupType)
 	}
-	if data.PrivateKey != "AGE-SECRET-KEY-1valid" {
+	if data.PrivateKey != identity.String() {
 		t.Fatalf("expected private key saved, got %q", data.PrivateKey)
 	}
 	if data.Passphrase != "" || data.PublicKey != "" {
@@ -396,6 +408,20 @@ func TestRunAgeSetupWizardCancel(t *testing.T) {
 	}
 	if data != nil {
 		t.Fatalf("expected nil data on cancel")
+	}
+}
+
+func TestRunAgeSetupWizardRunnerError(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	expected := errors.New("boom")
+	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return expected
+	}
+
+	if _, err := RunAgeSetupWizard(context.Background(), "/tmp/recipient.age", "/etc/proxsave/config.env", "sig-test"); !errors.Is(err, expected) {
+		t.Fatalf("err=%v; want %v", err, expected)
 	}
 }
 

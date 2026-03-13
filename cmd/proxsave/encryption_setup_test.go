@@ -1,0 +1,198 @@
+package main
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"filippo.io/age"
+
+	"github.com/tis24dev/proxsave/internal/orchestrator"
+)
+
+type testAgeSetupUI struct {
+	overwrite bool
+	drafts    []*orchestrator.AgeRecipientDraft
+	addMore   []bool
+}
+
+func (u *testAgeSetupUI) ConfirmOverwriteExistingRecipient(ctx context.Context, recipientPath string) (bool, error) {
+	return u.overwrite, nil
+}
+
+func (u *testAgeSetupUI) CollectRecipientDraft(ctx context.Context, recipientPath string) (*orchestrator.AgeRecipientDraft, error) {
+	if len(u.drafts) == 0 {
+		return nil, orchestrator.ErrAgeRecipientSetupAborted
+	}
+	draft := u.drafts[0]
+	u.drafts = u.drafts[1:]
+	return draft, nil
+}
+
+func (u *testAgeSetupUI) ConfirmAddAnotherRecipient(ctx context.Context, currentCount int) (bool, error) {
+	if len(u.addMore) == 0 {
+		return false, nil
+	}
+	next := u.addMore[0]
+	u.addMore = u.addMore[1:]
+	return next, nil
+}
+
+func TestRunInitialEncryptionSetupWithUIReloadsConfig(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+
+	baseDir := t.TempDir()
+	configPath := filepath.Join(baseDir, "env", "backup.env")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	content := "BASE_DIR=" + baseDir + "\nENCRYPT_ARCHIVE=true\nAGE_RECIPIENT=" + id.Recipient().String() + "\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := runInitialEncryptionSetupWithUI(context.Background(), configPath, nil)
+	if err != nil {
+		t.Fatalf("runInitialEncryptionSetupWithUI error: %v", err)
+	}
+	if result == nil || result.Config == nil {
+		t.Fatalf("expected config result")
+	}
+	if len(result.Config.AgeRecipients) != 1 || result.Config.AgeRecipients[0] != id.Recipient().String() {
+		t.Fatalf("AgeRecipients=%v; want [%s]", result.Config.AgeRecipients, id.Recipient().String())
+	}
+	if !result.ReusedExistingRecipients {
+		t.Fatalf("expected ReusedExistingRecipients=true")
+	}
+	if result.WroteRecipientFile {
+		t.Fatalf("expected WroteRecipientFile=false")
+	}
+	if result.RecipientPath != "" {
+		t.Fatalf("RecipientPath=%q; want empty for reuse-only result", result.RecipientPath)
+	}
+}
+
+func TestRunInitialEncryptionSetupWithUIUsesProvidedUI(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+
+	baseDir := t.TempDir()
+	configPath := filepath.Join(baseDir, "env", "backup.env")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	content := "BASE_DIR=" + baseDir + "\nENCRYPT_ARCHIVE=true\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ui := &testAgeSetupUI{
+		drafts: []*orchestrator.AgeRecipientDraft{
+			{Kind: orchestrator.AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
+		},
+		addMore: []bool{false},
+	}
+
+	result, err := runInitialEncryptionSetupWithUI(context.Background(), configPath, ui)
+	if err != nil {
+		t.Fatalf("runInitialEncryptionSetupWithUI error: %v", err)
+	}
+
+	expectedPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
+	if result == nil || result.Config == nil {
+		t.Fatalf("expected setup result with config")
+	}
+	if result.RecipientPath != expectedPath {
+		t.Fatalf("RecipientPath=%q; want %q", result.RecipientPath, expectedPath)
+	}
+	if !result.WroteRecipientFile {
+		t.Fatalf("expected WroteRecipientFile=true")
+	}
+	if result.ReusedExistingRecipients {
+		t.Fatalf("expected ReusedExistingRecipients=false")
+	}
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("expected recipient file at %s: %v", expectedPath, err)
+	}
+}
+
+func TestRunInitialEncryptionSetupWithUIReusesExistingFileWithoutReportingWrite(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+
+	baseDir := t.TempDir()
+	recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
+	if err := os.MkdirAll(filepath.Dir(recipientPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(recipientPath, []byte(id.Recipient().String()+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", recipientPath, err)
+	}
+
+	configPath := filepath.Join(baseDir, "env", "backup.env")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(configPath), err)
+	}
+	content := "BASE_DIR=" + baseDir + "\nENCRYPT_ARCHIVE=true\nAGE_RECIPIENT_FILE=" + recipientPath + "\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", configPath, err)
+	}
+
+	result, err := runInitialEncryptionSetupWithUI(context.Background(), configPath, nil)
+	if err != nil {
+		t.Fatalf("runInitialEncryptionSetupWithUI error: %v", err)
+	}
+
+	if result == nil || result.Config == nil {
+		t.Fatalf("expected setup result with config")
+	}
+	if !result.ReusedExistingRecipients {
+		t.Fatalf("expected ReusedExistingRecipients=true")
+	}
+	if result.WroteRecipientFile {
+		t.Fatalf("expected WroteRecipientFile=false")
+	}
+	if result.RecipientPath != "" {
+		t.Fatalf("RecipientPath=%q; want empty for reuse-only result", result.RecipientPath)
+	}
+}
+
+func TestRunNewKeySetupKeepsDefaultRecipientPathContract(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+
+	baseDir := t.TempDir()
+	configPath := filepath.Join(baseDir, "env", "backup.env")
+	ui := &testAgeSetupUI{
+		overwrite: true,
+		drafts: []*orchestrator.AgeRecipientDraft{
+			{Kind: orchestrator.AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
+		},
+		addMore: []bool{false},
+	}
+
+	if err := runNewKeySetup(context.Background(), configPath, baseDir, nil, ui); err != nil {
+		t.Fatalf("runNewKeySetup error: %v", err)
+	}
+
+	target := filepath.Join(baseDir, "identity", "age", "recipient.txt")
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", target, err)
+	}
+	if got := string(content); got != id.Recipient().String()+"\n" {
+		t.Fatalf("content=%q; want %q", got, id.Recipient().String()+"\n")
+	}
+}

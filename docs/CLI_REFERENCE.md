@@ -350,7 +350,7 @@ Next step: ./build/proxsave --dry-run
 # TUI mode (default) - terminal interface
 ./build/proxsave --newkey
 
-# CLI mode - text prompts (for debugging)
+# CLI mode - text prompts (for debugging or when TUI rendering is unavailable)
 ./build/proxsave --newkey --cli
 ```
 
@@ -364,7 +364,7 @@ Next step: ./build/proxsave --dry-run
    - **Private key-derived**: paste an `AGE-SECRET-KEY-...` key (not stored; proxsave stores only the derived public recipient)
 3. Writes/overwrites the recipient file after confirmation
 
-**Note**: In `--cli` mode (text prompts), you can add multiple recipients. The default TUI flow saves a single recipient; you can always add more by editing the recipient file (one per line).
+**Note**: Both CLI and TUI `--newkey` flows support adding multiple recipients and de-duplicate repeated entries before saving.
 
 **For complete encryption guide**, see: **[Encryption Guide](ENCRYPTION.md)**
 

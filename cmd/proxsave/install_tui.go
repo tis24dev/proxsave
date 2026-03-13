@@ -5,14 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
-
-	"filippo.io/age"
 
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
 )
 
@@ -139,46 +135,18 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		if bootstrap != nil {
 			bootstrap.Info("Running initial encryption setup (AGE recipients)")
 		}
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "running AGE setup wizard")
-		recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
-		ageData, err := wizard.RunAgeSetupWizard(ctx, recipientPath, configPath, buildSig)
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "running AGE setup via orchestrator")
+		setupResult, err := runInitialEncryptionSetupWithUI(ctx, configPath, wizard.NewAgeSetupUI(configPath, buildSig))
 		if err != nil {
-			if errors.Is(err, wizard.ErrAgeSetupCancelled) {
-				return fmt.Errorf("encryption setup aborted by user: %w", errInteractiveAborted)
-			} else {
-				return fmt.Errorf("AGE setup failed: %w", err)
-			}
-		}
-
-		// Process the AGE data based on setup type
-		var recipientKey string
-		switch ageData.SetupType {
-		case "existing":
-			recipientKey = ageData.PublicKey
-		case "passphrase":
-			// Derive recipient from passphrase
-			recipient, err := deriveRecipientFromPassphrase(ageData.Passphrase)
-			if err != nil {
-				return fmt.Errorf("failed to derive recipient from passphrase: %w", err)
-			}
-			recipientKey = recipient
-		case "privatekey":
-			// Derive recipient from private key
-			recipient, err := deriveRecipientFromPrivateKey(ageData.PrivateKey)
-			if err != nil {
-				return fmt.Errorf("failed to derive recipient from private key: %w", err)
-			}
-			recipientKey = recipient
-		}
-
-		// Save the recipient
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "saving AGE recipient")
-		if err := wizard.SaveAgeRecipient(recipientPath, recipientKey); err != nil {
-			return fmt.Errorf("failed to save AGE recipient: %w", err)
+			return err
 		}
 
 		bootstrap.Info("AGE encryption configured successfully")
-		bootstrap.Info("Recipient saved to: %s", recipientPath)
+		if setupResult.WroteRecipientFile && setupResult.RecipientPath != "" {
+			bootstrap.Info("Recipient saved to: %s", setupResult.RecipientPath)
+		} else if setupResult.ReusedExistingRecipients {
+			bootstrap.Info("Using existing AGE recipient configuration")
+		}
 		bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
 	}
 
@@ -279,24 +247,4 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "permissions status=%s", permStatus)
 
 	return nil
-}
-
-// deriveRecipientFromPassphrase derives a deterministic AGE recipient from a passphrase
-func deriveRecipientFromPassphrase(passphrase string) (string, error) {
-	return orchestrator.DeriveDeterministicRecipientFromPassphrase(passphrase)
-}
-
-// deriveRecipientFromPrivateKey derives the recipient (public key) from an AGE private key
-func deriveRecipientFromPrivateKey(privateKey string) (string, error) {
-	privateKey = strings.TrimSpace(privateKey)
-	if privateKey == "" {
-		return "", fmt.Errorf("private key cannot be empty")
-	}
-
-	identity, err := age.ParseX25519Identity(privateKey)
-	if err != nil {
-		return "", fmt.Errorf("invalid AGE private key: %w", err)
-	}
-
-	return identity.Recipient().String(), nil
 }

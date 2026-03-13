@@ -70,8 +70,8 @@ func validatePrivateKey(value string) (string, error) {
 	if key == "" {
 		return "", fmt.Errorf("private key cannot be empty")
 	}
-	if !strings.HasPrefix(key, "AGE-SECRET-KEY-1") {
-		return "", fmt.Errorf("private key must start with 'AGE-SECRET-KEY-1'")
+	if err := orchestrator.ValidateAgePrivateKeyString(key); err != nil {
+		return "", err
 	}
 	return key, nil
 }
@@ -486,8 +486,9 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 	form.AddSubmitButton("Continue")
 	form.AddCancelButton("Cancel")
 
-	// Run the app - ignore errors from normal app termination
-	_ = ageWizardRunner(app, flex, form.Form)
+	if err := ageWizardRunner(app, flex, form.Form); err != nil {
+		return nil, err
+	}
 
 	if data == nil {
 		return nil, ErrAgeSetupCancelled
