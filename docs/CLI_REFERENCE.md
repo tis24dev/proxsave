@@ -147,7 +147,7 @@ Some interactive commands support two interface modes:
 6. Optionally configures encryption (AGE setup)
 7. (TUI) Optionally selects a cron time (HH:MM) for the `proxsave` cron entry
 8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)
-9. (If Telegram enabled) Shows Server ID and offers pairing verification (retry/skip supported)
+9. (If Telegram centralized mode is enabled and config + Server ID resolve successfully) Shows Server ID and offers pairing verification (retry/skip supported); otherwise install continues and logs why pairing was skipped
 10. Finalizes installation (symlinks, cron migration, permission checks)
 
 **Install log**: The installer writes a session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome).

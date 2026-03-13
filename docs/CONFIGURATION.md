@@ -804,8 +804,8 @@ TELEGRAM_CHAT_ID=                  # Chat ID (your user ID or group ID)
 3. Open Telegram and start `@ProxmoxAN_bot`
 4. Send the Server ID to the bot
 5. Verify pairing:
-   - **TUI installer**: press `Check` (retry supported). `Continue` appears only after success; use `Skip` (or `ESC`) to proceed without verification.
-   - **CLI installer**: opt into the check and retry when prompted.
+   - **TUI installer**: the Telegram setup screen is shown only when config loads successfully, centralized mode is active, and a Server ID is available. When shown, press `Check` (retry supported). `Continue` appears only after success; use `Skip` (or `ESC`) to proceed without verification.
+   - **CLI installer**: the same eligibility rules apply, then you can opt into the check and retry when prompted.
    - Normal runs also verify automatically and will skip Telegram if not paired yet.
 
 **Setup personal bot**:

@@ -3,18 +3,14 @@ package wizard
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/tis24dev/proxsave/internal/config"
-	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
@@ -22,20 +18,14 @@ func stubTelegramSetupDeps(t *testing.T) {
 	t.Helper()
 
 	origRunner := telegramSetupWizardRunner
-	origLoadConfig := telegramSetupLoadConfig
-	origReadFile := telegramSetupReadFile
-	origStat := telegramSetupStat
-	origIdentityDetect := telegramSetupIdentityDetect
+	origBuildBootstrap := telegramSetupBuildBootstrap
 	origCheckRegistration := telegramSetupCheckRegistration
 	origQueueUpdateDraw := telegramSetupQueueUpdateDraw
 	origGo := telegramSetupGo
 
 	t.Cleanup(func() {
 		telegramSetupWizardRunner = origRunner
-		telegramSetupLoadConfig = origLoadConfig
-		telegramSetupReadFile = origReadFile
-		telegramSetupStat = origStat
-		telegramSetupIdentityDetect = origIdentityDetect
+		telegramSetupBuildBootstrap = origBuildBootstrap
 		telegramSetupCheckRegistration = origCheckRegistration
 		telegramSetupQueueUpdateDraw = origQueueUpdateDraw
 		telegramSetupGo = origGo
@@ -45,15 +35,28 @@ func stubTelegramSetupDeps(t *testing.T) {
 	telegramSetupQueueUpdateDraw = func(app *tui.App, f func()) { f() }
 }
 
+func eligibleTelegramSetupBootstrap() orchestrator.TelegramSetupBootstrap {
+	return orchestrator.TelegramSetupBootstrap{
+		Eligibility:       orchestrator.TelegramSetupEligibleCentralized,
+		ConfigLoaded:      true,
+		TelegramEnabled:   true,
+		TelegramMode:      "centralized",
+		ServerAPIHost:     "https://api.example.test",
+		ServerID:          "123456789",
+		IdentityFile:      "/tmp/.server_identity",
+		IdentityPersisted: false,
+	}
+}
+
 func TestRunTelegramSetupWizard_DisabledSkipsUIAndRunnerNotCalled(t *testing.T) {
 	stubTelegramSetupDeps(t)
 
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return &config.Config{TelegramEnabled: false}, nil
-	}
-	telegramSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
-		t.Fatalf("identity detect should not be called when telegram is disabled")
-		return nil, nil
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility:     orchestrator.TelegramSetupSkipDisabled,
+			ConfigLoaded:    true,
+			TelegramEnabled: false,
+		}, nil
 	}
 	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
 		t.Fatalf("runner should not be called when telegram is disabled")
@@ -75,17 +78,17 @@ func TestRunTelegramSetupWizard_DisabledSkipsUIAndRunnerNotCalled(t *testing.T) 
 	}
 }
 
-func TestRunTelegramSetupWizard_ConfigLoadAndReadFailSkipsUI(t *testing.T) {
+func TestRunTelegramSetupWizard_ConfigErrorSkipsUI(t *testing.T) {
 	stubTelegramSetupDeps(t)
 
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return nil, errors.New("parse failed")
-	}
-	telegramSetupReadFile = func(path string) ([]byte, error) {
-		return nil, errors.New("read failed")
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility: orchestrator.TelegramSetupSkipConfigError,
+			ConfigError: "parse failed",
+		}, nil
 	}
 	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		t.Fatalf("runner should not be called when env cannot be read")
+		t.Fatalf("runner should not be called when config bootstrap failed")
 		return nil
 	}
 
@@ -104,33 +107,20 @@ func TestRunTelegramSetupWizard_ConfigLoadAndReadFailSkipsUI(t *testing.T) {
 	}
 }
 
-func TestRunTelegramSetupWizard_FallbackPersonalMode_Continue(t *testing.T) {
+func TestRunTelegramSetupWizard_PersonalModeSkipsUI(t *testing.T) {
 	stubTelegramSetupDeps(t)
 
-	identityFile := filepath.Join(t.TempDir(), ".server_identity")
-	if err := os.WriteFile(identityFile, []byte("id"), 0o600); err != nil {
-		t.Fatalf("write identity file: %v", err)
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility:     orchestrator.TelegramSetupSkipPersonalMode,
+			ConfigLoaded:    true,
+			TelegramEnabled: true,
+			TelegramMode:    "personal",
+			ServerAPIHost:   "https://bot.tis24.it:1443",
+		}, nil
 	}
-
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return nil, errors.New(strings.Repeat("x", 250))
-	}
-	telegramSetupReadFile = func(path string) ([]byte, error) {
-		return []byte("TELEGRAM_ENABLED=true\nBOT_TELEGRAM_TYPE=Personal\n"), nil
-	}
-	telegramSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
-		return &identity.Info{ServerID: " 123 ", IdentityFile: " " + identityFile + " "}, nil
-	}
-	telegramSetupStat = os.Stat
 	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		form := focus.(*tview.Form)
-		if form.GetButtonIndex("Check") != -1 {
-			t.Fatalf("expected no Check button in personal mode")
-		}
-		if form.GetButtonIndex("Continue") == -1 {
-			t.Fatalf("expected Continue button in personal mode")
-		}
-		pressFormButton(t, form, "Continue")
+		t.Fatalf("runner should not be called in personal mode")
 		return nil
 	}
 
@@ -138,56 +128,57 @@ func TestRunTelegramSetupWizard_FallbackPersonalMode_Continue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunTelegramSetupWizard error: %v", err)
 	}
-	if !result.Shown {
-		t.Fatalf("expected wizard to be shown")
-	}
-	if result.ConfigLoaded {
-		t.Fatalf("expected ConfigLoaded=false for fallback mode")
-	}
-	if result.ConfigError == "" {
-		t.Fatalf("expected ConfigError to be set")
-	}
-	if !result.TelegramEnabled {
-		t.Fatalf("expected TelegramEnabled=true")
+	if result.Shown {
+		t.Fatalf("expected wizard to not be shown")
 	}
 	if result.TelegramMode != "personal" {
 		t.Fatalf("TelegramMode=%q, want personal", result.TelegramMode)
 	}
-	if result.ServerAPIHost != "https://bot.tis24.it:1443" {
-		t.Fatalf("ServerAPIHost=%q, want default", result.ServerAPIHost)
+	if !result.TelegramEnabled {
+		t.Fatalf("expected TelegramEnabled=true")
 	}
-	if result.ServerID != "123" {
-		t.Fatalf("ServerID=%q, want 123", result.ServerID)
+}
+
+func TestRunTelegramSetupWizard_IdentityUnavailableSkipsUI(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility:         orchestrator.TelegramSetupSkipIdentityUnavailable,
+			ConfigLoaded:        true,
+			TelegramEnabled:     true,
+			TelegramMode:        "centralized",
+			ServerAPIHost:       "https://api.example.test",
+			IdentityDetectError: "detect failed",
+		}, nil
 	}
-	if !result.IdentityPersisted {
-		t.Fatalf("expected IdentityPersisted=true")
+	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		t.Fatalf("runner should not be called when server ID is unavailable")
+		return nil
 	}
-	if result.Verified {
-		t.Fatalf("expected Verified=false")
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
 	}
-	if result.SkippedVerification {
-		t.Fatalf("expected SkippedVerification=false")
+	if result.Shown {
+		t.Fatalf("expected wizard to not be shown")
 	}
-	if result.CheckAttempts != 0 {
-		t.Fatalf("CheckAttempts=%d, want 0", result.CheckAttempts)
+	if result.IdentityDetectError == "" {
+		t.Fatalf("expected IdentityDetectError to be set")
+	}
+	if result.ServerID != "" {
+		t.Fatalf("ServerID=%q, want empty", result.ServerID)
 	}
 }
 
 func TestRunTelegramSetupWizard_CentralizedSuccess_RequiresCheckBeforeContinue(t *testing.T) {
 	stubTelegramSetupDeps(t)
 
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       "   ",
-			TelegramServerAPIHost: " https://api.example.test ",
-		}, nil
-	}
-	telegramSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
-		return &identity.Info{ServerID: " 987654321 ", IdentityFile: " /missing "}, nil
-	}
-	telegramSetupStat = func(path string) (os.FileInfo, error) {
-		return nil, os.ErrNotExist
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		state := eligibleTelegramSetupBootstrap()
+		state.ServerID = "987654321"
+		return state, nil
 	}
 	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
 		if serverAPIHost != "https://api.example.test" {
@@ -259,25 +250,21 @@ func TestRunTelegramSetupWizard_CentralizedFailure_CanRetryAndSkip(t *testing.T)
 	stubTelegramSetupDeps(t)
 
 	var calls int
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       "centralized",
-			TelegramServerAPIHost: "https://api.example.test",
-		}, nil
-	}
-	telegramSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
-		return &identity.Info{ServerID: "111222333"}, nil
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		state := eligibleTelegramSetupBootstrap()
+		state.ServerID = "111222333"
+		return state, nil
 	}
 	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
 		calls++
-		if calls == 1 {
+		switch calls {
+		case 1:
 			return notify.TelegramRegistrationStatus{Code: 403, Error: errors.New("not registered")}
-		}
-		if calls == 2 {
+		case 2:
 			return notify.TelegramRegistrationStatus{Code: 422, Message: "invalid"}
+		default:
+			return notify.TelegramRegistrationStatus{Code: 500, Message: "oops"}
 		}
-		return notify.TelegramRegistrationStatus{Code: 500, Message: "oops"}
 	}
 	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
 		form := focus.(*tview.Form)
@@ -315,106 +302,11 @@ func TestRunTelegramSetupWizard_CentralizedFailure_CanRetryAndSkip(t *testing.T)
 	}
 }
 
-func TestRunTelegramSetupWizard_CentralizedMissingServerID_ExitsOnEscWithoutSkipping(t *testing.T) {
-	stubTelegramSetupDeps(t)
-
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       "centralized",
-			TelegramServerAPIHost: "https://api.example.test",
-		}, nil
-	}
-	telegramSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
-		return nil, errors.New("detect failed")
-	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		form := focus.(*tview.Form)
-		if form.GetButtonIndex("Check") != -1 {
-			t.Fatalf("expected no Check button without Server ID")
-		}
-		if form.GetButtonIndex("Skip") != -1 {
-			t.Fatalf("expected no Skip button without Server ID")
-		}
-		if form.GetButtonIndex("Continue") == -1 {
-			t.Fatalf("expected Continue button without Server ID")
-		}
-
-		capture := app.GetInputCapture()
-		if capture == nil {
-			t.Fatalf("expected input capture to be set")
-		}
-		capture(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone))
-		return nil
-	}
-
-	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
-	if err != nil {
-		t.Fatalf("RunTelegramSetupWizard error: %v", err)
-	}
-	if result.SkippedVerification {
-		t.Fatalf("expected SkippedVerification=false")
-	}
-	if result.Verified {
-		t.Fatalf("expected Verified=false")
-	}
-	if result.CheckAttempts != 0 {
-		t.Fatalf("CheckAttempts=%d, want 0", result.CheckAttempts)
-	}
-	if result.ServerID != "" {
-		t.Fatalf("ServerID=%q, want empty", result.ServerID)
-	}
-	if result.IdentityDetectError == "" {
-		t.Fatalf("expected IdentityDetectError to be set")
-	}
-}
-
-func TestRunTelegramSetupWizard_CentralizedMissingServerID_CanContinueButton(t *testing.T) {
-	stubTelegramSetupDeps(t)
-
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       "centralized",
-			TelegramServerAPIHost: "https://api.example.test",
-		}, nil
-	}
-	telegramSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
-		return &identity.Info{ServerID: ""}, nil
-	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		form := focus.(*tview.Form)
-		pressFormButton(t, form, "Continue")
-		return nil
-	}
-
-	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
-	if err != nil {
-		t.Fatalf("RunTelegramSetupWizard error: %v", err)
-	}
-	if result.SkippedVerification {
-		t.Fatalf("expected SkippedVerification=false")
-	}
-	if result.Verified {
-		t.Fatalf("expected Verified=false")
-	}
-	if result.CheckAttempts != 0 {
-		t.Fatalf("CheckAttempts=%d, want 0", result.CheckAttempts)
-	}
-}
-
 func TestRunTelegramSetupWizard_CentralizedEscSkipsWhenNotVerified(t *testing.T) {
 	stubTelegramSetupDeps(t)
 
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       "centralized",
-			TelegramServerAPIHost: "https://api.example.test",
-		}, nil
-	}
-	telegramSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
-		return &identity.Info{ServerID: "123456"}, nil
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return eligibleTelegramSetupBootstrap(), nil
 	}
 	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
 		capture := app.GetInputCapture()
@@ -449,15 +341,8 @@ func TestRunTelegramSetupWizard_CentralizedEscSkipsWhenNotVerified(t *testing.T)
 func TestRunTelegramSetupWizard_PropagatesRunnerError(t *testing.T) {
 	stubTelegramSetupDeps(t)
 
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       "centralized",
-			TelegramServerAPIHost: "https://api.example.test",
-		}, nil
-	}
-	telegramSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
-		return &identity.Info{ServerID: "123456"}, nil
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return eligibleTelegramSetupBootstrap(), nil
 	}
 	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
 		return errors.New("runner failed")
@@ -480,16 +365,10 @@ func TestRunTelegramSetupWizard_CheckIgnoredWhileChecking_AndUpdateSuppressedAft
 
 	telegramSetupGo = func(fn func()) { pending = fn }
 	telegramSetupQueueUpdateDraw = func(app *tui.App, f func()) { f() }
-
-	telegramSetupLoadConfig = func(path string) (*config.Config, error) {
-		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       "centralized",
-			TelegramServerAPIHost: "https://api.example.test",
-		}, nil
-	}
-	telegramSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
-		return &identity.Info{ServerID: "999888777"}, nil
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		state := eligibleTelegramSetupBootstrap()
+		state.ServerID = "999888777"
+		return state, nil
 	}
 	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
 		checkCalls++
@@ -503,10 +382,10 @@ func TestRunTelegramSetupWizard_CheckIgnoredWhileChecking_AndUpdateSuppressedAft
 			t.Fatalf("expected pending check goroutine")
 		}
 
-		pressFormButton(t, form, "Check") // should be ignored while checking=true
-		pressFormButton(t, form, "Skip")  // closes the wizard
+		pressFormButton(t, form, "Check")
+		pressFormButton(t, form, "Skip")
 
-		pending() // simulate late completion after closing
+		pending()
 		return nil
 	}
 

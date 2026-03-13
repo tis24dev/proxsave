@@ -188,16 +188,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		if telegramErr != nil && bootstrap != nil {
 			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)
 		}
+		if bootstrap != nil && telegramErr == nil {
+			logTelegramSetupBootstrapOutcome(bootstrap, telegramRes.TelegramSetupBootstrap)
+		}
 		if bootstrap != nil && telegramRes.Shown {
-			if telegramRes.ConfigError != "" {
-				bootstrap.Warning("Telegram setup: failed to load config (non-blocking): %s", telegramRes.ConfigError)
-			}
-			if telegramRes.IdentityDetectError != "" {
-				bootstrap.Warning("Telegram setup: identity detection issue (non-blocking): %s", telegramRes.IdentityDetectError)
-			}
-			if telegramRes.TelegramMode == "personal" {
-				bootstrap.Info("Telegram setup: personal mode selected (no centralized pairing check)")
-			} else if telegramRes.Verified {
+			if telegramRes.Verified {
 				bootstrap.Info("Telegram setup: verified (code=%d)", telegramRes.LastStatusCode)
 			} else if telegramRes.SkippedVerification {
 				bootstrap.Info("Telegram setup: verification skipped by user")
