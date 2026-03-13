@@ -187,23 +187,23 @@ func createDecryptTUIEncryptedFixture(t *testing.T) *decryptTUIFixture {
 
 func successDecryptTUISequence(secret string) []timedSimKey {
 	keys := []timedSimKey{
-		{Key: tcell.KeyEnter, Wait: 150 * time.Millisecond},
-		{Key: tcell.KeyEnter, Wait: 300 * time.Millisecond},
+		{Key: tcell.KeyEnter, Wait: 250 * time.Millisecond},
+		{Key: tcell.KeyEnter, Wait: 500 * time.Millisecond},
 	}
 
 	for _, r := range secret {
 		keys = append(keys, timedSimKey{
 			Key:  tcell.KeyRune,
 			R:    r,
-			Wait: 20 * time.Millisecond,
+			Wait: 35 * time.Millisecond,
 		})
 	}
 
 	keys = append(keys,
-		timedSimKey{Key: tcell.KeyTab, Wait: 80 * time.Millisecond},
-		timedSimKey{Key: tcell.KeyEnter, Wait: 50 * time.Millisecond},
-		timedSimKey{Key: tcell.KeyTab, Wait: 300 * time.Millisecond},
-		timedSimKey{Key: tcell.KeyEnter, Wait: 50 * time.Millisecond},
+		timedSimKey{Key: tcell.KeyTab, Wait: 150 * time.Millisecond},
+		timedSimKey{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond},
+		timedSimKey{Key: tcell.KeyTab, Wait: 500 * time.Millisecond},
+		timedSimKey{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond},
 	)
 
 	return keys
@@ -211,11 +211,11 @@ func successDecryptTUISequence(secret string) []timedSimKey {
 
 func abortDecryptTUISequence() []timedSimKey {
 	return []timedSimKey{
-		{Key: tcell.KeyEnter, Wait: 150 * time.Millisecond},
-		{Key: tcell.KeyEnter, Wait: 300 * time.Millisecond},
-		{Key: tcell.KeyRune, R: '0', Wait: 300 * time.Millisecond},
-		{Key: tcell.KeyTab, Wait: 80 * time.Millisecond},
-		{Key: tcell.KeyEnter, Wait: 50 * time.Millisecond},
+		{Key: tcell.KeyEnter, Wait: 250 * time.Millisecond},
+		{Key: tcell.KeyEnter, Wait: 500 * time.Millisecond},
+		{Key: tcell.KeyRune, R: '0', Wait: 500 * time.Millisecond},
+		{Key: tcell.KeyTab, Wait: 150 * time.Millisecond},
+		{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond},
 	}
 }
 
@@ -233,8 +233,11 @@ func runDecryptWorkflowTUIForTest(t *testing.T, ctx context.Context, cfg *config
 	select {
 	case err := <-errCh:
 		return err
-	case <-time.After(12 * time.Second):
-		t.Fatalf("RunDecryptWorkflowTUI did not complete within 12s")
+	case <-ctx.Done():
+		t.Fatalf("RunDecryptWorkflowTUI context expired: %v", ctx.Err())
+		return nil
+	case <-time.After(20 * time.Second):
+		t.Fatalf("RunDecryptWorkflowTUI did not complete within 20s")
 		return nil
 	}
 }

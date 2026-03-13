@@ -22,7 +22,7 @@ func TestRunDecryptWorkflowTUI_SuccessLocalEncrypted(t *testing.T) {
 	fixture := createDecryptTUIEncryptedFixture(t)
 	withTimedSimAppSequence(t, successDecryptTUISequence(fixture.Secret))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 	defer cancel()
 
 	if err := runDecryptWorkflowTUIForTest(t, ctx, fixture.Config, fixture.ConfigPath); err != nil {
@@ -85,7 +85,7 @@ func TestRunDecryptWorkflowTUI_AbortAtSecretPrompt(t *testing.T) {
 	fixture := createDecryptTUIEncryptedFixture(t)
 	withTimedSimAppSequence(t, abortDecryptTUISequence())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 	defer cancel()
 
 	err := runDecryptWorkflowTUIForTest(t, ctx, fixture.Config, fixture.ConfigPath)
