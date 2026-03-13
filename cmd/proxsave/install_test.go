@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -526,6 +527,105 @@ func TestConfigureEncryption(t *testing.T) {
 	}
 	if !strings.Contains(template, "ENCRYPT_ARCHIVE=false") {
 		t.Fatalf("expected disabled flag")
+	}
+}
+
+func TestConfigureCronTime(t *testing.T) {
+	t.Run("empty input uses default", func(t *testing.T) {
+		var cronTime string
+		var err error
+		reader := bufio.NewReader(strings.NewReader("\n"))
+		captureStdout(t, func() {
+			cronTime, err = configureCronTime(context.Background(), reader, cronutil.DefaultTime)
+		})
+		if err != nil {
+			t.Fatalf("configureCronTime returned error: %v", err)
+		}
+		if cronTime != cronutil.DefaultTime {
+			t.Fatalf("configureCronTime default = %q, want %q", cronTime, cronutil.DefaultTime)
+		}
+	})
+
+	t.Run("invalid input re-prompts until valid", func(t *testing.T) {
+		var cronTime string
+		var err error
+		reader := bufio.NewReader(strings.NewReader("24:00\n3:7\n"))
+		output := captureStdout(t, func() {
+			cronTime, err = configureCronTime(context.Background(), reader, cronutil.DefaultTime)
+		})
+		if err != nil {
+			t.Fatalf("configureCronTime returned error: %v", err)
+		}
+		if cronTime != "03:07" {
+			t.Fatalf("configureCronTime normalized = %q, want %q", cronTime, "03:07")
+		}
+		if !strings.Contains(output, "cron hour must be between 00 and 23") {
+			t.Fatalf("expected validation error in output, got %q", output)
+		}
+	})
+
+	t.Run("aborted input returns sentinel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		reader := bufio.NewReader(strings.NewReader("03:15\n"))
+		_, err := configureCronTime(ctx, reader, cronutil.DefaultTime)
+		if !errors.Is(err, errInteractiveAborted) {
+			t.Fatalf("expected errInteractiveAborted, got %v", err)
+		}
+	})
+}
+
+func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
+	cfgDir := t.TempDir()
+	configPath := filepath.Join(cfgDir, "env", "backup.env")
+	tmpConfigPath := configPath + ".tmp"
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n03:15\n"))
+
+	var result installConfigResult
+	var err error
+	captureStdout(t, func() {
+		result, err = runConfigWizardCLI(context.Background(), reader, configPath, tmpConfigPath, "/opt/proxsave", nil)
+	})
+	if err != nil {
+		t.Fatalf("runConfigWizardCLI returned error: %v", err)
+	}
+	if result.SkipConfigWizard {
+		t.Fatal("expected SkipConfigWizard=false")
+	}
+	if result.EnableEncryption {
+		t.Fatal("expected EnableEncryption=false")
+	}
+	if result.CronSchedule != "15 03 * * *" {
+		t.Fatalf("CronSchedule = %q, want %q", result.CronSchedule, "15 03 * * *")
+	}
+
+	content, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		t.Fatalf("expected config file to be written: %v", readErr)
+	}
+	if !strings.Contains(string(content), "ENCRYPT_ARCHIVE=false") {
+		t.Fatalf("expected config content to be written, got %q", string(content))
+	}
+}
+
+func TestRunConfigWizardCLISkipLeavesCronScheduleEmpty(t *testing.T) {
+	cfgFile := createTempFile(t, "EXISTING=1\n")
+	tmpConfigPath := cfgFile + ".tmp"
+	reader := bufio.NewReader(strings.NewReader("3\n"))
+
+	var result installConfigResult
+	var err error
+	captureStdout(t, func() {
+		result, err = runConfigWizardCLI(context.Background(), reader, cfgFile, tmpConfigPath, "/opt/proxsave", nil)
+	})
+	if err != nil {
+		t.Fatalf("runConfigWizardCLI returned error: %v", err)
+	}
+	if !result.SkipConfigWizard {
+		t.Fatal("expected SkipConfigWizard=true")
+	}
+	if result.CronSchedule != "" {
+		t.Fatalf("expected empty CronSchedule when skipping wizard, got %q", result.CronSchedule)
 	}
 }
 

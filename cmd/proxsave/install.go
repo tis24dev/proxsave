@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
@@ -25,6 +26,12 @@ var (
 	newInstallRunInstall             = runInstall
 	newInstallRunInstallTUI          = runInstallTUI
 )
+
+type installConfigResult struct {
+	EnableEncryption bool
+	SkipConfigWizard bool
+	CronSchedule     string
+}
 
 func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) (err error) {
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "resolving configuration path")
@@ -78,11 +85,18 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running config wizard")
-	enableEncryption, skipConfigWizard, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
+	configResult, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
 	if err != nil {
 		return err
 	}
-	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "config wizard done (encryption=%v skip=%v)", enableEncryption, skipConfigWizard)
+	logging.DebugStepBootstrap(
+		bootstrap,
+		"install workflow (cli)",
+		"config wizard done (encryption=%v skip=%v cron=%s)",
+		configResult.EnableEncryption,
+		configResult.SkipConfigWizard,
+		configResult.CronSchedule,
+	)
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "installing support docs")
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
@@ -90,12 +104,12 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running encryption setup if needed")
-	if err := runEncryptionSetupIfNeeded(ctx, configPath, enableEncryption, skipConfigWizard, bootstrap); err != nil {
+	if err := runEncryptionSetupIfNeeded(ctx, configPath, configResult.EnableEncryption, configResult.SkipConfigWizard, bootstrap); err != nil {
 		return err
 	}
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors.
-	if !skipConfigWizard {
+	if !configResult.SkipConfigWizard {
 		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "post-install audit")
 		if err := runPostInstallAuditCLI(ctx, reader, execInfo.ExecPath, configPath, bootstrap); err != nil {
 			return err
@@ -110,7 +124,13 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
-	runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap)
+	runPostInstallSymlinksAndCron(
+		ctx,
+		baseDir,
+		execInfo,
+		bootstrap,
+		buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule),
+	)
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "detecting telegram identity")
 	telegramCode = detectTelegramCode(baseDir)
@@ -426,53 +446,65 @@ func handleLegacyInstall(ctx context.Context, reader *bufio.Reader, baseDir stri
 	return nil
 }
 
-func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, tmpConfigPath, baseDir string, bootstrap *logging.BootstrapLogger) (enableEncryption bool, skipConfigWizard bool, err error) {
+func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, tmpConfigPath, baseDir string, bootstrap *logging.BootstrapLogger) (result installConfigResult, err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "install config wizard (cli)", "config=%s", configPath)
 	defer func() { done(err) }()
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "preparing base template")
 	template, skipConfigWizard, err := prepareBaseTemplate(ctx, reader, configPath)
 	if err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 
 	if skipConfigWizard {
-		return false, true, nil
+		return installConfigResult{SkipConfigWizard: true}, nil
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring secondary storage")
 	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cloud storage")
 	if template, err = configureCloudStorage(ctx, reader, template); err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring firewall rules")
 	if template, err = configureFirewallRules(ctx, reader, template); err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring notifications")
 	if template, err = configureNotifications(ctx, reader, template); err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring encryption")
-	enableEncryption, err = configureEncryption(ctx, reader, &template)
+	result.EnableEncryption, err = configureEncryption(ctx, reader, &template)
 	if err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
+	}
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cron time")
+	cronTime, err := configureCronTime(ctx, reader, cronutil.DefaultTime)
+	if err != nil {
+		return installConfigResult{}, wrapInstallError(err)
+	}
+	result.CronSchedule = cronutil.TimeToSchedule(cronTime)
+	result.SkipConfigWizard = false
+
+	if bootstrap != nil {
+		bootstrap.Info("Cron schedule selected: %s", cronTime)
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "writing configuration")
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
-		return false, false, err
+		return installConfigResult{}, err
 	}
 
 	if bootstrap != nil {
 		bootstrap.Info("✓ Configuration saved at %s", configPath)
 	}
 
-	return enableEncryption, false, nil
+	return result, nil
 }
 
 func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEncryption, skipConfigWizard bool, bootstrap *logging.BootstrapLogger) (err error) {
@@ -494,7 +526,7 @@ func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEn
 	return nil
 }
 
-func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) {
+func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule string) {
 	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
 	defer func() { done(nil) }()
 	// Clean up legacy bash-based symlinks that point to the old installer scripts.
@@ -513,7 +545,9 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 
 	// Migrate legacy cron entries pointing to the bash script to the Go binary.
 	// If no cron entry exists at all, create a default one at 02:00 every day.
-	cronSchedule := resolveCronSchedule(nil)
+	if strings.TrimSpace(cronSchedule) == "" {
+		cronSchedule = resolveCronScheduleFromEnv()
+	}
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "migrating cron entries")
 	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 }
@@ -729,6 +763,22 @@ func configureEncryption(ctx context.Context, reader *bufio.Reader, template *st
 		*template = setEnvValue(*template, "ENCRYPT_ARCHIVE", "false")
 	}
 	return enableEncryption, nil
+}
+
+func configureCronTime(ctx context.Context, reader *bufio.Reader, defaultCron string) (string, error) {
+	fmt.Println("\n--- Schedule ---")
+	for {
+		cronTime, err := promptOptional(ctx, reader, fmt.Sprintf("Cron time for daily proxsave job (HH:MM) [%s]: ", defaultCron))
+		if err != nil {
+			return "", err
+		}
+		normalized, err := cronutil.NormalizeTime(cronTime, defaultCron)
+		if err != nil {
+			fmt.Printf("%v\n", err)
+			continue
+		}
+		return normalized, nil
+	}
 }
 
 func writeConfigFile(configPath, tmpConfigPath, content string) error {

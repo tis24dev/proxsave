@@ -231,7 +231,7 @@ Final install steps still run:
 4. **Firewall rules**: Optional firewall rules collection toggle (`BACKUP_FIREWALL_RULES=false` by default; supports iptables/nftables)
 5. **Notifications**: Enable Telegram (centralized) and Email notifications (wizard defaults to `EMAIL_DELIVERY_METHOD=relay`; you can switch to `sendmail` or `pmf` later)
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
-7. **Cron schedule**: Choose cron time (HH:MM) for the `proxsave` cron entry (TUI mode only)
+7. **Cron schedule**: Choose cron time (HH:MM, default `02:00`) for the `proxsave` cron entry in both CLI and TUI install modes
 8. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
 9. **Telegram pairing (optional)**: If Telegram centralized mode is enabled and the installer can load a valid config plus a Server ID, it shows your Server ID and lets you verify pairing with the bot (retry/skip supported). Otherwise installation continues and logs why pairing was skipped.
 

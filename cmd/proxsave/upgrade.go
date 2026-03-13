@@ -177,7 +177,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 	ensureGoSymlink(execPath, bootstrap)
 
-	cronSchedule := resolveCronSchedule(nil)
+	cronSchedule := resolveCronScheduleFromEnv()
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "migrating cron entries")
 	migrateLegacyCronEntries(ctx, baseDir, execPath, bootstrap, cronSchedule)
 

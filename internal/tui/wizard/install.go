@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/tui"
 	"github.com/tis24dev/proxsave/internal/tui/components"
 	"github.com/tis24dev/proxsave/pkg/utils"
@@ -71,7 +71,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	data := &InstallWizardData{
 		BaseDir:             baseDir,
 		ConfigPath:          configPath,
-		CronTime:            "02:00",
+		CronTime:            cronutil.DefaultTime,
 		EnableEncryption:    false, // Default to disabled
 		BackupFirewallRules: &defaultFirewallRules,
 	}
@@ -365,24 +365,11 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		// Get encryption setting
 		data.EnableEncryption = values["Enable Backup Encryption (AGE)"] == "Yes"
 
-		// Cron time validation (HH:MM)
-		cron := strings.TrimSpace(cronField.GetText())
-		if cron == "" {
-			cron = "02:00"
+		normalizedCron, err := cronutil.NormalizeTime(cronField.GetText(), cronutil.DefaultTime)
+		if err != nil {
+			return err
 		}
-		parts := strings.Split(cron, ":")
-		if len(parts) != 2 {
-			return fmt.Errorf("cron time must be in HH:MM format")
-		}
-		hour, err := strconv.Atoi(parts[0])
-		if err != nil || hour < 0 || hour > 23 {
-			return fmt.Errorf("cron hour must be between 00 and 23")
-		}
-		minute, err := strconv.Atoi(parts[1])
-		if err != nil || minute < 0 || minute > 59 {
-			return fmt.Errorf("cron minute must be between 00 and 59")
-		}
-		data.CronTime = fmt.Sprintf("%02d:%02d", hour, minute)
+		data.CronTime = normalizedCron
 
 		return nil
 	})

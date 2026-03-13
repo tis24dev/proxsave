@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
@@ -219,7 +220,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
 	// Migrate legacy cron entries
-	cronSchedule := resolveCronSchedule(wizardData)
+	wizardCronSchedule := ""
+	if wizardData != nil {
+		wizardCronSchedule = cronutil.TimeToSchedule(wizardData.CronTime)
+	}
+	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule)
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "migrating cron entries")
 	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 
