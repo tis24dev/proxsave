@@ -207,10 +207,21 @@ The installation wizard creates your configuration file interactively:
 ./build/proxsave --new-install
 ```
 
-If the configuration file already exists, the **TUI wizard** will ask whether to:
+If the configuration file already exists, **both TUI and CLI** ask whether to:
 - **Overwrite** (start from the embedded template)
 - **Edit existing** (use the current file as base and pre-fill the wizard fields)
-- **Keep & exit** (leave the file untouched and exit)
+- **Keep existing & continue** (leave the file untouched and skip the configuration wizard)
+- **Cancel** (exit installation)
+
+In **Keep existing & continue** mode, config-dependent post-steps are skipped:
+- AGE setup
+- Post-install check wizard
+- Telegram pairing wizard
+
+Final install steps still run:
+- Support docs installation
+- Symlink and cron finalization
+- Permission normalization
 
 **Wizard prompts:**
 

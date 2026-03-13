@@ -51,9 +51,10 @@ type InstallWizardData struct {
 type ExistingConfigAction int
 
 const (
-	ExistingConfigOverwrite ExistingConfigAction = iota // Start from embedded template (overwrite)
-	ExistingConfigEdit                                  // Keep existing file as base and edit
-	ExistingConfigSkip                                  // Leave the file untouched and skip wizard
+	ExistingConfigOverwrite    ExistingConfigAction = iota // Start from embedded template (overwrite)
+	ExistingConfigEdit                                     // Keep existing file as base and edit
+	ExistingConfigKeepContinue                             // Leave file untouched and continue installation
+	ExistingConfigCancel                                   // Abort installation
 )
 
 var (
@@ -698,7 +699,7 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 	if _, err := os.Stat(configPath); err == nil {
 		// File exists, ask how to proceed
 		app := tui.NewApp()
-		action := ExistingConfigSkip
+		action := ExistingConfigCancel
 
 		// Welcome text (same as main wizard)
 		welcomeText := tview.NewTextView().
@@ -737,16 +738,19 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 				"Choose how to proceed:\n"+
 				"[yellow]Overwrite[white]   - Start from embedded template\n"+
 				"[yellow]Edit existing[white] - Keep current file as base\n"+
-				"[yellow]Keep & exit[white]   - Leave file untouched, exit wizard", configPath)).
-			AddButtons([]string{"Overwrite", "Edit existing", "Keep & exit"}).
+				"[yellow]Keep & continue[white] - Leave file untouched, continue install\n"+
+				"[yellow]Cancel[white]      - Exit installation", configPath)).
+			AddButtons([]string{"Overwrite", "Edit existing", "Keep & continue", "Cancel"}).
 			SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 				switch buttonLabel {
 				case "Overwrite":
 					action = ExistingConfigOverwrite
 				case "Edit existing":
 					action = ExistingConfigEdit
+				case "Keep & continue":
+					action = ExistingConfigKeepContinue
 				default:
-					action = ExistingConfigSkip
+					action = ExistingConfigCancel
 				}
 				app.Stop()
 			})
@@ -774,12 +778,13 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 			SetBorderColor(tui.ProxmoxOrange).
 			SetBackgroundColor(tcell.ColorBlack)
 
-		// Run the modal - ignore errors from normal app termination
-		_ = checkExistingConfigRunner(app, flex, modal)
+		if err := checkExistingConfigRunner(app, flex, modal); err != nil {
+			return ExistingConfigCancel, err
+		}
 
 		return action, nil
 	} else if !os.IsNotExist(err) {
-		return ExistingConfigSkip, err
+		return ExistingConfigCancel, err
 	}
 
 	return ExistingConfigOverwrite, nil // File doesn't exist, proceed

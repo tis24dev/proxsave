@@ -706,22 +706,18 @@ func printInstallBanner(configPath string) {
 }
 
 func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, error) {
-	if info, err := os.Stat(configPath); err == nil {
-		if info.Mode().IsRegular() {
-			overwrite, err := promptYesNo(ctx, reader, fmt.Sprintf("%s already exists. Overwrite? [y/N]: ", configPath), false)
-			if err != nil {
-				return "", false, err
-			}
-			if !overwrite {
-				fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
-				return "", true, nil
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		return "", false, fmt.Errorf("failed to access configuration file: %w", err)
+	decision, err := prepareExistingConfigDecisionCLI(ctx, reader, configPath)
+	if err != nil {
+		return "", false, err
 	}
-
-	return config.DefaultEnvTemplate(), false, nil
+	if decision.AbortInstall {
+		return "", false, errInteractiveAborted
+	}
+	if decision.SkipConfigWizard {
+		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
+		return "", true, nil
+	}
+	return decision.BaseTemplate, false, nil
 }
 
 func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {

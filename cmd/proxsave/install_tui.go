@@ -75,9 +75,12 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	baseTemplate := ""
 
 	switch existingAction {
-	case wizard.ExistingConfigSkip:
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "user skipped configuration")
+	case wizard.ExistingConfigCancel:
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "user cancelled installation")
 		return wrapInstallError(errInteractiveAborted)
+	case wizard.ExistingConfigKeepContinue:
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using existing configuration and skipping wizard")
+		skipConfigWizard = true
 	case wizard.ExistingConfigEdit:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "editing existing configuration")
 		content, readErr := os.ReadFile(configPath)
@@ -181,28 +184,30 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors
 	// based on actionable warning hints like "set BACKUP_*=false to disable".
-	auditRes, auditErr := wizard.RunPostInstallAuditWizard(ctx, execInfo.ExecPath, configPath, buildSig)
-	if bootstrap != nil {
-		if auditErr != nil {
-			bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
-		} else {
-			switch {
-			case !auditRes.Ran:
-				bootstrap.Info("Post-install audit: skipped by user")
-			case auditRes.CollectErr != nil:
-				bootstrap.Warning("Post-install audit failed (non-blocking): %v", auditRes.CollectErr)
-			case len(auditRes.Suggestions) == 0:
-				bootstrap.Info("Post-install audit: no unused components detected")
-			default:
-				keys := make([]string, 0, len(auditRes.Suggestions))
-				for _, s := range auditRes.Suggestions {
-					keys = append(keys, s.Key)
-				}
-				bootstrap.Info("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
-				if len(auditRes.AppliedKeys) > 0 {
-					bootstrap.Info("Post-install audit: disabled (%d): %s", len(auditRes.AppliedKeys), strings.Join(auditRes.AppliedKeys, ", "))
-				} else {
-					bootstrap.Info("Post-install audit: no disables applied")
+	if !skipConfigWizard {
+		auditRes, auditErr := wizard.RunPostInstallAuditWizard(ctx, execInfo.ExecPath, configPath, buildSig)
+		if bootstrap != nil {
+			if auditErr != nil {
+				bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
+			} else {
+				switch {
+				case !auditRes.Ran:
+					bootstrap.Info("Post-install audit: skipped by user")
+				case auditRes.CollectErr != nil:
+					bootstrap.Warning("Post-install audit failed (non-blocking): %v", auditRes.CollectErr)
+				case len(auditRes.Suggestions) == 0:
+					bootstrap.Info("Post-install audit: no unused components detected")
+				default:
+					keys := make([]string, 0, len(auditRes.Suggestions))
+					for _, s := range auditRes.Suggestions {
+						keys = append(keys, s.Key)
+					}
+					bootstrap.Info("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
+					if len(auditRes.AppliedKeys) > 0 {
+						bootstrap.Info("Post-install audit: disabled (%d): %s", len(auditRes.AppliedKeys), strings.Join(auditRes.AppliedKeys, ", "))
+					} else {
+						bootstrap.Info("Post-install audit: no disables applied")
+					}
 				}
 			}
 		}
@@ -210,7 +215,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	// Telegram setup (centralized bot): if enabled during install, guide the user through
 	// pairing and allow an explicit verification step with retry + skip.
-	if wizardData != nil && (wizardData.NotificationMode == "telegram" || wizardData.NotificationMode == "both") {
+	if !skipConfigWizard && wizardData != nil && (wizardData.NotificationMode == "telegram" || wizardData.NotificationMode == "both") {
 		telegramRes, telegramErr := wizard.RunTelegramSetupWizard(ctx, baseDir, configPath, buildSig)
 		if telegramErr != nil && bootstrap != nil {
 			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)

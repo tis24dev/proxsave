@@ -131,8 +131,12 @@ Some interactive commands support two interface modes:
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **Existing configuration**:
-- If the configuration file already exists, the **TUI wizard** prompts you to **Overwrite**, **Edit existing** (uses the current file as base and pre-fills the wizard fields), or **Keep & exit**.
-- In **CLI mode** (`--cli`), you will be prompted to overwrite; choosing "No" keeps the file and skips the configuration wizard.
+- If the configuration file already exists, **both TUI and CLI** now offer the same choices:
+  - **Overwrite** (start from embedded template)
+  - **Edit existing** (use current file as base and pre-fill wizard fields)
+  - **Keep existing & continue** (leave file untouched and skip configuration wizard)
+  - **Cancel** (abort installation)
+- In **Keep existing & continue** mode, config-dependent post-steps are skipped (encryption setup, post-install audit, Telegram pairing), while finalization steps still run (docs install, symlink/cron finalization, permissions normalization).
 
 **Wizard workflow**:
 1. Generates/updates the configuration file (`configs/backup.env` by default)

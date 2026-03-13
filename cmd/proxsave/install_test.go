@@ -215,7 +215,7 @@ func TestResetInstallBaseDirRefusesRoot(t *testing.T) {
 
 func TestPrepareBaseTemplateExistingSkip(t *testing.T) {
 	cfgFile := createTempFile(t, "existing config")
-	reader := bufio.NewReader(strings.NewReader("n\n"))
+	reader := bufio.NewReader(strings.NewReader("3\n"))
 	var tmpl string
 	var skip bool
 	var err error
@@ -235,7 +235,7 @@ func TestPrepareBaseTemplateExistingSkip(t *testing.T) {
 
 func TestPrepareBaseTemplateOverwrite(t *testing.T) {
 	cfgFile := createTempFile(t, "old")
-	reader := bufio.NewReader(strings.NewReader("y\n"))
+	reader := bufio.NewReader(strings.NewReader("1\n"))
 	var tmpl string
 	var skip bool
 	var err error
@@ -250,6 +250,35 @@ func TestPrepareBaseTemplateOverwrite(t *testing.T) {
 	}
 	if tmpl == "" {
 		t.Fatalf("expected template contents")
+	}
+}
+
+func TestPrepareBaseTemplateEditExisting(t *testing.T) {
+	cfgFile := createTempFile(t, "EXISTING=1\n")
+	reader := bufio.NewReader(strings.NewReader("2\n"))
+	var tmpl string
+	var skip bool
+	var err error
+	captureStdout(t, func() {
+		tmpl, skip, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
+	})
+	if err != nil {
+		t.Fatalf("prepareBaseTemplate error: %v", err)
+	}
+	if skip {
+		t.Fatalf("expected skip=false for edit existing")
+	}
+	if !strings.Contains(tmpl, "EXISTING=1") {
+		t.Fatalf("expected existing template content, got %q", tmpl)
+	}
+}
+
+func TestPrepareBaseTemplateCancel(t *testing.T) {
+	cfgFile := createTempFile(t, "EXISTING=1\n")
+	reader := bufio.NewReader(strings.NewReader("0\n"))
+	_, _, err := prepareBaseTemplate(context.Background(), reader, cfgFile)
+	if !errors.Is(err, errInteractiveAborted) {
+		t.Fatalf("expected interactive abort, got %v", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,7 +206,8 @@ func TestCheckExistingConfigActions(t *testing.T) {
 	}{
 		{name: "overwrite", button: "Overwrite", want: ExistingConfigOverwrite},
 		{name: "edit existing", button: "Edit existing", want: ExistingConfigEdit},
-		{name: "keep", button: "Keep & exit", want: ExistingConfigSkip},
+		{name: "keep continue", button: "Keep & continue", want: ExistingConfigKeepContinue},
+		{name: "cancel", button: "Cancel", want: ExistingConfigCancel},
 	}
 
 	for _, tc := range tests {
@@ -245,7 +247,31 @@ func TestCheckExistingConfigPropagatesStatErrors(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for invalid path")
 	}
-	if action != ExistingConfigSkip {
-		t.Fatalf("expected skip action on stat error, got %v", action)
+	if action != ExistingConfigCancel {
+		t.Fatalf("expected cancel action on stat error, got %v", action)
+	}
+}
+
+func TestCheckExistingConfigPropagatesRunnerErrors(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "prox.env")
+	if err := os.WriteFile(configPath, []byte("base"), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	originalRunner := checkExistingConfigRunner
+	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
+
+	expectedErr := errors.New("ui runner failure")
+	checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return expectedErr
+	}
+
+	action, err := CheckExistingConfig(configPath, "sig")
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected runner error %v, got %v", expectedErr, err)
+	}
+	if action != ExistingConfigCancel {
+		t.Fatalf("expected cancel action on runner error, got %v", action)
 	}
 }
