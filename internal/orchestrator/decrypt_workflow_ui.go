@@ -177,6 +177,13 @@ func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPa
 func preparePlainBundleWithUI(ctx context.Context, cand *decryptCandidate, version string, logger *logging.Logger, ui interface {
 	PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error)
 }) (bundle *preparedBundle, err error) {
+	if cand == nil || cand.Manifest == nil {
+		return nil, fmt.Errorf("invalid backup candidate")
+	}
+	if ui == nil {
+		return nil, fmt.Errorf("decrypt workflow UI not available")
+	}
+
 	done := logging.DebugStart(logger, "prepare plain bundle (ui)", "source=%v rclone=%v", cand.Source, cand.IsRclone)
 	defer func() { done(err) }()
 	return preparePlainBundleCommon(ctx, cand, version, logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {

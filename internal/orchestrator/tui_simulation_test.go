@@ -61,12 +61,15 @@ func withSimApp(t *testing.T, keys []tcell.Key) {
 func TestPromptOverwriteAction_SelectsOverwrite(t *testing.T) {
 	withSimApp(t, []tcell.Key{tcell.KeyEnter})
 
-	got, err := promptOverwriteAction("/tmp/existing", "file", "", "/tmp/config.env", "sig")
+	decision, newPath, err := promptExistingPathDecisionTUI("/tmp/existing", "file", "", "/tmp/config.env", "sig")
 	if err != nil {
-		t.Fatalf("promptOverwriteAction error: %v", err)
+		t.Fatalf("promptExistingPathDecisionTUI error: %v", err)
 	}
-	if got != pathActionOverwrite {
-		t.Fatalf("choice=%q; want %q", got, pathActionOverwrite)
+	if decision != PathDecisionOverwrite {
+		t.Fatalf("decision=%v; want %v", decision, PathDecisionOverwrite)
+	}
+	if newPath != "" {
+		t.Fatalf("newPath=%q; want empty", newPath)
 	}
 }
 
@@ -74,9 +77,9 @@ func TestPromptNewPathInput_ContinueReturnsDefault(t *testing.T) {
 	// Move focus to Continue button then submit.
 	withSimApp(t, []tcell.Key{tcell.KeyTab, tcell.KeyEnter})
 
-	got, err := promptNewPathInput("/tmp/newpath", "/tmp/config.env", "sig")
+	got, err := promptNewPathInputTUI("/tmp/newpath", "/tmp/config.env", "sig")
 	if err != nil {
-		t.Fatalf("promptNewPathInput error: %v", err)
+		t.Fatalf("promptNewPathInputTUI error: %v", err)
 	}
 	if got != "/tmp/newpath" {
 		t.Fatalf("path=%q; want %q", got, "/tmp/newpath")
