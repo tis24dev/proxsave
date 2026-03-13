@@ -408,10 +408,10 @@ BACKUP_EXCLUDE_PATTERNS="*/cache/**, /var/tmp/**, *.log"
 # Enable secondary storage
 SECONDARY_ENABLED=false            # true | false
 
-# Secondary backup path
+# Secondary backup path (required when SECONDARY_ENABLED=true)
 SECONDARY_PATH=/mnt/secondary/backup
 
-# Secondary log path
+# Secondary log path (optional)
 SECONDARY_LOG_PATH=/mnt/secondary/log
 ```
 
@@ -421,7 +421,9 @@ Additional local storage for redundant backup copies - mounted NAS, USB drives, 
 
 ### IMPORTANT PATH REQUIREMENTS
 
-- `SECONDARY_PATH` **must be a filesystem-mounted path** (e.g., `/mnt/nas-backup`, `/media/usb-drive`)
+- `SECONDARY_PATH` **must be an absolute local filesystem path** (e.g., `/mnt/nas-backup`, `/media/usb-drive`)
+- `SECONDARY_LOG_PATH`, when set, must follow the **same absolute local path rules**
+- `SECONDARY_LOG_PATH` is optional; when empty, secondary backup copies still run, but secondary log copy/cleanup is disabled
 - `SECONDARY_PATH` **CANNOT** be a network address (e.g., `192.168.0.10/folder`, `//server/share`)
 - Network shares **must be mounted first** using standard Linux mounting (NFS/CIFS/SMB)
 
@@ -443,6 +445,7 @@ sudo mount -t cifs //192.168.0.10/backup /mnt/nas-backup -o credentials=/root/.s
 **2. Then configure SECONDARY_PATH**:
 ```bash
 SECONDARY_PATH=/mnt/nas-backup  # ✓ Correct - uses mounted path
+SECONDARY_LOG_PATH=/mnt/nas-logs  # Optional
 ```
 
 ### What NOT to Do
@@ -460,6 +463,7 @@ SECONDARY_PATH=\\192.168.0.10\backup    # ✗ WRONG - Windows path
 - Secondary storage is **non-critical** (failures log warnings, don't abort backup)
 - Files copied via native Go (no dependency on rclone)
 - Same retention policy as primary storage
+- Invalid configured secondary paths fail fast during configuration loading
 
 ---
 

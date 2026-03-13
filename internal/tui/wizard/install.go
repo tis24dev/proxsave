@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -20,16 +19,16 @@ import (
 )
 
 type installWizardPrefill struct {
-	SecondaryEnabled   bool
-	SecondaryPath      string
-	SecondaryLogPath   string
-	CloudEnabled       bool
-	CloudRemote        string
-	CloudLogPath       string
-	FirewallEnabled    bool
-	TelegramEnabled    bool
-	EmailEnabled       bool
-	EncryptionEnabled  bool
+	SecondaryEnabled  bool
+	SecondaryPath     string
+	SecondaryLogPath  string
+	CloudEnabled      bool
+	CloudRemote       string
+	CloudLogPath      string
+	FirewallEnabled   bool
+	TelegramEnabled   bool
+	EmailEnabled      bool
+	EncryptionEnabled bool
 }
 
 // InstallWizardData holds the collected installation data
@@ -327,15 +326,10 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		// Collect data
 		data.EnableSecondaryStorage = secondaryEnabled
 		if secondaryEnabled {
-			data.SecondaryPath = secondaryPathField.GetText()
-			data.SecondaryLogPath = secondaryLogField.GetText()
-
-			// Validate paths
-			if !filepath.IsAbs(data.SecondaryPath) {
-				return fmt.Errorf("secondary backup path must be absolute")
-			}
-			if !filepath.IsAbs(data.SecondaryLogPath) {
-				return fmt.Errorf("secondary log path must be absolute")
+			data.SecondaryPath = strings.TrimSpace(secondaryPathField.GetText())
+			data.SecondaryLogPath = strings.TrimSpace(secondaryLogField.GetText())
+			if err := validateSecondaryInstallData(data); err != nil {
+				return err
 			}
 		}
 
@@ -491,6 +485,9 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	if strings.TrimSpace(template) == "" {
 		template = config.DefaultEnvTemplate()
 	}
+	if err := validateSecondaryInstallData(data); err != nil {
+		return "", err
+	}
 
 	// BASE_DIR is auto-detected at runtime from the executable/config location.
 	// Keep it out of backup.env to avoid pinning the installation to a specific path.
@@ -502,8 +499,8 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	// Apply secondary storage
 	if data.EnableSecondaryStorage {
 		template = setEnvValue(template, "SECONDARY_ENABLED", "true")
-		template = setEnvValue(template, "SECONDARY_PATH", data.SecondaryPath)
-		template = setEnvValue(template, "SECONDARY_LOG_PATH", data.SecondaryLogPath)
+		template = setEnvValue(template, "SECONDARY_PATH", strings.TrimSpace(data.SecondaryPath))
+		template = setEnvValue(template, "SECONDARY_LOG_PATH", strings.TrimSpace(data.SecondaryLogPath))
 	} else {
 		template = setEnvValue(template, "SECONDARY_ENABLED", "false")
 	}
@@ -560,6 +557,19 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	}
 
 	return template, nil
+}
+
+func validateSecondaryInstallData(data *InstallWizardData) error {
+	if data == nil || !data.EnableSecondaryStorage {
+		return nil
+	}
+	if err := config.ValidateRequiredSecondaryPath(data.SecondaryPath); err != nil {
+		return err
+	}
+	if err := config.ValidateOptionalSecondaryLogPath(data.SecondaryLogPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 // setEnvValue sets or updates an environment variable in the template

@@ -411,8 +411,55 @@ func TestInputMapInputError(t *testing.T) {
 func TestValidateFutureFeatures_SecondaryWithoutPath(t *testing.T) {
 	cfg := &config.Config{SecondaryEnabled: true}
 
-	if err := validateFutureFeatures(cfg); err == nil {
-		t.Error("expected error for secondary enabled without path")
+	err := validateFutureFeatures(cfg)
+	if err == nil {
+		t.Fatal("expected error for secondary enabled without path")
+	}
+	if got, want := err.Error(), "SECONDARY_PATH is required when SECONDARY_ENABLED=true"; got != want {
+		t.Fatalf("validateFutureFeatures error = %q, want %q", got, want)
+	}
+}
+
+func TestValidateFutureFeatures_SecondaryRejectsRemotePath(t *testing.T) {
+	cfg := &config.Config{
+		SecondaryEnabled: true,
+		SecondaryPath:    "remote:path",
+	}
+
+	err := validateFutureFeatures(cfg)
+	if err == nil {
+		t.Fatal("expected error for remote-style secondary path")
+	}
+	if got, want := err.Error(), "SECONDARY_PATH must be an absolute local filesystem path"; got != want {
+		t.Fatalf("validateFutureFeatures error = %q, want %q", got, want)
+	}
+}
+
+func TestValidateFutureFeatures_SecondaryAllowsEmptyLogPath(t *testing.T) {
+	cfg := &config.Config{
+		SecondaryEnabled: true,
+		SecondaryPath:    "/backup/secondary",
+		SecondaryLogPath: "",
+	}
+
+	if err := validateFutureFeatures(cfg); err != nil {
+		t.Fatalf("expected empty secondary log path to be allowed, got %v", err)
+	}
+}
+
+func TestValidateFutureFeatures_SecondaryRejectsInvalidLogPath(t *testing.T) {
+	cfg := &config.Config{
+		SecondaryEnabled: true,
+		SecondaryPath:    "/backup/secondary",
+		SecondaryLogPath: "remote:/logs",
+	}
+
+	err := validateFutureFeatures(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid secondary log path")
+	}
+	if got, want := err.Error(), "SECONDARY_LOG_PATH must be an absolute local filesystem path"; got != want {
+		t.Fatalf("validateFutureFeatures error = %q, want %q", got, want)
 	}
 }
 

@@ -730,16 +730,32 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 		return "", err
 	}
 	if enableSecondary {
-		secondaryPath, err := promptNonEmpty(ctx, reader, "Secondary backup path (SECONDARY_PATH): ")
-		if err != nil {
-			return "", err
+		var secondaryPath string
+		for {
+			secondaryPath, err = promptNonEmpty(ctx, reader, "Secondary backup path (SECONDARY_PATH): ")
+			if err != nil {
+				return "", err
+			}
+			secondaryPath = sanitizeEnvValue(secondaryPath)
+			if err := config.ValidateRequiredSecondaryPath(secondaryPath); err != nil {
+				fmt.Printf("%v\n", err)
+				continue
+			}
+			break
 		}
-		secondaryPath = sanitizeEnvValue(secondaryPath)
-		secondaryLog, err := promptNonEmpty(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH): ")
-		if err != nil {
-			return "", err
+		var secondaryLog string
+		for {
+			secondaryLog, err = promptOptional(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ")
+			if err != nil {
+				return "", err
+			}
+			secondaryLog = sanitizeEnvValue(secondaryLog)
+			if err := config.ValidateOptionalSecondaryLogPath(secondaryLog); err != nil {
+				fmt.Printf("%v\n", err)
+				continue
+			}
+			break
 		}
-		secondaryLog = sanitizeEnvValue(secondaryLog)
 		template = setEnvValue(template, "SECONDARY_ENABLED", "true")
 		template = setEnvValue(template, "SECONDARY_PATH", secondaryPath)
 		template = setEnvValue(template, "SECONDARY_LOG_PATH", secondaryLog)

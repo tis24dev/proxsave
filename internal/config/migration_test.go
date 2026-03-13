@@ -159,6 +159,8 @@ const baseInstallTemplate = `BACKUP_ENABLED=true
 BACKUP_PATH=/default/backup
 LOG_PATH=/default/log
 SECONDARY_ENABLED=false
+SECONDARY_PATH=
+SECONDARY_LOG_PATH=
 CLOUD_ENABLED=false
 SET_BACKUP_PERMISSIONS=false
 BACKUP_USER=backup
@@ -188,6 +190,29 @@ func TestMigrateLegacyEnvCreatesConfigAndKeepsValues(t *testing.T) {
 		}
 		if cfg.BackupPath != "/legacy/backup" {
 			t.Fatalf("cfg.BackupPath=%s; want /legacy/backup", cfg.BackupPath)
+		}
+	})
+}
+
+func TestMigrateLegacyEnvRejectsInvalidSecondaryPath(t *testing.T) {
+	withTemplate(t, baseInstallTemplate, func() {
+		tmpDir := t.TempDir()
+		legacyPath := filepath.Join(tmpDir, "legacy.env")
+		outputPath := filepath.Join(tmpDir, "backup.env")
+		legacyContent := strings.Join([]string{
+			"ENABLE_SECONDARY_BACKUP=true",
+			"SECONDARY_BACKUP_PATH=remote:path",
+		}, "\n") + "\n"
+		if err := os.WriteFile(legacyPath, []byte(legacyContent), 0600); err != nil {
+			t.Fatalf("failed to write legacy env: %v", err)
+		}
+
+		_, err := MigrateLegacyEnv(legacyPath, outputPath)
+		if err == nil {
+			t.Fatal("expected migration to fail")
+		}
+		if got, want := err.Error(), "SECONDARY_PATH must be an absolute local filesystem path"; !strings.Contains(got, want) {
+			t.Fatalf("MigrateLegacyEnv error = %q, want substring %q", got, want)
 		}
 	})
 }

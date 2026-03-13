@@ -228,6 +228,60 @@ func TestConfigureSecondaryStorageEnabled(t *testing.T) {
 	}
 }
 
+func TestConfigureSecondaryStorageEnabledWithEmptyLogPath(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("y\n/mnt/secondary\n\n"))
+	captureStdout(t, func() {
+		result, err = configureSecondaryStorage(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureSecondaryStorage error: %v", err)
+	}
+	if !strings.Contains(result, "SECONDARY_ENABLED=true") {
+		t.Fatalf("expected SECONDARY_ENABLED=true in template: %q", result)
+	}
+	if !strings.Contains(result, "SECONDARY_PATH=/mnt/secondary") {
+		t.Fatalf("expected secondary path in template: %q", result)
+	}
+	if !strings.Contains(result, "SECONDARY_LOG_PATH=") {
+		t.Fatalf("expected empty secondary log path in template: %q", result)
+	}
+}
+
+func TestConfigureSecondaryStorageRejectsInvalidBackupPath(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("y\nrelative/path\n/mnt/secondary\n\n"))
+	captureStdout(t, func() {
+		result, err = configureSecondaryStorage(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureSecondaryStorage error: %v", err)
+	}
+	if !strings.Contains(result, "SECONDARY_PATH=/mnt/secondary") {
+		t.Fatalf("expected corrected secondary path in template: %q", result)
+	}
+}
+
+func TestConfigureSecondaryStorageRejectsInvalidLogPath(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("y\n/mnt/secondary\nremote:/logs\n\n"))
+	captureStdout(t, func() {
+		result, err = configureSecondaryStorage(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureSecondaryStorage error: %v", err)
+	}
+	if !strings.Contains(result, "SECONDARY_LOG_PATH=") {
+		t.Fatalf("expected empty secondary log path in template: %q", result)
+	}
+}
+
 func TestConfigureSecondaryStorageDisabled(t *testing.T) {
 	var result string
 	var err error

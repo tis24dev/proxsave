@@ -136,7 +136,7 @@ Some interactive commands support two interface modes:
 
 **Wizard workflow**:
 1. Generates/updates the configuration file (`configs/backup.env` by default)
-2. Optionally configures secondary storage
+2. Optionally configures secondary storage (`SECONDARY_PATH` required if enabled; `SECONDARY_LOG_PATH` optional; invalid secondary paths are re-prompted/rejected)
 3. Optionally configures cloud storage (rclone)
 4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
 5. Optionally sets up notifications (Telegram, Email; Email defaults to `EMAIL_DELIVERY_METHOD=relay`)

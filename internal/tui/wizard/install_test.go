@@ -102,6 +102,62 @@ func TestApplyInstallDataDefaultsBaseTemplate(t *testing.T) {
 	}
 }
 
+func TestApplyInstallDataAllowsEmptySecondaryLogPath(t *testing.T) {
+	data := &InstallWizardData{
+		BaseDir:                "/tmp/base",
+		EnableSecondaryStorage: true,
+		SecondaryPath:          "/mnt/sec",
+		SecondaryLogPath:       "",
+	}
+
+	result, err := ApplyInstallData("", data)
+	if err != nil {
+		t.Fatalf("ApplyInstallData returned error: %v", err)
+	}
+	if !strings.Contains(result, "SECONDARY_ENABLED=true") {
+		t.Fatalf("expected secondary enabled in result:\n%s", result)
+	}
+	if !strings.Contains(result, "SECONDARY_PATH=/mnt/sec") {
+		t.Fatalf("expected secondary path in result:\n%s", result)
+	}
+	if !strings.Contains(result, "SECONDARY_LOG_PATH=") {
+		t.Fatalf("expected empty secondary log path in result:\n%s", result)
+	}
+}
+
+func TestApplyInstallDataRejectsInvalidSecondaryPath(t *testing.T) {
+	data := &InstallWizardData{
+		BaseDir:                "/tmp/base",
+		EnableSecondaryStorage: true,
+		SecondaryPath:          "relative/path",
+	}
+
+	_, err := ApplyInstallData("", data)
+	if err == nil {
+		t.Fatal("expected ApplyInstallData to fail")
+	}
+	if got, want := err.Error(), "SECONDARY_PATH must be an absolute local filesystem path"; got != want {
+		t.Fatalf("ApplyInstallData error = %q, want %q", got, want)
+	}
+}
+
+func TestApplyInstallDataRejectsInvalidSecondaryLogPath(t *testing.T) {
+	data := &InstallWizardData{
+		BaseDir:                "/tmp/base",
+		EnableSecondaryStorage: true,
+		SecondaryPath:          "/mnt/sec",
+		SecondaryLogPath:       "remote:/logs",
+	}
+
+	_, err := ApplyInstallData("", data)
+	if err == nil {
+		t.Fatal("expected ApplyInstallData to fail")
+	}
+	if got, want := err.Error(), "SECONDARY_LOG_PATH must be an absolute local filesystem path"; got != want {
+		t.Fatalf("ApplyInstallData error = %q, want %q", got, want)
+	}
+}
+
 func TestApplyInstallDataCronAndNotifications(t *testing.T) {
 	baseTemplate := "CRON_SCHEDULE=\nCRON_HOUR=\nCRON_MINUTE=\nTELEGRAM_ENABLED=true\nEMAIL_ENABLED=false\nENCRYPT_ARCHIVE=true\n"
 	data := &InstallWizardData{
