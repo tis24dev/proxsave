@@ -10,6 +10,38 @@ import (
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
+func TestFormatPreservedEntries(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []string
+		want    string
+	}{
+		{
+			name:    "formats trimmed entries",
+			entries: []string{" build ", "env", " identity"},
+			want:    "build/ env/ identity/",
+		},
+		{
+			name:    "returns none for nil input",
+			entries: nil,
+			want:    "(none)",
+		},
+		{
+			name:    "returns none for blank entries",
+			entries: []string{"", "   ", "\t"},
+			want:    "(none)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatPreservedEntries(tt.entries); got != tt.want {
+				t.Fatalf("formatPreservedEntries(%v) = %q, want %q", tt.entries, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfirmNewInstallContinue(t *testing.T) {
 	originalRunner := confirmNewInstallRunner
 	defer func() { confirmNewInstallRunner = originalRunner }()
