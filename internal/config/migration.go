@@ -206,8 +206,13 @@ func validateMigratedConfig(cfg *Config) error {
 	if strings.TrimSpace(cfg.LogPath) == "" {
 		return fmt.Errorf("LOG_PATH cannot be empty")
 	}
-	if cfg.SecondaryEnabled && strings.TrimSpace(cfg.SecondaryPath) == "" {
-		return fmt.Errorf("SECONDARY_PATH required when SECONDARY_ENABLED=true")
+	if cfg.SecondaryEnabled {
+		if err := ValidateRequiredSecondaryPath(cfg.SecondaryPath); err != nil {
+			return err
+		}
+		if err := ValidateOptionalSecondaryLogPath(cfg.SecondaryLogPath); err != nil {
+			return err
+		}
 	}
 	if cfg.CloudEnabled && strings.TrimSpace(cfg.CloudRemote) == "" {
 		return fmt.Errorf("CLOUD_REMOTE required when CLOUD_ENABLED=true")

@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -8,6 +9,38 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/tui"
 )
+
+func TestFormatPreservedEntries(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []string
+		want    string
+	}{
+		{
+			name:    "formats trimmed entries",
+			entries: []string{" build ", "env", " identity"},
+			want:    "build/ env/ identity/",
+		},
+		{
+			name:    "returns none for nil input",
+			entries: nil,
+			want:    "(none)",
+		},
+		{
+			name:    "returns none for blank entries",
+			entries: []string{"", "   ", "\t"},
+			want:    "(none)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatPreservedEntries(tt.entries); got != tt.want {
+				t.Fatalf("formatPreservedEntries(%v) = %q, want %q", tt.entries, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestConfirmNewInstallContinue(t *testing.T) {
 	originalRunner := confirmNewInstallRunner
@@ -19,7 +52,7 @@ func TestConfirmNewInstallContinue(t *testing.T) {
 		return nil
 	}
 
-	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123")
+	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", []string{"build", "env", "identity"})
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -38,7 +71,7 @@ func TestConfirmNewInstallCancel(t *testing.T) {
 		return nil
 	}
 
-	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123")
+	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", []string{"build", "env", "identity"})
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -57,11 +90,45 @@ func TestConfirmNewInstallMessageIncludesBaseDir(t *testing.T) {
 		return nil
 	}
 
-	_, err := ConfirmNewInstall("/var/lib/data", "build-sig")
+	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", []string{"build", "env", "identity"})
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
 	if !strings.Contains(captured, "/var/lib/data") {
 		t.Fatalf("expected modal text to mention base dir, got %q", captured)
+	}
+}
+
+func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
+	originalRunner := confirmNewInstallRunner
+	defer func() { confirmNewInstallRunner = originalRunner }()
+
+	var captured string
+	confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		captured = extractModalText(focus.(*tview.Modal))
+		return nil
+	}
+
+	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", []string{"build", "env", "identity"})
+	if err != nil {
+		t.Fatalf("ConfirmNewInstall error: %v", err)
+	}
+	if !strings.Contains(captured, "build/ env/ identity/") {
+		t.Fatalf("expected modal text to mention preserved entries, got %q", captured)
+	}
+}
+
+func TestConfirmNewInstallPropagatesRunnerError(t *testing.T) {
+	originalRunner := confirmNewInstallRunner
+	defer func() { confirmNewInstallRunner = originalRunner }()
+
+	expectedErr := errors.New("runner failed")
+	confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return expectedErr
+	}
+
+	_, err := ConfirmNewInstall("/opt/proxmox", "sig-123", []string{"build", "env", "identity"})
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected error %v, got %v", expectedErr, err)
 	}
 }

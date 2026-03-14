@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,14 +12,27 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/notify"
-	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
-	"github.com/tis24dev/proxsave/internal/types"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
+
+var (
+	newInstallEnsureInteractiveStdin = ensureInteractiveStdin
+	newInstallConfirmCLI             = confirmNewInstallCLI
+	newInstallConfirmTUI             = wizard.ConfirmNewInstall
+	newInstallRunInstall             = runInstall
+	newInstallRunInstallTUI          = runInstallTUI
+	configureCronTimeFunc            = configureCronTime
+)
+
+type installConfigResult struct {
+	EnableEncryption bool
+	SkipConfigWizard bool
+	CronSchedule     string
+}
 
 func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) (err error) {
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "resolving configuration path")
@@ -74,11 +86,18 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running config wizard")
-	enableEncryption, skipConfigWizard, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
+	configResult, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
 	if err != nil {
 		return err
 	}
-	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "config wizard done (encryption=%v skip=%v)", enableEncryption, skipConfigWizard)
+	logging.DebugStepBootstrap(
+		bootstrap,
+		"install workflow (cli)",
+		"config wizard done (encryption=%v skip=%v cron=%s)",
+		configResult.EnableEncryption,
+		configResult.SkipConfigWizard,
+		configResult.CronSchedule,
+	)
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "installing support docs")
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
@@ -86,12 +105,12 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running encryption setup if needed")
-	if err := runEncryptionSetupIfNeeded(ctx, configPath, enableEncryption, skipConfigWizard, bootstrap); err != nil {
+	if err := runEncryptionSetupIfNeeded(ctx, configPath, configResult.EnableEncryption, configResult.SkipConfigWizard, bootstrap); err != nil {
 		return err
 	}
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors.
-	if !skipConfigWizard {
+	if !configResult.SkipConfigWizard {
 		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "post-install audit")
 		if err := runPostInstallAuditCLI(ctx, reader, execInfo.ExecPath, configPath, bootstrap); err != nil {
 			return err
@@ -106,7 +125,13 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
-	runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap)
+	runPostInstallSymlinksAndCron(
+		ctx,
+		baseDir,
+		execInfo,
+		bootstrap,
+		buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule),
+	)
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "detecting telegram identity")
 	telegramCode = detectTelegramCode(baseDir)
@@ -123,123 +148,6 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "permissions status=%s", permStatus)
 
 	return nil
-}
-
-func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, configPath string, bootstrap *logging.BootstrapLogger) error {
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		if bootstrap != nil {
-			bootstrap.Warning("Telegram setup: unable to load config (skipping): %v", err)
-		}
-		return nil
-	}
-	if cfg == nil || !cfg.TelegramEnabled {
-		return nil
-	}
-
-	mode := strings.ToLower(strings.TrimSpace(cfg.TelegramBotType))
-	if mode == "" {
-		mode = "centralized"
-	}
-	if mode == "personal" {
-		// No centralized pairing check exists for personal mode.
-		if bootstrap != nil {
-			bootstrap.Info("Telegram setup: personal mode selected (no centralized pairing check)")
-		}
-		return nil
-	}
-
-	fmt.Println("\n--- Telegram setup (optional) ---")
-	fmt.Println("You enabled Telegram notifications (centralized bot).")
-
-	info, idErr := identity.Detect(baseDir, nil)
-	if idErr != nil {
-		fmt.Printf("WARNING: Unable to compute server identity (non-blocking): %v\n", idErr)
-		if bootstrap != nil {
-			bootstrap.Warning("Telegram setup: identity detection failed (non-blocking): %v", idErr)
-		}
-		return nil
-	}
-
-	serverID := ""
-	if info != nil {
-		serverID = strings.TrimSpace(info.ServerID)
-	}
-	if serverID == "" {
-		fmt.Println("WARNING: Server ID unavailable; skipping Telegram setup.")
-		if bootstrap != nil {
-			bootstrap.Warning("Telegram setup: server ID unavailable; skipping")
-		}
-		return nil
-	}
-
-	fmt.Printf("Server ID: %s\n", serverID)
-	if info != nil && strings.TrimSpace(info.IdentityFile) != "" {
-		fmt.Printf("Identity file: %s\n", strings.TrimSpace(info.IdentityFile))
-	}
-	fmt.Println()
-	fmt.Println("1) Open Telegram and start @ProxmoxAN_bot")
-	fmt.Println("2) Send the Server ID above (digits only)")
-	fmt.Println("3) Verify pairing (recommended)")
-	fmt.Println()
-
-	check, err := promptYesNo(ctx, reader, "Check Telegram pairing now? [Y/n]: ", true)
-	if err != nil {
-		return wrapInstallError(err)
-	}
-	if !check {
-		fmt.Println("Skipped verification. You can verify later by running proxsave.")
-		if bootstrap != nil {
-			bootstrap.Info("Telegram setup: verification skipped by user")
-		}
-		return nil
-	}
-
-	serverHost := strings.TrimSpace(cfg.TelegramServerAPIHost)
-	if serverHost == "" {
-		serverHost = "https://bot.tis24.it:1443"
-	}
-
-	attempts := 0
-	for {
-		attempts++
-		status := notify.CheckTelegramRegistration(ctx, serverHost, serverID, nil)
-		if status.Code == 200 && status.Error == nil {
-			fmt.Println("✓ Telegram linked successfully.")
-			if bootstrap != nil {
-				bootstrap.Info("Telegram setup: verified (attempts=%d)", attempts)
-			}
-			return nil
-		}
-
-		msg := strings.TrimSpace(status.Message)
-		if msg == "" {
-			msg = "Registration not active yet"
-		}
-		fmt.Printf("Telegram: %s\n", msg)
-		switch status.Code {
-		case 403, 409:
-			fmt.Println("Hint: Start the bot, send the Server ID, then retry.")
-		case 422:
-			fmt.Println("Hint: The Server ID appears invalid. If this persists, re-run the installer.")
-		default:
-			if status.Error != nil {
-				fmt.Printf("Hint: Check failed: %v\n", status.Error)
-			}
-		}
-
-		retry, err := promptYesNo(ctx, reader, "Check again? [y/N]: ", false)
-		if err != nil {
-			return wrapInstallError(err)
-		}
-		if !retry {
-			fmt.Println("Verification not completed. You can retry later by running proxsave.")
-			if bootstrap != nil {
-				bootstrap.Info("Telegram setup: not verified (attempts=%d last=%d %s)", attempts, status.Code, msg)
-			}
-			return nil
-		}
-	}
 }
 
 func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath, configPath string, bootstrap *logging.BootstrapLogger) error {
@@ -361,25 +269,25 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, useCLI bool) (err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "new-install workflow", "config=%s", configPath)
 	defer func() { done(err) }()
-	resolvedPath, err := resolveInstallConfigPath(configPath)
+
+	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "ensuring interactive stdin")
+	if err := newInstallEnsureInteractiveStdin(); err != nil {
+		return err
+	}
+
+	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "building reset plan")
+	plan, err := buildNewInstallPlan(configPath)
 	if err != nil {
 		return err
 	}
 
-	baseDir := deriveBaseDirFromConfig(resolvedPath)
-
-	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "ensuring interactive stdin")
-	if err := ensureInteractiveStdin(); err != nil {
-		return err
-	}
-
-	buildSig := buildSignature()
-	if strings.TrimSpace(buildSig) == "" {
-		buildSig = "n/a"
-	}
-
 	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "confirming reset")
-	confirm, err := wizard.ConfirmNewInstall(baseDir, buildSig)
+	var confirm bool
+	if useCLI {
+		confirm, err = newInstallConfirmCLI(ctx, bufio.NewReader(os.Stdin), plan)
+	} else {
+		confirm, err = newInstallConfirmTUI(plan.BaseDir, plan.BuildSignature, plan.PreservedEntries)
+	}
 	if err != nil {
 		return wrapInstallError(err)
 	}
@@ -387,16 +295,18 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return wrapInstallError(errInteractiveAborted)
 	}
 
-	bootstrap.Info("Resetting %s (preserving env/ and identity/)", baseDir)
+	if bootstrap != nil {
+		bootstrap.Info("Resetting %s (preserving %s)", plan.BaseDir, formatNewInstallPreservedEntries(plan.PreservedEntries))
+	}
 	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "resetting base dir")
-	if err := resetInstallBaseDir(baseDir, bootstrap); err != nil {
+	if err := resetInstallBaseDir(plan.BaseDir, bootstrap); err != nil {
 		return err
 	}
 
 	if useCLI {
-		return runInstall(ctx, resolvedPath, bootstrap)
+		return newInstallRunInstall(ctx, plan.ResolvedConfigPath, bootstrap)
 	}
-	return runInstallTUI(ctx, resolvedPath, bootstrap)
+	return newInstallRunInstallTUI(ctx, plan.ResolvedConfigPath, bootstrap)
 }
 
 func printInstallFooter(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
@@ -472,7 +382,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
-	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
+	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
@@ -537,53 +447,65 @@ func handleLegacyInstall(ctx context.Context, reader *bufio.Reader, baseDir stri
 	return nil
 }
 
-func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, tmpConfigPath, baseDir string, bootstrap *logging.BootstrapLogger) (enableEncryption bool, skipConfigWizard bool, err error) {
+func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, tmpConfigPath, baseDir string, bootstrap *logging.BootstrapLogger) (result installConfigResult, err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "install config wizard (cli)", "config=%s", configPath)
 	defer func() { done(err) }()
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "preparing base template")
 	template, skipConfigWizard, err := prepareBaseTemplate(ctx, reader, configPath)
 	if err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 
 	if skipConfigWizard {
-		return false, true, nil
+		return installConfigResult{SkipConfigWizard: true}, nil
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring secondary storage")
 	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cloud storage")
 	if template, err = configureCloudStorage(ctx, reader, template); err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring firewall rules")
 	if template, err = configureFirewallRules(ctx, reader, template); err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring notifications")
 	if template, err = configureNotifications(ctx, reader, template); err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring encryption")
-	enableEncryption, err = configureEncryption(ctx, reader, &template)
+	result.EnableEncryption, err = configureEncryption(ctx, reader, &template)
 	if err != nil {
-		return false, false, wrapInstallError(err)
+		return installConfigResult{}, wrapInstallError(err)
+	}
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cron time")
+	cronTime, err := configureCronTimeFunc(ctx, reader, cronutil.DefaultTime)
+	if err != nil {
+		return installConfigResult{}, wrapInstallError(err)
+	}
+	result.CronSchedule = cronutil.TimeToSchedule(cronTime)
+	result.SkipConfigWizard = false
+
+	if bootstrap != nil {
+		bootstrap.Info("Cron schedule selected: %s", cronTime)
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "writing configuration")
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
-		return false, false, err
+		return installConfigResult{}, err
 	}
 
 	if bootstrap != nil {
 		bootstrap.Info("✓ Configuration saved at %s", configPath)
 	}
 
-	return enableEncryption, false, nil
+	return result, nil
 }
 
 func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEncryption, skipConfigWizard bool, bootstrap *logging.BootstrapLogger) (err error) {
@@ -605,7 +527,7 @@ func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEn
 	return nil
 }
 
-func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) {
+func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule string) {
 	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
 	defer func() { done(nil) }()
 	// Clean up legacy bash-based symlinks that point to the old installer scripts.
@@ -624,7 +546,9 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 
 	// Migrate legacy cron entries pointing to the bash script to the Go binary.
 	// If no cron entry exists at all, create a default one at 02:00 every day.
-	cronSchedule := resolveCronSchedule(nil)
+	if strings.TrimSpace(cronSchedule) == "" {
+		cronSchedule = resolveCronScheduleFromEnv()
+	}
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "migrating cron entries")
 	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 }
@@ -655,11 +579,7 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) (er
 		return fmt.Errorf("failed to list base directory %s: %w", baseDir, err)
 	}
 
-	preserve := map[string]struct{}{
-		"env":      {},
-		"identity": {},
-		"build":    {},
-	}
+	preserve := newInstallPreserveSet()
 
 	for _, entry := range entries {
 		name := entry.Name()
@@ -700,22 +620,18 @@ func printInstallBanner(configPath string) {
 }
 
 func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, error) {
-	if info, err := os.Stat(configPath); err == nil {
-		if info.Mode().IsRegular() {
-			overwrite, err := promptYesNo(ctx, reader, fmt.Sprintf("%s already exists. Overwrite? [y/N]: ", configPath), false)
-			if err != nil {
-				return "", false, err
-			}
-			if !overwrite {
-				fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
-				return "", true, nil
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		return "", false, fmt.Errorf("failed to access configuration file: %w", err)
+	decision, err := prepareExistingConfigDecisionCLI(ctx, reader, configPath)
+	if err != nil {
+		return "", false, err
 	}
-
-	return config.DefaultEnvTemplate(), false, nil
+	if decision.AbortInstall {
+		return "", false, errInteractiveAborted
+	}
+	if decision.SkipConfigWizard {
+		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
+		return "", true, nil
+	}
+	return decision.BaseTemplate, false, nil
 }
 
 func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
@@ -730,23 +646,35 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 		return "", err
 	}
 	if enableSecondary {
-		secondaryPath, err := promptNonEmpty(ctx, reader, "Secondary backup path (SECONDARY_PATH): ")
-		if err != nil {
-			return "", err
+		var secondaryPath string
+		for {
+			secondaryPath, err = promptNonEmpty(ctx, reader, "Secondary backup path (SECONDARY_PATH): ")
+			if err != nil {
+				return "", err
+			}
+			secondaryPath = sanitizeEnvValue(secondaryPath)
+			if err := config.ValidateRequiredSecondaryPath(secondaryPath); err != nil {
+				fmt.Printf("%v\n", err)
+				continue
+			}
+			break
 		}
-		secondaryPath = sanitizeEnvValue(secondaryPath)
-		secondaryLog, err := promptNonEmpty(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH): ")
-		if err != nil {
-			return "", err
+		var secondaryLog string
+		for {
+			secondaryLog, err = promptOptional(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ")
+			if err != nil {
+				return "", err
+			}
+			secondaryLog = sanitizeEnvValue(secondaryLog)
+			if err := config.ValidateOptionalSecondaryLogPath(secondaryLog); err != nil {
+				fmt.Printf("%v\n", err)
+				continue
+			}
+			break
 		}
-		secondaryLog = sanitizeEnvValue(secondaryLog)
-		template = setEnvValue(template, "SECONDARY_ENABLED", "true")
-		template = setEnvValue(template, "SECONDARY_PATH", secondaryPath)
-		template = setEnvValue(template, "SECONDARY_LOG_PATH", secondaryLog)
+		template = config.ApplySecondaryStorageSettings(template, true, secondaryPath, secondaryLog)
 	} else {
-		template = setEnvValue(template, "SECONDARY_ENABLED", "false")
-		template = setEnvValue(template, "SECONDARY_PATH", "")
-		template = setEnvValue(template, "SECONDARY_LOG_PATH", "")
+		template = config.ApplySecondaryStorageSettings(template, false, "", "")
 	}
 	return template, nil
 }
@@ -838,6 +766,22 @@ func configureEncryption(ctx context.Context, reader *bufio.Reader, template *st
 	return enableEncryption, nil
 }
 
+func configureCronTime(ctx context.Context, reader *bufio.Reader, defaultCron string) (string, error) {
+	fmt.Println("\n--- Schedule ---")
+	for {
+		cronTime, err := promptOptional(ctx, reader, fmt.Sprintf("Cron time for daily proxsave job (HH:MM) [%s]: ", defaultCron))
+		if err != nil {
+			return "", err
+		}
+		normalized, err := cronutil.NormalizeTime(cronTime, defaultCron)
+		if err != nil {
+			fmt.Printf("%v\n", err)
+			continue
+		}
+		return normalized, nil
+	}
+}
+
 func writeConfigFile(configPath, tmpConfigPath, content string) error {
 	dir := filepath.Dir(configPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -848,25 +792,6 @@ func writeConfigFile(configPath, tmpConfigPath, content string) error {
 	}
 	if err := os.Rename(tmpConfigPath, configPath); err != nil {
 		return fmt.Errorf("failed to finalize configuration file: %w", err)
-	}
-	return nil
-}
-
-func runInitialEncryptionSetup(ctx context.Context, configPath string) error {
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to reload configuration after install: %w", err)
-	}
-	logger := logging.New(types.LogLevelError, false)
-	logger.SetOutput(io.Discard)
-	orch := orchestrator.New(logger, false)
-	orch.SetConfig(cfg)
-	if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
-		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
-			// Treat AGE wizard abort as an interactive abort for install UX
-			return fmt.Errorf("encryption setup aborted by user: %w", errInteractiveAborted)
-		}
-		return fmt.Errorf("encryption setup failed: %w", err)
 	}
 	return nil
 }

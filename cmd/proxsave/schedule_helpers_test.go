@@ -3,45 +3,14 @@ package main
 import (
 	"testing"
 
-	"github.com/tis24dev/proxsave/internal/tui/wizard"
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 )
 
-func TestCronToSchedule(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"valid with padding", "2:5", "05 02 * * *"},
-		{"valid already padded", "02:05", "05 02 * * *"},
-		{"invalid format", "0205", ""},
-		{"invalid hour", "24:00", ""},
-		{"invalid minute", "00:60", ""},
-		{"non numeric", "aa:bb", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := cronToSchedule(tt.in); got != tt.want {
-				t.Fatalf("cronToSchedule(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResolveCronSchedule(t *testing.T) {
-	t.Run("wizard data takes precedence", func(t *testing.T) {
-		t.Setenv("CRON_SCHEDULE", "0 4 * * *")
-		data := &wizard.InstallWizardData{CronTime: "03:15"}
-		if got := resolveCronSchedule(data); got != "15 03 * * *" {
-			t.Fatalf("resolveCronSchedule(wizard) = %q, want %q", got, "15 03 * * *")
-		}
-	})
-
+func TestResolveCronScheduleFromEnv(t *testing.T) {
 	t.Run("env CRON_SCHEDULE overrides", func(t *testing.T) {
 		t.Setenv("CRON_SCHEDULE", "5 1 * * *")
-		if got := resolveCronSchedule(nil); got != "5 1 * * *" {
-			t.Fatalf("resolveCronSchedule(env) = %q, want %q", got, "5 1 * * *")
+		if got := resolveCronScheduleFromEnv(); got != "5 1 * * *" {
+			t.Fatalf("resolveCronScheduleFromEnv() = %q, want %q", got, "5 1 * * *")
 		}
 	})
 
@@ -49,8 +18,8 @@ func TestResolveCronSchedule(t *testing.T) {
 		t.Setenv("CRON_SCHEDULE", "")
 		t.Setenv("CRON_HOUR", "22")
 		t.Setenv("CRON_MINUTE", "10")
-		if got := resolveCronSchedule(nil); got != "10 22 * * *" {
-			t.Fatalf("resolveCronSchedule(hour/minute) = %q, want %q", got, "10 22 * * *")
+		if got := resolveCronScheduleFromEnv(); got != "10 22 * * *" {
+			t.Fatalf("resolveCronScheduleFromEnv() = %q, want %q", got, "10 22 * * *")
 		}
 	})
 
@@ -58,8 +27,31 @@ func TestResolveCronSchedule(t *testing.T) {
 		t.Setenv("CRON_SCHEDULE", "")
 		t.Setenv("CRON_HOUR", "")
 		t.Setenv("CRON_MINUTE", "")
-		if got := resolveCronSchedule(nil); got != "0 2 * * *" {
-			t.Fatalf("resolveCronSchedule(default) = %q, want %q", got, "0 2 * * *")
+		if got := resolveCronScheduleFromEnv(); got != cronutil.TimeToSchedule(cronutil.DefaultTime) {
+			t.Fatalf("resolveCronScheduleFromEnv() = %q, want %q", got, cronutil.TimeToSchedule(cronutil.DefaultTime))
+		}
+	})
+}
+
+func TestBuildInstallCronSchedule(t *testing.T) {
+	t.Run("wizard schedule takes precedence over env", func(t *testing.T) {
+		t.Setenv("CRON_SCHEDULE", "5 1 * * *")
+		if got := buildInstallCronSchedule(false, "15 03 * * *"); got != "15 03 * * *" {
+			t.Fatalf("buildInstallCronSchedule(false, schedule) = %q, want %q", got, "15 03 * * *")
+		}
+	})
+
+	t.Run("wizard run with empty schedule falls back to default time not env", func(t *testing.T) {
+		t.Setenv("CRON_SCHEDULE", "5 1 * * *")
+		if got := buildInstallCronSchedule(false, ""); got != cronutil.TimeToSchedule(cronutil.DefaultTime) {
+			t.Fatalf("buildInstallCronSchedule(false, \"\") = %q, want %q", got, cronutil.TimeToSchedule(cronutil.DefaultTime))
+		}
+	})
+
+	t.Run("skip wizard uses env fallback", func(t *testing.T) {
+		t.Setenv("CRON_SCHEDULE", "5 1 * * *")
+		if got := buildInstallCronSchedule(true, "15 03 * * *"); got != "5 1 * * *" {
+			t.Fatalf("buildInstallCronSchedule(true, schedule) = %q, want %q", got, "5 1 * * *")
 		}
 	})
 }

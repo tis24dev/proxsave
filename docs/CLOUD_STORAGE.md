@@ -815,7 +815,7 @@ cp -a /restore/* /
 A: No, currently only one `CLOUD_REMOTE` is supported. Workaround: Use `rclone union` to combine multiple backends.
 
 **Q: Can I use a network address like "192.168.0.10/folder" for SECONDARY_PATH?**
-A: **No**. `SECONDARY_PATH` and `BACKUP_PATH` require **filesystem-mounted paths only**. Network shares must be mounted first using NFS/CIFS/SMB mount commands, then you use the local mount point path (e.g., `/mnt/nas-backup`).
+A: **No**. `SECONDARY_PATH` and `BACKUP_PATH` require **absolute local filesystem paths**. For network shares, mount them first using NFS/CIFS/SMB, then use the local mount point path (e.g., `/mnt/nas-backup`).
 
 If you want to use a direct network address without mounting, configure it as `CLOUD_REMOTE` using rclone with an S3-compatible backend (like MinIO) or appropriate protocol.
 

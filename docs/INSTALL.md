@@ -207,28 +207,45 @@ The installation wizard creates your configuration file interactively:
 ./build/proxsave --new-install
 ```
 
-If the configuration file already exists, the **TUI wizard** will ask whether to:
+If the configuration file already exists, **both TUI and CLI** ask whether to:
 - **Overwrite** (start from the embedded template)
 - **Edit existing** (use the current file as base and pre-fill the wizard fields)
-- **Keep & exit** (leave the file untouched and exit)
+- **Keep existing & continue** (leave the file untouched and skip the configuration wizard)
+- **Cancel** (exit installation)
+
+In **Keep existing & continue** mode, config-dependent post-steps are skipped:
+- AGE setup
+- Post-install check wizard
+- Telegram pairing wizard
+
+Final install steps still run:
+- Support docs installation
+- Symlink and cron finalization
+- Permission normalization
 
 **Wizard prompts:**
 
 1. **Configuration file path**: Default `configs/backup.env` (accepts absolute or relative paths within repo)
-2. **Secondary storage**: Optional path for backup/log copies
+2. **Secondary storage**: Optional path for backup/log copies; disabling it clears both saved secondary paths from `backup.env`
 3. **Cloud storage (rclone)**: Optional rclone configuration (supports `CLOUD_REMOTE` as a remote name (recommended) or legacy `remote:path`; `CLOUD_LOG_PATH` supports path-only (recommended) or `otherremote:/path`)
 4. **Firewall rules**: Optional firewall rules collection toggle (`BACKUP_FIREWALL_RULES=false` by default; supports iptables/nftables)
 5. **Notifications**: Enable Telegram (centralized) and Email notifications (wizard defaults to `EMAIL_DELIVERY_METHOD=relay`; you can switch to `sendmail` or `pmf` later)
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
-7. **Cron schedule**: Choose cron time (HH:MM) for the `proxsave` cron entry (TUI mode only)
+7. **Cron schedule**: Choose cron time (HH:MM, default `02:00`) for the `proxsave` cron entry in both CLI and TUI install modes
 8. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
-9. **Telegram pairing (optional)**: If Telegram (centralized) is enabled, shows your Server ID and lets you verify pairing with the bot (retry/skip supported)
+9. **Telegram pairing (optional)**: If Telegram centralized mode is enabled and the installer can load a valid config plus a Server ID, it shows your Server ID and lets you verify pairing with the bot (retry/skip supported). Otherwise installation continues and logs why pairing was skipped.
 
 #### Telegram pairing wizard (TUI)
 
-If you enable Telegram notifications during `--install` (centralized bot), the installer opens an additional **Telegram Setup** screen after the post-install check.
+If you enable Telegram notifications during `--install`, the installer opens an additional **Telegram Setup** screen only when all of these are true:
+- `TELEGRAM_ENABLED=true`
+- `BOT_TELEGRAM_TYPE=centralized` (or left empty, which defaults to centralized)
+- `backup.env` loads successfully
+- a Server ID can be resolved from `<BASE_DIR>/identity/.server_identity`
 
-It does **not** modify your `backup.env`. It only:
+If any of those checks fail, installation continues without this screen and logs the skip reason (for example config load failure, personal mode, or missing server identity).
+
+When shown, it does **not** modify your `backup.env`. It only:
 - Computes/loads the **Server ID** and persists it (identity file)
 - Guides you through pairing with the centralized bot
 - Lets you verify pairing immediately (retry supported)
@@ -239,7 +256,7 @@ It does **not** modify your `backup.env`. It only:
 - **Status**: live feedback from the pairing check
 - **Actions**:
   - `Check`: verify pairing (press again to retry)
-  - `Continue`: available only after a successful check (centralized mode), or immediately in personal mode / when the Server ID is unavailable
+  - `Continue`: available only after a successful check
   - `Skip`: leave without verification (in centralized mode, `ESC` behaves like Skip when not verified)
 
 **Where the Server ID is stored:**
@@ -251,7 +268,7 @@ It does **not** modify your `backup.env`. It only:
 - Other errors: temporary server/network issue; retry or skip and pair later
 
 **CLI mode:**
-- With `--install --cli`, the installer prints the Server ID and asks whether to run the check now (with a retry loop).
+- With `--install --cli`, the installer follows the same eligibility rules, then prints the Server ID and asks whether to run the check now (with a retry loop).
 
 **Features:**
 
@@ -260,7 +277,7 @@ It does **not** modify your `backup.env`. It only:
 - Creates all necessary directories with proper permissions (0700)
 - Immediate AGE key generation if encryption is enabled
 - Optional post-install audit to disable unused collectors (keeps changes explicit; nothing is disabled silently)
-- Optional Telegram pairing wizard (centralized mode) that displays Server ID and verifies the bot registration (retry/skip supported)
+- Optional Telegram pairing wizard (centralized mode, valid config, Server ID available) that displays Server ID and verifies the bot registration (retry/skip supported)
 - Install session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome)
 
 After completion, edit `configs/backup.env` manually for advanced options.

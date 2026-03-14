@@ -75,99 +75,89 @@ func runNewKey(ctx context.Context, configPath string, logLevel types.LogLevel, 
 }
 
 func runNewKeyTUI(ctx context.Context, configPath, baseDir string, bootstrap *logging.BootstrapLogger) (err error) {
-	recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
 	sig := buildSignature()
 	if strings.TrimSpace(sig) == "" {
 		sig = "n/a"
 	}
-	done := logging.DebugStartBootstrap(bootstrap, "newkey workflow (tui)", "recipient=%s", recipientPath)
+	done := logging.DebugStartBootstrap(bootstrap, "newkey workflow (tui)", "config=%s", configPath)
 	defer func() { done(err) }()
 
-	// If a recipient already exists, ask for confirmation before overwriting
-	if _, err := os.Stat(recipientPath); err == nil {
-		logging.DebugStepBootstrap(bootstrap, "newkey workflow (tui)", "existing recipient found")
-		confirm, err := wizard.ConfirmRecipientOverwrite(recipientPath, configPath, sig)
-		if err != nil {
-			return err
-		}
-		if !confirm {
-			return wrapInstallError(errInteractiveAborted)
-		}
-		if err := orchestrator.BackupAgeRecipientFile(recipientPath); err != nil && bootstrap != nil {
-			bootstrap.Warning("WARNING: %v", err)
-		}
+	logging.DebugStepBootstrap(bootstrap, "newkey workflow (tui)", "running AGE setup via orchestrator")
+	recipientPath, err := runNewKeySetup(ctx, configPath, baseDir, logging.GetDefaultLogger(), wizard.NewAgeSetupUI(configPath, sig))
+	if err != nil {
+		return err
 	}
 
-	recipients := make([]string, 0, 2)
-	for {
-		logging.DebugStepBootstrap(bootstrap, "newkey workflow (tui)", "running AGE setup wizard")
-		ageData, err := wizard.RunAgeSetupWizard(ctx, recipientPath, configPath, sig)
-		if err != nil {
-			if errors.Is(err, wizard.ErrAgeSetupCancelled) {
-				return wrapInstallError(errInteractiveAborted)
-			}
-			return fmt.Errorf("AGE setup failed: %w", err)
-		}
-
-		// Process the AGE data based on setup type
-		var recipientKey string
-		switch ageData.SetupType {
-		case "existing":
-			recipientKey = ageData.PublicKey
-		case "passphrase":
-			recipient, err := deriveRecipientFromPassphrase(ageData.Passphrase)
-			if err != nil {
-				return fmt.Errorf("failed to derive recipient from passphrase: %w", err)
-			}
-			recipientKey = recipient
-		case "privatekey":
-			recipient, err := deriveRecipientFromPrivateKey(ageData.PrivateKey)
-			if err != nil {
-				return fmt.Errorf("failed to derive recipient from private key: %w", err)
-			}
-			recipientKey = recipient
-		default:
-			return fmt.Errorf("unknown AGE setup type: %s", ageData.SetupType)
-		}
-
-		if err := orchestrator.ValidateRecipientString(recipientKey); err != nil {
-			return fmt.Errorf("invalid recipient: %w", err)
-		}
-		recipients = append(recipients, recipientKey)
-
-		logging.DebugStepBootstrap(bootstrap, "newkey workflow (tui)", "recipient count=%d", len(recipients))
-		addMore, err := wizard.ConfirmAddRecipient(configPath, sig, len(recipients))
-		if err != nil {
-			return err
-		}
-		if !addMore {
-			break
-		}
-	}
-
-	recipients = orchestrator.DedupeRecipientStrings(recipients)
-	if len(recipients) == 0 {
-		return fmt.Errorf("no AGE recipients provided")
-	}
-	logging.DebugStepBootstrap(bootstrap, "newkey workflow (tui)", "saving recipients")
-	if err := orchestrator.WriteRecipientFile(recipientPath, recipients); err != nil {
-		return fmt.Errorf("failed to save AGE recipients: %w", err)
-	}
-
-	bootstrap.Info("✓ New AGE recipient(s) generated and saved to %s", recipientPath)
-	bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
+	logNewKeySuccess(recipientPath, bootstrap)
 
 	return nil
 }
 
 func runNewKeyCLI(ctx context.Context, configPath, baseDir string, logger *logging.Logger, bootstrap *logging.BootstrapLogger) error {
-	recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
+	recipientPath, err := runNewKeySetup(ctx, configPath, baseDir, logger, nil)
+	if err != nil {
+		return err
+	}
+
+	logNewKeySuccess(recipientPath, bootstrap)
+
+	return nil
+}
+
+func logNewKeySuccess(recipientPath string, bootstrap *logging.BootstrapLogger) {
+	if bootstrap != nil {
+		bootstrap.Info("✓ New AGE recipient(s) generated and saved to %s", recipientPath)
+		bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
+		return
+	}
+
+	fmt.Printf("✓ New AGE recipient(s) generated and saved to %s\n", recipientPath)
+	fmt.Println("IMPORTANT: Keep your passphrase/private key offline and secure!")
+}
+
+func modeLabel(useCLI bool) string {
+	if useCLI {
+		return "cli"
+	}
+	return "tui"
+}
+
+func loadNewKeyConfig(configPath, baseDir string) (*config.Config, string, error) {
+	defaultRecipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
 
 	cfg := &config.Config{
 		BaseDir:          baseDir,
 		ConfigPath:       configPath,
 		EncryptArchive:   true,
-		AgeRecipientFile: recipientPath,
+		AgeRecipientFile: defaultRecipientPath,
+	}
+
+	if _, err := os.Stat(configPath); err == nil {
+		loaded, err := config.LoadConfig(configPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("load configuration for newkey: %w", err)
+		}
+		cfg = loaded
+		cfg.BaseDir = baseDir
+		cfg.ConfigPath = configPath
+		cfg.EncryptArchive = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", fmt.Errorf("inspect configuration for newkey: %w", err)
+	}
+
+	recipientPath := strings.TrimSpace(cfg.AgeRecipientFile)
+	if recipientPath == "" {
+		recipientPath = defaultRecipientPath
+	}
+	cfg.AgeRecipientFile = recipientPath
+
+	return cfg, recipientPath, nil
+}
+
+func runNewKeySetup(ctx context.Context, configPath, baseDir string, logger *logging.Logger, ui orchestrator.AgeSetupUI) (string, error) {
+	cfg, recipientPath, err := loadNewKeyConfig(configPath, baseDir)
+	if err != nil {
+		return "", err
 	}
 
 	if logger == nil {
@@ -179,22 +169,17 @@ func runNewKeyCLI(ctx context.Context, configPath, baseDir string, logger *loggi
 	orch.SetConfig(cfg)
 	orch.SetForceNewAgeRecipient(true)
 
-	if err := orch.EnsureAgeRecipientsReady(ctx); err != nil {
+	if ui != nil {
+		err = orch.EnsureAgeRecipientsReadyWithUI(ctx, ui)
+	} else {
+		err = orch.EnsureAgeRecipientsReady(ctx)
+	}
+	if err != nil {
 		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
-			return wrapInstallError(errInteractiveAborted)
+			return "", wrapInstallError(errInteractiveAborted)
 		}
-		return fmt.Errorf("AGE setup failed: %w", err)
+		return "", fmt.Errorf("AGE setup failed: %w", err)
 	}
 
-	bootstrap.Info("✓ New AGE recipient(s) generated and saved to %s", recipientPath)
-	bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
-
-	return nil
-}
-
-func modeLabel(useCLI bool) string {
-	if useCLI {
-		return "cli"
-	}
-	return "tui"
+	return recipientPath, nil
 }

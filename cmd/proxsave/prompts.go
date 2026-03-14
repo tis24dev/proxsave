@@ -49,18 +49,25 @@ func promptYesNo(ctx context.Context, reader *bufio.Reader, question string, def
 
 func promptNonEmpty(ctx context.Context, reader *bufio.Reader, question string) (string, error) {
 	for {
-		if err := ctx.Err(); err != nil {
-			return "", errInteractiveAborted
-		}
-		fmt.Print(question)
-		resp, err := input.ReadLineWithContext(ctx, reader)
+		resp, err := promptOptional(ctx, reader, question)
 		if err != nil {
 			return "", err
 		}
-		resp = strings.TrimSpace(resp)
 		if resp != "" {
 			return resp, nil
 		}
 		fmt.Println("Value cannot be empty.")
 	}
+}
+
+func promptOptional(ctx context.Context, reader *bufio.Reader, question string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", errInteractiveAborted
+	}
+	fmt.Print(question)
+	resp, err := input.ReadLineWithContext(ctx, reader)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(resp), nil
 }

@@ -6,30 +6,29 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/tui"
 	"github.com/tis24dev/proxsave/internal/tui/components"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 type installWizardPrefill struct {
-	SecondaryEnabled   bool
-	SecondaryPath      string
-	SecondaryLogPath   string
-	CloudEnabled       bool
-	CloudRemote        string
-	CloudLogPath       string
-	FirewallEnabled    bool
-	TelegramEnabled    bool
-	EmailEnabled       bool
-	EncryptionEnabled  bool
+	SecondaryEnabled  bool
+	SecondaryPath     string
+	SecondaryLogPath  string
+	CloudEnabled      bool
+	CloudRemote       string
+	CloudLogPath      string
+	FirewallEnabled   bool
+	TelegramEnabled   bool
+	EmailEnabled      bool
+	EncryptionEnabled bool
 }
 
 // InstallWizardData holds the collected installation data
@@ -52,14 +51,18 @@ type InstallWizardData struct {
 type ExistingConfigAction int
 
 const (
-	ExistingConfigOverwrite ExistingConfigAction = iota // Start from embedded template (overwrite)
-	ExistingConfigEdit                                  // Keep existing file as base and edit
-	ExistingConfigSkip                                  // Leave the file untouched and skip wizard
+	ExistingConfigOverwrite    ExistingConfigAction = iota // Start from embedded template (overwrite)
+	ExistingConfigEdit                                     // Keep existing file as base and edit
+	ExistingConfigKeepContinue                             // Leave file untouched and continue installation
+	ExistingConfigCancel                                   // Abort installation
 )
 
 var (
 	// ErrInstallCancelled is returned when the user aborts the install wizard.
-	ErrInstallCancelled       = errors.New("installation aborted by user")
+	ErrInstallCancelled    = errors.New("installation aborted by user")
+	runInstallWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return app.SetRoot(root, true).SetFocus(focus).Run()
+	}
 	checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
 		return app.SetRoot(root, true).SetFocus(focus).Run()
 	}
@@ -71,7 +74,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	data := &InstallWizardData{
 		BaseDir:             baseDir,
 		ConfigPath:          configPath,
-		CronTime:            "02:00",
+		CronTime:            cronutil.DefaultTime,
 		EnableEncryption:    false, // Default to disabled
 		BackupFirewallRules: &defaultFirewallRules,
 	}
@@ -327,15 +330,10 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		// Collect data
 		data.EnableSecondaryStorage = secondaryEnabled
 		if secondaryEnabled {
-			data.SecondaryPath = secondaryPathField.GetText()
-			data.SecondaryLogPath = secondaryLogField.GetText()
-
-			// Validate paths
-			if !filepath.IsAbs(data.SecondaryPath) {
-				return fmt.Errorf("secondary backup path must be absolute")
-			}
-			if !filepath.IsAbs(data.SecondaryLogPath) {
-				return fmt.Errorf("secondary log path must be absolute")
+			data.SecondaryPath = strings.TrimSpace(secondaryPathField.GetText())
+			data.SecondaryLogPath = strings.TrimSpace(secondaryLogField.GetText())
+			if err := validateSecondaryInstallData(data); err != nil {
+				return err
 			}
 		}
 
@@ -370,24 +368,11 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		// Get encryption setting
 		data.EnableEncryption = values["Enable Backup Encryption (AGE)"] == "Yes"
 
-		// Cron time validation (HH:MM)
-		cron := strings.TrimSpace(cronField.GetText())
-		if cron == "" {
-			cron = "02:00"
+		normalizedCron, err := cronutil.NormalizeTime(cronField.GetText(), cronutil.DefaultTime)
+		if err != nil {
+			return err
 		}
-		parts := strings.Split(cron, ":")
-		if len(parts) != 2 {
-			return fmt.Errorf("cron time must be in HH:MM format")
-		}
-		hour, err := strconv.Atoi(parts[0])
-		if err != nil || hour < 0 || hour > 23 {
-			return fmt.Errorf("cron hour must be between 00 and 23")
-		}
-		minute, err := strconv.Atoi(parts[1])
-		if err != nil || minute < 0 || minute > 59 {
-			return fmt.Errorf("cron minute must be between 00 and 59")
-		}
-		data.CronTime = fmt.Sprintf("%02d:%02d", hour, minute)
+		data.CronTime = normalizedCron
 
 		return nil
 	})
@@ -469,8 +454,9 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetBorderColor(tui.ProxmoxOrange).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	// Run the app - ignore errors from normal app termination
-	_ = app.SetRoot(flex, true).SetFocus(form.Form).Run()
+	if err := runInstallWizardRunner(app, flex, form.Form); err != nil {
+		return nil, err
+	}
 
 	if data == nil {
 		return nil, ErrInstallCancelled
@@ -491,6 +477,9 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	if strings.TrimSpace(template) == "" {
 		template = config.DefaultEnvTemplate()
 	}
+	if err := validateSecondaryInstallData(data); err != nil {
+		return "", err
+	}
 
 	// BASE_DIR is auto-detected at runtime from the executable/config location.
 	// Keep it out of backup.env to avoid pinning the installation to a specific path.
@@ -500,13 +489,12 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	template = unsetEnvValue(template, "CRON_MINUTE")
 
 	// Apply secondary storage
-	if data.EnableSecondaryStorage {
-		template = setEnvValue(template, "SECONDARY_ENABLED", "true")
-		template = setEnvValue(template, "SECONDARY_PATH", data.SecondaryPath)
-		template = setEnvValue(template, "SECONDARY_LOG_PATH", data.SecondaryLogPath)
-	} else {
-		template = setEnvValue(template, "SECONDARY_ENABLED", "false")
-	}
+	template = config.ApplySecondaryStorageSettings(
+		template,
+		data.EnableSecondaryStorage,
+		data.SecondaryPath,
+		data.SecondaryLogPath,
+	)
 
 	// Apply cloud storage
 	if data.EnableCloudStorage {
@@ -560,6 +548,19 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	}
 
 	return template, nil
+}
+
+func validateSecondaryInstallData(data *InstallWizardData) error {
+	if data == nil || !data.EnableSecondaryStorage {
+		return nil
+	}
+	if err := config.ValidateRequiredSecondaryPath(data.SecondaryPath); err != nil {
+		return err
+	}
+	if err := config.ValidateOptionalSecondaryLogPath(data.SecondaryLogPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 // setEnvValue sets or updates an environment variable in the template
@@ -688,7 +689,7 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 	if _, err := os.Stat(configPath); err == nil {
 		// File exists, ask how to proceed
 		app := tui.NewApp()
-		action := ExistingConfigSkip
+		action := ExistingConfigCancel
 
 		// Welcome text (same as main wizard)
 		welcomeText := tview.NewTextView().
@@ -727,16 +728,19 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 				"Choose how to proceed:\n"+
 				"[yellow]Overwrite[white]   - Start from embedded template\n"+
 				"[yellow]Edit existing[white] - Keep current file as base\n"+
-				"[yellow]Keep & exit[white]   - Leave file untouched, exit wizard", configPath)).
-			AddButtons([]string{"Overwrite", "Edit existing", "Keep & exit"}).
+				"[yellow]Keep & continue[white] - Leave file untouched, continue install\n"+
+				"[yellow]Cancel[white]      - Exit installation", configPath)).
+			AddButtons([]string{"Overwrite", "Edit existing", "Keep & continue", "Cancel"}).
 			SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 				switch buttonLabel {
 				case "Overwrite":
 					action = ExistingConfigOverwrite
 				case "Edit existing":
 					action = ExistingConfigEdit
+				case "Keep & continue":
+					action = ExistingConfigKeepContinue
 				default:
-					action = ExistingConfigSkip
+					action = ExistingConfigCancel
 				}
 				app.Stop()
 			})
@@ -764,12 +768,13 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 			SetBorderColor(tui.ProxmoxOrange).
 			SetBackgroundColor(tcell.ColorBlack)
 
-		// Run the modal - ignore errors from normal app termination
-		_ = checkExistingConfigRunner(app, flex, modal)
+		if err := checkExistingConfigRunner(app, flex, modal); err != nil {
+			return ExistingConfigCancel, err
+		}
 
 		return action, nil
 	} else if !os.IsNotExist(err) {
-		return ExistingConfigSkip, err
+		return ExistingConfigCancel, err
 	}
 
 	return ExistingConfigOverwrite, nil // File doesn't exist, proceed

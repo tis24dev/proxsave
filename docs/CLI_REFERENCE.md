@@ -131,19 +131,23 @@ Some interactive commands support two interface modes:
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **Existing configuration**:
-- If the configuration file already exists, the **TUI wizard** prompts you to **Overwrite**, **Edit existing** (uses the current file as base and pre-fills the wizard fields), or **Keep & exit**.
-- In **CLI mode** (`--cli`), you will be prompted to overwrite; choosing "No" keeps the file and skips the configuration wizard.
+- If the configuration file already exists, **both TUI and CLI** now offer the same choices:
+  - **Overwrite** (start from embedded template)
+  - **Edit existing** (use current file as base and pre-fill wizard fields)
+  - **Keep existing & continue** (leave file untouched and skip configuration wizard)
+  - **Cancel** (abort installation)
+- In **Keep existing & continue** mode, config-dependent post-steps are skipped (encryption setup, post-install audit, Telegram pairing), while finalization steps still run (docs install, symlink/cron finalization, permissions normalization).
 
 **Wizard workflow**:
 1. Generates/updates the configuration file (`configs/backup.env` by default)
-2. Optionally configures secondary storage
+2. Optionally configures secondary storage (`SECONDARY_PATH` required if enabled; `SECONDARY_LOG_PATH` optional; invalid secondary paths are re-prompted/rejected; disabling secondary storage clears both saved secondary paths)
 3. Optionally configures cloud storage (rclone)
 4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
 5. Optionally sets up notifications (Telegram, Email; Email defaults to `EMAIL_DELIVERY_METHOD=relay`)
 6. Optionally configures encryption (AGE setup)
-7. (TUI) Optionally selects a cron time (HH:MM) for the `proxsave` cron entry
+7. Optionally selects a cron time (HH:MM, default `02:00`) for the `proxsave` cron entry in both CLI and TUI install flows
 8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)
-9. (If Telegram enabled) Shows Server ID and offers pairing verification (retry/skip supported)
+9. (If Telegram centralized mode is enabled and config + Server ID resolve successfully) Shows Server ID and offers pairing verification (retry/skip supported); otherwise install continues and logs why pairing was skipped
 10. Finalizes installation (symlinks, cron migration, permission checks)
 
 **Install log**: The installer writes a session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome).
@@ -346,21 +350,21 @@ Next step: ./build/proxsave --dry-run
 # TUI mode (default) - terminal interface
 ./build/proxsave --newkey
 
-# CLI mode - text prompts (for debugging)
+# CLI mode - text prompts (for debugging or when TUI rendering is unavailable)
 ./build/proxsave --newkey --cli
 ```
 
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **`--newkey` workflow**:
-1. Uses the default recipient file: `${BASE_DIR}/identity/age/recipient.txt` (same as `AGE_RECIPIENT_FILE` in the template)
+1. Uses the configured `AGE_RECIPIENT_FILE` when present; otherwise falls back to `${BASE_DIR}/identity/age/recipient.txt`
 2. Prompts for one of:
    - **Existing public recipient**: paste an `age1...` recipient
    - **Passphrase-derived**: enter a passphrase (proxsave derives the recipient; the passphrase is **not stored**)
    - **Private key-derived**: paste an `AGE-SECRET-KEY-...` key (not stored; proxsave stores only the derived public recipient)
 3. Writes/overwrites the recipient file after confirmation
 
-**Note**: In `--cli` mode (text prompts), you can add multiple recipients. The default TUI flow saves a single recipient; you can always add more by editing the recipient file (one per line).
+**Note**: Both CLI and TUI `--newkey` flows support adding multiple recipients and de-duplicate repeated entries before saving.
 
 **For complete encryption guide**, see: **[Encryption Guide](ENCRYPTION.md)**
 

@@ -1,13 +1,16 @@
 package wizard
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
@@ -102,6 +105,96 @@ func TestApplyInstallDataDefaultsBaseTemplate(t *testing.T) {
 	}
 }
 
+func TestApplyInstallDataAllowsEmptySecondaryLogPath(t *testing.T) {
+	data := &InstallWizardData{
+		BaseDir:                "/tmp/base",
+		EnableSecondaryStorage: true,
+		SecondaryPath:          "/mnt/sec",
+		SecondaryLogPath:       "",
+	}
+
+	result, err := ApplyInstallData("", data)
+	if err != nil {
+		t.Fatalf("ApplyInstallData returned error: %v", err)
+	}
+	if !strings.Contains(result, "SECONDARY_ENABLED=true") {
+		t.Fatalf("expected secondary enabled in result:\n%s", result)
+	}
+	if !strings.Contains(result, "SECONDARY_PATH=/mnt/sec") {
+		t.Fatalf("expected secondary path in result:\n%s", result)
+	}
+	if !strings.Contains(result, "SECONDARY_LOG_PATH=") {
+		t.Fatalf("expected empty secondary log path in result:\n%s", result)
+	}
+}
+
+func TestApplyInstallDataDisabledSecondaryClearsExistingValues(t *testing.T) {
+	baseTemplate := strings.Join([]string{
+		"SECONDARY_ENABLED=true",
+		"SECONDARY_PATH=/mnt/old-secondary",
+		"SECONDARY_LOG_PATH=/mnt/old-secondary/logs",
+		"TELEGRAM_ENABLED=false",
+		"EMAIL_ENABLED=false",
+		"ENCRYPT_ARCHIVE=false",
+		"",
+	}, "\n")
+	data := &InstallWizardData{
+		BaseDir:                "/tmp/base",
+		EnableSecondaryStorage: false,
+	}
+
+	result, err := ApplyInstallData(baseTemplate, data)
+	if err != nil {
+		t.Fatalf("ApplyInstallData returned error: %v", err)
+	}
+
+	for _, needle := range []string{
+		"SECONDARY_ENABLED=false",
+		"SECONDARY_PATH=",
+		"SECONDARY_LOG_PATH=",
+	} {
+		if !strings.Contains(result, needle) {
+			t.Fatalf("expected %q in result:\n%s", needle, result)
+		}
+	}
+	if strings.Contains(result, "/mnt/old-secondary") {
+		t.Fatalf("expected old secondary values to be cleared:\n%s", result)
+	}
+}
+
+func TestApplyInstallDataRejectsInvalidSecondaryPath(t *testing.T) {
+	data := &InstallWizardData{
+		BaseDir:                "/tmp/base",
+		EnableSecondaryStorage: true,
+		SecondaryPath:          "relative/path",
+	}
+
+	_, err := ApplyInstallData("", data)
+	if err == nil {
+		t.Fatal("expected ApplyInstallData to fail")
+	}
+	if got, want := err.Error(), "SECONDARY_PATH must be an absolute local filesystem path"; got != want {
+		t.Fatalf("ApplyInstallData error = %q, want %q", got, want)
+	}
+}
+
+func TestApplyInstallDataRejectsInvalidSecondaryLogPath(t *testing.T) {
+	data := &InstallWizardData{
+		BaseDir:                "/tmp/base",
+		EnableSecondaryStorage: true,
+		SecondaryPath:          "/mnt/sec",
+		SecondaryLogPath:       "remote:/logs",
+	}
+
+	_, err := ApplyInstallData("", data)
+	if err == nil {
+		t.Fatal("expected ApplyInstallData to fail")
+	}
+	if got, want := err.Error(), "SECONDARY_LOG_PATH must be an absolute local filesystem path"; got != want {
+		t.Fatalf("ApplyInstallData error = %q, want %q", got, want)
+	}
+}
+
 func TestApplyInstallDataCronAndNotifications(t *testing.T) {
 	baseTemplate := "CRON_SCHEDULE=\nCRON_HOUR=\nCRON_MINUTE=\nTELEGRAM_ENABLED=true\nEMAIL_ENABLED=false\nENCRYPT_ARCHIVE=true\n"
 	data := &InstallWizardData{
@@ -132,6 +225,37 @@ func TestApplyInstallDataCronAndNotifications(t *testing.T) {
 	assertContains("ENCRYPT_ARCHIVE", "false")
 }
 
+func TestRunInstallWizardBlankCronIgnoresEnvOverride(t *testing.T) {
+	t.Setenv("CRON_SCHEDULE", "5 1 * * *")
+
+	originalRunner := runInstallWizardRunner
+	t.Cleanup(func() { runInstallWizardRunner = originalRunner })
+
+	runInstallWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		form, ok := focus.(*tview.Form)
+		if !ok {
+			t.Fatalf("focus primitive = %T, want *tview.Form", focus)
+		}
+		button := form.GetButton(0)
+		if button == nil {
+			t.Fatal("expected install button")
+		}
+		button.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), nil)
+		return nil
+	}
+
+	data, err := RunInstallWizard(t.Context(), "/tmp/proxsave/backup.env", "/opt/proxsave", "sig", "")
+	if err != nil {
+		t.Fatalf("RunInstallWizard returned error: %v", err)
+	}
+	if data == nil {
+		t.Fatal("expected wizard data")
+	}
+	if data.CronTime != cronutil.DefaultTime {
+		t.Fatalf("CronTime = %q, want %q", data.CronTime, cronutil.DefaultTime)
+	}
+}
+
 func TestCheckExistingConfigActions(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "prox.env")
@@ -149,7 +273,8 @@ func TestCheckExistingConfigActions(t *testing.T) {
 	}{
 		{name: "overwrite", button: "Overwrite", want: ExistingConfigOverwrite},
 		{name: "edit existing", button: "Edit existing", want: ExistingConfigEdit},
-		{name: "keep", button: "Keep & exit", want: ExistingConfigSkip},
+		{name: "keep continue", button: "Keep & continue", want: ExistingConfigKeepContinue},
+		{name: "cancel", button: "Cancel", want: ExistingConfigCancel},
 	}
 
 	for _, tc := range tests {
@@ -189,7 +314,31 @@ func TestCheckExistingConfigPropagatesStatErrors(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for invalid path")
 	}
-	if action != ExistingConfigSkip {
-		t.Fatalf("expected skip action on stat error, got %v", action)
+	if action != ExistingConfigCancel {
+		t.Fatalf("expected cancel action on stat error, got %v", action)
+	}
+}
+
+func TestCheckExistingConfigPropagatesRunnerErrors(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "prox.env")
+	if err := os.WriteFile(configPath, []byte("base"), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	originalRunner := checkExistingConfigRunner
+	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
+
+	expectedErr := errors.New("ui runner failure")
+	checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		return expectedErr
+	}
+
+	action, err := CheckExistingConfig(configPath, "sig")
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected runner error %v, got %v", expectedErr, err)
+	}
+	if action != ExistingConfigCancel {
+		t.Fatalf("expected cancel action on runner error, got %v", action)
 	}
 }

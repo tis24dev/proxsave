@@ -288,6 +288,48 @@ func TestLoadConfigNotFound(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsInvalidSecondaryPathEvenWhenDisabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "invalid-secondary.env")
+	content := `BACKUP_PATH=/test/backup
+LOG_PATH=/test/log
+SECONDARY_ENABLED=false
+SECONDARY_PATH=remote:path
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("expected LoadConfig to fail")
+	}
+	if got, want := err.Error(), "SECONDARY_PATH must be an absolute local filesystem path"; !strings.Contains(got, want) {
+		t.Fatalf("LoadConfig() error = %q, want substring %q", got, want)
+	}
+}
+
+func TestLoadConfigRejectsInvalidSecondaryLogPathWhenConfigured(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "invalid-secondary-log.env")
+	content := `BACKUP_PATH=/test/backup
+LOG_PATH=/test/log
+SECONDARY_ENABLED=false
+SECONDARY_LOG_PATH=remote:/logs
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("expected LoadConfig to fail")
+	}
+	if got, want := err.Error(), "SECONDARY_LOG_PATH must be an absolute local filesystem path"; !strings.Contains(got, want) {
+		t.Fatalf("LoadConfig() error = %q, want substring %q", got, want)
+	}
+}
+
 func TestLoadConfigWithQuotes(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "test_quotes.env")

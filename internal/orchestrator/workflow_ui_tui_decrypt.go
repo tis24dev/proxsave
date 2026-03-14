@@ -375,83 +375,18 @@ func (u *tuiWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir str
 }
 
 func (u *tuiWorkflowUI) ResolveExistingPath(ctx context.Context, path, description, failure string) (ExistingPathDecision, string, error) {
-	action, err := promptOverwriteActionFunc(path, description, failure, u.configPath, u.buildSig)
+	decision, newPath, err := tuiPromptExistingPathDecision(path, description, failure, u.configPath, u.buildSig)
 	if err != nil {
 		return PathDecisionCancel, "", err
 	}
-	switch action {
-	case pathActionOverwrite:
-		return PathDecisionOverwrite, "", nil
-	case pathActionNew:
-		newPath, err := promptNewPathInputFunc(path, u.configPath, u.buildSig)
-		if err != nil {
-			return PathDecisionCancel, "", err
-		}
-		return PathDecisionNewPath, filepath.Clean(newPath), nil
-	default:
-		return PathDecisionCancel, "", ErrDecryptAborted
+	if decision != PathDecisionNewPath {
+		return decision, "", nil
 	}
+	return decision, filepath.Clean(newPath), nil
 }
 
 func (u *tuiWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error) {
-	app := newTUIApp()
-	var (
-		secret    string
-		cancelled bool
-	)
-
-	name := strings.TrimSpace(displayName)
-	if name == "" {
-		name = "selected backup"
-	}
-
-	infoMessage := fmt.Sprintf("Provide the AGE secret key or passphrase used for [yellow]%s[white].", name)
-	if strings.TrimSpace(previousError) != "" {
-		infoMessage = fmt.Sprintf("%s\n\n[red]%s[white]", infoMessage, strings.TrimSpace(previousError))
-	}
-
-	infoText := tview.NewTextView().
-		SetText(infoMessage).
-		SetWrap(true).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true)
-
-	form := components.NewForm(app)
-	label := "Key or passphrase:"
-	form.AddPasswordField(label, 64)
-	form.SetOnSubmit(func(values map[string]string) error {
-		raw := strings.TrimSpace(values[label])
-		if raw == "" {
-			return fmt.Errorf("key or passphrase cannot be empty")
-		}
-		if raw == "0" {
-			cancelled = true
-			return nil
-		}
-		secret = raw
-		return nil
-	})
-	form.SetOnCancel(func() {
-		cancelled = true
-	})
-	form.AddSubmitButton("Continue")
-	form.AddCancelButton("Cancel")
-	enableFormNavigation(form, nil)
-
-	content := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(infoText, 0, 2, false).
-		AddItem(form.Form, 0, 1, true)
-
-	page := u.buildPage("Decrypt key", u.configPath, u.buildSig, content)
-	form.SetParentView(page)
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
-		return "", err
-	}
-	if cancelled {
-		return "", ErrDecryptAborted
-	}
-	return secret, nil
+	return tuiPromptDecryptSecret(u.configPath, u.buildSig, displayName, previousError)
 }
 
 func backupSummaryForUI(cand *decryptCandidate) string {

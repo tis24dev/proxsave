@@ -344,7 +344,25 @@ func (c *Config) parse() error {
 	if err := c.parseCollectionSettings(); err != nil {
 		return err
 	}
+	if err := c.validateSecondarySettings(); err != nil {
+		return err
+	}
 	c.autoDetectPBSAuth()
+	return nil
+}
+
+func (c *Config) validateSecondarySettings() error {
+	if err := ValidateOptionalSecondaryPath(c.SecondaryPath); err != nil {
+		return err
+	}
+	if c.SecondaryEnabled {
+		if err := ValidateRequiredSecondaryPath(c.SecondaryPath); err != nil {
+			return err
+		}
+	}
+	if err := ValidateOptionalSecondaryLogPath(c.SecondaryLogPath); err != nil {
+		return err
+	}
 	return nil
 }
 
