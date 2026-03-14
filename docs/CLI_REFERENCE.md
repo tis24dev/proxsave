@@ -357,7 +357,7 @@ Next step: ./build/proxsave --dry-run
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 
 **`--newkey` workflow**:
-1. Uses the default recipient file: `${BASE_DIR}/identity/age/recipient.txt` (same as `AGE_RECIPIENT_FILE` in the template)
+1. Uses the configured `AGE_RECIPIENT_FILE` when present; otherwise falls back to `${BASE_DIR}/identity/age/recipient.txt`
 2. Prompts for one of:
    - **Existing public recipient**: paste an `age1...` recipient
    - **Passphrase-derived**: enter a passphrase (proxsave derives the recipient; the passphrase is **not stored**)

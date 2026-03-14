@@ -80,3 +80,61 @@ func TestLogNewKeySuccessWithBootstrapUsesBootstrapLogger(t *testing.T) {
 		t.Fatalf("expected mirror logger security reminder, got %q", mirrorOutput)
 	}
 }
+
+func TestLoadNewKeyConfigUsesConfiguredRecipientFile(t *testing.T) {
+	baseDir := t.TempDir()
+	configPath := filepath.Join(baseDir, "env", "backup.env")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(configPath), err)
+	}
+
+	customPath := filepath.Join(baseDir, "custom", "recipient.txt")
+	content := "BASE_DIR=" + baseDir + "\nENCRYPT_ARCHIVE=false\nAGE_RECIPIENT_FILE=" + customPath + "\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", configPath, err)
+	}
+
+	cfg, recipientPath, err := loadNewKeyConfig(configPath, baseDir)
+	if err != nil {
+		t.Fatalf("loadNewKeyConfig error: %v", err)
+	}
+	if recipientPath != customPath {
+		t.Fatalf("recipientPath=%q; want %q", recipientPath, customPath)
+	}
+	if cfg == nil {
+		t.Fatalf("expected config")
+	}
+	if cfg.BaseDir != baseDir {
+		t.Fatalf("BaseDir=%q; want %q", cfg.BaseDir, baseDir)
+	}
+	if cfg.ConfigPath != configPath {
+		t.Fatalf("ConfigPath=%q; want %q", cfg.ConfigPath, configPath)
+	}
+	if cfg.AgeRecipientFile != customPath {
+		t.Fatalf("AgeRecipientFile=%q; want %q", cfg.AgeRecipientFile, customPath)
+	}
+	if !cfg.EncryptArchive {
+		t.Fatalf("EncryptArchive=false; want true")
+	}
+}
+
+func TestLoadNewKeyConfigFailsForInvalidExistingConfig(t *testing.T) {
+	baseDir := t.TempDir()
+	configPath := filepath.Join(baseDir, "env", "backup.env")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(configPath), err)
+	}
+
+	content := "BASE_DIR=" + baseDir + "\nCUSTOM_BACKUP_PATHS=\"\nunterminated\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", configPath, err)
+	}
+
+	_, _, err := loadNewKeyConfig(configPath, baseDir)
+	if err == nil {
+		t.Fatalf("expected loadNewKeyConfig to fail for invalid config")
+	}
+	if !strings.Contains(err.Error(), "load configuration for newkey") {
+		t.Fatalf("expected wrapped configuration load error, got %v", err)
+	}
+}

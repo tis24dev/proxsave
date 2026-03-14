@@ -183,16 +183,68 @@ func TestRunNewKeySetupKeepsDefaultRecipientPathContract(t *testing.T) {
 		addMore: []bool{false},
 	}
 
-	if err := runNewKeySetup(context.Background(), configPath, baseDir, nil, ui); err != nil {
+	recipientPath, err := runNewKeySetup(context.Background(), configPath, baseDir, nil, ui)
+	if err != nil {
 		t.Fatalf("runNewKeySetup error: %v", err)
 	}
 
 	target := filepath.Join(baseDir, "identity", "age", "recipient.txt")
+	if recipientPath != target {
+		t.Fatalf("recipientPath=%q; want %q", recipientPath, target)
+	}
 	content, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("ReadFile(%s): %v", target, err)
 	}
 	if got := string(content); got != id.Recipient().String()+"\n" {
 		t.Fatalf("content=%q; want %q", got, id.Recipient().String()+"\n")
+	}
+}
+
+func TestRunNewKeySetupUsesConfiguredRecipientFile(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+
+	baseDir := t.TempDir()
+	configPath := filepath.Join(baseDir, "env", "backup.env")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(configPath), err)
+	}
+
+	customPath := filepath.Join(baseDir, "custom", "recipient.txt")
+	content := "BASE_DIR=" + baseDir + "\nENCRYPT_ARCHIVE=true\nAGE_RECIPIENT_FILE=" + customPath + "\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", configPath, err)
+	}
+
+	ui := &testAgeSetupUI{
+		overwrite: true,
+		drafts: []*orchestrator.AgeRecipientDraft{
+			{Kind: orchestrator.AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
+		},
+		addMore: []bool{false},
+	}
+
+	recipientPath, err := runNewKeySetup(context.Background(), configPath, baseDir, nil, ui)
+	if err != nil {
+		t.Fatalf("runNewKeySetup error: %v", err)
+	}
+	if recipientPath != customPath {
+		t.Fatalf("recipientPath=%q; want %q", recipientPath, customPath)
+	}
+
+	customContent, err := os.ReadFile(customPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", customPath, err)
+	}
+	if got := string(customContent); got != id.Recipient().String()+"\n" {
+		t.Fatalf("content=%q; want %q", got, id.Recipient().String()+"\n")
+	}
+
+	defaultPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
+	if _, err := os.Stat(defaultPath); !os.IsNotExist(err) {
+		t.Fatalf("default path %s should not be written, stat err=%v", defaultPath, err)
 	}
 }

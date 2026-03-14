@@ -75,16 +75,16 @@ func runNewKey(ctx context.Context, configPath string, logLevel types.LogLevel, 
 }
 
 func runNewKeyTUI(ctx context.Context, configPath, baseDir string, bootstrap *logging.BootstrapLogger) (err error) {
-	recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
 	sig := buildSignature()
 	if strings.TrimSpace(sig) == "" {
 		sig = "n/a"
 	}
-	done := logging.DebugStartBootstrap(bootstrap, "newkey workflow (tui)", "recipient=%s", recipientPath)
+	done := logging.DebugStartBootstrap(bootstrap, "newkey workflow (tui)", "config=%s", configPath)
 	defer func() { done(err) }()
 
 	logging.DebugStepBootstrap(bootstrap, "newkey workflow (tui)", "running AGE setup via orchestrator")
-	if err := runNewKeySetup(ctx, configPath, baseDir, logging.GetDefaultLogger(), wizard.NewAgeSetupUI(configPath, sig)); err != nil {
+	recipientPath, err := runNewKeySetup(ctx, configPath, baseDir, logging.GetDefaultLogger(), wizard.NewAgeSetupUI(configPath, sig))
+	if err != nil {
 		return err
 	}
 
@@ -94,8 +94,8 @@ func runNewKeyTUI(ctx context.Context, configPath, baseDir string, bootstrap *lo
 }
 
 func runNewKeyCLI(ctx context.Context, configPath, baseDir string, logger *logging.Logger, bootstrap *logging.BootstrapLogger) error {
-	recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
-	if err := runNewKeySetup(ctx, configPath, baseDir, logger, nil); err != nil {
+	recipientPath, err := runNewKeySetup(ctx, configPath, baseDir, logger, nil)
+	if err != nil {
 		return err
 	}
 
@@ -122,14 +122,42 @@ func modeLabel(useCLI bool) string {
 	return "tui"
 }
 
-func runNewKeySetup(ctx context.Context, configPath, baseDir string, logger *logging.Logger, ui orchestrator.AgeSetupUI) error {
-	recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
+func loadNewKeyConfig(configPath, baseDir string) (*config.Config, string, error) {
+	defaultRecipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
 
 	cfg := &config.Config{
 		BaseDir:          baseDir,
 		ConfigPath:       configPath,
 		EncryptArchive:   true,
-		AgeRecipientFile: recipientPath,
+		AgeRecipientFile: defaultRecipientPath,
+	}
+
+	if _, err := os.Stat(configPath); err == nil {
+		loaded, err := config.LoadConfig(configPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("load configuration for newkey: %w", err)
+		}
+		cfg = loaded
+		cfg.BaseDir = baseDir
+		cfg.ConfigPath = configPath
+		cfg.EncryptArchive = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", fmt.Errorf("inspect configuration for newkey: %w", err)
+	}
+
+	recipientPath := strings.TrimSpace(cfg.AgeRecipientFile)
+	if recipientPath == "" {
+		recipientPath = defaultRecipientPath
+	}
+	cfg.AgeRecipientFile = recipientPath
+
+	return cfg, recipientPath, nil
+}
+
+func runNewKeySetup(ctx context.Context, configPath, baseDir string, logger *logging.Logger, ui orchestrator.AgeSetupUI) (string, error) {
+	cfg, recipientPath, err := loadNewKeyConfig(configPath, baseDir)
+	if err != nil {
+		return "", err
 	}
 
 	if logger == nil {
@@ -141,7 +169,6 @@ func runNewKeySetup(ctx context.Context, configPath, baseDir string, logger *log
 	orch.SetConfig(cfg)
 	orch.SetForceNewAgeRecipient(true)
 
-	var err error
 	if ui != nil {
 		err = orch.EnsureAgeRecipientsReadyWithUI(ctx, ui)
 	} else {
@@ -149,10 +176,10 @@ func runNewKeySetup(ctx context.Context, configPath, baseDir string, logger *log
 	}
 	if err != nil {
 		if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
-			return wrapInstallError(errInteractiveAborted)
+			return "", wrapInstallError(errInteractiveAborted)
 		}
-		return fmt.Errorf("AGE setup failed: %w", err)
+		return "", fmt.Errorf("AGE setup failed: %w", err)
 	}
 
-	return nil
+	return recipientPath, nil
 }
