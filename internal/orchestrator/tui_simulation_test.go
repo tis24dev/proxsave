@@ -73,16 +73,22 @@ func TestPromptOverwriteAction_SelectsOverwrite(t *testing.T) {
 	}
 }
 
-func TestPromptNewPathInput_ContinueReturnsDefault(t *testing.T) {
-	// Move focus to Continue button then submit.
-	withSimApp(t, []tcell.Key{tcell.KeyTab, tcell.KeyEnter})
+func TestPromptNewPathInput_ContinueReturnsEditedPath(t *testing.T) {
+	withSimAppSequence(t, []simKey{
+		{Key: tcell.KeyRune, R: '/'},
+		{Key: tcell.KeyRune, R: 'a'},
+		{Key: tcell.KeyRune, R: 'l'},
+		{Key: tcell.KeyRune, R: 't'},
+		{Key: tcell.KeyTab},
+		{Key: tcell.KeyEnter},
+	})
 
 	got, err := promptNewPathInputTUI("/tmp/newpath", "/tmp/config.env", "sig")
 	if err != nil {
 		t.Fatalf("promptNewPathInputTUI error: %v", err)
 	}
-	if got != "/tmp/newpath" {
-		t.Fatalf("path=%q; want %q", got, "/tmp/newpath")
+	if got != "/tmp/newpath/alt" {
+		t.Fatalf("path=%q; want %q", got, "/tmp/newpath/alt")
 	}
 }
 

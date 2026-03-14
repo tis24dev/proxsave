@@ -100,3 +100,23 @@ func TestTUIWorkflowUIPromptDestinationDir_CancelReturnsAborted(t *testing.T) {
 		t.Fatalf("err=%v, want %v", err, ErrDecryptAborted)
 	}
 }
+
+func TestValidateDistinctNewPathInputRejectsEquivalentNormalizedPath(t *testing.T) {
+	_, err := validateDistinctNewPathInput("/tmp/out/", "/tmp/out")
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if err.Error() != "path must be different from existing path" {
+		t.Fatalf("err=%q, want %q", err.Error(), "path must be different from existing path")
+	}
+}
+
+func TestValidateDistinctNewPathInputAcceptsDifferentPath(t *testing.T) {
+	got, err := validateDistinctNewPathInput(" /tmp/out/alt ", "/tmp/out")
+	if err != nil {
+		t.Fatalf("validateDistinctNewPathInput error: %v", err)
+	}
+	if got != "/tmp/out/alt" {
+		t.Fatalf("path=%q, want %q", got, "/tmp/out/alt")
+	}
+}

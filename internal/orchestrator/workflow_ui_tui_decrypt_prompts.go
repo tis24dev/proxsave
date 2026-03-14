@@ -75,13 +75,15 @@ func promptNewPathInputTUI(defaultPath, configPath, buildSig string) (string, er
 	form := components.NewForm(app)
 	label := "New path"
 	form.AddInputFieldWithValidation(label, defaultPath, 64, func(value string) error {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("path cannot be empty")
-		}
-		return nil
+		_, err := validateDistinctNewPathInput(value, defaultPath)
+		return err
 	})
 	form.SetOnSubmit(func(values map[string]string) error {
-		newPath = strings.TrimSpace(values[label])
+		trimmed, err := validateDistinctNewPathInput(values[label], defaultPath)
+		if err != nil {
+			return err
+		}
+		newPath = trimmed
 		return nil
 	})
 	form.SetOnCancel(func() {
@@ -112,6 +114,20 @@ func promptNewPathInputTUI(defaultPath, configPath, buildSig string) (string, er
 		return "", ErrDecryptAborted
 	}
 	return filepath.Clean(newPath), nil
+}
+
+func validateDistinctNewPathInput(value, defaultPath string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", fmt.Errorf("path cannot be empty")
+	}
+
+	trimmedDefault := strings.TrimSpace(defaultPath)
+	if trimmedDefault != "" && filepath.Clean(trimmed) == filepath.Clean(trimmedDefault) {
+		return "", fmt.Errorf("path must be different from existing path")
+	}
+
+	return trimmed, nil
 }
 
 func promptDecryptSecretTUI(configPath, buildSig, displayName, previousError string) (string, error) {
