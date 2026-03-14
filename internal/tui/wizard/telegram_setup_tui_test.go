@@ -3,7 +3,9 @@ package wizard
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -46,6 +48,46 @@ func eligibleTelegramSetupBootstrap() orchestrator.TelegramSetupBootstrap {
 		IdentityFile:      "/tmp/.server_identity",
 		IdentityPersisted: false,
 	}
+}
+
+func extractTelegramSetupViews(t *testing.T, root tview.Primitive) (*tview.TextView, *tview.TextView, *tview.Form) {
+	t.Helper()
+
+	layout, ok := root.(*tview.Flex)
+	if !ok {
+		t.Fatalf("expected root *tview.Flex, got %T", root)
+	}
+	if layout.GetItemCount() < 4 {
+		t.Fatalf("unexpected layout item count: %d", layout.GetItemCount())
+	}
+
+	pages, ok := layout.GetItem(3).(*tview.Pages)
+	if !ok {
+		t.Fatalf("expected pages at layout index 3, got %T", layout.GetItem(3))
+	}
+	_, bodyPrimitive := pages.GetFrontPage()
+	body, ok := bodyPrimitive.(*tview.Flex)
+	if !ok {
+		t.Fatalf("expected body *tview.Flex, got %T", bodyPrimitive)
+	}
+	if body.GetItemCount() < 4 {
+		t.Fatalf("unexpected body item count: %d", body.GetItemCount())
+	}
+
+	serverIDView, ok := body.GetItem(1).(*tview.TextView)
+	if !ok {
+		t.Fatalf("expected server ID view at body index 1, got %T", body.GetItem(1))
+	}
+	statusView, ok := body.GetItem(2).(*tview.TextView)
+	if !ok {
+		t.Fatalf("expected status view at body index 2, got %T", body.GetItem(2))
+	}
+	form, ok := body.GetItem(3).(*tview.Form)
+	if !ok {
+		t.Fatalf("expected form at body index 3, got %T", body.GetItem(3))
+	}
+
+	return serverIDView, statusView, form
 }
 
 func TestRunTelegramSetupWizard_DisabledSkipsUIAndRunnerNotCalled(t *testing.T) {
@@ -172,6 +214,27 @@ func TestRunTelegramSetupWizard_IdentityUnavailableSkipsUI(t *testing.T) {
 	}
 }
 
+func TestRunTelegramSetupWizard_PropagatesBootstrapError(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	expectedErr := errors.New("bootstrap failed")
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{}, expectedErr
+	}
+	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		t.Fatalf("runner should not be called when bootstrap returns an error")
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected error %v, got %v", expectedErr, err)
+	}
+	if result != (TelegramSetupResult{}) {
+		t.Fatalf("expected empty result on bootstrap error, got %#v", result)
+	}
+}
+
 func TestRunTelegramSetupWizard_CentralizedSuccess_RequiresCheckBeforeContinue(t *testing.T) {
 	stubTelegramSetupDeps(t)
 
@@ -246,6 +309,40 @@ func TestRunTelegramSetupWizard_CentralizedSuccess_RequiresCheckBeforeContinue(t
 	}
 }
 
+func TestRunTelegramSetupWizard_ShowsPersistedIdentityState(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		state := eligibleTelegramSetupBootstrap()
+		state.IdentityPersisted = true
+		return state, nil
+	}
+	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		serverIDView, _, form := extractTelegramSetupViews(t, root)
+		text := serverIDView.GetText(true)
+		if !strings.Contains(text, "persisted") {
+			t.Fatalf("expected persisted identity state, got %q", text)
+		}
+		if strings.Contains(text, "not persisted") {
+			t.Fatalf("did not expect non-persisted label, got %q", text)
+		}
+
+		pressFormButton(t, form, "Skip")
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
+	}
+	if !result.IdentityPersisted {
+		t.Fatalf("expected IdentityPersisted=true")
+	}
+	if !result.SkippedVerification {
+		t.Fatalf("expected SkippedVerification=true")
+	}
+}
+
 func TestRunTelegramSetupWizard_CentralizedFailure_CanRetryAndSkip(t *testing.T) {
 	stubTelegramSetupDeps(t)
 
@@ -302,6 +399,57 @@ func TestRunTelegramSetupWizard_CentralizedFailure_CanRetryAndSkip(t *testing.T)
 	}
 }
 
+func TestRunTelegramSetupWizard_TruncatesLongFailureMessage(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	longMessage := strings.Repeat("x", 320)
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return eligibleTelegramSetupBootstrap(), nil
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		return notify.TelegramRegistrationStatus{
+			Code:    500,
+			Message: "  " + longMessage + "  ",
+		}
+	}
+	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		_, statusView, form := extractTelegramSetupViews(t, root)
+
+		pressFormButton(t, form, "Check")
+
+		text := statusView.GetText(true)
+		if !strings.Contains(text, "...(truncated)") {
+			t.Fatalf("expected truncated status, got %q", text)
+		}
+		if !strings.Contains(text, "Skip verification and complete pairing later.") {
+			t.Fatalf("expected retry/skip hint, got %q", text)
+		}
+		if strings.Contains(text, longMessage) {
+			t.Fatalf("expected long message to be truncated, got %q", text)
+		}
+
+		pressFormButton(t, form, "Skip")
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
+	}
+	if result.Verified {
+		t.Fatalf("expected Verified=false")
+	}
+	if result.CheckAttempts != 1 {
+		t.Fatalf("CheckAttempts=%d, want 1", result.CheckAttempts)
+	}
+	if result.LastStatusCode != 500 {
+		t.Fatalf("LastStatusCode=%d, want 500", result.LastStatusCode)
+	}
+	if result.LastStatusMessage != "  "+longMessage+"  " {
+		t.Fatalf("LastStatusMessage=%q, want original message", result.LastStatusMessage)
+	}
+}
+
 func TestRunTelegramSetupWizard_CentralizedEscSkipsWhenNotVerified(t *testing.T) {
 	stubTelegramSetupDeps(t)
 
@@ -335,6 +483,48 @@ func TestRunTelegramSetupWizard_CentralizedEscSkipsWhenNotVerified(t *testing.T)
 	}
 	if result.CheckAttempts != 0 {
 		t.Fatalf("CheckAttempts=%d, want 0", result.CheckAttempts)
+	}
+}
+
+func TestRunTelegramSetupWizard_CentralizedEscAfterVerificationDoesNotSkip(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return eligibleTelegramSetupBootstrap(), nil
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		return notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}
+	}
+	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		_, _, form := extractTelegramSetupViews(t, root)
+
+		pressFormButton(t, form, "Check")
+		if form.GetButtonIndex("Continue") == -1 {
+			t.Fatalf("expected Continue button after verification")
+		}
+
+		capture := app.GetInputCapture()
+		if capture == nil {
+			t.Fatalf("expected input capture to be set")
+		}
+		if got := capture(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone)); got != nil {
+			t.Fatalf("expected ESC to be consumed, got %#v", got)
+		}
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
+	}
+	if !result.Verified {
+		t.Fatalf("expected Verified=true")
+	}
+	if result.SkippedVerification {
+		t.Fatalf("expected SkippedVerification=false after ESC on verified flow")
+	}
+	if result.CheckAttempts != 1 {
+		t.Fatalf("CheckAttempts=%d, want 1", result.CheckAttempts)
 	}
 }
 
@@ -404,5 +594,45 @@ func TestRunTelegramSetupWizard_CheckIgnoredWhileChecking_AndUpdateSuppressedAft
 	}
 	if checkCalls != 1 {
 		t.Fatalf("checkCalls=%d, want 1", checkCalls)
+	}
+}
+
+func TestTelegramSetupDefaultWrappers(t *testing.T) {
+	done := make(chan struct{})
+	telegramSetupGo(func() {
+		close(done)
+	})
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for telegramSetupGo")
+	}
+
+	app := tui.NewApp()
+	app.SetScreen(tcell.NewSimulationScreen("UTF-8"))
+	root := tview.NewBox()
+
+	updateDone := make(chan struct{})
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		telegramSetupQueueUpdateDraw(app, func() {
+			close(updateDone)
+			app.Stop()
+		})
+	}()
+
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		app.Stop()
+	}()
+
+	if err := telegramSetupWizardRunner(app, root, root); err != nil {
+		t.Fatalf("telegramSetupWizardRunner error: %v", err)
+	}
+
+	select {
+	case <-updateDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for telegramSetupQueueUpdateDraw")
 	}
 }
