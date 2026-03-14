@@ -122,7 +122,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			return err
 		}
 
-		bootstrap.Debug("Configuration saved at %s", configPath)
+		if bootstrap != nil {
+			bootstrap.Debug("Configuration saved at %s", configPath)
+		}
 	}
 
 	// Install support docs
@@ -142,13 +144,15 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			return err
 		}
 
-		bootstrap.Info("AGE encryption configured successfully")
-		if setupResult.WroteRecipientFile && setupResult.RecipientPath != "" {
-			bootstrap.Info("Recipient saved to: %s", setupResult.RecipientPath)
-		} else if setupResult.ReusedExistingRecipients {
-			bootstrap.Info("Using existing AGE recipient configuration")
+		if bootstrap != nil {
+			bootstrap.Info("AGE encryption configured successfully")
+			if setupResult.WroteRecipientFile && setupResult.RecipientPath != "" {
+				bootstrap.Info("Recipient saved to: %s", setupResult.RecipientPath)
+			} else if setupResult.ReusedExistingRecipients {
+				bootstrap.Info("Using existing AGE recipient configuration")
+			}
+			bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
 		}
-		bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
 	}
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors
