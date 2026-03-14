@@ -57,34 +57,54 @@ func extractTelegramSetupViews(t *testing.T, root tview.Primitive) (*tview.TextV
 	if !ok {
 		t.Fatalf("expected root *tview.Flex, got %T", root)
 	}
-	if layout.GetItemCount() < 4 {
-		t.Fatalf("unexpected layout item count: %d", layout.GetItemCount())
+
+	var pages *tview.Pages
+	for i := 0; i < layout.GetItemCount(); i++ {
+		candidate, ok := layout.GetItem(i).(*tview.Pages)
+		if !ok {
+			continue
+		}
+		if pages != nil {
+			t.Fatal("expected a single pages container in telegram setup layout")
+		}
+		pages = candidate
+	}
+	if pages == nil {
+		t.Fatal("expected pages container in telegram setup layout")
 	}
 
-	pages, ok := layout.GetItem(3).(*tview.Pages)
-	if !ok {
-		t.Fatalf("expected pages at layout index 3, got %T", layout.GetItem(3))
-	}
 	_, bodyPrimitive := pages.GetFrontPage()
 	body, ok := bodyPrimitive.(*tview.Flex)
 	if !ok {
 		t.Fatalf("expected body *tview.Flex, got %T", bodyPrimitive)
 	}
-	if body.GetItemCount() < 4 {
-		t.Fatalf("unexpected body item count: %d", body.GetItemCount())
+
+	var serverIDView, statusView *tview.TextView
+	var form *tview.Form
+	for i := 0; i < body.GetItemCount(); i++ {
+		switch item := body.GetItem(i).(type) {
+		case *tview.TextView:
+			switch strings.TrimSpace(item.GetTitle()) {
+			case "Server ID":
+				serverIDView = item
+			case "Status":
+				statusView = item
+			}
+		case *tview.Form:
+			if strings.TrimSpace(item.GetTitle()) == "Actions" {
+				form = item
+			}
+		}
 	}
 
-	serverIDView, ok := body.GetItem(1).(*tview.TextView)
-	if !ok {
-		t.Fatalf("expected server ID view at body index 1, got %T", body.GetItem(1))
+	if serverIDView == nil {
+		t.Fatal("expected Server ID view in telegram setup body")
 	}
-	statusView, ok := body.GetItem(2).(*tview.TextView)
-	if !ok {
-		t.Fatalf("expected status view at body index 2, got %T", body.GetItem(2))
+	if statusView == nil {
+		t.Fatal("expected Status view in telegram setup body")
 	}
-	form, ok := body.GetItem(3).(*tview.Form)
-	if !ok {
-		t.Fatalf("expected form at body index 3, got %T", body.GetItem(3))
+	if form == nil {
+		t.Fatal("expected Actions form in telegram setup body")
 	}
 
 	return serverIDView, statusView, form
@@ -612,17 +632,19 @@ func TestTelegramSetupDefaultWrappers(t *testing.T) {
 	app.SetScreen(tcell.NewSimulationScreen("UTF-8"))
 	root := tview.NewBox()
 
+	updateQueued := make(chan struct{})
 	updateDone := make(chan struct{})
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		close(updateQueued)
 		telegramSetupQueueUpdateDraw(app, func() {
 			close(updateDone)
 			app.Stop()
 		})
 	}()
+	<-updateQueued
 
 	go func() {
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		app.Stop()
 	}()
 
