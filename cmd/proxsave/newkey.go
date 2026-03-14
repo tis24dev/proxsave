@@ -88,8 +88,7 @@ func runNewKeyTUI(ctx context.Context, configPath, baseDir string, bootstrap *lo
 		return err
 	}
 
-	bootstrap.Info("✓ New AGE recipient(s) generated and saved to %s", recipientPath)
-	bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
+	logNewKeySuccess(recipientPath, bootstrap)
 
 	return nil
 }
@@ -100,10 +99,20 @@ func runNewKeyCLI(ctx context.Context, configPath, baseDir string, logger *loggi
 		return err
 	}
 
-	bootstrap.Info("✓ New AGE recipient(s) generated and saved to %s", recipientPath)
-	bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
+	logNewKeySuccess(recipientPath, bootstrap)
 
 	return nil
+}
+
+func logNewKeySuccess(recipientPath string, bootstrap *logging.BootstrapLogger) {
+	if bootstrap != nil {
+		bootstrap.Info("✓ New AGE recipient(s) generated and saved to %s", recipientPath)
+		bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
+		return
+	}
+
+	fmt.Printf("✓ New AGE recipient(s) generated and saved to %s\n", recipientPath)
+	fmt.Println("IMPORTANT: Keep your passphrase/private key offline and secure!")
 }
 
 func modeLabel(useCLI bool) string {
