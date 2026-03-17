@@ -93,6 +93,7 @@ func (o *Orchestrator) prepareAgeRecipientsWithUI(ctx context.Context, ui AgeSet
 
 func (o *Orchestrator) runAgeSetupWorkflow(ctx context.Context, candidatePath string, ui AgeSetupUI) ([]string, *AgeRecipientSetupResult, error) {
 	targetPath := strings.TrimSpace(candidatePath)
+	fs := o.filesystem()
 	if targetPath == "" {
 		targetPath = o.defaultAgeRecipientFile()
 	}
@@ -102,22 +103,33 @@ func (o *Orchestrator) runAgeSetupWorkflow(ctx context.Context, candidatePath st
 
 	if o.logger != nil {
 		o.logger.Info("Encryption setup: no AGE recipients found, starting interactive wizard")
+		o.logger.Debug("Encryption setup: target recipient file resolved to %s (force new recipient=%t)", targetPath, o.forceNewAgeRecipient)
 	}
 
+	confirmedOverwriteExisting := false
 	if o.forceNewAgeRecipient {
-		if _, err := os.Stat(targetPath); err == nil {
+		if _, err := fs.Stat(targetPath); err == nil {
+			confirmedOverwriteExisting = true
+			if o.logger != nil {
+				o.logger.Debug("Encryption setup: existing AGE recipient file found at %s; requesting overwrite confirmation", targetPath)
+			}
 			confirm, err := ui.ConfirmOverwriteExistingRecipient(ctx, targetPath)
 			if err != nil {
 				return nil, nil, mapAgeSetupAbort(err)
 			}
 			if !confirm {
+				if o.logger != nil {
+					o.logger.Info("Encryption setup: overwrite declined for %s; leaving existing AGE recipient file unchanged", targetPath)
+				}
 				return nil, nil, ErrAgeRecipientSetupAborted
 			}
-			if err := backupExistingRecipientFile(targetPath); err != nil && o.logger != nil {
-				o.logger.Warning("NOTE: %v", err)
+			if o.logger != nil {
+				o.logger.Debug("Encryption setup: overwrite confirmed for %s; backup will be created before replacing the file", targetPath)
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return nil, nil, fmt.Errorf("failed to inspect existing AGE recipients at %s: %w", targetPath, err)
+		} else if o.logger != nil {
+			o.logger.Debug("Encryption setup: no existing AGE recipient file found at %s; a new file will be created", targetPath)
 		}
 	}
 
@@ -153,13 +165,40 @@ func (o *Orchestrator) runAgeSetupWorkflow(ctx context.Context, candidatePath st
 	if len(recipients) == 0 {
 		return nil, nil, fmt.Errorf("no recipients provided")
 	}
+	if o.logger != nil {
+		o.logger.Debug("Encryption setup: collected %d unique AGE recipient(s) for %s", len(recipients), targetPath)
+	}
 
-	if err := writeRecipientFile(targetPath, recipients); err != nil {
+	backupPath := ""
+	if confirmedOverwriteExisting {
+		if o.logger != nil {
+			o.logger.Debug("Encryption setup: creating backup of existing AGE recipient file at %s before overwrite", targetPath)
+		}
+		var err error
+		backupPath, err = backupExistingRecipientFileWithDeps(fs, o.clock, targetPath)
+		if err != nil {
+			if o.logger != nil {
+				o.logger.Warning("Encryption setup: failed to back up existing AGE recipients at %s: %v", targetPath, err)
+			}
+			return nil, nil, fmt.Errorf("backup existing AGE recipients at %s: %w", targetPath, err)
+		}
+		if o.logger != nil {
+			o.logger.Info("Encryption setup: existing AGE recipients backed up to %s", backupPath)
+		}
+	}
+
+	if o.logger != nil {
+		o.logger.Debug("Encryption setup: writing %d AGE recipient(s) to %s (overwrite existing=%t)", len(recipients), targetPath, confirmedOverwriteExisting)
+	}
+	if err := writeRecipientFileWithDeps(fs, o.clock, targetPath, recipients); err != nil {
 		return nil, nil, err
 	}
 
 	if o.logger != nil {
-		o.logger.Info("Saved AGE recipient to %s", targetPath)
+		o.logger.Info("Saved %d AGE recipient(s) to %s", len(recipients), targetPath)
+		if backupPath != "" {
+			o.logger.Debug("Encryption setup: previous AGE recipient file for %s was preserved at %s", targetPath, backupPath)
+		}
 		o.logger.Info("Reminder: keep the AGE private key offline; the server stores only recipients.")
 	}
 	return recipients, &AgeRecipientSetupResult{

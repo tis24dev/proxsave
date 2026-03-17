@@ -118,8 +118,19 @@ func TestBackupAgeRecipientFileExported(t *testing.T) {
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("expected backup file, got %v err=%v", matches, err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("original path should have been moved, stat err=%v", err)
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	if got := string(original); got != "old" {
+		t.Fatalf("original content=%q; want %q", got, "old")
+	}
+	backup, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", matches[0], err)
+	}
+	if got := string(backup); got != "old" {
+		t.Fatalf("backup content=%q; want %q", got, "old")
 	}
 }
 

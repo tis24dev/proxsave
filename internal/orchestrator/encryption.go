@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -318,18 +320,22 @@ func readRecipientFile(path string) ([]string, error) {
 }
 
 func writeRecipientFile(path string, recipients []string) error {
+	return writeRecipientFileWithDeps(osFS{}, realTimeProvider{}, path, recipients)
+}
+
+func writeRecipientFileWithDeps(fs FS, tp TimeProvider, path string, recipients []string) error {
+	if fs == nil {
+		fs = osFS{}
+	}
 	if len(recipients) == 0 {
 		return fmt.Errorf("no recipients to write")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := fs.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create recipient directory: %w", err)
 	}
 	content := strings.Join(recipients, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := writeFileAtomicWithDeps(fs, tp, path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write recipient file: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("chmod recipient file: %w", err)
 	}
 	return nil
 }
@@ -354,26 +360,152 @@ func mapInputAbortToAgeAbort(err error) error {
 }
 
 func backupExistingRecipientFile(path string) error {
-	if path == "" {
-		return nil
-	}
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	backupPath := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102-150405"))
-	if err := os.Rename(path, backupPath); err != nil {
-		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to backup recipient file: %w (also failed to remove: %v)", err, removeErr)
-		}
-		return fmt.Errorf("renamed recipient file failed, removed original: %w", err)
-	}
-	return nil
+	_, err := backupExistingRecipientFileWithDeps(osFS{}, realTimeProvider{}, path)
+	return err
 }
 
-// BackupAgeRecipientFile backs up an existing AGE recipient file (if present).
+func backupExistingRecipientFileWithDeps(fs FS, tp TimeProvider, path string) (string, error) {
+	if fs == nil {
+		fs = osFS{}
+	}
+	if path == "" {
+		return "", nil
+	}
+	info, err := fs.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("recipient path is a directory: %s", path)
+	}
+	perm := info.Mode().Perm()
+	if perm == 0 {
+		perm = 0o600
+	}
+	backupPath := fmt.Sprintf("%s.bak-%s", path, recipientTime(tp).Format("20060102-150405"))
+	if err := copyRecipientFileWithDeps(fs, path, backupPath, perm); err != nil {
+		return "", fmt.Errorf("backup recipient file: %w", err)
+	}
+	return backupPath, nil
+}
+
+func writeFileAtomicWithDeps(fs FS, tp TimeProvider, path string, data []byte, perm os.FileMode) error {
+	if fs == nil {
+		fs = osFS{}
+	}
+	perm &= 0o7777
+	if perm == 0 {
+		perm = 0o600
+	}
+
+	tmpPath := fmt.Sprintf("%s.proxsave.tmp.%d", path, recipientTime(tp).UnixNano())
+	tmpFile, err := fs.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+
+	writeErr := func() error {
+		if len(data) != 0 {
+			if _, err := tmpFile.Write(data); err != nil {
+				return err
+			}
+		}
+		if err := tmpFile.Chmod(perm); err != nil {
+			return err
+		}
+		return tmpFile.Sync()
+	}()
+
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = fs.Remove(tmpPath)
+		return writeErr
+	}
+	if closeErr != nil {
+		_ = fs.Remove(tmpPath)
+		return closeErr
+	}
+
+	if err := fs.Rename(tmpPath, path); err != nil {
+		_ = fs.Remove(tmpPath)
+		return err
+	}
+
+	return syncDirectoryWithDeps(fs, filepath.Dir(path))
+}
+
+func copyRecipientFileWithDeps(fs FS, src, dest string, perm os.FileMode) error {
+	if fs == nil {
+		fs = osFS{}
+	}
+
+	in, err := fs.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+
+	copyErr := func() error {
+		if _, err := io.Copy(out, in); err != nil {
+			return err
+		}
+		if err := out.Chmod(perm); err != nil {
+			return err
+		}
+		return out.Sync()
+	}()
+
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = fs.Remove(dest)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = fs.Remove(dest)
+		return closeErr
+	}
+
+	return syncDirectoryWithDeps(fs, filepath.Dir(dest))
+}
+
+func syncDirectoryWithDeps(fs FS, dir string) error {
+	if fs == nil {
+		fs = osFS{}
+	}
+
+	df, err := fs.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open dir %s: %w", dir, err)
+	}
+
+	syncErr := df.Sync()
+	closeErr := df.Close()
+	if syncErr != nil {
+		if errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP) {
+			return closeErr
+		}
+		return fmt.Errorf("sync dir %s: %w", dir, syncErr)
+	}
+	return closeErr
+}
+
+func recipientTime(tp TimeProvider) time.Time {
+	if tp != nil {
+		return tp.Now()
+	}
+	return time.Now()
+}
+
+// BackupAgeRecipientFile backs up an existing AGE recipient file (if present)
+// without removing the active file.
 func BackupAgeRecipientFile(path string) error {
 	return backupExistingRecipientFile(path)
 }
