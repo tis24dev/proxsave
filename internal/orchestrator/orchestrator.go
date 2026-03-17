@@ -1126,10 +1126,18 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bu
 	if err != nil {
 		return "", fmt.Errorf("failed to create bundle file: %w", err)
 	}
-	defer outFile.Close()
+	defer func() {
+		if outFile != nil {
+			_ = outFile.Close()
+		}
+	}()
 
 	tw := tar.NewWriter(outFile)
-	defer tw.Close()
+	defer func() {
+		if tw != nil {
+			_ = tw.Close()
+		}
+	}()
 
 	// Add each associated file to the tar archive
 	for _, filename := range associated {
@@ -1171,12 +1179,16 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bu
 
 	// Close tar writer to flush
 	if err := tw.Close(); err != nil {
+		tw = nil
 		return "", fmt.Errorf("failed to finalize tar archive: %w", err)
 	}
+	tw = nil
 
 	if err := outFile.Close(); err != nil {
+		outFile = nil
 		return "", fmt.Errorf("failed to close bundle file: %w", err)
 	}
+	outFile = nil
 
 	// Verify bundle was created
 	if _, err := fs.Stat(bundlePath); err != nil {

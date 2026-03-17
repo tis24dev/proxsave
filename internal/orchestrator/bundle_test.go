@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,27 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
+
+type trackingBundleFS struct {
+	FS
+	createdFile *os.File
+	openErr     map[string]error
+}
+
+func (f *trackingBundleFS) Create(name string) (*os.File, error) {
+	file, err := f.FS.Create(name)
+	if err == nil {
+		f.createdFile = file
+	}
+	return file, err
+}
+
+func (f *trackingBundleFS) Open(path string) (*os.File, error) {
+	if err, ok := f.openErr[filepath.Clean(path)]; ok {
+		return nil, err
+	}
+	return f.FS.Open(path)
+}
 
 func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
@@ -30,9 +52,10 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 		}
 	}
 
+	bundleFS := &trackingBundleFS{FS: osFS{}}
 	o := &Orchestrator{
 		logger: logger,
-		fs:     osFS{},
+		fs:     bundleFS,
 	}
 
 	bundlePath, err := o.createBundle(context.Background(), archive)
@@ -43,6 +66,12 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 	expectedPath := archive + ".bundle.tar"
 	if bundlePath != expectedPath {
 		t.Fatalf("bundle path = %s, want %s", bundlePath, expectedPath)
+	}
+	if bundleFS.createdFile == nil {
+		t.Fatalf("expected tracked bundle file")
+	}
+	if err := bundleFS.createdFile.Close(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("bundle file close after createBundle = %v, want ErrClosed", err)
 	}
 
 	// Verify bundle file exists
@@ -118,6 +147,46 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 		if !foundFiles[expected] {
 			t.Errorf("expected file %s not found in tar", expected)
 		}
+	}
+}
+
+func TestCreateBundle_ClosesBundleFileOnInputOpenError(t *testing.T) {
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	tempDir := t.TempDir()
+	archive := filepath.Join(tempDir, "backup.tar")
+
+	testData := map[string]string{
+		"":          "archive-content",
+		".sha256":   "checksum1",
+		".metadata": "metadata-json",
+	}
+	for suffix, content := range testData {
+		if err := os.WriteFile(archive+suffix, []byte(content), 0o640); err != nil {
+			t.Fatalf("write %s: %v", suffix, err)
+		}
+	}
+
+	forcedErr := errors.New("forced open failure")
+	bundleFS := &trackingBundleFS{
+		FS: osFS{},
+		openErr: map[string]error{
+			filepath.Clean(archive + ".sha256"): forcedErr,
+		},
+	}
+	o := &Orchestrator{
+		logger: logger,
+		fs:     bundleFS,
+	}
+
+	_, err := o.createBundle(context.Background(), archive)
+	if !errors.Is(err, forcedErr) {
+		t.Fatalf("createBundle error = %v, want wrapped %v", err, forcedErr)
+	}
+	if bundleFS.createdFile == nil {
+		t.Fatalf("expected tracked bundle file")
+	}
+	if err := bundleFS.createdFile.Close(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("bundle file close after createBundle error = %v, want ErrClosed", err)
 	}
 }
 

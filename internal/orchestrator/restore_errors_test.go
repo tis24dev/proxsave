@@ -785,6 +785,19 @@ func (a *alwaysFailCommandRunner) RunStream(ctx context.Context, name string, st
 	return nil, a.err
 }
 
+type trackingOpenFileFS struct {
+	FS
+	lastOpened *os.File
+}
+
+func (f *trackingOpenFileFS) OpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+	file, err := f.FS.OpenFile(path, flag, perm)
+	if err == nil {
+		f.lastOpened = file
+	}
+	return file, err
+}
+
 // --------------------------------------------------------------------------
 // ErrorInjectingFS - FS wrapper that can inject errors
 // --------------------------------------------------------------------------
@@ -916,7 +929,8 @@ func TestExtractRegularFile_CopyFails(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
 
-	restoreFS = osFS{}
+	trackingFS := &trackingOpenFileFS{FS: osFS{}}
+	restoreFS = trackingFS
 
 	dir := t.TempDir()
 	target := filepath.Join(dir, "testfile.txt")
@@ -941,6 +955,12 @@ func TestExtractRegularFile_CopyFails(t *testing.T) {
 	err := extractRegularFile(tr, target, header, logger)
 	if err == nil || !strings.Contains(err.Error(), "write file content") {
 		t.Fatalf("expected io.Copy error, got: %v", err)
+	}
+	if trackingFS.lastOpened == nil {
+		t.Fatalf("expected tracked output file")
+	}
+	if closeErr := trackingFS.lastOpened.Close(); !errors.Is(closeErr, os.ErrClosed) {
+		t.Fatalf("output file close after copy failure = %v, want ErrClosed", closeErr)
 	}
 }
 
@@ -1609,7 +1629,8 @@ func TestExtractDirectory_SuccessWithTimestamps(t *testing.T) {
 func TestExtractRegularFile_Success(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
-	restoreFS = osFS{}
+	trackingFS := &trackingOpenFileFS{FS: osFS{}}
+	restoreFS = trackingFS
 
 	dir := t.TempDir()
 	target := filepath.Join(dir, "file.txt")
@@ -1650,6 +1671,19 @@ func TestExtractRegularFile_Success(t *testing.T) {
 	}
 	if string(data) != "hello world" {
 		t.Fatalf("expected 'hello world', got: %q", string(data))
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("file mode = %o, want %o", info.Mode().Perm(), 0o644)
+	}
+	if trackingFS.lastOpened == nil {
+		t.Fatalf("expected tracked output file")
+	}
+	if closeErr := trackingFS.lastOpened.Close(); !errors.Is(closeErr, os.ErrClosed) {
+		t.Fatalf("output file close after success = %v, want ErrClosed", closeErr)
 	}
 }
 

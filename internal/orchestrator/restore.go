@@ -1607,7 +1607,11 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
-	defer outFile.Close()
+	defer func() {
+		if outFile != nil {
+			_ = outFile.Close()
+		}
+	}()
 
 	// Copy content
 	if _, err := io.Copy(outFile, tarReader); err != nil {
@@ -1616,8 +1620,10 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 
 	// Close before setting attributes
 	if err := outFile.Close(); err != nil {
+		outFile = nil
 		return fmt.Errorf("close file: %w", err)
 	}
+	outFile = nil
 
 	// Set ownership
 	if err := os.Chown(target, header.Uid, header.Gid); err != nil {
