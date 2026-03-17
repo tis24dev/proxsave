@@ -252,6 +252,7 @@ func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, r
 	case storage.LocationPrimary:
 		stats.LocalBackups = storageStats.TotalBackups
 		stats.LocalFreeSpace = clampInt64ToUint64(storageStats.AvailableSpace)
+		stats.LocalUsedSpace = clampInt64ToUint64(storageStats.UsedSpace)
 		stats.LocalTotalSpace = clampInt64ToUint64(storageStats.TotalSpace)
 		// Populate retention info
 		stats.LocalRetentionPolicy = retentionConfig.Policy
@@ -273,6 +274,7 @@ func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, r
 		}
 		stats.SecondaryBackups = storageStats.TotalBackups
 		stats.SecondaryFreeSpace = clampInt64ToUint64(storageStats.AvailableSpace)
+		stats.SecondaryUsedSpace = clampInt64ToUint64(storageStats.UsedSpace)
 		stats.SecondaryTotalSpace = clampInt64ToUint64(storageStats.TotalSpace)
 		// Populate retention info
 		stats.SecondaryRetentionPolicy = retentionConfig.Policy

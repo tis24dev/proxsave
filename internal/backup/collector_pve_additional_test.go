@@ -2,13 +2,17 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -85,6 +89,40 @@ func TestPatternWriterWrite_WritesRelativePathLine(t *testing.T) {
 	}
 	if pw.totalSize != info.Size() {
 		t.Fatalf("totalSize=%d; want %d", pw.totalSize, info.Size())
+	}
+}
+
+func TestDescribeDiskUsageMatchesStatfsSemantics(t *testing.T) {
+	collector := newTestCollector(t)
+	tempDir := t.TempDir()
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(tempDir, &stat); err != nil {
+		t.Fatalf("Statfs: %v", err)
+	}
+	total, available, used := safefs.SpaceUsageFromStatfs(stat)
+
+	got, err := collector.describeDiskUsage(context.Background(), tempDir, time.Second)
+	if err != nil {
+		t.Fatalf("describeDiskUsage error: %v", err)
+	}
+
+	want := fmt.Sprintf("Used: %s / Total: %s (Free: %s)",
+		FormatBytes(used),
+		FormatBytes(total),
+		FormatBytes(available),
+	)
+	if got != want {
+		t.Fatalf("describeDiskUsage = %q; want %q", got, want)
+	}
+}
+
+func TestDescribeDiskUsageReturnsStatfsError(t *testing.T) {
+	collector := newTestCollector(t)
+	missingPath := filepath.Join(t.TempDir(), "missing")
+
+	if _, err := collector.describeDiskUsage(context.Background(), missingPath, time.Second); err == nil {
+		t.Fatalf("describeDiskUsage() error = nil; want statfs error")
 	}
 }
 

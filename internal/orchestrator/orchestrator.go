@@ -106,9 +106,11 @@ type BackupStats struct {
 	SecondaryEnabled    bool
 	LocalBackups        int
 	LocalFreeSpace      uint64
+	LocalUsedSpace      uint64
 	LocalTotalSpace     uint64
 	SecondaryBackups    int
 	SecondaryFreeSpace  uint64
+	SecondaryUsedSpace  uint64
 	SecondaryTotalSpace uint64
 	CloudEnabled        bool
 	CloudBackups        int

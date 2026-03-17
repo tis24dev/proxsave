@@ -160,17 +160,19 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		compressionRatio = (1.0 - float64(stats.CompressedSize)/float64(stats.UncompressedSize)) * 100.0
 	}
 
+	n.warnOnInconsistentUsageStats("local", stats.LocalUsedSpace, stats.LocalTotalSpace)
 	localFree := formatBytesHR(stats.LocalFreeSpace)
-	localUsed := formatBytesHR(calculateUsedBytes(stats.LocalFreeSpace, stats.LocalTotalSpace))
-	localPercent := formatPercentString(calculateUsagePercent(stats.LocalFreeSpace, stats.LocalTotalSpace))
+	localUsed := formatBytesHR(stats.LocalUsedSpace)
+	localPercent := formatPercentString(calculateUsagePercent(stats.LocalUsedSpace, stats.LocalTotalSpace))
 
 	secondaryFree := ""
 	secondaryUsed := ""
 	secondaryPercent := ""
 	if stats.SecondaryEnabled {
+		n.warnOnInconsistentUsageStats("secondary", stats.SecondaryUsedSpace, stats.SecondaryTotalSpace)
 		secondaryFree = formatBytesHR(stats.SecondaryFreeSpace)
-		secondaryUsed = formatBytesHR(calculateUsedBytes(stats.SecondaryFreeSpace, stats.SecondaryTotalSpace))
-		secondaryPercent = formatPercentString(calculateUsagePercent(stats.SecondaryFreeSpace, stats.SecondaryTotalSpace))
+		secondaryUsed = formatBytesHR(stats.SecondaryUsedSpace)
+		secondaryPercent = formatPercentString(calculateUsagePercent(stats.SecondaryUsedSpace, stats.SecondaryTotalSpace))
 	}
 
 	// Parse log file for categories - use ParseLogCounts as primary source
@@ -224,7 +226,7 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		LocalUsed:          localUsed,
 		LocalPercent:       localPercent,
 		LocalSpaceBytes:    stats.LocalFreeSpace,
-		LocalUsagePercent:  calculateUsagePercent(stats.LocalFreeSpace, stats.LocalTotalSpace),
+		LocalUsagePercent:  calculateUsagePercent(stats.LocalUsedSpace, stats.LocalTotalSpace),
 
 		// Local retention info
 		LocalRetentionPolicy:   stats.LocalRetentionPolicy,
@@ -247,7 +249,7 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		SecondaryUsed:          secondaryUsed,
 		SecondaryPercent:       secondaryPercent,
 		SecondarySpaceBytes:    stats.SecondaryFreeSpace,
-		SecondaryUsagePercent:  calculateUsagePercent(stats.SecondaryFreeSpace, stats.SecondaryTotalSpace),
+		SecondaryUsagePercent:  calculateUsagePercent(stats.SecondaryUsedSpace, stats.SecondaryTotalSpace),
 
 		// Secondary retention info
 		SecondaryRetentionPolicy:   stats.SecondaryRetentionPolicy,
@@ -318,20 +320,22 @@ func formatBytesHR(bytes uint64) string {
 	return fmt.Sprintf("%.2f %s", val, units[exp])
 }
 
-// calculateUsagePercent calculates the usage percentage
-func calculateUsagePercent(freeBytes, totalBytes uint64) float64 {
+// calculateUsagePercent calculates the usage percentage from used and total bytes.
+func calculateUsagePercent(usedBytes, totalBytes uint64) float64 {
 	if totalBytes == 0 {
 		return 0.0
 	}
-	usedBytes := totalBytes - freeBytes
+	if usedBytes >= totalBytes {
+		return 100.0
+	}
 	return (float64(usedBytes) / float64(totalBytes)) * 100.0
 }
 
-func calculateUsedBytes(freeBytes, totalBytes uint64) uint64 {
-	if totalBytes == 0 || totalBytes <= freeBytes {
-		return 0
+func (n *NotificationAdapter) warnOnInconsistentUsageStats(location string, usedBytes, totalBytes uint64) {
+	if n == nil || n.logger == nil || totalBytes == 0 || usedBytes <= totalBytes {
+		return
 	}
-	return totalBytes - freeBytes
+	n.logger.Warning("%s storage usage stats inconsistent: used=%d total=%d; clamping percentage to 100%% for display", location, usedBytes, totalBytes)
 }
 
 func formatPercentString(percent float64) string {

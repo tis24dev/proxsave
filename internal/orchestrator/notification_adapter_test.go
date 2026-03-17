@@ -210,12 +210,14 @@ func TestConvertBackupStatsToNotificationData(t *testing.T) {
 		CompressedSize:            4000,
 		UncompressedSize:          8000,
 		LocalBackups:              2,
-		LocalFreeSpace:            1024,
-		LocalTotalSpace:           2048,
+		LocalFreeSpace:            400,
+		LocalUsedSpace:            500,
+		LocalTotalSpace:           1000,
 		SecondaryEnabled:          true,
 		SecondaryBackups:          1,
-		SecondaryFreeSpace:        2048,
-		SecondaryTotalSpace:       4096,
+		SecondaryFreeSpace:        1000,
+		SecondaryUsedSpace:        2500,
+		SecondaryTotalSpace:       4000,
 		CloudEnabled:              true,
 		CloudBackups:              3,
 		MaxLocalBackups:           10,
@@ -267,6 +269,12 @@ func TestConvertBackupStatsToNotificationData(t *testing.T) {
 	if data.EmailStatus != "disabled" || data.TelegramStatus != "N/A" {
 		t.Fatalf("Email/Telegram status unexpected: %q / %q", data.EmailStatus, data.TelegramStatus)
 	}
+	if data.LocalUsed != "500 B" || data.LocalPercent != "50.0%" {
+		t.Fatalf("local usage should use provided used-space stats, got used=%q percent=%q", data.LocalUsed, data.LocalPercent)
+	}
+	if data.SecondaryUsed != "2.44 KB" || data.SecondaryPercent != "62.5%" {
+		t.Fatalf("secondary usage should use provided used-space stats, got used=%q percent=%q", data.SecondaryUsed, data.SecondaryPercent)
+	}
 }
 
 func TestFormatHelpers(t *testing.T) {
@@ -276,11 +284,11 @@ func TestFormatHelpers(t *testing.T) {
 	if got := formatBytesHR(1024); got != "1.00 KB" {
 		t.Fatalf("formatBytesHR(1024) = %q; want 1.00 KB", got)
 	}
-	if got := calculateUsagePercent(25, 100); got != 75 {
-		t.Fatalf("calculateUsagePercent = %f; want 75", got)
+	if got := calculateUsagePercent(25, 100); got != 25 {
+		t.Fatalf("calculateUsagePercent = %f; want 25", got)
 	}
-	if got := calculateUsedBytes(25, 100); got != 75 {
-		t.Fatalf("calculateUsedBytes = %d; want 75", got)
+	if got := calculateUsagePercent(125, 100); got != 100 {
+		t.Fatalf("calculateUsagePercent should clamp at 100, got %f", got)
 	}
 	if got := formatPercentString(12.345); got != "12.3%" {
 		t.Fatalf("formatPercentString = %q; want 12.3%%", got)
@@ -357,6 +365,32 @@ func TestConvertBackupStatsUsesLogCountsAndCompressionFallback(t *testing.T) {
 	}
 }
 
+func TestConvertBackupStatsToNotificationDataWarnsOnInconsistentUsageStats(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	adapter := NewNotificationAdapter(&stubNotifier{name: "Email", enabled: true}, logger)
+	stats := sampleBackupStats()
+	stats.LocalUsedSpace = 1500
+	stats.LocalTotalSpace = 1000
+	stats.SecondaryUsedSpace = 4500
+	stats.SecondaryTotalSpace = 4000
+
+	data := adapter.convertBackupStatsToNotificationData(stats)
+
+	if data.LocalUsagePercent != 100 || data.SecondaryUsagePercent != 100 {
+		t.Fatalf("usage percent should still clamp for display, got local=%f secondary=%f", data.LocalUsagePercent, data.SecondaryUsagePercent)
+	}
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, "local storage usage stats inconsistent") {
+		t.Fatalf("expected local inconsistency warning, got %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "secondary storage usage stats inconsistent") {
+		t.Fatalf("expected secondary inconsistency warning, got %q", logOutput)
+	}
+}
+
 func sampleBackupStats() *BackupStats {
 	return &BackupStats{
 		ExitCode:            0,
@@ -366,12 +400,14 @@ func sampleBackupStats() *BackupStats {
 		ArchivePath:         "/var/tmp/backup.tar",
 		CompressedSize:      12345,
 		LocalBackups:        1,
-		LocalFreeSpace:      1024,
-		LocalTotalSpace:     2048,
+		LocalFreeSpace:      400,
+		LocalUsedSpace:      500,
+		LocalTotalSpace:     1000,
 		SecondaryEnabled:    true,
 		SecondaryBackups:    1,
-		SecondaryFreeSpace:  2048,
-		SecondaryTotalSpace: 4096,
+		SecondaryFreeSpace:  1000,
+		SecondaryUsedSpace:  2500,
+		SecondaryTotalSpace: 4000,
 		CloudEnabled:        true,
 		CloudBackups:        1,
 		Timestamp:           time.Now(),

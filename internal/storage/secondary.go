@@ -13,6 +13,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
@@ -727,20 +728,9 @@ func (s *SecondaryStorage) GetStats(ctx context.Context) (stats *StorageStats, e
 	// Get available/total space using statfs
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(s.basePath, &stat); err == nil {
-		available := int64(stat.Bavail) * int64(stat.Bsize)
-		total := int64(stat.Blocks) * int64(stat.Bsize)
-		if available < 0 {
-			available = 0
-		}
-		if total < 0 {
-			total = 0
-		}
+		total, available, used := safefs.SpaceUsageFromStatfs(stat)
 		stats.AvailableSpace = available
 		stats.TotalSpace = total
-		used := total - available
-		if used < 0 {
-			used = 0
-		}
 		stats.UsedSpace = used
 	}
 

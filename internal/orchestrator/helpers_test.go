@@ -794,48 +794,24 @@ func TestFormatBytesHR(t *testing.T) {
 func TestCalculateUsagePercent(t *testing.T) {
 	tests := []struct {
 		name      string
-		freeBytes uint64
+		usedBytes uint64
 		total     uint64
 		want      float64
 	}{
 		{"zero total", 0, 0, 0.0},
 		{"50% used", 500, 1000, 50.0},
-		{"100% full", 0, 1000, 100.0},
-		{"empty disk", 1000, 1000, 0.0},
-		{"25% used", 750, 1000, 25.0},
+		{"100% full", 1000, 1000, 100.0},
+		{"empty disk", 0, 1000, 0.0},
+		{"25% used", 250, 1000, 25.0},
+		{"used exceeds total", 1500, 1000, 100.0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := calculateUsagePercent(tt.freeBytes, tt.total)
+			got := calculateUsagePercent(tt.usedBytes, tt.total)
 			if got != tt.want {
 				t.Errorf("calculateUsagePercent(%d, %d) = %f; want %f",
-					tt.freeBytes, tt.total, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestCalculateUsedBytes(t *testing.T) {
-	tests := []struct {
-		name      string
-		freeBytes uint64
-		total     uint64
-		want      uint64
-	}{
-		{"zero total", 0, 0, 0},
-		{"normal usage", 300, 1000, 700},
-		{"full disk", 0, 1000, 1000},
-		{"empty disk", 1000, 1000, 0},
-		{"free > total (invalid)", 1500, 1000, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := calculateUsedBytes(tt.freeBytes, tt.total)
-			if got != tt.want {
-				t.Errorf("calculateUsedBytes(%d, %d) = %d; want %d",
-					tt.freeBytes, tt.total, got, tt.want)
+					tt.usedBytes, tt.total, got, tt.want)
 			}
 		})
 	}

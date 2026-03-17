@@ -275,6 +275,7 @@ func TestStorageAdapterSync_NonCriticalStoreErrorFinalizesErrorAndContinues(t *t
 			return &storage.StorageStats{
 				TotalBackups:   3,
 				AvailableSpace: 10,
+				UsedSpace:      7,
 				TotalSpace:     20,
 			}, nil
 		},
@@ -297,6 +298,9 @@ func TestStorageAdapterSync_NonCriticalStoreErrorFinalizesErrorAndContinues(t *t
 	}
 	if stats.SecondaryBackups != 3 {
 		t.Fatalf("SecondaryBackups = %d; want 3", stats.SecondaryBackups)
+	}
+	if stats.SecondaryUsedSpace != 7 {
+		t.Fatalf("SecondaryUsedSpace = %d; want 7", stats.SecondaryUsedSpace)
 	}
 	if stats.SecondaryRetentionPolicy != "simple" {
 		t.Fatalf("SecondaryRetentionPolicy = %q; want simple", stats.SecondaryRetentionPolicy)
@@ -325,6 +329,7 @@ func TestStorageAdapterSync_NonCriticalRetentionErrorFinalizesWarning(t *testing
 			return &storage.StorageStats{
 				TotalBackups:   1,
 				AvailableSpace: 5,
+				UsedSpace:      4,
 				TotalSpace:     10,
 			}, nil
 		},
@@ -339,6 +344,9 @@ func TestStorageAdapterSync_NonCriticalRetentionErrorFinalizesWarning(t *testing
 	}
 	if got := stats.LocalStatus; got != "warning" {
 		t.Fatalf("LocalStatus = %q; want warning", got)
+	}
+	if stats.LocalUsedSpace != 4 {
+		t.Fatalf("LocalUsedSpace = %d; want 4", stats.LocalUsedSpace)
 	}
 	if stats.LocalRetentionPolicy != "simple" {
 		t.Fatalf("LocalRetentionPolicy = %q; want simple", stats.LocalRetentionPolicy)

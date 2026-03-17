@@ -175,7 +175,7 @@ func (s *stubStorage) VerifyUpload(ctx context.Context, localFile, remoteFile st
 	return true, nil
 }
 func (s *stubStorage) GetStats(ctx context.Context) (*storage.StorageStats, error) {
-	return &storage.StorageStats{TotalBackups: len(s.list), AvailableSpace: 1024, TotalSpace: 2048}, nil
+	return &storage.StorageStats{TotalBackups: len(s.list), AvailableSpace: 1024, UsedSpace: 768, TotalSpace: 2048}, nil
 }
 
 func TestApplyStorageStatsSimplePrimary(t *testing.T) {
@@ -184,12 +184,12 @@ func TestApplyStorageStatsSimplePrimary(t *testing.T) {
 		logger:  logging.New(types.LogLevelError, false),
 	}
 	stats := &BackupStats{}
-	storageStats := &storage.StorageStats{TotalBackups: 3, AvailableSpace: 100, TotalSpace: 200}
+	storageStats := &storage.StorageStats{TotalBackups: 3, AvailableSpace: 100, UsedSpace: 80, TotalSpace: 200}
 	retentionCfg := storage.RetentionConfig{Policy: "simple", MaxBackups: 5}
 
 	adapter.applyStorageStats(storageStats, retentionCfg, stats)
 
-	if stats.LocalBackups != 3 || stats.LocalFreeSpace != 100 || stats.LocalTotalSpace != 200 {
+	if stats.LocalBackups != 3 || stats.LocalFreeSpace != 100 || stats.LocalUsedSpace != 80 || stats.LocalTotalSpace != 200 {
 		t.Fatalf("local stats not set correctly: %+v", stats)
 	}
 	if stats.LocalRetentionPolicy != "simple" {
@@ -210,7 +210,7 @@ func TestApplyStorageStatsGFSPrimary(t *testing.T) {
 		logger:  logging.New(types.LogLevelError, false),
 	}
 	stats := &BackupStats{}
-	storageStats := &storage.StorageStats{TotalBackups: len(backups), AvailableSpace: 500, TotalSpace: 1000}
+	storageStats := &storage.StorageStats{TotalBackups: len(backups), AvailableSpace: 500, UsedSpace: 400, TotalSpace: 1000}
 	retentionCfg := storage.RetentionConfig{Policy: "gfs", Daily: 1, Weekly: 1, Monthly: 1, Yearly: 1}
 
 	adapter.applyStorageStats(storageStats, retentionCfg, stats)
@@ -223,6 +223,28 @@ func TestApplyStorageStatsGFSPrimary(t *testing.T) {
 	}
 	if stats.LocalRetentionPolicy != "gfs" {
 		t.Fatalf("LocalRetentionPolicy = %q, want gfs", stats.LocalRetentionPolicy)
+	}
+}
+
+func TestApplyStorageStatsSimpleSecondaryUsesUsedSpace(t *testing.T) {
+	adapter := &StorageAdapter{
+		backend: &stubStorage{loc: storage.LocationSecondary},
+		logger:  logging.New(types.LogLevelError, false),
+	}
+	stats := &BackupStats{}
+	storageStats := &storage.StorageStats{TotalBackups: 4, AvailableSpace: 300, UsedSpace: 700, TotalSpace: 1000}
+	retentionCfg := storage.RetentionConfig{Policy: "simple", MaxBackups: 7}
+
+	adapter.applyStorageStats(storageStats, retentionCfg, stats)
+
+	if !stats.SecondaryEnabled {
+		t.Fatalf("SecondaryEnabled = false, want true")
+	}
+	if stats.SecondaryBackups != 4 || stats.SecondaryFreeSpace != 300 || stats.SecondaryUsedSpace != 700 || stats.SecondaryTotalSpace != 1000 {
+		t.Fatalf("secondary stats not set correctly: %+v", stats)
+	}
+	if stats.SecondaryRetentionPolicy != "simple" {
+		t.Fatalf("SecondaryRetentionPolicy = %q, want simple", stats.SecondaryRetentionPolicy)
 	}
 }
 

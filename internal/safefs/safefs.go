@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"syscall"
 	"time"
@@ -171,4 +172,36 @@ func Statfs(ctx context.Context, path string, timeout time.Duration) (syscall.St
 		err := statfs(path, &stat)
 		return stat, err
 	})
+}
+
+// SpaceUsageFromStatfs converts statfs counters into total, user-available, and
+// actually-used byte counts. "Available" tracks Bavail (space a non-root user can
+// allocate), while "used" tracks Blocks-Bfree (space already consumed).
+func SpaceUsageFromStatfs(stat syscall.Statfs_t) (totalBytes, availableBytes, usedBytes int64) {
+	totalBytes = statfsBlocksToBytes(stat.Blocks, stat.Bsize)
+	availableBytes = statfsBlocksToBytes(stat.Bavail, stat.Bsize)
+
+	if stat.Blocks > stat.Bfree {
+		usedBytes = statfsBlocksToBytes(stat.Blocks-stat.Bfree, stat.Bsize)
+	}
+	if availableBytes > totalBytes {
+		availableBytes = totalBytes
+	}
+	if usedBytes > totalBytes {
+		usedBytes = totalBytes
+	}
+
+	return totalBytes, availableBytes, usedBytes
+}
+
+func statfsBlocksToBytes(blocks uint64, blockSize int64) int64 {
+	if blocks == 0 || blockSize <= 0 {
+		return 0
+	}
+
+	size := uint64(blockSize)
+	if blocks > uint64(math.MaxInt64)/size {
+		return math.MaxInt64
+	}
+	return int64(blocks * size)
 }

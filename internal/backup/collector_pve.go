@@ -1997,9 +1997,7 @@ func (c *Collector) describeDiskUsage(ctx context.Context, path string, ioTimeou
 	if err != nil {
 		return "", err
 	}
-	total := int64(stat.Blocks) * int64(stat.Bsize)
-	available := int64(stat.Bavail) * int64(stat.Bsize)
-	used := total - available
+	total, available, used := safefs.SpaceUsageFromStatfs(stat)
 	if total <= 0 {
 		return "", fmt.Errorf("invalid filesystem statistics for %s", path)
 	}
