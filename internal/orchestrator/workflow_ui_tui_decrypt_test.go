@@ -65,6 +65,25 @@ func TestTUIWorkflowUIResolveExistingPath_NewPathIsCleaned(t *testing.T) {
 	}
 }
 
+func TestTUIWorkflowUIResolveExistingPath_WhitespaceNewPathStaysEmpty(t *testing.T) {
+	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+		return PathDecisionNewPath, "   \t  ", nil
+	})
+	defer restore()
+
+	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
+	decision, newPath, err := ui.ResolveExistingPath(context.Background(), "/tmp/archive.tar", "archive", "")
+	if err != nil {
+		t.Fatalf("ResolveExistingPath error: %v", err)
+	}
+	if decision != PathDecisionNewPath {
+		t.Fatalf("decision=%v, want %v", decision, PathDecisionNewPath)
+	}
+	if newPath != "" {
+		t.Fatalf("newPath=%q, want empty", newPath)
+	}
+}
+
 func TestTUIWorkflowUIResolveExistingPath_PropagatesError(t *testing.T) {
 	wantErr := errors.New("boom")
 	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {

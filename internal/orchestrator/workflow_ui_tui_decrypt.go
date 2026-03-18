@@ -382,7 +382,11 @@ func (u *tuiWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 	if decision != PathDecisionNewPath {
 		return decision, "", nil
 	}
-	return decision, filepath.Clean(newPath), nil
+	trimmed := strings.TrimSpace(newPath)
+	if trimmed == "" {
+		return decision, "", nil
+	}
+	return decision, filepath.Clean(trimmed), nil
 }
 
 func (u *tuiWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error) {
