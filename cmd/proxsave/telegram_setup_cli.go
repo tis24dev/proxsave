@@ -17,6 +17,8 @@ var (
 	telegramSetupPromptYesNo       = promptYesNo
 )
 
+const maxTelegramSetupVerificationAttempts = 10
+
 func logTelegramSetupBootstrapOutcome(bootstrap *logging.BootstrapLogger, state orchestrator.TelegramSetupBootstrap) {
 	switch state.Eligibility {
 	case orchestrator.TelegramSetupSkipConfigError:
@@ -92,6 +94,12 @@ func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, con
 			if status.Error != nil {
 				fmt.Printf("Hint: Check failed: %v\n", status.Error)
 			}
+		}
+
+		if attempts >= maxTelegramSetupVerificationAttempts {
+			fmt.Println("Maximum verification attempts reached. You can retry later by running proxsave.")
+			logBootstrapInfo(bootstrap, "Telegram setup: not verified (attempts=%d last=%d %s)", attempts, status.Code, msg)
+			return nil
 		}
 
 		retry, err := telegramSetupPromptYesNo(ctx, reader, "Check again? [y/N]: ", false)

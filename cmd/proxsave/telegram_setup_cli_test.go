@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func stubTelegramSetupCLIDeps(t *testing.T) {
@@ -172,6 +174,54 @@ func TestRunTelegramSetupCLI_VerifiesSuccessfully(t *testing.T) {
 	}
 	if checkCalls != 1 {
 		t.Fatalf("checkCalls=%d, want 1", checkCalls)
+	}
+}
+
+func TestRunTelegramSetupCLI_StopsAfterMaxVerificationAttempts(t *testing.T) {
+	stubTelegramSetupCLIDeps(t)
+
+	var promptCalls int
+	var checkCalls int
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility:     orchestrator.TelegramSetupEligibleCentralized,
+			ConfigLoaded:    true,
+			TelegramEnabled: true,
+			TelegramMode:    "centralized",
+			ServerAPIHost:   "https://api.example.test",
+			ServerID:        "123456789",
+			IdentityFile:    "/tmp/.server_identity",
+		}, nil
+	}
+	telegramSetupPromptYesNo = func(ctx context.Context, reader *bufio.Reader, question string, defaultYes bool) (bool, error) {
+		promptCalls++
+		return true, nil
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		checkCalls++
+		return notify.TelegramRegistrationStatus{
+			Code:    409,
+			Message: "not linked yet",
+		}
+	}
+
+	bootstrap := logging.NewBootstrapLogger()
+	var mirrorBuf bytes.Buffer
+	mirror := logging.New(types.LogLevelDebug, false)
+	mirror.SetOutput(&mirrorBuf)
+	bootstrap.SetMirrorLogger(mirror)
+
+	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", bootstrap); err != nil {
+		t.Fatalf("runTelegramSetupCLI error: %v", err)
+	}
+	if checkCalls != maxTelegramSetupVerificationAttempts {
+		t.Fatalf("checkCalls=%d, want %d", checkCalls, maxTelegramSetupVerificationAttempts)
+	}
+	if promptCalls != maxTelegramSetupVerificationAttempts {
+		t.Fatalf("promptCalls=%d, want %d", promptCalls, maxTelegramSetupVerificationAttempts)
+	}
+	if !strings.Contains(mirrorBuf.String(), "Telegram setup: not verified (attempts=10 last=409 not linked yet)") {
+		t.Fatalf("expected max-attempt failure log, got %q", mirrorBuf.String())
 	}
 }
 
