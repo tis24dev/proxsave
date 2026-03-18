@@ -1425,13 +1425,18 @@ func TestSecondaryStorageStoreHandlesBundles(t *testing.T) {
 	}
 
 	destBackup := filepath.Join(destDir, filepath.Base(backupFile))
-	if _, err := os.Stat(destBackup); err != nil {
-		t.Fatalf("expected backup to be copied: %v", err)
+	if _, err := os.Stat(destBackup); !os.IsNotExist(err) {
+		t.Fatalf("raw backup should not be copied when bundling is enabled, err=%v", err)
 	}
 
 	destBundle := filepath.Join(destDir, filepath.Base(backupFile)+".bundle.tar")
 	if _, err := os.Stat(destBundle); err != nil {
 		t.Fatalf("expected bundle to be copied: %v", err)
+	}
+	if data, err := os.ReadFile(destBundle); err != nil {
+		t.Fatalf("read copied bundle: %v", err)
+	} else if string(data) != "bundle" {
+		t.Fatalf("copied bundle = %q, want %q", string(data), "bundle")
 	}
 
 	if _, err := os.Stat(filepath.Join(destDir, filepath.Base(backupFile)+".metadata")); !os.IsNotExist(err) {

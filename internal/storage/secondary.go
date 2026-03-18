@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -109,14 +108,20 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 		return err
 	}
 
+	bundleEnabled := s.config != nil && s.config.BundleAssociatedFiles
+	sourceFile := backupFile
+	if bundleEnabled {
+		sourceFile = bundlePathFor(sourceFile)
+	}
+
 	// Verify source file exists
-	if _, err := os.Stat(backupFile); err != nil {
-		s.logger.Debug("Secondary storage: source file %s not found", backupFile)
-		s.logger.Warning("WARNING: Secondary storage - backup file not found: %s: %v", backupFile, err)
+	if _, err := os.Stat(sourceFile); err != nil {
+		s.logger.Debug("Secondary storage: source file %s not found", sourceFile)
+		s.logger.Warning("WARNING: Secondary storage - backup file not found: %s: %v", sourceFile, err)
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
-			Path:        backupFile,
+			Path:        sourceFile,
 			Err:         fmt.Errorf("source file not found: %w", err),
 			IsCritical:  false,
 			Recoverable: false,
@@ -138,18 +143,18 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	}
 
 	// Determine destination filename
-	destFile := filepath.Join(s.basePath, filepath.Base(backupFile))
+	destFile := filepath.Join(s.basePath, filepath.Base(sourceFile))
 
 	s.logger.Debug("Secondary Storage: Start copy...")
-	s.logger.Debug("Copying backup to secondary storage: %s -> %s", filepath.Base(backupFile), s.basePath)
+	s.logger.Debug("Copying backup to secondary storage: %s -> %s", filepath.Base(sourceFile), s.basePath)
 
-	if err := s.copyFile(ctx, backupFile, destFile); err != nil {
-		s.logger.Warning("WARNING: Secondary Storage: File copy failed for %s: %v", filepath.Base(backupFile), err)
+	if err := s.copyFile(ctx, sourceFile, destFile); err != nil {
+		s.logger.Warning("WARNING: Secondary Storage: File copy failed for %s: %v", filepath.Base(sourceFile), err)
 		s.logger.Warning("WARNING: Secondary Storage: Backup not saved to %s", s.basePath)
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
-			Path:        backupFile,
+			Path:        sourceFile,
 			Err:         fmt.Errorf("copy failed: %w", err),
 			IsCritical:  false,
 			Recoverable: true,
@@ -157,7 +162,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	}
 
 	// Copy associated files if not bundled
-	if !s.config.BundleAssociatedFiles {
+	if !bundleEnabled {
 		associatedFiles := []string{
 			backupFile + ".sha256",
 			backupFile + ".metadata",
@@ -182,23 +187,6 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 		if len(failedAssoc) > 0 {
 			s.logger.Warning("WARNING: Secondary Storage: %d associated file(s) failed to copy: %v",
 				len(failedAssoc), failedAssoc)
-		}
-	} else {
-		// When bundling is enabled, callers may pass either the raw archive path
-		// or the bundle path itself. Normalize to avoid looking for
-		// "*.bundle.tar.bundle.tar".
-		bundleFile := bundlePathFor(backupFile)
-		if bundleFile != backupFile {
-			if _, err := os.Stat(bundleFile); err == nil {
-				destBundle := filepath.Join(s.basePath, filepath.Base(bundleFile))
-				if err := s.copyFile(ctx, bundleFile, destBundle); err != nil {
-					s.logger.Warning("WARNING: Secondary Storage: Failed to copy bundle %s: %v",
-						filepath.Base(bundleFile), err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				s.logger.Warning("WARNING: Secondary Storage: Unable to inspect bundle %s: %v",
-					filepath.Base(bundleFile), err)
-			}
 		}
 	}
 
