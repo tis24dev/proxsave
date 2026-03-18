@@ -649,13 +649,32 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		}
 	}
 
-	filename := filepath.Base(backupFile)
+	primaryFile := backupFile
+	primaryStat := stat
+	if c.config.BundleAssociatedFiles {
+		// When bundling is enabled, callers may pass either the raw archive path
+		// or the bundle path itself. Only switch to the bundle when a distinct
+		// canonical bundle exists alongside the raw archive.
+		bundleFile := bundlePathFor(backupFile)
+		if bundleFile != backupFile {
+			bundleStat, err := os.Stat(bundleFile)
+			if err == nil {
+				primaryFile = bundleFile
+				primaryStat = bundleStat
+			} else if !errors.Is(err, os.ErrNotExist) {
+				c.logger.Warning("WARNING: Cloud storage - unable to inspect bundle %s: %v",
+					filepath.Base(bundleFile), err)
+			}
+		}
+	}
+
+	filename := filepath.Base(primaryFile)
 	remoteFile := c.remotePathFor(filename)
-	logging.DebugStep(c.logger, "cloud store", "source size=%s remote=%s", utils.FormatBytes(stat.Size()), c.remoteLabel())
+	logging.DebugStep(c.logger, "cloud store", "source size=%s remote=%s", utils.FormatBytes(primaryStat.Size()), c.remoteLabel())
 
 	c.logger.Info("Uploading backup to cloud storage: %s (%s) -> %s (timeout: %ds)",
 		filename,
-		utils.FormatBytes(stat.Size()),
+		utils.FormatBytes(primaryStat.Size()),
 		c.remoteLabel(),
 		c.config.RcloneTimeoutOperation)
 	c.logger.Debug("Cloud storage: upload retries=%d threads=%d bwlimit=%s",
@@ -667,7 +686,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 	tasks := make([]uploadTask, 0, 4)
 	tasks = append(tasks, uploadTask{
-		local:  backupFile,
+		local:  primaryFile,
 		remote: remoteFile,
 		verify: true,
 	})
@@ -688,23 +707,6 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 				remote: c.remotePathFor(filepath.Base(srcFile)),
 				verify: c.parallelVerify,
 			})
-		}
-	} else {
-		// When bundling is enabled, callers may pass either the raw archive path
-		// or the bundle path itself. Normalize to avoid looking for
-		// "*.bundle.tar.bundle.tar".
-		bundleFile := bundlePathFor(backupFile)
-		if bundleFile != backupFile {
-			if _, err := os.Stat(bundleFile); err == nil {
-				tasks = append(tasks, uploadTask{
-					local:  bundleFile,
-					remote: c.remotePathFor(filepath.Base(bundleFile)),
-					verify: c.parallelVerify,
-				})
-			} else if !errors.Is(err, os.ErrNotExist) {
-				c.logger.Warning("WARNING: Cloud storage - unable to inspect bundle %s: %v",
-					filepath.Base(bundleFile), err)
-			}
 		}
 	}
 

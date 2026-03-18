@@ -559,6 +559,42 @@ func TestCloudStorageStoreUploadsWithRemotePrefix(t *testing.T) {
 	}
 }
 
+func TestCloudStorageStorePrefersBundleWhenPresent(t *testing.T) {
+	tmpDir := t.TempDir()
+	backupFile := filepath.Join(tmpDir, "pbs1-backup.tar.zst")
+	bundleFile := bundlePathFor(backupFile)
+	writeTestFile(t, backupFile, "primary")
+	writeTestFile(t, bundleFile, "bundle")
+
+	cfg := &config.Config{
+		CloudEnabled:           true,
+		CloudRemote:            "remote",
+		BundleAssociatedFiles:  true,
+		RcloneRetries:          1,
+		RcloneTimeoutOperation: 10,
+	}
+
+	cs := newCloudStorageForTest(cfg)
+	cs.sleep = func(time.Duration) {}
+	remoteFile := cs.remotePathFor(filepath.Base(bundleFile))
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", bundleFile, remoteFile}},
+			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
+			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	if err := cs.Store(context.Background(), backupFile, nil); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls, got %d", len(queue.calls))
+	}
+}
+
 func TestCloudStorageStoreBundleInputSkipsDoubleBundleUpload(t *testing.T) {
 	tmpDir := t.TempDir()
 	bundleFile := filepath.Join(tmpDir, "pbs1-backup.tar.zst.bundle.tar")
@@ -575,11 +611,12 @@ func TestCloudStorageStoreBundleInputSkipsDoubleBundleUpload(t *testing.T) {
 
 	cs := newCloudStorageForTest(cfg)
 	cs.sleep = func(time.Duration) {}
+	remoteFile := cs.remotePathFor(filepath.Base(bundleFile))
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", bundleFile, "remote:pbs1-backup.tar.zst.bundle.tar"}},
-			{name: "rclone", args: []string{"lsl", "remote:pbs1-backup.tar.zst.bundle.tar"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
+			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", bundleFile, remoteFile}},
+			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 		},
 	}
