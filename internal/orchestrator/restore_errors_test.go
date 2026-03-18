@@ -962,6 +962,73 @@ func TestExtractRegularFile_CopyFails(t *testing.T) {
 	if closeErr := trackingFS.lastOpened.Close(); !errors.Is(closeErr, os.ErrClosed) {
 		t.Fatalf("output file close after copy failure = %v, want ErrClosed", closeErr)
 	}
+	tempMatches, err := filepath.Glob(target + ".proxsave.tmp.*")
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(tempMatches) != 0 {
+		t.Fatalf("temporary files should be removed after copy failure, found %v", tempMatches)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target %s should not exist after copy failure, stat err=%v", target, err)
+	}
+}
+
+func TestExtractRegularFile_CopyFailsPreservesExistingTarget(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	restoreFS = osFS{}
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "testfile.txt")
+	if err := os.WriteFile(target, []byte("keep me"), 0o600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	header := &tar.Header{
+		Name: "testfile.txt",
+		Mode: 0o644,
+		Size: 100,
+	}
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(header)
+	_, _ = tw.Write([]byte("short"))
+	tw.Close()
+
+	tr := tar.NewReader(&buf)
+	_, _ = tr.Next()
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	err := extractRegularFile(tr, target, header, logger)
+	if err == nil || !strings.Contains(err.Error(), "write file content") {
+		t.Fatalf("expected io.Copy error, got: %v", err)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read preserved target: %v", err)
+	}
+	if string(data) != "keep me" {
+		t.Fatalf("target content = %q, want preserved original", string(data))
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat preserved target: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("preserved target mode = %o, want %o", info.Mode().Perm(), 0o600)
+	}
+
+	tempMatches, err := filepath.Glob(target + ".proxsave.tmp.*")
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(tempMatches) != 0 {
+		t.Fatalf("temporary files should be removed after copy failure, found %v", tempMatches)
+	}
 }
 
 // --------------------------------------------------------------------------
@@ -1684,6 +1751,13 @@ func TestExtractRegularFile_Success(t *testing.T) {
 	}
 	if closeErr := trackingFS.lastOpened.Close(); !errors.Is(closeErr, os.ErrClosed) {
 		t.Fatalf("output file close after success = %v, want ErrClosed", closeErr)
+	}
+	tempMatches, err := filepath.Glob(target + ".proxsave.tmp.*")
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(tempMatches) != 0 {
+		t.Fatalf("temporary files should be removed after success, found %v", tempMatches)
 	}
 }
 

@@ -34,6 +34,7 @@ var (
 	servicePollInterval       = 500 * time.Millisecond
 	serviceRetryDelay         = 500 * time.Millisecond
 	restoreLogSequence        uint64
+	restoreTempSequence       uint64
 	restoreGlob               = filepath.Glob
 )
 
@@ -1598,18 +1599,35 @@ func extractDirectory(target string, header *tar.Header, logger *logging.Logger)
 }
 
 // extractRegularFile extracts a regular file with content and timestamps
-func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header, logger *logging.Logger) error {
-	// Remove existing file if it exists
-	_ = restoreFS.Remove(target)
+func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header, logger *logging.Logger) (retErr error) {
+	tmpSeq := atomic.AddUint64(&restoreTempSequence, 1)
+	tmpPath := fmt.Sprintf("%s.proxsave.tmp.%d.%d", target, nowRestore().UnixNano(), tmpSeq)
+	appendDeferredErr := func(prefix string, err error) {
+		if err == nil {
+			return
+		}
+		wrapped := fmt.Errorf("%s: %w", prefix, err)
+		if retErr == nil {
+			retErr = wrapped
+			return
+		}
+		retErr = errors.Join(retErr, wrapped)
+	}
 
-	// Create the file
-	outFile, err := restoreFS.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+	// Write to a sibling temp file first so a truncated archive entry cannot clobber
+	// an existing target before the content is fully copied and closed.
+	outFile, err := restoreFS.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL|os.O_TRUNC, os.FileMode(header.Mode))
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
 	defer func() {
 		if outFile != nil {
-			_ = outFile.Close()
+			appendDeferredErr("close file", outFile.Close())
+		}
+		if tmpPath != "" {
+			if err := restoreFS.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) && logger != nil {
+				logger.Debug("Failed to remove temp file %s: %v", tmpPath, err)
+			}
 		}
 	}()
 
@@ -1618,22 +1636,28 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 		return fmt.Errorf("write file content: %w", err)
 	}
 
-	// Close before setting attributes
+	// Close before setting attributes and renaming into place.
 	if err := outFile.Close(); err != nil {
 		outFile = nil
 		return fmt.Errorf("close file: %w", err)
 	}
 	outFile = nil
 
-	// Set ownership
-	if err := os.Chown(target, header.Uid, header.Gid); err != nil {
+	// Set ownership on the temp file before replacing the target so failures do not
+	// leave the final path in a partially restored state.
+	if err := os.Chown(tmpPath, header.Uid, header.Gid); err != nil {
 		logger.Debug("Failed to chown file %s: %v", target, err)
 	}
 
 	// Set permissions explicitly
-	if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
+	if err := os.Chmod(tmpPath, os.FileMode(header.Mode)); err != nil {
 		return fmt.Errorf("chmod file: %w", err)
 	}
+
+	if err := restoreFS.Rename(tmpPath, target); err != nil {
+		return fmt.Errorf("replace file: %w", err)
+	}
+	tmpPath = ""
 
 	// Set timestamps (mtime, atime, ctime via syscall)
 	if err := setTimestamps(target, header); err != nil {
