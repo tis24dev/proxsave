@@ -177,11 +177,7 @@ func TestArmAccessControlRollback_SystemdAndBackgroundPaths(t *testing.T) {
 
 	t.Run("uses systemd-run when available", func(t *testing.T) {
 		binDir := t.TempDir()
-		oldPath := os.Getenv("PATH")
-		if err := os.Setenv("PATH", binDir); err != nil {
-			t.Fatalf("set PATH: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		t.Setenv("PATH", binDir)
 		writeExecutable(t, binDir, "systemd-run")
 
 		fakeCmd := &FakeCommandRunner{}
@@ -204,11 +200,7 @@ func TestArmAccessControlRollback_SystemdAndBackgroundPaths(t *testing.T) {
 
 	t.Run("falls back to background timer on systemd-run failure", func(t *testing.T) {
 		binDir := t.TempDir()
-		oldPath := os.Getenv("PATH")
-		if err := os.Setenv("PATH", binDir); err != nil {
-			t.Fatalf("set PATH: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		t.Setenv("PATH", binDir)
 		writeExecutable(t, binDir, "systemd-run")
 
 		fakeCmd := &FakeCommandRunner{
@@ -242,11 +234,7 @@ func TestArmAccessControlRollback_SystemdAndBackgroundPaths(t *testing.T) {
 
 	t.Run("background timer failure returns error", func(t *testing.T) {
 		emptyBin := t.TempDir()
-		oldPath := os.Getenv("PATH")
-		if err := os.Setenv("PATH", emptyBin); err != nil {
-			t.Fatalf("set PATH: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		t.Setenv("PATH", emptyBin)
 
 		fakeCmd := &FakeCommandRunner{
 			Errors: map[string]error{},
@@ -283,11 +271,7 @@ func TestArmAccessControlRollback_DefaultWorkDirAndMinTimeout(t *testing.T) {
 	restoreTime = fakeTime
 
 	emptyBin := t.TempDir()
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", emptyBin); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+	t.Setenv("PATH", emptyBin)
 
 	fakeCmd := &FakeCommandRunner{}
 	restoreCmd = fakeCmd
@@ -375,11 +359,7 @@ func TestDisarmAccessControlRollback_RemovesMarkerScriptAndStopsTimer(t *testing
 	restoreFS = fakeFS
 
 	binDir := t.TempDir()
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", binDir); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+	t.Setenv("PATH", binDir)
 	writeExecutable(t, binDir, "systemctl")
 
 	fakeCmd := &FakeCommandRunner{}
@@ -844,4 +824,3 @@ func TestMaybeApplyAccessControlWithUI_BranchCoverage(t *testing.T) {
 		}
 	})
 }
-

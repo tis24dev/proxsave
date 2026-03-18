@@ -9,25 +9,9 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-func setBaseDirEnv(t *testing.T, value string) func() {
+func setBaseDirEnv(t *testing.T, value string) {
 	t.Helper()
-
-	prev := os.Getenv("BASE_DIR")
-	if value == "" {
-		_ = os.Unsetenv("BASE_DIR")
-	} else {
-		if err := os.Setenv("BASE_DIR", value); err != nil {
-			t.Fatalf("failed to set BASE_DIR: %v", err)
-		}
-	}
-
-	return func() {
-		if prev == "" {
-			_ = os.Unsetenv("BASE_DIR")
-		} else {
-			_ = os.Setenv("BASE_DIR", prev)
-		}
-	}
+	t.Setenv("BASE_DIR", value)
 }
 
 func TestLoadConfig(t *testing.T) {
@@ -59,8 +43,7 @@ BACKUP_BLACKLIST=/var/data/tmp
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/env/base/dir")
-	defer cleanup()
+	setBaseDirEnv(t, "/env/base/dir")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -260,8 +243,7 @@ AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt
 		t.Fatalf("Failed to write config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/custom/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/custom/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -367,8 +349,7 @@ LOG_PATH=/path/without/quotes
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/quotes/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/quotes/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -410,8 +391,7 @@ DEBUG_LEVEL=4
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/comments/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/comments/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -464,8 +444,7 @@ func TestConfigDefaults(t *testing.T) {
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/defaults/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/defaults/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -515,8 +494,7 @@ WEBHOOK_ENABLE=true
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/legacy/notifications/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/legacy/notifications/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -595,8 +573,7 @@ BACKUP_PATH=${BASE_DIR}/backup-data
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "")
-	defer cleanup()
+	setBaseDirEnv(t, "")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -623,8 +600,7 @@ PVE_CONFIG_PATH=/etc/pve
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/config-vars/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/config-vars/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -651,8 +627,7 @@ MAX_LOCAL_BACKUPS=10
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/retention/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/retention/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -760,8 +735,7 @@ LOCK_PATH=/test/lock
 		t.Fatalf("failed to write config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/env/base/dir")
-	defer cleanup()
+	setBaseDirEnv(t, "/env/base/dir")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -820,16 +794,8 @@ BACKUP_PATH=/fromfile
 		t.Fatalf("failed to write config: %v", err)
 	}
 
-	if err := os.Setenv("BACKUP_ENABLED", "true"); err != nil {
-		t.Fatalf("failed to set env BACKUP_ENABLED: %v", err)
-	}
-	if err := os.Setenv("BACKUP_PATH", "/fromenv"); err != nil {
-		t.Fatalf("failed to set env BACKUP_PATH: %v", err)
-	}
-	defer func() {
-		_ = os.Unsetenv("BACKUP_ENABLED")
-		_ = os.Unsetenv("BACKUP_PATH")
-	}()
+	t.Setenv("BACKUP_ENABLED", "true")
+	t.Setenv("BACKUP_PATH", "/fromenv")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -867,15 +833,8 @@ WEBHOOK_TIMEOUT=30
 		"WEBHOOK_TIMEOUT":         "45",
 	}
 	for key, value := range overrides {
-		if err := os.Setenv(key, value); err != nil {
-			t.Fatalf("failed to set env %s: %v", key, err)
-		}
+		t.Setenv(key, value)
 	}
-	defer func() {
-		for key := range overrides {
-			_ = os.Unsetenv(key)
-		}
-	}()
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -941,13 +900,9 @@ func TestConfigFallbackHelpers(t *testing.T) {
 }
 
 func TestExpandEnvVarsAndBaseDir(t *testing.T) {
-	restoreBase := setBaseDirEnv(t, "/env/base")
-	defer restoreBase()
+	setBaseDirEnv(t, "/env/base")
 
-	if err := os.Setenv("FOO", "bar"); err != nil {
-		t.Fatalf("failed to set FOO: %v", err)
-	}
-	defer func() { _ = os.Unsetenv("FOO") }()
+	t.Setenv("FOO", "bar")
 
 	in := "${FOO}/$FOO/${BASE_DIR}/suffix"
 	got := expandEnvVars(in)
@@ -1093,8 +1048,7 @@ func TestAutoDetectPBSTokenParsesFiles(t *testing.T) {
 }
 
 func TestAutoDetectPBSAuthEnvAndTokenPriority(t *testing.T) {
-	restoreBase := setBaseDirEnv(t, "/pbs/base")
-	defer restoreBase()
+	setBaseDirEnv(t, "/pbs/base")
 
 	tmpDir := t.TempDir()
 	tokenFile := filepath.Join(tmpDir, "pbs_token")
@@ -1103,14 +1057,9 @@ func TestAutoDetectPBSAuthEnvAndTokenPriority(t *testing.T) {
 	}
 
 	// Case 1: environment variables have highest priority
-	_ = os.Setenv("PBS_REPOSITORY", "envrepo")
-	_ = os.Setenv("PBS_PASSWORD", "envpass")
-	_ = os.Setenv("PBS_FINGERPRINT", "envfp")
-	defer func() {
-		_ = os.Unsetenv("PBS_REPOSITORY")
-		_ = os.Unsetenv("PBS_PASSWORD")
-		_ = os.Unsetenv("PBS_FINGERPRINT")
-	}()
+	t.Setenv("PBS_REPOSITORY", "envrepo")
+	t.Setenv("PBS_PASSWORD", "envpass")
+	t.Setenv("PBS_FINGERPRINT", "envfp")
 
 	cfg := &Config{
 		SecureAccount: tmpDir,
@@ -1126,9 +1075,9 @@ func TestAutoDetectPBSAuthEnvAndTokenPriority(t *testing.T) {
 	}
 
 	// Case 2: no env, use raw config values
-	_ = os.Unsetenv("PBS_REPOSITORY")
-	_ = os.Unsetenv("PBS_PASSWORD")
-	_ = os.Unsetenv("PBS_FINGERPRINT")
+	t.Setenv("PBS_REPOSITORY", "")
+	t.Setenv("PBS_PASSWORD", "")
+	t.Setenv("PBS_FINGERPRINT", "")
 
 	cfg2 := &Config{
 		SecureAccount: tmpDir,

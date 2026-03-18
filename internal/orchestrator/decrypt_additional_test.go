@@ -81,11 +81,7 @@ func TestDownloadRcloneBackup(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(io.Discard)

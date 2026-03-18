@@ -248,14 +248,7 @@ func TestDetectPBSViaSources(t *testing.T) {
 
 // TestExtendPath tests PATH environment variable extension
 func TestExtendPath(t *testing.T) {
-	// Save original PATH
-	originalPath := os.Getenv("PATH")
-	defer func() {
-		_ = os.Setenv("PATH", originalPath)
-	}()
-
-	// Set a minimal PATH
-	_ = os.Setenv("PATH", "/usr/local/bin")
+	t.Setenv("PATH", "/usr/local/bin")
 
 	extendPath()
 
@@ -271,11 +264,6 @@ func TestExtendPath(t *testing.T) {
 
 // TestExtendPathIdempotent tests that extendPath doesn't duplicate paths
 func TestExtendPathIdempotent(t *testing.T) {
-	originalPath := os.Getenv("PATH")
-	defer func() {
-		_ = os.Setenv("PATH", originalPath)
-	}()
-
 	// Call extendPath twice
 	extendPath()
 	pathAfterFirst := os.Getenv("PATH")

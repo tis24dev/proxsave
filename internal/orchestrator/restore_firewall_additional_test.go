@@ -560,11 +560,7 @@ func TestRestartPVEFirewallService_CommandFallbacks(t *testing.T) {
 	t.Cleanup(func() { restoreCmd = origCmd })
 
 	binDir := t.TempDir()
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", binDir); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+	t.Setenv("PATH", binDir)
 
 	writeExecutable(t, binDir, "systemctl")
 	writeExecutable(t, binDir, "pve-firewall")
@@ -623,9 +619,7 @@ func TestRestartPVEFirewallService_CommandFallbacks(t *testing.T) {
 		restoreCmd = fake
 
 		emptyBin := t.TempDir()
-		if err := os.Setenv("PATH", emptyBin); err != nil {
-			t.Fatalf("set PATH: %v", err)
-		}
+		t.Setenv("PATH", emptyBin)
 
 		if err := restartPVEFirewallService(context.Background()); err == nil {
 			t.Fatalf("expected error")
@@ -663,11 +657,7 @@ func TestArmFirewallRollback_SystemdAndBackgroundPaths(t *testing.T) {
 
 	t.Run("uses systemd-run when available", func(t *testing.T) {
 		binDir := t.TempDir()
-		oldPath := os.Getenv("PATH")
-		if err := os.Setenv("PATH", binDir); err != nil {
-			t.Fatalf("set PATH: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		t.Setenv("PATH", binDir)
 		writeExecutable(t, binDir, "systemd-run")
 
 		fakeCmd := &FakeCommandRunner{}
@@ -690,11 +680,7 @@ func TestArmFirewallRollback_SystemdAndBackgroundPaths(t *testing.T) {
 
 	t.Run("falls back to background timer on systemd-run failure", func(t *testing.T) {
 		binDir := t.TempDir()
-		oldPath := os.Getenv("PATH")
-		if err := os.Setenv("PATH", binDir); err != nil {
-			t.Fatalf("set PATH: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		t.Setenv("PATH", binDir)
 		writeExecutable(t, binDir, "systemd-run")
 
 		fakeCmd := &FakeCommandRunner{
@@ -728,11 +714,7 @@ func TestArmFirewallRollback_SystemdAndBackgroundPaths(t *testing.T) {
 
 	t.Run("background timer failure returns error", func(t *testing.T) {
 		emptyBin := t.TempDir()
-		oldPath := os.Getenv("PATH")
-		if err := os.Setenv("PATH", emptyBin); err != nil {
-			t.Fatalf("set PATH: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		t.Setenv("PATH", emptyBin)
 
 		fakeCmd := &FakeCommandRunner{
 			Errors: map[string]error{},
@@ -764,11 +746,7 @@ func TestDisarmFirewallRollback_RemovesMarkerAndStopsTimer(t *testing.T) {
 	restoreFS = fakeFS
 
 	binDir := t.TempDir()
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", binDir); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+	t.Setenv("PATH", binDir)
 	writeExecutable(t, binDir, "systemctl")
 
 	fakeCmd := &FakeCommandRunner{}
@@ -1566,11 +1544,7 @@ func TestArmFirewallRollback_DefaultWorkDirAndMinTimeout(t *testing.T) {
 	restoreTime = fakeTime
 
 	emptyBin := t.TempDir()
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", emptyBin); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+	t.Setenv("PATH", emptyBin)
 
 	fakeCmd := &FakeCommandRunner{}
 	restoreCmd = fakeCmd
@@ -1658,11 +1632,7 @@ func TestDisarmFirewallRollback_MissingMarkerAndNoSystemctl(t *testing.T) {
 	restoreFS = fakeFS
 
 	emptyBin := t.TempDir()
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", emptyBin); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+	t.Setenv("PATH", emptyBin)
 
 	fakeCmd := &FakeCommandRunner{}
 	restoreCmd = fakeCmd
