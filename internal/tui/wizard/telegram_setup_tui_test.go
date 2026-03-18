@@ -644,8 +644,12 @@ func TestTelegramSetupDefaultWrappers(t *testing.T) {
 	<-updateQueued
 
 	go func() {
-		time.Sleep(500 * time.Millisecond)
-		app.Stop()
+		select {
+		case <-updateDone:
+			return
+		case <-time.After(100 * time.Millisecond):
+			app.Stop()
+		}
 	}()
 
 	if err := telegramSetupWizardRunner(app, root, root); err != nil {
