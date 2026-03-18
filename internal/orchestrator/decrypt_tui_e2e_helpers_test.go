@@ -58,6 +58,7 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 	t.Helper()
 
 	orig := newTUIApp
+	done := make(chan struct{})
 	screen := tcell.NewSimulationScreen("UTF-8")
 	if err := screen.Init(); err != nil {
 		t.Fatalf("screen.Init: %v", err)
@@ -65,19 +66,36 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 	screen.SetSize(120, 40)
 
 	var once sync.Once
+	var injectWG sync.WaitGroup
 	newTUIApp = func() *tui.App {
 		app := tui.NewApp()
 		app.SetScreen(screen)
 
 		once.Do(func() {
+			injectWG.Add(1)
 			go func() {
+				defer injectWG.Done()
+
 				for _, k := range keys {
 					if k.Wait > 0 {
-						time.Sleep(k.Wait)
+						timer := time.NewTimer(k.Wait)
+						select {
+						case <-done:
+							if !timer.Stop() {
+								<-timer.C
+							}
+							return
+						case <-timer.C:
+						}
 					}
 					mod := k.Mod
 					if mod == 0 {
 						mod = tcell.ModNone
+					}
+					select {
+					case <-done:
+						return
+					default:
 					}
 					screen.InjectKey(k.Key, k.R, mod)
 				}
@@ -88,6 +106,8 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 	}
 
 	t.Cleanup(func() {
+		close(done)
+		injectWG.Wait()
 		newTUIApp = orig
 	})
 }
