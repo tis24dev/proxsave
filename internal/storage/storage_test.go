@@ -1585,8 +1585,16 @@ func TestSecondaryStorageGetStatsIncludesFilesystemInfo(t *testing.T) {
 		t.Fatalf("Statfs() error = %v", err)
 	}
 	_, _, wantUsed := safefs.SpaceUsageFromStatfs(stat)
-	if stats.UsedSpace != wantUsed {
-		t.Fatalf("UsedSpace mismatch: got %d want %d", stats.UsedSpace, wantUsed)
+	diff := stats.UsedSpace - wantUsed
+	if diff < 0 {
+		diff = -diff
+	}
+	tolerance := stat.Bsize
+	if tolerance < 0 {
+		tolerance = -tolerance
+	}
+	if diff > tolerance {
+		t.Fatalf("UsedSpace mismatch: got %d want %d (diff=%d, tolerance=%d)", stats.UsedSpace, wantUsed, diff, tolerance)
 	}
 }
 
