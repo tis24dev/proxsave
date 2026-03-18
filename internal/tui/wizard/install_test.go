@@ -105,6 +105,13 @@ func TestApplyInstallDataDefaultsBaseTemplate(t *testing.T) {
 	}
 }
 
+func TestApplyInstallDataRejectsNilData(t *testing.T) {
+	_, err := ApplyInstallData("", nil)
+	if !errors.Is(err, ErrNilInstallData) {
+		t.Fatalf("ApplyInstallData error = %v, want %v", err, ErrNilInstallData)
+	}
+}
+
 func TestApplyInstallDataAllowsEmptySecondaryLogPath(t *testing.T) {
 	data := &InstallWizardData{
 		BaseDir:                "/tmp/base",
@@ -192,6 +199,13 @@ func TestApplyInstallDataRejectsInvalidSecondaryLogPath(t *testing.T) {
 	}
 	if got, want := err.Error(), "SECONDARY_LOG_PATH must be an absolute local filesystem path"; got != want {
 		t.Fatalf("ApplyInstallData error = %q, want %q", got, want)
+	}
+}
+
+func TestValidateSecondaryInstallDataRejectsNilData(t *testing.T) {
+	err := validateSecondaryInstallData(nil)
+	if !errors.Is(err, ErrNilInstallData) {
+		t.Fatalf("validateSecondaryInstallData error = %v, want %v", err, ErrNilInstallData)
 	}
 }
 
