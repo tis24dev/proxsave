@@ -31,6 +31,11 @@ func TestFormatPreservedEntries(t *testing.T) {
 			entries: []string{"", "   ", "\t"},
 			want:    "(none)",
 		},
+		{
+			name:    "preserves existing trailing slash without doubling",
+			entries: []string{"build/", " env/ ", "identity"},
+			want:    "build/ env/ identity/",
+		},
 	}
 
 	for _, tt := range tests {

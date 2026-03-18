@@ -21,7 +21,10 @@ func formatPreservedEntries(entries []string) string {
 		if trimmed == "" {
 			continue
 		}
-		formatted = append(formatted, trimmed+"/")
+		if !strings.HasSuffix(trimmed, "/") {
+			trimmed += "/"
+		}
+		formatted = append(formatted, trimmed)
 	}
 	if len(formatted) == 0 {
 		return "(none)"
