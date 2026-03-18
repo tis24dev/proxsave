@@ -49,6 +49,23 @@ func TestNormalizeGFSRetentionConfigEnforcesDailyMinimum(t *testing.T) {
 	}
 }
 
+func TestEffectiveGFSRetentionConfigEnforcesDailyMinimumWithoutLogging(t *testing.T) {
+	cfg := RetentionConfig{
+		Policy: "gfs",
+		Daily:  0,
+		Weekly: 4,
+	}
+
+	effective := EffectiveGFSRetentionConfig(cfg)
+
+	if effective.Daily != 1 {
+		t.Fatalf("EffectiveGFSRetentionConfig() Daily = %d; want 1", effective.Daily)
+	}
+	if effective.Weekly != cfg.Weekly {
+		t.Fatalf("EffectiveGFSRetentionConfig() Weekly = %d; want %d", effective.Weekly, cfg.Weekly)
+	}
+}
+
 func TestLocalStorageListSkipsAssociatedFilesAndSortsByTimestamp(t *testing.T) {
 	t.Parallel()
 

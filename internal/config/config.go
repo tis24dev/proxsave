@@ -113,7 +113,7 @@ type Config struct {
 
 	// GFS (Grandfather-Father-Son) retention settings
 	// If ANY of these is > 0, GFS retention is enabled (overrides simple retention)
-	RetentionDaily   int // Keep backups from last N days (0 = disabled)
+	RetentionDaily   int // Keep the GFS daily tier; in GFS mode values <= 0 are normalized to 1
 	RetentionWeekly  int // Keep N weekly backups, one per week (0 = disabled)
 	RetentionMonthly int // Keep N monthly backups, one per month (0 = disabled)
 	RetentionYearly  int // Keep N yearly backups, one per year (0 = keep all yearly)

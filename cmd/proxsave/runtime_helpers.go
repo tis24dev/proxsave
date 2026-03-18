@@ -344,6 +344,9 @@ func fetchStorageStats(ctx context.Context, backend storage.Storage, logger *log
 
 func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) string {
 	retentionConfig := storage.NewRetentionConfigFromConfig(cfg, location)
+	if retentionConfig.Policy == "gfs" {
+		retentionConfig = storage.EffectiveGFSRetentionConfig(retentionConfig)
+	}
 
 	if stats == nil {
 		reason := "unable to gather stats"

@@ -73,6 +73,7 @@ func ClassifyBackupsGFS(backups []*types.BackupMetadata, config RetentionConfig)
 	if len(backups) == 0 {
 		return make(map[*types.BackupMetadata]RetentionCategory)
 	}
+	config = EffectiveGFSRetentionConfig(config)
 
 	// Sort by timestamp descending (newest first)
 	sort.Slice(backups, func(i, j int) bool {
@@ -87,20 +88,15 @@ func ClassifyBackupsGFS(backups []*types.BackupMetadata, config RetentionConfig)
 
 	// 1. DAILY: Keep the last N backups (newest first)
 	dailyLimit := config.Daily
-	if dailyLimit < 0 {
-		dailyLimit = 0
-	}
 	dailyCount := 0
 	dailyCutIndex := len(backups)
-	if dailyLimit > 0 {
-		for i, b := range backups {
-			if dailyCount >= dailyLimit {
-				dailyCutIndex = i
-				break
-			}
-			classification[b] = CategoryDaily
-			dailyCount++
+	for i, b := range backups {
+		if dailyCount >= dailyLimit {
+			dailyCutIndex = i
+			break
 		}
+		classification[b] = CategoryDaily
+		dailyCount++
 	}
 	if dailyCount < dailyLimit {
 		dailyCutIndex = len(backups)

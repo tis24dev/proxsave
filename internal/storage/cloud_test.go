@@ -916,7 +916,7 @@ func TestRemoteDirRef(t *testing.T) {
 	}
 }
 
-func TestCloudStorageApplyGFSRetentionDeletesMarkedBackups(t *testing.T) {
+func TestCloudStorageApplyGFSRetentionKeepsMinimumDailyBackup(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:          true,
 		CloudRemote:           "remote",
@@ -934,7 +934,6 @@ func TestCloudStorageApplyGFSRetentionDeletesMarkedBackups(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup.tar.zst"}},
 			{name: "rclone", args: []string{"deletefile", "remote:beta-backup.tar.zst"}},
 		},
 	}
@@ -951,15 +950,15 @@ func TestCloudStorageApplyGFSRetentionDeletesMarkedBackups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyGFSRetention() error = %v", err)
 	}
-	if deleted != 2 {
-		t.Fatalf("applyGFSRetention() deleted = %d, want 2", deleted)
+	if deleted != 1 {
+		t.Fatalf("applyGFSRetention() deleted = %d, want 1", deleted)
 	}
-	if len(queue.calls) != 2 {
-		t.Fatalf("expected 2 delete commands, got %d", len(queue.calls))
+	if len(queue.calls) != 1 {
+		t.Fatalf("expected 1 delete command, got %d", len(queue.calls))
 	}
 
 	summary := cs.LastRetentionSummary()
-	if summary.BackupsDeleted != 2 || summary.BackupsRemaining != 0 {
+	if summary.BackupsDeleted != 1 || summary.BackupsRemaining != 1 {
 		t.Fatalf("unexpected retention summary: %+v", summary)
 	}
 }

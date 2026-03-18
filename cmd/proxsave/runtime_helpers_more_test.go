@@ -278,21 +278,27 @@ func TestFormatStorageInitSummary(t *testing.T) {
 
 	cfgGFS := &config.Config{
 		RetentionPolicy:  "gfs",
-		RetentionDaily:   1,
-		RetentionWeekly:  0,
+		RetentionDaily:   0,
+		RetentionWeekly:  1,
 		RetentionMonthly: 0,
 		RetentionYearly:  -1,
 	}
 	now := time.Now()
 	backups := []*types.BackupMetadata{
 		{Timestamp: now.Add(-1 * time.Hour)},
-		{Timestamp: now.Add(-2 * time.Hour)},
+		{Timestamp: now.Add(-8 * 24 * time.Hour)},
 	}
 	stats := &storage.StorageStats{TotalBackups: 2}
 
 	summary := formatStorageInitSummary("Local", cfgGFS, storage.LocationPrimary, stats, backups)
 	if !bytes.Contains([]byte(summary), []byte("Kept (est.):")) {
 		t.Fatalf("expected GFS summary to include retention estimates, got: %s", summary)
+	}
+	if !bytes.Contains([]byte(summary), []byte("Daily: 1/1")) {
+		t.Fatalf("expected GFS summary to normalize daily tier, got: %s", summary)
+	}
+	if !bytes.Contains([]byte(summary), []byte("Weekly: 1/1")) {
+		t.Fatalf("expected GFS summary to keep one weekly backup, got: %s", summary)
 	}
 }
 
