@@ -651,14 +651,21 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 			})
 		}
 	} else {
-		// Upload bundle file
-		bundleFile := backupFile + ".bundle.tar"
-		if _, err := os.Stat(bundleFile); err == nil {
-			tasks = append(tasks, uploadTask{
-				local:  bundleFile,
-				remote: c.remotePathFor(filepath.Base(bundleFile)),
-				verify: c.parallelVerify,
-			})
+		// When bundling is enabled, callers may pass either the raw archive path
+		// or the bundle path itself. Normalize to avoid looking for
+		// "*.bundle.tar.bundle.tar".
+		bundleFile := bundlePathFor(backupFile)
+		if bundleFile != backupFile {
+			if _, err := os.Stat(bundleFile); err == nil {
+				tasks = append(tasks, uploadTask{
+					local:  bundleFile,
+					remote: c.remotePathFor(filepath.Base(bundleFile)),
+					verify: c.parallelVerify,
+				})
+			} else if !errors.Is(err, os.ErrNotExist) {
+				c.logger.Warning("WARNING: Cloud storage - unable to inspect bundle %s: %v",
+					filepath.Base(bundleFile), err)
+			}
 		}
 	}
 

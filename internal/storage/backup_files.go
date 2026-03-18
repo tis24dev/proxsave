@@ -2,13 +2,22 @@ package storage
 
 import "strings"
 
+const bundleSuffix = ".bundle.tar"
+
 // trimBundleSuffix removes the .bundle.tar suffix from a path if present.
 // It returns the trimmed path and whether the suffix was removed.
 func trimBundleSuffix(path string) (string, bool) {
-	if strings.HasSuffix(path, ".bundle.tar") {
-		return strings.TrimSuffix(path, ".bundle.tar"), true
+	if strings.HasSuffix(path, bundleSuffix) {
+		return strings.TrimSuffix(path, bundleSuffix), true
 	}
 	return path, false
+}
+
+// bundlePathFor returns the canonical bundle path for either a raw archive path
+// or a path that already points to a bundle.
+func bundlePathFor(path string) string {
+	base, _ := trimBundleSuffix(path)
+	return base + bundleSuffix
 }
 
 // buildBackupCandidatePaths returns the list of files that belong to a backup.
@@ -29,8 +38,9 @@ func buildBackupCandidatePaths(base string, includeBundle bool) []string {
 
 	files := make([]string, 0, 5)
 	if includeBundle {
-		if add(base + ".bundle.tar") {
-			files = append(files, base+".bundle.tar")
+		bundlePath := bundlePathFor(base)
+		if add(bundlePath) {
+			files = append(files, bundlePath)
 		}
 	}
 	candidates := []string{

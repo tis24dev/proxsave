@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -183,12 +184,19 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 				len(failedAssoc), failedAssoc)
 		}
 	} else {
-		// Copy bundle file
-		bundleFile := backupFile + ".bundle.tar"
-		if _, err := os.Stat(bundleFile); err == nil {
-			destBundle := filepath.Join(s.basePath, filepath.Base(bundleFile))
-			if err := s.copyFile(ctx, bundleFile, destBundle); err != nil {
-				s.logger.Warning("WARNING: Secondary Storage: Failed to copy bundle %s: %v",
+		// When bundling is enabled, callers may pass either the raw archive path
+		// or the bundle path itself. Normalize to avoid looking for
+		// "*.bundle.tar.bundle.tar".
+		bundleFile := bundlePathFor(backupFile)
+		if bundleFile != backupFile {
+			if _, err := os.Stat(bundleFile); err == nil {
+				destBundle := filepath.Join(s.basePath, filepath.Base(bundleFile))
+				if err := s.copyFile(ctx, bundleFile, destBundle); err != nil {
+					s.logger.Warning("WARNING: Secondary Storage: Failed to copy bundle %s: %v",
+						filepath.Base(bundleFile), err)
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				s.logger.Warning("WARNING: Secondary Storage: Unable to inspect bundle %s: %v",
 					filepath.Base(bundleFile), err)
 			}
 		}

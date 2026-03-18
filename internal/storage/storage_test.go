@@ -1439,6 +1439,42 @@ func TestSecondaryStorageStoreHandlesBundles(t *testing.T) {
 	}
 }
 
+func TestSecondaryStorageStoreBundleInputSkipsDoubleBundleCopy(t *testing.T) {
+	t.Parallel()
+
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+	cfg := &config.Config{
+		SecondaryEnabled:      true,
+		SecondaryPath:         destDir,
+		BundleAssociatedFiles: true,
+	}
+	storage := newSecondaryStorageForTest(t, cfg)
+
+	bundleFile := filepath.Join(srcDir, "node-bundle-backup-20240202-020202.tar.zst.bundle.tar")
+	if err := os.WriteFile(bundleFile, []byte("bundle"), 0o600); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+	doubleBundle := bundleFile + ".bundle.tar"
+	if err := os.WriteFile(doubleBundle, []byte("decoy"), 0o600); err != nil {
+		t.Fatalf("write double bundle decoy: %v", err)
+	}
+
+	if err := storage.Store(context.Background(), bundleFile, &types.BackupMetadata{}); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	destBundle := filepath.Join(destDir, filepath.Base(bundleFile))
+	if _, err := os.Stat(destBundle); err != nil {
+		t.Fatalf("expected bundle to be copied: %v", err)
+	}
+
+	destDoubleBundle := filepath.Join(destDir, filepath.Base(doubleBundle))
+	if _, err := os.Stat(destDoubleBundle); !os.IsNotExist(err) {
+		t.Fatalf("double bundle decoy should not be copied, err=%v", err)
+	}
+}
+
 func TestSecondaryStorageStoreHonorsContextCancellation(t *testing.T) {
 	t.Parallel()
 
