@@ -1121,23 +1121,29 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bu
 	bundlePath = archivePath + ".bundle.tar"
 	logger.Debug("Creating bundle with native Go tar: %s (files: %v)", bundlePath, associated)
 
-	// Create tar archive using native Go archive/tar
-	outFile, err := fs.Create(bundlePath)
+	// Write to a temporary file in the target directory and rename on success.
+	outFile, err := fs.CreateTemp(dir, fmt.Sprintf("%s.tmp-*", filepath.Base(bundlePath)))
 	if err != nil {
-		return "", fmt.Errorf("failed to create bundle file: %w", err)
+		return "", fmt.Errorf("failed to create temp bundle file: %w", err)
 	}
-	defer func() {
-		if outFile != nil {
-			_ = outFile.Close()
-		}
-	}()
-
-	tw := tar.NewWriter(outFile)
+	tempBundle := outFile.Name()
+	var tw *tar.Writer
+	removeTemp := true
 	defer func() {
 		if tw != nil {
 			_ = tw.Close()
+			tw = nil
+		}
+		if outFile != nil {
+			_ = outFile.Close()
+			outFile = nil
+		}
+		if removeTemp {
+			_ = fs.Remove(tempBundle)
 		}
 	}()
+
+	tw = tar.NewWriter(outFile)
 
 	// Add each associated file to the tar archive
 	for _, filename := range associated {
@@ -1184,14 +1190,28 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bu
 	}
 	tw = nil
 
+	if err := outFile.Sync(); err != nil {
+		return "", fmt.Errorf("failed to sync bundle file: %w", err)
+	}
+
 	if err := outFile.Close(); err != nil {
 		outFile = nil
 		return "", fmt.Errorf("failed to close bundle file: %w", err)
 	}
 	outFile = nil
 
+	if err := fs.Rename(tempBundle, bundlePath); err != nil {
+		return "", fmt.Errorf("failed to rename temp bundle file: %w", err)
+	}
+	removeTemp = false
+	if err := syncDirectoryWithDeps(fs, dir); err != nil {
+		_ = fs.Remove(bundlePath)
+		return "", fmt.Errorf("failed to sync bundle directory: %w", err)
+	}
+
 	// Verify bundle was created
 	if _, err := fs.Stat(bundlePath); err != nil {
+		_ = fs.Remove(bundlePath)
 		return "", fmt.Errorf("bundle file not created: %w", err)
 	}
 
