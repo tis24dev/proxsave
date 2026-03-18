@@ -125,6 +125,17 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 			wantLabel: []string{"Local backups"},
 		},
 		{
+			name: "secondary disabled ignores stale path",
+			cfg: &config.Config{
+				BackupPath:       "/backup/local",
+				SecondaryEnabled: false,
+				SecondaryPath:    "remote:path",
+			},
+			wantCount: 1,
+			wantPaths: []string{"/backup/local"},
+			wantLabel: []string{"Local backups"},
+		},
+		{
 			name: "cloud enabled but empty remote",
 			cfg: &config.Config{
 				BackupPath:   "/backup/local",

@@ -354,9 +354,6 @@ func (c *Config) parse() error {
 }
 
 func (c *Config) validateSecondarySettings() error {
-	if err := ValidateOptionalSecondaryPath(c.SecondaryPath); err != nil {
-		return err
-	}
 	if c.SecondaryEnabled {
 		if err := ValidateRequiredSecondaryPath(c.SecondaryPath); err != nil {
 			return err

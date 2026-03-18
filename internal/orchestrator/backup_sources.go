@@ -48,16 +48,18 @@ func buildDecryptPathOptions(cfg *config.Config, logger *logging.Logger) (option
 		logging.DebugStep(logger, "build backup source options", "skip local (empty)")
 	}
 
-	if clean := strings.TrimSpace(cfg.SecondaryPath); clean != "" {
-		logging.DebugStep(logger, "build backup source options", "add secondary path=%q", clean)
-		options = append(options, decryptPathOption{
-			Label: "Secondary backups",
-			Path:  clean,
-		})
-	} else if cfg.SecondaryEnabled {
-		logging.DebugStep(logger, "build backup source options", "skip secondary (enabled but path empty)")
+	if cfg.SecondaryEnabled {
+		if clean := strings.TrimSpace(cfg.SecondaryPath); clean != "" {
+			logging.DebugStep(logger, "build backup source options", "add secondary path=%q", clean)
+			options = append(options, decryptPathOption{
+				Label: "Secondary backups",
+				Path:  clean,
+			})
+		} else {
+			logging.DebugStep(logger, "build backup source options", "skip secondary (enabled but path empty)")
+		}
 	} else {
-		logging.DebugStep(logger, "build backup source options", "skip secondary (path empty)")
+		logging.DebugStep(logger, "build backup source options", "skip secondary (disabled)")
 	}
 
 	if strings.TrimSpace(cfg.CloudRemote) != "" || strings.TrimSpace(cfg.CloudRemotePath) != "" {

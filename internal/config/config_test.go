@@ -288,12 +288,36 @@ func TestLoadConfigNotFound(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsInvalidSecondaryPathEvenWhenDisabled(t *testing.T) {
+func TestLoadConfigAllowsInvalidSecondaryPathWhenDisabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "invalid-secondary.env")
 	content := `BACKUP_PATH=/test/backup
 LOG_PATH=/test/log
 SECONDARY_ENABLED=false
+SECONDARY_PATH=remote:path
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.SecondaryEnabled {
+		t.Fatal("SecondaryEnabled expected false")
+	}
+	if cfg.SecondaryPath != "remote:path" {
+		t.Fatalf("SecondaryPath = %q; want %q", cfg.SecondaryPath, "remote:path")
+	}
+}
+
+func TestLoadConfigRejectsInvalidSecondaryPathWhenEnabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "invalid-secondary-enabled.env")
+	content := `BACKUP_PATH=/test/backup
+LOG_PATH=/test/log
+SECONDARY_ENABLED=true
 SECONDARY_PATH=remote:path
 `
 	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
