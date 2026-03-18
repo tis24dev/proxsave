@@ -5,7 +5,8 @@ import (
 )
 
 // EffectiveGFSRetentionConfig returns the effective GFS configuration without side effects.
-// It applies the same value normalization used by retention execution paths, but does not log.
+// It applies the same value normalization used by GFS retention execution paths, but does not log.
+// Callers are responsible for invoking it only for configurations that should use GFS semantics.
 func EffectiveGFSRetentionConfig(cfg RetentionConfig) RetentionConfig {
 	effective := cfg
 	if effective.Daily <= 0 {

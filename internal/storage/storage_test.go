@@ -49,6 +49,49 @@ func TestNormalizeGFSRetentionConfigEnforcesDailyMinimum(t *testing.T) {
 	}
 }
 
+func TestNormalizeGFSRetentionConfigLeavesNonGFSUnchanged(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	cfg := RetentionConfig{
+		Policy:     "simple",
+		MaxBackups: 7,
+		Daily:      0,
+		Weekly:     4,
+	}
+
+	effective := NormalizeGFSRetentionConfig(logger, "Test Storage", cfg)
+
+	if effective != cfg {
+		t.Fatalf("NormalizeGFSRetentionConfig() = %+v; want %+v", effective, cfg)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log output for non-GFS policy, got: %s", buf.String())
+	}
+}
+
+func TestNormalizeGFSRetentionConfigDoesNotLogWhenDailyAlreadyValid(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	cfg := RetentionConfig{
+		Policy: "gfs",
+		Daily:  3,
+		Weekly: 4,
+	}
+
+	effective := NormalizeGFSRetentionConfig(logger, "Test Storage", cfg)
+
+	if effective != cfg {
+		t.Fatalf("NormalizeGFSRetentionConfig() = %+v; want %+v", effective, cfg)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log output when daily is already valid, got: %s", buf.String())
+	}
+}
+
 func TestEffectiveGFSRetentionConfigEnforcesDailyMinimumWithoutLogging(t *testing.T) {
 	cfg := RetentionConfig{
 		Policy: "gfs",
