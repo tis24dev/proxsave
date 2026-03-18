@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -269,6 +270,19 @@ func TestPreparePlainBundleWithUIRejectsMissingUI(t *testing.T) {
 
 	if _, err := preparePlainBundleWithUI(context.Background(), cand, "1.0.0", logger, nil); err == nil {
 		t.Fatalf("expected error for missing UI")
+	}
+}
+
+func TestRunDecryptWorkflowWithUIRejectsMissingUI(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := &config.Config{}
+
+	err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", nil)
+	if err == nil {
+		t.Fatal("expected error for missing UI")
+	}
+	if got, want := err.Error(), "decrypt workflow UI not available"; got != want {
+		t.Fatalf("error=%q, want %q", got, want)
 	}
 }
 
