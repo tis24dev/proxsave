@@ -21,6 +21,9 @@ func NewAgeSetupUI(configPath, buildSig string) orchestrator.AgeSetupUI {
 }
 
 func (a *ageSetupUIAdapter) ConfirmOverwriteExistingRecipient(ctx context.Context, recipientPath string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	return ConfirmRecipientOverwrite(recipientPath, a.configPath, a.buildSig)
 }
 
@@ -58,5 +61,8 @@ func (a *ageSetupUIAdapter) CollectRecipientDraft(ctx context.Context, recipient
 }
 
 func (a *ageSetupUIAdapter) ConfirmAddAnotherRecipient(ctx context.Context, currentCount int) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	return ConfirmAddRecipient(a.configPath, a.buildSig, currentCount)
 }

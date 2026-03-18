@@ -48,3 +48,47 @@ func TestAgeSetupUIAdapterCollectRecipientDraftRunnerError(t *testing.T) {
 		t.Fatalf("err=%v; want %v", err, expected)
 	}
 }
+
+func TestAgeSetupUIAdapterConfirmOverwriteExistingRecipientCanceledContext(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		t.Fatal("ageWizardRunner should not be called when context is already canceled")
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ui := NewAgeSetupUI("/etc/proxsave/config.env", "sig-test")
+	confirmed, err := ui.ConfirmOverwriteExistingRecipient(ctx, "/tmp/recipient.age")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
+	}
+	if confirmed {
+		t.Fatalf("confirmed=%t; want false", confirmed)
+	}
+}
+
+func TestAgeSetupUIAdapterConfirmAddAnotherRecipientCanceledContext(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		t.Fatal("ageWizardRunner should not be called when context is already canceled")
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ui := NewAgeSetupUI("/etc/proxsave/config.env", "sig-test")
+	confirmed, err := ui.ConfirmAddAnotherRecipient(ctx, 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
+	}
+	if confirmed {
+		t.Fatalf("confirmed=%t; want false", confirmed)
+	}
+}
