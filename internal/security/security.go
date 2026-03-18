@@ -351,6 +351,16 @@ func (c *Checker) verifyBinaryIntegrity() {
 	}
 	defer f.Close()
 
+	openedInfo, err := f.Stat()
+	if err != nil {
+		c.addError("Cannot stat opened executable %s: %v", c.execPath, err)
+		return
+	}
+	if !os.SameFile(info, openedInfo) {
+		c.addError("Executable %s changed during integrity check; aborting", c.execPath)
+		return
+	}
+
 	currentHash, err := checksumReader(f)
 	if err != nil {
 		c.addWarning("Unable to calculate hash for %s: %v", c.execPath, err)
