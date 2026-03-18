@@ -64,6 +64,10 @@ func TestRunTelegramSetupCLI_SkipOnPersonalMode(t *testing.T) {
 		t.Fatalf("prompt should not run for personal mode")
 		return false, nil
 	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		t.Fatalf("registration check should not run for personal mode")
+		return notify.TelegramRegistrationStatus{}
+	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
 		t.Fatalf("runTelegramSetupCLI error: %v", err)
@@ -85,6 +89,10 @@ func TestRunTelegramSetupCLI_SkipOnMissingIdentity(t *testing.T) {
 	telegramSetupPromptYesNo = func(ctx context.Context, reader *bufio.Reader, question string, defaultYes bool) (bool, error) {
 		t.Fatalf("prompt should not run when identity is unavailable")
 		return false, nil
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		t.Fatalf("registration check should not run when identity is unavailable")
+		return notify.TelegramRegistrationStatus{}
 	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
@@ -176,6 +184,10 @@ func TestRunTelegramSetupCLI_BootstrapErrorNonBlocking(t *testing.T) {
 	telegramSetupPromptYesNo = func(ctx context.Context, reader *bufio.Reader, question string, defaultYes bool) (bool, error) {
 		t.Fatalf("prompt should not run on bootstrap error")
 		return false, nil
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		t.Fatalf("registration check should not run on bootstrap error")
+		return notify.TelegramRegistrationStatus{}
 	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
