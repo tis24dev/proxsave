@@ -12,6 +12,17 @@ import (
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
+const (
+	telegramEnabledKey      = "TELEGRAM_ENABLED"
+	telegramEnableLegacyKey = "TELEGRAM_ENABLE"
+	emailEnabledKey         = "EMAIL_ENABLED"
+	emailEnableLegacyKey    = "EMAIL_ENABLE"
+	gotifyEnabledKey        = "GOTIFY_ENABLED"
+	gotifyEnableLegacyKey   = "GOTIFY_ENABLE"
+	webhookEnabledKey       = "WEBHOOK_ENABLED"
+	webhookEnableLegacyKey  = "WEBHOOK_ENABLE"
+)
+
 var (
 	multiValueKeys = map[string]bool{
 		"BACKUP_EXCLUDE_PATTERNS": true,
@@ -23,6 +34,13 @@ var (
 	blockValueKeys = map[string]bool{
 		"CUSTOM_BACKUP_PATHS": true,
 		"BACKUP_BLACKLIST":    true,
+	}
+
+	legacyNotificationEnableAliases = map[string]string{
+		telegramEnableLegacyKey: telegramEnabledKey,
+		emailEnableLegacyKey:    emailEnabledKey,
+		gotifyEnableLegacyKey:   gotifyEnabledKey,
+		webhookEnableLegacyKey:  webhookEnabledKey,
 	}
 )
 
@@ -327,7 +345,12 @@ func (c *Config) loadEnvOverrides() {
 
 	for _, key := range envKeys {
 		if envValue := os.Getenv(key); envValue != "" {
-			c.raw[key] = envValue
+			upperKey := strings.ToUpper(key)
+			if canonicalKey, ok := legacyNotificationEnableAliases[upperKey]; ok {
+				c.raw[canonicalKey] = envValue
+				continue
+			}
+			c.raw[upperKey] = envValue
 		}
 	}
 }
@@ -585,20 +608,20 @@ func (c *Config) parseRetentionSettings() {
 }
 
 func (c *Config) parseNotificationSettings() {
-	c.TelegramEnabled = c.getBoolWithFallback([]string{"TELEGRAM_ENABLED", "TELEGRAM_ENABLE"}, false)
+	c.TelegramEnabled = c.getBoolWithLegacyAlias(telegramEnabledKey, telegramEnableLegacyKey, false)
 	c.TelegramBotType = c.getString("BOT_TELEGRAM_TYPE", "centralized")
 	c.TelegramBotToken = c.getString("TELEGRAM_BOT_TOKEN", "")
 	c.TelegramChatID = c.getString("TELEGRAM_CHAT_ID", "")
 	c.TelegramServerAPIHost = "https://bot.tis24.it:1443"
 	c.ServerID = ""
 
-	c.EmailEnabled = c.getBoolWithFallback([]string{"EMAIL_ENABLED", "EMAIL_ENABLE"}, false)
+	c.EmailEnabled = c.getBoolWithLegacyAlias(emailEnabledKey, emailEnableLegacyKey, false)
 	c.EmailDeliveryMethod = c.getString("EMAIL_DELIVERY_METHOD", "relay")
 	c.EmailFallbackSendmail = c.getBool("EMAIL_FALLBACK_SENDMAIL", true)
 	c.EmailRecipient = c.getString("EMAIL_RECIPIENT", "")
 	c.EmailFrom = c.getString("EMAIL_FROM", "no-reply@proxmox.tis24.it")
 
-	c.GotifyEnabled = c.getBoolWithFallback([]string{"GOTIFY_ENABLED", "GOTIFY_ENABLE"}, false)
+	c.GotifyEnabled = c.getBoolWithLegacyAlias(gotifyEnabledKey, gotifyEnableLegacyKey, false)
 	c.GotifyServerURL = strings.TrimSpace(c.getString("GOTIFY_SERVER_URL", ""))
 	c.GotifyToken = strings.TrimSpace(c.getString("GOTIFY_TOKEN", ""))
 	c.GotifyPrioritySuccess = c.ensurePositiveInt("GOTIFY_PRIORITY_SUCCESS", 2)
@@ -612,7 +635,7 @@ func (c *Config) parseNotificationSettings() {
 	c.WorkerMaxRetries = 2
 	c.WorkerRetryDelay = 2
 
-	c.WebhookEnabled = c.getBoolWithFallback([]string{"WEBHOOK_ENABLED", "WEBHOOK_ENABLE"}, false)
+	c.WebhookEnabled = c.getBoolWithLegacyAlias(webhookEnabledKey, webhookEnableLegacyKey, false)
 	c.WebhookDefaultFormat = c.getString("WEBHOOK_FORMAT", "generic")
 	c.WebhookTimeout = c.getInt("WEBHOOK_TIMEOUT", 30)
 	c.WebhookMaxRetries = c.getInt("WEBHOOK_MAX_RETRIES", 3)
@@ -1006,6 +1029,10 @@ func (c *Config) getBoolWithFallback(keys []string, defaultValue bool) bool {
 		}
 	}
 	return defaultValue
+}
+
+func (c *Config) getBoolWithLegacyAlias(key, legacyKey string, defaultValue bool) bool {
+	return c.getBoolWithFallback([]string{key, legacyKey}, defaultValue)
 }
 
 func (c *Config) getIntWithFallback(keys []string, defaultValue int) int {

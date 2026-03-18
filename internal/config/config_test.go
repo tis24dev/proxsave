@@ -537,6 +537,53 @@ WEBHOOK_ENABLE=true
 	}
 }
 
+func TestLoadEnvOverridesNotificationLegacyEnableAliases(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "legacy_notification_env_override.env")
+
+	content := `TELEGRAM_ENABLED=false
+EMAIL_ENABLED=false
+GOTIFY_ENABLED=false
+WEBHOOK_ENABLED=false
+BOT_TELEGRAM_TYPE=centralized
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	overrides := map[string]string{
+		"TELEGRAM_ENABLE":   "true",
+		"EMAIL_ENABLE":      "true",
+		"GOTIFY_ENABLE":     "true",
+		"WEBHOOK_ENABLE":    "true",
+		"BOT_TELEGRAM_TYPE": "personal",
+	}
+	for key, value := range overrides {
+		t.Setenv(key, value)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if !cfg.TelegramEnabled {
+		t.Error("Expected TelegramEnabled to be true via TELEGRAM_ENABLE env override")
+	}
+	if !cfg.EmailEnabled {
+		t.Error("Expected EmailEnabled to be true via EMAIL_ENABLE env override")
+	}
+	if !cfg.GotifyEnabled {
+		t.Error("Expected GotifyEnabled to be true via GOTIFY_ENABLE env override")
+	}
+	if !cfg.WebhookEnabled {
+		t.Error("Expected WebhookEnabled to be true via WEBHOOK_ENABLE env override")
+	}
+	if cfg.TelegramBotType != "personal" {
+		t.Errorf("TelegramBotType = %q; want personal from env override", cfg.TelegramBotType)
+	}
+}
+
 func TestLoadConfigBaseDirFromConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "base_dir.env")
