@@ -1473,6 +1473,17 @@ func TestSecondaryStorageStoreBundleInputSkipsDoubleBundleCopy(t *testing.T) {
 	if _, err := os.Stat(destBundle); err != nil {
 		t.Fatalf("expected bundle to be copied: %v", err)
 	}
+	originalBundleData, err := os.ReadFile(bundleFile)
+	if err != nil {
+		t.Fatalf("read original bundle: %v", err)
+	}
+	copiedBundleData, err := os.ReadFile(destBundle)
+	if err != nil {
+		t.Fatalf("read copied bundle: %v", err)
+	}
+	if string(copiedBundleData) != string(originalBundleData) {
+		t.Fatalf("copied bundle contents = %q, want %q", string(copiedBundleData), string(originalBundleData))
+	}
 
 	destDoubleBundle := filepath.Join(destDir, filepath.Base(doubleBundle))
 	if _, err := os.Stat(destDoubleBundle); !os.IsNotExist(err) {
