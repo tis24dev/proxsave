@@ -330,14 +330,7 @@ func (c *Checker) verifyBinaryIntegrity() {
 		return
 	}
 
-	f, err := os.Open(c.execPath)
-	if err != nil {
-		c.addError("Cannot open executable %s: %v", c.execPath, err)
-		return
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
+	info, err := os.Lstat(c.execPath)
 	if err != nil {
 		c.addError("Cannot stat executable %s: %v", c.execPath, err)
 		return
@@ -351,14 +344,16 @@ func (c *Checker) verifyBinaryIntegrity() {
 	c.ensureOwnershipAndPerm(c.execPath, info, 0o700, fmt.Sprintf("Executable %s", c.execPath))
 
 	hashFile := c.execPath + ".md5"
+	f, err := os.Open(c.execPath)
+	if err != nil {
+		c.addError("Cannot open executable %s: %v", c.execPath, err)
+		return
+	}
+	defer f.Close()
+
 	currentHash, err := checksumReader(f)
 	if err != nil {
 		c.addWarning("Unable to calculate hash for %s: %v", c.execPath, err)
-		return
-	}
-
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		c.addWarning("Unable to rewind file for %s: %v", c.execPath, err)
 		return
 	}
 
