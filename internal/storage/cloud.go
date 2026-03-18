@@ -46,6 +46,7 @@ type CloudStorage struct {
 	parallelVerify bool
 	execCommand    func(ctx context.Context, name string, args ...string) ([]byte, error)
 	lookPath       func(string) (string, error)
+	waitForRetry   func(context.Context, time.Duration) error
 	sleep          func(time.Duration)
 	lastRet        RetentionSummary
 	remoteFilesMu  sync.RWMutex
@@ -133,6 +134,27 @@ func cloudRetryBackoff(attempt int) time.Duration {
 	return cloudRetryBackoffSchedule[index]
 }
 
+func waitForRetryContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // NewCloudStorage creates a new cloud storage instance
 func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage, error) {
 	// Normalize CloudRemote and CloudRemotePath into:
@@ -165,6 +187,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage,
 		parallelVerify: cfg.CloudParallelVerify,
 		execCommand:    defaultExecCommand,
 		lookPath:       exec.LookPath,
+		waitForRetry:   waitForRetryContext,
 		sleep:          time.Sleep,
 	}, nil
 }
@@ -336,6 +359,10 @@ func (c *CloudStorage) checkRemoteAccessible(ctx context.Context) error {
 
 		lastErr = err
 
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		// If the context timed out, wrap as timeout error
 		if timeoutCtx.Err() == context.DeadlineExceeded {
 			return &remoteCheckError{
@@ -350,7 +377,19 @@ func (c *CloudStorage) checkRemoteAccessible(ctx context.Context) error {
 			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Cloud remote check attempt %d/%d failed: %v (retrying in %v)",
 				attempt, maxAttempts, err, waitTime)
-			c.sleep(waitTime)
+			if err := c.waitForRetry(timeoutCtx, waitTime); err != nil {
+				if parentErr := ctx.Err(); parentErr != nil {
+					return parentErr
+				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					return &remoteCheckError{
+						kind: remoteErrorTimeout,
+						msg:  fmt.Sprintf("connection timeout (%ds) - remote did not respond in time", timeoutSeconds),
+						err:  err,
+					}
+				}
+				return err
+			}
 		}
 	}
 
@@ -756,7 +795,9 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		if attempt < c.config.RcloneRetries {
 			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Waiting %v before retry...", waitTime)
-			c.sleep(waitTime)
+			if err := c.waitForRetry(ctx, waitTime); err != nil {
+				return err
+			}
 		}
 	}
 
