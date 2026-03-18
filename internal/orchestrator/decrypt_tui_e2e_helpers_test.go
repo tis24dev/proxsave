@@ -256,9 +256,6 @@ func runDecryptWorkflowTUIForTest(t *testing.T, ctx context.Context, cfg *config
 	case <-ctx.Done():
 		t.Fatalf("RunDecryptWorkflowTUI context expired: %v", ctx.Err())
 		return nil
-	case <-time.After(20 * time.Second):
-		t.Fatalf("RunDecryptWorkflowTUI did not complete within 20s")
-		return nil
 	}
 }
 
