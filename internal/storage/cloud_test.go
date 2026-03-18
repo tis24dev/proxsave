@@ -68,6 +68,30 @@ func writeTestFile(t *testing.T, path, data string) {
 	}
 }
 
+func TestCloudRetryBackoff(t *testing.T) {
+	tests := []struct {
+		name    string
+		attempt int
+		want    time.Duration
+	}{
+		{name: "non-positive", attempt: 0, want: 0},
+		{name: "first retry", attempt: 1, want: 2 * time.Second},
+		{name: "second retry", attempt: 2, want: 4 * time.Second},
+		{name: "third retry", attempt: 3, want: 8 * time.Second},
+		{name: "fourth retry", attempt: 4, want: 16 * time.Second},
+		{name: "capped", attempt: 5, want: 30 * time.Second},
+		{name: "large attempt stays capped", attempt: 63, want: 30 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cloudRetryBackoff(tt.attempt); got != tt.want {
+				t.Fatalf("cloudRetryBackoff(%d) = %v, want %v", tt.attempt, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCloudStorageDetectFilesystem_RcloneMissingReturnsRecoverableError(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:            true,
@@ -267,6 +291,54 @@ func TestCloudStorageUploadWithRetryEventuallySucceeds(t *testing.T) {
 	}
 	if len(queue.calls) != 3 {
 		t.Fatalf("expected 3 upload attempts, got %d", len(queue.calls))
+	}
+}
+
+func TestCloudStorageUploadWithRetryUsesCappedBackoff(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:           true,
+		CloudRemote:            "remote",
+		RcloneRetries:          6,
+		RcloneTimeoutOperation: 5,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", err: errors.New("copy failed 1")},
+			{name: "rclone", err: errors.New("copy failed 2")},
+			{name: "rclone", err: errors.New("copy failed 3")},
+			{name: "rclone", err: errors.New("copy failed 4")},
+			{name: "rclone", err: errors.New("copy failed 5")},
+			{name: "rclone", out: "ok"},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	var waits []time.Duration
+	cs.sleep = func(d time.Duration) {
+		waits = append(waits, d)
+	}
+
+	if err := cs.uploadWithRetry(context.Background(), "/tmp/local.tar", "remote:local.tar"); err != nil {
+		t.Fatalf("uploadWithRetry() error = %v", err)
+	}
+
+	wantWaits := []time.Duration{
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		30 * time.Second,
+	}
+	if len(waits) != len(wantWaits) {
+		t.Fatalf("sleep calls = %d, want %d", len(waits), len(wantWaits))
+	}
+	for i := range wantWaits {
+		if waits[i] != wantWaits[i] {
+			t.Fatalf("sleep[%d] = %v, want %v", i, waits[i], wantWaits[i])
+		}
 	}
 }
 
@@ -1030,7 +1102,11 @@ func TestCloudStorageCheckWithNetworkErrorNoFallback(t *testing.T) {
 		},
 	}
 	cs.execCommand = queue.exec
-	cs.sleep = func(time.Duration) {} // Disable sleep for fast tests
+
+	var waits []time.Duration
+	cs.sleep = func(d time.Duration) {
+		waits = append(waits, d)
+	}
 
 	err := cs.checkRemoteAccessible(context.Background())
 	if err == nil {
@@ -1040,6 +1116,12 @@ func TestCloudStorageCheckWithNetworkErrorNoFallback(t *testing.T) {
 	// Should try 3 times (with retries), no fallback to write test
 	if len(queue.calls) != 3 {
 		t.Fatalf("expected 3 rclone calls (lsf per attempt), got %d", len(queue.calls))
+	}
+	if len(waits) != 2 {
+		t.Fatalf("expected 2 backoff waits, got %d", len(waits))
+	}
+	if waits[0] != 2*time.Second || waits[1] != 4*time.Second {
+		t.Fatalf("unexpected backoff waits: got %v", waits)
 	}
 }
 

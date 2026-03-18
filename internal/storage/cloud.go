@@ -25,7 +25,16 @@ import (
 const (
 	cloudUploadModeSequential = "sequential"
 	cloudUploadModeParallel   = "parallel"
+	cloudRetryBackoffMax      = 30 * time.Second
 )
+
+var cloudRetryBackoffSchedule = [...]time.Duration{
+	2 * time.Second,
+	4 * time.Second,
+	8 * time.Second,
+	16 * time.Second,
+	cloudRetryBackoffMax,
+}
 
 type CloudStorage struct {
 	config         *config.Config
@@ -109,6 +118,19 @@ func remoteBaseName(ref string) string {
 		return ""
 	}
 	return path.Base(trimmed)
+}
+
+// Bound exponential retry delays so large attempt counts stay safe and predictable.
+func cloudRetryBackoff(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+
+	index := attempt - 1
+	if index >= len(cloudRetryBackoffSchedule) {
+		return cloudRetryBackoffSchedule[len(cloudRetryBackoffSchedule)-1]
+	}
+	return cloudRetryBackoffSchedule[index]
 }
 
 // NewCloudStorage creates a new cloud storage instance
@@ -324,8 +346,8 @@ func (c *CloudStorage) checkRemoteAccessible(ctx context.Context) error {
 		}
 
 		if attempt < maxAttempts {
-			// Exponential backoff: 2s, 4s, 8s, ...
-			waitTime := time.Duration(1<<uint(attempt)) * time.Second
+			// Keep retry delays bounded and avoid shift/multiplication overflow.
+			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Cloud remote check attempt %d/%d failed: %v (retrying in %v)",
 				attempt, maxAttempts, err, waitTime)
 			c.sleep(waitTime)
@@ -723,9 +745,9 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 			break
 		}
 
-		// Wait before retry (exponential backoff)
+		// Keep retry delays bounded and avoid shift/multiplication overflow.
 		if attempt < c.config.RcloneRetries {
-			waitTime := time.Duration(1<<uint(attempt)) * time.Second
+			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Waiting %v before retry...", waitTime)
 			c.sleep(waitTime)
 		}
