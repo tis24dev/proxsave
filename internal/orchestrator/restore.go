@@ -1646,7 +1646,7 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 	defer func() {
 		appendDeferredErr("close file", closeOutFile())
 		if tmpPath != "" {
-			if err := restoreFS.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) && logger != nil {
+			if err := restoreFS.Remove(tmpPath); err != nil && logger != nil {
 				logger.Debug("Failed to remove temp file %s: %v", tmpPath, err)
 			}
 		}
