@@ -584,7 +584,7 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) (er
 	for _, entry := range entries {
 		name := entry.Name()
 		if _, keep := preserve[name]; keep {
-			bootstrap.Info("Preserving %s", filepath.Join(baseDir, name))
+			logBootstrapInfo(bootstrap, "Preserving %s", filepath.Join(baseDir, name))
 			continue
 		}
 		target := filepath.Join(baseDir, name)
@@ -599,7 +599,7 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) (er
 		if err := os.RemoveAll(target); err != nil {
 			return fmt.Errorf("failed to remove %s: %w", target, err)
 		}
-		bootstrap.Info("Removed %s", target)
+		logBootstrapInfo(bootstrap, "Removed %s", target)
 	}
 
 	return nil
@@ -845,9 +845,9 @@ func clearImmutableAttributes(target string, bootstrap *logging.BootstrapLogger)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			trimmed := strings.TrimSpace(string(out))
 			if trimmed != "" {
-				bootstrap.Warning("Failed to clear immutable flag on %s: %v (%s)", target, err, trimmed)
+				logBootstrapWarning(bootstrap, "Failed to clear immutable flag on %s: %v (%s)", target, err, trimmed)
 			} else {
-				bootstrap.Warning("Failed to clear immutable flag on %s: %v", target, err)
+				logBootstrapWarning(bootstrap, "Failed to clear immutable flag on %s: %v", target, err)
 			}
 		}
 	}

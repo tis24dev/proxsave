@@ -207,6 +207,35 @@ func TestResetInstallBaseDirRespectsSharedPreserveSet(t *testing.T) {
 	}
 }
 
+func TestResetInstallBaseDirAllowsNilBootstrap(t *testing.T) {
+	base := t.TempDir()
+	preservedDir := filepath.Join(base, "env")
+	if err := os.MkdirAll(preservedDir, 0o755); err != nil {
+		t.Fatalf("setup env: %v", err)
+	}
+	preservedFile := filepath.Join(preservedDir, "backup.env")
+	if err := os.WriteFile(preservedFile, []byte("KEEP=1"), 0o600); err != nil {
+		t.Fatalf("setup env file: %v", err)
+	}
+	removedFile := filepath.Join(base, "drop.txt")
+	if err := os.WriteFile(removedFile, []byte("drop"), 0o600); err != nil {
+		t.Fatalf("setup drop file: %v", err)
+	}
+
+	captureStdout(t, func() {
+		if err := resetInstallBaseDir(base, nil); err != nil {
+			t.Fatalf("resetInstallBaseDir returned error: %v", err)
+		}
+	})
+
+	if _, err := os.Stat(preservedFile); err != nil {
+		t.Fatalf("expected preserved file to remain, got %v", err)
+	}
+	if _, err := os.Stat(removedFile); !os.IsNotExist(err) {
+		t.Fatalf("expected drop.txt removed, got err=%v", err)
+	}
+}
+
 func TestResetInstallBaseDirRefusesRoot(t *testing.T) {
 	logger := logging.NewBootstrapLogger()
 	if err := resetInstallBaseDir("/", logger); err == nil {

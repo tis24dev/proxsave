@@ -92,3 +92,26 @@ func TestBootstrapLoggerDebugMirrorsAndFlushesAtDebugLevel(t *testing.T) {
 		t.Fatalf("expected debug message to be flushed, got %q", flushBuf.String())
 	}
 }
+
+func TestBootstrapLoggerNilReceiverNoops(t *testing.T) {
+	var b *BootstrapLogger
+
+	logger := New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	b.SetLevel(types.LogLevelDebug)
+	b.SetMirrorLogger(logger)
+	b.Println("plain")
+	b.Printf("plain-%d", 1)
+	b.Debug("debug")
+	b.Info("info")
+	b.Warning("warn")
+	b.Error("err")
+	b.Flush(logger)
+	b.Flush(nil)
+
+	if buf.Len() != 0 {
+		t.Fatalf("nil bootstrap receiver should not write to logger, got %q", buf.String())
+	}
+}
