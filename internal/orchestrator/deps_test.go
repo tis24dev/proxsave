@@ -36,8 +36,19 @@ func NewFakeFS() *FakeFS {
 
 func (f *FakeFS) onDisk(path string) string {
 	clean := filepath.Clean(path)
+	root := filepath.Clean(f.Root)
+	if clean == root || strings.HasPrefix(clean, root+string(filepath.Separator)) {
+		return clean
+	}
 	clean = strings.TrimPrefix(clean, string(filepath.Separator))
-	return filepath.Join(f.Root, clean)
+	return filepath.Join(root, clean)
+}
+
+func (f *FakeFS) Cleanup() error {
+	if f == nil {
+		return nil
+	}
+	return os.RemoveAll(f.Root)
 }
 
 // AddFile creates a file with content.

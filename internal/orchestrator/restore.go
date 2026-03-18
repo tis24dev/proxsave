@@ -1575,18 +1575,32 @@ func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string,
 }
 
 // extractDirectory creates a directory with proper permissions and timestamps
-func extractDirectory(target string, header *tar.Header, logger *logging.Logger) error {
+func extractDirectory(target string, header *tar.Header, logger *logging.Logger) (retErr error) {
 	if err := restoreFS.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
-	// Set ownership
-	if err := os.Chown(target, header.Uid, header.Gid); err != nil {
+	dirFile, err := restoreFS.Open(target)
+	if err != nil {
+		return fmt.Errorf("open directory: %w", err)
+	}
+	defer func() {
+		if dirFile == nil {
+			return
+		}
+		if err := dirFile.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("close directory: %w", err)
+		}
+	}()
+
+	// Apply metadata on the opened directory handle so logical FS paths
+	// (e.g. FakeFS-backed test roots) do not leak through to host paths.
+	// Ownership remains best-effort to match the previous restore behavior on
+	// unprivileged runs and filesystems that do not support chown.
+	if err := atomicFileChown(dirFile, header.Uid, header.Gid); err != nil {
 		logger.Debug("Failed to chown directory %s: %v", target, err)
 	}
-
-	// Set permissions explicitly
-	if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
+	if err := atomicFileChmod(dirFile, os.FileMode(header.Mode)); err != nil {
 		return fmt.Errorf("chmod directory: %w", err)
 	}
 
@@ -1602,6 +1616,7 @@ func extractDirectory(target string, header *tar.Header, logger *logging.Logger)
 func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header, logger *logging.Logger) (retErr error) {
 	tmpSeq := atomic.AddUint64(&restoreTempSequence, 1)
 	tmpPath := fmt.Sprintf("%s.proxsave.tmp.%d.%d", target, nowRestore().UnixNano(), tmpSeq)
+	var outFile *os.File
 	appendDeferredErr := func(prefix string, err error) {
 		if err == nil {
 			return
@@ -1613,6 +1628,14 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 		}
 		retErr = errors.Join(retErr, wrapped)
 	}
+	closeOutFile := func() error {
+		if outFile == nil {
+			return nil
+		}
+		err := outFile.Close()
+		outFile = nil
+		return err
+	}
 
 	// Write to a sibling temp file first so a truncated archive entry cannot clobber
 	// an existing target before the content is fully copied and closed.
@@ -1621,9 +1644,7 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 		return fmt.Errorf("create file: %w", err)
 	}
 	defer func() {
-		if outFile != nil {
-			appendDeferredErr("close file", outFile.Close())
-		}
+		appendDeferredErr("close file", closeOutFile())
 		if tmpPath != "" {
 			if err := restoreFS.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) && logger != nil {
 				logger.Debug("Failed to remove temp file %s: %v", tmpPath, err)
@@ -1636,22 +1657,20 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 		return fmt.Errorf("write file content: %w", err)
 	}
 
-	// Close before setting attributes and renaming into place.
-	if err := outFile.Close(); err != nil {
-		outFile = nil
-		return fmt.Errorf("close file: %w", err)
-	}
-	outFile = nil
-
-	// Set ownership on the temp file before replacing the target so failures do not
+	// Set metadata on the temp file before replacing the target so failures do not
 	// leave the final path in a partially restored state.
-	if err := os.Chown(tmpPath, header.Uid, header.Gid); err != nil {
+	// Ownership remains best-effort to match the previous restore behavior on
+	// unprivileged runs and filesystems that do not support chown.
+	if err := atomicFileChown(outFile, header.Uid, header.Gid); err != nil {
 		logger.Debug("Failed to chown file %s: %v", target, err)
 	}
-
-	// Set permissions explicitly
-	if err := os.Chmod(tmpPath, os.FileMode(header.Mode)); err != nil {
+	if err := atomicFileChmod(outFile, os.FileMode(header.Mode)); err != nil {
 		return fmt.Errorf("chmod file: %w", err)
+	}
+
+	// Close before renaming into place.
+	if err := closeOutFile(); err != nil {
+		return fmt.Errorf("close file: %w", err)
 	}
 
 	if err := restoreFS.Rename(tmpPath, target); err != nil {

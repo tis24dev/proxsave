@@ -63,6 +63,94 @@ func TestExtractTarEntry_BlocksPathTraversal(t *testing.T) {
 	}
 }
 
+func TestExtractPlainArchive_WithFakeFS_RestoresFiles(t *testing.T) {
+	origRestoreFS := restoreFS
+	fakeFS := NewFakeFS()
+	restoreFS = fakeFS
+	t.Cleanup(func() {
+		restoreFS = origRestoreFS
+		_ = fakeFS.Cleanup()
+	})
+
+	tmpTar := filepath.Join(t.TempDir(), "bundle.tar")
+	if err := writeTarFile(tmpTar, map[string]string{
+		"etc/hosts": "127.0.0.1 localhost\n",
+	}); err != nil {
+		t.Fatalf("writeTarFile: %v", err)
+	}
+	tarBytes, err := os.ReadFile(tmpTar)
+	if err != nil {
+		t.Fatalf("ReadFile tar: %v", err)
+	}
+	if err := fakeFS.WriteFile("/bundle.tar", tarBytes, 0o640); err != nil {
+		t.Fatalf("fakeFS.WriteFile: %v", err)
+	}
+
+	logger := logging.New(types.LogLevelDebug, false)
+	if err := extractPlainArchive(context.Background(), "/bundle.tar", "/", logger, nil); err != nil {
+		t.Fatalf("extractPlainArchive: %v", err)
+	}
+
+	data, err := fakeFS.ReadFile("/etc/hosts")
+	if err != nil {
+		t.Fatalf("expected restored /etc/hosts: %v", err)
+	}
+	if string(data) != "127.0.0.1 localhost\n" {
+		t.Fatalf("hosts=%q; want %q", string(data), "127.0.0.1 localhost\n")
+	}
+}
+
+func TestExtractSelectiveArchive_WithFakeFSMkdirTemp_RestoresIntoTempDir(t *testing.T) {
+	origRestoreFS := restoreFS
+	fakeFS := NewFakeFS()
+	restoreFS = fakeFS
+	t.Cleanup(func() {
+		restoreFS = origRestoreFS
+		_ = fakeFS.Cleanup()
+	})
+
+	tmpTar := filepath.Join(t.TempDir(), "bundle.tar")
+	if err := writeTarFile(tmpTar, map[string]string{
+		"etc/fstab": "UUID=root / ext4 defaults 0 1\n",
+	}); err != nil {
+		t.Fatalf("writeTarFile: %v", err)
+	}
+	tarBytes, err := os.ReadFile(tmpTar)
+	if err != nil {
+		t.Fatalf("ReadFile tar: %v", err)
+	}
+	if err := fakeFS.WriteFile("/bundle.tar", tarBytes, 0o640); err != nil {
+		t.Fatalf("fakeFS.WriteFile: %v", err)
+	}
+
+	fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = restoreFS.RemoveAll(fsTempDir) })
+
+	logger := logging.New(types.LogLevelDebug, false)
+	categories := []Category{{
+		ID:   "filesystem",
+		Name: "Filesystem Configuration",
+		Paths: []string{
+			"./etc/fstab",
+		},
+	}}
+	if _, err := extractSelectiveArchive(context.Background(), "/bundle.tar", fsTempDir, categories, RestoreModeCustom, logger); err != nil {
+		t.Fatalf("extractSelectiveArchive: %v", err)
+	}
+
+	backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
+	data, err := fakeFS.ReadFile(backupFstab)
+	if err != nil {
+		t.Fatalf("expected extracted backup fstab: %v", err)
+	}
+	if string(data) != "UUID=root / ext4 defaults 0 1\n" {
+		t.Fatalf("fstab=%q; want %q", string(data), "UUID=root / ext4 defaults 0 1\n")
+	}
+}
+
 func TestParsePoolNameFromUnit(t *testing.T) {
 	tests := []struct {
 		name     string
