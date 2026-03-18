@@ -2,6 +2,8 @@ package notify
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -93,5 +95,36 @@ func TestEmailNotifierDetectQueueEntryNotFound(t *testing.T) {
 	}
 	if queueID != "" || line != "" {
 		t.Fatalf("detectQueueEntry()=(%q,%q) want empty", queueID, line)
+	}
+}
+
+func TestEmailNotifierTailMailLogSkipsWorkWhenContextCanceled(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, err := NewEmailNotifier(EmailConfig{Enabled: true, DeliveryMethod: EmailDeliverySendmail}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error=%v", err)
+	}
+
+	origMailLogPaths := mailLogPaths
+	t.Cleanup(func() { mailLogPaths = origMailLogPaths })
+
+	logDir := t.TempDir()
+	logFile := filepath.Join(logDir, "mail.log")
+	if err := os.WriteFile(logFile, []byte("postfix/smtp[2]: ABC123: status=sent\n"), 0o600); err != nil {
+		t.Fatalf("write log file: %v", err)
+	}
+	mailLogPaths = []string{logFile}
+
+	mockCmdEnv(t, "tail", "postfix/smtp[2]: ABC123: status=sent", 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	lines, logPath := notifier.tailMailLog(ctx, 50)
+	if len(lines) != 0 {
+		t.Fatalf("tailMailLog() returned lines after context cancellation: %#v", lines)
+	}
+	if logPath != "" {
+		t.Fatalf("tailMailLog() returned log path %q after context cancellation", logPath)
 	}
 }
