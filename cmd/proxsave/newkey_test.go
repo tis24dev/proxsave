@@ -28,11 +28,22 @@ func captureNewKeyStdout(t *testing.T, fn func()) string {
 		close(done)
 	}()
 
+	cleaned := false
+	cleanup := func() {
+		if cleaned {
+			return
+		}
+		cleaned = true
+		os.Stdout = orig
+		_ = w.Close()
+		<-done
+		_ = r.Close()
+	}
+	t.Cleanup(cleanup)
+
 	fn()
 
-	_ = w.Close()
-	os.Stdout = orig
-	<-done
+	cleanup()
 	return buf.String()
 }
 
