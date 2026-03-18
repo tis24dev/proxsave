@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"context"
+	"errors"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -15,7 +17,7 @@ type simKey struct {
 	Mod tcell.ModMask
 }
 
-func withSimAppSequence(t *testing.T, keys []simKey) {
+func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 	t.Helper()
 
 	orig := newTUIApp
@@ -25,43 +27,56 @@ func withSimAppSequence(t *testing.T, keys []simKey) {
 	}
 	screen.SetSize(120, 40)
 
+	drawCh := make(chan struct{}, 8)
+	var injectOnce sync.Once
+
 	newTUIApp = func() *tui.App {
 		app := tui.NewApp()
 		app.SetScreen(screen)
+		readyCh := make(chan struct{})
+		var readyOnce sync.Once
+		app.SetAfterDrawFunc(func(screen tcell.Screen) {
+			readyOnce.Do(func() {
+				close(readyCh)
+				drawCh <- struct{}{}
+			})
+		})
 
-		go func() {
-			// Wait for app.Run() to start event processing.
-			time.Sleep(50 * time.Millisecond)
-			for _, k := range keys {
-				mod := k.Mod
-				if mod == 0 {
-					mod = tcell.ModNone
+		injectOnce.Do(func() {
+			go func() {
+				<-readyCh
+				for _, k := range keys {
+					mod := k.Mod
+					if mod == 0 {
+						mod = tcell.ModNone
+					}
+					screen.InjectKey(k.Key, k.R, mod)
 				}
-				screen.InjectKey(k.Key, k.R, mod)
-				time.Sleep(10 * time.Millisecond)
-			}
-		}()
+			}()
+		})
 		return app
 	}
 
 	t.Cleanup(func() {
 		newTUIApp = orig
 	})
+
+	return drawCh
 }
 
-func withSimApp(t *testing.T, keys []tcell.Key) {
+func withSimApp(t *testing.T, keys []tcell.Key) <-chan struct{} {
 	t.Helper()
 	seq := make([]simKey, 0, len(keys))
 	for _, k := range keys {
 		seq = append(seq, simKey{Key: k})
 	}
-	withSimAppSequence(t, seq)
+	return withSimAppSequence(t, seq)
 }
 
 func TestPromptOverwriteAction_SelectsOverwrite(t *testing.T) {
 	withSimApp(t, []tcell.Key{tcell.KeyEnter})
 
-	decision, newPath, err := promptExistingPathDecisionTUI("/tmp/existing", "file", "", "/tmp/config.env", "sig")
+	decision, newPath, err := promptExistingPathDecisionTUI(context.Background(), "/tmp/existing", "file", "", "/tmp/config.env", "sig")
 	if err != nil {
 		t.Fatalf("promptExistingPathDecisionTUI error: %v", err)
 	}
@@ -83,12 +98,58 @@ func TestPromptNewPathInput_ContinueReturnsEditedPath(t *testing.T) {
 		{Key: tcell.KeyEnter},
 	})
 
-	got, err := promptNewPathInputTUI("/tmp/newpath", "/tmp/config.env", "sig")
+	got, err := promptNewPathInputTUI(context.Background(), "/tmp/newpath", "/tmp/config.env", "sig")
 	if err != nil {
 		t.Fatalf("promptNewPathInputTUI error: %v", err)
 	}
 	if got != "/tmp/newpath/alt" {
 		t.Fatalf("path=%q; want %q", got, "/tmp/newpath/alt")
+	}
+}
+
+func TestPromptExistingPathDecisionTUI_ContextCanceledWhileRunning(t *testing.T) {
+	drawCh := withSimAppSequence(t, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-drawCh
+		cancel()
+	}()
+
+	_, _, err := promptExistingPathDecisionTUI(ctx, "/tmp/existing", "file", "", "/tmp/config.env", "sig")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
+	}
+}
+
+func TestPromptExistingPathDecisionTUI_NewPathContextCanceledWhileRunning(t *testing.T) {
+	drawCh := withSimApp(t, []tcell.Key{tcell.KeyRight, tcell.KeyEnter})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-drawCh
+		<-drawCh
+		cancel()
+	}()
+
+	_, _, err := promptExistingPathDecisionTUI(ctx, "/tmp/existing", "file", "", "/tmp/config.env", "sig")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
+	}
+}
+
+func TestPromptDecryptSecretTUI_ContextCanceledWhileRunning(t *testing.T) {
+	drawCh := withSimAppSequence(t, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-drawCh
+		cancel()
+	}()
+
+	_, err := promptDecryptSecretTUI(ctx, "/tmp/config.env", "sig", "backup", "")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
 	}
 }
 

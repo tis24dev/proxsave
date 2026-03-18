@@ -375,7 +375,7 @@ func (u *tuiWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir str
 }
 
 func (u *tuiWorkflowUI) ResolveExistingPath(ctx context.Context, path, description, failure string) (ExistingPathDecision, string, error) {
-	decision, newPath, err := tuiPromptExistingPathDecision(path, description, failure, u.configPath, u.buildSig)
+	decision, newPath, err := tuiPromptExistingPathDecision(ctx, path, description, failure, u.configPath, u.buildSig)
 	if err != nil {
 		return PathDecisionCancel, "", err
 	}
@@ -386,7 +386,7 @@ func (u *tuiWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 }
 
 func (u *tuiWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error) {
-	return tuiPromptDecryptSecret(u.configPath, u.buildSig, displayName, previousError)
+	return tuiPromptDecryptSecret(ctx, u.configPath, u.buildSig, displayName, previousError)
 }
 
 func backupSummaryForUI(cand *decryptCandidate) string {

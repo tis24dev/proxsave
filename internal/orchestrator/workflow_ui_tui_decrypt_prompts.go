@@ -1,9 +1,11 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -17,7 +19,48 @@ var (
 	tuiPromptDecryptSecret        = promptDecryptSecretTUI
 )
 
-func promptExistingPathDecisionTUI(path, description, failureMessage, configPath, buildSig string) (ExistingPathDecision, string, error) {
+func runTUIAppWithContext(ctx context.Context, app *tui.App) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+
+	var state atomic.Int32
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			if state.CompareAndSwap(0, 1) {
+				app.QueueEvent(tcell.NewEventKey(tcell.KeyCtrlC, 0, tcell.ModNone))
+			}
+		case <-done:
+		}
+	}()
+
+	if err := app.Run(); err != nil {
+		if state.CompareAndSwap(0, 2) {
+			return err
+		}
+		if state.Load() == 1 {
+			return ctx.Err()
+		}
+		return err
+	}
+	if state.CompareAndSwap(0, 2) {
+		return nil
+	}
+	if state.Load() == 1 {
+		return ctx.Err()
+	}
+	return nil
+}
+
+func promptExistingPathDecisionTUI(ctx context.Context, path, description, failureMessage, configPath, buildSig string) (ExistingPathDecision, string, error) {
 	app := newTUIApp()
 	decision := PathDecisionCancel
 
@@ -50,14 +93,15 @@ func promptExistingPathDecisionTUI(path, description, failureMessage, configPath
 		SetBackgroundColor(tcell.ColorBlack)
 
 	page := buildWizardPage("Destination path", configPath, buildSig, modal)
-	if err := app.SetRoot(page, true).SetFocus(modal).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(modal)
+	if err := runTUIAppWithContext(ctx, app); err != nil {
 		return PathDecisionCancel, "", err
 	}
 	if decision != PathDecisionNewPath {
 		return decision, "", nil
 	}
 
-	newPath, err := promptNewPathInputTUI(path, configPath, buildSig)
+	newPath, err := promptNewPathInputTUI(ctx, path, configPath, buildSig)
 	if err != nil {
 		if err == ErrDecryptAborted {
 			return PathDecisionCancel, "", nil
@@ -67,7 +111,7 @@ func promptExistingPathDecisionTUI(path, description, failureMessage, configPath
 	return PathDecisionNewPath, filepath.Clean(newPath), nil
 }
 
-func promptNewPathInputTUI(defaultPath, configPath, buildSig string) (string, error) {
+func promptNewPathInputTUI(ctx context.Context, defaultPath, configPath, buildSig string) (string, error) {
 	app := newTUIApp()
 	var newPath string
 	var cancelled bool
@@ -107,7 +151,8 @@ func promptNewPathInputTUI(defaultPath, configPath, buildSig string) (string, er
 	page := buildWizardPage("Choose destination path", configPath, buildSig, content)
 	form.SetParentView(page)
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := runTUIAppWithContext(ctx, app); err != nil {
 		return "", err
 	}
 	if cancelled {
@@ -130,7 +175,7 @@ func validateDistinctNewPathInput(value, defaultPath string) (string, error) {
 	return trimmed, nil
 }
 
-func promptDecryptSecretTUI(configPath, buildSig, displayName, previousError string) (string, error) {
+func promptDecryptSecretTUI(ctx context.Context, configPath, buildSig, displayName, previousError string) (string, error) {
 	app := newTUIApp()
 	var (
 		secret    string
@@ -186,7 +231,8 @@ func promptDecryptSecretTUI(configPath, buildSig, displayName, previousError str
 
 	page := buildWizardPage("Decrypt key", configPath, buildSig, content)
 	form.SetParentView(page)
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := runTUIAppWithContext(ctx, app); err != nil {
 		return "", err
 	}
 	if cancelled {

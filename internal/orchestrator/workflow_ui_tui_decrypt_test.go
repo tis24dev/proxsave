@@ -9,14 +9,14 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-func stubTUIExistingPathDecisionPrompt(fn func(path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error)) func() {
+func stubTUIExistingPathDecisionPrompt(fn func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error)) func() {
 	orig := tuiPromptExistingPathDecision
 	tuiPromptExistingPathDecision = fn
 	return func() { tuiPromptExistingPathDecision = orig }
 }
 
 func TestTUIWorkflowUIResolveExistingPath_Overwrite(t *testing.T) {
-	restore := stubTUIExistingPathDecisionPrompt(func(path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
 		if path != "/tmp/archive.tar" {
 			t.Fatalf("path=%q, want /tmp/archive.tar", path)
 		}
@@ -47,7 +47,7 @@ func TestTUIWorkflowUIResolveExistingPath_Overwrite(t *testing.T) {
 }
 
 func TestTUIWorkflowUIResolveExistingPath_NewPathIsCleaned(t *testing.T) {
-	restore := stubTUIExistingPathDecisionPrompt(func(path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
 		return PathDecisionNewPath, "/tmp/out/../out/final.tar", nil
 	})
 	defer restore()
@@ -67,7 +67,7 @@ func TestTUIWorkflowUIResolveExistingPath_NewPathIsCleaned(t *testing.T) {
 
 func TestTUIWorkflowUIResolveExistingPath_PropagatesError(t *testing.T) {
 	wantErr := errors.New("boom")
-	restore := stubTUIExistingPathDecisionPrompt(func(path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
 		return PathDecisionCancel, "", wantErr
 	})
 	defer restore()
@@ -75,6 +75,60 @@ func TestTUIWorkflowUIResolveExistingPath_PropagatesError(t *testing.T) {
 	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
 	if _, _, err := ui.ResolveExistingPath(context.Background(), "/tmp/archive.tar", "archive", ""); !errors.Is(err, wantErr) {
 		t.Fatalf("expected %v, got %v", wantErr, err)
+	}
+}
+
+func TestTUIWorkflowUIResolveExistingPath_PassesContext(t *testing.T) {
+	called := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	restore := stubTUIExistingPathDecisionPrompt(func(gotCtx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+		called = true
+		if gotCtx != ctx {
+			t.Fatalf("got context %p, want %p", gotCtx, ctx)
+		}
+		return PathDecisionOverwrite, "", nil
+	})
+	defer restore()
+
+	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
+	if _, _, err := ui.ResolveExistingPath(ctx, "/tmp/archive.tar", "archive", ""); err != nil {
+		t.Fatalf("ResolveExistingPath error: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected prompt to be called")
+	}
+}
+
+func stubTUIDecryptSecretPrompt(fn func(ctx context.Context, configPath, buildSig, displayName, previousError string) (string, error)) func() {
+	orig := tuiPromptDecryptSecret
+	tuiPromptDecryptSecret = fn
+	return func() { tuiPromptDecryptSecret = orig }
+}
+
+func TestTUIWorkflowUIPromptDecryptSecret_PassesContext(t *testing.T) {
+	called := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	restore := stubTUIDecryptSecretPrompt(func(gotCtx context.Context, configPath, buildSig, displayName, previousError string) (string, error) {
+		called = true
+		if gotCtx != ctx {
+			t.Fatalf("got context %p, want %p", gotCtx, ctx)
+		}
+		return "secret", nil
+	})
+	defer restore()
+
+	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
+	got, err := ui.PromptDecryptSecret(ctx, "archive", "")
+	if err != nil {
+		t.Fatalf("PromptDecryptSecret error: %v", err)
+	}
+	if got != "secret" {
+		t.Fatalf("secret=%q, want %q", got, "secret")
+	}
+	if !called {
+		t.Fatalf("expected prompt to be called")
 	}
 }
 
