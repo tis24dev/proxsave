@@ -835,6 +835,8 @@ EMAIL_RECIPIENT=                   # e.g., "admin@example.com"
 EMAIL_FROM=no-reply@proxmox.tis24.it
 ```
 
+If `EMAIL_ENABLED` is omitted, the default remains `false`. The legacy alias `EMAIL_ENABLE` is still accepted during migration and runtime loading.
+
 **Delivery methods**:
 - **relay**: Uses cloud relay (outbound HTTPS)
 - **sendmail**: Uses `/usr/sbin/sendmail` (requires a working local MTA, e.g. postfix)

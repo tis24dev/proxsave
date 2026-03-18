@@ -307,10 +307,12 @@ func (c *Config) loadEnvOverrides() {
 		"MAX_LOCAL_BACKUPS", "MAX_SECONDARY_BACKUPS", "MAX_CLOUD_BACKUPS",
 		"RETENTION_DAILY", "RETENTION_WEEKLY", "RETENTION_MONTHLY", "RETENTION_YEARLY",
 		"BUNDLE_ASSOCIATED_FILES", "ENCRYPT_ARCHIVE", "AGE_RECIPIENT", "AGE_RECIPIENT_FILE",
-		"TELEGRAM_ENABLED", "BOT_TELEGRAM_TYPE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
-		"EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_SENDMAIL",
+		"TELEGRAM_ENABLE", "TELEGRAM_ENABLED", "BOT_TELEGRAM_TYPE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+		"EMAIL_ENABLE", "EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_SENDMAIL",
 		"EMAIL_RECIPIENT", "EMAIL_FROM",
-		"WEBHOOK_ENABLED", "WEBHOOK_ENDPOINTS", "WEBHOOK_FORMAT", "WEBHOOK_TIMEOUT",
+		"GOTIFY_ENABLE", "GOTIFY_ENABLED", "GOTIFY_SERVER_URL", "GOTIFY_TOKEN",
+		"GOTIFY_PRIORITY_SUCCESS", "GOTIFY_PRIORITY_WARNING", "GOTIFY_PRIORITY_FAILURE",
+		"WEBHOOK_ENABLE", "WEBHOOK_ENABLED", "WEBHOOK_ENDPOINTS", "WEBHOOK_FORMAT", "WEBHOOK_TIMEOUT",
 		"WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_DELAY",
 		"METRICS_ENABLED", "METRICS_PATH",
 		"SECURITY_CHECK_ENABLED", "AUTO_UPDATE_HASHES", "AUTO_FIX_PERMISSIONS",
@@ -586,20 +588,20 @@ func (c *Config) parseRetentionSettings() {
 }
 
 func (c *Config) parseNotificationSettings() {
-	c.TelegramEnabled = c.getBool("TELEGRAM_ENABLED", false)
+	c.TelegramEnabled = c.getBoolWithFallback([]string{"TELEGRAM_ENABLED", "TELEGRAM_ENABLE"}, false)
 	c.TelegramBotType = c.getString("BOT_TELEGRAM_TYPE", "centralized")
 	c.TelegramBotToken = c.getString("TELEGRAM_BOT_TOKEN", "")
 	c.TelegramChatID = c.getString("TELEGRAM_CHAT_ID", "")
 	c.TelegramServerAPIHost = "https://bot.tis24.it:1443"
 	c.ServerID = ""
 
-	c.EmailEnabled = c.getBool("EMAIL_ENABLED", true)
+	c.EmailEnabled = c.getBoolWithFallback([]string{"EMAIL_ENABLED", "EMAIL_ENABLE"}, false)
 	c.EmailDeliveryMethod = c.getString("EMAIL_DELIVERY_METHOD", "relay")
 	c.EmailFallbackSendmail = c.getBool("EMAIL_FALLBACK_SENDMAIL", true)
 	c.EmailRecipient = c.getString("EMAIL_RECIPIENT", "")
 	c.EmailFrom = c.getString("EMAIL_FROM", "no-reply@proxmox.tis24.it")
 
-	c.GotifyEnabled = c.getBool("GOTIFY_ENABLED", false)
+	c.GotifyEnabled = c.getBoolWithFallback([]string{"GOTIFY_ENABLED", "GOTIFY_ENABLE"}, false)
 	c.GotifyServerURL = strings.TrimSpace(c.getString("GOTIFY_SERVER_URL", ""))
 	c.GotifyToken = strings.TrimSpace(c.getString("GOTIFY_TOKEN", ""))
 	c.GotifyPrioritySuccess = c.ensurePositiveInt("GOTIFY_PRIORITY_SUCCESS", 2)
@@ -613,7 +615,7 @@ func (c *Config) parseNotificationSettings() {
 	c.WorkerMaxRetries = 2
 	c.WorkerRetryDelay = 2
 
-	c.WebhookEnabled = c.getBool("WEBHOOK_ENABLED", false)
+	c.WebhookEnabled = c.getBoolWithFallback([]string{"WEBHOOK_ENABLED", "WEBHOOK_ENABLE"}, false)
 	c.WebhookDefaultFormat = c.getString("WEBHOOK_FORMAT", "generic")
 	c.WebhookTimeout = c.getInt("WEBHOOK_TIMEOUT", 30)
 	c.WebhookMaxRetries = c.getInt("WEBHOOK_MAX_RETRIES", 3)

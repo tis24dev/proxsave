@@ -296,7 +296,7 @@ LOG_PATH=/test/log
 SECONDARY_ENABLED=false
 SECONDARY_PATH=remote:path
 `
-	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
@@ -317,7 +317,7 @@ LOG_PATH=/test/log
 SECONDARY_ENABLED=false
 SECONDARY_LOG_PATH=remote:/logs
 `
-	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
@@ -469,8 +469,47 @@ func TestConfigDefaults(t *testing.T) {
 		t.Errorf("Default LocalRetentionDays = %d; want 7", cfg.LocalRetentionDays)
 	}
 
+	if cfg.EmailEnabled {
+		t.Error("Expected default EmailEnabled to be false")
+	}
+
 	if cfg.BaseDir != "/defaults/base" {
 		t.Errorf("Default BaseDir = %q; want %q", cfg.BaseDir, "/defaults/base")
+	}
+}
+
+func TestLoadConfigNotificationLegacyEnableAliases(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "legacy_notifications.env")
+
+	content := `TELEGRAM_ENABLE=true
+EMAIL_ENABLE=true
+GOTIFY_ENABLE=true
+WEBHOOK_ENABLE=true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	cleanup := setBaseDirEnv(t, "/legacy/notifications/base")
+	defer cleanup()
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if !cfg.TelegramEnabled {
+		t.Error("Expected TelegramEnabled to be true via TELEGRAM_ENABLE")
+	}
+	if !cfg.EmailEnabled {
+		t.Error("Expected EmailEnabled to be true via EMAIL_ENABLE")
+	}
+	if !cfg.GotifyEnabled {
+		t.Error("Expected GotifyEnabled to be true via GOTIFY_ENABLE")
+	}
+	if !cfg.WebhookEnabled {
+		t.Error("Expected WebhookEnabled to be true via WEBHOOK_ENABLE")
 	}
 }
 
@@ -731,6 +770,64 @@ BACKUP_PATH=/fromfile
 	}
 	if cfg.BackupPath != "/fromenv" {
 		t.Fatalf("BackupPath = %q; want /fromenv (from env override)", cfg.BackupPath)
+	}
+}
+
+func TestLoadEnvOverridesOverridesNotificationFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "notification_env_override.env")
+	content := `GOTIFY_SERVER_URL=https://from-file.example
+GOTIFY_TOKEN=file-token
+GOTIFY_PRIORITY_SUCCESS=2
+WEBHOOK_ENDPOINTS=file_hook
+WEBHOOK_FORMAT=generic
+WEBHOOK_TIMEOUT=30
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	overrides := map[string]string{
+		"GOTIFY_SERVER_URL":       "https://from-env.example",
+		"GOTIFY_TOKEN":            "env-token",
+		"GOTIFY_PRIORITY_SUCCESS": "9",
+		"WEBHOOK_ENDPOINTS":       "env_hook",
+		"WEBHOOK_FORMAT":          "slack",
+		"WEBHOOK_TIMEOUT":         "45",
+	}
+	for key, value := range overrides {
+		if err := os.Setenv(key, value); err != nil {
+			t.Fatalf("failed to set env %s: %v", key, err)
+		}
+	}
+	defer func() {
+		for key := range overrides {
+			_ = os.Unsetenv(key)
+		}
+	}()
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if cfg.GotifyServerURL != "https://from-env.example" {
+		t.Fatalf("GotifyServerURL = %q; want https://from-env.example", cfg.GotifyServerURL)
+	}
+	if cfg.GotifyToken != "env-token" {
+		t.Fatalf("GotifyToken = %q; want env-token", cfg.GotifyToken)
+	}
+	if cfg.GotifyPrioritySuccess != 9 {
+		t.Fatalf("GotifyPrioritySuccess = %d; want 9", cfg.GotifyPrioritySuccess)
+	}
+	if len(cfg.WebhookEndpointNames) != 1 || cfg.WebhookEndpointNames[0] != "env_hook" {
+		t.Fatalf("WebhookEndpointNames = %#v; want [env_hook]", cfg.WebhookEndpointNames)
+	}
+	if cfg.WebhookDefaultFormat != "slack" {
+		t.Fatalf("WebhookDefaultFormat = %q; want slack", cfg.WebhookDefaultFormat)
+	}
+	if cfg.WebhookTimeout != 45 {
+		t.Fatalf("WebhookTimeout = %d; want 45", cfg.WebhookTimeout)
 	}
 }
 
