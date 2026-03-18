@@ -280,7 +280,10 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
-			if !result.Verified {
+			mu.Lock()
+			verified := result.Verified
+			mu.Unlock()
+			if !verified {
 				doClose(true)
 			} else {
 				doClose(false)
