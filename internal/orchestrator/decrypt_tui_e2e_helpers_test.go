@@ -250,11 +250,25 @@ func runDecryptWorkflowTUIForTest(t *testing.T, ctx context.Context, cfg *config
 		errCh <- RunDecryptWorkflowTUI(ctx, cfg, logger, "1.0.0", configPath, "test-build")
 	}()
 
+	waitTimeout := 30 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		waitTimeout = time.Until(deadline) + 2*time.Second
+		if waitTimeout < 2*time.Second {
+			waitTimeout = 2 * time.Second
+		}
+	}
+	timer := time.NewTimer(waitTimeout)
+	defer timer.Stop()
+
 	select {
 	case err := <-errCh:
 		return err
-	case <-ctx.Done():
-		t.Fatalf("RunDecryptWorkflowTUI context expired: %v", ctx.Err())
+	case <-timer.C:
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("RunDecryptWorkflowTUI did not return within %s (context state: %v)", waitTimeout, err)
+			return nil
+		}
+		t.Fatalf("RunDecryptWorkflowTUI did not return within %s", waitTimeout)
 		return nil
 	}
 }
