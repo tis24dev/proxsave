@@ -15,6 +15,29 @@ func testPreservedEntries() []string {
 	return []string{"build", "env", "identity"}
 }
 
+func registerConfirmNewInstallRunner(t *testing.T, runner func(context.Context, *tui.App, tview.Primitive, tview.Primitive) error) {
+	t.Helper()
+	originalRunner := confirmNewInstallRunner
+	confirmNewInstallRunner = runner
+	t.Cleanup(func() {
+		confirmNewInstallRunner = originalRunner
+	})
+}
+
+func wizardPrimitiveContainsText(p tview.Primitive, want string) bool {
+	switch v := p.(type) {
+	case *tview.TextView:
+		return strings.Contains(v.GetText(false), want)
+	case *tview.Flex:
+		for i := 0; i < v.GetItemCount(); i++ {
+			if wizardPrimitiveContainsText(v.GetItem(i), want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestFormatPreservedEntries(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -53,14 +76,11 @@ func TestFormatPreservedEntries(t *testing.T) {
 }
 
 func TestConfirmNewInstallContinue(t *testing.T) {
-	originalRunner := confirmNewInstallRunner
-	defer func() { confirmNewInstallRunner = originalRunner }()
-
-	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		done := extractModalDone(focus.(*tview.Modal))
 		done(0, "Continue")
 		return nil
-	}
+	})
 
 	proceed, err := ConfirmNewInstall(context.Background(), "/opt/proxmox", "sig-123", testPreservedEntries())
 	if err != nil {
@@ -72,14 +92,11 @@ func TestConfirmNewInstallContinue(t *testing.T) {
 }
 
 func TestConfirmNewInstallCancel(t *testing.T) {
-	originalRunner := confirmNewInstallRunner
-	defer func() { confirmNewInstallRunner = originalRunner }()
-
-	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		done := extractModalDone(focus.(*tview.Modal))
 		done(1, "Cancel")
 		return nil
-	}
+	})
 
 	proceed, err := ConfirmNewInstall(context.Background(), "/opt/proxmox", "sig-123", testPreservedEntries())
 	if err != nil {
@@ -91,14 +108,11 @@ func TestConfirmNewInstallCancel(t *testing.T) {
 }
 
 func TestConfirmNewInstallMessageIncludesBaseDir(t *testing.T) {
-	originalRunner := confirmNewInstallRunner
-	defer func() { confirmNewInstallRunner = originalRunner }()
-
 	var captured string
-	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		captured = extractModalText(focus.(*tview.Modal))
 		return nil
-	}
+	})
 
 	_, err := ConfirmNewInstall(context.Background(), "/var/lib/data", "build-sig", testPreservedEntries())
 	if err != nil {
@@ -110,14 +124,11 @@ func TestConfirmNewInstallMessageIncludesBaseDir(t *testing.T) {
 }
 
 func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
-	originalRunner := confirmNewInstallRunner
-	defer func() { confirmNewInstallRunner = originalRunner }()
-
 	var captured string
-	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		captured = extractModalText(focus.(*tview.Modal))
 		return nil
-	}
+	})
 
 	_, err := ConfirmNewInstall(context.Background(), "/var/lib/data", "build-sig", testPreservedEntries())
 	if err != nil {
@@ -128,14 +139,51 @@ func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
 	}
 }
 
-func TestConfirmNewInstallPropagatesRunnerError(t *testing.T) {
-	originalRunner := confirmNewInstallRunner
-	defer func() { confirmNewInstallRunner = originalRunner }()
+func TestConfirmNewInstallMessageUsesNoneWhenEntriesAreBlank(t *testing.T) {
+	var captured string
+	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		captured = extractModalText(focus.(*tview.Modal))
+		return nil
+	})
 
-	expectedErr := errors.New("runner failed")
-	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
-		return expectedErr
+	_, err := ConfirmNewInstall(context.Background(), "/var/lib/data", "build-sig", []string{"", " ", "\t"})
+	if err != nil {
+		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
+	if !strings.Contains(captured, "(none)") {
+		t.Fatalf("expected modal text to mention (none), got %q", captured)
+	}
+}
+
+func TestConfirmNewInstallMessageEscapesDynamicColorMarkup(t *testing.T) {
+	baseDir := "/var/lib/[prod]"
+	preservedEntries := []string{" build[0] ", " identity] "}
+
+	var captured string
+	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		captured = extractModalText(focus.(*tview.Modal))
+		return nil
+	})
+
+	_, err := ConfirmNewInstall(context.Background(), baseDir, "build-sig", preservedEntries)
+	if err != nil {
+		t.Fatalf("ConfirmNewInstall error: %v", err)
+	}
+	if !strings.Contains(captured, tview.Escape(baseDir)) {
+		t.Fatalf("expected escaped base dir in modal text, got %q", captured)
+	}
+
+	wantPreserved := tview.Escape(formatPreservedEntries(preservedEntries))
+	if !strings.Contains(captured, wantPreserved) {
+		t.Fatalf("expected escaped preserved entries %q in modal text, got %q", wantPreserved, captured)
+	}
+}
+
+func TestConfirmNewInstallPropagatesRunnerError(t *testing.T) {
+	expectedErr := errors.New("runner failed")
+	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		return expectedErr
+	})
 
 	_, err := ConfirmNewInstall(context.Background(), "/opt/proxmox", "sig-123", testPreservedEntries())
 	if !errors.Is(err, expectedErr) {
@@ -144,18 +192,15 @@ func TestConfirmNewInstallPropagatesRunnerError(t *testing.T) {
 }
 
 func TestConfirmNewInstallPassesContextToRunner(t *testing.T) {
-	originalRunner := confirmNewInstallRunner
-	defer func() { confirmNewInstallRunner = originalRunner }()
-
 	ctx := t.Context()
-	confirmNewInstallRunner = func(gotCtx context.Context, app *tui.App, root, focus tview.Primitive) error {
+	registerConfirmNewInstallRunner(t, func(gotCtx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		if gotCtx != ctx {
 			t.Fatalf("got context %p, want %p", gotCtx, ctx)
 		}
 		done := extractModalDone(focus.(*tview.Modal))
 		done(0, "Continue")
 		return nil
-	}
+	})
 
 	proceed, err := ConfirmNewInstall(ctx, "/opt/proxmox", "sig-123", testPreservedEntries())
 	if err != nil {
@@ -163,5 +208,31 @@ func TestConfirmNewInstallPassesContextToRunner(t *testing.T) {
 	}
 	if !proceed {
 		t.Fatalf("expected proceed=true when Continue is selected")
+	}
+}
+
+func TestConfirmNewInstallBuildsWizardScreenWithEscapedBuildSignature(t *testing.T) {
+	buildSig := "sig-[123]"
+
+	var root tview.Primitive
+	var focus tview.Primitive
+	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, gotRoot, gotFocus tview.Primitive) error {
+		root = gotRoot
+		focus = gotFocus
+		return nil
+	})
+
+	_, err := ConfirmNewInstall(context.Background(), "/opt/proxmox", buildSig, testPreservedEntries())
+	if err != nil {
+		t.Fatalf("ConfirmNewInstall error: %v", err)
+	}
+	if root == nil {
+		t.Fatalf("expected wizard root to be passed to runner")
+	}
+	if _, ok := focus.(*tview.Modal); !ok {
+		t.Fatalf("expected modal focus, got %T", focus)
+	}
+	if !wizardPrimitiveContainsText(root, tview.Escape(buildSig)) {
+		t.Fatalf("expected root screen to include escaped build signature %q", tview.Escape(buildSig))
 	}
 }

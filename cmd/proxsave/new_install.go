@@ -16,13 +16,15 @@ type newInstallPlan struct {
 	PreservedEntries   []string
 }
 
+var newInstallBuildSignature = buildSignature
+
 func buildNewInstallPlan(configPath string) (newInstallPlan, error) {
 	resolvedPath, err := resolveInstallConfigPath(configPath)
 	if err != nil {
 		return newInstallPlan{}, err
 	}
 
-	buildSig := strings.TrimSpace(buildSignature())
+	buildSig := strings.TrimSpace(newInstallBuildSignature())
 	if buildSig == "" {
 		buildSig = "n/a"
 	}

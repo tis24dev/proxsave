@@ -17,6 +17,16 @@ const defaultHARollbackTimeout = 180 * time.Second
 
 var ErrHAApplyNotCommitted = errors.New("HA configuration not committed")
 
+var (
+	haApplyGeteuid    = os.Geteuid
+	haIsMounted       = isMounted
+	haIsRealRestoreFS = isRealRestoreFS
+
+	haArmRollback    = armHARollback
+	haDisarmRollback = disarmHARollback
+	haApplyFromStage = applyPVEHAFromStage
+)
+
 type HAApplyNotCommittedError struct {
 	RollbackLog      string
 	RollbackMarker   string
@@ -99,7 +109,7 @@ func maybeApplyPVEHAWithUI(
 	if ui == nil {
 		return fmt.Errorf("restore UI not available")
 	}
-	if !isRealRestoreFS(restoreFS) {
+	if !haIsRealRestoreFS(restoreFS) {
 		logger.Debug("Skipping PVE HA restore: non-system filesystem in use")
 		return nil
 	}
@@ -107,7 +117,7 @@ func maybeApplyPVEHAWithUI(
 		logger.Info("Dry run enabled: skipping PVE HA restore")
 		return nil
 	}
-	if os.Geteuid() != 0 {
+	if haApplyGeteuid() != 0 {
 		logger.Warning("Skipping PVE HA restore: requires root privileges")
 		return nil
 	}
@@ -132,7 +142,7 @@ func maybeApplyPVEHAWithUI(
 	}
 
 	etcPVE := "/etc/pve"
-	mounted, mountErr := isMounted(etcPVE)
+	mounted, mountErr := haIsMounted(etcPVE)
 	if mountErr != nil {
 		logger.Warning("PVE HA restore: unable to check pmxcfs mount (%s): %v", etcPVE, mountErr)
 	}
@@ -214,21 +224,21 @@ func maybeApplyPVEHAWithUI(
 	if rollbackPath != "" {
 		logger.Info("")
 		logger.Info("Arming HA rollback timer (%ds)...", int(defaultHARollbackTimeout.Seconds()))
-		rollbackHandle, err = armHARollback(ctx, logger, rollbackPath, defaultHARollbackTimeout, "/tmp/proxsave")
+		rollbackHandle, err = haArmRollback(ctx, logger, rollbackPath, defaultHARollbackTimeout, "/tmp/proxsave")
 		if err != nil {
 			return fmt.Errorf("arm HA rollback: %w", err)
 		}
 		logger.Info("HA rollback log: %s", rollbackHandle.logPath)
 	}
 
-	applied, err := applyPVEHAFromStage(logger, stageRoot)
+	applied, err := haApplyFromStage(logger, stageRoot)
 	if err != nil {
 		return err
 	}
 	if len(applied) == 0 {
 		logger.Info("PVE HA restore: no changes applied (stage contained no HA config entries)")
 		if rollbackHandle != nil {
-			disarmHARollback(ctx, logger, rollbackHandle)
+			haDisarmRollback(ctx, logger, rollbackHandle)
 		}
 		return nil
 	}
@@ -238,7 +248,7 @@ func maybeApplyPVEHAWithUI(
 		return nil
 	}
 
-	remaining := rollbackHandle.remaining(time.Now())
+	remaining := rollbackHandle.remaining(nowRestore())
 	if remaining <= 0 {
 		return buildHAApplyNotCommittedError(rollbackHandle)
 	}
@@ -260,7 +270,7 @@ func maybeApplyPVEHAWithUI(
 	}
 
 	if commit {
-		disarmHARollback(ctx, logger, rollbackHandle)
+		haDisarmRollback(ctx, logger, rollbackHandle)
 		logger.Info("HA changes committed.")
 		return nil
 	}
@@ -360,7 +370,7 @@ func armHARollback(ctx context.Context, logger *logging.Logger, backupPath strin
 		markerPath: filepath.Join(baseDir, fmt.Sprintf("ha_rollback_pending_%s", timestamp)),
 		scriptPath: filepath.Join(baseDir, fmt.Sprintf("ha_rollback_%s.sh", timestamp)),
 		logPath:    filepath.Join(baseDir, fmt.Sprintf("ha_rollback_%s.log", timestamp)),
-		armedAt:    time.Now(),
+		armedAt:    nowRestore(),
 		timeout:    timeout,
 	}
 

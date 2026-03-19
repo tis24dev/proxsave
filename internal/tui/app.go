@@ -82,18 +82,12 @@ func (a *App) RunWithContext(ctx context.Context) error {
 		if state.CompareAndSwap(0, 2) {
 			return err
 		}
-		if state.Load() == 1 {
-			return ctx.Err()
-		}
-		return err
+		return ctx.Err()
 	}
 	if state.CompareAndSwap(0, 2) {
 		return nil
 	}
-	if state.Load() == 1 {
-		return ctx.Err()
-	}
-	return nil
+	return ctx.Err()
 }
 
 // SetRootWithTitle sets the root primitive with a styled title

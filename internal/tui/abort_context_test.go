@@ -3,12 +3,26 @@ package tui
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
+
+func newSimulationApp(t *testing.T) (*App, tcell.SimulationScreen) {
+	t.Helper()
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("screen.Init: %v", err)
+	}
+
+	app := NewApp()
+	app.SetScreen(screen)
+	app.SetRoot(tview.NewBox(), true)
+	return app, screen
+}
 
 func TestSetAbortContext_GetAbortContextRoundTrip(t *testing.T) {
 	SetAbortContext(nil)
@@ -105,15 +119,79 @@ func TestAppRunWithContext_CanceledBeforeRun(t *testing.T) {
 	}
 }
 
-func TestAppRunWithContext_StopsOnCancel(t *testing.T) {
-	screen := tcell.NewSimulationScreen("UTF-8")
-	if err := screen.Init(); err != nil {
-		t.Fatalf("screen.Init: %v", err)
+func TestAppRunWithContext_NilReceiverReturnsNil(t *testing.T) {
+	var app *App
+	if err := app.RunWithContext(context.Background()); err != nil {
+		t.Fatalf("err=%v want nil", err)
 	}
+}
 
-	app := NewApp()
-	app.SetScreen(screen)
-	app.SetRoot(tview.NewBox(), true)
+func TestAppRunWithContext_NilContextRunsUntilStopped(t *testing.T) {
+	app, _ := newSimulationApp(t)
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		app.Stop()
+	}()
+
+	if err := app.RunWithContext(nil); err != nil {
+		t.Fatalf("err=%v want nil", err)
+	}
+}
+
+func TestAppRunWithContext_ReturnsNilWhenStoppedWithoutCancellation(t *testing.T) {
+	app, _ := newSimulationApp(t)
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		app.Stop()
+	}()
+
+	if err := app.RunWithContext(context.Background()); err != nil {
+		t.Fatalf("err=%v want nil", err)
+	}
+}
+
+func TestAppRunWithContext_StopsOnCancel(t *testing.T) {
+	app, _ := newSimulationApp(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	if err := app.RunWithContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want %v", err, context.Canceled)
+	}
+}
+
+func TestAppRunWithContext_PropagatesRunErrorWithoutCancellation(t *testing.T) {
+	app, _ := newSimulationApp(t)
+	runErr := errors.New("run failed")
+	eventErr := tcell.NewEventError(runErr)
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		app.QueueEvent(eventErr)
+	}()
+
+	if err := app.RunWithContext(context.Background()); err != eventErr {
+		t.Fatalf("err=%v want %v", err, eventErr)
+	}
+}
+
+func TestAppRunWithContext_PrefersContextErrorWhenCanceledDuringRunError(t *testing.T) {
+	app, _ := newSimulationApp(t)
+	runErr := errors.New("run failed")
+
+	var stopOnce sync.Once
+	app.stopHook = func() {
+		stopOnce.Do(func() {
+			app.stopHook = nil
+			app.QueueEvent(tcell.NewEventError(runErr))
+		})
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
