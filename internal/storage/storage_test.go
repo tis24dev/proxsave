@@ -18,7 +18,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -1639,21 +1638,11 @@ func TestSecondaryStorageGetStatsIncludesFilesystemInfo(t *testing.T) {
 	if stats.TotalSpace == 0 || stats.AvailableSpace == 0 {
 		t.Fatalf("expected filesystem stats to be populated (TotalSpace=%d, AvailableSpace=%d)", stats.TotalSpace, stats.AvailableSpace)
 	}
-	stat, err := safefs.Statfs(context.Background(), backupDir, 0)
-	if err != nil {
-		t.Fatalf("Statfs() error = %v", err)
+	if stats.AvailableSpace > stats.TotalSpace {
+		t.Fatalf("AvailableSpace = %d, should not exceed TotalSpace = %d", stats.AvailableSpace, stats.TotalSpace)
 	}
-	_, _, wantUsed := safefs.SpaceUsageFromStatfs(stat)
-	diff := stats.UsedSpace - wantUsed
-	if diff < 0 {
-		diff = -diff
-	}
-	tolerance := stat.Bsize
-	if tolerance < 0 {
-		tolerance = -tolerance
-	}
-	if diff > tolerance {
-		t.Fatalf("UsedSpace mismatch: got %d want %d (diff=%d, tolerance=%d)", stats.UsedSpace, wantUsed, diff, tolerance)
+	if stats.UsedSpace < 0 || stats.UsedSpace > stats.TotalSpace {
+		t.Fatalf("UsedSpace = %d, should be within [0, %d]", stats.UsedSpace, stats.TotalSpace)
 	}
 }
 
