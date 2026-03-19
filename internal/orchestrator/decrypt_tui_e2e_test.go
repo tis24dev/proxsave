@@ -13,8 +13,6 @@ import (
 )
 
 func TestRunDecryptWorkflowTUI_SuccessLocalEncrypted(t *testing.T) {
-	lockDecryptTUIE2E(t)
-
 	origFS := restoreFS
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = origFS })
@@ -76,8 +74,6 @@ func TestRunDecryptWorkflowTUI_SuccessLocalEncrypted(t *testing.T) {
 }
 
 func TestRunDecryptWorkflowTUI_AbortAtSecretPrompt(t *testing.T) {
-	lockDecryptTUIE2E(t)
-
 	origFS := restoreFS
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = origFS })

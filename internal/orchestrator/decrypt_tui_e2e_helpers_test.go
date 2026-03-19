@@ -47,16 +47,10 @@ type decryptTUIFixture struct {
 	ExpectedChecksum    string
 }
 
-func lockDecryptTUIE2E(t *testing.T) {
-	t.Helper()
-
-	decryptTUIE2EMu.Lock()
-	t.Cleanup(decryptTUIE2EMu.Unlock)
-}
-
 func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 	t.Helper()
 
+	decryptTUIE2EMu.Lock()
 	orig := newTUIApp
 	done := make(chan struct{})
 	screen := tcell.NewSimulationScreen("UTF-8")
@@ -109,6 +103,7 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 		close(done)
 		injectWG.Wait()
 		newTUIApp = orig
+		decryptTUIE2EMu.Unlock()
 	})
 }
 
