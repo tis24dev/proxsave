@@ -25,6 +25,8 @@ func BuildScreen(spec ScreenSpec, content tview.Primitive) tview.Primitive {
 	}
 	configPath := strings.TrimSpace(spec.ConfigPath)
 	buildSig := strings.TrimSpace(spec.BuildSig)
+	escapedConfigPath := tview.Escape(configPath)
+	escapedBuildSig := tview.Escape(buildSig)
 
 	welcomeText := tview.NewTextView().
 		SetText(spec.HeaderText).
@@ -58,7 +60,7 @@ func BuildScreen(spec ScreenSpec, content tview.Primitive) tview.Primitive {
 
 	if configPath != "" {
 		configPathText := tview.NewTextView().
-			SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
+			SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", escapedConfigPath)).
 			SetTextColor(tcell.ColorWhite).
 			SetDynamicColors(true).
 			SetTextAlign(tview.AlignCenter)
@@ -68,7 +70,7 @@ func BuildScreen(spec ScreenSpec, content tview.Primitive) tview.Primitive {
 
 	if buildSig != "" {
 		buildSigText := tview.NewTextView().
-			SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
+			SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", escapedBuildSig)).
 			SetTextColor(tcell.ColorWhite).
 			SetDynamicColors(true).
 			SetTextAlign(tview.AlignCenter)

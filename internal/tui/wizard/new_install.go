@@ -37,10 +37,12 @@ func ConfirmNewInstall(baseDir string, buildSig string, preservedEntries []strin
 	app := tui.NewApp()
 	proceed := false
 	preservedText := formatPreservedEntries(preservedEntries)
+	escapedBaseDir := tview.Escape(baseDir)
+	escapedPreservedText := tview.Escape(preservedText)
 
 	// Confirmation modal
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]%s[white]\nbut deletes everything else.\n\nContinue?", baseDir, preservedText)).
+		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]%s[white]\nbut deletes everything else.\n\nContinue?", escapedBaseDir, escapedPreservedText)).
 		AddButtons([]string{"Continue", "Cancel"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Continue" {

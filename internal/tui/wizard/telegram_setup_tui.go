@@ -100,14 +100,17 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 	b.WriteString("You can also Skip verification and complete pairing later.\n")
 	instructions.SetText(b.String())
 
-	serverIDLine := fmt.Sprintf("[yellow]%s[white]", result.ServerID)
+	escapedServerID := tview.Escape(result.ServerID)
+	serverIDLine := fmt.Sprintf("[yellow]%s[white]", escapedServerID)
 	identityLine := ""
 	if result.IdentityFile != "" {
 		persisted := "not persisted"
 		if result.IdentityPersisted {
 			persisted = "persisted"
 		}
-		identityLine = fmt.Sprintf("\n[gray]Identity file:[white] %s ([yellow]%s[white])", result.IdentityFile, persisted)
+		escapedIdentityFile := tview.Escape(result.IdentityFile)
+		escapedPersisted := tview.Escape(persisted)
+		identityLine = fmt.Sprintf("\n[gray]Identity file:[white] %s ([yellow]%s[white])", escapedIdentityFile, escapedPersisted)
 	}
 	serverIDView.SetText(serverIDLine + identityLine)
 

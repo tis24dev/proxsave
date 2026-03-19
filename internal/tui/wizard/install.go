@@ -655,6 +655,7 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 		// File exists, ask how to proceed
 		app := tui.NewApp()
 		action := ExistingConfigCancel
+		escapedConfigPath := tview.Escape(configPath)
 
 		// Confirmation modal
 		modal := tview.NewModal().
@@ -663,7 +664,7 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 				"[yellow]Overwrite[white]   - Start from embedded template\n"+
 				"[yellow]Edit existing[white] - Keep current file as base\n"+
 				"[yellow]Keep & continue[white] - Leave file untouched, continue install\n"+
-				"[yellow]Cancel[white]      - Exit installation", configPath)).
+				"[yellow]Cancel[white]      - Exit installation", escapedConfigPath)).
 			AddButtons([]string{"Overwrite", "Edit existing", "Keep & continue", "Cancel"}).
 			SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 				switch buttonLabel {

@@ -363,6 +363,47 @@ func TestRunTelegramSetupWizard_ShowsPersistedIdentityState(t *testing.T) {
 	}
 }
 
+func TestRunTelegramSetupWizard_EscapesBracketedServerIdentityValues(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		state := eligibleTelegramSetupBootstrap()
+		state.ServerID = "srv[42]"
+		state.IdentityFile = "/tmp/identity[prod].key"
+		return state, nil
+	}
+	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+		serverIDView, _, form := extractTelegramSetupViews(t, root)
+
+		rawText := serverIDView.GetText(false)
+		if !strings.Contains(rawText, tview.Escape("srv[42]")) {
+			t.Fatalf("expected escaped server ID in raw text, got %q", rawText)
+		}
+		if !strings.Contains(rawText, tview.Escape("/tmp/identity[prod].key")) {
+			t.Fatalf("expected escaped identity file in raw text, got %q", rawText)
+		}
+
+		plainText := serverIDView.GetText(true)
+		if !strings.Contains(plainText, "srv[42]") {
+			t.Fatalf("expected literal server ID in plain text, got %q", plainText)
+		}
+		if !strings.Contains(plainText, "/tmp/identity[prod].key") {
+			t.Fatalf("expected literal identity file in plain text, got %q", plainText)
+		}
+
+		pressFormButton(t, form, "Skip")
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
+	}
+	if !result.SkippedVerification {
+		t.Fatalf("expected SkippedVerification=true")
+	}
+}
+
 func TestRunTelegramSetupWizard_CentralizedFailure_CanRetryAndSkip(t *testing.T) {
 	stubTelegramSetupDeps(t)
 

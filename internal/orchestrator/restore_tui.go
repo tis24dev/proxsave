@@ -873,7 +873,13 @@ func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, n
 		var b strings.Builder
 		for _, check := range report.Checks {
 			color := healthColor(check.Severity)
-			b.WriteString(fmt.Sprintf("- [%s]%s[white] %s: %s\n", color, check.Severity.String(), check.Name, check.Message))
+			b.WriteString(fmt.Sprintf(
+				"- [%s]%s[white] %s: %s\n",
+				color,
+				check.Severity.String(),
+				tview.Escape(check.Name),
+				tview.Escape(check.Message),
+			))
 		}
 		return strings.TrimRight(b.String(), "\n")
 	}
@@ -886,7 +892,7 @@ func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, n
 			return fmt.Sprintf("NIC repair: [green]APPLIED[white] (%d file(s))", len(r.ChangedFiles))
 		}
 		if r.SkippedReason != "" {
-			return fmt.Sprintf("NIC repair: [yellow]SKIPPED[white] (%s)", r.SkippedReason)
+			return fmt.Sprintf("NIC repair: [yellow]SKIPPED[white] (%s)", tview.Escape(r.SkippedReason))
 		}
 		return ""
 	}
@@ -897,7 +903,7 @@ func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, n
 		}
 		var b strings.Builder
 		for _, m := range r.AppliedNICMap {
-			b.WriteString(fmt.Sprintf("- %s -> %s\n", m.OldName, m.NewName))
+			b.WriteString(fmt.Sprintf("- %s -> %s\n", tview.Escape(m.OldName), tview.Escape(m.NewName)))
 		}
 		return strings.TrimRight(b.String(), "\n")
 	}
@@ -918,7 +924,7 @@ func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, n
 
 		diagInfo := ""
 		if strings.TrimSpace(diagnosticsDir) != "" {
-			diagInfo = fmt.Sprintf("\n\nDiagnostics saved under:\n%s", diagnosticsDir)
+			diagInfo = fmt.Sprintf("\n\nDiagnostics saved under:\n%s", tview.Escape(diagnosticsDir))
 		}
 
 		infoText.SetText(fmt.Sprintf("Rollback in [yellow]%ds[white] (deadline: [yellow]%s[white]).\n\n%sNetwork health: [%s]%s[white]\n%s%s\n\nType COMMIT or press the button to keep the new network configuration.\nIf you do nothing, rollback will be automatic.",

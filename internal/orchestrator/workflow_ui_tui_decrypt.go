@@ -64,7 +64,7 @@ func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 	app := newTUIApp()
 
 	messageView := tview.NewTextView().
-		SetText(strings.TrimSpace(initialMessage)).
+		SetText(tview.Escape(strings.TrimSpace(initialMessage))).
 		SetTextAlign(tview.AlignCenter).
 		SetTextColor(tcell.ColorWhite).
 		SetDynamicColors(true)
@@ -94,7 +94,7 @@ func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 			return
 		}
 		app.QueueUpdateDraw(func() {
-			messageView.SetText(message)
+			messageView.SetText(tview.Escape(message))
 		})
 	}
 
@@ -129,7 +129,7 @@ func (u *tuiWorkflowUI) showOKModal(title, message string, borderColor tcell.Col
 	app := newTUIApp()
 
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("%s\n\n[yellow]Press ENTER to continue[white]", strings.TrimSpace(message))).
+		SetText(fmt.Sprintf("%s\n\n[yellow]Press ENTER to continue[white]", tview.Escape(strings.TrimSpace(message)))).
 		AddButtons([]string{"OK"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			app.Stop()

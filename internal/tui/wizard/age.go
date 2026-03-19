@@ -86,9 +86,10 @@ func validatePrivateKey(value string) (string, error) {
 func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool, error) {
 	app := tui.NewApp()
 	overwrite := false
+	escapedRecipientPath := tview.Escape(recipientPath)
 
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Existing recipient:\n[yellow]%s[white]\n\nOverwrite with a new one?", recipientPath)).
+		SetText(fmt.Sprintf("Existing recipient:\n[yellow]%s[white]\n\nOverwrite with a new one?", escapedRecipientPath)).
 		AddButtons([]string{"Overwrite", "Cancel"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Overwrite" {
@@ -179,14 +180,14 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 
 	setupTypeDropdown := tview.NewDropDown().
 		SetLabel("Setup Type").
-			SetOptions([]string{
-				"Use existing AGE public key",
-				"Generate key from passphrase",
-				"Generate key from existing private key",
-			}, func(option string, index int) {
-				switch index {
-				case 0:
-					setupType = ageSetupTypeExisting
+		SetOptions([]string{
+			"Use existing AGE public key",
+			"Generate key from passphrase",
+			"Generate key from existing private key",
+		}, func(option string, index int) {
+			switch index {
+			case 0:
+				setupType = ageSetupTypeExisting
 				if publicKeyField != nil {
 					publicKeyField.SetDisabled(false)
 				}
@@ -199,8 +200,8 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 				if privateKeyField != nil {
 					privateKeyField.SetDisabled(true)
 				}
-				case 1:
-					setupType = ageSetupTypePassphrase
+			case 1:
+				setupType = ageSetupTypePassphrase
 				if publicKeyField != nil {
 					publicKeyField.SetDisabled(true)
 				}
@@ -213,8 +214,8 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 				if privateKeyField != nil {
 					privateKeyField.SetDisabled(true)
 				}
-				case 2:
-					setupType = ageSetupTypePrivateKey
+			case 2:
+				setupType = ageSetupTypePrivateKey
 				if publicKeyField != nil {
 					publicKeyField.SetDisabled(true)
 				}

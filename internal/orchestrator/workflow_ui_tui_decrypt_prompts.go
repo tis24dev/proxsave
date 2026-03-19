@@ -65,9 +65,13 @@ func promptExistingPathDecisionTUI(ctx context.Context, env tuiScreenEnv, path, 
 	app := newTUIApp()
 	decision := PathDecisionCancel
 
-	message := fmt.Sprintf("The %s [yellow]%s[white] already exists.\nSelect how you want to proceed.", description, path)
+	message := fmt.Sprintf(
+		"The %s [yellow]%s[white] already exists.\nSelect how you want to proceed.",
+		tview.Escape(description),
+		tview.Escape(path),
+	)
 	if strings.TrimSpace(failureMessage) != "" {
-		message = fmt.Sprintf("%s\n\n[red]%s[white]", message, failureMessage)
+		message = fmt.Sprintf("%s\n\n[red]%s[white]", message, tview.Escape(strings.TrimSpace(failureMessage)))
 	}
 	message += "\n\n[yellow]Use ←→ or TAB to switch buttons | ENTER to confirm[white]"
 
@@ -191,10 +195,10 @@ func promptDecryptSecretTUI(ctx context.Context, env tuiScreenEnv, displayName, 
 	infoMessage := fmt.Sprintf(
 		"Provide the AGE secret key or passphrase used for [yellow]%s[white].\n\n"+
 			"Enter [yellow]0[white] to exit or use [yellow]Cancel[white].",
-		name,
+		tview.Escape(name),
 	)
 	if strings.TrimSpace(previousError) != "" {
-		infoMessage = fmt.Sprintf("%s\n\n[red]%s[white]", infoMessage, strings.TrimSpace(previousError))
+		infoMessage = fmt.Sprintf("%s\n\n[red]%s[white]", infoMessage, tview.Escape(strings.TrimSpace(previousError)))
 	}
 
 	infoText := tview.NewTextView().
