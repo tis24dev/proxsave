@@ -10,6 +10,10 @@ import (
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
+func testPreservedEntries() []string {
+	return []string{"build", "env", "identity"}
+}
+
 func TestFormatPreservedEntries(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -57,7 +61,7 @@ func TestConfirmNewInstallContinue(t *testing.T) {
 		return nil
 	}
 
-	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", []string{"build", "env", "identity"})
+	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", testPreservedEntries())
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -76,7 +80,7 @@ func TestConfirmNewInstallCancel(t *testing.T) {
 		return nil
 	}
 
-	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", []string{"build", "env", "identity"})
+	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", testPreservedEntries())
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -95,7 +99,7 @@ func TestConfirmNewInstallMessageIncludesBaseDir(t *testing.T) {
 		return nil
 	}
 
-	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", []string{"build", "env", "identity"})
+	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", testPreservedEntries())
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -114,7 +118,7 @@ func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
 		return nil
 	}
 
-	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", []string{"build", "env", "identity"})
+	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", testPreservedEntries())
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -132,7 +136,7 @@ func TestConfirmNewInstallPropagatesRunnerError(t *testing.T) {
 		return expectedErr
 	}
 
-	_, err := ConfirmNewInstall("/opt/proxmox", "sig-123", []string{"build", "env", "identity"})
+	_, err := ConfirmNewInstall("/opt/proxmox", "sig-123", testPreservedEntries())
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected error %v, got %v", expectedErr, err)
 	}
