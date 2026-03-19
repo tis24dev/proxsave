@@ -63,14 +63,18 @@ func TestShowRestorePlanTUI_CancelReturnsAborted(t *testing.T) {
 }
 
 func TestConfirmRestoreTUI_ConfirmedAndOverwriteReturnsTrue(t *testing.T) {
+	expectedCtx := context.WithValue(context.Background(), struct{}{}, "confirm-restore")
 	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+		if ctx != expectedCtx {
+			t.Fatalf("stub received unexpected context: got %v want %v", ctx, expectedCtx)
+		}
 		return true, nil
 	})
 	defer restore()
 
 	withSimApp(t, []tcell.Key{tcell.KeyEnter})
 
-	ok, err := confirmRestoreTUI(context.Background(), "/tmp/config.env", "sig")
+	ok, err := confirmRestoreTUI(expectedCtx, "/tmp/config.env", "sig")
 	if err != nil {
 		t.Fatalf("confirmRestoreTUI error: %v", err)
 	}
@@ -80,14 +84,18 @@ func TestConfirmRestoreTUI_ConfirmedAndOverwriteReturnsTrue(t *testing.T) {
 }
 
 func TestConfirmRestoreTUI_OverwriteDeclinedReturnsFalse(t *testing.T) {
+	expectedCtx := context.WithValue(context.Background(), struct{}{}, "overwrite-declined")
 	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+		if ctx != expectedCtx {
+			t.Fatalf("stub received unexpected context: got %v want %v", ctx, expectedCtx)
+		}
 		return false, nil
 	})
 	defer restore()
 
 	withSimApp(t, []tcell.Key{tcell.KeyEnter})
 
-	ok, err := confirmRestoreTUI(context.Background(), "/tmp/config.env", "sig")
+	ok, err := confirmRestoreTUI(expectedCtx, "/tmp/config.env", "sig")
 	if err != nil {
 		t.Fatalf("confirmRestoreTUI error: %v", err)
 	}
