@@ -340,7 +340,7 @@ func TestRunAgeSetupWizardExistingKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunAgeSetupWizard returned error: %v", err)
 	}
-	if data.SetupType != "existing" {
+	if data.SetupType != ageSetupTypeExisting {
 		t.Fatalf("unexpected setup type: %s", data.SetupType)
 	}
 	if data.RecipientKey != validAge {
@@ -361,7 +361,7 @@ func TestRunAgeSetupWizardPassphrase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunAgeSetupWizard returned error: %v", err)
 	}
-	if data.SetupType != "passphrase" {
+	if data.SetupType != ageSetupTypePassphrase {
 		t.Fatalf("unexpected setup type: %s", data.SetupType)
 	}
 	if data.Passphrase != "CorrectHorse1!" {
@@ -388,7 +388,7 @@ func TestRunAgeSetupWizardPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunAgeSetupWizard returned error: %v", err)
 	}
-	if data.SetupType != "privatekey" {
+	if data.SetupType != ageSetupTypePrivateKey {
 		t.Fatalf("unexpected setup type: %s", data.SetupType)
 	}
 	if data.PrivateKey != identity.String() {

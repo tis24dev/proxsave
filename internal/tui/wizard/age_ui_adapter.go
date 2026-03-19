@@ -40,17 +40,17 @@ func (a *ageSetupUIAdapter) CollectRecipientDraft(ctx context.Context, recipient
 	}
 
 	switch data.SetupType {
-	case "existing":
+	case ageSetupTypeExisting:
 		return &orchestrator.AgeRecipientDraft{
 			Kind:      orchestrator.AgeRecipientInputExisting,
 			PublicKey: data.PublicKey,
 		}, nil
-	case "passphrase":
+	case ageSetupTypePassphrase:
 		return &orchestrator.AgeRecipientDraft{
 			Kind:       orchestrator.AgeRecipientInputPassphrase,
 			Passphrase: data.Passphrase,
 		}, nil
-	case "privatekey":
+	case ageSetupTypePrivateKey:
 		return &orchestrator.AgeRecipientDraft{
 			Kind:       orchestrator.AgeRecipientInputPrivateKey,
 			PrivateKey: data.PrivateKey,
