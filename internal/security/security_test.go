@@ -1251,6 +1251,41 @@ func TestEnsureOwnershipAndPermAutoFix(t *testing.T) {
 	}
 }
 
+func TestEnsureOwnershipAndPermFromFDAutoFix(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "testfile")
+	if err := os.WriteFile(testFile, []byte("test"), 0777); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.Open(testFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checker := &Checker{
+		logger: newSecurityTestLogger(),
+		cfg:    &config.Config{AutoFixPermissions: true},
+		result: &Result{},
+	}
+
+	checker.ensureOwnershipAndPermFromFD(f, info, 0600, "test file")
+
+	refreshed, err := os.Stat(testFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Mode().Perm() != 0600 {
+		t.Errorf("permissions should have been fixed to 0600, got %o", refreshed.Mode().Perm())
+	}
+}
+
 func TestEnsureOwnershipAndPermSymlink(t *testing.T) {
 	tmpDir := t.TempDir()
 	targetFile := filepath.Join(tmpDir, "target")
