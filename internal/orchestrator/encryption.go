@@ -385,7 +385,8 @@ func backupExistingRecipientFileWithDeps(fs FS, tp TimeProvider, path string) (s
 	if perm == 0 {
 		perm = 0o600
 	}
-	backupPath := fmt.Sprintf("%s.bak-%s", path, recipientTime(tp).Format("20060102-150405"))
+	ts := recipientTime(tp)
+	backupPath := fmt.Sprintf("%s.bak-%s", path, ts.Format("20060102-150405.000000000"))
 	if err := copyRecipientFileWithDeps(fs, path, backupPath, perm); err != nil {
 		return "", fmt.Errorf("backup recipient file: %w", err)
 	}

@@ -168,7 +168,7 @@ func TestEnsureAgeRecipientsReadyWithUI_ForceNewRecipientSuccessfulOverwriteCrea
 		t.Fatalf("EnsureAgeRecipientsReadyWithUI error: %v", err)
 	}
 
-	backupPath := target + ".bak-" + fakeTime.Current.Format("20060102-150405")
+	backupPath := target + ".bak-" + fakeTime.Current.Format("20060102-150405.000000000")
 	backup, err := os.ReadFile(backupPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%s): %v", backupPath, err)
@@ -202,7 +202,7 @@ func TestRunAgeSetupWorkflow_ForceNewRecipientBackupFailurePreservesOriginal(t *
 	if err := fs.AddFile(target, []byte("old\n")); err != nil {
 		t.Fatalf("AddFile: %v", err)
 	}
-	backupPath := target + ".bak-" + fakeTime.Current.Format("20060102-150405")
+	backupPath := target + ".bak-" + fakeTime.Current.Format("20060102-150405.000000000")
 	fs.OpenFileErr[filepath.Clean(backupPath)] = errors.New("disk full")
 
 	ui := &mockAgeSetupUI{
@@ -274,7 +274,7 @@ func TestRunAgeSetupWorkflow_ForceNewRecipientWriteFailurePreservesOriginalAndBa
 		t.Fatalf("err=%v; want write recipient file failure", err)
 	}
 
-	backupPath := target + ".bak-" + fakeTime.Current.Format("20060102-150405")
+	backupPath := target + ".bak-" + fakeTime.Current.Format("20060102-150405.000000000")
 	backup, readErr := fs.ReadFile(backupPath)
 	if readErr != nil {
 		t.Fatalf("ReadFile(%s): %v", backupPath, readErr)
