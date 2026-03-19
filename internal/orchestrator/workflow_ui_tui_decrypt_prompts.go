@@ -121,7 +121,7 @@ func promptNewPathInputTUI(ctx context.Context, env tuiScreenEnv, defaultPath st
 	if cancelled {
 		return "", ErrDecryptAborted
 	}
-	return filepath.Clean(newPath), nil
+	return newPath, nil
 }
 
 func validateDistinctNewPathInput(value, defaultPath string) (string, error) {
