@@ -19,9 +19,6 @@ func captureCLIStdout(t *testing.T, fn func()) (captured string) {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stdout = w
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-	})
 
 	var buf bytes.Buffer
 	done := make(chan struct{})
