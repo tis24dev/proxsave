@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -280,15 +281,18 @@ func TestWebhookNotifier_Send_Success(t *testing.T) {
 func TestWebhookNotifier_SendToEndpoint_StopsRetryingWhenContextCanceled(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 
-	attempts := 0
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if attempts == 1 {
-			cancel()
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"temporary"}`))
+			time.AfterFunc(10*time.Millisecond, cancel)
+			return
 		}
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"temporary"}`))
+		_, _ = w.Write([]byte(`{"error":"temporary"}`))
 	}))
 	defer server.Close()
 
@@ -297,7 +301,7 @@ func TestWebhookNotifier_SendToEndpoint_StopsRetryingWhenContextCanceled(t *test
 		DefaultFormat: "generic",
 		Timeout:       30,
 		MaxRetries:    3,
-		RetryDelay:    0,
+		RetryDelay:    1,
 		Endpoints: []config.WebhookEndpoint{
 			{
 				Name:   "test-webhook",
@@ -318,8 +322,8 @@ func TestWebhookNotifier_SendToEndpoint_StopsRetryingWhenContextCanceled(t *test
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation error, got %v", err)
 	}
-	if attempts != 1 {
-		t.Fatalf("expected 1 attempt after cancellation, got %d", attempts)
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected 1 attempt after cancellation, got %d", got)
 	}
 }
 
