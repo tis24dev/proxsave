@@ -264,6 +264,8 @@ func TestExtendPath(t *testing.T) {
 
 // TestExtendPathIdempotent tests that extendPath doesn't duplicate paths
 func TestExtendPathIdempotent(t *testing.T) {
+	t.Setenv("PATH", "")
+
 	// Call extendPath twice
 	extendPath()
 	pathAfterFirst := os.Getenv("PATH")
