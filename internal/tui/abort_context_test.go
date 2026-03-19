@@ -11,7 +11,7 @@ import (
 	"github.com/rivo/tview"
 )
 
-func newSimulationApp(t *testing.T) (*App, tcell.SimulationScreen) {
+func newSimulationApp(t *testing.T) (*App, tcell.SimulationScreen, <-chan struct{}) {
 	t.Helper()
 	screen := tcell.NewSimulationScreen("UTF-8")
 	if err := screen.Init(); err != nil {
@@ -19,9 +19,16 @@ func newSimulationApp(t *testing.T) (*App, tcell.SimulationScreen) {
 	}
 
 	app := NewApp()
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	app.SetAfterDrawFunc(func(screen tcell.Screen) {
+		startedOnce.Do(func() {
+			close(started)
+		})
+	})
 	app.SetScreen(screen)
 	app.SetRoot(tview.NewBox(), true)
-	return app, screen
+	return app, screen, started
 }
 
 func TestSetAbortContext_GetAbortContextRoundTrip(t *testing.T) {
@@ -127,33 +134,75 @@ func TestAppRunWithContext_NilReceiverReturnsNil(t *testing.T) {
 }
 
 func TestAppRunWithContext_NilContextRunsUntilStopped(t *testing.T) {
-	app, _ := newSimulationApp(t)
+	app, _, started := newSimulationApp(t)
+	done := make(chan error, 1)
 
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		app.Stop()
+		done <- app.RunWithContext(nil)
 	}()
 
-	if err := app.RunWithContext(nil); err != nil {
-		t.Fatalf("err=%v want nil", err)
+	select {
+	case err := <-done:
+		t.Fatalf("RunWithContext(nil) returned before app started: %v", err)
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for app to start")
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("RunWithContext(nil) returned before Stop: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	app.Stop()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("err=%v want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for RunWithContext(nil) to return after Stop")
 	}
 }
 
 func TestAppRunWithContext_ReturnsNilWhenStoppedWithoutCancellation(t *testing.T) {
-	app, _ := newSimulationApp(t)
+	app, _, started := newSimulationApp(t)
+	done := make(chan error, 1)
 
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		app.Stop()
+		done <- app.RunWithContext(context.Background())
 	}()
 
-	if err := app.RunWithContext(context.Background()); err != nil {
-		t.Fatalf("err=%v want nil", err)
+	select {
+	case err := <-done:
+		t.Fatalf("RunWithContext(context.Background()) returned before app started: %v", err)
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for app to start")
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("RunWithContext(context.Background()) returned before Stop: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	app.Stop()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("err=%v want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for RunWithContext(context.Background()) to return after Stop")
 	}
 }
 
 func TestAppRunWithContext_StopsOnCancel(t *testing.T) {
-	app, _ := newSimulationApp(t)
+	app, _, _ := newSimulationApp(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -167,7 +216,7 @@ func TestAppRunWithContext_StopsOnCancel(t *testing.T) {
 }
 
 func TestAppRunWithContext_PropagatesRunErrorWithoutCancellation(t *testing.T) {
-	app, _ := newSimulationApp(t)
+	app, _, _ := newSimulationApp(t)
 	runErr := errors.New("run failed")
 	eventErr := tcell.NewEventError(runErr)
 
@@ -182,7 +231,7 @@ func TestAppRunWithContext_PropagatesRunErrorWithoutCancellation(t *testing.T) {
 }
 
 func TestAppRunWithContext_PrefersContextErrorWhenCanceledDuringRunError(t *testing.T) {
-	app, _ := newSimulationApp(t)
+	app, _, _ := newSimulationApp(t)
 	runErr := errors.New("run failed")
 
 	var stopOnce sync.Once
