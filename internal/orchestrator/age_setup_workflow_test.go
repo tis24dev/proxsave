@@ -81,6 +81,20 @@ func TestEnsureAgeRecipientsReadyWithUI_ConfiguresRecipientsWithoutTTY(t *testin
 	}
 }
 
+func TestMapAgeSetupAbort_NormalizesAbortSignals(t *testing.T) {
+	if !errors.Is(mapAgeSetupAbort(context.Canceled), ErrAgeRecipientSetupAborted) {
+		t.Fatalf("expected context.Canceled to normalize to %v", ErrAgeRecipientSetupAborted)
+	}
+	if !errors.Is(mapAgeSetupAbort(ErrAgeRecipientSetupAborted), ErrAgeRecipientSetupAborted) {
+		t.Fatalf("expected ErrAgeRecipientSetupAborted to remain normalized")
+	}
+
+	sentinel := errors.New("boom")
+	if got := mapAgeSetupAbort(sentinel); got != sentinel {
+		t.Fatalf("expected non-abort error passthrough, got %v", got)
+	}
+}
+
 func TestEnsureAgeRecipientsReadyWithUI_ForceNewRecipientDeclineReturnsAbort(t *testing.T) {
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "identity", "age", "recipient.txt")

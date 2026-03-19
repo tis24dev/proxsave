@@ -246,8 +246,9 @@ func mapAgeSetupAbort(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrAgeRecipientSetupAborted) {
+	mapped := mapInputAbortToAgeAbort(err)
+	if errors.Is(mapped, ErrAgeRecipientSetupAborted) {
 		return ErrAgeRecipientSetupAborted
 	}
-	return err
+	return mapped
 }
