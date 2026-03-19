@@ -813,11 +813,13 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 	page := buildRestoreWizardPage(title, configPath, buildSig, content)
 	form.SetParentView(page)
 
-	stopCh := make(chan struct{})
-	defer close(stopCh)
+	stopTicker := func() {}
 
 	if timeout > 0 {
+		stopCh := make(chan struct{})
+		done := make(chan struct{})
 		go func() {
+			defer close(done)
 			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -832,14 +834,25 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 						app.Stop()
 						return
 					}
+					select {
+					case <-stopCh:
+						return
+					default:
+					}
 					app.QueueUpdateDraw(func() { updateCountdown() })
 				}
 			}
 		}()
+		stopTicker = func() {
+			close(stopCh)
+			<-done
+		}
 	}
 
 	app.SetRoot(page, true).SetFocus(form.Form)
-	if err := app.RunWithContext(ctx); err != nil {
+	err := app.RunWithContext(ctx)
+	stopTicker()
+	if err != nil {
 		return false, err
 	}
 	if timedOut {
