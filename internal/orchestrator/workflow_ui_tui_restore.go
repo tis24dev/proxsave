@@ -14,31 +14,31 @@ import (
 )
 
 func (u *tuiWorkflowUI) SelectRestoreMode(ctx context.Context, systemType SystemType) (RestoreMode, error) {
-	return selectRestoreModeTUI(systemType, u.configPath, u.buildSig, strings.TrimSpace(u.selectedBackupSummary))
+	return selectRestoreModeTUI(ctx, systemType, u.configPath, u.buildSig, strings.TrimSpace(u.selectedBackupSummary))
 }
 
 func (u *tuiWorkflowUI) SelectCategories(ctx context.Context, available []Category, systemType SystemType) ([]Category, error) {
-	return selectCategoriesTUI(available, systemType, u.configPath, u.buildSig)
+	return selectCategoriesTUI(ctx, available, systemType, u.configPath, u.buildSig)
 }
 
 func (u *tuiWorkflowUI) SelectPBSRestoreBehavior(ctx context.Context) (PBSRestoreBehavior, error) {
-	return selectPBSRestoreBehaviorTUI(u.configPath, u.buildSig, strings.TrimSpace(u.selectedBackupSummary))
+	return selectPBSRestoreBehaviorTUI(ctx, u.configPath, u.buildSig, strings.TrimSpace(u.selectedBackupSummary))
 }
 
 func (u *tuiWorkflowUI) ShowRestorePlan(ctx context.Context, config *SelectiveRestoreConfig) error {
-	return showRestorePlanTUI(config, u.configPath, u.buildSig)
+	return showRestorePlanTUI(ctx, config, u.configPath, u.buildSig)
 }
 
 func (u *tuiWorkflowUI) ConfirmRestore(ctx context.Context) (bool, error) {
-	return confirmRestoreTUI(u.configPath, u.buildSig)
+	return confirmRestoreTUI(ctx, u.configPath, u.buildSig)
 }
 
 func (u *tuiWorkflowUI) ConfirmCompatibility(ctx context.Context, warning error) (bool, error) {
-	return promptCompatibilityTUI(u.configPath, u.buildSig, warning)
+	return promptCompatibilityTUI(ctx, u.configPath, u.buildSig, warning)
 }
 
 func (u *tuiWorkflowUI) SelectClusterRestoreMode(ctx context.Context) (ClusterRestoreMode, error) {
-	choice, err := promptClusterRestoreModeTUI(u.configPath, u.buildSig)
+	choice, err := promptClusterRestoreModeTUI(ctx, u.configPath, u.buildSig)
 	if err != nil {
 		return ClusterRestoreAbort, err
 	}
@@ -53,11 +53,11 @@ func (u *tuiWorkflowUI) SelectClusterRestoreMode(ctx context.Context) (ClusterRe
 }
 
 func (u *tuiWorkflowUI) ConfirmContinueWithoutSafetyBackup(ctx context.Context, cause error) (bool, error) {
-	return promptContinueWithoutSafetyBackupTUI(u.configPath, u.buildSig, cause)
+	return promptContinueWithoutSafetyBackupTUI(ctx, u.configPath, u.buildSig, cause)
 }
 
 func (u *tuiWorkflowUI) ConfirmContinueWithPBSServicesRunning(ctx context.Context) (bool, error) {
-	return promptContinueWithPBSServicesTUI(u.configPath, u.buildSig)
+	return promptContinueWithPBSServicesTUI(ctx, u.configPath, u.buildSig)
 }
 
 func (u *tuiWorkflowUI) ConfirmFstabMerge(ctx context.Context, title, message string, timeout time.Duration, defaultYes bool) (bool, error) {
@@ -121,7 +121,8 @@ func (u *tuiWorkflowUI) SelectExportNode(ctx context.Context, exportRoot, curren
 	page := u.buildPage("Select export node", u.configPath, u.buildSig, form.Form)
 	form.SetParentView(page)
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return "", err
 	}
 	if cancelled {
@@ -139,15 +140,15 @@ func (u *tuiWorkflowUI) ConfirmApplyVMConfigs(ctx context.Context, sourceNode, c
 	} else {
 		message = fmt.Sprintf("Found %d VM/CT configs for exported node %s.\nThey will be applied to current node %s.\n\nApply them via pvesh now?", count, sourceNode, currentNode)
 	}
-	return promptYesNoTUIFunc("Apply VM/CT configs", u.configPath, u.buildSig, message, "Apply via API", "Skip")
+	return promptYesNoTUIFunc(ctx, "Apply VM/CT configs", u.configPath, u.buildSig, message, "Apply via API", "Skip")
 }
 
 func (u *tuiWorkflowUI) ConfirmApplyStorageCfg(ctx context.Context, storageCfgPath string) (bool, error) {
 	message := fmt.Sprintf("Storage configuration found:\n\n%s\n\nApply storage.cfg via pvesh now?", strings.TrimSpace(storageCfgPath))
-	return promptYesNoTUIFunc("Apply storage.cfg", u.configPath, u.buildSig, message, "Apply via API", "Skip")
+	return promptYesNoTUIFunc(ctx, "Apply storage.cfg", u.configPath, u.buildSig, message, "Apply via API", "Skip")
 }
 
 func (u *tuiWorkflowUI) ConfirmApplyDatacenterCfg(ctx context.Context, datacenterCfgPath string) (bool, error) {
 	message := fmt.Sprintf("Datacenter configuration found:\n\n%s\n\nApply datacenter.cfg via pvesh now?", strings.TrimSpace(datacenterCfgPath))
-	return promptYesNoTUIFunc("Apply datacenter.cfg", u.configPath, u.buildSig, message, "Apply via API", "Skip")
+	return promptYesNoTUIFunc(ctx, "Apply datacenter.cfg", u.configPath, u.buildSig, message, "Apply via API", "Skip")
 }

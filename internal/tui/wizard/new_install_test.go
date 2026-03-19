@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -55,7 +56,7 @@ func TestConfirmNewInstallContinue(t *testing.T) {
 	originalRunner := confirmNewInstallRunner
 	defer func() { confirmNewInstallRunner = originalRunner }()
 
-	confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		done := extractModalDone(focus.(*tview.Modal))
 		done(0, "Continue")
 		return nil
@@ -74,7 +75,7 @@ func TestConfirmNewInstallCancel(t *testing.T) {
 	originalRunner := confirmNewInstallRunner
 	defer func() { confirmNewInstallRunner = originalRunner }()
 
-	confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		done := extractModalDone(focus.(*tview.Modal))
 		done(1, "Cancel")
 		return nil
@@ -94,7 +95,7 @@ func TestConfirmNewInstallMessageIncludesBaseDir(t *testing.T) {
 	defer func() { confirmNewInstallRunner = originalRunner }()
 
 	var captured string
-	confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		captured = extractModalText(focus.(*tview.Modal))
 		return nil
 	}
@@ -113,7 +114,7 @@ func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
 	defer func() { confirmNewInstallRunner = originalRunner }()
 
 	var captured string
-	confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		captured = extractModalText(focus.(*tview.Modal))
 		return nil
 	}
@@ -132,7 +133,7 @@ func TestConfirmNewInstallPropagatesRunnerError(t *testing.T) {
 	defer func() { confirmNewInstallRunner = originalRunner }()
 
 	expectedErr := errors.New("runner failed")
-	confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		return expectedErr
 	}
 

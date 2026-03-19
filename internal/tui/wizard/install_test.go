@@ -298,7 +298,7 @@ func TestCheckExistingConfigActions(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
+			checkExistingConfigRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 				done := extractModalDone(focus.(*tview.Modal))
 				done(0, tc.button)
 				return nil
@@ -348,7 +348,7 @@ func TestCheckExistingConfigPropagatesRunnerErrors(t *testing.T) {
 	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
 
 	expectedErr := errors.New("ui runner failure")
-	checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	checkExistingConfigRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		return expectedErr
 	}
 

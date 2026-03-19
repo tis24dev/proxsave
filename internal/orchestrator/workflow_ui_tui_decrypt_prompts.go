@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -19,47 +18,6 @@ var (
 	tuiPromptNewPathInput         = promptNewPathInputTUI
 	tuiPromptDecryptSecret        = promptDecryptSecretTUI
 )
-
-func runTUIAppWithContext(ctx context.Context, app *tui.App) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	done := make(chan struct{})
-	defer close(done)
-
-	var state atomic.Int32
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			if state.CompareAndSwap(0, 1) {
-				app.Stop()
-			}
-		case <-done:
-		}
-	}()
-
-	if err := app.Run(); err != nil {
-		if state.CompareAndSwap(0, 2) {
-			return err
-		}
-		if state.Load() == 1 {
-			return ctx.Err()
-		}
-		return err
-	}
-	if state.CompareAndSwap(0, 2) {
-		return nil
-	}
-	if state.Load() == 1 {
-		return ctx.Err()
-	}
-	return nil
-}
 
 func promptExistingPathDecisionTUI(ctx context.Context, env tuiScreenEnv, path, description, failureMessage string) (ExistingPathDecision, string, error) {
 	app := newTUIApp()
@@ -99,7 +57,7 @@ func promptExistingPathDecisionTUI(ctx context.Context, env tuiScreenEnv, path, 
 
 	page := env.page("Destination path", modal)
 	app.SetRoot(page, true).SetFocus(modal)
-	if err := runTUIAppWithContext(ctx, app); err != nil {
+	if err := app.RunWithContext(ctx); err != nil {
 		return PathDecisionCancel, "", err
 	}
 	if decision != PathDecisionNewPath {
@@ -157,7 +115,7 @@ func promptNewPathInputTUI(ctx context.Context, env tuiScreenEnv, defaultPath st
 	form.SetParentView(page)
 
 	app.SetRoot(page, true).SetFocus(form.Form)
-	if err := runTUIAppWithContext(ctx, app); err != nil {
+	if err := app.RunWithContext(ctx); err != nil {
 		return "", err
 	}
 	if cancelled {
@@ -238,7 +196,7 @@ func promptDecryptSecretTUI(ctx context.Context, env tuiScreenEnv, displayName, 
 	page := env.page("Decrypt key", content)
 	form.SetParentView(page)
 	app.SetRoot(page, true).SetFocus(form.Form)
-	if err := runTUIAppWithContext(ctx, app); err != nil {
+	if err := app.RunWithContext(ctx); err != nil {
 		return "", err
 	}
 	if cancelled {

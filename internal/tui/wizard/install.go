@@ -67,8 +67,10 @@ var (
 		app.SetFocus(focus)
 		return app.RunWithContext(ctx)
 	}
-	checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		return app.SetRoot(root, true).SetFocus(focus).Run()
+	checkExistingConfigRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetRoot(root, true)
+		app.SetFocus(focus)
+		return app.RunWithContext(ctx)
 	}
 )
 
@@ -700,7 +702,7 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 			modal,
 		)
 
-		if err := checkExistingConfigRunner(app, flex, modal); err != nil {
+		if err := checkExistingConfigRunner(context.Background(), app, flex, modal); err != nil {
 			return ExistingConfigCancel, err
 		}
 

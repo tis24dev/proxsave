@@ -292,7 +292,7 @@ func TestPromptDecryptSecretTUI_UsesProvidedBuilder(t *testing.T) {
 func TestSelectRestoreModeTUI_SelectsStorage(t *testing.T) {
 	withSimApp(t, []tcell.Key{tcell.KeyDown, tcell.KeyEnter})
 
-	mode, err := selectRestoreModeTUI(SystemTypePVE, "/tmp/config.env", "sig", "backup")
+	mode, err := selectRestoreModeTUI(context.Background(), SystemTypePVE, "/tmp/config.env", "sig", "backup")
 	if err != nil {
 		t.Fatalf("selectRestoreModeTUI error: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestSelectRestoreModeTUI_SelectsStorage(t *testing.T) {
 func TestPromptClusterRestoreModeTUI_SelectsRecovery(t *testing.T) {
 	withSimApp(t, []tcell.Key{tcell.KeyDown, tcell.KeyEnter})
 
-	choice, err := promptClusterRestoreModeTUI("/tmp/config.env", "sig")
+	choice, err := promptClusterRestoreModeTUI(context.Background(), "/tmp/config.env", "sig")
 	if err != nil {
 		t.Fatalf("promptClusterRestoreModeTUI error: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestPromptClusterRestoreModeTUI_CancelAborts(t *testing.T) {
 	// Switch focus to the Cancel button then submit.
 	withSimApp(t, []tcell.Key{tcell.KeyTab, tcell.KeyEnter})
 
-	_, err := promptClusterRestoreModeTUI("/tmp/config.env", "sig")
+	_, err := promptClusterRestoreModeTUI(context.Background(), "/tmp/config.env", "sig")
 	if err == nil {
 		t.Fatalf("expected abort error")
 	}

@@ -106,7 +106,8 @@ func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 		})
 	}()
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(taskCtx); err != nil {
 		cancel()
 		<-done
 		return err
@@ -118,14 +119,14 @@ func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 }
 
 func (u *tuiWorkflowUI) ShowMessage(ctx context.Context, title, message string) error {
-	return u.showOKModal(title, message, tui.ProxmoxOrange)
+	return u.showOKModal(ctx, title, message, tui.ProxmoxOrange)
 }
 
 func (u *tuiWorkflowUI) ShowError(ctx context.Context, title, message string) error {
-	return u.showOKModal(title, fmt.Sprintf("%s %s", tui.SymbolError, message), tui.ErrorRed)
+	return u.showOKModal(ctx, title, fmt.Sprintf("%s %s", tui.SymbolError, message), tui.ErrorRed)
 }
 
-func (u *tuiWorkflowUI) showOKModal(title, message string, borderColor tcell.Color) error {
+func (u *tuiWorkflowUI) showOKModal(ctx context.Context, title, message string, borderColor tcell.Color) error {
 	app := newTUIApp()
 
 	modal := tview.NewModal().
@@ -143,7 +144,8 @@ func (u *tuiWorkflowUI) showOKModal(title, message string, borderColor tcell.Col
 		SetBackgroundColor(tcell.ColorBlack)
 
 	page := u.buildPage(title, u.configPath, u.buildSig, modal)
-	return app.SetRoot(page, true).SetFocus(modal).Run()
+	app.SetRoot(page, true).SetFocus(modal)
+	return app.RunWithContext(ctx)
 }
 
 func (u *tuiWorkflowUI) SelectBackupSource(ctx context.Context, options []decryptPathOption) (decryptPathOption, error) {
@@ -197,7 +199,8 @@ func (u *tuiWorkflowUI) SelectBackupSource(ctx context.Context, options []decryp
 
 	page := u.buildPage("Select backup source", u.configPath, u.buildSig, form.Form)
 	form.SetParentView(page)
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return decryptPathOption{}, err
 	}
 	if aborted || strings.TrimSpace(selected.Path) == "" {
@@ -332,7 +335,8 @@ func (u *tuiWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []
 
 	page := u.buildPage("Select backup", u.configPath, u.buildSig, form.Form)
 	form.SetParentView(page)
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return nil, err
 	}
 	if aborted || selected == nil {
@@ -374,7 +378,8 @@ func (u *tuiWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir str
 
 	page := u.buildPage("Destination directory", u.configPath, u.buildSig, form.Form)
 	form.SetParentView(page)
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return "", err
 	}
 	if cancelled {

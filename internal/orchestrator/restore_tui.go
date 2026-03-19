@@ -50,7 +50,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	return nil
 }
 
-func selectRestoreModeTUI(systemType SystemType, configPath, buildSig, backupSummary string) (RestoreMode, error) {
+func selectRestoreModeTUI(ctx context.Context, systemType SystemType, configPath, buildSig, backupSummary string) (RestoreMode, error) {
 	app := newTUIApp()
 	var selected RestoreMode
 	var aborted bool
@@ -134,7 +134,7 @@ func selectRestoreModeTUI(systemType SystemType, configPath, buildSig, backupSum
 
 	page := buildRestoreWizardPage("Select restore mode", configPath, buildSig, content)
 	app.SetRoot(page, true).SetFocus(form.Form)
-	if err := app.Run(); err != nil {
+	if err := app.RunWithContext(ctx); err != nil {
 		return "", err
 	}
 	if aborted || selected == "" {
@@ -143,7 +143,7 @@ func selectRestoreModeTUI(systemType SystemType, configPath, buildSig, backupSum
 	return selected, nil
 }
 
-func selectPBSRestoreBehaviorTUI(configPath, buildSig, backupSummary string) (PBSRestoreBehavior, error) {
+func selectPBSRestoreBehaviorTUI(ctx context.Context, configPath, buildSig, backupSummary string) (PBSRestoreBehavior, error) {
 	app := newTUIApp()
 	var selected PBSRestoreBehavior
 	var aborted bool
@@ -218,7 +218,7 @@ func selectPBSRestoreBehaviorTUI(configPath, buildSig, backupSummary string) (PB
 
 	page := buildRestoreWizardPage("PBS restore behavior", configPath, buildSig, content)
 	app.SetRoot(page, true).SetFocus(form.Form)
-	if err := app.Run(); err != nil {
+	if err := app.RunWithContext(ctx); err != nil {
 		return PBSRestoreBehaviorUnspecified, err
 	}
 	if aborted || selected == PBSRestoreBehaviorUnspecified {
@@ -253,7 +253,7 @@ func filterAndSortCategoriesForSystem(available []Category, systemType SystemTyp
 	return relevant
 }
 
-func selectCategoriesTUI(available []Category, systemType SystemType, configPath, buildSig string) ([]Category, error) {
+func selectCategoriesTUI(ctx context.Context, available []Category, systemType SystemType, configPath, buildSig string) ([]Category, error) {
 	relevant := filterAndSortCategoriesForSystem(available, systemType)
 
 	if len(relevant) == 0 {
@@ -345,7 +345,8 @@ func selectCategoriesTUI(available []Category, systemType SystemType, configPath
 	page := buildRestoreWizardPage("Select restore categories", configPath, buildSig, content)
 	form.SetParentView(page)
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return nil, err
 	}
 	if goBack {
@@ -360,9 +361,10 @@ func selectCategoriesTUI(available []Category, systemType SystemType, configPath
 	return chosen, nil
 }
 
-func promptCompatibilityTUI(configPath, buildSig string, compatErr error) (bool, error) {
+func promptCompatibilityTUI(ctx context.Context, configPath, buildSig string, compatErr error) (bool, error) {
 	message := fmt.Sprintf("Compatibility check reported:\n\n[red]%v[white]\n\nContinuing may cause system instability.\n\nDo you want to continue anyway?", compatErr)
 	return promptYesNoTUIFunc(
+		ctx,
 		"Compatibility warning",
 		configPath,
 		buildSig,
@@ -372,9 +374,10 @@ func promptCompatibilityTUI(configPath, buildSig string, compatErr error) (bool,
 	)
 }
 
-func promptContinueWithoutSafetyBackupTUI(configPath, buildSig string, cause error) (bool, error) {
+func promptContinueWithoutSafetyBackupTUI(ctx context.Context, configPath, buildSig string, cause error) (bool, error) {
 	message := fmt.Sprintf("Failed to create safety backup:\n\n[red]%v[white]\n\nWithout a safety backup, it will be harder to rollback changes.\n\nContinue without safety backup?", cause)
 	return promptYesNoTUIFunc(
+		ctx,
 		"Safety backup failed",
 		configPath,
 		buildSig,
@@ -384,9 +387,10 @@ func promptContinueWithoutSafetyBackupTUI(configPath, buildSig string, cause err
 	)
 }
 
-func promptContinueWithPBSServicesTUI(configPath, buildSig string) (bool, error) {
+func promptContinueWithPBSServicesTUI(ctx context.Context, configPath, buildSig string) (bool, error) {
 	message := "Unable to stop Proxmox Backup Server services automatically.\n\nContinuing the restore while services are running may lead to inconsistent state.\n\nContinue restore with PBS services still running?"
 	return promptYesNoTUIFunc(
+		ctx,
 		"PBS services running",
 		configPath,
 		buildSig,
@@ -432,6 +436,7 @@ func maybeRepairNICNamesTUI(ctx context.Context, logger *logging.Logger, archive
 			b.WriteString("Skip NIC name repair and keep restored interface names?")
 
 			skip, err := promptYesNoTUIFunc(
+				ctx,
 				"NIC naming overrides",
 				configPath,
 				buildSig,
@@ -471,6 +476,7 @@ func maybeRepairNICNamesTUI(ctx context.Context, logger *logging.Logger, archive
 		b.WriteString("\nApply NIC rename mapping even for conflicts?")
 
 		ok, err := promptYesNoTUIFunc(
+			ctx,
 			"NIC name conflicts",
 			configPath,
 			buildSig,
@@ -498,7 +504,7 @@ func maybeRepairNICNamesTUI(ctx context.Context, logger *logging.Logger, archive
 	return result
 }
 
-func promptClusterRestoreModeTUI(configPath, buildSig string) (int, error) {
+func promptClusterRestoreModeTUI(ctx context.Context, configPath, buildSig string) (int, error) {
 	app := newTUIApp()
 	var choice int
 	var aborted bool
@@ -545,7 +551,7 @@ func promptClusterRestoreModeTUI(configPath, buildSig string) (int, error) {
 
 	page := buildRestoreWizardPage("Cluster restore mode", configPath, buildSig, form.Form)
 	app.SetRoot(page, true).SetFocus(form.Form)
-	if err := app.Run(); err != nil {
+	if err := app.RunWithContext(ctx); err != nil {
 		return 0, err
 	}
 	if aborted {
@@ -612,7 +618,7 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 	return b.String()
 }
 
-func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig string) error {
+func showRestorePlanTUI(ctx context.Context, config *SelectiveRestoreConfig, configPath, buildSig string) error {
 	if config == nil {
 		return fmt.Errorf("restore configuration not available")
 	}
@@ -648,7 +654,8 @@ func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig str
 	page := buildRestoreWizardPage("Restore plan", configPath, buildSig, content)
 	form.SetParentView(page)
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return err
 	}
 	if aborted || !proceed {
@@ -657,7 +664,7 @@ func showRestorePlanTUI(config *SelectiveRestoreConfig, configPath, buildSig str
 	return nil
 }
 
-func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
+func confirmRestoreTUI(ctx context.Context, configPath, buildSig string) (bool, error) {
 	app := newTUIApp()
 	var confirmed bool
 	var aborted bool
@@ -689,7 +696,8 @@ func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
 	page := buildRestoreWizardPage("Confirm restore", configPath, buildSig, content)
 	form.SetParentView(page)
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return false, err
 	}
 	if aborted {
@@ -699,7 +707,7 @@ func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
 		return false, ErrRestoreAborted
 	}
 	// Second-stage explicit overwrite confirmation
-	ok, err := confirmOverwriteTUI(configPath, buildSig)
+	ok, err := confirmOverwriteTUI(ctx, configPath, buildSig)
 	if err != nil {
 		return false, err
 	}
@@ -709,7 +717,7 @@ func confirmRestoreTUI(configPath, buildSig string) (bool, error) {
 	return true, nil
 }
 
-func promptYesNoTUI(title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+func promptYesNoTUI(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
 	app := newTUIApp()
 	var result bool
 	var cancelled bool
@@ -740,7 +748,8 @@ func promptYesNoTUI(title, configPath, buildSig, message, yesLabel, noLabel stri
 	page := buildRestoreWizardPage(title, configPath, buildSig, content)
 	form.SetParentView(page)
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return false, err
 	}
 	if cancelled {
@@ -809,10 +818,6 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 				select {
 				case <-stopCh:
 					return
-				case <-ctx.Done():
-					cancelled = true
-					app.Stop()
-					return
 				case <-ticker.C:
 					left := time.Until(deadline)
 					if left <= 0 {
@@ -827,7 +832,8 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 		}()
 	}
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return false, err
 	}
 	if timedOut {
@@ -840,7 +846,7 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 	return result, nil
 }
 
-func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir, configPath, buildSig string) (bool, error) {
+func promptNetworkCommitTUI(ctx context.Context, timeout time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir, configPath, buildSig string) (bool, error) {
 	app := newTUIApp()
 	var committed bool
 	var cancelled bool
@@ -983,7 +989,8 @@ func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, n
 		}
 	}()
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		close(stopCh)
 		ticker.Stop()
 		return false, err
@@ -998,9 +1005,10 @@ func promptNetworkCommitTUI(timeout time.Duration, health networkHealthReport, n
 	return committed, nil
 }
 
-func confirmOverwriteTUI(configPath, buildSig string) (bool, error) {
+func confirmOverwriteTUI(ctx context.Context, configPath, buildSig string) (bool, error) {
 	message := "This operation will overwrite existing configuration files on this system.\n\nAre you sure you want to proceed with the restore?"
 	return promptYesNoTUIFunc(
+		ctx,
 		"Confirm overwrite",
 		configPath,
 		buildSig,

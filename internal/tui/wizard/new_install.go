@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -10,8 +11,10 @@ import (
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
-var confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
-	return app.SetRoot(root, true).SetFocus(focus).Run()
+var confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+	app.SetRoot(root, true)
+	app.SetFocus(focus)
+	return app.RunWithContext(ctx)
 }
 
 func formatPreservedEntries(entries []string) string {
@@ -69,7 +72,7 @@ func ConfirmNewInstall(baseDir string, buildSig string, preservedEntries []strin
 		modal,
 	)
 
-	if err := confirmNewInstallRunner(app, flex, modal); err != nil {
+	if err := confirmNewInstallRunner(context.Background(), app, flex, modal); err != nil {
 		return false, err
 	}
 
