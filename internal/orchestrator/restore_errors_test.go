@@ -671,6 +671,45 @@ func TestExtractDirectory_WithTimestamps(t *testing.T) {
 	}
 }
 
+func TestExtractDirectory_AppliesRestrictiveModeAfterOpen(t *testing.T) {
+	orig := restoreFS
+	t.Cleanup(func() { restoreFS = orig })
+	restoreFS = osFS{}
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	destRoot := t.TempDir()
+	target := filepath.Join(destRoot, "locked")
+	t.Cleanup(func() {
+		if err := os.Chmod(target, 0o700); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("restore directory permissions for cleanup: %v", err)
+		}
+	})
+
+	header := &tar.Header{
+		Name:       "locked",
+		Mode:       0,
+		Uid:        os.Getuid(),
+		Gid:        os.Getgid(),
+		ModTime:    time.Date(2023, 6, 15, 12, 0, 0, 0, time.UTC),
+		AccessTime: time.Date(2023, 6, 15, 12, 0, 0, 0, time.UTC),
+	}
+
+	if err := extractDirectory(target, header, logger); err != nil {
+		t.Fatalf("extractDirectory failed with restrictive mode: %v", err)
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected directory")
+	}
+	if info.Mode().Perm() != 0 {
+		t.Fatalf("directory mode = %o, want %o", info.Mode().Perm(), 0)
+	}
+}
+
 // --------------------------------------------------------------------------
 // resetFailedService test
 // --------------------------------------------------------------------------

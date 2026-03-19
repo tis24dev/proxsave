@@ -1577,7 +1577,9 @@ func extractTarEntry(tarReader *tar.Reader, header *tar.Header, destRoot string,
 
 // extractDirectory creates a directory with proper permissions and timestamps
 func extractDirectory(target string, header *tar.Header, logger *logging.Logger) (retErr error) {
-	if err := restoreFS.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+	// Create with an owner-accessible mode first so the directory can be opened
+	// before applying restrictive archive permissions.
+	if err := restoreFS.MkdirAll(target, 0o700); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
