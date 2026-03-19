@@ -316,6 +316,33 @@ func TestCloudStorageUploadWithRetryEventuallySucceeds(t *testing.T) {
 	}
 }
 
+func TestCloudStorageUploadWithRetryNilWaitForRetryIsNoOp(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:           true,
+		CloudRemote:            "remote",
+		RcloneRetries:          2,
+		RcloneTimeoutOperation: 5,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", err: errors.New("copy failed")},
+			{name: "rclone", out: "ok"},
+		},
+	}
+	cs.execCommand = queue.exec
+	cs.waitForRetry = nil
+
+	if err := cs.uploadWithRetry(context.Background(), "/tmp/local.tar", "remote:local.tar"); err != nil {
+		t.Fatalf("uploadWithRetry() error = %v", err)
+	}
+	if len(queue.calls) != 2 {
+		t.Fatalf("expected 2 upload attempts, got %d", len(queue.calls))
+	}
+}
+
 func TestCloudStorageUploadWithRetryUsesCappedBackoff(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:           true,
@@ -1248,6 +1275,33 @@ func TestCloudStorageCheckWithNetworkErrorNoFallback(t *testing.T) {
 	}
 	if waits[0] != 2*time.Second || waits[1] != 4*time.Second {
 		t.Fatalf("unexpected backoff waits: got %v", waits)
+	}
+}
+
+func TestCloudStorageCheckRemoteAccessibleNilWaitForRetryIsNoOp(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "remote",
+		CloudWriteHealthCheck:   false,
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", err: errors.New("exit 1"), out: "dial tcp: connection refused"},
+			{name: "rclone", out: "ok"},
+		},
+	}
+	cs.execCommand = queue.exec
+	cs.waitForRetry = nil
+
+	if err := cs.checkRemoteAccessible(context.Background()); err != nil {
+		t.Fatalf("checkRemoteAccessible() error = %v", err)
+	}
+	if len(queue.calls) != 2 {
+		t.Fatalf("expected 2 remote check attempts, got %d", len(queue.calls))
 	}
 }
 

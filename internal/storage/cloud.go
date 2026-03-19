@@ -377,7 +377,7 @@ func (c *CloudStorage) checkRemoteAccessible(ctx context.Context) error {
 			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Cloud remote check attempt %d/%d failed: %v (retrying in %v)",
 				attempt, maxAttempts, err, waitTime)
-			if err := c.waitForRetry(timeoutCtx, waitTime); err != nil {
+			if err := c.callWaitForRetry(timeoutCtx, waitTime); err != nil {
 				if parentErr := ctx.Err(); parentErr != nil {
 					return parentErr
 				}
@@ -797,7 +797,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		if attempt < c.config.RcloneRetries {
 			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Waiting %v before retry...", waitTime)
-			if err := c.waitForRetry(ctx, waitTime); err != nil {
+			if err := c.callWaitForRetry(ctx, waitTime); err != nil {
 				return err
 			}
 		}
@@ -1763,6 +1763,13 @@ func (c *CloudStorage) exec(ctx context.Context, name string, args ...string) ([
 		return c.execCommand(ctx, name, args...)
 	}
 	return defaultExecCommand(ctx, name, args...)
+}
+
+func (c *CloudStorage) callWaitForRetry(ctx context.Context, d time.Duration) error {
+	if c.waitForRetry != nil {
+		return c.waitForRetry(ctx, d)
+	}
+	return nil
 }
 
 func defaultExecCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
