@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func captureCLIStdout(t *testing.T, fn func()) string {
+func captureCLIStdout(t *testing.T, fn func()) (captured string) {
 	t.Helper()
 
 	oldStdout := os.Stdout
@@ -29,15 +29,16 @@ func captureCLIStdout(t *testing.T, fn func()) string {
 		_, _ = io.Copy(&buf, r)
 		close(done)
 	}()
+	defer func() {
+		os.Stdout = oldStdout
+		_ = w.Close()
+		<-done
+		_ = r.Close()
+		captured = buf.String()
+	}()
 
 	fn()
-
-	_ = w.Close()
-	<-done
-	_ = r.Close()
-
-	os.Stdout = oldStdout
-	return buf.String()
+	return
 }
 
 func TestCLIWorkflowUIResolveExistingPath_RejectsEquivalentNormalizedPath(t *testing.T) {
