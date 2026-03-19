@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 
 	"github.com/tis24dev/proxsave/internal/tui"
 )
@@ -76,7 +77,8 @@ func withSimApp(t *testing.T, keys []tcell.Key) <-chan struct{} {
 func TestPromptOverwriteAction_SelectsOverwrite(t *testing.T) {
 	withSimApp(t, []tcell.Key{tcell.KeyEnter})
 
-	decision, newPath, err := promptExistingPathDecisionTUI(context.Background(), "/tmp/existing", "file", "", "/tmp/config.env", "sig")
+	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
+	decision, newPath, err := promptExistingPathDecisionTUI(context.Background(), ui.screenEnv(), "/tmp/existing", "file", "")
 	if err != nil {
 		t.Fatalf("promptExistingPathDecisionTUI error: %v", err)
 	}
@@ -98,12 +100,55 @@ func TestPromptNewPathInput_ContinueReturnsEditedPath(t *testing.T) {
 		{Key: tcell.KeyEnter},
 	})
 
-	got, err := promptNewPathInputTUI(context.Background(), "/tmp/newpath", "/tmp/config.env", "sig")
+	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
+	got, err := promptNewPathInputTUI(context.Background(), ui.screenEnv(), "/tmp/newpath")
 	if err != nil {
 		t.Fatalf("promptNewPathInputTUI error: %v", err)
 	}
 	if got != "/tmp/newpath/alt" {
 		t.Fatalf("path=%q; want %q", got, "/tmp/newpath/alt")
+	}
+}
+
+func TestPromptNewPathInputTUI_UsesProvidedBuilder(t *testing.T) {
+	withSimAppSequence(t, []simKey{
+		{Key: tcell.KeyRune, R: '/'},
+		{Key: tcell.KeyRune, R: 'a'},
+		{Key: tcell.KeyRune, R: 'l'},
+		{Key: tcell.KeyRune, R: 't'},
+		{Key: tcell.KeyTab},
+		{Key: tcell.KeyEnter},
+	})
+
+	ui := newTUIRestoreWorkflowUI("/tmp/config.env", "sig", nil)
+	builderCalls := 0
+	var gotTitle, gotConfigPath, gotBuildSig string
+	ui.buildPage = func(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
+		builderCalls++
+		gotTitle = title
+		gotConfigPath = configPath
+		gotBuildSig = buildSig
+		return buildRestoreWizardPage(title, configPath, buildSig, content)
+	}
+
+	got, err := promptNewPathInputTUI(context.Background(), ui.screenEnv(), "/tmp/newpath")
+	if err != nil {
+		t.Fatalf("promptNewPathInputTUI error: %v", err)
+	}
+	if got != "/tmp/newpath/alt" {
+		t.Fatalf("path=%q; want %q", got, "/tmp/newpath/alt")
+	}
+	if builderCalls != 1 {
+		t.Fatalf("builderCalls=%d; want 1", builderCalls)
+	}
+	if gotTitle != "Choose destination path" {
+		t.Fatalf("title=%q; want %q", gotTitle, "Choose destination path")
+	}
+	if gotConfigPath != "/tmp/config.env" {
+		t.Fatalf("configPath=%q; want %q", gotConfigPath, "/tmp/config.env")
+	}
+	if gotBuildSig != "sig" {
+		t.Fatalf("buildSig=%q; want %q", gotBuildSig, "sig")
 	}
 }
 
@@ -116,7 +161,8 @@ func TestPromptExistingPathDecisionTUI_ContextCanceledWhileRunning(t *testing.T)
 		cancel()
 	}()
 
-	_, _, err := promptExistingPathDecisionTUI(ctx, "/tmp/existing", "file", "", "/tmp/config.env", "sig")
+	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
+	_, _, err := promptExistingPathDecisionTUI(ctx, ui.screenEnv(), "/tmp/existing", "file", "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v; want %v", err, context.Canceled)
 	}
@@ -132,7 +178,8 @@ func TestPromptExistingPathDecisionTUI_NewPathContextCanceledWhileRunning(t *tes
 		cancel()
 	}()
 
-	_, _, err := promptExistingPathDecisionTUI(ctx, "/tmp/existing", "file", "", "/tmp/config.env", "sig")
+	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
+	_, _, err := promptExistingPathDecisionTUI(ctx, ui.screenEnv(), "/tmp/existing", "file", "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v; want %v", err, context.Canceled)
 	}
@@ -147,9 +194,93 @@ func TestPromptDecryptSecretTUI_ContextCanceledWhileRunning(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := promptDecryptSecretTUI(ctx, "/tmp/config.env", "sig", "backup", "")
+	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
+	_, err := promptDecryptSecretTUI(ctx, ui.screenEnv(), "backup", "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v; want %v", err, context.Canceled)
+	}
+}
+
+func TestPromptExistingPathDecisionTUI_PassesBuilderToNestedPrompt(t *testing.T) {
+	withSimApp(t, []tcell.Key{tcell.KeyRight, tcell.KeyEnter})
+
+	ui := newTUIRestoreWorkflowUI("/tmp/config.env", "sig", nil)
+	builderCalls := 0
+	var gotTitles []string
+	var gotConfigPaths []string
+	var gotBuildSigs []string
+	ui.buildPage = func(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
+		builderCalls++
+		gotTitles = append(gotTitles, title)
+		gotConfigPaths = append(gotConfigPaths, configPath)
+		gotBuildSigs = append(gotBuildSigs, buildSig)
+		return buildRestoreWizardPage(title, configPath, buildSig, content)
+	}
+	restore := stubTUINewPathInputPrompt(func(ctx context.Context, env tuiScreenEnv, defaultPath string) (string, error) {
+		if page := env.page("Spy", tview.NewBox()); page == nil {
+			t.Fatalf("expected non-nil page")
+		}
+		return "/tmp/existing/alt", nil
+	})
+	defer restore()
+
+	decision, newPath, err := promptExistingPathDecisionTUI(context.Background(), ui.screenEnv(), "/tmp/existing", "file", "")
+	if err != nil {
+		t.Fatalf("promptExistingPathDecisionTUI error: %v", err)
+	}
+	if decision != PathDecisionNewPath {
+		t.Fatalf("decision=%v; want %v", decision, PathDecisionNewPath)
+	}
+	if newPath != "/tmp/existing/alt" {
+		t.Fatalf("newPath=%q; want %q", newPath, "/tmp/existing/alt")
+	}
+	if builderCalls != 2 {
+		t.Fatalf("builderCalls=%d; want 2", builderCalls)
+	}
+	if gotTitles[0] != "Destination path" || gotTitles[1] != "Spy" {
+		t.Fatalf("titles=%v; want %v", gotTitles, []string{"Destination path", "Spy"})
+	}
+	for i, configPath := range gotConfigPaths {
+		if configPath != "/tmp/config.env" {
+			t.Fatalf("configPath[%d]=%q; want %q", i, configPath, "/tmp/config.env")
+		}
+	}
+	for i, buildSig := range gotBuildSigs {
+		if buildSig != "sig" {
+			t.Fatalf("buildSig[%d]=%q; want %q", i, buildSig, "sig")
+		}
+	}
+}
+
+func TestPromptDecryptSecretTUI_UsesProvidedBuilder(t *testing.T) {
+	withSimApp(t, []tcell.Key{tcell.KeyTab, tcell.KeyTab, tcell.KeyEnter})
+
+	ui := newTUIRestoreWorkflowUI("/tmp/config.env", "sig", nil)
+	builderCalls := 0
+	var gotTitle, gotConfigPath, gotBuildSig string
+	ui.buildPage = func(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
+		builderCalls++
+		gotTitle = title
+		gotConfigPath = configPath
+		gotBuildSig = buildSig
+		return buildRestoreWizardPage(title, configPath, buildSig, content)
+	}
+
+	_, err := promptDecryptSecretTUI(context.Background(), ui.screenEnv(), "backup", "")
+	if err != ErrDecryptAborted {
+		t.Fatalf("err=%v; want %v", err, ErrDecryptAborted)
+	}
+	if builderCalls != 1 {
+		t.Fatalf("builderCalls=%d; want 1", builderCalls)
+	}
+	if gotTitle != "Decrypt key" {
+		t.Fatalf("title=%q; want %q", gotTitle, "Decrypt key")
+	}
+	if gotConfigPath != "/tmp/config.env" {
+		t.Fatalf("configPath=%q; want %q", gotConfigPath, "/tmp/config.env")
+	}
+	if gotBuildSig != "sig" {
+		t.Fatalf("buildSig=%q; want %q", gotBuildSig, "sig")
 	}
 }
 

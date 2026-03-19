@@ -38,36 +38,6 @@ func ConfirmNewInstall(baseDir string, buildSig string, preservedEntries []strin
 	proceed := false
 	preservedText := formatPreservedEntries(preservedEntries)
 
-	// Header text (align with main install wizard)
-	welcomeText := tview.NewTextView().
-		SetText("Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n" +
-			"This wizard will guide you through configuring your backup system for Proxmox.\n" +
-			"All settings can be changed later by editing the configuration file.").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	// Build signature line
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true)
-	buildSigText.SetBorder(false)
-
-	// Navigation instructions
-	navInstructions := tview.NewTextView().
-		SetText("[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	// Separator
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
 	// Confirmation modal
 	modal := tview.NewModal().
 		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]%s[white]\nbut deletes everything else.\n\nContinue?", baseDir, preservedText)).
@@ -86,21 +56,16 @@ func ConfirmNewInstall(baseDir string, buildSig string, preservedEntries []strin
 		SetBorderColor(tui.WarningYellow).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	// Layout
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(modal, 0, 1, true).
-		AddItem(buildSigText, 1, 0, false)
-
-	flex.SetBorder(true).
-		SetTitle(" ProxSave New Install ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
+	flex := buildWizardScreen(
+		"ProxSave New Install",
+		"Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n"+
+			"This wizard will guide you through configuring your backup system for Proxmox.\n"+
+			"All settings can be changed later by editing the configuration file.",
+		"[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled",
+		"",
+		buildSig,
+		modal,
+	)
 
 	if err := confirmNewInstallRunner(app, flex, modal); err != nil {
 		return false, err

@@ -18,7 +18,7 @@ type tuiWorkflowUI struct {
 	configPath string
 	buildSig   string
 	logger     *logging.Logger
-	buildPage  func(title, configPath, buildSig string, content tview.Primitive) tview.Primitive
+	buildPage  tuiPageBuilder
 
 	selectedBackupSummary string
 }
@@ -42,6 +42,15 @@ func newTUIRestoreWorkflowUI(configPath, buildSig string, logger *logging.Logger
 	ui := newTUIWorkflowUI(configPath, buildSig, logger)
 	ui.buildPage = buildRestoreWizardPage
 	return ui
+}
+
+func (u *tuiWorkflowUI) screenEnv() tuiScreenEnv {
+	return tuiScreenEnv{
+		configPath: u.configPath,
+		buildSig:   u.buildSig,
+		logger:     u.logger,
+		buildPage:  u.buildPage,
+	}
 }
 
 func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage string, run func(ctx context.Context, report ProgressReporter) error) error {
@@ -375,7 +384,7 @@ func (u *tuiWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir str
 }
 
 func (u *tuiWorkflowUI) ResolveExistingPath(ctx context.Context, path, description, failure string) (ExistingPathDecision, string, error) {
-	decision, newPath, err := tuiPromptExistingPathDecision(ctx, path, description, failure, u.configPath, u.buildSig)
+	decision, newPath, err := tuiPromptExistingPathDecision(ctx, u.screenEnv(), path, description, failure)
 	if err != nil {
 		return PathDecisionCancel, "", err
 	}
@@ -390,7 +399,7 @@ func (u *tuiWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 }
 
 func (u *tuiWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error) {
-	return tuiPromptDecryptSecret(ctx, u.configPath, u.buildSig, displayName, previousError)
+	return tuiPromptDecryptSecret(ctx, u.screenEnv(), displayName, previousError)
 }
 
 func backupSummaryForUI(cand *decryptCandidate) string {

@@ -56,40 +56,6 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 	app := tui.NewApp()
 	pages := tview.NewPages()
 
-	titleText := tview.NewTextView().
-		SetText("ProxSave - Telegram Setup\n\n" +
-			"Telegram notifications are enabled.\n" +
-			"Complete the bot pairing now to avoid warning noise and skipped notifications.\n").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	titleText.SetBorder(false)
-
-	nav := tview.NewTextView().
-		SetText("[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to select | ESC to exit").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	nav.SetBorder(false)
-
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
-
 	instructions := tview.NewTextView().
 		SetDynamicColors(true).
 		SetWrap(true)
@@ -262,21 +228,16 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 
 	pages.AddPage("main", body, true, true)
 
-	layout := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(titleText, 5, 0, false).
-		AddItem(nav, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(pages, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
-
-	layout.SetBorder(true).
-		SetTitle(" ProxSave ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
+	layout := buildWizardScreen(
+		"ProxSave",
+		"ProxSave - Telegram Setup\n\n"+
+			"Telegram notifications are enabled.\n"+
+			"Complete the bot pairing now to avoid warning noise and skipped notifications.\n",
+		"[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to select | ESC to exit",
+		configPath,
+		buildSig,
+		pages,
+	)
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {

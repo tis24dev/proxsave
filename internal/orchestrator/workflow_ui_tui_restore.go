@@ -118,7 +118,7 @@ func (u *tuiWorkflowUI) SelectExportNode(ctx context.Context, exportRoot, curren
 	form.AddCancelButton("Cancel")
 	enableFormNavigation(form, nil)
 
-	page := buildRestoreWizardPage("Select export node", u.configPath, u.buildSig, form.Form)
+	page := u.buildPage("Select export node", u.configPath, u.buildSig, form.Form)
 	form.SetParentView(page)
 
 	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {

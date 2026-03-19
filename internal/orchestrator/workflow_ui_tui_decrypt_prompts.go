@@ -16,6 +16,7 @@ import (
 
 var (
 	tuiPromptExistingPathDecision = promptExistingPathDecisionTUI
+	tuiPromptNewPathInput         = promptNewPathInputTUI
 	tuiPromptDecryptSecret        = promptDecryptSecretTUI
 )
 
@@ -60,7 +61,7 @@ func runTUIAppWithContext(ctx context.Context, app *tui.App) error {
 	return nil
 }
 
-func promptExistingPathDecisionTUI(ctx context.Context, path, description, failureMessage, configPath, buildSig string) (ExistingPathDecision, string, error) {
+func promptExistingPathDecisionTUI(ctx context.Context, env tuiScreenEnv, path, description, failureMessage string) (ExistingPathDecision, string, error) {
 	app := newTUIApp()
 	decision := PathDecisionCancel
 
@@ -92,7 +93,7 @@ func promptExistingPathDecisionTUI(ctx context.Context, path, description, failu
 		SetBorderColor(tui.WarningYellow).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	page := buildWizardPage("Destination path", configPath, buildSig, modal)
+	page := env.page("Destination path", modal)
 	app.SetRoot(page, true).SetFocus(modal)
 	if err := runTUIAppWithContext(ctx, app); err != nil {
 		return PathDecisionCancel, "", err
@@ -101,7 +102,7 @@ func promptExistingPathDecisionTUI(ctx context.Context, path, description, failu
 		return decision, "", nil
 	}
 
-	newPath, err := promptNewPathInputTUI(ctx, path, configPath, buildSig)
+	newPath, err := tuiPromptNewPathInput(ctx, env, path)
 	if err != nil {
 		if err == ErrDecryptAborted {
 			return PathDecisionCancel, "", nil
@@ -111,7 +112,7 @@ func promptExistingPathDecisionTUI(ctx context.Context, path, description, failu
 	return PathDecisionNewPath, filepath.Clean(newPath), nil
 }
 
-func promptNewPathInputTUI(ctx context.Context, defaultPath, configPath, buildSig string) (string, error) {
+func promptNewPathInputTUI(ctx context.Context, env tuiScreenEnv, defaultPath string) (string, error) {
 	app := newTUIApp()
 	var newPath string
 	var cancelled bool
@@ -148,7 +149,7 @@ func promptNewPathInputTUI(ctx context.Context, defaultPath, configPath, buildSi
 		AddItem(helper, 3, 0, false).
 		AddItem(form.Form, 0, 1, true)
 
-	page := buildWizardPage("Choose destination path", configPath, buildSig, content)
+	page := env.page("Choose destination path", content)
 	form.SetParentView(page)
 
 	app.SetRoot(page, true).SetFocus(form.Form)
@@ -175,7 +176,7 @@ func validateDistinctNewPathInput(value, defaultPath string) (string, error) {
 	return trimmed, nil
 }
 
-func promptDecryptSecretTUI(ctx context.Context, configPath, buildSig, displayName, previousError string) (string, error) {
+func promptDecryptSecretTUI(ctx context.Context, env tuiScreenEnv, displayName, previousError string) (string, error) {
 	app := newTUIApp()
 	var (
 		secret    string
@@ -229,7 +230,7 @@ func promptDecryptSecretTUI(ctx context.Context, configPath, buildSig, displayNa
 		AddItem(infoText, 0, 2, false).
 		AddItem(form.Form, 0, 1, true)
 
-	page := buildWizardPage("Decrypt key", configPath, buildSig, content)
+	page := env.page("Decrypt key", content)
 	form.SetParentView(page)
 	app.SetRoot(page, true).SetFocus(form.Form)
 	if err := runTUIAppWithContext(ctx, app); err != nil {

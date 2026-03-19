@@ -42,40 +42,6 @@ type PostInstallAuditResult struct {
 func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildSig string) (result PostInstallAuditResult, err error) {
 	app := tui.NewApp()
 
-	titleText := tview.NewTextView().
-		SetText("ProxSave - Post-install Check\n\n" +
-			"Detect optional components that are enabled but not configured on this node.\n" +
-			"This helps reduce WARNING noise and exit code 1 runs when features are unused.\n").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	titleText.SetBorder(false)
-
-	nav := tview.NewTextView().
-		SetText("[yellow]Navigation:[white] ↑↓ to move | ENTER/SPACE to toggle | ←→ on buttons | ENTER to select").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	nav.SetBorder(false)
-
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
-
 	pages := tview.NewPages()
 
 	confirmRun := false
@@ -137,21 +103,16 @@ func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildS
 	pages.AddPage("confirm", confirm, true, true)
 	pages.AddPage("running", running, true, false)
 
-	layout := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(titleText, 5, 0, false).
-		AddItem(nav, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(pages, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
-
-	layout.SetBorder(true).
-		SetTitle(" ProxSave ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
+	layout := buildWizardScreen(
+		"ProxSave",
+		"ProxSave - Post-install Check\n\n"+
+			"Detect optional components that are enabled but not configured on this node.\n"+
+			"This helps reduce WARNING noise and exit code 1 runs when features are unused.\n",
+		"[yellow]Navigation:[white] ↑↓ to move | ENTER/SPACE to toggle | ←→ on buttons | ENTER to select",
+		configPath,
+		buildSig,
+		pages,
+	)
 
 	if runErr := postInstallAuditWizardRunner(app, layout, confirm); runErr != nil {
 		return PostInstallAuditResult{}, runErr

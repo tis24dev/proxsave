@@ -1005,53 +1005,14 @@ func confirmOverwriteTUI(configPath, buildSig string) (bool, error) {
 }
 
 func buildRestoreWizardPage(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
-	welcomeText := tview.NewTextView().
-		SetText(fmt.Sprintf("ProxSave - By TIS24DEV\n%s\n", restoreWizardSubtitle)).
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	navInstructions := tview.NewTextView().
-		SetText("\n" + restoreNavText).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
-
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(content, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
-
-	flex.SetBorder(true).
-		SetTitle(fmt.Sprintf(" %s ", title)).
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
-
-	return flex
+	return tui.BuildScreen(tui.ScreenSpec{
+		Title:           title,
+		HeaderText:      fmt.Sprintf("ProxSave - By TIS24DEV\n%s\n", restoreWizardSubtitle),
+		NavText:         restoreNavText,
+		ConfigPath:      configPath,
+		BuildSig:        buildSig,
+		TitleColor:      tui.ProxmoxOrange,
+		BorderColor:     tui.ProxmoxOrange,
+		BackgroundColor: tcell.ColorBlack,
+	}, content)
 }

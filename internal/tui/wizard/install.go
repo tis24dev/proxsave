@@ -88,29 +88,6 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	// Build the form
 	form := components.NewForm(app)
 
-	// Welcome text
-	welcomeText := tview.NewTextView().
-		SetText("Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n" +
-			"This wizard will guide you through configuring your backup system for Proxmox.\n" +
-			"All settings can be changed later by editing the configuration file.").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	// Navigation instructions
-	navInstructions := tview.NewTextView().
-		SetText("[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	// Add separator
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
 	// Track if any dropdown is currently open
 	var dropdownOpen bool
 
@@ -424,37 +401,16 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		return event
 	})
 
-	// Config path footer
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
-
-	// Create layout
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(form.Form, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
-
-	flex.SetBorder(true).
-		SetTitle(" ProxSave Installation ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
+	flex := buildWizardScreen(
+		"ProxSave Installation",
+		"Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n"+
+			"This wizard will guide you through configuring your backup system for Proxmox.\n"+
+			"All settings can be changed later by editing the configuration file.",
+		"[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled",
+		configPath,
+		buildSig,
+		form.Form,
+	)
 
 	if err := runInstallWizardRunner(app, flex, form.Form); err != nil {
 		return nil, err
@@ -700,37 +656,6 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 		app := tui.NewApp()
 		action := ExistingConfigCancel
 
-		// Welcome text (same as main wizard)
-		welcomeText := tview.NewTextView().
-			SetText("Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n" +
-				"This wizard will guide you through configuring your backup system for Proxmox.\n" +
-				"All settings can be changed later by editing the configuration file.").
-			SetTextColor(tui.ProxmoxLight).
-			SetDynamicColors(true)
-		welcomeText.SetBorder(false)
-
-		// Navigation instructions (no dropdowns in this view)
-		navInstructions := tview.NewTextView().
-			SetText("[yellow]Navigation:[white] Press [yellow]TAB[white] or [yellow]↑↓[white] to move between fields | " +
-				"Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to submit | Mouse clicks enabled").
-			SetTextColor(tcell.ColorWhite).
-			SetDynamicColors(true).
-			SetTextAlign(tview.AlignCenter)
-		navInstructions.SetBorder(false)
-
-		buildSigText := tview.NewTextView().
-			SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-			SetTextColor(tcell.ColorWhite).
-			SetDynamicColors(true).
-			SetTextAlign(tview.AlignCenter)
-		buildSigText.SetBorder(false)
-
-		// Separator
-		separator := tview.NewTextView().
-			SetText(strings.Repeat("─", 80)).
-			SetTextColor(tui.ProxmoxOrange)
-		separator.SetBorder(false)
-
 		// Confirmation modal
 		modal := tview.NewModal().
 			SetText(fmt.Sprintf("Configuration file already exists at:\n[yellow]%s[white]\n\n"+
@@ -761,21 +686,16 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 			SetBorderColor(tui.WarningYellow).
 			SetBackgroundColor(tcell.ColorBlack)
 
-			// Create layout with welcome text at top
-		flex := tview.NewFlex().
-			SetDirection(tview.FlexRow).
-			AddItem(welcomeText, 5, 0, false).
-			AddItem(navInstructions, 2, 0, false).
-			AddItem(separator, 1, 0, false).
-			AddItem(modal, 0, 1, true).
-			AddItem(buildSigText, 1, 0, false)
-
-		flex.SetBorder(true).
-			SetTitle(" ProxSave Installation ").
-			SetTitleAlign(tview.AlignCenter).
-			SetTitleColor(tui.ProxmoxOrange).
-			SetBorderColor(tui.ProxmoxOrange).
-			SetBackgroundColor(tcell.ColorBlack)
+		flex := buildWizardScreen(
+			"ProxSave Installation",
+			"Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n"+
+				"This wizard will guide you through configuring your backup system for Proxmox.\n"+
+				"All settings can be changed later by editing the configuration file.",
+			"[yellow]Navigation:[white] Press [yellow]TAB[white] or [yellow]↑↓[white] to move between fields | Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to submit | Mouse clicks enabled",
+			"",
+			buildSig,
+			modal,
+		)
 
 		if err := checkExistingConfigRunner(app, flex, modal); err != nil {
 			return ExistingConfigCancel, err

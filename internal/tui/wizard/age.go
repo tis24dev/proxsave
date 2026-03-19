@@ -81,40 +81,6 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 	app := tui.NewApp()
 	overwrite := false
 
-	welcomeText := tview.NewTextView().
-		SetText("ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n" +
-			"Configure encryption for your backups using the AGE encryption tool.\n" +
-			"Choose how you want to set up your encryption key.\n").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	navInstructions := tview.NewTextView().
-		SetText("\n[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
-
 	modal := tview.NewModal().
 		SetText(fmt.Sprintf("Existing recipient:\n[yellow]%s[white]\n\nOverwrite with a new one?", recipientPath)).
 		AddButtons([]string{"Overwrite", "Cancel"}).
@@ -132,21 +98,16 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 		SetBorderColor(tui.WarningYellow).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(modal, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
-
-	flex.SetBorder(true).
-		SetTitle(" AGE Encryption Setup ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
+	flex := buildWizardScreen(
+		"AGE Encryption Setup",
+		"ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n"+
+			"Configure encryption for your backups using the AGE encryption tool.\n"+
+			"Choose how you want to set up your encryption key.\n",
+		"[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled",
+		configPath,
+		buildSig,
+		modal,
+	)
 
 	if err := ageWizardRunner(app, flex, modal); err != nil {
 		return false, err
@@ -159,39 +120,6 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 func ConfirmAddRecipient(configPath, buildSig string, count int) (bool, error) {
 	app := tui.NewApp()
 	addAnother := false
-
-	welcomeText := tview.NewTextView().
-		SetText("ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n" +
-			"Add one or more AGE recipients for encryption.\n").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	navInstructions := tview.NewTextView().
-		SetText("\n[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
 
 	message := fmt.Sprintf("Recipient(s) added: %d\n\nAdd another recipient?", count)
 	modal := tview.NewModal().
@@ -211,21 +139,15 @@ func ConfirmAddRecipient(configPath, buildSig string, count int) (bool, error) {
 		SetBorderColor(tui.ProxmoxOrange).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(modal, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
-
-	flex.SetBorder(true).
-		SetTitle(" AGE Encryption Setup ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
+	flex := buildWizardScreen(
+		"AGE Encryption Setup",
+		"ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n"+
+			"Add one or more AGE recipients for encryption.\n",
+		"[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled",
+		configPath,
+		buildSig,
+		modal,
+	)
 
 	if err := ageWizardRunner(app, flex, modal); err != nil {
 		return false, err
@@ -244,43 +166,6 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 
 	// Build the form
 	form := components.NewForm(app)
-
-	// Welcome text
-	welcomeText := tview.NewTextView().
-		SetText("ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n" +
-			"Configure encryption for your backups using the AGE encryption tool.\n" +
-			"Choose how you want to set up your encryption key.\n").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	// Navigation instructions
-	navInstructions := tview.NewTextView().
-		SetText("\n[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	// Add separator
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
 
 	// Setup type dropdown
 	var setupType string
@@ -463,23 +348,16 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 		return event
 	})
 
-	// Create layout
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(form.Form, 0, 1, true)
-		// Footers
-	flex.AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
-
-	flex.SetBorder(true).
-		SetTitle(" AGE Encryption Setup ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
+	flex := buildWizardScreen(
+		"AGE Encryption Setup",
+		"ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n"+
+			"Configure encryption for your backups using the AGE encryption tool.\n"+
+			"Choose how you want to set up your encryption key.\n",
+		"[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled",
+		configPath,
+		buildSig,
+		form.Form,
+	)
 
 	// Set the parent view for inline error display, then add buttons
 	form.SetParentView(flex)

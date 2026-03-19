@@ -7,27 +7,28 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 )
 
-func stubTUIExistingPathDecisionPrompt(fn func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error)) func() {
+func stubTUIExistingPathDecisionPrompt(fn func(ctx context.Context, env tuiScreenEnv, path, description, failure string) (ExistingPathDecision, string, error)) func() {
 	orig := tuiPromptExistingPathDecision
 	tuiPromptExistingPathDecision = fn
 	return func() { tuiPromptExistingPathDecision = orig }
 }
 
 func TestTUIWorkflowUIResolveExistingPath_Overwrite(t *testing.T) {
-	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, env tuiScreenEnv, path, description, failure string) (ExistingPathDecision, string, error) {
 		if path != "/tmp/archive.tar" {
 			t.Fatalf("path=%q, want /tmp/archive.tar", path)
 		}
 		if description != "archive" {
 			t.Fatalf("description=%q, want archive", description)
 		}
-		if configPath != "/tmp/config.env" {
-			t.Fatalf("configPath=%q, want /tmp/config.env", configPath)
+		if env.configPath != "/tmp/config.env" {
+			t.Fatalf("configPath=%q, want /tmp/config.env", env.configPath)
 		}
-		if buildSig != "sig" {
-			t.Fatalf("buildSig=%q, want sig", buildSig)
+		if env.buildSig != "sig" {
+			t.Fatalf("buildSig=%q, want sig", env.buildSig)
 		}
 		return PathDecisionOverwrite, "", nil
 	})
@@ -47,7 +48,7 @@ func TestTUIWorkflowUIResolveExistingPath_Overwrite(t *testing.T) {
 }
 
 func TestTUIWorkflowUIResolveExistingPath_NewPathIsCleaned(t *testing.T) {
-	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, env tuiScreenEnv, path, description, failure string) (ExistingPathDecision, string, error) {
 		return PathDecisionNewPath, "/tmp/out/../out/final.tar", nil
 	})
 	defer restore()
@@ -66,7 +67,7 @@ func TestTUIWorkflowUIResolveExistingPath_NewPathIsCleaned(t *testing.T) {
 }
 
 func TestTUIWorkflowUIResolveExistingPath_WhitespaceNewPathStaysEmpty(t *testing.T) {
-	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, env tuiScreenEnv, path, description, failure string) (ExistingPathDecision, string, error) {
 		return PathDecisionNewPath, "   \t  ", nil
 	})
 	defer restore()
@@ -86,7 +87,7 @@ func TestTUIWorkflowUIResolveExistingPath_WhitespaceNewPathStaysEmpty(t *testing
 
 func TestTUIWorkflowUIResolveExistingPath_PropagatesError(t *testing.T) {
 	wantErr := errors.New("boom")
-	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, env tuiScreenEnv, path, description, failure string) (ExistingPathDecision, string, error) {
 		return PathDecisionCancel, "", wantErr
 	})
 	defer restore()
@@ -101,7 +102,7 @@ func TestTUIWorkflowUIResolveExistingPath_PassesContext(t *testing.T) {
 	called := false
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	restore := stubTUIExistingPathDecisionPrompt(func(gotCtx context.Context, path, description, failure, configPath, buildSig string) (ExistingPathDecision, string, error) {
+	restore := stubTUIExistingPathDecisionPrompt(func(gotCtx context.Context, env tuiScreenEnv, path, description, failure string) (ExistingPathDecision, string, error) {
 		called = true
 		if gotCtx != ctx {
 			t.Fatalf("got context %p, want %p", gotCtx, ctx)
@@ -119,17 +120,47 @@ func TestTUIWorkflowUIResolveExistingPath_PassesContext(t *testing.T) {
 	}
 }
 
-func stubTUIDecryptSecretPrompt(fn func(ctx context.Context, configPath, buildSig, displayName, previousError string) (string, error)) func() {
+func TestTUIRestoreWorkflowUIResolveExistingPath_PassesBuilder(t *testing.T) {
+	builderCalls := 0
+	restore := stubTUIExistingPathDecisionPrompt(func(ctx context.Context, env tuiScreenEnv, path, description, failure string) (ExistingPathDecision, string, error) {
+		if page := env.page("Spy", tview.NewBox()); page == nil {
+			t.Fatalf("expected non-nil page")
+		}
+		return PathDecisionOverwrite, "", nil
+	})
+	defer restore()
+
+	ui := newTUIRestoreWorkflowUI("/tmp/config.env", "sig", nil)
+	ui.buildPage = func(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
+		builderCalls++
+		return tview.NewBox()
+	}
+
+	if _, _, err := ui.ResolveExistingPath(context.Background(), "/tmp/archive.tar", "archive", ""); err != nil {
+		t.Fatalf("ResolveExistingPath error: %v", err)
+	}
+	if builderCalls != 1 {
+		t.Fatalf("builderCalls=%d, want 1", builderCalls)
+	}
+}
+
+func stubTUIDecryptSecretPrompt(fn func(ctx context.Context, env tuiScreenEnv, displayName, previousError string) (string, error)) func() {
 	orig := tuiPromptDecryptSecret
 	tuiPromptDecryptSecret = fn
 	return func() { tuiPromptDecryptSecret = orig }
+}
+
+func stubTUINewPathInputPrompt(fn func(ctx context.Context, env tuiScreenEnv, defaultPath string) (string, error)) func() {
+	orig := tuiPromptNewPathInput
+	tuiPromptNewPathInput = fn
+	return func() { tuiPromptNewPathInput = orig }
 }
 
 func TestTUIWorkflowUIPromptDecryptSecret_PassesContext(t *testing.T) {
 	called := false
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	restore := stubTUIDecryptSecretPrompt(func(gotCtx context.Context, configPath, buildSig, displayName, previousError string) (string, error) {
+	restore := stubTUIDecryptSecretPrompt(func(gotCtx context.Context, env tuiScreenEnv, displayName, previousError string) (string, error) {
 		called = true
 		if gotCtx != ctx {
 			t.Fatalf("got context %p, want %p", gotCtx, ctx)
@@ -148,6 +179,34 @@ func TestTUIWorkflowUIPromptDecryptSecret_PassesContext(t *testing.T) {
 	}
 	if !called {
 		t.Fatalf("expected prompt to be called")
+	}
+}
+
+func TestTUIRestoreWorkflowUIPromptDecryptSecret_PassesBuilder(t *testing.T) {
+	builderCalls := 0
+	restore := stubTUIDecryptSecretPrompt(func(ctx context.Context, env tuiScreenEnv, displayName, previousError string) (string, error) {
+		if page := env.page("Spy", tview.NewBox()); page == nil {
+			t.Fatalf("expected non-nil page")
+		}
+		return "secret", nil
+	})
+	defer restore()
+
+	ui := newTUIRestoreWorkflowUI("/tmp/config.env", "sig", nil)
+	ui.buildPage = func(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
+		builderCalls++
+		return tview.NewBox()
+	}
+
+	got, err := ui.PromptDecryptSecret(context.Background(), "archive", "")
+	if err != nil {
+		t.Fatalf("PromptDecryptSecret error: %v", err)
+	}
+	if got != "secret" {
+		t.Fatalf("secret=%q, want %q", got, "secret")
+	}
+	if builderCalls != 1 {
+		t.Fatalf("builderCalls=%d, want 1", builderCalls)
 	}
 }
 
