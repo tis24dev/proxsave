@@ -53,6 +53,14 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 	decryptTUIE2EMu.Lock()
 	orig := newTUIApp
 	done := make(chan struct{})
+	var injectWG sync.WaitGroup
+	t.Cleanup(func() {
+		close(done)
+		injectWG.Wait()
+		newTUIApp = orig
+		decryptTUIE2EMu.Unlock()
+	})
+
 	screen := tcell.NewSimulationScreen("UTF-8")
 	if err := screen.Init(); err != nil {
 		t.Fatalf("screen.Init: %v", err)
@@ -60,7 +68,6 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 	screen.SetSize(120, 40)
 
 	var once sync.Once
-	var injectWG sync.WaitGroup
 	newTUIApp = func() *tui.App {
 		app := tui.NewApp()
 		app.SetScreen(screen)
@@ -98,13 +105,6 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 
 		return app
 	}
-
-	t.Cleanup(func() {
-		close(done)
-		injectWG.Wait()
-		newTUIApp = orig
-		decryptTUIE2EMu.Unlock()
-	})
 }
 
 func createDecryptTUIEncryptedFixture(t *testing.T) *decryptTUIFixture {
