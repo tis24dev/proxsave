@@ -43,3 +43,20 @@ func TestBuildScreenOmitsEmptyOptionalFooters(t *testing.T) {
 		t.Fatalf("expected build signature footer")
 	}
 }
+
+func TestBuildScreenEscapesHeaderText(t *testing.T) {
+	page := BuildScreen(ScreenSpec{
+		Title:           "Title",
+		HeaderText:      "Header[prod]",
+		NavText:         "",
+		ConfigPath:      "",
+		BuildSig:        "",
+		TitleColor:      ProxmoxOrange,
+		BorderColor:     ProxmoxOrange,
+		BackgroundColor: tcell.ColorBlack,
+	}, tview.NewBox())
+
+	if !primitiveContainsText(page, tview.Escape("Header[prod]")) {
+		t.Fatalf("expected escaped header text")
+	}
+}

@@ -25,11 +25,12 @@ func BuildScreen(spec ScreenSpec, content tview.Primitive) tview.Primitive {
 	}
 	configPath := strings.TrimSpace(spec.ConfigPath)
 	buildSig := strings.TrimSpace(spec.BuildSig)
+	escapedHeaderText := tview.Escape(spec.HeaderText)
 	escapedConfigPath := tview.Escape(configPath)
 	escapedBuildSig := tview.Escape(buildSig)
 
 	welcomeText := tview.NewTextView().
-		SetText(spec.HeaderText).
+		SetText(escapedHeaderText).
 		SetTextColor(ProxmoxLight).
 		SetDynamicColors(true)
 	welcomeText.SetBorder(false)
