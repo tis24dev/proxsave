@@ -5,12 +5,15 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/tis24dev/proxsave/internal/tui"
 )
+
+const simAppInitialDrawTimeout = 2 * time.Second
 
 type simKey struct {
 	Key tcell.Key
@@ -29,7 +32,9 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 	screen.SetSize(120, 40)
 
 	drawCh := make(chan struct{}, 8)
+	done := make(chan struct{})
 	var injectOnce sync.Once
+	var injectWG sync.WaitGroup
 
 	newTUIApp = func() *tui.App {
 		app := tui.NewApp()
@@ -44,12 +49,37 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 		})
 
 		injectOnce.Do(func() {
+			injectWG.Add(1)
 			go func() {
-				<-readyCh
+				defer injectWG.Done()
+
+				timer := time.NewTimer(simAppInitialDrawTimeout)
+				defer func() {
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+				}()
+
+				select {
+				case <-readyCh:
+				case <-done:
+					return
+				case <-timer.C:
+					return
+				}
+
 				for _, k := range keys {
 					mod := k.Mod
 					if mod == 0 {
 						mod = tcell.ModNone
+					}
+					select {
+					case <-done:
+						return
+					default:
 					}
 					screen.InjectKey(k.Key, k.R, mod)
 				}
@@ -59,6 +89,8 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 	}
 
 	t.Cleanup(func() {
+		close(done)
+		injectWG.Wait()
 		newTUIApp = orig
 	})
 
