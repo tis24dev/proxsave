@@ -105,6 +105,21 @@ func TestPromptCompatibilityTUIUsesWarningText(t *testing.T) {
 	}
 }
 
+func TestPromptCompatibilityTUIEscapesBracketedWarningText(t *testing.T) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+		if !strings.Contains(message, tview.Escape("bad [warning]")) {
+			t.Fatalf("expected escaped bracketed warning, got %q", message)
+		}
+		return true, nil
+	})
+	defer restore()
+
+	ok, err := promptCompatibilityTUI(context.Background(), "cfg", "sig", errors.New("bad [warning]"))
+	if err != nil || !ok {
+		t.Fatalf("promptCompatibilityTUI returned %v, %v", ok, err)
+	}
+}
+
 func TestPromptContinueWithoutSafetyBackupTUI(t *testing.T) {
 	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
 		if title != "Safety backup failed" {
@@ -118,6 +133,24 @@ func TestPromptContinueWithoutSafetyBackupTUI(t *testing.T) {
 	defer restore()
 
 	ok, err := promptContinueWithoutSafetyBackupTUI(context.Background(), "cfg", "sig", errors.New("failure"))
+	if err != nil {
+		t.Fatalf("promptContinueWithoutSafetyBackupTUI error: %v", err)
+	}
+	if ok {
+		t.Fatalf("expected false decision")
+	}
+}
+
+func TestPromptContinueWithoutSafetyBackupTUIEscapesBracketedCause(t *testing.T) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+		if !strings.Contains(message, tview.Escape("bad [cause]")) {
+			t.Fatalf("expected escaped bracketed cause, got %q", message)
+		}
+		return false, nil
+	})
+	defer restore()
+
+	ok, err := promptContinueWithoutSafetyBackupTUI(context.Background(), "cfg", "sig", errors.New("bad [cause]"))
 	if err != nil {
 		t.Fatalf("promptContinueWithoutSafetyBackupTUI error: %v", err)
 	}

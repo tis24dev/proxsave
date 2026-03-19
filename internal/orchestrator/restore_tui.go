@@ -362,7 +362,10 @@ func selectCategoriesTUI(ctx context.Context, available []Category, systemType S
 }
 
 func promptCompatibilityTUI(ctx context.Context, configPath, buildSig string, compatErr error) (bool, error) {
-	message := fmt.Sprintf("Compatibility check reported:\n\n[red]%v[white]\n\nContinuing may cause system instability.\n\nDo you want to continue anyway?", compatErr)
+	message := fmt.Sprintf(
+		"Compatibility check reported:\n\n[red]%s[white]\n\nContinuing may cause system instability.\n\nDo you want to continue anyway?",
+		tview.Escape(fmt.Sprint(compatErr)),
+	)
 	return promptYesNoTUIFunc(
 		ctx,
 		"Compatibility warning",
@@ -375,7 +378,10 @@ func promptCompatibilityTUI(ctx context.Context, configPath, buildSig string, co
 }
 
 func promptContinueWithoutSafetyBackupTUI(ctx context.Context, configPath, buildSig string, cause error) (bool, error) {
-	message := fmt.Sprintf("Failed to create safety backup:\n\n[red]%v[white]\n\nWithout a safety backup, it will be harder to rollback changes.\n\nContinue without safety backup?", cause)
+	message := fmt.Sprintf(
+		"Failed to create safety backup:\n\n[red]%s[white]\n\nWithout a safety backup, it will be harder to rollback changes.\n\nContinue without safety backup?",
+		tview.Escape(fmt.Sprint(cause)),
+	)
 	return promptYesNoTUIFunc(
 		ctx,
 		"Safety backup failed",
