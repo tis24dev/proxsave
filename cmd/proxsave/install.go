@@ -490,7 +490,6 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 		return installConfigResult{}, wrapInstallError(err)
 	}
 	result.CronSchedule = cronutil.TimeToSchedule(cronTime)
-	result.SkipConfigWizard = false
 
 	if bootstrap != nil {
 		bootstrap.Info("Cron schedule selected: %s", cronTime)
