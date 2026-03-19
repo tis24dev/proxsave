@@ -231,8 +231,8 @@ func successDecryptTUISequence(secret string) []timedSimKey {
 
 func abortDecryptTUISequence() []timedSimKey {
 	return []timedSimKey{
-		{Key: tcell.KeyEnter, Wait: 250 * time.Millisecond},
-		{Key: tcell.KeyEnter, Wait: 500 * time.Millisecond},
+		{Key: tcell.KeyEnter, Wait: 1 * time.Second},
+		{Key: tcell.KeyEnter, Wait: 750 * time.Millisecond},
 		{Key: tcell.KeyRune, R: '0', Wait: 500 * time.Millisecond},
 		{Key: tcell.KeyTab, Wait: 150 * time.Millisecond},
 		{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond},
