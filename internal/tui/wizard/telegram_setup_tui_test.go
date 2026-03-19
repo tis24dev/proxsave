@@ -536,6 +536,47 @@ func TestRunTelegramSetupWizard_TruncatesLongFailureMessage(t *testing.T) {
 	}
 }
 
+func TestRunTelegramSetupWizard_EscapesBracketedStatusMessage(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	bracketedMessage := "bad [status] from body"
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return eligibleTelegramSetupBootstrap(), nil
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		return notify.TelegramRegistrationStatus{
+			Code:    500,
+			Message: bracketedMessage,
+		}
+	}
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		_, statusView, form := extractTelegramSetupViews(t, root)
+
+		pressFormButton(t, form, "Check")
+
+		rawText := statusView.GetText(false)
+		if !strings.Contains(rawText, tview.Escape(bracketedMessage)) {
+			t.Fatalf("expected escaped status text in raw view, got %q", rawText)
+		}
+
+		plainText := statusView.GetText(true)
+		if !strings.Contains(plainText, bracketedMessage) {
+			t.Fatalf("expected literal bracketed message in plain text, got %q", plainText)
+		}
+
+		pressFormButton(t, form, "Skip")
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
+	}
+	if result.LastStatusMessage != bracketedMessage {
+		t.Fatalf("LastStatusMessage=%q, want %q", result.LastStatusMessage, bracketedMessage)
+	}
+}
+
 func TestRunTelegramSetupWizard_CentralizedEscSkipsWhenNotVerified(t *testing.T) {
 	stubTelegramSetupDeps(t)
 

@@ -180,7 +180,7 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 
 				if status.Code == 200 && status.Error == nil {
 					result.Verified = true
-					setStatus(fmt.Sprintf("[green]✓ Linked successfully.[white]\n\n%s", status.Message))
+					setStatus(fmt.Sprintf("[green]✓ Linked successfully.[white]\n\n%s", tview.Escape(status.Message)))
 					if refreshButtons != nil {
 						refreshButtons()
 					}
@@ -200,7 +200,7 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 				default:
 					hint = "\n\nYou can press Check again, or Skip verification and complete pairing later."
 				}
-				setStatus(fmt.Sprintf("[yellow]%s[white]%s", truncate(msg, 300), hint))
+				setStatus(fmt.Sprintf("[yellow]%s[white]%s", tview.Escape(truncate(msg, 300)), hint))
 			})
 		})
 	}
