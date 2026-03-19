@@ -424,6 +424,135 @@ func TestWriteIdentityFileCreatesFileWith0600(t *testing.T) {
 	}
 }
 
+func TestWriteIdentityFileWithContext_RelocksOnCanceledContextBeforeWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "id.conf")
+	const initialContent = "initial"
+	if err := os.WriteFile(path, []byte(initialContent), 0o600); err != nil {
+		t.Fatalf("seed identity file: %v", err)
+	}
+
+	origSetImmutable := writeIdentityFileWithContextSetImmutable
+	origWriteFile := writeIdentityFileWithContextWriteFile
+	origChmod := writeIdentityFileWithContextChmod
+	t.Cleanup(func() {
+		writeIdentityFileWithContextSetImmutable = origSetImmutable
+		writeIdentityFileWithContextWriteFile = origWriteFile
+		writeIdentityFileWithContextChmod = origChmod
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	type immutableCall struct {
+		ctx    context.Context
+		enable bool
+	}
+	var calls []immutableCall
+	writeIdentityFileWithContextSetImmutable = func(callCtx context.Context, path string, enable bool, logger *logging.Logger) error {
+		calls = append(calls, immutableCall{ctx: callCtx, enable: enable})
+		if !enable {
+			cancel()
+		}
+		return nil
+	}
+	writeIdentityFileWithContextWriteFile = func(path string, data []byte, perm os.FileMode) error {
+		t.Fatal("writeIdentityFileWithContext should not write after context cancellation")
+		return nil
+	}
+	writeIdentityFileWithContextChmod = func(path string, mode os.FileMode) error {
+		t.Fatal("writeIdentityFileWithContext should not chmod after context cancellation")
+		return nil
+	}
+
+	err := writeIdentityFileWithContext(ctx, path, "updated", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("immutable call count = %d, want 2", len(calls))
+	}
+	if calls[0].ctx != ctx || calls[0].enable {
+		t.Fatalf("first immutable call = %+v, want unlock with original ctx", calls[0])
+	}
+	if !calls[1].enable {
+		t.Fatalf("second immutable call = %+v, want relock", calls[1])
+	}
+	if calls[1].ctx == ctx {
+		t.Fatalf("expected relock to use non-cancelable context")
+	}
+	if calls[1].ctx.Err() != nil {
+		t.Fatalf("expected relock context to be active, got %v", calls[1].ctx.Err())
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read identity file: %v", err)
+	}
+	if string(data) != initialContent {
+		t.Fatalf("file content = %q, want %q", string(data), initialContent)
+	}
+}
+
+func TestWriteIdentityFileWithContext_RelocksOnWriteError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "id.conf")
+	const initialContent = "initial"
+	if err := os.WriteFile(path, []byte(initialContent), 0o600); err != nil {
+		t.Fatalf("seed identity file: %v", err)
+	}
+
+	origSetImmutable := writeIdentityFileWithContextSetImmutable
+	origWriteFile := writeIdentityFileWithContextWriteFile
+	origChmod := writeIdentityFileWithContextChmod
+	t.Cleanup(func() {
+		writeIdentityFileWithContextSetImmutable = origSetImmutable
+		writeIdentityFileWithContextWriteFile = origWriteFile
+		writeIdentityFileWithContextChmod = origChmod
+	})
+
+	type immutableCall struct {
+		ctx    context.Context
+		enable bool
+	}
+	var calls []immutableCall
+	writeIdentityFileWithContextSetImmutable = func(callCtx context.Context, path string, enable bool, logger *logging.Logger) error {
+		calls = append(calls, immutableCall{ctx: callCtx, enable: enable})
+		return nil
+	}
+	writeErr := errors.New("write failed")
+	writeIdentityFileWithContextWriteFile = func(path string, data []byte, perm os.FileMode) error {
+		return writeErr
+	}
+	writeIdentityFileWithContextChmod = func(path string, mode os.FileMode) error {
+		t.Fatal("writeIdentityFileWithContext should not chmod after write failure")
+		return nil
+	}
+
+	err := writeIdentityFileWithContext(context.Background(), path, "updated", nil)
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("err=%v; want %v", err, writeErr)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("immutable call count = %d, want 2", len(calls))
+	}
+	if calls[0].enable {
+		t.Fatalf("first immutable call = %+v, want unlock", calls[0])
+	}
+	if !calls[1].enable {
+		t.Fatalf("second immutable call = %+v, want relock", calls[1])
+	}
+	if calls[1].ctx.Err() != nil {
+		t.Fatalf("expected relock context to be active, got %v", calls[1].ctx.Err())
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read identity file: %v", err)
+	}
+	if string(data) != initialContent {
+		t.Fatalf("file content = %q, want %q", string(data), initialContent)
+	}
+}
+
 func TestHexToDecimalValidAndInvalid(t *testing.T) {
 	if got := hexToDecimal("ff"); got != "255" {
 		t.Fatalf("hexToDecimal(\"ff\") = %q, want %q", got, "255")
