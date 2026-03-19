@@ -37,8 +37,10 @@ var (
 )
 
 var (
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		return app.SetRoot(root, true).SetFocus(focus).Run()
+	ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetRoot(root, true)
+		app.SetFocus(focus)
+		return app.RunWithContext(ctx)
 	}
 	ageMkdirAll  = os.MkdirAll
 	ageWriteFile = os.WriteFile
@@ -116,7 +118,7 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 		modal,
 	)
 
-	if err := ageWizardRunner(app, flex, modal); err != nil {
+	if err := ageWizardRunner(context.Background(), app, flex, modal); err != nil {
 		return false, err
 	}
 
@@ -156,7 +158,7 @@ func ConfirmAddRecipient(configPath, buildSig string, count int) (bool, error) {
 		modal,
 	)
 
-	if err := ageWizardRunner(app, flex, modal); err != nil {
+	if err := ageWizardRunner(context.Background(), app, flex, modal); err != nil {
 		return false, err
 	}
 
@@ -371,7 +373,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 	form.AddSubmitButton("Continue")
 	form.AddCancelButton("Cancel")
 
-	if err := ageWizardRunner(app, flex, form.Form); err != nil {
+	if err := ageWizardRunner(ctx, app, flex, form.Form); err != nil {
 		return nil, err
 	}
 

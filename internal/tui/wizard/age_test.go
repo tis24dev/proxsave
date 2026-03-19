@@ -227,7 +227,7 @@ func TestConfirmRecipientOverwriteSelection(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+			ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 				done := extractModalDone(focus.(*tview.Modal))
 				done(0, tc.button)
 				return nil
@@ -249,7 +249,7 @@ func TestConfirmRecipientOverwriteModalIncludesRecipientPath(t *testing.T) {
 	defer func() { ageWizardRunner = originalRunner }()
 
 	var modalText string
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		modalText = extractModalText(focus.(*tview.Modal))
 		return nil
 	}
@@ -267,7 +267,7 @@ func TestConfirmRecipientOverwriteRunnerError(t *testing.T) {
 	originalRunner := ageWizardRunner
 	defer func() { ageWizardRunner = originalRunner }()
 
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		return errors.New("boom")
 	}
 
@@ -292,7 +292,7 @@ func TestConfirmAddRecipientSelection(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+			ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 				done := extractModalDone(focus.(*tview.Modal))
 				done(0, tc.button)
 				return nil
@@ -314,7 +314,7 @@ func TestConfirmAddRecipientModalIncludesCount(t *testing.T) {
 	defer func() { ageWizardRunner = originalRunner }()
 
 	var modalText string
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		modalText = extractModalText(focus.(*tview.Modal))
 		return nil
 	}
@@ -416,7 +416,7 @@ func TestRunAgeSetupWizardRunnerError(t *testing.T) {
 	defer func() { ageWizardRunner = originalRunner }()
 
 	expected := errors.New("boom")
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		return expected
 	}
 
@@ -428,7 +428,7 @@ func TestRunAgeSetupWizardRunnerError(t *testing.T) {
 func runAgeWizardTest(t *testing.T, configure func(form *tview.Form)) (*AgeSetupData, error) {
 	t.Helper()
 	originalRunner := ageWizardRunner
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		form, ok := focus.(*tview.Form)
 		if !ok {
 			t.Fatalf("expected *tview.Form focus, got %T", focus)
@@ -438,6 +438,23 @@ func runAgeWizardTest(t *testing.T, configure func(form *tview.Form)) (*AgeSetup
 	}
 	t.Cleanup(func() { ageWizardRunner = originalRunner })
 	return RunAgeSetupWizard(context.Background(), "/tmp/recipient.age", "/etc/proxsave/config.env", "sig-test")
+}
+
+func TestRunAgeSetupWizard_PassesContextToRunner(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	ctx := t.Context()
+	ageWizardRunner = func(gotCtx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		if gotCtx != ctx {
+			t.Fatalf("ctx=%p; want %p", gotCtx, ctx)
+		}
+		return ErrAgeSetupCancelled
+	}
+
+	if _, err := RunAgeSetupWizard(ctx, "/tmp/recipient.age", "/etc/proxsave/config.env", "sig-test"); !errors.Is(err, ErrAgeSetupCancelled) {
+		t.Fatalf("err=%v; want %v", err, ErrAgeSetupCancelled)
+	}
 }
 
 func pressFormButton(t *testing.T, form *tview.Form, label string) {

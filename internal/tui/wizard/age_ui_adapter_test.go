@@ -11,7 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
-func registerAgeWizardRunner(t *testing.T, runner func(app *tui.App, root, focus tview.Primitive) error) {
+func registerAgeWizardRunner(t *testing.T, runner func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error) {
 	t.Helper()
 
 	originalRunner := ageWizardRunner
@@ -22,7 +22,7 @@ func registerAgeWizardRunner(t *testing.T, runner func(app *tui.App, root, focus
 }
 
 func TestAgeSetupUIAdapterCollectRecipientDraftCancelMapsAbort(t *testing.T) {
-	registerAgeWizardRunner(t, func(app *tui.App, root, focus tview.Primitive) error {
+	registerAgeWizardRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		form, ok := focus.(*tview.Form)
 		if !ok {
 			t.Fatalf("expected *tview.Form focus, got %T", focus)
@@ -43,7 +43,7 @@ func TestAgeSetupUIAdapterCollectRecipientDraftCancelMapsAbort(t *testing.T) {
 
 func TestAgeSetupUIAdapterCollectRecipientDraftRunnerError(t *testing.T) {
 	expected := errors.New("boom")
-	registerAgeWizardRunner(t, func(app *tui.App, root, focus tview.Primitive) error {
+	registerAgeWizardRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		return expected
 	})
 
@@ -54,7 +54,7 @@ func TestAgeSetupUIAdapterCollectRecipientDraftRunnerError(t *testing.T) {
 }
 
 func TestAgeSetupUIAdapterConfirmOverwriteExistingRecipientCanceledContext(t *testing.T) {
-	registerAgeWizardRunner(t, func(app *tui.App, root, focus tview.Primitive) error {
+	registerAgeWizardRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		t.Fatal("ageWizardRunner should not be called when context is already canceled")
 		return nil
 	})
@@ -73,7 +73,7 @@ func TestAgeSetupUIAdapterConfirmOverwriteExistingRecipientCanceledContext(t *te
 }
 
 func TestAgeSetupUIAdapterConfirmAddAnotherRecipientCanceledContext(t *testing.T) {
-	registerAgeWizardRunner(t, func(app *tui.App, root, focus tview.Primitive) error {
+	registerAgeWizardRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		t.Fatal("ageWizardRunner should not be called when context is already canceled")
 		return nil
 	})
