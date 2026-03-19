@@ -3,6 +3,8 @@ package wizard
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,16 +40,44 @@ func wizardPrimitiveContainsText(p tview.Primitive, want string) bool {
 	return false
 }
 
+func withWorkingDir(t *testing.T, dir string) {
+	t.Helper()
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(%q) failed: %v", dir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(original); err != nil {
+			t.Errorf("restoring working directory to %q failed: %v", original, err)
+		}
+	})
+}
+
 func TestFormatPreservedEntries(t *testing.T) {
+	tempDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(tempDir, "build"), 0o755); err != nil {
+		t.Fatalf("Mkdir(build) failed: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(tempDir, "identity"), 0o755); err != nil {
+		t.Fatalf("Mkdir(identity) failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "backup.env"), []byte("TEST=1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(backup.env) failed: %v", err)
+	}
+	withWorkingDir(t, tempDir)
+
 	tests := []struct {
 		name    string
 		entries []string
 		want    string
 	}{
 		{
-			name:    "formats trimmed entries",
-			entries: []string{" build ", "env", " identity"},
-			want:    "build/ env/ identity/",
+			name:    "adds slash only for directories",
+			entries: []string{" build ", "backup.env", " missing ", " identity"},
+			want:    "build/ backup.env missing identity/",
 		},
 		{
 			name:    "returns none for nil input",
@@ -61,8 +91,8 @@ func TestFormatPreservedEntries(t *testing.T) {
 		},
 		{
 			name:    "preserves existing trailing slash without doubling",
-			entries: []string{"build/", " env/ ", "identity"},
-			want:    "build/ env/ identity/",
+			entries: []string{"build/", " identity/ ", "backup.env"},
+			want:    "build/ identity/ backup.env",
 		},
 	}
 
@@ -124,6 +154,14 @@ func TestConfirmNewInstallMessageIncludesBaseDir(t *testing.T) {
 }
 
 func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
+	tempDir := t.TempDir()
+	for _, dir := range []string{"build", "env", "identity"} {
+		if err := os.Mkdir(filepath.Join(tempDir, dir), 0o755); err != nil {
+			t.Fatalf("Mkdir(%s) failed: %v", dir, err)
+		}
+	}
+	withWorkingDir(t, tempDir)
+
 	var captured string
 	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		captured = extractModalText(focus.(*tview.Modal))

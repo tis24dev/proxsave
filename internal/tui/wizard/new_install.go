@@ -3,6 +3,7 @@ package wizard
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -25,7 +26,9 @@ func formatPreservedEntries(entries []string) string {
 			continue
 		}
 		if !strings.HasSuffix(trimmed, "/") {
-			trimmed += "/"
+			if fi, err := os.Stat(trimmed); err == nil && fi.IsDir() {
+				trimmed += "/"
+			}
 		}
 		formatted = append(formatted, trimmed)
 	}
