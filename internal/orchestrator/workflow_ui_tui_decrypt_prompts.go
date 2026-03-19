@@ -211,11 +211,12 @@ func promptDecryptSecretTUI(ctx context.Context, env tuiScreenEnv, displayName, 
 	label := "Key or passphrase:"
 	form.AddPasswordField(label, 64)
 	form.SetOnSubmit(func(values map[string]string) error {
-		raw := strings.TrimSpace(values[label])
-		if raw == "" {
+		raw := values[label]
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
 			return fmt.Errorf("key or passphrase cannot be empty")
 		}
-		if raw == "0" {
+		if trimmed == "0" {
 			cancelled = true
 			return nil
 		}
