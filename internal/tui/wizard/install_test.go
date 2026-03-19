@@ -337,6 +337,24 @@ func TestCheckExistingConfigPropagatesStatErrors(t *testing.T) {
 	}
 }
 
+func TestCheckExistingConfigRejectsNonRegularPath(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config-dir")
+	if err := os.Mkdir(configPath, 0o755); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+
+	action, err := CheckExistingConfig(configPath, "sig")
+	if err == nil {
+		t.Fatal("expected error for non-regular config path")
+	}
+	if err.Error() != "configuration file path is not a regular file: "+configPath {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if action != ExistingConfigCancel {
+		t.Fatalf("expected cancel action on non-regular path, got %v", action)
+	}
+}
+
 func TestCheckExistingConfigPropagatesRunnerErrors(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "prox.env")

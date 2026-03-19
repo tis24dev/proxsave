@@ -655,7 +655,11 @@ func readTemplateBool(values map[string]string, keys ...string) bool {
 
 // CheckExistingConfig checks if config file exists and asks how to proceed
 func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigAction, error) {
-	if _, err := os.Stat(configPath); err == nil {
+	if info, err := os.Stat(configPath); err == nil {
+		if !info.Mode().IsRegular() {
+			return ExistingConfigCancel, fmt.Errorf("configuration file path is not a regular file: %s", configPath)
+		}
+
 		// File exists, ask how to proceed
 		app := tui.NewApp()
 		action := ExistingConfigCancel
