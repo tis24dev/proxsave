@@ -173,6 +173,11 @@ func TestPromptExistingPathDecisionTUI_NewPathContextCanceledWhileRunning(t *tes
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
+		// This flow produces two draw events: the first read waits for the initial
+		// promptExistingPathDecisionTUI dialog render, and the second waits for the
+		// secondary "new path" dialog opened after selecting that option. Cancel
+		// only after both drawCh reads so the test simulates context cancellation
+		// while the second dialog is already running.
 		<-drawCh
 		<-drawCh
 		cancel()
