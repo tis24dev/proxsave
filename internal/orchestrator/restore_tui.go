@@ -999,6 +999,7 @@ func promptNetworkCommitTUI(ctx context.Context, timeout time.Duration, health n
 	if err := app.RunWithContext(ctx); err != nil {
 		close(stopCh)
 		ticker.Stop()
+		<-done
 		return false, err
 	}
 	close(stopCh)
