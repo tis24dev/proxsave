@@ -552,10 +552,6 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 }
 
-func detectTelegramCode(baseDir string) string {
-	return detectTelegramCodeWithContext(context.Background(), baseDir)
-}
-
 func detectTelegramCodeWithContext(ctx context.Context, baseDir string) string {
 	info, err := identity.DetectWithContext(ctx, baseDir, nil)
 	if err != nil {
