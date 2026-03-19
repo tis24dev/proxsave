@@ -786,7 +786,7 @@ func run() int {
 	serverIDValue := strings.TrimSpace(cfg.ServerID)
 	serverMACValue := ""
 	telegramServerStatus := "Telegram disabled"
-	if info, err := identity.Detect(cfg.BaseDir, logger); err != nil {
+	if info, err := identity.DetectWithContext(ctx, cfg.BaseDir, logger); err != nil {
 		logging.Warning("WARNING: Failed to load server identity: %v", err)
 		identityInfo = info
 	} else {

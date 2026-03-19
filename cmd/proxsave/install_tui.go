@@ -233,7 +233,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 
 	// Attempt to resolve or create a server identity for Telegram pairing
-	if info, err := identity.Detect(baseDir, nil); err == nil {
+	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {
 		if code := info.ServerID; code != "" {
 			telegramCode = code
 		}

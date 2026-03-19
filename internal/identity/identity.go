@@ -2,6 +2,7 @@ package identity
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -44,6 +45,14 @@ var (
 
 // Detect resolves the server identity (ID + MAC address) and ensures persistence.
 func Detect(baseDir string, logger *logging.Logger) (*Info, error) {
+	return DetectWithContext(context.Background(), baseDir, logger)
+}
+
+// DetectWithContext resolves the server identity (ID + MAC address) and ensures persistence.
+func DetectWithContext(ctx context.Context, baseDir string, logger *logging.Logger) (*Info, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	info := &Info{}
 	baseDir = strings.TrimSpace(baseDir)
 	logDebug(logger, "Identity: starting detection (baseDir=%q)", baseDir)
@@ -78,7 +87,7 @@ func Detect(baseDir string, logger *logging.Logger) (*Info, error) {
 			if strings.TrimSpace(info.PrimaryMAC) == "" && strings.TrimSpace(boundMAC) != "" {
 				info.PrimaryMAC = boundMAC
 			}
-			maybeUpgradeIdentityFile(identityPath, id, info.PrimaryMAC, macs, logger)
+			maybeUpgradeIdentityFileWithContext(ctx, identityPath, id, info.PrimaryMAC, macs, logger)
 			return info, nil
 		}
 		logDebug(logger, "Identity: identity file %s returned empty server ID; generating new one", identityPath)
@@ -106,7 +115,10 @@ func Detect(baseDir string, logger *logging.Logger) (*Info, error) {
 	logDebug(logger, "Identity: identity directory ready: %s", identityDir)
 
 	logDebug(logger, "Identity: persisting identity file (0600 + immutable) to %s", identityPath)
-	if err := writeIdentityFile(identityPath, encodedFile, logger); err != nil {
+	if err := writeIdentityFileWithContext(ctx, identityPath, encodedFile, logger); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return info, err
+		}
 		logWarning(logger, "Identity: failed to write server identity file %s: %v (server ID will NOT be persisted)", identityPath, err)
 		return info, nil
 	}
@@ -732,6 +744,13 @@ func computeSystemKey(machineID, hostnamePart, extra string) string {
 }
 
 func maybeUpgradeIdentityFile(path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) {
+	maybeUpgradeIdentityFileWithContext(context.Background(), path, serverID, primaryMAC, macs, logger)
+}
+
+func maybeUpgradeIdentityFileWithContext(ctx context.Context, path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return
@@ -743,7 +762,7 @@ func maybeUpgradeIdentityFile(path string, serverID string, primaryMAC string, m
 	if err != nil {
 		return
 	}
-	if err := writeIdentityFile(path, updated, logger); err != nil {
+	if err := writeIdentityFileWithContext(ctx, path, updated, logger); err != nil {
 		logDebug(logger, "Identity: failed to upgrade identity file format: %v", err)
 	}
 }
@@ -784,10 +803,19 @@ func identityPayloadHasKeyLabels(fileContent string, logger *logging.Logger) boo
 }
 
 func writeIdentityFile(path, content string, logger *logging.Logger) error {
+	return writeIdentityFileWithContext(context.Background(), path, content, logger)
+}
+
+func writeIdentityFileWithContext(ctx context.Context, path, content string, logger *logging.Logger) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	logDebug(logger, "Identity: writeIdentityFile: start path=%s contentBytes=%d", path, len(content))
 
 	// Ensure file is writable even if immutable was previously set
-	_ = setImmutableAttribute(path, false, logger)
+	if err := setImmutableAttributeWithContext(ctx, path, false, logger); err != nil {
+		return err
+	}
 
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		logDebug(logger, "Identity: writeIdentityFile: os.WriteFile failed: %v", err)
@@ -799,7 +827,9 @@ func writeIdentityFile(path, content string, logger *logging.Logger) error {
 		return err
 	}
 
-	_ = setImmutableAttribute(path, true, logger)
+	if err := setImmutableAttributeWithContext(ctx, path, true, logger); err != nil {
+		return err
+	}
 
 	logDebug(logger, "Identity: writeIdentityFile: done path=%s", path)
 	return nil
@@ -890,6 +920,18 @@ func logDebug(logger *logging.Logger, format string, args ...interface{}) {
 }
 
 func setImmutableAttribute(path string, enable bool, logger *logging.Logger) error {
+	return setImmutableAttributeWithContext(context.Background(), path, enable, logger)
+}
+
+func setImmutableAttributeWithContext(ctx context.Context, path string, enable bool, logger *logging.Logger) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		logDebug(logger, "Identity: immutable: context canceled before chattr for %s: %v", path, err)
+		return err
+	}
+
 	if runtime.GOOS != "linux" {
 		logDebug(logger, "Identity: immutable: skip (GOOS=%s)", runtime.GOOS)
 		return nil
@@ -921,8 +963,12 @@ func setImmutableAttribute(path string, enable bool, logger *logging.Logger) err
 		flag = "-i"
 	}
 
-	cmd := exec.Command(chattrPath, flag, path)
+	cmd := exec.CommandContext(ctx, chattrPath, flag, path)
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			logDebug(logger, "Identity: immutable: chattr canceled for %s: %v", path, ctxErr)
+			return ctxErr
+		}
 		logDebug(logger, "Identity: immutable: chattr failed (ignored): %v", err)
 		return nil
 	}

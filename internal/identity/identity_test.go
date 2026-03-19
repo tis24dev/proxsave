@@ -2,11 +2,14 @@ package identity
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -197,6 +200,25 @@ func TestDetectCreatesIdentityFileInBaseDir(t *testing.T) {
 	}
 	if _, err := os.Stat(expectedPath); err != nil {
 		t.Fatalf("expected identity file to exist at %q: %v", expectedPath, err)
+	}
+}
+
+func TestSetImmutableAttributeWithContext_CanceledBeforeCommand(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires linux")
+	}
+
+	path := filepath.Join(t.TempDir(), "identity")
+	if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := setImmutableAttributeWithContext(ctx, path, false, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
 	}
 }
 

@@ -182,7 +182,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	migrateLegacyCronEntries(ctx, baseDir, execPath, bootstrap, cronSchedule)
 
 	telegramCode := ""
-	if info, err := identity.Detect(baseDir, nil); err == nil {
+	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {
 		if code := strings.TrimSpace(info.ServerID); code != "" {
 			telegramCode = code
 		}

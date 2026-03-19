@@ -243,6 +243,25 @@ func TestResetInstallBaseDirRefusesRoot(t *testing.T) {
 	}
 }
 
+func TestResetInstallBaseDirWithContext_CanceledBeforeRemoval(t *testing.T) {
+	base := t.TempDir()
+	dropFile := filepath.Join(base, "drop.txt")
+	if err := os.WriteFile(dropFile, []byte("drop"), 0o600); err != nil {
+		t.Fatalf("setup drop file: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := resetInstallBaseDirWithContext(ctx, base, logging.NewBootstrapLogger())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
+	}
+	if _, statErr := os.Stat(dropFile); statErr != nil {
+		t.Fatalf("expected file to remain after canceled reset, got %v", statErr)
+	}
+}
+
 func TestPrepareBaseTemplateExistingSkip(t *testing.T) {
 	cfgFile := createTempFile(t, "existing config")
 	reader := bufio.NewReader(strings.NewReader("3\n"))

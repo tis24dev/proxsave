@@ -134,7 +134,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	)
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "detecting telegram identity")
-	telegramCode = detectTelegramCode(baseDir)
+	telegramCode = detectTelegramCodeWithContext(ctx, baseDir)
 	if telegramCode != "" {
 		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "telegram identity detected")
 	} else {
@@ -299,7 +299,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 		bootstrap.Info("Resetting %s (preserving %s)", plan.BaseDir, formatNewInstallPreservedEntries(plan.PreservedEntries))
 	}
 	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "resetting base dir")
-	if err := resetInstallBaseDir(plan.BaseDir, bootstrap); err != nil {
+	if err := resetInstallBaseDirWithContext(ctx, plan.BaseDir, bootstrap); err != nil {
 		return err
 	}
 
@@ -554,7 +554,11 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 }
 
 func detectTelegramCode(baseDir string) string {
-	info, err := identity.Detect(baseDir, nil)
+	return detectTelegramCodeWithContext(context.Background(), baseDir)
+}
+
+func detectTelegramCodeWithContext(ctx context.Context, baseDir string) string {
+	info, err := identity.DetectWithContext(ctx, baseDir, nil)
 	if err != nil {
 		return ""
 	}
@@ -563,6 +567,13 @@ func detectTelegramCode(baseDir string) string {
 }
 
 func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) (err error) {
+	return resetInstallBaseDirWithContext(context.Background(), baseDir, bootstrap)
+}
+
+func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstrap *logging.BootstrapLogger) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	done := logging.DebugStartBootstrap(bootstrap, "reset install base", "base=%s", baseDir)
 	defer func() { done(err) }()
 	baseDir = filepath.Clean(baseDir)
@@ -582,6 +593,9 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) (er
 	preserve := newInstallPreserveSet()
 
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		name := entry.Name()
 		if _, keep := preserve[name]; keep {
 			logBootstrapInfo(bootstrap, "Preserving %s", filepath.Join(baseDir, name))
@@ -589,7 +603,9 @@ func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) (er
 		}
 		target := filepath.Join(baseDir, name)
 		logging.DebugStepBootstrap(bootstrap, "reset install base", "removing %s", target)
-		clearImmutableAttributes(target, bootstrap)
+		if err := clearImmutableAttributesWithContext(ctx, target, bootstrap); err != nil {
+			return err
+		}
 		// Best-effort: ensure write permission before removal
 		if entry.IsDir() {
 			_ = os.Chmod(target, 0o700)
@@ -830,9 +846,20 @@ func isInstallAbortedError(err error) bool {
 // clearImmutableAttributes attempts to remove immutable flags (chattr -i) so deletion can proceed.
 // It logs warnings on failure but does not return an error, since removal will report issues later.
 func clearImmutableAttributes(target string, bootstrap *logging.BootstrapLogger) {
+	_ = clearImmutableAttributesWithContext(context.Background(), target, bootstrap)
+}
+
+func clearImmutableAttributesWithContext(ctx context.Context, target string, bootstrap *logging.BootstrapLogger) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	chattrPath, err := exec.LookPath("chattr")
 	if err != nil {
-		return
+		return nil
 	}
 
 	argsList := [][]string{{chattrPath, "-i", target}}
@@ -841,8 +868,14 @@ func clearImmutableAttributes(target string, bootstrap *logging.BootstrapLogger)
 	}
 
 	for _, args := range argsList {
-		cmd := exec.Command(args[0], args[1:]...)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 		if out, err := cmd.CombinedOutput(); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			trimmed := strings.TrimSpace(string(out))
 			if trimmed != "" {
 				logBootstrapWarning(bootstrap, "Failed to clear immutable flag on %s: %v (%s)", target, err, trimmed)
@@ -851,4 +884,5 @@ func clearImmutableAttributes(target string, bootstrap *logging.BootstrapLogger)
 			}
 		}
 	}
+	return nil
 }
