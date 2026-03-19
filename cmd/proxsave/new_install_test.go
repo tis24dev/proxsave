@@ -114,7 +114,7 @@ func TestRunNewInstallCLIUsesCLIConfirmOnly(t *testing.T) {
 		return true, nil
 	}
 
-	newInstallConfirmTUI = func(baseDirArg, buildSig string, preservedEntries []string) (bool, error) {
+	newInstallConfirmTUI = func(ctx context.Context, baseDirArg, buildSig string, preservedEntries []string) (bool, error) {
 		t.Fatalf("TUI confirmation must not be called in --cli mode")
 		return false, nil
 	}
@@ -184,5 +184,52 @@ func TestRunNewInstallCancelSkipsReset(t *testing.T) {
 	}
 	if _, statErr := os.Stat(markerPath); statErr != nil {
 		t.Fatalf("expected marker to remain after cancel, got %v", statErr)
+	}
+}
+
+func TestRunNewInstallTUIPassesContextToConfirm(t *testing.T) {
+	originalEnsure := newInstallEnsureInteractiveStdin
+	originalConfirmCLI := newInstallConfirmCLI
+	originalConfirmTUI := newInstallConfirmTUI
+	originalRunInstall := newInstallRunInstall
+	originalRunInstallTUI := newInstallRunInstallTUI
+	defer func() {
+		newInstallEnsureInteractiveStdin = originalEnsure
+		newInstallConfirmCLI = originalConfirmCLI
+		newInstallConfirmTUI = originalConfirmTUI
+		newInstallRunInstall = originalRunInstall
+		newInstallRunInstallTUI = originalRunInstallTUI
+	}()
+
+	baseDir := t.TempDir()
+	configPath := filepath.Join(baseDir, "env", "backup.env")
+	ctx := t.Context()
+
+	newInstallEnsureInteractiveStdin = func() error { return nil }
+	newInstallConfirmCLI = func(ctx context.Context, reader *bufio.Reader, plan newInstallPlan) (bool, error) {
+		t.Fatalf("CLI confirmation must not be called in TUI mode")
+		return false, nil
+	}
+	newInstallConfirmTUI = func(gotCtx context.Context, baseDirArg, buildSig string, preservedEntries []string) (bool, error) {
+		if gotCtx != ctx {
+			t.Fatalf("got context %p, want %p", gotCtx, ctx)
+		}
+		if baseDirArg != baseDir {
+			t.Fatalf("baseDir=%q, want %q", baseDirArg, baseDir)
+		}
+		return false, nil
+	}
+	newInstallRunInstall = func(ctx context.Context, cfg string, bootstrap *logging.BootstrapLogger) error {
+		t.Fatalf("runInstall must not be called in TUI mode")
+		return nil
+	}
+	newInstallRunInstallTUI = func(ctx context.Context, cfg string, bootstrap *logging.BootstrapLogger) error {
+		t.Fatalf("runInstallTUI must not be called when confirmation is declined")
+		return nil
+	}
+
+	err := runNewInstall(ctx, configPath, logging.NewBootstrapLogger(), false)
+	if !errors.Is(err, errInteractiveAborted) {
+		t.Fatalf("expected interactive abort, got %v", err)
 	}
 }

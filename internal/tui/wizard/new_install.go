@@ -36,7 +36,7 @@ func formatPreservedEntries(entries []string) string {
 }
 
 // ConfirmNewInstall shows a TUI confirmation before wiping baseDir for --new-install.
-func ConfirmNewInstall(baseDir string, buildSig string, preservedEntries []string) (bool, error) {
+func ConfirmNewInstall(ctx context.Context, baseDir string, buildSig string, preservedEntries []string) (bool, error) {
 	app := tui.NewApp()
 	proceed := false
 	preservedText := formatPreservedEntries(preservedEntries)
@@ -72,7 +72,7 @@ func ConfirmNewInstall(baseDir string, buildSig string, preservedEntries []strin
 		modal,
 	)
 
-	if err := confirmNewInstallRunner(context.Background(), app, flex, modal); err != nil {
+	if err := confirmNewInstallRunner(ctx, app, flex, modal); err != nil {
 		return false, err
 	}
 

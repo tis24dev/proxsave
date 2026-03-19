@@ -286,7 +286,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 	if useCLI {
 		confirm, err = newInstallConfirmCLI(ctx, bufio.NewReader(os.Stdin), plan)
 	} else {
-		confirm, err = newInstallConfirmTUI(plan.BaseDir, plan.BuildSignature, plan.PreservedEntries)
+		confirm, err = newInstallConfirmTUI(ctx, plan.BaseDir, plan.BuildSignature, plan.PreservedEntries)
 	}
 	if err != nil {
 		return wrapInstallError(err)

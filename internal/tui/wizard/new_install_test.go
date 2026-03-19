@@ -62,7 +62,7 @@ func TestConfirmNewInstallContinue(t *testing.T) {
 		return nil
 	}
 
-	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", testPreservedEntries())
+	proceed, err := ConfirmNewInstall(context.Background(), "/opt/proxmox", "sig-123", testPreservedEntries())
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestConfirmNewInstallCancel(t *testing.T) {
 		return nil
 	}
 
-	proceed, err := ConfirmNewInstall("/opt/proxmox", "sig-123", testPreservedEntries())
+	proceed, err := ConfirmNewInstall(context.Background(), "/opt/proxmox", "sig-123", testPreservedEntries())
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestConfirmNewInstallMessageIncludesBaseDir(t *testing.T) {
 		return nil
 	}
 
-	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", testPreservedEntries())
+	_, err := ConfirmNewInstall(context.Background(), "/var/lib/data", "build-sig", testPreservedEntries())
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
 		return nil
 	}
 
-	_, err := ConfirmNewInstall("/var/lib/data", "build-sig", testPreservedEntries())
+	_, err := ConfirmNewInstall(context.Background(), "/var/lib/data", "build-sig", testPreservedEntries())
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -137,8 +137,31 @@ func TestConfirmNewInstallPropagatesRunnerError(t *testing.T) {
 		return expectedErr
 	}
 
-	_, err := ConfirmNewInstall("/opt/proxmox", "sig-123", testPreservedEntries())
+	_, err := ConfirmNewInstall(context.Background(), "/opt/proxmox", "sig-123", testPreservedEntries())
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected error %v, got %v", expectedErr, err)
+	}
+}
+
+func TestConfirmNewInstallPassesContextToRunner(t *testing.T) {
+	originalRunner := confirmNewInstallRunner
+	defer func() { confirmNewInstallRunner = originalRunner }()
+
+	ctx := t.Context()
+	confirmNewInstallRunner = func(gotCtx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		if gotCtx != ctx {
+			t.Fatalf("got context %p, want %p", gotCtx, ctx)
+		}
+		done := extractModalDone(focus.(*tview.Modal))
+		done(0, "Continue")
+		return nil
+	}
+
+	proceed, err := ConfirmNewInstall(ctx, "/opt/proxmox", "sig-123", testPreservedEntries())
+	if err != nil {
+		t.Fatalf("ConfirmNewInstall error: %v", err)
+	}
+	if !proceed {
+		t.Fatalf("expected proceed=true when Continue is selected")
 	}
 }
