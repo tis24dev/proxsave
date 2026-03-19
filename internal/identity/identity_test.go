@@ -264,6 +264,69 @@ func TestDetectUsesExistingIdentityFile(t *testing.T) {
 	}
 }
 
+func TestDetectWithContext_PropagatesCancellationDuringLegacyUpgrade(t *testing.T) {
+	origRead := readFirstLineFunc
+	origHost := hostnameFunc
+	t.Cleanup(func() {
+		readFirstLineFunc = origRead
+		hostnameFunc = origHost
+	})
+
+	hostnameFunc = func() (string, error) { return "host-one", nil }
+	readFirstLineFunc = func(path string, limit int) string {
+		switch path {
+		case "/etc/machine-id":
+			return "machine-one"
+		case "/sys/class/dmi/id/product_uuid":
+			return ""
+		default:
+			return ""
+		}
+	}
+
+	baseDir := t.TempDir()
+	identityDir := filepath.Join(baseDir, identityDirName)
+	if err := os.MkdirAll(identityDir, 0o755); err != nil {
+		t.Fatalf("failed to create identity dir: %v", err)
+	}
+	identityPath := filepath.Join(identityDir, identityFileName)
+
+	t.Cleanup(func() {
+		_ = setImmutableAttribute(identityPath, false, nil)
+	})
+
+	const serverID = "1234567890123456"
+	_, macs := collectMACCandidates(nil)
+	if len(macs) == 0 {
+		t.Skip("no non-loopback MACs available on this system")
+	}
+	primaryMAC := macs[0]
+	legacy, err := encodeProtectedServerIDLegacy(serverID, primaryMAC)
+	if err != nil {
+		t.Fatalf("encodeProtectedServerIDLegacy() error = %v", err)
+	}
+	if err := os.WriteFile(identityPath, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("failed to write legacy identity file: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	info, err := DetectWithContext(ctx, baseDir, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
+	}
+	if info == nil {
+		t.Fatal("expected info even on cancellation")
+	}
+	if info.ServerID != serverID {
+		t.Fatalf("ServerID = %q, want %q", info.ServerID, serverID)
+	}
+	if info.IdentityFile != identityPath {
+		t.Fatalf("IdentityFile = %q, want %q", info.IdentityFile, identityPath)
+	}
+}
+
 func TestLoadServerIDTriesAllMACAddresses(t *testing.T) {
 	baseDir := t.TempDir()
 	identityDir := filepath.Join(baseDir, identityDirName)
@@ -654,7 +717,9 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 		t.Fatalf("failed to write legacy identity file: %v", err)
 	}
 
-	maybeUpgradeIdentityFile(path, serverID, macPrimary, []string{macPrimary, macAlt}, nil)
+	if err := maybeUpgradeIdentityFile(path, serverID, macPrimary, []string{macPrimary, macAlt}, nil); err != nil {
+		t.Fatalf("maybeUpgradeIdentityFile() error = %v", err)
+	}
 
 	upgraded, err := os.ReadFile(path)
 	if err != nil {
@@ -1635,7 +1700,9 @@ func TestCollectMACCandidatesWithLogger(t *testing.T) {
 
 func TestMaybeUpgradeIdentityFileNonExistent(t *testing.T) {
 	// Should not panic on non-existent file
-	maybeUpgradeIdentityFile("/nonexistent/path/identity.conf", "1234567890123456", "aa:bb:cc:dd:ee:ff", nil, nil)
+	if err := maybeUpgradeIdentityFile("/nonexistent/path/identity.conf", "1234567890123456", "aa:bb:cc:dd:ee:ff", nil, nil); err != nil {
+		t.Fatalf("maybeUpgradeIdentityFile() error = %v", err)
+	}
 }
 
 func TestMaybeUpgradeIdentityFileAlreadyUpgraded(t *testing.T) {
@@ -1677,7 +1744,9 @@ func TestMaybeUpgradeIdentityFileAlreadyUpgraded(t *testing.T) {
 	original, _ := os.ReadFile(path)
 
 	// Try to upgrade - should be no-op since already v2
-	maybeUpgradeIdentityFile(path, serverID, macs[0], macs, nil)
+	if err := maybeUpgradeIdentityFile(path, serverID, macs[0], macs, nil); err != nil {
+		t.Fatalf("maybeUpgradeIdentityFile() error = %v", err)
+	}
 
 	// Content should not have changed (same format)
 	after, _ := os.ReadFile(path)

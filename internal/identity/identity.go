@@ -87,7 +87,9 @@ func DetectWithContext(ctx context.Context, baseDir string, logger *logging.Logg
 			if strings.TrimSpace(info.PrimaryMAC) == "" && strings.TrimSpace(boundMAC) != "" {
 				info.PrimaryMAC = boundMAC
 			}
-			maybeUpgradeIdentityFileWithContext(ctx, identityPath, id, info.PrimaryMAC, macs, logger)
+			if err := maybeUpgradeIdentityFileWithContext(ctx, identityPath, id, info.PrimaryMAC, macs, logger); err != nil {
+				return info, err
+			}
 			return info, nil
 		}
 		logDebug(logger, "Identity: identity file %s returned empty server ID; generating new one", identityPath)
@@ -743,28 +745,30 @@ func computeSystemKey(machineID, hostnamePart, extra string) string {
 	return fmt.Sprintf("%x", sum)[:16]
 }
 
-func maybeUpgradeIdentityFile(path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) {
-	maybeUpgradeIdentityFileWithContext(context.Background(), path, serverID, primaryMAC, macs, logger)
+func maybeUpgradeIdentityFile(path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) error {
+	return maybeUpgradeIdentityFileWithContext(context.Background(), path, serverID, primaryMAC, macs, logger)
 }
 
-func maybeUpgradeIdentityFileWithContext(ctx context.Context, path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) {
+func maybeUpgradeIdentityFileWithContext(ctx context.Context, path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return nil
 	}
 	if identityPayloadHasKeyLabels(string(data), logger) {
-		return
+		return nil
 	}
 	updated, err := encodeProtectedServerIDWithMACs(serverID, macs, primaryMAC, logger)
 	if err != nil {
-		return
+		return err
 	}
 	if err := writeIdentityFileWithContext(ctx, path, updated, logger); err != nil {
 		logDebug(logger, "Identity: failed to upgrade identity file format: %v", err)
+		return err
 	}
+	return nil
 }
 
 func normalizeMAC(mac string) string {
