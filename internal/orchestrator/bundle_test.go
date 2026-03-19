@@ -90,6 +90,16 @@ func assertTrackedPathsAbsent(t *testing.T, paths []string) {
 	}
 }
 
+func writeBundleFixtures(t *testing.T, archive string, data map[string]string) {
+	t.Helper()
+
+	for suffix, content := range data {
+		if err := os.WriteFile(archive+suffix, []byte(content), 0o640); err != nil {
+			t.Fatalf("write %s: %v", suffix, err)
+		}
+	}
+}
+
 func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 	tempDir := t.TempDir()
@@ -102,12 +112,7 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 		".metadata":        "metadata-json",
 		".metadata.sha256": "checksum2",
 	}
-
-	for suffix, content := range testData {
-		if err := os.WriteFile(archive+suffix, []byte(content), 0o640); err != nil {
-			t.Fatalf("write %s: %v", suffix, err)
-		}
-	}
+	writeBundleFixtures(t, archive, testData)
 
 	bundleFS := &trackingBundleFS{FS: osFS{}}
 	o := &Orchestrator{
@@ -221,11 +226,7 @@ func TestCreateBundle_ClosesBundleFileOnInputOpenError(t *testing.T) {
 		".sha256":   "checksum1",
 		".metadata": "metadata-json",
 	}
-	for suffix, content := range testData {
-		if err := os.WriteFile(archive+suffix, []byte(content), 0o640); err != nil {
-			t.Fatalf("write %s: %v", suffix, err)
-		}
-	}
+	writeBundleFixtures(t, archive, testData)
 
 	forcedErr := errors.New("forced open failure")
 	bundleFS := &trackingBundleFS{
@@ -258,11 +259,7 @@ func TestCreateBundle_RemovesTempFileOnRenameError(t *testing.T) {
 		".sha256":   "checksum1",
 		".metadata": "metadata-json",
 	}
-	for suffix, content := range testData {
-		if err := os.WriteFile(archive+suffix, []byte(content), 0o640); err != nil {
-			t.Fatalf("write %s: %v", suffix, err)
-		}
-	}
+	writeBundleFixtures(t, archive, testData)
 
 	forcedErr := errors.New("forced rename failure")
 	bundleFS := &trackingBundleFS{
@@ -293,11 +290,7 @@ func TestCreateBundle_RemovesFinalBundleOnDirectoryOpenErrorDuringSync(t *testin
 		".sha256":   "checksum1",
 		".metadata": "metadata-json",
 	}
-	for suffix, content := range testData {
-		if err := os.WriteFile(archive+suffix, []byte(content), 0o640); err != nil {
-			t.Fatalf("write %s: %v", suffix, err)
-		}
-	}
+	writeBundleFixtures(t, archive, testData)
 
 	forcedErr := errors.New("forced directory open failure during sync")
 	bundleFS := &trackingBundleFS{
