@@ -12,42 +12,10 @@ import (
 	"filippo.io/age"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/testutil"
 )
 
-type mockAgeSetupUI struct {
-	overwrite bool
-	drafts    []*AgeRecipientDraft
-	addMore   []bool
-
-	overwriteCalls int
-	collectCalls   int
-	addCalls       int
-}
-
-func (m *mockAgeSetupUI) ConfirmOverwriteExistingRecipient(ctx context.Context, recipientPath string) (bool, error) {
-	m.overwriteCalls++
-	return m.overwrite, nil
-}
-
-func (m *mockAgeSetupUI) CollectRecipientDraft(ctx context.Context, recipientPath string) (*AgeRecipientDraft, error) {
-	m.collectCalls++
-	if len(m.drafts) == 0 {
-		return nil, ErrAgeRecipientSetupAborted
-	}
-	draft := m.drafts[0]
-	m.drafts = m.drafts[1:]
-	return draft, nil
-}
-
-func (m *mockAgeSetupUI) ConfirmAddAnotherRecipient(ctx context.Context, currentCount int) (bool, error) {
-	m.addCalls++
-	if len(m.addMore) == 0 {
-		return false, nil
-	}
-	next := m.addMore[0]
-	m.addMore = m.addMore[1:]
-	return next, nil
-}
+type mockAgeSetupUI = testutil.AgeSetupUIStub[AgeRecipientDraft]
 
 type renameFailFS struct {
 	*FakeFS
@@ -64,7 +32,7 @@ func TestEnsureAgeRecipientsReadyWithUI_ReusesConfiguredRecipientsWithoutPrompti
 		t.Fatalf("GenerateX25519Identity: %v", err)
 	}
 
-	ui := &mockAgeSetupUI{}
+	ui := &mockAgeSetupUI{AbortErr: ErrAgeRecipientSetupAborted}
 	orch := newEncryptionTestOrchestrator(&config.Config{
 		EncryptArchive: true,
 		BaseDir:        t.TempDir(),
@@ -74,7 +42,7 @@ func TestEnsureAgeRecipientsReadyWithUI_ReusesConfiguredRecipientsWithoutPrompti
 	if err := orch.EnsureAgeRecipientsReadyWithUI(context.Background(), ui); err != nil {
 		t.Fatalf("EnsureAgeRecipientsReadyWithUI error: %v", err)
 	}
-	if ui.collectCalls != 0 || ui.overwriteCalls != 0 || ui.addCalls != 0 {
+	if ui.CollectCalls != 0 || ui.OverwriteCalls != 0 || ui.AddCalls != 0 {
 		t.Fatalf("UI should not have been used when recipients already exist: %#v", ui)
 	}
 }
@@ -87,10 +55,11 @@ func TestEnsureAgeRecipientsReadyWithUI_ConfiguresRecipientsWithoutTTY(t *testin
 
 	tmp := t.TempDir()
 	ui := &mockAgeSetupUI{
-		drafts: []*AgeRecipientDraft{
+		AbortErr: ErrAgeRecipientSetupAborted,
+		Drafts: []*AgeRecipientDraft{
 			{Kind: AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
 		},
-		addMore: []bool{false},
+		AddMore: []bool{false},
 	}
 	cfg := &config.Config{EncryptArchive: true, BaseDir: tmp}
 	orch := newEncryptionTestOrchestrator(cfg)
@@ -122,7 +91,10 @@ func TestEnsureAgeRecipientsReadyWithUI_ForceNewRecipientDeclineReturnsAbort(t *
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	ui := &mockAgeSetupUI{overwrite: false}
+	ui := &mockAgeSetupUI{
+		AbortErr:  ErrAgeRecipientSetupAborted,
+		Overwrite: false,
+	}
 	orch := newEncryptionTestOrchestrator(&config.Config{
 		EncryptArchive:   true,
 		BaseDir:          tmp,
@@ -134,11 +106,11 @@ func TestEnsureAgeRecipientsReadyWithUI_ForceNewRecipientDeclineReturnsAbort(t *
 	if !errors.Is(err, ErrAgeRecipientSetupAborted) {
 		t.Fatalf("err=%v; want %v", err, ErrAgeRecipientSetupAborted)
 	}
-	if ui.overwriteCalls != 1 {
-		t.Fatalf("overwriteCalls=%d; want 1", ui.overwriteCalls)
+	if ui.OverwriteCalls != 1 {
+		t.Fatalf("overwriteCalls=%d; want 1", ui.OverwriteCalls)
 	}
-	if ui.collectCalls != 0 {
-		t.Fatalf("collectCalls=%d; want 0", ui.collectCalls)
+	if ui.CollectCalls != 0 {
+		t.Fatalf("collectCalls=%d; want 0", ui.CollectCalls)
 	}
 	if _, statErr := os.Stat(target); statErr != nil {
 		t.Fatalf("recipient file should remain in place, stat err=%v", statErr)
@@ -161,11 +133,12 @@ func TestEnsureAgeRecipientsReadyWithUI_ForceNewRecipientSuccessfulOverwriteCrea
 	}
 
 	ui := &mockAgeSetupUI{
-		overwrite: true,
-		drafts: []*AgeRecipientDraft{
+		AbortErr:  ErrAgeRecipientSetupAborted,
+		Overwrite: true,
+		Drafts: []*AgeRecipientDraft{
 			{Kind: AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
 		},
-		addMore: []bool{false},
+		AddMore: []bool{false},
 	}
 	cfg := &config.Config{
 		EncryptArchive:   true,
@@ -197,8 +170,8 @@ func TestEnsureAgeRecipientsReadyWithUI_ForceNewRecipientSuccessfulOverwriteCrea
 	if got := strings.TrimSpace(string(content)); got != id.Recipient().String() {
 		t.Fatalf("content=%q; want %q", got, id.Recipient().String())
 	}
-	if ui.overwriteCalls != 1 {
-		t.Fatalf("overwriteCalls=%d; want 1", ui.overwriteCalls)
+	if ui.OverwriteCalls != 1 {
+		t.Fatalf("overwriteCalls=%d; want 1", ui.OverwriteCalls)
 	}
 }
 
@@ -219,11 +192,12 @@ func TestRunAgeSetupWorkflow_ForceNewRecipientBackupFailurePreservesOriginal(t *
 	fs.OpenFileErr[filepath.Clean(backupPath)] = errors.New("disk full")
 
 	ui := &mockAgeSetupUI{
-		overwrite: true,
-		drafts: []*AgeRecipientDraft{
+		AbortErr:  ErrAgeRecipientSetupAborted,
+		Overwrite: true,
+		Drafts: []*AgeRecipientDraft{
 			{Kind: AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
 		},
-		addMore: []bool{false},
+		AddMore: []bool{false},
 	}
 	orch := newEncryptionTestOrchestrator(&config.Config{EncryptArchive: true, AgeRecipientFile: target})
 	orch.SetForceNewAgeRecipient(true)
@@ -266,11 +240,12 @@ func TestRunAgeSetupWorkflow_ForceNewRecipientWriteFailurePreservesOriginalAndBa
 	}
 
 	ui := &mockAgeSetupUI{
-		overwrite: true,
-		drafts: []*AgeRecipientDraft{
+		AbortErr:  ErrAgeRecipientSetupAborted,
+		Overwrite: true,
+		Drafts: []*AgeRecipientDraft{
 			{Kind: AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
 		},
-		addMore: []bool{false},
+		AddMore: []bool{false},
 	}
 	orch := newEncryptionTestOrchestrator(&config.Config{EncryptArchive: true, AgeRecipientFile: target})
 	orch.SetForceNewAgeRecipient(true)

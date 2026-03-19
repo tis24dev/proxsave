@@ -9,35 +9,10 @@ import (
 	"filippo.io/age"
 
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/testutil"
 )
 
-type testAgeSetupUI struct {
-	overwrite bool
-	drafts    []*orchestrator.AgeRecipientDraft
-	addMore   []bool
-}
-
-func (u *testAgeSetupUI) ConfirmOverwriteExistingRecipient(ctx context.Context, recipientPath string) (bool, error) {
-	return u.overwrite, nil
-}
-
-func (u *testAgeSetupUI) CollectRecipientDraft(ctx context.Context, recipientPath string) (*orchestrator.AgeRecipientDraft, error) {
-	if len(u.drafts) == 0 {
-		return nil, orchestrator.ErrAgeRecipientSetupAborted
-	}
-	draft := u.drafts[0]
-	u.drafts = u.drafts[1:]
-	return draft, nil
-}
-
-func (u *testAgeSetupUI) ConfirmAddAnotherRecipient(ctx context.Context, currentCount int) (bool, error) {
-	if len(u.addMore) == 0 {
-		return false, nil
-	}
-	next := u.addMore[0]
-	u.addMore = u.addMore[1:]
-	return next, nil
-}
+type testAgeSetupUI = testutil.AgeSetupUIStub[orchestrator.AgeRecipientDraft]
 
 func TestRunInitialEncryptionSetupWithUIReloadsConfig(t *testing.T) {
 	id, err := age.GenerateX25519Identity()
@@ -95,10 +70,11 @@ func TestRunInitialEncryptionSetupWithUIUsesProvidedUI(t *testing.T) {
 	}
 
 	ui := &testAgeSetupUI{
-		drafts: []*orchestrator.AgeRecipientDraft{
+		AbortErr: orchestrator.ErrAgeRecipientSetupAborted,
+		Drafts: []*orchestrator.AgeRecipientDraft{
 			{Kind: orchestrator.AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
 		},
-		addMore: []bool{false},
+		AddMore: []bool{false},
 	}
 
 	result, err := runInitialEncryptionSetupWithUI(context.Background(), configPath, ui)
@@ -176,11 +152,12 @@ func TestRunNewKeySetupKeepsDefaultRecipientPathContract(t *testing.T) {
 	baseDir := t.TempDir()
 	configPath := filepath.Join(baseDir, "env", "backup.env")
 	ui := &testAgeSetupUI{
-		overwrite: true,
-		drafts: []*orchestrator.AgeRecipientDraft{
+		AbortErr:  orchestrator.ErrAgeRecipientSetupAborted,
+		Overwrite: true,
+		Drafts: []*orchestrator.AgeRecipientDraft{
 			{Kind: orchestrator.AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
 		},
-		addMore: []bool{false},
+		AddMore: []bool{false},
 	}
 
 	recipientPath, err := runNewKeySetup(context.Background(), configPath, baseDir, nil, ui)
@@ -220,11 +197,12 @@ func TestRunNewKeySetupUsesConfiguredRecipientFile(t *testing.T) {
 	}
 
 	ui := &testAgeSetupUI{
-		overwrite: true,
-		drafts: []*orchestrator.AgeRecipientDraft{
+		AbortErr:  orchestrator.ErrAgeRecipientSetupAborted,
+		Overwrite: true,
+		Drafts: []*orchestrator.AgeRecipientDraft{
 			{Kind: orchestrator.AgeRecipientInputExisting, PublicKey: id.Recipient().String()},
 		},
-		addMore: []bool{false},
+		AddMore: []bool{false},
 	}
 
 	recipientPath, err := runNewKeySetup(context.Background(), configPath, baseDir, nil, ui)
