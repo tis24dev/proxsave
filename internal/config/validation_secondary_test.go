@@ -23,6 +23,7 @@ func TestValidateRequiredSecondaryPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := ValidateRequiredSecondaryPath(tt.path)
 			if tt.wantErr == "" {
 				if err != nil {
@@ -54,6 +55,7 @@ func TestValidateOptionalSecondaryLogPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := ValidateOptionalSecondaryLogPath(tt.path)
 			if tt.wantErr == "" {
 				if err != nil {
@@ -84,6 +86,7 @@ func TestValidateOptionalSecondaryPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := ValidateOptionalSecondaryPath(tt.path)
 			if tt.wantErr == "" {
 				if err != nil {
