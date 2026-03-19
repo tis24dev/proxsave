@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -40,8 +41,23 @@ func (f *FakeFS) onDisk(path string) string {
 	if clean == root || strings.HasPrefix(clean, root+string(filepath.Separator)) {
 		return clean
 	}
-	clean = strings.TrimPrefix(clean, string(filepath.Separator))
-	return filepath.Join(root, clean)
+
+	mapped := clean
+	if filepath.IsAbs(mapped) {
+		fsRoot := filepath.VolumeName(mapped) + string(filepath.Separator)
+		rel, err := filepath.Rel(fsRoot, mapped)
+		if err != nil {
+			return root
+		}
+		mapped = rel
+	}
+
+	candidate := filepath.Join(root, mapped)
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return root
+	}
+	return filepath.Join(root, rel)
 }
 
 func (f *FakeFS) Cleanup() error {
@@ -260,4 +276,32 @@ func (f *FakeCommandRunner) RunStream(ctx context.Context, name string, stdin io
 		return nil, err
 	}
 	return io.NopCloser(strings.NewReader(string(out))), nil
+}
+
+func TestFakeFSOnDiskMapsAbsolutePathsUnderRoot(t *testing.T) {
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = fakeFS.Cleanup() })
+
+	got := fakeFS.onDisk("/etc/pve/corosync.conf")
+	want := filepath.Join(fakeFS.Root, "etc", "pve", "corosync.conf")
+	if got != want {
+		t.Fatalf("onDisk=%q, want %q", got, want)
+	}
+}
+
+func TestFakeFSOnDiskBlocksUpwardTraversal(t *testing.T) {
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = fakeFS.Cleanup() })
+
+	got := fakeFS.onDisk("../x")
+	rel, err := filepath.Rel(fakeFS.Root, got)
+	if err != nil {
+		t.Fatalf("filepath.Rel error: %v", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		t.Fatalf("onDisk escaped root: got %q (rel %q)", got, rel)
+	}
+	if got != fakeFS.Root {
+		t.Fatalf("onDisk=%q, want sandbox root %q", got, fakeFS.Root)
+	}
 }
