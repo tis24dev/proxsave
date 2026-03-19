@@ -330,14 +330,7 @@ func (c *Checker) verifyBinaryIntegrity() {
 		return
 	}
 
-	f, err := os.Open(c.execPath)
-	if err != nil {
-		c.addError("Cannot open executable %s: %v", c.execPath, err)
-		return
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
+	info, err := os.Lstat(c.execPath)
 	if err != nil {
 		c.addError("Cannot stat executable %s: %v", c.execPath, err)
 		return
@@ -348,17 +341,28 @@ func (c *Checker) verifyBinaryIntegrity() {
 		return
 	}
 
-	c.ensureOwnershipAndPerm(c.execPath, info, 0o700, fmt.Sprintf("Executable %s", c.execPath))
-
 	hashFile := c.execPath + ".md5"
+	f, err := os.Open(c.execPath)
+	if err != nil {
+		c.addError("Cannot open executable %s: %v", c.execPath, err)
+		return
+	}
+	defer f.Close()
+
+	openedInfo, err := f.Stat()
+	if err != nil {
+		c.addError("Cannot stat opened executable %s: %v", c.execPath, err)
+		return
+	}
+	if !os.SameFile(info, openedInfo) {
+		c.addError("Executable %s changed during integrity check; aborting", c.execPath)
+		return
+	}
+	openedInfo = c.ensureOwnershipAndPermFromFD(f, openedInfo, 0o700, fmt.Sprintf("Executable %s", c.execPath))
+
 	currentHash, err := checksumReader(f)
 	if err != nil {
 		c.addWarning("Unable to calculate hash for %s: %v", c.execPath, err)
-		return
-	}
-
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		c.addWarning("Unable to rewind file for %s: %v", c.execPath, err)
 		return
 	}
 
@@ -1029,6 +1033,58 @@ func (c *Checker) ensureOwnershipAndPerm(path string, info os.FileInfo, expected
 			} else {
 				c.logger.Info("Adjusted ownership on %s to root:root", path)
 				info, _ = os.Lstat(path)
+			}
+		} else {
+			c.addWarning("%s should be owned by root:root", description)
+		}
+	}
+
+	return info
+}
+
+func (c *Checker) ensureOwnershipAndPermFromFD(f *os.File, info os.FileInfo, expectedPerm os.FileMode, description string) os.FileInfo {
+	if f == nil {
+		return nil
+	}
+
+	path := f.Name()
+	if path == "" {
+		path = "<opened file>"
+	}
+
+	var err error
+	if info == nil {
+		info, err = f.Stat()
+		if err != nil {
+			c.addWarning("Cannot stat %s: %v", path, err)
+			return nil
+		}
+	}
+
+	if expectedPerm != 0 {
+		if perm := info.Mode().Perm(); perm != expectedPerm {
+			c.bannerWarning(fmt.Sprintf("incorrect permissions on %s (current %o, expected %o)", path, perm, expectedPerm))
+			if c.cfg.AutoFixPermissions {
+				if err := syscall.Fchmod(int(f.Fd()), uint32(expectedPerm)); err != nil {
+					c.addWarning("Failed to adjust permissions on %s: %v", path, err)
+				} else {
+					c.logger.Info("Adjusted permissions on %s to %o", path, expectedPerm)
+					info, _ = f.Stat()
+				}
+			} else {
+				c.addWarning("%s should have permissions %o (current %o)", description, expectedPerm, perm)
+			}
+		}
+	}
+
+	if info != nil && !isOwnedByRoot(info) {
+		c.bannerWarning(fmt.Sprintf("incorrect ownership on %s (required root:root)", path))
+		if c.cfg.AutoFixPermissions {
+			if err := syscall.Fchown(int(f.Fd()), 0, 0); err != nil {
+				c.addWarning("Failed to set ownership root:root on %s: %v", path, err)
+			} else {
+				c.logger.Info("Adjusted ownership on %s to root:root", path)
+				info, _ = f.Stat()
 			}
 		} else {
 			c.addWarning("%s should be owned by root:root", description)

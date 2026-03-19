@@ -16,8 +16,10 @@ import (
 )
 
 var (
-	postInstallAuditWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		return app.SetRoot(root, true).SetFocus(focus).Run()
+	postInstallAuditWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetRoot(root, true)
+		app.SetFocus(focus)
+		return app.RunWithContext(ctx)
 	}
 )
 
@@ -41,40 +43,6 @@ type PostInstallAuditResult struct {
 // (e.g., UI setup issues).
 func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildSig string) (result PostInstallAuditResult, err error) {
 	app := tui.NewApp()
-
-	titleText := tview.NewTextView().
-		SetText("ProxSave - Post-install Check\n\n" +
-			"Detect optional components that are enabled but not configured on this node.\n" +
-			"This helps reduce WARNING noise and exit code 1 runs when features are unused.\n").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	titleText.SetBorder(false)
-
-	nav := tview.NewTextView().
-		SetText("[yellow]Navigation:[white] ↑↓ to move | ENTER/SPACE to toggle | ←→ on buttons | ENTER to select").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	nav.SetBorder(false)
-
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
 
 	pages := tview.NewPages()
 
@@ -137,23 +105,18 @@ func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildS
 	pages.AddPage("confirm", confirm, true, true)
 	pages.AddPage("running", running, true, false)
 
-	layout := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(titleText, 5, 0, false).
-		AddItem(nav, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(pages, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
+	layout := buildWizardScreen(
+		"ProxSave",
+		"ProxSave - Post-install Check\n\n"+
+			"Detect optional components that are enabled but not configured on this node.\n"+
+			"This helps reduce WARNING noise and exit code 1 runs when features are unused.\n",
+		"[yellow]Navigation:[white] ↑↓ to move | ENTER/SPACE to toggle | ←→ on buttons | ENTER to select",
+		configPath,
+		buildSig,
+		pages,
+	)
 
-	layout.SetBorder(true).
-		SetTitle(" ProxSave ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
-
-	if runErr := postInstallAuditWizardRunner(app, layout, confirm); runErr != nil {
+	if runErr := postInstallAuditWizardRunner(ctx, app, layout, confirm); runErr != nil {
 		return PostInstallAuditResult{}, runErr
 	}
 
@@ -228,11 +191,11 @@ func showAuditReview(app *tui.App, pages *tview.Pages, configPath string, sugges
 		b.WriteString("[yellow]Detected warnings:[white]\n\n")
 		for _, msg := range s.Messages {
 			b.WriteString("- ")
-			b.WriteString(msg)
+			b.WriteString(tview.Escape(msg))
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("If you don’t use this feature, set [yellow]%s=false[white] to disable.\n", s.Key))
+		b.WriteString(fmt.Sprintf("If you don’t use this feature, set [yellow]%s=false[white] to disable.\n", tview.Escape(s.Key)))
 		details.SetText(b.String())
 	}
 

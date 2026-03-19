@@ -9,25 +9,9 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-func setBaseDirEnv(t *testing.T, value string) func() {
+func setBaseDirEnv(t *testing.T, value string) {
 	t.Helper()
-
-	prev := os.Getenv("BASE_DIR")
-	if value == "" {
-		_ = os.Unsetenv("BASE_DIR")
-	} else {
-		if err := os.Setenv("BASE_DIR", value); err != nil {
-			t.Fatalf("failed to set BASE_DIR: %v", err)
-		}
-	}
-
-	return func() {
-		if prev == "" {
-			_ = os.Unsetenv("BASE_DIR")
-		} else {
-			_ = os.Setenv("BASE_DIR", prev)
-		}
-	}
+	t.Setenv("BASE_DIR", value)
 }
 
 func TestLoadConfig(t *testing.T) {
@@ -59,8 +43,7 @@ BACKUP_BLACKLIST=/var/data/tmp
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/env/base/dir")
-	defer cleanup()
+	setBaseDirEnv(t, "/env/base/dir")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -260,8 +243,7 @@ AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt
 		t.Fatalf("Failed to write config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/custom/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/custom/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -288,6 +270,72 @@ func TestLoadConfigNotFound(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAllowsInvalidSecondaryPathWhenDisabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "invalid-secondary.env")
+	content := `BACKUP_PATH=/test/backup
+LOG_PATH=/test/log
+SECONDARY_ENABLED=false
+SECONDARY_PATH=remote:path
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.SecondaryEnabled {
+		t.Fatal("SecondaryEnabled expected false")
+	}
+	if cfg.SecondaryPath != "remote:path" {
+		t.Fatalf("SecondaryPath = %q; want %q", cfg.SecondaryPath, "remote:path")
+	}
+}
+
+func TestLoadConfigRejectsInvalidSecondaryPathWhenEnabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "invalid-secondary-enabled.env")
+	content := `BACKUP_PATH=/test/backup
+LOG_PATH=/test/log
+SECONDARY_ENABLED=true
+SECONDARY_PATH=remote:path
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("expected LoadConfig to fail")
+	}
+	if got, want := err.Error(), "SECONDARY_PATH must be an absolute local filesystem path"; !strings.Contains(got, want) {
+		t.Fatalf("LoadConfig() error = %q, want substring %q", got, want)
+	}
+}
+
+func TestLoadConfigRejectsInvalidSecondaryLogPathWhenConfigured(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "invalid-secondary-log.env")
+	content := `BACKUP_PATH=/test/backup
+LOG_PATH=/test/log
+SECONDARY_ENABLED=false
+SECONDARY_LOG_PATH=remote:/logs
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("expected LoadConfig to fail")
+	}
+	if got, want := err.Error(), "SECONDARY_LOG_PATH must be an absolute local filesystem path"; !strings.Contains(got, want) {
+		t.Fatalf("LoadConfig() error = %q, want substring %q", got, want)
+	}
+}
+
 func TestLoadConfigWithQuotes(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "test_quotes.env")
@@ -301,8 +349,7 @@ LOG_PATH=/path/without/quotes
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/quotes/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/quotes/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -344,8 +391,7 @@ DEBUG_LEVEL=4
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/comments/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/comments/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -398,8 +444,7 @@ func TestConfigDefaults(t *testing.T) {
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/defaults/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/defaults/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -427,8 +472,93 @@ func TestConfigDefaults(t *testing.T) {
 		t.Errorf("Default LocalRetentionDays = %d; want 7", cfg.LocalRetentionDays)
 	}
 
+	if cfg.EmailEnabled {
+		t.Error("Expected default EmailEnabled to be false")
+	}
+
 	if cfg.BaseDir != "/defaults/base" {
 		t.Errorf("Default BaseDir = %q; want %q", cfg.BaseDir, "/defaults/base")
+	}
+}
+
+func TestLoadConfigNotificationLegacyEnableAliases(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "legacy_notifications.env")
+
+	content := `TELEGRAM_ENABLE=true
+EMAIL_ENABLE=true
+GOTIFY_ENABLE=true
+WEBHOOK_ENABLE=true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	setBaseDirEnv(t, "/legacy/notifications/base")
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if !cfg.TelegramEnabled {
+		t.Error("Expected TelegramEnabled to be true via TELEGRAM_ENABLE")
+	}
+	if !cfg.EmailEnabled {
+		t.Error("Expected EmailEnabled to be true via EMAIL_ENABLE")
+	}
+	if !cfg.GotifyEnabled {
+		t.Error("Expected GotifyEnabled to be true via GOTIFY_ENABLE")
+	}
+	if !cfg.WebhookEnabled {
+		t.Error("Expected WebhookEnabled to be true via WEBHOOK_ENABLE")
+	}
+}
+
+func TestLoadEnvOverridesNotificationLegacyEnableAliases(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "legacy_notification_env_override.env")
+
+	content := `TELEGRAM_ENABLED=false
+EMAIL_ENABLED=false
+GOTIFY_ENABLED=false
+WEBHOOK_ENABLED=false
+BOT_TELEGRAM_TYPE=centralized
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	overrides := map[string]string{
+		"TELEGRAM_ENABLE":   "true",
+		"EMAIL_ENABLE":      "true",
+		"GOTIFY_ENABLE":     "true",
+		"WEBHOOK_ENABLE":    "true",
+		"BOT_TELEGRAM_TYPE": "personal",
+	}
+	for key, value := range overrides {
+		t.Setenv(key, value)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if !cfg.TelegramEnabled {
+		t.Error("Expected TelegramEnabled to be true via TELEGRAM_ENABLE env override")
+	}
+	if !cfg.EmailEnabled {
+		t.Error("Expected EmailEnabled to be true via EMAIL_ENABLE env override")
+	}
+	if !cfg.GotifyEnabled {
+		t.Error("Expected GotifyEnabled to be true via GOTIFY_ENABLE env override")
+	}
+	if !cfg.WebhookEnabled {
+		t.Error("Expected WebhookEnabled to be true via WEBHOOK_ENABLE env override")
+	}
+	if cfg.TelegramBotType != "personal" {
+		t.Errorf("TelegramBotType = %q; want personal from env override", cfg.TelegramBotType)
 	}
 }
 
@@ -443,8 +573,7 @@ BACKUP_PATH=${BASE_DIR}/backup-data
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "")
-	defer cleanup()
+	setBaseDirEnv(t, "")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -471,8 +600,7 @@ PVE_CONFIG_PATH=/etc/pve
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/config-vars/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/config-vars/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -499,8 +627,7 @@ MAX_LOCAL_BACKUPS=10
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/retention/base")
-	defer cleanup()
+	setBaseDirEnv(t, "/retention/base")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -608,8 +735,7 @@ LOCK_PATH=/test/lock
 		t.Fatalf("failed to write config: %v", err)
 	}
 
-	cleanup := setBaseDirEnv(t, "/env/base/dir")
-	defer cleanup()
+	setBaseDirEnv(t, "/env/base/dir")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -668,16 +794,8 @@ BACKUP_PATH=/fromfile
 		t.Fatalf("failed to write config: %v", err)
 	}
 
-	if err := os.Setenv("BACKUP_ENABLED", "true"); err != nil {
-		t.Fatalf("failed to set env BACKUP_ENABLED: %v", err)
-	}
-	if err := os.Setenv("BACKUP_PATH", "/fromenv"); err != nil {
-		t.Fatalf("failed to set env BACKUP_PATH: %v", err)
-	}
-	defer func() {
-		_ = os.Unsetenv("BACKUP_ENABLED")
-		_ = os.Unsetenv("BACKUP_PATH")
-	}()
+	t.Setenv("BACKUP_ENABLED", "true")
+	t.Setenv("BACKUP_PATH", "/fromenv")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -689,6 +807,57 @@ BACKUP_PATH=/fromfile
 	}
 	if cfg.BackupPath != "/fromenv" {
 		t.Fatalf("BackupPath = %q; want /fromenv (from env override)", cfg.BackupPath)
+	}
+}
+
+func TestLoadEnvOverridesOverridesNotificationFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "notification_env_override.env")
+	content := `GOTIFY_SERVER_URL=https://from-file.example
+GOTIFY_TOKEN=file-token
+GOTIFY_PRIORITY_SUCCESS=2
+WEBHOOK_ENDPOINTS=file_hook
+WEBHOOK_FORMAT=generic
+WEBHOOK_TIMEOUT=30
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	overrides := map[string]string{
+		"GOTIFY_SERVER_URL":       "https://from-env.example",
+		"GOTIFY_TOKEN":            "env-token",
+		"GOTIFY_PRIORITY_SUCCESS": "9",
+		"WEBHOOK_ENDPOINTS":       "env_hook",
+		"WEBHOOK_FORMAT":          "slack",
+		"WEBHOOK_TIMEOUT":         "45",
+	}
+	for key, value := range overrides {
+		t.Setenv(key, value)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if cfg.GotifyServerURL != "https://from-env.example" {
+		t.Fatalf("GotifyServerURL = %q; want https://from-env.example", cfg.GotifyServerURL)
+	}
+	if cfg.GotifyToken != "env-token" {
+		t.Fatalf("GotifyToken = %q; want env-token", cfg.GotifyToken)
+	}
+	if cfg.GotifyPrioritySuccess != 9 {
+		t.Fatalf("GotifyPrioritySuccess = %d; want 9", cfg.GotifyPrioritySuccess)
+	}
+	if len(cfg.WebhookEndpointNames) != 1 || cfg.WebhookEndpointNames[0] != "env_hook" {
+		t.Fatalf("WebhookEndpointNames = %#v; want [env_hook]", cfg.WebhookEndpointNames)
+	}
+	if cfg.WebhookDefaultFormat != "slack" {
+		t.Fatalf("WebhookDefaultFormat = %q; want slack", cfg.WebhookDefaultFormat)
+	}
+	if cfg.WebhookTimeout != 45 {
+		t.Fatalf("WebhookTimeout = %d; want 45", cfg.WebhookTimeout)
 	}
 }
 
@@ -731,13 +900,9 @@ func TestConfigFallbackHelpers(t *testing.T) {
 }
 
 func TestExpandEnvVarsAndBaseDir(t *testing.T) {
-	restoreBase := setBaseDirEnv(t, "/env/base")
-	defer restoreBase()
+	setBaseDirEnv(t, "/env/base")
 
-	if err := os.Setenv("FOO", "bar"); err != nil {
-		t.Fatalf("failed to set FOO: %v", err)
-	}
-	defer func() { _ = os.Unsetenv("FOO") }()
+	t.Setenv("FOO", "bar")
 
 	in := "${FOO}/$FOO/${BASE_DIR}/suffix"
 	got := expandEnvVars(in)
@@ -883,8 +1048,7 @@ func TestAutoDetectPBSTokenParsesFiles(t *testing.T) {
 }
 
 func TestAutoDetectPBSAuthEnvAndTokenPriority(t *testing.T) {
-	restoreBase := setBaseDirEnv(t, "/pbs/base")
-	defer restoreBase()
+	setBaseDirEnv(t, "/pbs/base")
 
 	tmpDir := t.TempDir()
 	tokenFile := filepath.Join(tmpDir, "pbs_token")
@@ -893,14 +1057,9 @@ func TestAutoDetectPBSAuthEnvAndTokenPriority(t *testing.T) {
 	}
 
 	// Case 1: environment variables have highest priority
-	_ = os.Setenv("PBS_REPOSITORY", "envrepo")
-	_ = os.Setenv("PBS_PASSWORD", "envpass")
-	_ = os.Setenv("PBS_FINGERPRINT", "envfp")
-	defer func() {
-		_ = os.Unsetenv("PBS_REPOSITORY")
-		_ = os.Unsetenv("PBS_PASSWORD")
-		_ = os.Unsetenv("PBS_FINGERPRINT")
-	}()
+	t.Setenv("PBS_REPOSITORY", "envrepo")
+	t.Setenv("PBS_PASSWORD", "envpass")
+	t.Setenv("PBS_FINGERPRINT", "envfp")
 
 	cfg := &Config{
 		SecureAccount: tmpDir,
@@ -916,9 +1075,9 @@ func TestAutoDetectPBSAuthEnvAndTokenPriority(t *testing.T) {
 	}
 
 	// Case 2: no env, use raw config values
-	_ = os.Unsetenv("PBS_REPOSITORY")
-	_ = os.Unsetenv("PBS_PASSWORD")
-	_ = os.Unsetenv("PBS_FINGERPRINT")
+	t.Setenv("PBS_REPOSITORY", "")
+	t.Setenv("PBS_PASSWORD", "")
+	t.Setenv("PBS_FINGERPRINT", "")
 
 	cfg2 := &Config{
 		SecureAccount: tmpDir,

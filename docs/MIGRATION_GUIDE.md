@@ -242,7 +242,7 @@ These old Bash variable names **still work** in Go (automatic fallback):
 | `LOCAL_BACKUP_PATH` | `BACKUP_PATH` | ✅ Auto-fallback |
 | `ENABLE_CLOUD_BACKUP` | `CLOUD_ENABLED` | ✅ Auto-fallback |
 | `PROMETHEUS_ENABLED` | `METRICS_ENABLED` | ✅ Auto-fallback |
-| `PROMETHEUS_PATH` | `METRICS_PATH` | ✅ Auto-fallback |
+| `PROMETHEUS_TEXTFILE_DIR` | `METRICS_PATH` | ✅ Auto-fallback |
 | `TELEGRAM_ENABLE` | `TELEGRAM_ENABLED` | ✅ Auto-fallback |
 | `EMAIL_ENABLE` | `EMAIL_ENABLED` | ✅ Auto-fallback |
 | `GOTIFY_ENABLE` | `GOTIFY_ENABLED` | ✅ Auto-fallback |
@@ -250,6 +250,8 @@ These old Bash variable names **still work** in Go (automatic fallback):
 | _... and 8 more_ | _See BACKUP_ENV_MAPPING.md_ | ✅ Auto-fallback |
 
 **What this means**: You can keep using old variable names, and Go will automatically read them. However, **it's recommended to update to new names** for clarity and future compatibility.
+
+For email notifications, if `EMAIL_ENABLED` is omitted entirely, the runtime default is `false`, matching the template.
 
 ### Variables Requiring Conversion
 
@@ -445,7 +447,7 @@ TELEGRAM_ENABLE=true
 TELEGRAM_ENABLED=true
 ```
 
-**Note**: Automatic fallback should handle this, but explicitly updating is cleaner.
+**Note**: Automatic fallback handles the legacy `_ENABLE` aliases, but explicitly updating is cleaner. For email, leaving `EMAIL_ENABLED` unset now keeps notifications disabled by default.
 
 ---
 

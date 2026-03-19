@@ -16,6 +16,11 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+func prependPathEnv(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestIsRcloneRemote(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -204,8 +209,7 @@ func TestDiscoverRcloneBackups_ListsAndParsesBundles(t *testing.T) {
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelDebug, false)
 
-	manifest, cleanup := setupFakeRcloneListAndCat(t)
-	defer cleanup()
+	manifest := setupFakeRcloneListAndCat(t)
 
 	candidates, err := discoverRcloneBackups(ctx, nil, "gdrive:pbs-backups/server1", logger, nil)
 	if err != nil {
@@ -267,16 +271,8 @@ esac
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-
-	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
-		t.Fatalf("set METADATA_PATH: %v", err)
-	}
-	defer os.Unsetenv("METADATA_PATH")
+	prependPathEnv(t, tmpDir)
+	t.Setenv("METADATA_PATH", metadataPath)
 
 	ctx := context.Background()
 	candidates, err := discoverRcloneBackups(ctx, nil, "gdrive:pbs-backups/server1", nil, nil)
@@ -394,17 +390,10 @@ esac
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-	_ = os.Setenv("BUNDLE_PATH", bundlePath)
-	_ = os.Setenv("RAW_NEWEST_META", rawNewestMeta)
-	_ = os.Setenv("RAW_OLD_META", rawOldMeta)
-	defer os.Unsetenv("BUNDLE_PATH")
-	defer os.Unsetenv("RAW_NEWEST_META")
-	defer os.Unsetenv("RAW_OLD_META")
+	prependPathEnv(t, tmpDir)
+	t.Setenv("BUNDLE_PATH", bundlePath)
+	t.Setenv("RAW_NEWEST_META", rawNewestMeta)
+	t.Setenv("RAW_OLD_META", rawOldMeta)
 
 	// Ensure archives appear in lsf snapshot; their content is not fetched.
 	_ = os.WriteFile(rawNewestArchive, []byte("x"), 0o600)
@@ -433,8 +422,7 @@ esac
 
 func TestDiscoverRcloneBackups_AllowsNilLogger(t *testing.T) {
 	ctx := context.Background()
-	manifest, cleanup := setupFakeRcloneListAndCat(t)
-	defer cleanup()
+	manifest := setupFakeRcloneListAndCat(t)
 
 	candidates, err := discoverRcloneBackups(ctx, nil, "gdrive:pbs-backups/server1", nil, nil)
 	if err != nil {
@@ -519,16 +507,8 @@ func TestInspectRcloneBundleManifest_UsesRcloneCat(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-
-	if err := os.Setenv("BUNDLE_PATH", bundlePath); err != nil {
-		t.Fatalf("set BUNDLE_PATH: %v", err)
-	}
-	defer os.Unsetenv("BUNDLE_PATH")
+	prependPathEnv(t, tmpDir)
+	t.Setenv("BUNDLE_PATH", bundlePath)
 
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelInfo, false)
@@ -553,9 +533,8 @@ func TestInspectRcloneBundleManifest_UsesRcloneCat(t *testing.T) {
 
 // setupFakeRcloneListAndCat creates a temporary bundle and installs a fake
 // rclone binary that supports `lsf` and `cat`, emulating cloud discovery.
-// It returns the manifest embedded in the bundle and a cleanup function that
-// restores PATH and auxiliary env vars.
-func setupFakeRcloneListAndCat(t *testing.T) (backup.Manifest, func()) {
+// It returns the manifest embedded in the bundle.
+func setupFakeRcloneListAndCat(t *testing.T) backup.Manifest {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -616,20 +595,10 @@ esac
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	if err := os.Setenv("BUNDLE_PATH", bundlePath); err != nil {
-		t.Fatalf("set BUNDLE_PATH: %v", err)
-	}
+	prependPathEnv(t, tmpDir)
+	t.Setenv("BUNDLE_PATH", bundlePath)
 
-	cleanup := func() {
-		_ = os.Setenv("PATH", oldPath)
-		_ = os.Unsetenv("BUNDLE_PATH")
-	}
-
-	return manifest, cleanup
+	return manifest
 }
 
 func TestDiscoverBackupCandidates_NoLoggerSkipsRawArtifactsWithoutChecksumVerification(t *testing.T) {
@@ -872,19 +841,9 @@ esac
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
-		t.Fatalf("set METADATA_PATH: %v", err)
-	}
-	defer os.Unsetenv("METADATA_PATH")
-	if err := os.Setenv("CHECKSUM_PATH", checksumPath); err != nil {
-		t.Fatalf("set CHECKSUM_PATH: %v", err)
-	}
-	defer os.Unsetenv("CHECKSUM_PATH")
+	prependPathEnv(t, tmpDir)
+	t.Setenv("METADATA_PATH", metadataPath)
+	t.Setenv("CHECKSUM_PATH", checksumPath)
 
 	candidates, err := discoverRcloneBackups(context.Background(), nil, "gdrive:pbs-backups/server1", nil, nil)
 	if err != nil {
@@ -973,19 +932,9 @@ esac
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
-		t.Fatalf("set METADATA_PATH: %v", err)
-	}
-	defer os.Unsetenv("METADATA_PATH")
-	if err := os.Setenv("CHECKSUM_PATH", checksumPath); err != nil {
-		t.Fatalf("set CHECKSUM_PATH: %v", err)
-	}
-	defer os.Unsetenv("CHECKSUM_PATH")
+	prependPathEnv(t, tmpDir)
+	t.Setenv("METADATA_PATH", metadataPath)
+	t.Setenv("CHECKSUM_PATH", checksumPath)
 
 	cfg := &config.Config{RcloneTimeoutConnection: 3}
 	candidates, err := discoverRcloneBackups(context.Background(), cfg, "gdrive:pbs-backups/server1", nil, nil)
@@ -1077,19 +1026,9 @@ esac
 				t.Fatalf("write fake rclone: %v", err)
 			}
 
-			oldPath := os.Getenv("PATH")
-			if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-				t.Fatalf("set PATH: %v", err)
-			}
-			defer os.Setenv("PATH", oldPath)
-			if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
-				t.Fatalf("set METADATA_PATH: %v", err)
-			}
-			defer os.Unsetenv("METADATA_PATH")
-			if err := os.Setenv("CHECKSUM_PATH", checksumPath); err != nil {
-				t.Fatalf("set CHECKSUM_PATH: %v", err)
-			}
-			defer os.Unsetenv("CHECKSUM_PATH")
+			prependPathEnv(t, tmpDir)
+			t.Setenv("METADATA_PATH", metadataPath)
+			t.Setenv("CHECKSUM_PATH", checksumPath)
 
 			candidates, err := discoverRcloneBackups(context.Background(), nil, "gdrive:pbs-backups/server1", nil, nil)
 			if err != nil {

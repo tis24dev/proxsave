@@ -342,7 +342,7 @@ func TestSecondaryStorage_Store_AssociatedCopyFailuresAreNonFatal(t *testing.T) 
 	}
 }
 
-func TestSecondaryStorage_Store_BundleCopyFailureIsNonFatal(t *testing.T) {
+func TestSecondaryStorage_Store_BundleSourceCopyFailureReturnsRecoverableError(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	srcDir := t.TempDir()
 	destDir := t.TempDir()
@@ -367,15 +367,46 @@ func TestSecondaryStorage_Store_BundleCopyFailureIsNonFatal(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
+	err := storage.Store(context.Background(), backupFile, &types.BackupMetadata{})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	var se *StorageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected StorageError, got %T: %v", err, err)
+	}
+	if !se.Recoverable {
+		t.Fatalf("expected recoverable StorageError, got %+v", se)
+	}
+
+	if _, err := os.Stat(filepath.Join(destDir, filepath.Base(backupFile))); !os.IsNotExist(err) {
+		t.Fatalf("raw backup should not be copied when bundling is enabled, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, filepath.Base(bundleDir))); !os.IsNotExist(err) {
+		t.Fatalf("bundle should not be copied due to forced source failure, err=%v", err)
+	}
+}
+
+func TestSecondaryStorage_Store_NilConfigTreatsSourceAsUnbundled(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+	storage := &SecondaryStorage{
+		logger:   logger,
+		basePath: destDir,
+	}
+
+	backupFile := filepath.Join(srcDir, "node-backup-20240102-030405.tar.zst")
+	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
 	if err := storage.Store(context.Background(), backupFile, &types.BackupMetadata{}); err != nil {
-		t.Fatalf("Store() error = %v; want nil (non-fatal bundle failure)", err)
+		t.Fatalf("Store() error = %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(destDir, filepath.Base(backupFile))); err != nil {
-		t.Fatalf("expected backup to be copied: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(destDir, filepath.Base(bundleDir))); !os.IsNotExist(err) {
-		t.Fatalf("expected bundle not to be copied due to forced failure, err=%v", err)
+		t.Fatalf("expected raw backup to be copied, err=%v", err)
 	}
 }
 

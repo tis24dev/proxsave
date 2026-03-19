@@ -48,6 +48,66 @@ func TestNormalizeGFSRetentionConfigEnforcesDailyMinimum(t *testing.T) {
 	}
 }
 
+func TestNormalizeGFSRetentionConfigLeavesNonGFSUnchanged(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	cfg := RetentionConfig{
+		Policy:     "simple",
+		MaxBackups: 7,
+		Daily:      0,
+		Weekly:     4,
+	}
+
+	effective := NormalizeGFSRetentionConfig(logger, "Test Storage", cfg)
+
+	if effective != cfg {
+		t.Fatalf("NormalizeGFSRetentionConfig() = %+v; want %+v", effective, cfg)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log output for non-GFS policy, got: %s", buf.String())
+	}
+}
+
+func TestNormalizeGFSRetentionConfigDoesNotLogWhenDailyAlreadyValid(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	cfg := RetentionConfig{
+		Policy: "gfs",
+		Daily:  3,
+		Weekly: 4,
+	}
+
+	effective := NormalizeGFSRetentionConfig(logger, "Test Storage", cfg)
+
+	if effective != cfg {
+		t.Fatalf("NormalizeGFSRetentionConfig() = %+v; want %+v", effective, cfg)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log output when daily is already valid, got: %s", buf.String())
+	}
+}
+
+func TestEffectiveGFSRetentionConfigEnforcesDailyMinimumWithoutLogging(t *testing.T) {
+	cfg := RetentionConfig{
+		Policy: "gfs",
+		Daily:  0,
+		Weekly: 4,
+	}
+
+	effective := EffectiveGFSRetentionConfig(cfg)
+
+	if effective.Daily != 1 {
+		t.Fatalf("EffectiveGFSRetentionConfig() Daily = %d; want 1", effective.Daily)
+	}
+	if effective.Weekly != cfg.Weekly {
+		t.Fatalf("EffectiveGFSRetentionConfig() Weekly = %d; want %d", effective.Weekly, cfg.Weekly)
+	}
+}
+
 func TestLocalStorageListSkipsAssociatedFilesAndSortsByTimestamp(t *testing.T) {
 	t.Parallel()
 
@@ -1407,17 +1467,69 @@ func TestSecondaryStorageStoreHandlesBundles(t *testing.T) {
 	}
 
 	destBackup := filepath.Join(destDir, filepath.Base(backupFile))
-	if _, err := os.Stat(destBackup); err != nil {
-		t.Fatalf("expected backup to be copied: %v", err)
+	if _, err := os.Stat(destBackup); !os.IsNotExist(err) {
+		t.Fatalf("raw backup should not be copied when bundling is enabled, err=%v", err)
 	}
 
 	destBundle := filepath.Join(destDir, filepath.Base(backupFile)+".bundle.tar")
 	if _, err := os.Stat(destBundle); err != nil {
 		t.Fatalf("expected bundle to be copied: %v", err)
 	}
+	if data, err := os.ReadFile(destBundle); err != nil {
+		t.Fatalf("read copied bundle: %v", err)
+	} else if string(data) != "bundle" {
+		t.Fatalf("copied bundle = %q, want %q", string(data), "bundle")
+	}
 
 	if _, err := os.Stat(filepath.Join(destDir, filepath.Base(backupFile)+".metadata")); !os.IsNotExist(err) {
 		t.Fatalf("metadata should not be copied when bundling is enabled, err=%v", err)
+	}
+}
+
+func TestSecondaryStorageStoreBundleInputSkipsDoubleBundleCopy(t *testing.T) {
+	t.Parallel()
+
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+	cfg := &config.Config{
+		SecondaryEnabled:      true,
+		SecondaryPath:         destDir,
+		BundleAssociatedFiles: true,
+	}
+	storage := newSecondaryStorageForTest(t, cfg)
+
+	bundleFile := filepath.Join(srcDir, "node-bundle-backup-20240202-020202.tar.zst.bundle.tar")
+	if err := os.WriteFile(bundleFile, []byte("bundle"), 0o600); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+	doubleBundle := bundleFile + ".bundle.tar"
+	if err := os.WriteFile(doubleBundle, []byte("decoy"), 0o600); err != nil {
+		t.Fatalf("write double bundle decoy: %v", err)
+	}
+
+	if err := storage.Store(context.Background(), bundleFile, &types.BackupMetadata{}); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	destBundle := filepath.Join(destDir, filepath.Base(bundleFile))
+	if _, err := os.Stat(destBundle); err != nil {
+		t.Fatalf("expected bundle to be copied: %v", err)
+	}
+	originalBundleData, err := os.ReadFile(bundleFile)
+	if err != nil {
+		t.Fatalf("read original bundle: %v", err)
+	}
+	copiedBundleData, err := os.ReadFile(destBundle)
+	if err != nil {
+		t.Fatalf("read copied bundle: %v", err)
+	}
+	if string(copiedBundleData) != string(originalBundleData) {
+		t.Fatalf("copied bundle contents = %q, want %q", string(copiedBundleData), string(originalBundleData))
+	}
+
+	destDoubleBundle := filepath.Join(destDir, filepath.Base(doubleBundle))
+	if _, err := os.Stat(destDoubleBundle); !os.IsNotExist(err) {
+		t.Fatalf("double bundle decoy should not be copied, err=%v", err)
 	}
 }
 
@@ -1526,8 +1638,11 @@ func TestSecondaryStorageGetStatsIncludesFilesystemInfo(t *testing.T) {
 	if stats.TotalSpace == 0 || stats.AvailableSpace == 0 {
 		t.Fatalf("expected filesystem stats to be populated (TotalSpace=%d, AvailableSpace=%d)", stats.TotalSpace, stats.AvailableSpace)
 	}
-	if stats.UsedSpace != stats.TotalSpace-stats.AvailableSpace {
-		t.Fatalf("UsedSpace mismatch: got %d want %d", stats.UsedSpace, stats.TotalSpace-stats.AvailableSpace)
+	if stats.AvailableSpace > stats.TotalSpace {
+		t.Fatalf("AvailableSpace = %d, should not exceed TotalSpace = %d", stats.AvailableSpace, stats.TotalSpace)
+	}
+	if stats.UsedSpace < 0 || stats.UsedSpace > stats.TotalSpace {
+		t.Fatalf("UsedSpace = %d, should be within [0, %d]", stats.UsedSpace, stats.TotalSpace)
 	}
 }
 

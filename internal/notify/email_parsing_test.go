@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -84,7 +85,7 @@ func TestInspectMailLogStatus(t *testing.T) {
 		t.Fatalf("NewEmailNotifier() error=%v", err)
 	}
 
-	status, matchedLine, usedPath := notifier.inspectMailLogStatus(queueID)
+	status, matchedLine, usedPath := notifier.inspectMailLogStatus(context.Background(), queueID)
 	if status != "sent" {
 		t.Fatalf("status=%q want %q (matchedLine=%q)", status, "sent", matchedLine)
 	}
@@ -126,7 +127,7 @@ func TestEmailNotifierCheckRecentMailLogsDetectsErrors(t *testing.T) {
 		t.Fatalf("NewEmailNotifier() error=%v", err)
 	}
 
-	lines := notifier.checkRecentMailLogs()
+	lines := notifier.checkRecentMailLogs(context.Background())
 	if len(lines) < 3 {
 		t.Fatalf("expected >=3 error-like lines, got %d: %#v", len(lines), lines)
 	}
@@ -184,7 +185,7 @@ func TestInspectMailLogStatus_Variants(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			status, matched, usedPath := notifier.inspectMailLogStatus(tt.queueID)
+			status, matched, usedPath := notifier.inspectMailLogStatus(context.Background(), tt.queueID)
 			if status != tt.want {
 				t.Fatalf("status=%q want %q (matched=%q)", status, tt.want, matched)
 			}

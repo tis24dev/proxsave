@@ -553,7 +553,7 @@ func (u *tuiWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLa
 	if timeout > 0 {
 		return promptYesNoTUIWithCountdown(ctx, u.logger, title, u.configPath, u.buildSig, message, yesLabel, noLabel, timeout)
 	}
-	return promptYesNoTUIFunc(title, u.configPath, u.buildSig, message, yesLabel, noLabel)
+	return promptYesNoTUIFunc(ctx, title, u.configPath, u.buildSig, message, yesLabel, noLabel)
 }
 
 func (u *tuiWorkflowUI) RepairNICNames(ctx context.Context, archivePath string) (*nicRepairResult, error) {
@@ -564,7 +564,7 @@ func (u *tuiWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	committed, err := promptNetworkCommitTUI(remaining, health, nicRepair, diagnosticsDir, u.configPath, u.buildSig)
+	committed, err := promptNetworkCommitTUI(ctx, remaining, health, nicRepair, diagnosticsDir, u.configPath, u.buildSig)
 	if err != nil && errors.Is(err, input.ErrInputAborted) {
 		return false, err
 	}

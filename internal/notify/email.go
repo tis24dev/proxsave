@@ -760,15 +760,22 @@ func (e *EmailNotifier) detectQueueEntry(ctx context.Context, recipient string) 
 }
 
 // tailMailLog reads the last maxLines from the first available mail log file.
-func (e *EmailNotifier) tailMailLog(maxLines int) ([]string, string) {
+func (e *EmailNotifier) tailMailLog(ctx context.Context, maxLines int) ([]string, string) {
+	if err := ctx.Err(); err != nil {
+		return nil, ""
+	}
+
 	for _, logFile := range mailLogPaths {
 		if _, err := os.Stat(logFile); err != nil {
 			continue
 		}
 
-		cmd := exec.Command("tail", "-n", strconv.Itoa(maxLines), logFile)
+		cmd := exec.CommandContext(ctx, "tail", "-n", strconv.Itoa(maxLines), logFile)
 		output, err := cmd.Output()
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ""
+			}
 			continue
 		}
 
@@ -777,13 +784,16 @@ func (e *EmailNotifier) tailMailLog(maxLines int) ([]string, string) {
 	}
 
 	// Fallback to journald if traditional log files are unavailable
+	if err := ctx.Err(); err != nil {
+		return nil, ""
+	}
 	if _, err := exec.LookPath("journalctl"); err == nil {
 		args := []string{"--no-pager", "-n", strconv.Itoa(maxLines)}
 		for _, unit := range []string{"postfix.service", "sendmail.service", "exim4.service"} {
 			args = append(args, "-u", unit)
 		}
 
-		cmd := exec.Command("journalctl", args...)
+		cmd := exec.CommandContext(ctx, "journalctl", args...)
 		output, err := cmd.Output()
 		if err == nil && len(output) > 0 {
 			lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
@@ -795,8 +805,8 @@ func (e *EmailNotifier) tailMailLog(maxLines int) ([]string, string) {
 }
 
 // checkRecentMailLogs checks recent mail log entries for errors
-func (e *EmailNotifier) checkRecentMailLogs() []string {
-	lines, _ := e.tailMailLog(50)
+func (e *EmailNotifier) checkRecentMailLogs(ctx context.Context) []string {
+	lines, _ := e.tailMailLog(ctx, 50)
 	if len(lines) == 0 {
 		return nil
 	}
@@ -832,8 +842,8 @@ func extractQueueID(outputs ...string) string {
 }
 
 // inspectMailLogStatus looks for a delivery status line for the given queue ID.
-func (e *EmailNotifier) inspectMailLogStatus(queueID string) (status, matchedLine, logPath string) {
-	lines, logPath := e.tailMailLog(80)
+func (e *EmailNotifier) inspectMailLogStatus(ctx context.Context, queueID string) (status, matchedLine, logPath string) {
+	lines, logPath := e.tailMailLog(ctx, 80)
 	if len(lines) == 0 || logPath == "" {
 		return "", "", logPath
 	}
@@ -1297,7 +1307,13 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	e.logger.Debug("=== Post-send verification ===")
 
 	// Brief pause to let sendmail process the message
-	time.Sleep(500 * time.Millisecond)
+	if err := sleepWithContext(ctx, 500*time.Millisecond); err != nil {
+		e.logger.Debug("Skipping post-send verification because context ended: %v", err)
+		e.logger.Debug("✅ Email handed off to sendmail successfully")
+		e.logger.Info("NOTE: Sendmail exit code 0 means email accepted to queue, not necessarily delivered")
+		e.logger.Info("  To verify actual delivery, check: mailq and /var/log/mail.log")
+		return queueID, "sendmail", sendmailPath, nil
+	}
 
 	// Check queue again to see if message is stuck
 	if queueCount, err := e.checkMailQueue(ctx); err == nil {
@@ -1317,7 +1333,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	}
 
 	// Check recent mail logs for errors (always surface summary, details only in debug)
-	recentErrors := e.checkRecentMailLogs()
+	recentErrors := e.checkRecentMailLogs(ctx)
 	if len(recentErrors) > 0 {
 		e.logger.Warning("⚠ Recent mail log entries indicate potential delivery issues (found %d error-like lines)", len(recentErrors))
 		e.logger.Info("  Suggestion: inspect /var/log/mail.log (or maillog/mail.err) on this host for details")
@@ -1345,7 +1361,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	}
 
 	if queueID != "" {
-		status, matchedLine, logPath := e.inspectMailLogStatus(queueID)
+		status, matchedLine, logPath := e.inspectMailLogStatus(ctx, queueID)
 		e.logMailLogStatus(queueID, status, matchedLine, logPath)
 	} else {
 		e.logger.Debug("Sendmail did not report a queue ID; attempting to detect from mail queue output")
@@ -1356,7 +1372,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 				if queueLine != "" && e.logger.GetLevel() >= types.LogLevelDebug {
 					e.logger.Debug("Mail queue entry: %s", queueLine)
 				}
-				status, matchedLine, logPath := e.inspectMailLogStatus(queueID)
+				status, matchedLine, logPath := e.inspectMailLogStatus(ctx, queueID)
 				e.logMailLogStatus(queueID, status, matchedLine, logPath)
 			} else {
 				e.logger.Debug("No matching mail queue entry found for %s immediately after sending", recipient)

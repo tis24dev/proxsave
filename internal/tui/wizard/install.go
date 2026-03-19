@@ -6,30 +6,29 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/tui"
 	"github.com/tis24dev/proxsave/internal/tui/components"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 type installWizardPrefill struct {
-	SecondaryEnabled   bool
-	SecondaryPath      string
-	SecondaryLogPath   string
-	CloudEnabled       bool
-	CloudRemote        string
-	CloudLogPath       string
-	FirewallEnabled    bool
-	TelegramEnabled    bool
-	EmailEnabled       bool
-	EncryptionEnabled  bool
+	SecondaryEnabled  bool
+	SecondaryPath     string
+	SecondaryLogPath  string
+	CloudEnabled      bool
+	CloudRemote       string
+	CloudLogPath      string
+	FirewallEnabled   bool
+	TelegramEnabled   bool
+	EmailEnabled      bool
+	EncryptionEnabled bool
 }
 
 // InstallWizardData holds the collected installation data
@@ -52,16 +51,26 @@ type InstallWizardData struct {
 type ExistingConfigAction int
 
 const (
-	ExistingConfigOverwrite ExistingConfigAction = iota // Start from embedded template (overwrite)
-	ExistingConfigEdit                                  // Keep existing file as base and edit
-	ExistingConfigSkip                                  // Leave the file untouched and skip wizard
+	ExistingConfigOverwrite    ExistingConfigAction = iota // Start from embedded template (overwrite)
+	ExistingConfigEdit                                     // Keep existing file as base and edit
+	ExistingConfigKeepContinue                             // Leave file untouched and continue installation
+	ExistingConfigCancel                                   // Abort installation
 )
 
 var (
 	// ErrInstallCancelled is returned when the user aborts the install wizard.
-	ErrInstallCancelled       = errors.New("installation aborted by user")
-	checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		return app.SetRoot(root, true).SetFocus(focus).Run()
+	ErrInstallCancelled = errors.New("installation aborted by user")
+	// ErrNilInstallData is returned when ApplyInstallData or its validators receive a nil payload.
+	ErrNilInstallData      = errors.New("install wizard data cannot be nil")
+	runInstallWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetRoot(root, true)
+		app.SetFocus(focus)
+		return app.RunWithContext(ctx)
+	}
+	checkExistingConfigRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetRoot(root, true)
+		app.SetFocus(focus)
+		return app.RunWithContext(ctx)
 	}
 )
 
@@ -71,7 +80,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	data := &InstallWizardData{
 		BaseDir:             baseDir,
 		ConfigPath:          configPath,
-		CronTime:            "02:00",
+		CronTime:            cronutil.DefaultTime,
 		EnableEncryption:    false, // Default to disabled
 		BackupFirewallRules: &defaultFirewallRules,
 	}
@@ -82,29 +91,6 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 
 	// Build the form
 	form := components.NewForm(app)
-
-	// Welcome text
-	welcomeText := tview.NewTextView().
-		SetText("Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n" +
-			"This wizard will guide you through configuring your backup system for Proxmox.\n" +
-			"All settings can be changed later by editing the configuration file.").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	// Navigation instructions
-	navInstructions := tview.NewTextView().
-		SetText("[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	// Add separator
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
 
 	// Track if any dropdown is currently open
 	var dropdownOpen bool
@@ -327,15 +313,10 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		// Collect data
 		data.EnableSecondaryStorage = secondaryEnabled
 		if secondaryEnabled {
-			data.SecondaryPath = secondaryPathField.GetText()
-			data.SecondaryLogPath = secondaryLogField.GetText()
-
-			// Validate paths
-			if !filepath.IsAbs(data.SecondaryPath) {
-				return fmt.Errorf("secondary backup path must be absolute")
-			}
-			if !filepath.IsAbs(data.SecondaryLogPath) {
-				return fmt.Errorf("secondary log path must be absolute")
+			data.SecondaryPath = strings.TrimSpace(secondaryPathField.GetText())
+			data.SecondaryLogPath = strings.TrimSpace(secondaryLogField.GetText())
+			if err := validateSecondaryInstallData(data); err != nil {
+				return err
 			}
 		}
 
@@ -370,24 +351,11 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		// Get encryption setting
 		data.EnableEncryption = values["Enable Backup Encryption (AGE)"] == "Yes"
 
-		// Cron time validation (HH:MM)
-		cron := strings.TrimSpace(cronField.GetText())
-		if cron == "" {
-			cron = "02:00"
+		normalizedCron, err := cronutil.NormalizeTime(cronField.GetText(), cronutil.DefaultTime)
+		if err != nil {
+			return err
 		}
-		parts := strings.Split(cron, ":")
-		if len(parts) != 2 {
-			return fmt.Errorf("cron time must be in HH:MM format")
-		}
-		hour, err := strconv.Atoi(parts[0])
-		if err != nil || hour < 0 || hour > 23 {
-			return fmt.Errorf("cron hour must be between 00 and 23")
-		}
-		minute, err := strconv.Atoi(parts[1])
-		if err != nil || minute < 0 || minute > 59 {
-			return fmt.Errorf("cron minute must be between 00 and 59")
-		}
-		data.CronTime = fmt.Sprintf("%02d:%02d", hour, minute)
+		data.CronTime = normalizedCron
 
 		return nil
 	})
@@ -437,40 +405,20 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		return event
 	})
 
-	// Config path footer
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
+	flex := buildWizardScreen(
+		"ProxSave Installation",
+		"Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n"+
+			"This wizard will guide you through configuring your backup system for Proxmox.\n"+
+			"All settings can be changed later by editing the configuration file.",
+		"[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled",
+		configPath,
+		buildSig,
+		form.Form,
+	)
 
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
-
-	// Create layout
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(form.Form, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
-
-	flex.SetBorder(true).
-		SetTitle(" ProxSave Installation ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
-
-	// Run the app - ignore errors from normal app termination
-	_ = app.SetRoot(flex, true).SetFocus(form.Form).Run()
+	if err := runInstallWizardRunner(ctx, app, flex, form.Form); err != nil {
+		return nil, err
+	}
 
 	if data == nil {
 		return nil, ErrInstallCancelled
@@ -482,6 +430,10 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 // ApplyInstallData applies the collected data to the config template.
 // If baseTemplate is empty, the embedded default template is used.
 func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, error) {
+	if data == nil {
+		return "", ErrNilInstallData
+	}
+
 	template := baseTemplate
 	editingExisting := strings.TrimSpace(baseTemplate) != ""
 	existingValues := map[string]string{}
@@ -490,6 +442,9 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	}
 	if strings.TrimSpace(template) == "" {
 		template = config.DefaultEnvTemplate()
+	}
+	if err := validateSecondaryInstallData(data); err != nil {
+		return "", err
 	}
 
 	// BASE_DIR is auto-detected at runtime from the executable/config location.
@@ -500,13 +455,12 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	template = unsetEnvValue(template, "CRON_MINUTE")
 
 	// Apply secondary storage
-	if data.EnableSecondaryStorage {
-		template = setEnvValue(template, "SECONDARY_ENABLED", "true")
-		template = setEnvValue(template, "SECONDARY_PATH", data.SecondaryPath)
-		template = setEnvValue(template, "SECONDARY_LOG_PATH", data.SecondaryLogPath)
-	} else {
-		template = setEnvValue(template, "SECONDARY_ENABLED", "false")
-	}
+	template = config.ApplySecondaryStorageSettings(
+		template,
+		data.EnableSecondaryStorage,
+		data.SecondaryPath,
+		data.SecondaryLogPath,
+	)
 
 	// Apply cloud storage
 	if data.EnableCloudStorage {
@@ -560,6 +514,22 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	}
 
 	return template, nil
+}
+
+func validateSecondaryInstallData(data *InstallWizardData) error {
+	if data == nil {
+		return ErrNilInstallData
+	}
+	if !data.EnableSecondaryStorage {
+		return nil
+	}
+	if err := config.ValidateRequiredSecondaryPath(data.SecondaryPath); err != nil {
+		return err
+	}
+	if err := config.ValidateOptionalSecondaryLogPath(data.SecondaryLogPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 // setEnvValue sets or updates an environment variable in the template
@@ -684,42 +654,16 @@ func readTemplateBool(values map[string]string, keys ...string) bool {
 }
 
 // CheckExistingConfig checks if config file exists and asks how to proceed
-func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigAction, error) {
-	if _, err := os.Stat(configPath); err == nil {
+func CheckExistingConfig(ctx context.Context, configPath string, buildSig string) (ExistingConfigAction, error) {
+	if info, err := os.Stat(configPath); err == nil {
+		if !info.Mode().IsRegular() {
+			return ExistingConfigCancel, fmt.Errorf("configuration file path is not a regular file: %s", configPath)
+		}
+
 		// File exists, ask how to proceed
 		app := tui.NewApp()
-		action := ExistingConfigSkip
-
-		// Welcome text (same as main wizard)
-		welcomeText := tview.NewTextView().
-			SetText("Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n" +
-				"This wizard will guide you through configuring your backup system for Proxmox.\n" +
-				"All settings can be changed later by editing the configuration file.").
-			SetTextColor(tui.ProxmoxLight).
-			SetDynamicColors(true)
-		welcomeText.SetBorder(false)
-
-		// Navigation instructions (no dropdowns in this view)
-		navInstructions := tview.NewTextView().
-			SetText("[yellow]Navigation:[white] Press [yellow]TAB[white] or [yellow]↑↓[white] to move between fields | " +
-				"Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to submit | Mouse clicks enabled").
-			SetTextColor(tcell.ColorWhite).
-			SetDynamicColors(true).
-			SetTextAlign(tview.AlignCenter)
-		navInstructions.SetBorder(false)
-
-		buildSigText := tview.NewTextView().
-			SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-			SetTextColor(tcell.ColorWhite).
-			SetDynamicColors(true).
-			SetTextAlign(tview.AlignCenter)
-		buildSigText.SetBorder(false)
-
-		// Separator
-		separator := tview.NewTextView().
-			SetText(strings.Repeat("─", 80)).
-			SetTextColor(tui.ProxmoxOrange)
-		separator.SetBorder(false)
+		action := ExistingConfigCancel
+		escapedConfigPath := tview.Escape(configPath)
 
 		// Confirmation modal
 		modal := tview.NewModal().
@@ -727,16 +671,19 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 				"Choose how to proceed:\n"+
 				"[yellow]Overwrite[white]   - Start from embedded template\n"+
 				"[yellow]Edit existing[white] - Keep current file as base\n"+
-				"[yellow]Keep & exit[white]   - Leave file untouched, exit wizard", configPath)).
-			AddButtons([]string{"Overwrite", "Edit existing", "Keep & exit"}).
+				"[yellow]Keep & continue[white] - Leave file untouched, continue install\n"+
+				"[yellow]Cancel[white]      - Exit installation", escapedConfigPath)).
+			AddButtons([]string{"Overwrite", "Edit existing", "Keep & continue", "Cancel"}).
 			SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 				switch buttonLabel {
 				case "Overwrite":
 					action = ExistingConfigOverwrite
 				case "Edit existing":
 					action = ExistingConfigEdit
+				case "Keep & continue":
+					action = ExistingConfigKeepContinue
 				default:
-					action = ExistingConfigSkip
+					action = ExistingConfigCancel
 				}
 				app.Stop()
 			})
@@ -747,29 +694,26 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 			SetTitleColor(tui.WarningYellow).
 			SetBorderColor(tui.WarningYellow).
 			SetBackgroundColor(tcell.ColorBlack)
+		modal.SetFocus(2)
 
-			// Create layout with welcome text at top
-		flex := tview.NewFlex().
-			SetDirection(tview.FlexRow).
-			AddItem(welcomeText, 5, 0, false).
-			AddItem(navInstructions, 2, 0, false).
-			AddItem(separator, 1, 0, false).
-			AddItem(modal, 0, 1, true).
-			AddItem(buildSigText, 1, 0, false)
+		flex := buildWizardScreen(
+			"ProxSave Installation",
+			"Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n"+
+				"This wizard will guide you through configuring your backup system for Proxmox.\n"+
+				"All settings can be changed later by editing the configuration file.",
+			"[yellow]Navigation:[white] Press [yellow]TAB[white] or [yellow]↑↓[white] to move between fields | Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to submit | Mouse clicks enabled",
+			"",
+			buildSig,
+			modal,
+		)
 
-		flex.SetBorder(true).
-			SetTitle(" ProxSave Installation ").
-			SetTitleAlign(tview.AlignCenter).
-			SetTitleColor(tui.ProxmoxOrange).
-			SetBorderColor(tui.ProxmoxOrange).
-			SetBackgroundColor(tcell.ColorBlack)
-
-		// Run the modal - ignore errors from normal app termination
-		_ = checkExistingConfigRunner(app, flex, modal)
+		if err := checkExistingConfigRunner(ctx, app, flex, modal); err != nil {
+			return ExistingConfigCancel, err
+		}
 
 		return action, nil
 	} else if !os.IsNotExist(err) {
-		return ExistingConfigSkip, err
+		return ExistingConfigCancel, err
 	}
 
 	return ExistingConfigOverwrite, nil // File doesn't exist, proceed

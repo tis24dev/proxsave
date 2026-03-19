@@ -5,8 +5,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -175,10 +177,9 @@ func TestSendViaCloudRelay_StatusHandling(t *testing.T) {
 }
 
 func TestSendViaCloudRelay_RetryOnServerError(t *testing.T) {
-	attempts := 0
+	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if attempts < 3 {
+		if atomic.AddInt32(&attempts, 1) < 3 {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"error":"temporary"}`))
 			return
@@ -210,7 +211,47 @@ func TestSendViaCloudRelay_RetryOnServerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected success after retries, got error: %v", err)
 	}
-	if attempts != 3 {
-		t.Fatalf("expected 3 attempts, got %d", attempts)
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Fatalf("expected 3 attempts, got %d", got)
+	}
+}
+
+func TestSendViaCloudRelay_StopsRetryingWhenContextCanceled(t *testing.T) {
+	var attempts int32
+	ctx, cancel := context.WithCancel(context.Background())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			cancel()
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"temporary"}`))
+	}))
+	defer server.Close()
+
+	cfg := CloudRelayConfig{
+		WorkerURL:   server.URL,
+		WorkerToken: "token",
+		HMACSecret:  "secret",
+		Timeout:     5,
+		MaxRetries:  3,
+		RetryDelay:  0,
+	}
+
+	logger := logging.New(types.LogLevelDebug, false)
+	err := sendViaCloudRelay(ctx, cfg, EmailRelayPayload{
+		To:            "dest@test.invalid",
+		Subject:       "subject",
+		Report:        map[string]interface{}{"ok": true},
+		Timestamp:     time.Now().Unix(),
+		ServerMAC:     "00:11:22:33:44:55",
+		ScriptVersion: "0.0.1",
+		ServerID:      "server-id",
+	}, logger)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation error, got %v", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Fatalf("expected 1 attempt after cancellation, got %d", got)
 	}
 }

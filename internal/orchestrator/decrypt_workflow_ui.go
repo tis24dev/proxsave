@@ -19,6 +19,10 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 	done := logging.DebugStart(logger, "select backup candidate (ui)", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
 
+	if ui == nil {
+		return nil, fmt.Errorf("backup selection UI not available")
+	}
+
 	pathOptions := buildDecryptPathOptions(cfg, logger)
 	if len(pathOptions) == 0 {
 		return nil, fmt.Errorf("no backup paths configured in backup.env")
@@ -177,6 +181,13 @@ func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPa
 func preparePlainBundleWithUI(ctx context.Context, cand *decryptCandidate, version string, logger *logging.Logger, ui interface {
 	PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error)
 }) (bundle *preparedBundle, err error) {
+	if cand == nil || cand.Manifest == nil {
+		return nil, fmt.Errorf("invalid backup candidate")
+	}
+	if ui == nil {
+		return nil, fmt.Errorf("decrypt workflow UI not available")
+	}
+
 	done := logging.DebugStart(logger, "prepare plain bundle (ui)", "source=%v rclone=%v", cand.Source, cand.IsRclone)
 	defer func() { done(err) }()
 	return preparePlainBundleCommon(ctx, cand, version, logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
@@ -190,6 +201,9 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	}
 	if logger == nil {
 		logger = logging.GetDefaultLogger()
+	}
+	if ui == nil {
+		return fmt.Errorf("decrypt workflow UI not available")
 	}
 	done := logging.DebugStart(logger, "decrypt workflow (ui)", "version=%s", version)
 	defer func() { done(err) }()

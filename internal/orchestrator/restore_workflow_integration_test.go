@@ -58,9 +58,7 @@ func TestRunSafeClusterApply_PveshNotFound(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("0\n"))
 
 	// Force PATH empty so LookPath fails
-	origPath := os.Getenv("PATH")
 	t.Setenv("PATH", "")
-	defer os.Setenv("PATH", origPath)
 
 	if err := runSafeClusterApply(context.Background(), reader, t.TempDir(), logger); err != nil {
 		t.Fatalf("expected nil when pvesh missing, got %v", err)

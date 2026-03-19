@@ -18,7 +18,7 @@ type tuiWorkflowUI struct {
 	configPath string
 	buildSig   string
 	logger     *logging.Logger
-	buildPage  func(title, configPath, buildSig string, content tview.Primitive) tview.Primitive
+	buildPage  tuiPageBuilder
 
 	selectedBackupSummary string
 }
@@ -44,6 +44,15 @@ func newTUIRestoreWorkflowUI(configPath, buildSig string, logger *logging.Logger
 	return ui
 }
 
+func (u *tuiWorkflowUI) screenEnv() tuiScreenEnv {
+	return tuiScreenEnv{
+		configPath: u.configPath,
+		buildSig:   u.buildSig,
+		logger:     u.logger,
+		buildPage:  u.buildPage,
+	}
+}
+
 func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage string, run func(ctx context.Context, report ProgressReporter) error) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -55,7 +64,7 @@ func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 	app := newTUIApp()
 
 	messageView := tview.NewTextView().
-		SetText(strings.TrimSpace(initialMessage)).
+		SetText(tview.Escape(strings.TrimSpace(initialMessage))).
 		SetTextAlign(tview.AlignCenter).
 		SetTextColor(tcell.ColorWhite).
 		SetDynamicColors(true)
@@ -85,7 +94,7 @@ func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 			return
 		}
 		app.QueueUpdateDraw(func() {
-			messageView.SetText(message)
+			messageView.SetText(tview.Escape(message))
 		})
 	}
 
@@ -97,7 +106,8 @@ func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 		})
 	}()
 
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(taskCtx); err != nil {
 		cancel()
 		<-done
 		return err
@@ -109,18 +119,18 @@ func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 }
 
 func (u *tuiWorkflowUI) ShowMessage(ctx context.Context, title, message string) error {
-	return u.showOKModal(title, message, tui.ProxmoxOrange)
+	return u.showOKModal(ctx, title, message, tui.ProxmoxOrange)
 }
 
 func (u *tuiWorkflowUI) ShowError(ctx context.Context, title, message string) error {
-	return u.showOKModal(title, fmt.Sprintf("%s %s", tui.SymbolError, message), tui.ErrorRed)
+	return u.showOKModal(ctx, title, fmt.Sprintf("%s %s", tui.SymbolError, message), tui.ErrorRed)
 }
 
-func (u *tuiWorkflowUI) showOKModal(title, message string, borderColor tcell.Color) error {
+func (u *tuiWorkflowUI) showOKModal(ctx context.Context, title, message string, borderColor tcell.Color) error {
 	app := newTUIApp()
 
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("%s\n\n[yellow]Press ENTER to continue[white]", strings.TrimSpace(message))).
+		SetText(fmt.Sprintf("%s\n\n[yellow]Press ENTER to continue[white]", tview.Escape(strings.TrimSpace(message)))).
 		AddButtons([]string{"OK"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			app.Stop()
@@ -134,7 +144,8 @@ func (u *tuiWorkflowUI) showOKModal(title, message string, borderColor tcell.Col
 		SetBackgroundColor(tcell.ColorBlack)
 
 	page := u.buildPage(title, u.configPath, u.buildSig, modal)
-	return app.SetRoot(page, true).SetFocus(modal).Run()
+	app.SetRoot(page, true).SetFocus(modal)
+	return app.RunWithContext(ctx)
 }
 
 func (u *tuiWorkflowUI) SelectBackupSource(ctx context.Context, options []decryptPathOption) (decryptPathOption, error) {
@@ -188,7 +199,8 @@ func (u *tuiWorkflowUI) SelectBackupSource(ctx context.Context, options []decryp
 
 	page := u.buildPage("Select backup source", u.configPath, u.buildSig, form.Form)
 	form.SetParentView(page)
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return decryptPathOption{}, err
 	}
 	if aborted || strings.TrimSpace(selected.Path) == "" {
@@ -323,7 +335,8 @@ func (u *tuiWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []
 
 	page := u.buildPage("Select backup", u.configPath, u.buildSig, form.Form)
 	form.SetParentView(page)
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return nil, err
 	}
 	if aborted || selected == nil {
@@ -365,7 +378,8 @@ func (u *tuiWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir str
 
 	page := u.buildPage("Destination directory", u.configPath, u.buildSig, form.Form)
 	form.SetParentView(page)
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
+	app.SetRoot(page, true).SetFocus(form.Form)
+	if err := app.RunWithContext(ctx); err != nil {
 		return "", err
 	}
 	if cancelled {
@@ -375,83 +389,22 @@ func (u *tuiWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir str
 }
 
 func (u *tuiWorkflowUI) ResolveExistingPath(ctx context.Context, path, description, failure string) (ExistingPathDecision, string, error) {
-	action, err := promptOverwriteActionFunc(path, description, failure, u.configPath, u.buildSig)
+	decision, newPath, err := tuiPromptExistingPathDecision(ctx, u.screenEnv(), path, description, failure)
 	if err != nil {
 		return PathDecisionCancel, "", err
 	}
-	switch action {
-	case pathActionOverwrite:
-		return PathDecisionOverwrite, "", nil
-	case pathActionNew:
-		newPath, err := promptNewPathInputFunc(path, u.configPath, u.buildSig)
-		if err != nil {
-			return PathDecisionCancel, "", err
-		}
-		return PathDecisionNewPath, filepath.Clean(newPath), nil
-	default:
-		return PathDecisionCancel, "", ErrDecryptAborted
+	if decision != PathDecisionNewPath {
+		return decision, "", nil
 	}
+	trimmed := strings.TrimSpace(newPath)
+	if trimmed == "" {
+		return decision, "", nil
+	}
+	return decision, filepath.Clean(trimmed), nil
 }
 
 func (u *tuiWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error) {
-	app := newTUIApp()
-	var (
-		secret    string
-		cancelled bool
-	)
-
-	name := strings.TrimSpace(displayName)
-	if name == "" {
-		name = "selected backup"
-	}
-
-	infoMessage := fmt.Sprintf("Provide the AGE secret key or passphrase used for [yellow]%s[white].", name)
-	if strings.TrimSpace(previousError) != "" {
-		infoMessage = fmt.Sprintf("%s\n\n[red]%s[white]", infoMessage, strings.TrimSpace(previousError))
-	}
-
-	infoText := tview.NewTextView().
-		SetText(infoMessage).
-		SetWrap(true).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true)
-
-	form := components.NewForm(app)
-	label := "Key or passphrase:"
-	form.AddPasswordField(label, 64)
-	form.SetOnSubmit(func(values map[string]string) error {
-		raw := strings.TrimSpace(values[label])
-		if raw == "" {
-			return fmt.Errorf("key or passphrase cannot be empty")
-		}
-		if raw == "0" {
-			cancelled = true
-			return nil
-		}
-		secret = raw
-		return nil
-	})
-	form.SetOnCancel(func() {
-		cancelled = true
-	})
-	form.AddSubmitButton("Continue")
-	form.AddCancelButton("Cancel")
-	enableFormNavigation(form, nil)
-
-	content := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(infoText, 0, 2, false).
-		AddItem(form.Form, 0, 1, true)
-
-	page := u.buildPage("Decrypt key", u.configPath, u.buildSig, content)
-	form.SetParentView(page)
-	if err := app.SetRoot(page, true).SetFocus(form.Form).Run(); err != nil {
-		return "", err
-	}
-	if cancelled {
-		return "", ErrDecryptAborted
-	}
-	return secret, nil
+	return tuiPromptDecryptSecret(ctx, u.screenEnv(), displayName, previousError)
 }
 
 func backupSummaryForUI(cand *decryptCandidate) string {

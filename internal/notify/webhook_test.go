@@ -277,6 +277,52 @@ func TestWebhookNotifier_Send_Success(t *testing.T) {
 	}
 }
 
+func TestWebhookNotifier_SendToEndpoint_StopsRetryingWhenContextCanceled(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	attempts := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			cancel()
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"temporary"}`))
+	}))
+	defer server.Close()
+
+	cfg := config.WebhookConfig{
+		Enabled:       true,
+		DefaultFormat: "generic",
+		Timeout:       30,
+		MaxRetries:    3,
+		RetryDelay:    0,
+		Endpoints: []config.WebhookEndpoint{
+			{
+				Name:   "test-webhook",
+				URL:    server.URL,
+				Format: "generic",
+				Method: "POST",
+				Auth:   config.WebhookAuth{Type: "none"},
+			},
+		},
+	}
+
+	notifier, err := NewWebhookNotifier(&cfg, logger)
+	if err != nil {
+		t.Fatalf("Failed to create notifier: %v", err)
+	}
+
+	err = notifier.sendToEndpoint(ctx, cfg.Endpoints[0], createTestNotificationData())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation error, got %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected 1 attempt after cancellation, got %d", attempts)
+	}
+}
+
 func TestWebhookNotifier_Send_Retry(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	attempts := 0

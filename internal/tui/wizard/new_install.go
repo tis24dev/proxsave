@@ -1,7 +1,10 @@
 package wizard
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -10,48 +13,44 @@ import (
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
-var confirmNewInstallRunner = func(app *tui.App, root, focus tview.Primitive) error {
-	return app.SetRoot(root, true).SetFocus(focus).Run()
+var confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+	app.SetRoot(root, true)
+	app.SetFocus(focus)
+	return app.RunWithContext(ctx)
+}
+
+func formatPreservedEntries(baseDir string, entries []string) string {
+	formatted := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasSuffix(trimmed, "/") {
+			resolved := filepath.Join(baseDir, trimmed)
+			if fi, err := os.Stat(resolved); err == nil && fi.IsDir() {
+				trimmed += "/"
+			}
+		}
+		formatted = append(formatted, trimmed)
+	}
+	if len(formatted) == 0 {
+		return "(none)"
+	}
+	return strings.Join(formatted, " ")
 }
 
 // ConfirmNewInstall shows a TUI confirmation before wiping baseDir for --new-install.
-func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
+func ConfirmNewInstall(ctx context.Context, baseDir string, buildSig string, preservedEntries []string) (bool, error) {
 	app := tui.NewApp()
 	proceed := false
-
-	// Header text (align with main install wizard)
-	welcomeText := tview.NewTextView().
-		SetText("Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n" +
-			"This wizard will guide you through configuring your backup system for Proxmox.\n" +
-			"All settings can be changed later by editing the configuration file.").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	// Build signature line
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true)
-	buildSigText.SetBorder(false)
-
-	// Navigation instructions
-	navInstructions := tview.NewTextView().
-		SetText("[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	// Separator
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
+	preservedText := formatPreservedEntries(baseDir, preservedEntries)
+	escapedBaseDir := tview.Escape(baseDir)
+	escapedPreservedText := tview.Escape(preservedText)
 
 	// Confirmation modal
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]build/ env/ identity/[white]\nbut deletes everything else.\n\nContinue?", baseDir)).
+		SetText(fmt.Sprintf("Base directory to reset:\n[yellow]%s[white]\n\nThis keeps [yellow]%s[white]\nbut deletes everything else.\n\nContinue?", escapedBaseDir, escapedPreservedText)).
 		AddButtons([]string{"Continue", "Cancel"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Continue" {
@@ -67,24 +66,20 @@ func ConfirmNewInstall(baseDir string, buildSig string) (bool, error) {
 		SetBorderColor(tui.WarningYellow).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	// Layout
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(modal, 0, 1, true).
-		AddItem(buildSigText, 1, 0, false)
+	flex := buildWizardScreen(
+		"ProxSave New Install",
+		"Welcome to ProxSave Installation Wizard - By TIS24DEV\n\n"+
+			"This wizard will guide you through configuring your backup system for Proxmox.\n"+
+			"All settings can be changed later by editing the configuration file.",
+		"[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled",
+		"",
+		buildSig,
+		modal,
+	)
 
-	flex.SetBorder(true).
-		SetTitle(" ProxSave New Install ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
-
-	// Run the app - ignore errors from normal app termination
-	_ = confirmNewInstallRunner(app, flex, modal)
+	if err := confirmNewInstallRunner(ctx, app, flex, modal); err != nil {
+		return false, err
+	}
 
 	return proceed, nil
 }

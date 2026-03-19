@@ -671,6 +671,45 @@ func TestExtractDirectory_WithTimestamps(t *testing.T) {
 	}
 }
 
+func TestExtractDirectory_AppliesRestrictiveModeAfterOpen(t *testing.T) {
+	orig := restoreFS
+	t.Cleanup(func() { restoreFS = orig })
+	restoreFS = osFS{}
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	destRoot := t.TempDir()
+	target := filepath.Join(destRoot, "locked")
+	t.Cleanup(func() {
+		if err := os.Chmod(target, 0o700); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("restore directory permissions for cleanup: %v", err)
+		}
+	})
+
+	header := &tar.Header{
+		Name:       "locked",
+		Mode:       0,
+		Uid:        os.Getuid(),
+		Gid:        os.Getgid(),
+		ModTime:    time.Date(2023, 6, 15, 12, 0, 0, 0, time.UTC),
+		AccessTime: time.Date(2023, 6, 15, 12, 0, 0, 0, time.UTC),
+	}
+
+	if err := extractDirectory(target, header, logger); err != nil {
+		t.Fatalf("extractDirectory failed with restrictive mode: %v", err)
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected directory")
+	}
+	if info.Mode().Perm() != 0 {
+		t.Fatalf("directory mode = %o, want %o", info.Mode().Perm(), 0)
+	}
+}
+
 // --------------------------------------------------------------------------
 // resetFailedService test
 // --------------------------------------------------------------------------
@@ -785,17 +824,39 @@ func (a *alwaysFailCommandRunner) RunStream(ctx context.Context, name string, st
 	return nil, a.err
 }
 
+type trackingOpenFileFS struct {
+	FS
+	lastOpened *os.File
+}
+
+func (f *trackingOpenFileFS) OpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+	file, err := f.FS.OpenFile(path, flag, perm)
+	if err == nil {
+		f.lastOpened = file
+	}
+	return file, err
+}
+
+func (f *trackingOpenFileFS) CreateTemp(dir, pattern string) (*os.File, error) {
+	file, err := f.FS.CreateTemp(dir, pattern)
+	if err == nil {
+		f.lastOpened = file
+	}
+	return file, err
+}
+
 // --------------------------------------------------------------------------
 // ErrorInjectingFS - FS wrapper that can inject errors
 // --------------------------------------------------------------------------
 
 type ErrorInjectingFS struct {
-	base        FS
-	mkdirAllErr error
-	openFileErr error
-	symlinkErr  error
-	readlinkErr error
-	linkErr     error
+	base          FS
+	mkdirAllErr   error
+	openFileErr   error
+	createTempErr error
+	symlinkErr    error
+	readlinkErr   error
+	linkErr       error
 }
 
 func (f *ErrorInjectingFS) Stat(path string) (os.FileInfo, error)  { return f.base.Stat(path) }
@@ -810,6 +871,9 @@ func (f *ErrorInjectingFS) Remove(path string) error                   { return 
 func (f *ErrorInjectingFS) RemoveAll(path string) error                { return f.base.RemoveAll(path) }
 func (f *ErrorInjectingFS) ReadDir(path string) ([]os.DirEntry, error) { return f.base.ReadDir(path) }
 func (f *ErrorInjectingFS) CreateTemp(dir, pattern string) (*os.File, error) {
+	if f.createTempErr != nil {
+		return nil, f.createTempErr
+	}
 	return f.base.CreateTemp(dir, pattern)
 }
 func (f *ErrorInjectingFS) MkdirTemp(dir, pattern string) (string, error) {
@@ -887,7 +951,7 @@ func TestExtractDirectory_MkdirAllFails(t *testing.T) {
 // extractRegularFile error tests
 // --------------------------------------------------------------------------
 
-func TestExtractRegularFile_OpenFileFails(t *testing.T) {
+func TestExtractRegularFile_CreateTempFails(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
 
@@ -895,8 +959,8 @@ func TestExtractRegularFile_OpenFileFails(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 
 	restoreFS = &ErrorInjectingFS{
-		base:        fakeFS,
-		openFileErr: fmt.Errorf("permission denied"),
+		base:          fakeFS,
+		createTempErr: fmt.Errorf("permission denied"),
 	}
 
 	header := &tar.Header{
@@ -916,7 +980,8 @@ func TestExtractRegularFile_CopyFails(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
 
-	restoreFS = osFS{}
+	trackingFS := &trackingOpenFileFS{FS: osFS{}}
+	restoreFS = trackingFS
 
 	dir := t.TempDir()
 	target := filepath.Join(dir, "testfile.txt")
@@ -941,6 +1006,79 @@ func TestExtractRegularFile_CopyFails(t *testing.T) {
 	err := extractRegularFile(tr, target, header, logger)
 	if err == nil || !strings.Contains(err.Error(), "write file content") {
 		t.Fatalf("expected io.Copy error, got: %v", err)
+	}
+	if trackingFS.lastOpened == nil {
+		t.Fatalf("expected tracked output file")
+	}
+	if closeErr := trackingFS.lastOpened.Close(); !errors.Is(closeErr, os.ErrClosed) {
+		t.Fatalf("output file close after copy failure = %v, want ErrClosed", closeErr)
+	}
+	tempMatches, err := filepath.Glob(filepath.Join(filepath.Dir(target), restoreTempPattern))
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(tempMatches) != 0 {
+		t.Fatalf("temporary files should be removed after copy failure, found %v", tempMatches)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target %s should not exist after copy failure, stat err=%v", target, err)
+	}
+}
+
+func TestExtractRegularFile_CopyFailsPreservesExistingTarget(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	restoreFS = osFS{}
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "testfile.txt")
+	if err := os.WriteFile(target, []byte("keep me"), 0o600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	header := &tar.Header{
+		Name: "testfile.txt",
+		Mode: 0o644,
+		Size: 100,
+	}
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(header)
+	_, _ = tw.Write([]byte("short"))
+	tw.Close()
+
+	tr := tar.NewReader(&buf)
+	_, _ = tr.Next()
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	err := extractRegularFile(tr, target, header, logger)
+	if err == nil || !strings.Contains(err.Error(), "write file content") {
+		t.Fatalf("expected io.Copy error, got: %v", err)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read preserved target: %v", err)
+	}
+	if string(data) != "keep me" {
+		t.Fatalf("target content = %q, want preserved original", string(data))
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat preserved target: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("preserved target mode = %o, want %o", info.Mode().Perm(), 0o600)
+	}
+
+	tempMatches, err := filepath.Glob(filepath.Join(filepath.Dir(target), restoreTempPattern))
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(tempMatches) != 0 {
+		t.Fatalf("temporary files should be removed after copy failure, found %v", tempMatches)
 	}
 }
 
@@ -1609,7 +1747,8 @@ func TestExtractDirectory_SuccessWithTimestamps(t *testing.T) {
 func TestExtractRegularFile_Success(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
-	restoreFS = osFS{}
+	trackingFS := &trackingOpenFileFS{FS: osFS{}}
+	restoreFS = trackingFS
 
 	dir := t.TempDir()
 	target := filepath.Join(dir, "file.txt")
@@ -1650,6 +1789,26 @@ func TestExtractRegularFile_Success(t *testing.T) {
 	}
 	if string(data) != "hello world" {
 		t.Fatalf("expected 'hello world', got: %q", string(data))
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("file mode = %o, want %o", info.Mode().Perm(), 0o644)
+	}
+	if trackingFS.lastOpened == nil {
+		t.Fatalf("expected tracked output file")
+	}
+	if closeErr := trackingFS.lastOpened.Close(); !errors.Is(closeErr, os.ErrClosed) {
+		t.Fatalf("output file close after success = %v, want ErrClosed", closeErr)
+	}
+	tempMatches, err := filepath.Glob(filepath.Join(filepath.Dir(target), restoreTempPattern))
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(tempMatches) != 0 {
+		t.Fatalf("temporary files should be removed after success, found %v", tempMatches)
 	}
 }
 

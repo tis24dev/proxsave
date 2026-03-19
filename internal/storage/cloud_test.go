@@ -68,6 +68,52 @@ func writeTestFile(t *testing.T, path, data string) {
 	}
 }
 
+func TestCloudRetryBackoff(t *testing.T) {
+	tests := []struct {
+		name    string
+		attempt int
+		want    time.Duration
+	}{
+		{name: "non-positive", attempt: 0, want: 0},
+		{name: "first retry", attempt: 1, want: 2 * time.Second},
+		{name: "second retry", attempt: 2, want: 4 * time.Second},
+		{name: "third retry", attempt: 3, want: 8 * time.Second},
+		{name: "fourth retry", attempt: 4, want: 16 * time.Second},
+		{name: "capped", attempt: 5, want: 30 * time.Second},
+		{name: "large attempt stays capped", attempt: 63, want: 30 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cloudRetryBackoff(tt.attempt); got != tt.want {
+				t.Fatalf("cloudRetryBackoff(%d) = %v, want %v", tt.attempt, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWaitForRetryContextReturnsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+		close(done)
+	}()
+
+	start := time.Now()
+	err := waitForRetryContext(ctx, time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitForRetryContext() error = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
+		t.Fatalf("waitForRetryContext() returned after %v, want prompt cancellation", elapsed)
+	}
+
+	<-done
+}
+
 func TestCloudStorageDetectFilesystem_RcloneMissingReturnsRecoverableError(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:            true,
@@ -260,13 +306,94 @@ func TestCloudStorageUploadWithRetryEventuallySucceeds(t *testing.T) {
 		},
 	}
 	cs.execCommand = queue.exec
-	cs.sleep = func(time.Duration) {}
+	cs.waitForRetry = func(context.Context, time.Duration) error { return nil }
 
 	if err := cs.uploadWithRetry(context.Background(), "/tmp/local.tar", "remote:local.tar"); err != nil {
 		t.Fatalf("uploadWithRetry() error = %v", err)
 	}
 	if len(queue.calls) != 3 {
 		t.Fatalf("expected 3 upload attempts, got %d", len(queue.calls))
+	}
+}
+
+func TestCloudStorageUploadWithRetryUsesCappedBackoff(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:           true,
+		CloudRemote:            "remote",
+		RcloneRetries:          6,
+		RcloneTimeoutOperation: 5,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", err: errors.New("copy failed 1")},
+			{name: "rclone", err: errors.New("copy failed 2")},
+			{name: "rclone", err: errors.New("copy failed 3")},
+			{name: "rclone", err: errors.New("copy failed 4")},
+			{name: "rclone", err: errors.New("copy failed 5")},
+			{name: "rclone", out: "ok"},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	var waits []time.Duration
+	cs.waitForRetry = func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return nil
+	}
+
+	if err := cs.uploadWithRetry(context.Background(), "/tmp/local.tar", "remote:local.tar"); err != nil {
+		t.Fatalf("uploadWithRetry() error = %v", err)
+	}
+
+	wantWaits := []time.Duration{
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		30 * time.Second,
+	}
+	if len(waits) != len(wantWaits) {
+		t.Fatalf("sleep calls = %d, want %d", len(waits), len(wantWaits))
+	}
+	for i := range wantWaits {
+		if waits[i] != wantWaits[i] {
+			t.Fatalf("sleep[%d] = %v, want %v", i, waits[i], wantWaits[i])
+		}
+	}
+}
+
+func TestCloudStorageUploadWithRetryReturnsContextErrorDuringBackoff(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:           true,
+		CloudRemote:            "remote",
+		RcloneRetries:          3,
+		RcloneTimeoutOperation: 5,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", err: errors.New("copy failed")},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cs.waitForRetry = func(ctx context.Context, _ time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}
+
+	err := cs.uploadWithRetry(ctx, "/tmp/local.tar", "remote:local.tar")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("uploadWithRetry() error = %v, want context.Canceled", err)
+	}
+	if len(queue.calls) != 1 {
+		t.Fatalf("expected 1 upload attempt before cancellation, got %d", len(queue.calls))
 	}
 }
 
@@ -429,6 +556,77 @@ func TestCloudStorageStoreUploadsWithRemotePrefix(t *testing.T) {
 	}
 	if len(queue.calls) != 6 {
 		t.Fatalf("expected 6 rclone calls, got %d", len(queue.calls))
+	}
+}
+
+func TestCloudStorageStorePrefersBundleWhenPresent(t *testing.T) {
+	tmpDir := t.TempDir()
+	backupFile := filepath.Join(tmpDir, "pbs1-backup.tar.zst")
+	bundleFile := bundlePathFor(backupFile)
+	writeTestFile(t, backupFile, "primary")
+	writeTestFile(t, bundleFile, "bundle")
+
+	cfg := &config.Config{
+		CloudEnabled:           true,
+		CloudRemote:            "remote",
+		BundleAssociatedFiles:  true,
+		RcloneRetries:          1,
+		RcloneTimeoutOperation: 10,
+	}
+
+	cs := newCloudStorageForTest(cfg)
+	cs.sleep = func(time.Duration) {}
+	remoteFile := cs.remotePathFor(filepath.Base(bundleFile))
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", bundleFile, remoteFile}},
+			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
+			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	if err := cs.Store(context.Background(), backupFile, nil); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls, got %d", len(queue.calls))
+	}
+}
+
+func TestCloudStorageStoreBundleInputSkipsDoubleBundleUpload(t *testing.T) {
+	tmpDir := t.TempDir()
+	bundleFile := filepath.Join(tmpDir, "pbs1-backup.tar.zst.bundle.tar")
+	writeTestFile(t, bundleFile, "bundle")
+	writeTestFile(t, bundleFile+".bundle.tar", "decoy")
+
+	cfg := &config.Config{
+		CloudEnabled:           true,
+		CloudRemote:            "remote",
+		BundleAssociatedFiles:  true,
+		RcloneRetries:          1,
+		RcloneTimeoutOperation: 10,
+	}
+
+	cs := newCloudStorageForTest(cfg)
+	cs.sleep = func(time.Duration) {}
+	remoteFile := cs.remotePathFor(filepath.Base(bundleFile))
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", bundleFile, remoteFile}},
+			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
+			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	if err := cs.Store(context.Background(), bundleFile, nil); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	if len(queue.calls) != 3 {
+		t.Fatalf("expected 3 rclone calls, got %d", len(queue.calls))
 	}
 }
 
@@ -844,7 +1042,7 @@ func TestRemoteDirRef(t *testing.T) {
 	}
 }
 
-func TestCloudStorageApplyGFSRetentionDeletesMarkedBackups(t *testing.T) {
+func TestCloudStorageApplyGFSRetentionKeepsMinimumDailyBackup(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:          true,
 		CloudRemote:           "remote",
@@ -862,7 +1060,6 @@ func TestCloudStorageApplyGFSRetentionDeletesMarkedBackups(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup.tar.zst"}},
 			{name: "rclone", args: []string{"deletefile", "remote:beta-backup.tar.zst"}},
 		},
 	}
@@ -879,15 +1076,15 @@ func TestCloudStorageApplyGFSRetentionDeletesMarkedBackups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyGFSRetention() error = %v", err)
 	}
-	if deleted != 2 {
-		t.Fatalf("applyGFSRetention() deleted = %d, want 2", deleted)
+	if deleted != 1 {
+		t.Fatalf("applyGFSRetention() deleted = %d, want 1", deleted)
 	}
-	if len(queue.calls) != 2 {
-		t.Fatalf("expected 2 delete commands, got %d", len(queue.calls))
+	if len(queue.calls) != 1 {
+		t.Fatalf("expected 1 delete command, got %d", len(queue.calls))
 	}
 
 	summary := cs.LastRetentionSummary()
-	if summary.BackupsDeleted != 2 || summary.BackupsRemaining != 0 {
+	if summary.BackupsDeleted != 1 || summary.BackupsRemaining != 1 {
 		t.Fatalf("unexpected retention summary: %+v", summary)
 	}
 }
@@ -995,7 +1192,7 @@ func TestCloudStorageCheckWithTimeoutNoFallback(t *testing.T) {
 		},
 	}
 	cs.execCommand = queue.exec
-	cs.sleep = func(time.Duration) {} // Disable sleep for fast tests
+	cs.waitForRetry = func(context.Context, time.Duration) error { return nil } // Disable retry wait for fast tests
 
 	err := cs.checkRemoteAccessible(context.Background())
 	if err == nil {
@@ -1030,7 +1227,12 @@ func TestCloudStorageCheckWithNetworkErrorNoFallback(t *testing.T) {
 		},
 	}
 	cs.execCommand = queue.exec
-	cs.sleep = func(time.Duration) {} // Disable sleep for fast tests
+
+	var waits []time.Duration
+	cs.waitForRetry = func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return nil
+	}
 
 	err := cs.checkRemoteAccessible(context.Background())
 	if err == nil {
@@ -1040,6 +1242,81 @@ func TestCloudStorageCheckWithNetworkErrorNoFallback(t *testing.T) {
 	// Should try 3 times (with retries), no fallback to write test
 	if len(queue.calls) != 3 {
 		t.Fatalf("expected 3 rclone calls (lsf per attempt), got %d", len(queue.calls))
+	}
+	if len(waits) != 2 {
+		t.Fatalf("expected 2 backoff waits, got %d", len(waits))
+	}
+	if waits[0] != 2*time.Second || waits[1] != 4*time.Second {
+		t.Fatalf("unexpected backoff waits: got %v", waits)
+	}
+}
+
+func TestCloudStorageCheckRemoteAccessibleReturnsContextErrorDuringBackoff(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "remote",
+		CloudWriteHealthCheck:   false,
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", err: errors.New("exit 1"), out: "dial tcp: connection refused"},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cs.waitForRetry = func(ctx context.Context, _ time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}
+
+	err := cs.checkRemoteAccessible(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("checkRemoteAccessible() error = %v, want context.Canceled", err)
+	}
+	if len(queue.calls) != 1 {
+		t.Fatalf("expected 1 remote check attempt before cancellation, got %d", len(queue.calls))
+	}
+}
+
+func TestCloudStorageCheckRemoteAccessiblePropagatesParentDeadline(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "remote",
+		CloudWriteHealthCheck:   false,
+		RcloneTimeoutConnection: 30,
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", err: errors.New("exit 1"), out: "dial tcp: connection refused"},
+		},
+	}
+	cs.execCommand = queue.exec
+	cs.waitForRetry = func(ctx context.Context, _ time.Duration) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := cs.checkRemoteAccessible(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("checkRemoteAccessible() error = %v, want context.DeadlineExceeded", err)
+	}
+	var rcErr *remoteCheckError
+	if errors.As(err, &rcErr) {
+		t.Fatalf("checkRemoteAccessible() error = %v, want parent deadline error, not remoteCheckError", err)
+	}
+	if len(queue.calls) != 1 {
+		t.Fatalf("expected 1 remote check attempt before parent deadline, got %d", len(queue.calls))
 	}
 }
 
@@ -1109,7 +1386,7 @@ func TestCloudStorageCheckBothListAndWriteFail(t *testing.T) {
 		},
 	}
 	cs.execCommand = queue.exec
-	cs.sleep = func(time.Duration) {} // Disable sleep for fast tests
+	cs.waitForRetry = func(context.Context, time.Duration) error { return nil } // Disable retry wait for fast tests
 
 	err := cs.checkRemoteAccessible(context.Background())
 	if err == nil {

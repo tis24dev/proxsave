@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -58,47 +60,8 @@ func (o *Orchestrator) EnsureAgeRecipientsReady(ctx context.Context) error {
 }
 
 func (o *Orchestrator) prepareAgeRecipients(ctx context.Context) ([]age.Recipient, error) {
-	if o.cfg == nil || !o.cfg.EncryptArchive {
-		return nil, nil
-	}
-
-	if o.ageRecipientCache != nil && !o.forceNewAgeRecipient {
-		return cloneRecipients(o.ageRecipientCache), nil
-	}
-
-	recipients, candidatePath, err := o.collectRecipientStrings()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(recipients) == 0 {
-		if !o.isInteractiveShell() {
-			o.logger.Error("Encryption setup requires interaction. Run the script interactively to complete the AGE recipient setup, then re-run in automated mode.")
-			o.logger.Debug("HINT Set AGE_RECIPIENT or AGE_RECIPIENT_FILE to bypass the interactive setup and re-run.")
-			return nil, fmt.Errorf("age recipients not configured")
-		}
-
-		wizardRecipients, savedPath, err := o.runAgeSetupWizard(ctx, candidatePath)
-		if err != nil {
-			return nil, err
-		}
-		recipients = append(recipients, wizardRecipients...)
-		if o.cfg.AgeRecipientFile == "" {
-			o.cfg.AgeRecipientFile = savedPath
-		}
-	}
-
-	if len(recipients) == 0 {
-		return nil, fmt.Errorf("no AGE recipients configured after setup")
-	}
-
-	parsed, err := parseRecipientStrings(recipients)
-	if err != nil {
-		return nil, err
-	}
-	o.ageRecipientCache = cloneRecipients(parsed)
-	o.forceNewAgeRecipient = false
-	return cloneRecipients(parsed), nil
+	recipients, _, err := o.prepareAgeRecipientsWithUI(ctx, nil)
+	return recipients, err
 }
 
 func (o *Orchestrator) collectRecipientStrings() ([]string, string, error) {
@@ -129,94 +92,22 @@ func (o *Orchestrator) collectRecipientStrings() ([]string, string, error) {
 // runAgeSetupWizard collects AGE recipients interactively.
 // Returns (fileRecipients, savedPath, error)
 func (o *Orchestrator) runAgeSetupWizard(ctx context.Context, candidatePath string) ([]string, string, error) {
-	reader := bufio.NewReader(os.Stdin)
-	targetPath := candidatePath
-	if targetPath == "" {
-		targetPath = o.defaultAgeRecipientFile()
+	if o == nil {
+		return nil, "", fmt.Errorf("orchestrator is required")
 	}
 
-	o.logger.Info("Encryption setup: no AGE recipients found, starting interactive wizard")
-	if targetPath == "" {
-		return nil, "", fmt.Errorf("unable to determine default path for AGE recipients")
-	}
-
-	// Create a child context for the wizard to handle Ctrl+C locally
 	wizardCtx, wizardCancel := context.WithCancel(ctx)
 	defer wizardCancel()
 
-	recipientPath := targetPath
-	if o.forceNewAgeRecipient && recipientPath != "" {
-		if _, err := os.Stat(recipientPath); err == nil {
-			fmt.Printf("WARNING: this will remove the existing AGE recipients stored at %s. Existing backups remain decryptable with your old private key.\n", recipientPath)
-			confirm, errPrompt := promptYesNoAge(wizardCtx, reader, fmt.Sprintf("Delete %s and enter a new recipient? [y/N]: ", recipientPath))
-			if errPrompt != nil {
-				return nil, "", errPrompt
-			}
-			if !confirm {
-				return nil, "", fmt.Errorf("operation aborted by user")
-			}
-			if err := backupExistingRecipientFile(recipientPath); err != nil {
-				fmt.Printf("NOTE: %v\n", err)
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, "", fmt.Errorf("failed to inspect existing AGE recipients at %s: %w", recipientPath, err)
-		}
-	}
-
-	recipients := make([]string, 0)
-	for {
-		fmt.Println("\n[1] Use an existing AGE public key")
-		fmt.Println("[2] Generate an AGE public key using a personal passphrase/password — not stored on the server")
-		fmt.Println("[3] Generate an AGE public key from an existing personal private key — not stored on the server")
-		fmt.Println("[4] Exit setup")
-		option, err := promptOptionAge(wizardCtx, reader, "Select an option [1-4]: ")
-		if err != nil {
-			return nil, "", err
-		}
-		if option == "4" {
-			return nil, "", ErrAgeRecipientSetupAborted
-		}
-
-		var value string
-		switch option {
-		case "1":
-			value, err = promptPublicRecipientAge(wizardCtx, reader)
-		case "2":
-			value, err = promptPassphraseRecipientAge(wizardCtx)
-			if err == nil {
-				o.logger.Info("Derived deterministic AGE public key from passphrase (no secrets stored)")
-			}
-		case "3":
-			value, err = promptPrivateKeyRecipientAge(wizardCtx)
-		}
-		if err != nil {
-			o.logger.Warning("Encryption setup: %v", err)
-			continue
-		}
-		if value != "" {
-			recipients = append(recipients, value)
-		}
-
-		more, err := promptYesNoAge(wizardCtx, reader, "Add another recipient? [y/N]: ")
-		if err != nil {
-			return nil, "", err
-		}
-		if !more {
-			break
-		}
-	}
-
-	if len(recipients) == 0 {
-		return nil, "", fmt.Errorf("no recipients provided")
-	}
-
-	if err := writeRecipientFile(targetPath, dedupeRecipientStrings(recipients)); err != nil {
+	recipients, result, err := o.runAgeSetupWorkflow(wizardCtx, candidatePath, newCLIAgeSetupUI(bufio.NewReader(os.Stdin), o.logger))
+	if err != nil {
 		return nil, "", err
 	}
-
-	o.logger.Info("Saved AGE recipient to %s", targetPath)
-	o.logger.Info("Reminder: keep the AGE private key offline; the server stores only recipients.")
-	return recipients, targetPath, nil
+	savedPath := ""
+	if result != nil {
+		savedPath = result.RecipientPath
+	}
+	return recipients, savedPath, nil
 }
 
 func (o *Orchestrator) defaultAgeRecipientFile() string {
@@ -262,6 +153,16 @@ func promptPublicRecipientAge(ctx context.Context, reader *bufio.Reader) (string
 }
 
 func promptPrivateKeyRecipientAge(ctx context.Context) (string, error) {
+	secret, err := promptPrivateKeyValueAge(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer resetString(&secret)
+
+	return ParseAgePrivateKeyRecipient(secret)
+}
+
+func promptPrivateKeyValueAge(ctx context.Context) (string, error) {
 	fmt.Print("Paste your AGE private key (not stored; input is not echoed). Press Enter when done: ")
 	secretBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
 	fmt.Println()
@@ -271,15 +172,14 @@ func promptPrivateKeyRecipientAge(ctx context.Context) (string, error) {
 	defer zeroBytes(secretBytes)
 
 	secret := strings.TrimSpace(string(secretBytes))
-	defer resetString(&secret)
 	if secret == "" {
 		return "", fmt.Errorf("private key cannot be empty")
 	}
-	identity, err := age.ParseX25519Identity(secret)
-	if err != nil {
-		return "", fmt.Errorf("invalid AGE private key: %w", err)
+	if err := ValidateAgePrivateKeyString(secret); err != nil {
+		resetString(&secret)
+		return "", err
 	}
-	return identity.Recipient().String(), nil
+	return secret, nil
 }
 
 // promptPassphraseRecipient derives a deterministic AGE public key from a passphrase
@@ -420,18 +320,22 @@ func readRecipientFile(path string) ([]string, error) {
 }
 
 func writeRecipientFile(path string, recipients []string) error {
+	return writeRecipientFileWithDeps(osFS{}, realTimeProvider{}, path, recipients)
+}
+
+func writeRecipientFileWithDeps(fs FS, tp TimeProvider, path string, recipients []string) error {
+	if fs == nil {
+		fs = osFS{}
+	}
 	if len(recipients) == 0 {
 		return fmt.Errorf("no recipients to write")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := fs.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create recipient directory: %w", err)
 	}
 	content := strings.Join(recipients, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := writeFileAtomicWithDeps(fs, tp, path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write recipient file: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("chmod recipient file: %w", err)
 	}
 	return nil
 }
@@ -456,26 +360,153 @@ func mapInputAbortToAgeAbort(err error) error {
 }
 
 func backupExistingRecipientFile(path string) error {
-	if path == "" {
-		return nil
-	}
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	backupPath := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102-150405"))
-	if err := os.Rename(path, backupPath); err != nil {
-		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to backup recipient file: %w (also failed to remove: %v)", err, removeErr)
-		}
-		return fmt.Errorf("renamed recipient file failed, removed original: %w", err)
-	}
-	return nil
+	_, err := backupExistingRecipientFileWithDeps(osFS{}, realTimeProvider{}, path)
+	return err
 }
 
-// BackupAgeRecipientFile backs up an existing AGE recipient file (if present).
+func backupExistingRecipientFileWithDeps(fs FS, tp TimeProvider, path string) (string, error) {
+	if fs == nil {
+		fs = osFS{}
+	}
+	if path == "" {
+		return "", nil
+	}
+	info, err := fs.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("recipient path is a directory: %s", path)
+	}
+	perm := info.Mode().Perm()
+	if perm == 0 {
+		perm = 0o600
+	}
+	ts := recipientTime(tp)
+	backupPath := fmt.Sprintf("%s.bak-%s", path, ts.Format("20060102-150405.000000000"))
+	if err := copyRecipientFileWithDeps(fs, path, backupPath, perm); err != nil {
+		return "", fmt.Errorf("backup recipient file: %w", err)
+	}
+	return backupPath, nil
+}
+
+func writeFileAtomicWithDeps(fs FS, tp TimeProvider, path string, data []byte, perm os.FileMode) error {
+	if fs == nil {
+		fs = osFS{}
+	}
+	perm &= 0o7777
+	if perm == 0 {
+		perm = 0o600
+	}
+
+	tmpPath := fmt.Sprintf("%s.proxsave.tmp.%d", path, recipientTime(tp).UnixNano())
+	tmpFile, err := fs.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+
+	writeErr := func() error {
+		if len(data) != 0 {
+			if _, err := tmpFile.Write(data); err != nil {
+				return err
+			}
+		}
+		if err := tmpFile.Chmod(perm); err != nil {
+			return err
+		}
+		return tmpFile.Sync()
+	}()
+
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = fs.Remove(tmpPath)
+		return writeErr
+	}
+	if closeErr != nil {
+		_ = fs.Remove(tmpPath)
+		return closeErr
+	}
+
+	if err := fs.Rename(tmpPath, path); err != nil {
+		_ = fs.Remove(tmpPath)
+		return err
+	}
+
+	return syncDirectoryWithDeps(fs, filepath.Dir(path))
+}
+
+func copyRecipientFileWithDeps(fs FS, src, dest string, perm os.FileMode) error {
+	if fs == nil {
+		fs = osFS{}
+	}
+
+	in, err := fs.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+
+	copyErr := func() error {
+		if _, err := io.Copy(out, in); err != nil {
+			return err
+		}
+		if err := out.Chmod(perm); err != nil {
+			return err
+		}
+		return out.Sync()
+	}()
+
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = fs.Remove(dest)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = fs.Remove(dest)
+		return closeErr
+	}
+
+	return syncDirectoryWithDeps(fs, filepath.Dir(dest))
+}
+
+func syncDirectoryWithDeps(fs FS, dir string) error {
+	if fs == nil {
+		fs = osFS{}
+	}
+
+	df, err := fs.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open dir %s: %w", dir, err)
+	}
+
+	syncErr := df.Sync()
+	closeErr := df.Close()
+	if syncErr != nil {
+		if errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP) {
+			return closeErr
+		}
+		return fmt.Errorf("sync dir %s: %w", dir, syncErr)
+	}
+	return closeErr
+}
+
+func recipientTime(tp TimeProvider) time.Time {
+	if tp != nil {
+		return tp.Now()
+	}
+	return time.Now()
+}
+
+// BackupAgeRecipientFile backs up an existing AGE recipient file (if present)
+// without removing the active file.
 func BackupAgeRecipientFile(path string) error {
 	return backupExistingRecipientFile(path)
 }
@@ -493,6 +524,25 @@ func ValidateRecipientString(value string) error {
 	}
 	_, err := parseRecipientString(trimmed)
 	return err
+}
+
+// ValidateAgePrivateKeyString checks whether a private AGE identity is valid.
+func ValidateAgePrivateKeyString(value string) error {
+	_, err := ParseAgePrivateKeyRecipient(value)
+	return err
+}
+
+// ParseAgePrivateKeyRecipient validates a private AGE identity and returns its public recipient.
+func ParseAgePrivateKeyRecipient(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", fmt.Errorf("private key cannot be empty")
+	}
+	identity, err := age.ParseX25519Identity(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("invalid AGE private key: %w", err)
+	}
+	return identity.Recipient().String(), nil
 }
 
 // DedupeRecipientStrings removes empty values and duplicates from recipient strings.

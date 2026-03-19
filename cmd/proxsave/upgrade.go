@@ -177,12 +177,12 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 	ensureGoSymlink(execPath, bootstrap)
 
-	cronSchedule := resolveCronSchedule(nil)
+	cronSchedule := resolveCronScheduleFromEnv()
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "migrating cron entries")
 	migrateLegacyCronEntries(ctx, baseDir, execPath, bootstrap, cronSchedule)
 
 	telegramCode := ""
-	if info, err := identity.Detect(baseDir, nil); err == nil {
+	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {
 		if code := strings.TrimSpace(info.ServerID); code != "" {
 			telegramCode = code
 		}
@@ -631,7 +631,7 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
-	fmt.Println("  --new-install      - Wipe installation directory (keep env/identity) then run installer")
+	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
 	fmt.Println()
 

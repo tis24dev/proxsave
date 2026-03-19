@@ -239,8 +239,13 @@ func resolveHostname() string {
 }
 
 func validateFutureFeatures(cfg *config.Config) error {
-	if cfg.SecondaryEnabled && cfg.SecondaryPath == "" {
-		return fmt.Errorf("secondary backup enabled but SECONDARY_PATH is empty")
+	if cfg.SecondaryEnabled {
+		if err := config.ValidateRequiredSecondaryPath(cfg.SecondaryPath); err != nil {
+			return err
+		}
+		if err := config.ValidateOptionalSecondaryLogPath(cfg.SecondaryLogPath); err != nil {
+			return err
+		}
 	}
 	if cfg.CloudEnabled && cfg.CloudRemote == "" {
 		logging.Warning("Cloud backup enabled but CLOUD_REMOTE is empty – disabling cloud storage for this run")
@@ -339,6 +344,9 @@ func fetchStorageStats(ctx context.Context, backend storage.Storage, logger *log
 
 func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) string {
 	retentionConfig := storage.NewRetentionConfigFromConfig(cfg, location)
+	if retentionConfig.Policy == "gfs" {
+		retentionConfig = storage.EffectiveGFSRetentionConfig(retentionConfig)
+	}
 
 	if stats == nil {
 		reason := "unable to gather stats"

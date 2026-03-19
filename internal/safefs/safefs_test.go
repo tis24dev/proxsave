@@ -3,6 +3,7 @@ package safefs
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"sync/atomic"
 	"syscall"
@@ -150,6 +151,87 @@ func TestStatfs_ReturnsTimeoutError(t *testing.T) {
 	}
 	if time.Since(start) > 250*time.Millisecond {
 		t.Fatalf("Statfs took too long: %s", time.Since(start))
+	}
+}
+
+func TestSpaceUsageFromStatfsUsesBfreeForUsedSpace(t *testing.T) {
+	stat := syscall.Statfs_t{
+		Blocks: 100,
+		Bfree:  20,
+		Bavail: 15,
+		Bsize:  4096,
+	}
+
+	total, available, used := SpaceUsageFromStatfs(stat)
+
+	if total != 100*4096 {
+		t.Fatalf("total = %d; want %d", total, 100*4096)
+	}
+	if available != 15*4096 {
+		t.Fatalf("available = %d; want %d", available, 15*4096)
+	}
+	if used != 80*4096 {
+		t.Fatalf("used = %d; want %d", used, 80*4096)
+	}
+	if used == total-available {
+		t.Fatalf("used should not be derived from Bavail when reserved blocks exist")
+	}
+}
+
+func TestSpaceUsageFromStatfsClampsInconsistentCounters(t *testing.T) {
+	stat := syscall.Statfs_t{
+		Blocks: 100,
+		Bfree:  150,
+		Bavail: 125,
+		Bsize:  1024,
+	}
+
+	total, available, used := SpaceUsageFromStatfs(stat)
+
+	if total != 100*1024 {
+		t.Fatalf("total = %d; want %d", total, 100*1024)
+	}
+	if available != total {
+		t.Fatalf("available = %d; want clamp to total %d", available, total)
+	}
+	if used != 0 {
+		t.Fatalf("used = %d; want 0", used)
+	}
+}
+
+func TestSpaceUsageFromStatfsClampsNegativeByteCounts(t *testing.T) {
+	stat := syscall.Statfs_t{
+		Blocks: 10,
+		Bfree:  2,
+		Bavail: 1,
+		Bsize:  -4096,
+	}
+
+	total, available, used := SpaceUsageFromStatfs(stat)
+
+	if total != 0 || available != 0 || used != 0 {
+		t.Fatalf("negative byte counts should clamp to zero, got total=%d available=%d used=%d", total, available, used)
+	}
+}
+
+func TestSpaceUsageFromStatfsSaturatesOverflowingProducts(t *testing.T) {
+	stat := syscall.Statfs_t{
+		Blocks: 1<<63 - 1,
+		Bfree:  0,
+		Bavail: 1<<63 - 1,
+		Bsize:  4096,
+	}
+
+	total, available, used := SpaceUsageFromStatfs(stat)
+
+	if total != math.MaxInt64 {
+		t.Fatalf("total = %d; want %d", total, math.MaxInt64)
+	}
+	if available != math.MaxInt64 {
+		t.Fatalf("available = %d; want %d", available, math.MaxInt64)
+	}
+	if used != math.MaxInt64 {
+		t.Fatalf("used = %d; want %d", used, math.MaxInt64)
 	}
 }
 

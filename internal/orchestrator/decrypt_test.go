@@ -125,6 +125,17 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 			wantLabel: []string{"Local backups"},
 		},
 		{
+			name: "secondary disabled ignores stale path",
+			cfg: &config.Config{
+				BackupPath:       "/backup/local",
+				SecondaryEnabled: false,
+				SecondaryPath:    "remote:path",
+			},
+			wantCount: 1,
+			wantPaths: []string{"/backup/local"},
+			wantLabel: []string{"Local backups"},
+		},
+		{
 			name: "cloud enabled but empty remote",
 			cfg: &config.Config{
 				BackupPath:   "/backup/local",
@@ -228,16 +239,8 @@ func TestInspectRcloneMetadataManifest_JSONArchivePathEmptyUsesRemoteArchivePath
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-
-	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
-		t.Fatalf("set METADATA_PATH: %v", err)
-	}
-	defer os.Unsetenv("METADATA_PATH")
+	prependPathEnv(t, tmpDir)
+	t.Setenv("METADATA_PATH", metadataPath)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -275,16 +278,8 @@ func TestInspectRcloneMetadataManifest_LegacyInfersAgeFromArchiveExt(t *testing.
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-
-	if err := os.Setenv("METADATA_PATH", metadataPath); err != nil {
-		t.Fatalf("set METADATA_PATH: %v", err)
-	}
-	defer os.Unsetenv("METADATA_PATH")
+	prependPathEnv(t, tmpDir)
+	t.Setenv("METADATA_PATH", metadataPath)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -330,16 +325,8 @@ func TestInspectRcloneBundleManifest_ReturnsErrorWhenManifestMissing(t *testing.
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-
-	if err := os.Setenv("BUNDLE_PATH", bundlePath); err != nil {
-		t.Fatalf("set BUNDLE_PATH: %v", err)
-	}
-	defer os.Unsetenv("BUNDLE_PATH")
+	prependPathEnv(t, tmpDir)
+	t.Setenv("BUNDLE_PATH", bundlePath)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -2093,24 +2080,10 @@ esac
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
-
-	if err := os.Setenv("ARCHIVE_SRC", archiveSrc); err != nil {
-		t.Fatalf("set ARCHIVE_SRC: %v", err)
-	}
-	if err := os.Setenv("METADATA_SRC", metadataSrc); err != nil {
-		t.Fatalf("set METADATA_SRC: %v", err)
-	}
-	if err := os.Setenv("CHECKSUM_SRC", checksumSrc); err != nil {
-		t.Fatalf("set CHECKSUM_SRC: %v", err)
-	}
-	defer os.Unsetenv("ARCHIVE_SRC")
-	defer os.Unsetenv("METADATA_SRC")
-	defer os.Unsetenv("CHECKSUM_SRC")
+	prependPathEnv(t, binDir)
+	t.Setenv("ARCHIVE_SRC", archiveSrc)
+	t.Setenv("METADATA_SRC", metadataSrc)
+	t.Setenv("CHECKSUM_SRC", checksumSrc)
 
 	cand := &decryptCandidate{
 		IsRclone:        true,
@@ -2298,11 +2271,7 @@ func TestInspectRcloneBundleManifest_TarReadErrorInLoop(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, tmpDir)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -2345,11 +2314,7 @@ func TestInspectRcloneBundleManifest_UnmarshalError(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, tmpDir)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -2400,11 +2365,7 @@ func TestInspectRcloneBundleManifest_ValidManifest(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, tmpDir)
 
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(io.Discard)
@@ -2441,11 +2402,7 @@ func TestInspectRcloneMetadataManifest_EmptyData(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, tmpDir)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -2482,11 +2439,7 @@ func TestInspectRcloneMetadataManifest_LegacyPlainEncryption(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, tmpDir)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -2533,11 +2486,7 @@ func TestInspectRcloneMetadataManifest_LegacyWithComments(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, tmpDir)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -2567,11 +2516,7 @@ func TestInspectRcloneMetadataManifest_RcloneFails(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, tmpDir)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -2743,11 +2688,7 @@ func TestDownloadRcloneBackup_RcloneRunError(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, tmpDir)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -2909,9 +2850,7 @@ esac
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	os.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, binDir)
 
 	// Mock password input to return the correct key
 	readPassword = func(fd int) ([]byte, error) {
@@ -3354,11 +3293,7 @@ func TestInspectRcloneBundleManifest_StartError(t *testing.T) {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	defer os.Setenv("PATH", oldPath)
+	prependPathEnv(t, tmpDir)
 
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -3652,9 +3587,7 @@ exit 1
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelDebug, false)
@@ -3687,9 +3620,7 @@ exit 0
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	workDir := filepath.Join(tmp, "work")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -3745,9 +3676,7 @@ fi
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	workDir := filepath.Join(tmp, "work")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -3845,9 +3774,7 @@ exit 0
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	cfg := &config.Config{
 		BackupPath:       "",
@@ -3887,9 +3814,7 @@ exit 1
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	// Create local backup directory with valid backup
 	backupDir := filepath.Join(tmp, "backups")
@@ -4024,9 +3949,7 @@ exit 1
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	cand := &decryptCandidate{
 		Source:     sourceBundle,
@@ -4082,9 +4005,7 @@ exit 1
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	// First allow the rclone download to work by using real FS initially
 	orig := restoreFS
@@ -4140,9 +4061,7 @@ cat "%s"
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelError, false)
@@ -4178,9 +4097,7 @@ exit 1
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelError, false)
@@ -4222,9 +4139,7 @@ cat "%s"
 		t.Fatalf("write rclone: %v", err)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelError, false)
@@ -4438,9 +4353,7 @@ exit 0
 	}
 
 	// Prepend fake rclone to PATH
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	orig := restoreFS
 	// Use regular osFS - the download will work, then MkdirAll for /tmp/proxsave should succeed
@@ -4585,9 +4498,7 @@ exit 0
 `, sourceBundlePath)
 	os.WriteFile(fakeRclone, []byte(script), 0o755)
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmp+":"+origPath)
-	defer os.Setenv("PATH", origPath)
+	prependPathEnv(t, tmp)
 
 	// Use FS that fails MkdirAll after the first call (download uses MkdirAll too)
 	fake := &fakeMkdirAllFailAfterDownloadFS{failAfterCall: 1}

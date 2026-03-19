@@ -123,7 +123,7 @@ func TestPrepareAgeRecipients_InteractiveWizardSetsRecipientFile(t *testing.T) {
 	}
 }
 
-func TestRunAgeSetupWizard_ForceNewRecipientBacksUpExistingFile(t *testing.T) {
+func TestRunAgeSetupWizard_ForceNewRecipientAbortKeepsExistingFile(t *testing.T) {
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "identity", "age", "recipient.txt")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -175,21 +175,18 @@ func TestRunAgeSetupWizard_ForceNewRecipientBacksUpExistingFile(t *testing.T) {
 	}
 
 	matches, err := filepath.Glob(target + ".bak-*")
-	if err != nil || len(matches) != 1 {
-		t.Fatalf("expected backup file, got %v err=%v", matches, err)
-	}
-
-	// Ensure original was moved away.
-	if _, err := os.Stat(target); !os.IsNotExist(err) {
-		t.Fatalf("expected original to be moved, stat err=%v", err)
-	}
-
-	// Ensure the old recipient didn't get replaced during abort.
-	data, err := os.ReadFile(matches[0])
 	if err != nil {
-		t.Fatalf("ReadFile backup: %v", err)
+		t.Fatalf("Glob(%s): %v", target+".bak-*", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected no backup file on abort, got %v", matches)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", target, err)
 	}
 	if strings.TrimSpace(string(data)) != "old" {
-		t.Fatalf("backup content=%q want=%q", strings.TrimSpace(string(data)), "old")
+		t.Fatalf("original content=%q want=%q", strings.TrimSpace(string(data)), "old")
 	}
 }

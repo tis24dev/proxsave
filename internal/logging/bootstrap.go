@@ -34,6 +34,9 @@ func NewBootstrapLogger() *BootstrapLogger {
 
 // SetLevel updates the minimum level used during Flush.
 func (b *BootstrapLogger) SetLevel(level types.LogLevel) {
+	if b == nil {
+		return
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.minLevel = level
@@ -41,6 +44,9 @@ func (b *BootstrapLogger) SetLevel(level types.LogLevel) {
 
 // Println records a raw line (used for banners/text without a header).
 func (b *BootstrapLogger) Println(message string) {
+	if b == nil {
+		return
+	}
 	fmt.Println(message)
 	b.mirrorLog(types.LogLevelInfo, message)
 	b.recordRaw(message)
@@ -48,6 +54,9 @@ func (b *BootstrapLogger) Println(message string) {
 
 // Debug records a debug message without printing it to the console.
 func (b *BootstrapLogger) Debug(format string, args ...interface{}) {
+	if b == nil {
+		return
+	}
 	msg := fmt.Sprintf(format, args...)
 	b.mirrorLog(types.LogLevelDebug, msg)
 	b.record(types.LogLevelDebug, msg)
@@ -55,6 +64,9 @@ func (b *BootstrapLogger) Debug(format string, args ...interface{}) {
 
 // Printf records a formatted line as raw.
 func (b *BootstrapLogger) Printf(format string, args ...interface{}) {
+	if b == nil {
+		return
+	}
 	msg := fmt.Sprintf(format, args...)
 	fmt.Println(msg)
 	b.mirrorLog(types.LogLevelInfo, msg)
@@ -63,6 +75,9 @@ func (b *BootstrapLogger) Printf(format string, args ...interface{}) {
 
 // Info logs an early informational message.
 func (b *BootstrapLogger) Info(format string, args ...interface{}) {
+	if b == nil {
+		return
+	}
 	msg := fmt.Sprintf(format, args...)
 	fmt.Println(msg)
 	b.mirrorLog(types.LogLevelInfo, msg)
@@ -71,6 +86,9 @@ func (b *BootstrapLogger) Info(format string, args ...interface{}) {
 
 // Warning records an early warning message (printed to stderr).
 func (b *BootstrapLogger) Warning(format string, args ...interface{}) {
+	if b == nil {
+		return
+	}
 	msg := fmt.Sprintf(format, args...)
 	if !strings.HasSuffix(msg, "\n") {
 		msg += "\n"
@@ -83,6 +101,9 @@ func (b *BootstrapLogger) Warning(format string, args ...interface{}) {
 
 // Error records an early error message (stderr).
 func (b *BootstrapLogger) Error(format string, args ...interface{}) {
+	if b == nil {
+		return
+	}
 	msg := fmt.Sprintf(format, args...)
 	if !strings.HasSuffix(msg, "\n") {
 		msg += "\n"
@@ -114,6 +135,9 @@ func (b *BootstrapLogger) recordRaw(message string) {
 
 // Flush flushes accumulated entries into the main logger (only the first time).
 func (b *BootstrapLogger) Flush(logger *Logger) {
+	if b == nil || logger == nil {
+		return
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.flushed {
@@ -121,9 +145,7 @@ func (b *BootstrapLogger) Flush(logger *Logger) {
 	}
 	for _, entry := range b.entries {
 		if entry.raw {
-			if logger != nil {
-				logger.AppendRaw(entry.message)
-			}
+			logger.AppendRaw(entry.message)
 			continue
 		}
 		if entry.level > b.minLevel {
@@ -150,6 +172,9 @@ func (b *BootstrapLogger) Flush(logger *Logger) {
 
 // SetMirrorLogger forwards every bootstrap message to the provided logger.
 func (b *BootstrapLogger) SetMirrorLogger(logger *Logger) {
+	if b == nil {
+		return
+	}
 	b.mu.Lock()
 	b.mirror = logger
 	b.mu.Unlock()

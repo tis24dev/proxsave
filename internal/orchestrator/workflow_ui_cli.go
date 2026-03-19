@@ -133,8 +133,9 @@ func (u *cliWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 			if err != nil {
 				return PathDecisionCancel, "", err
 			}
-			trimmed := strings.TrimSpace(newPath)
-			if trimmed == "" {
+			trimmed, err := validateDistinctNewPathInput(newPath, current)
+			if err != nil {
+				fmt.Println(err.Error())
 				continue
 			}
 			return PathDecisionNewPath, filepath.Clean(trimmed), nil

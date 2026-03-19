@@ -25,7 +25,16 @@ import (
 const (
 	cloudUploadModeSequential = "sequential"
 	cloudUploadModeParallel   = "parallel"
+	cloudRetryBackoffMax      = 30 * time.Second
 )
+
+var cloudRetryBackoffSchedule = [...]time.Duration{
+	2 * time.Second,
+	4 * time.Second,
+	8 * time.Second,
+	16 * time.Second,
+	cloudRetryBackoffMax,
+}
 
 type CloudStorage struct {
 	config         *config.Config
@@ -37,6 +46,7 @@ type CloudStorage struct {
 	parallelVerify bool
 	execCommand    func(ctx context.Context, name string, args ...string) ([]byte, error)
 	lookPath       func(string) (string, error)
+	waitForRetry   func(context.Context, time.Duration) error
 	sleep          func(time.Duration)
 	lastRet        RetentionSummary
 	remoteFilesMu  sync.RWMutex
@@ -111,6 +121,40 @@ func remoteBaseName(ref string) string {
 	return path.Base(trimmed)
 }
 
+// Bound exponential retry delays so large attempt counts stay safe and predictable.
+func cloudRetryBackoff(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+
+	index := attempt - 1
+	if index >= len(cloudRetryBackoffSchedule) {
+		return cloudRetryBackoffSchedule[len(cloudRetryBackoffSchedule)-1]
+	}
+	return cloudRetryBackoffSchedule[index]
+}
+
+func waitForRetryContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // NewCloudStorage creates a new cloud storage instance
 func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage, error) {
 	// Normalize CloudRemote and CloudRemotePath into:
@@ -143,6 +187,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage,
 		parallelVerify: cfg.CloudParallelVerify,
 		execCommand:    defaultExecCommand,
 		lookPath:       exec.LookPath,
+		waitForRetry:   waitForRetryContext,
 		sleep:          time.Sleep,
 	}, nil
 }
@@ -314,6 +359,10 @@ func (c *CloudStorage) checkRemoteAccessible(ctx context.Context) error {
 
 		lastErr = err
 
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		// If the context timed out, wrap as timeout error
 		if timeoutCtx.Err() == context.DeadlineExceeded {
 			return &remoteCheckError{
@@ -324,11 +373,23 @@ func (c *CloudStorage) checkRemoteAccessible(ctx context.Context) error {
 		}
 
 		if attempt < maxAttempts {
-			// Exponential backoff: 2s, 4s, 8s, ...
-			waitTime := time.Duration(1<<uint(attempt)) * time.Second
+			// Keep retry delays bounded and avoid shift/multiplication overflow.
+			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Cloud remote check attempt %d/%d failed: %v (retrying in %v)",
 				attempt, maxAttempts, err, waitTime)
-			c.sleep(waitTime)
+			if err := c.waitForRetry(timeoutCtx, waitTime); err != nil {
+				if parentErr := ctx.Err(); parentErr != nil {
+					return parentErr
+				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					return &remoteCheckError{
+						kind: remoteErrorTimeout,
+						msg:  fmt.Sprintf("connection timeout (%ds) - remote did not respond in time", timeoutSeconds),
+						err:  err,
+					}
+				}
+				return err
+			}
 		}
 	}
 
@@ -588,13 +649,32 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		}
 	}
 
-	filename := filepath.Base(backupFile)
+	primaryFile := backupFile
+	primaryStat := stat
+	if c.config.BundleAssociatedFiles {
+		// When bundling is enabled, callers may pass either the raw archive path
+		// or the bundle path itself. Only switch to the bundle when a distinct
+		// canonical bundle exists alongside the raw archive.
+		bundleFile := bundlePathFor(backupFile)
+		if bundleFile != backupFile {
+			bundleStat, err := os.Stat(bundleFile)
+			if err == nil {
+				primaryFile = bundleFile
+				primaryStat = bundleStat
+			} else if !errors.Is(err, os.ErrNotExist) {
+				c.logger.Warning("WARNING: Cloud storage - unable to inspect bundle %s: %v",
+					filepath.Base(bundleFile), err)
+			}
+		}
+	}
+
+	filename := filepath.Base(primaryFile)
 	remoteFile := c.remotePathFor(filename)
-	logging.DebugStep(c.logger, "cloud store", "source size=%s remote=%s", utils.FormatBytes(stat.Size()), c.remoteLabel())
+	logging.DebugStep(c.logger, "cloud store", "source size=%s remote=%s", utils.FormatBytes(primaryStat.Size()), c.remoteLabel())
 
 	c.logger.Info("Uploading backup to cloud storage: %s (%s) -> %s (timeout: %ds)",
 		filename,
-		utils.FormatBytes(stat.Size()),
+		utils.FormatBytes(primaryStat.Size()),
 		c.remoteLabel(),
 		c.config.RcloneTimeoutOperation)
 	c.logger.Debug("Cloud storage: upload retries=%d threads=%d bwlimit=%s",
@@ -606,7 +686,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 	tasks := make([]uploadTask, 0, 4)
 	tasks = append(tasks, uploadTask{
-		local:  backupFile,
+		local:  primaryFile,
 		remote: remoteFile,
 		verify: true,
 	})
@@ -625,16 +705,6 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 			tasks = append(tasks, uploadTask{
 				local:  srcFile,
 				remote: c.remotePathFor(filepath.Base(srcFile)),
-				verify: c.parallelVerify,
-			})
-		}
-	} else {
-		// Upload bundle file
-		bundleFile := backupFile + ".bundle.tar"
-		if _, err := os.Stat(bundleFile); err == nil {
-			tasks = append(tasks, uploadTask{
-				local:  bundleFile,
-				remote: c.remotePathFor(filepath.Base(bundleFile)),
 				verify: c.parallelVerify,
 			})
 		}
@@ -723,11 +793,13 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 			break
 		}
 
-		// Wait before retry (exponential backoff)
+		// Keep retry delays bounded and avoid shift/multiplication overflow.
 		if attempt < c.config.RcloneRetries {
-			waitTime := time.Duration(1<<uint(attempt)) * time.Second
+			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Waiting %v before retry...", waitTime)
-			c.sleep(waitTime)
+			if err := c.waitForRetry(ctx, waitTime); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1437,6 +1509,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (c *CloudStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
+	config = EffectiveGFSRetentionConfig(config)
 	c.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
 

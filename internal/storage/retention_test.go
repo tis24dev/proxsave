@@ -192,24 +192,38 @@ func TestClassifyBackupsGFS_DailyOnly(t *testing.T) {
 func TestClassifyBackupsGFS_ZeroDaily(t *testing.T) {
 	now := time.Now()
 	backups := []*types.BackupMetadata{
-		{Timestamp: now.Add(-24 * time.Hour)},
-		{Timestamp: now.Add(-48 * time.Hour)},
+		{Timestamp: now.Add(-1 * time.Hour)},
+		{Timestamp: now.Add(-8 * 24 * time.Hour)},
+		{Timestamp: now.Add(-15 * 24 * time.Hour)},
 	}
 
 	config := RetentionConfig{
 		Daily:   0,
 		Weekly:  1,
 		Monthly: 0,
-		Yearly:  0,
+		Yearly:  -1,
 	}
 
 	classification := ClassifyBackupsGFS(backups, config)
 
 	stats := GetRetentionStats(classification)
 
-	// With Daily=0, backups should go to weekly/monthly/yearly or delete
-	if stats[CategoryDaily] != 0 {
-		t.Errorf("Expected 0 daily backups with Daily=0, got %d", stats[CategoryDaily])
+	// In GFS, Daily=0 is normalized to 1 to ensure the current period is protected.
+	if stats[CategoryDaily] != 1 {
+		t.Errorf("Expected 1 daily backup with Daily=0, got %d", stats[CategoryDaily])
+	}
+	if stats[CategoryWeekly] != 1 {
+		t.Errorf("Expected 1 weekly backup with Daily=0, got %d", stats[CategoryWeekly])
+	}
+	if stats[CategoryDelete] != 1 {
+		t.Errorf("Expected 1 backup marked for deletion with Daily=0, got %d", stats[CategoryDelete])
+	}
+
+	if classification[backups[0]] != CategoryDaily {
+		t.Errorf("Expected newest backup to be daily with Daily=0, got %v", classification[backups[0]])
+	}
+	if classification[backups[1]] != CategoryWeekly {
+		t.Errorf("Expected previous-week backup to be weekly with Daily=0, got %v", classification[backups[1]])
 	}
 }
 
@@ -439,7 +453,7 @@ func TestClassifyBackupsGFS_NegativeDaily(t *testing.T) {
 	}
 
 	config := RetentionConfig{
-		Daily:   -5, // Negative should be treated as 0
+		Daily:   -5, // Negative values are normalized to the minimum daily tier.
 		Weekly:  0,
 		Monthly: 0,
 		Yearly:  -1, // Disable yearly retention so older-year backups aren't implicitly kept.
@@ -449,12 +463,12 @@ func TestClassifyBackupsGFS_NegativeDaily(t *testing.T) {
 
 	stats := GetRetentionStats(classification)
 
-	if stats[CategoryDaily] != 0 {
-		t.Errorf("Expected 0 daily backups with negative daily config, got %d", stats[CategoryDaily])
+	if stats[CategoryDaily] != 1 {
+		t.Errorf("Expected 1 daily backup with negative daily config, got %d", stats[CategoryDaily])
 	}
 
-	if stats[CategoryDelete] != 2 {
-		t.Errorf("Expected all backups marked for deletion, got %d", stats[CategoryDelete])
+	if stats[CategoryDelete] != 1 {
+		t.Errorf("Expected 1 backup marked for deletion, got %d", stats[CategoryDelete])
 	}
 }
 

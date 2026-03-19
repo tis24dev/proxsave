@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -105,7 +106,7 @@ func TestIsInstallAbortedError(t *testing.T) {
 	}
 }
 
-func TestResetInstallBaseDirPreservesEnvAndIdentity(t *testing.T) {
+func TestResetInstallBaseDirPreservesCoreDirectories(t *testing.T) {
 	base := t.TempDir()
 
 	// setup contents
@@ -134,6 +135,15 @@ func TestResetInstallBaseDirPreservesEnvAndIdentity(t *testing.T) {
 		t.Fatalf("setup identity file: %v", err)
 	}
 
+	buildDir := filepath.Join(base, "build")
+	if err := os.Mkdir(buildDir, 0o755); err != nil {
+		t.Fatalf("setup build: %v", err)
+	}
+	buildFile := filepath.Join(buildDir, "keep.txt")
+	if err := os.WriteFile(buildFile, []byte("build"), 0o600); err != nil {
+		t.Fatalf("setup build file: %v", err)
+	}
+
 	logger := logging.NewBootstrapLogger()
 	if err := resetInstallBaseDir(base, logger); err != nil {
 		t.Fatalf("resetInstallBaseDir returned error: %v", err)
@@ -157,6 +167,73 @@ func TestResetInstallBaseDirPreservesEnvAndIdentity(t *testing.T) {
 	if _, err := os.Stat(idFile); err != nil {
 		t.Fatalf("identity file should remain: %v", err)
 	}
+	if _, err := os.Stat(buildDir); err != nil {
+		t.Fatalf("build dir should remain: %v", err)
+	}
+	if _, err := os.Stat(buildFile); err != nil {
+		t.Fatalf("build file should remain: %v", err)
+	}
+}
+
+func TestResetInstallBaseDirRespectsSharedPreserveSet(t *testing.T) {
+	base := t.TempDir()
+	for _, entry := range newInstallPreservedEntries() {
+		dirPath := filepath.Join(base, entry)
+		if err := os.MkdirAll(dirPath, 0o755); err != nil {
+			t.Fatalf("setup %s: %v", entry, err)
+		}
+		filePath := filepath.Join(dirPath, "keep.txt")
+		if err := os.WriteFile(filePath, []byte(entry), 0o600); err != nil {
+			t.Fatalf("setup %s file: %v", entry, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(base, "drop.txt"), []byte("drop"), 0o600); err != nil {
+		t.Fatalf("setup drop file: %v", err)
+	}
+
+	logger := logging.NewBootstrapLogger()
+	if err := resetInstallBaseDir(base, logger); err != nil {
+		t.Fatalf("resetInstallBaseDir returned error: %v", err)
+	}
+
+	for _, entry := range newInstallPreservedEntries() {
+		filePath := filepath.Join(base, entry, "keep.txt")
+		if _, err := os.Stat(filePath); err != nil {
+			t.Fatalf("expected preserved file for %s, got %v", entry, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(base, "drop.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected drop.txt removed, got err=%v", err)
+	}
+}
+
+func TestResetInstallBaseDirAllowsNilBootstrap(t *testing.T) {
+	base := t.TempDir()
+	preservedDir := filepath.Join(base, "env")
+	if err := os.MkdirAll(preservedDir, 0o755); err != nil {
+		t.Fatalf("setup env: %v", err)
+	}
+	preservedFile := filepath.Join(preservedDir, "backup.env")
+	if err := os.WriteFile(preservedFile, []byte("KEEP=1"), 0o600); err != nil {
+		t.Fatalf("setup env file: %v", err)
+	}
+	removedFile := filepath.Join(base, "drop.txt")
+	if err := os.WriteFile(removedFile, []byte("drop"), 0o600); err != nil {
+		t.Fatalf("setup drop file: %v", err)
+	}
+
+	captureStdout(t, func() {
+		if err := resetInstallBaseDir(base, nil); err != nil {
+			t.Fatalf("resetInstallBaseDir returned error: %v", err)
+		}
+	})
+
+	if _, err := os.Stat(preservedFile); err != nil {
+		t.Fatalf("expected preserved file to remain, got %v", err)
+	}
+	if _, err := os.Stat(removedFile); !os.IsNotExist(err) {
+		t.Fatalf("expected drop.txt removed, got err=%v", err)
+	}
 }
 
 func TestResetInstallBaseDirRefusesRoot(t *testing.T) {
@@ -166,9 +243,28 @@ func TestResetInstallBaseDirRefusesRoot(t *testing.T) {
 	}
 }
 
+func TestResetInstallBaseDirWithContext_CanceledBeforeRemoval(t *testing.T) {
+	base := t.TempDir()
+	dropFile := filepath.Join(base, "drop.txt")
+	if err := os.WriteFile(dropFile, []byte("drop"), 0o600); err != nil {
+		t.Fatalf("setup drop file: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := resetInstallBaseDirWithContext(ctx, base, logging.NewBootstrapLogger())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v; want %v", err, context.Canceled)
+	}
+	if _, statErr := os.Stat(dropFile); statErr != nil {
+		t.Fatalf("expected file to remain after canceled reset, got %v", statErr)
+	}
+}
+
 func TestPrepareBaseTemplateExistingSkip(t *testing.T) {
 	cfgFile := createTempFile(t, "existing config")
-	reader := bufio.NewReader(strings.NewReader("n\n"))
+	reader := bufio.NewReader(strings.NewReader("3\n"))
 	var tmpl string
 	var skip bool
 	var err error
@@ -188,7 +284,7 @@ func TestPrepareBaseTemplateExistingSkip(t *testing.T) {
 
 func TestPrepareBaseTemplateOverwrite(t *testing.T) {
 	cfgFile := createTempFile(t, "old")
-	reader := bufio.NewReader(strings.NewReader("y\n"))
+	reader := bufio.NewReader(strings.NewReader("1\n"))
 	var tmpl string
 	var skip bool
 	var err error
@@ -203,6 +299,35 @@ func TestPrepareBaseTemplateOverwrite(t *testing.T) {
 	}
 	if tmpl == "" {
 		t.Fatalf("expected template contents")
+	}
+}
+
+func TestPrepareBaseTemplateEditExisting(t *testing.T) {
+	cfgFile := createTempFile(t, "EXISTING=1\n")
+	reader := bufio.NewReader(strings.NewReader("2\n"))
+	var tmpl string
+	var skip bool
+	var err error
+	captureStdout(t, func() {
+		tmpl, skip, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
+	})
+	if err != nil {
+		t.Fatalf("prepareBaseTemplate error: %v", err)
+	}
+	if skip {
+		t.Fatalf("expected skip=false for edit existing")
+	}
+	if !strings.Contains(tmpl, "EXISTING=1") {
+		t.Fatalf("expected existing template content, got %q", tmpl)
+	}
+}
+
+func TestPrepareBaseTemplateCancel(t *testing.T) {
+	cfgFile := createTempFile(t, "EXISTING=1\n")
+	reader := bufio.NewReader(strings.NewReader("0\n"))
+	_, _, err := prepareBaseTemplate(context.Background(), reader, cfgFile)
+	if !errors.Is(err, errInteractiveAborted) {
+		t.Fatalf("expected interactive abort, got %v", err)
 	}
 }
 
@@ -228,6 +353,60 @@ func TestConfigureSecondaryStorageEnabled(t *testing.T) {
 	}
 }
 
+func TestConfigureSecondaryStorageEnabledWithEmptyLogPath(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("y\n/mnt/secondary\n\n"))
+	captureStdout(t, func() {
+		result, err = configureSecondaryStorage(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureSecondaryStorage error: %v", err)
+	}
+	if !strings.Contains(result, "SECONDARY_ENABLED=true") {
+		t.Fatalf("expected SECONDARY_ENABLED=true in template: %q", result)
+	}
+	if !strings.Contains(result, "SECONDARY_PATH=/mnt/secondary") {
+		t.Fatalf("expected secondary path in template: %q", result)
+	}
+	if !strings.Contains(result, "SECONDARY_LOG_PATH=") {
+		t.Fatalf("expected empty secondary log path in template: %q", result)
+	}
+}
+
+func TestConfigureSecondaryStorageRejectsInvalidBackupPath(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("y\nrelative/path\n/mnt/secondary\n\n"))
+	captureStdout(t, func() {
+		result, err = configureSecondaryStorage(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureSecondaryStorage error: %v", err)
+	}
+	if !strings.Contains(result, "SECONDARY_PATH=/mnt/secondary") {
+		t.Fatalf("expected corrected secondary path in template: %q", result)
+	}
+}
+
+func TestConfigureSecondaryStorageRejectsInvalidLogPath(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("y\n/mnt/secondary\nremote:/logs\n\n"))
+	captureStdout(t, func() {
+		result, err = configureSecondaryStorage(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureSecondaryStorage error: %v", err)
+	}
+	if !strings.Contains(result, "SECONDARY_LOG_PATH=") {
+		t.Fatalf("expected empty secondary log path in template: %q", result)
+	}
+}
+
 func TestConfigureSecondaryStorageDisabled(t *testing.T) {
 	var result string
 	var err error
@@ -241,6 +420,38 @@ func TestConfigureSecondaryStorageDisabled(t *testing.T) {
 	}
 	if !strings.Contains(result, "SECONDARY_ENABLED=false") {
 		t.Fatalf("expected disabled flag in template: %q", result)
+	}
+	if !strings.Contains(result, "SECONDARY_PATH=") {
+		t.Fatalf("expected cleared secondary path in template: %q", result)
+	}
+	if !strings.Contains(result, "SECONDARY_LOG_PATH=") {
+		t.Fatalf("expected cleared secondary log path in template: %q", result)
+	}
+}
+
+func TestConfigureSecondaryStorageDisabledClearsExistingValues(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("n\n"))
+	template := "SECONDARY_ENABLED=true\nSECONDARY_PATH=/mnt/old-secondary\nSECONDARY_LOG_PATH=/mnt/old-secondary/logs\n"
+	captureStdout(t, func() {
+		result, err = configureSecondaryStorage(ctx, reader, template)
+	})
+	if err != nil {
+		t.Fatalf("configureSecondaryStorage error: %v", err)
+	}
+	for _, needle := range []string{
+		"SECONDARY_ENABLED=false",
+		"SECONDARY_PATH=",
+		"SECONDARY_LOG_PATH=",
+	} {
+		if !strings.Contains(result, needle) {
+			t.Fatalf("expected %q in template: %q", needle, result)
+		}
+	}
+	if strings.Contains(result, "/mnt/old-secondary") {
+		t.Fatalf("expected old secondary values to be cleared: %q", result)
 	}
 }
 
@@ -364,6 +575,130 @@ func TestConfigureEncryption(t *testing.T) {
 	}
 	if !strings.Contains(template, "ENCRYPT_ARCHIVE=false") {
 		t.Fatalf("expected disabled flag")
+	}
+}
+
+func TestConfigureCronTime(t *testing.T) {
+	t.Run("empty input uses default", func(t *testing.T) {
+		var cronTime string
+		var err error
+		reader := bufio.NewReader(strings.NewReader("\n"))
+		captureStdout(t, func() {
+			cronTime, err = configureCronTime(context.Background(), reader, cronutil.DefaultTime)
+		})
+		if err != nil {
+			t.Fatalf("configureCronTime returned error: %v", err)
+		}
+		if cronTime != cronutil.DefaultTime {
+			t.Fatalf("configureCronTime default = %q, want %q", cronTime, cronutil.DefaultTime)
+		}
+	})
+
+	t.Run("invalid input re-prompts until valid", func(t *testing.T) {
+		var cronTime string
+		var err error
+		reader := bufio.NewReader(strings.NewReader("24:00\n3:7\n"))
+		output := captureStdout(t, func() {
+			cronTime, err = configureCronTime(context.Background(), reader, cronutil.DefaultTime)
+		})
+		if err != nil {
+			t.Fatalf("configureCronTime returned error: %v", err)
+		}
+		if cronTime != "03:07" {
+			t.Fatalf("configureCronTime normalized = %q, want %q", cronTime, "03:07")
+		}
+		if !strings.Contains(output, "cron hour must be between 00 and 23") {
+			t.Fatalf("expected validation error in output, got %q", output)
+		}
+	})
+
+	t.Run("aborted input returns sentinel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		reader := bufio.NewReader(strings.NewReader("03:15\n"))
+		_, err := configureCronTime(ctx, reader, cronutil.DefaultTime)
+		if !errors.Is(err, errInteractiveAborted) {
+			t.Fatalf("expected errInteractiveAborted, got %v", err)
+		}
+	})
+}
+
+func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
+	cfgDir := t.TempDir()
+	configPath := filepath.Join(cfgDir, "env", "backup.env")
+	tmpConfigPath := configPath + ".tmp"
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n03:15\n"))
+
+	var result installConfigResult
+	var err error
+	captureStdout(t, func() {
+		result, err = runConfigWizardCLI(context.Background(), reader, configPath, tmpConfigPath, "/opt/proxsave", nil)
+	})
+	if err != nil {
+		t.Fatalf("runConfigWizardCLI returned error: %v", err)
+	}
+	if result.SkipConfigWizard {
+		t.Fatal("expected SkipConfigWizard=false")
+	}
+	if result.EnableEncryption {
+		t.Fatal("expected EnableEncryption=false")
+	}
+	if result.CronSchedule != "15 03 * * *" {
+		t.Fatalf("CronSchedule = %q, want %q", result.CronSchedule, "15 03 * * *")
+	}
+
+	content, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		t.Fatalf("expected config file to be written: %v", readErr)
+	}
+	if !strings.Contains(string(content), "ENCRYPT_ARCHIVE=false") {
+		t.Fatalf("expected config content to be written, got %q", string(content))
+	}
+}
+
+func TestRunConfigWizardCLISkipLeavesCronScheduleEmpty(t *testing.T) {
+	cfgFile := createTempFile(t, "EXISTING=1\n")
+	tmpConfigPath := cfgFile + ".tmp"
+	reader := bufio.NewReader(strings.NewReader("3\n"))
+
+	var result installConfigResult
+	var err error
+	captureStdout(t, func() {
+		result, err = runConfigWizardCLI(context.Background(), reader, cfgFile, tmpConfigPath, "/opt/proxsave", nil)
+	})
+	if err != nil {
+		t.Fatalf("runConfigWizardCLI returned error: %v", err)
+	}
+	if !result.SkipConfigWizard {
+		t.Fatal("expected SkipConfigWizard=true")
+	}
+	if result.CronSchedule != "" {
+		t.Fatalf("expected empty CronSchedule when skipping wizard, got %q", result.CronSchedule)
+	}
+}
+
+func TestRunConfigWizardCLIAbortAtCronPromptDoesNotWriteConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "env", "backup.env")
+	tmpConfigPath := configPath + ".tmp"
+
+	originalConfigureCronTime := configureCronTimeFunc
+	t.Cleanup(func() { configureCronTimeFunc = originalConfigureCronTime })
+
+	configureCronTimeFunc = func(ctx context.Context, reader *bufio.Reader, defaultCron string) (string, error) {
+		return "", errInteractiveAborted
+	}
+
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n"))
+
+	_, err := runConfigWizardCLI(context.Background(), reader, configPath, tmpConfigPath, "/opt/proxsave", nil)
+	if !errors.Is(err, errInteractiveAborted) {
+		t.Fatalf("expected errInteractiveAborted, got %v", err)
+	}
+	if _, statErr := os.Stat(configPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected config file not to exist, got err=%v", statErr)
+	}
+	if _, statErr := os.Stat(tmpConfigPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected temp config file not to exist, got err=%v", statErr)
 	}
 }
 

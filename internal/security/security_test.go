@@ -1251,6 +1251,41 @@ func TestEnsureOwnershipAndPermAutoFix(t *testing.T) {
 	}
 }
 
+func TestEnsureOwnershipAndPermFromFDAutoFix(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "testfile")
+	if err := os.WriteFile(testFile, []byte("test"), 0777); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.Open(testFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checker := &Checker{
+		logger: newSecurityTestLogger(),
+		cfg:    &config.Config{AutoFixPermissions: true},
+		result: &Result{},
+	}
+
+	checker.ensureOwnershipAndPermFromFD(f, info, 0600, "test file")
+
+	refreshed, err := os.Stat(testFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Mode().Perm() != 0600 {
+		t.Errorf("permissions should have been fixed to 0600, got %o", refreshed.Mode().Perm())
+	}
+}
+
 func TestEnsureOwnershipAndPermSymlink(t *testing.T) {
 	tmpDir := t.TempDir()
 	targetFile := filepath.Join(tmpDir, "target")
@@ -1531,8 +1566,6 @@ func TestVerifyBinaryIntegritySymlinkError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Note: The current implementation checks Mode()&os.ModeSymlink after os.Open
-	// which doesn't detect symlinks properly. This test documents the behavior.
 	checker := &Checker{
 		logger:   newSecurityTestLogger(),
 		cfg:      &config.Config{AutoUpdateHashes: true},
@@ -1542,8 +1575,12 @@ func TestVerifyBinaryIntegritySymlinkError(t *testing.T) {
 
 	checker.verifyBinaryIntegrity()
 
-	// The function opens the file and then stats - symlink is followed by Open
-	// This is expected behavior given the current implementation
+	if !containsIssue(checker.result, "is a symlink") {
+		t.Fatalf("expected symlink error, issues=%+v", checker.result.Issues)
+	}
+	if _, err := os.Stat(symlinkFile + ".md5"); err == nil {
+		t.Fatal("hash file should not be created for symlink executable")
+	}
 }
 
 func TestVerifyBinaryIntegrityOpenError(t *testing.T) {
@@ -1556,8 +1593,8 @@ func TestVerifyBinaryIntegrityOpenError(t *testing.T) {
 
 	checker.verifyBinaryIntegrity()
 
-	if !containsIssue(checker.result, "Cannot open executable") {
-		t.Errorf("expected error about cannot open executable, got %+v", checker.result.Issues)
+	if !containsIssue(checker.result, "Cannot stat executable") {
+		t.Errorf("expected error about cannot stat executable, got %+v", checker.result.Issues)
 	}
 }
 

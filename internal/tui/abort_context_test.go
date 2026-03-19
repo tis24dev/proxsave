@@ -2,11 +2,34 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
+
+func newSimulationApp(t *testing.T) (*App, tcell.SimulationScreen, <-chan struct{}) {
+	t.Helper()
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("screen.Init: %v", err)
+	}
+
+	app := NewApp()
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	app.SetAfterDrawFunc(func(screen tcell.Screen) {
+		startedOnce.Do(func() {
+			close(started)
+		})
+	})
+	app.SetScreen(screen)
+	app.SetRoot(tview.NewBox(), true)
+	return app, screen, started
+}
 
 func TestSetAbortContext_GetAbortContextRoundTrip(t *testing.T) {
 	SetAbortContext(nil)
@@ -91,6 +114,143 @@ func TestAppStop_NilReceiverNoPanic(t *testing.T) {
 func TestAppStop_DelegatesToEmbeddedApplication(t *testing.T) {
 	app := &App{Application: tview.NewApplication()}
 	app.Stop()
+}
+
+func TestAppRunWithContext_CanceledBeforeRun(t *testing.T) {
+	app := &App{Application: tview.NewApplication()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := app.RunWithContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want %v", err, context.Canceled)
+	}
+}
+
+func TestAppRunWithContext_NilReceiverReturnsNil(t *testing.T) {
+	var app *App
+	if err := app.RunWithContext(context.Background()); err != nil {
+		t.Fatalf("err=%v want nil", err)
+	}
+}
+
+func TestAppRunWithContext_NilContextRunsUntilStopped(t *testing.T) {
+	app, _, started := newSimulationApp(t)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- app.RunWithContext(nil)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("RunWithContext(nil) returned before app started: %v", err)
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for app to start")
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("RunWithContext(nil) returned before Stop: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	app.Stop()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("err=%v want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for RunWithContext(nil) to return after Stop")
+	}
+}
+
+func TestAppRunWithContext_ReturnsNilWhenStoppedWithoutCancellation(t *testing.T) {
+	app, _, started := newSimulationApp(t)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- app.RunWithContext(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("RunWithContext(context.Background()) returned before app started: %v", err)
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for app to start")
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("RunWithContext(context.Background()) returned before Stop: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	app.Stop()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("err=%v want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for RunWithContext(context.Background()) to return after Stop")
+	}
+}
+
+func TestAppRunWithContext_StopsOnCancel(t *testing.T) {
+	app, _, _ := newSimulationApp(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	if err := app.RunWithContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want %v", err, context.Canceled)
+	}
+}
+
+func TestAppRunWithContext_PropagatesRunErrorWithoutCancellation(t *testing.T) {
+	app, _, _ := newSimulationApp(t)
+	runErr := errors.New("run failed")
+	eventErr := tcell.NewEventError(runErr)
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		app.QueueEvent(eventErr)
+	}()
+
+	if err := app.RunWithContext(context.Background()); err != eventErr {
+		t.Fatalf("err=%v want %v", err, eventErr)
+	}
+}
+
+func TestAppRunWithContext_PrefersContextErrorWhenCanceledDuringRunError(t *testing.T) {
+	app, _, _ := newSimulationApp(t)
+	runErr := errors.New("run failed")
+
+	var stopOnce sync.Once
+	app.stopHook = func() {
+		stopOnce.Do(func() {
+			app.stopHook = nil
+			app.QueueEvent(tcell.NewEventError(runErr))
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	if err := app.RunWithContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want %v", err, context.Canceled)
+	}
 }
 
 func TestSetRootWithTitle_SetsBoxTitleAndBorderColor(t *testing.T) {

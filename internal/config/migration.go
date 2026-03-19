@@ -53,6 +53,10 @@ var migrationRules = map[string]migrationRule{
 	"BACKUP_NETWORK_CONFIGS":      {LegacyKeys: []string{"BACKUP_NETWORK_CONFIG"}},
 	"BACKUP_REMOTE_CONFIGS":       {LegacyKeys: []string{"BACKUP_REMOTE_CFG"}},
 	"BACKUP_CRON_JOBS":            {LegacyKeys: []string{"BACKUP_CRONTABS"}},
+	"TELEGRAM_ENABLED":            {LegacyKeys: []string{"TELEGRAM_ENABLE"}},
+	"EMAIL_ENABLED":               {LegacyKeys: []string{"EMAIL_ENABLE"}},
+	"GOTIFY_ENABLED":              {LegacyKeys: []string{"GOTIFY_ENABLE"}},
+	"WEBHOOK_ENABLED":             {LegacyKeys: []string{"WEBHOOK_ENABLE"}},
 	"METRICS_ENABLED":             {LegacyKeys: []string{"PROMETHEUS_ENABLED"}},
 	"METRICS_PATH":                {LegacyKeys: []string{"PROMETHEUS_TEXTFILE_DIR"}},
 	"PXAR_FILE_INCLUDE_PATTERN":   {LegacyKeys: []string{"PXAR_INCLUDE_PATTERN"}},
@@ -206,8 +210,13 @@ func validateMigratedConfig(cfg *Config) error {
 	if strings.TrimSpace(cfg.LogPath) == "" {
 		return fmt.Errorf("LOG_PATH cannot be empty")
 	}
-	if cfg.SecondaryEnabled && strings.TrimSpace(cfg.SecondaryPath) == "" {
-		return fmt.Errorf("SECONDARY_PATH required when SECONDARY_ENABLED=true")
+	if cfg.SecondaryEnabled {
+		if err := ValidateRequiredSecondaryPath(cfg.SecondaryPath); err != nil {
+			return err
+		}
+		if err := ValidateOptionalSecondaryLogPath(cfg.SecondaryLogPath); err != nil {
+			return err
+		}
 	}
 	if cfg.CloudEnabled && strings.TrimSpace(cfg.CloudRemote) == "" {
 		return fmt.Errorf("CLOUD_REMOTE required when CLOUD_ENABLED=true")

@@ -218,9 +218,15 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		if attempt > 0 {
 			w.logger.Debug("Retry attempt %d/%d after %ds delay...", attempt, maxRetries, retryDelay)
-			time.Sleep(time.Duration(retryDelay) * time.Second)
+			if err := sleepWithContext(ctx, time.Duration(retryDelay)*time.Second); err != nil {
+				return err
+			}
 		}
 
 		// Determine HTTP method
@@ -315,6 +321,9 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 		requestDuration := time.Since(requestStart)
 
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			lastErr = fmt.Errorf("request failed: %w", err)
 			w.logger.Warning("⚠️ Request failed after %dms (attempt %d/%d): %v",
 				requestDuration.Milliseconds(), attempt+1, maxRetries+1, err)
@@ -327,6 +336,9 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 		resp.Body.Close()
 
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			lastErr = fmt.Errorf("failed to read response: %w", err)
 			w.logger.Warning("Failed to read response body: %v", err)
 			continue
@@ -376,7 +388,9 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 			w.logger.Warning("⚠️ Rate limited (HTTP 429): %s", string(body))
 			if attempt < maxRetries {
 				w.logger.Debug("Waiting 10 seconds before retry due to rate limiting...")
-				time.Sleep(10 * time.Second)
+				if err := sleepWithContext(ctx, 10*time.Second); err != nil {
+					return err
+				}
 			}
 			lastErr = fmt.Errorf("rate limit exceeded (HTTP 429)")
 			continue

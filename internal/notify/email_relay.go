@@ -86,13 +86,19 @@ func sendViaCloudRelay(
 	var lastErr error
 	skipDefaultDelay := false
 	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		if attempt > 0 {
 			if skipDefaultDelay {
 				logger.Debug("Retry attempt %d/%d resuming after rate-limit cooldown (no extra delay)", attempt, config.MaxRetries)
 				skipDefaultDelay = false
 			} else {
 				logger.Debug("Retry attempt %d/%d after %ds delay...", attempt, config.MaxRetries, config.RetryDelay)
-				time.Sleep(time.Duration(config.RetryDelay) * time.Second)
+				if err := sleepWithContext(ctx, time.Duration(config.RetryDelay)*time.Second); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -114,6 +120,9 @@ func sendViaCloudRelay(
 		// Send request
 		resp, err := client.Do(req)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			lastErr = fmt.Errorf("request failed: %w", err)
 			logger.Warning("Cloud relay request failed (attempt %d/%d): %v", attempt+1, config.MaxRetries+1, err)
 			continue
@@ -123,6 +132,9 @@ func sendViaCloudRelay(
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			lastErr = fmt.Errorf("failed to read response: %w", err)
 			continue
 		}
@@ -174,7 +186,9 @@ func sendViaCloudRelay(
 
 			// Otherwise, retry with longer delay
 			logger.Debug("Waiting 5 seconds before retry due to rate limiting...")
-			time.Sleep(5 * time.Second)
+			if err := sleepWithContext(ctx, 5*time.Second); err != nil {
+				return err
+			}
 			skipDefaultDelay = true
 			lastErr = fmt.Errorf("rate limit exceeded")
 			continue

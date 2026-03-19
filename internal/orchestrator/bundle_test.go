@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,94 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
+
+type trackingBundleFS struct {
+	FS
+	createdFiles []*os.File
+	createdPaths []string
+	openErr      map[string]error
+	renameErr    error
+}
+
+func (f *trackingBundleFS) recordCreatedFile(file *os.File) {
+	if file == nil {
+		return
+	}
+	f.createdFiles = append(f.createdFiles, file)
+	f.createdPaths = append(f.createdPaths, filepath.Clean(file.Name()))
+}
+
+func (f *trackingBundleFS) Create(name string) (*os.File, error) {
+	file, err := f.FS.Create(name)
+	if err == nil {
+		f.recordCreatedFile(file)
+	}
+	return file, err
+}
+
+func (f *trackingBundleFS) CreateTemp(dir, pattern string) (*os.File, error) {
+	file, err := f.FS.CreateTemp(dir, pattern)
+	if err == nil {
+		f.recordCreatedFile(file)
+	}
+	return file, err
+}
+
+func (f *trackingBundleFS) Open(path string) (*os.File, error) {
+	if err, ok := f.openErr[filepath.Clean(path)]; ok {
+		return nil, err
+	}
+	return f.FS.Open(path)
+}
+
+func (f *trackingBundleFS) Rename(oldpath, newpath string) error {
+	if f.renameErr != nil {
+		return f.renameErr
+	}
+	return f.FS.Rename(oldpath, newpath)
+}
+
+func assertPathAbsent(t *testing.T, path string) {
+	t.Helper()
+
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected %s to be absent, got %v", path, err)
+	}
+}
+
+func assertTrackedFilesClosed(t *testing.T, files []*os.File) {
+	t.Helper()
+
+	if len(files) == 0 {
+		t.Fatalf("expected tracked bundle file")
+	}
+	for _, file := range files {
+		if err := file.Close(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("bundle file %s close after createBundle = %v, want ErrClosed", file.Name(), err)
+		}
+	}
+}
+
+func assertTrackedPathsAbsent(t *testing.T, paths []string) {
+	t.Helper()
+
+	if len(paths) == 0 {
+		t.Fatalf("expected tracked bundle file path")
+	}
+	for _, path := range paths {
+		assertPathAbsent(t, path)
+	}
+}
+
+func writeBundleFixtures(t *testing.T, archive string, data map[string]string) {
+	t.Helper()
+
+	for suffix, content := range data {
+		if err := os.WriteFile(archive+suffix, []byte(content), 0o640); err != nil {
+			t.Fatalf("write %s: %v", suffix, err)
+		}
+	}
+}
 
 func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
@@ -23,16 +112,12 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 		".metadata":        "metadata-json",
 		".metadata.sha256": "checksum2",
 	}
+	writeBundleFixtures(t, archive, testData)
 
-	for suffix, content := range testData {
-		if err := os.WriteFile(archive+suffix, []byte(content), 0o640); err != nil {
-			t.Fatalf("write %s: %v", suffix, err)
-		}
-	}
-
+	bundleFS := &trackingBundleFS{FS: osFS{}}
 	o := &Orchestrator{
 		logger: logger,
-		fs:     osFS{},
+		fs:     bundleFS,
 	}
 
 	bundlePath, err := o.createBundle(context.Background(), archive)
@@ -44,6 +129,16 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 	if bundlePath != expectedPath {
 		t.Fatalf("bundle path = %s, want %s", bundlePath, expectedPath)
 	}
+	if len(bundleFS.createdPaths) == 0 {
+		t.Fatalf("expected tracked bundle file path")
+	}
+	for _, path := range bundleFS.createdPaths {
+		if path == expectedPath {
+			t.Fatalf("expected bundle to be written via temp file, got %s", path)
+		}
+	}
+	assertTrackedPathsAbsent(t, bundleFS.createdPaths)
+	assertTrackedFilesClosed(t, bundleFS.createdFiles)
 
 	// Verify bundle file exists
 	bundleInfo, err := os.Stat(bundlePath)
@@ -119,6 +214,103 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 			t.Errorf("expected file %s not found in tar", expected)
 		}
 	}
+}
+
+func TestCreateBundle_ClosesBundleFileOnInputOpenError(t *testing.T) {
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	tempDir := t.TempDir()
+	archive := filepath.Join(tempDir, "backup.tar")
+
+	testData := map[string]string{
+		"":          "archive-content",
+		".sha256":   "checksum1",
+		".metadata": "metadata-json",
+	}
+	writeBundleFixtures(t, archive, testData)
+
+	forcedErr := errors.New("forced open failure")
+	bundleFS := &trackingBundleFS{
+		FS: osFS{},
+		openErr: map[string]error{
+			filepath.Clean(archive + ".sha256"): forcedErr,
+		},
+	}
+	o := &Orchestrator{
+		logger: logger,
+		fs:     bundleFS,
+	}
+
+	_, err := o.createBundle(context.Background(), archive)
+	if !errors.Is(err, forcedErr) {
+		t.Fatalf("createBundle error = %v, want wrapped %v", err, forcedErr)
+	}
+	assertTrackedFilesClosed(t, bundleFS.createdFiles)
+	assertPathAbsent(t, archive+".bundle.tar")
+	assertTrackedPathsAbsent(t, bundleFS.createdPaths)
+}
+
+func TestCreateBundle_RemovesTempFileOnRenameError(t *testing.T) {
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	tempDir := t.TempDir()
+	archive := filepath.Join(tempDir, "backup.tar")
+
+	testData := map[string]string{
+		"":          "archive-content",
+		".sha256":   "checksum1",
+		".metadata": "metadata-json",
+	}
+	writeBundleFixtures(t, archive, testData)
+
+	forcedErr := errors.New("forced rename failure")
+	bundleFS := &trackingBundleFS{
+		FS:        osFS{},
+		renameErr: forcedErr,
+	}
+	o := &Orchestrator{
+		logger: logger,
+		fs:     bundleFS,
+	}
+
+	_, err := o.createBundle(context.Background(), archive)
+	if !errors.Is(err, forcedErr) {
+		t.Fatalf("createBundle error = %v, want wrapped %v", err, forcedErr)
+	}
+	assertTrackedFilesClosed(t, bundleFS.createdFiles)
+	assertPathAbsent(t, archive+".bundle.tar")
+	assertTrackedPathsAbsent(t, bundleFS.createdPaths)
+}
+
+func TestCreateBundle_RemovesFinalBundleOnDirectoryOpenErrorDuringSync(t *testing.T) {
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	tempDir := t.TempDir()
+	archive := filepath.Join(tempDir, "backup.tar")
+
+	testData := map[string]string{
+		"":          "archive-content",
+		".sha256":   "checksum1",
+		".metadata": "metadata-json",
+	}
+	writeBundleFixtures(t, archive, testData)
+
+	forcedErr := errors.New("forced directory open failure during sync")
+	bundleFS := &trackingBundleFS{
+		FS: osFS{},
+		openErr: map[string]error{
+			filepath.Clean(tempDir): forcedErr,
+		},
+	}
+	o := &Orchestrator{
+		logger: logger,
+		fs:     bundleFS,
+	}
+
+	_, err := o.createBundle(context.Background(), archive)
+	if !errors.Is(err, forcedErr) {
+		t.Fatalf("createBundle error = %v, want wrapped %v", err, forcedErr)
+	}
+	assertTrackedFilesClosed(t, bundleFS.createdFiles)
+	assertPathAbsent(t, archive+".bundle.tar")
+	assertTrackedPathsAbsent(t, bundleFS.createdPaths)
 }
 
 func TestRemoveAssociatedFiles_RemovesAll(t *testing.T) {

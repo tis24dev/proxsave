@@ -25,14 +25,22 @@ type AgeSetupData struct {
 	RecipientKey string // The final recipient key to save
 }
 
+const (
+	ageSetupTypeExisting   = "existing"
+	ageSetupTypePassphrase = "passphrase"
+	ageSetupTypePrivateKey = "privatekey"
+)
+
 var (
 	// ErrAgeSetupCancelled is returned when the user aborts the AGE setup wizard.
 	ErrAgeSetupCancelled = errors.New("encryption setup aborted by user")
 )
 
 var (
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		return app.SetRoot(root, true).SetFocus(focus).Run()
+	ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetRoot(root, true)
+		app.SetFocus(focus)
+		return app.RunWithContext(ctx)
 	}
 	ageMkdirAll  = os.MkdirAll
 	ageWriteFile = os.WriteFile
@@ -70,53 +78,20 @@ func validatePrivateKey(value string) (string, error) {
 	if key == "" {
 		return "", fmt.Errorf("private key cannot be empty")
 	}
-	if !strings.HasPrefix(key, "AGE-SECRET-KEY-1") {
-		return "", fmt.Errorf("private key must start with 'AGE-SECRET-KEY-1'")
+	if err := orchestrator.ValidateAgePrivateKeyString(key); err != nil {
+		return "", err
 	}
 	return key, nil
 }
 
 // ConfirmRecipientOverwrite shows a TUI modal to confirm overwriting an existing AGE recipient.
-func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool, error) {
+func ConfirmRecipientOverwrite(ctx context.Context, recipientPath, configPath, buildSig string) (bool, error) {
 	app := tui.NewApp()
 	overwrite := false
-
-	welcomeText := tview.NewTextView().
-		SetText("ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n" +
-			"Configure encryption for your backups using the AGE encryption tool.\n" +
-			"Choose how you want to set up your encryption key.\n").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	navInstructions := tview.NewTextView().
-		SetText("\n[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
+	escapedRecipientPath := tview.Escape(recipientPath)
 
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Existing recipient:\n[yellow]%s[white]\n\nOverwrite with a new one?", recipientPath)).
+		SetText(fmt.Sprintf("Existing recipient:\n[yellow]%s[white]\n\nOverwrite with a new one?", escapedRecipientPath)).
 		AddButtons([]string{"Overwrite", "Cancel"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Overwrite" {
@@ -132,23 +107,18 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 		SetBorderColor(tui.WarningYellow).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(modal, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
+	flex := buildWizardScreen(
+		"AGE Encryption Setup",
+		"ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n"+
+			"Configure encryption for your backups using the AGE encryption tool.\n"+
+			"Choose how you want to set up your encryption key.\n",
+		"[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled",
+		configPath,
+		buildSig,
+		modal,
+	)
 
-	flex.SetBorder(true).
-		SetTitle(" AGE Encryption Setup ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
-
-	if err := ageWizardRunner(app, flex, modal); err != nil {
+	if err := ageWizardRunner(ctx, app, flex, modal); err != nil {
 		return false, err
 	}
 
@@ -156,42 +126,9 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 }
 
 // ConfirmAddRecipient asks whether to add another AGE recipient.
-func ConfirmAddRecipient(configPath, buildSig string, count int) (bool, error) {
+func ConfirmAddRecipient(ctx context.Context, configPath, buildSig string, count int) (bool, error) {
 	app := tui.NewApp()
 	addAnother := false
-
-	welcomeText := tview.NewTextView().
-		SetText("ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n" +
-			"Add one or more AGE recipients for encryption.\n").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	navInstructions := tview.NewTextView().
-		SetText("\n[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
 
 	message := fmt.Sprintf("Recipient(s) added: %d\n\nAdd another recipient?", count)
 	modal := tview.NewModal().
@@ -211,23 +148,17 @@ func ConfirmAddRecipient(configPath, buildSig string, count int) (bool, error) {
 		SetBorderColor(tui.ProxmoxOrange).
 		SetBackgroundColor(tcell.ColorBlack)
 
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(modal, 0, 1, true).
-		AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
+	flex := buildWizardScreen(
+		"AGE Encryption Setup",
+		"ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n"+
+			"Add one or more AGE recipients for encryption.\n",
+		"[yellow]Navigation:[white] Use [yellow]←→[white] on buttons | Press [yellow]ENTER[white] to select | Mouse clicks enabled",
+		configPath,
+		buildSig,
+		modal,
+	)
 
-	flex.SetBorder(true).
-		SetTitle(" AGE Encryption Setup ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
-
-	if err := ageWizardRunner(app, flex, modal); err != nil {
+	if err := ageWizardRunner(ctx, app, flex, modal); err != nil {
 		return false, err
 	}
 
@@ -245,43 +176,6 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 	// Build the form
 	form := components.NewForm(app)
 
-	// Welcome text
-	welcomeText := tview.NewTextView().
-		SetText("ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n" +
-			"Configure encryption for your backups using the AGE encryption tool.\n" +
-			"Choose how you want to set up your encryption key.\n").
-		SetTextColor(tui.ProxmoxLight).
-		SetDynamicColors(true)
-	welcomeText.SetBorder(false)
-
-	// Navigation instructions
-	navInstructions := tview.NewTextView().
-		SetText("\n[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled").
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	navInstructions.SetBorder(false)
-
-	// Add separator
-	separator := tview.NewTextView().
-		SetText(strings.Repeat("─", 80)).
-		SetTextColor(tui.ProxmoxOrange)
-	separator.SetBorder(false)
-
-	configPathText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Configuration file:[white] %s", configPath)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	configPathText.SetBorder(false)
-
-	buildSigText := tview.NewTextView().
-		SetText(fmt.Sprintf("[yellow]Build Signature:[white] %s", buildSig)).
-		SetTextColor(tcell.ColorWhite).
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
-	buildSigText.SetBorder(false)
-
 	// Setup type dropdown
 	var setupType string
 	var publicKeyField, passphraseField, passphraseConfirmField, privateKeyField *tview.InputField
@@ -295,7 +189,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 		}, func(option string, index int) {
 			switch index {
 			case 0:
-				setupType = "existing"
+				setupType = ageSetupTypeExisting
 				if publicKeyField != nil {
 					publicKeyField.SetDisabled(false)
 				}
@@ -309,7 +203,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 					privateKeyField.SetDisabled(true)
 				}
 			case 1:
-				setupType = "passphrase"
+				setupType = ageSetupTypePassphrase
 				if publicKeyField != nil {
 					publicKeyField.SetDisabled(true)
 				}
@@ -323,7 +217,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 					privateKeyField.SetDisabled(true)
 				}
 			case 2:
-				setupType = "privatekey"
+				setupType = ageSetupTypePrivateKey
 				if publicKeyField != nil {
 					publicKeyField.SetDisabled(true)
 				}
@@ -386,7 +280,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 	form.Form.AddFormItem(privateKeyField)
 
 	// Initialize with "existing" type selected
-	setupType = "existing"
+	setupType = ageSetupTypeExisting
 	passphraseField.SetDisabled(true)
 	passphraseConfirmField.SetDisabled(true)
 	privateKeyField.SetDisabled(true)
@@ -396,7 +290,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 		data.SetupType = setupType
 
 		switch setupType {
-		case "existing":
+		case ageSetupTypeExisting:
 			publicKey, err := validatePublicKey(publicKeyField.GetText())
 			if err != nil {
 				return err
@@ -404,14 +298,14 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 			data.PublicKey = publicKey
 			data.RecipientKey = publicKey
 
-		case "passphrase":
+		case ageSetupTypePassphrase:
 			passphrase, err := validatePassphrase(passphraseField.GetText(), passphraseConfirmField.GetText())
 			if err != nil {
 				return err
 			}
 			data.Passphrase = passphrase
 
-		case "privatekey":
+		case ageSetupTypePrivateKey:
 			privateKey, err := validatePrivateKey(privateKeyField.GetText())
 			if err != nil {
 				return err
@@ -463,31 +357,25 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 		return event
 	})
 
-	// Create layout
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(welcomeText, 5, 0, false).
-		AddItem(navInstructions, 2, 0, false).
-		AddItem(separator, 1, 0, false).
-		AddItem(form.Form, 0, 1, true)
-		// Footers
-	flex.AddItem(configPathText, 1, 0, false).
-		AddItem(buildSigText, 1, 0, false)
-
-	flex.SetBorder(true).
-		SetTitle(" AGE Encryption Setup ").
-		SetTitleAlign(tview.AlignCenter).
-		SetTitleColor(tui.ProxmoxOrange).
-		SetBorderColor(tui.ProxmoxOrange).
-		SetBackgroundColor(tcell.ColorBlack)
+	flex := buildWizardScreen(
+		"AGE Encryption Setup",
+		"ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n"+
+			"Configure encryption for your backups using the AGE encryption tool.\n"+
+			"Choose how you want to set up your encryption key.\n",
+		"[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to open dropdowns | ←→ on buttons | ENTER to submit | Mouse clicks enabled",
+		configPath,
+		buildSig,
+		form.Form,
+	)
 
 	// Set the parent view for inline error display, then add buttons
 	form.SetParentView(flex)
 	form.AddSubmitButton("Continue")
 	form.AddCancelButton("Cancel")
 
-	// Run the app - ignore errors from normal app termination
-	_ = ageWizardRunner(app, flex, form.Form)
+	if err := ageWizardRunner(ctx, app, flex, form.Form); err != nil {
+		return nil, err
+	}
 
 	if data == nil {
 		return nil, ErrAgeSetupCancelled

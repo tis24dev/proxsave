@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"filippo.io/age"
-
+	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
 )
 
@@ -65,7 +62,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	// Check if config exists
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "checking existing configuration")
-	existingAction, err := wizard.CheckExistingConfig(configPath, buildSig)
+	existingAction, err := wizard.CheckExistingConfig(ctx, configPath, buildSig)
 	if err != nil {
 		return err
 	}
@@ -75,9 +72,12 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	baseTemplate := ""
 
 	switch existingAction {
-	case wizard.ExistingConfigSkip:
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "user skipped configuration")
+	case wizard.ExistingConfigCancel:
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "user cancelled installation")
 		return wrapInstallError(errInteractiveAborted)
+	case wizard.ExistingConfigKeepContinue:
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using existing configuration and skipping wizard")
+		skipConfigWizard = true
 	case wizard.ExistingConfigEdit:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "editing existing configuration")
 		content, readErr := os.ReadFile(configPath)
@@ -122,7 +122,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			return err
 		}
 
-		bootstrap.Debug("Configuration saved at %s", configPath)
+		if bootstrap != nil {
+			bootstrap.Debug("Configuration saved at %s", configPath)
+		}
 	}
 
 	// Install support docs
@@ -136,73 +138,49 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		if bootstrap != nil {
 			bootstrap.Info("Running initial encryption setup (AGE recipients)")
 		}
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "running AGE setup wizard")
-		recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
-		ageData, err := wizard.RunAgeSetupWizard(ctx, recipientPath, configPath, buildSig)
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "running AGE setup via orchestrator")
+		setupResult, err := runInitialEncryptionSetupWithUI(ctx, configPath, wizard.NewAgeSetupUI(configPath, buildSig))
 		if err != nil {
-			if errors.Is(err, wizard.ErrAgeSetupCancelled) {
-				return fmt.Errorf("encryption setup aborted by user: %w", errInteractiveAborted)
-			} else {
-				return fmt.Errorf("AGE setup failed: %w", err)
-			}
+			return err
 		}
 
-		// Process the AGE data based on setup type
-		var recipientKey string
-		switch ageData.SetupType {
-		case "existing":
-			recipientKey = ageData.PublicKey
-		case "passphrase":
-			// Derive recipient from passphrase
-			recipient, err := deriveRecipientFromPassphrase(ageData.Passphrase)
-			if err != nil {
-				return fmt.Errorf("failed to derive recipient from passphrase: %w", err)
+		if bootstrap != nil {
+			bootstrap.Info("AGE encryption configured successfully")
+			if setupResult.WroteRecipientFile && setupResult.RecipientPath != "" {
+				bootstrap.Info("Recipient saved to: %s", setupResult.RecipientPath)
+			} else if setupResult.ReusedExistingRecipients {
+				bootstrap.Info("Using existing AGE recipient configuration")
 			}
-			recipientKey = recipient
-		case "privatekey":
-			// Derive recipient from private key
-			recipient, err := deriveRecipientFromPrivateKey(ageData.PrivateKey)
-			if err != nil {
-				return fmt.Errorf("failed to derive recipient from private key: %w", err)
-			}
-			recipientKey = recipient
+			bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
 		}
-
-		// Save the recipient
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "saving AGE recipient")
-		if err := wizard.SaveAgeRecipient(recipientPath, recipientKey); err != nil {
-			return fmt.Errorf("failed to save AGE recipient: %w", err)
-		}
-
-		bootstrap.Info("AGE encryption configured successfully")
-		bootstrap.Info("Recipient saved to: %s", recipientPath)
-		bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
 	}
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors
 	// based on actionable warning hints like "set BACKUP_*=false to disable".
-	auditRes, auditErr := wizard.RunPostInstallAuditWizard(ctx, execInfo.ExecPath, configPath, buildSig)
-	if bootstrap != nil {
-		if auditErr != nil {
-			bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
-		} else {
-			switch {
-			case !auditRes.Ran:
-				bootstrap.Info("Post-install audit: skipped by user")
-			case auditRes.CollectErr != nil:
-				bootstrap.Warning("Post-install audit failed (non-blocking): %v", auditRes.CollectErr)
-			case len(auditRes.Suggestions) == 0:
-				bootstrap.Info("Post-install audit: no unused components detected")
-			default:
-				keys := make([]string, 0, len(auditRes.Suggestions))
-				for _, s := range auditRes.Suggestions {
-					keys = append(keys, s.Key)
-				}
-				bootstrap.Info("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
-				if len(auditRes.AppliedKeys) > 0 {
-					bootstrap.Info("Post-install audit: disabled (%d): %s", len(auditRes.AppliedKeys), strings.Join(auditRes.AppliedKeys, ", "))
-				} else {
-					bootstrap.Info("Post-install audit: no disables applied")
+	if !skipConfigWizard {
+		auditRes, auditErr := wizard.RunPostInstallAuditWizard(ctx, execInfo.ExecPath, configPath, buildSig)
+		if bootstrap != nil {
+			if auditErr != nil {
+				bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
+			} else {
+				switch {
+				case !auditRes.Ran:
+					bootstrap.Info("Post-install audit: skipped by user")
+				case auditRes.CollectErr != nil:
+					bootstrap.Warning("Post-install audit failed (non-blocking): %v", auditRes.CollectErr)
+				case len(auditRes.Suggestions) == 0:
+					bootstrap.Info("Post-install audit: no unused components detected")
+				default:
+					keys := make([]string, 0, len(auditRes.Suggestions))
+					for _, s := range auditRes.Suggestions {
+						keys = append(keys, s.Key)
+					}
+					bootstrap.Info("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
+					if len(auditRes.AppliedKeys) > 0 {
+						bootstrap.Info("Post-install audit: disabled (%d): %s", len(auditRes.AppliedKeys), strings.Join(auditRes.AppliedKeys, ", "))
+					} else {
+						bootstrap.Info("Post-install audit: no disables applied")
+					}
 				}
 			}
 		}
@@ -210,21 +188,16 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	// Telegram setup (centralized bot): if enabled during install, guide the user through
 	// pairing and allow an explicit verification step with retry + skip.
-	if wizardData != nil && (wizardData.NotificationMode == "telegram" || wizardData.NotificationMode == "both") {
+	if !skipConfigWizard && wizardData != nil && (wizardData.NotificationMode == "telegram" || wizardData.NotificationMode == "both") {
 		telegramRes, telegramErr := wizard.RunTelegramSetupWizard(ctx, baseDir, configPath, buildSig)
 		if telegramErr != nil && bootstrap != nil {
 			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)
 		}
+		if bootstrap != nil && telegramErr == nil {
+			logTelegramSetupBootstrapOutcome(bootstrap, telegramRes.TelegramSetupBootstrap)
+		}
 		if bootstrap != nil && telegramRes.Shown {
-			if telegramRes.ConfigError != "" {
-				bootstrap.Warning("Telegram setup: failed to load config (non-blocking): %s", telegramRes.ConfigError)
-			}
-			if telegramRes.IdentityDetectError != "" {
-				bootstrap.Warning("Telegram setup: identity detection issue (non-blocking): %s", telegramRes.IdentityDetectError)
-			}
-			if telegramRes.TelegramMode == "personal" {
-				bootstrap.Info("Telegram setup: personal mode selected (no centralized pairing check)")
-			} else if telegramRes.Verified {
+			if telegramRes.Verified {
 				bootstrap.Info("Telegram setup: verified (code=%d)", telegramRes.LastStatusCode)
 			} else if telegramRes.SkippedVerification {
 				bootstrap.Info("Telegram setup: verification skipped by user")
@@ -251,12 +224,16 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
 	// Migrate legacy cron entries
-	cronSchedule := resolveCronSchedule(wizardData)
+	wizardCronSchedule := ""
+	if wizardData != nil {
+		wizardCronSchedule = cronutil.TimeToSchedule(wizardData.CronTime)
+	}
+	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule)
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "migrating cron entries")
 	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
 
 	// Attempt to resolve or create a server identity for Telegram pairing
-	if info, err := identity.Detect(baseDir, nil); err == nil {
+	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {
 		if code := info.ServerID; code != "" {
 			telegramCode = code
 		}
@@ -274,24 +251,4 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "permissions status=%s", permStatus)
 
 	return nil
-}
-
-// deriveRecipientFromPassphrase derives a deterministic AGE recipient from a passphrase
-func deriveRecipientFromPassphrase(passphrase string) (string, error) {
-	return orchestrator.DeriveDeterministicRecipientFromPassphrase(passphrase)
-}
-
-// deriveRecipientFromPrivateKey derives the recipient (public key) from an AGE private key
-func deriveRecipientFromPrivateKey(privateKey string) (string, error) {
-	privateKey = strings.TrimSpace(privateKey)
-	if privateKey == "" {
-		return "", fmt.Errorf("private key cannot be empty")
-	}
-
-	identity, err := age.ParseX25519Identity(privateKey)
-	if err != nil {
-		return "", fmt.Errorf("invalid AGE private key: %w", err)
-	}
-
-	return identity.Recipient().String(), nil
 }
