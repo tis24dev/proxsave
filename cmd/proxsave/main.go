@@ -1567,7 +1567,6 @@ func printNetworkRollbackCountdown(abortInfo *orchestrator.RestoreAbortInfo) {
 		fmt.Printf("\r  Remaining: %ds   ", int(remaining.Seconds()))
 
 		<-ticker.C
-		continue
 	}
 
 	fmt.Printf("%s===========================================%s\n", color, colorReset)
