@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -18,7 +19,7 @@ var confirmNewInstallRunner = func(ctx context.Context, app *tui.App, root, focu
 	return app.RunWithContext(ctx)
 }
 
-func formatPreservedEntries(entries []string) string {
+func formatPreservedEntries(baseDir string, entries []string) string {
 	formatted := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		trimmed := strings.TrimSpace(entry)
@@ -26,7 +27,8 @@ func formatPreservedEntries(entries []string) string {
 			continue
 		}
 		if !strings.HasSuffix(trimmed, "/") {
-			if fi, err := os.Stat(trimmed); err == nil && fi.IsDir() {
+			resolved := filepath.Join(baseDir, trimmed)
+			if fi, err := os.Stat(resolved); err == nil && fi.IsDir() {
 				trimmed += "/"
 			}
 		}
@@ -42,7 +44,7 @@ func formatPreservedEntries(entries []string) string {
 func ConfirmNewInstall(ctx context.Context, baseDir string, buildSig string, preservedEntries []string) (bool, error) {
 	app := tui.NewApp()
 	proceed := false
-	preservedText := formatPreservedEntries(preservedEntries)
+	preservedText := formatPreservedEntries(baseDir, preservedEntries)
 	escapedBaseDir := tview.Escape(baseDir)
 	escapedPreservedText := tview.Escape(preservedText)
 

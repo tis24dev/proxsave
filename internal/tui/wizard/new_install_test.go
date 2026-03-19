@@ -98,10 +98,24 @@ func TestFormatPreservedEntries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := formatPreservedEntries(tt.entries); got != tt.want {
+			if got := formatPreservedEntries(tempDir, tt.entries); got != tt.want {
 				t.Fatalf("formatPreservedEntries(%v) = %q, want %q", tt.entries, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFormatPreservedEntriesResolvesAgainstBaseDirNotCWD(t *testing.T) {
+	baseDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(baseDir, "build"), 0o755); err != nil {
+		t.Fatalf("Mkdir(build) failed: %v", err)
+	}
+
+	otherDir := t.TempDir()
+	withWorkingDir(t, otherDir)
+
+	if got := formatPreservedEntries(baseDir, []string{"build"}); got != "build/" {
+		t.Fatalf("formatPreservedEntries should resolve against baseDir: got %q, want %q", got, "build/")
 	}
 }
 
@@ -154,13 +168,12 @@ func TestConfirmNewInstallMessageIncludesBaseDir(t *testing.T) {
 }
 
 func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
-	tempDir := t.TempDir()
+	baseDir := t.TempDir()
 	for _, dir := range []string{"build", "env", "identity"} {
-		if err := os.Mkdir(filepath.Join(tempDir, dir), 0o755); err != nil {
+		if err := os.Mkdir(filepath.Join(baseDir, dir), 0o755); err != nil {
 			t.Fatalf("Mkdir(%s) failed: %v", dir, err)
 		}
 	}
-	withWorkingDir(t, tempDir)
 
 	var captured string
 	registerConfirmNewInstallRunner(t, func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
@@ -168,7 +181,7 @@ func TestConfirmNewInstallMessageIncludesPreservedEntries(t *testing.T) {
 		return nil
 	})
 
-	_, err := ConfirmNewInstall(context.Background(), "/var/lib/data", "build-sig", testPreservedEntries())
+	_, err := ConfirmNewInstall(context.Background(), baseDir, "build-sig", testPreservedEntries())
 	if err != nil {
 		t.Fatalf("ConfirmNewInstall error: %v", err)
 	}
@@ -211,7 +224,7 @@ func TestConfirmNewInstallMessageEscapesDynamicColorMarkup(t *testing.T) {
 		t.Fatalf("expected escaped base dir in modal text, got %q", captured)
 	}
 
-	wantPreserved := tview.Escape(formatPreservedEntries(preservedEntries))
+	wantPreserved := tview.Escape(formatPreservedEntries(baseDir, preservedEntries))
 	if !strings.Contains(captured, wantPreserved) {
 		t.Fatalf("expected escaped preserved entries %q in modal text, got %q", wantPreserved, captured)
 	}
