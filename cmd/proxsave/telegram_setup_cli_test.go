@@ -244,3 +244,75 @@ func TestRunTelegramSetupCLI_BootstrapErrorNonBlocking(t *testing.T) {
 		t.Fatalf("runTelegramSetupCLI error: %v", err)
 	}
 }
+
+func TestSanitizeTelegramSetupStatusMessage_StripsTerminalEscapes(t *testing.T) {
+	raw := " \x1b[31mneeds\tpairing\r\nnow\x1b[0m\x07 "
+
+	got := sanitizeTelegramSetupStatusMessage(raw)
+
+	if got != "needs pairing now" {
+		t.Fatalf("sanitizeTelegramSetupStatusMessage(%q) = %q, want %q", raw, got, "needs pairing now")
+	}
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("sanitized message should not contain escape characters: %q", got)
+	}
+}
+
+func TestSanitizeTelegramSetupStatusMessage_FallsBackToQuotedSafeText(t *testing.T) {
+	raw := strings.Repeat("\x1b", maxTelegramSetupStatusMessageLen+5)
+
+	got := sanitizeTelegramSetupStatusMessage(raw)
+
+	if got == "" {
+		t.Fatal("expected fallback message")
+	}
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("fallback should not contain raw escape characters: %q", got)
+	}
+	if !strings.Contains(got, `\x1b`) {
+		t.Fatalf("fallback should retain a safe escaped representation, got %q", got)
+	}
+	if !strings.Contains(got, "...(truncated)") {
+		t.Fatalf("expected truncated fallback output, got %q", got)
+	}
+}
+
+func TestRunTelegramSetupCLI_SanitizesRegistrationStatusOutput(t *testing.T) {
+	stubTelegramSetupCLIDeps(t)
+
+	promptCalls := 0
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility:     orchestrator.TelegramSetupEligibleCentralized,
+			ConfigLoaded:    true,
+			TelegramEnabled: true,
+			TelegramMode:    "centralized",
+			ServerAPIHost:   "https://api.example.test",
+			ServerID:        "123456789",
+		}, nil
+	}
+	telegramSetupPromptYesNo = func(ctx context.Context, reader *bufio.Reader, question string, defaultYes bool) (bool, error) {
+		promptCalls++
+		return promptCalls == 1, nil
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		return notify.TelegramRegistrationStatus{
+			Code:    500,
+			Message: "\x1b[31mneeds\tpairing\r\nnow\x1b[0m\x07",
+			Error:   errors.New("unexpected status 500"),
+		}
+	}
+
+	output := captureStdout(t, func() {
+		if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
+			t.Fatalf("runTelegramSetupCLI error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Telegram: needs pairing now") {
+		t.Fatalf("expected sanitized Telegram status in output, got %q", output)
+	}
+	if strings.Contains(output, "\x1b") {
+		t.Fatalf("output should not contain raw escape sequences, got %q", output)
+	}
+}
