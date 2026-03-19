@@ -274,38 +274,38 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 		SetFieldWidth(70).
 		SetMaskCharacter('*')
 	privateKeyField.SetDisabled(true)
-		form.Form.AddFormItem(privateKeyField)
+	form.Form.AddFormItem(privateKeyField)
 
-		// Initialize with "existing" type selected
-		setupType = ageSetupTypeExisting
+	// Initialize with "existing" type selected
+	setupType = ageSetupTypeExisting
 	passphraseField.SetDisabled(true)
 	passphraseConfirmField.SetDisabled(true)
 	privateKeyField.SetDisabled(true)
 
 	// Set up form submission
 	form.SetOnSubmit(func(values map[string]string) error {
-			data.SetupType = setupType
+		data.SetupType = setupType
 
-			switch setupType {
-			case ageSetupTypeExisting:
-				publicKey, err := validatePublicKey(publicKeyField.GetText())
-				if err != nil {
-					return err
-				}
-				data.PublicKey = publicKey
-				data.RecipientKey = publicKey
+		switch setupType {
+		case ageSetupTypeExisting:
+			publicKey, err := validatePublicKey(publicKeyField.GetText())
+			if err != nil {
+				return err
+			}
+			data.PublicKey = publicKey
+			data.RecipientKey = publicKey
 
-			case ageSetupTypePassphrase:
-				passphrase, err := validatePassphrase(passphraseField.GetText(), passphraseConfirmField.GetText())
-				if err != nil {
-					return err
-				}
-				data.Passphrase = passphrase
+		case ageSetupTypePassphrase:
+			passphrase, err := validatePassphrase(passphraseField.GetText(), passphraseConfirmField.GetText())
+			if err != nil {
+				return err
+			}
+			data.Passphrase = passphrase
 
-			case ageSetupTypePrivateKey:
-				privateKey, err := validatePrivateKey(privateKeyField.GetText())
-				if err != nil {
-					return err
+		case ageSetupTypePrivateKey:
+			privateKey, err := validatePrivateKey(privateKeyField.GetText())
+			if err != nil {
+				return err
 			}
 			data.PrivateKey = privateKey
 		}
