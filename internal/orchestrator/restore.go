@@ -34,9 +34,10 @@ var (
 	servicePollInterval       = 500 * time.Millisecond
 	serviceRetryDelay         = 500 * time.Millisecond
 	restoreLogSequence        uint64
-	restoreTempSequence       uint64
 	restoreGlob               = filepath.Glob
 )
+
+const restoreTempPattern = ".proxsave-tmp-*"
 
 // RestoreAbortInfo contains information about an aborted restore with network rollback.
 type RestoreAbortInfo struct {
@@ -1614,8 +1615,7 @@ func extractDirectory(target string, header *tar.Header, logger *logging.Logger)
 
 // extractRegularFile extracts a regular file with content and timestamps
 func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header, logger *logging.Logger) (retErr error) {
-	tmpSeq := atomic.AddUint64(&restoreTempSequence, 1)
-	tmpPath := fmt.Sprintf("%s.proxsave.tmp.%d.%d", target, nowRestore().UnixNano(), tmpSeq)
+	tmpPath := ""
 	var outFile *os.File
 	appendDeferredErr := func(prefix string, err error) {
 		if err == nil {
@@ -1639,10 +1639,11 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 
 	// Write to a sibling temp file first so a truncated archive entry cannot clobber
 	// an existing target before the content is fully copied and closed.
-	outFile, err := restoreFS.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL|os.O_TRUNC, os.FileMode(header.Mode))
+	outFile, err := restoreFS.CreateTemp(filepath.Dir(target), restoreTempPattern)
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
+	tmpPath = outFile.Name()
 	defer func() {
 		appendDeferredErr("close file", closeOutFile())
 		if tmpPath != "" {

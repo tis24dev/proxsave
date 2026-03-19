@@ -798,17 +798,26 @@ func (f *trackingOpenFileFS) OpenFile(path string, flag int, perm os.FileMode) (
 	return file, err
 }
 
+func (f *trackingOpenFileFS) CreateTemp(dir, pattern string) (*os.File, error) {
+	file, err := f.FS.CreateTemp(dir, pattern)
+	if err == nil {
+		f.lastOpened = file
+	}
+	return file, err
+}
+
 // --------------------------------------------------------------------------
 // ErrorInjectingFS - FS wrapper that can inject errors
 // --------------------------------------------------------------------------
 
 type ErrorInjectingFS struct {
-	base        FS
-	mkdirAllErr error
-	openFileErr error
-	symlinkErr  error
-	readlinkErr error
-	linkErr     error
+	base          FS
+	mkdirAllErr   error
+	openFileErr   error
+	createTempErr error
+	symlinkErr    error
+	readlinkErr   error
+	linkErr       error
 }
 
 func (f *ErrorInjectingFS) Stat(path string) (os.FileInfo, error)  { return f.base.Stat(path) }
@@ -823,6 +832,9 @@ func (f *ErrorInjectingFS) Remove(path string) error                   { return 
 func (f *ErrorInjectingFS) RemoveAll(path string) error                { return f.base.RemoveAll(path) }
 func (f *ErrorInjectingFS) ReadDir(path string) ([]os.DirEntry, error) { return f.base.ReadDir(path) }
 func (f *ErrorInjectingFS) CreateTemp(dir, pattern string) (*os.File, error) {
+	if f.createTempErr != nil {
+		return nil, f.createTempErr
+	}
 	return f.base.CreateTemp(dir, pattern)
 }
 func (f *ErrorInjectingFS) MkdirTemp(dir, pattern string) (string, error) {
@@ -900,7 +912,7 @@ func TestExtractDirectory_MkdirAllFails(t *testing.T) {
 // extractRegularFile error tests
 // --------------------------------------------------------------------------
 
-func TestExtractRegularFile_OpenFileFails(t *testing.T) {
+func TestExtractRegularFile_CreateTempFails(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
 
@@ -908,8 +920,8 @@ func TestExtractRegularFile_OpenFileFails(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 
 	restoreFS = &ErrorInjectingFS{
-		base:        fakeFS,
-		openFileErr: fmt.Errorf("permission denied"),
+		base:          fakeFS,
+		createTempErr: fmt.Errorf("permission denied"),
 	}
 
 	header := &tar.Header{
@@ -962,7 +974,7 @@ func TestExtractRegularFile_CopyFails(t *testing.T) {
 	if closeErr := trackingFS.lastOpened.Close(); !errors.Is(closeErr, os.ErrClosed) {
 		t.Fatalf("output file close after copy failure = %v, want ErrClosed", closeErr)
 	}
-	tempMatches, err := filepath.Glob(target + ".proxsave.tmp.*")
+	tempMatches, err := filepath.Glob(filepath.Join(filepath.Dir(target), restoreTempPattern))
 	if err != nil {
 		t.Fatalf("glob temp files: %v", err)
 	}
@@ -1022,7 +1034,7 @@ func TestExtractRegularFile_CopyFailsPreservesExistingTarget(t *testing.T) {
 		t.Fatalf("preserved target mode = %o, want %o", info.Mode().Perm(), 0o600)
 	}
 
-	tempMatches, err := filepath.Glob(target + ".proxsave.tmp.*")
+	tempMatches, err := filepath.Glob(filepath.Join(filepath.Dir(target), restoreTempPattern))
 	if err != nil {
 		t.Fatalf("glob temp files: %v", err)
 	}
@@ -1752,7 +1764,7 @@ func TestExtractRegularFile_Success(t *testing.T) {
 	if closeErr := trackingFS.lastOpened.Close(); !errors.Is(closeErr, os.ErrClosed) {
 		t.Fatalf("output file close after success = %v, want ErrClosed", closeErr)
 	}
-	tempMatches, err := filepath.Glob(target + ".proxsave.tmp.*")
+	tempMatches, err := filepath.Glob(filepath.Join(filepath.Dir(target), restoreTempPattern))
 	if err != nil {
 		t.Fatalf("glob temp files: %v", err)
 	}
