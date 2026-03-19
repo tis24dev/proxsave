@@ -11,18 +11,25 @@ import (
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
-func TestAgeSetupUIAdapterCollectRecipientDraftCancelMapsAbort(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
+func registerAgeWizardRunner(t *testing.T, runner func(app *tui.App, root, focus tview.Primitive) error) {
+	t.Helper()
 
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	originalRunner := ageWizardRunner
+	ageWizardRunner = runner
+	t.Cleanup(func() {
+		ageWizardRunner = originalRunner
+	})
+}
+
+func TestAgeSetupUIAdapterCollectRecipientDraftCancelMapsAbort(t *testing.T) {
+	registerAgeWizardRunner(t, func(app *tui.App, root, focus tview.Primitive) error {
 		form, ok := focus.(*tview.Form)
 		if !ok {
 			t.Fatalf("expected *tview.Form focus, got %T", focus)
 		}
 		pressFormButton(t, form, "Cancel")
 		return nil
-	}
+	})
 
 	ui := NewAgeSetupUI("/etc/proxsave/config.env", "sig-test")
 	draft, err := ui.CollectRecipientDraft(context.Background(), "/tmp/recipient.age")
@@ -35,13 +42,10 @@ func TestAgeSetupUIAdapterCollectRecipientDraftCancelMapsAbort(t *testing.T) {
 }
 
 func TestAgeSetupUIAdapterCollectRecipientDraftRunnerError(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
-
 	expected := errors.New("boom")
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	registerAgeWizardRunner(t, func(app *tui.App, root, focus tview.Primitive) error {
 		return expected
-	}
+	})
 
 	ui := NewAgeSetupUI("/etc/proxsave/config.env", "sig-test")
 	if _, err := ui.CollectRecipientDraft(context.Background(), "/tmp/recipient.age"); !errors.Is(err, expected) {
@@ -50,13 +54,10 @@ func TestAgeSetupUIAdapterCollectRecipientDraftRunnerError(t *testing.T) {
 }
 
 func TestAgeSetupUIAdapterConfirmOverwriteExistingRecipientCanceledContext(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
-
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	registerAgeWizardRunner(t, func(app *tui.App, root, focus tview.Primitive) error {
 		t.Fatal("ageWizardRunner should not be called when context is already canceled")
 		return nil
-	}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -72,13 +73,10 @@ func TestAgeSetupUIAdapterConfirmOverwriteExistingRecipientCanceledContext(t *te
 }
 
 func TestAgeSetupUIAdapterConfirmAddAnotherRecipientCanceledContext(t *testing.T) {
-	originalRunner := ageWizardRunner
-	defer func() { ageWizardRunner = originalRunner }()
-
-	ageWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	registerAgeWizardRunner(t, func(app *tui.App, root, focus tview.Primitive) error {
 		t.Fatal("ageWizardRunner should not be called when context is already canceled")
 		return nil
-	}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
