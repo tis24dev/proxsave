@@ -694,6 +694,7 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 			SetTitleColor(tui.WarningYellow).
 			SetBorderColor(tui.WarningYellow).
 			SetBackgroundColor(tcell.ColorBlack)
+		modal.SetFocus(2)
 
 		flex := buildWizardScreen(
 			"ProxSave Installation",

@@ -355,6 +355,50 @@ func TestCheckExistingConfigRejectsNonRegularPath(t *testing.T) {
 	}
 }
 
+func TestCheckExistingConfigDefaultsFocusToKeepContinue(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "prox.env")
+	if err := os.WriteFile(configPath, []byte("base"), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	originalRunner := checkExistingConfigRunner
+	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
+
+	checkExistingConfigRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		modal, ok := focus.(*tview.Modal)
+		if !ok {
+			t.Fatalf("focus=%T; want *tview.Modal", focus)
+		}
+
+		var form *tview.Form
+		modal.Focus(func(p tview.Primitive) {
+			var ok bool
+			form, ok = p.(*tview.Form)
+			if !ok {
+				t.Fatalf("delegate focus=%T; want *tview.Form", p)
+			}
+		})
+
+		formItem, button := form.GetFocusedItemIndex()
+		if formItem != -1 || button != 2 {
+			t.Fatalf("focused item=(%d,%d); want (-1,2)", formItem, button)
+		}
+
+		done := extractModalDone(modal)
+		done(0, "Keep & continue")
+		return nil
+	}
+
+	action, err := CheckExistingConfig(configPath, "sig-abc")
+	if err != nil {
+		t.Fatalf("CheckExistingConfig returned error: %v", err)
+	}
+	if action != ExistingConfigKeepContinue {
+		t.Fatalf("action=%v; want %v", action, ExistingConfigKeepContinue)
+	}
+}
+
 func TestCheckExistingConfigPropagatesRunnerErrors(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "prox.env")
