@@ -838,12 +838,6 @@ func isInstallAbortedError(err error) bool {
 	return false
 }
 
-// clearImmutableAttributes attempts to remove immutable flags (chattr -i) so deletion can proceed.
-// It logs warnings on failure but does not return an error, since removal will report issues later.
-func clearImmutableAttributes(target string, bootstrap *logging.BootstrapLogger) {
-	_ = clearImmutableAttributesWithContext(context.Background(), target, bootstrap)
-}
-
 func clearImmutableAttributesWithContext(ctx context.Context, target string, bootstrap *logging.BootstrapLogger) error {
 	if ctx == nil {
 		ctx = context.Background()
