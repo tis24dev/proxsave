@@ -62,7 +62,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	// Check if config exists
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "checking existing configuration")
-	existingAction, err := wizard.CheckExistingConfig(configPath, buildSig)
+	existingAction, err := wizard.CheckExistingConfig(ctx, configPath, buildSig)
 	if err != nil {
 		return err
 	}

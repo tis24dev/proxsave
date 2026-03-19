@@ -304,7 +304,7 @@ func TestCheckExistingConfigActions(t *testing.T) {
 				return nil
 			}
 
-			action, err := CheckExistingConfig(configPath, "sig-abc")
+			action, err := CheckExistingConfig(context.Background(), configPath, "sig-abc")
 			if err != nil {
 				t.Fatalf("CheckExistingConfig returned error: %v", err)
 			}
@@ -317,7 +317,7 @@ func TestCheckExistingConfigActions(t *testing.T) {
 
 func TestCheckExistingConfigMissingFileDefaultsToOverwrite(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "absent.env")
-	action, err := CheckExistingConfig(configPath, "sig")
+	action, err := CheckExistingConfig(context.Background(), configPath, "sig")
 	if err != nil {
 		t.Fatalf("CheckExistingConfig returned error: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestCheckExistingConfigMissingFileDefaultsToOverwrite(t *testing.T) {
 
 func TestCheckExistingConfigPropagatesStatErrors(t *testing.T) {
 	pathWithNul := string([]byte{0})
-	action, err := CheckExistingConfig(pathWithNul, "sig")
+	action, err := CheckExistingConfig(context.Background(), pathWithNul, "sig")
 	if err == nil {
 		t.Fatalf("expected error for invalid path")
 	}
@@ -343,7 +343,7 @@ func TestCheckExistingConfigRejectsNonRegularPath(t *testing.T) {
 		t.Fatalf("failed to create directory: %v", err)
 	}
 
-	action, err := CheckExistingConfig(configPath, "sig")
+	action, err := CheckExistingConfig(context.Background(), configPath, "sig")
 	if err == nil {
 		t.Fatal("expected error for non-regular config path")
 	}
@@ -390,7 +390,7 @@ func TestCheckExistingConfigDefaultsFocusToKeepContinue(t *testing.T) {
 		return nil
 	}
 
-	action, err := CheckExistingConfig(configPath, "sig-abc")
+	action, err := CheckExistingConfig(context.Background(), configPath, "sig-abc")
 	if err != nil {
 		t.Fatalf("CheckExistingConfig returned error: %v", err)
 	}
@@ -414,7 +414,37 @@ func TestCheckExistingConfigPropagatesRunnerErrors(t *testing.T) {
 		return expectedErr
 	}
 
-	action, err := CheckExistingConfig(configPath, "sig")
+	action, err := CheckExistingConfig(context.Background(), configPath, "sig")
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected runner error %v, got %v", expectedErr, err)
+	}
+	if action != ExistingConfigCancel {
+		t.Fatalf("expected cancel action on runner error, got %v", action)
+	}
+}
+
+func TestCheckExistingConfigPassesContextToRunner(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "prox.env")
+	if err := os.WriteFile(configPath, []byte("base"), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	originalRunner := checkExistingConfigRunner
+	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	expectedErr := errors.New("ui runner failure")
+	checkExistingConfigRunner = func(gotCtx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		if gotCtx != ctx {
+			t.Fatalf("ctx=%p; want %p", gotCtx, ctx)
+		}
+		return expectedErr
+	}
+
+	action, err := CheckExistingConfig(ctx, configPath, "sig")
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected runner error %v, got %v", expectedErr, err)
 	}

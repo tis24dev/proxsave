@@ -654,7 +654,7 @@ func readTemplateBool(values map[string]string, keys ...string) bool {
 }
 
 // CheckExistingConfig checks if config file exists and asks how to proceed
-func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigAction, error) {
+func CheckExistingConfig(ctx context.Context, configPath string, buildSig string) (ExistingConfigAction, error) {
 	if info, err := os.Stat(configPath); err == nil {
 		if !info.Mode().IsRegular() {
 			return ExistingConfigCancel, fmt.Errorf("configuration file path is not a regular file: %s", configPath)
@@ -707,7 +707,7 @@ func CheckExistingConfig(configPath string, buildSig string) (ExistingConfigActi
 			modal,
 		)
 
-		if err := checkExistingConfigRunner(context.Background(), app, flex, modal); err != nil {
+		if err := checkExistingConfigRunner(ctx, app, flex, modal); err != nil {
 			return ExistingConfigCancel, err
 		}
 
