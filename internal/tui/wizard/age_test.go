@@ -233,7 +233,7 @@ func TestConfirmRecipientOverwriteSelection(t *testing.T) {
 				return nil
 			}
 
-			got, err := ConfirmRecipientOverwrite("/tmp/recipient.age", "/etc/proxsave/.env", "sig-xyz")
+			got, err := ConfirmRecipientOverwrite(context.Background(), "/tmp/recipient.age", "/etc/proxsave/.env", "sig-xyz")
 			if err != nil {
 				t.Fatalf("ConfirmRecipientOverwrite returned error: %v", err)
 			}
@@ -254,7 +254,7 @@ func TestConfirmRecipientOverwriteModalIncludesRecipientPath(t *testing.T) {
 		return nil
 	}
 
-	_, err := ConfirmRecipientOverwrite("/var/lib/proxsave/recipient.age", "/etc/.env", "sig")
+	_, err := ConfirmRecipientOverwrite(context.Background(), "/var/lib/proxsave/recipient.age", "/etc/.env", "sig")
 	if err != nil {
 		t.Fatalf("ConfirmRecipientOverwrite returned error: %v", err)
 	}
@@ -271,7 +271,26 @@ func TestConfirmRecipientOverwriteRunnerError(t *testing.T) {
 		return errors.New("boom")
 	}
 
-	if _, err := ConfirmRecipientOverwrite("/tmp/recipient.age", "/etc/.env", "sig"); err == nil {
+	if _, err := ConfirmRecipientOverwrite(context.Background(), "/tmp/recipient.age", "/etc/.env", "sig"); err == nil {
+		t.Fatalf("expected error from runner")
+	}
+}
+
+func TestConfirmRecipientOverwritePassesContextToRunner(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ageWizardRunner = func(gotCtx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		if gotCtx != ctx {
+			t.Fatalf("ctx=%p; want %p", gotCtx, ctx)
+		}
+		return errors.New("boom")
+	}
+
+	if _, err := ConfirmRecipientOverwrite(ctx, "/tmp/recipient.age", "/etc/.env", "sig"); err == nil {
 		t.Fatalf("expected error from runner")
 	}
 }
@@ -298,7 +317,7 @@ func TestConfirmAddRecipientSelection(t *testing.T) {
 				return nil
 			}
 
-			got, err := ConfirmAddRecipient("/etc/proxsave/.env", "sig-xyz", 2)
+			got, err := ConfirmAddRecipient(context.Background(), "/etc/proxsave/.env", "sig-xyz", 2)
 			if err != nil {
 				t.Fatalf("ConfirmAddRecipient returned error: %v", err)
 			}
@@ -319,12 +338,31 @@ func TestConfirmAddRecipientModalIncludesCount(t *testing.T) {
 		return nil
 	}
 
-	_, err := ConfirmAddRecipient("/etc/proxsave/.env", "sig", 3)
+	_, err := ConfirmAddRecipient(context.Background(), "/etc/proxsave/.env", "sig", 3)
 	if err != nil {
 		t.Fatalf("ConfirmAddRecipient returned error: %v", err)
 	}
 	if !strings.Contains(modalText, "3") {
 		t.Fatalf("expected modal to mention count, got %q", modalText)
+	}
+}
+
+func TestConfirmAddRecipientPassesContextToRunner(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ageWizardRunner = func(gotCtx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		if gotCtx != ctx {
+			t.Fatalf("ctx=%p; want %p", gotCtx, ctx)
+		}
+		return errors.New("boom")
+	}
+
+	if _, err := ConfirmAddRecipient(ctx, "/etc/proxsave/.env", "sig", 3); err == nil {
+		t.Fatalf("expected error from runner")
 	}
 }
 

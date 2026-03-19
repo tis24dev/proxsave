@@ -85,7 +85,7 @@ func validatePrivateKey(value string) (string, error) {
 }
 
 // ConfirmRecipientOverwrite shows a TUI modal to confirm overwriting an existing AGE recipient.
-func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool, error) {
+func ConfirmRecipientOverwrite(ctx context.Context, recipientPath, configPath, buildSig string) (bool, error) {
 	app := tui.NewApp()
 	overwrite := false
 	escapedRecipientPath := tview.Escape(recipientPath)
@@ -118,7 +118,7 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 		modal,
 	)
 
-	if err := ageWizardRunner(context.Background(), app, flex, modal); err != nil {
+	if err := ageWizardRunner(ctx, app, flex, modal); err != nil {
 		return false, err
 	}
 
@@ -126,7 +126,7 @@ func ConfirmRecipientOverwrite(recipientPath, configPath, buildSig string) (bool
 }
 
 // ConfirmAddRecipient asks whether to add another AGE recipient.
-func ConfirmAddRecipient(configPath, buildSig string, count int) (bool, error) {
+func ConfirmAddRecipient(ctx context.Context, configPath, buildSig string, count int) (bool, error) {
 	app := tui.NewApp()
 	addAnother := false
 
@@ -158,7 +158,7 @@ func ConfirmAddRecipient(configPath, buildSig string, count int) (bool, error) {
 		modal,
 	)
 
-	if err := ageWizardRunner(context.Background(), app, flex, modal); err != nil {
+	if err := ageWizardRunner(ctx, app, flex, modal); err != nil {
 		return false, err
 	}
 

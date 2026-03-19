@@ -24,7 +24,7 @@ func (a *ageSetupUIAdapter) ConfirmOverwriteExistingRecipient(ctx context.Contex
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	return ConfirmRecipientOverwrite(recipientPath, a.configPath, a.buildSig)
+	return ConfirmRecipientOverwrite(ctx, recipientPath, a.configPath, a.buildSig)
 }
 
 func (a *ageSetupUIAdapter) CollectRecipientDraft(ctx context.Context, recipientPath string) (*orchestrator.AgeRecipientDraft, error) {
@@ -64,5 +64,5 @@ func (a *ageSetupUIAdapter) ConfirmAddAnotherRecipient(ctx context.Context, curr
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	return ConfirmAddRecipient(a.configPath, a.buildSig, currentCount)
+	return ConfirmAddRecipient(ctx, a.configPath, a.buildSig, currentCount)
 }
