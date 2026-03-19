@@ -332,7 +332,16 @@ func calculateUsagePercent(usedBytes, totalBytes uint64) float64 {
 }
 
 func (n *NotificationAdapter) warnOnInconsistentUsageStats(location string, usedBytes, totalBytes uint64) {
-	if n == nil || n.logger == nil || totalBytes == 0 || usedBytes <= totalBytes {
+	if n == nil || n.logger == nil {
+		return
+	}
+	if totalBytes == 0 {
+		if usedBytes > 0 {
+			n.logger.Warning("%s storage usage stats inconsistent: used=%d total=%d; reporting 0%% usage for display because total capacity is unknown", location, usedBytes, totalBytes)
+		}
+		return
+	}
+	if usedBytes <= totalBytes {
 		return
 	}
 	n.logger.Warning("%s storage usage stats inconsistent: used=%d total=%d; clamping percentage to 100%% for display", location, usedBytes, totalBytes)

@@ -391,6 +391,33 @@ func TestConvertBackupStatsToNotificationDataWarnsOnInconsistentUsageStats(t *te
 	}
 }
 
+func TestConvertBackupStatsToNotificationDataWarnsWhenUsedIsSetButTotalIsZero(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	adapter := NewNotificationAdapter(&stubNotifier{name: "Email", enabled: true}, logger)
+	stats := sampleBackupStats()
+	stats.LocalUsedSpace = 1500
+	stats.LocalTotalSpace = 0
+	stats.SecondaryEnabled = true
+	stats.SecondaryUsedSpace = 4500
+	stats.SecondaryTotalSpace = 0
+
+	data := adapter.convertBackupStatsToNotificationData(stats)
+
+	if data.LocalUsagePercent != 0 || data.SecondaryUsagePercent != 0 {
+		t.Fatalf("usage percent should remain 0 when total capacity is unknown, got local=%f secondary=%f", data.LocalUsagePercent, data.SecondaryUsagePercent)
+	}
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, "local storage usage stats inconsistent: used=1500 total=0") {
+		t.Fatalf("expected local zero-total warning, got %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "secondary storage usage stats inconsistent: used=4500 total=0") {
+		t.Fatalf("expected secondary zero-total warning, got %q", logOutput)
+	}
+}
+
 func sampleBackupStats() *BackupStats {
 	return &BackupStats{
 		ExitCode:            0,
