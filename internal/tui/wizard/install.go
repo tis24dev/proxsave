@@ -62,8 +62,10 @@ var (
 	ErrInstallCancelled = errors.New("installation aborted by user")
 	// ErrNilInstallData is returned when ApplyInstallData or its validators receive a nil payload.
 	ErrNilInstallData      = errors.New("install wizard data cannot be nil")
-	runInstallWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		return app.SetRoot(root, true).SetFocus(focus).Run()
+	runInstallWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetRoot(root, true)
+		app.SetFocus(focus)
+		return app.RunWithContext(ctx)
 	}
 	checkExistingConfigRunner = func(app *tui.App, root, focus tview.Primitive) error {
 		return app.SetRoot(root, true).SetFocus(focus).Run()
@@ -412,7 +414,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		form.Form,
 	)
 
-	if err := runInstallWizardRunner(app, flex, form.Form); err != nil {
+	if err := runInstallWizardRunner(ctx, app, flex, form.Form); err != nil {
 		return nil, err
 	}
 

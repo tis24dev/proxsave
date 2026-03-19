@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -245,7 +246,10 @@ func TestRunInstallWizardBlankCronIgnoresEnvOverride(t *testing.T) {
 	originalRunner := runInstallWizardRunner
 	t.Cleanup(func() { runInstallWizardRunner = originalRunner })
 
-	runInstallWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	runInstallWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		if ctx != t.Context() {
+			t.Fatalf("ctx=%p; want %p", ctx, t.Context())
+		}
 		form, ok := focus.(*tview.Form)
 		if !ok {
 			t.Fatalf("focus primitive = %T, want *tview.Form", focus)

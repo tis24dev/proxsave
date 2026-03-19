@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -91,6 +93,37 @@ func TestAppStop_NilReceiverNoPanic(t *testing.T) {
 func TestAppStop_DelegatesToEmbeddedApplication(t *testing.T) {
 	app := &App{Application: tview.NewApplication()}
 	app.Stop()
+}
+
+func TestAppRunWithContext_CanceledBeforeRun(t *testing.T) {
+	app := &App{Application: tview.NewApplication()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := app.RunWithContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want %v", err, context.Canceled)
+	}
+}
+
+func TestAppRunWithContext_StopsOnCancel(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("screen.Init: %v", err)
+	}
+
+	app := NewApp()
+	app.SetScreen(screen)
+	app.SetRoot(tview.NewBox(), true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	if err := app.RunWithContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want %v", err, context.Canceled)
+	}
 }
 
 func TestSetRootWithTitle_SetsBoxTitleAndBorderColor(t *testing.T) {

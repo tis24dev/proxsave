@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"context"
+	"sync/atomic"
+
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -48,6 +51,49 @@ func (a *App) Stop() {
 	if a.Application != nil {
 		a.Application.Stop()
 	}
+}
+
+func (a *App) RunWithContext(ctx context.Context) error {
+	if a == nil {
+		return nil
+	}
+	if ctx == nil {
+		return a.Run()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+
+	var state atomic.Int32
+	go func() {
+		select {
+		case <-ctx.Done():
+			if state.CompareAndSwap(0, 1) {
+				a.Stop()
+			}
+		case <-done:
+		}
+	}()
+
+	if err := a.Run(); err != nil {
+		if state.CompareAndSwap(0, 2) {
+			return err
+		}
+		if state.Load() == 1 {
+			return ctx.Err()
+		}
+		return err
+	}
+	if state.CompareAndSwap(0, 2) {
+		return nil
+	}
+	if state.Load() == 1 {
+		return ctx.Err()
+	}
+	return nil
 }
 
 // SetRootWithTitle sets the root primitive with a styled title
