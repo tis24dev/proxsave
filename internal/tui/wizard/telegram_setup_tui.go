@@ -15,8 +15,10 @@ import (
 )
 
 var (
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		return app.SetRoot(root, true).SetFocus(focus).Run()
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetRoot(root, true)
+		app.SetFocus(focus)
+		return app.RunWithContext(ctx)
 	}
 
 	telegramSetupBuildBootstrap    = orchestrator.BuildTelegramSetupBootstrap
@@ -257,7 +259,7 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 		return event
 	})
 
-	if runErr := telegramSetupWizardRunner(app, layout, form); runErr != nil {
+	if runErr := telegramSetupWizardRunner(ctx, app, layout, form); runErr != nil {
 		return TelegramSetupResult{}, runErr
 	}
 

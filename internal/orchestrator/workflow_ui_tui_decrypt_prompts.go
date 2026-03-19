@@ -37,7 +37,7 @@ func runTUIAppWithContext(ctx context.Context, app *tui.App) error {
 		select {
 		case <-ctx.Done():
 			if state.CompareAndSwap(0, 1) {
-				app.QueueEvent(tcell.NewEventKey(tcell.KeyCtrlC, 0, tcell.ModNone))
+				app.Stop()
 			}
 		case <-done:
 		}

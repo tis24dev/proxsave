@@ -120,7 +120,7 @@ func TestRunTelegramSetupWizard_DisabledSkipsUIAndRunnerNotCalled(t *testing.T) 
 			TelegramEnabled: false,
 		}, nil
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		t.Fatalf("runner should not be called when telegram is disabled")
 		return nil
 	}
@@ -149,7 +149,7 @@ func TestRunTelegramSetupWizard_ConfigErrorSkipsUI(t *testing.T) {
 			ConfigError: "parse failed",
 		}, nil
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		t.Fatalf("runner should not be called when config bootstrap failed")
 		return nil
 	}
@@ -181,7 +181,7 @@ func TestRunTelegramSetupWizard_PersonalModeSkipsUI(t *testing.T) {
 			ServerAPIHost:   "https://bot.tis24.it:1443",
 		}, nil
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		t.Fatalf("runner should not be called in personal mode")
 		return nil
 	}
@@ -214,7 +214,7 @@ func TestRunTelegramSetupWizard_IdentityUnavailableSkipsUI(t *testing.T) {
 			IdentityDetectError: "detect failed",
 		}, nil
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		t.Fatalf("runner should not be called when server ID is unavailable")
 		return nil
 	}
@@ -241,7 +241,7 @@ func TestRunTelegramSetupWizard_PropagatesBootstrapError(t *testing.T) {
 	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
 		return orchestrator.TelegramSetupBootstrap{}, expectedErr
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		t.Fatalf("runner should not be called when bootstrap returns an error")
 		return nil
 	}
@@ -252,6 +252,31 @@ func TestRunTelegramSetupWizard_PropagatesBootstrapError(t *testing.T) {
 	}
 	if result != (TelegramSetupResult{}) {
 		t.Fatalf("expected empty result on bootstrap error, got %#v", result)
+	}
+}
+
+func TestRunTelegramSetupWizard_PassesContextToRunner(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	ctx := t.Context()
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return eligibleTelegramSetupBootstrap(), nil
+	}
+	telegramSetupWizardRunner = func(gotCtx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		if gotCtx != ctx {
+			t.Fatalf("got context %p, want %p", gotCtx, ctx)
+		}
+		form := focus.(*tview.Form)
+		pressFormButton(t, form, "Skip")
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(ctx, t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
+	}
+	if !result.SkippedVerification {
+		t.Fatalf("expected SkippedVerification=true")
 	}
 }
 
@@ -272,7 +297,7 @@ func TestRunTelegramSetupWizard_CentralizedSuccess_RequiresCheckBeforeContinue(t
 		}
 		return notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		form := focus.(*tview.Form)
 		if form.GetButtonIndex("Continue") != -1 {
 			t.Fatalf("expected no Continue button before verification")
@@ -337,7 +362,7 @@ func TestRunTelegramSetupWizard_ShowsPersistedIdentityState(t *testing.T) {
 		state.IdentityPersisted = true
 		return state, nil
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		serverIDView, _, form := extractTelegramSetupViews(t, root)
 		text := serverIDView.GetText(true)
 		if !strings.Contains(text, "persisted") {
@@ -372,7 +397,7 @@ func TestRunTelegramSetupWizard_EscapesBracketedServerIdentityValues(t *testing.
 		state.IdentityFile = "/tmp/identity[prod].key"
 		return state, nil
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		serverIDView, _, form := extractTelegramSetupViews(t, root)
 
 		rawText := serverIDView.GetText(false)
@@ -424,7 +449,7 @@ func TestRunTelegramSetupWizard_CentralizedFailure_CanRetryAndSkip(t *testing.T)
 			return notify.TelegramRegistrationStatus{Code: 500, Message: "oops"}
 		}
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		form := focus.(*tview.Form)
 		pressFormButton(t, form, "Check")
 		pressFormButton(t, form, "Check")
@@ -473,7 +498,7 @@ func TestRunTelegramSetupWizard_TruncatesLongFailureMessage(t *testing.T) {
 			Message: "  " + longMessage + "  ",
 		}
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		_, statusView, form := extractTelegramSetupViews(t, root)
 
 		pressFormButton(t, form, "Check")
@@ -517,7 +542,7 @@ func TestRunTelegramSetupWizard_CentralizedEscSkipsWhenNotVerified(t *testing.T)
 	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
 		return eligibleTelegramSetupBootstrap(), nil
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		capture := app.GetInputCapture()
 		if capture == nil {
 			t.Fatalf("expected input capture to be set")
@@ -556,7 +581,7 @@ func TestRunTelegramSetupWizard_CentralizedEscAfterVerificationDoesNotSkip(t *te
 	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
 		return notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		_, _, form := extractTelegramSetupViews(t, root)
 
 		pressFormButton(t, form, "Check")
@@ -595,7 +620,7 @@ func TestRunTelegramSetupWizard_PropagatesRunnerError(t *testing.T) {
 	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
 		return eligibleTelegramSetupBootstrap(), nil
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		return errors.New("runner failed")
 	}
 
@@ -625,7 +650,7 @@ func TestRunTelegramSetupWizard_CheckIgnoredWhileChecking_AndUpdateSuppressedAft
 		checkCalls++
 		return notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}
 	}
-	telegramSetupWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		form := focus.(*tview.Form)
 
 		pressFormButton(t, form, "Check")
@@ -693,7 +718,7 @@ func TestTelegramSetupDefaultWrappers(t *testing.T) {
 		}
 	}()
 
-	if err := telegramSetupWizardRunner(app, root, root); err != nil {
+	if err := telegramSetupWizardRunner(context.Background(), app, root, root); err != nil {
 		t.Fatalf("telegramSetupWizardRunner error: %v", err)
 	}
 

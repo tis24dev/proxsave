@@ -16,8 +16,10 @@ import (
 )
 
 var (
-	postInstallAuditWizardRunner = func(app *tui.App, root, focus tview.Primitive) error {
-		return app.SetRoot(root, true).SetFocus(focus).Run()
+	postInstallAuditWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetRoot(root, true)
+		app.SetFocus(focus)
+		return app.RunWithContext(ctx)
 	}
 )
 
@@ -114,7 +116,7 @@ func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildS
 		pages,
 	)
 
-	if runErr := postInstallAuditWizardRunner(app, layout, confirm); runErr != nil {
+	if runErr := postInstallAuditWizardRunner(ctx, app, layout, confirm); runErr != nil {
 		return PostInstallAuditResult{}, runErr
 	}
 
