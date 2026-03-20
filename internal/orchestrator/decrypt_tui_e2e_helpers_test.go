@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,11 +27,31 @@ import (
 
 var decryptTUIE2EMu sync.Mutex
 
+type notifyingSimulationScreen struct {
+	tcell.SimulationScreen
+	notify func()
+}
+
+func (s *notifyingSimulationScreen) Show() {
+	s.SimulationScreen.Show()
+	if s.notify != nil {
+		s.notify()
+	}
+}
+
+func (s *notifyingSimulationScreen) Sync() {
+	s.SimulationScreen.Sync()
+	if s.notify != nil {
+		s.notify()
+	}
+}
+
 type timedSimKey struct {
-	Key  tcell.Key
-	R    rune
-	Mod  tcell.ModMask
-	Wait time.Duration
+	Key         tcell.Key
+	R           rune
+	Mod         tcell.ModMask
+	Wait        time.Duration
+	WaitForText string
 }
 
 type decryptTUIFixture struct {
@@ -61,34 +82,86 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 		decryptTUIE2EMu.Unlock()
 	})
 
-	screen := tcell.NewSimulationScreen("UTF-8")
-	if err := screen.Init(); err != nil {
+	baseScreen := tcell.NewSimulationScreen("UTF-8")
+	if err := baseScreen.Init(); err != nil {
 		t.Fatalf("screen.Init: %v", err)
 	}
-	screen.SetSize(120, 40)
+	baseScreen.SetSize(120, 40)
+
+	type timedSimScreenState struct {
+		signature string
+		text      string
+	}
+
+	screenStateCh := make(chan struct{}, 1)
+	var appMu sync.RWMutex
+	var currentApp *tui.App
+	screen := &notifyingSimulationScreen{
+		SimulationScreen: baseScreen,
+		notify: func() {
+			select {
+			case screenStateCh <- struct{}{}:
+			default:
+			}
+		},
+	}
 
 	var once sync.Once
 	newTUIApp = func() *tui.App {
 		app := tui.NewApp()
+		appMu.Lock()
+		currentApp = app
+		appMu.Unlock()
 		app.SetScreen(screen)
 
 		once.Do(func() {
 			injectWG.Add(1)
 			go func() {
 				defer injectWG.Done()
+				var lastInjectedState string
+
+				currentScreenState := func() timedSimScreenState {
+					appMu.RLock()
+					app := currentApp
+					appMu.RUnlock()
+
+					var focus any
+					if app != nil {
+						focus = app.GetFocus()
+					}
+
+					return timedSimScreenState{
+						signature: timedSimScreenStateSignature(screen, focus),
+						text:      timedSimScreenText(screen),
+					}
+				}
+
+				waitForScreenText := func(expected string) bool {
+					expected = strings.TrimSpace(expected)
+					for {
+						current := currentScreenState()
+						if current.signature != "" {
+							if (expected == "" || strings.Contains(current.text, expected)) &&
+								(lastInjectedState == "" || current.signature != lastInjectedState) {
+								return true
+							}
+						}
+
+						select {
+						case <-done:
+							return false
+						case <-screenStateCh:
+						}
+					}
+				}
 
 				for _, k := range keys {
 					if k.Wait > 0 {
-						timer := time.NewTimer(k.Wait)
-						select {
-						case <-done:
-							if !timer.Stop() {
-								<-timer.C
-							}
+						if !waitForScreenText(k.WaitForText) {
 							return
-						case <-timer.C:
 						}
 					}
+					current := currentScreenState()
 					mod := k.Mod
 					if mod == 0 {
 						mod = tcell.ModNone
@@ -99,12 +172,49 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 					default:
 					}
 					screen.InjectKey(k.Key, k.R, mod)
+					lastInjectedState = current.signature
 				}
 			}()
 		})
 
 		return app
 	}
+}
+
+func timedSimScreenStateSignature(screen tcell.SimulationScreen, focus any) string {
+	cells, width, height := screen.GetContents()
+	cursorX, cursorY, cursorVisible := screen.GetCursor()
+
+	sum := sha256.New()
+	fmt.Fprintf(sum, "size:%d:%d cursor:%d:%d:%t focus:%T:%p\n", width, height, cursorX, cursorY, cursorVisible, focus, focus)
+	for _, cell := range cells {
+		fg, bg, attr := cell.Style.Decompose()
+		fmt.Fprintf(sum, "%x/%d/%d/%d;", cell.Bytes, fg, bg, attr)
+	}
+	return hex.EncodeToString(sum.Sum(nil))
+}
+
+func timedSimScreenText(screen tcell.SimulationScreen) string {
+	cells, width, height := screen.GetContents()
+	if width <= 0 || height <= 0 || len(cells) < width*height {
+		return ""
+	}
+
+	var b strings.Builder
+	for y := 0; y < height; y++ {
+		row := make([]byte, 0, width)
+		for x := 0; x < width; x++ {
+			cell := cells[y*width+x]
+			if len(cell.Bytes) == 0 {
+				row = append(row, ' ')
+				continue
+			}
+			row = append(row, cell.Bytes...)
+		}
+		b.WriteString(strings.TrimRight(string(row), " "))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func createDecryptTUIEncryptedFixture(t *testing.T) *decryptTUIFixture {
@@ -202,23 +312,24 @@ func createDecryptTUIEncryptedFixture(t *testing.T) *decryptTUIFixture {
 
 func successDecryptTUISequence(secret string) []timedSimKey {
 	keys := []timedSimKey{
-		{Key: tcell.KeyEnter, Wait: 1 * time.Second},
-		{Key: tcell.KeyEnter, Wait: 750 * time.Millisecond},
+		{Key: tcell.KeyEnter, Wait: 1 * time.Second, WaitForText: "Select backup source"},
+		{Key: tcell.KeyEnter, Wait: 750 * time.Millisecond, WaitForText: "Select backup"},
 	}
 
 	for _, r := range secret {
 		keys = append(keys, timedSimKey{
-			Key:  tcell.KeyRune,
-			R:    r,
-			Wait: 35 * time.Millisecond,
+			Key:         tcell.KeyRune,
+			R:           r,
+			Wait:        35 * time.Millisecond,
+			WaitForText: "Decrypt key",
 		})
 	}
 
 	keys = append(keys,
-		timedSimKey{Key: tcell.KeyTab, Wait: 150 * time.Millisecond},
-		timedSimKey{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond},
-		timedSimKey{Key: tcell.KeyTab, Wait: 500 * time.Millisecond},
-		timedSimKey{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond},
+		timedSimKey{Key: tcell.KeyTab, Wait: 150 * time.Millisecond, WaitForText: "Decrypt key"},
+		timedSimKey{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond, WaitForText: "Decrypt key"},
+		timedSimKey{Key: tcell.KeyTab, Wait: 500 * time.Millisecond, WaitForText: "Destination directory"},
+		timedSimKey{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond, WaitForText: "Destination directory"},
 	)
 
 	return keys
@@ -226,11 +337,11 @@ func successDecryptTUISequence(secret string) []timedSimKey {
 
 func abortDecryptTUISequence() []timedSimKey {
 	return []timedSimKey{
-		{Key: tcell.KeyEnter, Wait: 1 * time.Second},
-		{Key: tcell.KeyEnter, Wait: 750 * time.Millisecond},
-		{Key: tcell.KeyRune, R: '0', Wait: 500 * time.Millisecond},
-		{Key: tcell.KeyTab, Wait: 150 * time.Millisecond},
-		{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond},
+		{Key: tcell.KeyEnter, Wait: 1 * time.Second, WaitForText: "Select backup source"},
+		{Key: tcell.KeyEnter, Wait: 750 * time.Millisecond, WaitForText: "Select backup"},
+		{Key: tcell.KeyRune, R: '0', Wait: 500 * time.Millisecond, WaitForText: "Decrypt key"},
+		{Key: tcell.KeyTab, Wait: 150 * time.Millisecond, WaitForText: "Decrypt key"},
+		{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond, WaitForText: "Decrypt key"},
 	}
 }
 

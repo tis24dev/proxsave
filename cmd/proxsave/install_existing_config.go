@@ -26,9 +26,16 @@ type existingConfigDecision struct {
 }
 
 func promptExistingConfigModeCLI(ctx context.Context, reader *bufio.Reader, configPath string) (existingConfigMode, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	info, err := os.Stat(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if err := ctx.Err(); err != nil {
+				return existingConfigCancel, err
+			}
 			return existingConfigOverwrite, nil
 		}
 		return existingConfigCancel, fmt.Errorf("failed to access configuration file: %w", err)
@@ -53,12 +60,24 @@ func promptExistingConfigModeCLI(ctx context.Context, reader *bufio.Reader, conf
 		case "":
 			fallthrough
 		case "3":
+			if err := ctx.Err(); err != nil {
+				return existingConfigCancel, err
+			}
 			return existingConfigKeepContinue, nil
 		case "1":
+			if err := ctx.Err(); err != nil {
+				return existingConfigCancel, err
+			}
 			return existingConfigOverwrite, nil
 		case "2":
+			if err := ctx.Err(); err != nil {
+				return existingConfigCancel, err
+			}
 			return existingConfigEdit, nil
 		case "0":
+			if err := ctx.Err(); err != nil {
+				return existingConfigCancel, err
+			}
 			return existingConfigCancel, nil
 		default:
 			fmt.Println("Please enter 1, 2, 3 or 0.")

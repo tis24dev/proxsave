@@ -11,6 +11,24 @@ import (
 
 func setBaseDirEnv(t *testing.T, value string) {
 	t.Helper()
+	if value == "" {
+		original, hadOriginal := os.LookupEnv("BASE_DIR")
+		if err := os.Unsetenv("BASE_DIR"); err != nil {
+			t.Fatalf("Unsetenv(BASE_DIR) failed: %v", err)
+		}
+		t.Cleanup(func() {
+			if hadOriginal {
+				if err := os.Setenv("BASE_DIR", original); err != nil {
+					t.Fatalf("restore BASE_DIR failed: %v", err)
+				}
+				return
+			}
+			if err := os.Unsetenv("BASE_DIR"); err != nil {
+				t.Fatalf("cleanup Unsetenv(BASE_DIR) failed: %v", err)
+			}
+		})
+		return
+	}
 	t.Setenv("BASE_DIR", value)
 }
 

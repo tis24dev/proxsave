@@ -39,8 +39,11 @@ type Info struct {
 }
 
 var (
-	hostnameFunc      = os.Hostname
-	readFirstLineFunc = readFirstLine
+	hostnameFunc                             = os.Hostname
+	readFirstLineFunc                        = readFirstLine
+	writeIdentityFileWithContextWriteFile    = os.WriteFile
+	writeIdentityFileWithContextChmod        = os.Chmod
+	writeIdentityFileWithContextSetImmutable = setImmutableAttributeWithContext
 )
 
 // Detect resolves the server identity (ID + MAC address) and ensures persistence.
@@ -810,28 +813,39 @@ func writeIdentityFile(path, content string, logger *logging.Logger) error {
 	return writeIdentityFileWithContext(context.Background(), path, content, logger)
 }
 
-func writeIdentityFileWithContext(ctx context.Context, path, content string, logger *logging.Logger) error {
+func writeIdentityFileWithContext(ctx context.Context, path, content string, logger *logging.Logger) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	logDebug(logger, "Identity: writeIdentityFile: start path=%s contentBytes=%d", path, len(content))
 
 	// Ensure file is writable even if immutable was previously set
-	if err := setImmutableAttributeWithContext(ctx, path, false, logger); err != nil {
+	if err := writeIdentityFileWithContextSetImmutable(ctx, path, false, logger); err != nil {
+		return err
+	}
+	defer func() {
+		lockErr := writeIdentityFileWithContextSetImmutable(context.Background(), path, true, logger)
+		if lockErr == nil {
+			return
+		}
+		logDebug(logger, "Identity: writeIdentityFile: failed to restore immutable attribute: %v", lockErr)
+		if err == nil {
+			err = lockErr
+		}
+	}()
+
+	if err := ctx.Err(); err != nil {
+		logDebug(logger, "Identity: writeIdentityFile: context canceled before write for %s: %v", path, err)
 		return err
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := writeIdentityFileWithContextWriteFile(path, []byte(content), 0o600); err != nil {
 		logDebug(logger, "Identity: writeIdentityFile: os.WriteFile failed: %v", err)
 		return err
 	}
 
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := writeIdentityFileWithContextChmod(path, 0o600); err != nil {
 		logDebug(logger, "Identity: writeIdentityFile: os.Chmod failed: %v", err)
-		return err
-	}
-
-	if err := setImmutableAttributeWithContext(ctx, path, true, logger); err != nil {
 		return err
 	}
 

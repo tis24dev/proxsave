@@ -167,6 +167,32 @@ BACKUP_USER=backup
 BACKUP_GROUP=backup
 `
 
+func overrideTemplateValues(template string, overrides map[string]string) string {
+	lines := strings.Split(template, "\n")
+	applied := make(map[string]bool, len(overrides))
+
+	for i, line := range lines {
+		key, _, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		value, ok := overrides[key]
+		if !ok {
+			continue
+		}
+		lines[i] = key + "=" + value
+		applied[key] = true
+	}
+
+	for key := range overrides {
+		if !applied[key] {
+			panic("template key not found: " + key)
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 func TestMigrateLegacyEnvCreatesConfigAndKeepsValues(t *testing.T) {
 	withTemplate(t, baseInstallTemplate, func() {
 		tmpDir := t.TempDir()
@@ -249,15 +275,11 @@ func TestMigrateLegacyEnvCreatesBackupWhenOverwriting(t *testing.T) {
 	})
 }
 
-const invalidPermissionsTemplate = `BACKUP_ENABLED=true
-BACKUP_PATH=/default/backup
-LOG_PATH=/default/log
-SECONDARY_ENABLED=false
-CLOUD_ENABLED=false
-SET_BACKUP_PERMISSIONS=true
-BACKUP_USER=
-BACKUP_GROUP=
-`
+var invalidPermissionsTemplate = overrideTemplateValues(baseInstallTemplate, map[string]string{
+	"SET_BACKUP_PERMISSIONS": "true",
+	"BACKUP_USER":            "",
+	"BACKUP_GROUP":           "",
+})
 
 func TestMigrateLegacyEnvRollsBackOnValidationFailure(t *testing.T) {
 	withTemplate(t, invalidPermissionsTemplate, func() {

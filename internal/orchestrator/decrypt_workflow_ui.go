@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"filippo.io/age"
@@ -15,11 +16,25 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
+func isNilInterface(v any) bool {
+	if v == nil {
+		return true
+	}
+
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
 func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *decryptCandidate, err error) {
 	done := logging.DebugStart(logger, "select backup candidate (ui)", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
 
-	if ui == nil {
+	if isNilInterface(ui) {
 		return nil, fmt.Errorf("backup selection UI not available")
 	}
 
@@ -105,6 +120,10 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 }
 
 func ensureWritablePathWithUI(ctx context.Context, ui DecryptWorkflowUI, targetPath, description string) (string, error) {
+	if isNilInterface(ui) {
+		return "", fmt.Errorf("decrypt workflow UI not available")
+	}
+
 	current := filepath.Clean(targetPath)
 	failure := ""
 
@@ -184,7 +203,7 @@ func preparePlainBundleWithUI(ctx context.Context, cand *decryptCandidate, versi
 	if cand == nil || cand.Manifest == nil {
 		return nil, fmt.Errorf("invalid backup candidate")
 	}
-	if ui == nil {
+	if isNilInterface(ui) {
 		return nil, fmt.Errorf("decrypt workflow UI not available")
 	}
 
@@ -202,7 +221,7 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	if logger == nil {
 		logger = logging.GetDefaultLogger()
 	}
-	if ui == nil {
+	if isNilInterface(ui) {
 		return fmt.Errorf("decrypt workflow UI not available")
 	}
 	done := logging.DebugStart(logger, "decrypt workflow (ui)", "version=%s", version)

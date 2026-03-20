@@ -120,6 +120,11 @@ func TestFormatNewInstallPreservedEntries(t *testing.T) {
 			entries: []string{"", " ", "\t"},
 			want:    "(none)",
 		},
+		{
+			name:    "normalizes trailing slashes",
+			entries: []string{"env/", "build//", " identity/// ", "/"},
+			want:    "env/ build/ identity/",
+		},
 	}
 
 	for _, tt := range tests {

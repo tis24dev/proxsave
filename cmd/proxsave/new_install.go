@@ -56,6 +56,7 @@ func formatNewInstallPreservedEntries(entries []string) string {
 	formatted := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		trimmed := strings.TrimSpace(entry)
+		trimmed = strings.TrimRight(trimmed, "/")
 		if trimmed == "" {
 			continue
 		}
