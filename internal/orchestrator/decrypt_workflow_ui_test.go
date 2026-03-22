@@ -273,6 +273,73 @@ func TestPreparePlainBundleWithUIRejectsMissingUI(t *testing.T) {
 	}
 }
 
+func TestSelectBackupCandidateWithUIRejectsTypedNilUI(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := &config.Config{}
+
+	var typedNil *fakeDecryptWorkflowUI
+	var ui BackupSelectionUI = typedNil
+
+	_, err := selectBackupCandidateWithUI(context.Background(), ui, cfg, logger, false)
+	if err == nil {
+		t.Fatal("expected error for typed-nil UI")
+	}
+	if got, want := err.Error(), "backup selection UI not available"; got != want {
+		t.Fatalf("error=%q, want %q", got, want)
+	}
+}
+
+func TestEnsureWritablePathWithUIRejectsTypedNilUI(t *testing.T) {
+	var typedNil *fakeDecryptWorkflowUI
+	var ui DecryptWorkflowUI = typedNil
+
+	_, err := ensureWritablePathWithUI(context.Background(), ui, mustCreateExistingFile(t), "bundle")
+	if err == nil {
+		t.Fatal("expected error for typed-nil UI")
+	}
+	if got, want := err.Error(), "decrypt workflow UI not available"; got != want {
+		t.Fatalf("error=%q, want %q", got, want)
+	}
+}
+
+func TestPreparePlainBundleWithUIRejectsTypedNilUI(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	tmp := t.TempDir()
+	rawArchive := filepath.Join(tmp, "backup.tar")
+	rawMetadata := rawArchive + ".metadata"
+	rawChecksum := rawArchive + ".sha256"
+
+	if err := os.WriteFile(rawArchive, []byte("payload-data"), 0o640); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	if err := os.WriteFile(rawMetadata, []byte(`{"manifest":true}`), 0o640); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	if err := os.WriteFile(rawChecksum, checksumLineForBytes("backup.tar", []byte("payload-data")), 0o640); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+
+	cand := &decryptCandidate{
+		Manifest: &backup.Manifest{
+			ArchivePath:    rawArchive,
+			EncryptionMode: "none",
+			CreatedAt:      time.Now(),
+			Hostname:       "node1",
+		},
+		Source:          sourceRaw,
+		RawArchivePath:  rawArchive,
+		RawMetadataPath: rawMetadata,
+		RawChecksumPath: rawChecksum,
+		DisplayBase:     "test-backup",
+	}
+
+	var typedNil *countingSecretPrompter
+
+	if _, err := preparePlainBundleWithUI(context.Background(), cand, "1.0.0", logger, typedNil); err == nil {
+		t.Fatal("expected error for typed-nil UI")
+	}
+}
+
 func TestRunDecryptWorkflowWithUIRejectsMissingUI(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	cfg := &config.Config{}
@@ -280,6 +347,22 @@ func TestRunDecryptWorkflowWithUIRejectsMissingUI(t *testing.T) {
 	err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", nil)
 	if err == nil {
 		t.Fatal("expected error for missing UI")
+	}
+	if got, want := err.Error(), "decrypt workflow UI not available"; got != want {
+		t.Fatalf("error=%q, want %q", got, want)
+	}
+}
+
+func TestRunDecryptWorkflowWithUIRejectsTypedNilUI(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := &config.Config{}
+
+	var typedNil *fakeDecryptWorkflowUI
+	var ui DecryptWorkflowUI = typedNil
+
+	err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", ui)
+	if err == nil {
+		t.Fatal("expected error for typed-nil UI")
 	}
 	if got, want := err.Error(), "decrypt workflow UI not available"; got != want {
 		t.Fatalf("error=%q, want %q", got, want)

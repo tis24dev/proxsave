@@ -384,25 +384,32 @@ func TestDisarmHARollback_RemovesMarkerAndStopsTimer(t *testing.T) {
 }
 
 func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
-	env := setupHATestEnv(t)
-	stageWithHA := env.stageRoot + "/etc/pve/ha/resources.cfg"
-	if err := env.fs.AddFile(stageWithHA, []byte("res\n")); err != nil {
-		t.Fatalf("add staged HA config: %v", err)
+	newEnv := func(t *testing.T) *haTestEnv {
+		t.Helper()
+		env := setupHATestEnv(t)
+		stageWithHA := env.stageRoot + "/etc/pve/ha/resources.cfg"
+		if err := env.fs.AddFile(stageWithHA, []byte("res\n")); err != nil {
+			t.Fatalf("add staged HA config: %v", err)
+		}
+		return env
 	}
 
 	t.Run("nil plan returns nil", func(t *testing.T) {
+		env := newEnv(t)
 		if err := maybeApplyPVEHAWithUI(context.Background(), &fakeRestoreWorkflowUI{}, env.logger, nil, nil, nil, env.stageRoot, false); err != nil {
 			t.Fatalf("expected nil, got %v", err)
 		}
 	})
 
 	t.Run("errors when ui missing", func(t *testing.T) {
+		env := newEnv(t)
 		if err := maybeApplyPVEHAWithUI(context.Background(), nil, env.logger, env.plan, nil, nil, env.stageRoot, false); err == nil {
 			t.Fatalf("expected error")
 		}
 	})
 
 	t.Run("skips on non-system restore fs", func(t *testing.T) {
+		env := newEnv(t)
 		haIsRealRestoreFS = func(fs FS) bool { return false }
 		t.Cleanup(func() { haIsRealRestoreFS = func(fs FS) bool { return true } })
 
@@ -412,6 +419,7 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 	})
 
 	t.Run("dry run, non-root, empty stage and cluster restore all skip", func(t *testing.T) {
+		env := newEnv(t)
 		if err := maybeApplyPVEHAWithUI(context.Background(), &fakeRestoreWorkflowUI{}, env.logger, env.plan, nil, nil, env.stageRoot, true); err != nil {
 			t.Fatalf("expected nil on dry run, got %v", err)
 		}
@@ -434,6 +442,7 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 	})
 
 	t.Run("skips when stage has no HA config or mount unavailable", func(t *testing.T) {
+		env := newEnv(t)
 		if err := maybeApplyPVEHAWithUI(context.Background(), &fakeRestoreWorkflowUI{}, env.logger, env.plan, nil, nil, "/empty", false); err != nil {
 			t.Fatalf("expected nil when stage has no HA config, got %v", err)
 		}
@@ -446,6 +455,7 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 	})
 
 	t.Run("stage detection and initial prompt errors are propagated", func(t *testing.T) {
+		env := newEnv(t)
 		restoreFS = statFailFS{
 			FS:       env.fs,
 			failPath: env.stageRoot + "/etc/pve/ha/resources.cfg",
@@ -472,6 +482,7 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 	})
 
 	t.Run("user skips apply", func(t *testing.T) {
+		env := newEnv(t)
 		ui := &scriptedRestoreWorkflowUI{
 			fakeRestoreWorkflowUI: &fakeRestoreWorkflowUI{},
 			script:                []scriptedConfirmAction{{ok: false}},
@@ -482,6 +493,7 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 	})
 
 	t.Run("proceed without rollback applies and returns", func(t *testing.T) {
+		env := newEnv(t)
 		haArmRollback = func(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (*haRollbackHandle, error) {
 			t.Fatalf("unexpected rollback arm")
 			return nil, nil
@@ -508,6 +520,7 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 	})
 
 	t.Run("full rollback and no rollback prompts can be declined or fail", func(t *testing.T) {
+		env := newEnv(t)
 		ui := &scriptedRestoreWorkflowUI{
 			fakeRestoreWorkflowUI: &fakeRestoreWorkflowUI{},
 			script: []scriptedConfirmAction{
@@ -555,6 +568,7 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 	})
 
 	t.Run("full rollback backup is used when HA rollback backup missing", func(t *testing.T) {
+		env := newEnv(t)
 		markerPath := "/tmp/proxsave/ha-full.marker"
 		disarmed := false
 		haArmRollback = func(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (*haRollbackHandle, error) {
@@ -596,6 +610,7 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 	})
 
 	t.Run("no changes applied disarms rollback", func(t *testing.T) {
+		env := newEnv(t)
 		markerPath := "/tmp/proxsave/ha-empty.marker"
 		disarmed := false
 		haArmRollback = func(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (*haRollbackHandle, error) {
@@ -630,6 +645,7 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 	})
 
 	t.Run("apply errors are propagated", func(t *testing.T) {
+		env := newEnv(t)
 		haApplyFromStage = func(logger *logging.Logger, stageRoot string) ([]string, error) {
 			return nil, fmt.Errorf("boom")
 		}
@@ -647,9 +663,13 @@ func TestMaybeApplyPVEHAWithUI_BranchCoverage(t *testing.T) {
 }
 
 func TestMaybeApplyPVEHAWithUI_CommitOutcomes(t *testing.T) {
-	env := setupHATestEnv(t)
-	if err := env.fs.AddFile(env.stageRoot+"/etc/pve/ha/resources.cfg", []byte("res\n")); err != nil {
-		t.Fatalf("add staged HA config: %v", err)
+	newEnv := func(t *testing.T) *haTestEnv {
+		t.Helper()
+		env := setupHATestEnv(t)
+		if err := env.fs.AddFile(env.stageRoot+"/etc/pve/ha/resources.cfg", []byte("res\n")); err != nil {
+			t.Fatalf("add staged HA config: %v", err)
+		}
+		return env
 	}
 
 	baseRollback := &SafetyBackupResult{BackupPath: "/backups/ha.tgz"}
@@ -667,6 +687,7 @@ func TestMaybeApplyPVEHAWithUI_CommitOutcomes(t *testing.T) {
 	}
 
 	t.Run("rollback choice returns typed error", func(t *testing.T) {
+		env := newEnv(t)
 		markerPath := "/tmp/proxsave/ha-rollback.marker"
 		haArmRollback = func(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (*haRollbackHandle, error) {
 			return makeHandle(markerPath, nowRestore()), nil
@@ -696,6 +717,7 @@ func TestMaybeApplyPVEHAWithUI_CommitOutcomes(t *testing.T) {
 	})
 
 	t.Run("commit prompt abort returns abort error", func(t *testing.T) {
+		env := newEnv(t)
 		haArmRollback = func(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (*haRollbackHandle, error) {
 			return makeHandle("/tmp/proxsave/ha-abort.marker", nowRestore()), nil
 		}
@@ -717,6 +739,7 @@ func TestMaybeApplyPVEHAWithUI_CommitOutcomes(t *testing.T) {
 	})
 
 	t.Run("commit prompt failure returns typed error", func(t *testing.T) {
+		env := newEnv(t)
 		haArmRollback = func(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (*haRollbackHandle, error) {
 			return makeHandle("/tmp/proxsave/ha-fail.marker", nowRestore()), nil
 		}
@@ -738,6 +761,7 @@ func TestMaybeApplyPVEHAWithUI_CommitOutcomes(t *testing.T) {
 	})
 
 	t.Run("expired rollback handle returns typed error without commit prompt", func(t *testing.T) {
+		env := newEnv(t)
 		haArmRollback = func(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (*haRollbackHandle, error) {
 			return makeHandle("/tmp/proxsave/ha-expired.marker", nowRestore().Add(-defaultHARollbackTimeout-time.Second)), nil
 		}
@@ -759,6 +783,7 @@ func TestMaybeApplyPVEHAWithUI_CommitOutcomes(t *testing.T) {
 	})
 
 	t.Run("arm rollback failure is wrapped", func(t *testing.T) {
+		env := newEnv(t)
 		haArmRollback = func(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (*haRollbackHandle, error) {
 			return nil, fmt.Errorf("boom")
 		}

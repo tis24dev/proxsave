@@ -21,6 +21,20 @@ func TestPromptExistingConfigModeCLIMissingFileDefaultsToOverwrite(t *testing.T)
 	}
 }
 
+func TestPromptExistingConfigModeCLIMissingFileRespectsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	missing := filepath.Join(t.TempDir(), "missing.env")
+	mode, err := promptExistingConfigModeCLI(ctx, bufio.NewReader(strings.NewReader("")), missing)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+	if mode != existingConfigCancel {
+		t.Fatalf("expected cancel mode, got %v", mode)
+	}
+}
+
 func TestPromptExistingConfigModeCLIOptions(t *testing.T) {
 	cfgFile := createTempFile(t, "EXISTING=1\n")
 	tests := []struct {
