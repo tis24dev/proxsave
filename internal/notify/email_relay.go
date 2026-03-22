@@ -139,10 +139,27 @@ func sendViaCloudRelay(
 			continue
 		}
 
+		// Log raw response body for all status codes (aids future diagnosis)
+		logger.Debug("Cloud relay: HTTP %d response (%d bytes): %s", resp.StatusCode, len(body), string(body))
+
 		// Handle HTTP status codes
 		switch resp.StatusCode {
 		case 200:
-			// Success
+			// Parse response body to verify actual delivery success.
+			// Empty body or non-JSON is treated as success for backward compatibility.
+			if len(body) > 0 {
+				var apiResp EmailRelayResponse
+				if err := json.Unmarshal(body, &apiResp); err == nil && !apiResp.Success {
+					errMsg := apiResp.Error
+					if errMsg == "" {
+						errMsg = apiResp.Message
+					}
+					if errMsg == "" {
+						errMsg = "relay returned success=false with no details"
+					}
+					return fmt.Errorf("cloud relay rejected email (HTTP 200 but success=false): %s", errMsg)
+				}
+			}
 			logger.Debug("Cloud relay: email sent successfully")
 			return nil
 

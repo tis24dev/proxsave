@@ -133,6 +133,9 @@ func TestSendViaCloudRelay_StatusHandling(t *testing.T) {
 
 	tests := []testCase{
 		{name: "200-success", statusCode: 200, body: `{"success":true}`, config: baseConfig, expectErr: false, expectCalls: 1},
+		{name: "200-success-false", statusCode: 200, body: `{"success":false,"error":"downstream email service failed"}`, config: baseConfig, expectErr: true, expectCalls: 1},
+		{name: "200-empty-body", statusCode: 200, body: ``, config: baseConfig, expectErr: false, expectCalls: 1},
+		{name: "200-invalid-json", statusCode: 200, body: `OK`, config: baseConfig, expectErr: false, expectCalls: 1},
 		{name: "400-bad-request", statusCode: 400, body: `{"error":"bad payload"}`, config: baseConfig, expectErr: true, expectCalls: 1},
 		{name: "401-auth", statusCode: 401, body: ``, config: baseConfig, expectErr: true, expectCalls: 1},
 		{name: "403-forbidden", statusCode: 403, body: ``, config: baseConfig, expectErr: true, expectCalls: 1},
