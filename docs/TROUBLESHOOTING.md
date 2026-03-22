@@ -571,6 +571,22 @@ If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVER
 - Relay blocks `root@…` recipients; use a real non-root mailbox for `EMAIL_RECIPIENT`.
 - If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to `EMAIL_DELIVERY_METHOD=pmf` when the relay fails.
 - Check the proxsave logs for `email-relay` warnings/errors.
+- `Email relay accepted request ...` means the relay accepted the submission. It does **not** guarantee final inbox delivery; later provider-side failures/bounces are outside the ProxSave process.
+
+Common relay auth/forbidden errors:
+
+- `authentication failed (HTTP 401): missing bearer token`: the relay did not receive the `Authorization: Bearer ...` header.
+- `authentication failed (HTTP 401): missing signature`: the relay did not receive the `X-Signature` header.
+- `forbidden (HTTP 403): invalid token`: the bearer token is wrong or not allowed by the worker.
+- `forbidden (HTTP 403): HMAC signature validation failed`: the request body and `X-Signature` do not match the worker's `HMAC_SECRET`.
+- `forbidden (HTTP 403): missing or invalid script version`: the relay rejected `X-Script-Version` (it must be semantic-version-like, e.g. `1.2.3`).
+- `forbidden (HTTP 403): from address override not allowed`: the client attempted to override the worker-managed sender address.
+
+If you operate your own relay worker:
+
+- The worker-side env var `MAC_LIMIT_IP_WHITELIST` can bypass the per-server daily MAC quota for trusted source IPs.
+- Example: `MAC_LIMIT_IP_WHITELIST=86.56.17.99`
+- This bypass affects only the daily MAC quota. It does **not** disable bearer-token checks, HMAC validation, IP burst limits, or token limits.
 
 Quick checks for auto-detect:
 

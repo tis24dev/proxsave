@@ -52,6 +52,7 @@ type EmailRelayPayload struct {
 // EmailRelayResponse represents the response from the cloud worker
 type EmailRelayResponse struct {
 	Success bool   `json:"success"`
+	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
@@ -165,17 +166,18 @@ func sendViaCloudRelay(
 
 		case 400:
 			// Bad request - don't retry
-			var apiResp EmailRelayResponse
-			_ = json.Unmarshal(body, &apiResp)
-			return fmt.Errorf("bad request (HTTP 400): %s", apiResp.Error)
+			apiResp := parseRelayResponse(body)
+			return fmt.Errorf("bad request (HTTP 400): %s", relayResponseDetail(apiResp, "bad request"))
 
 		case 401:
 			// Authentication failed - don't retry
-			return fmt.Errorf("authentication failed (HTTP 401): invalid token")
+			apiResp := parseRelayResponse(body)
+			return fmt.Errorf("authentication failed (HTTP 401): %s", classifyUnauthorizedRelayError(apiResp))
 
 		case 403:
-			// Forbidden - HMAC validation failed - don't retry
-			return fmt.Errorf("forbidden (HTTP 403): HMAC signature validation failed")
+			// Forbidden - classify specific cause when available.
+			apiResp := parseRelayResponse(body)
+			return fmt.Errorf("forbidden (HTTP 403): %s", classifyForbiddenRelayError(apiResp))
 
 		case 429:
 			// Rate limit exceeded - show detailed message
@@ -233,6 +235,75 @@ func generateHMACSignature(payload []byte, secret string) string {
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write(payload)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func parseRelayResponse(body []byte) EmailRelayResponse {
+	var apiResp EmailRelayResponse
+	_ = json.Unmarshal(body, &apiResp)
+	return apiResp
+}
+
+func relayResponseDetail(apiResp EmailRelayResponse, fallback string) string {
+	detail := strings.TrimSpace(apiResp.Error)
+	if detail == "" {
+		detail = strings.TrimSpace(apiResp.Message)
+	}
+	if detail == "" {
+		detail = fallback
+	}
+	return detail
+}
+
+func classifyUnauthorizedRelayError(apiResp EmailRelayResponse) string {
+	switch strings.TrimSpace(apiResp.Code) {
+	case "MISSING_SIGNATURE":
+		return "missing signature"
+	case "MISSING_TOKEN":
+		return "missing bearer token"
+	}
+
+	detail := relayResponseDetail(apiResp, "unauthorized")
+	lower := strings.ToLower(detail)
+
+	switch {
+	case strings.Contains(lower, "missing signature"):
+		return "missing signature"
+	case strings.Contains(lower, "missing bearer token"):
+		return "missing bearer token"
+	default:
+		return detail
+	}
+}
+
+func classifyForbiddenRelayError(apiResp EmailRelayResponse) string {
+	switch strings.TrimSpace(apiResp.Code) {
+	case "INVALID_SIGNATURE":
+		return "HMAC signature validation failed"
+	case "INVALID_TOKEN":
+		return "invalid token"
+	case "INVALID_SCRIPT_VERSION":
+		return "missing or invalid script version"
+	case "FROM_OVERRIDE_ATTEMPT":
+		return "from address override not allowed"
+	}
+
+	detail := relayResponseDetail(apiResp, "forbidden")
+	lower := strings.ToLower(detail)
+
+	switch {
+	case lower == "forbidden":
+		return "invalid token"
+	case strings.Contains(lower, "signature"):
+		return "HMAC signature validation failed"
+	case strings.Contains(lower, "script version"):
+		return "missing or invalid script version"
+	case strings.Contains(lower, "from address override"):
+		return "from address override not allowed"
+	case strings.Contains(lower, "invalid token"):
+		return "invalid token"
+	default:
+		return detail
+	}
 }
 
 // isQuotaLimit returns true if the rate-limit detail clearly indicates a quota cap

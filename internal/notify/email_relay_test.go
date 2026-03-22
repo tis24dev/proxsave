@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -112,12 +113,13 @@ func TestFormatCloudPathDisplay(t *testing.T) {
 
 func TestSendViaCloudRelay_StatusHandling(t *testing.T) {
 	type testCase struct {
-		name        string
-		statusCode  int
-		body        string
-		config      CloudRelayConfig
-		expectErr   bool
-		expectCalls int
+		name              string
+		statusCode        int
+		body              string
+		config            CloudRelayConfig
+		expectErr         bool
+		expectErrContains string
+		expectCalls       int
 	}
 
 	baseConfig := CloudRelayConfig{
@@ -133,13 +135,17 @@ func TestSendViaCloudRelay_StatusHandling(t *testing.T) {
 
 	tests := []testCase{
 		{name: "200-success", statusCode: 200, body: `{"success":true}`, config: baseConfig, expectErr: false, expectCalls: 1},
-		{name: "200-success-false", statusCode: 200, body: `{"success":false,"error":"downstream email service failed"}`, config: baseConfig, expectErr: true, expectCalls: 1},
+		{name: "200-success-false", statusCode: 200, body: `{"success":false,"error":"downstream email service failed"}`, config: baseConfig, expectErr: true, expectErrContains: "downstream email service failed", expectCalls: 1},
 		{name: "200-empty-body", statusCode: 200, body: ``, config: baseConfig, expectErr: false, expectCalls: 1},
 		{name: "200-invalid-json", statusCode: 200, body: `OK`, config: baseConfig, expectErr: false, expectCalls: 1},
-		{name: "400-bad-request", statusCode: 400, body: `{"error":"bad payload"}`, config: baseConfig, expectErr: true, expectCalls: 1},
-		{name: "401-auth", statusCode: 401, body: ``, config: baseConfig, expectErr: true, expectCalls: 1},
-		{name: "403-forbidden", statusCode: 403, body: ``, config: baseConfig, expectErr: true, expectCalls: 1},
-		{name: "429-quota", statusCode: 429, body: `{"message":"quota per server exceeded"}`, config: baseConfig, expectErr: true, expectCalls: 1},
+		{name: "400-bad-request", statusCode: 400, body: `{"error":"bad payload"}`, config: baseConfig, expectErr: true, expectErrContains: "bad payload", expectCalls: 1},
+		{name: "401-missing-signature-code", statusCode: 401, body: `{"code":"MISSING_SIGNATURE","error":"Missing signature"}`, config: baseConfig, expectErr: true, expectErrContains: "missing signature", expectCalls: 1},
+		{name: "403-invalid-signature-code", statusCode: 403, body: `{"code":"INVALID_SIGNATURE","error":"Invalid signature"}`, config: baseConfig, expectErr: true, expectErrContains: "HMAC signature validation failed", expectCalls: 1},
+		{name: "403-invalid-token-code", statusCode: 403, body: `{"code":"INVALID_TOKEN","error":"Invalid token"}`, config: baseConfig, expectErr: true, expectErrContains: "invalid token", expectCalls: 1},
+		{name: "403-invalid-script-version-code", statusCode: 403, body: `{"code":"INVALID_SCRIPT_VERSION","error":"Missing or invalid script version"}`, config: baseConfig, expectErr: true, expectErrContains: "script version", expectCalls: 1},
+		{name: "403-from-override-code", statusCode: 403, body: `{"code":"FROM_OVERRIDE_ATTEMPT","error":"From address override not allowed"}`, config: baseConfig, expectErr: true, expectErrContains: "from address override not allowed", expectCalls: 1},
+		{name: "403-legacy-forbidden", statusCode: 403, body: `{"error":"Forbidden"}`, config: baseConfig, expectErr: true, expectErrContains: "invalid token", expectCalls: 1},
+		{name: "429-quota", statusCode: 429, body: `{"message":"quota per server exceeded"}`, config: baseConfig, expectErr: true, expectErrContains: "rate limit exceeded", expectCalls: 1},
 	}
 
 	for _, tt := range tests {
@@ -171,6 +177,11 @@ func TestSendViaCloudRelay_StatusHandling(t *testing.T) {
 			}
 			if !tt.expectErr && err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.expectErrContains != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.expectErrContains) {
+					t.Fatalf("expected error containing %q, got %v", tt.expectErrContains, err)
+				}
 			}
 			if callCount != tt.expectCalls {
 				t.Fatalf("expected %d calls, got %d", tt.expectCalls, callCount)
