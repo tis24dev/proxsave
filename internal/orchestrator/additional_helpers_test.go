@@ -962,7 +962,7 @@ func TestPromptClusterRestoreMode(t *testing.T) {
 }
 
 func TestConfirmRestoreAction(t *testing.T) {
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest: &backup.Manifest{
 			CreatedAt:   time.Now(),
 			ArchivePath: "test.tar",

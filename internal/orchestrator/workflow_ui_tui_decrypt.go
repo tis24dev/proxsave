@@ -209,10 +209,10 @@ func (u *tuiWorkflowUI) SelectBackupSource(ctx context.Context, options []decryp
 	return selected, nil
 }
 
-func (u *tuiWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []*decryptCandidate) (*decryptCandidate, error) {
+func (u *tuiWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []*backupCandidate) (*backupCandidate, error) {
 	app := newTUIApp()
 	var (
-		selected *decryptCandidate
+		selected *backupCandidate
 		aborted  bool
 	)
 
@@ -223,76 +223,54 @@ func (u *tuiWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []
 
 	type row struct {
 		created     string
+		hostname    string
 		mode        string
 		tool        string
-		targets     string
+		target      string
 		compression string
 	}
 
 	rows := make([]row, len(candidates))
-	var maxMode, maxTool, maxTargets, maxComp int
+	var maxHost, maxMode, maxTool, maxTarget, maxComp int
 
 	for idx, cand := range candidates {
-		created := ""
-		if cand != nil && cand.Manifest != nil {
-			created = cand.Manifest.CreatedAt.Format("2006-01-02 15:04:05")
-		}
-
-		mode := strings.ToUpper(statusFromManifest(cand.Manifest))
-		if mode == "" {
-			mode = "UNKNOWN"
-		}
-
-		toolVersion := "unknown"
-		if cand != nil && cand.Manifest != nil {
-			if v := strings.TrimSpace(cand.Manifest.ScriptVersion); v != "" {
-				toolVersion = v
-			}
-		}
-		tool := "Tool " + toolVersion
-
-		targets := "Targets: unknown"
-		if cand != nil && cand.Manifest != nil {
-			targets = buildTargetInfo(cand.Manifest)
-		}
-
-		comp := ""
-		if cand != nil && cand.Manifest != nil {
-			if c := strings.TrimSpace(cand.Manifest.CompressionType); c != "" {
-				comp = strings.ToUpper(c)
-			}
-		}
+		display := describeBackupCandidate(cand)
 
 		rows[idx] = row{
-			created:     created,
-			mode:        mode,
-			tool:        tool,
-			targets:     targets,
-			compression: comp,
+			created:     display.Created,
+			hostname:    display.Hostname,
+			mode:        display.Mode,
+			tool:        display.Tool,
+			target:      display.Target,
+			compression: display.Compression,
 		}
 
-		if len(mode) > maxMode {
-			maxMode = len(mode)
+		if len(display.Hostname) > maxHost {
+			maxHost = len(display.Hostname)
 		}
-		if len(tool) > maxTool {
-			maxTool = len(tool)
+		if len(display.Mode) > maxMode {
+			maxMode = len(display.Mode)
 		}
-		if len(targets) > maxTargets {
-			maxTargets = len(targets)
+		if len(display.Tool) > maxTool {
+			maxTool = len(display.Tool)
 		}
-		if len(comp) > maxComp {
-			maxComp = len(comp)
+		if len(display.Target) > maxTarget {
+			maxTarget = len(display.Target)
+		}
+		if len(display.Compression) > maxComp {
+			maxComp = len(display.Compression)
 		}
 	}
 
 	for idx, r := range rows {
 		line := fmt.Sprintf(
-			"%2d) %s  %-*s  %-*s  %-*s",
+			"%2d) %s  %-*s  %-*s  %-*s  %-*s",
 			idx+1,
 			r.created,
+			maxHost, r.hostname,
 			maxMode, r.mode,
 			maxTool, r.tool,
-			maxTargets, r.targets,
+			maxTarget, r.target,
 		)
 		if maxComp > 0 {
 			line = fmt.Sprintf("%s  %-*s", line, maxComp, r.compression)
@@ -407,31 +385,6 @@ func (u *tuiWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, pr
 	return tuiPromptDecryptSecret(ctx, u.screenEnv(), displayName, previousError)
 }
 
-func backupSummaryForUI(cand *decryptCandidate) string {
-	if cand == nil {
-		return ""
-	}
-
-	base := strings.TrimSpace(cand.DisplayBase)
-	if base == "" {
-		switch {
-		case strings.TrimSpace(cand.BundlePath) != "":
-			base = filepath.Base(strings.TrimSpace(cand.BundlePath))
-		case strings.TrimSpace(cand.RawArchivePath) != "":
-			base = filepath.Base(strings.TrimSpace(cand.RawArchivePath))
-		}
-	}
-
-	created := ""
-	if cand.Manifest != nil {
-		created = cand.Manifest.CreatedAt.Format("2006-01-02 15:04:05")
-	}
-
-	if base == "" {
-		return created
-	}
-	if created == "" {
-		return base
-	}
-	return fmt.Sprintf("%s (%s)", base, created)
+func backupSummaryForUI(cand *backupCandidate) string {
+	return describeBackupCandidate(cand).Summary
 }

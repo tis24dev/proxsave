@@ -57,7 +57,7 @@ func resolveStagedIntegrityExpectation(staged stagedFiles, manifest *backup.Mani
 	return resolveIntegrityExpectationValues(checksumFromFile, checksumFromManifest)
 }
 
-func resolveCandidateIntegrityExpectation(staged stagedFiles, cand *decryptCandidate) (*stagedIntegrityExpectation, error) {
+func resolveCandidateIntegrityExpectation(staged stagedFiles, cand *backupCandidate) (*stagedIntegrityExpectation, error) {
 	if cand != nil && cand.Integrity != nil && strings.TrimSpace(cand.Integrity.Checksum) != "" {
 		normalized, err := backup.NormalizeChecksum(cand.Integrity.Checksum)
 		if err != nil {
@@ -95,7 +95,7 @@ func resolveCandidateIntegrityExpectation(staged stagedFiles, cand *decryptCandi
 	return resolveStagedIntegrityExpectation(staged, manifest)
 }
 
-func verifyStagedArchiveIntegrity(ctx context.Context, logger *logging.Logger, staged stagedFiles, cand *decryptCandidate) (string, error) {
+func verifyStagedArchiveIntegrity(ctx context.Context, logger *logging.Logger, staged stagedFiles, cand *backupCandidate) (string, error) {
 	if staged.ArchivePath == "" {
 		return "", fmt.Errorf("staged archive path is empty")
 	}

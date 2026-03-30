@@ -81,7 +81,7 @@ func (u *cliWorkflowUI) SelectBackupSource(ctx context.Context, options []decryp
 	return promptPathSelection(ctx, u.reader, options)
 }
 
-func (u *cliWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []*decryptCandidate) (*decryptCandidate, error) {
+func (u *cliWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []*backupCandidate) (*backupCandidate, error) {
 	return promptCandidateSelection(ctx, u.reader, candidates)
 }
 

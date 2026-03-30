@@ -14,9 +14,9 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-func stubPreparedRestoreBundle(archivePath string, manifest *backup.Manifest) func(context.Context, *config.Config, *logging.Logger, string, RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-	return func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-		return &decryptCandidate{
+func stubPreparedRestoreBundle(archivePath string, manifest *backup.Manifest) func(context.Context, *config.Config, *logging.Logger, string, RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+	return func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+		return &backupCandidate{
 				DisplayBase: "test",
 				Manifest:    manifest,
 			}, &preparedBundle{

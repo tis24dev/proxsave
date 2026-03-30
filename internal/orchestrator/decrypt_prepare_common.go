@@ -62,7 +62,7 @@ func resolvePreparedArchivePath(workDir, stagedArchivePath, currentEncryption st
 	return filepath.Join(workDir, archiveBase), nil
 }
 
-func preparePlainBundleCommon(ctx context.Context, cand *decryptCandidate, version string, logger *logging.Logger, decryptArchive archiveDecryptFunc) (bundle *preparedBundle, err error) {
+func preparePlainBundleCommon(ctx context.Context, cand *backupCandidate, version string, logger *logging.Logger, decryptArchive archiveDecryptFunc) (bundle *preparedBundle, err error) {
 	if cand == nil || cand.Manifest == nil {
 		return nil, fmt.Errorf("invalid backup candidate")
 	}

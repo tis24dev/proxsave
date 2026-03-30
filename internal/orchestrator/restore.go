@@ -688,7 +688,7 @@ func exportDestRoot(baseDir string) string {
 }
 
 // runFullRestore performs a full restore without selective options (fallback)
-func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool) error {
+func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *backupCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool) error {
 	if err := confirmRestoreAction(ctx, reader, candidate, destRoot); err != nil {
 		return err
 	}
@@ -760,7 +760,7 @@ func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *decryp
 	return nil
 }
 
-func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *decryptCandidate, dest string) error {
+func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *backupCandidate, dest string) error {
 	manifest := cand.Manifest
 	fmt.Println()
 	fmt.Printf("Selected backup: %s (%s)\n", cand.DisplayBase, manifest.CreatedAt.Format("2006-01-02 15:04:05"))

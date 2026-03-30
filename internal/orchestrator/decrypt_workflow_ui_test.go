@@ -34,7 +34,7 @@ func (f *fakeDecryptWorkflowUI) SelectBackupSource(ctx context.Context, options 
 	panic("unexpected SelectBackupSource call")
 }
 
-func (f *fakeDecryptWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []*decryptCandidate) (*decryptCandidate, error) {
+func (f *fakeDecryptWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []*backupCandidate) (*backupCandidate, error) {
 	panic("unexpected SelectBackupCandidate call")
 }
 
@@ -186,7 +186,7 @@ func TestPreparePlainBundleWithUICopiesRawArtifacts(t *testing.T) {
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest: &backup.Manifest{
 			ArchivePath:    rawArchive,
 			EncryptionMode: "none",
@@ -254,7 +254,7 @@ func TestPreparePlainBundleWithUIRejectsMissingUI(t *testing.T) {
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest: &backup.Manifest{
 			ArchivePath:    rawArchive,
 			EncryptionMode: "none",
@@ -319,7 +319,7 @@ func TestPreparePlainBundleWithUIRejectsTypedNilUI(t *testing.T) {
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest: &backup.Manifest{
 			ArchivePath:    rawArchive,
 			EncryptionMode: "none",

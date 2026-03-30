@@ -89,8 +89,8 @@ func buildDecryptPathOptions(cfg *config.Config, logger *logging.Logger) (option
 }
 
 // discoverRcloneBackups lists backup candidates from an rclone remote and returns
-// decrypt candidates backed by that remote (bundles and raw archives).
-func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath string, logger *logging.Logger, report ProgressReporter) (candidates []*decryptCandidate, err error) {
+// backup candidates backed by that remote (bundles and raw archives).
+func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath string, logger *logging.Logger, report ProgressReporter) (candidates []*backupCandidate, err error) {
 	done := logging.DebugStart(logger, "discover rclone backups", "remote=%s", remotePath)
 	defer func() { done(err) }()
 	start := time.Now()
@@ -128,7 +128,7 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 	}
 	logging.DebugStep(logger, "discover rclone backups", "rclone lsf output bytes=%d elapsed=%s", len(output), time.Since(lsfStart))
 
-	candidates = make([]*decryptCandidate, 0)
+	candidates = make([]*backupCandidate, 0)
 	lines := strings.Split(string(output), "\n")
 
 	totalEntries := len(lines)
@@ -238,7 +238,7 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 			if strings.TrimSpace(displayBase) == "" {
 				displayBase = filepath.Base(item.filename)
 			}
-			candidates = append(candidates, &decryptCandidate{
+			candidates = append(candidates, &backupCandidate{
 				Manifest:    manifest,
 				Source:      sourceBundle,
 				BundlePath:  item.remoteBundle,
@@ -295,7 +295,7 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 			if strings.TrimSpace(displayBase) == "" {
 				displayBase = filepath.Base(baseNameFromRemoteRef(item.remoteArchive))
 			}
-			candidates = append(candidates, &decryptCandidate{
+			candidates = append(candidates, &backupCandidate{
 				Manifest:        manifest,
 				Source:          sourceRaw,
 				RawArchivePath:  item.remoteArchive,
@@ -353,7 +353,7 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 
 // discoverBackupCandidates scans a local or mounted directory for backup
 // candidates (bundle or raw triplet: archive + metadata + checksum).
-func discoverBackupCandidates(logger *logging.Logger, root string) (candidates []*decryptCandidate, err error) {
+func discoverBackupCandidates(logger *logging.Logger, root string) (candidates []*backupCandidate, err error) {
 	done := logging.DebugStart(logger, "discover backup candidates", "root=%s", root)
 	defer func() { done(err) }()
 	entries, err := restoreFS.ReadDir(root)
@@ -362,7 +362,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 	}
 	logging.DebugStep(logger, "discover backup candidates", "entries=%d", len(entries))
 
-	candidates = make([]*decryptCandidate, 0)
+	candidates = make([]*backupCandidate, 0)
 	rawBases := make(map[string]struct{})
 	filesSeen := 0
 	dirsSkipped := 0
@@ -395,7 +395,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 				continue
 			}
 			logging.DebugStep(logger, "discover backup candidates", "bundle accepted: %s created_at=%s", name, manifest.CreatedAt.Format(time.RFC3339))
-			candidates = append(candidates, &decryptCandidate{
+			candidates = append(candidates, &backupCandidate{
 				Manifest:    manifest,
 				Source:      sourceBundle,
 				BundlePath:  fullPath,
@@ -453,7 +453,7 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 			}
 
 			rawBases[baseName] = struct{}{}
-			candidates = append(candidates, &decryptCandidate{
+			candidates = append(candidates, &backupCandidate{
 				Manifest:        manifest,
 				Source:          sourceRaw,
 				RawArchivePath:  archivePath,

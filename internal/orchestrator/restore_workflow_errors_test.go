@@ -12,7 +12,7 @@ import (
 
 func TestConfirmRestoreAction_Abort(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("0\n"))
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		DisplayBase: "test",
 		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
 	}
@@ -25,7 +25,7 @@ func TestConfirmRestoreAction_Abort(t *testing.T) {
 
 func TestConfirmRestoreAction_Proceed(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("RESTORE\n"))
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		DisplayBase: "test",
 		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
 	}

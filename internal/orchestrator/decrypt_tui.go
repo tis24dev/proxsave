@@ -45,23 +45,7 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 }
 
 func buildTargetInfo(manifest *backup.Manifest) string {
-	targets := formatTargets(manifest)
-	if targets == "" {
-		targets = "unknown"
-	} else {
-		targets = strings.ToUpper(targets)
-	}
-
-	version := normalizeProxmoxVersion(manifest.ProxmoxVersion)
-	if version != "" {
-		targets = fmt.Sprintf("%s %s", targets, version)
-	}
-
-	if cluster := formatClusterMode(manifest.ClusterMode); cluster != "" {
-		targets = fmt.Sprintf("%s (%s)", targets, cluster)
-	}
-
-	return fmt.Sprintf("Targets: %s", targets)
+	return fmt.Sprintf("Targets: %s", formatBackupCandidateTarget(manifest))
 }
 
 func normalizeProxmoxVersion(value string) string {
@@ -75,11 +59,11 @@ func normalizeProxmoxVersion(value string) string {
 	return version
 }
 
-func filterEncryptedCandidates(candidates []*decryptCandidate) []*decryptCandidate {
+func filterEncryptedCandidates(candidates []*backupCandidate) []*backupCandidate {
 	if len(candidates) == 0 {
 		return candidates
 	}
-	filtered := make([]*decryptCandidate, 0, len(candidates))
+	filtered := make([]*backupCandidate, 0, len(candidates))
 	for _, c := range candidates {
 		if c == nil || c.Manifest == nil {
 			continue

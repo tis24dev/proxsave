@@ -30,7 +30,7 @@ func isNilInterface(v any) bool {
 	}
 }
 
-func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *decryptCandidate, err error) {
+func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *backupCandidate, err error) {
 	done := logging.DebugStart(logger, "select backup candidate (ui)", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
 
@@ -51,7 +51,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 
 		logger.Info("Scanning %s for backups...", option.Path)
 
-		var candidates []*decryptCandidate
+		var candidates []*backupCandidate
 		scanErr := ui.RunTask(ctx, "Scanning backups", "Scanning backup source...", func(scanCtx context.Context, report ProgressReporter) error {
 			if option.IsRclone {
 				found, err := discoverRcloneBackups(scanCtx, cfg, option.Path, logger, report)
@@ -197,7 +197,7 @@ func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPa
 	}
 }
 
-func preparePlainBundleWithUI(ctx context.Context, cand *decryptCandidate, version string, logger *logging.Logger, ui interface {
+func preparePlainBundleWithUI(ctx context.Context, cand *backupCandidate, version string, logger *logging.Logger, ui interface {
 	PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error)
 }) (bundle *preparedBundle, err error) {
 	if cand == nil || cand.Manifest == nil {

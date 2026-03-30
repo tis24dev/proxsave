@@ -81,8 +81,8 @@ func TestRunRestoreWorkflow_ClusterBackupSafeMode_ExportsClusterAndRestoresNetwo
 		t.Fatalf("fakeFS.WriteFile: %v", err)
 	}
 
-	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-		cand := &decryptCandidate{
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+		cand := &backupCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
 				CreatedAt:     fakeNow.Now(),
@@ -206,8 +206,8 @@ func TestRunRestoreWorkflow_PBSStopsServicesAndChecksZFSWhenSelected(t *testing.
 		t.Fatalf("fakeFS.WriteFile: %v", err)
 	}
 
-	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-		cand := &decryptCandidate{
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+		cand := &backupCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
 				CreatedAt:     fakeNow.Now(),
@@ -334,8 +334,8 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 		t.Fatalf("restoreSandbox.WriteFile: %v", err)
 	}
 
-	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-		cand := &decryptCandidate{
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+		cand := &backupCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
 				CreatedAt:     fakeNow.Now(),
@@ -438,8 +438,8 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 		t.Fatalf("fakeFS.WriteFile: %v", err)
 	}
 
-	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-		cand := &decryptCandidate{
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+		cand := &backupCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
 				CreatedAt:     fakeNow.Now(),

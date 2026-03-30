@@ -89,8 +89,8 @@ func TestRunRestoreWorkflow_FstabMergeFails_ContinuesWithWarnings(t *testing.T) 
 		t.Fatalf("fakeFS.WriteFile(/bundle.tar): %v", err)
 	}
 
-	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-		cand := &decryptCandidate{
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+		cand := &backupCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
 				CreatedAt:     fakeNow.Now(),

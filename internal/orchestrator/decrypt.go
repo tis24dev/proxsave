@@ -36,7 +36,7 @@ const (
 	sourceRaw
 )
 
-type decryptCandidate struct {
+type backupCandidate struct {
 	Manifest        *backup.Manifest
 	Source          decryptSourceType
 	BundlePath      string
@@ -99,7 +99,7 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	return RunDecryptWorkflowWithDeps(ctx, &deps, version)
 }
 
-func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *decryptCandidate, err error) {
+func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *backupCandidate, err error) {
 	done := logging.DebugStart(logger, "select backup candidate", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
 
@@ -334,18 +334,20 @@ func inspectRcloneMetadataManifest(ctx context.Context, remoteMetadataPath, remo
 	return legacy, nil
 }
 
-func promptCandidateSelection(ctx context.Context, reader *bufio.Reader, candidates []*decryptCandidate) (*decryptCandidate, error) {
+func promptCandidateSelection(ctx context.Context, reader *bufio.Reader, candidates []*backupCandidate) (*backupCandidate, error) {
 	for {
 		fmt.Println("\nAvailable backups:")
 		for idx, cand := range candidates {
-			created := cand.Manifest.CreatedAt.Format("2006-01-02 15:04:05")
-			enc := strings.ToUpper(statusFromManifest(cand.Manifest))
-			toolVersion := cand.Manifest.ScriptVersion
-			if toolVersion == "" {
-				toolVersion = "unknown"
-			}
-			targetSummary := formatTargetSummary(cand.Manifest)
-			fmt.Printf("  [%d] %s • %s • Tool v%s • %s\n", idx+1, created, enc, toolVersion, targetSummary)
+			display := describeBackupCandidate(cand)
+			fmt.Printf(
+				"  [%d] %s • Host %s • %s • %s • %s\n",
+				idx+1,
+				display.Created,
+				display.Hostname,
+				display.Mode,
+				display.Tool,
+				display.Target,
+			)
 		}
 		fmt.Println("  [0] Exit")
 
@@ -429,12 +431,12 @@ func downloadRcloneBackup(ctx context.Context, remotePath string, logger *loggin
 	return tmpPath, cleanup, nil
 }
 
-func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *decryptCandidate, version string, logger *logging.Logger) (bundle *preparedBundle, err error) {
+func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *backupCandidate, version string, logger *logging.Logger) (bundle *preparedBundle, err error) {
 	ui := newCLIWorkflowUI(reader, logger)
 	return preparePlainBundleWithUI(ctx, cand, version, logger, ui)
 }
 
-func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (candidate *decryptCandidate, prepared *preparedBundle, err error) {
+func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (candidate *backupCandidate, prepared *preparedBundle, err error) {
 	done := logging.DebugStart(logger, "prepare decrypted backup", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
 	candidate, err = selectDecryptCandidate(ctx, reader, cfg, logger, requireEncrypted)
@@ -546,7 +548,7 @@ func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *loggin
 	return staged, nil
 }
 
-func copyRawArtifactsToWorkdir(ctx context.Context, cand *decryptCandidate, workDir string) (staged stagedFiles, err error) {
+func copyRawArtifactsToWorkdir(ctx context.Context, cand *backupCandidate, workDir string) (staged stagedFiles, err error) {
 	return copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, nil)
 }
 
@@ -577,7 +579,7 @@ func rcloneCopyTo(ctx context.Context, remotePath, localPath string, showProgres
 	return cmd.Run()
 }
 
-func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *decryptCandidate, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
+func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *backupCandidate, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
 	done := logging.DebugStart(logger, "stage raw artifacts", "archive=%s workdir=%s rclone=%v", cand.RawArchivePath, workDir, cand.IsRclone)
 	defer func() { done(err) }()
 	if ctx == nil {
