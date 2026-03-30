@@ -23,7 +23,7 @@ jobs:
           go test $(go list ./... | grep -v -E '/cmd/|/pbs$|/bech32$|^github.com/tis24dev/proxsave$') -coverprofile=coverage.out
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out
