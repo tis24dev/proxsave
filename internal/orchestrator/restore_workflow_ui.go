@@ -32,7 +32,7 @@ func fallbackRestoreDecisionInfoFromManifest(manifest *backup.Manifest) *Restore
 	return info
 }
 
-func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
+func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
 	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, false)
 	if err != nil {
 		return nil, nil, err
@@ -918,7 +918,7 @@ func dedupeCategoriesByID(categories []Category) []Category {
 	return out
 }
 
-func runFullRestoreWithUI(ctx context.Context, ui RestoreWorkflowUI, candidate *decryptCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool) error {
+func runFullRestoreWithUI(ctx context.Context, ui RestoreWorkflowUI, candidate *backupCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool) error {
 	if candidate == nil || prepared == nil || prepared.Manifest.ArchivePath == "" {
 		return fmt.Errorf("invalid restore candidate")
 	}

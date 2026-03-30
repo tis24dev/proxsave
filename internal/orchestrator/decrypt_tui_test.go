@@ -51,10 +51,10 @@ func TestBuildTargetInfo(t *testing.T) {
 
 func TestFilterEncryptedCandidates(t *testing.T) {
 	now := time.Now()
-	encrypted := &decryptCandidate{Manifest: &backup.Manifest{EncryptionMode: "age", CreatedAt: now}}
-	plain := &decryptCandidate{Manifest: &backup.Manifest{EncryptionMode: "none", CreatedAt: now}}
+	encrypted := &backupCandidate{Manifest: &backup.Manifest{EncryptionMode: "age", CreatedAt: now}}
+	plain := &backupCandidate{Manifest: &backup.Manifest{EncryptionMode: "none", CreatedAt: now}}
 
-	filtered := filterEncryptedCandidates([]*decryptCandidate{nil, encrypted, plain, {}})
+	filtered := filterEncryptedCandidates([]*backupCandidate{nil, encrypted, plain, {}})
 	if len(filtered) != 1 || filtered[0] != encrypted {
 		t.Fatalf("filterEncryptedCandidates returned %+v, want only encrypted candidate", filtered)
 	}

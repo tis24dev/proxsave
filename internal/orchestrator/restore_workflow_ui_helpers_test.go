@@ -56,7 +56,7 @@ func (f *fakeRestoreWorkflowUI) SelectBackupSource(ctx context.Context, options 
 	return decryptPathOption{}, fmt.Errorf("unexpected SelectBackupSource call")
 }
 
-func (f *fakeRestoreWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []*decryptCandidate) (*decryptCandidate, error) {
+func (f *fakeRestoreWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []*backupCandidate) (*backupCandidate, error) {
 	return nil, fmt.Errorf("unexpected SelectBackupCandidate call")
 }
 

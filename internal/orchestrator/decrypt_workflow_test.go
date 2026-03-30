@@ -89,7 +89,7 @@ func TestPreparePlainBundle_AllowsMissingRawChecksumSidecar(t *testing.T) {
 	// No checksum sidecar: restore/decrypt should still proceed when the manifest
 	// already carries the expected archive checksum.
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest:        manifest,
 		Source:          sourceRaw,
 		RawArchivePath:  archive,

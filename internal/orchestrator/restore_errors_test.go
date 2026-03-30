@@ -1266,7 +1266,7 @@ func TestRunSafeClusterApply_NoVMConfigs(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestConfirmRestoreAction_InvalidInput(t *testing.T) {
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		DisplayBase: "test-backup",
 		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
 	}
@@ -1281,7 +1281,7 @@ func TestConfirmRestoreAction_InvalidInput(t *testing.T) {
 }
 
 func TestConfirmRestoreAction_Cancel(t *testing.T) {
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		DisplayBase: "test-backup",
 		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
 	}
@@ -1463,7 +1463,7 @@ func TestRunFullRestore_ExtractError(t *testing.T) {
 
 	restoreFS = fakeFS
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		DisplayBase: "test-backup",
 		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
 	}

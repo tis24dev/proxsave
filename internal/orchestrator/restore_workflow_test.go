@@ -73,8 +73,8 @@ func TestRunRestoreWorkflow_CustomModeNoCategories_Succeeds(t *testing.T) {
 
 	tmp := t.TempDir()
 	archivePath := writeMinimalTar(t, tmp)
-	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-		cand := &decryptCandidate{
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+		cand := &backupCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
 				CreatedAt:     time.Unix(1700000000, 0),
@@ -124,8 +124,8 @@ func TestRunRestoreWorkflow_ConfirmFalseAborts(t *testing.T) {
 
 	tmp := t.TempDir()
 	archivePath := writeMinimalTar(t, tmp)
-	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*decryptCandidate, *preparedBundle, error) {
-		cand := &decryptCandidate{
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+		cand := &backupCandidate{
 			DisplayBase: "test",
 			Manifest: &backup.Manifest{
 				CreatedAt:     time.Unix(1700000000, 0),

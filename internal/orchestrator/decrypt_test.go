@@ -1044,7 +1044,7 @@ func TestPromptPathSelection_InvalidIndexRetries(t *testing.T) {
 
 func TestPromptCandidateSelection_Abort(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("0\n"))
-	candidates := []*decryptCandidate{
+	candidates := []*backupCandidate{
 		{Manifest: &backup.Manifest{EncryptionMode: "age"}},
 	}
 
@@ -1057,7 +1057,7 @@ func TestPromptCandidateSelection_Abort(t *testing.T) {
 func TestPromptCandidateSelection_EmptyInputRetries(t *testing.T) {
 	// Empty input, then valid selection
 	reader := bufio.NewReader(strings.NewReader("\n\n1\n"))
-	candidates := []*decryptCandidate{
+	candidates := []*backupCandidate{
 		{Manifest: &backup.Manifest{EncryptionMode: "age"}},
 	}
 
@@ -1073,7 +1073,7 @@ func TestPromptCandidateSelection_EmptyInputRetries(t *testing.T) {
 func TestPromptCandidateSelection_InvalidIndexRetries(t *testing.T) {
 	// Invalid index, then valid selection
 	reader := bufio.NewReader(strings.NewReader("99\n1\n"))
-	candidates := []*decryptCandidate{
+	candidates := []*backupCandidate{
 		{Manifest: &backup.Manifest{EncryptionMode: "age"}},
 	}
 
@@ -1537,7 +1537,7 @@ func TestPreparePlainBundle_UnsupportedSource(t *testing.T) {
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = origFS })
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest: &backup.Manifest{},
 		Source:   decryptSourceType(99), // Invalid source
 	}
@@ -1573,7 +1573,7 @@ func TestPreparePlainBundle_SourceBundleSuccess(t *testing.T) {
 		{name: "backup.sha256", data: checksumLineForBytes("archive.tar.xz", archiveData)},
 	})
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest:   &backup.Manifest{ArchivePath: filepath.Join(dir, "archive.tar.xz"), EncryptionMode: "none"},
 		Source:     sourceBundle,
 		BundlePath: bundlePath,
@@ -1605,7 +1605,7 @@ func TestPreparePlainBundle_ExtractError(t *testing.T) {
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = origFS })
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest:   &backup.Manifest{EncryptionMode: "none"},
 		Source:     sourceBundle,
 		BundlePath: "/nonexistent/bundle.tar",
@@ -1937,7 +1937,7 @@ func TestCopyRawArtifactsToWorkdir_Success(t *testing.T) {
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		RawArchivePath:  archivePath,
 		RawMetadataPath: metadataPath,
 		RawChecksumPath: checksumPath,
@@ -1957,7 +1957,7 @@ func TestCopyRawArtifactsToWorkdir_ArchiveError(t *testing.T) {
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = origFS })
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		RawArchivePath:  "/nonexistent/archive.tar.xz",
 		RawMetadataPath: "/nonexistent/backup.metadata",
 		RawChecksumPath: "/nonexistent/backup.sha256",
@@ -1986,7 +1986,7 @@ func TestCopyRawArtifactsToWorkdir_MetadataError(t *testing.T) {
 		t.Fatalf("write archive: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		RawArchivePath:  archivePath,
 		RawMetadataPath: "/nonexistent/backup.metadata",
 		RawChecksumPath: "/nonexistent/backup.sha256",
@@ -2019,7 +2019,7 @@ func TestCopyRawArtifactsToWorkdir_ChecksumError(t *testing.T) {
 		t.Fatalf("write metadata: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		RawArchivePath:  archivePath,
 		RawMetadataPath: metadataPath,
 		RawChecksumPath: "/nonexistent/backup.sha256",
@@ -2085,7 +2085,7 @@ esac
 	t.Setenv("METADATA_SRC", metadataSrc)
 	t.Setenv("CHECKSUM_SRC", checksumSrc)
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		IsRclone:        true,
 		RawArchivePath:  "gdrive:backup.tar.xz",
 		RawMetadataPath: "gdrive:backup.tar.xz.metadata",
@@ -2552,7 +2552,7 @@ func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
 		t.Fatalf("write metadata: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		RawArchivePath:  archivePath,
 		RawMetadataPath: metadataPath,
 		RawChecksumPath: "",
@@ -2575,7 +2575,7 @@ func TestCopyRawArtifactsToWorkdir_InvalidRclonePaths(t *testing.T) {
 	workDir := t.TempDir()
 
 	// Candidate with rclone but empty paths after colon
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		IsRclone:        true,
 		RawArchivePath:  "gdrive:",  // Empty path after colon
 		RawMetadataPath: "gdrive:m", // Valid
@@ -2765,7 +2765,7 @@ func TestPreparePlainBundle_CopyFileSamePath(t *testing.T) {
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest:        manifest,
 		Source:          sourceRaw,
 		RawArchivePath:  archivePath,
@@ -2857,7 +2857,7 @@ esac
 		return []byte(id.String()), nil
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest:   manifest,
 		Source:     sourceBundle,
 		BundlePath: "gdrive:backup.bundle.tar",
@@ -2899,7 +2899,7 @@ func TestPreparePlainBundleCommon_TrimmedAgeEncryptionTriggersDecrypt(t *testing
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest: &backup.Manifest{
 			ArchivePath:    workArchive,
 			EncryptionMode: "  age ",
@@ -2965,7 +2965,7 @@ func TestPreparePlainBundleCommon_AgeModeRequiresAgeSuffix(t *testing.T) {
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest: &backup.Manifest{
 			ArchivePath:    workArchive,
 			EncryptionMode: "age",
@@ -3016,7 +3016,7 @@ func TestPreparePlainBundleCommon_NonAgeRejectsAgeSuffix(t *testing.T) {
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest: &backup.Manifest{
 			ArchivePath:    workArchive,
 			EncryptionMode: "none",
@@ -3154,7 +3154,7 @@ func TestPreparePlainBundle_SourceBundleAdditional(t *testing.T) {
 	tw.Close()
 	f.Close()
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest:   manifest,
 		Source:     sourceBundle,
 		BundlePath: bundlePath,
@@ -3326,7 +3326,7 @@ func TestCopyRawArtifactsToWorkdir_WithChecksum(t *testing.T) {
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		RawArchivePath:  archivePath,
 		RawMetadataPath: metadataPath,
 		RawChecksumPath: checksumPath,
@@ -3418,7 +3418,7 @@ func TestPromptPathSelection_InvalidThenValid(t *testing.T) {
 
 func TestPromptCandidateSelection_Exit(t *testing.T) {
 	now := time.Now()
-	cands := []*decryptCandidate{
+	cands := []*backupCandidate{
 		{
 			Manifest: &backup.Manifest{
 				CreatedAt:      now,
@@ -3444,7 +3444,7 @@ func TestPreparePlainBundle_MkdirAllError(t *testing.T) {
 	restoreFS = fake
 	defer func() { restoreFS = orig }()
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: "/bundle.tar",
 		Manifest:   &backup.Manifest{EncryptionMode: "none"},
@@ -3470,7 +3470,7 @@ func TestPreparePlainBundle_MkdirTempError(t *testing.T) {
 	restoreFS = fake
 	defer func() { restoreFS = orig }()
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: "/bundle.tar",
 		Manifest:   &backup.Manifest{EncryptionMode: "none"},
@@ -3627,7 +3627,7 @@ exit 0
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		IsRclone:        true,
 		RawArchivePath:  "remote:backup.tar.xz",
 		RawMetadataPath: "remote:backup.metadata",
@@ -3683,7 +3683,7 @@ fi
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		IsRclone:        true,
 		RawArchivePath:  "remote:backup.tar.xz",
 		RawMetadataPath: "remote:backup.metadata",
@@ -3912,7 +3912,7 @@ func TestPreparePlainBundle_StatErrorAfterExtract(t *testing.T) {
 	restoreFS = fake
 	defer func() { restoreFS = orig }()
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: bundlePath,
 		Manifest:   &backup.Manifest{EncryptionMode: "none", Hostname: "test"},
@@ -3951,7 +3951,7 @@ exit 1
 
 	prependPathEnv(t, tmp)
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: "remote:backup.bundle.tar",
 		IsRclone:   true,
@@ -4013,7 +4013,7 @@ exit 1
 
 	// Call preparePlainBundle with rclone candidate
 	// It will first download (success), then try MkdirAll for tempRoot
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: "remote:backup.bundle.tar",
 		IsRclone:   true,
@@ -4194,7 +4194,7 @@ func TestPreparePlainBundle_CopyFileError(t *testing.T) {
 	restoreFS = fake
 	defer func() { restoreFS = orig }()
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: bundlePath,
 		Manifest:   &backup.Manifest{EncryptionMode: "none", Hostname: "test"},
@@ -4295,7 +4295,7 @@ func TestPreparePlainBundle_StatErrorOnPlainArchive(t *testing.T) {
 	restoreFS = fake
 	defer func() { restoreFS = orig }()
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: bundlePath,
 		Manifest:   &backup.Manifest{EncryptionMode: "none", Hostname: "test"},
@@ -4361,7 +4361,7 @@ exit 0
 	restoreFS = osFS{}
 	defer func() { restoreFS = orig }()
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: "remote:backup.bundle.tar",
 		IsRclone:   true,
@@ -4429,7 +4429,7 @@ func TestPreparePlainBundle_GenerateChecksumErrorPath(t *testing.T) {
 	restoreFS = fake
 	defer func() { restoreFS = orig }()
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: bundlePath,
 		Manifest:   &backup.Manifest{EncryptionMode: "none", Hostname: "test"},
@@ -4507,7 +4507,7 @@ exit 0
 	restoreFS = fake
 	defer func() { restoreFS = orig }()
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Source:     sourceBundle,
 		BundlePath: "remote:backup.bundle.tar",
 		IsRclone:   true,

@@ -60,7 +60,7 @@ func TestPreparePlainBundle_RejectsMissingChecksumVerification(t *testing.T) {
 		t.Fatalf("write metadata: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest:        manifest,
 		Source:          sourceRaw,
 		RawArchivePath:  archivePath,
@@ -109,7 +109,7 @@ func TestPreparePlainBundle_RejectsChecksumMismatch(t *testing.T) {
 		t.Fatalf("write checksum: %v", err)
 	}
 
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		Manifest:        manifest,
 		Source:          sourceRaw,
 		RawArchivePath:  archivePath,
@@ -144,7 +144,7 @@ func TestVerifyStagedArchiveIntegrity_UsesCandidateIntegrityExpectation(t *testi
 
 	got, err := verifyStagedArchiveIntegrity(context.Background(), logging.New(types.LogLevelError, false), stagedFiles{
 		ArchivePath: archivePath,
-	}, &decryptCandidate{
+	}, &backupCandidate{
 		Integrity: &stagedIntegrityExpectation{
 			Checksum: strings.ToUpper(checksumHexForBytes(archiveData)),
 			Source:   "checksum file",

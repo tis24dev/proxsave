@@ -209,7 +209,7 @@ func TestRunFullRestore_ExtractsArchiveToDestination(t *testing.T) {
 	}
 
 	reader := bufio.NewReader(strings.NewReader("RESTORE\n"))
-	cand := &decryptCandidate{
+	cand := &backupCandidate{
 		DisplayBase: "test",
 		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
 	}

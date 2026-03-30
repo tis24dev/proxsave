@@ -18,7 +18,18 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      - name: Resolve coverage toolchain
+        run: |
+          TOOLCHAIN_FROM_MOD=$(awk '/^toolchain /{print $2}' go.mod)
+          if [ -n "$TOOLCHAIN_FROM_MOD" ]; then
+            echo "COVER_GOTOOLCHAIN=${TOOLCHAIN_FROM_MOD}+auto" >> "$GITHUB_ENV"
+          else
+            echo "COVER_GOTOOLCHAIN=auto" >> "$GITHUB_ENV"
+          fi
+
       - name: Run tests with coverage
+        env:
+          GOTOOLCHAIN: ${{ env.COVER_GOTOOLCHAIN }}
         run: |
           go test $(go list ./... | grep -v -E '/cmd/|/pbs$|/bech32$|^github.com/tis24dev/proxsave$') -coverprofile=coverage.out
 
