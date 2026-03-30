@@ -198,12 +198,14 @@ func TestApplyStorageStatsSimplePrimary(t *testing.T) {
 }
 
 func TestApplyStorageStatsGFSPrimary(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
+	previousMonthBackup := time.Date(now.Year(), now.Month(), 1, now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC).Add(-24 * time.Hour)
+	previousYearBackup := time.Date(now.Year()-1, time.January, 15, now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
 	backups := []*types.BackupMetadata{
 		{Timestamp: now},                    // daily
 		{Timestamp: now.AddDate(0, 0, -8)},  // weekly
-		{Timestamp: now.AddDate(0, -1, -1)}, // monthly
-		{Timestamp: now.AddDate(-1, 0, 0)},  // yearly
+		{Timestamp: previousMonthBackup},    // monthly
+		{Timestamp: previousYearBackup},     // yearly
 	}
 	adapter := &StorageAdapter{
 		backend: &stubStorage{loc: storage.LocationPrimary, list: backups},
