@@ -76,106 +76,10 @@ func (c *Collector) collectPBSConfigFile(ctx context.Context, root, filename, de
 // CollectPBSConfigs collects Proxmox Backup Server specific configurations
 func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 	c.logger.Info("Collecting PBS configurations")
-	c.logger.Debug("Validating PBS environment before collection")
-
-	// Check if we're actually on PBS
-	pbsConfigPath := c.pbsConfigPath()
-	if _, err := os.Stat(pbsConfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("not a PBS system: %s not found", pbsConfigPath)
+	state := newCollectionState(c)
+	if err := runRecipe(ctx, newPBSRecipe(), state); err != nil {
+		return err
 	}
-	c.logger.Debug("Detected %s, proceeding with PBS collection", pbsConfigPath)
-
-	// Collect PBS directories
-	c.logger.Debug("Collecting PBS configuration directories")
-	if err := c.collectPBSDirectories(ctx, pbsConfigPath); err != nil {
-		return fmt.Errorf("failed to collect PBS directories: %w", err)
-	}
-	c.logger.Debug("PBS directory collection completed")
-
-	datastores, err := c.getDatastoreList(ctx)
-	if err != nil {
-		if ctx.Err() != nil {
-			return err
-		}
-		return fmt.Errorf("failed to detect PBS datastores: %w", err)
-	}
-	c.logger.Debug("Detected %d PBS datastores", len(datastores))
-
-	if len(datastores) == 0 {
-		c.logger.Info("Found 0 PBS datastore(s) via auto-detection")
-	} else {
-		summary := make([]string, 0, len(datastores))
-		for _, ds := range datastores {
-			if ds.Path != "" {
-				summary = append(summary, fmt.Sprintf("%s (%s)", ds.Name, ds.Path))
-			} else {
-				summary = append(summary, ds.Name)
-			}
-		}
-		c.logger.Info("Found %d PBS datastore(s) via auto-detection: %s", len(datastores), strings.Join(summary, ", "))
-	}
-
-	// Collect PBS commands output
-	c.logger.Debug("Collecting PBS command outputs and state")
-	if err := c.collectPBSCommands(ctx, datastores); err != nil {
-		return fmt.Errorf("failed to collect PBS commands: %w", err)
-	}
-	c.logger.Debug("PBS command output collection completed")
-
-	// Collect datastore inventory (mounts, paths, config snapshots)
-	c.logger.Debug("Collecting PBS datastore inventory report")
-	if err := c.collectPBSDatastoreInventory(ctx, datastores); err != nil {
-		c.logger.Warning("Failed to collect PBS datastore inventory report: %v", err)
-	} else {
-		c.logger.Debug("PBS datastore inventory report completed")
-	}
-
-	// Collect datastore configurations
-	if c.config.BackupDatastoreConfigs {
-		c.logger.Debug("Collecting datastore configuration files and namespaces")
-		if err := c.collectDatastoreConfigs(ctx, datastores); err != nil {
-			c.logger.Warning("Failed to collect datastore configs: %v", err)
-			// Non-fatal, continue
-		} else {
-			c.logger.Debug("Datastore configuration collection completed")
-		}
-	} else {
-		c.logger.Skip("PBS datastore configuration backup disabled.")
-	}
-
-	// Collect user/ACL configurations
-	if c.config.BackupUserConfigs {
-		c.logger.Debug("Collecting PBS user and ACL configurations")
-		if err := c.collectUserConfigs(ctx); err != nil {
-			c.logger.Warning("Failed to collect user configs: %v", err)
-			// Non-fatal, continue
-		} else {
-			c.logger.Debug("User configuration collection completed")
-		}
-	} else {
-		c.logger.Skip("PBS user/ACL backup disabled.")
-	}
-
-	if c.config.BackupPxarFiles {
-		c.logger.Debug("Collecting PXAR metadata for datastores")
-		if err := c.collectPBSPxarMetadata(ctx, datastores); err != nil {
-			c.logger.Warning("Failed to collect PBS PXAR metadata: %v", err)
-		} else {
-			c.logger.Debug("PXAR metadata collection completed")
-		}
-	} else {
-		c.logger.Skip("PBS PXAR metadata collection disabled.")
-	}
-
-	// Print collection summary
-	c.logger.Info("PBS collection summary:")
-	c.logger.Info("  Files collected: %d", c.stats.FilesProcessed)
-	c.logger.Info("  Files not found: %d", c.stats.FilesNotFound)
-	if c.stats.FilesFailed > 0 {
-		c.logger.Warning("  Files failed: %d", c.stats.FilesFailed)
-	}
-	c.logger.Debug("  Files skipped: %d", c.stats.FilesSkipped)
-	c.logger.Debug("  Bytes collected: %d", c.stats.BytesCollected)
 
 	c.logger.Info("PBS configuration collection completed")
 	return nil
