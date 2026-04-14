@@ -85,16 +85,6 @@ func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 	return nil
 }
 
-// collectPBSDirectories collects PBS-specific directories
-func (c *Collector) collectPBSDirectories(ctx context.Context, root string) error {
-	state := newCollectionState(c)
-	if err := runRecipe(ctx, newPBSDirectoryRecipe(root), state); err != nil {
-		return err
-	}
-	c.logger.Debug("PBS directory collection finished")
-	return nil
-}
-
 // collectPBSCommands collects output from PBS commands
 func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsDatastore) error {
 	if len(datastores) > 0 {
@@ -171,23 +161,6 @@ func (c *Collector) collectPBSConfigSnapshot(ctx context.Context, root string) e
 	})
 }
 
-func (c *Collector) collectPBSManifestSnapshot(ctx context.Context, root string) error {
-	state := newCollectionState(c)
-	return runRecipe(ctx, recipe{
-		Name: "pbs-manifest",
-		Bricks: append([]collectionBrick{
-			{
-				ID:          brickPBSManifestInit,
-				Description: "Initialize the PBS manifest",
-				Run: func(_ context.Context, state *collectionState) error {
-					state.collector.initPBSManifest()
-					return nil
-				},
-			},
-		}, newPBSManifestBricks(root)...),
-	}, state)
-}
-
 func (c *Collector) initPBSManifest() {
 	c.pbsManifest = make(map[string]ManifestEntry)
 }
@@ -247,9 +220,17 @@ func (c *Collector) collectPBSManifestNotificationsPriv(ctx context.Context, roo
 	return nil
 }
 
-func (c *Collector) collectPBSManifestAccess(ctx context.Context, root string) error {
+func (c *Collector) collectPBSManifestUserCfg(ctx context.Context, root string) error {
 	c.setPBSManifestEntry(ctx, root, "user.cfg", "User configuration", c.config.BackupUserConfigs, "BACKUP_USER_CONFIGS")
+	return nil
+}
+
+func (c *Collector) collectPBSManifestACLCfg(ctx context.Context, root string) error {
 	c.setPBSManifestEntry(ctx, root, "acl.cfg", "ACL configuration", c.config.BackupUserConfigs, "BACKUP_USER_CONFIGS")
+	return nil
+}
+
+func (c *Collector) collectPBSManifestDomainsCfg(ctx context.Context, root string) error {
 	c.setPBSManifestEntry(ctx, root, "domains.cfg", "Auth realm configuration", c.config.BackupUserConfigs, "BACKUP_USER_CONFIGS")
 	return nil
 }
@@ -269,10 +250,22 @@ func (c *Collector) collectPBSManifestVerificationJobs(ctx context.Context, root
 	return nil
 }
 
-func (c *Collector) collectPBSManifestTape(ctx context.Context, root string) error {
+func (c *Collector) collectPBSManifestTapeCfg(ctx context.Context, root string) error {
 	c.setPBSManifestEntry(ctx, root, "tape.cfg", "Tape configuration", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
+	return nil
+}
+
+func (c *Collector) collectPBSManifestTapeJobs(ctx context.Context, root string) error {
 	c.setPBSManifestEntry(ctx, root, "tape-job.cfg", "Tape jobs", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
+	return nil
+}
+
+func (c *Collector) collectPBSManifestMediaPools(ctx context.Context, root string) error {
 	c.setPBSManifestEntry(ctx, root, "media-pool.cfg", "Media pool configuration", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
+	return nil
+}
+
+func (c *Collector) collectPBSManifestTapeEncryptionKeys(ctx context.Context, root string) error {
 	c.setPBSManifestEntry(ctx, root, "tape-encryption-keys.json", "Tape encryption keys", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
 	return nil
 }
@@ -309,157 +302,6 @@ func (c *Collector) collectPBSNodeRuntime(ctx context.Context, commandsDir strin
 	return nil
 }
 
-func (c *Collector) collectPBSDatastoreRuntime(ctx context.Context, commandsDir string, datastores []pbsDatastore) error {
-	if err := c.collectCommandMulti(ctx,
-		"proxmox-backup-manager datastore list --output-format=json",
-		filepath.Join(commandsDir, "datastore_list.json"),
-		"Datastore list",
-		false); err != nil {
-		return err
-	}
-
-	if c.config.BackupDatastoreConfigs && len(datastores) > 0 {
-		for _, ds := range datastores {
-			if ds.isOverride() {
-				c.logger.Debug("Skipping datastore status for %s (path=%s): no PBS datastore identity", ds.Name, ds.Path)
-				continue
-			}
-			cliName := ds.cliName()
-			if cliName == "" {
-				c.logger.Debug("Skipping datastore status for %s (path=%s): empty PBS datastore identity", ds.Name, ds.Path)
-				continue
-			}
-			dsKey := ds.pathKey()
-			c.safeCmdOutput(ctx,
-				fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", cliName),
-				filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", dsKey)),
-				fmt.Sprintf("Datastore %s status", ds.Name),
-				false)
-		}
-	}
-
-	return nil
-}
-
-func (c *Collector) collectPBSAcmeRuntime(ctx context.Context, commandsDir string) error {
-	if c.config.BackupPBSAcmeAccounts || c.config.BackupPBSAcmePlugins {
-		c.collectPBSAcmeSnapshots(ctx, commandsDir)
-	}
-	return nil
-}
-
-func (c *Collector) collectPBSNotificationRuntime(ctx context.Context, commandsDir string) error {
-	if c.config.BackupPBSNotifications {
-		c.collectPBSNotificationSnapshots(ctx, commandsDir)
-		c.writePBSNotificationSummary(commandsDir)
-	}
-	return nil
-}
-
-func (c *Collector) collectPBSAccessRuntime(ctx context.Context, commandsDir string) error {
-	if !c.config.BackupUserConfigs {
-		return nil
-	}
-
-	if err := c.collectCommandMulti(ctx,
-		"proxmox-backup-manager user list --output-format=json",
-		filepath.Join(commandsDir, "user_list.json"),
-		"User list",
-		false); err != nil {
-		return err
-	}
-
-	c.collectPBSRealmSnapshots(ctx, commandsDir)
-
-	if err := c.collectCommandMulti(ctx,
-		"proxmox-backup-manager acl list --output-format=json",
-		filepath.Join(commandsDir, "acl_list.json"),
-		"ACL list",
-		false); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (c *Collector) collectPBSRemoteJobsRuntime(ctx context.Context, commandsDir string) error {
-	if c.config.BackupRemoteConfigs {
-		if err := c.collectCommandMulti(ctx,
-			"proxmox-backup-manager remote list --output-format=json",
-			filepath.Join(commandsDir, "remote_list.json"),
-			"Remote list",
-			false); err != nil {
-			return err
-		}
-	}
-	if c.config.BackupSyncJobs {
-		if err := c.collectCommandMulti(ctx,
-			"proxmox-backup-manager sync-job list --output-format=json",
-			filepath.Join(commandsDir, "sync_jobs.json"),
-			"Sync jobs",
-			false); err != nil {
-			return err
-		}
-	}
-	if c.config.BackupVerificationJobs {
-		if err := c.collectCommandMulti(ctx,
-			"proxmox-backup-manager verify-job list --output-format=json",
-			filepath.Join(commandsDir, "verification_jobs.json"),
-			"Verification jobs",
-			false); err != nil {
-			return err
-		}
-	}
-	if c.config.BackupPruneSchedules {
-		if err := c.collectCommandMulti(ctx,
-			"proxmox-backup-manager prune-job list --output-format=json",
-			filepath.Join(commandsDir, "prune_jobs.json"),
-			"Prune jobs",
-			false); err != nil {
-			return err
-		}
-	}
-
-	c.safeCmdOutput(ctx,
-		"proxmox-backup-manager garbage-collection list --output-format=json",
-		filepath.Join(commandsDir, "gc_jobs.json"),
-		"Garbage collection jobs",
-		false)
-
-	return nil
-}
-
-func (c *Collector) collectPBSTapeRuntime(ctx context.Context, commandsDir string) error {
-	if !c.config.BackupTapeConfigs {
-		return nil
-	}
-
-	if hasTape, err := c.hasTapeSupport(ctx); err != nil {
-		if ctx.Err() != nil {
-			return err
-		}
-		c.logger.Debug("Skipping tape details collection: %v", err)
-	} else if hasTape {
-		c.safeCmdOutput(ctx,
-			"proxmox-tape drive list --output-format=json",
-			filepath.Join(commandsDir, "tape_drives.json"),
-			"Tape drives",
-			false)
-		c.safeCmdOutput(ctx,
-			"proxmox-tape changer list --output-format=json",
-			filepath.Join(commandsDir, "tape_changers.json"),
-			"Tape changers",
-			false)
-		c.safeCmdOutput(ctx,
-			"proxmox-tape pool list --output-format=json",
-			filepath.Join(commandsDir, "tape_pools.json"),
-			"Tape pools",
-			false)
-	}
-
-	return nil
-}
-
 func (c *Collector) collectPBSNetworkRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupPBSNetworkConfig {
 		c.safeCmdOutput(ctx,
@@ -467,45 +309,6 @@ func (c *Collector) collectPBSNetworkRuntime(ctx context.Context, commandsDir st
 			filepath.Join(commandsDir, "network_list.json"),
 			"Network configuration",
 			false)
-	}
-	return nil
-}
-
-func (c *Collector) collectPBSHostStateRuntime(ctx context.Context, commandsDir string) error {
-	c.safeCmdOutput(ctx,
-		"proxmox-backup-manager disk list --output-format=json",
-		filepath.Join(commandsDir, "disk_list.json"),
-		"Disk list",
-		false)
-
-	if err := c.collectCommandMulti(ctx,
-		"proxmox-backup-manager cert info",
-		filepath.Join(commandsDir, "cert_info.txt"),
-		"Certificate information",
-		false); err != nil {
-		return err
-	}
-
-	if c.config.BackupPBSTrafficControl {
-		c.safeCmdOutput(ctx,
-			"proxmox-backup-manager traffic-control list --output-format=json",
-			filepath.Join(commandsDir, "traffic_control.json"),
-			"Traffic control rules",
-			false)
-	}
-
-	c.safeCmdOutput(ctx,
-		"proxmox-backup-manager task list --limit 50 --output-format=json",
-		filepath.Join(commandsDir, "recent_tasks.json"),
-		"Recent tasks",
-		false)
-
-	return nil
-}
-
-func (c *Collector) collectPBSS3Runtime(ctx context.Context, commandsDir string) error {
-	if c.config.BackupDatastoreConfigs && c.config.BackupPBSS3Endpoints {
-		c.collectPBSS3Snapshots(ctx, commandsDir)
 	}
 	return nil
 }
@@ -630,20 +433,31 @@ func (c *Collector) collectPBSNotificationMatchersRuntime(ctx context.Context, c
 		false)
 }
 
-func (c *Collector) collectPBSNotificationEndpointsRuntime(ctx context.Context, commandsDir string) error {
+func (c *Collector) collectPBSNotificationEndpointRuntime(ctx context.Context, commandsDir, typ string) error {
 	if !c.config.BackupPBSNotifications {
 		return nil
 	}
-	for _, typ := range []string{"smtp", "sendmail", "gotify", "webhook"} {
-		if err := c.collectCommandMulti(ctx,
-			fmt.Sprintf("proxmox-backup-manager notification endpoint %s list --output-format=json", typ),
-			filepath.Join(commandsDir, fmt.Sprintf("notification_endpoints_%s.json", typ)),
-			fmt.Sprintf("Notification endpoints (%s)", typ),
-			false); err != nil {
-			return err
-		}
-	}
-	return nil
+	return c.collectCommandMulti(ctx,
+		fmt.Sprintf("proxmox-backup-manager notification endpoint %s list --output-format=json", typ),
+		filepath.Join(commandsDir, fmt.Sprintf("notification_endpoints_%s.json", typ)),
+		fmt.Sprintf("Notification endpoints (%s)", typ),
+		false)
+}
+
+func (c *Collector) collectPBSNotificationEndpointSMTPRuntime(ctx context.Context, commandsDir string) error {
+	return c.collectPBSNotificationEndpointRuntime(ctx, commandsDir, "smtp")
+}
+
+func (c *Collector) collectPBSNotificationEndpointSendmailRuntime(ctx context.Context, commandsDir string) error {
+	return c.collectPBSNotificationEndpointRuntime(ctx, commandsDir, "sendmail")
+}
+
+func (c *Collector) collectPBSNotificationEndpointGotifyRuntime(ctx context.Context, commandsDir string) error {
+	return c.collectPBSNotificationEndpointRuntime(ctx, commandsDir, "gotify")
+}
+
+func (c *Collector) collectPBSNotificationEndpointWebhookRuntime(ctx context.Context, commandsDir string) error {
+	return c.collectPBSNotificationEndpointRuntime(ctx, commandsDir, "webhook")
 }
 
 func (c *Collector) collectPBSAccessUsersRuntime(ctx context.Context, commandsDir string) ([]string, error) {
@@ -665,24 +479,23 @@ func (c *Collector) collectPBSAccessUsersRuntime(ctx context.Context, commandsDi
 	return ids, nil
 }
 
-func (c *Collector) collectPBSAccessRealmsRuntime(ctx context.Context, commandsDir string) error {
+func (c *Collector) collectPBSAccessRealmRuntime(ctx context.Context, commandsDir, cmd, out, desc string) error {
 	if !c.config.BackupUserConfigs {
 		return nil
 	}
-	for _, realm := range []struct {
-		cmd  string
-		out  string
-		desc string
-	}{
-		{cmd: "proxmox-backup-manager ldap list --output-format=json", out: "realms_ldap.json", desc: "LDAP realms"},
-		{cmd: "proxmox-backup-manager ad list --output-format=json", out: "realms_ad.json", desc: "Active Directory realms"},
-		{cmd: "proxmox-backup-manager openid list --output-format=json", out: "realms_openid.json", desc: "OpenID realms"},
-	} {
-		if err := c.collectCommandMulti(ctx, realm.cmd, filepath.Join(commandsDir, realm.out), realm.desc, false); err != nil {
-			return err
-		}
-	}
-	return nil
+	return c.collectCommandMulti(ctx, cmd, filepath.Join(commandsDir, out), desc, false)
+}
+
+func (c *Collector) collectPBSAccessRealmLDAPRuntime(ctx context.Context, commandsDir string) error {
+	return c.collectPBSAccessRealmRuntime(ctx, commandsDir, "proxmox-backup-manager ldap list --output-format=json", "realms_ldap.json", "LDAP realms")
+}
+
+func (c *Collector) collectPBSAccessRealmADRuntime(ctx context.Context, commandsDir string) error {
+	return c.collectPBSAccessRealmRuntime(ctx, commandsDir, "proxmox-backup-manager ad list --output-format=json", "realms_ad.json", "Active Directory realms")
+}
+
+func (c *Collector) collectPBSAccessRealmOpenIDRuntime(ctx context.Context, commandsDir string) error {
+	return c.collectPBSAccessRealmRuntime(ctx, commandsDir, "proxmox-backup-manager openid list --output-format=json", "realms_openid.json", "OpenID realms")
 }
 
 func (c *Collector) collectPBSAccessACLRuntime(ctx context.Context, commandsDir string) error {
@@ -924,193 +737,24 @@ func parsePBSStringFieldList(raw []byte, field string) ([]string, error) {
 	return uniqueSortedStrings(values), nil
 }
 
-func (c *Collector) collectPBSAcmeSnapshots(ctx context.Context, commandsDir string) {
-	accountsPath := filepath.Join(commandsDir, "acme_accounts.json")
-	if err := c.collectCommandMulti(ctx,
-		"proxmox-backup-manager acme account list --output-format=json",
-		accountsPath,
-		"ACME accounts",
-		false,
-	); err != nil {
-		c.logger.Debug("ACME accounts snapshot skipped: %v", err)
-	}
-
-	pluginsPath := filepath.Join(commandsDir, "acme_plugins.json")
-	if err := c.collectCommandMulti(ctx,
-		"proxmox-backup-manager acme plugin list --output-format=json",
-		pluginsPath,
-		"ACME plugins",
-		false,
-	); err != nil {
-		c.logger.Debug("ACME plugins snapshot skipped: %v", err)
-	}
-
-	type acmeAccount struct {
-		Name string `json:"name"`
-	}
-	if raw, err := os.ReadFile(accountsPath); err == nil && len(raw) > 0 {
-		var accounts []acmeAccount
-		if err := json.Unmarshal(raw, &accounts); err == nil {
-			for _, account := range accounts {
-				name := strings.TrimSpace(account.Name)
-				if name == "" {
-					continue
-				}
-				out := filepath.Join(commandsDir, fmt.Sprintf("acme_account_%s_info.json", sanitizeFilename(name)))
-				_ = c.collectCommandMulti(ctx,
-					fmt.Sprintf("proxmox-backup-manager acme account info %s --output-format=json", name),
-					out,
-					fmt.Sprintf("ACME account info (%s)", name),
-					false)
-			}
-		}
-	}
-
-	type acmePlugin struct {
-		ID string `json:"id"`
-	}
-	if raw, err := os.ReadFile(pluginsPath); err == nil && len(raw) > 0 {
-		var plugins []acmePlugin
-		if err := json.Unmarshal(raw, &plugins); err == nil {
-			for _, plugin := range plugins {
-				id := strings.TrimSpace(plugin.ID)
-				if id == "" {
-					continue
-				}
-				out := filepath.Join(commandsDir, fmt.Sprintf("acme_plugin_%s_config.json", sanitizeFilename(id)))
-				_ = c.collectCommandMulti(ctx,
-					fmt.Sprintf("proxmox-backup-manager acme plugin config %s --output-format=json", id),
-					out,
-					fmt.Sprintf("ACME plugin config (%s)", id),
-					false)
-			}
-		}
-	}
-}
-
-func (c *Collector) collectPBSNotificationSnapshots(ctx context.Context, commandsDir string) {
-	_ = c.collectCommandMulti(ctx,
-		"proxmox-backup-manager notification target list --output-format=json",
-		filepath.Join(commandsDir, "notification_targets.json"),
-		"Notification targets",
-		false)
-
-	_ = c.collectCommandMulti(ctx,
-		"proxmox-backup-manager notification matcher list --output-format=json",
-		filepath.Join(commandsDir, "notification_matchers.json"),
-		"Notification matchers",
-		false)
-
-	for _, typ := range []string{"smtp", "sendmail", "gotify", "webhook"} {
-		_ = c.collectCommandMulti(ctx,
-			fmt.Sprintf("proxmox-backup-manager notification endpoint %s list --output-format=json", typ),
-			filepath.Join(commandsDir, fmt.Sprintf("notification_endpoints_%s.json", typ)),
-			fmt.Sprintf("Notification endpoints (%s)", typ),
-			false)
-	}
-}
-
-func (c *Collector) collectPBSRealmSnapshots(ctx context.Context, commandsDir string) {
-	for _, realm := range []struct {
-		cmd  string
-		out  string
-		desc string
-	}{
-		{
-			cmd:  "proxmox-backup-manager ldap list --output-format=json",
-			out:  "realms_ldap.json",
-			desc: "LDAP realms",
-		},
-		{
-			cmd:  "proxmox-backup-manager ad list --output-format=json",
-			out:  "realms_ad.json",
-			desc: "Active Directory realms",
-		},
-		{
-			cmd:  "proxmox-backup-manager openid list --output-format=json",
-			out:  "realms_openid.json",
-			desc: "OpenID realms",
-		},
-	} {
-		_ = c.collectCommandMulti(ctx,
-			realm.cmd,
-			filepath.Join(commandsDir, realm.out),
-			realm.desc,
-			false)
-	}
-}
-
-func (c *Collector) collectPBSS3Snapshots(ctx context.Context, commandsDir string) {
-	endpointsPath := filepath.Join(commandsDir, "s3_endpoints.json")
-	if err := c.collectCommandMulti(ctx,
-		"proxmox-backup-manager s3 endpoint list --output-format=json",
-		endpointsPath,
-		"S3 endpoints",
-		false,
-	); err != nil {
-		c.logger.Debug("S3 endpoints snapshot skipped: %v", err)
-	}
-
-	type s3Endpoint struct {
-		ID string `json:"id"`
-	}
-	raw, err := os.ReadFile(endpointsPath)
-	if err != nil || len(raw) == 0 {
-		return
-	}
-	var endpoints []s3Endpoint
-	if err := json.Unmarshal(raw, &endpoints); err != nil {
-		return
-	}
-
-	for _, endpoint := range endpoints {
-		id := strings.TrimSpace(endpoint.ID)
-		if id == "" {
-			continue
-		}
-		// Best-effort: may require network and may not exist on older versions.
-		out := filepath.Join(commandsDir, fmt.Sprintf("s3_endpoint_%s_buckets.json", sanitizeFilename(id)))
-		_ = c.collectCommandMulti(ctx,
-			fmt.Sprintf("proxmox-backup-manager s3 endpoint list-buckets %s --output-format=json", id),
-			out,
-			fmt.Sprintf("S3 endpoint buckets (%s)", id),
-			false)
-	}
-}
-
-// collectUserConfigs collects user and ACL configurations
-func (c *Collector) collectUserConfigs(ctx context.Context) error {
-	c.logger.Debug("Collecting PBS user and ACL information")
-	usersDir, err := c.ensurePBSAccessControlDir()
-	if err != nil {
-		return err
-	}
-	c.collectUserTokens(ctx, usersDir)
-
-	c.logger.Debug("PBS user information collection completed")
-	return nil
-}
-
-func (c *Collector) collectUserTokens(ctx context.Context, usersDir string) {
-	c.logger.Debug("Collecting PBS API tokens for configured users")
-	userListPath := filepath.Join(c.proxsaveCommandsDir("pbs"), "user_list.json")
+func (c *Collector) loadPBSUserIDsFromCommandFile(commandsDir string) ([]string, error) {
+	userListPath := filepath.Join(commandsDir, "user_list.json")
 	data, err := os.ReadFile(userListPath)
 	if err != nil {
-		c.logger.Debug("User list not available for token export: %v", err)
-		return
+		return nil, err
 	}
-	userIDs, err := parsePBSStringFieldList(data, "userid")
-	if err != nil {
-		c.logger.Debug("Failed to parse user list for token export: %v", err)
-		return
+	return parsePBSStringFieldList(data, "userid")
+}
+
+// collectUserConfigs keeps the legacy adapter but delegates to a recipe-backed access/token flow.
+func (c *Collector) collectUserConfigs(ctx context.Context) error {
+	c.logger.Debug("Collecting PBS user and ACL information")
+	state := newCollectionState(c)
+	if err := runRecipe(ctx, newPBSUserConfigRecipe(), state); err != nil {
+		return err
 	}
-	if _, err := c.collectPBSUserTokensForIDs(ctx, usersDir, userIDs); err != nil {
-		c.logger.Debug("Failed to collect per-user PBS tokens: %v", err)
-		return
-	}
-	if err := c.writePBSAggregatedTokensFromUserFiles(usersDir, userIDs); err != nil {
-		c.logger.Debug("Failed to write aggregated tokens.json: %v", err)
-	}
+	c.logger.Debug("PBS user information collection completed")
+	return nil
 }
 
 func (c *Collector) collectPBSUserTokensForIDs(ctx context.Context, usersDir string, userIDs []string) (map[string]json.RawMessage, error) {

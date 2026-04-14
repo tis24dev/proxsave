@@ -42,6 +42,20 @@ type pbsDatastore struct {
 	OutputKey      string
 }
 
+type pbsDatastoreConfigState struct {
+	datastores       []pbsDatastore
+	namespaceResults map[string][]pbs.Namespace
+	datastoreDir     string
+}
+
+type pbsPxarState struct {
+	eligible     []pbsDatastore
+	metaRoot     string
+	selectedRoot string
+	smallRoot    string
+	ioTimeout    time.Duration
+}
+
 func normalizePBSDatastorePath(path string) string {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
@@ -298,54 +312,92 @@ func (ds pbsDatastore) inventoryOrigin() string {
 	return pbsDatastoreSourceCLI
 }
 
-// collectDatastoreConfigs collects detailed datastore configurations
-func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pbsDatastore) error {
+func (c *Collector) preparePBSDatastoreConfigState(datastores []pbsDatastore) (*pbsDatastoreConfigState, error) {
 	if len(datastores) == 0 {
 		c.logger.Debug("No datastores found")
-		return nil
+		return &pbsDatastoreConfigState{
+			namespaceResults: make(map[string][]pbs.Namespace),
+		}, nil
 	}
+
 	datastores = clonePBSDatastores(datastores)
 	assignUniquePBSDatastoreOutputKeys(datastores)
-	c.logger.Debug("Collecting datastore details for %d datastores", len(datastores))
 
 	datastoreDir := c.proxsaveInfoDir("pbs", "datastores")
 	if err := c.ensureDir(datastoreDir); err != nil {
-		return fmt.Errorf("failed to create datastores directory: %w", err)
+		return nil, fmt.Errorf("failed to create datastores directory: %w", err)
 	}
 
-	for _, ds := range datastores {
-		dsKey := ds.pathKey()
+	return &pbsDatastoreConfigState{
+		datastores:       datastores,
+		namespaceResults: make(map[string][]pbs.Namespace, len(datastores)),
+		datastoreDir:     datastoreDir,
+	}, nil
+}
 
+// collectDatastoreConfigs remains as a thin compatibility adapter for tests.
+func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pbsDatastore) error {
+	state := newCollectionState(c)
+	if len(datastores) > 0 {
+		state.pbs.datastores = clonePBSDatastores(datastores)
+		assignUniquePBSDatastoreOutputKeys(state.pbs.datastores)
+	}
+	if err := runRecipe(ctx, newPBSDatastoreConfigRecipe(), state); err != nil {
+		return err
+	}
+	c.logger.Debug("Datastore configuration collection completed")
+	return nil
+}
+
+func (c *Collector) collectPBSDatastoreCLIConfigs(ctx context.Context, state *pbsDatastoreConfigState) error {
+	if state == nil || len(state.datastores) == 0 {
+		return nil
+	}
+	c.logger.Debug("Collecting datastore CLI configuration for %d datastores", len(state.datastores))
+	for _, ds := range state.datastores {
+		dsKey := ds.pathKey()
 		if cliName := ds.cliName(); cliName != "" && !ds.isOverride() {
-			// Get datastore configuration details for CLI-backed datastores only.
 			c.safeCmdOutput(ctx,
 				fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", cliName),
-				filepath.Join(datastoreDir, fmt.Sprintf("%s_config.json", dsKey)),
+				filepath.Join(state.datastoreDir, fmt.Sprintf("%s_config.json", dsKey)),
 				fmt.Sprintf("Datastore %s configuration", ds.Name),
 				false)
-		} else {
-			c.logger.Debug("Skipping datastore CLI config for %s (path=%s): no PBS datastore identity", ds.Name, ds.Path)
+			continue
 		}
-
-		// Get namespace list using CLI/Filesystem fallback
-		if err := c.collectDatastoreNamespaces(ctx, ds, datastoreDir); err != nil {
-			c.logger.Debug("Failed to collect namespaces for datastore %s: %v", ds.Name, err)
-		}
+		c.logger.Debug("Skipping datastore CLI config for %s (path=%s): no PBS datastore identity", ds.Name, ds.Path)
 	}
+	return nil
+}
 
-	c.logger.Debug("Datastore configuration collection completed")
+func (c *Collector) collectPBSDatastoreNamespaces(ctx context.Context, state *pbsDatastoreConfigState) error {
+	if state == nil || len(state.datastores) == 0 {
+		return nil
+	}
+	for _, ds := range state.datastores {
+		namespaces, err := c.collectDatastoreNamespacesSnapshot(ctx, ds, state.datastoreDir)
+		if err != nil {
+			c.logger.Debug("Failed to collect namespaces for datastore %s: %v", ds.Name, err)
+			continue
+		}
+		state.namespaceResults[ds.pathKey()] = namespaces
+	}
 	return nil
 }
 
 // collectDatastoreNamespaces collects namespace information for a datastore
 // using CLI first, then filesystem fallback.
 func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatastore, datastoreDir string) error {
+	_, err := c.collectDatastoreNamespacesSnapshot(ctx, ds, datastoreDir)
+	return err
+}
+
+func (c *Collector) collectDatastoreNamespacesSnapshot(ctx context.Context, ds pbsDatastore, datastoreDir string) ([]pbs.Namespace, error) {
 	c.logger.Debug("Collecting namespaces for datastore %s (path: %s)", ds.Name, ds.Path)
 	// Write location is deterministic; if excluded, skip the whole operation.
 	outputPath := filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.pathKey()))
 	if c.shouldExclude(outputPath) {
 		c.incFilesSkipped()
-		return nil
+		return nil, nil
 	}
 
 	ioTimeout := time.Duration(0)
@@ -365,17 +417,17 @@ func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatast
 		namespaces, fromFallback, err = listNamespacesFunc(ctx, ds.cliName(), ds.Path, ioTimeout)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Write namespaces to JSON file
 	data, err := json.MarshalIndent(namespaces, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal namespaces: %w", err)
+		return nil, fmt.Errorf("failed to marshal namespaces: %w", err)
 	}
 
 	if err := c.writeReportFile(outputPath, data); err != nil {
-		return fmt.Errorf("failed to write namespaces file: %w", err)
+		return nil, fmt.Errorf("failed to write namespaces file: %w", err)
 	}
 
 	if fromFallback {
@@ -383,20 +435,71 @@ func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatast
 	} else {
 		c.logger.Debug("Successfully collected %d namespaces for datastore %s via CLI", len(namespaces), ds.Name)
 	}
-	return nil
+	return namespaces, nil
 }
 
-func (c *Collector) collectPBSPxarMetadata(ctx context.Context, datastores []pbsDatastore) error {
+func (c *Collector) preparePBSPXARState(ctx context.Context, datastores []pbsDatastore) (*pbsPxarState, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
+	}
+	if len(datastores) == 0 {
+		return &pbsPxarState{}, nil
 	}
 
-	if len(datastores) == 0 {
-		return nil
-	}
 	datastores = clonePBSDatastores(datastores)
 	assignUniquePBSDatastoreOutputKeys(datastores)
-	c.logger.Debug("Collecting PXAR metadata for %d datastores", len(datastores))
+
+	ioTimeout := time.Duration(0)
+	if c.config != nil && c.config.FsIoTimeoutSeconds > 0 {
+		ioTimeout = time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
+	}
+
+	pxarRoot := c.proxsaveInfoDir("pbs", "pxar")
+	metaRoot := filepath.Join(pxarRoot, "metadata")
+	if err := c.ensureDir(metaRoot); err != nil {
+		return nil, fmt.Errorf("failed to create PXAR metadata directory: %w", err)
+	}
+	selectedRoot := filepath.Join(pxarRoot, "selected")
+	if err := c.ensureDir(selectedRoot); err != nil {
+		return nil, fmt.Errorf("failed to create selected_pxar directory: %w", err)
+	}
+	smallRoot := filepath.Join(pxarRoot, "small")
+	if err := c.ensureDir(smallRoot); err != nil {
+		return nil, fmt.Errorf("failed to create small_pxar directory: %w", err)
+	}
+
+	eligible := make([]pbsDatastore, 0, len(datastores))
+	for _, ds := range datastores {
+		if ds.Path == "" {
+			continue
+		}
+		stat, err := safefs.Stat(ctx, ds.Path, ioTimeout)
+		if err != nil {
+			if errors.Is(err, safefs.ErrTimeout) {
+				c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): filesystem probe timed out (%v)", ds.Name, ds.Path, err)
+				continue
+			}
+			c.logger.Debug("Skipping PXAR metadata for datastore %s (path not accessible: %s): %v", ds.Name, ds.Path, err)
+			continue
+		}
+		if !stat.IsDir() {
+			c.logger.Debug("Skipping PXAR metadata for datastore %s (path not a directory: %s)", ds.Name, ds.Path)
+			continue
+		}
+		dsKey := ds.pathKey()
+		for _, base := range []string{
+			filepath.Join(selectedRoot, dsKey, "vm"),
+			filepath.Join(selectedRoot, dsKey, "ct"),
+			filepath.Join(smallRoot, dsKey, "vm"),
+			filepath.Join(smallRoot, dsKey, "ct"),
+		} {
+			if err := c.ensureDir(base); err != nil {
+				c.logger.Debug("Failed to prepare PXAR directory %s: %v", base, err)
+			}
+		}
+		eligible = append(eligible, ds)
+	}
+
 	dsWorkers := c.config.PxarDatastoreConcurrency
 	if dsWorkers <= 0 {
 		dsWorkers = 1
@@ -407,40 +510,85 @@ func (c *Collector) collectPBSPxarMetadata(ctx context.Context, datastores []pbs
 	}
 	c.logger.Debug("PXAR metadata concurrency: datastores=%s", mode)
 
-	pxarRoot := c.proxsaveInfoDir("pbs", "pxar")
-	metaRoot := filepath.Join(pxarRoot, "metadata")
-	if err := c.ensureDir(metaRoot); err != nil {
-		return fmt.Errorf("failed to create PXAR metadata directory: %w", err)
+	return &pbsPxarState{
+		eligible:     eligible,
+		metaRoot:     metaRoot,
+		selectedRoot: selectedRoot,
+		smallRoot:    smallRoot,
+		ioTimeout:    ioTimeout,
+	}, nil
+}
+
+// collectPBSPxarMetadata remains as a thin compatibility adapter for tests.
+func (c *Collector) collectPBSPxarMetadata(ctx context.Context, datastores []pbsDatastore) error {
+	pxarState, err := c.preparePBSPXARState(ctx, datastores)
+	if err != nil {
+		return err
+	}
+	if err := c.collectPBSPXARMetadataStep(ctx, pxarState); err != nil {
+		return err
+	}
+	if err := c.collectPBSPXARSubdirReportsStep(ctx, pxarState); err != nil {
+		return err
+	}
+	if err := c.collectPBSPXARVMListsStep(ctx, pxarState); err != nil {
+		return err
+	}
+	return c.collectPBSPXARCTListsStep(ctx, pxarState)
+}
+
+func (c *Collector) collectPBSPXARMetadataStep(ctx context.Context, state *pbsPxarState) error {
+	return c.runPBSPXARStep(ctx, state, func(ctx context.Context, ds pbsDatastore, state *pbsPxarState) error {
+		return c.collectPBSPXARMetadataForDatastore(ctx, ds, state)
+	})
+}
+
+func (c *Collector) collectPBSPXARSubdirReportsStep(ctx context.Context, state *pbsPxarState) error {
+	return c.runPBSPXARStep(ctx, state, func(ctx context.Context, ds pbsDatastore, state *pbsPxarState) error {
+		dsDir := filepath.Join(state.metaRoot, ds.pathKey())
+		return c.writePxarSubdirReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_subdirs.txt", ds.pathKey())), ds, state.ioTimeout)
+	})
+}
+
+func (c *Collector) collectPBSPXARVMListsStep(ctx context.Context, state *pbsPxarState) error {
+	return c.runPBSPXARStep(ctx, state, func(ctx context.Context, ds pbsDatastore, state *pbsPxarState) error {
+		dsDir := filepath.Join(state.metaRoot, ds.pathKey())
+		return c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_vm_pxar_list.txt", ds.pathKey())), ds, "vm", state.ioTimeout)
+	})
+}
+
+func (c *Collector) collectPBSPXARCTListsStep(ctx context.Context, state *pbsPxarState) error {
+	return c.runPBSPXARStep(ctx, state, func(ctx context.Context, ds pbsDatastore, state *pbsPxarState) error {
+		dsDir := filepath.Join(state.metaRoot, ds.pathKey())
+		return c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_ct_pxar_list.txt", ds.pathKey())), ds, "ct", state.ioTimeout)
+	})
+}
+
+func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn func(context.Context, pbsDatastore, *pbsPxarState) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if state == nil || len(state.eligible) == 0 {
+		return nil
 	}
 
-	selectedRoot := filepath.Join(pxarRoot, "selected")
-	if err := c.ensureDir(selectedRoot); err != nil {
-		return fmt.Errorf("failed to create selected_pxar directory: %w", err)
+	dsWorkers := c.config.PxarDatastoreConcurrency
+	if dsWorkers <= 0 {
+		dsWorkers = 1
 	}
-
-	smallRoot := filepath.Join(pxarRoot, "small")
-	if err := c.ensureDir(smallRoot); err != nil {
-		return fmt.Errorf("failed to create small_pxar directory: %w", err)
-	}
-
-	workerLimit := dsWorkers
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var (
 		wg       sync.WaitGroup
-		sem      = make(chan struct{}, workerLimit)
+		sem      = make(chan struct{}, dsWorkers)
 		errMu    sync.Mutex
 		firstErr error
 	)
 
-	for _, ds := range datastores {
+	for _, ds := range state.eligible {
 		ds := ds
-		if ds.Path == "" {
-			continue
-		}
-
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -451,7 +599,7 @@ func (c *Collector) collectPBSPxarMetadata(ctx context.Context, datastores []pbs
 			}
 			defer func() { <-sem }()
 
-			if err := c.processPxarDatastore(ctx, ds, metaRoot, selectedRoot, smallRoot); err != nil {
+			if err := fn(ctx, ds, state); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return
 				}
@@ -473,56 +621,21 @@ func (c *Collector) collectPBSPxarMetadata(ctx context.Context, datastores []pbs
 	if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
-
-	c.logger.Debug("PXAR metadata collection completed")
 	return nil
 }
 
-func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, metaRoot, selectedRoot, smallRoot string) error {
+func (c *Collector) collectPBSPXARMetadataForDatastore(ctx context.Context, ds pbsDatastore, state *pbsPxarState) error {
 	if err := ctx.Err(); err != nil {
 		return err
-	}
-	if ds.Path == "" {
-		return nil
-	}
-
-	ioTimeout := time.Duration(0)
-	if c.config != nil && c.config.FsIoTimeoutSeconds > 0 {
-		ioTimeout = time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
-	}
-
-	stat, err := safefs.Stat(ctx, ds.Path, ioTimeout)
-	if err != nil {
-		if errors.Is(err, safefs.ErrTimeout) {
-			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): filesystem probe timed out (%v)", ds.Name, ds.Path, err)
-			return nil
-		}
-		c.logger.Debug("Skipping PXAR metadata for datastore %s (path not accessible: %s): %v", ds.Name, ds.Path, err)
-		return nil
-	}
-	if !stat.IsDir() {
-		c.logger.Debug("Skipping PXAR metadata for datastore %s (path not a directory: %s)", ds.Name, ds.Path)
-		return nil
 	}
 
 	start := time.Now()
 	c.logger.Debug("PXAR: scanning datastore %s at %s", ds.Name, ds.Path)
 
 	dsKey := ds.pathKey()
-	dsDir := filepath.Join(metaRoot, dsKey)
+	dsDir := filepath.Join(state.metaRoot, dsKey)
 	if err := c.ensureDir(dsDir); err != nil {
 		return fmt.Errorf("failed to create PXAR metadata directory for %s: %w", ds.Name, err)
-	}
-
-	for _, base := range []string{
-		filepath.Join(selectedRoot, dsKey, "vm"),
-		filepath.Join(selectedRoot, dsKey, "ct"),
-		filepath.Join(smallRoot, dsKey, "vm"),
-		filepath.Join(smallRoot, dsKey, "ct"),
-	} {
-		if err := c.ensureDir(base); err != nil {
-			c.logger.Debug("Failed to prepare PXAR directory %s: %v", base, err)
-		}
 	}
 
 	meta := struct {
@@ -539,7 +652,7 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 		ScannedAt: time.Now(),
 	}
 
-	if dirs, err := c.sampleDirectoriesBounded(ctx, ds.Path, 2, 30, ioTimeout); errors.Is(err, safefs.ErrTimeout) {
+	if dirs, err := c.sampleDirectoriesBounded(ctx, ds.Path, 2, 30, state.ioTimeout); errors.Is(err, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): directory sampling timed out (%v)", ds.Name, ds.Path, err)
 		return nil
 	} else if err == nil && len(dirs) > 0 {
@@ -554,7 +667,7 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 		includePatterns = []string{"*.pxar", "*.pxar.*", "catalog.pxar", "catalog.pxar.*"}
 	}
 	excludePatterns := c.config.PxarFileExcludePatterns
-	if files, err := c.sampleFilesBounded(ctx, ds.Path, includePatterns, excludePatterns, 8, 200, ioTimeout); errors.Is(err, safefs.ErrTimeout) {
+	if files, err := c.sampleFilesBounded(ctx, ds.Path, includePatterns, excludePatterns, 8, 200, state.ioTimeout); errors.Is(err, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): file sampling timed out (%v)", ds.Name, ds.Path, err)
 		return nil
 	} else if err == nil && len(files) > 0 {
@@ -570,30 +683,6 @@ func (c *Collector) processPxarDatastore(ctx context.Context, ds pbsDatastore, m
 	}
 
 	if err := c.writeReportFile(filepath.Join(dsDir, "metadata.json"), data); err != nil {
-		return err
-	}
-
-	if err := c.writePxarSubdirReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_subdirs.txt", dsKey)), ds, ioTimeout); err != nil {
-		if errors.Is(err, safefs.ErrTimeout) {
-			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): subdir report timed out (%v)", ds.Name, ds.Path, err)
-			return nil
-		}
-		return err
-	}
-
-	if err := c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_vm_pxar_list.txt", dsKey)), ds, "vm", ioTimeout); err != nil {
-		if errors.Is(err, safefs.ErrTimeout) {
-			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): VM list report timed out (%v)", ds.Name, ds.Path, err)
-			return nil
-		}
-		return err
-	}
-
-	if err := c.writePxarListReport(ctx, filepath.Join(dsDir, fmt.Sprintf("%s_ct_pxar_list.txt", dsKey)), ds, "ct", ioTimeout); err != nil {
-		if errors.Is(err, safefs.ErrTimeout) {
-			c.logger.Warning("Skipping PXAR metadata for datastore %s (path=%s): CT list report timed out (%v)", ds.Name, ds.Path, err)
-			return nil
-		}
 		return err
 	}
 

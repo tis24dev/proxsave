@@ -175,11 +175,16 @@ func TestNewPBSRecipeOrder(t *testing.T) {
 		brickPBSManifestTrafficControl,
 		brickPBSManifestNotifications,
 		brickPBSManifestNotificationsPriv,
-		brickPBSManifestAccess,
+		brickPBSManifestUserCfg,
+		brickPBSManifestACLCfg,
+		brickPBSManifestDomainsCfg,
 		brickPBSManifestRemote,
 		brickPBSManifestSyncJobs,
 		brickPBSManifestVerificationJobs,
-		brickPBSManifestTape,
+		brickPBSManifestTapeCfg,
+		brickPBSManifestTapeJobs,
+		brickPBSManifestMediaPools,
+		brickPBSManifestTapeEncryptionKeys,
 		brickPBSManifestNetwork,
 		brickPBSManifestPrune,
 		brickPBSRuntimeCore,
@@ -192,10 +197,15 @@ func TestNewPBSRecipeOrder(t *testing.T) {
 		brickPBSRuntimeACMEPluginConfig,
 		brickPBSRuntimeNotificationTargets,
 		brickPBSRuntimeNotificationMatchers,
-		brickPBSRuntimeNotificationEndpoints,
+		brickPBSRuntimeNotificationEndpointSMTP,
+		brickPBSRuntimeNotificationEndpointSendmail,
+		brickPBSRuntimeNotificationEndpointGotify,
+		brickPBSRuntimeNotificationEndpointWebhook,
 		brickPBSRuntimeNotificationSummary,
 		brickPBSRuntimeAccessUsers,
-		brickPBSRuntimeAccessRealms,
+		brickPBSRuntimeAccessRealmsLDAP,
+		brickPBSRuntimeAccessRealmsAD,
+		brickPBSRuntimeAccessRealmsOpenID,
 		brickPBSRuntimeAccessACL,
 		brickPBSRuntimeAccessUserTokens,
 		brickPBSRuntimeAccessTokensAggregate,
@@ -215,21 +225,37 @@ func TestNewPBSRecipeOrder(t *testing.T) {
 		brickPBSRuntimeRecentTasks,
 		brickPBSRuntimeS3Endpoints,
 		brickPBSRuntimeS3EndpointBuckets,
-		brickPBSStorageStackDirsSnapshot,
+		brickPBSStorageStackISCSISnapshot,
+		brickPBSStorageStackMultipathSnapshot,
+		brickPBSStorageStackMDADMSnapshot,
+		brickPBSStorageStackLVMSnapshot,
+		brickPBSStorageStackZFSSnapshot,
 		brickPBSStorageStackMountUnitsSnapshot,
 		brickPBSStorageStackAutofsSnapshot,
 		brickPBSStorageStackReferencedFiles,
 		brickPBSInventoryInit,
-		brickPBSInventoryBaseFiles,
-		brickPBSInventoryBaseDirs,
-		brickPBSInventoryMountUnits,
+		brickPBSInventoryMountFiles,
+		brickPBSInventoryOSFiles,
+		brickPBSInventoryMultipathFiles,
+		brickPBSInventoryISCSIFiles,
+		brickPBSInventoryAutofsFiles,
+		brickPBSInventoryZFSFiles,
+		brickPBSInventoryLVMDirs,
+		brickPBSInventorySystemdMountUnits,
 		brickPBSInventoryReferencedFiles,
-		brickPBSInventoryHostCommands,
+		brickPBSInventoryHostCommandsCore,
+		brickPBSInventoryHostCommandsStorage,
+		brickPBSInventoryHostCommandsZFS,
 		brickPBSInventoryCommandFiles,
 		brickPBSInventoryDatastores,
 		brickPBSInventoryWrite,
-		brickPBSDatastoreConfigs,
-		brickPBSPXAR,
+		brickPBSDatastoreCLIConfigs,
+		brickPBSDatastoreNamespaces,
+		brickPBSPXARPrepare,
+		brickPBSPXARMetadata,
+		brickPBSPXARSubdirReports,
+		brickPBSPXARVMLists,
+		brickPBSPXARCTLists,
 		brickPBSFinalizeSummary,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -491,8 +517,17 @@ func TestPBSInventoryInitBrickBuildsInventoryState(t *testing.T) {
 	if err := os.MkdirAll(pbsRoot, 0o755); err != nil {
 		t.Fatalf("mkdir pbs root: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(pbsRoot, "datastore.cfg"), []byte("datastore: store1\npath /data/store1\n"), 0o640); err != nil {
 		t.Fatalf("write datastore.cfg: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "fstab"), []byte("/dev/sda1 / ext4 defaults 0 1\n"), 0o644); err != nil {
+		t.Fatalf("write fstab: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "crypttab"), []byte("crypt1 UUID=abcd /etc/keys/disk.key luks\n"), 0o644); err != nil {
+		t.Fatalf("write crypttab: %v", err)
 	}
 
 	collector := newTestCollector(t)
@@ -513,6 +548,118 @@ func TestPBSInventoryInitBrickBuildsInventoryState(t *testing.T) {
 	}
 	if _, ok := state.pbs.inventory.report.Files["pbs_datastore_cfg"]; !ok {
 		t.Fatalf("expected datastore cfg snapshot in inventory state")
+	}
+	if !reflect.DeepEqual(state.pbs.inventory.referencedFiles, []string{"/etc/keys/disk.key"}) {
+		t.Fatalf("referenced files = %v", state.pbs.inventory.referencedFiles)
+	}
+}
+
+func TestPBSDatastoreCLIConfigsBrickPreparesConfigState(t *testing.T) {
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte(`{}`), nil
+		},
+	})
+	collector.proxType = "pbs"
+
+	state := newCollectionState(collector)
+	state.pbs.datastores = []pbsDatastore{{Name: "store1", Path: "/data/store1", CLIName: "store1"}}
+
+	brick := requireBrick(t, newPBSRecipe(), brickPBSDatastoreCLIConfigs)
+	if err := brick.Run(context.Background(), state); err != nil {
+		t.Fatalf("pbs datastore cli configs brick failed: %v", err)
+	}
+	if state.pbs.datastoreConfig == nil {
+		t.Fatalf("expected datastore config state to be initialized")
+	}
+	if len(state.pbs.datastoreConfig.datastores) != 1 {
+		t.Fatalf("expected 1 datastore in config state, got %d", len(state.pbs.datastoreConfig.datastores))
+	}
+	if state.pbs.datastoreConfig.datastoreDir == "" {
+		t.Fatalf("expected datastore config output dir to be set")
+	}
+}
+
+func TestPBSPXARPrepareBrickBuildsPxarState(t *testing.T) {
+	collector := newTestCollector(t)
+	collector.proxType = "pbs"
+
+	dsPath := t.TempDir()
+	state := newCollectionState(collector)
+	state.pbs.datastores = []pbsDatastore{{Name: "store1", Path: dsPath}}
+
+	brick := requireBrick(t, newPBSRecipe(), brickPBSPXARPrepare)
+	if err := brick.Run(context.Background(), state); err != nil {
+		t.Fatalf("pbs pxar prepare brick failed: %v", err)
+	}
+	if state.pbs.pxar == nil {
+		t.Fatalf("expected pxar state to be initialized")
+	}
+	if len(state.pbs.pxar.eligible) != 1 {
+		t.Fatalf("expected 1 eligible datastore, got %d", len(state.pbs.pxar.eligible))
+	}
+	if state.pbs.pxar.metaRoot == "" || state.pbs.pxar.selectedRoot == "" || state.pbs.pxar.smallRoot == "" {
+		t.Fatalf("expected PXAR output roots to be initialized, got %+v", state.pbs.pxar)
+	}
+}
+
+func TestPBSManifestAccessAndTapeBricksPopulateEntriesIndividually(t *testing.T) {
+	pbsRoot := t.TempDir()
+	for name := range map[string]string{
+		"user.cfg":                  "users",
+		"acl.cfg":                   "acl",
+		"domains.cfg":               "domains",
+		"tape.cfg":                  "tape",
+		"tape-job.cfg":              "jobs",
+		"media-pool.cfg":            "pool",
+		"tape-encryption-keys.json": "{}",
+	} {
+		if err := os.WriteFile(filepath.Join(pbsRoot, name), []byte(name), 0o640); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	collector := newTestCollector(t)
+	collector.proxType = "pbs"
+	collector.config.PBSConfigPath = pbsRoot
+
+	state := newCollectionState(collector)
+	collector.initPBSManifest()
+
+	for _, id := range []BrickID{
+		brickPBSManifestUserCfg,
+		brickPBSManifestACLCfg,
+		brickPBSManifestDomainsCfg,
+		brickPBSManifestTapeCfg,
+		brickPBSManifestTapeJobs,
+		brickPBSManifestMediaPools,
+		brickPBSManifestTapeEncryptionKeys,
+	} {
+		brick := requireBrick(t, newPBSRecipe(), id)
+		if err := brick.Run(context.Background(), state); err != nil {
+			t.Fatalf("manifest brick %s failed: %v", id, err)
+		}
+	}
+
+	for _, key := range []string{
+		"user.cfg",
+		"acl.cfg",
+		"domains.cfg",
+		"tape.cfg",
+		"tape-job.cfg",
+		"media-pool.cfg",
+		"tape-encryption-keys.json",
+	} {
+		entry, ok := collector.pbsManifest[key]
+		if !ok {
+			t.Fatalf("expected manifest entry for %s", key)
+		}
+		if entry.Status != StatusCollected {
+			t.Fatalf("manifest entry %s status = %s, want %s", key, entry.Status, StatusCollected)
+		}
 	}
 }
 

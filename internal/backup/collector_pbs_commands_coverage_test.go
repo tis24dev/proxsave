@@ -350,7 +350,7 @@ func TestCollectDatastoreConfigsCreatesDistinctNamespaceFilesForOverrideCollisio
 	}
 }
 
-func TestCollectUserTokensSkipsInvalidUserListJSON(t *testing.T) {
+func TestCollectUserConfigsSkipsInvalidUserListJSON(t *testing.T) {
 	tmp := t.TempDir()
 	collector := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
 
@@ -366,7 +366,9 @@ func TestCollectUserTokensSkipsInvalidUserListJSON(t *testing.T) {
 		t.Fatalf("write user_list.json: %v", err)
 	}
 
-	collector.collectUserTokens(context.Background(), usersDir)
+	if err := collector.collectUserConfigs(context.Background()); err != nil {
+		t.Fatalf("collectUserConfigs error: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(usersDir, "tokens.json")); err == nil {
 		t.Fatalf("tokens.json should not be created for invalid user list JSON")
 	}
