@@ -87,15 +87,55 @@ func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 
 // collectPBSDirectories collects PBS-specific directories
 func (c *Collector) collectPBSDirectories(ctx context.Context, root string) error {
+	if err := c.collectPBSConfigSnapshot(ctx, root); err != nil {
+		return err
+	}
+	if err := c.collectPBSManifestSnapshot(ctx, root); err != nil {
+		return err
+	}
+
+	c.logger.Debug("PBS directory collection finished")
+	return nil
+}
+
+// collectPBSCommands collects output from PBS commands
+func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsDatastore) error {
+	if len(datastores) > 0 {
+		datastores = clonePBSDatastores(datastores)
+		assignUniquePBSDatastoreOutputKeys(datastores)
+	}
+
+	commandsDir, err := c.ensureCommandsDir("pbs")
+	if err != nil {
+		return err
+	}
+	c.logger.Debug("Collecting PBS command outputs into %s", commandsDir)
+	steps := []func(context.Context) error{
+		func(ctx context.Context) error { return c.collectPBSCoreRuntime(ctx, commandsDir) },
+		func(ctx context.Context) error { return c.collectPBSNodeRuntime(ctx, commandsDir) },
+		func(ctx context.Context) error { return c.collectPBSDatastoreRuntime(ctx, commandsDir, datastores) },
+		func(ctx context.Context) error { return c.collectPBSAcmeRuntime(ctx, commandsDir) },
+		func(ctx context.Context) error { return c.collectPBSNotificationRuntime(ctx, commandsDir) },
+		func(ctx context.Context) error { return c.collectPBSAccessRuntime(ctx, commandsDir) },
+		func(ctx context.Context) error { return c.collectPBSRemoteJobsRuntime(ctx, commandsDir) },
+		func(ctx context.Context) error { return c.collectPBSTapeRuntime(ctx, commandsDir) },
+		func(ctx context.Context) error { return c.collectPBSNetworkRuntime(ctx, commandsDir) },
+		func(ctx context.Context) error { return c.collectPBSHostStateRuntime(ctx, commandsDir) },
+		func(ctx context.Context) error { return c.collectPBSS3Runtime(ctx, commandsDir) },
+	}
+	for _, step := range steps {
+		if err := step(ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Collector) collectPBSConfigSnapshot(ctx context.Context, root string) error {
 	c.logger.Debug("Collecting PBS directories (source=%s, dest=%s)",
 		root, filepath.Join(c.tempDir, "etc/proxmox-backup"))
 
-	// Even though we keep a full snapshot of /etc/proxmox-backup (or PBS_CONFIG_PATH),
-	// treat per-feature flags as exclusions so users can selectively omit sensitive files
-	// while still capturing unknown/new PBS config files.
-	//
-	// NOTE: These patterns are applied only for the duration of the directory snapshot to
-	// avoid impacting other collectors.
 	var extraExclude []string
 	if !c.config.BackupDatastoreConfigs {
 		extraExclude = append(extraExclude, "datastore.cfg")
@@ -124,7 +164,6 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 		extraExclude = append(extraExclude, "notifications-priv.cfg")
 	}
 	if !c.config.BackupUserConfigs {
-		// User-related configs are intentionally excluded together.
 		extraExclude = append(extraExclude, "user.cfg", "acl.cfg", "domains.cfg")
 	}
 	if !c.config.BackupRemoteConfigs {
@@ -146,51 +185,35 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 		extraExclude = append(extraExclude, "prune.cfg")
 	}
 
-	// PBS main configuration directory (full backup)
 	if len(extraExclude) > 0 {
 		c.logger.Debug("PBS config exclusions enabled (disabled features): %s", strings.Join(extraExclude, ", "))
 	}
-	if err := c.withTemporaryExcludes(extraExclude, func() error {
+	return c.withTemporaryExcludes(extraExclude, func() error {
 		return c.safeCopyDir(ctx,
 			root,
 			filepath.Join(c.tempDir, "etc/proxmox-backup"),
 			"PBS configuration")
-	}); err != nil {
-		return err
-	}
+	})
+}
 
-	// Initialize manifest for PBS configs
+func (c *Collector) collectPBSManifestSnapshot(ctx context.Context, root string) error {
 	c.pbsManifest = make(map[string]ManifestEntry)
 
 	c.logger.Info("Collecting PBS configuration files:")
-
-	// Datastore configuration
 	c.pbsManifest["datastore.cfg"] = c.collectPBSConfigFile(ctx, root, "datastore.cfg",
 		"Datastore configuration", c.config.BackupDatastoreConfigs, "BACKUP_DATASTORE_CONFIGS")
-
-	// S3 endpoint configuration (used by S3 datastores)
 	c.pbsManifest["s3.cfg"] = c.collectPBSConfigFile(ctx, root, "s3.cfg",
 		"S3 endpoints", c.config.BackupDatastoreConfigs && c.config.BackupPBSS3Endpoints, "BACKUP_PBS_S3_ENDPOINTS")
-
-	// Node configuration (global PBS settings)
 	c.pbsManifest["node.cfg"] = c.collectPBSConfigFile(ctx, root, "node.cfg",
 		"Node configuration", c.config.BackupPBSNodeConfig, "BACKUP_PBS_NODE_CONFIG")
-
-	// ACME configuration (accounts/plugins)
 	c.pbsManifest["acme/accounts.cfg"] = c.collectPBSConfigFile(ctx, root, filepath.Join("acme", "accounts.cfg"),
 		"ACME accounts", c.config.BackupPBSAcmeAccounts, "BACKUP_PBS_ACME_ACCOUNTS")
 	c.pbsManifest["acme/plugins.cfg"] = c.collectPBSConfigFile(ctx, root, filepath.Join("acme", "plugins.cfg"),
 		"ACME plugins", c.config.BackupPBSAcmePlugins, "BACKUP_PBS_ACME_PLUGINS")
-
-	// External metric servers
 	c.pbsManifest["metricserver.cfg"] = c.collectPBSConfigFile(ctx, root, "metricserver.cfg",
 		"External metric servers", c.config.BackupPBSMetricServers, "BACKUP_PBS_METRIC_SERVERS")
-
-	// Traffic control
 	c.pbsManifest["traffic-control.cfg"] = c.collectPBSConfigFile(ctx, root, "traffic-control.cfg",
 		"Traffic control rules", c.config.BackupPBSTrafficControl, "BACKUP_PBS_TRAFFIC_CONTROL")
-
-	// Notifications (targets/endpoints + matcher routing; secrets are stored in notifications-priv.cfg)
 	c.pbsManifest["notifications.cfg"] = c.collectPBSConfigFile(ctx, root, "notifications.cfg",
 		"Notifications configuration", c.config.BackupPBSNotifications, "BACKUP_PBS_NOTIFICATIONS")
 	privEnabled := c.config.BackupPBSNotifications && c.config.BackupPBSNotificationsPriv
@@ -200,69 +223,32 @@ func (c *Collector) collectPBSDirectories(ctx context.Context, root string) erro
 	}
 	c.pbsManifest["notifications-priv.cfg"] = c.collectPBSConfigFile(ctx, root, "notifications-priv.cfg",
 		"Notifications secrets", privEnabled, privDisableHint)
-
-	// User configuration
 	c.pbsManifest["user.cfg"] = c.collectPBSConfigFile(ctx, root, "user.cfg",
 		"User configuration", c.config.BackupUserConfigs, "BACKUP_USER_CONFIGS")
-
-	// ACL configuration (under user configs flag)
 	c.pbsManifest["acl.cfg"] = c.collectPBSConfigFile(ctx, root, "acl.cfg",
 		"ACL configuration", c.config.BackupUserConfigs, "BACKUP_USER_CONFIGS")
-
-	// Remote configuration (for sync jobs)
 	c.pbsManifest["remote.cfg"] = c.collectPBSConfigFile(ctx, root, "remote.cfg",
 		"Remote configuration", c.config.BackupRemoteConfigs, "BACKUP_REMOTE_CONFIGS")
-
-	// Sync jobs configuration
 	c.pbsManifest["sync.cfg"] = c.collectPBSConfigFile(ctx, root, "sync.cfg",
 		"Sync jobs", c.config.BackupSyncJobs, "BACKUP_SYNC_JOBS")
-
-	// Verification jobs configuration
 	c.pbsManifest["verification.cfg"] = c.collectPBSConfigFile(ctx, root, "verification.cfg",
 		"Verification jobs", c.config.BackupVerificationJobs, "BACKUP_VERIFICATION_JOBS")
-
-	// Tape backup configuration
 	c.pbsManifest["tape.cfg"] = c.collectPBSConfigFile(ctx, root, "tape.cfg",
 		"Tape configuration", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
-
-	// Tape jobs (under tape configs flag)
 	c.pbsManifest["tape-job.cfg"] = c.collectPBSConfigFile(ctx, root, "tape-job.cfg",
 		"Tape jobs", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
-
-	// Media pool configuration (under tape configs flag)
 	c.pbsManifest["media-pool.cfg"] = c.collectPBSConfigFile(ctx, root, "media-pool.cfg",
 		"Media pool configuration", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
-
-	// Tape encryption keys (under tape configs flag)
 	c.pbsManifest["tape-encryption-keys.json"] = c.collectPBSConfigFile(ctx, root, "tape-encryption-keys.json",
 		"Tape encryption keys", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
-
-	// Network configuration
 	c.pbsManifest["network.cfg"] = c.collectPBSConfigFile(ctx, root, "network.cfg",
 		"Network configuration", c.config.BackupPBSNetworkConfig, "BACKUP_PBS_NETWORK_CONFIG")
-
-	// Prune/GC schedules
 	c.pbsManifest["prune.cfg"] = c.collectPBSConfigFile(ctx, root, "prune.cfg",
 		"Prune schedules", c.config.BackupPruneSchedules, "BACKUP_PRUNE_SCHEDULES")
-
-	c.logger.Debug("PBS directory collection finished")
 	return nil
 }
 
-// collectPBSCommands collects output from PBS commands
-func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsDatastore) error {
-	if len(datastores) > 0 {
-		datastores = clonePBSDatastores(datastores)
-		assignUniquePBSDatastoreOutputKeys(datastores)
-	}
-
-	commandsDir := c.proxsaveCommandsDir("pbs")
-	if err := c.ensureDir(commandsDir); err != nil {
-		return fmt.Errorf("failed to create commands directory: %w", err)
-	}
-	c.logger.Debug("Collecting PBS command outputs into %s", commandsDir)
-
-	// PBS version (CRITICAL)
+func (c *Collector) collectPBSCoreRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
 		"proxmox-backup-manager version",
 		filepath.Join(commandsDir, "pbs_version.txt"),
@@ -270,8 +256,10 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		true); err != nil {
 		return fmt.Errorf("failed to get PBS version (critical): %w", err)
 	}
+	return nil
+}
 
-	// Node configuration
+func (c *Collector) collectPBSNodeRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupPBSNodeConfig {
 		c.safeCmdOutput(ctx,
 			"proxmox-backup-manager node show --output-format=json",
@@ -279,8 +267,10 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			"Node configuration",
 			false)
 	}
+	return nil
+}
 
-	// Datastore status
+func (c *Collector) collectPBSDatastoreRuntime(ctx context.Context, commandsDir string, datastores []pbsDatastore) error {
 	if err := c.collectCommandMulti(ctx,
 		"proxmox-backup-manager datastore list --output-format=json",
 		filepath.Join(commandsDir, "datastore_list.json"),
@@ -289,7 +279,6 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		return err
 	}
 
-	// Datastore usage details
 	if c.config.BackupDatastoreConfigs && len(datastores) > 0 {
 		for _, ds := range datastores {
 			if ds.isOverride() {
@@ -310,41 +299,51 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		}
 	}
 
-	// ACME (accounts, plugins)
+	return nil
+}
+
+func (c *Collector) collectPBSAcmeRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupPBSAcmeAccounts || c.config.BackupPBSAcmePlugins {
 		c.collectPBSAcmeSnapshots(ctx, commandsDir)
 	}
+	return nil
+}
 
-	// Notifications (targets, matchers, endpoints)
+func (c *Collector) collectPBSNotificationRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupPBSNotifications {
 		c.collectPBSNotificationSnapshots(ctx, commandsDir)
 		c.writePBSNotificationSummary(commandsDir)
 	}
+	return nil
+}
 
-	// User list
-	if c.config.BackupUserConfigs {
-		if err := c.collectCommandMulti(ctx,
-			"proxmox-backup-manager user list --output-format=json",
-			filepath.Join(commandsDir, "user_list.json"),
-			"User list",
-			false); err != nil {
-			return err
-		}
-
-		// Authentication realms (LDAP/AD/OpenID)
-		c.collectPBSRealmSnapshots(ctx, commandsDir)
-
-		// ACL list
-		if err := c.collectCommandMulti(ctx,
-			"proxmox-backup-manager acl list --output-format=json",
-			filepath.Join(commandsDir, "acl_list.json"),
-			"ACL list",
-			false); err != nil {
-			return err
-		}
+func (c *Collector) collectPBSAccessRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupUserConfigs {
+		return nil
 	}
 
-	// Remote list (sync sources)
+	if err := c.collectCommandMulti(ctx,
+		"proxmox-backup-manager user list --output-format=json",
+		filepath.Join(commandsDir, "user_list.json"),
+		"User list",
+		false); err != nil {
+		return err
+	}
+
+	c.collectPBSRealmSnapshots(ctx, commandsDir)
+
+	if err := c.collectCommandMulti(ctx,
+		"proxmox-backup-manager acl list --output-format=json",
+		filepath.Join(commandsDir, "acl_list.json"),
+		"ACL list",
+		false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Collector) collectPBSRemoteJobsRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupRemoteConfigs {
 		if err := c.collectCommandMulti(ctx,
 			"proxmox-backup-manager remote list --output-format=json",
@@ -354,8 +353,6 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			return err
 		}
 	}
-
-	// Sync jobs status
 	if c.config.BackupSyncJobs {
 		if err := c.collectCommandMulti(ctx,
 			"proxmox-backup-manager sync-job list --output-format=json",
@@ -365,8 +362,6 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			return err
 		}
 	}
-
-	// Verification jobs status
 	if c.config.BackupVerificationJobs {
 		if err := c.collectCommandMulti(ctx,
 			"proxmox-backup-manager verify-job list --output-format=json",
@@ -376,8 +371,6 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			return err
 		}
 	}
-
-	// Prune jobs
 	if c.config.BackupPruneSchedules {
 		if err := c.collectCommandMulti(ctx,
 			"proxmox-backup-manager prune-job list --output-format=json",
@@ -388,42 +381,47 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		}
 	}
 
-	// GC jobs
 	c.safeCmdOutput(ctx,
 		"proxmox-backup-manager garbage-collection list --output-format=json",
 		filepath.Join(commandsDir, "gc_jobs.json"),
 		"Garbage collection jobs",
 		false)
 
-	// Tape backup status (if configured)
-	if c.config.BackupTapeConfigs {
-		if hasTape, err := c.hasTapeSupport(ctx); err != nil {
-			if ctx.Err() != nil {
-				return err
-			}
-			c.logger.Debug("Skipping tape details collection: %v", err)
-		} else if hasTape {
-			c.safeCmdOutput(ctx,
-				"proxmox-tape drive list --output-format=json",
-				filepath.Join(commandsDir, "tape_drives.json"),
-				"Tape drives",
-				false)
+	return nil
+}
 
-			c.safeCmdOutput(ctx,
-				"proxmox-tape changer list --output-format=json",
-				filepath.Join(commandsDir, "tape_changers.json"),
-				"Tape changers",
-				false)
-
-			c.safeCmdOutput(ctx,
-				"proxmox-tape pool list --output-format=json",
-				filepath.Join(commandsDir, "tape_pools.json"),
-				"Tape pools",
-				false)
-		}
+func (c *Collector) collectPBSTapeRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupTapeConfigs {
+		return nil
 	}
 
-	// Network configuration
+	if hasTape, err := c.hasTapeSupport(ctx); err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		c.logger.Debug("Skipping tape details collection: %v", err)
+	} else if hasTape {
+		c.safeCmdOutput(ctx,
+			"proxmox-tape drive list --output-format=json",
+			filepath.Join(commandsDir, "tape_drives.json"),
+			"Tape drives",
+			false)
+		c.safeCmdOutput(ctx,
+			"proxmox-tape changer list --output-format=json",
+			filepath.Join(commandsDir, "tape_changers.json"),
+			"Tape changers",
+			false)
+		c.safeCmdOutput(ctx,
+			"proxmox-tape pool list --output-format=json",
+			filepath.Join(commandsDir, "tape_pools.json"),
+			"Tape pools",
+			false)
+	}
+
+	return nil
+}
+
+func (c *Collector) collectPBSNetworkRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupPBSNetworkConfig {
 		c.safeCmdOutput(ctx,
 			"proxmox-backup-manager network list --output-format=json",
@@ -431,8 +429,10 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			"Network configuration",
 			false)
 	}
+	return nil
+}
 
-	// Disk usage
+func (c *Collector) collectPBSHostStateRuntime(ctx context.Context, commandsDir string) error {
 	c.safeCmdOutput(ctx,
 		"proxmox-backup-manager disk list --output-format=json",
 		filepath.Join(commandsDir, "disk_list.json"),
@@ -447,7 +447,6 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 		return err
 	}
 
-	// Traffic control rules
 	if c.config.BackupPBSTrafficControl {
 		c.safeCmdOutput(ctx,
 			"proxmox-backup-manager traffic-control list --output-format=json",
@@ -456,18 +455,19 @@ func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsData
 			false)
 	}
 
-	// Task log summary
 	c.safeCmdOutput(ctx,
 		"proxmox-backup-manager task list --limit 50 --output-format=json",
 		filepath.Join(commandsDir, "recent_tasks.json"),
 		"Recent tasks",
 		false)
 
-	// S3 endpoints (optional, may be unavailable on older PBS versions)
+	return nil
+}
+
+func (c *Collector) collectPBSS3Runtime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupDatastoreConfigs && c.config.BackupPBSS3Endpoints {
 		c.collectPBSS3Snapshots(ctx, commandsDir)
 	}
-
 	return nil
 }
 

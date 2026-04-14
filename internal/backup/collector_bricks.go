@@ -12,8 +12,14 @@ type BrickID string
 
 const (
 	brickPVEValidateAndCluster BrickID = "pve_validate_and_cluster"
-	brickPVEDirectories        BrickID = "pve_directories"
-	brickPVECommands           BrickID = "pve_commands"
+	brickPVEConfigSnapshot     BrickID = "pve_config_snapshot"
+	brickPVEClusterSnapshot    BrickID = "pve_cluster_snapshot"
+	brickPVEFirewallSnapshot   BrickID = "pve_firewall_snapshot"
+	brickPVEVZDumpSnapshot     BrickID = "pve_vzdump_snapshot"
+	brickPVERuntimeCore        BrickID = "pve_runtime_core"
+	brickPVERuntimeACL         BrickID = "pve_runtime_acl"
+	brickPVERuntimeCluster     BrickID = "pve_runtime_cluster"
+	brickPVERuntimeStorage     BrickID = "pve_runtime_storage"
 	brickPVEVMConfigs          BrickID = "pve_vm_configs"
 	brickPVEJobs               BrickID = "pve_jobs"
 	brickPVESchedules          BrickID = "pve_schedules"
@@ -22,28 +28,62 @@ const (
 	brickPVECeph               BrickID = "pve_ceph"
 	brickPVEFinalize           BrickID = "pve_finalize"
 
-	brickPBSValidate           BrickID = "pbs_validate"
-	brickPBSDirectories        BrickID = "pbs_directories"
-	brickPBSDatastoreDiscovery BrickID = "pbs_datastore_discovery"
-	brickPBSCommands           BrickID = "pbs_commands"
-	brickPBSDatastoreInventory BrickID = "pbs_datastore_inventory"
-	brickPBSDatastoreConfigs   BrickID = "pbs_datastore_configs"
-	brickPBSUserConfigs        BrickID = "pbs_user_configs"
-	brickPBSPXAR               BrickID = "pbs_pxar"
-	brickPBSFinalize           BrickID = "pbs_finalize"
+	brickPBSValidate             BrickID = "pbs_validate"
+	brickPBSConfigSnapshot       BrickID = "pbs_config_snapshot"
+	brickPBSManifestSnapshot     BrickID = "pbs_manifest_snapshot"
+	brickPBSDatastoreDiscovery   BrickID = "pbs_datastore_discovery"
+	brickPBSRuntimeCore          BrickID = "pbs_runtime_core"
+	brickPBSRuntimeNode          BrickID = "pbs_runtime_node"
+	brickPBSRuntimeDatastores    BrickID = "pbs_runtime_datastores"
+	brickPBSRuntimeACME          BrickID = "pbs_runtime_acme"
+	brickPBSRuntimeNotifications BrickID = "pbs_runtime_notifications"
+	brickPBSRuntimeAccess        BrickID = "pbs_runtime_access"
+	brickPBSRuntimeRemoteJobs    BrickID = "pbs_runtime_remote_jobs"
+	brickPBSRuntimeTape          BrickID = "pbs_runtime_tape"
+	brickPBSRuntimeNetwork       BrickID = "pbs_runtime_network"
+	brickPBSRuntimeHostState     BrickID = "pbs_runtime_host_state"
+	brickPBSRuntimeS3            BrickID = "pbs_runtime_s3"
+	brickPBSStorageStackSnapshot BrickID = "pbs_storage_stack_snapshot"
+	brickPBSDatastoreInventory   BrickID = "pbs_datastore_inventory_report"
+	brickPBSDatastoreConfigs     BrickID = "pbs_datastore_configs"
+	brickPBSUserConfigs          BrickID = "pbs_user_configs"
+	brickPBSPXAR                 BrickID = "pbs_pxar"
+	brickPBSFinalize             BrickID = "pbs_finalize"
 
-	brickSystemDirectories   BrickID = "system_directories"
-	brickSystemCommands      BrickID = "system_commands"
-	brickSystemKernel        BrickID = "system_kernel"
-	brickSystemHardware      BrickID = "system_hardware"
-	brickSystemCriticalFiles BrickID = "system_critical_files"
-	brickSystemConfigFile    BrickID = "system_config_file"
-	brickSystemCustomPaths   BrickID = "system_custom_paths"
-	brickSystemScriptDirs    BrickID = "system_script_dirs"
-	brickSystemScriptRepo    BrickID = "system_script_repo"
-	brickSystemSSHKeys       BrickID = "system_ssh_keys"
-	brickSystemRootHome      BrickID = "system_root_home"
-	brickSystemUserHomes     BrickID = "system_user_homes"
+	brickSystemNetworkStatic        BrickID = "system_network_static"
+	brickSystemIdentityStatic       BrickID = "system_identity_static"
+	brickSystemAptStatic            BrickID = "system_apt_static"
+	brickSystemCronStatic           BrickID = "system_cron_static"
+	brickSystemServicesStatic       BrickID = "system_services_static"
+	brickSystemLoggingStatic        BrickID = "system_logging_static"
+	brickSystemSSLStatic            BrickID = "system_ssl_static"
+	brickSystemSysctlStatic         BrickID = "system_sysctl_static"
+	brickSystemKernelModulesStatic  BrickID = "system_kernel_modules_static"
+	brickSystemZFSStatic            BrickID = "system_zfs_static"
+	brickSystemFirewallStatic       BrickID = "system_firewall_static"
+	brickSystemRuntimeLeases        BrickID = "system_runtime_leases"
+	brickSystemCoreRuntime          BrickID = "system_core_runtime"
+	brickSystemNetworkRuntime       BrickID = "system_network_runtime"
+	brickSystemStorageRuntime       BrickID = "system_storage_runtime"
+	brickSystemComputeRuntime       BrickID = "system_compute_runtime"
+	brickSystemServicesRuntime      BrickID = "system_services_runtime"
+	brickSystemPackagesRuntime      BrickID = "system_packages_runtime"
+	brickSystemFirewallRuntime      BrickID = "system_firewall_runtime"
+	brickSystemKernelModulesRuntime BrickID = "system_kernel_modules_runtime"
+	brickSystemSysctlRuntime        BrickID = "system_sysctl_runtime"
+	brickSystemZFSRuntime           BrickID = "system_zfs_runtime"
+	brickSystemLVMRuntime           BrickID = "system_lvm_runtime"
+	brickSystemNetworkReport        BrickID = "system_network_report"
+	brickSystemKernel               BrickID = "system_kernel"
+	brickSystemHardware             BrickID = "system_hardware"
+	brickSystemCriticalFiles        BrickID = "system_critical_files"
+	brickSystemConfigFile           BrickID = "system_config_file"
+	brickSystemCustomPaths          BrickID = "system_custom_paths"
+	brickSystemScriptDirs           BrickID = "system_script_dirs"
+	brickSystemScriptRepo           BrickID = "system_script_repo"
+	brickSystemSSHKeys              BrickID = "system_ssh_keys"
+	brickSystemRootHome             BrickID = "system_root_home"
+	brickSystemUserHomes            BrickID = "system_user_homes"
 )
 
 type collectionBrick struct {
@@ -61,15 +101,22 @@ type collectionState struct {
 	collector *Collector
 	pve       pveContext
 	pbs       pbsContext
+	system    systemContext
 }
 
 type pveContext struct {
 	clustered   bool
 	runtimeInfo *pveRuntimeInfo
+	commandsDir string
 }
 
 type pbsContext struct {
-	datastores []pbsDatastore
+	datastores  []pbsDatastore
+	commandsDir string
+}
+
+type systemContext struct {
+	commandsDir string
 }
 
 func newCollectionState(c *Collector) *collectionState {
@@ -100,6 +147,52 @@ func recipeBrickIDs(r recipe) []BrickID {
 		ids = append(ids, brick.ID)
 	}
 	return ids
+}
+
+func (s *collectionState) ensurePVECommandsDir() (string, error) {
+	if s.pve.commandsDir != "" {
+		return s.pve.commandsDir, nil
+	}
+	dir, err := s.collector.ensureCommandsDir("pve")
+	if err != nil {
+		return "", err
+	}
+	s.pve.commandsDir = dir
+	return dir, nil
+}
+
+func (s *collectionState) ensurePBSCommandsDir() (string, error) {
+	if s.pbs.commandsDir != "" {
+		return s.pbs.commandsDir, nil
+	}
+	dir, err := s.collector.ensureCommandsDir("pbs")
+	if err != nil {
+		return "", err
+	}
+	s.pbs.commandsDir = dir
+	return dir, nil
+}
+
+func (s *collectionState) ensureSystemCommandsDir() (string, error) {
+	if s.system.commandsDir != "" {
+		return s.system.commandsDir, nil
+	}
+	dir, err := s.collector.ensureCommandsDir("system")
+	if err != nil {
+		return "", err
+	}
+	s.system.commandsDir = dir
+	return dir, nil
+}
+
+func (s *collectionState) ensurePVERuntimeInfo() *pveRuntimeInfo {
+	if s.pve.runtimeInfo == nil {
+		s.pve.runtimeInfo = &pveRuntimeInfo{
+			Nodes:    make([]string, 0),
+			Storages: make([]pveStorageEntry, 0),
+		}
+	}
+	return s.pve.runtimeInfo
 }
 
 func newPVERecipe() recipe {
@@ -139,30 +232,83 @@ func newPVERecipe() recipe {
 				},
 			},
 			{
-				ID:          brickPVEDirectories,
-				Description: "Collect PVE configuration directories",
+				ID:          brickPVEConfigSnapshot,
+				Description: "Collect base PVE configuration snapshot",
+				Run: func(ctx context.Context, state *collectionState) error {
+					return state.collector.collectPVEConfigSnapshot(ctx)
+				},
+			},
+			{
+				ID:          brickPVEClusterSnapshot,
+				Description: "Collect cluster-specific PVE snapshot",
+				Run: func(ctx context.Context, state *collectionState) error {
+					return state.collector.collectPVEClusterSnapshot(ctx, state.pve.clustered)
+				},
+			},
+			{
+				ID:          brickPVEFirewallSnapshot,
+				Description: "Collect PVE firewall snapshot",
+				Run: func(ctx context.Context, state *collectionState) error {
+					return state.collector.collectPVEFirewallSnapshot(ctx)
+				},
+			},
+			{
+				ID:          brickPVEVZDumpSnapshot,
+				Description: "Collect VZDump snapshot",
+				Run: func(ctx context.Context, state *collectionState) error {
+					return state.collector.collectPVEVZDumpSnapshot(ctx)
+				},
+			},
+			{
+				ID:          brickPVERuntimeCore,
+				Description: "Collect core PVE runtime information",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
-					c.logger.Debug("Collecting PVE directories (clustered=%v)", state.pve.clustered)
-					if err := c.collectPVEDirectories(ctx, state.pve.clustered); err != nil {
-						return fmt.Errorf("failed to collect PVE directories: %w", err)
+					commandsDir, err := state.ensurePVECommandsDir()
+					if err != nil {
+						return err
 					}
-					c.logger.Debug("PVE directory collection completed")
+					c.logger.Debug("Collecting PVE core runtime state")
+					return c.collectPVECoreRuntime(ctx, commandsDir, state.ensurePVERuntimeInfo())
+				},
+			},
+			{
+				ID:          brickPVERuntimeACL,
+				Description: "Collect PVE ACL runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePVECommandsDir()
+					if err != nil {
+						return err
+					}
+					state.collector.collectPVEACLRuntime(ctx, commandsDir)
 					return nil
 				},
 			},
 			{
-				ID:          brickPVECommands,
-				Description: "Collect PVE runtime commands",
+				ID:          brickPVERuntimeCluster,
+				Description: "Collect PVE cluster runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePVECommandsDir()
+					if err != nil {
+						return err
+					}
+					state.collector.collectPVEClusterRuntime(ctx, commandsDir, state.pve.clustered)
+					return nil
+				},
+			},
+			{
+				ID:          brickPVERuntimeStorage,
+				Description: "Collect PVE storage runtime information",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
-					c.logger.Debug("Collecting PVE command outputs and runtime state")
-					runtimeInfo, err := c.collectPVECommands(ctx, state.pve.clustered)
+					commandsDir, err := state.ensurePVECommandsDir()
 					if err != nil {
-						return fmt.Errorf("failed to collect PVE commands: %w", err)
+						return err
 					}
-					state.pve.runtimeInfo = runtimeInfo
-					c.logger.Debug("PVE command output collection completed")
+					if err := c.collectPVEStorageRuntime(ctx, commandsDir, state.ensurePVERuntimeInfo()); err != nil {
+						return err
+					}
+					c.finalizePVERuntimeInfo(state.ensurePVERuntimeInfo())
 					return nil
 				},
 			},
@@ -305,17 +451,17 @@ func newPBSRecipe() recipe {
 				},
 			},
 			{
-				ID:          brickPBSDirectories,
-				Description: "Collect PBS configuration directories",
+				ID:          brickPBSConfigSnapshot,
+				Description: "Collect base PBS configuration snapshot",
 				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					pbsConfigPath := c.pbsConfigPath()
-					c.logger.Debug("Collecting PBS configuration directories")
-					if err := c.collectPBSDirectories(ctx, pbsConfigPath); err != nil {
-						return fmt.Errorf("failed to collect PBS directories: %w", err)
-					}
-					c.logger.Debug("PBS directory collection completed")
-					return nil
+					return state.collector.collectPBSConfigSnapshot(ctx, state.collector.pbsConfigPath())
+				},
+			},
+			{
+				ID:          brickPBSManifestSnapshot,
+				Description: "Collect PBS manifest snapshot",
+				Run: func(ctx context.Context, state *collectionState) error {
+					return state.collector.collectPBSManifestSnapshot(ctx, state.collector.pbsConfigPath())
 				},
 			},
 			{
@@ -351,25 +497,140 @@ func newPBSRecipe() recipe {
 				},
 			},
 			{
-				ID:          brickPBSCommands,
-				Description: "Collect PBS runtime commands",
+				ID:          brickPBSRuntimeCore,
+				Description: "Collect core PBS runtime information",
 				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					c.logger.Debug("Collecting PBS command outputs and state")
-					if err := c.collectPBSCommands(ctx, state.pbs.datastores); err != nil {
-						return fmt.Errorf("failed to collect PBS commands: %w", err)
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
 					}
-					c.logger.Debug("PBS command output collection completed")
-					return nil
+					return state.collector.collectPBSCoreRuntime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeNode,
+				Description: "Collect PBS node runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSNodeRuntime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeDatastores,
+				Description: "Collect PBS datastore runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSDatastoreRuntime(ctx, commandsDir, state.pbs.datastores)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeACME,
+				Description: "Collect PBS ACME runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSAcmeRuntime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeNotifications,
+				Description: "Collect PBS notification runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSNotificationRuntime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeAccess,
+				Description: "Collect PBS access runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSAccessRuntime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeRemoteJobs,
+				Description: "Collect PBS remote and job runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSRemoteJobsRuntime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeTape,
+				Description: "Collect PBS tape runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSTapeRuntime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeNetwork,
+				Description: "Collect PBS network runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSNetworkRuntime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeHostState,
+				Description: "Collect PBS host-state runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSHostStateRuntime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSRuntimeS3,
+				Description: "Collect PBS S3 runtime information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					commandsDir, err := state.ensurePBSCommandsDir()
+					if err != nil {
+						return err
+					}
+					return state.collector.collectPBSS3Runtime(ctx, commandsDir)
+				},
+			},
+			{
+				ID:          brickPBSStorageStackSnapshot,
+				Description: "Collect storage-stack artifacts for PBS datastores",
+				Run: func(ctx context.Context, state *collectionState) error {
+					return state.collector.collectPBSStorageStackSnapshot(ctx)
 				},
 			},
 			{
 				ID:          brickPBSDatastoreInventory,
-				Description: "Collect PBS datastore inventory",
+				Description: "Collect PBS datastore inventory report",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
 					c.logger.Debug("Collecting PBS datastore inventory report")
-					if err := c.collectPBSDatastoreInventory(ctx, state.pbs.datastores); err != nil {
+					if err := c.writePBSDatastoreInventoryReport(ctx, state.pbs.datastores); err != nil {
 						c.logger.Warning("Failed to collect PBS datastore inventory report: %v", err)
 					} else {
 						c.logger.Debug("PBS datastore inventory report completed")
@@ -455,32 +716,129 @@ func newSystemRecipe() recipe {
 	return recipe{
 		Name: "system",
 		Bricks: []collectionBrick{
-			{
-				ID:          brickSystemDirectories,
-				Description: "Collect system directories",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					c.logger.Debug("Collecting system directories (network, apt, cron, services, ssl, kernel, firewall, etc.)")
-					if err := c.collectSystemDirectories(ctx); err != nil {
-						return fmt.Errorf("failed to collect system directories: %w", err)
-					}
-					c.logger.Debug("System directories collection completed")
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemCommands,
-				Description: "Collect system command outputs",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					c.logger.Debug("Collecting system command outputs and runtime state")
-					if err := c.collectSystemCommands(ctx); err != nil {
-						return fmt.Errorf("failed to collect system commands: %w", err)
-					}
-					c.logger.Debug("System command collection completed")
-					return nil
-				},
-			},
+			{ID: brickSystemNetworkStatic, Description: "Collect static network configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemNetworkStatic(ctx)
+			}},
+			{ID: brickSystemIdentityStatic, Description: "Collect static identity files", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemIdentityStatic(ctx)
+			}},
+			{ID: brickSystemAptStatic, Description: "Collect static APT configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemAptStatic(ctx)
+			}},
+			{ID: brickSystemCronStatic, Description: "Collect static cron configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemCronStatic(ctx)
+			}},
+			{ID: brickSystemServicesStatic, Description: "Collect static service configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemServicesStatic(ctx)
+			}},
+			{ID: brickSystemLoggingStatic, Description: "Collect static logging configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemLoggingStatic(ctx)
+			}},
+			{ID: brickSystemSSLStatic, Description: "Collect static SSL configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemSSLStatic(ctx)
+			}},
+			{ID: brickSystemSysctlStatic, Description: "Collect static sysctl configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemSysctlStatic(ctx)
+			}},
+			{ID: brickSystemKernelModulesStatic, Description: "Collect static kernel module configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemKernelModuleStatic(ctx)
+			}},
+			{ID: brickSystemZFSStatic, Description: "Collect static ZFS configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemZFSStatic(ctx)
+			}},
+			{ID: brickSystemFirewallStatic, Description: "Collect static firewall configuration", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemFirewallStatic(ctx)
+			}},
+			{ID: brickSystemRuntimeLeases, Description: "Collect runtime lease snapshots", Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectSystemRuntimeLeases(ctx)
+			}},
+			{ID: brickSystemCoreRuntime, Description: "Collect core system runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemCoreRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemNetworkRuntime, Description: "Collect network runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemNetworkRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemStorageRuntime, Description: "Collect storage runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemStorageRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemComputeRuntime, Description: "Collect compute runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemComputeRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemServicesRuntime, Description: "Collect service runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemServicesRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemPackagesRuntime, Description: "Collect package runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemPackagesRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemFirewallRuntime, Description: "Collect firewall runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemFirewallRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemKernelModulesRuntime, Description: "Collect kernel module runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemKernelModulesRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemSysctlRuntime, Description: "Collect sysctl runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemSysctlRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemZFSRuntime, Description: "Collect ZFS runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemZFSRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemLVMRuntime, Description: "Collect LVM runtime information", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectSystemLVMRuntime(ctx, commandsDir)
+			}},
+			{ID: brickSystemNetworkReport, Description: "Finalize derived system reports", Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				if err := state.collector.finalizeSystemRuntimeReports(ctx, commandsDir); err != nil {
+					state.collector.logger.Debug("Network report generation failed: %v", err)
+				}
+				return nil
+			}},
 			{
 				ID:          brickSystemKernel,
 				Description: "Collect kernel information",

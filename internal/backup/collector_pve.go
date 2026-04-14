@@ -299,14 +299,55 @@ func (c *Collector) describePathForManifest(src, dest string, enabled bool) Mani
 // collectPVEDirectories collects PVE-specific directories
 func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) error {
 	c.logger.Debug("Snapshotting PVE directories (clustered=%v)", clustered)
+	steps := []func(context.Context) error{
+		c.collectPVEConfigSnapshot,
+		func(ctx context.Context) error { return c.collectPVEClusterSnapshot(ctx, clustered) },
+		c.collectPVEFirewallSnapshot,
+		c.collectPVEVZDumpSnapshot,
+	}
+	for _, step := range steps {
+		if err := step(ctx); err != nil {
+			return err
+		}
+	}
 
+	c.logger.Debug("PVE directory snapshot completed")
+	return nil
+}
+
+// collectPVECommands collects output from PVE commands and returns runtime info
+func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pveRuntimeInfo, error) {
+	commandsDir, err := c.ensureCommandsDir("pve")
+	if err != nil {
+		return nil, err
+	}
+	c.logger.Debug("Collecting PVE command outputs into %s", commandsDir)
+
+	info := &pveRuntimeInfo{
+		Nodes:    make([]string, 0),
+		Storages: make([]pveStorageEntry, 0),
+	}
+	if err := c.collectPVECoreRuntime(ctx, commandsDir, info); err != nil {
+		return nil, err
+	}
+	c.collectPVEACLRuntime(ctx, commandsDir)
+	c.collectPVEClusterRuntime(ctx, commandsDir, clustered)
+	if err := c.collectPVEStorageRuntime(ctx, commandsDir, info); err != nil {
+		return nil, err
+	}
+	c.finalizePVERuntimeInfo(info)
+
+	c.logger.Debug("PVE command output collection finished: %d nodes, %d storages", len(info.Nodes), len(info.Storages))
+	return info, nil
+}
+
+func (c *Collector) collectPVEConfigSnapshot(ctx context.Context) error {
 	pveConfigPath := c.effectivePVEConfigPath()
 	var extraExclude []string
 	if !c.config.BackupVMConfigs {
 		extraExclude = append(extraExclude, "qemu-server", "lxc")
 	}
 	if !c.config.BackupPVEFirewall {
-		// Rules can exist both under /etc/pve/firewall and under /etc/pve/nodes/*.
 		extraExclude = append(extraExclude, "firewall", "host.fw")
 	}
 	if !c.config.BackupPVEACL {
@@ -316,24 +357,24 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 		extraExclude = append(extraExclude, "jobs.cfg", "vzdump.cron")
 	}
 	if !c.config.BackupClusterConfig {
-		// Keep /etc/pve snapshot but omit cluster-specific config files when disabled.
 		extraExclude = append(extraExclude, "corosync.conf")
 	}
 
 	if len(extraExclude) > 0 {
 		c.logger.Debug("PVE config exclusions enabled (disabled features): %s", strings.Join(extraExclude, ", "))
 	}
-	if err := c.withTemporaryExcludes(extraExclude, func() error {
+	return c.withTemporaryExcludes(extraExclude, func() error {
 		return c.safeCopyDir(ctx,
 			pveConfigPath,
 			c.targetPathFor(pveConfigPath),
 			"PVE configuration")
-	}); err != nil {
-		return err
-	}
+	})
+}
 
-	// Cluster configuration (if clustered)
+func (c *Collector) collectPVEClusterSnapshot(ctx context.Context, clustered bool) error {
+	pveConfigPath := c.effectivePVEConfigPath()
 	clusterPath := c.effectivePVEClusterPath()
+
 	if c.config.BackupClusterConfig {
 		corosyncPath := c.config.CorosyncConfigPath
 		if corosyncPath == "" {
@@ -349,7 +390,6 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 		}
 
 		if clustered {
-			// Cluster directory
 			if err := c.safeCopyDir(ctx,
 				clusterPath,
 				c.targetPathFor(clusterPath),
@@ -373,7 +413,6 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 			c.logger.Warning("Failed to copy Corosync authkey: %v", err)
 		}
 
-		// Always attempt to capture config.db even on standalone nodes when cluster config is enabled.
 		configDB := filepath.Join(clusterPath, "config.db")
 		if info, err := os.Stat(configDB); err == nil && !info.IsDir() {
 			target := c.targetPathFor(configDB)
@@ -388,7 +427,11 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 		c.logger.Debug("Skipping PVE cluster database capture: BACKUP_CLUSTER_CONFIG=false")
 	}
 
-	// Firewall configuration
+	return nil
+}
+
+func (c *Collector) collectPVEFirewallSnapshot(ctx context.Context) error {
+	pveConfigPath := c.effectivePVEConfigPath()
 	if c.config.BackupPVEFirewall {
 		firewallSrc := filepath.Join(pveConfigPath, "firewall")
 		if info, err := os.Stat(firewallSrc); err == nil {
@@ -416,7 +459,11 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 		c.logger.Skip("PVE firewall backup disabled.")
 	}
 
-	// VZDump configuration
+	return nil
+}
+
+func (c *Collector) collectPVEVZDumpSnapshot(ctx context.Context) error {
+	pveConfigPath := c.effectivePVEConfigPath()
 	if c.config.BackupVZDumpConfig {
 		c.logger.Info("Collecting VZDump backup configuration")
 		vzdumpPath := c.config.VzdumpConfigPath
@@ -435,53 +482,36 @@ func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) e
 		c.logger.Skip("VZDump configuration backup disabled.")
 	}
 
-	c.logger.Debug("PVE directory snapshot completed")
 	return nil
 }
 
-// collectPVECommands collects output from PVE commands and returns runtime info
-func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pveRuntimeInfo, error) {
-	commandsDir := c.proxsaveCommandsDir("pve")
-	if err := c.ensureDir(commandsDir); err != nil {
-		return nil, fmt.Errorf("failed to create commands directory: %w", err)
-	}
-	c.logger.Debug("Collecting PVE command outputs into %s", commandsDir)
-
-	// PVE version (CRITICAL)
+func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir string, info *pveRuntimeInfo) error {
 	if err := c.safeCmdOutput(ctx,
 		"pveversion -v",
 		filepath.Join(commandsDir, "pveversion.txt"),
 		"PVE version",
 		true); err != nil {
-		return nil, fmt.Errorf("failed to get PVE version (critical): %w", err)
+		return fmt.Errorf("failed to get PVE version (critical): %w", err)
 	}
 
-	// Node configuration
 	c.safeCmdOutput(ctx,
 		"pvenode config get",
 		filepath.Join(commandsDir, "node_config.txt"),
 		"Node configuration",
 		false)
 
-	// API version
 	c.safeCmdOutput(ctx,
 		"pvesh get /version --output-format=json",
 		filepath.Join(commandsDir, "api_version.json"),
 		"API version",
 		false)
 
-	info := &pveRuntimeInfo{
-		Nodes:    make([]string, 0),
-		Storages: make([]pveStorageEntry, 0),
-	}
-
-	// Collect node list (used for subsequent per-node commands)
 	if nodeData, err := c.captureCommandOutput(ctx,
 		"pvesh get /nodes --output-format=json",
 		filepath.Join(commandsDir, "nodes_status.json"),
 		"node status",
 		false); err != nil {
-		return nil, fmt.Errorf("failed to get node status: %w", err)
+		return fmt.Errorf("failed to get node status: %w", err)
 	} else if len(nodeData) > 0 {
 		var nodes []struct {
 			Node string `json:"node"`
@@ -497,56 +527,53 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 		}
 	}
 
-	// Collect ACL information if enabled
-	if c.config.BackupPVEACL {
-		c.safeCmdOutput(ctx,
-			"pveum user list --output-format=json",
-			filepath.Join(commandsDir, "pve_users.json"),
-			"PVE users",
-			false)
+	return nil
+}
 
-		c.safeCmdOutput(ctx,
-			"pveum group list --output-format=json",
-			filepath.Join(commandsDir, "pve_groups.json"),
-			"PVE groups",
-			false)
-
-		c.safeCmdOutput(ctx,
-			"pveum role list --output-format=json",
-			filepath.Join(commandsDir, "pve_roles.json"),
-			"PVE roles",
-			false)
-
-		// Resource pools (datacenter-wide objects; may be useful for SAFE restore apply).
-		c.safeCmdOutput(ctx,
-			"pveum pool list --output-format=json",
-			filepath.Join(commandsDir, "pools.json"),
-			"PVE resource pools",
-			false)
+func (c *Collector) collectPVEACLRuntime(ctx context.Context, commandsDir string) {
+	if !c.config.BackupPVEACL {
+		return
 	}
 
-	// Cluster commands (if clustered)
+	c.safeCmdOutput(ctx,
+		"pveum user list --output-format=json",
+		filepath.Join(commandsDir, "pve_users.json"),
+		"PVE users",
+		false)
+	c.safeCmdOutput(ctx,
+		"pveum group list --output-format=json",
+		filepath.Join(commandsDir, "pve_groups.json"),
+		"PVE groups",
+		false)
+	c.safeCmdOutput(ctx,
+		"pveum role list --output-format=json",
+		filepath.Join(commandsDir, "pve_roles.json"),
+		"PVE roles",
+		false)
+	c.safeCmdOutput(ctx,
+		"pveum pool list --output-format=json",
+		filepath.Join(commandsDir, "pools.json"),
+		"PVE resource pools",
+		false)
+}
+
+func (c *Collector) collectPVEClusterRuntime(ctx context.Context, commandsDir string, clustered bool) {
 	if clustered && c.config.BackupClusterConfig {
 		c.safeCmdOutput(ctx,
 			"pvecm status",
 			filepath.Join(commandsDir, "cluster_status.txt"),
 			"Cluster status",
 			false)
-
 		c.safeCmdOutput(ctx,
 			"pvecm nodes",
 			filepath.Join(commandsDir, "cluster_nodes.txt"),
 			"Cluster nodes",
 			false)
-
-		// HA status
 		c.safeCmdOutput(ctx,
 			"pvesh get /cluster/ha/status --output-format=json",
 			filepath.Join(commandsDir, "ha_status.json"),
 			"HA status",
 			false)
-
-		// Resource mappings (datacenter-wide objects; used by VM configs via mapping=<id>).
 		c.safeCmdOutput(ctx,
 			"pvesh get /cluster/mapping/pci --output-format=json",
 			filepath.Join(commandsDir, "mapping_pci.json"),
@@ -565,29 +592,28 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 	} else if clustered && !c.config.BackupClusterConfig {
 		c.logger.Debug("Skipping cluster runtime commands: BACKUP_CLUSTER_CONFIG=false (clustered=%v)", clustered)
 	}
+}
 
-	// Storage status
+func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir string, info *pveRuntimeInfo) error {
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
 	if nodeName == "" {
 		nodeName = hostname
 	}
 
-	// Disk list
 	c.safeCmdOutput(ctx,
 		fmt.Sprintf("pvesh get /nodes/%s/disks/list --output-format=json", nodeName),
 		filepath.Join(commandsDir, "disks_list.json"),
 		"Disks list",
 		false)
 
-	// Storage information
 	storageJSONPath := filepath.Join(commandsDir, "storage_status.json")
 	if storageData, err := c.captureCommandOutput(ctx,
 		fmt.Sprintf("pvesh get /nodes/%s/storage --output-format=json", nodeName),
 		storageJSONPath,
 		"Storage status",
 		false); err != nil {
-		return nil, fmt.Errorf("failed to query storage status: %w", err)
+		return fmt.Errorf("failed to query storage status: %w", err)
 	} else if len(storageData) > 0 {
 		storages, err := parseNodeStorageList(storageData)
 		if err != nil {
@@ -600,14 +626,17 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 		}
 	}
 
-	// Storage manager status (text output kept for compatibility)
 	c.safeCmdOutput(ctx,
 		"pvesm status",
 		filepath.Join(commandsDir, "pvesm_status.txt"),
 		"Storage manager status",
 		false)
 
-	// Ensure we have at least one node reference
+	return nil
+}
+
+func (c *Collector) finalizePVERuntimeInfo(info *pveRuntimeInfo) {
+	hostname, _ := os.Hostname()
 	if len(info.Nodes) == 0 {
 		if short := shortHostname(hostname); short != "" {
 			info.Nodes = append(info.Nodes, short)
@@ -619,9 +648,6 @@ func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pv
 	} else {
 		sort.Strings(info.Nodes)
 	}
-
-	c.logger.Debug("PVE command output collection finished: %d nodes, %d storages", len(info.Nodes), len(info.Storages))
-	return info, nil
 }
 
 func parseNodeStorageList(data []byte) ([]pveStorageEntry, error) {

@@ -14,16 +14,16 @@ func TestRunRecipeRunsBricksInOrder(t *testing.T) {
 		Name: "ordered",
 		Bricks: []collectionBrick{
 			{
-				ID: brickSystemDirectories,
+				ID: brickSystemIdentityStatic,
 				Run: func(context.Context, *collectionState) error {
-					ran = append(ran, brickSystemDirectories)
+					ran = append(ran, brickSystemIdentityStatic)
 					return nil
 				},
 			},
 			{
-				ID: brickSystemCommands,
+				ID: brickSystemCoreRuntime,
 				Run: func(context.Context, *collectionState) error {
-					ran = append(ran, brickSystemCommands)
+					ran = append(ran, brickSystemCoreRuntime)
 					return nil
 				},
 			},
@@ -41,7 +41,7 @@ func TestRunRecipeRunsBricksInOrder(t *testing.T) {
 		t.Fatalf("runRecipe failed: %v", err)
 	}
 
-	want := []BrickID{brickSystemDirectories, brickSystemCommands, brickSystemKernel}
+	want := []BrickID{brickSystemIdentityStatic, brickSystemCoreRuntime, brickSystemKernel}
 	if !reflect.DeepEqual(ran, want) {
 		t.Fatalf("brick order = %v, want %v", ran, want)
 	}
@@ -54,16 +54,16 @@ func TestRunRecipeStopsOnFirstError(t *testing.T) {
 		Name: "stop-on-error",
 		Bricks: []collectionBrick{
 			{
-				ID: brickSystemDirectories,
+				ID: brickSystemIdentityStatic,
 				Run: func(context.Context, *collectionState) error {
-					ran = append(ran, brickSystemDirectories)
+					ran = append(ran, brickSystemIdentityStatic)
 					return nil
 				},
 			},
 			{
-				ID: brickSystemCommands,
+				ID: brickSystemCoreRuntime,
 				Run: func(context.Context, *collectionState) error {
-					ran = append(ran, brickSystemCommands)
+					ran = append(ran, brickSystemCoreRuntime)
 					return wantErr
 				},
 			},
@@ -82,7 +82,7 @@ func TestRunRecipeStopsOnFirstError(t *testing.T) {
 		t.Fatalf("runRecipe error = %v, want %v", err, wantErr)
 	}
 
-	wantRan := []BrickID{brickSystemDirectories, brickSystemCommands}
+	wantRan := []BrickID{brickSystemIdentityStatic, brickSystemCoreRuntime}
 	if !reflect.DeepEqual(ran, wantRan) {
 		t.Fatalf("brick order after error = %v, want %v", ran, wantRan)
 	}
@@ -97,7 +97,7 @@ func TestRunRecipePropagatesContextCancellation(t *testing.T) {
 		Name: "canceled",
 		Bricks: []collectionBrick{
 			{
-				ID: brickSystemDirectories,
+				ID: brickSystemIdentityStatic,
 				Run: func(context.Context, *collectionState) error {
 					ran = true
 					return nil
@@ -119,8 +119,14 @@ func TestNewPVERecipeOrder(t *testing.T) {
 	got := recipeBrickIDs(newPVERecipe())
 	want := []BrickID{
 		brickPVEValidateAndCluster,
-		brickPVEDirectories,
-		brickPVECommands,
+		brickPVEConfigSnapshot,
+		brickPVEClusterSnapshot,
+		brickPVEFirewallSnapshot,
+		brickPVEVZDumpSnapshot,
+		brickPVERuntimeCore,
+		brickPVERuntimeACL,
+		brickPVERuntimeCluster,
+		brickPVERuntimeStorage,
 		brickPVEVMConfigs,
 		brickPVEJobs,
 		brickPVESchedules,
@@ -138,9 +144,21 @@ func TestNewPBSRecipeOrder(t *testing.T) {
 	got := recipeBrickIDs(newPBSRecipe())
 	want := []BrickID{
 		brickPBSValidate,
-		brickPBSDirectories,
+		brickPBSConfigSnapshot,
+		brickPBSManifestSnapshot,
 		brickPBSDatastoreDiscovery,
-		brickPBSCommands,
+		brickPBSRuntimeCore,
+		brickPBSRuntimeNode,
+		brickPBSRuntimeDatastores,
+		brickPBSRuntimeACME,
+		brickPBSRuntimeNotifications,
+		brickPBSRuntimeAccess,
+		brickPBSRuntimeRemoteJobs,
+		brickPBSRuntimeTape,
+		brickPBSRuntimeNetwork,
+		brickPBSRuntimeHostState,
+		brickPBSRuntimeS3,
+		brickPBSStorageStackSnapshot,
 		brickPBSDatastoreInventory,
 		brickPBSDatastoreConfigs,
 		brickPBSUserConfigs,
@@ -155,8 +173,30 @@ func TestNewPBSRecipeOrder(t *testing.T) {
 func TestNewSystemRecipeOrder(t *testing.T) {
 	got := recipeBrickIDs(newSystemRecipe())
 	want := []BrickID{
-		brickSystemDirectories,
-		brickSystemCommands,
+		brickSystemNetworkStatic,
+		brickSystemIdentityStatic,
+		brickSystemAptStatic,
+		brickSystemCronStatic,
+		brickSystemServicesStatic,
+		brickSystemLoggingStatic,
+		brickSystemSSLStatic,
+		brickSystemSysctlStatic,
+		brickSystemKernelModulesStatic,
+		brickSystemZFSStatic,
+		brickSystemFirewallStatic,
+		brickSystemRuntimeLeases,
+		brickSystemCoreRuntime,
+		brickSystemNetworkRuntime,
+		brickSystemStorageRuntime,
+		brickSystemComputeRuntime,
+		brickSystemServicesRuntime,
+		brickSystemPackagesRuntime,
+		brickSystemFirewallRuntime,
+		brickSystemKernelModulesRuntime,
+		brickSystemSysctlRuntime,
+		brickSystemZFSRuntime,
+		brickSystemLVMRuntime,
+		brickSystemNetworkReport,
 		brickSystemKernel,
 		brickSystemHardware,
 		brickSystemCriticalFiles,
@@ -198,7 +238,7 @@ func TestPVECommandsBrickPopulatesRuntimeInfo(t *testing.T) {
 
 	state := newCollectionState(collector)
 	state.pve.clustered = false
-	commandsBrick := newPVERecipe().Bricks[2]
+	commandsBrick := requireBrick(t, newPVERecipe(), brickPVERuntimeCore)
 
 	if err := commandsBrick.Run(context.Background(), state); err != nil {
 		t.Fatalf("pve commands brick failed: %v", err)
@@ -217,7 +257,7 @@ func TestPBSDatastoreDiscoveryBrickPopulatesDatastores(t *testing.T) {
 	collector.config.PBSDatastorePaths = []string{"/data/store1"}
 
 	state := newCollectionState(collector)
-	discoveryBrick := newPBSRecipe().Bricks[2]
+	discoveryBrick := requireBrick(t, newPBSRecipe(), brickPBSDatastoreDiscovery)
 
 	if err := discoveryBrick.Run(context.Background(), state); err != nil {
 		t.Fatalf("pbs discovery brick failed: %v", err)
@@ -228,4 +268,15 @@ func TestPBSDatastoreDiscoveryBrickPopulatesDatastores(t *testing.T) {
 	if state.pbs.datastores[0].Path != "/data/store1" {
 		t.Fatalf("datastore path = %q, want %q", state.pbs.datastores[0].Path, "/data/store1")
 	}
+}
+
+func requireBrick(t *testing.T, r recipe, id BrickID) collectionBrick {
+	t.Helper()
+	for _, brick := range r.Bricks {
+		if brick.ID == id {
+			return brick
+		}
+	}
+	t.Fatalf("brick %s not found in recipe %s", id, r.Name)
+	return collectionBrick{}
 }

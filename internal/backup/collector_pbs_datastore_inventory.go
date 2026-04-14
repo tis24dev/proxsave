@@ -93,22 +93,16 @@ type pbsDatastoreInventoryReport struct {
 }
 
 func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatastores []pbsDatastore) error {
+	if err := c.collectPBSStorageStackSnapshot(ctx); err != nil {
+		return err
+	}
+	return c.writePBSDatastoreInventoryReport(ctx, cliDatastores)
+}
+
+func (c *Collector) collectPBSStorageStackSnapshot(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	commandsDir := c.proxsaveCommandsDir("pbs")
-	if err := c.ensureDir(commandsDir); err != nil {
-		return fmt.Errorf("ensure commands dir: %w", err)
-	}
-
-	outputPath := filepath.Join(commandsDir, "pbs_datastore_inventory.json")
-	if c.shouldExclude(outputPath) {
-		c.incFilesSkipped()
-		return nil
-	}
-
-	ensureSystemPath()
 
 	// Copy storage stack configuration that may be needed to re-mount datastore paths (best effort).
 	for _, dir := range []struct {
@@ -131,6 +125,49 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 	if err := c.safeCopyFile(ctx, c.systemPath("/etc/multipath.conf"), filepath.Join(c.tempDir, "etc/multipath.conf"), "multipath.conf"); err != nil {
 		c.logger.Warning("Failed to collect /etc/multipath.conf: %v", err)
 	}
+
+	// Capture systemd mount units (common for remote storage mounts outside /etc/fstab).
+	if err := c.safeCopySystemdMountUnitFiles(ctx); err != nil {
+		c.logger.Warning("Failed to collect systemd mount units: %v", err)
+	}
+
+	// Capture common autofs map files and copy them into the backup tree (best effort).
+	if err := c.safeCopyAutofsMapFiles(ctx); err != nil {
+		c.logger.Warning("Failed to collect autofs map files: %v", err)
+	}
+
+	crypttabContent, _ := os.ReadFile(c.systemPath("/etc/crypttab"))
+	fstabContent, _ := os.ReadFile(c.systemPath("/etc/fstab"))
+	for _, ref := range uniqueSortedStrings(append(
+		extractCrypttabKeyFiles(string(crypttabContent)),
+		extractFstabReferencedFiles(string(fstabContent))...,
+	)) {
+		dest := filepath.Join(c.tempDir, strings.TrimPrefix(ref, "/"))
+		if err := c.safeCopyFile(ctx, c.systemPath(ref), dest, "Referenced file"); err != nil {
+			c.logger.Warning("Failed to collect referenced file %s: %v", ref, err)
+		}
+	}
+
+	return nil
+}
+
+func (c *Collector) writePBSDatastoreInventoryReport(ctx context.Context, cliDatastores []pbsDatastore) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	commandsDir, err := c.ensureCommandsDir("pbs")
+	if err != nil {
+		return fmt.Errorf("ensure commands dir: %w", err)
+	}
+
+	outputPath := filepath.Join(commandsDir, "pbs_datastore_inventory.json")
+	if c.shouldExclude(outputPath) {
+		c.incFilesSkipped()
+		return nil
+	}
+
+	ensureSystemPath()
 
 	report := pbsDatastoreInventoryReport{
 		GeneratedAt:      time.Now().Format(time.RFC3339),
@@ -181,14 +218,6 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 			return strings.HasSuffix(name, ".mount") || strings.HasSuffix(name, ".automount")
 		},
 	)
-	if err := c.safeCopySystemdMountUnitFiles(ctx); err != nil {
-		c.logger.Warning("Failed to collect systemd mount units: %v", err)
-	}
-
-	// Capture common autofs map files and copy them into the backup tree (best effort).
-	if err := c.safeCopyAutofsMapFiles(ctx); err != nil {
-		c.logger.Warning("Failed to collect autofs map files: %v", err)
-	}
 
 	// Best-effort: capture and copy referenced key/credential files from crypttab/fstab.
 	for _, ref := range uniqueSortedStrings(append(
@@ -202,11 +231,6 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 			snap.Reason = "referenced by fstab/crypttab"
 		}
 		report.Files[key] = snap
-
-		dest := filepath.Join(c.tempDir, strings.TrimPrefix(ref, "/"))
-		if err := c.safeCopyFile(ctx, c.systemPath(ref), dest, "Referenced file"); err != nil {
-			c.logger.Warning("Failed to collect referenced file %s: %v", ref, err)
-		}
 	}
 
 	configDatastores := parsePBSDatastoreCfg(report.Files["pbs_datastore_cfg"].Content)

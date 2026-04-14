@@ -76,67 +76,131 @@ func (c *Collector) CollectSystemInfo(ctx context.Context) error {
 // collectSystemDirectories collects system configuration directories
 func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 	c.logger.Debug("Collecting system directories into %s", c.tempDir)
-	// Network configuration
-	if c.config.BackupNetworkConfigs {
-		c.logger.Debug("Collecting network configuration files (/etc/network/*)")
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/network/interfaces"),
-			filepath.Join(c.tempDir, "etc/network/interfaces"),
-			"Network interfaces"); err != nil {
-			c.logger.Debug("No /etc/network/interfaces found")
-		}
-
-		// Additional network configs
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/network/interfaces.d"),
-			filepath.Join(c.tempDir, "etc/network/interfaces.d"),
-			"Network interfaces.d"); err != nil {
-			c.logger.Debug("No /etc/network/interfaces.d found")
-		}
-
-		// Additional network-related overrides frequently used on Proxmox hosts
-		extraNetworkFiles := []struct {
-			path string
-			desc string
-		}{
-			{"/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg", "Cloud-init network override"},
-			{"/etc/dnsmasq.d/lxc-vmbr1.conf", "LXC bridge DNSMasq configuration"},
-		}
-		for _, file := range extraNetworkFiles {
-			if err := c.safeCopyFile(ctx,
-				c.systemPath(file.path),
-				filepath.Join(c.tempDir, strings.TrimPrefix(file.path, "/")),
-				file.desc); err != nil {
-				c.logger.Debug("Failed to collect %s: %v", file.path, err)
-			}
-		}
-
-		// Netplan configs (if present)
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/netplan"),
-			filepath.Join(c.tempDir, "etc/netplan"),
-			"Netplan configuration"); err != nil {
-			c.logger.Debug("No /etc/netplan found")
-		}
-
-		// systemd-networkd configs (if present)
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/systemd/network"),
-			filepath.Join(c.tempDir, "etc/systemd/network"),
-			"systemd-networkd configuration"); err != nil {
-			c.logger.Debug("No /etc/systemd/network found")
-		}
-
-		// NetworkManager connections (if present)
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/NetworkManager/system-connections"),
-			filepath.Join(c.tempDir, "etc/NetworkManager/system-connections"),
-			"NetworkManager connections"); err != nil {
-			c.logger.Debug("No NetworkManager system-connections found")
+	steps := []func(context.Context) error{
+		c.collectSystemNetworkStatic,
+		c.collectSystemIdentityStatic,
+		c.collectSystemAptStatic,
+		c.collectSystemCronStatic,
+		c.collectSystemServicesStatic,
+		c.collectSystemLoggingStatic,
+		c.collectSystemSSLStatic,
+		c.collectSystemSysctlStatic,
+		c.collectSystemKernelModuleStatic,
+		c.collectSystemZFSStatic,
+		c.collectSystemFirewallStatic,
+		c.collectSystemRuntimeLeases,
+	}
+	for _, step := range steps {
+		if err := step(ctx); err != nil {
+			return err
 		}
 	}
 
-	// Hostname and hosts
+	c.logger.Debug("System directories collected")
+	return nil
+}
+
+// collectSystemCommands collects output from system commands
+func (c *Collector) collectSystemCommands(ctx context.Context) error {
+	commandsDir, err := c.ensureCommandsDir("system")
+	if err != nil {
+		return err
+	}
+	c.logger.Debug("Collecting system command outputs into %s", commandsDir)
+	steps := []func(context.Context, string) error{
+		c.collectSystemCoreRuntime,
+		c.collectSystemNetworkRuntime,
+		c.collectSystemStorageRuntime,
+		c.collectSystemComputeRuntime,
+		c.collectSystemServicesRuntime,
+		c.collectSystemPackagesRuntime,
+		c.collectSystemFirewallRuntime,
+		c.collectSystemKernelModulesRuntime,
+		c.collectSystemSysctlRuntime,
+		c.collectSystemZFSRuntime,
+		c.collectSystemLVMRuntime,
+	}
+	for _, step := range steps {
+		if err := step(ctx, commandsDir); err != nil {
+			return err
+		}
+	}
+
+	c.logger.Debug("System command output collection finished")
+	if err := c.finalizeSystemRuntimeReports(ctx, commandsDir); err != nil {
+		c.logger.Debug("Network report generation failed: %v", err)
+	}
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupNetworkConfigs {
+		return nil
+	}
+
+	c.logger.Debug("Collecting network configuration files (/etc/network/*)")
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/network/interfaces"),
+		filepath.Join(c.tempDir, "etc/network/interfaces"),
+		"Network interfaces"); err != nil {
+		c.logger.Debug("No /etc/network/interfaces found")
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/network/interfaces.d"),
+		filepath.Join(c.tempDir, "etc/network/interfaces.d"),
+		"Network interfaces.d"); err != nil {
+		c.logger.Debug("No /etc/network/interfaces.d found")
+	}
+
+	extraNetworkFiles := []struct {
+		path string
+		desc string
+	}{
+		{"/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg", "Cloud-init network override"},
+		{"/etc/dnsmasq.d/lxc-vmbr1.conf", "LXC bridge DNSMasq configuration"},
+	}
+	for _, file := range extraNetworkFiles {
+		if err := c.safeCopyFile(ctx,
+			c.systemPath(file.path),
+			filepath.Join(c.tempDir, strings.TrimPrefix(file.path, "/")),
+			file.desc); err != nil {
+			c.logger.Debug("Failed to collect %s: %v", file.path, err)
+		}
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/netplan"),
+		filepath.Join(c.tempDir, "etc/netplan"),
+		"Netplan configuration"); err != nil {
+		c.logger.Debug("No /etc/netplan found")
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/systemd/network"),
+		filepath.Join(c.tempDir, "etc/systemd/network"),
+		"systemd-networkd configuration"); err != nil {
+		c.logger.Debug("No /etc/systemd/network found")
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/NetworkManager/system-connections"),
+		filepath.Join(c.tempDir, "etc/NetworkManager/system-connections"),
+		"NetworkManager connections"); err != nil {
+		c.logger.Debug("No NetworkManager system-connections found")
+	}
+
+	return nil
+}
+
+func (c *Collector) collectSystemIdentityStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	c.logger.Debug("Collecting hostname/hosts information")
 	if err := c.safeCopyFile(ctx,
 		c.systemPath("/etc/hostname"),
@@ -152,7 +216,6 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 		c.logger.Debug("No /etc/hosts found")
 	}
 
-	// DNS configuration
 	c.logger.Debug("Collecting DNS resolver configuration")
 	if err := c.safeCopyFile(ctx,
 		c.systemPath("/etc/resolv.conf"),
@@ -161,7 +224,6 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 		c.logger.Debug("No /etc/resolv.conf found")
 	}
 
-	// Timezone configuration
 	c.logger.Debug("Collecting timezone configuration")
 	if err := c.safeCopyFile(ctx,
 		c.systemPath("/etc/timezone"),
@@ -170,239 +232,161 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 		c.logger.Debug("No /etc/timezone found")
 	}
 
-	// Apt sources
-	if c.config.BackupAptSources {
-		c.logger.Debug("Collecting APT sources and authentication data")
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/apt/sources.list"),
-			filepath.Join(c.tempDir, "etc/apt/sources.list"),
-			"APT sources"); err != nil {
-			c.logger.Debug("No /etc/apt/sources.list found")
-		}
+	return nil
+}
 
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/apt/sources.list.d"),
-			filepath.Join(c.tempDir, "etc/apt/sources.list.d"),
-			"APT sources.list.d"); err != nil {
-			c.logger.Debug("No /etc/apt/sources.list.d found")
-		}
+func (c *Collector) collectSystemAptStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupAptSources {
+		return nil
+	}
 
-		// APT preferences
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/apt/preferences"),
-			filepath.Join(c.tempDir, "etc/apt/preferences"),
-			"APT preferences"); err != nil {
-			c.logger.Debug("No /etc/apt/preferences found")
-		}
+	c.logger.Debug("Collecting APT sources and authentication data")
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/apt/sources.list"),
+		filepath.Join(c.tempDir, "etc/apt/sources.list"),
+		"APT sources"); err != nil {
+		c.logger.Debug("No /etc/apt/sources.list found")
+	}
 
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/apt/preferences.d"),
-			filepath.Join(c.tempDir, "etc/apt/preferences.d"),
-			"APT preferences.d"); err != nil {
-			c.logger.Debug("No /etc/apt/preferences.d found")
-		}
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/apt/sources.list.d"),
+		filepath.Join(c.tempDir, "etc/apt/sources.list.d"),
+		"APT sources.list.d"); err != nil {
+		c.logger.Debug("No /etc/apt/sources.list.d found")
+	}
 
-		// APT authentication keys
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/apt/trusted.gpg.d"),
-			filepath.Join(c.tempDir, "etc/apt/trusted.gpg.d"),
-			"APT GPG keys"); err != nil {
-			c.logger.Debug("No /etc/apt/trusted.gpg.d found")
-		}
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/apt/preferences"),
+		filepath.Join(c.tempDir, "etc/apt/preferences"),
+		"APT preferences"); err != nil {
+		c.logger.Debug("No /etc/apt/preferences found")
+	}
 
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/apt/apt.conf.d"),
-			filepath.Join(c.tempDir, "etc/apt/apt.conf.d"),
-			"APT apt.conf.d"); err != nil {
-			c.logger.Debug("No /etc/apt/apt.conf.d found")
-		}
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/apt/preferences.d"),
+		filepath.Join(c.tempDir, "etc/apt/preferences.d"),
+		"APT preferences.d"); err != nil {
+		c.logger.Debug("No /etc/apt/preferences.d found")
+	}
 
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/apt/auth.conf.d"),
-			filepath.Join(c.tempDir, "etc/apt/auth.conf.d"),
-			"APT auth.conf.d"); err != nil {
-			c.logger.Debug("No /etc/apt/auth.conf.d found")
-		}
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/apt/trusted.gpg.d"),
+		filepath.Join(c.tempDir, "etc/apt/trusted.gpg.d"),
+		"APT GPG keys"); err != nil {
+		c.logger.Debug("No /etc/apt/trusted.gpg.d found")
+	}
 
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/apt/keyrings"),
-			filepath.Join(c.tempDir, "etc/apt/keyrings"),
-			"APT keyrings"); err != nil {
-			c.logger.Debug("No /etc/apt/keyrings found")
-		}
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/apt/apt.conf.d"),
+		filepath.Join(c.tempDir, "etc/apt/apt.conf.d"),
+		"APT apt.conf.d"); err != nil {
+		c.logger.Debug("No /etc/apt/apt.conf.d found")
+	}
 
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/apt/listchanges.conf"),
-			filepath.Join(c.tempDir, "etc/apt/listchanges.conf"),
-			"APT listchanges.conf"); err != nil {
-			c.logger.Debug("No /etc/apt/listchanges.conf found")
-		}
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/apt/auth.conf.d"),
+		filepath.Join(c.tempDir, "etc/apt/auth.conf.d"),
+		"APT auth.conf.d"); err != nil {
+		c.logger.Debug("No /etc/apt/auth.conf.d found")
+	}
 
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/apt/listchanges.conf.d"),
-			filepath.Join(c.tempDir, "etc/apt/listchanges.conf.d"),
-			"APT listchanges.conf.d"); err != nil {
-			c.logger.Debug("No /etc/apt/listchanges.conf.d found")
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/apt/keyrings"),
+		filepath.Join(c.tempDir, "etc/apt/keyrings"),
+		"APT keyrings"); err != nil {
+		c.logger.Debug("No /etc/apt/keyrings found")
+	}
+
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/apt/listchanges.conf"),
+		filepath.Join(c.tempDir, "etc/apt/listchanges.conf"),
+		"APT listchanges.conf"); err != nil {
+		c.logger.Debug("No /etc/apt/listchanges.conf found")
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/apt/listchanges.conf.d"),
+		filepath.Join(c.tempDir, "etc/apt/listchanges.conf.d"),
+		"APT listchanges.conf.d"); err != nil {
+		c.logger.Debug("No /etc/apt/listchanges.conf.d found")
+	}
+
+	return nil
+}
+
+func (c *Collector) collectSystemCronStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupCronJobs {
+		return nil
+	}
+
+	c.logger.Debug("Collecting cron definitions (system and per-user)")
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/crontab"),
+		filepath.Join(c.tempDir, "etc/crontab"),
+		"System crontab"); err != nil {
+		c.logger.Debug("No /etc/crontab found")
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/cron.d"),
+		filepath.Join(c.tempDir, "etc/cron.d"),
+		"Cron.d directory"); err != nil {
+		c.logger.Debug("No /etc/cron.d found")
+	}
+
+	for _, dir := range []string{
+		"/etc/cron.daily",
+		"/etc/cron.hourly",
+		"/etc/cron.monthly",
+		"/etc/cron.weekly",
+	} {
+		if err := c.safeCopyDir(ctx, c.systemPath(dir),
+			filepath.Join(c.tempDir, dir[1:]),
+			filepath.Base(dir)); err != nil {
+			c.logger.Debug("No %s found", dir)
 		}
 	}
 
-	// Cron jobs
-	if c.config.BackupCronJobs {
-		c.logger.Debug("Collecting cron definitions (system and per-user)")
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/crontab"),
-			filepath.Join(c.tempDir, "etc/crontab"),
-			"System crontab"); err != nil {
-			c.logger.Debug("No /etc/crontab found")
-		}
-
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/cron.d"),
-			filepath.Join(c.tempDir, "etc/cron.d"),
-			"Cron.d directory"); err != nil {
-			c.logger.Debug("No /etc/cron.d found")
-		}
-
-		// Cron scripts directories
-		cronDirs := []string{
-			"/etc/cron.daily",
-			"/etc/cron.hourly",
-			"/etc/cron.monthly",
-			"/etc/cron.weekly",
-		}
-		for _, dir := range cronDirs {
-			if err := c.safeCopyDir(ctx, c.systemPath(dir),
-				filepath.Join(c.tempDir, dir[1:]), // Remove leading /
-				filepath.Base(dir)); err != nil {
-				c.logger.Debug("No %s found", dir)
-			}
-		}
-
-		// Per-user crontabs
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/var/spool/cron/crontabs"),
-			filepath.Join(c.tempDir, "var/spool/cron/crontabs"),
-			"User crontabs"); err != nil {
-			c.logger.Debug("No user crontabs found")
-		}
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/var/spool/cron/crontabs"),
+		filepath.Join(c.tempDir, "var/spool/cron/crontabs"),
+		"User crontabs"); err != nil {
+		c.logger.Debug("No user crontabs found")
 	}
 
-	// Systemd services
-	if c.config.BackupSystemdServices {
-		c.logger.Debug("Collecting systemd unit definitions")
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/systemd/system"),
-			filepath.Join(c.tempDir, "etc/systemd/system"),
-			"Systemd services"); err != nil {
-			c.logger.Debug("No /etc/systemd/system found")
-		}
+	return nil
+}
+
+func (c *Collector) collectSystemServicesStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupSystemdServices {
+		return nil
 	}
 
-	// SSL certificates
-	if c.config.BackupSSLCerts {
-		c.logger.Debug("Collecting SSL certificates and keys")
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/ssl/certs"),
-			filepath.Join(c.tempDir, "etc/ssl/certs"),
-			"SSL certificates"); err != nil {
-			c.logger.Debug("No /etc/ssl/certs found")
-		}
-
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/ssl/private"),
-			filepath.Join(c.tempDir, "etc/ssl/private"),
-			"SSL private keys"); err != nil {
-			c.logger.Debug("No /etc/ssl/private found")
-		}
-
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/ssl/openssl.cnf"),
-			filepath.Join(c.tempDir, "etc/ssl/openssl.cnf"),
-			"OpenSSL configuration"); err != nil {
-			c.logger.Debug("No /etc/ssl/openssl.cnf found")
-		}
+	c.logger.Debug("Collecting systemd unit definitions")
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/systemd/system"),
+		filepath.Join(c.tempDir, "etc/systemd/system"),
+		"Systemd services"); err != nil {
+		c.logger.Debug("No /etc/systemd/system found")
 	}
 
-	// Sysctl configuration
-	if c.config.BackupSysctlConfig {
-		c.logger.Debug("Collecting sysctl configuration files")
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/sysctl.conf"),
-			filepath.Join(c.tempDir, "etc/sysctl.conf"),
-			"Sysctl configuration"); err != nil {
-			c.logger.Debug("No /etc/sysctl.conf found")
-		}
+	return nil
+}
 
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/sysctl.d"),
-			filepath.Join(c.tempDir, "etc/sysctl.d"),
-			"Sysctl.d directory"); err != nil {
-			c.logger.Debug("No /etc/sysctl.d found")
-		}
+func (c *Collector) collectSystemLoggingStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	// Kernel modules
-	if c.config.BackupKernelModules {
-		c.logger.Debug("Collecting kernel module configuration")
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/modules"),
-			filepath.Join(c.tempDir, "etc/modules"),
-			"Kernel modules"); err != nil {
-			c.logger.Debug("No /etc/modules found")
-		}
-
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/modprobe.d"),
-			filepath.Join(c.tempDir, "etc/modprobe.d"),
-			"Modprobe.d directory"); err != nil {
-			c.logger.Debug("No /etc/modprobe.d found")
-		}
-	}
-
-	// ZFS configuration files
-	if c.config.BackupZFSConfig {
-		c.logger.Debug("Collecting ZFS configuration (/etc/zfs, /etc/hostid)")
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/zfs"),
-			filepath.Join(c.tempDir, "etc/zfs"),
-			"ZFS configuration"); err != nil {
-			c.logger.Warning("Failed to collect /etc/zfs: %v", err)
-		}
-
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/hostid"),
-			filepath.Join(c.tempDir, "etc/hostid"),
-			"ZFS host identifier"); err != nil {
-			c.logger.Warning("Failed to collect /etc/hostid: %v", err)
-		}
-	}
-
-	// Firewall rules (iptables/nftables)
-	if c.config.BackupFirewallRules {
-		c.logger.Debug("Collecting firewall rules (/etc/iptables, nftables)")
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/iptables"),
-			filepath.Join(c.tempDir, "etc/iptables"),
-			"iptables rules"); err != nil {
-			c.logger.Debug("No /etc/iptables found")
-		}
-
-		if err := c.safeCopyDir(ctx,
-			c.systemPath("/etc/nftables.d"),
-			filepath.Join(c.tempDir, "etc/nftables.d"),
-			"nftables rules"); err != nil {
-			c.logger.Debug("No /etc/nftables.d found")
-		}
-
-		if err := c.safeCopyFile(ctx,
-			c.systemPath("/etc/nftables.conf"),
-			filepath.Join(c.tempDir, "etc/nftables.conf"),
-			"nftables configuration"); err != nil {
-			c.logger.Debug("No /etc/nftables.conf found")
-		}
-	}
-
-	// Logrotate configuration
 	if err := c.safeCopyDir(ctx,
 		c.systemPath("/etc/logrotate.d"),
 		filepath.Join(c.tempDir, "etc/logrotate.d"),
@@ -410,7 +394,158 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 		c.logger.Debug("No /etc/logrotate.d found")
 	}
 
-	// DHCP leases (best effort)
+	return nil
+}
+
+func (c *Collector) collectSystemSSLStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupSSLCerts {
+		return nil
+	}
+
+	c.logger.Debug("Collecting SSL certificates and keys")
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/ssl/certs"),
+		filepath.Join(c.tempDir, "etc/ssl/certs"),
+		"SSL certificates"); err != nil {
+		c.logger.Debug("No /etc/ssl/certs found")
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/ssl/private"),
+		filepath.Join(c.tempDir, "etc/ssl/private"),
+		"SSL private keys"); err != nil {
+		c.logger.Debug("No /etc/ssl/private found")
+	}
+
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/ssl/openssl.cnf"),
+		filepath.Join(c.tempDir, "etc/ssl/openssl.cnf"),
+		"OpenSSL configuration"); err != nil {
+		c.logger.Debug("No /etc/ssl/openssl.cnf found")
+	}
+
+	return nil
+}
+
+func (c *Collector) collectSystemSysctlStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupSysctlConfig {
+		return nil
+	}
+
+	c.logger.Debug("Collecting sysctl configuration files")
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/sysctl.conf"),
+		filepath.Join(c.tempDir, "etc/sysctl.conf"),
+		"Sysctl configuration"); err != nil {
+		c.logger.Debug("No /etc/sysctl.conf found")
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/sysctl.d"),
+		filepath.Join(c.tempDir, "etc/sysctl.d"),
+		"Sysctl.d directory"); err != nil {
+		c.logger.Debug("No /etc/sysctl.d found")
+	}
+
+	return nil
+}
+
+func (c *Collector) collectSystemKernelModuleStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupKernelModules {
+		return nil
+	}
+
+	c.logger.Debug("Collecting kernel module configuration")
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/modules"),
+		filepath.Join(c.tempDir, "etc/modules"),
+		"Kernel modules"); err != nil {
+		c.logger.Debug("No /etc/modules found")
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/modprobe.d"),
+		filepath.Join(c.tempDir, "etc/modprobe.d"),
+		"Modprobe.d directory"); err != nil {
+		c.logger.Debug("No /etc/modprobe.d found")
+	}
+
+	return nil
+}
+
+func (c *Collector) collectSystemZFSStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupZFSConfig {
+		return nil
+	}
+
+	c.logger.Debug("Collecting ZFS configuration (/etc/zfs, /etc/hostid)")
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/zfs"),
+		filepath.Join(c.tempDir, "etc/zfs"),
+		"ZFS configuration"); err != nil {
+		c.logger.Warning("Failed to collect /etc/zfs: %v", err)
+	}
+
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/hostid"),
+		filepath.Join(c.tempDir, "etc/hostid"),
+		"ZFS host identifier"); err != nil {
+		c.logger.Warning("Failed to collect /etc/hostid: %v", err)
+	}
+
+	return nil
+}
+
+func (c *Collector) collectSystemFirewallStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupFirewallRules {
+		return nil
+	}
+
+	c.logger.Debug("Collecting firewall rules (/etc/iptables, nftables)")
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/iptables"),
+		filepath.Join(c.tempDir, "etc/iptables"),
+		"iptables rules"); err != nil {
+		c.logger.Debug("No /etc/iptables found")
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/nftables.d"),
+		filepath.Join(c.tempDir, "etc/nftables.d"),
+		"nftables rules"); err != nil {
+		c.logger.Debug("No /etc/nftables.d found")
+	}
+
+	if err := c.safeCopyFile(ctx,
+		c.systemPath("/etc/nftables.conf"),
+		filepath.Join(c.tempDir, "etc/nftables.conf"),
+		"nftables configuration"); err != nil {
+		c.logger.Debug("No /etc/nftables.conf found")
+	}
+
+	return nil
+}
+
+func (c *Collector) collectSystemRuntimeLeases(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	if err := c.safeCopyDir(ctx,
 		c.systemPath("/var/lib/dhcp"),
 		c.proxsaveRuntimeDir("var/lib/dhcp"),
@@ -430,19 +565,10 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 		c.logger.Debug("No /run/systemd/netif/leases found")
 	}
 
-	c.logger.Debug("System directories collected")
 	return nil
 }
 
-// collectSystemCommands collects output from system commands
-func (c *Collector) collectSystemCommands(ctx context.Context) error {
-	commandsDir := c.proxsaveCommandsDir("system")
-	if err := c.ensureDir(commandsDir); err != nil {
-		return fmt.Errorf("failed to create commands directory: %w", err)
-	}
-	c.logger.Debug("Collecting system command outputs into %s", commandsDir)
-
-	// OS release information (CRITICAL)
+func (c *Collector) collectSystemCoreRuntime(ctx context.Context, commandsDir string) error {
 	osReleasePath := c.systemPath("/etc/os-release")
 	if err := c.collectCommandMulti(ctx,
 		fmt.Sprintf("cat %s", osReleasePath),
@@ -452,7 +578,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return fmt.Errorf("failed to get OS release (critical): %w", err)
 	}
 
-	// Kernel version (CRITICAL)
 	if err := c.collectCommandMulti(ctx,
 		"uname -a",
 		filepath.Join(commandsDir, "uname.txt"),
@@ -461,14 +586,16 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return fmt.Errorf("failed to get kernel version (critical): %w", err)
 	}
 
-	// Hostname
 	c.safeCmdOutput(ctx,
 		"hostname -f",
 		filepath.Join(commandsDir, "hostname.txt"),
 		"Hostname",
 		false)
 
-	// IP addresses
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
 		"ip addr show",
 		filepath.Join(commandsDir, "ip_addr.txt"),
@@ -481,7 +608,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(commandsDir, "ip_addr.json"),
 		"IP addresses (json)")
 
-	// Policy routing rules
 	if err := c.collectCommandMulti(ctx,
 		"ip rule show",
 		filepath.Join(commandsDir, "ip_rule.txt"),
@@ -494,7 +620,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(commandsDir, "ip_rule.json"),
 		"IP rules (json)")
 
-	// IP routes
 	if err := c.collectCommandMulti(ctx,
 		"ip route show",
 		filepath.Join(commandsDir, "ip_route.txt"),
@@ -507,7 +632,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(commandsDir, "ip_route.json"),
 		"IP routes (json)")
 
-	// All routing tables (IPv4/IPv6)
 	c.collectCommandOptional(ctx,
 		"ip -4 route show table all",
 		filepath.Join(commandsDir, "ip_route_all_v4.txt"),
@@ -517,7 +641,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(commandsDir, "ip_route_all_v6.txt"),
 		"IP routes (all tables v6)")
 
-	// IP link statistics
 	c.collectCommandOptional(ctx,
 		"ip -s link",
 		filepath.Join(commandsDir, "ip_link.txt"),
@@ -527,7 +650,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		filepath.Join(commandsDir, "ip_link.json"),
 		"IP links (json)")
 
-	// Neighbors (ARP/NDP)
 	c.safeCmdOutput(ctx,
 		"ip neigh show",
 		filepath.Join(commandsDir, "ip_neigh.txt"),
@@ -539,7 +661,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		"Neighbor table (IPv6)",
 		false)
 
-	// Bridge/VLAN/FDB/MDB state
 	c.collectCommandOptional(ctx,
 		"bridge -d link show",
 		filepath.Join(commandsDir, "bridge_link.txt"),
@@ -561,7 +682,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		c.logger.Debug("Network inventory collection failed: %v", err)
 	}
 
-	// Bonding status (/proc/net/bonding/*)
 	if entries, err := os.ReadDir(c.systemPath("/proc/net/bonding")); err == nil {
 		for _, entry := range entries {
 			if entry.IsDir() {
@@ -577,7 +697,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		c.logger.Debug("No bonding interfaces found")
 	}
 
-	// DNS resolver
 	resolvPath := c.systemPath("/etc/resolv.conf")
 	c.safeCmdOutput(ctx,
 		fmt.Sprintf("cat %s", resolvPath),
@@ -585,7 +704,10 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		"DNS configuration",
 		false)
 
-	// Disk usage
+	return nil
+}
+
+func (c *Collector) collectSystemStorageRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
 		"df -h",
 		filepath.Join(commandsDir, "df.txt"),
@@ -594,14 +716,12 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return err
 	}
 
-	// Mounted filesystems
 	c.safeCmdOutput(ctx,
 		"mount",
 		filepath.Join(commandsDir, "mount.txt"),
 		"Mounted filesystems",
 		false)
 
-	// Block devices
 	if err := c.collectCommandMulti(ctx,
 		"lsblk -f",
 		filepath.Join(commandsDir, "lsblk.txt"),
@@ -610,19 +730,20 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return err
 	}
 
-	// Block devices (JSON) - used for stable device mapping during restore (fstab remap).
 	c.collectCommandOptional(ctx,
 		"lsblk -J -O",
 		filepath.Join(commandsDir, "lsblk_json.json"),
 		"Block devices (JSON)")
 
-	// Block device identifiers (UUID/PARTUUID/LABEL) - used for stable device mapping during restore.
 	c.collectCommandOptional(ctx,
 		"blkid",
 		filepath.Join(commandsDir, "blkid.txt"),
 		"Block device identifiers (blkid)")
 
-	// Memory information
+	return nil
+}
+
+func (c *Collector) collectSystemComputeRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
 		"free -h",
 		filepath.Join(commandsDir, "free.txt"),
@@ -631,7 +752,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return err
 	}
 
-	// CPU information
 	if err := c.collectCommandMulti(ctx,
 		"lscpu",
 		filepath.Join(commandsDir, "lscpu.txt"),
@@ -640,7 +760,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return err
 	}
 
-	// PCI devices
 	if err := c.collectCommandMulti(ctx,
 		"lspci -v",
 		filepath.Join(commandsDir, "lspci.txt"),
@@ -649,29 +768,36 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		return err
 	}
 
-	// USB devices
 	c.safeCmdOutput(ctx,
 		"lsusb",
 		filepath.Join(commandsDir, "lsusb.txt"),
 		"USB devices",
 		false)
 
-	// Systemd services status
-	if c.config.BackupSystemdServices {
-		if err := c.collectCommandMulti(ctx,
-			"systemctl list-units --type=service --all",
-			filepath.Join(commandsDir, "systemctl_services.txt"),
-			"Systemd services",
-			false); err != nil {
-			return err
-		}
+	return nil
+}
 
-		c.safeCmdOutput(ctx, "systemctl list-unit-files --type=service",
-			filepath.Join(commandsDir, "systemctl_service_files.txt"),
-			"Systemd service files", false)
+func (c *Collector) collectSystemServicesRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupSystemdServices {
+		return nil
 	}
 
-	// Installed packages
+	if err := c.collectCommandMulti(ctx,
+		"systemctl list-units --type=service --all",
+		filepath.Join(commandsDir, "systemctl_services.txt"),
+		"Systemd services",
+		false); err != nil {
+		return err
+	}
+
+	c.safeCmdOutput(ctx, "systemctl list-unit-files --type=service",
+		filepath.Join(commandsDir, "systemctl_service_files.txt"),
+		"Systemd service files", false)
+
+	return nil
+}
+
+func (c *Collector) collectSystemPackagesRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupInstalledPackages {
 		packagesDir := filepath.Join(commandsDir, "packages")
 		if err := c.ensureDir(packagesDir); err != nil {
@@ -687,7 +813,6 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 		}
 	}
 
-	// APT policy
 	if c.config.BackupAptSources {
 		c.safeCmdOutput(ctx,
 			"apt-cache policy",
@@ -696,152 +821,166 @@ func (c *Collector) collectSystemCommands(ctx context.Context) error {
 			false)
 	}
 
-	// Firewall status
-	if c.config.BackupFirewallRules {
-		if err := c.collectCommandMulti(ctx,
-			"iptables-save",
-			filepath.Join(commandsDir, "iptables.txt"),
-			"iptables rules",
-			false); err != nil {
-			return err
-		}
-
-		c.collectCommandOptional(ctx,
-			"iptables -t nat -vnL --line-numbers",
-			filepath.Join(commandsDir, "iptables_nat.txt"),
-			"iptables NAT table")
-
-		// ip6tables
-		if err := c.collectCommandMulti(ctx,
-			"ip6tables-save",
-			filepath.Join(commandsDir, "ip6tables.txt"),
-			"ip6tables rules",
-			false); err != nil {
-			return err
-		}
-
-		c.collectCommandOptional(ctx,
-			"ip6tables -t nat -vnL --line-numbers",
-			filepath.Join(commandsDir, "ip6tables_nat.txt"),
-			"ip6tables NAT table")
-
-		// nftables
-		c.safeCmdOutput(ctx,
-			"nft list ruleset",
-			filepath.Join(commandsDir, "nftables.txt"),
-			"nftables rules",
-			false)
-
-		// UFW status
-		c.collectCommandOptional(ctx,
-			"ufw status verbose",
-			filepath.Join(commandsDir, "ufw_status.txt"),
-			"UFW status")
-
-		// firewalld status
-		c.collectCommandOptional(ctx,
-			"firewall-cmd --state",
-			filepath.Join(commandsDir, "firewalld_state.txt"),
-			"firewalld state")
-		c.collectCommandOptional(ctx,
-			"firewall-cmd --list-all",
-			filepath.Join(commandsDir, "firewalld_list_all.txt"),
-			"firewalld rules")
-
-		// Service state for ufw/firewalld (best effort)
-		c.collectCommandOptional(ctx,
-			"systemctl status --no-pager ufw",
-			filepath.Join(commandsDir, "systemctl_ufw.txt"),
-			"systemctl ufw")
-		c.collectCommandOptional(ctx,
-			"systemctl status --no-pager firewalld",
-			filepath.Join(commandsDir, "systemctl_firewalld.txt"),
-			"systemctl firewalld")
-	}
-
-	// Loaded kernel modules
-	if c.config.BackupKernelModules {
-		c.safeCmdOutput(ctx,
-			"lsmod",
-			filepath.Join(commandsDir, "lsmod.txt"),
-			"Loaded kernel modules",
-			false)
-	}
-
-	// Sysctl values
-	if c.config.BackupSysctlConfig {
-		c.safeCmdOutput(ctx,
-			"sysctl -a",
-			filepath.Join(commandsDir, "sysctl.txt"),
-			"Sysctl values",
-			false)
-	}
-
-	// ZFS pools (if ZFS is present)
-	if c.config.BackupZFSConfig {
-		usesZFS, indicators := c.detectZFSUsage()
-		c.logger.Debug("ZFS usage detected=%t (indicators=%s)", usesZFS, indicators)
-		if !usesZFS {
-			c.logger.Warning("Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=false to disable.")
-		} else {
-			zfsDir := filepath.Join(commandsDir, "zfs")
-			if err := c.ensureDir(zfsDir); err != nil {
-				return fmt.Errorf("failed to create zfs info directory: %w", err)
-			}
-
-			if _, err := c.depLookPath("zpool"); err == nil {
-				c.collectCommandOptional(ctx,
-					"zpool status",
-					filepath.Join(zfsDir, "zpool_status.txt"),
-					"ZFS pool status")
-
-				c.collectCommandOptional(ctx,
-					"zpool list",
-					filepath.Join(zfsDir, "zpool_list.txt"),
-					"ZFS pool list")
-			}
-
-			if _, err := c.depLookPath("zfs"); err == nil {
-				c.collectCommandOptional(ctx,
-					"zfs list",
-					filepath.Join(zfsDir, "zfs_list.txt"),
-					"ZFS filesystem list")
-
-				c.collectCommandOptional(ctx,
-					"zfs get all",
-					filepath.Join(zfsDir, "zfs_get_all.txt"),
-					"ZFS properties",
-				)
-			}
-		}
-	}
-
-	// LVM information
-	if _, err := c.depStat(c.systemPath("/sbin/pvs")); err == nil {
-		c.safeCmdOutput(ctx,
-			"pvs",
-			filepath.Join(commandsDir, "lvm_pvs.txt"),
-			"LVM physical volumes",
-			false)
-
-		c.safeCmdOutput(ctx,
-			"vgs",
-			filepath.Join(commandsDir, "lvm_vgs.txt"),
-			"LVM volume groups",
-			false)
-
-		c.safeCmdOutput(ctx,
-			"lvs",
-			filepath.Join(commandsDir, "lvm_lvs.txt"),
-			"LVM logical volumes",
-			false)
-	}
-
-	c.logger.Debug("System command output collection finished")
-	if err := c.buildNetworkReport(ctx, commandsDir); err != nil {
-		c.logger.Debug("Network report generation failed: %v", err)
-	}
 	return nil
+}
+
+func (c *Collector) collectSystemFirewallRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupFirewallRules {
+		return nil
+	}
+
+	if err := c.collectCommandMulti(ctx,
+		"iptables-save",
+		filepath.Join(commandsDir, "iptables.txt"),
+		"iptables rules",
+		false); err != nil {
+		return err
+	}
+
+	c.collectCommandOptional(ctx,
+		"iptables -t nat -vnL --line-numbers",
+		filepath.Join(commandsDir, "iptables_nat.txt"),
+		"iptables NAT table")
+
+	if err := c.collectCommandMulti(ctx,
+		"ip6tables-save",
+		filepath.Join(commandsDir, "ip6tables.txt"),
+		"ip6tables rules",
+		false); err != nil {
+		return err
+	}
+
+	c.collectCommandOptional(ctx,
+		"ip6tables -t nat -vnL --line-numbers",
+		filepath.Join(commandsDir, "ip6tables_nat.txt"),
+		"ip6tables NAT table")
+
+	c.safeCmdOutput(ctx,
+		"nft list ruleset",
+		filepath.Join(commandsDir, "nftables.txt"),
+		"nftables rules",
+		false)
+
+	c.collectCommandOptional(ctx,
+		"ufw status verbose",
+		filepath.Join(commandsDir, "ufw_status.txt"),
+		"UFW status")
+	c.collectCommandOptional(ctx,
+		"firewall-cmd --state",
+		filepath.Join(commandsDir, "firewalld_state.txt"),
+		"firewalld state")
+	c.collectCommandOptional(ctx,
+		"firewall-cmd --list-all",
+		filepath.Join(commandsDir, "firewalld_list_all.txt"),
+		"firewalld rules")
+	c.collectCommandOptional(ctx,
+		"systemctl status --no-pager ufw",
+		filepath.Join(commandsDir, "systemctl_ufw.txt"),
+		"systemctl ufw")
+	c.collectCommandOptional(ctx,
+		"systemctl status --no-pager firewalld",
+		filepath.Join(commandsDir, "systemctl_firewalld.txt"),
+		"systemctl firewalld")
+
+	return nil
+}
+
+func (c *Collector) collectSystemKernelModulesRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupKernelModules {
+		return nil
+	}
+
+	c.safeCmdOutput(ctx,
+		"lsmod",
+		filepath.Join(commandsDir, "lsmod.txt"),
+		"Loaded kernel modules",
+		false)
+	return nil
+}
+
+func (c *Collector) collectSystemSysctlRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupSysctlConfig {
+		return nil
+	}
+
+	c.safeCmdOutput(ctx,
+		"sysctl -a",
+		filepath.Join(commandsDir, "sysctl.txt"),
+		"Sysctl values",
+		false)
+	return nil
+}
+
+func (c *Collector) collectSystemZFSRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupZFSConfig {
+		return nil
+	}
+
+	usesZFS, indicators := c.detectZFSUsage()
+	c.logger.Debug("ZFS usage detected=%t (indicators=%s)", usesZFS, indicators)
+	if !usesZFS {
+		c.logger.Warning("Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=false to disable.")
+		return nil
+	}
+
+	zfsDir := filepath.Join(commandsDir, "zfs")
+	if err := c.ensureDir(zfsDir); err != nil {
+		return fmt.Errorf("failed to create zfs info directory: %w", err)
+	}
+
+	if _, err := c.depLookPath("zpool"); err == nil {
+		c.collectCommandOptional(ctx,
+			"zpool status",
+			filepath.Join(zfsDir, "zpool_status.txt"),
+			"ZFS pool status")
+
+		c.collectCommandOptional(ctx,
+			"zpool list",
+			filepath.Join(zfsDir, "zpool_list.txt"),
+			"ZFS pool list")
+	}
+
+	if _, err := c.depLookPath("zfs"); err == nil {
+		c.collectCommandOptional(ctx,
+			"zfs list",
+			filepath.Join(zfsDir, "zfs_list.txt"),
+			"ZFS filesystem list")
+
+		c.collectCommandOptional(ctx,
+			"zfs get all",
+			filepath.Join(zfsDir, "zfs_get_all.txt"),
+			"ZFS properties",
+		)
+	}
+
+	return nil
+}
+
+func (c *Collector) collectSystemLVMRuntime(ctx context.Context, commandsDir string) error {
+	if _, err := c.depStat(c.systemPath("/sbin/pvs")); err != nil {
+		return nil
+	}
+
+	c.safeCmdOutput(ctx,
+		"pvs",
+		filepath.Join(commandsDir, "lvm_pvs.txt"),
+		"LVM physical volumes",
+		false)
+	c.safeCmdOutput(ctx,
+		"vgs",
+		filepath.Join(commandsDir, "lvm_vgs.txt"),
+		"LVM volume groups",
+		false)
+	c.safeCmdOutput(ctx,
+		"lvs",
+		filepath.Join(commandsDir, "lvm_lvs.txt"),
+		"LVM logical volumes",
+		false)
+	return nil
+}
+
+func (c *Collector) finalizeSystemRuntimeReports(ctx context.Context, commandsDir string) error {
+	return c.buildNetworkReport(ctx, commandsDir)
 }
 
 // buildNetworkReport composes a single human-readable network report by aggregating
