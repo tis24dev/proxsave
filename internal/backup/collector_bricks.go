@@ -11,22 +11,39 @@ import (
 type BrickID string
 
 const (
-	brickPVEValidateAndCluster BrickID = "pve_validate_and_cluster"
-	brickPVEConfigSnapshot     BrickID = "pve_config_snapshot"
-	brickPVEClusterSnapshot    BrickID = "pve_cluster_snapshot"
-	brickPVEFirewallSnapshot   BrickID = "pve_firewall_snapshot"
-	brickPVEVZDumpSnapshot     BrickID = "pve_vzdump_snapshot"
-	brickPVERuntimeCore        BrickID = "pve_runtime_core"
-	brickPVERuntimeACL         BrickID = "pve_runtime_acl"
-	brickPVERuntimeCluster     BrickID = "pve_runtime_cluster"
-	brickPVERuntimeStorage     BrickID = "pve_runtime_storage"
-	brickPVEVMConfigs          BrickID = "pve_vm_configs"
-	brickPVEJobs               BrickID = "pve_jobs"
-	brickPVESchedules          BrickID = "pve_schedules"
-	brickPVEReplication        BrickID = "pve_replication"
-	brickPVEStorageMetadata    BrickID = "pve_storage_metadata"
-	brickPVECeph               BrickID = "pve_ceph"
-	brickPVEFinalize           BrickID = "pve_finalize"
+	brickPVEValidateAndCluster         BrickID = "pve_validate_and_cluster"
+	brickPVEConfigSnapshot             BrickID = "pve_config_snapshot"
+	brickPVEClusterSnapshot            BrickID = "pve_cluster_snapshot"
+	brickPVEFirewallSnapshot           BrickID = "pve_firewall_snapshot"
+	brickPVEVZDumpSnapshot             BrickID = "pve_vzdump_snapshot"
+	brickPVERuntimeCore                BrickID = "pve_runtime_core"
+	brickPVERuntimeACL                 BrickID = "pve_runtime_acl"
+	brickPVERuntimeCluster             BrickID = "pve_runtime_cluster"
+	brickPVERuntimeStorage             BrickID = "pve_runtime_storage"
+	brickPVEVMQEMUConfigs              BrickID = "pve_vm_qemu_configs"
+	brickPVEVMLXCConfigs               BrickID = "pve_vm_lxc_configs"
+	brickPVEGuestInventory             BrickID = "pve_guest_inventory"
+	brickPVEBackupJobDefs              BrickID = "pve_backup_job_definitions"
+	brickPVEBackupJobHistory           BrickID = "pve_backup_job_history"
+	brickPVEVZDumpCron                 BrickID = "pve_vzdump_cron_snapshot"
+	brickPVEScheduleCrontab            BrickID = "pve_schedule_crontab"
+	brickPVEScheduleTimers             BrickID = "pve_schedule_timers"
+	brickPVEScheduleCronFiles          BrickID = "pve_schedule_cron_files"
+	brickPVEReplicationDefs            BrickID = "pve_replication_definitions"
+	brickPVEReplicationStatus          BrickID = "pve_replication_status"
+	brickPVEStorageResolve             BrickID = "pve_storage_resolve"
+	brickPVEStorageProbe               BrickID = "pve_storage_probe"
+	brickPVEStorageMetadataJSON        BrickID = "pve_storage_metadata_json"
+	brickPVEStorageMetadataText        BrickID = "pve_storage_metadata_text"
+	brickPVEStorageBackupAnalysis      BrickID = "pve_storage_backup_analysis"
+	brickPVEStorageSummary             BrickID = "pve_storage_summary"
+	brickPVECephConfigSnapshot         BrickID = "pve_ceph_config_snapshot"
+	brickPVECephRuntime                BrickID = "pve_ceph_runtime"
+	brickPVEAliasCore                  BrickID = "pve_alias_core"
+	brickPVEAggregateBackupHistory     BrickID = "pve_aggregate_backup_history"
+	brickPVEAggregateReplicationStatus BrickID = "pve_aggregate_replication_status"
+	brickPVEVersionInfo                BrickID = "pve_version_info"
+	brickPVEManifestFinalize           BrickID = "pve_manifest_finalize"
 
 	brickPBSValidate             BrickID = "pbs_validate"
 	brickPBSConfigSnapshot       BrickID = "pbs_config_snapshot"
@@ -105,9 +122,19 @@ type collectionState struct {
 }
 
 type pveContext struct {
-	clustered   bool
-	runtimeInfo *pveRuntimeInfo
-	commandsDir string
+	clustered                    bool
+	runtimeInfo                  *pveRuntimeInfo
+	commandsDir                  string
+	resolvedStorages             []pveStorageEntry
+	probedStorages               []pveStorageEntry
+	storageScanResults           map[string]*pveStorageScanResult
+	guestCollectionAborted       bool
+	jobCollectionAborted         bool
+	scheduleCollectionAborted    bool
+	replicationCollectionAborted bool
+	storageCollectionAborted     bool
+	cephCollectionAborted        bool
+	finalizeCollectionAborted    bool
 }
 
 type pbsContext struct {
@@ -313,114 +340,416 @@ func newPVERecipe() recipe {
 				},
 			},
 			{
-				ID:          brickPVEVMConfigs,
-				Description: "Collect VM and container configurations",
+				ID:          brickPVEVMQEMUConfigs,
+				Description: "Collect QEMU VM configurations",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
-					if c.config.BackupVMConfigs {
-						c.logger.Info("Collecting VM and container configurations")
-						c.logger.Debug("Collecting VM/CT configuration files")
-						if err := c.collectVMConfigs(ctx); err != nil {
-							c.logger.Warning("Failed to collect VM configs: %v", err)
-						} else {
-							c.logger.Debug("VM/CT configuration collection completed")
-						}
-					} else {
+					if !c.config.BackupVMConfigs {
 						c.logger.Skip("VM/container configuration backup disabled.")
+						return nil
+					}
+					if state.pve.guestCollectionAborted {
+						return nil
+					}
+					c.logger.Info("Collecting VM and container configurations")
+					if err := c.collectPVEQEMUConfigs(ctx); err != nil {
+						c.logger.Warning("Failed to collect QEMU VM configs: %v", err)
+						state.pve.guestCollectionAborted = true
 					}
 					return nil
 				},
 			},
 			{
-				ID:          brickPVEJobs,
-				Description: "Collect PVE job definitions",
+				ID:          brickPVEVMLXCConfigs,
+				Description: "Collect LXC container configurations",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
-					if c.config.BackupPVEJobs {
-						c.logger.Debug("Collecting PVE job definitions for nodes: %v", state.pve.runtimeNodes())
-						if err := c.collectPVEJobs(ctx, state.pve.runtimeNodes()); err != nil {
-							c.logger.Warning("Failed to collect PVE job information: %v", err)
-						} else {
-							c.logger.Debug("PVE job collection completed")
+					if !c.config.BackupVMConfigs || state.pve.guestCollectionAborted {
+						return nil
+					}
+					if err := c.collectPVELXCConfigs(ctx); err != nil {
+						c.logger.Warning("Failed to collect LXC configs: %v", err)
+						state.pve.guestCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEGuestInventory,
+				Description: "Collect guest inventory",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupVMConfigs || state.pve.guestCollectionAborted {
+						return nil
+					}
+					if err := c.collectPVEGuestInventory(ctx); err != nil {
+						c.logger.Warning("Failed to collect guest inventory: %v", err)
+						state.pve.guestCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEBackupJobDefs,
+				Description: "Collect PVE backup job definitions",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVEJobs || state.pve.jobCollectionAborted {
+						return nil
+					}
+					c.logger.Debug("Collecting PVE job definitions for nodes: %v", state.pve.runtimeNodes())
+					if err := c.collectPVEBackupJobDefinitions(ctx); err != nil {
+						c.logger.Warning("Failed to collect PVE backup job definitions: %v", err)
+						state.pve.jobCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEBackupJobHistory,
+				Description: "Collect PVE backup job history",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVEJobs || state.pve.jobCollectionAborted {
+						return nil
+					}
+					if err := c.collectPVEBackupJobHistory(ctx, state.pve.runtimeNodes()); err != nil {
+						c.logger.Warning("Failed to collect PVE backup history: %v", err)
+						state.pve.jobCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEVZDumpCron,
+				Description: "Collect VZDump cron snapshot",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVEJobs || state.pve.jobCollectionAborted {
+						return nil
+					}
+					if err := c.collectPVEVZDumpCronSnapshot(ctx); err != nil {
+						c.logger.Warning("Failed to collect VZDump cron snapshot: %v", err)
+						state.pve.jobCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEScheduleCrontab,
+				Description: "Collect root crontab schedule data",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVESchedules || state.pve.scheduleCollectionAborted {
+						return nil
+					}
+					if err := c.collectPVEScheduleCrontab(ctx); err != nil {
+						c.logger.Warning("Failed to collect PVE crontab schedules: %v", err)
+						state.pve.scheduleCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEScheduleTimers,
+				Description: "Collect systemd timer schedule data",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVESchedules || state.pve.scheduleCollectionAborted {
+						return nil
+					}
+					if err := c.collectPVEScheduleTimers(ctx); err != nil {
+						c.logger.Warning("Failed to collect PVE timer schedules: %v", err)
+						state.pve.scheduleCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEScheduleCronFiles,
+				Description: "Collect PVE-related cron files",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVESchedules || state.pve.scheduleCollectionAborted {
+						return nil
+					}
+					if err := c.collectPVEScheduleCronFiles(ctx); err != nil {
+						c.logger.Warning("Failed to collect PVE cron schedule files: %v", err)
+						state.pve.scheduleCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEReplicationDefs,
+				Description: "Collect PVE replication definitions",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVEReplication || state.pve.replicationCollectionAborted {
+						return nil
+					}
+					c.logger.Debug("Collecting PVE replication settings for nodes: %v", state.pve.runtimeNodes())
+					if err := c.collectPVEReplicationDefinitions(ctx); err != nil {
+						c.logger.Warning("Failed to collect PVE replication definitions: %v", err)
+						state.pve.replicationCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEReplicationStatus,
+				Description: "Collect PVE replication status",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVEReplication || state.pve.replicationCollectionAborted {
+						return nil
+					}
+					if err := c.collectPVEReplicationStatus(ctx, state.pve.runtimeNodes()); err != nil {
+						c.logger.Warning("Failed to collect PVE replication status: %v", err)
+						state.pve.replicationCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEStorageResolve,
+				Description: "Resolve PVE storage list for backup analysis",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVEBackupFiles {
+						return nil
+					}
+					if state.pve.storageCollectionAborted {
+						return nil
+					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					c.logger.Info("Collecting PVE datastore information using auto-detection")
+					c.logger.Debug("Collecting datastore metadata for %d storages", len(state.pve.runtimeStorages()))
+					state.pve.resolvedStorages = c.resolvePVEStorages(state.pve.runtimeStorages())
+					if len(state.pve.resolvedStorages) == 0 {
+						c.logger.Info("Found 0 PVE datastore(s) via auto-detection")
+						c.logger.Info("No PVE datastores detected - skipping metadata collection")
+						return nil
+					}
+					c.logger.Info("Found %d PVE datastore(s) via auto-detection", len(state.pve.resolvedStorages))
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEStorageProbe,
+				Description: "Probe resolved PVE storages",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVEBackupFiles || state.pve.storageCollectionAborted || len(state.pve.resolvedStorages) == 0 {
+						return nil
+					}
+					baseDir := c.pveDatastoresBaseDir()
+					if err := c.ensureDir(baseDir); err != nil {
+						c.logger.Warning("Failed to create datastore metadata directory: %v", err)
+						state.pve.storageCollectionAborted = true
+						return nil
+					}
+					ioTimeout := c.pveStorageIOTimout()
+					state.pve.probedStorages = nil
+					state.pve.storageScanResults = nil
+					for _, storage := range state.pve.resolvedStorages {
+						result, err := c.preparePVEStorageScan(ctx, storage, baseDir, ioTimeout)
+						if err != nil {
+							c.logger.Warning("Failed to probe PVE datastore %s: %v", storage.Name, err)
+							state.pve.storageCollectionAborted = true
+							return nil
+						}
+						if result == nil {
+							continue
+						}
+						state.pve.probedStorages = append(state.pve.probedStorages, storage)
+						state.pve.ensureStorageScanResults()[storage.pathKey()] = result
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEStorageMetadataJSON,
+				Description: "Write JSON metadata for probed PVE storages",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupPVEBackupFiles || state.pve.storageCollectionAborted || len(state.pve.probedStorages) == 0 {
+						return nil
+					}
+					ioTimeout := c.pveStorageIOTimout()
+					for _, storage := range state.pve.probedStorages {
+						result := state.pve.storageResult(storage)
+						if result == nil || result.SkipRemaining {
+							continue
+						}
+						if err := c.collectPVEStorageMetadataJSONStep(ctx, result, ioTimeout); err != nil {
+							c.logger.Warning("Failed to write PVE datastore JSON metadata for %s: %v", storage.Name, err)
+							state.pve.storageCollectionAborted = true
+							return nil
 						}
 					}
 					return nil
 				},
 			},
 			{
-				ID:          brickPVESchedules,
-				Description: "Collect PVE schedules",
+				ID:          brickPVEStorageMetadataText,
+				Description: "Write text metadata for probed PVE storages",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
-					if c.config.BackupPVESchedules {
-						c.logger.Debug("Collecting PVE schedule information")
-						if err := c.collectPVESchedules(ctx); err != nil {
-							c.logger.Warning("Failed to collect PVE schedules: %v", err)
-						} else {
-							c.logger.Debug("PVE schedule collection completed")
+					if !c.config.BackupPVEBackupFiles || state.pve.storageCollectionAborted || len(state.pve.probedStorages) == 0 {
+						return nil
+					}
+					ioTimeout := c.pveStorageIOTimout()
+					for _, storage := range state.pve.probedStorages {
+						result := state.pve.storageResult(storage)
+						if result == nil || result.SkipRemaining {
+							continue
+						}
+						if err := c.collectPVEStorageMetadataTextStep(ctx, result, ioTimeout); err != nil {
+							c.logger.Warning("Failed to write PVE datastore text metadata for %s: %v", storage.Name, err)
+							state.pve.storageCollectionAborted = true
+							return nil
 						}
 					}
 					return nil
 				},
 			},
 			{
-				ID:          brickPVEReplication,
-				Description: "Collect PVE replication information",
+				ID:          brickPVEStorageBackupAnalysis,
+				Description: "Analyze PVE backup files for probed storages",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
-					if c.config.BackupPVEReplication {
-						c.logger.Debug("Collecting PVE replication settings for nodes: %v", state.pve.runtimeNodes())
-						if err := c.collectPVEReplication(ctx, state.pve.runtimeNodes()); err != nil {
-							c.logger.Warning("Failed to collect PVE replication info: %v", err)
-						} else {
-							c.logger.Debug("PVE replication collection completed")
+					if !c.config.BackupPVEBackupFiles || state.pve.storageCollectionAborted || len(state.pve.probedStorages) == 0 {
+						return nil
+					}
+					ioTimeout := c.pveStorageIOTimout()
+					for _, storage := range state.pve.probedStorages {
+						result := state.pve.storageResult(storage)
+						if result == nil || result.SkipRemaining {
+							continue
+						}
+						if err := c.collectPVEStorageBackupAnalysisStep(ctx, result, ioTimeout); err != nil {
+							c.logger.Warning("Detailed backup analysis for %s failed: %v", storage.Name, err)
 						}
 					}
 					return nil
 				},
 			},
 			{
-				ID:          brickPVEStorageMetadata,
-				Description: "Collect PVE backup datastore metadata",
+				ID:          brickPVEStorageSummary,
+				Description: "Write PVE datastore summary",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
-					if c.config.BackupPVEBackupFiles {
-						c.logger.Debug("Collecting datastore metadata for PVE backup files")
-						if err := c.collectPVEStorageMetadata(ctx, state.pve.runtimeStorages()); err != nil {
-							c.logger.Warning("Failed to collect PVE datastore metadata: %v", err)
-						} else {
-							c.logger.Debug("PVE datastore metadata collection completed")
-						}
+					if !c.config.BackupPVEBackupFiles || state.pve.storageCollectionAborted || len(state.pve.probedStorages) == 0 {
+						return nil
+					}
+					if err := c.writePVEStorageSummary(ctx, state.pve.probedStorages); err != nil {
+						c.logger.Warning("Failed to write PVE datastore summary: %v", err)
+						state.pve.storageCollectionAborted = true
+						return nil
+					}
+					c.logger.Debug("PVE datastore metadata collection completed (%d processed)", len(state.pve.probedStorages))
+					return nil
+				},
+			},
+			{
+				ID:          brickPVECephConfigSnapshot,
+				Description: "Collect Ceph configuration snapshot",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if !c.config.BackupCephConfig || state.pve.cephCollectionAborted {
+						return nil
+					}
+					c.logger.Debug("Collecting Ceph configuration and status")
+					if err := c.collectPVECephConfigSnapshot(ctx); err != nil {
+						c.logger.Warning("Failed to collect Ceph configuration snapshot: %v", err)
+						state.pve.cephCollectionAborted = true
 					}
 					return nil
 				},
 			},
 			{
-				ID:          brickPVECeph,
-				Description: "Collect Ceph information",
+				ID:          brickPVECephRuntime,
+				Description: "Collect Ceph runtime information",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
-					if c.config.BackupCephConfig {
-						c.logger.Debug("Collecting Ceph configuration and status")
-						if err := c.collectPVECephInfo(ctx); err != nil {
-							c.logger.Warning("Failed to collect Ceph information: %v", err)
-						} else {
-							c.logger.Debug("Ceph information collection completed")
-						}
+					if !c.config.BackupCephConfig || state.pve.cephCollectionAborted {
+						return nil
+					}
+					if err := c.collectPVECephRuntime(ctx); err != nil {
+						c.logger.Warning("Failed to collect Ceph runtime information: %v", err)
+						state.pve.cephCollectionAborted = true
+					} else {
+						c.logger.Debug("Ceph information collection completed")
 					}
 					return nil
 				},
 			},
 			{
-				ID:          brickPVEFinalize,
-				Description: "Finalize PVE collection state",
+				ID:          brickPVEAliasCore,
+				Description: "Create core PVE aliases",
 				Run: func(ctx context.Context, state *collectionState) error {
 					c := state.collector
 					c.logger.Debug("Creating PVE info aliases under /var/lib/pve-cluster/info")
-					if err := c.createPVEInfoAliases(ctx); err != nil {
-						c.logger.Warning("Failed to create PVE info aliases: %v", err)
+					if err := c.createPVECoreAliases(ctx); err != nil {
+						c.logger.Warning("Failed to create PVE core aliases: %v", err)
+						state.pve.finalizeCollectionAborted = true
 					}
-					c.populatePVEManifest()
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEAggregateBackupHistory,
+				Description: "Aggregate backup history aliases",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if state.pve.finalizeCollectionAborted {
+						return nil
+					}
+					if err := c.createPVEBackupHistoryAggregate(ctx); err != nil {
+						c.logger.Warning("Failed to aggregate PVE backup history: %v", err)
+						state.pve.finalizeCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEAggregateReplicationStatus,
+				Description: "Aggregate replication status aliases",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if state.pve.finalizeCollectionAborted {
+						return nil
+					}
+					if err := c.createPVEReplicationAggregate(ctx); err != nil {
+						c.logger.Warning("Failed to aggregate PVE replication status: %v", err)
+						state.pve.finalizeCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEVersionInfo,
+				Description: "Write PVE version alias information",
+				Run: func(ctx context.Context, state *collectionState) error {
+					c := state.collector
+					if state.pve.finalizeCollectionAborted {
+						return nil
+					}
+					if err := c.createPVEVersionInfo(ctx); err != nil {
+						c.logger.Warning("Failed to write PVE version info: %v", err)
+						state.pve.finalizeCollectionAborted = true
+					}
+					return nil
+				},
+			},
+			{
+				ID:          brickPVEManifestFinalize,
+				Description: "Finalize the PVE manifest",
+				Run: func(_ context.Context, state *collectionState) error {
+					state.collector.populatePVEManifest()
 					return nil
 				},
 			},
@@ -1011,4 +1340,18 @@ func (p pveContext) runtimeStorages() []pveStorageEntry {
 		return nil
 	}
 	return p.runtimeInfo.Storages
+}
+
+func (p *pveContext) ensureStorageScanResults() map[string]*pveStorageScanResult {
+	if p.storageScanResults == nil {
+		p.storageScanResults = make(map[string]*pveStorageScanResult)
+	}
+	return p.storageScanResults
+}
+
+func (p pveContext) storageResult(storage pveStorageEntry) *pveStorageScanResult {
+	if p.storageScanResults == nil {
+		return nil
+	}
+	return p.storageScanResults[storage.pathKey()]
 }

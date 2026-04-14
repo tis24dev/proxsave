@@ -127,13 +127,30 @@ func TestNewPVERecipeOrder(t *testing.T) {
 		brickPVERuntimeACL,
 		brickPVERuntimeCluster,
 		brickPVERuntimeStorage,
-		brickPVEVMConfigs,
-		brickPVEJobs,
-		brickPVESchedules,
-		brickPVEReplication,
-		brickPVEStorageMetadata,
-		brickPVECeph,
-		brickPVEFinalize,
+		brickPVEVMQEMUConfigs,
+		brickPVEVMLXCConfigs,
+		brickPVEGuestInventory,
+		brickPVEBackupJobDefs,
+		brickPVEBackupJobHistory,
+		brickPVEVZDumpCron,
+		brickPVEScheduleCrontab,
+		brickPVEScheduleTimers,
+		brickPVEScheduleCronFiles,
+		brickPVEReplicationDefs,
+		brickPVEReplicationStatus,
+		brickPVEStorageResolve,
+		brickPVEStorageProbe,
+		brickPVEStorageMetadataJSON,
+		brickPVEStorageMetadataText,
+		brickPVEStorageBackupAnalysis,
+		brickPVEStorageSummary,
+		brickPVECephConfigSnapshot,
+		brickPVECephRuntime,
+		brickPVEAliasCore,
+		brickPVEAggregateBackupHistory,
+		brickPVEAggregateReplicationStatus,
+		brickPVEVersionInfo,
+		brickPVEManifestFinalize,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("PVE recipe IDs = %v, want %v", got, want)
@@ -248,6 +265,53 @@ func TestPVECommandsBrickPopulatesRuntimeInfo(t *testing.T) {
 	}
 	if len(state.pve.runtimeInfo.Nodes) == 0 {
 		t.Fatalf("expected runtime nodes to be populated")
+	}
+}
+
+func TestPVEStorageResolveBrickPopulatesResolvedStorages(t *testing.T) {
+	collector := newTestCollector(t)
+	collector.proxType = "pve"
+
+	state := newCollectionState(collector)
+	state.ensurePVERuntimeInfo().Storages = []pveStorageEntry{{Name: "local", Path: "/data/local", Type: "dir"}}
+
+	resolveBrick := requireBrick(t, newPVERecipe(), brickPVEStorageResolve)
+	if err := resolveBrick.Run(context.Background(), state); err != nil {
+		t.Fatalf("pve storage resolve brick failed: %v", err)
+	}
+	found := false
+	for _, storage := range state.pve.resolvedStorages {
+		if storage.Name == "local" && storage.Path == "/data/local" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected resolved storages to contain runtime storage local=/data/local, got %#v", state.pve.resolvedStorages)
+	}
+}
+
+func TestPVEStorageProbeBrickStoresScanResults(t *testing.T) {
+	collector := newTestCollector(t)
+	collector.proxType = "pve"
+
+	storageDir := t.TempDir()
+	state := newCollectionState(collector)
+	state.pve.resolvedStorages = []pveStorageEntry{{Name: "local", Path: storageDir, Type: "dir"}}
+
+	probeBrick := requireBrick(t, newPVERecipe(), brickPVEStorageProbe)
+	if err := probeBrick.Run(context.Background(), state); err != nil {
+		t.Fatalf("pve storage probe brick failed: %v", err)
+	}
+	if len(state.pve.probedStorages) != 1 {
+		t.Fatalf("expected 1 probed storage, got %d", len(state.pve.probedStorages))
+	}
+	result := state.pve.storageResult(state.pve.probedStorages[0])
+	if result == nil {
+		t.Fatalf("expected scan result to be stored")
+	}
+	if result.MetaDir == "" {
+		t.Fatalf("expected metadata directory to be set")
 	}
 }
 

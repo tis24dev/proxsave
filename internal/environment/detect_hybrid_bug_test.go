@@ -1,10 +1,26 @@
 package environment
 
 import (
+	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+func isolateDetectionFallbacks(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+
+	setValue(t, &additionalPaths, []string{})
+	setValue(t, &pveSourceFiles, []string{})
+	setValue(t, &pbsSourceFiles, []string{})
+	setValue(t, &pveDirCandidates, []string{})
+	setValue(t, &pbsDirCandidates, []string{})
+	setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-pve-version"))
+	setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-pve-legacy"))
+	setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version"))
+}
 
 // TestDetectHybridInstallation_Bug demonstrates the current bug where
 // ProxSave fails to detect PBS when both PVE and PBS are co-installed.
@@ -15,6 +31,8 @@ import (
 // - PBS detection is NEVER executed (early return bug at line 119)
 // - Result: PBS data collection is completely skipped
 func TestDetectHybridInstallation_Bug(t *testing.T) {
+	isolateDetectionFallbacks(t)
+
 	// Setup: Mock both PVE and PBS as available
 	setValue(t, &lookPathFunc, func(cmd string) (string, error) {
 		// Both commands exist (hybrid installation)
@@ -24,7 +42,7 @@ func TestDetectHybridInstallation_Bug(t *testing.T) {
 		case "proxmox-backup-manager":
 			return "/usr/sbin/proxmox-backup-manager", nil
 		default:
-			return "", nil
+			return "", errors.New("not found")
 		}
 	})
 
@@ -73,6 +91,8 @@ func TestDetectHybridInstallation_Bug(t *testing.T) {
 
 // TestDetectProxmox_EarlyReturnBug verifies the early return bug in detectProxmox()
 func TestDetectProxmox_EarlyReturnBug(t *testing.T) {
+	isolateDetectionFallbacks(t)
+
 	// Track which detection functions are called
 	pveDetectCalled := false
 	pbsDetectCalled := false
@@ -87,7 +107,7 @@ func TestDetectProxmox_EarlyReturnBug(t *testing.T) {
 			pbsDetectCalled = true
 			return "/usr/sbin/proxmox-backup-manager", nil
 		}
-		return "", nil
+		return "", errors.New("not found")
 	})
 
 	setValue(t, &runCommandFunc, func(cmd string, args ...string) (string, error) {
@@ -138,12 +158,14 @@ func TestDetectProxmox_EarlyReturnBug(t *testing.T) {
 
 // TestDetectPVEOnly verifies that PVE-only detection still works correctly
 func TestDetectPVEOnly(t *testing.T) {
+	isolateDetectionFallbacks(t)
+
 	setValue(t, &lookPathFunc, func(cmd string) (string, error) {
 		if cmd == "pveversion" {
 			return "/usr/bin/pveversion", nil
 		}
 		// PBS not available
-		return "", nil
+		return "", errors.New("not found")
 	})
 
 	setValue(t, &runCommandFunc, func(cmd string, args ...string) (string, error) {
@@ -171,12 +193,14 @@ func TestDetectPVEOnly(t *testing.T) {
 
 // TestDetectPBSOnly verifies that PBS-only detection works when PVE is not present
 func TestDetectPBSOnly(t *testing.T) {
+	isolateDetectionFallbacks(t)
+
 	setValue(t, &lookPathFunc, func(cmd string) (string, error) {
 		// PVE not available
 		if cmd == "proxmox-backup-manager" {
 			return "/usr/sbin/proxmox-backup-manager", nil
 		}
-		return "", nil
+		return "", errors.New("not found")
 	})
 
 	setValue(t, &runCommandFunc, func(cmd string, args ...string) (string, error) {
