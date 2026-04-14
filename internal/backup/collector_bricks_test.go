@@ -3,6 +3,8 @@ package backup
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -161,26 +163,74 @@ func TestNewPBSRecipeOrder(t *testing.T) {
 	got := recipeBrickIDs(newPBSRecipe())
 	want := []BrickID{
 		brickPBSValidate,
-		brickPBSConfigSnapshot,
-		brickPBSManifestSnapshot,
+		brickPBSConfigDirectoryCopy,
+		brickPBSManifestInit,
 		brickPBSDatastoreDiscovery,
+		brickPBSManifestDatastore,
+		brickPBSManifestS3,
+		brickPBSManifestNode,
+		brickPBSManifestACMEAccounts,
+		brickPBSManifestACMEPlugins,
+		brickPBSManifestMetricServers,
+		brickPBSManifestTrafficControl,
+		brickPBSManifestNotifications,
+		brickPBSManifestNotificationsPriv,
+		brickPBSManifestAccess,
+		brickPBSManifestRemote,
+		brickPBSManifestSyncJobs,
+		brickPBSManifestVerificationJobs,
+		brickPBSManifestTape,
+		brickPBSManifestNetwork,
+		brickPBSManifestPrune,
 		brickPBSRuntimeCore,
 		brickPBSRuntimeNode,
-		brickPBSRuntimeDatastores,
-		brickPBSRuntimeACME,
-		brickPBSRuntimeNotifications,
-		brickPBSRuntimeAccess,
-		brickPBSRuntimeRemoteJobs,
-		brickPBSRuntimeTape,
+		brickPBSRuntimeDatastoreList,
+		brickPBSRuntimeDatastoreStatus,
+		brickPBSRuntimeACMEAccountsList,
+		brickPBSRuntimeACMEAccountInfo,
+		brickPBSRuntimeACMEPluginsList,
+		brickPBSRuntimeACMEPluginConfig,
+		brickPBSRuntimeNotificationTargets,
+		brickPBSRuntimeNotificationMatchers,
+		brickPBSRuntimeNotificationEndpoints,
+		brickPBSRuntimeNotificationSummary,
+		brickPBSRuntimeAccessUsers,
+		brickPBSRuntimeAccessRealms,
+		brickPBSRuntimeAccessACL,
+		brickPBSRuntimeAccessUserTokens,
+		brickPBSRuntimeAccessTokensAggregate,
+		brickPBSRuntimeRemotes,
+		brickPBSRuntimeSyncJobs,
+		brickPBSRuntimeVerificationJobs,
+		brickPBSRuntimePruneJobs,
+		brickPBSRuntimeGCJobs,
+		brickPBSRuntimeTapeDetect,
+		brickPBSRuntimeTapeDrives,
+		brickPBSRuntimeTapeChangers,
+		brickPBSRuntimeTapePools,
 		brickPBSRuntimeNetwork,
-		brickPBSRuntimeHostState,
-		brickPBSRuntimeS3,
-		brickPBSStorageStackSnapshot,
-		brickPBSDatastoreInventory,
+		brickPBSRuntimeDisks,
+		brickPBSRuntimeCertInfo,
+		brickPBSRuntimeTrafficControl,
+		brickPBSRuntimeRecentTasks,
+		brickPBSRuntimeS3Endpoints,
+		brickPBSRuntimeS3EndpointBuckets,
+		brickPBSStorageStackDirsSnapshot,
+		brickPBSStorageStackMountUnitsSnapshot,
+		brickPBSStorageStackAutofsSnapshot,
+		brickPBSStorageStackReferencedFiles,
+		brickPBSInventoryInit,
+		brickPBSInventoryBaseFiles,
+		brickPBSInventoryBaseDirs,
+		brickPBSInventoryMountUnits,
+		brickPBSInventoryReferencedFiles,
+		brickPBSInventoryHostCommands,
+		brickPBSInventoryCommandFiles,
+		brickPBSInventoryDatastores,
+		brickPBSInventoryWrite,
 		brickPBSDatastoreConfigs,
-		brickPBSUserConfigs,
 		brickPBSPXAR,
-		brickPBSFinalize,
+		brickPBSFinalizeSummary,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("PBS recipe IDs = %v, want %v", got, want)
@@ -331,6 +381,138 @@ func TestPBSDatastoreDiscoveryBrickPopulatesDatastores(t *testing.T) {
 	}
 	if state.pbs.datastores[0].Path != "/data/store1" {
 		t.Fatalf("datastore path = %q, want %q", state.pbs.datastores[0].Path, "/data/store1")
+	}
+}
+
+func TestPBSAccessUsersBrickPopulatesUserIDs(t *testing.T) {
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "proxmox-backup-manager" {
+				return []byte{}, nil
+			}
+			if len(args) >= 3 && args[0] == "user" && args[1] == "list" {
+				return []byte(`[{"userid":"user@pam"},{"userid":"second@pbs"}]`), nil
+			}
+			return []byte(`[]`), nil
+		},
+	})
+	collector.proxType = "pbs"
+
+	state := newCollectionState(collector)
+	brick := requireBrick(t, newPBSRecipe(), brickPBSRuntimeAccessUsers)
+	if err := brick.Run(context.Background(), state); err != nil {
+		t.Fatalf("pbs access users brick failed: %v", err)
+	}
+	if !reflect.DeepEqual(state.pbs.userIDs, []string{"second@pbs", "user@pam"}) {
+		t.Fatalf("user IDs = %v", state.pbs.userIDs)
+	}
+}
+
+func TestPBSAcmeAccountsBrickPopulatesAccountNames(t *testing.T) {
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "proxmox-backup-manager" {
+				return []byte{}, nil
+			}
+			if len(args) >= 4 && args[0] == "acme" && args[1] == "account" && args[2] == "list" {
+				return []byte(`[{"name":"acc-2"},{"name":"acc-1"}]`), nil
+			}
+			return []byte(`[]`), nil
+		},
+	})
+	collector.proxType = "pbs"
+
+	state := newCollectionState(collector)
+	brick := requireBrick(t, newPBSRecipe(), brickPBSRuntimeACMEAccountsList)
+	if err := brick.Run(context.Background(), state); err != nil {
+		t.Fatalf("pbs acme accounts brick failed: %v", err)
+	}
+	if !reflect.DeepEqual(state.pbs.acmeAccountNames, []string{"acc-1", "acc-2"}) {
+		t.Fatalf("acme account names = %v", state.pbs.acmeAccountNames)
+	}
+}
+
+func TestPBSS3EndpointsBrickPopulatesEndpointIDs(t *testing.T) {
+	collector := newTestCollectorWithDeps(t, CollectorDeps{
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "proxmox-backup-manager" {
+				return []byte{}, nil
+			}
+			if len(args) >= 4 && args[0] == "s3" && args[1] == "endpoint" && args[2] == "list" {
+				return []byte(`[{"id":"b"},{"id":"a"}]`), nil
+			}
+			return []byte(`[]`), nil
+		},
+	})
+	collector.proxType = "pbs"
+
+	state := newCollectionState(collector)
+	brick := requireBrick(t, newPBSRecipe(), brickPBSRuntimeS3Endpoints)
+	if err := brick.Run(context.Background(), state); err != nil {
+		t.Fatalf("pbs s3 endpoints brick failed: %v", err)
+	}
+	if !reflect.DeepEqual(state.pbs.s3EndpointIDs, []string{"a", "b"}) {
+		t.Fatalf("s3 endpoint IDs = %v", state.pbs.s3EndpointIDs)
+	}
+}
+
+func TestPBSTapeDetectBrickStoresSupportState(t *testing.T) {
+	pbsRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pbsRoot, "tape.cfg"), []byte("ok"), 0o640); err != nil {
+		t.Fatalf("write tape.cfg: %v", err)
+	}
+
+	collector := newTestCollector(t)
+	collector.proxType = "pbs"
+	collector.config.PBSConfigPath = pbsRoot
+
+	state := newCollectionState(collector)
+	brick := requireBrick(t, newPBSRecipe(), brickPBSRuntimeTapeDetect)
+	if err := brick.Run(context.Background(), state); err != nil {
+		t.Fatalf("pbs tape detect brick failed: %v", err)
+	}
+	if !state.pbs.tapeSupportKnown || !state.pbs.tapeSupported {
+		t.Fatalf("expected tape support to be detected, got known=%v supported=%v", state.pbs.tapeSupportKnown, state.pbs.tapeSupported)
+	}
+}
+
+func TestPBSInventoryInitBrickBuildsInventoryState(t *testing.T) {
+	root := t.TempDir()
+	pbsRoot := filepath.Join(root, "etc", "proxmox-backup")
+	if err := os.MkdirAll(pbsRoot, 0o755); err != nil {
+		t.Fatalf("mkdir pbs root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pbsRoot, "datastore.cfg"), []byte("datastore: store1\npath /data/store1\n"), 0o640); err != nil {
+		t.Fatalf("write datastore.cfg: %v", err)
+	}
+
+	collector := newTestCollector(t)
+	collector.proxType = "pbs"
+	collector.config.SystemRootPrefix = root
+
+	state := newCollectionState(collector)
+	state.pbs.datastores = []pbsDatastore{{Name: "store1", Path: "/data/store1"}}
+	brick := requireBrick(t, newPBSRecipe(), brickPBSInventoryInit)
+	if err := brick.Run(context.Background(), state); err != nil {
+		t.Fatalf("pbs inventory init brick failed: %v", err)
+	}
+	if state.pbs.inventory == nil {
+		t.Fatalf("expected inventory state to be initialized")
+	}
+	if len(state.pbs.inventory.mergedDatastores) == 0 {
+		t.Fatalf("expected merged datastores to be populated")
+	}
+	if _, ok := state.pbs.inventory.report.Files["pbs_datastore_cfg"]; !ok {
+		t.Fatalf("expected datastore cfg snapshot in inventory state")
 	}
 }
 

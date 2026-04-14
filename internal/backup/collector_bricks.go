@@ -45,27 +45,75 @@ const (
 	brickPVEVersionInfo                BrickID = "pve_version_info"
 	brickPVEManifestFinalize           BrickID = "pve_manifest_finalize"
 
-	brickPBSValidate             BrickID = "pbs_validate"
-	brickPBSConfigSnapshot       BrickID = "pbs_config_snapshot"
-	brickPBSManifestSnapshot     BrickID = "pbs_manifest_snapshot"
-	brickPBSDatastoreDiscovery   BrickID = "pbs_datastore_discovery"
-	brickPBSRuntimeCore          BrickID = "pbs_runtime_core"
-	brickPBSRuntimeNode          BrickID = "pbs_runtime_node"
-	brickPBSRuntimeDatastores    BrickID = "pbs_runtime_datastores"
-	brickPBSRuntimeACME          BrickID = "pbs_runtime_acme"
-	brickPBSRuntimeNotifications BrickID = "pbs_runtime_notifications"
-	brickPBSRuntimeAccess        BrickID = "pbs_runtime_access"
-	brickPBSRuntimeRemoteJobs    BrickID = "pbs_runtime_remote_jobs"
-	brickPBSRuntimeTape          BrickID = "pbs_runtime_tape"
-	brickPBSRuntimeNetwork       BrickID = "pbs_runtime_network"
-	brickPBSRuntimeHostState     BrickID = "pbs_runtime_host_state"
-	brickPBSRuntimeS3            BrickID = "pbs_runtime_s3"
-	brickPBSStorageStackSnapshot BrickID = "pbs_storage_stack_snapshot"
-	brickPBSDatastoreInventory   BrickID = "pbs_datastore_inventory_report"
-	brickPBSDatastoreConfigs     BrickID = "pbs_datastore_configs"
-	brickPBSUserConfigs          BrickID = "pbs_user_configs"
-	brickPBSPXAR                 BrickID = "pbs_pxar"
-	brickPBSFinalize             BrickID = "pbs_finalize"
+	brickPBSValidate                       BrickID = "pbs_validate"
+	brickPBSConfigDirectoryCopy            BrickID = "pbs_config_directory_copy"
+	brickPBSManifestInit                   BrickID = "pbs_manifest_init"
+	brickPBSDatastoreDiscovery             BrickID = "pbs_datastore_discovery"
+	brickPBSManifestDatastore              BrickID = "pbs_manifest_datastore"
+	brickPBSManifestS3                     BrickID = "pbs_manifest_s3"
+	brickPBSManifestNode                   BrickID = "pbs_manifest_node"
+	brickPBSManifestACMEAccounts           BrickID = "pbs_manifest_acme_accounts"
+	brickPBSManifestACMEPlugins            BrickID = "pbs_manifest_acme_plugins"
+	brickPBSManifestMetricServers          BrickID = "pbs_manifest_metric_servers"
+	brickPBSManifestTrafficControl         BrickID = "pbs_manifest_traffic_control"
+	brickPBSManifestNotifications          BrickID = "pbs_manifest_notifications"
+	brickPBSManifestNotificationsPriv      BrickID = "pbs_manifest_notifications_priv"
+	brickPBSManifestAccess                 BrickID = "pbs_manifest_access"
+	brickPBSManifestRemote                 BrickID = "pbs_manifest_remote"
+	brickPBSManifestSyncJobs               BrickID = "pbs_manifest_sync_jobs"
+	brickPBSManifestVerificationJobs       BrickID = "pbs_manifest_verification_jobs"
+	brickPBSManifestTape                   BrickID = "pbs_manifest_tape"
+	brickPBSManifestNetwork                BrickID = "pbs_manifest_network"
+	brickPBSManifestPrune                  BrickID = "pbs_manifest_prune"
+	brickPBSRuntimeCore                    BrickID = "pbs_runtime_core"
+	brickPBSRuntimeNode                    BrickID = "pbs_runtime_node"
+	brickPBSRuntimeDatastoreList           BrickID = "pbs_runtime_datastore_list"
+	brickPBSRuntimeDatastoreStatus         BrickID = "pbs_runtime_datastore_status"
+	brickPBSRuntimeACMEAccountsList        BrickID = "pbs_runtime_acme_accounts_list"
+	brickPBSRuntimeACMEAccountInfo         BrickID = "pbs_runtime_acme_account_info"
+	brickPBSRuntimeACMEPluginsList         BrickID = "pbs_runtime_acme_plugins_list"
+	brickPBSRuntimeACMEPluginConfig        BrickID = "pbs_runtime_acme_plugin_config"
+	brickPBSRuntimeNotificationTargets     BrickID = "pbs_runtime_notification_targets"
+	brickPBSRuntimeNotificationMatchers    BrickID = "pbs_runtime_notification_matchers"
+	brickPBSRuntimeNotificationEndpoints   BrickID = "pbs_runtime_notification_endpoints"
+	brickPBSRuntimeNotificationSummary     BrickID = "pbs_runtime_notification_summary"
+	brickPBSRuntimeAccessUsers             BrickID = "pbs_runtime_access_users"
+	brickPBSRuntimeAccessRealms            BrickID = "pbs_runtime_access_realms"
+	brickPBSRuntimeAccessACL               BrickID = "pbs_runtime_access_acl"
+	brickPBSRuntimeAccessUserTokens        BrickID = "pbs_runtime_access_user_tokens"
+	brickPBSRuntimeAccessTokensAggregate   BrickID = "pbs_runtime_access_tokens_aggregate"
+	brickPBSRuntimeRemotes                 BrickID = "pbs_runtime_remotes"
+	brickPBSRuntimeSyncJobs                BrickID = "pbs_runtime_sync_jobs"
+	brickPBSRuntimeVerificationJobs        BrickID = "pbs_runtime_verification_jobs"
+	brickPBSRuntimePruneJobs               BrickID = "pbs_runtime_prune_jobs"
+	brickPBSRuntimeGCJobs                  BrickID = "pbs_runtime_gc_jobs"
+	brickPBSRuntimeTapeDetect              BrickID = "pbs_runtime_tape_detect"
+	brickPBSRuntimeTapeDrives              BrickID = "pbs_runtime_tape_drives"
+	brickPBSRuntimeTapeChangers            BrickID = "pbs_runtime_tape_changers"
+	brickPBSRuntimeTapePools               BrickID = "pbs_runtime_tape_pools"
+	brickPBSRuntimeNetwork                 BrickID = "pbs_runtime_network"
+	brickPBSRuntimeDisks                   BrickID = "pbs_runtime_disks"
+	brickPBSRuntimeCertInfo                BrickID = "pbs_runtime_cert_info"
+	brickPBSRuntimeTrafficControl          BrickID = "pbs_runtime_traffic_control"
+	brickPBSRuntimeRecentTasks             BrickID = "pbs_runtime_recent_tasks"
+	brickPBSRuntimeS3Endpoints             BrickID = "pbs_runtime_s3_endpoints"
+	brickPBSRuntimeS3EndpointBuckets       BrickID = "pbs_runtime_s3_endpoint_buckets"
+	brickPBSStorageStackDirsSnapshot       BrickID = "pbs_storage_stack_dirs_snapshot"
+	brickPBSStorageStackMountUnitsSnapshot BrickID = "pbs_storage_stack_mount_units_snapshot"
+	brickPBSStorageStackAutofsSnapshot     BrickID = "pbs_storage_stack_autofs_snapshot"
+	brickPBSStorageStackReferencedFiles    BrickID = "pbs_storage_stack_referenced_files_snapshot"
+	brickPBSInventoryInit                  BrickID = "pbs_inventory_init"
+	brickPBSInventoryBaseFiles             BrickID = "pbs_inventory_base_files"
+	brickPBSInventoryBaseDirs              BrickID = "pbs_inventory_base_dirs"
+	brickPBSInventoryMountUnits            BrickID = "pbs_inventory_mount_units"
+	brickPBSInventoryReferencedFiles       BrickID = "pbs_inventory_referenced_files"
+	brickPBSInventoryHostCommands          BrickID = "pbs_inventory_host_commands"
+	brickPBSInventoryCommandFiles          BrickID = "pbs_inventory_command_files"
+	brickPBSInventoryDatastores            BrickID = "pbs_inventory_datastores"
+	brickPBSInventoryWrite                 BrickID = "pbs_inventory_write"
+	brickPBSDatastoreConfigs               BrickID = "pbs_datastore_configs"
+	brickPBSPXAR                           BrickID = "pbs_pxar"
+	brickPBSFinalizeSummary                BrickID = "pbs_finalize_summary"
 
 	brickSystemNetworkStatic        BrickID = "system_network_static"
 	brickSystemIdentityStatic       BrickID = "system_identity_static"
@@ -138,8 +186,15 @@ type pveContext struct {
 }
 
 type pbsContext struct {
-	datastores  []pbsDatastore
-	commandsDir string
+	datastores       []pbsDatastore
+	commandsDir      string
+	userIDs          []string
+	acmeAccountNames []string
+	acmePluginIDs    []string
+	s3EndpointIDs    []string
+	tapeSupportKnown bool
+	tapeSupported    bool
+	inventory        *pbsInventoryState
 }
 
 type systemContext struct {
@@ -210,6 +265,13 @@ func (s *collectionState) ensureSystemCommandsDir() (string, error) {
 	}
 	s.system.commandsDir = dir
 	return dir, nil
+}
+
+func (s *collectionState) ensurePBSInventoryState() *pbsInventoryState {
+	if s.pbs.inventory == nil {
+		s.pbs.inventory = &pbsInventoryState{}
+	}
+	return s.pbs.inventory
 }
 
 func (s *collectionState) ensurePVERuntimeInfo() *pveRuntimeInfo {
@@ -758,284 +820,816 @@ func newPVERecipe() recipe {
 }
 
 func newPBSRecipe() recipe {
-	return recipe{
-		Name: "pbs",
-		Bricks: []collectionBrick{
-			{
-				ID:          brickPBSValidate,
-				Description: "Validate PBS environment",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					c.logger.Debug("Validating PBS environment before collection")
+	bricks := []collectionBrick{
+		{
+			ID:          brickPBSValidate,
+			Description: "Validate PBS environment",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				c.logger.Debug("Validating PBS environment before collection")
 
-					pbsConfigPath := c.pbsConfigPath()
-					if _, err := os.Stat(pbsConfigPath); err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return fmt.Errorf("not a PBS system: %s not found", pbsConfigPath)
-						}
-						return fmt.Errorf("failed to access PBS config path %s: %w", pbsConfigPath, err)
+				pbsConfigPath := c.pbsConfigPath()
+				if _, err := os.Stat(pbsConfigPath); err != nil {
+					if errors.Is(err, os.ErrNotExist) {
+						return fmt.Errorf("not a PBS system: %s not found", pbsConfigPath)
 					}
-					c.logger.Debug("Detected %s, proceeding with PBS collection", pbsConfigPath)
-					return nil
-				},
+					return fmt.Errorf("failed to access PBS config path %s: %w", pbsConfigPath, err)
+				}
+				c.logger.Debug("Detected %s, proceeding with PBS collection", pbsConfigPath)
+				return nil
 			},
-			{
-				ID:          brickPBSConfigSnapshot,
-				Description: "Collect base PBS configuration snapshot",
-				Run: func(ctx context.Context, state *collectionState) error {
-					return state.collector.collectPBSConfigSnapshot(ctx, state.collector.pbsConfigPath())
-				},
+		},
+		{
+			ID:          brickPBSConfigDirectoryCopy,
+			Description: "Copy the PBS configuration directory",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSConfigSnapshot(ctx, state.collector.pbsConfigPath())
 			},
-			{
-				ID:          brickPBSManifestSnapshot,
-				Description: "Collect PBS manifest snapshot",
-				Run: func(ctx context.Context, state *collectionState) error {
-					return state.collector.collectPBSManifestSnapshot(ctx, state.collector.pbsConfigPath())
-				},
+		},
+		{
+			ID:          brickPBSManifestInit,
+			Description: "Initialize the PBS manifest",
+			Run: func(_ context.Context, state *collectionState) error {
+				state.collector.initPBSManifest()
+				return nil
 			},
-			{
-				ID:          brickPBSDatastoreDiscovery,
-				Description: "Discover PBS datastores",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					datastores, err := c.getDatastoreList(ctx)
-					if err != nil {
-						if ctx.Err() != nil {
-							return err
-						}
-						return fmt.Errorf("failed to detect PBS datastores: %w", err)
+		},
+		{
+			ID:          brickPBSDatastoreDiscovery,
+			Description: "Discover PBS datastores",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				datastores, err := c.getDatastoreList(ctx)
+				if err != nil {
+					if ctx.Err() != nil {
+						return err
 					}
-					state.pbs.datastores = datastores
-					c.logger.Debug("Detected %d PBS datastores", len(datastores))
+					return fmt.Errorf("failed to detect PBS datastores: %w", err)
+				}
+				state.pbs.datastores = datastores
+				c.logger.Debug("Detected %d PBS datastores", len(datastores))
 
-					if len(datastores) == 0 {
-						c.logger.Info("Found 0 PBS datastore(s) via auto-detection")
-					} else {
-						summary := make([]string, 0, len(datastores))
-						for _, ds := range datastores {
-							if ds.Path != "" {
-								summary = append(summary, fmt.Sprintf("%s (%s)", ds.Name, ds.Path))
-							} else {
-								summary = append(summary, ds.Name)
-							}
+				if len(datastores) == 0 {
+					c.logger.Info("Found 0 PBS datastore(s) via auto-detection")
+				} else {
+					summary := make([]string, 0, len(datastores))
+					for _, ds := range datastores {
+						if ds.Path != "" {
+							summary = append(summary, fmt.Sprintf("%s (%s)", ds.Name, ds.Path))
+						} else {
+							summary = append(summary, ds.Name)
 						}
-						c.logger.Info("Found %d PBS datastore(s) via auto-detection: %s", len(datastores), strings.Join(summary, ", "))
 					}
+					c.logger.Info("Found %d PBS datastore(s) via auto-detection: %s", len(datastores), strings.Join(summary, ", "))
+				}
+				return nil
+			},
+		},
+	}
+	bricks = append(bricks, newPBSManifestBricks("")...)
+	bricks = append(bricks, newPBSRuntimeBricks()...)
+	bricks = append(bricks, newPBSStorageStackBricks()...)
+	bricks = append(bricks, newPBSInventoryBricks()...)
+	bricks = append(bricks, newPBSFeatureBricks()...)
+	bricks = append(bricks, newPBSFinalizeBricks()...)
+	return recipe{Name: "pbs", Bricks: bricks}
+}
 
+func newPBSDirectoryRecipe(root string) recipe {
+	bricks := []collectionBrick{
+		{
+			ID:          brickPBSConfigDirectoryCopy,
+			Description: "Copy the PBS configuration directory",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSConfigSnapshot(ctx, root)
+			},
+		},
+		{
+			ID:          brickPBSManifestInit,
+			Description: "Initialize the PBS manifest",
+			Run: func(_ context.Context, state *collectionState) error {
+				state.collector.initPBSManifest()
+				return nil
+			},
+		},
+	}
+	bricks = append(bricks, newPBSManifestBricks(root)...)
+	return recipe{Name: "pbs-directories", Bricks: bricks}
+}
+
+func newPBSCommandsRecipe() recipe {
+	return recipe{Name: "pbs-commands", Bricks: newPBSRuntimeBricks()}
+}
+
+func newPBSDatastoreInventoryRecipe() recipe {
+	bricks := append([]collectionBrick{}, newPBSStorageStackBricks()...)
+	bricks = append(bricks, newPBSInventoryBricks()...)
+	return recipe{Name: "pbs-inventory", Bricks: bricks}
+}
+
+func newPBSManifestBricks(rootOverride string) []collectionBrick {
+	resolveRoot := func(state *collectionState) string {
+		if strings.TrimSpace(rootOverride) != "" {
+			return rootOverride
+		}
+		return state.collector.pbsConfigPath()
+	}
+
+	return []collectionBrick{
+		{
+			ID:          brickPBSManifestDatastore,
+			Description: "Collect PBS datastore manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestDatastore(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestS3,
+			Description: "Collect PBS S3 manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestS3(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestNode,
+			Description: "Collect PBS node manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestNode(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestACMEAccounts,
+			Description: "Collect PBS ACME account manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestACMEAccounts(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestACMEPlugins,
+			Description: "Collect PBS ACME plugin manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestACMEPlugins(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestMetricServers,
+			Description: "Collect PBS metric server manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestMetricServers(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestTrafficControl,
+			Description: "Collect PBS traffic control manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestTrafficControl(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestNotifications,
+			Description: "Collect PBS notification manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestNotifications(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestNotificationsPriv,
+			Description: "Collect PBS notification secret manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestNotificationsPriv(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestAccess,
+			Description: "Collect PBS access manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestAccess(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestRemote,
+			Description: "Collect PBS remote manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestRemote(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestSyncJobs,
+			Description: "Collect PBS sync-job manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestSyncJobs(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestVerificationJobs,
+			Description: "Collect PBS verification-job manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestVerificationJobs(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestTape,
+			Description: "Collect PBS tape manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestTape(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestNetwork,
+			Description: "Collect PBS network manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestNetwork(ctx, resolveRoot(state))
+			},
+		},
+		{
+			ID:          brickPBSManifestPrune,
+			Description: "Collect PBS prune manifest entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSManifestPrune(ctx, resolveRoot(state))
+			},
+		},
+	}
+}
+
+func newPBSRuntimeBricks() []collectionBrick {
+	return []collectionBrick{
+		{
+			ID:          brickPBSRuntimeCore,
+			Description: "Collect core PBS runtime information",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSCoreRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeNode,
+			Description: "Collect PBS node runtime information",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSNodeRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeDatastoreList,
+			Description: "Collect PBS datastore list",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSDatastoreListRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeDatastoreStatus,
+			Description: "Collect PBS datastore status details",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSDatastoreStatusRuntime(ctx, commandsDir, state.pbs.datastores)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeACMEAccountsList,
+			Description: "Collect the PBS ACME account list",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				ids, err := state.collector.collectPBSAcmeAccountsListRuntime(ctx, commandsDir)
+				if err != nil {
+					return err
+				}
+				state.pbs.acmeAccountNames = ids
+				return nil
+			},
+		},
+		{
+			ID:          brickPBSRuntimeACMEAccountInfo,
+			Description: "Collect PBS ACME account details",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSAcmeAccountInfoRuntime(ctx, commandsDir, state.pbs.acmeAccountNames)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeACMEPluginsList,
+			Description: "Collect the PBS ACME plugin list",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				ids, err := state.collector.collectPBSAcmePluginsListRuntime(ctx, commandsDir)
+				if err != nil {
+					return err
+				}
+				state.pbs.acmePluginIDs = ids
+				return nil
+			},
+		},
+		{
+			ID:          brickPBSRuntimeACMEPluginConfig,
+			Description: "Collect PBS ACME plugin configuration",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSAcmePluginConfigRuntime(ctx, commandsDir, state.pbs.acmePluginIDs)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeNotificationTargets,
+			Description: "Collect PBS notification targets",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSNotificationTargetsRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeNotificationMatchers,
+			Description: "Collect PBS notification matchers",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSNotificationMatchersRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeNotificationEndpoints,
+			Description: "Collect PBS notification endpoints",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSNotificationEndpointsRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeNotificationSummary,
+			Description: "Write the PBS notification summary",
+			Run: func(_ context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				state.collector.writePBSNotificationSummary(commandsDir)
+				return nil
+			},
+		},
+		{
+			ID:          brickPBSRuntimeAccessUsers,
+			Description: "Collect the PBS user list",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				ids, err := state.collector.collectPBSAccessUsersRuntime(ctx, commandsDir)
+				if err != nil {
+					return err
+				}
+				state.pbs.userIDs = ids
+				return nil
+			},
+		},
+		{
+			ID:          brickPBSRuntimeAccessRealms,
+			Description: "Collect PBS access realm definitions",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSAccessRealmsRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeAccessACL,
+			Description: "Collect PBS ACL definitions",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSAccessACLRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeAccessUserTokens,
+			Description: "Collect PBS API token snapshots",
+			Run: func(ctx context.Context, state *collectionState) error {
+				if !state.collector.config.BackupUserConfigs || len(state.pbs.userIDs) == 0 {
 					return nil
-				},
+				}
+				usersDir, err := state.collector.ensurePBSAccessControlDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSAccessUserTokensRuntime(ctx, usersDir, state.pbs.userIDs)
 			},
-			{
-				ID:          brickPBSRuntimeCore,
-				Description: "Collect core PBS runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
+		},
+		{
+			ID:          brickPBSRuntimeAccessTokensAggregate,
+			Description: "Aggregate PBS API token snapshots",
+			Run: func(_ context.Context, state *collectionState) error {
+				if !state.collector.config.BackupUserConfigs || len(state.pbs.userIDs) == 0 {
+					return nil
+				}
+				usersDir, err := state.collector.ensurePBSAccessControlDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSAccessTokensAggregateRuntime(usersDir, state.pbs.userIDs)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeRemotes,
+			Description: "Collect PBS remote definitions",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSRemotesRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeSyncJobs,
+			Description: "Collect PBS sync jobs",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSSyncJobsRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeVerificationJobs,
+			Description: "Collect PBS verification jobs",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSVerificationJobsRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimePruneJobs,
+			Description: "Collect PBS prune jobs",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSPruneJobsRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeGCJobs,
+			Description: "Collect PBS garbage collection jobs",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSGCJobsRuntime(ctx, commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSRuntimeTapeDetect,
+			Description: "Detect PBS tape support",
+			Run: func(ctx context.Context, state *collectionState) error {
+				if !state.collector.config.BackupTapeConfigs {
+					state.pbs.tapeSupportKnown = true
+					state.pbs.tapeSupported = false
+					return nil
+				}
+				supported, err := state.collector.detectPBSTapeSupport(ctx)
+				if err != nil {
+					if ctx.Err() != nil {
 						return err
 					}
-					return state.collector.collectPBSCoreRuntime(ctx, commandsDir)
-				},
+					state.collector.logger.Debug("Skipping tape details collection: %v", err)
+					state.pbs.tapeSupportKnown = true
+					state.pbs.tapeSupported = false
+					return nil
+				}
+				state.pbs.tapeSupportKnown = true
+				state.pbs.tapeSupported = supported
+				return nil
 			},
-			{
-				ID:          brickPBSRuntimeNode,
-				Description: "Collect PBS node runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSNodeRuntime(ctx, commandsDir)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeTapeDrives,
+			Description: "Collect PBS tape drive inventory",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSTapeDrivesRuntime(ctx, commandsDir, state.pbs.tapeSupportKnown && state.pbs.tapeSupported)
 			},
-			{
-				ID:          brickPBSRuntimeDatastores,
-				Description: "Collect PBS datastore runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSDatastoreRuntime(ctx, commandsDir, state.pbs.datastores)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeTapeChangers,
+			Description: "Collect PBS tape changer inventory",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSTapeChangersRuntime(ctx, commandsDir, state.pbs.tapeSupportKnown && state.pbs.tapeSupported)
 			},
-			{
-				ID:          brickPBSRuntimeACME,
-				Description: "Collect PBS ACME runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSAcmeRuntime(ctx, commandsDir)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeTapePools,
+			Description: "Collect PBS tape pool inventory",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSTapePoolsRuntime(ctx, commandsDir, state.pbs.tapeSupportKnown && state.pbs.tapeSupported)
 			},
-			{
-				ID:          brickPBSRuntimeNotifications,
-				Description: "Collect PBS notification runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSNotificationRuntime(ctx, commandsDir)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeNetwork,
+			Description: "Collect PBS network runtime information",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSNetworkRuntime(ctx, commandsDir)
 			},
-			{
-				ID:          brickPBSRuntimeAccess,
-				Description: "Collect PBS access runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSAccessRuntime(ctx, commandsDir)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeDisks,
+			Description: "Collect the PBS disk inventory",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSDisksRuntime(ctx, commandsDir)
 			},
-			{
-				ID:          brickPBSRuntimeRemoteJobs,
-				Description: "Collect PBS remote and job runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSRemoteJobsRuntime(ctx, commandsDir)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeCertInfo,
+			Description: "Collect the PBS certificate summary",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSCertInfoRuntime(ctx, commandsDir)
 			},
-			{
-				ID:          brickPBSRuntimeTape,
-				Description: "Collect PBS tape runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSTapeRuntime(ctx, commandsDir)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeTrafficControl,
+			Description: "Collect PBS traffic control runtime information",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSTrafficControlRuntime(ctx, commandsDir)
 			},
-			{
-				ID:          brickPBSRuntimeNetwork,
-				Description: "Collect PBS network runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSNetworkRuntime(ctx, commandsDir)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeRecentTasks,
+			Description: "Collect recent PBS tasks",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSRecentTasksRuntime(ctx, commandsDir)
 			},
-			{
-				ID:          brickPBSRuntimeHostState,
-				Description: "Collect PBS host-state runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSHostStateRuntime(ctx, commandsDir)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeS3Endpoints,
+			Description: "Collect PBS S3 endpoints",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				ids, err := state.collector.collectPBSS3EndpointsRuntime(ctx, commandsDir)
+				if err != nil {
+					return err
+				}
+				state.pbs.s3EndpointIDs = ids
+				return nil
 			},
-			{
-				ID:          brickPBSRuntimeS3,
-				Description: "Collect PBS S3 runtime information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					commandsDir, err := state.ensurePBSCommandsDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSS3Runtime(ctx, commandsDir)
-				},
+		},
+		{
+			ID:          brickPBSRuntimeS3EndpointBuckets,
+			Description: "Collect PBS S3 endpoint bucket inventories",
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.collectPBSS3EndpointBucketsRuntime(ctx, commandsDir, state.pbs.s3EndpointIDs)
 			},
-			{
-				ID:          brickPBSStorageStackSnapshot,
-				Description: "Collect storage-stack artifacts for PBS datastores",
-				Run: func(ctx context.Context, state *collectionState) error {
-					return state.collector.collectPBSStorageStackSnapshot(ctx)
-				},
+		},
+	}
+}
+
+func newPBSStorageStackBricks() []collectionBrick {
+	return []collectionBrick{
+		{
+			ID:          brickPBSStorageStackDirsSnapshot,
+			Description: "Collect PBS storage-stack directories",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSStorageStackDirsSnapshot(ctx)
 			},
-			{
-				ID:          brickPBSDatastoreInventory,
-				Description: "Collect PBS datastore inventory report",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					c.logger.Debug("Collecting PBS datastore inventory report")
-					if err := c.writePBSDatastoreInventoryReport(ctx, state.pbs.datastores); err != nil {
-						c.logger.Warning("Failed to collect PBS datastore inventory report: %v", err)
+		},
+		{
+			ID:          brickPBSStorageStackMountUnitsSnapshot,
+			Description: "Collect PBS storage-stack mount units",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSStorageStackMountUnitsSnapshot(ctx)
+			},
+		},
+		{
+			ID:          brickPBSStorageStackAutofsSnapshot,
+			Description: "Collect PBS storage-stack autofs data",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSStorageStackAutofsSnapshot(ctx)
+			},
+		},
+		{
+			ID:          brickPBSStorageStackReferencedFiles,
+			Description: "Collect PBS storage-stack referenced files",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectPBSStorageStackReferencedFilesSnapshot(ctx)
+			},
+		},
+	}
+}
+
+func newPBSInventoryBricks() []collectionBrick {
+	return []collectionBrick{
+		{
+			ID:          brickPBSInventoryInit,
+			Description: "Initialize the PBS datastore inventory state",
+			Run: func(ctx context.Context, state *collectionState) error {
+				inventory, err := state.collector.initPBSDatastoreInventoryState(ctx, state.pbs.datastores)
+				if err != nil {
+					return err
+				}
+				state.pbs.inventory = inventory
+				return nil
+			},
+		},
+		{
+			ID:          brickPBSInventoryBaseFiles,
+			Description: "Populate PBS inventory base files",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSInventoryBaseFiles(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryBaseDirs,
+			Description: "Populate PBS inventory base directories",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSInventoryBaseDirs(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryMountUnits,
+			Description: "Populate PBS inventory mount-unit snapshots",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSInventoryMountUnits(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryReferencedFiles,
+			Description: "Populate PBS inventory referenced files",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSInventoryReferencedFiles(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryHostCommands,
+			Description: "Populate PBS inventory host-command snapshots",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSInventoryHostCommands(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryCommandFiles,
+			Description: "Populate PBS inventory with collected PBS command files",
+			Run: func(_ context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.populatePBSInventoryCommandFiles(state.ensurePBSInventoryState(), commandsDir)
+			},
+		},
+		{
+			ID:          brickPBSInventoryDatastores,
+			Description: "Populate PBS datastore inventory entries",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSDatastoreInventoryEntries(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryWrite,
+			Description: "Write the PBS datastore inventory report",
+			Run: func(_ context.Context, state *collectionState) error {
+				commandsDir, err := state.ensurePBSCommandsDir()
+				if err != nil {
+					return err
+				}
+				return state.collector.writePBSInventoryState(state.ensurePBSInventoryState(), commandsDir)
+			},
+		},
+	}
+}
+
+func newPBSFeatureBricks() []collectionBrick {
+	return []collectionBrick{
+		{
+			ID:          brickPBSDatastoreConfigs,
+			Description: "Collect PBS datastore configuration files",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if c.config.BackupDatastoreConfigs {
+					c.logger.Debug("Collecting datastore configuration files and namespaces")
+					if err := c.collectDatastoreConfigs(ctx, state.pbs.datastores); err != nil {
+						c.logger.Warning("Failed to collect datastore configs: %v", err)
 					} else {
-						c.logger.Debug("PBS datastore inventory report completed")
+						c.logger.Debug("Datastore configuration collection completed")
 					}
-					return nil
-				},
+				} else {
+					c.logger.Skip("PBS datastore configuration backup disabled.")
+				}
+				return nil
 			},
-			{
-				ID:          brickPBSDatastoreConfigs,
-				Description: "Collect PBS datastore configuration files",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupDatastoreConfigs {
-						c.logger.Debug("Collecting datastore configuration files and namespaces")
-						if err := c.collectDatastoreConfigs(ctx, state.pbs.datastores); err != nil {
-							c.logger.Warning("Failed to collect datastore configs: %v", err)
-						} else {
-							c.logger.Debug("Datastore configuration collection completed")
-						}
+		},
+		{
+			ID:          brickPBSPXAR,
+			Description: "Collect PBS PXAR metadata",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if c.config.BackupPxarFiles {
+					c.logger.Debug("Collecting PXAR metadata for datastores")
+					if err := c.collectPBSPxarMetadata(ctx, state.pbs.datastores); err != nil {
+						c.logger.Warning("Failed to collect PBS PXAR metadata: %v", err)
 					} else {
-						c.logger.Skip("PBS datastore configuration backup disabled.")
+						c.logger.Debug("PXAR metadata collection completed")
 					}
-					return nil
-				},
+				} else {
+					c.logger.Skip("PBS PXAR metadata collection disabled.")
+				}
+				return nil
 			},
-			{
-				ID:          brickPBSUserConfigs,
-				Description: "Collect PBS user and ACL configurations",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupUserConfigs {
-						c.logger.Debug("Collecting PBS user and ACL configurations")
-						if err := c.collectUserConfigs(ctx); err != nil {
-							c.logger.Warning("Failed to collect user configs: %v", err)
-						} else {
-							c.logger.Debug("User configuration collection completed")
-						}
-					} else {
-						c.logger.Skip("PBS user/ACL backup disabled.")
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickPBSPXAR,
-				Description: "Collect PBS PXAR metadata",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupPxarFiles {
-						c.logger.Debug("Collecting PXAR metadata for datastores")
-						if err := c.collectPBSPxarMetadata(ctx, state.pbs.datastores); err != nil {
-							c.logger.Warning("Failed to collect PBS PXAR metadata: %v", err)
-						} else {
-							c.logger.Debug("PXAR metadata collection completed")
-						}
-					} else {
-						c.logger.Skip("PBS PXAR metadata collection disabled.")
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickPBSFinalize,
-				Description: "Finalize PBS collection state",
-				Run: func(_ context.Context, state *collectionState) error {
-					c := state.collector
-					c.logger.Info("PBS collection summary:")
-					c.logger.Info("  Files collected: %d", c.stats.FilesProcessed)
-					c.logger.Info("  Files not found: %d", c.stats.FilesNotFound)
-					if c.stats.FilesFailed > 0 {
-						c.logger.Warning("  Files failed: %d", c.stats.FilesFailed)
-					}
-					c.logger.Debug("  Files skipped: %d", c.stats.FilesSkipped)
-					c.logger.Debug("  Bytes collected: %d", c.stats.BytesCollected)
-					return nil
-				},
+		},
+	}
+}
+
+func newPBSFinalizeBricks() []collectionBrick {
+	return []collectionBrick{
+		{
+			ID:          brickPBSFinalizeSummary,
+			Description: "Finalize PBS collection state",
+			Run: func(_ context.Context, state *collectionState) error {
+				c := state.collector
+				c.logger.Info("PBS collection summary:")
+				c.logger.Info("  Files collected: %d", c.stats.FilesProcessed)
+				c.logger.Info("  Files not found: %d", c.stats.FilesNotFound)
+				if c.stats.FilesFailed > 0 {
+					c.logger.Warning("  Files failed: %d", c.stats.FilesFailed)
+				}
+				c.logger.Debug("  Files skipped: %d", c.stats.FilesSkipped)
+				c.logger.Debug("  Bytes collected: %d", c.stats.BytesCollected)
+				return nil
 			},
 		},
 	}
