@@ -268,7 +268,7 @@ func (c *Collector) populatePBSInventoryHostCommandsCore(ctx context.Context, in
 	return nil
 }
 
-func (c *Collector) populatePBSInventoryHostCommandsStorage(ctx context.Context, inventory *pbsInventoryState) error {
+func (c *Collector) populatePBSInventoryHostCommandsDMSetup(ctx context.Context, inventory *pbsInventoryState) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -277,12 +277,56 @@ func (c *Collector) populatePBSInventoryHostCommandsStorage(ctx context.Context,
 	}
 	report := &inventory.report
 	report.Commands["dmsetup_tree"] = c.captureInventoryCommand(ctx, "dmsetup ls --tree", "dmsetup", "ls", "--tree")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryHostCommandsLVM(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
 	report.Commands["pvs_json"] = c.captureInventoryCommand(ctx, "pvs --reportformat json --units b", "pvs", "--reportformat", "json", "--units", "b")
 	report.Commands["vgs_json"] = c.captureInventoryCommand(ctx, "vgs --reportformat json --units b", "vgs", "--reportformat", "json", "--units", "b")
 	report.Commands["lvs_json"] = c.captureInventoryCommand(ctx, "lvs --reportformat json --units b -a", "lvs", "--reportformat", "json", "--units", "b", "-a")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryHostCommandsMDADM(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
 	report.Commands["proc_mdstat"] = c.captureInventoryCommand(ctx, "cat /proc/mdstat", "cat", "/proc/mdstat")
 	report.Commands["mdadm_scan"] = c.captureInventoryCommand(ctx, "mdadm --detail --scan", "mdadm", "--detail", "--scan")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryHostCommandsMultipath(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
 	report.Commands["multipath_ll"] = c.captureInventoryCommand(ctx, "multipath -ll", "multipath", "-ll")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryHostCommandsISCSI(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
 	report.Commands["iscsi_sessions"] = c.captureInventoryCommand(ctx, "iscsiadm -m session", "iscsiadm", "-m", "session")
 	report.Commands["iscsi_nodes"] = c.captureInventoryCommand(ctx, "iscsiadm -m node", "iscsiadm", "-m", "node")
 	report.Commands["iscsi_ifaces"] = c.captureInventoryCommand(ctx, "iscsiadm -m iface", "iscsiadm", "-m", "iface")

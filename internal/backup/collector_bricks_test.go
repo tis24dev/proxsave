@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -244,7 +246,11 @@ func TestNewPBSRecipeOrder(t *testing.T) {
 		brickPBSInventorySystemdMountUnits,
 		brickPBSInventoryReferencedFiles,
 		brickPBSInventoryHostCommandsCore,
-		brickPBSInventoryHostCommandsStorage,
+		brickPBSInventoryHostCommandsDMSetup,
+		brickPBSInventoryHostCommandsLVM,
+		brickPBSInventoryHostCommandsMDADM,
+		brickPBSInventoryHostCommandsMultipath,
+		brickPBSInventoryHostCommandsISCSI,
 		brickPBSInventoryHostCommandsZFS,
 		brickPBSInventoryCommandFiles,
 		brickPBSInventoryDatastores,
@@ -288,12 +294,24 @@ func TestNewSystemRecipeOrder(t *testing.T) {
 		brickSystemFirewallStatic,
 		brickSystemRuntimeLeases,
 		brickSystemCoreRuntime,
-		brickSystemNetworkRuntime,
+		brickSystemNetworkRuntimeAddr,
+		brickSystemNetworkRuntimeRules,
+		brickSystemNetworkRuntimeRoutes,
+		brickSystemNetworkRuntimeLinks,
+		brickSystemNetworkRuntimeNeighbors,
+		brickSystemNetworkRuntimeBridges,
+		brickSystemNetworkRuntimeInventory,
+		brickSystemNetworkRuntimeBonding,
+		brickSystemNetworkRuntimeDNS,
 		brickSystemStorageRuntime,
 		brickSystemComputeRuntime,
 		brickSystemServicesRuntime,
 		brickSystemPackagesRuntime,
-		brickSystemFirewallRuntime,
+		brickSystemFirewallRuntimeIPTables,
+		brickSystemFirewallRuntimeIP6Tables,
+		brickSystemFirewallRuntimeNFTables,
+		brickSystemFirewallRuntimeUFW,
+		brickSystemFirewallRuntimeFirewalld,
 		brickSystemKernelModulesRuntime,
 		brickSystemSysctlRuntime,
 		brickSystemZFSRuntime,
@@ -670,6 +688,224 @@ func TestPBSManifestAccessAndTapeBricksPopulateEntriesIndividually(t *testing.T)
 			t.Fatalf("manifest entry %s status = %s, want %s", key, entry.Status, StatusCollected)
 		}
 	}
+}
+
+func TestSystemNetworkRuntimeBricksProduceOwnFileFamilies(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{
+		filepath.Join(root, "sys", "class", "net", "eth0"),
+		filepath.Join(root, "etc"),
+		filepath.Join(root, "proc", "net", "bonding"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	for rel, content := range map[string]string{
+		"sys/class/net/eth0/address":   "00:11:22:33:44:55\n",
+		"sys/class/net/eth0/ifindex":   "2\n",
+		"sys/class/net/eth0/operstate": "up\n",
+		"sys/class/net/eth0/speed":     "1000\n",
+		"etc/resolv.conf":              "nameserver 1.1.1.1\n",
+		"proc/net/bonding/bond0":       "Bonding Mode: active-backup\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	cases := []struct {
+		id    BrickID
+		files []string
+	}{
+		{id: brickSystemNetworkRuntimeAddr, files: []string{"ip_addr.json", "ip_addr.txt"}},
+		{id: brickSystemNetworkRuntimeRules, files: []string{"ip_rule.json", "ip_rule.txt"}},
+		{id: brickSystemNetworkRuntimeRoutes, files: []string{"ip_route.json", "ip_route.txt", "ip_route_all_v4.txt", "ip_route_all_v6.txt"}},
+		{id: brickSystemNetworkRuntimeLinks, files: []string{"ip_link.json", "ip_link.txt"}},
+		{id: brickSystemNetworkRuntimeNeighbors, files: []string{"ip6_neigh.txt", "ip_neigh.txt"}},
+		{id: brickSystemNetworkRuntimeBridges, files: []string{"bridge_fdb.txt", "bridge_link.txt", "bridge_mdb.txt", "bridge_vlan.txt"}},
+		{id: brickSystemNetworkRuntimeInventory, files: []string{"network_inventory.json"}},
+		{id: brickSystemNetworkRuntimeBonding, files: []string{"bonding_bond0.txt"}},
+		{id: brickSystemNetworkRuntimeDNS, files: []string{"resolv_conf.txt"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.id), func(t *testing.T) {
+			collector := newTestCollectorWithDeps(t, CollectorDeps{
+				LookPath: func(cmd string) (string, error) {
+					return "/usr/bin/" + cmd, nil
+				},
+				RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+					return testCollectorCommandOutput(name, args...), nil
+				},
+			})
+			collector.config.SystemRootPrefix = root
+
+			state := newCollectionState(collector)
+			brick := requireBrick(t, newSystemRecipe(), tc.id)
+			if err := brick.Run(context.Background(), state); err != nil {
+				t.Fatalf("brick %s failed: %v", tc.id, err)
+			}
+
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				t.Fatalf("ensureSystemCommandsDir: %v", err)
+			}
+			got := listDirEntries(t, commandsDir)
+			if !reflect.DeepEqual(got, tc.files) {
+				t.Fatalf("files for %s = %v, want %v", tc.id, got, tc.files)
+			}
+		})
+	}
+}
+
+func TestSystemFirewallRuntimeBricksAreIndependentAndGated(t *testing.T) {
+	cases := []struct {
+		id    BrickID
+		files []string
+	}{
+		{id: brickSystemFirewallRuntimeIPTables, files: []string{"iptables.txt", "iptables_nat.txt"}},
+		{id: brickSystemFirewallRuntimeIP6Tables, files: []string{"ip6tables.txt", "ip6tables_nat.txt"}},
+		{id: brickSystemFirewallRuntimeNFTables, files: []string{"nftables.txt"}},
+		{id: brickSystemFirewallRuntimeUFW, files: []string{"systemctl_ufw.txt", "ufw_status.txt"}},
+		{id: brickSystemFirewallRuntimeFirewalld, files: []string{"firewalld_list_all.txt", "firewalld_state.txt", "systemctl_firewalld.txt"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.id)+"_enabled", func(t *testing.T) {
+			collector := newTestCollectorWithDeps(t, CollectorDeps{
+				LookPath: func(cmd string) (string, error) {
+					return "/usr/bin/" + cmd, nil
+				},
+				RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+					return testCollectorCommandOutput(name, args...), nil
+				},
+			})
+			collector.config.BackupFirewallRules = true
+
+			state := newCollectionState(collector)
+			brick := requireBrick(t, newSystemRecipe(), tc.id)
+			if err := brick.Run(context.Background(), state); err != nil {
+				t.Fatalf("brick %s failed: %v", tc.id, err)
+			}
+
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				t.Fatalf("ensureSystemCommandsDir: %v", err)
+			}
+			got := listDirEntries(t, commandsDir)
+			if !reflect.DeepEqual(got, tc.files) {
+				t.Fatalf("files for %s = %v, want %v", tc.id, got, tc.files)
+			}
+		})
+
+		t.Run(string(tc.id)+"_disabled", func(t *testing.T) {
+			collector := newTestCollectorWithDeps(t, CollectorDeps{
+				LookPath: func(cmd string) (string, error) {
+					return "/usr/bin/" + cmd, nil
+				},
+				RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+					return testCollectorCommandOutput(name, args...), nil
+				},
+			})
+			collector.config.BackupFirewallRules = false
+
+			state := newCollectionState(collector)
+			brick := requireBrick(t, newSystemRecipe(), tc.id)
+			if err := brick.Run(context.Background(), state); err != nil {
+				t.Fatalf("brick %s failed with firewall disabled: %v", tc.id, err)
+			}
+
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				t.Fatalf("ensureSystemCommandsDir: %v", err)
+			}
+			got := listDirEntries(t, commandsDir)
+			if len(got) != 0 {
+				t.Fatalf("expected no files for %s with firewall disabled, got %v", tc.id, got)
+			}
+		})
+	}
+}
+
+func TestPBSInventoryHostCommandStorageBricksPopulateOwnKeys(t *testing.T) {
+	cases := []struct {
+		id   BrickID
+		keys []string
+	}{
+		{id: brickPBSInventoryHostCommandsDMSetup, keys: []string{"dmsetup_tree"}},
+		{id: brickPBSInventoryHostCommandsLVM, keys: []string{"lvs_json", "pvs_json", "vgs_json"}},
+		{id: brickPBSInventoryHostCommandsMDADM, keys: []string{"mdadm_scan", "proc_mdstat"}},
+		{id: brickPBSInventoryHostCommandsMultipath, keys: []string{"multipath_ll"}},
+		{id: brickPBSInventoryHostCommandsISCSI, keys: []string{"iscsi_ifaces", "iscsi_nodes", "iscsi_sessions"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.id), func(t *testing.T) {
+			collector := newTestCollectorWithDeps(t, CollectorDeps{
+				LookPath: func(cmd string) (string, error) {
+					return "/usr/bin/" + cmd, nil
+				},
+				RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+					return testCollectorCommandOutput(name, args...), nil
+				},
+			})
+			collector.proxType = "pbs"
+
+			state := newCollectionState(collector)
+			state.pbs.inventory = &pbsInventoryState{
+				report: pbsDatastoreInventoryReport{
+					Commands: make(map[string]inventoryCommandSnapshot),
+					Files:    make(map[string]inventoryFileSnapshot),
+					Dirs:     make(map[string]inventoryDirSnapshot),
+				},
+				hostCommandsEnabled: true,
+			}
+
+			brick := requireBrick(t, newPBSRecipe(), tc.id)
+			if err := brick.Run(context.Background(), state); err != nil {
+				t.Fatalf("brick %s failed: %v", tc.id, err)
+			}
+
+			got := sortedInventoryCommandKeys(state.pbs.inventory.report.Commands)
+			if !reflect.DeepEqual(got, tc.keys) {
+				t.Fatalf("command keys for %s = %v, want %v", tc.id, got, tc.keys)
+			}
+		})
+	}
+}
+
+func listDirEntries(t *testing.T, dir string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir %s: %v", dir, err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
+func sortedInventoryCommandKeys(commands map[string]inventoryCommandSnapshot) []string {
+	keys := make([]string, 0, len(commands))
+	for key := range commands {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func testCollectorCommandOutput(name string, args ...string) []byte {
+	if name == "cat" && len(args) == 1 {
+		if data, err := os.ReadFile(args[0]); err == nil {
+			return data
+		}
+	}
+	return []byte(strings.TrimSpace(name+" "+strings.Join(args, " ")) + "\n")
 }
 
 func requireBrick(t *testing.T, r recipe, id BrickID) collectionBrick {

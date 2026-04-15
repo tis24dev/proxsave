@@ -128,7 +128,11 @@ const (
 	brickPBSInventorySystemdMountUnits          BrickID = "pbs_inventory_systemd_mount_units"
 	brickPBSInventoryReferencedFiles            BrickID = "pbs_inventory_referenced_files"
 	brickPBSInventoryHostCommandsCore           BrickID = "pbs_inventory_host_commands_core"
-	brickPBSInventoryHostCommandsStorage        BrickID = "pbs_inventory_host_commands_storage"
+	brickPBSInventoryHostCommandsDMSetup        BrickID = "pbs_inventory_host_commands_dmsetup"
+	brickPBSInventoryHostCommandsLVM            BrickID = "pbs_inventory_host_commands_lvm"
+	brickPBSInventoryHostCommandsMDADM          BrickID = "pbs_inventory_host_commands_mdadm"
+	brickPBSInventoryHostCommandsMultipath      BrickID = "pbs_inventory_host_commands_multipath"
+	brickPBSInventoryHostCommandsISCSI          BrickID = "pbs_inventory_host_commands_iscsi"
 	brickPBSInventoryHostCommandsZFS            BrickID = "pbs_inventory_host_commands_zfs"
 	brickPBSInventoryCommandFiles               BrickID = "pbs_inventory_command_files"
 	brickPBSInventoryDatastores                 BrickID = "pbs_inventory_datastores"
@@ -142,40 +146,52 @@ const (
 	brickPBSPXARCTLists                         BrickID = "pbs_pxar_ct_lists"
 	brickPBSFinalizeSummary                     BrickID = "pbs_finalize_summary"
 
-	brickSystemNetworkStatic        BrickID = "system_network_static"
-	brickSystemIdentityStatic       BrickID = "system_identity_static"
-	brickSystemAptStatic            BrickID = "system_apt_static"
-	brickSystemCronStatic           BrickID = "system_cron_static"
-	brickSystemServicesStatic       BrickID = "system_services_static"
-	brickSystemLoggingStatic        BrickID = "system_logging_static"
-	brickSystemSSLStatic            BrickID = "system_ssl_static"
-	brickSystemSysctlStatic         BrickID = "system_sysctl_static"
-	brickSystemKernelModulesStatic  BrickID = "system_kernel_modules_static"
-	brickSystemZFSStatic            BrickID = "system_zfs_static"
-	brickSystemFirewallStatic       BrickID = "system_firewall_static"
-	brickSystemRuntimeLeases        BrickID = "system_runtime_leases"
-	brickSystemCoreRuntime          BrickID = "system_core_runtime"
-	brickSystemNetworkRuntime       BrickID = "system_network_runtime"
-	brickSystemStorageRuntime       BrickID = "system_storage_runtime"
-	brickSystemComputeRuntime       BrickID = "system_compute_runtime"
-	brickSystemServicesRuntime      BrickID = "system_services_runtime"
-	brickSystemPackagesRuntime      BrickID = "system_packages_runtime"
-	brickSystemFirewallRuntime      BrickID = "system_firewall_runtime"
-	brickSystemKernelModulesRuntime BrickID = "system_kernel_modules_runtime"
-	brickSystemSysctlRuntime        BrickID = "system_sysctl_runtime"
-	brickSystemZFSRuntime           BrickID = "system_zfs_runtime"
-	brickSystemLVMRuntime           BrickID = "system_lvm_runtime"
-	brickSystemNetworkReport        BrickID = "system_network_report"
-	brickSystemKernel               BrickID = "system_kernel"
-	brickSystemHardware             BrickID = "system_hardware"
-	brickSystemCriticalFiles        BrickID = "system_critical_files"
-	brickSystemConfigFile           BrickID = "system_config_file"
-	brickSystemCustomPaths          BrickID = "system_custom_paths"
-	brickSystemScriptDirs           BrickID = "system_script_dirs"
-	brickSystemScriptRepo           BrickID = "system_script_repo"
-	brickSystemSSHKeys              BrickID = "system_ssh_keys"
-	brickSystemRootHome             BrickID = "system_root_home"
-	brickSystemUserHomes            BrickID = "system_user_homes"
+	brickSystemNetworkStatic            BrickID = "system_network_static"
+	brickSystemIdentityStatic           BrickID = "system_identity_static"
+	brickSystemAptStatic                BrickID = "system_apt_static"
+	brickSystemCronStatic               BrickID = "system_cron_static"
+	brickSystemServicesStatic           BrickID = "system_services_static"
+	brickSystemLoggingStatic            BrickID = "system_logging_static"
+	brickSystemSSLStatic                BrickID = "system_ssl_static"
+	brickSystemSysctlStatic             BrickID = "system_sysctl_static"
+	brickSystemKernelModulesStatic      BrickID = "system_kernel_modules_static"
+	brickSystemZFSStatic                BrickID = "system_zfs_static"
+	brickSystemFirewallStatic           BrickID = "system_firewall_static"
+	brickSystemRuntimeLeases            BrickID = "system_runtime_leases"
+	brickSystemCoreRuntime              BrickID = "system_core_runtime"
+	brickSystemNetworkRuntimeAddr       BrickID = "system_network_runtime_addr"
+	brickSystemNetworkRuntimeRules      BrickID = "system_network_runtime_rules"
+	brickSystemNetworkRuntimeRoutes     BrickID = "system_network_runtime_routes"
+	brickSystemNetworkRuntimeLinks      BrickID = "system_network_runtime_links"
+	brickSystemNetworkRuntimeNeighbors  BrickID = "system_network_runtime_neighbors"
+	brickSystemNetworkRuntimeBridges    BrickID = "system_network_runtime_bridges"
+	brickSystemNetworkRuntimeInventory  BrickID = "system_network_runtime_inventory"
+	brickSystemNetworkRuntimeBonding    BrickID = "system_network_runtime_bonding"
+	brickSystemNetworkRuntimeDNS        BrickID = "system_network_runtime_dns"
+	brickSystemStorageRuntime           BrickID = "system_storage_runtime"
+	brickSystemComputeRuntime           BrickID = "system_compute_runtime"
+	brickSystemServicesRuntime          BrickID = "system_services_runtime"
+	brickSystemPackagesRuntime          BrickID = "system_packages_runtime"
+	brickSystemFirewallRuntimeIPTables  BrickID = "system_firewall_runtime_iptables"
+	brickSystemFirewallRuntimeIP6Tables BrickID = "system_firewall_runtime_ip6tables"
+	brickSystemFirewallRuntimeNFTables  BrickID = "system_firewall_runtime_nftables"
+	brickSystemFirewallRuntimeUFW       BrickID = "system_firewall_runtime_ufw"
+	brickSystemFirewallRuntimeFirewalld BrickID = "system_firewall_runtime_firewalld"
+	brickSystemKernelModulesRuntime     BrickID = "system_kernel_modules_runtime"
+	brickSystemSysctlRuntime            BrickID = "system_sysctl_runtime"
+	brickSystemZFSRuntime               BrickID = "system_zfs_runtime"
+	brickSystemLVMRuntime               BrickID = "system_lvm_runtime"
+	brickSystemNetworkReport            BrickID = "system_network_report"
+	brickSystemKernel                   BrickID = "system_kernel"
+	brickSystemHardware                 BrickID = "system_hardware"
+	brickSystemCriticalFiles            BrickID = "system_critical_files"
+	brickSystemConfigFile               BrickID = "system_config_file"
+	brickSystemCustomPaths              BrickID = "system_custom_paths"
+	brickSystemScriptDirs               BrickID = "system_script_dirs"
+	brickSystemScriptRepo               BrickID = "system_script_repo"
+	brickSystemSSHKeys                  BrickID = "system_ssh_keys"
+	brickSystemRootHome                 BrickID = "system_root_home"
+	brickSystemUserHomes                BrickID = "system_user_homes"
 )
 
 type collectionBrick struct {
@@ -1699,10 +1715,38 @@ func newPBSInventoryBricks() []collectionBrick {
 			},
 		},
 		{
-			ID:          brickPBSInventoryHostCommandsStorage,
-			Description: "Populate PBS inventory storage host commands",
+			ID:          brickPBSInventoryHostCommandsDMSetup,
+			Description: "Populate PBS inventory dmsetup host commands",
 			Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.populatePBSInventoryHostCommandsStorage(ctx, state.ensurePBSInventoryState())
+				return state.collector.populatePBSInventoryHostCommandsDMSetup(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryHostCommandsLVM,
+			Description: "Populate PBS inventory LVM host commands",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSInventoryHostCommandsLVM(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryHostCommandsMDADM,
+			Description: "Populate PBS inventory mdadm host commands",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSInventoryHostCommandsMDADM(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryHostCommandsMultipath,
+			Description: "Populate PBS inventory multipath host commands",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSInventoryHostCommandsMultipath(ctx, state.ensurePBSInventoryState())
+			},
+		},
+		{
+			ID:          brickPBSInventoryHostCommandsISCSI,
+			Description: "Populate PBS inventory iSCSI host commands",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.populatePBSInventoryHostCommandsISCSI(ctx, state.ensurePBSInventoryState())
 			},
 		},
 		{
@@ -1911,6 +1955,20 @@ func newPBSFinalizeBricks() []collectionBrick {
 }
 
 func newSystemRecipe() recipe {
+	systemCommandsBrick := func(id BrickID, description string, run func(*Collector, context.Context, string) error) collectionBrick {
+		return collectionBrick{
+			ID:          id,
+			Description: description,
+			Run: func(ctx context.Context, state *collectionState) error {
+				commandsDir, err := state.ensureSystemCommandsDir()
+				if err != nil {
+					return err
+				}
+				return run(state.collector, ctx, commandsDir)
+			},
+		}
+	}
+
 	bricks := []collectionBrick{
 		{ID: brickSystemNetworkStatic, Description: "Collect static network configuration", Run: func(ctx context.Context, state *collectionState) error {
 			return state.collector.collectSystemNetworkStatic(ctx)
@@ -1959,13 +2017,15 @@ func newSystemRecipe() recipe {
 			}
 			return state.collector.collectSystemCoreRuntime(ctx, commandsDir)
 		}},
-		{ID: brickSystemNetworkRuntime, Description: "Collect network runtime information", Run: func(ctx context.Context, state *collectionState) error {
-			commandsDir, err := state.ensureSystemCommandsDir()
-			if err != nil {
-				return err
-			}
-			return state.collector.collectSystemNetworkRuntime(ctx, commandsDir)
-		}},
+		systemCommandsBrick(brickSystemNetworkRuntimeAddr, "Collect network address runtime information", (*Collector).collectSystemNetworkAddrRuntime),
+		systemCommandsBrick(brickSystemNetworkRuntimeRules, "Collect network rule runtime information", (*Collector).collectSystemNetworkRulesRuntime),
+		systemCommandsBrick(brickSystemNetworkRuntimeRoutes, "Collect network route runtime information", (*Collector).collectSystemNetworkRoutesRuntime),
+		systemCommandsBrick(brickSystemNetworkRuntimeLinks, "Collect network link runtime information", (*Collector).collectSystemNetworkLinksRuntime),
+		systemCommandsBrick(brickSystemNetworkRuntimeNeighbors, "Collect network neighbor runtime information", (*Collector).collectSystemNetworkNeighborsRuntime),
+		systemCommandsBrick(brickSystemNetworkRuntimeBridges, "Collect bridge runtime information", (*Collector).collectSystemNetworkBridgesRuntime),
+		systemCommandsBrick(brickSystemNetworkRuntimeInventory, "Collect network inventory runtime information", (*Collector).collectSystemNetworkInventoryRuntime),
+		systemCommandsBrick(brickSystemNetworkRuntimeBonding, "Collect bonding runtime information", (*Collector).collectSystemNetworkBondingRuntime),
+		systemCommandsBrick(brickSystemNetworkRuntimeDNS, "Collect DNS runtime information", (*Collector).collectSystemNetworkDNSRuntime),
 		{ID: brickSystemStorageRuntime, Description: "Collect storage runtime information", Run: func(ctx context.Context, state *collectionState) error {
 			commandsDir, err := state.ensureSystemCommandsDir()
 			if err != nil {
@@ -1994,13 +2054,11 @@ func newSystemRecipe() recipe {
 			}
 			return state.collector.collectSystemPackagesRuntime(ctx, commandsDir)
 		}},
-		{ID: brickSystemFirewallRuntime, Description: "Collect firewall runtime information", Run: func(ctx context.Context, state *collectionState) error {
-			commandsDir, err := state.ensureSystemCommandsDir()
-			if err != nil {
-				return err
-			}
-			return state.collector.collectSystemFirewallRuntime(ctx, commandsDir)
-		}},
+		systemCommandsBrick(brickSystemFirewallRuntimeIPTables, "Collect iptables runtime information", (*Collector).collectSystemFirewallIPTablesRuntime),
+		systemCommandsBrick(brickSystemFirewallRuntimeIP6Tables, "Collect ip6tables runtime information", (*Collector).collectSystemFirewallIP6TablesRuntime),
+		systemCommandsBrick(brickSystemFirewallRuntimeNFTables, "Collect nftables runtime information", (*Collector).collectSystemFirewallNFTablesRuntime),
+		systemCommandsBrick(brickSystemFirewallRuntimeUFW, "Collect UFW runtime information", (*Collector).collectSystemFirewallUFWRuntime),
+		systemCommandsBrick(brickSystemFirewallRuntimeFirewalld, "Collect firewalld runtime information", (*Collector).collectSystemFirewallFirewalldRuntime),
 		{ID: brickSystemKernelModulesRuntime, Description: "Collect kernel module runtime information", Run: func(ctx context.Context, state *collectionState) error {
 			commandsDir, err := state.ensureSystemCommandsDir()
 			if err != nil {

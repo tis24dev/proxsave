@@ -535,7 +535,7 @@ func (c *Collector) collectSystemCoreRuntime(ctx context.Context, commandsDir st
 	return nil
 }
 
-func (c *Collector) collectSystemNetworkRuntime(ctx context.Context, commandsDir string) error {
+func (c *Collector) collectSystemNetworkAddrRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
 		"ip addr show",
 		filepath.Join(commandsDir, "ip_addr.txt"),
@@ -548,6 +548,11 @@ func (c *Collector) collectSystemNetworkRuntime(ctx context.Context, commandsDir
 		filepath.Join(commandsDir, "ip_addr.json"),
 		"IP addresses (json)")
 
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkRulesRuntime(ctx context.Context, commandsDir string) error {
+
 	if err := c.collectCommandMulti(ctx,
 		"ip rule show",
 		filepath.Join(commandsDir, "ip_rule.txt"),
@@ -559,6 +564,11 @@ func (c *Collector) collectSystemNetworkRuntime(ctx context.Context, commandsDir
 		"ip -j rule show",
 		filepath.Join(commandsDir, "ip_rule.json"),
 		"IP rules (json)")
+
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkRoutesRuntime(ctx context.Context, commandsDir string) error {
 
 	if err := c.collectCommandMulti(ctx,
 		"ip route show",
@@ -581,6 +591,10 @@ func (c *Collector) collectSystemNetworkRuntime(ctx context.Context, commandsDir
 		filepath.Join(commandsDir, "ip_route_all_v6.txt"),
 		"IP routes (all tables v6)")
 
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkLinksRuntime(ctx context.Context, commandsDir string) error {
 	c.collectCommandOptional(ctx,
 		"ip -s link",
 		filepath.Join(commandsDir, "ip_link.txt"),
@@ -590,6 +604,10 @@ func (c *Collector) collectSystemNetworkRuntime(ctx context.Context, commandsDir
 		filepath.Join(commandsDir, "ip_link.json"),
 		"IP links (json)")
 
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkNeighborsRuntime(ctx context.Context, commandsDir string) error {
 	c.safeCmdOutput(ctx,
 		"ip neigh show",
 		filepath.Join(commandsDir, "ip_neigh.txt"),
@@ -601,6 +619,10 @@ func (c *Collector) collectSystemNetworkRuntime(ctx context.Context, commandsDir
 		"Neighbor table (IPv6)",
 		false)
 
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkBridgesRuntime(ctx context.Context, commandsDir string) error {
 	c.collectCommandOptional(ctx,
 		"bridge -d link show",
 		filepath.Join(commandsDir, "bridge_link.txt"),
@@ -618,8 +640,20 @@ func (c *Collector) collectSystemNetworkRuntime(ctx context.Context, commandsDir
 		filepath.Join(commandsDir, "bridge_mdb.txt"),
 		"Bridge MDB")
 
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkInventoryRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectNetworkInventory(ctx, commandsDir, ""); err != nil {
 		c.logger.Debug("Network inventory collection failed: %v", err)
+	}
+
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkBondingRuntime(ctx context.Context, commandsDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if entries, err := os.ReadDir(c.systemPath("/proc/net/bonding")); err == nil {
@@ -637,14 +671,16 @@ func (c *Collector) collectSystemNetworkRuntime(ctx context.Context, commandsDir
 		c.logger.Debug("No bonding interfaces found")
 	}
 
+	return nil
+}
+
+func (c *Collector) collectSystemNetworkDNSRuntime(ctx context.Context, commandsDir string) error {
 	resolvPath := c.systemPath("/etc/resolv.conf")
-	c.safeCmdOutput(ctx,
+	return c.safeCmdOutput(ctx,
 		fmt.Sprintf("cat %s", resolvPath),
 		filepath.Join(commandsDir, "resolv_conf.txt"),
 		"DNS configuration",
 		false)
-
-	return nil
 }
 
 func (c *Collector) collectSystemStorageRuntime(ctx context.Context, commandsDir string) error {
@@ -764,7 +800,7 @@ func (c *Collector) collectSystemPackagesRuntime(ctx context.Context, commandsDi
 	return nil
 }
 
-func (c *Collector) collectSystemFirewallRuntime(ctx context.Context, commandsDir string) error {
+func (c *Collector) collectSystemFirewallIPTablesRuntime(ctx context.Context, commandsDir string) error {
 	if !c.config.BackupFirewallRules {
 		return nil
 	}
@@ -782,6 +818,14 @@ func (c *Collector) collectSystemFirewallRuntime(ctx context.Context, commandsDi
 		filepath.Join(commandsDir, "iptables_nat.txt"),
 		"iptables NAT table")
 
+	return nil
+}
+
+func (c *Collector) collectSystemFirewallIP6TablesRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupFirewallRules {
+		return nil
+	}
+
 	if err := c.collectCommandMulti(ctx,
 		"ip6tables-save",
 		filepath.Join(commandsDir, "ip6tables.txt"),
@@ -795,16 +839,43 @@ func (c *Collector) collectSystemFirewallRuntime(ctx context.Context, commandsDi
 		filepath.Join(commandsDir, "ip6tables_nat.txt"),
 		"ip6tables NAT table")
 
-	c.safeCmdOutput(ctx,
+	return nil
+}
+
+func (c *Collector) collectSystemFirewallNFTablesRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupFirewallRules {
+		return nil
+	}
+
+	return c.safeCmdOutput(ctx,
 		"nft list ruleset",
 		filepath.Join(commandsDir, "nftables.txt"),
 		"nftables rules",
 		false)
+}
+
+func (c *Collector) collectSystemFirewallUFWRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupFirewallRules {
+		return nil
+	}
 
 	c.collectCommandOptional(ctx,
 		"ufw status verbose",
 		filepath.Join(commandsDir, "ufw_status.txt"),
 		"UFW status")
+	c.collectCommandOptional(ctx,
+		"systemctl status --no-pager ufw",
+		filepath.Join(commandsDir, "systemctl_ufw.txt"),
+		"systemctl ufw")
+
+	return nil
+}
+
+func (c *Collector) collectSystemFirewallFirewalldRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupFirewallRules {
+		return nil
+	}
+
 	c.collectCommandOptional(ctx,
 		"firewall-cmd --state",
 		filepath.Join(commandsDir, "firewalld_state.txt"),
@@ -813,10 +884,6 @@ func (c *Collector) collectSystemFirewallRuntime(ctx context.Context, commandsDi
 		"firewall-cmd --list-all",
 		filepath.Join(commandsDir, "firewalld_list_all.txt"),
 		"firewalld rules")
-	c.collectCommandOptional(ctx,
-		"systemctl status --no-pager ufw",
-		filepath.Join(commandsDir, "systemctl_ufw.txt"),
-		"systemctl ufw")
 	c.collectCommandOptional(ctx,
 		"systemctl status --no-pager firewalld",
 		filepath.Join(commandsDir, "systemctl_firewalld.txt"),
