@@ -86,6 +86,15 @@ func (c *Collector) collectSystemDirectories(ctx context.Context) error {
 		c.collectSystemSSLStatic,
 		c.collectSystemSysctlStatic,
 		c.collectSystemKernelModuleStatic,
+		c.collectCommonFilesystemFstab,
+		c.collectCommonStorageStackCrypttab,
+		c.collectCommonStorageStackISCSISnapshot,
+		c.collectCommonStorageStackMultipathSnapshot,
+		c.collectCommonStorageStackMDADMSnapshot,
+		c.collectCommonStorageStackLVMSnapshot,
+		c.collectCommonStorageStackMountUnitsSnapshot,
+		c.collectCommonStorageStackAutofsSnapshot,
+		c.collectCommonStorageStackReferencedFiles,
 		c.collectSystemZFSStatic,
 		c.collectSystemFirewallStatic,
 		c.collectSystemRuntimeLeases,
@@ -1189,10 +1198,8 @@ func (c *Collector) collectHardwareInfo(ctx context.Context) error {
 }
 
 func (c *Collector) collectCriticalFiles(ctx context.Context) error {
-	c.logger.Debug("Collecting critical files (passwd/shadow/fstab/etc.)")
+	c.logger.Debug("Collecting critical files (passwd/shadow/sudoers/etc.)")
 	criticalFiles := []string{
-		"/etc/fstab",
-		"/etc/crypttab",
 		"/etc/passwd",
 		"/etc/group",
 		"/etc/shadow",

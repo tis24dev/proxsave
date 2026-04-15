@@ -108,14 +108,15 @@ const (
 	brickPBSRuntimeRecentTasks                  BrickID = "pbs_runtime_recent_tasks"
 	brickPBSRuntimeS3Endpoints                  BrickID = "pbs_runtime_s3_endpoints"
 	brickPBSRuntimeS3EndpointBuckets            BrickID = "pbs_runtime_s3_endpoint_buckets"
-	brickPBSStorageStackISCSISnapshot           BrickID = "pbs_storage_stack_iscsi_snapshot"
-	brickPBSStorageStackMultipathSnapshot       BrickID = "pbs_storage_stack_multipath_snapshot"
-	brickPBSStorageStackMDADMSnapshot           BrickID = "pbs_storage_stack_mdadm_snapshot"
-	brickPBSStorageStackLVMSnapshot             BrickID = "pbs_storage_stack_lvm_snapshot"
-	brickPBSStorageStackZFSSnapshot             BrickID = "pbs_storage_stack_zfs_snapshot"
-	brickPBSStorageStackMountUnitsSnapshot      BrickID = "pbs_storage_stack_mount_units_snapshot"
-	brickPBSStorageStackAutofsSnapshot          BrickID = "pbs_storage_stack_autofs_snapshot"
-	brickPBSStorageStackReferencedFiles         BrickID = "pbs_storage_stack_referenced_files_snapshot"
+	brickCommonFilesystemFstab                  BrickID = "common_filesystem_fstab"
+	brickCommonStorageStackCrypttab             BrickID = "common_storage_stack_crypttab"
+	brickCommonStorageStackISCSISnapshot        BrickID = "common_storage_stack_iscsi"
+	brickCommonStorageStackMultipathSnapshot    BrickID = "common_storage_stack_multipath"
+	brickCommonStorageStackMDADMSnapshot        BrickID = "common_storage_stack_mdadm"
+	brickCommonStorageStackLVMSnapshot          BrickID = "common_storage_stack_lvm"
+	brickCommonStorageStackMountUnitsSnapshot   BrickID = "common_storage_stack_mount_units"
+	brickCommonStorageStackAutofsSnapshot       BrickID = "common_storage_stack_autofs"
+	brickCommonStorageStackReferencedFiles      BrickID = "common_storage_stack_referenced_files"
 	brickPBSInventoryInit                       BrickID = "pbs_inventory_init"
 	brickPBSInventoryMountFiles                 BrickID = "pbs_inventory_mount_files"
 	brickPBSInventoryOSFiles                    BrickID = "pbs_inventory_os_files"
@@ -940,7 +941,6 @@ func newPBSRecipe() recipe {
 	}
 	bricks = append(bricks, newPBSManifestBricks()...)
 	bricks = append(bricks, newPBSRuntimeBricks()...)
-	bricks = append(bricks, newPBSStorageStackBricks()...)
 	bricks = append(bricks, newPBSInventoryBricks()...)
 	bricks = append(bricks, newPBSFeatureBricks()...)
 	bricks = append(bricks, newPBSFinalizeBricks()...)
@@ -952,9 +952,7 @@ func newPBSCommandsRecipe() recipe {
 }
 
 func newPBSDatastoreInventoryRecipe() recipe {
-	bricks := append([]collectionBrick{}, newPBSStorageStackBricks()...)
-	bricks = append(bricks, newPBSInventoryBricks()...)
-	return recipe{Name: "pbs-inventory", Bricks: bricks}
+	return recipe{Name: "pbs-inventory", Bricks: newPBSInventoryBricks()}
 }
 
 func newPBSDatastoreConfigRecipe() recipe {
@@ -1551,62 +1549,74 @@ func newPBSRuntimeBricks() []collectionBrick {
 	}
 }
 
-func newPBSStorageStackBricks() []collectionBrick {
+func newCommonFilesystemBricks() []collectionBrick {
 	return []collectionBrick{
 		{
-			ID:          brickPBSStorageStackISCSISnapshot,
-			Description: "Collect PBS iSCSI snapshots",
+			ID:          brickCommonFilesystemFstab,
+			Description: "Collect the common filesystem table",
 			Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectPBSStorageStackISCSISnapshot(ctx)
+				return state.collector.collectCommonFilesystemFstab(ctx)
+			},
+		},
+	}
+}
+
+func newCommonStorageStackBricks() []collectionBrick {
+	return []collectionBrick{
+		{
+			ID:          brickCommonStorageStackCrypttab,
+			Description: "Collect common storage-stack crypttab data",
+			Run: func(ctx context.Context, state *collectionState) error {
+				return state.collector.collectCommonStorageStackCrypttab(ctx)
 			},
 		},
 		{
-			ID:          brickPBSStorageStackMultipathSnapshot,
-			Description: "Collect PBS multipath snapshots",
+			ID:          brickCommonStorageStackISCSISnapshot,
+			Description: "Collect common iSCSI storage-stack data",
 			Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectPBSStorageStackMultipathSnapshot(ctx)
+				return state.collector.collectCommonStorageStackISCSISnapshot(ctx)
 			},
 		},
 		{
-			ID:          brickPBSStorageStackMDADMSnapshot,
-			Description: "Collect PBS mdadm snapshots",
+			ID:          brickCommonStorageStackMultipathSnapshot,
+			Description: "Collect common multipath storage-stack data",
 			Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectPBSStorageStackMDADMSnapshot(ctx)
+				return state.collector.collectCommonStorageStackMultipathSnapshot(ctx)
 			},
 		},
 		{
-			ID:          brickPBSStorageStackLVMSnapshot,
-			Description: "Collect PBS LVM snapshots",
+			ID:          brickCommonStorageStackMDADMSnapshot,
+			Description: "Collect common mdadm storage-stack data",
 			Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectPBSStorageStackLVMSnapshot(ctx)
+				return state.collector.collectCommonStorageStackMDADMSnapshot(ctx)
 			},
 		},
 		{
-			ID:          brickPBSStorageStackZFSSnapshot,
-			Description: "Collect PBS ZFS snapshots",
+			ID:          brickCommonStorageStackLVMSnapshot,
+			Description: "Collect common LVM storage-stack data",
 			Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectPBSStorageStackZFSSnapshot(ctx)
+				return state.collector.collectCommonStorageStackLVMSnapshot(ctx)
 			},
 		},
 		{
-			ID:          brickPBSStorageStackMountUnitsSnapshot,
-			Description: "Collect PBS storage-stack mount units",
+			ID:          brickCommonStorageStackMountUnitsSnapshot,
+			Description: "Collect common storage-stack mount units",
 			Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectPBSStorageStackMountUnitsSnapshot(ctx)
+				return state.collector.collectCommonStorageStackMountUnitsSnapshot(ctx)
 			},
 		},
 		{
-			ID:          brickPBSStorageStackAutofsSnapshot,
-			Description: "Collect PBS storage-stack autofs data",
+			ID:          brickCommonStorageStackAutofsSnapshot,
+			Description: "Collect common storage-stack autofs data",
 			Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectPBSStorageStackAutofsSnapshot(ctx)
+				return state.collector.collectCommonStorageStackAutofsSnapshot(ctx)
 			},
 		},
 		{
-			ID:          brickPBSStorageStackReferencedFiles,
-			Description: "Collect PBS storage-stack referenced files",
+			ID:          brickCommonStorageStackReferencedFiles,
+			Description: "Collect common storage-stack referenced files",
 			Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectPBSStorageStackReferencedFilesSnapshot(ctx)
+				return state.collector.collectCommonStorageStackReferencedFiles(ctx)
 			},
 		},
 	}
@@ -1909,290 +1919,292 @@ func newPBSFinalizeBricks() []collectionBrick {
 }
 
 func newSystemRecipe() recipe {
-	return recipe{
-		Name: "system",
-		Bricks: []collectionBrick{
-			{ID: brickSystemNetworkStatic, Description: "Collect static network configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemNetworkStatic(ctx)
-			}},
-			{ID: brickSystemIdentityStatic, Description: "Collect static identity files", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemIdentityStatic(ctx)
-			}},
-			{ID: brickSystemAptStatic, Description: "Collect static APT configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemAptStatic(ctx)
-			}},
-			{ID: brickSystemCronStatic, Description: "Collect static cron configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemCronStatic(ctx)
-			}},
-			{ID: brickSystemServicesStatic, Description: "Collect static service configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemServicesStatic(ctx)
-			}},
-			{ID: brickSystemLoggingStatic, Description: "Collect static logging configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemLoggingStatic(ctx)
-			}},
-			{ID: brickSystemSSLStatic, Description: "Collect static SSL configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemSSLStatic(ctx)
-			}},
-			{ID: brickSystemSysctlStatic, Description: "Collect static sysctl configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemSysctlStatic(ctx)
-			}},
-			{ID: brickSystemKernelModulesStatic, Description: "Collect static kernel module configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemKernelModuleStatic(ctx)
-			}},
-			{ID: brickSystemZFSStatic, Description: "Collect static ZFS configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemZFSStatic(ctx)
-			}},
-			{ID: brickSystemFirewallStatic, Description: "Collect static firewall configuration", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemFirewallStatic(ctx)
-			}},
-			{ID: brickSystemRuntimeLeases, Description: "Collect runtime lease snapshots", Run: func(ctx context.Context, state *collectionState) error {
-				return state.collector.collectSystemRuntimeLeases(ctx)
-			}},
-			{ID: brickSystemCoreRuntime, Description: "Collect core system runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemCoreRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemNetworkRuntime, Description: "Collect network runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemNetworkRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemStorageRuntime, Description: "Collect storage runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemStorageRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemComputeRuntime, Description: "Collect compute runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemComputeRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemServicesRuntime, Description: "Collect service runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemServicesRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemPackagesRuntime, Description: "Collect package runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemPackagesRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemFirewallRuntime, Description: "Collect firewall runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemFirewallRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemKernelModulesRuntime, Description: "Collect kernel module runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemKernelModulesRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemSysctlRuntime, Description: "Collect sysctl runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemSysctlRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemZFSRuntime, Description: "Collect ZFS runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemZFSRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemLVMRuntime, Description: "Collect LVM runtime information", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				return state.collector.collectSystemLVMRuntime(ctx, commandsDir)
-			}},
-			{ID: brickSystemNetworkReport, Description: "Finalize derived system reports", Run: func(ctx context.Context, state *collectionState) error {
-				commandsDir, err := state.ensureSystemCommandsDir()
-				if err != nil {
-					return err
-				}
-				if err := state.collector.finalizeSystemRuntimeReports(ctx, commandsDir); err != nil {
-					state.collector.logger.Debug("Network report generation failed: %v", err)
+	bricks := []collectionBrick{
+		{ID: brickSystemNetworkStatic, Description: "Collect static network configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemNetworkStatic(ctx)
+		}},
+		{ID: brickSystemIdentityStatic, Description: "Collect static identity files", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemIdentityStatic(ctx)
+		}},
+		{ID: brickSystemAptStatic, Description: "Collect static APT configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemAptStatic(ctx)
+		}},
+		{ID: brickSystemCronStatic, Description: "Collect static cron configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemCronStatic(ctx)
+		}},
+		{ID: brickSystemServicesStatic, Description: "Collect static service configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemServicesStatic(ctx)
+		}},
+		{ID: brickSystemLoggingStatic, Description: "Collect static logging configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemLoggingStatic(ctx)
+		}},
+		{ID: brickSystemSSLStatic, Description: "Collect static SSL configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemSSLStatic(ctx)
+		}},
+		{ID: brickSystemSysctlStatic, Description: "Collect static sysctl configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemSysctlStatic(ctx)
+		}},
+		{ID: brickSystemKernelModulesStatic, Description: "Collect static kernel module configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemKernelModuleStatic(ctx)
+		}},
+	}
+	bricks = append(bricks, newCommonFilesystemBricks()...)
+	bricks = append(bricks, newCommonStorageStackBricks()...)
+	bricks = append(bricks, []collectionBrick{
+		{ID: brickSystemZFSStatic, Description: "Collect static ZFS configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemZFSStatic(ctx)
+		}},
+		{ID: brickSystemFirewallStatic, Description: "Collect static firewall configuration", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemFirewallStatic(ctx)
+		}},
+		{ID: brickSystemRuntimeLeases, Description: "Collect runtime lease snapshots", Run: func(ctx context.Context, state *collectionState) error {
+			return state.collector.collectSystemRuntimeLeases(ctx)
+		}},
+		{ID: brickSystemCoreRuntime, Description: "Collect core system runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemCoreRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemNetworkRuntime, Description: "Collect network runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemNetworkRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemStorageRuntime, Description: "Collect storage runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemStorageRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemComputeRuntime, Description: "Collect compute runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemComputeRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemServicesRuntime, Description: "Collect service runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemServicesRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemPackagesRuntime, Description: "Collect package runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemPackagesRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemFirewallRuntime, Description: "Collect firewall runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemFirewallRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemKernelModulesRuntime, Description: "Collect kernel module runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemKernelModulesRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemSysctlRuntime, Description: "Collect sysctl runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemSysctlRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemZFSRuntime, Description: "Collect ZFS runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemZFSRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemLVMRuntime, Description: "Collect LVM runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemLVMRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemNetworkReport, Description: "Finalize derived system reports", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			if err := state.collector.finalizeSystemRuntimeReports(ctx, commandsDir); err != nil {
+				state.collector.logger.Debug("Network report generation failed: %v", err)
+			}
+			return nil
+		}},
+		{
+			ID:          brickSystemKernel,
+			Description: "Collect kernel information",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				c.logger.Debug("Collecting kernel information (uname/modules)")
+				if err := c.collectKernelInfo(ctx); err != nil {
+					c.logger.Warning("Failed to collect kernel info: %v", err)
+				} else {
+					c.logger.Debug("Kernel information collected successfully")
 				}
 				return nil
-			}},
-			{
-				ID:          brickSystemKernel,
-				Description: "Collect kernel information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					c.logger.Debug("Collecting kernel information (uname/modules)")
-					if err := c.collectKernelInfo(ctx); err != nil {
-						c.logger.Warning("Failed to collect kernel info: %v", err)
-					} else {
-						c.logger.Debug("Kernel information collected successfully")
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemHardware,
-				Description: "Collect hardware information",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					c.logger.Debug("Collecting hardware inventory (CPU/memory/devices)")
-					if err := c.collectHardwareInfo(ctx); err != nil {
-						c.logger.Warning("Failed to collect hardware info: %v", err)
-					} else {
-						c.logger.Debug("Hardware inventory collected successfully")
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemCriticalFiles,
-				Description: "Collect critical system files",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupCriticalFiles {
-						c.logger.Debug("Collecting critical files specified in configuration")
-						if err := c.collectCriticalFiles(ctx); err != nil {
-							c.logger.Warning("Failed to collect critical files: %v", err)
-						} else {
-							c.logger.Debug("Critical files collected successfully")
-						}
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemConfigFile,
-				Description: "Collect backup configuration file",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupConfigFile {
-						c.logger.Debug("Collecting backup configuration file")
-						if err := c.collectConfigFile(ctx); err != nil {
-							c.logger.Warning("Failed to collect backup configuration file: %v", err)
-						} else {
-							c.logger.Debug("Backup configuration file collected successfully")
-						}
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemCustomPaths,
-				Description: "Collect custom backup paths",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if len(c.config.CustomBackupPaths) > 0 {
-						c.logger.Debug("Collecting custom paths: %v", c.config.CustomBackupPaths)
-						if err := c.collectCustomPaths(ctx); err != nil {
-							c.logger.Warning("Failed to collect custom paths: %v", err)
-						} else {
-							c.logger.Debug("Custom paths collected successfully")
-						}
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemScriptDirs,
-				Description: "Collect script directories",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupScriptDir {
-						c.logger.Debug("Collecting script directories (/usr/local/bin,/usr/local/sbin)")
-						if err := c.collectScriptDirectories(ctx); err != nil {
-							c.logger.Warning("Failed to collect script directories: %v", err)
-						} else {
-							c.logger.Debug("Script directories collected successfully")
-						}
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemScriptRepo,
-				Description: "Collect script repository",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupScriptRepository {
-						c.logger.Debug("Collecting script repository from %s", c.config.ScriptRepositoryPath)
-						if err := c.collectScriptRepository(ctx); err != nil {
-							c.logger.Warning("Failed to collect script repository: %v", err)
-						} else {
-							c.logger.Debug("Script repository collected successfully")
-						}
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemSSHKeys,
-				Description: "Collect SSH keys",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupSSHKeys {
-						c.logger.Debug("Collecting SSH keys for root and users")
-						if err := c.collectSSHKeys(ctx); err != nil {
-							c.logger.Warning("Failed to collect SSH keys: %v", err)
-						} else {
-							c.logger.Debug("SSH keys collected successfully")
-						}
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemRootHome,
-				Description: "Collect root home directory",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupRootHome {
-						c.logger.Debug("Collecting /root home directory")
-						if err := c.collectRootHome(ctx); err != nil {
-							c.logger.Warning("Failed to collect root home files: %v", err)
-						} else {
-							c.logger.Debug("Root home directory collected successfully")
-						}
-					}
-					return nil
-				},
-			},
-			{
-				ID:          brickSystemUserHomes,
-				Description: "Collect user home directories",
-				Run: func(ctx context.Context, state *collectionState) error {
-					c := state.collector
-					if c.config.BackupUserHomes {
-						c.logger.Debug("Collecting user home directories under /home")
-						if err := c.collectUserHomes(ctx); err != nil {
-							c.logger.Warning("Failed to collect user home directories: %v", err)
-						} else {
-							c.logger.Debug("User home directories collected successfully")
-						}
-					}
-					return nil
-				},
 			},
 		},
-	}
+		{
+			ID:          brickSystemHardware,
+			Description: "Collect hardware information",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				c.logger.Debug("Collecting hardware inventory (CPU/memory/devices)")
+				if err := c.collectHardwareInfo(ctx); err != nil {
+					c.logger.Warning("Failed to collect hardware info: %v", err)
+				} else {
+					c.logger.Debug("Hardware inventory collected successfully")
+				}
+				return nil
+			},
+		},
+		{
+			ID:          brickSystemCriticalFiles,
+			Description: "Collect critical system files",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if c.config.BackupCriticalFiles {
+					c.logger.Debug("Collecting critical files specified in configuration")
+					if err := c.collectCriticalFiles(ctx); err != nil {
+						c.logger.Warning("Failed to collect critical files: %v", err)
+					} else {
+						c.logger.Debug("Critical files collected successfully")
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID:          brickSystemConfigFile,
+			Description: "Collect backup configuration file",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if c.config.BackupConfigFile {
+					c.logger.Debug("Collecting backup configuration file")
+					if err := c.collectConfigFile(ctx); err != nil {
+						c.logger.Warning("Failed to collect backup configuration file: %v", err)
+					} else {
+						c.logger.Debug("Backup configuration file collected successfully")
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID:          brickSystemCustomPaths,
+			Description: "Collect custom backup paths",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if len(c.config.CustomBackupPaths) > 0 {
+					c.logger.Debug("Collecting custom paths: %v", c.config.CustomBackupPaths)
+					if err := c.collectCustomPaths(ctx); err != nil {
+						c.logger.Warning("Failed to collect custom paths: %v", err)
+					} else {
+						c.logger.Debug("Custom paths collected successfully")
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID:          brickSystemScriptDirs,
+			Description: "Collect script directories",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if c.config.BackupScriptDir {
+					c.logger.Debug("Collecting script directories (/usr/local/bin,/usr/local/sbin)")
+					if err := c.collectScriptDirectories(ctx); err != nil {
+						c.logger.Warning("Failed to collect script directories: %v", err)
+					} else {
+						c.logger.Debug("Script directories collected successfully")
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID:          brickSystemScriptRepo,
+			Description: "Collect script repository",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if c.config.BackupScriptRepository {
+					c.logger.Debug("Collecting script repository from %s", c.config.ScriptRepositoryPath)
+					if err := c.collectScriptRepository(ctx); err != nil {
+						c.logger.Warning("Failed to collect script repository: %v", err)
+					} else {
+						c.logger.Debug("Script repository collected successfully")
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID:          brickSystemSSHKeys,
+			Description: "Collect SSH keys",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if c.config.BackupSSHKeys {
+					c.logger.Debug("Collecting SSH keys for root and users")
+					if err := c.collectSSHKeys(ctx); err != nil {
+						c.logger.Warning("Failed to collect SSH keys: %v", err)
+					} else {
+						c.logger.Debug("SSH keys collected successfully")
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID:          brickSystemRootHome,
+			Description: "Collect root home directory",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if c.config.BackupRootHome {
+					c.logger.Debug("Collecting /root home directory")
+					if err := c.collectRootHome(ctx); err != nil {
+						c.logger.Warning("Failed to collect root home files: %v", err)
+					} else {
+						c.logger.Debug("Root home directory collected successfully")
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID:          brickSystemUserHomes,
+			Description: "Collect user home directories",
+			Run: func(ctx context.Context, state *collectionState) error {
+				c := state.collector
+				if c.config.BackupUserHomes {
+					c.logger.Debug("Collecting user home directories under /home")
+					if err := c.collectUserHomes(ctx); err != nil {
+						c.logger.Warning("Failed to collect user home directories: %v", err)
+					} else {
+						c.logger.Debug("User home directories collected successfully")
+					}
+				}
+				return nil
+			},
+		},
+	}...)
+	return recipe{Name: "system", Bricks: bricks}
 }
 
 func (p pveContext) runtimeNodes() []string {
