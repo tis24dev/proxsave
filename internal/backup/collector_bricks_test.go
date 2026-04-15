@@ -117,6 +117,14 @@ func TestRunRecipePropagatesContextCancellation(t *testing.T) {
 	}
 }
 
+func recipeBrickIDs(r recipe) []BrickID {
+	ids := make([]BrickID, 0, len(r.Bricks))
+	for _, brick := range r.Bricks {
+		ids = append(ids, brick.ID)
+	}
+	return ids
+}
+
 func TestNewPVERecipeOrder(t *testing.T) {
 	got := recipeBrickIDs(newPVERecipe())
 	want := []BrickID{

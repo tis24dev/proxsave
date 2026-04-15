@@ -23,10 +23,6 @@ type safetyBackupSpec struct {
 	WriteLocationFile bool
 }
 
-func resolveAndCheckPath(destRoot, candidate string) (string, error) {
-	return resolvePathWithinRootFS(safetyFS, destRoot, candidate)
-}
-
 // SafetyBackupResult contains information about the safety backup
 type SafetyBackupResult struct {
 	BackupPath    string

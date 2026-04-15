@@ -252,14 +252,6 @@ func runRecipe(ctx context.Context, r recipe, state *collectionState) error {
 	return nil
 }
 
-func recipeBrickIDs(r recipe) []BrickID {
-	ids := make([]BrickID, 0, len(r.Bricks))
-	for _, brick := range r.Bricks {
-		ids = append(ids, brick.ID)
-	}
-	return ids
-}
-
 func (s *collectionState) ensurePVECommandsDir() (string, error) {
 	if s.pve.commandsDir != "" {
 		return s.pve.commandsDir, nil
