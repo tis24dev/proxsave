@@ -116,7 +116,7 @@ proxsave/
 │   ├── tui/                   # TUI wizards
 │   ├── types/                 # Shared types
 │   └── version/               # Version info
-├── pkg/                       # Public libraries (if any)
+├── pkg/                       # Shared helper packages for ProxSave (not an implicit stable external API)
 ├── build/                     # Build artifacts (binary output)
 ├── configs/                   # Configuration files
 ├── docs/                      # Documentation
