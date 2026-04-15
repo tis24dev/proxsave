@@ -186,9 +186,17 @@ func TestCollectSystemDirectoriesCopiesCommonStorageStack(t *testing.T) {
 	writeFile("etc/autofs.conf", "TIMEOUT=60\n", 0o644)
 	writeFile("etc/auto.pbs", "/mnt/autofs -fstype=nfs4 server:/export\n", 0o644)
 
-	if err := collector.collectSystemDirectories(context.Background()); err != nil {
-		t.Fatalf("collectSystemDirectories failed: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newSystemRecipe(), nil,
+		brickCommonFilesystemFstab,
+		brickCommonStorageStackCrypttab,
+		brickCommonStorageStackISCSISnapshot,
+		brickCommonStorageStackMultipathSnapshot,
+		brickCommonStorageStackMDADMSnapshot,
+		brickCommonStorageStackLVMSnapshot,
+		brickCommonStorageStackMountUnitsSnapshot,
+		brickCommonStorageStackAutofsSnapshot,
+		brickCommonStorageStackReferencedFiles,
+	)
 
 	for _, rel := range []string{
 		"etc/fstab",
@@ -441,9 +449,10 @@ func TestCollectSystemDirectoriesCopiesAltNetConfigsAndLeases(t *testing.T) {
 		}
 	}
 
-	if err := collector.collectSystemDirectories(context.Background()); err != nil {
-		t.Fatalf("collectSystemDirectories failed: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newSystemRecipe(), nil,
+		brickSystemNetworkStatic,
+		brickSystemRuntimeLeases,
+	)
 
 	paths := []string{
 		filepath.Join(collector.tempDir, "etc", "netplan", "01-netcfg.yaml"),

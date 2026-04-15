@@ -85,18 +85,6 @@ func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 	return nil
 }
 
-// collectPBSCommands collects output from PBS commands
-func (c *Collector) collectPBSCommands(ctx context.Context, datastores []pbsDatastore) error {
-	if len(datastores) > 0 {
-		datastores = clonePBSDatastores(datastores)
-		assignUniquePBSDatastoreOutputKeys(datastores)
-	}
-
-	state := newCollectionState(c)
-	state.pbs.datastores = datastores
-	return runRecipe(ctx, newPBSCommandsRecipe(), state)
-}
-
 func (c *Collector) collectPBSConfigSnapshot(ctx context.Context, root string) error {
 	c.logger.Debug("Collecting PBS directories (source=%s, dest=%s)",
 		root, filepath.Join(c.tempDir, "etc/proxmox-backup"))
@@ -744,17 +732,6 @@ func (c *Collector) loadPBSUserIDsFromCommandFile(commandsDir string) ([]string,
 		return nil, err
 	}
 	return parsePBSStringFieldList(data, "userid")
-}
-
-// collectUserConfigs keeps the legacy adapter but delegates to a recipe-backed access/token flow.
-func (c *Collector) collectUserConfigs(ctx context.Context) error {
-	c.logger.Debug("Collecting PBS user and ACL information")
-	state := newCollectionState(c)
-	if err := runRecipe(ctx, newPBSUserConfigRecipe(), state); err != nil {
-		return err
-	}
-	c.logger.Debug("PBS user information collection completed")
-	return nil
 }
 
 func (c *Collector) collectPBSUserTokensForIDs(ctx context.Context, usersDir string, userIDs []string) (map[string]json.RawMessage, error) {

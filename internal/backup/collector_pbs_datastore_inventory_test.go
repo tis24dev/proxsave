@@ -126,9 +126,7 @@ datastore: Synology-Archive
 	}
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	if err := collector.collectPBSDatastoreInventory(context.Background(), nil); err != nil {
-		t.Fatalf("collectPBSDatastoreInventory error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreInventoryRecipe(), nil)
 
 	reportPath := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "pbs_datastore_inventory.json")
 	raw, err := os.ReadFile(reportPath)
@@ -261,9 +259,9 @@ func TestCollectPBSDatastoreInventoryCapturesHostCommands(t *testing.T) {
 
 	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, deps)
 	cli := []pbsDatastore{{Name: "Data1", Path: "/mnt/datastore/Data1"}}
-	if err := collector.collectPBSDatastoreInventory(context.Background(), cli); err != nil {
-		t.Fatalf("collectPBSDatastoreInventory error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreInventoryRecipe(), func(state *collectionState) {
+		state.pbs.datastores = cli
+	})
 
 	reportPath := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "pbs_datastore_inventory.json")
 	raw, err := os.ReadFile(reportPath)

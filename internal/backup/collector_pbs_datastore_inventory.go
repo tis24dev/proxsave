@@ -99,15 +99,6 @@ type pbsInventoryState struct {
 	hostCommandsEnabled bool
 }
 
-func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatastores []pbsDatastore) error {
-	state := newCollectionState(c)
-	if len(cliDatastores) > 0 {
-		state.pbs.datastores = clonePBSDatastores(cliDatastores)
-		assignUniquePBSDatastoreOutputKeys(state.pbs.datastores)
-	}
-	return runRecipe(ctx, newPBSDatastoreInventoryRecipe(), state)
-}
-
 func (c *Collector) initPBSDatastoreInventoryState(ctx context.Context, cliDatastores []pbsDatastore) (*pbsInventoryState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

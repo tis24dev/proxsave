@@ -335,20 +335,6 @@ func (c *Collector) preparePBSDatastoreConfigState(datastores []pbsDatastore) (*
 	}, nil
 }
 
-// collectDatastoreConfigs remains as a thin compatibility adapter for tests.
-func (c *Collector) collectDatastoreConfigs(ctx context.Context, datastores []pbsDatastore) error {
-	state := newCollectionState(c)
-	if len(datastores) > 0 {
-		state.pbs.datastores = clonePBSDatastores(datastores)
-		assignUniquePBSDatastoreOutputKeys(state.pbs.datastores)
-	}
-	if err := runRecipe(ctx, newPBSDatastoreConfigRecipe(), state); err != nil {
-		return err
-	}
-	c.logger.Debug("Datastore configuration collection completed")
-	return nil
-}
-
 func (c *Collector) collectPBSDatastoreCLIConfigs(ctx context.Context, state *pbsDatastoreConfigState) error {
 	if state == nil || len(state.datastores) == 0 {
 		return nil
@@ -517,24 +503,6 @@ func (c *Collector) preparePBSPXARState(ctx context.Context, datastores []pbsDat
 		smallRoot:    smallRoot,
 		ioTimeout:    ioTimeout,
 	}, nil
-}
-
-// collectPBSPxarMetadata remains as a thin compatibility adapter for tests.
-func (c *Collector) collectPBSPxarMetadata(ctx context.Context, datastores []pbsDatastore) error {
-	pxarState, err := c.preparePBSPXARState(ctx, datastores)
-	if err != nil {
-		return err
-	}
-	if err := c.collectPBSPXARMetadataStep(ctx, pxarState); err != nil {
-		return err
-	}
-	if err := c.collectPBSPXARSubdirReportsStep(ctx, pxarState); err != nil {
-		return err
-	}
-	if err := c.collectPBSPXARVMListsStep(ctx, pxarState); err != nil {
-		return err
-	}
-	return c.collectPBSPXARCTListsStep(ctx, pxarState)
 }
 
 func (c *Collector) collectPBSPXARMetadataStep(ctx context.Context, state *pbsPxarState) error {

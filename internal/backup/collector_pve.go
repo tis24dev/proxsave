@@ -310,51 +310,6 @@ func (c *Collector) describePathForManifest(src, dest string, enabled bool) Mani
 	return ManifestEntry{Status: StatusCollected}
 }
 
-// collectPVEDirectories collects PVE-specific directories
-func (c *Collector) collectPVEDirectories(ctx context.Context, clustered bool) error {
-	c.logger.Debug("Snapshotting PVE directories (clustered=%v)", clustered)
-	steps := []func(context.Context) error{
-		c.collectPVEConfigSnapshot,
-		func(ctx context.Context) error { return c.collectPVEClusterSnapshot(ctx, clustered) },
-		c.collectPVEFirewallSnapshot,
-		c.collectPVEVZDumpSnapshot,
-	}
-	for _, step := range steps {
-		if err := step(ctx); err != nil {
-			return err
-		}
-	}
-
-	c.logger.Debug("PVE directory snapshot completed")
-	return nil
-}
-
-// collectPVECommands collects output from PVE commands and returns runtime info
-func (c *Collector) collectPVECommands(ctx context.Context, clustered bool) (*pveRuntimeInfo, error) {
-	commandsDir, err := c.ensureCommandsDir("pve")
-	if err != nil {
-		return nil, err
-	}
-	c.logger.Debug("Collecting PVE command outputs into %s", commandsDir)
-
-	info := &pveRuntimeInfo{
-		Nodes:    make([]string, 0),
-		Storages: make([]pveStorageEntry, 0),
-	}
-	if err := c.collectPVECoreRuntime(ctx, commandsDir, info); err != nil {
-		return nil, err
-	}
-	c.collectPVEACLRuntime(ctx, commandsDir)
-	c.collectPVEClusterRuntime(ctx, commandsDir, clustered)
-	if err := c.collectPVEStorageRuntime(ctx, commandsDir, info); err != nil {
-		return nil, err
-	}
-	c.finalizePVERuntimeInfo(info)
-
-	c.logger.Debug("PVE command output collection finished: %d nodes, %d storages", len(info.Nodes), len(info.Storages))
-	return info, nil
-}
-
 func (c *Collector) collectPVEConfigSnapshot(ctx context.Context) error {
 	pveConfigPath := c.effectivePVEConfigPath()
 	var extraExclude []string
@@ -864,26 +819,6 @@ func (c *Collector) collectPVEVZDumpCronSnapshot(ctx context.Context) error {
 	return nil
 }
 
-func (c *Collector) collectPVEJobs(ctx context.Context, nodes []string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	c.logger.Debug("Collecting PVE job definitions and histories for nodes: %v", nodes)
-
-	if err := c.collectPVEBackupJobDefinitions(ctx); err != nil {
-		return err
-	}
-	if err := c.collectPVEBackupJobHistory(ctx, nodes); err != nil {
-		return err
-	}
-	if err := c.collectPVEVZDumpCronSnapshot(ctx); err != nil {
-		return err
-	}
-
-	c.logger.Debug("PVE job collection completed (jobs dir: %s)", c.pveJobsDir())
-	return nil
-}
-
 func (c *Collector) effectivePVEConfigPath() string {
 	if path := strings.TrimSpace(c.config.PVEConfigPath); path != "" {
 		return c.systemPath(path)
@@ -998,26 +933,6 @@ func (c *Collector) collectPVEScheduleCronFiles(ctx context.Context) error {
 	return nil
 }
 
-func (c *Collector) collectPVESchedules(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	c.logger.Debug("Collecting schedule information (cron/systemd timers)")
-
-	if err := c.collectPVEScheduleCrontab(ctx); err != nil {
-		return err
-	}
-	if err := c.collectPVEScheduleTimers(ctx); err != nil {
-		return err
-	}
-	if err := c.collectPVEScheduleCronFiles(ctx); err != nil {
-		return err
-	}
-
-	c.logger.Debug("PVE schedule collection completed (output dir: %s)", c.pveSchedulesDir())
-	return nil
-}
-
 func (c *Collector) collectPVEReplicationDefinitions(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1063,23 +978,6 @@ func (c *Collector) collectPVEReplicationStatus(ctx context.Context, nodes []str
 			fmt.Sprintf("%s replication status", node),
 			false)
 	}
-	return nil
-}
-
-func (c *Collector) collectPVEReplication(ctx context.Context, nodes []string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	c.logger.Debug("Collecting replication jobs for nodes: %v", nodes)
-
-	if err := c.collectPVEReplicationDefinitions(ctx); err != nil {
-		return err
-	}
-	if err := c.collectPVEReplicationStatus(ctx, nodes); err != nil {
-		return err
-	}
-
-	c.logger.Debug("PVE replication collection completed (dir: %s)", c.pveReplicationDir())
 	return nil
 }
 
@@ -1381,71 +1279,6 @@ func (c *Collector) writePVEStorageSummary(ctx context.Context, storages []pveSt
 	summary.WriteString(fmt.Sprintf("\n# Total datastores processed: %d\n", len(storages)))
 
 	return c.writeReportFile(filepath.Join(c.pveDatastoresBaseDir(), "detected_datastores.txt"), []byte(summary.String()))
-}
-
-func (c *Collector) collectPVEStorageMetadata(ctx context.Context, storages []pveStorageEntry) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	c.logger.Info("Collecting PVE datastore information using auto-detection")
-	c.logger.Debug("Collecting datastore metadata for %d storages", len(storages))
-
-	resolved := c.resolvePVEStorages(storages)
-	if len(resolved) == 0 {
-		c.logger.Info("Found 0 PVE datastore(s) via auto-detection")
-		c.logger.Info("No PVE datastores detected - skipping metadata collection")
-		return nil
-	}
-
-	c.logger.Info("Found %d PVE datastore(s) via auto-detection", len(resolved))
-
-	baseDir := c.pveDatastoresBaseDir()
-	if err := c.ensureDir(baseDir); err != nil {
-		return fmt.Errorf("failed to create datastore metadata directory: %w", err)
-	}
-
-	ioTimeout := c.pveStorageIOTimout()
-	probed := make([]pveStorageEntry, 0, len(resolved))
-	results := make(map[string]*pveStorageScanResult, len(resolved))
-	for _, storage := range resolved {
-		result, err := c.preparePVEStorageScan(ctx, storage, baseDir, ioTimeout)
-		if err != nil {
-			return err
-		}
-		if result == nil {
-			continue
-		}
-		probed = append(probed, storage)
-		results[storage.pathKey()] = result
-	}
-
-	for _, storage := range probed {
-		if err := c.collectPVEStorageMetadataJSONStep(ctx, results[storage.pathKey()], ioTimeout); err != nil {
-			return err
-		}
-	}
-	for _, storage := range probed {
-		if err := c.collectPVEStorageMetadataTextStep(ctx, results[storage.pathKey()], ioTimeout); err != nil {
-			return err
-		}
-	}
-	if c.config.BackupPVEBackupFiles {
-		for _, storage := range probed {
-			result := results[storage.pathKey()]
-			if result == nil || result.SkipRemaining {
-				continue
-			}
-			if err := c.collectPVEStorageBackupAnalysisStep(ctx, result, ioTimeout); err != nil {
-				c.logger.Warning("Detailed backup analysis for %s failed: %v", storage.Name, err)
-			}
-		}
-	}
-	if err := c.writePVEStorageSummary(ctx, probed); err != nil {
-		return err
-	}
-
-	c.logger.Debug("PVE datastore metadata collection completed (%d processed)", len(probed))
-	return nil
 }
 
 func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveStorageEntry, metaDir string, ioTimeout time.Duration) error {
@@ -1861,17 +1694,6 @@ func (c *Collector) collectPVECephRuntime(ctx context.Context) error {
 	return nil
 }
 
-func (c *Collector) collectPVECephInfo(ctx context.Context) error {
-	if err := c.collectPVECephConfigSnapshot(ctx); err != nil {
-		return err
-	}
-	if err := c.collectPVECephRuntime(ctx); err != nil {
-		return err
-	}
-	c.logger.Debug("Ceph information collection completed")
-	return nil
-}
-
 func (c *Collector) createPVECoreAliases(ctx context.Context) error {
 	baseInfoDir := c.pveInfoDir()
 	if err := c.ensureDir(baseInfoDir); err != nil {
@@ -1951,22 +1773,6 @@ func (c *Collector) createPVEVersionInfo(ctx context.Context) error {
 		return fmt.Errorf("failed to prepare PVE info directory: %w", err)
 	}
 	if err := c.writePVEVersionInfo(ctx, baseInfoDir); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *Collector) createPVEInfoAliases(ctx context.Context) error {
-	if err := c.createPVECoreAliases(ctx); err != nil {
-		return err
-	}
-	if err := c.createPVEBackupHistoryAggregate(ctx); err != nil {
-		return err
-	}
-	if err := c.createPVEReplicationAggregate(ctx); err != nil {
-		return err
-	}
-	if err := c.createPVEVersionInfo(ctx); err != nil {
 		return err
 	}
 	return nil

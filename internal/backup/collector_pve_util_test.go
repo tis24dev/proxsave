@@ -802,10 +802,9 @@ func TestCollectPVEDirectoriesClusteredMode(t *testing.T) {
 	cfg.BackupClusterConfig = true
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-	err := collector.collectPVEDirectories(context.Background(), true)
-	if err != nil {
-		t.Fatalf("collectPVEDirectories error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+		state.pve.clustered = true
+	}, brickPVEConfigSnapshot, brickPVEClusterSnapshot)
 }
 
 // TestCollectPVEDirectoriesFirewallAsDirectory tests firewall as directory
@@ -831,10 +830,7 @@ func TestCollectPVEDirectoriesFirewallAsDirectory(t *testing.T) {
 	cfg.BackupPVEFirewall = true
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-	err := collector.collectPVEDirectories(context.Background(), false)
-	if err != nil {
-		t.Fatalf("collectPVEDirectories error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEFirewallSnapshot)
 }
 
 // TestCollectPVEDirectoriesFirewallAsFile tests firewall as single file
@@ -856,10 +852,7 @@ func TestCollectPVEDirectoriesFirewallAsFile(t *testing.T) {
 	cfg.BackupPVEFirewall = true
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-	err := collector.collectPVEDirectories(context.Background(), false)
-	if err != nil {
-		t.Fatalf("collectPVEDirectories error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEFirewallSnapshot)
 }
 
 // TestCollectPVEDirectoriesVZDumpConfig tests vzdump config collection
@@ -886,10 +879,7 @@ func TestCollectPVEDirectoriesVZDumpConfig(t *testing.T) {
 	cfg.VzdumpConfigPath = vzdumpPath
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-	err := collector.collectPVEDirectories(context.Background(), false)
-	if err != nil {
-		t.Fatalf("collectPVEDirectories error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEVZDumpSnapshot)
 }
 
 // TestCollectPVEDirectoriesVZDumpRelativePath tests vzdump with relative path
@@ -912,10 +902,7 @@ func TestCollectPVEDirectoriesVZDumpRelativePath(t *testing.T) {
 	cfg.VzdumpConfigPath = "vzdump.conf" // Relative path
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-	err := collector.collectPVEDirectories(context.Background(), false)
-	if err != nil {
-		t.Fatalf("collectPVEDirectories error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEVZDumpSnapshot)
 }
 
 // TestCollectPVEDirectoriesDisabledOptions tests with disabled options
@@ -934,10 +921,12 @@ func TestCollectPVEDirectoriesDisabledOptions(t *testing.T) {
 	cfg.BackupVZDumpConfig = false
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-	err := collector.collectPVEDirectories(context.Background(), false)
-	if err != nil {
-		t.Fatalf("collectPVEDirectories error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil,
+		brickPVEConfigSnapshot,
+		brickPVEClusterSnapshot,
+		brickPVEFirewallSnapshot,
+		brickPVEVZDumpSnapshot,
+	)
 }
 
 // TestCollectPVEDirectoriesWithConfigDB tests config.db handling
@@ -963,10 +952,7 @@ func TestCollectPVEDirectoriesWithConfigDB(t *testing.T) {
 	cfg.PVEClusterPath = clusterDir
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
-	err := collector.collectPVEDirectories(context.Background(), false)
-	if err != nil {
-		t.Fatalf("collectPVEDirectories error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEClusterSnapshot)
 }
 
 // TestHasMultiplePVENodesDetailed tests multiple node detection

@@ -38,9 +38,9 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 		{Name: "store2", Path: "/data/store2"},
 	}
 
-	if err := collector.collectPBSCommands(context.Background(), datastores); err != nil {
-		t.Fatalf("collectPBSCommands error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSCommandsRecipe(), func(state *collectionState) {
+		state.pbs.datastores = datastores
+	})
 
 	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
 
@@ -117,9 +117,9 @@ func TestCollectPBSCommandsSkipsStatusForOverrideOnlyEntries(t *testing.T) {
 		NormalizedPath: normalizePBSDatastorePath("/mnt/a/backup"),
 		OutputKey:      buildPBSOverrideOutputKey("/mnt/a/backup"),
 	}
-	if err := collector.collectPBSCommands(context.Background(), []pbsDatastore{override}); err != nil {
-		t.Fatalf("collectPBSCommands error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSCommandsRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{override}
+	})
 
 	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
 	statusPath := filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", override.pathKey()))
@@ -145,7 +145,9 @@ func TestCollectPBSCommandsReturnsErrorWhenCriticalVersionFails(t *testing.T) {
 	}
 
 	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, deps)
-	err := collector.collectPBSCommands(context.Background(), []pbsDatastore{{Name: "store1", Path: "/data/store1"}})
+	state := newCollectionState(collector)
+	state.pbs.datastores = []pbsDatastore{{Name: "store1", Path: "/data/store1"}}
+	err := runRecipe(context.Background(), newPBSCommandsRecipe(), state)
 	if err == nil || !strings.Contains(err.Error(), "failed to get PBS version") {
 		t.Fatalf("expected critical version error, got %v", err)
 	}
@@ -177,9 +179,9 @@ func TestCollectPBSPxarMetadataProcessesMultipleDatastores(t *testing.T) {
 	ds1, ds1Path := makeDatastore("ds1")
 	ds2, ds2Path := makeDatastore("ds2")
 
-	if err := collector.collectPBSPxarMetadata(context.Background(), []pbsDatastore{ds1, {Name: "skip", Path: ""}, ds2}); err != nil {
-		t.Fatalf("collectPBSPxarMetadata error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSPXARRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{ds1, {Name: "skip", Path: ""}, ds2}
+	})
 
 	metaDir := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata")
 	for _, tc := range []struct {
@@ -257,9 +259,9 @@ func TestCollectPBSPxarMetadataSeparatesOverrideBasenameCollisions(t *testing.T)
 		t.Fatalf("expected distinct path keys, got %q", ds1.pathKey())
 	}
 
-	if err := collector.collectPBSPxarMetadata(context.Background(), []pbsDatastore{ds1, ds2}); err != nil {
-		t.Fatalf("collectPBSPxarMetadata error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSPXARRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{ds1, ds2}
+	})
 
 	for _, ds := range []pbsDatastore{ds1, ds2} {
 		base := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata", ds.pathKey())
@@ -269,7 +271,7 @@ func TestCollectPBSPxarMetadataSeparatesOverrideBasenameCollisions(t *testing.T)
 	}
 }
 
-func TestCollectPBSPxarMetadataReturnsErrorWhenTempVarIsFile(t *testing.T) {
+func TestPBSPXARRecipeSkipsOutputsWhenTempVarIsFile(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, "var"), []byte("not-a-dir"), 0o640); err != nil {
 		t.Fatalf("write var file: %v", err)
@@ -277,9 +279,13 @@ func TestCollectPBSPxarMetadataReturnsErrorWhenTempVarIsFile(t *testing.T) {
 
 	collector := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
 	dsPath := t.TempDir()
-	err := collector.collectPBSPxarMetadata(context.Background(), []pbsDatastore{{Name: "ds", Path: dsPath}})
-	if err == nil || !strings.Contains(err.Error(), "failed to create PXAR metadata directory") {
-		t.Fatalf("expected ensureDir failure, got %v", err)
+	runRecipeForTest(t, context.Background(), collector, newPBSPXARRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{{Name: "ds", Path: dsPath}}
+	})
+
+	metaPath := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata", "ds", "metadata.json")
+	if _, err := os.Stat(metaPath); err == nil {
+		t.Fatalf("expected no PXAR metadata output when preparation fails")
 	}
 }
 
@@ -301,9 +307,9 @@ func TestCollectDatastoreConfigsCreatesConfigAndNamespaceFiles(t *testing.T) {
 	tmp := t.TempDir()
 	collector := NewCollectorWithDeps(newTestLogger(), cfg, tmp, types.ProxmoxBS, false, deps)
 	ds := pbsDatastore{Name: "store", Path: "/fake/path"}
-	if err := collector.collectDatastoreConfigs(context.Background(), []pbsDatastore{ds}); err != nil {
-		t.Fatalf("collectDatastoreConfigs error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreConfigRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{ds}
+	})
 
 	datastoreDir := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "datastores")
 	if _, err := os.Stat(filepath.Join(datastoreDir, "store_config.json")); err != nil {
@@ -335,9 +341,9 @@ func TestCollectDatastoreConfigsCreatesDistinctNamespaceFilesForOverrideCollisio
 
 	ds1 := makeOverride(filepath.Join(tmp, "mnt", "a", "backup"))
 	ds2 := makeOverride(filepath.Join(tmp, "srv", "b", "backup"))
-	if err := collector.collectDatastoreConfigs(context.Background(), []pbsDatastore{ds1, ds2}); err != nil {
-		t.Fatalf("collectDatastoreConfigs error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreConfigRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{ds1, ds2}
+	})
 
 	datastoreDir := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "datastores")
 	for _, ds := range []pbsDatastore{ds1, ds2} {
@@ -366,9 +372,7 @@ func TestCollectUserConfigsSkipsInvalidUserListJSON(t *testing.T) {
 		t.Fatalf("write user_list.json: %v", err)
 	}
 
-	if err := collector.collectUserConfigs(context.Background()); err != nil {
-		t.Fatalf("collectUserConfigs error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSUserConfigRecipe(), nil)
 	if _, err := os.Stat(filepath.Join(usersDir, "tokens.json")); err == nil {
 		t.Fatalf("tokens.json should not be created for invalid user list JSON")
 	}
@@ -392,9 +396,9 @@ func TestCollectPBSCommandsSkipsTapeDetailsWhenHasTapeSupportErrors(t *testing.T
 	}
 
 	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, deps)
-	if err := collector.collectPBSCommands(context.Background(), []pbsDatastore{{Name: "store1", Path: "/data/store1"}}); err != nil {
-		t.Fatalf("collectPBSCommands error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSCommandsRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{{Name: "store1", Path: "/data/store1"}}
+	})
 
 	if _, err := os.Stat(filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "tape_drives.json")); err == nil {
 		t.Fatalf("tape_drives.json should not be created when tape support check fails")
@@ -514,7 +518,7 @@ func TestPBSConfigPathUsesDefaultWhenUnset(t *testing.T) {
 	}
 }
 
-func TestCollectPBSPxarMetadataStopsOnFirstDatastoreError(t *testing.T) {
+func TestPBSPXARRecipeSkipsBrokenDatastoreWithoutAbortingRecipe(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := GetDefaultCollectorConfig()
 	cfg.PxarDatastoreConcurrency = 2
@@ -542,11 +546,19 @@ func TestCollectPBSPxarMetadataStopsOnFirstDatastoreError(t *testing.T) {
 		t.Fatalf("mkdir vm: %v", err)
 	}
 
-	err := collector.collectPBSPxarMetadata(context.Background(), []pbsDatastore{
-		{Name: "badds", Path: dsBadPath},
-		{Name: "okds", Path: dsOKPath},
+	runRecipeForTest(t, context.Background(), collector, newPBSPXARRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{
+			{Name: "badds", Path: dsBadPath},
+			{Name: "okds", Path: dsOKPath},
+		}
 	})
-	if err == nil || !strings.Contains(err.Error(), "failed to create PXAR metadata directory") {
-		t.Fatalf("expected datastore processing error, got %v", err)
+
+	okMeta := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata", "okds", "metadata.json")
+	if _, err := os.Stat(okMeta); err != nil {
+		t.Fatalf("expected healthy datastore metadata to be collected: %v", err)
+	}
+	badMeta := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata", "badds", "metadata.json")
+	if _, err := os.Stat(badMeta); err == nil {
+		t.Fatalf("expected broken datastore metadata to be skipped")
 	}
 }
