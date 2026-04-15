@@ -303,10 +303,13 @@ func TestNewSystemRecipeOrder(t *testing.T) {
 		brickSystemNetworkRuntimeInventory,
 		brickSystemNetworkRuntimeBonding,
 		brickSystemNetworkRuntimeDNS,
-		brickSystemStorageRuntime,
-		brickSystemComputeRuntime,
+		brickSystemStorageRuntimeMounts,
+		brickSystemStorageRuntimeBlock,
+		brickSystemComputeRuntimeMemoryCPU,
+		brickSystemComputeRuntimeBusInv,
 		brickSystemServicesRuntime,
-		brickSystemPackagesRuntime,
+		brickSystemPackagesRuntimeInstalled,
+		brickSystemPackagesRuntimeAPTPolicy,
 		brickSystemFirewallRuntimeIPTables,
 		brickSystemFirewallRuntimeIP6Tables,
 		brickSystemFirewallRuntimeNFTables,
@@ -828,6 +831,196 @@ func TestSystemFirewallRuntimeBricksAreIndependentAndGated(t *testing.T) {
 	}
 }
 
+func TestSystemStorageRuntimeBricksProduceOwnFileFamilies(t *testing.T) {
+	cases := []struct {
+		id    BrickID
+		files []string
+	}{
+		{id: brickSystemStorageRuntimeMounts, files: []string{"df.txt", "mount.txt"}},
+		{id: brickSystemStorageRuntimeBlock, files: []string{"blkid.txt", "lsblk.txt", "lsblk_json.json"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.id), func(t *testing.T) {
+			collector := newTestCollectorWithDeps(t, CollectorDeps{
+				LookPath: func(cmd string) (string, error) {
+					return "/usr/bin/" + cmd, nil
+				},
+				RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+					return testCollectorCommandOutput(name, args...), nil
+				},
+			})
+
+			state := newCollectionState(collector)
+			brick := requireBrick(t, newSystemRecipe(), tc.id)
+			if err := brick.Run(context.Background(), state); err != nil {
+				t.Fatalf("brick %s failed: %v", tc.id, err)
+			}
+
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				t.Fatalf("ensureSystemCommandsDir: %v", err)
+			}
+			got := listDirEntries(t, commandsDir)
+			if !reflect.DeepEqual(got, tc.files) {
+				t.Fatalf("files for %s = %v, want %v", tc.id, got, tc.files)
+			}
+		})
+	}
+}
+
+func TestSystemComputeRuntimeBricksProduceOwnFileFamilies(t *testing.T) {
+	cases := []struct {
+		id    BrickID
+		files []string
+	}{
+		{id: brickSystemComputeRuntimeMemoryCPU, files: []string{"free.txt", "lscpu.txt"}},
+		{id: brickSystemComputeRuntimeBusInv, files: []string{"lspci.txt", "lsusb.txt"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.id), func(t *testing.T) {
+			collector := newTestCollectorWithDeps(t, CollectorDeps{
+				LookPath: func(cmd string) (string, error) {
+					return "/usr/bin/" + cmd, nil
+				},
+				RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+					return testCollectorCommandOutput(name, args...), nil
+				},
+			})
+
+			state := newCollectionState(collector)
+			brick := requireBrick(t, newSystemRecipe(), tc.id)
+			if err := brick.Run(context.Background(), state); err != nil {
+				t.Fatalf("brick %s failed: %v", tc.id, err)
+			}
+
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				t.Fatalf("ensureSystemCommandsDir: %v", err)
+			}
+			got := listDirEntries(t, commandsDir)
+			if !reflect.DeepEqual(got, tc.files) {
+				t.Fatalf("files for %s = %v, want %v", tc.id, got, tc.files)
+			}
+		})
+	}
+}
+
+func TestSystemPackagesRuntimeBricksAreIndependentAndGated(t *testing.T) {
+	t.Run(string(brickSystemPackagesRuntimeInstalled)+"_enabled", func(t *testing.T) {
+		collector := newTestCollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				return testCollectorCommandOutput(name, args...), nil
+			},
+		})
+		collector.config.BackupInstalledPackages = true
+		collector.config.BackupAptSources = false
+
+		state := newCollectionState(collector)
+		brick := requireBrick(t, newSystemRecipe(), brickSystemPackagesRuntimeInstalled)
+		if err := brick.Run(context.Background(), state); err != nil {
+			t.Fatalf("brick %s failed: %v", brickSystemPackagesRuntimeInstalled, err)
+		}
+
+		commandsDir, err := state.ensureSystemCommandsDir()
+		if err != nil {
+			t.Fatalf("ensureSystemCommandsDir: %v", err)
+		}
+		got := listRelativeFiles(t, commandsDir)
+		want := []string{"packages/dpkg_list.txt"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("files for %s = %v, want %v", brickSystemPackagesRuntimeInstalled, got, want)
+		}
+	})
+
+	t.Run(string(brickSystemPackagesRuntimeInstalled)+"_disabled", func(t *testing.T) {
+		collector := newTestCollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				return testCollectorCommandOutput(name, args...), nil
+			},
+		})
+		collector.config.BackupInstalledPackages = false
+
+		state := newCollectionState(collector)
+		brick := requireBrick(t, newSystemRecipe(), brickSystemPackagesRuntimeInstalled)
+		if err := brick.Run(context.Background(), state); err != nil {
+			t.Fatalf("brick %s failed with packages disabled: %v", brickSystemPackagesRuntimeInstalled, err)
+		}
+
+		commandsDir, err := state.ensureSystemCommandsDir()
+		if err != nil {
+			t.Fatalf("ensureSystemCommandsDir: %v", err)
+		}
+		got := listRelativeFiles(t, commandsDir)
+		if len(got) != 0 {
+			t.Fatalf("expected no files for %s with packages disabled, got %v", brickSystemPackagesRuntimeInstalled, got)
+		}
+	})
+
+	t.Run(string(brickSystemPackagesRuntimeAPTPolicy)+"_enabled", func(t *testing.T) {
+		collector := newTestCollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				return testCollectorCommandOutput(name, args...), nil
+			},
+		})
+		collector.config.BackupInstalledPackages = false
+		collector.config.BackupAptSources = true
+
+		state := newCollectionState(collector)
+		brick := requireBrick(t, newSystemRecipe(), brickSystemPackagesRuntimeAPTPolicy)
+		if err := brick.Run(context.Background(), state); err != nil {
+			t.Fatalf("brick %s failed: %v", brickSystemPackagesRuntimeAPTPolicy, err)
+		}
+
+		commandsDir, err := state.ensureSystemCommandsDir()
+		if err != nil {
+			t.Fatalf("ensureSystemCommandsDir: %v", err)
+		}
+		got := listRelativeFiles(t, commandsDir)
+		want := []string{"apt_policy.txt"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("files for %s = %v, want %v", brickSystemPackagesRuntimeAPTPolicy, got, want)
+		}
+	})
+
+	t.Run(string(brickSystemPackagesRuntimeAPTPolicy)+"_disabled", func(t *testing.T) {
+		collector := newTestCollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				return testCollectorCommandOutput(name, args...), nil
+			},
+		})
+		collector.config.BackupAptSources = false
+
+		state := newCollectionState(collector)
+		brick := requireBrick(t, newSystemRecipe(), brickSystemPackagesRuntimeAPTPolicy)
+		if err := brick.Run(context.Background(), state); err != nil {
+			t.Fatalf("brick %s failed with apt disabled: %v", brickSystemPackagesRuntimeAPTPolicy, err)
+		}
+
+		commandsDir, err := state.ensureSystemCommandsDir()
+		if err != nil {
+			t.Fatalf("ensureSystemCommandsDir: %v", err)
+		}
+		got := listRelativeFiles(t, commandsDir)
+		if len(got) != 0 {
+			t.Fatalf("expected no files for %s with apt disabled, got %v", brickSystemPackagesRuntimeAPTPolicy, got)
+		}
+	})
+}
+
 func TestPBSInventoryHostCommandStorageBricksPopulateOwnKeys(t *testing.T) {
 	cases := []struct {
 		id   BrickID
@@ -888,6 +1081,30 @@ func listDirEntries(t *testing.T, dir string) []string {
 		names = append(names, entry.Name())
 	}
 	return names
+}
+
+func listRelativeFiles(t *testing.T, root string) []string {
+	t.Helper()
+
+	var files []string
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, filepath.ToSlash(rel))
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	sort.Strings(files)
+	return files
 }
 
 func sortedInventoryCommandKeys(commands map[string]inventoryCommandSnapshot) []string {

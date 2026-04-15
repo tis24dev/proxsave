@@ -683,7 +683,7 @@ func (c *Collector) collectSystemNetworkDNSRuntime(ctx context.Context, commands
 		false)
 }
 
-func (c *Collector) collectSystemStorageRuntime(ctx context.Context, commandsDir string) error {
+func (c *Collector) collectSystemStorageMountsRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
 		"df -h",
 		filepath.Join(commandsDir, "df.txt"),
@@ -698,6 +698,10 @@ func (c *Collector) collectSystemStorageRuntime(ctx context.Context, commandsDir
 		"Mounted filesystems",
 		false)
 
+	return nil
+}
+
+func (c *Collector) collectSystemStorageBlockDevicesRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
 		"lsblk -f",
 		filepath.Join(commandsDir, "lsblk.txt"),
@@ -719,7 +723,7 @@ func (c *Collector) collectSystemStorageRuntime(ctx context.Context, commandsDir
 	return nil
 }
 
-func (c *Collector) collectSystemComputeRuntime(ctx context.Context, commandsDir string) error {
+func (c *Collector) collectSystemComputeMemoryCPURuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
 		"free -h",
 		filepath.Join(commandsDir, "free.txt"),
@@ -736,6 +740,10 @@ func (c *Collector) collectSystemComputeRuntime(ctx context.Context, commandsDir
 		return err
 	}
 
+	return nil
+}
+
+func (c *Collector) collectSystemComputeBusInventoryRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
 		"lspci -v",
 		filepath.Join(commandsDir, "lspci.txt"),
@@ -773,7 +781,7 @@ func (c *Collector) collectSystemServicesRuntime(ctx context.Context, commandsDi
 	return nil
 }
 
-func (c *Collector) collectSystemPackagesRuntime(ctx context.Context, commandsDir string) error {
+func (c *Collector) collectSystemPackagesInstalledRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupInstalledPackages {
 		packagesDir := filepath.Join(commandsDir, "packages")
 		if err := c.ensureDir(packagesDir); err != nil {
@@ -789,15 +797,19 @@ func (c *Collector) collectSystemPackagesRuntime(ctx context.Context, commandsDi
 		}
 	}
 
-	if c.config.BackupAptSources {
-		c.safeCmdOutput(ctx,
-			"apt-cache policy",
-			filepath.Join(commandsDir, "apt_policy.txt"),
-			"APT policy",
-			false)
+	return nil
+}
+
+func (c *Collector) collectSystemPackagesAptPolicyRuntime(ctx context.Context, commandsDir string) error {
+	if !c.config.BackupAptSources {
+		return nil
 	}
 
-	return nil
+	return c.safeCmdOutput(ctx,
+		"apt-cache policy",
+		filepath.Join(commandsDir, "apt_policy.txt"),
+		"APT policy",
+		false)
 }
 
 func (c *Collector) collectSystemFirewallIPTablesRuntime(ctx context.Context, commandsDir string) error {

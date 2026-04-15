@@ -168,10 +168,13 @@ const (
 	brickSystemNetworkRuntimeInventory  BrickID = "system_network_runtime_inventory"
 	brickSystemNetworkRuntimeBonding    BrickID = "system_network_runtime_bonding"
 	brickSystemNetworkRuntimeDNS        BrickID = "system_network_runtime_dns"
-	brickSystemStorageRuntime           BrickID = "system_storage_runtime"
-	brickSystemComputeRuntime           BrickID = "system_compute_runtime"
+	brickSystemStorageRuntimeMounts     BrickID = "system_storage_runtime_mounts"
+	brickSystemStorageRuntimeBlock      BrickID = "system_storage_runtime_block_devices"
+	brickSystemComputeRuntimeMemoryCPU  BrickID = "system_compute_runtime_memory_cpu"
+	brickSystemComputeRuntimeBusInv     BrickID = "system_compute_runtime_bus_inventory"
 	brickSystemServicesRuntime          BrickID = "system_services_runtime"
-	brickSystemPackagesRuntime          BrickID = "system_packages_runtime"
+	brickSystemPackagesRuntimeInstalled BrickID = "system_packages_runtime_installed"
+	brickSystemPackagesRuntimeAPTPolicy BrickID = "system_packages_runtime_apt_policy"
 	brickSystemFirewallRuntimeIPTables  BrickID = "system_firewall_runtime_iptables"
 	brickSystemFirewallRuntimeIP6Tables BrickID = "system_firewall_runtime_ip6tables"
 	brickSystemFirewallRuntimeNFTables  BrickID = "system_firewall_runtime_nftables"
@@ -2026,19 +2029,33 @@ func newSystemRecipe() recipe {
 		systemCommandsBrick(brickSystemNetworkRuntimeInventory, "Collect network inventory runtime information", (*Collector).collectSystemNetworkInventoryRuntime),
 		systemCommandsBrick(brickSystemNetworkRuntimeBonding, "Collect bonding runtime information", (*Collector).collectSystemNetworkBondingRuntime),
 		systemCommandsBrick(brickSystemNetworkRuntimeDNS, "Collect DNS runtime information", (*Collector).collectSystemNetworkDNSRuntime),
-		{ID: brickSystemStorageRuntime, Description: "Collect storage runtime information", Run: func(ctx context.Context, state *collectionState) error {
+		{ID: brickSystemStorageRuntimeMounts, Description: "Collect storage mount runtime information", Run: func(ctx context.Context, state *collectionState) error {
 			commandsDir, err := state.ensureSystemCommandsDir()
 			if err != nil {
 				return err
 			}
-			return state.collector.collectSystemStorageRuntime(ctx, commandsDir)
+			return state.collector.collectSystemStorageMountsRuntime(ctx, commandsDir)
 		}},
-		{ID: brickSystemComputeRuntime, Description: "Collect compute runtime information", Run: func(ctx context.Context, state *collectionState) error {
+		{ID: brickSystemStorageRuntimeBlock, Description: "Collect block device runtime information", Run: func(ctx context.Context, state *collectionState) error {
 			commandsDir, err := state.ensureSystemCommandsDir()
 			if err != nil {
 				return err
 			}
-			return state.collector.collectSystemComputeRuntime(ctx, commandsDir)
+			return state.collector.collectSystemStorageBlockDevicesRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemComputeRuntimeMemoryCPU, Description: "Collect memory and CPU runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemComputeMemoryCPURuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemComputeRuntimeBusInv, Description: "Collect bus inventory runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemComputeBusInventoryRuntime(ctx, commandsDir)
 		}},
 		{ID: brickSystemServicesRuntime, Description: "Collect service runtime information", Run: func(ctx context.Context, state *collectionState) error {
 			commandsDir, err := state.ensureSystemCommandsDir()
@@ -2047,12 +2064,19 @@ func newSystemRecipe() recipe {
 			}
 			return state.collector.collectSystemServicesRuntime(ctx, commandsDir)
 		}},
-		{ID: brickSystemPackagesRuntime, Description: "Collect package runtime information", Run: func(ctx context.Context, state *collectionState) error {
+		{ID: brickSystemPackagesRuntimeInstalled, Description: "Collect installed package runtime information", Run: func(ctx context.Context, state *collectionState) error {
 			commandsDir, err := state.ensureSystemCommandsDir()
 			if err != nil {
 				return err
 			}
-			return state.collector.collectSystemPackagesRuntime(ctx, commandsDir)
+			return state.collector.collectSystemPackagesInstalledRuntime(ctx, commandsDir)
+		}},
+		{ID: brickSystemPackagesRuntimeAPTPolicy, Description: "Collect APT policy runtime information", Run: func(ctx context.Context, state *collectionState) error {
+			commandsDir, err := state.ensureSystemCommandsDir()
+			if err != nil {
+				return err
+			}
+			return state.collector.collectSystemPackagesAptPolicyRuntime(ctx, commandsDir)
 		}},
 		systemCommandsBrick(brickSystemFirewallRuntimeIPTables, "Collect iptables runtime information", (*Collector).collectSystemFirewallIPTablesRuntime),
 		systemCommandsBrick(brickSystemFirewallRuntimeIP6Tables, "Collect ip6tables runtime information", (*Collector).collectSystemFirewallIP6TablesRuntime),
