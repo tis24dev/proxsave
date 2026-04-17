@@ -13,7 +13,7 @@ import (
 )
 
 func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot, destRoot string, dryRun bool) (err error) {
-	if plan == nil || plan.SystemType != SystemTypePVE {
+	if plan == nil || !plan.SystemType.SupportsPVE() {
 		return nil
 	}
 	if !plan.HasCategoryID("storage_pve") && !plan.HasCategoryID("pve_jobs") {
@@ -249,7 +249,7 @@ func applyPVEBackupJobsFromStage(ctx context.Context, logger *logging.Logger, st
 }
 
 func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot, destRoot string) error {
-	if plan == nil || plan.SystemType != SystemTypePVE || !plan.HasCategoryID("storage_pve") {
+	if plan == nil || !plan.SystemType.SupportsPVE() || !plan.HasCategoryID("storage_pve") {
 		return nil
 	}
 	if strings.TrimSpace(stageRoot) == "" {

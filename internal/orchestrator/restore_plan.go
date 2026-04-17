@@ -32,8 +32,8 @@ func PlanRestore(
 		ClusterBackup:    clusterBackup,
 	}
 
-	plan.NeedsClusterRestore = systemType == SystemTypePVE && hasCategoryID(normal, "pve_cluster")
-	plan.NeedsPBSServices = systemType == SystemTypePBS && shouldStopPBSServices(append(append([]Category{}, normal...), staged...))
+	plan.NeedsClusterRestore = systemType.SupportsPVE() && hasCategoryID(normal, "pve_cluster")
+	plan.NeedsPBSServices = systemType.SupportsPBS() && shouldStopPBSServices(append(append([]Category{}, normal...), staged...))
 
 	applyClusterSafety(plan)
 
@@ -65,8 +65,8 @@ func applyClusterSafety(plan *RestorePlan) {
 	plan.NormalCategories = normal
 	plan.StagedCategories = staged
 	plan.ExportCategories = export
-	plan.NeedsClusterRestore = plan.SystemType == SystemTypePVE && hasCategoryID(plan.NormalCategories, "pve_cluster")
-	plan.NeedsPBSServices = plan.SystemType == SystemTypePBS && shouldStopPBSServices(append(append([]Category{}, plan.NormalCategories...), plan.StagedCategories...))
+	plan.NeedsClusterRestore = plan.SystemType.SupportsPVE() && hasCategoryID(plan.NormalCategories, "pve_cluster")
+	plan.NeedsPBSServices = plan.SystemType.SupportsPBS() && shouldStopPBSServices(append(append([]Category{}, plan.NormalCategories...), plan.StagedCategories...))
 }
 
 func (p *RestorePlan) HasCategoryID(id string) bool {

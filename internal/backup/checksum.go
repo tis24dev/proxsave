@@ -29,6 +29,8 @@ type Manifest struct {
 	ProxmoxType      string    `json:"proxmox_type"`
 	ProxmoxTargets   []string  `json:"proxmox_targets,omitempty"`
 	ProxmoxVersion   string    `json:"proxmox_version,omitempty"`
+	PVEVersion       string    `json:"pve_version,omitempty"`
+	PBSVersion       string    `json:"pbs_version,omitempty"`
 	Hostname         string    `json:"hostname"`
 	ScriptVersion    string    `json:"script_version,omitempty"`
 	EncryptionMode   string    `json:"encryption_mode,omitempty"`
@@ -221,6 +223,21 @@ func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) {
 			}
 		case "PROXMOX_TYPE":
 			legacy.ProxmoxType = value
+		case "BACKUP_TARGETS", "PROXMOX_TARGETS":
+			targets := strings.Split(value, ",")
+			legacy.ProxmoxTargets = legacy.ProxmoxTargets[:0]
+			for _, target := range targets {
+				target = strings.TrimSpace(target)
+				if target != "" {
+					legacy.ProxmoxTargets = append(legacy.ProxmoxTargets, target)
+				}
+			}
+		case "PROXMOX_VERSION":
+			legacy.ProxmoxVersion = value
+		case "PVE_VERSION":
+			legacy.PVEVersion = value
+		case "PBS_VERSION":
+			legacy.PBSVersion = value
 		case "HOSTNAME":
 			legacy.Hostname = value
 		case "SCRIPT_VERSION":

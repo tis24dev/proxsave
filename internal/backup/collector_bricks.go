@@ -1029,6 +1029,15 @@ func newPBSUserConfigRecipe() recipe {
 	}
 }
 
+func newDualRecipe() recipe {
+	bricks := append([]collectionBrick{}, newPVERecipe().Bricks...)
+	bricks = append(bricks, newPBSRecipe().Bricks...)
+	return recipe{
+		Name:   "dual",
+		Bricks: bricks,
+	}
+}
+
 func newPBSManifestBricks() []collectionBrick {
 	return []collectionBrick{
 		{ID: brickPBSManifestDatastore, Description: "Collect PBS datastore manifest entries", Run: func(ctx context.Context, state *collectionState) error {

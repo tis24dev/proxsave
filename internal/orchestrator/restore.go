@@ -618,14 +618,8 @@ func combinePoolNames(a, b []string) []string {
 }
 
 func shouldRecreateDirectories(systemType SystemType, categories []Category) bool {
-	switch systemType {
-	case SystemTypePVE:
-		return hasCategoryID(categories, "storage_pve")
-	case SystemTypePBS:
-		return hasCategoryID(categories, "datastore_pbs")
-	default:
-		return false
-	}
+	return (systemType.SupportsPVE() && hasCategoryID(categories, "storage_pve")) ||
+		(systemType.SupportsPBS() && hasCategoryID(categories, "datastore_pbs"))
 }
 
 func hasCategoryID(categories []Category, id string) bool {

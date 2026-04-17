@@ -116,6 +116,25 @@ func TestEmailNotifierDetectRecipientPVE(t *testing.T) {
 	}
 }
 
+func TestEmailNotifierDetectRecipientDualUsesPVEPath(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	notifier, err := NewEmailNotifier(EmailConfig{}, types.ProxmoxDual, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+	// Dual intentionally reuses the PVE resolver for root@pam email detection.
+	mockCmdEnv(t, "pvesh", "", 1)
+	mockCmdEnv(t, "pveum", `[{"userid":"root@pam","email":"root@example.com"}]`, 0)
+
+	recipient, err := notifier.detectRecipient(context.Background())
+	if err != nil {
+		t.Fatalf("detectRecipient() error = %v", err)
+	}
+	if recipient != "root@example.com" {
+		t.Fatalf("detectRecipient()=%s want root@example.com", recipient)
+	}
+}
+
 func TestEmailNotifierDetectRecipientPVEViaPvesh(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	notifier, err := NewEmailNotifier(EmailConfig{}, types.ProxmoxVE, logger)

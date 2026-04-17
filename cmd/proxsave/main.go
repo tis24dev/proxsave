@@ -430,7 +430,12 @@ func run() int {
 		bootstrap.Println("Continuing with limited functionality...")
 	}
 	bootstrap.Printf("✓ Proxmox Type: %s", envInfo.Type)
-	bootstrap.Printf("  Version: %s", envInfo.Version)
+	if envInfo.Type == types.ProxmoxDual {
+		bootstrap.Printf("  PVE Version: %s", envInfo.PVEVersion)
+		bootstrap.Printf("  PBS Version: %s", envInfo.PBSVersion)
+	} else {
+		bootstrap.Printf("  Version: %s", envInfo.Version)
+	}
 	bootstrap.Println("")
 
 	// Handle configuration upgrade (schema-aware merge with embedded template).
@@ -941,7 +946,7 @@ func run() int {
 	orch.SetVersion(toolVersion)
 	orch.SetConfig(cfg)
 	orch.SetIdentity(serverIDValue, serverMACValue)
-	orch.SetProxmoxVersion(envInfo.Version)
+	orch.SetEnvironmentInfo(envInfo)
 	orch.SetStartTime(startTime)
 	if updateInfo != nil {
 		orch.SetUpdateInfo(updateInfo.NewVersion, updateInfo.Current, updateInfo.Latest)
@@ -1376,7 +1381,7 @@ func run() int {
 
 		// Run Go-based backup (collection + archive)
 		backupDone := logging.DebugStart(logger, "backup run", "proxmox=%s host=%s", envInfo.Type, hostname)
-		stats, err := orch.RunGoBackup(ctx, envInfo.Type, hostname)
+		stats, err := orch.RunGoBackup(ctx, envInfo, hostname)
 		if err != nil {
 			backupDone(err)
 			// Check if error is due to cancellation

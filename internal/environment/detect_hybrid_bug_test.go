@@ -22,15 +22,7 @@ func isolateDetectionFallbacks(t *testing.T) {
 	setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version"))
 }
 
-// TestDetectHybridInstallation_Bug demonstrates the current bug where
-// ProxSave fails to detect PBS when both PVE and PBS are co-installed.
-//
-// This test documents the BUG that needs to be fixed:
-// - When both pveversion and proxmox-backup-manager are available
-// - detectProxmox() returns immediately after finding PVE
-// - PBS detection is NEVER executed (early return bug at line 119)
-// - Result: PBS data collection is completely skipped
-func TestDetectHybridInstallation_Bug(t *testing.T) {
+func TestDetectHybridInstallationDual(t *testing.T) {
 	isolateDetectionFallbacks(t)
 
 	// Setup: Mock both PVE and PBS as available
@@ -60,37 +52,26 @@ func TestDetectHybridInstallation_Bug(t *testing.T) {
 	// Act: Run detection
 	envInfo, err := Detect()
 
-	// Assert: Current behavior (with BUG)
 	if err != nil {
 		t.Fatalf("Detect() returned unexpected error: %v", err)
 	}
 
-	// BUG: Detects only PVE, ignores PBS
-	if envInfo.Type != types.ProxmoxVE {
-		t.Errorf("Expected Type=ProxmoxVE (due to early return bug), got Type=%s", envInfo.Type)
+	if envInfo.Type != types.ProxmoxDual {
+		t.Errorf("Expected Type=ProxmoxDual, got Type=%s", envInfo.Type)
 	}
 
-	if envInfo.Version != "9.1.5" {
-		t.Errorf("Expected PVE Version=9.1.5, got Version=%s", envInfo.Version)
+	if envInfo.PVEVersion != "9.1.5" {
+		t.Errorf("Expected PVE Version=9.1.5, got Version=%s", envInfo.PVEVersion)
 	}
-
-	// TODO: After fix, this test should verify:
-	// - envInfo.HasPVE should be true
-	// - envInfo.HasPBS should be true
-	// - envInfo.PVEVersion should be "9.1.5"
-	// - envInfo.PBSVersion should be "4.1.6"
-	// - Both PVE and PBS collectors should be invoked
-
-	// Document the bug for posterity
-	t.Logf("BUG CONFIRMED: System has both PVE and PBS, but ProxSave only detected PVE")
-	t.Logf("  Detected Type: %s", envInfo.Type)
-	t.Logf("  Detected Version: %s", envInfo.Version)
-	t.Logf("  PBS detection was SKIPPED due to early return at detect.go:119")
-	t.Logf("  Expected: Should detect and collect data from BOTH systems")
+	if envInfo.PBSVersion != "4.1.6" {
+		t.Errorf("Expected PBS Version=4.1.6, got Version=%s", envInfo.PBSVersion)
+	}
+	if envInfo.Version != "pve=9.1.5,pbs=4.1.6" {
+		t.Errorf("Expected combined Version, got Version=%s", envInfo.Version)
+	}
 }
 
-// TestDetectProxmox_EarlyReturnBug verifies the early return bug in detectProxmox()
-func TestDetectProxmox_EarlyReturnBug(t *testing.T) {
+func TestDetectProxmoxHybridCallsBothDetectors(t *testing.T) {
 	isolateDetectionFallbacks(t)
 
 	// Track which detection functions are called
@@ -132,28 +113,21 @@ func TestDetectProxmox_EarlyReturnBug(t *testing.T) {
 		t.Error("PVE detection was not called")
 	}
 
-	// BUG: PBS detection is never called due to early return
-	// After finding PVE at line 118-120, function returns immediately
-	// Line 122 (PBS check) is NEVER executed
-	if pbsDetectCalled {
-		t.Error("PBS detection should NOT be called with current buggy code (early return)")
+	if !pbsDetectCalled {
+		t.Error("PBS detection should be called on hybrid installations")
 	}
 
-	if pType != types.ProxmoxVE {
-		t.Errorf("Expected pType=ProxmoxVE, got %s", pType)
+	if pType != types.ProxmoxDual {
+		t.Errorf("Expected pType=ProxmoxDual, got %s", pType)
 	}
 
-	if version != "8.1.3" {
-		t.Errorf("Expected version=8.1.3, got %s", version)
+	if version != "pve=8.1.3,pbs=3.1.2" {
+		t.Errorf("Expected combined version, got %s", version)
 	}
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
-
-	t.Logf("BUG VERIFIED: PBS detection was never called due to early return at line 119")
-	t.Logf("  pveDetectCalled: %v", pveDetectCalled)
-	t.Logf("  pbsDetectCalled: %v (should be false with current buggy code)", pbsDetectCalled)
 }
 
 // TestDetectPVEOnly verifies that PVE-only detection still works correctly

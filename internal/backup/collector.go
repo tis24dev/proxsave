@@ -396,6 +396,12 @@ func (c *Collector) CollectAll(ctx context.Context) error {
 			return fmt.Errorf("PBS collection failed: %w", err)
 		}
 		c.logger.Debug("PBS-specific collection completed")
+	case types.ProxmoxDual:
+		c.logger.Debug("Invoking dual-role collectors (PVE + PBS recipes, shared system/common once)")
+		if err := c.CollectDualConfigs(ctx); err != nil {
+			return fmt.Errorf("dual collection failed: %w", err)
+		}
+		c.logger.Debug("Dual-role collection completed")
 	case types.ProxmoxUnknown:
 		c.logger.Warning("Unknown Proxmox type, collecting generic system info only")
 		c.logger.Debug("Skipping hypervisor-specific collection because type is unknown")

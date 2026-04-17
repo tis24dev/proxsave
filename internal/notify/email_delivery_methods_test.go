@@ -200,6 +200,122 @@ func TestEmailNotifier_RelayFallback_UsesPMFOnly(t *testing.T) {
 	}
 }
 
+func TestEmailNotifier_RelayFallback_UsesPMFWhenRecipientDetectionFails(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	capturePath := filepath.Join(t.TempDir(), "pmf_capture.txt")
+	t.Setenv("PMF_CAPTURE_PATH", capturePath)
+
+	pmfScriptPath := writeCaptureScript(t, "proxmox-mail-forward", "PMF_CAPTURE_PATH")
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", filepath.Dir(pmfScriptPath)+string(os.PathListSeparator)+origPath)
+
+	origCandidates := pmfLookPathCandidates
+	pmfLookPathCandidates = []string{"proxmox-mail-forward"}
+	t.Cleanup(func() { pmfLookPathCandidates = origCandidates })
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:          true,
+		DeliveryMethod:   EmailDeliveryRelay,
+		FallbackSendmail: true,
+		Recipient:        "",
+		From:             "no-reply@proxmox.example.com",
+	}, types.ProxmoxUnknown, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() returned unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected Success=true due to PMF preflight fallback, got false (err=%v)", result.Error)
+	}
+	if !result.UsedFallback {
+		t.Fatalf("expected UsedFallback=true")
+	}
+	if result.Method != "email-pmf-fallback" {
+		t.Fatalf("expected Method=email-pmf-fallback, got %q", result.Method)
+	}
+	if got, _ := result.Metadata["fallback_stage"].(string); got != "preflight" {
+		t.Fatalf("fallback_stage=%q want %q", got, "preflight")
+	}
+	if got, _ := result.Metadata["fallback_reason"].(string); got != "recipient_autodetect_failed" {
+		t.Fatalf("fallback_reason=%q want %q", got, "recipient_autodetect_failed")
+	}
+	if result.Error == nil {
+		t.Fatalf("expected original preflight cause preserved in result.Error")
+	}
+
+	got, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("read pmf capture: %v", err)
+	}
+	msg := string(got)
+	if !strings.Contains(msg, "To: root\n") {
+		t.Fatalf("expected To: root header when recipient resolution fails, got:\n%s", msg)
+	}
+}
+
+func TestEmailNotifier_RelayFallback_UsesPMFWhenRootRecipientBlocked(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	capturePath := filepath.Join(t.TempDir(), "pmf_capture.txt")
+	t.Setenv("PMF_CAPTURE_PATH", capturePath)
+
+	pmfScriptPath := writeCaptureScript(t, "proxmox-mail-forward", "PMF_CAPTURE_PATH")
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", filepath.Dir(pmfScriptPath)+string(os.PathListSeparator)+origPath)
+
+	origCandidates := pmfLookPathCandidates
+	pmfLookPathCandidates = []string{"proxmox-mail-forward"}
+	t.Cleanup(func() { pmfLookPathCandidates = origCandidates })
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:          true,
+		DeliveryMethod:   EmailDeliveryRelay,
+		FallbackSendmail: true,
+		Recipient:        "root@example.com",
+		From:             "no-reply@proxmox.example.com",
+	}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() returned unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected Success=true due to PMF preflight fallback, got false (err=%v)", result.Error)
+	}
+	if !result.UsedFallback {
+		t.Fatalf("expected UsedFallback=true")
+	}
+	if result.Method != "email-pmf-fallback" {
+		t.Fatalf("expected Method=email-pmf-fallback, got %q", result.Method)
+	}
+	if got, _ := result.Metadata["fallback_stage"].(string); got != "preflight" {
+		t.Fatalf("fallback_stage=%q want %q", got, "preflight")
+	}
+	if got, _ := result.Metadata["fallback_reason"].(string); got != "recipient_blocked_root" {
+		t.Fatalf("fallback_reason=%q want %q", got, "recipient_blocked_root")
+	}
+	if result.Error == nil {
+		t.Fatalf("expected original preflight cause preserved in result.Error")
+	}
+
+	got, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("read pmf capture: %v", err)
+	}
+	msg := string(got)
+	if !strings.Contains(msg, "To: root@example.com\n") {
+		t.Fatalf("expected To: root@example.com header in PMF message, got:\n%s", msg)
+	}
+}
+
 func TestEmailNotifierBuildEmailMessage_AttachesLogWhenConfigured(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(io.Discard)

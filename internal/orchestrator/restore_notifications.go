@@ -51,11 +51,7 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 		return nil
 	}
 
-	switch plan.SystemType {
-	case SystemTypePBS:
-		if !plan.HasCategoryID("pbs_notifications") {
-			return nil
-		}
+	if plan.SystemType.SupportsPBS() && plan.HasCategoryID("pbs_notifications") {
 		behavior := plan.PBSRestoreBehavior
 		strict := behavior == PBSRestoreBehaviorClean
 		allowFileFallback := behavior == PBSRestoreBehaviorClean
@@ -63,26 +59,27 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 		if err := ensurePBSServicesForAPI(ctx, logger); err != nil {
 			if allowFileFallback {
 				logger.Warning("PBS notifications API apply unavailable; falling back to file-based apply: %v", err)
-				return applyPBSNotificationsFromStage(ctx, logger, stageRoot)
+				if err := applyPBSNotificationsFromStage(ctx, logger, stageRoot); err != nil {
+					return err
+				}
+			} else {
+				logger.Warning("PBS notifications API apply unavailable; skipping apply (merge mode): %v", err)
 			}
-			logger.Warning("PBS notifications API apply unavailable; skipping apply (merge mode): %v", err)
-			return nil
-		}
-
-		if err := applyPBSNotificationsViaAPI(ctx, logger, stageRoot, strict); err != nil {
+		} else if err := applyPBSNotificationsViaAPI(ctx, logger, stageRoot, strict); err != nil {
 			if allowFileFallback {
 				logger.Warning("PBS notifications API apply failed; falling back to file-based apply: %v", err)
-				return applyPBSNotificationsFromStage(ctx, logger, stageRoot)
+				if err := applyPBSNotificationsFromStage(ctx, logger, stageRoot); err != nil {
+					return err
+				}
+			} else {
+				logger.Warning("PBS notifications API apply failed; skipping apply (merge mode): %v", err)
 			}
-			logger.Warning("PBS notifications API apply failed; skipping apply (merge mode): %v", err)
-			return nil
+		} else {
+			logger.Info("PBS notifications applied via API (%s)", behavior.DisplayName())
 		}
-		logger.Info("PBS notifications applied via API (%s)", behavior.DisplayName())
-		return nil
-	case SystemTypePVE:
-		if !plan.HasCategoryID("pve_notifications") {
-			return nil
-		}
+	}
+
+	if plan.SystemType.SupportsPVE() && plan.HasCategoryID("pve_notifications") {
 		if plan.NeedsClusterRestore {
 			logging.DebugStep(logger, "notifications staged apply", "Skip PVE notifications apply: cluster RECOVERY restores config.db")
 			return nil
@@ -92,9 +89,9 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 			return nil
 		}
 		return applyPVENotificationsFromStage(ctx, logger, stageRoot)
-	default:
-		return nil
 	}
+
+	return nil
 }
 
 func applyPBSNotificationsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {

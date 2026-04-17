@@ -32,9 +32,10 @@ type RestoreDecisionInfo struct {
 }
 
 type restoreDecisionMetadata struct {
-	BackupType  SystemType
-	ClusterMode string
-	Hostname    string
+	BackupType    SystemType
+	BackupTargets []string
+	ClusterMode   string
+	Hostname      string
 }
 
 type restoreArchiveInspection struct {
@@ -221,6 +222,8 @@ func parseRestoreDecisionMetadata(data []byte) (*restoreDecisionMetadata, error)
 		switch key {
 		case "BACKUP_TYPE":
 			meta.BackupType = parseSystemTypeString(value)
+		case "BACKUP_TARGETS":
+			meta.BackupTargets = splitTargetsCSV(value)
 		case "PVE_CLUSTER_MODE", "CLUSTER_MODE":
 			meta.ClusterMode = value
 		case "HOSTNAME":
@@ -246,6 +249,9 @@ func buildRestoreDecisionInfo(metadata *restoreDecisionMetadata, categories []Ca
 
 	if metadata != nil {
 		info.BackupHostname = strings.TrimSpace(metadata.Hostname)
+		if info.BackupType == SystemTypeUnknown && len(metadata.BackupTargets) > 0 {
+			info.BackupType = parseSystemTargets(metadata.BackupTargets)
+		}
 	}
 
 	categoryType, ambiguousType := detectBackupTypeFromCategories(categories)
@@ -294,7 +300,7 @@ func detectBackupTypeFromCategories(categories []Category) (SystemType, bool) {
 
 	switch {
 	case hasPVE && hasPBS:
-		return SystemTypeUnknown, true
+		return SystemTypeDual, false
 	case hasPVE:
 		return SystemTypePVE, false
 	case hasPBS:
@@ -302,4 +308,16 @@ func detectBackupTypeFromCategories(categories []Category) (SystemType, bool) {
 	default:
 		return SystemTypeUnknown, false
 	}
+}
+
+func splitTargetsCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	targets := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			targets = append(targets, part)
+		}
+	}
+	return targets
 }

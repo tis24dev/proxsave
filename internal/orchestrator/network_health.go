@@ -267,7 +267,7 @@ func runNetworkHealthChecks(ctx context.Context, opts networkHealthOptions) netw
 		}
 	}
 
-	if opts.SystemType == SystemTypePVE {
+	if opts.SystemType.SupportsPVE() {
 		logging.DebugStep(opts.Logger, "network health checks", "Cluster (corosync/quorum) check")
 		runCorosyncClusterHealthChecks(ctx, opts.CommandTimeout, opts.Logger, &report)
 	}

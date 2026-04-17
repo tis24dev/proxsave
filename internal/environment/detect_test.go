@@ -15,7 +15,7 @@ func TestDetectProxmoxType(t *testing.T) {
 
 	// On a real Proxmox system, this should be PVE or PBS
 	// On a non-Proxmox system (like our build environment), it should be Unknown
-	if result != types.ProxmoxVE && result != types.ProxmoxBS && result != types.ProxmoxUnknown {
+	if result != types.ProxmoxVE && result != types.ProxmoxBS && result != types.ProxmoxDual && result != types.ProxmoxUnknown {
 		t.Errorf("DetectProxmoxType() returned unexpected type: %v", result)
 	}
 }
@@ -132,6 +132,15 @@ func TestEnvironmentInfo(t *testing.T) {
 			envInfo: EnvironmentInfo{
 				Type:    types.ProxmoxUnknown,
 				Version: "unknown",
+			},
+		},
+		{
+			name: "dual environment",
+			envInfo: EnvironmentInfo{
+				Type:       types.ProxmoxDual,
+				Version:    "pve=8.0,pbs=3.0",
+				PVEVersion: "8.0",
+				PBSVersion: "3.0",
 			},
 		},
 	}
