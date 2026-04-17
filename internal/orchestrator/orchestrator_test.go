@@ -15,6 +15,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/checks"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -62,7 +63,7 @@ func TestRunGoBackupEndToEnd(t *testing.T) {
 	orch.SetChecker(checker)
 
 	ctx := context.Background()
-	stats, err := orch.RunGoBackup(ctx, types.ProxmoxUnknown, "test-host")
+	stats, err := orch.RunGoBackup(ctx, &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "test-host")
 	if err != nil {
 		t.Fatalf("RunGoBackup failed: %v", err)
 	}
@@ -198,7 +199,7 @@ func TestRunGoBackupFallbackCompression(t *testing.T) {
 	t.Cleanup(restore)
 
 	ctx := context.Background()
-	stats, err := orch.RunGoBackup(ctx, types.ProxmoxUnknown, "fallback-host")
+	stats, err := orch.RunGoBackup(ctx, &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "fallback-host")
 	if err != nil {
 		t.Fatalf("RunGoBackup failed: %v", err)
 	}
@@ -777,7 +778,7 @@ func TestRunGoBackup_EarlyFailureMetricsAndLogParsing(t *testing.T) {
 		MaxPVEBackupSizeBytes: -1,
 	})
 
-	stats, err := orch.RunGoBackup(context.Background(), types.ProxmoxUnknown, "host-early")
+	stats, err := orch.RunGoBackup(context.Background(), &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "host-early")
 	if err == nil {
 		t.Fatalf("expected error from RunGoBackup")
 	}
@@ -828,7 +829,7 @@ func TestRunGoBackup_DryRunParsesLogsAndSkipsDispatch(t *testing.T) {
 	})
 	orch.RegisterStorageTarget(&testStorageTarget{})
 
-	stats, err := orch.RunGoBackup(context.Background(), types.ProxmoxUnknown, "dry-host")
+	stats, err := orch.RunGoBackup(context.Background(), &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "dry-host")
 	if err != nil {
 		t.Fatalf("RunGoBackup dry run failed: %v", err)
 	}
@@ -877,7 +878,7 @@ func TestRunGoBackup_BundleAndDispatchFailure(t *testing.T) {
 	})
 	orch.RegisterStorageTarget(&testStorageTarget{err: errors.New("sync failed")})
 
-	stats, err := orch.RunGoBackup(context.Background(), types.ProxmoxUnknown, "bundle-host")
+	stats, err := orch.RunGoBackup(context.Background(), &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "bundle-host")
 	if err == nil {
 		t.Fatalf("expected RunGoBackup to fail on storage dispatch")
 	}

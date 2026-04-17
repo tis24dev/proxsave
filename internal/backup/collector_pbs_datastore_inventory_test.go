@@ -126,9 +126,7 @@ datastore: Synology-Archive
 	}
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	if err := collector.collectPBSDatastoreInventory(context.Background(), nil); err != nil {
-		t.Fatalf("collectPBSDatastoreInventory error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreInventoryRecipe(), nil)
 
 	reportPath := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "pbs_datastore_inventory.json")
 	raw, err := os.ReadFile(reportPath)
@@ -170,25 +168,18 @@ datastore: Synology-Archive
 		t.Fatalf("expected lvm backup snapshot, got: %+v", dir)
 	}
 
-	// Ensure iSCSI config was copied into the backup tree.
-	copiedNodesFile := filepath.Join(collector.tempDir, "etc", "iscsi", "nodes", "iqn.2026-01.test:target1", "127.0.0.1,3260,1", "default")
-	if _, err := os.Stat(copiedNodesFile); err != nil {
-		t.Fatalf("expected copied iSCSI node file, got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "keys", "crypt1.key")); err != nil {
-		t.Fatalf("expected copied crypttab keyfile, got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "cifs-creds")); err != nil {
-		t.Fatalf("expected copied fstab credentials file, got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "root", ".ssh", "id_rsa")); err != nil {
-		t.Fatalf("expected copied ssh identity file, got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "systemd", "system", "mnt-synology_nfs-pbs_backup.mount")); err != nil {
-		t.Fatalf("expected copied systemd mount unit file, got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "auto.pbs")); err != nil {
-		t.Fatalf("expected copied autofs map file, got %v", err)
+	// Inventory-only adapter should not own backup-tree copies for storage_stack anymore.
+	for _, rel := range []string{
+		"etc/iscsi/nodes/iqn.2026-01.test:target1/127.0.0.1,3260,1/default",
+		"etc/keys/crypt1.key",
+		"etc/cifs-creds",
+		"root/.ssh/id_rsa",
+		"etc/systemd/system/mnt-synology_nfs-pbs_backup.mount",
+		"etc/auto.pbs",
+	} {
+		if _, err := os.Stat(filepath.Join(collector.tempDir, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Fatalf("expected inventory-only adapter to skip backup-tree copy for %s, got err=%v", rel, err)
+		}
 	}
 
 	if len(report.Datastores) != 2 {
@@ -268,9 +259,9 @@ func TestCollectPBSDatastoreInventoryCapturesHostCommands(t *testing.T) {
 
 	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, deps)
 	cli := []pbsDatastore{{Name: "Data1", Path: "/mnt/datastore/Data1"}}
-	if err := collector.collectPBSDatastoreInventory(context.Background(), cli); err != nil {
-		t.Fatalf("collectPBSDatastoreInventory error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreInventoryRecipe(), func(state *collectionState) {
+		state.pbs.datastores = cli
+	})
 
 	reportPath := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "pbs_datastore_inventory.json")
 	raw, err := os.ReadFile(reportPath)

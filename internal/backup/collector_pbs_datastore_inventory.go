@@ -92,45 +92,19 @@ type pbsDatastoreInventoryReport struct {
 	Datastores []pbsDatastoreInventoryEntry        `json:"datastores,omitempty"`
 }
 
-func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatastores []pbsDatastore) error {
+type pbsInventoryState struct {
+	report              pbsDatastoreInventoryReport
+	mergedDatastores    []pbsDatastoreDefinition
+	referencedFiles     []string
+	hostCommandsEnabled bool
+}
+
+func (c *Collector) initPBSDatastoreInventoryState(ctx context.Context, cliDatastores []pbsDatastore) (*pbsInventoryState, error) {
 	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	commandsDir := c.proxsaveCommandsDir("pbs")
-	if err := c.ensureDir(commandsDir); err != nil {
-		return fmt.Errorf("ensure commands dir: %w", err)
-	}
-
-	outputPath := filepath.Join(commandsDir, "pbs_datastore_inventory.json")
-	if c.shouldExclude(outputPath) {
-		c.incFilesSkipped()
-		return nil
+		return nil, err
 	}
 
 	ensureSystemPath()
-
-	// Copy storage stack configuration that may be needed to re-mount datastore paths (best effort).
-	for _, dir := range []struct {
-		src  string
-		dest string
-		desc string
-	}{
-		{src: "/etc/iscsi", dest: filepath.Join(c.tempDir, "etc/iscsi"), desc: "iSCSI configuration"},
-		{src: "/var/lib/iscsi", dest: filepath.Join(c.tempDir, "var/lib/iscsi"), desc: "iSCSI runtime state"},
-		{src: "/etc/multipath", dest: filepath.Join(c.tempDir, "etc/multipath"), desc: "multipath configuration"},
-		{src: "/etc/mdadm", dest: filepath.Join(c.tempDir, "etc/mdadm"), desc: "mdadm configuration"},
-		{src: "/etc/lvm/backup", dest: filepath.Join(c.tempDir, "etc/lvm/backup"), desc: "LVM metadata backups"},
-		{src: "/etc/lvm/archive", dest: filepath.Join(c.tempDir, "etc/lvm/archive"), desc: "LVM metadata archives"},
-		{src: "/etc/zfs", dest: filepath.Join(c.tempDir, "etc/zfs"), desc: "ZFS configuration/cache"},
-	} {
-		if err := c.safeCopyDir(ctx, c.systemPath(dir.src), dir.dest, dir.desc); err != nil {
-			c.logger.Warning("Failed to collect %s (%s): %v", dir.desc, dir.src, err)
-		}
-	}
-	if err := c.safeCopyFile(ctx, c.systemPath("/etc/multipath.conf"), filepath.Join(c.tempDir, "etc/multipath.conf"), "multipath.conf"); err != nil {
-		c.logger.Warning("Failed to collect /etc/multipath.conf: %v", err)
-	}
 
 	report := pbsDatastoreInventoryReport{
 		GeneratedAt:      time.Now().Format(time.RFC3339),
@@ -148,31 +122,103 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 	report.Files["pbs_datastore_cfg"] = c.captureInventoryFile(filepath.Join(c.pbsConfigPath(), "datastore.cfg"), "pbsConfig/datastore.cfg")
 	report.Files["fstab"] = c.captureInventoryFile(c.systemPath("/etc/fstab"), "/etc/fstab")
 	report.Files["crypttab"] = c.captureInventoryFile(c.systemPath("/etc/crypttab"), "/etc/crypttab")
+	configDatastores := parsePBSDatastoreCfg(report.Files["pbs_datastore_cfg"].Content)
+	if len(configDatastores) > 0 {
+		report.DatastoreCfgParse = true
+	}
+
+	return &pbsInventoryState{
+		report:              report,
+		mergedDatastores:    mergePBSDatastoreDefinitions(cliDatastores, configDatastores),
+		referencedFiles:     uniqueSortedStrings(append(extractCrypttabKeyFiles(report.Files["crypttab"].Content), extractFstabReferencedFiles(report.Files["fstab"].Content)...)),
+		hostCommandsEnabled: report.HostCommands,
+	}, nil
+}
+
+func (c *Collector) populatePBSInventoryMountFiles(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	report := &inventory.report
+	report.Files["fstab"] = c.captureInventoryFile(c.systemPath("/etc/fstab"), "/etc/fstab")
+	report.Files["crypttab"] = c.captureInventoryFile(c.systemPath("/etc/crypttab"), "/etc/crypttab")
+	report.Files["proc_mounts"] = c.captureInventoryFile(c.systemPath("/proc/mounts"), "/proc/mounts")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryOSFiles(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	report := &inventory.report
 	report.Files["mdstat"] = c.captureInventoryFile(c.systemPath("/proc/mdstat"), "/proc/mdstat")
 	report.Files["os_release"] = c.captureInventoryFile(c.systemPath("/etc/os-release"), "/etc/os-release")
-	report.Files["proc_mounts"] = c.captureInventoryFile(c.systemPath("/proc/mounts"), "/proc/mounts")
 	report.Files["lvm_conf"] = c.captureInventoryFile(c.systemPath("/etc/lvm/lvm.conf"), "/etc/lvm/lvm.conf")
+	report.Files["mdadm_conf"] = c.captureInventoryFile(c.systemPath("/etc/mdadm/mdadm.conf"), "/etc/mdadm/mdadm.conf")
+	report.Dirs["mdadm_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/mdadm"), "/etc/mdadm")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryMultipathFiles(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	report := &inventory.report
 	report.Files["multipath_conf"] = c.captureInventoryFile(c.systemPath("/etc/multipath.conf"), "/etc/multipath.conf")
 	report.Files["multipath_bindings"] = c.captureInventoryFile(c.systemPath("/etc/multipath/bindings"), "/etc/multipath/bindings")
 	report.Files["multipath_wwids"] = c.captureInventoryFile(c.systemPath("/etc/multipath/wwids"), "/etc/multipath/wwids")
-	report.Files["mdadm_conf"] = c.captureInventoryFile(c.systemPath("/etc/mdadm/mdadm.conf"), "/etc/mdadm/mdadm.conf")
+	report.Dirs["multipath_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/multipath"), "/etc/multipath")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryISCSIFiles(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	report := &inventory.report
 	report.Files["iscsi_initiatorname"] = c.captureInventoryFile(c.systemPath("/etc/iscsi/initiatorname.iscsi"), "/etc/iscsi/initiatorname.iscsi")
 	report.Files["iscsi_iscsid_conf"] = c.captureInventoryFile(c.systemPath("/etc/iscsi/iscsid.conf"), "/etc/iscsi/iscsid.conf")
-	report.Files["autofs_master"] = c.captureInventoryFile(c.systemPath("/etc/auto.master"), "/etc/auto.master")
-	report.Files["autofs_conf"] = c.captureInventoryFile(c.systemPath("/etc/autofs.conf"), "/etc/autofs.conf")
-	report.Files["zfs_zpool_cache"] = c.captureInventoryFile(c.systemPath("/etc/zfs/zpool.cache"), "/etc/zfs/zpool.cache")
-
 	report.Dirs["iscsi_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/iscsi"), "/etc/iscsi")
 	report.Dirs["iscsi_var_lib"] = c.captureInventoryDir(ctx, c.systemPath("/var/lib/iscsi"), "/var/lib/iscsi")
-	report.Dirs["multipath_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/multipath"), "/etc/multipath")
-	report.Dirs["mdadm_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/mdadm"), "/etc/mdadm")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryAutofsFiles(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	report := &inventory.report
+	report.Files["autofs_master"] = c.captureInventoryFile(c.systemPath("/etc/auto.master"), "/etc/auto.master")
+	report.Files["autofs_conf"] = c.captureInventoryFile(c.systemPath("/etc/autofs.conf"), "/etc/autofs.conf")
+	report.Dirs["autofs_master_d"] = c.captureInventoryDir(ctx, c.systemPath("/etc/auto.master.d"), "/etc/auto.master.d")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryZFSFiles(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	report := &inventory.report
+	report.Files["zfs_zpool_cache"] = c.captureInventoryFile(c.systemPath("/etc/zfs/zpool.cache"), "/etc/zfs/zpool.cache")
+	report.Dirs["zfs_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/zfs"), "/etc/zfs")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryLVMDirs(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	report := &inventory.report
 	report.Dirs["lvm_backup"] = c.captureInventoryDir(ctx, c.systemPath("/etc/lvm/backup"), "/etc/lvm/backup")
 	report.Dirs["lvm_archive"] = c.captureInventoryDir(ctx, c.systemPath("/etc/lvm/archive"), "/etc/lvm/archive")
-	report.Dirs["zfs_etc"] = c.captureInventoryDir(ctx, c.systemPath("/etc/zfs"), "/etc/zfs")
-	report.Dirs["autofs_master_d"] = c.captureInventoryDir(ctx, c.systemPath("/etc/auto.master.d"), "/etc/auto.master.d")
+	return nil
+}
 
-	// Capture systemd mount units (common for remote storage mounts outside /etc/fstab).
-	report.Dirs["systemd_mount_units"] = c.captureInventoryDirFiltered(
+func (c *Collector) populatePBSInventorySystemdMountUnits(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	inventory.report.Dirs["systemd_mount_units"] = c.captureInventoryDirFiltered(
 		ctx,
 		c.systemPath("/etc/systemd/system"),
 		"/etc/systemd/system",
@@ -181,43 +227,140 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 			return strings.HasSuffix(name, ".mount") || strings.HasSuffix(name, ".automount")
 		},
 	)
-	if err := c.safeCopySystemdMountUnitFiles(ctx); err != nil {
-		c.logger.Warning("Failed to collect systemd mount units: %v", err)
-	}
+	return nil
+}
 
-	// Capture common autofs map files and copy them into the backup tree (best effort).
-	if err := c.safeCopyAutofsMapFiles(ctx); err != nil {
-		c.logger.Warning("Failed to collect autofs map files: %v", err)
+func (c *Collector) populatePBSInventoryReferencedFiles(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
-	// Best-effort: capture and copy referenced key/credential files from crypttab/fstab.
-	for _, ref := range uniqueSortedStrings(append(
-		extractCrypttabKeyFiles(report.Files["crypttab"].Content),
-		extractFstabReferencedFiles(report.Files["fstab"].Content)...,
-	)) {
-		ref := ref
+	report := &inventory.report
+	for _, ref := range inventory.referencedFiles {
 		key := referencedFileKey(ref)
 		snap := c.captureInventoryFile(c.systemPath(ref), ref)
 		if !snap.Skipped && snap.Reason == "" {
 			snap.Reason = "referenced by fstab/crypttab"
 		}
 		report.Files[key] = snap
+	}
+	return nil
+}
 
-		dest := filepath.Join(c.tempDir, strings.TrimPrefix(ref, "/"))
-		if err := c.safeCopyFile(ctx, c.systemPath(ref), dest, "Referenced file"); err != nil {
-			c.logger.Warning("Failed to collect referenced file %s: %v", ref, err)
-		}
+func (c *Collector) populatePBSInventoryHostCommandsCore(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	report := &inventory.report
+	if inventory.hostCommandsEnabled {
+		report.Commands["uname"] = c.captureInventoryCommand(ctx, "uname -a", "uname", "-a")
+		report.Commands["blkid"] = c.captureInventoryCommand(ctx, "blkid", "blkid")
+		report.Commands["lsblk_json"] = c.captureInventoryCommand(ctx, "lsblk -J -O", "lsblk", "-J", "-O")
+		report.Commands["findmnt_json"] = c.captureInventoryCommand(ctx, "findmnt -J", "findmnt", "-J")
+		report.Commands["nfsstat_mounts"] = c.captureInventoryCommand(ctx, "nfsstat -m", "nfsstat", "-m")
+		return nil
 	}
 
-	configDatastores := parsePBSDatastoreCfg(report.Files["pbs_datastore_cfg"].Content)
-	if len(configDatastores) > 0 {
-		report.DatastoreCfgParse = true
+	report.Commands["host_commands_skipped"] = inventoryCommandSnapshot{
+		Command: "host_commands",
+		Skipped: true,
+		Reason:  "system_root_prefix is not host root; skipping host-only commands",
 	}
+	return nil
+}
 
-	merged := mergePBSDatastoreDefinitions(cliDatastores, configDatastores)
-	report.Datastores = make([]pbsDatastoreInventoryEntry, 0, len(merged))
+func (c *Collector) populatePBSInventoryHostCommandsDMSetup(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
+	report.Commands["dmsetup_tree"] = c.captureInventoryCommand(ctx, "dmsetup ls --tree", "dmsetup", "ls", "--tree")
+	return nil
+}
 
-	for _, def := range merged {
+func (c *Collector) populatePBSInventoryHostCommandsLVM(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
+	report.Commands["pvs_json"] = c.captureInventoryCommand(ctx, "pvs --reportformat json --units b", "pvs", "--reportformat", "json", "--units", "b")
+	report.Commands["vgs_json"] = c.captureInventoryCommand(ctx, "vgs --reportformat json --units b", "vgs", "--reportformat", "json", "--units", "b")
+	report.Commands["lvs_json"] = c.captureInventoryCommand(ctx, "lvs --reportformat json --units b -a", "lvs", "--reportformat", "json", "--units", "b", "-a")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryHostCommandsMDADM(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
+	report.Commands["proc_mdstat"] = c.captureInventoryCommand(ctx, "cat /proc/mdstat", "cat", "/proc/mdstat")
+	report.Commands["mdadm_scan"] = c.captureInventoryCommand(ctx, "mdadm --detail --scan", "mdadm", "--detail", "--scan")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryHostCommandsMultipath(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
+	report.Commands["multipath_ll"] = c.captureInventoryCommand(ctx, "multipath -ll", "multipath", "-ll")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryHostCommandsISCSI(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
+	report.Commands["iscsi_sessions"] = c.captureInventoryCommand(ctx, "iscsiadm -m session", "iscsiadm", "-m", "session")
+	report.Commands["iscsi_nodes"] = c.captureInventoryCommand(ctx, "iscsiadm -m node", "iscsiadm", "-m", "node")
+	report.Commands["iscsi_ifaces"] = c.captureInventoryCommand(ctx, "iscsiadm -m iface", "iscsiadm", "-m", "iface")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryHostCommandsZFS(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !inventory.hostCommandsEnabled {
+		return nil
+	}
+	report := &inventory.report
+	report.Commands["zpool_status"] = c.captureInventoryCommand(ctx, "zpool status -P", "zpool", "status", "-P")
+	report.Commands["zpool_list"] = c.captureInventoryCommand(ctx, "zpool list", "zpool", "list")
+	report.Commands["zfs_list"] = c.captureInventoryCommand(ctx, "zfs list", "zfs", "list")
+	return nil
+}
+
+func (c *Collector) populatePBSInventoryCommandFiles(inventory *pbsInventoryState, commandsDir string) error {
+	report := &inventory.report
+	report.Commands["pbs_version_file"] = c.captureInventoryCommandFromFile(filepath.Join(commandsDir, "pbs_version.txt"), "var/lib/proxsave-info/commands/pbs/pbs_version.txt")
+	report.Commands["datastore_list_file"] = c.captureInventoryCommandFromFile(filepath.Join(commandsDir, "datastore_list.json"), "var/lib/proxsave-info/commands/pbs/datastore_list.json")
+	return nil
+}
+
+func (c *Collector) populatePBSDatastoreInventoryEntries(ctx context.Context, inventory *pbsInventoryState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	report := &inventory.report
+	report.Datastores = make([]pbsDatastoreInventoryEntry, 0, len(inventory.mergedDatastores))
+	for _, def := range inventory.mergedDatastores {
 		entry := pbsDatastoreInventoryEntry{
 			Name:      def.Name,
 			Path:      def.Path,
@@ -242,59 +385,27 @@ func (c *Collector) collectPBSDatastoreInventory(ctx context.Context, cliDatasto
 			}
 		}
 
-		if report.HostCommands && def.Path != "" && filepath.IsAbs(def.Path) {
+		if inventory.hostCommandsEnabled && def.Path != "" && filepath.IsAbs(def.Path) {
 			entry.Findmnt = c.captureInventoryCommand(ctx, fmt.Sprintf("findmnt -J -T %s", def.Path), "findmnt", "-J", "-T", def.Path)
 			entry.DF = c.captureInventoryCommand(ctx, fmt.Sprintf("df -T %s", def.Path), "df", "-T", def.Path)
 		}
 
 		report.Datastores = append(report.Datastores, entry)
 	}
+	return nil
+}
 
-	if report.HostCommands {
-		report.Commands["uname"] = c.captureInventoryCommand(ctx, "uname -a", "uname", "-a")
-		report.Commands["blkid"] = c.captureInventoryCommand(ctx, "blkid", "blkid")
-		report.Commands["lsblk_json"] = c.captureInventoryCommand(ctx, "lsblk -J -O", "lsblk", "-J", "-O")
-		report.Commands["findmnt_json"] = c.captureInventoryCommand(ctx, "findmnt -J", "findmnt", "-J")
-		report.Commands["nfsstat_mounts"] = c.captureInventoryCommand(ctx, "nfsstat -m", "nfsstat", "-m")
-
-		report.Commands["dmsetup_tree"] = c.captureInventoryCommand(ctx, "dmsetup ls --tree", "dmsetup", "ls", "--tree")
-		report.Commands["pvs_json"] = c.captureInventoryCommand(ctx, "pvs --reportformat json --units b", "pvs", "--reportformat", "json", "--units", "b")
-		report.Commands["vgs_json"] = c.captureInventoryCommand(ctx, "vgs --reportformat json --units b", "vgs", "--reportformat", "json", "--units", "b")
-		report.Commands["lvs_json"] = c.captureInventoryCommand(ctx, "lvs --reportformat json --units b -a", "lvs", "--reportformat", "json", "--units", "b", "-a")
-
-		report.Commands["proc_mdstat"] = c.captureInventoryCommand(ctx, "cat /proc/mdstat", "cat", "/proc/mdstat")
-		report.Commands["mdadm_scan"] = c.captureInventoryCommand(ctx, "mdadm --detail --scan", "mdadm", "--detail", "--scan")
-
-		report.Commands["multipath_ll"] = c.captureInventoryCommand(ctx, "multipath -ll", "multipath", "-ll")
-
-		report.Commands["iscsi_sessions"] = c.captureInventoryCommand(ctx, "iscsiadm -m session", "iscsiadm", "-m", "session")
-		report.Commands["iscsi_nodes"] = c.captureInventoryCommand(ctx, "iscsiadm -m node", "iscsiadm", "-m", "node")
-		report.Commands["iscsi_ifaces"] = c.captureInventoryCommand(ctx, "iscsiadm -m iface", "iscsiadm", "-m", "iface")
-
-		report.Commands["zpool_status"] = c.captureInventoryCommand(ctx, "zpool status -P", "zpool", "status", "-P")
-		report.Commands["zpool_list"] = c.captureInventoryCommand(ctx, "zpool list", "zpool", "list")
-		report.Commands["zfs_list"] = c.captureInventoryCommand(ctx, "zfs list", "zfs", "list")
-	} else {
-		report.Commands["host_commands_skipped"] = inventoryCommandSnapshot{
-			Command: "host_commands",
-			Skipped: true,
-			Reason:  "system_root_prefix is not host root; skipping host-only commands",
-		}
+func (c *Collector) writePBSInventoryState(inventory *pbsInventoryState, commandsDir string) error {
+	outputPath := filepath.Join(commandsDir, "pbs_datastore_inventory.json")
+	if c.shouldExclude(outputPath) {
+		c.incFilesSkipped()
+		return nil
 	}
-
-	// Include already collected PBS command outputs if available (best-effort).
-	report.Commands["pbs_version_file"] = c.captureInventoryCommandFromFile(filepath.Join(commandsDir, "pbs_version.txt"), "var/lib/proxsave-info/commands/pbs/pbs_version.txt")
-	report.Commands["datastore_list_file"] = c.captureInventoryCommandFromFile(filepath.Join(commandsDir, "datastore_list.json"), "var/lib/proxsave-info/commands/pbs/datastore_list.json")
-
-	data, err := json.MarshalIndent(report, "", "  ")
+	data, err := json.MarshalIndent(inventory.report, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal datastore inventory report: %w", err)
 	}
-
-	if err := c.writeReportFile(outputPath, data); err != nil {
-		return err
-	}
-	return nil
+	return c.writeReportFile(outputPath, data)
 }
 
 func (c *Collector) captureInventoryFile(sourcePath, logicalPath string) inventoryFileSnapshot {
@@ -700,172 +811,6 @@ func referencedFileKey(path string) string {
 	}
 	sum := sha256.Sum256([]byte(path))
 	return fmt.Sprintf("ref_%s_%s", sanitizeFilename(path), hex.EncodeToString(sum[:4]))
-}
-
-func extractCrypttabKeyFiles(content string) []string {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return nil
-	}
-
-	var out []string
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		keyFile := strings.TrimSpace(fields[2])
-		if keyFile == "" || keyFile == "none" || keyFile == "-" {
-			continue
-		}
-		if strings.HasPrefix(keyFile, "/") {
-			out = append(out, keyFile)
-		}
-	}
-	return uniqueSortedStrings(out)
-}
-
-func extractFstabReferencedFiles(content string) []string {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return nil
-	}
-
-	keys := map[string]struct{}{
-		"credentials":  {},
-		"cred":         {},
-		"passwd":       {},
-		"passfile":     {},
-		"keyfile":      {},
-		"identityfile": {},
-	}
-
-	var out []string
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-
-		opts := fields[3]
-		for _, opt := range strings.Split(opts, ",") {
-			opt = strings.TrimSpace(opt)
-			if opt == "" || !strings.Contains(opt, "=") {
-				continue
-			}
-			parts := strings.SplitN(opt, "=", 2)
-			key := strings.ToLower(strings.TrimSpace(parts[0]))
-			val := strings.TrimSpace(parts[1])
-			if key == "" || val == "" {
-				continue
-			}
-			if _, ok := keys[key]; !ok {
-				continue
-			}
-			if strings.HasPrefix(val, "/") {
-				out = append(out, val)
-			}
-		}
-	}
-	return uniqueSortedStrings(out)
-}
-
-func (c *Collector) safeCopySystemdMountUnitFiles(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	base := c.systemPath("/etc/systemd/system")
-	info, err := os.Stat(base)
-	if err != nil {
-		return nil
-	}
-	if !info.IsDir() {
-		return nil
-	}
-
-	destBase := filepath.Join(c.tempDir, "etc/systemd/system")
-	if c.shouldExclude(base) || c.shouldExclude(destBase) {
-		c.incFilesSkipped()
-		return nil
-	}
-
-	if c.dryRun {
-		return nil
-	}
-	if err := c.ensureDir(destBase); err != nil {
-		return err
-	}
-
-	return filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
-		if errCtx := ctx.Err(); errCtx != nil {
-			return errCtx
-		}
-		if err != nil {
-			return err
-		}
-		if info == nil || info.IsDir() {
-			return nil
-		}
-		name := strings.ToLower(info.Name())
-		if !strings.HasSuffix(name, ".mount") && !strings.HasSuffix(name, ".automount") {
-			return nil
-		}
-		rel, err := filepath.Rel(base, path)
-		if err != nil {
-			return err
-		}
-		dest := filepath.Join(destBase, rel)
-		if c.shouldExclude(path) || c.shouldExclude(dest) {
-			return nil
-		}
-		return c.safeCopyFile(ctx, path, dest, "systemd mount unit")
-	})
-}
-
-func (c *Collector) safeCopyAutofsMapFiles(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	for _, path := range []string{
-		"/etc/auto.master",
-		"/etc/autofs.conf",
-	} {
-		src := c.systemPath(path)
-		dest := filepath.Join(c.tempDir, strings.TrimPrefix(path, "/"))
-		if err := c.safeCopyFile(ctx, src, dest, "autofs config"); err != nil {
-			// Non-critical; safeCopyFile already counts failures when appropriate.
-			continue
-		}
-	}
-
-	// /etc/auto.* maps (e.g. /etc/auto.nfs, /etc/auto.cifs)
-	glob := c.systemPath("/etc/auto.*")
-	matches, _ := filepath.Glob(glob)
-	for _, src := range matches {
-		base := filepath.Base(src)
-		if base == "auto.master" {
-			continue
-		}
-		rel := filepath.Join("etc", base)
-		dest := filepath.Join(c.tempDir, rel)
-		_ = c.safeCopyFile(ctx, src, dest, "autofs map")
-	}
-
-	// /etc/auto.master.d (drop-in directory)
-	_ = c.safeCopyDir(ctx, c.systemPath("/etc/auto.master.d"), filepath.Join(c.tempDir, "etc/auto.master.d"), "autofs drop-in configs")
-	return nil
 }
 
 func (c *Collector) captureInventoryDirFiltered(ctx context.Context, sourcePath, logicalPath string, include func(rel string, info os.FileInfo) bool) inventoryDirSnapshot {

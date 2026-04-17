@@ -803,9 +803,9 @@ func TestRestoreSafetyBackup_MaliciousSymlinks(t *testing.T) {
 
 func TestResolveAndCheckPathInsideRoot(t *testing.T) {
 	root := t.TempDir()
-	target, err := resolveAndCheckPath(root, filepath.Join("etc", "pve", "config.db"))
+	target, err := resolvePathWithinRootFS(osFS{}, root, filepath.Join("etc", "pve", "config.db"))
 	if err != nil {
-		t.Fatalf("resolveAndCheckPath returned error: %v", err)
+		t.Fatalf("resolvePathWithinRootFS returned error: %v", err)
 	}
 	if !strings.HasPrefix(target, root) {
 		t.Fatalf("resolved path not inside root: %s", target)
@@ -817,7 +817,7 @@ func TestResolveAndCheckPathInsideRoot(t *testing.T) {
 
 func TestResolveAndCheckPathRejectsTraversal(t *testing.T) {
 	root := t.TempDir()
-	if _, err := resolveAndCheckPath(root, filepath.Join("..", "outside")); err == nil {
+	if _, err := resolvePathWithinRootFS(osFS{}, root, filepath.Join("..", "outside")); err == nil {
 		t.Fatalf("expected traversal to be rejected")
 	}
 }
@@ -838,7 +838,7 @@ func TestResolveAndCheckPathRejectsSymlinkEscape(t *testing.T) {
 		t.Fatalf("create symlink: %v", err)
 	}
 
-	if _, err := resolveAndCheckPath(root, filepath.Join("escape-link", "data.txt")); err == nil {
+	if _, err := resolvePathWithinRootFS(osFS{}, root, filepath.Join("escape-link", "data.txt")); err == nil {
 		t.Fatalf("expected symlink escape to be rejected")
 	}
 }
@@ -850,7 +850,7 @@ func TestResolveAndCheckPathRejectsBrokenIntermediateSymlinkEscape(t *testing.T)
 		t.Fatalf("create symlink: %v", err)
 	}
 
-	if _, err := resolveAndCheckPath(root, filepath.Join("escape-link", "missing", "data.txt")); err == nil {
+	if _, err := resolvePathWithinRootFS(osFS{}, root, filepath.Join("escape-link", "missing", "data.txt")); err == nil {
 		t.Fatalf("expected broken symlink escape to be rejected")
 	}
 }
@@ -2196,9 +2196,9 @@ func TestResolveAndCheckPath_AbsolutePathInput(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	resolved, err := resolveAndCheckPath(root, absPath)
+	resolved, err := resolvePathWithinRootFS(osFS{}, root, absPath)
 	if err != nil {
-		t.Fatalf("resolveAndCheckPath failed: %v", err)
+		t.Fatalf("resolvePathWithinRootFS failed: %v", err)
 	}
 
 	if !strings.HasPrefix(resolved, root) {

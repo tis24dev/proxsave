@@ -28,7 +28,7 @@ var (
 )
 
 func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
-	if plan == nil || plan.SystemType != SystemTypePBS {
+	if plan == nil || !plan.SystemType.SupportsPBS() {
 		return nil
 	}
 	if !plan.HasCategoryID("datastore_pbs") && !plan.HasCategoryID("pbs_jobs") && !plan.HasCategoryID("pbs_remotes") && !plan.HasCategoryID("pbs_host") && !plan.HasCategoryID("pbs_tape") {

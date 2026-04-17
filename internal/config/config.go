@@ -2,6 +2,9 @@ package config
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,6 +45,12 @@ var (
 		gotifyEnableLegacyKey:   gotifyEnabledKey,
 		webhookEnableLegacyKey:  webhookEnabledKey,
 	}
+
+	pbsFingerprintCertPaths = []string{
+		"/etc/proxmox-backup/proxy.pem",
+	}
+
+	configHostnameFunc = os.Hostname
 )
 
 // Config contains the full backup system configuration.
@@ -1216,8 +1225,9 @@ func (c *Config) autoDetectPBSAuth() {
 		c.PBSFingerprint = c.getString("PBS_FINGERPRINT", "")
 	}
 
-	// Priority 3: Auto-detect from PBS system files
-	if c.PBSFingerprint == "" {
+	// Priority 3: Auto-detect from local PBS system files only.
+	// Never infer a local certificate fingerprint for an explicitly remote repository.
+	if c.PBSFingerprint == "" && shouldAutoDetectLocalPBSFingerprint(c.PBSRepository) {
 		c.PBSFingerprint = autoDetectPBSFingerprint()
 	}
 
@@ -1237,13 +1247,7 @@ func (c *Config) autoDetectPBSAuth() {
 
 // autoDetectPBSFingerprint tries to extract the SSL fingerprint from PBS certificate
 func autoDetectPBSFingerprint() string {
-	// Try to get fingerprint from PBS proxy certificate
-	certPaths := []string{
-		"/etc/proxmox-backup/proxy.pem",
-		"/etc/pve/pve-root-ca.pem",
-	}
-
-	for _, certPath := range certPaths {
+	for _, certPath := range pbsFingerprintCertPaths {
 		if fp := extractFingerprintFromCert(certPath); fp != "" {
 			return fp
 		}
@@ -1254,10 +1258,113 @@ func autoDetectPBSFingerprint() string {
 
 // extractFingerprintFromCert extracts SHA256 fingerprint from a certificate file
 func extractFingerprintFromCert(certPath string) string {
-	_ = certPath
-	// This would require crypto/x509 parsing - for now return empty
-	// The fingerprint is optional and commands will work without it on localhost
-	return ""
+	data, err := os.ReadFile(certPath)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+
+	certDER := data
+	rest := data
+	for len(rest) > 0 {
+		block, remaining := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = remaining
+		if block.Type == "CERTIFICATE" && len(block.Bytes) > 0 {
+			certDER = block.Bytes
+			break
+		}
+	}
+
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return ""
+	}
+
+	sum := sha256.Sum256(cert.Raw)
+	parts := make([]string, 0, len(sum))
+	for _, b := range sum {
+		parts = append(parts, fmt.Sprintf("%02x", b))
+	}
+	return strings.Join(parts, ":")
+}
+
+func shouldAutoDetectLocalPBSFingerprint(repo string) bool {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return true
+	}
+
+	host := parsePBSRepositoryHost(repo)
+	if host == "" {
+		return false
+	}
+	return isLocalPBSHost(host)
+}
+
+func parsePBSRepositoryHost(repo string) string {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return ""
+	}
+
+	at := strings.LastIndex(repo, "@")
+	if at < 0 || at == len(repo)-1 {
+		return ""
+	}
+
+	hostPart := strings.TrimSpace(repo[at+1:])
+	if hostPart == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(hostPart, "[") {
+		end := strings.Index(hostPart, "]")
+		if end <= 1 {
+			return ""
+		}
+		return normalizePBSHost(hostPart[1:end])
+	}
+
+	return normalizePBSHost(strings.SplitN(hostPart, ":", 2)[0])
+}
+
+func isLocalPBSHost(host string) bool {
+	host = normalizePBSHost(host)
+	switch host {
+	case "", "localhost", "127.0.0.1", "::1":
+		return host != ""
+	}
+
+	currentHost, err := configHostnameFunc()
+	if err != nil {
+		return false
+	}
+	currentHost = normalizePBSHost(currentHost)
+	if currentHost == "" {
+		return false
+	}
+	if host == currentHost {
+		return true
+	}
+
+	currentShort := currentHost
+	if dot := strings.Index(currentShort, "."); dot > 0 {
+		currentShort = currentShort[:dot]
+	}
+	hostShort := host
+	if dot := strings.Index(hostShort, "."); dot > 0 {
+		hostShort = hostShort[:dot]
+	}
+	return host == currentShort || hostShort == currentHost || hostShort == currentShort
+}
+
+func normalizePBSHost(host string) string {
+	host = strings.TrimSpace(strings.ToLower(host))
+	host = strings.Trim(host, "[]")
+	host = strings.TrimSuffix(host, ".")
+	return host
 }
 
 // BuildWebhookConfig constructs a complete webhook configuration with all endpoints

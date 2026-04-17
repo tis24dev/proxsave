@@ -18,6 +18,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/checks"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -202,10 +203,10 @@ func TestApplyStorageStatsGFSPrimary(t *testing.T) {
 	previousMonthBackup := time.Date(now.Year(), now.Month(), 1, now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC).Add(-24 * time.Hour)
 	previousYearBackup := time.Date(now.Year()-1, time.January, 15, now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
 	backups := []*types.BackupMetadata{
-		{Timestamp: now},                    // daily
-		{Timestamp: now.AddDate(0, 0, -8)},  // weekly
-		{Timestamp: previousMonthBackup},    // monthly
-		{Timestamp: previousYearBackup},     // yearly
+		{Timestamp: now},                   // daily
+		{Timestamp: now.AddDate(0, 0, -8)}, // weekly
+		{Timestamp: previousMonthBackup},   // monthly
+		{Timestamp: previousYearBackup},    // yearly
 	}
 	adapter := &StorageAdapter{
 		backend: &stubStorage{loc: storage.LocationPrimary, list: backups},
@@ -1482,7 +1483,7 @@ func TestRunGoBackupConfigValidationError(t *testing.T) {
 	tempDir := t.TempDir()
 	orch.SetBackupConfig(tempDir, tempDir, types.CompressionType("invalid"), 1, 0, "standard", nil)
 
-	stats, err := orch.RunGoBackup(context.Background(), types.ProxmoxUnknown, "host-invalid")
+	stats, err := orch.RunGoBackup(context.Background(), &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "host-invalid")
 	if err == nil {
 		t.Fatalf("expected error for invalid compression type")
 	}

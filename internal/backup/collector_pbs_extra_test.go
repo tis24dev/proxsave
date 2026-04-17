@@ -156,9 +156,7 @@ func TestCollectUserTokensAggregates(t *testing.T) {
 		t.Fatalf("write user list: %v", err)
 	}
 
-	if err := c.collectUserConfigs(context.Background()); err != nil {
-		t.Fatalf("collectUserConfigs error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), c, newPBSUserConfigRecipe(), nil)
 
 	aggPath := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "access-control", "tokens.json")
 	if _, err := os.Stat(aggPath); err != nil {

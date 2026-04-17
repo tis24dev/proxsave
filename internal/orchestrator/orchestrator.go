@@ -16,6 +16,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/checks"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/metrics"
 	"github.com/tis24dev/proxsave/internal/storage"
@@ -55,7 +56,10 @@ func (e *EarlyErrorState) HasError() bool {
 type BackupStats struct {
 	Hostname                  string
 	ProxmoxType               types.ProxmoxType
+	ProxmoxTargets            []string
 	ProxmoxVersion            string
+	PVEVersion                string
+	PBSVersion                string
 	BundleCreated             bool
 	Timestamp                 time.Time
 	Version                   string
@@ -176,6 +180,7 @@ type Orchestrator struct {
 	cmdRunner            CommandRunner
 	version              string
 	proxmoxVersion       string
+	envInfo              *environment.EnvironmentInfo
 	dryRun               bool
 	forceNewAgeRecipient bool
 	ageRecipientCache    []age.Recipient
@@ -298,6 +303,18 @@ func (o *Orchestrator) SetForceNewAgeRecipient(force bool) {
 
 func (o *Orchestrator) SetProxmoxVersion(version string) {
 	o.proxmoxVersion = strings.TrimSpace(version)
+}
+
+// SetEnvironmentInfo attaches the detected environment model for downstream consumers.
+func (o *Orchestrator) SetEnvironmentInfo(info *environment.EnvironmentInfo) {
+	if o == nil || info == nil {
+		return
+	}
+	copied := *info
+	o.envInfo = &copied
+	if strings.TrimSpace(copied.Version) != "" {
+		o.proxmoxVersion = strings.TrimSpace(copied.Version)
+	}
 }
 
 // SetStartTime injects the timestamp to reuse across logs/backups.
@@ -486,7 +503,16 @@ func (o *Orchestrator) ensureTempRegistry() *TempDirRegistry {
 }
 
 // RunGoBackup performs the entire backup using Go components (collector + archiver)
-func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType, hostname string) (stats *BackupStats, err error) {
+func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.EnvironmentInfo, hostname string) (stats *BackupStats, err error) {
+	if envInfo == nil {
+		envInfo = o.envInfo
+	} else {
+		o.SetEnvironmentInfo(envInfo)
+	}
+	pType := types.ProxmoxUnknown
+	if envInfo != nil {
+		pType = envInfo.Type
+	}
 	done := logging.DebugStart(o.logger, "backup run", "type=%s hostname=%s", pType, hostname)
 	defer func() { done(err) }()
 	o.logger.Info("Starting Go-based backup orchestration for %s", pType)
@@ -506,8 +532,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	o.logStep(1, "Initializing backup statistics and temporary workspace")
 	stats = InitializeBackupStats(
 		hostname,
-		pType,
-		o.proxmoxVersion,
+		envInfo,
 		o.version,
 		startTime,
 		o.cfg,
@@ -691,7 +716,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 	stats.FilesIncluded = int(collStats.FilesProcessed)
 	stats.FilesMissing = int(collStats.FilesNotFound)
 	stats.UncompressedSize = collStats.BytesCollected
-	if pType == types.ProxmoxVE {
+	if stats.ProxmoxType.SupportsPVE() {
 		if collector.IsClusteredPVE() {
 			stats.ClusterMode = "cluster"
 		} else {
@@ -871,10 +896,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 		if o.cfg != nil && o.cfg.EncryptArchive {
 			encryptionMode = "age"
 		}
-		targets := make([]string, 0, 1)
-		if stats.ProxmoxType != "" {
-			targets = append(targets, string(stats.ProxmoxType))
-		}
+		targets := append([]string(nil), stats.ProxmoxTargets...)
 		manifest := &backup.Manifest{
 			ArchivePath:      archivePath,
 			ArchiveSize:      stats.ArchiveSize,
@@ -886,6 +908,8 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, pType types.ProxmoxType,
 			ProxmoxType:      string(stats.ProxmoxType),
 			ProxmoxTargets:   targets,
 			ProxmoxVersion:   stats.ProxmoxVersion,
+			PVEVersion:       stats.PVEVersion,
+			PBSVersion:       stats.PBSVersion,
 			Hostname:         stats.Hostname,
 			ScriptVersion:    stats.ScriptVersion,
 			EncryptionMode:   encryptionMode,
@@ -1513,8 +1537,17 @@ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) e
 	builder.WriteString("# This file enables selective restore functionality in newer restore scripts\n")
 	builder.WriteString(fmt.Sprintf("VERSION=%s\n", version))
 	builder.WriteString(fmt.Sprintf("BACKUP_TYPE=%s\n", stats.ProxmoxType.String()))
+	if len(stats.ProxmoxTargets) > 0 {
+		builder.WriteString(fmt.Sprintf("BACKUP_TARGETS=%s\n", strings.Join(stats.ProxmoxTargets, ",")))
+	}
 	builder.WriteString(fmt.Sprintf("TIMESTAMP=%s\n", stats.Timestamp))
 	builder.WriteString(fmt.Sprintf("HOSTNAME=%s\n", stats.Hostname))
+	if strings.TrimSpace(stats.PVEVersion) != "" {
+		builder.WriteString(fmt.Sprintf("PVE_VERSION=%s\n", strings.TrimSpace(stats.PVEVersion)))
+	}
+	if strings.TrimSpace(stats.PBSVersion) != "" {
+		builder.WriteString(fmt.Sprintf("PBS_VERSION=%s\n", strings.TrimSpace(stats.PBSVersion)))
+	}
 	if stats.ClusterMode != "" {
 		builder.WriteString(fmt.Sprintf("PVE_CLUSTER_MODE=%s\n", stats.ClusterMode))
 	}

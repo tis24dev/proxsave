@@ -7,6 +7,7 @@ import (
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -36,8 +37,7 @@ func BuildArchiverConfig(
 // InitializeBackupStats builds the initial BackupStats snapshot without side effects.
 func InitializeBackupStats(
 	hostname string,
-	pType types.ProxmoxType,
-	proxmoxVersion string,
+	envInfo *environment.EnvironmentInfo,
 	version string,
 	startTime time.Time,
 	cfg *config.Config,
@@ -48,10 +48,25 @@ func InitializeBackupStats(
 	backupPath string,
 	serverID, serverMAC string,
 ) *BackupStats {
+	pType := types.ProxmoxUnknown
+	proxmoxVersion := "unknown"
+	pveVersion := ""
+	pbsVersion := ""
+	targets := []string(nil)
+	if envInfo != nil {
+		pType = envInfo.Type
+		proxmoxVersion = envInfo.Version
+		pveVersion = envInfo.PVEVersion
+		pbsVersion = envInfo.PBSVersion
+		targets = append(targets, envInfo.Type.Targets()...)
+	}
 	stats := &BackupStats{
 		Hostname:                 hostname,
 		ProxmoxType:              pType,
+		ProxmoxTargets:           targets,
 		ProxmoxVersion:           proxmoxVersion,
+		PVEVersion:               pveVersion,
+		PBSVersion:               pbsVersion,
 		Timestamp:                startTime,
 		Version:                  version,
 		ScriptVersion:            version,

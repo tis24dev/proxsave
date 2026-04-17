@@ -843,12 +843,19 @@ func isIgnorableOwnershipError(err error) bool {
 func RecreateDirectoriesFromConfig(systemType SystemType, logger *logging.Logger) error {
 	logger.Info("Recreating directory structures from configuration...")
 
-	switch systemType {
-	case SystemTypePVE:
+	switch {
+	case systemType == SystemTypeDual:
 		if err := RecreateStorageDirectories(logger); err != nil {
 			return fmt.Errorf("recreate PVE storage directories: %w", err)
 		}
-	case SystemTypePBS:
+		if err := RecreateDatastoreDirectories(logger); err != nil {
+			return fmt.Errorf("recreate PBS datastore directories: %w", err)
+		}
+	case systemType.SupportsPVE():
+		if err := RecreateStorageDirectories(logger); err != nil {
+			return fmt.Errorf("recreate PVE storage directories: %w", err)
+		}
+	case systemType.SupportsPBS():
 		if err := RecreateDatastoreDirectories(logger); err != nil {
 			return fmt.Errorf("recreate PBS datastore directories: %w", err)
 		}

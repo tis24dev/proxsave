@@ -193,7 +193,7 @@ func TestDetectCreatesIdentityFileInBaseDir(t *testing.T) {
 
 	expectedPath := filepath.Join(baseDir, identityDirName, identityFileName)
 	t.Cleanup(func() {
-		_ = setImmutableAttribute(expectedPath, false, nil)
+		_ = setImmutableAttributeWithContext(context.Background(), expectedPath, false, nil)
 	})
 	if info.IdentityFile != expectedPath {
 		t.Fatalf("IdentityFile = %q, want %q", info.IdentityFile, expectedPath)
@@ -292,7 +292,7 @@ func TestDetectWithContext_PropagatesCancellationDuringLegacyUpgrade(t *testing.
 	identityPath := filepath.Join(identityDir, identityFileName)
 
 	t.Cleanup(func() {
-		_ = setImmutableAttribute(identityPath, false, nil)
+		_ = setImmutableAttributeWithContext(context.Background(), identityPath, false, nil)
 	})
 
 	const serverID = "1234567890123456"
@@ -399,12 +399,12 @@ func TestWriteIdentityFileCreatesFileWith0600(t *testing.T) {
 	path := filepath.Join(dir, "id.conf")
 
 	t.Cleanup(func() {
-		_ = setImmutableAttribute(path, false, nil)
+		_ = setImmutableAttributeWithContext(context.Background(), path, false, nil)
 	})
 
 	const body = "test-content"
-	if err := writeIdentityFile(path, body, nil); err != nil {
-		t.Fatalf("writeIdentityFile() error = %v", err)
+	if err := writeIdentityFileWithContext(context.Background(), path, body, nil); err != nil {
+		t.Fatalf("writeIdentityFileWithContext() error = %v", err)
 	}
 
 	data, err := os.ReadFile(path)
@@ -831,7 +831,7 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 	path := filepath.Join(dir, "identity.conf")
 
 	t.Cleanup(func() {
-		_ = setImmutableAttribute(path, false, nil)
+		_ = setImmutableAttributeWithContext(context.Background(), path, false, nil)
 	})
 
 	const serverID = "1111222233334444"
@@ -846,8 +846,8 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 		t.Fatalf("failed to write legacy identity file: %v", err)
 	}
 
-	if err := maybeUpgradeIdentityFile(path, serverID, macPrimary, []string{macPrimary, macAlt}, nil); err != nil {
-		t.Fatalf("maybeUpgradeIdentityFile() error = %v", err)
+	if err := maybeUpgradeIdentityFileWithContext(context.Background(), path, serverID, macPrimary, []string{macPrimary, macAlt}, nil); err != nil {
+		t.Fatalf("maybeUpgradeIdentityFileWithContext() error = %v", err)
 	}
 
 	upgraded, err := os.ReadFile(path)
@@ -1829,8 +1829,8 @@ func TestCollectMACCandidatesWithLogger(t *testing.T) {
 
 func TestMaybeUpgradeIdentityFileNonExistent(t *testing.T) {
 	// Should not panic on non-existent file
-	if err := maybeUpgradeIdentityFile("/nonexistent/path/identity.conf", "1234567890123456", "aa:bb:cc:dd:ee:ff", nil, nil); err != nil {
-		t.Fatalf("maybeUpgradeIdentityFile() error = %v", err)
+	if err := maybeUpgradeIdentityFileWithContext(context.Background(), "/nonexistent/path/identity.conf", "1234567890123456", "aa:bb:cc:dd:ee:ff", nil, nil); err != nil {
+		t.Fatalf("maybeUpgradeIdentityFileWithContext() error = %v", err)
 	}
 }
 
@@ -1854,7 +1854,7 @@ func TestMaybeUpgradeIdentityFileAlreadyUpgraded(t *testing.T) {
 	path := filepath.Join(dir, "identity.conf")
 
 	t.Cleanup(func() {
-		_ = setImmutableAttribute(path, false, nil)
+		_ = setImmutableAttributeWithContext(context.Background(), path, false, nil)
 	})
 
 	const serverID = "1234567890123456"
@@ -1873,8 +1873,8 @@ func TestMaybeUpgradeIdentityFileAlreadyUpgraded(t *testing.T) {
 	original, _ := os.ReadFile(path)
 
 	// Try to upgrade - should be no-op since already v2
-	if err := maybeUpgradeIdentityFile(path, serverID, macs[0], macs, nil); err != nil {
-		t.Fatalf("maybeUpgradeIdentityFile() error = %v", err)
+	if err := maybeUpgradeIdentityFileWithContext(context.Background(), path, serverID, macs[0], macs, nil); err != nil {
+		t.Fatalf("maybeUpgradeIdentityFileWithContext() error = %v", err)
 	}
 
 	// Content should not have changed (same format)

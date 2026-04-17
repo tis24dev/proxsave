@@ -177,7 +177,7 @@ func maybeApplyNetworkConfigWithUI(ctx context.Context, ui RestoreWorkflowUI, lo
 		systemType = plan.SystemType
 		// In cluster RECOVERY restores, PVE services are intentionally stopped and /etc/pve is unmounted
 		// until the end of the workflow. PVE UI (8006) and corosync/quorum checks are not meaningful here.
-		suppressPVEChecks = plan.SystemType == SystemTypePVE && plan.NeedsClusterRestore
+		suppressPVEChecks = plan.SystemType.SupportsPVE() && plan.NeedsClusterRestore
 	}
 	return applyNetworkWithRollbackWithUI(ctx, ui, logger, rollbackPath, networkRollbackPath, stageRoot, archivePath, defaultNetworkRollbackTimeout, systemType, suppressPVEChecks)
 }

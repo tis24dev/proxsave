@@ -12,6 +12,9 @@ const (
 	// ProxmoxBS - Proxmox Backup Server
 	ProxmoxBS ProxmoxType = "pbs"
 
+	// ProxmoxDual - Host supports both PVE and PBS roles.
+	ProxmoxDual ProxmoxType = "dual"
+
 	// ProxmoxUnknown - Unknown or undetected type
 	ProxmoxUnknown ProxmoxType = "unknown"
 )
@@ -19,6 +22,28 @@ const (
 // String returns the string representation of the Proxmox type.
 func (p ProxmoxType) String() string {
 	return string(p)
+}
+
+// SupportsPVE reports whether the type includes PVE capabilities.
+func (p ProxmoxType) SupportsPVE() bool {
+	return p == ProxmoxVE || p == ProxmoxDual
+}
+
+// SupportsPBS reports whether the type includes PBS capabilities.
+func (p ProxmoxType) SupportsPBS() bool {
+	return p == ProxmoxBS || p == ProxmoxDual
+}
+
+// Targets returns the explicit target roles represented by this type.
+func (p ProxmoxType) Targets() []string {
+	targets := make([]string, 0, 2)
+	if p.SupportsPVE() {
+		targets = append(targets, string(ProxmoxVE))
+	}
+	if p.SupportsPBS() {
+		targets = append(targets, string(ProxmoxBS))
+	}
+	return targets
 }
 
 // CompressionType represents the compression type.

@@ -498,9 +498,9 @@ func TestCollectDatastoreConfigsDryRun(t *testing.T) {
 	})
 
 	datastores := []pbsDatastore{{Name: "store1", Path: "/fake"}}
-	if err := collector.collectDatastoreConfigs(context.Background(), datastores); err != nil {
-		t.Fatalf("collectDatastoreConfigs failed: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreConfigRecipe(), func(state *collectionState) {
+		state.pbs.datastores = datastores
+	})
 
 	nsFile := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "datastores", "store1_namespaces.json")
 	if _, err := os.Stat(nsFile); err != nil {
@@ -534,9 +534,9 @@ func TestCollectDatastoreConfigs_UsesPathSafeKeyForUnsafeDatastoreName(t *testin
 	})
 
 	ds := pbsDatastore{Name: unsafeName, Path: "/fake"}
-	if err := collector.collectDatastoreConfigs(context.Background(), []pbsDatastore{ds}); err != nil {
-		t.Fatalf("collectDatastoreConfigs failed: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreConfigRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{ds}
+	})
 
 	if len(seenArgs) < 3 || seenArgs[0] != "datastore" || seenArgs[1] != "show" || seenArgs[2] != unsafeName {
 		t.Fatalf("expected raw datastore name in command args, got %v", seenArgs)
@@ -595,9 +595,9 @@ func TestCollectDatastoreConfigsSkipsCLIConfigForOverridePaths(t *testing.T) {
 		NormalizedPath: normalizePBSDatastorePath(dsPath),
 		OutputKey:      buildPBSOverrideOutputKey(dsPath),
 	}
-	if err := collector.collectDatastoreConfigs(context.Background(), []pbsDatastore{ds}); err != nil {
-		t.Fatalf("collectDatastoreConfigs failed: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreConfigRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{ds}
+	})
 
 	datastoreDir := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "datastores")
 	if _, err := os.Stat(filepath.Join(datastoreDir, fmt.Sprintf("%s_namespaces.json", ds.pathKey()))); err != nil {
@@ -648,9 +648,9 @@ func TestCollectDatastoreConfigsDisambiguatesManualCLIAndOverrideKeyCollisions(t
 			NormalizedPath: normalizePBSDatastorePath(overridePath),
 		},
 	}
-	if err := collector.collectDatastoreConfigs(context.Background(), datastores); err != nil {
-		t.Fatalf("collectDatastoreConfigs failed: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSDatastoreConfigRecipe(), func(state *collectionState) {
+		state.pbs.datastores = datastores
+	})
 
 	resolved := clonePBSDatastores(datastores)
 	assignUniquePBSDatastoreOutputKeys(resolved)
@@ -691,9 +691,9 @@ func TestCollectPBSPxarMetadata_UsesPathSafeKeyForUnsafeDatastoreName(t *testing
 	}
 
 	ds := pbsDatastore{Name: "../escape", Path: dsPath, Comment: "unsafe"}
-	if err := collector.collectPBSPxarMetadata(context.Background(), []pbsDatastore{ds}); err != nil {
-		t.Fatalf("collectPBSPxarMetadata failed: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSPXARRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{ds}
+	})
 
 	dsKey := collectorPathKey(ds.Name)
 	base := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "pxar", "metadata", dsKey)
@@ -751,9 +751,9 @@ func TestCollectPBSCommands_UsesPathSafeKeyForUnsafeDatastoreName(t *testing.T) 
 	})
 
 	ds := pbsDatastore{Name: "../escape", Path: "/data/escape"}
-	if err := collector.collectPBSCommands(context.Background(), []pbsDatastore{ds}); err != nil {
-		t.Fatalf("collectPBSCommands error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSCommandsRecipe(), func(state *collectionState) {
+		state.pbs.datastores = []pbsDatastore{ds}
+	})
 
 	key := collectorPathKey(ds.Name)
 	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
@@ -825,9 +825,10 @@ func TestCollectPBSCommands_DisambiguatesStatusFilesForCollidingDatastoreKeys(t 
 		t.Fatalf("expected one base key and one suffixed key from collision, got %+v", resolved)
 	}
 
-	if err := collector.collectPBSCommands(context.Background(), datastores); err != nil {
-		t.Fatalf("collectPBSCommands error: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSCommandsRecipe(), func(state *collectionState) {
+		state.pbs.datastores = clonePBSDatastores(datastores)
+		assignUniquePBSDatastoreOutputKeys(state.pbs.datastores)
+	})
 
 	commandsDir := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs")
 	statusFiles, err := filepath.Glob(filepath.Join(commandsDir, "datastore_*_status.json"))
@@ -878,9 +879,7 @@ func TestCollectUserConfigsWithTokens(t *testing.T) {
 		t.Fatalf("failed to write user list: %v", err)
 	}
 
-	if err := collector.collectUserConfigs(context.Background()); err != nil {
-		t.Fatalf("collectUserConfigs failed: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSUserConfigRecipe(), nil)
 
 	tokensPath := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "access-control", "tokens.json")
 	data, err := os.ReadFile(tokensPath)
@@ -902,9 +901,7 @@ func TestCollectUserConfigsWithTokens(t *testing.T) {
 
 func TestCollectUserConfigsMissingUserList(t *testing.T) {
 	collector := newTestCollectorWithDeps(t, CollectorDeps{})
-	if err := collector.collectUserConfigs(context.Background()); err != nil {
-		t.Fatalf("collectUserConfigs failed: %v", err)
-	}
+	runRecipeForTest(t, context.Background(), collector, newPBSUserConfigRecipe(), nil)
 
 	tokensPath := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "access-control", "tokens.json")
 	if _, err := os.Stat(tokensPath); !os.IsNotExist(err) {

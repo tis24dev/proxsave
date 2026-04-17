@@ -10,7 +10,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-func TestProcessPxarDatastoreSkipsNonDir(t *testing.T) {
+func TestPreparePBSPXARStateSkipsNonDir(t *testing.T) {
 	tmp := t.TempDir()
 	filePath := filepath.Join(tmp, "notadir")
 	if err := os.WriteFile(filePath, []byte("x"), 0o640); err != nil {
@@ -18,8 +18,12 @@ func TestProcessPxarDatastoreSkipsNonDir(t *testing.T) {
 	}
 	c := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
 	ds := pbsDatastore{Name: "ds", Path: filePath}
-	if err := c.processPxarDatastore(context.Background(), ds, filepath.Join(tmp, "meta"), filepath.Join(tmp, "sel"), filepath.Join(tmp, "small")); err != nil {
-		t.Fatalf("processPxarDatastore should skip non-dir: %v", err)
+	state, err := c.preparePBSPXARState(context.Background(), []pbsDatastore{ds})
+	if err != nil {
+		t.Fatalf("preparePBSPXARState should skip non-dir: %v", err)
+	}
+	if len(state.eligible) != 0 {
+		t.Fatalf("expected non-directory datastore to be skipped, got %+v", state.eligible)
 	}
 }
 
