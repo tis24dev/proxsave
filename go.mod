@@ -8,9 +8,9 @@ require (
 	filippo.io/age v1.3.1
 	github.com/gdamore/tcell/v2 v2.13.8
 	github.com/rivo/tview v0.42.0
-	golang.org/x/crypto v0.49.0
+	golang.org/x/crypto v0.50.0
 	golang.org/x/term v0.42.0
-	golang.org/x/text v0.35.0
+	golang.org/x/text v0.36.0
 )
 
 require (
