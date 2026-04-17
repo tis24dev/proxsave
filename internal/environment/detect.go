@@ -112,6 +112,9 @@ type EnvironmentInfo struct {
 func Detect() (*EnvironmentInfo, error) {
 	info, err := detectEnvironmentInfo()
 	if info.Type == types.ProxmoxUnknown {
+		if err != nil {
+			return info, err
+		}
 		return info, fmt.Errorf("unable to detect Proxmox environment")
 	}
 	return info, err
@@ -165,7 +168,7 @@ func resolveType(hasPVE, hasPBS bool) types.ProxmoxType {
 
 func normalizedDetectedVersion(version string) string {
 	version = strings.TrimSpace(version)
-	if version == "" {
+	if version == "" || strings.EqualFold(version, "unknown") {
 		return ""
 	}
 	return version

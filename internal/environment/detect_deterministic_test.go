@@ -520,8 +520,8 @@ func TestDetect_Branches(t *testing.T) {
 		if info.Type != types.ProxmoxUnknown || info.Version != "unknown" {
 			t.Fatalf("Detect() info = (%v, %q), want (%v, %q)", info.Type, info.Version, types.ProxmoxUnknown, "unknown")
 		}
-		if err == nil || err.Error() != "unable to detect Proxmox environment" {
-			t.Fatalf("Detect() err = %v, want %q", err, "unable to detect Proxmox environment")
+		if err == nil || !strings.Contains(err.Error(), "unable to detect Proxmox environment") {
+			t.Fatalf("Detect() err = %v, want error containing %q", err, "unable to detect Proxmox environment")
 		}
 	})
 

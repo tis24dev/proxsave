@@ -480,7 +480,7 @@ func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir strin
 		filepath.Join(commandsDir, "nodes_status.json"),
 		"node status",
 		false); err != nil {
-		return fmt.Errorf("failed to get node status: %w", err)
+		c.logger.Warning("Failed to get node status: %v", err)
 	} else if len(nodeData) > 0 {
 		var nodes []struct {
 			Node string `json:"node"`
@@ -582,7 +582,7 @@ func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir st
 		storageJSONPath,
 		"Storage status",
 		false); err != nil {
-		return fmt.Errorf("failed to query storage status: %w", err)
+		c.logger.Warning("Failed to query storage status: %v", err)
 	} else if len(storageData) > 0 {
 		storages, err := parseNodeStorageList(storageData)
 		if err != nil {

@@ -545,7 +545,8 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 		dsWorkers = 1
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	parentCtx := ctx
+	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
 	var (
@@ -586,7 +587,7 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 	if firstErr != nil {
 		return firstErr
 	}
-	if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
+	if err := parentCtx.Err(); err != nil {
 		return err
 	}
 	return nil

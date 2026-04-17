@@ -1263,7 +1263,8 @@ func extractFingerprintFromCert(certPath string) string {
 		return ""
 	}
 
-	certDER := data
+	var certDER []byte
+	foundCert := false
 	rest := data
 	for len(rest) > 0 {
 		block, remaining := pem.Decode(rest)
@@ -1273,8 +1274,12 @@ func extractFingerprintFromCert(certPath string) string {
 		rest = remaining
 		if block.Type == "CERTIFICATE" && len(block.Bytes) > 0 {
 			certDER = block.Bytes
+			foundCert = true
 			break
 		}
+	}
+	if !foundCert {
+		return ""
 	}
 
 	cert, err := x509.ParseCertificate(certDER)
@@ -1310,11 +1315,13 @@ func parsePBSRepositoryHost(repo string) string {
 	}
 
 	at := strings.LastIndex(repo, "@")
-	if at < 0 || at == len(repo)-1 {
-		return ""
+	hostPart := repo
+	if at >= 0 {
+		if at == len(repo)-1 {
+			return ""
+		}
+		hostPart = strings.TrimSpace(repo[at+1:])
 	}
-
-	hostPart := strings.TrimSpace(repo[at+1:])
 	if hostPart == "" {
 		return ""
 	}
@@ -1327,7 +1334,13 @@ func parsePBSRepositoryHost(repo string) string {
 		return normalizePBSHost(hostPart[1:end])
 	}
 
-	return normalizePBSHost(strings.SplitN(hostPart, ":", 2)[0])
+	if colon := strings.LastIndex(hostPart, ":"); colon >= 0 {
+		hostPart = strings.TrimSpace(hostPart[:colon])
+	}
+	if hostPart == "" {
+		return ""
+	}
+	return normalizePBSHost(hostPart)
 }
 
 func isLocalPBSHost(host string) bool {
@@ -1357,7 +1370,8 @@ func isLocalPBSHost(host string) bool {
 	if dot := strings.Index(hostShort, "."); dot > 0 {
 		hostShort = hostShort[:dot]
 	}
-	return host == currentShort || hostShort == currentHost || hostShort == currentShort
+	return hostShort == currentShort &&
+		(strings.Index(host, ".") < 0 || strings.Index(currentHost, ".") < 0)
 }
 
 func normalizePBSHost(host string) string {

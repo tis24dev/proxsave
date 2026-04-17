@@ -191,6 +191,20 @@ func (c *Collector) populatePBSInventoryAutofsFiles(ctx context.Context, invento
 	report.Files["autofs_master"] = c.captureInventoryFile(c.systemPath("/etc/auto.master"), "/etc/auto.master")
 	report.Files["autofs_conf"] = c.captureInventoryFile(c.systemPath("/etc/autofs.conf"), "/etc/autofs.conf")
 	report.Dirs["autofs_master_d"] = c.captureInventoryDir(ctx, c.systemPath("/etc/auto.master.d"), "/etc/auto.master.d")
+	if matches, err := filepath.Glob(c.systemPath("/etc/auto.*")); err == nil {
+		for _, sourcePath := range matches {
+			info, statErr := os.Stat(sourcePath)
+			if statErr != nil || info == nil || info.IsDir() {
+				continue
+			}
+			base := filepath.Base(sourcePath)
+			if base == "auto.master" {
+				continue
+			}
+			key := "autofs_map_" + sanitizeFilename(base)
+			report.Files[key] = c.captureInventoryFile(sourcePath, filepath.Join("/etc", base))
+		}
+	}
 	return nil
 }
 

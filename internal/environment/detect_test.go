@@ -153,6 +153,14 @@ func TestEnvironmentInfo(t *testing.T) {
 			if tt.envInfo.Version == "" {
 				t.Error("EnvironmentInfo.Version should not be empty")
 			}
+			if tt.envInfo.Type == types.ProxmoxDual {
+				if tt.envInfo.PVEVersion == "" {
+					t.Error("EnvironmentInfo.PVEVersion should not be empty for dual environments")
+				}
+				if tt.envInfo.PBSVersion == "" {
+					t.Error("EnvironmentInfo.PBSVersion should not be empty for dual environments")
+				}
+			}
 		})
 	}
 }

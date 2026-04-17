@@ -243,26 +243,27 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	}
 
 	if e.config.DeliveryMethod == EmailDeliveryRelay && isRootRecipient(recipient) {
+		redactedRecipient := redactEmail(recipient)
 		if relayPMFFallbackEnabled {
 			if autoDetected {
-				e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and is blocked for relay delivery", recipient)
+				e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and is blocked for relay delivery", redactedRecipient)
 			} else {
-				e.logger.Warning("WARNING: Configured email recipient %s belongs to root and is blocked for relay delivery", recipient)
+				e.logger.Warning("WARNING: Configured email recipient %s belongs to root and is blocked for relay delivery", redactedRecipient)
 			}
 			preflightFallbackReason = "recipient_blocked_root"
-			preflightFallbackCause = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", recipient)
+			preflightFallbackCause = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", redactedRecipient)
 			e.logger.Info("  Bypassing relay and invoking PMF fallback before relay attempt")
 			e.logger.Debug("Email fallback decision: stage=preflight reason=%s cause=%v", preflightFallbackReason, preflightFallbackCause)
 		} else {
 			if autoDetected {
-				e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and will be rejected", recipient)
+				e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and will be rejected", redactedRecipient)
 			} else {
-				e.logger.Warning("WARNING: Configured email recipient %s belongs to root and will be rejected", recipient)
+				e.logger.Warning("WARNING: Configured email recipient %s belongs to root and will be rejected", redactedRecipient)
 			}
 			e.logger.Info("  Configure EMAIL_RECIPIENT with a non-root mailbox to enable notifications")
 			result.Success = false
 			result.Duration = time.Since(startTime)
-			result.Error = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", recipient)
+			result.Error = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", redactedRecipient)
 			return result, nil
 		}
 	}

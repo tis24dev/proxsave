@@ -514,28 +514,14 @@ func parseRouteDevice(output string) string {
 }
 
 func defaultNetworkPortChecks(systemType SystemType) []tcpPortCheck {
-	checks := make([]tcpPortCheck, 0, 2)
+	var checks []tcpPortCheck
 	if systemType.SupportsPVE() {
 		checks = append(checks, tcpPortCheck{Name: "PVE web UI", Address: "127.0.0.1", Port: 8006})
 	}
 	if systemType.SupportsPBS() {
 		checks = append(checks, tcpPortCheck{Name: "PBS web UI", Address: "127.0.0.1", Port: 8007})
 	}
-	if len(checks) > 0 {
-		return checks
-	}
-	switch systemType {
-	case SystemTypePVE:
-		return []tcpPortCheck{
-			{Name: "PVE web UI", Address: "127.0.0.1", Port: 8006},
-		}
-	case SystemTypePBS:
-		return []tcpPortCheck{
-			{Name: "PBS web UI", Address: "127.0.0.1", Port: 8007},
-		}
-	default:
-		return nil
-	}
+	return checks
 }
 
 func promptNetworkCommitWithCountdown(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, remaining time.Duration) (bool, error) {

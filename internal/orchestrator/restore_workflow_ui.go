@@ -813,8 +813,8 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	logger.Info("")
 	logger.Info("IMPORTANT: You may need to restart services for changes to take effect.")
-	switch {
-	case systemType == SystemTypeDual:
+	switch systemType {
+	case SystemTypeDual:
 		if needsClusterRestore && clusterServicesStopped {
 			logger.Info("  PVE services were stopped/restarted during restore; verify status with: pvecm status")
 		} else {
@@ -825,27 +825,27 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		} else {
 			logger.Info("  PBS services: systemctl restart proxmox-backup-proxy proxmox-backup")
 		}
-	case systemType == SystemTypePVE:
+	case SystemTypePVE:
 		if needsClusterRestore && clusterServicesStopped {
 			logger.Info("  PVE services were stopped/restarted during restore; verify status with: pvecm status")
 		} else {
 			logger.Info("  PVE services: systemctl restart pve-cluster pvedaemon pveproxy")
 		}
-	case systemType == SystemTypePBS:
+	case SystemTypePBS:
 		if pbsServicesStopped {
 			logger.Info("  PBS services were stopped/restarted during restore; verify status with: systemctl status proxmox-backup proxmox-backup-proxy")
 		} else {
 			logger.Info("  PBS services: systemctl restart proxmox-backup-proxy proxmox-backup")
 		}
+	}
 
-		if hasCategoryID(plan.NormalCategories, "zfs") {
-			logger.Info("")
-			if err := checkZFSPoolsAfterRestore(logger); err != nil {
-				logger.Warning("ZFS pool check: %v", err)
-			}
-		} else {
-			logger.Debug("Skipping ZFS pool verification (ZFS category not selected)")
+	if hasCategoryID(plan.NormalCategories, "zfs") {
+		logger.Info("")
+		if err := checkZFSPoolsAfterRestore(logger); err != nil {
+			logger.Warning("ZFS pool check: %v", err)
 		}
+	} else {
+		logger.Debug("Skipping ZFS pool verification (ZFS category not selected)")
 	}
 
 	logger.Info("")

@@ -3,6 +3,7 @@ package backup
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -259,7 +260,10 @@ func (c *Collector) safeCopySystemdMountUnitFiles(ctx context.Context) error {
 	base := c.systemPath("/etc/systemd/system")
 	info, err := os.Stat(base)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", base, err)
 	}
 	if !info.IsDir() {
 		return nil

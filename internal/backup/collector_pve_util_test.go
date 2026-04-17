@@ -805,6 +805,13 @@ func TestCollectPVEDirectoriesClusteredMode(t *testing.T) {
 	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
 		state.pve.clustered = true
 	}, brickPVEConfigSnapshot, brickPVEClusterSnapshot)
+
+	if _, err := os.Stat(collector.targetPathFor(filepath.Join(pveDir, "corosync.conf"))); err != nil {
+		t.Fatalf("expected corosync.conf to be copied: %v", err)
+	}
+	if _, err := os.Stat(collector.targetPathFor(clusterDir)); err != nil {
+		t.Fatalf("expected cluster directory snapshot to be copied: %v", err)
+	}
 }
 
 // TestCollectPVEDirectoriesFirewallAsDirectory tests firewall as directory
@@ -831,6 +838,10 @@ func TestCollectPVEDirectoriesFirewallAsDirectory(t *testing.T) {
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
 	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEFirewallSnapshot)
+
+	if _, err := os.Stat(collector.targetPathFor(filepath.Join(firewallDir, "cluster.fw"))); err != nil {
+		t.Fatalf("expected firewall rule file to be copied: %v", err)
+	}
 }
 
 // TestCollectPVEDirectoriesFirewallAsFile tests firewall as single file
@@ -853,6 +864,10 @@ func TestCollectPVEDirectoriesFirewallAsFile(t *testing.T) {
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
 	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEFirewallSnapshot)
+
+	if _, err := os.Stat(collector.targetPathFor(filepath.Join(pveDir, "firewall"))); err != nil {
+		t.Fatalf("expected firewall file to be copied: %v", err)
+	}
 }
 
 // TestCollectPVEDirectoriesVZDumpConfig tests vzdump config collection
@@ -880,6 +895,10 @@ func TestCollectPVEDirectoriesVZDumpConfig(t *testing.T) {
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
 	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEVZDumpSnapshot)
+
+	if _, err := os.Stat(collector.targetPathFor(vzdumpPath)); err != nil {
+		t.Fatalf("expected vzdump.conf to be copied: %v", err)
+	}
 }
 
 // TestCollectPVEDirectoriesVZDumpRelativePath tests vzdump with relative path
@@ -903,6 +922,10 @@ func TestCollectPVEDirectoriesVZDumpRelativePath(t *testing.T) {
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
 	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEVZDumpSnapshot)
+
+	if _, err := os.Stat(collector.targetPathFor(filepath.Join(pveDir, "vzdump.conf"))); err != nil {
+		t.Fatalf("expected relative vzdump.conf to be copied: %v", err)
+	}
 }
 
 // TestCollectPVEDirectoriesDisabledOptions tests with disabled options
@@ -927,6 +950,19 @@ func TestCollectPVEDirectoriesDisabledOptions(t *testing.T) {
 		brickPVEFirewallSnapshot,
 		brickPVEVZDumpSnapshot,
 	)
+
+	assertMissing := func(path string) {
+		t.Helper()
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("expected %s to be absent", path)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be absent, got: %v", path, err)
+		}
+	}
+
+	assertMissing(collector.targetPathFor(filepath.Join(pveDir, "corosync.conf")))
+	assertMissing(collector.targetPathFor(filepath.Join(pveDir, "firewall")))
+	assertMissing(collector.targetPathFor(filepath.Join(tmpDir, "etc", "vzdump.conf")))
 }
 
 // TestCollectPVEDirectoriesWithConfigDB tests config.db handling
@@ -953,6 +989,10 @@ func TestCollectPVEDirectoriesWithConfigDB(t *testing.T) {
 	collector := NewCollector(logger, cfg, tmpDir, "pve", false)
 
 	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEClusterSnapshot)
+
+	if _, err := os.Stat(collector.targetPathFor(filepath.Join(clusterDir, "config.db"))); err != nil {
+		t.Fatalf("expected config.db to be copied: %v", err)
+	}
 }
 
 // TestHasMultiplePVENodesDetailed tests multiple node detection

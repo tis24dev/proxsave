@@ -69,6 +69,8 @@ func selectRestoreModeTUI(ctx context.Context, systemType SystemType, configPath
 		storageText = "DATASTORE only - PBS datastore definitions + sync/verify/prune jobs + mounts"
 	case SystemTypeDual:
 		storageText = "STORAGE/DATASTORE only - PVE storage + PBS datastore/jobs + mounts"
+	case SystemTypeUnknown:
+		storageText = "STORAGE/DATASTORE not available for this system"
 	default:
 		storageText = "STORAGE/DATASTORE only - Storage or datastore configuration"
 	}

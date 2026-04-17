@@ -226,6 +226,36 @@ func TestRecreateDirectoriesFromConfigRoutes(t *testing.T) {
 		}
 	})
 
+	t.Run("Dual", func(t *testing.T) {
+		pveBaseDir := filepath.Join(t.TempDir(), "local")
+		pveCfg := fmt.Sprintf("dir: local\n    path %s\n", pveBaseDir)
+		pveCfgPath, restorePVE := overridePath(t, &storageCfgPath, "storage.cfg")
+		t.Cleanup(restorePVE)
+		writeFile(t, pveCfgPath, pveCfg)
+
+		pbsBaseDir := filepath.Join(t.TempDir(), "data")
+		pbsCfg := fmt.Sprintf("datastore: main\n    path %s\n", pbsBaseDir)
+		pbsCfgPath, restorePBS := overridePath(t, &datastoreCfgPath, "datastore.cfg")
+		t.Cleanup(restorePBS)
+		writeFile(t, pbsCfgPath, pbsCfg)
+
+		cachePath, cacheRestore := overridePath(t, &zpoolCachePath, "zpool.cache")
+		t.Cleanup(cacheRestore)
+		if err := os.RemoveAll(cachePath); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("cleanup cache path: %v", err)
+		}
+
+		if err := RecreateDirectoriesFromConfig(SystemTypeDual, logger); err != nil {
+			t.Fatalf("RecreateDirectoriesFromConfig Dual: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(pveBaseDir, "images")); err != nil {
+			t.Fatalf("expected PVE directories to be created for dual system: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(pbsBaseDir, ".chunks")); err != nil {
+			t.Fatalf("expected PBS directories to be created for dual system: %v", err)
+		}
+	})
+
 	t.Run("Unknown", func(t *testing.T) {
 		if err := RecreateDirectoriesFromConfig(SystemTypeUnknown, logger); err != nil {
 			t.Fatalf("RecreateDirectoriesFromConfig unknown: %v", err)

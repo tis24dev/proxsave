@@ -114,6 +114,7 @@ func TestGetCategoriesForSystem(t *testing.T) {
 	}{
 		{"pve system", "pve", true, false, true},
 		{"pbs system", "pbs", false, true, true},
+		{"dual system", "dual", true, true, true},
 		{"unknown system", "unknown", false, false, false},
 	}
 
@@ -335,6 +336,7 @@ func TestGetCategoryByID(t *testing.T) {
 func TestGetStorageModeCategories(t *testing.T) {
 	pveCategories := GetStorageModeCategories("pve")
 	pbsCategories := GetStorageModeCategories("pbs")
+	dualCategories := GetStorageModeCategories("dual")
 
 	// PVE should include pve_cluster, storage_pve, filesystem
 	pveIDs := make(map[string]bool)
@@ -361,6 +363,16 @@ func TestGetStorageModeCategories(t *testing.T) {
 	}
 	if !pbsIDs["filesystem"] {
 		t.Error("PBS storage mode should include filesystem")
+	}
+
+	dualIDs := make(map[string]bool)
+	for _, cat := range dualCategories {
+		dualIDs[cat.ID] = true
+	}
+	for _, expected := range []string{"pve_cluster", "pbs_config", "pbs_remotes", "filesystem", "storage_stack"} {
+		if !dualIDs[expected] {
+			t.Errorf("Dual storage mode should include %s", expected)
+		}
 	}
 }
 

@@ -20,7 +20,6 @@ const (
 	RestoreDecisionSourceUnknown          RestoreDecisionSource = "unknown"
 	RestoreDecisionSourceInternalMetadata RestoreDecisionSource = "internal_metadata"
 	RestoreDecisionSourceCategories       RestoreDecisionSource = "categories"
-	RestoreDecisionSourceAmbiguous        RestoreDecisionSource = "ambiguous"
 )
 
 // RestoreDecisionInfo contains the archive-derived facts used for restore decisions.
@@ -254,11 +253,8 @@ func buildRestoreDecisionInfo(metadata *restoreDecisionMetadata, categories []Ca
 		}
 	}
 
-	categoryType, ambiguousType := detectBackupTypeFromCategories(categories)
+	categoryType := detectBackupTypeFromCategories(categories)
 	switch {
-	case ambiguousType:
-		logger.Warning("Archive contains both PVE and PBS-specific payloads; treating backup type as unknown for compatibility checks")
-		info.Source = RestoreDecisionSourceAmbiguous
 	case metadata != nil && metadata.BackupType != SystemTypeUnknown && categoryType == SystemTypeUnknown:
 		info.BackupType = metadata.BackupType
 		info.Source = RestoreDecisionSourceInternalMetadata
@@ -287,7 +283,7 @@ func buildRestoreDecisionInfo(metadata *restoreDecisionMetadata, categories []Ca
 	return info
 }
 
-func detectBackupTypeFromCategories(categories []Category) (SystemType, bool) {
+func detectBackupTypeFromCategories(categories []Category) SystemType {
 	var hasPVE, hasPBS bool
 	for _, cat := range categories {
 		switch cat.Type {
@@ -300,13 +296,13 @@ func detectBackupTypeFromCategories(categories []Category) (SystemType, bool) {
 
 	switch {
 	case hasPVE && hasPBS:
-		return SystemTypeDual, false
+		return SystemTypeDual
 	case hasPVE:
-		return SystemTypePVE, false
+		return SystemTypePVE
 	case hasPBS:
-		return SystemTypePBS, false
+		return SystemTypePBS
 	default:
-		return SystemTypeUnknown, false
+		return SystemTypeUnknown
 	}
 }
 

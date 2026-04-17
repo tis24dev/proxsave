@@ -80,8 +80,8 @@ func TestAnalyzeRestoreArchive_UsesInternalMetadataWhenCategoriesAreCommonOnly(t
 	if err != nil {
 		t.Fatalf("AnalyzeRestoreArchive() error: %v", err)
 	}
-	if backupType, ambiguous := detectBackupTypeFromCategories(categories); backupType != SystemTypeUnknown || ambiguous {
-		t.Fatalf("detectBackupTypeFromCategories() = (%s, %v); want (%s, false)", backupType, ambiguous, SystemTypeUnknown)
+	if backupType := detectBackupTypeFromCategories(categories); backupType != SystemTypeUnknown {
+		t.Fatalf("detectBackupTypeFromCategories() = %s; want %s", backupType, SystemTypeUnknown)
 	}
 	if decision == nil {
 		t.Fatalf("decision info is nil")
@@ -97,6 +97,18 @@ func TestAnalyzeRestoreArchive_UsesInternalMetadataWhenCategoriesAreCommonOnly(t
 	}
 	if decision.ClusterPayload {
 		t.Fatalf("ClusterPayload should stay false without pve_cluster payload")
+	}
+}
+
+func TestDetectBackupTypeFromCategories_DualPayload(t *testing.T) {
+	categories := []Category{
+		{ID: "pve_cluster", Type: CategoryTypePVE},
+		{ID: "pbs_config", Type: CategoryTypePBS},
+		{ID: "network", Type: CategoryTypeCommon},
+	}
+
+	if backupType := detectBackupTypeFromCategories(categories); backupType != SystemTypeDual {
+		t.Fatalf("detectBackupTypeFromCategories() = %s; want %s", backupType, SystemTypeDual)
 	}
 }
 

@@ -225,10 +225,21 @@ func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) {
 			legacy.ProxmoxType = value
 		case "BACKUP_TARGETS", "PROXMOX_TARGETS":
 			targets := strings.Split(value, ",")
-			legacy.ProxmoxTargets = legacy.ProxmoxTargets[:0]
+			seenTargets := make(map[string]struct{}, len(legacy.ProxmoxTargets))
+			for _, target := range legacy.ProxmoxTargets {
+				target = strings.TrimSpace(target)
+				if target == "" {
+					continue
+				}
+				seenTargets[target] = struct{}{}
+			}
 			for _, target := range targets {
 				target = strings.TrimSpace(target)
 				if target != "" {
+					if _, ok := seenTargets[target]; ok {
+						continue
+					}
+					seenTargets[target] = struct{}{}
 					legacy.ProxmoxTargets = append(legacy.ProxmoxTargets, target)
 				}
 			}

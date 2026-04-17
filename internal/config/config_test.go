@@ -18,6 +18,13 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+func clearPBSAuthEnvForTest(t *testing.T) {
+	t.Helper()
+	t.Setenv("PBS_FINGERPRINT", "")
+	t.Setenv("PBS_REPOSITORY", "")
+	t.Setenv("PBS_PASSWORD", "")
+}
+
 func setBaseDirEnv(t *testing.T, value string) {
 	t.Helper()
 	if value == "" {
@@ -1148,6 +1155,7 @@ func TestExtractFingerprintFromCertInvalid(t *testing.T) {
 }
 
 func TestAutoDetectPBSAuthLocalRepositoryAutoDetectsFingerprint(t *testing.T) {
+	clearPBSAuthEnvForTest(t)
 	setBaseDirEnv(t, "/pbs/base")
 	certPath, expected := writeTestPBSCertificate(t)
 	setPBSFingerprintCertPathsForTest(t, []string{certPath})
@@ -1164,6 +1172,7 @@ func TestAutoDetectPBSAuthLocalRepositoryAutoDetectsFingerprint(t *testing.T) {
 }
 
 func TestAutoDetectPBSAuthRemoteRepositorySkipsLocalFingerprint(t *testing.T) {
+	clearPBSAuthEnvForTest(t)
 	setBaseDirEnv(t, "/pbs/base")
 	certPath, _ := writeTestPBSCertificate(t)
 	setPBSFingerprintCertPathsForTest(t, []string{certPath})
@@ -1180,6 +1189,7 @@ func TestAutoDetectPBSAuthRemoteRepositorySkipsLocalFingerprint(t *testing.T) {
 }
 
 func TestAutoDetectPBSAuthEmptyRepositoryAutoDetectsFingerprint(t *testing.T) {
+	clearPBSAuthEnvForTest(t)
 	setBaseDirEnv(t, "/pbs/base")
 	certPath, expected := writeTestPBSCertificate(t)
 	setPBSFingerprintCertPathsForTest(t, []string{certPath})

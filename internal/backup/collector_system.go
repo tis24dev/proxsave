@@ -976,25 +976,29 @@ func (c *Collector) collectSystemZFSRuntime(ctx context.Context, commandsDir str
 }
 
 func (c *Collector) collectSystemLVMRuntime(ctx context.Context, commandsDir string) error {
-	if _, err := c.depStat(c.systemPath("/sbin/pvs")); err != nil {
+	if _, err := c.depLookPath("pvs"); err == nil {
+		c.safeCmdOutput(ctx,
+			"pvs",
+			filepath.Join(commandsDir, "lvm_pvs.txt"),
+			"LVM physical volumes",
+			false)
+	} else {
 		return nil
 	}
-
-	c.safeCmdOutput(ctx,
-		"pvs",
-		filepath.Join(commandsDir, "lvm_pvs.txt"),
-		"LVM physical volumes",
-		false)
-	c.safeCmdOutput(ctx,
-		"vgs",
-		filepath.Join(commandsDir, "lvm_vgs.txt"),
-		"LVM volume groups",
-		false)
-	c.safeCmdOutput(ctx,
-		"lvs",
-		filepath.Join(commandsDir, "lvm_lvs.txt"),
-		"LVM logical volumes",
-		false)
+	if _, err := c.depLookPath("vgs"); err == nil {
+		c.safeCmdOutput(ctx,
+			"vgs",
+			filepath.Join(commandsDir, "lvm_vgs.txt"),
+			"LVM volume groups",
+			false)
+	}
+	if _, err := c.depLookPath("lvs"); err == nil {
+		c.safeCmdOutput(ctx,
+			"lvs",
+			filepath.Join(commandsDir, "lvm_lvs.txt"),
+			"LVM logical volumes",
+			false)
+	}
 	return nil
 }
 
