@@ -791,6 +791,9 @@ func (c *Collector) collectPVEBackupJobHistory(ctx context.Context, nodes []stri
 
 	seen := make(map[string]struct{})
 	for _, node := range nodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		node = strings.TrimSpace(node)
 		if node == "" {
 			continue
@@ -869,7 +872,7 @@ func (c *Collector) pveCephDir() string {
 	return filepath.Join(c.pveInfoDir(), "ceph")
 }
 
-func (c *Collector) pveStorageIOTimout() time.Duration {
+func (c *Collector) pveStorageIOTimeout() time.Duration {
 	if c.config != nil && c.config.FsIoTimeoutSeconds > 0 {
 		return time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
 	}
@@ -963,6 +966,9 @@ func (c *Collector) collectPVEReplicationStatus(ctx context.Context, nodes []str
 
 	seen := make(map[string]struct{})
 	for _, node := range nodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		node = strings.TrimSpace(node)
 		if node == "" {
 			continue
@@ -1080,7 +1086,7 @@ func (c *Collector) preparePVEStorageScan(ctx context.Context, storage pveStorag
 				storage.Name, storage.Path,
 			)
 		default:
-			if status != reason {
+			if strings.HasPrefix(reason, "status=") {
 				c.logger.Warning(
 					"PVE datastore %s skipped: Proxmox reports storage status %q. Not scanning %s for vzdump backup files. Fix storage status, or disable it in Proxmox if unused.",
 					storage.Name, status, storage.Path,
@@ -1727,7 +1733,7 @@ func (c *Collector) createPVECoreAliases(ctx context.Context) error {
 	}
 
 	for _, entry := range aliasMap {
-		if err := c.copyIfExists(entry.source, entry.target, "PVE info alias"); err != nil {
+		if err := c.copyIfExists(ctx, entry.source, entry.target, "PVE info alias"); err != nil {
 			c.logger.Debug("Skipping alias for %s: %v", entry.source, err)
 		}
 	}
@@ -1759,7 +1765,7 @@ func (c *Collector) createPVEReplicationAggregate(ctx context.Context) error {
 		if _, err := os.Stat(sourceJobs); err != nil {
 			// replication_jobs.json was not yet created; attempt to copy from temp path used earlier
 			backupJobsPath := filepath.Join(c.pveJobsDir(), "replication_jobs.json")
-			_ = c.copyIfExists(backupJobsPath, sourceJobs, "replication jobs alias")
+			_ = c.copyIfExists(ctx, backupJobsPath, sourceJobs, "replication jobs alias")
 		}
 	} else {
 		return fmt.Errorf("failed to prepare replication directory for aliases: %w", err)
@@ -1778,11 +1784,11 @@ func (c *Collector) createPVEVersionInfo(ctx context.Context) error {
 	return nil
 }
 
-func (c *Collector) copyIfExists(source, target, description string) error {
+func (c *Collector) copyIfExists(ctx context.Context, source, target, description string) error {
 	if _, err := os.Stat(source); err != nil {
 		return err
 	}
-	return c.safeCopyFile(context.Background(), source, target, description)
+	return c.safeCopyFile(ctx, source, target, description)
 }
 
 func (c *Collector) aggregateBackupHistory(ctx context.Context, jobsDir, target string) error {

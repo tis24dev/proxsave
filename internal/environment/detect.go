@@ -87,14 +87,13 @@ func GetVersion(pType types.ProxmoxType) (string, error) {
 		return "", fmt.Errorf("unable to determine Proxmox Backup Server version")
 	case types.ProxmoxDual:
 		info, err := detectEnvironmentInfo()
-		if err != nil && info.Type == types.ProxmoxUnknown {
+		if err != nil {
 			return "", err
 		}
-		version := combineVersions(info.PVEVersion, info.PBSVersion)
-		if version == "" || version == "unknown" {
+		if info.Type != types.ProxmoxDual || info.Version == "" || info.Version == "unknown" {
 			return "", fmt.Errorf("unable to determine dual Proxmox versions")
 		}
-		return version, nil
+		return info.Version, nil
 	default:
 		return "", fmt.Errorf("unknown proxmox type: %s", pType)
 	}
@@ -147,9 +146,6 @@ func detectEnvironmentInfo() (*EnvironmentInfo, error) {
 // detectProxmox is retained as a compatibility wrapper for legacy call sites and tests.
 func detectProxmox() (types.ProxmoxType, string, error) {
 	info, err := detectEnvironmentInfo()
-	if info == nil {
-		return types.ProxmoxUnknown, "unknown", err
-	}
 	return info.Type, info.Version, err
 }
 
@@ -175,8 +171,6 @@ func normalizedDetectedVersion(version string) string {
 }
 
 func combineVersions(pveVersion, pbsVersion string) string {
-	pveVersion = strings.TrimSpace(pveVersion)
-	pbsVersion = strings.TrimSpace(pbsVersion)
 	switch {
 	case pveVersion != "" && pbsVersion != "":
 		return fmt.Sprintf("pve=%s,pbs=%s", pveVersion, pbsVersion)

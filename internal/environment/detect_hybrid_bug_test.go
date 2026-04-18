@@ -105,8 +105,8 @@ func TestDetectProxmoxHybridCallsBothDetectors(t *testing.T) {
 	pveDetectCalled = false
 	pbsDetectCalled = false
 
-	// Run detection
-	pType, version, err := detectProxmox()
+	// Run detection through the canonical environment-info path.
+	info, err := detectEnvironmentInfo()
 
 	// Verify PVE was detected
 	if !pveDetectCalled {
@@ -117,12 +117,12 @@ func TestDetectProxmoxHybridCallsBothDetectors(t *testing.T) {
 		t.Error("PBS detection should be called on hybrid installations")
 	}
 
-	if pType != types.ProxmoxDual {
-		t.Errorf("Expected pType=ProxmoxDual, got %s", pType)
+	if info.Type != types.ProxmoxDual {
+		t.Errorf("Expected pType=ProxmoxDual, got %s", info.Type)
 	}
 
-	if version != "pve=8.1.3,pbs=3.1.2" {
-		t.Errorf("Expected combined version, got %s", version)
+	if info.Version != "pve=8.1.3,pbs=3.1.2" {
+		t.Errorf("Expected combined version, got %s", info.Version)
 	}
 
 	if err != nil {

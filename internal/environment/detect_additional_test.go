@@ -466,27 +466,31 @@ func TestDetectPBS(t *testing.T) {
 	}
 }
 
-// TestDetectProxmox tests complete proxmox detection
-func TestDetectProxmox(t *testing.T) {
-	pType, version, err := detectProxmox()
+// TestDetectEnvironmentInfo tests complete detection through the real public entrypoint.
+func TestDetectEnvironmentInfo(t *testing.T) {
+	info, err := Detect()
+
+	if info == nil {
+		t.Fatal("Detect() returned nil info")
+	}
 
 	// Should always return a valid type
-	if pType == "" {
-		t.Error("detectProxmox() should return a non-empty type")
+	if info.Type == "" {
+		t.Error("Detect() should return a non-empty type")
 	}
 
 	// On unknown systems, should return error
-	if pType == types.ProxmoxUnknown {
+	if info.Type == types.ProxmoxUnknown {
 		if err == nil {
-			t.Error("detectProxmox() should return error for unknown systems")
+			t.Error("Detect() should return error for unknown systems")
 		}
-		if version != "unknown" {
-			t.Errorf("Version should be 'unknown' for unknown systems, got %q", version)
+		if info.Version != "unknown" {
+			t.Errorf("Version should be 'unknown' for unknown systems, got %q", info.Version)
 		}
 	}
 
 	// On detected systems, version should not be empty
-	if pType != types.ProxmoxUnknown && version == "" {
+	if info.Type != types.ProxmoxUnknown && info.Version == "" {
 		t.Error("Version should not be empty for detected Proxmox systems")
 	}
 }

@@ -140,8 +140,6 @@ func (c *Collector) populatePBSInventoryMountFiles(ctx context.Context, inventor
 		return err
 	}
 	report := &inventory.report
-	report.Files["fstab"] = c.captureInventoryFile(c.systemPath("/etc/fstab"), "/etc/fstab")
-	report.Files["crypttab"] = c.captureInventoryFile(c.systemPath("/etc/crypttab"), "/etc/crypttab")
 	report.Files["proc_mounts"] = c.captureInventoryFile(c.systemPath("/proc/mounts"), "/proc/mounts")
 	return nil
 }

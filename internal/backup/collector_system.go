@@ -976,14 +976,15 @@ func (c *Collector) collectSystemZFSRuntime(ctx context.Context, commandsDir str
 }
 
 func (c *Collector) collectSystemLVMRuntime(ctx context.Context, commandsDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if _, err := c.depLookPath("pvs"); err == nil {
 		c.safeCmdOutput(ctx,
 			"pvs",
 			filepath.Join(commandsDir, "lvm_pvs.txt"),
 			"LVM physical volumes",
 			false)
-	} else {
-		return nil
 	}
 	if _, err := c.depLookPath("vgs"); err == nil {
 		c.safeCmdOutput(ctx,

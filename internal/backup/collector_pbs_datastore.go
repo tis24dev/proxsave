@@ -365,6 +365,9 @@ func (c *Collector) collectPBSDatastoreNamespaces(ctx context.Context, state *pb
 			c.logger.Debug("Failed to collect namespaces for datastore %s: %v", ds.Name, err)
 			continue
 		}
+		if namespaces == nil {
+			continue
+		}
 		state.namespaceResults[ds.pathKey()] = namespaces
 	}
 	return nil

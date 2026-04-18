@@ -677,7 +677,7 @@ func newPVERecipe() recipe {
 						state.pve.storageCollectionAborted = true
 						return nil
 					}
-					ioTimeout := c.pveStorageIOTimout()
+					ioTimeout := c.pveStorageIOTimeout()
 					state.pve.probedStorages = nil
 					state.pve.storageScanResults = nil
 					for _, storage := range state.pve.resolvedStorages {
@@ -704,7 +704,7 @@ func newPVERecipe() recipe {
 					if !c.config.BackupPVEBackupFiles || state.pve.storageCollectionAborted || len(state.pve.probedStorages) == 0 {
 						return nil
 					}
-					ioTimeout := c.pveStorageIOTimout()
+					ioTimeout := c.pveStorageIOTimeout()
 					for _, storage := range state.pve.probedStorages {
 						result := state.pve.storageResult(storage)
 						if result == nil || result.SkipRemaining {
@@ -727,7 +727,7 @@ func newPVERecipe() recipe {
 					if !c.config.BackupPVEBackupFiles || state.pve.storageCollectionAborted || len(state.pve.probedStorages) == 0 {
 						return nil
 					}
-					ioTimeout := c.pveStorageIOTimout()
+					ioTimeout := c.pveStorageIOTimeout()
 					for _, storage := range state.pve.probedStorages {
 						result := state.pve.storageResult(storage)
 						if result == nil || result.SkipRemaining {
@@ -750,7 +750,7 @@ func newPVERecipe() recipe {
 					if !c.config.BackupPVEBackupFiles || state.pve.storageCollectionAborted || len(state.pve.probedStorages) == 0 {
 						return nil
 					}
-					ioTimeout := c.pveStorageIOTimout()
+					ioTimeout := c.pveStorageIOTimeout()
 					for _, storage := range state.pve.probedStorages {
 						result := state.pve.storageResult(storage)
 						if result == nil || result.SkipRemaining {

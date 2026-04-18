@@ -572,8 +572,8 @@ func GetStorageModeCategories(systemType string) []Category {
 	var categories []Category
 	allowedIDs := make(map[string]bool)
 
-	addStorageModeIDs := func(systemType string) {
-		switch systemType {
+	addStorageModeIDs := func(kind string) {
+		switch kind {
 		case "pve":
 			for _, id := range []string{"pve_cluster", "storage_pve", "pve_jobs", "zfs", "filesystem", "storage_stack"} {
 				allowedIDs[id] = true

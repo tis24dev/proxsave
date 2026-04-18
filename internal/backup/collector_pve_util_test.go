@@ -156,7 +156,7 @@ func TestCopyIfExists(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := collector.copyIfExists(tt.srcPath, tt.dstPath, "test")
+			err := collector.copyIfExists(context.Background(), tt.srcPath, tt.dstPath, "test")
 
 			if tt.expectError {
 				if err == nil {

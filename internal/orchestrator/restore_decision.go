@@ -255,6 +255,8 @@ func buildRestoreDecisionInfo(metadata *restoreDecisionMetadata, categories []Ca
 
 	categoryType := detectBackupTypeFromCategories(categories)
 	switch {
+	case info.BackupType != SystemTypeUnknown && categoryType == SystemTypeUnknown:
+		info.Source = RestoreDecisionSourceInternalMetadata
 	case metadata != nil && metadata.BackupType != SystemTypeUnknown && categoryType == SystemTypeUnknown:
 		info.BackupType = metadata.BackupType
 		info.Source = RestoreDecisionSourceInternalMetadata

@@ -449,9 +449,9 @@ func TestDetectProxmox_Branches(t *testing.T) {
 			return "pve-manager/7.4-3/d4a3b4a1", nil
 		})
 
-		pType, version, err := detectProxmox()
-		if err != nil || pType != types.ProxmoxVE || version != "7.4-3" {
-			t.Fatalf("detectProxmox() = (%v, %q, %v), want (%v, %q, %v)", pType, version, err, types.ProxmoxVE, "7.4-3", nil)
+		info, err := Detect()
+		if err != nil || info.Type != types.ProxmoxVE || info.Version != "7.4-3" {
+			t.Fatalf("Detect() = (%v, %q, %v), want (%v, %q, %v)", info.Type, info.Version, err, types.ProxmoxVE, "7.4-3", nil)
 		}
 	})
 
@@ -466,18 +466,18 @@ func TestDetectProxmox_Branches(t *testing.T) {
 			return "version: 2.4.1", nil
 		})
 
-		pType, version, err := detectProxmox()
-		if err != nil || pType != types.ProxmoxBS || version != "2.4.1" {
-			t.Fatalf("detectProxmox() = (%v, %q, %v), want (%v, %q, %v)", pType, version, err, types.ProxmoxBS, "2.4.1", nil)
+		info, err := Detect()
+		if err != nil || info.Type != types.ProxmoxBS || info.Version != "2.4.1" {
+			t.Fatalf("Detect() = (%v, %q, %v), want (%v, %q, %v)", info.Type, info.Version, err, types.ProxmoxBS, "2.4.1", nil)
 		}
 	})
 
 	t.Run("unknown with debug", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 
-		pType, version, err := detectProxmox()
-		if pType != types.ProxmoxUnknown || version != "unknown" || err == nil {
-			t.Fatalf("detectProxmox() = (%v, %q, %v), want (%v, %q, non-nil)", pType, version, err, types.ProxmoxUnknown, "unknown")
+		info, err := Detect()
+		if info.Type != types.ProxmoxUnknown || info.Version != "unknown" || err == nil {
+			t.Fatalf("Detect() = (%v, %q, %v), want (%v, %q, non-nil)", info.Type, info.Version, err, types.ProxmoxUnknown, "unknown")
 		}
 		if !strings.Contains(err.Error(), "debug saved to") {
 			t.Fatalf("expected error to contain %q, got %q", "debug saved to", err.Error())
@@ -488,9 +488,9 @@ func TestDetectProxmox_Branches(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 		setValue(t, &mkdirAllFunc, func(string, os.FileMode) error { return errors.New("no perms") })
 
-		pType, version, err := detectProxmox()
-		if pType != types.ProxmoxUnknown || version != "unknown" || err == nil {
-			t.Fatalf("detectProxmox() = (%v, %q, %v), want (%v, %q, non-nil)", pType, version, err, types.ProxmoxUnknown, "unknown")
+		info, err := Detect()
+		if info.Type != types.ProxmoxUnknown || info.Version != "unknown" || err == nil {
+			t.Fatalf("Detect() = (%v, %q, %v), want (%v, %q, non-nil)", info.Type, info.Version, err, types.ProxmoxUnknown, "unknown")
 		}
 		if strings.Contains(err.Error(), "debug saved to") {
 			t.Fatalf("expected error to NOT contain %q, got %q", "debug saved to", err.Error())
