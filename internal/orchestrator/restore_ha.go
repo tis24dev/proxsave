@@ -99,7 +99,7 @@ func maybeApplyPVEHAWithUI(
 	stageRoot string,
 	dryRun bool,
 ) (err error) {
-	if plan == nil || plan.SystemType != SystemTypePVE || !plan.HasCategoryID("pve_ha") {
+	if plan == nil || !plan.SystemType.SupportsPVE() || !plan.HasCategoryID("pve_ha") {
 		return nil
 	}
 

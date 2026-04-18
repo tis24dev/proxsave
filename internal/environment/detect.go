@@ -66,8 +66,8 @@ var (
 
 // DetectProxmoxType detects whether the system is running Proxmox VE or Proxmox Backup Server
 func DetectProxmoxType() types.ProxmoxType {
-	pType, _, _ := detectProxmox()
-	return pType
+	info, _ := detectEnvironmentInfo()
+	return info.Type
 }
 
 // GetVersion returns the version string of the detected Proxmox system
@@ -85,6 +85,15 @@ func GetVersion(pType types.ProxmoxType) (string, error) {
 			return version, nil
 		}
 		return "", fmt.Errorf("unable to determine Proxmox Backup Server version")
+	case types.ProxmoxDual:
+		info, err := detectEnvironmentInfo()
+		if err != nil {
+			return "", err
+		}
+		if info.Type != types.ProxmoxDual || info.Version == "" || info.Version == "unknown" {
+			return "", fmt.Errorf("unable to determine dual Proxmox versions")
+		}
+		return info.Version, nil
 	default:
 		return "", fmt.Errorf("unknown proxmox type: %s", pType)
 	}
@@ -92,42 +101,86 @@ func GetVersion(pType types.ProxmoxType) (string, error) {
 
 // EnvironmentInfo holds information about the current Proxmox environment
 type EnvironmentInfo struct {
-	Type    types.ProxmoxType
-	Version string
+	Type       types.ProxmoxType
+	Version    string
+	PVEVersion string
+	PBSVersion string
 }
 
 // Detect detects the Proxmox environment and returns detailed information
 func Detect() (*EnvironmentInfo, error) {
-	pType, version, err := detectProxmox()
-	if pType == types.ProxmoxUnknown {
-		return &EnvironmentInfo{
-			Type:    pType,
-			Version: "unknown",
-		}, fmt.Errorf("unable to detect Proxmox environment")
+	info, err := detectEnvironmentInfo()
+	if info.Type == types.ProxmoxUnknown {
+		if err != nil {
+			return info, err
+		}
+		return info, fmt.Errorf("unable to detect Proxmox environment")
 	}
-
-	return &EnvironmentInfo{
-		Type:    pType,
-		Version: version,
-	}, err
+	return info, err
 }
 
-func detectProxmox() (types.ProxmoxType, string, error) {
+func detectEnvironmentInfo() (*EnvironmentInfo, error) {
 	extendPath()
 
-	if version, ok := detectPVE(); ok {
-		return types.ProxmoxVE, version, nil
-	}
+	pveVersion, hasPVE := detectPVE()
+	pbsVersion, hasPBS := detectPBS()
 
-	if version, ok := detectPBS(); ok {
-		return types.ProxmoxBS, version, nil
+	info := &EnvironmentInfo{
+		Type:       resolveType(hasPVE, hasPBS),
+		PVEVersion: normalizedDetectedVersion(pveVersion),
+		PBSVersion: normalizedDetectedVersion(pbsVersion),
+	}
+	info.Version = combineVersions(info.PVEVersion, info.PBSVersion)
+
+	if info.Type != types.ProxmoxUnknown {
+		return info, nil
 	}
 
 	debugPath := writeDetectionDebug()
 	if debugPath != "" {
-		return types.ProxmoxUnknown, "unknown", fmt.Errorf("unable to detect Proxmox environment (debug saved to %s)", debugPath)
+		return info, fmt.Errorf("unable to detect Proxmox environment (debug saved to %s)", debugPath)
 	}
-	return types.ProxmoxUnknown, "unknown", fmt.Errorf("unable to detect Proxmox environment")
+	return info, fmt.Errorf("unable to detect Proxmox environment")
+}
+
+// detectProxmox is retained as a compatibility wrapper for legacy call sites and tests.
+func detectProxmox() (types.ProxmoxType, string, error) {
+	info, err := detectEnvironmentInfo()
+	return info.Type, info.Version, err
+}
+
+func resolveType(hasPVE, hasPBS bool) types.ProxmoxType {
+	switch {
+	case hasPVE && hasPBS:
+		return types.ProxmoxDual
+	case hasPVE:
+		return types.ProxmoxVE
+	case hasPBS:
+		return types.ProxmoxBS
+	default:
+		return types.ProxmoxUnknown
+	}
+}
+
+func normalizedDetectedVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" || strings.EqualFold(version, "unknown") {
+		return ""
+	}
+	return version
+}
+
+func combineVersions(pveVersion, pbsVersion string) string {
+	switch {
+	case pveVersion != "" && pbsVersion != "":
+		return fmt.Sprintf("pve=%s,pbs=%s", pveVersion, pbsVersion)
+	case pveVersion != "":
+		return pveVersion
+	case pbsVersion != "":
+		return pbsVersion
+	default:
+		return "unknown"
+	}
 }
 
 func detectPVE() (string, bool) {

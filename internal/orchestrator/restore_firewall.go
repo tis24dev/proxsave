@@ -101,7 +101,7 @@ func maybeApplyPVEFirewallWithUI(
 	stageRoot string,
 	dryRun bool,
 ) (err error) {
-	if plan == nil || plan.SystemType != SystemTypePVE || !plan.HasCategoryID("pve_firewall") {
+	if plan == nil || !plan.SystemType.SupportsPVE() || !plan.HasCategoryID("pve_firewall") {
 		return nil
 	}
 

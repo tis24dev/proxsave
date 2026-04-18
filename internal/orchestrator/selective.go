@@ -131,6 +131,8 @@ func ShowRestoreModeMenuWithReader(ctx context.Context, reader *bufio.Reader, lo
 		fmt.Println("  [2] STORAGE only - PVE cluster + storage + jobs + mounts")
 	case SystemTypePBS:
 		fmt.Println("  [2] DATASTORE only - PBS datastore definitions + sync/verify/prune jobs + mounts")
+	case SystemTypeDual:
+		fmt.Println("  [2] STORAGE/DATASTORE only - PVE storage + PBS datastore/jobs + common mounts")
 	default:
 		fmt.Println("  [2] STORAGE/DATASTORE only - Storage or datastore configuration")
 	}
@@ -181,8 +183,8 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 	relevantCategories := make([]Category, 0)
 	for _, cat := range availableCategories {
 		if cat.Type == CategoryTypeCommon ||
-			(systemType == SystemTypePVE && cat.Type == CategoryTypePVE) ||
-			(systemType == SystemTypePBS && cat.Type == CategoryTypePBS) {
+			(systemType.SupportsPVE() && cat.Type == CategoryTypePVE) ||
+			(systemType.SupportsPBS() && cat.Type == CategoryTypePBS) {
 			relevantCategories = append(relevantCategories, cat)
 		}
 	}
@@ -357,10 +359,12 @@ func ShowRestorePlan(logger *logging.Logger, config *SelectiveRestoreConfig) {
 	case RestoreModeFull:
 		modeName = "FULL restore (all categories)"
 	case RestoreModeStorage:
-		if config.SystemType == SystemTypePVE {
+		if config.SystemType.SupportsPVE() && !config.SystemType.SupportsPBS() {
 			modeName = "STORAGE only (cluster + storage + jobs + mounts)"
-		} else {
+		} else if config.SystemType.SupportsPBS() && !config.SystemType.SupportsPVE() {
 			modeName = "DATASTORE only (datastores + jobs + mounts)"
+		} else {
+			modeName = "STORAGE/DATASTORE only (PVE + PBS storage/jobs + mounts)"
 		}
 	case RestoreModeBase:
 		modeName = "SYSTEM BASE only (network + SSL + SSH + services + filesystem)"

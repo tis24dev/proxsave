@@ -163,13 +163,17 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	case EmailDeliveryRelay:
 		if e.config.FallbackSendmail {
 			e.logger.Info("Email delivery method: relay (fallback: pmf enabled)")
+			e.logger.Debug("Email delivery plan: primary=relay fallback=pmf relay_requires_recipient=true pmf_recipient_optional=true")
 		} else {
 			e.logger.Info("Email delivery method: relay (fallback: disabled)")
+			e.logger.Debug("Email delivery plan: primary=relay fallback=disabled relay_requires_recipient=true")
 		}
 	case EmailDeliverySendmail:
 		e.logger.Info("Email delivery method: sendmail (/usr/sbin/sendmail)")
+		e.logger.Debug("Email delivery plan: primary=sendmail fallback=disabled relay_requires_recipient=true")
 	case EmailDeliveryPMF:
 		e.logger.Info("Email delivery method: pmf (proxmox-mail-forward)")
+		e.logger.Debug("Email delivery plan: primary=pmf fallback=disabled recipient_optional=true")
 	default:
 		e.logger.Info("Email delivery method: %s", e.config.DeliveryMethod)
 	}
@@ -177,14 +181,26 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	// Resolve recipient
 	recipient := strings.TrimSpace(e.config.Recipient)
 	autoDetected := false
+	recipientSource := "configured"
+	relayPMFFallbackEnabled := e.config.DeliveryMethod == EmailDeliveryRelay && e.config.FallbackSendmail
+	var preflightFallbackReason string
+	var preflightFallbackCause error
 	if recipient == "" {
+		recipientSource = "auto-detect"
 		e.logger.Debug("Email recipient not configured, attempting auto-detection...")
 		detectedRecipient, err := e.detectRecipient(ctx)
 		if err != nil {
 			e.logger.Warning("WARNING: Failed to detect email recipient: %v", err)
-			if e.config.DeliveryMethod == EmailDeliveryPMF {
+			switch {
+			case e.config.DeliveryMethod == EmailDeliveryPMF:
 				e.logger.Info("  Proceeding anyway because EMAIL_DELIVERY_METHOD=pmf routes via Proxmox Notifications; recipient is only used for the To: header")
-			} else {
+			case relayPMFFallbackEnabled:
+				preflightFallbackReason = "recipient_autodetect_failed"
+				preflightFallbackCause = fmt.Errorf("no valid email recipient: %w", err)
+				e.logger.Warning("WARNING: Relay delivery requires a valid recipient; auto-detection failed")
+				e.logger.Info("  Bypassing relay and invoking PMF fallback before relay attempt")
+				e.logger.Debug("Email fallback decision: stage=preflight reason=%s cause=%v", preflightFallbackReason, preflightFallbackCause)
+			default:
 				e.logger.Warning("WARNING: Email notification skipped because no valid recipient is available")
 				e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
 				result.Success = false
@@ -196,34 +212,66 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			recipient = detectedRecipient
 			e.logger.Debug("Auto-detected email recipient: %s", redactEmail(recipient))
 			autoDetected = true
+			recipientSource = "auto-detected"
 		}
 	}
 
 	recipient = strings.TrimSpace(recipient)
 	if recipient == "" {
-		if e.config.DeliveryMethod == EmailDeliveryRelay || e.config.DeliveryMethod == EmailDeliverySendmail {
+		switch {
+		case relayPMFFallbackEnabled:
+			if preflightFallbackReason == "" {
+				preflightFallbackReason = "recipient_missing"
+			}
+			if preflightFallbackCause == nil {
+				preflightFallbackCause = fmt.Errorf("no valid email recipient configured")
+			}
+			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
+			e.logger.Info("  Bypassing relay and invoking PMF fallback before relay attempt because proxmox-mail-forward routes via Proxmox Notifications and does not require a resolved recipient")
+			e.logger.Debug("Email fallback decision: stage=preflight reason=%s cause=%v", preflightFallbackReason, preflightFallbackCause)
+		case e.config.DeliveryMethod == EmailDeliveryRelay || e.config.DeliveryMethod == EmailDeliverySendmail:
 			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
 			e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
 			result.Success = false
 			result.Duration = time.Since(startTime)
 			result.Error = fmt.Errorf("no valid email recipient configured")
 			return result, nil
+		default:
+			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
+			e.logger.Info("  EMAIL_DELIVERY_METHOD=pmf routes via Proxmox Notifications; recipient is only used for the To: header")
 		}
-		e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
-		e.logger.Info("  EMAIL_DELIVERY_METHOD=pmf routes via Proxmox Notifications; recipient is only used for the To: header")
 	}
 
 	if e.config.DeliveryMethod == EmailDeliveryRelay && isRootRecipient(recipient) {
-		if autoDetected {
-			e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and will be rejected", recipient)
+		redactedRecipient := redactEmail(recipient)
+		if relayPMFFallbackEnabled {
+			if autoDetected {
+				e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and is blocked for relay delivery", redactedRecipient)
+			} else {
+				e.logger.Warning("WARNING: Configured email recipient %s belongs to root and is blocked for relay delivery", redactedRecipient)
+			}
+			preflightFallbackReason = "recipient_blocked_root"
+			preflightFallbackCause = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", redactedRecipient)
+			e.logger.Info("  Bypassing relay and invoking PMF fallback before relay attempt")
+			e.logger.Debug("Email fallback decision: stage=preflight reason=%s cause=%v", preflightFallbackReason, preflightFallbackCause)
 		} else {
-			e.logger.Warning("WARNING: Configured email recipient %s belongs to root and will be rejected", recipient)
+			if autoDetected {
+				e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and will be rejected", redactedRecipient)
+			} else {
+				e.logger.Warning("WARNING: Configured email recipient %s belongs to root and will be rejected", redactedRecipient)
+			}
+			e.logger.Info("  Configure EMAIL_RECIPIENT with a non-root mailbox to enable notifications")
+			result.Success = false
+			result.Duration = time.Since(startTime)
+			result.Error = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", redactedRecipient)
+			return result, nil
 		}
-		e.logger.Info("  Configure EMAIL_RECIPIENT with a non-root mailbox to enable notifications")
-		result.Success = false
-		result.Duration = time.Since(startTime)
-		result.Error = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", recipient)
-		return result, nil
+	}
+
+	if recipient == "" {
+		e.logger.Debug("Email recipient resolution outcome: source=%s recipient=<empty>", recipientSource)
+	} else {
+		e.logger.Debug("Email recipient resolution outcome: source=%s recipient=%s", recipientSource, redactEmail(recipient))
 	}
 
 	// Validate recipient email format
@@ -243,7 +291,9 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	var err error
 	var relayErr error // Store original relay error if fallback is used
 
-	if e.config.DeliveryMethod == EmailDeliveryRelay {
+	if preflightFallbackReason != "" {
+		err = e.sendViaPMFFallback(ctx, result, recipient, subject, htmlBody, textBody, data, "preflight", preflightFallbackReason, preflightFallbackCause)
+	} else if e.config.DeliveryMethod == EmailDeliveryRelay {
 		result.Method = "email-relay"
 		err = e.sendViaRelay(ctx, recipient, subject, htmlBody, textBody, data)
 
@@ -251,24 +301,10 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		if err != nil && e.config.FallbackSendmail {
 			relayErr = err // Store original relay error
 			e.logger.Warning("WARNING: Cloud relay failed: %v", err)
+			e.logger.Info("Attempting PMF fallback after relay delivery failure...")
+			e.logger.Debug("Email fallback decision: stage=delivery reason=relay_send_failed cause=%v", relayErr)
 
-			e.logger.Info("Attempting fallback to pmf...")
-
-			result.Method = "email-pmf-fallback"
-			result.UsedFallback = true
-			backend, backendPath, sendErr := e.sendViaPMF(ctx, recipient, subject, htmlBody, textBody, data)
-			if backend != "" {
-				result.Metadata["email_backend"] = backend
-			}
-			if backendPath != "" {
-				result.Metadata["email_backend_path"] = backendPath
-			}
-			err = sendErr
-
-			// If fallback succeeds, preserve the original relay error for logging
-			if err == nil {
-				result.Error = relayErr
-			}
+			err = e.sendViaPMFFallback(ctx, result, recipient, subject, htmlBody, textBody, data, "delivery", "relay_send_failed", relayErr)
 		}
 	} else if e.config.DeliveryMethod == EmailDeliveryPMF {
 		result.Method = "email-pmf"
@@ -334,6 +370,45 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	return result, nil
 }
 
+func (e *EmailNotifier) sendViaPMFFallback(
+	ctx context.Context,
+	result *NotificationResult,
+	recipient, subject, htmlBody, textBody string,
+	data *NotificationData,
+	stage, reason string,
+	cause error,
+) error {
+	result.Method = "email-pmf-fallback"
+	result.UsedFallback = true
+	if stage != "" {
+		result.Metadata["fallback_stage"] = stage
+	}
+	if reason != "" {
+		result.Metadata["fallback_reason"] = reason
+	}
+
+	switch stage {
+	case "preflight":
+		e.logger.Info("PMF fallback activated during preflight (%s)", reason)
+	case "delivery":
+		e.logger.Info("PMF fallback activated after relay delivery failure")
+	default:
+		e.logger.Info("PMF fallback activated")
+	}
+
+	backend, backendPath, err := e.sendViaPMF(ctx, recipient, subject, htmlBody, textBody, data)
+	if backend != "" {
+		result.Metadata["email_backend"] = backend
+	}
+	if backendPath != "" {
+		result.Metadata["email_backend_path"] = backendPath
+	}
+	if err == nil && cause != nil {
+		result.Error = cause
+	}
+	return err
+}
+
 func describeEmailMethod(method string) string {
 	switch method {
 	case "email-relay":
@@ -392,7 +467,13 @@ func (e *EmailNotifier) detectRecipient(ctx context.Context) (string, error) {
 	e.logger.Debug("Recipient auto-detection: looking up email for %s (proxmox=%s)", targetUserID, e.proxmoxType)
 
 	switch e.proxmoxType {
-	case types.ProxmoxVE:
+	case types.ProxmoxVE, types.ProxmoxDual:
+		// Dual hosts intentionally reuse the PVE recipient discovery path here.
+		// This rule applies only to root@pam email auto-detection and does not
+		// redefine the global meaning of dual elsewhere in the system.
+		if e.proxmoxType == types.ProxmoxDual {
+			e.logger.Debug("Recipient auto-detection: dual host uses PVE resolver for root@pam email")
+		}
 		return e.detectRecipientPVE(ctx, targetUserID)
 
 	case types.ProxmoxBS:

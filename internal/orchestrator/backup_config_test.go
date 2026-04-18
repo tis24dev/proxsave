@@ -8,6 +8,7 @@ import (
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -53,8 +54,7 @@ func TestInitializeBackupStats(t *testing.T) {
 
 	stats := InitializeBackupStats(
 		"node1",
-		types.ProxmoxVE,
-		"7.0",
+		&environment.EnvironmentInfo{Type: types.ProxmoxVE, Version: "7.0", PVEVersion: "7.0"},
 		"1.2.3",
 		start,
 		cfg,
@@ -91,8 +91,7 @@ func TestInitializeBackupStats_NoConfig(t *testing.T) {
 	start := time.Now()
 	stats := InitializeBackupStats(
 		"host",
-		types.ProxmoxUnknown,
-		"",
+		&environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"},
 		"v1",
 		start,
 		nil,

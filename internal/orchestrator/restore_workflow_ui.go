@@ -151,7 +151,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	plan := PlanRestore(decisionInfo.ClusterPayload, selectedCategories, systemType, mode)
 
-	if plan.SystemType == SystemTypePBS &&
+	if plan.SystemType.SupportsPBS() &&
 		(plan.HasCategoryID("pbs_host") ||
 			plan.HasCategoryID("datastore_pbs") ||
 			plan.HasCategoryID("pbs_remotes") ||
@@ -285,7 +285,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 			logger.Info("This backup is used for the %ds HA rollback timer and only includes HA paths.", int(defaultHARollbackTimeout.Seconds()))
 		}
 	}
-	if plan.SystemType == SystemTypePVE && plan.ClusterBackup && !plan.NeedsClusterRestore && plan.HasCategoryID("pve_access_control") {
+	if plan.SystemType.SupportsPVE() && plan.ClusterBackup && !plan.NeedsClusterRestore && plan.HasCategoryID("pve_access_control") {
 		logger.Info("")
 		logging.DebugStep(logger, "restore", "Create access-control-only rollback backup for optional cluster-safe access control apply")
 		accessControlRollbackBackup, err = CreatePVEAccessControlRollbackBackup(logger, systemWriteCategories, destRoot)
@@ -612,7 +612,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 	}
 
-	if plan.SystemType == SystemTypePBS && plan.HasCategoryID("pbs_notifications") && !pbsServicesStopped {
+	if plan.SystemType.SupportsPBS() && plan.HasCategoryID("pbs_notifications") && !pbsServicesStopped {
 		if err := maybeVerifyAndRepairPBSNotificationsAfterRestore(ctx, logger, plan, stageRoot, cfg.DryRun); err != nil {
 			restoreHadWarnings = true
 			logger.Warning("PBS notifications verification/repair: %v", err)
@@ -814,6 +814,17 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	logger.Info("")
 	logger.Info("IMPORTANT: You may need to restart services for changes to take effect.")
 	switch systemType {
+	case SystemTypeDual:
+		if needsClusterRestore && clusterServicesStopped {
+			logger.Info("  PVE services were stopped/restarted during restore; verify status with: pvecm status")
+		} else {
+			logger.Info("  PVE services: systemctl restart pve-cluster pvedaemon pveproxy")
+		}
+		if pbsServicesStopped {
+			logger.Info("  PBS services were stopped/restarted during restore; verify status with: systemctl status proxmox-backup proxmox-backup-proxy")
+		} else {
+			logger.Info("  PBS services: systemctl restart proxmox-backup-proxy proxmox-backup")
+		}
 	case SystemTypePVE:
 		if needsClusterRestore && clusterServicesStopped {
 			logger.Info("  PVE services were stopped/restarted during restore; verify status with: pvecm status")
@@ -826,15 +837,15 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		} else {
 			logger.Info("  PBS services: systemctl restart proxmox-backup-proxy proxmox-backup")
 		}
+	}
 
-		if hasCategoryID(plan.NormalCategories, "zfs") {
-			logger.Info("")
-			if err := checkZFSPoolsAfterRestore(logger); err != nil {
-				logger.Warning("ZFS pool check: %v", err)
-			}
-		} else {
-			logger.Debug("Skipping ZFS pool verification (ZFS category not selected)")
+	if hasCategoryID(plan.NormalCategories, "zfs") {
+		logger.Info("")
+		if err := checkZFSPoolsAfterRestore(logger); err != nil {
+			logger.Warning("ZFS pool check: %v", err)
 		}
+	} else {
+		logger.Debug("Skipping ZFS pool verification (ZFS category not selected)")
 	}
 
 	logger.Info("")

@@ -67,6 +67,10 @@ func selectRestoreModeTUI(ctx context.Context, systemType SystemType, configPath
 		storageText = "STORAGE only - PVE cluster + storage + jobs + mounts"
 	case SystemTypePBS:
 		storageText = "DATASTORE only - PBS datastore definitions + sync/verify/prune jobs + mounts"
+	case SystemTypeDual:
+		storageText = "STORAGE/DATASTORE only - PVE storage + PBS datastore/jobs + mounts"
+	case SystemTypeUnknown:
+		storageText = "STORAGE/DATASTORE not available for this system"
 	default:
 		storageText = "STORAGE/DATASTORE only - Storage or datastore configuration"
 	}
@@ -231,8 +235,8 @@ func filterAndSortCategoriesForSystem(available []Category, systemType SystemTyp
 	relevant := make([]Category, 0, len(available))
 	for _, cat := range available {
 		if cat.Type == CategoryTypeCommon ||
-			(systemType == SystemTypePVE && cat.Type == CategoryTypePVE) ||
-			(systemType == SystemTypePBS && cat.Type == CategoryTypePBS) {
+			(systemType.SupportsPVE() && cat.Type == CategoryTypePVE) ||
+			(systemType.SupportsPBS() && cat.Type == CategoryTypePBS) {
 			relevant = append(relevant, cat)
 		}
 	}
@@ -582,10 +586,12 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 	case RestoreModeFull:
 		modeName = "FULL restore (all categories)"
 	case RestoreModeStorage:
-		if config.SystemType == SystemTypePVE {
+		if config.SystemType.SupportsPVE() && !config.SystemType.SupportsPBS() {
 			modeName = "STORAGE only (cluster + storage + jobs + mounts)"
-		} else {
+		} else if config.SystemType.SupportsPBS() && !config.SystemType.SupportsPVE() {
 			modeName = "DATASTORE only (datastores + jobs + mounts)"
+		} else {
+			modeName = "STORAGE/DATASTORE only (PVE + PBS storage/jobs + mounts)"
 		}
 	case RestoreModeBase:
 		modeName = "SYSTEM BASE only (network + SSL + SSH + services + filesystem)"

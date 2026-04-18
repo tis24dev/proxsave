@@ -748,10 +748,6 @@ func computeSystemKey(machineID, hostnamePart, extra string) string {
 	return fmt.Sprintf("%x", sum)[:16]
 }
 
-func maybeUpgradeIdentityFile(path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) error {
-	return maybeUpgradeIdentityFileWithContext(context.Background(), path, serverID, primaryMAC, macs, logger)
-}
-
 func maybeUpgradeIdentityFileWithContext(ctx context.Context, path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -807,10 +803,6 @@ func identityPayloadHasKeyLabels(fileContent string, logger *logging.Logger) boo
 		logDebug(logger, "Identity: identityPayloadHasKeyLabels scanner error: %v", err)
 	}
 	return false
-}
-
-func writeIdentityFile(path, content string, logger *logging.Logger) error {
-	return writeIdentityFileWithContext(context.Background(), path, content, logger)
 }
 
 func writeIdentityFileWithContext(ctx context.Context, path, content string, logger *logging.Logger) (err error) {
@@ -935,10 +927,6 @@ func logDebug(logger *logging.Logger, format string, args ...interface{}) {
 	if logger != nil {
 		logger.Debug(format, args...)
 	}
-}
-
-func setImmutableAttribute(path string, enable bool, logger *logging.Logger) error {
-	return setImmutableAttributeWithContext(context.Background(), path, enable, logger)
 }
 
 func setImmutableAttributeWithContext(ctx context.Context, path string, enable bool, logger *logging.Logger) error {

@@ -1,6 +1,9 @@
 package backup
 
-import "path/filepath"
+import (
+	"fmt"
+	"path/filepath"
+)
 
 func (c *Collector) proxsaveInfoRoot() string {
 	return filepath.Join(c.tempDir, "var/lib/proxsave-info")
@@ -19,4 +22,12 @@ func (c *Collector) proxsaveCommandsDir(component string) string {
 
 func (c *Collector) proxsaveRuntimeDir(component string) string {
 	return c.proxsaveInfoDir("runtime", component)
+}
+
+func (c *Collector) ensureCommandsDir(component string) (string, error) {
+	dir := c.proxsaveCommandsDir(component)
+	if err := c.ensureDir(dir); err != nil {
+		return "", fmt.Errorf("failed to create commands directory: %w", err)
+	}
+	return dir, nil
 }

@@ -106,7 +106,7 @@ func TestCollectCustomPathsHonorsContext(t *testing.T) {
 	}
 }
 
-func TestCollectCriticalFilesIncludesCrypttab(t *testing.T) {
+func TestCollectCriticalFilesExcludesFilesystemAndStorageStackFiles(t *testing.T) {
 	collector := newTestCollector(t)
 	root := t.TempDir()
 	collector.config.SystemRootPrefix = root
@@ -114,21 +114,111 @@ func TestCollectCriticalFilesIncludesCrypttab(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
 		t.Fatalf("mkdir etc: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "fstab"), []byte("/dev/sda1 / ext4 defaults 0 1\n"), 0o644); err != nil {
+		t.Fatalf("write fstab: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(root, "etc", "crypttab"), []byte("crypt1 UUID=deadbeef none luks\n"), 0o600); err != nil {
 		t.Fatalf("write crypttab: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "passwd"), []byte("root:x:0:0:root:/root:/bin/bash\n"), 0o644); err != nil {
+		t.Fatalf("write passwd: %v", err)
 	}
 
 	if err := collector.collectCriticalFiles(context.Background()); err != nil {
 		t.Fatalf("collectCriticalFiles error: %v", err)
 	}
 
-	dest := filepath.Join(collector.tempDir, "etc", "crypttab")
-	data, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatalf("expected crypttab copied, got %v", err)
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "crypttab")); !os.IsNotExist(err) {
+		t.Fatalf("expected crypttab to be excluded from collectCriticalFiles, got err=%v", err)
 	}
-	if string(data) != "crypt1 UUID=deadbeef none luks\n" {
-		t.Fatalf("crypttab content mismatch: %q", string(data))
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "fstab")); !os.IsNotExist(err) {
+		t.Fatalf("expected fstab to be excluded from collectCriticalFiles, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(collector.tempDir, "etc", "passwd")); err != nil {
+		t.Fatalf("expected passwd copied, got %v", err)
+	}
+}
+
+func TestCollectSystemDirectoriesCopiesCommonStorageStack(t *testing.T) {
+	collector := newTestCollector(t)
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+
+	for _, dir := range []string{
+		filepath.Join(root, "etc"),
+		filepath.Join(root, "etc", "keys"),
+		filepath.Join(root, "etc", "iscsi", "nodes", "iqn.2026-01.test:target1", "127.0.0.1,3260,1"),
+		filepath.Join(root, "etc", "multipath"),
+		filepath.Join(root, "etc", "mdadm"),
+		filepath.Join(root, "etc", "lvm", "backup"),
+		filepath.Join(root, "etc", "lvm", "archive"),
+		filepath.Join(root, "etc", "systemd", "system"),
+		filepath.Join(root, "etc", "auto.master.d"),
+		filepath.Join(root, "root", ".ssh"),
+		filepath.Join(root, "var", "lib", "iscsi"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	writeFile := func(rel, content string, mode os.FileMode) {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	writeFile("etc/fstab", "//server/share /mnt/cifs cifs credentials=/etc/cifs-creds 0 0\nsshfs#example:/ /mnt/ssh fuse.sshfs defaults,_netdev,IdentityFile=/root/.ssh/id_rsa 0 0\n", 0o644)
+	writeFile("etc/crypttab", "crypt1 UUID=deadbeef /etc/keys/crypt1.key luks\n", 0o600)
+	writeFile("etc/keys/crypt1.key", "keydata\n", 0o600)
+	writeFile("etc/cifs-creds", "username=alice\npassword=secret\n", 0o600)
+	writeFile("root/.ssh/id_rsa", "PRIVATEKEY\n", 0o600)
+	writeFile("etc/iscsi/nodes/iqn.2026-01.test:target1/127.0.0.1,3260,1/default", "node.session.auth.password = secret\n", 0o600)
+	writeFile("var/lib/iscsi/example.txt", "state\n", 0o600)
+	writeFile("etc/multipath.conf", "defaults {}\n", 0o644)
+	writeFile("etc/multipath/bindings", "mpatha 3600...\n", 0o600)
+	writeFile("etc/mdadm/mdadm.conf", "ARRAY /dev/md0 UUID=deadbeef\n", 0o644)
+	writeFile("etc/lvm/backup/vg0", "backup\n", 0o600)
+	writeFile("etc/lvm/archive/vg0_00001.vg", "archive\n", 0o600)
+	writeFile("etc/systemd/system/mnt-storage.mount", "[Mount]\nWhat=server:/export\nWhere=/mnt/storage\nType=nfs\n", 0o644)
+	writeFile("etc/auto.master", "/- /etc/auto.pbs\n", 0o644)
+	writeFile("etc/autofs.conf", "TIMEOUT=60\n", 0o644)
+	writeFile("etc/auto.pbs", "/mnt/autofs -fstype=nfs4 server:/export\n", 0o644)
+
+	runSelectedBricksForTest(t, context.Background(), collector, newSystemRecipe(), nil,
+		brickCommonFilesystemFstab,
+		brickCommonStorageStackCrypttab,
+		brickCommonStorageStackISCSISnapshot,
+		brickCommonStorageStackMultipathSnapshot,
+		brickCommonStorageStackMDADMSnapshot,
+		brickCommonStorageStackLVMSnapshot,
+		brickCommonStorageStackMountUnitsSnapshot,
+		brickCommonStorageStackAutofsSnapshot,
+		brickCommonStorageStackReferencedFiles,
+	)
+
+	for _, rel := range []string{
+		"etc/fstab",
+		"etc/crypttab",
+		"etc/keys/crypt1.key",
+		"etc/cifs-creds",
+		"root/.ssh/id_rsa",
+		"etc/iscsi/nodes/iqn.2026-01.test:target1/127.0.0.1,3260,1/default",
+		"var/lib/iscsi/example.txt",
+		"etc/multipath.conf",
+		"etc/multipath/bindings",
+		"etc/mdadm/mdadm.conf",
+		"etc/lvm/backup/vg0",
+		"etc/lvm/archive/vg0_00001.vg",
+		"etc/systemd/system/mnt-storage.mount",
+		"etc/auto.master",
+		"etc/autofs.conf",
+		"etc/auto.pbs",
+	} {
+		if _, err := os.Stat(filepath.Join(collector.tempDir, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("expected copied file %s: %v", rel, err)
+		}
 	}
 }
 
@@ -359,9 +449,10 @@ func TestCollectSystemDirectoriesCopiesAltNetConfigsAndLeases(t *testing.T) {
 		}
 	}
 
-	if err := collector.collectSystemDirectories(context.Background()); err != nil {
-		t.Fatalf("collectSystemDirectories failed: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newSystemRecipe(), nil,
+		brickSystemNetworkStatic,
+		brickSystemRuntimeLeases,
+	)
 
 	paths := []string{
 		filepath.Join(collector.tempDir, "etc", "netplan", "01-netcfg.yaml"),

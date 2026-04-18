@@ -485,6 +485,8 @@ func GetCategoriesForSystem(systemType string) []Category {
 				categories = append(categories, cat)
 			}
 		}
+	case "dual":
+		categories = all
 	}
 
 	return categories
@@ -568,21 +570,34 @@ func GetCategoryByID(id string, categories []Category) *Category {
 func GetStorageModeCategories(systemType string) []Category {
 	all := GetAllCategories()
 	var categories []Category
+	allowedIDs := make(map[string]bool)
+
+	addStorageModeIDs := func(kind string) {
+		switch kind {
+		case "pve":
+			for _, id := range []string{"pve_cluster", "storage_pve", "pve_jobs", "zfs", "filesystem", "storage_stack"} {
+				allowedIDs[id] = true
+			}
+		case "pbs":
+			for _, id := range []string{"pbs_config", "datastore_pbs", "maintenance_pbs", "pbs_jobs", "pbs_remotes", "zfs", "filesystem", "storage_stack"} {
+				allowedIDs[id] = true
+			}
+		}
+	}
 
 	switch systemType {
 	case "pve":
-		// PVE: cluster + storage + jobs + zfs + filesystem + storage stack
-		for _, cat := range all {
-			if cat.ID == "pve_cluster" || cat.ID == "storage_pve" || cat.ID == "pve_jobs" || cat.ID == "zfs" || cat.ID == "filesystem" || cat.ID == "storage_stack" {
-				categories = append(categories, cat)
-			}
-		}
+		addStorageModeIDs("pve")
 	case "pbs":
-		// PBS: config export + datastore + maintenance + jobs + remotes + zfs + filesystem + storage stack
-		for _, cat := range all {
-			if cat.ID == "pbs_config" || cat.ID == "datastore_pbs" || cat.ID == "maintenance_pbs" || cat.ID == "pbs_jobs" || cat.ID == "pbs_remotes" || cat.ID == "zfs" || cat.ID == "filesystem" || cat.ID == "storage_stack" {
-				categories = append(categories, cat)
-			}
+		addStorageModeIDs("pbs")
+	case "dual":
+		addStorageModeIDs("pve")
+		addStorageModeIDs("pbs")
+	}
+
+	for _, cat := range all {
+		if allowedIDs[cat.ID] {
+			categories = append(categories, cat)
 		}
 	}
 

@@ -145,11 +145,16 @@ func maybeApplyAccessControlWithUI(
 	}
 
 	// Cluster backups: PVE access control is cluster-wide. In SAFE (no config.db restore) this must be opt-in.
-	if plan.SystemType == SystemTypePVE &&
+	if plan.SystemType.SupportsPVE() &&
 		plan.HasCategoryID("pve_access_control") &&
 		plan.ClusterBackup &&
 		!plan.NeedsClusterRestore {
-		return maybeApplyPVEAccessControlFromClusterBackupWithUI(ctx, ui, logger, plan, safetyBackup, accessControlRollbackBackup, stageRoot, dryRun)
+		if err := maybeApplyPVEAccessControlFromClusterBackupWithUI(ctx, ui, logger, plan, safetyBackup, accessControlRollbackBackup, stageRoot, dryRun); err != nil {
+			return err
+		}
+		if !plan.SystemType.SupportsPBS() || !plan.HasCategoryID("pbs_access_control") {
+			return nil
+		}
 	}
 
 	// Default behavior for all other cases (PBS, standalone PVE, cluster RECOVERY).
@@ -165,7 +170,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 	stageRoot string,
 	dryRun bool,
 ) (err error) {
-	if plan == nil || plan.SystemType != SystemTypePVE || !plan.HasCategoryID("pve_access_control") || !plan.ClusterBackup {
+	if plan == nil || !plan.SystemType.SupportsPVE() || !plan.HasCategoryID("pve_access_control") || !plan.ClusterBackup {
 		return nil
 	}
 

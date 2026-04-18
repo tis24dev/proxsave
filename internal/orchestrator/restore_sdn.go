@@ -14,7 +14,7 @@ import (
 func maybeApplyPVESDNFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
 	_ = ctx // reserved for future timeouts/cancellation hooks
 
-	if plan == nil || plan.SystemType != SystemTypePVE || !plan.HasCategoryID("pve_sdn") {
+	if plan == nil || !plan.SystemType.SupportsPVE() || !plan.HasCategoryID("pve_sdn") {
 		return nil
 	}
 	if strings.TrimSpace(stageRoot) == "" {

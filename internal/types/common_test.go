@@ -10,6 +10,7 @@ func TestProxmoxTypeString(t *testing.T) {
 	}{
 		{"pve", ProxmoxVE, "pve"},
 		{"pbs", ProxmoxBS, "pbs"},
+		{"dual", ProxmoxDual, "dual"},
 		{"unknown", ProxmoxUnknown, "unknown"},
 	}
 
@@ -18,6 +19,42 @@ func TestProxmoxTypeString(t *testing.T) {
 			result := tt.ptype.String()
 			if result != tt.expected {
 				t.Errorf("ProxmoxType.String() = %q; want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestProxmoxTypeCapabilities(t *testing.T) {
+	tests := []struct {
+		name        string
+		ptype       ProxmoxType
+		supportsPVE bool
+		supportsPBS bool
+		targets     []string
+	}{
+		{name: "pve", ptype: ProxmoxVE, supportsPVE: true, supportsPBS: false, targets: []string{"pve"}},
+		{name: "pbs", ptype: ProxmoxBS, supportsPVE: false, supportsPBS: true, targets: []string{"pbs"}},
+		{name: "dual", ptype: ProxmoxDual, supportsPVE: true, supportsPBS: true, targets: []string{"pve", "pbs"}},
+		{name: "unknown", ptype: ProxmoxUnknown, supportsPVE: false, supportsPBS: false, targets: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.ptype.SupportsPVE(); got != tt.supportsPVE {
+				t.Fatalf("SupportsPVE() = %v, want %v", got, tt.supportsPVE)
+			}
+			if got := tt.ptype.SupportsPBS(); got != tt.supportsPBS {
+				t.Fatalf("SupportsPBS() = %v, want %v", got, tt.supportsPBS)
+			}
+
+			gotTargets := tt.ptype.Targets()
+			if len(gotTargets) != len(tt.targets) {
+				t.Fatalf("Targets() len = %d, want %d (%v)", len(gotTargets), len(tt.targets), gotTargets)
+			}
+			for i := range gotTargets {
+				if gotTargets[i] != tt.targets[i] {
+					t.Fatalf("Targets()[%d] = %q, want %q", i, gotTargets[i], tt.targets[i])
+				}
 			}
 		})
 	}

@@ -20,7 +20,7 @@ func maybeVerifyAndRepairPBSNotificationsAfterRestore(ctx context.Context, logge
 	if dryRun {
 		return nil
 	}
-	if plan.SystemType != SystemTypePBS || !plan.HasCategoryID("pbs_notifications") {
+	if !plan.SystemType.SupportsPBS() || !plan.HasCategoryID("pbs_notifications") {
 		return nil
 	}
 	if strings.TrimSpace(stageRoot) == "" && !isRealRestoreFS(restoreFS) {

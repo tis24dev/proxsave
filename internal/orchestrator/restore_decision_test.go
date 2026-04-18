@@ -80,8 +80,8 @@ func TestAnalyzeRestoreArchive_UsesInternalMetadataWhenCategoriesAreCommonOnly(t
 	if err != nil {
 		t.Fatalf("AnalyzeRestoreArchive() error: %v", err)
 	}
-	if backupType, ambiguous := detectBackupTypeFromCategories(categories); backupType != SystemTypeUnknown || ambiguous {
-		t.Fatalf("detectBackupTypeFromCategories() = (%s, %v); want (%s, false)", backupType, ambiguous, SystemTypeUnknown)
+	if backupType := detectBackupTypeFromCategories(categories); backupType != SystemTypeUnknown {
+		t.Fatalf("detectBackupTypeFromCategories() = %s; want %s", backupType, SystemTypeUnknown)
 	}
 	if decision == nil {
 		t.Fatalf("decision info is nil")
@@ -97,6 +97,47 @@ func TestAnalyzeRestoreArchive_UsesInternalMetadataWhenCategoriesAreCommonOnly(t
 	}
 	if decision.ClusterPayload {
 		t.Fatalf("ClusterPayload should stay false without pve_cluster payload")
+	}
+}
+
+func TestAnalyzeRestoreArchive_UsesInternalTargetsWhenMetadataTypeIsEmpty(t *testing.T) {
+	origRestoreFS := restoreFS
+	t.Cleanup(func() { restoreFS = origRestoreFS })
+	restoreFS = osFS{}
+
+	archivePath := filepath.Join(t.TempDir(), "backup.tar")
+	if err := writeTarFile(archivePath, map[string]string{
+		"etc/hosts": "127.0.0.1 localhost\n",
+		"var/lib/proxsave-info/backup_metadata.txt": "# Proxsave Metadata\nBACKUP_TARGETS=pve,pbs\nHOSTNAME=dual-node\n",
+	}); err != nil {
+		t.Fatalf("writeTarFile: %v", err)
+	}
+
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	_, decision, err := AnalyzeRestoreArchive(archivePath, logger)
+	if err != nil {
+		t.Fatalf("AnalyzeRestoreArchive() error: %v", err)
+	}
+	if decision == nil {
+		t.Fatalf("decision info is nil")
+	}
+	if decision.BackupType != SystemTypeDual {
+		t.Fatalf("BackupType=%s; want %s", decision.BackupType, SystemTypeDual)
+	}
+	if decision.Source != RestoreDecisionSourceInternalMetadata {
+		t.Fatalf("Source=%s; want %s", decision.Source, RestoreDecisionSourceInternalMetadata)
+	}
+}
+
+func TestDetectBackupTypeFromCategories_DualPayload(t *testing.T) {
+	categories := []Category{
+		{ID: "pve_cluster", Type: CategoryTypePVE},
+		{ID: "pbs_config", Type: CategoryTypePBS},
+		{ID: "network", Type: CategoryTypeCommon},
+	}
+
+	if backupType := detectBackupTypeFromCategories(categories); backupType != SystemTypeDual {
+		t.Fatalf("detectBackupTypeFromCategories() = %s; want %s", backupType, SystemTypeDual)
 	}
 }
 

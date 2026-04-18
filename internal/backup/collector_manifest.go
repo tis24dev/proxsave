@@ -26,13 +26,14 @@ type ManifestEntry struct {
 
 // BackupManifest contains metadata about all files in the backup
 type BackupManifest struct {
-	CreatedAt   time.Time                `json:"created_at"`
-	Hostname    string                   `json:"hostname"`
-	ProxmoxType string                   `json:"proxmox_type"`
-	PBSConfigs  map[string]ManifestEntry `json:"pbs_configs,omitempty"`
-	PVEConfigs  map[string]ManifestEntry `json:"pve_configs,omitempty"`
-	SystemFiles map[string]ManifestEntry `json:"system_files,omitempty"`
-	Stats       ManifestStats            `json:"stats"`
+	CreatedAt      time.Time                `json:"created_at"`
+	Hostname       string                   `json:"hostname"`
+	ProxmoxType    string                   `json:"proxmox_type"`
+	ProxmoxTargets []string                 `json:"proxmox_targets,omitempty"`
+	PBSConfigs     map[string]ManifestEntry `json:"pbs_configs,omitempty"`
+	PVEConfigs     map[string]ManifestEntry `json:"pve_configs,omitempty"`
+	SystemFiles    map[string]ManifestEntry `json:"system_files,omitempty"`
+	Stats          ManifestStats            `json:"stats"`
 }
 
 // ManifestStats contains summary statistics for the manifest
@@ -48,12 +49,13 @@ type ManifestStats struct {
 // WriteManifest writes the backup manifest to the temp directory
 func (c *Collector) WriteManifest(hostname string) error {
 	manifest := BackupManifest{
-		CreatedAt:   time.Now().UTC(),
-		Hostname:    hostname,
-		ProxmoxType: string(c.proxType),
-		PBSConfigs:  c.pbsManifest,
-		PVEConfigs:  c.pveManifest,
-		SystemFiles: c.systemManifest,
+		CreatedAt:      time.Now().UTC(),
+		Hostname:       hostname,
+		ProxmoxType:    string(c.proxType),
+		ProxmoxTargets: append([]string(nil), c.proxType.Targets()...),
+		PBSConfigs:     c.pbsManifest,
+		PVEConfigs:     c.pveManifest,
+		SystemFiles:    c.systemManifest,
 		Stats: ManifestStats{
 			FilesProcessed: c.stats.FilesProcessed,
 			FilesFailed:    c.stats.FilesFailed,

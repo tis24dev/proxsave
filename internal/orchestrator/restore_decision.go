@@ -20,7 +20,6 @@ const (
 	RestoreDecisionSourceUnknown          RestoreDecisionSource = "unknown"
 	RestoreDecisionSourceInternalMetadata RestoreDecisionSource = "internal_metadata"
 	RestoreDecisionSourceCategories       RestoreDecisionSource = "categories"
-	RestoreDecisionSourceAmbiguous        RestoreDecisionSource = "ambiguous"
 )
 
 // RestoreDecisionInfo contains the archive-derived facts used for restore decisions.
@@ -32,9 +31,10 @@ type RestoreDecisionInfo struct {
 }
 
 type restoreDecisionMetadata struct {
-	BackupType  SystemType
-	ClusterMode string
-	Hostname    string
+	BackupType    SystemType
+	BackupTargets []string
+	ClusterMode   string
+	Hostname      string
 }
 
 type restoreArchiveInspection struct {
@@ -221,6 +221,8 @@ func parseRestoreDecisionMetadata(data []byte) (*restoreDecisionMetadata, error)
 		switch key {
 		case "BACKUP_TYPE":
 			meta.BackupType = parseSystemTypeString(value)
+		case "BACKUP_TARGETS":
+			meta.BackupTargets = splitTargetsCSV(value)
 		case "PVE_CLUSTER_MODE", "CLUSTER_MODE":
 			meta.ClusterMode = value
 		case "HOSTNAME":
@@ -246,13 +248,15 @@ func buildRestoreDecisionInfo(metadata *restoreDecisionMetadata, categories []Ca
 
 	if metadata != nil {
 		info.BackupHostname = strings.TrimSpace(metadata.Hostname)
+		if info.BackupType == SystemTypeUnknown && len(metadata.BackupTargets) > 0 {
+			info.BackupType = parseSystemTargets(metadata.BackupTargets)
+		}
 	}
 
-	categoryType, ambiguousType := detectBackupTypeFromCategories(categories)
+	categoryType := detectBackupTypeFromCategories(categories)
 	switch {
-	case ambiguousType:
-		logger.Warning("Archive contains both PVE and PBS-specific payloads; treating backup type as unknown for compatibility checks")
-		info.Source = RestoreDecisionSourceAmbiguous
+	case info.BackupType != SystemTypeUnknown && categoryType == SystemTypeUnknown:
+		info.Source = RestoreDecisionSourceInternalMetadata
 	case metadata != nil && metadata.BackupType != SystemTypeUnknown && categoryType == SystemTypeUnknown:
 		info.BackupType = metadata.BackupType
 		info.Source = RestoreDecisionSourceInternalMetadata
@@ -281,7 +285,7 @@ func buildRestoreDecisionInfo(metadata *restoreDecisionMetadata, categories []Ca
 	return info
 }
 
-func detectBackupTypeFromCategories(categories []Category) (SystemType, bool) {
+func detectBackupTypeFromCategories(categories []Category) SystemType {
 	var hasPVE, hasPBS bool
 	for _, cat := range categories {
 		switch cat.Type {
@@ -294,12 +298,24 @@ func detectBackupTypeFromCategories(categories []Category) (SystemType, bool) {
 
 	switch {
 	case hasPVE && hasPBS:
-		return SystemTypeUnknown, true
+		return SystemTypeDual
 	case hasPVE:
-		return SystemTypePVE, false
+		return SystemTypePVE
 	case hasPBS:
-		return SystemTypePBS, false
+		return SystemTypePBS
 	default:
-		return SystemTypeUnknown, false
+		return SystemTypeUnknown
 	}
+}
+
+func splitTargetsCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	targets := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			targets = append(targets, part)
+		}
+	}
+	return targets
 }

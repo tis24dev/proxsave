@@ -269,13 +269,13 @@ func (c *Checker) buildDependencyList() []dependencyEntry {
 	}
 
 	if c.envInfo != nil {
-		switch c.envInfo.Type {
-		case types.ProxmoxVE:
+		if c.envInfo.Type.SupportsPVE() {
 			deps = append(deps,
 				c.binaryDependency("pveversion", []string{"pveversion"}, false, "Proxmox VE command availability"),
 				c.binaryDependency("pvecm", []string{"pvecm"}, false, "PVE cluster management command"),
 			)
-		case types.ProxmoxBS:
+		}
+		if c.envInfo.Type.SupportsPBS() {
 			deps = append(deps,
 				c.binaryDependency("proxmox-backup-manager", []string{"proxmox-backup-manager"}, false, "PBS management CLI"),
 			)

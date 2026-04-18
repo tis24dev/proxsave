@@ -196,9 +196,9 @@ func TestCollectPVECommandsSkipsClusterRuntimeWhenBackupClusterConfigDisabled(t 
 	})
 	collector.config.BackupClusterConfig = false
 
-	if _, err := collector.collectPVECommands(context.Background(), true); err != nil {
-		t.Fatalf("collectPVECommands returned error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+		state.pve.clustered = true
+	}, brickPVERuntimeCluster)
 	if pvecmCalls != 0 {
 		t.Fatalf("expected pvecm not to be called when BACKUP_CLUSTER_CONFIG=false, got %d calls", pvecmCalls)
 	}
@@ -521,8 +521,8 @@ func TestCollectVMConfigsComprehensive(t *testing.T) {
 	})
 }
 
-// Test collectPVEDirectories function
-func TestCollectPVEDirectories(t *testing.T) {
+// TestCollectPVESnapshotBricks collects the PVE snapshot bricks used by the real recipe.
+func TestCollectPVESnapshotBricks(t *testing.T) {
 	collector := newPVECollector(t)
 
 	// Create PVE directory structure
@@ -543,15 +543,14 @@ func TestCollectPVEDirectories(t *testing.T) {
 		t.Fatalf("failed to write firewall config: %v", err)
 	}
 
-	ctx := context.Background()
-	err := collector.collectPVEDirectories(ctx, false)
-	if err != nil {
-		t.Fatalf("collectPVEDirectories failed: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil,
+		brickPVEConfigSnapshot,
+		brickPVEFirewallSnapshot,
+	)
 }
 
-// Test collectPVECommands function
-func TestCollectPVECommands(t *testing.T) {
+// TestPVERuntimeBricks collects the PVE runtime bricks used by the real recipe.
+func TestPVERuntimeBricks(t *testing.T) {
 	collector := newPVECollectorWithDeps(t, CollectorDeps{
 		LookPath: func(cmd string) (string, error) {
 			return "/usr/bin/" + cmd, nil
@@ -576,31 +575,31 @@ func TestCollectPVECommands(t *testing.T) {
 		},
 	})
 
-	ctx := context.Background()
-	runtimeInfo, err := collector.collectPVECommands(ctx, false)
-	if err != nil {
-		t.Fatalf("collectPVECommands failed: %v", err)
-	}
+	state := runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil,
+		brickPVERuntimeCore,
+		brickPVERuntimeACL,
+		brickPVERuntimeCluster,
+		brickPVERuntimeStorage,
+	)
 
-	if runtimeInfo == nil {
+	if state.pve.runtimeInfo == nil {
 		t.Error("expected non-nil runtimeInfo")
 	}
 }
 
-// Test createPVEInfoAliases function
-func TestCreatePVEInfoAliases(t *testing.T) {
+// TestPVEFinalizeBricks runs the real finalize bricks instead of the legacy wrapper.
+func TestPVEFinalizeBricks(t *testing.T) {
 	collector := newPVECollector(t)
-
-	ctx := context.Background()
-	err := collector.createPVEInfoAliases(ctx)
-	// This may fail in test environment, but should not panic
-	if err != nil {
-		t.Logf("createPVEInfoAliases returned error (expected in test env): %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil,
+		brickPVEAliasCore,
+		brickPVEAggregateBackupHistory,
+		brickPVEAggregateReplicationStatus,
+		brickPVEVersionInfo,
+	)
 }
 
-// Test collectPVEJobs function
-func TestCollectPVEJobs(t *testing.T) {
+// TestPVEJobBricks runs the real PVE job bricks instead of the legacy adapter.
+func TestPVEJobBricks(t *testing.T) {
 	collector := newPVECollectorWithDeps(t, CollectorDeps{
 		LookPath: func(cmd string) (string, error) {
 			return "/usr/bin/" + cmd, nil
@@ -613,16 +612,13 @@ func TestCollectPVEJobs(t *testing.T) {
 		},
 	})
 
-	ctx := context.Background()
-	nodes := []string{"test-node"}
-	err := collector.collectPVEJobs(ctx, nodes)
-	if err != nil {
-		t.Logf("collectPVEJobs returned error (expected in some envs): %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+		state.ensurePVERuntimeInfo().Nodes = []string{"test-node"}
+	}, brickPVEBackupJobDefs, brickPVEBackupJobHistory, brickPVEVZDumpCron)
 }
 
-// TestCollectPVEJobsComprehensive tests various edge cases for collectPVEJobs
-func TestCollectPVEJobsComprehensive(t *testing.T) {
+// TestPVEJobBricksComprehensive tests various edge cases for the real job bricks.
+func TestPVEJobBricksComprehensive(t *testing.T) {
 	t.Run("skips empty and duplicate node names", func(t *testing.T) {
 		collector := newPVECollectorWithDeps(t, CollectorDeps{
 			LookPath: func(cmd string) (string, error) {
@@ -633,13 +629,9 @@ func TestCollectPVEJobsComprehensive(t *testing.T) {
 			},
 		})
 
-		ctx := context.Background()
-		// Include empty strings and duplicates
-		nodes := []string{"node1", "", "  ", "node1", "node2", "node2"}
-		err := collector.collectPVEJobs(ctx, nodes)
-		if err != nil {
-			t.Logf("collectPVEJobs returned error: %v", err)
-		}
+		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+			state.ensurePVERuntimeInfo().Nodes = []string{"node1", "", "  ", "node1", "node2", "node2"}
+		}, brickPVEBackupJobDefs, brickPVEBackupJobHistory, brickPVEVZDumpCron)
 	})
 
 	t.Run("handles context cancellation", func(t *testing.T) {
@@ -655,7 +647,16 @@ func TestCollectPVEJobsComprehensive(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := collector.collectPVEJobs(ctx, []string{"node1"})
+		state := newCollectionState(collector)
+		state.ensurePVERuntimeInfo().Nodes = []string{"node1"}
+		err := runRecipe(ctx, recipe{
+			Name: "pve-jobs-canceled",
+			Bricks: []collectionBrick{
+				requireBrick(t, newPVERecipe(), brickPVEBackupJobDefs),
+				requireBrick(t, newPVERecipe(), brickPVEBackupJobHistory),
+				requireBrick(t, newPVERecipe(), brickPVEVZDumpCron),
+			},
+		}, state)
 		if err != context.Canceled {
 			t.Errorf("expected context.Canceled, got: %v", err)
 		}
@@ -676,11 +677,7 @@ func TestCollectPVEJobsComprehensive(t *testing.T) {
 		cfg.SystemRootPrefix = tmpDir
 		collector := NewCollector(logger, cfg, t.TempDir(), "pve", false)
 
-		ctx := context.Background()
-		err := collector.collectPVEJobs(ctx, []string{})
-		if err != nil {
-			t.Logf("collectPVEJobs returned error: %v", err)
-		}
+		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVEVZDumpCron)
 	})
 
 	t.Run("handles whitespace-padded node names", func(t *testing.T) {
@@ -693,29 +690,24 @@ func TestCollectPVEJobsComprehensive(t *testing.T) {
 			},
 		})
 
-		ctx := context.Background()
-		nodes := []string{"  node1  ", "  node2  "}
-		err := collector.collectPVEJobs(ctx, nodes)
-		if err != nil {
-			t.Logf("collectPVEJobs returned error: %v", err)
-		}
+		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+			state.ensurePVERuntimeInfo().Nodes = []string{"  node1  ", "  node2  "}
+		}, brickPVEBackupJobHistory)
 	})
 }
 
-// Test collectPVESchedules function
-func TestCollectPVESchedules(t *testing.T) {
+// TestPVEScheduleBricks runs the real PVE schedule bricks.
+func TestPVEScheduleBricks(t *testing.T) {
 	collector := newPVECollector(t)
-
-	ctx := context.Background()
-	err := collector.collectPVESchedules(ctx)
-	// May fail if crontab not available
-	if err != nil {
-		t.Logf("collectPVESchedules returned error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil,
+		brickPVEScheduleCrontab,
+		brickPVEScheduleTimers,
+		brickPVEScheduleCronFiles,
+	)
 }
 
-// Test collectPVEReplication function
-func TestCollectPVEReplication(t *testing.T) {
+// TestPVEReplicationBricks runs the real replication bricks.
+func TestPVEReplicationBricks(t *testing.T) {
 	collector := newPVECollectorWithDeps(t, CollectorDeps{
 		LookPath: func(cmd string) (string, error) {
 			return "/usr/bin/" + cmd, nil
@@ -725,12 +717,9 @@ func TestCollectPVEReplication(t *testing.T) {
 		},
 	})
 
-	ctx := context.Background()
-	nodes := []string{"test-node"}
-	err := collector.collectPVEReplication(ctx, nodes)
-	if err != nil {
-		t.Logf("collectPVEReplication returned error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+		state.ensurePVERuntimeInfo().Nodes = []string{"test-node"}
+	}, brickPVEReplicationDefs, brickPVEReplicationStatus)
 }
 
 func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
@@ -776,9 +765,12 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 	collector.config.BackupPVEJobs = false
 	collector.config.BackupClusterConfig = false
 
-	if err := collector.collectPVEDirectories(context.Background(), false); err != nil {
-		t.Fatalf("collectPVEDirectories error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil,
+		brickPVEConfigSnapshot,
+		brickPVEClusterSnapshot,
+		brickPVEFirewallSnapshot,
+		brickPVEVZDumpSnapshot,
+	)
 
 	destPVE := collector.targetPathFor(pveRoot)
 	if _, err := os.Stat(filepath.Join(destPVE, "dummy.cfg")); err != nil {
@@ -811,18 +803,17 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 	}
 }
 
-// Test collectPVEStorageMetadata function
-func TestCollectPVEStorageMetadata(t *testing.T) {
+// TestPVEStoragePipeline runs the real PVE storage pipeline bricks.
+func TestPVEStoragePipeline(t *testing.T) {
 	collector := newPVECollector(t)
 
-	ctx := context.Background()
 	storageDir := t.TempDir()
 	storages := []pveStorageEntry{
 		{Name: "local", Path: storageDir, Type: "dir"},
 	}
-	if err := collector.collectPVEStorageMetadata(ctx, storages); err != nil {
-		t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+		state.ensurePVERuntimeInfo().Storages = storages
+	}, brickPVEStorageResolve, brickPVEStorageProbe, brickPVEStorageMetadataJSON, brickPVEStorageMetadataText, brickPVEStorageBackupAnalysis, brickPVEStorageSummary)
 
 	metaPath := filepath.Join(collector.tempDir, "var/lib/pve-cluster/info/datastores", "local", "metadata.json")
 	if _, err := os.Stat(metaPath); err != nil {
@@ -836,16 +827,15 @@ func TestCollectPVEStorageMetadata_UsesPathSafeKeyForUnsafeStorageName(t *testin
 	collector.config.MaxPVEBackupSizeBytes = 1024 * 1024
 	collector.config.PVEBackupIncludePattern = "vm-100"
 
-	ctx := context.Background()
 	storageDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(storageDir, "vm-100-backup.vma"), []byte("content"), 0o644); err != nil {
 		t.Fatalf("write backup file: %v", err)
 	}
 
 	storage := pveStorageEntry{Name: "../escape", Path: storageDir, Type: "dir"}
-	if err := collector.collectPVEStorageMetadata(ctx, []pveStorageEntry{storage}); err != nil {
-		t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
-	}
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+		state.ensurePVERuntimeInfo().Storages = []pveStorageEntry{storage}
+	}, brickPVEStorageResolve, brickPVEStorageProbe, brickPVEStorageMetadataJSON, brickPVEStorageMetadataText, brickPVEStorageBackupAnalysis, brickPVEStorageSummary)
 
 	key := collectorPathKey(storage.Name)
 	baseDir := filepath.Join(collector.tempDir, "var/lib/pve-cluster/info/datastores", key)
@@ -883,8 +873,6 @@ func TestCollectPVEStorageMetadata_SkipReasonsAreUserFriendly(t *testing.T) {
 		b := v
 		return &b
 	}
-	ctx := context.Background()
-
 	t.Run("disabled storage uses SKIP with debug details", func(t *testing.T) {
 		collector := newPVECollector(t)
 		var out bytes.Buffer
@@ -893,9 +881,9 @@ func TestCollectPVEStorageMetadata_SkipReasonsAreUserFriendly(t *testing.T) {
 		storages := []pveStorageEntry{
 			{Name: "HDD1", Path: "/mnt/pve/HDD1", Active: boolPtr(false), Enabled: boolPtr(false)},
 		}
-		if err := collector.collectPVEStorageMetadata(ctx, storages); err != nil {
-			t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
-		}
+		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+			state.ensurePVERuntimeInfo().Storages = storages
+		}, brickPVEStorageResolve, brickPVEStorageProbe, brickPVEStorageMetadataJSON, brickPVEStorageMetadataText, brickPVEStorageBackupAnalysis, brickPVEStorageSummary)
 
 		logText := out.String()
 		if collector.logger.WarningCount() != 0 {
@@ -917,9 +905,9 @@ func TestCollectPVEStorageMetadata_SkipReasonsAreUserFriendly(t *testing.T) {
 		storages := []pveStorageEntry{
 			{Name: "HDD2", Path: "/mnt/pve/HDD2", Active: boolPtr(false), Enabled: boolPtr(true)},
 		}
-		if err := collector.collectPVEStorageMetadata(ctx, storages); err != nil {
-			t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
-		}
+		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+			state.ensurePVERuntimeInfo().Storages = storages
+		}, brickPVEStorageResolve, brickPVEStorageProbe, brickPVEStorageMetadataJSON, brickPVEStorageMetadataText, brickPVEStorageBackupAnalysis, brickPVEStorageSummary)
 
 		logText := out.String()
 		if collector.logger.WarningCount() != 1 {
@@ -941,9 +929,9 @@ func TestCollectPVEStorageMetadata_SkipReasonsAreUserFriendly(t *testing.T) {
 		storages := []pveStorageEntry{
 			{Name: "MISSING", Path: filepath.Join(t.TempDir(), "does-not-exist"), Type: "dir"},
 		}
-		if err := collector.collectPVEStorageMetadata(ctx, storages); err != nil {
-			t.Fatalf("collectPVEStorageMetadata returned error: %v", err)
-		}
+		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), func(state *collectionState) {
+			state.ensurePVERuntimeInfo().Storages = storages
+		}, brickPVEStorageResolve, brickPVEStorageProbe, brickPVEStorageMetadataJSON, brickPVEStorageMetadataText, brickPVEStorageBackupAnalysis, brickPVEStorageSummary)
 
 		logText := out.String()
 		if collector.logger.WarningCount() != 1 {
@@ -958,8 +946,8 @@ func TestCollectPVEStorageMetadata_SkipReasonsAreUserFriendly(t *testing.T) {
 	})
 }
 
-// Test collectPVECephInfo function
-func TestCollectPVECephInfo(t *testing.T) {
+// TestPVECephBricks runs the real Ceph bricks.
+func TestPVECephBricks(t *testing.T) {
 	t.Run("no ceph configured", func(t *testing.T) {
 		collector := newPVECollectorWithDeps(t, CollectorDeps{
 			LookPath: func(cmd string) (string, error) {
@@ -967,12 +955,7 @@ func TestCollectPVECephInfo(t *testing.T) {
 			},
 		})
 
-		ctx := context.Background()
-		err := collector.collectPVECephInfo(ctx)
-		// Should not error when ceph is not configured
-		if err != nil {
-			t.Logf("collectPVECephInfo returned error when ceph missing: %v", err)
-		}
+		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVECephConfigSnapshot, brickPVECephRuntime)
 	})
 
 	t.Run("ceph configured", func(t *testing.T) {
@@ -994,10 +977,6 @@ func TestCollectPVECephInfo(t *testing.T) {
 			},
 		})
 
-		ctx := context.Background()
-		err := collector.collectPVECephInfo(ctx)
-		if err != nil {
-			t.Logf("collectPVECephInfo with ceph returned error: %v", err)
-		}
+		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVECephConfigSnapshot, brickPVECephRuntime)
 	})
 }

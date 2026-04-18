@@ -31,7 +31,7 @@ var (
 )
 
 func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot, destRoot string, dryRun bool) error {
-	if plan == nil || plan.SystemType != SystemTypePBS || !plan.HasCategoryID("datastore_pbs") {
+	if plan == nil || !plan.SystemType.SupportsPBS() || !plan.HasCategoryID("datastore_pbs") {
 		return nil
 	}
 	if strings.TrimSpace(stageRoot) == "" {

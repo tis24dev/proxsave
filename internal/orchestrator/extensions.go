@@ -160,6 +160,13 @@ func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, early
 	if o.version != "" {
 		stats.Version = o.version
 	}
+	if o.envInfo != nil {
+		stats.ProxmoxType = o.envInfo.Type
+		stats.ProxmoxTargets = append([]string(nil), o.envInfo.Type.Targets()...)
+		stats.ProxmoxVersion = o.envInfo.Version
+		stats.PVEVersion = o.envInfo.PVEVersion
+		stats.PBSVersion = o.envInfo.PBSVersion
+	}
 	if o.proxmoxVersion != "" {
 		stats.ProxmoxVersion = o.proxmoxVersion
 	}
