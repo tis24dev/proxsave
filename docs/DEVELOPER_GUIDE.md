@@ -116,7 +116,7 @@ proxsave/
 │   ├── tui/                   # TUI wizards
 │   ├── types/                 # Shared types
 │   └── version/               # Version info
-├── pkg/                       # Shared helper packages for ProxSave (not an implicit stable external API)
+├── pkg/                       # Shared helper packages for Proxsave (not an implicit stable external API)
 ├── build/                     # Build artifacts (binary output)
 ├── configs/                   # Configuration files
 ├── docs/                      # Documentation
@@ -130,12 +130,34 @@ proxsave/
 
 | Module | Purpose | Files |
 |--------|---------|-------|
-| **orchestrator** | Core backup/restore orchestration | `internal/orchestrator/*.go` |
+| **orchestrator** | Core backup/restore orchestration and capability-based restore decisions | `internal/orchestrator/*.go` |
 | **config** | Configuration management | `internal/config/config.go` |
 | **storage** | Local/secondary/cloud storage | `internal/storage/*.go` |
-| **backup** | Archiving + manifest/checksum helpers | `internal/backup/*.go` |
+| **backup** | Collector recipes/bricks, archiving, manifest/checksum helpers | `internal/backup/*.go` |
 | **notify** | Notification channels | `internal/notify/*.go` |
 | **security** | Security checks, permissions | `internal/security/*.go` |
+
+---
+
+### Collector Architecture
+
+The backup collector is no longer organized around large branch-specific
+wrappers. It is built from explicit recipes and fine-grained bricks:
+
+- `newPVERecipe()`
+- `newPBSRecipe()`
+- `newDualRecipe()`
+- `newSystemRecipe()`
+
+Important invariants:
+
+- `dual` is a real type, not an alias
+- `dual` composes PVE + PBS bricks in a single run
+- `system/common` runs only once
+- `storage_stack` belongs to `common/system`, not PBS
+
+For the authoritative architecture description, see
+[Collector Architecture](COLLECTOR_ARCHITECTURE.md).
 
 ---
 
@@ -643,11 +665,13 @@ rclone check /local/dir/ gdrive:pbs-backups/ --checksum
 ## Related Documentation
 
 ### User Documentation
-- **[README](../README.md)** - Project overview and quick start
+- **[Docs Index](README.md)** - Documentation hub for the `docs/` tree
 - **[Configuration Guide](CONFIGURATION.md)** - All configuration variables
 - **[CLI Reference](CLI_REFERENCE.md)** - Command-line flags
 
 ### Contributor Documentation
+- **[Collector Architecture](COLLECTOR_ARCHITECTURE.md)** - Collector recipes, bricks, and `dual`
+- **[Restore Technical](RESTORE_TECHNICAL.md)** - Restore internals and compatibility flow
 - **[Migration Guide](MIGRATION_GUIDE.md)** - Bash to Go migration
 - **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues
 
@@ -687,7 +711,7 @@ Testing:
 Documentation:
 □ Update relevant docs/*.md files
 □ Add usage examples
-□ Update README.md if needed
+□ Update docs/README.md and architecture docs if navigation changes
 □ Write clear commit messages
 
 Before Submitting PR:

@@ -90,6 +90,7 @@ SYSTEM_ROOT_PREFIX = NEW (Go-only) → Override system root for collection (test
 PVESH_TIMEOUT = NEW (Go-only) → Timeout (seconds) for each `pvesh` command execution (0=disabled).
 FS_IO_TIMEOUT = NEW (Go-only) → Timeout (seconds) for filesystem probes (stat/readdir/statfs) on storages (0=disabled). Helps avoid hangs on unreachable network mounts.
 NOTE: PBS restore behavior is selected interactively during `--restore` and is intentionally not configured via `backup.env`.
+NOTE: There is no dedicated `DUAL_*` environment family. Dual-role hosts are detected automatically and use the same PVE/PBS collector flags in a single run.
 BACKUP_PBS_S3_ENDPOINTS = NEW (Go-only) → Collect `s3.cfg` and S3 endpoint snapshots (PBS).
 BACKUP_PBS_NODE_CONFIG = NEW (Go-only) → Collect `node.cfg` and node snapshots (PBS).
 BACKUP_PBS_ACME_ACCOUNTS = NEW (Go-only) → Collect `acme/accounts.cfg` and ACME account snapshots (PBS).

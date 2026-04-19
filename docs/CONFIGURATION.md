@@ -6,7 +6,7 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 
 - [Configuration File Location](#configuration-file-location)
 - [General Settings](#general-settings)
-- [Restore (PBS)](#restore-pbs)
+- [Restore Behavior & Dual-Role Hosts](#restore-behavior--dual-role-hosts)
 - [Security Settings](#security-settings)
 - [Disk Space](#disk-space)
 - [Storage Paths](#storage-paths)
@@ -72,15 +72,33 @@ PROFILING_ENABLED=true             # true | false (profiles written under LOG_PA
 
 ---
 
-## Restore (PBS)
+## Restore Behavior & Dual-Role Hosts
 
-PBS restore behavior is chosen **interactively at restore time** on PBS hosts (not via `backup.env`).
+Restore behavior is chosen **interactively at restore time** when PBS-specific
+categories are going to be applied. This is not configured through `backup.env`.
 
 You will be asked to choose a behavior:
 - **Merge (existing PBS)**: intended for restoring onto an already operational PBS; ProxSave applies supported PBS categories via `proxmox-backup-manager` without deleting existing objects that are not in the backup.
 - **Clean 1:1 (fresh PBS install)**: intended for restoring onto a new, clean PBS; ProxSave attempts to make supported PBS objects match the backup (may remove objects that exist on the system but are not in the backup).
 
 ProxSave applies supported PBS staged categories via API automatically (and may fall back to file-based staged apply only in **Clean 1:1** mode).
+
+### Dual-role hosts
+
+ProxSave automatically detects the current host role as one of:
+
+- `pve`
+- `pbs`
+- `dual`
+- `unknown`
+
+There is no dedicated `backup.env` switch for `dual`. On a co-installed host,
+`dual` is detected automatically and a single backup run can include both PVE
+and PBS payloads plus one shared `common/system` payload.
+
+Dual backups persist explicit target metadata (`BACKUP_TYPE=dual`,
+`BACKUP_TARGETS=pve,pbs`) and restore uses that metadata to filter categories
+to the roles supported by the current host.
 
 **Current API coverage**:
 - Node + traffic control (`pbs_host`)
@@ -846,10 +864,12 @@ If `EMAIL_ENABLED` is omitted, the default remains `false`. The legacy alias `EM
 - Allowed values for `EMAIL_DELIVERY_METHOD` are: `relay`, `sendmail`, `pmf` (invalid values will skip Email with a warning).
 - `EMAIL_FALLBACK_SENDMAIL` is a historical name (kept for compatibility). When `EMAIL_DELIVERY_METHOD=relay`, it enables fallback to **pmf** (it will not fall back to `/usr/sbin/sendmail`).
 - `relay` requires a real mailbox recipient and blocks `root@…` recipients; set `EMAIL_RECIPIENT` to a non-root mailbox if needed.
+- When relay preconditions fail before delivery starts (for example missing recipient, autodetect failure, or blocked `root@…` recipient) and fallback is enabled, ProxSave may bypass relay and invoke `pmf` directly.
 - When logs say the relay "accepted request", it means the worker and upstream email API accepted the submission. It does **not** guarantee final inbox delivery (the message may still bounce, be deferred, or land in spam later).
 - If `EMAIL_RECIPIENT` is empty, ProxSave auto-detects the recipient from the `root@pam` user:
   - **PVE**: Proxmox API via `pvesh get /access/users/root@pam` → fallback to `pveum user list` → fallback to `/etc/pve/user.cfg`
   - **PBS**: `proxmox-backup-manager user list` → fallback to `/etc/proxmox-backup/user.cfg`
+  - **Dual**: intentionally uses the **PVE** detection path for `root@pam` email discovery
 - `sendmail` requires a recipient and uses `/usr/sbin/sendmail` (auto-detect applies if `EMAIL_RECIPIENT` is empty, as described above).
 - With `pmf`, final delivery recipients are determined by Proxmox Notifications targets/matchers. `EMAIL_RECIPIENT` is only used for the `To:` header and may be empty.
 

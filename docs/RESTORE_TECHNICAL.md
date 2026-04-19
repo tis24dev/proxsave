@@ -425,56 +425,57 @@ type PreparedBackup struct {
 **File**: `internal/orchestrator/restore.go:58-72`
 
 ```go
-systemType := DetectSystemType(logger)
-logger.Info("Current system type: %s", systemType)
+systemType := DetectCurrentSystem()
+backupType := DetectBackupType(prepared.Manifest)
 
-if err := ValidateCompatibility(systemType, prepared.Manifest, reader); err != nil {
+if err := ValidateCompatibility(systemType, backupType); err != nil {
     logger.Warning("Compatibility check: %v", err)
-    // Prompt user to continue or abort
+    // Continue with warning or abort depending on workflow context
 }
 ```
 
-**System Detection** (`compatibility.go:21-33`):
+**System Detection** (`compatibility.go`):
 ```go
-func DetectSystemType(logger *logging.Logger) SystemType {
-    // Check for PVE indicators
-    if _, err := os.Stat("/etc/pve"); err == nil {
-        if _, err := os.Stat("/usr/bin/qm"); err == nil {
-            return SystemTypePVE
-        }
-    }
+func DetectCurrentSystem() SystemType {
+    hasPVE := fileExists("/etc/pve") || fileExists("/usr/bin/qm") || fileExists("/usr/bin/pct")
+    hasPBS := fileExists("/etc/proxmox-backup") || fileExists("/usr/sbin/proxmox-backup-proxy")
 
-    // Check for PBS indicators
-    if _, err := os.Stat("/etc/proxmox-backup"); err == nil {
-        if _, err := os.Stat("/usr/sbin/proxmox-backup-proxy"); err == nil {
-            return SystemTypePBS
-        }
+    switch {
+    case hasPVE && hasPBS:
+        return SystemTypeDual
+    case hasPVE:
+        return SystemTypePVE
+    case hasPBS:
+        return SystemTypePBS
+    default:
+        return SystemTypeUnknown
     }
+}
+```
 
+Restore compatibility is therefore **capability-based**, not exact-match only.
+
+**Backup Type Detection**:
+```go
+func DetectBackupType(manifest *backup.Manifest) SystemType {
+    if len(manifest.ProxmoxTargets) > 0 {
+        return parseSystemTargets(manifest.ProxmoxTargets)
+    }
+    if manifest.ProxmoxType != "" {
+        return parseSystemTypeString(manifest.ProxmoxType)
+    }
+    // Fallback: hostname heuristics
     return SystemTypeUnknown
 }
 ```
 
-**Compatibility Check** (`compatibility.go:67-97`):
-```go
-func ValidateCompatibility(
-    systemType SystemType,
-    manifest *Manifest,
-    reader *bufio.Reader,
-) error {
-    backupType := DetermineBackupSystemType(manifest)
+**Compatibility Check**:
+- **incompatible**: no shared role between backup and current host
+- **partial compatibility**: shared role exists, but backup and host are not identical
+- **full compatibility**: same role set
 
-    if systemType != SystemTypeUnknown &&
-       backupType != SystemTypeUnknown &&
-       systemType != backupType {
-        // Prompt user: Type "yes" to continue
-        if !getUserConfirmation(reader, "yes") {
-            return ErrRestoreAborted
-        }
-    }
-    return nil
-}
-```
+When compatibility is partial, restore continues with warnings and later filters
+the category set to the roles supported by the current host.
 
 ---
 

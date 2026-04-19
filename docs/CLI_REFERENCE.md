@@ -432,27 +432,36 @@ Next step: ./build/proxsave --dry-run
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
 **Note**: CLI and TUI run the same workflow logic; `--cli` only changes the interface (prompts/progress rendering), not the restore/decrypt behavior.
 
-**`--restore` workflow** (14 phases):
+**`--restore` workflow** (16 phases):
 1. Scans configured storage locations (local/secondary/cloud)
 2. Lists available backups with metadata (encrypted or unencrypted)
 3. If encrypted, prompts for decryption key/passphrase and decrypts
-4. Validates system compatibility (PVE/PBS mismatch warning)
-5. Analyzes backup categories
-6. Presents restore mode selection:
-   - **Full Restore**: All categories
-   - **Storage Restore**: PVE/PBS-specific configs
-   - **Base System Restore**: Network, SSH, system files
-   - **Custom Restore**: Select specific categories
-7. For cluster backups: prompts for **SAFE** (export+API) or **RECOVERY** (full restore) mode
-8. Shows detailed restore plan with selected categories
-9. Requires confirmation: type `RESTORE` to proceed
-10. Creates safety backup of existing files
-11. Stops services if needed (PVE: pve-cluster, pvedaemon, pveproxy, pvestatd; PBS: proxmox-backup-proxy, proxmox-backup)
-12. Extracts selected categories to system root (`/`)
-13. Exports export-only categories to separate directory
-14. For SAFE cluster mode: offers to apply configs via `pvesh` API
-15. Recreates storage/datastore directories, checks ZFS pools
-16. Restarts services and displays completion summary
+4. Detects the current host role (`pve`, `pbs`, `dual`, or `unknown`)
+5. Validates compatibility using capability overlap and backup targets
+   - exact match: proceed normally
+   - partial match: continue with warning, then filter categories automatically
+   - no overlap: warn strongly before continuing
+6. Analyzes backup categories
+7. Presents restore mode selection:
+   - **Full Restore**: all compatible categories
+   - **Storage Restore**: storage/datastore-focused categories
+   - **Base System Restore**: network, SSH, system files
+   - **Custom Restore**: select specific categories
+8. For cluster backups: prompts for **SAFE** (export+API) or **RECOVERY** (full restore) mode
+9. Shows detailed restore plan with selected categories
+10. Requires confirmation: type `RESTORE` to proceed
+11. Creates safety backup of existing files
+12. Stops services if needed (PVE: pve-cluster, pvedaemon, pveproxy, pvestatd; PBS: proxmox-backup-proxy, proxmox-backup)
+13. Extracts selected categories to system root (`/`)
+14. Exports export-only categories to separate directory
+15. For SAFE cluster mode: offers to apply configs via `pvesh` API
+16. Recreates storage/datastore directories, checks ZFS pools, restarts services, and displays completion summary
+
+**Compatibility model**:
+- `dual` backups persist explicit targets (`pve`, `pbs`)
+- restoring a `dual` backup to a single-role host is allowed
+- ProxSave restores only categories compatible with the current host role
+- `common` categories remain available across roles
 
 **⚠️ WARNING**: Restore operations overwrite files in-place. **Always test in a VM or snapshot your system first!**
 
