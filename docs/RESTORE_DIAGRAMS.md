@@ -1,6 +1,9 @@
 # Restore Workflow Diagrams
 
 Visual diagrams for understanding the restore system architecture and flow.
+Use this file as a visual companion to [RESTORE_GUIDE.md](RESTORE_GUIDE.md) and
+[RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md), not as the primary place for
+textual restore rules.
 
 ## Table of Contents
 
@@ -655,22 +658,27 @@ flowchart TD
     BackupPVE --> Compare
     BackupPBS --> Compare
     BackupDual --> Compare
-    BackupUnknown --> Compare[Compare Types]
+    BackupUnknown --> Compare[Compare Capability Sets]
 
-    Compare --> Match{Current == Backup?}
-    Match -->|Yes| Compatible([Compatible])
-    Match -->|No| CheckUnknown{Either Unknown?}
+    Compare --> SharedRole{Any shared role?}
+    SharedRole -->|Yes| ExactMatch{Same role set?}
+    ExactMatch -->|Yes| Compatible([Full Compatibility])
+    ExactMatch -->|No| Partial[Partial Compatibility]
+    Partial --> Filter["Warn user and filter to<br/>supported categories"]
+    Filter --> ProceedAnyway([Proceed with Warning])
 
-    CheckUnknown -->|Yes| Compatible
-    CheckUnknown -->|No| Incompatible[Incompatible]
+    SharedRole -->|No| CheckUnknown{Either side unknown?}
+    CheckUnknown -->|Yes| WarnUnknown["Warn: compatibility<br/>cannot be fully verified"]
+    WarnUnknown --> Proceed([Proceed])
+    CheckUnknown -->|No| Incompatible["No overlapping role"]
 
-    Incompatible --> DisplayWarning["Display Warning:<br/>PVE ↔ PBS mismatch"]
+    Incompatible --> DisplayWarning["Display Warning:<br/>backup and host roles differ"]
     DisplayWarning --> AskOverride{Type 'yes'<br/>to continue?}
 
     AskOverride -->|No| Abort([Abort])
-    AskOverride -->|Yes| ProceedAnyway([Proceed with Warning])
+    AskOverride -->|Yes| ProceedAnyway
 
-    Compatible --> Proceed([Proceed])
+    Compatible --> Proceed
 
     style Start fill:#87CEEB
     style Proceed fill:#90EE90

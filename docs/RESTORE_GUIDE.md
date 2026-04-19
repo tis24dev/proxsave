@@ -51,6 +51,14 @@ PVE+PBS backups using the interactive restore workflow.
 
 The `--restore` command provides an **interactive, category-based restoration system** that allows selective or full restoration of Proxmox configuration files from backup archives.
 
+### How to Use the Restore Docs
+
+The restore documentation is split on purpose:
+
+- [RESTORE_GUIDE.md](RESTORE_GUIDE.md): operator workflow, modes, warnings, and practical examples
+- [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md): implementation details, detection logic, and internal architecture
+- [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md): visual companion for the main workflow and decision paths
+
 ### Key Features
 
 - **Category-based selection**: Granular control over what gets restored
@@ -347,7 +355,10 @@ Your selection: c      # Continue to restore plan
 
 ## Complete Workflow
 
-The restore process follows a **14-phase workflow** with safety checks at each step.
+The restore process follows a phased workflow with safety checks at each step.
+This section stays operator-focused. Internal decision rules and code-level
+behavior live in [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md), while the visual
+flow lives in [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md).
 
 ### Workflow Diagram
 
@@ -522,6 +533,10 @@ compatible with PBS. Proceeding may result in system instability.
 
 Type "yes" to continue anyway or "no" to abort:
 ```
+
+This guide intentionally shows the operator-facing outcomes only. The exact
+metadata precedence, host detection order, and capability-overlap rules are
+documented in [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md#phase-3-system-detection--compatibility).
 
 #### Phase 6: Cluster Restore Mode (PVE Cluster Backups Only)
 
@@ -1828,18 +1843,17 @@ Current auto-skip prompts:
 
 ### 3. Compatibility Validation
 
-**System Type Detection**:
-```
-Current system: Proxmox Virtual Environment (PVE)
-Backup source: Proxmox Virtual Environment (PVE)
-✓ Compatible
-```
+Compatibility is evaluated with the same `pve | pbs | dual | unknown` model
+described in [System Types and Compatibility](#system-types-and-compatibility).
 
-**Incompatibility Warning**:
-```
-⚠ WARNING: Potential incompatibility detected!
-Type "yes" to continue anyway or "no" to abort: _
-```
+Operator-visible behavior is:
+- exact role match: proceed normally
+- partial overlap: continue with warnings and automatic category filtering
+- no overlap: warn before continuing
+- unknown: warn because role-specific validation is incomplete
+
+For the internal precedence rules and implementation path, see
+[RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md#phase-3-system-detection--compatibility).
 
 ### 4. Network Safe Apply (Optional)
 

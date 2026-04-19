@@ -18,6 +18,11 @@ Technical architecture and implementation details for the restore system.
 
 ## Architecture Overview
 
+This document is the implementation-oriented companion to
+[RESTORE_GUIDE.md](RESTORE_GUIDE.md). Use the guide for operator behavior and
+examples; use this file for internal restore logic, module responsibilities,
+and decision flow details.
+
 ### Design Principles
 
 1. **Safety First**: Multiple layers of protection against data loss
@@ -423,6 +428,10 @@ type PreparedBackup struct {
 #### Phase 3: System Detection & Compatibility
 
 **File**: `internal/orchestrator/restore.go:58-72`
+
+This section is the technical source of truth for restore compatibility.
+User-facing examples and warning text live in
+[RESTORE_GUIDE.md](RESTORE_GUIDE.md#phase-3-compatibility-check).
 
 ```go
 systemType := DetectCurrentSystem()
