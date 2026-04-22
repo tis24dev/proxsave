@@ -528,16 +528,26 @@ EMAIL_DELIVERY_METHOD=relay
 EMAIL_RECIPIENT=admin@example.com
 EMAIL_FROM=noreply@proxmox.example.com
 
-# Webhook (Discord)
+# Webhook (Discord + Pushover)
 WEBHOOK_ENABLED=true
-WEBHOOK_ENDPOINTS=discord_alerts
+WEBHOOK_ENDPOINTS=discord_alerts,pushover
 WEBHOOK_DISCORD_ALERTS_URL=https://discord.com/api/webhooks/XXXX/YYYY
 WEBHOOK_DISCORD_ALERTS_FORMAT=discord
 WEBHOOK_DISCORD_ALERTS_METHOD=POST
 
+# Pushover (push notifications to phone/desktop). Token + user key go in the
+# JSON body, so AUTH_TYPE stays "none". PRIORITY accepts -2..1 (default 0).
+WEBHOOK_PUSHOVER_URL=https://api.pushover.net/1/messages.json
+WEBHOOK_PUSHOVER_FORMAT=pushover
+WEBHOOK_PUSHOVER_METHOD=POST
+WEBHOOK_PUSHOVER_AUTH_TYPE=none
+WEBHOOK_PUSHOVER_AUTH_TOKEN=azGDORePK8gMaC0QOYAMyEEuzJnyUi
+WEBHOOK_PUSHOVER_AUTH_USER=uQiRzpo4DXghDmr9QzzfQu27cmVRsG
+WEBHOOK_PUSHOVER_PRIORITY=0
+
 # Run backup
 ./build/proxsave
-# Result: Notifications sent to Telegram, Email, and Discord
+# Result: Notifications sent to Telegram, Email, Discord, and Pushover
 ```
 
 ### Setup Steps

@@ -58,6 +58,12 @@ func NewWebhookNotifier(webhookConfig *config.WebhookConfig, logger *logging.Log
 				logger.Debug("    Header: %s (value masked)", k)
 			}
 		}
+
+		if strings.EqualFold(ep.Format, "pushover") {
+			if ep.Priority < -2 || ep.Priority > 1 {
+				return nil, fmt.Errorf("webhook endpoint %q: PRIORITY must be in range -2..1 (got %d); priority 2 (emergency) is not supported", ep.Name, ep.Priority)
+			}
+		}
 	}
 
 	// Create HTTP client with timeout
@@ -178,7 +184,8 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 	w.logger.Debug("Building %s payload...", format)
 	payloadStart := time.Now()
 
-	payload, err := w.buildPayload(format, data)
+	endpoint.Format = format
+	payload, err := w.buildPayload(endpoint, data)
 	if err != nil {
 		w.logger.Error("Failed to build %s payload: %v", format, err)
 		return fmt.Errorf("failed to build payload: %w", err)
@@ -415,16 +422,19 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 }
 
 // buildPayload builds the webhook payload based on format
-func (w *WebhookNotifier) buildPayload(format string, data *NotificationData) (interface{}, error) {
+func (w *WebhookNotifier) buildPayload(endpoint config.WebhookEndpoint, data *NotificationData) (interface{}, error) {
+	format := strings.ToLower(endpoint.Format)
 	w.logger.Debug("buildPayload() called with format=%s", format)
 
-	switch strings.ToLower(format) {
+	switch format {
 	case "discord":
 		return buildDiscordPayload(data, w.logger)
 	case "slack":
 		return buildSlackPayload(data, w.logger)
 	case "teams":
 		return buildTeamsPayload(data, w.logger)
+	case "pushover":
+		return buildPushoverPayload(endpoint, data, w.logger)
 	case "generic":
 		return buildGenericPayload(data, w.logger)
 	default:
