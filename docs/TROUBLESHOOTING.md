@@ -568,8 +568,9 @@ If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVER
 - Recipient auto-detection details (when `EMAIL_RECIPIENT` is empty):
   - **PVE**: `pvesh get /access/users/root@pam` → fallback to `pveum user list` → fallback to `/etc/pve/user.cfg`
   - **PBS**: `proxmox-backup-manager user list` → fallback to `/etc/proxmox-backup/user.cfg`
+  - **Dual**: intentionally reuses the **PVE** path for `root@pam` email discovery
 - Relay blocks `root@…` recipients; use a real non-root mailbox for `EMAIL_RECIPIENT`.
-- If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to `EMAIL_DELIVERY_METHOD=pmf` when the relay fails.
+- If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to `EMAIL_DELIVERY_METHOD=pmf` when the relay fails. If relay cannot even start because recipient resolution/preconditions fail, ProxSave can bypass relay and invoke the PMF fallback directly.
 - Check the proxsave logs for `email-relay` warnings/errors.
 - `Email relay accepted request ...` means the relay accepted the submission. It does **not** guarantee final inbox delivery; later provider-side failures/bounces are outside the ProxSave process.
 

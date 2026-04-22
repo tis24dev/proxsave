@@ -14,6 +14,7 @@ Real-world configuration examples for Proxsave covering common deployment scenar
 - [Example 7: Multi-Notification Setup](#example-7-multi-notification-setup)
 - [Example 8: Complete Production Setup](#example-8-complete-production-setup)
 - [Example 9: Test in a Chroot/Fixture](#example-9-test-in-a-chrootfixture)
+- [Example 10: Dual PVE+PBS Host](#example-10-dual-pvepbs-host)
 - [Related Documentation](#related-documentation)
 
 ---
@@ -897,6 +898,71 @@ SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxsave
 ### Expected Results
 - Collected files reflect the contents of `/mnt/snapshot-root/etc`, `/var`, `/root`, `/home`, etc.
 - No writes to the node's live filesystem.
+
+---
+
+## Example 10: Dual PVE+PBS Host
+
+**Scenario**: A single node runs both Proxmox VE and Proxmox Backup Server.
+
+**Use case**:
+- Lab or edge node with co-installed PVE + PBS
+- Single backup run should include both product roles
+- Restore must remain compatible with `dual`, `pve`, or `pbs` targets
+
+### Configuration
+
+```bash
+# configs/backup.env
+BACKUP_ENABLED=true
+BACKUP_PATH=/opt/proxsave/backup
+LOG_PATH=/opt/proxsave/log
+
+# Common/system collection
+BACKUP_NETWORK_CONFIGS=true
+BACKUP_CRON_JOBS=true
+BACKUP_SYSTEMD_SERVICES=true
+BACKUP_ZFS_CONFIG=true
+
+# PVE collection
+BACKUP_VM_CONFIGS=true
+BACKUP_CLUSTER_CONFIG=true
+BACKUP_PVE_JOBS=true
+BACKUP_PVE_REPLICATION=true
+BACKUP_PVE_FIREWALL=true
+
+# PBS collection
+BACKUP_DATASTORE_CONFIGS=true
+BACKUP_REMOTE_CONFIGS=true
+BACKUP_SYNC_JOBS=true
+BACKUP_VERIFICATION_JOBS=true
+BACKUP_PBS_NOTIFICATIONS=true
+BACKUP_PBS_NODE_CONFIG=true
+
+# Recommended for dual labs: keep diagnostics
+BACKUP_PXAR_FILES=true
+```
+
+### Expected Behavior
+
+- ProxSave auto-detects the host as `dual`
+- One archive is produced for the run
+- Metadata persists:
+  - `BACKUP_TYPE=dual`
+  - `BACKUP_TARGETS=pve,pbs`
+- The backup contains:
+  - PVE categories
+  - PBS categories
+  - one shared `common/system` payload
+
+### Restore Notes
+
+- Restore on a `dual` host: full `PVE + PBS + Common`
+- Restore on a `pve` host: `PVE + Common`
+- Restore on a `pbs` host: `PBS + Common`
+
+The restore workflow filters categories automatically when the current host does
+not support all backup targets.
 
 ---
 

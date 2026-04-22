@@ -1,6 +1,7 @@
 # Proxsave - Restore Guide
 
-Complete guide for restoring Proxmox VE and Proxmox Backup Server configurations using the interactive restore workflow.
+Complete guide for restoring Proxmox VE, Proxmox Backup Server, and dual-role
+PVE+PBS backups using the interactive restore workflow.
 
 ## Table of Contents
 
@@ -50,6 +51,14 @@ Complete guide for restoring Proxmox VE and Proxmox Backup Server configurations
 
 The `--restore` command provides an **interactive, category-based restoration system** that allows selective or full restoration of Proxmox configuration files from backup archives.
 
+### How to Use the Restore Docs
+
+The restore documentation is split on purpose:
+
+- [RESTORE_GUIDE.md](RESTORE_GUIDE.md): operator workflow, modes, warnings, and practical examples
+- [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md): implementation details, detection logic, and internal architecture
+- [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md): visual companion for the main workflow and decision paths
+
 ### Key Features
 
 - **Category-based selection**: Granular control over what gets restored
@@ -59,6 +68,32 @@ The `--restore` command provides an **interactive, category-based restoration sy
 - **Cluster-aware**: Special handling for PVE cluster database
 - **Export-only protection**: Critical paths protected from direct writes
 - **Comprehensive logging**: Detailed audit trail of all operations
+
+### System Types and Compatibility
+
+Restore decisions are now based on four host types:
+
+- `pve`
+- `pbs`
+- `dual`
+- `unknown`
+
+Backups also persist explicit target roles. This means compatibility is no
+longer a simple exact match:
+
+- **Full compatibility**: current host and backup targets match exactly
+- **Partial compatibility**: backup and host share at least one role
+- **Incompatible**: backup and host share no role
+
+Examples:
+
+- `dual` backup on `dual` host: restore `PVE + PBS + Common`
+- `dual` backup on `pve` host: restore `PVE + Common`
+- `dual` backup on `pbs` host: restore `PBS + Common`
+- `pve` backup on `dual` host: restore `PVE + Common`
+
+`unknown` hosts can still use export-oriented or common-only workflows, but
+ProxSave warns because role-specific compatibility cannot be verified.
 
 ### What Gets Restored
 
@@ -204,6 +239,10 @@ Four predefined modes provide common restoration scenarios, plus custom selectio
 - **Normal** categories are restored to system paths
 - **Staged** categories are extracted under `/tmp/proxsave/restore-stage-*` and applied automatically (API/file apply)
 - **Export-only** categories (e.g. `pve_config_export`, `pbs_config`) are extracted to the export directory for manual review/application
+- On a `dual` host, FULL restore can include PVE, PBS, and Common categories in
+  the same run
+- On a single-role host restoring a `dual` backup, ProxSave automatically
+  filters the FULL selection to compatible categories
 
 **Command Flow**:
 ```
@@ -238,6 +277,10 @@ Select restore mode:
 - `filesystem` - /etc/fstab
 - `storage_stack` - Storage stack config (mount prerequisites)
 - `zfs` - ZFS configuration
+
+**Dual hosts**:
+- STORAGE mode on a `dual` host includes the compatible storage-focused
+  categories from both product roles plus the common storage categories
 
 **Command Flow**:
 ```
@@ -312,7 +355,10 @@ Your selection: c      # Continue to restore plan
 
 ## Complete Workflow
 
-The restore process follows a **14-phase workflow** with safety checks at each step.
+The restore process follows a phased workflow with safety checks at each step.
+This section stays operator-focused. Internal decision rules and code-level
+behavior live in [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md), while the visual
+flow lives in [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md).
 
 ### Workflow Diagram
 
@@ -334,10 +380,10 @@ Phase 2: Decryption (if needed)
   └─ Verify SHA256 checksum
 
 Phase 3: Compatibility Check
-  ├─ Detect current system type (PVE/PBS/Unknown)
+  ├─ Detect current system type (PVE/PBS/DUAL/Unknown)
   ├─ Read backup type from manifest
-  ├─ Validate compatibility
-  └─ Warn if mismatch, require confirmation
+  ├─ Validate compatibility (exact / partial / incompatible)
+  └─ Filter to compatible categories when needed
 
 Phase 4: Category Analysis
   ├─ Open and scan archive
@@ -402,7 +448,7 @@ Phase 13: SAFE Apply (Cluster SAFE Mode Only)
 Phase 14: Post-Restore Tasks
   ├─ Optional: Apply restored network config with rollback timer (requires COMMIT)
   ├─ Recreate storage/datastore directories
-  ├─ Check ZFS pool status (PBS only)
+  ├─ Check ZFS pool status when the `zfs` category was restored (including dual hosts)
   ├─ Restart PVE/PBS services (if stopped)
   └─ Display completion summary
 ```
@@ -463,6 +509,18 @@ Backup system type: Proxmox Virtual Environment (PVE)
 ✓ Systems are compatible
 ```
 
+**Partial-compatibility warning**:
+```
+⚠ WARNING: Partial compatibility detected
+
+Current system: Proxmox Virtual Environment (PVE)
+Backup source: Proxmox VE + Proxmox Backup Server (DUAL)
+
+ProxSave will continue with the categories compatible with the current host:
+- PVE categories
+- Common categories
+```
+
 **Incompatibility warning**:
 ```
 ⚠ WARNING: Potential incompatibility detected!
@@ -475,6 +533,10 @@ compatible with PBS. Proceeding may result in system instability.
 
 Type "yes" to continue anyway or "no" to abort:
 ```
+
+This guide intentionally shows the operator-facing outcomes only. The exact
+metadata precedence, host detection order, and capability-overlap rules are
+documented in [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md#phase-3-system-detection--compatibility).
 
 #### Phase 6: Cluster Restore Mode (PVE Cluster Backups Only)
 
@@ -1781,18 +1843,17 @@ Current auto-skip prompts:
 
 ### 3. Compatibility Validation
 
-**System Type Detection**:
-```
-Current system: Proxmox Virtual Environment (PVE)
-Backup source: Proxmox Virtual Environment (PVE)
-✓ Compatible
-```
+Compatibility is evaluated with the same `pve | pbs | dual | unknown` model
+described in [System Types and Compatibility](#system-types-and-compatibility).
 
-**Incompatibility Warning**:
-```
-⚠ WARNING: Potential incompatibility detected!
-Type "yes" to continue anyway or "no" to abort: _
-```
+Operator-visible behavior is:
+- exact role match: proceed normally
+- partial overlap: continue with warnings and automatic category filtering
+- no overlap: warn before continuing
+- unknown: warn because role-specific validation is incomplete
+
+For the internal precedence rules and implementation path, see
+[RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md#phase-3-system-detection--compatibility).
 
 ### 4. Network Safe Apply (Optional)
 
@@ -2438,7 +2499,17 @@ systemctl restart proxmox-backup proxmox-backup-proxy
 
 **Q: Can I restore PVE backup to PBS system (or vice versa)?**
 
-A: Not recommended. The restore workflow will warn about incompatibility. PVE and PBS have different configurations that are not interchangeable. However, **common categories** (network, SSH, SSL) can be safely restored cross-platform using Custom mode.
+A: Direct cross-role restore is still not recommended. PVE and PBS have
+different role-specific configurations. However, ProxSave now evaluates
+compatibility by **role overlap**:
+
+- `pve` ↔ `pbs`: only common categories are sensible
+- `dual` → `pve`: PVE + Common can be restored
+- `dual` → `pbs`: PBS + Common can be restored
+- `pve` or `pbs` → `dual`: the matching role + Common can be restored
+
+When overlap exists, ProxSave continues with warnings and automatically filters
+the selected categories to the roles supported by the current host.
 
 ---
 
@@ -2464,6 +2535,8 @@ Typical full restore: **5-15 minutes**
 
 A: Yes, with considerations:
 - **Same system type** (PVE to PVE, PBS to PBS) recommended
+- **Dual-role to single-role** restores are allowed, but only matching role
+  categories plus Common are applied
 - **Hostname** should match or be updated manually
 - **Network configuration** may need adjustment
 - **Storage paths** may need adjustment
