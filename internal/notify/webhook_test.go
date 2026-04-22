@@ -1247,3 +1247,74 @@ func TestNewWebhookNotifier_PushoverPriority(t *testing.T) {
 		})
 	}
 }
+
+func TestNewWebhookNotifier_PushoverPriority_UsesDefaultFormat(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	ep := pushoverTestEndpoint(2)
+	ep.Format = ""
+
+	cfg := &config.WebhookConfig{
+		Enabled:       true,
+		DefaultFormat: "pushover",
+		Timeout:       30,
+		Endpoints:     []config.WebhookEndpoint{ep},
+	}
+
+	_, err := NewWebhookNotifier(cfg, logger)
+	if err == nil {
+		t.Fatal("expected error for invalid pushover priority resolved from default format, got nil")
+	}
+	if !strings.Contains(err.Error(), "PRIORITY") {
+		t.Fatalf("error %q does not mention PRIORITY", err.Error())
+	}
+}
+
+func TestNewWebhookNotifier_PushoverMethod(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	tests := []struct {
+		name          string
+		method        string
+		format        string
+		defaultFormat string
+		expectError   bool
+	}{
+		{name: "explicit post", method: "POST", format: "pushover", expectError: false},
+		{name: "implicit post", method: "", format: "pushover", expectError: false},
+		{name: "default format post", method: "", format: "", defaultFormat: "pushover", expectError: false},
+		{name: "get rejected", method: "GET", format: "pushover", expectError: true},
+		{name: "head rejected", method: "HEAD", format: "pushover", expectError: true},
+		{name: "put rejected", method: "PUT", format: "pushover", expectError: true},
+		{name: "default format get rejected", method: "GET", format: "", defaultFormat: "pushover", expectError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := pushoverTestEndpoint(0)
+			ep.Method = tt.method
+			ep.Format = tt.format
+
+			cfg := &config.WebhookConfig{
+				Enabled:       true,
+				DefaultFormat: tt.defaultFormat,
+				Timeout:       30,
+				Endpoints:     []config.WebhookEndpoint{ep},
+			}
+
+			_, err := NewWebhookNotifier(cfg, logger)
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), "METHOD must be POST") {
+					t.Fatalf("error %q does not mention POST method requirement", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
