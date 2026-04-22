@@ -204,7 +204,9 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 
 	w.logger.Debug("Payload marshaled: %d bytes", len(payloadBytes))
 	if w.logger.GetLevel() <= types.LogLevelDebug {
-		if len(payloadBytes) > 200 {
+		if strings.EqualFold(format, "pushover") {
+			w.logger.Debug("Payload preview omitted: pushover payload contains credentials")
+		} else if len(payloadBytes) > 200 {
 			w.logger.Debug("Payload preview (first 200 chars): %s...", string(payloadBytes[:200]))
 		} else {
 			w.logger.Debug("Payload content: %s", string(payloadBytes))

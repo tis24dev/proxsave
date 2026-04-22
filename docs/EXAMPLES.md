@@ -503,7 +503,7 @@ crontab -e
 
 ## Example 7: Multi-Notification Setup
 
-**Scenario**: Telegram + Email + Webhook (Discord) notifications.
+**Scenario**: Telegram + Email + Webhook (Discord + Pushover) notifications.
 
 **Use case**:
 - Multiple notification channels
@@ -541,8 +541,8 @@ WEBHOOK_PUSHOVER_URL=https://api.pushover.net/1/messages.json
 WEBHOOK_PUSHOVER_FORMAT=pushover
 WEBHOOK_PUSHOVER_METHOD=POST
 WEBHOOK_PUSHOVER_AUTH_TYPE=none
-WEBHOOK_PUSHOVER_AUTH_TOKEN=azGDORePK8gMaC0QOYAMyEEuzJnyUi
-WEBHOOK_PUSHOVER_AUTH_USER=uQiRzpo4DXghDmr9QzzfQu27cmVRsG
+WEBHOOK_PUSHOVER_AUTH_TOKEN=<pushover-application-token>
+WEBHOOK_PUSHOVER_AUTH_USER=<pushover-user-or-group-key>
 WEBHOOK_PUSHOVER_PRIORITY=0
 
 # Run backup
@@ -601,11 +601,13 @@ printf "To: root\nSubject: proxsave test\n\nHello from proxsave\n" | sudo /usr/l
 - ✅ Telegram message with summary
 - ✅ Email with detailed report
 - ✅ Discord embed with stats
+- ✅ Pushover push notification
 
 **On failure**:
 - ❌ Telegram alert with error
 - ❌ Email with failure details
 - ❌ Discord mention with logs
+- ❌ Pushover push notification
 
 ---
 
