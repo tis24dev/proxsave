@@ -1427,13 +1427,16 @@ func (c *Config) BuildWebhookConfig() *WebhookConfig {
 			}
 		}
 
+		priority := c.getInt(prefix+"PRIORITY", 0)
+
 		endpoints = append(endpoints, WebhookEndpoint{
-			Name:    name,
-			URL:     url,
-			Format:  format,
-			Method:  method,
-			Headers: headers,
-			Auth:    auth,
+			Name:     name,
+			URL:      url,
+			Format:   format,
+			Method:   method,
+			Headers:  headers,
+			Auth:     auth,
+			Priority: priority,
 		})
 	}
 
@@ -1528,6 +1531,7 @@ type WebhookEndpoint struct {
 	Method       string
 	Headers      map[string]string
 	Auth         WebhookAuth
+	Priority     int
 	CustomFields map[string]interface{}
 }
 

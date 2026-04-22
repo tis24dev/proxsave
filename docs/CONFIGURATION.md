@@ -906,7 +906,7 @@ WEBHOOK_ENABLED=false              # true | false
 WEBHOOK_ENDPOINTS=                 # e.g., "discord_alerts,teams_ops"
 
 # Default payload format
-WEBHOOK_FORMAT=generic             # discord | slack | teams | generic
+WEBHOOK_FORMAT=generic             # discord | slack | teams | generic | pushover
 
 # Request timeout (seconds)
 WEBHOOK_TIMEOUT=30
@@ -923,7 +923,7 @@ WEBHOOK_RETRY_DELAY=2              # Seconds between retries
 WEBHOOK_DISCORD_ALERTS_URL=https://discord.com/api/webhooks/XXXX/YYY
 
 # Payload format
-WEBHOOK_DISCORD_ALERTS_FORMAT=discord  # discord | slack | teams | generic
+WEBHOOK_DISCORD_ALERTS_FORMAT=discord  # discord | slack | teams | generic | pushover
 
 # HTTP method
 WEBHOOK_DISCORD_ALERTS_METHOD=POST     # POST | GET | HEAD
@@ -935,10 +935,13 @@ WEBHOOK_DISCORD_ALERTS_HEADERS="X-Custom-Token:abc123,X-Another:value"
 WEBHOOK_DISCORD_ALERTS_AUTH_TYPE=none  # none | bearer | basic | hmac
 
 # Authentication credentials
-WEBHOOK_DISCORD_ALERTS_AUTH_TOKEN=     # Bearer token
-WEBHOOK_DISCORD_ALERTS_AUTH_USER=      # Basic auth username
+WEBHOOK_DISCORD_ALERTS_AUTH_TOKEN=     # Bearer token (or Pushover application token)
+WEBHOOK_DISCORD_ALERTS_AUTH_USER=      # Basic auth username (or Pushover user/group key)
 WEBHOOK_DISCORD_ALERTS_AUTH_PASS=      # Basic auth password
 WEBHOOK_DISCORD_ALERTS_AUTH_SECRET=    # HMAC secret key
+
+# Pushover-specific (only honored when FORMAT=pushover; default 0, range -2..1)
+WEBHOOK_DISCORD_ALERTS_PRIORITY=0
 ```
 
 **Supported formats**:
@@ -946,6 +949,7 @@ WEBHOOK_DISCORD_ALERTS_AUTH_SECRET=    # HMAC secret key
 - **slack**: Slack incoming webhook format
 - **teams**: Microsoft Teams connector format
 - **generic**: Simple JSON `{"status": "...", "message": "..."}`
+- **pushover**: [Pushover](https://pushover.net) push notifications. Reuses `AUTH_TOKEN` (application token) and `AUTH_USER` (user/group key); `AUTH_TYPE` stays `none` because Pushover takes credentials in the JSON body. Title is truncated to 250 characters and message to 1024 characters per Pushover's API limits. `PRIORITY` accepts -2..1 (default 0); emergency priority (2) is not supported.
 
 ---
 

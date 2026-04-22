@@ -504,7 +504,7 @@ crontab -e
 
 ## Example 7: Multi-Notification Setup
 
-**Scenario**: Telegram + Email + Webhook (Discord) notifications.
+**Scenario**: Telegram + Email + Webhook (Discord + Pushover) notifications.
 
 **Use case**:
 - Multiple notification channels
@@ -529,16 +529,26 @@ EMAIL_DELIVERY_METHOD=relay
 EMAIL_RECIPIENT=admin@example.com
 EMAIL_FROM=noreply@proxmox.example.com
 
-# Webhook (Discord)
+# Webhook (Discord + Pushover)
 WEBHOOK_ENABLED=true
-WEBHOOK_ENDPOINTS=discord_alerts
+WEBHOOK_ENDPOINTS=discord_alerts,pushover
 WEBHOOK_DISCORD_ALERTS_URL=https://discord.com/api/webhooks/XXXX/YYYY
 WEBHOOK_DISCORD_ALERTS_FORMAT=discord
 WEBHOOK_DISCORD_ALERTS_METHOD=POST
 
+# Pushover (push notifications to phone/desktop). Token + user key go in the
+# JSON body, so AUTH_TYPE stays "none". PRIORITY accepts -2..1 (default 0).
+WEBHOOK_PUSHOVER_URL=https://api.pushover.net/1/messages.json
+WEBHOOK_PUSHOVER_FORMAT=pushover
+WEBHOOK_PUSHOVER_METHOD=POST
+WEBHOOK_PUSHOVER_AUTH_TYPE=none
+WEBHOOK_PUSHOVER_AUTH_TOKEN=<pushover-application-token>
+WEBHOOK_PUSHOVER_AUTH_USER=<pushover-user-or-group-key>
+WEBHOOK_PUSHOVER_PRIORITY=0
+
 # Run backup
 ./build/proxsave
-# Result: Notifications sent to Telegram, Email, and Discord
+# Result: Notifications sent to Telegram, Email, Discord, and Pushover
 ```
 
 ### Setup Steps
@@ -592,11 +602,13 @@ printf "To: root\nSubject: proxsave test\n\nHello from proxsave\n" | sudo /usr/l
 - ✅ Telegram message with summary
 - ✅ Email with detailed report
 - ✅ Discord embed with stats
+- ✅ Pushover push notification
 
 **On failure**:
 - ❌ Telegram alert with error
 - ❌ Email with failure details
 - ❌ Discord mention with logs
+- ❌ Pushover push notification
 
 ---
 

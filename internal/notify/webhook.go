@@ -24,6 +24,25 @@ type WebhookNotifier struct {
 	client *http.Client
 }
 
+func resolveWebhookFormat(format, defaultFormat string) string {
+	format = strings.TrimSpace(format)
+	if format == "" {
+		format = strings.TrimSpace(defaultFormat)
+	}
+	if format == "" {
+		return "generic"
+	}
+	return format
+}
+
+func resolveWebhookMethod(method string) string {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == "" {
+		return http.MethodPost
+	}
+	return method
+}
+
 // NewWebhookNotifier creates a new webhook notifier
 func NewWebhookNotifier(webhookConfig *config.WebhookConfig, logger *logging.Logger) (*WebhookNotifier, error) {
 	logger.Debug("WebhookNotifier initialization starting...")
@@ -56,6 +75,17 @@ func NewWebhookNotifier(webhookConfig *config.WebhookConfig, logger *logging.Log
 		if len(ep.Headers) > 0 {
 			for k := range ep.Headers {
 				logger.Debug("    Header: %s (value masked)", k)
+			}
+		}
+
+		format := resolveWebhookFormat(ep.Format, webhookConfig.DefaultFormat)
+		method := resolveWebhookMethod(ep.Method)
+		if strings.EqualFold(format, "pushover") {
+			if ep.Priority < -2 || ep.Priority > 1 {
+				return nil, fmt.Errorf("webhook endpoint %q: PRIORITY must be in range -2..1 (got %d); priority 2 (emergency) is not supported", ep.Name, ep.Priority)
+			}
+			if method != http.MethodPost {
+				return nil, fmt.Errorf("webhook endpoint %q: METHOD must be POST for pushover (got %s)", ep.Name, method)
 			}
 		}
 	}
@@ -164,21 +194,29 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 	w.logger.Debug("Endpoint format: %s, URL: %s", endpoint.Format, maskURL(endpoint.URL))
 
 	// Determine format to use
-	format := endpoint.Format
-	if format == "" {
-		format = w.config.DefaultFormat
-		w.logger.Debug("Using default format: %s", format)
+	format := resolveWebhookFormat(endpoint.Format, w.config.DefaultFormat)
+	if strings.TrimSpace(endpoint.Format) == "" {
+		if strings.TrimSpace(w.config.DefaultFormat) != "" {
+			w.logger.Debug("Using default format: %s", format)
+		} else {
+			w.logger.Debug("No format specified, using generic")
+		}
 	}
-	if format == "" {
-		format = "generic"
-		w.logger.Debug("No format specified, using generic")
+
+	method := resolveWebhookMethod(endpoint.Method)
+	if strings.TrimSpace(endpoint.Method) == "" {
+		w.logger.Debug("No method specified, using POST")
+	}
+	if strings.EqualFold(format, "pushover") && method != http.MethodPost {
+		return fmt.Errorf("webhook endpoint %q: METHOD must be POST for pushover (got %s)", endpoint.Name, method)
 	}
 
 	// Build payload based on format
 	w.logger.Debug("Building %s payload...", format)
 	payloadStart := time.Now()
 
-	payload, err := w.buildPayload(format, data)
+	endpoint.Format = format
+	payload, err := w.buildPayload(endpoint, data)
 	if err != nil {
 		w.logger.Error("Failed to build %s payload: %v", format, err)
 		return fmt.Errorf("failed to build payload: %w", err)
@@ -197,7 +235,9 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 
 	w.logger.Debug("Payload marshaled: %d bytes", len(payloadBytes))
 	if w.logger.GetLevel() <= types.LogLevelDebug {
-		if len(payloadBytes) > 200 {
+		if strings.EqualFold(format, "pushover") {
+			w.logger.Debug("Payload preview omitted: pushover payload contains credentials")
+		} else if len(payloadBytes) > 200 {
 			w.logger.Debug("Payload preview (first 200 chars): %s...", string(payloadBytes[:200]))
 		} else {
 			w.logger.Debug("Payload content: %s", string(payloadBytes))
@@ -227,12 +267,6 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 			if err := sleepWithContext(ctx, time.Duration(retryDelay)*time.Second); err != nil {
 				return err
 			}
-		}
-
-		// Determine HTTP method
-		method := strings.ToUpper(strings.TrimSpace(endpoint.Method))
-		if method == "" {
-			method = "POST"
 		}
 
 		parsedURL, parseErr := url.Parse(endpoint.URL)
@@ -415,16 +449,19 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 }
 
 // buildPayload builds the webhook payload based on format
-func (w *WebhookNotifier) buildPayload(format string, data *NotificationData) (interface{}, error) {
+func (w *WebhookNotifier) buildPayload(endpoint config.WebhookEndpoint, data *NotificationData) (interface{}, error) {
+	format := strings.ToLower(endpoint.Format)
 	w.logger.Debug("buildPayload() called with format=%s", format)
 
-	switch strings.ToLower(format) {
+	switch format {
 	case "discord":
 		return buildDiscordPayload(data, w.logger)
 	case "slack":
 		return buildSlackPayload(data, w.logger)
 	case "teams":
 		return buildTeamsPayload(data, w.logger)
+	case "pushover":
+		return buildPushoverPayload(endpoint, data, w.logger)
 	case "generic":
 		return buildGenericPayload(data, w.logger)
 	default:
