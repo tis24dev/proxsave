@@ -15,8 +15,6 @@ func newTestLogger() *logging.Logger {
 }
 
 func TestTempDirRegistryRegisterAndDeregister(t *testing.T) {
-	t.Parallel()
-
 	regPath := filepath.Join(t.TempDir(), "temp-dirs.json")
 	registry, err := NewTempDirRegistry(newTestLogger(), regPath)
 	if err != nil {
@@ -54,8 +52,6 @@ func TestTempDirRegistryRegisterAndDeregister(t *testing.T) {
 }
 
 func TestTempDirRegistryCleanupOrphaned(t *testing.T) {
-	t.Parallel()
-
 	regPath := filepath.Join(t.TempDir(), "temp-dirs.json")
 	registry, err := NewTempDirRegistry(newTestLogger(), regPath)
 	if err != nil {

@@ -63,8 +63,6 @@ func TestApplyPBSRemoteCfgFromStage_RemovesWhenEmpty(t *testing.T) {
 }
 
 func TestShouldApplyPBSDatastoreBlock_AllowsMountLikePathsOnRootFS(t *testing.T) {
-	t.Parallel()
-
 	dir, err := os.MkdirTemp("/mnt", "proxsave-test-ds-")
 	if err != nil {
 		t.Skipf("cannot create temp dir under /mnt: %v", err)

@@ -11,8 +11,6 @@ import (
 )
 
 func TestGuardMountpointsFromMountinfo_VisibleAndHidden(t *testing.T) {
-	t.Parallel()
-
 	mountinfo := strings.Join([]string{
 		"10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/visible rw - ext4 /dev/sda1 rw",
 		"20 1 0:1 " + mountGuardBaseDir + "/g2 /mnt/hidden rw - ext4 /dev/sda1 rw",
@@ -32,8 +30,6 @@ func TestGuardMountpointsFromMountinfo_VisibleAndHidden(t *testing.T) {
 }
 
 func TestGuardMountpointsFromMountinfo_UnescapesMountpoint(t *testing.T) {
-	t.Parallel()
-
 	mountinfo := "10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/with\\040space rw - ext4 /dev/sda1 rw\n"
 	visible, hidden, mounts := guardMountpointsFromMountinfo(mountinfo)
 	if mounts != 1 {

@@ -7,8 +7,6 @@ import (
 )
 
 func TestPVEStorageMountGuardItems_BuildsExpectedTargets(t *testing.T) {
-	t.Parallel()
-
 	candidates := []pveStorageMountGuardCandidate{
 		{StorageID: "Data1", StorageType: "dir", Path: "/mnt/datastore/Data1"},
 		{StorageID: "Synology-Archive", StorageType: "dir", Path: "/mnt/Synology_NFS/PBS_Backup"},
@@ -40,8 +38,6 @@ func TestPVEStorageMountGuardItems_BuildsExpectedTargets(t *testing.T) {
 }
 
 func TestApplyPVEBackupJobsFromStage_CreatesJobsViaPvesh(t *testing.T) {
-	t.Parallel()
-
 	origFS := restoreFS
 	origCmd := restoreCmd
 	t.Cleanup(func() {

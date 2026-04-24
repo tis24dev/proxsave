@@ -29,21 +29,83 @@ var decryptTUIE2EMu sync.Mutex
 
 type notifyingSimulationScreen struct {
 	tcell.SimulationScreen
-	notify func()
+	mu       sync.Mutex
+	snapshot timedSimScreenSnapshot
+	notify   func()
+}
+
+type timedSimScreenSnapshot struct {
+	cells         []tcell.SimCell
+	width         int
+	height        int
+	cursorX       int
+	cursorY       int
+	cursorVisible bool
+	ready         bool
 }
 
 func (s *notifyingSimulationScreen) Show() {
+	s.mu.Lock()
 	s.SimulationScreen.Show()
+	s.captureLocked()
+	s.mu.Unlock()
+	s.notifyChange()
+}
+
+func (s *notifyingSimulationScreen) Sync() {
+	s.mu.Lock()
+	s.SimulationScreen.Sync()
+	s.captureLocked()
+	s.mu.Unlock()
+	s.notifyChange()
+}
+
+func (s *notifyingSimulationScreen) snapshotState() timedSimScreenSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneTimedSimScreenSnapshot(s.snapshot)
+}
+
+func (s *notifyingSimulationScreen) captureLocked() {
+	cells, width, height := s.SimulationScreen.GetContents()
+	cursorX, cursorY, cursorVisible := s.SimulationScreen.GetCursor()
+	s.snapshot = timedSimScreenSnapshot{
+		cells:         cloneSimCells(cells),
+		width:         width,
+		height:        height,
+		cursorX:       cursorX,
+		cursorY:       cursorY,
+		cursorVisible: cursorVisible,
+		ready:         true,
+	}
+}
+
+func (s *notifyingSimulationScreen) notifyChange() {
 	if s.notify != nil {
 		s.notify()
 	}
 }
 
-func (s *notifyingSimulationScreen) Sync() {
-	s.SimulationScreen.Sync()
-	if s.notify != nil {
-		s.notify()
+func cloneTimedSimScreenSnapshot(snapshot timedSimScreenSnapshot) timedSimScreenSnapshot {
+	snapshot.cells = cloneSimCells(snapshot.cells)
+	return snapshot
+}
+
+func cloneSimCells(cells []tcell.SimCell) []tcell.SimCell {
+	if len(cells) == 0 {
+		return nil
 	}
+	cloned := make([]tcell.SimCell, len(cells))
+	for i, cell := range cells {
+		cloned[i] = cell
+		if cell.Bytes != nil {
+			cloned[i].Bytes = append([]byte(nil), cell.Bytes...)
+		}
+		if cell.Runes != nil {
+			cloned[i].Runes = append([]rune(nil), cell.Runes...)
+		}
+	}
+	return cloned
 }
 
 type timedSimKey struct {
@@ -129,10 +191,11 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 					if app != nil {
 						focus = app.GetFocus()
 					}
+					snapshot := screen.snapshotState()
 
 					return timedSimScreenState{
-						signature: timedSimScreenStateSignature(screen, focus),
-						text:      timedSimScreenText(screen),
+						signature: timedSimScreenStateSignature(snapshot, focus),
+						text:      timedSimScreenText(snapshot),
 					}
 				}
 
@@ -181,30 +244,30 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 	}
 }
 
-func timedSimScreenStateSignature(screen tcell.SimulationScreen, focus any) string {
-	cells, width, height := screen.GetContents()
-	cursorX, cursorY, cursorVisible := screen.GetCursor()
+func timedSimScreenStateSignature(snapshot timedSimScreenSnapshot, focus any) string {
+	if !snapshot.ready || snapshot.width <= 0 || snapshot.height <= 0 || len(snapshot.cells) < snapshot.width*snapshot.height {
+		return ""
+	}
 
 	sum := sha256.New()
-	fmt.Fprintf(sum, "size:%d:%d cursor:%d:%d:%t focus:%T:%p\n", width, height, cursorX, cursorY, cursorVisible, focus, focus)
-	for _, cell := range cells {
+	fmt.Fprintf(sum, "size:%d:%d cursor:%d:%d:%t focus:%T:%p\n", snapshot.width, snapshot.height, snapshot.cursorX, snapshot.cursorY, snapshot.cursorVisible, focus, focus)
+	for _, cell := range snapshot.cells {
 		fg, bg, attr := cell.Style.Decompose()
 		fmt.Fprintf(sum, "%x/%d/%d/%d;", cell.Bytes, fg, bg, attr)
 	}
 	return hex.EncodeToString(sum.Sum(nil))
 }
 
-func timedSimScreenText(screen tcell.SimulationScreen) string {
-	cells, width, height := screen.GetContents()
-	if width <= 0 || height <= 0 || len(cells) < width*height {
+func timedSimScreenText(snapshot timedSimScreenSnapshot) string {
+	if !snapshot.ready || snapshot.width <= 0 || snapshot.height <= 0 || len(snapshot.cells) < snapshot.width*snapshot.height {
 		return ""
 	}
 
 	var b strings.Builder
-	for y := 0; y < height; y++ {
-		row := make([]byte, 0, width)
-		for x := 0; x < width; x++ {
-			cell := cells[y*width+x]
+	for y := 0; y < snapshot.height; y++ {
+		row := make([]byte, 0, snapshot.width)
+		for x := 0; x < snapshot.width; x++ {
+			cell := snapshot.cells[y*snapshot.width+x]
 			if len(cell.Bytes) == 0 {
 				row = append(row, ' ')
 				continue

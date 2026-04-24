@@ -12,8 +12,6 @@ import (
 )
 
 func TestPBSConfigHasHeader_AcceptsAndRejectsExpectedForms(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
 		name    string
 		content string
@@ -348,8 +346,6 @@ func TestLoadPBSDatastoreCfgFromInventory_PropagatesErrors(t *testing.T) {
 }
 
 func TestDetectPBSDatastoreCfgDuplicateKeys_DetectsDuplicateKeys(t *testing.T) {
-	t.Parallel()
-
 	blocks := []pbsDatastoreBlock{{
 		Name: "DS1",
 		Lines: []string{
@@ -366,8 +362,6 @@ func TestDetectPBSDatastoreCfgDuplicateKeys_DetectsDuplicateKeys(t *testing.T) {
 }
 
 func TestDetectPBSDatastoreCfgDuplicateKeys_AllowsUniqueKeys(t *testing.T) {
-	t.Parallel()
-
 	blocks := []pbsDatastoreBlock{{
 		Name: "DS1",
 		Lines: []string{
@@ -382,8 +376,6 @@ func TestDetectPBSDatastoreCfgDuplicateKeys_AllowsUniqueKeys(t *testing.T) {
 }
 
 func TestParsePBSDatastoreCfgBlocks_IgnoresGarbageAndHandlesMissingNames(t *testing.T) {
-	t.Parallel()
-
 	content := strings.Join([]string{
 		"path /should/be/ignored",
 		"datastore:",
@@ -416,8 +408,6 @@ func TestParsePBSDatastoreCfgBlocks_IgnoresGarbageAndHandlesMissingNames(t *test
 }
 
 func TestParsePBSDatastoreCfgBlocks_DropsEmptyNamedBlocks(t *testing.T) {
-	t.Parallel()
-
 	content := strings.Join([]string{
 		"datastore: :",
 		"    path /mnt/ignored",
@@ -440,8 +430,6 @@ func TestParsePBSDatastoreCfgBlocks_DropsEmptyNamedBlocks(t *testing.T) {
 }
 
 func TestShouldApplyPBSDatastoreBlock_CoversCommonBranches(t *testing.T) {
-	t.Parallel()
-
 	if ok, reason := shouldApplyPBSDatastoreBlock(pbsDatastoreBlock{Name: "ds", Path: "/"}, newTestLogger()); ok || !strings.Contains(reason, "invalid") {
 		t.Fatalf("expected invalid path rejection, got ok=%v reason=%q", ok, reason)
 	}
@@ -464,8 +452,6 @@ func TestShouldApplyPBSDatastoreBlock_CoversCommonBranches(t *testing.T) {
 }
 
 func TestWriteDeferredPBSDatastoreCfg_EmptyInputIsNoop(t *testing.T) {
-	t.Parallel()
-
 	if path, err := writeDeferredPBSDatastoreCfg(nil); err != nil {
 		t.Fatalf("err=%v", err)
 	} else if path != "" {

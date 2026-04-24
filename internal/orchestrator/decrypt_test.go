@@ -190,7 +190,6 @@ func TestBuildDecryptPathOptions(t *testing.T) {
 }
 
 func TestBaseNameFromRemoteRef(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		in   string
 		want string
@@ -464,7 +463,6 @@ func TestParseIdentityInput(t *testing.T) {
 }
 
 func TestSanitizeBundleEntryName(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name      string
 		input     string
@@ -489,7 +487,6 @@ func TestSanitizeBundleEntryName(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			got, err := sanitizeBundleEntryName(tt.input)
 			if tt.expectErr {
 				if err == nil {
