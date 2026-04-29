@@ -606,11 +606,12 @@ func TestArmNetworkRollback_SystemdRunFailureFallsBackToNohup(t *testing.T) {
 
 	foundSystemdRun := false
 	foundFallback := false
+	wantFallback := backgroundRollbackCallKey(30, handle.scriptPath)
 	for _, call := range fakeCmd.CallsList() {
 		if strings.HasPrefix(call, "systemd-run ") {
 			foundSystemdRun = true
 		}
-		if strings.HasPrefix(call, "sh -c nohup sh -c 'sleep ") {
+		if call == wantFallback {
 			foundFallback = true
 		}
 	}
@@ -653,8 +654,9 @@ func TestArmNetworkRollback_WithoutSystemdRunUsesNohup(t *testing.T) {
 	}
 
 	foundFallback := false
+	wantFallback := backgroundRollbackCallKey(1, handle.scriptPath)
 	for _, call := range fakeCmd.CallsList() {
-		if strings.HasPrefix(call, "sh -c nohup sh -c 'sleep ") {
+		if call == wantFallback {
 			foundFallback = true
 		}
 	}
@@ -693,8 +695,9 @@ func TestArmNetworkRollback_SubSecondTimeoutArmsAtLeastOneSecond(t *testing.T) {
 	}
 
 	foundSleep1 := false
+	wantFallback := backgroundRollbackCallKey(1, handle.scriptPath)
 	for _, call := range fakeCmd.CallsList() {
-		if strings.Contains(call, "sleep 1;") {
+		if call == wantFallback {
 			foundSleep1 = true
 		}
 	}
@@ -723,13 +726,35 @@ func TestArmNetworkRollback_FallbackCommandFailureReturnsError(t *testing.T) {
 
 	restoreCmd = &FakeCommandRunner{
 		Errors: map[string]error{
-			"sh -c nohup sh -c 'sleep 1; /bin/sh /tmp/proxsave/network_rollback_20260201_123456.sh' >/dev/null 2>&1 &": errors.New("boom"),
+			backgroundRollbackCallKey(1, "/tmp/proxsave/network_rollback_20260201_123456.sh"): errors.New("boom"),
 		},
 	}
 
 	_, err := armNetworkRollback(context.Background(), newDiscardLogger(), "/backup.tar", 1*time.Second, "")
 	if err == nil || !strings.Contains(err.Error(), "failed to arm rollback timer") {
 		t.Fatalf("err=%v want failed to arm rollback timer", err)
+	}
+}
+
+func TestRunBackgroundRollbackTimer_UsesPositionalArgsForScriptPath(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+
+	fakeCmd := &FakeCommandRunner{}
+	restoreCmd = fakeCmd
+
+	scriptPath := "/tmp/proxsave dir/rollback's ; touch /tmp/proxsave-injected.sh"
+	if _, err := runBackgroundRollbackTimer(context.Background(), 2, scriptPath); err != nil {
+		t.Fatalf("runBackgroundRollbackTimer error: %v", err)
+	}
+
+	want := backgroundRollbackCallKey(2, scriptPath)
+	calls := fakeCmd.CallsList()
+	if len(calls) != 1 || calls[0] != want {
+		t.Fatalf("unexpected calls: %#v", calls)
+	}
+	if strings.Contains(backgroundRollbackCommand, scriptPath) {
+		t.Fatalf("rollback script path must not be interpolated into shell command")
 	}
 }
 

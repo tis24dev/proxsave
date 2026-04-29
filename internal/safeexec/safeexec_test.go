@@ -62,6 +62,22 @@ func TestValidateRcloneRemoteName(t *testing.T) {
 	}
 }
 
+func TestValidateRemoteRelativePath(t *testing.T) {
+	valid := []string{"", "tenant/a", "/tenant/a/", "tenant with spaces/a"}
+	for _, value := range valid {
+		if err := ValidateRemoteRelativePath(value, "path"); err != nil {
+			t.Fatalf("ValidateRemoteRelativePath(%q) error: %v", value, err)
+		}
+	}
+
+	invalid := []string{"../escape", "tenant/../../escape", "bad\npath"}
+	for _, value := range invalid {
+		if err := ValidateRemoteRelativePath(value, "path"); err == nil {
+			t.Fatalf("ValidateRemoteRelativePath(%q) expected error", value)
+		}
+	}
+}
+
 func TestProcPath(t *testing.T) {
 	got, err := ProcPath(123, "status")
 	if err != nil {

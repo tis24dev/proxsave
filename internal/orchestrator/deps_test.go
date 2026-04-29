@@ -237,6 +237,16 @@ func commandKey(name string, args []string) string {
 	return fmt.Sprintf("%s %s", name, strings.Join(args, " "))
 }
 
+func backgroundRollbackCallKey(timeoutSeconds int, scriptPath string) string {
+	return commandKey("sh", []string{
+		"-c",
+		backgroundRollbackCommand,
+		"proxsave-rollback",
+		fmt.Sprintf("%d", timeoutSeconds),
+		scriptPath,
+	})
+}
+
 // FakePrompter simulates user choices.
 type FakePrompter struct {
 	Mode       RestoreMode

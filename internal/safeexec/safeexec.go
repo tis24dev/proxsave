@@ -51,6 +51,8 @@ func CommandContext(ctx context.Context, name string, args ...string) (*exec.Cmd
 		return exec.CommandContext(ctx, "echo", args...), nil
 	case "ethtool":
 		return exec.CommandContext(ctx, "ethtool", args...), nil
+	case "false":
+		return exec.CommandContext(ctx, "false", args...), nil
 	case "firewall-cmd":
 		return exec.CommandContext(ctx, "firewall-cmd", args...), nil
 	case "free":
@@ -145,6 +147,8 @@ func CommandContext(ctx context.Context, name string, args ...string) (*exec.Cmd
 		return exec.CommandContext(ctx, "systemctl", args...), nil
 	case "systemd-run":
 		return exec.CommandContext(ctx, "systemd-run", args...), nil
+	case "sysctl":
+		return exec.CommandContext(ctx, "sysctl", args...), nil
 	case "tail":
 		return exec.CommandContext(ctx, "tail", args...), nil
 	case "tar":
@@ -195,6 +199,7 @@ func TrustedCommandContext(ctx context.Context, execPath string, args ...string)
 		return nil, err
 	}
 	// #nosec G204 -- execPath is absolute, regular, executable, and not world-writable.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	return exec.CommandContext(ctx, execPath, args...), nil
 }
 
