@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -21,6 +20,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 var ErrRestoreAborted = errors.New("restore workflow aborted by user")
@@ -1421,7 +1421,7 @@ func createLzmaReader(ctx context.Context, file *os.File) (io.Reader, error) {
 }
 
 // runRestoreCommandStream starts a command that reads from stdin and exposes stdout as a ReadCloser.
-// It prefers an injectable streaming runner when available; otherwise falls back to exec.CommandContext.
+// It prefers an injectable streaming runner when available; otherwise falls back to safeexec.
 func runRestoreCommandStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.Reader, error) {
 	type streamingRunner interface {
 		RunStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.ReadCloser, error)
@@ -1430,7 +1430,10 @@ func runRestoreCommandStream(ctx context.Context, name string, stdin io.Reader, 
 		return sr.RunStream(ctx, name, stdin, args...)
 	}
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd, err := safeexec.CommandContext(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
 	cmd.Stdin = stdin
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

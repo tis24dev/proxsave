@@ -456,7 +456,7 @@ func (c *Collector) collectPVEVZDumpSnapshot(ctx context.Context) error {
 
 func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir string, info *pveRuntimeInfo) error {
 	if err := c.safeCmdOutput(ctx,
-		"pveversion -v",
+		commandSpec("pveversion", "-v"),
 		filepath.Join(commandsDir, "pveversion.txt"),
 		"PVE version",
 		true); err != nil {
@@ -464,19 +464,19 @@ func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir strin
 	}
 
 	c.safeCmdOutput(ctx,
-		"pvenode config get",
+		commandSpec("pvenode", "config", "get"),
 		filepath.Join(commandsDir, "node_config.txt"),
 		"Node configuration",
 		false)
 
 	c.safeCmdOutput(ctx,
-		"pvesh get /version --output-format=json",
+		commandSpec("pvesh", "get", "/version", "--output-format=json"),
 		filepath.Join(commandsDir, "api_version.json"),
 		"API version",
 		false)
 
 	if nodeData, err := c.captureCommandOutput(ctx,
-		"pvesh get /nodes --output-format=json",
+		commandSpec("pvesh", "get", "/nodes", "--output-format=json"),
 		filepath.Join(commandsDir, "nodes_status.json"),
 		"node status",
 		false); err != nil {
@@ -505,22 +505,22 @@ func (c *Collector) collectPVEACLRuntime(ctx context.Context, commandsDir string
 	}
 
 	c.safeCmdOutput(ctx,
-		"pveum user list --output-format=json",
+		commandSpec("pveum", "user", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "pve_users.json"),
 		"PVE users",
 		false)
 	c.safeCmdOutput(ctx,
-		"pveum group list --output-format=json",
+		commandSpec("pveum", "group", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "pve_groups.json"),
 		"PVE groups",
 		false)
 	c.safeCmdOutput(ctx,
-		"pveum role list --output-format=json",
+		commandSpec("pveum", "role", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "pve_roles.json"),
 		"PVE roles",
 		false)
 	c.safeCmdOutput(ctx,
-		"pveum pool list --output-format=json",
+		commandSpec("pveum", "pool", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "pools.json"),
 		"PVE resource pools",
 		false)
@@ -529,32 +529,32 @@ func (c *Collector) collectPVEACLRuntime(ctx context.Context, commandsDir string
 func (c *Collector) collectPVEClusterRuntime(ctx context.Context, commandsDir string, clustered bool) {
 	if clustered && c.config.BackupClusterConfig {
 		c.safeCmdOutput(ctx,
-			"pvecm status",
+			commandSpec("pvecm", "status"),
 			filepath.Join(commandsDir, "cluster_status.txt"),
 			"Cluster status",
 			false)
 		c.safeCmdOutput(ctx,
-			"pvecm nodes",
+			commandSpec("pvecm", "nodes"),
 			filepath.Join(commandsDir, "cluster_nodes.txt"),
 			"Cluster nodes",
 			false)
 		c.safeCmdOutput(ctx,
-			"pvesh get /cluster/ha/status --output-format=json",
+			commandSpec("pvesh", "get", "/cluster/ha/status", "--output-format=json"),
 			filepath.Join(commandsDir, "ha_status.json"),
 			"HA status",
 			false)
 		c.safeCmdOutput(ctx,
-			"pvesh get /cluster/mapping/pci --output-format=json",
+			commandSpec("pvesh", "get", "/cluster/mapping/pci", "--output-format=json"),
 			filepath.Join(commandsDir, "mapping_pci.json"),
 			"PCI resource mappings",
 			false)
 		c.safeCmdOutput(ctx,
-			"pvesh get /cluster/mapping/usb --output-format=json",
+			commandSpec("pvesh", "get", "/cluster/mapping/usb", "--output-format=json"),
 			filepath.Join(commandsDir, "mapping_usb.json"),
 			"USB resource mappings",
 			false)
 		c.safeCmdOutput(ctx,
-			"pvesh get /cluster/mapping/dir --output-format=json",
+			commandSpec("pvesh", "get", "/cluster/mapping/dir", "--output-format=json"),
 			filepath.Join(commandsDir, "mapping_dir.json"),
 			"Directory resource mappings",
 			false)
@@ -571,14 +571,14 @@ func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir st
 	}
 
 	c.safeCmdOutput(ctx,
-		fmt.Sprintf("pvesh get /nodes/%s/disks/list --output-format=json", nodeName),
+		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/disks/list", nodeName), "--output-format=json"),
 		filepath.Join(commandsDir, "disks_list.json"),
 		"Disks list",
 		false)
 
 	storageJSONPath := filepath.Join(commandsDir, "storage_status.json")
 	if storageData, err := c.captureCommandOutput(ctx,
-		fmt.Sprintf("pvesh get /nodes/%s/storage --output-format=json", nodeName),
+		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/storage", nodeName), "--output-format=json"),
 		storageJSONPath,
 		"Storage status",
 		false); err != nil {
@@ -596,7 +596,7 @@ func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir st
 	}
 
 	c.safeCmdOutput(ctx,
-		"pvesm status",
+		commandSpec("pvesm", "status"),
 		filepath.Join(commandsDir, "pvesm_status.txt"),
 		"Storage manager status",
 		false)
@@ -730,13 +730,13 @@ func (c *Collector) collectPVEGuestInventory(ctx context.Context) error {
 	}
 
 	c.safeCmdOutput(ctx,
-		fmt.Sprintf("pvesh get /nodes/%s/qemu --output-format=json", nodeName),
+		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/qemu", nodeName), "--output-format=json"),
 		filepath.Join(commandsDir, "qemu_vms.json"),
 		"QEMU VMs list",
 		false)
 
 	c.safeCmdOutput(ctx,
-		fmt.Sprintf("pvesh get /nodes/%s/lxc --output-format=json", nodeName),
+		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/lxc", nodeName), "--output-format=json"),
 		filepath.Join(commandsDir, "lxc_containers.json"),
 		"LXC containers list",
 		false)
@@ -771,7 +771,7 @@ func (c *Collector) collectPVEBackupJobDefinitions(ctx context.Context) error {
 	}
 
 	if _, err := c.captureCommandOutput(ctx,
-		"pvesh get /cluster/backup --output-format=json",
+		commandSpec("pvesh", "get", "/cluster/backup", "--output-format=json"),
 		filepath.Join(jobsDir, "backup_jobs.json"),
 		"backup jobs",
 		false); err != nil {
@@ -804,7 +804,7 @@ func (c *Collector) collectPVEBackupJobHistory(ctx context.Context, nodes []stri
 		seen[node] = struct{}{}
 		outputPath := filepath.Join(jobsDir, fmt.Sprintf("%s_backup_history.json", node))
 		c.captureCommandOutput(ctx,
-			fmt.Sprintf("pvesh get /nodes/%s/tasks --output-format=json --typefilter=vzdump", node),
+			commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/tasks", node), "--output-format=json", "--typefilter=vzdump"),
 			outputPath,
 			fmt.Sprintf("%s backup history", node),
 			false)
@@ -889,7 +889,7 @@ func (c *Collector) collectPVEScheduleCrontab(ctx context.Context) error {
 	}
 
 	c.captureCommandOutput(ctx,
-		"crontab -l",
+		commandSpec("crontab", "-l"),
 		filepath.Join(schedulesDir, "root_crontab.txt"),
 		"root crontab",
 		false)
@@ -905,7 +905,7 @@ func (c *Collector) collectPVEScheduleTimers(ctx context.Context) error {
 		return fmt.Errorf("failed to create schedules directory: %w", err)
 	}
 	c.captureCommandOutput(ctx,
-		"systemctl list-timers --all --no-pager",
+		commandSpec("systemctl", "list-timers", "--all", "--no-pager"),
 		filepath.Join(schedulesDir, "systemd_timers.txt"),
 		"systemd timers",
 		false)
@@ -946,7 +946,7 @@ func (c *Collector) collectPVEReplicationDefinitions(ctx context.Context) error 
 	}
 
 	if _, err := c.captureCommandOutput(ctx,
-		"pvesh get /cluster/replication --output-format=json",
+		commandSpec("pvesh", "get", "/cluster/replication", "--output-format=json"),
 		filepath.Join(repDir, "replication_jobs.json"),
 		"replication jobs",
 		false); err != nil {
@@ -979,7 +979,7 @@ func (c *Collector) collectPVEReplicationStatus(ctx context.Context, nodes []str
 		seen[node] = struct{}{}
 		outputPath := filepath.Join(repDir, fmt.Sprintf("%s_replication_status.json", node))
 		c.captureCommandOutput(ctx,
-			fmt.Sprintf("pvesh get /nodes/%s/replication --output-format=json", node),
+			commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/replication", node), "--output-format=json"),
 			outputPath,
 			fmt.Sprintf("%s replication status", node),
 			false)
@@ -1677,16 +1677,16 @@ func (c *Collector) collectPVECephRuntime(ctx context.Context) error {
 	}
 
 	commands := []struct {
-		cmd  string
+		cmd  CommandSpec
 		file string
 		desc string
 	}{
-		{"ceph -s", "ceph_status.txt", "Ceph status"},
-		{"ceph osd df", "ceph_osd_df.txt", "Ceph OSD DF"},
-		{"ceph osd tree", "ceph_osd_tree.txt", "Ceph OSD tree"},
-		{"ceph mon stat", "ceph_mon_stat.txt", "Ceph mon stat"},
-		{"ceph pg stat", "ceph_pg_stat.txt", "Ceph PG stat"},
-		{"ceph health detail", "ceph_health.txt", "Ceph health"},
+		{commandSpec("ceph", "-s"), "ceph_status.txt", "Ceph status"},
+		{commandSpec("ceph", "osd", "df"), "ceph_osd_df.txt", "Ceph OSD DF"},
+		{commandSpec("ceph", "osd", "tree"), "ceph_osd_tree.txt", "Ceph OSD tree"},
+		{commandSpec("ceph", "mon", "stat"), "ceph_mon_stat.txt", "Ceph mon stat"},
+		{commandSpec("ceph", "pg", "stat"), "ceph_pg_stat.txt", "Ceph PG stat"},
+		{commandSpec("ceph", "health", "detail"), "ceph_health.txt", "Ceph health"},
 	}
 
 	for _, command := range commands {
@@ -1890,7 +1890,7 @@ func (c *Collector) aggregateReplicationStatus(ctx context.Context, replicationD
 
 func (c *Collector) writePVEVersionInfo(ctx context.Context, baseInfoDir string) error {
 	versionFile := filepath.Join(baseInfoDir, "pve_version.txt")
-	if err := c.safeCmdOutput(ctx, "pveversion", versionFile, "PVE version info", false); err != nil {
+	if err := c.safeCmdOutput(ctx, commandSpec("pveversion"), versionFile, "PVE version info", false); err != nil {
 		return err
 	}
 	return nil

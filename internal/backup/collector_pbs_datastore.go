@@ -344,7 +344,7 @@ func (c *Collector) collectPBSDatastoreCLIConfigs(ctx context.Context, state *pb
 		dsKey := ds.pathKey()
 		if cliName := ds.cliName(); cliName != "" && !ds.isOverride() {
 			c.safeCmdOutput(ctx,
-				fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", cliName),
+				commandSpec("proxmox-backup-manager", "datastore", "show", cliName, "--output-format=json"),
 				filepath.Join(state.datastoreDir, fmt.Sprintf("%s_config.json", dsKey)),
 				fmt.Sprintf("Datastore %s configuration", ds.Name),
 				false)

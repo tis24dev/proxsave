@@ -511,7 +511,7 @@ func (c *Collector) collectSystemRuntimeLeases(ctx context.Context) error {
 func (c *Collector) collectSystemCoreRuntime(ctx context.Context, commandsDir string) error {
 	osReleasePath := c.systemPath("/etc/os-release")
 	if err := c.collectCommandMulti(ctx,
-		fmt.Sprintf("cat %s", osReleasePath),
+		commandSpec("cat", osReleasePath),
 		filepath.Join(commandsDir, "os_release.txt"),
 		"OS release",
 		true); err != nil {
@@ -519,7 +519,7 @@ func (c *Collector) collectSystemCoreRuntime(ctx context.Context, commandsDir st
 	}
 
 	if err := c.collectCommandMulti(ctx,
-		"uname -a",
+		commandSpec("uname", "-a"),
 		filepath.Join(commandsDir, "uname.txt"),
 		"Kernel version",
 		true); err != nil {
@@ -527,7 +527,7 @@ func (c *Collector) collectSystemCoreRuntime(ctx context.Context, commandsDir st
 	}
 
 	c.safeCmdOutput(ctx,
-		"hostname -f",
+		commandSpec("hostname", "-f"),
 		filepath.Join(commandsDir, "hostname.txt"),
 		"Hostname",
 		false)
@@ -537,14 +537,14 @@ func (c *Collector) collectSystemCoreRuntime(ctx context.Context, commandsDir st
 
 func (c *Collector) collectSystemNetworkAddrRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
-		"ip addr show",
+		commandSpec("ip", "addr", "show"),
 		filepath.Join(commandsDir, "ip_addr.txt"),
 		"IP addresses",
 		false); err != nil {
 		return err
 	}
 	c.collectCommandOptional(ctx,
-		"ip -j addr show",
+		commandSpec("ip", "-j", "addr", "show"),
 		filepath.Join(commandsDir, "ip_addr.json"),
 		"IP addresses (json)")
 
@@ -554,14 +554,14 @@ func (c *Collector) collectSystemNetworkAddrRuntime(ctx context.Context, command
 func (c *Collector) collectSystemNetworkRulesRuntime(ctx context.Context, commandsDir string) error {
 
 	if err := c.collectCommandMulti(ctx,
-		"ip rule show",
+		commandSpec("ip", "rule", "show"),
 		filepath.Join(commandsDir, "ip_rule.txt"),
 		"IP rules",
 		false); err != nil {
 		return err
 	}
 	c.collectCommandOptional(ctx,
-		"ip -j rule show",
+		commandSpec("ip", "-j", "rule", "show"),
 		filepath.Join(commandsDir, "ip_rule.json"),
 		"IP rules (json)")
 
@@ -571,23 +571,23 @@ func (c *Collector) collectSystemNetworkRulesRuntime(ctx context.Context, comman
 func (c *Collector) collectSystemNetworkRoutesRuntime(ctx context.Context, commandsDir string) error {
 
 	if err := c.collectCommandMulti(ctx,
-		"ip route show",
+		commandSpec("ip", "route", "show"),
 		filepath.Join(commandsDir, "ip_route.txt"),
 		"IP routes",
 		false); err != nil {
 		return err
 	}
 	c.collectCommandOptional(ctx,
-		"ip -j route show",
+		commandSpec("ip", "-j", "route", "show"),
 		filepath.Join(commandsDir, "ip_route.json"),
 		"IP routes (json)")
 
 	c.collectCommandOptional(ctx,
-		"ip -4 route show table all",
+		commandSpec("ip", "-4", "route", "show", "table", "all"),
 		filepath.Join(commandsDir, "ip_route_all_v4.txt"),
 		"IP routes (all tables v4)")
 	c.collectCommandOptional(ctx,
-		"ip -6 route show table all",
+		commandSpec("ip", "-6", "route", "show", "table", "all"),
 		filepath.Join(commandsDir, "ip_route_all_v6.txt"),
 		"IP routes (all tables v6)")
 
@@ -596,11 +596,11 @@ func (c *Collector) collectSystemNetworkRoutesRuntime(ctx context.Context, comma
 
 func (c *Collector) collectSystemNetworkLinksRuntime(ctx context.Context, commandsDir string) error {
 	c.collectCommandOptional(ctx,
-		"ip -s link",
+		commandSpec("ip", "-s", "link"),
 		filepath.Join(commandsDir, "ip_link.txt"),
 		"IP link statistics")
 	c.collectCommandOptional(ctx,
-		"ip -j link",
+		commandSpec("ip", "-j", "link"),
 		filepath.Join(commandsDir, "ip_link.json"),
 		"IP links (json)")
 
@@ -609,12 +609,12 @@ func (c *Collector) collectSystemNetworkLinksRuntime(ctx context.Context, comman
 
 func (c *Collector) collectSystemNetworkNeighborsRuntime(ctx context.Context, commandsDir string) error {
 	c.safeCmdOutput(ctx,
-		"ip neigh show",
+		commandSpec("ip", "neigh", "show"),
 		filepath.Join(commandsDir, "ip_neigh.txt"),
 		"Neighbor table",
 		false)
 	c.safeCmdOutput(ctx,
-		"ip -6 neigh show",
+		commandSpec("ip", "-6", "neigh", "show"),
 		filepath.Join(commandsDir, "ip6_neigh.txt"),
 		"Neighbor table (IPv6)",
 		false)
@@ -624,19 +624,19 @@ func (c *Collector) collectSystemNetworkNeighborsRuntime(ctx context.Context, co
 
 func (c *Collector) collectSystemNetworkBridgesRuntime(ctx context.Context, commandsDir string) error {
 	c.collectCommandOptional(ctx,
-		"bridge -d link show",
+		commandSpec("bridge", "-d", "link", "show"),
 		filepath.Join(commandsDir, "bridge_link.txt"),
 		"Bridge links")
 	c.collectCommandOptional(ctx,
-		"bridge vlan show",
+		commandSpec("bridge", "vlan", "show"),
 		filepath.Join(commandsDir, "bridge_vlan.txt"),
 		"Bridge VLANs")
 	c.collectCommandOptional(ctx,
-		"bridge fdb show",
+		commandSpec("bridge", "fdb", "show"),
 		filepath.Join(commandsDir, "bridge_fdb.txt"),
 		"Bridge FDB")
 	c.collectCommandOptional(ctx,
-		"bridge mdb show",
+		commandSpec("bridge", "mdb", "show"),
 		filepath.Join(commandsDir, "bridge_mdb.txt"),
 		"Bridge MDB")
 
@@ -677,7 +677,7 @@ func (c *Collector) collectSystemNetworkBondingRuntime(ctx context.Context, comm
 func (c *Collector) collectSystemNetworkDNSRuntime(ctx context.Context, commandsDir string) error {
 	resolvPath := c.systemPath("/etc/resolv.conf")
 	return c.safeCmdOutput(ctx,
-		fmt.Sprintf("cat %s", resolvPath),
+		commandSpec("cat", resolvPath),
 		filepath.Join(commandsDir, "resolv_conf.txt"),
 		"DNS configuration",
 		false)
@@ -685,7 +685,7 @@ func (c *Collector) collectSystemNetworkDNSRuntime(ctx context.Context, commands
 
 func (c *Collector) collectSystemStorageMountsRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
-		"df -h",
+		commandSpec("df", "-h"),
 		filepath.Join(commandsDir, "df.txt"),
 		"Disk usage",
 		false); err != nil {
@@ -693,7 +693,7 @@ func (c *Collector) collectSystemStorageMountsRuntime(ctx context.Context, comma
 	}
 
 	c.safeCmdOutput(ctx,
-		"mount",
+		commandSpec("mount"),
 		filepath.Join(commandsDir, "mount.txt"),
 		"Mounted filesystems",
 		false)
@@ -703,7 +703,7 @@ func (c *Collector) collectSystemStorageMountsRuntime(ctx context.Context, comma
 
 func (c *Collector) collectSystemStorageBlockDevicesRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
-		"lsblk -f",
+		commandSpec("lsblk", "-f"),
 		filepath.Join(commandsDir, "lsblk.txt"),
 		"Block devices",
 		false); err != nil {
@@ -711,12 +711,12 @@ func (c *Collector) collectSystemStorageBlockDevicesRuntime(ctx context.Context,
 	}
 
 	c.collectCommandOptional(ctx,
-		"lsblk -J -O",
+		commandSpec("lsblk", "-J", "-O"),
 		filepath.Join(commandsDir, "lsblk_json.json"),
 		"Block devices (JSON)")
 
 	c.collectCommandOptional(ctx,
-		"blkid",
+		commandSpec("blkid"),
 		filepath.Join(commandsDir, "blkid.txt"),
 		"Block device identifiers (blkid)")
 
@@ -725,7 +725,7 @@ func (c *Collector) collectSystemStorageBlockDevicesRuntime(ctx context.Context,
 
 func (c *Collector) collectSystemComputeMemoryCPURuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
-		"free -h",
+		commandSpec("free", "-h"),
 		filepath.Join(commandsDir, "free.txt"),
 		"Memory usage",
 		false); err != nil {
@@ -733,7 +733,7 @@ func (c *Collector) collectSystemComputeMemoryCPURuntime(ctx context.Context, co
 	}
 
 	if err := c.collectCommandMulti(ctx,
-		"lscpu",
+		commandSpec("lscpu"),
 		filepath.Join(commandsDir, "lscpu.txt"),
 		"CPU information",
 		false); err != nil {
@@ -745,7 +745,7 @@ func (c *Collector) collectSystemComputeMemoryCPURuntime(ctx context.Context, co
 
 func (c *Collector) collectSystemComputeBusInventoryRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
-		"lspci -v",
+		commandSpec("lspci", "-v"),
 		filepath.Join(commandsDir, "lspci.txt"),
 		"PCI devices",
 		false); err != nil {
@@ -753,7 +753,7 @@ func (c *Collector) collectSystemComputeBusInventoryRuntime(ctx context.Context,
 	}
 
 	c.safeCmdOutput(ctx,
-		"lsusb",
+		commandSpec("lsusb"),
 		filepath.Join(commandsDir, "lsusb.txt"),
 		"USB devices",
 		false)
@@ -767,14 +767,14 @@ func (c *Collector) collectSystemServicesRuntime(ctx context.Context, commandsDi
 	}
 
 	if err := c.collectCommandMulti(ctx,
-		"systemctl list-units --type=service --all",
+		commandSpec("systemctl", "list-units", "--type=service", "--all"),
 		filepath.Join(commandsDir, "systemctl_services.txt"),
 		"Systemd services",
 		false); err != nil {
 		return err
 	}
 
-	c.safeCmdOutput(ctx, "systemctl list-unit-files --type=service",
+	c.safeCmdOutput(ctx, commandSpec("systemctl", "list-unit-files", "--type=service"),
 		filepath.Join(commandsDir, "systemctl_service_files.txt"),
 		"Systemd service files", false)
 
@@ -789,7 +789,7 @@ func (c *Collector) collectSystemPackagesInstalledRuntime(ctx context.Context, c
 		}
 
 		if err := c.collectCommandMulti(ctx,
-			"dpkg -l",
+			commandSpec("dpkg", "-l"),
 			filepath.Join(packagesDir, "dpkg_list.txt"),
 			"Installed packages",
 			false); err != nil {
@@ -806,7 +806,7 @@ func (c *Collector) collectSystemPackagesAptPolicyRuntime(ctx context.Context, c
 	}
 
 	return c.safeCmdOutput(ctx,
-		"apt-cache policy",
+		commandSpec("apt-cache", "policy"),
 		filepath.Join(commandsDir, "apt_policy.txt"),
 		"APT policy",
 		false)
@@ -818,7 +818,7 @@ func (c *Collector) collectSystemFirewallIPTablesRuntime(ctx context.Context, co
 	}
 
 	if err := c.collectCommandMulti(ctx,
-		"iptables-save",
+		commandSpec("iptables-save"),
 		filepath.Join(commandsDir, "iptables.txt"),
 		"iptables rules",
 		false); err != nil {
@@ -826,7 +826,7 @@ func (c *Collector) collectSystemFirewallIPTablesRuntime(ctx context.Context, co
 	}
 
 	c.collectCommandOptional(ctx,
-		"iptables -t nat -vnL --line-numbers",
+		commandSpec("iptables", "-t", "nat", "-vnL", "--line-numbers"),
 		filepath.Join(commandsDir, "iptables_nat.txt"),
 		"iptables NAT table")
 
@@ -839,7 +839,7 @@ func (c *Collector) collectSystemFirewallIP6TablesRuntime(ctx context.Context, c
 	}
 
 	if err := c.collectCommandMulti(ctx,
-		"ip6tables-save",
+		commandSpec("ip6tables-save"),
 		filepath.Join(commandsDir, "ip6tables.txt"),
 		"ip6tables rules",
 		false); err != nil {
@@ -847,7 +847,7 @@ func (c *Collector) collectSystemFirewallIP6TablesRuntime(ctx context.Context, c
 	}
 
 	c.collectCommandOptional(ctx,
-		"ip6tables -t nat -vnL --line-numbers",
+		commandSpec("ip6tables", "-t", "nat", "-vnL", "--line-numbers"),
 		filepath.Join(commandsDir, "ip6tables_nat.txt"),
 		"ip6tables NAT table")
 
@@ -860,7 +860,7 @@ func (c *Collector) collectSystemFirewallNFTablesRuntime(ctx context.Context, co
 	}
 
 	return c.safeCmdOutput(ctx,
-		"nft list ruleset",
+		commandSpec("nft", "list", "ruleset"),
 		filepath.Join(commandsDir, "nftables.txt"),
 		"nftables rules",
 		false)
@@ -872,11 +872,11 @@ func (c *Collector) collectSystemFirewallUFWRuntime(ctx context.Context, command
 	}
 
 	c.collectCommandOptional(ctx,
-		"ufw status verbose",
+		commandSpec("ufw", "status", "verbose"),
 		filepath.Join(commandsDir, "ufw_status.txt"),
 		"UFW status")
 	c.collectCommandOptional(ctx,
-		"systemctl status --no-pager ufw",
+		commandSpec("systemctl", "status", "--no-pager", "ufw"),
 		filepath.Join(commandsDir, "systemctl_ufw.txt"),
 		"systemctl ufw")
 
@@ -889,15 +889,15 @@ func (c *Collector) collectSystemFirewallFirewalldRuntime(ctx context.Context, c
 	}
 
 	c.collectCommandOptional(ctx,
-		"firewall-cmd --state",
+		commandSpec("firewall-cmd", "--state"),
 		filepath.Join(commandsDir, "firewalld_state.txt"),
 		"firewalld state")
 	c.collectCommandOptional(ctx,
-		"firewall-cmd --list-all",
+		commandSpec("firewall-cmd", "--list-all"),
 		filepath.Join(commandsDir, "firewalld_list_all.txt"),
 		"firewalld rules")
 	c.collectCommandOptional(ctx,
-		"systemctl status --no-pager firewalld",
+		commandSpec("systemctl", "status", "--no-pager", "firewalld"),
 		filepath.Join(commandsDir, "systemctl_firewalld.txt"),
 		"systemctl firewalld")
 
@@ -910,7 +910,7 @@ func (c *Collector) collectSystemKernelModulesRuntime(ctx context.Context, comma
 	}
 
 	c.safeCmdOutput(ctx,
-		"lsmod",
+		commandSpec("lsmod"),
 		filepath.Join(commandsDir, "lsmod.txt"),
 		"Loaded kernel modules",
 		false)
@@ -923,7 +923,7 @@ func (c *Collector) collectSystemSysctlRuntime(ctx context.Context, commandsDir 
 	}
 
 	c.safeCmdOutput(ctx,
-		"sysctl -a",
+		commandSpec("sysctl", "-a"),
 		filepath.Join(commandsDir, "sysctl.txt"),
 		"Sysctl values",
 		false)
@@ -949,24 +949,24 @@ func (c *Collector) collectSystemZFSRuntime(ctx context.Context, commandsDir str
 
 	if _, err := c.depLookPath("zpool"); err == nil {
 		c.collectCommandOptional(ctx,
-			"zpool status",
+			commandSpec("zpool", "status"),
 			filepath.Join(zfsDir, "zpool_status.txt"),
 			"ZFS pool status")
 
 		c.collectCommandOptional(ctx,
-			"zpool list",
+			commandSpec("zpool", "list"),
 			filepath.Join(zfsDir, "zpool_list.txt"),
 			"ZFS pool list")
 	}
 
 	if _, err := c.depLookPath("zfs"); err == nil {
 		c.collectCommandOptional(ctx,
-			"zfs list",
+			commandSpec("zfs", "list"),
 			filepath.Join(zfsDir, "zfs_list.txt"),
 			"ZFS filesystem list")
 
 		c.collectCommandOptional(ctx,
-			"zfs get all",
+			commandSpec("zfs", "get", "all"),
 			filepath.Join(zfsDir, "zfs_get_all.txt"),
 			"ZFS properties",
 		)
@@ -981,21 +981,21 @@ func (c *Collector) collectSystemLVMRuntime(ctx context.Context, commandsDir str
 	}
 	if _, err := c.depLookPath("pvs"); err == nil {
 		c.safeCmdOutput(ctx,
-			"pvs",
+			commandSpec("pvs"),
 			filepath.Join(commandsDir, "lvm_pvs.txt"),
 			"LVM physical volumes",
 			false)
 	}
 	if _, err := c.depLookPath("vgs"); err == nil {
 		c.safeCmdOutput(ctx,
-			"vgs",
+			commandSpec("vgs"),
 			filepath.Join(commandsDir, "lvm_vgs.txt"),
 			"LVM volume groups",
 			false)
 	}
 	if _, err := c.depLookPath("lvs"); err == nil {
 		c.safeCmdOutput(ctx,
-			"lvs",
+			commandSpec("lvs"),
 			filepath.Join(commandsDir, "lvm_lvs.txt"),
 			"LVM logical volumes",
 			false)
@@ -1161,14 +1161,14 @@ func (c *Collector) collectKernelInfo(ctx context.Context) error {
 
 	// Kernel command line
 	c.safeCmdOutput(ctx,
-		fmt.Sprintf("cat %s", c.systemPath("/proc/cmdline")),
+		commandSpec("cat", c.systemPath("/proc/cmdline")),
 		filepath.Join(commandsDir, "kernel_cmdline.txt"),
 		"Kernel command line",
 		false)
 
 	// Kernel version details
 	c.safeCmdOutput(ctx,
-		fmt.Sprintf("cat %s", c.systemPath("/proc/version")),
+		commandSpec("cat", c.systemPath("/proc/version")),
 		filepath.Join(commandsDir, "kernel_version.txt"),
 		"Kernel version details",
 		false)
@@ -1184,7 +1184,7 @@ func (c *Collector) collectHardwareInfo(ctx context.Context) error {
 
 	// DMI decode (requires root)
 	c.safeCmdOutput(ctx,
-		"dmidecode",
+		commandSpec("dmidecode"),
 		filepath.Join(commandsDir, "dmidecode.txt"),
 		"Hardware DMI information",
 		false)
@@ -1192,7 +1192,7 @@ func (c *Collector) collectHardwareInfo(ctx context.Context) error {
 	// Hardware sensors (if available)
 	if _, err := c.depStat(c.systemPath("/usr/bin/sensors")); err == nil {
 		c.safeCmdOutput(ctx,
-			"sensors",
+			commandSpec("sensors"),
 			filepath.Join(commandsDir, "sensors.txt"),
 			"Hardware sensors",
 			false)
@@ -1202,7 +1202,7 @@ func (c *Collector) collectHardwareInfo(ctx context.Context) error {
 	if _, err := c.depStat(c.systemPath("/usr/sbin/smartctl")); err == nil {
 		// Get list of disks
 		c.safeCmdOutput(ctx,
-			"smartctl --scan",
+			commandSpec("smartctl", "--scan"),
 			filepath.Join(commandsDir, "smartctl_scan.txt"),
 			"SMART scan",
 			false)

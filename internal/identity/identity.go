@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 const (
@@ -969,7 +970,11 @@ func setImmutableAttributeWithContext(ctx context.Context, path string, enable b
 		flag = "-i"
 	}
 
-	cmd := exec.CommandContext(ctx, chattrPath, flag, path)
+	cmd, err := safeexec.TrustedCommandContext(ctx, chattrPath, flag, path)
+	if err != nil {
+		logDebug(logger, "Identity: immutable: chattr path rejected for %s: %v", path, err)
+		return nil
+	}
 	if err := cmd.Run(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			logDebug(logger, "Identity: immutable: chattr canceled for %s: %v", path, ctxErr)

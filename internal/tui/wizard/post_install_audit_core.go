@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 // PostInstallAuditSuggestion represents an optional feature that appears to be enabled
@@ -51,11 +52,14 @@ func postInstallAuditAllowedKeysSet() map[string]struct{} {
 func runPostInstallAuditDryRun(ctx context.Context, execPath, configPath string) (output string, exitCode int, err error) {
 	// Run a dry-run with warning-level logs to keep output minimal while still capturing
 	// all actionable "set KEY=false" hints.
-	cmd := exec.CommandContext(ctx, execPath,
+	cmd, err := safeexec.TrustedCommandContext(ctx, execPath,
 		"--dry-run",
 		"--log-level", "warning",
 		"--config", configPath,
 	)
+	if err != nil {
+		return "", -1, err
+	}
 	out, runErr := cmd.CombinedOutput()
 	if runErr == nil {
 		return string(out), 0, nil

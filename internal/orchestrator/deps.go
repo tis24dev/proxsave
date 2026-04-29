@@ -11,6 +11,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 // FS abstracts filesystem operations to simplify testing.
@@ -123,7 +124,10 @@ type osCommandRunner struct{}
 const defaultCommandWaitDelay = 3 * time.Second
 
 func (osCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd, err := safeexec.CommandContext(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
 	cmd.WaitDelay = defaultCommandWaitDelay
 	out, err := cmd.CombinedOutput()
 	if err != nil && errors.Is(err, exec.ErrWaitDelay) {
@@ -134,7 +138,10 @@ func (osCommandRunner) Run(ctx context.Context, name string, args ...string) ([]
 
 // RunStream returns a stdout pipe for streaming commands that read from stdin.
 func (osCommandRunner) RunStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.ReadCloser, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd, err := safeexec.CommandContext(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
 	cmd.Stdin = stdin
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

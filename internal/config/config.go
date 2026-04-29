@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
@@ -381,6 +382,9 @@ func (c *Config) parse() error {
 	if err := c.validateSecondarySettings(); err != nil {
 		return err
 	}
+	if err := c.validateCloudSettings(); err != nil {
+		return err
+	}
 	c.autoDetectPBSAuth()
 	return nil
 }
@@ -395,6 +399,31 @@ func (c *Config) validateSecondarySettings() error {
 		return err
 	}
 	return nil
+}
+
+func (c *Config) validateCloudSettings() error {
+	if !c.CloudEnabled {
+		return nil
+	}
+	remoteName, basePath := splitCloudRemoteRef(strings.TrimSpace(c.CloudRemote))
+	if err := safeexec.ValidateRcloneRemoteName(remoteName); err != nil {
+		return fmt.Errorf("CLOUD_REMOTE invalid: %w", err)
+	}
+	if err := safeexec.ValidateRemoteRelativePath(strings.Trim(strings.TrimSpace(basePath), "/"), "CLOUD_REMOTE path"); err != nil {
+		return err
+	}
+	if err := safeexec.ValidateRemoteRelativePath(strings.Trim(strings.TrimSpace(c.CloudRemotePath), "/"), "CLOUD_REMOTE_PATH"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func splitCloudRemoteRef(ref string) (remoteName, relPath string) {
+	parts := strings.SplitN(ref, ":", 2)
+	if len(parts) < 2 {
+		return ref, ""
+	}
+	return parts[0], parts[1]
 }
 
 func (c *Config) parseGeneralSettings() {

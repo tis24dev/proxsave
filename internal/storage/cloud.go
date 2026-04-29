@@ -15,6 +15,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
@@ -87,6 +88,28 @@ func (c *CloudStorage) buildRcloneArgs(subcommand string) []string {
 		args = append(args, c.config.RcloneFlags...)
 	}
 	return args
+}
+
+func validateRcloneArgs(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing rclone subcommand")
+	}
+	switch args[0] {
+	case "copyto", "delete", "deletefile", "ls", "lsf", "lsl", "mkdir", "touch":
+	default:
+		return fmt.Errorf("rclone subcommand not allowed: %s", args[0])
+	}
+	for _, arg := range args {
+		if strings.TrimSpace(arg) == "" {
+			return fmt.Errorf("rclone argument must not be empty")
+		}
+		for _, r := range arg {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("rclone argument contains control characters")
+			}
+		}
+	}
+	return nil
 }
 
 func splitRemoteRef(ref string) (remoteName, relPath string) {
@@ -163,9 +186,19 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage,
 	//     (base path from CLOUD_REMOTE plus optional CLOUD_REMOTE_PATH)
 	rawRemote := strings.TrimSpace(cfg.CloudRemote)
 	remoteName, basePath := splitRemoteRef(rawRemote)
+	remoteName = strings.TrimSpace(remoteName)
+	if err := safeexec.ValidateRcloneRemoteName(remoteName); err != nil {
+		return nil, fmt.Errorf("invalid CLOUD_REMOTE: %w", err)
+	}
 	basePath = strings.Trim(strings.TrimSpace(basePath), "/")
+	if err := safeexec.ValidateRemoteRelativePath(basePath, "CLOUD_REMOTE path"); err != nil {
+		return nil, err
+	}
 
 	userPrefix := strings.Trim(strings.TrimSpace(cfg.CloudRemotePath), "/")
+	if err := safeexec.ValidateRemoteRelativePath(userPrefix, "CLOUD_REMOTE_PATH"); err != nil {
+		return nil, err
+	}
 
 	combinedPrefix := strings.Trim(path.Join(basePath, userPrefix), "/")
 
@@ -1759,6 +1792,12 @@ func (c *CloudStorage) markCloudLogPathAvailable() {
 }
 
 func (c *CloudStorage) exec(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name != "rclone" {
+		return nil, fmt.Errorf("cloud storage may only execute rclone, got %q", name)
+	}
+	if err := validateRcloneArgs(args); err != nil {
+		return nil, err
+	}
 	if c.execCommand != nil {
 		return c.execCommand(ctx, name, args...)
 	}
@@ -1773,7 +1812,10 @@ func (c *CloudStorage) callWaitForRetry(ctx context.Context, d time.Duration) er
 }
 
 func defaultExecCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd, err := safeexec.CommandContext(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
 	return cmd.CombinedOutput()
 }
 

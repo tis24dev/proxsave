@@ -117,6 +117,39 @@ func (c *Collector) depRunCommandWithEnv(ctx context.Context, extraEnv []string,
 	return runCommandWithEnv(ctx, extraEnv, name, args...)
 }
 
+type CommandSpec struct {
+	Name string
+	Args []string
+}
+
+func commandSpec(name string, args ...string) CommandSpec {
+	return CommandSpec{Name: strings.TrimSpace(name), Args: append([]string(nil), args...)}
+}
+
+func (s CommandSpec) validate() error {
+	if s.Name == "" {
+		return fmt.Errorf("empty command")
+	}
+	if strings.ContainsAny(s.Name, `/\`) {
+		return fmt.Errorf("command name must not contain path separators: %s", s.Name)
+	}
+	for _, arg := range s.Args {
+		for _, r := range arg {
+			if r == 0 {
+				return fmt.Errorf("command argument contains NUL byte")
+			}
+		}
+	}
+	return nil
+}
+
+func (s CommandSpec) String() string {
+	if len(s.Args) == 0 {
+		return s.Name
+	}
+	return s.Name + " " + strings.Join(s.Args, " ")
+}
+
 func (c *Collector) depStat(path string) (os.FileInfo, error) {
 	if c.deps.Stat != nil {
 		return c.deps.Stat(path)
@@ -876,8 +909,11 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 	return nil
 }
 
-func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description string, critical bool) error {
+func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output, description string, critical bool) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := spec.validate(); err != nil {
 		return err
 	}
 
@@ -887,39 +923,34 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 		return nil
 	}
 
-	c.logger.Debug("Collecting %s via command: %s > %s", description, cmd, output)
-
-	cmdParts := strings.Fields(cmd)
-	if len(cmdParts) == 0 {
-		return fmt.Errorf("empty command")
-	}
+	c.logger.Debug("Collecting %s via command: %s > %s", description, spec.String(), output)
 
 	// Check if command exists
-	if _, err := c.depLookPath(cmdParts[0]); err != nil {
+	if _, err := c.depLookPath(spec.Name); err != nil {
 		if critical {
 			c.incFilesFailed()
-			return fmt.Errorf("critical command not available: %s", cmdParts[0])
+			return fmt.Errorf("critical command not available: %s", spec.Name)
 		}
-		c.logger.Debug("Command not available: %s (skipping %s)", cmdParts[0], description)
+		c.logger.Debug("Command not available: %s (skipping %s)", spec.Name, description)
 		return nil
 	}
 
 	if c.dryRun {
-		c.logger.Debug("[DRY RUN] Would execute command: %s > %s", cmd, output)
+		c.logger.Debug("[DRY RUN] Would execute command: %s > %s", spec.String(), output)
 		return nil
 	}
 
-	cmdString := strings.Join(cmdParts, " ")
+	cmdString := spec.String()
 	runCtx := ctx
 	var cancel context.CancelFunc
-	if cmdParts[0] == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
+	if spec.Name == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.PveshTimeoutSeconds)*time.Second)
 	}
 	if cancel != nil {
 		defer cancel()
 	}
 
-	out, err := c.depRunCommand(runCtx, cmdParts[0], cmdParts[1:]...)
+	out, err := c.depRunCommand(runCtx, spec.Name, spec.Args...)
 	if err != nil {
 		if critical {
 			c.incFilesFailed()
@@ -940,12 +971,12 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 
 		reason := ""
 		if ctxInfo.Detected {
-			c.logger.Debug("Privilege-sensitive allowlist: command=%q allowlisted=%t", cmdParts[0], isPrivilegeSensitiveCommand(cmdParts[0]))
-			match := privilegeSensitiveFailureMatch(cmdParts[0], exitCode, outputText)
+			c.logger.Debug("Privilege-sensitive allowlist: command=%q allowlisted=%t", spec.Name, isPrivilegeSensitiveCommand(spec.Name))
+			match := privilegeSensitiveFailureMatch(spec.Name, exitCode, outputText)
 			reason = match.Reason
-			c.logger.Debug("Privilege-sensitive classification: command=%q matched=%t match=%q reason=%q", cmdParts[0], reason != "", match.Match, reason)
+			c.logger.Debug("Privilege-sensitive classification: command=%q matched=%t match=%q reason=%q", spec.Name, reason != "", match.Match, reason)
 		} else {
-			c.logger.Debug("Privilege-sensitive downgrade not considered: limited-privilege context not detected (command=%q)", cmdParts[0])
+			c.logger.Debug("Privilege-sensitive downgrade not considered: limited-privilege context not detected (command=%q)", spec.Name)
 		}
 
 		if ctxInfo.Detected && reason != "" {
@@ -958,7 +989,7 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 		}
 
 		if ctxInfo.Detected {
-			c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; emitting WARNING", cmdParts[0])
+			c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; emitting WARNING", spec.Name)
 		}
 
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the required CLI is available and has proper permissions. Output: %s",
@@ -980,8 +1011,11 @@ func (c *Collector) safeCmdOutput(ctx context.Context, cmd, output, description 
 
 // safeCmdOutputWithPBSAuth executes a command with PBS authentication environment variables
 // This enables automatic authentication for proxmox-backup-client commands
-func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, description string, critical bool) error {
+func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, spec CommandSpec, output, description string, critical bool) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := spec.validate(); err != nil {
 		return err
 	}
 
@@ -991,23 +1025,18 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 		return nil
 	}
 
-	cmdParts := strings.Fields(cmd)
-	if len(cmdParts) == 0 {
-		return fmt.Errorf("empty command")
-	}
-
 	// Check if command exists
-	if _, err := c.depLookPath(cmdParts[0]); err != nil {
+	if _, err := c.depLookPath(spec.Name); err != nil {
 		if critical {
 			c.incFilesFailed()
-			return fmt.Errorf("critical command not available: %s", cmdParts[0])
+			return fmt.Errorf("critical command not available: %s", spec.Name)
 		}
-		c.logger.Debug("Command not available: %s (skipping %s)", cmdParts[0], description)
+		c.logger.Debug("Command not available: %s (skipping %s)", spec.Name, description)
 		return nil
 	}
 
 	if c.dryRun {
-		c.logger.Debug("[DRY RUN] Would execute command with PBS auth: %s > %s", cmd, output)
+		c.logger.Debug("[DRY RUN] Would execute command with PBS auth: %s > %s", spec.String(), output)
 		return nil
 	}
 
@@ -1028,11 +1057,11 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 	}
 
 	if pbsAuthUsed {
-		c.logger.Debug("Using PBS authentication for command: %s", cmdParts[0])
+		c.logger.Debug("Using PBS authentication for command: %s", spec.Name)
 	}
 
-	cmdString := strings.Join(cmdParts, " ")
-	out, err := c.depRunCommandWithEnv(ctx, extraEnv, cmdParts[0], cmdParts[1:]...)
+	cmdString := spec.String()
+	out, err := c.depRunCommandWithEnv(ctx, extraEnv, spec.Name, spec.Args...)
 	if err != nil {
 		if critical {
 			c.incFilesFailed()
@@ -1057,8 +1086,11 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, cmd, output, d
 
 // safeCmdOutputWithPBSAuthForDatastore executes a command with PBS authentication for a specific datastore
 // This function appends the datastore name to the PBS_REPOSITORY environment variable
-func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cmd, output, description, datastoreName string, critical bool) error {
+func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, spec CommandSpec, output, description, datastoreName string, critical bool) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := spec.validate(); err != nil {
 		return err
 	}
 
@@ -1068,23 +1100,18 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
 		return nil
 	}
 
-	cmdParts := strings.Fields(cmd)
-	if len(cmdParts) == 0 {
-		return fmt.Errorf("empty command")
-	}
-
 	// Check if command exists
-	if _, err := c.depLookPath(cmdParts[0]); err != nil {
+	if _, err := c.depLookPath(spec.Name); err != nil {
 		if critical {
 			c.incFilesFailed()
-			return fmt.Errorf("critical command not available: %s", cmdParts[0])
+			return fmt.Errorf("critical command not available: %s", spec.Name)
 		}
-		c.logger.Debug("Command not available: %s (skipping %s)", cmdParts[0], description)
+		c.logger.Debug("Command not available: %s (skipping %s)", spec.Name, description)
 		return nil
 	}
 
 	if c.dryRun {
-		c.logger.Debug("[DRY RUN] Would execute command with PBS auth for datastore %s: %s > %s", datastoreName, cmd, output)
+		c.logger.Debug("[DRY RUN] Would execute command with PBS auth for datastore %s: %s > %s", datastoreName, spec.String(), output)
 		return nil
 	}
 
@@ -1128,8 +1155,8 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, cm
 		c.logger.Debug("Using PBS_FINGERPRINT=%s", c.config.PBSFingerprint)
 	}
 
-	cmdString := strings.Join(cmdParts, " ")
-	out, err := c.depRunCommandWithEnv(ctx, extraEnv, cmdParts[0], cmdParts[1:]...)
+	cmdString := spec.String()
+	out, err := c.depRunCommandWithEnv(ctx, extraEnv, spec.Name, spec.Args...)
 	if err != nil {
 		if critical {
 			c.incFilesFailed()
@@ -1244,8 +1271,11 @@ func (c *Collector) writeReportFile(path string, data []byte) error {
 	return nil
 }
 
-func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, description string, critical bool) ([]byte, error) {
+func (c *Collector) captureCommandOutput(ctx context.Context, spec CommandSpec, output, description string, critical bool) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := spec.validate(); err != nil {
 		return nil, err
 	}
 
@@ -1255,37 +1285,32 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		return nil, nil
 	}
 
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("empty command")
-	}
-
-	if _, err := c.depLookPath(parts[0]); err != nil {
+	if _, err := c.depLookPath(spec.Name); err != nil {
 		if critical {
 			c.incFilesFailed()
-			return nil, fmt.Errorf("critical command not available: %s", parts[0])
+			return nil, fmt.Errorf("critical command not available: %s", spec.Name)
 		}
-		c.logger.Debug("Command not available: %s (skipping %s)", parts[0], description)
+		c.logger.Debug("Command not available: %s (skipping %s)", spec.Name, description)
 		return nil, nil
 	}
 
 	if c.dryRun {
-		c.logger.Debug("[DRY RUN] Would execute command: %s > %s", cmd, output)
+		c.logger.Debug("[DRY RUN] Would execute command: %s > %s", spec.String(), output)
 		return nil, nil
 	}
 
 	runCtx := ctx
 	var cancel context.CancelFunc
-	if parts[0] == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
+	if spec.Name == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.PveshTimeoutSeconds)*time.Second)
 	}
 	if cancel != nil {
 		defer cancel()
 	}
 
-	out, err := c.depRunCommand(runCtx, parts[0], parts[1:]...)
+	out, err := c.depRunCommand(runCtx, spec.Name, spec.Args...)
 	if err != nil {
-		cmdString := strings.Join(parts, " ")
+		cmdString := spec.String()
 		if critical {
 			c.incFilesFailed()
 			return nil, fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
@@ -1305,12 +1330,12 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 
 		reason := ""
 		if ctxInfo.Detected {
-			c.logger.Debug("Privilege-sensitive allowlist: command=%q allowlisted=%t", parts[0], isPrivilegeSensitiveCommand(parts[0]))
-			match := privilegeSensitiveFailureMatch(parts[0], exitCode, outputText)
+			c.logger.Debug("Privilege-sensitive allowlist: command=%q allowlisted=%t", spec.Name, isPrivilegeSensitiveCommand(spec.Name))
+			match := privilegeSensitiveFailureMatch(spec.Name, exitCode, outputText)
 			reason = match.Reason
-			c.logger.Debug("Privilege-sensitive classification: command=%q matched=%t match=%q reason=%q", parts[0], reason != "", match.Match, reason)
+			c.logger.Debug("Privilege-sensitive classification: command=%q matched=%t match=%q reason=%q", spec.Name, reason != "", match.Match, reason)
 		} else {
-			c.logger.Debug("Privilege-sensitive downgrade not considered: limited-privilege context not detected (command=%q)", parts[0])
+			c.logger.Debug("Privilege-sensitive downgrade not considered: limited-privilege context not detected (command=%q)", spec.Name)
 		}
 
 		if ctxInfo.Detected && reason != "" {
@@ -1323,11 +1348,11 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 		}
 
 		if ctxInfo.Detected {
-			c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; continuing with standard handling", parts[0])
+			c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; continuing with standard handling", spec.Name)
 		}
 
-		if parts[0] == "systemctl" && len(parts) >= 2 && parts[1] == "status" {
-			unit := parts[len(parts)-1]
+		if spec.Name == "systemctl" && len(spec.Args) >= 2 && spec.Args[0] == "status" {
+			unit := spec.Args[len(spec.Args)-1]
 			if exitCode == 4 || strings.Contains(outputText, "could not be found") {
 				c.logger.Warning("Skipping %s: %s.service not found (not installed?). Set BACKUP_FIREWALL_RULES=false to disable.",
 					description,
@@ -1360,12 +1385,12 @@ func (c *Collector) captureCommandOutput(ctx context.Context, cmd, output, descr
 	return out, nil
 }
 
-func (c *Collector) collectCommandMulti(ctx context.Context, cmd, output, description string, critical bool, mirrors ...string) error {
+func (c *Collector) collectCommandMulti(ctx context.Context, spec CommandSpec, output, description string, critical bool, mirrors ...string) error {
 	if output == "" {
 		return fmt.Errorf("primary output path cannot be empty for %s", description)
 	}
 
-	data, err := c.captureCommandOutput(ctx, cmd, output, description, critical)
+	data, err := c.captureCommandOutput(ctx, spec, output, description, critical)
 	if err != nil {
 		return err
 	}
@@ -1385,13 +1410,13 @@ func (c *Collector) collectCommandMulti(ctx context.Context, cmd, output, descri
 	return nil
 }
 
-func (c *Collector) collectCommandOptional(ctx context.Context, cmd, output, description string, mirrors ...string) {
+func (c *Collector) collectCommandOptional(ctx context.Context, spec CommandSpec, output, description string, mirrors ...string) {
 	if output == "" {
 		c.logger.Debug("Optional command %s skipped: no primary output path", description)
 		return
 	}
 
-	data, err := c.captureCommandOutput(ctx, cmd, output, description, false)
+	data, err := c.captureCommandOutput(ctx, spec, output, description, false)
 	if err != nil {
 		c.logger.Debug("Optional command %s skipped: %v", description, err)
 		return

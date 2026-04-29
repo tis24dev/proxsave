@@ -6,14 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
-var execCommand = exec.CommandContext
+var execCommand = safeexec.CommandContext
 
 // Namespace represents a single PBS namespace.
 type Namespace struct {
@@ -57,7 +57,7 @@ func listNamespacesViaCLI(ctx context.Context, datastore string) ([]Namespace, e
 		return nil, err
 	}
 
-	cmd := execCommand(
+	cmd, cmdErr := execCommand(
 		ctx,
 		"proxmox-backup-manager",
 		"datastore",
@@ -66,6 +66,9 @@ func listNamespacesViaCLI(ctx context.Context, datastore string) ([]Namespace, e
 		datastore,
 		"--output-format=json",
 	)
+	if cmdErr != nil {
+		return nil, cmdErr
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

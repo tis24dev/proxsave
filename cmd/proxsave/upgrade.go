@@ -25,6 +25,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
@@ -650,7 +651,10 @@ func upgradeConfigWithBinary(ctx context.Context, execPath, configPath string) (
 		return nil, fmt.Errorf("configuration path is empty")
 	}
 
-	cmd := exec.CommandContext(ctx, execPath, "--config", configPath, "--upgrade-config-json")
+	cmd, err := safeexec.TrustedCommandContext(ctx, execPath, "--config", configPath, "--upgrade-config-json")
+	if err != nil {
+		return nil, err
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout

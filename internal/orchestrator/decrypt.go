@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -22,6 +21,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -186,7 +186,10 @@ func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger 
 	defer cancel()
 
 	logging.DebugStep(logger, "inspect rclone bundle manifest", "executing: rclone cat %s", remotePath)
-	cmd := exec.CommandContext(cmdCtx, "rclone", "cat", remotePath)
+	cmd, err := safeexec.CommandContext(cmdCtx, "rclone", "cat", remotePath)
+	if err != nil {
+		return nil, fmt.Errorf("prepare rclone cat: %w", err)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("open rclone stream: %w", err)
@@ -270,7 +273,10 @@ func inspectRcloneMetadataManifest(ctx context.Context, remoteMetadataPath, remo
 	defer func() { done(err) }()
 	logging.DebugStep(logger, "inspect rclone metadata manifest", "executing: rclone cat %s", remoteMetadataPath)
 
-	cmd := exec.CommandContext(ctx, "rclone", "cat", remoteMetadataPath)
+	cmd, err := safeexec.CommandContext(ctx, "rclone", "cat", remoteMetadataPath)
+	if err != nil {
+		return nil, fmt.Errorf("prepare rclone metadata cat: %w", err)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("rclone cat %s failed: %w (output: %s)", remoteMetadataPath, err, strings.TrimSpace(string(output)))
@@ -418,7 +424,10 @@ func downloadRcloneBackup(ctx context.Context, remotePath string, logger *loggin
 	logging.DebugStep(logger, "download rclone backup", "local temp file=%s", tmpPath)
 
 	// Use rclone copyto to download with progress
-	cmd := exec.CommandContext(ctx, "rclone", "copyto", remotePath, tmpPath, "--progress")
+	cmd, err := safeexec.CommandContext(ctx, "rclone", "copyto", remotePath, tmpPath, "--progress")
+	if err != nil {
+		return "", nil, err
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -573,7 +582,10 @@ func rcloneCopyTo(ctx context.Context, remotePath, localPath string, showProgres
 	if showProgress {
 		args = append(args, "--progress")
 	}
-	cmd := exec.CommandContext(ctx, "rclone", args...)
+	cmd, err := safeexec.CommandContext(ctx, "rclone", args...)
+	if err != nil {
+		return err
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

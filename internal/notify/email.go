@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -656,7 +657,10 @@ func (e *EmailNotifier) detectRecipientViaUserCfg(cfgPath string, targetUserID s
 }
 
 func runCombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd, err := safeexec.CommandContext(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, err
@@ -669,6 +673,13 @@ func truncateForLog(s string, maxBytes int) string {
 		return s
 	}
 	return s[:maxBytes] + "...(truncated)"
+}
+
+func commandForMailTool(ctx context.Context, pathOrName string, args ...string) (*exec.Cmd, error) {
+	if filepath.IsAbs(pathOrName) {
+		return safeexec.TrustedCommandContext(ctx, pathOrName, args...)
+	}
+	return safeexec.CommandContext(ctx, pathOrName, args...)
 }
 
 // sendViaRelay sends email via cloud relay
@@ -697,7 +708,10 @@ func (e *EmailNotifier) isMTAServiceActive(ctx context.Context) (bool, string) {
 	}
 
 	for _, service := range services {
-		cmd := exec.CommandContext(ctx, "systemctl", "is-active", service)
+		cmd, err := safeexec.CommandContext(ctx, "systemctl", "is-active", service)
+		if err != nil {
+			return false, err.Error()
+		}
 		if err := cmd.Run(); err == nil {
 			e.logger.Debug("MTA service %s is active", service)
 			return true, service
@@ -768,7 +782,10 @@ func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
 		mailqPath = "mailq"
 	}
 
-	cmd := exec.CommandContext(ctx, mailqPath)
+	cmd, err := commandForMailTool(ctx, mailqPath)
+	if err != nil {
+		return 0, err
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		return 0, fmt.Errorf("mailq failed: %w", err)
@@ -810,7 +827,10 @@ func (e *EmailNotifier) detectQueueEntry(ctx context.Context, recipient string) 
 		return "", "", fmt.Errorf("mailq command not found")
 	}
 
-	cmd := exec.CommandContext(ctx, mailqPath)
+	cmd, err := commandForMailTool(ctx, mailqPath)
+	if err != nil {
+		return "", "", err
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("mailq failed: %w", err)
@@ -851,7 +871,10 @@ func (e *EmailNotifier) tailMailLog(ctx context.Context, maxLines int) ([]string
 			continue
 		}
 
-		cmd := exec.CommandContext(ctx, "tail", "-n", strconv.Itoa(maxLines), logFile)
+		cmd, err := safeexec.CommandContext(ctx, "tail", "-n", strconv.Itoa(maxLines), logFile)
+		if err != nil {
+			continue
+		}
 		output, err := cmd.Output()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -874,7 +897,10 @@ func (e *EmailNotifier) tailMailLog(ctx context.Context, maxLines int) ([]string
 			args = append(args, "-u", unit)
 		}
 
-		cmd := exec.CommandContext(ctx, "journalctl", args...)
+		cmd, err := safeexec.CommandContext(ctx, "journalctl", args...)
+		if err != nil {
+			return nil, ""
+		}
 		output, err := cmd.Output()
 		if err == nil && len(output) > 0 {
 			lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
@@ -1218,7 +1244,10 @@ func (e *EmailNotifier) sendViaPMF(ctx context.Context, recipient, subject, html
 	e.logger.Debug("=== Sending email via proxmox-mail-forward ===")
 	e.logger.Debug("proxmox-mail-forward routing is handled by Proxmox Notifications; To=%q is only a mail header", toHeader)
 
-	cmd := exec.CommandContext(ctx, pmfPath)
+	cmd, err := commandForMailTool(ctx, pmfPath)
+	if err != nil {
+		return "", "", err
+	}
 	cmd.Stdin = strings.NewReader(emailMessage)
 
 	var stdoutBuf, stderrBuf strings.Builder
@@ -1329,7 +1358,10 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	}
 
 	// Create sendmail command
-	cmd := exec.CommandContext(ctx, sendmailPath, args...)
+	cmd, err := commandForMailTool(ctx, sendmailPath, args...)
+	if err != nil {
+		return "", "", "", err
+	}
 	cmd.Stdin = strings.NewReader(emailMessage)
 
 	// Capture stdout and stderr separately

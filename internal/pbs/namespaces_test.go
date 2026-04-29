@@ -213,13 +213,13 @@ func TestHelperProcess(t *testing.T) {
 func setExecCommandStub(t *testing.T, scenario string) {
 	t.Helper()
 	original := execCommand
-	execCommand = func(context.Context, string, ...string) *exec.Cmd {
+	execCommand = func(context.Context, string, ...string) (*exec.Cmd, error) {
 		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--")
 		cmd.Env = append(os.Environ(),
 			"GO_WANT_HELPER_PROCESS=1",
 			"PBS_HELPER_SCENARIO="+scenario,
 		)
-		return cmd
+		return cmd, nil
 	}
 	t.Cleanup(func() {
 		execCommand = original

@@ -295,8 +295,8 @@ func armNetworkRollback(ctx context.Context, logger *logging.Logger, backupPath 
 
 	if handle.unitName == "" {
 		logging.DebugStep(logger, "arm network rollback", "Arm timer via background sleep (%ds)", timeoutSeconds)
-		cmd := fmt.Sprintf("nohup sh -c 'sleep %d; /bin/sh %s' >/dev/null 2>&1 &", timeoutSeconds, handle.scriptPath)
-		if output, err := restoreCmd.Run(ctx, "sh", "-c", cmd); err != nil {
+		output, err := runBackgroundRollbackTimer(ctx, timeoutSeconds, handle.scriptPath)
+		if err != nil {
 			logger.Debug("Background rollback output: %s", strings.TrimSpace(string(output)))
 			return nil, fmt.Errorf("failed to arm rollback timer: %w", err)
 		}
@@ -792,6 +792,15 @@ func shellQuote(value string) string {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+const backgroundRollbackCommand = `nohup sh -c 'sleep "$1"; /bin/sh "$2"' proxsave-rollback-worker "$1" "$2" >/dev/null 2>&1 &`
+
+func runBackgroundRollbackTimer(ctx context.Context, timeoutSeconds int, scriptPath string) ([]byte, error) {
+	if timeoutSeconds < 1 {
+		timeoutSeconds = 1
+	}
+	return restoreCmd.Run(ctx, "sh", "-c", backgroundRollbackCommand, "proxsave-rollback", fmt.Sprintf("%d", timeoutSeconds), scriptPath)
 }
 
 func commandAvailable(name string) bool {

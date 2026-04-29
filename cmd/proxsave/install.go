@@ -15,6 +15,7 @@ import (
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
@@ -860,7 +861,11 @@ func clearImmutableAttributesWithContext(ctx context.Context, target string, boo
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+		cmd, err := safeexec.TrustedCommandContext(ctx, args[0], args[1:]...)
+		if err != nil {
+			logBootstrapWarning(bootstrap, "Failed to prepare chattr for %s: %v", target, err)
+			continue
+		}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr

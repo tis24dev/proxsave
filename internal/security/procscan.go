@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 // Heuristic detection for safe kernel-style processes.
@@ -28,25 +30,28 @@ type procInfo struct {
 func readProcInfo(pid int) procInfo {
 	info := procInfo{}
 
-	commPath := fmt.Sprintf("/proc/%d/comm", pid)
-	if data, err := os.ReadFile(commPath); err == nil {
-		info.comm = strings.TrimSpace(string(data))
+	if commPath, err := safeexec.ProcPath(pid, "comm"); err == nil {
+		if data, err := os.ReadFile(commPath); err == nil {
+			info.comm = strings.TrimSpace(string(data))
+		}
 	}
 
-	statusPath := fmt.Sprintf("/proc/%d/status", pid)
-	if data, err := os.ReadFile(statusPath); err == nil {
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "PPid:") {
-				_, _ = fmt.Sscanf(line, "PPid:\t%d", &info.ppid)
-				break
+	if statusPath, err := safeexec.ProcPath(pid, "status"); err == nil {
+		if data, err := os.ReadFile(statusPath); err == nil {
+			lines := strings.Split(string(data), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "PPid:") {
+					_, _ = fmt.Sscanf(line, "PPid:\t%d", &info.ppid)
+					break
+				}
 			}
 		}
 	}
 
-	exePath := fmt.Sprintf("/proc/%d/exe", pid)
-	if target, err := filepath.EvalSymlinks(exePath); err == nil {
-		info.exe = target
+	if exePath, err := safeexec.ProcPath(pid, "exe"); err == nil {
+		if target, err := filepath.EvalSymlinks(exePath); err == nil {
+			info.exe = target
+		}
 	}
 
 	return info
