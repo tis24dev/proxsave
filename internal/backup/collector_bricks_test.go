@@ -1,3 +1,4 @@
+// Package backup provides collection, archive, and verification logic for ProxSave backups.
 package backup
 
 import (
@@ -125,6 +126,48 @@ func recipeBrickIDs(r recipe) []BrickID {
 		ids = append(ids, brick.ID)
 	}
 	return ids
+}
+
+func TestRealRecipesHaveCompleteUniqueBricks(t *testing.T) {
+	recipes := []recipe{
+		newPVERecipe(),
+		newPBSRecipe(),
+		newPBSCommandsRecipe(),
+		newPBSDatastoreInventoryRecipe(),
+		newPBSDatastoreConfigRecipe(),
+		newPBSPXARRecipe(),
+		newPBSUserConfigRecipe(),
+		newSystemRecipe(),
+		newDualRecipe(),
+	}
+
+	for _, r := range recipes {
+		t.Run(r.Name, func(t *testing.T) {
+			if r.Name == "" {
+				t.Fatalf("recipe name is empty")
+			}
+			if len(r.Bricks) == 0 {
+				t.Fatalf("recipe %s has no bricks", r.Name)
+			}
+
+			seen := make(map[BrickID]int, len(r.Bricks))
+			for i, brick := range r.Bricks {
+				if brick.ID == "" {
+					t.Fatalf("recipe %s brick %d has empty ID", r.Name, i)
+				}
+				if brick.Description == "" {
+					t.Fatalf("recipe %s brick %s has empty description", r.Name, brick.ID)
+				}
+				if brick.Run == nil {
+					t.Fatalf("recipe %s brick %s has nil Run", r.Name, brick.ID)
+				}
+				if first, ok := seen[brick.ID]; ok {
+					t.Fatalf("recipe %s has duplicate brick ID %s at indexes %d and %d", r.Name, brick.ID, first, i)
+				}
+				seen[brick.ID] = i
+			}
+		})
+	}
 }
 
 func TestNewPVERecipeOrder(t *testing.T) {
