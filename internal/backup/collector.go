@@ -1,3 +1,4 @@
+// Package backup contains collection, archive, manifest, and optimization helpers.
 package backup
 
 import (
@@ -263,54 +264,79 @@ var defaultExcludePatterns = []string{
 
 // Validate checks if the collector configuration is valid
 func (c *CollectorConfig) Validate() error {
-	// Validate exclude patterns (basic glob syntax check)
+	if err := c.validateExcludePatterns(); err != nil {
+		return err
+	}
+
+	if !c.hasCollectionOptionEnabled() {
+		return fmt.Errorf("at least one backup option must be enabled")
+	}
+
+	c.normalizePxarConcurrency()
+	if c.MaxPVEBackupSizeBytes < 0 {
+		return fmt.Errorf("MAX_PVE_BACKUP_SIZE must be >= 0")
+	}
+	c.normalizeCommandTimeouts()
+	if c.SystemRootPrefix != "" && !filepath.IsAbs(c.SystemRootPrefix) {
+		return fmt.Errorf("system root prefix must be an absolute path")
+	}
+
+	return nil
+}
+
+func (c *CollectorConfig) validateExcludePatterns() error {
 	for i, pattern := range c.ExcludePatterns {
 		if pattern == "" {
 			return fmt.Errorf("exclude pattern at index %d is empty", i)
 		}
-		// Test if pattern is valid glob syntax
 		if _, err := filepath.Match(pattern, "test"); err != nil {
 			return fmt.Errorf("invalid glob pattern at index %d: %s (error: %w)", i, pattern, err)
 		}
 	}
+	return nil
+}
 
-	// At least one collection option should be enabled
-	hasAnyEnabled := c.BackupVMConfigs || c.BackupClusterConfig ||
-		c.BackupPVEFirewall || c.BackupVZDumpConfig || c.BackupPVEACL ||
-		c.BackupPVEJobs || c.BackupPVESchedules || c.BackupPVEReplication ||
-		c.BackupPVEBackupFiles || c.BackupCephConfig ||
-		c.BackupDatastoreConfigs || c.BackupPBSS3Endpoints || c.BackupPBSNodeConfig ||
-		c.BackupPBSAcmeAccounts || c.BackupPBSAcmePlugins || c.BackupPBSMetricServers ||
-		c.BackupPBSTrafficControl || c.BackupPBSNotifications || c.BackupUserConfigs || c.BackupRemoteConfigs ||
-		c.BackupSyncJobs || c.BackupVerificationJobs || c.BackupTapeConfigs ||
-		c.BackupPBSNetworkConfig || c.BackupPruneSchedules || c.BackupPxarFiles ||
-		c.BackupNetworkConfigs || c.BackupAptSources || c.BackupCronJobs ||
-		c.BackupSystemdServices || c.BackupSSLCerts || c.BackupSysctlConfig ||
-		c.BackupKernelModules || c.BackupFirewallRules ||
-		c.BackupInstalledPackages || c.BackupScriptDir || c.BackupCriticalFiles ||
-		c.BackupSSHKeys || c.BackupZFSConfig || c.BackupConfigFile
-
-	if !hasAnyEnabled {
-		return fmt.Errorf("at least one backup option must be enabled")
+func (c *CollectorConfig) hasCollectionOptionEnabled() bool {
+	for _, enabled := range c.collectionOptionFlags() {
+		if enabled {
+			return true
+		}
 	}
+	return false
+}
 
+func (c *CollectorConfig) collectionOptionFlags() []bool {
+	return []bool{
+		c.BackupVMConfigs, c.BackupClusterConfig,
+		c.BackupPVEFirewall, c.BackupVZDumpConfig, c.BackupPVEACL,
+		c.BackupPVEJobs, c.BackupPVESchedules, c.BackupPVEReplication,
+		c.BackupPVEBackupFiles, c.BackupCephConfig,
+		c.BackupDatastoreConfigs, c.BackupPBSS3Endpoints, c.BackupPBSNodeConfig,
+		c.BackupPBSAcmeAccounts, c.BackupPBSAcmePlugins, c.BackupPBSMetricServers,
+		c.BackupPBSTrafficControl, c.BackupPBSNotifications, c.BackupUserConfigs, c.BackupRemoteConfigs,
+		c.BackupSyncJobs, c.BackupVerificationJobs, c.BackupTapeConfigs,
+		c.BackupPBSNetworkConfig, c.BackupPruneSchedules, c.BackupPxarFiles,
+		c.BackupNetworkConfigs, c.BackupAptSources, c.BackupCronJobs,
+		c.BackupSystemdServices, c.BackupSSLCerts, c.BackupSysctlConfig,
+		c.BackupKernelModules, c.BackupFirewallRules,
+		c.BackupInstalledPackages, c.BackupScriptDir, c.BackupCriticalFiles,
+		c.BackupSSHKeys, c.BackupZFSConfig, c.BackupConfigFile,
+	}
+}
+
+func (c *CollectorConfig) normalizePxarConcurrency() {
 	if c.PxarDatastoreConcurrency <= 0 {
 		c.PxarDatastoreConcurrency = 3
 	}
-	if c.MaxPVEBackupSizeBytes < 0 {
-		return fmt.Errorf("MAX_PVE_BACKUP_SIZE must be >= 0")
-	}
+}
+
+func (c *CollectorConfig) normalizeCommandTimeouts() {
 	if c.PveshTimeoutSeconds < 0 {
 		c.PveshTimeoutSeconds = 15
 	}
 	if c.FsIoTimeoutSeconds < 0 {
 		c.FsIoTimeoutSeconds = 30
 	}
-	if c.SystemRootPrefix != "" && !filepath.IsAbs(c.SystemRootPrefix) {
-		return fmt.Errorf("system root prefix must be an absolute path")
-	}
-
-	return nil
 }
 
 // NewCollector creates a new backup collector
@@ -729,19 +755,12 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 
 	c.logger.Debug("Collecting %s: %s -> %s", description, src, dest)
 
-	info, err := os.Lstat(src)
-	if err != nil {
-		if os.IsNotExist(err) {
-			c.logger.Debug("%s not found: %s (skipping)", description, src)
-			return nil
-		}
-		c.incFilesFailed()
-		return fmt.Errorf("failed to stat %s: %w", src, err)
+	info, found, err := c.statCopySource(src, description)
+	if err != nil || !found {
+		return err
 	}
 
-	// Check if this file should be excluded
-	if c.shouldExclude(src) || c.shouldExclude(dest) {
-		c.incFilesSkipped()
+	if c.shouldSkipCopy(src, dest) {
 		return nil
 	}
 
@@ -751,55 +770,91 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 		return nil
 	}
 
-	// Handle symbolic links by recreating the link
 	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := osReadlink(src)
-		if err != nil {
-			c.incFilesFailed()
-			return fmt.Errorf("symlink read failed - path: %s: %w", src, err)
-		}
-
-		if err := c.ensureDir(filepath.Dir(dest)); err != nil {
-			c.incFilesFailed()
-			return err
-		}
-		c.applyDirectoryMetadataFromSource(filepath.Dir(src), filepath.Dir(dest))
-
-		// Remove existing file if present
-		if _, err := os.Lstat(dest); err == nil {
-			if err := os.Remove(dest); err != nil {
-				c.incFilesFailed()
-				return fmt.Errorf("file replacement failed - path: %s: %w", dest, err)
-			}
-		}
-
-		if err := osSymlink(target, dest); err != nil {
-			c.incFilesFailed()
-			return fmt.Errorf("symlink creation failed - source: %s - target: %s - absolute: %v: %w",
-				src, target, filepath.IsAbs(target), err)
-		}
-
-		c.applySymlinkOwnership(dest, info)
-
-		c.incFilesProcessed()
-		c.logger.Debug("Successfully copied symlink %s -> %s", dest, target)
-		return nil
+		return c.copySymlinkFile(src, dest, info)
 	}
 
 	if !info.Mode().IsRegular() {
-		// Skip non-regular files (devices, sockets, etc.) but count as processed
 		c.logger.Debug("Skipping non-regular file: %s", src)
 		return nil
 	}
 
-	// Ensure destination directory exists
-	if err := c.ensureDir(filepath.Dir(dest)); err != nil {
+	return c.copyRegularFile(src, dest, description, info)
+}
+
+func (c *Collector) statCopySource(src, description string) (os.FileInfo, bool, error) {
+	info, err := os.Lstat(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.logger.Debug("%s not found: %s (skipping)", description, src)
+			return nil, false, nil
+		}
+		c.incFilesFailed()
+		return nil, false, fmt.Errorf("failed to stat %s: %w", src, err)
+	}
+	return info, true, nil
+}
+
+func (c *Collector) shouldSkipCopy(src, dest string) bool {
+	if c.shouldExclude(src) || c.shouldExclude(dest) {
+		c.incFilesSkipped()
+		return true
+	}
+	return false
+}
+
+func (c *Collector) copySymlinkFile(src, dest string, info os.FileInfo) error {
+	target, err := osReadlink(src)
+	if err != nil {
+		c.incFilesFailed()
+		return fmt.Errorf("symlink read failed - path: %s: %w", src, err)
+	}
+
+	if err := c.prepareCopyDestination(src, dest); err != nil {
 		c.incFilesFailed()
 		return err
 	}
-	c.applyDirectoryMetadataFromSource(filepath.Dir(src), filepath.Dir(dest))
 
-	// Open source file
+	if err := c.removeExistingSymlinkDestination(dest); err != nil {
+		c.incFilesFailed()
+		return err
+	}
+
+	if err := osSymlink(target, dest); err != nil {
+		c.incFilesFailed()
+		return fmt.Errorf("symlink creation failed - source: %s - target: %s - absolute: %v: %w",
+			src, target, filepath.IsAbs(target), err)
+	}
+
+	c.applySymlinkOwnership(dest, info)
+	c.incFilesProcessed()
+	c.logger.Debug("Successfully copied symlink %s -> %s", dest, target)
+	return nil
+}
+
+func (c *Collector) prepareCopyDestination(src, dest string) error {
+	if err := c.ensureDir(filepath.Dir(dest)); err != nil {
+		return err
+	}
+	c.applyDirectoryMetadataFromSource(filepath.Dir(src), filepath.Dir(dest))
+	return nil
+}
+
+func (c *Collector) removeExistingSymlinkDestination(dest string) error {
+	if _, err := os.Lstat(dest); err == nil {
+		if err := os.Remove(dest); err != nil {
+			return fmt.Errorf("file replacement failed - path: %s: %w", dest, err)
+		}
+	}
+	return nil
+}
+
+func (c *Collector) copyRegularFile(src, dest, description string, info os.FileInfo) error {
+	if err := c.prepareCopyDestination(src, dest); err != nil {
+		c.incFilesFailed()
+		return err
+	}
+
 	srcFile, err := osOpen(src)
 	if err != nil {
 		c.incFilesFailed()
@@ -807,23 +862,10 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 	}
 	defer srcFile.Close()
 
-	// Create destination file with a safe default mode; we'll apply the original metadata after copy.
-	destFile, err := osOpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	written, err := copyRegularFileContents(srcFile, src, dest)
 	if err != nil {
 		c.incFilesFailed()
-		return fmt.Errorf("failed to create %s: %w", dest, err)
-	}
-
-	// Copy content
-	written, err := io.Copy(destFile, srcFile)
-	closeErr := destFile.Close()
-	if err != nil {
-		c.incFilesFailed()
-		return fmt.Errorf("failed to copy %s: %w", src, err)
-	}
-	if closeErr != nil {
-		c.incFilesFailed()
-		return fmt.Errorf("failed to close %s: %w", dest, closeErr)
+		return err
 	}
 
 	c.applyMetadata(dest, info)
@@ -833,6 +875,23 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 	c.logger.Debug("Successfully collected %s: %s", description, src)
 
 	return nil
+}
+
+func copyRegularFileContents(srcFile io.Reader, src, dest string) (int64, error) {
+	destFile, err := osOpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create %s: %w", dest, err)
+	}
+
+	written, err := io.Copy(destFile, srcFile)
+	closeErr := destFile.Close()
+	if err != nil {
+		return 0, fmt.Errorf("failed to copy %s: %w", src, err)
+	}
+	if closeErr != nil {
+		return 0, fmt.Errorf("failed to close %s: %w", dest, closeErr)
+	}
+	return written, nil
 }
 
 func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description string) error {

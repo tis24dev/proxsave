@@ -564,7 +564,12 @@ func createTestBundle(t *testing.T, entries []bundleEntry) string {
 	t.Helper()
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "bundle.tar")
+	createTestBundleAt(t, bundlePath, entries)
+	return bundlePath
+}
 
+func createTestBundleAt(t *testing.T, bundlePath string, entries []bundleEntry) {
+	t.Helper()
 	f, err := os.Create(bundlePath)
 	if err != nil {
 		t.Fatalf("create bundle: %v", err)
@@ -588,7 +593,88 @@ func createTestBundle(t *testing.T, entries []bundleEntry) string {
 	if err := tw.Close(); err != nil {
 		t.Fatalf("close tar writer: %v", err)
 	}
-	return bundlePath
+}
+
+func createPlainBackupBundle(t *testing.T, bundlePath string, archiveData []byte, manifest backup.Manifest, includeChecksum bool) {
+	t.Helper()
+	metaJSON, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+
+	entries := []bundleEntry{
+		{name: "backup.tar.xz", data: archiveData},
+		{name: "backup.metadata", data: metaJSON},
+	}
+	if includeChecksum {
+		entries = append(entries, bundleEntry{
+			name: "backup.sha256",
+			data: []byte(checksumLineForBytes("backup.tar.xz", archiveData)),
+		})
+	}
+	createTestBundleAt(t, bundlePath, entries)
+}
+
+func useRestoreFS(t *testing.T, fs FS) {
+	t.Helper()
+	orig := restoreFS
+	restoreFS = fs
+	t.Cleanup(func() { restoreFS = orig })
+}
+
+type rawArtifactFixture struct {
+	candidate *backupCandidate
+	workDir   string
+}
+
+func createRawArtifactFixture(t *testing.T, includeMetadata bool, checksumContent string) rawArtifactFixture {
+	t.Helper()
+	srcDir := t.TempDir()
+
+	archivePath := filepath.Join(srcDir, "backup.tar.xz")
+	if err := os.WriteFile(archivePath, []byte("archive data"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	metadataPath := "/nonexistent/backup.metadata"
+	if includeMetadata {
+		metadataPath = filepath.Join(srcDir, "backup.metadata")
+		if err := os.WriteFile(metadataPath, []byte("{}"), 0o644); err != nil {
+			t.Fatalf("write metadata: %v", err)
+		}
+	}
+
+	checksumPath := ""
+	if checksumContent != "" {
+		checksumPath = filepath.Join(srcDir, "backup.sha256")
+		if err := os.WriteFile(checksumPath, []byte(checksumContent), 0o644); err != nil {
+			t.Fatalf("write checksum: %v", err)
+		}
+	}
+
+	return rawArtifactFixture{
+		candidate: &backupCandidate{
+			RawArchivePath:  archivePath,
+			RawMetadataPath: metadataPath,
+			RawChecksumPath: checksumPath,
+		},
+		workDir: t.TempDir(),
+	}
+}
+
+func plainBundleCandidate(path string, manifest *backup.Manifest) *backupCandidate {
+	return &backupCandidate{
+		Source:     sourceBundle,
+		BundlePath: path,
+		Manifest:   manifest,
+	}
+}
+
+func preparePlainBundleTestInput(path string, manifest *backup.Manifest) (*backupCandidate, context.Context, *bufio.Reader, *logging.Logger) {
+	return plainBundleCandidate(path, manifest),
+		context.Background(),
+		bufio.NewReader(strings.NewReader("")),
+		logging.New(types.LogLevelError, false)
 }
 
 func TestEnsureWritablePath(t *testing.T) {
@@ -1913,34 +1999,10 @@ func TestMoveFileSafe_SameDevice(t *testing.T) {
 // =====================================
 
 func TestCopyRawArtifactsToWorkdir_Success(t *testing.T) {
-	origFS := restoreFS
-	restoreFS = osFS{}
-	t.Cleanup(func() { restoreFS = origFS })
+	useRestoreFS(t, osFS{})
 
-	srcDir := t.TempDir()
-	workDir := t.TempDir()
-
-	// Create source files
-	archivePath := filepath.Join(srcDir, "backup.tar.xz")
-	if err := os.WriteFile(archivePath, []byte("archive data"), 0o644); err != nil {
-		t.Fatalf("write archive: %v", err)
-	}
-	metadataPath := filepath.Join(srcDir, "backup.metadata")
-	if err := os.WriteFile(metadataPath, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write metadata: %v", err)
-	}
-	checksumPath := filepath.Join(srcDir, "backup.sha256")
-	if err := os.WriteFile(checksumPath, []byte("checksum"), 0o644); err != nil {
-		t.Fatalf("write checksum: %v", err)
-	}
-
-	cand := &backupCandidate{
-		RawArchivePath:  archivePath,
-		RawMetadataPath: metadataPath,
-		RawChecksumPath: checksumPath,
-	}
-
-	staged, err := copyRawArtifactsToWorkdir(context.Background(), cand, workDir)
+	fixture := createRawArtifactFixture(t, true, "checksum")
+	staged, err := copyRawArtifactsToWorkdir(context.Background(), fixture.candidate, fixture.workDir)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdir error: %v", err)
 	}
@@ -1950,9 +2012,7 @@ func TestCopyRawArtifactsToWorkdir_Success(t *testing.T) {
 }
 
 func TestCopyRawArtifactsToWorkdir_ArchiveError(t *testing.T) {
-	origFS := restoreFS
-	restoreFS = osFS{}
-	t.Cleanup(func() { restoreFS = origFS })
+	useRestoreFS(t, osFS{})
 
 	cand := &backupCandidate{
 		RawArchivePath:  "/nonexistent/archive.tar.xz",
@@ -1970,26 +2030,11 @@ func TestCopyRawArtifactsToWorkdir_ArchiveError(t *testing.T) {
 }
 
 func TestCopyRawArtifactsToWorkdir_MetadataError(t *testing.T) {
-	origFS := restoreFS
-	restoreFS = osFS{}
-	t.Cleanup(func() { restoreFS = origFS })
+	useRestoreFS(t, osFS{})
 
-	srcDir := t.TempDir()
-	workDir := t.TempDir()
-
-	// Create only archive, no metadata
-	archivePath := filepath.Join(srcDir, "backup.tar.xz")
-	if err := os.WriteFile(archivePath, []byte("archive data"), 0o644); err != nil {
-		t.Fatalf("write archive: %v", err)
-	}
-
-	cand := &backupCandidate{
-		RawArchivePath:  archivePath,
-		RawMetadataPath: "/nonexistent/backup.metadata",
-		RawChecksumPath: "/nonexistent/backup.sha256",
-	}
-
-	_, err := copyRawArtifactsToWorkdir(context.Background(), cand, workDir)
+	fixture := createRawArtifactFixture(t, false, "")
+	fixture.candidate.RawChecksumPath = "/nonexistent/backup.sha256"
+	_, err := copyRawArtifactsToWorkdir(context.Background(), fixture.candidate, fixture.workDir)
 	if err == nil {
 		t.Fatal("expected error for nonexistent metadata")
 	}
@@ -1999,30 +2044,11 @@ func TestCopyRawArtifactsToWorkdir_MetadataError(t *testing.T) {
 }
 
 func TestCopyRawArtifactsToWorkdir_ChecksumError(t *testing.T) {
-	origFS := restoreFS
-	restoreFS = osFS{}
-	t.Cleanup(func() { restoreFS = origFS })
+	useRestoreFS(t, osFS{})
 
-	srcDir := t.TempDir()
-	workDir := t.TempDir()
-
-	// Create archive and metadata, no checksum
-	archivePath := filepath.Join(srcDir, "backup.tar.xz")
-	if err := os.WriteFile(archivePath, []byte("archive data"), 0o644); err != nil {
-		t.Fatalf("write archive: %v", err)
-	}
-	metadataPath := filepath.Join(srcDir, "backup.metadata")
-	if err := os.WriteFile(metadataPath, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write metadata: %v", err)
-	}
-
-	cand := &backupCandidate{
-		RawArchivePath:  archivePath,
-		RawMetadataPath: metadataPath,
-		RawChecksumPath: "/nonexistent/backup.sha256",
-	}
-
-	staged, err := copyRawArtifactsToWorkdir(context.Background(), cand, workDir)
+	fixture := createRawArtifactFixture(t, true, "")
+	fixture.candidate.RawChecksumPath = "/nonexistent/backup.sha256"
+	staged, err := copyRawArtifactsToWorkdir(context.Background(), fixture.candidate, fixture.workDir)
 	if err != nil {
 		t.Fatalf("expected checksum to be optional, got error: %v", err)
 	}
@@ -2532,30 +2558,10 @@ func TestInspectRcloneMetadataManifest_RcloneFails(t *testing.T) {
 // =====================================
 
 func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
-	origFS := restoreFS
-	restoreFS = osFS{}
-	t.Cleanup(func() { restoreFS = origFS })
+	useRestoreFS(t, osFS{})
 
-	srcDir := t.TempDir()
-	workDir := t.TempDir()
-
-	// Create source files
-	archivePath := filepath.Join(srcDir, "backup.tar.xz")
-	if err := os.WriteFile(archivePath, []byte("archive data"), 0o644); err != nil {
-		t.Fatalf("write archive: %v", err)
-	}
-	metadataPath := filepath.Join(srcDir, "backup.metadata")
-	if err := os.WriteFile(metadataPath, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write metadata: %v", err)
-	}
-
-	cand := &backupCandidate{
-		RawArchivePath:  archivePath,
-		RawMetadataPath: metadataPath,
-		RawChecksumPath: "",
-	}
-
-	staged, err := copyRawArtifactsToWorkdirWithLogger(context.TODO(), cand, workDir, nil)
+	fixture := createRawArtifactFixture(t, true, "")
+	staged, err := copyRawArtifactsToWorkdirWithLogger(context.TODO(), fixture.candidate, fixture.workDir, nil)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdirWithLogger error: %v", err)
 	}
@@ -3302,34 +3308,10 @@ func TestInspectRcloneBundleManifest_StartError(t *testing.T) {
 }
 
 func TestCopyRawArtifactsToWorkdir_WithChecksum(t *testing.T) {
-	origFS := restoreFS
-	restoreFS = osFS{}
-	t.Cleanup(func() { restoreFS = origFS })
+	useRestoreFS(t, osFS{})
 
-	srcDir := t.TempDir()
-	workDir := t.TempDir()
-
-	// Create source files including checksum
-	archivePath := filepath.Join(srcDir, "backup.tar.xz")
-	if err := os.WriteFile(archivePath, []byte("archive data"), 0o644); err != nil {
-		t.Fatalf("write archive: %v", err)
-	}
-	metadataPath := filepath.Join(srcDir, "backup.metadata")
-	if err := os.WriteFile(metadataPath, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write metadata: %v", err)
-	}
-	checksumPath := filepath.Join(srcDir, "backup.sha256")
-	if err := os.WriteFile(checksumPath, []byte("checksum backup.tar.xz"), 0o644); err != nil {
-		t.Fatalf("write checksum: %v", err)
-	}
-
-	cand := &backupCandidate{
-		RawArchivePath:  archivePath,
-		RawMetadataPath: metadataPath,
-		RawChecksumPath: checksumPath,
-	}
-
-	staged, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), cand, workDir, nil)
+	fixture := createRawArtifactFixture(t, true, "checksum backup.tar.xz")
+	staged, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), fixture.candidate, fixture.workDir, nil)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdirWithLogger error: %v", err)
 	}
@@ -3710,26 +3692,9 @@ func TestSelectDecryptCandidate_RequireEncryptedAllPlain(t *testing.T) {
 
 	// Create a plain backup bundle (must have .bundle.tar suffix)
 	bundlePath := filepath.Join(backupDir, "backup-2024-01-01.bundle.tar")
-	bundleFile, _ := os.Create(bundlePath)
-	tw := tar.NewWriter(bundleFile)
-
-	// Add archive (plain, no .age extension)
 	archiveData := []byte("archive content")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
-
-	// Add metadata with encryption=none
 	manifest := backup.Manifest{EncryptionMode: "none", Hostname: "test", CreatedAt: time.Now(), ArchivePath: "backup.tar.xz"}
-	metaJSON, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
-	tw.Write(metaJSON)
-
-	// Add checksum
-	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
-	tw.Write(checksum)
-	tw.Close()
-	bundleFile.Close()
+	createPlainBackupBundle(t, bundlePath, archiveData, manifest, true)
 
 	cfg := &config.Config{
 		BackupPath:       backupDir,
@@ -3821,23 +3786,9 @@ exit 1
 
 	// Bundle must have .bundle.tar suffix to be discovered
 	bundlePath := filepath.Join(backupDir, "backup.bundle.tar")
-	bundleFile, _ := os.Create(bundlePath)
-	tw := tar.NewWriter(bundleFile)
-
 	archiveData := []byte("archive content")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
-
 	manifest := backup.Manifest{EncryptionMode: "age", Hostname: "test", CreatedAt: time.Now(), ArchivePath: "backup.tar.xz"}
-	metaJSON, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
-	tw.Write(metaJSON)
-
-	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
-	tw.Write(checksum)
-	tw.Close()
-	bundleFile.Close()
+	createPlainBackupBundle(t, bundlePath, archiveData, manifest, true)
 
 	cfg := &config.Config{
 		BackupPath:       backupDir,
@@ -3872,23 +3823,9 @@ func TestPreparePlainBundle_StatErrorAfterExtract(t *testing.T) {
 
 	// Create a valid bundle
 	bundlePath := filepath.Join(tmp, "bundle.tar")
-	bundleFile, _ := os.Create(bundlePath)
-	tw := tar.NewWriter(bundleFile)
-
 	archiveData := []byte("archive content")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
-
 	manifest := backup.Manifest{EncryptionMode: "none", Hostname: "test", CreatedAt: time.Now()}
-	metaJSON, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
-	tw.Write(metaJSON)
-
-	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
-	tw.Write(checksum)
-	tw.Close()
-	bundleFile.Close()
+	createPlainBackupBundle(t, bundlePath, archiveData, manifest, true)
 
 	// Create FakeFS that will fail on stat for the extracted archive
 	fake := NewFakeFS()
@@ -3905,18 +3842,11 @@ func TestPreparePlainBundle_StatErrorAfterExtract(t *testing.T) {
 	fake.StatErr["/tmp/proxsave"] = nil // Allow this stat
 	// After extraction, stat will be called on the plain archive - we set error later
 
-	orig := restoreFS
-	restoreFS = fake
-	defer func() { restoreFS = orig }()
-
-	cand := &backupCandidate{
-		Source:     sourceBundle,
-		BundlePath: bundlePath,
-		Manifest:   &backup.Manifest{EncryptionMode: "none", Hostname: "test"},
-	}
-	ctx := context.Background()
-	reader := bufio.NewReader(strings.NewReader(""))
-	logger := logging.New(types.LogLevelError, false)
+	useRestoreFS(t, fake)
+	cand, ctx, reader, logger := preparePlainBundleTestInput(
+		bundlePath,
+		&backup.Manifest{EncryptionMode: "none", Hostname: "test"},
+	)
 
 	// The test shows that with proper setup, stat error would be triggered
 	// For now, run with FakeFS to cover the MkdirAll/MkdirTemp paths
@@ -3972,19 +3902,9 @@ func TestPreparePlainBundle_MkdirTempErrorWithRcloneCleanup(t *testing.T) {
 
 	// Create a fake downloaded bundle file
 	bundlePath := filepath.Join(tmp, "downloaded.bundle.tar")
-	bundleFile, _ := os.Create(bundlePath)
-	tw := tar.NewWriter(bundleFile)
 	archiveData := []byte("data")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
-	metaJSON, _ := json.Marshal(backup.Manifest{EncryptionMode: "none", ArchivePath: "backup.tar.xz"})
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
-	tw.Write(metaJSON)
-	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
-	tw.Write(checksum)
-	tw.Close()
-	bundleFile.Close()
+	manifest := backup.Manifest{EncryptionMode: "none", ArchivePath: "backup.tar.xz"}
+	createPlainBackupBundle(t, bundlePath, archiveData, manifest, true)
 
 	// Track if cleanup was called
 	cleanupCalled := false
@@ -4158,23 +4078,9 @@ func TestPreparePlainBundle_CopyFileError(t *testing.T) {
 
 	// Create a valid bundle
 	bundlePath := filepath.Join(tmp, "bundle.tar")
-	bundleFile, _ := os.Create(bundlePath)
-	tw := tar.NewWriter(bundleFile)
-
 	archiveData := []byte("archive content")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
-
 	manifest := backup.Manifest{EncryptionMode: "none", Hostname: "test", CreatedAt: time.Now(), ArchivePath: "backup.tar.xz"}
-	metaJSON, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
-	tw.Write(metaJSON)
-
-	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
-	tw.Write(checksum)
-	tw.Close()
-	bundleFile.Close()
+	createPlainBackupBundle(t, bundlePath, archiveData, manifest, true)
 
 	// Use FakeFS
 	fake := NewFakeFS()
@@ -4187,18 +4093,11 @@ func TestPreparePlainBundle_CopyFileError(t *testing.T) {
 	// After extraction, set OpenFile error for the archive copy destination
 	// The copyFile function will try to create the destination file
 
-	orig := restoreFS
-	restoreFS = fake
-	defer func() { restoreFS = orig }()
-
-	cand := &backupCandidate{
-		Source:     sourceBundle,
-		BundlePath: bundlePath,
-		Manifest:   &backup.Manifest{EncryptionMode: "none", Hostname: "test"},
-	}
-	ctx := context.Background()
-	reader := bufio.NewReader(strings.NewReader(""))
-	logger := logging.New(types.LogLevelError, false)
+	useRestoreFS(t, fake)
+	cand, ctx, reader, logger := preparePlainBundleTestInput(
+		bundlePath,
+		&backup.Manifest{EncryptionMode: "none", Hostname: "test"},
+	)
 
 	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger)
 	// This test verifies that the path goes through successfully for plain archives
@@ -4267,39 +4166,18 @@ func TestPreparePlainBundle_StatErrorOnPlainArchive(t *testing.T) {
 
 	// Create a valid bundle with plain (non-encrypted) archive
 	bundlePath := filepath.Join(tmp, "bundle.tar")
-	bundleFile, _ := os.Create(bundlePath)
-	tw := tar.NewWriter(bundleFile)
-
 	archiveData := []byte("archive content for stat test")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
-
 	manifest := backup.Manifest{EncryptionMode: "none", Hostname: "test", CreatedAt: time.Now(), ArchivePath: "backup.tar.xz"}
-	metaJSON, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
-	tw.Write(metaJSON)
-
-	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
-	tw.Write(checksum)
-	tw.Close()
-	bundleFile.Close()
+	createPlainBackupBundle(t, bundlePath, archiveData, manifest, true)
 
 	// Use wrapped osFS that fails stat on plain archive after several calls
 	fake := &fakeStatFailOnPlainArchive{}
 
-	orig := restoreFS
-	restoreFS = fake
-	defer func() { restoreFS = orig }()
-
-	cand := &backupCandidate{
-		Source:     sourceBundle,
-		BundlePath: bundlePath,
-		Manifest:   &backup.Manifest{EncryptionMode: "none", Hostname: "test"},
-	}
-	ctx := context.Background()
-	reader := bufio.NewReader(strings.NewReader(""))
-	logger := logging.New(types.LogLevelError, false)
+	useRestoreFS(t, fake)
+	cand, ctx, reader, logger := preparePlainBundleTestInput(
+		bundlePath,
+		&backup.Manifest{EncryptionMode: "none", Hostname: "test"},
+	)
 
 	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger)
 	if err == nil {
@@ -4325,17 +4203,9 @@ func TestPreparePlainBundle_MkdirAllErrorWithRcloneDownloadCleanup(t *testing.T)
 
 	// Create a valid bundle that rclone will "download"
 	bundlePath := filepath.Join(downloadDir, "backup.bundle.tar")
-	bundleFile, _ := os.Create(bundlePath)
-	tw := tar.NewWriter(bundleFile)
 	archiveData := []byte("archive content")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
 	manifest := backup.Manifest{EncryptionMode: "none", Hostname: "test", CreatedAt: time.Now()}
-	metaJSON, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
-	tw.Write(metaJSON)
-	tw.Close()
-	bundleFile.Close()
+	createPlainBackupBundle(t, bundlePath, archiveData, manifest, false)
 
 	// Script that copies the pre-made bundle to the destination
 	script := fmt.Sprintf(`#!/bin/bash
@@ -4401,39 +4271,18 @@ func TestPreparePlainBundle_GenerateChecksumErrorPath(t *testing.T) {
 
 	// Create a valid bundle
 	bundlePath := filepath.Join(tmp, "bundle.tar")
-	bundleFile, _ := os.Create(bundlePath)
-	tw := tar.NewWriter(bundleFile)
-
 	archiveData := []byte("archive content for checksum error test")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
-
 	manifest := backup.Manifest{EncryptionMode: "none", Hostname: "test", CreatedAt: time.Now(), ArchivePath: "backup.tar.xz"}
-	metaJSON, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
-	tw.Write(metaJSON)
-
-	checksum := checksumLineForBytes("backup.tar.xz", archiveData)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o640})
-	tw.Write(checksum)
-	tw.Close()
-	bundleFile.Close()
+	createPlainBackupBundle(t, bundlePath, archiveData, manifest, true)
 
 	// Use FS that removes file after stat
 	fake := &fakeStatThenRemoveFS{}
 
-	orig := restoreFS
-	restoreFS = fake
-	defer func() { restoreFS = orig }()
-
-	cand := &backupCandidate{
-		Source:     sourceBundle,
-		BundlePath: bundlePath,
-		Manifest:   &backup.Manifest{EncryptionMode: "none", Hostname: "test"},
-	}
-	ctx := context.Background()
-	reader := bufio.NewReader(strings.NewReader(""))
-	logger := logging.New(types.LogLevelError, false)
+	useRestoreFS(t, fake)
+	cand, ctx, reader, logger := preparePlainBundleTestInput(
+		bundlePath,
+		&backup.Manifest{EncryptionMode: "none", Hostname: "test"},
+	)
 
 	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger)
 	if err == nil {
@@ -4473,17 +4322,9 @@ func TestPreparePlainBundle_MkdirAllErrorAfterRcloneDownload(t *testing.T) {
 
 	// Create the bundle that will be "downloaded"
 	sourceBundlePath := filepath.Join(bundleDir, "backup.bundle.tar")
-	bundleFile, _ := os.Create(sourceBundlePath)
-	tw := tar.NewWriter(bundleFile)
 	archiveData := []byte("archive")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
 	manifest := backup.Manifest{EncryptionMode: "none", Hostname: "test", CreatedAt: time.Now()}
-	metaJSON, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(metaJSON)), Mode: 0o640})
-	tw.Write(metaJSON)
-	tw.Close()
-	bundleFile.Close()
+	createPlainBackupBundle(t, sourceBundlePath, archiveData, manifest, false)
 
 	// Script that copies the bundle to destination
 	script := fmt.Sprintf(`#!/bin/bash
