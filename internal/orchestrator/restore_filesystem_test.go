@@ -276,7 +276,13 @@ func TestExtractArchiveNative_SkipFnSkipsFstab(t *testing.T) {
 		return name == "etc/fstab"
 	}
 
-	if err := extractArchiveNative(context.Background(), archivePath, destRoot, newTestLogger(), nil, RestoreModeFull, nil, "", skipFn); err != nil {
+	if err := extractArchiveNative(context.Background(), restoreArchiveOptions{
+		archivePath: archivePath,
+		destRoot:    destRoot,
+		logger:      newTestLogger(),
+		mode:        RestoreModeFull,
+		skipFn:      skipFn,
+	}); err != nil {
 		t.Fatalf("extractArchiveNative error: %v", err)
 	}
 

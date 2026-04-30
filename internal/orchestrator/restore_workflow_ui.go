@@ -1,3 +1,4 @@
+// Package orchestrator coordinates backup, restore, decrypt, and related workflows.
 package orchestrator
 
 import (
@@ -453,7 +454,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 							"./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json",
 						},
 					}}
-					if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, invCategory, RestoreModeCustom, nil, "", nil); err != nil {
+					if err := extractArchiveNative(ctx, restoreArchiveOptions{
+						archivePath: prepared.ArchivePath,
+						destRoot:    fsTempDir,
+						logger:      logger,
+						categories:  invCategory,
+						mode:        RestoreModeCustom,
+					}); err != nil {
 						logger.Debug("Failed to extract fstab inventory data (continuing): %v", err)
 					}
 
@@ -509,7 +516,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 					"./var/lib/proxsave-info/commands/pve/mapping_dir.json",
 				},
 			}}
-			if err := extractArchiveNative(ctx, prepared.ArchivePath, exportRoot, logger, safeInvCategory, RestoreModeCustom, nil, "", nil); err != nil {
+			if err := extractArchiveNative(ctx, restoreArchiveOptions{
+				archivePath: prepared.ArchivePath,
+				destRoot:    exportRoot,
+				logger:      logger,
+				categories:  safeInvCategory,
+				mode:        RestoreModeCustom,
+			}); err != nil {
 				logger.Debug("Failed to extract SAFE apply inventory (continuing): %v", err)
 			}
 
@@ -978,7 +991,13 @@ func runFullRestoreWithUI(ctx context.Context, ui RestoreWorkflowUI, candidate *
 					"./etc/fstab",
 				},
 			}}
-			if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, fsCategory, RestoreModeCustom, nil, "", nil); err != nil {
+			if err := extractArchiveNative(ctx, restoreArchiveOptions{
+				archivePath: prepared.ArchivePath,
+				destRoot:    fsTempDir,
+				logger:      logger,
+				categories:  fsCategory,
+				mode:        RestoreModeCustom,
+			}); err != nil {
 				logger.Warning("Failed to extract filesystem config for merge: %v", err)
 			} else {
 				currentFstab := filepath.Join(destRoot, "etc", "fstab")

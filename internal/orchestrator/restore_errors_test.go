@@ -1906,7 +1906,12 @@ func TestExtractArchiveNative_OpenError(t *testing.T) {
 	restoreFS = osFS{}
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	err := extractArchiveNative(context.Background(), "/nonexistent/archive.tar", "/tmp", logger, nil, RestoreModeFull, nil, "", nil)
+	err := extractArchiveNative(context.Background(), restoreArchiveOptions{
+		archivePath: "/nonexistent/archive.tar",
+		destRoot:    "/tmp",
+		logger:      logger,
+		mode:        RestoreModeFull,
+	})
 	if err == nil || !strings.Contains(err.Error(), "open archive") {
 		t.Fatalf("expected open error, got: %v", err)
 	}
