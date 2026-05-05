@@ -55,7 +55,7 @@ func TestRunRestoreCommandStream_UsesStreamingRunner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createXZReader: %v", err)
 	}
-	defer reader.(io.Closer).Close()
+	defer reader.Close()
 
 	buf, err := io.ReadAll(reader)
 	if err != nil {

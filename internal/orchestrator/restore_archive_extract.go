@@ -38,7 +38,7 @@ type restoreExtractionLog struct {
 }
 
 // extractArchiveNative extracts TAR archives natively in Go, preserving all timestamps.
-func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) error {
+func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err error) {
 	file, err := restoreFS.Open(opts.archivePath)
 	if err != nil {
 		return fmt.Errorf("open archive: %w", err)
@@ -49,9 +49,7 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) error
 	if err != nil {
 		return fmt.Errorf("create decompression reader: %w", err)
 	}
-	if closer, ok := reader.(io.Closer); ok {
-		defer closer.Close()
-	}
+	defer closeDecompressionReader(reader, &err, "close decompression reader")
 
 	extractionLog := newRestoreExtractionLog(opts)
 	defer extractionLog.close()

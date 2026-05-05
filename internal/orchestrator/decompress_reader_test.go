@@ -1,9 +1,12 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -36,6 +39,7 @@ func TestCreateDecompressionReaderTar(t *testing.T) {
 	if reader == nil {
 		t.Fatalf("reader should not be nil for tar")
 	}
+	_ = reader.Close()
 }
 
 type fakeStreamCommandRunner struct {
@@ -57,6 +61,28 @@ func (f *fakeStreamCommandRunner) RunStream(ctx context.Context, name string, st
 		return io.NopCloser(strings.NewReader(out)), nil
 	}
 	return io.NopCloser(strings.NewReader("")), nil
+}
+
+type extractionCloseErrorReadCloser struct {
+	*bytes.Reader
+	err error
+}
+
+func (r *extractionCloseErrorReadCloser) Close() error {
+	return r.err
+}
+
+type closeErrorStreamCommandRunner struct {
+	data     []byte
+	closeErr error
+}
+
+func (f *closeErrorStreamCommandRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	return nil, nil
+}
+
+func (f *closeErrorStreamCommandRunner) RunStream(context.Context, string, io.Reader, ...string) (io.ReadCloser, error) {
+	return &extractionCloseErrorReadCloser{Reader: bytes.NewReader(f.data), err: f.closeErr}, nil
 }
 
 func TestCreateDecompressionReaderUsesStreamingRunnerForCompressedFormats(t *testing.T) {
@@ -98,14 +124,9 @@ func TestCreateDecompressionReaderUsesStreamingRunnerForCompressedFormats(t *tes
 			if err != nil {
 				t.Fatalf("createDecompressionReader(%s) error: %v", tt.ext, err)
 			}
+			defer reader.Close()
 
-			rc, ok := reader.(io.ReadCloser)
-			if !ok {
-				t.Fatalf("expected io.ReadCloser, got %T", reader)
-			}
-			defer rc.Close()
-
-			out, err := io.ReadAll(rc)
+			out, err := io.ReadAll(reader)
 			if err != nil {
 				t.Fatalf("ReadAll: %v", err)
 			}
@@ -116,5 +137,42 @@ func TestCreateDecompressionReaderUsesStreamingRunnerForCompressedFormats(t *tes
 				t.Fatalf("calls=%v; want [%q]", fake.calls, tt.wantCmd)
 			}
 		})
+	}
+}
+
+func TestExtractArchiveNativeReturnsDecompressionCloseError(t *testing.T) {
+	origCmd := restoreCmd
+	origFS := restoreFS
+	t.Cleanup(func() {
+		restoreCmd = origCmd
+		restoreFS = origFS
+	})
+
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "source.tar")
+	if err := writeTarFile(tarPath, map[string]string{"etc/example.conf": "ok\n"}); err != nil {
+		t.Fatalf("writeTarFile: %v", err)
+	}
+	tarData, err := os.ReadFile(tarPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	closeErr := errors.New("decompressor exited 2")
+	restoreCmd = &closeErrorStreamCommandRunner{data: tarData, closeErr: closeErr}
+	restoreFS = osFS{}
+
+	archivePath := filepath.Join(dir, "archive.tar.zst")
+	if err := os.WriteFile(archivePath, []byte("compressed"), 0o640); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err = extractArchiveNative(context.Background(), restoreArchiveOptions{
+		archivePath: archivePath,
+		destRoot:    filepath.Join(dir, "dest"),
+		logger:      newTestLogger(),
+	})
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("extractArchiveNative error = %v, want close error %v", err, closeErr)
 	}
 }

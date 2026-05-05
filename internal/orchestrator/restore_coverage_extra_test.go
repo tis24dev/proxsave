@@ -658,13 +658,9 @@ func TestRunRestoreCommandStream_FallsBackToExecCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runRestoreCommandStream error: %v", err)
 	}
-	rc, ok := reader.(io.ReadCloser)
-	if !ok {
-		t.Fatalf("expected io.ReadCloser, got %T", reader)
-	}
-	defer rc.Close()
+	defer reader.Close()
 
-	out, err := io.ReadAll(rc)
+	out, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}

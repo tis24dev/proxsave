@@ -148,7 +148,7 @@ func repairResolvConfWithSystemdResolved(logger *logging.Logger) (bool, error) {
 	return false, nil
 }
 
-func readTarEntry(ctx context.Context, archivePath, name string, maxBytes int64) ([]byte, error) {
+func readTarEntry(ctx context.Context, archivePath, name string, maxBytes int64) (data []byte, err error) {
 	file, err := restoreFS.Open(archivePath)
 	if err != nil {
 		return nil, fmt.Errorf("open archive: %w", err)
@@ -159,9 +159,7 @@ func readTarEntry(ctx context.Context, archivePath, name string, maxBytes int64)
 	if err != nil {
 		return nil, fmt.Errorf("create decompression reader: %w", err)
 	}
-	if closer, ok := reader.(io.Closer); ok {
-		defer closer.Close()
-	}
+	defer closeDecompressionReader(reader, &err, "close decompression reader")
 
 	wantA := strings.TrimPrefix(strings.TrimSpace(name), "./")
 	wantB := "./" + wantA

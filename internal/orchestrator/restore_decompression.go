@@ -15,11 +15,11 @@ import (
 
 type restoreDecompressionFormat struct {
 	matches func(string) bool
-	open    func(context.Context, *os.File) (io.Reader, error)
+	open    func(context.Context, *os.File) (io.ReadCloser, error)
 }
 
 // createDecompressionReader creates appropriate decompression reader based on file extension
-func createDecompressionReader(ctx context.Context, file *os.File, archivePath string) (io.Reader, error) {
+func createDecompressionReader(ctx context.Context, file *os.File, archivePath string) (io.ReadCloser, error) {
 	for _, format := range restoreDecompressionFormats() {
 		if format.matches(archivePath) {
 			return format.open(ctx, file)
@@ -28,11 +28,20 @@ func createDecompressionReader(ctx context.Context, file *os.File, archivePath s
 	return nil, fmt.Errorf("unsupported archive format: %s", filepath.Base(archivePath))
 }
 
+func closeDecompressionReader(reader io.Closer, errp *error, operation string) {
+	if reader == nil || errp == nil {
+		return
+	}
+	if closeErr := reader.Close(); closeErr != nil && *errp == nil {
+		*errp = fmt.Errorf("%s: %w", operation, closeErr)
+	}
+}
+
 func restoreDecompressionFormats() []restoreDecompressionFormat {
 	return []restoreDecompressionFormat{
 		{
 			matches: func(path string) bool { return strings.HasSuffix(path, ".tar.gz") || strings.HasSuffix(path, ".tgz") },
-			open:    func(_ context.Context, file *os.File) (io.Reader, error) { return gzip.NewReader(file) },
+			open:    func(_ context.Context, file *os.File) (io.ReadCloser, error) { return gzip.NewReader(file) },
 		},
 		{matches: func(path string) bool { return strings.HasSuffix(path, ".tar.xz") }, open: createXZReader},
 		{
@@ -43,33 +52,33 @@ func restoreDecompressionFormats() []restoreDecompressionFormat {
 		},
 		{matches: func(path string) bool { return strings.HasSuffix(path, ".tar.bz2") }, open: createBzip2Reader},
 		{matches: func(path string) bool { return strings.HasSuffix(path, ".tar.lzma") }, open: createLzmaReader},
-		{matches: func(path string) bool { return strings.HasSuffix(path, ".tar") }, open: func(_ context.Context, file *os.File) (io.Reader, error) { return file, nil }},
+		{matches: func(path string) bool { return strings.HasSuffix(path, ".tar") }, open: func(_ context.Context, file *os.File) (io.ReadCloser, error) { return file, nil }},
 	}
 }
 
 // createXZReader creates an XZ decompression reader using injectable command runner
-func createXZReader(ctx context.Context, file *os.File) (io.Reader, error) {
+func createXZReader(ctx context.Context, file *os.File) (io.ReadCloser, error) {
 	return runRestoreCommandStream(ctx, "xz", file, "-d", "-c")
 }
 
 // createZstdReader creates a Zstd decompression reader using injectable command runner
-func createZstdReader(ctx context.Context, file *os.File) (io.Reader, error) {
+func createZstdReader(ctx context.Context, file *os.File) (io.ReadCloser, error) {
 	return runRestoreCommandStream(ctx, "zstd", file, "-d", "-c")
 }
 
 // createBzip2Reader creates a Bzip2 decompression reader using injectable command runner
-func createBzip2Reader(ctx context.Context, file *os.File) (io.Reader, error) {
+func createBzip2Reader(ctx context.Context, file *os.File) (io.ReadCloser, error) {
 	return runRestoreCommandStream(ctx, "bzip2", file, "-d", "-c")
 }
 
 // createLzmaReader creates an LZMA decompression reader using injectable command runner
-func createLzmaReader(ctx context.Context, file *os.File) (io.Reader, error) {
+func createLzmaReader(ctx context.Context, file *os.File) (io.ReadCloser, error) {
 	return runRestoreCommandStream(ctx, "lzma", file, "-d", "-c")
 }
 
 // runRestoreCommandStream starts a command that reads from stdin and exposes stdout as a ReadCloser.
 // It prefers an injectable streaming runner when available; otherwise falls back to safeexec.
-func runRestoreCommandStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.Reader, error) {
+func runRestoreCommandStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.ReadCloser, error) {
 	type streamingRunner interface {
 		RunStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.ReadCloser, error)
 	}

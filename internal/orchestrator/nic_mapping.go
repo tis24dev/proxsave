@@ -312,7 +312,7 @@ func loadBackupNetworkInventoryFromArchive(ctx context.Context, archivePath stri
 	return &inv, used, nil
 }
 
-func readArchiveEntry(ctx context.Context, archivePath string, candidates []string, maxBytes int64) ([]byte, string, error) {
+func readArchiveEntry(ctx context.Context, archivePath string, candidates []string, maxBytes int64) (data []byte, used string, err error) {
 	file, err := restoreFS.Open(archivePath)
 	if err != nil {
 		return nil, "", err
@@ -323,9 +323,7 @@ func readArchiveEntry(ctx context.Context, archivePath string, candidates []stri
 	if err != nil {
 		return nil, "", err
 	}
-	if closer, ok := reader.(io.Closer); ok {
-		defer closer.Close()
-	}
+	defer closeDecompressionReader(reader, &err, "close decompression reader")
 
 	tr := tar.NewReader(reader)
 
