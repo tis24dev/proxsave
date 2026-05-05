@@ -230,19 +230,21 @@ func extractSymlink(target string, header *tar.Header, destRoot string, logger *
 // extractHardlink creates a hard link
 func extractHardlink(target string, header *tar.Header, destRoot string) error {
 	// Validate hard link target
-	linkName := header.Linkname
+	linkName := filepath.FromSlash(header.Linkname)
+	if linkName == "" || filepath.Clean(linkName) == "." {
+		return fmt.Errorf("empty hardlink target not allowed")
+	}
 
 	// Reject absolute hard link targets immediately
 	if filepath.IsAbs(linkName) {
 		return fmt.Errorf("absolute hardlink target not allowed: %s", linkName)
 	}
 
-	// Validate the hard link target stays within extraction root
-	if _, err := resolvePathWithinRootFS(restoreFS, destRoot, linkName); err != nil {
+	// Resolve and validate the hard link target stays within extraction root.
+	linkTarget, err := resolvePathWithinRootFS(restoreFS, destRoot, linkName)
+	if err != nil {
 		return fmt.Errorf("hardlink target escapes root: %s -> %s: %w", header.Name, linkName, err)
 	}
-
-	linkTarget := filepath.Join(destRoot, linkName)
 
 	// Remove existing file/link if it exists
 	_ = restoreFS.Remove(target)

@@ -748,6 +748,18 @@ func TestExtractDirectory_Success(t *testing.T) {
 // extractHardlink tests
 // --------------------------------------------------------------------------
 
+type recordingLinkFS struct {
+	*FakeFS
+	oldname string
+	newname string
+}
+
+func (f *recordingLinkFS) Link(oldname, newname string) error {
+	f.oldname = oldname
+	f.newname = newname
+	return f.FakeFS.Link(oldname, newname)
+}
+
 func TestExtractHardlink_AbsoluteTargetRejected(t *testing.T) {
 	header := &tar.Header{
 		Name:     "link",
@@ -771,6 +783,86 @@ func TestExtractHardlink_EscapesRoot(t *testing.T) {
 	err := extractHardlink("/tmp/dest/link", header, "/tmp/dest")
 	if err == nil || !strings.Contains(err.Error(), "escapes root") {
 		t.Fatalf("expected escape error, got: %v", err)
+	}
+}
+
+func TestExtractHardlink_UsesResolvedTargetPath(t *testing.T) {
+	orig := restoreFS
+	fakeFS := NewFakeFS()
+	recordingFS := &recordingLinkFS{FakeFS: fakeFS}
+	restoreFS = recordingFS
+	t.Cleanup(func() {
+		restoreFS = orig
+		_ = fakeFS.Cleanup()
+	})
+
+	destRoot := fakeFS.Root
+	realDir := filepath.Join(destRoot, "real")
+	if err := fakeFS.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("mkdir real dir: %v", err)
+	}
+	realTarget := filepath.Join(realDir, "target.txt")
+	if err := fakeFS.WriteFile(realTarget, []byte("test"), 0o644); err != nil {
+		t.Fatalf("write real target: %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(destRoot, "alias")); err != nil {
+		t.Fatalf("create alias symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "hardlink.txt",
+		Linkname: filepath.Join("alias", "target.txt"),
+		Typeflag: tar.TypeLink,
+	}
+	linkFile := filepath.Join(destRoot, header.Name)
+
+	if err := extractHardlink(linkFile, header, destRoot); err != nil {
+		t.Fatalf("extractHardlink failed: %v", err)
+	}
+	if recordingFS.oldname != realTarget {
+		t.Fatalf("hardlink source = %q, want resolved target %q", recordingFS.oldname, realTarget)
+	}
+	if recordingFS.newname != linkFile {
+		t.Fatalf("hardlink destination = %q, want %q", recordingFS.newname, linkFile)
+	}
+
+	realInfo, err := os.Stat(realTarget)
+	if err != nil {
+		t.Fatalf("stat real target: %v", err)
+	}
+	linkInfo, err := os.Stat(linkFile)
+	if err != nil {
+		t.Fatalf("stat hardlink: %v", err)
+	}
+	if !os.SameFile(realInfo, linkInfo) {
+		t.Fatalf("hardlink does not point to resolved target")
+	}
+}
+
+func TestExtractHardlink_RejectsSymlinkEscapeTarget(t *testing.T) {
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+
+	destRoot := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(destRoot, "escape-link")); err != nil {
+		t.Fatalf("create escape symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "link.txt",
+		Linkname: filepath.Join("escape-link", "target.txt"),
+		Typeflag: tar.TypeLink,
+	}
+	linkFile := filepath.Join(destRoot, header.Name)
+
+	err := extractHardlink(linkFile, header, destRoot)
+	if err == nil || !strings.Contains(err.Error(), "escapes root") {
+		t.Fatalf("expected escapes root error, got: %v", err)
+	}
+	if _, err := os.Lstat(linkFile); !os.IsNotExist(err) {
+		t.Fatalf("hardlink should not be created, got err=%v", err)
 	}
 }
 
