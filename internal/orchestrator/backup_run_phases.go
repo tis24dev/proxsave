@@ -271,7 +271,13 @@ func (o *Orchestrator) verifyAndWriteBackupArtifacts(run *backupRunContext, work
 	}
 	stats.Checksum = checksum
 
-	o.writeArchiveChecksum(workspace, artifacts, checksum)
+	if err := o.writeArchiveChecksum(workspace, artifacts, checksum); err != nil {
+		return &BackupError{
+			Phase: "verification",
+			Err:   err,
+			Code:  types.ExitVerificationError,
+		}
+	}
 	if err := o.writeArchiveManifest(run, artifacts, checksum); err != nil {
 		return err
 	}

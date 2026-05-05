@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -32,5 +33,28 @@ func TestCreateBackupArchiveClassifiesAgeRecipientFailureAsEncryption(t *testing
 	}
 	if backupErr.Code != types.ExitEncryptionError {
 		t.Fatalf("Code=%v; want %v", backupErr.Code, types.ExitEncryptionError)
+	}
+}
+
+func TestWriteArchiveChecksumPropagatesWriteError(t *testing.T) {
+	orch := New(newTestLogger(), false)
+	checksumPath := "/backups/test.tar.sha256"
+	writeErr := errors.New("disk full")
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = fakeFS.Cleanup() })
+
+	err := orch.writeArchiveChecksum(
+		&backupWorkspace{fs: writeFileFailFS{FS: fakeFS, failPath: checksumPath, err: writeErr}},
+		&backupArtifacts{archivePath: "/backups/test.tar", checksumPath: checksumPath},
+		"abc123",
+	)
+	if err == nil {
+		t.Fatal("expected writeArchiveChecksum error")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("expected wrapped write error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), checksumPath) {
+		t.Fatalf("expected checksum path in error, got %q", err.Error())
 	}
 }

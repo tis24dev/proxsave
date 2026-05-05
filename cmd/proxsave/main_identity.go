@@ -10,15 +10,21 @@ import (
 	"github.com/tis24dev/proxsave/internal/notify"
 )
 
+var runtimeServerIdentityDetector = detectServerIdentity
+
 func initializeServerIdentity(rt *appRuntime) {
-	identityInfo := detectServerIdentity(rt)
 	rt.serverIDValue = strings.TrimSpace(rt.cfg.ServerID)
 	rt.serverMACValue = ""
-	if identityInfo != nil {
-		applyDetectedIdentity(rt, identityInfo)
-	}
-	if rt.serverIDValue != "" && rt.cfg.ServerID == "" {
+	if rt.serverIDValue != "" {
 		rt.cfg.ServerID = rt.serverIDValue
+	} else {
+		identityInfo := runtimeServerIdentityDetector(rt)
+		if identityInfo != nil {
+			applyDetectedIdentity(rt, identityInfo)
+		}
+		if rt.serverIDValue != "" {
+			rt.cfg.ServerID = rt.serverIDValue
+		}
 	}
 
 	logServerIdentityValues(rt.serverIDValue, rt.serverMACValue)

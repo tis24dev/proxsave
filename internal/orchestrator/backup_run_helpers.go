@@ -259,13 +259,13 @@ func (o *Orchestrator) generateArchiveChecksum(ctx context.Context, archivePath 
 	return checksum, nil
 }
 
-func (o *Orchestrator) writeArchiveChecksum(workspace *backupWorkspace, artifacts *backupArtifacts, checksum string) {
+func (o *Orchestrator) writeArchiveChecksum(workspace *backupWorkspace, artifacts *backupArtifacts, checksum string) error {
 	checksumContent := fmt.Sprintf("%s  %s\n", checksum, filepath.Base(artifacts.archivePath))
-	if err := workspace.fs.WriteFile(artifacts.checksumPath, []byte(checksumContent), 0640); err != nil {
-		o.logger.Warning("Failed to write checksum file %s: %v", artifacts.checksumPath, err)
-	} else {
-		o.logger.Debug("Checksum file written to %s", artifacts.checksumPath)
+	if err := workspace.fs.WriteFile(artifacts.checksumPath, []byte(checksumContent), 0o640); err != nil {
+		return fmt.Errorf("write checksum file %s: %w", artifacts.checksumPath, err)
 	}
+	o.logger.Debug("Checksum file written to %s", artifacts.checksumPath)
+	return nil
 }
 
 func (o *Orchestrator) writeArchiveManifest(run *backupRunContext, artifacts *backupArtifacts, checksum string) error {
