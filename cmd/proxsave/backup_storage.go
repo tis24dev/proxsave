@@ -129,16 +129,20 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 		return nil
 	}
 
-	cloudFS, _ := detectFilesystemInfo(opts.ctx, cloudBackend, cfg.CloudRemote, logger)
+	cloudFS, err := detectFilesystemInfo(opts.ctx, cloudBackend, cfg.CloudRemote, logger)
 	if cloudFS == nil {
-		logging.DebugStep(logger, "storage init", "cloud unavailable, disabling")
+		reason := "filesystem detection unavailable"
+		if err != nil {
+			reason = fmt.Sprintf("filesystem detection failed: %v", err)
+		}
+		logging.DebugStep(logger, "storage init", "cloud unavailable, disabling: %s", reason)
 		cfg.CloudEnabled = false
 		cfg.CloudLogPath = ""
 		if checker != nil {
 			checker.DisableCloud()
 		}
-		logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, nil, nil))
-		logging.Skip("Path Cloud: disabled")
+		logStorageInitSummary(fmt.Sprintf("%s; %s", formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, nil, nil), reason))
+		logging.Skip("Path Cloud: disabled (%s)", reason)
 		return nil
 	}
 

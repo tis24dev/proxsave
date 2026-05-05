@@ -254,7 +254,7 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 
 	// Create detailed log directory
 	logDir := "/tmp/proxsave"
-	if err := restoreFS.MkdirAll(logDir, 0755); err != nil {
+	if err := restoreFS.MkdirAll(logDir, 0o755); err != nil {
 		logger.Warning("Could not create log directory: %v", err)
 	}
 

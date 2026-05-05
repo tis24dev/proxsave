@@ -27,6 +27,7 @@ func validateModeCompatibility(args *cli.Args) []string {
 		return []string{"command-line arguments are required"}
 	}
 
+	var allMessages []string
 	for _, rule := range []modeCompatibilityRule{
 		validateCleanupGuardsCompatibility,
 		validateSupportCompatibility,
@@ -34,10 +35,10 @@ func validateModeCompatibility(args *cli.Args) []string {
 		validateUpgradeCompatibility,
 	} {
 		if messages := rule(args); len(messages) > 0 {
-			return messages
+			allMessages = append(allMessages, messages...)
 		}
 	}
-	return nil
+	return allMessages
 }
 
 func validateCleanupGuardsCompatibility(args *cli.Args) []string {

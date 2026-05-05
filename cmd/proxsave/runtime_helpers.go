@@ -279,6 +279,9 @@ func detectFilesystemInfo(ctx context.Context, backend storage.Storage, path str
 			return nil, err
 		}
 		logger.Debug("WARNING: %s filesystem detection failed: %v", backend.Name(), err)
+		if backend.Location() == storage.LocationCloud {
+			return nil, err
+		}
 		return nil, nil
 	}
 

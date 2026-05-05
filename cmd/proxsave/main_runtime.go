@@ -288,7 +288,7 @@ func checkGoRuntimeVersion(minimum string) error {
 	rtMaj, rtMin, rtPatch := parse(rt)
 	minMaj, minMin, minPatch := parse(minimum)
 
-	newer := func(aMaj, aMin, aPatch, bMaj, bMin, bPatch int) bool {
+	meetsMinimum := func(aMaj, aMin, aPatch, bMaj, bMin, bPatch int) bool {
 		if aMaj != bMaj {
 			return aMaj > bMaj
 		}
@@ -298,7 +298,7 @@ func checkGoRuntimeVersion(minimum string) error {
 		return aPatch >= bPatch
 	}
 
-	if !newer(rtMaj, rtMin, rtPatch, minMaj, minMin, minPatch) {
+	if !meetsMinimum(rtMaj, rtMin, rtPatch, minMaj, minMin, minPatch) {
 		return fmt.Errorf("go runtime version %s is below required %s — rebuild with go %s or set GOTOOLCHAIN=auto", rt, "go"+minimum, "go"+minimum)
 	}
 	return nil
