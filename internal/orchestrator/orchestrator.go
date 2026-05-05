@@ -521,7 +521,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.Env
 	}()
 
 	if err := o.prepareBackupWorkspace(run, workspace); err != nil {
-		return nil, err
+		return stats, err
 	}
 	defer func() {
 		o.cleanupBackupWorkspace(workspace)

@@ -226,7 +226,7 @@ func (o *Orchestrator) createBackupArchive(run *backupRunContext, workspace *bac
 
 	ageRecipients, err := o.prepareAgeRecipients(run.ctx)
 	if err != nil {
-		return nil, &BackupError{Phase: "config", Err: err, Code: types.ExitConfigError}
+		return nil, &BackupError{Phase: "encryption", Err: err, Code: types.ExitEncryptionError}
 	}
 
 	archiverConfig := o.buildBackupArchiverConfig(run, ageRecipients)
