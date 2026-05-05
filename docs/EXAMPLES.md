@@ -940,7 +940,7 @@ BACKUP_PBS_NOTIFICATIONS=true
 BACKUP_PBS_NODE_CONFIG=true
 
 # Recommended for dual labs: keep diagnostics
-BACKUP_PXAR_FILES=true
+PXAR_SCAN_ENABLE=true
 ```
 
 ### Expected Behavior

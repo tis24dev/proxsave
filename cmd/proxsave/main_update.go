@@ -81,12 +81,15 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 }
 
 // isNewerVersion returns true if latest is strictly newer than current,
-// comparing MAJOR.MINOR.PATCH (ignoring any leading 'v' and pre-release suffixes).
+// comparing MAJOR.MINOR.PATCH (ignoring any leading 'v', pre-release suffixes, and build metadata).
 func isNewerVersion(current, latest string) bool {
 	parse := func(v string) (int, int, int) {
 		v = strings.TrimSpace(v)
 		v = strings.TrimPrefix(v, "v")
 		if i := strings.IndexByte(v, '-'); i >= 0 {
+			v = v[:i]
+		}
+		if i := strings.IndexByte(v, '+'); i >= 0 {
 			v = v[:i]
 		}
 

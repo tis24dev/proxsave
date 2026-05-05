@@ -43,6 +43,8 @@ func TestIsNewerVersion(t *testing.T) {
 		{"major newer", "1.9.9", "2.0.0", true},
 		{"strip leading v", "v1.2.3", "1.2.4", true},
 		{"ignore prerelease", "1.2.3-rc1", "1.2.3", false},
+		{"ignore build metadata", "v1.2.3+current", "v1.2.4+latest", true},
+		{"build metadata does not zero patch", "v1.2.3+current", "v1.2.3+latest", false},
 		{"missing patch treated as 0", "1.2", "1.2.0", false},
 	}
 
