@@ -1,11 +1,13 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/quotedprintable"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1110,6 +1112,14 @@ func summarizeSendmailTranscript(transcript string) (highlights []string, remote
 	return highlights, remoteID, localQueueID
 }
 
+func encodeQuotedPrintableBody(body string) string {
+	var encoded bytes.Buffer
+	writer := quotedprintable.NewWriter(&encoded)
+	_, _ = writer.Write([]byte(body))
+	_ = writer.Close()
+	return encoded.String()
+}
+
 func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody string, data *NotificationData) (emailMessage, toHeader string) {
 	e.logger.Debug("=== Building email message ===")
 
@@ -1152,17 +1162,17 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 			// Plain text part
 			email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
 			email.WriteString("Content-Type: text/plain; charset=UTF-8\n")
-			email.WriteString("Content-Transfer-Encoding: 8bit\n")
+			email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 			email.WriteString("\n")
-			email.WriteString(textBody)
+			email.WriteString(encodeQuotedPrintableBody(textBody))
 			email.WriteString("\n\n")
 
 			// HTML part
 			email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
 			email.WriteString("Content-Type: text/html; charset=UTF-8\n")
-			email.WriteString("Content-Transfer-Encoding: 8bit\n")
+			email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 			email.WriteString("\n")
-			email.WriteString(htmlBody)
+			email.WriteString(encodeQuotedPrintableBody(htmlBody))
 			email.WriteString("\n\n")
 
 			email.WriteString(fmt.Sprintf("--%s--\n", altBoundary))
@@ -1204,17 +1214,17 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 		// Plain text part
 		email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
 		email.WriteString("Content-Type: text/plain; charset=UTF-8\n")
-		email.WriteString("Content-Transfer-Encoding: 8bit\n")
+		email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 		email.WriteString("\n")
-		email.WriteString(textBody)
+		email.WriteString(encodeQuotedPrintableBody(textBody))
 		email.WriteString("\n\n")
 
 		// HTML part
 		email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
 		email.WriteString("Content-Type: text/html; charset=UTF-8\n")
-		email.WriteString("Content-Transfer-Encoding: 8bit\n")
+		email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 		email.WriteString("\n")
-		email.WriteString(htmlBody)
+		email.WriteString(encodeQuotedPrintableBody(htmlBody))
 		email.WriteString("\n\n")
 
 		email.WriteString(fmt.Sprintf("--%s--\n", altBoundary))

@@ -377,6 +377,43 @@ func TestEmailNotifierBuildEmailMessage_FallsBackWhenLogUnreadable(t *testing.T)
 	}
 }
 
+func TestEmailNotifierBuildEmailMessage_EncodesUTF8BodiesAsSevenBitSafe(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:        true,
+		DeliveryMethod: EmailDeliveryPMF,
+		From:           "no-reply@proxmox.example.com",
+	}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	emailMessage, _ := notifier.buildEmailMessage(
+		"admin@example.com",
+		"✅ PVE Backup à",
+		"<p>Backup completato ✅ con avvisi: è pieno</p>",
+		"Backup completato ✅ con avvisi: è pieno",
+		createTestNotificationData(),
+	)
+
+	if strings.Contains(emailMessage, "Content-Transfer-Encoding: 8bit") {
+		t.Fatalf("email message must not use 8bit transfer encoding:\n%s", emailMessage)
+	}
+	if count := strings.Count(emailMessage, "Content-Transfer-Encoding: quoted-printable"); count != 2 {
+		t.Fatalf("expected two quoted-printable body parts, got %d:\n%s", count, emailMessage)
+	}
+	if strings.Contains(emailMessage, "✅") || strings.Contains(emailMessage, "è") || strings.Contains(emailMessage, "à") {
+		t.Fatalf("email message contains raw non-ASCII body/subject characters:\n%s", emailMessage)
+	}
+	for i, b := range []byte(emailMessage) {
+		if b > 0x7f {
+			t.Fatalf("email message contains non-ASCII byte 0x%x at offset %d", b, i)
+		}
+	}
+}
+
 func TestEmailNotifierIsMTAServiceActive_SystemctlMissing(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(io.Discard)
