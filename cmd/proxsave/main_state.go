@@ -72,12 +72,6 @@ func (state *appRunState) finalize(code int) int {
 	return code
 }
 
-func (state *appRunState) setBackupResult(result backupModeResult) {
-	state.orch = result.orch
-	state.earlyErrorState = result.earlyErrorState
-	state.pendingSupportStat = result.supportStats
-}
-
 func (state *appRunState) applyModeResult(result modeResult) {
 	state.orch = result.orch
 	state.earlyErrorState = result.earlyErrorState

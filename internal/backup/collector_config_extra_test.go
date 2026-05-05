@@ -33,6 +33,26 @@ func TestCollectorConfigValidateDefaultsAndErrors(t *testing.T) {
 	}
 }
 
+func TestCollectorConfigValidateAcceptsNewStandaloneCollectionOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *CollectorConfig
+	}{
+		{name: "pbs notification priv", cfg: &CollectorConfig{BackupPBSNotificationsPriv: true}},
+		{name: "root home", cfg: &CollectorConfig{BackupRootHome: true}},
+		{name: "script repository", cfg: &CollectorConfig{BackupScriptRepository: true}},
+		{name: "user homes", cfg: &CollectorConfig{BackupUserHomes: true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.cfg.Validate(); err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestGlobHelpers(t *testing.T) {
 	cases := []struct {
 		pattern   string

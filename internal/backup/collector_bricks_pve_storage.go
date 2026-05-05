@@ -56,6 +56,9 @@ func newPVEStorageProbeBricks() []collectionBrick {
 				for _, storage := range state.pve.resolvedStorages {
 					result, err := c.preparePVEStorageScan(ctx, storage, baseDir, ioTimeout)
 					if err != nil {
+						if isContextCancellationError(ctx, err) {
+							return err
+						}
 						c.logger.Warning("Failed to probe PVE datastore %s: %v", storage.Name, err)
 						state.pve.storageCollectionAborted = true
 						return nil
@@ -89,6 +92,9 @@ func newPVEStorageMetadataJSONBricks() []collectionBrick {
 						continue
 					}
 					if err := c.collectPVEStorageMetadataJSONStep(ctx, result, ioTimeout); err != nil {
+						if isContextCancellationError(ctx, err) {
+							return err
+						}
 						c.logger.Warning("Failed to write PVE datastore JSON metadata for %s: %v", storage.Name, err)
 						state.pve.storageCollectionAborted = true
 						return nil
@@ -117,6 +123,9 @@ func newPVEStorageMetadataTextBricks() []collectionBrick {
 						continue
 					}
 					if err := c.collectPVEStorageMetadataTextStep(ctx, result, ioTimeout); err != nil {
+						if isContextCancellationError(ctx, err) {
+							return err
+						}
 						c.logger.Warning("Failed to write PVE datastore text metadata for %s: %v", storage.Name, err)
 						state.pve.storageCollectionAborted = true
 						return nil
@@ -145,6 +154,9 @@ func newPVEStorageAnalysisBricks() []collectionBrick {
 						continue
 					}
 					if err := c.collectPVEStorageBackupAnalysisStep(ctx, result, ioTimeout); err != nil {
+						if isContextCancellationError(ctx, err) {
+							return err
+						}
 						c.logger.Warning("Detailed backup analysis for %s failed: %v", storage.Name, err)
 					}
 				}
@@ -165,6 +177,9 @@ func newPVEStorageSummaryBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.writePVEStorageSummary(ctx, state.pve.probedStorages); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to write PVE datastore summary: %v", err)
 					state.pve.storageCollectionAborted = true
 					return nil

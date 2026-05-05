@@ -3,6 +3,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -304,6 +305,20 @@ func runRecipe(ctx context.Context, r recipe, state *collectionState) error {
 		}
 	}
 	return nil
+}
+
+func isContextCancellationError(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if ctx == nil {
+		return false
+	}
+	ctxErr := ctx.Err()
+	return ctxErr != nil && errors.Is(err, ctxErr)
 }
 
 func (s *collectionState) ensurePVECommandsDir() (string, error) {

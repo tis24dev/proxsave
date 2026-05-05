@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestRunRecipeRunsBricksInOrder(t *testing.T) {
@@ -117,6 +120,46 @@ func TestRunRecipePropagatesContextCancellation(t *testing.T) {
 	}
 	if ran {
 		t.Fatalf("expected no brick execution after context cancellation")
+	}
+}
+
+func TestPVEGuestBrickPropagatesQEMUContextCancellation(t *testing.T) {
+	cfg := &CollectorConfig{
+		BackupVMConfigs: true,
+		PVEConfigPath:   filepath.Join(t.TempDir(), "etc", "pve"),
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.PVEConfigPath, "qemu-server"), 0o755); err != nil {
+		t.Fatalf("mkdir qemu-server: %v", err)
+	}
+
+	collector := NewCollector(logging.New(types.LogLevelError, false), cfg, t.TempDir(), types.ProxmoxVE, false)
+	state := newCollectionState(collector)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := newPVEGuestBricks()[0].Run(ctx, state)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("guest brick error = %v, want %v", err, context.Canceled)
+	}
+	if state.pve.guestCollectionAborted {
+		t.Fatalf("guest collection should not be marked aborted for context cancellation")
+	}
+}
+
+func TestPVEStorageProbeBrickPropagatesContextCancellation(t *testing.T) {
+	cfg := &CollectorConfig{BackupPVEBackupFiles: true}
+	collector := NewCollector(logging.New(types.LogLevelError, false), cfg, t.TempDir(), types.ProxmoxVE, false)
+	state := newCollectionState(collector)
+	state.pve.resolvedStorages = []pveStorageEntry{{Name: "local", Path: t.TempDir()}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := newPVEStorageProbeBricks()[0].Run(ctx, state)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("storage probe brick error = %v, want %v", err, context.Canceled)
+	}
+	if state.pve.storageCollectionAborted {
+		t.Fatalf("storage collection should not be marked aborted for context cancellation")
 	}
 }
 

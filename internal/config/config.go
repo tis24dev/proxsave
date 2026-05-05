@@ -405,9 +405,12 @@ func (c *Config) validateCloudSettings() error {
 	if !c.CloudEnabled {
 		return nil
 	}
-	remoteName, basePath := splitCloudRemoteRef(strings.TrimSpace(c.CloudRemote))
-	if err := safeexec.ValidateRcloneRemoteName(remoteName); err != nil {
-		return fmt.Errorf("CLOUD_REMOTE invalid: %w", err)
+	cloudRemote := strings.TrimSpace(c.CloudRemote)
+	remoteName, basePath := splitCloudRemoteRef(cloudRemote)
+	if !isAbsoluteCloudRemoteRef(remoteName, basePath) {
+		if err := safeexec.ValidateRcloneRemoteName(remoteName); err != nil {
+			return fmt.Errorf("CLOUD_REMOTE invalid: %w", err)
+		}
 	}
 	if err := safeexec.ValidateRemoteRelativePath(strings.Trim(strings.TrimSpace(basePath), "/"), "CLOUD_REMOTE path"); err != nil {
 		return err
@@ -416,6 +419,22 @@ func (c *Config) validateCloudSettings() error {
 		return err
 	}
 	return nil
+}
+
+func isAbsoluteCloudRemoteRef(remoteName, basePath string) bool {
+	remoteName = strings.TrimSpace(remoteName)
+	basePath = strings.TrimSpace(basePath)
+	if filepath.IsAbs(remoteName) {
+		return true
+	}
+	if len(remoteName) != 1 {
+		return false
+	}
+	drive := remoteName[0]
+	if (drive < 'A' || drive > 'Z') && (drive < 'a' || drive > 'z') {
+		return false
+	}
+	return strings.HasPrefix(basePath, `\`) || strings.HasPrefix(basePath, "/")
 }
 
 func splitCloudRemoteRef(ref string) (remoteName, relPath string) {

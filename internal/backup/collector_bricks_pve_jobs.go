@@ -15,6 +15,9 @@ func newPVEBackupJobBricks() []collectionBrick {
 				}
 				c.logger.Debug("Collecting PVE job definitions for nodes: %v", state.pve.runtimeNodes())
 				if err := c.collectPVEBackupJobDefinitions(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect PVE backup job definitions: %v", err)
 					state.pve.jobCollectionAborted = true
 				}
@@ -30,6 +33,9 @@ func newPVEBackupJobBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.collectPVEBackupJobHistory(ctx, state.pve.runtimeNodes()); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect PVE backup history: %v", err)
 					state.pve.jobCollectionAborted = true
 				}
@@ -45,6 +51,9 @@ func newPVEBackupJobBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.collectPVEVZDumpCronSnapshot(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect VZDump cron snapshot: %v", err)
 					state.pve.jobCollectionAborted = true
 				}
@@ -65,6 +74,9 @@ func newPVEScheduleBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.collectPVEScheduleCrontab(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect PVE crontab schedules: %v", err)
 					state.pve.scheduleCollectionAborted = true
 				}
@@ -80,6 +92,9 @@ func newPVEScheduleBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.collectPVEScheduleTimers(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect PVE timer schedules: %v", err)
 					state.pve.scheduleCollectionAborted = true
 				}
@@ -95,6 +110,9 @@ func newPVEScheduleBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.collectPVEScheduleCronFiles(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect PVE cron schedule files: %v", err)
 					state.pve.scheduleCollectionAborted = true
 				}
@@ -116,6 +134,9 @@ func newPVEReplicationBricks() []collectionBrick {
 				}
 				c.logger.Debug("Collecting PVE replication settings for nodes: %v", state.pve.runtimeNodes())
 				if err := c.collectPVEReplicationDefinitions(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect PVE replication definitions: %v", err)
 					state.pve.replicationCollectionAborted = true
 				}
@@ -131,6 +152,9 @@ func newPVEReplicationBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.collectPVEReplicationStatus(ctx, state.pve.runtimeNodes()); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect PVE replication status: %v", err)
 					state.pve.replicationCollectionAborted = true
 				}

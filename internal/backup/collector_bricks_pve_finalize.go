@@ -15,6 +15,9 @@ func newPVECephBricks() []collectionBrick {
 				}
 				c.logger.Debug("Collecting Ceph configuration and status")
 				if err := c.collectPVECephConfigSnapshot(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect Ceph configuration snapshot: %v", err)
 					state.pve.cephCollectionAborted = true
 				}
@@ -30,6 +33,9 @@ func newPVECephBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.collectPVECephRuntime(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect Ceph runtime information: %v", err)
 					state.pve.cephCollectionAborted = true
 				} else {
@@ -50,6 +56,9 @@ func newPVEAliasBricks() []collectionBrick {
 				c := state.collector
 				c.logger.Debug("Creating PVE info aliases under /var/lib/pve-cluster/info")
 				if err := c.createPVECoreAliases(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to create PVE core aliases: %v", err)
 					state.pve.finalizeCollectionAborted = true
 				}
@@ -70,6 +79,9 @@ func newPVEAggregateBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.createPVEBackupHistoryAggregate(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to aggregate PVE backup history: %v", err)
 					state.pve.finalizeCollectionAborted = true
 				}
@@ -85,6 +97,9 @@ func newPVEAggregateBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.createPVEReplicationAggregate(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to aggregate PVE replication status: %v", err)
 					state.pve.finalizeCollectionAborted = true
 				}
@@ -105,6 +120,9 @@ func newPVEVersionBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.createPVEVersionInfo(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to write PVE version info: %v", err)
 					state.pve.finalizeCollectionAborted = true
 				}

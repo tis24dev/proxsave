@@ -313,7 +313,8 @@ func (c *CollectorConfig) collectionOptionFlags() []bool {
 		c.BackupPVEBackupFiles, c.BackupCephConfig,
 		c.BackupDatastoreConfigs, c.BackupPBSS3Endpoints, c.BackupPBSNodeConfig,
 		c.BackupPBSAcmeAccounts, c.BackupPBSAcmePlugins, c.BackupPBSMetricServers,
-		c.BackupPBSTrafficControl, c.BackupPBSNotifications, c.BackupUserConfigs, c.BackupRemoteConfigs,
+		c.BackupPBSTrafficControl, c.BackupPBSNotifications, c.BackupPBSNotificationsPriv,
+		c.BackupUserConfigs, c.BackupRemoteConfigs,
 		c.BackupSyncJobs, c.BackupVerificationJobs, c.BackupTapeConfigs,
 		c.BackupPBSNetworkConfig, c.BackupPruneSchedules, c.BackupPxarFiles,
 		c.BackupNetworkConfigs, c.BackupAptSources, c.BackupCronJobs,
@@ -321,6 +322,7 @@ func (c *CollectorConfig) collectionOptionFlags() []bool {
 		c.BackupKernelModules, c.BackupFirewallRules,
 		c.BackupInstalledPackages, c.BackupScriptDir, c.BackupCriticalFiles,
 		c.BackupSSHKeys, c.BackupZFSConfig, c.BackupConfigFile,
+		c.BackupRootHome, c.BackupScriptRepository, c.BackupUserHomes,
 	}
 }
 

@@ -175,6 +175,9 @@ func newPVEGuestBricks() []collectionBrick {
 				}
 				c.logger.Info("Collecting VM and container configurations")
 				if err := c.collectPVEQEMUConfigs(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect QEMU VM configs: %v", err)
 					state.pve.guestCollectionAborted = true
 				}
@@ -190,6 +193,9 @@ func newPVEGuestBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.collectPVELXCConfigs(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect LXC configs: %v", err)
 					state.pve.guestCollectionAborted = true
 				}
@@ -205,6 +211,9 @@ func newPVEGuestBricks() []collectionBrick {
 					return nil
 				}
 				if err := c.collectPVEGuestInventory(ctx); err != nil {
+					if isContextCancellationError(ctx, err) {
+						return err
+					}
 					c.logger.Warning("Failed to collect guest inventory: %v", err)
 					state.pve.guestCollectionAborted = true
 				}

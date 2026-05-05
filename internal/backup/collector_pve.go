@@ -1171,6 +1171,9 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 		result.SkipRemaining = true
 		return nil
 	}
+	if isContextCancellationError(ctx, dirSampleErr) {
+		return dirSampleErr
+	}
 	if dirSampleErr != nil {
 		c.logger.Debug("Directory sample for datastore %s failed: %v", storage.Name, dirSampleErr)
 	}
@@ -1185,6 +1188,9 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: disk usage probe timed out (%v)", storage.Name, storage.Path, formatRuntime, diskUsageErr)
 		result.SkipRemaining = true
 		return nil
+	}
+	if isContextCancellationError(ctx, diskUsageErr) {
+		return diskUsageErr
 	}
 	if diskUsageErr != nil {
 		c.logger.Debug("Disk usage summary for %s failed: %v", storage.Name, diskUsageErr)
@@ -1209,6 +1215,9 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: file sampling timed out (%v)", storage.Name, storage.Path, formatRuntime, sampleFileErr)
 		result.SkipRemaining = true
 		return nil
+	}
+	if isContextCancellationError(ctx, sampleFileErr) {
+		return sampleFileErr
 	}
 	if sampleFileErr != nil {
 		c.logger.Debug("Backup file sample for %s failed: %v", storage.Name, sampleFileErr)
@@ -1242,6 +1251,9 @@ func (c *Collector) collectPVEStorageMetadataTextStep(ctx context.Context, resul
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: metadata sampling timed out (%v)", storage.Name, storage.Path, formatRuntime, fileSampleErr)
 		result.SkipRemaining = true
 		return nil
+	}
+	if isContextCancellationError(ctx, fileSampleErr) {
+		return fileSampleErr
 	}
 	if fileSampleErr != nil {
 		c.logger.Debug("General file sampling for %s failed: %v", storage.Name, fileSampleErr)
