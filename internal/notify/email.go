@@ -684,6 +684,17 @@ func commandForMailTool(ctx context.Context, pathOrName string, args ...string) 
 	return safeexec.CommandContext(ctx, pathOrName, args...)
 }
 
+func lookupAbsolutePath(name string) (string, error) {
+	execPath, err := exec.LookPath(name)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(execPath) {
+		return execPath, nil
+	}
+	return filepath.Abs(execPath)
+}
+
 // sendViaRelay sends email via cloud relay
 func (e *EmailNotifier) sendViaRelay(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) error {
 	// Build payload
@@ -705,12 +716,13 @@ func (e *EmailNotifier) sendViaRelay(ctx context.Context, recipient, subject, ht
 func (e *EmailNotifier) isMTAServiceActive(ctx context.Context) (bool, string) {
 	services := []string{"postfix", "sendmail", "exim4"}
 
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	systemctlPath, err := lookupAbsolutePath("systemctl")
+	if err != nil {
 		return false, "systemctl not available"
 	}
 
 	for _, service := range services {
-		cmd, err := safeexec.CommandContext(ctx, "systemctl", "is-active", service)
+		cmd, err := safeexec.TrustedCommandContext(ctx, systemctlPath, "is-active", service)
 		if err != nil {
 			return false, err.Error()
 		}
@@ -775,13 +787,12 @@ func (e *EmailNotifier) checkRelayHostConfigured(ctx context.Context) (bool, str
 // checkMailQueue checks the mail queue status
 func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
 	// Try mailq command (works for both Postfix and Sendmail)
-	mailqPath := "/usr/bin/mailq"
-	if _, err := exec.LookPath("mailq"); err != nil {
-		if _, err := exec.LookPath(mailqPath); err != nil {
+	mailqPath, err := lookupAbsolutePath("mailq")
+	if err != nil {
+		mailqPath, err = lookupAbsolutePath("/usr/bin/mailq")
+		if err != nil {
 			return 0, fmt.Errorf("mailq command not found")
 		}
-	} else {
-		mailqPath = "mailq"
 	}
 
 	cmd, err := commandForMailTool(ctx, mailqPath)
@@ -822,11 +833,12 @@ func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
 
 // detectQueueEntry scans the mail queue for a recipient and returns the latest queue ID.
 func (e *EmailNotifier) detectQueueEntry(ctx context.Context, recipient string) (string, string, error) {
-	mailqPath := "/usr/bin/mailq"
-	if _, err := exec.LookPath("mailq"); err == nil {
-		mailqPath = "mailq"
-	} else if _, err := exec.LookPath(mailqPath); err != nil {
-		return "", "", fmt.Errorf("mailq command not found")
+	mailqPath, err := lookupAbsolutePath("mailq")
+	if err != nil {
+		mailqPath, err = lookupAbsolutePath("/usr/bin/mailq")
+		if err != nil {
+			return "", "", fmt.Errorf("mailq command not found")
+		}
 	}
 
 	cmd, err := commandForMailTool(ctx, mailqPath)

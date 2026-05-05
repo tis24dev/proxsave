@@ -14,6 +14,18 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+func TestRunRestoreWorkflowWithUIClearsStaleAbortInfoBeforeValidation(t *testing.T) {
+	lastRestoreAbortInfo = &RestoreAbortInfo{NetworkRollbackArmed: true}
+	t.Cleanup(ClearRestoreAbortInfo)
+
+	if err := runRestoreWorkflowWithUI(context.Background(), nil, nil, "vtest", nil); err == nil {
+		t.Fatalf("expected configuration error")
+	}
+	if got := GetLastRestoreAbortInfo(); got != nil {
+		t.Fatalf("expected stale abort info to be cleared, got %#v", got)
+	}
+}
+
 func TestRunRestoreWorkflow_FstabPromptInputAborted_AbortsWorkflow(t *testing.T) {
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd

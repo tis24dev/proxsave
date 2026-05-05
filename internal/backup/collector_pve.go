@@ -790,6 +790,7 @@ func (c *Collector) collectPVEBackupJobHistory(ctx context.Context, nodes []stri
 	}
 
 	seen := make(map[string]struct{})
+	var firstErr error
 	for _, node := range nodes {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -803,13 +804,15 @@ func (c *Collector) collectPVEBackupJobHistory(ctx context.Context, nodes []stri
 		}
 		seen[node] = struct{}{}
 		outputPath := filepath.Join(jobsDir, fmt.Sprintf("%s_backup_history.json", node))
-		c.captureCommandOutput(ctx,
+		if _, err := c.captureCommandOutput(ctx,
 			commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/tasks", node), "--output-format=json", "--typefilter=vzdump"),
 			outputPath,
 			fmt.Sprintf("%s backup history", node),
-			false)
+			false); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return nil
+	return firstErr
 }
 
 func (c *Collector) collectPVEVZDumpCronSnapshot(ctx context.Context) error {
@@ -888,11 +891,13 @@ func (c *Collector) collectPVEScheduleCrontab(ctx context.Context) error {
 		return fmt.Errorf("failed to create schedules directory: %w", err)
 	}
 
-	c.captureCommandOutput(ctx,
+	if _, err := c.captureCommandOutput(ctx,
 		commandSpec("crontab", "-l"),
 		filepath.Join(schedulesDir, "root_crontab.txt"),
 		"root crontab",
-		false)
+		false); err != nil {
+		return fmt.Errorf("collectPVEScheduleCrontab: %w", err)
+	}
 	return nil
 }
 
@@ -904,11 +909,13 @@ func (c *Collector) collectPVEScheduleTimers(ctx context.Context) error {
 	if err := c.ensureDir(schedulesDir); err != nil {
 		return fmt.Errorf("failed to create schedules directory: %w", err)
 	}
-	c.captureCommandOutput(ctx,
+	if _, err := c.captureCommandOutput(ctx,
 		commandSpec("systemctl", "list-timers", "--all", "--no-pager"),
 		filepath.Join(schedulesDir, "systemd_timers.txt"),
 		"systemd timers",
-		false)
+		false); err != nil {
+		return fmt.Errorf("collectPVEScheduleTimers: %w", err)
+	}
 	return nil
 }
 
@@ -965,6 +972,7 @@ func (c *Collector) collectPVEReplicationStatus(ctx context.Context, nodes []str
 	}
 
 	seen := make(map[string]struct{})
+	var firstErr error
 	for _, node := range nodes {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -978,13 +986,15 @@ func (c *Collector) collectPVEReplicationStatus(ctx context.Context, nodes []str
 		}
 		seen[node] = struct{}{}
 		outputPath := filepath.Join(repDir, fmt.Sprintf("%s_replication_status.json", node))
-		c.captureCommandOutput(ctx,
+		if _, err := c.captureCommandOutput(ctx,
 			commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/replication", node), "--output-format=json"),
 			outputPath,
 			fmt.Sprintf("%s replication status", node),
-			false)
+			false); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return nil
+	return firstErr
 }
 
 func (c *Collector) resolvePVEStorages(storages []pveStorageEntry) []pveStorageEntry {
