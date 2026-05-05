@@ -1122,7 +1122,7 @@ func TestEffectivePVEConfigPathDetailed(t *testing.T) {
 		},
 		{
 			name:       "whitespace only uses default",
-			configPath: "",
+			configPath: " ",
 			expected:   "/etc/pve",
 		},
 		{

@@ -115,7 +115,7 @@ func newPBSUserConfigRecipe() recipe {
 							state.pbs.userIDs = nil
 							return nil
 						}
-						state.collector.logger.Debug("Failed to parse user list for token export: %v", err)
+						state.collector.logger.Warning("Failed to parse user list for token export: %v", err)
 						state.pbs.userIDs = nil
 						return nil
 					}

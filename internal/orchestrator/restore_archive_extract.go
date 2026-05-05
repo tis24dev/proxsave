@@ -206,7 +206,8 @@ func (log *restoreExtractionLog) writeSummary(stats restoreExtractionStats) {
 	fmt.Fprintf(log.logFile, "=== SUMMARY ===\n")
 	fmt.Fprintf(log.logFile, "Total files extracted: %d\n", stats.filesExtracted)
 	fmt.Fprintf(log.logFile, "Total files skipped: %d\n", stats.filesSkipped)
-	fmt.Fprintf(log.logFile, "Total files in archive: %d\n", stats.filesExtracted+stats.filesSkipped)
+	fmt.Fprintf(log.logFile, "Total files failed: %d\n", stats.filesFailed)
+	fmt.Fprintf(log.logFile, "Total files in archive: %d\n", stats.filesExtracted+stats.filesSkipped+stats.filesFailed)
 }
 
 func (log *restoreExtractionLog) copyTempEntries(tempFile *os.File, label string) {
@@ -228,11 +229,19 @@ func logRestoreExtractionSummary(opts restoreArchiveOptions, stats restoreExtrac
 			opts.logger.Info("Successfully restored all %d files/directories", stats.filesExtracted)
 		}
 	} else {
-		opts.logger.Warning("Restored %d files/directories; %d item(s) failed (see detailed log)", stats.filesExtracted, stats.filesFailed)
+		if opts.logFilePath != "" {
+			opts.logger.Warning("Restored %d files/directories; %d item(s) failed (see detailed log)", stats.filesExtracted, stats.filesFailed)
+		} else {
+			opts.logger.Warning("Restored %d files/directories; %d item(s) failed", stats.filesExtracted, stats.filesFailed)
+		}
 	}
 
 	if stats.filesSkipped > 0 {
-		opts.logger.Info("%d additional archive entries (logs, diagnostics, system defaults) were left unchanged on this system; see detailed log for details", stats.filesSkipped)
+		if opts.logFilePath != "" {
+			opts.logger.Info("%d additional archive entries (logs, diagnostics, system defaults) were left unchanged on this system; see detailed log for details", stats.filesSkipped)
+		} else {
+			opts.logger.Info("%d additional archive entries (logs, diagnostics, system defaults) were left unchanged on this system", stats.filesSkipped)
+		}
 	}
 
 	if opts.logFilePath != "" {

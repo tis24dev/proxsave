@@ -63,6 +63,29 @@ func TestExtractTarEntry_BlocksPathTraversal(t *testing.T) {
 	}
 }
 
+func TestShouldSkipRestoreEntryTargetEtcPVEBoundary(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	header := &tar.Header{Name: "etc/pveuser.conf"}
+
+	for _, target := range []string{"/etc/pve", "/etc/pve/local.cfg"} {
+		skip, err := shouldSkipRestoreEntryTarget(header, target, string(os.PathSeparator), logger)
+		if err != nil {
+			t.Fatalf("shouldSkipRestoreEntryTarget(%q) error: %v", target, err)
+		}
+		if !skip {
+			t.Fatalf("expected %q to be skipped", target)
+		}
+	}
+
+	skip, err := shouldSkipRestoreEntryTarget(header, "/etc/pveuser.conf", string(os.PathSeparator), logger)
+	if err != nil {
+		t.Fatalf("shouldSkipRestoreEntryTarget false-positive path error: %v", err)
+	}
+	if skip {
+		t.Fatalf("did not expect /etc/pveuser.conf to match /etc/pve guard")
+	}
+}
+
 func TestExtractPlainArchive_WithFakeFS_RestoresFiles(t *testing.T) {
 	origRestoreFS := restoreFS
 	fakeFS := NewFakeFS()

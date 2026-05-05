@@ -44,7 +44,7 @@ func shouldSkipRestoreEntryTarget(header *tar.Header, target, cleanDestRoot stri
 		return false, nil
 	}
 	// Hard guard: never write directly into /etc/pve when restoring to system root
-	if strings.HasPrefix(target, "/etc/pve") {
+	if target == "/etc/pve" || strings.HasPrefix(target, "/etc/pve/") {
 		logger.Warning("Skipping restore to %s (writes to /etc/pve are prohibited)", target)
 		return true, nil
 	}
