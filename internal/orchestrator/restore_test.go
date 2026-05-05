@@ -1180,6 +1180,9 @@ nfs: nfs-backup
 	if blocks[0].ID != "local" || blocks[1].ID != "nfs-backup" {
 		t.Fatalf("unexpected block IDs: %v, %v", blocks[0].ID, blocks[1].ID)
 	}
+	if blocks[0].Type != "dir" || blocks[1].Type != "nfs" {
+		t.Fatalf("unexpected block types: %v, %v", blocks[0].Type, blocks[1].Type)
+	}
 }
 
 func TestParseStorageBlocks_LegacyStoragePrefix(t *testing.T) {
@@ -1206,6 +1209,9 @@ func TestParseStorageBlocks_LegacyStoragePrefix(t *testing.T) {
 	}
 	if blocks[0].ID != "local" {
 		t.Fatalf("unexpected block ID: %v", blocks[0].ID)
+	}
+	if blocks[0].Type != "" {
+		t.Fatalf("legacy storage block type = %q, want empty because type is in entries", blocks[0].Type)
 	}
 }
 

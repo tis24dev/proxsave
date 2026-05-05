@@ -551,9 +551,11 @@ func TestApplyStorageCfg_WithMultipleBlocks(t *testing.T) {
 	// Write storage config with multiple blocks
 	cfgPath := filepath.Join(t.TempDir(), "storage.cfg")
 	content := `storage: local
+	type dir
 	path /var/lib/vz
 
 storage: backup
+	type nfs
 	path /mnt/backup
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
@@ -570,6 +572,16 @@ storage: backup
 	if applied != 2 {
 		t.Fatalf("expected 2 applied, got %d (failed=%d)", applied, failed)
 	}
+	calls := strings.Join(restoreCmd.(*FakeCommandRunner).CallsList(), "\n")
+	if strings.Contains(calls, " -conf ") {
+		t.Fatalf("storage apply must not use -conf; calls=%s", calls)
+	}
+	if !strings.Contains(calls, "pvesh create /storage --storage=local --type=dir --path=/var/lib/vz") {
+		t.Fatalf("missing local storage args; calls=%s", calls)
+	}
+	if !strings.Contains(calls, "pvesh create /storage --storage=backup --type=nfs --path=/mnt/backup") {
+		t.Fatalf("missing backup storage args; calls=%s", calls)
+	}
 }
 
 func TestApplyStorageCfg_PveshError(t *testing.T) {
@@ -583,6 +595,7 @@ func TestApplyStorageCfg_PveshError(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "storage.cfg")
 	content := `storage: local
+	type dir
 	path /var/lib/vz
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
@@ -1710,6 +1723,13 @@ func TestApplyVMConfigs_SuccessfulApply(t *testing.T) {
 
 	if applied != 1 || failed != 0 {
 		t.Fatalf("expected (1,0), got (%d,%d)", applied, failed)
+	}
+	calls := strings.Join(fake.CallsList(), "\n")
+	if strings.Contains(calls, "--filename") {
+		t.Fatalf("VM apply must not use --filename; calls=%s", calls)
+	}
+	if !strings.Contains(calls, "pvesh set /nodes/") || !strings.Contains(calls, "/qemu/100/config --name=test-vm") {
+		t.Fatalf("missing VM config args; calls=%s", calls)
 	}
 }
 

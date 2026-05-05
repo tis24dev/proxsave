@@ -190,7 +190,13 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			return applied, failed
 		}
 		target := fmt.Sprintf("/nodes/%s/%s/%s/config", detectNodeForVM(), vm.Kind, vm.VMID)
-		args := []string{"set", target, "--filename", vm.Path}
+		configArgs, err := pveshArgsFromColonConfigFile(vm.Path)
+		if err != nil {
+			logger.Warning("Failed to read %s (vmid=%s kind=%s): %v", vm.Path, vm.VMID, vm.Kind, err)
+			failed++
+			continue
+		}
+		args := append([]string{"set", target}, configArgs...)
 		if err := runPvesh(ctx, logger, args); err != nil {
 			logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
 			failed++
@@ -216,8 +222,90 @@ func detectNodeForVM() string {
 }
 
 type storageBlock struct {
-	ID   string
-	data []string
+	ID      string
+	Type    string
+	entries []proxmoxNotificationEntry
+}
+
+func pveshArgsFromColonConfigFile(path string) ([]string, error) {
+	data, err := restoreFS.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return pveshArgsFromColonConfigLines(strings.Split(string(data), "\n")), nil
+}
+
+func pveshArgsFromColonConfigLines(lines []string) []string {
+	args := make([]string, 0, len(lines)*2)
+	for _, line := range lines {
+		key, value, ok := parseColonConfigLine(line)
+		if !ok {
+			continue
+		}
+		args = append(args, fmt.Sprintf("--%s=%s", key, value))
+	}
+	return args
+}
+
+func pveshArgsFromProxmoxEntries(entries []proxmoxNotificationEntry) []string {
+	args := make([]string, 0, len(entries)*2)
+	for _, entry := range entries {
+		key := strings.TrimSpace(entry.Key)
+		value := strings.TrimSpace(entry.Value)
+		if key == "" || value == "" {
+			continue
+		}
+		args = append(args, fmt.Sprintf("--%s=%s", key, value))
+	}
+	return args
+}
+
+func storageBlockPveshArgs(block storageBlock) ([]string, bool) {
+	storageType := strings.TrimSpace(block.Type)
+	if storageType == "" {
+		storageType = storageEntryValue(block.entries, "type")
+	}
+	if storageType == "" {
+		return nil, false
+	}
+
+	args := []string{
+		fmt.Sprintf("--storage=%s", block.ID),
+		fmt.Sprintf("--type=%s", storageType),
+	}
+	for _, entry := range block.entries {
+		if strings.EqualFold(strings.TrimSpace(entry.Key), "type") {
+			continue
+		}
+		args = append(args, pveshArgsFromProxmoxEntries([]proxmoxNotificationEntry{entry})...)
+	}
+	return args, true
+}
+
+func storageEntryValue(entries []proxmoxNotificationEntry, want string) string {
+	for _, entry := range entries {
+		if strings.EqualFold(strings.TrimSpace(entry.Key), want) {
+			return strings.TrimSpace(entry.Value)
+		}
+	}
+	return ""
+}
+
+func parseColonConfigLine(line string) (key, value string, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return "", "", false
+	}
+	idx := strings.Index(trimmed, ":")
+	if idx <= 0 {
+		return "", "", false
+	}
+	key = strings.TrimSpace(trimmed[:idx])
+	value = strings.TrimSpace(trimmed[idx+1:])
+	if key == "" || value == "" {
+		return "", "", false
+	}
+	return key, value, true
 }
 
 func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger) (applied, failed int, err error) {
@@ -231,21 +319,14 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 	}
 
 	for _, blk := range blocks {
-		tmp, tmpErr := restoreFS.CreateTemp("", fmt.Sprintf("pve-storage-%s-*.cfg", sanitizeID(blk.ID)))
-		if tmpErr != nil {
+		createArgs, ok := storageBlockPveshArgs(blk)
+		if !ok {
+			logger.Warning("Skipping storage %s: storage type missing", blk.ID)
 			failed++
 			continue
 		}
-		tmpName := tmp.Name()
-		if _, werr := tmp.WriteString(strings.Join(blk.data, "\n") + "\n"); werr != nil {
-			_ = tmp.Close()
-			_ = restoreFS.Remove(tmpName)
-			failed++
-			continue
-		}
-		_ = tmp.Close()
+		args := append([]string{"create", "/storage"}, createArgs...)
 
-		args := []string{"set", fmt.Sprintf("/cluster/storage/%s", blk.ID), "-conf", tmpName}
 		if runErr := runPvesh(ctx, logger, args); runErr != nil {
 			logger.Warning("Failed to apply storage %s: %v", blk.ID, runErr)
 			failed++
@@ -253,8 +334,6 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 			logger.Info("Applied storage definition %s", blk.ID)
 			applied++
 		}
-
-		_ = restoreFS.Remove(tmpName)
 
 		if err := ctx.Err(); err != nil {
 			return applied, failed, err
@@ -289,14 +368,22 @@ func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
 
 		// storage.cfg blocks use `<type>: <id>` (e.g. `dir: local`, `nfs: backup`).
 		// Older exports may still use `storage: <id>` blocks.
-		_, name, ok := parseSectionHeader(trimmed)
+		typ, name, ok := parseSectionHeader(trimmed)
 		if ok {
 			flush()
-			current = &storageBlock{ID: name, data: []string{line}}
+			storageType := ""
+			if !strings.EqualFold(typ, "storage") {
+				storageType = typ
+			}
+			current = &storageBlock{ID: name, Type: storageType}
 			continue
 		}
 		if current != nil {
-			current.data = append(current.data, line)
+			key, value := parseProxmoxNotificationKV(trimmed)
+			if strings.TrimSpace(key) == "" {
+				continue
+			}
+			current.entries = append(current.entries, proxmoxNotificationEntry{Key: key, Value: value})
 		}
 	}
 	flush()

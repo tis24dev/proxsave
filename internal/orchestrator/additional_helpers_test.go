@@ -828,8 +828,8 @@ storage: backup
 	if blocks[0].ID != "local" || blocks[1].ID != "backup" {
 		t.Fatalf("unexpected IDs: %+v", blocks)
 	}
-	if len(blocks[0].data) == 0 || len(blocks[1].data) == 0 {
-		t.Fatalf("expected data in blocks")
+	if len(blocks[0].entries) == 0 || len(blocks[1].entries) == 0 {
+		t.Fatalf("expected entries in blocks")
 	}
 
 	// Empty file -> zero blocks

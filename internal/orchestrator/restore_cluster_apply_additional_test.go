@@ -53,7 +53,7 @@ func TestRunSafeClusterApplyWithUI_SkipsStorageDatacenterWhenStoragePVEStaged(t 
 	}
 
 	for _, call := range runner.calls {
-		if strings.Contains(call, "/cluster/storage") || strings.Contains(call, "/cluster/config") {
+		if strings.Contains(call, "pvesh create /storage") || strings.Contains(call, "pvesh set /storage") || strings.Contains(call, "/cluster/config") {
 			t.Fatalf("storage/datacenter apply should be skipped for storage_pve staged restore; calls=%#v", runner.calls)
 		}
 	}

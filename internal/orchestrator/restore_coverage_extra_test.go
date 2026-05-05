@@ -359,10 +359,10 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 	}
 
 	wantPrefixes := []string{
-		"pvesh set /nodes/" + node + "/qemu/100/config --filename ",
-		"pvesh set /nodes/" + node + "/lxc/101/config --filename ",
-		"pvesh set /cluster/storage/local -conf ",
-		"pvesh set /cluster/storage/backup_ext -conf ",
+		"pvesh set /nodes/" + node + "/qemu/100/config --name=vm100",
+		"pvesh set /nodes/" + node + "/lxc/101/config --hostname=ct101",
+		"pvesh create /storage --storage=local --type=dir --path=/var/lib/vz",
+		"pvesh create /storage --storage=backup_ext --type=nfs --server=10.0.0.1",
 		"pvesh set /cluster/config -conf ",
 	}
 	for _, prefix := range wantPrefixes {
@@ -375,6 +375,14 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 		}
 		if !found {
 			t.Fatalf("expected a call with prefix %q; calls=%#v", prefix, runner.calls)
+		}
+	}
+	for _, call := range runner.calls {
+		if strings.Contains(call, "--filename") {
+			t.Fatalf("VM/CT apply must not use invalid --filename flag; calls=%#v", runner.calls)
+		}
+		if strings.Contains(call, "/cluster/storage/") || (strings.Contains(call, " -conf ") && strings.Contains(call, "storage")) {
+			t.Fatalf("storage apply must not use invalid cluster storage path or -conf flag; calls=%#v", runner.calls)
 		}
 	}
 }
@@ -531,11 +539,10 @@ func TestRunSafeClusterApply_UsesSingleExportedNodeWhenHostnameMismatch(t *testi
 		t.Fatalf("runSafeClusterApply error: %v", err)
 	}
 
-	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/100/config --filename "
-	wantSourceSuffix := filepath.Join("etc", "pve", "nodes", sourceNode, "qemu-server", "100.conf")
+	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/100/config --name=vm100"
 	found := false
 	for _, call := range runner.calls {
-		if strings.HasPrefix(call, wantPrefix) && strings.Contains(call, wantSourceSuffix) {
+		if strings.HasPrefix(call, wantPrefix) {
 			found = true
 			break
 		}
@@ -593,11 +600,10 @@ func TestRunSafeClusterApply_PromptsForSourceNodeWhenMultipleExportNodes(t *test
 		t.Fatalf("runSafeClusterApply error: %v", err)
 	}
 
-	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/101/config --filename "
-	wantSourceSuffix := filepath.Join("etc", "pve", "nodes", sourceNode2, "qemu-server", "101.conf")
+	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/101/config --name=vm101"
 	found := false
 	for _, call := range runner.calls {
-		if strings.HasPrefix(call, wantPrefix) && strings.Contains(call, wantSourceSuffix) {
+		if strings.HasPrefix(call, wantPrefix) {
 			found = true
 			break
 		}
