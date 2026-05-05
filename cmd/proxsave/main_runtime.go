@@ -78,6 +78,7 @@ func bootstrapRuntime(ctx context.Context, args *cli.Args, bootstrap *logging.Bo
 	rt.updateInfo = checkForUpdates(ctx, rt.logger, toolVersion)
 	applyRunPermissions(rt)
 	initializeRunProfiling(rt)
+	rt.unprivilegedInfo = environment.DetectUnprivilegedContainer()
 	return rt, types.ExitSuccess.Int(), true
 }
 

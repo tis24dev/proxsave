@@ -14,6 +14,12 @@ import (
 type runDeferredAction func()
 
 func runDeferredActions(rt *appRuntime, state *appRunState) []runDeferredAction {
+	// runRuntime defers each returned action while iterating this slice, so these
+	// entries execute in reverse (LIFO) order. Keep the ordering intentional:
+	// dispatchDeferredEarlyErrorNotification must run before sendDeferredSupportEmail
+	// because it sets state.pendingSupportStat, which sendDeferredSupportEmail
+	// reads. Do not reorder these entries or change the defer pattern without
+	// preserving that dependency.
 	return []runDeferredAction{
 		func() {
 			if state.showSummary {
@@ -79,8 +85,8 @@ func closeRunProfiling(rt *appRuntime) {
 		logging.Warning("Failed to create heap profile file: %v", err)
 		return
 	}
+	defer f.Close()
 	if err := pprof.WriteHeapProfile(f); err != nil {
 		logging.Warning("Failed to write heap profile: %v", err)
 	}
-	_ = f.Close()
 }

@@ -4,7 +4,6 @@ package main
 import (
 	"strings"
 
-	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -12,7 +11,6 @@ func logRunContext(rt *appRuntime) {
 	logRunDryRunStatus(rt)
 	baseDirSource := runBaseDirSource(rt)
 	logging.Info("Environment: %s %s", rt.envInfo.Type, rt.envInfo.Version)
-	rt.unprivilegedInfo = environment.DetectUnprivilegedContainer()
 	logUserNamespaceContext(rt.logger, rt.unprivilegedInfo)
 	logging.Info("Backup enabled: %v", rt.cfg.BackupEnabled)
 	logging.Info("Debug level: %s", rt.logLevel.String())

@@ -1318,3 +1318,43 @@ func TestNewWebhookNotifier_PushoverMethod(t *testing.T) {
 		})
 	}
 }
+
+func TestNewWebhookNotifier_PushoverAuthRequired(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	tests := []struct {
+		name    string
+		token   string
+		user    string
+		missing string
+	}{
+		{name: "missing token", token: "", user: "user-key-xyz", missing: "missing token"},
+		{name: "missing user", token: "app-token-abc", user: "", missing: "missing user"},
+		{name: "missing both", token: "", user: "", missing: "missing token/user"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := pushoverTestEndpoint(0)
+			ep.Auth.Token = tt.token
+			ep.Auth.User = tt.user
+
+			cfg := &config.WebhookConfig{
+				Enabled:   true,
+				Timeout:   30,
+				Endpoints: []config.WebhookEndpoint{ep},
+			}
+
+			_, err := NewWebhookNotifier(cfg, logger)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), "Pushover requires Auth.Token and Auth.User") {
+				t.Fatalf("error %q does not mention Pushover auth requirement", err.Error())
+			}
+			if !strings.Contains(err.Error(), tt.missing) {
+				t.Fatalf("error %q does not mention %q", err.Error(), tt.missing)
+			}
+		})
+	}
+}

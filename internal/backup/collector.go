@@ -968,38 +968,68 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 	return nil
 }
 
-func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output, description string, critical bool) error {
+type commandRunClassification int
+
+const (
+	commandRunSucceeded commandRunClassification = iota
+	commandRunSkipped
+	commandRunNonCriticalFailure
+	commandRunDowngradedToSkip
+	commandRunCriticalFailure
+)
+
+type commandRunOptions struct {
+	output                string
+	description           string
+	caller                string
+	critical              bool
+	logCollection         bool
+	handleSystemctlStatus bool
+}
+
+type commandRunResult struct {
+	output         []byte
+	classification commandRunClassification
+	exitCode       int
+	outputSummary  string
+	contextInfo    unprivilegedContainerContext
+}
+
+func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec, opts commandRunOptions) (commandRunResult, error) {
+	result := commandRunResult{classification: commandRunSkipped, exitCode: -1}
 	if err := ctx.Err(); err != nil {
-		return err
+		return result, err
 	}
 	if err := spec.validate(); err != nil {
-		return err
+		return result, err
 	}
 
-	if output != "" && c.shouldExclude(output) {
-		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
+	if opts.output != "" && c.shouldExclude(opts.output) {
+		c.logger.Debug("Skipping %s: output %s excluded by pattern", opts.description, opts.output)
 		c.incFilesSkipped()
-		return nil
-	}
-
-	c.logger.Debug("Collecting %s via command: %s > %s", description, spec.String(), output)
-
-	// Check if command exists
-	if _, err := c.depLookPath(spec.Name); err != nil {
-		if critical {
-			c.incFilesFailed()
-			return fmt.Errorf("critical command not available: %s", spec.Name)
-		}
-		c.logger.Debug("Command not available: %s (skipping %s)", spec.Name, description)
-		return nil
-	}
-
-	if c.dryRun {
-		c.logger.Debug("[DRY RUN] Would execute command: %s > %s", spec.String(), output)
-		return nil
+		return result, nil
 	}
 
 	cmdString := spec.String()
+	if opts.logCollection {
+		c.logger.Debug("Collecting %s via command: %s > %s", opts.description, cmdString, opts.output)
+	}
+
+	if _, err := c.depLookPath(spec.Name); err != nil {
+		if opts.critical {
+			c.incFilesFailed()
+			result.classification = commandRunCriticalFailure
+			return result, fmt.Errorf("critical command not available: %s", spec.Name)
+		}
+		c.logger.Debug("Command not available: %s (skipping %s)", spec.Name, opts.description)
+		return result, nil
+	}
+
+	if c.dryRun {
+		c.logger.Debug("[DRY RUN] Would execute command: %s > %s", cmdString, opts.output)
+		return result, nil
+	}
+
 	runCtx := ctx
 	var cancel context.CancelFunc
 	if spec.Name == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
@@ -1010,10 +1040,13 @@ func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output,
 	}
 
 	out, err := c.depRunCommand(runCtx, spec.Name, spec.Args...)
+	result.output = out
 	if err != nil {
-		if critical {
+		result.outputSummary = summarizeCommandOutputText(string(out))
+		if opts.critical {
 			c.incFilesFailed()
-			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
+			result.classification = commandRunCriticalFailure
+			return result, fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, opts.description, err, result.outputSummary)
 		}
 		exitCode := -1
 		var exitErr *exec.ExitError
@@ -1021,11 +1054,15 @@ func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output,
 			exitCode = exitErr.ExitCode()
 		}
 		outputText := strings.TrimSpace(string(out))
+		result.exitCode = exitCode
+		result.outputSummary = summarizeCommandOutputText(outputText)
+		result.classification = commandRunNonCriticalFailure
 
-		c.logger.Debug("Non-critical command failed (safeCmdOutput): description=%q cmd=%q exitCode=%d err=%v", description, cmdString, exitCode, err)
-		c.logger.Debug("Non-critical command output summary (safeCmdOutput): %s", summarizeCommandOutputText(outputText))
+		c.logger.Debug("Non-critical command failed (%s): description=%q cmd=%q exitCode=%d err=%v", opts.caller, opts.description, cmdString, exitCode, err)
+		c.logger.Debug("Non-critical command output summary (%s): %s", opts.caller, result.outputSummary)
 
 		ctxInfo := c.depDetectUnprivilegedContainer()
+		result.contextInfo = ctxInfo
 		c.logger.Debug("Privilege context evaluation: detected=%t details=%q", ctxInfo.Detected, strings.TrimSpace(ctxInfo.Details))
 
 		reason := ""
@@ -1039,32 +1076,83 @@ func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output,
 		}
 
 		if ctxInfo.Detected && reason != "" {
-			c.logger.Debug("Downgrading WARNING->SKIP: description=%q cmd=%q exitCode=%d", description, cmdString, exitCode)
+			result.classification = commandRunDowngradedToSkip
+			c.logger.Debug("Downgrading WARNING->SKIP: description=%q cmd=%q exitCode=%d", opts.description, cmdString, exitCode)
 
-			c.logger.Skip("Skipping %s: %s (Expected with limited privileges).", description, reason)
-			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v contextDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
-			c.logger.Debug("SKIP output summary for %s: %s", description, summarizeCommandOutputText(outputText))
-			return nil
+			c.logger.Skip("Skipping %s: %s (Expected with limited privileges).", opts.description, reason)
+			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v contextDetails=%q", opts.description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
+			c.logger.Debug("SKIP output summary for %s: %s", opts.description, result.outputSummary)
+			return result, nil
 		}
 
 		if ctxInfo.Detected {
-			c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; emitting WARNING", spec.Name)
+			if opts.handleSystemctlStatus {
+				c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; continuing with standard handling", spec.Name)
+			} else {
+				c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; emitting WARNING", spec.Name)
+			}
 		}
 
-		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the required CLI is available and has proper permissions. Output: %s",
-			description,
-			cmdString,
-			err,
-			summarizeCommandOutputText(outputText),
-		)
-		return nil // Non-critical failure
+		if opts.handleSystemctlStatus && spec.Name == "systemctl" && len(spec.Args) >= 2 && spec.Args[0] == "status" {
+			unit := spec.Args[len(spec.Args)-1]
+			if exitCode == 4 || strings.Contains(outputText, "could not be found") {
+				c.logger.Warning("Skipping %s: %s.service not found (not installed?). Set BACKUP_FIREWALL_RULES=false to disable.",
+					opts.description,
+					unit,
+				)
+				return result, nil
+			}
+			if strings.Contains(outputText, "Failed to connect to system scope bus") || strings.Contains(outputText, "System has not been booted with systemd") {
+				c.logger.Warning("Skipping %s: systemd is not available/accessible in this environment. Non-critical; backup continues. Output: %s",
+					opts.description,
+					result.outputSummary,
+				)
+				return result, nil
+			}
+		}
+
+		if opts.handleSystemctlStatus {
+			c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Output: %s",
+				opts.description,
+				cmdString,
+				err,
+				result.outputSummary,
+			)
+		} else {
+			c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the required CLI is available and has proper permissions. Output: %s",
+				opts.description,
+				cmdString,
+				err,
+				result.outputSummary,
+			)
+		}
+		return result, nil
 	}
 
-	if err := c.writeReportFile(output, out); err != nil {
+	result.classification = commandRunSucceeded
+	return result, nil
+}
+
+func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output, description string, critical bool) error {
+	result, err := c.runAndClassifyCommand(ctx, spec, commandRunOptions{
+		output:        output,
+		description:   description,
+		caller:        "safeCmdOutput",
+		critical:      critical,
+		logCollection: true,
+	})
+	if err != nil {
+		return err
+	}
+	if result.classification != commandRunSucceeded {
+		return nil
+	}
+
+	if err := c.writeReportFile(output, result.output); err != nil {
 		return err
 	}
 
-	c.logger.Debug("Successfully collected %s via command: %s", description, cmdString)
+	c.logger.Debug("Successfully collected %s via command: %s", description, spec.String())
 	return nil
 }
 
@@ -1331,117 +1419,25 @@ func (c *Collector) writeReportFile(path string, data []byte) error {
 }
 
 func (c *Collector) captureCommandOutput(ctx context.Context, spec CommandSpec, output, description string, critical bool) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err := spec.validate(); err != nil {
-		return nil, err
-	}
-
-	if output != "" && c.shouldExclude(output) {
-		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
-		c.incFilesSkipped()
-		return nil, nil
-	}
-
-	if _, err := c.depLookPath(spec.Name); err != nil {
-		if critical {
-			c.incFilesFailed()
-			return nil, fmt.Errorf("critical command not available: %s", spec.Name)
-		}
-		c.logger.Debug("Command not available: %s (skipping %s)", spec.Name, description)
-		return nil, nil
-	}
-
-	if c.dryRun {
-		c.logger.Debug("[DRY RUN] Would execute command: %s > %s", spec.String(), output)
-		return nil, nil
-	}
-
-	runCtx := ctx
-	var cancel context.CancelFunc
-	if spec.Name == "pvesh" && c.config != nil && c.config.PveshTimeoutSeconds > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.PveshTimeoutSeconds)*time.Second)
-	}
-	if cancel != nil {
-		defer cancel()
-	}
-
-	out, err := c.depRunCommand(runCtx, spec.Name, spec.Args...)
+	result, err := c.runAndClassifyCommand(ctx, spec, commandRunOptions{
+		output:                output,
+		description:           description,
+		caller:                "captureCommandOutput",
+		critical:              critical,
+		handleSystemctlStatus: true,
+	})
 	if err != nil {
-		cmdString := spec.String()
-		if critical {
-			c.incFilesFailed()
-			return nil, fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
-		}
-		exitCode := -1
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		}
-		outputText := strings.TrimSpace(string(out))
-
-		c.logger.Debug("Non-critical command failed (captureCommandOutput): description=%q cmd=%q exitCode=%d err=%v", description, cmdString, exitCode, err)
-		c.logger.Debug("Non-critical command output summary (captureCommandOutput): %s", summarizeCommandOutputText(outputText))
-
-		ctxInfo := c.depDetectUnprivilegedContainer()
-		c.logger.Debug("Privilege context evaluation: detected=%t details=%q", ctxInfo.Detected, strings.TrimSpace(ctxInfo.Details))
-
-		reason := ""
-		if ctxInfo.Detected {
-			c.logger.Debug("Privilege-sensitive allowlist: command=%q allowlisted=%t", spec.Name, isPrivilegeSensitiveCommand(spec.Name))
-			match := privilegeSensitiveFailureMatch(spec.Name, exitCode, outputText)
-			reason = match.Reason
-			c.logger.Debug("Privilege-sensitive classification: command=%q matched=%t match=%q reason=%q", spec.Name, reason != "", match.Match, reason)
-		} else {
-			c.logger.Debug("Privilege-sensitive downgrade not considered: limited-privilege context not detected (command=%q)", spec.Name)
-		}
-
-		if ctxInfo.Detected && reason != "" {
-			c.logger.Debug("Downgrading WARNING->SKIP: description=%q cmd=%q exitCode=%d", description, cmdString, exitCode)
-
-			c.logger.Skip("Skipping %s: %s (Expected with limited privileges).", description, reason)
-			c.logger.Debug("SKIP context (privilege-sensitive): description=%q cmd=%q exitCode=%d err=%v contextDetails=%q", description, cmdString, exitCode, err, strings.TrimSpace(ctxInfo.Details))
-			c.logger.Debug("SKIP output summary for %s: %s", description, summarizeCommandOutputText(outputText))
-			return nil, nil
-		}
-
-		if ctxInfo.Detected {
-			c.logger.Debug("No privilege-sensitive downgrade applied: command=%q did not match known patterns; continuing with standard handling", spec.Name)
-		}
-
-		if spec.Name == "systemctl" && len(spec.Args) >= 2 && spec.Args[0] == "status" {
-			unit := spec.Args[len(spec.Args)-1]
-			if exitCode == 4 || strings.Contains(outputText, "could not be found") {
-				c.logger.Warning("Skipping %s: %s.service not found (not installed?). Set BACKUP_FIREWALL_RULES=false to disable.",
-					description,
-					unit,
-				)
-				return nil, nil
-			}
-			if strings.Contains(outputText, "Failed to connect to system scope bus") || strings.Contains(outputText, "System has not been booted with systemd") {
-				c.logger.Warning("Skipping %s: systemd is not available/accessible in this environment. Non-critical; backup continues. Output: %s",
-					description,
-					summarizeCommandOutputText(outputText),
-				)
-				return nil, nil
-			}
-		}
-
-		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Output: %s",
-			description,
-			cmdString,
-			err,
-			summarizeCommandOutputText(outputText),
-		)
+		return nil, err
+	}
+	if result.classification != commandRunSucceeded {
 		return nil, nil
 	}
 
-	if err := c.writeReportFile(output, out); err != nil {
+	if err := c.writeReportFile(output, result.output); err != nil {
 		return nil, err
 	}
 
-	return out, nil
+	return result.output, nil
 }
 
 func (c *Collector) collectCommandMulti(ctx context.Context, spec CommandSpec, output, description string, critical bool, mirrors ...string) error {

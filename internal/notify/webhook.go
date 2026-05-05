@@ -81,6 +81,16 @@ func NewWebhookNotifier(webhookConfig *config.WebhookConfig, logger *logging.Log
 		format := resolveWebhookFormat(ep.Format, webhookConfig.DefaultFormat)
 		method := resolveWebhookMethod(ep.Method)
 		if strings.EqualFold(format, "pushover") {
+			missing := []string{}
+			if ep.Auth.Token == "" {
+				missing = append(missing, "token")
+			}
+			if ep.Auth.User == "" {
+				missing = append(missing, "user")
+			}
+			if len(missing) > 0 {
+				return nil, fmt.Errorf("webhook endpoint %q: Pushover requires Auth.Token and Auth.User; missing %s", ep.Name, strings.Join(missing, "/"))
+			}
 			if ep.Priority < -2 || ep.Priority > 1 {
 				return nil, fmt.Errorf("webhook endpoint %q: PRIORITY must be in range -2..1 (got %d); priority 2 (emergency) is not supported", ep.Name, ep.Priority)
 			}

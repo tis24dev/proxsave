@@ -9,8 +9,23 @@ import (
 )
 
 func TestCommandContextAllowlist(t *testing.T) {
-	if _, err := CommandContext(context.Background(), "rclone", "lsf", "remote:"); err != nil {
-		t.Fatalf("CommandContext allowed command error: %v", err)
+	allowedCommands := []string{
+		"rclone",
+		"tar",
+		"xz",
+		"zstd",
+		"systemctl",
+		"mailq",
+		"tail",
+		"journalctl",
+		"pvesh",
+		"pveum",
+		"proxmox-backup-manager",
+	}
+	for _, command := range allowedCommands {
+		if _, err := CommandContext(context.Background(), command); err != nil {
+			t.Fatalf("CommandContext(%q) allowed command error: %v", command, err)
+		}
 	}
 	if _, err := CommandContext(context.Background(), "not-a-proxsave-command"); !errors.Is(err, ErrCommandNotAllowed) {
 		t.Fatalf("CommandContext unknown command error = %v, want ErrCommandNotAllowed", err)

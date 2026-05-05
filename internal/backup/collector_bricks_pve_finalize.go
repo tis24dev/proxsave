@@ -127,15 +127,15 @@ func newPVEManifestBricks() []collectionBrick {
 	}
 }
 
-func (p pveContext) runtimeNodes() []string {
-	if p.runtimeInfo == nil {
+func (p *pveContext) runtimeNodes() []string {
+	if p == nil || p.runtimeInfo == nil {
 		return nil
 	}
 	return p.runtimeInfo.Nodes
 }
 
-func (p pveContext) runtimeStorages() []pveStorageEntry {
-	if p.runtimeInfo == nil {
+func (p *pveContext) runtimeStorages() []pveStorageEntry {
+	if p == nil || p.runtimeInfo == nil {
 		return nil
 	}
 	return p.runtimeInfo.Storages
@@ -148,8 +148,8 @@ func (p *pveContext) ensureStorageScanResults() map[string]*pveStorageScanResult
 	return p.storageScanResults
 }
 
-func (p pveContext) storageResult(storage pveStorageEntry) *pveStorageScanResult {
-	if p.storageScanResults == nil {
+func (p *pveContext) storageResult(storage pveStorageEntry) *pveStorageScanResult {
+	if p == nil || p.storageScanResults == nil {
 		return nil
 	}
 	return p.storageScanResults[storage.pathKey()]
