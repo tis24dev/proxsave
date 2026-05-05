@@ -13,9 +13,15 @@ import (
 
 var restoreGlob = filepath.Glob
 
-// checkZFSPoolsAfterRestore checks if ZFS pools need to be imported after restore
-func checkZFSPoolsAfterRestore(logger *logging.Logger) error {
-	if _, err := restoreCmd.Run(context.Background(), "which", "zpool"); err != nil {
+// checkZFSPoolsAfterRestore checks if ZFS pools need to be imported after restore.
+func checkZFSPoolsAfterRestore(ctx context.Context, logger *logging.Logger) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := restoreCmd.Run(ctx, "which", "zpool"); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		// zpool utility not available -> no ZFS tooling installed
 		return nil
 	}
@@ -23,14 +29,18 @@ func checkZFSPoolsAfterRestore(logger *logging.Logger) error {
 	logger.Info("Checking ZFS pool status...")
 
 	configuredPools := detectConfiguredZFSPools()
-	importablePools, importOutput, importErr := detectImportableZFSPools()
+	importablePools, importOutput, importErr := detectImportableZFSPools(ctx)
+	if importErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+	}
 
 	logConfiguredZFSPools(logger, configuredPools)
 	logImportableZFSPools(logger, importablePools, importOutput, importErr)
 
 	if len(importablePools) == 0 {
-		logNoImportableZFSPools(logger, configuredPools)
-		return nil
+		return logNoImportableZFSPools(ctx, logger, configuredPools)
 	}
 
 	logManualZFSImportInstructions(logger, importablePools)
@@ -65,19 +75,23 @@ func logImportableZFSPools(logger *logging.Logger, importablePools []string, imp
 	}
 }
 
-func logNoImportableZFSPools(logger *logging.Logger, configuredPools []string) {
+func logNoImportableZFSPools(ctx context.Context, logger *logging.Logger, configuredPools []string) error {
 	logger.Info("`zpool import` did not report pools waiting for import.")
 	if len(configuredPools) == 0 {
-		return
+		return nil
 	}
 	logger.Info("")
 	for _, pool := range configuredPools {
-		if _, err := restoreCmd.Run(context.Background(), "zpool", "status", pool); err == nil {
+		if _, err := restoreCmd.Run(ctx, "zpool", "status", pool); err == nil {
 			logger.Info("Pool %s is already imported (no manual action needed)", pool)
 		} else {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			logger.Warning("Systemd expects pool %s, but `zpool import` and `zpool status` did not report it. Check disk visibility and pool status.", pool)
 		}
 	}
+	return nil
 }
 
 func logManualZFSImportInstructions(logger *logging.Logger, importablePools []string) {
@@ -163,8 +177,8 @@ func parsePoolNameFromUnit(unitName string) string {
 	}
 }
 
-func detectImportableZFSPools() ([]string, string, error) {
-	output, err := restoreCmd.Run(context.Background(), "zpool", "import")
+func detectImportableZFSPools(ctx context.Context) ([]string, string, error) {
+	output, err := restoreCmd.Run(ctx, "zpool", "import")
 	poolNames := parseZpoolImportOutput(string(output))
 	if err != nil {
 		return poolNames, string(output), err

@@ -21,6 +21,8 @@ func (runOnlyRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	return nil, fmt.Errorf("unexpected command: %s", commandKey(name, args))
 }
 
+type zfsContextTestKey struct{}
+
 type recordingRunner struct {
 	calls []string
 }
@@ -63,7 +65,7 @@ func TestDetectImportableZFSPools_ReturnsPoolsAndErrorWhenCommandFails(t *testin
 	}
 	restoreCmd = fake
 
-	pools, output, err := detectImportableZFSPools()
+	pools, output, err := detectImportableZFSPools(context.Background())
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -86,11 +88,55 @@ func TestCheckZFSPoolsAfterRestore_ReturnsNilWhenZpoolMissing(t *testing.T) {
 	}
 	restoreCmd = fake
 
-	if err := checkZFSPoolsAfterRestore(newTestLogger()); err != nil {
+	if err := checkZFSPoolsAfterRestore(context.Background(), newTestLogger()); err != nil {
 		t.Fatalf("expected nil error when zpool missing, got %v", err)
 	}
 	if len(fake.Calls) != 1 || fake.Calls[0] != "which zpool" {
 		t.Fatalf("unexpected calls: %#v", fake.Calls)
+	}
+}
+
+func TestCheckZFSPoolsAfterRestore_UsesProvidedContext(t *testing.T) {
+	orig := restoreCmd
+	t.Cleanup(func() { restoreCmd = orig })
+
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"which zpool":  []byte("/sbin/zpool\n"),
+			"zpool import": []byte(""),
+		},
+	}
+	restoreCmd = fake
+
+	ctx := context.WithValue(context.Background(), zfsContextTestKey{}, "restore")
+	if err := checkZFSPoolsAfterRestore(ctx, newTestLogger()); err != nil {
+		t.Fatalf("checkZFSPoolsAfterRestore error: %v", err)
+	}
+
+	if len(fake.Contexts) == 0 {
+		t.Fatalf("expected command contexts to be recorded")
+	}
+	for i, got := range fake.Contexts {
+		if got.Value(zfsContextTestKey{}) != "restore" {
+			t.Fatalf("command context %d did not use restore context", i)
+		}
+	}
+}
+
+func TestCheckZFSPoolsAfterRestore_ReturnsCanceledContext(t *testing.T) {
+	orig := restoreCmd
+	t.Cleanup(func() { restoreCmd = orig })
+
+	fake := &FakeCommandRunner{}
+	restoreCmd = fake
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := checkZFSPoolsAfterRestore(ctx, newTestLogger()); err != context.Canceled {
+		t.Fatalf("checkZFSPoolsAfterRestore error = %v, want context.Canceled", err)
+	}
+	if len(fake.Calls) != 0 {
+		t.Fatalf("expected no commands after canceled context, got %#v", fake.Calls)
 	}
 }
 
@@ -131,7 +177,7 @@ func TestCheckZFSPoolsAfterRestore_ConfiguredPools_NoImportables(t *testing.T) {
 	}
 	restoreCmd = fake
 
-	if err := checkZFSPoolsAfterRestore(newTestLogger()); err != nil {
+	if err := checkZFSPoolsAfterRestore(context.Background(), newTestLogger()); err != nil {
 		t.Fatalf("checkZFSPoolsAfterRestore error: %v", err)
 	}
 
@@ -172,7 +218,7 @@ func TestCheckZFSPoolsAfterRestore_ReportsImportablePools(t *testing.T) {
 	}
 	restoreCmd = fake
 
-	if err := checkZFSPoolsAfterRestore(newTestLogger()); err != nil {
+	if err := checkZFSPoolsAfterRestore(context.Background(), newTestLogger()); err != nil {
 		t.Fatalf("checkZFSPoolsAfterRestore error: %v", err)
 	}
 

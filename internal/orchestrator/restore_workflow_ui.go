@@ -855,7 +855,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	if hasCategoryID(plan.NormalCategories, "zfs") {
 		logger.Info("")
-		if err := checkZFSPoolsAfterRestore(logger); err != nil {
+		if err := checkZFSPoolsAfterRestore(ctx, logger); err != nil {
 			logger.Warning("ZFS pool check: %v", err)
 		}
 	} else {

@@ -210,14 +210,16 @@ func (f *FakeTime) Advance(d time.Duration) {
 
 // FakeCommandRunner records invocations and returns predefined outputs/errors.
 type FakeCommandRunner struct {
-	Outputs map[string][]byte
-	Errors  map[string]error
-	Calls   []string
+	Outputs  map[string][]byte
+	Errors   map[string]error
+	Calls    []string
+	Contexts []context.Context
 }
 
 func (f *FakeCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	key := commandKey(name, args)
 	f.Calls = append(f.Calls, key)
+	f.Contexts = append(f.Contexts, ctx)
 	var out []byte
 	if f.Outputs != nil {
 		out = f.Outputs[key]
