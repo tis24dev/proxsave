@@ -13,7 +13,10 @@ import (
 	"github.com/tis24dev/proxsave/internal/tui"
 )
 
-const simAppInitialDrawTimeout = 2 * time.Second
+const (
+	simAppInitialDrawTimeout = 2 * time.Second
+	simAppCompletionTimeout  = 10 * time.Second
+)
 
 type simKey struct {
 	Key tcell.Key
@@ -68,6 +71,8 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 				case <-done:
 					return
 				case <-timer.C:
+					t.Errorf("TUI simulation did not render its initial draw within %s", simAppInitialDrawTimeout)
+					app.Stop()
 					return
 				}
 
@@ -82,6 +87,20 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 					default:
 					}
 					screen.InjectKey(k.Key, k.R, mod)
+				}
+
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(simAppCompletionTimeout)
+				select {
+				case <-done:
+				case <-timer.C:
+					t.Errorf("TUI simulation did not finish within %s after injecting %d key(s)", simAppCompletionTimeout, len(keys))
+					app.Stop()
 				}
 			}()
 		})
