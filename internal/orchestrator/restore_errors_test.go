@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -881,6 +882,12 @@ func (f *ErrorInjectingFS) MkdirTemp(dir, pattern string) (string, error) {
 }
 func (f *ErrorInjectingFS) Rename(oldpath, newpath string) error {
 	return f.base.Rename(oldpath, newpath)
+}
+func (f *ErrorInjectingFS) Lchown(path string, uid, gid int) error {
+	return f.base.Lchown(path, uid, gid)
+}
+func (f *ErrorInjectingFS) UtimesNano(path string, times []syscall.Timespec) error {
+	return f.base.UtimesNano(path, times)
 }
 
 func (f *ErrorInjectingFS) MkdirAll(path string, perm os.FileMode) error {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -184,6 +185,14 @@ func (f *FakeFS) MkdirTemp(dir, pattern string) (string, error) {
 
 func (f *FakeFS) Rename(oldpath, newpath string) error {
 	return os.Rename(f.onDisk(oldpath), f.onDisk(newpath))
+}
+
+func (f *FakeFS) Lchown(path string, uid, gid int) error {
+	return os.Lchown(f.onDisk(path), uid, gid)
+}
+
+func (f *FakeFS) UtimesNano(path string, times []syscall.Timespec) error {
+	return syscall.UtimesNano(f.onDisk(path), times)
 }
 
 // FakeTime provides deterministic time.

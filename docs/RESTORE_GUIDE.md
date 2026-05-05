@@ -510,7 +510,7 @@ Backup system type: Proxmox Virtual Environment (PVE)
 ```
 
 **Partial-compatibility warning**:
-```
+```text
 ⚠ WARNING: Partial compatibility detected
 
 Current system: Proxmox Virtual Environment (PVE)

@@ -219,7 +219,7 @@ func extractSymlink(target string, header *tar.Header, destRoot string, logger *
 	}
 
 	// Set ownership (on the symlink itself, not the target)
-	if err := os.Lchown(target, header.Uid, header.Gid); err != nil {
+	if err := restoreFS.Lchown(target, header.Uid, header.Gid); err != nil {
 		logger.Debug("Failed to lchown symlink %s: %v", target, err)
 	}
 
@@ -269,7 +269,7 @@ func setTimestamps(target string, header *tar.Header) error {
 		{Sec: mtime.Unix(), Nsec: int64(mtime.Nanosecond())},
 	}
 
-	if err := syscall.UtimesNano(target, times); err != nil {
+	if err := restoreFS.UtimesNano(target, times); err != nil {
 		return fmt.Errorf("set atime/mtime: %w", err)
 	}
 

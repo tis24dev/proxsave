@@ -47,8 +47,7 @@ var (
 		"/etc/apt/sources.list.d/proxmox.list",
 	}
 
-	lookPathFunc       = exec.LookPath
-	commandContextFunc = safeexec.TrustedCommandContext
+	lookPathFunc = exec.LookPath
 
 	readFileFunc  = os.ReadFile
 	statFunc      = os.Stat
@@ -342,15 +341,7 @@ func runCommand(command string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 
-	var (
-		cmd    *exec.Cmd
-		cmdErr error
-	)
-	if filepath.IsAbs(command) {
-		cmd, cmdErr = commandContextFunc(ctx, command, args...)
-	} else {
-		cmd, cmdErr = safeexec.CommandContext(ctx, command, args...)
-	}
+	cmd, cmdErr := safeexec.TrustedCommandContext(ctx, command, args...)
 	if cmdErr != nil {
 		return "", cmdErr
 	}

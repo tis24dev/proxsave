@@ -289,7 +289,7 @@ func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
 
 		// storage.cfg blocks use `<type>: <id>` (e.g. `dir: local`, `nfs: backup`).
 		// Older exports may still use `storage: <id>` blocks.
-		_, name, ok := parseProxmoxNotificationHeader(trimmed)
+		_, name, ok := parseSectionHeader(trimmed)
 		if ok {
 			flush()
 			current = &storageBlock{ID: name, data: []string{line}}

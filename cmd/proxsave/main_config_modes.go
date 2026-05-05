@@ -153,7 +153,6 @@ func printConfigUpgradeDryRunResult(bootstrap *logging.BootstrapLogger, result *
 }
 
 func printConfigUpgradeApplyResult(bootstrap *logging.BootstrapLogger, result *config.UpgradeResult) {
-	bootstrap.Println("Configuration upgraded successfully!")
 	if len(result.MissingKeys) > 0 {
 		bootstrap.Printf("- Added %d missing key(s): %s",
 			len(result.MissingKeys), strings.Join(result.MissingKeys, ", "))
