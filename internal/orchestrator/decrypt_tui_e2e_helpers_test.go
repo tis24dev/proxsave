@@ -120,6 +120,7 @@ type timedSimKey struct {
 	R                rune
 	Mod              tcell.ModMask
 	WaitForText      string
+	Wait             time.Duration
 	RequireNewApp    bool
 	SettleAfterMatch time.Duration
 }
@@ -261,6 +262,11 @@ func (h *timedSimHarness) run(keys []timedSimKey) {
 			return
 		}
 		generation = state.generation
+		if key.Wait > 0 && strings.TrimSpace(key.WaitForText) == "" {
+			if !h.sleepOrDone(key.Wait) {
+				return
+			}
+		}
 
 		settle := key.SettleAfterMatch
 		if settle <= 0 {
@@ -292,7 +298,11 @@ func (h *timedSimHarness) run(keys []timedSimKey) {
 
 func (h *timedSimHarness) waitForScreenText(index int, key timedSimKey, minGeneration int) (timedSimScreenState, bool) {
 	expected := strings.TrimSpace(key.WaitForText)
-	timer := time.NewTimer(timedSimScreenWaitTimeout)
+	timeout := timedSimScreenWaitTimeout
+	if key.Wait > 0 {
+		timeout = key.Wait
+	}
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	for {
@@ -310,7 +320,7 @@ func (h *timedSimHarness) waitForScreenText(index int, key timedSimKey, minGener
 				"TUI simulation timed out at action %d waiting for text %q within %s (min generation=%d, current generation=%d, focus=%s)\nCurrent screen:\n%s",
 				index,
 				expected,
-				timedSimScreenWaitTimeout,
+				timeout,
 				minGeneration,
 				state.generation,
 				state.focusType,

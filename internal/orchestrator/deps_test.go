@@ -24,6 +24,12 @@ type FakeFS struct {
 	MkdirAllErr  error
 	MkdirTempErr error
 	OpenFileErr  map[string]error
+	Ownership    map[string]FakeOwnership
+}
+
+type FakeOwnership struct {
+	UID int
+	GID int
 }
 
 func NewFakeFS() *FakeFS {
@@ -33,6 +39,7 @@ func NewFakeFS() *FakeFS {
 		StatErr:     make(map[string]error),
 		StatErrors:  make(map[string]error),
 		OpenFileErr: make(map[string]error),
+		Ownership:   make(map[string]FakeOwnership),
 	}
 }
 
@@ -188,7 +195,15 @@ func (f *FakeFS) Rename(oldpath, newpath string) error {
 }
 
 func (f *FakeFS) Lchown(path string, uid, gid int) error {
-	return os.Lchown(f.onDisk(path), uid, gid)
+	diskPath := f.onDisk(path)
+	if _, err := os.Lstat(diskPath); err != nil {
+		return err
+	}
+	if f.Ownership == nil {
+		f.Ownership = make(map[string]FakeOwnership)
+	}
+	f.Ownership[diskPath] = FakeOwnership{UID: uid, GID: gid}
+	return nil
 }
 
 func (f *FakeFS) UtimesNano(path string, times []syscall.Timespec) error {

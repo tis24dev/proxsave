@@ -34,6 +34,9 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 		logger.Debug("Update check skipped: current version is empty")
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

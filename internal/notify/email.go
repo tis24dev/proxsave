@@ -692,7 +692,7 @@ func lookupAbsolutePath(name string) (string, error) {
 	if filepath.IsAbs(execPath) {
 		return execPath, nil
 	}
-	return filepath.Abs(execPath)
+	return "", fmt.Errorf("exec.LookPath returned non-absolute path %q", execPath)
 }
 
 // sendViaRelay sends email via cloud relay

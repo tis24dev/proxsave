@@ -80,6 +80,9 @@ func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 	if err := runRecipe(ctx, newPBSRecipe(), state); err != nil {
 		return err
 	}
+	if err := runRecipe(ctx, newPBSUserConfigRecipe(), state); err != nil {
+		return err
+	}
 
 	c.logger.Info("PBS configuration collection completed")
 	return nil
