@@ -11,6 +11,16 @@ import (
 )
 
 func TestApplyNetworkWithRollbackWithUI_RollsBackFilesOnPreflightFailure(t *testing.T) {
+	fake := setupNetworkPreflightRollbackTest(t)
+	err := runNetworkPreflightRollbackFailure(t)
+	if err == nil || !strings.Contains(err.Error(), "network preflight validation failed") {
+		t.Fatalf("expected preflight error, got %v", err)
+	}
+	assertNetworkPreflightRollbackCalls(t, fake.CallsList())
+}
+
+func setupNetworkPreflightRollbackTest(t *testing.T) *FakeCommandRunner {
+	t.Helper()
 	origFS := restoreFS
 	origCmd := restoreCmd
 	origTime := restoreTime
@@ -28,18 +38,30 @@ func TestApplyNetworkWithRollbackWithUI_RollsBackFilesOnPreflightFailure(t *test
 	restoreTime = &FakeTime{Current: time.Date(2026, 1, 18, 13, 47, 6, 0, time.UTC)}
 	networkDiagnosticsSequence = 0
 
-	pathDir := t.TempDir()
-	ifqueryPath := filepath.Join(pathDir, "ifquery")
-	if err := os.WriteFile(ifqueryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write ifquery: %v", err)
-	}
-	ifupPath := filepath.Join(pathDir, "ifup")
-	if err := os.WriteFile(ifupPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write ifup: %v", err)
-	}
-	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	installNetworkPreflightRollbackTools(t)
+	fake := newNetworkPreflightRollbackRunner()
+	restoreCmd = fake
+	return fake
+}
 
-	fake := &FakeCommandRunner{
+func installNetworkPreflightRollbackTools(t *testing.T) {
+	t.Helper()
+	pathDir := t.TempDir()
+	writeExecutableTestTool(t, pathDir, "ifquery")
+	writeExecutableTestTool(t, pathDir, "ifup")
+	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func writeExecutableTestTool(t *testing.T, pathDir, name string) {
+	t.Helper()
+	toolPath := filepath.Join(pathDir, name)
+	if err := os.WriteFile(toolPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+func newNetworkPreflightRollbackRunner() *FakeCommandRunner {
+	return &FakeCommandRunner{
 		Outputs: map[string][]byte{
 			"ip route show default": []byte("default via 192.168.1.1 dev nic1\n"),
 			"ifquery --check -a":    []byte("ifquery check output\n"),
@@ -49,31 +71,32 @@ func TestApplyNetworkWithRollbackWithUI_RollsBackFilesOnPreflightFailure(t *test
 			"ifup -n -a": fmt.Errorf("exit 1"),
 		},
 	}
-	restoreCmd = fake
+}
 
+func runNetworkPreflightRollbackFailure(t *testing.T) error {
+	t.Helper()
 	logger := newTestLogger()
 	rollbackBackup := "/tmp/proxsave/network_rollback_backup_20260118_134651.tar.gz"
 
 	ui := &fakeRestoreWorkflowUI{confirmAction: true}
-	err := applyNetworkWithRollbackWithUI(
+	return applyNetworkWithRollbackWithUI(
 		context.Background(),
 		ui,
 		logger,
-		rollbackBackup,
-		rollbackBackup,
-		"",
-		"",
-		defaultNetworkRollbackTimeout,
-		SystemTypePBS,
-		false,
+		networkRollbackUIApplyRequest{
+			rollbackBackupPath:  rollbackBackup,
+			networkRollbackPath: rollbackBackup,
+			timeout:             defaultNetworkRollbackTimeout,
+			systemType:          SystemTypePBS,
+		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "network preflight validation failed") {
-		t.Fatalf("expected preflight error, got %v", err)
-	}
+}
 
+func assertNetworkPreflightRollbackCalls(t *testing.T, calls []string) {
+	t.Helper()
 	foundIfupPreflight := false
 	foundRollbackSh := false
-	for _, call := range fake.CallsList() {
+	for _, call := range calls {
 		if call == "ifup -n -a" {
 			foundIfupPreflight = true
 		}
@@ -82,9 +105,9 @@ func TestApplyNetworkWithRollbackWithUI_RollsBackFilesOnPreflightFailure(t *test
 		}
 	}
 	if !foundIfupPreflight {
-		t.Fatalf("expected ifup preflight to run; calls=%#v", fake.CallsList())
+		t.Fatalf("expected ifup preflight to run; calls=%#v", calls)
 	}
 	if !foundRollbackSh {
-		t.Fatalf("expected rollback script to be invoked via sh; calls=%#v", fake.CallsList())
+		t.Fatalf("expected rollback script to be invoked via sh; calls=%#v", calls)
 	}
 }

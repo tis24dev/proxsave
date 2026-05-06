@@ -1,3 +1,4 @@
+// Package proxmoxbackup embeds installable project documentation.
 package proxmoxbackup
 
 import (
