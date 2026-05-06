@@ -78,7 +78,7 @@ func listExportNodeDirs(exportRoot string) ([]string, error) {
 	nodesRoot := filepath.Join(exportRoot, "etc/pve/nodes")
 	entries, err := restoreFS.ReadDir(nodesRoot)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
@@ -184,18 +184,40 @@ func readVMName(confPath string) string {
 }
 
 func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logger) (applied, failed int) {
+	node := localNodeName()
 	for _, vm := range entries {
 		if err := ctx.Err(); err != nil {
 			logger.Warning("VM apply aborted: %v", err)
 			return applied, failed
 		}
-		target := fmt.Sprintf("/nodes/%s/%s/%s/config", detectNodeForVM(), vm.Kind, vm.VMID)
+		target := fmt.Sprintf("/nodes/%s/%s/%s/config", node, vm.Kind, vm.VMID)
 		configArgs, err := pveshArgsFromColonConfigFile(vm.Path)
 		if err != nil {
 			logger.Warning("Failed to read %s (vmid=%s kind=%s): %v", vm.Path, vm.VMID, vm.Kind, err)
 			failed++
 			continue
 		}
+
+		exists, err := pveshGuestExists(ctx, logger, target)
+		if err != nil {
+			logger.Warning("Failed to check existing VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+			failed++
+			continue
+		}
+		if !exists {
+			createArgs, err := pveshCreateGuestArgs(node, vm, configArgs)
+			if err != nil {
+				logger.Warning("Failed to prepare VM/CT create for %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+				failed++
+				continue
+			}
+			if err := runPvesh(ctx, logger, createArgs); err != nil {
+				logger.Warning("Failed to create VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+				failed++
+				continue
+			}
+		}
+
 		args := append([]string{"set", target}, configArgs...)
 		if err := runPvesh(ctx, logger, args); err != nil {
 			logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
@@ -212,13 +234,66 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 	return applied, failed
 }
 
-func detectNodeForVM() string {
+func localNodeName() string {
 	host, _ := os.Hostname()
 	host = shortHost(host)
 	if host != "" {
 		return host
 	}
 	return "localhost"
+}
+
+func pveshGuestExists(ctx context.Context, logger *logging.Logger, target string) (bool, error) {
+	if err := runPvesh(ctx, logger, []string{"get", target}); err != nil {
+		if isPveshNotFoundError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func pveshCreateGuestArgs(node string, vm vmEntry, configArgs []string) ([]string, error) {
+	args := []string{
+		"create",
+		fmt.Sprintf("/nodes/%s/%s", node, vm.Kind),
+		fmt.Sprintf("--vmid=%s", vm.VMID),
+	}
+	switch vm.Kind {
+	case "qemu":
+		return args, nil
+	case "lxc":
+		ostemplate, ok := pveshArgValue(configArgs, "ostemplate")
+		if !ok {
+			return nil, fmt.Errorf("missing ostemplate in LXC config")
+		}
+		return append(args, fmt.Sprintf("--ostemplate=%s", ostemplate)), nil
+	default:
+		return nil, fmt.Errorf("unsupported guest kind %q", vm.Kind)
+	}
+}
+
+func pveshArgValue(args []string, key string) (string, bool) {
+	prefix := "--" + key + "="
+	for _, arg := range args {
+		if strings.HasPrefix(arg, prefix) {
+			return strings.TrimPrefix(arg, prefix), true
+		}
+	}
+	return "", false
+}
+
+func isPveshNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{"not found", "does not exist", "no such", "unable to find", "404"} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type storageBlock struct {
@@ -238,6 +313,9 @@ func pveshArgsFromColonConfigFile(path string) ([]string, error) {
 func pveshArgsFromColonConfigLines(lines []string) []string {
 	args := make([]string, 0, len(lines)*2)
 	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			break
+		}
 		key, value, ok := parseColonConfigLine(line)
 		if !ok {
 			continue

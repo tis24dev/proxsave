@@ -137,7 +137,8 @@ func TestPVEGuestBrickPropagatesQEMUContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := newPVEGuestBricks()[0].Run(ctx, state)
+	brick := requireBrick(t, recipe{Name: "pve-guest", Bricks: newPVEGuestBricks()}, brickPVEVMQEMUConfigs)
+	err := brick.Run(ctx, state)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("guest brick error = %v, want %v", err, context.Canceled)
 	}
@@ -154,7 +155,8 @@ func TestPVEStorageProbeBrickPropagatesContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := newPVEStorageProbeBricks()[0].Run(ctx, state)
+	brick := requireBrick(t, recipe{Name: "pve-storage-probe", Bricks: newPVEStorageProbeBricks()}, brickPVEStorageProbe)
+	err := brick.Run(ctx, state)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("storage probe brick error = %v, want %v", err, context.Canceled)
 	}

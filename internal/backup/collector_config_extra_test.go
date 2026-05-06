@@ -49,7 +49,17 @@ func TestCollectorConfigValidateAcceptsNewStandaloneCollectionOptions(t *testing
 			if err := tt.cfg.Validate(); err != nil {
 				t.Fatalf("Validate() error = %v", err)
 			}
+			if tt.cfg.PxarDatastoreConcurrency != 3 {
+				t.Fatalf("PxarDatastoreConcurrency = %d, want 3", tt.cfg.PxarDatastoreConcurrency)
+			}
 		})
+	}
+}
+
+func TestCollectorConfigValidateAcceptsCustomBackupPathsOnly(t *testing.T) {
+	cfg := &CollectorConfig{CustomBackupPaths: []string{"/opt/custom"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 

@@ -131,6 +131,8 @@ type timedSimHarness struct {
 	closeDoneOnce sync.Once
 	injectWG      sync.WaitGroup
 	screenStateCh chan struct{}
+	runCompleted  chan struct{}
+	closeRunOnce  sync.Once
 
 	appMu   sync.RWMutex
 	apps    []*tui.App
@@ -174,6 +176,7 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) *timedSimHarness 
 		t:             t,
 		done:          make(chan struct{}),
 		screenStateCh: make(chan struct{}, 1),
+		runCompleted:  make(chan struct{}),
 	}
 
 	t.Cleanup(func() {
@@ -222,6 +225,18 @@ func (h *timedSimHarness) notifyScreenStateChanged() {
 	case h.screenStateCh <- struct{}{}:
 	default:
 	}
+}
+
+func (h *timedSimHarness) markRunCompleted() {
+	if h == nil {
+		return
+	}
+	if h.runCompleted == nil {
+		return
+	}
+	h.closeRunOnce.Do(func() {
+		close(h.runCompleted)
+	})
 }
 
 func (h *timedSimHarness) stop() {
@@ -289,6 +304,7 @@ func (h *timedSimHarness) run(keys []timedSimKey) {
 	timer := time.NewTimer(timedSimCompletionTimeout)
 	defer timer.Stop()
 	select {
+	case <-h.runCompleted:
 	case <-h.done:
 	case <-timer.C:
 		h.t.Errorf("TUI simulation did not finish within %s after injecting %d key(s)\n%s", timedSimCompletionTimeout, len(keys), h.describeCurrentState())
@@ -537,7 +553,11 @@ func runDecryptWorkflowTUIForTest(t *testing.T, sim *timedSimHarness, ctx contex
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- RunDecryptWorkflowTUI(runCtx, cfg, logger, "1.0.0", configPath, "test-build")
+		err := RunDecryptWorkflowTUI(runCtx, cfg, logger, "1.0.0", configPath, "test-build")
+		if sim != nil {
+			sim.markRunCompleted()
+		}
+		errCh <- err
 	}()
 
 	waitTimeout := 30 * time.Second

@@ -1733,6 +1733,42 @@ func TestApplyVMConfigs_SuccessfulApply(t *testing.T) {
 	}
 }
 
+func TestApplyVMConfigs_CreatesMissingGuestBeforeSet(t *testing.T) {
+	orig := restoreCmd
+	t.Cleanup(func() { restoreCmd = orig })
+
+	node := localNodeName()
+	getCall := fmt.Sprintf("pvesh get /nodes/%s/qemu/100/config", node)
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{},
+		Errors: map[string]error{
+			getCall: fmt.Errorf("not found"),
+		},
+	}
+	restoreCmd = fake
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "100.conf")
+	if err := os.WriteFile(configPath, []byte("name: test-vm"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	entries := []vmEntry{{VMID: "100", Kind: "qemu", Path: configPath}}
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	applied, failed := applyVMConfigs(context.Background(), entries, logger)
+
+	if applied != 1 || failed != 0 {
+		t.Fatalf("expected (1,0), got (%d,%d)", applied, failed)
+	}
+	calls := strings.Join(fake.CallsList(), "\n")
+	if !strings.Contains(calls, fmt.Sprintf("pvesh create /nodes/%s/qemu --vmid=100", node)) {
+		t.Fatalf("missing create call; calls=%s", calls)
+	}
+	if !strings.Contains(calls, fmt.Sprintf("pvesh set /nodes/%s/qemu/100/config --name=test-vm", node)) {
+		t.Fatalf("missing set call; calls=%s", calls)
+	}
+}
+
 // --------------------------------------------------------------------------
 // extractDirectory success path test
 // --------------------------------------------------------------------------

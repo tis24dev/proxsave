@@ -1353,14 +1353,42 @@ func TestReadVMName_FileNotFound(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// detectNodeForVM tests
+// localNodeName tests
 // --------------------------------------------------------------------------
 
-func TestDetectNodeForVM_ReturnsHostname(t *testing.T) {
-	node := detectNodeForVM()
-	// detectNodeForVM returns the current hostname, not the node from path
+func TestLocalNodeName_ReturnsHostname(t *testing.T) {
+	node := localNodeName()
 	if node == "" {
 		t.Fatalf("expected non-empty node from hostname")
+	}
+}
+
+func TestPveshArgsFromColonConfigLinesStopsAtSectionHeader(t *testing.T) {
+	args := pveshArgsFromColonConfigLines([]string{
+		"name: vm100",
+		"memory: 2048",
+		"[snapshot]",
+		"parent: base",
+		"snaptime: 123",
+	})
+
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "--name=vm100") || !strings.Contains(got, "--memory=2048") {
+		t.Fatalf("expected pre-section args, got %v", args)
+	}
+	if strings.Contains(got, "parent") || strings.Contains(got, "snaptime") {
+		t.Fatalf("snapshot section args must be ignored, got %v", args)
+	}
+}
+
+func TestPveshCreateGuestArgsIncludesLXCOstemplate(t *testing.T) {
+	args, err := pveshCreateGuestArgs("node1", vmEntry{VMID: "101", Kind: "lxc"}, []string{"--hostname=ct101", "--ostemplate=local:vztmpl/debian.tar.zst"})
+	if err != nil {
+		t.Fatalf("pveshCreateGuestArgs error = %v", err)
+	}
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "create /nodes/node1/lxc --vmid=101") || !strings.Contains(got, "--ostemplate=local:vztmpl/debian.tar.zst") {
+		t.Fatalf("unexpected create args: %v", args)
 	}
 }
 

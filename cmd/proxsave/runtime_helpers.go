@@ -220,7 +220,10 @@ func logServerIdentityValues(serverID, mac string) {
 
 func resolveHostname() string {
 	if path, err := exec.LookPath("hostname"); err == nil {
-		cmd, cmdErr := safeexec.TrustedCommandContext(context.Background(), path, "-f")
+		cmdCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		cmd, cmdErr := safeexec.TrustedCommandContext(cmdCtx, path, "-f")
 		if cmdErr == nil {
 			if out, err := cmd.Output(); err == nil {
 				if fqdn := strings.TrimSpace(string(out)); fqdn != "" {

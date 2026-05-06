@@ -32,16 +32,35 @@ func startMainRun() runBootstrap {
 }
 
 func finishMainRun(run runBootstrap) {
+	var panicErr error
+	exitAfterCleanup := false
 	defer func() {
-		if r := recover(); r != nil {
-			stack := debug.Stack()
-			run.bootstrap.Error("PANIC: %v", r)
-			fmt.Fprintf(os.Stderr, "panic: %v\n%s\n", r, stack)
+		if run.bootstrap != nil && run.state != nil {
+			logging.DebugStepBootstrap(run.bootstrap, "main run", "exit_code=%d", run.state.finalExitCode)
+		}
+		if run.runDone != nil {
+			run.runDone(panicErr)
+		}
+		if exitAfterCleanup {
 			os.Exit(types.ExitPanicError.Int())
 		}
-		logging.DebugStepBootstrap(run.bootstrap, "main run", "exit_code=%d", run.state.finalExitCode)
-		run.runDone(nil)
 	}()
+
+	r := recover()
+	if r == nil {
+		return
+	}
+
+	stack := debug.Stack()
+	panicErr = fmt.Errorf("panic: %v", r)
+	exitAfterCleanup = true
+	if run.state != nil {
+		run.state.finalExitCode = types.ExitPanicError.Int()
+	}
+	if run.bootstrap != nil {
+		run.bootstrap.Error("PANIC: %v\n%s", r, stack)
+	}
+	fmt.Fprintf(os.Stderr, "panic: %v\n%s\n", r, stack)
 }
 
 func preparePreRuntimeArgs(ctx context.Context, bootstrap *logging.BootstrapLogger, toolVersion string) (*cli.Args, int, bool) {

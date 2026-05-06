@@ -297,6 +297,9 @@ func (c *CollectorConfig) validateExcludePatterns() error {
 }
 
 func (c *CollectorConfig) hasCollectionOptionEnabled() bool {
+	if len(c.CustomBackupPaths) > 0 {
+		return true
+	}
 	for _, enabled := range c.collectionOptionFlags() {
 		if enabled {
 			return true
@@ -1233,6 +1236,29 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, spec CommandSp
 	return nil
 }
 
+func pbsRepositoryWithDatastore(repository, datastoreName string) string {
+	separator := -1
+	bracketDepth := 0
+	for i, r := range repository {
+		switch r {
+		case '[':
+			bracketDepth++
+		case ']':
+			if bracketDepth > 0 {
+				bracketDepth--
+			}
+		case ':':
+			if bracketDepth == 0 {
+				separator = i
+			}
+		}
+	}
+	if separator >= 0 {
+		return repository[:separator+1] + datastoreName
+	}
+	return repository + ":" + datastoreName
+}
+
 // safeCmdOutputWithPBSAuthForDatastore executes a command with PBS authentication for a specific datastore
 // This function appends the datastore name to the PBS_REPOSITORY environment variable
 func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, spec CommandSpec, output, description, datastoreName string, critical bool) error {
@@ -1274,17 +1300,7 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, sp
 	// Build PBS_REPOSITORY with datastore
 	repoWithDatastore := ""
 	if c.config.PBSRepository != "" {
-		// If repository already has a datastore (contains :), replace it
-		// Otherwise append the datastore name
-		repoWithDatastore = c.config.PBSRepository
-		if strings.Contains(repoWithDatastore, ":") {
-			// Replace existing datastore: "user@host:oldds" -> "user@host:newds"
-			parts := strings.SplitN(repoWithDatastore, ":", 2)
-			repoWithDatastore = fmt.Sprintf("%s:%s", parts[0], datastoreName)
-		} else {
-			// Append datastore: "user@host" -> "user@host:datastore"
-			repoWithDatastore = fmt.Sprintf("%s:%s", repoWithDatastore, datastoreName)
-		}
+		repoWithDatastore = pbsRepositoryWithDatastore(c.config.PBSRepository, datastoreName)
 	} else {
 		// No repository configured but we have password - use root@pam as default user
 		repoWithDatastore = fmt.Sprintf("root@pam@localhost:%s", datastoreName)

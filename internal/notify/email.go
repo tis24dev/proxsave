@@ -695,6 +695,19 @@ func lookupAbsolutePath(name string) (string, error) {
 	return "", fmt.Errorf("exec.LookPath returned non-absolute path %q", execPath)
 }
 
+func findMailqPath() (string, error) {
+	candidates := []string{"mailq", "/usr/bin/mailq"}
+	errs := make([]error, 0, len(candidates))
+	for _, candidate := range candidates {
+		path, err := lookupAbsolutePath(candidate)
+		if err == nil {
+			return path, nil
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", candidate, err))
+	}
+	return "", fmt.Errorf("mailq command not found: %w", errors.Join(errs...))
+}
+
 // sendViaRelay sends email via cloud relay
 func (e *EmailNotifier) sendViaRelay(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) error {
 	// Build payload
@@ -787,12 +800,9 @@ func (e *EmailNotifier) checkRelayHostConfigured(ctx context.Context) (bool, str
 // checkMailQueue checks the mail queue status
 func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
 	// Try mailq command (works for both Postfix and Sendmail)
-	mailqPath, err := lookupAbsolutePath("mailq")
+	mailqPath, err := findMailqPath()
 	if err != nil {
-		mailqPath, err = lookupAbsolutePath("/usr/bin/mailq")
-		if err != nil {
-			return 0, fmt.Errorf("mailq command not found")
-		}
+		return 0, err
 	}
 
 	cmd, err := commandForMailTool(ctx, mailqPath)
@@ -833,12 +843,9 @@ func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
 
 // detectQueueEntry scans the mail queue for a recipient and returns the latest queue ID.
 func (e *EmailNotifier) detectQueueEntry(ctx context.Context, recipient string) (string, string, error) {
-	mailqPath, err := lookupAbsolutePath("mailq")
+	mailqPath, err := findMailqPath()
 	if err != nil {
-		mailqPath, err = lookupAbsolutePath("/usr/bin/mailq")
-		if err != nil {
-			return "", "", fmt.Errorf("mailq command not found")
-		}
+		return "", "", err
 	}
 
 	cmd, err := commandForMailTool(ctx, mailqPath)

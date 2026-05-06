@@ -224,9 +224,11 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 		sessionLogger.Info("Starting --install (config=%s)", args.ConfigPath)
 	}
 
-	err := runInstallTUI(ctx, args.ConfigPath, bootstrap)
+	var err error
 	if args.ForceCLI {
 		err = runInstall(ctx, args.ConfigPath, bootstrap)
+	} else {
+		err = runInstallTUI(ctx, args.ConfigPath, bootstrap)
 	}
 
 	if err != nil {

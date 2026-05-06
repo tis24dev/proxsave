@@ -83,16 +83,19 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 	}
 }
 
-// isNewerVersion returns true if latest is strictly newer than current,
-// comparing MAJOR.MINOR.PATCH (ignoring any leading 'v', pre-release suffixes, and build metadata).
+// isNewerVersion returns true if latest is strictly newer than current.
+// It compares MAJOR.MINOR.PATCH, ignores build metadata, and treats a stable
+// release as newer than a prerelease with the same numeric version.
 func isNewerVersion(current, latest string) bool {
-	parse := func(v string) (int, int, int) {
+	parse := func(v string) (int, int, int, bool) {
 		v = strings.TrimSpace(v)
 		v = strings.TrimPrefix(v, "v")
-		if i := strings.IndexByte(v, '-'); i >= 0 {
+		if i := strings.IndexByte(v, '+'); i >= 0 {
 			v = v[:i]
 		}
-		if i := strings.IndexByte(v, '+'); i >= 0 {
+		hasPrerelease := false
+		if i := strings.IndexByte(v, '-'); i >= 0 {
+			hasPrerelease = true
 			v = v[:i]
 		}
 
@@ -112,11 +115,11 @@ func isNewerVersion(current, latest string) bool {
 		if len(parts) > 2 {
 			patch = toInt(parts[2])
 		}
-		return major, minor, patch
+		return major, minor, patch, hasPrerelease
 	}
 
-	curMaj, curMin, curPatch := parse(current)
-	latMaj, latMin, latPatch := parse(latest)
+	curMaj, curMin, curPatch, curPrerelease := parse(current)
+	latMaj, latMin, latPatch, latPrerelease := parse(latest)
 
 	if latMaj != curMaj {
 		return latMaj > curMaj
@@ -124,5 +127,8 @@ func isNewerVersion(current, latest string) bool {
 	if latMin != curMin {
 		return latMin > curMin
 	}
-	return latPatch > curPatch
+	if latPatch != curPatch {
+		return latPatch > curPatch
+	}
+	return curPrerelease && !latPrerelease
 }

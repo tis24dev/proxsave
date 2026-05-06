@@ -84,6 +84,30 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreBuildsRepo(t *testing.T) {
 	}
 }
 
+func TestPBSRepositoryWithDatastorePreservesHostPortAndIPv6(t *testing.T) {
+	tests := []struct {
+		name      string
+		repo      string
+		datastore string
+		want      string
+	}{
+		{name: "host only", repo: "user@host", datastore: "newds", want: "user@host:newds"},
+		{name: "existing datastore", repo: "user@host:oldds", datastore: "newds", want: "user@host:newds"},
+		{name: "host port", repo: "user@host:8007:oldds", datastore: "newds", want: "user@host:8007:newds"},
+		{name: "bracketed ipv6", repo: "[2001:db8::1]:oldds", datastore: "newds", want: "[2001:db8::1]:newds"},
+		{name: "user bracketed ipv6", repo: "user@[2001:db8::1]:oldds", datastore: "newds", want: "user@[2001:db8::1]:newds"},
+		{name: "bracketed ipv6 without datastore", repo: "[2001:db8::1]", datastore: "newds", want: "[2001:db8::1]:newds"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pbsRepositoryWithDatastore(tt.repo, tt.datastore); got != tt.want {
+				t.Fatalf("pbsRepositoryWithDatastore(%q, %q) = %q, want %q", tt.repo, tt.datastore, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSafeCmdOutputWithPBSAuthForDatastoreSkipsWhenNoCredentials(t *testing.T) {
 	origLookPath := execLookPath
 	origRun := runCommandWithEnv
