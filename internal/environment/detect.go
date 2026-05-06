@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -46,8 +47,7 @@ var (
 		"/etc/apt/sources.list.d/proxmox.list",
 	}
 
-	lookPathFunc       = exec.LookPath
-	commandContextFunc = exec.CommandContext
+	lookPathFunc = exec.LookPath
 
 	readFileFunc  = os.ReadFile
 	statFunc      = os.Stat
@@ -341,7 +341,10 @@ func runCommand(command string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 
-	cmd := commandContextFunc(ctx, command, args...)
+	cmd, cmdErr := safeexec.TrustedCommandContext(ctx, command, args...)
+	if cmdErr != nil {
+		return "", cmdErr
+	}
 	output, err := cmd.Output()
 	if ctx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("command %s timed out", command)

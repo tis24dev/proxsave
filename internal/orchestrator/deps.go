@@ -7,10 +7,12 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 // FS abstracts filesystem operations to simplify testing.
@@ -32,6 +34,8 @@ type FS interface {
 	CreateTemp(dir, pattern string) (*os.File, error)
 	MkdirTemp(dir, pattern string) (string, error)
 	Rename(oldpath, newpath string) error
+	Lchown(path string, uid, gid int) error
+	UtimesNano(path string, times []syscall.Timespec) error
 }
 
 // Prompter encapsulates interactive prompts.
@@ -93,6 +97,10 @@ func (osFS) CreateTemp(dir, pattern string) (*os.File, error) {
 }
 func (osFS) MkdirTemp(dir, pattern string) (string, error) { return os.MkdirTemp(dir, pattern) }
 func (osFS) Rename(oldpath, newpath string) error          { return os.Rename(oldpath, newpath) }
+func (osFS) Lchown(path string, uid, gid int) error        { return os.Lchown(path, uid, gid) }
+func (osFS) UtimesNano(path string, times []syscall.Timespec) error {
+	return syscall.UtimesNano(path, times)
+}
 
 type consolePrompter struct{}
 
@@ -123,7 +131,10 @@ type osCommandRunner struct{}
 const defaultCommandWaitDelay = 3 * time.Second
 
 func (osCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd, err := safeexec.CommandContext(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
 	cmd.WaitDelay = defaultCommandWaitDelay
 	out, err := cmd.CombinedOutput()
 	if err != nil && errors.Is(err, exec.ErrWaitDelay) {
@@ -134,7 +145,10 @@ func (osCommandRunner) Run(ctx context.Context, name string, args ...string) ([]
 
 // RunStream returns a stdout pipe for streaming commands that read from stdin.
 func (osCommandRunner) RunStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.ReadCloser, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd, err := safeexec.CommandContext(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
 	cmd.Stdin = stdin
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

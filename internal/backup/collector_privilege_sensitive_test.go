@@ -33,7 +33,7 @@ func TestSafeCmdOutput_LimitedPrivileges_DowngradesDmidecodeToSkip(t *testing.T)
 	c := NewCollectorWithDeps(logger, GetDefaultCollectorConfig(), tmp, types.ProxmoxUnknown, false, deps)
 	outPath := filepath.Join(tmp, "dmidecode.txt")
 
-	if err := c.safeCmdOutput(context.Background(), "dmidecode", outPath, "Hardware DMI information", false); err != nil {
+	if err := c.safeCmdOutput(context.Background(), commandSpec("dmidecode"), outPath, "Hardware DMI information", false); err != nil {
 		t.Fatalf("safeCmdOutput returned error: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestCaptureCommandOutput_LimitedPrivileges_DowngradesBlkidToSkipWithRestore
 	c := NewCollectorWithDeps(logger, GetDefaultCollectorConfig(), tmp, types.ProxmoxUnknown, false, deps)
 	outPath := filepath.Join(tmp, "blkid.txt")
 
-	data, err := c.captureCommandOutput(context.Background(), "blkid", outPath, "Block device identifiers (blkid)", false)
+	data, err := c.captureCommandOutput(context.Background(), commandSpec("blkid"), outPath, "Block device identifiers (blkid)", false)
 	if err != nil {
 		t.Fatalf("captureCommandOutput returned error: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestSafeCmdOutput_LimitedPrivileges_DowngradesSensorsToSkip(t *testing.T) {
 	c := NewCollectorWithDeps(logger, GetDefaultCollectorConfig(), tmp, types.ProxmoxUnknown, false, deps)
 	outPath := filepath.Join(tmp, "sensors.txt")
 
-	if err := c.safeCmdOutput(context.Background(), "sensors", outPath, "Hardware sensors", false); err != nil {
+	if err := c.safeCmdOutput(context.Background(), commandSpec("sensors"), outPath, "Hardware sensors", false); err != nil {
 		t.Fatalf("safeCmdOutput returned error: %v", err)
 	}
 
@@ -156,7 +156,7 @@ func TestSafeCmdOutput_LimitedPrivileges_DowngradesSmartctlToSkip(t *testing.T) 
 	c := NewCollectorWithDeps(logger, GetDefaultCollectorConfig(), tmp, types.ProxmoxUnknown, false, deps)
 	outPath := filepath.Join(tmp, "smartctl_scan.txt")
 
-	if err := c.safeCmdOutput(context.Background(), "smartctl --scan", outPath, "SMART scan", false); err != nil {
+	if err := c.safeCmdOutput(context.Background(), commandSpec("smartctl", "--scan"), outPath, "SMART scan", false); err != nil {
 		t.Fatalf("safeCmdOutput returned error: %v", err)
 	}
 

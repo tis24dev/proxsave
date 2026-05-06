@@ -370,6 +370,30 @@ SECONDARY_LOG_PATH=remote:/logs
 	}
 }
 
+func TestValidateCloudSettingsAllowsAbsoluteCloudRemote(t *testing.T) {
+	tests := []string{
+		"/mnt/cloud",
+		`C:\cloud`,
+		"C:/cloud",
+	}
+
+	for _, remote := range tests {
+		t.Run(remote, func(t *testing.T) {
+			cfg := &Config{CloudEnabled: true, CloudRemote: remote}
+			if err := cfg.validateCloudSettings(); err != nil {
+				t.Fatalf("validateCloudSettings() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateCloudSettingsStillValidatesAbsoluteCloudRemotePath(t *testing.T) {
+	cfg := &Config{CloudEnabled: true, CloudRemote: "/mnt/cloud:../escape"}
+	if err := cfg.validateCloudSettings(); err == nil {
+		t.Fatal("expected validateCloudSettings to reject traversal in CLOUD_REMOTE path")
+	}
+}
+
 func TestLoadConfigWithQuotes(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "test_quotes.env")

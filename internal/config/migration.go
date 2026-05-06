@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
@@ -220,6 +221,18 @@ func validateMigratedConfig(cfg *Config) error {
 	}
 	if cfg.CloudEnabled && strings.TrimSpace(cfg.CloudRemote) == "" {
 		return fmt.Errorf("CLOUD_REMOTE required when CLOUD_ENABLED=true")
+	}
+	if cfg.CloudEnabled {
+		remoteName, basePath := splitCloudRemoteRef(strings.TrimSpace(cfg.CloudRemote))
+		if err := safeexec.ValidateRcloneRemoteName(remoteName); err != nil {
+			return fmt.Errorf("CLOUD_REMOTE invalid: %w", err)
+		}
+		if err := safeexec.ValidateRemoteRelativePath(strings.Trim(strings.TrimSpace(basePath), "/"), "CLOUD_REMOTE path"); err != nil {
+			return err
+		}
+		if err := safeexec.ValidateRemoteRelativePath(strings.Trim(strings.TrimSpace(cfg.CloudRemotePath), "/"), "CLOUD_REMOTE_PATH"); err != nil {
+			return err
+		}
 	}
 	if cfg.SetBackupPermissions {
 		if strings.TrimSpace(cfg.BackupUser) == "" || strings.TrimSpace(cfg.BackupGroup) == "" {

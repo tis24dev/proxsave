@@ -828,8 +828,8 @@ storage: backup
 	if blocks[0].ID != "local" || blocks[1].ID != "backup" {
 		t.Fatalf("unexpected IDs: %+v", blocks)
 	}
-	if len(blocks[0].data) == 0 || len(blocks[1].data) == 0 {
-		t.Fatalf("expected data in blocks")
+	if len(blocks[0].entries) == 0 || len(blocks[1].entries) == 0 {
+		t.Fatalf("expected entries in blocks")
 	}
 
 	// Empty file -> zero blocks
@@ -913,7 +913,12 @@ func TestExtractArchiveNativeSymlinkAndHardlink(t *testing.T) {
 	}
 
 	dest := filepath.Join(tmpDir, "dest")
-	if err := extractArchiveNative(context.Background(), tarPath, dest, logger, nil, RestoreModeFull, nil, "", nil); err != nil {
+	if err := extractArchiveNative(context.Background(), restoreArchiveOptions{
+		archivePath: tarPath,
+		destRoot:    dest,
+		logger:      logger,
+		mode:        RestoreModeFull,
+	}); err != nil {
 		t.Fatalf("extractArchiveNative error: %v", err)
 	}
 
@@ -1292,7 +1297,12 @@ func TestExtractArchiveNativeBlocksTraversal(t *testing.T) {
 	_ = f.Close()
 
 	dest := filepath.Join(tmpDir, "dest")
-	if err := extractArchiveNative(context.Background(), tarPath, dest, logger, nil, RestoreModeFull, nil, "", nil); err != nil {
+	if err := extractArchiveNative(context.Background(), restoreArchiveOptions{
+		archivePath: tarPath,
+		destRoot:    dest,
+		logger:      logger,
+		mode:        RestoreModeFull,
+	}); err != nil {
 		t.Fatalf("extractArchiveNative error: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "../etc/passwd")); err == nil {

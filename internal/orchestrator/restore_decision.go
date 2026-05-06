@@ -91,14 +91,12 @@ func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (
 	if err != nil {
 		return nil, err
 	}
-	if closer, ok := reader.(interface{ Close() error }); ok {
-		defer func() {
-			if closeErr := closer.Close(); closeErr != nil && err == nil {
-				inspection = nil
-				err = fmt.Errorf("inspect archive: %w", closeErr)
-			}
-		}()
-	}
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil && err == nil {
+			inspection = nil
+			err = fmt.Errorf("inspect archive: %w", closeErr)
+		}
+	}()
 
 	tarReader := tar.NewReader(reader)
 	archivePaths, metadata, metadataErr, collectErr := collectRestoreArchiveFacts(tarReader)

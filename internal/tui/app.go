@@ -2,16 +2,27 @@ package tui
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
+const (
+	appRunStateIdle = iota
+	appRunStateStarting
+	appRunStateRunning
+	appRunStateFinished
+)
+
 // App wraps tview.Application with Proxmox-specific configuration
 type App struct {
 	*tview.Application
-	stopHook func()
+	stopHook      func()
+	runMu         sync.Mutex
+	runState      int
+	stopRequested bool
 }
 
 // NewApp creates a new TUI application with Proxmox theme
@@ -49,8 +60,57 @@ func (a *App) Stop() {
 		return
 	}
 	if a.Application != nil {
-		a.Application.Stop()
+		a.runMu.Lock()
+		switch a.runState {
+		case appRunStateIdle, appRunStateStarting:
+			// tview.Stop before Run clears the configured screen; apply it once
+			// the event loop can process the request instead.
+			a.stopRequested = true
+			a.runMu.Unlock()
+			return
+		case appRunStateRunning:
+			a.runMu.Unlock()
+			a.Application.Stop()
+			return
+		default:
+			a.runMu.Unlock()
+		}
 	}
+}
+
+func (a *App) Run() error {
+	if a == nil || a.Application == nil {
+		return nil
+	}
+
+	a.runMu.Lock()
+	a.runState = appRunStateStarting
+	a.runMu.Unlock()
+
+	go a.markRunningAndStopIfRequested()
+
+	err := a.Application.Run()
+
+	a.runMu.Lock()
+	a.runState = appRunStateFinished
+	a.stopRequested = false
+	a.runMu.Unlock()
+
+	return err
+}
+
+func (a *App) markRunningAndStopIfRequested() {
+	a.QueueUpdate(func() {
+		a.runMu.Lock()
+		a.runState = appRunStateRunning
+		stopRequested := a.stopRequested
+		a.stopRequested = false
+		a.runMu.Unlock()
+
+		if stopRequested {
+			a.Application.Stop()
+		}
+	})
 }
 
 func (a *App) RunWithContext(ctx context.Context) error {

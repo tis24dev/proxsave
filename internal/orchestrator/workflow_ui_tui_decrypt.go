@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -86,35 +87,67 @@ func (u *tuiWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 	form.SetParentView(page)
 
 	done := make(chan struct{})
+	started := make(chan struct{})
+	var startOnce sync.Once
 	var runErr error
+
+	queueProgressUpdate := func(update func()) {
+		select {
+		case <-taskCtx.Done():
+			return
+		default:
+		}
+		go func() {
+			select {
+			case <-taskCtx.Done():
+				return
+			default:
+			}
+			app.QueueUpdateDraw(update)
+		}()
+	}
 
 	report := func(message string) {
 		message = strings.TrimSpace(message)
 		if message == "" {
 			return
 		}
-		app.QueueUpdateDraw(func() {
+		queueProgressUpdate(func() {
 			messageView.SetText(tview.Escape(message))
 		})
 	}
 
-	go func() {
-		runErr = run(taskCtx, report)
-		close(done)
-		app.QueueUpdateDraw(func() {
-			app.Stop()
+	startTask := func() {
+		startOnce.Do(func() {
+			close(started)
+			go func() {
+				runErr = run(taskCtx, report)
+				close(done)
+				app.Stop()
+			}()
 		})
-	}()
+	}
 
 	app.SetRoot(page, true).SetFocus(form.Form)
+	app.SetAfterDrawFunc(func(screen tcell.Screen) {
+		startTask()
+	})
 	if err := app.RunWithContext(taskCtx); err != nil {
 		cancel()
-		<-done
+		select {
+		case <-started:
+			<-done
+		default:
+		}
 		return err
 	}
 
 	cancel()
-	<-done
+	select {
+	case <-started:
+		<-done
+	default:
+	}
 	return runErr
 }
 

@@ -1,0 +1,531 @@
+// Package orchestrator coordinates backup, restore, decrypt, and related workflows.
+package orchestrator
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/tis24dev/proxsave/internal/input"
+	"github.com/tis24dev/proxsave/internal/logging"
+)
+
+// runSafeClusterApply applies selected cluster configs via pvesh without touching config.db.
+// It operates on files extracted to exportRoot (e.g. exportDestRoot).
+func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) (err error) {
+	if logger == nil {
+		logger = logging.GetDefaultLogger()
+	}
+	ui := newCLIWorkflowUI(reader, logger)
+	return runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger, nil)
+}
+
+type vmEntry struct {
+	VMID string
+	Kind string // qemu | lxc
+	Name string
+	Path string
+}
+
+func scanVMConfigs(exportRoot, node string) ([]vmEntry, error) {
+	var entries []vmEntry
+	base := filepath.Join(exportRoot, "etc/pve/nodes", node)
+
+	type dirSpec struct {
+		kind string
+		path string
+	}
+
+	dirs := []dirSpec{
+		{kind: "qemu", path: filepath.Join(base, "qemu-server")},
+		{kind: "lxc", path: filepath.Join(base, "lxc")},
+	}
+
+	for _, spec := range dirs {
+		infos, err := restoreFS.ReadDir(spec.path)
+		if err != nil {
+			continue
+		}
+		for _, entry := range infos {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".conf") {
+				continue
+			}
+			vmid := strings.TrimSuffix(name, ".conf")
+			vmPath := filepath.Join(spec.path, name)
+			vmName := readVMName(vmPath)
+			entries = append(entries, vmEntry{
+				VMID: vmid,
+				Kind: spec.kind,
+				Name: vmName,
+				Path: vmPath,
+			})
+		}
+	}
+
+	return entries, nil
+}
+
+func listExportNodeDirs(exportRoot string) ([]string, error) {
+	nodesRoot := filepath.Join(exportRoot, "etc/pve/nodes")
+	entries, err := restoreFS.ReadDir(nodesRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var nodes []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" {
+			continue
+		}
+		nodes = append(nodes, name)
+	}
+	sort.Strings(nodes)
+	return nodes, nil
+}
+
+func countVMConfigsForNode(exportRoot, node string) (qemuCount, lxcCount int) {
+	base := filepath.Join(exportRoot, "etc/pve/nodes", node)
+
+	countInDir := func(dir string) int {
+		entries, err := restoreFS.ReadDir(dir)
+		if err != nil {
+			return 0
+		}
+		n := 0
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(entry.Name(), ".conf") {
+				n++
+			}
+		}
+		return n
+	}
+
+	qemuCount = countInDir(filepath.Join(base, "qemu-server"))
+	lxcCount = countInDir(filepath.Join(base, "lxc"))
+	return qemuCount, lxcCount
+}
+
+func promptExportNodeSelection(ctx context.Context, reader *bufio.Reader, exportRoot, currentNode string, exportNodes []string) (string, error) {
+	for {
+		fmt.Println()
+		fmt.Printf("WARNING: VM/CT configs in this backup are stored under different node names.\n")
+		fmt.Printf("Current node: %s\n", currentNode)
+		fmt.Println("Select which exported node to import VM/CT configs from (they will be applied to the current node):")
+		for idx, node := range exportNodes {
+			qemuCount, lxcCount := countVMConfigsForNode(exportRoot, node)
+			fmt.Printf("  [%d] %s (qemu=%d, lxc=%d)\n", idx+1, node, qemuCount, lxcCount)
+		}
+		fmt.Println("  [0] Skip VM/CT apply")
+
+		fmt.Print("Choice: ")
+		line, err := input.ReadLineWithContext(ctx, reader)
+		if err != nil {
+			return "", err
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "0" {
+			return "", nil
+		}
+		if trimmed == "" {
+			continue
+		}
+		idx, err := parseMenuIndex(trimmed, len(exportNodes))
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		return exportNodes[idx], nil
+	}
+}
+
+func stringSliceContains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func readVMName(confPath string) string {
+	data, err := restoreFS.ReadFile(confPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "name:") {
+			return strings.TrimSpace(strings.TrimPrefix(t, "name:"))
+		}
+		if strings.HasPrefix(t, "hostname:") {
+			return strings.TrimSpace(strings.TrimPrefix(t, "hostname:"))
+		}
+	}
+	return ""
+}
+
+func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logger) (applied, failed int) {
+	node := localNodeName()
+	for _, vm := range entries {
+		if err := ctx.Err(); err != nil {
+			logger.Warning("VM apply aborted: %v", err)
+			return applied, failed
+		}
+		target := fmt.Sprintf("/nodes/%s/%s/%s/config", node, vm.Kind, vm.VMID)
+		configArgs, err := pveshArgsFromColonConfigFile(vm.Path)
+		if err != nil {
+			logger.Warning("Failed to read %s (vmid=%s kind=%s): %v", vm.Path, vm.VMID, vm.Kind, err)
+			failed++
+			continue
+		}
+
+		exists, err := pveshGuestExists(ctx, logger, target)
+		if err != nil {
+			logger.Warning("Failed to check existing VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+			failed++
+			continue
+		}
+		if !exists {
+			createArgs, err := pveshCreateGuestArgs(node, vm, configArgs)
+			if err != nil {
+				logger.Warning("Failed to prepare VM/CT create for %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+				failed++
+				continue
+			}
+			if err := runPvesh(ctx, logger, createArgs); err != nil {
+				logger.Warning("Failed to create VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+				failed++
+				continue
+			}
+		}
+
+		args := append([]string{"set", target}, configArgs...)
+		if err := runPvesh(ctx, logger, args); err != nil {
+			logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+			failed++
+		} else {
+			display := vm.VMID
+			if vm.Name != "" {
+				display = fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
+			}
+			logger.Info("Applied VM/CT config %s", display)
+			applied++
+		}
+	}
+	return applied, failed
+}
+
+func localNodeName() string {
+	host, _ := os.Hostname()
+	host = shortHost(host)
+	if host != "" {
+		return host
+	}
+	return "localhost"
+}
+
+func pveshGuestExists(ctx context.Context, logger *logging.Logger, target string) (bool, error) {
+	if err := runPvesh(ctx, logger, []string{"get", target}); err != nil {
+		if isPveshNotFoundError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func pveshCreateGuestArgs(node string, vm vmEntry, configArgs []string) ([]string, error) {
+	args := []string{
+		"create",
+		fmt.Sprintf("/nodes/%s/%s", node, vm.Kind),
+		fmt.Sprintf("--vmid=%s", vm.VMID),
+	}
+	switch vm.Kind {
+	case "qemu":
+		return args, nil
+	case "lxc":
+		ostemplate, ok := pveshArgValue(configArgs, "ostemplate")
+		if !ok {
+			return nil, fmt.Errorf("missing ostemplate in LXC config")
+		}
+		return append(args, fmt.Sprintf("--ostemplate=%s", ostemplate)), nil
+	default:
+		return nil, fmt.Errorf("unsupported guest kind %q", vm.Kind)
+	}
+}
+
+func pveshArgValue(args []string, key string) (string, bool) {
+	prefix := "--" + key + "="
+	for _, arg := range args {
+		if strings.HasPrefix(arg, prefix) {
+			return strings.TrimPrefix(arg, prefix), true
+		}
+	}
+	return "", false
+}
+
+func isPveshNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{"not found", "does not exist", "no such", "unable to find", "404"} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+type storageBlock struct {
+	ID      string
+	Type    string
+	entries []proxmoxNotificationEntry
+}
+
+func pveshArgsFromColonConfigFile(path string) ([]string, error) {
+	data, err := restoreFS.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return pveshArgsFromColonConfigLines(strings.Split(string(data), "\n")), nil
+}
+
+func pveshArgsFromColonConfigLines(lines []string) []string {
+	args := make([]string, 0, len(lines)*2)
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			break
+		}
+		key, value, ok := parseColonConfigLine(line)
+		if !ok {
+			continue
+		}
+		args = append(args, fmt.Sprintf("--%s=%s", key, value))
+	}
+	return args
+}
+
+func pveshArgsFromProxmoxEntries(entries []proxmoxNotificationEntry) []string {
+	args := make([]string, 0, len(entries)*2)
+	for _, entry := range entries {
+		key := strings.TrimSpace(entry.Key)
+		value := strings.TrimSpace(entry.Value)
+		if key == "" || value == "" {
+			continue
+		}
+		args = append(args, fmt.Sprintf("--%s=%s", key, value))
+	}
+	return args
+}
+
+func storageBlockPveshArgs(block storageBlock) ([]string, bool) {
+	storageType := strings.TrimSpace(block.Type)
+	if storageType == "" {
+		storageType = storageEntryValue(block.entries, "type")
+	}
+	if storageType == "" {
+		return nil, false
+	}
+
+	args := []string{
+		fmt.Sprintf("--storage=%s", block.ID),
+		fmt.Sprintf("--type=%s", storageType),
+	}
+	for _, entry := range block.entries {
+		if strings.EqualFold(strings.TrimSpace(entry.Key), "type") {
+			continue
+		}
+		args = append(args, pveshArgsFromProxmoxEntries([]proxmoxNotificationEntry{entry})...)
+	}
+	return args, true
+}
+
+func storageEntryValue(entries []proxmoxNotificationEntry, want string) string {
+	for _, entry := range entries {
+		if strings.EqualFold(strings.TrimSpace(entry.Key), want) {
+			return strings.TrimSpace(entry.Value)
+		}
+	}
+	return ""
+}
+
+func parseColonConfigLine(line string) (key, value string, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return "", "", false
+	}
+	idx := strings.Index(trimmed, ":")
+	if idx <= 0 {
+		return "", "", false
+	}
+	key = strings.TrimSpace(trimmed[:idx])
+	value = strings.TrimSpace(trimmed[idx+1:])
+	if key == "" || value == "" {
+		return "", "", false
+	}
+	return key, value, true
+}
+
+func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger) (applied, failed int, err error) {
+	blocks, perr := parseStorageBlocks(cfgPath)
+	if perr != nil {
+		return 0, 0, perr
+	}
+	if len(blocks) == 0 {
+		logger.Info("No storage definitions detected in storage.cfg")
+		return 0, 0, nil
+	}
+
+	for _, blk := range blocks {
+		createArgs, ok := storageBlockPveshArgs(blk)
+		if !ok {
+			logger.Warning("Skipping storage %s: storage type missing", blk.ID)
+			failed++
+			continue
+		}
+		args := append([]string{"create", "/storage"}, createArgs...)
+
+		if runErr := runPvesh(ctx, logger, args); runErr != nil {
+			logger.Warning("Failed to apply storage %s: %v", blk.ID, runErr)
+			failed++
+		} else {
+			logger.Info("Applied storage definition %s", blk.ID)
+			applied++
+		}
+
+		if err := ctx.Err(); err != nil {
+			return applied, failed, err
+		}
+	}
+
+	return applied, failed, nil
+}
+
+func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
+	data, err := restoreFS.ReadFile(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var blocks []storageBlock
+	var current *storageBlock
+
+	flush := func() {
+		if current != nil {
+			blocks = append(blocks, *current)
+			current = nil
+		}
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			flush()
+			continue
+		}
+
+		// storage.cfg blocks use `<type>: <id>` (e.g. `dir: local`, `nfs: backup`).
+		// Older exports may still use `storage: <id>` blocks.
+		typ, name, ok := parseSectionHeader(trimmed)
+		if ok {
+			flush()
+			storageType := ""
+			if !strings.EqualFold(typ, "storage") {
+				storageType = typ
+			}
+			current = &storageBlock{ID: name, Type: storageType}
+			continue
+		}
+		if current != nil {
+			key, value := parseProxmoxNotificationKV(trimmed)
+			if strings.TrimSpace(key) == "" {
+				continue
+			}
+			current.entries = append(current.entries, proxmoxNotificationEntry{Key: key, Value: value})
+		}
+	}
+	flush()
+
+	return blocks, nil
+}
+
+func runPvesh(ctx context.Context, logger *logging.Logger, args []string) error {
+	output, err := restoreCmd.Run(ctx, "pvesh", args...)
+	if len(output) > 0 {
+		logger.Debug("pvesh %v output: %s", args, strings.TrimSpace(string(output)))
+	}
+	if err != nil {
+		return fmt.Errorf("pvesh %v failed: %w", args, err)
+	}
+	return nil
+}
+
+func shortHost(host string) string {
+	if idx := strings.Index(host, "."); idx > 0 {
+		return host[:idx]
+	}
+	return host
+}
+
+func sanitizeID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if isSafeIDRune(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
+func isSafeIDRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
+}
+
+// promptClusterRestoreMode asks how to handle cluster database restore (safe export vs full recovery).
+func promptClusterRestoreMode(ctx context.Context, reader *bufio.Reader) (int, error) {
+	fmt.Println()
+	fmt.Println("Cluster backup detected. Choose how to restore the cluster database:")
+	fmt.Println("  [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).")
+	fmt.Println("  [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.")
+	fmt.Println("  [0] Exit")
+
+	for {
+		fmt.Print("Choice: ")
+		choiceLine, err := input.ReadLineWithContext(ctx, reader)
+		if err != nil {
+			return 0, err
+		}
+		switch strings.TrimSpace(choiceLine) {
+		case "1":
+			return 1, nil
+		case "2":
+			return 2, nil
+		case "0":
+			return 0, nil
+		default:
+			fmt.Println("Please enter 1, 2, or 0.")
+		}
+	}
+}

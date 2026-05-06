@@ -4,13 +4,18 @@ import (
 	"context"
 	"os"
 	"os/exec"
+
+	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 var (
 	execLookPath = exec.LookPath
 
 	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, name, args...)
+		cmd, err := safeexec.CommandContext(ctx, name, args...)
+		if err != nil {
+			return nil, err
+		}
 		if len(extraEnv) > 0 {
 			cmd.Env = append(os.Environ(), extraEnv...)
 		}

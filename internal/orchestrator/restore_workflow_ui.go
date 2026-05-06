@@ -1,3 +1,4 @@
+// Package orchestrator coordinates backup, restore, decrypt, and related workflows.
 package orchestrator
 
 import (
@@ -46,6 +47,7 @@ func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger 
 }
 
 func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (err error) {
+	ClearRestoreAbortInfo()
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
 	}
@@ -453,7 +455,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 							"./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json",
 						},
 					}}
-					if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, invCategory, RestoreModeCustom, nil, "", nil); err != nil {
+					if err := extractArchiveNative(ctx, restoreArchiveOptions{
+						archivePath: prepared.ArchivePath,
+						destRoot:    fsTempDir,
+						logger:      logger,
+						categories:  invCategory,
+						mode:        RestoreModeCustom,
+					}); err != nil {
 						logger.Debug("Failed to extract fstab inventory data (continuing): %v", err)
 					}
 
@@ -509,7 +517,13 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 					"./var/lib/proxsave-info/commands/pve/mapping_dir.json",
 				},
 			}}
-			if err := extractArchiveNative(ctx, prepared.ArchivePath, exportRoot, logger, safeInvCategory, RestoreModeCustom, nil, "", nil); err != nil {
+			if err := extractArchiveNative(ctx, restoreArchiveOptions{
+				archivePath: prepared.ArchivePath,
+				destRoot:    exportRoot,
+				logger:      logger,
+				categories:  safeInvCategory,
+				mode:        RestoreModeCustom,
+			}); err != nil {
 				logger.Debug("Failed to extract SAFE apply inventory (continuing): %v", err)
 			}
 
@@ -841,7 +855,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	if hasCategoryID(plan.NormalCategories, "zfs") {
 		logger.Info("")
-		if err := checkZFSPoolsAfterRestore(logger); err != nil {
+		if err := checkZFSPoolsAfterRestore(ctx, logger); err != nil {
 			logger.Warning("ZFS pool check: %v", err)
 		}
 	} else {
@@ -978,7 +992,13 @@ func runFullRestoreWithUI(ctx context.Context, ui RestoreWorkflowUI, candidate *
 					"./etc/fstab",
 				},
 			}}
-			if err := extractArchiveNative(ctx, prepared.ArchivePath, fsTempDir, logger, fsCategory, RestoreModeCustom, nil, "", nil); err != nil {
+			if err := extractArchiveNative(ctx, restoreArchiveOptions{
+				archivePath: prepared.ArchivePath,
+				destRoot:    fsTempDir,
+				logger:      logger,
+				categories:  fsCategory,
+				mode:        RestoreModeCustom,
+			}); err != nil {
 				logger.Warning("Failed to extract filesystem config for merge: %v", err)
 			} else {
 				currentFstab := filepath.Join(destRoot, "etc", "fstab")

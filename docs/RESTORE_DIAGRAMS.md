@@ -1,6 +1,9 @@
 # Restore Workflow Diagrams
 
 Visual diagrams for understanding the restore system architecture and flow.
+Use this file as a visual companion to [RESTORE_GUIDE.md](RESTORE_GUIDE.md) and
+[RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md), not as the primary place for
+textual restore rules.
 
 ## Table of Contents
 
@@ -100,11 +103,13 @@ flowchart TD
     Full --> SystemFull{System Type?}
     SystemFull -->|PVE| PVEFull[PVE Categories:<br/>- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- pve_notifications<br/>- pve_access_control<br/>- pve_firewall<br/>- pve_ha<br/>- pve_sdn<br/>- corosync<br/>- ceph<br/>+ Common]
     SystemFull -->|PBS| PBSFull[PBS Categories:<br/>- pbs_host<br/>- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- pbs_notifications<br/>- pbs_access_control<br/>- pbs_tape<br/>+ Common]
+    SystemFull -->|DUAL| DualFull[Dual Categories:<br/>- PVE categories<br/>- PBS categories<br/>- Common categories]
     SystemFull -->|Unknown| CommonFull[Common Only:<br/>- filesystem<br/>- storage_stack<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- user_data<br/>- zfs<br/>- proxsave_info]
 
     Storage --> SystemStorage{System Type?}
     SystemStorage -->|PVE| PVEStorage[- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- filesystem<br/>- storage_stack<br/>- zfs]
     SystemStorage -->|PBS| PBSStorage[- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- filesystem<br/>- storage_stack<br/>- zfs]
+    SystemStorage -->|DUAL| DualStorage[- PVE storage categories<br/>- PBS storage categories<br/>- filesystem<br/>- storage_stack<br/>- zfs]
 
     Base --> BaseCats[- network<br/>- ssl<br/>- ssh<br/>- services<br/>- filesystem]
 
@@ -456,14 +461,17 @@ flowchart TD
 
     CheckSystem -->|PVE| FilterPVE[Filter Categories]
     CheckSystem -->|PBS| FilterPBS[Filter Categories]
+    CheckSystem -->|DUAL| FilterDual[Filter Categories]
     CheckSystem -->|Unknown| FilterCommon[Filter Categories]
 
     FilterPVE --> IncludePVE["Include:<br/>- CategoryTypePVE<br/>- CategoryTypeCommon"]
     FilterPBS --> IncludePBS["Include:<br/>- CategoryTypePBS<br/>- CategoryTypeCommon"]
+    FilterDual --> IncludeDual["Include:<br/>- CategoryTypePVE<br/>- CategoryTypePBS<br/>- CategoryTypeCommon"]
     FilterCommon --> IncludeOnlyCommon["Include:<br/>- CategoryTypeCommon only"]
 
     IncludePVE --> CheckMode{Restore Mode?}
     IncludePBS --> CheckMode
+    IncludeDual --> CheckMode
     IncludeOnlyCommon --> CheckMode
 
     CheckMode -->|Full/Storage/Base| RemoveExport[Remove ExportOnly = true]
@@ -629,41 +637,48 @@ flowchart TD
 ```mermaid
 flowchart TD
     Start([Backup Prepared]) --> DetectCurrent[Detect Current System]
-    DetectCurrent --> CheckPVE{"/etc/pve exists<br/>AND /usr/bin/qm exists?"}
+    DetectCurrent --> CheckSystem{PVE indicators?<br/>PBS indicators?}
 
-    CheckPVE -->|Yes| CurrentPVE[Current: PVE]
-    CheckPVE -->|No| CheckPBS{"/etc/proxmox-backup exists<br/>AND /usr/sbin/proxmox-backup-proxy?"}
-
-    CheckPBS -->|Yes| CurrentPBS[Current: PBS]
-    CheckPBS -->|No| CurrentUnknown[Current: Unknown]
+    CheckSystem -->|PVE only| CurrentPVE[Current: PVE]
+    CheckSystem -->|PBS only| CurrentPBS[Current: PBS]
+    CheckSystem -->|Both| CurrentDual[Current: DUAL]
+    CheckSystem -->|Neither| CurrentUnknown[Current: Unknown]
 
     CurrentPVE --> ReadManifest
     CurrentPBS --> ReadManifest
+    CurrentDual --> ReadManifest
     CurrentUnknown --> ReadManifest[Read Backup Manifest]
 
-    ReadManifest --> CheckBackupType{manifest.ProxmoxType<br/>OR hostname pattern}
+    ReadManifest --> CheckBackupType{manifest.ProxmoxTargets<br/>or ProxmoxType<br/>or hostname pattern}
     CheckBackupType -->|pve| BackupPVE[Backup: PVE]
     CheckBackupType -->|pbs| BackupPBS[Backup: PBS]
+    CheckBackupType -->|dual| BackupDual[Backup: DUAL]
     CheckBackupType -->|Unknown| BackupUnknown[Backup: Unknown]
 
     BackupPVE --> Compare
     BackupPBS --> Compare
-    BackupUnknown --> Compare[Compare Types]
+    BackupDual --> Compare
+    BackupUnknown --> Compare[Compare Capability Sets]
 
-    Compare --> Match{Current == Backup?}
-    Match -->|Yes| Compatible([Compatible])
-    Match -->|No| CheckUnknown{Either Unknown?}
+    Compare --> SharedRole{Any shared role?}
+    SharedRole -->|Yes| ExactMatch{Same role set?}
+    ExactMatch -->|Yes| Compatible([Full Compatibility])
+    ExactMatch -->|No| Partial[Partial Compatibility]
+    Partial --> Filter["Warn user and filter to<br/>supported categories"]
+    Filter --> ProceedAnyway([Proceed with Warning])
 
-    CheckUnknown -->|Yes| Compatible
-    CheckUnknown -->|No| Incompatible[Incompatible]
+    SharedRole -->|No| CheckUnknown{Either side unknown?}
+    CheckUnknown -->|Yes| WarnUnknown["Warn: compatibility<br/>cannot be fully verified"]
+    WarnUnknown --> Proceed([Proceed])
+    CheckUnknown -->|No| Incompatible["No overlapping role"]
 
-    Incompatible --> DisplayWarning["Display Warning:<br/>PVE ↔ PBS mismatch"]
+    Incompatible --> DisplayWarning["Display Warning:<br/>backup and host roles differ"]
     DisplayWarning --> AskOverride{Type 'yes'<br/>to continue?}
 
     AskOverride -->|No| Abort([Abort])
-    AskOverride -->|Yes| ProceedAnyway([Proceed with Warning])
+    AskOverride -->|Yes| ProceedAnyway
 
-    Compatible --> Proceed([Proceed])
+    Compatible --> Proceed
 
     style Start fill:#87CEEB
     style Proceed fill:#90EE90

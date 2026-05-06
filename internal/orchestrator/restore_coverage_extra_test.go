@@ -21,6 +21,8 @@ func (runOnlyRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	return nil, fmt.Errorf("unexpected command: %s", commandKey(name, args))
 }
 
+type zfsContextTestKey struct{}
+
 type recordingRunner struct {
 	calls []string
 }
@@ -63,7 +65,7 @@ func TestDetectImportableZFSPools_ReturnsPoolsAndErrorWhenCommandFails(t *testin
 	}
 	restoreCmd = fake
 
-	pools, output, err := detectImportableZFSPools()
+	pools, output, err := detectImportableZFSPools(context.Background())
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -86,11 +88,55 @@ func TestCheckZFSPoolsAfterRestore_ReturnsNilWhenZpoolMissing(t *testing.T) {
 	}
 	restoreCmd = fake
 
-	if err := checkZFSPoolsAfterRestore(newTestLogger()); err != nil {
+	if err := checkZFSPoolsAfterRestore(context.Background(), newTestLogger()); err != nil {
 		t.Fatalf("expected nil error when zpool missing, got %v", err)
 	}
 	if len(fake.Calls) != 1 || fake.Calls[0] != "which zpool" {
 		t.Fatalf("unexpected calls: %#v", fake.Calls)
+	}
+}
+
+func TestCheckZFSPoolsAfterRestore_UsesProvidedContext(t *testing.T) {
+	orig := restoreCmd
+	t.Cleanup(func() { restoreCmd = orig })
+
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"which zpool":  []byte("/sbin/zpool\n"),
+			"zpool import": []byte(""),
+		},
+	}
+	restoreCmd = fake
+
+	ctx := context.WithValue(context.Background(), zfsContextTestKey{}, "restore")
+	if err := checkZFSPoolsAfterRestore(ctx, newTestLogger()); err != nil {
+		t.Fatalf("checkZFSPoolsAfterRestore error: %v", err)
+	}
+
+	if len(fake.Contexts) == 0 {
+		t.Fatalf("expected command contexts to be recorded")
+	}
+	for i, got := range fake.Contexts {
+		if got.Value(zfsContextTestKey{}) != "restore" {
+			t.Fatalf("command context %d did not use restore context", i)
+		}
+	}
+}
+
+func TestCheckZFSPoolsAfterRestore_ReturnsCanceledContext(t *testing.T) {
+	orig := restoreCmd
+	t.Cleanup(func() { restoreCmd = orig })
+
+	fake := &FakeCommandRunner{}
+	restoreCmd = fake
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := checkZFSPoolsAfterRestore(ctx, newTestLogger()); err != context.Canceled {
+		t.Fatalf("checkZFSPoolsAfterRestore error = %v, want context.Canceled", err)
+	}
+	if len(fake.Calls) != 0 {
+		t.Fatalf("expected no commands after canceled context, got %#v", fake.Calls)
 	}
 }
 
@@ -131,7 +177,7 @@ func TestCheckZFSPoolsAfterRestore_ConfiguredPools_NoImportables(t *testing.T) {
 	}
 	restoreCmd = fake
 
-	if err := checkZFSPoolsAfterRestore(newTestLogger()); err != nil {
+	if err := checkZFSPoolsAfterRestore(context.Background(), newTestLogger()); err != nil {
 		t.Fatalf("checkZFSPoolsAfterRestore error: %v", err)
 	}
 
@@ -172,7 +218,7 @@ func TestCheckZFSPoolsAfterRestore_ReportsImportablePools(t *testing.T) {
 	}
 	restoreCmd = fake
 
-	if err := checkZFSPoolsAfterRestore(newTestLogger()); err != nil {
+	if err := checkZFSPoolsAfterRestore(context.Background(), newTestLogger()); err != nil {
 		t.Fatalf("checkZFSPoolsAfterRestore error: %v", err)
 	}
 
@@ -313,10 +359,10 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 	}
 
 	wantPrefixes := []string{
-		"pvesh set /nodes/" + node + "/qemu/100/config --filename ",
-		"pvesh set /nodes/" + node + "/lxc/101/config --filename ",
-		"pvesh set /cluster/storage/local -conf ",
-		"pvesh set /cluster/storage/backup_ext -conf ",
+		"pvesh set /nodes/" + node + "/qemu/100/config --name=vm100",
+		"pvesh set /nodes/" + node + "/lxc/101/config --hostname=ct101",
+		"pvesh create /storage --storage=local --type=dir --path=/var/lib/vz",
+		"pvesh create /storage --storage=backup_ext --type=nfs --server=10.0.0.1",
 		"pvesh set /cluster/config -conf ",
 	}
 	for _, prefix := range wantPrefixes {
@@ -329,6 +375,14 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 		}
 		if !found {
 			t.Fatalf("expected a call with prefix %q; calls=%#v", prefix, runner.calls)
+		}
+	}
+	for _, call := range runner.calls {
+		if strings.Contains(call, "--filename") {
+			t.Fatalf("VM/CT apply must not use invalid --filename flag; calls=%#v", runner.calls)
+		}
+		if strings.Contains(call, "/cluster/storage/") || (strings.Contains(call, " -conf ") && strings.Contains(call, "storage")) {
+			t.Fatalf("storage apply must not use invalid cluster storage path or -conf flag; calls=%#v", runner.calls)
 		}
 	}
 }
@@ -485,11 +539,10 @@ func TestRunSafeClusterApply_UsesSingleExportedNodeWhenHostnameMismatch(t *testi
 		t.Fatalf("runSafeClusterApply error: %v", err)
 	}
 
-	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/100/config --filename "
-	wantSourceSuffix := filepath.Join("etc", "pve", "nodes", sourceNode, "qemu-server", "100.conf")
+	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/100/config --name=vm100"
 	found := false
 	for _, call := range runner.calls {
-		if strings.HasPrefix(call, wantPrefix) && strings.Contains(call, wantSourceSuffix) {
+		if strings.HasPrefix(call, wantPrefix) {
 			found = true
 			break
 		}
@@ -547,11 +600,10 @@ func TestRunSafeClusterApply_PromptsForSourceNodeWhenMultipleExportNodes(t *test
 		t.Fatalf("runSafeClusterApply error: %v", err)
 	}
 
-	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/101/config --filename "
-	wantSourceSuffix := filepath.Join("etc", "pve", "nodes", sourceNode2, "qemu-server", "101.conf")
+	wantPrefix := "pvesh set /nodes/" + targetNode + "/qemu/101/config --name=vm101"
 	found := false
 	for _, call := range runner.calls {
-		if strings.HasPrefix(call, wantPrefix) && strings.Contains(call, wantSourceSuffix) {
+		if strings.HasPrefix(call, wantPrefix) {
 			found = true
 			break
 		}
@@ -612,13 +664,9 @@ func TestRunRestoreCommandStream_FallsBackToExecCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runRestoreCommandStream error: %v", err)
 	}
-	rc, ok := reader.(io.ReadCloser)
-	if !ok {
-		t.Fatalf("expected io.ReadCloser, got %T", reader)
-	}
-	defer rc.Close()
+	defer reader.Close()
 
-	out, err := io.ReadAll(rc)
+	out, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}

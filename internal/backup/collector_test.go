@@ -270,7 +270,7 @@ func TestCollectorSafeCmdOutput(t *testing.T) {
 	// Use a simple command that should be available on all systems
 	outputFile := filepath.Join(tempDir, "output.txt")
 	ctx := context.Background()
-	err := collector.safeCmdOutput(ctx, "echo test", outputFile, "test command", false)
+	err := collector.safeCmdOutput(ctx, commandSpec("echo", "test"), outputFile, "test command", false)
 
 	if err != nil {
 		t.Fatalf("safeCmdOutput failed: %v", err)
@@ -298,7 +298,7 @@ func TestCollectorSafeCmdOutputNonCriticalFailure(t *testing.T) {
 	ctx := context.Background()
 	outputFile := filepath.Join(tempDir, "non_critical.txt")
 
-	if err := collector.safeCmdOutput(ctx, "false", outputFile, "non critical failure", false); err != nil {
+	if err := collector.safeCmdOutput(ctx, commandSpec("false"), outputFile, "non critical failure", false); err != nil {
 		t.Fatalf("non-critical command should not return error: %v", err)
 	}
 
@@ -321,7 +321,7 @@ func TestCollectorSafeCmdOutputCriticalFailure(t *testing.T) {
 	ctx := context.Background()
 	outputFile := filepath.Join(tempDir, "critical.txt")
 
-	if err := collector.safeCmdOutput(ctx, "false", outputFile, "critical failure", true); err == nil {
+	if err := collector.safeCmdOutput(ctx, commandSpec("false"), outputFile, "critical failure", true); err == nil {
 		t.Fatalf("expected error for critical command failure")
 	}
 
@@ -344,7 +344,7 @@ func TestCollectorSafeCmdOutputCommandNotFound(t *testing.T) {
 	// Use a command that definitely doesn't exist
 	outputFile := filepath.Join(tempDir, "output.txt")
 	ctx := context.Background()
-	err := collector.safeCmdOutput(ctx, "nonexistent_command_xyz", outputFile, "test command", false)
+	err := collector.safeCmdOutput(ctx, commandSpec("nonexistent_command_xyz"), outputFile, "test command", false)
 
 	// Should return nil (command not found is not an error for non-critical commands)
 	if err != nil {
@@ -814,7 +814,7 @@ func TestCaptureCommandOutput_SystemctlStatusUnitNotFound_Skips(t *testing.T) {
 	collector := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
 	outPath := filepath.Join(tmp, "systemctl_status.txt")
 
-	data, err := collector.captureCommandOutput(context.Background(), "systemctl status foo", outPath, "systemctl status", false)
+	data, err := collector.captureCommandOutput(context.Background(), commandSpec("systemctl", "status", "foo"), outPath, "systemctl status", false)
 	if err != nil {
 		t.Fatalf("captureCommandOutput returned error: %v", err)
 	}
@@ -848,7 +848,7 @@ func TestCaptureCommandOutput_SystemctlStatusSystemdUnavailable_Skips(t *testing
 	collector := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
 	outPath := filepath.Join(tmp, "systemctl_status.txt")
 
-	data, err := collector.captureCommandOutput(context.Background(), "systemctl status ssh", outPath, "systemctl status", false)
+	data, err := collector.captureCommandOutput(context.Background(), commandSpec("systemctl", "status", "ssh"), outPath, "systemctl status", false)
 	if err != nil {
 		t.Fatalf("captureCommandOutput returned error: %v", err)
 	}
@@ -1412,7 +1412,7 @@ func TestSafeCmdOutputHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := c.safeCmdOutput(ctx, "echo hi", filepath.Join(tmp, "out.txt"), "canceled", false)
+	err := c.safeCmdOutput(ctx, commandSpec("echo", "hi"), filepath.Join(tmp, "out.txt"), "canceled", false)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -1424,7 +1424,7 @@ func TestSafeCmdOutputReturnsErrorOnEmptyCommand(t *testing.T) {
 	tmp := t.TempDir()
 	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
 
-	if err := c.safeCmdOutput(context.Background(), "   ", filepath.Join(tmp, "out.txt"), "empty", false); err == nil {
+	if err := c.safeCmdOutput(context.Background(), CommandSpec{}, filepath.Join(tmp, "out.txt"), "empty", false); err == nil {
 		t.Fatalf("expected error for empty command")
 	}
 }
@@ -1439,7 +1439,7 @@ func TestSafeCmdOutputCriticalCommandNotAvailableIncrementsFilesFailed(t *testin
 	}
 	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
 
-	err := c.safeCmdOutput(context.Background(), "does-not-exist", filepath.Join(tmp, "out.txt"), "critical", true)
+	err := c.safeCmdOutput(context.Background(), commandSpec("does-not-exist"), filepath.Join(tmp, "out.txt"), "critical", true)
 	if err == nil {
 		t.Fatalf("expected error for critical missing command")
 	}
@@ -1468,7 +1468,7 @@ func TestSafeCmdOutputWriteFailureIncrementsFilesFailed(t *testing.T) {
 	}
 	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
 
-	err := c.safeCmdOutput(context.Background(), "echo hi", outDir, "write-fail", false)
+	err := c.safeCmdOutput(context.Background(), commandSpec("echo", "hi"), outDir, "write-fail", false)
 	if err == nil {
 		t.Fatalf("expected write error when output path is a directory")
 	}
@@ -1498,7 +1498,7 @@ func TestSafeCmdOutputEnsureDirFailureReturnsError(t *testing.T) {
 	}
 	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
 
-	if err := c.safeCmdOutput(context.Background(), "echo hi", output, "ensureDir-fail", false); err == nil {
+	if err := c.safeCmdOutput(context.Background(), commandSpec("echo", "hi"), output, "ensureDir-fail", false); err == nil {
 		t.Fatalf("expected ensureDir error")
 	}
 }
@@ -1509,7 +1509,7 @@ func TestCaptureCommandOutputReturnsErrorOnEmptyCommand(t *testing.T) {
 	tmp := t.TempDir()
 	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
 
-	if _, err := c.captureCommandOutput(context.Background(), "   ", filepath.Join(tmp, "out.txt"), "empty", false); err == nil {
+	if _, err := c.captureCommandOutput(context.Background(), CommandSpec{}, filepath.Join(tmp, "out.txt"), "empty", false); err == nil {
 		t.Fatalf("expected error for empty command")
 	}
 }
@@ -1523,7 +1523,7 @@ func TestCaptureCommandOutputHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := c.captureCommandOutput(ctx, "echo hi", filepath.Join(tmp, "out.txt"), "canceled", false); !errors.Is(err, context.Canceled) {
+	if _, err := c.captureCommandOutput(ctx, commandSpec("echo", "hi"), filepath.Join(tmp, "out.txt"), "canceled", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
@@ -1547,7 +1547,7 @@ func TestCaptureCommandOutputPropagatesWriteReportFileError(t *testing.T) {
 	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
 
 	// writeReportFile should fail because output path is a directory.
-	if _, err := c.captureCommandOutput(context.Background(), "echo hi", outDir, "desc", false); err == nil {
+	if _, err := c.captureCommandOutput(context.Background(), commandSpec("echo", "hi"), outDir, "desc", false); err == nil {
 		t.Fatalf("expected writeReportFile error")
 	}
 }
@@ -1562,7 +1562,7 @@ func TestCaptureCommandOutputCriticalCommandNotAvailableIncrementsFilesFailed(t 
 	}
 	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
 
-	_, err := c.captureCommandOutput(context.Background(), "missing-cmd arg", filepath.Join(tmp, "out.txt"), "critical", true)
+	_, err := c.captureCommandOutput(context.Background(), commandSpec("missing-cmd", "arg"), filepath.Join(tmp, "out.txt"), "critical", true)
 	if err == nil {
 		t.Fatalf("expected error for critical missing command")
 	}
@@ -1588,7 +1588,7 @@ func TestCaptureCommandOutputNonCriticalFailureReturnsNil(t *testing.T) {
 	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
 
 	outPath := filepath.Join(tmp, "out.txt")
-	data, err := c.captureCommandOutput(context.Background(), "cmd arg", outPath, "noncritical", false)
+	data, err := c.captureCommandOutput(context.Background(), commandSpec("cmd", "arg"), outPath, "noncritical", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1606,7 +1606,7 @@ func TestCollectCommandMultiRequiresPrimaryOutput(t *testing.T) {
 	tmp := t.TempDir()
 	c := NewCollector(logger, cfg, tmp, types.ProxmoxUnknown, false)
 
-	if err := c.collectCommandMulti(context.Background(), "echo hi", "", "desc", false); err == nil {
+	if err := c.collectCommandMulti(context.Background(), commandSpec("echo", "hi"), "", "desc", false); err == nil {
 		t.Fatalf("expected error when primary output is empty")
 	}
 }
@@ -1630,7 +1630,7 @@ func TestCollectCommandMultiFailsWhenMirrorWriteFails(t *testing.T) {
 		t.Fatalf("mkdir mirrorDir: %v", err)
 	}
 
-	if err := c.collectCommandMulti(context.Background(), "echo hi", primary, "desc", false, mirrorDir, ""); err == nil {
+	if err := c.collectCommandMulti(context.Background(), commandSpec("echo", "hi"), primary, "desc", false, mirrorDir, ""); err == nil {
 		t.Fatalf("expected error when mirror path is a directory")
 	}
 }
@@ -1649,7 +1649,7 @@ func TestCollectCommandMultiSkipsEmptyMirrors(t *testing.T) {
 	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
 
 	primary := filepath.Join(tmp, "primary.txt")
-	if err := c.collectCommandMulti(context.Background(), "echo hi", primary, "desc", false, ""); err != nil {
+	if err := c.collectCommandMulti(context.Background(), commandSpec("echo", "hi"), primary, "desc", false, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, err := os.Stat(primary); err != nil {
@@ -1670,7 +1670,7 @@ func TestCollectCommandOptionalSkipsWhenNoOutputPath(t *testing.T) {
 		},
 	}
 	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
-	c.collectCommandOptional(context.Background(), "echo hi", "", "desc", filepath.Join(tmp, "mirror"))
+	c.collectCommandOptional(context.Background(), commandSpec("echo", "hi"), "", "desc", filepath.Join(tmp, "mirror"))
 }
 
 func TestCollectCommandOptionalDoesNotMirrorEmptyOutput(t *testing.T) {
@@ -1688,7 +1688,7 @@ func TestCollectCommandOptionalDoesNotMirrorEmptyOutput(t *testing.T) {
 
 	primary := filepath.Join(tmp, "primary.txt")
 	mirror := filepath.Join(tmp, "mirror.txt")
-	c.collectCommandOptional(context.Background(), "echo hi", primary, "desc", mirror)
+	c.collectCommandOptional(context.Background(), commandSpec("echo", "hi"), primary, "desc", mirror)
 
 	if _, err := os.Stat(primary); err != nil {
 		t.Fatalf("expected primary file to exist: %v", err)
@@ -1718,7 +1718,7 @@ func TestCollectCommandOptionalSkipsOnCaptureError(t *testing.T) {
 	}
 
 	mirror := filepath.Join(tmp, "mirror.txt")
-	c.collectCommandOptional(context.Background(), "echo hi", outDir, "desc", "", mirror)
+	c.collectCommandOptional(context.Background(), commandSpec("echo", "hi"), outDir, "desc", "", mirror)
 	if _, err := os.Stat(mirror); !os.IsNotExist(err) {
 		t.Fatalf("expected mirror to be skipped on capture error, stat err=%v", err)
 	}
@@ -1739,7 +1739,7 @@ func TestCollectCommandOptionalSkipsEmptyMirrorEntries(t *testing.T) {
 
 	primary := filepath.Join(tmp, "primary.txt")
 	mirror := filepath.Join(tmp, "mirror.txt")
-	c.collectCommandOptional(context.Background(), "echo hi", primary, "desc", "", mirror)
+	c.collectCommandOptional(context.Background(), commandSpec("echo", "hi"), primary, "desc", "", mirror)
 	if _, err := os.Stat(mirror); err != nil {
 		t.Fatalf("expected mirror file to exist: %v", err)
 	}
@@ -1764,5 +1764,5 @@ func TestCollectCommandOptionalIgnoresMirrorWriteFailures(t *testing.T) {
 		t.Fatalf("mkdir mirrorDir: %v", err)
 	}
 
-	c.collectCommandOptional(context.Background(), "echo hi", primary, "desc", mirrorDir)
+	c.collectCommandOptional(context.Background(), commandSpec("echo", "hi"), primary, "desc", mirrorDir)
 }

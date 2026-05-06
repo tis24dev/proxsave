@@ -161,6 +161,20 @@ func TestDetectFilesystemInfo(t *testing.T) {
 		}
 	})
 
+	t.Run("cloud error is returned for caller diagnostics", func(t *testing.T) {
+		backend := &fakeStorageBackend{
+			name:     "cloud",
+			location: storage.LocationCloud,
+			enabled:  true,
+			critical: false,
+			fsErr:    errors.New("cloud detect failed"),
+		}
+		info, err := detectFilesystemInfo(ctx, backend, "remote:path", logger)
+		if err == nil || info != nil {
+			t.Fatalf("detectFilesystemInfo() = (%v,%v), want (nil,error)", info, err)
+		}
+	})
+
 	t.Run("critical error is returned", func(t *testing.T) {
 		backend := &fakeStorageBackend{
 			name:     "primary",

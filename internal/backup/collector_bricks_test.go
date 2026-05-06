@@ -1,3 +1,4 @@
+// Package backup provides collection, archive, and verification logic for ProxSave backups.
 package backup
 
 import (
@@ -9,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestRunRecipeRunsBricksInOrder(t *testing.T) {
@@ -119,12 +123,96 @@ func TestRunRecipePropagatesContextCancellation(t *testing.T) {
 	}
 }
 
+func TestPVEGuestBrickPropagatesQEMUContextCancellation(t *testing.T) {
+	cfg := &CollectorConfig{
+		BackupVMConfigs: true,
+		PVEConfigPath:   filepath.Join(t.TempDir(), "etc", "pve"),
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.PVEConfigPath, "qemu-server"), 0o755); err != nil {
+		t.Fatalf("mkdir qemu-server: %v", err)
+	}
+
+	collector := NewCollector(logging.New(types.LogLevelError, false), cfg, t.TempDir(), types.ProxmoxVE, false)
+	state := newCollectionState(collector)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	brick := requireBrick(t, recipe{Name: "pve-guest", Bricks: newPVEGuestBricks()}, brickPVEVMQEMUConfigs)
+	err := brick.Run(ctx, state)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("guest brick error = %v, want %v", err, context.Canceled)
+	}
+	if state.pve.guestCollectionAborted {
+		t.Fatalf("guest collection should not be marked aborted for context cancellation")
+	}
+}
+
+func TestPVEStorageProbeBrickPropagatesContextCancellation(t *testing.T) {
+	cfg := &CollectorConfig{BackupPVEBackupFiles: true}
+	collector := NewCollector(logging.New(types.LogLevelError, false), cfg, t.TempDir(), types.ProxmoxVE, false)
+	state := newCollectionState(collector)
+	state.pve.resolvedStorages = []pveStorageEntry{{Name: "local", Path: t.TempDir()}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	brick := requireBrick(t, recipe{Name: "pve-storage-probe", Bricks: newPVEStorageProbeBricks()}, brickPVEStorageProbe)
+	err := brick.Run(ctx, state)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("storage probe brick error = %v, want %v", err, context.Canceled)
+	}
+	if state.pve.storageCollectionAborted {
+		t.Fatalf("storage collection should not be marked aborted for context cancellation")
+	}
+}
+
 func recipeBrickIDs(r recipe) []BrickID {
 	ids := make([]BrickID, 0, len(r.Bricks))
 	for _, brick := range r.Bricks {
 		ids = append(ids, brick.ID)
 	}
 	return ids
+}
+
+func TestRealRecipesHaveCompleteUniqueBricks(t *testing.T) {
+	recipes := []recipe{
+		newPVERecipe(),
+		newPBSRecipe(),
+		newPBSCommandsRecipe(),
+		newPBSDatastoreInventoryRecipe(),
+		newPBSDatastoreConfigRecipe(),
+		newPBSPXARRecipe(),
+		newPBSUserConfigRecipe(),
+		newSystemRecipe(),
+		newDualRecipe(),
+	}
+
+	for _, r := range recipes {
+		t.Run(r.Name, func(t *testing.T) {
+			if r.Name == "" {
+				t.Fatalf("recipe name is empty")
+			}
+			if len(r.Bricks) == 0 {
+				t.Fatalf("recipe %s has no bricks", r.Name)
+			}
+
+			seen := make(map[BrickID]int, len(r.Bricks))
+			for i, brick := range r.Bricks {
+				if brick.ID == "" {
+					t.Fatalf("recipe %s brick %d has empty ID", r.Name, i)
+				}
+				if brick.Description == "" {
+					t.Fatalf("recipe %s brick %s has empty description", r.Name, brick.ID)
+				}
+				if brick.Run == nil {
+					t.Fatalf("recipe %s brick %s has nil Run", r.Name, brick.ID)
+				}
+				if first, ok := seen[brick.ID]; ok {
+					t.Fatalf("recipe %s has duplicate brick ID %s at indexes %d and %d", r.Name, brick.ID, first, i)
+				}
+				seen[brick.ID] = i
+			}
+		})
+	}
 }
 
 func TestNewPVERecipeOrder(t *testing.T) {

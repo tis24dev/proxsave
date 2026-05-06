@@ -3,6 +3,7 @@ package environment
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -151,7 +152,11 @@ func TestContainsAny(t *testing.T) {
 // TestRunCommand tests command execution with timeout
 func TestRunCommand(t *testing.T) {
 	// Test successful command
-	output, err := runCommand("echo", "test")
+	echoPath, err := exec.LookPath("echo")
+	if err != nil {
+		t.Fatalf("LookPath(echo) failed: %v", err)
+	}
+	output, err := runCommand(echoPath, "test")
 	if err != nil {
 		t.Errorf("runCommand() error = %v", err)
 	}

@@ -167,6 +167,25 @@ func TestAppRunWithContext_NilContextRunsUntilStopped(t *testing.T) {
 	}
 }
 
+func TestAppRunWithContext_StopBeforeRunStopsWhenRunStarts(t *testing.T) {
+	app, _, _ := newSimulationApp(t)
+	app.Stop()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- app.RunWithContext(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("err=%v want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pre-run Stop to end RunWithContext")
+	}
+}
+
 func TestAppRunWithContext_ReturnsNilWhenStoppedWithoutCancellation(t *testing.T) {
 	app, _, started := newSimulationApp(t)
 	done := make(chan error, 1)

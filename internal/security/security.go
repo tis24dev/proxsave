@@ -21,6 +21,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -634,7 +635,11 @@ func (c *Checker) checkFirewall(ctx context.Context) {
 		return
 	}
 
-	cmd := exec.CommandContext(ctx, "iptables", "-L", "-n")
+	cmd, err := safeexec.CommandContext(ctx, "iptables", "-L", "-n")
+	if err != nil {
+		c.addWarning("Failed to prepare iptables command: %v", err)
+		return
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		c.addWarning("Failed to run iptables -L -n: %v", err)
@@ -664,7 +669,11 @@ func (c *Checker) checkOpenPorts(ctx context.Context) {
 		return
 	}
 
-	cmd := exec.CommandContext(ctx, "ss", "-tulnap")
+	cmd, err := safeexec.CommandContext(ctx, "ss", "-tulnap")
+	if err != nil {
+		c.addWarning("Failed to prepare 'ss -tulnap': %v", err)
+		return
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		c.addWarning("Failed to execute 'ss -tulnap': %v", err)
@@ -700,7 +709,10 @@ func (c *Checker) checkOpenPortsAgainstSuspiciousList(ctx context.Context) {
 	if _, err := exec.LookPath("ss"); err != nil {
 		return
 	}
-	cmd := exec.CommandContext(ctx, "ss", "-tuln")
+	cmd, err := safeexec.CommandContext(ctx, "ss", "-tuln")
+	if err != nil {
+		return
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		return
@@ -721,7 +733,11 @@ func (c *Checker) checkOpenPortsAgainstSuspiciousList(ctx context.Context) {
 }
 
 func (c *Checker) checkSuspiciousProcesses(ctx context.Context) {
-	cmd := exec.CommandContext(ctx, "ps", "-eo", "user=,state=,vsz=,pid=,command=")
+	cmd, err := safeexec.CommandContext(ctx, "ps", "-eo", "user=,state=,vsz=,pid=,command=")
+	if err != nil {
+		c.addWarning("Failed to prepare 'ps' for process inspection: %v", err)
+		return
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		c.addWarning("Failed to execute 'ps' for process inspection: %v", err)

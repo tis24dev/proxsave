@@ -63,6 +63,29 @@ func TestExtractTarEntry_BlocksPathTraversal(t *testing.T) {
 	}
 }
 
+func TestShouldSkipRestoreEntryTargetEtcPVEBoundary(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	header := &tar.Header{Name: "etc/pveuser.conf"}
+
+	for _, target := range []string{"/etc/pve", "/etc/pve/local.cfg"} {
+		skip, err := shouldSkipRestoreEntryTarget(header, target, string(os.PathSeparator), logger)
+		if err != nil {
+			t.Fatalf("shouldSkipRestoreEntryTarget(%q) error: %v", target, err)
+		}
+		if !skip {
+			t.Fatalf("expected %q to be skipped", target)
+		}
+	}
+
+	skip, err := shouldSkipRestoreEntryTarget(header, "/etc/pveuser.conf", string(os.PathSeparator), logger)
+	if err != nil {
+		t.Fatalf("shouldSkipRestoreEntryTarget false-positive path error: %v", err)
+	}
+	if skip {
+		t.Fatalf("did not expect /etc/pveuser.conf to match /etc/pve guard")
+	}
+}
+
 func TestExtractPlainArchive_WithFakeFS_RestoresFiles(t *testing.T) {
 	origRestoreFS := restoreFS
 	fakeFS := NewFakeFS()
@@ -748,6 +771,18 @@ func TestExtractDirectory_Success(t *testing.T) {
 // extractHardlink tests
 // --------------------------------------------------------------------------
 
+type recordingLinkFS struct {
+	*FakeFS
+	oldname string
+	newname string
+}
+
+func (f *recordingLinkFS) Link(oldname, newname string) error {
+	f.oldname = oldname
+	f.newname = newname
+	return f.FakeFS.Link(oldname, newname)
+}
+
 func TestExtractHardlink_AbsoluteTargetRejected(t *testing.T) {
 	header := &tar.Header{
 		Name:     "link",
@@ -771,6 +806,86 @@ func TestExtractHardlink_EscapesRoot(t *testing.T) {
 	err := extractHardlink("/tmp/dest/link", header, "/tmp/dest")
 	if err == nil || !strings.Contains(err.Error(), "escapes root") {
 		t.Fatalf("expected escape error, got: %v", err)
+	}
+}
+
+func TestExtractHardlink_UsesResolvedTargetPath(t *testing.T) {
+	orig := restoreFS
+	fakeFS := NewFakeFS()
+	recordingFS := &recordingLinkFS{FakeFS: fakeFS}
+	restoreFS = recordingFS
+	t.Cleanup(func() {
+		restoreFS = orig
+		_ = fakeFS.Cleanup()
+	})
+
+	destRoot := fakeFS.Root
+	realDir := filepath.Join(destRoot, "real")
+	if err := fakeFS.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("mkdir real dir: %v", err)
+	}
+	realTarget := filepath.Join(realDir, "target.txt")
+	if err := fakeFS.WriteFile(realTarget, []byte("test"), 0o644); err != nil {
+		t.Fatalf("write real target: %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(destRoot, "alias")); err != nil {
+		t.Fatalf("create alias symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "hardlink.txt",
+		Linkname: filepath.Join("alias", "target.txt"),
+		Typeflag: tar.TypeLink,
+	}
+	linkFile := filepath.Join(destRoot, header.Name)
+
+	if err := extractHardlink(linkFile, header, destRoot); err != nil {
+		t.Fatalf("extractHardlink failed: %v", err)
+	}
+	if recordingFS.oldname != realTarget {
+		t.Fatalf("hardlink source = %q, want resolved target %q", recordingFS.oldname, realTarget)
+	}
+	if recordingFS.newname != linkFile {
+		t.Fatalf("hardlink destination = %q, want %q", recordingFS.newname, linkFile)
+	}
+
+	realInfo, err := os.Stat(realTarget)
+	if err != nil {
+		t.Fatalf("stat real target: %v", err)
+	}
+	linkInfo, err := os.Stat(linkFile)
+	if err != nil {
+		t.Fatalf("stat hardlink: %v", err)
+	}
+	if !os.SameFile(realInfo, linkInfo) {
+		t.Fatalf("hardlink does not point to resolved target")
+	}
+}
+
+func TestExtractHardlink_RejectsSymlinkEscapeTarget(t *testing.T) {
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+
+	destRoot := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(destRoot, "escape-link")); err != nil {
+		t.Fatalf("create escape symlink: %v", err)
+	}
+
+	header := &tar.Header{
+		Name:     "link.txt",
+		Linkname: filepath.Join("escape-link", "target.txt"),
+		Typeflag: tar.TypeLink,
+	}
+	linkFile := filepath.Join(destRoot, header.Name)
+
+	err := extractHardlink(linkFile, header, destRoot)
+	if err == nil || !strings.Contains(err.Error(), "escapes root") {
+		t.Fatalf("expected escapes root error, got: %v", err)
+	}
+	if _, err := os.Lstat(linkFile); !os.IsNotExist(err) {
+		t.Fatalf("hardlink should not be created, got err=%v", err)
 	}
 }
 
@@ -1065,6 +1180,9 @@ nfs: nfs-backup
 	if blocks[0].ID != "local" || blocks[1].ID != "nfs-backup" {
 		t.Fatalf("unexpected block IDs: %v, %v", blocks[0].ID, blocks[1].ID)
 	}
+	if blocks[0].Type != "dir" || blocks[1].Type != "nfs" {
+		t.Fatalf("unexpected block types: %v, %v", blocks[0].Type, blocks[1].Type)
+	}
 }
 
 func TestParseStorageBlocks_LegacyStoragePrefix(t *testing.T) {
@@ -1091,6 +1209,9 @@ func TestParseStorageBlocks_LegacyStoragePrefix(t *testing.T) {
 	}
 	if blocks[0].ID != "local" {
 		t.Fatalf("unexpected block ID: %v", blocks[0].ID)
+	}
+	if blocks[0].Type != "" {
+		t.Fatalf("legacy storage block type = %q, want empty because type is in entries", blocks[0].Type)
 	}
 }
 
@@ -1232,14 +1353,42 @@ func TestReadVMName_FileNotFound(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// detectNodeForVM tests
+// localNodeName tests
 // --------------------------------------------------------------------------
 
-func TestDetectNodeForVM_ReturnsHostname(t *testing.T) {
-	node := detectNodeForVM()
-	// detectNodeForVM returns the current hostname, not the node from path
+func TestLocalNodeName_ReturnsHostname(t *testing.T) {
+	node := localNodeName()
 	if node == "" {
 		t.Fatalf("expected non-empty node from hostname")
+	}
+}
+
+func TestPveshArgsFromColonConfigLinesStopsAtSectionHeader(t *testing.T) {
+	args := pveshArgsFromColonConfigLines([]string{
+		"name: vm100",
+		"memory: 2048",
+		"[snapshot]",
+		"parent: base",
+		"snaptime: 123",
+	})
+
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "--name=vm100") || !strings.Contains(got, "--memory=2048") {
+		t.Fatalf("expected pre-section args, got %v", args)
+	}
+	if strings.Contains(got, "parent") || strings.Contains(got, "snaptime") {
+		t.Fatalf("snapshot section args must be ignored, got %v", args)
+	}
+}
+
+func TestPveshCreateGuestArgsIncludesLXCOstemplate(t *testing.T) {
+	args, err := pveshCreateGuestArgs("node1", vmEntry{VMID: "101", Kind: "lxc"}, []string{"--hostname=ct101", "--ostemplate=local:vztmpl/debian.tar.zst"})
+	if err != nil {
+		t.Fatalf("pveshCreateGuestArgs error = %v", err)
+	}
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "create /nodes/node1/lxc --vmid=101") || !strings.Contains(got, "--ostemplate=local:vztmpl/debian.tar.zst") {
+		t.Fatalf("unexpected create args: %v", args)
 	}
 }
 

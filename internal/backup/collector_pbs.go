@@ -80,6 +80,9 @@ func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 	if err := runRecipe(ctx, newPBSRecipe(), state); err != nil {
 		return err
 	}
+	if err := runRecipe(ctx, newPBSUserConfigRecipe(), state); err != nil {
+		return err
+	}
 
 	c.logger.Info("PBS configuration collection completed")
 	return nil
@@ -270,7 +273,7 @@ func (c *Collector) collectPBSManifestPrune(ctx context.Context, root string) er
 
 func (c *Collector) collectPBSCoreRuntime(ctx context.Context, commandsDir string) error {
 	if err := c.collectCommandMulti(ctx,
-		"proxmox-backup-manager version",
+		commandSpec("proxmox-backup-manager", "version"),
 		filepath.Join(commandsDir, "pbs_version.txt"),
 		"PBS version",
 		true); err != nil {
@@ -282,7 +285,7 @@ func (c *Collector) collectPBSCoreRuntime(ctx context.Context, commandsDir strin
 func (c *Collector) collectPBSNodeRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupPBSNodeConfig {
 		c.safeCmdOutput(ctx,
-			"proxmox-backup-manager node show --output-format=json",
+			commandSpec("proxmox-backup-manager", "node", "show", "--output-format=json"),
 			filepath.Join(commandsDir, "node_config.json"),
 			"Node configuration",
 			false)
@@ -293,7 +296,7 @@ func (c *Collector) collectPBSNodeRuntime(ctx context.Context, commandsDir strin
 func (c *Collector) collectPBSNetworkRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupPBSNetworkConfig {
 		c.safeCmdOutput(ctx,
-			"proxmox-backup-manager network list --output-format=json",
+			commandSpec("proxmox-backup-manager", "network", "list", "--output-format=json"),
 			filepath.Join(commandsDir, "network_list.json"),
 			"Network configuration",
 			false)
@@ -303,7 +306,7 @@ func (c *Collector) collectPBSNetworkRuntime(ctx context.Context, commandsDir st
 
 func (c *Collector) collectPBSDatastoreListRuntime(ctx context.Context, commandsDir string) error {
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager datastore list --output-format=json",
+		commandSpec("proxmox-backup-manager", "datastore", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "datastore_list.json"),
 		"Datastore list",
 		false)
@@ -325,7 +328,7 @@ func (c *Collector) collectPBSDatastoreStatusRuntime(ctx context.Context, comman
 		}
 		dsKey := ds.pathKey()
 		c.safeCmdOutput(ctx,
-			fmt.Sprintf("proxmox-backup-manager datastore show %s --output-format=json", cliName),
+			commandSpec("proxmox-backup-manager", "datastore", "show", cliName, "--output-format=json"),
 			filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", dsKey)),
 			fmt.Sprintf("Datastore %s status", ds.Name),
 			false)
@@ -338,7 +341,7 @@ func (c *Collector) collectPBSAcmeAccountsListRuntime(ctx context.Context, comma
 		return nil, nil
 	}
 	raw, err := c.captureCommandOutput(ctx,
-		"proxmox-backup-manager acme account list --output-format=json",
+		commandSpec("proxmox-backup-manager", "acme", "account", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "acme_accounts.json"),
 		"ACME accounts",
 		false)
@@ -359,7 +362,7 @@ func (c *Collector) collectPBSAcmeAccountInfoRuntime(ctx context.Context, comman
 	for _, name := range uniqueSortedStrings(accountNames) {
 		out := filepath.Join(commandsDir, fmt.Sprintf("acme_account_%s_info.json", sanitizeFilename(name)))
 		c.collectCommandOptional(ctx,
-			fmt.Sprintf("proxmox-backup-manager acme account info %s --output-format=json", name),
+			commandSpec("proxmox-backup-manager", "acme", "account", "info", name, "--output-format=json"),
 			out,
 			fmt.Sprintf("ACME account info (%s)", name))
 	}
@@ -371,7 +374,7 @@ func (c *Collector) collectPBSAcmePluginsListRuntime(ctx context.Context, comman
 		return nil, nil
 	}
 	raw, err := c.captureCommandOutput(ctx,
-		"proxmox-backup-manager acme plugin list --output-format=json",
+		commandSpec("proxmox-backup-manager", "acme", "plugin", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "acme_plugins.json"),
 		"ACME plugins",
 		false)
@@ -392,7 +395,7 @@ func (c *Collector) collectPBSAcmePluginConfigRuntime(ctx context.Context, comma
 	for _, id := range uniqueSortedStrings(pluginIDs) {
 		out := filepath.Join(commandsDir, fmt.Sprintf("acme_plugin_%s_config.json", sanitizeFilename(id)))
 		c.collectCommandOptional(ctx,
-			fmt.Sprintf("proxmox-backup-manager acme plugin config %s --output-format=json", id),
+			commandSpec("proxmox-backup-manager", "acme", "plugin", "config", id, "--output-format=json"),
 			out,
 			fmt.Sprintf("ACME plugin config (%s)", id))
 	}
@@ -404,7 +407,7 @@ func (c *Collector) collectPBSNotificationTargetsRuntime(ctx context.Context, co
 		return nil
 	}
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager notification target list --output-format=json",
+		commandSpec("proxmox-backup-manager", "notification", "target", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "notification_targets.json"),
 		"Notification targets",
 		false)
@@ -415,7 +418,7 @@ func (c *Collector) collectPBSNotificationMatchersRuntime(ctx context.Context, c
 		return nil
 	}
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager notification matcher list --output-format=json",
+		commandSpec("proxmox-backup-manager", "notification", "matcher", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "notification_matchers.json"),
 		"Notification matchers",
 		false)
@@ -426,7 +429,7 @@ func (c *Collector) collectPBSNotificationEndpointRuntime(ctx context.Context, c
 		return nil
 	}
 	return c.collectCommandMulti(ctx,
-		fmt.Sprintf("proxmox-backup-manager notification endpoint %s list --output-format=json", typ),
+		commandSpec("proxmox-backup-manager", "notification", "endpoint", typ, "list", "--output-format=json"),
 		filepath.Join(commandsDir, fmt.Sprintf("notification_endpoints_%s.json", typ)),
 		fmt.Sprintf("Notification endpoints (%s)", typ),
 		false)
@@ -453,7 +456,7 @@ func (c *Collector) collectPBSAccessUsersRuntime(ctx context.Context, commandsDi
 		return nil, nil
 	}
 	raw, err := c.captureCommandOutput(ctx,
-		"proxmox-backup-manager user list --output-format=json",
+		commandSpec("proxmox-backup-manager", "user", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "user_list.json"),
 		"User list",
 		false)
@@ -467,23 +470,23 @@ func (c *Collector) collectPBSAccessUsersRuntime(ctx context.Context, commandsDi
 	return ids, nil
 }
 
-func (c *Collector) collectPBSAccessRealmRuntime(ctx context.Context, commandsDir, cmd, out, desc string) error {
+func (c *Collector) collectPBSAccessRealmRuntime(ctx context.Context, commandsDir string, spec CommandSpec, out, desc string) error {
 	if !c.config.BackupUserConfigs {
 		return nil
 	}
-	return c.collectCommandMulti(ctx, cmd, filepath.Join(commandsDir, out), desc, false)
+	return c.collectCommandMulti(ctx, spec, filepath.Join(commandsDir, out), desc, false)
 }
 
 func (c *Collector) collectPBSAccessRealmLDAPRuntime(ctx context.Context, commandsDir string) error {
-	return c.collectPBSAccessRealmRuntime(ctx, commandsDir, "proxmox-backup-manager ldap list --output-format=json", "realms_ldap.json", "LDAP realms")
+	return c.collectPBSAccessRealmRuntime(ctx, commandsDir, commandSpec("proxmox-backup-manager", "ldap", "list", "--output-format=json"), "realms_ldap.json", "LDAP realms")
 }
 
 func (c *Collector) collectPBSAccessRealmADRuntime(ctx context.Context, commandsDir string) error {
-	return c.collectPBSAccessRealmRuntime(ctx, commandsDir, "proxmox-backup-manager ad list --output-format=json", "realms_ad.json", "Active Directory realms")
+	return c.collectPBSAccessRealmRuntime(ctx, commandsDir, commandSpec("proxmox-backup-manager", "ad", "list", "--output-format=json"), "realms_ad.json", "Active Directory realms")
 }
 
 func (c *Collector) collectPBSAccessRealmOpenIDRuntime(ctx context.Context, commandsDir string) error {
-	return c.collectPBSAccessRealmRuntime(ctx, commandsDir, "proxmox-backup-manager openid list --output-format=json", "realms_openid.json", "OpenID realms")
+	return c.collectPBSAccessRealmRuntime(ctx, commandsDir, commandSpec("proxmox-backup-manager", "openid", "list", "--output-format=json"), "realms_openid.json", "OpenID realms")
 }
 
 func (c *Collector) collectPBSAccessACLRuntime(ctx context.Context, commandsDir string) error {
@@ -491,7 +494,7 @@ func (c *Collector) collectPBSAccessACLRuntime(ctx context.Context, commandsDir 
 		return nil
 	}
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager acl list --output-format=json",
+		commandSpec("proxmox-backup-manager", "acl", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "acl_list.json"),
 		"ACL list",
 		false)
@@ -519,7 +522,7 @@ func (c *Collector) collectPBSRemotesRuntime(ctx context.Context, commandsDir st
 		return nil
 	}
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager remote list --output-format=json",
+		commandSpec("proxmox-backup-manager", "remote", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "remote_list.json"),
 		"Remote list",
 		false)
@@ -530,7 +533,7 @@ func (c *Collector) collectPBSSyncJobsRuntime(ctx context.Context, commandsDir s
 		return nil
 	}
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager sync-job list --output-format=json",
+		commandSpec("proxmox-backup-manager", "sync-job", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "sync_jobs.json"),
 		"Sync jobs",
 		false)
@@ -541,7 +544,7 @@ func (c *Collector) collectPBSVerificationJobsRuntime(ctx context.Context, comma
 		return nil
 	}
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager verify-job list --output-format=json",
+		commandSpec("proxmox-backup-manager", "verify-job", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "verification_jobs.json"),
 		"Verification jobs",
 		false)
@@ -552,7 +555,7 @@ func (c *Collector) collectPBSPruneJobsRuntime(ctx context.Context, commandsDir 
 		return nil
 	}
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager prune-job list --output-format=json",
+		commandSpec("proxmox-backup-manager", "prune-job", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "prune_jobs.json"),
 		"Prune jobs",
 		false)
@@ -560,7 +563,7 @@ func (c *Collector) collectPBSPruneJobsRuntime(ctx context.Context, commandsDir 
 
 func (c *Collector) collectPBSGCJobsRuntime(ctx context.Context, commandsDir string) error {
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager garbage-collection list --output-format=json",
+		commandSpec("proxmox-backup-manager", "garbage-collection", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "gc_jobs.json"),
 		"Garbage collection jobs",
 		false)
@@ -575,7 +578,7 @@ func (c *Collector) collectPBSTapeDrivesRuntime(ctx context.Context, commandsDir
 		return nil
 	}
 	c.safeCmdOutput(ctx,
-		"proxmox-tape drive list --output-format=json",
+		commandSpec("proxmox-tape", "drive", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "tape_drives.json"),
 		"Tape drives",
 		false)
@@ -587,7 +590,7 @@ func (c *Collector) collectPBSTapeChangersRuntime(ctx context.Context, commandsD
 		return nil
 	}
 	c.safeCmdOutput(ctx,
-		"proxmox-tape changer list --output-format=json",
+		commandSpec("proxmox-tape", "changer", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "tape_changers.json"),
 		"Tape changers",
 		false)
@@ -599,7 +602,7 @@ func (c *Collector) collectPBSTapePoolsRuntime(ctx context.Context, commandsDir 
 		return nil
 	}
 	c.safeCmdOutput(ctx,
-		"proxmox-tape pool list --output-format=json",
+		commandSpec("proxmox-tape", "pool", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "tape_pools.json"),
 		"Tape pools",
 		false)
@@ -608,7 +611,7 @@ func (c *Collector) collectPBSTapePoolsRuntime(ctx context.Context, commandsDir 
 
 func (c *Collector) collectPBSDisksRuntime(ctx context.Context, commandsDir string) error {
 	c.safeCmdOutput(ctx,
-		"proxmox-backup-manager disk list --output-format=json",
+		commandSpec("proxmox-backup-manager", "disk", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "disk_list.json"),
 		"Disk list",
 		false)
@@ -617,7 +620,7 @@ func (c *Collector) collectPBSDisksRuntime(ctx context.Context, commandsDir stri
 
 func (c *Collector) collectPBSCertInfoRuntime(ctx context.Context, commandsDir string) error {
 	return c.collectCommandMulti(ctx,
-		"proxmox-backup-manager cert info",
+		commandSpec("proxmox-backup-manager", "cert", "info"),
 		filepath.Join(commandsDir, "cert_info.txt"),
 		"Certificate information",
 		false)
@@ -628,7 +631,7 @@ func (c *Collector) collectPBSTrafficControlRuntime(ctx context.Context, command
 		return nil
 	}
 	c.safeCmdOutput(ctx,
-		"proxmox-backup-manager traffic-control list --output-format=json",
+		commandSpec("proxmox-backup-manager", "traffic-control", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "traffic_control.json"),
 		"Traffic control rules",
 		false)
@@ -637,7 +640,7 @@ func (c *Collector) collectPBSTrafficControlRuntime(ctx context.Context, command
 
 func (c *Collector) collectPBSRecentTasksRuntime(ctx context.Context, commandsDir string) error {
 	c.safeCmdOutput(ctx,
-		"proxmox-backup-manager task list --limit 50 --output-format=json",
+		commandSpec("proxmox-backup-manager", "task", "list", "--limit", "50", "--output-format=json"),
 		filepath.Join(commandsDir, "recent_tasks.json"),
 		"Recent tasks",
 		false)
@@ -649,7 +652,7 @@ func (c *Collector) collectPBSS3EndpointsRuntime(ctx context.Context, commandsDi
 		return nil, nil
 	}
 	raw, err := c.captureCommandOutput(ctx,
-		"proxmox-backup-manager s3 endpoint list --output-format=json",
+		commandSpec("proxmox-backup-manager", "s3", "endpoint", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "s3_endpoints.json"),
 		"S3 endpoints",
 		false)
@@ -670,7 +673,7 @@ func (c *Collector) collectPBSS3EndpointBucketsRuntime(ctx context.Context, comm
 	for _, id := range uniqueSortedStrings(endpointIDs) {
 		out := filepath.Join(commandsDir, fmt.Sprintf("s3_endpoint_%s_buckets.json", sanitizeFilename(id)))
 		c.collectCommandOptional(ctx,
-			fmt.Sprintf("proxmox-backup-manager s3 endpoint list-buckets %s --output-format=json", id),
+			commandSpec("proxmox-backup-manager", "s3", "endpoint", "list-buckets", id, "--output-format=json"),
 			out,
 			fmt.Sprintf("S3 endpoint buckets (%s)", id))
 	}
@@ -738,8 +741,8 @@ func (c *Collector) collectPBSUserTokensForIDs(ctx context.Context, usersDir str
 	aggregated := make(map[string]json.RawMessage)
 	for _, id := range uniqueSortedStrings(userIDs) {
 		tokenPath := filepath.Join(usersDir, fmt.Sprintf("%s_tokens.json", sanitizeFilename(id)))
-		cmd := fmt.Sprintf("proxmox-backup-manager user list-tokens %s --output-format=json", id)
-		if err := c.safeCmdOutput(ctx, cmd, tokenPath, fmt.Sprintf("API tokens for %s", id), false); err != nil {
+		spec := commandSpec("proxmox-backup-manager", "user", "list-tokens", id, "--output-format=json")
+		if err := c.safeCmdOutput(ctx, spec, tokenPath, fmt.Sprintf("API tokens for %s", id), false); err != nil {
 			c.logger.Debug("Token export skipped for %s: %v", id, err)
 			continue
 		}

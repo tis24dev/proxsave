@@ -14,8 +14,6 @@ import (
 )
 
 func TestGuardDirForTarget(t *testing.T) {
-	t.Parallel()
-
 	target := "/mnt/datastore"
 	sum := sha256.Sum256([]byte(target))
 	id := fmt.Sprintf("%x", sum[:8])
@@ -34,8 +32,6 @@ func TestGuardDirForTarget(t *testing.T) {
 }
 
 func TestIsMountedFromMountinfo(t *testing.T) {
-	t.Parallel()
-
 	mountinfo := strings.Join([]string{
 		"36 25 0:32 / / rw,relatime - ext4 /dev/sda1 rw",
 		`37 36 0:33 / /mnt/pbs\040datastore rw,relatime - ext4 /dev/sdb1 rw`,
@@ -98,8 +94,6 @@ func TestFstabMountpointsSet_Error(t *testing.T) {
 }
 
 func TestSplitPathAndMountRootWithPrefix(t *testing.T) {
-	t.Parallel()
-
 	if got := splitPath("a//b/ /c/"); strings.Join(got, ",") != "a,b,c" {
 		t.Fatalf("splitPath unexpected: %#v", got)
 	}
@@ -112,8 +106,6 @@ func TestSplitPathAndMountRootWithPrefix(t *testing.T) {
 }
 
 func TestSortByLengthDesc(t *testing.T) {
-	t.Parallel()
-
 	items := []string{"a", "abc", "ab"}
 	sortByLengthDesc(items)
 	if len(items) != 3 {
@@ -125,8 +117,6 @@ func TestSortByLengthDesc(t *testing.T) {
 }
 
 func TestFirstFstabMountpointMatch(t *testing.T) {
-	t.Parallel()
-
 	mountpoints := []string{"/mnt/storage/pbs", "/mnt/storage", "/"}
 	if got := firstFstabMountpointMatch("/mnt/storage/pbs/ds1/data", mountpoints); got != "/mnt/storage/pbs" {
 		t.Fatalf("firstFstabMountpointMatch got %q want %q", got, "/mnt/storage/pbs")

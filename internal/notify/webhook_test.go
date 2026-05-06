@@ -658,7 +658,8 @@ func TestWebhookNotifier_buildPayload_CoversFormats(t *testing.T) {
 	for _, format := range formats {
 		format := format
 		t.Run(format, func(t *testing.T) {
-			payload, err := notifier.buildPayload(format, data)
+			ep := config.WebhookEndpoint{Name: "x", URL: "https://example.com", Format: format}
+			payload, err := notifier.buildPayload(ep, data)
 			if err != nil {
 				t.Fatalf("buildPayload(%q) error = %v", format, err)
 			}
@@ -1066,6 +1067,293 @@ func TestMaskHeaderValue(t *testing.T) {
 			}
 			if tt.expected == tt.value && result != tt.expected {
 				t.Errorf("maskHeaderValue(%s, %s) = %s, want %s", tt.key, tt.value, result, tt.expected)
+			}
+		})
+	}
+}
+
+func pushoverTestEndpoint(priority int) config.WebhookEndpoint {
+	return config.WebhookEndpoint{
+		Name:     "pushover",
+		URL:      "https://api.pushover.net/1/messages.json",
+		Format:   "pushover",
+		Method:   "POST",
+		Auth:     config.WebhookAuth{Type: "none", Token: "app-token-abc", User: "user-key-xyz"},
+		Priority: priority,
+	}
+}
+
+func TestBuildPushoverPayload_Success(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+
+	payload, err := buildPushoverPayload(pushoverTestEndpoint(0), data, logger)
+	if err != nil {
+		t.Fatalf("buildPushoverPayload() error: %v", err)
+	}
+
+	if got := payload["token"]; got != "app-token-abc" {
+		t.Errorf("token = %v, want app-token-abc", got)
+	}
+	if got := payload["user"]; got != "user-key-xyz" {
+		t.Errorf("user = %v, want user-key-xyz", got)
+	}
+	if got := payload["priority"]; got != 0 {
+		t.Errorf("priority = %v, want 0", got)
+	}
+
+	title, ok := payload["title"].(string)
+	if !ok {
+		t.Fatalf("title is not a string: %T", payload["title"])
+	}
+	if !strings.Contains(title, data.Hostname) {
+		t.Errorf("title %q does not contain hostname %q", title, data.Hostname)
+	}
+	if !strings.Contains(title, GetStatusEmoji(data.Status)) {
+		t.Errorf("title %q does not contain status emoji", title)
+	}
+
+	message, ok := payload["message"].(string)
+	if !ok {
+		t.Fatalf("message is not a string: %T", payload["message"])
+	}
+	for _, want := range []string{"Status:", "Duration:", "Size:", "Errors:", "Warnings:"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("message missing %q; got %q", want, message)
+		}
+	}
+}
+
+func TestBuildPushoverPayload_MissingToken(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+	ep := pushoverTestEndpoint(0)
+	ep.Auth.Token = ""
+
+	_, err := buildPushoverPayload(ep, data, logger)
+	if err == nil {
+		t.Fatal("expected error for missing token, got nil")
+	}
+	if !strings.Contains(err.Error(), "AUTH_TOKEN") {
+		t.Errorf("error %q does not mention AUTH_TOKEN", err.Error())
+	}
+}
+
+func TestBuildPushoverPayload_MissingUser(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+	ep := pushoverTestEndpoint(0)
+	ep.Auth.User = ""
+
+	_, err := buildPushoverPayload(ep, data, logger)
+	if err == nil {
+		t.Fatal("expected error for missing user, got nil")
+	}
+	if !strings.Contains(err.Error(), "AUTH_USER") {
+		t.Errorf("error %q does not mention AUTH_USER", err.Error())
+	}
+}
+
+func TestBuildPushoverPayload_TitleTruncated(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+	data.Hostname = strings.Repeat("h", 300)
+
+	payload, err := buildPushoverPayload(pushoverTestEndpoint(0), data, logger)
+	if err != nil {
+		t.Fatalf("buildPushoverPayload() error: %v", err)
+	}
+
+	title := payload["title"].(string)
+	if got := len([]rune(title)); got > 250 {
+		t.Errorf("title rune length = %d, want <= 250", got)
+	}
+	if !strings.HasSuffix(title, "…") {
+		t.Errorf("truncated title should end with ellipsis; got %q", title)
+	}
+}
+
+func TestBuildPushoverPayload_MessageTruncated(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+	data.StatusMessage = strings.Repeat("x", 1100)
+
+	payload, err := buildPushoverPayload(pushoverTestEndpoint(0), data, logger)
+	if err != nil {
+		t.Fatalf("buildPushoverPayload() error: %v", err)
+	}
+
+	message := payload["message"].(string)
+	if got := len([]rune(message)); got > 1024 {
+		t.Errorf("message rune length = %d, want <= 1024", got)
+	}
+	if !strings.HasSuffix(message, "…") {
+		t.Errorf("truncated message should end with ellipsis; got %q", message)
+	}
+}
+
+func TestBuildPushoverPayload_PriorityPassthrough(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+
+	for _, p := range []int{-2, -1, 0, 1} {
+		payload, err := buildPushoverPayload(pushoverTestEndpoint(p), data, logger)
+		if err != nil {
+			t.Fatalf("priority=%d: buildPushoverPayload() error: %v", p, err)
+		}
+		if got := payload["priority"]; got != p {
+			t.Errorf("priority=%d: got %v", p, got)
+		}
+	}
+}
+
+func TestNewWebhookNotifier_PushoverPriority(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	tests := []struct {
+		name        string
+		priority    int
+		expectError bool
+	}{
+		{"min valid", -2, false},
+		{"zero", 0, false},
+		{"max valid", 1, false},
+		{"too low", -3, true},
+		{"emergency rejected", 2, true},
+		{"too high", 3, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.WebhookConfig{
+				Enabled:       true,
+				DefaultFormat: "pushover",
+				Timeout:       30,
+				Endpoints:     []config.WebhookEndpoint{pushoverTestEndpoint(tt.priority)},
+			}
+			_, err := NewWebhookNotifier(cfg, logger)
+			if tt.expectError {
+				if err == nil {
+					t.Fatalf("priority=%d: expected error, got nil", tt.priority)
+				}
+				if !strings.Contains(err.Error(), "PRIORITY") {
+					t.Errorf("error %q does not mention PRIORITY", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("priority=%d: unexpected error: %v", tt.priority, err)
+			}
+		})
+	}
+}
+
+func TestNewWebhookNotifier_PushoverPriority_UsesDefaultFormat(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	ep := pushoverTestEndpoint(2)
+	ep.Format = ""
+
+	cfg := &config.WebhookConfig{
+		Enabled:       true,
+		DefaultFormat: "pushover",
+		Timeout:       30,
+		Endpoints:     []config.WebhookEndpoint{ep},
+	}
+
+	_, err := NewWebhookNotifier(cfg, logger)
+	if err == nil {
+		t.Fatal("expected error for invalid pushover priority resolved from default format, got nil")
+	}
+	if !strings.Contains(err.Error(), "PRIORITY") {
+		t.Fatalf("error %q does not mention PRIORITY", err.Error())
+	}
+}
+
+func TestNewWebhookNotifier_PushoverMethod(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	tests := []struct {
+		name          string
+		method        string
+		format        string
+		defaultFormat string
+		expectError   bool
+	}{
+		{name: "explicit post", method: "POST", format: "pushover", expectError: false},
+		{name: "implicit post", method: "", format: "pushover", expectError: false},
+		{name: "default format post", method: "", format: "", defaultFormat: "pushover", expectError: false},
+		{name: "get rejected", method: "GET", format: "pushover", expectError: true},
+		{name: "head rejected", method: "HEAD", format: "pushover", expectError: true},
+		{name: "put rejected", method: "PUT", format: "pushover", expectError: true},
+		{name: "default format get rejected", method: "GET", format: "", defaultFormat: "pushover", expectError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := pushoverTestEndpoint(0)
+			ep.Method = tt.method
+			ep.Format = tt.format
+
+			cfg := &config.WebhookConfig{
+				Enabled:       true,
+				DefaultFormat: tt.defaultFormat,
+				Timeout:       30,
+				Endpoints:     []config.WebhookEndpoint{ep},
+			}
+
+			_, err := NewWebhookNotifier(cfg, logger)
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), "METHOD must be POST") {
+					t.Fatalf("error %q does not mention POST method requirement", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewWebhookNotifier_PushoverAuthRequired(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	tests := []struct {
+		name    string
+		token   string
+		user    string
+		missing string
+	}{
+		{name: "missing token", token: "", user: "user-key-xyz", missing: "missing token"},
+		{name: "missing user", token: "app-token-abc", user: "", missing: "missing user"},
+		{name: "missing both", token: "", user: "", missing: "missing token/user"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := pushoverTestEndpoint(0)
+			ep.Auth.Token = tt.token
+			ep.Auth.User = tt.user
+
+			cfg := &config.WebhookConfig{
+				Enabled:   true,
+				Timeout:   30,
+				Endpoints: []config.WebhookEndpoint{ep},
+			}
+
+			_, err := NewWebhookNotifier(cfg, logger)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), "Pushover requires Auth.Token and Auth.User") {
+				t.Fatalf("error %q does not mention Pushover auth requirement", err.Error())
+			}
+			if !strings.Contains(err.Error(), tt.missing) {
+				t.Fatalf("error %q does not mention %q", err.Error(), tt.missing)
 			}
 		})
 	}

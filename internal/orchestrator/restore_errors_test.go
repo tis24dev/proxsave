@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestRunRestoreCommandStream_UsesStreamingRunner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createXZReader: %v", err)
 	}
-	defer reader.(io.Closer).Close()
+	defer reader.Close()
 
 	buf, err := io.ReadAll(reader)
 	if err != nil {
@@ -550,9 +551,11 @@ func TestApplyStorageCfg_WithMultipleBlocks(t *testing.T) {
 	// Write storage config with multiple blocks
 	cfgPath := filepath.Join(t.TempDir(), "storage.cfg")
 	content := `storage: local
+	type dir
 	path /var/lib/vz
 
 storage: backup
+	type nfs
 	path /mnt/backup
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
@@ -569,6 +572,16 @@ storage: backup
 	if applied != 2 {
 		t.Fatalf("expected 2 applied, got %d (failed=%d)", applied, failed)
 	}
+	calls := strings.Join(restoreCmd.(*FakeCommandRunner).CallsList(), "\n")
+	if strings.Contains(calls, " -conf ") {
+		t.Fatalf("storage apply must not use -conf; calls=%s", calls)
+	}
+	if !strings.Contains(calls, "pvesh create /storage --storage=local --type=dir --path=/var/lib/vz") {
+		t.Fatalf("missing local storage args; calls=%s", calls)
+	}
+	if !strings.Contains(calls, "pvesh create /storage --storage=backup --type=nfs --path=/mnt/backup") {
+		t.Fatalf("missing backup storage args; calls=%s", calls)
+	}
 }
 
 func TestApplyStorageCfg_PveshError(t *testing.T) {
@@ -582,6 +595,7 @@ func TestApplyStorageCfg_PveshError(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "storage.cfg")
 	content := `storage: local
+	type dir
 	path /var/lib/vz
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
@@ -881,6 +895,12 @@ func (f *ErrorInjectingFS) MkdirTemp(dir, pattern string) (string, error) {
 }
 func (f *ErrorInjectingFS) Rename(oldpath, newpath string) error {
 	return f.base.Rename(oldpath, newpath)
+}
+func (f *ErrorInjectingFS) Lchown(path string, uid, gid int) error {
+	return f.base.Lchown(path, uid, gid)
+}
+func (f *ErrorInjectingFS) UtimesNano(path string, times []syscall.Timespec) error {
+	return f.base.UtimesNano(path, times)
 }
 
 func (f *ErrorInjectingFS) MkdirAll(path string, perm os.FileMode) error {
@@ -1704,6 +1724,49 @@ func TestApplyVMConfigs_SuccessfulApply(t *testing.T) {
 	if applied != 1 || failed != 0 {
 		t.Fatalf("expected (1,0), got (%d,%d)", applied, failed)
 	}
+	calls := strings.Join(fake.CallsList(), "\n")
+	if strings.Contains(calls, "--filename") {
+		t.Fatalf("VM apply must not use --filename; calls=%s", calls)
+	}
+	if !strings.Contains(calls, "pvesh set /nodes/") || !strings.Contains(calls, "/qemu/100/config --name=test-vm") {
+		t.Fatalf("missing VM config args; calls=%s", calls)
+	}
+}
+
+func TestApplyVMConfigs_CreatesMissingGuestBeforeSet(t *testing.T) {
+	orig := restoreCmd
+	t.Cleanup(func() { restoreCmd = orig })
+
+	node := localNodeName()
+	getCall := fmt.Sprintf("pvesh get /nodes/%s/qemu/100/config", node)
+	fake := &FakeCommandRunner{
+		Outputs: map[string][]byte{},
+		Errors: map[string]error{
+			getCall: fmt.Errorf("not found"),
+		},
+	}
+	restoreCmd = fake
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "100.conf")
+	if err := os.WriteFile(configPath, []byte("name: test-vm"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	entries := []vmEntry{{VMID: "100", Kind: "qemu", Path: configPath}}
+	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+	applied, failed := applyVMConfigs(context.Background(), entries, logger)
+
+	if applied != 1 || failed != 0 {
+		t.Fatalf("expected (1,0), got (%d,%d)", applied, failed)
+	}
+	calls := strings.Join(fake.CallsList(), "\n")
+	if !strings.Contains(calls, fmt.Sprintf("pvesh create /nodes/%s/qemu --vmid=100", node)) {
+		t.Fatalf("missing create call; calls=%s", calls)
+	}
+	if !strings.Contains(calls, fmt.Sprintf("pvesh set /nodes/%s/qemu/100/config --name=test-vm", node)) {
+		t.Fatalf("missing set call; calls=%s", calls)
+	}
 }
 
 // --------------------------------------------------------------------------
@@ -1906,7 +1969,12 @@ func TestExtractArchiveNative_OpenError(t *testing.T) {
 	restoreFS = osFS{}
 
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-	err := extractArchiveNative(context.Background(), "/nonexistent/archive.tar", "/tmp", logger, nil, RestoreModeFull, nil, "", nil)
+	err := extractArchiveNative(context.Background(), restoreArchiveOptions{
+		archivePath: "/nonexistent/archive.tar",
+		destRoot:    "/tmp",
+		logger:      logger,
+		mode:        RestoreModeFull,
+	})
 	if err == nil || !strings.Contains(err.Error(), "open archive") {
 		t.Fatalf("expected open error, got: %v", err)
 	}

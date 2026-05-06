@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -574,4 +575,54 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	logger.Debug("Generic payload built successfully with %d top-level keys", len(payload))
 	return payload, nil
+}
+
+// buildPushoverPayload builds a Pushover-formatted webhook payload.
+// Pushover requires the application token and user/group key in the JSON body
+// (not in headers); this builder reads them from endpoint.Auth.Token and
+// endpoint.Auth.User and rejects requests where either is missing.
+func buildPushoverPayload(endpoint config.WebhookEndpoint, data *NotificationData, logger *logging.Logger) (map[string]interface{}, error) {
+	logger.Debug("buildPushoverPayload() starting...")
+
+	if endpoint.Auth.Token == "" {
+		return nil, fmt.Errorf("pushover: AUTH_TOKEN (Pushover application token) is required")
+	}
+	if endpoint.Auth.User == "" {
+		return nil, fmt.Errorf("pushover: AUTH_USER (Pushover user/group key) is required")
+	}
+
+	title := truncateRunes(fmt.Sprintf("%s Proxmox Backup — %s", GetStatusEmoji(data.Status), data.Hostname), 250)
+
+	message := truncateRunes(fmt.Sprintf(
+		"Status: %s\nDuration: %s\nSize: %s\nErrors: %d | Warnings: %d",
+		data.StatusMessage,
+		FormatDuration(data.BackupDuration),
+		data.BackupSizeHR,
+		data.ErrorCount,
+		data.WarningCount,
+	), 1024)
+
+	payload := map[string]interface{}{
+		"token":    endpoint.Auth.Token,
+		"user":     endpoint.Auth.User,
+		"title":    title,
+		"message":  message,
+		"priority": endpoint.Priority,
+	}
+
+	logger.Debug("Pushover payload built (priority=%d, title_len=%d, message_len=%d)", endpoint.Priority, len([]rune(title)), len([]rune(message)))
+	return payload, nil
+}
+
+// truncateRunes shortens s to at most max runes, suffixing with "…" when cut.
+// Operates on runes (not bytes) so multibyte characters like emoji are not split.
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max-1]) + "…"
 }

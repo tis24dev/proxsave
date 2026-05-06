@@ -275,7 +275,7 @@ func TestArmHARollback_CoversSchedulingPaths(t *testing.T) {
 			t.Fatalf("expected backup path in script, got:\n%s", string(script))
 		}
 
-		wantBackground := "sh -c nohup sh -c 'sleep 2; /bin/sh " + handle.scriptPath + "' >/dev/null 2>&1 &"
+		wantBackground := backgroundRollbackCallKey(2, handle.scriptPath)
 		calls := env.cmd.CallsList()
 		if len(calls) != 1 || calls[0] != wantBackground {
 			t.Fatalf("unexpected calls: %#v", calls)
@@ -290,7 +290,7 @@ func TestArmHARollback_CoversSchedulingPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("armHARollback error: %v", err)
 		}
-		wantBackground := "sh -c nohup sh -c 'sleep 1; /bin/sh " + handle.scriptPath + "' >/dev/null 2>&1 &"
+		wantBackground := backgroundRollbackCallKey(1, handle.scriptPath)
 		calls := env.cmd.CallsList()
 		if len(calls) != 1 || calls[0] != wantBackground {
 			t.Fatalf("unexpected calls: %#v", calls)
@@ -319,7 +319,7 @@ func TestArmHARollback_CoversSchedulingPaths(t *testing.T) {
 			t.Fatalf("expected unitName to be cleared after systemd-run failure, got %q", handle.unitName)
 		}
 
-		wantBackground := "sh -c nohup sh -c 'sleep 2; /bin/sh " + scriptPath + "' >/dev/null 2>&1 &"
+		wantBackground := backgroundRollbackCallKey(2, scriptPath)
 		calls := env.cmd.CallsList()
 		if len(calls) != 2 || calls[0] != systemdKey || calls[1] != wantBackground {
 			t.Fatalf("unexpected calls: %#v", calls)
@@ -332,7 +332,7 @@ func TestArmHARollback_CoversSchedulingPaths(t *testing.T) {
 
 		timestamp := env.fakeTime.Current.Format("20060102_150405")
 		scriptPath := filepath.Join("/tmp/proxsave", fmt.Sprintf("ha_rollback_%s.sh", timestamp))
-		backgroundKey := "sh -c nohup sh -c 'sleep 1; /bin/sh " + scriptPath + "' >/dev/null 2>&1 &"
+		backgroundKey := backgroundRollbackCallKey(1, scriptPath)
 		env.cmd.Errors = map[string]error{
 			backgroundKey: fmt.Errorf("boom"),
 		}

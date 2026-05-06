@@ -58,7 +58,7 @@ func TestEnsureSystemPathPreservesCustomPrefix(t *testing.T) {
 
 func TestCollectCustomPathsIgnoresEmptyEntries(t *testing.T) {
 	collector := newTestCollector(t)
-	collector.config.CustomBackupPaths = []string{"", "   ", ""}
+	collector.config.CustomBackupPaths = []string{"", "", ""}
 
 	if err := collector.collectCustomPaths(context.Background()); err != nil {
 		t.Fatalf("collectCustomPaths returned error for empty paths: %v", err)

@@ -49,6 +49,9 @@ const (
 
 	// ExitSecurityError - Errors detected by the security check.
 	ExitSecurityError ExitCode = 14
+
+	// ExitEncryptionError - Error during encryption setup or processing.
+	ExitEncryptionError ExitCode = 15
 )
 
 // String returns a human-readable description of the exit code.
@@ -84,6 +87,8 @@ func (e ExitCode) String() string {
 		return "panic error"
 	case ExitSecurityError:
 		return "security error"
+	case ExitEncryptionError:
+		return "encryption error"
 	default:
 		return "unknown error"
 	}

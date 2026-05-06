@@ -3,6 +3,7 @@ package pbs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -192,6 +193,13 @@ func TestListNamespacesViaCLI_ErrorIncludesStderr(t *testing.T) {
 	}
 }
 
+func TestListNamespacesViaCLI_ExecCommandError(t *testing.T) {
+	setExecCommandStub(t, "cmd-failure")
+	if _, err := listNamespacesViaCLI(context.Background(), "dummy"); err == nil || !strings.Contains(err.Error(), "simulated execCommand failure") {
+		t.Fatalf("expected execCommand error, got %v", err)
+	}
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
@@ -213,13 +221,22 @@ func TestHelperProcess(t *testing.T) {
 func setExecCommandStub(t *testing.T, scenario string) {
 	t.Helper()
 	original := execCommand
-	execCommand = func(context.Context, string, ...string) *exec.Cmd {
+	if scenario == "cmd-failure" {
+		execCommand = func(context.Context, string, ...string) (*exec.Cmd, error) {
+			return nil, errors.New("simulated execCommand failure")
+		}
+		t.Cleanup(func() {
+			execCommand = original
+		})
+		return
+	}
+	execCommand = func(context.Context, string, ...string) (*exec.Cmd, error) {
 		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--")
 		cmd.Env = append(os.Environ(),
 			"GO_WANT_HELPER_PROCESS=1",
 			"PBS_HELPER_SCENARIO="+scenario,
 		)
-		return cmd
+		return cmd, nil
 	}
 	t.Cleanup(func() {
 		execCommand = original

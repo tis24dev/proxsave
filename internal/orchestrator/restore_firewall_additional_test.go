@@ -704,8 +704,7 @@ func TestArmFirewallRollback_SystemdAndBackgroundPaths(t *testing.T) {
 			t.Fatalf("expected unitName cleared after systemd-run failure, got %q", handle.unitName)
 		}
 
-		cmd := fmt.Sprintf("nohup sh -c 'sleep %d; /bin/sh %s' >/dev/null 2>&1 &", 2, scriptPath)
-		wantBackground := "sh -c " + cmd
+		wantBackground := backgroundRollbackCallKey(2, scriptPath)
 		calls := fakeCmd.CallsList()
 		if len(calls) != 2 || calls[1] != wantBackground {
 			t.Fatalf("unexpected calls: %#v", calls)
@@ -723,8 +722,7 @@ func TestArmFirewallRollback_SystemdAndBackgroundPaths(t *testing.T) {
 
 		timestamp := fakeTime.Current.Format("20060102_150405")
 		scriptPath := filepath.Join("/tmp/proxsave", fmt.Sprintf("firewall_rollback_%s.sh", timestamp))
-		cmd := fmt.Sprintf("nohup sh -c 'sleep %d; /bin/sh %s' >/dev/null 2>&1 &", 1, scriptPath)
-		backgroundKey := "sh -c " + cmd
+		backgroundKey := backgroundRollbackCallKey(1, scriptPath)
 		fakeCmd.Errors[backgroundKey] = fmt.Errorf("boom")
 
 		if _, err := armFirewallRollback(context.Background(), logger, "/backup.tgz", 1*time.Second, "/tmp/proxsave"); err == nil {
@@ -1563,7 +1561,7 @@ func TestArmFirewallRollback_DefaultWorkDirAndMinTimeout(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("unexpected calls: %#v", calls)
 	}
-	if !strings.Contains(calls[0], "sleep 1; /bin/sh") {
+	if calls[0] != backgroundRollbackCallKey(1, handle.scriptPath) {
 		t.Fatalf("expected timeoutSeconds to clamp to 1, got call=%q", calls[0])
 	}
 }

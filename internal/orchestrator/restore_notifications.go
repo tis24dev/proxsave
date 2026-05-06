@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -22,6 +23,8 @@ type proxmoxNotificationSection struct {
 	Entries     []proxmoxNotificationEntry
 	RedactFlags []string
 }
+
+var sectionHeaderTypePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
 	if plan == nil {
@@ -401,7 +404,7 @@ func parseProxmoxNotificationSections(content string) ([]proxmoxNotificationSect
 	return out, nil
 }
 
-func parseProxmoxNotificationHeader(line string) (typ, name string, ok bool) {
+func parseSectionHeader(line string) (typ, name string, ok bool) {
 	idx := strings.Index(line, ":")
 	if idx <= 0 {
 		return "", "", false
@@ -411,17 +414,14 @@ func parseProxmoxNotificationHeader(line string) (typ, name string, ok bool) {
 	if typ == "" || name == "" {
 		return "", "", false
 	}
-	for _, r := range typ {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '-' || r == '_':
-		default:
-			return "", "", false
-		}
+	if !sectionHeaderTypePattern.MatchString(typ) {
+		return "", "", false
 	}
 	return typ, name, true
+}
+
+func parseProxmoxNotificationHeader(line string) (typ, name string, ok bool) {
+	return parseSectionHeader(line)
 }
 
 func parseProxmoxNotificationKV(line string) (key, value string) {

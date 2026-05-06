@@ -1,11 +1,13 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/quotedprintable"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -656,7 +659,10 @@ func (e *EmailNotifier) detectRecipientViaUserCfg(cfgPath string, targetUserID s
 }
 
 func runCombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd, err := safeexec.CommandContext(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, err
@@ -669,6 +675,37 @@ func truncateForLog(s string, maxBytes int) string {
 		return s
 	}
 	return s[:maxBytes] + "...(truncated)"
+}
+
+func commandForMailTool(ctx context.Context, pathOrName string, args ...string) (*exec.Cmd, error) {
+	if filepath.IsAbs(pathOrName) {
+		return safeexec.TrustedCommandContext(ctx, pathOrName, args...)
+	}
+	return safeexec.CommandContext(ctx, pathOrName, args...)
+}
+
+func lookupAbsolutePath(name string) (string, error) {
+	execPath, err := exec.LookPath(name)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(execPath) {
+		return execPath, nil
+	}
+	return "", fmt.Errorf("exec.LookPath returned non-absolute path %q", execPath)
+}
+
+func findMailqPath() (string, error) {
+	candidates := []string{"mailq", "/usr/bin/mailq"}
+	errs := make([]error, 0, len(candidates))
+	for _, candidate := range candidates {
+		path, err := lookupAbsolutePath(candidate)
+		if err == nil {
+			return path, nil
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", candidate, err))
+	}
+	return "", fmt.Errorf("mailq command not found: %w", errors.Join(errs...))
 }
 
 // sendViaRelay sends email via cloud relay
@@ -692,12 +729,16 @@ func (e *EmailNotifier) sendViaRelay(ctx context.Context, recipient, subject, ht
 func (e *EmailNotifier) isMTAServiceActive(ctx context.Context) (bool, string) {
 	services := []string{"postfix", "sendmail", "exim4"}
 
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	systemctlPath, err := lookupAbsolutePath("systemctl")
+	if err != nil {
 		return false, "systemctl not available"
 	}
 
 	for _, service := range services {
-		cmd := exec.CommandContext(ctx, "systemctl", "is-active", service)
+		cmd, err := safeexec.TrustedCommandContext(ctx, systemctlPath, "is-active", service)
+		if err != nil {
+			return false, err.Error()
+		}
 		if err := cmd.Run(); err == nil {
 			e.logger.Debug("MTA service %s is active", service)
 			return true, service
@@ -759,16 +800,15 @@ func (e *EmailNotifier) checkRelayHostConfigured(ctx context.Context) (bool, str
 // checkMailQueue checks the mail queue status
 func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
 	// Try mailq command (works for both Postfix and Sendmail)
-	mailqPath := "/usr/bin/mailq"
-	if _, err := exec.LookPath("mailq"); err != nil {
-		if _, err := exec.LookPath(mailqPath); err != nil {
-			return 0, fmt.Errorf("mailq command not found")
-		}
-	} else {
-		mailqPath = "mailq"
+	mailqPath, err := findMailqPath()
+	if err != nil {
+		return 0, err
 	}
 
-	cmd := exec.CommandContext(ctx, mailqPath)
+	cmd, err := commandForMailTool(ctx, mailqPath)
+	if err != nil {
+		return 0, err
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		return 0, fmt.Errorf("mailq failed: %w", err)
@@ -803,14 +843,15 @@ func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
 
 // detectQueueEntry scans the mail queue for a recipient and returns the latest queue ID.
 func (e *EmailNotifier) detectQueueEntry(ctx context.Context, recipient string) (string, string, error) {
-	mailqPath := "/usr/bin/mailq"
-	if _, err := exec.LookPath("mailq"); err == nil {
-		mailqPath = "mailq"
-	} else if _, err := exec.LookPath(mailqPath); err != nil {
-		return "", "", fmt.Errorf("mailq command not found")
+	mailqPath, err := findMailqPath()
+	if err != nil {
+		return "", "", err
 	}
 
-	cmd := exec.CommandContext(ctx, mailqPath)
+	cmd, err := commandForMailTool(ctx, mailqPath)
+	if err != nil {
+		return "", "", err
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("mailq failed: %w", err)
@@ -851,7 +892,10 @@ func (e *EmailNotifier) tailMailLog(ctx context.Context, maxLines int) ([]string
 			continue
 		}
 
-		cmd := exec.CommandContext(ctx, "tail", "-n", strconv.Itoa(maxLines), logFile)
+		cmd, err := safeexec.CommandContext(ctx, "tail", "-n", strconv.Itoa(maxLines), logFile)
+		if err != nil {
+			continue
+		}
 		output, err := cmd.Output()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -874,7 +918,10 @@ func (e *EmailNotifier) tailMailLog(ctx context.Context, maxLines int) ([]string
 			args = append(args, "-u", unit)
 		}
 
-		cmd := exec.CommandContext(ctx, "journalctl", args...)
+		cmd, err := safeexec.CommandContext(ctx, "journalctl", args...)
+		if err != nil {
+			return nil, ""
+		}
 		output, err := cmd.Output()
 		if err == nil && len(output) > 0 {
 			lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
@@ -1084,6 +1131,14 @@ func summarizeSendmailTranscript(transcript string) (highlights []string, remote
 	return highlights, remoteID, localQueueID
 }
 
+func encodeQuotedPrintableBody(body string) string {
+	var encoded bytes.Buffer
+	writer := quotedprintable.NewWriter(&encoded)
+	_, _ = writer.Write([]byte(body))
+	_ = writer.Close()
+	return encoded.String()
+}
+
 func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody string, data *NotificationData) (emailMessage, toHeader string) {
 	e.logger.Debug("=== Building email message ===")
 
@@ -1126,17 +1181,17 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 			// Plain text part
 			email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
 			email.WriteString("Content-Type: text/plain; charset=UTF-8\n")
-			email.WriteString("Content-Transfer-Encoding: 8bit\n")
+			email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 			email.WriteString("\n")
-			email.WriteString(textBody)
+			email.WriteString(encodeQuotedPrintableBody(textBody))
 			email.WriteString("\n\n")
 
 			// HTML part
 			email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
 			email.WriteString("Content-Type: text/html; charset=UTF-8\n")
-			email.WriteString("Content-Transfer-Encoding: 8bit\n")
+			email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 			email.WriteString("\n")
-			email.WriteString(htmlBody)
+			email.WriteString(encodeQuotedPrintableBody(htmlBody))
 			email.WriteString("\n\n")
 
 			email.WriteString(fmt.Sprintf("--%s--\n", altBoundary))
@@ -1178,17 +1233,17 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 		// Plain text part
 		email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
 		email.WriteString("Content-Type: text/plain; charset=UTF-8\n")
-		email.WriteString("Content-Transfer-Encoding: 8bit\n")
+		email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 		email.WriteString("\n")
-		email.WriteString(textBody)
+		email.WriteString(encodeQuotedPrintableBody(textBody))
 		email.WriteString("\n\n")
 
 		// HTML part
 		email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
 		email.WriteString("Content-Type: text/html; charset=UTF-8\n")
-		email.WriteString("Content-Transfer-Encoding: 8bit\n")
+		email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 		email.WriteString("\n")
-		email.WriteString(htmlBody)
+		email.WriteString(encodeQuotedPrintableBody(htmlBody))
 		email.WriteString("\n\n")
 
 		email.WriteString(fmt.Sprintf("--%s--\n", altBoundary))
@@ -1218,7 +1273,10 @@ func (e *EmailNotifier) sendViaPMF(ctx context.Context, recipient, subject, html
 	e.logger.Debug("=== Sending email via proxmox-mail-forward ===")
 	e.logger.Debug("proxmox-mail-forward routing is handled by Proxmox Notifications; To=%q is only a mail header", toHeader)
 
-	cmd := exec.CommandContext(ctx, pmfPath)
+	cmd, err := commandForMailTool(ctx, pmfPath)
+	if err != nil {
+		return "", "", err
+	}
 	cmd.Stdin = strings.NewReader(emailMessage)
 
 	var stdoutBuf, stderrBuf strings.Builder
@@ -1329,7 +1387,10 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	}
 
 	// Create sendmail command
-	cmd := exec.CommandContext(ctx, sendmailPath, args...)
+	cmd, err := commandForMailTool(ctx, sendmailPath, args...)
+	if err != nil {
+		return "", "", "", err
+	}
 	cmd.Stdin = strings.NewReader(emailMessage)
 
 	// Capture stdout and stderr separately

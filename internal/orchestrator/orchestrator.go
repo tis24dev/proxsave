@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -504,528 +503,54 @@ func (o *Orchestrator) ensureTempRegistry() *TempDirRegistry {
 
 // RunGoBackup performs the entire backup using Go components (collector + archiver)
 func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.EnvironmentInfo, hostname string) (stats *BackupStats, err error) {
-	if envInfo == nil {
-		envInfo = o.envInfo
-	} else {
-		o.SetEnvironmentInfo(envInfo)
-	}
-	pType := types.ProxmoxUnknown
-	if envInfo != nil {
-		pType = envInfo.Type
-	}
-	done := logging.DebugStart(o.logger, "backup run", "type=%s hostname=%s", pType, hostname)
+	run := o.newBackupRunContext(ctx, envInfo, hostname)
+	done := logging.DebugStart(o.logger, "backup run", "type=%s hostname=%s", run.proxmoxType, hostname)
 	defer func() { done(err) }()
-	o.logger.Info("Starting Go-based backup orchestration for %s", pType)
+	o.logger.Info("Starting Go-based backup orchestration for %s", run.proxmoxType)
 
-	// Unified cleanup of previous execution artifacts
-	registry := o.cleanupPreviousExecutionArtifacts()
-	fs := o.filesystem()
-
-	startTime := o.startTime
-	if startTime.IsZero() {
-		startTime = o.now()
-		o.startTime = startTime
+	workspace := &backupWorkspace{
+		registry: o.cleanupPreviousExecutionArtifacts(),
+		fs:       o.filesystem(),
 	}
-	normalizedLevel := normalizeCompressionLevel(o.compressionType, o.compressionLevel)
-
-	fmt.Println()
-	o.logStep(1, "Initializing backup statistics and temporary workspace")
-	stats = InitializeBackupStats(
-		hostname,
-		envInfo,
-		o.version,
-		startTime,
-		o.cfg,
-		o.compressionType,
-		o.compressionMode,
-		normalizedLevel,
-		o.compressionThreads,
-		o.backupPath,
-		o.serverID,
-		o.serverMAC,
-	)
-	// Get log file path from logger (more reliable than env var)
-	if logFile := o.logger.GetLogFilePath(); logFile != "" {
-		stats.LogFilePath = logFile
-	}
-
-	// Propagate version update information (if any) into stats so that
-	// downstream notification adapters can include it in their payloads.
-	if o.versionUpdateAvailable || o.updateCurrentVersion != "" || o.updateLatestVersion != "" {
-		stats.NewVersionAvailable = o.versionUpdateAvailable
-		stats.CurrentVersion = o.updateCurrentVersion
-		stats.LatestVersion = o.updateLatestVersion
-	}
-
-	metricsStats := stats
+	stats = o.initBackupRun(run)
 	defer func() {
-		if metricsStats == nil || o.cfg == nil || !o.cfg.MetricsEnabled || o.dryRun {
-			return
-		}
-
-		if metricsStats.EndTime.IsZero() {
-			metricsStats.EndTime = o.now()
-		}
-		if metricsStats.Duration == 0 && !metricsStats.StartTime.IsZero() {
-			metricsStats.Duration = metricsStats.EndTime.Sub(metricsStats.StartTime)
-		}
-
-		if err != nil {
-			var backupErr *BackupError
-			if errors.As(err, &backupErr) {
-				metricsStats.ExitCode = backupErr.Code.Int()
-			} else {
-				metricsStats.ExitCode = types.ExitGenericError.Int()
-			}
-		} else if metricsStats.ExitCode == 0 {
-			metricsStats.ExitCode = types.ExitSuccess.Int()
-		}
-
-		if m := metricsStats.toPrometheusMetrics(); m != nil {
-			exporter := metrics.NewPrometheusExporter(o.cfg.MetricsPath, o.logger)
-			if exportErr := exporter.Export(m); exportErr != nil {
-				o.logger.Warning("Failed to export Prometheus metrics: %v", exportErr)
-			}
-		}
+		o.exportBackupMetrics(run, err)
+	}()
+	defer func() {
+		o.finalizeFailedBackupStats(run, err)
 	}()
 
-	// Ensure that, in case of failure, we still perform log parsing,
-	// derive an exit code and dispatch notifications/log rotation.
-	defer func() {
-		if err == nil || stats == nil {
-			return
-		}
-
-		// Ensure end time and duration are set
-		if stats.EndTime.IsZero() {
-			stats.EndTime = o.now()
-		}
-		if stats.Duration == 0 && !stats.StartTime.IsZero() {
-			stats.Duration = stats.EndTime.Sub(stats.StartTime)
-		}
-
-		// Parse log file to populate error/warning counts
-		if stats.LogFilePath != "" {
-			o.logger.Debug("Parsing log file for error/warning counts after failure: %s", stats.LogFilePath)
-			_, errorCount, warningCount := ParseLogCounts(stats.LogFilePath, 0)
-			stats.ErrorCount = errorCount
-			stats.WarningCount = warningCount
-			if errorCount > 0 || warningCount > 0 {
-				o.logger.Debug("Found %d errors and %d warnings in log file (failure path)", errorCount, warningCount)
-			}
-		} else {
-			o.logger.Debug("No log file path specified, error/warning counts will be 0 (failure path)")
-		}
-
-		// Derive exit code from the error when possible
-		var backupErr *BackupError
-		if errors.As(err, &backupErr) {
-			stats.ExitCode = backupErr.Code.Int()
-		} else {
-			stats.ExitCode = types.ExitBackupError.Int()
-		}
-
-	}()
-
-	o.logger.Debug("Creating temporary directory for collection output")
-	// Create temporary directory for collection (outside backup path)
-	// Note: /tmp/proxsave is validated in pre-backup checks (CheckTempDirectory)
-	// This MkdirAll is a fallback for cases where pre-checks don't run
-	timestampStr := startTime.Format("20060102-150405")
-	tempRoot := filepath.Join("/tmp", "proxsave")
-	if err := fs.MkdirAll(tempRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("Temp directory creation failed - path: %s: %w", tempRoot, err)
-	}
-	tempDir, err := fs.MkdirTemp(tempRoot, fmt.Sprintf("proxsave-%s-%s-", hostname, timestampStr))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temporary directory: %w", err)
-	}
-	if o.dryRun {
-		o.logger.Info("[DRY RUN] Temporary directory would be: %s", tempDir)
-	} else {
-		o.logger.Debug("Using temporary directory: %s", tempDir)
+	if err := o.prepareBackupWorkspace(run, workspace); err != nil {
+		return stats, err
 	}
 	defer func() {
-		if registry == nil {
-			if cleanupErr := fs.RemoveAll(tempDir); cleanupErr != nil {
-				o.logger.Warning("Failed to remove temp directory %s: %v", tempDir, cleanupErr)
-			}
-			return
-		}
-		o.logger.Debug("Temporary workspace preserved at %s (will be removed at the next startup)", tempDir)
+		o.cleanupBackupWorkspace(workspace)
 	}()
-
-	// Create marker file for parity with Bash cleanup guarantees
-	markerPath := filepath.Join(tempDir, ".proxsave-marker")
-	markerContent := fmt.Sprintf(
-		"Created by PID %d on %s UTC\n",
-		os.Getpid(),
-		o.now().UTC().Format("2006-01-02 15:04:05"),
-	)
-	if err := fs.WriteFile(markerPath, []byte(markerContent), 0600); err != nil {
+	if err := o.markBackupWorkspace(workspace); err != nil {
 		return stats, fmt.Errorf("failed to create temp marker file: %w", err)
 	}
+	o.registerBackupWorkspace(workspace)
 
-	if registry != nil {
-		if err := registry.Register(tempDir); err != nil {
-			o.logger.Debug("Failed to register temp directory %s: %v", tempDir, err)
-		}
+	if err := o.collectBackupData(run, workspace); err != nil {
+		return stats, err
 	}
-
-	// Step 1: Collect configuration files
-	fmt.Println()
-	o.logStep(2, "Collection of configuration files and optimizations")
-	o.logger.Info("Collecting configuration files...")
-	o.logger.Debug("Collector dry-run=%v excludePatterns=%d", o.dryRun, len(o.excludePatterns))
-	collectorConfig := backup.GetDefaultCollectorConfig()
-	collectorConfig.ExcludePatterns = append([]string(nil), o.excludePatterns...)
-	if o.cfg != nil {
-		applyCollectorOverrides(collectorConfig, o.cfg)
-		if len(o.cfg.BackupBlacklist) > 0 {
-			collectorConfig.ExcludePatterns = append(collectorConfig.ExcludePatterns, o.cfg.BackupBlacklist...)
-		}
-	}
-
-	if err := collectorConfig.Validate(); err != nil {
-		return stats, &BackupError{
-			Phase: "config",
-			Err:   err,
-			Code:  types.ExitConfigError,
-		}
-	}
-
-	collector := backup.NewCollectorWithDeps(o.logger, collectorConfig, tempDir, pType, o.dryRun, o.collectorDeps())
-
-	o.logger.Debug("Starting collector run (type=%s)", pType)
-	if err := collector.CollectAll(ctx); err != nil {
-		// Return collection-specific error
-		return stats, &BackupError{
-			Phase: "collection",
-			Err:   err,
-			Code:  types.ExitCollectionError,
-		}
-	}
-
-	// Get collection statistics
-	collStats := collector.GetStats()
-	stats.FilesCollected = int(collStats.FilesProcessed)
-	stats.FilesFailed = int(collStats.FilesFailed)
-	stats.FilesNotFound = int(collStats.FilesNotFound)
-	stats.DirsCreated = int(collStats.DirsCreated)
-	stats.BytesCollected = collStats.BytesCollected
-	stats.FilesIncluded = int(collStats.FilesProcessed)
-	stats.FilesMissing = int(collStats.FilesNotFound)
-	stats.UncompressedSize = collStats.BytesCollected
-	if stats.ProxmoxType.SupportsPVE() {
-		if collector.IsClusteredPVE() {
-			stats.ClusterMode = "cluster"
-		} else {
-			stats.ClusterMode = "standalone"
-		}
-	}
-
-	if err := o.writeBackupMetadata(tempDir, stats); err != nil {
-		o.logger.Debug("Failed to write backup metadata: %v", err)
-	}
-
-	// Write backup manifest with file status details
-	if err := collector.WriteManifest(hostname); err != nil {
-		o.logger.Debug("Failed to write backup manifest: %v", err)
-	}
-
-	o.logger.Info("Collection completed: %d files (%s), %d failed, %d dirs created",
-		collStats.FilesProcessed,
-		backup.FormatBytes(collStats.BytesCollected),
-		collStats.FilesFailed,
-		collStats.DirsCreated)
-
-	// Additional disk space check using estimated size and safety factor
-	if o.checker != nil && stats.BytesCollected > 0 {
-		o.logger.Debug("Running disk-space validation for estimated data size")
-		estimatedSizeGB := float64(stats.BytesCollected) / (1024.0 * 1024.0 * 1024.0)
-		// Ensure we always reserve at least a small amount
-		if estimatedSizeGB < 0.001 {
-			estimatedSizeGB = 0.001
-		}
-		result := o.checker.CheckDiskSpaceForEstimate(estimatedSizeGB)
-		if result.Passed {
-			o.logger.Debug("Disk check passed: %s", result.Message)
-		} else {
-			errMsg := result.Message
-			diskErr := result.Error
-			if errMsg == "" && diskErr != nil {
-				errMsg = diskErr.Error()
-			}
-			if errMsg == "" {
-				errMsg = "insufficient disk space"
-			}
-			if diskErr == nil {
-				diskErr = errors.New(errMsg)
-			}
-			return stats, &BackupError{
-				Phase: "disk",
-				Err:   fmt.Errorf("disk space validation failed: %w", diskErr),
-				Code:  types.ExitDiskSpaceError,
-			}
-		}
-	}
-
-	if o.optimizationCfg.Enabled() {
-		fmt.Println()
-		o.logger.Step("Backup optimizations on collected data")
-		if err := backup.ApplyOptimizations(ctx, o.logger, tempDir, o.optimizationCfg); err != nil {
-			o.logger.Warning("Backup optimizations completed with warnings: %v", err)
-		}
-	} else {
-		o.logger.Debug("Skipping optimization step (all features disabled)")
-	}
-
-	// Step 2: Create archive
-	fmt.Println()
-	o.logStep(3, "Creation of compressed archive")
-	o.logger.Info("Creating compressed archive...")
-	o.logger.Debug("Archiver configuration: type=%s level=%d mode=%s threads=%d",
-		o.compressionType, normalizedLevel, o.compressionMode, o.compressionThreads)
-
-	// Generate archive filename
-	archiveBasename := fmt.Sprintf("%s-backup-%s", hostname, timestampStr)
-
-	ageRecipients, err := o.prepareAgeRecipients(ctx)
+	artifacts, err := o.createBackupArchive(run, workspace)
 	if err != nil {
-		return stats, &BackupError{
-			Phase: "config",
-			Err:   err,
-			Code:  types.ExitConfigError,
-		}
+		return stats, err
 	}
-
-	archiverConfig := BuildArchiverConfig(
-		o.compressionType,
-		normalizedLevel,
-		o.compressionThreads,
-		o.compressionMode,
-		o.dryRun,
-		o.cfg != nil && o.cfg.EncryptArchive,
-		ageRecipients,
-		collectorConfig.ExcludePatterns,
-	)
-
-	if err := archiverConfig.Validate(); err != nil {
-		return stats, &BackupError{
-			Phase: "config",
-			Err:   err,
-			Code:  types.ExitConfigError,
-		}
+	if err := o.verifyAndWriteBackupArtifacts(run, workspace, artifacts); err != nil {
+		return stats, err
 	}
-
-	archiver := backup.NewArchiver(o.logger, archiverConfig)
-	effectiveCompression := archiver.ResolveCompression()
-	stats.Compression = effectiveCompression
-	stats.CompressionLevel = archiver.CompressionLevel()
-	stats.CompressionMode = archiver.CompressionMode()
-	stats.CompressionThreads = archiver.CompressionThreads()
-	archiveExt := archiver.GetArchiveExtension()
-	archivePath := filepath.Join(o.backupPath, archiveBasename+archiveExt)
-	if stats.RequestedCompression != stats.Compression {
-		o.logger.Info("Using %s compression (requested %s)", stats.Compression, stats.RequestedCompression)
+	if err := o.bundleBackupArtifacts(run, workspace, artifacts); err != nil {
+		return stats, err
 	}
-
-	if err := archiver.CreateArchive(ctx, tempDir, archivePath); err != nil {
-		phase := "archive"
-		code := types.ExitArchiveError
-		var compressionErr *backup.CompressionError
-		if errors.As(err, &compressionErr) {
-			phase = "compression"
-			code = types.ExitCompressionError
-		}
-
-		return stats, &BackupError{
-			Phase: phase,
-			Err:   err,
-			Code:  code,
-		}
-	}
-
-	stats.ArchivePath = archivePath
-	checksumPath := archivePath + ".sha256"
-
-	// Get archive size
-	if !o.dryRun {
-		fmt.Println()
-		o.logStep(4, "Verification of archive and metadata generation")
-		if size, err := archiver.GetArchiveSize(archivePath); err == nil {
-			stats.ArchiveSize = size
-			stats.CompressedSize = size
-			stats.updateCompressionMetrics()
-			o.logger.Debug("Archive created: %s (%s)", archivePath, backup.FormatBytes(size))
-		} else {
-			o.logger.Warning("Failed to get archive size: %v", err)
-		}
-
-		// Verify archive (skipped internally when encryption is enabled)
-		if err := archiver.VerifyArchive(ctx, archivePath); err != nil {
-			// Return verification-specific error
-			return stats, &BackupError{
-				Phase: "verification",
-				Err:   err,
-				Code:  types.ExitVerificationError,
-			}
-		}
-
-		// Generate checksum and manifest for the archive
-		checksum, err := backup.GenerateChecksum(ctx, o.logger, archivePath)
-		if err != nil {
-			return stats, &BackupError{
-				Phase: "verification",
-				Err:   fmt.Errorf("checksum generation failed: %w", err),
-				Code:  types.ExitVerificationError,
-			}
-		}
-		stats.Checksum = checksum
-
-		checksumContent := fmt.Sprintf("%s  %s\n", checksum, filepath.Base(archivePath))
-		if err := fs.WriteFile(checksumPath, []byte(checksumContent), 0640); err != nil {
-			o.logger.Warning("Failed to write checksum file %s: %v", checksumPath, err)
-		} else {
-			o.logger.Debug("Checksum file written to %s", checksumPath)
-		}
-
-		manifestPath := archivePath + ".manifest.json"
-		manifestCreatedAt := stats.Timestamp
-		encryptionMode := "none"
-		if o.cfg != nil && o.cfg.EncryptArchive {
-			encryptionMode = "age"
-		}
-		targets := append([]string(nil), stats.ProxmoxTargets...)
-		manifest := &backup.Manifest{
-			ArchivePath:      archivePath,
-			ArchiveSize:      stats.ArchiveSize,
-			SHA256:           checksum,
-			CreatedAt:        manifestCreatedAt,
-			CompressionType:  string(stats.Compression),
-			CompressionLevel: stats.CompressionLevel,
-			CompressionMode:  stats.CompressionMode,
-			ProxmoxType:      string(stats.ProxmoxType),
-			ProxmoxTargets:   targets,
-			ProxmoxVersion:   stats.ProxmoxVersion,
-			PVEVersion:       stats.PVEVersion,
-			PBSVersion:       stats.PBSVersion,
-			Hostname:         stats.Hostname,
-			ScriptVersion:    stats.ScriptVersion,
-			EncryptionMode:   encryptionMode,
-			ClusterMode:      stats.ClusterMode,
-		}
-
-		if err := backup.CreateManifest(ctx, o.logger, manifest, manifestPath); err != nil {
-			return stats, &BackupError{
-				Phase: "verification",
-				Err:   fmt.Errorf("manifest creation failed: %w", err),
-				Code:  types.ExitVerificationError,
-			}
-		}
-		stats.ManifestPath = manifestPath
-
-		// Maintain Bash-compatible metadata filename for downstream tooling
-		metadataAlias := archivePath + ".metadata"
-		if err := copyFile(fs, manifestPath, metadataAlias); err != nil {
-			o.logger.Warning("Failed to write legacy metadata file %s: %v", metadataAlias, err)
-		} else {
-			o.logger.Debug("Legacy metadata file written to %s", metadataAlias)
-		}
-
-		// Create bundle (if requested) before dispatching to other storage targets
-		bundleEnabled := o.cfg != nil && o.cfg.BundleAssociatedFiles
-		if bundleEnabled {
-			fmt.Println()
-			o.logStep(5, "Bundling of archive, checksum and metadata")
-			o.logger.Debug("Bundling enabled: creating bundle from %s", filepath.Base(archivePath))
-			bundlePath, err := o.createBundle(ctx, archivePath)
-			if err != nil {
-				return stats, &BackupError{
-					Phase: "archive",
-					Err:   fmt.Errorf("bundle creation failed: %w", err),
-					Code:  types.ExitArchiveError,
-				}
-			}
-
-			if err := o.removeAssociatedFiles(archivePath); err != nil {
-				o.logger.Warning("Failed to remove raw files after bundling: %v", err)
-			} else {
-				o.logger.Debug("Removed raw tar/checksum/metadata after bundling")
-			}
-
-			if info, err := fs.Stat(bundlePath); err == nil {
-				stats.ArchiveSize = info.Size()
-				stats.CompressedSize = info.Size()
-				stats.updateCompressionMetrics()
-			}
-			stats.ArchivePath = bundlePath
-			stats.ManifestPath = ""
-			stats.BundleCreated = true
-			archivePath = bundlePath
-			o.logger.Debug("Bundle ready: %s", filepath.Base(bundlePath))
-		} else {
-			fmt.Println()
-			o.logger.Skip("Bundling disabled")
-		}
-
-		stats.EndTime = o.now()
-
-		o.logger.Info("✓ Archive created and verified")
-	} else {
-		fmt.Println()
-		o.logStep(4, "Verification skipped (dry run mode)")
-		o.logger.Info("[DRY RUN] Would create archive: %s", archivePath)
-		stats.EndTime = o.now()
-	}
-
-	stats.Duration = stats.EndTime.Sub(stats.StartTime)
-
-	// Parse log file to populate error/warning counts before dispatch
-	if stats.LogFilePath != "" {
-		o.logger.Debug("Parsing log file for error/warning counts: %s", stats.LogFilePath)
-		_, errorCount, warningCount := ParseLogCounts(stats.LogFilePath, 0)
-		stats.ErrorCount = errorCount
-		stats.WarningCount = warningCount
-		if errorCount > 0 || warningCount > 0 {
-			o.logger.Debug("Found %d errors and %d warnings in log file", errorCount, warningCount)
-		}
-	} else {
-		o.logger.Debug("No log file path specified, error/warning counts will be 0")
-	}
-
-	// Determine aggregated exit code (similar to legacy Bash logic)
-	switch {
-	case stats.ErrorCount > 0:
-		stats.ExitCode = types.ExitBackupError.Int()
-	case stats.WarningCount > 0:
-		stats.ExitCode = types.ExitGenericError.Int()
-	default:
-		stats.ExitCode = types.ExitSuccess.Int()
-	}
-	o.logger.Debug("Aggregated exit code based on log analysis: %d", stats.ExitCode)
-
-	if len(o.storageTargets) == 0 {
-		fmt.Println()
-		o.logStep(6, "No storage targets registered - skipping")
-	} else if o.dryRun {
-		fmt.Println()
-		o.logStep(6, "Storage dispatch skipped (dry run mode)")
-	} else {
-		fmt.Println()
-		o.logStep(6, "Dispatching archive to %d storage target(s)", len(o.storageTargets))
-		o.logGlobalRetentionPolicy()
-	}
-
-	if !o.dryRun {
-		o.logger.Debug("Dispatching archive to %d storage targets", len(o.storageTargets))
-		if err := o.dispatchPostBackup(ctx, stats); err != nil {
-			return stats, err
-		}
+	o.finalizeBackupStats(run)
+	if err := o.dispatchBackupArtifacts(run); err != nil {
+		return stats, err
 	}
 
 	fmt.Println()
-	o.logger.Debug("Go backup completed in %s", backup.FormatDuration(stats.Duration))
+	o.logger.Debug("Go backup completed in %s", backup.FormatDuration(run.stats.Duration))
 
 	return stats, nil
 }

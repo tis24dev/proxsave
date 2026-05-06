@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
@@ -381,6 +382,9 @@ func (c *Config) parse() error {
 	if err := c.validateSecondarySettings(); err != nil {
 		return err
 	}
+	if err := c.validateCloudSettings(); err != nil {
+		return err
+	}
 	c.autoDetectPBSAuth()
 	return nil
 }
@@ -395,6 +399,50 @@ func (c *Config) validateSecondarySettings() error {
 		return err
 	}
 	return nil
+}
+
+func (c *Config) validateCloudSettings() error {
+	if !c.CloudEnabled {
+		return nil
+	}
+	cloudRemote := strings.TrimSpace(c.CloudRemote)
+	remoteName, basePath := splitCloudRemoteRef(cloudRemote)
+	if !isAbsoluteCloudRemoteRef(remoteName, basePath) {
+		if err := safeexec.ValidateRcloneRemoteName(remoteName); err != nil {
+			return fmt.Errorf("CLOUD_REMOTE invalid: %w", err)
+		}
+	}
+	if err := safeexec.ValidateRemoteRelativePath(strings.Trim(strings.TrimSpace(basePath), "/"), "CLOUD_REMOTE path"); err != nil {
+		return err
+	}
+	if err := safeexec.ValidateRemoteRelativePath(strings.Trim(strings.TrimSpace(c.CloudRemotePath), "/"), "CLOUD_REMOTE_PATH"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func isAbsoluteCloudRemoteRef(remoteName, basePath string) bool {
+	remoteName = strings.TrimSpace(remoteName)
+	basePath = strings.TrimSpace(basePath)
+	if filepath.IsAbs(remoteName) {
+		return true
+	}
+	if len(remoteName) != 1 {
+		return false
+	}
+	drive := remoteName[0]
+	if (drive < 'A' || drive > 'Z') && (drive < 'a' || drive > 'z') {
+		return false
+	}
+	return strings.HasPrefix(basePath, `\`) || strings.HasPrefix(basePath, "/")
+}
+
+func splitCloudRemoteRef(ref string) (remoteName, relPath string) {
+	parts := strings.SplitN(ref, ":", 2)
+	if len(parts) < 2 {
+		return ref, ""
+	}
+	return parts[0], parts[1]
 }
 
 func (c *Config) parseGeneralSettings() {
@@ -1427,13 +1475,16 @@ func (c *Config) BuildWebhookConfig() *WebhookConfig {
 			}
 		}
 
+		priority := c.getInt(prefix+"PRIORITY", 0)
+
 		endpoints = append(endpoints, WebhookEndpoint{
-			Name:    name,
-			URL:     url,
-			Format:  format,
-			Method:  method,
-			Headers: headers,
-			Auth:    auth,
+			Name:     name,
+			URL:      url,
+			Format:   format,
+			Method:   method,
+			Headers:  headers,
+			Auth:     auth,
+			Priority: priority,
 		})
 	}
 
@@ -1528,6 +1579,7 @@ type WebhookEndpoint struct {
 	Method       string
 	Headers      map[string]string
 	Auth         WebhookAuth
+	Priority     int
 	CustomFields map[string]interface{}
 }
 

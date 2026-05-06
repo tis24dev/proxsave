@@ -18,6 +18,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
@@ -219,9 +220,15 @@ func logServerIdentityValues(serverID, mac string) {
 
 func resolveHostname() string {
 	if path, err := exec.LookPath("hostname"); err == nil {
-		if out, err := exec.Command(path, "-f").Output(); err == nil {
-			if fqdn := strings.TrimSpace(string(out)); fqdn != "" {
-				return fqdn
+		cmdCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		cmd, cmdErr := safeexec.TrustedCommandContext(cmdCtx, path, "-f")
+		if cmdErr == nil {
+			if out, err := cmd.Output(); err == nil {
+				if fqdn := strings.TrimSpace(string(out)); fqdn != "" {
+					return fqdn
+				}
 			}
 		}
 	}
@@ -275,6 +282,9 @@ func detectFilesystemInfo(ctx context.Context, backend storage.Storage, path str
 			return nil, err
 		}
 		logger.Debug("WARNING: %s filesystem detection failed: %v", backend.Name(), err)
+		if backend.Location() == storage.LocationCloud {
+			return nil, err
+		}
 		return nil, nil
 	}
 
@@ -678,7 +688,10 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 
 	readCron := func() (string, error) {
-		cmd := exec.CommandContext(ctx, "crontab", "-l")
+		cmd, err := safeexec.CommandContext(ctx, "crontab", "-l")
+		if err != nil {
+			return "", err
+		}
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			lower := strings.ToLower(string(output))
@@ -691,7 +704,10 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 
 	writeCron := func(content string) error {
-		cmd := exec.CommandContext(ctx, "crontab", "-")
+		cmd, err := safeexec.CommandContext(ctx, "crontab", "-")
+		if err != nil {
+			return err
+		}
 		cmd.Stdin = strings.NewReader(content)
 		output, err := cmd.CombinedOutput()
 		if err != nil {

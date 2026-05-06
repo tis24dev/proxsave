@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -17,6 +16,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 // decryptPathOption describes a logical backup source (local, secondary, cloud)
@@ -117,7 +117,10 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 	// Use rclone lsf to list files inside the backup directory
 	lsfCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(lsfCtx, "rclone", "lsf", fullPath)
+	cmd, err := safeexec.CommandContext(lsfCtx, "rclone", "lsf", fullPath)
+	if err != nil {
+		return nil, err
+	}
 	lsfStart := time.Now()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -545,7 +548,10 @@ func inspectRcloneChecksumFile(ctx context.Context, remotePath string, logger *l
 	defer func() { done(err) }()
 	logging.DebugStep(logger, "inspect rclone checksum", "executing: rclone cat %s", remotePath)
 
-	cmd := exec.CommandContext(ctx, "rclone", "cat", remotePath)
+	cmd, err := safeexec.CommandContext(ctx, "rclone", "cat", remotePath)
+	if err != nil {
+		return "", err
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", fmt.Errorf("start rclone cat %s: %w", remotePath, err)

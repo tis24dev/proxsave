@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -23,6 +24,12 @@ type FakeFS struct {
 	MkdirAllErr  error
 	MkdirTempErr error
 	OpenFileErr  map[string]error
+	Ownership    map[string]FakeOwnership
+}
+
+type FakeOwnership struct {
+	UID int
+	GID int
 }
 
 func NewFakeFS() *FakeFS {
@@ -32,6 +39,7 @@ func NewFakeFS() *FakeFS {
 		StatErr:     make(map[string]error),
 		StatErrors:  make(map[string]error),
 		OpenFileErr: make(map[string]error),
+		Ownership:   make(map[string]FakeOwnership),
 	}
 }
 
@@ -186,6 +194,22 @@ func (f *FakeFS) Rename(oldpath, newpath string) error {
 	return os.Rename(f.onDisk(oldpath), f.onDisk(newpath))
 }
 
+func (f *FakeFS) Lchown(path string, uid, gid int) error {
+	diskPath := f.onDisk(path)
+	if _, err := os.Lstat(diskPath); err != nil {
+		return err
+	}
+	if f.Ownership == nil {
+		f.Ownership = make(map[string]FakeOwnership)
+	}
+	f.Ownership[diskPath] = FakeOwnership{UID: uid, GID: gid}
+	return nil
+}
+
+func (f *FakeFS) UtimesNano(path string, times []syscall.Timespec) error {
+	return syscall.UtimesNano(f.onDisk(path), times)
+}
+
 // FakeTime provides deterministic time.
 type FakeTime struct {
 	Current time.Time
@@ -201,14 +225,16 @@ func (f *FakeTime) Advance(d time.Duration) {
 
 // FakeCommandRunner records invocations and returns predefined outputs/errors.
 type FakeCommandRunner struct {
-	Outputs map[string][]byte
-	Errors  map[string]error
-	Calls   []string
+	Outputs  map[string][]byte
+	Errors   map[string]error
+	Calls    []string
+	Contexts []context.Context
 }
 
 func (f *FakeCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	key := commandKey(name, args)
 	f.Calls = append(f.Calls, key)
+	f.Contexts = append(f.Contexts, ctx)
 	var out []byte
 	if f.Outputs != nil {
 		out = f.Outputs[key]
@@ -235,6 +261,16 @@ func commandKey(name string, args []string) string {
 		return name
 	}
 	return fmt.Sprintf("%s %s", name, strings.Join(args, " "))
+}
+
+func backgroundRollbackCallKey(timeoutSeconds int, scriptPath string) string {
+	return commandKey("sh", []string{
+		"-c",
+		backgroundRollbackCommand,
+		"proxsave-rollback",
+		fmt.Sprintf("%d", timeoutSeconds),
+		scriptPath,
+	})
 }
 
 // FakePrompter simulates user choices.

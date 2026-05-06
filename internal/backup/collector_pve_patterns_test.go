@@ -208,7 +208,7 @@ func TestEffectivePVEClusterPath(t *testing.T) {
 		},
 		{
 			name:       "whitespace only uses default",
-			configPath: "   ",
+			configPath: " ",
 			expected:   "/var/lib/pve-cluster",
 		},
 		{
