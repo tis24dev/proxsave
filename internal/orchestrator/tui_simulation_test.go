@@ -38,9 +38,23 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 	done := make(chan struct{})
 	var injectOnce sync.Once
 	var injectWG sync.WaitGroup
+	var appMu sync.RWMutex
+	var currentApp *tui.App
+
+	stopCurrentApp := func() {
+		appMu.RLock()
+		app := currentApp
+		appMu.RUnlock()
+		if app != nil {
+			app.Stop()
+		}
+	}
 
 	newTUIApp = func() *tui.App {
 		app := tui.NewApp()
+		appMu.Lock()
+		currentApp = app
+		appMu.Unlock()
 		app.SetScreen(screen)
 		readyCh := make(chan struct{})
 		var readyOnce sync.Once
@@ -72,7 +86,7 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 					return
 				case <-timer.C:
 					t.Errorf("TUI simulation did not render its initial draw within %s", simAppInitialDrawTimeout)
-					app.Stop()
+					stopCurrentApp()
 					return
 				}
 
@@ -100,7 +114,7 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 				case <-done:
 				case <-timer.C:
 					t.Errorf("TUI simulation did not finish within %s after injecting %d key(s)", simAppCompletionTimeout, len(keys))
-					app.Stop()
+					stopCurrentApp()
 				}
 			}()
 		})
@@ -108,6 +122,7 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 	}
 
 	t.Cleanup(func() {
+		stopCurrentApp()
 		close(done)
 		injectWG.Wait()
 		newTUIApp = orig

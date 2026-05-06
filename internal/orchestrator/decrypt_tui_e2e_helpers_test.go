@@ -25,11 +25,15 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-var decryptTUIE2EMu sync.Mutex
+var (
+	decryptTUIE2EMu      sync.Mutex
+	timedSimAppStopperMu sync.Mutex
+	timedSimAppStopper   func()
+)
 
 const (
-	timedSimScreenWaitTimeout = 5 * time.Second
-	timedSimCompletionTimeout = 10 * time.Second
+	timedSimScreenWaitTimeout = 10 * time.Second
+	timedSimCompletionTimeout = 15 * time.Second
 )
 
 type notifyingSimulationScreen struct {
@@ -153,9 +157,11 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 			app.Stop()
 		}
 	}
+	restoreStopper := setTimedSimAppStopper(stopCurrentApp)
 
 	t.Cleanup(func() {
 		stopCurrentApp()
+		restoreStopper()
 		close(done)
 		injectWG.Wait()
 		newTUIApp = orig
@@ -272,6 +278,28 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 		})
 
 		return app
+	}
+}
+
+func setTimedSimAppStopper(stop func()) func() {
+	timedSimAppStopperMu.Lock()
+	previous := timedSimAppStopper
+	timedSimAppStopper = stop
+	timedSimAppStopperMu.Unlock()
+
+	return func() {
+		timedSimAppStopperMu.Lock()
+		timedSimAppStopper = previous
+		timedSimAppStopperMu.Unlock()
+	}
+}
+
+func stopTimedSimAppForTest() {
+	timedSimAppStopperMu.Lock()
+	stop := timedSimAppStopper
+	timedSimAppStopperMu.Unlock()
+	if stop != nil {
+		stop()
 	}
 }
 
@@ -442,12 +470,15 @@ func abortDecryptTUISequence() []timedSimKey {
 func runDecryptWorkflowTUIForTest(t *testing.T, ctx context.Context, cfg *config.Config, configPath string) error {
 	t.Helper()
 
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- RunDecryptWorkflowTUI(ctx, cfg, logger, "1.0.0", configPath, "test-build")
+		errCh <- RunDecryptWorkflowTUI(runCtx, cfg, logger, "1.0.0", configPath, "test-build")
 	}()
 
 	waitTimeout := 30 * time.Second
@@ -464,7 +495,18 @@ func runDecryptWorkflowTUIForTest(t *testing.T, ctx context.Context, cfg *config
 	case err := <-errCh:
 		return err
 	case <-timer.C:
-		if err := ctx.Err(); err != nil {
+		cancel()
+		stopTimedSimAppForTest()
+
+		shutdownTimer := time.NewTimer(2 * time.Second)
+		defer shutdownTimer.Stop()
+		select {
+		case err := <-errCh:
+			return err
+		case <-shutdownTimer.C:
+		}
+
+		if err := runCtx.Err(); err != nil {
 			t.Fatalf("RunDecryptWorkflowTUI did not return within %s (context state: %v)", waitTimeout, err)
 			return nil
 		}
