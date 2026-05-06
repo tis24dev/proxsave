@@ -63,6 +63,11 @@ func NewWebhookNotifier(webhookConfig *config.WebhookConfig, logger *logging.Log
 		return nil, fmt.Errorf("webhook notifications enabled but no endpoints configured")
 	}
 
+	notifier := &WebhookNotifier{
+		config: webhookConfig,
+		logger: logger,
+	}
+
 	// Log each endpoint configuration (with masked sensitive data)
 	for i, ep := range webhookConfig.Endpoints {
 		logger.Debug("Endpoint #%d configuration:", i+1)
@@ -77,26 +82,8 @@ func NewWebhookNotifier(webhookConfig *config.WebhookConfig, logger *logging.Log
 				logger.Debug("    Header: %s (value masked)", k)
 			}
 		}
-
-		format := resolveWebhookFormat(ep.Format, webhookConfig.DefaultFormat)
-		method := resolveWebhookMethod(ep.Method)
-		if strings.EqualFold(format, "pushover") {
-			missing := []string{}
-			if ep.Auth.Token == "" {
-				missing = append(missing, "token")
-			}
-			if ep.Auth.User == "" {
-				missing = append(missing, "user")
-			}
-			if len(missing) > 0 {
-				return nil, fmt.Errorf("webhook endpoint %q: Pushover requires Auth.Token and Auth.User; missing %s", ep.Name, strings.Join(missing, "/"))
-			}
-			if ep.Priority < -2 || ep.Priority > 1 {
-				return nil, fmt.Errorf("webhook endpoint %q: PRIORITY must be in range -2..1 (got %d); priority 2 (emergency) is not supported", ep.Name, ep.Priority)
-			}
-			if method != http.MethodPost {
-				return nil, fmt.Errorf("webhook endpoint %q: METHOD must be POST for pushover (got %s)", ep.Name, method)
-			}
+		if err := notifier.validateEndpoint(ep); err != nil {
+			return nil, err
 		}
 	}
 
@@ -114,11 +101,34 @@ func NewWebhookNotifier(webhookConfig *config.WebhookConfig, logger *logging.Log
 
 	logger.Info("✅ WebhookNotifier initialized successfully with %d endpoint(s)", len(webhookConfig.Endpoints))
 
-	return &WebhookNotifier{
-		config: webhookConfig,
-		logger: logger,
-		client: client,
-	}, nil
+	notifier.client = client
+	return notifier, nil
+}
+
+func (w *WebhookNotifier) validateEndpoint(ep config.WebhookEndpoint) error {
+	format := resolveWebhookFormat(ep.Format, w.config.DefaultFormat)
+	method := resolveWebhookMethod(ep.Method)
+	if !strings.EqualFold(format, "pushover") {
+		return nil
+	}
+
+	missing := []string{}
+	if ep.Auth.Token == "" {
+		missing = append(missing, "token")
+	}
+	if ep.Auth.User == "" {
+		missing = append(missing, "user")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("webhook endpoint %q: Pushover requires Auth.Token and Auth.User; missing %s", ep.Name, strings.Join(missing, "/"))
+	}
+	if ep.Priority < -2 || ep.Priority > 1 {
+		return fmt.Errorf("webhook endpoint %q: PRIORITY must be in range -2..1 (got %d); priority 2 (emergency) is not supported", ep.Name, ep.Priority)
+	}
+	if method != http.MethodPost {
+		return fmt.Errorf("webhook endpoint %q: METHOD must be POST for pushover (got %s)", ep.Name, method)
+	}
+	return nil
 }
 
 // Name returns the notifier name

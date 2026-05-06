@@ -199,8 +199,7 @@ func TrustedCommandContext(ctx context.Context, execPath string, args ...string)
 		return nil, err
 	}
 	// #nosec G204 -- execPath is absolute, regular, executable, and not world-writable.
-	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
-	return exec.CommandContext(ctx, execPath, args...), nil
+	return exec.CommandContext(ctx, execPath, args...), nil // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 }
 
 func ValidateTrustedExecutablePath(execPath string) error {
