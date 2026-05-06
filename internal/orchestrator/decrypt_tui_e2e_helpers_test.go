@@ -27,6 +27,11 @@ import (
 
 var decryptTUIE2EMu sync.Mutex
 
+const (
+	timedSimScreenWaitTimeout = 5 * time.Second
+	timedSimCompletionTimeout = 10 * time.Second
+)
+
 type notifyingSimulationScreen struct {
 	tcell.SimulationScreen
 	mu       sync.Mutex
@@ -137,7 +142,20 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 	orig := newTUIApp
 	done := make(chan struct{})
 	var injectWG sync.WaitGroup
+	var appMu sync.RWMutex
+	var currentApp *tui.App
+
+	stopCurrentApp := func() {
+		appMu.RLock()
+		app := currentApp
+		appMu.RUnlock()
+		if app != nil {
+			app.Stop()
+		}
+	}
+
 	t.Cleanup(func() {
+		stopCurrentApp()
 		close(done)
 		injectWG.Wait()
 		newTUIApp = orig
@@ -156,8 +174,6 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 	}
 
 	screenStateCh := make(chan struct{}, 1)
-	var appMu sync.RWMutex
-	var currentApp *tui.App
 	screen := &notifyingSimulationScreen{
 		SimulationScreen: baseScreen,
 		notify: func() {
@@ -201,6 +217,8 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 
 				waitForScreenText := func(expected string) bool {
 					expected = strings.TrimSpace(expected)
+					timer := time.NewTimer(timedSimScreenWaitTimeout)
+					defer timer.Stop()
 					for {
 						current := currentScreenState()
 						if current.signature != "" {
@@ -214,6 +232,10 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 						case <-done:
 							return false
 						case <-screenStateCh:
+						case <-timer.C:
+							t.Errorf("TUI simulation did not render expected text %q within %s", expected, timedSimScreenWaitTimeout)
+							stopCurrentApp()
+							return false
 						}
 					}
 				}
@@ -236,6 +258,15 @@ func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
 					}
 					screen.InjectKey(k.Key, k.R, mod)
 					lastInjectedState = current.signature
+				}
+
+				timer := time.NewTimer(timedSimCompletionTimeout)
+				defer timer.Stop()
+				select {
+				case <-done:
+				case <-timer.C:
+					t.Errorf("TUI simulation did not finish within %s after injecting %d key(s)", timedSimCompletionTimeout, len(keys))
+					stopCurrentApp()
 				}
 			}()
 		})
