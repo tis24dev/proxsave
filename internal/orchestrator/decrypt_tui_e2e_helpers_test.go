@@ -25,15 +25,13 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-var (
-	decryptTUIE2EMu      sync.Mutex
-	timedSimAppStopperMu sync.Mutex
-	timedSimAppStopper   func()
-)
+var decryptTUIE2EMu sync.Mutex
 
 const (
 	timedSimScreenWaitTimeout = 10 * time.Second
 	timedSimCompletionTimeout = 15 * time.Second
+	timedSimDefaultSettle     = 15 * time.Millisecond
+	timedSimKeyDelay          = 15 * time.Millisecond
 )
 
 type notifyingSimulationScreen struct {
@@ -118,11 +116,38 @@ func cloneSimCells(cells []tcell.SimCell) []tcell.SimCell {
 }
 
 type timedSimKey struct {
-	Key         tcell.Key
-	R           rune
-	Mod         tcell.ModMask
-	Wait        time.Duration
-	WaitForText string
+	Key              tcell.Key
+	R                rune
+	Mod              tcell.ModMask
+	WaitForText      string
+	RequireNewApp    bool
+	SettleAfterMatch time.Duration
+}
+
+type timedSimHarness struct {
+	t             *testing.T
+	done          chan struct{}
+	closeDoneOnce sync.Once
+	injectWG      sync.WaitGroup
+	screenStateCh chan struct{}
+
+	appMu   sync.RWMutex
+	apps    []*tui.App
+	current *timedSimAppState
+}
+
+type timedSimAppState struct {
+	generation int
+	app        *tui.App
+	screen     *notifyingSimulationScreen
+}
+
+type timedSimScreenState struct {
+	generation int
+	text       string
+	focusType  string
+	ready      bool
+	screen     *notifyingSimulationScreen
 }
 
 type decryptTUIFixture struct {
@@ -139,182 +164,205 @@ type decryptTUIFixture struct {
 	ExpectedChecksum    string
 }
 
-func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) {
+func withTimedSimAppSequence(t *testing.T, keys []timedSimKey) *timedSimHarness {
 	t.Helper()
 
 	decryptTUIE2EMu.Lock()
 	orig := newTUIApp
-	done := make(chan struct{})
-	var injectWG sync.WaitGroup
-	var appMu sync.RWMutex
-	var currentApp *tui.App
-
-	stopCurrentApp := func() {
-		appMu.RLock()
-		app := currentApp
-		appMu.RUnlock()
-		if app != nil {
-			app.Stop()
-		}
+	h := &timedSimHarness{
+		t:             t,
+		done:          make(chan struct{}),
+		screenStateCh: make(chan struct{}, 1),
 	}
-	restoreStopper := setTimedSimAppStopper(stopCurrentApp)
 
 	t.Cleanup(func() {
-		stopCurrentApp()
-		restoreStopper()
-		close(done)
-		injectWG.Wait()
+		h.stop()
 		newTUIApp = orig
 		decryptTUIE2EMu.Unlock()
 	})
 
-	baseScreen := tcell.NewSimulationScreen("UTF-8")
-	if err := baseScreen.Init(); err != nil {
-		t.Fatalf("screen.Init: %v", err)
-	}
-	baseScreen.SetSize(120, 40)
-
-	type timedSimScreenState struct {
-		signature string
-		text      string
-	}
-
-	screenStateCh := make(chan struct{}, 1)
-	screen := &notifyingSimulationScreen{
-		SimulationScreen: baseScreen,
-		notify: func() {
-			select {
-			case screenStateCh <- struct{}{}:
-			default:
-			}
-		},
-	}
-
-	var once sync.Once
 	newTUIApp = func() *tui.App {
 		app := tui.NewApp()
-		appMu.Lock()
-		currentApp = app
-		appMu.Unlock()
+
+		baseScreen := tcell.NewSimulationScreen("UTF-8")
+		if err := baseScreen.Init(); err != nil {
+			t.Fatalf("screen.Init: %v", err)
+		}
+		baseScreen.SetSize(120, 40)
+
+		screen := &notifyingSimulationScreen{
+			SimulationScreen: baseScreen,
+			notify:           h.notifyScreenStateChanged,
+		}
+
+		h.appMu.Lock()
+		state := &timedSimAppState{
+			generation: len(h.apps) + 1,
+			app:        app,
+			screen:     screen,
+		}
+		h.apps = append(h.apps, app)
+		h.current = state
+		h.appMu.Unlock()
+
 		app.SetScreen(screen)
-
-		once.Do(func() {
-			injectWG.Add(1)
-			go func() {
-				defer injectWG.Done()
-				var lastInjectedState string
-
-				currentScreenState := func() timedSimScreenState {
-					appMu.RLock()
-					app := currentApp
-					appMu.RUnlock()
-
-					var focus any
-					if app != nil {
-						focus = app.GetFocus()
-					}
-					snapshot := screen.snapshotState()
-
-					return timedSimScreenState{
-						signature: timedSimScreenStateSignature(snapshot, focus),
-						text:      timedSimScreenText(snapshot),
-					}
-				}
-
-				waitForScreenText := func(expected string) bool {
-					expected = strings.TrimSpace(expected)
-					timer := time.NewTimer(timedSimScreenWaitTimeout)
-					defer timer.Stop()
-					for {
-						current := currentScreenState()
-						if current.signature != "" {
-							if (expected == "" || strings.Contains(current.text, expected)) &&
-								(lastInjectedState == "" || current.signature != lastInjectedState) {
-								return true
-							}
-						}
-
-						select {
-						case <-done:
-							return false
-						case <-screenStateCh:
-						case <-timer.C:
-							t.Errorf("TUI simulation did not render expected text %q within %s", expected, timedSimScreenWaitTimeout)
-							stopCurrentApp()
-							return false
-						}
-					}
-				}
-
-				for _, k := range keys {
-					if k.Wait > 0 {
-						if !waitForScreenText(k.WaitForText) {
-							return
-						}
-					}
-					current := currentScreenState()
-					mod := k.Mod
-					if mod == 0 {
-						mod = tcell.ModNone
-					}
-					select {
-					case <-done:
-						return
-					default:
-					}
-					screen.InjectKey(k.Key, k.R, mod)
-					lastInjectedState = current.signature
-				}
-
-				timer := time.NewTimer(timedSimCompletionTimeout)
-				defer timer.Stop()
-				select {
-				case <-done:
-				case <-timer.C:
-					t.Errorf("TUI simulation did not finish within %s after injecting %d key(s)", timedSimCompletionTimeout, len(keys))
-					stopCurrentApp()
-				}
-			}()
-		})
-
+		h.notifyScreenStateChanged()
 		return app
 	}
+
+	h.injectWG.Add(1)
+	go h.run(keys)
+
+	return h
 }
 
-func setTimedSimAppStopper(stop func()) func() {
-	timedSimAppStopperMu.Lock()
-	previous := timedSimAppStopper
-	timedSimAppStopper = stop
-	timedSimAppStopperMu.Unlock()
-
-	return func() {
-		timedSimAppStopperMu.Lock()
-		timedSimAppStopper = previous
-		timedSimAppStopperMu.Unlock()
-	}
-}
-
-func stopTimedSimAppForTest() {
-	timedSimAppStopperMu.Lock()
-	stop := timedSimAppStopper
-	timedSimAppStopperMu.Unlock()
-	if stop != nil {
-		stop()
+func (h *timedSimHarness) notifyScreenStateChanged() {
+	select {
+	case h.screenStateCh <- struct{}{}:
+	default:
 	}
 }
 
-func timedSimScreenStateSignature(snapshot timedSimScreenSnapshot, focus any) string {
-	if !snapshot.ready || snapshot.width <= 0 || snapshot.height <= 0 || len(snapshot.cells) < snapshot.width*snapshot.height {
-		return ""
+func (h *timedSimHarness) stop() {
+	if h == nil {
+		return
+	}
+	h.closeDoneOnce.Do(func() {
+		close(h.done)
+	})
+	h.StopAll()
+	h.injectWG.Wait()
+}
+
+func (h *timedSimHarness) StopAll() {
+	if h == nil {
+		return
+	}
+	h.appMu.RLock()
+	apps := append([]*tui.App(nil), h.apps...)
+	h.appMu.RUnlock()
+	for i := len(apps) - 1; i >= 0; i-- {
+		apps[i].Stop()
+	}
+}
+
+func (h *timedSimHarness) run(keys []timedSimKey) {
+	defer h.injectWG.Done()
+
+	generation := 0
+	for idx, key := range keys {
+		minGeneration := generation
+		if minGeneration == 0 || key.RequireNewApp {
+			minGeneration++
+		}
+
+		state, ok := h.waitForScreenText(idx, key, minGeneration)
+		if !ok {
+			return
+		}
+		generation = state.generation
+
+		settle := key.SettleAfterMatch
+		if settle <= 0 {
+			settle = timedSimDefaultSettle
+		}
+		if !h.sleepOrDone(settle) {
+			return
+		}
+
+		mod := key.Mod
+		if mod == 0 {
+			mod = tcell.ModNone
+		}
+		state.screen.InjectKey(key.Key, key.R, mod)
+		if !h.sleepOrDone(timedSimKeyDelay) {
+			return
+		}
 	}
 
-	sum := sha256.New()
-	fmt.Fprintf(sum, "size:%d:%d cursor:%d:%d:%t focus:%T:%p\n", snapshot.width, snapshot.height, snapshot.cursorX, snapshot.cursorY, snapshot.cursorVisible, focus, focus)
-	for _, cell := range snapshot.cells {
-		fg, bg, attr := cell.Style.Decompose()
-		fmt.Fprintf(sum, "%x/%d/%d/%d;", cell.Bytes, fg, bg, attr)
+	timer := time.NewTimer(timedSimCompletionTimeout)
+	defer timer.Stop()
+	select {
+	case <-h.done:
+	case <-timer.C:
+		h.t.Errorf("TUI simulation did not finish within %s after injecting %d key(s)\n%s", timedSimCompletionTimeout, len(keys), h.describeCurrentState())
+		h.StopAll()
 	}
-	return hex.EncodeToString(sum.Sum(nil))
+}
+
+func (h *timedSimHarness) waitForScreenText(index int, key timedSimKey, minGeneration int) (timedSimScreenState, bool) {
+	expected := strings.TrimSpace(key.WaitForText)
+	timer := time.NewTimer(timedSimScreenWaitTimeout)
+	defer timer.Stop()
+
+	for {
+		state := h.currentScreenState()
+		if state.ready && state.generation >= minGeneration && (expected == "" || strings.Contains(state.text, expected)) {
+			return state, true
+		}
+
+		select {
+		case <-h.done:
+			return timedSimScreenState{}, false
+		case <-h.screenStateCh:
+		case <-timer.C:
+			h.t.Errorf(
+				"TUI simulation timed out at action %d waiting for text %q within %s (min generation=%d, current generation=%d, focus=%s)\nCurrent screen:\n%s",
+				index,
+				expected,
+				timedSimScreenWaitTimeout,
+				minGeneration,
+				state.generation,
+				state.focusType,
+				state.text,
+			)
+			h.StopAll()
+			return state, false
+		}
+	}
+}
+
+func (h *timedSimHarness) currentScreenState() timedSimScreenState {
+	h.appMu.RLock()
+	current := h.current
+	h.appMu.RUnlock()
+	if current == nil || current.screen == nil {
+		return timedSimScreenState{}
+	}
+
+	focusType := "<nil>"
+	if current.app != nil {
+		if focus := current.app.GetFocus(); focus != nil {
+			focusType = fmt.Sprintf("%T", focus)
+		}
+	}
+	snapshot := current.screen.snapshotState()
+	return timedSimScreenState{
+		generation: current.generation,
+		text:       timedSimScreenText(snapshot),
+		focusType:  focusType,
+		ready:      snapshot.ready,
+		screen:     current.screen,
+	}
+}
+
+func (h *timedSimHarness) describeCurrentState() string {
+	state := h.currentScreenState()
+	return fmt.Sprintf("current generation=%d focus=%s ready=%t\nCurrent screen:\n%s", state.generation, state.focusType, state.ready, state.text)
+}
+
+func (h *timedSimHarness) sleepOrDone(d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-h.done:
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func timedSimScreenText(snapshot timedSimScreenSnapshot) string {
@@ -434,24 +482,25 @@ func createDecryptTUIEncryptedFixture(t *testing.T) *decryptTUIFixture {
 
 func successDecryptTUISequence(secret string) []timedSimKey {
 	keys := []timedSimKey{
-		{Key: tcell.KeyEnter, Wait: 1 * time.Second, WaitForText: "Select backup source"},
-		{Key: tcell.KeyEnter, Wait: 750 * time.Millisecond, WaitForText: "Select backup"},
+		{Key: tcell.KeyEnter, WaitForText: "Select backup source", RequireNewApp: true},
+		{Key: tcell.KeyEnter, WaitForText: "Select backup", RequireNewApp: true},
 	}
 
-	for _, r := range secret {
+	for idx, r := range secret {
 		keys = append(keys, timedSimKey{
-			Key:         tcell.KeyRune,
-			R:           r,
-			Wait:        35 * time.Millisecond,
-			WaitForText: "Decrypt key",
+			Key:              tcell.KeyRune,
+			R:                r,
+			WaitForText:      "Decrypt key",
+			RequireNewApp:    idx == 0,
+			SettleAfterMatch: 5 * time.Millisecond,
 		})
 	}
 
 	keys = append(keys,
-		timedSimKey{Key: tcell.KeyTab, Wait: 150 * time.Millisecond, WaitForText: "Decrypt key"},
-		timedSimKey{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond, WaitForText: "Decrypt key"},
-		timedSimKey{Key: tcell.KeyTab, Wait: 500 * time.Millisecond, WaitForText: "Destination directory"},
-		timedSimKey{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond, WaitForText: "Destination directory"},
+		timedSimKey{Key: tcell.KeyTab, WaitForText: "Decrypt key"},
+		timedSimKey{Key: tcell.KeyEnter, WaitForText: "Decrypt key"},
+		timedSimKey{Key: tcell.KeyTab, WaitForText: "Destination directory", RequireNewApp: true},
+		timedSimKey{Key: tcell.KeyEnter, WaitForText: "Destination directory"},
 	)
 
 	return keys
@@ -459,15 +508,15 @@ func successDecryptTUISequence(secret string) []timedSimKey {
 
 func abortDecryptTUISequence() []timedSimKey {
 	return []timedSimKey{
-		{Key: tcell.KeyEnter, Wait: 1 * time.Second, WaitForText: "Select backup source"},
-		{Key: tcell.KeyEnter, Wait: 750 * time.Millisecond, WaitForText: "Select backup"},
-		{Key: tcell.KeyRune, R: '0', Wait: 500 * time.Millisecond, WaitForText: "Decrypt key"},
-		{Key: tcell.KeyTab, Wait: 150 * time.Millisecond, WaitForText: "Decrypt key"},
-		{Key: tcell.KeyEnter, Wait: 100 * time.Millisecond, WaitForText: "Decrypt key"},
+		{Key: tcell.KeyEnter, WaitForText: "Select backup source", RequireNewApp: true},
+		{Key: tcell.KeyEnter, WaitForText: "Select backup", RequireNewApp: true},
+		{Key: tcell.KeyRune, R: '0', WaitForText: "Decrypt key", RequireNewApp: true},
+		{Key: tcell.KeyTab, WaitForText: "Decrypt key"},
+		{Key: tcell.KeyEnter, WaitForText: "Decrypt key"},
 	}
 }
 
-func runDecryptWorkflowTUIForTest(t *testing.T, ctx context.Context, cfg *config.Config, configPath string) error {
+func runDecryptWorkflowTUIForTest(t *testing.T, sim *timedSimHarness, ctx context.Context, cfg *config.Config, configPath string) error {
 	t.Helper()
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -496,7 +545,9 @@ func runDecryptWorkflowTUIForTest(t *testing.T, ctx context.Context, cfg *config
 		return err
 	case <-timer.C:
 		cancel()
-		stopTimedSimAppForTest()
+		if sim != nil {
+			sim.StopAll()
+		}
 
 		shutdownTimer := time.NewTimer(2 * time.Second)
 		defer shutdownTimer.Stop()
@@ -507,8 +558,14 @@ func runDecryptWorkflowTUIForTest(t *testing.T, ctx context.Context, cfg *config
 		}
 
 		if err := runCtx.Err(); err != nil {
+			if sim != nil {
+				t.Fatalf("RunDecryptWorkflowTUI did not return within %s (context state: %v)\n%s", waitTimeout, err, sim.describeCurrentState())
+			}
 			t.Fatalf("RunDecryptWorkflowTUI did not return within %s (context state: %v)", waitTimeout, err)
 			return nil
+		}
+		if sim != nil {
+			t.Fatalf("RunDecryptWorkflowTUI did not return within %s\n%s", waitTimeout, sim.describeCurrentState())
 		}
 		t.Fatalf("RunDecryptWorkflowTUI did not return within %s", waitTimeout)
 		return nil

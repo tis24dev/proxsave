@@ -18,12 +18,12 @@ func TestRunDecryptWorkflowTUI_SuccessLocalEncrypted(t *testing.T) {
 	t.Cleanup(func() { restoreFS = origFS })
 
 	fixture := createDecryptTUIEncryptedFixture(t)
-	withTimedSimAppSequence(t, successDecryptTUISequence(fixture.Secret))
+	sim := withTimedSimAppSequence(t, successDecryptTUISequence(fixture.Secret))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 	defer cancel()
 
-	if err := runDecryptWorkflowTUIForTest(t, ctx, fixture.Config, fixture.ConfigPath); err != nil {
+	if err := runDecryptWorkflowTUIForTest(t, sim, ctx, fixture.Config, fixture.ConfigPath); err != nil {
 		t.Fatalf("RunDecryptWorkflowTUI error: %v", err)
 	}
 
@@ -79,12 +79,12 @@ func TestRunDecryptWorkflowTUI_AbortAtSecretPrompt(t *testing.T) {
 	t.Cleanup(func() { restoreFS = origFS })
 
 	fixture := createDecryptTUIEncryptedFixture(t)
-	withTimedSimAppSequence(t, abortDecryptTUISequence())
+	sim := withTimedSimAppSequence(t, abortDecryptTUISequence())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 	defer cancel()
 
-	err := runDecryptWorkflowTUIForTest(t, ctx, fixture.Config, fixture.ConfigPath)
+	err := runDecryptWorkflowTUIForTest(t, sim, ctx, fixture.Config, fixture.ConfigPath)
 	if !errors.Is(err, ErrDecryptAborted) {
 		t.Fatalf("RunDecryptWorkflowTUI error=%v; want %v", err, ErrDecryptAborted)
 	}
