@@ -7,9 +7,9 @@ Configuration for AI behavior when interacting with Codacy's MCP Server
 
 ## CRITICAL: After ANY successful `edit_file` or `reapply` operation
 - YOU MUST IMMEDIATELY run the `codacy_cli_analyze` tool from Codacy's MCP Server for each file that was edited, with:
-  - `rootPath`: set to the workspace path
-  - `file`: set to the path of the edited file
-  - `tool`: leave empty or unset
+ - `rootPath`: set to the workspace path
+ - `file`: set to the path of the edited file
+ - `tool`: leave empty or unset
 - If any issues are found in the new edits, propose and apply fixes for them.
 - > NOTE: Failure to follow this rule is considered a critical error.
 
@@ -24,8 +24,8 @@ Configuration for AI behavior when interacting with Codacy's MCP Server
 
 ## When there are no Codacy MCP Server tools available, or the MCP Server is not reachable
 - Suggest the user the following troubleshooting steps:
-  - Try to reset the MCP on the extension
-  - If the user is using VSCode, suggest them to review their Copilot > MCP settings in Github, under their organization or personal account. Refer them to Settings > Copilot > Enable MCP servers in Copilot. Suggested URL (https://github.com/settings/copilot/features) or https://github.com/organizations/{organization-name}/settings/copilot/features (This can only be done by their organization admins / owners)
+ - Try to reset the MCP on the extension
+ - If the user is using VSCode, suggest them to review their Copilot > MCP settings in Github, under their organization or personal account. Refer them to Settings > Copilot > Enable MCP servers in Copilot. Suggested URL (https://github.com/settings/copilot/features) or https://github.com/organizations/{organization-name}/settings/copilot/features (This can only be done by their organization admins / owners)
 - If none of the above steps work, suggest the user to contact Codacy support
 
 ## Trying to call a tool that needs a rootPath as a parameter
@@ -33,24 +33,24 @@ Configuration for AI behavior when interacting with Codacy's MCP Server
 
 ## CRITICAL: Dependencies and Security Checks
 - IMMEDIATELY after ANY of these actions:
-  - Running npm/yarn/pnpm install
-  - Adding dependencies to package.json
-  - Adding requirements to requirements.txt
-  - Adding dependencies to pom.xml
-  - Adding dependencies to build.gradle
-  - Any other package manager operations
+ - Running npm/yarn/pnpm install
+ - Adding dependencies to package.json
+ - Adding requirements to requirements.txt
+ - Adding dependencies to pom.xml
+ - Adding dependencies to build.gradle
+ - Any other package manager operations
 - You MUST run the `codacy_cli_analyze` tool with:
-  - `rootPath`: set to the workspace path
-  - `tool`: set to "trivy"
-  - `file`: leave empty or unset
+ - `rootPath`: set to the workspace path
+ - `tool`: set to "trivy"
+ - `file`: leave empty or unset
 - If any vulnerabilities are found because of the newly added packages:
-  - Stop all other operations
-  - Propose and apply fixes for the security issues
-  - Only continue with the original task after security issues are resolved
+ - Stop all other operations
+ - Propose and apply fixes for the security issues
+ - Only continue with the original task after security issues are resolved
 - EXAMPLE:
-  - After: npm install react-markdown
-  - Do: Run codacy_cli_analyze with trivy
-  - Before: Continuing with any other tasks
+ - After: npm install react-markdown
+ - Do: Run codacy_cli_analyze with trivy
+ - Before: Continuing with any other tasks
 
 ## General
 - Repeat the relevant steps for each modified file.
