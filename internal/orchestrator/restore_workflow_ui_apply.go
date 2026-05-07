@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -311,8 +310,4 @@ func (w *restoreUIWorkflowRun) logRebootRecommendation() {
 	w.logger.Info("")
 	w.logger.Warning("⚠ SYSTEM REBOOT RECOMMENDED")
 	w.logger.Info("Reboot the node (or at least restart networking and system services) to ensure all restored configurations take effect cleanly.")
-}
-
-func inputAbortOrRestoreAbort(err error) bool {
-	return errors.Is(err, ErrRestoreAborted) || input.IsAborted(err)
 }

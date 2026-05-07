@@ -178,10 +178,6 @@ func copyFileOverlayWithinRoot(src, dest, destRoot string) (bool, error) {
 	return true, nil
 }
 
-func copySymlinkOverlay(src, dest string) (bool, error) {
-	return copySymlinkOverlayWithinRoot(src, dest, filepath.Dir(dest))
-}
-
 func copySymlinkOverlayWithinRoot(src, dest, destRoot string) (bool, error) {
 	info, err := restoreFS.Lstat(src)
 	if err != nil {

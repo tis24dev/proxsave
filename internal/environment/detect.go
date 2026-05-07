@@ -143,12 +143,6 @@ func detectEnvironmentInfo() (*EnvironmentInfo, error) {
 	return info, fmt.Errorf("unable to detect Proxmox environment")
 }
 
-// detectProxmox is retained as a compatibility wrapper for legacy call sites and tests.
-func detectProxmox() (types.ProxmoxType, string, error) {
-	info, err := detectEnvironmentInfo()
-	return info.Type, info.Version, err
-}
-
 func resolveType(hasPVE, hasPBS bool) types.ProxmoxType {
 	switch {
 	case hasPVE && hasPBS:
