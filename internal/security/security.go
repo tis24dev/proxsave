@@ -359,7 +359,7 @@ func (c *Checker) verifyBinaryIntegrity() {
 		c.addError("Executable %s changed during integrity check; aborting", c.execPath)
 		return
 	}
-	openedInfo = c.ensureOwnershipAndPermFromFD(f, openedInfo, 0o700, fmt.Sprintf("Executable %s", c.execPath))
+	c.ensureOwnershipAndPermFromFD(f, openedInfo, 0o700, fmt.Sprintf("Executable %s", c.execPath))
 
 	currentHash, err := checksumReader(f)
 	if err != nil {

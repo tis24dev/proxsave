@@ -30,7 +30,7 @@ var (
 )
 
 func guardMountPoint(ctx context.Context, guardTarget string) error {
-	ctx, target, err := normalizeGuardMountRequest(ctx, guardTarget)
+	target, err := normalizeGuardMountRequest(ctx, guardTarget)
 	if err != nil {
 		return err
 	}
@@ -47,18 +47,18 @@ func guardMountPoint(ctx context.Context, guardTarget string) error {
 	return bindReadOnlyGuard(guardDir, target)
 }
 
-func normalizeGuardMountRequest(ctx context.Context, guardTarget string) (context.Context, string, error) {
+func normalizeGuardMountRequest(ctx context.Context, guardTarget string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return ctx, "", err
+		return "", err
 	}
 	target := filepath.Clean(strings.TrimSpace(guardTarget))
 	if !isValidGuardTarget(target) {
-		return ctx, "", fmt.Errorf("invalid guard target: %q", guardTarget)
+		return "", fmt.Errorf("invalid guard target: %q", guardTarget)
 	}
-	return ctx, target, nil
+	return target, nil
 }
 
 func ensureGuardTargetUnmounted(target string) error {
