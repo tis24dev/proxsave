@@ -592,14 +592,15 @@ func rcloneCopyTo(ctx context.Context, remotePath, localPath string, showProgres
 }
 
 func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *backupCandidate, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
-	done := logging.DebugStart(logger, "stage raw artifacts", "archive=%s workdir=%s rclone=%v", cand.RawArchivePath, workDir, cand.IsRclone)
-	defer func() { done(err) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if cand == nil {
 		return stagedFiles{}, fmt.Errorf("candidate is nil")
 	}
+
+	done := logging.DebugStart(logger, "stage raw artifacts", "archive=%s workdir=%s rclone=%v", cand.RawArchivePath, workDir, cand.IsRclone)
+	defer func() { done(err) }()
 
 	archiveBase := filepath.Base(cand.RawArchivePath)
 	metaBase := filepath.Base(cand.RawMetadataPath)

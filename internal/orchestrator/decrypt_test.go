@@ -2570,6 +2570,16 @@ func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
 	}
 }
 
+func TestCopyRawArtifactsToWorkdirWithLogger_NilCandidate(t *testing.T) {
+	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), nil, t.TempDir(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil candidate")
+	}
+	if !strings.Contains(err.Error(), "candidate is nil") {
+		t.Fatalf("expected 'candidate is nil' error, got: %v", err)
+	}
+}
+
 func TestCopyRawArtifactsToWorkdir_InvalidRclonePaths(t *testing.T) {
 	origFS := restoreFS
 	restoreFS = osFS{}
