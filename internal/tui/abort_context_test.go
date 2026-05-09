@@ -31,8 +31,12 @@ func newSimulationApp(t *testing.T) (*App, tcell.SimulationScreen, <-chan struct
 	return app, screen, started
 }
 
+func clearAbortContextForTest() {
+	SetAbortContext(nil) //nolint:staticcheck // Verifies nil clears the process-wide abort context.
+}
+
 func TestSetAbortContext_GetAbortContextRoundTrip(t *testing.T) {
-	SetAbortContext(nil)
+	clearAbortContextForTest()
 	if got := getAbortContext(); got != nil {
 		t.Fatalf("expected nil abort context, got %v", got)
 	}
@@ -44,7 +48,7 @@ func TestSetAbortContext_GetAbortContextRoundTrip(t *testing.T) {
 		t.Fatalf("expected stored context to match")
 	}
 
-	SetAbortContext(nil)
+	clearAbortContextForTest()
 	if got := getAbortContext(); got != nil {
 		t.Fatalf("expected abort context to be cleared, got %v", got)
 	}
@@ -53,7 +57,7 @@ func TestSetAbortContext_GetAbortContextRoundTrip(t *testing.T) {
 func TestBindAbortContext_StopsAppOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	SetAbortContext(ctx)
-	t.Cleanup(func() { SetAbortContext(nil) })
+	t.Cleanup(clearAbortContextForTest)
 
 	stopped := make(chan struct{})
 	app := &App{
@@ -71,7 +75,7 @@ func TestBindAbortContext_StopsAppOnCancel(t *testing.T) {
 }
 
 func TestBindAbortContext_NoContextNoop(t *testing.T) {
-	SetAbortContext(nil)
+	clearAbortContextForTest()
 
 	stopped := make(chan struct{})
 	app := &App{
@@ -91,7 +95,7 @@ func TestNewApp_SetsThemeAndReturnsApplication(t *testing.T) {
 	oldTheme := tview.Styles
 	t.Cleanup(func() { tview.Styles = oldTheme })
 
-	SetAbortContext(nil)
+	clearAbortContextForTest()
 
 	app := NewApp()
 	if app == nil || app.Application == nil {
@@ -138,7 +142,7 @@ func TestAppRunWithContext_NilContextRunsUntilStopped(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- app.RunWithContext(nil)
+		done <- app.RunWithContext(nil) //nolint:staticcheck // Verifies nil context runs until the app stops.
 	}()
 
 	select {

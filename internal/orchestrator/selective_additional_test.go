@@ -84,7 +84,7 @@ func TestConfirmRestoreOperation(t *testing.T) {
 			}
 			_ = w.Close()
 			os.Stdin = r
-			defer r.Close()
+			defer func() { _ = r.Close() }()
 
 			got, err := ConfirmRestoreOperation(context.Background(), logger)
 			if err != nil {

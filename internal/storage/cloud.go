@@ -1241,7 +1241,7 @@ func (c *CloudStorage) isBackupEntry(filename string, snapshot map[string]struct
 	// Only include backup files (legacy `proxmox-backup-*` or Go `*-backup-*`)
 	isNewName := strings.Contains(filename, "-backup-")
 	isLegacy := strings.HasPrefix(filename, "proxmox-backup-")
-	if !(isLegacy || isNewName) {
+	if !isLegacy && !isNewName {
 		return false
 	}
 

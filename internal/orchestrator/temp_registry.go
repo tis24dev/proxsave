@@ -136,7 +136,7 @@ func (r *TempDirRegistry) updateEntries(mutator func([]tempDirRecord) ([]tempDir
 	})
 }
 
-func (r *TempDirRegistry) withLock(mutator func([]tempDirRecord) ([]tempDirRecord, error)) error {
+func (r *TempDirRegistry) withLock(mutator func([]tempDirRecord) ([]tempDirRecord, error)) (err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -144,12 +144,20 @@ func (r *TempDirRegistry) withLock(mutator func([]tempDirRecord) ([]tempDirRecor
 	if err != nil {
 		return fmt.Errorf("open registry lock: %w", err)
 	}
-	defer lockFile.Close()
+	defer func() {
+		if closeErr := lockFile.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close registry lock: %w", closeErr)
+		}
+	}()
 
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
 		return fmt.Errorf("flock registry: %w", err)
 	}
-	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	defer func() {
+		if unlockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN); unlockErr != nil && err == nil {
+			err = fmt.Errorf("unlock registry: %w", unlockErr)
+		}
+	}()
 
 	entries, err := r.loadEntries()
 	if err != nil {

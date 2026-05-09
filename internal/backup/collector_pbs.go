@@ -284,7 +284,7 @@ func (c *Collector) collectPBSCoreRuntime(ctx context.Context, commandsDir strin
 
 func (c *Collector) collectPBSNodeRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupPBSNodeConfig {
-		c.safeCmdOutput(ctx,
+		return c.safeCmdOutput(ctx,
 			commandSpec("proxmox-backup-manager", "node", "show", "--output-format=json"),
 			filepath.Join(commandsDir, "node_config.json"),
 			"Node configuration",
@@ -295,7 +295,7 @@ func (c *Collector) collectPBSNodeRuntime(ctx context.Context, commandsDir strin
 
 func (c *Collector) collectPBSNetworkRuntime(ctx context.Context, commandsDir string) error {
 	if c.config.BackupPBSNetworkConfig {
-		c.safeCmdOutput(ctx,
+		return c.safeCmdOutput(ctx,
 			commandSpec("proxmox-backup-manager", "network", "list", "--output-format=json"),
 			filepath.Join(commandsDir, "network_list.json"),
 			"Network configuration",
@@ -327,11 +327,13 @@ func (c *Collector) collectPBSDatastoreStatusRuntime(ctx context.Context, comman
 			continue
 		}
 		dsKey := ds.pathKey()
-		c.safeCmdOutput(ctx,
+		if err := c.safeCmdOutput(ctx,
 			commandSpec("proxmox-backup-manager", "datastore", "show", cliName, "--output-format=json"),
 			filepath.Join(commandsDir, fmt.Sprintf("datastore_%s_status.json", dsKey)),
 			fmt.Sprintf("Datastore %s status", ds.Name),
-			false)
+			false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -577,45 +579,41 @@ func (c *Collector) collectPBSTapeDrivesRuntime(ctx context.Context, commandsDir
 	if !enabled {
 		return nil
 	}
-	c.safeCmdOutput(ctx,
+	return c.safeCmdOutput(ctx,
 		commandSpec("proxmox-tape", "drive", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "tape_drives.json"),
 		"Tape drives",
 		false)
-	return nil
 }
 
 func (c *Collector) collectPBSTapeChangersRuntime(ctx context.Context, commandsDir string, enabled bool) error {
 	if !enabled {
 		return nil
 	}
-	c.safeCmdOutput(ctx,
+	return c.safeCmdOutput(ctx,
 		commandSpec("proxmox-tape", "changer", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "tape_changers.json"),
 		"Tape changers",
 		false)
-	return nil
 }
 
 func (c *Collector) collectPBSTapePoolsRuntime(ctx context.Context, commandsDir string, enabled bool) error {
 	if !enabled {
 		return nil
 	}
-	c.safeCmdOutput(ctx,
+	return c.safeCmdOutput(ctx,
 		commandSpec("proxmox-tape", "pool", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "tape_pools.json"),
 		"Tape pools",
 		false)
-	return nil
 }
 
 func (c *Collector) collectPBSDisksRuntime(ctx context.Context, commandsDir string) error {
-	c.safeCmdOutput(ctx,
+	return c.safeCmdOutput(ctx,
 		commandSpec("proxmox-backup-manager", "disk", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "disk_list.json"),
 		"Disk list",
 		false)
-	return nil
 }
 
 func (c *Collector) collectPBSCertInfoRuntime(ctx context.Context, commandsDir string) error {
@@ -630,25 +628,23 @@ func (c *Collector) collectPBSTrafficControlRuntime(ctx context.Context, command
 	if !c.config.BackupPBSTrafficControl {
 		return nil
 	}
-	c.safeCmdOutput(ctx,
+	return c.safeCmdOutput(ctx,
 		commandSpec("proxmox-backup-manager", "traffic-control", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "traffic_control.json"),
 		"Traffic control rules",
 		false)
-	return nil
 }
 
 func (c *Collector) collectPBSRecentTasksRuntime(ctx context.Context, commandsDir string) error {
-	c.safeCmdOutput(ctx,
+	return c.safeCmdOutput(ctx,
 		commandSpec("proxmox-backup-manager", "task", "list", "--limit", "50", "--output-format=json"),
 		filepath.Join(commandsDir, "recent_tasks.json"),
 		"Recent tasks",
 		false)
-	return nil
 }
 
 func (c *Collector) collectPBSS3EndpointsRuntime(ctx context.Context, commandsDir string) ([]string, error) {
-	if !(c.config.BackupDatastoreConfigs && c.config.BackupPBSS3Endpoints) {
+	if !c.config.BackupDatastoreConfigs || !c.config.BackupPBSS3Endpoints {
 		return nil, nil
 	}
 	raw, err := c.captureCommandOutput(ctx,
@@ -667,7 +663,7 @@ func (c *Collector) collectPBSS3EndpointsRuntime(ctx context.Context, commandsDi
 }
 
 func (c *Collector) collectPBSS3EndpointBucketsRuntime(ctx context.Context, commandsDir string, endpointIDs []string) error {
-	if !(c.config.BackupDatastoreConfigs && c.config.BackupPBSS3Endpoints) {
+	if !c.config.BackupDatastoreConfigs || !c.config.BackupPBSS3Endpoints {
 		return nil
 	}
 	for _, id := range uniqueSortedStrings(endpointIDs) {

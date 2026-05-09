@@ -474,7 +474,7 @@ func buildSystemData(macs []string, logger *logging.Logger) string {
 	}
 
 	if builder.Len() == 0 {
-		builder.WriteString(fmt.Sprintf("fallback-%d-%d", time.Now().Unix(), os.Getpid()))
+		fmt.Fprintf(&builder, "fallback-%d-%d", time.Now().Unix(), os.Getpid())
 		logDebug(logger, "Identity: buildSystemData: WARNING: used fallback seed (unexpected)")
 	}
 
@@ -494,10 +494,10 @@ func encodeProtectedServerIDWithMACs(serverID string, macs []string, primaryMAC 
 
 	var builder strings.Builder
 	builder.WriteString("# ProxSave Backup System Configuration\n")
-	builder.WriteString(fmt.Sprintf("# Generated: %s\n", time.Now().Format(time.RFC3339)))
+	fmt.Fprintf(&builder, "# Generated: %s\n", time.Now().Format(time.RFC3339))
 	builder.WriteString("# DO NOT MODIFY THIS FILE MANUALLY\n")
 	builder.WriteString("# Format: proxsave-identity-v2\n")
-	builder.WriteString(fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", encoded))
+	fmt.Fprintf(&builder, "SYSTEM_CONFIG_DATA=\"%s\"\n", encoded)
 	builder.WriteString("# End of configuration\n")
 
 	content := builder.String()

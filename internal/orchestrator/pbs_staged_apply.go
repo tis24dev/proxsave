@@ -404,11 +404,11 @@ func loadPBSDatastoreCfgFromInventory(stageRoot string) (string, string, error) 
 		if out.Len() > 0 {
 			out.WriteString("\n")
 		}
-		out.WriteString(fmt.Sprintf("datastore: %s\n", name))
+		fmt.Fprintf(&out, "datastore: %s\n", name)
 		if comment := strings.TrimSpace(ds.Comment); comment != "" {
-			out.WriteString(fmt.Sprintf("    comment %s\n", comment))
+			fmt.Fprintf(&out, "    comment %s\n", comment)
 		}
-		out.WriteString(fmt.Sprintf("    path %s\n", path))
+		fmt.Fprintf(&out, "    path %s\n", path)
 	}
 
 	generated := strings.TrimSpace(out.String())

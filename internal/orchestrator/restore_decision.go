@@ -85,7 +85,7 @@ func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (
 	if err != nil {
 		return nil, fmt.Errorf("open archive: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close archive")
 
 	reader, err := createDecompressionReader(context.Background(), file, archivePath)
 	if err != nil {
@@ -162,7 +162,7 @@ func readRestoreDecisionMetadata(tarReader *tar.Reader, header *tar.Header) ([]b
 	if header == nil {
 		return nil, fmt.Errorf("restore metadata entry is missing a tar header")
 	}
-	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+	if header.Typeflag != tar.TypeReg {
 		return nil, fmt.Errorf("archive entry %s is not a regular file", header.Name)
 	}
 

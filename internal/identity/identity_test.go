@@ -1138,7 +1138,8 @@ func TestReadAddrAssignType(t *testing.T) {
 }
 
 func TestIsBridgeInterfaceByName(t *testing.T) {
-	// On non-Linux or without sysfs, falls back to name-based detection
+	// On non-Linux, detection falls back to interface names. On Linux,
+	// sysfs decides the result and these synthetic names may not exist.
 	tests := []struct {
 		name string
 		want bool
@@ -1155,16 +1156,21 @@ func TestIsBridgeInterfaceByName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// This will use name-based fallback if sysfs not available
 			got := isBridgeInterface(tt.name)
-			// On Linux with sysfs, result may differ, so we just check it doesn't panic
-			_ = got
+			if runtime.GOOS == "linux" {
+				t.Logf("sysfs bridge detection for %q returned %v", tt.name, got)
+				return
+			}
+			if got != tt.want {
+				t.Fatalf("isBridgeInterface(%q)=%v; want %v", tt.name, got, tt.want)
+			}
 		})
 	}
 }
 
 func TestIsWirelessInterfaceByName(t *testing.T) {
-	// On non-Linux or without sysfs, falls back to name-based detection
+	// On non-Linux, detection falls back to interface names. On Linux,
+	// sysfs decides the result and these synthetic names may not exist.
 	tests := []struct {
 		name string
 		want bool
@@ -1179,9 +1185,12 @@ func TestIsWirelessInterfaceByName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := isWirelessInterface(tt.name)
-			// Check name-based fallback behavior
-			if strings.HasPrefix(strings.ToLower(tt.name), "wl") && !got {
-				// May or may not work depending on sysfs
+			if runtime.GOOS == "linux" {
+				t.Logf("sysfs wireless detection for %q returned %v", tt.name, got)
+				return
+			}
+			if got != tt.want {
+				t.Fatalf("isWirelessInterface(%q)=%v; want %v", tt.name, got, tt.want)
 			}
 		})
 	}

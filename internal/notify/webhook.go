@@ -387,7 +387,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 		// Read response body
 		w.logger.Debug("Reading response body...")
 		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		closeErr := resp.Body.Close()
 
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -395,6 +395,11 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 			}
 			lastErr = fmt.Errorf("failed to read response: %w", err)
 			w.logger.Warning("Failed to read response body: %v", err)
+			continue
+		}
+		if closeErr != nil {
+			lastErr = fmt.Errorf("failed to close response body: %w", closeErr)
+			w.logger.Warning("Failed to close response body: %v", closeErr)
 			continue
 		}
 

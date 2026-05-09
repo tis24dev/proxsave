@@ -124,8 +124,7 @@ func newPVERuntimeBricks() []collectionBrick {
 				if err != nil {
 					return err
 				}
-				state.collector.collectPVEACLRuntime(ctx, commandsDir)
-				return nil
+				return state.collector.collectPVEACLRuntime(ctx, commandsDir)
 			},
 		},
 		{
@@ -136,8 +135,7 @@ func newPVERuntimeBricks() []collectionBrick {
 				if err != nil {
 					return err
 				}
-				state.collector.collectPVEClusterRuntime(ctx, commandsDir, state.pve.clustered)
-				return nil
+				return state.collector.collectPVEClusterRuntime(ctx, commandsDir, state.pve.clustered)
 			},
 		},
 		{

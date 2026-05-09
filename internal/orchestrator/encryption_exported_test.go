@@ -177,14 +177,14 @@ func TestPrepareAgeRecipients_NoRecipientsNonInteractiveErrors(t *testing.T) {
 	}
 	outR, outW, err := os.Pipe()
 	if err != nil {
-		inR.Close()
-		inW.Close()
+		_ = inR.Close()
+		_ = inW.Close()
 		t.Fatalf("pipe stdout: %v", err)
 	}
-	defer inR.Close()
-	defer inW.Close()
-	defer outR.Close()
-	defer outW.Close()
+	defer func() { _ = inR.Close() }()
+	defer func() { _ = inW.Close() }()
+	defer func() { _ = outR.Close() }()
+	defer func() { _ = outW.Close() }()
 
 	os.Stdin = inR
 	os.Stdout = outW
@@ -245,7 +245,7 @@ func TestRunAgeSetupWizard_ExitReturnsAborted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open stdin: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	origIn := os.Stdin
 	t.Cleanup(func() { os.Stdin = origIn })
@@ -273,7 +273,7 @@ func TestRunAgeSetupWizard_Option1WritesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open stdin: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	origIn := os.Stdin
 	t.Cleanup(func() { os.Stdin = origIn })

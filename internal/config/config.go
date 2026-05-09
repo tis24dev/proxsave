@@ -1419,7 +1419,7 @@ func isLocalPBSHost(host string) bool {
 		hostShort = hostShort[:dot]
 	}
 	return hostShort == currentShort &&
-		(strings.Index(host, ".") < 0 || strings.Index(currentHost, ".") < 0)
+		(!strings.Contains(host, ".") || !strings.Contains(currentHost, "."))
 }
 
 func normalizePBSHost(host string) string {
@@ -1498,14 +1498,18 @@ func (c *Config) BuildWebhookConfig() *WebhookConfig {
 	}
 }
 
-func parseEnvFile(path string) (map[string]string, error) {
+func parseEnvFile(path string) (raw map[string]string, err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open config file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close config file: %w", closeErr)
+		}
+	}()
 
-	raw := make(map[string]string)
+	raw = make(map[string]string)
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {

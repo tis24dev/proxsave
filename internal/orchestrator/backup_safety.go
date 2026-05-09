@@ -60,13 +60,13 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	if err != nil {
 		return nil, fmt.Errorf("create backup archive: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close backup archive")
 
 	gzWriter := gzip.NewWriter(file)
-	defer gzWriter.Close()
+	defer closeIntoErr(&err, gzWriter, "close gzip writer")
 
 	tarWriter := tar.NewWriter(gzWriter)
-	defer tarWriter.Close()
+	defer closeIntoErr(&err, tarWriter, "close tar writer")
 
 	result = &SafetyBackupResult{
 		BackupPath: backupArchive,
@@ -225,12 +225,12 @@ func CreatePVEAccessControlRollbackBackup(logger *logging.Logger, selectedCatego
 }
 
 // backupFile adds a single file to the tar archive
-func backupFile(tw *tar.Writer, sourcePath, archivePath string, result *SafetyBackupResult, logger *logging.Logger) error {
+func backupFile(tw *tar.Writer, sourcePath, archivePath string, result *SafetyBackupResult, logger *logging.Logger) (err error) {
 	file, err := safetyFS.Open(sourcePath)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close source file")
 
 	info, err := file.Stat()
 	if err != nil {
@@ -333,13 +333,13 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 	if err != nil {
 		return fmt.Errorf("open backup: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close backup archive")
 
 	gzReader, err := gzip.NewReader(file)
 	if err != nil {
 		return fmt.Errorf("create gzip reader: %w", err)
 	}
-	defer gzReader.Close()
+	defer closeIntoErr(&err, gzReader, "close gzip reader")
 
 	tarReader := tar.NewReader(gzReader)
 	filesRestored := 0
@@ -400,7 +400,10 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 			}
 
 			// Remove existing file/symlink before creating new one
-			safetyFS.Remove(target)
+			if err := safetyFS.Remove(target); err != nil && !os.IsNotExist(err) {
+				logger.Warning("Cannot remove existing path %s before symlink restore: %v", target, err)
+				continue
+			}
 
 			// Create the symlink
 			if err := safetyFS.Symlink(linkTarget, target); err != nil {
@@ -412,12 +415,16 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 			actualTarget, err := safetyFS.Readlink(target)
 			if err != nil {
 				logger.Warning("Cannot read created symlink %s: %v", target, err)
-				safetyFS.Remove(target) // Clean up the symlink
+				if removeErr := safetyFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
+					logger.Warning("Cannot remove unreadable symlink %s: %v", target, removeErr)
+				}
 				continue
 			}
 
 			if _, err := resolvePathRelativeToBaseWithinRootFS(safetyFS, absDestRoot, filepath.Dir(target), actualTarget); err != nil {
-				safetyFS.Remove(target)
+				if removeErr := safetyFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
+					logger.Warning("Cannot remove unsafe symlink %s: %v", target, removeErr)
+				}
 				if isPathSecurityError(err) {
 					logger.Warning("Removing symlink %s -> %s: target escapes root after creation: %v",
 						target, actualTarget, err)
@@ -438,11 +445,16 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 		}
 
 		if _, err := io.Copy(outFile, tarReader); err != nil {
-			outFile.Close()
+			if closeErr := outFile.Close(); closeErr != nil {
+				logger.Warning("Cannot close partially restored file %s: %v", target, closeErr)
+			}
 			logger.Warning("Cannot write file %s: %v", target, err)
 			continue
 		}
-		outFile.Close()
+		if err := outFile.Close(); err != nil {
+			logger.Warning("Cannot close restored file %s: %v", target, err)
+			continue
+		}
 
 		filesRestored++
 		logger.Debug("Restored: %s", header.Name)

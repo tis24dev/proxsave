@@ -73,7 +73,7 @@ func (r networkHealthReport) Details() string {
 	b.WriteString(r.Summary())
 	b.WriteString("\n")
 	for _, c := range r.Checks {
-		b.WriteString(fmt.Sprintf("- [%s] %s: %s\n", c.Severity.String(), c.Name, c.Message))
+		fmt.Fprintf(&b, "- [%s] %s: %s\n", c.Severity.String(), c.Name, c.Message)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

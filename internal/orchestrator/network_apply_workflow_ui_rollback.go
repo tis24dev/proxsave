@@ -443,12 +443,12 @@ func networkNotCommittedMessage(diagnosticsDir string, notCommittedErr *NetworkA
 	var b strings.Builder
 	b.WriteString("Network configuration not committed.\n\n")
 	b.WriteString(rollbackState + "\n\n")
-	b.WriteString(fmt.Sprintf("IP now (after apply): %s\n", observed))
+	fmt.Fprintf(&b, "IP now (after apply): %s\n", observed)
 	if original != "unknown" {
-		b.WriteString(fmt.Sprintf("Expected after rollback: %s\n", original))
+		fmt.Fprintf(&b, "Expected after rollback: %s\n", original)
 	}
 	if reconnectHost != "" && reconnectHost != "unknown" {
-		b.WriteString(fmt.Sprintf("Reconnect using: %s\n", reconnectHost))
+		fmt.Fprintf(&b, "Reconnect using: %s\n", reconnectHost)
 	}
 	b.WriteString("\nDiagnostics saved under:\n")
 	b.WriteString(strings.TrimSpace(diagnosticsDir))

@@ -44,12 +44,12 @@ func buildNetworkPlanReport(ctx context.Context, iface, source string, timeout t
 
 	var b strings.Builder
 	b.WriteString("Network plan\n\n")
-	b.WriteString(fmt.Sprintf("- Management interface: %s\n", strings.TrimSpace(iface)))
+	fmt.Fprintf(&b, "- Management interface: %s\n", strings.TrimSpace(iface))
 	if strings.TrimSpace(source) != "" {
-		b.WriteString(fmt.Sprintf("- Detection source: %s\n", strings.TrimSpace(source)))
+		fmt.Fprintf(&b, "- Detection source: %s\n", strings.TrimSpace(source))
 	}
-	b.WriteString(fmt.Sprintf("- Current runtime: %s\n", current.summary()))
-	b.WriteString(fmt.Sprintf("- Target config:  %s\n", target.summary()))
+	fmt.Fprintf(&b, "- Current runtime: %s\n", current.summary())
+	fmt.Fprintf(&b, "- Target config:  %s\n", target.summary())
 	return b.String(), nil
 }
 

@@ -42,7 +42,7 @@ func TestEmailNotifier_RelayNoFallback_ReturnsError(t *testing.T) {
 	// Force relay failure.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"temporary"}`))
+		_, _ = w.Write([]byte(`{"error":"temporary"}`))
 	}))
 	defer server.Close()
 
@@ -136,7 +136,7 @@ func TestEmailNotifier_RelayFallback_UsesPMFOnly(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"temporary"}`))
+		_, _ = w.Write([]byte(`{"error":"temporary"}`))
 	}))
 	defer server.Close()
 

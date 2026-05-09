@@ -22,7 +22,7 @@ type pbsDatastoreEntry struct {
 	Path string
 }
 
-func loadPVEStorageEntries(path string, logger *logging.Logger) ([]pveStorageEntry, error) {
+func loadPVEStorageEntries(path string, logger *logging.Logger) (entries []pveStorageEntry, err error) {
 	if exists, err := configFileExists(path, "storage.cfg", "storage directory recreation", logger); err != nil || !exists {
 		return nil, err
 	}
@@ -32,16 +32,16 @@ func loadPVEStorageEntries(path string, logger *logging.Logger) ([]pveStorageEnt
 	if err != nil {
 		return nil, fmt.Errorf("open storage.cfg: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close storage.cfg")
 
-	entries, err := parsePVEStorageEntries(file)
+	entries, err = parsePVEStorageEntries(file)
 	if err != nil {
 		return nil, fmt.Errorf("read storage.cfg: %w", err)
 	}
 	return entries, nil
 }
 
-func loadPBSDatastoreEntries(path string, logger *logging.Logger) ([]pbsDatastoreEntry, error) {
+func loadPBSDatastoreEntries(path string, logger *logging.Logger) (entries []pbsDatastoreEntry, err error) {
 	if exists, err := configFileExists(path, "datastore.cfg", "datastore directory recreation", logger); err != nil || !exists {
 		return nil, err
 	}
@@ -55,9 +55,9 @@ func loadPBSDatastoreEntries(path string, logger *logging.Logger) ([]pbsDatastor
 	if err != nil {
 		return nil, fmt.Errorf("open datastore.cfg: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close datastore.cfg")
 
-	entries, err := parsePBSDatastoreEntries(file)
+	entries, err = parsePBSDatastoreEntries(file)
 	if err != nil {
 		return nil, fmt.Errorf("read datastore.cfg: %w", err)
 	}

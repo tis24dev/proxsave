@@ -108,8 +108,8 @@ func selectRestoreModeTUI(ctx context.Context, systemType SystemType, configPath
 	listItem := components.NewListFormItem(list).
 		SetLabel("Select restore mode").
 		SetFieldHeight(8)
-	form.Form.AddFormItem(listItem)
-	form.Form.SetFocus(0)
+	form.AddFormItem(listItem)
+	form.SetFocus(0)
 
 	form.SetOnCancel(func() {
 		aborted = true
@@ -192,8 +192,8 @@ func selectPBSRestoreBehaviorTUI(ctx context.Context, configPath, buildSig, back
 	listItem := components.NewListFormItem(list).
 		SetLabel("Select PBS restore behavior").
 		SetFieldHeight(6)
-	form.Form.AddFormItem(listItem)
-	form.Form.SetFocus(0)
+	form.AddFormItem(listItem)
+	form.SetFocus(0)
 
 	form.SetOnCancel(func() {
 		aborted = true
@@ -298,7 +298,7 @@ func selectCategoriesTUI(ctx context.Context, available []Category, systemType S
 			return event
 		})
 
-		form.Form.AddFormItem(dropdown)
+		form.AddFormItem(dropdown)
 
 		if strings.TrimSpace(cat.Description) != "" {
 			desc := tview.NewInputField().
@@ -306,7 +306,7 @@ func selectCategoriesTUI(ctx context.Context, available []Category, systemType S
 				SetFieldWidth(0).
 				SetText("").
 				SetDisabled(true)
-			form.Form.AddFormItem(desc)
+			form.AddFormItem(desc)
 		}
 	}
 
@@ -333,7 +333,7 @@ func selectCategoriesTUI(ctx context.Context, available []Category, systemType S
 	})
 
 	// Buttons: Back, Continue, Cancel
-	form.Form.AddButton("Back", func() {
+	form.AddButton("Back", func() {
 		goBack = true
 		app.Stop()
 	})
@@ -550,8 +550,8 @@ func promptClusterRestoreModeTUI(ctx context.Context, configPath, buildSig strin
 	listItem := components.NewListFormItem(list).
 		SetLabel("Cluster restore mode").
 		SetFieldHeight(6)
-	form.Form.AddFormItem(listItem)
-	form.Form.SetFocus(0)
+	form.AddFormItem(listItem)
+	form.SetFocus(0)
 
 	form.SetOnCancel(func() {
 		aborted = true
@@ -904,13 +904,11 @@ func promptNetworkCommitTUI(ctx context.Context, timeout time.Duration, health n
 		var b strings.Builder
 		for _, check := range report.Checks {
 			color := healthColor(check.Severity)
-			b.WriteString(fmt.Sprintf(
-				"- [%s]%s[white] %s: %s\n",
+			fmt.Fprintf(&b, "- [%s]%s[white] %s: %s\n",
 				color,
 				check.Severity.String(),
 				tview.Escape(check.Name),
-				tview.Escape(check.Message),
-			))
+				tview.Escape(check.Message))
 		}
 		return strings.TrimRight(b.String(), "\n")
 	}
@@ -934,7 +932,7 @@ func promptNetworkCommitTUI(ctx context.Context, timeout time.Duration, health n
 		}
 		var b strings.Builder
 		for _, m := range r.AppliedNICMap {
-			b.WriteString(fmt.Sprintf("- %s -> %s\n", tview.Escape(m.OldName), tview.Escape(m.NewName)))
+			fmt.Fprintf(&b, "- %s -> %s\n", tview.Escape(m.OldName), tview.Escape(m.NewName))
 		}
 		return strings.TrimRight(b.String(), "\n")
 	}

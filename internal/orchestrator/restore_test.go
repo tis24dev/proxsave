@@ -1235,7 +1235,9 @@ func TestMinDuration(t *testing.T) {
 func TestSleepWithContext_Normal(t *testing.T) {
 	ctx := context.Background()
 	start := time.Now()
-	sleepWithContext(ctx, 50*time.Millisecond)
+	if err := sleepWithContext(ctx, 50*time.Millisecond); err != nil {
+		t.Fatalf("sleepWithContext error: %v", err)
+	}
 	elapsed := time.Since(start)
 	if elapsed < 40*time.Millisecond {
 		t.Fatalf("sleep too short: %v", elapsed)
@@ -1246,7 +1248,9 @@ func TestSleepWithContext_Cancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	sleepWithContext(ctx, 1*time.Second)
+	if err := sleepWithContext(ctx, 1*time.Second); err == nil {
+		t.Fatalf("expected cancellation error")
+	}
 	elapsed := time.Since(start)
 	if elapsed > 100*time.Millisecond {
 		t.Fatalf("sleep should have returned immediately: %v", elapsed)

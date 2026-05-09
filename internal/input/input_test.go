@@ -218,7 +218,7 @@ func TestReadLineWithContext_ReturnsLine(t *testing.T) {
 
 func TestReadLineWithContext_NilContextWorks(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("hello\n"))
-	got, err := ReadLineWithContext(nil, reader)
+	got, err := ReadLineWithContext(nil, reader) //nolint:staticcheck // Verifies the documented nil context fallback.
 	if err != nil {
 		t.Fatalf("ReadLineWithContext error: %v", err)
 	}
@@ -229,8 +229,8 @@ func TestReadLineWithContext_NilContextWorks(t *testing.T) {
 
 func TestReadLineWithContext_CancelledReturnsAborted(t *testing.T) {
 	pr, pw := io.Pipe()
-	defer pr.Close()
-	defer pw.Close()
+	defer func() { _ = pr.Close() }()
+	defer func() { _ = pw.Close() }()
 
 	reader := bufio.NewReader(pr)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -258,8 +258,8 @@ func TestReadLineWithContext_CancelledReturnsAborted(t *testing.T) {
 
 func TestReadLineWithContext_DeadlineReturnsDeadlineExceeded(t *testing.T) {
 	pr, pw := io.Pipe()
-	defer pr.Close()
-	defer pw.Close()
+	defer func() { _ = pr.Close() }()
+	defer func() { _ = pw.Close() }()
 
 	reader := bufio.NewReader(pr)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -364,7 +364,7 @@ func TestReadPasswordWithContext_NilContextWorks(t *testing.T) {
 	readPassword := func(fd int) ([]byte, error) {
 		return []byte("secret"), nil
 	}
-	got, err := ReadPasswordWithContext(nil, readPassword, 0)
+	got, err := ReadPasswordWithContext(nil, readPassword, 0) //nolint:staticcheck // Verifies the documented nil context fallback.
 	if err != nil {
 		t.Fatalf("ReadPasswordWithContext error: %v", err)
 	}

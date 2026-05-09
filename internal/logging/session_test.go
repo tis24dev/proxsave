@@ -42,7 +42,7 @@ func TestDetectHostname(t *testing.T) {
 	for _, r := range host {
 		isLower := r >= 'a' && r <= 'z'
 		isDigit := r >= '0' && r <= '9'
-		if !(isLower || isDigit || r == '-') {
+		if !isLower && !isDigit && r != '-' {
 			t.Fatalf("unexpected rune %q in hostname %q", r, host)
 		}
 	}

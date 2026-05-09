@@ -19,7 +19,7 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 	if err != nil {
 		return nil, 0, 0
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, 0, 64*1024)

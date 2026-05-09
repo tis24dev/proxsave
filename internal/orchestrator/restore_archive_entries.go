@@ -209,12 +209,16 @@ func extractSymlink(target string, header *tar.Header, destRoot string, logger *
 	// POST-CREATION VALIDATION: Verify the created symlink's target stays within destRoot
 	actualTarget, err := restoreFS.Readlink(target)
 	if err != nil {
-		restoreFS.Remove(target) // Clean up
+		if removeErr := restoreFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
+			logger.Debug("Failed to remove symlink %s after readlink error: %v", target, removeErr)
+		}
 		return fmt.Errorf("read created symlink %s: %w", target, err)
 	}
 
 	if _, err := resolvePathRelativeToBaseWithinRootFS(restoreFS, destRoot, filepath.Dir(target), actualTarget); err != nil {
-		restoreFS.Remove(target)
+		if removeErr := restoreFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
+			logger.Debug("Failed to remove unsafe symlink %s: %v", target, removeErr)
+		}
 		return fmt.Errorf("symlink target escapes root after creation: %s -> %s: %w", header.Name, actualTarget, err)
 	}
 

@@ -153,7 +153,7 @@ func readTarEntry(ctx context.Context, archivePath, name string, maxBytes int64)
 	if err != nil {
 		return nil, fmt.Errorf("open archive: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close archive")
 
 	reader, err := createDecompressionReader(ctx, file, archivePath)
 	if err != nil {
@@ -182,7 +182,7 @@ func readTarEntry(ctx context.Context, archivePath, name string, maxBytes int64)
 		if header.Name != wantA && header.Name != wantB {
 			continue
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		if header.Typeflag != tar.TypeReg {
 			return nil, fmt.Errorf("archive entry %s is not a regular file", header.Name)
 		}
 

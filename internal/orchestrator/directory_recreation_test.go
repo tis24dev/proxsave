@@ -529,7 +529,7 @@ func TestRecreateDirectoriesFromConfigPVEStatError(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0o000); err != nil {
 		t.Skipf("cannot create restricted directory: %v", err)
 	}
-	defer os.Chmod(cfgDir, 0o755)
+	defer func() { _ = os.Chmod(cfgDir, 0o755) }()
 
 	cfgPath := filepath.Join(cfgDir, "storage.cfg")
 	prev := storageCfgPath
@@ -555,7 +555,7 @@ func TestRecreateDirectoriesFromConfigPBSStatError(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0o000); err != nil {
 		t.Skipf("cannot create restricted directory: %v", err)
 	}
-	defer os.Chmod(cfgDir, 0o755)
+	defer func() { _ = os.Chmod(cfgDir, 0o755) }()
 
 	cfgPath := filepath.Join(cfgDir, "datastore.cfg")
 	prev := datastoreCfgPath

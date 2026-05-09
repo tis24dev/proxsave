@@ -16,8 +16,8 @@ func TestCreateDecompressionReaderUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = f.Close() }()
 
 	if _, err := createDecompressionReader(context.Background(), f, f.Name()); err == nil {
 		t.Fatalf("expected error for unsupported extension")
@@ -29,8 +29,8 @@ func TestCreateDecompressionReaderTar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = f.Close() }()
 
 	reader, err := createDecompressionReader(context.Background(), f, f.Name())
 	if err != nil {
@@ -117,14 +117,14 @@ func TestCreateDecompressionReaderUsesStreamingRunnerForCompressedFormats(t *tes
 			if err != nil {
 				t.Fatalf("CreateTemp: %v", err)
 			}
-			defer os.Remove(f.Name())
-			defer f.Close()
+			defer func() { _ = os.Remove(f.Name()) }()
+			defer func() { _ = f.Close() }()
 
 			reader, err := createDecompressionReader(context.Background(), f, f.Name())
 			if err != nil {
 				t.Fatalf("createDecompressionReader(%s) error: %v", tt.ext, err)
 			}
-			defer reader.Close()
+			defer func() { _ = reader.Close() }()
 
 			out, err := io.ReadAll(reader)
 			if err != nil {

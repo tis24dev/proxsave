@@ -70,7 +70,7 @@ func CheckTelegramRegistration(ctx context.Context, serverAPIHost, serverID stri
 		logTelegramRegistrationDebug(logger, "Telegram registration: request failed: %v", err)
 		return TelegramRegistrationStatus{Message: "Connection failed", Error: err}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	logTelegramRegistrationDebug(logger, "Telegram registration: response status=%d bodyBytes=%d bodyPreview=%q", resp.StatusCode, len(body), truncateTelegramRegistrationBody(body, 200))

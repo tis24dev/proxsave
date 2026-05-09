@@ -33,7 +33,7 @@ func NewListFormItem(list *tview.List) *ListFormItem {
 		focusedSelectedBg: tui.ProxmoxOrange,
 		blurredSelectedBg: tcell.ColorDarkSlateGray,
 	}
-	item.List.SetInputCapture(item.inputCapture)
+	item.SetInputCapture(item.inputCapture)
 	return item
 }
 
@@ -67,7 +67,7 @@ func (i *ListFormItem) GetLabel() string {
 func (i *ListFormItem) SetFormAttributes(labelWidth int, labelColor, bgColor, fieldTextColor, fieldBgColor tcell.Color) tview.FormItem {
 	i.bgColor = bgColor
 	i.textColor = fieldTextColor
-	i.List.
+	i.
 		SetMainTextColor(fieldTextColor).
 		SetSecondaryTextColor(fieldTextColor).
 		SetBackgroundColor(bgColor)
@@ -111,13 +111,13 @@ func (i *ListFormItem) inputCapture(event *tcell.EventKey) *tcell.EventKey {
 		}
 		return nil
 	case tcell.KeyUp:
-		if i.finished != nil && i.List.GetItemCount() > 0 && i.List.GetCurrentItem() == 0 {
+		if i.finished != nil && i.GetItemCount() > 0 && i.GetCurrentItem() == 0 {
 			i.finished(tcell.KeyBacktab)
 			return nil
 		}
 	case tcell.KeyDown:
-		count := i.List.GetItemCount()
-		if i.finished != nil && count > 0 && i.List.GetCurrentItem() == count-1 {
+		count := i.GetItemCount()
+		if i.finished != nil && count > 0 && i.GetCurrentItem() == count-1 {
 			i.finished(tcell.KeyTab)
 			return nil
 		}
@@ -129,12 +129,12 @@ func (i *ListFormItem) inputCapture(event *tcell.EventKey) *tcell.EventKey {
 // Focus is called when this primitive receives focus.
 func (i *ListFormItem) Focus(delegate func(p tview.Primitive)) {
 	i.hasFocus = true
-	i.List.SetSelectedBackgroundColor(i.focusedSelectedBg)
+	i.SetSelectedBackgroundColor(i.focusedSelectedBg)
 	col := i.textColor
 	if col == 0 {
 		col = tcell.ColorWhite
 	}
-	i.List.SetSelectedTextColor(col)
+	i.SetSelectedTextColor(col)
 	i.List.Focus(delegate)
 }
 
@@ -145,11 +145,11 @@ func (i *ListFormItem) Blur() {
 	if bg == 0 {
 		bg = i.blurredSelectedBg
 	}
-	i.List.SetSelectedBackgroundColor(bg)
+	i.SetSelectedBackgroundColor(bg)
 	col := i.textColor
 	if col == 0 {
 		col = tcell.ColorWhite
 	}
-	i.List.SetSelectedTextColor(col)
+	i.SetSelectedTextColor(col)
 	i.List.Blur()
 }

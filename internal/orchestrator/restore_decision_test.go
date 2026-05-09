@@ -184,7 +184,7 @@ func TestCollectRestoreArchiveFacts_RejectsOversizedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Open: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	archivePaths, metadata, metadataErr, err := collectRestoreArchiveFacts(tar.NewReader(file))
 	if err != nil {

@@ -83,7 +83,7 @@ func BenchmarkPrefilterFiles(b *testing.B) {
 	}
 }
 
-func writeFileOfSize(path string, size int64) error {
+func writeFileOfSize(path string, size int64) (err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func writeFileOfSize(path string, size int64) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer closeIntoErr(&err, f, "close benchmark file")
 
 	chunk := bytes.Repeat([]byte("x"), 32*1024)
 	var written int64
@@ -134,14 +134,18 @@ func copyDir(src, dst string) error {
 		}
 		dstFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
 		if err != nil {
-			srcFile.Close()
+			_ = srcFile.Close()
 			return err
 		}
-		_, err = io.Copy(dstFile, srcFile)
-		srcFile.Close()
-		if err != nil {
+		_, copyErr := io.Copy(dstFile, srcFile)
+		closeSrcErr := srcFile.Close()
+		if copyErr != nil {
 			_ = dstFile.Close()
-			return err
+			return copyErr
+		}
+		if closeSrcErr != nil {
+			_ = dstFile.Close()
+			return closeSrcErr
 		}
 		return dstFile.Close()
 	})

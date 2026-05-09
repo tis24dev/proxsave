@@ -155,7 +155,7 @@ func (osCommandRunner) RunStream(ctx context.Context, name string, stdin io.Read
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		stdout.Close()
+		_ = stdout.Close()
 		return nil, err
 	}
 	return &waitReadCloser{ReadCloser: stdout, wait: cmd.Wait}, nil

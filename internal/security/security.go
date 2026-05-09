@@ -348,7 +348,7 @@ func (c *Checker) verifyBinaryIntegrity() {
 		c.addError("Cannot open executable %s: %v", c.execPath, err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	openedInfo, err := f.Stat()
 	if err != nil {
@@ -569,7 +569,7 @@ func fileContainsMarker(path string, markers []string, limit int) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	const bufSize = 4096
 	maxMarkerLen := 0
@@ -801,7 +801,7 @@ func checksumFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return checksumReader(f)
 }
 

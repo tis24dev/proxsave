@@ -33,7 +33,7 @@ func (p *Panel) SetTitle(title string) *Panel {
 func (p *Panel) SetStatus(status string) *Panel {
 	symbol := tui.StatusSymbol(status)
 
-	title := p.Box.GetTitle()
+	title := p.GetTitle()
 	p.Box.SetTitle(title + " " + symbol)
 	return p
 }
@@ -41,7 +41,7 @@ func (p *Panel) SetStatus(status string) *Panel {
 // InfoPanel creates a styled info panel
 func InfoPanel(title, message string) *Panel {
 	panel := NewPanel().SetTitle(title)
-	panel.Box.SetBackgroundColor(tui.ProxmoxDark)
+	panel.SetBackgroundColor(tui.ProxmoxDark)
 	return panel
 }
 

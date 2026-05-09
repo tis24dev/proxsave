@@ -22,6 +22,15 @@ import (
 
 var lookPath = exec.LookPath
 
+func closeIntoErr(errp *error, closer io.Closer, operation string) {
+	if errp == nil || closer == nil {
+		return
+	}
+	if closeErr := closer.Close(); closeErr != nil && *errp == nil {
+		*errp = fmt.Errorf("%s: %w", operation, closeErr)
+	}
+}
+
 // ArchiverDeps groups external dependencies used by Archiver.
 type ArchiverDeps struct {
 	LookPath       func(string) (string, error)
@@ -443,7 +452,7 @@ func (a *Archiver) createGzipArchive(ctx context.Context, sourceDir, outputPath 
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer outFile.Close()
+	defer closeIntoErr(&err, outFile, "close output archive")
 
 	writer, finalizeEncryption, err := a.wrapEncryptionWriter(outFile)
 	if err != nil {
@@ -464,7 +473,7 @@ func (a *Archiver) createGzipArchive(ctx context.Context, sourceDir, outputPath 
 	if err != nil {
 		return fmt.Errorf("failed to create gzip writer: %w", err)
 	}
-	defer gzWriter.Close()
+	defer closeIntoErr(&err, gzWriter, "close gzip writer")
 
 	// Stream tar content into gzip writer
 	if err := a.writeTar(ctx, sourceDir, gzWriter); err != nil {
@@ -493,7 +502,7 @@ func (a *Archiver) createTarArchive(ctx context.Context, sourceDir, outputPath s
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer outFile.Close()
+	defer closeIntoErr(&err, outFile, "close output archive")
 
 	writer, finalizeEncryption, err := a.wrapEncryptionWriter(outFile)
 	if err != nil {
@@ -576,7 +585,7 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer outFile.Close()
+	defer closeIntoErr(&err, outFile, "close output archive")
 
 	pr, pw := io.Pipe()
 	cmd.Stdin = pr
@@ -600,15 +609,15 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 		defer close(errChan)
 		err := a.writeTar(ctx, sourceDir, pw)
 		if err != nil {
-			pw.CloseWithError(err)
+			_ = pw.CloseWithError(err)
 		} else {
-			pw.Close()
+			err = pw.Close()
 		}
 		errChan <- err
 	}()
 
 	if err := cmd.Start(); err != nil {
-		pw.Close()
+		_ = pw.Close()
 		if startErr := <-errChan; startErr != nil {
 			return startErr
 		}
@@ -649,7 +658,7 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer outFile.Close()
+	defer closeIntoErr(&err, outFile, "close output archive")
 
 	pr, pw := io.Pipe()
 	cmd.Stdin = pr
@@ -673,15 +682,15 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 		defer close(errChan)
 		err := a.writeTar(ctx, sourceDir, pw)
 		if err != nil {
-			pw.CloseWithError(err)
+			_ = pw.CloseWithError(err)
 		} else {
-			pw.Close()
+			err = pw.Close()
 		}
 		errChan <- err
 	}()
 
 	if err := cmd.Start(); err != nil {
-		pw.Close()
+		_ = pw.Close()
 		if startErr := <-errChan; startErr != nil {
 			return startErr
 		}
@@ -730,7 +739,7 @@ func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputP
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer outFile.Close()
+	defer closeIntoErr(&err, outFile, "close output archive")
 
 	pr, pw := io.Pipe()
 	cmd.Stdin = pr
@@ -756,16 +765,15 @@ func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputP
 	go func() {
 		defer close(errChan)
 		if err := a.writeTar(ctx, sourceDir, pw); err != nil {
-			pw.CloseWithError(err)
+			_ = pw.CloseWithError(err)
 			errChan <- err
 			return
 		}
-		pw.Close()
-		errChan <- nil
+		errChan <- pw.Close()
 	}()
 
 	if err := cmd.Start(); err != nil {
-		pw.Close()
+		_ = pw.Close()
 		if startErr := <-errChan; startErr != nil {
 			return startErr
 		}
@@ -889,10 +897,14 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 				a.logger.Warning("Failed to open file %s: %v", path, err)
 				return nil
 			}
-			defer file.Close()
 
 			if _, err := io.Copy(tarWriter, file); err != nil {
+				_ = file.Close()
 				a.logger.Warning("Failed to write file %s to archive: %v", path, err)
+				return nil
+			}
+			if err := file.Close(); err != nil {
+				a.logger.Warning("Failed to close file %s after archiving: %v", path, err)
 				return nil
 			}
 

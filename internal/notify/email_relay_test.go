@@ -154,7 +154,7 @@ func TestSendViaCloudRelay_StatusHandling(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				callCount++
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.body))
+				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer server.Close()
 
@@ -195,7 +195,7 @@ func TestSendViaCloudRelay_RetryOnServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&attempts, 1) < 3 {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"temporary"}`))
+			_, _ = w.Write([]byte(`{"error":"temporary"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -238,7 +238,7 @@ func TestSendViaCloudRelay_StopsRetryingWhenContextCanceled(t *testing.T) {
 			cancel()
 		}
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"temporary"}`))
+		_, _ = w.Write([]byte(`{"error":"temporary"}`))
 	}))
 	defer server.Close()
 

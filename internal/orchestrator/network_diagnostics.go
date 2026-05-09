@@ -49,8 +49,8 @@ func writeNetworkSnapshot(ctx context.Context, logger *logging.Logger, diagnosti
 
 	path = filepath.Join(diagnosticsDir, fmt.Sprintf("%s.txt", label))
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("GeneratedAt: %s\n", nowRestore().Format(time.RFC3339)))
-	b.WriteString(fmt.Sprintf("Label: %s\n\n", label))
+	fmt.Fprintf(&b, "GeneratedAt: %s\n", nowRestore().Format(time.RFC3339))
+	fmt.Fprintf(&b, "Label: %s\n\n", label)
 
 	b.WriteString("=== LIVE NETWORK STATE ===\n\n")
 	commands := [][]string{
@@ -78,7 +78,7 @@ func writeNetworkSnapshot(ctx context.Context, logger *logging.Logger, diagnosti
 			}
 		}
 		if err != nil {
-			b.WriteString(fmt.Sprintf("ERROR: %v\n", err))
+			fmt.Fprintf(&b, "ERROR: %v\n", err)
 			if logger != nil {
 				logger.Debug("Network snapshot command failed: %s: %v", strings.Join(cmd, " "), err)
 			}
@@ -128,7 +128,7 @@ func appendCommandSnapshot(ctx context.Context, logger *logging.Logger, b *strin
 		}
 	}
 	if err != nil {
-		b.WriteString(fmt.Sprintf("ERROR: %v\n", err))
+		fmt.Fprintf(b, "ERROR: %v\n", err)
 		if logger != nil {
 			logger.Debug("Network snapshot command failed: %s: %v", strings.Join(cmd, " "), err)
 		}
@@ -143,18 +143,18 @@ func appendFileSnapshot(logger *logging.Logger, label string, b *strings.Builder
 	}
 	info, err := restoreFS.Stat(path)
 	if err != nil {
-		b.WriteString(fmt.Sprintf("ERROR: %v\n\n", err))
+		fmt.Fprintf(b, "ERROR: %v\n\n", err)
 		if logger != nil {
 			logging.DebugStep(logger, "network snapshot", "Stat failed (%s): %s: %v", label, path, err)
 		}
 		return
 	}
-	b.WriteString(fmt.Sprintf("Mode: %s\n", info.Mode().String()))
-	b.WriteString(fmt.Sprintf("Size: %d\n", info.Size()))
-	b.WriteString(fmt.Sprintf("ModTime: %s\n\n", info.ModTime().Format(time.RFC3339)))
+	fmt.Fprintf(b, "Mode: %s\n", info.Mode().String())
+	fmt.Fprintf(b, "Size: %d\n", info.Size())
+	fmt.Fprintf(b, "ModTime: %s\n\n", info.ModTime().Format(time.RFC3339))
 	data, err := restoreFS.ReadFile(path)
 	if err != nil {
-		b.WriteString(fmt.Sprintf("ERROR: %v\n\n", err))
+		fmt.Fprintf(b, "ERROR: %v\n\n", err)
 		if logger != nil {
 			logging.DebugStep(logger, "network snapshot", "Read failed (%s): %s: %v", label, path, err)
 		}
@@ -168,7 +168,7 @@ func appendFileSnapshot(logger *logging.Logger, label string, b *strings.Builder
 		if maxBytes > 0 && (len(data) == 0 || data[maxBytes-1] != '\n') {
 			b.WriteString("\n")
 		}
-		b.WriteString(fmt.Sprintf("\n[truncated: %d of %d bytes]\n\n", maxBytes, len(data)))
+		fmt.Fprintf(b, "\n[truncated: %d of %d bytes]\n\n", maxBytes, len(data))
 		return
 	}
 	b.Write(data)
@@ -185,7 +185,7 @@ func appendDirSnapshot(logger *logging.Logger, label string, b *strings.Builder,
 	}
 	entries, err := restoreFS.ReadDir(dir)
 	if err != nil {
-		b.WriteString(fmt.Sprintf("ERROR: %v\n\n", err))
+		fmt.Fprintf(b, "ERROR: %v\n\n", err)
 		if logger != nil {
 			logging.DebugStep(logger, "network snapshot", "ReadDir failed (%s): %s: %v", label, dir, err)
 		}
@@ -220,7 +220,7 @@ func appendDirSnapshot(logger *logging.Logger, label string, b *strings.Builder,
 		logging.DebugStep(logger, "network snapshot", "Dir entries (%s): %s: %s", label, dir, strings.Join(names, ", "))
 	}
 	for _, e := range list {
-		b.WriteString(fmt.Sprintf("- %s (%s)\n", e.name, e.mode.String()))
+		fmt.Fprintf(b, "- %s (%s)\n", e.name, e.mode.String())
 	}
 	b.WriteString("\n")
 

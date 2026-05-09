@@ -187,9 +187,15 @@ func TestCollectorSafeCopyDir(t *testing.T) {
 
 	// Create test source directory with files
 	srcDir := filepath.Join(tempDir, "source")
-	os.MkdirAll(filepath.Join(srcDir, "subdir"), 0755)
-	os.WriteFile(filepath.Join(srcDir, "file1.txt"), []byte("content1"), 0644)
-	os.WriteFile(filepath.Join(srcDir, "subdir", "file2.txt"), []byte("content2"), 0644)
+	if err := os.MkdirAll(filepath.Join(srcDir, "subdir"), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "file1.txt"), []byte("content1"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "subdir", "file2.txt"), []byte("content2"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 	if err := os.Chmod(srcDir, 0700); err != nil {
 		t.Fatalf("Failed to chmod source dir: %v", err)
 	}
@@ -378,7 +384,9 @@ func TestCollectorDryRun(t *testing.T) {
 
 	// Create a test file and try to copy it
 	srcFile := filepath.Join(tempDir, "source.txt")
-	os.WriteFile(srcFile, []byte("test"), 0644)
+	if err := os.WriteFile(srcFile, []byte("test"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	destFile := filepath.Join(tempDir, "dryrun", "dest.txt")
 	ctx := context.Background()
@@ -486,7 +494,9 @@ func TestGetStats(t *testing.T) {
 
 	// Perform an operation
 	testDir := filepath.Join(tempDir, "test")
-	collector.ensureDir(testDir)
+	if err := collector.ensureDir(testDir); err != nil {
+		t.Fatalf("ensureDir failed: %v", err)
+	}
 
 	// Check stats updated
 	stats = collector.GetStats()

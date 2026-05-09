@@ -150,12 +150,12 @@ func shouldSkipDedupPath(rel string) bool {
 	}
 }
 
-func hashFile(path string) (string, error) {
+func hashFile(path string) (sum string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer closeIntoErr(&err, f, "close file for hash")
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, f); err != nil {
@@ -243,7 +243,7 @@ func chunkLargeFiles(ctx context.Context, logger *logging.Logger, root string, c
 	return nil
 }
 
-func splitFile(path, destBase string, chunkSize int64) error {
+func splitFile(path, destBase string, chunkSize int64) (err error) {
 	if err := os.MkdirAll(filepath.Dir(destBase), defaultChunkDirPerm); err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func splitFile(path, destBase string, chunkSize int64) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer closeIntoErr(&err, in, "close source file")
 
 	buf := make([]byte, chunkBufferSize)
 	index := 0
@@ -270,12 +270,12 @@ func splitFile(path, destBase string, chunkSize int64) error {
 	return nil
 }
 
-func writeChunk(src *os.File, chunkPath string, buf []byte, limit int64) (bool, error) {
+func writeChunk(src *os.File, chunkPath string, buf []byte, limit int64) (done bool, err error) {
 	out, err := os.OpenFile(chunkPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultChunkFilePerm)
 	if err != nil {
 		return false, err
 	}
-	defer out.Close()
+	defer closeIntoErr(&err, out, "close chunk file")
 
 	var written int64
 	for written < limit {

@@ -112,12 +112,12 @@ func existingDirectoryOrNoData(path string) (bool, error) {
 	return info.IsDir(), nil
 }
 
-func datastoreContainsUnexpectedEntries(datastorePath string) (bool, error) {
+func datastoreContainsUnexpectedEntries(datastorePath string) (unexpected bool, err error) {
 	f, err := os.Open(datastorePath)
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer closeIntoErr(&err, f, "close datastore directory")
 	return readerContainsUnexpectedEntries(f)
 }
 
@@ -149,12 +149,12 @@ func hasUnexpectedDatastoreName(names []string) bool {
 	return false
 }
 
-func dirHasAnyEntry(path string) (bool, error) {
+func dirHasAnyEntry(path string) (hasEntry bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer closeIntoErr(&err, f, "close directory")
 
 	_, err = f.Readdirnames(1)
 	if err == nil {

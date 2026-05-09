@@ -297,14 +297,13 @@ func parseRecipientString(value string) (age.Recipient, error) {
 	}
 }
 
-func readRecipientFile(path string) ([]string, error) {
+func readRecipientFile(path string) (recipients []string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer closeIntoErr(&err, f, "close recipient file")
 
-	var recipients []string
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -438,7 +437,7 @@ func writeFileAtomicWithDeps(fs FS, tp TimeProvider, path string, data []byte, p
 	return syncDirectoryWithDeps(fs, filepath.Dir(path))
 }
 
-func copyRecipientFileWithDeps(fs FS, src, dest string, perm os.FileMode) error {
+func copyRecipientFileWithDeps(fs FS, src, dest string, perm os.FileMode) (err error) {
 	if fs == nil {
 		fs = osFS{}
 	}
@@ -447,7 +446,7 @@ func copyRecipientFileWithDeps(fs FS, src, dest string, perm os.FileMode) error 
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer closeIntoErr(&err, in, "close recipient source file")
 
 	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm)
 	if err != nil {

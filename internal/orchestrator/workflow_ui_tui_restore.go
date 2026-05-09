@@ -109,8 +109,8 @@ func (u *tuiWorkflowUI) SelectExportNode(ctx context.Context, exportRoot, curren
 	listItem := components.NewListFormItem(list).
 		SetLabel(fmt.Sprintf("Current node: %s", strings.TrimSpace(currentNode))).
 		SetFieldHeight(8)
-	form.Form.AddFormItem(listItem)
-	form.Form.SetFocus(0)
+	form.AddFormItem(listItem)
+	form.SetFocus(0)
 
 	form.SetOnCancel(func() {
 		cancelled = true

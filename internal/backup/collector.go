@@ -854,7 +854,7 @@ func (c *Collector) removeExistingSymlinkDestination(dest string) error {
 	return nil
 }
 
-func (c *Collector) copyRegularFile(src, dest, description string, info os.FileInfo) error {
+func (c *Collector) copyRegularFile(src, dest, description string, info os.FileInfo) (err error) {
 	if err := c.prepareCopyDestination(src, dest); err != nil {
 		c.incFilesFailed()
 		return err
@@ -865,7 +865,7 @@ func (c *Collector) copyRegularFile(src, dest, description string, info os.FileI
 		c.incFilesFailed()
 		return fmt.Errorf("failed to open %s: %w", src, err)
 	}
-	defer srcFile.Close()
+	defer closeIntoErr(&err, srcFile, "close source file")
 
 	written, err := copyRegularFileContents(srcFile, src, dest)
 	if err != nil {

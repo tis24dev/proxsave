@@ -62,14 +62,14 @@ func ParseChecksumData(data []byte) (string, error) {
 }
 
 // GenerateChecksum calculates SHA256 checksum of a file
-func GenerateChecksum(ctx context.Context, logger *logging.Logger, filePath string) (string, error) {
+func GenerateChecksum(ctx context.Context, logger *logging.Logger, filePath string) (checksum string, err error) {
 	logger.Debug("Generating SHA256 checksum for: %s", filePath)
 
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open file: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close checksum source file")
 
 	hash := sha256.New()
 
@@ -98,7 +98,7 @@ func GenerateChecksum(ctx context.Context, logger *logging.Logger, filePath stri
 		}
 	}
 
-	checksum := hex.EncodeToString(hash.Sum(nil))
+	checksum = hex.EncodeToString(hash.Sum(nil))
 	logger.Debug("Generated checksum: %s", checksum)
 	return checksum, nil
 }

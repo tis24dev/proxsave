@@ -39,7 +39,7 @@ func TestCheckTelegramRegistrationResponses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.name))
+				_, _ = w.Write([]byte(tt.name))
 			}))
 			defer server.Close()
 

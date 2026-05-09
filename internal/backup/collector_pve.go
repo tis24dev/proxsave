@@ -463,17 +463,21 @@ func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir strin
 		return fmt.Errorf("failed to get PVE version (critical): %w", err)
 	}
 
-	c.safeCmdOutput(ctx,
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvenode", "config", "get"),
 		filepath.Join(commandsDir, "node_config.txt"),
 		"Node configuration",
-		false)
+		false); err != nil {
+		return err
+	}
 
-	c.safeCmdOutput(ctx,
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvesh", "get", "/version", "--output-format=json"),
 		filepath.Join(commandsDir, "api_version.json"),
 		"API version",
-		false)
+		false); err != nil {
+		return err
+	}
 
 	if nodeData, err := c.captureCommandOutput(ctx,
 		commandSpec("pvesh", "get", "/nodes", "--output-format=json"),
@@ -499,68 +503,90 @@ func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir strin
 	return nil
 }
 
-func (c *Collector) collectPVEACLRuntime(ctx context.Context, commandsDir string) {
+func (c *Collector) collectPVEACLRuntime(ctx context.Context, commandsDir string) error {
 	if !c.config.BackupPVEACL {
-		return
+		return nil
 	}
 
-	c.safeCmdOutput(ctx,
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pveum", "user", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "pve_users.json"),
 		"PVE users",
-		false)
-	c.safeCmdOutput(ctx,
+		false); err != nil {
+		return err
+	}
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pveum", "group", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "pve_groups.json"),
 		"PVE groups",
-		false)
-	c.safeCmdOutput(ctx,
+		false); err != nil {
+		return err
+	}
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pveum", "role", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "pve_roles.json"),
 		"PVE roles",
-		false)
-	c.safeCmdOutput(ctx,
+		false); err != nil {
+		return err
+	}
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pveum", "pool", "list", "--output-format=json"),
 		filepath.Join(commandsDir, "pools.json"),
 		"PVE resource pools",
-		false)
+		false); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (c *Collector) collectPVEClusterRuntime(ctx context.Context, commandsDir string, clustered bool) {
+func (c *Collector) collectPVEClusterRuntime(ctx context.Context, commandsDir string, clustered bool) error {
 	if clustered && c.config.BackupClusterConfig {
-		c.safeCmdOutput(ctx,
+		if err := c.safeCmdOutput(ctx,
 			commandSpec("pvecm", "status"),
 			filepath.Join(commandsDir, "cluster_status.txt"),
 			"Cluster status",
-			false)
-		c.safeCmdOutput(ctx,
+			false); err != nil {
+			return err
+		}
+		if err := c.safeCmdOutput(ctx,
 			commandSpec("pvecm", "nodes"),
 			filepath.Join(commandsDir, "cluster_nodes.txt"),
 			"Cluster nodes",
-			false)
-		c.safeCmdOutput(ctx,
+			false); err != nil {
+			return err
+		}
+		if err := c.safeCmdOutput(ctx,
 			commandSpec("pvesh", "get", "/cluster/ha/status", "--output-format=json"),
 			filepath.Join(commandsDir, "ha_status.json"),
 			"HA status",
-			false)
-		c.safeCmdOutput(ctx,
+			false); err != nil {
+			return err
+		}
+		if err := c.safeCmdOutput(ctx,
 			commandSpec("pvesh", "get", "/cluster/mapping/pci", "--output-format=json"),
 			filepath.Join(commandsDir, "mapping_pci.json"),
 			"PCI resource mappings",
-			false)
-		c.safeCmdOutput(ctx,
+			false); err != nil {
+			return err
+		}
+		if err := c.safeCmdOutput(ctx,
 			commandSpec("pvesh", "get", "/cluster/mapping/usb", "--output-format=json"),
 			filepath.Join(commandsDir, "mapping_usb.json"),
 			"USB resource mappings",
-			false)
-		c.safeCmdOutput(ctx,
+			false); err != nil {
+			return err
+		}
+		if err := c.safeCmdOutput(ctx,
 			commandSpec("pvesh", "get", "/cluster/mapping/dir", "--output-format=json"),
 			filepath.Join(commandsDir, "mapping_dir.json"),
 			"Directory resource mappings",
-			false)
+			false); err != nil {
+			return err
+		}
 	} else if clustered && !c.config.BackupClusterConfig {
 		c.logger.Debug("Skipping cluster runtime commands: BACKUP_CLUSTER_CONFIG=false (clustered=%v)", clustered)
 	}
+	return nil
 }
 
 func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir string, info *pveRuntimeInfo) error {
@@ -570,11 +596,13 @@ func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir st
 		nodeName = hostname
 	}
 
-	c.safeCmdOutput(ctx,
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/disks/list", nodeName), "--output-format=json"),
 		filepath.Join(commandsDir, "disks_list.json"),
 		"Disks list",
-		false)
+		false); err != nil {
+		return err
+	}
 
 	storageJSONPath := filepath.Join(commandsDir, "storage_status.json")
 	if storageData, err := c.captureCommandOutput(ctx,
@@ -595,11 +623,13 @@ func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir st
 		}
 	}
 
-	c.safeCmdOutput(ctx,
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvesm", "status"),
 		filepath.Join(commandsDir, "pvesm_status.txt"),
 		"Storage manager status",
-		false)
+		false); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -729,17 +759,21 @@ func (c *Collector) collectPVEGuestInventory(ctx context.Context) error {
 		nodeName = hostname
 	}
 
-	c.safeCmdOutput(ctx,
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/qemu", nodeName), "--output-format=json"),
 		filepath.Join(commandsDir, "qemu_vms.json"),
 		"QEMU VMs list",
-		false)
+		false); err != nil {
+		return err
+	}
 
-	c.safeCmdOutput(ctx,
+	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/lxc", nodeName), "--output-format=json"),
 		filepath.Join(commandsDir, "lxc_containers.json"),
 		"LXC containers list",
-		false)
+		false); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -1298,13 +1332,13 @@ func (c *Collector) writePVEStorageSummary(ctx context.Context, storages []pveSt
 	summary.WriteString("\n# Format: TYPE|NAME|PATH|CONTENT\n\n")
 
 	for _, storage := range storages {
-		summary.WriteString(fmt.Sprintf("%s|%s|%s|%s\n",
+		fmt.Fprintf(&summary, "%s|%s|%s|%s\n",
 			storage.Type,
 			storage.Name,
 			storage.Path,
-			storage.Content))
+			storage.Content)
 	}
-	summary.WriteString(fmt.Sprintf("\n# Total datastores processed: %d\n", len(storages)))
+	fmt.Fprintf(&summary, "\n# Total datastores processed: %d\n", len(storages))
 
 	return c.writeReportFile(filepath.Join(c.pveDatastoresBaseDir(), "detected_datastores.txt"), []byte(summary.String()))
 }
@@ -1519,7 +1553,7 @@ func newPatternWriter(storageName, storagePath, analysisDir, pattern string, dry
 		time.Now().Format(time.RFC3339),
 	)
 	if _, err := writer.WriteString(header); err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, err
 	}
 	return &patternWriter{
@@ -1611,7 +1645,7 @@ func (c *Collector) copyBackupSample(ctx context.Context, src, destDir, descript
 	return c.safeCopyFile(ctx, src, dest, description)
 }
 
-func (c *Collector) writePatternSummary(storage pveStorageEntry, analysisDir string, writers []*patternWriter, totalFiles, totalSize int64) error {
+func (c *Collector) writePatternSummary(storage pveStorageEntry, analysisDir string, writers []*patternWriter, totalFiles, totalSize int64) (err error) {
 	// Skip file creation in dry-run mode
 	if c.dryRun {
 		c.logger.Debug("[DRY RUN] Would write backup summary for datastore: %s", storage.Name)
@@ -1623,35 +1657,65 @@ func (c *Collector) writePatternSummary(storage pveStorageEntry, analysisDir str
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close PVE backup summary")
 
 	writer := bufio.NewWriter(file)
-	fmt.Fprintf(writer, "# PVE Backup Files Summary for datastore: %s\n", storage.Name)
-	fmt.Fprintf(writer, "# Path: %s\n", storage.Path)
-	fmt.Fprintf(writer, "# Generated on: %s\n\n", time.Now().Format(time.RFC3339))
-
-	for _, w := range writers {
-		fmt.Fprintf(writer, "## Files matching pattern: %s\n", w.pattern)
-		if w.count == 0 {
-			fmt.Fprintln(writer, "  No files found")
-			fmt.Fprintln(writer)
-			continue
-		}
-		fmt.Fprintf(writer, "  Files: %d\n", w.count)
-		if w.errorCount > 0 {
-			fmt.Fprintf(writer, "  Successfully analyzed: %d\n", w.count-w.errorCount)
-			fmt.Fprintf(writer, "  Files with errors: %d\n", w.errorCount)
-		}
-		fmt.Fprintf(writer, "  Total size: %s\n\n", FormatBytes(w.totalSize))
+	writeSummaryf := func(format string, args ...any) error {
+		_, err := fmt.Fprintf(writer, format, args...)
+		return err
+	}
+	if err := writeSummaryf("# PVE Backup Files Summary for datastore: %s\n", storage.Name); err != nil {
+		return err
+	}
+	if err := writeSummaryf("# Path: %s\n", storage.Path); err != nil {
+		return err
+	}
+	if err := writeSummaryf("# Generated on: %s\n\n", time.Now().Format(time.RFC3339)); err != nil {
+		return err
 	}
 
-	fmt.Fprintln(writer, "## Overall Summary")
-	fmt.Fprintf(writer, "Total backup files: %d\n", totalFiles)
-	fmt.Fprintf(writer, "Total backup size: %s\n", FormatBytes(totalSize))
+	for _, w := range writers {
+		if err := writeSummaryf("## Files matching pattern: %s\n", w.pattern); err != nil {
+			return err
+		}
+		if w.count == 0 {
+			if _, err := fmt.Fprintln(writer, "  No files found"); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(writer); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := writeSummaryf("  Files: %d\n", w.count); err != nil {
+			return err
+		}
+		if w.errorCount > 0 {
+			if err := writeSummaryf("  Successfully analyzed: %d\n", w.count-w.errorCount); err != nil {
+				return err
+			}
+			if err := writeSummaryf("  Files with errors: %d\n", w.errorCount); err != nil {
+				return err
+			}
+		}
+		if err := writeSummaryf("  Total size: %s\n\n", FormatBytes(w.totalSize)); err != nil {
+			return err
+		}
+	}
+
+	if _, err := fmt.Fprintln(writer, "## Overall Summary"); err != nil {
+		return err
+	}
+	if err := writeSummaryf("Total backup files: %d\n", totalFiles); err != nil {
+		return err
+	}
+	if err := writeSummaryf("Total backup size: %s\n", FormatBytes(totalSize)); err != nil {
+		return err
+	}
 	if err := writer.Flush(); err != nil {
 		return err
 	}
-	return file.Close()
+	return nil
 }
 
 func (c *Collector) collectPVECephConfigSnapshot(ctx context.Context) error {
@@ -1712,11 +1776,13 @@ func (c *Collector) collectPVECephRuntime(ctx context.Context) error {
 	}
 
 	for _, command := range commands {
-		c.captureCommandOutput(ctx,
+		if _, err := c.captureCommandOutput(ctx,
 			command.cmd,
 			filepath.Join(cephDir, command.file),
 			command.desc,
-			false)
+			false); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -1971,7 +2037,7 @@ func (c *Collector) parseStorageConfigEntries() []pveStorageEntry {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	var (

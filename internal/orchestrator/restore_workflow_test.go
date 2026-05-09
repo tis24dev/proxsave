@@ -27,10 +27,8 @@ func writeMinimalTar(t *testing.T, dir string) string {
 	if err != nil {
 		t.Fatalf("create tar: %v", err)
 	}
-	defer f.Close()
 
 	tw := tar.NewWriter(f)
-	defer tw.Close()
 
 	body := []byte("hello\n")
 	hdr := &tar.Header{
@@ -48,6 +46,12 @@ func writeMinimalTar(t *testing.T, dir string) string {
 	}
 	if err := tw.Flush(); err != nil {
 		t.Fatalf("flush tar: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close tar file: %v", err)
 	}
 	return path
 }

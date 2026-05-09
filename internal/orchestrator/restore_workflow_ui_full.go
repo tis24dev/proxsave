@@ -99,7 +99,11 @@ func (f *fullRestoreUIFlow) mergeFstabIfSafe() error {
 		f.logger.Warning("Failed to create temp dir for fstab merge: %v", err)
 		return nil
 	}
-	defer restoreFS.RemoveAll(fsTempDir)
+	defer func() {
+		if err := restoreFS.RemoveAll(fsTempDir); err != nil {
+			f.logger.Debug("Failed to remove temporary fstab merge directory %s: %v", fsTempDir, err)
+		}
+	}()
 	return f.extractAndMergeFstab(fsTempDir)
 }
 

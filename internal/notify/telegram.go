@@ -199,7 +199,7 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 	if err != nil {
 		return "", "", fmt.Errorf("API request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response
 	body, err := io.ReadAll(resp.Body)
@@ -245,61 +245,61 @@ func (t *TelegramNotifier) buildMessage(data *NotificationData) string {
 	// Tool name and version header
 	version := strings.TrimSpace(data.ScriptVersion)
 	if version != "" {
-		msg.WriteString(fmt.Sprintf("ProxSave - v%s\n\n", version))
+		fmt.Fprintf(&msg, "ProxSave - v%s\n\n", version)
 	} else {
 		msg.WriteString("ProxSave\n\n")
 	}
 
 	// Header with status and hostname
 	statusEmoji := GetStatusEmoji(data.Status)
-	msg.WriteString(fmt.Sprintf("%s Backup %s - %s\n\n",
+	fmt.Fprintf(&msg, "%s Backup %s - %s\n\n",
 		statusEmoji,
 		data.ProxmoxType.String(),
-		data.Hostname))
+		data.Hostname)
 
 	// Storage status
 	localEmoji := GetStorageEmoji(data.LocalStatus)
-	msg.WriteString(fmt.Sprintf("%s Local      (%s backups)\n", localEmoji, data.LocalStatusSummary))
+	fmt.Fprintf(&msg, "%s Local      (%s backups)\n", localEmoji, data.LocalStatusSummary)
 
 	if data.SecondaryEnabled {
 		secondaryEmoji := GetStorageEmoji(data.SecondaryStatus)
-		msg.WriteString(fmt.Sprintf("%s Secondary  (%s backups)\n", secondaryEmoji, data.SecondaryStatusSummary))
+		fmt.Fprintf(&msg, "%s Secondary  (%s backups)\n", secondaryEmoji, data.SecondaryStatusSummary)
 	} else {
 		msg.WriteString("➖ Secondary  (disabled)\n")
 	}
 
 	if data.CloudEnabled {
 		cloudEmoji := GetStorageEmoji(data.CloudStatus)
-		msg.WriteString(fmt.Sprintf("%s Cloud      (%s backups)\n", cloudEmoji, data.CloudStatusSummary))
+		fmt.Fprintf(&msg, "%s Cloud      (%s backups)\n", cloudEmoji, data.CloudStatusSummary)
 	} else {
 		msg.WriteString("➖ Cloud      (disabled)\n")
 	}
 
 	// Email status
 	emailEmoji := GetStorageEmoji(data.EmailStatus)
-	msg.WriteString(fmt.Sprintf("%s Email\n\n", emailEmoji))
+	fmt.Fprintf(&msg, "%s Email\n\n", emailEmoji)
 
 	// File counts
-	msg.WriteString(fmt.Sprintf("📁 Included files: %d\n", data.FilesIncluded))
+	fmt.Fprintf(&msg, "📁 Included files: %d\n", data.FilesIncluded)
 	if data.FilesMissing > 0 {
-		msg.WriteString(fmt.Sprintf("⚠️ Missing files: %d\n", data.FilesMissing))
+		fmt.Fprintf(&msg, "⚠️ Missing files: %d\n", data.FilesMissing)
 	}
 	msg.WriteString("\n")
 
 	// Disk space
 	msg.WriteString("💾 Available space:\n")
-	msg.WriteString(fmt.Sprintf("🔹 Local: %s\n", data.LocalFree))
+	fmt.Fprintf(&msg, "🔹 Local: %s\n", data.LocalFree)
 	if data.SecondaryEnabled && data.SecondaryFree != "" {
-		msg.WriteString(fmt.Sprintf("🔹 Secondary: %s\n", data.SecondaryFree))
+		fmt.Fprintf(&msg, "🔹 Secondary: %s\n", data.SecondaryFree)
 	}
 	msg.WriteString("\n")
 
 	// Backup metadata
-	msg.WriteString(fmt.Sprintf("📅 Backup date: %s\n", data.BackupDate.Format("2006-01-02 15:04")))
-	msg.WriteString(fmt.Sprintf("⏱️ Duration: %s\n\n", FormatDuration(data.BackupDuration)))
+	fmt.Fprintf(&msg, "📅 Backup date: %s\n", data.BackupDate.Format("2006-01-02 15:04"))
+	fmt.Fprintf(&msg, "⏱️ Duration: %s\n\n", FormatDuration(data.BackupDuration))
 
 	// Exit code
-	msg.WriteString(fmt.Sprintf("🔢 Exit code: %d", data.ExitCode))
+	fmt.Fprintf(&msg, "🔢 Exit code: %d", data.ExitCode)
 
 	// Optional version update information
 	if data.NewVersionAvailable && strings.TrimSpace(data.LatestVersion) != "" {
@@ -307,9 +307,9 @@ func (t *TelegramNotifier) buildMessage(data *NotificationData) string {
 
 		current := strings.TrimSpace(data.CurrentVersion)
 		if current != "" {
-			msg.WriteString(fmt.Sprintf("New version: %s (current: %s)\n", data.LatestVersion, current))
+			fmt.Fprintf(&msg, "New version: %s (current: %s)\n", data.LatestVersion, current)
 		} else {
-			msg.WriteString(fmt.Sprintf("New version: %s\n", data.LatestVersion))
+			fmt.Fprintf(&msg, "New version: %s\n", data.LatestVersion)
 		}
 		msg.WriteString("Run 'proxsave --upgrade'\n")
 	}
@@ -340,7 +340,7 @@ func (t *TelegramNotifier) sendToTelegram(ctx context.Context, botToken, chatID,
 	if err != nil {
 		return fmt.Errorf("api request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check response
 	if resp.StatusCode != 200 {

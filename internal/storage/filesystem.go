@@ -202,8 +202,11 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 		d.logger.Debug("Cannot create test file for ownership check: %v", err)
 		return false
 	}
-	f.Close()
-	defer os.Remove(testFile)
+	if err := f.Close(); err != nil {
+		d.logger.Debug("Cannot close test file for ownership check: %v", err)
+		return false
+	}
+	defer func() { _ = os.Remove(testFile) }()
 
 	// Try to change ownership to current user (should be safe)
 	uid := os.Getuid()

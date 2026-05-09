@@ -116,7 +116,7 @@ func TestConsolePrompterWrappers(t *testing.T) {
 		_, _ = w.WriteString("1\n")
 		_ = w.Close()
 		os.Stdin = r
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 
 		mode, err := (consolePrompter{}).SelectRestoreMode(context.Background(), logger, SystemTypePVE)
 		if err != nil {
@@ -141,7 +141,7 @@ func TestConsolePrompterWrappers(t *testing.T) {
 		_, _ = w.WriteString("a\nc\n")
 		_ = w.Close()
 		os.Stdin = r
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 
 		cats, err := (consolePrompter{}).SelectCategories(context.Background(), logger, available, SystemTypePVE)
 		if err != nil {
@@ -160,7 +160,7 @@ func TestConsolePrompterWrappers(t *testing.T) {
 		_, _ = w.WriteString("RESTORE\n")
 		_ = w.Close()
 		os.Stdin = r
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 
 		ok, err := (consolePrompter{}).ConfirmRestore(context.Background(), logger)
 		if err != nil {

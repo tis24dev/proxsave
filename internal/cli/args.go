@@ -210,26 +210,26 @@ func ShowVersion() {
 }
 
 func printHelp(w io.Writer, argv0 string) {
-	fmt.Fprintf(w, "Usage: %s [options]\n\n", argv0)
-	fmt.Fprintln(w, "ProxSave")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "Options:")
+	_, _ = fmt.Fprintf(w, "Usage: %s [options]\n\n", argv0)
+	_, _ = fmt.Fprintln(w, "ProxSave")
+	_, _ = fmt.Fprintln(w, "")
+	_, _ = fmt.Fprintln(w, "Options:")
 	flag.PrintDefaults()
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "Examples:")
-	fmt.Fprintf(w, "  %s -c /path/to/config.env\n", argv0)
-	fmt.Fprintf(w, "  %s --dry-run --log-level debug\n", argv0)
-	fmt.Fprintf(w, "  %s --version\n", argv0)
+	_, _ = fmt.Fprintln(w, "")
+	_, _ = fmt.Fprintln(w, "Examples:")
+	_, _ = fmt.Fprintf(w, "  %s -c /path/to/config.env\n", argv0)
+	_, _ = fmt.Fprintf(w, "  %s --dry-run --log-level debug\n", argv0)
+	_, _ = fmt.Fprintf(w, "  %s --version\n", argv0)
 }
 
 func printVersion(w io.Writer) {
-	fmt.Fprintln(w, "ProxSave")
+	_, _ = fmt.Fprintln(w, "ProxSave")
 
 	v := version.String()
 	if strings.TrimSpace(v) == "" {
 		v = "0.0.0-dev"
 	}
-	fmt.Fprintf(w, "Version: %s\n", v)
+	_, _ = fmt.Fprintf(w, "Version: %s\n", v)
 
 	build := "development"
 	commit := strings.TrimSpace(version.Commit)
@@ -242,9 +242,9 @@ func printVersion(w io.Writer) {
 	case date != "":
 		build = date
 	}
-	fmt.Fprintf(w, "Build: %s\n", build)
+	_, _ = fmt.Fprintf(w, "Build: %s\n", build)
 
-	fmt.Fprintln(w, "Author: tis24dev")
+	_, _ = fmt.Fprintln(w, "Author: tis24dev")
 }
 
 type stringFlag struct {

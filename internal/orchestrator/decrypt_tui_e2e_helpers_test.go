@@ -74,8 +74,8 @@ func (s *notifyingSimulationScreen) snapshotState() timedSimScreenSnapshot {
 }
 
 func (s *notifyingSimulationScreen) captureLocked() {
-	cells, width, height := s.SimulationScreen.GetContents()
-	cursorX, cursorY, cursorVisible := s.SimulationScreen.GetCursor()
+	cells, width, height := s.GetContents()
+	cursorX, cursorY, cursorVisible := s.GetCursor()
 	s.snapshot = timedSimScreenSnapshot{
 		cells:         cloneSimCells(cells),
 		width:         width,
@@ -609,7 +609,7 @@ func readTarEntries(t *testing.T, tarPath string) map[string][]byte {
 	if err != nil {
 		t.Fatalf("open tar %s: %v", tarPath, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	tr := tar.NewReader(file)
 	entries := make(map[string][]byte)

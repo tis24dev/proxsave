@@ -664,7 +664,7 @@ func TestRunRestoreCommandStream_FallsBackToExecCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runRestoreCommandStream error: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	out, err := io.ReadAll(reader)
 	if err != nil {
@@ -700,15 +700,15 @@ func TestExtractTarEntry_SkipsSensitiveSystemPathsOnRootRestore(t *testing.T) {
 	}
 }
 
-func writeTarFile(path string, files map[string]string) error {
+func writeTarFile(path string, files map[string]string) (err error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer closeIntoErr(&err, f, "close test tar file")
 
 	tw := tar.NewWriter(f)
-	defer tw.Close()
+	defer closeIntoErr(&err, tw, "close test tar writer")
 
 	for name, content := range files {
 		b := []byte(content)
