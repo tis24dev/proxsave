@@ -1,0 +1,34 @@
+name: Race Detector
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+
+jobs:
+  race:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Resolve race toolchain
+        run: |
+          TOOLCHAIN_FROM_MOD=$(awk '/^toolchain /{print $2}' go.mod)
+          if [ -n "$TOOLCHAIN_FROM_MOD" ]; then
+            echo "RACE_GOTOOLCHAIN=${TOOLCHAIN_FROM_MOD}+auto" >> "$GITHUB_ENV"
+          else
+            echo "RACE_GOTOOLCHAIN=auto" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run race detector
+        env:
+          GOTOOLCHAIN: ${{ env.RACE_GOTOOLCHAIN }}
+        run: |
+          go test -race ./...
