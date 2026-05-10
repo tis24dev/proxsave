@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -24,6 +25,10 @@ type pbsNotificationDesiredState struct {
 	matchers     map[string]proxmoxNotificationSection
 	matcherNames []string
 }
+
+// gotifyTokenRedactIndex is the token positional index in
+// `notification endpoint gotify create <name> <server> <token> ...`.
+const gotifyTokenRedactIndex = 6
 
 func applyPBSNotificationsViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
 	desired, present, err := loadPBSNotificationDesiredState(stageRoot, logger)
@@ -184,7 +189,7 @@ func pbsGotifyEndpointPositionals(name string, entries []proxmoxNotificationEntr
 
 func pbsEndpointRedactIndexes(typ string) []int {
 	if typ == "gotify" {
-		return []int{6}
+		return []int{gotifyTokenRedactIndex}
 	}
 	return nil
 }
@@ -286,7 +291,7 @@ func upsertPBSNotificationEndpoint(ctx context.Context, typ, name string, endpoi
 		updateArgs := append([]string{"notification", "endpoint", typ, "update", name}, endpoint.positional...)
 		updateArgs = append(updateArgs, flags...)
 		if _, upErr := runPBSManagerRedacted(ctx, updateArgs, endpoint.redactFlags, endpoint.redactIndex); upErr != nil {
-			return fmt.Errorf("endpoint %s:%s: %v (create) / %v (update)", typ, name, err, upErr)
+			return fmt.Errorf("endpoint %s:%s: %w", typ, name, errors.Join(err, upErr))
 		}
 	}
 	return nil
@@ -307,7 +312,7 @@ func upsertPBSNotificationMatcher(ctx context.Context, name string, matcher prox
 	if _, err := runPBSManager(ctx, createArgs...); err != nil {
 		updateArgs := append([]string{"notification", "matcher", "update", name}, flags...)
 		if _, upErr := runPBSManager(ctx, updateArgs...); upErr != nil {
-			return fmt.Errorf("matcher %s: %v (create) / %v (update)", name, err, upErr)
+			return fmt.Errorf("matcher %s: %w", name, errors.Join(err, upErr))
 		}
 	}
 	return nil

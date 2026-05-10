@@ -206,10 +206,18 @@ func applyPBSDatastoreOwnership(basePath, datastoreName string, dirsToFix []stri
 	if len(dirsToFix) > 0 {
 		logger.Debug("PBS datastore permissions: applying ownership to %d created path(s) (datastore=%s path=%s)", len(dirsToFix), datastoreName, basePath)
 	}
+	baseProcessed := false
+	cleanBasePath := filepath.Clean(basePath)
 	for _, dir := range dirsToFix {
 		if err := setDatastoreOwnership(dir, logger); err != nil {
 			logger.Warning("Could not set datastore ownership for %s: %v", dir, err)
 		}
+		if filepath.Clean(dir) == cleanBasePath {
+			baseProcessed = true
+		}
+	}
+	if baseProcessed {
+		return
 	}
 	if err := setDatastoreOwnership(basePath, logger); err != nil {
 		logger.Warning("Could not set datastore ownership for %s: %v", basePath, err)

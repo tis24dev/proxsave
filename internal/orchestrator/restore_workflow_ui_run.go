@@ -53,11 +53,16 @@ func newRestoreUIWorkflowRun(ctx context.Context, cfg *config.Config, logger *lo
 }
 
 func (w *restoreUIWorkflowRun) run() error {
-	fallbackToFullRestore, err := w.prepareBundleAndPlan()
+	if err := w.prepareBundle(); err != nil {
+		return err
+	}
+	if w.prepared != nil {
+		defer w.prepared.Cleanup()
+	}
+	fallbackToFullRestore, err := w.planPreparedBundle()
 	if err != nil {
 		return err
 	}
-	defer w.prepared.Cleanup()
 	if fallbackToFullRestore {
 		return runFullRestoreWithUI(w.ctx, w.ui, w.candidate, w.prepared, w.destRoot, w.logger, w.cfg.DryRun)
 	}

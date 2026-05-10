@@ -292,10 +292,11 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 	if err := tempFile.Sync(); err != nil {
 		return fmt.Errorf("failed to sync temporary file %s: %w", tempName, err)
 	}
-	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("failed to close temporary file %s: %w", tempName, err)
-	}
+	closeErr := tempFile.Close()
 	tempFile = nil
+	if closeErr != nil {
+		return fmt.Errorf("failed to close temporary file %s: %w", tempName, closeErr)
+	}
 
 	if err := os.Chmod(tempName, sourceInfo.Mode()); err != nil {
 		s.logger.Debug("Secondary storage: unable to mirror permissions on %s: %v", tempName, err)

@@ -14,6 +14,10 @@ func (w *restoreUIWorkflowRun) prepareBundleAndPlan() (bool, error) {
 	if err := w.prepareBundle(); err != nil {
 		return false, err
 	}
+	return w.planPreparedBundle()
+}
+
+func (w *restoreUIWorkflowRun) planPreparedBundle() (bool, error) {
 	w.detectTargetSystem()
 	fallbackToFullRestore, err := w.analyzeArchive()
 	if err != nil {

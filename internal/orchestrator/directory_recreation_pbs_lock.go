@@ -64,7 +64,10 @@ func removeOrRenamePBSDatastoreLockDirectory(lockPath string, logger *logging.Lo
 	}
 	if len(entries) == 0 {
 		logger.Warning("PBS datastore lock: %s is a directory (invalid); removing and recreating as file", lockPath)
-		return true, os.Remove(lockPath)
+		if err := os.Remove(lockPath); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 
 	backupPath := fmt.Sprintf("%s.proxsave-dir.%s", lockPath, nowRestore().Format("20060102-150405"))

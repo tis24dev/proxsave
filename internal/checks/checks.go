@@ -375,21 +375,25 @@ func (c *Checker) CheckLockFile() CheckResult {
 			result.Message = result.Error.Error()
 			return result
 		}
-		defer func() {
-			if err := f.Close(); err != nil {
-				c.logger.Warning("Failed to close lock file %s: %v", lockPath, err)
-			}
-		}()
 
 		hostname, _ := os.Hostname()
 		lockContent := fmt.Sprintf("pid=%d\nhost=%s\ntime=%s\n", os.Getpid(), hostname, time.Now().Format(time.RFC3339))
 		if _, err := f.WriteString(lockContent); err != nil {
+			if closeErr := f.Close(); closeErr != nil {
+				c.logger.Warning("Failed to close lock file %s: %v", lockPath, closeErr)
+			}
 			result.Error = fmt.Errorf("failed to write lock file: %w", err)
 			result.Message = result.Error.Error()
 			return result
 		}
 		if err := syncFile(f); err != nil {
 			c.logger.Warning("Failed to sync lock file %s: %v", lockPath, err)
+		}
+		if err := f.Close(); err != nil {
+			c.logger.Warning("Failed to close lock file %s: %v", lockPath, err)
+			result.Error = fmt.Errorf("failed to close lock file: %w", err)
+			result.Message = result.Error.Error()
+			return result
 		}
 	} else {
 		c.logger.Info("[DRY RUN] Would create lock file: %s", lockPath)

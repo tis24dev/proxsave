@@ -77,15 +77,36 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		}
 	}()
 
+	var writeErr error
+	wrap := func(err error) error {
+		if err == nil {
+			return nil
+		}
+		if writeErr == nil {
+			writeErr = fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		}
+		return writeErr
+	}
+	writef := func(format string, a ...any) error {
+		if writeErr != nil {
+			return writeErr
+		}
+		_, err := fmt.Fprintf(f, format, a...)
+		return wrap(err)
+	}
+
 	// Helper to write a single metric with HELP/TYPE
 	writeMetric := func(name, mtype, help, value string) error {
-		if _, err := fmt.Fprintf(f, "# HELP %s %s\n", name, help); err != nil {
+		if writeErr != nil {
+			return writeErr
+		}
+		if err := writef("# HELP %s %s\n", name, help); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(f, "# TYPE %s %s\n", name, mtype); err != nil {
+		if err := writef("# TYPE %s %s\n", name, mtype); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintln(f, value); err != nil {
+		if err := writef("%s\n", value); err != nil {
 			return err
 		}
 		return nil
@@ -113,7 +134,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Unix timestamp of backup start",
 		fmt.Sprintf("proxmox_backup_start_time_seconds %.0f", startTs),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -122,7 +143,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Unix timestamp of backup end",
 		fmt.Sprintf("proxmox_backup_end_time_seconds %.0f", endTs),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -131,7 +152,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Duration of last backup in seconds",
 		fmt.Sprintf("proxmox_backup_duration_seconds %.2f", m.Duration.Seconds()),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -140,7 +161,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Exit code of last backup",
 		fmt.Sprintf("proxmox_backup_exit_code %d", m.ExitCode),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -149,7 +170,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Status of last backup (0=success,1=warning,2=error)",
 		fmt.Sprintf("proxmox_backup_status %d", status),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -158,7 +179,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Total number of errors in last backup",
 		fmt.Sprintf("proxmox_backup_errors_total %d", m.ErrorCount),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -167,7 +188,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Total number of warnings in last backup",
 		fmt.Sprintf("proxmox_backup_warnings_total %d", m.WarningCount),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -176,7 +197,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Total number of bytes collected during last backup",
 		fmt.Sprintf("proxmox_backup_bytes_collected %d", m.BytesCollected),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -185,7 +206,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Size of last backup archive in bytes",
 		fmt.Sprintf("proxmox_backup_archive_size_bytes %d", m.ArchiveSize),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -194,7 +215,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Total files successfully collected during last backup",
 		fmt.Sprintf("proxmox_backup_files_collected_total %d", m.FilesCollected),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := writeMetric(
@@ -203,42 +224,41 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		"Total files that failed to collect during last backup",
 		fmt.Sprintf("proxmox_backup_files_failed_total %d", m.FilesFailed),
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	// Per-location backup counts
-	if _, err := fmt.Fprintf(f, "# HELP proxmox_backup_backups_total Number of backups per location\n"); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+	if err := writef("# HELP proxmox_backup_backups_total Number of backups per location\n"); err != nil {
+		return err
 	}
-	if _, err := fmt.Fprintf(f, "# TYPE proxmox_backup_backups_total gauge\n"); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+	if err := writef("# TYPE proxmox_backup_backups_total gauge\n"); err != nil {
+		return err
 	}
-	if _, err := fmt.Fprintf(f, "proxmox_backup_backups_total{location=\"local\"} %d\n", m.LocalBackups); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+	if err := writef("proxmox_backup_backups_total{location=\"local\"} %d\n", m.LocalBackups); err != nil {
+		return err
 	}
-	if _, err := fmt.Fprintf(f, "proxmox_backup_backups_total{location=\"secondary\"} %d\n", m.SecBackups); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+	if err := writef("proxmox_backup_backups_total{location=\"secondary\"} %d\n", m.SecBackups); err != nil {
+		return err
 	}
-	if _, err := fmt.Fprintf(f, "proxmox_backup_backups_total{location=\"cloud\"} %d\n", m.CloudBackups); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+	if err := writef("proxmox_backup_backups_total{location=\"cloud\"} %d\n", m.CloudBackups); err != nil {
+		return err
 	}
 
 	// Static info metric with labels
-	if _, err := fmt.Fprintf(f, "# HELP proxmox_backup_info Static information about this backup instance\n"); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+	if err := writef("# HELP proxmox_backup_info Static information about this backup instance\n"); err != nil {
+		return err
 	}
-	if _, err := fmt.Fprintf(f, "# TYPE proxmox_backup_info gauge\n"); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+	if err := writef("# TYPE proxmox_backup_info gauge\n"); err != nil {
+		return err
 	}
-	if _, err := fmt.Fprintf(
-		f,
+	if err := writef(
 		"proxmox_backup_info{hostname=%q,proxmox_type=%q,proxmox_version=%q,script_version=%q} 1\n",
 		m.Hostname,
 		m.ProxmoxType,
 		m.ProxmoxVersion,
 		m.ScriptVersion,
 	); err != nil {
-		return fmt.Errorf("write metrics file %s: %w", tmpPath, err)
+		return err
 	}
 
 	if err := f.Sync(); err != nil {

@@ -162,7 +162,7 @@ func readRestoreDecisionMetadata(tarReader *tar.Reader, header *tar.Header) ([]b
 	if header == nil {
 		return nil, fmt.Errorf("restore metadata entry is missing a tar header")
 	}
-	if header.Typeflag != tar.TypeReg {
+	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
 		return nil, fmt.Errorf("archive entry %s is not a regular file", header.Name)
 	}
 

@@ -271,21 +271,31 @@ func splitFile(path, destBase string, chunkSize int64) (err error) {
 }
 
 func writeChunk(src *os.File, chunkPath string, buf []byte, limit int64) (done bool, err error) {
-	out, err := os.OpenFile(chunkPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultChunkFilePerm)
-	if err != nil {
-		return false, err
+	if limit <= 0 {
+		return true, nil
 	}
-	defer closeIntoErr(&err, out, "close chunk file")
-
+	var out *os.File
+	defer func() {
+		if out != nil {
+			closeIntoErr(&err, out, "close chunk file")
+		}
+	}()
 	var written int64
 	for written < limit {
 		remaining := limit - written
-		if remaining < int64(len(buf)) {
-			buf = buf[:remaining]
+		readBuf := buf
+		if remaining < int64(len(readBuf)) {
+			readBuf = readBuf[:remaining]
 		}
-		n, err := src.Read(buf)
+		n, err := src.Read(readBuf)
 		if n > 0 {
-			if _, wErr := out.Write(buf[:n]); wErr != nil {
+			if out == nil {
+				out, err = os.OpenFile(chunkPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultChunkFilePerm)
+				if err != nil {
+					return false, err
+				}
+			}
+			if _, wErr := out.Write(readBuf[:n]); wErr != nil {
 				return false, wErr
 			}
 			written += int64(n)

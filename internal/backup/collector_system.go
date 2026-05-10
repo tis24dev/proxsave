@@ -57,6 +57,59 @@ func (c *Collector) detectZFSUsage() (bool, string) {
 	return true, strings.Join(indicators, ",")
 }
 
+func (c *Collector) collectBestEffortProbe(ctx context.Context, spec CommandSpec, output, description string, available func() (bool, string)) {
+	if _, err := c.depLookPath(spec.Name); err != nil {
+		c.logger.Debug("Skipping %s: command %s not available: %v", description, spec.Name, err)
+		return
+	}
+	if available != nil {
+		ok, reason := available()
+		if !ok {
+			if reason == "" {
+				reason = "required capability not detected"
+			}
+			c.logger.Debug("Skipping %s: %s", description, reason)
+			return
+		}
+	}
+	if err := c.safeCmdOutput(ctx, spec, output, description, false); err != nil {
+		c.logger.Warning("Skipping %s: %v", description, err)
+	}
+}
+
+func (c *Collector) systemctlProbeAvailable() (bool, string) {
+	if _, err := c.depStat(c.systemPath("/run/systemd/system")); err == nil {
+		return true, ""
+	}
+	if data, err := os.ReadFile(c.systemPath("/proc/1/comm")); err == nil && strings.TrimSpace(string(data)) == "systemd" {
+		return true, ""
+	}
+	if ctxInfo := c.depDetectUnprivilegedContainer(); ctxInfo.Detected {
+		return false, "systemd runtime not detected in container: " + ctxInfo.Details
+	}
+	return false, "systemd runtime not detected"
+}
+
+func (c *Collector) dmidecodeProbeAvailable() (bool, string) {
+	if os.Geteuid() != 0 {
+		return false, fmt.Sprintf("dmidecode requires root privileges (euid=%d)", os.Geteuid())
+	}
+	if _, err := c.depStat(c.systemPath("/sys/firmware/dmi/tables")); err == nil {
+		return true, ""
+	}
+	if _, err := c.depStat(c.systemPath("/dev/mem")); err == nil {
+		return true, ""
+	}
+	return false, "DMI tables not accessible"
+}
+
+func (c *Collector) sensorsProbeAvailable() (bool, string) {
+	if _, err := c.depStat(c.systemPath("/sys/class/hwmon")); err == nil {
+		return true, ""
+	}
+	return false, "hardware sensor sysfs not detected"
+}
+
 // CollectSystemInfo collects common system information (both PVE and PBS)
 func (c *Collector) CollectSystemInfo(ctx context.Context) error {
 	c.logger.Info("Collecting system information")
@@ -526,13 +579,11 @@ func (c *Collector) collectSystemCoreRuntime(ctx context.Context, commandsDir st
 		return fmt.Errorf("failed to get kernel version (critical): %w", err)
 	}
 
-	if err := c.safeCmdOutput(ctx,
+	c.collectBestEffortProbe(ctx,
 		commandSpec("hostname", "-f"),
 		filepath.Join(commandsDir, "hostname.txt"),
 		"Hostname",
-		false); err != nil {
-		return err
-	}
+		nil)
 
 	return nil
 }
@@ -760,13 +811,11 @@ func (c *Collector) collectSystemComputeBusInventoryRuntime(ctx context.Context,
 		return err
 	}
 
-	if err := c.safeCmdOutput(ctx,
+	c.collectBestEffortProbe(ctx,
 		commandSpec("lsusb"),
 		filepath.Join(commandsDir, "lsusb.txt"),
 		"USB devices",
-		false); err != nil {
-		return err
-	}
+		nil)
 
 	return nil
 }
@@ -776,19 +825,15 @@ func (c *Collector) collectSystemServicesRuntime(ctx context.Context, commandsDi
 		return nil
 	}
 
-	if err := c.collectCommandMulti(ctx,
+	c.collectBestEffortProbe(ctx,
 		commandSpec("systemctl", "list-units", "--type=service", "--all"),
 		filepath.Join(commandsDir, "systemctl_services.txt"),
 		"Systemd services",
-		false); err != nil {
-		return err
-	}
+		c.systemctlProbeAvailable)
 
-	if err := c.safeCmdOutput(ctx, commandSpec("systemctl", "list-unit-files", "--type=service"),
+	c.collectBestEffortProbe(ctx, commandSpec("systemctl", "list-unit-files", "--type=service"),
 		filepath.Join(commandsDir, "systemctl_service_files.txt"),
-		"Systemd service files", false); err != nil {
-		return err
-	}
+		"Systemd service files", c.systemctlProbeAvailable)
 
 	return nil
 }
@@ -887,10 +932,11 @@ func (c *Collector) collectSystemFirewallUFWRuntime(ctx context.Context, command
 		commandSpec("ufw", "status", "verbose"),
 		filepath.Join(commandsDir, "ufw_status.txt"),
 		"UFW status")
-	c.collectCommandOptional(ctx,
+	c.collectBestEffortProbe(ctx,
 		commandSpec("systemctl", "status", "--no-pager", "ufw"),
 		filepath.Join(commandsDir, "systemctl_ufw.txt"),
-		"systemctl ufw")
+		"systemctl ufw",
+		c.systemctlProbeAvailable)
 
 	return nil
 }
@@ -908,10 +954,11 @@ func (c *Collector) collectSystemFirewallFirewalldRuntime(ctx context.Context, c
 		commandSpec("firewall-cmd", "--list-all"),
 		filepath.Join(commandsDir, "firewalld_list_all.txt"),
 		"firewalld rules")
-	c.collectCommandOptional(ctx,
+	c.collectBestEffortProbe(ctx,
 		commandSpec("systemctl", "status", "--no-pager", "firewalld"),
 		filepath.Join(commandsDir, "systemctl_firewalld.txt"),
-		"systemctl firewalld")
+		"systemctl firewalld",
+		c.systemctlProbeAvailable)
 
 	return nil
 }
@@ -1202,25 +1249,17 @@ func (c *Collector) collectHardwareInfo(ctx context.Context) error {
 	commandsDir := c.proxsaveCommandsDir("system")
 	c.logger.Debug("Collecting hardware inventory into %s", commandsDir)
 
-	// DMI decode (requires root)
-	if err := c.safeCmdOutput(ctx,
+	c.collectBestEffortProbe(ctx,
 		commandSpec("dmidecode"),
 		filepath.Join(commandsDir, "dmidecode.txt"),
 		"Hardware DMI information",
-		false); err != nil {
-		return err
-	}
+		c.dmidecodeProbeAvailable)
 
-	// Hardware sensors (if available)
-	if _, err := c.depStat(c.systemPath("/usr/bin/sensors")); err == nil {
-		if err := c.safeCmdOutput(ctx,
-			commandSpec("sensors"),
-			filepath.Join(commandsDir, "sensors.txt"),
-			"Hardware sensors",
-			false); err != nil {
-			return err
-		}
-	}
+	c.collectBestEffortProbe(ctx,
+		commandSpec("sensors"),
+		filepath.Join(commandsDir, "sensors.txt"),
+		"Hardware sensors",
+		c.sensorsProbeAvailable)
 
 	// SMART status for disks (if available)
 	if _, err := c.depStat(c.systemPath("/usr/sbin/smartctl")); err == nil {

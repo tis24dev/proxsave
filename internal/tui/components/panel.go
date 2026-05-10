@@ -48,23 +48,23 @@ func InfoPanel(title, message string) *Panel {
 // SuccessPanel creates a success-styled panel
 func SuccessPanel(title, message string) *Panel {
 	panel := NewPanel().SetTitle(title)
-	panel.Box.SetBorderColor(tui.SuccessGreen).
-		SetTitleColor(tui.SuccessGreen)
+	panel.SetBorderColor(tui.SuccessGreen)
+	panel.SetTitleColor(tui.SuccessGreen)
 	return panel
 }
 
 // ErrorPanel creates an error-styled panel
 func ErrorPanel(title, message string) *Panel {
 	panel := NewPanel().SetTitle(title)
-	panel.Box.SetBorderColor(tui.ErrorRed).
-		SetTitleColor(tui.ErrorRed)
+	panel.SetBorderColor(tui.ErrorRed)
+	panel.SetTitleColor(tui.ErrorRed)
 	return panel
 }
 
 // WarningPanel creates a warning-styled panel
 func WarningPanel(title, message string) *Panel {
 	panel := NewPanel().SetTitle(title)
-	panel.Box.SetBorderColor(tui.WarningYellow).
-		SetTitleColor(tui.WarningYellow)
+	panel.SetBorderColor(tui.WarningYellow)
+	panel.SetTitleColor(tui.WarningYellow)
 	return panel
 }

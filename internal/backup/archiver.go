@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/tis24dev/proxsave/internal/closeerr"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -22,14 +23,7 @@ import (
 
 var lookPath = exec.LookPath
 
-func closeIntoErr(errp *error, closer io.Closer, operation string) {
-	if errp == nil || closer == nil {
-		return
-	}
-	if closeErr := closer.Close(); closeErr != nil && *errp == nil {
-		*errp = fmt.Errorf("%s: %w", operation, closeErr)
-	}
-}
+var closeIntoErr = closeerr.CloseIntoErr
 
 // ArchiverDeps groups external dependencies used by Archiver.
 type ArchiverDeps struct {

@@ -35,7 +35,9 @@ var installableDocs = func() []DocAsset {
 }()
 
 // InstallableDocs returns the list of documentation files embedded in the
-// binary that should be written to the installation root.
+// binary that should be written to the installation root. The returned DocAsset
+// slice is copied, but DocAsset.Data shares the embedded installableDocs backing
+// data; callers must treat Data as read-only or copy it before mutation.
 func InstallableDocs() []DocAsset {
 	out := make([]DocAsset, len(installableDocs))
 	copy(out, installableDocs)

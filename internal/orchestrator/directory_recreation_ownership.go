@@ -71,7 +71,10 @@ func handleDatastoreOwnershipError(action, path string, uid, gid int, err error,
 
 func ensureDatastoreDirectoryMode(path string, logger *logging.Logger) error {
 	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
 		return nil
 	}
 

@@ -16,6 +16,9 @@ type fstabMergeUIPrompt struct {
 	defaultYes    bool
 }
 
+// fstabMergeTimeout is the default time a UI has to confirm the Smart fstab merge.
+const fstabMergeTimeout = 90 * time.Second
+
 func smartMergeFstabWithUI(ctx context.Context, logger *logging.Logger, ui RestoreWorkflowUI, currentFstabPath, backupFstabPath string, dryRun bool) error {
 	if logger == nil {
 		logger = logging.GetDefaultLogger()
@@ -33,7 +36,7 @@ func smartMergeFstabWithUI(ctx context.Context, logger *logging.Logger, ui Resto
 		return nil
 	}
 
-	confirmed, err := ui.ConfirmFstabMerge(ctx, "Smart fstab merge", prompt.message(), 90*time.Second, prompt.defaultYes)
+	confirmed, err := ui.ConfirmFstabMerge(ctx, "Smart fstab merge", prompt.message(), fstabMergeTimeout, prompt.defaultYes)
 	if err != nil {
 		return err
 	}

@@ -174,7 +174,7 @@ func (w *restoreUIWorkflowRun) exportCategories() error {
 	w.exportRoot = exportDestRoot(w.cfg.BaseDir)
 	w.logger.Info("")
 	w.logger.Info("Exporting %d export-only category(ies) to: %s", len(w.plan.ExportCategories), w.exportRoot)
-	if err := restoreFS.MkdirAll(w.exportRoot, 0o755); err != nil {
+	if err := restoreFS.MkdirAll(w.exportRoot, 0o700); err != nil {
 		return fmt.Errorf("failed to create export directory %s: %w", w.exportRoot, err)
 	}
 
@@ -256,7 +256,7 @@ func (w *restoreUIWorkflowRun) extractStagedCategories() error {
 	w.stageRoot = stageDestRoot()
 	w.logger.Info("")
 	w.logger.Info("Staging %d sensitive category(ies) to: %s", len(w.plan.StagedCategories), w.stageRoot)
-	if err := restoreFS.MkdirAll(w.stageRoot, 0o755); err != nil {
+	if err := restoreFS.MkdirAll(w.stageRoot, 0o700); err != nil {
 		return fmt.Errorf("failed to create staging directory %s: %w", w.stageRoot, err)
 	}
 

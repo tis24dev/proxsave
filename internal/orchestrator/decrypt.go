@@ -413,15 +413,15 @@ func downloadRcloneBackup(ctx context.Context, remotePath string, logger *loggin
 		return "", nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tmpPath = tmpFile.Name()
-	if err := tmpFile.Close(); err != nil {
-		return "", nil, fmt.Errorf("close temp file: %w", err)
-	}
-
 	cleanup = func() {
 		logger.Debug("Removing temporary rclone download: %s", tmpPath)
 		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
 			logger.Debug("Failed to remove temporary rclone download %s: %v", tmpPath, err)
 		}
+	}
+	if err := tmpFile.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("close temp file: %w", err)
 	}
 
 	logger.Info("Downloading backup from cloud storage: %s", remotePath)

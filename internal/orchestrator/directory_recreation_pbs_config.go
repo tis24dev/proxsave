@@ -22,26 +22,86 @@ func normalizePBSDatastoreCfg(path string, logger *logging.Logger) error {
 		return nil
 	}
 
-	if err := os.MkdirAll("/tmp/proxsave", 0o755); err != nil {
-		return fmt.Errorf("ensure /tmp/proxsave exists: %w", err)
-	}
-
-	backupPath := filepath.Join("/tmp/proxsave", fmt.Sprintf("datastore.cfg.pre-normalize.%s", nowRestore().Format("20060102-150405")))
-	if err := os.WriteFile(backupPath, raw, 0o600); err != nil {
+	backupPath, err := writePBSDatastoreCfgBackup(raw)
+	if err != nil {
 		return fmt.Errorf("write backup copy: %w", err)
 	}
 
 	mode := datastoreCfgMode(path)
-	tmpPath := fmt.Sprintf("%s.proxsave.tmp", path)
-	if err := os.WriteFile(tmpPath, []byte(normalized), mode); err != nil {
+	if err := writePBSDatastoreCfgAtomically(path, []byte(normalized), mode); err != nil {
 		return fmt.Errorf("write normalized datastore.cfg: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("replace datastore.cfg: %w", err)
 	}
 
 	logger.Warning("PBS datastore.cfg: fixed %d malformed line(s) (properties must be indented); backup saved to %s", fixed, backupPath)
+	return nil
+}
+
+func writePBSDatastoreCfgBackup(raw []byte) (backupPath string, err error) {
+	backupDir, err := os.MkdirTemp("/tmp", "proxsave-")
+	if err != nil {
+		return "", err
+	}
+	removeBackupDir := true
+	defer func() {
+		if err != nil && removeBackupDir {
+			_ = os.RemoveAll(backupDir)
+		}
+	}()
+	if err := os.Chmod(backupDir, 0o700); err != nil {
+		return "", err
+	}
+
+	prefix := fmt.Sprintf("datastore.cfg.pre-normalize.%s-", nowRestore().Format("20060102-150405"))
+	backupFile, err := os.CreateTemp(backupDir, prefix)
+	if err != nil {
+		return "", err
+	}
+	backupPath = backupFile.Name()
+	defer func() {
+		if err != nil {
+			_ = backupFile.Close()
+			_ = os.Remove(backupPath)
+		}
+	}()
+
+	if err = backupFile.Chmod(0o600); err != nil {
+		return "", err
+	}
+	if _, err = backupFile.Write(raw); err != nil {
+		return "", err
+	}
+	if err = backupFile.Close(); err != nil {
+		return "", err
+	}
+	removeBackupDir = false
+	return backupPath, nil
+}
+
+func writePBSDatastoreCfgAtomically(path string, data []byte, mode os.FileMode) (err error) {
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), "datastore.cfg.proxsave-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		if err != nil {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err = tmpFile.Chmod(mode); err != nil {
+		return err
+	}
+	if _, err = tmpFile.Write(data); err != nil {
+		return err
+	}
+	if err = tmpFile.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace datastore.cfg: %w", err)
+	}
 	return nil
 }
 

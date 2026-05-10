@@ -179,8 +179,8 @@ func (a *pbsMountGuardApply) prepareOfflineGuardTarget(guardTarget string) bool 
 
 	mounted, err := isMounted(guardTarget)
 	if err != nil {
-		a.warning("PBS mount guard: unable to check mount status for %s: %v (continuing)", guardTarget, err)
-		return true
+		a.warning("PBS mount guard: mount status probe for %s is inconclusive: %v (skipping guard)", guardTarget, err)
+		return false
 	}
 	if mounted {
 		a.debug("PBS mount guard: mountpoint %s already mounted, skipping guard", guardTarget)

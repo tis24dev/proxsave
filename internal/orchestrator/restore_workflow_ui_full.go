@@ -56,7 +56,7 @@ func (f *fullRestoreUIFlow) run() error {
 }
 
 func (f *fullRestoreUIFlow) validate() error {
-	if f.candidate == nil || f.prepared == nil || f.prepared.Manifest.ArchivePath == "" {
+	if f.candidate == nil || f.prepared == nil || f.prepared.ArchivePath == "" {
 		return fmt.Errorf("invalid restore candidate")
 	}
 	return nil

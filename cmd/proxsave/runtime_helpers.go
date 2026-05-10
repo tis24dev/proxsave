@@ -84,7 +84,7 @@ func detectExecInfo() ExecInfo {
 	originalDir := dir
 	baseDir := ""
 
-	for dir != "" && dir != "." && dir != string(filepath.Separator) {
+	for dir != "" && dir != "." {
 		if info, err := os.Stat(filepath.Join(dir, "env")); err == nil && info.IsDir() {
 			baseDir = dir
 			break
