@@ -1,34 +1,57 @@
 name: Race Detector
 
-on:
+run-name: Race detector - ${{ github.ref_name }}
+
+"on":
   push:
-    branches: [ main, dev ]
-  pull_request:
+    branches:
+      - main
+      - dev
+  pull_request: {}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   race:
+    name: Go race detector
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      CGO_ENABLED: "1"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: 'go.mod'
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            **/go.sum
 
-      - name: Resolve race toolchain
+      - name: Show Go environment
         run: |
-          TOOLCHAIN_FROM_MOD=$(awk '/^toolchain /{print $2}' go.mod)
-          if [ -n "$TOOLCHAIN_FROM_MOD" ]; then
-            echo "RACE_GOTOOLCHAIN=${TOOLCHAIN_FROM_MOD}+auto" >> "$GITHUB_ENV"
-          else
-            echo "RACE_GOTOOLCHAIN=auto" >> "$GITHUB_ENV"
-          fi
+          go version
+          go env GOTOOLCHAIN CGO_ENABLED GOOS GOARCH
+
+      - name: Download dependencies
+        run: go mod download
 
       - name: Run race detector
-        env:
-          GOTOOLCHAIN: ${{ env.RACE_GOTOOLCHAIN }}
-        run: |
-          go test -race ./...
+        run: go test -race -count=1 ./...
