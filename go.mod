@@ -2,7 +2,7 @@ module github.com/tis24dev/proxsave
 
 go 1.25.0
 
-toolchain go1.25.9
+toolchain go1.25.10
 
 require (
 	filippo.io/age v1.3.1
