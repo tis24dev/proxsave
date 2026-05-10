@@ -1048,6 +1048,9 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 	out, err := c.depRunCommand(runCtx, spec.Name, spec.Args...)
 	result.output = out
 	if err != nil {
+		if isContextCancellationError(runCtx, err) {
+			return result, err
+		}
 		result.outputSummary = summarizeCommandOutputText(string(out))
 		if opts.critical {
 			c.incFilesFailed()

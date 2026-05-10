@@ -69,6 +69,76 @@ func TestCollectSystemKernelModulesRuntimeBestEffort(t *testing.T) {
 	}
 }
 
+func TestCollectSystemKernelModulesRuntimePropagatesCommandCancellation(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&bytes.Buffer{})
+
+	tempDir := t.TempDir()
+	config := GetDefaultCollectorConfig()
+	collector := NewCollectorWithDeps(logger, config, tempDir, types.ProxmoxUnknown, false, CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			if name == "lsmod" {
+				return "/usr/sbin/lsmod", nil
+			}
+			return "", os.ErrNotExist
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "lsmod" {
+				t.Fatalf("unexpected command %s", name)
+			}
+			return nil, context.Canceled
+		},
+		DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
+	})
+
+	err := collector.collectSystemKernelModulesRuntime(context.Background(), filepath.Join(tempDir, "commands"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("collectSystemKernelModulesRuntime error=%v; want %v", err, context.Canceled)
+	}
+}
+
+func TestCollectSystemKernelModulesRuntimePropagatesCommandDeadline(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&bytes.Buffer{})
+
+	tempDir := t.TempDir()
+	config := GetDefaultCollectorConfig()
+	collector := NewCollectorWithDeps(logger, config, tempDir, types.ProxmoxUnknown, false, CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			if name == "lsmod" {
+				return "/usr/sbin/lsmod", nil
+			}
+			return "", os.ErrNotExist
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "lsmod" {
+				t.Fatalf("unexpected command %s", name)
+			}
+			return nil, context.DeadlineExceeded
+		},
+		DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
+	})
+
+	err := collector.collectSystemKernelModulesRuntime(context.Background(), filepath.Join(tempDir, "commands"))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("collectSystemKernelModulesRuntime error=%v; want %v", err, context.DeadlineExceeded)
+	}
+}
+
+func TestCollectBestEffortProbePropagatesCanceledContext(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&bytes.Buffer{})
+
+	collector := NewCollector(logger, GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxUnknown, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := collector.collectBestEffortProbe(ctx, commandSpec("lsusb"), filepath.Join(t.TempDir(), "lsusb.txt"), "USB devices", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("collectBestEffortProbe error=%v; want %v", err, context.Canceled)
+	}
+}
+
 func TestCollectHardwareInfoSmartctlScanBestEffort(t *testing.T) {
 	var log bytes.Buffer
 	logger := logging.New(types.LogLevelDebug, false)
