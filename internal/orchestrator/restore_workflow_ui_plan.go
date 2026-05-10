@@ -10,11 +10,23 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-func (w *restoreUIWorkflowRun) prepareBundleAndPlan() (bool, error) {
+func (w *restoreUIWorkflowRun) prepareBundleAndPlan() (fallbackToFullRestore bool, err error) {
 	if err := w.prepareBundle(); err != nil {
 		return false, err
 	}
-	return w.planPreparedBundle()
+	cleanupOnFailure := true
+	defer func() {
+		if cleanupOnFailure && w.prepared != nil {
+			w.prepared.Cleanup()
+		}
+	}()
+
+	fallbackToFullRestore, err = w.planPreparedBundle()
+	if err != nil {
+		return fallbackToFullRestore, err
+	}
+	cleanupOnFailure = false
+	return fallbackToFullRestore, nil
 }
 
 func (w *restoreUIWorkflowRun) planPreparedBundle() (bool, error) {
