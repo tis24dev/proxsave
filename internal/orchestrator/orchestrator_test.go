@@ -22,6 +22,20 @@ import (
 
 const testAgeRecipient = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
 
+func setSmallBackupTestConfig(t *testing.T, orch *Orchestrator, dir string) {
+	t.Helper()
+
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("BACKUP_CONFIG_FILE=true\n"), 0o600); err != nil {
+		t.Fatalf("write test config: %v", err)
+	}
+
+	orch.SetConfig(&config.Config{
+		ConfigPath:       configPath,
+		BackupConfigFile: true,
+	})
+}
+
 type testStorageTarget struct {
 	err   error
 	calls int
@@ -44,6 +58,7 @@ func TestRunGoBackupEndToEnd(t *testing.T) {
 
 	orch := New(logger, false)
 	orch.SetBackupConfig(backupDir, logDir, types.CompressionNone, 0, 0, "standard", nil)
+	setSmallBackupTestConfig(t, orch, backupDir)
 
 	checkerConfig := &checks.CheckerConfig{
 		BackupPath:         backupDir,
@@ -62,7 +77,8 @@ func TestRunGoBackupEndToEnd(t *testing.T) {
 	checker := checks.NewChecker(logger, checkerConfig)
 	orch.SetChecker(checker)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	stats, err := orch.RunGoBackup(ctx, &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "test-host")
 	if err != nil {
 		t.Fatalf("RunGoBackup failed: %v", err)
@@ -172,6 +188,7 @@ func TestRunGoBackupFallbackCompression(t *testing.T) {
 
 	orch := New(logger, false)
 	orch.SetBackupConfig(backupDir, logDir, types.CompressionXZ, 6, 0, "ultra", nil)
+	setSmallBackupTestConfig(t, orch, backupDir)
 
 	checkerConfig := &checks.CheckerConfig{
 		BackupPath:         backupDir,
@@ -198,7 +215,8 @@ func TestRunGoBackupFallbackCompression(t *testing.T) {
 	})
 	t.Cleanup(restore)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	stats, err := orch.RunGoBackup(ctx, &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "fallback-host")
 	if err != nil {
 		t.Fatalf("RunGoBackup failed: %v", err)

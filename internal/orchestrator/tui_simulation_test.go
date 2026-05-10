@@ -28,12 +28,6 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 	t.Helper()
 
 	orig := newTUIApp
-	screen := tcell.NewSimulationScreen("UTF-8")
-	if err := screen.Init(); err != nil {
-		t.Fatalf("screen.Init: %v", err)
-	}
-	screen.SetSize(120, 40)
-
 	drawCh := make(chan struct{}, 8)
 	done := make(chan struct{})
 	var injectOnce sync.Once
@@ -51,6 +45,12 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 	}
 
 	newTUIApp = func() *tui.App {
+		screen := tcell.NewSimulationScreen("UTF-8")
+		if err := screen.Init(); err != nil {
+			t.Fatalf("screen.Init: %v", err)
+		}
+		screen.SetSize(120, 40)
+
 		app := tui.NewApp()
 		appMu.Lock()
 		currentApp = app
