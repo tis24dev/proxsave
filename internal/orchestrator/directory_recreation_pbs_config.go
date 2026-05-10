@@ -47,9 +47,6 @@ func writePBSDatastoreCfgBackup(raw []byte) (backupPath string, err error) {
 			_ = os.RemoveAll(backupDir)
 		}
 	}()
-	if err := os.Chmod(backupDir, 0o700); err != nil {
-		return "", err
-	}
 
 	prefix := fmt.Sprintf("datastore.cfg.pre-normalize.%s-", nowRestore().Format("20060102-150405"))
 	backupFile, err := os.CreateTemp(backupDir, prefix)
@@ -112,6 +109,9 @@ func datastoreCfgMode(path string) os.FileMode {
 	return os.FileMode(0o644)
 }
 
+// normalizePBSDatastoreCfgContent expects PBS datastore.cfg content, where the
+// only supported top-level sections are datastore blocks. Once a datastore block
+// is seen, subsequent non-comment lines are treated as datastore properties.
 func normalizePBSDatastoreCfgContent(content string) (string, int) {
 	lines := strings.Split(content, "\n")
 	inDatastoreBlock := false
