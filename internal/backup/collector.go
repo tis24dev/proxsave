@@ -990,6 +990,7 @@ type commandRunOptions struct {
 	critical              bool
 	logCollection         bool
 	handleSystemctlStatus bool
+	debugNonCritical      bool
 }
 
 type commandRunResult struct {
@@ -1123,6 +1124,13 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 				err,
 				result.outputSummary,
 			)
+		} else if opts.debugNonCritical {
+			c.logger.Debug("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Output: %s",
+				opts.description,
+				cmdString,
+				err,
+				result.outputSummary,
+			)
 		} else {
 			c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the required CLI is available and has proper permissions. Output: %s",
 				opts.description,
@@ -1145,6 +1153,29 @@ func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output,
 		caller:        "safeCmdOutput",
 		critical:      critical,
 		logCollection: true,
+	})
+	if err != nil {
+		return err
+	}
+	if result.classification != commandRunSucceeded {
+		return nil
+	}
+
+	if err := c.writeReportFile(output, result.output); err != nil {
+		return err
+	}
+
+	c.logger.Debug("Successfully collected %s via command: %s", description, spec.String())
+	return nil
+}
+
+func (c *Collector) safeCmdOutputBestEffort(ctx context.Context, spec CommandSpec, output, description string) error {
+	result, err := c.runAndClassifyCommand(ctx, spec, commandRunOptions{
+		output:           output,
+		description:      description,
+		caller:           "safeCmdOutputBestEffort",
+		logCollection:    true,
+		debugNonCritical: true,
 	})
 	if err != nil {
 		return err

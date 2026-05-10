@@ -1126,10 +1126,6 @@ func TestCheckLockFile_RemoveStaleLockFails(t *testing.T) {
 }
 
 func TestCheckLockFile_WriteFails(t *testing.T) {
-	if _, err := os.Stat("/dev/full"); err != nil {
-		t.Skipf("/dev/full not available: %v", err)
-	}
-
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(io.Discard)
 
@@ -1143,7 +1139,7 @@ func TestCheckLockFile_WriteFails(t *testing.T) {
 	origOpen := osOpenFile
 	t.Cleanup(func() { osOpenFile = origOpen })
 	osOpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
-		return os.OpenFile("/dev/full", os.O_WRONLY, 0)
+		return os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_RDONLY, perm)
 	}
 
 	checker := NewChecker(logger, config)
@@ -1153,6 +1149,9 @@ func TestCheckLockFile_WriteFails(t *testing.T) {
 	}
 	if result.Error == nil || !strings.Contains(result.Error.Error(), "failed to write lock file") {
 		t.Fatalf("expected write lock file error, got: %v", result.Error)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("expected partial lock file to be removed, stat err: %v", err)
 	}
 }
 
@@ -1175,6 +1174,36 @@ func TestCheckLockFile_SyncWarningDoesNotFail(t *testing.T) {
 	result := checker.CheckLockFile()
 	if !result.Passed {
 		t.Fatalf("expected CheckLockFile to pass despite sync failure, got: %v", result.Error)
+	}
+}
+
+func TestCheckLockFile_CloseFailsRemovesPartialLock(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+
+	config := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
+	config.LockFilePath = lockPath
+	config.MaxLockAge = time.Hour
+
+	origSync := syncFile
+	t.Cleanup(func() { syncFile = origSync })
+	syncFile = func(f *os.File) error {
+		return f.Close()
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckLockFile()
+	if result.Passed {
+		t.Fatalf("expected CheckLockFile to fail, got passed")
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "failed to close lock file") {
+		t.Fatalf("expected close lock file error, got: %v", result.Error)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("expected partial lock file to be removed, stat err: %v", err)
 	}
 }
 

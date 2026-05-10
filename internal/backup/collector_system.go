@@ -72,8 +72,8 @@ func (c *Collector) collectBestEffortProbe(ctx context.Context, spec CommandSpec
 			return
 		}
 	}
-	if err := c.safeCmdOutput(ctx, spec, output, description, false); err != nil {
-		c.logger.Warning("Skipping %s: %v", description, err)
+	if err := c.safeCmdOutputBestEffort(ctx, spec, output, description); err != nil {
+		c.logger.Debug("Skipping %s: %v", description, err)
 	}
 }
 
@@ -968,11 +968,12 @@ func (c *Collector) collectSystemKernelModulesRuntime(ctx context.Context, comma
 		return nil
 	}
 
-	return c.safeCmdOutput(ctx,
+	c.collectBestEffortProbe(ctx,
 		commandSpec("lsmod"),
 		filepath.Join(commandsDir, "lsmod.txt"),
 		"Loaded kernel modules",
-		false)
+		nil)
+	return nil
 }
 
 func (c *Collector) collectSystemSysctlRuntime(ctx context.Context, commandsDir string) error {
@@ -1263,14 +1264,11 @@ func (c *Collector) collectHardwareInfo(ctx context.Context) error {
 
 	// SMART status for disks (if available)
 	if _, err := c.depStat(c.systemPath("/usr/sbin/smartctl")); err == nil {
-		// Get list of disks
-		if err := c.safeCmdOutput(ctx,
+		c.collectBestEffortProbe(ctx,
 			commandSpec("smartctl", "--scan"),
 			filepath.Join(commandsDir, "smartctl_scan.txt"),
 			"SMART scan",
-			false); err != nil {
-			return err
-		}
+			nil)
 	}
 
 	c.logger.Debug("Hardware information snapshot completed")

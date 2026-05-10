@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -25,6 +26,92 @@ func TestEnsureSystemPathAddsDefaults(t *testing.T) {
 		if !strings.Contains(got, required) {
 			t.Fatalf("PATH %q should contain %s", got, required)
 		}
+	}
+}
+
+func TestCollectSystemKernelModulesRuntimeBestEffort(t *testing.T) {
+	var log bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&log)
+
+	tempDir := t.TempDir()
+	config := GetDefaultCollectorConfig()
+	calls := 0
+	collector := NewCollectorWithDeps(logger, config, tempDir, types.ProxmoxUnknown, false, CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			if name == "lsmod" {
+				return "/usr/sbin/lsmod", nil
+			}
+			return "", os.ErrNotExist
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "lsmod" {
+				t.Fatalf("unexpected command %s", name)
+			}
+			calls++
+			return []byte("lsmod failed"), errors.New("lsmod failed")
+		},
+		DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
+	})
+
+	commandsDir := filepath.Join(tempDir, "commands")
+	if err := collector.collectSystemKernelModulesRuntime(context.Background(), commandsDir); err != nil {
+		t.Fatalf("collectSystemKernelModulesRuntime returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("lsmod calls=%d; want 1", calls)
+	}
+	if logger.WarningCount() != 0 {
+		t.Fatalf("expected lsmod failure to stay below warning level, warnings=%d log=%s", logger.WarningCount(), log.String())
+	}
+	if _, err := os.Stat(filepath.Join(commandsDir, "lsmod.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected no lsmod output file on failure, stat err: %v", err)
+	}
+}
+
+func TestCollectHardwareInfoSmartctlScanBestEffort(t *testing.T) {
+	var log bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&log)
+
+	tempDir := t.TempDir()
+	config := GetDefaultCollectorConfig()
+	calls := 0
+	collector := NewCollectorWithDeps(logger, config, tempDir, types.ProxmoxUnknown, false, CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			if name == "smartctl" {
+				return "/usr/sbin/smartctl", nil
+			}
+			return "", os.ErrNotExist
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "smartctl" || len(args) != 1 || args[0] != "--scan" {
+				t.Fatalf("unexpected command %s %v", name, args)
+			}
+			calls++
+			return []byte("smartctl failed"), errors.New("smartctl failed")
+		},
+		Stat: func(path string) (os.FileInfo, error) {
+			if strings.HasSuffix(path, "/usr/sbin/smartctl") {
+				return nil, nil
+			}
+			return nil, os.ErrNotExist
+		},
+		DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
+	})
+
+	if err := collector.collectHardwareInfo(context.Background()); err != nil {
+		t.Fatalf("collectHardwareInfo returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("smartctl calls=%d; want 1", calls)
+	}
+	if logger.WarningCount() != 0 {
+		t.Fatalf("expected smartctl failure to stay below warning level, warnings=%d log=%s", logger.WarningCount(), log.String())
+	}
+	output := filepath.Join(collector.proxsaveCommandsDir("system"), "smartctl_scan.txt")
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("expected no smartctl output file on failure, stat err: %v", err)
 	}
 }
 
