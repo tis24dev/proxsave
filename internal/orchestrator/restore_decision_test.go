@@ -62,13 +62,15 @@ func tarBytes(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
-func TestReadRestoreDecisionMetadataAcceptsTypeRegA(t *testing.T) {
+func TestReadRestoreDecisionMetadataAcceptsNulTypeFlag(t *testing.T) {
+	const nulTypeFlag byte = 0
+
 	data := []byte("BACKUP_TYPE=pbs\n")
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	if err := tw.WriteHeader(&tar.Header{
 		Name:     "var/lib/proxsave-info/backup_metadata.txt",
-		Typeflag: tar.TypeRegA,
+		Typeflag: nulTypeFlag,
 		Mode:     0o640,
 		Size:     int64(len(data)),
 	}); err != nil {
