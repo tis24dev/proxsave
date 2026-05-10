@@ -550,10 +550,6 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 		dsWorkers = 1
 	}
 
-	parentCtx := ctx
-	ctx, cancel := context.WithCancel(parentCtx)
-	defer cancel()
-
 	var (
 		wg       sync.WaitGroup
 		sem      = make(chan struct{}, dsWorkers)
@@ -580,7 +576,6 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
-					cancel()
 				}
 				errMu.Unlock()
 			}
@@ -592,7 +587,7 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 	if firstErr != nil {
 		return firstErr
 	}
-	if err := parentCtx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return nil
