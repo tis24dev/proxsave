@@ -203,6 +203,10 @@ func (w *restoreUIWorkflowRun) runClusterSafeApply() error {
 		w.logger.Warning("Cluster SAFE mode selected but export directory not available; skipping automatic pvesh apply")
 		return nil
 	}
+	if w.exportLogPath == "" {
+		w.logger.Warning("Cluster SAFE mode selected but export extraction did not complete; skipping automatic pvesh apply")
+		return nil
+	}
 	w.extractSafeApplyInventory()
 	if err := runSafeClusterApplyWithUI(w.ctx, w.ui, w.exportRoot, w.logger, w.plan); err != nil {
 		return w.handleClusterSafeApplyError(err)

@@ -2,8 +2,25 @@ package orchestrator
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 )
+
+func TestRunClusterSafeApplySkipsWhenExportExtractionIncomplete(t *testing.T) {
+	w := &restoreUIWorkflowRun{
+		ctx:           context.Background(),
+		logger:        newTestLogger(),
+		ui:            nil,
+		exportRoot:    filepath.Join(t.TempDir(), "export"),
+		exportLogPath: "",
+		plan:          &RestorePlan{ClusterSafeMode: true},
+		prepared:      &preparedBundle{ArchivePath: "/missing.tar"},
+	}
+
+	if err := w.runClusterSafeApply(); err != nil {
+		t.Fatalf("runClusterSafeApply error: %v", err)
+	}
+}
 
 func TestExtractStagedCategoriesReportsIncompleteOnNonAbortError(t *testing.T) {
 	origRestoreFS := restoreFS
