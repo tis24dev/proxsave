@@ -246,26 +246,34 @@ func (w *restoreUIWorkflowRun) stageAndApplySensitiveCategories() error {
 	if len(w.plan.StagedCategories) == 0 {
 		return nil
 	}
-	if err := w.extractStagedCategories(); err != nil {
+	success, err := w.extractStagedCategories()
+	if err != nil {
 		return err
+	}
+	if !success {
+		w.logger.Warning("Skipping apply due to staged extraction errors")
+		return nil
 	}
 	return w.applyStagedCategories()
 }
 
-func (w *restoreUIWorkflowRun) extractStagedCategories() error {
+func (w *restoreUIWorkflowRun) extractStagedCategories() (bool, error) {
 	w.stageRoot = stageDestRoot()
 	w.logger.Info("")
 	w.logger.Info("Staging %d sensitive category(ies) to: %s", len(w.plan.StagedCategories), w.stageRoot)
 	if err := restoreFS.MkdirAll(w.stageRoot, 0o700); err != nil {
-		return fmt.Errorf("failed to create staging directory %s: %w", w.stageRoot, err)
+		return false, fmt.Errorf("failed to create staging directory %s: %w", w.stageRoot, err)
 	}
 
 	stageLog, err := extractSelectiveArchive(w.ctx, w.prepared.ArchivePath, w.stageRoot, w.plan.StagedCategories, RestoreModeCustom, w.logger)
 	if err != nil {
-		return w.handleStageExtractError(err)
+		if err := w.handleStageExtractError(err); err != nil {
+			return false, err
+		}
+		return false, nil
 	}
 	w.stageLogPath = stageLog
-	return nil
+	return true, nil
 }
 
 func (w *restoreUIWorkflowRun) handleStageExtractError(err error) error {
