@@ -145,6 +145,14 @@ func TestCollectHardwareInfoSmartctlScanBestEffort(t *testing.T) {
 	logger.SetOutput(&log)
 
 	tempDir := t.TempDir()
+	smartctlMarker := filepath.Join(tempDir, "smartctl")
+	if err := os.WriteFile(smartctlMarker, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write smartctl marker: %v", err)
+	}
+	smartctlInfo, err := os.Stat(smartctlMarker)
+	if err != nil {
+		t.Fatalf("stat smartctl marker: %v", err)
+	}
 	config := GetDefaultCollectorConfig()
 	calls := 0
 	collector := NewCollectorWithDeps(logger, config, tempDir, types.ProxmoxUnknown, false, CollectorDeps{
@@ -163,7 +171,7 @@ func TestCollectHardwareInfoSmartctlScanBestEffort(t *testing.T) {
 		},
 		Stat: func(path string) (os.FileInfo, error) {
 			if strings.HasSuffix(path, "/usr/sbin/smartctl") {
-				return nil, nil
+				return smartctlInfo, nil
 			}
 			return nil, os.ErrNotExist
 		},

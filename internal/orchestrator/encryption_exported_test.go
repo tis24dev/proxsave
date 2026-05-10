@@ -175,15 +175,22 @@ func TestPrepareAgeRecipients_NoRecipientsNonInteractiveErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipe stdin: %v", err)
 	}
-	defer inR.Close()
-	defer inW.Close()
+	cleanupClose := func(name string, closeFn func() error) {
+		t.Cleanup(func() {
+			if err := closeFn(); err != nil {
+				t.Errorf("close %s: %v", name, err)
+			}
+		})
+	}
+	cleanupClose("stdin reader", inR.Close)
+	cleanupClose("stdin writer", inW.Close)
 
 	outR, outW, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("pipe stdout: %v", err)
 	}
-	defer outR.Close()
-	defer outW.Close()
+	cleanupClose("stdout reader", outR.Close)
+	cleanupClose("stdout writer", outW.Close)
 
 	os.Stdin = inR
 	os.Stdout = outW

@@ -21,13 +21,13 @@ jobs:
       # CHECKOUT
       ########################################
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       ########################################
       # GO 1.25 — MAIN TOOLCHAIN
       ########################################
       - name: Set up Go (from go.mod)
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version-file: 'go.mod'
 
@@ -56,7 +56,7 @@ jobs:
       # GOSEC — RUN USING GO 1.21 (NO DOCKER)
       ########################################
       - name: Set up Go 1.21 for GoSec
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version: "1.21"
 
@@ -88,7 +88,7 @@ jobs:
       # UPLOAD SARIF
       ########################################
       - name: Upload GoSec SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e
         with:
           sarif_file: gosec.sarif
 
@@ -96,7 +96,7 @@ jobs:
       # RESTORE GO 1.25 FOR CODEQL
       ########################################
       - name: Restore Go 1.25 for CodeQL
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version-file: 'go.mod'
 
@@ -104,7 +104,7 @@ jobs:
       # CODEQL
       ########################################
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@68bde559dea0fdcac2102bfdf6230c5f70eb485e
         with:
           languages: go
 
@@ -114,4 +114,4 @@ jobs:
           go build ./...
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@68bde559dea0fdcac2102bfdf6230c5f70eb485e

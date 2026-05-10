@@ -1049,6 +1049,22 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 	result.output = out
 	if err != nil {
 		if isContextCancellationError(runCtx, err) {
+			if isNonCriticalPveshDeadline(ctx, runCtx, spec, opts.critical) {
+				result.classification = commandRunNonCriticalFailure
+				result.outputSummary = summarizeCommandOutputText(string(out))
+				timeoutSeconds := 0
+				if c.config != nil {
+					timeoutSeconds = c.config.PveshTimeoutSeconds
+				}
+				if opts.debugNonCritical {
+					c.logger.Debug("Skipping %s: command `%s` timed out after %d seconds. Non-critical; backup continues. Output: %s",
+						opts.description, cmdString, timeoutSeconds, result.outputSummary)
+				} else {
+					c.logger.Warning("Skipping %s: command `%s` timed out after %d seconds. Non-critical; backup continues. Output: %s",
+						opts.description, cmdString, timeoutSeconds, result.outputSummary)
+				}
+				return result, nil
+			}
 			return result, err
 		}
 		result.outputSummary = summarizeCommandOutputText(string(out))
@@ -1147,6 +1163,16 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 
 	result.classification = commandRunSucceeded
 	return result, nil
+}
+
+func isNonCriticalPveshDeadline(parentCtx, runCtx context.Context, spec CommandSpec, critical bool) bool {
+	if parentCtx == nil || runCtx == nil {
+		return false
+	}
+	return spec.Name == "pvesh" &&
+		!critical &&
+		parentCtx.Err() == nil &&
+		errors.Is(runCtx.Err(), context.DeadlineExceeded)
 }
 
 func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output, description string, critical bool) error {

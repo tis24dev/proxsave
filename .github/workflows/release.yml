@@ -24,7 +24,7 @@ jobs:
       # CHECKOUT (fetch-depth 0 per changelog e GoReleaser)
       ########################################
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
 
@@ -45,7 +45,7 @@ jobs:
       # SETUP GO
       ########################################
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version-file: 'go.mod'
 
@@ -82,6 +82,6 @@ jobs:
       # ATTESTAZIONE PROVENIENZA BUILD
       ########################################
       - name: Attest Build Provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
         with:
           subject-path: build/proxsave_*

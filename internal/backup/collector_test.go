@@ -1428,6 +1428,59 @@ func TestSafeCmdOutputHonorsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestSafeCmdOutputSwallowsNonCriticalPveshDeadline(t *testing.T) {
+	logger := logging.New(types.LogLevelWarning, false)
+	cfg := GetDefaultCollectorConfig()
+	cfg.PveshTimeoutSeconds = 1
+	tmp := t.TempDir()
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/usr/bin/pvesh", nil },
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "pvesh" {
+				t.Fatalf("unexpected command %s", name)
+			}
+			<-ctx.Done()
+			return []byte("timeout"), ctx.Err()
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	output := filepath.Join(tmp, "pvesh.txt")
+	err := c.safeCmdOutput(context.Background(), commandSpec("pvesh", "get", "/nodes"), output, "pvesh nodes", false)
+	if err != nil {
+		t.Fatalf("expected non-critical pvesh timeout to be skipped, got %v", err)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("expected no output file on timeout, stat err=%v", err)
+	}
+	if logger.WarningCount() != 1 {
+		t.Fatalf("expected one warning for skipped pvesh timeout, got %d", logger.WarningCount())
+	}
+}
+
+func TestSafeCmdOutputPropagatesParentCancellationDuringPvesh(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	cfg.PveshTimeoutSeconds = 15
+	tmp := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/usr/bin/pvesh", nil },
+		RunCommand: func(runCtx context.Context, name string, args ...string) ([]byte, error) {
+			cancel()
+			<-runCtx.Done()
+			return nil, runCtx.Err()
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	err := c.safeCmdOutput(ctx, commandSpec("pvesh", "get", "/nodes"), filepath.Join(tmp, "pvesh.txt"), "pvesh nodes", false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected parent context cancellation, got %v", err)
+	}
+}
+
 func TestSafeCmdOutputReturnsErrorOnEmptyCommand(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	cfg := GetDefaultCollectorConfig()
