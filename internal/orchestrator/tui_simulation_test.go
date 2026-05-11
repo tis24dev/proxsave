@@ -26,14 +26,19 @@ type simKey struct {
 
 func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 	t.Helper()
+	return withSimAppSequences(t, keys)
+}
+
+func withSimAppSequences(t *testing.T, sequences ...[]simKey) <-chan struct{} {
+	t.Helper()
 
 	orig := newTUIApp
 	drawCh := make(chan struct{}, 8)
 	done := make(chan struct{})
-	var injectOnce sync.Once
 	var injectWG sync.WaitGroup
 	var appMu sync.RWMutex
 	var currentApp *tui.App
+	var appCount int
 
 	stopCurrentApp := func() {
 		appMu.RLock()
@@ -42,6 +47,67 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 		if app != nil {
 			app.Stop()
 		}
+	}
+
+	keysForApp := func(index int) []simKey {
+		if index >= 0 && index < len(sequences) {
+			return sequences[index]
+		}
+		return nil
+	}
+
+	startInjector := func(screen tcell.SimulationScreen, readyCh <-chan struct{}, keys []simKey) {
+		injectWG.Add(1)
+		go func() {
+			defer injectWG.Done()
+
+			timer := time.NewTimer(simAppInitialDrawTimeout)
+			defer func() {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}()
+
+			select {
+			case <-readyCh:
+			case <-done:
+				return
+			case <-timer.C:
+				t.Errorf("TUI simulation did not render its initial draw within %s", simAppInitialDrawTimeout)
+				stopCurrentApp()
+				return
+			}
+
+			for _, k := range keys {
+				mod := k.Mod
+				if mod == 0 {
+					mod = tcell.ModNone
+				}
+				select {
+				case <-done:
+					return
+				default:
+				}
+				screen.InjectKey(k.Key, k.R, mod)
+			}
+
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(simAppCompletionTimeout)
+			select {
+			case <-done:
+			case <-timer.C:
+				t.Errorf("TUI simulation did not finish within %s after injecting %d key(s)", simAppCompletionTimeout, len(keys))
+				stopCurrentApp()
+			}
+		}()
 	}
 
 	newTUIApp = func() *tui.App {
@@ -53,6 +119,8 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 
 		app := tui.NewApp()
 		appMu.Lock()
+		appIndex := appCount
+		appCount++
 		currentApp = app
 		appMu.Unlock()
 		app.SetScreen(screen)
@@ -65,59 +133,7 @@ func withSimAppSequence(t *testing.T, keys []simKey) <-chan struct{} {
 			})
 		})
 
-		injectOnce.Do(func() {
-			injectWG.Add(1)
-			go func() {
-				defer injectWG.Done()
-
-				timer := time.NewTimer(simAppInitialDrawTimeout)
-				defer func() {
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
-				}()
-
-				select {
-				case <-readyCh:
-				case <-done:
-					return
-				case <-timer.C:
-					t.Errorf("TUI simulation did not render its initial draw within %s", simAppInitialDrawTimeout)
-					stopCurrentApp()
-					return
-				}
-
-				for _, k := range keys {
-					mod := k.Mod
-					if mod == 0 {
-						mod = tcell.ModNone
-					}
-					select {
-					case <-done:
-						return
-					default:
-					}
-					screen.InjectKey(k.Key, k.R, mod)
-				}
-
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				timer.Reset(simAppCompletionTimeout)
-				select {
-				case <-done:
-				case <-timer.C:
-					t.Errorf("TUI simulation did not finish within %s after injecting %d key(s)", simAppCompletionTimeout, len(keys))
-					stopCurrentApp()
-				}
-			}()
-		})
+		startInjector(screen, readyCh, keysForApp(appIndex))
 		return app
 	}
 
@@ -153,6 +169,35 @@ func TestPromptOverwriteAction_SelectsOverwrite(t *testing.T) {
 	}
 	if newPath != "" {
 		t.Fatalf("newPath=%q; want empty", newPath)
+	}
+}
+
+func TestPromptExistingPathDecisionTUI_NewPathReceivesNestedInput(t *testing.T) {
+	withSimAppSequences(t,
+		[]simKey{
+			{Key: tcell.KeyRight},
+			{Key: tcell.KeyEnter},
+		},
+		[]simKey{
+			{Key: tcell.KeyRune, R: '/'},
+			{Key: tcell.KeyRune, R: 'a'},
+			{Key: tcell.KeyRune, R: 'l'},
+			{Key: tcell.KeyRune, R: 't'},
+			{Key: tcell.KeyTab},
+			{Key: tcell.KeyEnter},
+		},
+	)
+
+	ui := newTUIWorkflowUI("/tmp/config.env", "sig", nil)
+	decision, newPath, err := promptExistingPathDecisionTUI(context.Background(), ui.screenEnv(), "/tmp/existing", "file", "")
+	if err != nil {
+		t.Fatalf("promptExistingPathDecisionTUI error: %v", err)
+	}
+	if decision != PathDecisionNewPath {
+		t.Fatalf("decision=%v; want %v", decision, PathDecisionNewPath)
+	}
+	if newPath != "/tmp/existing/alt" {
+		t.Fatalf("newPath=%q; want %q", newPath, "/tmp/existing/alt")
 	}
 }
 
