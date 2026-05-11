@@ -10,7 +10,7 @@ require (
 	github.com/rivo/tview v0.42.0
 	golang.org/x/crypto v0.50.0
 	golang.org/x/term v0.42.0
-	golang.org/x/text v0.36.0
+	golang.org/x/text v0.37.0
 )
 
 require (
