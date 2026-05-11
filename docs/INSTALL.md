@@ -154,8 +154,8 @@ For more details, see [CLI Reference - Binary Upgrade](CLI_REFERENCE.md#binary-u
 
 ```bash
 # Install Go (if building from source)
-wget https://go.dev/dl/go1.25.4.linux-amd64.tar.gz
-tar -C /usr/local -xzf go1.25.4.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.25.10.linux-amd64.tar.gz
+tar -C /usr/local -xzf go1.25.10.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 # Install rclone (for cloud storage)
@@ -168,7 +168,7 @@ apt update && apt install -y git
 apt update && apt install -y make
 
 # Verify installations
-go version    # Should show go1.25+
+go version    # Should show go1.25.10+
 rclone version  # Should show rclone v1.50+
 git --version # Should show git 2.47.3+
 make --version # Should show make 4.4.1+
