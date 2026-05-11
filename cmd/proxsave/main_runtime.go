@@ -265,10 +265,10 @@ func buildHeapProfilePath(rt *appRuntime) string {
 
 // checkGoRuntimeVersion ensures the running binary was built with at least the specified Go version (semver: major.minor.patch).
 func checkGoRuntimeVersion(minimum string) error {
-	rt := runtime.Version() // e.g., "go1.25.10"
+	rt := runtime.Version() // e.g., "go1.25.4"
 	// Normalize versions to x.y.z
 	parse := func(v string) (int, int, int) {
-		// Accept forms: go1.25.10, go1.25, 1.25.10, 1.25
+		// Accept forms: go1.25.4, go1.25, 1.25.4, 1.25
 		v = strings.TrimPrefix(v, "go")
 		parts := strings.Split(v, ".")
 		toInt := func(s string) int { n, _ := strconv.Atoi(s); return n }
