@@ -92,6 +92,9 @@ Examples:
 - `dual` backup on `pbs` host: restore `PBS + Common`
 - `pve` backup on `dual` host: restore `PVE + Common`
 
+When compatibility is partial, ProxSave automatically filters selectable
+restore categories to the roles supported by the current host.
+
 `unknown` hosts can still use export-oriented or common-only workflows, but
 ProxSave warns because role-specific compatibility cannot be verified.
 
@@ -2499,9 +2502,10 @@ systemctl restart proxmox-backup proxmox-backup-proxy
 
 **Q: Can I restore PVE backup to PBS system (or vice versa)?**
 
-A: Direct cross-role restore is still not recommended. PVE and PBS have
-different role-specific configurations. However, ProxSave now evaluates
-compatibility by **role overlap**:
+A: Pure cross-role restore (no role overlap) is not recommended; however
+ProxSave supports restores when roles overlap. PVE and PBS have different
+role-specific configurations. ProxSave now evaluates compatibility by
+**role overlap**:
 
 - `pve` ↔ `pbs`: only common categories are sensible
 - `dual` → `pve`: PVE + Common can be restored
