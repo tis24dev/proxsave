@@ -110,7 +110,7 @@ func RunPostInstallAuditWizard(ctx context.Context, execPath, configPath, buildS
 		"ProxSave - Post-install Check\n\n"+
 			"Detect optional components that are enabled but not configured on this node.\n"+
 			"This helps reduce WARNING noise and exit code 1 runs when features are unused.\n",
-		"[yellow]Navigation:[white] ↑↓ to move | ENTER/SPACE to toggle | ←→ on buttons | ENTER to select",
+		"[yellow]Navigation:[white] ↑↓ to move | ENTER/SPACE to toggle | TAB to actions | ←→ on buttons | ENTER to select",
 		configPath,
 		buildSig,
 		pages,
@@ -221,21 +221,12 @@ func showAuditReview(app *tui.App, pages *tview.Pages, configPath string, sugges
 	list.SetSelectedFunc(func(index int, _ string, _ string, _ rune) {
 		toggle(index)
 	})
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyEnter:
-			// Let SetSelectedFunc handle it.
-			return event
-		}
-		if event.Rune() == ' ' {
-			toggle(list.GetCurrentItem())
-			return nil
-		}
-		return event
-	})
-
 	if len(suggestions) > 0 {
 		updateDetails(0)
+	}
+
+	applyKeys := func(keys []string) {
+		applyAuditDisableSelection(app, pages, configPath, keys, applied)
 	}
 
 	buttons := tview.NewForm().
@@ -246,28 +237,42 @@ func showAuditReview(app *tui.App, pages *tview.Pages, configPath string, sugges
 					keys = append(keys, s.Key)
 				}
 			}
-			sort.Strings(keys)
-			if len(keys) == 0 {
-				showAuditDoneModal(app, pages, "No changes selected.\n\nNothing was modified.")
-				return
-			}
-			if err := applyAuditDisables(configPath, keys); err != nil {
-				showAuditDoneModal(app, pages, "Failed to update configuration:\n\n"+err.Error())
-				return
-			}
-			*applied = keys
-			showAuditDoneModal(app, pages, fmt.Sprintf("Configuration updated successfully.\n\nDisabled %d feature(s).", len(keys)))
+			applyKeys(keys)
 		}).
 		AddButton("Disable all", func() {
-			for i := range suggestions {
-				selected[suggestions[i].Key] = true
-				updateListItem(i)
+			keys := make([]string, 0, len(suggestions))
+			for _, s := range suggestions {
+				keys = append(keys, s.Key)
 			}
-			updateDetails(list.GetCurrentItem())
+			applyKeys(keys)
 		}).
 		AddButton("Skip", func() {
 			app.Stop()
 		})
+
+	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event == nil {
+			return event
+		}
+		switch event.Key() {
+		case tcell.KeyEnter:
+			// Let SetSelectedFunc handle it.
+			return event
+		case tcell.KeyTab:
+			app.SetFocus(buttons)
+			return nil
+		case tcell.KeyDown:
+			if len(suggestions) == 0 || list.GetCurrentItem() >= len(suggestions)-1 {
+				app.SetFocus(buttons)
+				return nil
+			}
+		}
+		if event.Rune() == ' ' {
+			toggle(list.GetCurrentItem())
+			return nil
+		}
+		return event
+	})
 
 	buttons.SetBorder(true).
 		SetTitle(" Actions ").
@@ -275,6 +280,25 @@ func showAuditReview(app *tui.App, pages *tview.Pages, configPath string, sugges
 		SetTitleColor(tui.ProxmoxOrange).
 		SetBorderColor(tui.ProxmoxOrange).
 		SetBackgroundColor(tcell.ColorBlack)
+	buttons.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event == nil {
+			return event
+		}
+		formItemIndex, buttonIndex := buttons.GetFocusedItemIndex()
+		if formItemIndex >= 0 || buttonIndex < 0 {
+			return event
+		}
+		switch event.Key() {
+		case tcell.KeyLeft:
+			return tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone)
+		case tcell.KeyRight, tcell.KeyDown:
+			return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+		case tcell.KeyUp, tcell.KeyEscape:
+			app.SetFocus(list)
+			return nil
+		}
+		return event
+	})
 
 	list.SetBorder(true).
 		SetTitle(" Suggestions ").
@@ -303,6 +327,29 @@ func showAuditReview(app *tui.App, pages *tview.Pages, configPath string, sugges
 
 	pages.AddAndSwitchToPage("review", review, true)
 	app.SetFocus(list)
+}
+
+func applyAuditDisableSelection(app *tui.App, pages *tview.Pages, configPath string, keys []string, applied *[]string) {
+	normalized := make([]string, 0, len(keys))
+	for _, key := range keys {
+		key = strings.ToUpper(strings.TrimSpace(key))
+		if key != "" {
+			normalized = append(normalized, key)
+		}
+	}
+	sort.Strings(normalized)
+	if len(normalized) == 0 {
+		showAuditDoneModal(app, pages, "No changes selected.\n\nNothing was modified.")
+		return
+	}
+	if err := applyAuditDisables(configPath, normalized); err != nil {
+		showAuditDoneModal(app, pages, "Failed to update configuration:\n\n"+err.Error())
+		return
+	}
+	if applied != nil {
+		*applied = append([]string(nil), normalized...)
+	}
+	showAuditDoneModal(app, pages, fmt.Sprintf("Configuration updated successfully.\n\nDisabled %d feature(s).", len(normalized)))
 }
 
 func applyAuditDisables(configPath string, keys []string) error {
