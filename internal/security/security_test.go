@@ -146,12 +146,13 @@ func TestCheckDependenciesMissingRequiredAddsError(t *testing.T) {
 func TestCheckDependenciesMissingOptionalAddsWarning(t *testing.T) {
 	cfg := &config.Config{
 		CompressionType:       types.CompressionNone, // only tar required
+		EmailEnabled:          true,
 		EmailDeliveryMethod:   "relay",
-		EmailFallbackSendmail: true, // pmf becomes optional dependency (relay fallback)
+		EmailFallbackSendmail: true, // sendmail becomes optional dependency (relay fallback)
 	}
 	checker := newCheckerForTest(cfg, stubLookPath(map[string]bool{
 		"tar": true, // present
-		// proxmox-mail-forward missing -> warning
+		// sendmail missing -> warning
 	}))
 
 	checker.checkDependencies()
@@ -160,7 +161,7 @@ func TestCheckDependenciesMissingOptionalAddsWarning(t *testing.T) {
 		t.Fatalf("expected 1 warning, got %d issues=%+v", got, checker.result.Issues)
 	}
 	msg := checker.result.Issues[0].Message
-	if !strings.Contains(msg, "Optional dependency") || !strings.Contains(msg, "proxmox-mail-forward") {
+	if !strings.Contains(msg, "Optional dependency") || !strings.Contains(msg, "sendmail") {
 		t.Fatalf("unexpected warning message: %s", msg)
 	}
 	if checker.result.ErrorCount() != 0 {
@@ -1422,7 +1423,7 @@ func TestBuildDependencyListEmailMethods(t *testing.T) {
 	}{
 		{"pmf method", "pmf", false, "proxmox-mail-forward", true},
 		{"sendmail method", "sendmail", false, "sendmail", true},
-		{"relay with fallback", "relay", true, "proxmox-mail-forward", false},
+		{"relay with fallback", "relay", true, "sendmail", false},
 		{"relay without fallback", "relay", false, "", false},
 		{"empty defaults to relay", "", false, "", false},
 	}
@@ -1432,6 +1433,7 @@ func TestBuildDependencyListEmailMethods(t *testing.T) {
 			checker := &Checker{
 				logger: newSecurityTestLogger(),
 				cfg: &config.Config{
+					EmailEnabled:          true,
 					EmailDeliveryMethod:   tc.method,
 					EmailFallbackSendmail: tc.fallback,
 				},

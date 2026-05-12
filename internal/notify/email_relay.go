@@ -10,11 +10,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
+
+var relayScriptVersionPattern = regexp.MustCompile(`^v?([0-9]+)(?:\.([0-9]+))?(?:\.([0-9]+))?`)
 
 // CloudRelayConfig holds configuration for email cloud relay
 type CloudRelayConfig struct {
@@ -68,6 +71,7 @@ func sendViaCloudRelay(
 	if config.WorkerURL == "" {
 		config = DefaultCloudRelayConfig
 	}
+	payload.ScriptVersion = normalizeRelayScriptVersion(payload.ScriptVersion)
 
 	// Create HTTP client with timeout
 	client := &http.Client{
@@ -232,6 +236,24 @@ func sendViaCloudRelay(
 
 	// All retries exhausted
 	return fmt.Errorf("cloud relay failed after %d attempts: %w", config.MaxRetries+1, lastErr)
+}
+
+func normalizeRelayScriptVersion(version string) string {
+	version = strings.TrimSpace(version)
+	matches := relayScriptVersionPattern.FindStringSubmatch(version)
+	if matches == nil {
+		return "0.0.0"
+	}
+	major := matches[1]
+	minor := "0"
+	patch := "0"
+	if matches[2] != "" {
+		minor = matches[2]
+	}
+	if matches[3] != "" {
+		patch = matches[3]
+	}
+	return fmt.Sprintf("%s.%s.%s", major, minor, patch)
 }
 
 // generateHMACSignature generates an HMAC-SHA256 signature for the payload

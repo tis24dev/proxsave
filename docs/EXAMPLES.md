@@ -569,21 +569,23 @@ WEBHOOK_PUSHOVER_PRIORITY=0
 #### 2. Email Configuration
 
 ```bash
-# Option A: Cloud relay (outbound HTTPS)
+# Option A: Cloud relay (default, outbound HTTPS)
 # - Set EMAIL_DELIVERY_METHOD=relay and configure EMAIL_RECIPIENT (or leave empty for root@pam auto-detect)
 # - Relay blocks root@… recipients; use a real non-root mailbox for EMAIL_RECIPIENT
 # - No local SMTP/MTA setup required on the node
-# - Optional: set EMAIL_FALLBACK_SENDMAIL=true to fall back to EMAIL_DELIVERY_METHOD=pmf when the relay fails
+# - Optional/default: set EMAIL_FALLBACK_SENDMAIL=true to fall back to local sendmail when the relay fails
 
 # Option B: Local sendmail (/usr/sbin/sendmail)
 # - Set EMAIL_DELIVERY_METHOD=sendmail
 # - Requires a working local MTA (e.g. postfix) on the node
 # - EMAIL_RECIPIENT is required (or auto-detected from Proxmox root@pam if configured)
 
-# Option C: Proxmox Notifications via proxmox-mail-forward
+# Option C: Proxmox Notifications (manual)
 # - Set EMAIL_DELIVERY_METHOD=pmf
-# - Ensure Proxmox Notifications targets/matchers are configured
+# - Configure SMTP/Sendmail targets and matchers in Proxmox Notifications
+# - ProxSave does not need SMTP host/port/user/password
 # - EMAIL_RECIPIENT is optional (only used for the To: header)
+# - With EMAIL_FALLBACK_SENDMAIL=true, fallback order is pmf -> relay -> sendmail
 # - Optional quick check (runs the forwarder directly; run as root):
 printf "To: root\nSubject: proxsave test\n\nHello from proxsave\n" | sudo /usr/libexec/proxmox-mail-forward
 ```

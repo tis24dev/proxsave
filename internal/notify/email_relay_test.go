@@ -30,6 +30,59 @@ func TestGenerateHMACSignature(t *testing.T) {
 	}
 }
 
+func TestNormalizeRelayScriptVersion(t *testing.T) {
+	tests := map[string]string{
+		"":            "0.0.0",
+		"dev":         "0.0.0",
+		"v1.2.3":      "1.2.3",
+		"1.2.3":       "1.2.3",
+		"1.2":         "1.2.0",
+		"0.0.0-dev":   "0.0.0",
+		" 2.10.4+abc": "2.10.4",
+	}
+
+	for input, want := range tests {
+		if got := normalizeRelayScriptVersion(input); got != want {
+			t.Fatalf("normalizeRelayScriptVersion(%q)=%q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestSendViaCloudRelay_NormalizesScriptVersionHeader(t *testing.T) {
+	var gotHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Script-Version")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer server.Close()
+
+	cfg := CloudRelayConfig{
+		WorkerURL:   server.URL,
+		WorkerToken: "token",
+		HMACSecret:  "secret",
+		Timeout:     5,
+		MaxRetries:  0,
+		RetryDelay:  0,
+	}
+	logger := logging.New(types.LogLevelDebug, false)
+	err := sendViaCloudRelay(context.Background(), cfg, EmailRelayPayload{
+		To:            "dest@test.invalid",
+		Subject:       "subject",
+		Report:        map[string]interface{}{"ok": true},
+		Timestamp:     time.Now().Unix(),
+		ServerMAC:     "00:11:22:33:44:55",
+		ScriptVersion: "0.0.0-dev",
+		ServerID:      "server-id",
+	}, logger)
+	if err != nil {
+		t.Fatalf("sendViaCloudRelay() error = %v", err)
+	}
+	if gotHeader != "0.0.0" {
+		t.Fatalf("X-Script-Version=%q, want 0.0.0", gotHeader)
+	}
+}
+
 func TestIsQuotaLimit(t *testing.T) {
 	cases := []struct {
 		input    string

@@ -51,9 +51,10 @@ COROSYNC_CONFIG_PATH      = SAME
 CUSTOM_BACKUP_PATHS       = SAME
 DEBUG_LEVEL               = SAME
 DISABLE_NETWORK_PREFLIGHT = SAME
-EMAIL_DELIVERY_METHOD     = SAME (now supports `relay`, `sendmail` (/usr/sbin/sendmail), and `pmf` (proxmox-mail-forward / Proxmox Notifications))
+EMAIL_DELIVERY_METHOD     = SAME (supports `relay`, `sendmail` (/usr/sbin/sendmail), and `pmf` (proxmox-mail-forward / Proxmox Notifications); aliases like `proxmox-notifications` normalize to `pmf`)
 EMAIL_ENABLED             = SAME
-EMAIL_FALLBACK_SENDMAIL   = SAME (historical name; when EMAIL_DELIVERY_METHOD=relay, enables fallback to `pmf`)
+EMAIL_FALLBACK_SENDMAIL   = SAME (local sendmail failover for relay; for pmf the fallback chain is relay then sendmail)
+EMAIL_FALLBACK_PMF        = TRANSITIONAL alias accepted for compatibility with older templates; prefer `EMAIL_FALLBACK_SENDMAIL`
 EMAIL_FROM                = SAME
 EMAIL_RECIPIENT           = SAME
 ENABLE_DEDUPLICATION      = SAME

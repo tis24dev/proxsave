@@ -143,7 +143,7 @@ Some interactive commands support two interface modes:
 2. Optionally configures secondary storage (`SECONDARY_PATH` required if enabled; `SECONDARY_LOG_PATH` optional; invalid secondary paths are re-prompted/rejected; disabling secondary storage clears both saved secondary paths)
 3. Optionally configures cloud storage (rclone)
 4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
-5. Optionally sets up notifications (Telegram, Email; Email defaults to `EMAIL_DELIVERY_METHOD=relay`)
+5. Optionally sets up notifications (Telegram, Email; Email asks for a delivery method and defaults to `EMAIL_DELIVERY_METHOD=relay` with `EMAIL_FALLBACK_SENDMAIL=true`)
 6. Optionally configures encryption (AGE setup)
 7. Optionally selects a cron time (HH:MM, default `02:00`) for the `proxsave` cron entry in both CLI and TUI install flows
 8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)

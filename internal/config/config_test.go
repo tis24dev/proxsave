@@ -573,6 +573,54 @@ WEBHOOK_ENABLE=true
 	}
 }
 
+func TestLoadConfigEmailDeliveryAliasesAndFallbackSendmail(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "email_aliases.env")
+
+	content := `EMAIL_ENABLED=true
+EMAIL_DELIVERY_METHOD=proxmox-notifications
+EMAIL_FALLBACK_SENDMAIL=false
+EMAIL_FALLBACK_PMF=true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	setBaseDirEnv(t, "/email/aliases/base")
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if cfg.EmailDeliveryMethod != "pmf" {
+		t.Fatalf("EmailDeliveryMethod=%q, want pmf", cfg.EmailDeliveryMethod)
+	}
+	if cfg.EmailFallbackSendmail {
+		t.Fatalf("EMAIL_FALLBACK_SENDMAIL should take precedence over transitional EMAIL_FALLBACK_PMF")
+	}
+}
+
+func TestNormalizeEmailDeliveryMethod(t *testing.T) {
+	tests := map[string]string{
+		"":                        "relay",
+		"cloud relay":             "relay",
+		"local_mta":               "sendmail",
+		"pfm":                     "pmf",
+		"proxmox":                 "pmf",
+		"proxmox-mail-forward":    "pmf",
+		"proxmox notifications":   "pmf",
+		"unexpected-experiment":   "unexpected-experiment",
+		" unexpected_EXPERIMENT ": "unexpected-experiment",
+	}
+
+	for input, want := range tests {
+		if got := NormalizeEmailDeliveryMethod(input); got != want {
+			t.Fatalf("NormalizeEmailDeliveryMethod(%q)=%q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestLoadEnvOverridesNotificationLegacyEnableAliases(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "legacy_notification_env_override.env")

@@ -189,7 +189,7 @@ type StorageStatus struct {
 type NotificationResult struct {
 	Success      bool
 	UsedFallback bool   // True if fallback method was used after primary failed
-	Method       string // "telegram", "email-relay", "email-sendmail"
+	Method       string // "telegram", "email-relay", "email-pmf", "email-sendmail", or "*-fallback"
 	Error        error  // Original error (even if fallback succeeded)
 	Duration     time.Duration
 	Metadata     map[string]interface{} // Additional info (HTTP status, etc.)

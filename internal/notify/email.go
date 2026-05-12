@@ -165,8 +165,8 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	switch e.config.DeliveryMethod {
 	case EmailDeliveryRelay:
 		if e.config.FallbackSendmail {
-			e.logger.Info("Email delivery method: relay (fallback: pmf enabled)")
-			e.logger.Debug("Email delivery plan: primary=relay fallback=pmf relay_requires_recipient=true pmf_recipient_optional=true")
+			e.logger.Info("Email delivery method: relay (fallback: sendmail enabled)")
+			e.logger.Debug("Email delivery plan: primary=relay fallback=sendmail relay_requires_recipient=true sendmail_requires_recipient=true")
 		} else {
 			e.logger.Info("Email delivery method: relay (fallback: disabled)")
 			e.logger.Debug("Email delivery plan: primary=relay fallback=disabled relay_requires_recipient=true")
@@ -176,7 +176,11 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		e.logger.Debug("Email delivery plan: primary=sendmail fallback=disabled relay_requires_recipient=true")
 	case EmailDeliveryPMF:
 		e.logger.Info("Email delivery method: pmf (proxmox-mail-forward)")
-		e.logger.Debug("Email delivery plan: primary=pmf fallback=disabled recipient_optional=true")
+		if e.config.FallbackSendmail {
+			e.logger.Debug("Email delivery plan: primary=pmf fallback=relay,sendmail recipient_optional=true relay_requires_recipient=true sendmail_requires_recipient=true")
+		} else {
+			e.logger.Debug("Email delivery plan: primary=pmf fallback=relay recipient_optional=true relay_requires_recipient=true")
+		}
 	default:
 		e.logger.Info("Email delivery method: %s", e.config.DeliveryMethod)
 	}
@@ -185,7 +189,6 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	recipient := strings.TrimSpace(e.config.Recipient)
 	autoDetected := false
 	recipientSource := "configured"
-	relayPMFFallbackEnabled := e.config.DeliveryMethod == EmailDeliveryRelay && e.config.FallbackSendmail
 	var preflightFallbackReason string
 	var preflightFallbackCause error
 	if recipient == "" {
@@ -197,12 +200,6 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			switch {
 			case e.config.DeliveryMethod == EmailDeliveryPMF:
 				e.logger.Info("  Proceeding anyway because EMAIL_DELIVERY_METHOD=pmf routes via Proxmox Notifications; recipient is only used for the To: header")
-			case relayPMFFallbackEnabled:
-				preflightFallbackReason = "recipient_autodetect_failed"
-				preflightFallbackCause = fmt.Errorf("no valid email recipient: %w", err)
-				e.logger.Warning("WARNING: Relay delivery requires a valid recipient; auto-detection failed")
-				e.logger.Info("  Bypassing relay and invoking PMF fallback before relay attempt")
-				e.logger.Debug("Email fallback decision: stage=preflight reason=%s cause=%v", preflightFallbackReason, preflightFallbackCause)
 			default:
 				e.logger.Warning("WARNING: Email notification skipped because no valid recipient is available")
 				e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
@@ -222,16 +219,6 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	recipient = strings.TrimSpace(recipient)
 	if recipient == "" {
 		switch {
-		case relayPMFFallbackEnabled:
-			if preflightFallbackReason == "" {
-				preflightFallbackReason = "recipient_missing"
-			}
-			if preflightFallbackCause == nil {
-				preflightFallbackCause = fmt.Errorf("no valid email recipient configured")
-			}
-			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
-			e.logger.Info("  Bypassing relay and invoking PMF fallback before relay attempt because proxmox-mail-forward routes via Proxmox Notifications and does not require a resolved recipient")
-			e.logger.Debug("Email fallback decision: stage=preflight reason=%s cause=%v", preflightFallbackReason, preflightFallbackCause)
 		case e.config.DeliveryMethod == EmailDeliveryRelay || e.config.DeliveryMethod == EmailDeliverySendmail:
 			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
 			e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
@@ -247,7 +234,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 	if e.config.DeliveryMethod == EmailDeliveryRelay && isRootRecipient(recipient) {
 		redactedRecipient := redactEmail(recipient)
-		if relayPMFFallbackEnabled {
+		if e.config.FallbackSendmail {
 			if autoDetected {
 				e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and is blocked for relay delivery", redactedRecipient)
 			} else {
@@ -255,7 +242,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			}
 			preflightFallbackReason = "recipient_blocked_root"
 			preflightFallbackCause = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", redactedRecipient)
-			e.logger.Info("  Bypassing relay and invoking PMF fallback before relay attempt")
+			e.logger.Info("  Bypassing relay and invoking sendmail fallback before relay attempt")
 			e.logger.Debug("Email fallback decision: stage=preflight reason=%s cause=%v", preflightFallbackReason, preflightFallbackCause)
 		} else {
 			if autoDetected {
@@ -295,19 +282,19 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	var relayErr error // Store original relay error if fallback is used
 
 	if preflightFallbackReason != "" {
-		err = e.sendViaPMFFallback(ctx, result, recipient, subject, htmlBody, textBody, data, "preflight", preflightFallbackReason, preflightFallbackCause)
+		err = e.sendViaSendmailFallback(ctx, result, recipient, subject, htmlBody, textBody, data, "preflight", preflightFallbackReason, preflightFallbackCause)
 	} else if e.config.DeliveryMethod == EmailDeliveryRelay {
 		result.Method = "email-relay"
 		err = e.sendViaRelay(ctx, recipient, subject, htmlBody, textBody, data)
 
-		// Fallback to PMF if relay fails and fallback is enabled
+		// Fallback to local sendmail if relay fails and fallback is enabled.
 		if err != nil && e.config.FallbackSendmail {
 			relayErr = err // Store original relay error
 			e.logger.Warning("WARNING: Cloud relay failed: %v", err)
-			e.logger.Info("Attempting PMF fallback after relay delivery failure...")
+			e.logger.Info("Attempting sendmail fallback after relay delivery failure...")
 			e.logger.Debug("Email fallback decision: stage=delivery reason=relay_send_failed cause=%v", relayErr)
 
-			err = e.sendViaPMFFallback(ctx, result, recipient, subject, htmlBody, textBody, data, "delivery", "relay_send_failed", relayErr)
+			err = e.sendViaSendmailFallback(ctx, result, recipient, subject, htmlBody, textBody, data, "delivery", "relay_send_failed", relayErr)
 		}
 	} else if e.config.DeliveryMethod == EmailDeliveryPMF {
 		result.Method = "email-pmf"
@@ -319,6 +306,10 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			result.Metadata["email_backend_path"] = backendPath
 		}
 		err = sendErr
+		if err != nil {
+			e.logger.Warning("WARNING: PMF delivery failed: %v", err)
+			err = e.sendPMFFallbackChain(ctx, result, recipient, subject, htmlBody, textBody, data, err)
+		}
 	} else {
 		result.Method = "email-sendmail"
 		queueID, backend, backendPath, sendErr := e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
@@ -348,7 +339,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	// Success (either primary or fallback)
 	if result.UsedFallback {
 		// Fallback succeeded after relay failure
-		e.logger.Warning("⚠️ Email sent via fallback after relay failure")
+		e.logger.Warning("⚠️ Email sent via fallback after primary delivery failure")
 	}
 
 	// Log according to delivery method to avoid implying guaranteed inbox delivery
@@ -373,7 +364,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	return result, nil
 }
 
-func (e *EmailNotifier) sendViaPMFFallback(
+func (e *EmailNotifier) sendViaSendmailFallback(
 	ctx context.Context,
 	result *NotificationResult,
 	recipient, subject, htmlBody, textBody string,
@@ -381,7 +372,7 @@ func (e *EmailNotifier) sendViaPMFFallback(
 	stage, reason string,
 	cause error,
 ) error {
-	result.Method = "email-pmf-fallback"
+	result.Method = "email-sendmail-fallback"
 	result.UsedFallback = true
 	if stage != "" {
 		result.Metadata["fallback_stage"] = stage
@@ -392,14 +383,17 @@ func (e *EmailNotifier) sendViaPMFFallback(
 
 	switch stage {
 	case "preflight":
-		e.logger.Info("PMF fallback activated during preflight (%s)", reason)
+		e.logger.Info("Sendmail fallback activated during preflight (%s)", reason)
 	case "delivery":
-		e.logger.Info("PMF fallback activated after relay delivery failure")
+		e.logger.Info("Sendmail fallback activated after primary delivery failure")
 	default:
-		e.logger.Info("PMF fallback activated")
+		e.logger.Info("Sendmail fallback activated")
 	}
 
-	backend, backendPath, err := e.sendViaPMF(ctx, recipient, subject, htmlBody, textBody, data)
+	queueID, backend, backendPath, err := e.sendViaSendmail(ctx, recipient, subject, htmlBody, textBody, data)
+	if queueID != "" {
+		result.Metadata["mail_queue_id"] = queueID
+	}
 	if backend != "" {
 		result.Metadata["email_backend"] = backend
 	}
@@ -412,6 +406,71 @@ func (e *EmailNotifier) sendViaPMFFallback(
 	return err
 }
 
+func (e *EmailNotifier) sendViaRelayFallback(
+	ctx context.Context,
+	result *NotificationResult,
+	recipient, subject, htmlBody, textBody string,
+	data *NotificationData,
+	stage, reason string,
+	cause error,
+) error {
+	result.Method = "email-relay-fallback"
+	result.UsedFallback = true
+	if stage != "" {
+		result.Metadata["fallback_stage"] = stage
+	}
+	if reason != "" {
+		result.Metadata["fallback_reason"] = reason
+	}
+
+	e.logger.Info("Relay fallback activated after PMF delivery failure")
+	err := e.sendViaRelay(ctx, recipient, subject, htmlBody, textBody, data)
+	if err == nil && cause != nil {
+		result.Error = cause
+	}
+	return err
+}
+
+func (e *EmailNotifier) sendPMFFallbackChain(
+	ctx context.Context,
+	result *NotificationResult,
+	recipient, subject, htmlBody, textBody string,
+	data *NotificationData,
+	pmfErr error,
+) error {
+	relayAllowed := strings.TrimSpace(recipient) != "" && !isRootRecipient(recipient)
+	if relayAllowed {
+		e.logger.Info("Attempting relay fallback after PMF delivery failure...")
+		e.logger.Debug("Email fallback decision: stage=delivery reason=pmf_send_failed cause=%v", pmfErr)
+		relayErr := e.sendViaRelayFallback(ctx, result, recipient, subject, htmlBody, textBody, data, "delivery", "pmf_send_failed", pmfErr)
+		if relayErr == nil {
+			return nil
+		}
+		e.logger.Warning("WARNING: Relay fallback failed after PMF failure: %v", relayErr)
+		if !e.config.FallbackSendmail {
+			return fmt.Errorf("pmf failed: %w; relay fallback failed: %v", pmfErr, relayErr)
+		}
+		result.Metadata["relay_fallback_error"] = relayErr.Error()
+	} else {
+		if strings.TrimSpace(recipient) == "" {
+			e.logger.Info("Skipping relay fallback after PMF failure because no recipient is available")
+		} else {
+			e.logger.Info("Skipping relay fallback after PMF failure because relay blocks root recipients")
+		}
+		if !e.config.FallbackSendmail {
+			return pmfErr
+		}
+	}
+
+	if strings.TrimSpace(recipient) == "" {
+		return fmt.Errorf("pmf failed: %w; sendmail fallback unavailable because no valid recipient is configured", pmfErr)
+	}
+
+	e.logger.Info("Attempting sendmail fallback after PMF/relay delivery failure...")
+	e.logger.Debug("Email fallback decision: stage=delivery reason=pmf_or_relay_send_failed cause=%v", pmfErr)
+	return e.sendViaSendmailFallback(ctx, result, recipient, subject, htmlBody, textBody, data, "delivery", "pmf_or_relay_send_failed", pmfErr)
+}
+
 func describeEmailMethod(method string) string {
 	switch method {
 	case "email-relay":
@@ -420,6 +479,10 @@ func describeEmailMethod(method string) string {
 		return "sendmail"
 	case "email-pmf":
 		return "proxmox-mail-forward"
+	case "email-relay-fallback":
+		return "cloud relay fallback"
+	case "email-sendmail-fallback":
+		return "sendmail fallback"
 	case "email-pmf-fallback":
 		return "proxmox-mail-forward fallback"
 	default:

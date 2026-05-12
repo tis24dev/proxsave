@@ -128,7 +128,7 @@ func TestEmailNotifier_SendPMF_AllowsMissingRecipientAndInvokesForwarder(t *test
 	}
 }
 
-func TestEmailNotifier_RelayFallback_UsesPMFOnly(t *testing.T) {
+func TestEmailNotifier_RelayFallback_UsesSendmail(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 
 	// Force relay failure.
@@ -140,21 +140,31 @@ func TestEmailNotifier_RelayFallback_UsesPMFOnly(t *testing.T) {
 	}))
 	defer server.Close()
 
-	capturePath := filepath.Join(t.TempDir(), "pmf_capture.txt")
-	t.Setenv("PMF_CAPTURE_PATH", capturePath)
+	dir := t.TempDir()
+	capturePath := filepath.Join(t.TempDir(), "sendmail_capture.txt")
+	t.Setenv("SENDMAIL_CAPTURE_PATH", capturePath)
 
-	pmfScriptPath := writeCaptureScript(t, "proxmox-mail-forward", "PMF_CAPTURE_PATH")
+	sendmailPath := writeCmd(t, dir, "sendmail", `#!/bin/sh
+set -eu
+cat > "${SENDMAIL_CAPTURE_PATH}"
+echo "queued as FALLBACKQID"
+exit 0
+`)
+	writeCmd(t, dir, "mailq", "#!/bin/sh\necho \"Mail queue is empty\"\nexit 0\n")
+	writeCmd(t, dir, "tail", "#!/bin/sh\nexit 0\n")
+	writeCmd(t, dir, "journalctl", "#!/bin/sh\nexit 0\n")
+	writeCmd(t, dir, "systemctl", "#!/bin/sh\nexit 3\n")
 	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", filepath.Dir(pmfScriptPath)+string(os.PathListSeparator)+origPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+origPath)
 
-	origCandidates := pmfLookPathCandidates
-	pmfLookPathCandidates = []string{"proxmox-mail-forward"}
-	t.Cleanup(func() { pmfLookPathCandidates = origCandidates })
+	origSendmailPath := sendmailBinaryPath
+	sendmailBinaryPath = sendmailPath
+	t.Cleanup(func() { sendmailBinaryPath = origSendmailPath })
 
 	notifier, err := NewEmailNotifier(EmailConfig{
 		Enabled:          true,
 		DeliveryMethod:   EmailDeliveryRelay,
-		FallbackSendmail: true, // historical name; now means fallback to PMF
+		FallbackSendmail: true,
 		Recipient:        "admin@example.com",
 		From:             "no-reply@proxmox.example.com",
 		CloudRelayConfig: CloudRelayConfig{
@@ -175,13 +185,13 @@ func TestEmailNotifier_RelayFallback_UsesPMFOnly(t *testing.T) {
 		t.Fatalf("Send() returned unexpected error: %v", err)
 	}
 	if !result.Success {
-		t.Fatalf("expected Success=true due to PMF fallback, got false (err=%v)", result.Error)
+		t.Fatalf("expected Success=true due to sendmail fallback, got false (err=%v)", result.Error)
 	}
 	if !result.UsedFallback {
 		t.Fatalf("expected UsedFallback=true")
 	}
-	if result.Method != "email-pmf-fallback" {
-		t.Fatalf("expected Method=email-pmf-fallback, got %q", result.Method)
+	if result.Method != "email-sendmail-fallback" {
+		t.Fatalf("expected Method=email-sendmail-fallback, got %q", result.Method)
 	}
 	if result.Error == nil {
 		t.Fatalf("expected original relay error preserved in result.Error")
@@ -193,26 +203,15 @@ func TestEmailNotifier_RelayFallback_UsesPMFOnly(t *testing.T) {
 
 	got, err := os.ReadFile(capturePath)
 	if err != nil {
-		t.Fatalf("read pmf capture: %v", err)
+		t.Fatalf("read sendmail capture: %v", err)
 	}
 	if !strings.Contains(string(got), "To: admin@example.com\n") {
-		t.Fatalf("expected To: admin@example.com header in PMF message")
+		t.Fatalf("expected To: admin@example.com header in sendmail message")
 	}
 }
 
-func TestEmailNotifier_RelayFallback_UsesPMFWhenRecipientDetectionFails(t *testing.T) {
+func TestEmailNotifier_RelayFallback_DoesNotBypassMissingRecipient(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
-
-	capturePath := filepath.Join(t.TempDir(), "pmf_capture.txt")
-	t.Setenv("PMF_CAPTURE_PATH", capturePath)
-
-	pmfScriptPath := writeCaptureScript(t, "proxmox-mail-forward", "PMF_CAPTURE_PATH")
-	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", filepath.Dir(pmfScriptPath)+string(os.PathListSeparator)+origPath)
-
-	origCandidates := pmfLookPathCandidates
-	pmfLookPathCandidates = []string{"proxmox-mail-forward"}
-	t.Cleanup(func() { pmfLookPathCandidates = origCandidates })
 
 	notifier, err := NewEmailNotifier(EmailConfig{
 		Enabled:          true,
@@ -229,48 +228,39 @@ func TestEmailNotifier_RelayFallback_UsesPMFWhenRecipientDetectionFails(t *testi
 	if err != nil {
 		t.Fatalf("Send() returned unexpected error: %v", err)
 	}
-	if !result.Success {
-		t.Fatalf("expected Success=true due to PMF preflight fallback, got false (err=%v)", result.Error)
+	if result.Success {
+		t.Fatalf("expected Success=false when relay and sendmail have no recipient")
 	}
-	if !result.UsedFallback {
-		t.Fatalf("expected UsedFallback=true")
-	}
-	if result.Method != "email-pmf-fallback" {
-		t.Fatalf("expected Method=email-pmf-fallback, got %q", result.Method)
-	}
-	if got, _ := result.Metadata["fallback_stage"].(string); got != "preflight" {
-		t.Fatalf("fallback_stage=%q want %q", got, "preflight")
-	}
-	if got, _ := result.Metadata["fallback_reason"].(string); got != "recipient_autodetect_failed" {
-		t.Fatalf("fallback_reason=%q want %q", got, "recipient_autodetect_failed")
+	if result.UsedFallback {
+		t.Fatalf("expected no fallback attempt without a recipient")
 	}
 	if result.Error == nil {
-		t.Fatalf("expected original preflight cause preserved in result.Error")
-	}
-
-	got, err := os.ReadFile(capturePath)
-	if err != nil {
-		t.Fatalf("read pmf capture: %v", err)
-	}
-	msg := string(got)
-	if !strings.Contains(msg, "To: root\n") {
-		t.Fatalf("expected To: root header when recipient resolution fails, got:\n%s", msg)
+		t.Fatalf("expected missing recipient error")
 	}
 }
 
-func TestEmailNotifier_RelayFallback_UsesPMFWhenRootRecipientBlocked(t *testing.T) {
+func TestEmailNotifier_RelayFallback_UsesSendmailWhenRootRecipientBlocked(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 
-	capturePath := filepath.Join(t.TempDir(), "pmf_capture.txt")
-	t.Setenv("PMF_CAPTURE_PATH", capturePath)
+	dir := t.TempDir()
+	capturePath := filepath.Join(t.TempDir(), "sendmail_capture.txt")
+	t.Setenv("SENDMAIL_CAPTURE_PATH", capturePath)
 
-	pmfScriptPath := writeCaptureScript(t, "proxmox-mail-forward", "PMF_CAPTURE_PATH")
+	sendmailPath := writeCmd(t, dir, "sendmail", `#!/bin/sh
+set -eu
+cat > "${SENDMAIL_CAPTURE_PATH}"
+exit 0
+`)
+	writeCmd(t, dir, "mailq", "#!/bin/sh\necho \"Mail queue is empty\"\nexit 0\n")
+	writeCmd(t, dir, "tail", "#!/bin/sh\nexit 0\n")
+	writeCmd(t, dir, "journalctl", "#!/bin/sh\nexit 0\n")
+	writeCmd(t, dir, "systemctl", "#!/bin/sh\nexit 3\n")
 	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", filepath.Dir(pmfScriptPath)+string(os.PathListSeparator)+origPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+origPath)
 
-	origCandidates := pmfLookPathCandidates
-	pmfLookPathCandidates = []string{"proxmox-mail-forward"}
-	t.Cleanup(func() { pmfLookPathCandidates = origCandidates })
+	origSendmailPath := sendmailBinaryPath
+	sendmailBinaryPath = sendmailPath
+	t.Cleanup(func() { sendmailBinaryPath = origSendmailPath })
 
 	notifier, err := NewEmailNotifier(EmailConfig{
 		Enabled:          true,
@@ -288,13 +278,13 @@ func TestEmailNotifier_RelayFallback_UsesPMFWhenRootRecipientBlocked(t *testing.
 		t.Fatalf("Send() returned unexpected error: %v", err)
 	}
 	if !result.Success {
-		t.Fatalf("expected Success=true due to PMF preflight fallback, got false (err=%v)", result.Error)
+		t.Fatalf("expected Success=true due to sendmail preflight fallback, got false (err=%v)", result.Error)
 	}
 	if !result.UsedFallback {
 		t.Fatalf("expected UsedFallback=true")
 	}
-	if result.Method != "email-pmf-fallback" {
-		t.Fatalf("expected Method=email-pmf-fallback, got %q", result.Method)
+	if result.Method != "email-sendmail-fallback" {
+		t.Fatalf("expected Method=email-sendmail-fallback, got %q", result.Method)
 	}
 	if got, _ := result.Metadata["fallback_stage"].(string); got != "preflight" {
 		t.Fatalf("fallback_stage=%q want %q", got, "preflight")
@@ -308,11 +298,144 @@ func TestEmailNotifier_RelayFallback_UsesPMFWhenRootRecipientBlocked(t *testing.
 
 	got, err := os.ReadFile(capturePath)
 	if err != nil {
-		t.Fatalf("read pmf capture: %v", err)
+		t.Fatalf("read sendmail capture: %v", err)
 	}
 	msg := string(got)
 	if !strings.Contains(msg, "To: root@example.com\n") {
-		t.Fatalf("expected To: root@example.com header in PMF message, got:\n%s", msg)
+		t.Fatalf("expected To: root@example.com header in sendmail message, got:\n%s", msg)
+	}
+}
+
+func TestEmailNotifier_PMFFallback_UsesRelayFirst(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	origCandidates := pmfLookPathCandidates
+	pmfLookPathCandidates = []string{filepath.Join(t.TempDir(), "missing-proxmox-mail-forward")}
+	t.Cleanup(func() { pmfLookPathCandidates = origCandidates })
+
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer server.Close()
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:          true,
+		DeliveryMethod:   EmailDeliveryPMF,
+		FallbackSendmail: true,
+		Recipient:        "admin@example.com",
+		From:             "no-reply@proxmox.example.com",
+		CloudRelayConfig: CloudRelayConfig{
+			WorkerURL:   server.URL,
+			WorkerToken: "token",
+			HMACSecret:  "secret",
+			Timeout:     5,
+			MaxRetries:  0,
+			RetryDelay:  0,
+		},
+	}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() returned unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected Success=true due to relay fallback, got false (err=%v)", result.Error)
+	}
+	if !result.UsedFallback {
+		t.Fatalf("expected UsedFallback=true")
+	}
+	if result.Method != "email-relay-fallback" {
+		t.Fatalf("expected Method=email-relay-fallback, got %q", result.Method)
+	}
+	if result.Error == nil {
+		t.Fatalf("expected original PMF error preserved in result.Error")
+	}
+	if callCount != 1 {
+		t.Fatalf("expected relay fallback to be attempted once, got %d", callCount)
+	}
+}
+
+func TestEmailNotifier_PMFFallback_UsesSendmailAfterRelayFailure(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	origCandidates := pmfLookPathCandidates
+	pmfLookPathCandidates = []string{filepath.Join(t.TempDir(), "missing-proxmox-mail-forward")}
+	t.Cleanup(func() { pmfLookPathCandidates = origCandidates })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"temporary"}`))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	capturePath := filepath.Join(t.TempDir(), "sendmail_capture.txt")
+	t.Setenv("SENDMAIL_CAPTURE_PATH", capturePath)
+
+	sendmailPath := writeCmd(t, dir, "sendmail", `#!/bin/sh
+set -eu
+cat > "${SENDMAIL_CAPTURE_PATH}"
+exit 0
+`)
+	writeCmd(t, dir, "mailq", "#!/bin/sh\necho \"Mail queue is empty\"\nexit 0\n")
+	writeCmd(t, dir, "tail", "#!/bin/sh\nexit 0\n")
+	writeCmd(t, dir, "journalctl", "#!/bin/sh\nexit 0\n")
+	writeCmd(t, dir, "systemctl", "#!/bin/sh\nexit 3\n")
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+origPath)
+
+	origSendmailPath := sendmailBinaryPath
+	sendmailBinaryPath = sendmailPath
+	t.Cleanup(func() { sendmailBinaryPath = origSendmailPath })
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:          true,
+		DeliveryMethod:   EmailDeliveryPMF,
+		FallbackSendmail: true,
+		Recipient:        "admin@example.com",
+		From:             "no-reply@proxmox.example.com",
+		CloudRelayConfig: CloudRelayConfig{
+			WorkerURL:   server.URL,
+			WorkerToken: "token",
+			HMACSecret:  "secret",
+			Timeout:     5,
+			MaxRetries:  0,
+			RetryDelay:  0,
+		},
+	}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() returned unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected Success=true due to sendmail fallback, got false (err=%v)", result.Error)
+	}
+	if !result.UsedFallback {
+		t.Fatalf("expected UsedFallback=true")
+	}
+	if result.Method != "email-sendmail-fallback" {
+		t.Fatalf("expected Method=email-sendmail-fallback, got %q", result.Method)
+	}
+	if result.Error == nil {
+		t.Fatalf("expected original PMF error preserved in result.Error")
+	}
+
+	got, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("read sendmail capture: %v", err)
+	}
+	if !strings.Contains(string(got), "To: admin@example.com\n") {
+		t.Fatalf("expected To: admin@example.com header in sendmail message")
 	}
 }
 

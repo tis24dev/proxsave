@@ -750,18 +750,53 @@ func configureNotifications(ctx context.Context, reader *bufio.Reader, template 
 	}
 
 	fmt.Println("\n--- Email ---")
-	enableEmail, err := promptYesNo(ctx, reader, "Enable email notifications (central relay)? [y/N]: ", false)
+	fmt.Println("Default email delivery uses the TIS24 cloud relay, with local sendmail as failover.")
+	fmt.Println("ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.")
+	enableEmail, err := promptYesNo(ctx, reader, "Enable email notifications? [y/N]: ", false)
 	if err != nil {
 		return "", err
 	}
 	if enableEmail {
+		method, err := promptEmailDeliveryMethod(ctx, reader, "relay")
+		if err != nil {
+			return "", err
+		}
 		template = setEnvValue(template, "EMAIL_ENABLED", "true")
-		template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", "relay")
+		template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", method)
+		template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
 		template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", "true")
 	} else {
 		template = setEnvValue(template, "EMAIL_ENABLED", "false")
 	}
 	return template, nil
+}
+
+func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaultMethod string) (string, error) {
+	defaultMethod = config.NormalizeEmailDeliveryMethod(defaultMethod)
+	if defaultMethod != "relay" && defaultMethod != "sendmail" && defaultMethod != "pmf" {
+		defaultMethod = "relay"
+	}
+
+	fmt.Println("Email delivery methods:")
+	fmt.Println("  relay    TIS24 cloud relay over outbound HTTPS (default)")
+	fmt.Println("  sendmail Local /usr/sbin/sendmail (fallback/default failover; requires a local MTA)")
+	fmt.Println("  pmf      Proxmox Notifications via proxmox-mail-forward (SMTP lives in Proxmox)")
+	for {
+		resp, err := promptOptional(ctx, reader, fmt.Sprintf("Email delivery method [%s]: ", defaultMethod))
+		if err != nil {
+			return "", err
+		}
+		method := defaultMethod
+		if strings.TrimSpace(resp) != "" {
+			method = config.NormalizeEmailDeliveryMethod(resp)
+		}
+		switch method {
+		case "pmf", "relay", "sendmail":
+			return method, nil
+		default:
+			fmt.Println("Please enter 'pmf', 'relay', or 'sendmail'. Aliases like 'proxmox-notifications' are accepted for pmf.")
+		}
+	}
 }
 
 func configureEncryption(ctx context.Context, reader *bufio.Reader, template *string) (bool, error) {

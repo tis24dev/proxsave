@@ -17,14 +17,16 @@ import (
 )
 
 const (
-	telegramEnabledKey      = "TELEGRAM_ENABLED"
-	telegramEnableLegacyKey = "TELEGRAM_ENABLE"
-	emailEnabledKey         = "EMAIL_ENABLED"
-	emailEnableLegacyKey    = "EMAIL_ENABLE"
-	gotifyEnabledKey        = "GOTIFY_ENABLED"
-	gotifyEnableLegacyKey   = "GOTIFY_ENABLE"
-	webhookEnabledKey       = "WEBHOOK_ENABLED"
-	webhookEnableLegacyKey  = "WEBHOOK_ENABLE"
+	telegramEnabledKey        = "TELEGRAM_ENABLED"
+	telegramEnableLegacyKey   = "TELEGRAM_ENABLE"
+	emailEnabledKey           = "EMAIL_ENABLED"
+	emailEnableLegacyKey      = "EMAIL_ENABLE"
+	emailFallbackSendmailKey  = "EMAIL_FALLBACK_SENDMAIL"
+	emailFallbackPMFLegacyKey = "EMAIL_FALLBACK_PMF"
+	gotifyEnabledKey          = "GOTIFY_ENABLED"
+	gotifyEnableLegacyKey     = "GOTIFY_ENABLE"
+	webhookEnabledKey         = "WEBHOOK_ENABLED"
+	webhookEnableLegacyKey    = "WEBHOOK_ENABLE"
 )
 
 var (
@@ -53,6 +55,26 @@ var (
 
 	configHostnameFunc = os.Hostname
 )
+
+// NormalizeEmailDeliveryMethod maps user-facing aliases to the internal delivery
+// method identifiers used by the notification runtime.
+func NormalizeEmailDeliveryMethod(method string) string {
+	normalized := strings.ToLower(strings.TrimSpace(method))
+	if normalized == "" {
+		return "relay"
+	}
+	normalized = strings.NewReplacer("_", "-", " ", "-").Replace(normalized)
+	switch normalized {
+	case "relay", "cloud", "cloud-relay", "tis24-relay":
+		return "relay"
+	case "sendmail", "local", "local-mta", "mta":
+		return "sendmail"
+	case "pmf", "pfm", "proxmox", "proxmox-notification", "proxmox-notifications", "proxmox-mail-forward":
+		return "pmf"
+	default:
+		return normalized
+	}
+}
 
 // Config contains the full backup system configuration.
 type Config struct {
@@ -167,7 +189,7 @@ type Config struct {
 	// Email Notifications
 	EmailEnabled          bool
 	EmailDeliveryMethod   string // "relay", "sendmail", or "pmf"
-	EmailFallbackSendmail bool
+	EmailFallbackSendmail bool   // True means email delivery may fall back to local /usr/sbin/sendmail.
 	EmailRecipient        string // Single recipient, empty = auto-detect
 	EmailFrom             string
 
@@ -336,7 +358,7 @@ func (c *Config) loadEnvOverrides() {
 		"RETENTION_DAILY", "RETENTION_WEEKLY", "RETENTION_MONTHLY", "RETENTION_YEARLY",
 		"BUNDLE_ASSOCIATED_FILES", "ENCRYPT_ARCHIVE", "AGE_RECIPIENT", "AGE_RECIPIENT_FILE",
 		"TELEGRAM_ENABLE", "TELEGRAM_ENABLED", "BOT_TELEGRAM_TYPE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
-		"EMAIL_ENABLE", "EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_SENDMAIL",
+		"EMAIL_ENABLE", "EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_PMF", "EMAIL_FALLBACK_SENDMAIL",
 		"EMAIL_RECIPIENT", "EMAIL_FROM",
 		"GOTIFY_ENABLE", "GOTIFY_ENABLED", "GOTIFY_SERVER_URL", "GOTIFY_TOKEN",
 		"GOTIFY_PRIORITY_SUCCESS", "GOTIFY_PRIORITY_WARNING", "GOTIFY_PRIORITY_FAILURE",
@@ -673,8 +695,8 @@ func (c *Config) parseNotificationSettings() {
 	c.ServerID = ""
 
 	c.EmailEnabled = c.getBoolWithLegacyAlias(emailEnabledKey, emailEnableLegacyKey, false)
-	c.EmailDeliveryMethod = c.getString("EMAIL_DELIVERY_METHOD", "relay")
-	c.EmailFallbackSendmail = c.getBool("EMAIL_FALLBACK_SENDMAIL", true)
+	c.EmailDeliveryMethod = NormalizeEmailDeliveryMethod(c.getString("EMAIL_DELIVERY_METHOD", "relay"))
+	c.EmailFallbackSendmail = c.getBoolWithFallback([]string{emailFallbackSendmailKey, emailFallbackPMFLegacyKey}, true)
 	c.EmailRecipient = c.getString("EMAIL_RECIPIENT", "")
 	c.EmailFrom = c.getString("EMAIL_FROM", "no-reply@proxmox.tis24.it")
 

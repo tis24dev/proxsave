@@ -232,31 +232,38 @@ func (c *Checker) buildDependencyList() []dependencyEntry {
 		deps = append(deps, c.binaryDependency("rclone", []string{"rclone"}, false, "cloud storage uploads enabled"))
 	}
 
-	emailMethod := strings.ToLower(strings.TrimSpace(c.cfg.EmailDeliveryMethod))
-	if emailMethod == "" {
-		emailMethod = "relay"
-	}
-	if emailMethod == "pmf" {
-		deps = append(deps, c.binaryDependency(
-			"proxmox-mail-forward",
-			[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
-			true,
-			"email delivery method set to pmf (Proxmox Notifications via proxmox-mail-forward)",
-		))
-	} else if emailMethod == "sendmail" {
-		deps = append(deps, c.binaryDependency(
-			"sendmail",
-			[]string{"/usr/sbin/sendmail", "sendmail"},
-			true,
-			"email delivery method set to sendmail (/usr/sbin/sendmail)",
-		))
-	} else if emailMethod == "relay" && c.cfg.EmailFallbackSendmail {
-		deps = append(deps, c.binaryDependency(
-			"proxmox-mail-forward",
-			[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
-			false,
-			"email relay fallback to pmf enabled (uses proxmox-mail-forward)",
-		))
+	if c.cfg.EmailEnabled {
+		emailMethod := config.NormalizeEmailDeliveryMethod(c.cfg.EmailDeliveryMethod)
+		if emailMethod == "pmf" {
+			deps = append(deps, c.binaryDependency(
+				"proxmox-mail-forward",
+				[]string{"/usr/libexec/proxmox-mail-forward", "/usr/bin/proxmox-mail-forward", "proxmox-mail-forward"},
+				true,
+				"email delivery method set to pmf (Proxmox Notifications via proxmox-mail-forward)",
+			))
+			if c.cfg.EmailFallbackSendmail {
+				deps = append(deps, c.binaryDependency(
+					"sendmail",
+					[]string{"/usr/sbin/sendmail", "sendmail"},
+					false,
+					"email pmf fallback chain can use local sendmail if pmf and relay fail",
+				))
+			}
+		} else if emailMethod == "sendmail" {
+			deps = append(deps, c.binaryDependency(
+				"sendmail",
+				[]string{"/usr/sbin/sendmail", "sendmail"},
+				true,
+				"email delivery method set to sendmail (/usr/sbin/sendmail)",
+			))
+		} else if emailMethod == "relay" && c.cfg.EmailFallbackSendmail {
+			deps = append(deps, c.binaryDependency(
+				"sendmail",
+				[]string{"/usr/sbin/sendmail", "sendmail"},
+				false,
+				"email relay fallback to local sendmail enabled",
+			))
+		}
 	}
 
 	if c.cfg.BackupCephConfig {

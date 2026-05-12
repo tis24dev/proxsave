@@ -41,6 +41,8 @@ func TestDispatchEarlyErrorNotification_PopulatesMinimalStats(t *testing.T) {
 		logger:         logger,
 		version:        "1.2.3",
 		proxmoxVersion: "8.1",
+		serverID:       " 1234567890123456 ",
+		serverMAC:      " bc:24:11:41:0d:18 ",
 	}
 	early := &EarlyErrorState{
 		Phase:     "config",
@@ -62,8 +64,11 @@ func TestDispatchEarlyErrorNotification_PopulatesMinimalStats(t *testing.T) {
 	if stats.StartTime != ts || stats.EndTime != ts || stats.Timestamp != ts {
 		t.Fatalf("timestamps not propagated: start=%v end=%v ts=%v", stats.StartTime, stats.EndTime, stats.Timestamp)
 	}
-	if stats.Version != "1.2.3" || stats.ProxmoxVersion != "8.1" {
-		t.Fatalf("version fields=%q/%q; want %q/%q", stats.Version, stats.ProxmoxVersion, "1.2.3", "8.1")
+	if stats.Version != "1.2.3" || stats.ScriptVersion != "1.2.3" || stats.ProxmoxVersion != "8.1" {
+		t.Fatalf("version fields=%q/%q/%q; want %q/%q/%q", stats.Version, stats.ScriptVersion, stats.ProxmoxVersion, "1.2.3", "1.2.3", "8.1")
+	}
+	if stats.ServerID != "1234567890123456" || stats.ServerMAC != "bc:24:11:41:0d:18" {
+		t.Fatalf("identity fields=%q/%q; want server ID and MAC", stats.ServerID, stats.ServerMAC)
 	}
 	if stats.LocalStatusSummary == "" || !strings.Contains(stats.LocalStatusSummary, "boom") {
 		t.Fatalf("LocalStatusSummary=%q; want to contain error text", stats.LocalStatusSummary)

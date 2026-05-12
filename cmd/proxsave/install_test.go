@@ -544,6 +544,39 @@ func TestConfigureNotifications(t *testing.T) {
 	}
 }
 
+func TestConfigureNotificationsEmailDefaultsToRelaySendmailFallback(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("n\ny\n\n"))
+	captureStdout(t, func() {
+		result, err = configureNotifications(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureNotifications error: %v", err)
+	}
+	for _, want := range []string{
+		"TELEGRAM_ENABLED=false",
+		"EMAIL_ENABLED=true",
+		"EMAIL_DELIVERY_METHOD=relay",
+		"EMAIL_FALLBACK_SENDMAIL=true",
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("missing %q in template: %q", want, result)
+		}
+	}
+}
+
+func TestPromptEmailDeliveryMethodAcceptsProxmoxAlias(t *testing.T) {
+	method, err := promptEmailDeliveryMethod(context.Background(), bufio.NewReader(strings.NewReader("proxmox-notifications\n")), "relay")
+	if err != nil {
+		t.Fatalf("promptEmailDeliveryMethod error: %v", err)
+	}
+	if method != "pmf" {
+		t.Fatalf("method=%q, want pmf", method)
+	}
+}
+
 func TestConfigureEncryption(t *testing.T) {
 	var enabled bool
 	var err error

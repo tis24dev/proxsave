@@ -87,6 +87,8 @@ func TestDescribeEmailMethod(t *testing.T) {
 		{"email-relay", "cloud relay"},
 		{"email-sendmail", "sendmail"},
 		{"email-pmf", "proxmox-mail-forward"},
+		{"email-relay-fallback", "cloud relay fallback"},
+		{"email-sendmail-fallback", "sendmail fallback"},
 		{"email-pmf-fallback", "proxmox-mail-forward fallback"},
 		{"custom", "custom"},
 	}
