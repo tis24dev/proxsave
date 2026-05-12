@@ -143,12 +143,6 @@ func detectEnvironmentInfo() (*EnvironmentInfo, error) {
 	return info, fmt.Errorf("unable to detect Proxmox environment")
 }
 
-// detectProxmox is retained as a compatibility wrapper for legacy call sites and tests.
-func detectProxmox() (types.ProxmoxType, string, error) {
-	info, err := detectEnvironmentInfo()
-	return info.Type, info.Version, err
-}
-
 func resolveType(hasPVE, hasPBS bool) types.ProxmoxType {
 	switch {
 	case hasPVE && hasPBS:
@@ -421,58 +415,58 @@ func writeDetectionDebug() string {
 	path := filepath.Join(debugDir, fmt.Sprintf("proxmox_detection_debug_%d.log", now.Unix()))
 
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("=== Proxmox Detection Failure Debug - %s ===\n", now.Format("2006-01-02 15:04:05")))
-	builder.WriteString(fmt.Sprintf("Current PATH: %s\n", os.Getenv("PATH")))
+	fmt.Fprintf(&builder, "=== Proxmox Detection Failure Debug - %s ===\n", now.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&builder, "Current PATH: %s\n", os.Getenv("PATH"))
 
 	if u, err := userCurrentFunc(); err == nil {
-		builder.WriteString(fmt.Sprintf("Current USER: %s\n", u.Username))
+		fmt.Fprintf(&builder, "Current USER: %s\n", u.Username)
 	} else {
 		builder.WriteString("Current USER: unknown\n")
 	}
 
 	if cwd, err := getwdFunc(); err == nil {
-		builder.WriteString(fmt.Sprintf("Current PWD: %s\n", cwd))
+		fmt.Fprintf(&builder, "Current PWD: %s\n", cwd)
 	}
-	builder.WriteString(fmt.Sprintf("Shell: %s\n\n", os.Getenv("SHELL")))
+	fmt.Fprintf(&builder, "Shell: %s\n\n", os.Getenv("SHELL"))
 
 	builder.WriteString("=== Command availability check ===\n")
-	builder.WriteString(fmt.Sprintf("command -v pveversion: %s\n", lookPathOrNotFound("pveversion")))
-	builder.WriteString(fmt.Sprintf("command -v proxmox-backup-manager: %s\n", lookPathOrNotFound("proxmox-backup-manager")))
+	fmt.Fprintf(&builder, "command -v pveversion: %s\n", lookPathOrNotFound("pveversion"))
+	fmt.Fprintf(&builder, "command -v proxmox-backup-manager: %s\n", lookPathOrNotFound("proxmox-backup-manager"))
 	builder.WriteString("\n")
 
 	builder.WriteString("=== File existence check ===\n")
-	builder.WriteString(fmt.Sprintf("%s exists: %s\n", "/usr/bin/pveversion", boolToYes(fileExists("/usr/bin/pveversion"))))
-	builder.WriteString(fmt.Sprintf("%s executable: %s\n", "/usr/bin/pveversion", boolToYes(isExecutable("/usr/bin/pveversion"))))
-	builder.WriteString(fmt.Sprintf("%s exists: %s\n", "/usr/sbin/pveversion", boolToYes(fileExists("/usr/sbin/pveversion"))))
-	builder.WriteString(fmt.Sprintf("%s executable: %s\n", "/usr/sbin/pveversion", boolToYes(isExecutable("/usr/sbin/pveversion"))))
-	builder.WriteString(fmt.Sprintf("%s exists: %s\n", "/usr/bin/proxmox-backup-manager", boolToYes(fileExists("/usr/bin/proxmox-backup-manager"))))
-	builder.WriteString(fmt.Sprintf("%s executable: %s\n", "/usr/bin/proxmox-backup-manager", boolToYes(isExecutable("/usr/bin/proxmox-backup-manager"))))
+	fmt.Fprintf(&builder, "%s exists: %s\n", "/usr/bin/pveversion", boolToYes(fileExists("/usr/bin/pveversion")))
+	fmt.Fprintf(&builder, "%s executable: %s\n", "/usr/bin/pveversion", boolToYes(isExecutable("/usr/bin/pveversion")))
+	fmt.Fprintf(&builder, "%s exists: %s\n", "/usr/sbin/pveversion", boolToYes(fileExists("/usr/sbin/pveversion")))
+	fmt.Fprintf(&builder, "%s executable: %s\n", "/usr/sbin/pveversion", boolToYes(isExecutable("/usr/sbin/pveversion")))
+	fmt.Fprintf(&builder, "%s exists: %s\n", "/usr/bin/proxmox-backup-manager", boolToYes(fileExists("/usr/bin/proxmox-backup-manager")))
+	fmt.Fprintf(&builder, "%s executable: %s\n", "/usr/bin/proxmox-backup-manager", boolToYes(isExecutable("/usr/bin/proxmox-backup-manager")))
 	builder.WriteString("\n")
 
 	builder.WriteString("=== Directory existence check ===\n")
 	for _, dir := range append(pveDirCandidates, pbsDirCandidates...) {
-		builder.WriteString(fmt.Sprintf("%s exists: %s\n", dir, boolToYes(dirExists(dir))))
+		fmt.Fprintf(&builder, "%s exists: %s\n", dir, boolToYes(dirExists(dir)))
 	}
 	builder.WriteString("\n")
 
 	builder.WriteString("=== Version file check ===\n")
-	builder.WriteString(fmt.Sprintf("%s exists: %s\n", pveLegacyFile, boolToYes(fileExists(pveLegacyFile))))
+	fmt.Fprintf(&builder, "%s exists: %s\n", pveLegacyFile, boolToYes(fileExists(pveLegacyFile)))
 	if content := readAndTrim(pveLegacyFile); content != "" {
-		builder.WriteString(fmt.Sprintf("%s content: %s\n", pveLegacyFile, content))
+		fmt.Fprintf(&builder, "%s content: %s\n", pveLegacyFile, content)
 	}
-	builder.WriteString(fmt.Sprintf("%s exists: %s\n", pveVersionFile, boolToYes(fileExists(pveVersionFile))))
+	fmt.Fprintf(&builder, "%s exists: %s\n", pveVersionFile, boolToYes(fileExists(pveVersionFile)))
 	if content := readAndTrim(pveVersionFile); content != "" {
-		builder.WriteString(fmt.Sprintf("%s content: %s\n", pveVersionFile, content))
+		fmt.Fprintf(&builder, "%s content: %s\n", pveVersionFile, content)
 	}
-	builder.WriteString(fmt.Sprintf("%s exists: %s\n", pbsVersionFile, boolToYes(fileExists(pbsVersionFile))))
+	fmt.Fprintf(&builder, "%s exists: %s\n", pbsVersionFile, boolToYes(fileExists(pbsVersionFile)))
 	if content := readAndTrim(pbsVersionFile); content != "" {
-		builder.WriteString(fmt.Sprintf("%s content: %s\n", pbsVersionFile, content))
+		fmt.Fprintf(&builder, "%s content: %s\n", pbsVersionFile, content)
 	}
 	builder.WriteString("\n")
 
 	builder.WriteString("=== APT source files check ===\n")
 	for _, source := range append(pveSourceFiles, pbsSourceFiles...) {
-		builder.WriteString(fmt.Sprintf("%s exists: %s\n", source, boolToYes(fileExists(source))))
+		fmt.Fprintf(&builder, "%s exists: %s\n", source, boolToYes(fileExists(source)))
 	}
 	builder.WriteString("\n")
 

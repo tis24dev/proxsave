@@ -1,0 +1,57 @@
+name: Race Detector
+
+run-name: Race detector - ${{ github.ref_name }}
+
+"on":
+  push:
+    branches:
+      - main
+      - dev
+  pull_request: {}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  race:
+    name: Go race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      CGO_ENABLED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            **/go.sum
+
+      - name: Show Go environment
+        run: |
+          go version
+          go env GOTOOLCHAIN CGO_ENABLED GOOS GOARCH
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run race detector
+        run: go test -race -count=1 ./...

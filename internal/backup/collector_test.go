@@ -187,9 +187,15 @@ func TestCollectorSafeCopyDir(t *testing.T) {
 
 	// Create test source directory with files
 	srcDir := filepath.Join(tempDir, "source")
-	os.MkdirAll(filepath.Join(srcDir, "subdir"), 0755)
-	os.WriteFile(filepath.Join(srcDir, "file1.txt"), []byte("content1"), 0644)
-	os.WriteFile(filepath.Join(srcDir, "subdir", "file2.txt"), []byte("content2"), 0644)
+	if err := os.MkdirAll(filepath.Join(srcDir, "subdir"), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "file1.txt"), []byte("content1"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "subdir", "file2.txt"), []byte("content2"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 	if err := os.Chmod(srcDir, 0700); err != nil {
 		t.Fatalf("Failed to chmod source dir: %v", err)
 	}
@@ -378,7 +384,9 @@ func TestCollectorDryRun(t *testing.T) {
 
 	// Create a test file and try to copy it
 	srcFile := filepath.Join(tempDir, "source.txt")
-	os.WriteFile(srcFile, []byte("test"), 0644)
+	if err := os.WriteFile(srcFile, []byte("test"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	destFile := filepath.Join(tempDir, "dryrun", "dest.txt")
 	ctx := context.Background()
@@ -486,7 +494,9 @@ func TestGetStats(t *testing.T) {
 
 	// Perform an operation
 	testDir := filepath.Join(tempDir, "test")
-	collector.ensureDir(testDir)
+	if err := collector.ensureDir(testDir); err != nil {
+		t.Fatalf("ensureDir failed: %v", err)
+	}
 
 	// Check stats updated
 	stats = collector.GetStats()
@@ -1415,6 +1425,59 @@ func TestSafeCmdOutputHonorsContextCancellation(t *testing.T) {
 	err := c.safeCmdOutput(ctx, commandSpec("echo", "hi"), filepath.Join(tmp, "out.txt"), "canceled", false)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestSafeCmdOutputSwallowsNonCriticalPveshDeadline(t *testing.T) {
+	logger := logging.New(types.LogLevelWarning, false)
+	cfg := GetDefaultCollectorConfig()
+	cfg.PveshTimeoutSeconds = 1
+	tmp := t.TempDir()
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/usr/bin/pvesh", nil },
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name != "pvesh" {
+				t.Fatalf("unexpected command %s", name)
+			}
+			<-ctx.Done()
+			return []byte("timeout"), ctx.Err()
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	output := filepath.Join(tmp, "pvesh.txt")
+	err := c.safeCmdOutput(context.Background(), commandSpec("pvesh", "get", "/nodes"), output, "pvesh nodes", false)
+	if err != nil {
+		t.Fatalf("expected non-critical pvesh timeout to be skipped, got %v", err)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("expected no output file on timeout, stat err=%v", err)
+	}
+	if logger.WarningCount() != 1 {
+		t.Fatalf("expected one warning for skipped pvesh timeout, got %d", logger.WarningCount())
+	}
+}
+
+func TestSafeCmdOutputPropagatesParentCancellationDuringPvesh(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	cfg := GetDefaultCollectorConfig()
+	cfg.PveshTimeoutSeconds = 15
+	tmp := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deps := CollectorDeps{
+		LookPath: func(string) (string, error) { return "/usr/bin/pvesh", nil },
+		RunCommand: func(runCtx context.Context, name string, args ...string) ([]byte, error) {
+			cancel()
+			<-runCtx.Done()
+			return nil, runCtx.Err()
+		},
+	}
+	c := NewCollectorWithDeps(logger, cfg, tmp, types.ProxmoxUnknown, false, deps)
+
+	err := c.safeCmdOutput(ctx, commandSpec("pvesh", "get", "/nodes"), filepath.Join(tmp, "pvesh.txt"), "pvesh nodes", false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected parent context cancellation, got %v", err)
 	}
 }
 

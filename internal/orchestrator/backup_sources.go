@@ -525,18 +525,19 @@ func readBoundedChecksumLine(reader io.Reader) ([]byte, bool, error) {
 	return nil, false, err
 }
 
-func parseLocalChecksumFile(checksumPath string) (string, error) {
+func parseLocalChecksumFile(checksumPath string) (checksum string, err error) {
 	file, err := restoreFS.Open(checksumPath)
 	if err != nil {
 		return "", fmt.Errorf("read checksum file %s: %w", checksumPath, err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close checksum file")
 
-	data, _, err := readBoundedChecksumLine(file)
+	var data []byte
+	data, _, err = readBoundedChecksumLine(file)
 	if err != nil {
 		return "", fmt.Errorf("read checksum file %s: %w", checksumPath, err)
 	}
-	checksum, err := backup.ParseChecksumData(data)
+	checksum, err = backup.ParseChecksumData(data)
 	if err != nil {
 		return "", fmt.Errorf("parse checksum file %s: %w", checksumPath, err)
 	}

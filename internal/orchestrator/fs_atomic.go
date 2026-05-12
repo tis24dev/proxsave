@@ -105,10 +105,7 @@ func ensureDirExistsWithInheritedMeta(dir string) error {
 
 	var toCreate []string
 	cur := dir
-	for {
-		if cur == existing || cur == "" || cur == "." {
-			break
-		}
+	for cur != existing && cur != "" && cur != "." {
 		toCreate = append([]string{cur}, toCreate...)
 		parent := filepath.Dir(cur)
 		if parent == cur {

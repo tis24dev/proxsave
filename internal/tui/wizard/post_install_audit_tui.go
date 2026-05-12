@@ -195,7 +195,7 @@ func showAuditReview(app *tui.App, pages *tview.Pages, configPath string, sugges
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("If you don’t use this feature, set [yellow]%s=false[white] to disable.\n", tview.Escape(s.Key)))
+		fmt.Fprintf(&b, "If you don’t use this feature, set [yellow]%s=false[white] to disable.\n", tview.Escape(s.Key))
 		details.SetText(b.String())
 	}
 

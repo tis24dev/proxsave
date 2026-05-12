@@ -854,7 +854,7 @@ func (c *Collector) removeExistingSymlinkDestination(dest string) error {
 	return nil
 }
 
-func (c *Collector) copyRegularFile(src, dest, description string, info os.FileInfo) error {
+func (c *Collector) copyRegularFile(src, dest, description string, info os.FileInfo) (err error) {
 	if err := c.prepareCopyDestination(src, dest); err != nil {
 		c.incFilesFailed()
 		return err
@@ -865,7 +865,7 @@ func (c *Collector) copyRegularFile(src, dest, description string, info os.FileI
 		c.incFilesFailed()
 		return fmt.Errorf("failed to open %s: %w", src, err)
 	}
-	defer srcFile.Close()
+	defer closeIntoErr(&err, srcFile, "close source file")
 
 	written, err := copyRegularFileContents(srcFile, src, dest)
 	if err != nil {
@@ -990,6 +990,7 @@ type commandRunOptions struct {
 	critical              bool
 	logCollection         bool
 	handleSystemctlStatus bool
+	debugNonCritical      bool
 }
 
 type commandRunResult struct {
@@ -1047,6 +1048,25 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 	out, err := c.depRunCommand(runCtx, spec.Name, spec.Args...)
 	result.output = out
 	if err != nil {
+		if isContextCancellationError(runCtx, err) {
+			if isNonCriticalPveshDeadline(ctx, runCtx, spec, opts.critical) {
+				result.classification = commandRunNonCriticalFailure
+				result.outputSummary = summarizeCommandOutputText(string(out))
+				timeoutSeconds := 0
+				if c.config != nil {
+					timeoutSeconds = c.config.PveshTimeoutSeconds
+				}
+				if opts.debugNonCritical {
+					c.logger.Debug("Skipping %s: command `%s` timed out after %d seconds. Non-critical; backup continues. Output: %s",
+						opts.description, cmdString, timeoutSeconds, result.outputSummary)
+				} else {
+					c.logger.Warning("Skipping %s: command `%s` timed out after %d seconds. Non-critical; backup continues. Output: %s",
+						opts.description, cmdString, timeoutSeconds, result.outputSummary)
+				}
+				return result, nil
+			}
+			return result, err
+		}
 		result.outputSummary = summarizeCommandOutputText(string(out))
 		if opts.critical {
 			c.incFilesFailed()
@@ -1123,6 +1143,13 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 				err,
 				result.outputSummary,
 			)
+		} else if opts.debugNonCritical {
+			c.logger.Debug("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Output: %s",
+				opts.description,
+				cmdString,
+				err,
+				result.outputSummary,
+			)
 		} else {
 			c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the required CLI is available and has proper permissions. Output: %s",
 				opts.description,
@@ -1138,6 +1165,16 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 	return result, nil
 }
 
+func isNonCriticalPveshDeadline(parentCtx, runCtx context.Context, spec CommandSpec, critical bool) bool {
+	if parentCtx == nil || runCtx == nil {
+		return false
+	}
+	return spec.Name == "pvesh" &&
+		!critical &&
+		parentCtx.Err() == nil &&
+		errors.Is(runCtx.Err(), context.DeadlineExceeded)
+}
+
 func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output, description string, critical bool) error {
 	result, err := c.runAndClassifyCommand(ctx, spec, commandRunOptions{
 		output:        output,
@@ -1145,6 +1182,29 @@ func (c *Collector) safeCmdOutput(ctx context.Context, spec CommandSpec, output,
 		caller:        "safeCmdOutput",
 		critical:      critical,
 		logCollection: true,
+	})
+	if err != nil {
+		return err
+	}
+	if result.classification != commandRunSucceeded {
+		return nil
+	}
+
+	if err := c.writeReportFile(output, result.output); err != nil {
+		return err
+	}
+
+	c.logger.Debug("Successfully collected %s via command: %s", description, spec.String())
+	return nil
+}
+
+func (c *Collector) safeCmdOutputBestEffort(ctx context.Context, spec CommandSpec, output, description string) error {
+	result, err := c.runAndClassifyCommand(ctx, spec, commandRunOptions{
+		output:           output,
+		description:      description,
+		caller:           "safeCmdOutputBestEffort",
+		logCollection:    true,
+		debugNonCritical: true,
 	})
 	if err != nil {
 		return err

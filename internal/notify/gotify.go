@@ -143,7 +143,7 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 		result.Duration = time.Since(start)
 		return result, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	result.Metadata["status_code"] = resp.StatusCode
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))

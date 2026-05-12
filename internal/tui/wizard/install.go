@@ -123,14 +123,14 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		return event
 	})
 
-	form.Form.AddFormItem(secondaryDropdown)
+	form.AddFormItem(secondaryDropdown)
 
 	secondaryHint := tview.NewInputField().
 		SetLabel("  tip: SECONDARY_PATH needs a mounted path; for 192.168.0.10/folder use an rclone remote").
 		SetFieldWidth(0).
 		SetText("")
 	secondaryHint.SetDisabled(true)
-	form.Form.AddFormItem(secondaryHint)
+	form.AddFormItem(secondaryHint)
 
 	secondaryPathField = tview.NewInputField().
 		SetLabel("  └─ Secondary Backup Path").
@@ -140,7 +140,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		secondaryPathField.SetText(prefill.SecondaryPath)
 	}
 	secondaryPathField.SetDisabled(!secondaryEnabled)
-	form.Form.AddFormItem(secondaryPathField)
+	form.AddFormItem(secondaryPathField)
 
 	secondaryLogField = tview.NewInputField().
 		SetLabel("  └─ Secondary Log Path").
@@ -150,7 +150,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		secondaryLogField.SetText(prefill.SecondaryLogPath)
 	}
 	secondaryLogField.SetDisabled(!secondaryEnabled)
-	form.Form.AddFormItem(secondaryLogField)
+	form.AddFormItem(secondaryLogField)
 
 	// Cloud Storage section
 	cloudEnabled := prefill.CloudEnabled
@@ -179,14 +179,14 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		return event
 	})
 
-	form.Form.AddFormItem(cloudDropdown)
+	form.AddFormItem(cloudDropdown)
 
 	cloudHint := tview.NewInputField().
 		SetLabel("  Tip: remote name (via 'rclone config'), e.g. myremote (or myremote:path)").
 		SetFieldWidth(0).
 		SetText("")
 	cloudHint.SetDisabled(true)
-	form.Form.AddFormItem(cloudHint)
+	form.AddFormItem(cloudHint)
 
 	rcloneBackupField = tview.NewInputField().
 		SetLabel("  └─ Rclone Backup Remote").
@@ -196,7 +196,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		rcloneBackupField.SetText(prefill.CloudRemote)
 	}
 	rcloneBackupField.SetDisabled(!cloudEnabled)
-	form.Form.AddFormItem(rcloneBackupField)
+	form.AddFormItem(rcloneBackupField)
 
 	rcloneLogField = tview.NewInputField().
 		SetLabel("  └─ Rclone Log Path").
@@ -206,7 +206,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		rcloneLogField.SetText(prefill.CloudLogPath)
 	}
 	rcloneLogField.SetDisabled(!cloudEnabled)
-	form.Form.AddFormItem(rcloneLogField)
+	form.AddFormItem(rcloneLogField)
 
 	// Firewall rules backup (system collection)
 	firewallEnabled := prefill.FirewallEnabled
@@ -227,7 +227,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		return event
 	})
 
-	form.Form.AddFormItem(firewallDropdown)
+	form.AddFormItem(firewallDropdown)
 
 	// Notifications (header + two toggles)
 	telegramEnabled := prefill.TelegramEnabled
@@ -237,7 +237,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetFieldWidth(0).
 		SetText("").
 		SetDisabled(true)
-	form.Form.AddFormItem(notificationHeader)
+	form.AddFormItem(notificationHeader)
 
 	telegramDropdown := tview.NewDropDown().
 		SetLabel("  └─ Enable Telegram notifications").
@@ -254,7 +254,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		}
 		return event
 	})
-	form.Form.AddFormItem(telegramDropdown)
+	form.AddFormItem(telegramDropdown)
 
 	emailDropdown := tview.NewDropDown().
 		SetLabel("  └─ Enable Email notifications").
@@ -271,7 +271,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		}
 		return event
 	})
-	form.Form.AddFormItem(emailDropdown)
+	form.AddFormItem(emailDropdown)
 
 	// Encryption
 	encryptionDropdown := tview.NewDropDown().
@@ -290,7 +290,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		return event
 	})
 
-	form.Form.AddFormItem(encryptionDropdown)
+	form.AddFormItem(encryptionDropdown)
 
 	// Separator before scheduling
 	cronSeparator := tview.NewInputField().
@@ -298,7 +298,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetFieldWidth(0).
 		SetText("").
 		SetDisabled(true)
-	form.Form.AddFormItem(cronSeparator)
+	form.AddFormItem(cronSeparator)
 
 	// Cron schedule (after encryption)
 	cronField := tview.NewInputField().
@@ -306,7 +306,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetText("").
 		SetPlaceholder(data.CronTime).
 		SetFieldWidth(7)
-	form.Form.AddFormItem(cronField)
+	form.AddFormItem(cronField)
 
 	// Set up form submission
 	form.SetOnSubmit(func(values map[string]string) error {
@@ -371,17 +371,17 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 
 	// Style the form
 	form.SetBorderWithTitle("ProxSave Installation")
-	form.Form.SetBackgroundColor(tcell.ColorBlack)
+	form.SetBackgroundColor(tcell.ColorBlack)
 
 	// Add arrow key support for navigation
-	form.Form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		// If a dropdown is open, don't intercept arrow keys - let them work naturally
 		if dropdownOpen {
 			return event
 		}
 
 		// Check if focus is on a button (not on a form field)
-		formItemIndex, buttonIndex := form.Form.GetFocusedItemIndex()
+		formItemIndex, buttonIndex := form.GetFocusedItemIndex()
 		isOnButton := (formItemIndex < 0 && buttonIndex >= 0)
 		isOnFormField := (formItemIndex >= 0)
 

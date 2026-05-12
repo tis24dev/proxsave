@@ -124,7 +124,11 @@ func runFullRestoreFstabMerge(ctx context.Context, reader *bufio.Reader, archive
 		logger.Warning("Failed to create temp dir for fstab merge: %v", err)
 		return nil
 	}
-	defer restoreFS.RemoveAll(fsTempDir)
+	defer func() {
+		if err := restoreFS.RemoveAll(fsTempDir); err != nil {
+			logger.Debug("Failed to remove temporary fstab merge directory %s: %v", fsTempDir, err)
+		}
+	}()
 
 	if err := extractFullRestoreFstab(ctx, archivePath, fsTempDir, logger); err != nil {
 		logger.Warning("Failed to extract filesystem config for merge: %v", err)
@@ -254,7 +258,7 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 
 	// Create detailed log directory
 	logDir := "/tmp/proxsave"
-	if err := restoreFS.MkdirAll(logDir, 0o755); err != nil {
+	if err := restoreFS.MkdirAll(logDir, 0o700); err != nil {
 		logger.Warning("Could not create log directory: %v", err)
 	}
 
@@ -267,7 +271,11 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 		logger.Warning("Could not create detailed log file: %v", err)
 		logFile = nil
 	} else {
-		defer logFile.Close()
+		defer func() {
+			if closeErr := logFile.Close(); closeErr != nil {
+				logger.Warning("close detailed restore log: %v", closeErr)
+			}
+		}()
 		logger.Info("Detailed restore log: %s", logPath)
 		logging.DebugStep(logger, "extract selective archive", "log file=%s", logPath)
 	}

@@ -20,53 +20,53 @@ func BuildEmailPlainText(data *NotificationData) string {
 	var body strings.Builder
 
 	statusEmoji := GetStatusEmoji(data.Status)
-	body.WriteString(fmt.Sprintf("%s %s BACKUP REPORT - %s\n",
-		statusEmoji, strings.ToUpper(data.ProxmoxType.String()), strings.ToUpper(data.Status.String())))
-	body.WriteString(fmt.Sprintf("Hostname: %s\n", data.Hostname))
-	body.WriteString(fmt.Sprintf("Date: %s\n\n", data.BackupDate.Format("2006-01-02 15:04:05")))
+	fmt.Fprintf(&body, "%s %s BACKUP REPORT - %s\n",
+		statusEmoji, strings.ToUpper(data.ProxmoxType.String()), strings.ToUpper(data.Status.String()))
+	fmt.Fprintf(&body, "Hostname: %s\n", data.Hostname)
+	fmt.Fprintf(&body, "Date: %s\n\n", data.BackupDate.Format("2006-01-02 15:04:05"))
 
 	body.WriteString("BACKUP STATUS:\n")
-	body.WriteString(fmt.Sprintf("  Local:     %s backups (%s free)\n", data.LocalStatusSummary, data.LocalFree))
+	fmt.Fprintf(&body, "  Local:     %s backups (%s free)\n", data.LocalStatusSummary, data.LocalFree)
 	if data.SecondaryEnabled {
-		body.WriteString(fmt.Sprintf("  Secondary: %s backups (%s free)\n", data.SecondaryStatusSummary, data.SecondaryFree))
+		fmt.Fprintf(&body, "  Secondary: %s backups (%s free)\n", data.SecondaryStatusSummary, data.SecondaryFree)
 	}
 	if data.CloudEnabled {
-		body.WriteString(fmt.Sprintf("  Cloud:     %s backups\n", data.CloudStatusSummary))
+		fmt.Fprintf(&body, "  Cloud:     %s backups\n", data.CloudStatusSummary)
 	}
 	body.WriteString("\n")
 
 	body.WriteString("BACKUP DETAILS:\n")
-	body.WriteString(fmt.Sprintf("  Backup File: %s\n", data.BackupFile))
-	body.WriteString(fmt.Sprintf("  Size: %s\n", data.BackupSizeHR))
-	body.WriteString(fmt.Sprintf("  Included Files: %d\n", data.FilesIncluded))
-	body.WriteString(fmt.Sprintf("  Missing Files: %d\n", data.FilesMissing))
-	body.WriteString(fmt.Sprintf("  Duration: %s\n", FormatDuration(data.BackupDuration)))
-	body.WriteString(fmt.Sprintf("  Compression: %s (level %d, ratio %.2f%%)\n",
-		data.CompressionType, data.CompressionLevel, data.CompressionRatio))
+	fmt.Fprintf(&body, "  Backup File: %s\n", data.BackupFile)
+	fmt.Fprintf(&body, "  Size: %s\n", data.BackupSizeHR)
+	fmt.Fprintf(&body, "  Included Files: %d\n", data.FilesIncluded)
+	fmt.Fprintf(&body, "  Missing Files: %d\n", data.FilesMissing)
+	fmt.Fprintf(&body, "  Duration: %s\n", FormatDuration(data.BackupDuration))
+	fmt.Fprintf(&body, "  Compression: %s (level %d, ratio %.2f%%)\n",
+		data.CompressionType, data.CompressionLevel, data.CompressionRatio)
 	body.WriteString("\n")
 
 	body.WriteString("ISSUES:\n")
-	body.WriteString(fmt.Sprintf("  Errors: %d\n", data.ErrorCount))
-	body.WriteString(fmt.Sprintf("  Warnings: %d\n", data.WarningCount))
-	body.WriteString(fmt.Sprintf("  Total Issues: %d\n", data.TotalIssues))
+	fmt.Fprintf(&body, "  Errors: %d\n", data.ErrorCount)
+	fmt.Fprintf(&body, "  Warnings: %d\n", data.WarningCount)
+	fmt.Fprintf(&body, "  Total Issues: %d\n", data.TotalIssues)
 	if data.LogFilePath != "" {
-		body.WriteString(fmt.Sprintf("  Log: %s\n", data.LogFilePath))
+		fmt.Fprintf(&body, "  Log: %s\n", data.LogFilePath)
 	}
 	body.WriteString("\n")
 
 	if len(data.LogCategories) > 0 {
 		body.WriteString("ISSUE DETAILS:\n")
 		for _, cat := range data.LogCategories {
-			body.WriteString(fmt.Sprintf("  - [%s] %s (count: %d)\n", cat.Type, cat.Label, cat.Count))
+			fmt.Fprintf(&body, "  - [%s] %s (count: %d)\n", cat.Type, cat.Label, cat.Count)
 			if cat.Example != "" {
-				body.WriteString(fmt.Sprintf("    Example: %s\n", cat.Example))
+				fmt.Fprintf(&body, "    Example: %s\n", cat.Example)
 			}
 		}
 		body.WriteString("\n")
 	}
 
-	body.WriteString(fmt.Sprintf("Exit Code: %d\n", data.ExitCode))
-	body.WriteString(fmt.Sprintf("Script Version: %s\n", data.ScriptVersion))
+	fmt.Fprintf(&body, "Exit Code: %d\n", data.ExitCode)
+	fmt.Fprintf(&body, "Script Version: %s\n", data.ScriptVersion)
 
 	return body.String()
 }
@@ -101,7 +101,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("<!DOCTYPE html>\n")
 	html.WriteString("<html>\n<head>\n")
 	html.WriteString("    <meta charset=\"UTF-8\">\n")
-	html.WriteString(fmt.Sprintf("    <title>%s Backup Report</title>\n", proxmoxType))
+	fmt.Fprintf(&html, "    <title>%s Backup Report</title>\n", proxmoxType)
 	html.WriteString("    <style>\n")
 	html.WriteString(getEmbeddedCSS())
 	html.WriteString("    </style>\n")
@@ -111,22 +111,22 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("    <div class=\"container\">\n")
 
 	// Header
-	html.WriteString(fmt.Sprintf("        <div class=\"header\" style=\"background-color: %s;\">\n", statusColor))
-	html.WriteString(fmt.Sprintf("            <h1>%s Backup Report - %s</h1>\n", proxmoxType, statusText))
-	html.WriteString(fmt.Sprintf("            <p>%s - %s</p>\n", data.Hostname, data.BackupDate.Format("2006-01-02 15:04:05")))
+	fmt.Fprintf(&html, "        <div class=\"header\" style=\"background-color: %s;\">\n", statusColor)
+	fmt.Fprintf(&html, "            <h1>%s Backup Report - %s</h1>\n", proxmoxType, statusText)
+	fmt.Fprintf(&html, "            <p>%s - %s</p>\n", data.Hostname, data.BackupDate.Format("2006-01-02 15:04:05"))
 	html.WriteString("        </div>\n")
 
 	// Content
 	html.WriteString("        <div class=\"content\">\n")
 
 	// Backup Status Section
-	html.WriteString(fmt.Sprintf("            <div class=\"backup-status\" style=\"border-left-color: %s;\">\n", backupPathsColor))
+	fmt.Fprintf(&html, "            <div class=\"backup-status\" style=\"border-left-color: %s;\">\n", backupPathsColor)
 
 	// Local Storage
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Local Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	html.WriteString(fmt.Sprintf("                        <span class=\"emoji\">%s</span> %s backups\n", GetStorageEmoji(data.LocalStatus), data.LocalStatusSummary))
+	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", GetStorageEmoji(data.LocalStatus), data.LocalStatusSummary)
 	html.WriteString("                    </div>\n")
 	if data.LocalFree != "" && data.LocalFree != "N/A" {
 		barColor := "normal"
@@ -136,11 +136,11 @@ func BuildEmailHTML(data *NotificationData) string {
 			barColor = "warning"
 		}
 		html.WriteString("                    <div class=\"storage-info\">\n")
-		html.WriteString(fmt.Sprintf("                        <span>%s</span>\n", data.LocalUsed))
+		fmt.Fprintf(&html, "                        <span>%s</span>\n", data.LocalUsed)
 		html.WriteString("                        <div class=\"space-bar\">\n")
-		html.WriteString(fmt.Sprintf("                            <div class=\"space-used %s\" style=\"width: %.1f%%;\"></div>\n", barColor, data.LocalUsagePercent))
+		fmt.Fprintf(&html, "                            <div class=\"space-used %s\" style=\"width: %.1f%%;\"></div>\n", barColor, data.LocalUsagePercent)
 		html.WriteString("                        </div>\n")
-		html.WriteString(fmt.Sprintf("                        <span>%s free (%s used)</span>\n", data.LocalFree, data.LocalPercent))
+		fmt.Fprintf(&html, "                        <span>%s free (%s used)</span>\n", data.LocalFree, data.LocalPercent)
 		html.WriteString("                    </div>\n")
 	}
 	html.WriteString("                </div>\n")
@@ -150,7 +150,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Secondary Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	html.WriteString(fmt.Sprintf("                        <span class=\"emoji\">%s</span> %s backups\n", GetStorageEmoji(data.SecondaryStatus), data.SecondaryStatusSummary))
+	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", GetStorageEmoji(data.SecondaryStatus), data.SecondaryStatusSummary)
 	html.WriteString("                    </div>\n")
 	if data.SecondaryEnabled && data.SecondaryFree != "" && data.SecondaryFree != "N/A" {
 		barColor := "normal"
@@ -160,11 +160,11 @@ func BuildEmailHTML(data *NotificationData) string {
 			barColor = "warning"
 		}
 		html.WriteString("                    <div class=\"storage-info\">\n")
-		html.WriteString(fmt.Sprintf("                        <span>%s</span>\n", data.SecondaryUsed))
+		fmt.Fprintf(&html, "                        <span>%s</span>\n", data.SecondaryUsed)
 		html.WriteString("                        <div class=\"space-bar\">\n")
-		html.WriteString(fmt.Sprintf("                            <div class=\"space-used %s\" style=\"width: %.1f%%;\"></div>\n", barColor, data.SecondaryUsagePercent))
+		fmt.Fprintf(&html, "                            <div class=\"space-used %s\" style=\"width: %.1f%%;\"></div>\n", barColor, data.SecondaryUsagePercent)
 		html.WriteString("                        </div>\n")
-		html.WriteString(fmt.Sprintf("                        <span>%s free (%s used)</span>\n", data.SecondaryFree, data.SecondaryPercent))
+		fmt.Fprintf(&html, "                        <span>%s free (%s used)</span>\n", data.SecondaryFree, data.SecondaryPercent)
 		html.WriteString("                    </div>\n")
 	}
 	html.WriteString("                </div>\n")
@@ -174,7 +174,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Cloud Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	html.WriteString(fmt.Sprintf("                        <span class=\"emoji\">%s</span> %s backups\n", GetStorageEmoji(data.CloudStatus), data.CloudStatusSummary))
+	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", GetStorageEmoji(data.CloudStatus), data.CloudStatusSummary)
 	html.WriteString("                    </div>\n")
 	html.WriteString("                </div>\n")
 
@@ -210,10 +210,10 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("            \n")
 	html.WriteString("            <div class=\"section\">\n")
 	html.WriteString("                <h2>Error and Warning Summary</h2>\n")
-	html.WriteString(fmt.Sprintf("                <div style=\"padding:15px; background-color:#F5F5F5; border-radius:6px; margin-bottom:15px; border-left:4px solid %s;\">\n", errorSummaryColor))
-	html.WriteString(fmt.Sprintf("                    <p><strong>Total Issues:</strong> %d</p>\n", data.TotalIssues))
-	html.WriteString(fmt.Sprintf("                    <p><strong>Errors:</strong> %d</p>\n", data.ErrorCount))
-	html.WriteString(fmt.Sprintf("                    <p><strong>Warnings:</strong> %d</p>\n", data.WarningCount))
+	fmt.Fprintf(&html, "                <div style=\"padding:15px; background-color:#F5F5F5; border-radius:6px; margin-bottom:15px; border-left:4px solid %s;\">\n", errorSummaryColor)
+	fmt.Fprintf(&html, "                    <p><strong>Total Issues:</strong> %d</p>\n", data.TotalIssues)
+	fmt.Fprintf(&html, "                    <p><strong>Errors:</strong> %d</p>\n", data.ErrorCount)
+	fmt.Fprintf(&html, "                    <p><strong>Warnings:</strong> %d</p>\n", data.WarningCount)
 	html.WriteString("                </div>\n")
 
 	if len(data.LogCategories) > 0 {
@@ -225,9 +225,9 @@ func BuildEmailHTML(data *NotificationData) string {
 		html.WriteString("                    </tr>\n")
 		for _, cat := range data.LogCategories {
 			html.WriteString("                    <tr>\n")
-			html.WriteString(fmt.Sprintf("                        <td>%s</td>\n", escapeHTML(cat.Label)))
-			html.WriteString(fmt.Sprintf("                        <td>%s</td>\n", escapeHTML(cat.Type)))
-			html.WriteString(fmt.Sprintf("                        <td>%d</td>\n", cat.Count))
+			fmt.Fprintf(&html, "                        <td>%s</td>\n", escapeHTML(cat.Label))
+			fmt.Fprintf(&html, "                        <td>%s</td>\n", escapeHTML(cat.Type))
+			fmt.Fprintf(&html, "                        <td>%d</td>\n", cat.Count)
 			html.WriteString("                    </tr>\n")
 		}
 		html.WriteString("                </table>\n")
@@ -235,7 +235,7 @@ func BuildEmailHTML(data *NotificationData) string {
 
 	// Show log file path after the table
 	if data.LogFilePath != "" {
-		html.WriteString(fmt.Sprintf("                <p style=\"font-size:13px; color:#666; margin-top:10px;\">Full log available at: %s</p>\n", escapeHTML(data.LogFilePath)))
+		fmt.Fprintf(&html, "                <p style=\"font-size:13px; color:#666; margin-top:10px;\">Full log available at: %s</p>\n", escapeHTML(data.LogFilePath))
 	}
 	html.WriteString("            </div>\n")
 
@@ -246,10 +246,10 @@ func BuildEmailHTML(data *NotificationData) string {
 		html.WriteString("                <h2>System Recommendations</h2>\n")
 		html.WriteString("                <div style=\"padding:15px; background-color:#FFF3E0; border-radius:6px; border-left:4px solid #FF9800;\">\n")
 		if data.LocalUsagePercent > 85 {
-			html.WriteString(fmt.Sprintf("                    <p>⚠️ <strong>Local storage is %.1f%% full.</strong> Consider cleaning old backups or expanding storage capacity.</p>\n", data.LocalUsagePercent))
+			fmt.Fprintf(&html, "                    <p>⚠️ <strong>Local storage is %.1f%% full.</strong> Consider cleaning old backups or expanding storage capacity.</p>\n", data.LocalUsagePercent)
 		}
 		if data.SecondaryEnabled && data.SecondaryUsagePercent > 85 {
-			html.WriteString(fmt.Sprintf("                    <p>⚠️ <strong>Secondary storage is %.1f%% full.</strong> Consider cleaning old backups or expanding storage capacity.</p>\n", data.SecondaryUsagePercent))
+			fmt.Fprintf(&html, "                    <p>⚠️ <strong>Secondary storage is %.1f%% full.</strong> Consider cleaning old backups or expanding storage capacity.</p>\n", data.SecondaryUsagePercent)
 		}
 		html.WriteString("                </div>\n")
 		html.WriteString("            </div>\n")
@@ -259,7 +259,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("        </div>\n")
 	html.WriteString("        <div class=\"footer\">\n")
 	html.WriteString("            <p>This is an automated message from the Proxmox Backup Script.</p>\n")
-	html.WriteString(fmt.Sprintf("            <p>Generated on %s by backup script v%s</p>\n", data.BackupDate.Format("2006-01-02 15:04:05"), data.ScriptVersion))
+	fmt.Fprintf(&html, "            <p>Generated on %s by backup script v%s</p>\n", data.BackupDate.Format("2006-01-02 15:04:05"), data.ScriptVersion)
 	html.WriteString("        </div>\n")
 
 	html.WriteString("    </div>\n")

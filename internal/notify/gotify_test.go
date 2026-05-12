@@ -128,7 +128,7 @@ func TestGotifySendSuccessAndFailure(t *testing.T) {
 	// Now force server to return 500 to trigger failure path.
 	serverFail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("fail"))
+		_, _ = w.Write([]byte("fail"))
 	}))
 	defer serverFail.Close()
 

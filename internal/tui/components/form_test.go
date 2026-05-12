@@ -35,14 +35,14 @@ func TestGetFormValuesCollectsWidgets(t *testing.T) {
 	form := NewForm(tui.NewApp())
 
 	form.AddInputFieldWithValidation("Input", "", 10)
-	form.Form.AddCheckbox("Check", true, nil)
-	form.Form.AddDropDown("Drop", []string{"a", "b"}, 1, nil)
+	form.AddCheckbox("Check", true, nil)
+	form.AddDropDown("Drop", []string{"a", "b"}, 1, nil)
 
 	// Set values
-	if input, ok := form.Form.GetFormItem(0).(*tview.InputField); ok {
+	if input, ok := form.GetFormItem(0).(*tview.InputField); ok {
 		input.SetText("value")
 	}
-	if dd, ok := form.Form.GetFormItem(2).(*tview.DropDown); ok {
+	if dd, ok := form.GetFormItem(2).(*tview.DropDown); ok {
 		dd.SetCurrentOption(1)
 	}
 
@@ -71,8 +71,8 @@ func TestAddPasswordFieldRegistersValidators(t *testing.T) {
 	if _, ok := form.validators["Password"]; !ok {
 		t.Fatalf("expected validators to be registered for Password")
 	}
-	if form.Form.GetFormItemCount() != 1 {
-		t.Fatalf("form item count=%d; want 1", form.Form.GetFormItemCount())
+	if form.GetFormItemCount() != 1 {
+		t.Fatalf("form item count=%d; want 1", form.GetFormItemCount())
 	}
 	if got := form.Form.GetFormItem(0).(*tview.InputField).GetLabel(); got != "Password" {
 		t.Fatalf("label=%q; want %q", got, "Password")
@@ -91,7 +91,7 @@ func TestAddSubmitButtonShowsValidationError(t *testing.T) {
 		form.SetOnSubmit(func(values map[string]string) error { return nil })
 		form.AddSubmitButton("Continue")
 
-		btn := form.Form.GetButton(form.Form.GetButtonCount() - 1)
+		btn := form.GetButton(form.GetButtonCount() - 1)
 		btn.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), nil)
 	})
 
@@ -110,7 +110,7 @@ func TestAddSubmitButtonShowsSubmitError(t *testing.T) {
 		form.SetOnSubmit(func(values map[string]string) error { return errors.New("boom") })
 		form.AddSubmitButton("Continue")
 
-		btn := form.Form.GetButton(form.Form.GetButtonCount() - 1)
+		btn := form.GetButton(form.GetButtonCount() - 1)
 		btn.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), nil)
 	})
 
@@ -133,7 +133,7 @@ func TestAddSubmitButtonUsesInlineErrorWhenParentViewSet(t *testing.T) {
 		form.SetOnSubmit(func(values map[string]string) error { return nil })
 		form.AddSubmitButton("Continue")
 
-		btn := form.Form.GetButton(form.Form.GetButtonCount() - 1)
+		btn := form.GetButton(form.GetButtonCount() - 1)
 		btn.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), nil)
 	})
 
@@ -149,7 +149,7 @@ func TestAddCancelButtonCallsHandler(t *testing.T) {
 	form.SetOnCancel(func() { called = true })
 	form.AddCancelButton("Cancel")
 
-	btn := form.Form.GetButton(form.Form.GetButtonCount() - 1)
+	btn := form.GetButton(form.GetButtonCount() - 1)
 	btn.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), nil)
 
 	if !called {
@@ -160,7 +160,7 @@ func TestAddCancelButtonCallsHandler(t *testing.T) {
 func TestSetBorderWithTitleSetsTitle(t *testing.T) {
 	form := NewForm(tui.NewApp())
 	form.SetBorderWithTitle("Wizard")
-	if form.Form.GetTitle() != " Wizard " {
-		t.Fatalf("title=%q; want %q", form.Form.GetTitle(), " Wizard ")
+	if form.GetTitle() != " Wizard " {
+		t.Fatalf("title=%q; want %q", form.GetTitle(), " Wizard ")
 	}
 }

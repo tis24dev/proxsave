@@ -10,7 +10,7 @@ func enableFormNavigation(form *components.Form, dropdownOpen *bool) {
 	if form == nil || form.Form == nil {
 		return
 	}
-	form.Form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event == nil {
 			return event
 		}
@@ -18,7 +18,7 @@ func enableFormNavigation(form *components.Form, dropdownOpen *bool) {
 			return event
 		}
 
-		formItemIndex, buttonIndex := form.Form.GetFocusedItemIndex()
+		formItemIndex, buttonIndex := form.GetFocusedItemIndex()
 		isOnButton := formItemIndex < 0 && buttonIndex >= 0
 		isOnField := formItemIndex >= 0
 
@@ -31,7 +31,7 @@ func enableFormNavigation(form *components.Form, dropdownOpen *bool) {
 			}
 		} else if isOnField {
 			// If focused item is a ListFormItem, let it handle navigation internally.
-			if _, ok := form.Form.GetFormItem(formItemIndex).(*components.ListFormItem); ok {
+			if _, ok := form.GetFormItem(formItemIndex).(*components.ListFormItem); ok {
 				return event
 			}
 			// For other form fields, convert arrows to tab navigation.

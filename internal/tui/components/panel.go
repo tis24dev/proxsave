@@ -33,7 +33,7 @@ func (p *Panel) SetTitle(title string) *Panel {
 func (p *Panel) SetStatus(status string) *Panel {
 	symbol := tui.StatusSymbol(status)
 
-	title := p.Box.GetTitle()
+	title := p.GetTitle()
 	p.Box.SetTitle(title + " " + symbol)
 	return p
 }
@@ -41,30 +41,30 @@ func (p *Panel) SetStatus(status string) *Panel {
 // InfoPanel creates a styled info panel
 func InfoPanel(title, message string) *Panel {
 	panel := NewPanel().SetTitle(title)
-	panel.Box.SetBackgroundColor(tui.ProxmoxDark)
+	panel.SetBackgroundColor(tui.ProxmoxDark)
 	return panel
 }
 
 // SuccessPanel creates a success-styled panel
 func SuccessPanel(title, message string) *Panel {
 	panel := NewPanel().SetTitle(title)
-	panel.Box.SetBorderColor(tui.SuccessGreen).
-		SetTitleColor(tui.SuccessGreen)
+	panel.SetBorderColor(tui.SuccessGreen)
+	panel.SetTitleColor(tui.SuccessGreen)
 	return panel
 }
 
 // ErrorPanel creates an error-styled panel
 func ErrorPanel(title, message string) *Panel {
 	panel := NewPanel().SetTitle(title)
-	panel.Box.SetBorderColor(tui.ErrorRed).
-		SetTitleColor(tui.ErrorRed)
+	panel.SetBorderColor(tui.ErrorRed)
+	panel.SetTitleColor(tui.ErrorRed)
 	return panel
 }
 
 // WarningPanel creates a warning-styled panel
 func WarningPanel(title, message string) *Panel {
 	panel := NewPanel().SetTitle(title)
-	panel.Box.SetBorderColor(tui.WarningYellow).
-		SetTitleColor(tui.WarningYellow)
+	panel.SetBorderColor(tui.WarningYellow)
+	panel.SetTitleColor(tui.WarningYellow)
 	return panel
 }

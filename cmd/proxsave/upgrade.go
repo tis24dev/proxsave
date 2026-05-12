@@ -227,7 +227,11 @@ func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *l
 	if err != nil {
 		return "", fmt.Errorf("cannot create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if removeErr := os.RemoveAll(tmpDir); removeErr != nil {
+			bootstrap.Debug("Failed to remove temporary upgrade directory %s: %v", tmpDir, removeErr)
+		}
+	}()
 	logging.DebugStepBootstrap(bootstrap, "upgrade download/install", "temp dir=%s", tmpDir)
 
 	archivePath := filepath.Join(tmpDir, filename)
@@ -288,7 +292,7 @@ func fetchLatestRelease(ctx context.Context) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("failed to fetch latest release: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
@@ -381,7 +385,7 @@ func downloadFile(ctx context.Context, url, dest string, bootstrap *logging.Boot
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	logging.DebugStepBootstrap(bootstrap, "upgrade download", "status=%s", resp.Status)
 	if resp.StatusCode != http.StatusOK {
@@ -393,7 +397,7 @@ func downloadFile(ctx context.Context, url, dest string, bootstrap *logging.Boot
 	if err != nil {
 		return fmt.Errorf("cannot create file %s: %w", dest, err)
 	}
-	defer out.Close()
+	defer closeIntoErr(&err, out, "close downloaded file")
 
 	written, err := io.Copy(out, resp.Body)
 	if err != nil {
@@ -436,7 +440,7 @@ func verifyChecksum(archivePath, checksumPath, filename string, bootstrap *loggi
 	if err != nil {
 		return fmt.Errorf("cannot open archive for checksum: %w", err)
 	}
-	defer f.Close()
+	defer closeIntoErr(&err, f, "close archive for checksum")
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, f); err != nil {
@@ -459,13 +463,13 @@ func extractBinaryFromTar(archivePath, targetName, destPath string, bootstrap *l
 	if err != nil {
 		return fmt.Errorf("cannot open archive: %w", err)
 	}
-	defer f.Close()
+	defer closeIntoErr(&err, f, "close release archive")
 
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("cannot create gzip reader: %w", err)
 	}
-	defer gzr.Close()
+	defer closeIntoErr(&err, gzr, "close release gzip reader")
 
 	tr := tar.NewReader(gzr)
 	for {
@@ -489,7 +493,7 @@ func extractBinaryFromTar(archivePath, targetName, destPath string, bootstrap *l
 			return fmt.Errorf("cannot create extracted binary: %w", err)
 		}
 		if _, err := io.Copy(tmpFile, tr); err != nil {
-			tmpFile.Close()
+			_ = tmpFile.Close()
 			return fmt.Errorf("cannot write extracted binary: %w", err)
 		}
 		if err := tmpFile.Close(); err != nil {
@@ -513,7 +517,7 @@ func installBinary(srcPath, destPath string, bootstrap *logging.BootstrapLogger)
 	if err != nil {
 		return fmt.Errorf("cannot open extracted binary: %w", err)
 	}
-	defer src.Close()
+	defer closeIntoErr(&err, src, "close extracted binary")
 
 	dst, err := os.OpenFile(tmpDest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
@@ -521,7 +525,7 @@ func installBinary(srcPath, destPath string, bootstrap *logging.BootstrapLogger)
 	}
 
 	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
+		_ = dst.Close()
 		return fmt.Errorf("cannot copy binary to temp target: %w", err)
 	}
 	if err := dst.Close(); err != nil {
@@ -532,6 +536,15 @@ func installBinary(srcPath, destPath string, bootstrap *logging.BootstrapLogger)
 		return fmt.Errorf("cannot replace binary at %s: %w", destPath, err)
 	}
 	return nil
+}
+
+func closeIntoErr(errp *error, closer io.Closer, operation string) {
+	if errp == nil || closer == nil {
+		return
+	}
+	if closeErr := closer.Close(); closeErr != nil && *errp == nil {
+		*errp = fmt.Errorf("%s: %w", operation, closeErr)
+	}
 }
 
 func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error) {

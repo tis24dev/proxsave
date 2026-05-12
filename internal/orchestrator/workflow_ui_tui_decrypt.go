@@ -218,12 +218,12 @@ func (u *tuiWorkflowUI) SelectBackupSource(ctx context.Context, options []decryp
 	if listHeight > 14 {
 		listHeight = 14
 	}
-	form.Form.AddFormItem(
+	form.AddFormItem(
 		components.NewListFormItem(list).
 			SetLabel("Available backup sources").
 			SetFieldHeight(listHeight),
 	)
-	form.Form.SetFocus(0)
+	form.SetFocus(0)
 	form.SetOnCancel(func() {
 		aborted = true
 	})
@@ -332,12 +332,12 @@ func (u *tuiWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []
 	if listHeight > 14 {
 		listHeight = 14
 	}
-	form.Form.AddFormItem(
+	form.AddFormItem(
 		components.NewListFormItem(list).
 			SetLabel("Available backups").
 			SetFieldHeight(listHeight),
 	)
-	form.Form.SetFocus(0)
+	form.SetFocus(0)
 	form.SetOnCancel(func() {
 		aborted = true
 	})

@@ -287,7 +287,7 @@ func (l *LocalStorage) loadMetadataFromBundle(bundlePath string) (*types.BackupM
 		l.logger.Debug("Local storage: failed to open bundle %s: %v", bundlePath, err)
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	tr := tar.NewReader(file)
 	expectedName := strings.TrimSuffix(filepath.Base(bundlePath), ".bundle.tar") + ".metadata"

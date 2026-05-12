@@ -348,7 +348,7 @@ func (c *Checker) verifyBinaryIntegrity() {
 		c.addError("Cannot open executable %s: %v", c.execPath, err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	openedInfo, err := f.Stat()
 	if err != nil {
@@ -359,7 +359,7 @@ func (c *Checker) verifyBinaryIntegrity() {
 		c.addError("Executable %s changed during integrity check; aborting", c.execPath)
 		return
 	}
-	openedInfo = c.ensureOwnershipAndPermFromFD(f, openedInfo, 0o700, fmt.Sprintf("Executable %s", c.execPath))
+	c.ensureOwnershipAndPermFromFD(f, openedInfo, 0o700, fmt.Sprintf("Executable %s", c.execPath))
 
 	currentHash, err := checksumReader(f)
 	if err != nil {
@@ -569,7 +569,7 @@ func fileContainsMarker(path string, markers []string, limit int) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	const bufSize = 4096
 	maxMarkerLen := 0
@@ -751,7 +751,11 @@ func (c *Checker) checkSuspiciousProcesses(ctx context.Context) {
 		if args == "" {
 			continue
 		}
-		lowerArgs := strings.ToLower(args)
+		trimmed := strings.TrimSpace(args)
+		if isZombieProxmoxProcess(user, state, vsz, trimmed) {
+			continue
+		}
+		lowerArgs := strings.ToLower(trimmed)
 
 		for _, signature := range c.cfg.SuspiciousProcesses {
 			sig := strings.ToLower(strings.TrimSpace(signature))
@@ -759,12 +763,11 @@ func (c *Checker) checkSuspiciousProcesses(ctx context.Context) {
 				continue
 			}
 			if strings.Contains(lowerArgs, sig) {
-				c.addWarning("Suspicious process detected: %s (PID %s, user %s)", strings.TrimSpace(args), pid, user)
+				c.addWarning("Suspicious process detected: %s (PID %s, user %s)", trimmed, pid, user)
 				break
 			}
 		}
 
-		trimmed := strings.TrimSpace(args)
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			name := strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
 			if !c.isSafeBracketProcess(name) {
@@ -775,11 +778,6 @@ func (c *Checker) checkSuspiciousProcesses(ctx context.Context) {
 				}
 				c.addWarning("Suspicious kernel-style process: %s (PID %s, user %s)", name, pid, user)
 			}
-		}
-
-		//lint:ignore SA4017 isZombieProxmoxProcess is intentionally used only for control flow
-		if isZombieProxmoxProcess(user, state, vsz, trimmed) {
-			continue
 		}
 	}
 }
@@ -803,7 +801,7 @@ func checksumFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return checksumReader(f)
 }
 

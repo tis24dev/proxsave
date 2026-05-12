@@ -45,13 +45,13 @@ func TestCreateSafetyBackup_ExpandsGlobPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open backup: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gzReader, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatalf("gzip reader: %v", err)
 	}
-	defer gzReader.Close()
+	defer func() { _ = gzReader.Close() }()
 
 	tr := tar.NewReader(gzReader)
 	seen := map[string]bool{}

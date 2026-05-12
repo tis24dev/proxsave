@@ -27,6 +27,52 @@ func stubPreparedRestoreBundle(archivePath string, manifest *backup.Manifest) fu
 	}
 }
 
+func TestRunRestoreWorkflow_CleansPreparedBundleWhenPlanningFails(t *testing.T) {
+	origRestoreSystem := restoreSystem
+	origPrepare := prepareRestoreBundleFunc
+	origAnalyze := analyzeRestoreArchiveFunc
+	t.Cleanup(func() {
+		restoreSystem = origRestoreSystem
+		prepareRestoreBundleFunc = origPrepare
+		analyzeRestoreArchiveFunc = origAnalyze
+	})
+
+	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
+	cleanupCalls := 0
+	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
+		return &backupCandidate{
+				DisplayBase: "test",
+				Manifest: &backup.Manifest{
+					CreatedAt:     time.Unix(1700000000, 0),
+					ProxmoxType:   "pve",
+					ScriptVersion: "vtest",
+				},
+			}, &preparedBundle{
+				ArchivePath: "/bundle.tar",
+				Manifest:    backup.Manifest{ArchivePath: "/bundle.tar"},
+				cleanup: func() {
+					cleanupCalls++
+				},
+			}, nil
+	}
+	analyzeRestoreArchiveFunc = func(archivePath string, logger *logging.Logger) ([]Category, *RestoreDecisionInfo, error) {
+		return nil, &RestoreDecisionInfo{BackupType: SystemTypePVE}, nil
+	}
+
+	wantErr := errors.New("select mode failed")
+	logger := logging.New(types.LogLevelError, false)
+	cfg := &config.Config{BaseDir: "/base"}
+	ui := &fakeRestoreWorkflowUI{modeErr: wantErr}
+
+	err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err=%v; want %v", err, wantErr)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("cleanupCalls=%d; want 1", cleanupCalls)
+	}
+}
+
 func TestRunRestoreWorkflow_ClusterPromptUsesArchivePayloadNotManifest(t *testing.T) {
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd

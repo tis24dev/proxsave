@@ -131,12 +131,16 @@ func sendViaCloudRelay(
 
 		// Read response body
 		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		closeErr := resp.Body.Close()
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
 			lastErr = fmt.Errorf("failed to read response: %w", err)
+			continue
+		}
+		if closeErr != nil {
+			lastErr = fmt.Errorf("failed to close response body: %w", closeErr)
 			continue
 		}
 

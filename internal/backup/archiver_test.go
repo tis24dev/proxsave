@@ -83,9 +83,15 @@ func TestCreateTarArchive(t *testing.T) {
 
 	// Create test files
 	testDir := filepath.Join(tempDir, "source")
-	os.MkdirAll(filepath.Join(testDir, "subdir"), 0755)
-	os.WriteFile(filepath.Join(testDir, "file1.txt"), []byte("content1"), 0644)
-	os.WriteFile(filepath.Join(testDir, "subdir", "file2.txt"), []byte("content2"), 0644)
+	if err := os.MkdirAll(filepath.Join(testDir, "subdir"), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "file1.txt"), []byte("content1"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "subdir", "file2.txt"), []byte("content2"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	// Create archive
 	outputPath := filepath.Join(tempDir, "test.tar")
@@ -138,7 +144,7 @@ func TestCreateTarArchiveRespectsExcludePatterns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open archive: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	found := map[string]bool{}
 	tr := tar.NewReader(f)
@@ -178,8 +184,12 @@ func TestCreateGzipArchive(t *testing.T) {
 
 	// Create test files
 	testDir := filepath.Join(tempDir, "source")
-	os.MkdirAll(testDir, 0755)
-	os.WriteFile(filepath.Join(testDir, "file.txt"), []byte("test content"), 0644)
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "file.txt"), []byte("test content"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	// Create archive
 	outputPath := filepath.Join(tempDir, "test.tar.gz")
@@ -199,7 +209,7 @@ func TestCreateGzipArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open archive: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	_, err = gzip.NewReader(f)
 	if err != nil {
@@ -364,13 +374,19 @@ func TestVerifyArchive(t *testing.T) {
 
 	// Create a test archive
 	testDir := filepath.Join(tempDir, "source")
-	os.MkdirAll(testDir, 0755)
-	os.WriteFile(filepath.Join(testDir, "file.txt"), []byte("test"), 0644)
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "file.txt"), []byte("test"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	outputPath := filepath.Join(tempDir, "test.tar")
 	ctx := context.Background()
 
-	archiver.CreateArchive(ctx, testDir, outputPath)
+	if err := archiver.CreateArchive(ctx, testDir, outputPath); err != nil {
+		t.Fatalf("CreateArchive failed: %v", err)
+	}
 
 	// Verify it
 	if err := archiver.VerifyArchive(ctx, outputPath); err != nil {
@@ -405,14 +421,20 @@ func TestGetArchiveSize(t *testing.T) {
 
 	// Create a test archive
 	testDir := filepath.Join(tempDir, "source")
-	os.MkdirAll(testDir, 0755)
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
 	content := []byte("test content with some length")
-	os.WriteFile(filepath.Join(testDir, "file.txt"), content, 0644)
+	if err := os.WriteFile(filepath.Join(testDir, "file.txt"), content, 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	outputPath := filepath.Join(tempDir, "test.tar")
 	ctx := context.Background()
 
-	archiver.CreateArchive(ctx, testDir, outputPath)
+	if err := archiver.CreateArchive(ctx, testDir, outputPath); err != nil {
+		t.Fatalf("CreateArchive failed: %v", err)
+	}
 
 	// Get size
 	size, err := archiver.GetArchiveSize(outputPath)
@@ -437,8 +459,12 @@ func TestDryRunMode(t *testing.T) {
 
 	// Create test files
 	testDir := filepath.Join(tempDir, "source")
-	os.MkdirAll(testDir, 0755)
-	os.WriteFile(filepath.Join(testDir, "file.txt"), []byte("test"), 0644)
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "file.txt"), []byte("test"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	// Try to create archive in dry-run mode
 	outputPath := filepath.Join(tempDir, "test.tar")
@@ -539,9 +565,13 @@ func TestContextCancellation(t *testing.T) {
 
 	// Create a large test directory to ensure cancellation can happen
 	testDir := filepath.Join(tempDir, "source")
-	os.MkdirAll(testDir, 0755)
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
 	for i := 0; i < 100; i++ {
-		os.WriteFile(filepath.Join(testDir, fmt.Sprintf("file%d.txt", i)), []byte("test content"), 0644)
+		if err := os.WriteFile(filepath.Join(testDir, fmt.Sprintf("file%d.txt", i)), []byte("test content"), 0644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
 	}
 
 	// Create a context that we'll cancel immediately
@@ -564,7 +594,7 @@ func verifyTarContent(tarPath string, expectedFiles []string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	tr := tar.NewReader(f)
 	found := make(map[string]bool)
@@ -677,12 +707,12 @@ func TestEncryptedArchiveRejectsWrongIdentity(t *testing.T) {
 	}
 }
 
-func decryptArchiveForTest(src, dst string, identity age.Identity) error {
+func decryptArchiveForTest(src, dst string, identity age.Identity) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer closeIntoErr(&err, in, "close encrypted test archive")
 
 	reader, err := age.Decrypt(in, identity)
 	if err != nil {
@@ -693,7 +723,7 @@ func decryptArchiveForTest(src, dst string, identity age.Identity) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer closeIntoErr(&err, out, "close decrypted test archive")
 
 	if _, err := io.Copy(out, reader); err != nil {
 		return err

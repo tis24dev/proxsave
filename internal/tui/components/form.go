@@ -48,7 +48,7 @@ func NewForm(app *tui.App) *Form {
 // AddInputFieldWithValidation adds an input field with validation
 func (f *Form) AddInputFieldWithValidation(label, value string, fieldWidth int, validators ...ValidatorFunc) *Form {
 	f.validators[label] = validators
-	f.Form.AddInputField(label, value, fieldWidth, nil, nil)
+	f.AddInputField(label, value, fieldWidth, nil, nil)
 	return f
 }
 
@@ -79,7 +79,7 @@ func (f *Form) SetParentView(parent tview.Primitive) *Form {
 
 // AddSubmitButton adds a styled submit button
 func (f *Form) AddSubmitButton(label string) *Form {
-	f.Form.AddButton(label, func() {
+	f.AddButton(label, func() {
 		if f.onSubmit != nil {
 			values := f.GetFormValues()
 			if err := f.ValidateAll(values); err != nil {
@@ -106,7 +106,7 @@ func (f *Form) AddSubmitButton(label string) *Form {
 
 // AddCancelButton adds a styled cancel button
 func (f *Form) AddCancelButton(label string) *Form {
-	f.Form.AddButton(label, func() {
+	f.AddButton(label, func() {
 		if f.onCancel != nil {
 			f.onCancel()
 		}
@@ -118,8 +118,8 @@ func (f *Form) AddCancelButton(label string) *Form {
 // GetFormValues extracts all form values
 func (f *Form) GetFormValues() map[string]string {
 	values := make(map[string]string)
-	for i := 0; i < f.Form.GetFormItemCount(); i++ {
-		item := f.Form.GetFormItem(i)
+	for i := 0; i < f.GetFormItemCount(); i++ {
+		item := f.GetFormItem(i)
 		if inputField, ok := item.(*tview.InputField); ok {
 			label := inputField.GetLabel()
 			value := inputField.GetText()

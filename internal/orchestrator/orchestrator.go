@@ -726,10 +726,12 @@ func (o *Orchestrator) createBundle(ctx context.Context, archivePath string) (bu
 		}
 
 		if _, err := io.Copy(tw, &contextReader{ctx: ctx, r: file}); err != nil {
-			file.Close()
+			_ = file.Close()
 			return "", fmt.Errorf("failed to write %s to tar: %w", filename, err)
 		}
-		file.Close()
+		if err := file.Close(); err != nil {
+			return "", fmt.Errorf("failed to close %s: %w", filename, err)
+		}
 	}
 
 	// Close tar writer to flush
@@ -806,7 +808,7 @@ func (o *Orchestrator) removeAssociatedFiles(archivePath string) error {
 // encryptArchive was replaced by streaming encryption inside the archiver.
 
 // SaveStatsReport writes a JSON report with backup statistics to the log directory.
-func (o *Orchestrator) SaveStatsReport(stats *BackupStats) error {
+func (o *Orchestrator) SaveStatsReport(stats *BackupStats) (err error) {
 	if stats == nil {
 		return fmt.Errorf("stats cannot be nil")
 	}
@@ -833,7 +835,7 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) error {
 	if err != nil {
 		return fmt.Errorf("create stats report: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close stats report")
 
 	durationSeconds := stats.Duration.Seconds()
 	compressionRatio := stats.CompressionRatio
@@ -1060,21 +1062,21 @@ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) e
 	builder := strings.Builder{}
 	builder.WriteString("# ProxSave Metadata\n")
 	builder.WriteString("# This file enables selective restore functionality in newer restore scripts\n")
-	builder.WriteString(fmt.Sprintf("VERSION=%s\n", version))
-	builder.WriteString(fmt.Sprintf("BACKUP_TYPE=%s\n", stats.ProxmoxType.String()))
+	fmt.Fprintf(&builder, "VERSION=%s\n", version)
+	fmt.Fprintf(&builder, "BACKUP_TYPE=%s\n", stats.ProxmoxType.String())
 	if len(stats.ProxmoxTargets) > 0 {
-		builder.WriteString(fmt.Sprintf("BACKUP_TARGETS=%s\n", strings.Join(stats.ProxmoxTargets, ",")))
+		fmt.Fprintf(&builder, "BACKUP_TARGETS=%s\n", strings.Join(stats.ProxmoxTargets, ","))
 	}
-	builder.WriteString(fmt.Sprintf("TIMESTAMP=%s\n", stats.Timestamp))
-	builder.WriteString(fmt.Sprintf("HOSTNAME=%s\n", stats.Hostname))
+	fmt.Fprintf(&builder, "TIMESTAMP=%s\n", stats.Timestamp)
+	fmt.Fprintf(&builder, "HOSTNAME=%s\n", stats.Hostname)
 	if strings.TrimSpace(stats.PVEVersion) != "" {
-		builder.WriteString(fmt.Sprintf("PVE_VERSION=%s\n", strings.TrimSpace(stats.PVEVersion)))
+		fmt.Fprintf(&builder, "PVE_VERSION=%s\n", strings.TrimSpace(stats.PVEVersion))
 	}
 	if strings.TrimSpace(stats.PBSVersion) != "" {
-		builder.WriteString(fmt.Sprintf("PBS_VERSION=%s\n", strings.TrimSpace(stats.PBSVersion)))
+		fmt.Fprintf(&builder, "PBS_VERSION=%s\n", strings.TrimSpace(stats.PBSVersion))
 	}
 	if stats.ClusterMode != "" {
-		builder.WriteString(fmt.Sprintf("PVE_CLUSTER_MODE=%s\n", stats.ClusterMode))
+		fmt.Fprintf(&builder, "PVE_CLUSTER_MODE=%s\n", stats.ClusterMode)
 	}
 	builder.WriteString("SUPPORTS_SELECTIVE_RESTORE=true\n")
 	builder.WriteString("BACKUP_FEATURES=selective_restore,category_mapping,version_detection,auto_directory_creation\n")
@@ -1175,7 +1177,7 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.PBSPassword = cfg.PBSPassword
 	cc.PBSFingerprint = cfg.PBSFingerprint
 }
-func copyFile(fs FS, src, dest string) error {
+func copyFile(fs FS, src, dest string) (err error) {
 	if fs == nil {
 		fs = osFS{}
 	}
@@ -1183,13 +1185,13 @@ func copyFile(fs FS, src, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer closeIntoErr(&err, in, "close source file")
 
 	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer closeIntoErr(&err, out, "close destination file")
 
 	if _, err := io.Copy(out, in); err != nil {
 		return err

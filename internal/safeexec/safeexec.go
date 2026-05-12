@@ -1,3 +1,4 @@
+// Package safeexec centralizes constrained process execution helpers.
 package safeexec
 
 import (
@@ -12,172 +13,170 @@ import (
 	"unicode"
 )
 
+// ErrCommandNotAllowed reports that a command name is outside the allowlist.
 var ErrCommandNotAllowed = errors.New("command not allowed")
 
+type commandFactory func(context.Context, ...string) *exec.Cmd
+
+var allowedCommandFactories = map[string]commandFactory{
+	"apt-cache": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "apt-cache", args...)
+	},
+	"blkid": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "blkid", args...) },
+	"bridge": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "bridge", args...)
+	},
+	"bzip2": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "bzip2", args...) },
+	"cat":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "cat", args...) },
+	"ceph":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ceph", args...) },
+	"chattr": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "chattr", args...)
+	},
+	"crontab": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "crontab", args...)
+	},
+	"df": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "df", args...) },
+	"dmidecode": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "dmidecode", args...)
+	},
+	"dpkg": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "dpkg", args...) },
+	"dpkg-query": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "dpkg-query", args...)
+	},
+	"echo": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "echo", args...) },
+	"ethtool": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ethtool", args...)
+	},
+	"false": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "false", args...) },
+	"firewall-cmd": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "firewall-cmd", args...)
+	},
+	"free": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "free", args...) },
+	"hostname": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "hostname", args...)
+	},
+	"ifreload": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ifreload", args...)
+	},
+	"ifup": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ifup", args...) },
+	"ip":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ip", args...) },
+	"iptables": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "iptables", args...)
+	},
+	"iptables-save": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "iptables-save", args...)
+	},
+	"ip6tables": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ip6tables", args...)
+	},
+	"ip6tables-save": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ip6tables-save", args...)
+	},
+	"journalctl": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "journalctl", args...)
+	},
+	"lsblk": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lsblk", args...) },
+	"lspci": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lspci", args...) },
+	"lscpu": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lscpu", args...) },
+	"lsmod": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lsmod", args...) },
+	"lsusb": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lsusb", args...) },
+	"lvs":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lvs", args...) },
+	"lzma":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lzma", args...) },
+	"mailq": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "mailq", args...) },
+	"mount": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "mount", args...) },
+	"mountpoint": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "mountpoint", args...)
+	},
+	"nft": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "nft", args...) },
+	"pbzip2": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pbzip2", args...)
+	},
+	"pgrep": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pgrep", args...) },
+	"pigz":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pigz", args...) },
+	"ping":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ping", args...) },
+	"pvs":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pvs", args...) },
+	"proxmox-backup-client": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "proxmox-backup-client", args...)
+	},
+	"proxmox-backup-manager": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "proxmox-backup-manager", args...)
+	},
+	"proxmox-mail-forward": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "proxmox-mail-forward", args...)
+	},
+	"proxmox-tape": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "proxmox-tape", args...)
+	},
+	"ps":    func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ps", args...) },
+	"pvecm": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pvecm", args...) },
+	"pve-firewall": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pve-firewall", args...)
+	},
+	"pvenode": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pvenode", args...)
+	},
+	"pvesh": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pvesh", args...) },
+	"pvesm": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pvesm", args...) },
+	"pveum": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pveum", args...) },
+	"pveversion": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pveversion", args...)
+	},
+	"rclone": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "rclone", args...)
+	},
+	"sendmail": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sendmail", args...)
+	},
+	"sensors": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sensors", args...)
+	},
+	"sh": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "sh", args...) },
+	"smartctl": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "smartctl", args...)
+	},
+	"ss": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ss", args...) },
+	"systemctl": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "systemctl", args...)
+	},
+	"systemd-run": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "systemd-run", args...)
+	},
+	"sysctl": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sysctl", args...)
+	},
+	"tail": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "tail", args...) },
+	"tar":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "tar", args...) },
+	"udevadm": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "udevadm", args...)
+	},
+	"umount": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "umount", args...)
+	},
+	"uname": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "uname", args...) },
+	"ufw":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ufw", args...) },
+	"vgs":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "vgs", args...) },
+	"which": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "which", args...) },
+	"xz":    func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "xz", args...) },
+	"zfs":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "zfs", args...) },
+	"zpool": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "zpool", args...) },
+	"zstd":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "zstd", args...) },
+}
+
 // CommandContext creates commands only for binaries that are intentionally
-// allowed by the application. Keep exec.CommandContext calls in the switch so
+// allowed by the application. Keep exec.CommandContext calls in the factory map so
 // static analyzers can see literal command names.
 func CommandContext(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
 	if strings.TrimSpace(name) != name || name == "" || strings.ContainsAny(name, `/\`) {
 		return nil, fmt.Errorf("%w: %q", ErrCommandNotAllowed, name)
 	}
 
-	switch name {
-	case "apt-cache":
-		return exec.CommandContext(ctx, "apt-cache", args...), nil
-	case "blkid":
-		return exec.CommandContext(ctx, "blkid", args...), nil
-	case "bridge":
-		return exec.CommandContext(ctx, "bridge", args...), nil
-	case "bzip2":
-		return exec.CommandContext(ctx, "bzip2", args...), nil
-	case "cat":
-		return exec.CommandContext(ctx, "cat", args...), nil
-	case "ceph":
-		return exec.CommandContext(ctx, "ceph", args...), nil
-	case "chattr":
-		return exec.CommandContext(ctx, "chattr", args...), nil
-	case "crontab":
-		return exec.CommandContext(ctx, "crontab", args...), nil
-	case "df":
-		return exec.CommandContext(ctx, "df", args...), nil
-	case "dmidecode":
-		return exec.CommandContext(ctx, "dmidecode", args...), nil
-	case "dpkg":
-		return exec.CommandContext(ctx, "dpkg", args...), nil
-	case "dpkg-query":
-		return exec.CommandContext(ctx, "dpkg-query", args...), nil
-	case "echo":
-		return exec.CommandContext(ctx, "echo", args...), nil
-	case "ethtool":
-		return exec.CommandContext(ctx, "ethtool", args...), nil
-	case "false":
-		return exec.CommandContext(ctx, "false", args...), nil
-	case "firewall-cmd":
-		return exec.CommandContext(ctx, "firewall-cmd", args...), nil
-	case "free":
-		return exec.CommandContext(ctx, "free", args...), nil
-	case "hostname":
-		return exec.CommandContext(ctx, "hostname", args...), nil
-	case "ifreload":
-		return exec.CommandContext(ctx, "ifreload", args...), nil
-	case "ifup":
-		return exec.CommandContext(ctx, "ifup", args...), nil
-	case "ip":
-		return exec.CommandContext(ctx, "ip", args...), nil
-	case "iptables":
-		return exec.CommandContext(ctx, "iptables", args...), nil
-	case "iptables-save":
-		return exec.CommandContext(ctx, "iptables-save", args...), nil
-	case "ip6tables":
-		return exec.CommandContext(ctx, "ip6tables", args...), nil
-	case "ip6tables-save":
-		return exec.CommandContext(ctx, "ip6tables-save", args...), nil
-	case "journalctl":
-		return exec.CommandContext(ctx, "journalctl", args...), nil
-	case "lsblk":
-		return exec.CommandContext(ctx, "lsblk", args...), nil
-	case "lspci":
-		return exec.CommandContext(ctx, "lspci", args...), nil
-	case "lscpu":
-		return exec.CommandContext(ctx, "lscpu", args...), nil
-	case "lsmod":
-		return exec.CommandContext(ctx, "lsmod", args...), nil
-	case "lsusb":
-		return exec.CommandContext(ctx, "lsusb", args...), nil
-	case "lvs":
-		return exec.CommandContext(ctx, "lvs", args...), nil
-	case "lzma":
-		return exec.CommandContext(ctx, "lzma", args...), nil
-	case "mailq":
-		return exec.CommandContext(ctx, "mailq", args...), nil
-	case "mount":
-		return exec.CommandContext(ctx, "mount", args...), nil
-	case "mountpoint":
-		return exec.CommandContext(ctx, "mountpoint", args...), nil
-	case "nft":
-		return exec.CommandContext(ctx, "nft", args...), nil
-	case "pbzip2":
-		return exec.CommandContext(ctx, "pbzip2", args...), nil
-	case "pgrep":
-		return exec.CommandContext(ctx, "pgrep", args...), nil
-	case "pigz":
-		return exec.CommandContext(ctx, "pigz", args...), nil
-	case "ping":
-		return exec.CommandContext(ctx, "ping", args...), nil
-	case "pvs":
-		return exec.CommandContext(ctx, "pvs", args...), nil
-	case "proxmox-backup-client":
-		return exec.CommandContext(ctx, "proxmox-backup-client", args...), nil
-	case "proxmox-backup-manager":
-		return exec.CommandContext(ctx, "proxmox-backup-manager", args...), nil
-	case "proxmox-mail-forward":
-		return exec.CommandContext(ctx, "proxmox-mail-forward", args...), nil
-	case "proxmox-tape":
-		return exec.CommandContext(ctx, "proxmox-tape", args...), nil
-	case "ps":
-		return exec.CommandContext(ctx, "ps", args...), nil
-	case "pvecm":
-		return exec.CommandContext(ctx, "pvecm", args...), nil
-	case "pve-firewall":
-		return exec.CommandContext(ctx, "pve-firewall", args...), nil
-	case "pvenode":
-		return exec.CommandContext(ctx, "pvenode", args...), nil
-	case "pvesh":
-		return exec.CommandContext(ctx, "pvesh", args...), nil
-	case "pvesm":
-		return exec.CommandContext(ctx, "pvesm", args...), nil
-	case "pveum":
-		return exec.CommandContext(ctx, "pveum", args...), nil
-	case "pveversion":
-		return exec.CommandContext(ctx, "pveversion", args...), nil
-	case "rclone":
-		return exec.CommandContext(ctx, "rclone", args...), nil
-	case "sendmail":
-		return exec.CommandContext(ctx, "sendmail", args...), nil
-	case "sensors":
-		return exec.CommandContext(ctx, "sensors", args...), nil
-	case "sh":
-		return exec.CommandContext(ctx, "sh", args...), nil
-	case "smartctl":
-		return exec.CommandContext(ctx, "smartctl", args...), nil
-	case "ss":
-		return exec.CommandContext(ctx, "ss", args...), nil
-	case "systemctl":
-		return exec.CommandContext(ctx, "systemctl", args...), nil
-	case "systemd-run":
-		return exec.CommandContext(ctx, "systemd-run", args...), nil
-	case "sysctl":
-		return exec.CommandContext(ctx, "sysctl", args...), nil
-	case "tail":
-		return exec.CommandContext(ctx, "tail", args...), nil
-	case "tar":
-		return exec.CommandContext(ctx, "tar", args...), nil
-	case "udevadm":
-		return exec.CommandContext(ctx, "udevadm", args...), nil
-	case "umount":
-		return exec.CommandContext(ctx, "umount", args...), nil
-	case "uname":
-		return exec.CommandContext(ctx, "uname", args...), nil
-	case "ufw":
-		return exec.CommandContext(ctx, "ufw", args...), nil
-	case "vgs":
-		return exec.CommandContext(ctx, "vgs", args...), nil
-	case "which":
-		return exec.CommandContext(ctx, "which", args...), nil
-	case "xz":
-		return exec.CommandContext(ctx, "xz", args...), nil
-	case "zfs":
-		return exec.CommandContext(ctx, "zfs", args...), nil
-	case "zpool":
-		return exec.CommandContext(ctx, "zpool", args...), nil
-	case "zstd":
-		return exec.CommandContext(ctx, "zstd", args...), nil
-	default:
-		return nil, fmt.Errorf("%w: %q", ErrCommandNotAllowed, name)
+	if factory, ok := allowedCommandFactories[name]; ok {
+		return factory(ctx, args...), nil
 	}
+	return nil, fmt.Errorf("%w: %q", ErrCommandNotAllowed, name)
 }
 
+// CombinedOutput runs an allowed command and returns its combined stdout/stderr.
 func CombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd, err := CommandContext(ctx, name, args...)
 	if err != nil {
@@ -186,6 +185,7 @@ func CombinedOutput(ctx context.Context, name string, args ...string) ([]byte, e
 	return cmd.CombinedOutput()
 }
 
+// Output runs an allowed command and returns stdout.
 func Output(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd, err := CommandContext(ctx, name, args...)
 	if err != nil {
@@ -194,6 +194,7 @@ func Output(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return cmd.Output()
 }
 
+// TrustedCommandContext creates a command for a validated absolute executable path.
 func TrustedCommandContext(ctx context.Context, execPath string, args ...string) (*exec.Cmd, error) {
 	if err := ValidateTrustedExecutablePath(execPath); err != nil {
 		return nil, err
@@ -202,6 +203,7 @@ func TrustedCommandContext(ctx context.Context, execPath string, args ...string)
 	return exec.CommandContext(ctx, execPath, args...), nil // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 }
 
+// ValidateTrustedExecutablePath verifies an executable path is absolute, regular, executable, and not world-writable.
 func ValidateTrustedExecutablePath(execPath string) error {
 	clean := strings.TrimSpace(execPath)
 	if clean == "" {
@@ -226,6 +228,7 @@ func ValidateTrustedExecutablePath(execPath string) error {
 	return nil
 }
 
+// ValidateRcloneRemoteName validates a rclone remote name before it is used in command arguments.
 func ValidateRcloneRemoteName(remote string) error {
 	if remote == "" {
 		return fmt.Errorf("rclone remote name is empty")
@@ -244,6 +247,7 @@ func ValidateRcloneRemoteName(remote string) error {
 	return nil
 }
 
+// ValidateRemoteRelativePath validates a remote-relative path segment for a named field.
 func ValidateRemoteRelativePath(value, field string) error {
 	clean := strings.TrimSpace(value)
 	if clean == "" {
@@ -264,6 +268,7 @@ func ValidateRemoteRelativePath(value, field string) error {
 	return nil
 }
 
+// ProcPath returns a safe /proc path for a supported PID leaf.
 func ProcPath(pid int, leaf string) (string, error) {
 	if pid <= 0 {
 		return "", fmt.Errorf("pid must be positive")

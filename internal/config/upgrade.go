@@ -385,14 +385,12 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	ops := make([]insertOp, 0, len(missingEntries))
 	unanchored := make([]templateEntry, 0)
 	for _, entry := range missingEntries {
-		insertIndex := appendIndex
-		if prev, ok := findPrevAnchor(entry.index); ok {
-			insertIndex = prev
-		} else {
+		prev, ok := findPrevAnchor(entry.index)
+		if !ok {
 			unanchored = append(unanchored, entry)
 			continue
 		}
-		insertIndex = normalizeInsertIndex(insertIndex)
+		insertIndex := normalizeInsertIndex(prev)
 		ops = append(ops, insertOp{
 			index: insertIndex,
 			lines: entry.lines,

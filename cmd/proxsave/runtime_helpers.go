@@ -84,10 +84,7 @@ func detectExecInfo() ExecInfo {
 	originalDir := dir
 	baseDir := ""
 
-	for {
-		if dir == "" || dir == "." || dir == string(filepath.Separator) {
-			break
-		}
+	for dir != "" && dir != "." {
 		if info, err := os.Stat(filepath.Join(dir, "env")); err == nil && info.IsDir() {
 			baseDir = dir
 			break
@@ -1085,7 +1082,7 @@ func executableHash() string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return ""

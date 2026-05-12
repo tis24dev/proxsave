@@ -163,7 +163,7 @@ func (r nicRepairResult) Details() string {
 	var b strings.Builder
 	b.WriteString(r.Summary())
 	if r.BackupDir != "" {
-		b.WriteString(fmt.Sprintf("\nBackup of pre-repair files: %s", r.BackupDir))
+		fmt.Fprintf(&b, "\nBackup of pre-repair files: %s", r.BackupDir)
 	}
 	if len(r.ChangedFiles) > 0 {
 		b.WriteString("\nUpdated files:")
@@ -317,7 +317,7 @@ func readArchiveEntry(ctx context.Context, archivePath string, candidates []stri
 	if err != nil {
 		return nil, "", err
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close archive")
 
 	reader, err := createDecompressionReader(ctx, file, archivePath)
 	if err != nil {

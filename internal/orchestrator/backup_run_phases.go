@@ -126,7 +126,7 @@ func (o *Orchestrator) prepareBackupWorkspace(run *backupRunContext, workspace *
 	o.logger.Debug("Creating temporary directory for collection output")
 	workspace.tempRoot = filepath.Join("/tmp", "proxsave")
 	if err := workspace.fs.MkdirAll(workspace.tempRoot, 0o755); err != nil {
-		return fmt.Errorf("Temp directory creation failed - path: %s: %w", workspace.tempRoot, err)
+		return fmt.Errorf("temp directory creation failed - path: %s: %w", workspace.tempRoot, err)
 	}
 
 	tempDir, err := workspace.fs.MkdirTemp(workspace.tempRoot, fmt.Sprintf("proxsave-%s-%s-", run.hostname, run.timestamp))

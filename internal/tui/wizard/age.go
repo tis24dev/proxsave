@@ -244,14 +244,14 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 		return event
 	})
 
-	form.Form.AddFormItem(setupTypeDropdown)
+	form.AddFormItem(setupTypeDropdown)
 
 	// Public key field (for "existing" type)
 	publicKeyField = tview.NewInputField().
 		SetLabel("  └─ AGE/SSH Recipient").
 		SetText("").
 		SetFieldWidth(70)
-	form.Form.AddFormItem(publicKeyField)
+	form.AddFormItem(publicKeyField)
 
 	// Passphrase fields (for "passphrase" type)
 	passphraseField = tview.NewInputField().
@@ -260,7 +260,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 		SetFieldWidth(50).
 		SetMaskCharacter('*')
 	passphraseField.SetDisabled(true)
-	form.Form.AddFormItem(passphraseField)
+	form.AddFormItem(passphraseField)
 
 	passphraseConfirmField = tview.NewInputField().
 		SetLabel("  └─ Confirm Passphrase").
@@ -268,7 +268,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 		SetFieldWidth(50).
 		SetMaskCharacter('*')
 	passphraseConfirmField.SetDisabled(true)
-	form.Form.AddFormItem(passphraseConfirmField)
+	form.AddFormItem(passphraseConfirmField)
 
 	// Private key field (for "privatekey" type)
 	privateKeyField = tview.NewInputField().
@@ -277,7 +277,7 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 		SetFieldWidth(70).
 		SetMaskCharacter('*')
 	privateKeyField.SetDisabled(true)
-	form.Form.AddFormItem(privateKeyField)
+	form.AddFormItem(privateKeyField)
 
 	// Initialize with "existing" type selected
 	setupType = ageSetupTypeExisting
@@ -323,17 +323,17 @@ func RunAgeSetupWizard(ctx context.Context, recipientPath, configPath, buildSig 
 
 	// Style the form
 	form.SetBorderWithTitle("AGE Encryption Setup")
-	form.Form.SetBackgroundColor(tcell.ColorBlack)
+	form.SetBackgroundColor(tcell.ColorBlack)
 
 	// Add arrow key support for navigation
-	form.Form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		// If a dropdown is open, don't intercept arrow keys - let them work naturally
 		if dropdownOpen {
 			return event
 		}
 
 		// Check if focus is on a button (not on a form field)
-		formItemIndex, buttonIndex := form.Form.GetFocusedItemIndex()
+		formItemIndex, buttonIndex := form.GetFocusedItemIndex()
 		isOnButton := (formItemIndex < 0 && buttonIndex >= 0)
 		isOnFormField := (formItemIndex >= 0)
 

@@ -85,8 +85,8 @@ func TestPromptYesNoWithCountdown_InputYes(test *testing.T) {
 
 func TestPromptYesNoWithCountdown_TimeoutReturnsNo(test *testing.T) {
 	pipeReader, pipeWriter := io.Pipe()
-	defer pipeReader.Close()
-	defer pipeWriter.Close()
+	defer func() { _ = pipeReader.Close() }()
+	defer func() { _ = pipeWriter.Close() }()
 
 	reader := bufio.NewReader(pipeReader)
 	logger := logging.New(types.LogLevelInfo, false)

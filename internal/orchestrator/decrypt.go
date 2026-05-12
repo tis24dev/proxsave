@@ -136,12 +136,12 @@ func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []de
 	}
 }
 
-func inspectBundleManifest(bundlePath string) (*backup.Manifest, error) {
+func inspectBundleManifest(bundlePath string) (manifest *backup.Manifest, err error) {
 	file, err := restoreFS.Open(bundlePath)
 	if err != nil {
 		return nil, fmt.Errorf("open bundle: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close bundle")
 
 	tr := tar.NewReader(file)
 	for {
@@ -194,7 +194,7 @@ func inspectRcloneBundleManifest(ctx context.Context, remotePath string, logger 
 	if err != nil {
 		return nil, fmt.Errorf("open rclone stream: %w", err)
 	}
-	defer stdout.Close()
+	defer func() { _ = stdout.Close() }()
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -413,11 +413,15 @@ func downloadRcloneBackup(ctx context.Context, remotePath string, logger *loggin
 		return "", nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tmpPath = tmpFile.Name()
-	tmpFile.Close()
-
 	cleanup = func() {
 		logger.Debug("Removing temporary rclone download: %s", tmpPath)
-		os.Remove(tmpPath)
+		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+			logger.Debug("Failed to remove temporary rclone download %s: %v", tmpPath, err)
+		}
+	}
+	if err := tmpFile.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("close temp file: %w", err)
 	}
 
 	logger.Info("Downloading backup from cloud storage: %s", remotePath)
@@ -496,7 +500,7 @@ func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *loggin
 	if err != nil {
 		return stagedFiles{}, fmt.Errorf("open bundle: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close bundle")
 
 	tr := tar.NewReader(file)
 	extracted := 0
@@ -531,10 +535,14 @@ func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *loggin
 			return stagedFiles{}, fmt.Errorf("extract %s: %w", hdr.Name, err)
 		}
 		if _, err := io.Copy(out, tr); err != nil {
-			out.Close()
+			if closeErr := out.Close(); closeErr != nil {
+				return stagedFiles{}, fmt.Errorf("write %s: %w (close: %v)", hdr.Name, err, closeErr)
+			}
 			return stagedFiles{}, fmt.Errorf("write %s: %w", hdr.Name, err)
 		}
-		out.Close()
+		if err := out.Close(); err != nil {
+			return stagedFiles{}, fmt.Errorf("close extracted %s: %w", hdr.Name, err)
+		}
 		extracted++
 
 		switch {
@@ -592,14 +600,15 @@ func rcloneCopyTo(ctx context.Context, remotePath, localPath string, showProgres
 }
 
 func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *backupCandidate, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
-	done := logging.DebugStart(logger, "stage raw artifacts", "archive=%s workdir=%s rclone=%v", cand.RawArchivePath, workDir, cand.IsRclone)
-	defer func() { done(err) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if cand == nil {
 		return stagedFiles{}, fmt.Errorf("candidate is nil")
 	}
+
+	done := logging.DebugStart(logger, "stage raw artifacts", "archive=%s workdir=%s rclone=%v", cand.RawArchivePath, workDir, cand.IsRclone)
+	defer func() { done(err) }()
 
 	archiveBase := filepath.Base(cand.RawArchivePath)
 	metaBase := filepath.Base(cand.RawMetadataPath)
@@ -682,18 +691,18 @@ func parseIdentityInput(input string) ([]age.Identity, error) {
 	return deriveDeterministicIdentitiesFromPassphrase(input)
 }
 
-func decryptWithIdentity(src, dst string, identities ...age.Identity) error {
+func decryptWithIdentity(src, dst string, identities ...age.Identity) (err error) {
 	in, err := restoreFS.Open(src)
 	if err != nil {
 		return fmt.Errorf("open encrypted archive: %w", err)
 	}
-	defer in.Close()
+	defer closeIntoErr(&err, in, "close encrypted archive")
 
 	out, err := restoreFS.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 	if err != nil {
 		return fmt.Errorf("create decrypted archive: %w", err)
 	}
-	defer out.Close()
+	defer closeIntoErr(&err, out, "close decrypted archive")
 
 	reader, err := age.Decrypt(in, identities...)
 	if err != nil {

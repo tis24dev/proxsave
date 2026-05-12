@@ -879,6 +879,43 @@ func TestCheckSuspiciousProcesses(t *testing.T) {
 	}
 }
 
+func TestCheckSuspiciousProcessesSkipsProxmoxBackupZombie(t *testing.T) {
+	writeFakePS(t, "root Z 0 123 proxmox-backup-proxy\n")
+	checker := newChecker(t, &config.Config{
+		SuspiciousProcesses: []string{"proxmox-backup"},
+	})
+
+	checker.checkSuspiciousProcesses(context.Background())
+
+	if containsIssue(checker.result, "Suspicious process detected") {
+		t.Fatalf("expected Proxmox Backup zombie to be skipped, issues=%+v", checker.result.Issues)
+	}
+}
+
+func TestCheckSuspiciousProcessesWarnsForNonZombieProxmoxBackupMatch(t *testing.T) {
+	writeFakePS(t, "root S 1234 124 proxmox-backup-proxy\n")
+	checker := newChecker(t, &config.Config{
+		SuspiciousProcesses: []string{"proxmox-backup"},
+	})
+
+	checker.checkSuspiciousProcesses(context.Background())
+
+	if !containsIssue(checker.result, "Suspicious process detected") {
+		t.Fatalf("expected non-zombie Proxmox Backup process match warning, issues=%+v", checker.result.Issues)
+	}
+}
+
+func writeFakePS(t *testing.T, output string) {
+	t.Helper()
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "ps")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%b' %q\n", output)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake ps: %v", err)
+	}
+	t.Setenv("PATH", dir)
+}
+
 // TestRunSecurityChecks tests the main Run function
 func TestRunSecurityChecks(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -1262,7 +1299,7 @@ func TestEnsureOwnershipAndPermFromFDAutoFix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
@@ -2148,7 +2185,7 @@ func TestRunWithMissingTarDependency(t *testing.T) {
 
 	result, err := Run(context.Background(), logger, cfg, configPath, execPath, envInfo)
 	if err != nil {
-		// Error is expected if tar is not found
+		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
 	if result == nil {
@@ -2172,7 +2209,7 @@ func TestDetectPrivateAgeKeysWithUnreadableFile(t *testing.T) {
 	if err := os.WriteFile(unreadable, []byte("AGE-SECRET-KEY-TEST"), 0000); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(unreadable, 0644) // Cleanup
+	defer func() { _ = os.Chmod(unreadable, 0644) }()
 
 	checker := &Checker{
 		logger: newSecurityTestLogger(),
@@ -2246,8 +2283,7 @@ func TestVerifyDirectoriesWithExistingDir(t *testing.T) {
 		}
 	}
 	if !hasPermWarning {
-		// Permission or ownership warning depends on running context
-		// This is acceptable
+		t.Log("permission or ownership warning depends on the running context")
 	}
 }
 
@@ -2440,7 +2476,7 @@ func TestRunWithPBSEnvironment(t *testing.T) {
 
 	result, err := Run(context.Background(), logger, cfg, configPath, execPath, envInfo)
 	if err != nil {
-		// May get error if dependencies are missing
+		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
 	if result == nil {
@@ -2549,7 +2585,7 @@ func TestVerifyBinaryIntegrityCreateHashErrorReadOnly(t *testing.T) {
 	if err := os.Chmod(tmpDir, 0555); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(tmpDir, 0755) // Cleanup
+	defer func() { _ = os.Chmod(tmpDir, 0755) }()
 
 	checker := &Checker{
 		logger:   newSecurityTestLogger(),
@@ -2589,7 +2625,7 @@ func TestVerifyBinaryIntegrityUpdateHashError(t *testing.T) {
 	if err := os.Chmod(hashPath, 0444); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(hashPath, 0644) // Cleanup
+	defer func() { _ = os.Chmod(hashPath, 0644) }()
 
 	checker := &Checker{
 		logger:   newSecurityTestLogger(),

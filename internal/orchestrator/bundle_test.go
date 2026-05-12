@@ -154,7 +154,7 @@ func TestCreateBundle_CreatesValidTarArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open bundle: %v", err)
 	}
-	defer bundleFile.Close()
+	defer func() { _ = bundleFile.Close() }()
 
 	tr := tar.NewReader(bundleFile)
 	foundFiles := make(map[string]bool)

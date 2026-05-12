@@ -343,11 +343,13 @@ func (c *Collector) collectPBSDatastoreCLIConfigs(ctx context.Context, state *pb
 	for _, ds := range state.datastores {
 		dsKey := ds.pathKey()
 		if cliName := ds.cliName(); cliName != "" && !ds.isOverride() {
-			c.safeCmdOutput(ctx,
+			if err := c.safeCmdOutput(ctx,
 				commandSpec("proxmox-backup-manager", "datastore", "show", cliName, "--output-format=json"),
 				filepath.Join(state.datastoreDir, fmt.Sprintf("%s_config.json", dsKey)),
 				fmt.Sprintf("Datastore %s configuration", ds.Name),
-				false)
+				false); err != nil {
+				return err
+			}
 			continue
 		}
 		c.logger.Debug("Skipping datastore CLI config for %s (path=%s): no PBS datastore identity", ds.Name, ds.Path)
@@ -548,10 +550,6 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 		dsWorkers = 1
 	}
 
-	parentCtx := ctx
-	ctx, cancel := context.WithCancel(parentCtx)
-	defer cancel()
-
 	var (
 		wg       sync.WaitGroup
 		sem      = make(chan struct{}, dsWorkers)
@@ -578,7 +576,6 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
-					cancel()
 				}
 				errMu.Unlock()
 			}
@@ -590,7 +587,7 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 	if firstErr != nil {
 		return firstErr
 	}
-	if err := parentCtx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return nil
@@ -665,15 +662,15 @@ func (c *Collector) collectPBSPXARMetadataForDatastore(ctx context.Context, ds p
 func (c *Collector) writePxarSubdirReport(ctx context.Context, target string, ds pbsDatastore, ioTimeout time.Duration) error {
 	c.logger.Debug("Writing PXAR subdirectory report for datastore %s", ds.Name)
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("# Datastore subdirectories in %s generated on %s\n", ds.Path, time.Now().Format(time.RFC1123)))
-	builder.WriteString(fmt.Sprintf("# Datastore: %s\n", ds.Name))
+	fmt.Fprintf(&builder, "# Datastore subdirectories in %s generated on %s\n", ds.Path, time.Now().Format(time.RFC1123))
+	fmt.Fprintf(&builder, "# Datastore: %s\n", ds.Name)
 
 	entries, err := safefs.ReadDir(ctx, ds.Path, ioTimeout)
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
 			return err
 		}
-		builder.WriteString(fmt.Sprintf("# Unable to read datastore path: %v\n", err))
+		fmt.Fprintf(&builder, "# Unable to read datastore path: %v\n", err)
 		return c.writeReportFile(target, []byte(builder.String()))
 	}
 
@@ -702,8 +699,8 @@ func (c *Collector) writePxarListReport(ctx context.Context, target string, ds p
 	basePath := filepath.Join(ds.Path, subDir)
 
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("# List of .pxar files in %s generated on %s\n", basePath, time.Now().Format(time.RFC1123)))
-	builder.WriteString(fmt.Sprintf("# Datastore: %s, Subdirectory: %s\n", ds.Name, subDir))
+	fmt.Fprintf(&builder, "# List of .pxar files in %s generated on %s\n", basePath, time.Now().Format(time.RFC1123))
+	fmt.Fprintf(&builder, "# Datastore: %s, Subdirectory: %s\n", ds.Name, subDir)
 	builder.WriteString("# Format: permissions size date name\n")
 
 	entries, err := safefs.ReadDir(ctx, basePath, ioTimeout)
@@ -711,7 +708,7 @@ func (c *Collector) writePxarListReport(ctx context.Context, target string, ds p
 		if errors.Is(err, safefs.ErrTimeout) {
 			return err
 		}
-		builder.WriteString(fmt.Sprintf("# Unable to read directory: %v\n", err))
+		fmt.Fprintf(&builder, "# Unable to read directory: %v\n", err)
 		if writeErr := c.writeReportFile(target, []byte(builder.String())); writeErr != nil {
 			return writeErr
 		}
@@ -756,11 +753,11 @@ func (c *Collector) writePxarListReport(ctx context.Context, target string, ds p
 		builder.WriteString("# No .pxar files found\n")
 	} else {
 		for _, file := range files {
-			builder.WriteString(fmt.Sprintf("%s %d %s %s\n",
+			fmt.Fprintf(&builder, "%s %d %s %s\n",
 				file.mode.String(),
 				file.size,
 				file.time.Format("2006-01-02 15:04:05"),
-				file.name))
+				file.name)
 		}
 	}
 

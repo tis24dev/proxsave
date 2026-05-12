@@ -48,14 +48,14 @@ func TestRunRestoreCommandStream_UsesStreamingRunner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}
-	defer os.Remove(tmp.Name())
-	defer tmp.Close()
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	defer func() { _ = tmp.Close() }()
 
 	reader, err := createXZReader(context.Background(), tmp)
 	if err != nil {
 		t.Fatalf("createXZReader: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	buf, err := io.ReadAll(reader)
 	if err != nil {
@@ -1017,7 +1017,7 @@ func TestExtractRegularFile_CopyFails(t *testing.T) {
 	tw := tar.NewWriter(&buf)
 	_ = tw.WriteHeader(header)
 	_, _ = tw.Write([]byte("short")) // Only 5 bytes but header says 100
-	tw.Close()
+	_ = tw.Close()
 
 	tr := tar.NewReader(&buf)
 	_, _ = tr.Next()
@@ -1066,7 +1066,7 @@ func TestExtractRegularFile_CopyFailsPreservesExistingTarget(t *testing.T) {
 	tw := tar.NewWriter(&buf)
 	_ = tw.WriteHeader(header)
 	_, _ = tw.Write([]byte("short"))
-	tw.Close()
+	_ = tw.Close()
 
 	tr := tar.NewReader(&buf)
 	_, _ = tr.Next()
@@ -1323,7 +1323,9 @@ func TestSleepWithContext_ContextCanceled(t *testing.T) {
 	cancel()
 
 	start := time.Now()
-	sleepWithContext(ctx, 10*time.Second)
+	if err := sleepWithContext(ctx, 10*time.Second); err == nil {
+		t.Fatalf("expected cancellation error")
+	}
 	elapsed := time.Since(start)
 
 	// Should return immediately due to canceled context
@@ -1565,7 +1567,7 @@ func TestCreateDecompressionReader_UnknownExtension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Should return error for unknown extension
 	_, err = createDecompressionReader(context.Background(), file, filePath)
@@ -1833,7 +1835,9 @@ func TestExtractRegularFile_Success(t *testing.T) {
 	if _, err := tw.Write(content); err != nil {
 		t.Fatalf("write content: %v", err)
 	}
-	tw.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
 
 	tr := tar.NewReader(&buf)
 	if _, err := tr.Next(); err != nil {

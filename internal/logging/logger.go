@@ -72,7 +72,10 @@ func (l *Logger) OpenLogFile(logPath string) error {
 	defer l.mu.Unlock()
 	// If a log file is already open, close it first.
 	if l.logFile != nil {
-		l.logFile.Close()
+		if err := l.logFile.Close(); err != nil {
+			return fmt.Errorf("failed to close existing log file: %w", err)
+		}
+		l.logFile = nil
 	}
 
 	// Create the log file (O_CREATE|O_WRONLY|O_APPEND).
@@ -197,11 +200,11 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 	}
 
 	// Write to stdout with colors.
-	fmt.Fprint(l.output, outputStdout)
+	_, _ = fmt.Fprint(l.output, outputStdout)
 
 	// If a log file is open, write there too (without colors).
 	if l.logFile != nil {
-		fmt.Fprint(l.logFile, outputFile)
+		_, _ = fmt.Fprint(l.logFile, outputFile)
 	}
 }
 
@@ -333,7 +336,7 @@ func (l *Logger) AppendRaw(message string) {
 		types.LogLevelInfo.String(),
 		message,
 	)
-	fmt.Fprint(l.logFile, output)
+	_, _ = fmt.Fprint(l.logFile, output)
 }
 
 // Package-level default logger

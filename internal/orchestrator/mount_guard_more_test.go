@@ -111,7 +111,7 @@ func TestSortByLengthDesc(t *testing.T) {
 	if len(items) != 3 {
 		t.Fatalf("unexpected len: %d", len(items))
 	}
-	if !(len(items[0]) >= len(items[1]) && len(items[1]) >= len(items[2])) {
+	if len(items[0]) < len(items[1]) || len(items[1]) < len(items[2]) {
 		t.Fatalf("expected non-increasing lengths, got %#v", items)
 	}
 }
@@ -269,7 +269,7 @@ func TestGuardMountPoint(t *testing.T) {
 			return nil
 		}
 
-		if err := guardMountPoint(nil, "/mnt/nilctx"); err != nil {
+		if err := guardMountPoint(nil, "/mnt/nilctx"); err != nil { //nolint:staticcheck // Verifies the documented nil context fallback.
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -726,14 +726,14 @@ func TestMaybeApplyPBSDatastoreMountGuards_FullFlow(t *testing.T) {
 	buildMountinfo := func() string {
 		var b strings.Builder
 		for mp := range mountedTargets {
-			b.WriteString(fmt.Sprintf("1 2 3:4 / %s rw - ext4 /dev/sda1 rw\n", mp))
+			fmt.Fprintf(&b, "1 2 3:4 / %s rw - ext4 /dev/sda1 rw\n", mp)
 		}
 		return b.String()
 	}
 	buildProcMounts := func() string {
 		var b strings.Builder
 		for mp := range mountedTargets {
-			b.WriteString(fmt.Sprintf("/dev/sda1 %s ext4 rw 0 0\n", mp))
+			fmt.Fprintf(&b, "/dev/sda1 %s ext4 rw 0 0\n", mp)
 		}
 		return b.String()
 	}

@@ -150,12 +150,12 @@ func shouldSkipDedupPath(rel string) bool {
 	}
 }
 
-func hashFile(path string) (string, error) {
+func hashFile(path string) (sum string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer closeIntoErr(&err, f, "close file for hash")
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, f); err != nil {
@@ -243,7 +243,7 @@ func chunkLargeFiles(ctx context.Context, logger *logging.Logger, root string, c
 	return nil
 }
 
-func splitFile(path, destBase string, chunkSize int64) error {
+func splitFile(path, destBase string, chunkSize int64) (err error) {
 	if err := os.MkdirAll(filepath.Dir(destBase), defaultChunkDirPerm); err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func splitFile(path, destBase string, chunkSize int64) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer closeIntoErr(&err, in, "close source file")
 
 	buf := make([]byte, chunkBufferSize)
 	index := 0
@@ -270,22 +270,32 @@ func splitFile(path, destBase string, chunkSize int64) error {
 	return nil
 }
 
-func writeChunk(src *os.File, chunkPath string, buf []byte, limit int64) (bool, error) {
-	out, err := os.OpenFile(chunkPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultChunkFilePerm)
-	if err != nil {
-		return false, err
+func writeChunk(src *os.File, chunkPath string, buf []byte, limit int64) (done bool, err error) {
+	if limit <= 0 {
+		return true, nil
 	}
-	defer out.Close()
-
+	var out *os.File
+	defer func() {
+		if out != nil {
+			closeIntoErr(&err, out, "close chunk file")
+		}
+	}()
 	var written int64
 	for written < limit {
 		remaining := limit - written
-		if remaining < int64(len(buf)) {
-			buf = buf[:remaining]
+		readBuf := buf
+		if remaining < int64(len(readBuf)) {
+			readBuf = readBuf[:remaining]
 		}
-		n, err := src.Read(buf)
+		n, err := src.Read(readBuf)
 		if n > 0 {
-			if _, wErr := out.Write(buf[:n]); wErr != nil {
+			if out == nil {
+				out, err = os.OpenFile(chunkPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultChunkFilePerm)
+				if err != nil {
+					return false, err
+				}
+			}
+			if _, wErr := out.Write(readBuf[:n]); wErr != nil {
 				return false, wErr
 			}
 			written += int64(n)

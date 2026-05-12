@@ -1151,9 +1151,9 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 	if toHeader == "" {
 		toHeader = "root"
 	}
-	email.WriteString(fmt.Sprintf("To: %s\n", toHeader))
-	email.WriteString(fmt.Sprintf("From: %s\n", e.config.From))
-	email.WriteString(fmt.Sprintf("Subject: =?UTF-8?B?%s?=\n", encodedSubject))
+	fmt.Fprintf(&email, "To: %s\n", toHeader)
+	fmt.Fprintf(&email, "From: %s\n", e.config.From)
+	fmt.Fprintf(&email, "Subject: =?UTF-8?B?%s?=\n", encodedSubject)
 	email.WriteString("MIME-Version: 1.0\n")
 
 	// Decide whether to attach log file
@@ -1170,16 +1170,16 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 			mixedBoundary := "mixed_boundary_42"
 			altBoundary := "alt_boundary_42"
 
-			email.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\n", mixedBoundary))
+			fmt.Fprintf(&email, "Content-Type: multipart/mixed; boundary=\"%s\"\n", mixedBoundary)
 			email.WriteString("\n")
 
 			// First part: multipart/alternative with text and HTML bodies
-			email.WriteString(fmt.Sprintf("--%s\n", mixedBoundary))
-			email.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\n", altBoundary))
+			fmt.Fprintf(&email, "--%s\n", mixedBoundary)
+			fmt.Fprintf(&email, "Content-Type: multipart/alternative; boundary=\"%s\"\n", altBoundary)
 			email.WriteString("\n")
 
 			// Plain text part
-			email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
+			fmt.Fprintf(&email, "--%s\n", altBoundary)
 			email.WriteString("Content-Type: text/plain; charset=UTF-8\n")
 			email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 			email.WriteString("\n")
@@ -1187,14 +1187,14 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 			email.WriteString("\n\n")
 
 			// HTML part
-			email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
+			fmt.Fprintf(&email, "--%s\n", altBoundary)
 			email.WriteString("Content-Type: text/html; charset=UTF-8\n")
 			email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 			email.WriteString("\n")
 			email.WriteString(encodeQuotedPrintableBody(htmlBody))
 			email.WriteString("\n\n")
 
-			email.WriteString(fmt.Sprintf("--%s--\n", altBoundary))
+			fmt.Fprintf(&email, "--%s--\n", altBoundary)
 			email.WriteString("\n")
 
 			// Second part: log file attachment (Base64 encoded)
@@ -1203,9 +1203,9 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 				filename = "backup.log"
 			}
 
-			email.WriteString(fmt.Sprintf("--%s\n", mixedBoundary))
-			email.WriteString(fmt.Sprintf("Content-Type: text/plain; charset=UTF-8; name=\"%s\"\n", filename))
-			email.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\n", filename))
+			fmt.Fprintf(&email, "--%s\n", mixedBoundary)
+			fmt.Fprintf(&email, "Content-Type: text/plain; charset=UTF-8; name=\"%s\"\n", filename)
+			fmt.Fprintf(&email, "Content-Disposition: attachment; filename=\"%s\"\n", filename)
 			email.WriteString("Content-Transfer-Encoding: base64\n")
 			email.WriteString("\n")
 
@@ -1220,18 +1220,18 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 				email.WriteString("\n")
 			}
 			email.WriteString("\n")
-			email.WriteString(fmt.Sprintf("--%s--\n", mixedBoundary))
+			fmt.Fprintf(&email, "--%s--\n", mixedBoundary)
 		}
 	}
 
 	if !attachLog {
 		// Fallback / default: simple multipart/alternative (no attachment)
 		altBoundary := "boundary42"
-		email.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\n", altBoundary))
+		fmt.Fprintf(&email, "Content-Type: multipart/alternative; boundary=\"%s\"\n", altBoundary)
 		email.WriteString("\n")
 
 		// Plain text part
-		email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
+		fmt.Fprintf(&email, "--%s\n", altBoundary)
 		email.WriteString("Content-Type: text/plain; charset=UTF-8\n")
 		email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 		email.WriteString("\n")
@@ -1239,14 +1239,14 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 		email.WriteString("\n\n")
 
 		// HTML part
-		email.WriteString(fmt.Sprintf("--%s\n", altBoundary))
+		fmt.Fprintf(&email, "--%s\n", altBoundary)
 		email.WriteString("Content-Type: text/html; charset=UTF-8\n")
 		email.WriteString("Content-Transfer-Encoding: quoted-printable\n")
 		email.WriteString("\n")
 		email.WriteString(encodeQuotedPrintableBody(htmlBody))
 		email.WriteString("\n\n")
 
-		email.WriteString(fmt.Sprintf("--%s--\n", altBoundary))
+		fmt.Fprintf(&email, "--%s--\n", altBoundary)
 	}
 
 	e.logger.Debug("Email message built (%d bytes)", email.Len())

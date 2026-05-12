@@ -574,7 +574,7 @@ func createTestBundleAt(t *testing.T, bundlePath string, entries []bundleEntry) 
 	if err != nil {
 		t.Fatalf("create bundle: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	tw := tar.NewWriter(f)
 	for _, entry := range entries {
@@ -1496,14 +1496,26 @@ func TestDecryptWithIdentity_CreateOutputError(t *testing.T) {
 
 	// Create encrypted file
 	encPath := filepath.Join(dir, "file.age")
-	f, _ := os.Create(encPath)
-	w, _ := age.Encrypt(f, id.Recipient())
-	w.Write([]byte("data"))
-	w.Close()
-	f.Close()
+	f, err := os.Create(encPath)
+	if err != nil {
+		t.Fatalf("create encrypted file: %v", err)
+	}
+	w, err := age.Encrypt(f, id.Recipient())
+	if err != nil {
+		t.Fatalf("age encrypt: %v", err)
+	}
+	if _, err := w.Write([]byte("data")); err != nil {
+		t.Fatalf("write encrypted file: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close age writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close encrypted file: %v", err)
+	}
 
 	// Try to write to nonexistent directory
-	err := decryptWithIdentity(encPath, "/nonexistent/dir/out", id)
+	err = decryptWithIdentity(encPath, "/nonexistent/dir/out", id)
 	if err == nil {
 		t.Fatal("expected error for nonexistent output directory")
 	}
@@ -1524,14 +1536,26 @@ func TestDecryptWithIdentity_WrongIdentity(t *testing.T) {
 	// Create encrypted file with correct identity
 	encPath := filepath.Join(dir, "file.age")
 	outPath := filepath.Join(dir, "file.out")
-	f, _ := os.Create(encPath)
-	w, _ := age.Encrypt(f, correctID.Recipient())
-	w.Write([]byte("data"))
-	w.Close()
-	f.Close()
+	f, err := os.Create(encPath)
+	if err != nil {
+		t.Fatalf("create encrypted file: %v", err)
+	}
+	w, err := age.Encrypt(f, correctID.Recipient())
+	if err != nil {
+		t.Fatalf("age encrypt: %v", err)
+	}
+	if _, err := w.Write([]byte("data")); err != nil {
+		t.Fatalf("write encrypted file: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close age writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close encrypted file: %v", err)
+	}
 
 	// Try to decrypt with wrong identity
-	err := decryptWithIdentity(encPath, outPath, wrongID)
+	err = decryptWithIdentity(encPath, outPath, wrongID)
 	if err == nil {
 		t.Fatal("expected error for wrong identity")
 	}
@@ -1577,11 +1601,23 @@ func TestDecryptArchiveWithPrompts_EmptyInputRetries(t *testing.T) {
 	// Create encrypted file
 	encPath := filepath.Join(dir, "file.age")
 	outPath := filepath.Join(dir, "file.out")
-	f, _ := os.Create(encPath)
-	w, _ := age.Encrypt(f, id.Recipient())
-	w.Write([]byte("data"))
-	w.Close()
-	f.Close()
+	f, err := os.Create(encPath)
+	if err != nil {
+		t.Fatalf("create encrypted file: %v", err)
+	}
+	w, err := age.Encrypt(f, id.Recipient())
+	if err != nil {
+		t.Fatalf("age encrypt: %v", err)
+	}
+	if _, err := w.Write([]byte("data")); err != nil {
+		t.Fatalf("write encrypted file: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close age writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close encrypted file: %v", err)
+	}
 
 	// First return empty, then correct key
 	inputs := [][]byte{
@@ -1602,7 +1638,7 @@ func TestDecryptArchiveWithPrompts_EmptyInputRetries(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
 
-	err := decryptArchiveWithPrompts(context.Background(), nil, encPath, outPath, logger)
+	err = decryptArchiveWithPrompts(context.Background(), nil, encPath, outPath, logger)
 	if err != nil {
 		t.Fatalf("decryptArchiveWithPrompts error: %v", err)
 	}
@@ -1799,16 +1835,27 @@ func TestSelectDecryptCandidate_RequireEncryptedFiltersPlain(t *testing.T) {
 	// Create dir with encrypted backup
 	encDir := t.TempDir()
 	archive := filepath.Join(encDir, "enc.tar.xz.age.bundle.tar")
-	f, _ := os.Create(archive)
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
 	tw := tar.NewWriter(f)
 	manifestData, _ := json.Marshal(&backup.Manifest{
 		ArchivePath:    filepath.Join(encDir, "enc.tar.xz.age"),
 		EncryptionMode: "age",
 	})
-	tw.WriteHeader(&tar.Header{Name: "enc.metadata", Size: int64(len(manifestData)), Mode: 0o600})
-	tw.Write(manifestData)
-	tw.Close()
-	f.Close()
+	if err := tw.WriteHeader(&tar.Header{Name: "enc.metadata", Size: int64(len(manifestData)), Mode: 0o600}); err != nil {
+		t.Fatalf("write manifest header: %v", err)
+	}
+	if _, err := tw.Write(manifestData); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
 
 	cfg := &config.Config{
 		BackupPath:       plainDir,
@@ -2173,16 +2220,32 @@ func TestExtractBundleToWorkdir_WithFakeFS(t *testing.T) {
 	}
 	tw := tar.NewWriter(f)
 	content := []byte("archive content")
-	tw.WriteHeader(&tar.Header{Name: "archive.tar.xz", Size: int64(len(content)), Mode: 0o600})
-	tw.Write(content)
+	if err := tw.WriteHeader(&tar.Header{Name: "archive.tar.xz", Size: int64(len(content)), Mode: 0o600}); err != nil {
+		t.Fatalf("write archive header: %v", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatalf("write archive content: %v", err)
+	}
 	meta := []byte("{}")
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(meta)), Mode: 0o600})
-	tw.Write(meta)
+	if err := tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(meta)), Mode: 0o600}); err != nil {
+		t.Fatalf("write metadata header: %v", err)
+	}
+	if _, err := tw.Write(meta); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
 	checksum := []byte("abcd1234")
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o600})
-	tw.Write(checksum)
-	tw.Close()
-	f.Close()
+	if err := tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksum)), Mode: 0o600}); err != nil {
+		t.Fatalf("write checksum header: %v", err)
+	}
+	if _, err := tw.Write(checksum); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close bundle file: %v", err)
+	}
 
 	// We need to add the bundle to FakeFS - extractBundleToWorkdir uses restoreFS.Open
 	// which translates the path, but the file exists in the real FS, not the fake one.
@@ -2285,7 +2348,9 @@ func TestInspectRcloneBundleManifest_TarReadErrorInLoop(t *testing.T) {
 		t.Fatalf("write data: %v", err)
 	}
 	// Don't close properly to leave truncated tar
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close truncated bundle: %v", err)
+	}
 
 	// Create fake rclone that cats the truncated bundle
 	scriptPath := filepath.Join(tmpDir, "rclone")
@@ -2327,8 +2392,12 @@ func TestInspectRcloneBundleManifest_UnmarshalError(t *testing.T) {
 	if _, err := tw.Write(invalidJSON); err != nil {
 		t.Fatalf("write data: %v", err)
 	}
-	tw.Close()
-	f.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close bundle file: %v", err)
+	}
 
 	// Create fake rclone that cats the bundle
 	scriptPath := filepath.Join(tmpDir, "rclone")
@@ -2378,8 +2447,12 @@ func TestInspectRcloneBundleManifest_ValidManifest(t *testing.T) {
 	if _, err := tw.Write(manifestData); err != nil {
 		t.Fatalf("write data: %v", err)
 	}
-	tw.Close()
-	f.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close bundle file: %v", err)
+	}
 
 	// Create fake rclone that cats the bundle
 	scriptPath := filepath.Join(tmpDir, "rclone")
@@ -2570,6 +2643,16 @@ func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
 	}
 }
 
+func TestCopyRawArtifactsToWorkdirWithLogger_NilCandidate(t *testing.T) {
+	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), nil, t.TempDir(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil candidate")
+	}
+	if !strings.Contains(err.Error(), "candidate is nil") {
+		t.Fatalf("expected 'candidate is nil' error, got: %v", err)
+	}
+}
+
 func TestCopyRawArtifactsToWorkdir_InvalidRclonePaths(t *testing.T) {
 	origFS := restoreFS
 	restoreFS = osFS{}
@@ -2637,11 +2720,23 @@ func TestDecryptArchiveWithPrompts_InvalidIdentityThenValid(t *testing.T) {
 	// Create encrypted file
 	encPath := filepath.Join(dir, "file.age")
 	outPath := filepath.Join(dir, "file.out")
-	f, _ := os.Create(encPath)
-	w, _ := age.Encrypt(f, id.Recipient())
-	w.Write([]byte("secret data"))
-	w.Close()
-	f.Close()
+	f, err := os.Create(encPath)
+	if err != nil {
+		t.Fatalf("create encrypted file: %v", err)
+	}
+	w, err := age.Encrypt(f, id.Recipient())
+	if err != nil {
+		t.Fatalf("age encrypt: %v", err)
+	}
+	if _, err := w.Write([]byte("secret data")); err != nil {
+		t.Fatalf("write encrypted file: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close age writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close encrypted file: %v", err)
+	}
 
 	// First return invalid key format, then correct key
 	inputs := [][]byte{
@@ -2661,7 +2756,7 @@ func TestDecryptArchiveWithPrompts_InvalidIdentityThenValid(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
 
-	err := decryptArchiveWithPrompts(context.Background(), nil, encPath, outPath, logger)
+	err = decryptArchiveWithPrompts(context.Background(), nil, encPath, outPath, logger)
 	if err != nil {
 		t.Fatalf("decryptArchiveWithPrompts error: %v", err)
 	}
@@ -2809,11 +2904,23 @@ func TestPreparePlainBundle_AgeDecryptionWithRclone(t *testing.T) {
 	// Create an encrypted archive
 	id, _ := age.GenerateX25519Identity()
 	archivePath := filepath.Join(tmpDir, "backup.tar.xz.age")
-	f, _ := os.Create(archivePath)
-	w, _ := age.Encrypt(f, id.Recipient())
-	w.Write([]byte("encrypted content"))
-	w.Close()
-	f.Close()
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create encrypted archive: %v", err)
+	}
+	w, err := age.Encrypt(f, id.Recipient())
+	if err != nil {
+		t.Fatalf("age encrypt: %v", err)
+	}
+	if _, err := w.Write([]byte("encrypted content")); err != nil {
+		t.Fatalf("write encrypted archive: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close age writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close encrypted archive: %v", err)
+	}
 
 	// Create bundle tar containing the encrypted archive
 	bundlePath := filepath.Join(tmpDir, "backup.bundle.tar")
@@ -2822,8 +2929,12 @@ func TestPreparePlainBundle_AgeDecryptionWithRclone(t *testing.T) {
 
 	// Add archive
 	archiveContent, _ := os.ReadFile(archivePath)
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz.age", Size: int64(len(archiveContent)), Mode: 0o600})
-	tw.Write(archiveContent)
+	if err := tw.WriteHeader(&tar.Header{Name: "backup.tar.xz.age", Size: int64(len(archiveContent)), Mode: 0o600}); err != nil {
+		t.Fatalf("write archive header: %v", err)
+	}
+	if _, err := tw.Write(archiveContent); err != nil {
+		t.Fatalf("write archive content: %v", err)
+	}
 
 	// Add metadata
 	manifest := &backup.Manifest{
@@ -2831,16 +2942,28 @@ func TestPreparePlainBundle_AgeDecryptionWithRclone(t *testing.T) {
 		EncryptionMode: "age",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(manifestData)), Mode: 0o600})
-	tw.Write(manifestData)
+	if err := tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(manifestData)), Mode: 0o600}); err != nil {
+		t.Fatalf("write metadata header: %v", err)
+	}
+	if _, err := tw.Write(manifestData); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
 
 	// Add checksum
 	checksumData := checksumLineForBytes("backup.tar.xz.age", archiveContent)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksumData)), Mode: 0o600})
-	tw.Write(checksumData)
+	if err := tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksumData)), Mode: 0o600}); err != nil {
+		t.Fatalf("write checksum header: %v", err)
+	}
+	if _, err := tw.Write(checksumData); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
 
-	tw.Close()
-	bf.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := bf.Close(); err != nil {
+		t.Fatalf("close bundle file: %v", err)
+	}
 
 	// Create fake rclone
 	scriptPath := filepath.Join(binDir, "rclone")
@@ -3086,31 +3209,52 @@ func TestExtractBundleToWorkdir_SkipsDirectories(t *testing.T) {
 	// Create bundle with directory entries
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "bundle.tar")
-	f, _ := os.Create(bundlePath)
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
 	tw := tar.NewWriter(f)
 
 	// Add directory entry (should be skipped)
-	tw.WriteHeader(&tar.Header{
+	if err := tw.WriteHeader(&tar.Header{
 		Name:     "subdir/",
 		Mode:     0o755,
 		Typeflag: tar.TypeDir,
-	})
+	}); err != nil {
+		t.Fatalf("write directory header: %v", err)
+	}
 
 	// Add files
 	archiveData := []byte("archive content")
-	tw.WriteHeader(&tar.Header{Name: "subdir/archive.tar.xz", Size: int64(len(archiveData)), Mode: 0o600})
-	tw.Write(archiveData)
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/archive.tar.xz", Size: int64(len(archiveData)), Mode: 0o600}); err != nil {
+		t.Fatalf("write archive header: %v", err)
+	}
+	if _, err := tw.Write(archiveData); err != nil {
+		t.Fatalf("write archive content: %v", err)
+	}
 
 	metaData := []byte("{}")
-	tw.WriteHeader(&tar.Header{Name: "subdir/backup.metadata", Size: int64(len(metaData)), Mode: 0o600})
-	tw.Write(metaData)
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/backup.metadata", Size: int64(len(metaData)), Mode: 0o600}); err != nil {
+		t.Fatalf("write metadata header: %v", err)
+	}
+	if _, err := tw.Write(metaData); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
 
 	sumData := []byte("checksum")
-	tw.WriteHeader(&tar.Header{Name: "subdir/backup.sha256", Size: int64(len(sumData)), Mode: 0o600})
-	tw.Write(sumData)
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/backup.sha256", Size: int64(len(sumData)), Mode: 0o600}); err != nil {
+		t.Fatalf("write checksum header: %v", err)
+	}
+	if _, err := tw.Write(sumData); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
 
-	tw.Close()
-	f.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close bundle file: %v", err)
+	}
 
 	staged, err := extractBundleToWorkdirWithLogger(bundlePath, workDir, nil)
 	if err != nil {
@@ -3135,27 +3279,46 @@ func TestPreparePlainBundle_SourceBundleAdditional(t *testing.T) {
 
 	// Create a valid bundle tar with plain archive
 	bundlePath := filepath.Join(dir, "backup.bundle.tar")
-	f, _ := os.Create(bundlePath)
+	f, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
 	tw := tar.NewWriter(f)
 
 	archiveData := []byte("archive content")
-	tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o600})
-	tw.Write(archiveData)
+	if err := tw.WriteHeader(&tar.Header{Name: "backup.tar.xz", Size: int64(len(archiveData)), Mode: 0o600}); err != nil {
+		t.Fatalf("write archive header: %v", err)
+	}
+	if _, err := tw.Write(archiveData); err != nil {
+		t.Fatalf("write archive content: %v", err)
+	}
 
 	manifest := &backup.Manifest{
 		ArchivePath:    "/backup.tar.xz",
 		EncryptionMode: "none",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(manifestData)), Mode: 0o600})
-	tw.Write(manifestData)
+	if err := tw.WriteHeader(&tar.Header{Name: "backup.metadata", Size: int64(len(manifestData)), Mode: 0o600}); err != nil {
+		t.Fatalf("write metadata header: %v", err)
+	}
+	if _, err := tw.Write(manifestData); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
 
 	checksumData := checksumLineForBytes("backup.tar.xz", archiveData)
-	tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksumData)), Mode: 0o600})
-	tw.Write(checksumData)
+	if err := tw.WriteHeader(&tar.Header{Name: "backup.sha256", Size: int64(len(checksumData)), Mode: 0o600}); err != nil {
+		t.Fatalf("write checksum header: %v", err)
+	}
+	if _, err := tw.Write(checksumData); err != nil {
+		t.Fatalf("write checksum: %v", err)
+	}
 
-	tw.Close()
-	f.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close bundle file: %v", err)
+	}
 
 	cand := &backupCandidate{
 		Manifest:   manifest,
@@ -3249,14 +3412,26 @@ func TestDecryptWithIdentity_WrongKey(t *testing.T) {
 
 	encPath := filepath.Join(dir, "file.age")
 	outPath := filepath.Join(dir, "file.out")
-	f, _ := os.Create(encPath)
-	w, _ := age.Encrypt(f, correctID.Recipient())
-	w.Write([]byte("secret data"))
-	w.Close()
-	f.Close()
+	f, err := os.Create(encPath)
+	if err != nil {
+		t.Fatalf("create encrypted file: %v", err)
+	}
+	w, err := age.Encrypt(f, correctID.Recipient())
+	if err != nil {
+		t.Fatalf("age encrypt: %v", err)
+	}
+	if _, err := w.Write([]byte("secret data")); err != nil {
+		t.Fatalf("write encrypted file: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close age writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close encrypted file: %v", err)
+	}
 
 	// Try to decrypt with wrong key
-	err := decryptWithIdentity(encPath, outPath, wrongID)
+	err = decryptWithIdentity(encPath, outPath, wrongID)
 	if err == nil {
 		t.Fatal("expected error when decrypting with wrong key")
 	}
@@ -3505,8 +3680,12 @@ func TestExtractBundleToWorkdir_OpenFileErrorOnExtract(t *testing.T) {
 	if _, err := tw.Write(checksum); err != nil {
 		t.Fatalf("write checksum: %v", err)
 	}
-	tw.Close()
-	bundleFile.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := bundleFile.Close(); err != nil {
+		t.Fatalf("close bundle file: %v", err)
+	}
 
 	workDir := filepath.Join(tmp, "work")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -3550,12 +3729,23 @@ func TestInspectRcloneBundleManifest_ManifestFoundWithWaitErr(t *testing.T) {
 
 	// Create a tar file with manifest
 	tarPath := filepath.Join(tmp, "bundle.tar")
-	tarFile, _ := os.Create(tarPath)
+	tarFile, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatalf("create tar: %v", err)
+	}
 	tw := tar.NewWriter(tarFile)
-	tw.WriteHeader(&tar.Header{Name: "test.manifest.json", Size: int64(len(manifestJSON)), Mode: 0o640})
-	tw.Write(manifestJSON)
-	tw.Close()
-	tarFile.Close()
+	if err := tw.WriteHeader(&tar.Header{Name: "test.manifest.json", Size: int64(len(manifestJSON)), Mode: 0o640}); err != nil {
+		t.Fatalf("write manifest header: %v", err)
+	}
+	if _, err := tw.Write(manifestJSON); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := tarFile.Close(); err != nil {
+		t.Fatalf("close tar file: %v", err)
+	}
 
 	// Script that outputs the tar and then exits with error
 	script := fmt.Sprintf(`#!/bin/bash
@@ -3963,13 +4153,22 @@ func TestInspectRcloneBundleManifest_ReadManifestError(t *testing.T) {
 
 	// Create a tar file with a metadata entry that has invalid JSON
 	tarPath := filepath.Join(tmp, "bundle.tar")
-	tarFile, _ := os.Create(tarPath)
+	tarFile, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatalf("create tar: %v", err)
+	}
 	tw := tar.NewWriter(tarFile)
 	// Write header with size larger than actual data to cause read error
-	tw.WriteHeader(&tar.Header{Name: "test.metadata", Size: 1000, Mode: 0o640})
-	tw.Write([]byte("partial"))
-	tw.Close()
-	tarFile.Close()
+	if err := tw.WriteHeader(&tar.Header{Name: "test.metadata", Size: 1000, Mode: 0o640}); err != nil {
+		t.Fatalf("write metadata header: %v", err)
+	}
+	if _, err := tw.Write([]byte("partial")); err != nil {
+		t.Fatalf("write partial metadata: %v", err)
+	}
+	_ = tw.Close()
+	if err := tarFile.Close(); err != nil {
+		t.Fatalf("close tar file: %v", err)
+	}
 
 	script := fmt.Sprintf(`#!/bin/bash
 cat "%s"
@@ -3983,7 +4182,7 @@ cat "%s"
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := inspectRcloneBundleManifest(ctx, "remote:bundle.tar", logger)
+	_, err = inspectRcloneBundleManifest(ctx, "remote:bundle.tar", logger)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -4001,10 +4200,17 @@ func TestInspectRcloneBundleManifest_ManifestNilWithWaitErr(t *testing.T) {
 
 	// Create an empty tar file
 	tarPath := filepath.Join(tmp, "empty.tar")
-	tarFile, _ := os.Create(tarPath)
+	tarFile, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatalf("create tar: %v", err)
+	}
 	tw := tar.NewWriter(tarFile)
-	tw.Close()
-	tarFile.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := tarFile.Close(); err != nil {
+		t.Fatalf("close tar file: %v", err)
+	}
 
 	script := fmt.Sprintf(`#!/bin/bash
 cat "%s"
@@ -4019,7 +4225,7 @@ exit 1
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := inspectRcloneBundleManifest(ctx, "remote:bundle.tar", logger)
+	_, err = inspectRcloneBundleManifest(ctx, "remote:bundle.tar", logger)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -4040,13 +4246,23 @@ func TestInspectRcloneBundleManifest_SkipsDirectories(t *testing.T) {
 	tw := tar.NewWriter(tarFile)
 
 	// Add a directory entry
-	tw.WriteHeader(&tar.Header{Name: "subdir/", Typeflag: tar.TypeDir, Mode: 0o755})
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/", Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+		t.Fatalf("write directory header: %v", err)
+	}
 
 	// Add manifest
-	tw.WriteHeader(&tar.Header{Name: "subdir/test.metadata", Size: int64(len(manifestJSON)), Mode: 0o640})
-	tw.Write(manifestJSON)
-	tw.Close()
-	tarFile.Close()
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/test.metadata", Size: int64(len(manifestJSON)), Mode: 0o640}); err != nil {
+		t.Fatalf("write manifest header: %v", err)
+	}
+	if _, err := tw.Write(manifestJSON); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := tarFile.Close(); err != nil {
+		t.Fatalf("close tar file: %v", err)
+	}
 
 	rcloneScript := filepath.Join(tmp, "rclone")
 	script := fmt.Sprintf(`#!/bin/bash
@@ -4116,15 +4332,26 @@ func TestExtractBundleToWorkdir_RelPathError(t *testing.T) {
 	// Create a tar with an entry that would cause filepath.Rel to fail
 	// This is hard to trigger naturally, but we can test the escape check
 	bundlePath := filepath.Join(tmp, "bundle.tar")
-	bundleFile, _ := os.Create(bundlePath)
+	bundleFile, err := os.Create(bundlePath)
+	if err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
 	tw := tar.NewWriter(bundleFile)
 
 	// Add file with path traversal attempt
 	archiveData := []byte("archive content")
-	tw.WriteHeader(&tar.Header{Name: "../../../etc/passwd", Size: int64(len(archiveData)), Mode: 0o640})
-	tw.Write(archiveData)
-	tw.Close()
-	bundleFile.Close()
+	if err := tw.WriteHeader(&tar.Header{Name: "../../../etc/passwd", Size: int64(len(archiveData)), Mode: 0o640}); err != nil {
+		t.Fatalf("write traversal header: %v", err)
+	}
+	if _, err := tw.Write(archiveData); err != nil {
+		t.Fatalf("write traversal content: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := bundleFile.Close(); err != nil {
+		t.Fatalf("close bundle file: %v", err)
+	}
 
 	workDir := filepath.Join(tmp, "work")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -4136,7 +4363,7 @@ func TestExtractBundleToWorkdir_RelPathError(t *testing.T) {
 	defer func() { restoreFS = orig }()
 
 	logger := logging.New(types.LogLevelError, false)
-	_, err := extractBundleToWorkdirWithLogger(bundlePath, workDir, logger)
+	_, err = extractBundleToWorkdirWithLogger(bundlePath, workDir, logger)
 	if err == nil {
 		t.Fatalf("expected error for path traversal, got nil")
 	}
@@ -4261,7 +4488,7 @@ func (f *fakeStatThenRemoveFS) Stat(path string) (os.FileInfo, error) {
 	}
 	// After stat succeeds, remove the file so GenerateChecksum can't open it
 	if strings.Contains(path, "proxmox-decrypt") && strings.HasSuffix(path, ".tar.xz") {
-		os.Remove(path)
+		_ = os.Remove(path)
 	}
 	return info, nil
 }
@@ -4318,7 +4545,9 @@ func TestPreparePlainBundle_MkdirAllErrorAfterRcloneDownload(t *testing.T) {
 	// Create fake rclone that downloads a valid bundle
 	fakeRclone := filepath.Join(tmp, "rclone")
 	bundleDir := filepath.Join(tmp, "bundles")
-	os.MkdirAll(bundleDir, 0o755)
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatalf("mkdir bundle dir: %v", err)
+	}
 
 	// Create the bundle that will be "downloaded"
 	sourceBundlePath := filepath.Join(bundleDir, "backup.bundle.tar")
@@ -4334,7 +4563,9 @@ if [[ "$1" == "copyto" ]]; then
 fi
 exit 0
 `, sourceBundlePath)
-	os.WriteFile(fakeRclone, []byte(script), 0o755)
+	if err := os.WriteFile(fakeRclone, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
 
 	prependPathEnv(t, tmp)
 

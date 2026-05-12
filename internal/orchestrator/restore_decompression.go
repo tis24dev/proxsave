@@ -96,7 +96,7 @@ func runRestoreCommandStream(ctx context.Context, name string, stdin io.Reader, 
 		return nil, fmt.Errorf("create %s pipe: %w", name, err)
 	}
 	if err := cmd.Start(); err != nil {
-		stdout.Close()
+		_ = stdout.Close()
 		return nil, fmt.Errorf("start %s: %w", name, err)
 	}
 	return &waitReadCloser{ReadCloser: stdout, wait: cmd.Wait}, nil

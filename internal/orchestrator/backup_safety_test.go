@@ -225,7 +225,7 @@ func TestBackupFileAndDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gzip reader error: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	tr := tar.NewReader(reader)
 
 	var files []string
@@ -663,13 +663,13 @@ func TestCreateSafetyBackupArchivesSelectedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open archive: %v", err)
 	}
-	defer archiveFile.Close()
+	defer func() { _ = archiveFile.Close() }()
 
 	gzr, err := gzip.NewReader(archiveFile)
 	if err != nil {
 		t.Fatalf("gzip reader: %v", err)
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 	tr := tar.NewReader(gzr)
 
 	var entries []string
@@ -1416,7 +1416,7 @@ func TestRestoreSafetyBackup_FileCreationError(t *testing.T) {
 	if err := os.Chmod(subDir, 0o444); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(subDir, 0o755) })
+	t.Cleanup(func() { _ = os.Chmod(subDir, 0o755) })
 
 	err := RestoreSafetyBackup(logger, backupPath, restoreDir)
 	// Should not fail, just log warning
@@ -1823,8 +1823,12 @@ func TestBackupDirectory_WalkError(t *testing.T) {
 		t.Fatal("expected error for non-existent directory")
 	}
 
-	tw.Close()
-	gzw.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar writer close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip writer close failed: %v", err)
+	}
 }
 
 // =====================================
@@ -1846,8 +1850,12 @@ func TestBackupFile_OpenError(t *testing.T) {
 		t.Fatal("expected error for non-existent file")
 	}
 
-	tw.Close()
-	gzw.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar writer close failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip writer close failed: %v", err)
+	}
 }
 
 func TestBackupFile_LargeFile(t *testing.T) {

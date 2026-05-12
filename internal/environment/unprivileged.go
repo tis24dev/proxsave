@@ -335,23 +335,6 @@ func formatIDMapDetails(label string, info IDMapOutsideZeroInfo) string {
 	}
 }
 
-func formatFileValueDetails(label string, info FileValueInfo) string {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		label = "value"
-	}
-	switch {
-	case info.OK && strings.TrimSpace(info.Value) != "":
-		return fmt.Sprintf("%s=%s", label, strings.TrimSpace(info.Value))
-	case info.OK:
-		return fmt.Sprintf("%s=empty", label)
-	case info.ReadError != "":
-		return fmt.Sprintf("%s=unavailable(err=%s)", label, info.ReadError)
-	default:
-		return fmt.Sprintf("%s=unavailable", label)
-	}
-}
-
 func formatSimpleDetails(label, value, emptyValue string) string {
 	label = strings.TrimSpace(label)
 	if label == "" {

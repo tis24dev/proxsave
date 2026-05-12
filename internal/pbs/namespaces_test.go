@@ -207,13 +207,13 @@ func TestHelperProcess(t *testing.T) {
 
 	switch os.Getenv("PBS_HELPER_SCENARIO") {
 	case "cli-success":
-		fmt.Fprint(os.Stdout, `{"data":[{"ns":"","path":"/mnt/datastore","comment":"root namespace"},{"ns":"prod","path":"/mnt/datastore/prod","parent":"","ctime":1700000000}]}`)
+		_, _ = fmt.Fprint(os.Stdout, `{"data":[{"ns":"","path":"/mnt/datastore","comment":"root namespace"},{"ns":"prod","path":"/mnt/datastore/prod","parent":"","ctime":1700000000}]}`)
 		os.Exit(0)
 	case "cli-error":
-		fmt.Fprint(os.Stderr, "CLI exploded")
+		_, _ = fmt.Fprint(os.Stderr, "CLI exploded")
 		os.Exit(1)
 	default:
-		fmt.Fprint(os.Stderr, "unknown scenario")
+		_, _ = fmt.Fprint(os.Stderr, "unknown scenario")
 		os.Exit(2)
 	}
 }

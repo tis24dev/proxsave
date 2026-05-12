@@ -62,6 +62,41 @@ func tarBytes(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
+func TestReadRestoreDecisionMetadataAcceptsNulTypeFlag(t *testing.T) {
+	const nulTypeFlag byte = 0
+
+	data := []byte("BACKUP_TYPE=pbs\n")
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     "var/lib/proxsave-info/backup_metadata.txt",
+		Typeflag: nulTypeFlag,
+		Mode:     0o640,
+		Size:     int64(len(data)),
+	}); err != nil {
+		t.Fatalf("WriteHeader: %v", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close tar writer: %v", err)
+	}
+
+	tr := tar.NewReader(&buf)
+	header, err := tr.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	got, err := readRestoreDecisionMetadata(tr, header)
+	if err != nil {
+		t.Fatalf("readRestoreDecisionMetadata: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Fatalf("metadata=%q; want %q", string(got), string(data))
+	}
+}
+
 func TestAnalyzeRestoreArchive_UsesInternalMetadataWhenCategoriesAreCommonOnly(t *testing.T) {
 	origRestoreFS := restoreFS
 	t.Cleanup(func() { restoreFS = origRestoreFS })
@@ -184,7 +219,7 @@ func TestCollectRestoreArchiveFacts_RejectsOversizedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Open: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	archivePaths, metadata, metadataErr, err := collectRestoreArchiveFacts(tar.NewReader(file))
 	if err != nil {

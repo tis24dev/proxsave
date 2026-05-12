@@ -1,3 +1,4 @@
+// Package orchestrator coordinates backup, restore, decrypt, and related workflows.
 package orchestrator
 
 import (
@@ -11,8 +12,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 const mountGuardBaseDir = "/var/lib/proxsave/guards"
@@ -30,242 +29,69 @@ var (
 	mountGuardParsePBSDatastoreCfg   = parsePBSDatastoreCfgBlocks
 )
 
-func maybeApplyPBSDatastoreMountGuards(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot, destRoot string, dryRun bool) error {
-	if plan == nil || !plan.SystemType.SupportsPBS() || !plan.HasCategoryID("datastore_pbs") {
-		return nil
-	}
-	if strings.TrimSpace(stageRoot) == "" {
-		return nil
-	}
-	if filepath.Clean(strings.TrimSpace(destRoot)) != string(os.PathSeparator) {
-		if logger != nil {
-			logger.Debug("Skipping PBS mount guards: restore destination is not system root (dest=%s)", destRoot)
-		}
-		return nil
-	}
-
-	if dryRun {
-		if logger != nil {
-			logger.Info("Dry run enabled: skipping PBS mount guards")
-		}
-		return nil
-	}
-	if !isRealRestoreFS(restoreFS) {
-		if logger != nil {
-			logger.Debug("Skipping PBS mount guards: non-system filesystem in use")
-		}
-		return nil
-	}
-	if mountGuardGeteuid() != 0 {
-		if logger != nil {
-			logger.Warning("Skipping PBS mount guards: requires root privileges")
-		}
-		return nil
-	}
-
-	stagePath := filepath.Join(stageRoot, "etc/proxmox-backup/datastore.cfg")
-	data, err := restoreFS.ReadFile(stagePath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("read staged datastore.cfg: %w", err)
-	}
-	if strings.TrimSpace(string(data)) == "" {
-		return nil
-	}
-
-	normalized, _ := normalizePBSDatastoreCfgContent(string(data))
-	blocks, err := mountGuardParsePBSDatastoreCfg(normalized)
-	if err != nil {
-		return err
-	}
-	if len(blocks) == 0 {
-		return nil
-	}
-
-	var fstabMounts map[string]struct{}
-	var mountpointCandidates []string
-	currentFstab := filepath.Join(destRoot, "etc", "fstab")
-	if mounts, err := mountGuardFstabMountpointsSet(currentFstab); err != nil {
-		if logger != nil {
-			logger.Warning("PBS mount guard: unable to parse current fstab %s: %v (continuing without fstab cross-check)", currentFstab, err)
-		}
-	} else {
-		fstabMounts = mounts
-		for mp := range mounts {
-			if mp == "" || mp == "." || mp == string(os.PathSeparator) {
-				continue
-			}
-			if !isConfirmableDatastoreMountRoot(mp) {
-				continue
-			}
-			mountpointCandidates = append(mountpointCandidates, mp)
-		}
-		sortByLengthDesc(mountpointCandidates)
-	}
-
-	protected := make(map[string]struct{})
-	for _, block := range blocks {
-		dsPath := filepath.Clean(strings.TrimSpace(block.Path))
-		if dsPath == "" || dsPath == "." || dsPath == string(os.PathSeparator) {
-			continue
-		}
-
-		guardTarget := ""
-		if len(mountpointCandidates) > 0 {
-			guardTarget = firstFstabMountpointMatch(dsPath, mountpointCandidates)
-		}
-		if guardTarget == "" {
-			guardTarget = pbsMountGuardRootForDatastorePath(dsPath)
-		}
-		guardTarget = filepath.Clean(strings.TrimSpace(guardTarget))
-		if guardTarget == "" || guardTarget == "." || guardTarget == string(os.PathSeparator) {
-			continue
-		}
-		if _, seen := protected[guardTarget]; seen {
-			continue
-		}
-
-		// If we can parse /etc/fstab, only guard mountpoints that exist there.
-		// This avoids making local (rootfs) datastores immutable by mistake.
-		if fstabMounts != nil {
-			if _, ok := fstabMounts[guardTarget]; !ok {
-				continue
-			}
-		}
-
-		if err := mountGuardMkdirAll(guardTarget, 0o755); err != nil {
-			if logger != nil {
-				logger.Warning("PBS mount guard: unable to create mountpoint directory %s: %v", guardTarget, err)
-			}
-			continue
-		}
-
-		onRootFS, _, devErr := mountGuardIsPathOnRootFilesystem(guardTarget)
-		if devErr != nil {
-			if logger != nil {
-				logger.Warning("PBS mount guard: unable to determine filesystem device for %s: %v", guardTarget, devErr)
-			}
-			continue
-		}
-		if !onRootFS {
-			continue
-		}
-
-		mounted, mountErr := isMounted(guardTarget)
-		if mountErr != nil && logger != nil {
-			logger.Warning("PBS mount guard: unable to check mount status for %s: %v (continuing)", guardTarget, mountErr)
-		}
-		if mountErr == nil && mounted {
-			if logger != nil {
-				logger.Debug("PBS mount guard: mountpoint %s already mounted, skipping guard", guardTarget)
-			}
-			continue
-		}
-
-		// Best-effort attempt to mount now (the entry may have just been restored to /etc/fstab).
-		// If the storage is online, this avoids applying guards on mountpoints that would mount cleanly.
-		mountCtx, cancel := context.WithTimeout(ctx, mountGuardMountAttemptTimeout)
-		out, attemptErr := restoreCmd.Run(mountCtx, "mount", guardTarget)
-		cancel()
-		if attemptErr == nil {
-			onRootFSNow, _, devErrNow := mountGuardIsPathOnRootFilesystem(guardTarget)
-			if devErrNow == nil && !onRootFSNow {
-				if logger != nil {
-					logger.Info("PBS mount guard: mountpoint %s is now mounted (mount attempt succeeded)", guardTarget)
-				}
-				continue
-			}
-			if mountedNow, mountErrNow := isMounted(guardTarget); mountErrNow == nil && mountedNow {
-				if logger != nil {
-					logger.Info("PBS mount guard: mountpoint %s is now mounted (mount attempt succeeded)", guardTarget)
-				}
-				continue
-			}
-		} else {
-			if logger != nil {
-				if errors.Is(mountCtx.Err(), context.DeadlineExceeded) {
-					logger.Warning("PBS mount guard: mount attempt timed out for %s after %s", guardTarget, mountGuardMountAttemptTimeout)
-				} else {
-					trimmed := strings.TrimSpace(string(out))
-					if trimmed != "" {
-						logger.Debug("PBS mount guard: mount attempt failed for %s: %v (output=%s)", guardTarget, attemptErr, trimmed)
-					} else {
-						logger.Debug("PBS mount guard: mount attempt failed for %s: %v", guardTarget, attemptErr)
-					}
-				}
-			}
-		}
-
-		if logger != nil {
-			logger.Info("PBS mount guard: mountpoint %s offline, applying guard bind mount", guardTarget)
-		}
-
-		if err := guardMountPoint(ctx, guardTarget); err != nil {
-			if logger != nil {
-				logger.Warning("PBS mount guard: failed to bind-mount guard on %s: %v; falling back to chattr +i", guardTarget, err)
-			}
-			if _, fallbackErr := restoreCmd.Run(ctx, "chattr", "+i", guardTarget); fallbackErr != nil {
-				if logger != nil {
-					logger.Warning("PBS mount guard: failed to set immutable attribute on %s: %v", guardTarget, fallbackErr)
-				}
-				continue
-			}
-			protected[guardTarget] = struct{}{}
-			if logger != nil {
-				logger.Warning("PBS mount guard: %s resolves to root filesystem (mount missing?) — marked immutable (chattr +i) to prevent writes until storage is available", guardTarget)
-			}
-			continue
-		}
-
-		protected[guardTarget] = struct{}{}
-		if logger != nil {
-			if entries, err := mountGuardReadDir(guardTarget); err == nil && len(entries) > 0 {
-				logger.Warning("PBS mount guard: guard mount point %s is not empty (entries=%d)", guardTarget, len(entries))
-			}
-			logger.Warning("PBS mount guard: %s resolves to root filesystem (mount missing?) — bind-mounted a read-only guard to prevent writes until storage is available", guardTarget)
-		}
-	}
-
-	return nil
-}
-
 func guardMountPoint(ctx context.Context, guardTarget string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
+	target, err := normalizeGuardMountRequest(ctx, guardTarget)
+	if err != nil {
 		return err
 	}
-
-	target := filepath.Clean(strings.TrimSpace(guardTarget))
-	if target == "" || target == "." || target == string(os.PathSeparator) {
-		return fmt.Errorf("invalid guard target: %q", guardTarget)
-	}
-
-	mounted, err := isMounted(target)
-	if err != nil {
+	if err := ensureGuardTargetUnmounted(target); err != nil {
 		return fmt.Errorf("check mount status: %w", err)
-	}
-	if mounted {
+	} else if isAlreadyMounted(target) {
 		return nil
 	}
 
 	guardDir := guardDirForTarget(target)
+	if err := ensureGuardDirectories(guardDir, target); err != nil {
+		return err
+	}
+	return bindReadOnlyGuard(guardDir, target)
+}
+
+func normalizeGuardMountRequest(ctx context.Context, guardTarget string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	target := filepath.Clean(strings.TrimSpace(guardTarget))
+	if !isValidGuardTarget(target) {
+		return "", fmt.Errorf("invalid guard target: %q", guardTarget)
+	}
+	return target, nil
+}
+
+func ensureGuardTargetUnmounted(target string) error {
+	mounted, err := isMounted(target)
+	if err != nil {
+		return err
+	}
+	if mounted {
+		return nil
+	}
+	return nil
+}
+
+func isAlreadyMounted(target string) bool {
+	mounted, err := isMounted(target)
+	return err == nil && mounted
+}
+
+func ensureGuardDirectories(guardDir, target string) error {
 	if err := mountGuardMkdirAll(guardDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir guard dir: %w", err)
 	}
 	if err := mountGuardMkdirAll(target, 0o755); err != nil {
 		return fmt.Errorf("mkdir target: %w", err)
 	}
+	return nil
+}
 
-	// Bind mount guard directory over the mountpoint to avoid writes to the underlying rootfs path.
+func bindReadOnlyGuard(guardDir, target string) error {
 	if err := mountGuardSysMount(guardDir, target, "", syscall.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind mount guard: %w", err)
 	}
 
-	// Make the bind mount read-only to ensure PBS cannot write backup data to the guard directory.
 	remountFlags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY | syscall.MS_NODEV | syscall.MS_NOSUID | syscall.MS_NOEXEC)
 	if err := mountGuardSysMount("", target, "", remountFlags, ""); err != nil {
 		_ = mountGuardSysUnmount(target, 0)
@@ -355,8 +181,6 @@ func isMountedFromProcMounts(path string) (bool, error) {
 }
 
 func unescapeProcPath(s string) string {
-	// /proc/self/mountinfo uses octal escapes: \040, \011, \012, \134.
-	// Keep it minimal: decode any \XYZ sequence where XYZ are octal digits and the value fits into a byte (0-255).
 	if !strings.Contains(s, "\\") {
 		return s
 	}
@@ -364,29 +188,37 @@ func unescapeProcPath(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); {
-		if s[i] != '\\' || i+3 >= len(s) {
+		if !hasProcOctalEscapeAt(s, i) {
 			_ = b.WriteByte(s[i])
 			i++
 			continue
 		}
 
-		oct := s[i+1 : i+4]
-		if oct[0] < '0' || oct[0] > '7' || oct[1] < '0' || oct[1] > '7' || oct[2] < '0' || oct[2] > '7' {
-			_ = b.WriteByte(s[i])
-			i++
-			continue
-		}
-
-		val := (int(oct[0]-'0') << 6) | (int(oct[1]-'0') << 3) | int(oct[2]-'0')
-		if val > 255 {
-			_ = b.WriteByte(s[i])
-			i++
-			continue
-		}
-		_ = b.WriteByte(byte(val))
+		_ = b.WriteByte(procOctalEscapeValue(s[i+1 : i+4]))
 		i += 4
 	}
 	return b.String()
+}
+
+func hasProcOctalEscapeAt(s string, i int) bool {
+	return i+3 < len(s) &&
+		s[i] == '\\' &&
+		isOctalDigit(s[i+1]) &&
+		isOctalDigit(s[i+2]) &&
+		isOctalDigit(s[i+3]) &&
+		procOctalEscapeInt(s[i+1:i+4]) <= 255
+}
+
+func isOctalDigit(b byte) bool {
+	return b >= '0' && b <= '7'
+}
+
+func procOctalEscapeValue(oct string) byte {
+	return byte(procOctalEscapeInt(oct))
+}
+
+func procOctalEscapeInt(oct string) int {
+	return (int(oct[0]-'0') << 6) | (int(oct[1]-'0') << 3) | int(oct[2]-'0')
 }
 
 func fstabMountpointsSet(path string) (map[string]struct{}, error) {
@@ -464,17 +296,27 @@ func sortByLengthDesc(items []string) {
 
 func firstFstabMountpointMatch(datastorePath string, mountpoints []string) string {
 	ds := filepath.Clean(strings.TrimSpace(datastorePath))
-	if ds == "" || ds == "." || ds == string(os.PathSeparator) {
+	if !isValidGuardTarget(ds) {
 		return ""
 	}
 
 	for _, mp := range mountpoints {
-		if mp == "" || mp == "." || mp == string(os.PathSeparator) {
-			continue
-		}
-		if ds == mp || strings.HasPrefix(ds, mp+string(os.PathSeparator)) {
+		if mountpointContainsDatastore(mp, ds) {
 			return mp
 		}
 	}
 	return ""
+}
+
+func mountpointContainsDatastore(mountpoint, datastorePath string) bool {
+	mp := filepath.Clean(strings.TrimSpace(mountpoint))
+	if !isValidGuardTarget(mp) {
+		return false
+	}
+	return datastorePath == mp || strings.HasPrefix(datastorePath, mp+string(os.PathSeparator))
+}
+
+func isValidGuardTarget(path string) bool {
+	path = filepath.Clean(strings.TrimSpace(path))
+	return path != "" && path != "." && path != string(os.PathSeparator)
 }

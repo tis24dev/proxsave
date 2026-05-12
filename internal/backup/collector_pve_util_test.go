@@ -719,6 +719,9 @@ func TestIsClusteredPVE(t *testing.T) {
 		cfg.PVEConfigPath = pveDir
 		cfg.CorosyncConfigPath = ""
 		collector := NewCollector(logger, cfg, tmpDir, "pve", false)
+		collector.deps.LookPath = func(string) (string, error) {
+			return "", os.ErrNotExist
+		}
 
 		clustered, err := collector.isClusteredPVE(context.Background())
 		if err != nil {

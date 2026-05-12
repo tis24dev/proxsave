@@ -57,8 +57,8 @@ func TestPromptNetworkCommitWithCountdown_NonCommitInputReturnsFalse(test *testi
 
 func TestPromptNetworkCommitWithCountdown_TimeoutReturnsDeadlineExceeded(test *testing.T) {
 	pipeReader, pipeWriter := io.Pipe()
-	defer pipeReader.Close()
-	defer pipeWriter.Close()
+	defer func() { _ = pipeReader.Close() }()
+	defer func() { _ = pipeWriter.Close() }()
 
 	reader := bufio.NewReader(pipeReader)
 	logger := logging.New(types.LogLevelInfo, false)

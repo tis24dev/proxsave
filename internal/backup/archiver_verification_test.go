@@ -246,14 +246,16 @@ func TestVerifyGzipArchive_CorruptedTar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	gzipWriter := gzip.NewWriter(file)
 	_, err = gzipWriter.Write([]byte("corrupted tar content"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	gzipWriter.Close()
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	logger := logging.New(types.LogLevelInfo, false)
 	archiver := &Archiver{logger: logger}
@@ -352,7 +354,7 @@ func TestVerifyGzipArchive_ValidTarContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	gzipWriter := gzip.NewWriter(file)
 	tarWriter := tar.NewWriter(gzipWriter)
@@ -370,8 +372,12 @@ func TestVerifyGzipArchive_ValidTarContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tarWriter.Close()
-	gzipWriter.Close()
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	logger := logging.New(types.LogLevelInfo, false)
 	archiver := &Archiver{logger: logger}

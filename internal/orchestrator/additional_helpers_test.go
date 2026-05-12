@@ -1492,8 +1492,11 @@ func TestRunGoBackupConfigValidationError(t *testing.T) {
 	orch := New(logger, false)
 	tempDir := t.TempDir()
 	orch.SetBackupConfig(tempDir, tempDir, types.CompressionType("invalid"), 1, 0, "standard", nil)
+	setSmallBackupTestConfig(t, orch, tempDir)
 
-	stats, err := orch.RunGoBackup(context.Background(), &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "host-invalid")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	stats, err := orch.RunGoBackup(ctx, &environment.EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}, "host-invalid")
 	if err == nil {
 		t.Fatalf("expected error for invalid compression type")
 	}

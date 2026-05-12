@@ -236,7 +236,7 @@ func TestWebhookNotifier_Send_Success(t *testing.T) {
 
 		// Respond with success
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer server.Close()
 
@@ -336,11 +336,11 @@ func TestWebhookNotifier_Send_Retry(t *testing.T) {
 		attempts++
 		if attempts < 3 {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"temporary failure"}`))
+			_, _ = w.Write([]byte(`{"error":"temporary failure"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer server.Close()
 

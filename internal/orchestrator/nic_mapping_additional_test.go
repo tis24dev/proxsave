@@ -552,7 +552,7 @@ func TestPlanAndApplyNICNameRepair_WithFakeInventory(t *testing.T) {
 		t.Fatalf("write interfaces: %v", err)
 	}
 
-	// includeConflicts=false: applies only safe mapping (ens2 -> eno1).
+	// includeConflicts=false: applies only safe mapping (ens20 -> eno1).
 	res, err := applyNICNameRepair(logger, plan, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -587,6 +587,15 @@ func TestPlanAndApplyNICNameRepair_WithFakeInventory(t *testing.T) {
 	res, err = applyNICNameRepair(logger, plan, true)
 	if err != nil {
 		t.Fatalf("apply conflicts: %v", err)
+	}
+	if res == nil || res.SkippedReason != "" {
+		t.Fatalf("conflict result=%+v", res)
+	}
+	if len(res.ChangedFiles) != 1 || res.ChangedFiles[0] != "/etc/network/interfaces" {
+		t.Fatalf("conflict ChangedFiles=%v", res.ChangedFiles)
+	}
+	if len(res.AppliedNICMap) != 2 {
+		t.Fatalf("conflict AppliedNICMap=%+v", res.AppliedNICMap)
 	}
 	data, err = fakeFS.ReadFile("/etc/network/interfaces")
 	if err != nil {

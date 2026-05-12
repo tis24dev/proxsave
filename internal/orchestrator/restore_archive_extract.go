@@ -43,7 +43,7 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	if err != nil {
 		return fmt.Errorf("open archive: %w", err)
 	}
-	defer file.Close()
+	defer closeIntoErr(&err, file, "close archive")
 
 	reader, err := createDecompressionReader(ctx, file, opts.archivePath)
 	if err != nil {
@@ -97,7 +97,7 @@ func closeAndRemoveRestoreTemp(file *os.File) {
 	if file == nil {
 		return
 	}
-	file.Close()
+	_ = file.Close()
 	_ = restoreFS.Remove(file.Name())
 }
 
@@ -105,19 +105,19 @@ func (log *restoreExtractionLog) writeHeader(opts restoreArchiveOptions) {
 	if log.logFile == nil {
 		return
 	}
-	fmt.Fprintf(log.logFile, "=== PROXMOX RESTORE LOG ===\n")
-	fmt.Fprintf(log.logFile, "Date: %s\n", nowRestore().Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(log.logFile, "Mode: %s\n", getModeName(opts.mode))
+	_, _ = fmt.Fprintf(log.logFile, "=== PROXMOX RESTORE LOG ===\n")
+	_, _ = fmt.Fprintf(log.logFile, "Date: %s\n", nowRestore().Format("2006-01-02 15:04:05"))
+	_, _ = fmt.Fprintf(log.logFile, "Mode: %s\n", getModeName(opts.mode))
 	if len(opts.categories) > 0 {
-		fmt.Fprintf(log.logFile, "Selected categories: %d categories\n", len(opts.categories))
+		_, _ = fmt.Fprintf(log.logFile, "Selected categories: %d categories\n", len(opts.categories))
 		for _, cat := range opts.categories {
-			fmt.Fprintf(log.logFile, "  - %s (%s)\n", cat.Name, cat.ID)
+			_, _ = fmt.Fprintf(log.logFile, "  - %s (%s)\n", cat.Name, cat.ID)
 		}
 	} else {
-		fmt.Fprintf(log.logFile, "Selected categories: ALL (full restore)\n")
+		_, _ = fmt.Fprintf(log.logFile, "Selected categories: ALL (full restore)\n")
 	}
-	fmt.Fprintf(log.logFile, "Archive: %s\n", filepath.Base(opts.archivePath))
-	fmt.Fprintf(log.logFile, "\n")
+	_, _ = fmt.Fprintf(log.logFile, "Archive: %s\n", filepath.Base(opts.archivePath))
+	_, _ = fmt.Fprintf(log.logFile, "\n")
 }
 
 func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, opts restoreArchiveOptions, extractionLog *restoreExtractionLog) (restoreExtractionStats, error) {
@@ -179,13 +179,13 @@ func restoreEntryMatchesCategories(entryName string, categories []Category) bool
 
 func (log *restoreExtractionLog) recordSkipped(name, reason string) {
 	if log.skippedTemp != nil {
-		fmt.Fprintf(log.skippedTemp, "SKIPPED: %s (%s)\n", name, reason)
+		_, _ = fmt.Fprintf(log.skippedTemp, "SKIPPED: %s (%s)\n", name, reason)
 	}
 }
 
 func (log *restoreExtractionLog) recordRestored(name string) {
 	if log.restoredTemp != nil {
-		fmt.Fprintf(log.restoredTemp, "RESTORED: %s\n", name)
+		_, _ = fmt.Fprintf(log.restoredTemp, "RESTORED: %s\n", name)
 	}
 }
 
@@ -193,19 +193,19 @@ func (log *restoreExtractionLog) writeSummary(stats restoreExtractionStats) {
 	if log.logFile == nil {
 		return
 	}
-	fmt.Fprintf(log.logFile, "=== FILES RESTORED ===\n")
+	_, _ = fmt.Fprintf(log.logFile, "=== FILES RESTORED ===\n")
 	log.copyTempEntries(log.restoredTemp, "restored")
-	fmt.Fprintf(log.logFile, "\n")
+	_, _ = fmt.Fprintf(log.logFile, "\n")
 
-	fmt.Fprintf(log.logFile, "=== FILES SKIPPED ===\n")
+	_, _ = fmt.Fprintf(log.logFile, "=== FILES SKIPPED ===\n")
 	log.copyTempEntries(log.skippedTemp, "skipped")
-	fmt.Fprintf(log.logFile, "\n")
+	_, _ = fmt.Fprintf(log.logFile, "\n")
 
-	fmt.Fprintf(log.logFile, "=== SUMMARY ===\n")
-	fmt.Fprintf(log.logFile, "Total files extracted: %d\n", stats.filesExtracted)
-	fmt.Fprintf(log.logFile, "Total files skipped: %d\n", stats.filesSkipped)
-	fmt.Fprintf(log.logFile, "Total files failed: %d\n", stats.filesFailed)
-	fmt.Fprintf(log.logFile, "Total files in archive: %d\n", stats.filesExtracted+stats.filesSkipped+stats.filesFailed)
+	_, _ = fmt.Fprintf(log.logFile, "=== SUMMARY ===\n")
+	_, _ = fmt.Fprintf(log.logFile, "Total files extracted: %d\n", stats.filesExtracted)
+	_, _ = fmt.Fprintf(log.logFile, "Total files skipped: %d\n", stats.filesSkipped)
+	_, _ = fmt.Fprintf(log.logFile, "Total files failed: %d\n", stats.filesFailed)
+	_, _ = fmt.Fprintf(log.logFile, "Total files in archive: %d\n", stats.filesExtracted+stats.filesSkipped+stats.filesFailed)
 }
 
 func (log *restoreExtractionLog) copyTempEntries(tempFile *os.File, label string) {

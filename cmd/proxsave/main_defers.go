@@ -85,7 +85,11 @@ func closeRunProfiling(rt *appRuntime) {
 		logging.Warning("Failed to create heap profile file: %v", err)
 		return
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			logging.Warning("Failed to close heap profile file: %v", err)
+		}
+	}()
 	if err := pprof.WriteHeapProfile(f); err != nil {
 		logging.Warning("Failed to write heap profile: %v", err)
 	}

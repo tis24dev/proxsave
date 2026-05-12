@@ -221,7 +221,7 @@ func (s *SecondaryStorage) countBackups(ctx context.Context) int {
 }
 
 // copyFile copies a file using Go's io.Copy
-func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) error {
+func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -242,9 +242,15 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) error
 	}
 	tempName := tempFile.Name()
 	defer func() {
-		tempFile.Close()
+		if tempFile != nil {
+			if closeErr := tempFile.Close(); closeErr != nil && err == nil {
+				err = fmt.Errorf("failed to close temporary file %s: %w", tempName, closeErr)
+			}
+		}
 		if tempName != "" {
-			os.Remove(tempName)
+			if removeErr := os.Remove(tempName); removeErr != nil && err == nil && !os.IsNotExist(removeErr) {
+				err = fmt.Errorf("failed to remove temporary file %s: %w", tempName, removeErr)
+			}
 		}
 	}()
 
@@ -253,7 +259,11 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) error
 	if err != nil {
 		return fmt.Errorf("failed to open source file %s: %w", src, err)
 	}
-	defer sourceFile.Close()
+	defer func() {
+		if closeErr := sourceFile.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close source file %s: %w", src, closeErr)
+		}
+	}()
 
 	buf := make([]byte, 1024*1024) // 1MB buffer
 	var written int64
@@ -282,10 +292,11 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) error
 	if err := tempFile.Sync(); err != nil {
 		return fmt.Errorf("failed to sync temporary file %s: %w", tempName, err)
 	}
-	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("failed to close temporary file %s: %w", tempName, err)
-	}
+	closeErr := tempFile.Close()
 	tempFile = nil
+	if closeErr != nil {
+		return fmt.Errorf("failed to close temporary file %s: %w", tempName, closeErr)
+	}
 
 	if err := os.Chmod(tempName, sourceInfo.Mode()); err != nil {
 		s.logger.Debug("Secondary storage: unable to mirror permissions on %s: %v", tempName, err)

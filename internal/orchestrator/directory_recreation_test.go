@@ -188,79 +188,85 @@ func TestNormalizePBSDatastoreCfgContentNoChangesWhenValid(t *testing.T) {
 }
 
 func TestRecreateDirectoriesFromConfigRoutes(t *testing.T) {
+	t.Run("PVE", testRecreateDirectoriesFromConfigPVE)
+	t.Run("PBS", testRecreateDirectoriesFromConfigPBS)
+	t.Run("Dual", testRecreateDirectoriesFromConfigDual)
+	t.Run("Unknown", testRecreateDirectoriesFromConfigUnknown)
+}
+
+func testRecreateDirectoriesFromConfigPVE(t *testing.T) {
 	logger := newTestLogger()
+	baseDir := filepath.Join(t.TempDir(), "local")
+	cfg := fmt.Sprintf("dir: local\n    path %s\n", baseDir)
+	cfgPath, restore := overridePath(t, &storageCfgPath, "storage.cfg")
+	t.Cleanup(restore)
+	writeFile(t, cfgPath, cfg)
 
-	t.Run("PVE", func(t *testing.T) {
-		baseDir := filepath.Join(t.TempDir(), "local")
-		cfg := fmt.Sprintf("dir: local\n    path %s\n", baseDir)
-		cfgPath, restore := overridePath(t, &storageCfgPath, "storage.cfg")
-		t.Cleanup(restore)
-		writeFile(t, cfgPath, cfg)
+	if err := RecreateDirectoriesFromConfig(SystemTypePVE, logger); err != nil {
+		t.Fatalf("RecreateDirectoriesFromConfig PVE: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, "images")); err != nil {
+		t.Fatalf("expected PVE directories to be created: %v", err)
+	}
+}
 
-		if err := RecreateDirectoriesFromConfig(SystemTypePVE, logger); err != nil {
-			t.Fatalf("RecreateDirectoriesFromConfig PVE: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(baseDir, "images")); err != nil {
-			t.Fatalf("expected PVE directories to be created: %v", err)
-		}
-	})
+func testRecreateDirectoriesFromConfigPBS(t *testing.T) {
+	logger := newTestLogger()
+	baseDir := filepath.Join(t.TempDir(), "data")
+	cfg := fmt.Sprintf("datastore: main\n    path %s\n", baseDir)
+	cfgPath, restore := overridePath(t, &datastoreCfgPath, "datastore.cfg")
+	t.Cleanup(restore)
+	writeFile(t, cfgPath, cfg)
+	removeZpoolCacheForTest(t)
 
-	t.Run("PBS", func(t *testing.T) {
-		baseDir := filepath.Join(t.TempDir(), "data")
-		cfg := fmt.Sprintf("datastore: main\n    path %s\n", baseDir)
-		cfgPath, restore := overridePath(t, &datastoreCfgPath, "datastore.cfg")
-		t.Cleanup(restore)
-		writeFile(t, cfgPath, cfg)
+	if err := RecreateDirectoriesFromConfig(SystemTypePBS, logger); err != nil {
+		t.Fatalf("RecreateDirectoriesFromConfig PBS: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, ".chunks")); err != nil {
+		t.Fatalf("expected PBS directories to be created: %v", err)
+	}
+}
 
-		cachePath, cacheRestore := overridePath(t, &zpoolCachePath, "zpool.cache")
-		t.Cleanup(cacheRestore)
-		if err := os.RemoveAll(cachePath); err != nil && !os.IsNotExist(err) {
-			t.Fatalf("cleanup cache path: %v", err)
-		}
+func testRecreateDirectoriesFromConfigDual(t *testing.T) {
+	logger := newTestLogger()
+	pveBaseDir := filepath.Join(t.TempDir(), "local")
+	pveCfg := fmt.Sprintf("dir: local\n    path %s\n", pveBaseDir)
+	pveCfgPath, restorePVE := overridePath(t, &storageCfgPath, "storage.cfg")
+	t.Cleanup(restorePVE)
+	writeFile(t, pveCfgPath, pveCfg)
 
-		if err := RecreateDirectoriesFromConfig(SystemTypePBS, logger); err != nil {
-			t.Fatalf("RecreateDirectoriesFromConfig PBS: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(baseDir, ".chunks")); err != nil {
-			t.Fatalf("expected PBS directories to be created: %v", err)
-		}
-	})
+	pbsBaseDir := filepath.Join(t.TempDir(), "data")
+	pbsCfg := fmt.Sprintf("datastore: main\n    path %s\n", pbsBaseDir)
+	pbsCfgPath, restorePBS := overridePath(t, &datastoreCfgPath, "datastore.cfg")
+	t.Cleanup(restorePBS)
+	writeFile(t, pbsCfgPath, pbsCfg)
+	removeZpoolCacheForTest(t)
 
-	t.Run("Dual", func(t *testing.T) {
-		pveBaseDir := filepath.Join(t.TempDir(), "local")
-		pveCfg := fmt.Sprintf("dir: local\n    path %s\n", pveBaseDir)
-		pveCfgPath, restorePVE := overridePath(t, &storageCfgPath, "storage.cfg")
-		t.Cleanup(restorePVE)
-		writeFile(t, pveCfgPath, pveCfg)
+	if err := RecreateDirectoriesFromConfig(SystemTypeDual, logger); err != nil {
+		t.Fatalf("RecreateDirectoriesFromConfig Dual: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(pveBaseDir, "images")); err != nil {
+		t.Fatalf("expected PVE directories to be created for dual system: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(pbsBaseDir, ".chunks")); err != nil {
+		t.Fatalf("expected PBS directories to be created for dual system: %v", err)
+	}
+}
 
-		pbsBaseDir := filepath.Join(t.TempDir(), "data")
-		pbsCfg := fmt.Sprintf("datastore: main\n    path %s\n", pbsBaseDir)
-		pbsCfgPath, restorePBS := overridePath(t, &datastoreCfgPath, "datastore.cfg")
-		t.Cleanup(restorePBS)
-		writeFile(t, pbsCfgPath, pbsCfg)
+func testRecreateDirectoriesFromConfigUnknown(t *testing.T) {
+	logger := newTestLogger()
+	if err := RecreateDirectoriesFromConfig(SystemTypeUnknown, logger); err != nil {
+		t.Fatalf("RecreateDirectoriesFromConfig unknown: %v", err)
+	}
+}
 
-		cachePath, cacheRestore := overridePath(t, &zpoolCachePath, "zpool.cache")
-		t.Cleanup(cacheRestore)
-		if err := os.RemoveAll(cachePath); err != nil && !os.IsNotExist(err) {
-			t.Fatalf("cleanup cache path: %v", err)
-		}
-
-		if err := RecreateDirectoriesFromConfig(SystemTypeDual, logger); err != nil {
-			t.Fatalf("RecreateDirectoriesFromConfig Dual: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(pveBaseDir, "images")); err != nil {
-			t.Fatalf("expected PVE directories to be created for dual system: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(pbsBaseDir, ".chunks")); err != nil {
-			t.Fatalf("expected PBS directories to be created for dual system: %v", err)
-		}
-	})
-
-	t.Run("Unknown", func(t *testing.T) {
-		if err := RecreateDirectoriesFromConfig(SystemTypeUnknown, logger); err != nil {
-			t.Fatalf("RecreateDirectoriesFromConfig unknown: %v", err)
-		}
-	})
+func removeZpoolCacheForTest(t *testing.T) {
+	t.Helper()
+	cachePath, cacheRestore := overridePath(t, &zpoolCachePath, "zpool.cache")
+	t.Cleanup(cacheRestore)
+	if err := os.RemoveAll(cachePath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("cleanup cache path: %v", err)
+	}
 }
 
 // Test: RecreateStorageDirectories quando il file non esiste
@@ -523,7 +529,7 @@ func TestRecreateDirectoriesFromConfigPVEStatError(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0o000); err != nil {
 		t.Skipf("cannot create restricted directory: %v", err)
 	}
-	defer os.Chmod(cfgDir, 0o755)
+	defer func() { _ = os.Chmod(cfgDir, 0o755) }()
 
 	cfgPath := filepath.Join(cfgDir, "storage.cfg")
 	prev := storageCfgPath
@@ -549,7 +555,7 @@ func TestRecreateDirectoriesFromConfigPBSStatError(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0o000); err != nil {
 		t.Skipf("cannot create restricted directory: %v", err)
 	}
-	defer os.Chmod(cfgDir, 0o755)
+	defer func() { _ = os.Chmod(cfgDir, 0o755) }()
 
 	cfgPath := filepath.Join(cfgDir, "datastore.cfg")
 	prev := datastoreCfgPath

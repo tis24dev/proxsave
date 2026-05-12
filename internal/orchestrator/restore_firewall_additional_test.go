@@ -193,7 +193,7 @@ func (e staticDirEntry) Name() string      { return e.name }
 func (e staticDirEntry) IsDir() bool       { return e.mode.IsDir() }
 func (e staticDirEntry) Type() fs.FileMode { return e.mode }
 func (e staticDirEntry) Info() (fs.FileInfo, error) {
-	return staticFileInfo{name: e.name, mode: e.mode}, nil
+	return staticFileInfo(e), nil
 }
 
 type scriptedConfirmAction struct {
