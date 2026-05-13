@@ -259,6 +259,16 @@ func TestWritePBSDatastoreCfgAtomicallyWritesDataAndMode(t *testing.T) {
 	}
 }
 
+func TestParseConfigPathKeepsSpaces(t *testing.T) {
+	path, ok := parseConfigPath("path /mnt/my store")
+	if !ok {
+		t.Fatalf("expected path line to parse")
+	}
+	if path != "/mnt/my store" {
+		t.Fatalf("path=%q; want %q", path, "/mnt/my store")
+	}
+}
+
 func TestRecreateDirectoriesFromConfigRoutes(t *testing.T) {
 	t.Run("PVE", testRecreateDirectoriesFromConfigPVE)
 	t.Run("PBS", testRecreateDirectoriesFromConfigPBS)

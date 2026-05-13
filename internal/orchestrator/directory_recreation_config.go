@@ -153,12 +153,9 @@ func parsePBSDatastoreHeader(line string) (pbsDatastoreEntry, bool) {
 }
 
 func parseConfigPath(line string) (string, bool) {
-	if !strings.HasPrefix(line, "path ") {
+	const pathPrefix = "path "
+	if !strings.HasPrefix(line, pathPrefix) {
 		return "", false
 	}
-	parts := strings.Fields(line)
-	if len(parts) < 2 {
-		return "", false
-	}
-	return parts[1], true
+	return strings.TrimSpace(line[len(pathPrefix):]), true
 }
