@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -159,7 +158,7 @@ func (f *networkConfigUIApplyFlow) confirmApplyNow() (bool, error) {
 		sourceLine,
 		int(defaultNetworkRollbackTimeout.Seconds()),
 	)
-	applyNow, err := f.ui.ConfirmAction(f.ctx, "Apply network configuration", message, "Apply now", "Skip apply", 90*time.Second, false)
+	applyNow, err := f.ui.ConfirmAction(f.ctx, "Apply network configuration", message, "Apply now", "Skip apply", defaultNetworkApplyConfirmTimeout, false)
 	logging.DebugStep(f.logger, "network safe apply (ui)", "User choice: applyNow=%v", applyNow)
 	return applyNow, err
 }
