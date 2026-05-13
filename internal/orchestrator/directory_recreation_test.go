@@ -236,6 +236,29 @@ func TestNormalizePBSDatastoreCfgContentNoChangesWhenValid(t *testing.T) {
 	}
 }
 
+func TestWritePBSDatastoreCfgAtomicallyWritesDataAndMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "datastore.cfg")
+
+	if err := writePBSDatastoreCfgAtomically(path, []byte("datastore: ds\n    path /mnt/ds\n"), 0o640); err != nil {
+		t.Fatalf("writePBSDatastoreCfgAtomically: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read datastore.cfg: %v", err)
+	}
+	if string(got) != "datastore: ds\n    path /mnt/ds\n" {
+		t.Fatalf("unexpected content: %q", string(got))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat datastore.cfg: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode=%#o; want 0640", info.Mode().Perm())
+	}
+}
+
 func TestRecreateDirectoriesFromConfigRoutes(t *testing.T) {
 	t.Run("PVE", testRecreateDirectoriesFromConfigPVE)
 	t.Run("PBS", testRecreateDirectoriesFromConfigPBS)
