@@ -60,3 +60,26 @@ func TestApplyPBSNotificationsViaAPI_CreatesEndpointAndMatcher(t *testing.T) {
 		t.Fatalf("calls=%v want %v", runner.calls, want)
 	}
 }
+
+func TestBuildPBSNotificationDesiredState_NilLoggerSkipsMalformedSections(t *testing.T) {
+	cfgSections := []proxmoxNotificationSection{
+		{Type: "unknown", Name: "ignored"},
+		{Type: "smtp", Name: "missing-recipient"},
+		{Type: "gotify", Name: "missing-server"},
+		{
+			Type: "gotify",
+			Name: "missing-token",
+			Entries: []proxmoxNotificationEntry{
+				{Key: "server", Value: "https://gotify.example"},
+			},
+		},
+	}
+
+	desired := buildPBSNotificationDesiredState(cfgSections, nil, nil)
+	if len(desired.endpoints) != 0 {
+		t.Fatalf("expected malformed endpoints to be skipped, got=%v", desired.endpoints)
+	}
+	if len(desired.matchers) != 0 {
+		t.Fatalf("expected no matchers, got=%v", desired.matchers)
+	}
+}
