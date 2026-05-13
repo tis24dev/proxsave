@@ -550,6 +550,9 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 		dsWorkers = 1
 	}
 
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var (
 		wg       sync.WaitGroup
 		sem      = make(chan struct{}, dsWorkers)
@@ -564,18 +567,22 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
-			case <-ctx.Done():
+			case <-childCtx.Done():
 				return
 			}
 			defer func() { <-sem }()
+			if err := childCtx.Err(); err != nil {
+				return
+			}
 
-			if err := fn(ctx, ds, state); err != nil {
+			if err := fn(childCtx, ds, state); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return
 				}
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
+					cancel()
 				}
 				errMu.Unlock()
 			}
