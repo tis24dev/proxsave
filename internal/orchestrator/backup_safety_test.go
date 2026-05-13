@@ -1152,6 +1152,40 @@ func TestRestoreSafetyBackup_CorruptedTar(t *testing.T) {
 	}
 }
 
+func TestRestoreSafetyBackupRemovesPartialFileOnCopyError(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "truncated.tar.gz")
+	restoreDir := filepath.Join(tmpDir, "restore")
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+	if err := tw.WriteHeader(&tar.Header{Name: "partial.txt", Mode: 0o644, Size: 10}); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write([]byte("abc")); err != nil {
+		t.Fatalf("write partial content: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := os.WriteFile(backupPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	err := RestoreSafetyBackup(logger, backupPath, restoreDir)
+	if err != nil && !strings.Contains(err.Error(), "read tar entry") {
+		t.Fatalf("unexpected restore error: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(restoreDir, "partial.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected partial file to be removed, stat err=%v", statErr)
+	}
+}
+
 func TestRestoreSafetyBackup_OpenError(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	var logBuf bytes.Buffer
