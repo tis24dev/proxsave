@@ -14,18 +14,11 @@ func (w *restoreUIWorkflowRun) prepareBundleAndPlan() (fallbackToFullRestore boo
 	if err := w.prepareBundle(); err != nil {
 		return false, err
 	}
-	cleanupOnFailure := true
-	defer func() {
-		if cleanupOnFailure && w.prepared != nil {
-			w.prepared.Cleanup()
-		}
-	}()
 
 	fallbackToFullRestore, err = w.planPreparedBundle()
 	if err != nil {
 		return fallbackToFullRestore, err
 	}
-	cleanupOnFailure = false
 	return fallbackToFullRestore, nil
 }
 
