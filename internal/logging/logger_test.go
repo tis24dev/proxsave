@@ -477,6 +477,27 @@ func TestOpenLogFileReopenClosesPrevious(t *testing.T) {
 	}
 }
 
+func TestOpenLogFileClearsStaleHandleWhenCloseFails(t *testing.T) {
+	tmp := t.TempDir()
+	first := filepath.Join(tmp, "first.log")
+	second := filepath.Join(tmp, "second.log")
+
+	logger := New(types.LogLevelInfo, false)
+	if err := logger.OpenLogFile(first); err != nil {
+		t.Fatalf("OpenLogFile(first) error: %v", err)
+	}
+	if err := logger.logFile.Close(); err != nil {
+		t.Fatalf("pre-close log file: %v", err)
+	}
+
+	if err := logger.OpenLogFile(second); err == nil {
+		t.Fatalf("expected reopen to report close error")
+	}
+	if logger.logFile != nil {
+		t.Fatalf("expected stale logFile handle to be cleared")
+	}
+}
+
 func TestPackageLevelFatalUsesDefaultLoggerExitFunc(t *testing.T) {
 	var buf bytes.Buffer
 	logger := New(types.LogLevelDebug, false)

@@ -72,10 +72,11 @@ func (l *Logger) OpenLogFile(logPath string) error {
 	defer l.mu.Unlock()
 	// If a log file is already open, close it first.
 	if l.logFile != nil {
-		if err := l.logFile.Close(); err != nil {
+		err := l.logFile.Close()
+		l.logFile = nil
+		if err != nil {
 			return fmt.Errorf("failed to close existing log file: %w", err)
 		}
-		l.logFile = nil
 	}
 
 	// Create the log file (O_CREATE|O_WRONLY|O_APPEND).
