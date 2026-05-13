@@ -74,6 +74,12 @@ type UpgradeResult struct {
 //     to a "Custom keys" section at the bottom of the file.
 //  4. The original file is backed up before writing the new version.
 func UpgradeConfigFile(configPath string) (*UpgradeResult, error) {
+	return UpgradeConfigFileWithBaseDir(configPath, defaultBaseDir())
+}
+
+// UpgradeConfigFileWithBaseDir merges the user's configuration with the
+// embedded template and validates the result against the detected base dir.
+func UpgradeConfigFileWithBaseDir(configPath, baseDir string) (*UpgradeResult, error) {
 	result, newContent, originalContent, err := computeConfigUpgrade(configPath)
 	if err != nil {
 		return result, err
@@ -113,7 +119,7 @@ func UpgradeConfigFile(configPath string) (*UpgradeResult, error) {
 	result.BackupPath = backupPath
 
 	// Post-upgrade validation: ensure the upgraded configuration can be parsed.
-	if _, err := LoadConfig(configPath); err != nil {
+	if _, err := LoadConfigWithBaseDir(configPath, baseDir); err != nil {
 		// Attempt automatic rollback to the backup.
 		_ = os.Rename(backupPath, configPath)
 		return result, fmt.Errorf("upgraded config invalid, restored backup: %w", err)
@@ -175,7 +181,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 
 	// Prune deprecated keys that are now auto-detected at runtime.
 	//
-	// BASE_DIR is derived from the executable/config location.
+	// BASE_DIR is derived from the installed executable path.
 	// CRON_* scheduling is managed via crontab, not backup.env.
 	deprecatedUpperKeys := map[string]struct{}{
 		"BASE_DIR":      {},
@@ -211,7 +217,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		warnings = append(warnings, fmt.Sprintf("Removed deprecated keys from backup.env: %s (BASE_DIR is auto-detected; cron is managed via crontab)", strings.Join(keys, ", ")))
+		warnings = append(warnings, fmt.Sprintf("Removed deprecated keys from backup.env: %s (BASE_DIR is auto-detected from the installed executable; cron is managed via crontab)", strings.Join(keys, ", ")))
 	}
 
 	// 2. Walk the template line-by-line and collect template entries.

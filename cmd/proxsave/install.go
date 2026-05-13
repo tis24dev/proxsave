@@ -43,7 +43,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 	configPath = resolvedPath
 
-	baseDir := deriveBaseDirFromConfig(configPath)
+	baseDir, _ := detectedBaseDirOrFallback()
 	_ = os.Setenv("BASE_DIR", baseDir)
 
 	done := logging.DebugStartBootstrap(bootstrap, "install workflow (cli)", "config=%s base=%s", configPath, baseDir)
@@ -393,14 +393,6 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println()
 }
 
-func deriveBaseDirFromConfig(configPath string) string {
-	baseDir := filepath.Dir(filepath.Dir(configPath))
-	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxsave"
-	}
-	return baseDir
-}
-
 func cleanupTempConfig(tmpConfigPath string) {
 	if tmpConfigPath == "" {
 		return
@@ -461,6 +453,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	if skipConfigWizard {
 		return installConfigResult{SkipConfigWizard: true}, nil
 	}
+	template = config.RemoveRuntimeDerivedEnvKeys(template)
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring secondary storage")
 	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
@@ -497,6 +490,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "writing configuration")
+	template = config.RemoveRuntimeDerivedEnvKeys(template)
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
 		return installConfigResult{}, err
 	}

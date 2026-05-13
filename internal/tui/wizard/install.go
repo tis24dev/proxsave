@@ -490,12 +490,9 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		return "", err
 	}
 
-	// BASE_DIR is auto-detected at runtime from the executable/config location.
-	// Keep it out of backup.env to avoid pinning the installation to a specific path.
-	template = unsetEnvValue(template, "BASE_DIR")
-	template = unsetEnvValue(template, "CRON_SCHEDULE")
-	template = unsetEnvValue(template, "CRON_HOUR")
-	template = unsetEnvValue(template, "CRON_MINUTE")
+	// BASE_DIR and cron values are derived at runtime/finalization time.
+	// Keep them out of backup.env to avoid pinning the installation.
+	template = config.RemoveRuntimeDerivedEnvKeys(template)
 
 	// Apply secondary storage
 	template = config.ApplySecondaryStorageSettings(

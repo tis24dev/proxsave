@@ -282,6 +282,8 @@ When shown, it does **not** modify your `backup.env`. It only:
 
 After completion, edit `configs/backup.env` manually for advanced options.
 
+`BASE_DIR` is detected from the installed `proxsave` executable. Do not add an active `BASE_DIR=...` line to `backup.env`; upgrades remove it and runtime ignores it if present.
+
 ---
 
 ## Upgrading from Previous Bash Version (v0.7.4-bash or Earlier)

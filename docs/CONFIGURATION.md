@@ -250,8 +250,9 @@ MIN_DISK_SPACE_CLOUD_GB=1          # Cloud storage (not enforced for remote)
 
 ```bash
 # Base directory for all operations (auto-detected at runtime)
-# BASE_DIR is derived from the executable/config location, so it is usually not
-# written in backup.env.
+# BASE_DIR is auto-detected from the installed proxsave executable; do not set it
+# in backup.env. Active BASE_DIR=... lines are deprecated and ignored.
+# BASE_DIR=/opt/proxsave
 
 # Lock file directory
 LOCK_PATH=${BASE_DIR}/lock
@@ -266,7 +267,7 @@ BACKUP_PATH=${BASE_DIR}/backup
 LOG_PATH=${BASE_DIR}/log
 ```
 
-**Path resolution**: `${BASE_DIR}` expands automatically. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables).
+**Path resolution**: `${BASE_DIR}` expands automatically from the installed `proxsave` executable path. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables), but `BASE_DIR` itself is not configurable from `backup.env` or the parent environment.
 
 ---
 

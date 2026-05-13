@@ -305,11 +305,20 @@ type Config struct {
 	PBSFingerprint string // Auto-detected from PBS certificate
 
 	// raw configuration map
-	raw map[string]string
+	raw                  map[string]string
+	ignoredBaseDirConfig string
+	ignoredBaseDirEnv    string
+	detectedBaseDir      string
 }
 
 // LoadConfig reads the backup.env configuration file.
 func LoadConfig(configPath string) (*Config, error) {
+	return LoadConfigWithBaseDir(configPath, defaultBaseDir())
+}
+
+// LoadConfigWithBaseDir reads the backup.env configuration file and expands
+// ${BASE_DIR} using the caller-provided runtime base directory.
+func LoadConfigWithBaseDir(configPath, detectedBaseDir string) (*Config, error) {
 	if !utils.FileExists(configPath) {
 		return nil, fmt.Errorf("configuration file not found: %s", configPath)
 	}
@@ -319,9 +328,22 @@ func LoadConfig(configPath string) (*Config, error) {
 		return nil, err
 	}
 
+	detectedBaseDir = strings.TrimSpace(detectedBaseDir)
+	if detectedBaseDir == "" {
+		detectedBaseDir = defaultBaseDir()
+	}
+
 	cfg := &Config{
-		ConfigPath: configPath,
-		raw:        rawValues,
+		ConfigPath:      configPath,
+		BaseDir:         detectedBaseDir,
+		raw:             rawValues,
+		detectedBaseDir: detectedBaseDir,
+	}
+	if rawBaseDir := strings.TrimSpace(rawValues["BASE_DIR"]); rawBaseDir != "" {
+		cfg.ignoredBaseDirConfig = rawBaseDir
+	}
+	if envBaseDir := strings.TrimSpace(os.Getenv("BASE_DIR")); envBaseDir != "" && filepath.Clean(envBaseDir) != filepath.Clean(detectedBaseDir) {
+		cfg.ignoredBaseDirEnv = envBaseDir
 	}
 
 	// Override with environment variables (env vars take precedence over file)
@@ -543,9 +565,11 @@ func (c *Config) parseOptimizationSettings() {
 func (c *Config) parseSecuritySettings() {
 	c.DisableNetworkPreflight = c.getBool("DISABLE_NETWORK_PREFLIGHT", false)
 
-	// Base directory
-	envBaseDir := os.Getenv("BASE_DIR")
-	c.BaseDir = c.getString("BASE_DIR", envBaseDir)
+	// Base directory is runtime-derived. BASE_DIR in backup.env or the parent
+	// environment is deprecated and intentionally ignored.
+	if c.BaseDir == "" {
+		c.BaseDir = strings.TrimSpace(c.detectedBaseDir)
+	}
 	if c.BaseDir == "" {
 		c.BaseDir = defaultBaseDir()
 	}
@@ -995,9 +1019,6 @@ func mergeStringSlices(base, extra []string) []string {
 
 // Helper methods with fallback support (try multiple keys)
 func defaultBaseDir() string {
-	if val := strings.TrimSpace(os.Getenv("BASE_DIR")); val != "" {
-		return val
-	}
 	if _, err := os.Stat("/opt/proxsave"); err == nil {
 		return "/opt/proxsave"
 	}
@@ -1007,29 +1028,17 @@ func defaultBaseDir() string {
 	return "/opt/proxsave"
 }
 
-// expandEnvVars expands environment variables and special variables like ${BASE_DIR}
-func expandEnvVars(s string) string {
-	// Expand ${VAR} and $VAR style variables
-	result := os.Expand(s, func(key string) string {
-		// Special handling for BASE_DIR
-		if key == "BASE_DIR" {
-			// Check if BASE_DIR is set in environment, otherwise use default
-			return defaultBaseDir()
-		}
-		return os.Getenv(key)
-	})
-	return result
-}
-
 type configVarExpander struct {
 	raw        map[string]string
+	baseDir    string
 	cache      map[string]string
 	inProgress map[string]bool
 }
 
-func newConfigVarExpander(raw map[string]string) *configVarExpander {
+func newConfigVarExpander(raw map[string]string, baseDir string) *configVarExpander {
 	return &configVarExpander{
 		raw:        raw,
+		baseDir:    strings.TrimSpace(baseDir),
 		cache:      make(map[string]string),
 		inProgress: make(map[string]bool),
 	}
@@ -1057,15 +1066,11 @@ func (e *configVarExpander) resolve(key string) string {
 	e.inProgress[upperKey] = true
 	defer delete(e.inProgress, upperKey)
 
-	// Keep the historical behavior where BASE_DIR expands even when it's not set
-	// in the config or environment.
 	if upperKey == "BASE_DIR" {
-		if rawVal, ok := e.raw[upperKey]; ok && strings.TrimSpace(rawVal) != "" {
-			expanded := e.expand(rawVal)
-			e.cache[upperKey] = expanded
-			return expanded
+		expanded := strings.TrimSpace(e.baseDir)
+		if expanded == "" {
+			expanded = defaultBaseDir()
 		}
-		expanded := defaultBaseDir()
 		e.cache[upperKey] = expanded
 		return expanded
 	}
@@ -1088,7 +1093,7 @@ func (c *Config) expandConfigVars(s string) string {
 	if strings.IndexByte(s, '$') == -1 {
 		return s
 	}
-	return newConfigVarExpander(c.raw).expand(s)
+	return newConfigVarExpander(c.raw, c.BaseDir).expand(s)
 }
 
 func (c *Config) getStringWithFallback(keys []string, defaultValue string) string {
@@ -1246,6 +1251,24 @@ func sanitizeMinDisk(value float64) float64 {
 func (c *Config) Get(key string) (string, bool) {
 	val, ok := c.raw[key]
 	return val, ok
+}
+
+// IgnoredBaseDirConfig returns the deprecated BASE_DIR value found in
+// backup.env, if any. The value is informational only and is not applied.
+func (c *Config) IgnoredBaseDirConfig() (string, bool) {
+	if c == nil || strings.TrimSpace(c.ignoredBaseDirConfig) == "" {
+		return "", false
+	}
+	return c.ignoredBaseDirConfig, true
+}
+
+// IgnoredBaseDirEnv returns the deprecated BASE_DIR value inherited from the
+// parent environment when it differs from the detected runtime base directory.
+func (c *Config) IgnoredBaseDirEnv() (string, bool) {
+	if c == nil || strings.TrimSpace(c.ignoredBaseDirEnv) == "" {
+		return "", false
+	}
+	return c.ignoredBaseDirEnv, true
 }
 
 // Set sets a value in the configuration.
@@ -1676,5 +1699,3 @@ func (c *Config) GetRetentionPolicy() string {
 	}
 	return "simple"
 }
-
-// expandEnvVars expands environment variables and special variables like ${BASE_DIR}

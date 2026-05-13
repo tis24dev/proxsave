@@ -28,7 +28,7 @@ func stubTelegramSetupBootstrapDeps(t *testing.T) {
 func TestBuildTelegramSetupBootstrap_ConfigLoadFailureSkips(t *testing.T) {
 	stubTelegramSetupBootstrapDeps(t)
 
-	telegramSetupBootstrapLoadConfig = func(path string) (*config.Config, error) {
+	telegramSetupBootstrapLoadConfig = func(path, baseDir string) (*config.Config, error) {
 		return nil, errors.New("parse failed")
 	}
 	telegramSetupBootstrapIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
@@ -54,7 +54,7 @@ func TestBuildTelegramSetupBootstrap_ConfigLoadFailureSkips(t *testing.T) {
 func TestBuildTelegramSetupBootstrap_DisabledSkips(t *testing.T) {
 	stubTelegramSetupBootstrapDeps(t)
 
-	telegramSetupBootstrapLoadConfig = func(path string) (*config.Config, error) {
+	telegramSetupBootstrapLoadConfig = func(path, baseDir string) (*config.Config, error) {
 		return &config.Config{TelegramEnabled: false}, nil
 	}
 	telegramSetupBootstrapIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
@@ -77,7 +77,7 @@ func TestBuildTelegramSetupBootstrap_DisabledSkips(t *testing.T) {
 func TestBuildTelegramSetupBootstrap_PersonalModeSkips(t *testing.T) {
 	stubTelegramSetupBootstrapDeps(t)
 
-	telegramSetupBootstrapLoadConfig = func(path string) (*config.Config, error) {
+	telegramSetupBootstrapLoadConfig = func(path, baseDir string) (*config.Config, error) {
 		return &config.Config{
 			TelegramEnabled:       true,
 			TelegramBotType:       " Personal ",
@@ -107,7 +107,7 @@ func TestBuildTelegramSetupBootstrap_PersonalModeSkips(t *testing.T) {
 func TestBuildTelegramSetupBootstrap_IdentityErrorSkips(t *testing.T) {
 	stubTelegramSetupBootstrapDeps(t)
 
-	telegramSetupBootstrapLoadConfig = func(path string) (*config.Config, error) {
+	telegramSetupBootstrapLoadConfig = func(path, baseDir string) (*config.Config, error) {
 		return &config.Config{
 			TelegramEnabled: true,
 			TelegramBotType: "centralized",
@@ -135,7 +135,7 @@ func TestBuildTelegramSetupBootstrap_IdentityErrorSkips(t *testing.T) {
 func TestBuildTelegramSetupBootstrap_EmptyServerIDSkips(t *testing.T) {
 	stubTelegramSetupBootstrapDeps(t)
 
-	telegramSetupBootstrapLoadConfig = func(path string) (*config.Config, error) {
+	telegramSetupBootstrapLoadConfig = func(path, baseDir string) (*config.Config, error) {
 		return &config.Config{
 			TelegramEnabled:       true,
 			TelegramBotType:       "centralized",
@@ -169,7 +169,7 @@ func TestBuildTelegramSetupBootstrap_EligibleCentralized(t *testing.T) {
 		t.Fatalf("write identity file: %v", err)
 	}
 
-	telegramSetupBootstrapLoadConfig = func(path string) (*config.Config, error) {
+	telegramSetupBootstrapLoadConfig = func(path, baseDir string) (*config.Config, error) {
 		return &config.Config{
 			TelegramEnabled:       true,
 			TelegramBotType:       "   ",

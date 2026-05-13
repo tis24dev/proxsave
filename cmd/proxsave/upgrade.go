@@ -44,10 +44,7 @@ type releaseInfo struct {
 //   - upgrades backup.env by adding missing keys from the new template (preserving existing values)
 //   - refreshes symlinks/cron/docs and normalizes permissions/ownership
 func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) int {
-	baseDir := filepath.Dir(filepath.Dir(args.ConfigPath))
-	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxsave"
-	}
+	baseDir, _ := detectedBaseDirOrFallback()
 	_ = os.Setenv("BASE_DIR", baseDir)
 
 	logLevel := types.LogLevelInfo
@@ -92,14 +89,11 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	bootstrap.Printf("Base directory: %s", baseDir)
 	bootstrap.Println("")
 
-	cfg, err := config.LoadConfig(args.ConfigPath)
+	_, err := config.LoadConfigWithBaseDir(args.ConfigPath, baseDir)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to load configuration: %v", err)
 		workflowErr = err
 		return types.ExitConfigError.Int()
-	}
-	if strings.TrimSpace(cfg.BaseDir) == "" {
-		cfg.BaseDir = baseDir
 	}
 
 	// Discover the latest available release on GitHub and compare with the

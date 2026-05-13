@@ -830,6 +830,9 @@ CONFIG_FILE=/etc/pbs/prod.env ./build/proxsave
 # Force dry-run mode
 DRY_RUN=true ./build/proxsave
 
+# BASE_DIR is not an override; it is detected from the installed executable.
+# BASE_DIR in the environment or backup.env is deprecated and ignored.
+
 # PBS restore behavior
 # Selected interactively during `--restore` on PBS hosts (Merge vs Clean 1:1).
 
@@ -840,7 +843,7 @@ DEBUG_LEVEL=extreme ./build/proxsave --log-level debug
 USE_COLOR=false ./build/proxsave
 ```
 
-**Priority**: Environment variables > Configuration file > Defaults
+**Priority**: Environment variables > Configuration file > Defaults, except `BASE_DIR`, which is always runtime-detected.
 
 ---
 

@@ -57,8 +57,9 @@ func TestNewInstallPreservedEntries(t *testing.T) {
 }
 
 func TestBuildNewInstallPlan(t *testing.T) {
-	baseDir := t.TempDir()
-	configPath := filepath.Join(baseDir, "env", "backup.env")
+	configRoot := t.TempDir()
+	configPath := filepath.Join(configRoot, "env", "backup.env")
+	wantBaseDir, _ := detectedBaseDirOrFallback()
 
 	plan, err := buildNewInstallPlan(configPath)
 	if err != nil {
@@ -67,8 +68,8 @@ func TestBuildNewInstallPlan(t *testing.T) {
 	if plan.ResolvedConfigPath != configPath {
 		t.Fatalf("resolved config path = %q, want %q", plan.ResolvedConfigPath, configPath)
 	}
-	if plan.BaseDir != baseDir {
-		t.Fatalf("base dir = %q, want %q", plan.BaseDir, baseDir)
+	if plan.BaseDir != wantBaseDir {
+		t.Fatalf("base dir = %q, want %q", plan.BaseDir, wantBaseDir)
 	}
 	if strings.TrimSpace(plan.BuildSignature) == "" {
 		t.Fatalf("build signature should not be empty")
@@ -82,6 +83,7 @@ func TestBuildNewInstallPlanUsesNAWhenBuildSignatureBlank(t *testing.T) {
 	registerNewInstallBuildSignature(t, func() string { return "   " })
 
 	baseDir := t.TempDir()
+	forceDetectedBaseDirForTest(t, baseDir)
 	configPath := filepath.Join(baseDir, "env", "backup.env")
 
 	plan, err := buildNewInstallPlan(configPath)
@@ -215,6 +217,7 @@ func TestRunNewInstallCLIUsesCLIConfirmOnly(t *testing.T) {
 	}()
 
 	baseDir := t.TempDir()
+	forceDetectedBaseDirForTest(t, baseDir)
 	configPath := filepath.Join(baseDir, "env", "backup.env")
 	stalePath := filepath.Join(baseDir, "stale.txt")
 	if err := os.WriteFile(stalePath, []byte("stale"), 0o600); err != nil {
@@ -277,6 +280,7 @@ func TestRunNewInstallCancelSkipsReset(t *testing.T) {
 	}()
 
 	baseDir := t.TempDir()
+	forceDetectedBaseDirForTest(t, baseDir)
 	configPath := filepath.Join(baseDir, "env", "backup.env")
 	markerPath := filepath.Join(baseDir, "marker.txt")
 	if err := os.WriteFile(markerPath, []byte("keep"), 0o600); err != nil {
@@ -320,6 +324,7 @@ func TestRunNewInstallTUIPassesContextToConfirm(t *testing.T) {
 	}()
 
 	baseDir := t.TempDir()
+	forceDetectedBaseDirForTest(t, baseDir)
 	configPath := filepath.Join(baseDir, "env", "backup.env")
 	ctx := t.Context()
 
@@ -367,6 +372,7 @@ func TestRunNewInstallTUIUsesTUIConfirmAndRunInstallTUI(t *testing.T) {
 	}()
 
 	baseDir := t.TempDir()
+	forceDetectedBaseDirForTest(t, baseDir)
 	configPath := filepath.Join(baseDir, "env", "backup.env")
 	stalePath := filepath.Join(baseDir, "stale.txt")
 	if err := os.WriteFile(stalePath, []byte("stale"), 0o600); err != nil {

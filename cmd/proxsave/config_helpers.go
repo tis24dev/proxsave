@@ -24,10 +24,7 @@ func resolveInstallConfigPath(configPath string) (string, error) {
 		return configPath, nil
 	}
 
-	baseDir, ok := detectBaseDir()
-	if !ok {
-		return "", fmt.Errorf("unable to determine base directory for configuration")
-	}
+	baseDir, _ := detectedBaseDirOrFallback()
 	return filepath.Join(baseDir, configPath), nil
 }
 

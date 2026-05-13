@@ -29,9 +29,10 @@ func buildNewInstallPlan(configPath string) (newInstallPlan, error) {
 		buildSig = "n/a"
 	}
 
+	baseDir, _ := detectedBaseDirOrFallback()
 	return newInstallPlan{
 		ResolvedConfigPath: resolvedPath,
-		BaseDir:            deriveBaseDirFromConfig(resolvedPath),
+		BaseDir:            baseDir,
 		BuildSignature:     buildSig,
 		PreservedEntries:   newInstallPreservedEntries(),
 	}, nil

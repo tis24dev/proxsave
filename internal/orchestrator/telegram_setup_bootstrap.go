@@ -38,7 +38,7 @@ type TelegramSetupBootstrap struct {
 }
 
 var (
-	telegramSetupBootstrapLoadConfig     = config.LoadConfig
+	telegramSetupBootstrapLoadConfig     = config.LoadConfigWithBaseDir
 	telegramSetupBootstrapIdentityDetect = identity.Detect
 	telegramSetupBootstrapStat           = os.Stat
 )
@@ -46,7 +46,7 @@ var (
 func BuildTelegramSetupBootstrap(configPath, baseDir string) (TelegramSetupBootstrap, error) {
 	state := TelegramSetupBootstrap{}
 
-	cfg, err := telegramSetupBootstrapLoadConfig(configPath)
+	cfg, err := telegramSetupBootstrapLoadConfig(configPath, baseDir)
 	if err != nil {
 		state.Eligibility = TelegramSetupSkipConfigError
 		state.ConfigError = err.Error()

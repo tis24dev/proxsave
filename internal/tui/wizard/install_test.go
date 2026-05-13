@@ -78,7 +78,7 @@ func TestApplyInstallDataRespectsBaseTemplate(t *testing.T) {
 	}
 
 	assertContains("MARKER", "1")
-	if strings.Contains(result, "BASE_DIR=") {
+	if _, ok := parseEnvTemplate(result)["BASE_DIR"]; ok {
 		t.Fatalf("expected BASE_DIR to be removed, got:\n%s", result)
 	}
 	assertContains("SECONDARY_ENABLED", "true")
@@ -101,7 +101,7 @@ func TestApplyInstallDataDefaultsBaseTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyInstallData returned error: %v", err)
 	}
-	if strings.Contains(result, "BASE_DIR=") {
+	if _, ok := parseEnvTemplate(result)["BASE_DIR"]; ok {
 		t.Fatalf("expected BASE_DIR not to be written in default template")
 	}
 }

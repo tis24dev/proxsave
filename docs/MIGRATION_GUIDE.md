@@ -321,6 +321,7 @@ These Bash variables are **not needed** in Go (skip them during migration):
 **Paths**:
 - `BACKUP_ENV_PATH` → Go uses fixed `configs/backup.env`
 - `SCRIPT_DIR` → Go binary is self-contained
+- `BASE_DIR` → Go auto-detects it from the installed `proxsave` executable; active migrated values are ignored/removed
 
 **Internal Logic**:
 - `BACKUP_TIMESTAMP_FORMAT` → Go uses ISO 8601 internally

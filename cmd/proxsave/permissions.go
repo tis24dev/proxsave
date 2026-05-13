@@ -163,16 +163,15 @@ func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string,
 		return "skipped", "permissions normalization skipped (configuration path unavailable)"
 	}
 
-	cfg, err := config.LoadConfig(configPath)
+	if baseDir == "" {
+		baseDir, _ = detectedBaseDirOrFallback()
+	}
+	cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir)
 	if err != nil {
 		if bootstrap != nil {
 			bootstrap.Warning("Post-install: skipping permission fix, failed to load configuration: %v", err)
 		}
 		return "error", "unable to normalize permissions: failed to load configuration (see log)"
-	}
-
-	if strings.TrimSpace(cfg.BaseDir) == "" && baseDir != "" {
-		cfg.BaseDir = baseDir
 	}
 
 	logger := logging.New(types.LogLevelInfo, cfg.UseColor)

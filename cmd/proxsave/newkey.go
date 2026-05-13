@@ -52,15 +52,7 @@ func runNewKey(ctx context.Context, configPath string, logLevel types.LogLevel, 
 	}
 	configPath = resolvedPath
 
-	// Derive BASE_DIR from the configuration path
-	baseDir := filepath.Dir(filepath.Dir(configPath))
-	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		if _, err := os.Stat("/opt/proxsave"); err == nil {
-			baseDir = "/opt/proxsave"
-		} else {
-			baseDir = "/opt/proxmox-backup"
-		}
-	}
+	baseDir, _ := detectedBaseDirOrFallback()
 	_ = os.Setenv("BASE_DIR", baseDir)
 
 	logging.DebugStepBootstrap(bootstrap, "newkey workflow", "config=%s base=%s", configPath, baseDir)
@@ -133,7 +125,7 @@ func loadNewKeyConfig(configPath, baseDir string) (*config.Config, string, error
 	}
 
 	if _, err := os.Stat(configPath); err == nil {
-		loaded, err := config.LoadConfig(configPath)
+		loaded, err := config.LoadConfigWithBaseDir(configPath, baseDir)
 		if err != nil {
 			return nil, "", fmt.Errorf("load configuration for newkey: %w", err)
 		}
