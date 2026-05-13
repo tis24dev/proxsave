@@ -310,19 +310,27 @@ func isVirtualInterface(iface string, logger *logging.Logger) bool {
 
 func isBridgeInterface(iface string) bool {
 	if runtime.GOOS != "linux" {
-		name := strings.ToLower(iface)
-		return strings.HasPrefix(name, "vmbr") || strings.HasPrefix(name, "br") || strings.HasPrefix(name, "bridge")
+		return isBridgeInterfaceByName(iface)
 	}
 	_, err := os.Stat(filepath.Join("/sys/class/net", iface, "bridge"))
 	return err == nil
 }
 
+func isBridgeInterfaceByName(iface string) bool {
+	name := strings.ToLower(iface)
+	return strings.HasPrefix(name, "vmbr") || strings.HasPrefix(name, "br") || strings.HasPrefix(name, "bridge")
+}
+
 func isWirelessInterface(iface string) bool {
 	if runtime.GOOS != "linux" {
-		return strings.HasPrefix(strings.ToLower(iface), "wl")
+		return isWirelessInterfaceByName(iface)
 	}
 	_, err := os.Stat(filepath.Join("/sys/class/net", iface, "wireless"))
 	return err == nil
+}
+
+func isWirelessInterfaceByName(iface string) bool {
+	return strings.HasPrefix(strings.ToLower(iface), "wl")
 }
 
 func isLocallyAdministeredMAC(mac string) bool {

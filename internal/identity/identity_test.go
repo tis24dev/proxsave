@@ -1138,8 +1138,6 @@ func TestReadAddrAssignType(t *testing.T) {
 }
 
 func TestIsBridgeInterfaceByName(t *testing.T) {
-	// On non-Linux, detection falls back to interface names. On Linux,
-	// sysfs decides the result and these synthetic names may not exist.
 	tests := []struct {
 		name string
 		want bool
@@ -1156,21 +1154,15 @@ func TestIsBridgeInterfaceByName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isBridgeInterface(tt.name)
-			if runtime.GOOS == "linux" {
-				t.Logf("sysfs bridge detection for %q returned %v", tt.name, got)
-				return
-			}
+			got := isBridgeInterfaceByName(tt.name)
 			if got != tt.want {
-				t.Fatalf("isBridgeInterface(%q)=%v; want %v", tt.name, got, tt.want)
+				t.Fatalf("isBridgeInterfaceByName(%q)=%v; want %v", tt.name, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestIsWirelessInterfaceByName(t *testing.T) {
-	// On non-Linux, detection falls back to interface names. On Linux,
-	// sysfs decides the result and these synthetic names may not exist.
 	tests := []struct {
 		name string
 		want bool
@@ -1184,13 +1176,9 @@ func TestIsWirelessInterfaceByName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isWirelessInterface(tt.name)
-			if runtime.GOOS == "linux" {
-				t.Logf("sysfs wireless detection for %q returned %v", tt.name, got)
-				return
-			}
+			got := isWirelessInterfaceByName(tt.name)
 			if got != tt.want {
-				t.Fatalf("isWirelessInterface(%q)=%v; want %v", tt.name, got, tt.want)
+				t.Fatalf("isWirelessInterfaceByName(%q)=%v; want %v", tt.name, got, tt.want)
 			}
 		})
 	}
