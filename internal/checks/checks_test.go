@@ -1227,6 +1227,8 @@ func TestCheckLockFile_CloseFailsRemovesPartialLock(t *testing.T) {
 
 	origSync := syncFile
 	t.Cleanup(func() { syncFile = origSync })
+	// Closing here causes the subsequent production Close() to return os.ErrClosed
+	// and exercise the close-failure branch.
 	syncFile = func(f *os.File) error {
 		return f.Close()
 	}
