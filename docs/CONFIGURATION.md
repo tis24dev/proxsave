@@ -865,7 +865,7 @@ If `EMAIL_ENABLED` is omitted, the default remains `false`. The legacy alias `EM
 | `sendmail` | The node already has a local MTA such as Postfix, Exim, or Sendmail. | In the local MTA. ProxSave calls `/usr/sbin/sendmail`. |
 | `pmf` | You explicitly want Proxmox Notifications via `proxmox-mail-forward`. | In Proxmox (`Datacenter -> Notifications` on PVE, or the PBS notification UI/config). ProxSave does not ask for SMTP host/port/user/password. |
 
-`pmf` may also be written as `proxmox`, `proxmox-notifications`, or `proxmox-mail-forward`; ProxSave normalizes those aliases to `pmf`.
+The value `pmf` may also be written as `proxmox`, `proxmox-notifications`, or `proxmox-mail-forward`; ProxSave normalizes those aliases to `pmf`.
 
 **Notes**:
 - Allowed values for `EMAIL_DELIVERY_METHOD` are: `pmf`, `relay`, `sendmail` (invalid values will skip Email with a warning).
