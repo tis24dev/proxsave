@@ -130,21 +130,24 @@ func (w *restoreUIWorkflowRun) shouldCreateAccessControlRollbackBackup() bool {
 
 func (w *restoreUIWorkflowRun) prepareRestoreServices() (func(), error) {
 	var cleanups []func()
+	runCleanups := func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}
 	if cleanup, err := w.preparePVEClusterRestore(); err != nil {
+		runCleanups()
 		return nil, err
 	} else if cleanup != nil {
 		cleanups = append(cleanups, cleanup)
 	}
 	if cleanup, err := w.preparePBSServices(); err != nil {
+		runCleanups()
 		return nil, err
 	} else if cleanup != nil {
 		cleanups = append(cleanups, cleanup)
 	}
-	return func() {
-		for i := len(cleanups) - 1; i >= 0; i-- {
-			cleanups[i]()
-		}
-	}, nil
+	return runCleanups, nil
 }
 
 func (w *restoreUIWorkflowRun) preparePVEClusterRestore() (func(), error) {
