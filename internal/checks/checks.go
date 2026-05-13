@@ -392,7 +392,6 @@ func (c *Checker) CheckLockFile() CheckResult {
 			c.logger.Warning("Failed to sync lock file %s: %v", lockPath, err)
 		}
 		if err := f.Close(); err != nil {
-			c.logger.Warning("Failed to close lock file %s: %v", lockPath, err)
 			c.removePartialLockFile(lockPath)
 			result.Error = fmt.Errorf("failed to close lock file: %w", err)
 			result.Message = result.Error.Error()
