@@ -1112,8 +1112,8 @@ func TestFilesystemTypeHelpers(t *testing.T) {
 		{FilesystemExFAT, false, false, true},
 		{FilesystemNFS4, false, true, false},
 		{FilesystemCIFS, false, true, true},
-		{FilesystemSMB, false, true, false},
-		{FilesystemFUSE, false, false, false},
+		{FilesystemSMB, false, true, true},
+		{FilesystemFUSE, false, false, true},
 		{FilesystemUnknown, false, false, false},
 	}
 

@@ -22,6 +22,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -86,6 +87,8 @@ type Checker struct {
 	envInfo    *environment.EnvironmentInfo
 	result     *Result
 	lookPath   func(string) (string, error)
+
+	filesystemInfoLookup func(context.Context, string) (*storage.FilesystemInfo, error)
 }
 
 type dependencyEntry struct {
@@ -525,6 +528,10 @@ func (c *Checker) verifyDirectories() {
 			continue
 		}
 
+		if dir.allowBackup && c.shouldSkipPOSIXDirectoryChecks(dir.path) {
+			continue
+		}
+
 		if dir.allowBackup && c.shouldSkipOwnershipChecks(dir.path) {
 			c.logger.Debug("Security check: skipping root ownership enforcement for %s (managed by SET_BACKUP_PERMISSIONS)", dir.path)
 			continue
@@ -850,6 +857,42 @@ func (c *Checker) shouldSkipOwnershipChecks(path string) bool {
 		}
 	}
 	return false
+}
+
+func (c *Checker) shouldSkipPOSIXDirectoryChecks(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+
+	fsInfo, err := c.detectFilesystemInfo(context.Background(), path)
+	if err != nil {
+		if c.logger != nil {
+			c.logger.Debug("Security check: filesystem detection failed for %s; continuing with POSIX permission checks: %v", path, err)
+		}
+		return false
+	}
+	if fsInfo == nil {
+		return false
+	}
+	if fsInfo.Type.ShouldAutoExclude() || !fsInfo.SupportsOwnership {
+		if c.logger != nil {
+			c.logger.Info("Security check: skipping POSIX permissions for %s (filesystem %s does not support Unix ownership/permissions)", path, fsInfo.Type)
+		}
+		return true
+	}
+	return false
+}
+
+func (c *Checker) detectFilesystemInfo(ctx context.Context, path string) (*storage.FilesystemInfo, error) {
+	if c != nil && c.filesystemInfoLookup != nil {
+		return c.filesystemInfoLookup(ctx, path)
+	}
+	logger := (*logging.Logger)(nil)
+	if c != nil {
+		logger = c.logger
+	}
+	return storage.NewFilesystemDetector(logger).DetectFilesystem(ctx, path)
 }
 
 type ssEntry struct {

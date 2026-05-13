@@ -147,6 +147,9 @@ AUTO_FIX_PERMISSIONS=true
     └── proxsave               755 (-rwxr-xr-x)
 ```
 
+**CIFS/SMB or Windows-backed shares**:
+Linux permission modes and `root:root` ownership are often synthetic on CIFS/SMB mounts, especially when the server is Windows. ProxSave detects non-POSIX backup/log filesystems and skips POSIX permission/ownership warnings for `BACKUP_PATH`, `LOG_PATH`, `SECONDARY_PATH`, and `SECONDARY_LOG_PATH`. If warnings persist, confirm the share is mounted before ProxSave starts and that the mount type appears as `cifs`/`smb` in `/proc/mounts`.
+
 ---
 
 #### Error: `Invalid configuration value for COMPRESSION_TYPE`

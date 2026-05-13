@@ -13,6 +13,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -2310,6 +2311,53 @@ func TestVerifyDirectoriesSkipOwnershipForBackup(t *testing.T) {
 
 	// The backup directory should have ownership check skipped
 	// Ownership warnings for backup path should not appear
+}
+
+func TestVerifyDirectoriesSkipsPOSIXChecksOnCIFSBackupPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	backupDir := filepath.Join(tmpDir, "backup")
+	if err := os.MkdirAll(backupDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(backupDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+
+	checker := &Checker{
+		logger: newSecurityTestLogger(),
+		cfg: &config.Config{
+			BaseDir:            tmpDir,
+			BackupPath:         backupDir,
+			AutoFixPermissions: false,
+		},
+		result: &Result{},
+		filesystemInfoLookup: func(ctx context.Context, path string) (*storage.FilesystemInfo, error) {
+			if filepath.Clean(path) == filepath.Clean(backupDir) {
+				return &storage.FilesystemInfo{
+					Path:              path,
+					Type:              storage.FilesystemCIFS,
+					SupportsOwnership: false,
+					IsNetworkFS:       true,
+					MountPoint:        backupDir,
+				}, nil
+			}
+			return &storage.FilesystemInfo{
+				Path:              path,
+				Type:              storage.FilesystemExt4,
+				SupportsOwnership: true,
+				MountPoint:        tmpDir,
+			}, nil
+		},
+	}
+
+	checker.verifyDirectories()
+
+	for _, issue := range checker.result.Issues {
+		if strings.Contains(issue.Message, backupDir) &&
+			(strings.Contains(issue.Message, "permissions") || strings.Contains(issue.Message, "owned")) {
+			t.Fatalf("expected CIFS backup path POSIX warnings to be skipped, got issue: %s", issue.Message)
+		}
+	}
 }
 
 // ============================================================
