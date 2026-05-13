@@ -136,6 +136,31 @@ func TestRecreateDatastoreDirectoriesCreatesStructure(t *testing.T) {
 	}
 }
 
+func TestInitializePBSDatastoreReturnsSubdirError(t *testing.T) {
+	logger := newDirTestLogger()
+	baseDir := filepath.Join(t.TempDir(), "datastore")
+	if err := os.MkdirAll(baseDir, 0o750); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, ".chunks"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write blocking file: %v", err)
+	}
+
+	changed, err := initializePBSDatastore(baseDir, "ds", logger)
+	if err == nil {
+		t.Fatalf("expected subdirectory creation error")
+	}
+	if changed {
+		t.Fatalf("changed=%t; want false on subdir error", changed)
+	}
+	if !strings.Contains(err.Error(), ".chunks") {
+		t.Fatalf("expected error to mention failed subdir, got: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(baseDir, ".index")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected .index creation to be skipped after first error, stat err=%v", statErr)
+	}
+}
+
 func TestRecreateDatastoreDirectoriesSkipsZFSMountPoints(t *testing.T) {
 	logger := newDirTestLogger()
 	baseDir := filepath.Join(t.TempDir(), "backup-ds")

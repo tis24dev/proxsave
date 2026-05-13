@@ -176,7 +176,10 @@ func initializePBSDatastore(basePath, datastoreName string, logger *logging.Logg
 	}
 	changed := len(dirsToFix) > 0
 
-	subdirChanged, dirsToFix := ensurePBSDatastoreSubdirs(basePath, dirsToFix, logger)
+	subdirChanged, dirsToFix, err := ensurePBSDatastoreSubdirs(basePath, dirsToFix)
+	if err != nil {
+		return false, fmt.Errorf("create datastore subdirectories: %w", err)
+	}
 	applyPBSDatastoreOwnership(basePath, datastoreName, dirsToFix, logger)
 
 	lockChanged, lockErr := ensurePBSDatastoreLockFile(basePath, logger)
@@ -187,7 +190,7 @@ func initializePBSDatastore(basePath, datastoreName string, logger *logging.Logg
 	return changed || subdirChanged || lockChanged, nil
 }
 
-func ensurePBSDatastoreSubdirs(basePath string, dirsToFix []string, logger *logging.Logger) (bool, []string) {
+func ensurePBSDatastoreSubdirs(basePath string, dirsToFix []string) (bool, []string, error) {
 	changed := false
 	for _, subdir := range pbsDatastoreSubdirs {
 		path := filepath.Join(basePath, subdir)
@@ -196,10 +199,10 @@ func ensurePBSDatastoreSubdirs(basePath string, dirsToFix []string, logger *logg
 			dirsToFix = append(dirsToFix, path)
 		}
 		if err := os.MkdirAll(path, 0750); err != nil {
-			logger.Warning("Failed to create %s: %v", path, err)
+			return changed, dirsToFix, fmt.Errorf("create %s: %w", path, err)
 		}
 	}
-	return changed, dirsToFix
+	return changed, dirsToFix, nil
 }
 
 func applyPBSDatastoreOwnership(basePath, datastoreName string, dirsToFix []string, logger *logging.Logger) {
