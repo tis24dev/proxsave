@@ -34,9 +34,11 @@ func guardMountPoint(ctx context.Context, guardTarget string) error {
 	if err != nil {
 		return err
 	}
-	if err := ensureGuardTargetUnmounted(target); err != nil {
+	mounted, err := ensureGuardTargetUnmounted(target)
+	if err != nil {
 		return fmt.Errorf("check mount status: %w", err)
-	} else if isAlreadyMounted(target) {
+	}
+	if mounted {
 		return nil
 	}
 
@@ -61,20 +63,12 @@ func normalizeGuardMountRequest(ctx context.Context, guardTarget string) (string
 	return target, nil
 }
 
-func ensureGuardTargetUnmounted(target string) error {
+func ensureGuardTargetUnmounted(target string) (bool, error) {
 	mounted, err := isMounted(target)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if mounted {
-		return nil
-	}
-	return nil
-}
-
-func isAlreadyMounted(target string) bool {
-	mounted, err := isMounted(target)
-	return err == nil && mounted
+	return mounted, nil
 }
 
 func ensureGuardDirectories(guardDir, target string) error {
