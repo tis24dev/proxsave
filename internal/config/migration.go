@@ -149,6 +149,9 @@ func mergeTemplateWithLegacy(template string, legacy map[string]string) (string,
 	}
 
 	for key := range legacy {
+		if _, ignored := ignoredLegacyMigrationKeys[strings.ToUpper(strings.TrimSpace(key))]; ignored {
+			continue
+		}
 		if !usedLegacy[key] {
 			summary.UnmappedLegacyKeys = append(summary.UnmappedLegacyKeys, key)
 		}
@@ -160,6 +163,10 @@ func mergeTemplateWithLegacy(template string, legacy map[string]string) (string,
 		merged += "\n"
 	}
 	return merged, summary
+}
+
+var ignoredLegacyMigrationKeys = map[string]struct{}{
+	"BASE_DIR": {},
 }
 
 func renderValueLines(key, value string) []string {

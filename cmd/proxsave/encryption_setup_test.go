@@ -21,6 +21,7 @@ func TestRunInitialEncryptionSetupWithUIReloadsConfig(t *testing.T) {
 	}
 
 	baseDir := t.TempDir()
+	forceDetectedBaseDirForTest(t, baseDir)
 	configPath := filepath.Join(baseDir, "env", "backup.env")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -59,6 +60,7 @@ func TestRunInitialEncryptionSetupWithUIUsesProvidedUI(t *testing.T) {
 	}
 
 	baseDir := t.TempDir()
+	forceDetectedBaseDirForTest(t, baseDir)
 	configPath := filepath.Join(baseDir, "env", "backup.env")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -107,6 +109,7 @@ func TestRunInitialEncryptionSetupWithUIReusesExistingFileWithoutReportingWrite(
 	}
 
 	baseDir := t.TempDir()
+	forceDetectedBaseDirForTest(t, baseDir)
 	recipientPath := filepath.Join(baseDir, "identity", "age", "recipient.txt")
 	if err := os.MkdirAll(filepath.Dir(recipientPath), 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)

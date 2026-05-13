@@ -27,7 +27,7 @@ func featuresNeedNetwork(cfg *config.Config) (bool, []string) {
 		}
 	}
 	// Email via relay
-	if cfg.EmailEnabled && strings.EqualFold(cfg.EmailDeliveryMethod, "relay") {
+	if cfg.EmailEnabled && config.NormalizeEmailDeliveryMethod(cfg.EmailDeliveryMethod) == "relay" {
 		reasons = append(reasons, "Email relay delivery")
 	}
 	// Gotify
@@ -83,7 +83,7 @@ func cloudNetworkEnabled(cfg *config.Config) bool { return cfg.CloudEnabled }
 func telegramNetworkEnabled(cfg *config.Config) bool { return cfg.TelegramEnabled }
 
 func emailRelayNetworkEnabled(cfg *config.Config) bool {
-	return cfg.EmailEnabled && strings.EqualFold(cfg.EmailDeliveryMethod, "relay")
+	return cfg.EmailEnabled && config.NormalizeEmailDeliveryMethod(cfg.EmailDeliveryMethod) == "relay"
 }
 
 func gotifyNetworkEnabled(cfg *config.Config) bool { return cfg.GotifyEnabled }

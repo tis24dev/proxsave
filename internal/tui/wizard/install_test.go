@@ -78,7 +78,7 @@ func TestApplyInstallDataRespectsBaseTemplate(t *testing.T) {
 	}
 
 	assertContains("MARKER", "1")
-	if strings.Contains(result, "BASE_DIR=") {
+	if _, ok := parseEnvTemplate(result)["BASE_DIR"]; ok {
 		t.Fatalf("expected BASE_DIR to be removed, got:\n%s", result)
 	}
 	assertContains("SECONDARY_ENABLED", "true")
@@ -101,7 +101,7 @@ func TestApplyInstallDataDefaultsBaseTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyInstallData returned error: %v", err)
 	}
-	if strings.Contains(result, "BASE_DIR=") {
+	if _, ok := parseEnvTemplate(result)["BASE_DIR"]; ok {
 		t.Fatalf("expected BASE_DIR not to be written in default template")
 	}
 }
@@ -234,10 +234,38 @@ func TestApplyInstallDataCronAndNotifications(t *testing.T) {
 	assertContains("TELEGRAM_ENABLED", "false")
 	assertContains("EMAIL_ENABLED", "true")
 	assertContains("EMAIL_DELIVERY_METHOD", "relay")
+	assertContains("EMAIL_FALLBACK_SENDMAIL", "true")
 	if strings.Contains(result, "CRON_SCHEDULE=") || strings.Contains(result, "CRON_HOUR=") || strings.Contains(result, "CRON_MINUTE=") {
 		t.Fatalf("expected CRON_* keys to be removed from backup.env, got:\n%s", result)
 	}
 	assertContains("ENCRYPT_ARCHIVE", "false")
+}
+
+func TestApplyInstallDataPreservesExistingEmailDeliveryMethod(t *testing.T) {
+	baseTemplate := strings.Join([]string{
+		"EMAIL_ENABLED=false",
+		"EMAIL_DELIVERY_METHOD=relay",
+		"EMAIL_FALLBACK_SENDMAIL=false",
+		"",
+	}, "\n")
+	data := &InstallWizardData{
+		BaseDir:          "/data",
+		NotificationMode: "email",
+	}
+
+	result, err := ApplyInstallData(baseTemplate, data)
+	if err != nil {
+		t.Fatalf("ApplyInstallData returned error: %v", err)
+	}
+	if !strings.Contains(result, "EMAIL_DELIVERY_METHOD=relay") {
+		t.Fatalf("expected existing relay method to be preserved:\n%s", result)
+	}
+	if !strings.Contains(result, "EMAIL_FALLBACK_SENDMAIL=false") {
+		t.Fatalf("expected existing sendmail fallback key to be preserved:\n%s", result)
+	}
+	if strings.Contains(result, "EMAIL_FALLBACK_PMF") {
+		t.Fatalf("expected transitional EMAIL_FALLBACK_PMF key to be removed:\n%s", result)
+	}
 }
 
 func TestRunInstallWizardBlankCronIgnoresEnvOverride(t *testing.T) {

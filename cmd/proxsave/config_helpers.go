@@ -24,10 +24,7 @@ func resolveInstallConfigPath(configPath string) (string, error) {
 		return configPath, nil
 	}
 
-	baseDir, ok := detectBaseDir()
-	if !ok {
-		return "", fmt.Errorf("unable to determine base directory for configuration")
-	}
+	baseDir, _ := detectedBaseDirOrFallback()
 	return filepath.Join(baseDir, configPath), nil
 }
 
@@ -50,6 +47,37 @@ func ensureConfigExists(path string, logger configStatusLogger) error {
 
 func setEnvValue(template, key, value string) string {
 	return utils.SetEnvValue(template, key, value)
+}
+
+func unsetEnvValue(template, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return template
+	}
+
+	lines := strings.Split(template, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if utils.IsComment(trimmed) {
+			out = append(out, line)
+			continue
+		}
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) != 2 {
+			out = append(out, line)
+			continue
+		}
+		parsedKey := strings.TrimSpace(parts[0])
+		if fields := strings.Fields(parsedKey); len(fields) >= 2 && fields[0] == "export" {
+			parsedKey = fields[1]
+		}
+		if strings.EqualFold(parsedKey, key) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 func sanitizeEnvValue(value string) string {

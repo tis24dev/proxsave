@@ -202,11 +202,12 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 		d.logger.Debug("Cannot create test file for ownership check: %v", err)
 		return false
 	}
+	defer func() { _ = os.Remove(testFile) }()
+
 	if err := f.Close(); err != nil {
 		d.logger.Debug("Cannot close test file for ownership check: %v", err)
 		return false
 	}
-	defer func() { _ = os.Remove(testFile) }()
 
 	// Try to change ownership to current user (should be safe)
 	uid := os.Getuid()
@@ -241,6 +242,9 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 // parseFilesystemType converts a filesystem type string to FilesystemType
 func parseFilesystemType(fsTypeStr string) FilesystemType {
 	fsTypeStr = strings.ToLower(fsTypeStr)
+	if strings.HasPrefix(fsTypeStr, "fuse.") {
+		return FilesystemFUSE
+	}
 
 	switch fsTypeStr {
 	case "ext4":
@@ -271,13 +275,13 @@ func parseFilesystemType(fsTypeStr string) FilesystemType {
 		return FilesystemExFAT
 	case "ntfs", "ntfs-3g":
 		return FilesystemNTFS
-	case "fuse", "fuse.sshfs":
+	case "fuse":
 		return FilesystemFUSE
 	case "nfs":
 		return FilesystemNFS
 	case "nfs4":
 		return FilesystemNFS4
-	case "cifs", "smb", "smbfs":
+	case "cifs", "smb", "smbfs", "smb2", "smb3":
 		return FilesystemCIFS
 	default:
 		return FilesystemUnknown

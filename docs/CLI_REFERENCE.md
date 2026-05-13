@@ -143,7 +143,7 @@ Some interactive commands support two interface modes:
 2. Optionally configures secondary storage (`SECONDARY_PATH` required if enabled; `SECONDARY_LOG_PATH` optional; invalid secondary paths are re-prompted/rejected; disabling secondary storage clears both saved secondary paths)
 3. Optionally configures cloud storage (rclone)
 4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
-5. Optionally sets up notifications (Telegram, Email; Email defaults to `EMAIL_DELIVERY_METHOD=relay`)
+5. Optionally sets up notifications (Telegram, Email; Email asks for a delivery method and defaults to `EMAIL_DELIVERY_METHOD=relay` with `EMAIL_FALLBACK_SENDMAIL=true`)
 6. Optionally configures encryption (AGE setup)
 7. Optionally selects a cron time (HH:MM, default `02:00`) for the `proxsave` cron entry in both CLI and TUI install flows
 8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)
@@ -830,6 +830,9 @@ CONFIG_FILE=/etc/pbs/prod.env ./build/proxsave
 # Force dry-run mode
 DRY_RUN=true ./build/proxsave
 
+# BASE_DIR is not an override; it is detected from the installed executable.
+# BASE_DIR in the environment or backup.env is deprecated and ignored.
+
 # PBS restore behavior
 # Selected interactively during `--restore` on PBS hosts (Merge vs Clean 1:1).
 
@@ -840,7 +843,7 @@ DEBUG_LEVEL=extreme ./build/proxsave --log-level debug
 USE_COLOR=false ./build/proxsave
 ```
 
-**Priority**: Environment variables > Configuration file > Defaults
+**Priority**: Environment variables > Configuration file > Defaults, except `BASE_DIR`, which is always runtime-detected.
 
 ---
 

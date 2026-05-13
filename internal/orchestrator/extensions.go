@@ -159,6 +159,7 @@ func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, early
 	// Try to populate version info from orchestrator
 	if o.version != "" {
 		stats.Version = o.version
+		stats.ScriptVersion = o.version
 	}
 	if o.envInfo != nil {
 		stats.ProxmoxType = o.envInfo.Type
@@ -170,6 +171,8 @@ func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, early
 	if o.proxmoxVersion != "" {
 		stats.ProxmoxVersion = o.proxmoxVersion
 	}
+	stats.ServerID = strings.TrimSpace(o.serverID)
+	stats.ServerMAC = strings.TrimSpace(o.serverMAC)
 
 	// Set log file path if logger has one
 	if logPath := o.logger.GetLogFilePath(); logPath != "" {

@@ -544,6 +544,39 @@ func TestConfigureNotifications(t *testing.T) {
 	}
 }
 
+func TestConfigureNotificationsEmailDefaultsToRelaySendmailFallback(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader("n\ny\n\n"))
+	captureStdout(t, func() {
+		result, err = configureNotifications(ctx, reader, "")
+	})
+	if err != nil {
+		t.Fatalf("configureNotifications error: %v", err)
+	}
+	for _, want := range []string{
+		"TELEGRAM_ENABLED=false",
+		"EMAIL_ENABLED=true",
+		"EMAIL_DELIVERY_METHOD=relay",
+		"EMAIL_FALLBACK_SENDMAIL=true",
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("missing %q in template: %q", want, result)
+		}
+	}
+}
+
+func TestPromptEmailDeliveryMethodAcceptsProxmoxAlias(t *testing.T) {
+	method, err := promptEmailDeliveryMethod(context.Background(), bufio.NewReader(strings.NewReader("proxmox-notifications\n")), "relay")
+	if err != nil {
+		t.Fatalf("promptEmailDeliveryMethod error: %v", err)
+	}
+	if method != "pmf" {
+		t.Fatalf("method=%q, want pmf", method)
+	}
+}
+
 func TestConfigureEncryption(t *testing.T) {
 	var enabled bool
 	var err error
@@ -656,6 +689,34 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 	}
 }
 
+func TestRunConfigWizardCLIEditExistingRemovesRuntimeDerivedKeys(t *testing.T) {
+	cfgFile := createTempFile(t, "BASE_DIR=/custom\nCRON_HOUR=2\nMARKER=1\n")
+	tmpConfigPath := cfgFile + ".tmp"
+	reader := bufio.NewReader(strings.NewReader("2\nn\nn\nn\nn\nn\nn\n03:15\n"))
+
+	var err error
+	captureStdout(t, func() {
+		_, err = runConfigWizardCLI(context.Background(), reader, cfgFile, tmpConfigPath, "/opt/proxsave", nil)
+	})
+	if err != nil {
+		t.Fatalf("runConfigWizardCLI returned error: %v", err)
+	}
+
+	content, readErr := os.ReadFile(cfgFile)
+	if readErr != nil {
+		t.Fatalf("expected config file to be written: %v", readErr)
+	}
+	values := parseWrittenEnvForTest(string(content))
+	for _, key := range []string{"BASE_DIR", "CRON_SCHEDULE", "CRON_HOUR", "CRON_MINUTE"} {
+		if _, ok := values[key]; ok {
+			t.Fatalf("expected %s to be removed from config:\n%s", key, content)
+		}
+	}
+	if values["MARKER"] != "1" {
+		t.Fatalf("expected existing MARKER to be preserved, got %q in:\n%s", values["MARKER"], content)
+	}
+}
+
 func TestRunConfigWizardCLISkipLeavesCronScheduleEmpty(t *testing.T) {
 	cfgFile := createTempFile(t, "EXISTING=1\n")
 	tmpConfigPath := cfgFile + ".tmp"
@@ -713,4 +774,24 @@ func createTempFile(t *testing.T, content string) string {
 	}
 	_ = f.Close()
 	return f.Name()
+}
+
+func parseWrittenEnvForTest(content string) map[string]string {
+	values := map[string]string{}
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		if fields := strings.Fields(key); len(fields) >= 2 && fields[0] == "export" {
+			key = fields[1]
+		}
+		values[strings.ToUpper(key)] = strings.TrimSpace(parts[1])
+	}
+	return values
 }

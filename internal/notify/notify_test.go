@@ -134,6 +134,44 @@ func TestTemplateHelpers(t *testing.T) {
 	}
 }
 
+func TestBuildEmailHTMLEscapesHeaderStorageAndFooterValues(t *testing.T) {
+	data := createTestNotificationData()
+	data.Hostname = `<img src=x onerror=alert(1)>`
+	data.LocalStatusSummary = `<script>local()</script>`
+	data.LocalUsed = `<b>14 GB</b>`
+	data.LocalFree = `<i>12 GB</i>`
+	data.LocalPercent = `<u>53%</u>`
+	data.SecondaryStatusSummary = `<script>secondary()</script>`
+	data.SecondaryUsed = `<b>secondary used</b>`
+	data.SecondaryFree = `<i>secondary free</i>`
+	data.SecondaryPercent = `<u>secondary percent</u>`
+	data.CloudStatusSummary = `<script>cloud()</script>`
+	data.ScriptVersion = `<script>version()</script>`
+
+	html := BuildEmailHTML(data)
+	rawValues := []string{
+		data.Hostname,
+		data.LocalStatusSummary,
+		data.LocalUsed,
+		data.LocalFree,
+		data.LocalPercent,
+		data.SecondaryStatusSummary,
+		data.SecondaryUsed,
+		data.SecondaryFree,
+		data.SecondaryPercent,
+		data.CloudStatusSummary,
+		data.ScriptVersion,
+	}
+	for _, raw := range rawValues {
+		if strings.Contains(html, raw) {
+			t.Fatalf("BuildEmailHTML emitted raw value %q\nHTML:\n%s", raw, html)
+		}
+		if !strings.Contains(html, escapeHTML(raw)) {
+			t.Fatalf("BuildEmailHTML missing escaped value %q", escapeHTML(raw))
+		}
+	}
+}
+
 func TestValueHelpers(t *testing.T) {
 	if got := valueOrNA(" "); got != "N/A" {
 		t.Fatalf("valueOrNA blank = %s, want N/A", got)

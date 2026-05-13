@@ -96,7 +96,9 @@ func buildPBSNotificationDesiredState(cfgSections, privSections []proxmoxNotific
 		case "matcher":
 			desired.matchers[name] = section
 		default:
-			logger.Warning("PBS notifications API apply: unknown section %q (%s); skipping", typ, name)
+			if logger != nil {
+				logger.Warning("PBS notifications API apply: unknown section %q (%s); skipping", typ, name)
+			}
 		}
 	}
 
@@ -167,7 +169,9 @@ func pbsEndpointPositionalArgs(typ, name string, entries []proxmoxNotificationEn
 func pbsEndpointSinglePositional(typ, name string, entries []proxmoxNotificationEntry, logger *logging.Logger, keys ...string) ([]string, []proxmoxNotificationEntry, bool) {
 	value, remaining, ok := popEntryValue(entries, keys...)
 	if !ok || strings.TrimSpace(value) == "" {
-		logger.Warning("PBS notifications API apply: %s endpoint %s missing %s; skipping", typ, name, keys[0])
+		if logger != nil {
+			logger.Warning("PBS notifications API apply: %s endpoint %s missing %s; skipping", typ, name, keys[0])
+		}
 		return nil, entries, false
 	}
 	return []string{value}, remaining, true
@@ -176,12 +180,16 @@ func pbsEndpointSinglePositional(typ, name string, entries []proxmoxNotification
 func pbsGotifyEndpointPositionals(name string, entries []proxmoxNotificationEntry, logger *logging.Logger) ([]string, []proxmoxNotificationEntry, bool) {
 	server, remaining, ok := popEntryValue(entries, "server")
 	if !ok || strings.TrimSpace(server) == "" {
-		logger.Warning("PBS notifications API apply: gotify endpoint %s missing server; skipping", name)
+		if logger != nil {
+			logger.Warning("PBS notifications API apply: gotify endpoint %s missing server; skipping", name)
+		}
 		return nil, entries, false
 	}
 	token, remaining, ok := popEntryValue(remaining, "token")
 	if !ok || strings.TrimSpace(token) == "" {
-		logger.Warning("PBS notifications API apply: gotify endpoint %s missing token; skipping", name)
+		if logger != nil {
+			logger.Warning("PBS notifications API apply: gotify endpoint %s missing token; skipping", name)
+		}
 		return nil, entries, false
 	}
 	return []string{server, token}, remaining, true

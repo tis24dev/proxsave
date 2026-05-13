@@ -80,18 +80,65 @@ func detectExecInfo() ExecInfo {
 	}
 
 	execDir := filepath.Dir(execPath)
-	dir := execDir
-	originalDir := dir
-	baseDir := ""
+	baseDir, hasBase := resolveBaseDirFromExecutablePath(execPath)
 
+	return ExecInfo{
+		ExecPath: execPath,
+		ExecDir:  execDir,
+		BaseDir:  baseDir,
+		HasBase:  hasBase,
+	}
+}
+
+func detectBaseDir() (string, bool) {
+	info := getExecInfo()
+	return info.BaseDir, info.HasBase
+}
+
+func detectedBaseDirOrFallback() (string, bool) {
+	baseDir, found := detectBaseDir()
+	if strings.TrimSpace(baseDir) == "" {
+		return fallbackBaseDir(), false
+	}
+	return baseDir, found
+}
+
+func resolveBaseDirFromExecutablePath(execPath string) (string, bool) {
+	clean := filepath.Clean(strings.TrimSpace(execPath))
+	if clean == "" || clean == "." {
+		return fallbackBaseDir(), false
+	}
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil && strings.TrimSpace(resolved) != "" {
+		clean = filepath.Clean(resolved)
+	}
+	if baseDir, ok := baseDirFromStandardExecutableLayout(clean); ok {
+		return baseDir, true
+	}
+	if baseDir, ok := baseDirFromInstallMarkers(filepath.Dir(clean)); ok {
+		return baseDir, true
+	}
+	return fallbackBaseDir(), false
+}
+
+func baseDirFromStandardExecutableLayout(execPath string) (string, bool) {
+	dir := filepath.Dir(execPath)
+	if filepath.Base(dir) != "build" {
+		return "", false
+	}
+	parent := filepath.Dir(dir)
+	if parent == "" || parent == "." || parent == string(filepath.Separator) {
+		return "", false
+	}
+	return parent, true
+}
+
+func baseDirFromInstallMarkers(startDir string) (string, bool) {
+	dir := filepath.Clean(strings.TrimSpace(startDir))
 	for dir != "" && dir != "." {
-		if info, err := os.Stat(filepath.Join(dir, "env")); err == nil && info.IsDir() {
-			baseDir = dir
-			break
-		}
-		if info, err := os.Stat(filepath.Join(dir, "script")); err == nil && info.IsDir() {
-			baseDir = dir
-			break
+		for _, marker := range []string{"configs", "env", "script", "identity"} {
+			if info, err := os.Stat(filepath.Join(dir, marker)); err == nil && info.IsDir() {
+				return dir, true
+			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -99,24 +146,17 @@ func detectExecInfo() ExecInfo {
 		}
 		dir = parent
 	}
-
-	if baseDir == "" {
-		if parent := filepath.Dir(originalDir); parent != "" && parent != "." && parent != string(filepath.Separator) {
-			baseDir = parent
-		}
-	}
-
-	return ExecInfo{
-		ExecPath: execPath,
-		ExecDir:  execDir,
-		BaseDir:  baseDir,
-		HasBase:  baseDir != "",
-	}
+	return "", false
 }
 
-func detectBaseDir() (string, bool) {
-	info := getExecInfo()
-	return info.BaseDir, info.HasBase
+func fallbackBaseDir() string {
+	if info, err := os.Stat("/opt/proxsave"); err == nil && info.IsDir() {
+		return "/opt/proxsave"
+	}
+	if info, err := os.Stat("/opt/proxmox-backup"); err == nil && info.IsDir() {
+		return "/opt/proxmox-backup"
+	}
+	return "/opt/proxsave"
 }
 
 func collectExecPathCandidates() []string {

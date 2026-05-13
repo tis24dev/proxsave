@@ -155,6 +155,21 @@ func TestMergeTemplateWithLegacyTracksUnmappedKeys(t *testing.T) {
 	}
 }
 
+func TestMergeTemplateWithLegacyIgnoresDeprecatedBaseDir(t *testing.T) {
+	legacy := map[string]string{
+		"BASE_DIR": "/legacy/base",
+	}
+
+	merged, summary := mergeTemplateWithLegacy(testTemplate, legacy)
+
+	if strings.Contains(merged, "\nBASE_DIR=") || strings.HasPrefix(merged, "BASE_DIR=") {
+		t.Fatalf("merged template should not contain active BASE_DIR:\n%s", merged)
+	}
+	if len(summary.UnmappedLegacyKeys) != 0 {
+		t.Fatalf("UnmappedLegacyKeys = %v; want []", summary.UnmappedLegacyKeys)
+	}
+}
+
 const baseInstallTemplate = `BACKUP_ENABLED=true
 BACKUP_PATH=/default/backup
 LOG_PATH=/default/log

@@ -448,11 +448,17 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 			if closeErr := outFile.Close(); closeErr != nil {
 				logger.Warning("Cannot close partially restored file %s: %v", target, closeErr)
 			}
+			if removeErr := safetyFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
+				logger.Warning("Cannot remove partially restored file %s: %v", target, removeErr)
+			}
 			logger.Warning("Cannot write file %s: %v", target, err)
 			continue
 		}
 		if err := outFile.Close(); err != nil {
 			logger.Warning("Cannot close restored file %s: %v", target, err)
+			if removeErr := safetyFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
+				logger.Warning("Cannot remove partially restored file %s: %v", target, removeErr)
+			}
 			continue
 		}
 

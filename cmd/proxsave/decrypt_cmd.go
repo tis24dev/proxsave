@@ -31,22 +31,12 @@ func runDecryptWorkflowOnly(ctx context.Context, configPath string, bootstrap *l
 		return err
 	}
 
-	cfg, err := config.LoadConfig(configPath)
+	autoBaseDir, _ := detectedBaseDirOrFallback()
+	cfg, err := config.LoadConfigWithBaseDir(configPath, autoBaseDir)
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	autoBaseDir, _ := detectBaseDir()
-	if cfg.BaseDir == "" {
-		if autoBaseDir == "" {
-			if _, err := os.Stat("/opt/proxsave"); err == nil {
-				autoBaseDir = "/opt/proxsave"
-			} else {
-				autoBaseDir = "/opt/proxmox-backup"
-			}
-		}
-		cfg.BaseDir = autoBaseDir
-	}
 	_ = os.Setenv("BASE_DIR", cfg.BaseDir)
 
 	logLevel := cfg.DebugLevel

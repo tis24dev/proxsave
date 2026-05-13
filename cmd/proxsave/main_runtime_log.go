@@ -1,11 +1,7 @@
 // Package main contains the proxsave command entrypoint.
 package main
 
-import (
-	"strings"
-
-	"github.com/tis24dev/proxsave/internal/logging"
-)
+import "github.com/tis24dev/proxsave/internal/logging"
 
 func logRunContext(rt *appRuntime) {
 	logRunDryRunStatus(rt)
@@ -17,6 +13,7 @@ func logRunContext(rt *appRuntime) {
 	logging.Info("Compression: %s (level %d, mode %s)", rt.cfg.CompressionType, rt.cfg.CompressionLevel, rt.cfg.CompressionMode)
 	logging.Info("Base directory: %s (%s)", rt.cfg.BaseDir, baseDirSource)
 	logging.Info("Configuration file: %s (%s)", rt.args.ConfigPath, runConfigPathSource(rt))
+	logIgnoredBaseDirOverrides(rt)
 }
 
 func logRunDryRunStatus(rt *appRuntime) {
@@ -31,16 +28,22 @@ func logRunDryRunStatus(rt *appRuntime) {
 }
 
 func runBaseDirSource(rt *appRuntime) string {
-	if rawBaseDir, ok := rt.cfg.Get("BASE_DIR"); ok && strings.TrimSpace(rawBaseDir) != "" {
-		return "configured in backup.env"
-	}
-	if rt.initialEnvBaseDir != "" {
-		return "from environment (BASE_DIR)"
-	}
 	if rt.autoBaseDirFound {
 		return "auto-detected from executable path"
 	}
 	return "default fallback"
+}
+
+func logIgnoredBaseDirOverrides(rt *appRuntime) {
+	if rt == nil || rt.cfg == nil {
+		return
+	}
+	if val, ok := rt.cfg.IgnoredBaseDirConfig(); ok {
+		logging.Warning("Ignoring deprecated BASE_DIR from backup.env (%q); using detected base directory %s", val, rt.cfg.BaseDir)
+	}
+	if val, ok := rt.cfg.IgnoredBaseDirEnv(); ok {
+		logging.Warning("Ignoring deprecated BASE_DIR from environment (%q); using detected base directory %s", val, rt.cfg.BaseDir)
+	}
 }
 
 func runConfigPathSource(rt *appRuntime) string {

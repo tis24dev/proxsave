@@ -18,11 +18,13 @@ func setDatastoreOwnership(path string, logger *logging.Logger) error {
 	}
 
 	uid, gid, found, err := lookupBackupOwnership(path, logger)
-	if err != nil || !found {
+	if err != nil {
 		return err
 	}
-	if err := chownDatastorePath(path, uid, gid, logger); err != nil {
-		return err
+	if found {
+		if err := chownDatastorePath(path, uid, gid, logger); err != nil {
+			return err
+		}
 	}
 	return ensureDatastoreDirectoryMode(path, logger)
 }

@@ -20,7 +20,8 @@ type encryptionSetupResult struct {
 }
 
 func runInitialEncryptionSetupWithUI(ctx context.Context, configPath string, ui orchestrator.AgeSetupUI) (*encryptionSetupResult, error) {
-	cfg, err := config.LoadConfig(configPath)
+	baseDir, _ := detectedBaseDirOrFallback()
+	cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reload configuration after install: %w", err)
 	}

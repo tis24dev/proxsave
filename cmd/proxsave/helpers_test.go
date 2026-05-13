@@ -741,10 +741,11 @@ func TestFeaturesNeedNetwork(t *testing.T) {
 
 func TestDisableNetworkFeaturesForRun(t *testing.T) {
 	cfg := &config.Config{
-		TelegramEnabled:     true,
-		EmailEnabled:        true,
-		EmailDeliveryMethod: "relay",
-		CloudEnabled:        true,
+		TelegramEnabled:       true,
+		EmailEnabled:          true,
+		EmailDeliveryMethod:   "relay",
+		EmailFallbackSendmail: true,
+		CloudEnabled:          true,
 	}
 
 	// Mock bootstrap logger (nil is ok for this test)
@@ -757,9 +758,9 @@ func TestDisableNetworkFeaturesForRun(t *testing.T) {
 		t.Error("CloudEnabled should be disabled")
 	}
 
-	// Email with relay should be disabled
-	if cfg.EmailEnabled && cfg.EmailDeliveryMethod == "relay" {
-		t.Error("Email relay should be disabled")
+	// Email relay should switch to local sendmail fallback when enabled.
+	if !cfg.EmailEnabled || cfg.EmailDeliveryMethod != "sendmail" {
+		t.Errorf("Email relay should switch to sendmail fallback, enabled=%v method=%q", cfg.EmailEnabled, cfg.EmailDeliveryMethod)
 	}
 }
 

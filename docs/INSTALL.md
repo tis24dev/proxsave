@@ -229,7 +229,7 @@ Final install steps still run:
 2. **Secondary storage**: Optional path for backup/log copies; disabling it clears both saved secondary paths from `backup.env`
 3. **Cloud storage (rclone)**: Optional rclone configuration (supports `CLOUD_REMOTE` as a remote name (recommended) or legacy `remote:path`; `CLOUD_LOG_PATH` supports path-only (recommended) or `otherremote:/path`)
 4. **Firewall rules**: Optional firewall rules collection toggle (`BACKUP_FIREWALL_RULES=false` by default; supports iptables/nftables)
-5. **Notifications**: Enable Telegram (centralized) and Email notifications (wizard defaults to `EMAIL_DELIVERY_METHOD=relay`; you can switch to `sendmail` or `pmf` later)
+5. **Notifications**: Enable Telegram (centralized) and Email notifications; Email asks for a delivery method and defaults to `relay` with `sendmail` failover. Use `pmf` only when you want Proxmox Notifications via `proxmox-mail-forward`.
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 7. **Cron schedule**: Choose cron time (HH:MM, default `02:00`) for the `proxsave` cron entry in both CLI and TUI install modes
 8. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
@@ -281,6 +281,8 @@ When shown, it does **not** modify your `backup.env`. It only:
 - Install session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome)
 
 After completion, edit `configs/backup.env` manually for advanced options.
+
+`BASE_DIR` is detected from the installed `proxsave` executable. Do not add an active `BASE_DIR=...` line to `backup.env`; upgrades remove it and runtime ignores it if present.
 
 ---
 

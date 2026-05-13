@@ -19,16 +19,17 @@ import (
 )
 
 type installWizardPrefill struct {
-	SecondaryEnabled  bool
-	SecondaryPath     string
-	SecondaryLogPath  string
-	CloudEnabled      bool
-	CloudRemote       string
-	CloudLogPath      string
-	FirewallEnabled   bool
-	TelegramEnabled   bool
-	EmailEnabled      bool
-	EncryptionEnabled bool
+	SecondaryEnabled    bool
+	SecondaryPath       string
+	SecondaryLogPath    string
+	CloudEnabled        bool
+	CloudRemote         string
+	CloudLogPath        string
+	FirewallEnabled     bool
+	TelegramEnabled     bool
+	EmailEnabled        bool
+	EmailDeliveryMethod string
+	EncryptionEnabled   bool
 }
 
 // InstallWizardData holds the collected installation data
@@ -43,6 +44,8 @@ type InstallWizardData struct {
 	RcloneLogRemote        string
 	BackupFirewallRules    *bool
 	NotificationMode       string // "none", "telegram", "email", "both"
+	EmailDeliveryMethod    string // "relay", "sendmail", or "pmf"
+	EmailFallbackSendmail  *bool
 	CronTime               string // HH:MM
 	EnableEncryption       bool
 }
@@ -58,6 +61,15 @@ const (
 )
 
 var (
+	installEmailDeliveryOptions = []struct {
+		Label  string
+		Method string
+	}{
+		{Label: "Cloud relay (relay)", Method: "relay"},
+		{Label: "Local sendmail (sendmail)", Method: "sendmail"},
+		{Label: "Proxmox Notifications (pmf)", Method: "pmf"},
+	}
+
 	// ErrInstallCancelled is returned when the user aborts the install wizard.
 	ErrInstallCancelled = errors.New("installation aborted by user")
 	// ErrNilInstallData is returned when ApplyInstallData or its validators receive a nil payload.
@@ -77,12 +89,15 @@ var (
 // RunInstallWizard runs the TUI-based installation wizard
 func RunInstallWizard(ctx context.Context, configPath string, baseDir string, buildSig string, baseTemplate string) (*InstallWizardData, error) {
 	defaultFirewallRules := false
+	defaultEmailFallbackSendmail := true
 	data := &InstallWizardData{
-		BaseDir:             baseDir,
-		ConfigPath:          configPath,
-		CronTime:            cronutil.DefaultTime,
-		EnableEncryption:    false, // Default to disabled
-		BackupFirewallRules: &defaultFirewallRules,
+		BaseDir:               baseDir,
+		ConfigPath:            configPath,
+		CronTime:              cronutil.DefaultTime,
+		EnableEncryption:      false, // Default to disabled
+		BackupFirewallRules:   &defaultFirewallRules,
+		EmailDeliveryMethod:   "relay",
+		EmailFallbackSendmail: &defaultEmailFallbackSendmail,
 	}
 
 	app := tui.NewApp()
@@ -232,6 +247,8 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 	// Notifications (header + two toggles)
 	telegramEnabled := prefill.TelegramEnabled
 	emailEnabled := prefill.EmailEnabled
+	emailDeliveryMethod := installEmailDeliveryMethodOrDefault(prefill.EmailDeliveryMethod)
+	var emailMethodDropdown *tview.DropDown
 	notificationHeader := tview.NewInputField().
 		SetLabel("Notifications").
 		SetFieldWidth(0).
@@ -260,6 +277,9 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		SetLabel("  └─ Enable Email notifications").
 		SetOptions([]string{"No", "Yes"}, func(option string, index int) {
 			emailEnabled = (option == "Yes")
+			if emailMethodDropdown != nil {
+				emailMethodDropdown.SetDisabled(!emailEnabled)
+			}
 			dropdownOpen = false
 		}).
 		SetCurrentOption(boolToOptionIndex(emailEnabled))
@@ -272,6 +292,27 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		return event
 	})
 	form.AddFormItem(emailDropdown)
+
+	emailMethodLabels := installEmailDeliveryMethodLabels()
+	emailMethodDropdown = tview.NewDropDown().
+		SetLabel("  └─ Email delivery method").
+		SetOptions(emailMethodLabels, func(_ string, index int) {
+			if index >= 0 && index < len(installEmailDeliveryOptions) {
+				emailDeliveryMethod = installEmailDeliveryOptions[index].Method
+			}
+			dropdownOpen = false
+		}).
+		SetCurrentOption(installEmailDeliveryMethodIndex(emailDeliveryMethod))
+	emailMethodDropdown.SetDisabled(!emailEnabled)
+	emailMethodDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEnter {
+			dropdownOpen = !dropdownOpen
+		} else if event.Key() == tcell.KeyEscape {
+			dropdownOpen = false
+		}
+		return event
+	})
+	form.AddFormItem(emailMethodDropdown)
 
 	// Encryption
 	encryptionDropdown := tview.NewDropDown().
@@ -347,6 +388,8 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		default:
 			data.NotificationMode = "none"
 		}
+		data.EmailDeliveryMethod = installEmailDeliveryMethodOrDefault(emailDeliveryMethod)
+		data.EmailFallbackSendmail = &defaultEmailFallbackSendmail
 
 		// Get encryption setting
 		data.EnableEncryption = values["Enable Backup Encryption (AGE)"] == "Yes"
@@ -447,12 +490,9 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		return "", err
 	}
 
-	// BASE_DIR is auto-detected at runtime from the executable/config location.
-	// Keep it out of backup.env to avoid pinning the installation to a specific path.
-	template = unsetEnvValue(template, "BASE_DIR")
-	template = unsetEnvValue(template, "CRON_SCHEDULE")
-	template = unsetEnvValue(template, "CRON_HOUR")
-	template = unsetEnvValue(template, "CRON_MINUTE")
+	// BASE_DIR and cron values are derived at runtime/finalization time.
+	// Keep them out of backup.env to avoid pinning the installation.
+	template = config.RemoveRuntimeDerivedEnvKeys(template)
 
 	// Apply secondary storage
 	template = config.ApplySecondaryStorageSettings(
@@ -495,12 +535,24 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 
 	if data.NotificationMode == "email" || data.NotificationMode == "both" {
 		template = setEnvValue(template, "EMAIL_ENABLED", "true")
-		// Preserve existing delivery preferences when editing an existing config.
-		if !editingExisting || strings.TrimSpace(existingValues["EMAIL_DELIVERY_METHOD"]) == "" {
-			template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", "relay")
+		method := strings.TrimSpace(data.EmailDeliveryMethod)
+		if method == "" && editingExisting {
+			method = strings.TrimSpace(existingValues["EMAIL_DELIVERY_METHOD"])
 		}
-		if !editingExisting || strings.TrimSpace(existingValues["EMAIL_FALLBACK_SENDMAIL"]) == "" {
+		method = installEmailDeliveryMethodOrDefault(method)
+		template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", method)
+
+		fallbackRaw := readTemplateString(existingValues, "EMAIL_FALLBACK_SENDMAIL", "EMAIL_FALLBACK_PMF")
+		switch {
+		case data.EmailFallbackSendmail != nil:
+			template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
+			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", fmt.Sprintf("%t", *data.EmailFallbackSendmail))
+		case fallbackRaw == "":
+			template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
 			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", "true")
+		case strings.TrimSpace(existingValues["EMAIL_FALLBACK_SENDMAIL"]) == "":
+			template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
+			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", fmt.Sprintf("%t", utils.ParseBool(fallbackRaw)))
 		}
 	} else {
 		template = setEnvValue(template, "EMAIL_ENABLED", "false")
@@ -598,6 +650,7 @@ func deriveInstallWizardPrefill(baseTemplate string) installWizardPrefill {
 
 	out.TelegramEnabled = readTemplateBool(values, "TELEGRAM_ENABLED")
 	out.EmailEnabled = readTemplateBool(values, "EMAIL_ENABLED")
+	out.EmailDeliveryMethod = installEmailDeliveryMethodOrDefault(readTemplateString(values, "EMAIL_DELIVERY_METHOD"))
 
 	out.EncryptionEnabled = readTemplateBool(values, "ENCRYPT_ARCHIVE")
 
@@ -651,6 +704,37 @@ func readTemplateBool(values map[string]string, keys ...string) bool {
 		return false
 	}
 	return utils.ParseBool(raw)
+}
+
+func installEmailDeliveryMethodOrDefault(method string) string {
+	if strings.TrimSpace(method) == "" {
+		return "relay"
+	}
+	normalized := config.NormalizeEmailDeliveryMethod(method)
+	switch normalized {
+	case "relay", "sendmail", "pmf":
+		return normalized
+	default:
+		return "relay"
+	}
+}
+
+func installEmailDeliveryMethodLabels() []string {
+	labels := make([]string, 0, len(installEmailDeliveryOptions))
+	for _, option := range installEmailDeliveryOptions {
+		labels = append(labels, option.Label)
+	}
+	return labels
+}
+
+func installEmailDeliveryMethodIndex(method string) int {
+	method = installEmailDeliveryMethodOrDefault(method)
+	for i, option := range installEmailDeliveryOptions {
+		if option.Method == method {
+			return i
+		}
+	}
+	return 0
 }
 
 // CheckExistingConfig checks if config file exists and asks how to proceed

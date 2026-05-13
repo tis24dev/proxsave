@@ -43,7 +43,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 	configPath = resolvedPath
 
-	baseDir := deriveBaseDirFromConfig(configPath)
+	baseDir, _ := detectedBaseDirOrFallback()
 	_ = os.Setenv("BASE_DIR", baseDir)
 
 	done := logging.DebugStartBootstrap(bootstrap, "install workflow (cli)", "config=%s base=%s", configPath, baseDir)
@@ -393,14 +393,6 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println()
 }
 
-func deriveBaseDirFromConfig(configPath string) string {
-	baseDir := filepath.Dir(filepath.Dir(configPath))
-	if baseDir == "" || baseDir == "." || baseDir == string(filepath.Separator) {
-		baseDir = "/opt/proxsave"
-	}
-	return baseDir
-}
-
 func cleanupTempConfig(tmpConfigPath string) {
 	if tmpConfigPath == "" {
 		return
@@ -461,6 +453,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	if skipConfigWizard {
 		return installConfigResult{SkipConfigWizard: true}, nil
 	}
+	template = config.RemoveRuntimeDerivedEnvKeys(template)
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring secondary storage")
 	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
@@ -497,6 +490,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "writing configuration")
+	template = config.RemoveRuntimeDerivedEnvKeys(template)
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
 		return installConfigResult{}, err
 	}
@@ -750,18 +744,53 @@ func configureNotifications(ctx context.Context, reader *bufio.Reader, template 
 	}
 
 	fmt.Println("\n--- Email ---")
-	enableEmail, err := promptYesNo(ctx, reader, "Enable email notifications (central relay)? [y/N]: ", false)
+	fmt.Println("Default email delivery uses the TIS24 cloud relay, with local sendmail as failover.")
+	fmt.Println("ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.")
+	enableEmail, err := promptYesNo(ctx, reader, "Enable email notifications? [y/N]: ", false)
 	if err != nil {
 		return "", err
 	}
 	if enableEmail {
+		method, err := promptEmailDeliveryMethod(ctx, reader, "relay")
+		if err != nil {
+			return "", err
+		}
 		template = setEnvValue(template, "EMAIL_ENABLED", "true")
-		template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", "relay")
+		template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", method)
+		template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
 		template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", "true")
 	} else {
 		template = setEnvValue(template, "EMAIL_ENABLED", "false")
 	}
 	return template, nil
+}
+
+func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaultMethod string) (string, error) {
+	defaultMethod = config.NormalizeEmailDeliveryMethod(defaultMethod)
+	if defaultMethod != "relay" && defaultMethod != "sendmail" && defaultMethod != "pmf" {
+		defaultMethod = "relay"
+	}
+
+	fmt.Println("Email delivery methods:")
+	fmt.Println("  relay    TIS24 cloud relay over outbound HTTPS (default)")
+	fmt.Println("  sendmail Local /usr/sbin/sendmail (fallback/default failover; requires a local MTA)")
+	fmt.Println("  pmf      Proxmox Notifications via proxmox-mail-forward (SMTP lives in Proxmox)")
+	for {
+		resp, err := promptOptional(ctx, reader, fmt.Sprintf("Email delivery method [%s]: ", defaultMethod))
+		if err != nil {
+			return "", err
+		}
+		method := defaultMethod
+		if strings.TrimSpace(resp) != "" {
+			method = config.NormalizeEmailDeliveryMethod(resp)
+		}
+		switch method {
+		case "pmf", "relay", "sendmail":
+			return method, nil
+		default:
+			fmt.Println("Please enter 'pmf', 'relay', or 'sendmail'. Aliases like 'proxmox-notifications' are accepted for pmf.")
+		}
+	}
 }
 
 func configureEncryption(ctx context.Context, reader *bufio.Reader, template *string) (bool, error) {

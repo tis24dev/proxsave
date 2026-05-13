@@ -209,12 +209,13 @@ When `SET_BACKUP_PERMISSIONS=true`, the system applies Bash-compatible ownership
 - Non-fatal: All failures logged as warnings
 - Backup continues even if permission changes fail
 - User/group not found: logs warning and skips operation
+- Backup/log paths on non-POSIX filesystems such as CIFS/SMB, NTFS, FAT/exFAT, FUSE, or network filesystems without Unix ownership support are detected and skipped for `chown`/`chmod` and security permission warnings. Windows-backed CIFS shares are expected to manage permissions on the Windows side.
 
 **Use cases**:
 - Migration from legacy Bash version
 - Multi-user environments requiring specific ownership
 - Shared backup storage with group access
-- NFS/CIFS mounts requiring specific ownership
+- POSIX-capable NFS mounts requiring specific ownership
 
 **Example**:
 ```bash
@@ -249,8 +250,9 @@ MIN_DISK_SPACE_CLOUD_GB=1          # Cloud storage (not enforced for remote)
 
 ```bash
 # Base directory for all operations (auto-detected at runtime)
-# BASE_DIR is derived from the executable/config location, so it is usually not
-# written in backup.env.
+# BASE_DIR is auto-detected from the installed proxsave executable; do not set it
+# in backup.env. Active BASE_DIR=... lines are deprecated and ignored.
+# BASE_DIR=/opt/proxsave
 
 # Lock file directory
 LOCK_PATH=${BASE_DIR}/lock
@@ -265,7 +267,7 @@ BACKUP_PATH=${BASE_DIR}/backup
 LOG_PATH=${BASE_DIR}/log
 ```
 
-**Path resolution**: `${BASE_DIR}` expands automatically. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables).
+**Path resolution**: `${BASE_DIR}` expands automatically from the installed `proxsave` executable path. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables), but `BASE_DIR` itself is not configurable from `backup.env` or the parent environment.
 
 ---
 
@@ -841,7 +843,7 @@ EMAIL_ENABLED=false                # true | false
 # Delivery method
 EMAIL_DELIVERY_METHOD=relay        # relay | sendmail | pmf
 
-# Fallback to pmf (proxmox-mail-forward) if relay fails
+# Fallback to local sendmail if the primary path cannot deliver
 EMAIL_FALLBACK_SENDMAIL=true       # true | false
 
 # Recipient
@@ -855,16 +857,22 @@ EMAIL_FROM=no-reply@proxmox.tis24.it
 
 If `EMAIL_ENABLED` is omitted, the default remains `false`. The legacy alias `EMAIL_ENABLE` is still accepted during migration and runtime loading.
 
-**Delivery methods**:
-- **relay**: Uses cloud relay (outbound HTTPS)
-- **sendmail**: Uses `/usr/sbin/sendmail` (requires a working local MTA, e.g. postfix)
-- **pmf**: Uses Proxmox Notifications via `proxmox-mail-forward`
+**Which delivery method should I choose?**
+
+| Method | Best when | Where SMTP is configured |
+| --- | --- | --- |
+| `relay` | Default for new installs. Uses the built-in TIS24 cloud relay over outbound HTTPS. | In the relay service; ProxSave only needs a recipient. |
+| `sendmail` | The node already has a local MTA such as Postfix, Exim, or Sendmail. | In the local MTA. ProxSave calls `/usr/sbin/sendmail`. |
+| `pmf` | You explicitly want Proxmox Notifications via `proxmox-mail-forward`. | In Proxmox (`Datacenter -> Notifications` on PVE, or the PBS notification UI/config). ProxSave does not ask for SMTP host/port/user/password. |
+
+`pmf` may also be written as `proxmox`, `proxmox-notifications`, or `proxmox-mail-forward`; ProxSave normalizes those aliases to `pmf`.
 
 **Notes**:
-- Allowed values for `EMAIL_DELIVERY_METHOD` are: `relay`, `sendmail`, `pmf` (invalid values will skip Email with a warning).
-- `EMAIL_FALLBACK_SENDMAIL` is a historical name (kept for compatibility). When `EMAIL_DELIVERY_METHOD=relay`, it enables fallback to **pmf** (it will not fall back to `/usr/sbin/sendmail`).
+- Allowed values for `EMAIL_DELIVERY_METHOD` are: `pmf`, `relay`, `sendmail` (invalid values will skip Email with a warning).
+- `EMAIL_FALLBACK_SENDMAIL=true` controls local `/usr/sbin/sendmail` failover. `EMAIL_FALLBACK_PMF` is accepted only as a transitional alias from older templates.
 - `relay` requires a real mailbox recipient and blocks `root@…` recipients; set `EMAIL_RECIPIENT` to a non-root mailbox if needed.
-- When relay preconditions fail before delivery starts (for example missing recipient, autodetect failure, or blocked `root@…` recipient) and fallback is enabled, ProxSave may bypass relay and invoke `pmf` directly.
+- Default install behavior is `relay -> sendmail`.
+- If you manually set `EMAIL_DELIVERY_METHOD=pmf`, fallback order is `pmf -> relay -> sendmail` when `EMAIL_FALLBACK_SENDMAIL=true`.
 - When logs say the relay "accepted request", it means the worker and upstream email API accepted the submission. It does **not** guarantee final inbox delivery (the message may still bounce, be deferred, or land in spam later).
 - If `EMAIL_RECIPIENT` is empty, ProxSave auto-detects the recipient from the `root@pam` user:
   - **PVE**: Proxmox API via `pvesh get /access/users/root@pam` → fallback to `pveum user list` → fallback to `/etc/pve/user.cfg`

@@ -23,8 +23,8 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 	configPath = resolvedPath
 
-	// Derive BASE_DIR from the configuration path
-	baseDir := deriveBaseDirFromConfig(configPath)
+	// Derive BASE_DIR from the installed executable path.
+	baseDir, _ := detectedBaseDirOrFallback()
 	_ = os.Setenv("BASE_DIR", baseDir)
 
 	// Before starting the TUI wizard, perform a best-effort cleanup of any existing

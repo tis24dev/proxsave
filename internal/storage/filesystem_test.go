@@ -55,11 +55,13 @@ func TestParseFilesystemType_CoversKnownAndUnknownTypes(t *testing.T) {
 		{"ntfs-3g", FilesystemNTFS},
 		{"fuse", FilesystemFUSE},
 		{"fuse.sshfs", FilesystemFUSE},
+		{"fuse.smbnetfs", FilesystemFUSE},
 		{"nfs", FilesystemNFS},
 		{"nfs4", FilesystemNFS4},
 		{"cifs", FilesystemCIFS},
 		{"smb", FilesystemCIFS},
 		{"smbfs", FilesystemCIFS},
+		{"smb3", FilesystemCIFS},
 		{"definitely-unknown", FilesystemUnknown},
 	}
 

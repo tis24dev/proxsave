@@ -93,11 +93,30 @@ func writePBSDatastoreCfgAtomically(path string, data []byte, mode os.FileMode) 
 	if _, err = tmpFile.Write(data); err != nil {
 		return err
 	}
+	if err = tmpFile.Sync(); err != nil {
+		return fmt.Errorf("sync datastore.cfg temp file: %w", err)
+	}
 	if err = tmpFile.Close(); err != nil {
 		return err
 	}
 	if err = os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replace datastore.cfg: %w", err)
+	}
+	if err = syncPBSDatastoreCfgDir(path); err != nil {
+		return err
+	}
+	return nil
+}
+
+func syncPBSDatastoreCfgDir(path string) (err error) {
+	dirFile, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open datastore.cfg directory: %w", err)
+	}
+	defer closeIntoErr(&err, dirFile, "close datastore.cfg directory")
+
+	if err = dirFile.Sync(); err != nil {
+		return fmt.Errorf("fsync datastore.cfg directory: %w", err)
 	}
 	return nil
 }

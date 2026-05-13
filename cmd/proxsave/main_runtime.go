@@ -85,18 +85,10 @@ func bootstrapRuntime(ctx context.Context, args *cli.Args, bootstrap *logging.Bo
 func loadRunConfig(args *cli.Args, bootstrap *logging.BootstrapLogger) (*config.Config, string, bool, int, bool) {
 	autoBaseDir, autoFound := detectBaseDir()
 	if autoBaseDir == "" {
-		if _, err := os.Stat("/opt/proxsave"); err == nil {
-			autoBaseDir = "/opt/proxsave"
-		} else {
-			autoBaseDir = "/opt/proxmox-backup"
-		}
+		autoBaseDir = fallbackBaseDir()
 	}
 
 	initialEnvBaseDir := os.Getenv("BASE_DIR")
-	if initialEnvBaseDir == "" {
-		_ = os.Setenv("BASE_DIR", autoBaseDir)
-	}
-
 	if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
 		bootstrap.Error("ERROR: %v", err)
 		return nil, "", false, types.ExitConfigError.Int(), false
@@ -104,13 +96,10 @@ func loadRunConfig(args *cli.Args, bootstrap *logging.BootstrapLogger) (*config.
 
 	bootstrap.Printf("Loading configuration from: %s", args.ConfigPath)
 	logging.DebugStepBootstrap(bootstrap, "main run", "loading configuration")
-	cfg, err := config.LoadConfig(args.ConfigPath)
+	cfg, err := config.LoadConfigWithBaseDir(args.ConfigPath, autoBaseDir)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to load configuration: %v", err)
 		return nil, "", false, types.ExitConfigError.Int(), false
-	}
-	if cfg.BaseDir == "" {
-		cfg.BaseDir = autoBaseDir
 	}
 	_ = os.Setenv("BASE_DIR", cfg.BaseDir)
 	bootstrap.Println("✓ Configuration loaded successfully")

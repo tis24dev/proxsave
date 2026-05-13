@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,15 +28,19 @@ func createPVEStorageStructure(basePath, storageType string, logger *logging.Log
 		return nil
 	}
 
-	createStorageSubdirs(basePath, subdirs, logger)
+	if err := createStorageSubdirs(basePath, subdirs); err != nil {
+		return fmt.Errorf("create storage subdirectories: %w", err)
+	}
 	return nil
 }
 
-func createStorageSubdirs(basePath string, subdirs []string, logger *logging.Logger) {
+func createStorageSubdirs(basePath string, subdirs []string) error {
+	var errs []error
 	for _, subdir := range subdirs {
 		path := filepath.Join(basePath, subdir)
 		if err := os.MkdirAll(path, 0750); err != nil {
-			logger.Warning("Failed to create %s: %v", path, err)
+			errs = append(errs, fmt.Errorf("create %s: %w", path, err))
 		}
 	}
+	return errors.Join(errs...)
 }

@@ -2,9 +2,11 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
@@ -50,5 +52,32 @@ func TestWritePxarListReportWithFiles(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "backup1.pxar") {
 		t.Fatalf("expected pxar file listed, got %s", string(content))
+	}
+}
+
+func TestRunPBSPXARStepCancelsPendingWorkersOnFirstError(t *testing.T) {
+	cfg := GetDefaultCollectorConfig()
+	cfg.PxarDatastoreConcurrency = 1
+	c := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
+	state := &pbsPxarState{
+		eligible: []pbsDatastore{
+			{Name: "ds1", Path: "/tmp/ds1"},
+			{Name: "ds2", Path: "/tmp/ds2"},
+			{Name: "ds3", Path: "/tmp/ds3"},
+		},
+	}
+
+	errBoom := errors.New("pxar failed")
+	var calls int32
+	err := c.runPBSPXARStep(context.Background(), state, func(ctx context.Context, _ pbsDatastore, _ *pbsPxarState) error {
+		atomic.AddInt32(&calls, 1)
+		return errBoom
+	})
+
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("runPBSPXARStep error = %v, want %v", err, errBoom)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("fn called %d times, want 1", got)
 	}
 }

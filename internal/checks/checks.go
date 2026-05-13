@@ -20,6 +20,7 @@ import (
 // checks to allow tests to inject controlled failures (e.g., EIO) without
 // depending on specific filesystem behavior.
 var createTestFile = os.Create
+var closeTestFile = func(f *os.File) error { return f.Close() }
 
 var (
 	osStat      = os.Stat
@@ -391,7 +392,6 @@ func (c *Checker) CheckLockFile() CheckResult {
 			c.logger.Warning("Failed to sync lock file %s: %v", lockPath, err)
 		}
 		if err := f.Close(); err != nil {
-			c.logger.Warning("Failed to close lock file %s: %v", lockPath, err)
 			c.removePartialLockFile(lockPath)
 			result.Error = fmt.Errorf("failed to close lock file: %w", err)
 			result.Message = result.Error.Error()
@@ -441,8 +441,14 @@ func (c *Checker) CheckPermissions() CheckResult {
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			f, err := createTestFile(testFile)
 			if err == nil {
-				if closeErr := f.Close(); closeErr != nil {
+				if closeErr := closeTestFile(f); closeErr != nil {
 					lastErr = closeErr
+					if errors.Is(closeErr, syscall.EIO) && attempt < maxAttempts {
+						c.logger.Warning("I/O error while closing permission test file in %s (attempt %d/%d), will retry: %v",
+							dir, attempt, maxAttempts, closeErr)
+						time.Sleep(retryDelay)
+						continue
+					}
 				} else {
 					lastErr = nil
 				}
@@ -637,6 +643,7 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 		result.Message = result.Error.Error()
 		return result
 	}
+	defer func() { _ = osRemove(testSymlink) }()
 	if err := osRemove(testSymlink); err != nil && !os.IsNotExist(err) {
 		c.logger.Warning("Failed to remove temp symlink test %s: %v", testSymlink, err)
 	}

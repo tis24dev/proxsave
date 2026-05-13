@@ -205,6 +205,8 @@ func TestConvertBackupStatsToNotificationData(t *testing.T) {
 		ExitCode:                  1,
 		Hostname:                  "host",
 		ProxmoxType:               types.ProxmoxUnknown,
+		ServerID:                  "server-id",
+		ServerMAC:                 "bc:24:11:41:0d:18",
 		ArchivePath:               filepath.Join("/tmp", "backup.tar.xz"),
 		ArchiveSize:               5000,
 		CompressedSize:            4000,
@@ -250,6 +252,9 @@ func TestConvertBackupStatsToNotificationData(t *testing.T) {
 	}
 	if data.BackupFileName != "backup.tar.xz" {
 		t.Fatalf("BackupFileName = %q; want backup.tar.xz", data.BackupFileName)
+	}
+	if data.ServerID != "server-id" || data.ServerMAC != "bc:24:11:41:0d:18" {
+		t.Fatalf("identity fields=%q/%q; want server ID and MAC", data.ServerID, data.ServerMAC)
 	}
 	if data.LocalStatus != "warning" {
 		t.Fatalf("LocalStatus = %q; want warning", data.LocalStatus)

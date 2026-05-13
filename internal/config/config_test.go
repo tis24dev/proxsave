@@ -78,8 +78,9 @@ BACKUP_BLACKLIST=/var/data/tmp
 	}
 
 	setBaseDirEnv(t, "/env/base/dir")
+	detectedBaseDir := "/detected/base/dir"
 
-	cfg, err := LoadConfig(configPath)
+	cfg, err := LoadConfigWithBaseDir(configPath, detectedBaseDir)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -129,8 +130,8 @@ BACKUP_BLACKLIST=/var/data/tmp
 		t.Error("Expected MetricsEnabled to be true")
 	}
 
-	if cfg.BaseDir != "/env/base/dir" {
-		t.Errorf("BaseDir = %q; want %q", cfg.BaseDir, "/env/base/dir")
+	if cfg.BaseDir != detectedBaseDir {
+		t.Errorf("BaseDir = %q; want %q", cfg.BaseDir, detectedBaseDir)
 	}
 
 	if !cfg.SecurityCheckEnabled {
@@ -222,7 +223,7 @@ PBS_DATASTORE_PATH=/mnt/pbs1,/mnt/pbs2,/mnt/pbs3
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
-	cfg, err := LoadConfig(configPath)
+	cfg, err := LoadConfigWithBaseDir(configPath, "/custom/base")
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -279,7 +280,8 @@ AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt
 
 	setBaseDirEnv(t, "/custom/base")
 
-	cfg, err := LoadConfig(configPath)
+	detectedBaseDir := "/custom/base"
+	cfg, err := LoadConfigWithBaseDir(configPath, detectedBaseDir)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -316,7 +318,8 @@ SECONDARY_PATH=remote:path
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
-	cfg, err := LoadConfig(configPath)
+	detectedBaseDir := "/quotes/base"
+	cfg, err := LoadConfigWithBaseDir(configPath, detectedBaseDir)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -409,7 +412,8 @@ LOG_PATH=/path/without/quotes
 
 	setBaseDirEnv(t, "/quotes/base")
 
-	cfg, err := LoadConfig(configPath)
+	detectedBaseDir := "/quotes/base"
+	cfg, err := LoadConfigWithBaseDir(configPath, detectedBaseDir)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -426,8 +430,8 @@ LOG_PATH=/path/without/quotes
 		t.Errorf("LogPath = %q; want %q", cfg.LogPath, "/path/without/quotes")
 	}
 
-	if cfg.BaseDir != "/quotes/base" {
-		t.Errorf("BaseDir = %q; want %q", cfg.BaseDir, "/quotes/base")
+	if cfg.BaseDir != detectedBaseDir {
+		t.Errorf("BaseDir = %q; want %q", cfg.BaseDir, detectedBaseDir)
 	}
 }
 
@@ -451,7 +455,7 @@ DEBUG_LEVEL=4
 
 	setBaseDirEnv(t, "/comments/base")
 
-	cfg, err := LoadConfig(configPath)
+	cfg, err := LoadConfigWithBaseDir(configPath, "/defaults/base")
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -504,7 +508,8 @@ func TestConfigDefaults(t *testing.T) {
 
 	setBaseDirEnv(t, "/defaults/base")
 
-	cfg, err := LoadConfig(configPath)
+	detectedBaseDir := "/defaults/base"
+	cfg, err := LoadConfigWithBaseDir(configPath, detectedBaseDir)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -534,8 +539,8 @@ func TestConfigDefaults(t *testing.T) {
 		t.Error("Expected default EmailEnabled to be false")
 	}
 
-	if cfg.BaseDir != "/defaults/base" {
-		t.Errorf("Default BaseDir = %q; want %q", cfg.BaseDir, "/defaults/base")
+	if cfg.BaseDir != detectedBaseDir {
+		t.Errorf("Default BaseDir = %q; want %q", cfg.BaseDir, detectedBaseDir)
 	}
 }
 
@@ -570,6 +575,54 @@ WEBHOOK_ENABLE=true
 	}
 	if !cfg.WebhookEnabled {
 		t.Error("Expected WebhookEnabled to be true via WEBHOOK_ENABLE")
+	}
+}
+
+func TestLoadConfigEmailDeliveryAliasesAndFallbackSendmail(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "email_aliases.env")
+
+	content := `EMAIL_ENABLED=true
+EMAIL_DELIVERY_METHOD=proxmox-notifications
+EMAIL_FALLBACK_SENDMAIL=false
+EMAIL_FALLBACK_PMF=true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	setBaseDirEnv(t, "/email/aliases/base")
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if cfg.EmailDeliveryMethod != "pmf" {
+		t.Fatalf("EmailDeliveryMethod=%q, want pmf", cfg.EmailDeliveryMethod)
+	}
+	if cfg.EmailFallbackSendmail {
+		t.Fatalf("EMAIL_FALLBACK_SENDMAIL should take precedence over transitional EMAIL_FALLBACK_PMF")
+	}
+}
+
+func TestNormalizeEmailDeliveryMethod(t *testing.T) {
+	tests := map[string]string{
+		"":                        "relay",
+		"cloud relay":             "relay",
+		"local_mta":               "sendmail",
+		"pfm":                     "pmf",
+		"proxmox":                 "pmf",
+		"proxmox-mail-forward":    "pmf",
+		"proxmox notifications":   "pmf",
+		"unexpected-experiment":   "unexpected-experiment",
+		" unexpected_EXPERIMENT ": "unexpected-experiment",
+	}
+
+	for input, want := range tests {
+		if got := NormalizeEmailDeliveryMethod(input); got != want {
+			t.Fatalf("NormalizeEmailDeliveryMethod(%q)=%q, want %q", input, got, want)
+		}
 	}
 }
 
@@ -620,7 +673,7 @@ BOT_TELEGRAM_TYPE=centralized
 	}
 }
 
-func TestLoadConfigBaseDirFromConfig(t *testing.T) {
+func TestLoadConfigIgnoresBaseDirFromConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "base_dir.env")
 
@@ -631,19 +684,26 @@ BACKUP_PATH=${BASE_DIR}/backup-data
 		t.Fatalf("Failed to create test config: %v", err)
 	}
 
-	setBaseDirEnv(t, "")
+	setBaseDirEnv(t, "/env/base")
+	detectedBaseDir := "/detected/base"
 
-	cfg, err := LoadConfig(configPath)
+	cfg, err := LoadConfigWithBaseDir(configPath, detectedBaseDir)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 
-	if cfg.BaseDir != "/custom/base" {
-		t.Errorf("BaseDir = %q; want %q", cfg.BaseDir, "/custom/base")
+	if cfg.BaseDir != detectedBaseDir {
+		t.Errorf("BaseDir = %q; want %q", cfg.BaseDir, detectedBaseDir)
 	}
 
-	if cfg.BackupPath != "/custom/base/backup-data" {
-		t.Errorf("BackupPath = %q; want %q", cfg.BackupPath, "/custom/base/backup-data")
+	if cfg.BackupPath != "/detected/base/backup-data" {
+		t.Errorf("BackupPath = %q; want %q", cfg.BackupPath, "/detected/base/backup-data")
+	}
+	if val, ok := cfg.IgnoredBaseDirConfig(); !ok || val != "/custom/base" {
+		t.Fatalf("IgnoredBaseDirConfig = %q, %v; want /custom/base true", val, ok)
+	}
+	if val, ok := cfg.IgnoredBaseDirEnv(); !ok || val != "/env/base" {
+		t.Fatalf("IgnoredBaseDirEnv = %q, %v; want /env/base true", val, ok)
 	}
 }
 
@@ -957,18 +1017,16 @@ func TestConfigFallbackHelpers(t *testing.T) {
 	}
 }
 
-func TestExpandEnvVarsAndBaseDir(t *testing.T) {
-	setBaseDirEnv(t, "/env/base")
-
+func TestConfigVarExpanderUsesDetectedBaseDir(t *testing.T) {
 	t.Setenv("FOO", "bar")
 
 	in := "${FOO}/$FOO/${BASE_DIR}/suffix"
-	got := expandEnvVars(in)
+	got := newConfigVarExpander(map[string]string{}, "/detected/base").expand(in)
 	if !strings.Contains(got, "bar/bar") {
 		t.Fatalf("expandEnvVars FOO not expanded correctly: %q", got)
 	}
-	if !strings.Contains(got, "/env/base/") {
-		t.Fatalf("expandEnvVars BASE_DIR not expanded from env base dir: %q", got)
+	if !strings.Contains(got, "/detected/base/") {
+		t.Fatalf("expandEnvVars BASE_DIR not expanded from detected base dir: %q", got)
 	}
 }
 

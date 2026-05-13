@@ -332,10 +332,12 @@ func TestGuardMountPoint(t *testing.T) {
 	})
 
 	t.Run("returns nil when already mounted", func(t *testing.T) {
+		readCalls := 0
 		mountGuardReadFile = func(path string) ([]byte, error) {
 			if path != "/proc/self/mountinfo" {
 				return nil, os.ErrNotExist
 			}
+			readCalls++
 			return []byte("1 2 3:4 / /mnt/already rw - ext4 /dev/sda1 rw\n"), nil
 		}
 		mountGuardMkdirAll = func(string, os.FileMode) error {
@@ -349,6 +351,9 @@ func TestGuardMountPoint(t *testing.T) {
 
 		if err := guardMountPoint(context.Background(), "/mnt/already"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
+		}
+		if readCalls != 1 {
+			t.Fatalf("readCalls=%d; want 1", readCalls)
 		}
 	})
 

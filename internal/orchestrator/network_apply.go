@@ -16,7 +16,10 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-const defaultNetworkRollbackTimeout = 180 * time.Second
+const (
+	defaultNetworkRollbackTimeout     = 180 * time.Second
+	defaultNetworkApplyConfirmTimeout = 90 * time.Second
+)
 
 var ErrNetworkApplyNotCommitted = errors.New("network configuration not committed")
 

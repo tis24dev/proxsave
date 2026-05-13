@@ -25,7 +25,8 @@ func runUpgradeConfigJSONMode(args *cli.Args) (int, bool) {
 		return types.ExitConfigError.Int(), true
 	}
 
-	result, err := config.UpgradeConfigFile(args.ConfigPath)
+	baseDir, _ := detectedBaseDirOrFallback()
+	result, err := config.UpgradeConfigFileWithBaseDir(args.ConfigPath, baseDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: Failed to upgrade configuration: %v\n", err)
 		return types.ExitConfigError.Int(), true
@@ -66,7 +67,8 @@ func runUpgradeConfigMode(_ context.Context, args *cli.Args, bootstrap *logging.
 	}
 
 	bootstrap.Printf("Upgrading configuration file: %s", args.ConfigPath)
-	result, err := config.UpgradeConfigFile(args.ConfigPath)
+	baseDir, _ := detectedBaseDirOrFallback()
+	result, err := config.UpgradeConfigFileWithBaseDir(args.ConfigPath, baseDir)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to upgrade configuration: %v", err)
 		return types.ExitConfigError.Int(), true

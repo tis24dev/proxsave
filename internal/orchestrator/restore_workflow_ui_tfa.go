@@ -10,7 +10,7 @@ import (
 )
 
 func maybeAddRecommendedCategoriesForTFA(ctx context.Context, ui RestoreWorkflowUI, logger *logging.Logger, selected []Category, available []Category) ([]Category, error) {
-	if !shouldPromptForTFARecommendations(ui, logger, selected) {
+	if !shouldPromptForTFARecommendations(ui, selected) {
 		return selected, nil
 	}
 	addCategories, addNames := tfaRecommendedCategories(selected, available)
@@ -23,15 +23,16 @@ func maybeAddRecommendedCategoriesForTFA(ctx context.Context, ui RestoreWorkflow
 		return nil, err
 	}
 	if !addNow {
-		logger.Warning("Access control selected without %s; WebAuthn users may require re-enrollment if the UI origin changes", strings.Join(addNames, ", "))
+		if logger != nil {
+			logger.Warning("Access control selected without %s; WebAuthn users may require re-enrollment if the UI origin changes", strings.Join(addNames, ", "))
+		}
 		return selected, nil
 	}
 	return dedupeCategoriesByID(append(selected, addCategories...)), nil
 }
 
-func shouldPromptForTFARecommendations(ui RestoreWorkflowUI, logger *logging.Logger, selected []Category) bool {
+func shouldPromptForTFARecommendations(ui RestoreWorkflowUI, selected []Category) bool {
 	return ui != nil &&
-		logger != nil &&
 		(hasCategoryID(selected, "pve_access_control") || hasCategoryID(selected, "pbs_access_control"))
 }
 

@@ -147,6 +147,9 @@ AUTO_FIX_PERMISSIONS=true
     └── proxsave               755 (-rwxr-xr-x)
 ```
 
+**CIFS/SMB or Windows-backed shares**:
+Linux permission modes and `root:root` ownership are often synthetic on CIFS/SMB mounts, especially when the server is Windows. ProxSave detects non-POSIX backup/log filesystems and skips POSIX permission/ownership warnings for `BACKUP_PATH`, `LOG_PATH`, `SECONDARY_PATH`, and `SECONDARY_LOG_PATH`. If warnings persist, confirm the share is mounted before ProxSave starts and that the mount type appears as `cifs`/`smb` in `/proc/mounts`.
+
 ---
 
 #### Error: `Invalid configuration value for COMPRESSION_TYPE`
@@ -557,7 +560,23 @@ EMAIL_DELIVERY_METHOD=sendmail # /usr/sbin/sendmail (local MTA required)
 EMAIL_DELIVERY_METHOD=pmf     # Proxmox Notifications via proxmox-mail-forward
 ```
 
-If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVERY_METHOD` is exactly one of: `relay`, `sendmail`, `pmf` (typos will skip Email with a warning like: `Email: enabled but not initialized (...)`).
+If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVERY_METHOD` is one of: `pmf`, `relay`, `sendmail` (aliases such as `proxmox-notifications` normalize to `pmf`; typos will skip Email with a warning like: `Email: enabled but not initialized (...)`).
+
+##### If `EMAIL_DELIVERY_METHOD=pmf`
+
+This mode uses Proxmox Notifications via `proxmox-mail-forward`. It is the recommended mode on Proxmox hosts when you expected SMTP settings in ProxSave: configure SMTP targets/matchers in Proxmox, then let ProxSave hand the message to Proxmox.
+
+- `EMAIL_RECIPIENT` is optional in this mode and is only used for the `To:` header.
+- If PMF fails and `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave tries the relay first and then local sendmail.
+- Verify `proxmox-mail-forward` exists:
+  ```bash
+  test -x /usr/libexec/proxmox-mail-forward && echo "proxmox-mail-forward OK" || echo "proxmox-mail-forward not found"
+  ```
+- Verify Proxmox Notifications configuration in the UI (`Datacenter -> Notifications` on PVE, or the PBS notification UI/config).
+- Direct handoff test:
+  ```bash
+  printf "To: root\nSubject: proxsave test\n\nHello from proxsave\n" | sudo /usr/libexec/proxmox-mail-forward
+  ```
 
 ##### If `EMAIL_DELIVERY_METHOD=relay`
 
@@ -570,7 +589,7 @@ If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVER
   - **PBS**: `proxmox-backup-manager user list` → fallback to `/etc/proxmox-backup/user.cfg`
   - **Dual**: intentionally reuses the **PVE** path for `root@pam` email discovery
 - Relay blocks `root@…` recipients; use a real non-root mailbox for `EMAIL_RECIPIENT`.
-- If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to `EMAIL_DELIVERY_METHOD=pmf` when the relay fails. If relay cannot even start because recipient resolution/preconditions fail, ProxSave can bypass relay and invoke the PMF fallback directly.
+- If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to local `/usr/sbin/sendmail` when relay delivery fails. If relay cannot start because no recipient is available, sendmail cannot help either; configure `EMAIL_RECIPIENT` or the `root@pam` email in Proxmox.
 - Check the proxsave logs for `email-relay` warnings/errors.
 - `Email relay accepted request ...` means the relay accepted the submission. It does **not** guarantee final inbox delivery; later provider-side failures/bounces are outside the ProxSave process.
 
@@ -623,17 +642,6 @@ This mode uses `/usr/sbin/sendmail`, so your node must have a working local MTA 
   test -x /usr/sbin/sendmail && echo "sendmail OK" || echo "sendmail not found"
   ```
 - Check your MTA status and queue (`systemctl status postfix`, `mailq`, `/var/log/mail.log`).
-
-##### If `EMAIL_DELIVERY_METHOD=pmf`
-
-This mode uses Proxmox Notifications via `proxmox-mail-forward` (final recipients are configured in Proxmox, not in proxsave).
-
-- `EMAIL_RECIPIENT` is optional in this mode and is only used for the `To:` header.
-- Verify `proxmox-mail-forward` exists:
-  ```bash
-  test -x /usr/libexec/proxmox-mail-forward && echo "proxmox-mail-forward OK" || echo "proxmox-mail-forward not found"
-  ```
-- Verify Proxmox Notifications configuration in the UI (`Datacenter -> Notifications`).
 
 ---
 

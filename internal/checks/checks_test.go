@@ -891,6 +891,43 @@ func TestCheckTempDirectory_SymlinkSupport(t *testing.T) {
 	}
 }
 
+func TestCheckTempDirectory_DefersSymlinkCleanupAfterInlineRemoveFailure(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	origTempRoot := tempRootPath
+	origRemove := osRemove
+	t.Cleanup(func() {
+		tempRootPath = origTempRoot
+		osRemove = origRemove
+	})
+
+	tempRootPath = t.TempDir()
+	testSymlink := filepath.Join(tempRootPath, ".proxsave-symlink-test")
+	removeSymlinkCalls := 0
+	osRemove = func(name string) error {
+		if name == testSymlink {
+			removeSymlinkCalls++
+			if removeSymlinkCalls == 1 {
+				return syscall.EIO
+			}
+		}
+		return origRemove(name)
+	}
+
+	checker := NewChecker(logger, GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir()))
+	result := checker.CheckTempDirectory()
+	if !result.Passed {
+		t.Fatalf("expected CheckTempDirectory to pass, got: %v", result.Error)
+	}
+	if removeSymlinkCalls != 2 {
+		t.Fatalf("expected inline and deferred symlink cleanup attempts, got %d", removeSymlinkCalls)
+	}
+	if _, err := os.Lstat(testSymlink); !os.IsNotExist(err) {
+		t.Fatalf("expected deferred symlink cleanup, lstat err=%v", err)
+	}
+}
+
 func TestRunAllChecks_IncludesTempDirectory(t *testing.T) {
 	// Ensure /tmp/proxsave exists
 	if err := os.MkdirAll(filepath.Join("/tmp", "proxsave"), 0o755); err != nil {
@@ -1190,6 +1227,8 @@ func TestCheckLockFile_CloseFailsRemovesPartialLock(t *testing.T) {
 
 	origSync := syncFile
 	t.Cleanup(func() { syncFile = origSync })
+	// Closing here causes the subsequent production Close() to return os.ErrClosed
+	// and exercise the close-failure branch.
 	syncFile = func(f *os.File) error {
 		return f.Close()
 	}
@@ -1362,6 +1401,52 @@ func TestCheckPermissions_RetriesOnEIOThenSucceeds(t *testing.T) {
 	}
 	if eioAttempts != 2 {
 		t.Fatalf("expected 2 EIO attempts, got %d", eioAttempts)
+	}
+	if attempts != 4 {
+		t.Fatalf("expected 4 attempts total (3 for backup dir, 1 for log dir), got %d", attempts)
+	}
+}
+
+func TestCheckPermissions_RetriesOnCloseEIOThenSucceeds(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	backupDir := t.TempDir()
+	logDir := t.TempDir()
+	config := GetDefaultCheckerConfig(backupDir, logDir, t.TempDir())
+
+	origCreate := createTestFile
+	origClose := closeTestFile
+	t.Cleanup(func() {
+		createTestFile = origCreate
+		closeTestFile = origClose
+	})
+
+	attempts := 0
+	createTestFile = func(name string) (*os.File, error) {
+		attempts++
+		return os.Create(name)
+	}
+
+	closeEIOs := 0
+	closeTestFile = func(f *os.File) error {
+		if err := f.Close(); err != nil {
+			return err
+		}
+		if closeEIOs < 2 {
+			closeEIOs++
+			return syscall.EIO
+		}
+		return nil
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+	if !result.Passed {
+		t.Fatalf("expected CheckPermissions to pass after close retries, got: %v", result.Error)
+	}
+	if closeEIOs != 2 {
+		t.Fatalf("expected 2 close EIO attempts, got %d", closeEIOs)
 	}
 	if attempts != 4 {
 		t.Fatalf("expected 4 attempts total (3 for backup dir, 1 for log dir), got %d", attempts)
