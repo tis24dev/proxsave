@@ -891,6 +891,43 @@ func TestCheckTempDirectory_SymlinkSupport(t *testing.T) {
 	}
 }
 
+func TestCheckTempDirectory_DefersSymlinkCleanupAfterInlineRemoveFailure(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	origTempRoot := tempRootPath
+	origRemove := osRemove
+	t.Cleanup(func() {
+		tempRootPath = origTempRoot
+		osRemove = origRemove
+	})
+
+	tempRootPath = t.TempDir()
+	testSymlink := filepath.Join(tempRootPath, ".proxsave-symlink-test")
+	removeSymlinkCalls := 0
+	osRemove = func(name string) error {
+		if name == testSymlink {
+			removeSymlinkCalls++
+			if removeSymlinkCalls == 1 {
+				return syscall.EIO
+			}
+		}
+		return origRemove(name)
+	}
+
+	checker := NewChecker(logger, GetDefaultCheckerConfig(t.TempDir(), t.TempDir(), t.TempDir()))
+	result := checker.CheckTempDirectory()
+	if !result.Passed {
+		t.Fatalf("expected CheckTempDirectory to pass, got: %v", result.Error)
+	}
+	if removeSymlinkCalls != 2 {
+		t.Fatalf("expected inline and deferred symlink cleanup attempts, got %d", removeSymlinkCalls)
+	}
+	if _, err := os.Lstat(testSymlink); !os.IsNotExist(err) {
+		t.Fatalf("expected deferred symlink cleanup, lstat err=%v", err)
+	}
+}
+
 func TestRunAllChecks_IncludesTempDirectory(t *testing.T) {
 	// Ensure /tmp/proxsave exists
 	if err := os.MkdirAll(filepath.Join("/tmp", "proxsave"), 0o755); err != nil {

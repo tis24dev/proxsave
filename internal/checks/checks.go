@@ -644,6 +644,7 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 		result.Message = result.Error.Error()
 		return result
 	}
+	defer func() { _ = osRemove(testSymlink) }()
 	if err := osRemove(testSymlink); err != nil && !os.IsNotExist(err) {
 		c.logger.Warning("Failed to remove temp symlink test %s: %v", testSymlink, err)
 	}
