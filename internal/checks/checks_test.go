@@ -1368,6 +1368,52 @@ func TestCheckPermissions_RetriesOnEIOThenSucceeds(t *testing.T) {
 	}
 }
 
+func TestCheckPermissions_RetriesOnCloseEIOThenSucceeds(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	backupDir := t.TempDir()
+	logDir := t.TempDir()
+	config := GetDefaultCheckerConfig(backupDir, logDir, t.TempDir())
+
+	origCreate := createTestFile
+	origClose := closeTestFile
+	t.Cleanup(func() {
+		createTestFile = origCreate
+		closeTestFile = origClose
+	})
+
+	attempts := 0
+	createTestFile = func(name string) (*os.File, error) {
+		attempts++
+		return os.Create(name)
+	}
+
+	closeEIOs := 0
+	closeTestFile = func(f *os.File) error {
+		if err := f.Close(); err != nil {
+			return err
+		}
+		if closeEIOs < 2 {
+			closeEIOs++
+			return syscall.EIO
+		}
+		return nil
+	}
+
+	checker := NewChecker(logger, config)
+	result := checker.CheckPermissions()
+	if !result.Passed {
+		t.Fatalf("expected CheckPermissions to pass after close retries, got: %v", result.Error)
+	}
+	if closeEIOs != 2 {
+		t.Fatalf("expected 2 close EIO attempts, got %d", closeEIOs)
+	}
+	if attempts != 4 {
+		t.Fatalf("expected 4 attempts total (3 for backup dir, 1 for log dir), got %d", attempts)
+	}
+}
+
 func TestCheckPermissions_RemoveTestFileWarning(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(io.Discard)

@@ -20,6 +20,7 @@ import (
 // checks to allow tests to inject controlled failures (e.g., EIO) without
 // depending on specific filesystem behavior.
 var createTestFile = os.Create
+var closeTestFile = func(f *os.File) error { return f.Close() }
 
 var (
 	osStat      = os.Stat
@@ -441,8 +442,14 @@ func (c *Checker) CheckPermissions() CheckResult {
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			f, err := createTestFile(testFile)
 			if err == nil {
-				if closeErr := f.Close(); closeErr != nil {
+				if closeErr := closeTestFile(f); closeErr != nil {
 					lastErr = closeErr
+					if errors.Is(closeErr, syscall.EIO) && attempt < maxAttempts {
+						c.logger.Warning("I/O error while closing permission test file in %s (attempt %d/%d), will retry: %v",
+							dir, attempt, maxAttempts, closeErr)
+						time.Sleep(retryDelay)
+						continue
+					}
 				} else {
 					lastErr = nil
 				}
