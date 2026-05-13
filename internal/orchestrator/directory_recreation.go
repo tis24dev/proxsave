@@ -22,9 +22,11 @@ func RecreateStorageDirectories(logger *logging.Logger) error {
 	}
 
 	directoriesCreated := 0
+	var errs []error
 	for _, entry := range entries {
 		if err := createPVEStorageStructure(entry.Path, entry.Type, logger); err != nil {
 			logger.Warning("Failed to create storage structure for %s: %v", entry.Name, err)
+			errs = append(errs, fmt.Errorf("%s: %w", entry.Name, err))
 			continue
 		}
 
@@ -36,7 +38,7 @@ func RecreateStorageDirectories(logger *logging.Logger) error {
 		logger.Info("Recreated %d storage directory structures", directoriesCreated)
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // RecreateDatastoreDirectories parses datastore.cfg and recreates datastore directories (PBS)

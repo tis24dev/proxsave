@@ -55,6 +55,30 @@ func TestRecreateStorageDirectoriesCreatesStructure(t *testing.T) {
 	}
 }
 
+func TestRecreateStorageDirectoriesReturnsSubdirError(t *testing.T) {
+	logger := newDirTestLogger()
+	baseDir := filepath.Join(t.TempDir(), "local")
+	if err := os.MkdirAll(baseDir, 0o750); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, "dump"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write blocking file: %v", err)
+	}
+
+	cfg := fmt.Sprintf("dir: local\n    path %s\n", baseDir)
+	cfgPath, restore := overridePath(t, &storageCfgPath, "storage.cfg")
+	defer restore()
+	writeFile(t, cfgPath, cfg)
+
+	err := RecreateStorageDirectories(logger)
+	if err == nil {
+		t.Fatalf("expected subdirectory creation error")
+	}
+	if !strings.Contains(err.Error(), "dump") {
+		t.Fatalf("expected error to mention failed subdir, got: %v", err)
+	}
+}
+
 func TestCreatePVEStorageStructureHandlesVariousTypes(t *testing.T) {
 	logger := newDirTestLogger()
 	baseNFS := filepath.Join(t.TempDir(), "nfs")
