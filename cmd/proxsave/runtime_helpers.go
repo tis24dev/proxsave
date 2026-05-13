@@ -32,15 +32,16 @@ type ExecInfo struct {
 }
 
 var (
-	execInfo     ExecInfo
-	execInfoOnce sync.Once
+	execInfo     = &ExecInfo{}
+	execInfoOnce = &sync.Once{}
 )
 
 func getExecInfo() ExecInfo {
 	execInfoOnce.Do(func() {
-		execInfo = detectExecInfo()
+		info := detectExecInfo()
+		execInfo = &info
 	})
-	return execInfo
+	return *execInfo
 }
 
 func detectExecInfo() ExecInfo {

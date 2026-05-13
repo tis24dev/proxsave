@@ -12,13 +12,13 @@ func forceDetectedBaseDirForTest(t *testing.T, baseDir string) {
 	origOnce := execInfoOnce
 
 	execPath := filepath.Join(baseDir, "build", "proxsave")
-	execInfo = ExecInfo{
+	execInfo = &ExecInfo{
 		ExecPath: execPath,
 		ExecDir:  filepath.Dir(execPath),
 		BaseDir:  baseDir,
 		HasBase:  true,
 	}
-	execInfoOnce = sync.Once{}
+	execInfoOnce = &sync.Once{}
 	execInfoOnce.Do(func() {})
 
 	t.Cleanup(func() {
