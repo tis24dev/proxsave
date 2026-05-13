@@ -77,6 +77,21 @@ func BuildEmailHTML(data *NotificationData) string {
 	statusColor := getStatusColor(data.Status)
 	statusText := strings.ToUpper(data.Status.String())
 	proxmoxType := strings.ToUpper(data.ProxmoxType.String())
+	backupDate := escapeHTML(data.BackupDate.Format("2006-01-02 15:04:05"))
+	hostname := escapeHTML(data.Hostname)
+	localEmoji := escapeHTML(GetStorageEmoji(data.LocalStatus))
+	localStatusSummary := escapeHTML(data.LocalStatusSummary)
+	localUsed := escapeHTML(data.LocalUsed)
+	localFree := escapeHTML(data.LocalFree)
+	localPercent := escapeHTML(data.LocalPercent)
+	secondaryEmoji := escapeHTML(GetStorageEmoji(data.SecondaryStatus))
+	secondaryStatusSummary := escapeHTML(data.SecondaryStatusSummary)
+	secondaryUsed := escapeHTML(data.SecondaryUsed)
+	secondaryFree := escapeHTML(data.SecondaryFree)
+	secondaryPercent := escapeHTML(data.SecondaryPercent)
+	cloudEmoji := escapeHTML(GetStorageEmoji(data.CloudStatus))
+	cloudStatusSummary := escapeHTML(data.CloudStatusSummary)
+	scriptVersion := escapeHTML(data.ScriptVersion)
 
 	// Determine backup paths sidebar color
 	backupPathsColor := "#4CAF50" // Green by default
@@ -113,7 +128,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	// Header
 	fmt.Fprintf(&html, "        <div class=\"header\" style=\"background-color: %s;\">\n", statusColor)
 	fmt.Fprintf(&html, "            <h1>%s Backup Report - %s</h1>\n", proxmoxType, statusText)
-	fmt.Fprintf(&html, "            <p>%s - %s</p>\n", data.Hostname, data.BackupDate.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&html, "            <p>%s - %s</p>\n", hostname, backupDate)
 	html.WriteString("        </div>\n")
 
 	// Content
@@ -126,7 +141,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Local Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", GetStorageEmoji(data.LocalStatus), data.LocalStatusSummary)
+	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", localEmoji, localStatusSummary)
 	html.WriteString("                    </div>\n")
 	if data.LocalFree != "" && data.LocalFree != "N/A" {
 		barColor := "normal"
@@ -136,11 +151,11 @@ func BuildEmailHTML(data *NotificationData) string {
 			barColor = "warning"
 		}
 		html.WriteString("                    <div class=\"storage-info\">\n")
-		fmt.Fprintf(&html, "                        <span>%s</span>\n", data.LocalUsed)
+		fmt.Fprintf(&html, "                        <span>%s</span>\n", localUsed)
 		html.WriteString("                        <div class=\"space-bar\">\n")
 		fmt.Fprintf(&html, "                            <div class=\"space-used %s\" style=\"width: %.1f%%;\"></div>\n", barColor, data.LocalUsagePercent)
 		html.WriteString("                        </div>\n")
-		fmt.Fprintf(&html, "                        <span>%s free (%s used)</span>\n", data.LocalFree, data.LocalPercent)
+		fmt.Fprintf(&html, "                        <span>%s free (%s used)</span>\n", localFree, localPercent)
 		html.WriteString("                    </div>\n")
 	}
 	html.WriteString("                </div>\n")
@@ -150,7 +165,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Secondary Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", GetStorageEmoji(data.SecondaryStatus), data.SecondaryStatusSummary)
+	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", secondaryEmoji, secondaryStatusSummary)
 	html.WriteString("                    </div>\n")
 	if data.SecondaryEnabled && data.SecondaryFree != "" && data.SecondaryFree != "N/A" {
 		barColor := "normal"
@@ -160,11 +175,11 @@ func BuildEmailHTML(data *NotificationData) string {
 			barColor = "warning"
 		}
 		html.WriteString("                    <div class=\"storage-info\">\n")
-		fmt.Fprintf(&html, "                        <span>%s</span>\n", data.SecondaryUsed)
+		fmt.Fprintf(&html, "                        <span>%s</span>\n", secondaryUsed)
 		html.WriteString("                        <div class=\"space-bar\">\n")
 		fmt.Fprintf(&html, "                            <div class=\"space-used %s\" style=\"width: %.1f%%;\"></div>\n", barColor, data.SecondaryUsagePercent)
 		html.WriteString("                        </div>\n")
-		fmt.Fprintf(&html, "                        <span>%s free (%s used)</span>\n", data.SecondaryFree, data.SecondaryPercent)
+		fmt.Fprintf(&html, "                        <span>%s free (%s used)</span>\n", secondaryFree, secondaryPercent)
 		html.WriteString("                    </div>\n")
 	}
 	html.WriteString("                </div>\n")
@@ -174,7 +189,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Cloud Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", GetStorageEmoji(data.CloudStatus), data.CloudStatusSummary)
+	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", cloudEmoji, cloudStatusSummary)
 	html.WriteString("                    </div>\n")
 	html.WriteString("                </div>\n")
 
@@ -259,7 +274,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("        </div>\n")
 	html.WriteString("        <div class=\"footer\">\n")
 	html.WriteString("            <p>This is an automated message from the Proxmox Backup Script.</p>\n")
-	fmt.Fprintf(&html, "            <p>Generated on %s by backup script v%s</p>\n", data.BackupDate.Format("2006-01-02 15:04:05"), data.ScriptVersion)
+	fmt.Fprintf(&html, "            <p>Generated on %s by backup script v%s</p>\n", backupDate, scriptVersion)
 	html.WriteString("        </div>\n")
 
 	html.WriteString("    </div>\n")
