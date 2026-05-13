@@ -537,6 +537,38 @@ func TestEmailNotifierBuildEmailMessage_EncodesUTF8BodiesAsSevenBitSafe(t *testi
 	}
 }
 
+func TestEmailNotifierBuildEmailMessageSanitizesAddressHeaders(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:        true,
+		DeliveryMethod: EmailDeliveryPMF,
+		From:           "sender@example.com\r\nBcc: injected@example.com",
+	}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	emailMessage, toHeader := notifier.buildEmailMessage(
+		"admin@example.com\r\nCc: injected@example.com",
+		"subject",
+		"<b>html</b>",
+		"text",
+		createTestNotificationData(),
+	)
+
+	if strings.Contains(emailMessage, "\r") {
+		t.Fatalf("email message contains raw carriage return:\n%s", emailMessage)
+	}
+	if strings.Contains(emailMessage, "\nCc: injected@example.com") || strings.Contains(emailMessage, "\nBcc: injected@example.com") {
+		t.Fatalf("email message contains injected header:\n%s", emailMessage)
+	}
+	if toHeader != "admin@example.comCc: injected@example.com" {
+		t.Fatalf("toHeader=%q", toHeader)
+	}
+}
+
 func TestEmailNotifierIsMTAServiceActive_SystemctlMissing(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(io.Discard)

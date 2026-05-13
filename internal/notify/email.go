@@ -1202,6 +1202,12 @@ func encodeQuotedPrintableBody(body string) string {
 	return encoded.String()
 }
 
+func sanitizeHeaderValue(value string) string {
+	value = strings.ReplaceAll(value, "\r", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	return strings.TrimSpace(value)
+}
+
 func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody string, data *NotificationData) (emailMessage, toHeader string) {
 	e.logger.Debug("=== Building email message ===")
 
@@ -1210,12 +1216,16 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 
 	// Build email headers and body
 	var email strings.Builder
-	toHeader = strings.TrimSpace(recipient)
+	toHeader = sanitizeHeaderValue(recipient)
 	if toHeader == "" {
 		toHeader = "root"
 	}
+	fromHeader := sanitizeHeaderValue(e.config.From)
+	if fromHeader == "" {
+		fromHeader = "no-reply@proxmox.tis24.it"
+	}
 	fmt.Fprintf(&email, "To: %s\n", toHeader)
-	fmt.Fprintf(&email, "From: %s\n", e.config.From)
+	fmt.Fprintf(&email, "From: %s\n", fromHeader)
 	fmt.Fprintf(&email, "Subject: =?UTF-8?B?%s?=\n", encodedSubject)
 	email.WriteString("MIME-Version: 1.0\n")
 
