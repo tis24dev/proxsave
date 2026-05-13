@@ -611,11 +611,9 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 	}()
 
 	if err := cmd.Start(); err != nil {
-		_ = pw.Close()
-		if startErr := <-errChan; startErr != nil {
-			return startErr
-		}
-		return fmt.Errorf("failed to start xz: %w", err)
+		startErr := fmt.Errorf("failed to start xz: %w", err)
+		drainTarWriterAfterCompressorStartFailure(pw, errChan, startErr)
+		return startErr
 	}
 
 	tarErr := <-errChan
@@ -684,11 +682,9 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 	}()
 
 	if err := cmd.Start(); err != nil {
-		_ = pw.Close()
-		if startErr := <-errChan; startErr != nil {
-			return startErr
-		}
-		return fmt.Errorf("failed to start zstd: %w", err)
+		startErr := fmt.Errorf("failed to start zstd: %w", err)
+		drainTarWriterAfterCompressorStartFailure(pw, errChan, startErr)
+		return startErr
 	}
 
 	tarErr := <-errChan
@@ -726,6 +722,11 @@ func (a *Archiver) attachStderrLogger(cmd *exec.Cmd, algo string) error {
 	}()
 
 	return nil
+}
+
+func drainTarWriterAfterCompressorStartFailure(pw *io.PipeWriter, errChan <-chan error, startErr error) {
+	_ = pw.CloseWithError(startErr)
+	_ = <-errChan
 }
 
 func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputPath string, cmd *exec.Cmd, algo string) (err error) {
@@ -767,11 +768,9 @@ func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputP
 	}()
 
 	if err := cmd.Start(); err != nil {
-		_ = pw.Close()
-		if startErr := <-errChan; startErr != nil {
-			return startErr
-		}
-		return fmt.Errorf("failed to start %s: %w", algo, err)
+		startErr := fmt.Errorf("failed to start %s: %w", algo, err)
+		drainTarWriterAfterCompressorStartFailure(pw, errChan, startErr)
+		return startErr
 	}
 
 	if tarErr := <-errChan; tarErr != nil {

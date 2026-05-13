@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -529,6 +530,74 @@ func TestCompressionErrorWrap(t *testing.T) {
 	}
 	if errors.Is(cerr, fmt.Errorf("other")) {
 		t.Fatalf("CompressionError should not match unrelated errors")
+	}
+}
+
+func TestCompressorStartFailureReturnsStartError(t *testing.T) {
+	tmp := t.TempDir()
+	sourceDir := filepath.Join(tmp, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	missingCommand := filepath.Join(tmp, "missing-compressor")
+	newArchiver := func() *Archiver {
+		a := NewArchiver(logger, &ArchiverConfig{
+			Compression:      types.CompressionXZ,
+			CompressionLevel: 3,
+		})
+		a.deps.CommandContext = func(ctx context.Context, _ string, args ...string) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, missingCommand, args...), nil
+		}
+		return a
+	}
+
+	tests := []struct {
+		name string
+		run  func(context.Context, *Archiver, string, string) error
+		want string
+	}{
+		{
+			name: "xz",
+			run: func(ctx context.Context, a *Archiver, source, output string) error {
+				return a.createXZArchive(ctx, source, output)
+			},
+			want: "failed to start xz",
+		},
+		{
+			name: "zstd",
+			run: func(ctx context.Context, a *Archiver, source, output string) error {
+				return a.createZstdArchive(ctx, source, output)
+			},
+			want: "failed to start zstd",
+		},
+		{
+			name: "generic",
+			run: func(ctx context.Context, a *Archiver, source, output string) error {
+				cmd := exec.CommandContext(ctx, missingCommand, "-c")
+				return a.pipeTarThroughCommand(ctx, source, output, cmd, "fake")
+			},
+			want: "failed to start fake",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run(context.Background(), newArchiver(), sourceDir, filepath.Join(tmp, tt.name+".tar"))
+			if err == nil {
+				t.Fatalf("expected start failure")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v, want to contain %q", err, tt.want)
+			}
+			if errors.Is(err, io.ErrClosedPipe) {
+				t.Fatalf("returned pipe error instead of compressor start error: %v", err)
+			}
+		})
 	}
 }
 
