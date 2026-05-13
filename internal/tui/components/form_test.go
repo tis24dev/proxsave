@@ -74,7 +74,11 @@ func TestAddPasswordFieldRegistersValidators(t *testing.T) {
 	if form.GetFormItemCount() != 1 {
 		t.Fatalf("form item count=%d; want 1", form.GetFormItemCount())
 	}
-	if got := form.Form.GetFormItem(0).(*tview.InputField).GetLabel(); got != "Password" {
+	item, ok := form.GetFormItem(0).(*tview.InputField)
+	if !ok {
+		t.Fatalf("form item type=%T; want *tview.InputField", form.GetFormItem(0))
+	}
+	if got := item.GetLabel(); got != "Password" {
 		t.Fatalf("label=%q; want %q", got, "Password")
 	}
 }
