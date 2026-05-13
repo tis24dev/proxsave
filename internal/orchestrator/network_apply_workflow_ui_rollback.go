@@ -272,7 +272,7 @@ func (f *networkRollbackUIApplyFlow) rollbackStagedPreflightFailure(preflight ne
 		f.info("Network rollback log: %s", rollbackLog)
 	}
 	if rbErr != nil {
-		f.error("Network apply aborted: preflight validation failed (%s) and rollback failed: %v", preflight.CommandLine(), rbErr)
+		f.logError("Network apply aborted: preflight validation failed (%s) and rollback failed: %v", preflight.CommandLine(), rbErr)
 		return fmt.Errorf("network preflight validation failed; rollback attempt failed: %w", rbErr)
 	}
 	f.captureAfterRollbackDiagnostics()
@@ -502,7 +502,7 @@ func (f *networkRollbackUIApplyFlow) warning(format string, args ...interface{})
 	}
 }
 
-func (f *networkRollbackUIApplyFlow) error(format string, args ...interface{}) {
+func (f *networkRollbackUIApplyFlow) logError(format string, args ...interface{}) {
 	if f.logger != nil {
 		f.logger.Error(format, args...)
 	}
