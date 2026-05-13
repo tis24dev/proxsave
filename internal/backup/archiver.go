@@ -726,7 +726,7 @@ func (a *Archiver) attachStderrLogger(cmd *exec.Cmd, algo string) error {
 
 func drainTarWriterAfterCompressorStartFailure(pw *io.PipeWriter, errChan <-chan error, startErr error) {
 	_ = pw.CloseWithError(startErr)
-	_ = <-errChan
+	<-errChan
 }
 
 func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputPath string, cmd *exec.Cmd, algo string) (err error) {
