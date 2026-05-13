@@ -163,7 +163,7 @@ func TestInitializePBSDatastoreReturnsSubdirError(t *testing.T) {
 
 func TestRecreateDatastoreDirectoriesSkipsZFSMountPoints(t *testing.T) {
 	logger := newDirTestLogger()
-	baseDir := filepath.Join(t.TempDir(), "backup-ds")
+	baseDir := filepath.Join(t.TempDir(), "backup", "ds")
 	cfg := fmt.Sprintf("datastore: ds\n    path %s\n", baseDir)
 	cfgPath, restore := overridePath(t, &datastoreCfgPath, "datastore.cfg")
 	defer restore()
@@ -551,19 +551,46 @@ func TestIsLikelyZFSMountPointNoMatch(t *testing.T) {
 	}
 }
 
-// Test: isLikelyZFSMountPoint with a path containing "datastore"
+// Test: isLikelyZFSMountPoint with a path containing a datastore segment
 func TestIsLikelyZFSMountPointDatastorePath(t *testing.T) {
 	logger := newDirTestLogger()
 	cachePath, restore := overridePath(t, &zpoolCachePath, "zpool.cache")
 	defer restore()
 	writeFile(t, cachePath, "cache")
 
-	// A path with "datastore" in the name should match
+	// A path with a "datastore" segment should match.
 	if !isLikelyZFSMountPoint("/var/lib/datastore", logger) {
-		t.Fatalf("expected true for path containing 'datastore'")
+		t.Fatalf("expected true for path containing a 'datastore' segment")
 	}
 	if !isLikelyZFSMountPoint("/DATASTORE/pool", logger) {
-		t.Fatalf("expected true for path containing 'DATASTORE' (case insensitive)")
+		t.Fatalf("expected true for path containing a 'DATASTORE' segment (case insensitive)")
+	}
+}
+
+func TestIsCommonZFSMountPathRequiresPathSegments(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "mnt prefix", path: "/mnt/pbs", want: true},
+		{name: "backup segment", path: "/backup/pbs", want: true},
+		{name: "nested backup segment", path: "/srv/backup/pbs", want: true},
+		{name: "datastore segment", path: "/var/lib/datastore", want: true},
+		{name: "datastore segment case insensitive", path: "/DATASTORE/pool", want: true},
+		{name: "backup substring", path: "/srv/mybackup/pbs", want: false},
+		{name: "datastore substring", path: "/srv/mydatastore/pbs", want: false},
+		{name: "backup suffix substring", path: "/srv/backup-old/pbs", want: false},
+		{name: "datastore suffix substring", path: "/srv/datastore2/pbs", want: false},
+		{name: "relative backup segment", path: "backup/pbs", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCommonZFSMountPath(tt.path); got != tt.want {
+				t.Fatalf("isCommonZFSMountPath(%q)=%v; want %v", tt.path, got, tt.want)
+			}
+		})
 	}
 }
 

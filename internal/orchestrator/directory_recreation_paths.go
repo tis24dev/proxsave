@@ -148,9 +148,22 @@ func isLikelyZFSMountPoint(path string, logger *logging.Logger) bool {
 }
 
 func isCommonZFSMountPath(pathLower string) bool {
+	pathLower = filepath.Clean(strings.ToLower(pathLower))
+	if !strings.HasPrefix(pathLower, "/") {
+		return false
+	}
 	return strings.HasPrefix(pathLower, "/mnt/") ||
-		strings.Contains(pathLower, "backup") ||
-		strings.Contains(pathLower, "datastore")
+		hasPathSegment(pathLower, "backup") ||
+		hasPathSegment(pathLower, "datastore")
+}
+
+func hasPathSegment(path, segment string) bool {
+	for _, part := range strings.Split(path, "/") {
+		if part == segment {
+			return true
+		}
+	}
+	return false
 }
 
 func isIgnorableOwnershipError(err error) bool {
