@@ -66,7 +66,7 @@ func normalizeRestoreWorkflowUIError(ctx context.Context, logger *logging.Logger
 	if err == nil {
 		return nil
 	}
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		logger.Warning("Restore input closed unexpectedly (EOF). This usually means the interactive UI lost access to stdin/TTY (e.g., SSH disconnect or non-interactive execution). Re-run with --restore --cli from an interactive shell.")
 		return ErrRestoreAborted
 	}
