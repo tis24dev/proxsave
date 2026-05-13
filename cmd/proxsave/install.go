@@ -453,7 +453,6 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	if skipConfigWizard {
 		return installConfigResult{SkipConfigWizard: true}, nil
 	}
-	template = config.RemoveRuntimeDerivedEnvKeys(template)
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring secondary storage")
 	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
