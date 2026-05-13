@@ -22,44 +22,66 @@ var allowedCommandFactories = map[string]commandFactory{
 	"apt-cache": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "apt-cache", args...)
 	},
-	"blkid": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "blkid", args...) },
+	"blkid": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "blkid", args...)
+	},
 	"bridge": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "bridge", args...)
 	},
-	"bzip2": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "bzip2", args...) },
-	"cat":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "cat", args...) },
-	"ceph":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ceph", args...) },
+	"bzip2": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "bzip2", args...)
+	},
+	"cat": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "cat", args...)
+	},
+	"ceph": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ceph", args...)
+	},
 	"chattr": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "chattr", args...)
 	},
 	"crontab": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "crontab", args...)
 	},
-	"df": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "df", args...) },
+	"df": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "df", args...)
+	},
 	"dmidecode": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "dmidecode", args...)
 	},
-	"dpkg": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "dpkg", args...) },
+	"dpkg": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "dpkg", args...)
+	},
 	"dpkg-query": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "dpkg-query", args...)
 	},
-	"echo": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "echo", args...) },
+	"echo": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo", args...)
+	},
 	"ethtool": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "ethtool", args...)
 	},
-	"false": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "false", args...) },
+	"false": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "false", args...)
+	},
 	"firewall-cmd": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "firewall-cmd", args...)
 	},
-	"free": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "free", args...) },
+	"free": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "free", args...)
+	},
 	"hostname": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "hostname", args...)
 	},
 	"ifreload": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "ifreload", args...)
 	},
-	"ifup": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ifup", args...) },
-	"ip":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ip", args...) },
+	"ifup": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ifup", args...)
+	},
+	"ip": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ip", args...)
+	},
 	"iptables": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "iptables", args...)
 	},
@@ -75,26 +97,54 @@ var allowedCommandFactories = map[string]commandFactory{
 	"journalctl": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "journalctl", args...)
 	},
-	"lsblk": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lsblk", args...) },
-	"lspci": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lspci", args...) },
-	"lscpu": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lscpu", args...) },
-	"lsmod": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lsmod", args...) },
-	"lsusb": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lsusb", args...) },
-	"lvs":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lvs", args...) },
-	"lzma":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "lzma", args...) },
-	"mailq": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "mailq", args...) },
-	"mount": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "mount", args...) },
+	"lsblk": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "lsblk", args...)
+	},
+	"lspci": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "lspci", args...)
+	},
+	"lscpu": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "lscpu", args...)
+	},
+	"lsmod": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "lsmod", args...)
+	},
+	"lsusb": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "lsusb", args...)
+	},
+	"lvs": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "lvs", args...)
+	},
+	"lzma": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "lzma", args...)
+	},
+	"mailq": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "mailq", args...)
+	},
+	"mount": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "mount", args...)
+	},
 	"mountpoint": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "mountpoint", args...)
 	},
-	"nft": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "nft", args...) },
+	"nft": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "nft", args...)
+	},
 	"pbzip2": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "pbzip2", args...)
 	},
-	"pgrep": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pgrep", args...) },
-	"pigz":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pigz", args...) },
-	"ping":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ping", args...) },
-	"pvs":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pvs", args...) },
+	"pgrep": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pgrep", args...)
+	},
+	"pigz": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pigz", args...)
+	},
+	"ping": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ping", args...)
+	},
+	"pvs": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pvs", args...)
+	},
 	"proxmox-backup-client": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "proxmox-backup-client", args...)
 	},
@@ -107,17 +157,27 @@ var allowedCommandFactories = map[string]commandFactory{
 	"proxmox-tape": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "proxmox-tape", args...)
 	},
-	"ps":    func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ps", args...) },
-	"pvecm": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pvecm", args...) },
+	"ps": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ps", args...)
+	},
+	"pvecm": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pvecm", args...)
+	},
 	"pve-firewall": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "pve-firewall", args...)
 	},
 	"pvenode": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "pvenode", args...)
 	},
-	"pvesh": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pvesh", args...) },
-	"pvesm": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pvesm", args...) },
-	"pveum": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "pveum", args...) },
+	"pvesh": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pvesh", args...)
+	},
+	"pvesm": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pvesm", args...)
+	},
+	"pveum": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "pveum", args...)
+	},
 	"pveversion": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "pveversion", args...)
 	},
@@ -130,11 +190,15 @@ var allowedCommandFactories = map[string]commandFactory{
 	"sensors": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "sensors", args...)
 	},
-	"sh": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "sh", args...) },
+	"sh": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", args...)
+	},
 	"smartctl": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "smartctl", args...)
 	},
-	"ss": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ss", args...) },
+	"ss": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ss", args...)
+	},
 	"systemctl": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "systemctl", args...)
 	},
@@ -144,22 +208,42 @@ var allowedCommandFactories = map[string]commandFactory{
 	"sysctl": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "sysctl", args...)
 	},
-	"tail": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "tail", args...) },
-	"tar":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "tar", args...) },
+	"tail": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "tail", args...)
+	},
+	"tar": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "tar", args...)
+	},
 	"udevadm": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "udevadm", args...)
 	},
 	"umount": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "umount", args...)
 	},
-	"uname": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "uname", args...) },
-	"ufw":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "ufw", args...) },
-	"vgs":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "vgs", args...) },
-	"which": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "which", args...) },
-	"xz":    func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "xz", args...) },
-	"zfs":   func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "zfs", args...) },
-	"zpool": func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "zpool", args...) },
-	"zstd":  func(ctx context.Context, args ...string) *exec.Cmd { return exec.CommandContext(ctx, "zstd", args...) },
+	"uname": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "uname", args...)
+	},
+	"ufw": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "ufw", args...)
+	},
+	"vgs": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "vgs", args...)
+	},
+	"which": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "which", args...)
+	},
+	"xz": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "xz", args...)
+	},
+	"zfs": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "zfs", args...)
+	},
+	"zpool": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "zpool", args...)
+	},
+	"zstd": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "zstd", args...)
+	},
 }
 
 // CommandContext creates commands only for binaries that are intentionally
