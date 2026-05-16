@@ -251,7 +251,11 @@ func TestRunAgeSetupWizard_ExitReturnsAborted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open stdin: %v", err)
 	}
-	defer f.Close()
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close stdin fixture: %v", err)
+		}
+	})
 
 	origIn := os.Stdin
 	t.Cleanup(func() { os.Stdin = origIn })
@@ -279,7 +283,11 @@ func TestRunAgeSetupWizard_Option1WritesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open stdin: %v", err)
 	}
-	defer f.Close()
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close stdin fixture: %v", err)
+		}
+	})
 
 	origIn := os.Stdin
 	t.Cleanup(func() { os.Stdin = origIn })
