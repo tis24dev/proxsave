@@ -597,8 +597,13 @@ func TestFinalizeAndCloseLogWithoutLogFile(t *testing.T) {
 }
 
 type stubNotifierChannel struct {
-	name   string
-	called bool
+	name          string
+	called        bool
+	logger        *logging.Logger
+	warnOnNotify  bool
+	errorCount    int
+	warningCount  int
+	categoryCount int
 }
 
 func (s *stubNotifierChannel) Name() string {
@@ -607,6 +612,25 @@ func (s *stubNotifierChannel) Name() string {
 
 func (s *stubNotifierChannel) Notify(ctx context.Context, stats *BackupStats) error {
 	s.called = true
+	if stats != nil {
+		s.errorCount = stats.ErrorCount
+		s.warningCount = stats.WarningCount
+		s.categoryCount = len(stats.LogCategories)
+	}
+	if s.warnOnNotify && s.logger != nil {
+		s.logger.Warning("%s notification warning after snapshot", s.name)
+	}
+	return nil
+}
+
+type warningStorageTarget struct {
+	logger *logging.Logger
+}
+
+func (w *warningStorageTarget) Sync(ctx context.Context, stats *BackupStats) error {
+	if w.logger != nil {
+		w.logger.Warning("storage warning before notification snapshot")
+	}
 	return nil
 }
 
@@ -718,6 +742,70 @@ func TestDispatchNotificationsUsesNameMappingNotRegistrationOrder(t *testing.T) 
 	// No warnings should be produced for missing channels.
 	if strings.Contains(buf.String(), "enabled but not initialized") {
 		t.Fatalf("unexpected warning in output: %s", buf.String())
+	}
+}
+
+func TestDispatchPostBackupSnapshotsIssuesImmediatelyBeforeNotifications(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	logPath := filepath.Join(t.TempDir(), "run.log")
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatalf("OpenLogFile: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = logger.CloseLogFile()
+	})
+
+	email := &stubNotifierChannel{name: "Email", logger: logger, warnOnNotify: true}
+	telegram := &stubNotifierChannel{name: "Telegram"}
+	o := &Orchestrator{
+		logger: logger,
+		cfg: &config.Config{
+			EmailEnabled:    true,
+			TelegramEnabled: true,
+			GotifyEnabled:   false,
+			WebhookEnabled:  false,
+		},
+		storageTargets: []StorageTarget{
+			&warningStorageTarget{logger: logger},
+		},
+		notificationChannels: []NotificationChannel{
+			email,
+			telegram,
+		},
+	}
+	stats := &BackupStats{
+		LogFilePath:      logPath,
+		SecondaryEnabled: true,
+		SecondaryStatus:  "ok",
+		CloudStatus:      "disabled",
+		EmailStatus:      "unknown",
+		TelegramStatus:   "unknown",
+	}
+
+	if err := o.dispatchPostBackup(context.Background(), stats); err != nil {
+		t.Fatalf("dispatchPostBackup returned error: %v", err)
+	}
+
+	if !email.called || !telegram.called {
+		t.Fatalf("expected both notifiers to be called (email=%v telegram=%v)", email.called, telegram.called)
+	}
+	if email.warningCount != 1 || telegram.warningCount != 1 {
+		t.Fatalf("notifiers should see the same pre-notification warning snapshot, got email=%d telegram=%d", email.warningCount, telegram.warningCount)
+	}
+	if email.errorCount != 0 || telegram.errorCount != 0 {
+		t.Fatalf("notifiers should not see errors, got email=%d telegram=%d", email.errorCount, telegram.errorCount)
+	}
+	if email.categoryCount == 0 || telegram.categoryCount == 0 || len(stats.LogCategories) == 0 {
+		t.Fatalf("expected pre-notification log categories to be snapshotted")
+	}
+	if stats.WarningCount != 1 {
+		t.Fatalf("stats.WarningCount should remain at the pre-notification snapshot, got %d", stats.WarningCount)
+	}
+	if got := logger.WarningCount(); got != 2 {
+		t.Fatalf("final logger warning count should include storage and notification warnings, got %d", got)
 	}
 }
 

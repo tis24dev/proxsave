@@ -316,7 +316,7 @@ func TestConvertBackupStatsPropagatesIssueSnapshotAndCompressionFallback(t *test
 	logger := logging.New(types.LogLevelDebug, false)
 	adapter := NewNotificationAdapter(&stubNotifier{name: "Email", enabled: true}, logger)
 
-	// Issue counts and categories are snapshotted into stats at backup completion;
+	// Issue counts and categories are snapshotted before the notification group;
 	// conversion must propagate them as-is without re-parsing the log file.
 	stats := &BackupStats{
 		ExitCode:             0,
@@ -348,6 +348,10 @@ func TestConvertBackupStatsPropagatesIssueSnapshotAndCompressionFallback(t *test
 	}
 	if len(data.LogCategories) != 2 {
 		t.Fatalf("expected LogCategories to be propagated from stats, got %d entries", len(data.LogCategories))
+	}
+	data.LogCategories[0].Label = "mutated"
+	if stats.LogCategories[0].Label == "mutated" {
+		t.Fatalf("LogCategories should be copied into NotificationData")
 	}
 
 	// Compression ratio should be computed from sizes when explicit savings is <= 0

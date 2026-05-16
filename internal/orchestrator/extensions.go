@@ -115,6 +115,36 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 	}
 }
 
+// startNotificationGroup is the notification boundary. Keep the issue snapshot
+// immediately adjacent to dispatchNotifications; no logging belongs between them.
+func (o *Orchestrator) startNotificationGroup(ctx context.Context, stats *BackupStats) {
+	o.snapshotPreNotificationIssues(stats)
+	o.dispatchNotifications(ctx, stats)
+}
+
+func (o *Orchestrator) snapshotPreNotificationIssues(stats *BackupStats) {
+	o.refreshLogIssuesFromFile(stats, true)
+}
+
+func (o *Orchestrator) refreshLogIssuesFromFile(stats *BackupStats, includeCategories bool) {
+	if stats == nil || strings.TrimSpace(stats.LogFilePath) == "" {
+		return
+	}
+
+	categoryLimit := 0
+	if includeCategories {
+		categoryLimit = 10
+	}
+	categories, errorCount, warningCount := ParseLogCounts(stats.LogFilePath, categoryLimit)
+	stats.ErrorCount = errorCount
+	stats.WarningCount = warningCount
+	if includeCategories {
+		stats.LogCategories = categories
+	} else {
+		stats.LogCategories = nil
+	}
+}
+
 // DispatchEarlyErrorNotification sends notifications for errors that occurred before backup started
 // This creates a minimal BackupStats with error information for notification purposes
 func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, earlyErr *EarlyErrorState) *BackupStats {
@@ -180,7 +210,7 @@ func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, early
 	}
 
 	// Dispatch notifications with minimal stats
-	o.dispatchNotifications(ctx, stats)
+	o.startNotificationGroup(ctx, stats)
 
 	return stats
 }
@@ -208,7 +238,7 @@ func (o *Orchestrator) dispatchNotificationsAndLogs(ctx context.Context, stats *
 	// Notification errors are logged but never propagated
 	fmt.Println()
 	o.logStep(7, "Notifications - dispatching channels")
-	o.dispatchNotifications(ctx, stats)
+	o.startNotificationGroup(ctx, stats)
 }
 
 func (o *Orchestrator) dispatchPostBackup(ctx context.Context, stats *BackupStats) error {

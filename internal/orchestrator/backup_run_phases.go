@@ -341,12 +341,9 @@ func (o *Orchestrator) finalizeBackupStats(run *backupRunContext) {
 
 	if stats.LogFilePath != "" {
 		o.logger.Debug("Parsing log file for error/warning counts: %s", stats.LogFilePath)
-		categories, errorCount, warningCount := ParseLogCounts(stats.LogFilePath, 10)
-		stats.ErrorCount = errorCount
-		stats.WarningCount = warningCount
-		stats.LogCategories = categories
-		if errorCount > 0 || warningCount > 0 {
-			o.logger.Debug("Found %d errors and %d warnings in log file", errorCount, warningCount)
+		o.refreshLogIssuesFromFile(stats, false)
+		if stats.ErrorCount > 0 || stats.WarningCount > 0 {
+			o.logger.Debug("Found %d errors and %d warnings in log file", stats.ErrorCount, stats.WarningCount)
 		}
 	} else {
 		o.logger.Debug("No log file path specified, error/warning counts will be 0")

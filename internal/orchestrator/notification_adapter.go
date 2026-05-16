@@ -175,13 +175,13 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		secondaryPercent = formatPercentString(calculateUsagePercent(stats.SecondaryUsedSpace, stats.SecondaryTotalSpace))
 	}
 
-	// Issue counts and categories are snapshotted into stats at backup completion
-	// (finalizeBackupStats / parseFailedBackupLogCounts) so all notifiers see the
-	// same totals. Re-parsing the log here per-notifier would over-count warnings
+	// Issue counts and categories are snapshotted immediately before the
+	// notification group starts, so all notifiers see the same pre-notification
+	// totals. Re-parsing the log here per-notifier would over-count warnings
 	// emitted by earlier notifiers in the dispatch chain.
 	errorCount := stats.ErrorCount
 	warningCount := stats.WarningCount
-	logCategories := stats.LogCategories
+	logCategories := append([]notify.LogCategory(nil), stats.LogCategories...)
 	totalIssues := errorCount + warningCount
 
 	// Extract filename from full path for email display
