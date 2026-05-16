@@ -284,11 +284,11 @@ func TestPBSAPIApply_StrictListCommandErrors(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 
 	tests := []struct {
-		name     string
-		relPath  string
-		content  string
-		listCmd  string
-		apply    func(context.Context, *logging.Logger, string, bool) error
+		name    string
+		relPath string
+		content string
+		listCmd string
+		apply   func(context.Context, *logging.Logger, string, bool) error
 	}{
 		{
 			name:    "remote",
@@ -945,7 +945,7 @@ func TestApplyPBSDatastoreCfgViaAPI_CreateAndUpdateFail(t *testing.T) {
 
 	runner.errs = map[string]error{
 		"proxmox-backup-manager datastore create ds1 /p1 --comment c1": errors.New("create failed"),
-		"proxmox-backup-manager datastore update ds1 --comment c1":       errors.New("update failed"),
+		"proxmox-backup-manager datastore update ds1 --comment c1":     errors.New("update failed"),
 	}
 
 	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false)
@@ -1023,7 +1023,7 @@ func TestApplyPBSSyncCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing.T) {
 		"proxmox-backup-manager sync-job list --output-format=json": []byte(`{"data":[{"id":"job1"},{"id":"old"}]}`),
 	}
 	runner.errs = map[string]error{
-		"proxmox-backup-manager sync-job remove old":                    errors.New("cannot remove old"),
+		"proxmox-backup-manager sync-job remove old":                          errors.New("cannot remove old"),
 		"proxmox-backup-manager sync-job create job1 --remote r1 --store ds1": errors.New("already exists"),
 	}
 
@@ -1078,7 +1078,7 @@ func TestApplyPBSVerificationCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing
 		"proxmox-backup-manager verify-job list --output-format=json": []byte(`{"data":[{"id":"v1"},{"id":"old"}]}`),
 	}
 	runner.errs = map[string]error{
-		"proxmox-backup-manager verify-job remove old":       errors.New("cannot remove old"),
+		"proxmox-backup-manager verify-job remove old":            errors.New("cannot remove old"),
 		"proxmox-backup-manager verify-job create v1 --store ds1": errors.New("already exists"),
 	}
 
@@ -1135,7 +1135,7 @@ func TestApplyPBSPruneCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing.T) {
 		"proxmox-backup-manager prune-job list --output-format=json": []byte(`{"data":[{"id":"old"},{"id":"p1"}]}`),
 	}
 	runner.errs = map[string]error{
-		"proxmox-backup-manager prune-job remove old":           errors.New("cannot remove old"),
+		"proxmox-backup-manager prune-job remove old":                          errors.New("cannot remove old"),
 		"proxmox-backup-manager prune-job create p1 --store ds1 --keep-last 3": errors.New("already exists"),
 	}
 
