@@ -312,20 +312,12 @@ func TestFormatHelpers(t *testing.T) {
 	}
 }
 
-func TestConvertBackupStatsUsesLogCountsAndCompressionFallback(t *testing.T) {
+func TestConvertBackupStatsPropagatesIssueSnapshotAndCompressionFallback(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	adapter := NewNotificationAdapter(&stubNotifier{name: "Email", enabled: true}, logger)
 
-	// Prepare a temporary log file with known error/warning counts
-	tempDir := t.TempDir()
-	logFile := filepath.Join(tempDir, "notif.log")
-	content := `[2025-11-10 14:30:01] [WARNING] Something minor
-[2025-11-10 14:30:02] [ERROR] Something bad
-`
-	if err := os.WriteFile(logFile, []byte(content), 0644); err != nil {
-		t.Fatalf("failed to write log file: %v", err)
-	}
-
+	// Issue counts and categories are snapshotted into stats at backup completion;
+	// conversion must propagate them as-is without re-parsing the log file.
 	stats := &BackupStats{
 		ExitCode:             0,
 		Hostname:             "host",
@@ -337,20 +329,25 @@ func TestConvertBackupStatsUsesLogCountsAndCompressionFallback(t *testing.T) {
 		CloudEnabled:         false,
 		MaxLocalBackups:      5,
 		LocalRetentionPolicy: "simple",
-		LogFilePath:          logFile,
-		ErrorCount:           0,
-		WarningCount:         0,
-		Compression:          types.CompressionZstd,
+		ErrorCount:           1,
+		WarningCount:         1,
+		LogCategories: []notify.LogCategory{
+			{Label: "Something minor", Type: "WARNING", Count: 1, Example: "Something minor"},
+			{Label: "Something bad", Type: "ERROR", Count: 1, Example: "Something bad"},
+		},
+		Compression: types.CompressionZstd,
 	}
 
 	data := adapter.convertBackupStatsToNotificationData(stats)
 
-	// Log counts should override stats.ErrorCount/WarningCount
 	if data.ErrorCount != 1 || data.WarningCount != 1 {
-		t.Fatalf("expected error/warning counts from log = 1/1; got %d/%d", data.ErrorCount, data.WarningCount)
+		t.Fatalf("expected error/warning counts from stats = 1/1; got %d/%d", data.ErrorCount, data.WarningCount)
 	}
-	if len(data.LogCategories) == 0 {
-		t.Fatalf("expected LogCategories to be populated from log")
+	if data.TotalIssues != 2 {
+		t.Fatalf("expected TotalIssues = 2; got %d", data.TotalIssues)
+	}
+	if len(data.LogCategories) != 2 {
+		t.Fatalf("expected LogCategories to be propagated from stats, got %d entries", len(data.LogCategories))
 	}
 
 	// Compression ratio should be computed from sizes when explicit savings is <= 0
@@ -367,6 +364,43 @@ func TestConvertBackupStatsUsesLogCountsAndCompressionFallback(t *testing.T) {
 	}
 	if data.CloudStatus != "disabled" {
 		t.Fatalf("CloudStatus = %q; want disabled", data.CloudStatus)
+	}
+}
+
+func TestConvertBackupStatsDoesNotRereadLogFile(t *testing.T) {
+	// Regression test: conversion must trust stats.ErrorCount/WarningCount/LogCategories
+	// and never re-parse stats.LogFilePath, so warnings emitted during the notification
+	// phase aren't double-counted across notifiers in the dispatch chain.
+	logger := logging.New(types.LogLevelDebug, false)
+	adapter := NewNotificationAdapter(&stubNotifier{name: "Email", enabled: true}, logger)
+
+	tempDir := t.TempDir()
+	logFile := filepath.Join(tempDir, "notif.log")
+	// Log file contains 5 warnings that are NOT yet snapshotted into stats.
+	content := `[2025-11-10 14:30:01] [WARNING] one
+[2025-11-10 14:30:02] [WARNING] two
+[2025-11-10 14:30:03] [WARNING] three
+[2025-11-10 14:30:04] [WARNING] four
+[2025-11-10 14:30:05] [WARNING] five
+`
+	if err := os.WriteFile(logFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write log file: %v", err)
+	}
+
+	stats := &BackupStats{
+		ExitCode:     0,
+		Hostname:     "host",
+		ArchivePath:  "/var/tmp/backup.tar",
+		LogFilePath:  logFile,
+		ErrorCount:   0,
+		WarningCount: 0,
+		Compression:  types.CompressionZstd,
+	}
+
+	data := adapter.convertBackupStatsToNotificationData(stats)
+
+	if data.WarningCount != 0 || data.ErrorCount != 0 {
+		t.Fatalf("conversion must trust stats counts (0/0); got errors=%d warnings=%d", data.ErrorCount, data.WarningCount)
 	}
 }
 

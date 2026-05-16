@@ -175,17 +175,13 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		secondaryPercent = formatPercentString(calculateUsagePercent(stats.SecondaryUsedSpace, stats.SecondaryTotalSpace))
 	}
 
-	// Parse log file for categories - use ParseLogCounts as primary source
-	logCategories, logErrors, logWarnings := ParseLogCounts(stats.LogFilePath, 10)
-
-	// Use parsed counts if available, otherwise fall back to stats
+	// Issue counts and categories are snapshotted into stats at backup completion
+	// (finalizeBackupStats / parseFailedBackupLogCounts) so all notifiers see the
+	// same totals. Re-parsing the log here per-notifier would over-count warnings
+	// emitted by earlier notifiers in the dispatch chain.
 	errorCount := stats.ErrorCount
 	warningCount := stats.WarningCount
-	if logErrors > 0 || logWarnings > 0 {
-		errorCount = logErrors
-		warningCount = logWarnings
-	}
-
+	logCategories := stats.LogCategories
 	totalIssues := errorCount + warningCount
 
 	// Extract filename from full path for email display
