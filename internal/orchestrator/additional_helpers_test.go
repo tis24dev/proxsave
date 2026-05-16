@@ -604,6 +604,7 @@ type stubNotifierChannel struct {
 	errorCount    int
 	warningCount  int
 	categoryCount int
+	exitCode      int
 }
 
 func (s *stubNotifierChannel) Name() string {
@@ -616,6 +617,7 @@ func (s *stubNotifierChannel) Notify(ctx context.Context, stats *BackupStats) er
 		s.errorCount = stats.ErrorCount
 		s.warningCount = stats.WarningCount
 		s.categoryCount = len(stats.LogCategories)
+		s.exitCode = stats.ExitCode
 	}
 	if s.warnOnNotify && s.logger != nil {
 		s.logger.Warning("%s notification warning after snapshot", s.name)
@@ -803,6 +805,12 @@ func TestDispatchPostBackupSnapshotsIssuesImmediatelyBeforeNotifications(t *test
 	}
 	if stats.WarningCount != 1 {
 		t.Fatalf("stats.WarningCount should remain at the pre-notification snapshot, got %d", stats.WarningCount)
+	}
+	if stats.ExitCode != types.ExitGenericError.Int() {
+		t.Fatalf("stats.ExitCode should reflect pre-notification warnings, got %d", stats.ExitCode)
+	}
+	if email.exitCode != types.ExitGenericError.Int() || telegram.exitCode != types.ExitGenericError.Int() {
+		t.Fatalf("notifiers should see warning exit code, got email=%d telegram=%d", email.exitCode, telegram.exitCode)
 	}
 	if got := logger.WarningCount(); got != 2 {
 		t.Fatalf("final logger warning count should include storage and notification warnings, got %d", got)

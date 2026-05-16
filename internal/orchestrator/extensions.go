@@ -118,7 +118,11 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 // startNotificationGroup is the notification boundary. Keep the issue snapshot
 // immediately adjacent to dispatchNotifications; no logging belongs between them.
 func (o *Orchestrator) startNotificationGroup(ctx context.Context, stats *BackupStats) {
+	if o == nil {
+		return
+	}
 	o.snapshotPreNotificationIssues(stats)
+	applyIssueExitCode(stats)
 	o.dispatchNotifications(ctx, stats)
 }
 
@@ -142,6 +146,20 @@ func (o *Orchestrator) refreshLogIssuesFromFile(stats *BackupStats, includeCateg
 		stats.LogCategories = categories
 	} else {
 		stats.LogCategories = nil
+	}
+}
+
+func applyIssueExitCode(stats *BackupStats) {
+	if stats == nil {
+		return
+	}
+	switch {
+	case stats.ErrorCount > 0 && (stats.ExitCode == types.ExitSuccess.Int() || stats.ExitCode == types.ExitGenericError.Int()):
+		stats.ExitCode = types.ExitBackupError.Int()
+	case stats.WarningCount > 0 && stats.ExitCode == types.ExitSuccess.Int():
+		stats.ExitCode = types.ExitGenericError.Int()
+	case stats.ExitCode == 0:
+		stats.ExitCode = types.ExitSuccess.Int()
 	}
 }
 
@@ -209,8 +227,9 @@ func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, early
 		stats.LogFilePath = logPath
 	}
 
-	// Dispatch notifications with minimal stats
-	o.startNotificationGroup(ctx, stats)
+	// Dispatch notifications with minimal stats. Early errors are already
+	// represented in stats and may not be present in the log file yet.
+	o.dispatchNotifications(ctx, stats)
 
 	return stats
 }
