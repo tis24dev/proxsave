@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -75,5 +76,39 @@ func TestDispatchEarlyErrorNotification_PopulatesMinimalStats(t *testing.T) {
 	}
 	if stats.Hostname == "" {
 		t.Fatalf("Hostname is empty")
+	}
+}
+
+func TestDispatchEarlyErrorNotificationPreservesSyntheticIssueWithLogFile(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+	logPath := filepath.Join(t.TempDir(), "early.log")
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatalf("OpenLogFile: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = logger.CloseLogFile()
+	})
+
+	orch := &Orchestrator{logger: logger}
+	early := &EarlyErrorState{
+		Phase:     "config",
+		Error:     errors.New("boom"),
+		ExitCode:  types.ExitConfigError,
+		Timestamp: time.Unix(1700000000, 0),
+	}
+
+	stats := orch.DispatchEarlyErrorNotification(context.Background(), early)
+	if stats == nil {
+		t.Fatalf("expected stats, got nil")
+	}
+	if stats.ExitCode != types.ExitConfigError.Int() {
+		t.Fatalf("ExitCode=%d; want %d", stats.ExitCode, types.ExitConfigError.Int())
+	}
+	if stats.ErrorCount != 1 {
+		t.Fatalf("ErrorCount=%d; want synthetic early error count to be preserved", stats.ErrorCount)
+	}
+	if stats.LogFilePath != logPath {
+		t.Fatalf("LogFilePath=%q; want %q", stats.LogFilePath, logPath)
 	}
 }
