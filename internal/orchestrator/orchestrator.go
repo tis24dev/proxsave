@@ -18,6 +18,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/metrics"
+	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -151,9 +152,10 @@ type BackupStats struct {
 	CloudGFSCurrentYearly      int
 
 	// Error/warning counts
-	ErrorCount   int
-	WarningCount int
-	LogFilePath  string
+	ErrorCount    int
+	WarningCount  int
+	LogFilePath   string
+	LogCategories []notify.LogCategory
 
 	// Exit code
 	ExitCode       int

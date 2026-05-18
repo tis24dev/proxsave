@@ -197,8 +197,8 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		detectedRecipient, err := e.detectRecipient(ctx)
 		if err != nil {
 			e.logger.Warning("WARNING: Failed to detect email recipient: %v", err)
-			switch {
-			case e.config.DeliveryMethod == EmailDeliveryPMF:
+			switch e.config.DeliveryMethod {
+			case EmailDeliveryPMF:
 				e.logger.Info("  Proceeding anyway because EMAIL_DELIVERY_METHOD=pmf routes via Proxmox Notifications; recipient is only used for the To: header")
 			default:
 				e.logger.Warning("WARNING: Email notification skipped because no valid recipient is available")
@@ -218,8 +218,8 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 	recipient = strings.TrimSpace(recipient)
 	if recipient == "" {
-		switch {
-		case e.config.DeliveryMethod == EmailDeliveryRelay || e.config.DeliveryMethod == EmailDeliverySendmail:
+		switch e.config.DeliveryMethod {
+		case EmailDeliveryRelay, EmailDeliverySendmail:
 			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
 			e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
 			result.Success = false

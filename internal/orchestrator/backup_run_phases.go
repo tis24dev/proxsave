@@ -339,26 +339,25 @@ func (o *Orchestrator) finalizeBackupStats(run *backupRunContext) {
 	stats := run.stats
 	stats.Duration = stats.EndTime.Sub(stats.StartTime)
 
-	if stats.LogFilePath != "" {
-		o.logger.Debug("Parsing log file for error/warning counts: %s", stats.LogFilePath)
-		_, errorCount, warningCount := ParseLogCounts(stats.LogFilePath, 0)
-		stats.ErrorCount = errorCount
-		stats.WarningCount = warningCount
-		if errorCount > 0 || warningCount > 0 {
-			o.logger.Debug("Found %d errors and %d warnings in log file", errorCount, warningCount)
-		}
-	} else {
+	if o.dryRun {
+		o.finalizeDryRunIssueStats(stats)
+	}
+}
+
+func (o *Orchestrator) finalizeDryRunIssueStats(stats *BackupStats) {
+	if stats.LogFilePath == "" {
 		o.logger.Debug("No log file path specified, error/warning counts will be 0")
+		applyIssueExitCode(stats)
+		o.logger.Debug("Aggregated exit code based on log analysis: %d", stats.ExitCode)
+		return
 	}
 
-	switch {
-	case stats.ErrorCount > 0:
-		stats.ExitCode = types.ExitBackupError.Int()
-	case stats.WarningCount > 0:
-		stats.ExitCode = types.ExitGenericError.Int()
-	default:
-		stats.ExitCode = types.ExitSuccess.Int()
+	o.logger.Debug("Parsing log file for error/warning counts: %s", stats.LogFilePath)
+	o.refreshLogIssuesFromFile(stats, false)
+	if stats.ErrorCount > 0 || stats.WarningCount > 0 {
+		o.logger.Debug("Found %d errors and %d warnings in log file", stats.ErrorCount, stats.WarningCount)
 	}
+	applyIssueExitCode(stats)
 	o.logger.Debug("Aggregated exit code based on log analysis: %d", stats.ExitCode)
 }
 
