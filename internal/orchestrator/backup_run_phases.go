@@ -339,10 +339,12 @@ func (o *Orchestrator) finalizeBackupStats(run *backupRunContext) {
 	stats := run.stats
 	stats.Duration = stats.EndTime.Sub(stats.StartTime)
 
-	if !o.dryRun {
-		return
+	if o.dryRun {
+		o.finalizeDryRunIssueStats(stats)
 	}
+}
 
+func (o *Orchestrator) finalizeDryRunIssueStats(stats *BackupStats) {
 	if stats.LogFilePath == "" {
 		o.logger.Debug("No log file path specified, error/warning counts will be 0")
 		applyIssueExitCode(stats)
