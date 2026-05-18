@@ -153,13 +153,16 @@ func applyIssueExitCode(stats *BackupStats) {
 	if stats == nil {
 		return
 	}
-	switch {
-	case stats.ErrorCount > 0 && (stats.ExitCode == types.ExitSuccess.Int() || stats.ExitCode == types.ExitGenericError.Int()):
-		stats.ExitCode = types.ExitBackupError.Int()
-	case stats.WarningCount > 0 && stats.ExitCode == types.ExitSuccess.Int():
+
+	if stats.ErrorCount > 0 {
+		if stats.ExitCode == types.ExitSuccess.Int() || stats.ExitCode == types.ExitGenericError.Int() {
+			stats.ExitCode = types.ExitBackupError.Int()
+		}
+		return
+	}
+
+	if stats.WarningCount > 0 && stats.ExitCode == types.ExitSuccess.Int() {
 		stats.ExitCode = types.ExitGenericError.Int()
-	case stats.ExitCode == 0:
-		stats.ExitCode = types.ExitSuccess.Int()
 	}
 }
 
