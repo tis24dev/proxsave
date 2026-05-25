@@ -89,3 +89,19 @@ func TestLoadManifestInvalidJSONError(t *testing.T) {
 		t.Fatalf("expected error for invalid JSON manifest")
 	}
 }
+
+func TestLoadManifestMetadataErrorIncludesLegacyCause(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "missing-archive.tar.zst.metadata")
+	if err := os.WriteFile(path, []byte("{"), 0o640); err != nil {
+		t.Fatalf("write invalid metadata: %v", err)
+	}
+
+	_, err := LoadManifest(path)
+	if err == nil {
+		t.Fatal("expected error for metadata with missing archive")
+	}
+	if !strings.Contains(err.Error(), "cannot stat archive") {
+		t.Fatalf("error=%v; want legacy stat cause", err)
+	}
+}

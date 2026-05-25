@@ -168,7 +168,11 @@ func LoadManifest(manifestPath string) (*Manifest, error) {
 		return legacyManifest, nil
 	}
 
-	return nil, fmt.Errorf("failed to unmarshal manifest: %w", err)
+	return nil, fmt.Errorf(
+		"failed to parse manifest as JSON (%v) and legacy metadata (%v)",
+		err,
+		legacyErr,
+	)
 }
 
 // loadLegacyManifest attempts to parse legacy Bash metadata files (KEY=VALUE format).
