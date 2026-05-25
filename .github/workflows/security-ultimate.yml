@@ -49,6 +49,9 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
+      - name: Download modules
+        run: go mod download
+
       - name: Run govulncheck
         run: govulncheck ./...
 
