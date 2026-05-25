@@ -195,7 +195,9 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 	}
 
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	parseLegacyMetadata(scanner, legacy)
+	if err := parseLegacyMetadata(scanner, legacy); err != nil {
+		return nil, fmt.Errorf("parse legacy metadata: %w", err)
+	}
 
 	loadLegacyChecksum(archivePath, legacy)
 	inferEncryptionMode(archivePath, legacy)
@@ -203,7 +205,7 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 	return legacy, nil
 }
 
-func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) {
+func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) error {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -261,6 +263,10 @@ func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) {
 			legacy.EncryptionMode = value
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("scan legacy metadata: %w", err)
+	}
+	return nil
 }
 
 func loadLegacyChecksum(archivePath string, legacy *Manifest) {
