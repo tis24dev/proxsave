@@ -2602,6 +2602,53 @@ func TestInspectRcloneMetadataManifest_LegacyWithComments(t *testing.T) {
 	}
 }
 
+func TestInspectRcloneMetadataManifest_LegacyIncludesTargetsAndVersions(t *testing.T) {
+	tmpDir := t.TempDir()
+	metadataPath := filepath.Join(tmpDir, "targets.metadata")
+
+	legacy := strings.Join([]string{
+		"PROXMOX_TARGETS=pve,pbs",
+		"BACKUP_TARGETS=pve,dual",
+		"PROXMOX_VERSION=8.2/3.4",
+		"PVE_VERSION=8.2-1",
+		"PBS_VERSION=3.4-2",
+		"",
+	}, "\n")
+	if err := os.WriteFile(metadataPath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := fmt.Sprintf("#!/bin/sh\ncat %q\n", metadataPath)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	prependPathEnv(t, tmpDir)
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+
+	got, err := inspectRcloneMetadataManifest(context.Background(), "gdrive:targets.metadata", "gdrive:backup.tar.zst", logger)
+	if err != nil {
+		t.Fatalf("inspectRcloneMetadataManifest error: %v", err)
+	}
+
+	if got.ProxmoxVersion != "8.2/3.4" || got.PVEVersion != "8.2-1" || got.PBSVersion != "3.4-2" {
+		t.Fatalf("unexpected versions: proxmox=%q pve=%q pbs=%q", got.ProxmoxVersion, got.PVEVersion, got.PBSVersion)
+	}
+
+	if len(got.ProxmoxTargets) != 3 {
+		t.Fatalf("ProxmoxTargets len=%d; want 3 (%v)", len(got.ProxmoxTargets), got.ProxmoxTargets)
+	}
+	wantTargets := []string{"pve", "pbs", "dual"}
+	for i, want := range wantTargets {
+		if got.ProxmoxTargets[i] != want {
+			t.Fatalf("ProxmoxTargets[%d]=%q; want %q (all=%v)", i, got.ProxmoxTargets[i], want, got.ProxmoxTargets)
+		}
+	}
+}
+
 func TestInspectRcloneMetadataManifest_RcloneFails(t *testing.T) {
 	tmpDir := t.TempDir()
 

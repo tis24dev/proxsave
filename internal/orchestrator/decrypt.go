@@ -320,6 +320,33 @@ func inspectRcloneMetadataManifest(ctx context.Context, remoteMetadataPath, remo
 			}
 		case "PROXMOX_TYPE":
 			legacy.ProxmoxType = value
+		case "BACKUP_TARGETS", "PROXMOX_TARGETS":
+			targets := strings.Split(value, ",")
+			seenTargets := make(map[string]struct{}, len(legacy.ProxmoxTargets))
+			for _, target := range legacy.ProxmoxTargets {
+				target = strings.TrimSpace(target)
+				if target == "" {
+					continue
+				}
+				seenTargets[target] = struct{}{}
+			}
+			for _, target := range targets {
+				target = strings.TrimSpace(target)
+				if target == "" {
+					continue
+				}
+				if _, ok := seenTargets[target]; ok {
+					continue
+				}
+				seenTargets[target] = struct{}{}
+				legacy.ProxmoxTargets = append(legacy.ProxmoxTargets, target)
+			}
+		case "PROXMOX_VERSION":
+			legacy.ProxmoxVersion = value
+		case "PVE_VERSION":
+			legacy.PVEVersion = value
+		case "PBS_VERSION":
+			legacy.PBSVersion = value
 		case "HOSTNAME":
 			legacy.Hostname = value
 		case "SCRIPT_VERSION":
