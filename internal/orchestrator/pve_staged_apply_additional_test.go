@@ -10,6 +10,15 @@ import (
 	"testing"
 )
 
+func requireWritablePveMountRoot(t *testing.T) {
+	t.Helper()
+	probe := filepath.Join("/mnt/pve", ".proxsave-mount-guard-probe")
+	if err := os.MkdirAll(filepath.Dir(probe), 0o755); err != nil {
+		t.Skipf("requires writable %s: %v", filepath.Dir(probe), err)
+	}
+	_ = os.Remove(probe)
+}
+
 func pvePlan(needsClusterRestore bool, ids ...string) *RestorePlan {
 	cats := make([]Category, 0, len(ids))
 	for _, id := range ids {
@@ -570,6 +579,7 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T)
 	if err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, pvePlan(false, "storage_pve"), "/stage", "/tmp/not-root"); err != nil {
 		t.Fatalf("non-root destination: expected nil error, got %v", err)
 	}
+	requireWritablePveMountRoot(t)
 
 	origFS := restoreFS
 	origCmd := restoreCmd
@@ -577,6 +587,7 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T)
 	origMkdirAll := mountGuardMkdirAll
 	origSysMount := mountGuardSysMount
 	origSysUnmount := mountGuardSysUnmount
+	origGeteuid := mountGuardGeteuid
 	t.Cleanup(func() {
 		restoreFS = origFS
 		restoreCmd = origCmd
@@ -584,7 +595,9 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T)
 		mountGuardMkdirAll = origMkdirAll
 		mountGuardSysMount = origSysMount
 		mountGuardSysUnmount = origSysUnmount
+		mountGuardGeteuid = origGeteuid
 	})
+	mountGuardGeteuid = func() int { return 0 }
 
 	nonRealFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(nonRealFS.Root) })
@@ -654,12 +667,15 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ReadAndNoopBranches(t *testing
 
 	origFS := restoreFS
 	origCmd := restoreCmd
+	origGeteuid := mountGuardGeteuid
 	t.Cleanup(func() {
 		restoreFS = origFS
 		restoreCmd = origCmd
+		mountGuardGeteuid = origGeteuid
 	})
 
 	restoreFS = osFS{}
+	mountGuardGeteuid = func() int { return 0 }
 	restoreCmd = &FakeCommandRunner{}
 
 	stageRoot := t.TempDir()
@@ -698,6 +714,7 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 	ctx := context.Background()
 	logger := newTestLogger()
 	plan := pvePlan(false, "storage_pve")
+	requireWritablePveMountRoot(t)
 
 	origFS := restoreFS
 	origCmd := restoreCmd
@@ -705,6 +722,7 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 	origMkdirAll := mountGuardMkdirAll
 	origSysMount := mountGuardSysMount
 	origSysUnmount := mountGuardSysUnmount
+	origGeteuid := mountGuardGeteuid
 	t.Cleanup(func() {
 		restoreFS = origFS
 		restoreCmd = origCmd
@@ -712,9 +730,11 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 		mountGuardMkdirAll = origMkdirAll
 		mountGuardSysMount = origSysMount
 		mountGuardSysUnmount = origSysUnmount
+		mountGuardGeteuid = origGeteuid
 	})
 
 	restoreFS = osFS{}
+	mountGuardGeteuid = func() int { return 0 }
 	mountGuardMkdirAll = os.MkdirAll
 	mountGuardSysUnmount = func(target string, flags int) error { return nil }
 

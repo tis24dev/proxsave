@@ -903,11 +903,14 @@ func TestAccessControlUtilityFunctions_Branches(t *testing.T) {
 func TestMaybeApplyAccessControlFromStage_RealFSPaths(t *testing.T) {
 	origFS := restoreFS
 	origReadFile := mountGuardReadFile
+	origGeteuid := accessControlApplyGeteuid
 	t.Cleanup(func() {
 		restoreFS = origFS
 		mountGuardReadFile = origReadFile
+		accessControlApplyGeteuid = origGeteuid
 	})
 	restoreFS = osFS{}
+	accessControlApplyGeteuid = func() int { return 0 }
 
 	logger := newTestLogger()
 	ctx := context.Background()

@@ -258,7 +258,7 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 	if filepath.Clean(strings.TrimSpace(destRoot)) != string(os.PathSeparator) {
 		return nil
 	}
-	if !isRealRestoreFS(restoreFS) || os.Geteuid() != 0 {
+	if !isRealRestoreFS(restoreFS) || mountGuardGeteuid() != 0 {
 		return nil
 	}
 
