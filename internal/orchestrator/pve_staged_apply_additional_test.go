@@ -2,7 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,13 +13,103 @@ import (
 	"testing"
 )
 
+const pveMountIntegrationStoragePrefix = "proxsave-it-"
+
+// requireWritablePveMountRoot skips integration tests unless /mnt/pve accepts a real write/remove probe.
 func requireWritablePveMountRoot(t *testing.T) {
 	t.Helper()
-	probe := filepath.Join("/mnt/pve", ".proxsave-mount-guard-probe")
-	if err := os.MkdirAll(filepath.Dir(probe), 0o755); err != nil {
-		t.Skipf("requires writable %s: %v", filepath.Dir(probe), err)
+	root := "/mnt/pve"
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Skipf("requires writable %s: %v", root, err)
 	}
-	_ = os.Remove(probe)
+	probe := filepath.Join(root, fmt.Sprintf(".%sprobe-%d", pveMountIntegrationStoragePrefix, os.Getpid()))
+	if err := os.WriteFile(probe, []byte("probe"), 0o600); err != nil {
+		t.Skipf("requires writable %s: %v", root, err)
+	}
+	if f, err := os.Open(probe); err == nil {
+		_ = f.Sync()
+		_ = f.Close()
+	}
+	if err := os.Remove(probe); err != nil {
+		t.Skipf("requires writable %s (remove probe): %v", root, err)
+	}
+}
+
+func uniquePveMountTestStorageID(t *testing.T, label string) string {
+	t.Helper()
+	label = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			return r
+		case r == '-', r == '_':
+			return '-'
+		default:
+			return '-'
+		}
+	}, strings.ToLower(strings.TrimSpace(label)))
+	if label == "" {
+		label = "x"
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", t.Name(), label, os.Getpid())))
+	return pveMountIntegrationStoragePrefix + hex.EncodeToString(sum[:6]) + "-" + label
+}
+
+func pveMountTargetForStorageID(storageID string) string {
+	return filepath.Join("/mnt/pve", storageID)
+}
+
+func isPveMountIntegrationTestStorageID(storageID string) bool {
+	return strings.HasPrefix(storageID, pveMountIntegrationStoragePrefix)
+}
+
+func isPveMountIntegrationTestPath(path string) bool {
+	path = filepath.Clean(path)
+	if filepath.Dir(path) != "/mnt/pve" {
+		return false
+	}
+	return isPveMountIntegrationTestStorageID(filepath.Base(path))
+}
+
+func cleanupPveMountTestTarget(t *testing.T, target string) {
+	t.Helper()
+	if !isPveMountIntegrationTestPath(target) {
+		t.Fatalf("refusing cleanup of non-test mount target %q", target)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(target) })
+}
+
+func cleanupPveMountTestGuardDir(t *testing.T, target string) {
+	t.Helper()
+	if !isPveMountIntegrationTestPath(target) {
+		t.Fatalf("refusing cleanup of guard dir for non-test mount target %q", target)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(guardDirForTarget(target)) })
+}
+
+func removePveMountTestPathIfExists(t *testing.T, path string) {
+	t.Helper()
+	if !isPveMountIntegrationTestPath(path) {
+		t.Fatalf("refusing remove of non-test mount path %q", path)
+	}
+	_ = os.Remove(path)
+}
+
+func TestPveMountIntegrationTestPathSafety(t *testing.T) {
+	id := uniquePveMountTestStorageID(t, "safety")
+	target := pveMountTargetForStorageID(id)
+	if !isPveMountIntegrationTestPath(target) {
+		t.Fatalf("expected owned test path %q", target)
+	}
+	for _, path := range []string{
+		"/mnt/pve/proxsave-offline",
+		"/mnt/pve/activate-ok",
+		"/mnt/pve",
+		"/mnt/pool/nas",
+	} {
+		if isPveMountIntegrationTestPath(path) {
+			t.Fatalf("path %q must not be treated as integration-test owned", path)
+		}
+	}
 }
 
 func pvePlan(needsClusterRestore bool, ids ...string) *RestorePlan {
@@ -617,13 +710,14 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T)
 	if err := os.MkdirAll(filepath.Dir(stageCfgPath), 0o755); err != nil {
 		t.Fatalf("mkdir staged storage.cfg dir: %v", err)
 	}
-	if err := os.WriteFile(stageCfgPath, []byte("nfs: proxsave-offline\n"), 0o644); err != nil {
+	offlineID := uniquePveMountTestStorageID(t, "offline")
+	if err := os.WriteFile(stageCfgPath, []byte("nfs: "+offlineID+"\n"), 0o644); err != nil {
 		t.Fatalf("write staged storage.cfg: %v", err)
 	}
 
-	target := "/mnt/pve/proxsave-offline"
-	t.Cleanup(func() { _ = os.RemoveAll(target) })
-	t.Cleanup(func() { _ = os.RemoveAll(guardDirForTarget(target)) })
+	target := pveMountTargetForStorageID(offlineID)
+	cleanupPveMountTestTarget(t, target)
+	cleanupPveMountTestGuardDir(t, target)
 
 	fakeCmd := &FakeCommandRunner{
 		Errors: map[string]error{
@@ -744,13 +838,14 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 		if err := os.MkdirAll(filepath.Dir(stageCfgPath), 0o755); err != nil {
 			t.Fatalf("mkdir stage cfg dir: %v", err)
 		}
-		if err := os.WriteFile(stageCfgPath, []byte("nfs: activate-ok\n"), 0o644); err != nil {
+		activateID := uniquePveMountTestStorageID(t, "activate-ok")
+		if err := os.WriteFile(stageCfgPath, []byte("nfs: "+activateID+"\n"), 0o644); err != nil {
 			t.Fatalf("write staged storage.cfg: %v", err)
 		}
 
-		target := "/mnt/pve/activate-ok"
-		t.Cleanup(func() { _ = os.RemoveAll(target) })
-		t.Cleanup(func() { _ = os.RemoveAll(guardDirForTarget(target)) })
+		target := pveMountTargetForStorageID(activateID)
+		cleanupPveMountTestTarget(t, target)
+		cleanupPveMountTestGuardDir(t, target)
 
 		fakeCmd := &FakeCommandRunner{}
 		restoreCmd = fakeCmd
@@ -782,7 +877,7 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 		if !strings.Contains(calls, "which pvesm") {
 			t.Fatalf("missing which pvesm call; calls=%v", fakeCmd.CallsList())
 		}
-		if !strings.Contains(calls, "pvesm activate activate-ok") {
+		if !strings.Contains(calls, "pvesm activate "+activateID) {
 			t.Fatalf("missing pvesm activate call; calls=%v", fakeCmd.CallsList())
 		}
 		if strings.Contains(calls, "chattr +i "+target) {
@@ -791,36 +886,34 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 	})
 
 	t.Run("mkdir failure and off-root symlink are skipped", func(t *testing.T) {
+		mkdirFailID := uniquePveMountTestStorageID(t, "mkdir-fail")
+		offrootID := uniquePveMountTestStorageID(t, "offroot-link")
 		stageRoot := t.TempDir()
 		stageCfgPath := filepath.Join(stageRoot, "etc/pve/storage.cfg")
 		if err := os.MkdirAll(filepath.Dir(stageCfgPath), 0o755); err != nil {
 			t.Fatalf("mkdir stage cfg dir: %v", err)
 		}
 		cfg := strings.Join([]string{
-			"nfs: mkdir-fail",
-			"nfs: offroot-link",
+			"nfs: " + mkdirFailID,
+			"nfs: " + offrootID,
 			"",
 		}, "\n")
 		if err := os.WriteFile(stageCfgPath, []byte(cfg), 0o644); err != nil {
 			t.Fatalf("write staged storage.cfg: %v", err)
 		}
 
-		if err := os.MkdirAll("/mnt/pve", 0o755); err != nil {
-			t.Fatalf("mkdir /mnt/pve: %v", err)
-		}
-
-		mkdirFailTarget := "/mnt/pve/mkdir-fail"
-		offrootTarget := "/mnt/pve/offroot-link"
+		mkdirFailTarget := pveMountTargetForStorageID(mkdirFailID)
+		offrootTarget := pveMountTargetForStorageID(offrootID)
 		if err := os.WriteFile(mkdirFailTarget, []byte("file blocks mkdir"), 0o644); err != nil {
 			t.Fatalf("seed mkdir-fail target file: %v", err)
 		}
-		t.Cleanup(func() { _ = os.Remove(mkdirFailTarget) })
+		t.Cleanup(func() { removePveMountTestPathIfExists(t, mkdirFailTarget) })
 
-		_ = os.Remove(offrootTarget)
+		removePveMountTestPathIfExists(t, offrootTarget)
 		if err := os.Symlink("/proc", offrootTarget); err != nil {
 			t.Fatalf("create offroot symlink: %v", err)
 		}
-		t.Cleanup(func() { _ = os.Remove(offrootTarget) })
+		t.Cleanup(func() { removePveMountTestPathIfExists(t, offrootTarget) })
 
 		fakeCmd := &FakeCommandRunner{
 			Errors: map[string]error{
@@ -845,7 +938,7 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 			t.Fatalf("expected skips for mkdir failure/off-root symlink, got %v", err)
 		}
 		calls := strings.Join(fakeCmd.CallsList(), "\n")
-		if strings.Contains(calls, "mount /mnt/pve/mkdir-fail") || strings.Contains(calls, "mount /mnt/pve/offroot-link") {
+		if strings.Contains(calls, "mount "+mkdirFailTarget) || strings.Contains(calls, "mount "+offrootTarget) {
 			t.Fatalf("mount attempts should not happen for skipped targets; calls=%v", fakeCmd.CallsList())
 		}
 	})
@@ -856,21 +949,23 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 		if err := os.MkdirAll(filepath.Dir(stageCfgPath), 0o755); err != nil {
 			t.Fatalf("mkdir stage cfg dir: %v", err)
 		}
+		chattrFailID := uniquePveMountTestStorageID(t, "chattr-fail")
+		guardOKID := uniquePveMountTestStorageID(t, "guard-ok")
 		cfg := strings.Join([]string{
-			"nfs: chattr-fail",
-			"nfs: guard-ok",
+			"nfs: " + chattrFailID,
+			"nfs: " + guardOKID,
 			"",
 		}, "\n")
 		if err := os.WriteFile(stageCfgPath, []byte(cfg), 0o644); err != nil {
 			t.Fatalf("write staged storage.cfg: %v", err)
 		}
 
-		chattrFailTarget := "/mnt/pve/chattr-fail"
-		guardOKTarget := "/mnt/pve/guard-ok"
-		t.Cleanup(func() { _ = os.RemoveAll(chattrFailTarget) })
-		t.Cleanup(func() { _ = os.RemoveAll(guardOKTarget) })
-		t.Cleanup(func() { _ = os.RemoveAll(guardDirForTarget(chattrFailTarget)) })
-		t.Cleanup(func() { _ = os.RemoveAll(guardDirForTarget(guardOKTarget)) })
+		chattrFailTarget := pveMountTargetForStorageID(chattrFailID)
+		guardOKTarget := pveMountTargetForStorageID(guardOKID)
+		cleanupPveMountTestTarget(t, chattrFailTarget)
+		cleanupPveMountTestTarget(t, guardOKTarget)
+		cleanupPveMountTestGuardDir(t, chattrFailTarget)
+		cleanupPveMountTestGuardDir(t, guardOKTarget)
 
 		fakeCmd := &FakeCommandRunner{
 			Errors: map[string]error{
