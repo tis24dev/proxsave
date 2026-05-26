@@ -550,14 +550,11 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 		dsWorkers = 1
 	}
 
-	childCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	var (
-		wg       sync.WaitGroup
-		sem      = make(chan struct{}, dsWorkers)
-		errMu    sync.Mutex
-		firstErr error
+		wg    sync.WaitGroup
+		sem   = make(chan struct{}, dsWorkers)
+		errMu sync.Mutex
+		errs  []error
 	)
 
 	for _, ds := range state.eligible {
@@ -567,23 +564,22 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
-			case <-childCtx.Done():
+			case <-ctx.Done():
 				return
 			}
 			defer func() { <-sem }()
-			if err := childCtx.Err(); err != nil {
+
+			if err := ctx.Err(); err != nil {
 				return
 			}
 
-			if err := fn(childCtx, ds, state); err != nil {
-				if errors.Is(err, context.Canceled) {
+			if err := fn(ctx, ds, state); err != nil {
+				if isParentContextError(ctx, err) {
 					return
 				}
+				c.logger.Debug("PXAR: datastore %s step failed: %v", ds.Name, err)
 				errMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-					cancel()
-				}
+				errs = append(errs, err)
 				errMu.Unlock()
 			}
 		}()
@@ -591,13 +587,13 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 
 	wg.Wait()
 
-	if firstErr != nil {
-		return firstErr
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if len(errs) > 0 {
+			return errors.Join(ctxErr, errors.Join(errs...))
+		}
+		return ctxErr
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (c *Collector) collectPBSPXARMetadataForDatastore(ctx context.Context, ds pbsDatastore, state *pbsPxarState) error {
