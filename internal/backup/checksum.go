@@ -159,7 +159,8 @@ func LoadManifest(manifestPath string) (*Manifest, error) {
 	}
 
 	var manifest Manifest
-	if err := json.Unmarshal(data, &manifest); err == nil {
+	unmarshalErr := json.Unmarshal(data, &manifest)
+	if unmarshalErr == nil {
 		return &manifest, nil
 	}
 
@@ -170,7 +171,7 @@ func LoadManifest(manifestPath string) (*Manifest, error) {
 
 	return nil, fmt.Errorf(
 		"failed to parse manifest as JSON (%v) and legacy metadata (%v)",
-		err,
+		unmarshalErr,
 		legacyErr,
 	)
 }
