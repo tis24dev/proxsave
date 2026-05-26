@@ -49,6 +49,9 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
+      - name: Download modules
+        run: go mod download
+
       - name: Run govulncheck
         run: govulncheck ./...
 
@@ -88,7 +91,7 @@ jobs:
       # UPLOAD SARIF
       ########################################
       - name: Upload GoSec SARIF
-        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa
         with:
           sarif_file: gosec.sarif
 
@@ -104,7 +107,7 @@ jobs:
       # CODEQL
       ########################################
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba
+        uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa
         with:
           languages: go
 
@@ -114,4 +117,4 @@ jobs:
           go build ./...
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba
+        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa

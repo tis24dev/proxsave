@@ -164,7 +164,9 @@ func TestParseLegacyMetadata_AllFieldsAndTargetMerge(t *testing.T) {
 		"ENCRYPTION_MODE=age",
 	}, "\n")))
 
-	parseLegacyMetadata(scanner, legacy)
+	if err := parseLegacyMetadata(scanner, legacy); err != nil {
+		t.Fatalf("parseLegacyMetadata error: %v", err)
+	}
 
 	if legacy.CompressionType != "zst" {
 		t.Fatalf("CompressionType = %q; want zst", legacy.CompressionType)
@@ -183,6 +185,20 @@ func TestParseLegacyMetadata_AllFieldsAndTargetMerge(t *testing.T) {
 	}
 	if legacy.Hostname != "dual-node" || legacy.ScriptVersion != "2.0.0" || legacy.EncryptionMode != "age" {
 		t.Fatalf("unexpected identity/encryption fields: %+v", legacy)
+	}
+}
+
+func TestParseLegacyMetadata_PropagatesScannerErrors(t *testing.T) {
+	legacy := &Manifest{}
+	scanner := bufio.NewScanner(strings.NewReader("COMPRESSION_TYPE=" + strings.Repeat("x", 128)))
+	scanner.Buffer(make([]byte, 0, 8), 32)
+
+	err := parseLegacyMetadata(scanner, legacy)
+	if err == nil {
+		t.Fatal("expected scanner error, got nil")
+	}
+	if !strings.Contains(err.Error(), "token too long") {
+		t.Fatalf("error=%v; want token-too-long scanner failure", err)
 	}
 }
 

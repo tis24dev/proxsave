@@ -61,7 +61,7 @@ func maybeApplyAccessControlFromStage(ctx context.Context, logger *logging.Logge
 		logger.Debug("Skipping staged access control apply: non-system filesystem in use")
 		return nil
 	}
-	if os.Geteuid() != 0 {
+	if accessControlApplyGeteuid() != 0 {
 		logger.Warning("Skipping staged access control apply: requires root privileges")
 		return nil
 	}

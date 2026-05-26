@@ -85,7 +85,36 @@ func TestLoadManifestInvalidJSONError(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{"), 0o640); err != nil {
 		t.Fatalf("write invalid json: %v", err)
 	}
-	if _, err := LoadManifest(path); err == nil {
+	_, err := LoadManifest(path)
+	if err == nil {
 		t.Fatalf("expected error for invalid JSON manifest")
+	}
+	if strings.Contains(err.Error(), "(<nil>)") {
+		t.Fatalf("error message should include JSON parse cause, not <nil>; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "failed to parse manifest as JSON") {
+		t.Fatalf("unexpected error format; got: %v", err)
+	}
+}
+
+func TestLoadManifestMetadataErrorIncludesLegacyCause(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "missing-archive.tar.zst.metadata")
+	if err := os.WriteFile(path, []byte("{"), 0o640); err != nil {
+		t.Fatalf("write invalid metadata: %v", err)
+	}
+
+	_, err := LoadManifest(path)
+	if err == nil {
+		t.Fatal("expected error for metadata with missing archive")
+	}
+	if !strings.Contains(err.Error(), "failed to parse manifest as JSON") {
+		t.Fatalf("error=%v; want JSON parse cause in combined error", err)
+	}
+	if strings.Contains(err.Error(), "JSON (<nil>)") {
+		t.Fatalf("error=%v; JSON parse cause must not be <nil>", err)
+	}
+	if !strings.Contains(err.Error(), "cannot stat archive") {
+		t.Fatalf("error=%v; want legacy stat cause", err)
 	}
 }

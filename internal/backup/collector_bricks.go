@@ -321,6 +321,14 @@ func isContextCancellationError(ctx context.Context, err error) bool {
 	return ctxErr != nil && errors.Is(err, ctxErr)
 }
 
+func isParentContextError(ctx context.Context, err error) bool {
+	if err == nil || ctx == nil {
+		return false
+	}
+	ctxErr := ctx.Err()
+	return ctxErr != nil && errors.Is(err, ctxErr)
+}
+
 func (s *collectionState) ensurePVECommandsDir() (string, error) {
 	if s.pve.commandsDir != "" {
 		return s.pve.commandsDir, nil

@@ -56,6 +56,18 @@ func newPBSPXARBricks() []collectionBrick {
 	bricks = append(bricks, newPBSPXARCTListBricks()...)
 	return bricks
 }
+
+func (c *Collector) handlePBSPXARStepError(ctx context.Context, message string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if isParentContextError(ctx, err) {
+		return err
+	}
+	c.logger.Warning("%s: %v", message, err)
+	return nil
+}
+
 func newPBSPXARPrepareBricks() []collectionBrick {
 	return []collectionBrick{
 		{
@@ -69,8 +81,7 @@ func newPBSPXARPrepareBricks() []collectionBrick {
 				}
 				pxarState, err := state.ensurePBSPXARState(ctx)
 				if err != nil {
-					c.logger.Warning("Failed to prepare PBS PXAR state: %v", err)
-					return nil
+					return c.handlePBSPXARStepError(ctx, "Failed to prepare PBS PXAR state", err)
 				}
 				state.pbs.pxar = pxarState
 				return nil
@@ -90,11 +101,10 @@ func newPBSPXARMetadataBricks() []collectionBrick {
 				}
 				pxarState, err := state.ensurePBSPXARState(ctx)
 				if err != nil {
-					state.collector.logger.Warning("Failed to prepare PBS PXAR state: %v", err)
-					return nil
+					return state.collector.handlePBSPXARStepError(ctx, "Failed to prepare PBS PXAR state", err)
 				}
 				if err := state.collector.collectPBSPXARMetadataStep(ctx, pxarState); err != nil {
-					state.collector.logger.Warning("Failed to collect PBS PXAR metadata: %v", err)
+					return state.collector.handlePBSPXARStepError(ctx, "Failed to collect PBS PXAR metadata", err)
 				}
 				return nil
 			},
@@ -113,11 +123,10 @@ func newPBSPXARSubdirReportBricks() []collectionBrick {
 				}
 				pxarState, err := state.ensurePBSPXARState(ctx)
 				if err != nil {
-					state.collector.logger.Warning("Failed to prepare PBS PXAR state: %v", err)
-					return nil
+					return state.collector.handlePBSPXARStepError(ctx, "Failed to prepare PBS PXAR state", err)
 				}
 				if err := state.collector.collectPBSPXARSubdirReportsStep(ctx, pxarState); err != nil {
-					state.collector.logger.Warning("Failed to collect PBS PXAR subdir reports: %v", err)
+					return state.collector.handlePBSPXARStepError(ctx, "Failed to collect PBS PXAR subdir reports", err)
 				}
 				return nil
 			},
@@ -136,11 +145,10 @@ func newPBSPXARVMListBricks() []collectionBrick {
 				}
 				pxarState, err := state.ensurePBSPXARState(ctx)
 				if err != nil {
-					state.collector.logger.Warning("Failed to prepare PBS PXAR state: %v", err)
-					return nil
+					return state.collector.handlePBSPXARStepError(ctx, "Failed to prepare PBS PXAR state", err)
 				}
 				if err := state.collector.collectPBSPXARVMListsStep(ctx, pxarState); err != nil {
-					state.collector.logger.Warning("Failed to collect PBS PXAR VM lists: %v", err)
+					return state.collector.handlePBSPXARStepError(ctx, "Failed to collect PBS PXAR VM lists", err)
 				}
 				return nil
 			},
@@ -159,11 +167,10 @@ func newPBSPXARCTListBricks() []collectionBrick {
 				}
 				pxarState, err := state.ensurePBSPXARState(ctx)
 				if err != nil {
-					state.collector.logger.Warning("Failed to prepare PBS PXAR state: %v", err)
-					return nil
+					return state.collector.handlePBSPXARStepError(ctx, "Failed to prepare PBS PXAR state", err)
 				}
 				if err := state.collector.collectPBSPXARCTListsStep(ctx, pxarState); err != nil {
-					state.collector.logger.Warning("Failed to collect PBS PXAR CT lists: %v", err)
+					return state.collector.handlePBSPXARStepError(ctx, "Failed to collect PBS PXAR CT lists", err)
 				}
 				return nil
 			},

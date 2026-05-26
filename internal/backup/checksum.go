@@ -159,7 +159,8 @@ func LoadManifest(manifestPath string) (*Manifest, error) {
 	}
 
 	var manifest Manifest
-	if err := json.Unmarshal(data, &manifest); err == nil {
+	unmarshalErr := json.Unmarshal(data, &manifest)
+	if unmarshalErr == nil {
 		return &manifest, nil
 	}
 
@@ -168,7 +169,11 @@ func LoadManifest(manifestPath string) (*Manifest, error) {
 		return legacyManifest, nil
 	}
 
-	return nil, fmt.Errorf("failed to unmarshal manifest: %w", err)
+	return nil, fmt.Errorf(
+		"failed to parse manifest as JSON (%v) and legacy metadata (%v)",
+		unmarshalErr,
+		legacyErr,
+	)
 }
 
 // loadLegacyManifest attempts to parse legacy Bash metadata files (KEY=VALUE format).
@@ -191,7 +196,9 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 	}
 
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	parseLegacyMetadata(scanner, legacy)
+	if err := parseLegacyMetadata(scanner, legacy); err != nil {
+		return nil, fmt.Errorf("parse legacy metadata: %w", err)
+	}
 
 	loadLegacyChecksum(archivePath, legacy)
 	inferEncryptionMode(archivePath, legacy)
@@ -199,7 +206,7 @@ func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 	return legacy, nil
 }
 
-func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) {
+func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) error {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -257,6 +264,10 @@ func parseLegacyMetadata(scanner *bufio.Scanner, legacy *Manifest) {
 			legacy.EncryptionMode = value
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("scan legacy metadata: %w", err)
+	}
+	return nil
 }
 
 func loadLegacyChecksum(archivePath string, legacy *Manifest) {
