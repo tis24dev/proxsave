@@ -1265,6 +1265,52 @@ func TestEnsureOwnershipAndPermWrongPermissions(t *testing.T) {
 	}
 }
 
+// H6 regression: when the path is a symlink, ensureOwnershipAndPerm must refuse
+// to chmod (and chown) and must NOT follow the link to the target — even when
+// the caller passes os.Stat-derived info (which follows symlinks and hides the
+// ModeSymlink bit), with AUTO_FIX_PERMISSIONS enabled.
+func TestEnsureOwnershipAndPermRefusesSymlinkTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "target")
+	if err := os.WriteFile(target, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmpDir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reproduce the caller bug: info from os.Stat follows the symlink, so it
+	// describes the target and never carries ModeSymlink.
+	info, err := os.Stat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checker := &Checker{
+		logger: newSecurityTestLogger(),
+		cfg:    &config.Config{AutoFixPermissions: true},
+		result: &Result{},
+	}
+
+	checker.ensureOwnershipAndPerm(link, info, 0o600, "test file via symlink")
+
+	// The target must NOT have been chmod'd through the link.
+	ti, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ti.Mode().Perm(); got != 0o644 {
+		t.Fatalf("symlink target was modified through the link: perms %o, want 0644", got)
+	}
+	if !containsIssue(checker.result, "refusing to chmod symlink") {
+		t.Errorf("expected refusal to chmod symlink, got %+v", checker.result.Issues)
+	}
+}
+
 func TestEnsureOwnershipAndPermAutoFix(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "testfile")

@@ -1066,7 +1066,15 @@ func (c *Checker) ensureOwnershipAndPerm(path string, info os.FileInfo, expected
 		}
 	}
 
+	// Determine symlink status from the path itself (Lstat), independent of the
+	// caller-supplied info. Callers pass os.Stat-derived info, which follows
+	// symlinks and never reports ModeSymlink; relying on it would defeat the
+	// refusal guards below and let syscall.Chmod follow the link to an arbitrary
+	// target.
 	isSymlink := info.Mode()&os.ModeSymlink != 0
+	if li, lerr := os.Lstat(path); lerr == nil {
+		isSymlink = li.Mode()&os.ModeSymlink != 0
+	}
 
 	if expectedPerm != 0 {
 		if perm := info.Mode().Perm(); perm != expectedPerm {
