@@ -9,37 +9,6 @@ import (
 	"testing"
 )
 
-func TestSplitFileAndChunks(t *testing.T) {
-	tmp := t.TempDir()
-	source := filepath.Join(tmp, "data.bin")
-	content := bytes.Repeat([]byte("x"), 40)
-	if err := os.WriteFile(source, content, 0o640); err != nil {
-		t.Fatalf("write source: %v", err)
-	}
-
-	destBase := filepath.Join(tmp, "chunks", "data.bin")
-	if err := splitFile(source, destBase, 16); err != nil {
-		t.Fatalf("splitFile: %v", err)
-	}
-
-	chunks := []string{
-		destBase + ".001.chunk",
-		destBase + ".002.chunk",
-		destBase + ".003.chunk",
-	}
-	var total int
-	for _, c := range chunks {
-		b, err := os.ReadFile(c)
-		if err != nil {
-			t.Fatalf("read chunk %s: %v", c, err)
-		}
-		total += len(b)
-	}
-	if total != len(content) {
-		t.Fatalf("combined chunk size %d, want %d", total, len(content))
-	}
-}
-
 func TestNormalizeTextFileAndConfigAndJSON(t *testing.T) {
 	tmp := t.TempDir()
 

@@ -112,11 +112,8 @@ type Config struct {
 	SafetyFactor       float64
 
 	// Optimization settings
-	EnableSmartChunking    bool
 	EnableDeduplication    bool
 	EnablePrefilter        bool
-	ChunkSizeMB            int
-	ChunkThresholdMB       int
 	PrefilterMaxFileSizeMB int
 
 	// Paths
@@ -365,8 +362,7 @@ func (c *Config) loadEnvOverrides() {
 		"BACKUP_ENABLED", "DRY_RUN", "DEBUG_LEVEL", "USE_COLOR", "COLORIZE_STEP_LOGS",
 		"PROFILING_ENABLED",
 		"COMPRESSION_TYPE", "COMPRESSION_LEVEL", "COMPRESSION_THREADS", "COMPRESSION_MODE",
-		"ENABLE_SMART_CHUNKING", "ENABLE_DEDUPLICATION", "ENABLE_PREFILTER",
-		"CHUNK_SIZE_MB", "CHUNK_THRESHOLD_MB", "PREFILTER_MAX_FILE_SIZE_MB",
+		"ENABLE_DEDUPLICATION", "ENABLE_PREFILTER", "PREFILTER_MAX_FILE_SIZE_MB",
 		"BACKUP_PATH", "LOG_PATH", "LOCK_PATH", "SECURE_ACCOUNT",
 		"SECONDARY_ENABLED", "SECONDARY_PATH", "SECONDARY_LOG_PATH",
 		"CLOUD_ENABLED", "CLOUD_REMOTE", "CLOUD_REMOTE_PATH", "CLOUD_LOG_PATH",
@@ -541,17 +537,8 @@ func normalizeCompressionType(ct types.CompressionType) types.CompressionType {
 }
 
 func (c *Config) parseOptimizationSettings() {
-	c.EnableSmartChunking = c.getBool("ENABLE_SMART_CHUNKING", false)
 	c.EnableDeduplication = c.getBool("ENABLE_DEDUPLICATION", false)
 	c.EnablePrefilter = c.getBool("ENABLE_PREFILTER", false)
-	c.ChunkSizeMB = c.getInt("CHUNK_SIZE_MB", 10)
-	if c.ChunkSizeMB <= 0 {
-		c.ChunkSizeMB = 10
-	}
-	c.ChunkThresholdMB = c.getInt("CHUNK_THRESHOLD_MB", 50)
-	if c.ChunkThresholdMB <= 0 {
-		c.ChunkThresholdMB = 50
-	}
 	c.PrefilterMaxFileSizeMB = c.getInt("PREFILTER_MAX_FILE_SIZE_MB", 8)
 	if c.PrefilterMaxFileSizeMB <= 0 {
 		c.PrefilterMaxFileSizeMB = 8

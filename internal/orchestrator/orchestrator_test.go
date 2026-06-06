@@ -599,7 +599,6 @@ func TestOrchestrator_SetOptimizationConfig(t *testing.T) {
 
 	// Call with a valid OptimizationConfig
 	cfg := backup.OptimizationConfig{
-		EnableChunking:      false,
 		EnableDeduplication: false,
 		EnablePrefilter:     false,
 	}
