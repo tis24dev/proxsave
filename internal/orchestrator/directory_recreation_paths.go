@@ -166,6 +166,40 @@ func hasPathSegment(path, segment string) bool {
 	return false
 }
 
+// rootFilesystemMountShouldSkip reports whether directory creation should be
+// skipped because the target resolves to the root filesystem while looking like a
+// dedicated/ZFS mount that is not yet mounted and holds no data we would risk.
+// Shared by PVE storage and PBS datastore recreation so both use one decision.
+func rootFilesystemMountShouldSkip(onRootFS, suspicious, hasData, dataUnknown bool) bool {
+	if !onRootFS || !suspicious {
+		return false
+	}
+	return dataUnknown || !hasData
+}
+
+// shouldSkipUnmountedStorageMount decides, from the path alone, whether to skip
+// recreating directories because basePath looks like a dedicated/ZFS mount that
+// is not yet mounted and currently resolves to the root filesystem. Creating
+// directories there would shadow the real storage once it is mounted. hasData
+// signals the caller already found real content at basePath (then we do not skip).
+// It composes the same shared primitives the PBS datastore guard uses.
+func shouldSkipUnmountedStorageMount(basePath string, hasData bool, logger *logging.Logger) bool {
+	zfsLikely := isLikelyZFSMountPoint(basePath, logger)
+	if shouldSkipMissingZFSMountPoint(basePath, zfsLikely, logger) {
+		return true
+	}
+	onRootFS, _, err := isPathOnRootFilesystem(basePath)
+	if err != nil {
+		return false
+	}
+	suspicious := isSuspiciousDatastoreMountLocation(basePath) || zfsLikely
+	if rootFilesystemMountShouldSkip(onRootFS, suspicious, hasData, false) {
+		logger.Warning("Storage mount preflight: %s resolves to the root filesystem (mount missing?) — skipping directory creation to avoid writing to the wrong disk; mount the storage disk / import the pool first", basePath)
+		return true
+	}
+	return false
+}
+
 func isIgnorableOwnershipError(err error) bool {
 	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EROFS)
 }

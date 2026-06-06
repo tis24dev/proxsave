@@ -24,9 +24,13 @@ func RecreateStorageDirectories(logger *logging.Logger) error {
 	directoriesCreated := 0
 	var errs []error
 	for _, entry := range entries {
-		if err := createPVEStorageStructure(entry.Path, entry.Type, logger); err != nil {
+		created, err := createPVEStorageStructure(entry.Path, entry.Type, logger)
+		if err != nil {
 			logger.Warning("Failed to create storage structure for %s: %v", entry.Name, err)
 			errs = append(errs, fmt.Errorf("%s: %w", entry.Name, err))
+			continue
+		}
+		if !created {
 			continue
 		}
 

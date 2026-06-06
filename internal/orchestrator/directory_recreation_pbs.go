@@ -55,10 +55,10 @@ func shouldSkipMissingZFSMountPoint(basePath string, zfsLikely bool, logger *log
 		return false
 	}
 	if os.IsNotExist(statErr) {
-		logger.Warning("PBS datastore preflight: %s looks like a ZFS mountpoint and does not exist yet; skipping directory creation to avoid shadowing a not-yet-imported pool", basePath)
+		logger.Warning("Storage mount preflight: %s looks like a ZFS mountpoint and does not exist yet; skipping directory creation to avoid shadowing a not-yet-imported pool", basePath)
 		return true
 	}
-	logger.Warning("PBS datastore preflight: unable to stat potential ZFS mountpoint %s: %v; skipping any datastore filesystem changes", basePath, statErr)
+	logger.Warning("Storage mount preflight: unable to stat potential ZFS mountpoint %s: %v; skipping any filesystem changes", basePath, statErr)
 	return true
 }
 
@@ -121,7 +121,7 @@ func shouldSkipUnsafePBSDatastore(preflight pbsDatastorePreflight, logger *loggi
 }
 
 func shouldSkipRootFilesystemDatastore(preflight pbsDatastorePreflight, logger *logging.Logger) bool {
-	if !preflight.onRootFS || !preflight.suspiciousMount || (!preflight.dataUnknown && preflight.hasData) {
+	if !rootFilesystemMountShouldSkip(preflight.onRootFS, preflight.suspiciousMount, preflight.hasData, preflight.dataUnknown) {
 		return false
 	}
 

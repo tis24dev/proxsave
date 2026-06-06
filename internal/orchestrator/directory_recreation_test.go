@@ -82,7 +82,7 @@ func TestRecreateStorageDirectoriesReturnsSubdirError(t *testing.T) {
 func TestCreatePVEStorageStructureHandlesVariousTypes(t *testing.T) {
 	logger := newDirTestLogger()
 	baseNFS := filepath.Join(t.TempDir(), "nfs")
-	if err := createPVEStorageStructure(baseNFS, "nfs", logger); err != nil {
+	if _, err := createPVEStorageStructure(baseNFS, "nfs", logger); err != nil {
 		t.Fatalf("createPVEStorageStructure(nfs): %v", err)
 	}
 	for _, sub := range []string{"dump", "images", "template"} {
@@ -92,7 +92,7 @@ func TestCreatePVEStorageStructureHandlesVariousTypes(t *testing.T) {
 	}
 
 	baseOther := filepath.Join(t.TempDir(), "rbd")
-	if err := createPVEStorageStructure(baseOther, "rbd", logger); err != nil {
+	if _, err := createPVEStorageStructure(baseOther, "rbd", logger); err != nil {
 		t.Fatalf("createPVEStorageStructure(rbd): %v", err)
 	}
 	if _, err := os.Stat(baseOther); err != nil {
@@ -442,7 +442,7 @@ cifs: cifs1
 func TestCreatePVEStorageStructureCIFS(t *testing.T) {
 	logger := newDirTestLogger()
 	baseCIFS := filepath.Join(t.TempDir(), "cifs")
-	if err := createPVEStorageStructure(baseCIFS, "cifs", logger); err != nil {
+	if _, err := createPVEStorageStructure(baseCIFS, "cifs", logger); err != nil {
 		t.Fatalf("createPVEStorageStructure(cifs): %v", err)
 	}
 	for _, sub := range []string{"dump", "images", "template"} {
@@ -609,9 +609,32 @@ func TestCreatePVEStorageStructureBaseError(t *testing.T) {
 	logger := newDirTestLogger()
 	// A path containing a NUL byte is invalid
 	invalidPath := "/dev/null/cannot/create/here"
-	err := createPVEStorageStructure(invalidPath, "dir", logger)
+	_, err := createPVEStorageStructure(invalidPath, "dir", logger)
 	if err == nil {
 		t.Fatalf("expected error for invalid base path")
+	}
+}
+
+// TestCreatePVEStorageStructureSkipsUnmountedZFSMount pins the new PVE guard:
+// a ZFS-like, not-yet-mounted storage path must be skipped (created=false) with
+// nothing written — mirroring the PBS datastore behavior via the shared guard.
+func TestCreatePVEStorageStructureSkipsUnmountedZFSMount(t *testing.T) {
+	logger := newDirTestLogger()
+	cachePath, restore := overridePath(t, &zpoolCachePath, "zpool.cache")
+	defer restore()
+	writeFile(t, cachePath, "cache")
+
+	// "backup" path segment + present zpool.cache => ZFS-likely; missing => unmounted.
+	baseDir := filepath.Join(t.TempDir(), "backup", "store")
+	created, err := createPVEStorageStructure(baseDir, "dir", logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if created {
+		t.Fatalf("expected created=false for an unmounted ZFS-like storage path")
+	}
+	if _, statErr := os.Stat(baseDir); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no directory to be created when skipping, stat err=%v", statErr)
 	}
 }
 
