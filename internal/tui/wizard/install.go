@@ -459,6 +459,12 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		form.Form,
 	)
 
+	// Route validation/submit errors to an inline modal that returns to the form,
+	// instead of ShowError() which stops the app and would make RunInstallWizard
+	// return the partially-filled data with a nil error. The submit closure reads
+	// parentView lazily, so setting it here (after the button was added) is fine.
+	form.SetParentView(flex)
+
 	if err := runInstallWizardRunner(ctx, app, flex, form.Form); err != nil {
 		return nil, err
 	}
@@ -487,6 +493,9 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = config.DefaultEnvTemplate()
 	}
 	if err := validateSecondaryInstallData(data); err != nil {
+		return "", err
+	}
+	if err := validateCloudInstallData(data); err != nil {
 		return "", err
 	}
 
@@ -580,6 +589,26 @@ func validateSecondaryInstallData(data *InstallWizardData) error {
 	}
 	if err := config.ValidateOptionalSecondaryLogPath(data.SecondaryLogPath); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateCloudInstallData mirrors the wizard's own onSubmit checks: when cloud
+// storage is enabled both rclone remotes are required. It is a defense-in-depth
+// guard so a partially-filled payload can never write CLOUD_ENABLED=true with an
+// empty CLOUD_REMOTE/CLOUD_LOG_PATH into the config.
+func validateCloudInstallData(data *InstallWizardData) error {
+	if data == nil {
+		return ErrNilInstallData
+	}
+	if !data.EnableCloudStorage {
+		return nil
+	}
+	if strings.TrimSpace(data.RcloneBackupRemote) == "" {
+		return errors.New("cloud storage is enabled but the rclone backup remote is empty")
+	}
+	if strings.TrimSpace(data.RcloneLogRemote) == "" {
+		return errors.New("cloud storage is enabled but the rclone log path is empty")
 	}
 	return nil
 }

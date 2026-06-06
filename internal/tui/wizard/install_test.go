@@ -186,6 +186,37 @@ func TestApplyInstallDataRejectsInvalidSecondaryPath(t *testing.T) {
 	}
 }
 
+// H7 regression: a partially-filled payload (cloud enabled but a remote left
+// empty) must be rejected, never written as CLOUD_ENABLED=true with an empty
+// CLOUD_REMOTE/CLOUD_LOG_PATH.
+func TestApplyInstallDataRejectsCloudWithoutRemote(t *testing.T) {
+	cases := []struct {
+		name   string
+		backup string
+		log    string
+	}{
+		{"empty backup remote", "", "remote:logs"},
+		{"empty log remote", "remote:backups", ""},
+		{"both empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := &InstallWizardData{
+				EnableCloudStorage: true,
+				RcloneBackupRemote: tc.backup,
+				RcloneLogRemote:    tc.log,
+			}
+			result, err := ApplyInstallData("", data)
+			if err == nil {
+				t.Fatalf("expected error for cloud enabled without a remote, got nil (result=%q)", result)
+			}
+			if strings.Contains(result, "CLOUD_ENABLED=true") {
+				t.Fatalf("must not write CLOUD_ENABLED=true with an empty remote; result=%q", result)
+			}
+		})
+	}
+}
+
 func TestApplyInstallDataRejectsInvalidSecondaryLogPath(t *testing.T) {
 	data := &InstallWizardData{
 		BaseDir:                "/tmp/base",
