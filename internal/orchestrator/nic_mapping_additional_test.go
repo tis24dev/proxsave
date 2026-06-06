@@ -1269,3 +1269,56 @@ func TestMapToEntriesAndTokenBoundary(t *testing.T) {
 		t.Fatalf("applyInterfaceRenameMap unexpected: out=%q changed=%v", out, changed)
 	}
 }
+
+// --- Behavior pins for applyInterfaceRenameMap (non-cyclic correctness, locked
+// before switching to a single-pass rewrite that also fixes swaps/cycles) ---
+
+// TestApplyInterfaceRenameMapMultiOccurrence pins that every reference to a
+// renamed interface is rewritten while unrelated interfaces are left alone.
+func TestApplyInterfaceRenameMapMultiOccurrence(t *testing.T) {
+	const in = "auto eth0\niface eth0 inet static\n    address 10.0.0.2/24\nauto vmbr0\niface vmbr0 inet manual\n    bridge_ports eth0\n"
+	out, changed := applyInterfaceRenameMap(in, map[string]string{"eth0": "enp3s0"})
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if strings.Count(out, "enp3s0") != 3 {
+		t.Fatalf("expected all 3 eth0 references renamed, got:\n%s", out)
+	}
+	if strings.Contains(out, "eth0") {
+		t.Fatalf("expected no eth0 left, got:\n%s", out)
+	}
+	if strings.Count(out, "vmbr0") != 2 {
+		t.Fatalf("expected unrelated vmbr0 preserved, got:\n%s", out)
+	}
+}
+
+// TestApplyInterfaceRenameMapRespectsTokenBoundaries pins that only whole
+// interface-name tokens are renamed (eth0 must not match eth0a/eth00/veth0).
+func TestApplyInterfaceRenameMapRespectsTokenBoundaries(t *testing.T) {
+	const in = "iface eth0\niface eth0a\niface eth00\niface veth0\n"
+	out, changed := applyInterfaceRenameMap(in, map[string]string{"eth0": "X"})
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if !strings.Contains(out, "iface X\n") {
+		t.Fatalf("expected eth0 token renamed to X, got:\n%s", out)
+	}
+	for _, keep := range []string{"eth0a", "eth00", "veth0"} {
+		if !strings.Contains(out, keep) {
+			t.Fatalf("expected %q preserved (not a whole-token match), got:\n%s", keep, out)
+		}
+	}
+}
+
+// TestApplyInterfaceRenameMapIndependentRenames pins multiple non-overlapping
+// renames applied in one call.
+func TestApplyInterfaceRenameMapIndependentRenames(t *testing.T) {
+	const in = "iface eth0\niface eth1\n"
+	out, changed := applyInterfaceRenameMap(in, map[string]string{"eth0": "enp1", "eth1": "enp2"})
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if out != "iface enp1\niface enp2\n" {
+		t.Fatalf("unexpected output: %q", out)
+	}
+}
