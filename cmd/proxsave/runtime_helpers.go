@@ -566,8 +566,22 @@ func cleanupLegacyBashSymlinks(baseDir string, bootstrap *logging.BootstrapLogge
 // Any discovered filesystem entries named "proxmox-backup" that are not the
 // current Go binary are removed so that the installer can recreate a clean
 // symlink pointing at the Go executable.
+// globalEntrypointDirs are the well-known directories always scanned for
+// proxsave/proxmox-backup entrypoints (in addition to PATH). Declared as a var
+// so tests can point it at temporary directories instead of the real system
+// paths.
+var globalEntrypointDirs = []string{"/usr/local/bin", "/usr/bin"}
+
 func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.BootstrapLogger) {
 	execPath = strings.TrimSpace(execPath)
+	if execPath == "" {
+		// Without a known current binary we cannot tell our own entrypoint apart
+		// from the ones to remove, and ensureGoSymlink cannot recreate a
+		// replacement either. Removing here would leave the host with no working
+		// proxsave/proxmox-backup command, so do nothing.
+		logBootstrapWarning(bootstrap, "WARNING: current executable path is unknown; skipping proxsave/proxmox-backup entrypoint cleanup to avoid removing a working entrypoint that cannot be recreated")
+		return
+	}
 
 	pathEnv := os.Getenv("PATH")
 	if strings.TrimSpace(pathEnv) == "" {
@@ -589,13 +603,16 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 		}
 	}
 
-	// Ensure the common global paths are always considered, even if not in PATH.
-	candidates = append(candidates,
-		"/usr/local/bin/proxsave",
-		"/usr/bin/proxsave",
-		"/usr/local/bin/proxmox-backup",
-		"/usr/bin/proxmox-backup",
-	)
+	// Ensure the common global directories are always considered, even if not in PATH.
+	for _, dir := range globalEntrypointDirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		for _, name := range names {
+			candidates = append(candidates, filepath.Join(dir, name))
+		}
+	}
 
 	seen := map[string]struct{}{}
 	removed := 0

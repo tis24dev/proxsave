@@ -27,12 +27,10 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	baseDir, _ := detectedBaseDirOrFallback()
 	_ = os.Setenv("BASE_DIR", baseDir)
 
-	// Before starting the TUI wizard, perform a best-effort cleanup of any existing
-	// proxsave/proxmox-backup entrypoints so that the installer can recreate a clean
-	// symlink for the Go binary.
+	// Entrypoint cleanup + recreation is deferred to runPostInstallSymlinksAndCron
+	// (success path only), so an aborted/non-interactive install never leaves the
+	// host without a working proxsave/proxmox-backup command.
 	execInfo := getExecInfo()
-	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "cleaning legacy entrypoints")
-	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
 
 	if bootstrap != nil {
 		bootstrap.Info("Starting --install in TUI mode")
@@ -209,28 +207,15 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		}
 	}
 
-	// Clean up legacy bash-based symlinks
-	if bootstrap != nil {
-		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")
-	}
-	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "cleaning legacy bash symlinks")
-	cleanupLegacyBashSymlinks(baseDir, bootstrap)
-
-	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary
-	if bootstrap != nil {
-		bootstrap.Info("Ensuring 'proxsave' and 'proxmox-backup' commands point to the Go binary")
-	}
-	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "ensuring go symlink")
-	ensureGoSymlink(execInfo.ExecPath, bootstrap)
-
-	// Migrate legacy cron entries
+	// Finalize legacy-symlink cleanup, entrypoint cleanup/recreation, and cron via the
+	// shared post-install engine (the same runPostInstallSymlinksAndCron the CLI uses),
+	// so TUI and CLI behave identically here.
 	wizardCronSchedule := ""
 	if wizardData != nil {
 		wizardCronSchedule = cronutil.TimeToSchedule(wizardData.CronTime)
 	}
 	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule)
-	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "migrating cron entries")
-	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
+	runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap, cronSchedule)
 
 	// Attempt to resolve or create a server identity for Telegram pairing
 	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {

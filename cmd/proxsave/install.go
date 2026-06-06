@@ -49,12 +49,10 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	done := logging.DebugStartBootstrap(bootstrap, "install workflow (cli)", "config=%s base=%s", configPath, baseDir)
 	defer func() { done(err) }()
 
-	// Before starting the interactive wizard, perform a best-effort cleanup of any
-	// existing proxsave/proxmox-backup entrypoints so that the installer can recreate a
-	// clean symlink for the Go binary.
+	// Entrypoint cleanup + recreation is deferred to runPostInstallSymlinksAndCron
+	// (success path only), so an aborted/non-interactive install never leaves the
+	// host without a working proxsave/proxmox-backup command.
 	execInfo := getExecInfo()
-	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "cleaning legacy entrypoints")
-	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
 
 	if bootstrap != nil {
 		bootstrap.Info("Starting --install in CLI mode")
@@ -529,6 +527,14 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 	}
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "cleaning legacy bash symlinks")
 	cleanupLegacyBashSymlinks(baseDir, bootstrap)
+
+	// Remove any stale proxsave/proxmox-backup entrypoints (PATH, /usr/local/bin,
+	// /usr/bin) that do not point to this Go binary, then recreate clean symlinks.
+	// This runs here — immediately before recreation and only on the success path —
+	// so an aborted or non-interactive install can never leave the host without a
+	// working entrypoint.
+	logging.DebugStepBootstrap(bootstrap, "post-install setup", "cleaning legacy entrypoints")
+	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
 
 	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary, if not already customized.
 	if bootstrap != nil {
