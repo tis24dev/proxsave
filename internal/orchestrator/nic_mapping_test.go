@@ -116,9 +116,9 @@ func TestApplyInterfaceRenameMapReplacesTokensAndVLANs(t *testing.T) {
 	}
 }
 
-func TestReplaceInterfaceTokenDoesNotReplacePrefixes(t *testing.T) {
+func TestApplyInterfaceRenameMapDoesNotReplacePrefixes(t *testing.T) {
 	input := "auto eno10\niface eno10 inet manual\n"
-	out, changed := replaceInterfaceToken(input, "eno1", "enp3s0")
+	out, changed := applyInterfaceRenameMap(input, map[string]string{"eno1": "enp3s0"})
 	if changed {
 		t.Fatalf("expected changed=false, got true: %q", out)
 	}

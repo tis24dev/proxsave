@@ -601,11 +601,18 @@ func TestPlanAndApplyNICNameRepair_WithFakeInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if strings.Contains(string(data), "ens20") || strings.Contains(string(data), "auto eno1\n") {
-		t.Fatalf("expected ens20 and eno1 to be replaced:\n%s", string(data))
+	if strings.Contains(string(data), "ens20") {
+		t.Fatalf("expected ens20 to be replaced:\n%s", string(data))
 	}
-	if !strings.Contains(string(data), "auto eth0") {
-		t.Fatalf("expected eth0:\n%s", string(data))
+	// The chain {ens20->eno1, eno1->eth0} must keep the two NICs DISTINCT (no
+	// collapse): backup ens20 (mac02, now named eno1) -> eno1; backup eno1
+	// (mac01, now named eth0) -> eth0. Exactly one stanza each. The old
+	// sequential rewrite collapsed both onto eth0 (the H1 bug).
+	if got := strings.Count(string(data), "auto eno1\n"); got != 1 {
+		t.Fatalf("expected exactly one 'auto eno1' (was ens20), got %d:\n%s", got, string(data))
+	}
+	if got := strings.Count(string(data), "auto eth0\n"); got != 1 {
+		t.Fatalf("expected exactly one 'auto eth0' (was eno1), got %d:\n%s", got, string(data))
 	}
 }
 
@@ -713,13 +720,6 @@ func TestMappingHelpersAndEdgeCases(t *testing.T) {
 	}
 	if out, changed := applyInterfaceRenameMap("auto a\n", map[string]string{}); out != "auto a\n" || changed {
 		t.Fatalf("applyInterfaceRenameMap unexpected result: out=%q changed=%v", out, changed)
-	}
-
-	if out, changed := replaceInterfaceToken("", "a", "b"); out != "" || changed {
-		t.Fatalf("replaceInterfaceToken unexpected: out=%q changed=%v", out, changed)
-	}
-	if _, changed := replaceInterfaceToken("auto a\n", "a", "a"); changed {
-		t.Fatalf("replaceInterfaceToken should not change when old==new")
 	}
 
 	cases := map[byte]bool{
@@ -1240,29 +1240,13 @@ func TestRewriteIfupdownConfigFiles_BackupStageErrors(t *testing.T) {
 	})
 }
 
-func TestMapToEntriesAndTokenBoundary(t *testing.T) {
+func TestMapToEntriesAndRenameNoop(t *testing.T) {
 	if got := mapToEntries(map[string]string{}); got != nil {
 		t.Fatalf("mapToEntries=%v; want nil", got)
 	}
 	got := mapToEntries(map[string]string{"b": "B", "a": "A"})
 	if len(got) != 2 || got[0].OldName != "a" || got[1].OldName != "b" {
 		t.Fatalf("entries=%+v", got)
-	}
-
-	if isTokenBoundary("abc", -1, "a") {
-		t.Fatalf("expected false for negative idx")
-	}
-	if isTokenBoundary("abc", 2, "zz") {
-		t.Fatalf("expected false for token overflow")
-	}
-	if isTokenBoundary("xeno1", 1, "eno1") {
-		t.Fatalf("expected false for iface-char prefix")
-	}
-	if isTokenBoundary("eno10", 0, "eno1") {
-		t.Fatalf("expected false for iface-char suffix")
-	}
-	if !isTokenBoundary("eno1", 0, "eno1") {
-		t.Fatalf("expected true for token covering full string")
 	}
 
 	if out, changed := applyInterfaceRenameMap("auto a\n", map[string]string{"a": "a"}); out != "auto a\n" || changed {
@@ -1320,5 +1304,40 @@ func TestApplyInterfaceRenameMapIndependentRenames(t *testing.T) {
 	}
 	if out != "iface enp1\niface enp2\n" {
 		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+// --- Fix coverage: swaps/cycles/chains and the collision guard ---
+
+// TestApplyInterfaceRenameMapSwap is the H1 regression: a swap must keep both
+// interfaces distinct instead of collapsing them onto one name.
+func TestApplyInterfaceRenameMapSwap(t *testing.T) {
+	const in = "auto eth0\niface eth0 inet manual\nauto eth1\niface eth1 inet manual\n    bridge_ports eth0 eth1\n"
+	out, changed := applyInterfaceRenameMap(in, map[string]string{"eth0": "eth1", "eth1": "eth0"})
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if got := strings.Count(out, "auto eth0\n"); got != 1 {
+		t.Fatalf("expected exactly one 'auto eth0' after swap, got %d:\n%s", got, out)
+	}
+	if got := strings.Count(out, "auto eth1\n"); got != 1 {
+		t.Fatalf("expected exactly one 'auto eth1' after swap, got %d:\n%s", got, out)
+	}
+	if !strings.Contains(out, "bridge_ports eth1 eth0\n") {
+		t.Fatalf("expected bridge_ports tokens swapped, got:\n%s", out)
+	}
+}
+
+// TestApplyInterfaceRenameMapChain pins a non-cyclic chain {a:b, b:c}: original a
+// becomes b and original b becomes c, deterministically (the old sequential apply
+// was order-dependent and could collapse them).
+func TestApplyInterfaceRenameMapChain(t *testing.T) {
+	const in = "iface a\niface b\n"
+	out, changed := applyInterfaceRenameMap(in, map[string]string{"a": "b", "b": "c"})
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if out != "iface b\niface c\n" {
+		t.Fatalf("unexpected chain result: %q", out)
 	}
 }

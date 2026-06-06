@@ -794,87 +794,45 @@ func mapToEntries(renameMap map[string]string) []nicMappingEntry {
 	return entries
 }
 
+// applyInterfaceRenameMap rewrites whole interface-name tokens in content using
+// renameMap, in a SINGLE pass over the original text. Each maximal interface-name
+// token is looked up once in the original map, so swaps ({eth0:eth1, eth1:eth0})
+// and chains ({a:b, b:c}) resolve correctly instead of collapsing the way a
+// sequential apply-each-rename-against-the-evolving-string would.
 func applyInterfaceRenameMap(content string, renameMap map[string]string) (string, bool) {
 	if content == "" || len(renameMap) == 0 {
 		return content, false
 	}
-	updated := content
-	changed := false
-	keys := make([]string, 0, len(renameMap))
-	for k := range renameMap {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
-	for _, oldName := range keys {
-		newName := renameMap[oldName]
-		if oldName == "" || newName == "" || oldName == newName {
-			continue
-		}
-		next, ok := replaceInterfaceToken(updated, oldName, newName)
-		if ok {
-			updated = next
-			changed = true
-		}
-	}
-	return updated, changed
-}
 
-func replaceInterfaceToken(input, oldName, newName string) (string, bool) {
-	if input == "" || oldName == "" || oldName == newName {
-		return input, false
-	}
 	var b strings.Builder
-	b.Grow(len(input))
+	b.Grow(len(content))
 	changed := false
 
 	i := 0
-	for {
-		idx := strings.Index(input[i:], oldName)
-		if idx < 0 {
-			b.WriteString(input[i:])
-			break
-		}
-		idx += i
-
-		if isTokenBoundary(input, idx, oldName) {
-			b.WriteString(input[i:idx])
-			b.WriteString(newName)
-			i = idx + len(oldName)
-			changed = true
+	for i < len(content) {
+		if !isIfaceNameChar(content[i]) {
+			b.WriteByte(content[i])
+			i++
 			continue
 		}
-
-		b.WriteString(input[i : idx+1])
-		i = idx + 1
+		j := i
+		for j < len(content) && isIfaceNameChar(content[j]) {
+			j++
+		}
+		token := content[i:j]
+		if newName, ok := renameMap[token]; ok && newName != "" && newName != token {
+			b.WriteString(newName)
+			changed = true
+		} else {
+			b.WriteString(token)
+		}
+		i = j
 	}
 
 	if !changed {
-		return input, false
+		return content, false
 	}
 	return b.String(), true
-}
-
-func isTokenBoundary(text string, idx int, token string) bool {
-	if idx < 0 || idx+len(token) > len(text) {
-		return false
-	}
-
-	if idx > 0 {
-		prev := text[idx-1]
-		if isIfaceNameChar(prev) {
-			return false
-		}
-	}
-
-	end := idx + len(token)
-	if end < len(text) {
-		next := text[end]
-		if isIfaceNameChar(next) {
-			return false
-		}
-	}
-
-	return true
 }
 
 func isIfaceNameChar(ch byte) bool {
