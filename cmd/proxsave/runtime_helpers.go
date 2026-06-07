@@ -617,21 +617,10 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 }
 
 func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule string) {
-	baseDir = strings.TrimSpace(baseDir)
-	if baseDir == "" {
-		baseDir = "/opt/proxsave"
-	}
-
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
 		logBootstrapWarning(bootstrap, "WARNING: Unable to update cron entry: executable path is unknown")
 		return
-	}
-
-	legacyPaths := []string{
-		filepath.Join(baseDir, "script", "proxmox-backup.sh"),
-		filepath.Join("/opt/proxmox-backup", "script", "proxmox-backup.sh"),
-		filepath.Join("/opt/proxsave", "script", "proxmox-backup.sh"),
 	}
 
 	newCommandToken := "/usr/local/bin/proxsave"
@@ -697,7 +686,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		correctPaths = append(correctPaths, execPath)
 	}
 
-	updatedLines, hasCurrentEntry := filterCronLines(lines, legacyPaths, correctPaths)
+	updatedLines, hasCurrentEntry := filterCronLines(lines, correctPaths)
 
 	schedule := strings.TrimSpace(cronSchedule)
 	if schedule == "" {
@@ -722,21 +711,9 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 }
 
-func filterCronLines(lines []string, legacyPaths []string, correctPaths []string) ([]string, bool) {
+func filterCronLines(lines []string, correctPaths []string) ([]string, bool) {
 	updatedLines := make([]string, 0, len(lines))
 	hasCurrentEntry := false
-
-	containsLegacy := func(line string) bool {
-		if strings.Contains(line, "proxmox-backup.sh") {
-			return true
-		}
-		for _, p := range legacyPaths {
-			if p != "" && strings.Contains(line, p) {
-				return true
-			}
-		}
-		return false
-	}
 
 	containsCorrectPath := func(line string) bool {
 		for _, p := range correctPaths {
@@ -751,10 +728,6 @@ func filterCronLines(lines []string, legacyPaths []string, correctPaths []string
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			updatedLines = append(updatedLines, line)
-			continue
-		}
-		if containsLegacy(line) {
-			// Remove cron entries that still reference the legacy Bash script paths.
 			continue
 		}
 		if containsCorrectPath(line) {

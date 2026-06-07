@@ -12,7 +12,6 @@ func TestFilterCronLines(t *testing.T) {
 	tests := []struct {
 		name         string
 		inputLines   []string
-		legacyPaths  []string
 		correctPaths []string
 		wantLines    []string
 		wantHasEntry bool
@@ -26,7 +25,6 @@ func TestFilterCronLines(t *testing.T) {
 				userLine2,
 				"0 3 * * * /usr/local/bin/proxsave", // Correct entry
 			},
-			legacyPaths:  []string{"/opt/proxsave/script/proxmox-backup.sh"},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"# Existing comments",
@@ -38,25 +36,11 @@ func TestFilterCronLines(t *testing.T) {
 			wantHasEntry: true,
 		},
 		{
-			name: "Remove legacy bash script",
-			inputLines: []string{
-				"0 2 * * * /opt/proxsave/script/proxmox-backup.sh",
-				userLine1,
-			},
-			legacyPaths:  []string{"/opt/proxsave/script/proxmox-backup.sh"},
-			correctPaths: []string{"/usr/local/bin/proxsave"},
-			wantLines: []string{
-				userLine1,
-			},
-			wantHasEntry: false,
-		},
-		{
 			name: "Remove outdated binary reference",
 			inputLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup", // Outdated path
 				userLine1,
 			},
-			legacyPaths:  []string{},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				userLine1,
@@ -68,7 +52,6 @@ func TestFilterCronLines(t *testing.T) {
 			inputLines: []string{
 				"0 2 * * * /usr/local/bin/proxmox-backup-new",
 			},
-			legacyPaths:  []string{},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"0 2 * * * /usr/local/bin/proxmox-backup-new",
@@ -80,7 +63,6 @@ func TestFilterCronLines(t *testing.T) {
 			inputLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-dog",
 			},
-			legacyPaths:  []string{},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-dog",
@@ -92,7 +74,6 @@ func TestFilterCronLines(t *testing.T) {
 			inputLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-test --flag",
 			},
-			legacyPaths:  []string{},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-test --flag",
@@ -103,13 +84,11 @@ func TestFilterCronLines(t *testing.T) {
 			name: "Mixed scenario",
 			inputLines: []string{
 				"# Header",
-				"0 2 * * * /opt/proxsave/script/proxmox-backup.sh", // Legacy
 				userLine1,                           // Keep
 				"0 4 * * * /usr/bin/proxsave",       // Wrong path
 				userLine2,                           // Keep
 				"0 5 * * * /usr/local/bin/proxsave", // Correct
 			},
-			legacyPaths:  []string{"/opt/proxsave/script/proxmox-backup.sh"},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"# Header",
@@ -123,7 +102,7 @@ func TestFilterCronLines(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotLines, gotHasEntry := filterCronLines(tt.inputLines, tt.legacyPaths, tt.correctPaths)
+			gotLines, gotHasEntry := filterCronLines(tt.inputLines, tt.correctPaths)
 
 			if gotHasEntry != tt.wantHasEntry {
 				t.Errorf("hasCurrentEntry = %v, want %v", gotHasEntry, tt.wantHasEntry)
