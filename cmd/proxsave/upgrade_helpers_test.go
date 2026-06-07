@@ -93,6 +93,19 @@ func TestVerifyChecksum(t *testing.T) {
 			t.Fatalf("expected checksum mismatch error")
 		}
 	})
+
+	t.Run("overlapping suffix entries", func(t *testing.T) {
+		// A path-prefixed entry whose name merely ends with filename must be
+		// ignored; only the exact-filename entry (with the correct hash) counts.
+		wrong := "0000000000000000000000000000000000000000000000000000000000000000"
+		content := wrong + "  artifacts/" + filename + "\n" + sumHex + "  " + filename + "\n"
+		if err := os.WriteFile(checksumPath, []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile(checksum overlap): %v", err)
+		}
+		if err := verifyChecksum(root, "SHA256SUMS", filename, nil); err != nil {
+			t.Fatalf("expected exact filename match to win over a suffix match, got: %v", err)
+		}
+	})
 }
 
 func TestExtractBinaryFromTar(t *testing.T) {

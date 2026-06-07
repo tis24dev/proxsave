@@ -448,8 +448,11 @@ func verifyChecksum(root *os.Root, checksumName, filename string, bootstrap *log
 		if len(parts) < 2 {
 			continue
 		}
-		name := string(parts[len(parts)-1])
-		if strings.HasSuffix(name, filename) {
+		// Require an exact filename match (normalizing only sha256sum's optional
+		// binary-mode '*' marker); a mere suffix match would wrongly accept an
+		// overlapping entry such as "artifacts/<filename>".
+		name := strings.TrimPrefix(string(parts[len(parts)-1]), "*")
+		if name == filename {
 			expected = string(parts[0])
 			break
 		}
