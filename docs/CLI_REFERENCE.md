@@ -197,8 +197,7 @@ Some interactive commands support two interface modes:
 6. Extracts binary from tar.gz archive
 7. Atomically replaces current binary (write to .tmp, then rename)
 8. Updates symlinks in `/usr/local/bin/` (proxsave, proxmox-backup)
-9. Cleans up legacy Bash script symlinks
-10. Migrates cron entries (legacy entries are replaced, existing ones using the Go binary are preserved) and fixes file permissions
+9. Migrates cron entries (legacy entries are replaced, existing ones using the Go binary are preserved) and fixes file permissions
 
 **Post-upgrade steps**:
 1. Configuration file automatically compatible with new version

@@ -501,7 +501,6 @@ COMPRESSION_MODE=standard
 
 ### Migration Resources
 - **BACKUP_ENV_MAPPING.md** - Complete Bash → Go variable mapping
-- **[Legacy Bash Guide](LEGACY_BASH.md)** - Information about the Bash version
 
 ### Configuration
 - **[Configuration Guide](CONFIGURATION.md)** - Complete Go variable reference

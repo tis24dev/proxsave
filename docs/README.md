@@ -28,6 +28,5 @@ below for the current operational and technical behavior.
 - [ENCRYPTION.md](ENCRYPTION.md): archive encryption and decrypt/restore flow
 - [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md): attestation verification
 - [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md): migration from the Bash implementation
-- [LEGACY_BASH.md](LEGACY_BASH.md): legacy Bash notes and compatibility
 - [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md): PVE cluster disaster recovery
 - [RELEASE-PROCESS.md](RELEASE-PROCESS.md): release engineering notes
