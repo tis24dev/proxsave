@@ -6,9 +6,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ecdsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +37,16 @@ const (
 
 	maxUpgradeConfigJSONPreviewLength = 4000
 )
+
+// releaseSigningPubKeyPEM is the pinned ECDSA P-256 public key used to verify the
+// signature of SHA256SUMS during an upgrade. The matching private key lives only
+// in the project's GitHub Actions secret (PROXSAVE_KEY_SIGNATURE).
+// Fingerprint (sha256 of DER): fdbbba66cdb770b85a728c8aee0b920b4cd244c84f4fc5a0065188fbe9a5eddb
+const releaseSigningPubKeyPEM = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElks05mPtm1vm0YtHlSGX1HlgdXjn
+liDJEnB+RgiWOQR+6xLWeX7PyauuMxUh/HNnvBQAokK91fLWes4r9Xlwzw==
+-----END PUBLIC KEY-----
+`
 
 type releaseInfo struct {
 	TagName string `json:"tag_name"`
@@ -213,6 +226,7 @@ func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *l
 	filename := fmt.Sprintf("proxsave_%s_%s_%s.tar.gz", version, osName, arch)
 	archiveURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, tag, filename)
 	checksumURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/SHA256SUMS", githubRepo, tag)
+	signatureURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/SHA256SUMS.sig", githubRepo, tag)
 
 	bootstrap.Info("Downloading latest release: %s (%s/%s)", tag, osName, arch)
 
@@ -229,6 +243,7 @@ func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *l
 
 	archivePath := filepath.Join(tmpDir, filename)
 	checksumPath := filepath.Join(tmpDir, "SHA256SUMS")
+	signaturePath := filepath.Join(tmpDir, "SHA256SUMS.sig")
 
 	if err := downloadFile(ctx, archiveURL, archivePath, bootstrap); err != nil {
 		return "", fmt.Errorf("failed to download archive: %w", err)
@@ -236,6 +251,16 @@ func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *l
 	if err := downloadFile(ctx, checksumURL, checksumPath, bootstrap); err != nil {
 		return "", fmt.Errorf("failed to download checksum file: %w", err)
 	}
+	if err := downloadFile(ctx, signatureURL, signaturePath, bootstrap); err != nil {
+		return "", fmt.Errorf("failed to download signature file (release may be unsigned): %w", err)
+	}
+
+	// Authenticity first: SHA256SUMS must be signed by the project's release key;
+	// the checksum then ties the archive to that authenticated file.
+	if err := verifyReleaseSignature(checksumPath, signaturePath, releaseSigningPubKeyPEM); err != nil {
+		return "", err
+	}
+	bootstrap.Info("Upgrade: SHA256SUMS signature verified")
 
 	if err := verifyChecksum(archivePath, checksumPath, filename, bootstrap); err != nil {
 		return "", err
@@ -447,6 +472,45 @@ func verifyChecksum(archivePath, checksumPath, filename string, bootstrap *loggi
 		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", filename, expected, sum)
 	}
 	return nil
+}
+
+// verifyReleaseSignature verifies that the SHA256SUMS file was signed with the
+// project's release key. The signature is an ECDSA-P256/SHA-256 signature in
+// ASN.1 DER form, as produced by `openssl dgst -sha256 -sign`.
+func verifyReleaseSignature(checksumPath, signaturePath, pubKeyPEM string) error {
+	pub, err := parseECDSAPublicKey(pubKeyPEM)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(checksumPath)
+	if err != nil {
+		return fmt.Errorf("cannot read checksum file: %w", err)
+	}
+	sig, err := os.ReadFile(signaturePath)
+	if err != nil {
+		return fmt.Errorf("cannot read signature file: %w", err)
+	}
+	digest := sha256.Sum256(data)
+	if !ecdsa.VerifyASN1(pub, digest[:], sig) {
+		return errors.New("SHA256SUMS signature verification failed — refusing to upgrade")
+	}
+	return nil
+}
+
+func parseECDSAPublicKey(pubKeyPEM string) (*ecdsa.PublicKey, error) {
+	block, _ := pem.Decode([]byte(pubKeyPEM))
+	if block == nil {
+		return nil, errors.New("invalid public key PEM")
+	}
+	keyAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse public key: %w", err)
+	}
+	pub, ok := keyAny.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, errors.New("pinned public key is not ECDSA")
+	}
+	return pub, nil
 }
 
 func extractBinaryFromTar(archivePath, targetName, destPath string, bootstrap *logging.BootstrapLogger) (err error) {
