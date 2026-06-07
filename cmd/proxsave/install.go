@@ -79,11 +79,6 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	reader := bufio.NewReader(os.Stdin)
 	printInstallBanner(configPath)
 
-	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "checking legacy install state")
-	if err := handleLegacyInstall(ctx, reader, baseDir); err != nil {
-		return err
-	}
-
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running config wizard")
 	configResult, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
 	if err != nil {
@@ -398,44 +393,6 @@ func cleanupTempConfig(tmpConfigPath string) {
 	if _, err := os.Stat(tmpConfigPath); err == nil {
 		_ = os.Remove(tmpConfigPath)
 	}
-}
-
-func handleLegacyInstall(ctx context.Context, reader *bufio.Reader, baseDir string) error {
-	// Detect legacy Bash-based installation (old backup.env or proxmox-backup.sh)
-	legacyPaths := []string{
-		filepath.Join(baseDir, "env", "backup.env"),
-		filepath.Join(baseDir, "proxmox-backup.sh"),
-		filepath.Join(baseDir, "script", "proxmox-backup.sh"),
-	}
-
-	legacyFound := false
-	for _, p := range legacyPaths {
-		if _, err := os.Stat(p); err == nil {
-			legacyFound = true
-			break
-		}
-	}
-
-	if !legacyFound {
-		return nil
-	}
-
-	yellow := "\033[33m"
-	reset := "\033[0m"
-	fmt.Println(string(yellow) + "A previous Bash-based version of the Proxmox Backup script has been detected on this system." + string(reset))
-	fmt.Println(string(yellow) + "This Go version requires migrating or recreating the configuration file. You will also have access to the migration tool." + string(reset))
-	fmt.Println()
-
-	confirm, err := promptYesNo(ctx, reader, "Do you want to continue with the Go install wizard? [y/N]: ", false)
-	if err != nil {
-		return wrapInstallError(err)
-	}
-	if !confirm {
-		return wrapInstallError(errInteractiveAborted)
-	}
-
-	fmt.Println()
-	return nil
 }
 
 func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, tmpConfigPath, baseDir string, bootstrap *logging.BootstrapLogger) (result installConfigResult, err error) {
