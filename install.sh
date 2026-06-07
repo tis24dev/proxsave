@@ -43,6 +43,15 @@ TARGET_DIR="/opt/proxsave"
 BUILD_DIR="${TARGET_DIR}/build"
 TARGET_BIN="${BUILD_DIR}/proxsave"
 
+# Pinned release-signing public key (ECDSA P-256). The matching private key lives
+# only in the project's GitHub Actions secret, so an archive whose SHA256SUMS does
+# not verify against this key is rejected. Fingerprint (sha256 of DER):
+# fdbbba66cdb770b85a728c8aee0b920b4cd244c84f4fc5a0065188fbe9a5eddb
+PUBKEY_PEM='-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElks05mPtm1vm0YtHlSGX1HlgdXjn
+liDJEnB+RgiWOQR+6xLWeX7PyauuMxUh/HNnvBQAokK91fLWes4r9Xlwzw==
+-----END PUBLIC KEY-----'
+
 ###############################################
 # 3) OS/ARCH detection
 ###############################################
@@ -124,9 +133,11 @@ FILENAME="proxsave_${VERSION}_${OS}_${ARCH}.tar.gz"
 
 BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${FILENAME}"
 CHECKSUM_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/SHA256SUMS"
+SIG_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/SHA256SUMS.sig"
 
-echo "➡ Archive URL:  ${BINARY_URL}"
-echo "➡ Checksum URL: ${CHECKSUM_URL}"
+echo "➡ Archive URL:   ${BINARY_URL}"
+echo "➡ Checksum URL:  ${CHECKSUM_URL}"
+echo "➡ Signature URL: ${SIG_URL}"
 
 ###############################################
 # 7) Prepare directories
@@ -138,7 +149,7 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 cd "${TMP_DIR}"
 
 ###############################################
-# 8) Download archive and checksum
+# 8) Download archive, checksum and signature
 ###############################################
 echo "[+] Downloading archive..."
 download "${BINARY_URL}" "${FILENAME}"
@@ -146,8 +157,31 @@ download "${BINARY_URL}" "${FILENAME}"
 echo "[+] Downloading SHA256SUMS..."
 download "${CHECKSUM_URL}" "SHA256SUMS"
 
+echo "[+] Downloading SHA256SUMS.sig..."
+if ! download "${SIG_URL}" "SHA256SUMS.sig"; then
+  echo "❌ Could not download SHA256SUMS.sig for ${LATEST_TAG}"
+  echo "   Refusing to install without a verifiable release signature."
+  exit 1
+fi
+
 ###############################################
-# 9) Verify checksum
+# 9) Verify SHA256SUMS signature (authenticity)
+###############################################
+echo "[+] Verifying SHA256SUMS signature..."
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "❌ openssl is required to verify the release signature"
+  exit 1
+fi
+
+printf '%s\n' "${PUBKEY_PEM}" > pubkey.pem
+if ! openssl dgst -sha256 -verify pubkey.pem -signature SHA256SUMS.sig SHA256SUMS >/dev/null 2>&1; then
+  echo "❌ SHA256SUMS signature verification FAILED — refusing to install"
+  exit 1
+fi
+echo "✔ Signature OK (release authenticity verified)"
+
+###############################################
+# 10) Verify checksum (integrity)
 ###############################################
 echo "[+] Verifying checksum..."
 awk -v f="${FILENAME}" '$2 == f' SHA256SUMS > CHECK
@@ -160,7 +194,7 @@ sha256sum -c CHECK
 echo "✔ Checksum OK"
 
 ###############################################
-# 10) Extract ONLY the binary
+# 11) Extract ONLY the binary
 ###############################################
 echo "[+] Extracting binary from tar.gz..."
 tar -xzf "${FILENAME}" proxsave
@@ -171,14 +205,14 @@ if [ ! -f proxsave ]; then
 fi
 
 ###############################################
-# 11) Install binary
+# 12) Install binary
 ###############################################
 echo "[+] Installing binary -> ${TARGET_BIN}"
 mv proxsave "${TARGET_BIN}"
 chmod +x "${TARGET_BIN}"
 
 ###############################################
-# 12) Run internal installer (--install or --new-install)
+# 13) Run internal installer (--install or --new-install)
 ###############################################
 cd "${TARGET_DIR}"
 
