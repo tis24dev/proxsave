@@ -100,7 +100,7 @@ The `--upgrade` command:
 - ✅ Verifies integrity with SHA256 checksums
 - ✅ Atomically replaces current binary
 - ✅ Updates symlinks (`/usr/local/bin/proxsave`, `/usr/local/bin/proxmox-backup`)
-- ✅ Migrates cron entries to new binary while preserving entries that already point to the Go executable
+- ✅ Ensures a cron entry for the Go binary, preserving existing entries that already point to it
 - ✅ Fixes file permissions
 - ❌ **Does NOT modify** your `backup.env` configuration
 

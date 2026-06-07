@@ -494,8 +494,9 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "ensuring go symlink")
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
-	// Migrate legacy cron entries pointing to the bash script to the Go binary.
-	// If no cron entry exists at all, create a default one at 02:00 every day.
+	// Ensure a cron entry for the Go binary: preserve an entry that already
+	// targets it, drop outdated proxsave/proxmox-backup binary entries, and if
+	// no entry exists at all create a default one at 02:00 every day.
 	if strings.TrimSpace(cronSchedule) == "" {
 		cronSchedule = resolveCronScheduleFromEnv()
 	}
