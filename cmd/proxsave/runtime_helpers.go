@@ -686,6 +686,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		correctPaths = append(correctPaths, execPath)
 	}
 
+	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
 	updatedLines, hasCurrentEntry := filterCronLines(lines, correctPaths)
 
 	schedule := strings.TrimSpace(cronSchedule)
@@ -709,6 +710,35 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	} else {
 		bootstrap.Debug("Recreated cron entry for proxsave at schedule %s: %s", schedule, newCommandToken)
 	}
+}
+
+// dropLegacyBashCronLines removes crontab lines whose command is the old Bash
+// backup script (<root>/script/proxmox-backup.sh) under a known proxsave install
+// root. It is deliberately narrow: it matches the cron command token by exact
+// path (not a substring) and only the ".sh" script — so Proxmox Backup Server
+// components (proxmox-backup, proxmox-backup-proxy, proxmox-backup-client, none of
+// which end in .sh), comments, and lines that merely pass the path as an argument
+// are never removed.
+func dropLegacyBashCronLines(lines []string, baseDir string, bootstrap *logging.BootstrapLogger) []string {
+	roots := []string{strings.TrimSpace(baseDir), "/opt/proxmox-backup", "/opt/proxsave"}
+	legacyScripts := make(map[string]struct{}, len(roots))
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		legacyScripts[filepath.Join(root, "script", "proxmox-backup.sh")] = struct{}{}
+	}
+
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		token := strings.Trim(cronCommandToken(line), "\"'")
+		if _, isLegacy := legacyScripts[token]; isLegacy {
+			logBootstrapInfo(bootstrap, "Removing legacy Bash backup cron entry: %s", token)
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return kept
 }
 
 func filterCronLines(lines []string, correctPaths []string) ([]string, bool) {
