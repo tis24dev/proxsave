@@ -71,3 +71,45 @@ func TestCleanupGlobalEntrypointsKeepsCurrentRemovesLegacy(t *testing.T) {
 		t.Fatalf("stale entrypoint must be removed, stat err=%v", err)
 	}
 }
+
+// TestRemoveLegacyEntrypoint verifies the legacy "proxmox-backup" command is
+// dropped only when it is a symlink we created — a real file (e.g. an operator's
+// own script) is never deleted, keeping PBS and unrelated files safe.
+func TestRemoveLegacyEntrypoint(t *testing.T) {
+	t.Run("removes a symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "proxsave-bin")
+		if err := os.WriteFile(target, []byte("binary"), 0o755); err != nil {
+			t.Fatalf("write target: %v", err)
+		}
+		link := filepath.Join(dir, "proxmox-backup")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+
+		removeLegacyEntrypoint(link, logging.NewBootstrapLogger())
+
+		if _, err := os.Lstat(link); !os.IsNotExist(err) {
+			t.Fatalf("legacy symlink must be removed, stat err=%v", err)
+		}
+	})
+
+	t.Run("leaves a real file in place", func(t *testing.T) {
+		dir := t.TempDir()
+		real := filepath.Join(dir, "proxmox-backup")
+		if err := os.WriteFile(real, []byte("not ours"), 0o755); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+
+		removeLegacyEntrypoint(real, logging.NewBootstrapLogger())
+
+		if _, err := os.Stat(real); err != nil {
+			t.Fatalf("a real (non-symlink) file must be left untouched, got: %v", err)
+		}
+	})
+
+	t.Run("absent path is a no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		removeLegacyEntrypoint(filepath.Join(dir, "proxmox-backup"), logging.NewBootstrapLogger())
+	})
+}

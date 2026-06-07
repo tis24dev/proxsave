@@ -489,7 +489,7 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 
 	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary, if not already customized.
 	if bootstrap != nil {
-		bootstrap.Info("Ensuring 'proxsave' and 'proxmox-backup' commands point to the Go binary")
+		bootstrap.Info("Ensuring the 'proxsave' command points to the Go binary")
 	}
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "ensuring go symlink")
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)

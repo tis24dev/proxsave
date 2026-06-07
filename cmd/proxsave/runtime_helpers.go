@@ -583,7 +583,7 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
-		logBootstrapWarning(bootstrap, "WARNING: Unable to create proxsave/proxmox-backup symlinks: executable path is unknown")
+		logBootstrapWarning(bootstrap, "WARNING: Unable to update the proxsave entrypoint: executable path is unknown")
 		return
 	}
 
@@ -613,7 +613,31 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 	}
 
 	create("/usr/local/bin/proxsave")
-	create("/usr/local/bin/proxmox-backup")
+	// The legacy "proxmox-backup" command name is no longer a supported entrypoint:
+	// drop its symlink instead of recreating it. proxsave is the only entrypoint.
+	removeLegacyEntrypoint("/usr/local/bin/proxmox-backup", bootstrap)
+}
+
+// removeLegacyEntrypoint deletes the legacy "proxmox-backup" command symlink at
+// dest. It only removes a symlink (the form proxsave always created); a real file
+// is intentionally left in place so an unrelated file (e.g. an operator's own
+// script) is never deleted. Proxmox Backup Server ships its tools as
+// proxmox-backup-client/-proxy/-manager under /usr/sbin and /usr/bin, never a bare
+// "proxmox-backup" symlink in /usr/local/bin, so PBS is unaffected.
+func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
+	info, err := os.Lstat(dest)
+	if err != nil {
+		return
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		logBootstrapInfo(bootstrap, "Leaving %s in place: not a symlink created by proxsave", dest)
+		return
+	}
+	if err := os.Remove(dest); err != nil {
+		logBootstrapWarning(bootstrap, "WARNING: Failed to remove legacy entrypoint %s: %v", dest, err)
+		return
+	}
+	logBootstrapInfo(bootstrap, "Removed legacy 'proxmox-backup' entrypoint: %s", dest)
 }
 
 func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule string) {

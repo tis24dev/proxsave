@@ -211,7 +211,7 @@ Some interactive commands support two interface modes:
 - **No configuration changes**: `backup.env` is never modified during `--upgrade`
 - **Platform support**: Linux only (amd64, arm64)
 - **Incompatible flags**: Cannot use with `--install` or `--new-install`
-- **Automatic maintenance**: Symlinks, cron (without touching entries already pointing to proxsave/proxmox-backup), and permissions updated automatically
+- **Automatic maintenance**: Symlinks, cron (without touching entries already pointing to proxsave), and permissions updated automatically
 - **Safe replacement**: Old binary is replaced atomically (no backup created)
 - **Separate config upgrade**: Use `--upgrade-config` separately to update configuration
 
