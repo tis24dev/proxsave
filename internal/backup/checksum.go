@@ -108,7 +108,7 @@ func CreateManifest(ctx context.Context, logger *logging.Logger, manifest *Manif
 	logger.Debug("Creating manifest file: %s", outputPath)
 
 	// Ensure output directory exists
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0750); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 

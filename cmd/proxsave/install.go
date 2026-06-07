@@ -528,7 +528,7 @@ func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstr
 		return fmt.Errorf("refusing to reset unsafe base directory: %q", baseDir)
 	}
 
-	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+	if err := os.MkdirAll(baseDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create base directory %s: %w", baseDir, err)
 	}
 

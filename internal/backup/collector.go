@@ -685,7 +685,7 @@ func (c *Collector) ensureDir(path string) error {
 		created = true
 	}
 
-	if err := os.MkdirAll(path, 0755); err != nil {
+	if err := os.MkdirAll(path, 0750); err != nil {
 		return err
 	}
 	if created {

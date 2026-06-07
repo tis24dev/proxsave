@@ -114,7 +114,7 @@ func DetectWithContext(ctx context.Context, baseDir string, logger *logging.Logg
 	logDebug(logger, "Identity: generated new server ID %s", serverID)
 
 	logDebug(logger, "Identity: ensuring identity directory exists at %s", identityDir)
-	if err := os.MkdirAll(identityDir, 0o755); err != nil {
+	if err := os.MkdirAll(identityDir, 0o750); err != nil {
 		logWarning(logger, "Identity: failed to create identity directory %s: %v (server ID will NOT be persisted)", identityDir, err)
 		return info, nil
 	}

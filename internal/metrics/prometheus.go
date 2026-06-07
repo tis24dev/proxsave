@@ -57,6 +57,10 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		return fmt.Errorf("metrics textfile directory is empty")
 	}
 
+	// 0755 on purpose (not 0750): this is the Prometheus textfile-collector
+	// directory, which node_exporter — typically a non-root user — must be able to
+	// traverse and read to scrape the metrics file.
+	// #nosec G301 -- world-traversable is required for the non-root metrics scraper.
 	if err := os.MkdirAll(pe.textfileDir, 0o755); err != nil {
 		return fmt.Errorf("create metrics directory %s: %w", pe.textfileDir, err)
 	}

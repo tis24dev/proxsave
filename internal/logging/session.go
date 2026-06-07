@@ -18,7 +18,7 @@ const sessionLogDir = "/tmp/proxsave"
 // session completes.
 func StartSessionLogger(flow string, level types.LogLevel, useColor bool) (*Logger, string, func(), error) {
 	flow = sanitizeFlowName(flow)
-	if err := os.MkdirAll(sessionLogDir, 0o755); err != nil {
+	if err := os.MkdirAll(sessionLogDir, 0o750); err != nil {
 		return nil, "", nil, fmt.Errorf("create session log directory: %w", err)
 	}
 
