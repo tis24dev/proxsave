@@ -14,7 +14,7 @@
   - [Prerequisites](#prerequisites)
   - [Building from Source](#building-from-source)
   - [Interactive Installation Wizard](#interactive-installation-wizard)
-- [🔄 Upgrading from Bash Version](#upgrading-from-previous-bash-version-v074-bash-or-earlier)
+- [🔄 Migrating an Existing Configuration](#migrating-an-existing-configuration-env-migration)
   - [Migration Tools](#migration-tools)
   - [Upgrade Steps](#upgrade-steps)
 
@@ -282,9 +282,9 @@ After completion, edit `configs/backup.env` manually for advanced options.
 
 ---
 
-## Upgrading from Previous Bash Version (v0.7.4-bash or Earlier)
+## Migrating an Existing Configuration (env-migration)
 
-If you're currently using the legacy Bash version (historically called proxmox-backup, v0.7.4-bash or earlier), you can upgrade to the Go-based proxsave release with minimal effort. The Go version offers significant performance improvements while maintaining backward compatibility for most configuration variables.
+The `--env-migration` tool imports an existing `backup.env` (e.g. from the legacy Bash version, v0.7.4-bash or earlier) into the current Go configuration, mapping most variables automatically. See [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md) for the complete variable mapping.
 
 ### Migration Tools
 
