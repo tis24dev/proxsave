@@ -67,7 +67,13 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 	hashes := make(map[string]string)
 	var duplicates int
 
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	rootFS, err := os.OpenRoot(root)
+	if err != nil {
+		return fmt.Errorf("open dedup root: %w", err)
+	}
+	defer func() { _ = rootFS.Close() }()
+
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -82,7 +88,10 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 		}
 
 		rel, relErr := filepath.Rel(root, path)
-		if relErr == nil && shouldSkipDedupPath(rel) {
+		if relErr != nil {
+			return nil
+		}
+		if shouldSkipDedupPath(rel) {
 			return nil
 		}
 
@@ -94,7 +103,7 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 			return nil
 		}
 
-		hash, err := hashFile(path)
+		hash, err := hashFile(rootFS, rel)
 		if err != nil {
 			logger.Warning("Failed to hash %s: %v", path, err)
 			return nil
@@ -134,8 +143,8 @@ func shouldSkipDedupPath(rel string) bool {
 	}
 }
 
-func hashFile(path string) (sum string, err error) {
-	f, err := os.Open(path)
+func hashFile(root *os.Root, name string) (sum string, err error) {
+	f, err := root.Open(name)
 	if err != nil {
 		return "", err
 	}
@@ -196,7 +205,13 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 		}
 	}
 
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	rootFS, err := os.OpenRoot(root)
+	if err != nil {
+		return fmt.Errorf("open prefilter root: %w", err)
+	}
+	defer func() { _ = rootFS.Close() }()
+
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -222,11 +237,16 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 			return nil
 		}
 
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+
 		stats.scanned++
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
 		case ".txt", ".log", ".md":
-			if changed, err := normalizeTextFile(path); err == nil && changed {
+			if changed, err := normalizeTextFile(rootFS, rel); err == nil && changed {
 				stats.optimized++
 			}
 		case ".conf", ".cfg", ".ini":
@@ -234,11 +254,11 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 				stats.skippedStructured++
 				return nil
 			}
-			if changed, err := normalizeConfigFile(path); err == nil && changed {
+			if changed, err := normalizeConfigFile(rootFS, rel); err == nil && changed {
 				stats.optimized++
 			}
 		case ".json":
-			if changed, err := minifyJSON(path); err == nil && changed {
+			if changed, err := minifyJSON(rootFS, rel); err == nil && changed {
 				stats.optimized++
 			}
 		}
@@ -253,8 +273,12 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 	return nil
 }
 
-func normalizeTextFile(path string) (bool, error) {
-	data, err := os.ReadFile(path)
+// normalizeTextFile reads and rewrites name through root, an *os.Root opened on
+// the staging tree. Using os.Root confines all I/O inside that tree at the
+// syscall level, so a path that tried to escape (via "..") would be rejected —
+// no taint/path-traversal is possible (this is why there is no #nosec here).
+func normalizeTextFile(root *os.Root, name string) (bool, error) {
+	data, err := root.ReadFile(name)
 	if err != nil {
 		return false, err
 	}
@@ -262,17 +286,17 @@ func normalizeTextFile(path string) (bool, error) {
 	if bytes.Equal(data, normalized) {
 		return false, nil
 	}
-	return true, os.WriteFile(path, normalized, defaultOptimizedFilePerm)
+	return true, root.WriteFile(name, normalized, defaultOptimizedFilePerm)
 }
 
-func normalizeConfigFile(path string) (bool, error) {
+func normalizeConfigFile(root *os.Root, name string) (bool, error) {
 	// Config files can be whitespace/ordering-sensitive (e.g. section headers).
 	// Only perform safe, semantic-preserving normalization here.
-	return normalizeTextFile(path)
+	return normalizeTextFile(root, name)
 }
 
-func minifyJSON(path string) (bool, error) {
-	data, err := os.ReadFile(path)
+func minifyJSON(root *os.Root, name string) (bool, error) {
+	data, err := root.ReadFile(name)
 	if err != nil {
 		return false, err
 	}
@@ -287,5 +311,5 @@ func minifyJSON(path string) (bool, error) {
 	if bytes.Equal(bytes.TrimSpace(data), minified) {
 		return false, nil
 	}
-	return true, os.WriteFile(path, minified, defaultOptimizedFilePerm)
+	return true, root.WriteFile(name, minified, defaultOptimizedFilePerm)
 }
