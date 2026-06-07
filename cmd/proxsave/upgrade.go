@@ -574,7 +574,7 @@ func installBinary(srcRoot *os.Root, srcName, destPath string, bootstrap *loggin
 	done := logging.DebugStartBootstrap(bootstrap, "upgrade install", "src=%s dest=%s", srcName, destPath)
 	defer func() { done(err) }()
 	destDir := filepath.Dir(destPath)
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	if err := os.MkdirAll(destDir, 0o750); err != nil {
 		return fmt.Errorf("cannot create target directory: %w", err)
 	}
 
