@@ -40,6 +40,15 @@
    ./build/proxsave
    ```
 
+> **Release integrity & authenticity.** `install.sh` and `proxsave --upgrade`
+> verify every release before installing it: `SHA256SUMS` is checked against the
+> project's pinned **ECDSA P-256** signature (`SHA256SUMS.sig`), then the archive
+> is checked against `SHA256SUMS`. A missing or invalid signature aborts the
+> install/upgrade — there is no fallback to checksum-only. `install.sh` requires
+> `openssl` for this (preinstalled on Proxmox); the Go upgrade verifies it
+> natively. To verify a download yourself, see
+> [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md#release-signature-sha256sumssig).
+
 ### Migration
 
 1. Run migration installation from bash with old env file

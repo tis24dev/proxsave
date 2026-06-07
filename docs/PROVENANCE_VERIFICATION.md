@@ -10,6 +10,39 @@ Every Proxsave release binary includes cryptographically signed provenance attes
 
 Attestations use the SLSA (Supply-chain Levels for Software Artifacts) standard and are registered in an immutable public transparency log (Sigstore).
 
+## Release signature (SHA256SUMS.sig)
+
+In addition to the SLSA attestations described below, every release ships a detached signature of its `SHA256SUMS` file: `SHA256SUMS.sig`. It is an **ECDSA P-256 / SHA-256** signature produced in CI with a private key that exists only as a GitHub Actions secret.
+
+**This is what the tooling enforces automatically.** `install.sh` and `proxsave --upgrade` download `SHA256SUMS.sig` and verify it against a public key **pinned in the tool itself** before trusting `SHA256SUMS` (and then the archive checksum). A missing or invalid signature aborts the install/upgrade — there is no fallback to checksum-only. Because the public key is pinned in the client, an attacker cannot substitute their own key: only the project's private key can produce a signature that verifies.
+
+Pinned public key (sha256/DER fingerprint `fdbbba66cdb770b85a728c8aee0b920b4cd244c84f4fc5a0065188fbe9a5eddb`):
+
+```text
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElks05mPtm1vm0YtHlSGX1HlgdXjn
+liDJEnB+RgiWOQR+6xLWeX7PyauuMxUh/HNnvBQAokK91fLWes4r9Xlwzw==
+-----END PUBLIC KEY-----
+```
+
+### Verify a download manually
+
+```bash
+TAG=v0.0.0   # the release you downloaded
+base="https://github.com/tis24dev/proxsave/releases/download/${TAG}"
+curl -fsSLO "${base}/SHA256SUMS"
+curl -fsSLO "${base}/SHA256SUMS.sig"
+
+# Save the pinned public key above to proxsave_pub.pem, then verify authenticity:
+openssl dgst -sha256 -verify proxsave_pub.pem -signature SHA256SUMS.sig SHA256SUMS
+#   -> "Verified OK"
+
+# Then check the archive you downloaded against the now-authenticated checksums:
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+> The release signature (above) and the SLSA attestations (below) are complementary: the signature is the lightweight check the installer enforces with no extra tooling, while attestations add an independently verifiable, transparency-logged build provenance via the GitHub CLI.
+
 ## Why Attestations Matter
 
 Provenance attestations protect against:
