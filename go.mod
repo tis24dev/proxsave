@@ -1,6 +1,6 @@
 module github.com/tis24dev/proxsave
 
-go 1.25.10
+go 1.25.11
 
 require (
 	filippo.io/age v1.3.1
