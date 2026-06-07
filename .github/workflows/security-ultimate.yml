@@ -30,6 +30,7 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version-file: 'go.mod'
+          cache: false
 
       - name: Show Go version
         run: go version
@@ -56,17 +57,14 @@ jobs:
         run: govulncheck ./...
 
       ########################################
-      # GOSEC — RUN USING GO 1.21 (NO DOCKER)
+      # GOSEC — runs under the project's Go (from go.mod, currently 1.25).
+      # gosec must be a version that supports the project's Go: support for Go
+      # 1.25 landed in gosec v2.25.0, so the old v2.20.0 (built for Go ≤1.22)
+      # could not type-check this code — combined with -no-fail/|| true it would
+      # silently emit an empty SARIF. Keep gosec current with the Go toolchain.
       ########################################
-      - name: Set up Go 1.21 for GoSec
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
-        with:
-          go-version: "1.21"
-
       - name: Install GoSec
-        run: |
-          go clean -modcache
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.20.0
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
 
       - name: Run GoSec
         run: |
@@ -95,26 +93,5 @@ jobs:
         with:
           sarif_file: gosec.sarif
 
-      ########################################
-      # RESTORE GO 1.25 FOR CODEQL
-      ########################################
-      - name: Restore Go 1.25 for CodeQL
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
-        with:
-          go-version-file: 'go.mod'
-
-      ########################################
-      # CODEQL
-      ########################################
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa
-        with:
-          languages: go
-
-      - name: Build the Go project
-        run: |
-          go mod tidy
-          go build ./...
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa
+      # NOTE: CodeQL now runs in its own workflow (.github/workflows/codeql.yml),
+      # so it is not duplicated here.
