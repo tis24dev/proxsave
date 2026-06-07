@@ -458,9 +458,30 @@ func (c *Collector) captureInventoryFile(sourcePath, logicalPath string) invento
 // (dm-crypt/LUKS key files and CIFS/NFS/SSH credential files): their bytes must
 // not be embedded in — nor be derivable from — the plaintext inventory report.
 func (c *Collector) captureInventoryFileMetadataOnly(sourcePath, logicalPath string) inventoryFileSnapshot {
-	snap := c.captureInventoryFile(sourcePath, logicalPath)
-	snap.Content = ""
-	snap.SHA256 = ""
+	snap := inventoryFileSnapshot{
+		LogicalPath: logicalPath,
+		SourcePath:  sourcePath,
+	}
+
+	if c.shouldExclude(sourcePath) {
+		snap.Skipped = true
+		snap.Reason = "excluded by pattern"
+		return snap
+	}
+
+	// Metadata only: stat the file instead of reading it, so the (potentially
+	// sensitive) content is never loaded and Content/SHA256 stay empty.
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return snap
+		}
+		snap.Error = err.Error()
+		return snap
+	}
+
+	snap.Exists = true
+	snap.SizeBytes = info.Size()
 	return snap
 }
 

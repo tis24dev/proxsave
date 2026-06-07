@@ -494,11 +494,12 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 
 	pathEnv := os.Getenv("PATH")
 	if strings.TrimSpace(pathEnv) == "" {
-		bootstrap.Info("PATH is empty; skipping global proxsave/proxmox-backup entrypoint scan")
-		return
+		// Empty PATH: skip PATH-based scanning but still clean the well-known
+		// global directories below (filepath.SplitList("") yields no PATH entries).
+		bootstrap.Info("PATH is empty; scanning only the well-known global directories")
+	} else {
+		bootstrap.Info("Scanning for existing proxsave/proxmox-backup commands on PATH before installation")
 	}
-
-	bootstrap.Info("Scanning for existing proxsave/proxmox-backup commands on PATH before installation")
 
 	candidates := make([]string, 0, 16)
 	names := []string{"proxsave", "proxmox-backup"}
@@ -627,6 +628,9 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 	info, err := os.Lstat(dest)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			logBootstrapWarning(bootstrap, "WARNING: Unable to inspect legacy entrypoint %s: %v", dest, err)
+		}
 		return
 	}
 	if info.Mode()&os.ModeSymlink == 0 {

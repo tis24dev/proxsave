@@ -1086,8 +1086,12 @@ func (c *Checker) ensureOwnershipAndPerm(path string, info os.FileInfo, expected
 					c.addWarning("Failed to adjust permissions on %s: %v", path, err)
 				} else {
 					c.logger.Info("Adjusted permissions on %s to %o", path, expectedPerm)
-					info, _ = os.Lstat(path)
-					isSymlink = info.Mode()&os.ModeSymlink != 0
+					if reInfo, statErr := os.Lstat(path); statErr == nil {
+						info = reInfo
+						isSymlink = info.Mode()&os.ModeSymlink != 0
+					} else {
+						c.addWarning("Failed to re-stat %s after adjusting permissions: %v", path, statErr)
+					}
 				}
 			} else {
 				c.addWarning("%s should have permissions %o (current %o)", description, expectedPerm, perm)
