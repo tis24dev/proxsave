@@ -681,20 +681,30 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		lines = strings.Split(strings.TrimRight(normalized, "\n"), "\n")
 	}
 
+	// proxsave is the canonical entrypoint; the legacy "proxmox-backup" name is
+	// intentionally NOT treated as a current target, so a cron still pointing at it
+	// is migrated to proxsave below while keeping the operator's schedule.
 	correctPaths := []string{strings.TrimSpace(newCommandToken)}
 	if execPath != "" && execPath != newCommandToken {
 		correctPaths = append(correctPaths, execPath)
 	}
 
 	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
-	updatedLines, hasCurrentEntry := filterCronLines(lines, correctPaths)
+	updatedLines, hasCurrentEntry, replacedSchedule := filterCronLines(lines, correctPaths)
 
 	schedule := strings.TrimSpace(cronSchedule)
 	if schedule == "" {
 		schedule = "0 2 * * *"
 	}
-	// Append a fresh default entry pointing to the Go binary (or fallback) if one doesn't exist already.
+	// Add an entry pointing to the Go binary if none already targets it. If we
+	// removed an entry that pointed to an outdated proxsave/proxmox-backup binary,
+	// keep the operator's existing schedule instead of resetting to the default,
+	// and warn that the entry was rewritten.
 	if !hasCurrentEntry {
+		if replacedSchedule != "" {
+			schedule = replacedSchedule
+			logBootstrapWarning(bootstrap, "Cron entry pointed to an outdated binary path; rewriting it to %s and keeping the existing schedule %q", newCommandToken, schedule)
+		}
 		defaultLine := fmt.Sprintf("%s %s", schedule, newCommandToken)
 		updatedLines = append(updatedLines, defaultLine)
 	}
@@ -741,9 +751,10 @@ func dropLegacyBashCronLines(lines []string, baseDir string, bootstrap *logging.
 	return kept
 }
 
-func filterCronLines(lines []string, correctPaths []string) ([]string, bool) {
+func filterCronLines(lines []string, correctPaths []string) ([]string, bool, string) {
 	updatedLines := make([]string, 0, len(lines))
 	hasCurrentEntry := false
+	replacedSchedule := ""
 
 	containsCorrectPath := func(line string) bool {
 		for _, p := range correctPaths {
@@ -766,13 +777,38 @@ func filterCronLines(lines []string, correctPaths []string) ([]string, bool) {
 			continue
 		}
 		if containsBinaryReference(line) {
-			// Remove proxsave/proxmox-backup entries that point to outdated binaries.
+			// Remove proxsave/proxmox-backup entries that point to outdated binaries,
+			// remembering the operator's schedule so the rewritten entry can keep it.
+			if replacedSchedule == "" {
+				replacedSchedule = cronScheduleField(line)
+			}
 			continue
 		}
 		updatedLines = append(updatedLines, line)
 	}
 
-	return updatedLines, hasCurrentEntry
+	return updatedLines, hasCurrentEntry, replacedSchedule
+}
+
+// cronScheduleField returns the schedule portion of a cron line — the first five
+// time fields, or an "@" shorthand (e.g. @daily) — or "" if the line carries no
+// schedule (blank, comment, or env assignment).
+func cronScheduleField(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return ""
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return ""
+	}
+	if strings.HasPrefix(fields[0], "@") {
+		return fields[0]
+	}
+	if len(fields) <= 5 {
+		return ""
+	}
+	return strings.Join(fields[:5], " ")
 }
 
 func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {

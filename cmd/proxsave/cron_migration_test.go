@@ -17,6 +17,7 @@ func TestFilterCronLines(t *testing.T) {
 		correctPaths []string
 		wantLines    []string
 		wantHasEntry bool
+		wantSchedule string
 	}{
 		{
 			name: "Preserve proxmox-backup-client lines",
@@ -38,6 +39,19 @@ func TestFilterCronLines(t *testing.T) {
 			wantHasEntry: true,
 		},
 		{
+			name: "Migrate legacy proxmox-backup symlink, keep schedule",
+			inputLines: []string{
+				"0 5 * * * /usr/local/bin/proxmox-backup",
+				userLine1,
+			},
+			correctPaths: []string{"/usr/local/bin/proxsave"},
+			wantLines: []string{
+				userLine1,
+			},
+			wantHasEntry: false,
+			wantSchedule: "0 5 * * *",
+		},
+		{
 			name: "Remove outdated binary reference",
 			inputLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup", // Outdated path
@@ -48,6 +62,7 @@ func TestFilterCronLines(t *testing.T) {
 				userLine1,
 			},
 			wantHasEntry: false,
+			wantSchedule: "0 2 * * *",
 		},
 		{
 			name: "Preserve custom binary name proxmox-backup-new",
@@ -99,15 +114,20 @@ func TestFilterCronLines(t *testing.T) {
 				"0 5 * * * /usr/local/bin/proxsave",
 			},
 			wantHasEntry: true,
+			wantSchedule: "0 4 * * *",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotLines, gotHasEntry := filterCronLines(tt.inputLines, tt.correctPaths)
+			gotLines, gotHasEntry, gotSchedule := filterCronLines(tt.inputLines, tt.correctPaths)
 
 			if gotHasEntry != tt.wantHasEntry {
 				t.Errorf("hasCurrentEntry = %v, want %v", gotHasEntry, tt.wantHasEntry)
+			}
+
+			if gotSchedule != tt.wantSchedule {
+				t.Errorf("replacedSchedule = %q, want %q", gotSchedule, tt.wantSchedule)
 			}
 
 			if len(gotLines) != len(tt.wantLines) {
