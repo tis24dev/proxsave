@@ -49,8 +49,14 @@ func TestVerifyReleaseSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
 	t.Run("valid signature passes", func(t *testing.T) {
-		if err := verifyReleaseSignature(checksumPath, sigPath, pubPEM); err != nil {
+		if err := verifyReleaseSignature(root, "SHA256SUMS", "SHA256SUMS.sig", pubPEM); err != nil {
 			t.Fatalf("expected a valid signature, got: %v", err)
 		}
 	})
@@ -60,7 +66,7 @@ func TestVerifyReleaseSignature(t *testing.T) {
 		if err := os.WriteFile(bad, []byte("tampered  x\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyReleaseSignature(bad, sigPath, pubPEM); err == nil {
+		if err := verifyReleaseSignature(root, "SHA256SUMS.bad", "SHA256SUMS.sig", pubPEM); err == nil {
 			t.Fatal("expected failure for tampered checksums")
 		}
 	})
@@ -70,7 +76,7 @@ func TestVerifyReleaseSignature(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyReleaseSignature(checksumPath, sigPath, testPubPEM(t, other)); err == nil {
+		if err := verifyReleaseSignature(root, "SHA256SUMS", "SHA256SUMS.sig", testPubPEM(t, other)); err == nil {
 			t.Fatal("expected failure when verifying with a different key")
 		}
 	})

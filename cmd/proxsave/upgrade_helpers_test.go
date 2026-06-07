@@ -30,9 +30,14 @@ func TestDownloadFile(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 	dest := filepath.Join(dir, "out.bin")
 
-	if err := downloadFile(context.Background(), server.URL+"/ok", dest, nil); err != nil {
+	if err := downloadFile(context.Background(), server.URL+"/ok", root, "out.bin", nil); err != nil {
 		t.Fatalf("downloadFile(ok) error: %v", err)
 	}
 	data, err := os.ReadFile(dest)
@@ -43,13 +48,18 @@ func TestDownloadFile(t *testing.T) {
 		t.Fatalf("downloaded content = %q, want %q", string(data), "hello")
 	}
 
-	if err := downloadFile(context.Background(), server.URL+"/fail", filepath.Join(dir, "fail.bin"), nil); err == nil {
+	if err := downloadFile(context.Background(), server.URL+"/fail", root, "fail.bin", nil); err == nil {
 		t.Fatalf("expected downloadFile(fail) to return error")
 	}
 }
 
 func TestVerifyChecksum(t *testing.T) {
 	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 	filename := "test-archive.tar.gz"
 	archivePath := filepath.Join(dir, filename)
 	checksumPath := filepath.Join(dir, "SHA256SUMS")
@@ -65,12 +75,12 @@ func TestVerifyChecksum(t *testing.T) {
 		t.Fatalf("WriteFile(checksum): %v", err)
 	}
 
-	if err := verifyChecksum(archivePath, checksumPath, filename, nil); err != nil {
+	if err := verifyChecksum(root, "SHA256SUMS", filename, nil); err != nil {
 		t.Fatalf("verifyChecksum() error: %v", err)
 	}
 
 	t.Run("missing entry", func(t *testing.T) {
-		if err := verifyChecksum(archivePath, checksumPath, "missing.tar.gz", nil); err == nil {
+		if err := verifyChecksum(root, "SHA256SUMS", "missing.tar.gz", nil); err == nil {
 			t.Fatalf("expected error for missing checksum entry")
 		}
 	})
@@ -79,7 +89,7 @@ func TestVerifyChecksum(t *testing.T) {
 		if err := os.WriteFile(checksumPath, []byte("deadbeef  "+filename+"\n"), 0o600); err != nil {
 			t.Fatalf("WriteFile(checksum mismatch): %v", err)
 		}
-		if err := verifyChecksum(archivePath, checksumPath, filename, nil); err == nil {
+		if err := verifyChecksum(root, "SHA256SUMS", filename, nil); err == nil {
 			t.Fatalf("expected checksum mismatch error")
 		}
 	})
@@ -87,6 +97,11 @@ func TestVerifyChecksum(t *testing.T) {
 
 func TestExtractBinaryFromTar(t *testing.T) {
 	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 	archivePath := filepath.Join(dir, "bundle.tar.gz")
 	destPath := filepath.Join(dir, "proxsave")
 
@@ -122,7 +137,7 @@ func TestExtractBinaryFromTar(t *testing.T) {
 		t.Fatalf("WriteFile(archive): %v", err)
 	}
 
-	if err := extractBinaryFromTar(archivePath, "proxsave", destPath, nil); err != nil {
+	if err := extractBinaryFromTar(root, "bundle.tar.gz", "proxsave", "proxsave", nil); err != nil {
 		t.Fatalf("extractBinaryFromTar() error: %v", err)
 	}
 	data, err := os.ReadFile(destPath)
@@ -133,20 +148,25 @@ func TestExtractBinaryFromTar(t *testing.T) {
 		t.Fatalf("extracted content = %q, want %q", string(data), "binary-bytes")
 	}
 
-	if err := extractBinaryFromTar(archivePath, "missing", filepath.Join(dir, "missing"), nil); err == nil {
+	if err := extractBinaryFromTar(root, "bundle.tar.gz", "missing", "missing", nil); err == nil {
 		t.Fatalf("expected error when binary is missing from archive")
 	}
 }
 
 func TestInstallBinary(t *testing.T) {
 	dir := t.TempDir()
+	srcRoot, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() { _ = srcRoot.Close() }()
 	src := filepath.Join(dir, "src.bin")
 	if err := os.WriteFile(src, []byte("bin"), 0o600); err != nil {
 		t.Fatalf("WriteFile(src): %v", err)
 	}
 
 	dest := filepath.Join(dir, "nested", "proxsave")
-	if err := installBinary(src, dest, nil); err != nil {
+	if err := installBinary(srcRoot, "src.bin", dest, nil); err != nil {
 		t.Fatalf("installBinary() error: %v", err)
 	}
 
