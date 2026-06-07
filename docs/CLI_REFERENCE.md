@@ -196,7 +196,7 @@ Some interactive commands support two interface modes:
 5. Verifies archive integrity using SHA256 checksum
 6. Extracts binary from tar.gz archive
 7. Atomically replaces current binary (write to .tmp, then rename)
-8. Updates symlinks in `/usr/local/bin/` (proxsave, proxmox-backup)
+8. Updates the `proxsave` symlink in `/usr/local/bin/` (and removes the legacy `proxmox-backup` symlink if present)
 9. Ensures the cron entry targets the Go binary (entries already using it are preserved; outdated proxsave/proxmox-backup binary entries are replaced) and fixes file permissions
 
 **Post-upgrade steps**:
@@ -712,7 +712,7 @@ crontab -e
 0 2 * * * /opt/proxsave/build/proxsave >> /var/log/pbs-cron.log 2>&1
 
 # Rotate logs (logrotate config)
-# /etc/logrotate.d/proxmox-backup
+# /etc/logrotate.d/proxsave
 /var/log/pbs-cron.log {
     daily
     rotate 7
