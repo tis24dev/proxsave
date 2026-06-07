@@ -218,7 +218,8 @@ func TestReadLineWithContext_ReturnsLine(t *testing.T) {
 
 func TestReadLineWithContext_NilContextWorks(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("hello\n"))
-	got, err := ReadLineWithContext(nil, reader) //nolint:staticcheck // Verifies the documented nil context fallback.
+	var nilCtx context.Context // deliberately nil: verifies the documented nil-context fallback
+	got, err := ReadLineWithContext(nilCtx, reader)
 	if err != nil {
 		t.Fatalf("ReadLineWithContext error: %v", err)
 	}
@@ -364,7 +365,8 @@ func TestReadPasswordWithContext_NilContextWorks(t *testing.T) {
 	readPassword := func(fd int) ([]byte, error) {
 		return []byte("secret"), nil
 	}
-	got, err := ReadPasswordWithContext(nil, readPassword, 0) //nolint:staticcheck // Verifies the documented nil context fallback.
+	var nilCtx context.Context // deliberately nil: verifies the documented nil-context fallback
+	got, err := ReadPasswordWithContext(nilCtx, readPassword, 0)
 	if err != nil {
 		t.Fatalf("ReadPasswordWithContext error: %v", err)
 	}
