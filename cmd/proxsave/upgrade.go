@@ -608,7 +608,10 @@ func installBinary(srcRoot *os.Root, srcName, destPath string, bootstrap *loggin
 		return fmt.Errorf("cannot close temp target binary: %w", err)
 	}
 
-	if err := os.Rename(filepath.Join(destDir, tmpName), destPath); err != nil {
+	// Rename through the same *os.Root (paths relative to it) so the swap stays
+	// confined to the directory fd opened above — no re-resolution of destDir as a
+	// string, which would reopen a TOCTOU window on a mutable path.
+	if err := destRoot.Rename(tmpName, destName); err != nil {
 		return fmt.Errorf("cannot replace binary at %s: %w", destPath, err)
 	}
 	return nil
