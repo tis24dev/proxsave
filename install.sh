@@ -43,12 +43,6 @@ TARGET_DIR="/opt/proxsave"
 BUILD_DIR="${TARGET_DIR}/build"
 TARGET_BIN="${BUILD_DIR}/proxsave"
 
-if [ -d "/opt/proxmox-backup" ] && [ ! -d "${TARGET_DIR}" ]; then
-  echo "🔄 Detected legacy installation at /opt/proxmox-backup"
-  echo "➡  Migrating to ${TARGET_DIR}..."
-  mv /opt/proxmox-backup "${TARGET_DIR}"
-fi
-
 ###############################################
 # 3) OS/ARCH detection
 ###############################################
@@ -140,6 +134,7 @@ echo "➡ Checksum URL: ${CHECKSUM_URL}"
 mkdir -p "${BUILD_DIR}"
 
 TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
 cd "${TMP_DIR}"
 
 ###############################################
@@ -155,10 +150,11 @@ download "${CHECKSUM_URL}" "SHA256SUMS"
 # 9) Verify checksum
 ###############################################
 echo "[+] Verifying checksum..."
-grep " ${FILENAME}\$" SHA256SUMS > CHECK || {
+awk -v f="${FILENAME}" '$2 == f' SHA256SUMS > CHECK
+if [ ! -s CHECK ]; then
   echo "❌ Checksum entry not found for ${FILENAME}"
   exit 1
-}
+fi
 
 sha256sum -c CHECK
 echo "✔ Checksum OK"
@@ -193,11 +189,6 @@ fi
 
 echo "[+] Running: ${TARGET_BIN} ${BINARY_ARGS[*]}"
 "${TARGET_BIN}" "${BINARY_ARGS[@]}"
-
-###############################################
-# 13) Cleanup
-###############################################
-rm -rf "${TMP_DIR}"
 
 echo "--------------------------------------------"
 echo "✔ Installation completed successfully!"
