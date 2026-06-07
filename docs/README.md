@@ -27,6 +27,6 @@ below for the current operational and technical behavior.
 - [CLOUD_STORAGE.md](CLOUD_STORAGE.md): cloud/rclone behavior
 - [ENCRYPTION.md](ENCRYPTION.md): archive encryption and decrypt/restore flow
 - [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md): attestation verification
-- [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md): migration from the Bash implementation
+- [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md): env-migration of an existing backup.env to Go config
 - [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md): PVE cluster disaster recovery
 - [RELEASE-PROCESS.md](RELEASE-PROCESS.md): release engineering notes

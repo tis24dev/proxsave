@@ -769,7 +769,7 @@ crontab -e
 
 ### Reference
 - **[Restore Guide](RESTORE_GUIDE.md)** - Restore from any example backup
-- **[Migration Guide](MIGRATION_GUIDE.md)** - Migrate from Bash version
+- **[Migration Guide](MIGRATION_GUIDE.md)** - Migrate an existing backup.env to Go config
 
 ### Main Documentation
 - **[README](../README.md)** - Project overview and quick start

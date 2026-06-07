@@ -728,7 +728,7 @@ crontab -e
 
 ### Configuration
 - **[Configuration Guide](CONFIGURATION.md)** - Complete variable reference
-- **[Migration Guide](MIGRATION_GUIDE.md)** - Bash to Go migration details
+- **[Migration Guide](MIGRATION_GUIDE.md)** - backup.env config migration (`--env-migration`)
 
 ### Operations
 - **[Encryption Guide](ENCRYPTION.md)** - AGE encryption setup and usage
