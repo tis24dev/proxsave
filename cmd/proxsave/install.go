@@ -478,12 +478,6 @@ func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEn
 func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule string) {
 	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
 	defer func() { done(nil) }()
-	// Clean up legacy bash-based symlinks that point to the old installer scripts.
-	if bootstrap != nil {
-		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")
-	}
-	logging.DebugStepBootstrap(bootstrap, "post-install setup", "cleaning legacy bash symlinks")
-	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 
 	// Remove any stale proxsave/proxmox-backup entrypoints (PATH, /usr/local/bin,
 	// /usr/bin) that do not point to this Go binary, then recreate clean symlinks.

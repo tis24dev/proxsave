@@ -168,7 +168,6 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
 		bootstrap.Warning("Upgrade: failed to refresh documentation: %v", err)
 	}
-	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 	ensureGoSymlink(execPath, bootstrap)
 
 	cronSchedule := resolveCronScheduleFromEnv()

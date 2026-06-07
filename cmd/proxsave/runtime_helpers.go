@@ -462,101 +462,10 @@ func formatBackupNoun(n int) string {
 	return fmt.Sprintf("%d backups", n)
 }
 
-func cleanupLegacyBashSymlinks(baseDir string, bootstrap *logging.BootstrapLogger) {
-	baseDir = strings.TrimSpace(baseDir)
-	if baseDir == "" {
-		baseDir = "/opt/proxsave"
-	}
-
-	legacyTargets := map[string]struct{}{}
-	addLegacyDir := func(dir string) {
-		dir = strings.TrimSpace(dir)
-		if dir == "" {
-			return
-		}
-		scriptDir := filepath.Join(dir, "script")
-		if info, err := os.Stat(scriptDir); err != nil || !info.IsDir() {
-			return
-		}
-		for _, name := range []string{
-			"proxmox-backup.sh",
-			"security-check.sh",
-			"fix-permissions.sh",
-			"proxmox-restore.sh",
-		} {
-			path := filepath.Join(scriptDir, name)
-			if _, err := os.Stat(path); err != nil {
-				continue
-			}
-			if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved != "" {
-				legacyTargets[resolved] = struct{}{}
-			} else {
-				legacyTargets[path] = struct{}{}
-			}
-		}
-	}
-
-	addLegacyDir(baseDir)
-	addLegacyDir("/opt/proxmox-backup")
-	addLegacyDir("/opt/proxsave")
-
-	searchDirs := []string{"/usr/local/bin", "/usr/bin"}
-
-	if len(legacyTargets) == 0 {
-		bootstrap.Info("No legacy bash-based proxmox-backup scripts detected under %s or /opt/proxmox-backup", baseDir)
-		return
-	}
-
-	removed := 0
-
-	for _, dir := range searchDirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			path := filepath.Join(dir, e.Name())
-			info, err := os.Lstat(path)
-			if err != nil || info.Mode()&os.ModeSymlink == 0 {
-				continue
-			}
-
-			target, err := os.Readlink(path)
-			if err != nil {
-				continue
-			}
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(dir, target)
-			}
-			resolved, err := filepath.EvalSymlinks(target)
-			if err != nil {
-				resolved = target
-			}
-
-			if _, ok := legacyTargets[resolved]; !ok {
-				continue
-			}
-
-			if err := os.Remove(path); err != nil {
-				bootstrap.Warning("WARNING: Failed to remove legacy symlink %s -> %s: %v", path, resolved, err)
-			} else {
-				bootstrap.Info("Removed legacy bash symlink: %s -> %s", path, resolved)
-				removed++
-			}
-		}
-	}
-
-	if removed == 0 {
-		bootstrap.Info("Legacy bash-based proxmox-backup symlink cleanup completed: no matching symlinks found in /usr/local/bin or /usr/bin")
-	} else {
-		bootstrap.Info("Legacy bash-based proxmox-backup symlink cleanup completed: removed %d symlink(s)", removed)
-	}
-}
-
 // cleanupGlobalProxmoxBackupEntrypoints performs a best-effort cleanup of any existing
 // proxmox-backup entrypoints on the system PATH, as well as the common global
-// locations /usr/local/bin and /usr/bin. This is intentionally more aggressive
-// than cleanupLegacyBashSymlinks and is designed to mirror what an operator
+// locations /usr/local/bin and /usr/bin. It removes any stale proxsave/proxmox-backup
+// entrypoint that does not point at the current Go binary, mirroring what an operator
 // would manually inspect with:
 //
 //	type -a proxmox-backup
