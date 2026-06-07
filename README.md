@@ -39,6 +39,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/i
 ```
 You can find the installation script source [here](./install.sh).
 
+🔒 The installer and `proxsave --upgrade` verify each release against ProxSave's pinned **ECDSA P-256** signing key before installing — so only authentic, untampered builds ever run ([details](./docs/PROVENANCE_VERIFICATION.md#release-signature-sha256sumssig)).
+
 > [!NOTE]
 > Please refer to the [docs](./docs/INSTALL.md) for more information about the installation.
 
