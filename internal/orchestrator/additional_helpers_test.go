@@ -1365,6 +1365,17 @@ func TestShowCategorySelectionMenu(t *testing.T) {
 	if _, err := ShowCategorySelectionMenu(context.Background(), logger, available, SystemTypePVE); err == nil {
 		t.Fatalf("expected cancel error")
 	}
+
+	// Back to mode selection: 'b' must return errRestoreBackToMode (distinct from
+	// the abort '0') so the shared engine loop re-prompts for the restore mode,
+	// matching the TUI's Back button.
+	r, w, _ = os.Pipe()
+	_, _ = w.WriteString("b\n")
+	_ = w.Close()
+	os.Stdin = r
+	if _, err := ShowCategorySelectionMenu(context.Background(), logger, available, SystemTypePVE); !errors.Is(err, errRestoreBackToMode) {
+		t.Fatalf("expected errRestoreBackToMode, got %v", err)
+	}
 }
 
 func TestExtractArchiveNativeBlocksTraversal(t *testing.T) {
