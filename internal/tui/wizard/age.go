@@ -107,6 +107,11 @@ func ConfirmRecipientOverwrite(ctx context.Context, recipientPath, configPath, b
 		SetBorderColor(tui.WarningYellow).
 		SetBackgroundColor(tcell.ColorBlack)
 
+	// Default-focus the non-destructive "Cancel" (button index 1) so pressing
+	// Enter without navigating aborts rather than overwrites, matching the CLI
+	// which defaults the overwrite confirmation to "no".
+	modal.SetFocus(1)
+
 	flex := buildWizardScreen(
 		"AGE Encryption Setup",
 		"ProxSave - By TIS24DEV\nAGE Encryption Setup\n\n"+
@@ -147,6 +152,11 @@ func ConfirmAddRecipient(ctx context.Context, configPath, buildSig string, count
 		SetTitleColor(tui.ProxmoxOrange).
 		SetBorderColor(tui.ProxmoxOrange).
 		SetBackgroundColor(tcell.ColorBlack)
+
+	// Default-focus "Finish" (button index 1) so pressing Enter without navigating
+	// does not add another recipient, matching the CLI which defaults this prompt
+	// to "no".
+	modal.SetFocus(1)
 
 	flex := buildWizardScreen(
 		"AGE Encryption Setup",

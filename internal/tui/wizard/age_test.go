@@ -244,6 +244,52 @@ func TestConfirmRecipientOverwriteSelection(t *testing.T) {
 	}
 }
 
+// TestConfirmRecipientOverwriteDefaultsFocusToCancel pins the CLI/TUI parity fix:
+// the destructive "Overwrite" must NOT be the default-focused button, so pressing
+// Enter without navigating aborts (like the CLI's "no" default) rather than
+// overwriting the existing recipient.
+func TestConfirmRecipientOverwriteDefaultsFocusToCancel(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	var focusedLabel string
+	ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetFocus(focus)
+		if btn, ok := app.GetFocus().(*tview.Button); ok {
+			focusedLabel = btn.GetLabel()
+		}
+		return nil
+	}
+
+	if _, err := ConfirmRecipientOverwrite(context.Background(), "/tmp/recipient.age", "/etc/.env", "sig"); err != nil {
+		t.Fatalf("ConfirmRecipientOverwrite returned error: %v", err)
+	}
+	if focusedLabel != "Cancel" {
+		t.Fatalf("default-focused button = %q, want \"Cancel\"", focusedLabel)
+	}
+}
+
+func TestConfirmAddRecipientDefaultsFocusToFinish(t *testing.T) {
+	originalRunner := ageWizardRunner
+	defer func() { ageWizardRunner = originalRunner }()
+
+	var focusedLabel string
+	ageWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		app.SetFocus(focus)
+		if btn, ok := app.GetFocus().(*tview.Button); ok {
+			focusedLabel = btn.GetLabel()
+		}
+		return nil
+	}
+
+	if _, err := ConfirmAddRecipient(context.Background(), "/etc/.env", "sig", 2); err != nil {
+		t.Fatalf("ConfirmAddRecipient returned error: %v", err)
+	}
+	if focusedLabel != "Finish" {
+		t.Fatalf("default-focused button = %q, want \"Finish\"", focusedLabel)
+	}
+}
+
 func TestConfirmRecipientOverwriteModalIncludesRecipientPath(t *testing.T) {
 	originalRunner := ageWizardRunner
 	defer func() { ageWizardRunner = originalRunner }()
