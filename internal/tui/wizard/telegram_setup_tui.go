@@ -192,14 +192,25 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 				default:
 					hint = "\n\nYou can press Check again, or Skip verification and complete pairing later."
 				}
+				if result.CheckAttempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
+					hint = "\n\nMaximum verification attempts reached. Skip and complete pairing later by running proxsave."
+				}
 				setStatus(fmt.Sprintf("[yellow]%s[white]%s", tview.Escape(orchestrator.TruncateTelegramSetupStatusMessage(msg)), hint))
+				if refreshButtons != nil {
+					refreshButtons()
+				}
 			})
 		})
 	}
 
 	refreshButtons = func() {
 		form.ClearButtons()
-		form.AddButton("Check", checkHandler)
+		// Stop offering another check once the shared attempt cap is reached (and
+		// not yet verified), matching the CLI which stops after the same number of
+		// attempts; an explicit Skip is then required to leave.
+		if result.Verified || result.CheckAttempts < orchestrator.TelegramSetupMaxVerificationAttempts {
+			form.AddButton("Check", checkHandler)
+		}
 		if result.Verified {
 			form.AddButton("Continue", func() { doClose(false) })
 			return

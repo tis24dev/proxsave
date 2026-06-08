@@ -214,11 +214,11 @@ func TestRunTelegramSetupCLI_StopsAfterMaxVerificationAttempts(t *testing.T) {
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", bootstrap); err != nil {
 		t.Fatalf("runTelegramSetupCLI error: %v", err)
 	}
-	if checkCalls != maxTelegramSetupVerificationAttempts {
-		t.Fatalf("checkCalls=%d, want %d", checkCalls, maxTelegramSetupVerificationAttempts)
+	if checkCalls != orchestrator.TelegramSetupMaxVerificationAttempts {
+		t.Fatalf("checkCalls=%d, want %d", checkCalls, orchestrator.TelegramSetupMaxVerificationAttempts)
 	}
-	if promptCalls != maxTelegramSetupVerificationAttempts {
-		t.Fatalf("promptCalls=%d, want %d", promptCalls, maxTelegramSetupVerificationAttempts)
+	if promptCalls != orchestrator.TelegramSetupMaxVerificationAttempts {
+		t.Fatalf("promptCalls=%d, want %d", promptCalls, orchestrator.TelegramSetupMaxVerificationAttempts)
 	}
 	if !strings.Contains(mirrorBuf.String(), "Telegram setup: not verified (attempts=10 last=409 not linked yet)") {
 		t.Fatalf("expected max-attempt failure log, got %q", mirrorBuf.String())

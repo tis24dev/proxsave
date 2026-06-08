@@ -20,8 +20,6 @@ var (
 	telegramSetupPromptYesNo       = promptYesNo
 )
 
-const maxTelegramSetupVerificationAttempts = 10
-
 func sanitizeTelegramSetupStatusMessage(raw string) string {
 	msg := strings.TrimSpace(raw)
 	if msg == "" {
@@ -215,7 +213,7 @@ func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, con
 			}
 		}
 
-		if attempts >= maxTelegramSetupVerificationAttempts {
+		if attempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
 			fmt.Println("Maximum verification attempts reached. You can retry later by running proxsave.")
 			logBootstrapInfo(bootstrap, "Telegram setup: not verified (attempts=%d last=%d %s)", attempts, status.Code, msg)
 			return nil

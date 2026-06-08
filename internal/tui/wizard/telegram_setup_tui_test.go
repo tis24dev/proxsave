@@ -485,6 +485,50 @@ func TestRunTelegramSetupWizard_CentralizedFailure_CanRetryAndSkip(t *testing.T)
 	}
 }
 
+// TestRunTelegramSetupWizard_StopsOfferingCheckAtCap pins the CLI/TUI parity fix:
+// after the shared attempt cap the TUI must stop offering "Check" and require an
+// explicit Skip, mirroring the CLI which stops after the same number of attempts.
+func TestRunTelegramSetupWizard_StopsOfferingCheckAtCap(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return eligibleTelegramSetupBootstrap(), nil
+	}
+	calls := 0
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		calls++
+		return notify.TelegramRegistrationStatus{Code: 403, Error: errors.New("not registered")}
+	}
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		form := focus.(*tview.Form)
+		for i := 0; i < orchestrator.TelegramSetupMaxVerificationAttempts; i++ {
+			pressFormButton(t, form, "Check")
+		}
+		if form.GetButtonIndex("Check") != -1 {
+			t.Fatalf("expected the Check button to be removed once the attempt cap is reached")
+		}
+		pressFormButton(t, form, "Skip")
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
+	}
+	if result.Verified {
+		t.Fatalf("expected Verified=false")
+	}
+	if result.CheckAttempts != orchestrator.TelegramSetupMaxVerificationAttempts {
+		t.Fatalf("CheckAttempts=%d, want %d", result.CheckAttempts, orchestrator.TelegramSetupMaxVerificationAttempts)
+	}
+	if calls != orchestrator.TelegramSetupMaxVerificationAttempts {
+		t.Fatalf("check calls=%d, want %d", calls, orchestrator.TelegramSetupMaxVerificationAttempts)
+	}
+	if !result.SkippedVerification {
+		t.Fatalf("expected SkippedVerification=true")
+	}
+}
+
 func TestRunTelegramSetupWizard_TruncatesLongFailureMessage(t *testing.T) {
 	stubTelegramSetupDeps(t)
 

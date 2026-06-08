@@ -10,6 +10,11 @@ import (
 
 const defaultTelegramServerAPIHost = "https://bot.tis24.it:1443"
 
+// TelegramSetupMaxVerificationAttempts bounds how many registration checks the
+// install wizard runs before it stops offering another check and requires the
+// user to skip. Shared by the CLI and TUI so both enforce the same policy.
+const TelegramSetupMaxVerificationAttempts = 10
+
 // TelegramSetupStatusMessageMaxRunes caps the length of the untrusted Telegram
 // registration status message shown during verification. Shared by the CLI and
 // TUI so both apply the same bound.
