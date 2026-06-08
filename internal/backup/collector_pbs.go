@@ -272,8 +272,12 @@ func (c *Collector) collectPBSManifestPrune(ctx context.Context, root string) er
 }
 
 func (c *Collector) collectPBSCoreRuntime(ctx context.Context, commandsDir string) error {
+	// Use the canonical `versions` subcommand rather than relying on `version` resolving
+	// via proxmox-router prefix-matching: this command is on the critical path, so avoid
+	// any abbreviation ambiguity a future `version*` subcommand could introduce. Output
+	// (the running-version summary text) and the pbs_version.txt file are unchanged.
 	if err := c.collectCommandMulti(ctx,
-		commandSpec("proxmox-backup-manager", "version"),
+		commandSpec("proxmox-backup-manager", "versions"),
 		filepath.Join(commandsDir, "pbs_version.txt"),
 		"PBS version",
 		true); err != nil {
