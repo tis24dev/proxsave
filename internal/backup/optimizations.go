@@ -239,7 +239,7 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
-			return nil
+			return fmt.Errorf("compute path relative to %s: %w", root, relErr)
 		}
 
 		stats.scanned++
