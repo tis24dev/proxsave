@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -675,12 +676,21 @@ func (c *Collector) collectPBSS3EndpointBucketsRuntime(ctx context.Context, comm
 		return nil
 	}
 	for _, id := range uniqueSortedStrings(endpointIDs) {
+		// id is parsed from `s3 endpoint list` output and addresses the REST path below.
+		// Percent-escape the segment so separators/control chars in a malformed id cannot
+		// retarget the API path. Bare dot-segments survive url.PathEscape unchanged, so
+		// reject "." / ".." explicitly to prevent traversal (e.g. /config/s3/../list-buckets
+		// resolving to /config/list-buckets).
+		if id == "." || id == ".." {
+			c.logger.Debug("Skipping S3 bucket listing for endpoint %q: path-traversal id", id)
+			continue
+		}
 		out := filepath.Join(commandsDir, fmt.Sprintf("s3_endpoint_%s_buckets.json", sanitizeFilename(id)))
 		// `proxmox-backup-manager s3 endpoint list-buckets` has no --output-format flag
 		// (unlike `s3 endpoint list`), so query the REST endpoint via proxmox-backup-debug
 		// to obtain JSON instead. See PBS issue #225.
 		c.collectCommandOptional(ctx,
-			commandSpec("proxmox-backup-debug", "api", "get", "/config/s3/"+id+"/list-buckets", "--output-format=json"),
+			commandSpec("proxmox-backup-debug", "api", "get", "/config/s3/"+url.PathEscape(id)+"/list-buckets", "--output-format=json"),
 			out,
 			fmt.Sprintf("S3 endpoint buckets (%s)", id))
 	}
