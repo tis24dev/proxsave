@@ -51,29 +51,37 @@ func TestTruncateTelegramSetupStatusMessage(t *testing.T) {
 		}
 	})
 
-	t.Run("truncates an over-length ASCII message", func(t *testing.T) {
+	t.Run("truncates an over-length ASCII message within the cap", func(t *testing.T) {
 		in := strings.Repeat("x", limit+50)
 		got := TruncateTelegramSetupStatusMessage(in)
-		want := strings.Repeat("x", limit) + "...(truncated)"
-		if got != want {
-			t.Fatalf("got %q, want %q", got, want)
+		if !strings.HasSuffix(got, "...(truncated)") {
+			t.Fatalf("expected the truncation marker, got %q", got)
+		}
+		// The suffix is reserved: the whole result must stay within the cap.
+		if n := utf8.RuneCountInString(got); n > limit {
+			t.Fatalf("truncated result is %d runes, must be <= cap %d", n, limit)
+		}
+		if !strings.HasPrefix(in, strings.TrimSuffix(got, "...(truncated)")) {
+			t.Fatalf("kept body is not a prefix of the input: %q", got)
 		}
 	})
 
-	t.Run("truncates on rune boundaries, never emitting invalid UTF-8", func(t *testing.T) {
-		// 界 is a 3-byte rune; a naive byte slice at the limit would split one,
-		// producing invalid UTF-8 — exactly the bug this function avoids.
+	t.Run("truncates on rune boundaries within the cap, never emitting invalid UTF-8", func(t *testing.T) {
+		// 界 is a 3-byte rune; a naive byte slice would split one, producing invalid
+		// UTF-8 — exactly the bug this function avoids.
 		in := strings.Repeat("界", limit+10)
 		got := TruncateTelegramSetupStatusMessage(in)
 		if !utf8.ValidString(got) {
 			t.Fatalf("result is not valid UTF-8: %q", got)
 		}
-		want := strings.Repeat("界", limit) + "...(truncated)"
-		if got != want {
-			t.Fatalf("rune-based truncation mismatch")
+		if !strings.HasSuffix(got, "...(truncated)") {
+			t.Fatalf("expected the truncation marker, got %q", got)
 		}
-		if n := utf8.RuneCountInString(strings.TrimSuffix(got, "...(truncated)")); n != limit {
-			t.Fatalf("kept %d runes, want %d", n, limit)
+		if n := utf8.RuneCountInString(got); n > limit {
+			t.Fatalf("truncated result is %d runes, must be <= cap %d", n, limit)
+		}
+		if !strings.HasPrefix(in, strings.TrimSuffix(got, "...(truncated)")) {
+			t.Fatalf("kept body is not a rune-aligned prefix of the input")
 		}
 	})
 }
