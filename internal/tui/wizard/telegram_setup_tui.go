@@ -85,14 +85,6 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 		SetTitleColor(tui.ProxmoxOrange).
 		SetBorderColor(tui.ProxmoxOrange)
 
-	truncate := func(s string, max int) string {
-		s = strings.TrimSpace(s)
-		if max <= 0 || len(s) <= max {
-			return s
-		}
-		return s[:max] + "...(truncated)"
-	}
-
 	var b strings.Builder
 	b.WriteString("[yellow]Mode:[white] centralized\n")
 	b.WriteString("\n1) Open Telegram and start [yellow]@ProxmoxAN_bot[white]\n")
@@ -200,7 +192,7 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 				default:
 					hint = "\n\nYou can press Check again, or Skip verification and complete pairing later."
 				}
-				setStatus(fmt.Sprintf("[yellow]%s[white]%s", tview.Escape(truncate(msg, 300)), hint))
+				setStatus(fmt.Sprintf("[yellow]%s[white]%s", tview.Escape(orchestrator.TruncateTelegramSetupStatusMessage(msg)), hint))
 			})
 		})
 	}

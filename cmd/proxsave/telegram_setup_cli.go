@@ -21,7 +21,6 @@ var (
 )
 
 const maxTelegramSetupVerificationAttempts = 10
-const maxTelegramSetupStatusMessageLen = 200
 
 func sanitizeTelegramSetupStatusMessage(raw string) string {
 	msg := strings.TrimSpace(raw)
@@ -30,7 +29,7 @@ func sanitizeTelegramSetupStatusMessage(raw string) string {
 	}
 
 	sanitized := stripTelegramTerminalSequences(msg)
-	sanitized = truncateTelegramSetupStatusMessage(sanitized, maxTelegramSetupStatusMessageLen)
+	sanitized = orchestrator.TruncateTelegramSetupStatusMessage(sanitized)
 	if sanitized != "" {
 		return sanitized
 	}
@@ -38,19 +37,7 @@ func sanitizeTelegramSetupStatusMessage(raw string) string {
 	quoted := strconv.QuoteToASCII(msg)
 	quoted = strings.TrimPrefix(quoted, `"`)
 	quoted = strings.TrimSuffix(quoted, `"`)
-	return truncateTelegramSetupStatusMessage(quoted, maxTelegramSetupStatusMessageLen)
-}
-
-func truncateTelegramSetupStatusMessage(msg string, max int) string {
-	msg = strings.TrimSpace(msg)
-	if msg == "" || max <= 0 {
-		return ""
-	}
-	runes := []rune(msg)
-	if len(runes) <= max {
-		return msg
-	}
-	return string(runes[:max]) + "...(truncated)"
+	return orchestrator.TruncateTelegramSetupStatusMessage(quoted)
 }
 
 func stripTelegramTerminalSequences(msg string) string {

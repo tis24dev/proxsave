@@ -10,6 +10,27 @@ import (
 
 const defaultTelegramServerAPIHost = "https://bot.tis24.it:1443"
 
+// TelegramSetupStatusMessageMaxRunes caps the length of the untrusted Telegram
+// registration status message shown during verification. Shared by the CLI and
+// TUI so both apply the same bound.
+const TelegramSetupStatusMessageMaxRunes = 200
+
+// TruncateTelegramSetupStatusMessage trims and rune-safely truncates an untrusted
+// Telegram registration status message for display. Shared by the CLI and TUI so
+// both truncate identically and neither slices a multi-byte rune mid-sequence
+// (the previous TUI byte-based truncation could emit invalid UTF-8).
+func TruncateTelegramSetupStatusMessage(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return ""
+	}
+	runes := []rune(msg)
+	if len(runes) <= TelegramSetupStatusMessageMaxRunes {
+		return msg
+	}
+	return string(runes[:TelegramSetupStatusMessageMaxRunes]) + "...(truncated)"
+}
+
 type TelegramSetupEligibility int
 
 const (

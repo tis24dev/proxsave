@@ -286,7 +286,7 @@ func TestSanitizeTelegramSetupStatusMessage_StripsTerminalEscapes(t *testing.T) 
 }
 
 func TestSanitizeTelegramSetupStatusMessage_FallsBackToQuotedSafeText(t *testing.T) {
-	raw := strings.Repeat("\x1b", maxTelegramSetupStatusMessageLen+5)
+	raw := strings.Repeat("\x1b", orchestrator.TelegramSetupStatusMessageMaxRunes+5)
 
 	got := sanitizeTelegramSetupStatusMessage(raw)
 
