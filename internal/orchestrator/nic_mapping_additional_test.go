@@ -728,7 +728,8 @@ func TestMappingHelpersAndEdgeCases(t *testing.T) {
 		'0': true,
 		'_': true,
 		'-': true,
-		'.': false,
+		'.': true,  // VLAN subinterfaces (e.g. eno1.100) are valid name tokens
+		':': false, // excluded on purpose: appears in IPv6 addresses
 		' ': false,
 	}
 	for ch, want := range cases {
@@ -1339,5 +1340,56 @@ func TestApplyInterfaceRenameMapChain(t *testing.T) {
 	}
 	if out != "iface b\niface c\n" {
 		t.Fatalf("unexpected chain result: %q", out)
+	}
+}
+
+// TestApplyInterfaceRenameMapDottedVLAN pins that VLAN subinterface names, which
+// contain a dot, are matched as a single whole token and renamed (previously the
+// dot split the name so dotted interfaces were never renamed).
+func TestApplyInterfaceRenameMapDottedVLAN(t *testing.T) {
+	const in = "auto vmbr0.100\niface vmbr0.100 inet manual\n    vlan-raw-device vmbr0\n"
+	out, changed := applyInterfaceRenameMap(in, map[string]string{"vmbr0.100": "vmbr1.100"})
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if strings.Count(out, "vmbr1.100") != 2 {
+		t.Fatalf("expected both vmbr0.100 references renamed, got:\n%s", out)
+	}
+	if strings.Contains(out, "vmbr0.100") {
+		t.Fatalf("expected no vmbr0.100 left, got:\n%s", out)
+	}
+	// The raw-device parent "vmbr0" is a different whole token and must be left alone.
+	if !strings.Contains(out, "vlan-raw-device vmbr0\n") {
+		t.Fatalf("expected unrelated parent vmbr0 preserved, got:\n%s", out)
+	}
+}
+
+// TestApplyInterfaceRenameMapParentRenamePropagatesToVLAN pins that renaming a
+// parent NIC propagates to its VLAN children even when only the parent is mapped:
+// vmbr0 -> vmbr1 must also rewrite vmbr0.100 -> vmbr1.100 (per-component fallback),
+// otherwise the VLAN would reference a parent that no longer exists.
+func TestApplyInterfaceRenameMapParentRenamePropagatesToVLAN(t *testing.T) {
+	const in = "iface vmbr0\niface vmbr0.100\n"
+	out, changed := applyInterfaceRenameMap(in, map[string]string{"vmbr0": "vmbr1"})
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if out != "iface vmbr1\niface vmbr1.100\n" {
+		t.Fatalf("expected parent rename to propagate to the VLAN child, got:\n%s", out)
+	}
+}
+
+// TestApplyInterfaceRenameMapDottedKeyNoPartialMatch pins the boundary: a dotted
+// key must not partially match a longer dotted token. Key "vmbr0.100" renames the
+// exact token "vmbr0.100" but must leave "vmbr0.1000" alone (its components vmbr0
+// and 1000 are not keys either).
+func TestApplyInterfaceRenameMapDottedKeyNoPartialMatch(t *testing.T) {
+	const in = "iface vmbr0.100\niface vmbr0.1000\n"
+	out, changed := applyInterfaceRenameMap(in, map[string]string{"vmbr0.100": "vmbr1.100"})
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if out != "iface vmbr1.100\niface vmbr0.1000\n" {
+		t.Fatalf("expected only the exact dotted token renamed, got:\n%s", out)
 	}
 }
