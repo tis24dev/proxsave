@@ -116,6 +116,22 @@ func TestFilterCronLines(t *testing.T) {
 			wantHasEntry: true,
 			wantSchedule: "0 4 * * *",
 		},
+		{
+			// Regression: a different binary whose name merely shares the
+			// "/usr/local/bin/proxsave" prefix must not be matched (was a false
+			// positive when matching by substring instead of the command token).
+			name: "Ignore a prefix-sharing binary (not the proxsave entry)",
+			inputLines: []string{
+				"0 2 * * * /usr/local/bin/proxsavex",
+				userLine1,
+			},
+			correctPaths: []string{"/usr/local/bin/proxsave"},
+			wantLines: []string{
+				"0 2 * * * /usr/local/bin/proxsavex",
+				userLine1,
+			},
+			wantHasEntry: false,
+		},
 	}
 
 	for _, tt := range tests {

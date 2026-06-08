@@ -782,8 +782,16 @@ func filterCronLines(lines []string, correctPaths []string) ([]string, bool, str
 	replacedSchedule := ""
 
 	containsCorrectPath := func(line string) bool {
+		// Match the cron command token exactly, not as a substring: otherwise a
+		// line like "... /bin/echo /usr/local/bin/proxsave" (proxsave as an
+		// argument) or "/usr/local/bin/proxsavex" (prefix-sharing) would be mistaken
+		// for the current proxsave entry.
+		cmd := strings.Trim(cronCommandToken(line), "\"'")
+		if cmd == "" {
+			return false
+		}
 		for _, p := range correctPaths {
-			if p != "" && strings.Contains(line, p) {
+			if p != "" && cmd == p {
 				return true
 			}
 		}
