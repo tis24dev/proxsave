@@ -87,7 +87,7 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read pbs_version.txt: %v", err)
 	}
-	if !strings.Contains(string(version), "proxmox-backup-manager version") {
+	if !strings.Contains(string(version), "proxmox-backup-manager versions") {
 		t.Fatalf("unexpected version content: %s", string(version))
 	}
 }
