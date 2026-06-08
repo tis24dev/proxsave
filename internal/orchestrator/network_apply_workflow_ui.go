@@ -32,7 +32,7 @@ func (c *cliWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLa
 }
 
 func (c *cliWorkflowUI) RepairNICNames(ctx context.Context, archivePath string) (*nicRepairResult, error) {
-	return maybeRepairNICNamesCLI(ctx, c.reader, c.logger, archivePath), nil
+	return repairNICNamesWithUI(ctx, c, c.logger, archivePath), nil
 }
 
 func (c *cliWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir string) (bool, error) {
@@ -62,7 +62,7 @@ func (u *tuiWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLa
 }
 
 func (u *tuiWorkflowUI) RepairNICNames(ctx context.Context, archivePath string) (*nicRepairResult, error) {
-	return maybeRepairNICNamesTUI(ctx, u.logger, archivePath, u.configPath, u.buildSig), nil
+	return repairNICNamesWithUI(ctx, u, u.logger, archivePath), nil
 }
 
 func (u *tuiWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir string) (bool, error) {
