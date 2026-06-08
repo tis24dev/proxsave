@@ -89,7 +89,7 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
-			return nil
+			return fmt.Errorf("compute path relative to %s: %w", root, relErr)
 		}
 		if shouldSkipDedupPath(rel) {
 			return nil
