@@ -629,6 +629,21 @@ func TestPromptEmailDeliveryMethodAcceptsProxmoxAlias(t *testing.T) {
 	}
 }
 
+func TestRunPostInstallAuditCLIAbortIsNonBlocking(t *testing.T) {
+	// EOF on the first audit prompt (Ctrl-D) must NOT abort the install: the
+	// optional audit is skipped and runInstall continues to the entrypoint/cron
+	// finalization, matching the TUI's non-blocking audit contract.
+	ctx := context.Background()
+	reader := bufio.NewReader(strings.NewReader(""))
+	var err error
+	captureStdout(t, func() {
+		err = runPostInstallAuditCLI(ctx, reader, "/nonexistent/proxsave", "/nonexistent/backup.env", nil)
+	})
+	if err != nil {
+		t.Fatalf("post-install audit abort must be non-blocking, got: %v", err)
+	}
+}
+
 func TestConfigureEncryption(t *testing.T) {
 	var enabled bool
 	var err error

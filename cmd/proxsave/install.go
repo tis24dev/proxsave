@@ -144,11 +144,26 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	return nil
 }
 
+// skipAuditOnAbort turns a post-install-audit prompt error (Ctrl-D/EOF or a
+// cancelled context) into a non-blocking outcome: the optional audit is
+// abandoned with a warning and the caller continues the install so the
+// entrypoint/cron finalization still runs. This matches the TUI, which logs the
+// audit error as a non-blocking warning and never aborts the install, and the
+// rest of this function, which already treats collection and config read/write
+// failures as non-blocking.
+func skipAuditOnAbort(bootstrap *logging.BootstrapLogger, err error) error {
+	fmt.Printf("Post-install audit skipped (input aborted, non-blocking): %v\n", err)
+	if bootstrap != nil {
+		bootstrap.Warning("Post-install audit skipped (input aborted, non-blocking): %v", err)
+	}
+	return nil
+}
+
 func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath, configPath string, bootstrap *logging.BootstrapLogger) error {
 	fmt.Println("\n--- Post-install check (optional) ---")
 	run, err := promptYesNo(ctx, reader, "Run a dry-run to detect unused components and reduce warnings? [Y/n]: ", true)
 	if err != nil {
-		return wrapInstallError(err)
+		return skipAuditOnAbort(bootstrap, err)
 	}
 	if !run {
 		if bootstrap != nil {
@@ -200,7 +215,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 
 	disableAny, err := promptYesNo(ctx, reader, "Disable any of the suggested components now (set KEY=false)? [y/N]: ", false)
 	if err != nil {
-		return wrapInstallError(err)
+		return skipAuditOnAbort(bootstrap, err)
 	}
 	if !disableAny {
 		fmt.Println("No changes applied. You can disable unused components later by editing backup.env.")
@@ -214,7 +229,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	for _, s := range suggestions {
 		disable, err := promptYesNo(ctx, reader, fmt.Sprintf("Disable %s? [y/N]: ", s.Key), false)
 		if err != nil {
-			return wrapInstallError(err)
+			return skipAuditOnAbort(bootstrap, err)
 		}
 		if disable {
 			keys = append(keys, s.Key)
