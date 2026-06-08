@@ -67,6 +67,39 @@ jobs:
           syft-version: v1.19.0
 
       ########################################
+      # VALIDATE THE SIGNING KEY *BEFORE* PUBLISHING
+      # GoReleaser publishes the release (incl. SHA256SUMS) before the signing step
+      # below; if signing then failed, the tag would go live without SHA256SUMS.sig
+      # and both install.sh and the in-app upgrade hard-fail on the missing file,
+      # blocking every install/upgrade. Fail here, before anything is published, if
+      # the signing secret is missing or does not match the pinned public key.
+      ########################################
+      - name: Validate release signing key before publishing
+        env:
+          PROXSAVE_KEY_SIGNATURE: ${{ secrets.PROXSAVE_KEY_SIGNATURE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PROXSAVE_KEY_SIGNATURE:-}" ]; then
+            echo "::error::PROXSAVE_KEY_SIGNATURE is empty; refusing to publish a release that cannot be signed." >&2
+            exit 1
+          fi
+          KEY_FILE="$(mktemp)"
+          trap 'rm -f "$KEY_FILE" probe.txt probe.sig pinned_pub.pem' EXIT
+          printf '%s\n' "$PROXSAVE_KEY_SIGNATURE" > "$KEY_FILE"
+          echo "proxsave release signing probe" > probe.txt
+          # Sign a probe and verify it against the SAME pinned public key install.sh
+          # ships (extracted at runtime, so there is no second hard-coded copy to drift
+          # — install.sh's copy is already guarded by TestReleaseSigningKeyNoDrift). A
+          # wrong/corrupt/expired secret fails here, before GoReleaser publishes.
+          openssl dgst -sha256 -sign "$KEY_FILE" -out probe.sig probe.txt
+          # Patterns omit the dashes so this line is not mistaken for a PEM block by
+          # TestReleaseSigningKeyNoDrift (which scans release.yml for the first key).
+          awk '/BEGIN PUBLIC KEY/{f=1} f{print} /END PUBLIC KEY/{exit}' install.sh > pinned_pub.pem
+          test -s pinned_pub.pem
+          openssl dgst -sha256 -verify pinned_pub.pem -signature probe.sig probe.txt
+          echo "Release signing key validated against the pinned public key."
+
+      ########################################
       # GORELEASER
       ########################################
       - name: Run GoReleaser
