@@ -480,6 +480,13 @@ func (c *Collector) captureInventoryFileMetadataOnly(sourcePath, logicalPath str
 		return snap
 	}
 
+	if !info.Mode().IsRegular() {
+		// Mirror the content path (os.ReadFile), which would fail on a
+		// directory/device/socket: a non-regular target is not a healthy file.
+		snap.Error = fmt.Sprintf("not a regular file (mode %s)", info.Mode())
+		return snap
+	}
+
 	snap.Exists = true
 	snap.SizeBytes = info.Size()
 	return snap
