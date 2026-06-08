@@ -617,9 +617,13 @@ func (c *Collector) collectPBSDisksRuntime(ctx context.Context, commandsDir stri
 }
 
 func (c *Collector) collectPBSCertInfoRuntime(ctx context.Context, commandsDir string) error {
+	// `proxmox-backup-manager cert info` has no --output-format flag and renders the
+	// certificate SANs as raw byte arrays; query the REST endpoint via proxmox-backup-debug
+	// for clean JSON instead (superset of the text fields). The node segment is ignored for
+	// local debug calls, so "localhost" is always valid regardless of the actual node name.
 	return c.collectCommandMulti(ctx,
-		commandSpec("proxmox-backup-manager", "cert", "info"),
-		filepath.Join(commandsDir, "cert_info.txt"),
+		commandSpec("proxmox-backup-debug", "api", "get", "/nodes/localhost/certificates/info", "--output-format=json"),
+		filepath.Join(commandsDir, "cert_info.json"),
 		"Certificate information",
 		false)
 }

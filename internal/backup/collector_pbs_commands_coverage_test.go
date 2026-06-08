@@ -73,7 +73,7 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 		"tape_pools.json",
 		"network_list.json",
 		"disk_list.json",
-		"cert_info.txt",
+		"cert_info.json",
 		"traffic_control.json",
 		"recent_tasks.json",
 		"s3_endpoints.json",
