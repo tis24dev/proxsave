@@ -55,10 +55,10 @@ func TestCleanupGlobalEntrypointsKeepsCurrentRemovesLegacy(t *testing.T) {
 	if err := os.Symlink(execPath, keep); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
-	// Stale entrypoint not pointing to the current binary => must be removed.
+	// Stale SYMLINK not pointing to the current binary => must be removed.
 	legacy := filepath.Join(dir, "proxmox-backup")
-	if err := os.WriteFile(legacy, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("write legacy: %v", err)
+	if err := os.Symlink(execPath+"-old", legacy); err != nil {
+		t.Fatalf("symlink legacy: %v", err)
 	}
 	withTempEntrypointDirs(t, dir)
 
@@ -68,7 +68,36 @@ func TestCleanupGlobalEntrypointsKeepsCurrentRemovesLegacy(t *testing.T) {
 		t.Fatalf("symlink to current binary must be kept, got: %v", err)
 	}
 	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
-		t.Fatalf("stale entrypoint must be removed, stat err=%v", err)
+		t.Fatalf("stale symlink must be removed, stat err=%v", err)
+	}
+}
+
+// TestCleanupGlobalEntrypointsKeepsRealNonSymlinkFile pins the safety fix: a real
+// (non-symlink) entrypoint that does not resolve to the current binary — e.g. a
+// distro/package-managed /usr/bin/proxsave — must be left in place, because the
+// recreation step only writes /usr/local/bin/proxsave and could never restore it.
+func TestCleanupGlobalEntrypointsKeepsRealNonSymlinkFile(t *testing.T) {
+	binDir := t.TempDir()
+	execPath := filepath.Join(binDir, "proxsave-bin")
+	if err := os.WriteFile(execPath, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("write bin: %v", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+
+	dir := t.TempDir()
+	// A real, package-managed-looking binary that does not resolve to execPath.
+	packaged := filepath.Join(dir, "proxsave")
+	if err := os.WriteFile(packaged, []byte("#!/bin/sh\n# distro package\n"), 0o755); err != nil {
+		t.Fatalf("write packaged: %v", err)
+	}
+	withTempEntrypointDirs(t, dir)
+
+	cleanupGlobalProxmoxBackupEntrypoints(execPath, logging.NewBootstrapLogger())
+
+	if _, err := os.Stat(packaged); err != nil {
+		t.Fatalf("a real (non-symlink) entrypoint must be left untouched, got: %v", err)
 	}
 }
 

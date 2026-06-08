@@ -493,11 +493,12 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
 	defer func() { done(nil) }()
 
-	// Remove any stale proxsave/proxmox-backup entrypoints (PATH, /usr/local/bin,
-	// /usr/bin) that do not point to this Go binary, then recreate clean symlinks.
-	// This runs here — immediately before recreation and only on the success path —
-	// so an aborted or non-interactive install can never leave the host without a
-	// working entrypoint.
+	// Remove stale proxsave/proxmox-backup *symlinks* (PATH, /usr/local/bin,
+	// /usr/bin) that do not point to this Go binary, then recreate clean ones. Real
+	// (non-symlink) files are left in place so a package-managed /usr/bin binary is
+	// never deleted. This runs here — immediately before recreation and only on the
+	// success path — so an aborted or non-interactive install can never leave the
+	// host without a working entrypoint.
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "cleaning legacy entrypoints")
 	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
 
