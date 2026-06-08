@@ -137,7 +137,7 @@ func TestCollectPBSCommandsReturnsErrorWhenCriticalVersionFails(t *testing.T) {
 			return "/bin/" + name, nil
 		},
 		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			if name == "proxmox-backup-manager" && len(args) > 0 && args[0] == "version" {
+			if name == "proxmox-backup-manager" && len(args) > 0 && args[0] == "versions" {
 				return []byte("nope"), errors.New("boom")
 			}
 			return []byte("ok"), nil
