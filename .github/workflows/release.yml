@@ -84,19 +84,30 @@ jobs:
             exit 1
           fi
           KEY_FILE="$(mktemp)"
-          trap 'rm -f "$KEY_FILE" probe.txt probe.sig pinned_pub.pem' EXIT
+          trap 'rm -f "$KEY_FILE"' EXIT
           printf '%s\n' "$PROXSAVE_KEY_SIGNATURE" > "$KEY_FILE"
-          echo "proxsave release signing probe" > probe.txt
-          # Sign a probe and verify it against the SAME pinned public key install.sh
-          # ships (extracted at runtime, so there is no second hard-coded copy to drift
-          # — install.sh's copy is already guarded by TestReleaseSigningKeyNoDrift). A
-          # wrong/corrupt/expired secret fails here, before GoReleaser publishes.
-          openssl dgst -sha256 -sign "$KEY_FILE" -out probe.sig probe.txt
-          # Patterns omit the dashes so this line is not mistaken for a PEM block by
-          # TestReleaseSigningKeyNoDrift (which scans release.yml for the first key).
-          awk '/BEGIN PUBLIC KEY/{f=1} f{print} /END PUBLIC KEY/{exit}' install.sh > pinned_pub.pem
-          test -s pinned_pub.pem
-          openssl dgst -sha256 -verify pinned_pub.pem -signature probe.sig probe.txt
+          # Derive the public key from the signing secret and compare its base64 body
+          # to the pinned key install.sh ships, so a missing/wrong/corrupt secret fails
+          # HERE, before GoReleaser publishes — otherwise the tag would go live without a
+          # usable SHA256SUMS.sig and block every install/upgrade. We compare base64
+          # bodies (not whole PEM files): install.sh stores the key as a shell-quoted
+          # value (PUBKEY_PEM='-----BEGIN...'), so a naive PEM extraction is not openssl-
+          # readable; and the dash-less awk patterns never look like a PEM block to
+          # TestReleaseSigningKeyNoDrift, so no second hard-coded copy is introduced.
+          derived="$(openssl pkey -in "$KEY_FILE" -pubout 2>/dev/null | awk '/BEGIN PUBLIC KEY/{f=1;next} /END PUBLIC KEY/{f=0} f{print}' | tr -d '\r\n ')" || true
+          pinned="$(awk '/BEGIN PUBLIC KEY/{f=1;next} /END PUBLIC KEY/{f=0} f{print}' install.sh | tr -d '\r\n ')"
+          if [ -z "$derived" ]; then
+            echo "::error::could not derive a public key from PROXSAVE_KEY_SIGNATURE (corrupt or wrong-format signing secret)." >&2
+            exit 1
+          fi
+          if [ -z "$pinned" ]; then
+            echo "::error::could not read the pinned public key from install.sh." >&2
+            exit 1
+          fi
+          if [ "$derived" != "$pinned" ]; then
+            echo "::error::PROXSAVE_KEY_SIGNATURE does not match the pinned public key; refusing to publish." >&2
+            exit 1
+          fi
           echo "Release signing key validated against the pinned public key."
 
       ########################################
