@@ -184,7 +184,10 @@ echo "✔ Signature OK (release authenticity verified)"
 # 10) Verify checksum (integrity)
 ###############################################
 echo "[+] Verifying checksum..."
-awk -v f="${FILENAME}" '$2 == f' SHA256SUMS > CHECK
+# Match the filename exactly, normalizing sha256sum's optional binary-mode '*'
+# marker on the name (mirrors the Go verifyChecksum). The original line is printed
+# unchanged so "sha256sum -c" still understands the marker.
+awk -v f="${FILENAME}" '{n=$2; sub(/^\*/,"",n)} n==f' SHA256SUMS > CHECK
 if [ ! -s CHECK ]; then
   echo "❌ Checksum entry not found for ${FILENAME}"
   exit 1
