@@ -26,6 +26,10 @@ func createPVEStorageStructure(basePath, storageType string, logger *logging.Log
 		return false, nil
 	}
 
+	changed := false
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		changed = true
+	}
 	if err := os.MkdirAll(basePath, 0750); err != nil {
 		return false, fmt.Errorf("create base directory: %w", err)
 	}
@@ -33,13 +37,14 @@ func createPVEStorageStructure(basePath, storageType string, logger *logging.Log
 	subdirs, ok := pveStorageSubdirs[storageType]
 	if !ok {
 		logger.Debug("Storage type %s does not require subdirectories", storageType)
-		return true, nil
+		return changed, nil
 	}
 
-	if err := createStorageSubdirs(basePath, subdirs); err != nil {
+	subdirsCreated, err := createStorageSubdirs(basePath, subdirs)
+	if err != nil {
 		return false, fmt.Errorf("create storage subdirectories: %w", err)
 	}
-	return true, nil
+	return changed || subdirsCreated, nil
 }
 
 // pveStoragePathHasData reports whether basePath already contains entries, i.e.
@@ -49,13 +54,17 @@ func pveStoragePathHasData(basePath string) bool {
 	return err == nil && has
 }
 
-func createStorageSubdirs(basePath string, subdirs []string) error {
+func createStorageSubdirs(basePath string, subdirs []string) (bool, error) {
 	var errs []error
+	created := false
 	for _, subdir := range subdirs {
 		path := filepath.Join(basePath, subdir)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			created = true
+		}
 		if err := os.MkdirAll(path, 0750); err != nil {
 			errs = append(errs, fmt.Errorf("create %s: %w", path, err))
 		}
 	}
-	return errors.Join(errs...)
+	return created, errors.Join(errs...)
 }
