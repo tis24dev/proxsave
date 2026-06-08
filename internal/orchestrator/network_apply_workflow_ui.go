@@ -50,17 +50,15 @@ func (c *cliWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.
 }
 
 func (u *tuiWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
-	_ = defaultYes
-
 	title = strings.TrimSpace(title)
 	if title == "" {
 		title = "Confirm"
 	}
 	message = strings.TrimSpace(message)
 	if timeout > 0 {
-		return promptYesNoTUIWithCountdown(ctx, u.logger, title, u.configPath, u.buildSig, message, yesLabel, noLabel, timeout)
+		return promptYesNoTUIWithCountdown(ctx, u.logger, title, u.configPath, u.buildSig, message, yesLabel, noLabel, timeout, defaultYes)
 	}
-	return promptYesNoTUIFunc(ctx, title, u.configPath, u.buildSig, message, yesLabel, noLabel)
+	return promptYesNoTUIFunc(ctx, title, u.configPath, u.buildSig, message, yesLabel, noLabel, defaultYes)
 }
 
 func (u *tuiWorkflowUI) RepairNICNames(ctx context.Context, archivePath string) (*nicRepairResult, error) {

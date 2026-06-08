@@ -73,7 +73,7 @@ func (u *tuiWorkflowUI) ConfirmFstabMerge(ctx context.Context, title, message st
 		msg = recommended
 	}
 
-	return promptYesNoTUIWithCountdown(ctx, u.logger, title, u.configPath, u.buildSig, msg, "Apply", "Skip", timeout)
+	return promptYesNoTUIWithCountdown(ctx, u.logger, title, u.configPath, u.buildSig, msg, "Apply", "Skip", timeout, defaultYes)
 }
 
 func (u *tuiWorkflowUI) SelectExportNode(ctx context.Context, exportRoot, currentNode string, exportNodes []string) (string, error) {
@@ -140,15 +140,15 @@ func (u *tuiWorkflowUI) ConfirmApplyVMConfigs(ctx context.Context, sourceNode, c
 	} else {
 		message = fmt.Sprintf("Found %d VM/CT configs for exported node %s.\nThey will be applied to current node %s.\n\nApply them via pvesh now?", count, sourceNode, currentNode)
 	}
-	return promptYesNoTUIFunc(ctx, "Apply VM/CT configs", u.configPath, u.buildSig, message, "Apply via API", "Skip")
+	return promptYesNoTUIFunc(ctx, "Apply VM/CT configs", u.configPath, u.buildSig, message, "Apply via API", "Skip", false)
 }
 
 func (u *tuiWorkflowUI) ConfirmApplyStorageCfg(ctx context.Context, storageCfgPath string) (bool, error) {
 	message := fmt.Sprintf("Storage configuration found:\n\n%s\n\nApply storage.cfg via pvesh now?", strings.TrimSpace(storageCfgPath))
-	return promptYesNoTUIFunc(ctx, "Apply storage.cfg", u.configPath, u.buildSig, message, "Apply via API", "Skip")
+	return promptYesNoTUIFunc(ctx, "Apply storage.cfg", u.configPath, u.buildSig, message, "Apply via API", "Skip", false)
 }
 
 func (u *tuiWorkflowUI) ConfirmApplyDatacenterCfg(ctx context.Context, datacenterCfgPath string) (bool, error) {
 	message := fmt.Sprintf("Datacenter configuration found:\n\n%s\n\nApply datacenter.cfg via pvesh now?", strings.TrimSpace(datacenterCfgPath))
-	return promptYesNoTUIFunc(ctx, "Apply datacenter.cfg", u.configPath, u.buildSig, message, "Apply via API", "Skip")
+	return promptYesNoTUIFunc(ctx, "Apply datacenter.cfg", u.configPath, u.buildSig, message, "Apply via API", "Skip", false)
 }

@@ -115,6 +115,19 @@ func (f *Form) AddCancelButton(label string) *Form {
 	return f
 }
 
+// SetDefaultButton focuses the button at position buttonIndex (0 = first button
+// added) when the form receives focus, so that pressing Enter without navigating
+// activates the intended default action instead of always selecting the first
+// button. Any form items precede the buttons in the focus order, which this
+// accounts for. An out-of-range index is ignored, leaving tview's default focus.
+func (f *Form) SetDefaultButton(buttonIndex int) *Form {
+	if buttonIndex < 0 || buttonIndex >= f.GetButtonCount() {
+		return f
+	}
+	f.Form.SetFocus(f.GetFormItemCount() + buttonIndex)
+	return f
+}
+
 // GetFormValues extracts all form values
 func (f *Form) GetFormValues() map[string]string {
 	values := make(map[string]string)

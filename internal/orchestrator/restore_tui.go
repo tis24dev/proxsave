@@ -378,6 +378,7 @@ func promptCompatibilityTUI(ctx context.Context, configPath, buildSig string, co
 		message,
 		"Continue anyway",
 		"Abort restore",
+		false, // CLI ConfirmCompatibility defaults to abort on a blank line
 	)
 }
 
@@ -394,6 +395,7 @@ func promptContinueWithoutSafetyBackupTUI(ctx context.Context, configPath, build
 		message,
 		"Continue without safety backup",
 		"Abort restore",
+		false, // CLI ConfirmContinueWithoutSafetyBackup defaults to abort
 	)
 }
 
@@ -407,6 +409,7 @@ func promptContinueWithPBSServicesTUI(ctx context.Context, configPath, buildSig 
 		message,
 		"Continue restore",
 		"Abort restore",
+		false, // CLI ConfirmContinueWithPBSServicesRunning defaults to abort
 	)
 }
 
@@ -453,6 +456,7 @@ func maybeRepairNICNamesTUI(ctx context.Context, logger *logging.Logger, archive
 				b.String(),
 				"Skip NIC repair",
 				"Proceed",
+				false, // match CLI: a blank line does NOT skip the repair (Proceed)
 			)
 			if err != nil {
 				logger.Warning("NIC naming override prompt failed: %v", err)
@@ -493,6 +497,7 @@ func maybeRepairNICNamesTUI(ctx context.Context, logger *logging.Logger, archive
 			b.String(),
 			"Apply conflicts",
 			"Skip conflicts",
+			false, // match CLI: a blank line skips conflicting NIC mappings
 		)
 		if err != nil {
 			logger.Warning("NIC conflict prompt failed: %v", err)
@@ -729,7 +734,17 @@ func confirmRestoreTUI(ctx context.Context, configPath, buildSig string) (bool, 
 	return true, nil
 }
 
-func promptYesNoTUI(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+// defaultButtonIndex maps the engine's defaultYes intent to the focus index of
+// the yes/no button forms built below, which always add the affirmative button
+// first (0) and the cancel/No button second (1).
+func defaultButtonIndex(defaultYes bool) int {
+	if defaultYes {
+		return 0
+	}
+	return 1
+}
+
+func promptYesNoTUI(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 	app := newTUIApp()
 	var result bool
 	var cancelled bool
@@ -751,6 +766,11 @@ func promptYesNoTUI(ctx context.Context, title, configPath, buildSig, message, y
 	form.AddSubmitButton(yesLabel)
 	form.AddCancelButton(noLabel)
 	enableFormNavigation(form, nil)
+	// Honor the engine-supplied default: focus the affirmative button only when
+	// defaultYes is set, otherwise focus the cancel/No button so that pressing
+	// Enter without navigating chooses the same answer the CLI would for a blank
+	// line. Buttons are added Yes(0)/No(1).
+	form.SetDefaultButton(defaultButtonIndex(defaultYes))
 
 	content := tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -770,7 +790,7 @@ func promptYesNoTUI(ctx context.Context, title, configPath, buildSig, message, y
 	return result, nil
 }
 
-func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, title, configPath, buildSig, message, yesLabel, noLabel string, timeout time.Duration) (bool, error) {
+func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, title, configPath, buildSig, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
 	app := newTUIApp()
 	var result bool
 	var cancelled bool
@@ -787,6 +807,14 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 		SetTextColor(tcell.ColorYellow).
 		SetDynamicColors(true)
 
+	// The Enter/default answer is yesLabel only when defaultYes is set; the
+	// countdown label advertises that choice to match the CLI prompt. Note the
+	// auto-skip on timeout still resolves to No in both modes (see below).
+	defaultLabel := noLabel
+	if defaultYes {
+		defaultLabel = yesLabel
+	}
+
 	deadline := time.Now().Add(timeout)
 	deadlineHHMMSS := deadline.Format("15:04:05")
 	updateCountdown := func() {
@@ -794,7 +822,7 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 		if left < 0 {
 			left = 0
 		}
-		countdownText.SetText(fmt.Sprintf("Auto-skip in %ds (at %s, default: %s)", int(left.Seconds()), deadlineHHMMSS, noLabel))
+		countdownText.SetText(fmt.Sprintf("Auto-skip in %ds (at %s, default: %s)", int(left.Seconds()), deadlineHHMMSS, defaultLabel))
 	}
 	updateCountdown()
 
@@ -809,6 +837,7 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 	form.AddSubmitButton(yesLabel)
 	form.AddCancelButton(noLabel)
 	enableFormNavigation(form, nil)
+	form.SetDefaultButton(defaultButtonIndex(defaultYes))
 
 	content := tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -1039,6 +1068,7 @@ func confirmOverwriteTUI(ctx context.Context, configPath, buildSig string) (bool
 		message,
 		"Overwrite and restore",
 		"Cancel",
+		false, // destructive overwrite must be an explicit choice, not the default
 	)
 }
 
