@@ -82,7 +82,7 @@ func TestRecreateStorageDirectoriesReturnsSubdirError(t *testing.T) {
 func TestCreatePVEStorageStructureHandlesVariousTypes(t *testing.T) {
 	logger := newDirTestLogger()
 	baseNFS := filepath.Join(t.TempDir(), "nfs")
-	if err := createPVEStorageStructure(baseNFS, "nfs", logger); err != nil {
+	if _, err := createPVEStorageStructure(baseNFS, "nfs", logger); err != nil {
 		t.Fatalf("createPVEStorageStructure(nfs): %v", err)
 	}
 	for _, sub := range []string{"dump", "images", "template"} {
@@ -92,7 +92,7 @@ func TestCreatePVEStorageStructureHandlesVariousTypes(t *testing.T) {
 	}
 
 	baseOther := filepath.Join(t.TempDir(), "rbd")
-	if err := createPVEStorageStructure(baseOther, "rbd", logger); err != nil {
+	if _, err := createPVEStorageStructure(baseOther, "rbd", logger); err != nil {
 		t.Fatalf("createPVEStorageStructure(rbd): %v", err)
 	}
 	if _, err := os.Stat(baseOther); err != nil {
@@ -442,7 +442,7 @@ cifs: cifs1
 func TestCreatePVEStorageStructureCIFS(t *testing.T) {
 	logger := newDirTestLogger()
 	baseCIFS := filepath.Join(t.TempDir(), "cifs")
-	if err := createPVEStorageStructure(baseCIFS, "cifs", logger); err != nil {
+	if _, err := createPVEStorageStructure(baseCIFS, "cifs", logger); err != nil {
 		t.Fatalf("createPVEStorageStructure(cifs): %v", err)
 	}
 	for _, sub := range []string{"dump", "images", "template"} {
@@ -609,9 +609,32 @@ func TestCreatePVEStorageStructureBaseError(t *testing.T) {
 	logger := newDirTestLogger()
 	// A path containing a NUL byte is invalid
 	invalidPath := "/dev/null/cannot/create/here"
-	err := createPVEStorageStructure(invalidPath, "dir", logger)
+	_, err := createPVEStorageStructure(invalidPath, "dir", logger)
 	if err == nil {
 		t.Fatalf("expected error for invalid base path")
+	}
+}
+
+// TestCreatePVEStorageStructureSkipsUnmountedZFSMount pins the new PVE guard:
+// a ZFS-like, not-yet-mounted storage path must be skipped (created=false) with
+// nothing written — mirroring the PBS datastore behavior via the shared guard.
+func TestCreatePVEStorageStructureSkipsUnmountedZFSMount(t *testing.T) {
+	logger := newDirTestLogger()
+	cachePath, restore := overridePath(t, &zpoolCachePath, "zpool.cache")
+	defer restore()
+	writeFile(t, cachePath, "cache")
+
+	// "backup" path segment + present zpool.cache => ZFS-likely; missing => unmounted.
+	baseDir := filepath.Join(t.TempDir(), "backup", "store")
+	created, err := createPVEStorageStructure(baseDir, "dir", logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if created {
+		t.Fatalf("expected created=false for an unmounted ZFS-like storage path")
+	}
+	if _, statErr := os.Stat(baseDir); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no directory to be created when skipping, stat err=%v", statErr)
 	}
 }
 
@@ -678,5 +701,114 @@ func TestRecreateDirectoriesFromConfigPBSStatError(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatalf("expected error from stat on restricted path")
+	}
+}
+
+// --- Behavior pins for the PBS storage-mount guard (locked before the shared-guard refactor) ---
+
+// TestShouldSkipRootFilesystemDatastoreTruthTable pins the exact boolean decision
+// of the root-filesystem guard. The shared guard introduced by the refactor must
+// reproduce this truth table: skip iff onRootFS && suspiciousMount && (dataUnknown || !hasData).
+func TestShouldSkipRootFilesystemDatastoreTruthTable(t *testing.T) {
+	logger := newDirTestLogger()
+	cases := []struct {
+		name string
+		pf   pbsDatastorePreflight
+		want bool
+	}{
+		{"not on root fs", pbsDatastorePreflight{onRootFS: false, suspiciousMount: true, hasData: false}, false},
+		{"not a suspicious mount location", pbsDatastorePreflight{onRootFS: true, suspiciousMount: false, hasData: false}, false},
+		{"on root + suspicious + empty -> skip", pbsDatastorePreflight{onRootFS: true, suspiciousMount: true, hasData: false}, true},
+		{"on root + suspicious + has data -> keep", pbsDatastorePreflight{onRootFS: true, suspiciousMount: true, hasData: true, dataUnknown: false}, false},
+		{"on root + suspicious + data unknown -> skip", pbsDatastorePreflight{onRootFS: true, suspiciousMount: true, hasData: true, dataUnknown: true}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldSkipRootFilesystemDatastore(tc.pf, logger); got != tc.want {
+				t.Fatalf("shouldSkipRootFilesystemDatastore(%+v) = %v, want %v", tc.pf, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestShouldSkipMissingZFSMountPointBehavior pins the missing-ZFS-mountpoint guard.
+func TestShouldSkipMissingZFSMountPointBehavior(t *testing.T) {
+	logger := newDirTestLogger()
+	existing := t.TempDir()
+	missing := filepath.Join(existing, "absent")
+
+	if shouldSkipMissingZFSMountPoint(missing, false, logger) {
+		t.Fatalf("non-ZFS path must never skip on missing-mountpoint grounds")
+	}
+	if !shouldSkipMissingZFSMountPoint(missing, true, logger) {
+		t.Fatalf("ZFS-likely missing path must skip")
+	}
+	if shouldSkipMissingZFSMountPoint(existing, true, logger) {
+		t.Fatalf("ZFS-likely existing path must not skip on missing-mountpoint grounds")
+	}
+}
+
+// TestIsSuspiciousDatastoreMountLocationBehavior pins which paths are treated as
+// likely-dedicated mount roots.
+func TestIsSuspiciousDatastoreMountLocationBehavior(t *testing.T) {
+	suspicious := []string{"/mnt/data", "/mnt/pve/store", "/media/usb", "/run/media/user/disk"}
+	for _, p := range suspicious {
+		if !isSuspiciousDatastoreMountLocation(p) {
+			t.Errorf("expected %q to be a suspicious mount location", p)
+		}
+	}
+	normal := []string{"/var/lib/vz", "/var/lib/proxmox-backup", "/srv/data", "/tmp/x", "/"}
+	for _, p := range normal {
+		if isSuspiciousDatastoreMountLocation(p) {
+			t.Errorf("expected %q NOT to be a suspicious mount location", p)
+		}
+	}
+}
+
+// TestCreatePBSDatastoreStructureSkipsExistingData pins that a datastore path that
+// already contains data is left untouched (created=false). Uses a non-suspicious,
+// non-ZFS path so the decision is independent of the test host's filesystem layout.
+func TestCreatePBSDatastoreStructureSkipsExistingData(t *testing.T) {
+	logger := newDirTestLogger()
+	_, restore := overridePath(t, &zpoolCachePath, "zpool.cache") // cache absent => not ZFS
+	defer restore()
+
+	baseDir := filepath.Join(t.TempDir(), "ds")
+	if err := os.MkdirAll(filepath.Join(baseDir, ".chunks"), 0o750); err != nil {
+		t.Fatalf("mkdir .chunks: %v", err)
+	}
+	writeFile(t, filepath.Join(baseDir, ".chunks", "0000"), "data")
+
+	created, err := createPBSDatastoreStructure(baseDir, "ds", logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if created {
+		t.Fatalf("expected created=false when the datastore already contains data")
+	}
+}
+
+// TestCreatePBSDatastoreStructureSkipsUnexpectedEntries pins that a datastore path
+// containing unexpected (non-scaffold) entries is left untouched (created=false).
+func TestCreatePBSDatastoreStructureSkipsUnexpectedEntries(t *testing.T) {
+	logger := newDirTestLogger()
+	_, restore := overridePath(t, &zpoolCachePath, "zpool.cache") // cache absent => not ZFS
+	defer restore()
+
+	baseDir := filepath.Join(t.TempDir(), "ds")
+	if err := os.MkdirAll(baseDir, 0o750); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
+	writeFile(t, filepath.Join(baseDir, "unexpected.txt"), "x")
+
+	created, err := createPBSDatastoreStructure(baseDir, "ds", logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if created {
+		t.Fatalf("expected created=false when the datastore dir has unexpected entries")
+	}
+	if _, statErr := os.Stat(filepath.Join(baseDir, ".chunks")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no .chunks created when skipping, stat err=%v", statErr)
 	}
 }

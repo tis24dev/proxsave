@@ -594,7 +594,10 @@ flowchart TD
     CheckPBSCat -->|Yes| ParsePBS[Parse /etc/proxmox-backup/datastore.cfg]
 
     ParsePVE --> LoopPVE[For Each Storage]
-    LoopPVE --> CheckPVEType{Storage Type?}
+    LoopPVE --> CheckPVEMount{"Unmounted ZFS/<br/>dedicated mount?<br/>(resolves to rootfs)"}
+
+    CheckPVEMount -->|Yes| WarnPVEMount["Warn: Don't create<br/>(mount disk / import pool first)"]
+    CheckPVEMount -->|No| CheckPVEType{Storage Type?}
 
     CheckPVEType -->|dir| CreateDirStruct["Create:<br/>- dump/<br/>- images/<br/>- template/<br/>- snippets/<br/>- private/"]
     CheckPVEType -->|nfs/cifs| CreateNFSStruct["Create:<br/>- dump/<br/>- images/<br/>- template/"]
@@ -602,6 +605,7 @@ flowchart TD
 
     CreateDirStruct --> NextPVE
     CreateNFSStruct --> NextPVE
+    WarnPVEMount --> NextPVE
     NextPVE --> MorePVE{More Storage?}
     MorePVE -->|Yes| LoopPVE
     MorePVE -->|No| Done([Done])

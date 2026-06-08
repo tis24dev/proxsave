@@ -16,7 +16,7 @@ func TestOptimizationConfigEnabled(t *testing.T) {
 	if cfg.Enabled() {
 		t.Fatal("expected disabled config when all stages are false")
 	}
-	cfg.EnableChunking = true
+	cfg.EnableDeduplication = true
 	if !cfg.Enabled() {
 		t.Fatal("expected Enabled() to return true when a stage is active")
 	}
@@ -44,15 +44,10 @@ func TestApplyOptimizationsRunsAllStages(t *testing.T) {
 	confFile := mustWriteFile(filepath.Join("conf", "settings.conf"), confOriginal)
 	jsonFile := mustWriteFile(filepath.Join("meta", "data.json"), "{\n  \"a\": 1,\n  \"b\": 2\n}\n")
 
-	chunkTarget := mustWriteFile("chunk.bin", string(bytes.Repeat([]byte("x"), 96)))
-
 	logger := logging.New(types.LogLevelError, false)
 	cfg := OptimizationConfig{
-		EnableChunking:            true,
 		EnableDeduplication:       true,
 		EnablePrefilter:           true,
-		ChunkSizeBytes:            16,
-		ChunkThresholdBytes:       64,
 		PrefilterMaxFileSizeBytes: 1024,
 	}
 
@@ -97,18 +92,6 @@ func TestApplyOptimizationsRunsAllStages(t *testing.T) {
 	}
 	if bytes.Contains(jsonContents, []byte(" ")) || bytes.Contains(jsonContents, []byte("\n")) {
 		t.Fatalf("expected minified JSON, got %q", jsonContents)
-	}
-
-	// Chunking should remove the original file, create a marker, and emit chunks.
-	if _, err := os.Stat(chunkTarget); !os.IsNotExist(err) {
-		t.Fatalf("expected original chunk target removed, stat err=%v", err)
-	}
-	if _, err := os.Stat(chunkTarget + ".chunked"); err != nil {
-		t.Fatalf("chunk marker missing: %v", err)
-	}
-	chunkPath := filepath.Join(root, "chunked_files", "chunk.bin.001.chunk")
-	if _, err := os.Stat(chunkPath); err != nil {
-		t.Fatalf("expected first chunk at %s: %v", chunkPath, err)
 	}
 }
 

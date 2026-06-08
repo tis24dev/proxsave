@@ -126,7 +126,8 @@ func TestApplyPBSAccessControlFromStage_EarlyAndReadErrors(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 
-	if err := applyPBSAccessControlFromStage(nil, logger, "/stage"); err != nil {
+	var nilCtx context.Context // deliberately nil: verifies nil-context handling is safe
+	if err := applyPBSAccessControlFromStage(nilCtx, logger, "/stage"); err != nil {
 		t.Fatalf("nil context with missing staged files should be safe, got %v", err)
 	}
 
@@ -534,7 +535,8 @@ func TestApplyPVEAccessControlFromStage_AdditionalBranches(t *testing.T) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 
-		if err := applyPVEAccessControlFromStage(nil, newTestLogger(), "/stage"); err != nil {
+		var nilCtx context.Context // deliberately nil: verifies nil-context handling is safe
+		if err := applyPVEAccessControlFromStage(nilCtx, newTestLogger(), "/stage"); err != nil {
 			t.Fatalf("nil context with no staged files should be safe, got %v", err)
 		}
 	})

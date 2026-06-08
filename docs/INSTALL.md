@@ -14,12 +14,9 @@
   - [Prerequisites](#prerequisites)
   - [Building from Source](#building-from-source)
   - [Interactive Installation Wizard](#interactive-installation-wizard)
-- [🔄 Upgrading from Bash Version](#upgrading-from-previous-bash-version-v074-bash-or-earlier)
+- [🔄 Migrating an Existing Configuration](#migrating-an-existing-configuration-env-migration)
   - [Migration Tools](#migration-tools)
   - [Upgrade Steps](#upgrade-steps)
-- [📜 Legacy Bash Version](#legacy-bash-version-v074-bash)
-  - [Installing the Legacy Bash Version](#installing-the-legacy-bash-version)
-- [⌨️ Legacy vs Go Version](#legacy-vs-go-version)
 
 ## Fast Install
 
@@ -42,6 +39,15 @@
    ```bash
    ./build/proxsave
    ```
+
+> **Release integrity & authenticity.** `install.sh` and `proxsave --upgrade`
+> verify every release before installing it: `SHA256SUMS` is checked against the
+> project's pinned **ECDSA P-256** signature (`SHA256SUMS.sig`), then the archive
+> is checked against `SHA256SUMS`. A missing or invalid signature aborts the
+> install/upgrade — there is no fallback to checksum-only. `install.sh` requires
+> `openssl` for this (preinstalled on Proxmox); the Go upgrade verifies it
+> natively. To verify a download yourself, see
+> [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md#release-signature-sha256sumssig).
 
 ### Migration
 
@@ -102,9 +108,8 @@ The `--upgrade` command:
 - ✅ Downloads latest binary from GitHub releases
 - ✅ Verifies integrity with SHA256 checksums
 - ✅ Atomically replaces current binary
-- ✅ Updates symlinks (`/usr/local/bin/proxsave`, `/usr/local/bin/proxmox-backup`)
-- ✅ Cleans up legacy Bash script symlinks
-- ✅ Migrates cron entries to new binary while preserving entries that already point to the Go executable
+- ✅ Updates the `/usr/local/bin/proxsave` symlink (and removes the legacy `proxmox-backup` symlink if present)
+- ✅ Ensures a cron entry for the Go binary, preserving existing entries that already point to it
 - ✅ Fixes file permissions
 - ❌ **Does NOT modify** your `backup.env` configuration
 
@@ -154,8 +159,8 @@ For more details, see [CLI Reference - Binary Upgrade](CLI_REFERENCE.md#binary-u
 
 ```bash
 # Install Go (if building from source)
-wget https://go.dev/dl/go1.25.10.linux-amd64.tar.gz
-tar -C /usr/local -xzf go1.25.10.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.25.11.linux-amd64.tar.gz
+tar -C /usr/local -xzf go1.25.11.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 # Install rclone (for cloud storage)
@@ -168,7 +173,7 @@ apt update && apt install -y git
 apt update && apt install -y make
 
 # Verify installations
-go version    # Should show go1.25.10+
+go version    # Should show go1.25.11+
 rclone version  # Should show rclone v1.50+
 git --version # Should show git 2.47.3+
 make --version # Should show make 4.4.1+
@@ -286,9 +291,9 @@ After completion, edit `configs/backup.env` manually for advanced options.
 
 ---
 
-## Upgrading from Previous Bash Version (v0.7.4-bash or Earlier)
+## Migrating an Existing Configuration (env-migration)
 
-If you're currently using the legacy Bash version (historically called proxmox-backup, v0.7.4-bash or earlier), you can upgrade to the Go-based proxsave release with minimal effort. The Go version offers significant performance improvements while maintaining backward compatibility for most configuration variables.
+The `--env-migration` tool imports an existing `backup.env` (e.g. from the legacy Bash version, v0.7.4-bash or earlier) into the current Go configuration, mapping most variables automatically. See [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md) for the complete variable mapping.
 
 ### Migration Tools
 
@@ -415,91 +420,3 @@ This guide categorizes every variable:
 - Review the complete mapping guide: [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)
 - Compare your Bash config with the Go template side-by-side
 - Enable debug logging: `./build/proxsave --dry-run --log-level debug`
-
----
-
-## Legacy Bash Version (v0.7.4-bash)
-
-The original Bash script (20,370 lines) has been moved to the `old` branch and is no longer actively developed. However, it remains available for users who need it.
-
-### Availability
-
-- **Source code**: Available in the `old` branch of this repository
-- **Installation script**: The `install.sh` file remains in the `main` branch for backward compatibility
-
-### Installing the Legacy Bash Version
-
-The legacy Bash version can still be installed using the original installation command:
-
-#### Option 1: Fast Bash Legacy Install or Update or Reinstall
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/old/install.sh)"
-```
-
-#### Option 2: Manual
-
-Enter the /opt directory
-
-```bash
-cd /opt
-```
-
-Download the repository (stable release)
-
-```bash
-wget https://github.com/tis24dev/proxsave/archive/refs/tags/v0.7.4-bash.tar.gz
-```
-
-Create the script directory
-
-```bash
-mkdir -p proxsave
-```
-
-Extract the script files into the newly created directory, then delete the archive
-
-```bash
-tar xzf v0.7.4-bash.tar.gz -C proxsave --strip-components=1 && rm v0.7.4-bash.tar.gz
-```
-
-Enter the script directory
-
-```bash
-cd proxsave
-```
-
-Start the installation (runs initial checks, creates symlinks, creates cron)
-
-```bash
-./install.sh
-```
-
-Customize your settings
-
-```bash
-nano env/backup.env
-```
-
-Run first backup
-
-```bash
-./script/proxmox-backup.sh
-```
-
-**Important Notes:**
-
-- **Bash version only**: The legacy installer (`old` branch) installs the **Bash version** (v0.7.4-bash), not the Go version.
-- **For the Go version**: Use the one-liner in the **Fast Install** section or build from source in **Manual Installation**.
-
-### Legacy vs Go Version
-
-|Feature|Legacy Bash (v0.7.4)|Go Version (v0.9.0+)|
-|---|---|---|
-|**Status**|Maintenance mode (old branch)|Active development (main branch)|
-|**Installation**|`install.sh` script|Build from source|
-|**Performance**|Slower (shell overhead)|10-20x faster (compiled)|
-|**Code size**|20,370 lines|~3,000 lines Go code|
-|**Memory usage**|Higher (multiple processes)|Lower (single binary)|
-|**Maintenance**|Archived, critical fixes only|Active development|
-|**Compatibility**|Can coexist with Go version|Can coexist with Bash version|

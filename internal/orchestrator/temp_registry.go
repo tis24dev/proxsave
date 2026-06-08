@@ -41,7 +41,7 @@ func NewTempDirRegistry(logger *logging.Logger, registryPath string) (*TempDirRe
 	}
 
 	dir := filepath.Dir(registryPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create registry directory: %w", err)
 	}
 
@@ -218,11 +218,11 @@ func resolveRegistryPath() string {
 		return custom
 	}
 
-	if err := os.MkdirAll(filepath.Dir(defaultRegistryPath), 0o755); err == nil {
+	if err := os.MkdirAll(filepath.Dir(defaultRegistryPath), 0o750); err == nil {
 		return defaultRegistryPath
 	}
 
 	fallback := filepath.Join(os.TempDir(), registryFallbackDir, "temp-dirs.json")
-	_ = os.MkdirAll(filepath.Dir(fallback), 0o755)
+	_ = os.MkdirAll(filepath.Dir(fallback), 0o750)
 	return fallback
 }

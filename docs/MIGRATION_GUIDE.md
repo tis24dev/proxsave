@@ -1,6 +1,6 @@
-# Migration Guide: Bash to Go
+# Migration Guide: Configuration (env-migration)
 
-Complete guide for upgrading from the Bash version (v0.7.4-bash or earlier) to the Go version (proxsave).
+Complete guide for migrating an existing `backup.env` configuration (from the legacy Bash version, v0.7.4-bash or earlier) to the Go version (proxsave) using the built-in `--env-migration` tool.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ Complete guide for upgrading from the Bash version (v0.7.4-bash or earlier) to t
 
 ## Overview
 
-If you're currently using the legacy Bash version (historically called proxmox-backup, v0.7.4-bash or earlier), you can upgrade to the Go-based proxsave release with minimal effort. The Go version offers significant performance improvements while maintaining backward compatibility for most configuration variables.
+If you have an existing `backup.env` from the legacy Bash version (historically called proxmox-backup, v0.7.4-bash or earlier), you can convert it to the Go-based proxsave configuration with minimal effort. The `--env-migration` tool maps most variables automatically while preserving backward compatibility for most configuration names.
 
 **Key benefits of upgrading to Go**:
 - ⚡ **10-100x faster** execution (compiled vs interpreted)
@@ -32,9 +32,8 @@ If you're currently using the legacy Bash version (historically called proxmox-b
 
 ## Compatibility Overview
 
-The migration path is designed to be smooth and safe:
+The configuration migration is designed to be smooth and safe:
 
-- ✅ **Both versions can coexist**: The Bash and Go versions can run in the same directory (`/opt/proxsave/`) as they use different internal paths and binary names
 - ✅ **Most variables work unchanged**: ~70 configuration variables have identical names between Bash and Go
 - ✅ **Automatic fallback support**: 16 renamed variables automatically read old Bash names via fallback mechanism
 - ⚠️ **Some variables require manual conversion**: 2 variables have semantic changes (storage thresholds, cloud path format)
@@ -208,25 +207,6 @@ tar -tf backup/*-backup-*.bundle.tar | head -50
 
 # Check cloud upload (if enabled)
 rclone ls gdrive:pbs-backups/
-```
-
-### Step 6: Gradual Cutover (Optional)
-
-The old Bash version remains functional and can be used as fallback during the transition period:
-
-```bash
-# Keep Bash version available
-# /opt/proxsave/script/proxmox-backup.sh (Bash)
-# /opt/proxsave/build/proxsave (Go)
-
-# Test Go version in cron first
-crontab -e
-# Comment Bash line:
-# 0 2 * * * /opt/proxsave/script/proxmox-backup.sh
-# Add Go line:
-0 2 * * * /opt/proxsave/build/proxsave
-
-# Monitor for 1-2 weeks, then remove Bash cron completely
 ```
 
 ---
@@ -501,7 +481,6 @@ COMPRESSION_MODE=standard
 
 ### Migration Resources
 - **BACKUP_ENV_MAPPING.md** - Complete Bash → Go variable mapping
-- **[Legacy Bash Guide](LEGACY_BASH.md)** - Information about the Bash version
 
 ### Configuration
 - **[Configuration Guide](CONFIGURATION.md)** - Complete Go variable reference
@@ -547,13 +526,9 @@ Testing:
 Deployment:
 □ Update cron job to use Go binary
 □ Monitor first few scheduled backups
-□ Keep Bash version as fallback (1-2 weeks)
 □ Document any custom changes
-□ Archive old Bash config for reference
 
-Cleanup (after 1-2 weeks):
-□ Remove Bash cron job
-□ Archive Bash version (optional)
+Cleanup:
 □ Update documentation/runbooks
 □ Celebrate successful migration! 🎉
 ```
@@ -561,9 +536,6 @@ Cleanup (after 1-2 weeks):
 ---
 
 ## FAQ
-
-**Q: Can I run both Bash and Go versions in parallel?**
-A: Yes! They can coexist in the same directory. However, **avoid running both simultaneously** to prevent conflicts. Use one or the other per cron schedule.
 
 **Q: Will migration delete my Bash configuration?**
 A: No. The migration tool **never deletes** your Bash config. It only reads it and creates a new Go config.
@@ -573,9 +545,6 @@ A: For RENAMED variables (16 total), Go automatically falls back to read old nam
 
 **Q: How long does migration take?**
 A: Automatic migration takes **seconds**. Manual migration depends on complexity but typically **10-30 minutes** for careful review.
-
-**Q: Can I roll back to Bash version after migration?**
-A: Yes! Your Bash installation remains untouched. Simply switch your cron job back to the Bash script.
 
 **Q: Do I need to migrate everything at once?**
 A: No. You can migrate incrementally:

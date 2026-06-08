@@ -7,21 +7,21 @@ on:
 
 jobs:
   release:
-    # Esegui il job SOLO se il tag è creato direttamente (non da PR)
-    # e comunque su un ref di tipo "tag"
+    # Run the job ONLY when the tag is pushed directly (not from a PR)
+    # and the ref is a tag.
     if: startsWith(github.ref, 'refs/tags/') && github.event.base_ref == ''
 
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write       # Per creare release GitHub
-      id-token: write       # Necessario per OIDC / attestazioni
-      attestations: write   # Necessario per actions/attest-build-provenance
-      actions: read         # Necessario per leggere metadata del run
+      contents: write       # Create the GitHub release
+      id-token: write       # Required for OIDC / attestations
+      attestations: write   # Required for actions/attest-build-provenance
+      actions: read         # Required to read run metadata
 
     steps:
       ########################################
-      # CHECKOUT (fetch-depth 0 per changelog e GoReleaser)
+      # CHECKOUT (fetch-depth 0 for changelog and GoReleaser)
       ########################################
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -29,7 +29,7 @@ jobs:
           fetch-depth: 0
 
       ########################################
-      # VALIDAZIONE TAG
+      # VALIDATE TAG
       ########################################
       - name: Validate SemVer tag
         run: |
@@ -53,18 +53,51 @@ jobs:
         run: go version
 
       ########################################
-      # VERIFICA MODULI
+      # VERIFY MODULES
       ########################################
       - name: Verify Go modules
         run: go mod verify
 
       ########################################
-      # INSTALL SYFT (per SBOM CycloneDX via GoReleaser)
+      # INSTALL SYFT (for CycloneDX SBOM via GoReleaser)
       ########################################
       - name: Install Syft (for SBOM generation)
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           syft-version: v1.19.0
+
+      ########################################
+      # VALIDATE THE SIGNING KEY *BEFORE* PUBLISHING
+      # GoReleaser publishes the release (incl. SHA256SUMS) before the signing step
+      # below; if signing then failed, the tag would go live without SHA256SUMS.sig
+      # and both install.sh and the in-app upgrade hard-fail on the missing file,
+      # blocking every install/upgrade. Fail here, before anything is published, if
+      # the signing secret is missing or does not match the pinned public key.
+      ########################################
+      - name: Validate release signing key before publishing
+        env:
+          PROXSAVE_KEY_SIGNATURE: ${{ secrets.PROXSAVE_KEY_SIGNATURE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PROXSAVE_KEY_SIGNATURE:-}" ]; then
+            echo "::error::PROXSAVE_KEY_SIGNATURE is empty; refusing to publish a release that cannot be signed." >&2
+            exit 1
+          fi
+          KEY_FILE="$(mktemp)"
+          trap 'rm -f "$KEY_FILE" probe.txt probe.sig pinned_pub.pem' EXIT
+          printf '%s\n' "$PROXSAVE_KEY_SIGNATURE" > "$KEY_FILE"
+          echo "proxsave release signing probe" > probe.txt
+          # Sign a probe and verify it against the SAME pinned public key install.sh
+          # ships (extracted at runtime, so there is no second hard-coded copy to drift
+          # — install.sh's copy is already guarded by TestReleaseSigningKeyNoDrift). A
+          # wrong/corrupt/expired secret fails here, before GoReleaser publishes.
+          openssl dgst -sha256 -sign "$KEY_FILE" -out probe.sig probe.txt
+          # Patterns omit the dashes so this line is not mistaken for a PEM block by
+          # TestReleaseSigningKeyNoDrift (which scans release.yml for the first key).
+          awk '/BEGIN PUBLIC KEY/{f=1} f{print} /END PUBLIC KEY/{exit}' install.sh > pinned_pub.pem
+          test -s pinned_pub.pem
+          openssl dgst -sha256 -verify pinned_pub.pem -signature probe.sig probe.txt
+          echo "Release signing key validated against the pinned public key."
 
       ########################################
       # GORELEASER
@@ -79,7 +112,38 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       ########################################
-      # ATTESTAZIONE PROVENIENZA BUILD
+      # SIGN SHA256SUMS (ECDSA P-256) + upload as a release asset
+      ########################################
+      - name: Sign and publish SHA256SUMS signature
+        env:
+          PROXSAVE_KEY_SIGNATURE: ${{ secrets.PROXSAVE_KEY_SIGNATURE }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -f build/SHA256SUMS
+
+          KEY_FILE="$(mktemp)"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          printf '%s\n' "$PROXSAVE_KEY_SIGNATURE" > "$KEY_FILE"
+
+          # Sign the checksum file with the project's ECDSA P-256 private key.
+          openssl dgst -sha256 -sign "$KEY_FILE" -out build/SHA256SUMS.sig build/SHA256SUMS
+
+          # Defense in depth: verify the signature against the SAME public key that
+          # install.sh pins, so a wrong/corrupt signing secret fails the release here
+          # instead of shipping an unverifiable artifact.
+          printf '%s\n' \
+            '-----BEGIN PUBLIC KEY-----' \
+            'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElks05mPtm1vm0YtHlSGX1HlgdXjn' \
+            'liDJEnB+RgiWOQR+6xLWeX7PyauuMxUh/HNnvBQAokK91fLWes4r9Xlwzw==' \
+            '-----END PUBLIC KEY-----' > pinned_pub.pem
+          openssl dgst -sha256 -verify pinned_pub.pem -signature build/SHA256SUMS.sig build/SHA256SUMS
+
+          # Upload the signature to the release GoReleaser just created.
+          gh release upload "${GITHUB_REF#refs/tags/}" build/SHA256SUMS.sig --clobber
+
+      ########################################
+      # BUILD PROVENANCE ATTESTATION
       ########################################
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32

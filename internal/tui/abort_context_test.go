@@ -32,7 +32,8 @@ func newSimulationApp(t *testing.T) (*App, tcell.SimulationScreen, <-chan struct
 }
 
 func clearAbortContextForTest() {
-	SetAbortContext(nil) //nolint:staticcheck // Verifies nil clears the process-wide abort context.
+	var nilCtx context.Context // deliberately nil: verifies nil clears the process-wide abort context
+	SetAbortContext(nilCtx)
 }
 
 func TestSetAbortContext_GetAbortContextRoundTrip(t *testing.T) {
@@ -142,7 +143,8 @@ func TestAppRunWithContext_NilContextRunsUntilStopped(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- app.RunWithContext(nil) //nolint:staticcheck // Verifies nil context runs until the app stops.
+		var nilCtx context.Context // deliberately nil: verifies a nil context runs until the app stops
+		done <- app.RunWithContext(nilCtx)
 	}()
 
 	select {

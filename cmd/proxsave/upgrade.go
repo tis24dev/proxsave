@@ -6,9 +6,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ecdsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +37,16 @@ const (
 
 	maxUpgradeConfigJSONPreviewLength = 4000
 )
+
+// releaseSigningPubKeyPEM is the pinned ECDSA P-256 public key used to verify the
+// signature of SHA256SUMS during an upgrade. The matching private key lives only
+// in the project's GitHub Actions secret (PROXSAVE_KEY_SIGNATURE).
+// Fingerprint (sha256 of DER): fdbbba66cdb770b85a728c8aee0b920b4cd244c84f4fc5a0065188fbe9a5eddb
+const releaseSigningPubKeyPEM = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElks05mPtm1vm0YtHlSGX1HlgdXjn
+liDJEnB+RgiWOQR+6xLWeX7PyauuMxUh/HNnvBQAokK91fLWes4r9Xlwzw==
+-----END PUBLIC KEY-----
+`
 
 type releaseInfo struct {
 	TagName string `json:"tag_name"`
@@ -168,7 +181,6 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
 		bootstrap.Warning("Upgrade: failed to refresh documentation: %v", err)
 	}
-	cleanupLegacyBashSymlinks(baseDir, bootstrap)
 	ensureGoSymlink(execPath, bootstrap)
 
 	cronSchedule := resolveCronScheduleFromEnv()
@@ -214,6 +226,7 @@ func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *l
 	filename := fmt.Sprintf("proxsave_%s_%s_%s.tar.gz", version, osName, arch)
 	archiveURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, tag, filename)
 	checksumURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/SHA256SUMS", githubRepo, tag)
+	signatureURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/SHA256SUMS.sig", githubRepo, tag)
 
 	bootstrap.Info("Downloading latest release: %s (%s/%s)", tag, osName, arch)
 
@@ -228,26 +241,42 @@ func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *l
 	}()
 	logging.DebugStepBootstrap(bootstrap, "upgrade download/install", "temp dir=%s", tmpDir)
 
-	archivePath := filepath.Join(tmpDir, filename)
-	checksumPath := filepath.Join(tmpDir, "SHA256SUMS")
+	// All downloads land in the process-private temp dir; operate on it through an
+	// *os.Root so every read/write is confined there at the syscall level.
+	tmpRoot, err := os.OpenRoot(tmpDir)
+	if err != nil {
+		return "", fmt.Errorf("cannot open temp dir: %w", err)
+	}
+	defer func() { _ = tmpRoot.Close() }()
 
-	if err := downloadFile(ctx, archiveURL, archivePath, bootstrap); err != nil {
+	const checksumName, signatureName, binaryName = "SHA256SUMS", "SHA256SUMS.sig", "proxsave"
+
+	if err := downloadFile(ctx, archiveURL, tmpRoot, filename, bootstrap); err != nil {
 		return "", fmt.Errorf("failed to download archive: %w", err)
 	}
-	if err := downloadFile(ctx, checksumURL, checksumPath, bootstrap); err != nil {
+	if err := downloadFile(ctx, checksumURL, tmpRoot, checksumName, bootstrap); err != nil {
 		return "", fmt.Errorf("failed to download checksum file: %w", err)
 	}
+	if err := downloadFile(ctx, signatureURL, tmpRoot, signatureName, bootstrap); err != nil {
+		return "", fmt.Errorf("failed to download signature file (release may be unsigned): %w", err)
+	}
 
-	if err := verifyChecksum(archivePath, checksumPath, filename, bootstrap); err != nil {
+	// Authenticity first: SHA256SUMS must be signed by the project's release key;
+	// the checksum then ties the archive to that authenticated file.
+	if err := verifyReleaseSignature(tmpRoot, checksumName, signatureName, releaseSigningPubKeyPEM); err != nil {
+		return "", err
+	}
+	bootstrap.Info("Upgrade: SHA256SUMS signature verified")
+
+	if err := verifyChecksum(tmpRoot, checksumName, filename, bootstrap); err != nil {
 		return "", err
 	}
 
-	extractedPath := filepath.Join(tmpDir, "proxsave")
-	if err := extractBinaryFromTar(archivePath, "proxsave", extractedPath, bootstrap); err != nil {
+	if err := extractBinaryFromTar(tmpRoot, filename, binaryName, binaryName, bootstrap); err != nil {
 		return "", err
 	}
 
-	if err := installBinary(extractedPath, execPath, bootstrap); err != nil {
+	if err := installBinary(tmpRoot, binaryName, execPath, bootstrap); err != nil {
 		return "", err
 	}
 
@@ -366,8 +395,8 @@ func compareVersions(current, latest string) int {
 	return 0
 }
 
-func downloadFile(ctx context.Context, url, dest string, bootstrap *logging.BootstrapLogger) (err error) {
-	done := logging.DebugStartBootstrap(bootstrap, "upgrade download", "url=%s dest=%s", url, dest)
+func downloadFile(ctx context.Context, url string, root *os.Root, name string, bootstrap *logging.BootstrapLogger) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade download", "url=%s dest=%s", url, name)
 	defer func() { done(err) }()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -387,24 +416,24 @@ func downloadFile(ctx context.Context, url, dest string, bootstrap *logging.Boot
 		return fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	out, err := os.Create(dest)
+	out, err := root.Create(name)
 	if err != nil {
-		return fmt.Errorf("cannot create file %s: %w", dest, err)
+		return fmt.Errorf("cannot create file %s: %w", name, err)
 	}
 	defer closeIntoErr(&err, out, "close downloaded file")
 
 	written, err := io.Copy(out, resp.Body)
 	if err != nil {
-		return fmt.Errorf("cannot write file %s: %w", dest, err)
+		return fmt.Errorf("cannot write file %s: %w", name, err)
 	}
 	logging.DebugStepBootstrap(bootstrap, "upgrade download", "bytes=%d", written)
 	return nil
 }
 
-func verifyChecksum(archivePath, checksumPath, filename string, bootstrap *logging.BootstrapLogger) (err error) {
+func verifyChecksum(root *os.Root, checksumName, filename string, bootstrap *logging.BootstrapLogger) (err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "upgrade checksum", "file=%s", filename)
 	defer func() { done(err) }()
-	checksums, err := os.ReadFile(checksumPath)
+	checksums, err := root.ReadFile(checksumName)
 	if err != nil {
 		return fmt.Errorf("cannot read checksum file: %w", err)
 	}
@@ -419,8 +448,11 @@ func verifyChecksum(archivePath, checksumPath, filename string, bootstrap *loggi
 		if len(parts) < 2 {
 			continue
 		}
-		name := string(parts[len(parts)-1])
-		if strings.HasSuffix(name, filename) {
+		// Require an exact filename match (normalizing only sha256sum's optional
+		// binary-mode '*' marker); a mere suffix match would wrongly accept an
+		// overlapping entry such as "artifacts/<filename>".
+		name := strings.TrimPrefix(string(parts[len(parts)-1]), "*")
+		if name == filename {
 			expected = string(parts[0])
 			break
 		}
@@ -430,7 +462,7 @@ func verifyChecksum(archivePath, checksumPath, filename string, bootstrap *loggi
 		return fmt.Errorf("checksum entry not found for %s", filename)
 	}
 
-	f, err := os.Open(archivePath)
+	f, err := root.Open(filename)
 	if err != nil {
 		return fmt.Errorf("cannot open archive for checksum: %w", err)
 	}
@@ -450,10 +482,49 @@ func verifyChecksum(archivePath, checksumPath, filename string, bootstrap *loggi
 	return nil
 }
 
-func extractBinaryFromTar(archivePath, targetName, destPath string, bootstrap *logging.BootstrapLogger) (err error) {
-	done := logging.DebugStartBootstrap(bootstrap, "upgrade extract", "archive=%s target=%s", archivePath, targetName)
+// verifyReleaseSignature verifies that the SHA256SUMS file was signed with the
+// project's release key. The signature is an ECDSA-P256/SHA-256 signature in
+// ASN.1 DER form, as produced by `openssl dgst -sha256 -sign`.
+func verifyReleaseSignature(root *os.Root, checksumName, signatureName, pubKeyPEM string) error {
+	pub, err := parseECDSAPublicKey(pubKeyPEM)
+	if err != nil {
+		return err
+	}
+	data, err := root.ReadFile(checksumName)
+	if err != nil {
+		return fmt.Errorf("cannot read checksum file: %w", err)
+	}
+	sig, err := root.ReadFile(signatureName)
+	if err != nil {
+		return fmt.Errorf("cannot read signature file: %w", err)
+	}
+	digest := sha256.Sum256(data)
+	if !ecdsa.VerifyASN1(pub, digest[:], sig) {
+		return errors.New("SHA256SUMS signature verification failed — refusing to upgrade")
+	}
+	return nil
+}
+
+func parseECDSAPublicKey(pubKeyPEM string) (*ecdsa.PublicKey, error) {
+	block, _ := pem.Decode([]byte(pubKeyPEM))
+	if block == nil {
+		return nil, errors.New("invalid public key PEM")
+	}
+	keyAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse public key: %w", err)
+	}
+	pub, ok := keyAny.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, errors.New("pinned public key is not ECDSA")
+	}
+	return pub, nil
+}
+
+func extractBinaryFromTar(root *os.Root, archiveName, targetName, destName string, bootstrap *logging.BootstrapLogger) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade extract", "archive=%s target=%s", archiveName, targetName)
 	defer func() { done(err) }()
-	f, err := os.Open(archivePath)
+	f, err := root.Open(archiveName)
 	if err != nil {
 		return fmt.Errorf("cannot open archive: %w", err)
 	}
@@ -481,8 +552,8 @@ func extractBinaryFromTar(archivePath, targetName, destPath string, bootstrap *l
 			continue
 		}
 
-		logging.DebugStepBootstrap(bootstrap, "upgrade extract", "extracting to %s", destPath)
-		tmpFile, err := os.Create(destPath)
+		logging.DebugStepBootstrap(bootstrap, "upgrade extract", "extracting to %s", destName)
+		tmpFile, err := root.Create(destName)
 		if err != nil {
 			return fmt.Errorf("cannot create extracted binary: %w", err)
 		}
@@ -499,21 +570,32 @@ func extractBinaryFromTar(archivePath, targetName, destPath string, bootstrap *l
 	return fmt.Errorf("binary %s not found inside archive", targetName)
 }
 
-func installBinary(srcPath, destPath string, bootstrap *logging.BootstrapLogger) (err error) {
-	done := logging.DebugStartBootstrap(bootstrap, "upgrade install", "src=%s dest=%s", srcPath, destPath)
+func installBinary(srcRoot *os.Root, srcName, destPath string, bootstrap *logging.BootstrapLogger) (err error) {
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade install", "src=%s dest=%s", srcName, destPath)
 	defer func() { done(err) }()
-	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+	destDir := filepath.Dir(destPath)
+	if err := os.MkdirAll(destDir, 0o750); err != nil {
 		return fmt.Errorf("cannot create target directory: %w", err)
 	}
 
-	tmpDest := destPath + ".tmp"
-	src, err := os.Open(srcPath)
+	// Write the replacement binary through an *os.Root on the install directory so
+	// the create/replace is confined there.
+	destRoot, err := os.OpenRoot(destDir)
+	if err != nil {
+		return fmt.Errorf("cannot open target directory: %w", err)
+	}
+	defer func() { _ = destRoot.Close() }()
+
+	destName := filepath.Base(destPath)
+	tmpName := destName + ".tmp"
+
+	src, err := srcRoot.Open(srcName)
 	if err != nil {
 		return fmt.Errorf("cannot open extracted binary: %w", err)
 	}
 	defer closeIntoErr(&err, src, "close extracted binary")
 
-	dst, err := os.OpenFile(tmpDest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	dst, err := destRoot.OpenFile(tmpName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return fmt.Errorf("cannot create temp target binary: %w", err)
 	}
@@ -526,7 +608,10 @@ func installBinary(srcPath, destPath string, bootstrap *logging.BootstrapLogger)
 		return fmt.Errorf("cannot close temp target binary: %w", err)
 	}
 
-	if err := os.Rename(tmpDest, destPath); err != nil {
+	// Rename through the same *os.Root (paths relative to it) so the swap stays
+	// confined to the directory fd opened above — no re-resolution of destDir as a
+	// string, which would reopen a TOCTOU window on a mutable path.
+	if err := destRoot.Rename(tmpName, destName); err != nil {
 		return fmt.Errorf("cannot replace binary at %s: %w", destPath, err)
 	}
 	return nil

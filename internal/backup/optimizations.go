@@ -15,27 +15,20 @@ import (
 )
 
 const (
-	defaultChunkSizeBytes        = 10 * 1024 * 1024
-	defaultChunkThresholdBytes   = 50 * 1024 * 1024
 	defaultPrefilterMaxSizeBytes = 8 * 1024 * 1024
-	chunkBufferSize              = 1 << 20 // 1 MiB
-	defaultChunkDirPerm          = 0o755
-	defaultChunkFilePerm         = 0o640
+	defaultOptimizedFilePerm     = 0o640
 )
 
 // OptimizationConfig controls optional preprocessing steps executed before archiving.
 type OptimizationConfig struct {
-	EnableChunking            bool
 	EnableDeduplication       bool
 	EnablePrefilter           bool
-	ChunkSizeBytes            int64
-	ChunkThresholdBytes       int64
 	PrefilterMaxFileSizeBytes int64
 }
 
 // Enabled returns true if at least one optimization is active.
 func (c OptimizationConfig) Enabled() bool {
-	return c.EnableChunking || c.EnableDeduplication || c.EnablePrefilter
+	return c.EnableDeduplication || c.EnablePrefilter
 }
 
 // ApplyOptimizations executes the requested optimizations in sequence.
@@ -44,8 +37,8 @@ func ApplyOptimizations(ctx context.Context, logger *logging.Logger, root string
 		return nil
 	}
 
-	logger.Info("Running backup optimizations (chunking=%v dedup=%v prefilter=%v)",
-		cfg.EnableChunking, cfg.EnableDeduplication, cfg.EnablePrefilter)
+	logger.Info("Running backup optimizations (dedup=%v prefilter=%v)",
+		cfg.EnableDeduplication, cfg.EnablePrefilter)
 
 	if cfg.EnableDeduplication {
 		logger.Debug("Starting deduplication stage")
@@ -65,15 +58,6 @@ func ApplyOptimizations(ctx context.Context, logger *logging.Logger, root string
 		}
 	}
 
-	if cfg.EnableChunking {
-		logger.Debug("Starting chunking stage (chunk size %d bytes threshold %d bytes)", cfg.ChunkSizeBytes, cfg.ChunkThresholdBytes)
-		if err := chunkLargeFiles(ctx, logger, root, cfg.ChunkSizeBytes, cfg.ChunkThresholdBytes); err != nil {
-			logger.Warning("Chunking failed: %v", err)
-		} else {
-			logger.Debug("Chunking stage completed")
-		}
-	}
-
 	return nil
 }
 
@@ -83,7 +67,13 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 	hashes := make(map[string]string)
 	var duplicates int
 
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	rootFS, err := os.OpenRoot(root)
+	if err != nil {
+		return fmt.Errorf("open dedup root: %w", err)
+	}
+	defer func() { _ = rootFS.Close() }()
+
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -98,7 +88,10 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 		}
 
 		rel, relErr := filepath.Rel(root, path)
-		if relErr == nil && shouldSkipDedupPath(rel) {
+		if relErr != nil {
+			return fmt.Errorf("compute path relative to %s: %w", root, relErr)
+		}
+		if shouldSkipDedupPath(rel) {
 			return nil
 		}
 
@@ -110,7 +103,7 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 			return nil
 		}
 
-		hash, err := hashFile(path)
+		hash, err := hashFile(rootFS, rel)
 		if err != nil {
 			logger.Warning("Failed to hash %s: %v", path, err)
 			return nil
@@ -150,8 +143,8 @@ func shouldSkipDedupPath(rel string) bool {
 	}
 }
 
-func hashFile(path string) (sum string, err error) {
-	f, err := os.Open(path)
+func hashFile(root *os.Root, name string) (sum string, err error) {
+	f, err := root.Open(name)
 	if err != nil {
 		return "", err
 	}
@@ -173,144 +166,6 @@ func replaceWithSymlink(target, duplicate string) error {
 		rel = target
 	}
 	return os.Symlink(rel, duplicate)
-}
-
-func chunkLargeFiles(ctx context.Context, logger *logging.Logger, root string, chunkSize, threshold int64) error {
-	if chunkSize <= 0 {
-		chunkSize = defaultChunkSizeBytes
-	}
-	if threshold <= 0 {
-		threshold = defaultChunkThresholdBytes
-	}
-	logger.Debug("Scanning %s for files >= %d bytes to chunk (chunk size %d)", root, threshold, chunkSize)
-
-	chunkDir := filepath.Join(root, "chunked_files")
-	if err := os.MkdirAll(chunkDir, defaultChunkDirPerm); err != nil {
-		return fmt.Errorf("create chunk dir: %w", err)
-	}
-
-	var processed int
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if d.IsDir() {
-			if path == chunkDir {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasPrefix(path, chunkDir) {
-			return nil
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		if !info.Mode().IsRegular() || info.Size() < threshold {
-			return nil
-		}
-
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
-		}
-		destBase := filepath.Join(chunkDir, rel)
-		if err := splitFile(path, destBase, chunkSize); err != nil {
-			logger.Warning("Failed to chunk %s: %v", path, err)
-			return nil
-		}
-
-		if err := os.Remove(path); err != nil {
-			logger.Warning("Failed to remove original file %s after chunking: %v", path, err)
-		} else if err := os.WriteFile(path+".chunked", []byte{}, defaultChunkFilePerm); err != nil {
-			logger.Warning("Failed to write chunk marker for %s: %v", path, err)
-		}
-		processed++
-		logger.Debug("Chunked %s into %s", path, destBase)
-		return nil
-	})
-
-	if err != nil {
-		return fmt.Errorf("chunking walk failed: %w", err)
-	}
-
-	logger.Info("Chunking completed: %d large files processed", processed)
-	return nil
-}
-
-func splitFile(path, destBase string, chunkSize int64) (err error) {
-	if err := os.MkdirAll(filepath.Dir(destBase), defaultChunkDirPerm); err != nil {
-		return err
-	}
-
-	in, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer closeIntoErr(&err, in, "close source file")
-
-	buf := make([]byte, chunkBufferSize)
-	index := 0
-	for {
-		index++
-		chunkPath := fmt.Sprintf("%s.%03d.chunk", destBase, index)
-		done, err := writeChunk(in, chunkPath, buf, chunkSize)
-		if err != nil {
-			return err
-		}
-		if done {
-			break
-		}
-	}
-	return nil
-}
-
-func writeChunk(src *os.File, chunkPath string, buf []byte, limit int64) (done bool, err error) {
-	if limit <= 0 {
-		return true, nil
-	}
-	var out *os.File
-	defer func() {
-		if out != nil {
-			closeIntoErr(&err, out, "close chunk file")
-		}
-	}()
-	var written int64
-	for written < limit {
-		remaining := limit - written
-		readBuf := buf
-		if remaining < int64(len(readBuf)) {
-			readBuf = readBuf[:remaining]
-		}
-		n, err := src.Read(readBuf)
-		if n > 0 {
-			if out == nil {
-				out, err = os.OpenFile(chunkPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultChunkFilePerm)
-				if err != nil {
-					return false, err
-				}
-			}
-			if _, wErr := out.Write(readBuf[:n]); wErr != nil {
-				return false, wErr
-			}
-			written += int64(n)
-		}
-		if err != nil {
-			if err == io.EOF {
-				return true, nil
-			}
-			return false, err
-		}
-		if written >= limit {
-			return false, nil
-		}
-	}
-	return false, nil
 }
 
 func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, maxSize int64) error {
@@ -350,7 +205,13 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 		}
 	}
 
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	rootFS, err := os.OpenRoot(root)
+	if err != nil {
+		return fmt.Errorf("open prefilter root: %w", err)
+	}
+	defer func() { _ = rootFS.Close() }()
+
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -376,11 +237,16 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 			return nil
 		}
 
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return fmt.Errorf("compute path relative to %s: %w", root, relErr)
+		}
+
 		stats.scanned++
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
 		case ".txt", ".log", ".md":
-			if changed, err := normalizeTextFile(path); err == nil && changed {
+			if changed, err := normalizeTextFile(rootFS, rel); err == nil && changed {
 				stats.optimized++
 			}
 		case ".conf", ".cfg", ".ini":
@@ -388,11 +254,11 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 				stats.skippedStructured++
 				return nil
 			}
-			if changed, err := normalizeConfigFile(path); err == nil && changed {
+			if changed, err := normalizeConfigFile(rootFS, rel); err == nil && changed {
 				stats.optimized++
 			}
 		case ".json":
-			if changed, err := minifyJSON(path); err == nil && changed {
+			if changed, err := minifyJSON(rootFS, rel); err == nil && changed {
 				stats.optimized++
 			}
 		}
@@ -407,8 +273,12 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 	return nil
 }
 
-func normalizeTextFile(path string) (bool, error) {
-	data, err := os.ReadFile(path)
+// normalizeTextFile reads and rewrites name through root, an *os.Root opened on
+// the staging tree. Using os.Root confines all I/O inside that tree at the
+// syscall level, so a path that tried to escape (via "..") would be rejected —
+// no taint/path-traversal is possible (this is why there is no #nosec here).
+func normalizeTextFile(root *os.Root, name string) (bool, error) {
+	data, err := root.ReadFile(name)
 	if err != nil {
 		return false, err
 	}
@@ -416,17 +286,17 @@ func normalizeTextFile(path string) (bool, error) {
 	if bytes.Equal(data, normalized) {
 		return false, nil
 	}
-	return true, os.WriteFile(path, normalized, defaultChunkFilePerm)
+	return true, root.WriteFile(name, normalized, defaultOptimizedFilePerm)
 }
 
-func normalizeConfigFile(path string) (bool, error) {
+func normalizeConfigFile(root *os.Root, name string) (bool, error) {
 	// Config files can be whitespace/ordering-sensitive (e.g. section headers).
 	// Only perform safe, semantic-preserving normalization here.
-	return normalizeTextFile(path)
+	return normalizeTextFile(root, name)
 }
 
-func minifyJSON(path string) (bool, error) {
-	data, err := os.ReadFile(path)
+func minifyJSON(root *os.Root, name string) (bool, error) {
+	data, err := root.ReadFile(name)
 	if err != nil {
 		return false, err
 	}
@@ -441,5 +311,5 @@ func minifyJSON(path string) (bool, error) {
 	if bytes.Equal(bytes.TrimSpace(data), minified) {
 		return false, nil
 	}
-	return true, os.WriteFile(path, minified, defaultChunkFilePerm)
+	return true, root.WriteFile(name, minified, defaultOptimizedFilePerm)
 }

@@ -335,20 +335,11 @@ COMPRESSION_TYPE=none
 ## Advanced Optimizations
 
 ```bash
-# Enable smart chunking for large files
-ENABLE_SMART_CHUNKING=true         # true | false
-
 # Enable deduplication
 ENABLE_DEDUPLICATION=true          # true | false
 
 # Enable prefiltering
 ENABLE_PREFILTER=true              # true | false
-
-# Chunking threshold (MB)
-CHUNK_THRESHOLD_MB=50              # Files >50MB are chunked
-
-# Chunk size (MB)
-CHUNK_SIZE_MB=10                   # Each chunk is 10MB
 
 # Prefilter max file size (MB)
 PREFILTER_MAX_FILE_SIZE_MB=8       # Skip prefilter for files >8MB
@@ -356,7 +347,6 @@ PREFILTER_MAX_FILE_SIZE_MB=8       # Skip prefilter for files >8MB
 
 ### What These Do
 
-- **Smart chunking**: Splits large files for parallel processing
 - **Deduplication**: Detects duplicate data blocks (reduces storage)
 - **Prefilter**: Applies safe, semantic-preserving normalization to small text/JSON files to improve compression (e.g. removes CR from CRLF line endings and minifies JSON). It does **not** reorder, de-indent, or strip structured configuration files, and it avoids touching Proxmox/PBS structured config paths (e.g. `etc/pve/**`, `etc/proxmox-backup/**`).
 

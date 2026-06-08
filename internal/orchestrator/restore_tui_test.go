@@ -85,7 +85,7 @@ func TestBuildRestoreWizardPageReturnsFlex(t *testing.T) {
 }
 
 func TestPromptCompatibilityTUIUsesWarningText(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 		if title != "Compatibility warning" {
 			t.Fatalf("unexpected title %q", title)
 		}
@@ -106,7 +106,7 @@ func TestPromptCompatibilityTUIUsesWarningText(t *testing.T) {
 }
 
 func TestPromptCompatibilityTUIEscapesBracketedWarningText(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 		if !strings.Contains(message, tview.Escape("bad [warning]")) {
 			t.Fatalf("expected escaped bracketed warning, got %q", message)
 		}
@@ -121,7 +121,7 @@ func TestPromptCompatibilityTUIEscapesBracketedWarningText(t *testing.T) {
 }
 
 func TestPromptContinueWithoutSafetyBackupTUI(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 		if title != "Safety backup failed" {
 			t.Fatalf("unexpected title %q", title)
 		}
@@ -142,7 +142,7 @@ func TestPromptContinueWithoutSafetyBackupTUI(t *testing.T) {
 }
 
 func TestPromptContinueWithoutSafetyBackupTUIEscapesBracketedCause(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 		if !strings.Contains(message, tview.Escape("bad [cause]")) {
 			t.Fatalf("expected escaped bracketed cause, got %q", message)
 		}
@@ -160,7 +160,7 @@ func TestPromptContinueWithoutSafetyBackupTUIEscapesBracketedCause(t *testing.T)
 }
 
 func TestPromptContinueWithPBSServicesTUI(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 		if title != "PBS services running" {
 			t.Fatalf("unexpected title %q", title)
 		}
@@ -178,7 +178,7 @@ func TestPromptContinueWithPBSServicesTUI(t *testing.T) {
 }
 
 func TestConfirmOverwriteTUI(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 		if title != "Confirm overwrite" {
 			t.Fatalf("unexpected title %q", title)
 		}
@@ -198,7 +198,7 @@ func TestConfirmOverwriteTUI(t *testing.T) {
 	}
 }
 
-func stubPromptYesNo(fn func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error)) func() {
+func stubPromptYesNo(fn func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error)) func() {
 	orig := promptYesNoTUIFunc
 	promptYesNoTUIFunc = fn
 	return func() { promptYesNoTUIFunc = orig }

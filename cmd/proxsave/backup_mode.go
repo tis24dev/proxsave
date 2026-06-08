@@ -123,11 +123,8 @@ func configureBackupOrchestrator(opts backupModeOptions, orch *orchestrator.Orch
 
 func backupOptimizationConfig(cfg *config.Config) backup.OptimizationConfig {
 	return backup.OptimizationConfig{
-		EnableChunking:            cfg.EnableSmartChunking,
 		EnableDeduplication:       cfg.EnableDeduplication,
 		EnablePrefilter:           cfg.EnablePrefilter,
-		ChunkSizeBytes:            int64(cfg.ChunkSizeMB) * bytesPerMegabyte,
-		ChunkThresholdBytes:       int64(cfg.ChunkThresholdMB) * bytesPerMegabyte,
 		PrefilterMaxFileSizeBytes: int64(cfg.PrefilterMaxFileSizeMB) * bytesPerMegabyte,
 	}
 }

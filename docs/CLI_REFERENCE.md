@@ -196,9 +196,8 @@ Some interactive commands support two interface modes:
 5. Verifies archive integrity using SHA256 checksum
 6. Extracts binary from tar.gz archive
 7. Atomically replaces current binary (write to .tmp, then rename)
-8. Updates symlinks in `/usr/local/bin/` (proxsave, proxmox-backup)
-9. Cleans up legacy Bash script symlinks
-10. Migrates cron entries (legacy entries are replaced, existing ones using the Go binary are preserved) and fixes file permissions
+8. Updates the `proxsave` symlink in `/usr/local/bin/` (and removes the legacy `proxmox-backup` symlink if present)
+9. Ensures the cron entry targets the Go binary (entries already using it are preserved; outdated proxsave/proxmox-backup binary entries are replaced) and fixes file permissions
 
 **Post-upgrade steps**:
 1. Configuration file automatically compatible with new version
@@ -212,7 +211,7 @@ Some interactive commands support two interface modes:
 - **No configuration changes**: `backup.env` is never modified during `--upgrade`
 - **Platform support**: Linux only (amd64, arm64)
 - **Incompatible flags**: Cannot use with `--install` or `--new-install`
-- **Automatic maintenance**: Symlinks, cron (without touching entries already pointing to proxsave/proxmox-backup), and permissions updated automatically
+- **Automatic maintenance**: Symlinks, cron (without touching entries already pointing to proxsave), and permissions updated automatically
 - **Safe replacement**: Old binary is replaced atomically (no backup created)
 - **Separate config upgrade**: Use `--upgrade-config` separately to update configuration
 
@@ -713,7 +712,7 @@ crontab -e
 0 2 * * * /opt/proxsave/build/proxsave >> /var/log/pbs-cron.log 2>&1
 
 # Rotate logs (logrotate config)
-# /etc/logrotate.d/proxmox-backup
+# /etc/logrotate.d/proxsave
 /var/log/pbs-cron.log {
     daily
     rotate 7
@@ -729,7 +728,7 @@ crontab -e
 
 ### Configuration
 - **[Configuration Guide](CONFIGURATION.md)** - Complete variable reference
-- **[Migration Guide](MIGRATION_GUIDE.md)** - Bash to Go migration details
+- **[Migration Guide](MIGRATION_GUIDE.md)** - backup.env config migration (`--env-migration`)
 
 ### Operations
 - **[Encryption Guide](ENCRYPTION.md)** - AGE encryption setup and usage

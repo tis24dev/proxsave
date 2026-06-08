@@ -9,45 +9,19 @@ import (
 	"testing"
 )
 
-func TestSplitFileAndChunks(t *testing.T) {
-	tmp := t.TempDir()
-	source := filepath.Join(tmp, "data.bin")
-	content := bytes.Repeat([]byte("x"), 40)
-	if err := os.WriteFile(source, content, 0o640); err != nil {
-		t.Fatalf("write source: %v", err)
-	}
-
-	destBase := filepath.Join(tmp, "chunks", "data.bin")
-	if err := splitFile(source, destBase, 16); err != nil {
-		t.Fatalf("splitFile: %v", err)
-	}
-
-	chunks := []string{
-		destBase + ".001.chunk",
-		destBase + ".002.chunk",
-		destBase + ".003.chunk",
-	}
-	var total int
-	for _, c := range chunks {
-		b, err := os.ReadFile(c)
-		if err != nil {
-			t.Fatalf("read chunk %s: %v", c, err)
-		}
-		total += len(b)
-	}
-	if total != len(content) {
-		t.Fatalf("combined chunk size %d, want %d", total, len(content))
-	}
-}
-
 func TestNormalizeTextFileAndConfigAndJSON(t *testing.T) {
 	tmp := t.TempDir()
+	root, err := os.OpenRoot(tmp)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 
 	textPath := filepath.Join(tmp, "note.txt")
 	if err := os.WriteFile(textPath, []byte("line1\r\nline2\r\n"), 0o640); err != nil {
 		t.Fatalf("write text: %v", err)
 	}
-	if changed, err := normalizeTextFile(textPath); err != nil {
+	if changed, err := normalizeTextFile(root, "note.txt"); err != nil {
 		t.Fatalf("normalizeTextFile: %v", err)
 	} else if !changed {
 		t.Fatalf("expected text to be normalized")
@@ -62,7 +36,7 @@ func TestNormalizeTextFileAndConfigAndJSON(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o640); err != nil {
 		t.Fatalf("write conf: %v", err)
 	}
-	if changed, err := normalizeConfigFile(cfgPath); err != nil {
+	if changed, err := normalizeConfigFile(root, "app.conf"); err != nil {
 		t.Fatalf("normalizeConfigFile: %v", err)
 	} else if !changed {
 		t.Fatalf("expected config to be normalized")
@@ -79,7 +53,7 @@ func TestNormalizeTextFileAndConfigAndJSON(t *testing.T) {
 	if err := os.WriteFile(jsonPath, []byte("{\n \"a\": 1,\n \"b\": 2\n}\n"), 0o640); err != nil {
 		t.Fatalf("write json: %v", err)
 	}
-	if changed, err := minifyJSON(jsonPath); err != nil {
+	if changed, err := minifyJSON(root, "data.json"); err != nil {
 		t.Fatalf("minifyJSON: %v", err)
 	} else if !changed {
 		t.Fatalf("expected JSON to be minified")
@@ -92,20 +66,25 @@ func TestNormalizeTextFileAndConfigAndJSON(t *testing.T) {
 	if err := os.WriteFile(jsonPath, []byte("{invalid"), 0o640); err != nil {
 		t.Fatalf("write invalid json: %v", err)
 	}
-	if _, err := minifyJSON(jsonPath); err == nil {
+	if _, err := minifyJSON(root, "data.json"); err == nil {
 		t.Fatalf("expected error for invalid json")
 	}
 }
 
 func TestMinifyJSONKeepsData(t *testing.T) {
 	tmp := t.TempDir()
+	root, err := os.OpenRoot(tmp)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 	path := filepath.Join(tmp, "data.json")
 	original := map[string]int{"a": 1, "b": 2}
 	payload, _ := json.MarshalIndent(original, "", "  ")
 	if err := os.WriteFile(path, payload, 0o640); err != nil {
 		t.Fatalf("write json: %v", err)
 	}
-	if changed, err := minifyJSON(path); err != nil {
+	if changed, err := minifyJSON(root, "data.json"); err != nil {
 		t.Fatalf("minifyJSON: %v", err)
 	} else if !changed {
 		t.Fatalf("expected JSON to be minified")

@@ -229,6 +229,7 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 		fmt.Println("  a      - Select all")
 		fmt.Println("  n      - Deselect all")
 		fmt.Println("  c      - Continue with selected categories")
+		fmt.Println("  b      - Back to mode selection")
 		fmt.Println("  0      - Cancel")
 		fmt.Print("\nChoice: ")
 
@@ -273,6 +274,12 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 			}
 
 			return selectedCategories, nil
+
+		case "b":
+			// Go back to restore-mode selection (mirrors the TUI's Back button).
+			// The shared engine loop (selectModeAndCategories) catches this and
+			// re-prompts for the mode.
+			return nil, errRestoreBackToMode
 
 		case "0":
 			return nil, ErrRestoreAborted

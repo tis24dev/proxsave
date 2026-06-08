@@ -794,89 +794,87 @@ func mapToEntries(renameMap map[string]string) []nicMappingEntry {
 	return entries
 }
 
+// applyInterfaceRenameMap rewrites whole interface-name tokens in content using
+// renameMap, in a SINGLE pass over the original text. Each maximal interface-name
+// token is looked up once in the original map, so swaps ({eth0:eth1, eth1:eth0})
+// and chains ({a:b, b:c}) resolve correctly instead of collapsing the way a
+// sequential apply-each-rename-against-the-evolving-string would.
+//
+// A token may contain dots (VLAN subinterfaces such as eno1.100). Such a token is
+// first looked up whole, so an explicit dotted mapping (eno1.100 -> enp3s0.100)
+// matches directly; if there is no whole-token match it falls back to renaming
+// each dot-separated component, so renaming a parent NIC (eno1 -> enp3s0) also
+// fixes its VLAN children (eno1.100 -> enp3s0.100).
 func applyInterfaceRenameMap(content string, renameMap map[string]string) (string, bool) {
 	if content == "" || len(renameMap) == 0 {
 		return content, false
 	}
-	updated := content
-	changed := false
-	keys := make([]string, 0, len(renameMap))
-	for k := range renameMap {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
-	for _, oldName := range keys {
-		newName := renameMap[oldName]
-		if oldName == "" || newName == "" || oldName == newName {
-			continue
-		}
-		next, ok := replaceInterfaceToken(updated, oldName, newName)
-		if ok {
-			updated = next
-			changed = true
-		}
-	}
-	return updated, changed
-}
 
-func replaceInterfaceToken(input, oldName, newName string) (string, bool) {
-	if input == "" || oldName == "" || oldName == newName {
-		return input, false
-	}
 	var b strings.Builder
-	b.Grow(len(input))
+	b.Grow(len(content))
 	changed := false
 
 	i := 0
-	for {
-		idx := strings.Index(input[i:], oldName)
-		if idx < 0 {
-			b.WriteString(input[i:])
-			break
-		}
-		idx += i
-
-		if isTokenBoundary(input, idx, oldName) {
-			b.WriteString(input[i:idx])
-			b.WriteString(newName)
-			i = idx + len(oldName)
-			changed = true
+	for i < len(content) {
+		if !isIfaceNameChar(content[i]) {
+			b.WriteByte(content[i])
+			i++
 			continue
 		}
-
-		b.WriteString(input[i : idx+1])
-		i = idx + 1
+		j := i
+		for j < len(content) && isIfaceNameChar(content[j]) {
+			j++
+		}
+		token := content[i:j]
+		if renamed, ok := renameInterfaceToken(token, renameMap); ok {
+			b.WriteString(renamed)
+			changed = true
+		} else {
+			b.WriteString(token)
+		}
+		i = j
 	}
 
 	if !changed {
-		return input, false
+		return content, false
 	}
 	return b.String(), true
 }
 
-func isTokenBoundary(text string, idx int, token string) bool {
-	if idx < 0 || idx+len(token) > len(text) {
-		return false
+// renameInterfaceToken resolves a single interface-name token against renameMap.
+// It prefers a whole-token match (covering plain names and full dotted VLAN
+// names); failing that, a dotted token has each component renamed independently
+// so a parent-NIC rename propagates to its VLAN children. Every lookup is against
+// the original map, preserving the single-pass swap/chain semantics. It returns
+// the (possibly rewritten) token and whether a rename occurred.
+func renameInterfaceToken(token string, renameMap map[string]string) (string, bool) {
+	if newName, ok := renameMap[token]; ok && newName != "" && newName != token {
+		return newName, true
 	}
-
-	if idx > 0 {
-		prev := text[idx-1]
-		if isIfaceNameChar(prev) {
-			return false
+	if strings.IndexByte(token, '.') < 0 {
+		return token, false
+	}
+	parts := strings.Split(token, ".")
+	changed := false
+	for idx, p := range parts {
+		if newName, ok := renameMap[p]; ok && newName != "" && newName != p {
+			parts[idx] = newName
+			changed = true
 		}
 	}
-
-	end := idx + len(token)
-	if end < len(text) {
-		next := text[end]
-		if isIfaceNameChar(next) {
-			return false
-		}
+	if !changed {
+		return token, false
 	}
-
-	return true
+	return strings.Join(parts, "."), true
 }
 
+// isIfaceNameChar reports whether ch can appear inside a Linux network-interface
+// name as written in /etc/network/interfaces and listed under /sys/class/net.
+// Besides alphanumerics, '_' and '-', this includes '.' so VLAN subinterfaces
+// such as "vmbr0.100" / "eth0.100" are matched as a single whole token (and thus
+// renamed). ':' is deliberately excluded: it is not part of modern netdev names
+// and appears in IPv6 addresses, where treating it as a name char would conflate
+// address fragments into tokens.
 func isIfaceNameChar(ch byte) bool {
 	switch {
 	case ch >= 'a' && ch <= 'z':
@@ -885,7 +883,7 @@ func isIfaceNameChar(ch byte) bool {
 		return true
 	case ch >= '0' && ch <= '9':
 		return true
-	case ch == '_' || ch == '-':
+	case ch == '_' || ch == '-' || ch == '.':
 		return true
 	default:
 		return false

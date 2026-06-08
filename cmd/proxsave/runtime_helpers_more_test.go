@@ -83,30 +83,6 @@ func TestExtractRemoteName(t *testing.T) {
 	}
 }
 
-func TestExtractTokenAndSeparators(t *testing.T) {
-	line := `PATH=/usr/bin:/bin; /usr/local/bin/proxsave --dry-run && echo "done"`
-
-	start := bytes.Index([]byte(line), []byte("proxsave"))
-	if start < 0 {
-		t.Fatalf("failed to locate proxsave in %q", line)
-	}
-	end := start + len("proxsave")
-
-	token := extractToken(line, start, end)
-	if token != "/usr/local/bin/proxsave" {
-		t.Fatalf("extractToken() = %q, want %q", token, "/usr/local/bin/proxsave")
-	}
-
-	for _, b := range []byte{';', '&', '|', '>', '<', '(', ')'} {
-		if !isCommandSeparator(b) {
-			t.Fatalf("expected %q to be a command separator", b)
-		}
-	}
-	if isCommandSeparator('a') {
-		t.Fatalf("did not expect 'a' to be a command separator")
-	}
-}
-
 func TestFetchBackupList(t *testing.T) {
 	ctx := context.Background()
 	backend := &fakeStorageBackend{

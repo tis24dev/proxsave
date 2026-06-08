@@ -345,7 +345,22 @@ func disarmNetworkRollback(ctx context.Context, logger *logging.Logger, handle *
 	logging.DebugStep(logger, "disarm network rollback", "Disarm complete")
 }
 
-func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, archivePath string) *nicRepairResult {
+// nicRepairUI is the minimal UI surface the shared NIC-name repair orchestration
+// needs: a yes/no confirmation and an informational message. Both cliWorkflowUI
+// and tuiWorkflowUI satisfy it, so the CLI and TUI run the exact same repair
+// logic and differ only in how the prompts/messages are rendered.
+type nicRepairUI interface {
+	ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error)
+	ShowMessage(ctx context.Context, title, message string) error
+}
+
+// repairNICNamesWithUI plans and, with user confirmation, applies NIC-name repair
+// to /etc/network/interfaces*. It is the single implementation shared by the CLI
+// and TUI restore flows (previously duplicated as maybeRepairNICNamesCLI and
+// maybeRepairNICNamesTUI); the only mode-specific behavior comes from ui. Both
+// confirmations default to the non-destructive answer (do NOT skip the repair /
+// do NOT apply conflicting mappings) in both modes.
+func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.Logger, archivePath string) *nicRepairResult {
 	logging.DebugStep(logger, "NIC repair", "Plan NIC name repair (archive=%s)", strings.TrimSpace(archivePath))
 	plan, err := planNICNameRepair(ctx, archivePath)
 	if err != nil {
@@ -365,9 +380,7 @@ func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *l
 	if !plan.Mapping.IsEmpty() {
 		logger.Debug("NIC mapping source: %s", strings.TrimSpace(plan.Mapping.BackupSourcePath))
 		logger.Debug("NIC mapping details:\n%s", plan.Mapping.Details())
-	}
 
-	if !plan.Mapping.IsEmpty() {
 		logging.DebugStep(logger, "NIC repair", "Detect persistent NIC naming overrides (udev/systemd)")
 		overrides, err := detectNICNamingOverrideRules(logger)
 		if err != nil {
@@ -377,13 +390,17 @@ func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *l
 		} else {
 			logger.Warning("%s", overrides.Summary())
 			logging.DebugStep(logger, "NIC repair", "Naming override details:\n%s", overrides.Details(32))
-			fmt.Println()
-			fmt.Println("WARNING: Persistent NIC naming rules detected (udev/systemd).")
-			fmt.Println("If you use custom rules to keep legacy interface names (e.g. enp3s0 -> eth0), ProxSave NIC repair may rewrite /etc/network/interfaces* to different names.")
+
+			var b strings.Builder
+			b.WriteString("Persistent NIC naming rules detected (udev/systemd).\n\n")
+			b.WriteString("If you use custom rules to keep legacy interface names (e.g. enp3s0 -> eth0), ProxSave NIC repair may rewrite /etc/network/interfaces* to different names.\n\n")
 			if details := strings.TrimSpace(overrides.Details(8)); details != "" {
-				fmt.Println(details)
+				b.WriteString(details)
+				b.WriteString("\n\n")
 			}
-			skip, err := promptYesNo(ctx, reader, "Skip NIC name repair and keep restored interface names? (y/N): ")
+			b.WriteString("Skip NIC name repair and keep restored interface names?")
+
+			skip, err := ui.ConfirmAction(ctx, "NIC naming overrides", b.String(), "Skip NIC repair", "Proceed", 0, false)
 			if err != nil {
 				logger.Warning("NIC naming override prompt failed: %v", err)
 			} else if skip {
@@ -399,6 +416,9 @@ func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *l
 	includeConflicts := false
 	if len(plan.Conflicts) > 0 {
 		logging.DebugStep(logger, "NIC repair", "Conflicts detected: %d", len(plan.Conflicts))
+		var b strings.Builder
+		b.WriteString("Detected NIC name conflicts.\n\n")
+		b.WriteString("These interface names exist on the current system but map to different NICs in the backup inventory:\n\n")
 		for i, conflict := range plan.Conflicts {
 			if i >= 32 {
 				logging.DebugStep(logger, "NIC repair", "Conflict details truncated (showing first 32)")
@@ -406,11 +426,13 @@ func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *l
 			}
 			logging.DebugStep(logger, "NIC repair", "Conflict: %s", conflict.Details())
 		}
-		fmt.Println("NIC name conflicts detected:")
 		for _, conflict := range plan.Conflicts {
-			fmt.Println(conflict.Details())
+			b.WriteString(conflict.Details())
+			b.WriteString("\n")
 		}
-		ok, err := promptYesNo(ctx, reader, "Apply NIC rename mapping even when conflicting interface names exist on this system? (y/N): ")
+		b.WriteString("\nApply NIC rename mapping even when conflicting interface names exist on this system?")
+
+		ok, err := ui.ConfirmAction(ctx, "NIC name conflicts", b.String(), "Apply conflicts", "Skip conflicts", 0, false)
 		if err != nil {
 			logger.Warning("NIC conflict prompt failed: %v", err)
 		} else if ok {
@@ -425,12 +447,16 @@ func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *l
 		logger.Warning("NIC name repair failed: %v", err)
 		return nil
 	}
+
+	// Surface the outcome in both modes (this was previously CLI-only): the
+	// conflict-skip note is not part of result.Summary(), and the applied details
+	// confirm the /etc/network/interfaces* rewrite.
 	if len(plan.Conflicts) > 0 && !includeConflicts {
-		fmt.Println("Note: conflicting NIC mappings were skipped.")
+		_ = ui.ShowMessage(ctx, "NIC repair", "Note: conflicting NIC mappings were skipped.")
 	}
 	if result != nil {
 		if result.Applied() {
-			fmt.Println(result.Details())
+			_ = ui.ShowMessage(ctx, "NIC repair", result.Details())
 		} else if result.SkippedReason != "" {
 			logger.Info("%s", result.Summary())
 		} else {
@@ -438,6 +464,13 @@ func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *l
 		}
 	}
 	return result
+}
+
+// maybeRepairNICNamesCLI runs the shared NIC-name repair through a CLI UI. It
+// remains a thin entry point for tests that drive the flow with a bufio.Reader;
+// production code calls repairNICNamesWithUI via cliWorkflowUI.RepairNICNames.
+func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, archivePath string) *nicRepairResult {
+	return repairNICNamesWithUI(ctx, newCLIWorkflowUI(reader, logger), logger, archivePath)
 }
 
 func applyNetworkConfig(ctx context.Context, logger *logging.Logger) error {

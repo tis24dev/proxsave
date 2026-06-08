@@ -269,7 +269,8 @@ func TestGuardMountPoint(t *testing.T) {
 			return nil
 		}
 
-		if err := guardMountPoint(nil, "/mnt/nilctx"); err != nil { //nolint:staticcheck // Verifies the documented nil context fallback.
+		var nilCtx context.Context // deliberately nil: verifies the documented nil-context fallback
+		if err := guardMountPoint(nilCtx, "/mnt/nilctx"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

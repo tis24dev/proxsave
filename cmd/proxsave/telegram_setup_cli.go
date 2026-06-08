@@ -20,9 +20,6 @@ var (
 	telegramSetupPromptYesNo       = promptYesNo
 )
 
-const maxTelegramSetupVerificationAttempts = 10
-const maxTelegramSetupStatusMessageLen = 200
-
 func sanitizeTelegramSetupStatusMessage(raw string) string {
 	msg := strings.TrimSpace(raw)
 	if msg == "" {
@@ -30,7 +27,7 @@ func sanitizeTelegramSetupStatusMessage(raw string) string {
 	}
 
 	sanitized := stripTelegramTerminalSequences(msg)
-	sanitized = truncateTelegramSetupStatusMessage(sanitized, maxTelegramSetupStatusMessageLen)
+	sanitized = orchestrator.TruncateTelegramSetupStatusMessage(sanitized)
 	if sanitized != "" {
 		return sanitized
 	}
@@ -38,19 +35,7 @@ func sanitizeTelegramSetupStatusMessage(raw string) string {
 	quoted := strconv.QuoteToASCII(msg)
 	quoted = strings.TrimPrefix(quoted, `"`)
 	quoted = strings.TrimSuffix(quoted, `"`)
-	return truncateTelegramSetupStatusMessage(quoted, maxTelegramSetupStatusMessageLen)
-}
-
-func truncateTelegramSetupStatusMessage(msg string, max int) string {
-	msg = strings.TrimSpace(msg)
-	if msg == "" || max <= 0 {
-		return ""
-	}
-	runes := []rune(msg)
-	if len(runes) <= max {
-		return msg
-	}
-	return string(runes[:max]) + "...(truncated)"
+	return orchestrator.TruncateTelegramSetupStatusMessage(quoted)
 }
 
 func stripTelegramTerminalSequences(msg string) string {
@@ -194,7 +179,7 @@ func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, con
 
 	check, err := telegramSetupPromptYesNo(ctx, reader, "Check Telegram pairing now? [Y/n]: ", true)
 	if err != nil {
-		return wrapInstallError(err)
+		return skipOptionalInstallStepOnAbort(bootstrap, "Telegram setup", err)
 	}
 	if !check {
 		fmt.Println("Skipped verification. You can verify later by running proxsave.")
@@ -228,7 +213,7 @@ func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, con
 			}
 		}
 
-		if attempts >= maxTelegramSetupVerificationAttempts {
+		if attempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
 			fmt.Println("Maximum verification attempts reached. You can retry later by running proxsave.")
 			logBootstrapInfo(bootstrap, "Telegram setup: not verified (attempts=%d last=%d %s)", attempts, status.Code, msg)
 			return nil
@@ -236,7 +221,7 @@ func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, con
 
 		retry, err := telegramSetupPromptYesNo(ctx, reader, "Check again? [y/N]: ", false)
 		if err != nil {
-			return wrapInstallError(err)
+			return skipOptionalInstallStepOnAbort(bootstrap, "Telegram setup", err)
 		}
 		if !retry {
 			fmt.Println("Verification not completed. You can retry later by running proxsave.")

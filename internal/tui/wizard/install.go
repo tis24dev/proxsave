@@ -18,7 +18,12 @@ import (
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
-type installWizardPrefill struct {
+// InstallWizardPrefill holds the values parsed from an existing backup.env so a
+// re-run of the install wizard can default to them. It is the single source of
+// truth shared by the TUI wizard and the CLI wizard (cmd/proxsave) — see
+// DeriveInstallWizardPrefill — so both modes default to the stored config and
+// neither silently resets a toggle on a no-op edit.
+type InstallWizardPrefill struct {
 	SecondaryEnabled    bool
 	SecondaryPath       string
 	SecondaryLogPath    string
@@ -27,6 +32,7 @@ type installWizardPrefill struct {
 	CloudLogPath        string
 	FirewallEnabled     bool
 	TelegramEnabled     bool
+	TelegramType        string
 	EmailEnabled        bool
 	EmailDeliveryMethod string
 	EncryptionEnabled   bool
@@ -102,7 +108,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 
 	app := tui.NewApp()
 
-	prefill := deriveInstallWizardPrefill(baseTemplate)
+	prefill := DeriveInstallWizardPrefill(baseTemplate)
 
 	// Build the form
 	form := components.NewForm(app)
@@ -459,6 +465,12 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 		form.Form,
 	)
 
+	// Route validation/submit errors to an inline modal that returns to the form,
+	// instead of ShowError() which stops the app and would make RunInstallWizard
+	// return the partially-filled data with a nil error. The submit closure reads
+	// parentView lazily, so setting it here (after the button was added) is fine.
+	form.SetParentView(flex)
+
 	if err := runInstallWizardRunner(ctx, app, flex, form.Form); err != nil {
 		return nil, err
 	}
@@ -487,6 +499,9 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = config.DefaultEnvTemplate()
 	}
 	if err := validateSecondaryInstallData(data); err != nil {
+		return "", err
+	}
+	if err := validateCloudInstallData(data); err != nil {
 		return "", err
 	}
 
@@ -584,6 +599,26 @@ func validateSecondaryInstallData(data *InstallWizardData) error {
 	return nil
 }
 
+// validateCloudInstallData mirrors the wizard's own onSubmit checks: when cloud
+// storage is enabled both rclone remotes are required. It is a defense-in-depth
+// guard so a partially-filled payload can never write CLOUD_ENABLED=true with an
+// empty CLOUD_REMOTE/CLOUD_LOG_PATH into the config.
+func validateCloudInstallData(data *InstallWizardData) error {
+	if data == nil {
+		return ErrNilInstallData
+	}
+	if !data.EnableCloudStorage {
+		return nil
+	}
+	if strings.TrimSpace(data.RcloneBackupRemote) == "" {
+		return errors.New("cloud storage is enabled but the rclone backup remote is empty")
+	}
+	if strings.TrimSpace(data.RcloneLogRemote) == "" {
+		return errors.New("cloud storage is enabled but the rclone log path is empty")
+	}
+	return nil
+}
+
 // setEnvValue sets or updates an environment variable in the template
 func setEnvValue(template, key, value string) string {
 	return utils.SetEnvValue(template, key, value)
@@ -631,8 +666,11 @@ func boolToOptionIndex(value bool) int {
 	return 0
 }
 
-func deriveInstallWizardPrefill(baseTemplate string) installWizardPrefill {
-	out := installWizardPrefill{}
+// DeriveInstallWizardPrefill parses an existing backup.env template into an
+// InstallWizardPrefill. Both the TUI wizard and the CLI install wizard call this
+// so each prompt/field defaults to the stored value.
+func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
+	out := InstallWizardPrefill{}
 	if strings.TrimSpace(baseTemplate) == "" {
 		return out
 	}
@@ -649,6 +687,7 @@ func deriveInstallWizardPrefill(baseTemplate string) installWizardPrefill {
 	out.FirewallEnabled = readTemplateBool(values, "BACKUP_FIREWALL_RULES")
 
 	out.TelegramEnabled = readTemplateBool(values, "TELEGRAM_ENABLED")
+	out.TelegramType = readTemplateString(values, "BOT_TELEGRAM_TYPE")
 	out.EmailEnabled = readTemplateBool(values, "EMAIL_ENABLED")
 	out.EmailDeliveryMethod = installEmailDeliveryMethodOrDefault(readTemplateString(values, "EMAIL_DELIVERY_METHOD"))
 

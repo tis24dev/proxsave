@@ -249,9 +249,14 @@ func (c *Collector) populatePBSInventoryReferencedFiles(ctx context.Context, inv
 	report := &inventory.report
 	for _, ref := range inventory.referencedFiles {
 		key := referencedFileKey(ref)
-		snap := c.captureInventoryFile(c.systemPath(ref), ref)
+		// Referenced files come from crypttab key-file paths and fstab
+		// credentials/keyfile/identityfile options: they are dm-crypt/LUKS keys
+		// and CIFS/NFS/SSH secrets. Record presence/size only — never their
+		// content nor a hash of it — so the plaintext inventory report cannot
+		// leak (nor make derivable) the key material.
+		snap := c.captureInventoryFileMetadataOnly(c.systemPath(ref), ref)
 		if !snap.Skipped && snap.Reason == "" {
-			snap.Reason = "referenced by fstab/crypttab"
+			snap.Reason = "referenced by fstab/crypttab (content omitted: potential secret)"
 		}
 		report.Files[key] = snap
 	}
@@ -445,6 +450,45 @@ func (c *Collector) captureInventoryFile(sourcePath, logicalPath string) invento
 	snap.SizeBytes = int64(len(data))
 	snap.SHA256 = sha256Hex(data)
 	snap.Content = string(data)
+	return snap
+}
+
+// captureInventoryFileMetadataOnly records a file's presence and size but never
+// its content or content hash. It is used for fstab/crypttab referenced files
+// (dm-crypt/LUKS key files and CIFS/NFS/SSH credential files): their bytes must
+// not be embedded in — nor be derivable from — the plaintext inventory report.
+func (c *Collector) captureInventoryFileMetadataOnly(sourcePath, logicalPath string) inventoryFileSnapshot {
+	snap := inventoryFileSnapshot{
+		LogicalPath: logicalPath,
+		SourcePath:  sourcePath,
+	}
+
+	if c.shouldExclude(sourcePath) {
+		snap.Skipped = true
+		snap.Reason = "excluded by pattern"
+		return snap
+	}
+
+	// Metadata only: stat the file instead of reading it, so the (potentially
+	// sensitive) content is never loaded and Content/SHA256 stay empty.
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return snap
+		}
+		snap.Error = err.Error()
+		return snap
+	}
+
+	if !info.Mode().IsRegular() {
+		// Mirror the content path (os.ReadFile), which would fail on a
+		// directory/device/socket: a non-regular target is not a healthy file.
+		snap.Error = fmt.Sprintf("not a regular file (mode %s)", info.Mode())
+		return snap
+	}
+
+	snap.Exists = true
+	snap.SizeBytes = info.Size()
 	return snap
 }
 

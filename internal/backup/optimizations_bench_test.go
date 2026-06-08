@@ -1,7 +1,6 @@
 package backup
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -12,40 +11,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
-
-func BenchmarkChunkLargeFiles(b *testing.B) {
-	const (
-		fileSize   = 256 * 1024 // 256 KiB per file
-		fileCount  = 4
-		chunkBytes = 128 * 1024
-	)
-
-	ctx := context.Background()
-	logger := logging.New(types.LogLevelError, false)
-
-	template := b.TempDir()
-	for i := 0; i < fileCount; i++ {
-		path := filepath.Join(template, fmt.Sprintf("seed-%02d.dat", i))
-		if err := writeFileOfSize(path, fileSize); err != nil {
-			b.Fatalf("write seed file: %v", err)
-		}
-	}
-
-	workspace := b.TempDir()
-	b.ReportAllocs()
-	b.SetBytes(fileSize * fileCount)
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		iterRoot := filepath.Join(workspace, fmt.Sprintf("iter-%d", i))
-		if err := copyDir(template, iterRoot); err != nil {
-			b.Fatalf("copy template: %v", err)
-		}
-		if err := chunkLargeFiles(ctx, logger, iterRoot, chunkBytes, chunkBytes); err != nil {
-			b.Fatalf("chunkLargeFiles: %v", err)
-		}
-	}
-}
 
 func BenchmarkPrefilterFiles(b *testing.B) {
 	const maxSize = 256 * 1024
@@ -81,32 +46,6 @@ func BenchmarkPrefilterFiles(b *testing.B) {
 			b.Fatalf("prefilterFiles: %v", err)
 		}
 	}
-}
-
-func writeFileOfSize(path string, size int64) (err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer closeIntoErr(&err, f, "close benchmark file")
-
-	chunk := bytes.Repeat([]byte("x"), 32*1024)
-	var written int64
-	for written < size {
-		left := size - written
-		toWrite := chunk
-		if left < int64(len(chunk)) {
-			toWrite = chunk[:left]
-		}
-		if _, err := f.Write(toWrite); err != nil {
-			return err
-		}
-		written += int64(len(toWrite))
-	}
-	return nil
 }
 
 func copyDir(src, dst string) error {

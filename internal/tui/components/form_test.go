@@ -161,6 +161,32 @@ func TestAddCancelButtonCallsHandler(t *testing.T) {
 	}
 }
 
+func TestSetDefaultButtonFocusesChosenButton(t *testing.T) {
+	form := NewForm(tui.NewApp())
+	form.AddSubmitButton("Yes")
+	form.AddCancelButton("No")
+
+	form.SetDefaultButton(1) // focus the cancel/No button
+	if !form.GetButton(1).HasFocus() {
+		t.Fatalf("expected button 1 (No) to be focused")
+	}
+	if form.GetButton(0).HasFocus() {
+		t.Fatalf("button 0 (Yes) should not be focused")
+	}
+
+	form.SetDefaultButton(0) // focus the submit/Yes button
+	if !form.GetButton(0).HasFocus() {
+		t.Fatalf("expected button 0 (Yes) to be focused")
+	}
+
+	// Out-of-range indices are no-ops: focus must stay on button 0.
+	form.SetDefaultButton(5)
+	form.SetDefaultButton(-1)
+	if !form.GetButton(0).HasFocus() {
+		t.Fatalf("out-of-range SetDefaultButton must not change focus")
+	}
+}
+
 func TestSetBorderWithTitleSetsTitle(t *testing.T) {
 	form := NewForm(tui.NewApp())
 	form.SetBorderWithTitle("Wizard")

@@ -2,6 +2,8 @@ package main
 
 import (
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 func TestFilterCronLines(t *testing.T) {
@@ -12,10 +14,10 @@ func TestFilterCronLines(t *testing.T) {
 	tests := []struct {
 		name         string
 		inputLines   []string
-		legacyPaths  []string
 		correctPaths []string
 		wantLines    []string
 		wantHasEntry bool
+		wantSchedule string
 	}{
 		{
 			name: "Preserve proxmox-backup-client lines",
@@ -26,7 +28,6 @@ func TestFilterCronLines(t *testing.T) {
 				userLine2,
 				"0 3 * * * /usr/local/bin/proxsave", // Correct entry
 			},
-			legacyPaths:  []string{"/opt/proxsave/script/proxmox-backup.sh"},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"# Existing comments",
@@ -38,17 +39,17 @@ func TestFilterCronLines(t *testing.T) {
 			wantHasEntry: true,
 		},
 		{
-			name: "Remove legacy bash script",
+			name: "Migrate legacy proxmox-backup symlink, keep schedule",
 			inputLines: []string{
-				"0 2 * * * /opt/proxsave/script/proxmox-backup.sh",
+				"0 5 * * * /usr/local/bin/proxmox-backup",
 				userLine1,
 			},
-			legacyPaths:  []string{"/opt/proxsave/script/proxmox-backup.sh"},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				userLine1,
 			},
 			wantHasEntry: false,
+			wantSchedule: "0 5 * * *",
 		},
 		{
 			name: "Remove outdated binary reference",
@@ -56,19 +57,18 @@ func TestFilterCronLines(t *testing.T) {
 				"0 2 * * * /usr/bin/proxmox-backup", // Outdated path
 				userLine1,
 			},
-			legacyPaths:  []string{},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				userLine1,
 			},
 			wantHasEntry: false,
+			wantSchedule: "0 2 * * *",
 		},
 		{
 			name: "Preserve custom binary name proxmox-backup-new",
 			inputLines: []string{
 				"0 2 * * * /usr/local/bin/proxmox-backup-new",
 			},
-			legacyPaths:  []string{},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"0 2 * * * /usr/local/bin/proxmox-backup-new",
@@ -80,7 +80,6 @@ func TestFilterCronLines(t *testing.T) {
 			inputLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-dog",
 			},
-			legacyPaths:  []string{},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-dog",
@@ -92,7 +91,6 @@ func TestFilterCronLines(t *testing.T) {
 			inputLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-test --flag",
 			},
-			legacyPaths:  []string{},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-test --flag",
@@ -103,13 +101,11 @@ func TestFilterCronLines(t *testing.T) {
 			name: "Mixed scenario",
 			inputLines: []string{
 				"# Header",
-				"0 2 * * * /opt/proxsave/script/proxmox-backup.sh", // Legacy
 				userLine1,                           // Keep
 				"0 4 * * * /usr/bin/proxsave",       // Wrong path
 				userLine2,                           // Keep
 				"0 5 * * * /usr/local/bin/proxsave", // Correct
 			},
-			legacyPaths:  []string{"/opt/proxsave/script/proxmox-backup.sh"},
 			correctPaths: []string{"/usr/local/bin/proxsave"},
 			wantLines: []string{
 				"# Header",
@@ -118,15 +114,53 @@ func TestFilterCronLines(t *testing.T) {
 				"0 5 * * * /usr/local/bin/proxsave",
 			},
 			wantHasEntry: true,
+			wantSchedule: "0 4 * * *",
+		},
+		{
+			// Regression: a different binary whose name merely shares the
+			// "/usr/local/bin/proxsave" prefix must not be matched (was a false
+			// positive when matching by substring instead of the command token).
+			name: "Ignore a prefix-sharing binary (not the proxsave entry)",
+			inputLines: []string{
+				"0 2 * * * /usr/local/bin/proxsavex",
+				userLine1,
+			},
+			correctPaths: []string{"/usr/local/bin/proxsave"},
+			wantLines: []string{
+				"0 2 * * * /usr/local/bin/proxsavex",
+				userLine1,
+			},
+			wantHasEntry: false,
+		},
+		{
+			// Regression: a job whose COMMAND is a different binary but which passes
+			// the proxsave path only as an ARGUMENT (e.g. backing up the binary) must
+			// NOT be removed — removal keys off the cron command token, not a path
+			// appearing anywhere in the line.
+			name: "Preserve a job referencing proxsave only as an argument",
+			inputLines: []string{
+				"0 4 * * * /usr/bin/cp /usr/local/bin/proxsave /backup/proxsave.bak",
+				userLine1,
+			},
+			correctPaths: []string{"/usr/local/bin/proxsave"},
+			wantLines: []string{
+				"0 4 * * * /usr/bin/cp /usr/local/bin/proxsave /backup/proxsave.bak",
+				userLine1,
+			},
+			wantHasEntry: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotLines, gotHasEntry := filterCronLines(tt.inputLines, tt.legacyPaths, tt.correctPaths)
+			gotLines, gotHasEntry, gotSchedule := filterCronLines(tt.inputLines, tt.correctPaths)
 
 			if gotHasEntry != tt.wantHasEntry {
 				t.Errorf("hasCurrentEntry = %v, want %v", gotHasEntry, tt.wantHasEntry)
+			}
+
+			if gotSchedule != tt.wantSchedule {
+				t.Errorf("replacedSchedule = %q, want %q", gotSchedule, tt.wantSchedule)
 			}
 
 			if len(gotLines) != len(tt.wantLines) {
@@ -134,6 +168,73 @@ func TestFilterCronLines(t *testing.T) {
 			}
 
 			for i, line := range gotLines {
+				if line != tt.wantLines[i] {
+					t.Errorf("line[%d] = %q, want %q", i, line, tt.wantLines[i])
+				}
+			}
+		})
+	}
+}
+
+func TestDropLegacyBashCronLines(t *testing.T) {
+	tests := []struct {
+		name      string
+		baseDir   string
+		input     []string
+		wantLines []string
+	}{
+		{
+			name:    "drops legacy bash script under known roots",
+			baseDir: "/opt/proxsave",
+			input: []string{
+				"0 2 * * * /opt/proxsave/script/proxmox-backup.sh",
+				"0 2 * * * /opt/proxmox-backup/script/proxmox-backup.sh",
+			},
+			wantLines: []string{},
+		},
+		{
+			name:    "drops legacy bash script under custom baseDir",
+			baseDir: "/custom/base",
+			input: []string{
+				"0 2 * * * /custom/base/script/proxmox-backup.sh",
+			},
+			wantLines: []string{},
+		},
+		{
+			// Safety guard: Proxmox Backup Server components and unrelated jobs
+			// must NEVER be removed. PBS binaries have no ".sh"; a path that only
+			// appears as an argument is not the command; a same-named script under
+			// an unknown path is not ours.
+			name:    "preserves PBS components and unrelated jobs",
+			baseDir: "/opt/proxsave",
+			input: []string{
+				"# backup jobs",
+				"0 1 * * * /usr/bin/proxmox-backup-client backup root.pxar:/etc",
+				"0 2 * * * /usr/sbin/proxmox-backup-proxy",
+				"0 3 * * * /usr/local/bin/proxsave",
+				"0 4 * * * /home/me/proxmox-backup.sh",
+				"0 5 * * * /bin/echo /opt/proxsave/script/proxmox-backup.sh",
+			},
+			wantLines: []string{
+				"# backup jobs",
+				"0 1 * * * /usr/bin/proxmox-backup-client backup root.pxar:/etc",
+				"0 2 * * * /usr/sbin/proxmox-backup-proxy",
+				"0 3 * * * /usr/local/bin/proxsave",
+				"0 4 * * * /home/me/proxmox-backup.sh",
+				"0 5 * * * /bin/echo /opt/proxsave/script/proxmox-backup.sh",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dropLegacyBashCronLines(tt.input, tt.baseDir, logging.NewBootstrapLogger())
+
+			if len(got) != len(tt.wantLines) {
+				t.Fatalf("got %d lines, want %d lines\nGot:  %v\nWant: %v", len(got), len(tt.wantLines), got, tt.wantLines)
+			}
+
+			for i, line := range got {
 				if line != tt.wantLines[i] {
 					t.Errorf("line[%d] = %q, want %q", i, line, tt.wantLines[i])
 				}

@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -399,6 +400,12 @@ func (f *networkRollbackUIApplyFlow) waitForCommit() error {
 	committed, commitErr := f.ui.PromptNetworkCommit(f.ctx, remaining, f.health, f.nicRepair, f.diagnosticsDir)
 	if commitErr != nil {
 		f.warning("Commit prompt error: %v", commitErr)
+		// A timeout is the same "user did not type COMMIT in time" outcome the TUI
+		// reports as (false, nil): surface the reconnect/rollback guidance in both
+		// modes via handleNetworkNotCommitted. Only a genuine cancel/error skips it.
+		if errors.Is(commitErr, context.DeadlineExceeded) {
+			return f.handleNetworkNotCommitted()
+		}
 		return buildNetworkApplyNotCommittedError(f.ctx, f.logger, f.iface, f.handle)
 	}
 	logging.DebugStep(f.logger, "network safe apply (ui)", "User commit result: committed=%v", committed)

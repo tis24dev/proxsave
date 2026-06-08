@@ -12,7 +12,8 @@ type restoreTUITestContextKey struct{}
 func TestPromptYesNoTUI_YesReturnsTrue(t *testing.T) {
 	withSimApp(t, []tcell.Key{tcell.KeyEnter})
 
-	ok, err := promptYesNoTUI(context.Background(), "Title", "/tmp/config.env", "sig", "Message", "Yes", "No")
+	// defaultYes focuses the affirmative button, so pressing Enter chooses Yes.
+	ok, err := promptYesNoTUI(context.Background(), "Title", "/tmp/config.env", "sig", "Message", "Yes", "No", true)
 	if err != nil {
 		t.Fatalf("promptYesNoTUI error: %v", err)
 	}
@@ -24,12 +25,29 @@ func TestPromptYesNoTUI_YesReturnsTrue(t *testing.T) {
 func TestPromptYesNoTUI_NoReturnsFalse(t *testing.T) {
 	withSimApp(t, []tcell.Key{tcell.KeyTab, tcell.KeyEnter})
 
-	ok, err := promptYesNoTUI(context.Background(), "Title", "/tmp/config.env", "sig", "Message", "Yes", "No")
+	ok, err := promptYesNoTUI(context.Background(), "Title", "/tmp/config.env", "sig", "Message", "Yes", "No", true)
 	if err != nil {
 		t.Fatalf("promptYesNoTUI error: %v", err)
 	}
 	if ok {
 		t.Fatalf("ok=%v; want false", ok)
+	}
+}
+
+// TestPromptYesNoTUI_DefaultNoEnterReturnsFalse pins the core of the engine/UI
+// parity fix: when the engine asks for a default-deny prompt (defaultYes=false),
+// pressing Enter without navigating must choose No — matching the CLI, which
+// returns the default on a blank line — rather than the affirmative button that
+// tview would focus first.
+func TestPromptYesNoTUI_DefaultNoEnterReturnsFalse(t *testing.T) {
+	withSimApp(t, []tcell.Key{tcell.KeyEnter})
+
+	ok, err := promptYesNoTUI(context.Background(), "Title", "/tmp/config.env", "sig", "Message", "Yes", "No", false)
+	if err != nil {
+		t.Fatalf("promptYesNoTUI error: %v", err)
+	}
+	if ok {
+		t.Fatalf("ok=%v; want false (Enter on a default-No prompt must decline)", ok)
 	}
 }
 
@@ -66,7 +84,7 @@ func TestShowRestorePlanTUI_CancelReturnsAborted(t *testing.T) {
 
 func TestConfirmRestoreTUI_ConfirmedAndOverwriteReturnsTrue(t *testing.T) {
 	expectedCtx := context.WithValue(context.Background(), restoreTUITestContextKey{}, "confirm-restore")
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 		if ctx != expectedCtx {
 			t.Fatalf("stub received unexpected context: got %v want %v", ctx, expectedCtx)
 		}
@@ -87,7 +105,7 @@ func TestConfirmRestoreTUI_ConfirmedAndOverwriteReturnsTrue(t *testing.T) {
 
 func TestConfirmRestoreTUI_OverwriteDeclinedReturnsFalse(t *testing.T) {
 	expectedCtx := context.WithValue(context.Background(), restoreTUITestContextKey{}, "overwrite-declined")
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 		if ctx != expectedCtx {
 			t.Fatalf("stub received unexpected context: got %v want %v", ctx, expectedCtx)
 		}

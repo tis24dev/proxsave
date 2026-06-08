@@ -553,3 +553,93 @@ func TestUpgradeConfigAddsMissingKeysUnderUpgradeSectionWhenNoAnchor(t *testing.
 		}
 	})
 }
+
+// TestUpgradePrunesRemovedChunkKeysExactly is an adversarial guard for the
+// removal of the obsolete smart-chunking keys from live backup.env files.
+// Removing the wrong line would be catastrophic, so it asserts that ONLY the
+// three exact keys are pruned and that every look-alike key, commented line and
+// substring-bearing value is preserved untouched.
+func TestUpgradePrunesRemovedChunkKeysExactly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "backup.env")
+	original := strings.Join([]string{
+		"BACKUP_ENABLED=true",
+		"ENABLE_DEDUPLICATION=true",
+		"ENABLE_PREFILTER=true",
+		"# old optimization knobs below (must NOT be removed as a comment)",
+		"ENABLE_SMART_CHUNKING=true",
+		"CHUNK_THRESHOLD_MB=50",
+		"CHUNK_SIZE_MB=10",
+		"# CHUNK_SIZE_MB=99 commented line must stay",
+		"MAX_CHUNK_SIZE_MB=1",                  // look-alike: must stay
+		"CHUNK_SIZE_MB_LEGACY=2",               // look-alike: must stay
+		"ENABLE_SMART_CHUNKING_V2=3",           // look-alike: must stay
+		"CUSTOM_BACKUP_PATHS=/x/chunk_size_mb", // value substring: must stay
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(original), 0o640); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	res, err := UpgradeConfigFile(path)
+	if err != nil {
+		t.Fatalf("UpgradeConfigFile: %v", err)
+	}
+	if !res.Changed {
+		t.Fatalf("expected Changed=true (chunk keys should have been pruned)")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	values, _, _, _, _, _, perr := parseEnvValues(strings.Split(string(after), "\n"))
+	if perr != nil {
+		t.Fatalf("parse upgraded file: %v", perr)
+	}
+
+	for _, k := range []string{"ENABLE_SMART_CHUNKING", "CHUNK_THRESHOLD_MB", "CHUNK_SIZE_MB"} {
+		if _, ok := values[k]; ok {
+			t.Fatalf("key %q should have been pruned but is still active", k)
+		}
+	}
+	for _, k := range []string{
+		"BACKUP_ENABLED", "ENABLE_DEDUPLICATION", "ENABLE_PREFILTER",
+		"MAX_CHUNK_SIZE_MB", "CHUNK_SIZE_MB_LEGACY", "ENABLE_SMART_CHUNKING_V2",
+		"CUSTOM_BACKUP_PATHS",
+	} {
+		if _, ok := values[k]; !ok {
+			t.Fatalf("key %q must be preserved but was removed", k)
+		}
+	}
+	if !strings.Contains(string(after), "# CHUNK_SIZE_MB=99 commented line must stay") {
+		t.Fatalf("commented look-alike line must be preserved verbatim")
+	}
+	if v := values["CUSTOM_BACKUP_PATHS"]; len(v) == 0 || !strings.Contains(v[0].rawValue, "chunk_size_mb") {
+		t.Fatalf("value containing 'chunk_size_mb' must be preserved, got %+v", v)
+	}
+
+	w := strings.Join(res.Warnings, " | ")
+	for _, k := range []string{"ENABLE_SMART_CHUNKING", "CHUNK_THRESHOLD_MB", "CHUNK_SIZE_MB"} {
+		if !strings.Contains(w, k) {
+			t.Fatalf("warning should mention pruned key %q; got: %s", k, w)
+		}
+	}
+
+	// Safety net: a timestamped backup equal to the original must exist.
+	if res.BackupPath == "" {
+		t.Fatalf("expected a backup file to be created")
+	}
+	backupContent, err := os.ReadFile(res.BackupPath)
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	if string(backupContent) != original {
+		t.Fatalf("backup must equal the original file byte-for-byte")
+	}
+
+	// The pruned file must still be loadable.
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("upgraded config must still load: %v", err)
+	}
+}

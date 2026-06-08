@@ -168,6 +168,35 @@ datastore: Synology-Archive
 		t.Fatalf("expected lvm backup snapshot, got: %+v", dir)
 	}
 
+	// H3 regression: the on-disk inventory report (which is what gets archived)
+	// must record fstab/crypttab referenced files — dm-crypt/LUKS key files and
+	// CIFS/NFS/SSH credential files — as presence/size ONLY, never their content
+	// nor a hash of it, and must not contain the secret bytes anywhere.
+	refSnapshots := 0
+	for key, snap := range report.Files {
+		if !strings.HasPrefix(key, "ref_") {
+			continue
+		}
+		refSnapshots++
+		if snap.Content != "" {
+			t.Fatalf("referenced secret file %q leaked content: %q", snap.LogicalPath, snap.Content)
+		}
+		if snap.SHA256 != "" {
+			t.Fatalf("referenced secret file %q leaked a content hash: %q", snap.LogicalPath, snap.SHA256)
+		}
+		if snap.Exists && snap.SizeBytes == 0 {
+			t.Fatalf("referenced file %q should record its size", snap.LogicalPath)
+		}
+	}
+	if refSnapshots == 0 {
+		t.Fatalf("expected referenced-file snapshots for the crypttab/fstab secrets")
+	}
+	for _, secret := range []string{"keydata", "PRIVATEKEY", "password=secret", "username=alice"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("inventory report leaked secret %q", secret)
+		}
+	}
+
 	// Inventory-only adapter should not own backup-tree copies for storage_stack anymore.
 	for _, rel := range []string{
 		"etc/iscsi/nodes/iqn.2026-01.test:target1/127.0.0.1,3260,1/default",

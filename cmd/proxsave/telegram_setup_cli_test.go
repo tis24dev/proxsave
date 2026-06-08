@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -214,14 +215,15 @@ func TestRunTelegramSetupCLI_StopsAfterMaxVerificationAttempts(t *testing.T) {
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", bootstrap); err != nil {
 		t.Fatalf("runTelegramSetupCLI error: %v", err)
 	}
-	if checkCalls != maxTelegramSetupVerificationAttempts {
-		t.Fatalf("checkCalls=%d, want %d", checkCalls, maxTelegramSetupVerificationAttempts)
+	if checkCalls != orchestrator.TelegramSetupMaxVerificationAttempts {
+		t.Fatalf("checkCalls=%d, want %d", checkCalls, orchestrator.TelegramSetupMaxVerificationAttempts)
 	}
-	if promptCalls != maxTelegramSetupVerificationAttempts {
-		t.Fatalf("promptCalls=%d, want %d", promptCalls, maxTelegramSetupVerificationAttempts)
+	if promptCalls != orchestrator.TelegramSetupMaxVerificationAttempts {
+		t.Fatalf("promptCalls=%d, want %d", promptCalls, orchestrator.TelegramSetupMaxVerificationAttempts)
 	}
-	if !strings.Contains(mirrorBuf.String(), "Telegram setup: not verified (attempts=10 last=409 not linked yet)") {
-		t.Fatalf("expected max-attempt failure log, got %q", mirrorBuf.String())
+	wantLog := fmt.Sprintf("Telegram setup: not verified (attempts=%d last=409 not linked yet)", orchestrator.TelegramSetupMaxVerificationAttempts)
+	if !strings.Contains(mirrorBuf.String(), wantLog) {
+		t.Fatalf("expected max-attempt failure log %q, got %q", wantLog, mirrorBuf.String())
 	}
 }
 
@@ -245,6 +247,38 @@ func TestRunTelegramSetupCLI_BootstrapErrorNonBlocking(t *testing.T) {
 	}
 }
 
+// TestRunTelegramSetupCLI_PromptAbortIsNonBlocking pins the CLI/TUI parity fix: a
+// prompt abort (Ctrl-D/EOF or cancel) during the optional Telegram verification
+// must NOT abort the install — it returns nil so runInstall still reaches the
+// entrypoint/cron finalization, matching the TUI which demotes Telegram errors to
+// a warning. Previously this returned wrapInstallError and aborted the install.
+func TestRunTelegramSetupCLI_PromptAbortIsNonBlocking(t *testing.T) {
+	stubTelegramSetupCLIDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility: orchestrator.TelegramSetupEligibleCentralized,
+			ServerID:    "12345",
+		}, nil
+	}
+	promptCalls := 0
+	telegramSetupPromptYesNo = func(ctx context.Context, reader *bufio.Reader, question string, defaultYes bool) (bool, error) {
+		promptCalls++
+		return false, errInteractiveAborted
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+		t.Fatalf("registration check should not run when the prompt aborts")
+		return notify.TelegramRegistrationStatus{}
+	}
+
+	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
+		t.Fatalf("prompt abort during Telegram setup must be non-blocking, got: %v", err)
+	}
+	if promptCalls != 1 {
+		t.Fatalf("expected the verification prompt to be exercised exactly once, got %d calls", promptCalls)
+	}
+}
+
 func TestSanitizeTelegramSetupStatusMessage_StripsTerminalEscapes(t *testing.T) {
 	raw := " \x1b[31mneeds\tpairing\r\nnow\x1b[0m\x07 "
 
@@ -259,7 +293,7 @@ func TestSanitizeTelegramSetupStatusMessage_StripsTerminalEscapes(t *testing.T) 
 }
 
 func TestSanitizeTelegramSetupStatusMessage_FallsBackToQuotedSafeText(t *testing.T) {
-	raw := strings.Repeat("\x1b", maxTelegramSetupStatusMessageLen+5)
+	raw := strings.Repeat("\x1b", orchestrator.TelegramSetupStatusMessageMaxRunes+5)
 
 	got := sanitizeTelegramSetupStatusMessage(raw)
 

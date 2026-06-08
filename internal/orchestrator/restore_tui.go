@@ -378,6 +378,7 @@ func promptCompatibilityTUI(ctx context.Context, configPath, buildSig string, co
 		message,
 		"Continue anyway",
 		"Abort restore",
+		false, // CLI ConfirmCompatibility defaults to abort on a blank line
 	)
 }
 
@@ -394,6 +395,7 @@ func promptContinueWithoutSafetyBackupTUI(ctx context.Context, configPath, build
 		message,
 		"Continue without safety backup",
 		"Abort restore",
+		false, // CLI ConfirmContinueWithoutSafetyBackup defaults to abort
 	)
 }
 
@@ -407,111 +409,8 @@ func promptContinueWithPBSServicesTUI(ctx context.Context, configPath, buildSig 
 		message,
 		"Continue restore",
 		"Abort restore",
+		false, // CLI ConfirmContinueWithPBSServicesRunning defaults to abort
 	)
-}
-
-func maybeRepairNICNamesTUI(ctx context.Context, logger *logging.Logger, archivePath, configPath, buildSig string) *nicRepairResult {
-	logging.DebugStep(logger, "NIC repair", "Plan NIC name repair (archive=%s)", strings.TrimSpace(archivePath))
-	plan, err := planNICNameRepair(ctx, archivePath)
-	if err != nil {
-		logger.Warning("NIC name repair plan failed: %v", err)
-		return nil
-	}
-	if plan == nil {
-		return nil
-	}
-	logging.DebugStep(logger, "NIC repair", "Plan result: mappingEntries=%d safe=%d conflicts=%d skippedReason=%q", len(plan.Mapping.Entries), len(plan.SafeMappings), len(plan.Conflicts), strings.TrimSpace(plan.SkippedReason))
-
-	if plan.SkippedReason != "" && !plan.HasWork() {
-		return &nicRepairResult{AppliedAt: nowRestore(), SkippedReason: plan.SkippedReason}
-	}
-
-	if !plan.Mapping.IsEmpty() {
-		logging.DebugStep(logger, "NIC repair", "Detect persistent NIC naming overrides (udev/systemd)")
-		overrides, err := detectNICNamingOverrideRules(logger)
-		if err != nil {
-			logger.Debug("NIC naming override detection failed: %v", err)
-		} else if overrides.Empty() {
-			logging.DebugStep(logger, "NIC repair", "No persistent NIC naming overrides detected")
-		} else {
-			logging.DebugStep(logger, "NIC repair", "Naming overrides detected: %s", overrides.Summary())
-			logging.DebugStep(logger, "NIC repair", "Naming override details:\n%s", overrides.Details(32))
-			var b strings.Builder
-			b.WriteString("Detected persistent NIC naming rules (udev/systemd).\n\n")
-			b.WriteString("If these rules are intended to keep legacy interface names, ProxSave NIC repair may rewrite /etc/network/interfaces* to different names.\n\n")
-			if details := strings.TrimSpace(overrides.Details(8)); details != "" {
-				b.WriteString(details)
-				b.WriteString("\n\n")
-			}
-			b.WriteString("Skip NIC name repair and keep restored interface names?")
-
-			skip, err := promptYesNoTUIFunc(
-				ctx,
-				"NIC naming overrides",
-				configPath,
-				buildSig,
-				b.String(),
-				"Skip NIC repair",
-				"Proceed",
-			)
-			if err != nil {
-				logger.Warning("NIC naming override prompt failed: %v", err)
-			} else if skip {
-				logging.DebugStep(logger, "NIC repair", "User choice: skip NIC repair due to naming overrides")
-				logger.Info("NIC name repair skipped due to persistent naming rules")
-				return &nicRepairResult{AppliedAt: nowRestore(), SkippedReason: "skipped due to persistent NIC naming rules (user choice)"}
-			} else {
-				logging.DebugStep(logger, "NIC repair", "User choice: proceed with NIC repair despite naming overrides")
-			}
-		}
-	}
-
-	includeConflicts := false
-	if len(plan.Conflicts) > 0 {
-		logging.DebugStep(logger, "NIC repair", "Conflicts detected: %d", len(plan.Conflicts))
-		for i, conflict := range plan.Conflicts {
-			if i >= 32 {
-				logging.DebugStep(logger, "NIC repair", "Conflict details truncated (showing first 32)")
-				break
-			}
-			logging.DebugStep(logger, "NIC repair", "Conflict: %s", conflict.Details())
-		}
-		var b strings.Builder
-		b.WriteString("Detected NIC name conflicts.\n\n")
-		b.WriteString("These interface names exist on the current system but map to different NICs in the backup inventory:\n\n")
-		for _, conflict := range plan.Conflicts {
-			b.WriteString(conflict.Details())
-			b.WriteString("\n")
-		}
-		b.WriteString("\nApply NIC rename mapping even for conflicts?")
-
-		ok, err := promptYesNoTUIFunc(
-			ctx,
-			"NIC name conflicts",
-			configPath,
-			buildSig,
-			b.String(),
-			"Apply conflicts",
-			"Skip conflicts",
-		)
-		if err != nil {
-			logger.Warning("NIC conflict prompt failed: %v", err)
-		} else if ok {
-			includeConflicts = true
-		}
-	}
-	logging.DebugStep(logger, "NIC repair", "Apply conflicts=%v (conflictCount=%d)", includeConflicts, len(plan.Conflicts))
-
-	logging.DebugStep(logger, "NIC repair", "Apply NIC rename mapping to /etc/network/interfaces*")
-	result, err := applyNICNameRepair(logger, plan, includeConflicts)
-	if err != nil {
-		logger.Warning("NIC name repair failed: %v", err)
-		return nil
-	}
-	if result != nil {
-		logging.DebugStep(logger, "NIC repair", "Result: applied=%v changedFiles=%d skippedReason=%q", result.Applied(), len(result.ChangedFiles), strings.TrimSpace(result.SkippedReason))
-	}
-	return result
 }
 
 func promptClusterRestoreModeTUI(ctx context.Context, configPath, buildSig string) (int, error) {
@@ -729,7 +628,17 @@ func confirmRestoreTUI(ctx context.Context, configPath, buildSig string) (bool, 
 	return true, nil
 }
 
-func promptYesNoTUI(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string) (bool, error) {
+// defaultButtonIndex maps the engine's defaultYes intent to the focus index of
+// the yes/no button forms built below, which always add the affirmative button
+// first (0) and the cancel/No button second (1).
+func defaultButtonIndex(defaultYes bool) int {
+	if defaultYes {
+		return 0
+	}
+	return 1
+}
+
+func promptYesNoTUI(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
 	app := newTUIApp()
 	var result bool
 	var cancelled bool
@@ -751,6 +660,11 @@ func promptYesNoTUI(ctx context.Context, title, configPath, buildSig, message, y
 	form.AddSubmitButton(yesLabel)
 	form.AddCancelButton(noLabel)
 	enableFormNavigation(form, nil)
+	// Honor the engine-supplied default: focus the affirmative button only when
+	// defaultYes is set, otherwise focus the cancel/No button so that pressing
+	// Enter without navigating chooses the same answer the CLI would for a blank
+	// line. Buttons are added Yes(0)/No(1).
+	form.SetDefaultButton(defaultButtonIndex(defaultYes))
 
 	content := tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -770,7 +684,7 @@ func promptYesNoTUI(ctx context.Context, title, configPath, buildSig, message, y
 	return result, nil
 }
 
-func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, title, configPath, buildSig, message, yesLabel, noLabel string, timeout time.Duration) (bool, error) {
+func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, title, configPath, buildSig, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
 	app := newTUIApp()
 	var result bool
 	var cancelled bool
@@ -787,6 +701,14 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 		SetTextColor(tcell.ColorYellow).
 		SetDynamicColors(true)
 
+	// The Enter/default answer is yesLabel only when defaultYes is set; the
+	// countdown label advertises that choice to match the CLI prompt. Note the
+	// auto-skip on timeout still resolves to No in both modes (see below).
+	defaultLabel := noLabel
+	if defaultYes {
+		defaultLabel = yesLabel
+	}
+
 	deadline := time.Now().Add(timeout)
 	deadlineHHMMSS := deadline.Format("15:04:05")
 	updateCountdown := func() {
@@ -794,7 +716,7 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 		if left < 0 {
 			left = 0
 		}
-		countdownText.SetText(fmt.Sprintf("Auto-skip in %ds (at %s, default: %s)", int(left.Seconds()), deadlineHHMMSS, noLabel))
+		countdownText.SetText(fmt.Sprintf("Auto-skip in %ds (at %s, default: %s)", int(left.Seconds()), deadlineHHMMSS, defaultLabel))
 	}
 	updateCountdown()
 
@@ -809,6 +731,7 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 	form.AddSubmitButton(yesLabel)
 	form.AddCancelButton(noLabel)
 	enableFormNavigation(form, nil)
+	form.SetDefaultButton(defaultButtonIndex(defaultYes))
 
 	content := tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -1039,6 +962,7 @@ func confirmOverwriteTUI(ctx context.Context, configPath, buildSig string) (bool
 		message,
 		"Overwrite and restore",
 		"Cancel",
+		false, // destructive overwrite must be an explicit choice, not the default
 	)
 }
 

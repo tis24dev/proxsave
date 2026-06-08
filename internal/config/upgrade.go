@@ -179,15 +179,25 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		return result, "", originalContent, fmt.Errorf("failed to parse config %s: %w", configPath, err)
 	}
 
-	// Prune deprecated keys that are now auto-detected at runtime.
+	// Prune deprecated keys that are obsolete or auto-managed at runtime.
+	//
+	// Matching is exact on the parsed KEY (case-insensitive): only a line whose
+	// left-hand-side key equals one of these is removed. Look-alike keys
+	// (e.g. MAX_CHUNK_SIZE_MB), commented lines, and values that merely contain
+	// these strings are never touched. See parseEnvValues/splitKeyValueRaw.
 	//
 	// BASE_DIR is derived from the installed executable path.
 	// CRON_* scheduling is managed via crontab, not backup.env.
+	// ENABLE_SMART_CHUNKING / CHUNK_SIZE_MB / CHUNK_THRESHOLD_MB belonged to the
+	// removed smart-chunking optimization and are no longer read by the binary.
 	deprecatedUpperKeys := map[string]struct{}{
-		"BASE_DIR":      {},
-		"CRON_SCHEDULE": {},
-		"CRON_HOUR":     {},
-		"CRON_MINUTE":   {},
+		"BASE_DIR":              {},
+		"CRON_SCHEDULE":         {},
+		"CRON_HOUR":             {},
+		"CRON_MINUTE":           {},
+		"ENABLE_SMART_CHUNKING": {},
+		"CHUNK_SIZE_MB":         {},
+		"CHUNK_THRESHOLD_MB":    {},
 	}
 	skipOriginalLines := make([]bool, len(originalLines))
 	prunedLineCount := 0
@@ -217,7 +227,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		warnings = append(warnings, fmt.Sprintf("Removed deprecated keys from backup.env: %s (BASE_DIR is auto-detected from the installed executable; cron is managed via crontab)", strings.Join(keys, ", ")))
+		warnings = append(warnings, fmt.Sprintf("Removed deprecated keys from backup.env: %s (obsolete or auto-managed settings no longer used by ProxSave)", strings.Join(keys, ", ")))
 	}
 
 	// 2. Walk the template line-by-line and collect template entries.

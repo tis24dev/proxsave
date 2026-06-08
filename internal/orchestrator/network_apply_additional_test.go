@@ -1637,6 +1637,50 @@ func TestPromptNetworkCommitWithCountdown_InputAborted(t *testing.T) {
 	}
 }
 
+// TestWaitForCommit_TimeoutShowsRollbackGuidance pins the CLI/TUI parity fix: a
+// commit-prompt timeout (DeadlineExceeded, as the CLI prompt reports) must surface
+// the reconnect/rollback guidance via ShowMessage just like the TUI's (false, nil)
+// timeout path, while a genuine cancel still skips it. iface and handle paths are
+// left empty so buildNetworkApplyNotCommittedError makes no external calls.
+func TestWaitForCommit_TimeoutShowsRollbackGuidance(t *testing.T) {
+	makeFlow := func(ui RestoreWorkflowUI) *networkRollbackUIApplyFlow {
+		return &networkRollbackUIApplyFlow{
+			ctx:            context.Background(),
+			ui:             ui,
+			logger:         newDiscardLogger(),
+			iface:          "",
+			diagnosticsDir: t.TempDir(),
+			handle:         &networkRollbackHandle{armedAt: time.Now(), timeout: time.Hour},
+		}
+	}
+
+	t.Run("timeout shows guidance", func(t *testing.T) {
+		ui := &fakeRestoreWorkflowUI{networkCommitErr: context.DeadlineExceeded}
+		err := makeFlow(ui).waitForCommit()
+		var notCommitted *NetworkApplyNotCommittedError
+		if !errors.As(err, &notCommitted) {
+			t.Fatalf("err=%v; want *NetworkApplyNotCommittedError", err)
+		}
+		if len(ui.shownMessages) == 0 {
+			t.Fatalf("expected reconnect/rollback guidance to be shown on timeout")
+		}
+		if !strings.Contains(ui.shownMessages[len(ui.shownMessages)-1], "not committed") {
+			t.Fatalf("unexpected guidance message: %q", ui.shownMessages)
+		}
+	})
+
+	t.Run("cancel does not show guidance", func(t *testing.T) {
+		ui := &fakeRestoreWorkflowUI{networkCommitErr: context.Canceled}
+		err := makeFlow(ui).waitForCommit()
+		if err == nil {
+			t.Fatalf("expected an error on cancel")
+		}
+		if len(ui.shownMessages) != 0 {
+			t.Fatalf("expected no guidance message on cancel, got %q", ui.shownMessages)
+		}
+	})
+}
+
 func TestRollbackNetworkFilesNow_ErrorCasesAndScriptFailure(t *testing.T) {
 	origFS := restoreFS
 	origCmd := restoreCmd

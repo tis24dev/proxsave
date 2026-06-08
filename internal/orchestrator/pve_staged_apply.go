@@ -327,7 +327,7 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 			continue
 		}
 
-		if err := os.MkdirAll(guardTarget, 0o755); err != nil {
+		if err := os.MkdirAll(guardTarget, 0o750); err != nil {
 			if logger != nil {
 				logger.Warning("PVE mount guard: unable to create mountpoint directory %s: %v", guardTarget, err)
 			}

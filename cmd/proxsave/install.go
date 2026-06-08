@@ -49,12 +49,10 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	done := logging.DebugStartBootstrap(bootstrap, "install workflow (cli)", "config=%s base=%s", configPath, baseDir)
 	defer func() { done(err) }()
 
-	// Before starting the interactive wizard, perform a best-effort cleanup of any
-	// existing proxsave/proxmox-backup entrypoints so that the installer can recreate a
-	// clean symlink for the Go binary.
+	// Entrypoint cleanup + recreation is deferred to runPostInstallSymlinksAndCron
+	// (success path only), so an aborted/non-interactive install never leaves the
+	// host without a working proxsave/proxmox-backup command.
 	execInfo := getExecInfo()
-	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "cleaning legacy entrypoints")
-	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
 
 	if bootstrap != nil {
 		bootstrap.Info("Starting --install in CLI mode")
@@ -80,11 +78,6 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 
 	reader := bufio.NewReader(os.Stdin)
 	printInstallBanner(configPath)
-
-	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "checking legacy install state")
-	if err := handleLegacyInstall(ctx, reader, baseDir); err != nil {
-		return err
-	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running config wizard")
 	configResult, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
@@ -151,11 +144,25 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	return nil
 }
 
+// skipOptionalInstallStepOnAbort turns a prompt error (Ctrl-D/EOF or a cancelled
+// context) from an optional install step — the post-install audit or the Telegram
+// setup — into a non-blocking outcome: the step is abandoned with a warning and
+// the caller continues the install so the entrypoint/cron finalization still
+// runs. This matches the TUI, which logs such errors as non-blocking warnings and
+// never aborts the install.
+func skipOptionalInstallStepOnAbort(bootstrap *logging.BootstrapLogger, step string, err error) error {
+	fmt.Printf("%s skipped (input aborted, non-blocking): %v\n", step, err)
+	if bootstrap != nil {
+		bootstrap.Warning("%s skipped (input aborted, non-blocking): %v", step, err)
+	}
+	return nil
+}
+
 func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath, configPath string, bootstrap *logging.BootstrapLogger) error {
 	fmt.Println("\n--- Post-install check (optional) ---")
 	run, err := promptYesNo(ctx, reader, "Run a dry-run to detect unused components and reduce warnings? [Y/n]: ", true)
 	if err != nil {
-		return wrapInstallError(err)
+		return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
 	}
 	if !run {
 		if bootstrap != nil {
@@ -207,7 +214,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 
 	disableAny, err := promptYesNo(ctx, reader, "Disable any of the suggested components now (set KEY=false)? [y/N]: ", false)
 	if err != nil {
-		return wrapInstallError(err)
+		return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
 	}
 	if !disableAny {
 		fmt.Println("No changes applied. You can disable unused components later by editing backup.env.")
@@ -221,7 +228,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	for _, s := range suggestions {
 		disable, err := promptYesNo(ctx, reader, fmt.Sprintf("Disable %s? [y/N]: ", s.Key), false)
 		if err != nil {
-			return wrapInstallError(err)
+			return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
 		}
 		if disable {
 			keys = append(keys, s.Key)
@@ -402,44 +409,6 @@ func cleanupTempConfig(tmpConfigPath string) {
 	}
 }
 
-func handleLegacyInstall(ctx context.Context, reader *bufio.Reader, baseDir string) error {
-	// Detect legacy Bash-based installation (old backup.env or proxmox-backup.sh)
-	legacyPaths := []string{
-		filepath.Join(baseDir, "env", "backup.env"),
-		filepath.Join(baseDir, "proxmox-backup.sh"),
-		filepath.Join(baseDir, "script", "proxmox-backup.sh"),
-	}
-
-	legacyFound := false
-	for _, p := range legacyPaths {
-		if _, err := os.Stat(p); err == nil {
-			legacyFound = true
-			break
-		}
-	}
-
-	if !legacyFound {
-		return nil
-	}
-
-	yellow := "\033[33m"
-	reset := "\033[0m"
-	fmt.Println(string(yellow) + "A previous Bash-based version of the Proxmox Backup script has been detected on this system." + string(reset))
-	fmt.Println(string(yellow) + "This Go version requires migrating or recreating the configuration file. You will also have access to the migration tool." + string(reset))
-	fmt.Println()
-
-	confirm, err := promptYesNo(ctx, reader, "Do you want to continue with the Go install wizard? [y/N]: ", false)
-	if err != nil {
-		return wrapInstallError(err)
-	}
-	if !confirm {
-		return wrapInstallError(errInteractiveAborted)
-	}
-
-	fmt.Println()
-	return nil
-}
-
 func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, tmpConfigPath, baseDir string, bootstrap *logging.BootstrapLogger) (result installConfigResult, err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "install config wizard (cli)", "config=%s", configPath)
 	defer func() { done(err) }()
@@ -523,22 +492,26 @@ func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEn
 func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule string) {
 	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
 	defer func() { done(nil) }()
-	// Clean up legacy bash-based symlinks that point to the old installer scripts.
-	if bootstrap != nil {
-		bootstrap.Info("Cleaning up legacy bash-based symlinks (if present)")
-	}
-	logging.DebugStepBootstrap(bootstrap, "post-install setup", "cleaning legacy bash symlinks")
-	cleanupLegacyBashSymlinks(baseDir, bootstrap)
+
+	// Remove stale proxsave/proxmox-backup *symlinks* (PATH, /usr/local/bin,
+	// /usr/bin) that do not point to this Go binary, then recreate clean ones. Real
+	// (non-symlink) files are left in place so a package-managed /usr/bin binary is
+	// never deleted. This runs here — immediately before recreation and only on the
+	// success path — so an aborted or non-interactive install can never leave the
+	// host without a working entrypoint.
+	logging.DebugStepBootstrap(bootstrap, "post-install setup", "cleaning legacy entrypoints")
+	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
 
 	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary, if not already customized.
 	if bootstrap != nil {
-		bootstrap.Info("Ensuring 'proxsave' and 'proxmox-backup' commands point to the Go binary")
+		bootstrap.Info("Ensuring the 'proxsave' command points to the Go binary")
 	}
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "ensuring go symlink")
 	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
-	// Migrate legacy cron entries pointing to the bash script to the Go binary.
-	// If no cron entry exists at all, create a default one at 02:00 every day.
+	// Ensure a cron entry for the Go binary: preserve an entry that already
+	// targets it, drop outdated proxsave/proxmox-backup binary entries, and if
+	// no entry exists at all create a default one at 02:00 every day.
 	if strings.TrimSpace(cronSchedule) == "" {
 		cronSchedule = resolveCronScheduleFromEnv()
 	}
@@ -570,7 +543,7 @@ func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstr
 		return fmt.Errorf("refusing to reset unsafe base directory: %q", baseDir)
 	}
 
-	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+	if err := os.MkdirAll(baseDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create base directory %s: %w", baseDir, err)
 	}
 
@@ -646,14 +619,15 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 	fmt.Println("Network shares must be mounted BEFORE running this backup tool.")
 	fmt.Println("For direct network access without mounting, use cloud storage (rclone) instead.")
 	fmt.Println("(You can change these settings later in backup.env)")
-	enableSecondary, err := promptYesNo(ctx, reader, "Enable secondary backup path? [y/N]: ", false)
+	prefill := wizard.DeriveInstallWizardPrefill(template)
+	enableSecondary, err := confirmDefault(ctx, reader, "Enable secondary backup path?", prefill.SecondaryEnabled)
 	if err != nil {
 		return "", err
 	}
 	if enableSecondary {
 		var secondaryPath string
 		for {
-			secondaryPath, err = promptNonEmpty(ctx, reader, "Secondary backup path (SECONDARY_PATH): ")
+			secondaryPath, err = promptNonEmptyWithDefault(ctx, reader, "Secondary backup path (SECONDARY_PATH): ", prefill.SecondaryPath)
 			if err != nil {
 				return "", err
 			}
@@ -666,7 +640,7 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 		}
 		var secondaryLog string
 		for {
-			secondaryLog, err = promptOptional(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ")
+			secondaryLog, err = promptOptionalWithDefault(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ", prefill.SecondaryLogPath)
 			if err != nil {
 				return "", err
 			}
@@ -687,17 +661,18 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 func configureCloudStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
 	fmt.Println("\n--- Cloud storage (rclone) ---")
 	fmt.Println("Remember to configure rclone manually before enabling cloud backups.")
-	enableCloud, err := promptYesNo(ctx, reader, "Enable cloud backups? [y/N]: ", false)
+	prefill := wizard.DeriveInstallWizardPrefill(template)
+	enableCloud, err := confirmDefault(ctx, reader, "Enable cloud backups?", prefill.CloudEnabled)
 	if err != nil {
 		return "", err
 	}
 	if enableCloud {
-		remote, err := promptNonEmpty(ctx, reader, "Rclone remote for backups (e.g. myremote:pbs-backups): ")
+		remote, err := promptNonEmptyWithDefault(ctx, reader, "Rclone remote for backups (e.g. myremote:pbs-backups): ", prefill.CloudRemote)
 		if err != nil {
 			return "", err
 		}
 		remote = sanitizeEnvValue(remote)
-		logRemote, err := promptNonEmpty(ctx, reader, "Rclone remote for logs (e.g. myremote:/logs): ")
+		logRemote, err := promptNonEmptyWithDefault(ctx, reader, "Rclone remote for logs (e.g. myremote:/logs): ", prefill.CloudLogPath)
 		if err != nil {
 			return "", err
 		}
@@ -717,7 +692,7 @@ func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template 
 	fmt.Println("\n--- Firewall rules ---")
 	fmt.Println("Enable collection of firewall rules (e.g., iptables/nftables).")
 	fmt.Println("(You can change this later in backup.env via BACKUP_FIREWALL_RULES)")
-	enable, err := promptYesNo(ctx, reader, "Backup firewall rules? [y/N]: ", false)
+	enable, err := confirmDefault(ctx, reader, "Backup firewall rules?", wizard.DeriveInstallWizardPrefill(template).FirewallEnabled)
 	if err != nil {
 		return "", err
 	}
@@ -730,14 +705,19 @@ func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template 
 }
 
 func configureNotifications(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
+	prefill := wizard.DeriveInstallWizardPrefill(template)
 	fmt.Println("\n--- Telegram ---")
-	enableTelegram, err := promptYesNo(ctx, reader, "Enable Telegram notifications (centralized)? [y/N]: ", false)
+	enableTelegram, err := confirmDefault(ctx, reader, "Enable Telegram notifications (centralized)?", prefill.TelegramEnabled)
 	if err != nil {
 		return "", err
 	}
 	if enableTelegram {
 		template = setEnvValue(template, "TELEGRAM_ENABLED", "true")
-		template = setEnvValue(template, "BOT_TELEGRAM_TYPE", "centralized")
+		// Preserve a stored bot mode (e.g. personal); only seed the centralized
+		// default when none is set yet, mirroring the TUI's ApplyInstallData.
+		if strings.TrimSpace(prefill.TelegramType) == "" {
+			template = setEnvValue(template, "BOT_TELEGRAM_TYPE", "centralized")
+		}
 	} else {
 		template = setEnvValue(template, "TELEGRAM_ENABLED", "false")
 	}
@@ -745,12 +725,12 @@ func configureNotifications(ctx context.Context, reader *bufio.Reader, template 
 	fmt.Println("\n--- Email ---")
 	fmt.Println("Default email delivery uses the TIS24 cloud relay, with local sendmail as failover.")
 	fmt.Println("ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.")
-	enableEmail, err := promptYesNo(ctx, reader, "Enable email notifications? [y/N]: ", false)
+	enableEmail, err := confirmDefault(ctx, reader, "Enable email notifications?", prefill.EmailEnabled)
 	if err != nil {
 		return "", err
 	}
 	if enableEmail {
-		method, err := promptEmailDeliveryMethod(ctx, reader, "relay")
+		method, err := promptEmailDeliveryMethod(ctx, reader, prefill.EmailDeliveryMethod)
 		if err != nil {
 			return "", err
 		}
@@ -794,7 +774,7 @@ func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaul
 
 func configureEncryption(ctx context.Context, reader *bufio.Reader, template *string) (bool, error) {
 	fmt.Println("\n--- Encryption ---")
-	enableEncryption, err := promptYesNo(ctx, reader, "Enable backup encryption? [y/N]: ", false)
+	enableEncryption, err := confirmDefault(ctx, reader, "Enable backup encryption?", wizard.DeriveInstallWizardPrefill(*template).EncryptionEnabled)
 	if err != nil {
 		return false, err
 	}
