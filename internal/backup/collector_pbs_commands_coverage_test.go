@@ -73,7 +73,7 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 		"tape_pools.json",
 		"network_list.json",
 		"disk_list.json",
-		"cert_info.txt",
+		"cert_info.json",
 		"traffic_control.json",
 		"recent_tasks.json",
 		"s3_endpoints.json",
@@ -87,7 +87,7 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read pbs_version.txt: %v", err)
 	}
-	if !strings.Contains(string(version), "proxmox-backup-manager version") {
+	if !strings.Contains(string(version), "proxmox-backup-manager versions") {
 		t.Fatalf("unexpected version content: %s", string(version))
 	}
 }
@@ -137,7 +137,7 @@ func TestCollectPBSCommandsReturnsErrorWhenCriticalVersionFails(t *testing.T) {
 			return "/bin/" + name, nil
 		},
 		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			if name == "proxmox-backup-manager" && len(args) > 0 && args[0] == "version" {
+			if name == "proxmox-backup-manager" && len(args) > 0 && args[0] == "versions" {
 				return []byte("nope"), errors.New("boom")
 			}
 			return []byte("ok"), nil

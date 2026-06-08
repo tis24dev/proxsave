@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,8 +273,12 @@ func (c *Collector) collectPBSManifestPrune(ctx context.Context, root string) er
 }
 
 func (c *Collector) collectPBSCoreRuntime(ctx context.Context, commandsDir string) error {
+	// Use the canonical `versions` subcommand rather than relying on `version` resolving
+	// via proxmox-router prefix-matching: this command is on the critical path, so avoid
+	// any abbreviation ambiguity a future `version*` subcommand could introduce. Output
+	// (the running-version summary text) and the pbs_version.txt file are unchanged.
 	if err := c.collectCommandMulti(ctx,
-		commandSpec("proxmox-backup-manager", "version"),
+		commandSpec("proxmox-backup-manager", "versions"),
 		filepath.Join(commandsDir, "pbs_version.txt"),
 		"PBS version",
 		true); err != nil {
@@ -617,9 +622,13 @@ func (c *Collector) collectPBSDisksRuntime(ctx context.Context, commandsDir stri
 }
 
 func (c *Collector) collectPBSCertInfoRuntime(ctx context.Context, commandsDir string) error {
+	// `proxmox-backup-manager cert info` has no --output-format flag and renders the
+	// certificate SANs as raw byte arrays; query the REST endpoint via proxmox-backup-debug
+	// for clean JSON instead (superset of the text fields). The node segment is ignored for
+	// local debug calls, so "localhost" is always valid regardless of the actual node name.
 	return c.collectCommandMulti(ctx,
-		commandSpec("proxmox-backup-manager", "cert", "info"),
-		filepath.Join(commandsDir, "cert_info.txt"),
+		commandSpec("proxmox-backup-debug", "api", "get", "/nodes/localhost/certificates/info", "--output-format=json"),
+		filepath.Join(commandsDir, "cert_info.json"),
 		"Certificate information",
 		false)
 }
@@ -667,9 +676,21 @@ func (c *Collector) collectPBSS3EndpointBucketsRuntime(ctx context.Context, comm
 		return nil
 	}
 	for _, id := range uniqueSortedStrings(endpointIDs) {
+		// id is parsed from `s3 endpoint list` output and addresses the REST path below.
+		// Percent-escape the segment so separators/control chars in a malformed id cannot
+		// retarget the API path. Bare dot-segments survive url.PathEscape unchanged, so
+		// reject "." / ".." explicitly to prevent traversal (e.g. /config/s3/../list-buckets
+		// resolving to /config/list-buckets).
+		if id == "." || id == ".." {
+			c.logger.Debug("Skipping S3 bucket listing for endpoint %q: path-traversal id", id)
+			continue
+		}
 		out := filepath.Join(commandsDir, fmt.Sprintf("s3_endpoint_%s_buckets.json", sanitizeFilename(id)))
+		// `proxmox-backup-manager s3 endpoint list-buckets` has no --output-format flag
+		// (unlike `s3 endpoint list`), so query the REST endpoint via proxmox-backup-debug
+		// to obtain JSON instead. See PBS issue #225.
 		c.collectCommandOptional(ctx,
-			commandSpec("proxmox-backup-manager", "s3", "endpoint", "list-buckets", id, "--output-format=json"),
+			commandSpec("proxmox-backup-debug", "api", "get", "/config/s3/"+url.PathEscape(id)+"/list-buckets", "--output-format=json"),
 			out,
 			fmt.Sprintf("S3 endpoint buckets (%s)", id))
 	}
