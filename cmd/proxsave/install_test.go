@@ -493,6 +493,31 @@ func TestConfigureCloudStorageDisabled(t *testing.T) {
 	}
 }
 
+func TestConfigureCloudStorageKeepsExistingOnEdit(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	// Pressing Enter through every prompt while editing an existing config must
+	// keep the stored values rather than silently reset CLOUD_ENABLED to false.
+	reader := bufio.NewReader(strings.NewReader("\n\n\n"))
+	template := "CLOUD_ENABLED=true\nCLOUD_REMOTE=remote:pbs\nCLOUD_LOG_PATH=remote:/logs\n"
+	captureStdout(t, func() {
+		result, err = configureCloudStorage(ctx, reader, template)
+	})
+	if err != nil {
+		t.Fatalf("configureCloudStorage error: %v", err)
+	}
+	for _, want := range []string{
+		"CLOUD_ENABLED=true",
+		"CLOUD_REMOTE=remote:pbs",
+		"CLOUD_LOG_PATH=remote:/logs",
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected %q preserved on no-op edit, got: %q", want, result)
+		}
+	}
+}
+
 func TestConfigureFirewallRulesDefaultsToDisabled(t *testing.T) {
 	var result string
 	var err error
@@ -563,6 +588,33 @@ func TestConfigureNotificationsEmailDefaultsToRelaySendmailFallback(t *testing.T
 	} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("missing %q in template: %q", want, result)
+		}
+	}
+}
+
+func TestConfigureNotificationsKeepsExistingOnEdit(t *testing.T) {
+	var result string
+	var err error
+	ctx := context.Background()
+	// Enter through telegram, email and the email-method prompts: a no-op edit
+	// must preserve the stored personal bot mode and pmf delivery method instead
+	// of clobbering them to centralized/relay.
+	reader := bufio.NewReader(strings.NewReader("\n\n\n"))
+	template := "TELEGRAM_ENABLED=true\nBOT_TELEGRAM_TYPE=personal\nEMAIL_ENABLED=true\nEMAIL_DELIVERY_METHOD=pmf\n"
+	captureStdout(t, func() {
+		result, err = configureNotifications(ctx, reader, template)
+	})
+	if err != nil {
+		t.Fatalf("configureNotifications error: %v", err)
+	}
+	for _, want := range []string{
+		"TELEGRAM_ENABLED=true",
+		"BOT_TELEGRAM_TYPE=personal",
+		"EMAIL_ENABLED=true",
+		"EMAIL_DELIVERY_METHOD=pmf",
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected %q preserved on no-op edit, got: %q", want, result)
 		}
 	}
 }

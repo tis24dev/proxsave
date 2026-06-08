@@ -604,14 +604,15 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 	fmt.Println("Network shares must be mounted BEFORE running this backup tool.")
 	fmt.Println("For direct network access without mounting, use cloud storage (rclone) instead.")
 	fmt.Println("(You can change these settings later in backup.env)")
-	enableSecondary, err := promptYesNo(ctx, reader, "Enable secondary backup path? [y/N]: ", false)
+	prefill := wizard.DeriveInstallWizardPrefill(template)
+	enableSecondary, err := confirmDefault(ctx, reader, "Enable secondary backup path?", prefill.SecondaryEnabled)
 	if err != nil {
 		return "", err
 	}
 	if enableSecondary {
 		var secondaryPath string
 		for {
-			secondaryPath, err = promptNonEmpty(ctx, reader, "Secondary backup path (SECONDARY_PATH): ")
+			secondaryPath, err = promptNonEmptyWithDefault(ctx, reader, "Secondary backup path (SECONDARY_PATH): ", prefill.SecondaryPath)
 			if err != nil {
 				return "", err
 			}
@@ -624,7 +625,7 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 		}
 		var secondaryLog string
 		for {
-			secondaryLog, err = promptOptional(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ")
+			secondaryLog, err = promptOptionalWithDefault(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ", prefill.SecondaryLogPath)
 			if err != nil {
 				return "", err
 			}
@@ -645,17 +646,18 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 func configureCloudStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
 	fmt.Println("\n--- Cloud storage (rclone) ---")
 	fmt.Println("Remember to configure rclone manually before enabling cloud backups.")
-	enableCloud, err := promptYesNo(ctx, reader, "Enable cloud backups? [y/N]: ", false)
+	prefill := wizard.DeriveInstallWizardPrefill(template)
+	enableCloud, err := confirmDefault(ctx, reader, "Enable cloud backups?", prefill.CloudEnabled)
 	if err != nil {
 		return "", err
 	}
 	if enableCloud {
-		remote, err := promptNonEmpty(ctx, reader, "Rclone remote for backups (e.g. myremote:pbs-backups): ")
+		remote, err := promptNonEmptyWithDefault(ctx, reader, "Rclone remote for backups (e.g. myremote:pbs-backups): ", prefill.CloudRemote)
 		if err != nil {
 			return "", err
 		}
 		remote = sanitizeEnvValue(remote)
-		logRemote, err := promptNonEmpty(ctx, reader, "Rclone remote for logs (e.g. myremote:/logs): ")
+		logRemote, err := promptNonEmptyWithDefault(ctx, reader, "Rclone remote for logs (e.g. myremote:/logs): ", prefill.CloudLogPath)
 		if err != nil {
 			return "", err
 		}
@@ -675,7 +677,7 @@ func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template 
 	fmt.Println("\n--- Firewall rules ---")
 	fmt.Println("Enable collection of firewall rules (e.g., iptables/nftables).")
 	fmt.Println("(You can change this later in backup.env via BACKUP_FIREWALL_RULES)")
-	enable, err := promptYesNo(ctx, reader, "Backup firewall rules? [y/N]: ", false)
+	enable, err := confirmDefault(ctx, reader, "Backup firewall rules?", wizard.DeriveInstallWizardPrefill(template).FirewallEnabled)
 	if err != nil {
 		return "", err
 	}
@@ -688,14 +690,19 @@ func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template 
 }
 
 func configureNotifications(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
+	prefill := wizard.DeriveInstallWizardPrefill(template)
 	fmt.Println("\n--- Telegram ---")
-	enableTelegram, err := promptYesNo(ctx, reader, "Enable Telegram notifications (centralized)? [y/N]: ", false)
+	enableTelegram, err := confirmDefault(ctx, reader, "Enable Telegram notifications (centralized)?", prefill.TelegramEnabled)
 	if err != nil {
 		return "", err
 	}
 	if enableTelegram {
 		template = setEnvValue(template, "TELEGRAM_ENABLED", "true")
-		template = setEnvValue(template, "BOT_TELEGRAM_TYPE", "centralized")
+		// Preserve a stored bot mode (e.g. personal); only seed the centralized
+		// default when none is set yet, mirroring the TUI's ApplyInstallData.
+		if strings.TrimSpace(prefill.TelegramType) == "" {
+			template = setEnvValue(template, "BOT_TELEGRAM_TYPE", "centralized")
+		}
 	} else {
 		template = setEnvValue(template, "TELEGRAM_ENABLED", "false")
 	}
@@ -703,12 +710,12 @@ func configureNotifications(ctx context.Context, reader *bufio.Reader, template 
 	fmt.Println("\n--- Email ---")
 	fmt.Println("Default email delivery uses the TIS24 cloud relay, with local sendmail as failover.")
 	fmt.Println("ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.")
-	enableEmail, err := promptYesNo(ctx, reader, "Enable email notifications? [y/N]: ", false)
+	enableEmail, err := confirmDefault(ctx, reader, "Enable email notifications?", prefill.EmailEnabled)
 	if err != nil {
 		return "", err
 	}
 	if enableEmail {
-		method, err := promptEmailDeliveryMethod(ctx, reader, "relay")
+		method, err := promptEmailDeliveryMethod(ctx, reader, prefill.EmailDeliveryMethod)
 		if err != nil {
 			return "", err
 		}
@@ -752,7 +759,7 @@ func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaul
 
 func configureEncryption(ctx context.Context, reader *bufio.Reader, template *string) (bool, error) {
 	fmt.Println("\n--- Encryption ---")
-	enableEncryption, err := promptYesNo(ctx, reader, "Enable backup encryption? [y/N]: ", false)
+	enableEncryption, err := confirmDefault(ctx, reader, "Enable backup encryption?", wizard.DeriveInstallWizardPrefill(*template).EncryptionEnabled)
 	if err != nil {
 		return false, err
 	}

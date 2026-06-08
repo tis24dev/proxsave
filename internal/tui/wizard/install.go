@@ -18,7 +18,12 @@ import (
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
-type installWizardPrefill struct {
+// InstallWizardPrefill holds the values parsed from an existing backup.env so a
+// re-run of the install wizard can default to them. It is the single source of
+// truth shared by the TUI wizard and the CLI wizard (cmd/proxsave) — see
+// DeriveInstallWizardPrefill — so both modes default to the stored config and
+// neither silently resets a toggle on a no-op edit.
+type InstallWizardPrefill struct {
 	SecondaryEnabled    bool
 	SecondaryPath       string
 	SecondaryLogPath    string
@@ -27,6 +32,7 @@ type installWizardPrefill struct {
 	CloudLogPath        string
 	FirewallEnabled     bool
 	TelegramEnabled     bool
+	TelegramType        string
 	EmailEnabled        bool
 	EmailDeliveryMethod string
 	EncryptionEnabled   bool
@@ -102,7 +108,7 @@ func RunInstallWizard(ctx context.Context, configPath string, baseDir string, bu
 
 	app := tui.NewApp()
 
-	prefill := deriveInstallWizardPrefill(baseTemplate)
+	prefill := DeriveInstallWizardPrefill(baseTemplate)
 
 	// Build the form
 	form := components.NewForm(app)
@@ -660,8 +666,11 @@ func boolToOptionIndex(value bool) int {
 	return 0
 }
 
-func deriveInstallWizardPrefill(baseTemplate string) installWizardPrefill {
-	out := installWizardPrefill{}
+// DeriveInstallWizardPrefill parses an existing backup.env template into an
+// InstallWizardPrefill. Both the TUI wizard and the CLI install wizard call this
+// so each prompt/field defaults to the stored value.
+func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
+	out := InstallWizardPrefill{}
 	if strings.TrimSpace(baseTemplate) == "" {
 		return out
 	}
@@ -678,6 +687,7 @@ func deriveInstallWizardPrefill(baseTemplate string) installWizardPrefill {
 	out.FirewallEnabled = readTemplateBool(values, "BACKUP_FIREWALL_RULES")
 
 	out.TelegramEnabled = readTemplateBool(values, "TELEGRAM_ENABLED")
+	out.TelegramType = readTemplateString(values, "BOT_TELEGRAM_TYPE")
 	out.EmailEnabled = readTemplateBool(values, "EMAIL_ENABLED")
 	out.EmailDeliveryMethod = installEmailDeliveryMethodOrDefault(readTemplateString(values, "EMAIL_DELIVERY_METHOD"))
 
