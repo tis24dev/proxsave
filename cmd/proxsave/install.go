@@ -144,17 +144,16 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	return nil
 }
 
-// skipAuditOnAbort turns a post-install-audit prompt error (Ctrl-D/EOF or a
-// cancelled context) into a non-blocking outcome: the optional audit is
-// abandoned with a warning and the caller continues the install so the
-// entrypoint/cron finalization still runs. This matches the TUI, which logs the
-// audit error as a non-blocking warning and never aborts the install, and the
-// rest of this function, which already treats collection and config read/write
-// failures as non-blocking.
-func skipAuditOnAbort(bootstrap *logging.BootstrapLogger, err error) error {
-	fmt.Printf("Post-install audit skipped (input aborted, non-blocking): %v\n", err)
+// skipOptionalInstallStepOnAbort turns a prompt error (Ctrl-D/EOF or a cancelled
+// context) from an optional install step — the post-install audit or the Telegram
+// setup — into a non-blocking outcome: the step is abandoned with a warning and
+// the caller continues the install so the entrypoint/cron finalization still
+// runs. This matches the TUI, which logs such errors as non-blocking warnings and
+// never aborts the install.
+func skipOptionalInstallStepOnAbort(bootstrap *logging.BootstrapLogger, step string, err error) error {
+	fmt.Printf("%s skipped (input aborted, non-blocking): %v\n", step, err)
 	if bootstrap != nil {
-		bootstrap.Warning("Post-install audit skipped (input aborted, non-blocking): %v", err)
+		bootstrap.Warning("%s skipped (input aborted, non-blocking): %v", step, err)
 	}
 	return nil
 }
@@ -163,7 +162,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	fmt.Println("\n--- Post-install check (optional) ---")
 	run, err := promptYesNo(ctx, reader, "Run a dry-run to detect unused components and reduce warnings? [Y/n]: ", true)
 	if err != nil {
-		return skipAuditOnAbort(bootstrap, err)
+		return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
 	}
 	if !run {
 		if bootstrap != nil {
@@ -215,7 +214,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 
 	disableAny, err := promptYesNo(ctx, reader, "Disable any of the suggested components now (set KEY=false)? [y/N]: ", false)
 	if err != nil {
-		return skipAuditOnAbort(bootstrap, err)
+		return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
 	}
 	if !disableAny {
 		fmt.Println("No changes applied. You can disable unused components later by editing backup.env.")
@@ -229,7 +228,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	for _, s := range suggestions {
 		disable, err := promptYesNo(ctx, reader, fmt.Sprintf("Disable %s? [y/N]: ", s.Key), false)
 		if err != nil {
-			return skipAuditOnAbort(bootstrap, err)
+			return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
 		}
 		if disable {
 			keys = append(keys, s.Key)
