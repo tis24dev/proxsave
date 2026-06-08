@@ -184,9 +184,12 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		}
 	}
 
-	// Telegram setup (centralized bot): if enabled during install, guide the user through
-	// pairing and allow an explicit verification step with retry + skip.
-	if !skipConfigWizard && wizardData != nil && (wizardData.NotificationMode == "telegram" || wizardData.NotificationMode == "both") {
+	// Telegram setup (centralized bot): guide the user through pairing with an
+	// explicit verification step (retry + skip). Eligibility is decided solely by
+	// RunTelegramSetupWizard (BuildTelegramSetupBootstrap reads the written
+	// TELEGRAM_ENABLED/mode), the same single source of truth the CLI uses — it
+	// returns Shown=false without any UI when Telegram is not centrally enabled.
+	if !skipConfigWizard {
 		telegramRes, telegramErr := wizard.RunTelegramSetupWizard(ctx, baseDir, configPath, buildSig)
 		if telegramErr != nil && bootstrap != nil {
 			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)
