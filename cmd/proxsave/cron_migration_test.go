@@ -132,6 +132,23 @@ func TestFilterCronLines(t *testing.T) {
 			},
 			wantHasEntry: false,
 		},
+		{
+			// Regression: a job whose COMMAND is a different binary but which passes
+			// the proxsave path only as an ARGUMENT (e.g. backing up the binary) must
+			// NOT be removed — removal keys off the cron command token, not a path
+			// appearing anywhere in the line.
+			name: "Preserve a job referencing proxsave only as an argument",
+			inputLines: []string{
+				"0 4 * * * /usr/bin/cp /usr/local/bin/proxsave /backup/proxsave.bak",
+				userLine1,
+			},
+			correctPaths: []string{"/usr/local/bin/proxsave"},
+			wantLines: []string{
+				"0 4 * * * /usr/bin/cp /usr/local/bin/proxsave /backup/proxsave.bak",
+				userLine1,
+			},
+			wantHasEntry: false,
+		},
 	}
 
 	for _, tt := range tests {

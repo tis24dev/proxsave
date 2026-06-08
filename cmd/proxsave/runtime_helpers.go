@@ -870,11 +870,13 @@ func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ..
 	logging.Info(format, args...)
 }
 
+// containsBinaryReference reports whether the cron line's COMMAND is a
+// proxsave/proxmox-backup binary (matched by the command-token basename). It
+// deliberately does not scan the rest of the line: a binary path that merely
+// appears as an argument (e.g. "cp /usr/local/bin/proxsave /backup/") belongs to a
+// different command and must not be treated as a proxsave entry to remove.
 func containsBinaryReference(line string) bool {
-	if commandTokenMatchesTarget(cronCommandToken(line)) {
-		return true
-	}
-	return containsInlineBinaryReference(line)
+	return commandTokenMatchesTarget(cronCommandToken(line))
 }
 
 func cronCommandToken(line string) string {
@@ -926,116 +928,6 @@ func commandTokenMatchesTarget(token string) bool {
 	}
 	base := filepath.Base(token)
 	return base == "proxsave" || base == "proxmox-backup"
-}
-
-func containsInlineBinaryReference(line string) bool {
-	targets := []string{"proxsave", "proxmox-backup"}
-	for _, target := range targets {
-		searchStart := 0
-		for searchStart < len(line) {
-			offset := strings.Index(line[searchStart:], target)
-			if offset == -1 {
-				break
-			}
-			start := searchStart + offset
-			end := start + len(target)
-			if tokenLooksLikeExecutable(line, start, end) {
-				return true
-			}
-			searchStart = end
-		}
-	}
-	return false
-}
-
-func tokenLooksLikeExecutable(line string, start, end int) bool {
-	var before, after byte
-	if start > 0 {
-		before = line[start-1]
-	}
-	if end < len(line) {
-		after = line[end]
-	}
-
-	if !isExecutableBoundaryBefore(before) || !isExecutableBoundaryAfter(after) {
-		return false
-	}
-
-	token := extractToken(line, start, end)
-	token = strings.Trim(token, "\"'")
-	if token == "" {
-		return false
-	}
-
-	base := filepath.Base(token)
-	return base == "proxsave" || base == "proxmox-backup"
-}
-
-func extractToken(line string, start, end int) string {
-	begin := start
-	for begin > 0 {
-		prev := line[begin-1]
-		if unicode.IsSpace(rune(prev)) || isCommandSeparator(prev) {
-			break
-		}
-		begin--
-	}
-
-	stop := end
-	for stop < len(line) {
-		next := line[stop]
-		if unicode.IsSpace(rune(next)) || isCommandSeparator(next) {
-			break
-		}
-		stop++
-	}
-
-	return line[begin:stop]
-}
-
-func isCommandSeparator(b byte) bool {
-	switch b {
-	case ';', '&', '|', '>', '<', '(', ')':
-		return true
-	}
-	return false
-}
-
-func isExecutableBoundaryBefore(b byte) bool {
-	if b == 0 {
-		return true
-	}
-	if unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) || b == '_' || b == '-' || b == '.' {
-		return false
-	}
-	if unicode.IsSpace(rune(b)) {
-		return true
-	}
-	switch b {
-	case '"', '\'', '/', '\\', '=', ':', '[', '{':
-		return true
-	}
-	return false
-}
-
-func isExecutableBoundaryAfter(b byte) bool {
-	if b == 0 {
-		return true
-	}
-	if unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) || b == '_' || b == '-' || b == '.' {
-		return false
-	}
-	if b == '/' || b == '\\' {
-		return false
-	}
-	if unicode.IsSpace(rune(b)) {
-		return true
-	}
-	switch b {
-	case '"', '\'', ';', '&', '|', '>', '<', ')', '(', ']', '}':
-		return true
-	}
-	return false
 }
 
 func fetchBackupList(ctx context.Context, backend storage.Storage) []*types.BackupMetadata {
