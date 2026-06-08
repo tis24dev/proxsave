@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -220,8 +221,9 @@ func TestRunTelegramSetupCLI_StopsAfterMaxVerificationAttempts(t *testing.T) {
 	if promptCalls != orchestrator.TelegramSetupMaxVerificationAttempts {
 		t.Fatalf("promptCalls=%d, want %d", promptCalls, orchestrator.TelegramSetupMaxVerificationAttempts)
 	}
-	if !strings.Contains(mirrorBuf.String(), "Telegram setup: not verified (attempts=10 last=409 not linked yet)") {
-		t.Fatalf("expected max-attempt failure log, got %q", mirrorBuf.String())
+	wantLog := fmt.Sprintf("Telegram setup: not verified (attempts=%d last=409 not linked yet)", orchestrator.TelegramSetupMaxVerificationAttempts)
+	if !strings.Contains(mirrorBuf.String(), wantLog) {
+		t.Fatalf("expected max-attempt failure log %q, got %q", wantLog, mirrorBuf.String())
 	}
 }
 
@@ -259,7 +261,9 @@ func TestRunTelegramSetupCLI_PromptAbortIsNonBlocking(t *testing.T) {
 			ServerID:    "12345",
 		}, nil
 	}
+	promptCalls := 0
 	telegramSetupPromptYesNo = func(ctx context.Context, reader *bufio.Reader, question string, defaultYes bool) (bool, error) {
+		promptCalls++
 		return false, errInteractiveAborted
 	}
 	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
@@ -269,6 +273,9 @@ func TestRunTelegramSetupCLI_PromptAbortIsNonBlocking(t *testing.T) {
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
 		t.Fatalf("prompt abort during Telegram setup must be non-blocking, got: %v", err)
+	}
+	if promptCalls != 1 {
+		t.Fatalf("expected the verification prompt to be exercised exactly once, got %d calls", promptCalls)
 	}
 }
 
