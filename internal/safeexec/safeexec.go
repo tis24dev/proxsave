@@ -148,6 +148,9 @@ var allowedCommandFactories = map[string]commandFactory{
 	"proxmox-backup-client": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "proxmox-backup-client", args...)
 	},
+	"proxmox-backup-debug": func(ctx context.Context, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "proxmox-backup-debug", args...)
+	},
 	"proxmox-backup-manager": func(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "proxmox-backup-manager", args...)
 	},

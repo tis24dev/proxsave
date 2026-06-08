@@ -668,8 +668,11 @@ func (c *Collector) collectPBSS3EndpointBucketsRuntime(ctx context.Context, comm
 	}
 	for _, id := range uniqueSortedStrings(endpointIDs) {
 		out := filepath.Join(commandsDir, fmt.Sprintf("s3_endpoint_%s_buckets.json", sanitizeFilename(id)))
+		// `proxmox-backup-manager s3 endpoint list-buckets` has no --output-format flag
+		// (unlike `s3 endpoint list`), so query the REST endpoint via proxmox-backup-debug
+		// to obtain JSON instead. See PBS issue #225.
 		c.collectCommandOptional(ctx,
-			commandSpec("proxmox-backup-manager", "s3", "endpoint", "list-buckets", id, "--output-format=json"),
+			commandSpec("proxmox-backup-debug", "api", "get", "/config/s3/"+id+"/list-buckets", "--output-format=json"),
 			out,
 			fmt.Sprintf("S3 endpoint buckets (%s)", id))
 	}
