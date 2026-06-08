@@ -653,19 +653,16 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 
 	newCommandToken := "/usr/local/bin/proxsave"
 	if _, err := os.Stat(newCommandToken); err != nil {
-		alt := "/usr/local/bin/proxmox-backup"
-		if _, err := os.Stat(alt); err == nil {
-			newCommandToken = alt
-		} else {
-			fallback := strings.TrimSpace(execPath)
-			if fallback != "" {
-				bootstrap.Info("Symlinks for proxsave/proxmox-backup not found, falling back to %s for cron entries", fallback)
-				newCommandToken = fallback
-			} else {
-				bootstrap.Warning("WARNING: Unable to locate Go binary for cron migration")
-				return
-			}
+		// proxsave symlink missing: fall back to the known Go binary (execPath),
+		// not /usr/local/bin/proxmox-backup — that path may resolve to an unrelated
+		// PBS binary and we must never schedule that as root in cron.
+		fallback := strings.TrimSpace(execPath)
+		if fallback == "" {
+			bootstrap.Warning("WARNING: Unable to locate Go binary for cron migration")
+			return
 		}
+		bootstrap.Info("proxsave symlink not found; falling back to %s for cron entries", fallback)
+		newCommandToken = fallback
 	}
 
 	readCron := func() (string, error) {
