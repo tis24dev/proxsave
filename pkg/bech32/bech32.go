@@ -71,10 +71,15 @@ func createChecksum(hrp string, data []byte) []byte {
 	ret := make([]byte, 6)
 	for p := range ret {
 		shift := 5 * (5 - p)
-		ret[p] = byte(mod>>shift) & 31
+		ret[p] = byte((mod >> shift) & 31)
 	}
 	return ret
 }
+
+// lowByte narrows a uint32 group value to a single byte. Callers always mask
+// with maxv (<= 0xFF) first, so the low-byte mask drops no information; it just
+// makes the narrowing provably in-range instead of relying on the maxv invariant.
+func lowByte(v uint32) byte { return byte(v & 0xFF) }
 
 func convertBits(data []byte, frombits, tobits byte, pad bool) ([]byte, error) {
 	var ret []byte
@@ -89,16 +94,16 @@ func convertBits(data []byte, frombits, tobits byte, pad bool) ([]byte, error) {
 		bits += frombits
 		for bits >= tobits {
 			bits -= tobits
-			ret = append(ret, byte(acc>>bits)&maxv)
+			ret = append(ret, lowByte((acc>>bits)&uint32(maxv)))
 		}
 	}
 	if pad {
 		if bits > 0 {
-			ret = append(ret, byte(acc<<(tobits-bits))&maxv)
+			ret = append(ret, lowByte((acc<<(tobits-bits))&uint32(maxv)))
 		}
 	} else if bits >= frombits {
 		return nil, fmt.Errorf("illegal zero padding")
-	} else if byte(acc<<(tobits-bits))&maxv != 0 {
+	} else if lowByte((acc<<(tobits-bits))&uint32(maxv)) != 0 {
 		return nil, fmt.Errorf("non-zero padding")
 	}
 	return ret, nil
@@ -160,7 +165,7 @@ func Decode(s string) (hrp string, data []byte, err error) {
 		if d == -1 {
 			return "", nil, fmt.Errorf("invalid character data part: s[%d]=%v", p, c)
 		}
-		data = append(data, byte(d))
+		data = append(data, byte(d&0x1f))
 	}
 	if !verifyChecksum(hrp, data) {
 		return "", nil, fmt.Errorf("invalid checksum")

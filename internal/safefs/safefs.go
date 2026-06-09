@@ -200,8 +200,14 @@ func statfsBlocksToBytes(blocks uint64, blockSize int64) int64 {
 	}
 
 	size := uint64(blockSize)
-	if blocks > uint64(math.MaxInt64)/size {
+	// Guard the multiplication itself against wrapping uint64...
+	if blocks > math.MaxUint64/size {
 		return math.MaxInt64
 	}
-	return int64(blocks * size)
+	// ...then clamp the product into the signed int64 return range.
+	product := blocks * size
+	if product > uint64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return int64(product)
 }

@@ -381,7 +381,7 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 
 		// Handle directories
 		if header.Typeflag == tar.TypeDir {
-			if err := safetyFS.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+			if err := safetyFS.MkdirAll(target, os.FileMode(header.Mode&0o7777)); err != nil {
 				logger.Warning("Cannot create directory %s: %v", target, err)
 			}
 			continue
@@ -438,7 +438,7 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 		}
 
 		// Handle regular files
-		outFile, err := safetyFS.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+		outFile, err := safetyFS.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode&0o7777))
 		if err != nil {
 			logger.Warning("Cannot create file %s: %v", target, err)
 			continue
