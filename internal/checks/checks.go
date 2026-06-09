@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -316,7 +317,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 		}
 
 		var meta lockFileMetadata
-		if content, rerr := os.ReadFile(lockPath); rerr == nil {
+		if content, rerr := readLockFileContent(lockPath); rerr == nil {
 			meta = parseLockFileMetadata(content)
 		} else {
 			c.logger.Debug("Failed to read lock file %s: %v", lockPath, rerr)
@@ -719,7 +720,7 @@ func (c *Checker) resolveLockPath() string {
 // a parseable pid, is treated as owned so the subsequent remove is a harmless
 // no-op rather than a leak.
 func (c *Checker) ownsLockFile(lockPath string) bool {
-	content, err := os.ReadFile(lockPath)
+	content, err := readLockFileContent(lockPath)
 	if err != nil {
 		return true
 	}
@@ -729,6 +730,28 @@ func (c *Checker) ownsLockFile(lockPath string) bool {
 	}
 	hostname, _ := os.Hostname()
 	return meta.PID == os.Getpid() && sameHost(meta.Host, hostname)
+}
+
+// readLockFileContent reads the lock file at lockPath through an *os.Root on its
+// directory, so the read is confined there at the syscall level: a symlink or `..`
+// in the basename cannot escape the lock directory, and the path is no longer a
+// raw variable sink (resolving the gosec G304 finding structurally rather than with
+// a suppression). The lock file is always a single basename inside an existing lock
+// directory, so opening the directory as a root is sufficient.
+func readLockFileContent(lockPath string) ([]byte, error) {
+	root, err := os.OpenRoot(filepath.Dir(lockPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	f, err := root.Open(filepath.Base(lockPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	return io.ReadAll(f)
 }
 
 // GetDefaultCheckerConfig returns a default checker configuration
