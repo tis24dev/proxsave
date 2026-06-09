@@ -833,6 +833,16 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		`echo "[INFO] NETWORK ROLLBACK SCRIPT FINISHED" >> "$LOG"`,
 		`echo "[INFO] Timestamp: $(date -Is)" >> "$LOG"`,
 		`echo "[INFO] ========================================" >> "$LOG"`,
+		// Signal extraction failure to the caller via a nonzero exit. The tar step
+		// runs inside an `if`, which suspends `set -e`, so without this the script
+		// exits 0 even when it restored nothing - making a failed rollback
+		// indistinguishable from a successful one and causing the caller to report
+		// "rolled back to the pre-restore state" when it did not. Placed after the
+		// marker removal so the marker lifecycle is unchanged.
+		`if [ "$TAR_OK" -ne 1 ]; then`,
+		`  echo "[ERROR] Rollback failed: pre-restore files were NOT restored (extract phase failed)" >> "$LOG"`,
+		`  exit 1`,
+		`fi`,
 	)
 	return strings.Join(lines, "\n") + "\n"
 }
