@@ -675,10 +675,10 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		// PBS binary and we must never schedule that as root in cron.
 		fallback := strings.TrimSpace(execPath)
 		if fallback == "" {
-			bootstrap.Warning("WARNING: Unable to locate Go binary for cron migration")
+			logBootstrapWarning(bootstrap, "WARNING: Unable to locate Go binary for cron migration")
 			return
 		}
-		bootstrap.Info("proxsave symlink not found; falling back to %s for cron entries", fallback)
+		logBootstrapInfo(bootstrap, "proxsave symlink not found; falling back to %s for cron entries", fallback)
 		newCommandToken = fallback
 	}
 
@@ -713,7 +713,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 
 	current, err := readCron()
 	if err != nil {
-		bootstrap.Warning("WARNING: Unable to inspect existing cron entries: %v", err)
+		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect existing cron entries: %v", err)
 		return
 	}
 
@@ -758,14 +758,14 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
-		bootstrap.Warning("WARNING: Failed to update cron entries: %v", err)
+		logBootstrapWarning(bootstrap, "WARNING: Failed to update cron entries: %v", err)
 		return
 	}
 
 	if hasCurrentEntry {
-		bootstrap.Debug("Existing cron entry already targets %s; no changes made.", newCommandToken)
+		logBootstrapDebug(bootstrap, "Existing cron entry already targets %s; no changes made.", newCommandToken)
 	} else {
-		bootstrap.Debug("Recreated cron entry for proxsave at schedule %s: %s", schedule, newCommandToken)
+		logBootstrapDebug(bootstrap, "Recreated cron entry for proxsave at schedule %s: %s", schedule, newCommandToken)
 	}
 }
 
@@ -884,6 +884,14 @@ func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ..
 		return
 	}
 	logging.Info(format, args...)
+}
+
+func logBootstrapDebug(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+	if bootstrap != nil {
+		bootstrap.Debug(format, args...)
+		return
+	}
+	logging.Debug(format, args...)
 }
 
 // containsBinaryReference reports whether the cron line's COMMAND is a
