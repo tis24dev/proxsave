@@ -255,14 +255,17 @@ func applyPVEClusterResourceMapping(ctx context.Context, logger *logging.Logger,
 	getArgs := []string{"get", fmt.Sprintf("/cluster/mapping/%s/%s", mappingType, id), "--output-format=json"}
 	out, getErr := runPveshSensitive(ctx, logger, getArgs)
 	var existing pveClusterMappingSpec
+	var parseErr error
 	ok := false
 	if getErr == nil && len(out) > 0 {
-		if parsed, parsedOK, parseErr := parsePVEClusterMappingObject(out); parseErr == nil && parsedOK {
+		var parsed pveClusterMappingSpec
+		var parsedOK bool
+		if parsed, parsedOK, parseErr = parsePVEClusterMappingObject(out); parseErr == nil && parsedOK {
 			existing, ok = parsed, true
 		}
 	}
 	if !ok {
-		return fmt.Errorf("create %s mapping %q failed and the existing mapping could not be read (get error: %v): %w", mappingType, id, getErr, createErr)
+		return fmt.Errorf("create %s mapping %q failed and the existing mapping could not be read (get error: %v, parse error: %v): %w", mappingType, id, getErr, parseErr, createErr)
 	}
 
 	mergedEntries := uniqueSortedStrings(append(existing.MapEntries, spec.MapEntries...))

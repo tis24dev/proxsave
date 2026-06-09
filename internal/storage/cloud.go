@@ -798,6 +798,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		retries = 1
 	}
 
+	attemptsMade := 0
 	for attempt := 1; attempt <= retries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -810,6 +811,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 				filepath.Base(localFile))
 		}
 
+		attemptsMade++
 		err := c.rcloneCopy(ctx, localFile, remoteFile)
 		if err == nil {
 			return nil
@@ -848,11 +850,11 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 	if ctx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("upload failed: operation timeout (%ds exceeded) after %d attempts",
 			c.config.RcloneTimeoutOperation,
-			retries)
+			attemptsMade)
 	}
 
 	return fmt.Errorf("upload failed after %d attempts: %w",
-		retries,
+		attemptsMade,
 		lastErr)
 }
 

@@ -158,12 +158,18 @@ func buildNetworkApplyNotCommittedError(ctx context.Context, logger *logging.Log
 		rollbackArmed = false
 		logging.DebugStep(logger, "build not-committed error", "No handle: rollbackArmed=false")
 	} else if strings.TrimSpace(handle.markerPath) != "" {
-		if _, statErr := restoreFS.Stat(handle.markerPath); statErr != nil {
+		_, statErr := restoreFS.Stat(handle.markerPath)
+		switch {
+		case statErr == nil:
+			logging.DebugStep(logger, "build not-committed error", "Marker exists (%s): rollbackArmed=true", handle.markerPath)
+		case os.IsNotExist(statErr):
 			// Marker missing => rollback likely already executed (or was manually removed).
 			rollbackArmed = false
 			logging.DebugStep(logger, "build not-committed error", "Marker missing (%s): rollbackArmed=false", handle.markerPath)
-		} else {
-			logging.DebugStep(logger, "build not-committed error", "Marker exists (%s): rollbackArmed=true", handle.markerPath)
+		default:
+			// A non-ENOENT stat error is inconclusive; keep the conservative default
+			// (rollbackArmed=true) so the operator is still warned the network may revert.
+			logging.DebugStep(logger, "build not-committed error", "Marker stat failed (%s): %v; keeping rollbackArmed=true", handle.markerPath, statErr)
 		}
 	}
 
@@ -727,6 +733,10 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		// Signal that the revert is now in progress (before any filesystem change).
 		`echo "[DEBUG] Signalling rollback in progress: $RUNNING" >> "$LOG"`,
 		`: > "$RUNNING"`,
+		// Remove the sentinel even on an unexpected exit or signal, so it never
+		// persists past the script's lifetime; the normal cleanup below (rm -f) is
+		// idempotent and still runs.
+		`trap 'rm -f "$RUNNING"' EXIT INT TERM`,
 		// Extract phase
 		`echo "[INFO] --- EXTRACT PHASE ---" >> "$LOG"`,
 		`echo "[DEBUG] Executing: tar -xzf $BACKUP -C /" >> "$LOG"`,

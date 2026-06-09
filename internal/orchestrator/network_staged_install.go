@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -128,9 +129,13 @@ func rollbackAfterFailedStagedNetworkApply(ctx context.Context, logger *logging.
 	}
 	if rbErr != nil {
 		logger.Error("Network staged apply rollback also failed: %v", rbErr)
-	} else {
-		logger.Warning("Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s)", rollbackPath)
+		// Surface BOTH failures so callers/logs see that the apply left /etc
+		// half-written AND the revert did not complete. errors.Join keeps both
+		// unwrappable (errors.Is on either still works).
+		return fmt.Errorf("network staged apply failed and the rollback to the pre-restore state (rollback=%s) also failed: %w",
+			rollbackPath, errors.Join(applyErr, rbErr))
 	}
+	logger.Warning("Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s)", rollbackPath)
 	return applyErr
 }
 

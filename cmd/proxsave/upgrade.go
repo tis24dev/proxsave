@@ -354,8 +354,10 @@ func fetchLatestRelease(ctx context.Context) (string, string, error) {
 }
 
 // compareVersions compares two semantic version strings (e.g. "0.11.2") and
-// returns -1 if current < latest, 0 if equal, 1 if current > latest.
-// Pre-release/build suffixes are ignored for comparison purposes.
+// returns -1 if current < latest, 0 if equal, 1 if current > latest. Numeric core
+// segments are compared first; when they are equal, a pre-release identifier (e.g.
+// "-rc1") ranks BELOW the same-numeric stable release (matching isNewerVersion).
+// Build metadata ("+...") is ignored.
 func compareVersions(current, latest string) int {
 	normalize := func(v string) ([]int, bool) {
 		v = strings.TrimSpace(v)

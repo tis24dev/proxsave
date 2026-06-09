@@ -47,3 +47,46 @@ func TestRollbackAfterFailedStagedNetworkApply_RollsBackAndReturnsOriginalError(
 		t.Fatalf("expected the rollback script to be invoked via sh; calls=%v", cmd.Calls)
 	}
 }
+
+// shFailingRunner makes the rollback script invocation (`sh <script>`) fail.
+type shFailingRunner struct{ err error }
+
+func (r shFailingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == "sh" {
+		return []byte("rollback boom"), r.err
+	}
+	return nil, nil
+}
+
+// When the apply fails AND the rollback also fails, the returned error must surface
+// BOTH (and reference the rollback path), not just the apply error.
+func TestRollbackAfterFailedStagedNetworkApply_SurfacesRollbackFailure(t *testing.T) {
+	origFS, origCmd, origTime := restoreFS, restoreCmd, restoreTime
+	t.Cleanup(func() {
+		restoreFS, restoreCmd, restoreTime = origFS, origCmd, origTime
+	})
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	restoreTime = &FakeTime{Current: time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)}
+
+	rollbackErr := errors.New("rollback script exit 1")
+	restoreCmd = shFailingRunner{err: rollbackErr}
+
+	applyErr := errors.New("write /etc/hostname failed")
+	got := rollbackAfterFailedStagedNetworkApply(context.Background(), newTestLogger(), applyErr, "/backup.tar")
+
+	if got == nil {
+		t.Fatal("expected a combined error when both apply and rollback fail")
+	}
+	if !errors.Is(got, applyErr) {
+		t.Errorf("returned error must preserve the original apply error; got %v", got)
+	}
+	if !errors.Is(got, rollbackErr) {
+		t.Errorf("returned error must surface the rollback failure; got %v", got)
+	}
+	if !strings.Contains(got.Error(), "/backup.tar") {
+		t.Errorf("returned error should reference the rollback path; got %v", got)
+	}
+}
