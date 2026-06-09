@@ -305,12 +305,28 @@ func (w *restoreUIWorkflowRun) applyStagedCategories() error {
 			return maybeApplyNotificationsFromStage(w.ctx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun)
 		}},
 	}
+	return w.runStagedApplySteps(steps)
+}
+
+// runStagedApplySteps applies each staged-config step in order, re-checking for
+// cancellation BETWEEN steps. A step may degrade a context.Canceled into a
+// warning+nil (e.g. the PVE step swallows all sub-errors), which would otherwise
+// let the loop proceed to apply later sensitive steps (PVE SDN, access-control
+// secrets, notifications) on a system the operator already aborted. Since
+// restoreAbortOrInput recognises context.Canceled, returning w.ctx.Err() here
+// aborts the workflow instead of finishing "with warnings".
+func (w *restoreUIWorkflowRun) runStagedApplySteps(steps []restoreStageApplyStep) error {
 	for _, step := range steps {
+		if err := w.ctx.Err(); err != nil {
+			return err
+		}
 		if err := w.runStageApplyStep(step); err != nil {
 			return err
 		}
 	}
-	return nil
+	// Catch a cancellation that landed during the final step so the run is
+	// reported as aborted rather than completed.
+	return w.ctx.Err()
 }
 
 type restoreStageApplyStep struct {
