@@ -80,6 +80,14 @@ func maybeInstallNetworkConfigFromStage(
 		return true, nil
 	}
 
+	// A SKIPPED preflight (no validator binary such as ifup/ifreload available) is
+	// NOT a validation failure: we could not validate, but the staged config is in
+	// place and presumed good, so keep it instead of rolling back a valid restore.
+	if !networkPreflightWarrantsRollback(preflight) {
+		logger.Warning("Network restore: preflight validation skipped (%s); keeping staged configuration without live validation.", strings.TrimSpace(preflight.SkipReason))
+		return true, nil
+	}
+
 	logger.Warning("%s", preflight.Summary())
 	if out := strings.TrimSpace(preflight.Output); out != "" {
 		logger.Debug("Network preflight output:\n%s", out)
