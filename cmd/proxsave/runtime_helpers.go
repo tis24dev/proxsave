@@ -598,32 +598,7 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 		return
 	}
 
-	create := func(dest string) {
-		if info, err := os.Lstat(dest); err == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				if resolved, err := filepath.EvalSymlinks(dest); err == nil && resolved == execPath {
-					logBootstrapInfo(bootstrap, "Keeping existing symlink %s -> %s", dest, resolved)
-					return
-				}
-			}
-			if rmErr := os.Remove(dest); rmErr != nil {
-				logBootstrapWarning(bootstrap, "WARNING: Failed to replace %s: remove failed: %v", dest, rmErr)
-				return
-			}
-			logBootstrapInfo(bootstrap, "Removed existing entrypoint at %s", dest)
-		} else if !os.IsNotExist(err) {
-			logBootstrapWarning(bootstrap, "WARNING: Unable to inspect %s: %v", dest, err)
-			return
-		}
-
-		if err := os.Symlink(execPath, dest); err != nil {
-			logBootstrapWarning(bootstrap, "WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
-			return
-		}
-		logBootstrapInfo(bootstrap, "Created symlink: %s -> %s", dest, execPath)
-	}
-
-	create("/usr/local/bin/proxsave")
+	installEntrypointSymlink(execPath, "/usr/local/bin/proxsave", bootstrap)
 	// The legacy "proxmox-backup" command name is no longer a supported entrypoint:
 	// drop its symlink instead of recreating it. proxsave is the only entrypoint.
 	removeLegacyEntrypoint("/usr/local/bin/proxmox-backup", bootstrap)
@@ -635,6 +610,38 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 // script) is never deleted. Proxmox Backup Server ships its tools as
 // proxmox-backup-client/-proxy/-manager under /usr/sbin and /usr/bin, never a bare
 // "proxmox-backup" symlink in /usr/local/bin, so PBS is unaffected.
+// installEntrypointSymlink points dest at execPath as a symlink, replacing any
+// existing file/symlink ATOMICALLY: it creates the new symlink at a temp path in
+// the same directory and renames it over dest. A bare remove-then-symlink would
+// leave the host with NO entrypoint if the symlink step failed after the remove
+// succeeded; the atomic rename never leaves dest missing.
+func installEntrypointSymlink(execPath, dest string, bootstrap *logging.BootstrapLogger) {
+	if info, err := os.Lstat(dest); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			if resolved, err := filepath.EvalSymlinks(dest); err == nil && resolved == execPath {
+				logBootstrapInfo(bootstrap, "Keeping existing symlink %s -> %s", dest, resolved)
+				return
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect %s: %v", dest, err)
+		return
+	}
+
+	tmp := dest + ".proxsave-new"
+	_ = os.Remove(tmp) // clear any leftover from a previous interrupted run
+	if err := os.Symlink(execPath, tmp); err != nil {
+		logBootstrapWarning(bootstrap, "WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
+		return
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		logBootstrapWarning(bootstrap, "WARNING: Failed to install symlink %s -> %s: %v", dest, execPath, err)
+		return
+	}
+	logBootstrapInfo(bootstrap, "Created symlink: %s -> %s", dest, execPath)
+}
+
 func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 	info, err := os.Lstat(dest)
 	if err != nil {
