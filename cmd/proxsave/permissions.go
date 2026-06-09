@@ -148,6 +148,15 @@ func applyOwnershipWalkEntry(path string, d os.DirEntry, walkErr error, uid, gid
 	}
 
 	if d.IsDir() {
+		// Directories must keep the execute bit to stay traversable, so gosec's G302
+		// default ceiling (<=0600, which is appropriate for files) does not fit here.
+		// 0750 = rwxr-x--- grants access to the owner and the backup group - both set
+		// by the os.Chown above to backupUser:backupGroup, which is the whole point of
+		// SET_BACKUP_PERMISSIONS - while denying "others" entirely. Tightening to
+		// <=0700 would silently remove backup-group access; <=0600 would make the
+		// directory non-traversable. There is no stricter value that preserves the
+		// feature, so the broad-but-intentional mode is annotated rather than changed.
+		// #nosec G302 -- intentional 0750 on a chowned backup directory; others have no access.
 		if err := os.Chmod(path, 0o750); err != nil {
 			logger.Debug("chmod failed on %s: %v", path, err)
 		}
