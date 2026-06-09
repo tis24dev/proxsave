@@ -725,23 +725,28 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 
 	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
-	updatedLines, hasCurrentEntry, replacedSchedule := filterCronLines(lines, correctPaths)
+	updatedLines, hasCurrentEntry, replacedSchedules := filterCronLines(lines, correctPaths)
 
 	schedule := strings.TrimSpace(cronSchedule)
 	if schedule == "" {
 		schedule = "0 2 * * *"
 	}
-	// Add an entry pointing to the Go binary if none already targets it. If we
-	// removed an entry that pointed to an outdated proxsave/proxmox-backup binary,
-	// keep the operator's existing schedule instead of resetting to the default,
-	// and warn that the entry was rewritten.
+	// Add entries pointing to the Go binary if none already targets it. If we
+	// removed entries that pointed to outdated proxsave/proxmox-backup binaries,
+	// recreate ONE entry per distinct removed schedule (keeping each operator
+	// schedule) instead of resetting to the default or collapsing several distinct
+	// schedules into a single rewritten entry.
 	if !hasCurrentEntry {
-		if replacedSchedule != "" {
-			schedule = replacedSchedule
-			logBootstrapWarning(bootstrap, "Cron entry pointed to an outdated binary path; rewriting it to %s and keeping the existing schedule %q", newCommandToken, schedule)
+		schedules := replacedSchedules
+		if len(schedules) == 0 {
+			schedules = []string{schedule}
+		} else {
+			logBootstrapWarning(bootstrap, "Cron entries pointed to outdated binary paths; rewriting %d to %s and keeping the existing schedule(s) %q", len(schedules), newCommandToken, schedules)
 		}
-		defaultLine := fmt.Sprintf("%s %s", schedule, newCommandToken)
-		updatedLines = append(updatedLines, defaultLine)
+		for _, s := range schedules {
+			updatedLines = append(updatedLines, fmt.Sprintf("%s %s", s, newCommandToken))
+		}
+		schedule = strings.Join(schedules, ", ")
 	}
 
 	newCron := strings.Join(updatedLines, "\n") + "\n"
@@ -786,10 +791,11 @@ func dropLegacyBashCronLines(lines []string, baseDir string, bootstrap *logging.
 	return kept
 }
 
-func filterCronLines(lines []string, correctPaths []string) ([]string, bool, string) {
+func filterCronLines(lines []string, correctPaths []string) ([]string, bool, []string) {
 	updatedLines := make([]string, 0, len(lines))
 	hasCurrentEntry := false
-	replacedSchedule := ""
+	var replacedSchedules []string
+	seenSchedules := make(map[string]bool)
 
 	containsCorrectPath := func(line string) bool {
 		// Match the cron command token exactly, not as a substring: otherwise a
@@ -821,16 +827,19 @@ func filterCronLines(lines []string, correctPaths []string) ([]string, bool, str
 		}
 		if containsBinaryReference(line) {
 			// Remove proxsave/proxmox-backup entries that point to outdated binaries,
-			// remembering the operator's schedule so the rewritten entry can keep it.
-			if replacedSchedule == "" {
-				replacedSchedule = cronScheduleField(line)
+			// remembering EACH distinct schedule so every rewritten entry can keep its
+			// own. Multiple legacy entries with different schedules must not collapse
+			// into a single rewritten entry (which would silently drop the others).
+			if sched := cronScheduleField(line); sched != "" && !seenSchedules[sched] {
+				seenSchedules[sched] = true
+				replacedSchedules = append(replacedSchedules, sched)
 			}
 			continue
 		}
 		updatedLines = append(updatedLines, line)
 	}
 
-	return updatedLines, hasCurrentEntry, replacedSchedule
+	return updatedLines, hasCurrentEntry, replacedSchedules
 }
 
 // cronScheduleField returns the schedule portion of a cron line — the first five
