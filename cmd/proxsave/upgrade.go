@@ -204,7 +204,19 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 
 	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr)
 
-	if upgradeErr != nil {
+	// A configuration-upgrade failure after a successful binary install must also be
+	// reflected in the exit code (the footer already shows "Configuration: ERROR"),
+	// so automation does not treat the run as fully successful.
+	if upgradeErr == nil && cfgUpgradeErr != nil {
+		workflowErr = cfgUpgradeErr
+	}
+	return upgradeExitCode(upgradeErr, cfgUpgradeErr)
+}
+
+// upgradeExitCode maps the binary-install and config-upgrade outcomes to a process
+// exit code: any failure on either yields a non-zero exit.
+func upgradeExitCode(upgradeErr, cfgUpgradeErr error) int {
+	if upgradeErr != nil || cfgUpgradeErr != nil {
 		return types.ExitGenericError.Int()
 	}
 	return types.ExitSuccess.Int()
