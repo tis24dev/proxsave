@@ -794,6 +794,20 @@ func promptYesNoTUIWithCountdown(ctx context.Context, logger *logging.Logger, ti
 	return result, nil
 }
 
+// configureNetworkCommitButtons wires the COMMIT / "Let rollback run" buttons and
+// defaults keyboard focus to the SAFE choice ("Let rollback run", button index 1).
+// COMMIT keeps the just-applied (possibly broken) network config and disarms the
+// automatic rollback, so a reflexive Enter must not select it. Defaulting to the
+// safe button matches the CLI prompt (a blank line means "not committed = let
+// rollback run") and the SetDefaultButton(safe) convention of the sibling
+// destructive prompts.
+func configureNetworkCommitButtons(form *components.Form) {
+	form.AddSubmitButton("COMMIT")
+	form.AddCancelButton("Let rollback run")
+	enableFormNavigation(form, nil)
+	form.SetDefaultButton(defaultButtonIndex(false))
+}
+
 func promptNetworkCommitTUI(ctx context.Context, timeout time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir, configPath, buildSig string) (bool, error) {
 	app := newTUIApp()
 	var committed bool
@@ -899,9 +913,7 @@ func promptNetworkCommitTUI(ctx context.Context, timeout time.Duration, health n
 	form.SetOnCancel(func() {
 		cancelled = true
 	})
-	form.AddSubmitButton("COMMIT")
-	form.AddCancelButton("Let rollback run")
-	enableFormNavigation(form, nil)
+	configureNetworkCommitButtons(form)
 
 	content := tview.NewFlex().
 		SetDirection(tview.FlexRow).
