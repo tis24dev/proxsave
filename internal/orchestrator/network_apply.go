@@ -196,6 +196,23 @@ func buildNetworkApplyNotCommittedError(ctx context.Context, logger *logging.Log
 	}
 }
 
+// rollbackAlreadyExecuted reports whether the rollback has already run to
+// completion. The rollback script removes the marker file as its final step (and
+// disarmNetworkRollback removes it too), so while the timer is armed and before
+// we disarm, a missing marker means the revert already happened. This catches the
+// case rollbackAlreadyRunning misses: a finished systemd unit is no longer
+// 'active', so `systemctl is-active` reports it as not running.
+func rollbackAlreadyExecuted(logger *logging.Logger, handle *networkRollbackHandle) bool {
+	if handle == nil || strings.TrimSpace(handle.markerPath) == "" {
+		return false
+	}
+	if _, err := restoreFS.Stat(handle.markerPath); err != nil {
+		logging.DebugStep(logger, "rollback already executed", "Marker missing (%s): rollback already ran", handle.markerPath)
+		return true
+	}
+	return false
+}
+
 func rollbackAlreadyRunning(ctx context.Context, logger *logging.Logger, handle *networkRollbackHandle) bool {
 	if handle == nil || strings.TrimSpace(handle.unitName) == "" {
 		logging.DebugStep(logger, "rollback already running", "Skip check: handle=%v unitName=%q", handle != nil, "")
