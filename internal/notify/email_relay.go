@@ -29,14 +29,22 @@ type CloudRelayConfig struct {
 	RetryDelay  int // seconds
 }
 
-// Default cloud relay configuration (hardcoded for compatibility with Bash script)
+// Default cloud relay configuration (hardcoded for compatibility with Bash script).
+//
+// WorkerToken and HMACSecret are a SHARED, PUBLIC anti-abuse credential for the
+// open-source relay client: the same value ships in every distributed binary and
+// is published in this repository, so it is not a confidential secret. It only
+// gates access to the free shared relay worker (rate-limited server-side); see
+// docs/SECURITY.md "Hardcoded relay credential (G101)".
 var DefaultCloudRelayConfig = CloudRelayConfig{
-	WorkerURL:   "https://relay-tis24.weathered-hill-5216.workers.dev/send",
+	WorkerURL: "https://relay-tis24.weathered-hill-5216.workers.dev/send",
+	// #nosec G101 -- shared public relay token, not a confidential secret (see docs/SECURITY.md).
 	WorkerToken: "v1_public_20251024",
-	HMACSecret:  "4cc8946c15338082674d7213aee19069571e1afe60ad21b44be4d68260486fb2", // From wrangler.jsonc
-	Timeout:     30,
-	MaxRetries:  2,
-	RetryDelay:  2,
+	// #nosec G101 -- shared public relay HMAC, not a confidential secret (see docs/SECURITY.md).
+	HMACSecret: "4cc8946c15338082674d7213aee19069571e1afe60ad21b44be4d68260486fb2",
+	Timeout:    30,
+	MaxRetries: 2,
+	RetryDelay: 2,
 }
 
 // EmailRelayPayload represents the JSON payload sent to the cloud worker

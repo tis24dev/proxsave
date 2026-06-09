@@ -719,7 +719,11 @@ func (c *Config) parseNotificationSettings() {
 	c.GotifyPriorityFailure = c.ensurePositiveInt("GOTIFY_PRIORITY_FAILURE", 8)
 
 	c.CloudflareWorkerURL = "https://relay-tis24.weathered-hill-5216.workers.dev/send"
+	// CloudflareWorkerToken/CloudflareHMACSecret are a shared, public anti-abuse
+	// credential, not a confidential secret (see notify.DefaultCloudRelayConfig and
+	// docs/SECURITY.md). They mirror notify.DefaultCloudRelayConfig.
 	c.CloudflareWorkerToken = "v1_public_20251024"
+	// #nosec G101 -- shared public relay HMAC, not a confidential secret (see docs/SECURITY.md).
 	c.CloudflareHMACSecret = "4cc8946c15338082674d7213aee19069571e1afe60ad21b44be4d68260486fb2"
 	c.WorkerTimeout = 30
 	c.WorkerMaxRetries = 2
