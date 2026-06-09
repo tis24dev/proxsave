@@ -592,7 +592,10 @@ func extractBinaryFromTar(root *os.Root, archiveName, targetName, destName strin
 		if err != nil {
 			return fmt.Errorf("cannot create extracted binary: %w", err)
 		}
-		if _, err := io.Copy(tmpFile, tr); err != nil {
+		// Bound the copy to the entry's declared size: the release archive is
+		// already signature- and checksum-verified, and io.CopyN keeps gosec G110
+		// (decompression bomb) satisfied while rejecting a truncated entry.
+		if _, err := io.CopyN(tmpFile, tr, hdr.Size); err != nil {
 			_ = tmpFile.Close()
 			return fmt.Errorf("cannot write extracted binary: %w", err)
 		}
