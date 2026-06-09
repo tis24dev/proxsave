@@ -354,59 +354,58 @@ func parseBlkidInventory(content string) map[string]fstabDeviceIdentity {
 func parseLsblkTextInventory(content string) map[string]fstabDeviceIdentity {
 	out := make(map[string]fstabDeviceIdentity)
 	lines := strings.Split(content, "\n")
+
 	headerIdx := -1
-	var headerFields []string
+	headerLine := ""
 	for i, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		headerFields = strings.Fields(line)
-		if len(headerFields) >= 2 && strings.EqualFold(headerFields[0], "NAME") {
+		stripped := strings.TrimRight(line, "\r")
+		fields := strings.Fields(stripped)
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "NAME") {
 			headerIdx = i
+			headerLine = stripped
 			break
 		}
 	}
-	if headerIdx == -1 || len(headerFields) == 0 {
+	if headerIdx == -1 {
 		return out
 	}
 
-	uuidCol := -1
-	labelCol := -1
-	for i, field := range headerFields {
-		switch strings.ToUpper(strings.TrimSpace(field)) {
-		case "UUID":
-			uuidCol = i
-		case "LABEL":
-			labelCol = i
-		}
-	}
-	if uuidCol == -1 && labelCol == -1 {
+	// lsblk -f prints a fixed-width, column-aligned table. Parse UUID/LABEL by
+	// their column rune-offsets taken from the header, NOT by whitespace tokens:
+	// strings.Fields collapses runs of whitespace and emits no token for an empty
+	// cell, so the Nth token is not the Nth column whenever an earlier cell is
+	// blank (which lsblk routinely leaves for FSTYPE/FSVER/LABEL/FSAVAIL, and
+	// FSVER values like "LVM2 001" even contain a space). Offsets are in rune
+	// space so multi-byte tree glyphs (├─, └─) in the NAME column stay aligned.
+	bounds := lsblkColumnBounds(headerLine)
+	uuidBounds, hasUUID := bounds["UUID"]
+	labelBounds, hasLabel := bounds["LABEL"]
+	if !hasUUID && !hasLabel {
 		return out
 	}
 
 	for _, raw := range lines[headerIdx+1:] {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		fields := strings.Fields(raw)
-		if len(fields) == 0 {
+		row := strings.TrimRight(raw, "\r")
+		tokens := strings.Fields(row)
+		if len(tokens) == 0 {
 			continue
 		}
 
-		name := sanitizeLsblkName(fields[0])
+		// NAME is column 0 and never contains internal spaces, so the first
+		// whitespace token is safe to use directly.
+		name := sanitizeLsblkName(tokens[0])
 		if name == "" {
 			continue
 		}
 		path := filepath.Join("/dev", name)
 
+		rowRunes := []rune(row)
 		id := fstabDeviceIdentity{}
-		if uuidCol >= 0 && uuidCol < len(fields) {
-			id.UUID = strings.TrimSpace(fields[uuidCol])
+		if hasUUID {
+			id.UUID = strings.TrimSpace(sliceRunes(rowRunes, uuidBounds[0], uuidBounds[1]))
 		}
-		if labelCol >= 0 && labelCol < len(fields) {
-			id.Label = strings.TrimSpace(fields[labelCol])
+		if hasLabel {
+			id.Label = strings.TrimSpace(sliceRunes(rowRunes, labelBounds[0], labelBounds[1]))
 		}
 		if id.UUID == "" && id.Label == "" {
 			continue
@@ -415,6 +414,58 @@ func parseLsblkTextInventory(content string) map[string]fstabDeviceIdentity {
 	}
 
 	return out
+}
+
+// lsblkColumnBounds derives, from a fixed-width lsblk header line, the [start,end)
+// rune offsets of each column keyed by upper-cased column name. end == -1 marks
+// the final column, which runs to the end of each row.
+func lsblkColumnBounds(header string) map[string][2]int {
+	runes := []rune(header)
+	type col struct {
+		name  string
+		start int
+	}
+	var cols []col
+	i := 0
+	for i < len(runes) {
+		for i < len(runes) && runes[i] == ' ' {
+			i++
+		}
+		if i >= len(runes) {
+			break
+		}
+		start := i
+		for i < len(runes) && runes[i] != ' ' {
+			i++
+		}
+		cols = append(cols, col{name: strings.ToUpper(string(runes[start:i])), start: start})
+	}
+
+	bounds := make(map[string][2]int, len(cols))
+	for j, c := range cols {
+		end := -1
+		if j+1 < len(cols) {
+			end = cols[j+1].start
+		}
+		bounds[c.name] = [2]int{c.start, end}
+	}
+	return bounds
+}
+
+// sliceRunes returns runes[start:end] clamped to the slice bounds. end == -1 (or
+// any value past the end) means "to the end of the slice". An out-of-range start
+// yields "".
+func sliceRunes(runes []rune, start, end int) string {
+	if start < 0 || start >= len(runes) {
+		return ""
+	}
+	if end < 0 || end > len(runes) {
+		end = len(runes)
+	}
+	if end < start {
+		return ""
+	}
+	return string(runes[start:end])
 }
 
 func sanitizeLsblkName(field string) string {
