@@ -2,6 +2,11 @@ package main
 
 import "testing"
 
+// audited: 2026-06-09 — corrected the "1.2.3-rc1" vs "1.2.3" case from 0 to -1.
+// The old expectation encoded the bug where compareVersions stripped the
+// pre-release suffix entirely and treated an rc as equal to its stable release,
+// diverging from isNewerVersion and stranding rc users on "already running the
+// latest version".
 func TestCompareVersions(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -14,7 +19,7 @@ func TestCompareVersions(t *testing.T) {
 		{"patch newer", "0.11.10", "0.11.2", 1},
 		{"minor newer", "0.10.9", "0.11.0", -1},
 		{"major newer", "1.0.0", "0.99.0", 1},
-		{"ignore suffix", "1.2.3-rc1", "1.2.3", 0},
+		{"prerelease older than stable", "1.2.3-rc1", "1.2.3", -1},
 		{"different length", "1.2", "1.2.1", -1},
 		{"empty current", "", "1", -1},
 		{"empty latest", "1", "", 1},

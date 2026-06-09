@@ -340,13 +340,17 @@ func fetchLatestRelease(ctx context.Context) (string, string, error) {
 // returns -1 if current < latest, 0 if equal, 1 if current > latest.
 // Pre-release/build suffixes are ignored for comparison purposes.
 func compareVersions(current, latest string) int {
-	normalize := func(v string) []int {
+	normalize := func(v string) ([]int, bool) {
 		v = strings.TrimSpace(v)
 		if v == "" {
-			return []int{0}
+			return []int{0}, false
 		}
-		// Strip common pre-release/build suffixes (e.g. "-rc1")
+		// A "-" suffix marks a semver pre-release (e.g. "-rc1"); "+" marks build
+		// metadata. Record whether this is a pre-release and strip the suffix so
+		// the numeric core can be compared; the flag breaks numeric ties below.
+		prerelease := false
 		if idx := strings.IndexAny(v, "-+"); idx >= 0 {
+			prerelease = v[idx] == '-'
 			v = v[:idx]
 		}
 		parts := strings.Split(v, ".")
@@ -364,13 +368,13 @@ func compareVersions(current, latest string) int {
 			}
 		}
 		if len(out) == 0 {
-			return []int{0}
+			return []int{0}, prerelease
 		}
-		return out
+		return out, prerelease
 	}
 
-	a := normalize(current)
-	b := normalize(latest)
+	a, aPre := normalize(current)
+	b, bPre := normalize(latest)
 
 	maxLen := len(a)
 	if len(b) > maxLen {
@@ -392,7 +396,19 @@ func compareVersions(current, latest string) int {
 			return 1
 		}
 	}
-	return 0
+
+	// Numeric cores are equal: a stable release outranks the same-numeric
+	// pre-release, matching isNewerVersion (the update check) so the upgrade gate
+	// and the update nag agree on the rc -> stable transition instead of leaving
+	// rc users stranded ("already running the latest version").
+	switch {
+	case aPre && !bPre:
+		return -1
+	case !aPre && bPre:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func downloadFile(ctx context.Context, url string, root *os.Root, name string, bootstrap *logging.BootstrapLogger) (err error) {
