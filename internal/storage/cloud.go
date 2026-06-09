@@ -789,7 +789,16 @@ func (c *CloudStorage) countBackups(ctx context.Context) int {
 func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFile string) error {
 	var lastErr error
 
-	for attempt := 1; attempt <= c.config.RcloneRetries; attempt++ {
+	// Guarantee at least one upload attempt. RCLONE_RETRIES is read with a default
+	// of 3 but never clamped, so a misconfigured RCLONE_RETRIES<=0 would otherwise
+	// skip the loop entirely, never call rclone, and return a bogus
+	// "upload failed after 0 attempts: <nil>" while silently uploading nothing.
+	retries := c.config.RcloneRetries
+	if retries < 1 {
+		retries = 1
+	}
+
+	for attempt := 1; attempt <= retries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -797,7 +806,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		if attempt > 1 {
 			c.logger.Info("Upload retry attempt %d/%d for %s",
 				attempt,
-				c.config.RcloneRetries,
+				retries,
 				filepath.Base(localFile))
 		}
 
@@ -812,12 +821,12 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		if ctx.Err() == context.DeadlineExceeded {
 			c.logger.Warning("Upload attempt %d/%d failed: operation timeout (%ds exceeded)",
 				attempt,
-				c.config.RcloneRetries,
+				retries,
 				c.config.RcloneTimeoutOperation)
 		} else {
 			c.logger.Warning("Upload attempt %d/%d failed: %v",
 				attempt,
-				c.config.RcloneRetries,
+				retries,
 				err)
 		}
 
@@ -827,7 +836,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		}
 
 		// Keep retry delays bounded and avoid shift/multiplication overflow.
-		if attempt < c.config.RcloneRetries {
+		if attempt < retries {
 			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Waiting %v before retry...", waitTime)
 			if err := c.callWaitForRetry(ctx, waitTime); err != nil {
@@ -839,11 +848,11 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 	if ctx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("upload failed: operation timeout (%ds exceeded) after %d attempts",
 			c.config.RcloneTimeoutOperation,
-			c.config.RcloneRetries)
+			retries)
 	}
 
 	return fmt.Errorf("upload failed after %d attempts: %w",
-		c.config.RcloneRetries,
+		retries,
 		lastErr)
 }
 
