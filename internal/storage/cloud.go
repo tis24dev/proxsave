@@ -1301,6 +1301,18 @@ func (c *CloudStorage) Delete(ctx context.Context, backupFile string) error {
 	return err
 }
 
+// errCloudSidecarDeleteOnly marks a delete where the backup archive itself was
+// removed but one or more associated sidecar files (.sha256/.metadata) could not
+// be. Retention counting treats it as a successful deletion (the backup IS gone)
+// rather than over-reporting the backup as still present.
+var errCloudSidecarDeleteOnly = errors.New("backup archive deleted; associated file(s) could not be removed")
+
+// isCloudBackupSidecar reports whether a candidate path is an associated sidecar
+// (checksum/metadata) rather than the backup data archive itself.
+func isCloudBackupSidecar(rel string) bool {
+	return strings.HasSuffix(rel, ".sha256") || strings.HasSuffix(rel, ".metadata")
+}
+
 func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile string) (logDeleted bool, err error) {
 	done := logging.DebugStart(c.logger, "cloud delete", "file=%s", backupFile)
 	defer func() { done(err) }()
@@ -1330,6 +1342,7 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 	}
 
 	failedFiles := make([]string, 0)
+	dataFailed := false // true if the backup data archive (not just a sidecar) failed to delete
 
 	// Delete all files
 	for _, rel := range relativeNames {
@@ -1357,6 +1370,9 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 			c.logger.Warning("WARNING: Cloud storage - failed to delete %s: %v: %s",
 				filepath.Base(f), err, msg)
 			failedFiles = append(failedFiles, filepath.Base(f))
+			if !isCloudBackupSidecar(rel) {
+				dataFailed = true
+			}
 			// Continue with other files
 			continue
 		}
@@ -1367,6 +1383,11 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 	logDeleted = c.deleteAssociatedLog(ctx, backupFile)
 
 	if len(failedFiles) > 0 {
+		if !dataFailed {
+			// Only sidecars failed; the backup archive itself is gone. Surface a
+			// sentinel error so retention counting still treats this as deleted.
+			return logDeleted, fmt.Errorf("%w: %v", errCloudSidecarDeleteOnly, failedFiles)
+		}
 		return logDeleted, fmt.Errorf("failed to delete %d file(s): %v", len(failedFiles), failedFiles)
 	}
 
@@ -1632,8 +1653,14 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 
 		logDeleted, err := c.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
-			c.logger.Warning("WARNING: Cloud storage - failed to delete %s: %v", backup.BackupFile, err)
-			continue
+			if !errors.Is(err, errCloudSidecarDeleteOnly) {
+				// The backup archive itself is still present; do not count it.
+				c.logger.Warning("WARNING: Cloud storage - failed to delete %s: %v", backup.BackupFile, err)
+				continue
+			}
+			// The archive is gone, only sidecars remained: count it as deleted but
+			// warn about the leftover associated files.
+			c.logger.Warning("WARNING: Cloud storage - %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
 		}
 
 		deleted++
