@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -438,6 +439,17 @@ func (a *Archiver) CreateArchive(ctx context.Context, sourceDir, outputPath stri
 }
 
 // createGzipArchive creates a gzip-compressed tar archive using Go's stdlib
+// finalizeEncryptionInto runs the encryption finalizer and folds any error into
+// *errp. A failed age Close means the encrypted archive's final chunk was not
+// written - a truncated, undecryptable archive - so it must never be demoted to a
+// warning behind an earlier close error (e.g. a compressor Close that ran first via
+// the LIFO defer order). errors.Join preserves both errors.
+func finalizeEncryptionInto(errp *error, finalize func() error) {
+	if cerr := finalize(); cerr != nil {
+		*errp = errors.Join(*errp, fmt.Errorf("finalize encrypted archive: %w", cerr))
+	}
+}
+
 func (a *Archiver) createGzipArchive(ctx context.Context, sourceDir, outputPath string) (err error) {
 	a.logger.Debug("Creating gzip archive with level %d (mode %s)", a.compressionLevel, a.CompressionMode())
 
@@ -452,15 +464,7 @@ func (a *Archiver) createGzipArchive(ctx context.Context, sourceDir, outputPath 
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 
 	// Create gzip writer targeting final writer (possibly encrypted)
 	gzWriter, err := gzip.NewWriterLevel(writer, a.compressionLevel)
@@ -502,15 +506,7 @@ func (a *Archiver) createTarArchive(ctx context.Context, sourceDir, outputPath s
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 
 	if err := a.writeTar(ctx, sourceDir, writer); err != nil {
 		return fmt.Errorf("failed to write tar archive: %w", err)
@@ -587,15 +583,7 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 	cmd.Stdout = writer
 
 	errChan := make(chan error, 1)
@@ -658,15 +646,7 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 	cmd.Stdout = writer
 
 	errChan := make(chan error, 1)
@@ -742,15 +722,7 @@ func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputP
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 	cmd.Stdout = writer
 	if err := a.attachStderrLogger(cmd, algo); err != nil {
 		return fmt.Errorf("capture %s output: %w", algo, err)
