@@ -1691,24 +1691,30 @@ func TestReleaseLock_DryRunUsesDefaultPath(t *testing.T) {
 	}
 }
 
+// audited: 2026-06-09 — corrected setup: ReleaseLock is now ownership-aware, so
+// the remove-failure path is only reachable after a real acquisition. The old
+// setup (write lock file by hand, never acquire, expect removal) encoded the
+// pre-fix bug where a non-owner deleted the shared lock.
 func TestReleaseLock_RemoveFails(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(io.Discard)
 
 	tmpDir := t.TempDir()
 	lockPath := filepath.Join(tmpDir, ".backup.lock")
-	if err := os.WriteFile(lockPath, []byte("lock"), 0o600); err != nil {
-		t.Fatalf("write lock file: %v", err)
-	}
 
 	cfg := GetDefaultCheckerConfig(tmpDir, tmpDir, tmpDir)
 	cfg.LockFilePath = lockPath
+
+	checker := NewChecker(logger, cfg)
+	// Acquire the lock for real so this checker owns it.
+	if res := checker.CheckLockFile(); !res.Passed {
+		t.Fatalf("CheckLockFile should acquire the lock: %s", res.Message)
+	}
 
 	origRemove := osRemove
 	t.Cleanup(func() { osRemove = origRemove })
 	osRemove = func(name string) error { return syscall.EPERM }
 
-	checker := NewChecker(logger, cfg)
 	err := checker.ReleaseLock()
 	if err == nil || !strings.Contains(err.Error(), "failed to release lock") {
 		t.Fatalf("expected failed to release lock error, got: %v", err)

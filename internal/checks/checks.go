@@ -41,6 +41,14 @@ var (
 type Checker struct {
 	logger *logging.Logger
 	config *CheckerConfig
+
+	// lockAcquired is true only after THIS checker successfully created the lock
+	// file. ReleaseLock is a no-op unless this flag is set, so a checker that did
+	// not win the lock (another backup held it, or a deferred release fired after
+	// an early error before acquisition) never deletes the holder's lock file.
+	lockAcquired bool
+	// lockPath records the exact path of the lock file this checker created.
+	lockPath string
 }
 
 // DisableCloud globally disables cloud-related checks for this checker.
@@ -397,6 +405,11 @@ func (c *Checker) CheckLockFile() CheckResult {
 			result.Message = result.Error.Error()
 			return result
 		}
+
+		// Record ownership: only now does this checker truly hold the lock, so a
+		// later ReleaseLock is allowed to remove it.
+		c.lockAcquired = true
+		c.lockPath = lockPath
 	} else {
 		c.logger.Info("[DRY RUN] Would create lock file: %s", lockPath)
 	}
@@ -653,15 +666,33 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 	return result
 }
 
-// ReleaseLock removes the lock file
+// ReleaseLock removes the lock file, but ONLY if this checker actually acquired
+// it. A checker that never won the lock must not delete the shared lock file:
+// doing so would remove the holder's lock and break mutual exclusion (e.g. a
+// second backup that failed the "another backup is in progress" check, or a
+// deferred release that fired after an early error before acquisition).
 func (c *Checker) ReleaseLock() error {
-	lockPath := c.config.LockFilePath
-	if lockPath == "" {
-		lockPath = filepath.Join(c.config.LockDirPath, ".backup.lock")
+	if c.config.DryRun {
+		c.logger.Info("[DRY RUN] Would release lock file: %s", c.resolveLockPath())
+		return nil
 	}
 
-	if c.config.DryRun {
-		c.logger.Info("[DRY RUN] Would release lock file: %s", lockPath)
+	if !c.lockAcquired {
+		c.logger.Debug("Lock not acquired by this checker; nothing to release")
+		return nil
+	}
+
+	lockPath := c.lockPath
+	if lockPath == "" {
+		lockPath = c.resolveLockPath()
+	}
+
+	// Defense in depth: only remove the lock if it still belongs to this process.
+	// Guards against the rare case where our lock was reaped as stale and another
+	// process re-created it between acquisition and release.
+	if !c.ownsLockFile(lockPath) {
+		c.logger.Warning("Lock file %s no longer owned by this process (pid=%d); not removing", lockPath, os.Getpid())
+		c.lockAcquired = false
 		return nil
 	}
 
@@ -669,8 +700,35 @@ func (c *Checker) ReleaseLock() error {
 		return fmt.Errorf("failed to release lock: %w", err)
 	}
 
+	c.lockAcquired = false
 	c.logger.Debug("Lock file released: %s", lockPath)
 	return nil
+}
+
+// resolveLockPath returns the configured lock file path, defaulting to
+// <LockDirPath>/.backup.lock when no explicit path is set.
+func (c *Checker) resolveLockPath() string {
+	if c.config.LockFilePath != "" {
+		return c.config.LockFilePath
+	}
+	return filepath.Join(c.config.LockDirPath, ".backup.lock")
+}
+
+// ownsLockFile reports whether the lock file at lockPath was written by this
+// process (matching pid and host). A missing or unreadable file, or one without
+// a parseable pid, is treated as owned so the subsequent remove is a harmless
+// no-op rather than a leak.
+func (c *Checker) ownsLockFile(lockPath string) bool {
+	content, err := os.ReadFile(lockPath)
+	if err != nil {
+		return true
+	}
+	meta := parseLockFileMetadata(content)
+	if meta.PID == 0 {
+		return true
+	}
+	hostname, _ := os.Hostname()
+	return meta.PID == os.Getpid() && sameHost(meta.Host, hostname)
 }
 
 // GetDefaultCheckerConfig returns a default checker configuration
