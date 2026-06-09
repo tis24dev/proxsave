@@ -202,6 +202,9 @@ func TestInstallBinary(t *testing.T) {
 	}
 }
 
+// audited: 2026-06-09 — only linux/amd64 releases are published, so arm64 is no
+// longer accepted (the old test treated arm64 as supported, documenting an arch the
+// release pipeline never builds).
 func TestDetectOSArch(t *testing.T) {
 	osName, arch, err := detectOSArch()
 
@@ -212,7 +215,7 @@ func TestDetectOSArch(t *testing.T) {
 		return
 	}
 
-	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+	if runtime.GOARCH != "amd64" {
 		if err == nil {
 			t.Fatalf("expected error for unsupported architecture %q, got os=%q arch=%q", runtime.GOARCH, osName, arch)
 		}
@@ -225,7 +228,7 @@ func TestDetectOSArch(t *testing.T) {
 	if osName != "linux" {
 		t.Fatalf("detectOSArch() os=%q, want %q", osName, "linux")
 	}
-	if arch != runtime.GOARCH {
-		t.Fatalf("detectOSArch() arch=%q, want %q", arch, runtime.GOARCH)
+	if arch != "amd64" {
+		t.Fatalf("detectOSArch() arch=%q, want %q", arch, "amd64")
 	}
 }

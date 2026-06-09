@@ -288,21 +288,23 @@ func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *l
 }
 
 func detectOSArch() (string, string, error) {
-	osName := strings.ToLower(runtime.GOOS)
+	return resolveReleaseTarget(runtime.GOOS, runtime.GOARCH)
+}
+
+// resolveReleaseTarget maps the running platform to the OS/arch of a published
+// release archive. Releases are built for linux/amd64 ONLY (see
+// .github/.goreleaser.yml), so any other architecture is rejected up front:
+// advertising it would build a download URL for an archive that does not exist and
+// fail later with a confusing 404.
+func resolveReleaseTarget(goos, goarch string) (string, string, error) {
+	osName := strings.ToLower(goos)
 	if osName != "linux" {
 		return "", "", fmt.Errorf("unsupported OS: %s (only linux is supported)", osName)
 	}
-
-	var arch string
-	switch runtime.GOARCH {
-	case "amd64":
-		arch = "amd64"
-	case "arm64":
-		arch = "arm64"
-	default:
-		return "", "", fmt.Errorf("unsupported architecture: %s (supported: amd64, arm64)", runtime.GOARCH)
+	if goarch != "amd64" {
+		return "", "", fmt.Errorf("no prebuilt release for architecture %s: only linux/amd64 binaries are published; build from source to upgrade on this host", goarch)
 	}
-	return osName, arch, nil
+	return osName, "amd64", nil
 }
 
 func fetchLatestRelease(ctx context.Context) (string, string, error) {
