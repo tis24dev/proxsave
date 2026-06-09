@@ -127,22 +127,32 @@ func applyDirOwnershipRecursive(root string, uid, gid int, logger *logging.Logge
 	logger.Debug("Walking directory tree for permissions: %s (uid=%d,gid=%d)", root, uid, gid)
 
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		if err := os.Chown(path, uid, gid); err != nil {
-			// Do not stop on chown errors; just log at debug level.
-			logger.Debug("chown failed on %s: %v", path, err)
-		}
-
-		if d.IsDir() {
-			if err := os.Chmod(path, 0o750); err != nil {
-				logger.Debug("chmod failed on %s: %v", path, err)
-			}
-		}
-		return nil
+		return applyOwnershipWalkEntry(path, d, walkErr, uid, gid, logger)
 	})
+}
+
+// applyOwnershipWalkEntry applies ownership/permissions to a single walked entry.
+// A traversal error (walkErr) is logged and SKIPPED (return nil) rather than
+// propagated: returning it would abort filepath.WalkDir, leaving every not-yet-
+// visited entry with its old ownership. One unreadable subtree must not block
+// fixing the rest of the backup tree.
+func applyOwnershipWalkEntry(path string, d os.DirEntry, walkErr error, uid, gid int, logger *logging.Logger) error {
+	if walkErr != nil {
+		logger.Debug("permission walk: skipping %s: %v", path, walkErr)
+		return nil
+	}
+
+	if err := os.Chown(path, uid, gid); err != nil {
+		// Do not stop on chown errors; just log at debug level.
+		logger.Debug("chown failed on %s: %v", path, err)
+	}
+
+	if d.IsDir() {
+		if err := os.Chmod(path, 0o750); err != nil {
+			logger.Debug("chmod failed on %s: %v", path, err)
+		}
+	}
+	return nil
 }
 
 // fixPermissionsAfterInstall runs a best-effort permission and ownership
