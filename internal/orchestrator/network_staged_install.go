@@ -60,7 +60,11 @@ func maybeInstallNetworkConfigFromStage(
 	logging.DebugStep(logger, "network staged install", "Apply staged network files to system paths (no reload)")
 	applied, err := applyNetworkFilesFromStage(logger, stageRoot)
 	if err != nil {
-		return false, err
+		// A partial apply may have written some of /etc/network/*, /etc/hosts,
+		// /etc/hostname, /etc/resolv.conf. Roll back to the pre-restore state
+		// (rollbackPath was validated non-empty above) instead of leaving /etc
+		// half-written.
+		return false, rollbackAfterFailedStagedNetworkApply(ctx, logger, err, rollbackPath)
 	}
 	logging.DebugStep(logger, "network staged install", "Staged network files applied: %d", len(applied))
 
@@ -110,6 +114,24 @@ func maybeInstallNetworkConfigFromStage(
 	)
 	logger.Info("Staged network files remain available under: %s", stageRoot)
 	return false, fmt.Errorf("network staged install preflight failed; network files rolled back")
+}
+
+// rollbackAfterFailedStagedNetworkApply rolls the staged network apply back to the
+// pre-restore state after applyNetworkFilesFromStage failed partway (which may have
+// left /etc half-written), then returns the original apply error. The bare error
+// return previously left the host with a half-applied network config and no revert.
+func rollbackAfterFailedStagedNetworkApply(ctx context.Context, logger *logging.Logger, applyErr error, rollbackPath string) error {
+	logger.Warning("Network staged apply failed: %v", applyErr)
+	rbLog, rbErr := rollbackNetworkFilesNow(ctx, logger, rollbackPath, "")
+	if strings.TrimSpace(rbLog) != "" {
+		logger.Info("Network rollback log: %s", rbLog)
+	}
+	if rbErr != nil {
+		logger.Error("Network staged apply rollback also failed: %v", rbErr)
+	} else {
+		logger.Warning("Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s)", rollbackPath)
+	}
+	return applyErr
 }
 
 func maybeRepairNICNamesAuto(ctx context.Context, logger *logging.Logger, archivePath string) *nicRepairResult {
