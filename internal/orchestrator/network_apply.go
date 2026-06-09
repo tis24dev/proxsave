@@ -214,8 +214,24 @@ func rollbackAlreadyExecuted(logger *logging.Logger, handle *networkRollbackHand
 }
 
 func rollbackAlreadyRunning(ctx context.Context, logger *logging.Logger, handle *networkRollbackHandle) bool {
-	if handle == nil || strings.TrimSpace(handle.unitName) == "" {
-		logging.DebugStep(logger, "rollback already running", "Skip check: handle=%v unitName=%q", handle != nil, "")
+	if handle == nil {
+		logging.DebugStep(logger, "rollback already running", "Skip check: nil handle")
+		return false
+	}
+
+	// The rollback script writes "<marker>.running" before it starts the revert and
+	// removes it when finished. Statting that sentinel detects an in-progress
+	// rollback even in the nohup fallback, where there is no systemd unit to query
+	// (this is what closes the commit-during-revert race in that mode).
+	if mp := strings.TrimSpace(handle.markerPath); mp != "" {
+		if _, err := restoreFS.Stat(mp + ".running"); err == nil {
+			logging.DebugStep(logger, "rollback already running", "Running sentinel present (%s.running)", mp)
+			return true
+		}
+	}
+
+	if strings.TrimSpace(handle.unitName) == "" {
+		logging.DebugStep(logger, "rollback already running", "Skip systemd check: no unit (nohup fallback)")
 		return false
 	}
 	if !commandAvailable("systemctl") {
@@ -677,6 +693,11 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		fmt.Sprintf("LOG=%s", shellQuote(logPath)),
 		fmt.Sprintf("MARKER=%s", shellQuote(markerPath)),
 		fmt.Sprintf("BACKUP=%s", shellQuote(backupPath)),
+		// RUNNING signals that the revert is actually in progress: it is written
+		// AFTER the marker guard passes and removed when the script finishes, so an
+		// in-flight rollback is detectable even in the nohup fallback, where there is
+		// no systemd unit to query (rollbackAlreadyRunning stats "<marker>.running").
+		`RUNNING="$MARKER.running"`,
 		// Header
 		`echo "[INFO] ========================================" >> "$LOG"`,
 		`echo "[INFO] NETWORK ROLLBACK SCRIPT STARTED" >> "$LOG"`,
@@ -694,6 +715,9 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		`  exit 0`,
 		`fi`,
 		`echo "[DEBUG] Marker exists, proceeding with rollback" >> "$LOG"`,
+		// Signal that the revert is now in progress (before any filesystem change).
+		`echo "[DEBUG] Signalling rollback in progress: $RUNNING" >> "$LOG"`,
+		`: > "$RUNNING"`,
 		// Extract phase
 		`echo "[INFO] --- EXTRACT PHASE ---" >> "$LOG"`,
 		`echo "[DEBUG] Executing: tar -xzf $BACKUP -C /" >> "$LOG"`,
@@ -827,8 +851,8 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 	}
 
 	lines = append(lines,
-		`echo "[DEBUG] Removing marker file..." >> "$LOG"`,
-		`rm -f "$MARKER"`,
+		`echo "[DEBUG] Removing marker and running sentinel..." >> "$LOG"`,
+		`rm -f "$MARKER" "$RUNNING"`,
 		`echo "[INFO] ========================================" >> "$LOG"`,
 		`echo "[INFO] NETWORK ROLLBACK SCRIPT FINISHED" >> "$LOG"`,
 		`echo "[INFO] Timestamp: $(date -Is)" >> "$LOG"`,
