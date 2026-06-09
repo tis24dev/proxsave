@@ -212,9 +212,12 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 
 // downloadAndInstallLatest downloads the specified release archive from GitHub,
 // verifies the checksum, extracts the proxsave binary, and installs it to execPath.
-func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *logging.BootstrapLogger, tag, version string) (string, error) {
-	var err error
+func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *logging.BootstrapLogger, tag, version string) (versionInstalled string, err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "upgrade download/install", "tag=%s version=%s", tag, version)
+	// Named return so the deferred trace reflects the ACTUAL returned error. The
+	// per-step `if err := <call>; err != nil { return "", ... }` blocks shadow a
+	// local err, but a `return` assigns this named err on the way out, so done(err)
+	// no longer logs the span as "ok" when a download/verify/install step failed.
 	defer func() { done(err) }()
 
 	osName, arch, err := detectOSArch()
