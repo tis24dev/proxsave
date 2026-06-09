@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,9 +15,66 @@ import (
 )
 
 type pveClusterMappingJSON struct {
-	ID      string                   `json:"id"`
-	Comment string                   `json:"comment,omitempty"`
-	Map     []map[string]interface{} `json:"map,omitempty"`
+	ID      string            `json:"id"`
+	Comment string            `json:"comment,omitempty"`
+	Map     []pveMappingEntry `json:"map,omitempty"`
+}
+
+// pveMappingEntry is one per-node mapping inside a cluster resource mapping.
+// `pvesh get /cluster/mapping/<type> --output-format=json` emits each entry as a
+// PVE property string ("node=pve01,path=0000:01:00.0,id=8086:1234"), which is the
+// real on-disk backup format. We also accept an object ({"node":"pve01",...}) for
+// robustness, since earlier code and fixtures assumed that (never-emitted) shape.
+type pveMappingEntry struct {
+	props map[string]string
+}
+
+func (e *pveMappingEntry) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		e.props = nil
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		e.props = parsePVEPropertyString(s)
+		return nil
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	props := make(map[string]string, len(obj))
+	for k, v := range obj {
+		k = strings.TrimSpace(k)
+		if k == "" || v == nil {
+			continue
+		}
+		props[k] = strings.TrimSpace(fmt.Sprint(v))
+	}
+	e.props = props
+	return nil
+}
+
+// parsePVEPropertyString splits a PVE property string "k=v,k=v" into its fields.
+func parsePVEPropertyString(s string) map[string]string {
+	out := make(map[string]string)
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(part, "=")
+		k = strings.TrimSpace(k)
+		if !ok || k == "" {
+			continue
+		}
+		out[k] = strings.TrimSpace(v)
+	}
+	return out
 }
 
 type pveClusterMappingSpec struct {
@@ -134,18 +192,7 @@ func readPVEClusterResourceMappingsFromExport(exportRoot, mappingType string) ([
 		}
 
 		for _, m := range item.Map {
-			entry := make(map[string]string, len(m))
-			for k, v := range m {
-				k = strings.TrimSpace(k)
-				if k == "" || v == nil {
-					continue
-				}
-				entry[k] = strings.TrimSpace(fmt.Sprint(v))
-			}
-			if len(entry) == 0 {
-				continue
-			}
-			if rendered := renderMappingEntry(entry); rendered != "" {
+			if rendered := renderMappingEntry(m.props); rendered != "" {
 				spec.MapEntries = append(spec.MapEntries, rendered)
 			}
 		}
@@ -247,15 +294,7 @@ func parsePVEClusterMappingObject(data []byte) (pveClusterMappingSpec, bool, err
 		Comment: strings.TrimSpace(obj.Comment),
 	}
 	for _, m := range obj.Map {
-		entry := make(map[string]string, len(m))
-		for k, v := range m {
-			k = strings.TrimSpace(k)
-			if k == "" || v == nil {
-				continue
-			}
-			entry[k] = strings.TrimSpace(fmt.Sprint(v))
-		}
-		if rendered := renderMappingEntry(entry); rendered != "" {
+		if rendered := renderMappingEntry(m.props); rendered != "" {
 			spec.MapEntries = append(spec.MapEntries, rendered)
 		}
 	}
