@@ -995,12 +995,17 @@ func (a *Archiver) VerifyArchive(ctx context.Context, archivePath string) error 
 		return a.verifyXZArchive(ctx, archivePath)
 	case types.CompressionZstd:
 		return a.verifyZstdArchive(ctx, archivePath)
-	case types.CompressionGzip:
+	case types.CompressionGzip, types.CompressionPigz:
+		// pigz emits standard gzip-format output, so the gzip verifier applies.
 		return a.verifyGzipArchive(ctx, archivePath)
+	case types.CompressionBzip2:
+		return a.verifyBzip2Archive(ctx, archivePath)
+	case types.CompressionLZMA:
+		return a.verifyLzmaArchive(ctx, archivePath)
 	case types.CompressionNone:
 		return a.verifyTarArchive(ctx, archivePath)
 	default:
-		a.logger.Warning("Unknown compression type, skipping detailed verification")
+		a.logger.Warning("Unknown compression type %q, skipping detailed verification", a.compression)
 		return nil
 	}
 }
@@ -1078,6 +1083,42 @@ func (a *Archiver) verifyGzipArchive(ctx context.Context, archivePath string) er
 	}
 
 	a.logger.Debug("Archive verification passed: Gzip compression and tar structure are valid")
+	return nil
+}
+
+// verifyBzip2Archive tests bzip2 compression and tar integrity
+func (a *Archiver) verifyBzip2Archive(ctx context.Context, archivePath string) error {
+	a.logger.Debug("Testing Bzip2 compression integrity")
+
+	// tar -tjf decompresses through bzip2 and lists, exercising both layers.
+	cmd, err := a.cmd(ctx, "tar", "-tjf", archivePath)
+	if err != nil {
+		return err
+	}
+	cmd.Stdout = nil // Discard output
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tar/bzip2 verification failed: %w (output: %s)", err, string(output))
+	}
+
+	a.logger.Debug("Archive verification passed: Bzip2 compression and tar structure are valid")
+	return nil
+}
+
+// verifyLzmaArchive tests lzma compression and tar integrity
+func (a *Archiver) verifyLzmaArchive(ctx context.Context, archivePath string) error {
+	a.logger.Debug("Testing LZMA compression integrity")
+
+	// tar --lzma -tf decompresses through lzma and lists, exercising both layers.
+	cmd, err := a.cmd(ctx, "tar", "--lzma", "-tf", archivePath)
+	if err != nil {
+		return err
+	}
+	cmd.Stdout = nil // Discard output
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tar/lzma verification failed: %w (output: %s)", err, string(output))
+	}
+
+	a.logger.Debug("Archive verification passed: LZMA compression and tar structure are valid")
 	return nil
 }
 
