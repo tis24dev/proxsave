@@ -688,11 +688,13 @@ func (c *Checker) ReleaseLock() error {
 		lockPath = c.resolveLockPath()
 	}
 
-	// Defense in depth: only remove the lock if it still belongs to this process.
-	// Guards against the rare case where our lock was reaped as stale and another
-	// process re-created it between acquisition and release.
+	// Defense in depth: only remove the lock if we can still confirm it belongs to
+	// this process. Guards against our lock having been reaped as stale and
+	// re-created by another process, and against a tampered/unreadable lock: when
+	// ownership cannot be confirmed we leave the file for the stale-age reaper
+	// rather than risk deleting another process's lock.
 	if !c.ownsLockFile(lockPath) {
-		c.logger.Warning("Lock file %s no longer owned by this process (pid=%d); not removing", lockPath, os.Getpid())
+		c.logger.Warning("Could not confirm ownership of lock file %s (pid=%d); leaving it in place", lockPath, os.Getpid())
 		c.lockAcquired = false
 		return nil
 	}
@@ -715,19 +717,31 @@ func (c *Checker) resolveLockPath() string {
 	return filepath.Join(c.config.LockDirPath, ".backup.lock")
 }
 
-// ownsLockFile reports whether the lock file at lockPath was written by this
-// process (matching pid and host). A missing or unreadable file, or one without
-// a parseable pid, is treated as owned so the subsequent remove is a harmless
-// no-op rather than a leak.
+// ownsLockFile reports whether the lock file at lockPath provably belongs to this
+// process. ReleaseLock uses it as a defense-in-depth check before deleting the
+// lock, so it FAILS CLOSED: it returns true only when the lock is already gone
+// (removal is a harmless no-op) or its recorded pid/host match this process. On any
+// other read/parse failure - permission, I/O, truncated or replaced content, an
+// escaping symlink, or a lock with no parseable pid - ownership cannot be proven,
+// so it returns false and the lock is left in place (it will be reaped later once
+// it ages past MaxLockAge) rather than risk deleting a lock this process no longer
+// owns.
 func (c *Checker) ownsLockFile(lockPath string) bool {
 	content, err := readLockFileContent(lockPath)
 	if err != nil {
-		return true
+		if os.IsNotExist(err) {
+			return true // already gone; removing it is a no-op
+		}
+		c.logger.Debug("Cannot verify lock ownership of %s: read failed: %v", lockPath, err)
+		return false
 	}
+
 	meta := parseLockFileMetadata(content)
 	if meta.PID == 0 {
-		return true
+		c.logger.Debug("Cannot verify lock ownership of %s: no pid recorded", lockPath)
+		return false
 	}
+
 	hostname, _ := os.Hostname()
 	return meta.PID == os.Getpid() && sameHost(meta.Host, hostname)
 }
