@@ -240,22 +240,35 @@ func applyPVEClusterResourceMapping(ctx context.Context, logger *logging.Logger,
 		createArgs = append(createArgs, "--map", entry)
 	}
 
-	if err := runPvesh(ctx, logger, createArgs); err == nil {
+	createErr := runPvesh(ctx, logger, createArgs)
+	if createErr == nil {
 		return nil
 	}
 
-	// Create may fail if mapping already exists. Try to merge by unioning current+backup entries and updating via set.
-	mergedEntries := append([]string(nil), spec.MapEntries...)
-	comment := strings.TrimSpace(spec.Comment)
-
+	// Create failed. It commonly means the mapping already exists, in which case we
+	// merge the live entries with the backup ones and update via set. Only do that if
+	// we can actually READ the existing mapping: if the get fails or returns nothing
+	// parseable, the create may have failed for another reason (invalid value,
+	// permission denied, transient cluster lock) and a blind set could overwrite a
+	// live mapping with only the backup entries or mask the real cause - so surface
+	// the original create error instead.
 	getArgs := []string{"get", fmt.Sprintf("/cluster/mapping/%s/%s", mappingType, id), "--output-format=json"}
-	if out, getErr := runPveshSensitive(ctx, logger, getArgs); getErr == nil && len(out) > 0 {
-		if existing, ok, parseErr := parsePVEClusterMappingObject(out); parseErr == nil && ok {
-			mergedEntries = uniqueSortedStrings(append(existing.MapEntries, mergedEntries...))
-			if comment == "" {
-				comment = strings.TrimSpace(existing.Comment)
-			}
+	out, getErr := runPveshSensitive(ctx, logger, getArgs)
+	var existing pveClusterMappingSpec
+	ok := false
+	if getErr == nil && len(out) > 0 {
+		if parsed, parsedOK, parseErr := parsePVEClusterMappingObject(out); parseErr == nil && parsedOK {
+			existing, ok = parsed, true
 		}
+	}
+	if !ok {
+		return fmt.Errorf("create %s mapping %q failed and the existing mapping could not be read (get error: %v): %w", mappingType, id, getErr, createErr)
+	}
+
+	mergedEntries := uniqueSortedStrings(append(existing.MapEntries, spec.MapEntries...))
+	comment := strings.TrimSpace(spec.Comment)
+	if comment == "" {
+		comment = strings.TrimSpace(existing.Comment)
 	}
 
 	setArgs := []string{"set", fmt.Sprintf("/cluster/mapping/%s/%s", mappingType, id)}
