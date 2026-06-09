@@ -341,7 +341,11 @@ func (f *networkRollbackUIApplyFlow) armRollbackAndApply() error {
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Apply network configuration now")
 	if err := applyNetworkConfig(f.ctx, f.logger); err != nil {
 		f.warning("Network apply failed: %v", err)
-		return err
+		// The rollback timer is already armed and will revert the network, but the
+		// config was NOT committed. Surface the not-committed/reconnect guidance
+		// (matching the COMMIT-timeout and expired-window paths) so the caller logs
+		// the rollback-armed state instead of a bare "apply step failed".
+		return f.handleNetworkNotCommitted()
 	}
 	return nil
 }
