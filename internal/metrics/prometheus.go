@@ -126,12 +126,19 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		endTs = float64(m.StartTime.Unix() + int64(m.Duration.Seconds()))
 	}
 
-	// Status gauge: 0=success, 1=warning, 2=error
+	// Status gauge: 0=success, 1=warning, 2=error. Classify by the error/warning
+	// counts rather than the exit code alone: a warning-only run is promoted to a
+	// non-zero (generic) exit code upstream, so keying off m.ExitCode != 0 used to
+	// report a warning-only backup as an error (PS-BH-004). A non-zero exit code
+	// with no counted errors/warnings (e.g. an early abort) still maps to error.
 	status := 0
-	if m.ExitCode != 0 {
+	switch {
+	case m.ErrorCount > 0:
 		status = 2
-	} else if m.WarningCount > 0 {
+	case m.WarningCount > 0:
 		status = 1
+	case m.ExitCode != 0:
+		status = 2
 	}
 
 	// Core metrics
