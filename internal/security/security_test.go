@@ -704,55 +704,6 @@ func TestDetectPrivateAgeKeysAddsWarning(t *testing.T) {
 	}
 }
 
-// TestChecksumFile tests file checksumming
-func TestChecksumFile(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create test file with known content
-	testFile := filepath.Join(tmpDir, "test.txt")
-	content := []byte("test content for checksum")
-	if err := os.WriteFile(testFile, content, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Calculate checksum
-	checksum1, err := checksumFile(testFile)
-	if err != nil {
-		t.Errorf("checksumFile() error = %v", err)
-	}
-	if checksum1 == "" {
-		t.Error("checksumFile() returned empty checksum")
-	}
-
-	// Verify checksum is consistent
-	checksum2, err := checksumFile(testFile)
-	if err != nil {
-		t.Errorf("checksumFile() second call error = %v", err)
-	}
-	if checksum1 != checksum2 {
-		t.Errorf("checksumFile() inconsistent: first=%s, second=%s", checksum1, checksum2)
-	}
-
-	// Test with different content
-	testFile2 := filepath.Join(tmpDir, "test2.txt")
-	if err := os.WriteFile(testFile2, []byte("different content"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	checksum3, err := checksumFile(testFile2)
-	if err != nil {
-		t.Errorf("checksumFile() error = %v", err)
-	}
-	if checksum3 == checksum1 {
-		t.Error("checksumFile() should return different checksums for different content")
-	}
-
-	// Test with nonexistent file
-	_, err = checksumFile(filepath.Join(tmpDir, "nonexistent.txt"))
-	if err == nil {
-		t.Error("checksumFile() should return error for nonexistent file")
-	}
-}
-
 // TestIsSafeBracketProcess tests bracket process safety checking
 func TestIsSafeBracketProcess(t *testing.T) {
 	tests := []struct {

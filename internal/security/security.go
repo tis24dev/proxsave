@@ -810,15 +810,6 @@ func isZombieProxmoxProcess(user, state, vsz, cmd string) bool {
 	return vsz == "0" || vsz == ""
 }
 
-func checksumFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-	return checksumReader(f)
-}
-
 func checksumReader(r io.Reader) (string, error) {
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, r); err != nil {
