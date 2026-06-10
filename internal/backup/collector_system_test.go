@@ -540,6 +540,50 @@ func TestWriteReportFileIncrementsFilesFailedOnWriteError(t *testing.T) {
 	}
 }
 
+// TestWriteReportFileRejectsPathEscapingRoot exercises the gosec G703
+// path-traversal containment added to writeReportFile: report paths that
+// resolve outside the collector staging root (c.tempDir) must be refused, both
+// for a lexical ".." escape (reportRelPath) and for a symlinked component that
+// only escapes once resolved (os.Root). In both cases no file may be written
+// outside the root and FilesFailed must be incremented.
+func TestWriteReportFileRejectsPathEscapingRoot(t *testing.T) {
+	t.Run("lexical parent-dir escape is rejected", func(t *testing.T) {
+		collector := newTestCollector(t)
+
+		escape := filepath.Join(collector.tempDir, "..", "escaped-report.txt")
+		if err := collector.writeReportFile(escape, []byte("payload")); err == nil {
+			t.Fatalf("expected writeReportFile to reject path escaping collector root")
+		}
+		if _, err := os.Stat(escape); !os.IsNotExist(err) {
+			t.Fatalf("escaping report must not be created, stat err=%v", err)
+		}
+		if stats := collector.GetStats(); stats.FilesFailed != 1 {
+			t.Fatalf("expected FilesFailed=1 after escape rejection, got %d", stats.FilesFailed)
+		}
+	})
+
+	t.Run("symlinked component escape is rejected", func(t *testing.T) {
+		collector := newTestCollector(t)
+
+		// A directory outside the collector root, reached through a symlink that
+		// lives inside the root. reportRelPath sees a clean in-root path, so the
+		// os.Root write is what must refuse to follow the link out of the root.
+		outside := t.TempDir()
+		link := filepath.Join(collector.tempDir, "evil")
+		if err := os.Symlink(outside, link); err != nil {
+			t.Fatalf("create escaping symlink: %v", err)
+		}
+
+		report := filepath.Join(link, "report.txt")
+		if err := collector.writeReportFile(report, []byte("payload")); err == nil {
+			t.Fatalf("expected writeReportFile to reject write through escaping symlink")
+		}
+		if _, err := os.Stat(filepath.Join(outside, "report.txt")); !os.IsNotExist(err) {
+			t.Fatalf("report must not be written outside the root, stat err=%v", err)
+		}
+	})
+}
+
 func TestWriteReportFileDryRun(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	config := GetDefaultCollectorConfig()
@@ -1217,7 +1261,7 @@ func TestCollectSystemRuntimeBranchCoverage(t *testing.T) {
 	t.Run("zfs disabled", func(t *testing.T) {
 		collector := newTestCollector(t)
 		collector.config.BackupZFSConfig = false
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := collector.collectSystemZFSRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemZFSRuntime disabled: %v", err)
 		}
@@ -1243,7 +1287,7 @@ func TestCollectSystemRuntimeBranchCoverage(t *testing.T) {
 		root := t.TempDir()
 		collector.config.SystemRootPrefix = root
 		writeRootFile(t, root, "etc/fstab", "tank/home /home zfs defaults 0 0\n", 0o644)
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 
 		if err := collector.collectSystemZFSRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemZFSRuntime detected: %v", err)
@@ -1258,7 +1302,7 @@ func TestCollectSystemRuntimeBranchCoverage(t *testing.T) {
 		root := t.TempDir()
 		collector.config.SystemRootPrefix = root
 		writeRootFile(t, root, "etc/fstab", "tank/home /home zfs defaults 0 0\n", 0o644)
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := os.WriteFile(filepath.Join(commandsDir, "zfs"), []byte("blocker"), 0o644); err != nil {
 			t.Fatalf("write zfs blocker: %v", err)
 		}
@@ -1283,7 +1327,7 @@ func TestCollectSystemRuntimeBranchCoverage(t *testing.T) {
 				return []byte(name + "\n"), nil
 			},
 		})
-		commandsDir := t.TempDir()
+		commandsDir := collector.proxsaveCommandsDir("system")
 		if err := collector.collectSystemLVMRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemLVMRuntime: %v", err)
 		}
@@ -1301,7 +1345,7 @@ func TestCollectSystemRuntimeBranchCoverage(t *testing.T) {
 		collector := newTestCollectorWithDeps(t, CollectorDeps{
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist },
 		})
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := collector.collectSystemLVMRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemLVMRuntime missing commands: %v", err)
 		}
@@ -1790,7 +1834,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 		root := t.TempDir()
 		collector.config.SystemRootPrefix = root
 		writeRootFile(t, root, "etc/os-release", "ID=debian\n", 0o644)
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 
 		if err := collector.collectSystemCoreRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemCoreRuntime: %v", err)
@@ -1835,7 +1879,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				commandsDir := t.TempDir()
+				commandsDir := scratchUnderRoot(t, collector)
 				if err := os.MkdirAll(filepath.Join(commandsDir, tc.blocker), 0o755); err != nil {
 					t.Fatalf("mkdir blocker: %v", err)
 				}
@@ -1858,7 +1902,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 				return []byte(strings.Join(args, " ") + "\n"), nil
 			},
 		})
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := os.MkdirAll(filepath.Join(commandsDir, "ip6_neigh.txt"), 0o755); err != nil {
 			t.Fatalf("mkdir blocker: %v", err)
 		}
@@ -1900,7 +1944,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(root, "proc/net/bonding/subdir"), 0o755); err != nil {
 			t.Fatalf("mkdir bonding subdir: %v", err)
 		}
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := collector.collectSystemNetworkBondingRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemNetworkBondingRuntime: %v", err)
 		}
@@ -1959,7 +2003,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				commandsDir := t.TempDir()
+				commandsDir := scratchUnderRoot(t, collector)
 				if err := os.MkdirAll(filepath.Join(commandsDir, tc.blocker), 0o755); err != nil {
 					t.Fatalf("mkdir blocker: %v", err)
 				}
@@ -1973,7 +2017,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 	t.Run("services runtime disabled unavailable and available", func(t *testing.T) {
 		collector := newTestCollector(t)
 		collector.config.BackupSystemdServices = false
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := collector.collectSystemServicesRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemServicesRuntime disabled: %v", err)
 		}
@@ -1998,7 +2042,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 			DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
 		})
 		collector.config.SystemRootPrefix = t.TempDir()
-		commandsDir = t.TempDir()
+		commandsDir = scratchUnderRoot(t, collector)
 		if err := collector.collectSystemServicesRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemServicesRuntime unavailable: %v", err)
 		}
@@ -2020,7 +2064,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 		root := t.TempDir()
 		collector.config.SystemRootPrefix = root
 		writeRootFile(t, root, "proc/1/comm", "systemd\n", 0o644)
-		commandsDir = t.TempDir()
+		commandsDir = scratchUnderRoot(t, collector)
 		if err := collector.collectSystemServicesRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemServicesRuntime available: %v", err)
 		}
@@ -2031,7 +2075,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 	t.Run("packages runtime disabled blocked and success", func(t *testing.T) {
 		collector := newTestCollector(t)
 		collector.config.BackupInstalledPackages = false
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := collector.collectSystemPackagesInstalledRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemPackagesInstalledRuntime disabled: %v", err)
 		}
@@ -2041,7 +2085,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 
 		collector = newTestCollector(t)
 		collector.config.BackupInstalledPackages = true
-		commandsDir = t.TempDir()
+		commandsDir = scratchUnderRoot(t, collector)
 		if err := os.WriteFile(filepath.Join(commandsDir, "packages"), []byte("blocker"), 0o644); err != nil {
 			t.Fatalf("write packages blocker: %v", err)
 		}
@@ -2061,7 +2105,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 			},
 		})
 		collector.config.BackupInstalledPackages = true
-		commandsDir = t.TempDir()
+		commandsDir = collector.proxsaveCommandsDir("system")
 		if err := collector.collectSystemPackagesInstalledRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemPackagesInstalledRuntime success: %v", err)
 		}
@@ -2071,7 +2115,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 	t.Run("sysctl runtime disabled success and write failure", func(t *testing.T) {
 		collector := newTestCollector(t)
 		collector.config.BackupSysctlConfig = false
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := collector.collectSystemSysctlRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemSysctlRuntime disabled: %v", err)
 		}
@@ -2090,13 +2134,13 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 				return []byte("kernel.hostname = test\n"), nil
 			},
 		})
-		commandsDir = t.TempDir()
+		commandsDir = collector.proxsaveCommandsDir("system")
 		if err := collector.collectSystemSysctlRuntime(context.Background(), commandsDir); err != nil {
 			t.Fatalf("collectSystemSysctlRuntime success: %v", err)
 		}
 		assertFileExists(t, filepath.Join(commandsDir, "sysctl.txt"))
 
-		commandsDir = t.TempDir()
+		commandsDir = scratchUnderRoot(t, collector)
 		if err := os.MkdirAll(filepath.Join(commandsDir, "sysctl.txt"), 0o755); err != nil {
 			t.Fatalf("mkdir sysctl blocker: %v", err)
 		}
@@ -2129,7 +2173,7 @@ func TestCollectSystemAdditionalRuntimeBranches(t *testing.T) {
 			{name: "lvs", blocker: "lvm_lvs.txt", before: []string{"lvm_pvs.txt", "lvm_vgs.txt"}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				commandsDir := t.TempDir()
+				commandsDir := scratchUnderRoot(t, collector)
 				if err := os.MkdirAll(filepath.Join(commandsDir, tc.blocker), 0o755); err != nil {
 					t.Fatalf("mkdir blocker: %v", err)
 				}
@@ -2156,7 +2200,7 @@ func TestCollectBestEffortProbeLateCancellationBranches(t *testing.T) {
 		})
 		ctx, cancelFn := context.WithCancel(context.Background())
 		cancel = cancelFn
-		output := filepath.Join(t.TempDir(), "probe.txt")
+		output := filepath.Join(scratchUnderRoot(t, collector), "probe.txt")
 		if err := os.MkdirAll(output, 0o755); err != nil {
 			t.Fatalf("mkdir output blocker: %v", err)
 		}
@@ -2176,7 +2220,7 @@ func TestCollectBestEffortProbeLateCancellationBranches(t *testing.T) {
 		})
 		ctx, cancelFn := context.WithCancel(context.Background())
 		cancel = cancelFn
-		output := filepath.Join(t.TempDir(), "probe.txt")
+		output := filepath.Join(scratchUnderRoot(t, collector), "probe.txt")
 		if err := collector.collectBestEffortProbe(ctx, commandSpec("probe"), output, "probe", nil); !errors.Is(err, context.Canceled) {
 			t.Fatalf("collectBestEffortProbe error=%v; want context.Canceled", err)
 		}
@@ -2249,7 +2293,7 @@ func TestCollectSystemRemainingRuntimeErrorBranches(t *testing.T) {
 		root := t.TempDir()
 		collector.config.SystemRootPrefix = root
 		writeRootFile(t, root, "etc/os-release", "ID=debian\n", 0o644)
-		if err := collector.collectSystemCoreRuntime(context.Background(), t.TempDir()); !errors.Is(err, context.Canceled) {
+		if err := collector.collectSystemCoreRuntime(context.Background(), collector.proxsaveCommandsDir("system")); !errors.Is(err, context.Canceled) {
 			t.Fatalf("collectSystemCoreRuntime hostname cancellation=%v; want context.Canceled", err)
 		}
 	})
@@ -2277,7 +2321,7 @@ func TestCollectSystemRemainingRuntimeErrorBranches(t *testing.T) {
 			{name: "ip6tables", blocker: "ip6tables.txt", fn: collector.collectSystemFirewallIP6TablesRuntime},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				commandsDir := t.TempDir()
+				commandsDir := scratchUnderRoot(t, collector)
 				if err := os.MkdirAll(filepath.Join(commandsDir, tc.blocker), 0o755); err != nil {
 					t.Fatalf("mkdir blocker: %v", err)
 				}
@@ -2293,7 +2337,7 @@ func TestCollectSystemRemainingRuntimeErrorBranches(t *testing.T) {
 		root := t.TempDir()
 		collector.config.SystemRootPrefix = root
 		writeRootFile(t, root, "proc/net/bonding/bond0", "bonding\n", 0o644)
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := os.MkdirAll(filepath.Join(commandsDir, "bonding_bond0.txt"), 0o755); err != nil {
 			t.Fatalf("mkdir bonding blocker: %v", err)
 		}
@@ -2369,7 +2413,7 @@ func TestCollectSystemRemainingRuntimeErrorBranches(t *testing.T) {
 				if tc.setup != nil {
 					tc.setup(collector)
 				}
-				if err := tc.fn(collector, context.Background(), t.TempDir()); !errors.Is(err, context.Canceled) {
+				if err := tc.fn(collector, context.Background(), scratchUnderRoot(t, collector)); !errors.Is(err, context.Canceled) {
 					t.Fatalf("%s error=%v; want context.Canceled", tc.name, err)
 				}
 			})
@@ -2418,7 +2462,7 @@ func TestCollectSystemRemainingRuntimeErrorBranches(t *testing.T) {
 			t.Fatalf("buildNetworkReport canceled=%v; want context.Canceled", err)
 		}
 
-		commandsDir := t.TempDir()
+		commandsDir := scratchUnderRoot(t, collector)
 		if err := os.MkdirAll(filepath.Join(commandsDir, "network_report.txt"), 0o755); err != nil {
 			t.Fatalf("mkdir network report blocker: %v", err)
 		}
@@ -2709,7 +2753,11 @@ func TestCollectSystemRemainingFileErrorBranches(t *testing.T) {
 		root := t.TempDir()
 		collector.config.SystemRootPrefix = root
 		writeRootFile(t, root, "etc/network/interfaces.d/vmbr0", "auto vmbr0\n", 0o644)
-		if err := collector.buildNetworkReport(context.Background(), t.TempDir()); err != nil {
+		// Report files are written inside the collector staging root (tempDir), as
+		// in production (proxsaveCommandsDir is under tempDir); a stray dir would be
+		// rejected by writeReportFile's os.Root containment.
+		commandsDir := collector.proxsaveCommandsDir("system")
+		if err := collector.buildNetworkReport(context.Background(), commandsDir); err != nil {
 			t.Fatalf("buildNetworkReport with globbed config: %v", err)
 		}
 	})

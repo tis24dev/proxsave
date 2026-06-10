@@ -1480,12 +1480,29 @@ func (c *Collector) writeReportFile(path string, data []byte) error {
 		return nil
 	}
 
+	// Report names can embed system-derived entity names (PVE/PBS node, datastore).
+	// Resolve the target relative to the collector staging root and confine the
+	// write within it through os.Root, so a "../" or symlinked path component cannot
+	// land the file outside tempDir (gosec G703 path-traversal containment).
+	rel, err := c.reportRelPath(path)
+	if err != nil {
+		c.incFilesFailed()
+		return err
+	}
+
 	if err := c.ensureDir(filepath.Dir(path)); err != nil {
 		c.incFilesFailed()
 		return fmt.Errorf("failed to create report directory: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0640); err != nil {
+	root, err := os.OpenRoot(c.tempDir)
+	if err != nil {
+		c.incFilesFailed()
+		return fmt.Errorf("failed to open collector root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	if err := root.WriteFile(rel, data, 0o640); err != nil {
 		c.incFilesFailed()
 		return fmt.Errorf("failed to write report %s: %w", path, err)
 	}
@@ -1494,6 +1511,19 @@ func (c *Collector) writeReportFile(path string, data []byte) error {
 	c.addBytesCollected(int64(len(data)))
 	c.logger.Debug("Successfully wrote report file: %s", path)
 	return nil
+}
+
+// reportRelPath validates that path lies within the collector staging root
+// (c.tempDir) and returns it relative to that root, for use with os.Root.
+func (c *Collector) reportRelPath(path string) (string, error) {
+	rel, err := filepath.Rel(c.tempDir, path)
+	if err != nil {
+		return "", fmt.Errorf("resolve report path %s: %w", path, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("report path escapes collector root: %s", path)
+	}
+	return rel, nil
 }
 
 func (c *Collector) captureCommandOutput(ctx context.Context, spec CommandSpec, output, description string, critical bool) ([]byte, error) {

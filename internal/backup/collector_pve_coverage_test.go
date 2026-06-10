@@ -60,6 +60,20 @@ func markOutputPathAsDir(t *testing.T, dir, name string) {
 	}
 }
 
+// scratchUnderRoot returns a unique directory created under the collector's
+// staging root (c.tempDir). writeReportFile confines every report write to that
+// root via os.Root, so tests that target a report-output directory must use a
+// tempDir-rooted path rather than a bare t.TempDir() (which os.Root rejects as
+// escaping the collector root). Semantics mirror t.TempDir(): unique per call.
+func scratchUnderRoot(t *testing.T, c *Collector) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(c.tempDir, "scratch-")
+	if err != nil {
+		t.Fatalf("create scratch dir under collector root: %v", err)
+	}
+	return dir
+}
+
 func TestPVEManifestHelpersAdditionalBranches(t *testing.T) {
 	var nilCollector *Collector
 	nilCollector.populatePVEManifest()
@@ -134,7 +148,7 @@ func TestPVEManifestHelpersAdditionalBranches(t *testing.T) {
 func TestPVERuntimeCommandSuccessAndFailureBranches(t *testing.T) {
 	t.Run("success paths parse runtime info", func(t *testing.T) {
 		collector := newPVEHappyCommandCollector(t)
-		commandsDir := t.TempDir()
+		commandsDir := collector.proxsaveCommandsDir("pve")
 		info := &pveRuntimeInfo{}
 
 		if err := collector.collectPVECoreRuntime(context.Background(), commandsDir, info); err != nil {
@@ -202,7 +216,7 @@ func TestPVERuntimeCommandSuccessAndFailureBranches(t *testing.T) {
 		for _, tt := range cases {
 			t.Run(tt.name, func(t *testing.T) {
 				collector := newPVEHappyCommandCollector(t)
-				commandsDir := t.TempDir()
+				commandsDir := collector.proxsaveCommandsDir("pve")
 				markOutputPathAsDir(t, commandsDir, tt.blockFile)
 				err := collector.collectPVECoreRuntime(context.Background(), commandsDir, &pveRuntimeInfo{})
 				if tt.wantErr && err == nil {
@@ -219,7 +233,7 @@ func TestPVERuntimeCommandSuccessAndFailureBranches(t *testing.T) {
 		for _, blockFile := range []string{"pve_users.json", "pve_groups.json", "pve_roles.json", "pools.json"} {
 			t.Run(blockFile, func(t *testing.T) {
 				collector := newPVEHappyCommandCollector(t)
-				commandsDir := t.TempDir()
+				commandsDir := collector.proxsaveCommandsDir("pve")
 				markOutputPathAsDir(t, commandsDir, blockFile)
 				if err := collector.collectPVEACLRuntime(context.Background(), commandsDir); err == nil {
 					t.Fatal("expected ACL output write error")
@@ -239,7 +253,7 @@ func TestPVERuntimeCommandSuccessAndFailureBranches(t *testing.T) {
 		} {
 			t.Run(blockFile, func(t *testing.T) {
 				collector := newPVEHappyCommandCollector(t)
-				commandsDir := t.TempDir()
+				commandsDir := collector.proxsaveCommandsDir("pve")
 				markOutputPathAsDir(t, commandsDir, blockFile)
 				if err := collector.collectPVEClusterRuntime(context.Background(), commandsDir, true); err == nil {
 					t.Fatal("expected cluster output write error")
@@ -261,7 +275,7 @@ func TestPVERuntimeCommandSuccessAndFailureBranches(t *testing.T) {
 		for _, tt := range cases {
 			t.Run(tt.name, func(t *testing.T) {
 				collector := newPVEHappyCommandCollector(t)
-				commandsDir := t.TempDir()
+				commandsDir := collector.proxsaveCommandsDir("pve")
 				markOutputPathAsDir(t, commandsDir, tt.blockFile)
 				err := collector.collectPVEStorageRuntime(context.Background(), commandsDir, &pveRuntimeInfo{})
 				if tt.wantErr && err == nil {
@@ -584,7 +598,7 @@ func TestPVEStorageScanMetadataAndSummaryEdges(t *testing.T) {
 		t.Fatal("expected metadata directory creation failure")
 	}
 
-	validBase := t.TempDir()
+	validBase := scratchUnderRoot(t, collector)
 	validResult, err := collector.preparePVEStorageScan(context.Background(), pveStorageEntry{Name: "local", Path: storageDir, Type: "dir", Content: "backup"}, validBase, 0)
 	if err != nil {
 		t.Fatalf("preparePVEStorageScan valid: %v", err)
@@ -612,7 +626,7 @@ func TestPVEStorageScanMetadataAndSummaryEdges(t *testing.T) {
 
 	missingResult := &pveStorageScanResult{
 		Storage: pveStorageEntry{Name: "missing", Path: filepath.Join(t.TempDir(), "missing"), Type: "dir"},
-		MetaDir: t.TempDir(),
+		MetaDir: scratchUnderRoot(t, collector),
 	}
 	if err := collector.collectPVEStorageMetadataJSONStep(context.Background(), missingResult, 0); err != nil {
 		t.Fatalf("metadata JSON with missing path should write partial report: %v", err)
@@ -623,7 +637,7 @@ func TestPVEStorageScanMetadataAndSummaryEdges(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	cancelResult := &pveStorageScanResult{Storage: pveStorageEntry{Name: "cancel", Path: storageDir}, MetaDir: t.TempDir()}
+	cancelResult := &pveStorageScanResult{Storage: pveStorageEntry{Name: "cancel", Path: storageDir}, MetaDir: scratchUnderRoot(t, collector)}
 	if err := collector.collectPVEStorageMetadataJSONStep(ctx, cancelResult, 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("metadata JSON canceled = %v", err)
 	}
@@ -631,7 +645,7 @@ func TestPVEStorageScanMetadataAndSummaryEdges(t *testing.T) {
 		t.Fatalf("metadata text canceled = %v", err)
 	}
 
-	metaFile := filepath.Join(t.TempDir(), "meta-file")
+	metaFile := filepath.Join(scratchUnderRoot(t, collector), "meta-file")
 	if err := os.WriteFile(metaFile, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write metaFile: %v", err)
 	}
@@ -678,7 +692,7 @@ func TestPVEStorageScanMetadataAndSummaryEdges(t *testing.T) {
 	if _, err := collector.sampleMetadataFileStats(context.Background(), storageDir, 3, 10, 0); err != nil {
 		t.Fatalf("sampleMetadataFileStats with broken symlink: %v", err)
 	}
-	if err := collector.writeDatastoreMetadataText(t.TempDir(), pveStorageEntry{Name: "local", Path: storageDir}, []string{""}, nil, "ok", nil, []string{"sample"}, nil); err != nil {
+	if err := collector.writeDatastoreMetadataText(scratchUnderRoot(t, collector), pveStorageEntry{Name: "local", Path: storageDir}, []string{""}, nil, "ok", nil, []string{"sample"}, nil); err != nil {
 		t.Fatalf("writeDatastoreMetadataText empty rel sample: %v", err)
 	}
 	if got := relativeDepth("/tmp/base", "/tmp/base/."); got != 0 {
@@ -1079,7 +1093,7 @@ func TestPVEFinalizeAggregateAndVersionErrorBranches(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(jobsDir, "node_backup_history.json"), 0o755); err != nil {
 		t.Fatalf("mkdir history dir entry: %v", err)
 	}
-	if err := collector.aggregateBackupHistory(context.Background(), jobsDir, filepath.Join(t.TempDir(), "history.json")); err != nil {
+	if err := collector.aggregateBackupHistory(context.Background(), jobsDir, filepath.Join(scratchUnderRoot(t, collector), "history.json")); err != nil {
 		t.Fatalf("aggregateBackupHistory dir entry: %v", err)
 	}
 
@@ -1087,7 +1101,7 @@ func TestPVEFinalizeAggregateAndVersionErrorBranches(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repDir, "node_replication_status.json"), 0o755); err != nil {
 		t.Fatalf("mkdir replication dir entry: %v", err)
 	}
-	if err := collector.aggregateReplicationStatus(context.Background(), repDir, filepath.Join(t.TempDir(), "replication.json")); err != nil {
+	if err := collector.aggregateReplicationStatus(context.Background(), repDir, filepath.Join(scratchUnderRoot(t, collector), "replication.json")); err != nil {
 		t.Fatalf("aggregateReplicationStatus dir entry: %v", err)
 	}
 }
