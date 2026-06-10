@@ -1541,7 +1541,7 @@ func newPatternWriter(storageName, storagePath, analysisDir, pattern string, dry
 		}, nil
 	}
 
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0640)
+	file, err := createBackupOutputFile(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -1653,7 +1653,7 @@ func (c *Collector) writePatternSummary(storage pveStorageEntry, analysisDir str
 	}
 
 	summaryPath := filepath.Join(analysisDir, fmt.Sprintf("%s_backup_summary.txt", storage.pathKey()))
-	file, err := os.OpenFile(summaryPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0640)
+	file, err := createBackupOutputFile(summaryPath)
 	if err != nil {
 		return err
 	}

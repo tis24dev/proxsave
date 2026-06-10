@@ -68,6 +68,9 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 	tmpPath := filepath.Join(pe.textfileDir, "proxmox_backup.prom.tmp")
 	finalPath := filepath.Join(pe.textfileDir, "proxmox_backup.prom")
 
+	// 0644 on purpose: the metrics file must be world-readable so node_exporter
+	// (typically a non-root user) can scrape it, same rationale as the 0755 dir above.
+	// #nosec G302 -- world-readable is required for the non-root metrics scraper.
 	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("create metrics file %s: %w", tmpPath, err)

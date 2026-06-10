@@ -118,8 +118,9 @@ func CreateManifest(ctx context.Context, logger *logging.Logger, manifest *Manif
 		return fmt.Errorf("failed to marshal manifest: %w", err)
 	}
 
-	// Write manifest file
-	if err := os.WriteFile(outputPath, data, 0644); err != nil {
+	// Write manifest file (owner-only; the integrity manifest is verified by
+	// proxsave itself, it carries no group/world reader).
+	if err := os.WriteFile(outputPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write manifest file: %w", err)
 	}
 

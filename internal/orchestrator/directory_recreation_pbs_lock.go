@@ -79,6 +79,10 @@ func removeOrRenamePBSDatastoreLockDirectory(lockPath string, logger *logging.Lo
 }
 
 func createPBSDatastoreLockFile(lockPath string) error {
+	// 0640 on purpose: the lock lives in the PBS datastore and is chowned to the
+	// datastore owner (setDatastoreOwnership); group-read keeps it consistent with
+	// the datastore's access model. The file is empty, so it exposes nothing.
+	// #nosec G302 -- 0o640 group-read matches the chowned PBS datastore lock convention; the lock file is empty.
 	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", lockPath, err)

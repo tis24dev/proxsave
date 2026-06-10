@@ -199,7 +199,7 @@ func (r *TempDirRegistry) saveEntries(entries []tempDirRecord) error {
 	}
 
 	tmpPath := r.registryPath + ".tmp"
-	if err := os.WriteFile(tmpPath, content, 0o640); err != nil {
+	if err := os.WriteFile(tmpPath, content, 0o600); err != nil {
 		return fmt.Errorf("write temp registry: %w", err)
 	}
 	return os.Rename(tmpPath, r.registryPath)
