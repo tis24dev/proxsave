@@ -382,8 +382,11 @@ func TestMaybeApplyPBSConfigsFromStage_ApiErrorsTriggerFallbackOnlyInCleanMode(t
 			{ID: "pbs_jobs"},
 		},
 	}
-	if err := maybeApplyPBSConfigsFromStage(context.Background(), newTestLogger(), planMerge, stageRoot, false); err != nil {
-		t.Fatalf("maybeApplyPBSConfigsFromStage merge: %v", err)
+	// BH-003: in merge mode every API apply failed and there is no file fallback,
+	// so nothing was applied; the wrapper must surface this as an error (which the
+	// workflow turns into "restore completed with warnings") instead of nil.
+	if err := maybeApplyPBSConfigsFromStage(context.Background(), newTestLogger(), planMerge, stageRoot, false); err == nil {
+		t.Fatalf("maybeApplyPBSConfigsFromStage merge: expected an error when all API applies fail with no fallback")
 	}
 	for _, path := range []string{
 		"/etc/proxmox-backup/node.cfg",

@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 )
@@ -79,5 +81,48 @@ func TestApplyPVEBackupJobsFromStage_CreatesJobsViaPvesh(t *testing.T) {
 	}
 	if !strings.Contains(calls, "pvesh create /cluster/backup --id job2 --node pve1 --storage backup") {
 		t.Fatalf("expected create job2 call; calls=%v", fakeCmd.CallsList())
+	}
+}
+
+// pveshWhichOKApplyFailRunner makes "which pvesh" succeed (so pvesh is considered
+// available) but fails every other command, so applyStorageCfg records failed
+// entries.
+type pveshWhichOKApplyFailRunner struct{}
+
+func (pveshWhichOKApplyFailRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == "which" {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("pvesh failed")
+}
+
+func (pveshWhichOKApplyFailRunner) RunStream(ctx context.Context, name string, stdin io.Reader, args ...string) (io.ReadCloser, error) {
+	return nil, fmt.Errorf("pvesh failed")
+}
+
+// TestApplyPVEStorageCfgFromStage_ReturnsErrorOnApplyFailure locks in part of the
+// BH-003 fix: when staged storage.cfg entries fail to apply (failed > 0), the
+// step must return an error so the staged-apply wrapper reports the restore "with
+// warnings" instead of swallowing the failure and reporting success.
+func TestApplyPVEStorageCfgFromStage_ReturnsErrorOnApplyFailure(t *testing.T) {
+	origFS := restoreFS
+	origCmd := restoreCmd
+	t.Cleanup(func() {
+		restoreFS = origFS
+		restoreCmd = origCmd
+	})
+
+	fakeFS := NewFakeFS()
+	restoreFS = fakeFS
+	restoreCmd = pveshWhichOKApplyFailRunner{}
+
+	stageRoot := "/stage"
+	cfg := "storage: local\n    type dir\n    path /var/lib/vz\n"
+	if err := fakeFS.AddFile(stageRoot+"/etc/pve/storage.cfg", []byte(cfg)); err != nil {
+		t.Fatalf("add storage.cfg: %v", err)
+	}
+
+	if err := applyPVEStorageCfgFromStage(context.Background(), newTestLogger(), stageRoot); err == nil {
+		t.Fatalf("expected an error when storage.cfg entries fail to apply")
 	}
 }
