@@ -521,6 +521,17 @@ func (c *Collector) captureInventoryDir(ctx context.Context, sourcePath, logical
 
 	snap.Exists = true
 
+	// Read each entry through an os.Root rooted at sourcePath so a path component
+	// swapped for a symlink mid-walk cannot make the read escape the tree (gosec
+	// G122 Walk TOCTOU). filepath.Walk never descends symlinks, so rel has only
+	// real components and legitimate reads are unaffected.
+	root, err := os.OpenRoot(sourcePath)
+	if err != nil {
+		snap.Error = err.Error()
+		return snap
+	}
+	defer func() { _ = root.Close() }()
+
 	var files []inventoryDirEntry
 	walkErr := filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
 		if errCtx := ctx.Err(); errCtx != nil {
@@ -554,7 +565,7 @@ func (c *Collector) captureInventoryDir(ctx context.Context, sourcePath, logical
 			return nil
 		}
 
-		data, err := os.ReadFile(path)
+		data, err := root.ReadFile(rel)
 		if err != nil {
 			entry.Error = err.Error()
 		} else {
@@ -896,6 +907,17 @@ func (c *Collector) captureInventoryDirFiltered(ctx context.Context, sourcePath,
 	}
 	snap.Exists = true
 
+	// Read each entry through an os.Root rooted at sourcePath so a path component
+	// swapped for a symlink mid-walk cannot make the read escape the tree (gosec
+	// G122 Walk TOCTOU). filepath.Walk never descends symlinks, so rel has only
+	// real components and legitimate reads are unaffected.
+	root, err := os.OpenRoot(sourcePath)
+	if err != nil {
+		snap.Error = err.Error()
+		return snap
+	}
+	defer func() { _ = root.Close() }()
+
 	var files []inventoryDirEntry
 	walkErr := filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
 		if errCtx := ctx.Err(); errCtx != nil {
@@ -932,7 +954,7 @@ func (c *Collector) captureInventoryDirFiltered(ctx context.Context, sourcePath,
 			return nil
 		}
 
-		data, err := os.ReadFile(path)
+		data, err := root.ReadFile(rel)
 		if err != nil {
 			entry.Error = err.Error()
 		} else {

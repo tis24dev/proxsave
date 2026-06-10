@@ -774,6 +774,15 @@ func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputP
 // addToTar recursively adds files and directories to a tar archive
 // Preserves symlinks instead of following them
 func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDir, baseInArchive string) error {
+	// Open file content through an os.Root rooted at sourceDir so a path component
+	// swapped for a symlink mid-walk cannot make the copy escape the tree (gosec
+	// G122 Walk TOCTOU). filepath.Walk never descends symlinks, so relPath has only
+	// real components and legitimate files open unchanged.
+	root, err := os.OpenRoot(sourceDir)
+	if err != nil {
+		return fmt.Errorf("open archive source root %s: %w", sourceDir, err)
+	}
+	defer func() { _ = root.Close() }()
 	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		// Check context cancellation
 		select {
@@ -867,7 +876,7 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 
 		// If it's a regular file (not symlink, dir, etc), write its content
 		if linkInfo.Mode().IsRegular() {
-			file, err := os.Open(path)
+			file, err := root.Open(relPath)
 			if err != nil {
 				a.logger.Warning("Failed to open file %s: %v", path, err)
 				return nil
