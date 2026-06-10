@@ -21,6 +21,11 @@ type restoreArchiveOptions struct {
 	logFile     *os.File
 	logFilePath string
 	skipFn      func(entryName string) bool
+	// failOnPartialExtraction makes extractArchiveNative return an error when one
+	// or more entries fail to extract. Best-effort callers leave it false (a
+	// partial extraction is reported as a warning); the staged restore path sets
+	// it true so an incomplete stage is never applied to the live system (BH-002).
+	failOnPartialExtraction bool
 }
 
 type restoreExtractionStats struct {
@@ -62,6 +67,14 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 
 	extractionLog.writeSummary(stats)
 	logRestoreExtractionSummary(opts, stats)
+
+	// When the caller cannot safely act on a partial result (the staged restore
+	// path, which would otherwise apply an incomplete tree of PVE/PBS/network/
+	// secret config to the live system), surface per-entry extraction failures as
+	// an error instead of silently succeeding (BH-002).
+	if opts.failOnPartialExtraction && stats.filesFailed > 0 {
+		return fmt.Errorf("incomplete extraction: %d entr(ies) failed to extract (%d extracted); refusing to apply a partial result", stats.filesFailed, stats.filesExtracted)
+	}
 	return nil
 }
 

@@ -269,7 +269,12 @@ func (w *restoreUIWorkflowRun) extractStagedCategories() (bool, error) {
 		return false, fmt.Errorf("failed to create staging directory %s: %w", w.stageRoot, err)
 	}
 
-	stageLog, err := extractSelectiveArchive(w.ctx, w.prepared.ArchivePath, w.stageRoot, w.plan.StagedCategories, RestoreModeCustom, w.logger)
+	// failOnPartial=true: a staged extraction with any failed entry must NOT be
+	// applied to the live system; otherwise an incomplete tree of sensitive config
+	// (PVE/PBS/network/secrets) could be applied (BH-002). On error the apply is
+	// skipped (handleStageExtractError -> return false), so the system is left
+	// untouched rather than partially mutated.
+	stageLog, err := extractSelectiveArchiveStrict(w.ctx, w.prepared.ArchivePath, w.stageRoot, w.plan.StagedCategories, RestoreModeCustom, w.logger, true)
 	if err != nil {
 		if err := w.handleStageExtractError(err); err != nil {
 			return false, err
