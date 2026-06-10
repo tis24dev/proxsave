@@ -726,6 +726,10 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	if !c.config.BundleAssociatedFiles {
 		associatedFiles := []string{
 			backupFile + ".sha256",
+			// .manifest.json is the authoritative metadata; upload it so a raw cloud
+			// backup stays discoverable even if the legacy .metadata alias (written
+			// best-effort) is missing (PS-BH-002).
+			backupFile + ".manifest.json",
 			backupFile + ".metadata",
 			backupFile + ".metadata.sha256",
 		}

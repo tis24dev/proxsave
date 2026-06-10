@@ -303,6 +303,73 @@ esac
 	}
 }
 
+// TestDiscoverRcloneBackups_DiscoversRawViaManifest locks in the PS-BH-002 fix: a
+// raw cloud backup must be discoverable via its authoritative .manifest.json even
+// when the legacy .metadata alias is missing, while a backup that has both is
+// listed only once (the .metadata alias stays the canonical key).
+func TestDiscoverRcloneBackups_DiscoversRawViaManifest(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifest := backup.Manifest{
+		ArchivePath:    "/var/backups/node-backup-20251206.tar.xz",
+		ProxmoxType:    "pve",
+		ProxmoxVersion: "8.1",
+		CreatedAt:      time.Date(2025, 12, 6, 12, 0, 0, 0, time.UTC),
+		EncryptionMode: "none",
+		SHA256:         checksumHexForBytes([]byte("node-backup-20251206")),
+	}
+	manifestBytes, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	manifestPath := filepath.Join(tmpDir, "manifest.json")
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+case "$1" in
+  lsf) printf '%s' "$LSF_LINES" ;;
+  cat) cat "$MANIFEST_PATH" ;;
+  *) echo "unexpected subcommand: $1" >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+	prependPathEnv(t, tmpDir)
+	t.Setenv("MANIFEST_PATH", manifestPath)
+
+	t.Run("manifest only (no .metadata) is discovered", func(t *testing.T) {
+		t.Setenv("LSF_LINES", "node-backup-20251206.tar.xz\nnode-backup-20251206.tar.xz.manifest.json\n")
+		candidates, err := discoverRcloneBackups(context.Background(), nil, "gdrive:pbs-backups/server1", nil, nil)
+		if err != nil {
+			t.Fatalf("discoverRcloneBackups() error = %v", err)
+		}
+		if len(candidates) != 1 {
+			t.Fatalf("got %d candidates; want 1 (raw discovered via .manifest.json)", len(candidates))
+		}
+		if candidates[0].Source != sourceRaw {
+			t.Fatalf("Source = %v; want sourceRaw", candidates[0].Source)
+		}
+		if candidates[0].Manifest == nil || candidates[0].Manifest.ArchivePath != manifest.ArchivePath {
+			t.Fatalf("manifest not parsed from .manifest.json: %#v", candidates[0].Manifest)
+		}
+	})
+
+	t.Run("both .metadata and .manifest.json yield a single candidate", func(t *testing.T) {
+		t.Setenv("LSF_LINES", "node-backup-20251206.tar.xz\nnode-backup-20251206.tar.xz.metadata\nnode-backup-20251206.tar.xz.manifest.json\n")
+		candidates, err := discoverRcloneBackups(context.Background(), nil, "gdrive:pbs-backups/server1", nil, nil)
+		if err != nil {
+			t.Fatalf("discoverRcloneBackups() error = %v", err)
+		}
+		if len(candidates) != 1 {
+			t.Fatalf("got %d candidates; want 1 (deduped: .metadata is the canonical key)", len(candidates))
+		}
+	})
+}
+
 func TestDiscoverRcloneBackups_MixedCandidatesSortedByCreatedAt(t *testing.T) {
 	tmpDir := t.TempDir()
 
