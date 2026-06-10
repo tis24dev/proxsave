@@ -26,6 +26,12 @@ func applyNetworkFilesFromStage(logger *logging.Logger, stageRoot string) (appli
 
 	items := []stageItem{
 		{Rel: "etc/network", Dest: "/etc/network", Kind: "dir"},
+		// Other network backends declared by the "network" category (BH-004): a
+		// staged dir is only applied when present in the backup, so systems not
+		// using a given backend are unaffected (copyDirOverlay is a no-op then).
+		{Rel: "etc/netplan", Dest: "/etc/netplan", Kind: "dir"},
+		{Rel: "etc/systemd/network", Dest: "/etc/systemd/network", Kind: "dir"},
+		{Rel: "etc/NetworkManager/system-connections", Dest: "/etc/NetworkManager/system-connections", Kind: "dir"},
 		{Rel: "etc/hosts", Dest: "/etc/hosts", Kind: "file"},
 		{Rel: "etc/hostname", Dest: "/etc/hostname", Kind: "file"},
 		{Rel: "etc/cloud/cloud.cfg.d/99-disable-network-config.cfg", Dest: "/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg", Kind: "file"},
