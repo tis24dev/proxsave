@@ -731,30 +731,17 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		correctPaths = append(correctPaths, execPath)
 	}
 
-	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
-	updatedLines, hasCurrentEntry, replacedSchedules := filterCronLines(lines, correctPaths)
-
 	schedule := strings.TrimSpace(cronSchedule)
 	if schedule == "" {
 		schedule = "0 2 * * *"
 	}
-	// Add entries pointing to the Go binary if none already targets it. If we
-	// removed entries that pointed to outdated proxsave/proxmox-backup binaries,
-	// recreate ONE entry per distinct removed schedule (keeping each operator
-	// schedule) instead of resetting to the default or collapsing several distinct
-	// schedules into a single rewritten entry.
-	if !hasCurrentEntry {
-		schedules := replacedSchedules
-		if len(schedules) == 0 {
-			schedules = []string{schedule}
-		} else {
-			logBootstrapWarning(bootstrap, "Cron entries pointed to outdated binary paths; rewriting %d to %s and keeping the existing schedule(s) %q", len(schedules), newCommandToken, schedules)
-		}
-		for _, s := range schedules {
-			updatedLines = append(updatedLines, fmt.Sprintf("%s %s", s, newCommandToken))
-		}
-		schedule = strings.Join(schedules, ", ")
-	}
+
+	// (Re)install resets proxsave's schedule to the chosen one: every
+	// proxsave-managed entry is dropped and a single fresh entry is written at the
+	// chosen schedule, while unrelated operator cron lines are preserved. Upgrades
+	// no longer call this, so it only runs on install (CRON-INSTALL-002 /
+	// CRON-MIXED-001).
+	updatedLines := buildReinstallCronLines(lines, baseDir, correctPaths, schedule, newCommandToken, bootstrap)
 
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
@@ -762,11 +749,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		return
 	}
 
-	if hasCurrentEntry {
-		logBootstrapDebug(bootstrap, "Existing cron entry already targets %s; no changes made.", newCommandToken)
-	} else {
-		logBootstrapDebug(bootstrap, "Recreated cron entry for proxsave at schedule %s: %s", schedule, newCommandToken)
-	}
+	logBootstrapDebug(bootstrap, "Reinstalled proxsave cron entry at schedule %s: %s", schedule, newCommandToken)
 }
 
 // dropLegacyBashCronLines removes crontab lines whose command is the old Bash
@@ -847,6 +830,43 @@ func filterCronLines(lines []string, correctPaths []string) ([]string, bool, []s
 	}
 
 	return updatedLines, hasCurrentEntry, replacedSchedules
+}
+
+// dropCanonicalCronLines removes every cron line whose command token already
+// targets one of the canonical proxsave paths, so a (re)install can rewrite the
+// schedule from scratch instead of preserving the previous one.
+func dropCanonicalCronLines(lines, correctPaths []string) []string {
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		token := strings.Trim(cronCommandToken(line), "\"'")
+		canonical := false
+		if token != "" {
+			for _, p := range correctPaths {
+				if p != "" && token == p {
+					canonical = true
+					break
+				}
+			}
+		}
+		if canonical {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return kept
+}
+
+// buildReinstallCronLines computes the crontab for a (re)install: it drops the
+// legacy Bash cron entry, every outdated proxsave/proxmox-backup binary entry and
+// any entry already targeting the canonical path, then appends a single fresh
+// entry at the chosen schedule. Unrelated operator lines, comments and blanks are
+// preserved. This deliberately resets proxsave's schedule to the chosen one
+// (CRON-INSTALL-002) and removes stale/duplicate entries (CRON-MIXED-001).
+func buildReinstallCronLines(lines []string, baseDir string, correctPaths []string, schedule, commandToken string, bootstrap *logging.BootstrapLogger) []string {
+	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
+	updated, _, _ := filterCronLines(lines, correctPaths)
+	updated = dropCanonicalCronLines(updated, correctPaths)
+	return append(updated, fmt.Sprintf("%s %s", schedule, commandToken))
 }
 
 // cronScheduleField returns the schedule portion of a cron line — the first five

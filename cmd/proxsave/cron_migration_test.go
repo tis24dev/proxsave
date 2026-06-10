@@ -251,3 +251,38 @@ func TestDropLegacyBashCronLines(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildReinstallCronLines covers the (re)install cron behaviour (CRON-MIXED-001
+// / CRON-INSTALL-002): every proxsave-managed entry (legacy Bash, outdated binary,
+// and the canonical path at its old schedule) is dropped and a single fresh entry
+// is written at the chosen schedule, while unrelated operator lines and comments
+// are preserved.
+func TestBuildReinstallCronLines(t *testing.T) {
+	correctPaths := []string{"/usr/local/bin/proxsave"}
+	userLine := "0 12 * * * /mnt/pve/nas/scripts/backup_folders-nightly.sh arg"
+
+	lines := []string{
+		"# Header",
+		userLine, // unrelated operator job: keep
+		"0 1 * * * /opt/proxsave/script/proxmox-backup.sh", // legacy Bash: drop
+		"0 4 * * * /usr/bin/proxsave",                      // outdated binary: drop
+		"0 5 * * * /usr/local/bin/proxsave",                // canonical, old schedule: drop
+	}
+
+	got := buildReinstallCronLines(lines, "/opt/proxsave", correctPaths, "30 1 * * *", "/usr/local/bin/proxsave", nil)
+
+	want := []string{
+		"# Header",
+		userLine,
+		"30 1 * * * /usr/local/bin/proxsave", // single fresh entry at the chosen schedule
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("got %d lines, want %d\nGot:  %v\nWant: %v", len(got), len(want), got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("line[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

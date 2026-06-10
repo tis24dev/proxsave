@@ -183,9 +183,10 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	}
 	ensureGoSymlink(execPath, bootstrap)
 
-	cronSchedule := resolveCronScheduleFromEnv()
-	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "migrating cron entries")
-	migrateLegacyCronEntries(ctx, baseDir, execPath, bootstrap, cronSchedule)
+	// Upgrades intentionally leave the cron schedule untouched; the canonical
+	// /usr/local/bin/proxsave entry created at install keeps working across binary
+	// upgrades. Re-run --install to change the schedule.
+	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "leaving cron entries unchanged")
 
 	telegramCode := ""
 	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {
