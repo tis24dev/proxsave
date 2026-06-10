@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -426,7 +427,12 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 	basePath, _ := trimBundleSuffix(backupFile)
 	filesToDelete := buildBackupCandidatePaths(basePath, s.config.BundleAssociatedFiles)
 
-	// Delete all files (non-critical errors)
+	// Delete all files; collect real removal failures (not "already gone") and
+	// track whether the data archive itself (not just a sidecar) failed, so the
+	// caller never counts a backup whose archive remains on disk as deleted
+	// (PS-BH-001), while a sidecar-only failure still counts (the archive IS gone).
+	var failedFiles []string
+	dataFailed := false
 	for _, f := range filesToDelete {
 		if f == "" {
 			continue
@@ -438,12 +444,22 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 				continue
 			}
 			s.logger.Warning("WARNING: Secondary storage - failed to remove %s: %v", f, err)
-			// Continue with other files
+			failedFiles = append(failedFiles, f)
+			if !isBackupSidecar(f) {
+				dataFailed = true
+			}
 		}
 	}
 
 	// Best-effort: delete associated secondary log file for this backup
 	logDeleted := s.deleteAssociatedLog(backupFile)
+
+	if len(failedFiles) > 0 {
+		if !dataFailed {
+			return logDeleted, fmt.Errorf("%w: %v", errBackupSidecarDeleteOnly, failedFiles)
+		}
+		return logDeleted, fmt.Errorf("failed to remove %d file(s): %v", len(failedFiles), failedFiles)
+	}
 
 	s.logger.Debug("Deleted secondary backup: %s", filepath.Base(backupFile))
 	return logDeleted, nil
@@ -571,8 +587,12 @@ func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*typ
 
 		logDeleted, err := s.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
-			s.logger.Warning("WARNING: Secondary storage - failed to delete %s: %v", backup.BackupFile, err)
-			continue
+			if !errors.Is(err, errBackupSidecarDeleteOnly) {
+				s.logger.Warning("WARNING: Secondary storage - failed to delete %s: %v", backup.BackupFile, err)
+				continue
+			}
+			// Archive removed, only sidecar(s) failed: count as deleted but warn.
+			s.logger.Warning("WARNING: Secondary storage - %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
 		}
 
 		deleted++
@@ -646,8 +666,12 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 
 		logDeleted, err := s.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
-			s.logger.Warning("WARNING: Secondary storage - failed to delete %s: %v", backup.BackupFile, err)
-			continue
+			if !errors.Is(err, errBackupSidecarDeleteOnly) {
+				s.logger.Warning("WARNING: Secondary storage - failed to delete %s: %v", backup.BackupFile, err)
+				continue
+			}
+			// Archive removed, only sidecar(s) failed: count as deleted but warn.
+			s.logger.Warning("WARNING: Secondary storage - %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
 		}
 
 		deleted++

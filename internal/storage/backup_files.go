@@ -1,8 +1,23 @@
 package storage
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 const bundleSuffix = ".bundle.tar"
+
+// errBackupSidecarDeleteOnly marks a delete where the backup data archive itself
+// was removed but one or more associated sidecar files (.sha256/.metadata) could
+// not be. Retention counting treats it as a successful deletion (the archive IS
+// gone) rather than over-reporting freed space or remaining backups.
+var errBackupSidecarDeleteOnly = errors.New("backup archive deleted; associated file(s) could not be removed")
+
+// isBackupSidecar reports whether a candidate path is an associated sidecar
+// (checksum/metadata) rather than the backup data archive itself.
+func isBackupSidecar(path string) bool {
+	return strings.HasSuffix(path, ".sha256") || strings.HasSuffix(path, ".metadata")
+}
 
 // trimBundleSuffix removes the .bundle.tar suffix from a path if present.
 // It returns the trimmed path and whether the suffix was removed.

@@ -15,7 +15,7 @@ import (
 // even after the backup archive itself was removed. deleteBatched then treated that as
 // "not deleted" and skipped incrementing the counter, so the retention summary
 // over-reported "remaining" backups while the archive was actually gone. The delete now
-// distinguishes a sidecar-only failure (errCloudSidecarDeleteOnly) and counts it.
+// distinguishes a sidecar-only failure (errBackupSidecarDeleteOnly) and counts it.
 func TestCloudStorageApplyRetention_CountsBackupWhenOnlySidecarDeleteFails(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:          true,
