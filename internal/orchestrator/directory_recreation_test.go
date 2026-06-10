@@ -812,3 +812,43 @@ func TestCreatePBSDatastoreStructureSkipsUnexpectedEntries(t *testing.T) {
 		t.Fatalf("expected no .chunks created when skipping, stat err=%v", statErr)
 	}
 }
+
+// TestValidateRecreationPath locks in the gosec G304 hardening: a storage/
+// datastore "path" taken verbatim from a restored storage.cfg/datastore.cfg must
+// be rejected when it is not absolute, contains "..", is the filesystem root, or
+// targets a system-critical directory, while legitimate datastore mount points at
+// arbitrary locations are accepted.
+func TestValidateRecreationPath(t *testing.T) {
+	accepted := []string{
+		"/mnt/datastore/backups",
+		"/var/lib/proxmox-backup",
+		"/tank/pbs",
+		"/srv/pve/dump",
+		"/data/store",
+	}
+	for _, p := range accepted {
+		if err := validateRecreationPath(p); err != nil {
+			t.Errorf("validateRecreationPath(%q) = %v; want accepted", p, err)
+		}
+	}
+
+	rejected := []string{
+		"relative/path",
+		"",
+		"../escape",
+		"/mnt/../etc",
+		"/",
+		"/etc",
+		"/etc/proxmox-backup",
+		"/usr/bin",
+		"/proc/1",
+		"/dev/shm",
+		"/root/.ssh",
+		"/boot/efi",
+	}
+	for _, p := range rejected {
+		if err := validateRecreationPath(p); err == nil {
+			t.Errorf("validateRecreationPath(%q) = nil; want rejected", p)
+		}
+	}
+}

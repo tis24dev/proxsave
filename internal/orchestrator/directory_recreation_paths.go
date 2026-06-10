@@ -79,6 +79,42 @@ func isConfirmableDatastoreMountRoot(path string) bool {
 	}
 }
 
+// recreationSystemCriticalRoots are directories a recreated PVE storage / PBS
+// datastore must never resolve to. During restore the storage.cfg/datastore.cfg
+// is backup content, its "path" value is used verbatim, and recreation runs as
+// root, so a tampered config could otherwise point directory creation, probing
+// or .lock creation at the live OS tree.
+var recreationSystemCriticalRoots = []string{
+	"/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot",
+	"/dev", "/proc", "/sys", "/run", "/root",
+}
+
+// validateRecreationPath rejects a storage/datastore path that is unsafe to
+// operate on during directory recreation: not absolute, containing a ".."
+// component, the filesystem root, or located within a system-critical directory.
+// Legitimate datastores live at arbitrary admin mount points, so this is a
+// defense-in-depth denylist rather than an allowlist.
+func validateRecreationPath(path string) error {
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("path %q is not absolute", path)
+	}
+	for _, part := range strings.Split(path, string(os.PathSeparator)) {
+		if part == ".." {
+			return fmt.Errorf("path %q contains a parent-directory (..) reference", path)
+		}
+	}
+	clean := filepath.Clean(path)
+	if clean == string(os.PathSeparator) {
+		return fmt.Errorf("path %q resolves to the filesystem root", path)
+	}
+	for _, root := range recreationSystemCriticalRoots {
+		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
+			return fmt.Errorf("path %q is within system-critical directory %q", path, root)
+		}
+	}
+	return nil
+}
+
 func isSuspiciousDatastoreMountLocation(path string) bool {
 	return isConfirmableDatastoreMountRoot(path)
 }
