@@ -44,9 +44,15 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		return nil
 	}
 
+	// failedItems accumulates config items that ended up NOT applied, so the
+	// caller reports the restore "with warnings" instead of a clean success
+	// rather than silently swallowing failed applies (BH-003).
+	var failedItems []string
+
 	if plan.HasCategoryID("storage_pve") {
 		if err := applyPVEVzdumpConfFromStage(logger, stageRoot); err != nil {
 			logger.Warning("PVE staged apply: vzdump.conf: %v", err)
+			failedItems = append(failedItems, "vzdump.conf")
 		}
 
 		// In cluster RECOVERY mode, config.db restoration owns storage.cfg/datacenter.cfg.
@@ -56,16 +62,19 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		} else {
 			if err := applyPVEStorageCfgFromStage(ctx, logger, stageRoot); err != nil {
 				logger.Warning("PVE staged apply: storage.cfg: %v", err)
+				failedItems = append(failedItems, "storage.cfg")
 			}
 		}
 
 		if err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, plan, stageRoot, destRoot); err != nil {
 			logger.Warning("PVE staged apply: mount guards: %v", err)
+			failedItems = append(failedItems, "mount guards")
 		}
 
 		if !plan.NeedsClusterRestore {
 			if err := applyPVEDatacenterCfgFromStage(ctx, logger, stageRoot); err != nil {
 				logger.Warning("PVE staged apply: datacenter.cfg: %v", err)
+				failedItems = append(failedItems, "datacenter.cfg")
 			}
 		}
 	}
@@ -76,10 +85,14 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		} else {
 			if err := applyPVEBackupJobsFromStage(ctx, logger, stageRoot); err != nil {
 				logger.Warning("PVE staged apply: jobs.cfg: %v", err)
+				failedItems = append(failedItems, "jobs.cfg")
 			}
 		}
 	}
 
+	if len(failedItems) > 0 {
+		return fmt.Errorf("%d PVE config item(s) failed to apply: %s", len(failedItems), strings.Join(failedItems, ", "))
+	}
 	return nil
 }
 
@@ -135,6 +148,9 @@ func applyPVEStorageCfgFromStage(ctx context.Context, logger *logging.Logger, st
 		return err
 	}
 	logger.Info("PVE staged apply: storage.cfg applied (ok=%d failed=%d)", applied, failed)
+	if failed > 0 {
+		return fmt.Errorf("storage.cfg applied with %d failure(s) (ok=%d)", failed, applied)
+	}
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -41,6 +42,14 @@ var (
 type Checker struct {
 	logger *logging.Logger
 	config *CheckerConfig
+
+	// lockAcquired is true only after THIS checker successfully created the lock
+	// file. ReleaseLock is a no-op unless this flag is set, so a checker that did
+	// not win the lock (another backup held it, or a deferred release fired after
+	// an early error before acquisition) never deletes the holder's lock file.
+	lockAcquired bool
+	// lockPath records the exact path of the lock file this checker created.
+	lockPath string
 }
 
 // DisableCloud globally disables cloud-related checks for this checker.
@@ -308,7 +317,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 		}
 
 		var meta lockFileMetadata
-		if content, rerr := os.ReadFile(lockPath); rerr == nil {
+		if content, rerr := readLockFileContent(lockPath); rerr == nil {
 			meta = parseLockFileMetadata(content)
 		} else {
 			c.logger.Debug("Failed to read lock file %s: %v", lockPath, rerr)
@@ -397,6 +406,11 @@ func (c *Checker) CheckLockFile() CheckResult {
 			result.Message = result.Error.Error()
 			return result
 		}
+
+		// Record ownership: only now does this checker truly hold the lock, so a
+		// later ReleaseLock is allowed to remove it.
+		c.lockAcquired = true
+		c.lockPath = lockPath
 	} else {
 		c.logger.Info("[DRY RUN] Would create lock file: %s", lockPath)
 	}
@@ -653,15 +667,35 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 	return result
 }
 
-// ReleaseLock removes the lock file
+// ReleaseLock removes the lock file, but ONLY if this checker actually acquired
+// it. A checker that never won the lock must not delete the shared lock file:
+// doing so would remove the holder's lock and break mutual exclusion (e.g. a
+// second backup that failed the "another backup is in progress" check, or a
+// deferred release that fired after an early error before acquisition).
 func (c *Checker) ReleaseLock() error {
-	lockPath := c.config.LockFilePath
-	if lockPath == "" {
-		lockPath = filepath.Join(c.config.LockDirPath, ".backup.lock")
+	if c.config.DryRun {
+		c.logger.Info("[DRY RUN] Would release lock file: %s", c.resolveLockPath())
+		return nil
 	}
 
-	if c.config.DryRun {
-		c.logger.Info("[DRY RUN] Would release lock file: %s", lockPath)
+	if !c.lockAcquired {
+		c.logger.Debug("Lock not acquired by this checker; nothing to release")
+		return nil
+	}
+
+	lockPath := c.lockPath
+	if lockPath == "" {
+		lockPath = c.resolveLockPath()
+	}
+
+	// Defense in depth: only remove the lock if we can still confirm it belongs to
+	// this process. Guards against our lock having been reaped as stale and
+	// re-created by another process, and against a tampered/unreadable lock: when
+	// ownership cannot be confirmed we leave the file for the stale-age reaper
+	// rather than risk deleting another process's lock.
+	if !c.ownsLockFile(lockPath) {
+		c.logger.Warning("Could not confirm ownership of lock file %s (pid=%d); leaving it in place", lockPath, os.Getpid())
+		c.lockAcquired = false
 		return nil
 	}
 
@@ -669,8 +703,69 @@ func (c *Checker) ReleaseLock() error {
 		return fmt.Errorf("failed to release lock: %w", err)
 	}
 
+	c.lockAcquired = false
 	c.logger.Debug("Lock file released: %s", lockPath)
 	return nil
+}
+
+// resolveLockPath returns the configured lock file path, defaulting to
+// <LockDirPath>/.backup.lock when no explicit path is set.
+func (c *Checker) resolveLockPath() string {
+	if c.config.LockFilePath != "" {
+		return c.config.LockFilePath
+	}
+	return filepath.Join(c.config.LockDirPath, ".backup.lock")
+}
+
+// ownsLockFile reports whether the lock file at lockPath provably belongs to this
+// process. ReleaseLock uses it as a defense-in-depth check before deleting the
+// lock, so it FAILS CLOSED: it returns true only when the lock is already gone
+// (removal is a harmless no-op) or its recorded pid/host match this process. On any
+// other read/parse failure - permission, I/O, truncated or replaced content, an
+// escaping symlink, or a lock with no parseable pid - ownership cannot be proven,
+// so it returns false and the lock is left in place (it will be reaped later once
+// it ages past MaxLockAge) rather than risk deleting a lock this process no longer
+// owns.
+func (c *Checker) ownsLockFile(lockPath string) bool {
+	content, err := readLockFileContent(lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true // already gone; removing it is a no-op
+		}
+		c.logger.Debug("Cannot verify lock ownership of %s: read failed: %v", lockPath, err)
+		return false
+	}
+
+	meta := parseLockFileMetadata(content)
+	if meta.PID == 0 {
+		c.logger.Debug("Cannot verify lock ownership of %s: no pid recorded", lockPath)
+		return false
+	}
+
+	hostname, _ := os.Hostname()
+	return meta.PID == os.Getpid() && sameHost(meta.Host, hostname)
+}
+
+// readLockFileContent reads the lock file at lockPath through an *os.Root on its
+// directory, so the read is confined there at the syscall level: a symlink or `..`
+// in the basename cannot escape the lock directory, and the path is no longer a
+// raw variable sink (resolving the gosec G304 finding structurally rather than with
+// a suppression). The lock file is always a single basename inside an existing lock
+// directory, so opening the directory as a root is sufficient.
+func readLockFileContent(lockPath string) ([]byte, error) {
+	root, err := os.OpenRoot(filepath.Dir(lockPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	f, err := root.Open(filepath.Base(lockPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	return io.ReadAll(f)
 }
 
 // GetDefaultCheckerConfig returns a default checker configuration

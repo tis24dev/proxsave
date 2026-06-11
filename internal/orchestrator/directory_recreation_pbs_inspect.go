@@ -113,6 +113,10 @@ func existingDirectoryOrNoData(path string) (bool, error) {
 }
 
 func datastoreContainsUnexpectedEntries(datastorePath string) (unexpected bool, err error) {
+	if err := validateRecreationPath(datastorePath); err != nil {
+		return false, err
+	}
+	// #nosec G304 -- datastorePath validated just above by validateRecreationPath (absolute, no "..", not a system-critical dir).
 	f, err := os.Open(datastorePath)
 	if err != nil {
 		return false, err
@@ -150,6 +154,10 @@ func hasUnexpectedDatastoreName(names []string) bool {
 }
 
 func dirHasAnyEntry(path string) (hasEntry bool, err error) {
+	if err := validateRecreationPath(path); err != nil {
+		return false, err
+	}
+	// #nosec G304 -- path validated just above by validateRecreationPath (absolute, no "..", not a system-critical dir).
 	f, err := os.Open(path)
 	if err != nil {
 		return false, err

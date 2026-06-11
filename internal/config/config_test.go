@@ -1331,3 +1331,31 @@ func writeTestPBSCertificate(t *testing.T) (string, string) {
 	}
 	return path, strings.Join(parts, ":")
 }
+
+func TestParseSecuritySettingsParsesSafeProcesses(t *testing.T) {
+	cfg := &Config{raw: map[string]string{
+		"SAFE_PROCESSES": "ffmpeg, regex:^foo$ ,bar*",
+	}}
+
+	cfg.parseSecuritySettings()
+
+	want := []string{"ffmpeg", "regex:^foo$", "bar*"}
+	if len(cfg.SafeProcesses) != len(want) {
+		t.Fatalf("SafeProcesses = %#v; want %#v", cfg.SafeProcesses, want)
+	}
+	for i := range want {
+		if cfg.SafeProcesses[i] != want[i] {
+			t.Fatalf("SafeProcesses[%d] = %q; want %q", i, cfg.SafeProcesses[i], want[i])
+		}
+	}
+}
+
+func TestParseSecuritySettingsSafeProcessesDefaultsEmpty(t *testing.T) {
+	cfg := &Config{raw: map[string]string{}}
+
+	cfg.parseSecuritySettings()
+
+	if len(cfg.SafeProcesses) != 0 {
+		t.Fatalf("SafeProcesses should default to empty, got %#v", cfg.SafeProcesses)
+	}
+}

@@ -726,6 +726,10 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	if !c.config.BundleAssociatedFiles {
 		associatedFiles := []string{
 			backupFile + ".sha256",
+			// .manifest.json is the authoritative metadata; upload it so a raw cloud
+			// backup stays discoverable even if the legacy .metadata alias (written
+			// best-effort) is missing (PS-BH-002).
+			backupFile + ".manifest.json",
 			backupFile + ".metadata",
 			backupFile + ".metadata.sha256",
 		}
@@ -789,7 +793,17 @@ func (c *CloudStorage) countBackups(ctx context.Context) int {
 func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFile string) error {
 	var lastErr error
 
-	for attempt := 1; attempt <= c.config.RcloneRetries; attempt++ {
+	// Guarantee at least one upload attempt. RCLONE_RETRIES is read with a default
+	// of 3 but never clamped, so a misconfigured RCLONE_RETRIES<=0 would otherwise
+	// skip the loop entirely, never call rclone, and return a bogus
+	// "upload failed after 0 attempts: <nil>" while silently uploading nothing.
+	retries := c.config.RcloneRetries
+	if retries < 1 {
+		retries = 1
+	}
+
+	attemptsMade := 0
+	for attempt := 1; attempt <= retries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -797,10 +811,11 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		if attempt > 1 {
 			c.logger.Info("Upload retry attempt %d/%d for %s",
 				attempt,
-				c.config.RcloneRetries,
+				retries,
 				filepath.Base(localFile))
 		}
 
+		attemptsMade++
 		err := c.rcloneCopy(ctx, localFile, remoteFile)
 		if err == nil {
 			return nil
@@ -812,12 +827,12 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		if ctx.Err() == context.DeadlineExceeded {
 			c.logger.Warning("Upload attempt %d/%d failed: operation timeout (%ds exceeded)",
 				attempt,
-				c.config.RcloneRetries,
+				retries,
 				c.config.RcloneTimeoutOperation)
 		} else {
 			c.logger.Warning("Upload attempt %d/%d failed: %v",
 				attempt,
-				c.config.RcloneRetries,
+				retries,
 				err)
 		}
 
@@ -827,7 +842,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		}
 
 		// Keep retry delays bounded and avoid shift/multiplication overflow.
-		if attempt < c.config.RcloneRetries {
+		if attempt < retries {
 			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Waiting %v before retry...", waitTime)
 			if err := c.callWaitForRetry(ctx, waitTime); err != nil {
@@ -839,11 +854,11 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 	if ctx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("upload failed: operation timeout (%ds exceeded) after %d attempts",
 			c.config.RcloneTimeoutOperation,
-			c.config.RcloneRetries)
+			attemptsMade)
 	}
 
 	return fmt.Errorf("upload failed after %d attempts: %w",
-		c.config.RcloneRetries,
+		attemptsMade,
 		lastErr)
 }
 
@@ -1321,6 +1336,7 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 	}
 
 	failedFiles := make([]string, 0)
+	dataFailed := false // true if the backup data archive (not just a sidecar) failed to delete
 
 	// Delete all files
 	for _, rel := range relativeNames {
@@ -1348,6 +1364,9 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 			c.logger.Warning("WARNING: Cloud storage - failed to delete %s: %v: %s",
 				filepath.Base(f), err, msg)
 			failedFiles = append(failedFiles, filepath.Base(f))
+			if !isBackupSidecar(rel) {
+				dataFailed = true
+			}
 			// Continue with other files
 			continue
 		}
@@ -1358,6 +1377,11 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 	logDeleted = c.deleteAssociatedLog(ctx, backupFile)
 
 	if len(failedFiles) > 0 {
+		if !dataFailed {
+			// Only sidecars failed; the backup archive itself is gone. Surface a
+			// sentinel error so retention counting still treats this as deleted.
+			return logDeleted, fmt.Errorf("%w: %v", errBackupSidecarDeleteOnly, failedFiles)
+		}
 		return logDeleted, fmt.Errorf("failed to delete %d file(s): %v", len(failedFiles), failedFiles)
 	}
 
@@ -1623,8 +1647,14 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 
 		logDeleted, err := c.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
-			c.logger.Warning("WARNING: Cloud storage - failed to delete %s: %v", backup.BackupFile, err)
-			continue
+			if !errors.Is(err, errBackupSidecarDeleteOnly) {
+				// The backup archive itself is still present; do not count it.
+				c.logger.Warning("WARNING: Cloud storage - failed to delete %s: %v", backup.BackupFile, err)
+				continue
+			}
+			// The archive is gone, only sidecars remained: count it as deleted but
+			// warn about the leftover associated files.
+			c.logger.Warning("WARNING: Cloud storage - %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
 		}
 
 		deleted++

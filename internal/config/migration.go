@@ -196,11 +196,21 @@ func createMigrationBackup(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to read existing configuration: %w", err)
 	}
-	backupPath := fmt.Sprintf("%s.migration-backup.%s", path, time.Now().Format("20060102_150405"))
-	if err := os.WriteFile(backupPath, data, 0o600); err != nil {
+	// Confine the backup write to the configuration directory via os.Root so the
+	// backup (config path plus a timestamped suffix) cannot land outside that
+	// directory (gosec G703 path-traversal containment).
+	dir := filepath.Dir(path)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", fmt.Errorf("failed to open configuration directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	backupName := fmt.Sprintf("%s.migration-backup.%s", filepath.Base(path), time.Now().Format("20060102_150405"))
+	if err := root.WriteFile(backupName, data, 0o600); err != nil {
 		return "", fmt.Errorf("failed to create configuration backup: %w", err)
 	}
-	return backupPath, nil
+	return filepath.Join(dir, backupName), nil
 }
 
 func restoreMigratedConfig(summary *EnvMigrationSummary, outputPath string) {

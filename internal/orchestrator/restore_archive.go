@@ -244,7 +244,16 @@ func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logg
 }
 
 // extractSelectiveArchive extracts only files matching selected categories
+// (best-effort: per-entry extraction failures are logged but do not fail the call).
 func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, categories []Category, mode RestoreMode, logger *logging.Logger) (logPath string, err error) {
+	return extractSelectiveArchiveStrict(ctx, archivePath, destRoot, categories, mode, logger, false)
+}
+
+// extractSelectiveArchiveStrict is extractSelectiveArchive with control over
+// whether a partial extraction (one or more entries failed) is reported as an
+// error. The staged restore path passes failOnPartial=true so an incomplete
+// stage is never applied to the live system; best-effort callers pass false.
+func extractSelectiveArchiveStrict(ctx context.Context, archivePath, destRoot string, categories []Category, mode RestoreMode, logger *logging.Logger, failOnPartial bool) (logPath string, err error) {
 	done := logging.DebugStart(logger, "extract selective archive", "archive=%s dest=%s categories=%d mode=%s", archivePath, destRoot, len(categories), mode)
 	defer func() { done(err) }()
 	if err := restoreFS.MkdirAll(destRoot, 0o755); err != nil {
@@ -284,13 +293,14 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 
 	// Use native Go extraction with category filter
 	if err := extractArchiveNative(ctx, restoreArchiveOptions{
-		archivePath: archivePath,
-		destRoot:    destRoot,
-		logger:      logger,
-		categories:  categories,
-		mode:        mode,
-		logFile:     logFile,
-		logFilePath: logPath,
+		archivePath:             archivePath,
+		destRoot:                destRoot,
+		logger:                  logger,
+		categories:              categories,
+		mode:                    mode,
+		logFile:                 logFile,
+		logFilePath:             logPath,
+		failOnPartialExtraction: failOnPartial,
 	}); err != nil {
 		return logPath, err
 	}

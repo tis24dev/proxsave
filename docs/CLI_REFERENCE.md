@@ -172,6 +172,8 @@ Some interactive commands support two interface modes:
 5. Writes updated configuration
 6. Reports added/removed variables
 
+> **Keep `backup.env` a regular file.** The config upgrade (`--upgrade`, `--upgrade-config`) and `--env-migration` write the new configuration atomically (temp file + rename), so if `configs/backup.env` is a **symlink** it is replaced by a regular file and the symlink target is left unchanged. For a centrally managed configuration, deploy a regular `backup.env` (for example copied or templated by your config-management tool) instead of symlinking it.
+
 ### Binary Upgrade
 
 ```bash
@@ -197,23 +199,23 @@ Some interactive commands support two interface modes:
 6. Extracts binary from tar.gz archive
 7. Atomically replaces current binary (write to .tmp, then rename)
 8. Updates the `proxsave` symlink in `/usr/local/bin/` (and removes the legacy `proxmox-backup` symlink if present)
-9. Ensures the cron entry targets the Go binary (entries already using it are preserved; outdated proxsave/proxmox-backup binary entries are replaced) and fixes file permissions
+9. Upgrades the configuration file (adds any new keys from the template to `backup.env`, preserving your existing and custom values, after backing up the current file) and fixes file permissions. The cron schedule is left untouched (re-run `--install` to change it).
 
 **Post-upgrade steps**:
-1. Configuration file automatically compatible with new version
-2. Optionally run `--upgrade-config` to merge new config template variables
+1. New config template keys are merged into `backup.env` automatically (existing and custom values preserved; previous file backed up)
+2. Run `--upgrade-config` only to re-run that merge without upgrading the binary
 3. Test functionality with dry-run: `./build/proxsave --dry-run`
 4. Verify backups continue to work as expected
 5. Check cron schedule was preserved: `crontab -l`
 
 **Important notes**:
 - **Internet required**: Must be able to reach GitHub releases
-- **No configuration changes**: `backup.env` is never modified during `--upgrade`
-- **Platform support**: Linux only (amd64, arm64)
+- **Configuration kept current**: `--upgrade` merges new template keys into `backup.env`, preserving your existing and custom values and backing up the previous file first; it never changes or removes values you set
+- **Platform support**: Linux only (amd64)
 - **Incompatible flags**: Cannot use with `--install` or `--new-install`
-- **Automatic maintenance**: Symlinks, cron (without touching entries already pointing to proxsave), and permissions updated automatically
+- **Automatic maintenance**: Symlinks and permissions are updated automatically; the cron schedule is left untouched (re-run `--install` to change it)
 - **Safe replacement**: Old binary is replaced atomically (no backup created)
-- **Separate config upgrade**: Use `--upgrade-config` separately to update configuration
+- **Standalone config upgrade**: `--upgrade` already merges new template keys; use `--upgrade-config` to run that merge without upgrading the binary
 
 See also: [upgrading configuration](#configuration-upgrade)
 

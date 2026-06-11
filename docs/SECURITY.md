@@ -34,3 +34,25 @@ CI runs gosec (`.github/workflows/security-ultimate.yml`). Two rules deserve a n
   tool/system/config-controlled per the threat model. The rule stays enabled so any
   **new** variable-path I/O is still surfaced for review; genuinely contained I/O
   should use `os.Root` rather than a `#nosec` suppression.
+- **G101** ("potential hardcoded credentials") — **kept enabled**. With one
+  intentional exception (below), every current finding is a **name-only false
+  positive**: a constant or identifier whose name matches `token`/`secret`/`salt`
+  but whose value is a file path (`/etc/pve/priv/token.cfg`), a KDF
+  domain-separation salt (public by construction), a token *name* (`backup@pbs!go-client`,
+  not its secret), or an enum id (`pbs_runtime_access_user_tokens`). These are
+  dismissed as false positives in Code Scanning rather than renamed, since the names
+  are correct as written.
+
+### Hardcoded relay credential (G101)
+
+The cloud email relay ships a hardcoded `WorkerToken` and `HMACSecret`
+(`notify.DefaultCloudRelayConfig`, mirrored in `config.applyDefaults`). These are a
+**shared, public anti-abuse credential**, not a confidential secret: the same value
+is compiled into every distributed binary and published in this open-source
+repository, so it cannot be kept secret on the client side. The token name is
+literally `v1_public_...`. It only gates the free shared relay worker, whose real
+protection is server-side (rate limiting, per-request `server_mac`/`server_id`); it
+grants no access to user data or the host. The two sites carry a `#nosec G101`
+documenting this, and the Code Scanning alert is dismissed accordingly. Operators
+who want a private relay can point `CLOUDFLARE_*` / the relay config at their own
+worker with their own secret.

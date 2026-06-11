@@ -103,7 +103,7 @@ func extractDirectory(target string, header *tar.Header, logger *logging.Logger)
 	if err := atomicFileChown(dirFile, header.Uid, header.Gid); err != nil {
 		logger.Debug("Failed to chown directory %s: %v", target, err)
 	}
-	if err := atomicFileChmod(dirFile, os.FileMode(header.Mode)); err != nil {
+	if err := atomicFileChmod(dirFile, os.FileMode(header.Mode&0o7777)); err != nil {
 		return fmt.Errorf("chmod directory: %w", err)
 	}
 
@@ -167,7 +167,7 @@ func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header
 	if err := atomicFileChown(outFile, header.Uid, header.Gid); err != nil {
 		logger.Debug("Failed to chown file %s: %v", target, err)
 	}
-	if err := atomicFileChmod(outFile, os.FileMode(header.Mode)); err != nil {
+	if err := atomicFileChmod(outFile, os.FileMode(header.Mode&0o7777)); err != nil {
 		return fmt.Errorf("chmod file: %w", err)
 	}
 

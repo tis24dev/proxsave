@@ -35,6 +35,14 @@ func (r networkPreflightResult) Ok() bool {
 	return !r.Skipped && r.ExitError == nil
 }
 
+// networkPreflightWarrantsRollback reports whether a non-OK preflight result is a
+// genuine validation FAILURE (so the staged network config must be rolled back),
+// as opposed to a SKIP (no validator binary available), which must keep the staged
+// config rather than reverting a valid restore.
+func networkPreflightWarrantsRollback(r networkPreflightResult) bool {
+	return !r.Ok() && !r.Skipped
+}
+
 func (r networkPreflightResult) Summary() string {
 	if r.Skipped {
 		return fmt.Sprintf("Network preflight: SKIPPED (%s)", strings.TrimSpace(r.SkipReason))

@@ -183,9 +183,10 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	}
 	ensureGoSymlink(execPath, bootstrap)
 
-	cronSchedule := resolveCronScheduleFromEnv()
-	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "migrating cron entries")
-	migrateLegacyCronEntries(ctx, baseDir, execPath, bootstrap, cronSchedule)
+	// Upgrades intentionally leave the cron schedule untouched; the canonical
+	// /usr/local/bin/proxsave entry created at install keeps working across binary
+	// upgrades. Re-run --install to change the schedule.
+	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "leaving cron entries unchanged")
 
 	telegramCode := ""
 	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {
@@ -204,7 +205,19 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 
 	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr)
 
-	if upgradeErr != nil {
+	// A configuration-upgrade failure after a successful binary install must also be
+	// reflected in the exit code (the footer already shows "Configuration: ERROR"),
+	// so automation does not treat the run as fully successful.
+	if upgradeErr == nil && cfgUpgradeErr != nil {
+		workflowErr = cfgUpgradeErr
+	}
+	return upgradeExitCode(upgradeErr, cfgUpgradeErr)
+}
+
+// upgradeExitCode maps the binary-install and config-upgrade outcomes to a process
+// exit code: any failure on either yields a non-zero exit.
+func upgradeExitCode(upgradeErr, cfgUpgradeErr error) int {
+	if upgradeErr != nil || cfgUpgradeErr != nil {
 		return types.ExitGenericError.Int()
 	}
 	return types.ExitSuccess.Int()
@@ -212,9 +225,12 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 
 // downloadAndInstallLatest downloads the specified release archive from GitHub,
 // verifies the checksum, extracts the proxsave binary, and installs it to execPath.
-func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *logging.BootstrapLogger, tag, version string) (string, error) {
-	var err error
+func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *logging.BootstrapLogger, tag, version string) (versionInstalled string, err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "upgrade download/install", "tag=%s version=%s", tag, version)
+	// Named return so the deferred trace reflects the ACTUAL returned error. The
+	// per-step `if err := <call>; err != nil { return "", ... }` blocks shadow a
+	// local err, but a `return` assigns this named err on the way out, so done(err)
+	// no longer logs the span as "ok" when a download/verify/install step failed.
 	defer func() { done(err) }()
 
 	osName, arch, err := detectOSArch()
@@ -285,21 +301,23 @@ func downloadAndInstallLatest(ctx context.Context, execPath string, bootstrap *l
 }
 
 func detectOSArch() (string, string, error) {
-	osName := strings.ToLower(runtime.GOOS)
+	return resolveReleaseTarget(runtime.GOOS, runtime.GOARCH)
+}
+
+// resolveReleaseTarget maps the running platform to the OS/arch of a published
+// release archive. Releases are built for linux/amd64 ONLY (see
+// .github/.goreleaser.yml), so any other architecture is rejected up front:
+// advertising it would build a download URL for an archive that does not exist and
+// fail later with a confusing 404.
+func resolveReleaseTarget(goos, goarch string) (string, string, error) {
+	osName := strings.ToLower(goos)
 	if osName != "linux" {
 		return "", "", fmt.Errorf("unsupported OS: %s (only linux is supported)", osName)
 	}
-
-	var arch string
-	switch runtime.GOARCH {
-	case "amd64":
-		arch = "amd64"
-	case "arm64":
-		arch = "arm64"
-	default:
-		return "", "", fmt.Errorf("unsupported architecture: %s (supported: amd64, arm64)", runtime.GOARCH)
+	if goarch != "amd64" {
+		return "", "", fmt.Errorf("no prebuilt release for architecture %s: only linux/amd64 binaries are published; build from source to upgrade on this host", goarch)
 	}
-	return osName, arch, nil
+	return osName, "amd64", nil
 }
 
 func fetchLatestRelease(ctx context.Context) (string, string, error) {
@@ -337,16 +355,22 @@ func fetchLatestRelease(ctx context.Context) (string, string, error) {
 }
 
 // compareVersions compares two semantic version strings (e.g. "0.11.2") and
-// returns -1 if current < latest, 0 if equal, 1 if current > latest.
-// Pre-release/build suffixes are ignored for comparison purposes.
+// returns -1 if current < latest, 0 if equal, 1 if current > latest. Numeric core
+// segments are compared first; when they are equal, a pre-release identifier (e.g.
+// "-rc1") ranks BELOW the same-numeric stable release (matching isNewerVersion).
+// Build metadata ("+...") is ignored.
 func compareVersions(current, latest string) int {
-	normalize := func(v string) []int {
+	normalize := func(v string) ([]int, bool) {
 		v = strings.TrimSpace(v)
 		if v == "" {
-			return []int{0}
+			return []int{0}, false
 		}
-		// Strip common pre-release/build suffixes (e.g. "-rc1")
+		// A "-" suffix marks a semver pre-release (e.g. "-rc1"); "+" marks build
+		// metadata. Record whether this is a pre-release and strip the suffix so
+		// the numeric core can be compared; the flag breaks numeric ties below.
+		prerelease := false
 		if idx := strings.IndexAny(v, "-+"); idx >= 0 {
+			prerelease = v[idx] == '-'
 			v = v[:idx]
 		}
 		parts := strings.Split(v, ".")
@@ -364,13 +388,13 @@ func compareVersions(current, latest string) int {
 			}
 		}
 		if len(out) == 0 {
-			return []int{0}
+			return []int{0}, prerelease
 		}
-		return out
+		return out, prerelease
 	}
 
-	a := normalize(current)
-	b := normalize(latest)
+	a, aPre := normalize(current)
+	b, bPre := normalize(latest)
 
 	maxLen := len(a)
 	if len(b) > maxLen {
@@ -392,7 +416,19 @@ func compareVersions(current, latest string) int {
 			return 1
 		}
 	}
-	return 0
+
+	// Numeric cores are equal: a stable release outranks the same-numeric
+	// pre-release, matching isNewerVersion (the update check) so the upgrade gate
+	// and the update nag agree on the rc -> stable transition instead of leaving
+	// rc users stranded ("already running the latest version").
+	switch {
+	case aPre && !bPre:
+		return -1
+	case !aPre && bPre:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func downloadFile(ctx context.Context, url string, root *os.Root, name string, bootstrap *logging.BootstrapLogger) (err error) {
@@ -557,7 +593,10 @@ func extractBinaryFromTar(root *os.Root, archiveName, targetName, destName strin
 		if err != nil {
 			return fmt.Errorf("cannot create extracted binary: %w", err)
 		}
-		if _, err := io.Copy(tmpFile, tr); err != nil {
+		// Bound the copy to the entry's declared size: the release archive is
+		// already signature- and checksum-verified, and io.CopyN keeps gosec G110
+		// (decompression bomb) satisfied while rejecting a truncated entry.
+		if _, err := io.CopyN(tmpFile, tr, hdr.Size); err != nil {
 			_ = tmpFile.Close()
 			return fmt.Errorf("cannot write extracted binary: %w", err)
 		}

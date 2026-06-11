@@ -158,12 +158,18 @@ func buildNetworkApplyNotCommittedError(ctx context.Context, logger *logging.Log
 		rollbackArmed = false
 		logging.DebugStep(logger, "build not-committed error", "No handle: rollbackArmed=false")
 	} else if strings.TrimSpace(handle.markerPath) != "" {
-		if _, statErr := restoreFS.Stat(handle.markerPath); statErr != nil {
+		_, statErr := restoreFS.Stat(handle.markerPath)
+		switch {
+		case statErr == nil:
+			logging.DebugStep(logger, "build not-committed error", "Marker exists (%s): rollbackArmed=true", handle.markerPath)
+		case os.IsNotExist(statErr):
 			// Marker missing => rollback likely already executed (or was manually removed).
 			rollbackArmed = false
 			logging.DebugStep(logger, "build not-committed error", "Marker missing (%s): rollbackArmed=false", handle.markerPath)
-		} else {
-			logging.DebugStep(logger, "build not-committed error", "Marker exists (%s): rollbackArmed=true", handle.markerPath)
+		default:
+			// A non-ENOENT stat error is inconclusive; keep the conservative default
+			// (rollbackArmed=true) so the operator is still warned the network may revert.
+			logging.DebugStep(logger, "build not-committed error", "Marker stat failed (%s): %v; keeping rollbackArmed=true", handle.markerPath, statErr)
 		}
 	}
 
@@ -196,9 +202,51 @@ func buildNetworkApplyNotCommittedError(ctx context.Context, logger *logging.Log
 	}
 }
 
+// rollbackAlreadyExecuted reports whether the rollback has already run to
+// completion. The rollback script removes the marker file as its final step (and
+// disarmNetworkRollback removes it too), so while the timer is armed and before we
+// disarm, a MISSING marker means the revert already happened. This catches the case
+// rollbackAlreadyRunning misses: a finished systemd unit is no longer 'active'.
+//
+// Only a not-exist stat result counts as "missing": any other stat error
+// (permission, transient I/O) is inconclusive and must NOT be read as executed, or a
+// transient failure would wrongly classify a valid COMMIT as too-late. The
+// in-progress case is independently detected by rollbackAlreadyRunning.
+func rollbackAlreadyExecuted(logger *logging.Logger, handle *networkRollbackHandle) bool {
+	if handle == nil || strings.TrimSpace(handle.markerPath) == "" {
+		return false
+	}
+	_, err := restoreFS.Stat(handle.markerPath)
+	if err == nil {
+		return false // marker still present: the rollback has not completed
+	}
+	if os.IsNotExist(err) {
+		logging.DebugStep(logger, "rollback already executed", "Marker missing (%s): rollback already ran", handle.markerPath)
+		return true
+	}
+	logger.Warning("Could not stat rollback marker %s: %v; assuming the rollback has not completed", handle.markerPath, err)
+	return false
+}
+
 func rollbackAlreadyRunning(ctx context.Context, logger *logging.Logger, handle *networkRollbackHandle) bool {
-	if handle == nil || strings.TrimSpace(handle.unitName) == "" {
-		logging.DebugStep(logger, "rollback already running", "Skip check: handle=%v unitName=%q", handle != nil, "")
+	if handle == nil {
+		logging.DebugStep(logger, "rollback already running", "Skip check: nil handle")
+		return false
+	}
+
+	// The rollback script writes "<marker>.running" before it starts the revert and
+	// removes it when finished. Statting that sentinel detects an in-progress
+	// rollback even in the nohup fallback, where there is no systemd unit to query
+	// (this is what closes the commit-during-revert race in that mode).
+	if mp := strings.TrimSpace(handle.markerPath); mp != "" {
+		if _, err := restoreFS.Stat(mp + ".running"); err == nil {
+			logging.DebugStep(logger, "rollback already running", "Running sentinel present (%s.running)", mp)
+			return true
+		}
+	}
+
+	if strings.TrimSpace(handle.unitName) == "" {
+		logging.DebugStep(logger, "rollback already running", "Skip systemd check: no unit (nohup fallback)")
 		return false
 	}
 	if !commandAvailable("systemctl") {
@@ -660,6 +708,11 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		fmt.Sprintf("LOG=%s", shellQuote(logPath)),
 		fmt.Sprintf("MARKER=%s", shellQuote(markerPath)),
 		fmt.Sprintf("BACKUP=%s", shellQuote(backupPath)),
+		// RUNNING signals that the revert is actually in progress: it is written
+		// AFTER the marker guard passes and removed when the script finishes, so an
+		// in-flight rollback is detectable even in the nohup fallback, where there is
+		// no systemd unit to query (rollbackAlreadyRunning stats "<marker>.running").
+		`RUNNING="$MARKER.running"`,
 		// Header
 		`echo "[INFO] ========================================" >> "$LOG"`,
 		`echo "[INFO] NETWORK ROLLBACK SCRIPT STARTED" >> "$LOG"`,
@@ -677,6 +730,13 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		`  exit 0`,
 		`fi`,
 		`echo "[DEBUG] Marker exists, proceeding with rollback" >> "$LOG"`,
+		// Signal that the revert is now in progress (before any filesystem change).
+		`echo "[DEBUG] Signalling rollback in progress: $RUNNING" >> "$LOG"`,
+		`: > "$RUNNING"`,
+		// Remove the sentinel even on an unexpected exit or signal, so it never
+		// persists past the script's lifetime; the normal cleanup below (rm -f) is
+		// idempotent and still runs.
+		`trap 'rm -f "$RUNNING"' EXIT INT TERM`,
 		// Extract phase
 		`echo "[INFO] --- EXTRACT PHASE ---" >> "$LOG"`,
 		`echo "[DEBUG] Executing: tar -xzf $BACKUP -C /" >> "$LOG"`,
@@ -810,12 +870,22 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 	}
 
 	lines = append(lines,
-		`echo "[DEBUG] Removing marker file..." >> "$LOG"`,
-		`rm -f "$MARKER"`,
+		`echo "[DEBUG] Removing marker and running sentinel..." >> "$LOG"`,
+		`rm -f "$MARKER" "$RUNNING"`,
 		`echo "[INFO] ========================================" >> "$LOG"`,
 		`echo "[INFO] NETWORK ROLLBACK SCRIPT FINISHED" >> "$LOG"`,
 		`echo "[INFO] Timestamp: $(date -Is)" >> "$LOG"`,
 		`echo "[INFO] ========================================" >> "$LOG"`,
+		// Signal extraction failure to the caller via a nonzero exit. The tar step
+		// runs inside an `if`, which suspends `set -e`, so without this the script
+		// exits 0 even when it restored nothing - making a failed rollback
+		// indistinguishable from a successful one and causing the caller to report
+		// "rolled back to the pre-restore state" when it did not. Placed after the
+		// marker removal so the marker lifecycle is unchanged.
+		`if [ "$TAR_OK" -ne 1 ]; then`,
+		`  echo "[ERROR] Rollback failed: pre-restore files were NOT restored (extract phase failed)" >> "$LOG"`,
+		`  exit 1`,
+		`fi`,
 	)
 	return strings.Join(lines, "\n") + "\n"
 }

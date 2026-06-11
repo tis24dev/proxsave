@@ -341,7 +341,11 @@ func (f *networkRollbackUIApplyFlow) armRollbackAndApply() error {
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Apply network configuration now")
 	if err := applyNetworkConfig(f.ctx, f.logger); err != nil {
 		f.warning("Network apply failed: %v", err)
-		return err
+		// The rollback timer is already armed and will revert the network, but the
+		// config was NOT committed. Surface the not-committed/reconnect guidance
+		// (matching the COMMIT-timeout and expired-window paths) so the caller logs
+		// the rollback-armed state instead of a bare "apply step failed".
+		return f.handleNetworkNotCommitted()
 	}
 	return nil
 }
@@ -392,8 +396,13 @@ func (f *networkRollbackUIApplyFlow) runPostApplyHealthChecks() {
 func (f *networkRollbackUIApplyFlow) waitForCommit() error {
 	remaining := f.handle.remaining(time.Now())
 	if remaining <= 0 {
-		f.warning("Rollback window already expired; leaving rollback armed")
-		return nil
+		// The rollback window elapsed before we could prompt for COMMIT: the timer
+		// is still armed and will revert the network shortly. This is NOT a
+		// successful commit, so surface the not-committed/reconnect guidance
+		// (matching the firewall/HA/access-control flows) instead of returning nil,
+		// which the caller reads as "committed successfully".
+		f.warning("Rollback window already expired before COMMIT; network configuration NOT committed (rollback armed)")
+		return f.handleNetworkNotCommitted()
 	}
 
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Wait for COMMIT (rollback in %ds)", int(remaining.Seconds()))
@@ -416,8 +425,14 @@ func (f *networkRollbackUIApplyFlow) waitForCommit() error {
 }
 
 func (f *networkRollbackUIApplyFlow) commitNetworkConfig() error {
-	if rollbackAlreadyRunning(f.ctx, f.logger, f.handle) {
-		f.warning("Commit received too late: rollback already running. Network configuration NOT committed.")
+	// Treat the commit as too-late if the rollback is currently running OR has
+	// already run to completion. rollbackAlreadyRunning only sees an 'active'
+	// systemd unit; a finished rollback is inactive/dead, so we also check the
+	// marker file (removed by the rollback script on completion, and not yet by
+	// us since disarm runs below) to avoid reporting a successful commit after the
+	// network was already reverted.
+	if rollbackAlreadyRunning(f.ctx, f.logger, f.handle) || rollbackAlreadyExecuted(f.logger, f.handle) {
+		f.warning("Commit received too late: rollback already running or completed. Network configuration NOT committed.")
 		return buildNetworkApplyNotCommittedError(f.ctx, f.logger, f.iface, f.handle)
 	}
 	disarmNetworkRollback(f.ctx, f.logger, f.handle)

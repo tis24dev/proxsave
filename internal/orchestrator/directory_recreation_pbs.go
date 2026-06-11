@@ -29,6 +29,11 @@ func createPBSDatastoreStructure(basePath, datastoreName string, logger *logging
 	var err error
 	defer func() { done(err) }()
 
+	if err = validateRecreationPath(basePath); err != nil {
+		err = fmt.Errorf("unsafe datastore path %q from datastore.cfg: %w", basePath, err)
+		return false, err
+	}
+
 	zfsLikely := isLikelyZFSMountPoint(basePath, logger)
 	if shouldSkipMissingZFSMountPoint(basePath, zfsLikely, logger) {
 		return false, nil

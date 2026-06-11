@@ -65,9 +65,8 @@ fi
 
 case "$ARCH_RAW" in
   x86_64) ARCH="amd64" ;;
-  aarch64|arm64) ARCH="arm64" ;;
   *)
-    echo "❌ Unsupported architecture: ${ARCH_RAW}"
+    echo "❌ Unsupported architecture: ${ARCH_RAW} (only linux/amd64 is published; build from source for other architectures)"
     exit 1
     ;;
 esac

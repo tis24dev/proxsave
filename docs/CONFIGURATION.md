@@ -149,6 +149,15 @@ SAFE_BRACKET_PROCESSES="sshd:,systemd,cron,rsyslogd,dbus-daemon"
 # Built-in defaults for SAFE_KERNEL_PROCESSES: ksgxd, hwrng, usb-storage, vdev_autotrim, card1-crtc0, card1-crtc1, card1-crtc2, kvm-pit*, and various regex patterns
 SAFE_KERNEL_PROCESSES="ksgxd,hwrng,usb-storage,vdev_autotrim,card1-crtc0,card1-crtc1,card1-crtc2,kvm-pit,regex:^card[0-9]+-crtc[0-9]+$,regex:^drbd_[wrs]_.+,regex:^kvm-pit/[0-9]+$,regex:^kmmpd-drbd[0-9]+$"
 
+# Allowlist for the suspicious-process scan (no built-in defaults; purely user-driven)
+# A process is never flagged if any token of its command line (or that token's basename)
+# matches an entry, even if it also matches SUSPICIOUS_PROCESSES.
+# Matching is anchored to the start of each token: a plain entry matches any token that
+# STARTS WITH it (e.g. "ssh" also matches "sshd"), so use "regex:^name$" for an exact match.
+# "name*" wildcard and "regex:pattern" are also supported (case-insensitive).
+# Useful for benign tools such as Frigate's ffmpeg -f concat demuxer.
+# SAFE_PROCESSES="ffmpeg"
+
 # Skip permission checks (use only for testing)
 SKIP_PERMISSION_CHECK=false                     # true | false
 
@@ -174,6 +183,7 @@ All security process lists use an **additive merge strategy**:
 - **`SUSPICIOUS_PROCESSES`**: Your configured values are **added** to built-in defaults
 - **`SAFE_BRACKET_PROCESSES`**: Your configured values are **added** to built-in defaults
 - **`SAFE_KERNEL_PROCESSES`**: Your configured values are **added** to built-in defaults
+- **`SAFE_PROCESSES`**: Allowlist for the suspicious-process scan; it has **no built-in defaults**, so the final list is exactly your configured entries
 
 **Example**: If you configure `SUSPICIOUS_PROCESSES="mymalware,suspicious-app"`, the final list will include:
 - Built-in defaults: `ncat, cryptominer, xmrig, kdevtmpfsi, kinsing, minerd, mr.sh`
@@ -181,6 +191,15 @@ All security process lists use an **additive merge strategy**:
 - Final result: All of the above combined (duplicates automatically removed)
 
 This means you don't need to repeat the default values - just add your custom entries.
+
+#### Process Matching
+
+`SUSPICIOUS_PROCESSES` and `SAFE_PROCESSES` are matched per command-line token (and each token's path basename), anchored to the **start** of the token:
+
+- A **plain entry** matches any token that **starts with** it. For example `ncat` matches `ncat` and `/usr/bin/ncat`, but no longer matches the substring inside `concat`; note that `ssh` would also match `sshd`.
+- Use **`regex:^name$`** for an exact match, or **`name*`** / **`regex:pattern`** for explicit wildcard/regex control (case-insensitive).
+
+`SAFE_BRACKET_PROCESSES` and `SAFE_KERNEL_PROCESSES` match a single process name and behave differently: a plain entry there is an **exact** match (use `name*` / `regex:` for broader matching).
 
 ### Permission Management
 

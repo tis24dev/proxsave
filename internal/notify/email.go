@@ -264,9 +264,24 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		e.logger.Debug("Email recipient resolution outcome: source=%s recipient=%s", recipientSource, redactEmail(recipient))
 	}
 
-	// Validate recipient email format
+	// Validate recipient email format. Methods that need a real mailbox
+	// (relay/sendmail) cannot deliver to a malformed address, so refuse it instead
+	// of reporting a false success (PS-BH-005); PMF routes via Proxmox
+	// Notifications and only uses the recipient for the To: header, so a warning
+	// is enough there. The recipient is redacted in the log.
 	if recipient != "" && !emailRegex.MatchString(recipient) {
-		e.logger.Warning("WARNING: Invalid email format: %s", recipient)
+		redactedRecipient := redactEmail(recipient)
+		switch e.config.DeliveryMethod {
+		case EmailDeliveryRelay, EmailDeliverySendmail:
+			e.logger.Warning("WARNING: Invalid email recipient format: %s", redactedRecipient)
+			e.logger.Info("  Configure EMAIL_RECIPIENT with a valid email address")
+			result.Success = false
+			result.Duration = time.Since(startTime)
+			result.Error = fmt.Errorf("invalid email recipient format: %s", redactedRecipient)
+			return result, nil
+		default:
+			e.logger.Warning("WARNING: Invalid email format: %s", redactedRecipient)
+		}
 	}
 
 	// Build email subject and body
@@ -345,7 +360,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	// Log according to delivery method to avoid implying guaranteed inbox delivery
 	if result.Method == "email-relay" {
 		// Cloud relay confirmed the request (HTTP 200 from worker)
-		e.logger.Info("Email relay accepted request for %s (%s)", recipient, describeEmailMethod(result.Method))
+		e.logger.Info("Email relay accepted request for %s (%s)", redactEmail(recipient), describeEmailMethod(result.Method))
 	} else {
 		// Local delivery path: we only know the message was handed off (not necessarily delivered)
 		backend := describeEmailMethod(result.Method)
@@ -353,7 +368,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			backend = strings.TrimSpace(v)
 		}
 
-		recipientHint := strings.TrimSpace(recipient)
+		recipientHint := redactEmail(strings.TrimSpace(recipient))
 		if recipientHint == "" {
 			recipientHint = "(recipient not set - routed by Proxmox Notifications)"
 		}

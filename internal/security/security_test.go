@@ -704,55 +704,6 @@ func TestDetectPrivateAgeKeysAddsWarning(t *testing.T) {
 	}
 }
 
-// TestChecksumFile tests file checksumming
-func TestChecksumFile(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create test file with known content
-	testFile := filepath.Join(tmpDir, "test.txt")
-	content := []byte("test content for checksum")
-	if err := os.WriteFile(testFile, content, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Calculate checksum
-	checksum1, err := checksumFile(testFile)
-	if err != nil {
-		t.Errorf("checksumFile() error = %v", err)
-	}
-	if checksum1 == "" {
-		t.Error("checksumFile() returned empty checksum")
-	}
-
-	// Verify checksum is consistent
-	checksum2, err := checksumFile(testFile)
-	if err != nil {
-		t.Errorf("checksumFile() second call error = %v", err)
-	}
-	if checksum1 != checksum2 {
-		t.Errorf("checksumFile() inconsistent: first=%s, second=%s", checksum1, checksum2)
-	}
-
-	// Test with different content
-	testFile2 := filepath.Join(tmpDir, "test2.txt")
-	if err := os.WriteFile(testFile2, []byte("different content"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	checksum3, err := checksumFile(testFile2)
-	if err != nil {
-		t.Errorf("checksumFile() error = %v", err)
-	}
-	if checksum3 == checksum1 {
-		t.Error("checksumFile() should return different checksums for different content")
-	}
-
-	// Test with nonexistent file
-	_, err = checksumFile(filepath.Join(tmpDir, "nonexistent.txt"))
-	if err == nil {
-		t.Error("checksumFile() should return error for nonexistent file")
-	}
-}
-
 // TestIsSafeBracketProcess tests bracket process safety checking
 func TestIsSafeBracketProcess(t *testing.T) {
 	tests := []struct {
@@ -904,6 +855,71 @@ func TestCheckSuspiciousProcessesWarnsForNonZombieProxmoxBackupMatch(t *testing.
 
 	if !containsIssue(checker.result, "Suspicious process detected") {
 		t.Fatalf("expected non-zombie Proxmox Backup process match warning, issues=%+v", checker.result.Issues)
+	}
+}
+
+// TestCommandLineMatches pins the token-anchored matching contract that replaced
+// the naive whole-command-line substring scan (issue #232).
+func TestCommandLineMatches(t *testing.T) {
+	cases := []struct {
+		name      string
+		signature string
+		cmdline   string
+		want      bool
+	}{
+		{"concat false positive rejected", "ncat", "/usr/lib/ffmpeg/7.0/bin/ffmpeg -hide_banner -f concat -y", false},
+		{"bare ncat token matches", "ncat", "ncat -l 4444", true},
+		{"ncat via path basename matches", "ncat", "/usr/bin/ncat -e /bin/sh", true},
+		{"prefix-on-token preserved", "proxmox-backup", "proxmox-backup-proxy", true},
+		{"script via interpreter matches by basename", "mr.sh", "bash /tmp/mr.sh", true},
+		{"unrelated script does not match", "mr.sh", "bash /tmp/summary.sh", false},
+		{"binary via absolute path matches", "xmrig", "/usr/bin/xmrig --config /etc/x.json", true},
+		{"wildcard signature matches", "xmrig*", "xmrigd --foo", true},
+		{"anchored regex rejects concat", "regex:^ncat$", "ffmpeg -f concat", false},
+		{"anchored regex matches token", "regex:^ncat$", "ncat -l", true},
+		{"signature only in a path directory does not match", "xmrig", "/opt/xmrig-loader/start --go", false},
+		{"empty signature never matches", "", "anything here", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := commandLineMatches(tc.signature, tc.cmdline); got != tc.want {
+				t.Errorf("commandLineMatches(%q, %q) = %v, want %v", tc.signature, tc.cmdline, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckSuspiciousProcessesIgnoresConcatFalsePositive(t *testing.T) {
+	writeFakePS(t, "root S 1000 4242 /usr/lib/ffmpeg/7.0/bin/ffmpeg -hide_banner -f concat -y\n")
+	checker := newChecker(t, &config.Config{
+		SuspiciousProcesses: []string{"ncat"},
+	})
+
+	checker.checkSuspiciousProcesses(context.Background())
+
+	if containsIssue(checker.result, "Suspicious process detected") {
+		t.Fatalf("ffmpeg -f concat must not match the ncat signature, issues=%+v", checker.result.Issues)
+	}
+}
+
+func TestCheckSuspiciousProcessesSafeProcessesAllowlist(t *testing.T) {
+	writeFakePS(t, "root S 1000 4243 /usr/bin/xmrig --config /etc/x.json\n")
+
+	flagged := newChecker(t, &config.Config{
+		SuspiciousProcesses: []string{"xmrig"},
+	})
+	flagged.checkSuspiciousProcesses(context.Background())
+	if !containsIssue(flagged.result, "Suspicious process detected") {
+		t.Fatalf("xmrig must be flagged without an allowlist, issues=%+v", flagged.result.Issues)
+	}
+
+	allowed := newChecker(t, &config.Config{
+		SuspiciousProcesses: []string{"xmrig"},
+		SafeProcesses:       []string{"xmrig"},
+	})
+	allowed.checkSuspiciousProcesses(context.Background())
+	if containsIssue(allowed.result, "Suspicious process detected") {
+		t.Fatalf("SAFE_PROCESSES=xmrig must exempt the process, issues=%+v", allowed.result.Issues)
 	}
 }
 

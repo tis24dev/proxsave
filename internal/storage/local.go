@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -355,7 +356,12 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 	basePath, _ := trimBundleSuffix(backupFile)
 	filesToDelete := buildBackupCandidatePaths(basePath, l.config.BundleAssociatedFiles)
 
-	// Delete all files
+	// Delete all files; collect real removal failures (not "already gone") and
+	// track whether the data archive itself (not just a sidecar) failed, so the
+	// caller never counts a backup whose archive remains on disk as deleted
+	// (PS-BH-001), while a sidecar-only failure still counts (the archive IS gone).
+	var failedFiles []string
+	dataFailed := false
 	for _, f := range filesToDelete {
 		if f == "" {
 			continue
@@ -367,12 +373,22 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 				continue
 			}
 			l.logger.Warning("Failed to remove %s: %v", f, err)
-			// Continue with other files
+			failedFiles = append(failedFiles, f)
+			if !isBackupSidecar(f) {
+				dataFailed = true
+			}
 		}
 	}
 
 	// Best-effort: delete associated local log file for this backup
 	logDeleted := l.deleteAssociatedLog(backupFile)
+
+	if len(failedFiles) > 0 {
+		if !dataFailed {
+			return logDeleted, fmt.Errorf("%w: %v", errBackupSidecarDeleteOnly, failedFiles)
+		}
+		return logDeleted, fmt.Errorf("failed to remove %d file(s): %v", len(failedFiles), failedFiles)
+	}
 
 	l.logger.Debug("Local storage: deleted backup and associated files: %s", filepath.Base(backupFile))
 	return logDeleted, nil
@@ -499,8 +515,12 @@ func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 
 		logDeleted, err := l.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
-			l.logger.Warning("Failed to delete %s: %v", backup.BackupFile, err)
-			continue
+			if !errors.Is(err, errBackupSidecarDeleteOnly) {
+				l.logger.Warning("Failed to delete %s: %v", backup.BackupFile, err)
+				continue
+			}
+			// Archive removed, only sidecar(s) failed: count as deleted but warn.
+			l.logger.Warning("Local storage: %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
 		}
 
 		deleted++
@@ -574,8 +594,12 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 
 		logDeleted, err := l.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
-			l.logger.Warning("Failed to delete %s: %v", backup.BackupFile, err)
-			continue
+			if !errors.Is(err, errBackupSidecarDeleteOnly) {
+				l.logger.Warning("Failed to delete %s: %v", backup.BackupFile, err)
+				continue
+			}
+			// Archive removed, only sidecar(s) failed: count as deleted but warn.
+			l.logger.Warning("Local storage: %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
 		}
 
 		deleted++

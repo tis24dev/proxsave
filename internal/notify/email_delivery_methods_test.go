@@ -239,6 +239,39 @@ func TestEmailNotifier_RelayFallback_DoesNotBypassMissingRecipient(t *testing.T)
 	}
 }
 
+// TestEmailNotifier_RelayRejectsInvalidRecipientFormat locks in the PS-BH-005
+// fix: a malformed recipient on relay/sendmail (which need a real mailbox) must
+// be refused with Success=false instead of being delivered and reported as a
+// success.
+func TestEmailNotifier_RelayRejectsInvalidRecipientFormat(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:          true,
+		DeliveryMethod:   EmailDeliveryRelay,
+		FallbackSendmail: true,
+		Recipient:        "not-a-valid-email",
+		From:             "no-reply@proxmox.example.com",
+	}, types.ProxmoxUnknown, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil {
+		t.Fatalf("Send() returned unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Fatalf("expected Success=false for a malformed recipient on relay (PS-BH-005)")
+	}
+	if result.UsedFallback {
+		t.Fatalf("expected no delivery/fallback attempt for a malformed recipient")
+	}
+	if result.Error == nil {
+		t.Fatalf("expected an error for the malformed recipient")
+	}
+}
+
 func TestEmailNotifier_RelayFallback_UsesSendmailWhenRootRecipientBlocked(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 

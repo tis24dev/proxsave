@@ -200,7 +200,13 @@ func isOctalDigit(b byte) bool {
 }
 
 func procOctalEscapeValue(oct string) byte {
-	return byte(procOctalEscapeInt(oct))
+	v := procOctalEscapeInt(oct)
+	if v < 0 || v > 0xFF {
+		// Unreachable: callers gate on hasProcOctalEscapeAt (value <= 255).
+		// The bound makes the byte conversion safe without that invariant.
+		return 0
+	}
+	return byte(v)
 }
 
 func procOctalEscapeInt(oct string) int {

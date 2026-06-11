@@ -22,6 +22,9 @@ var pveStorageSubdirs = map[string][]string{
 // looks like a dedicated/ZFS mount that is not yet mounted (see
 // shouldSkipUnmountedStorageMount) — the same guard the PBS datastore path uses.
 func createPVEStorageStructure(basePath, storageType string, logger *logging.Logger) (bool, error) {
+	if err := validateRecreationPath(basePath); err != nil {
+		return false, fmt.Errorf("unsafe storage path %q from storage.cfg: %w", basePath, err)
+	}
 	if shouldSkipUnmountedStorageMount(basePath, pveStoragePathHasData(basePath), logger) {
 		return false, nil
 	}

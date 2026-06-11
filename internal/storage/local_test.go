@@ -354,8 +354,11 @@ func TestLocalStorage_Delete_RemoveErrorContinues(t *testing.T) {
 	cfg := &config.Config{BackupPath: tempDir}
 	storage, _ := NewLocalStorage(cfg, logger)
 
-	if err := storage.Delete(context.Background(), backupFile); err != nil {
-		t.Fatalf("Delete() error = %v", err)
+	// The sidecar (.sha256) removal fails but the archive is removed, so Delete
+	// surfaces the sidecar-only sentinel (PS-BH-001) rather than nil; retention
+	// still counts such a backup as deleted.
+	if err := storage.Delete(context.Background(), backupFile); !errors.Is(err, errBackupSidecarDeleteOnly) {
+		t.Fatalf("Delete() error = %v, want errBackupSidecarDeleteOnly", err)
 	}
 	if _, err := os.Stat(backupFile); !os.IsNotExist(err) {
 		t.Fatalf("expected backup file to be removed, stat err=%v", err)

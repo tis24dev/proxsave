@@ -107,7 +107,7 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 	}
 
 	logging.DebugStep(logger, "discover rclone backups", "listing remote: %s", fullPath)
-	logging.DebugStep(logger, "discover rclone backups", "filters=bundle.tar and raw .metadata")
+	logging.DebugStep(logger, "discover rclone backups", "filters=bundle.tar and raw .metadata/.manifest.json")
 	logDebug(logger, "Cloud (rclone): listing backups under %s", fullPath)
 	logDebug(logger, "Cloud (rclone): executing: rclone lsf %s", fullPath)
 	if report != nil {
@@ -204,6 +204,37 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 				filename:       filename,
 				remoteArchive:  remoteArchive,
 				remoteMetadata: remoteMetadata,
+				remoteChecksum: remoteChecksum,
+			})
+		case strings.HasSuffix(filename, ".manifest.json"):
+			archiveName := strings.TrimSuffix(filename, ".manifest.json")
+			if !strings.Contains(archiveName, ".tar") {
+				nonCandidateEntries++
+				continue
+			}
+			if _, ok := snapshot[archiveName]; !ok {
+				nonCandidateEntries++
+				continue
+			}
+			// The legacy .metadata alias, when present, is the canonical discovery
+			// key for a raw backup; only fall back to the authoritative manifest
+			// when the alias is missing, so the same backup is not listed twice
+			// (PS-BH-002).
+			if _, ok := snapshot[archiveName+".metadata"]; ok {
+				continue
+			}
+
+			remoteArchive := joinRemote(fullPath, archiveName)
+			remoteManifest := joinRemote(fullPath, filename)
+			remoteChecksum := ""
+			if _, ok := snapshot[archiveName+".sha256"]; ok {
+				remoteChecksum = joinRemote(fullPath, archiveName+".sha256")
+			}
+			items = append(items, inspectItem{
+				kind:           sourceRaw,
+				filename:       filename,
+				remoteArchive:  remoteArchive,
+				remoteMetadata: remoteManifest,
 				remoteChecksum: remoteChecksum,
 			})
 		default:

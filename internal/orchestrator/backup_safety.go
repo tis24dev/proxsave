@@ -381,7 +381,7 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 
 		// Handle directories
 		if header.Typeflag == tar.TypeDir {
-			if err := safetyFS.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+			if err := safetyFS.MkdirAll(target, os.FileMode(header.Mode&0o7777)); err != nil {
 				logger.Warning("Cannot create directory %s: %v", target, err)
 			}
 			continue
@@ -438,13 +438,15 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 		}
 
 		// Handle regular files
-		outFile, err := safetyFS.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+		outFile, err := safetyFS.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode&0o7777))
 		if err != nil {
 			logger.Warning("Cannot create file %s: %v", target, err)
 			continue
 		}
 
-		if _, err := io.Copy(outFile, tarReader); err != nil {
+		// Copy exactly the entry's declared size: bounds the write (gosec G110),
+		// and a short read on a truncated/corrupt snapshot becomes an explicit error.
+		if _, err := io.CopyN(outFile, tarReader, header.Size); err != nil {
 			if closeErr := outFile.Close(); closeErr != nil {
 				logger.Warning("Cannot close partially restored file %s: %v", target, closeErr)
 			}

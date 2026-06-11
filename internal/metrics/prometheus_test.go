@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,5 +73,49 @@ func TestPrometheusExporterNilMetrics(t *testing.T) {
 	exporter := NewPrometheusExporter(dir, nil)
 	if err := exporter.Export(nil); err != nil {
 		t.Fatalf("Export(nil) error = %v", err)
+	}
+}
+
+// TestPrometheusExporterStatusMapping locks in the PS-BH-004 fix: the status gauge
+// (0=success, 1=warning, 2=error) is derived from the error/warning counts, so a
+// warning-only run (promoted to a non-zero generic exit code upstream) reports
+// status=1 (warning) instead of 2 (error).
+func TestPrometheusExporterStatusMapping(t *testing.T) {
+	cases := []struct {
+		name         string
+		exitCode     int
+		errorCount   int
+		warningCount int
+		wantStatus   int
+	}{
+		{"clean success", 0, 0, 0, 0},
+		{"warning only (promoted to generic exit code)", int(types.ExitGenericError), 0, 3, 1},
+		{"errors present", int(types.ExitBackupError), 2, 1, 2},
+		{"early abort without counts", int(types.ExitConfigError), 0, 0, 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			exporter := NewPrometheusExporter(dir, logging.New(types.LogLevelError, false))
+			m := &BackupMetrics{
+				StartTime:    time.Unix(1000, 0),
+				EndTime:      time.Unix(1100, 0),
+				ExitCode:     tc.exitCode,
+				ErrorCount:   tc.errorCount,
+				WarningCount: tc.warningCount,
+			}
+			if err := exporter.Export(m); err != nil {
+				t.Fatalf("Export() error = %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "proxmox_backup.prom"))
+			if err != nil {
+				t.Fatalf("read metrics file: %v", err)
+			}
+			want := fmt.Sprintf("proxmox_backup_status %d\n", tc.wantStatus)
+			if !strings.Contains(string(data), want) {
+				t.Fatalf("status mismatch: want %q\n%s", want, string(data))
+			}
+		})
 	}
 }

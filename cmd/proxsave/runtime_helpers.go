@@ -598,32 +598,7 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 		return
 	}
 
-	create := func(dest string) {
-		if info, err := os.Lstat(dest); err == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				if resolved, err := filepath.EvalSymlinks(dest); err == nil && resolved == execPath {
-					logBootstrapInfo(bootstrap, "Keeping existing symlink %s -> %s", dest, resolved)
-					return
-				}
-			}
-			if rmErr := os.Remove(dest); rmErr != nil {
-				logBootstrapWarning(bootstrap, "WARNING: Failed to replace %s: remove failed: %v", dest, rmErr)
-				return
-			}
-			logBootstrapInfo(bootstrap, "Removed existing entrypoint at %s", dest)
-		} else if !os.IsNotExist(err) {
-			logBootstrapWarning(bootstrap, "WARNING: Unable to inspect %s: %v", dest, err)
-			return
-		}
-
-		if err := os.Symlink(execPath, dest); err != nil {
-			logBootstrapWarning(bootstrap, "WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
-			return
-		}
-		logBootstrapInfo(bootstrap, "Created symlink: %s -> %s", dest, execPath)
-	}
-
-	create("/usr/local/bin/proxsave")
+	installEntrypointSymlink(execPath, "/usr/local/bin/proxsave", bootstrap)
 	// The legacy "proxmox-backup" command name is no longer a supported entrypoint:
 	// drop its symlink instead of recreating it. proxsave is the only entrypoint.
 	removeLegacyEntrypoint("/usr/local/bin/proxmox-backup", bootstrap)
@@ -635,6 +610,89 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 // script) is never deleted. Proxmox Backup Server ships its tools as
 // proxmox-backup-client/-proxy/-manager under /usr/sbin and /usr/bin, never a bare
 // "proxmox-backup" symlink in /usr/local/bin, so PBS is unaffected.
+// installEntrypointSymlink points dest at execPath as a symlink, replacing any
+// existing file/symlink ATOMICALLY: it creates the new symlink at a temp path in
+// the same directory and renames it over dest. A bare remove-then-symlink would
+// leave the host with NO entrypoint if the symlink step failed after the remove
+// succeeded; the atomic rename never leaves dest missing.
+func installEntrypointSymlink(execPath, dest string, bootstrap *logging.BootstrapLogger) {
+	if info, err := os.Lstat(dest); err == nil {
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			if resolved, err := filepath.EvalSymlinks(dest); err == nil && resolved == execPath {
+				logBootstrapInfo(bootstrap, "Keeping existing symlink %s -> %s", dest, resolved)
+				return
+			}
+		case info.Mode().IsRegular():
+			// A real (non-symlink) file occupies the entrypoint path: it may be an
+			// operator wrapper or a packaged binary, which the cleanup scan also
+			// refuses to delete. Back it up before replacing it with the proxsave
+			// symlink so it is never lost silently (INSTALL-SYMLINK-001). If the
+			// backup fails, refuse to replace it rather than clobber it.
+			backup, err := backupRealFile(dest)
+			if err != nil {
+				logBootstrapWarning(bootstrap, "WARNING: Not replacing real file %s: failed to back it up: %v", dest, err)
+				return
+			}
+			logBootstrapWarning(bootstrap, "WARNING: Backed up existing real file %s to %s before installing the proxsave symlink", dest, backup)
+		}
+	} else if !os.IsNotExist(err) {
+		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect %s: %v", dest, err)
+		return
+	}
+
+	tmp := dest + ".proxsave-new"
+	_ = os.Remove(tmp) // clear any leftover from a previous interrupted run
+	if err := os.Symlink(execPath, tmp); err != nil {
+		logBootstrapWarning(bootstrap, "WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
+		return
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		logBootstrapWarning(bootstrap, "WARNING: Failed to install symlink %s -> %s: %v", dest, execPath, err)
+		return
+	}
+	logBootstrapInfo(bootstrap, "Created symlink: %s -> %s", dest, execPath)
+}
+
+// backupRealFile copies the regular file at path to "<path>.bak", preserving its
+// permission bits, and returns the backup path. It is used before proxsave
+// replaces a real operator/package file at an entrypoint path with its symlink, so
+// the original is never lost (INSTALL-SYMLINK-001).
+func backupRealFile(path string) (string, error) {
+	backup := path + ".bak"
+	// Resolve the source and its ".bak" sibling through os.Root on their shared
+	// directory so the variable path provably cannot escape it (gosec G304
+	// containment); the entrypoint path is admin-controlled, but the structural
+	// fix is preferred over a #nosec.
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+
+	src, err := root.Open(filepath.Base(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = src.Close() }()
+
+	info, err := src.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	dst, err := root.OpenFile(filepath.Base(backup), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		return "", err
+	}
+	return backup, dst.Close()
+}
+
 func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 	info, err := os.Lstat(dest)
 	if err != nil {
@@ -668,10 +726,10 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		// PBS binary and we must never schedule that as root in cron.
 		fallback := strings.TrimSpace(execPath)
 		if fallback == "" {
-			bootstrap.Warning("WARNING: Unable to locate Go binary for cron migration")
+			logBootstrapWarning(bootstrap, "WARNING: Unable to locate Go binary for cron migration")
 			return
 		}
-		bootstrap.Info("proxsave symlink not found; falling back to %s for cron entries", fallback)
+		logBootstrapInfo(bootstrap, "proxsave symlink not found; falling back to %s for cron entries", fallback)
 		newCommandToken = fallback
 	}
 
@@ -706,7 +764,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 
 	current, err := readCron()
 	if err != nil {
-		bootstrap.Warning("WARNING: Unable to inspect existing cron entries: %v", err)
+		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect existing cron entries: %v", err)
 		return
 	}
 
@@ -724,37 +782,25 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		correctPaths = append(correctPaths, execPath)
 	}
 
-	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
-	updatedLines, hasCurrentEntry, replacedSchedule := filterCronLines(lines, correctPaths)
-
 	schedule := strings.TrimSpace(cronSchedule)
 	if schedule == "" {
 		schedule = "0 2 * * *"
 	}
-	// Add an entry pointing to the Go binary if none already targets it. If we
-	// removed an entry that pointed to an outdated proxsave/proxmox-backup binary,
-	// keep the operator's existing schedule instead of resetting to the default,
-	// and warn that the entry was rewritten.
-	if !hasCurrentEntry {
-		if replacedSchedule != "" {
-			schedule = replacedSchedule
-			logBootstrapWarning(bootstrap, "Cron entry pointed to an outdated binary path; rewriting it to %s and keeping the existing schedule %q", newCommandToken, schedule)
-		}
-		defaultLine := fmt.Sprintf("%s %s", schedule, newCommandToken)
-		updatedLines = append(updatedLines, defaultLine)
-	}
+
+	// (Re)install resets proxsave's schedule to the chosen one: every
+	// proxsave-managed entry is dropped and a single fresh entry is written at the
+	// chosen schedule, while unrelated operator cron lines are preserved. Upgrades
+	// no longer call this, so it only runs on install (CRON-INSTALL-002 /
+	// CRON-MIXED-001).
+	updatedLines := buildReinstallCronLines(lines, baseDir, correctPaths, schedule, newCommandToken, bootstrap)
 
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
-		bootstrap.Warning("WARNING: Failed to update cron entries: %v", err)
+		logBootstrapWarning(bootstrap, "WARNING: Failed to update cron entries: %v", err)
 		return
 	}
 
-	if hasCurrentEntry {
-		bootstrap.Debug("Existing cron entry already targets %s; no changes made.", newCommandToken)
-	} else {
-		bootstrap.Debug("Recreated cron entry for proxsave at schedule %s: %s", schedule, newCommandToken)
-	}
+	logBootstrapDebug(bootstrap, "Reinstalled proxsave cron entry at schedule %s: %s", schedule, newCommandToken)
 }
 
 // dropLegacyBashCronLines removes crontab lines whose command is the old Bash
@@ -786,10 +832,11 @@ func dropLegacyBashCronLines(lines []string, baseDir string, bootstrap *logging.
 	return kept
 }
 
-func filterCronLines(lines []string, correctPaths []string) ([]string, bool, string) {
+func filterCronLines(lines []string, correctPaths []string) ([]string, bool, []string) {
 	updatedLines := make([]string, 0, len(lines))
 	hasCurrentEntry := false
-	replacedSchedule := ""
+	var replacedSchedules []string
+	seenSchedules := make(map[string]bool)
 
 	containsCorrectPath := func(line string) bool {
 		// Match the cron command token exactly, not as a substring: otherwise a
@@ -821,16 +868,56 @@ func filterCronLines(lines []string, correctPaths []string) ([]string, bool, str
 		}
 		if containsBinaryReference(line) {
 			// Remove proxsave/proxmox-backup entries that point to outdated binaries,
-			// remembering the operator's schedule so the rewritten entry can keep it.
-			if replacedSchedule == "" {
-				replacedSchedule = cronScheduleField(line)
+			// remembering EACH distinct schedule so every rewritten entry can keep its
+			// own. Multiple legacy entries with different schedules must not collapse
+			// into a single rewritten entry (which would silently drop the others).
+			if sched := cronScheduleField(line); sched != "" && !seenSchedules[sched] {
+				seenSchedules[sched] = true
+				replacedSchedules = append(replacedSchedules, sched)
 			}
 			continue
 		}
 		updatedLines = append(updatedLines, line)
 	}
 
-	return updatedLines, hasCurrentEntry, replacedSchedule
+	return updatedLines, hasCurrentEntry, replacedSchedules
+}
+
+// dropCanonicalCronLines removes every cron line whose command token already
+// targets one of the canonical proxsave paths, so a (re)install can rewrite the
+// schedule from scratch instead of preserving the previous one.
+func dropCanonicalCronLines(lines, correctPaths []string) []string {
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		token := strings.Trim(cronCommandToken(line), "\"'")
+		canonical := false
+		if token != "" {
+			for _, p := range correctPaths {
+				if p != "" && token == p {
+					canonical = true
+					break
+				}
+			}
+		}
+		if canonical {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return kept
+}
+
+// buildReinstallCronLines computes the crontab for a (re)install: it drops the
+// legacy Bash cron entry, every outdated proxsave/proxmox-backup binary entry and
+// any entry already targeting the canonical path, then appends a single fresh
+// entry at the chosen schedule. Unrelated operator lines, comments and blanks are
+// preserved. This deliberately resets proxsave's schedule to the chosen one
+// (CRON-INSTALL-002) and removes stale/duplicate entries (CRON-MIXED-001).
+func buildReinstallCronLines(lines []string, baseDir string, correctPaths []string, schedule, commandToken string, bootstrap *logging.BootstrapLogger) []string {
+	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
+	updated, _, _ := filterCronLines(lines, correctPaths)
+	updated = dropCanonicalCronLines(updated, correctPaths)
+	return append(updated, fmt.Sprintf("%s %s", schedule, commandToken))
 }
 
 // cronScheduleField returns the schedule portion of a cron line — the first five
@@ -868,6 +955,14 @@ func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ..
 		return
 	}
 	logging.Info(format, args...)
+}
+
+func logBootstrapDebug(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+	if bootstrap != nil {
+		bootstrap.Debug(format, args...)
+		return
+	}
+	logging.Debug(format, args...)
 }
 
 // containsBinaryReference reports whether the cron line's COMMAND is a

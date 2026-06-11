@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -387,5 +388,41 @@ func TestVerifyGzipArchive_ValidTarContent(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("verifyGzipArchive failed for valid tar.gz: %v", err)
+	}
+}
+
+// TestRunTarListVerification covers the shared tar-listing verifier helper: a
+// successful command's (potentially huge) stdout is discarded rather than
+// buffered, and a failure surfaces the command's stderr (not its stdout).
+func TestRunTarListVerification(t *testing.T) {
+	// Success: stdout is produced (and discarded), exit 0 -> no error.
+	if err := runTarListVerification(exec.Command("sh", "-c", "echo a; echo b")); err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	// Failure: the error carries stderr, not the discarded stdout.
+	err := runTarListVerification(exec.Command("sh", "-c", "echo discarded-stdout; echo boom 1>&2; exit 3"))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("expected stderr 'boom' in error, got %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "discarded-stdout") {
+		t.Fatalf("stdout must not appear in the error: %q", err.Error())
+	}
+}
+
+// TestCappedBuffer verifies the stderr cap drops overflow while reporting full writes.
+func TestCappedBuffer(t *testing.T) {
+	c := &cappedBuffer{cap: 4}
+	if n, err := c.Write([]byte("abcdefgh")); err != nil || n != 8 {
+		t.Fatalf("Write = (%d, %v), want (8, nil)", n, err)
+	}
+	if got := c.String(); got != "abcd" {
+		t.Fatalf("String() = %q, want %q", got, "abcd")
+	}
+	if n, _ := c.Write([]byte("xyz")); n != 3 || c.String() != "abcd" {
+		t.Fatalf("after cap: n=%d str=%q, want 3 / abcd", n, c.String())
 	}
 }

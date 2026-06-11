@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,9 +15,66 @@ import (
 )
 
 type pveClusterMappingJSON struct {
-	ID      string                   `json:"id"`
-	Comment string                   `json:"comment,omitempty"`
-	Map     []map[string]interface{} `json:"map,omitempty"`
+	ID      string            `json:"id"`
+	Comment string            `json:"comment,omitempty"`
+	Map     []pveMappingEntry `json:"map,omitempty"`
+}
+
+// pveMappingEntry is one per-node mapping inside a cluster resource mapping.
+// `pvesh get /cluster/mapping/<type> --output-format=json` emits each entry as a
+// PVE property string ("node=pve01,path=0000:01:00.0,id=8086:1234"), which is the
+// real on-disk backup format. We also accept an object ({"node":"pve01",...}) for
+// robustness, since earlier code and fixtures assumed that (never-emitted) shape.
+type pveMappingEntry struct {
+	props map[string]string
+}
+
+func (e *pveMappingEntry) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		e.props = nil
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		e.props = parsePVEPropertyString(s)
+		return nil
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	props := make(map[string]string, len(obj))
+	for k, v := range obj {
+		k = strings.TrimSpace(k)
+		if k == "" || v == nil {
+			continue
+		}
+		props[k] = strings.TrimSpace(fmt.Sprint(v))
+	}
+	e.props = props
+	return nil
+}
+
+// parsePVEPropertyString splits a PVE property string "k=v,k=v" into its fields.
+func parsePVEPropertyString(s string) map[string]string {
+	out := make(map[string]string)
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(part, "=")
+		k = strings.TrimSpace(k)
+		if !ok || k == "" {
+			continue
+		}
+		out[k] = strings.TrimSpace(v)
+	}
+	return out
 }
 
 type pveClusterMappingSpec struct {
@@ -134,18 +192,7 @@ func readPVEClusterResourceMappingsFromExport(exportRoot, mappingType string) ([
 		}
 
 		for _, m := range item.Map {
-			entry := make(map[string]string, len(m))
-			for k, v := range m {
-				k = strings.TrimSpace(k)
-				if k == "" || v == nil {
-					continue
-				}
-				entry[k] = strings.TrimSpace(fmt.Sprint(v))
-			}
-			if len(entry) == 0 {
-				continue
-			}
-			if rendered := renderMappingEntry(entry); rendered != "" {
+			if rendered := renderMappingEntry(m.props); rendered != "" {
 				spec.MapEntries = append(spec.MapEntries, rendered)
 			}
 		}
@@ -193,22 +240,38 @@ func applyPVEClusterResourceMapping(ctx context.Context, logger *logging.Logger,
 		createArgs = append(createArgs, "--map", entry)
 	}
 
-	if err := runPvesh(ctx, logger, createArgs); err == nil {
+	createErr := runPvesh(ctx, logger, createArgs)
+	if createErr == nil {
 		return nil
 	}
 
-	// Create may fail if mapping already exists. Try to merge by unioning current+backup entries and updating via set.
-	mergedEntries := append([]string(nil), spec.MapEntries...)
-	comment := strings.TrimSpace(spec.Comment)
-
+	// Create failed. It commonly means the mapping already exists, in which case we
+	// merge the live entries with the backup ones and update via set. Only do that if
+	// we can actually READ the existing mapping: if the get fails or returns nothing
+	// parseable, the create may have failed for another reason (invalid value,
+	// permission denied, transient cluster lock) and a blind set could overwrite a
+	// live mapping with only the backup entries or mask the real cause - so surface
+	// the original create error instead.
 	getArgs := []string{"get", fmt.Sprintf("/cluster/mapping/%s/%s", mappingType, id), "--output-format=json"}
-	if out, getErr := runPveshSensitive(ctx, logger, getArgs); getErr == nil && len(out) > 0 {
-		if existing, ok, parseErr := parsePVEClusterMappingObject(out); parseErr == nil && ok {
-			mergedEntries = uniqueSortedStrings(append(existing.MapEntries, mergedEntries...))
-			if comment == "" {
-				comment = strings.TrimSpace(existing.Comment)
-			}
+	out, getErr := runPveshSensitive(ctx, logger, getArgs)
+	var existing pveClusterMappingSpec
+	var parseErr error
+	ok := false
+	if getErr == nil && len(out) > 0 {
+		var parsed pveClusterMappingSpec
+		var parsedOK bool
+		if parsed, parsedOK, parseErr = parsePVEClusterMappingObject(out); parseErr == nil && parsedOK {
+			existing, ok = parsed, true
 		}
+	}
+	if !ok {
+		return fmt.Errorf("create %s mapping %q failed and the existing mapping could not be read (get error: %v, parse error: %v): %w", mappingType, id, getErr, parseErr, createErr)
+	}
+
+	mergedEntries := uniqueSortedStrings(append(existing.MapEntries, spec.MapEntries...))
+	comment := strings.TrimSpace(spec.Comment)
+	if comment == "" {
+		comment = strings.TrimSpace(existing.Comment)
 	}
 
 	setArgs := []string{"set", fmt.Sprintf("/cluster/mapping/%s/%s", mappingType, id)}
@@ -247,15 +310,7 @@ func parsePVEClusterMappingObject(data []byte) (pveClusterMappingSpec, bool, err
 		Comment: strings.TrimSpace(obj.Comment),
 	}
 	for _, m := range obj.Map {
-		entry := make(map[string]string, len(m))
-		for k, v := range m {
-			k = strings.TrimSpace(k)
-			if k == "" || v == nil {
-				continue
-			}
-			entry[k] = strings.TrimSpace(fmt.Sprint(v))
-		}
-		if rendered := renderMappingEntry(entry); rendered != "" {
+		if rendered := renderMappingEntry(m.props); rendered != "" {
 			spec.MapEntries = append(spec.MapEntries, rendered)
 		}
 	}

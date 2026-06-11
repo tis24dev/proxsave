@@ -109,9 +109,9 @@ The `--upgrade` command:
 - ✅ Verifies integrity with SHA256 checksums
 - ✅ Atomically replaces current binary
 - ✅ Updates the `/usr/local/bin/proxsave` symlink (and removes the legacy `proxmox-backup` symlink if present)
-- ✅ Ensures a cron entry for the Go binary, preserving existing entries that already point to it
 - ✅ Fixes file permissions
-- ❌ **Does NOT modify** your `backup.env` configuration
+- ✅ Merges any new template keys into your `backup.env` (your existing and custom values are preserved, and the previous file is backed up first)
+- ❌ **Does NOT touch** your cron schedule (re-run `--install` to change it)
 
 ### Full Upgrade Workflow
 
@@ -135,7 +135,7 @@ crontab -l
 ### Requirements
 
 - **Internet connection**: Must reach GitHub releases
-- **Platform**: Linux (amd64 or arm64)
+- **Platform**: Linux (amd64)
 - **Permissions**: Root/sudo access recommended
 
 ### Troubleshooting

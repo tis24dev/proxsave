@@ -119,11 +119,16 @@ func standaloneClusterMode(collector *backup.Collector) string {
 }
 
 func (o *Orchestrator) writeBackupCollectionMetadata(tempDir, hostname string, stats *BackupStats, collector *backup.Collector) {
+	// Surface metadata/manifest write failures as warnings (not debug) so the log
+	// parser counts them: this drives WarningCount, the exit code and the
+	// notification/Prometheus status, instead of silently leaving the run "clean"
+	// while the embedded diagnostic metadata is incomplete (PS-BH-003). The backup
+	// data itself is unaffected, so a warning (not an error) is the right severity.
 	if err := o.writeBackupMetadata(tempDir, stats); err != nil {
-		o.logger.Debug("Failed to write backup metadata: %v", err)
+		o.logger.Warning("WARNING: Failed to write backup metadata: %v", err)
 	}
 	if err := collector.WriteManifest(hostname); err != nil {
-		o.logger.Debug("Failed to write backup manifest: %v", err)
+		o.logger.Warning("WARNING: Failed to write backup manifest: %v", err)
 	}
 }
 

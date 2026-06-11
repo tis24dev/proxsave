@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -438,11 +439,22 @@ func (a *Archiver) CreateArchive(ctx context.Context, sourceDir, outputPath stri
 }
 
 // createGzipArchive creates a gzip-compressed tar archive using Go's stdlib
+// finalizeEncryptionInto runs the encryption finalizer and folds any error into
+// *errp. A failed age Close means the encrypted archive's final chunk was not
+// written - a truncated, undecryptable archive - so it must never be demoted to a
+// warning behind an earlier close error (e.g. a compressor Close that ran first via
+// the LIFO defer order). errors.Join preserves both errors.
+func finalizeEncryptionInto(errp *error, finalize func() error) {
+	if cerr := finalize(); cerr != nil {
+		*errp = errors.Join(*errp, fmt.Errorf("finalize encrypted archive: %w", cerr))
+	}
+}
+
 func (a *Archiver) createGzipArchive(ctx context.Context, sourceDir, outputPath string) (err error) {
 	a.logger.Debug("Creating gzip archive with level %d (mode %s)", a.compressionLevel, a.CompressionMode())
 
 	// Create output file
-	outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	outFile, err := createBackupOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -452,15 +464,7 @@ func (a *Archiver) createGzipArchive(ctx context.Context, sourceDir, outputPath 
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 
 	// Create gzip writer targeting final writer (possibly encrypted)
 	gzWriter, err := gzip.NewWriterLevel(writer, a.compressionLevel)
@@ -492,7 +496,7 @@ func (a *Archiver) createTarArchive(ctx context.Context, sourceDir, outputPath s
 	a.logger.Debug("Creating uncompressed tar archive")
 
 	// Create output file
-	outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	outFile, err := createBackupOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -502,15 +506,7 @@ func (a *Archiver) createTarArchive(ctx context.Context, sourceDir, outputPath s
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 
 	if err := a.writeTar(ctx, sourceDir, writer); err != nil {
 		return fmt.Errorf("failed to write tar archive: %w", err)
@@ -575,7 +571,7 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 		return fmt.Errorf("capture xz output: %w", err)
 	}
 
-	outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	outFile, err := createBackupOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -587,15 +583,7 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 	cmd.Stdout = writer
 
 	errChan := make(chan error, 1)
@@ -646,7 +634,7 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 		return fmt.Errorf("capture zstd output: %w", err)
 	}
 
-	outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	outFile, err := createBackupOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -658,15 +646,7 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 	cmd.Stdout = writer
 
 	errChan := make(chan error, 1)
@@ -729,8 +709,27 @@ func drainTarWriterAfterCompressorStartFailure(pw *io.PipeWriter, errChan <-chan
 	<-errChan
 }
 
+// createBackupOutputFile creates a backup output/content file with the project's
+// standard backup permission (defaultOptimizedFilePerm, 0o640). Backups are
+// intentionally group-readable so a backup-operator group can read them; the
+// containing directory restricts world access. Centralised here so the single
+// deliberate permission decision is documented in one place.
+func createBackupOutputFile(outputPath string) (*os.File, error) {
+	// Contain the variable output path within its directory via os.Root so it
+	// cannot escape (gosec G304); the path is the admin-configured backup
+	// destination, but the structural fix is preferred over a #nosec. The returned
+	// file is an independent descriptor and stays valid after the Root is closed.
+	root, err := os.OpenRoot(filepath.Dir(outputPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	// #nosec G302 -- 0o640 group-read is the deliberate backup-file convention (defaultOptimizedFilePerm); operators read backups and the parent dir gates world access.
+	return root.OpenFile(filepath.Base(outputPath), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultOptimizedFilePerm)
+}
+
 func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputPath string, cmd *exec.Cmd, algo string) (err error) {
-	outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	outFile, err := createBackupOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -742,15 +741,7 @@ func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputP
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := finalizeEncryption(); cerr != nil {
-			if err == nil {
-				err = fmt.Errorf("finalize encrypted archive: %w", cerr)
-			} else {
-				a.logger.Warning("Failed to finalize encrypted archive: %v", cerr)
-			}
-		}
-	}()
+	defer finalizeEncryptionInto(&err, finalizeEncryption)
 	cmd.Stdout = writer
 	if err := a.attachStderrLogger(cmd, algo); err != nil {
 		return fmt.Errorf("capture %s output: %w", algo, err)
@@ -792,6 +783,15 @@ func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputP
 // addToTar recursively adds files and directories to a tar archive
 // Preserves symlinks instead of following them
 func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDir, baseInArchive string) error {
+	// Open file content through an os.Root rooted at sourceDir so a path component
+	// swapped for a symlink mid-walk cannot make the copy escape the tree (gosec
+	// G122 Walk TOCTOU). filepath.Walk never descends symlinks, so relPath has only
+	// real components and legitimate files open unchanged.
+	root, err := os.OpenRoot(sourceDir)
+	if err != nil {
+		return fmt.Errorf("open archive source root %s: %w", sourceDir, err)
+	}
+	defer func() { _ = root.Close() }()
 	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		// Check context cancellation
 		select {
@@ -885,7 +885,7 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 
 		// If it's a regular file (not symlink, dir, etc), write its content
 		if linkInfo.Mode().IsRegular() {
-			file, err := os.Open(path)
+			file, err := root.Open(relPath)
 			if err != nil {
 				a.logger.Warning("Failed to open file %s: %v", path, err)
 				return nil
@@ -995,12 +995,17 @@ func (a *Archiver) VerifyArchive(ctx context.Context, archivePath string) error 
 		return a.verifyXZArchive(ctx, archivePath)
 	case types.CompressionZstd:
 		return a.verifyZstdArchive(ctx, archivePath)
-	case types.CompressionGzip:
+	case types.CompressionGzip, types.CompressionPigz:
+		// pigz emits standard gzip-format output, so the gzip verifier applies.
 		return a.verifyGzipArchive(ctx, archivePath)
+	case types.CompressionBzip2:
+		return a.verifyBzip2Archive(ctx, archivePath)
+	case types.CompressionLZMA:
+		return a.verifyLzmaArchive(ctx, archivePath)
 	case types.CompressionNone:
 		return a.verifyTarArchive(ctx, archivePath)
 	default:
-		a.logger.Warning("Unknown compression type, skipping detailed verification")
+		a.logger.Warning("Unknown compression type %q, skipping detailed verification", a.compression)
 		return nil
 	}
 }
@@ -1025,9 +1030,8 @@ func (a *Archiver) verifyXZArchive(ctx context.Context, archivePath string) erro
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar listing failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar listing failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: XZ compression and tar structure are valid")
@@ -1054,9 +1058,8 @@ func (a *Archiver) verifyZstdArchive(ctx context.Context, archivePath string) er
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar listing failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar listing failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: Zstd compression and tar structure are valid")
@@ -1072,12 +1075,45 @@ func (a *Archiver) verifyGzipArchive(ctx context.Context, archivePath string) er
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar/gzip verification failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar/gzip verification failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: Gzip compression and tar structure are valid")
+	return nil
+}
+
+// verifyBzip2Archive tests bzip2 compression and tar integrity
+func (a *Archiver) verifyBzip2Archive(ctx context.Context, archivePath string) error {
+	a.logger.Debug("Testing Bzip2 compression integrity")
+
+	// tar -tjf decompresses through bzip2 and lists, exercising both layers.
+	cmd, err := a.cmd(ctx, "tar", "-tjf", archivePath)
+	if err != nil {
+		return err
+	}
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar/bzip2 verification failed: %w", err)
+	}
+
+	a.logger.Debug("Archive verification passed: Bzip2 compression and tar structure are valid")
+	return nil
+}
+
+// verifyLzmaArchive tests lzma compression and tar integrity
+func (a *Archiver) verifyLzmaArchive(ctx context.Context, archivePath string) error {
+	a.logger.Debug("Testing LZMA compression integrity")
+
+	// tar --lzma -tf decompresses through lzma and lists, exercising both layers.
+	cmd, err := a.cmd(ctx, "tar", "--lzma", "-tf", archivePath)
+	if err != nil {
+		return err
+	}
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar/lzma verification failed: %w", err)
+	}
+
+	a.logger.Debug("Archive verification passed: LZMA compression and tar structure are valid")
 	return nil
 }
 
@@ -1090,12 +1126,54 @@ func (a *Archiver) verifyTarArchive(ctx context.Context, archivePath string) err
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar verification failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar verification failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: Tar structure is valid")
+	return nil
+}
+
+// verifyStderrCap bounds the stderr captured from a tar-listing verifier so a
+// pathological archive cannot make the error message itself large.
+const verifyStderrCap = 8 << 10 // 8 KiB is ample for a tar error message
+
+// cappedBuffer collects at most cap bytes (discarding the rest) while always
+// reporting a full write, so wiring it as a command's Stderr never blocks or
+// short-writes the process.
+type cappedBuffer struct {
+	buf []byte
+	cap int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if remaining := c.cap - len(c.buf); remaining > 0 {
+		if len(p) > remaining {
+			c.buf = append(c.buf, p[:remaining]...)
+		} else {
+			c.buf = append(c.buf, p...)
+		}
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string { return string(c.buf) }
+
+// runTarListVerification runs a `tar -t...` listing command used only to verify
+// archive integrity. The listing prints one line per entry and can be enormous,
+// so its stdout is discarded instead of buffered in memory (the previous
+// CombinedOutput kept the whole listing despite the "discard" intent). Only a
+// bounded amount of stderr is captured so a failure stays actionable.
+func runTarListVerification(cmd *exec.Cmd) error {
+	cmd.Stdout = io.Discard
+	stderr := &cappedBuffer{cap: verifyStderrCap}
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("%w (stderr: %s)", err, msg)
+		}
+		return err
+	}
 	return nil
 }
 

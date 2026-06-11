@@ -238,3 +238,53 @@ func TestCopySymlinkOverlayWithinRoot_CleansUpWhenCreatedSymlinkEscapesAfterCrea
 		t.Fatalf("expected created symlink cleanup, lstat err = %v", statErr)
 	}
 }
+
+// TestApplyNetworkFilesFromStage_AppliesDeclaredBackends locks in the BH-004 fix:
+// the staged network applier must apply the netplan, systemd-networkd and
+// NetworkManager directories that the "network" category backs up, not only
+// /etc/network and the hosts/hostname/dnsmasq files.
+func TestApplyNetworkFilesFromStage_AppliesDeclaredBackends(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	staged := map[string]string{
+		"/stage/etc/netplan/01-netcfg.yaml":                              "network:\n  version: 2\n",
+		"/stage/etc/systemd/network/10-eth0.network":                     "[Match]\nName=eth0\n",
+		"/stage/etc/NetworkManager/system-connections/eth0.nmconnection": "[connection]\nid=eth0\n",
+	}
+	for path, content := range staged {
+		if err := fakeFS.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write staged %s: %v", path, err)
+		}
+	}
+
+	applied, err := applyNetworkFilesFromStage(newTestLogger(), "/stage")
+	if err != nil {
+		t.Fatalf("applyNetworkFilesFromStage: %v", err)
+	}
+
+	for src, content := range staged {
+		dest := strings.TrimPrefix(src, "/stage")
+		got, err := fakeFS.ReadFile(dest)
+		if err != nil {
+			t.Fatalf("expected %s to be applied: %v", dest, err)
+		}
+		if string(got) != content {
+			t.Fatalf("%s content=%q, want %q", dest, string(got), content)
+		}
+		found := false
+		for _, p := range applied {
+			if p == dest {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected applied paths to include %s, got %#v", dest, applied)
+		}
+	}
+}

@@ -570,6 +570,12 @@ func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstr
 		}
 		// Best-effort: ensure write permission before removal
 		if entry.IsDir() {
+			// 0700 is the minimum that lets the owner traverse and delete the
+			// directory's contents in the os.RemoveAll below: a directory needs the
+			// execute bit, so gosec G302's file-oriented <=0600 ceiling does not apply.
+			// Owner-only (group and others have no access), and the mode is transient -
+			// the directory is removed on the very next line.
+			// #nosec G302 -- transient 0700 on a directory about to be removed; owner-only.
 			_ = os.Chmod(target, 0o700)
 		} else {
 			_ = os.Chmod(target, 0o600)
@@ -807,7 +813,16 @@ func writeConfigFile(configPath, tmpConfigPath, content string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("failed to create configuration directory: %w", err)
 	}
-	if err := os.WriteFile(tmpConfigPath, []byte(content), 0o600); err != nil {
+	// Confine the temp write to the configuration directory via os.Root so the
+	// admin-supplied --config path cannot place the file outside that directory
+	// (gosec G703 path-traversal containment). tmpConfigPath is configPath with a
+	// suffix, so it always resolves to a single component within dir.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("failed to open configuration directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.WriteFile(filepath.Base(tmpConfigPath), []byte(content), 0o600); err != nil {
 		return fmt.Errorf("failed to write configuration file: %w", err)
 	}
 	if err := os.Rename(tmpConfigPath, configPath); err != nil {

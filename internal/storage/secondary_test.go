@@ -515,9 +515,11 @@ func TestSecondaryStorage_DeleteBackupInternal_ContinuesOnRemoveErrors(t *testin
 		t.Fatalf("WriteFile: %v", err)
 	}
 
+	// The sidecar (.metadata) removal fails but the archive is removed, so the
+	// sidecar-only sentinel is returned (PS-BH-001) rather than nil.
 	logDeleted, err := storage.deleteBackupInternal(context.Background(), backupFile)
-	if err != nil {
-		t.Fatalf("deleteBackupInternal error: %v", err)
+	if !errors.Is(err, errBackupSidecarDeleteOnly) {
+		t.Fatalf("deleteBackupInternal error = %v, want errBackupSidecarDeleteOnly", err)
 	}
 	if logDeleted {
 		t.Fatalf("expected logDeleted=false when SecondaryLogPath is empty")

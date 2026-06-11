@@ -33,7 +33,7 @@ func TestSafeCmdOutputWithPBSAuthSetsEnv(t *testing.T) {
 	cfg.PBSFingerprint = "finger"
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuth(context.Background(), commandSpec("echo", "hi"), output, "test", true); err != nil {
 		t.Fatalf("safeCmdOutputWithPBSAuth error: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreBuildsRepo(t *testing.T) {
 	cfg.PBSPassword = "secret"
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), commandSpec("echo", "hi"), output, "desc", "newds", true); err != nil {
 		t.Fatalf("safeCmdOutputWithPBSAuthForDatastore error: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreSkipsWhenNoCredentials(t *testing.T
 	cfg.PBSPassword = ""
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 
 	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), commandSpec("echo", "hi"), output, "desc", "ds", true); err != nil {
 		t.Fatalf("safeCmdOutputWithPBSAuthForDatastore error: %v", err)
@@ -164,7 +164,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreDefaultsUserWhenRepoEmpty(t *testin
 	cfg.PBSPassword = "secret"
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 
 	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), commandSpec("echo", "hi"), output, "desc", "ds1", true); err != nil {
 		t.Fatalf("safeCmdOutputWithPBSAuthForDatastore error: %v", err)
@@ -185,7 +185,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreDefaultsUserWhenRepoEmpty(t *testin
 func TestSafeCmdOutputWithPBSAuthReturnsErrorOnEmptyCommand(t *testing.T) {
 	cfg := GetDefaultCollectorConfig()
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	if err := collector.safeCmdOutputWithPBSAuth(context.Background(), CommandSpec{}, filepath.Join(t.TempDir(), "out.txt"), "desc", false); err == nil {
+	if err := collector.safeCmdOutputWithPBSAuth(context.Background(), CommandSpec{}, filepath.Join(collector.tempDir, "out.txt"), "desc", false); err == nil {
 		t.Fatalf("expected error for empty command")
 	}
 }
@@ -197,7 +197,7 @@ func TestSafeCmdOutputWithPBSAuthCriticalCommandNotAvailableIncrementsFilesFaile
 
 	cfg := GetDefaultCollectorConfig()
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	if err := collector.safeCmdOutputWithPBSAuth(context.Background(), commandSpec("missing-cmd", "arg"), filepath.Join(t.TempDir(), "out.txt"), "desc", true); err == nil {
+	if err := collector.safeCmdOutputWithPBSAuth(context.Background(), commandSpec("missing-cmd", "arg"), filepath.Join(collector.tempDir, "out.txt"), "desc", true); err == nil {
 		t.Fatalf("expected error for critical missing command")
 	}
 	if got := collector.GetStats().FilesFailed; got != 1 {
@@ -221,7 +221,7 @@ func TestSafeCmdOutputWithPBSAuthDryRunSkipsExecution(t *testing.T) {
 
 	cfg := GetDefaultCollectorConfig()
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, true)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuth(context.Background(), commandSpec("echo", "hi"), output, "desc", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestSafeCmdOutputWithPBSAuthHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := collector.safeCmdOutputWithPBSAuth(ctx, commandSpec("echo", "hi"), filepath.Join(t.TempDir(), "out.txt"), "desc", false); !errors.Is(err, context.Canceled) {
+	if err := collector.safeCmdOutputWithPBSAuth(ctx, commandSpec("echo", "hi"), filepath.Join(collector.tempDir, "out.txt"), "desc", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
@@ -277,7 +277,7 @@ func TestSafeCmdOutputWithPBSAuthNonCriticalCommandNotAvailableIsSkipped(t *test
 
 	cfg := GetDefaultCollectorConfig()
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuth(context.Background(), commandSpec("missing-cmd", "arg"), output, "desc", false); err != nil {
 		t.Fatalf("expected non-critical missing command to be skipped, got %v", err)
 	}
@@ -301,7 +301,7 @@ func TestSafeCmdOutputWithPBSAuthNonCriticalCommandFailureIsSwallowed(t *testing
 
 	cfg := GetDefaultCollectorConfig()
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuth(context.Background(), commandSpec("echo", "hi"), output, "desc", false); err != nil {
 		t.Fatalf("expected non-critical failure to be swallowed, got %v", err)
 	}
@@ -351,7 +351,7 @@ func TestSafeCmdOutputWithPBSAuthCriticalFailureIncrementsFilesFailed(t *testing
 
 	cfg := GetDefaultCollectorConfig()
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuth(context.Background(), commandSpec("echo", "hi"), output, "desc", true); err == nil {
 		t.Fatalf("expected critical error")
 	}
@@ -381,7 +381,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreAppendsDatastoreAndIncludesFingerpr
 	cfg.PBSFingerprint = "finger"
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), commandSpec("echo", "hi"), output, "desc", "ds1", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreNonCriticalFailureReturnsNil(t *tes
 	cfg.PBSPassword = "secret"
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), commandSpec("echo", "hi"), output, "desc", "ds1", false); err != nil {
 		t.Fatalf("expected non-critical failure to be swallowed, got %v", err)
 	}
@@ -427,7 +427,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreReturnsErrorOnEmptyCommand(t *testi
 	cfg.PBSPassword = "secret"
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
 
-	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), CommandSpec{}, filepath.Join(t.TempDir(), "out.txt"), "desc", "ds", false); err == nil {
+	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), CommandSpec{}, filepath.Join(collector.tempDir, "out.txt"), "desc", "ds", false); err == nil {
 		t.Fatalf("expected error for empty command")
 	}
 }
@@ -441,7 +441,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreHonorsContextCancellation(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := collector.safeCmdOutputWithPBSAuthForDatastore(ctx, commandSpec("echo", "hi"), filepath.Join(t.TempDir(), "out.txt"), "desc", "ds", false); !errors.Is(err, context.Canceled) {
+	if err := collector.safeCmdOutputWithPBSAuthForDatastore(ctx, commandSpec("echo", "hi"), filepath.Join(collector.tempDir, "out.txt"), "desc", "ds", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
@@ -455,7 +455,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreNonCriticalCommandNotAvailableIsSki
 	cfg.PBSRepository = "user@host"
 	cfg.PBSPassword = "secret"
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), commandSpec("missing-cmd", "arg"), output, "desc", "ds", false); err != nil {
 		t.Fatalf("expected non-critical missing command to be skipped, got %v", err)
 	}
@@ -473,7 +473,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreCriticalCommandNotAvailableIncremen
 	cfg.PBSRepository = "user@host"
 	cfg.PBSPassword = "secret"
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), commandSpec("missing-cmd", "arg"), output, "desc", "ds", true); err == nil {
 		t.Fatalf("expected critical error for missing command")
 	}
@@ -501,7 +501,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreDryRunSkipsExecution(t *testing.T) 
 	cfg.PBSPassword = "secret"
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, true)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), commandSpec("echo", "hi"), output, "desc", "ds", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreCriticalFailureIncrementsFilesFaile
 	cfg.PBSPassword = "secret"
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
-	output := filepath.Join(t.TempDir(), "out.txt")
+	output := filepath.Join(collector.tempDir, "out.txt")
 	if err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(), commandSpec("echo", "hi"), output, "desc", "ds", true); err == nil {
 		t.Fatalf("expected critical error")
 	}

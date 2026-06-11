@@ -561,7 +561,9 @@ func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *loggin
 		if err != nil {
 			return stagedFiles{}, fmt.Errorf("extract %s: %w", hdr.Name, err)
 		}
-		if _, err := io.Copy(out, tr); err != nil {
+		// Copy exactly the entry's declared size: bounds the write (gosec G110),
+		// and a short read on a truncated/corrupt bundle becomes an explicit error.
+		if _, err := io.CopyN(out, tr, hdr.Size); err != nil {
 			if closeErr := out.Close(); closeErr != nil {
 				return stagedFiles{}, fmt.Errorf("write %s: %w (close: %v)", hdr.Name, err, closeErr)
 			}
