@@ -44,3 +44,34 @@ func TestWriteBackupCollectionMetadata_FailuresEscalateToWarnings(t *testing.T) 
 		t.Fatalf("expected no warnings on a writable tempDir, got %d", got)
 	}
 }
+
+// TestWriteBackupCollectionMetadata_FailureReflectedInReSnapshot locks in the
+// PS-BH-003 secondary fix: re-applying the collector stats after the metadata
+// writes reflects a manifest write failure in FilesFailed (the first snapshot,
+// taken before the writes, does not).
+func TestWriteBackupCollectionMetadata_FailureReflectedInReSnapshot(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	o := &Orchestrator{logger: logger}
+
+	badTemp := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(badTemp, []byte("x"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	collector := backup.NewCollector(logger, backup.GetDefaultCollectorConfig(), badTemp, types.ProxmoxUnknown, false)
+
+	var stats BackupStats
+
+	// First snapshot, taken before the metadata writes, sees no failures.
+	o.applyBackupCollectionStats(&stats, collector.GetStats(), collector)
+	if stats.FilesFailed != 0 {
+		t.Fatalf("pre-write FilesFailed = %d, want 0", stats.FilesFailed)
+	}
+
+	o.writeBackupCollectionMetadata(badTemp, "test-host", &stats, collector)
+
+	// Re-snapshot after the writes: the failed manifest write is now reflected.
+	o.applyBackupCollectionStats(&stats, collector.GetStats(), collector)
+	if stats.FilesFailed == 0 {
+		t.Fatalf("post-write FilesFailed = 0, want >0 (manifest write failure not reflected)")
+	}
+}

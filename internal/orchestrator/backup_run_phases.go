@@ -193,6 +193,14 @@ func (o *Orchestrator) collectBackupData(run *backupRunContext, workspace *backu
 	collStats := collector.GetStats()
 	o.applyBackupCollectionStats(run.stats, collStats, collector)
 	o.writeBackupCollectionMetadata(workspace.tempDir, run.hostname, run.stats, collector)
+
+	// The collection manifest is written through the collector after the first
+	// snapshot, so re-snapshot afterwards: this counts the manifest like every other
+	// report file on success and reflects a manifest write failure in FilesFailed
+	// (PS-BH-003 secondary). The warning that drives the run outcome is emitted by
+	// writeBackupCollectionMetadata itself.
+	collStats = collector.GetStats()
+	o.applyBackupCollectionStats(run.stats, collStats, collector)
 	o.logBackupCollectionSummary(collStats)
 
 	if err := o.validateCollectedBackupSize(run.stats); err != nil {
