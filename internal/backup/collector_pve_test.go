@@ -1069,3 +1069,24 @@ func TestPVECephBricks(t *testing.T) {
 		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVECephConfigSnapshot, brickPVECephRuntime)
 	})
 }
+
+// TestDefaultPVEBackupPatternsCoverLegacyVariants verifies the default PVE backup
+// patterns include legacy vzdump compression variants (.lzo/.xz) so they are not
+// silently skipped during sampling/small-copy (issue #65).
+func TestDefaultPVEBackupPatternsCoverLegacyVariants(t *testing.T) {
+	have := make(map[string]bool, len(defaultPVEBackupPatterns))
+	for _, p := range defaultPVEBackupPatterns {
+		have[p] = true
+	}
+	for _, want := range []string{"*.vma.lzo", "*.vma.xz", "*.tar.lzo", "*.tar.xz"} {
+		if !have[want] {
+			t.Errorf("defaultPVEBackupPatterns missing legacy variant %q", want)
+		}
+	}
+	if !matchPattern("vzdump-qemu-100-2024_01_01.vma.lzo", "*.vma.lzo") {
+		t.Fatal("expected *.vma.lzo to match a legacy lzo backup file")
+	}
+	if !matchPattern("vzdump-lxc-101-2024_01_01.tar.xz", "*.tar.xz") {
+		t.Fatal("expected *.tar.xz to match a legacy xz backup file")
+	}
+}

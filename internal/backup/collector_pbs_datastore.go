@@ -798,11 +798,11 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
-			c.logger.Debug("PBS datastore CLI enumeration failed: %v", err)
+			c.logger.Warning("PBS datastore enumeration via proxmox-backup-manager failed; per-datastore status may be incomplete (raw datastore.cfg is still collected): %v", err)
 		} else {
 			var entries []datastoreEntry
 			if err := json.Unmarshal(output, &entries); err != nil {
-				c.logger.Debug("Failed to parse PBS datastore list JSON: %v", err)
+				c.logger.Warning("Could not parse 'proxmox-backup-manager datastore list' output; per-datastore status may be incomplete (raw datastore.cfg is still collected): %v", err)
 			} else {
 				datastores = make([]pbsDatastore, 0, len(entries)+len(c.config.PBSDatastorePaths))
 				for _, entry := range entries {

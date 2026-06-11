@@ -227,6 +227,9 @@ func TestGetDatastoreListCommandError(t *testing.T) {
 	if datastores[0].Name != "from-error" || datastores[0].Path != "/override/from-error" || datastores[0].Source != pbsDatastoreSourceOverride {
 		t.Fatalf("unexpected override datastore after command failure: %+v", datastores[0])
 	}
+	if got := collector.logger.WarningCount(); got != 1 {
+		t.Fatalf("expected the enumeration failure surfaced as 1 warning (issue #62), got %d", got)
+	}
 }
 
 func TestGetDatastoreListBadJSON(t *testing.T) {
@@ -249,6 +252,9 @@ func TestGetDatastoreListBadJSON(t *testing.T) {
 	}
 	if datastores[0].Name != "from-parse" || datastores[0].Path != "/override/from-parse" || datastores[0].Source != pbsDatastoreSourceOverride {
 		t.Fatalf("unexpected override datastore after parse failure: %+v", datastores[0])
+	}
+	if got := collector.logger.WarningCount(); got != 1 {
+		t.Fatalf("expected the JSON parse failure surfaced as 1 warning (issue #62), got %d", got)
 	}
 }
 

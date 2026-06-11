@@ -53,14 +53,22 @@ type pveStorageScanResult struct {
 	SkipRemaining   bool
 }
 
+// defaultPVEBackupPatterns are the glob patterns used to recognise PVE backup
+// files for sampling/analysis and for the opt-in small/selected copy. It includes
+// the legacy vzdump compression variants (.lzo from lzop, .xz) so backups produced
+// by older or non-default vzdump settings are not silently missed (issue #65).
 var defaultPVEBackupPatterns = []string{
 	"*.vma",
 	"*.vma.gz",
 	"*.vma.lz4",
+	"*.vma.lzo",
+	"*.vma.xz",
 	"*.vma.zst",
 	"*.tar",
 	"*.tar.gz",
 	"*.tar.lz4",
+	"*.tar.lzo",
+	"*.tar.xz",
 	"*.tar.zst",
 	"*.log",
 	"*.notes",
@@ -1280,11 +1288,9 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 
 	includePatterns := c.config.PxarFileIncludePatterns
 	if len(includePatterns) == 0 {
-		includePatterns = []string{
-			"*.vma", "*.vma.gz", "*.vma.lz4", "*.vma.zst",
-			"*.tar", "*.tar.gz", "*.tar.lz4", "*.tar.zst",
-			"*.log", "*.notes",
-		}
+		// Same default set as the analysis scan; keep them unified so legacy
+		// variants stay in sync (issue #65).
+		includePatterns = defaultPVEBackupPatterns
 	}
 	excludePatterns := c.config.PxarFileExcludePatterns
 
