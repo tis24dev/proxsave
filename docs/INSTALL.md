@@ -135,7 +135,7 @@ crontab -l
 ### Requirements
 
 - **Internet connection**: Must reach GitHub releases
-- **Platform**: Linux (amd64 or arm64)
+- **Platform**: Linux (amd64)
 - **Permissions**: Root/sudo access recommended
 
 ### Troubleshooting

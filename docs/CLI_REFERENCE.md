@@ -209,7 +209,7 @@ Some interactive commands support two interface modes:
 **Important notes**:
 - **Internet required**: Must be able to reach GitHub releases
 - **No configuration changes**: `backup.env` is never modified during `--upgrade`
-- **Platform support**: Linux only (amd64, arm64)
+- **Platform support**: Linux only (amd64)
 - **Incompatible flags**: Cannot use with `--install` or `--new-install`
 - **Automatic maintenance**: Symlinks, cron (without touching entries already pointing to proxsave), and permissions updated automatically
 - **Safe replacement**: Old binary is replaced atomically (no backup created)
