@@ -306,6 +306,9 @@ func (w *restoreUIWorkflowRun) applyStagedCategories() error {
 		}},
 		{name: "PVE SDN staged apply", run: func() error { return maybeApplyPVESDNFromStage(w.ctx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun) }},
 		{name: "Access control staged apply", run: w.applyAccessControlFromStage},
+		{name: "System accounts staged apply", run: func() error {
+			return maybeApplyAccountsFromStage(w.ctx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun)
+		}},
 		{name: "Notifications staged apply", run: func() error {
 			return maybeApplyNotificationsFromStage(w.ctx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun)
 		}},
