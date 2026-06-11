@@ -137,6 +137,15 @@ func (c *Collector) CollectSystemInfo(ctx context.Context) error {
 
 	ensureSystemPath()
 	c.logger.Debug("System PATH verified for command execution")
+
+	// Populate the system_files manifest for the duration of system collection so
+	// the backup manifest records which system targets were collected (issue #59).
+	if c.systemManifest == nil {
+		c.systemManifest = make(map[string]ManifestEntry)
+	}
+	c.recordSystemManifest = true
+	defer func() { c.recordSystemManifest = false }()
+
 	state := newCollectionState(c)
 	if err := runRecipe(ctx, newSystemRecipe(), state); err != nil {
 		return err

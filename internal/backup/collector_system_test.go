@@ -2900,3 +2900,58 @@ func newTestCollectorWithDeps(t *testing.T, override CollectorDeps) *Collector {
 	tempDir := t.TempDir()
 	return NewCollectorWithDeps(logger, config, tempDir, types.ProxmoxUnknown, false, deps)
 }
+
+// TestSystemManifestRecordsTargetsNotNestedFiles verifies system collection
+// populates systemManifest at collection-target granularity (issue #59): a direct
+// file copy and a directory copy each yield one entry, a missing source is
+// recorded as not_found, and files nested inside a copied directory are NOT
+// recorded individually.
+func TestSystemManifestRecordsTargetsNotNestedFiles(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "hostname"), []byte("h"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "netdir", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "netdir", "a.conf"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "netdir", "sub", "b.conf"), []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
+	collector.systemManifest = make(map[string]ManifestEntry)
+	collector.recordSystemManifest = true
+
+	ctx := context.Background()
+	if err := collector.safeCopyFile(ctx, filepath.Join(src, "hostname"), filepath.Join(collector.tempDir, "etc/hostname"), "Hostname"); err != nil {
+		t.Fatalf("safeCopyFile hostname: %v", err)
+	}
+	if err := collector.safeCopyFile(ctx, filepath.Join(src, "missing"), filepath.Join(collector.tempDir, "etc/missing"), "Missing"); err != nil {
+		t.Fatalf("safeCopyFile missing: %v", err)
+	}
+	if err := collector.safeCopyDir(ctx, filepath.Join(src, "netdir"), filepath.Join(collector.tempDir, "etc/netdir"), "Net dir"); err != nil {
+		t.Fatalf("safeCopyDir netdir: %v", err)
+	}
+
+	m := collector.systemManifest
+	if got := m["etc/hostname"]; got.Status != StatusCollected {
+		t.Fatalf("etc/hostname: want collected, got %+v", got)
+	}
+	if got := m["etc/missing"]; got.Status != StatusNotFound {
+		t.Fatalf("etc/missing: want not_found, got %+v", got)
+	}
+	if got := m["etc/netdir"]; got.Status != StatusCollected {
+		t.Fatalf("etc/netdir: want collected dir target, got %+v", got)
+	}
+	for k := range m {
+		if strings.HasPrefix(k, "etc/netdir/") {
+			t.Fatalf("nested file %q must not be recorded (only the dir target)", k)
+		}
+	}
+	if len(m) != 3 {
+		t.Fatalf("expected 3 system manifest entries (hostname, missing, netdir), got %d: %+v", len(m), m)
+	}
+}

@@ -61,6 +61,12 @@ type Collector struct {
 	pbsManifest    map[string]ManifestEntry
 	pveManifest    map[string]ManifestEntry
 	systemManifest map[string]ManifestEntry
+	// recordSystemManifest gates population of systemManifest to the system
+	// collection phase; systemManifestDepth>0 means a directory walk is in
+	// progress, so only the top-level target is recorded, not every nested file
+	// (issue #59).
+	recordSystemManifest bool
+	systemManifestDepth  int
 }
 
 var osSymlink = os.Symlink
@@ -753,6 +759,24 @@ func (c *Collector) applySymlinkOwnership(dest string, info os.FileInfo) {
 	}
 }
 
+// recordSystemManifestEntry records a system collection target into the manifest
+// (issue #59). It is a no-op outside the system collection phase and inside
+// directory walks, so the manifest lists collection targets rather than every
+// nested file (no bloat). pveManifestKey computes a tempDir-relative key.
+func (c *Collector) recordSystemManifestEntry(dest string, entry ManifestEntry) {
+	if !c.recordSystemManifest || c.systemManifestDepth != 0 || c.systemManifest == nil {
+		return
+	}
+	c.systemManifest[pveManifestKey(c.tempDir, dest)] = entry
+}
+
+func manifestEntryFromResult(err error, size int64) ManifestEntry {
+	if err != nil {
+		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
+	}
+	return ManifestEntry{Status: StatusCollected, Size: size}
+}
+
 func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -761,30 +785,42 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 	c.logger.Debug("Collecting %s: %s -> %s", description, src, dest)
 
 	info, found, err := c.statCopySource(src, description)
-	if err != nil || !found {
+	if err != nil {
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: err.Error()})
 		return err
+	}
+	if !found {
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusNotFound})
+		return nil
 	}
 
 	if c.shouldSkipCopy(src, dest) {
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusSkipped})
 		return nil
 	}
 
 	if c.dryRun {
 		c.logger.Debug("[DRY RUN] Would copy file: %s -> %s", src, dest)
 		c.incFilesProcessed()
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
 		return nil
 	}
 
 	if info.Mode()&os.ModeSymlink != 0 {
-		return c.copySymlinkFile(src, dest, info)
+		err := c.copySymlinkFile(src, dest, info)
+		c.recordSystemManifestEntry(dest, manifestEntryFromResult(err, 0))
+		return err
 	}
 
 	if !info.Mode().IsRegular() {
 		c.logger.Debug("Skipping non-regular file: %s", src)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusSkipped})
 		return nil
 	}
 
-	return c.copyRegularFile(src, dest, description, info)
+	err = c.copyRegularFile(src, dest, description, info)
+	c.recordSystemManifestEntry(dest, manifestEntryFromResult(err, info.Size()))
+	return err
 }
 
 func (c *Collector) statCopySource(src, description string) (os.FileInfo, bool, error) {
@@ -909,18 +945,27 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 	if c.shouldExclude(src) || c.shouldExclude(dest) {
 		c.logger.Debug("Skipping directory %s due to exclusion pattern", src)
 		c.incFilesSkipped()
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusSkipped})
 		return nil
 	}
 
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		c.logger.Debug("%s not found: %s (skipping)", description, src)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusNotFound})
 		return nil
 	}
 
 	if c.dryRun {
 		c.logger.Debug("[DRY RUN] Would copy directory: %s -> %s", src, dest)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
 		return nil
 	}
+
+	// Record the directory as a single collection target, then suppress per-file
+	// recording during the walk so the manifest stays at target granularity (#59).
+	c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
+	c.systemManifestDepth++
+	defer func() { c.systemManifestDepth-- }()
 
 	// Ensure destination exists
 	if err := c.ensureDir(dest); err != nil {
