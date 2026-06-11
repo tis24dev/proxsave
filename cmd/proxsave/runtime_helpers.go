@@ -661,7 +661,17 @@ func installEntrypointSymlink(execPath, dest string, bootstrap *logging.Bootstra
 // the original is never lost (INSTALL-SYMLINK-001).
 func backupRealFile(path string) (string, error) {
 	backup := path + ".bak"
-	src, err := os.Open(path)
+	// Resolve the source and its ".bak" sibling through os.Root on their shared
+	// directory so the variable path provably cannot escape it (gosec G304
+	// containment); the entrypoint path is admin-controlled, but the structural
+	// fix is preferred over a #nosec.
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+
+	src, err := root.Open(filepath.Base(path))
 	if err != nil {
 		return "", err
 	}
@@ -672,7 +682,7 @@ func backupRealFile(path string) (string, error) {
 		return "", err
 	}
 
-	dst, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	dst, err := root.OpenFile(filepath.Base(backup), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
 	if err != nil {
 		return "", err
 	}

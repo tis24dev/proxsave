@@ -715,8 +715,17 @@ func drainTarWriterAfterCompressorStartFailure(pw *io.PipeWriter, errChan <-chan
 // containing directory restricts world access. Centralised here so the single
 // deliberate permission decision is documented in one place.
 func createBackupOutputFile(outputPath string) (*os.File, error) {
+	// Contain the variable output path within its directory via os.Root so it
+	// cannot escape (gosec G304); the path is the admin-configured backup
+	// destination, but the structural fix is preferred over a #nosec. The returned
+	// file is an independent descriptor and stays valid after the Root is closed.
+	root, err := os.OpenRoot(filepath.Dir(outputPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
 	// #nosec G302 -- 0o640 group-read is the deliberate backup-file convention (defaultOptimizedFilePerm); operators read backups and the parent dir gates world access.
-	return os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultOptimizedFilePerm)
+	return root.OpenFile(filepath.Base(outputPath), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultOptimizedFilePerm)
 }
 
 func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputPath string, cmd *exec.Cmd, algo string) (err error) {
