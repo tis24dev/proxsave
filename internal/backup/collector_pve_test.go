@@ -754,6 +754,10 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 	mustWrite(filepath.Join(pveRoot, "lxc", "101.conf"), "ct")
 	mustWrite(filepath.Join(pveRoot, "firewall", "cluster.fw"), "fw")
 	mustWrite(filepath.Join(pveRoot, "nodes", "node1", "host.fw"), "hostfw")
+	mustWrite(filepath.Join(pveRoot, "priv", "shadow.cfg"), "hash")
+	mustWrite(filepath.Join(pveRoot, "priv", "token.cfg"), "token")
+	mustWrite(filepath.Join(pveRoot, "priv", "tfa.cfg"), "tfa")
+	mustWrite(filepath.Join(pveRoot, "priv", "notifications.cfg"), "notif")
 
 	clusterPath := filepath.Join(t.TempDir(), "pve-cluster")
 	mustWrite(filepath.Join(clusterPath, "config.db"), "db")
@@ -787,6 +791,9 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 		filepath.Join("lxc", "101.conf"),
 		filepath.Join("firewall", "cluster.fw"),
 		filepath.Join("nodes", "node1", "host.fw"),
+		filepath.Join("priv", "shadow.cfg"),
+		filepath.Join("priv", "token.cfg"),
+		filepath.Join("priv", "tfa.cfg"),
 	} {
 		_, err := os.Stat(filepath.Join(destPVE, excluded))
 		if err == nil {
@@ -797,9 +804,91 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 		}
 	}
 
+	// priv/notifications.cfg belongs to the notifications domain, NOT access control:
+	// the BACKUP_PVE_ACL toggle must not exclude it (proves the exclusion is file-scoped,
+	// not a priv/** subtree wipe).
+	if _, err := os.Stat(filepath.Join(destPVE, "priv", "notifications.cfg")); err != nil {
+		t.Fatalf("expected priv/notifications.cfg retained (not governed by BACKUP_PVE_ACL): %v", err)
+	}
+
 	destDB := collector.targetPathFor(filepath.Join(clusterPath, "config.db"))
 	if _, err := os.Stat(destDB); err == nil {
 		t.Fatalf("expected config.db excluded when BACKUP_CLUSTER_CONFIG=false")
+	}
+}
+
+// TestPVEConfigSnapshotKeepsPrivWhenACLEnabled guards against over-exclusion:
+// with BACKUP_PVE_ACL=true the priv credential files must still be collected.
+func TestPVEConfigSnapshotKeepsPrivWhenACLEnabled(t *testing.T) {
+	collector := newPVECollector(t)
+	pveRoot := collector.config.PVEConfigPath
+
+	write := func(rel, contents string) {
+		t.Helper()
+		path := filepath.Join(pveRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	write("user.cfg", "user")
+	write(filepath.Join("priv", "shadow.cfg"), "hash")
+	write(filepath.Join("priv", "token.cfg"), "token")
+	write(filepath.Join("priv", "tfa.cfg"), "tfa")
+
+	collector.config.BackupPVEACL = true
+
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil,
+		brickPVEConfigSnapshot,
+	)
+
+	destPVE := collector.targetPathFor(pveRoot)
+	for _, kept := range []string{
+		"user.cfg",
+		filepath.Join("priv", "shadow.cfg"),
+		filepath.Join("priv", "token.cfg"),
+		filepath.Join("priv", "tfa.cfg"),
+	} {
+		if _, err := os.Stat(filepath.Join(destPVE, kept)); err != nil {
+			t.Fatalf("expected %s collected when BACKUP_PVE_ACL=true, got %v", kept, err)
+		}
+	}
+}
+
+func TestCollectPVEConfigsPopulatesManifestDisabledForPrivWhenACLOff(t *testing.T) {
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("{}"), nil
+		},
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+	})
+
+	pveConfigPath := collector.config.PVEConfigPath
+	if err := os.MkdirAll(filepath.Join(pveConfigPath, "priv"), 0o700); err != nil {
+		t.Fatalf("mkdir priv: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pveConfigPath, "priv", "shadow.cfg"), []byte("hash"), 0o600); err != nil {
+		t.Fatalf("write shadow.cfg: %v", err)
+	}
+	collector.config.BackupPVEACL = false
+
+	if err := collector.CollectPVEConfigs(context.Background()); err != nil {
+		t.Fatalf("CollectPVEConfigs failed: %v", err)
+	}
+
+	src := filepath.Join(collector.effectivePVEConfigPath(), "priv", "shadow.cfg")
+	dest := collector.targetPathFor(src)
+	key := pveManifestKey(collector.tempDir, dest)
+	entry, ok := collector.pveManifest[key]
+	if !ok {
+		t.Fatalf("expected manifest entry for %s (key=%s)", src, key)
+	}
+	if entry.Status != StatusDisabled {
+		t.Fatalf("expected %s status, got %s", StatusDisabled, entry.Status)
 	}
 }
 

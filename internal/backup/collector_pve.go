@@ -66,6 +66,21 @@ var defaultPVEBackupPatterns = []string{
 	"*.notes",
 }
 
+// pveACLPrivExcludePatterns are the access-control credential files under
+// /etc/pve/priv/ that must be dropped from the flat /etc/pve snapshot when
+// BACKUP_PVE_ACL is disabled. They mirror the access-control material listed by
+// the pve_access_control restore category (internal/orchestrator/categories.go)
+// and the pve*CfgPath constants in internal/orchestrator/restore_access_control.go
+// (kept in sync manually: internal/backup cannot import internal/orchestrator).
+// The "**/priv/<file>.cfg" form anchors on the priv parent so it matches the
+// path candidate "etc/pve/priv/shadow.cfg" (see matchesGlob/globToRegex) without
+// touching priv/notifications.cfg (pve_notifications domain), authkey.key or acme/.
+var pveACLPrivExcludePatterns = []string{
+	"**/priv/shadow.cfg",
+	"**/priv/token.cfg",
+	"**/priv/tfa.cfg",
+}
+
 var errStopWalk = errors.New("stop walk")
 
 // CollectPVEConfigs collects Proxmox VE specific configurations
@@ -209,6 +224,22 @@ func (c *Collector) populatePVEManifest() {
 		countNotFound:       false,
 		suppressNotFoundLog: true,
 	})
+	// Access-control credential material under priv/ (gated by the same toggle).
+	// These are absent on a fresh install with no custom users/tokens/2FA, so a
+	// missing file is not an error.
+	for _, privFile := range []struct{ name, description string }{
+		{"shadow.cfg", "User password hashes"},
+		{"token.cfg", "API token secrets"},
+		{"tfa.cfg", "TFA secrets"},
+	} {
+		record(filepath.Join(pveConfigPath, "priv", privFile.name), c.config.BackupPVEACL, manifestLogOpts{
+			description:         privFile.description,
+			disableHint:         "BACKUP_PVE_ACL",
+			log:                 true,
+			countNotFound:       false,
+			suppressNotFoundLog: true,
+		})
+	}
 
 	// Scheduled jobs.
 	record(filepath.Join(pveConfigPath, "jobs.cfg"), c.config.BackupPVEJobs, manifestLogOpts{
@@ -321,6 +352,10 @@ func (c *Collector) collectPVEConfigSnapshot(ctx context.Context) error {
 	}
 	if !c.config.BackupPVEACL {
 		extraExclude = append(extraExclude, "user.cfg", "domains.cfg")
+		// ACLs/users are not just user.cfg/domains.cfg: the credential material
+		// lives under priv/ (password hashes, API token secrets, TFA secrets).
+		// Exclude it too so the toggle removes the whole access-control domain.
+		extraExclude = append(extraExclude, pveACLPrivExcludePatterns...)
 	}
 	if !c.config.BackupPVEJobs {
 		extraExclude = append(extraExclude, "jobs.cfg", "vzdump.cron")
@@ -343,6 +378,15 @@ func (c *Collector) collectPVEConfigSnapshot(ctx context.Context) error {
 func (c *Collector) collectPVEClusterSnapshot(ctx context.Context, clustered bool) error {
 	pveConfigPath := c.effectivePVEConfigPath()
 	clusterPath := c.effectivePVEClusterPath()
+
+	// /etc/pve is a pmxcfs mount backed by config.db: the cluster database still
+	// contains the PVE access-control secrets even though BACKUP_PVE_ACL=false
+	// excludes the flat priv files. Warn so the operator is not left with a false
+	// sense of exclusion; the only way to drop them entirely is to also disable
+	// cluster backup.
+	if c.config.BackupClusterConfig && !c.config.BackupPVEACL {
+		c.logger.Warning("PVE access control: BACKUP_PVE_ACL=false excludes /etc/pve/priv/{shadow,token,tfa}.cfg, but the same secrets remain inside the cluster database config.db; set BACKUP_CLUSTER_CONFIG=false to exclude them entirely")
+	}
 
 	if c.config.BackupClusterConfig {
 		corosyncPath := c.config.CorosyncConfigPath
