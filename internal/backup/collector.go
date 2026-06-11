@@ -67,6 +67,9 @@ type Collector struct {
 	// (issue #59).
 	recordSystemManifest bool
 	systemManifestDepth  int
+	// collectingCustomPaths is set while copying operator-supplied CUSTOM_BACKUP_PATHS,
+	// during which the source walk prunes the staging workspace to avoid self-copy (#56).
+	collectingCustomPaths bool
 }
 
 var osSymlink = os.Symlink
@@ -784,6 +787,11 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 
 	c.logger.Debug("Collecting %s: %s -> %s", description, src, dest)
 
+	if c.isWithinStagingDir(src) {
+		c.logger.Debug("Skipping file %s: inside the staging workspace (#56)", src)
+		return nil
+	}
+
 	info, found, err := c.statCopySource(src, description)
 	if err != nil {
 		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: err.Error()})
@@ -935,12 +943,30 @@ func copyRegularFileContents(srcFile io.Reader, src, dest string) (int64, error)
 	return written, nil
 }
 
+// isWithinStagingDir reports whether path is the staging tempDir or lives under
+// it. The source walk must never descend into the destination staging tree, or a
+// broad CUSTOM_BACKUP_PATHS entry (e.g. "/", "/tmp", "/tmp/proxsave") would copy
+// the growing archive into itself, recursing and ballooning the backup (#56).
+func (c *Collector) isWithinStagingDir(path string) bool {
+	if !c.collectingCustomPaths || c.tempDir == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	root := filepath.Clean(c.tempDir)
+	return clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator))
+}
+
 func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	c.logger.Debug("Collecting directory %s: %s -> %s", description, src, dest)
+
+	if c.isWithinStagingDir(src) {
+		c.logger.Debug("Skipping directory %s: inside the staging workspace (would copy the archive into itself)", src)
+		return nil
+	}
 
 	if c.shouldExclude(src) || c.shouldExclude(dest) {
 		c.logger.Debug("Skipping directory %s due to exclusion pattern", src)
@@ -980,6 +1006,16 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 
 		if err != nil {
 			return err
+		}
+
+		// Never descend into the staging workspace: a broad source (e.g. a custom
+		// path of "/" or "/tmp") would otherwise copy the in-progress archive into
+		// itself (#56).
+		if c.isWithinStagingDir(path) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
 		// Calculate relative path and destination path for archive matching.

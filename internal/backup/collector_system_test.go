@@ -2955,3 +2955,37 @@ func TestSystemManifestRecordsTargetsNotNestedFiles(t *testing.T) {
 		t.Fatalf("expected 3 system manifest entries (hostname, missing, netdir), got %d: %+v", len(m), m)
 	}
 }
+
+// TestSafeCopyDirSkipsStagingWorkspace verifies a broad source does not copy the
+// staging workspace into itself (issue #56): the staging subtree under the source
+// must be pruned while the real content is still collected.
+func TestSafeCopyDirSkipsStagingWorkspace(t *testing.T) {
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
+
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "real.conf"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The staging workspace lives under the source (the self-recursion case).
+	staging := filepath.Join(srcDir, "proxsave-staging")
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "ARCHIVE_DATA"), []byte("must not be copied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	collector.tempDir = staging
+	collector.collectingCustomPaths = true // the prune is scoped to custom-path collection
+
+	dest := filepath.Join(staging, "etc", "custom")
+	if err := collector.safeCopyDir(context.Background(), srcDir, dest, "custom"); err != nil {
+		t.Fatalf("safeCopyDir: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, "real.conf")); err != nil {
+		t.Fatalf("expected real.conf to be collected: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "proxsave-staging")); !os.IsNotExist(err) {
+		t.Fatalf("staging workspace must not be copied into itself (#56), stat err=%v", err)
+	}
+}

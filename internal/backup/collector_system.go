@@ -1373,6 +1373,13 @@ func (c *Collector) collectConfigFile(ctx context.Context) error {
 
 func (c *Collector) collectCustomPaths(ctx context.Context) error {
 	c.logger.Debug("Collecting custom paths defined in configuration")
+	// Operator-supplied paths may be broad (e.g. "/", "/tmp", "/tmp/proxsave") and
+	// thus contain the staging workspace; prune it from the source walk so the
+	// in-progress archive is never copied into itself (#56). Other collection
+	// sources are fixed system paths that never contain tempDir, so the prune is
+	// scoped to this phase only.
+	c.collectingCustomPaths = true
+	defer func() { c.collectingCustomPaths = false }()
 	seen := make(map[string]struct{})
 
 	for _, rawPath := range c.config.CustomBackupPaths {
