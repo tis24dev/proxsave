@@ -1030,9 +1030,8 @@ func (a *Archiver) verifyXZArchive(ctx context.Context, archivePath string) erro
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar listing failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar listing failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: XZ compression and tar structure are valid")
@@ -1059,9 +1058,8 @@ func (a *Archiver) verifyZstdArchive(ctx context.Context, archivePath string) er
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar listing failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar listing failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: Zstd compression and tar structure are valid")
@@ -1077,9 +1075,8 @@ func (a *Archiver) verifyGzipArchive(ctx context.Context, archivePath string) er
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar/gzip verification failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar/gzip verification failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: Gzip compression and tar structure are valid")
@@ -1095,9 +1092,8 @@ func (a *Archiver) verifyBzip2Archive(ctx context.Context, archivePath string) e
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar/bzip2 verification failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar/bzip2 verification failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: Bzip2 compression and tar structure are valid")
@@ -1113,9 +1109,8 @@ func (a *Archiver) verifyLzmaArchive(ctx context.Context, archivePath string) er
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar/lzma verification failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar/lzma verification failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: LZMA compression and tar structure are valid")
@@ -1131,12 +1126,54 @@ func (a *Archiver) verifyTarArchive(ctx context.Context, archivePath string) err
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = nil // Discard output
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar verification failed: %w (output: %s)", err, string(output))
+	if err := runTarListVerification(cmd); err != nil {
+		return fmt.Errorf("tar verification failed: %w", err)
 	}
 
 	a.logger.Debug("Archive verification passed: Tar structure is valid")
+	return nil
+}
+
+// verifyStderrCap bounds the stderr captured from a tar-listing verifier so a
+// pathological archive cannot make the error message itself large.
+const verifyStderrCap = 8 << 10 // 8 KiB is ample for a tar error message
+
+// cappedBuffer collects at most cap bytes (discarding the rest) while always
+// reporting a full write, so wiring it as a command's Stderr never blocks or
+// short-writes the process.
+type cappedBuffer struct {
+	buf []byte
+	cap int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if remaining := c.cap - len(c.buf); remaining > 0 {
+		if len(p) > remaining {
+			c.buf = append(c.buf, p[:remaining]...)
+		} else {
+			c.buf = append(c.buf, p...)
+		}
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string { return string(c.buf) }
+
+// runTarListVerification runs a `tar -t...` listing command used only to verify
+// archive integrity. The listing prints one line per entry and can be enormous,
+// so its stdout is discarded instead of buffered in memory (the previous
+// CombinedOutput kept the whole listing despite the "discard" intent). Only a
+// bounded amount of stderr is captured so a failure stays actionable.
+func runTarListVerification(cmd *exec.Cmd) error {
+	cmd.Stdout = io.Discard
+	stderr := &cappedBuffer{cap: verifyStderrCap}
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("%w (stderr: %s)", err, msg)
+		}
+		return err
+	}
 	return nil
 }
 
