@@ -207,14 +207,8 @@ make build
 ### Cross-Compilation
 
 ```bash
-# Linux AMD64 (default)
+# Linux AMD64 (the only published target)
 GOOS=linux GOARCH=amd64 go build -o build/proxsave-linux-amd64 ./cmd/proxsave
-
-# Linux ARM64 (Raspberry Pi, ARM servers)
-GOOS=linux GOARCH=arm64 go build -o build/proxsave-linux-arm64 ./cmd/proxsave
-
-# Linux ARM32 (older Raspberry Pi)
-GOOS=linux GOARCH=arm go build -o build/proxsave-linux-arm ./cmd/proxsave
 ```
 
 ---
@@ -560,9 +554,6 @@ make run
 
 # Clean build artifacts
 make clean
-
-# Cross-compile for different architectures
-GOOS=linux GOARCH=arm64 make build
 ```
 
 ### Testing & Quality
