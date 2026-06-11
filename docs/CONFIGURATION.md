@@ -1059,7 +1059,7 @@ BACKUP_PBS_NOTIFICATIONS=true      # notifications.cfg (targets/matchers/endpoin
 BACKUP_PBS_NOTIFICATIONS_PRIV=true # notifications-priv.cfg (secrets/credentials for endpoints)
 
 # User and permissions
-BACKUP_USER_CONFIGS=true           # PBS users and tokens
+BACKUP_USER_CONFIGS=true           # PBS users/ACLs/realms + credentials (token.cfg, shadow.json, token.shadow, tfa.json)
 
 # Remote configurations
 BACKUP_REMOTE_CONFIGS=true         # Remote PBS servers

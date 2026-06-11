@@ -89,6 +89,20 @@ func (c *Collector) CollectPBSConfigs(ctx context.Context) error {
 	return nil
 }
 
+// pbsUserConfigSecretExcludes are the PBS access-control credential files dropped
+// from the /etc/proxmox-backup snapshot when BACKUP_USER_CONFIGS is disabled, in
+// addition to user.cfg/acl.cfg/domains.cfg. They mirror the secret files listed by
+// the pbs_access_control restore category (internal/orchestrator/categories.go) and
+// the pbs*Path constants in internal/orchestrator/restore_access_control.go (kept in
+// sync manually: internal/backup cannot import internal/orchestrator). These are
+// top-level files in /etc/proxmox-backup, so plain basename patterns match them.
+var pbsUserConfigSecretExcludes = []string{
+	"token.cfg",
+	"shadow.json",
+	"token.shadow",
+	"tfa.json",
+}
+
 func (c *Collector) collectPBSConfigSnapshot(ctx context.Context, root string) error {
 	c.logger.Debug("Collecting PBS directories (source=%s, dest=%s)",
 		root, filepath.Join(c.tempDir, "etc/proxmox-backup"))
@@ -122,6 +136,10 @@ func (c *Collector) collectPBSConfigSnapshot(ctx context.Context, root string) e
 	}
 	if !c.config.BackupUserConfigs {
 		extraExclude = append(extraExclude, "user.cfg", "acl.cfg", "domains.cfg")
+		// Users/ACLs are not the whole story: token secrets, password hashes and TFA
+		// secrets live alongside in /etc/proxmox-backup. Exclude them too so the toggle
+		// removes the whole access-control domain.
+		extraExclude = append(extraExclude, pbsUserConfigSecretExcludes...)
 	}
 	if !c.config.BackupRemoteConfigs {
 		extraExclude = append(extraExclude, "remote.cfg")

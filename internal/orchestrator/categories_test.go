@@ -34,3 +34,35 @@ func TestPVEAccessControlCategoryMatchesRestoreConstants(t *testing.T) {
 		t.Errorf("pve_access_control has %d paths, want %d (%v); a new access-control file must also be added to the backup-side exclusion", len(cat.Paths), len(want), cat.Paths)
 	}
 }
+
+// TestPBSAccessControlCategoryContainsRestoreConstants locks the PBS access-control
+// credential files. The same set is duplicated as exclusion patterns in
+// internal/backup/collector_pbs.go (pbsUserConfigSecretExcludes) because the backup
+// package cannot import this one. Subset check (the category also carries
+// informational var/lib/proxsave-info JSON paths).
+func TestPBSAccessControlCategoryContainsRestoreConstants(t *testing.T) {
+	cat := GetCategoryByID("pbs_access_control", GetAllCategories())
+	if cat == nil {
+		t.Fatal("pbs_access_control category not found")
+	}
+
+	want := []string{
+		"." + pbsUserCfgPath,
+		"." + pbsDomainsCfgPath,
+		"." + pbsACLCfgPath,
+		"." + pbsTokenCfgPath,
+		"." + pbsShadowJSONPath,
+		"." + pbsTokenShadowPath,
+		"." + pbsTFAJSONPath,
+	}
+
+	have := make(map[string]bool, len(cat.Paths))
+	for _, p := range cat.Paths {
+		have[p] = true
+	}
+	for _, w := range want {
+		if !have[w] {
+			t.Errorf("pbs_access_control category missing %q; keep it in sync with restore_access_control.go constants and internal/backup/collector_pbs.go pbsUserConfigSecretExcludes", w)
+		}
+	}
+}

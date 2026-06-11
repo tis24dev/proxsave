@@ -926,3 +926,72 @@ func (fakeFileInfo) Mode() os.FileMode  { return 0 }
 func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (fakeFileInfo) IsDir() bool        { return false }
 func (fakeFileInfo) Sys() interface{}   { return nil }
+
+func TestCollectPBSConfigSnapshotExcludesUserConfigSecretsWhenDisabled(t *testing.T) {
+	pbsRoot := t.TempDir()
+	for _, f := range []string{
+		"user.cfg", "acl.cfg", "domains.cfg",
+		"token.cfg", "shadow.json", "token.shadow", "tfa.json",
+		"datastore.cfg", "notifications-priv.cfg",
+	} {
+		if err := os.WriteFile(filepath.Join(pbsRoot, f), []byte("x"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = pbsRoot
+	cfg.BackupUserConfigs = false
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
+
+	if err := collector.collectPBSConfigSnapshot(context.Background(), pbsRoot); err != nil {
+		t.Fatalf("collectPBSConfigSnapshot failed: %v", err)
+	}
+
+	dest := filepath.Join(collector.tempDir, "etc/proxmox-backup")
+	for _, excluded := range []string{
+		"user.cfg", "acl.cfg", "domains.cfg",
+		"token.cfg", "shadow.json", "token.shadow", "tfa.json",
+	} {
+		if _, err := os.Stat(filepath.Join(dest, excluded)); err == nil {
+			t.Fatalf("expected %s excluded when BACKUP_USER_CONFIGS=false", excluded)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat %s: %v", excluded, err)
+		}
+	}
+
+	// Files governed by other toggles must remain: proves the exclusion is scoped to
+	// the access-control domain, not a blanket wipe.
+	for _, kept := range []string{"datastore.cfg", "notifications-priv.cfg"} {
+		if _, err := os.Stat(filepath.Join(dest, kept)); err != nil {
+			t.Fatalf("expected %s retained (not governed by BACKUP_USER_CONFIGS): %v", kept, err)
+		}
+	}
+}
+
+func TestCollectPBSConfigSnapshotKeepsUserConfigSecretsWhenEnabled(t *testing.T) {
+	pbsRoot := t.TempDir()
+	for _, f := range []string{"user.cfg", "token.cfg", "shadow.json", "token.shadow", "tfa.json"} {
+		if err := os.WriteFile(filepath.Join(pbsRoot, f), []byte("x"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = pbsRoot
+	cfg.BackupUserConfigs = true
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
+
+	if err := collector.collectPBSConfigSnapshot(context.Background(), pbsRoot); err != nil {
+		t.Fatalf("collectPBSConfigSnapshot failed: %v", err)
+	}
+
+	dest := filepath.Join(collector.tempDir, "etc/proxmox-backup")
+	for _, kept := range []string{"user.cfg", "token.cfg", "shadow.json", "token.shadow", "tfa.json"} {
+		if _, err := os.Stat(filepath.Join(dest, kept)); err != nil {
+			t.Fatalf("expected %s collected when BACKUP_USER_CONFIGS=true, got %v", kept, err)
+		}
+	}
+}
