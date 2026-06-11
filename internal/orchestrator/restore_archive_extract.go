@@ -4,11 +4,14 @@ package orchestrator
 import (
 	"archive/tar"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -67,6 +70,11 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 
 	extractionLog.writeSummary(stats)
 	logRestoreExtractionSummary(opts, stats)
+
+	// Turn deduplicated symlinks back into regular files using the dedup manifest,
+	// so selective restore never leaves a dangling link and full restore preserves
+	// the original file type (issue #70).
+	materializeDedupSymlinks(opts.destRoot, opts.logger)
 
 	// When the caller cannot safely act on a partial result (the staged restore
 	// path, which would otherwise apply an incomplete tree of PVE/PBS/network/
@@ -167,7 +175,17 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 	return stats, nil
 }
 
+func isDedupManifestEntry(name string) bool {
+	clean := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(name)), "/")
+	return clean == backup.DedupManifestRelPath
+}
+
 func skipRestoreArchiveEntry(header *tar.Header, opts restoreArchiveOptions, selectiveMode bool, extractionLog *restoreExtractionLog, stats *restoreExtractionStats) bool {
+	// The dedup manifest is always extracted, regardless of selected categories, so
+	// the post-extraction pass can materialize deduplicated symlinks (issue #70).
+	if isDedupManifestEntry(header.Name) {
+		return false
+	}
 	if opts.skipFn != nil && opts.skipFn(header.Name) {
 		stats.filesSkipped++
 		extractionLog.recordSkipped(header.Name, "skipped by restore policy")
@@ -257,5 +275,82 @@ func logRestoreExtractionSummary(opts restoreArchiveOptions, stats restoreExtrac
 
 	if opts.logFilePath != "" {
 		opts.logger.Info("Detailed restore log: %s", opts.logFilePath)
+	}
+}
+
+// materializeDedupSymlinks reads the dedup manifest written at backup time and
+// replaces each recorded symlink with a regular copy of its target. This undoes
+// the backup-side deduplication so a restored file is a real file (not a symlink)
+// and a selectively-restored file is never left as a dangling link (issue #70).
+// It is a no-op when no manifest is present (deduplication was off or found no
+// duplicates).
+func materializeDedupSymlinks(destRoot string, logger *logging.Logger) {
+	manifestTarget, cleanDestRoot, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, backup.DedupManifestRelPath)
+	if err != nil {
+		return
+	}
+	data, err := restoreFS.ReadFile(manifestTarget)
+	if err != nil {
+		return // no dedup manifest: nothing to materialize
+	}
+	var entries []backup.DedupManifestEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		logger.Warning("Dedup manifest unreadable; skipping symlink materialization: %v", err)
+		return
+	}
+
+	var materialized, dangling int
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Path) == "" {
+			continue
+		}
+		target, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, entry.Path)
+		if err != nil {
+			continue
+		}
+		info, err := restoreFS.Lstat(target)
+		if err != nil {
+			continue // not extracted: its category was not selected
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue // already a regular file
+		}
+		linkTarget, err := restoreFS.Readlink(target)
+		if err != nil {
+			continue
+		}
+		resolved, err := resolvePathRelativeToBaseWithinRootFS(restoreFS, cleanDestRoot, filepath.Dir(target), linkTarget)
+		if err != nil {
+			continue
+		}
+		content, err := restoreFS.ReadFile(resolved)
+		if err != nil {
+			// Dangling: the dedup target's file was not restored (its category was
+			// not selected). Remove the broken link rather than leaving it.
+			_ = restoreFS.Remove(target)
+			logger.Warning("Dedup: %s could not be restored as a regular file (its content lives in %s, whose category was not selected); removed dangling link", entry.Path, linkTarget)
+			dangling++
+			continue
+		}
+		mode := os.FileMode(entry.Mode).Perm()
+		if mode == 0 {
+			mode = 0o600
+		}
+		if err := restoreFS.Remove(target); err != nil {
+			logger.Warning("Dedup: failed to replace symlink %s: %v", entry.Path, err)
+			continue
+		}
+		if err := restoreFS.WriteFile(target, content, mode); err != nil {
+			logger.Warning("Dedup: failed to materialize %s: %v", entry.Path, err)
+			continue
+		}
+		materialized++
+	}
+
+	// Drop the manifest so it does not linger on the restored system.
+	_ = restoreFS.Remove(manifestTarget)
+
+	if materialized > 0 || dangling > 0 {
+		logger.Info("Dedup: materialized %d deduplicated file(s) as regular files, removed %d dangling link(s)", materialized, dangling)
 	}
 }

@@ -19,6 +19,19 @@ const (
 	defaultOptimizedFilePerm     = 0o640
 )
 
+// DedupManifestRelPath is where deduplicateFiles records the symlinks it created,
+// relative to the staging/archive root. The restore reads it (always extracted)
+// to materialize those symlinks back into regular files, so selective restore
+// never produces dangling links and full restore preserves file-type fidelity
+// (issue #70).
+const DedupManifestRelPath = "var/lib/proxsave-info/dedup_manifest.json"
+
+// DedupManifestEntry records one file that deduplication replaced with a symlink.
+type DedupManifestEntry struct {
+	Path string `json:"path"` // path relative to the archive root, slash-separated
+	Mode uint32 `json:"mode"` // original regular-file permission bits
+}
+
 // OptimizationConfig controls optional preprocessing steps executed before archiving.
 type OptimizationConfig struct {
 	EnableDeduplication       bool
@@ -66,6 +79,7 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 
 	hashes := make(map[string]string)
 	var duplicates int
+	var manifest []DedupManifestEntry
 
 	rootFS, err := os.OpenRoot(root)
 	if err != nil {
@@ -115,6 +129,10 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 				return nil
 			}
 			duplicates++
+			manifest = append(manifest, DedupManifestEntry{
+				Path: filepath.ToSlash(rel),
+				Mode: uint32(info.Mode().Perm()),
+			})
 			logger.Debug("Deduplicated %s → %s", path, existing)
 		} else {
 			hashes[hash] = path
@@ -126,8 +144,32 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 		return fmt.Errorf("deduplication walk failed: %w", err)
 	}
 
+	if err := writeDedupManifest(root, manifest); err != nil {
+		// Best-effort: without the manifest the restore cannot materialize these
+		// symlinks, so warn loudly rather than silently shipping unrecoverable links.
+		logger.Warning("Failed to write dedup manifest (deduplicated files may not restore faithfully): %v", err)
+	}
+
 	logger.Info("Deduplication completed: %d duplicates replaced", duplicates)
 	return nil
+}
+
+// writeDedupManifest records the deduplicated symlinks so the restore can
+// materialize them back into regular files (issue #70). It is a no-op when no
+// files were deduplicated.
+func writeDedupManifest(root string, entries []DedupManifestEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(root, filepath.FromSlash(DedupManifestRelPath))
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(dest, data, 0o600)
 }
 
 func shouldSkipDedupPath(rel string) bool {
@@ -158,14 +200,24 @@ func hashFile(root *os.Root, name string) (sum string, err error) {
 }
 
 func replaceWithSymlink(target, duplicate string) error {
-	if err := os.Remove(duplicate); err != nil {
-		return err
-	}
 	rel, err := filepath.Rel(filepath.Dir(duplicate), target)
 	if err != nil {
 		rel = target
 	}
-	return os.Symlink(rel, duplicate)
+	// Create the symlink at a temporary name, then atomically rename it over the
+	// duplicate. The previous order (os.Remove then os.Symlink) lost the staged
+	// file if Symlink failed; renaming makes the replacement fail-closed: on any
+	// error the original duplicate is left untouched (issue #71).
+	tmp := duplicate + ".dedup.tmp"
+	_ = os.Remove(tmp)
+	if err := os.Symlink(rel, tmp); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, duplicate); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, maxSize int64) error {
@@ -258,6 +310,10 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 				stats.optimized++
 			}
 		case ".json":
+			if isStructuredConfigPath(path) {
+				stats.skippedStructured++
+				return nil
+			}
 			if changed, err := minifyJSON(rootFS, rel); err == nil && changed {
 				stats.optimized++
 			}
@@ -300,14 +356,15 @@ func minifyJSON(root *os.Root, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var tmp any
-	if err := json.Unmarshal(data, &tmp); err != nil {
+	// json.Compact strips only insignificant whitespace at the token level. Unlike
+	// an Unmarshal-into-any + Marshal round-trip it preserves number text/precision
+	// (no >2^53 rounding), key order and duplicate keys, so the payload stays
+	// byte-faithful aside from whitespace (issue #72).
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, data); err != nil {
 		return false, err
 	}
-	minified, err := json.Marshal(tmp)
-	if err != nil {
-		return false, err
-	}
+	minified := buf.Bytes()
 	if bytes.Equal(bytes.TrimSpace(data), minified) {
 		return false, nil
 	}
