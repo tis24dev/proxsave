@@ -1359,3 +1359,20 @@ func TestParseSecuritySettingsSafeProcessesDefaultsEmpty(t *testing.T) {
 		t.Fatalf("SafeProcesses should default to empty, got %#v", cfg.SafeProcesses)
 	}
 }
+
+func TestParseSystemSettingsSystemRootPrefix(t *testing.T) {
+	t.Run("parses and trims the override", func(t *testing.T) {
+		cfg := &Config{raw: map[string]string{"SYSTEM_ROOT_PREFIX": "  /mnt/fixture  "}}
+		cfg.parseSystemSettings()
+		if cfg.SystemRootPrefix != "/mnt/fixture" {
+			t.Fatalf("SystemRootPrefix = %q; want /mnt/fixture", cfg.SystemRootPrefix)
+		}
+	})
+	t.Run("defaults to empty (real root) when unset", func(t *testing.T) {
+		cfg := &Config{raw: map[string]string{}}
+		cfg.parseSystemSettings()
+		if cfg.SystemRootPrefix != "" {
+			t.Fatalf("SystemRootPrefix should default to empty, got %q", cfg.SystemRootPrefix)
+		}
+	})
+}

@@ -287,6 +287,7 @@ type Config struct {
 	BackupScriptRepository  bool
 	BackupUserHomes         bool
 	BackupConfigFile        bool
+	SystemRootPrefix        string
 	PVEConfigPath           string
 	PBSConfigPath           string
 	PVEClusterPath          string
@@ -857,6 +858,9 @@ func (c *Config) parseSystemSettings() {
 	c.BackupScriptRepository = c.getBool("BACKUP_SCRIPT_REPOSITORY", true)
 	c.BackupUserHomes = c.getBool("BACKUP_USER_HOMES", true)
 	c.BackupConfigFile = c.getBool("BACKUP_CONFIG_FILE", true)
+	// Optional system-root override (chroot/test fixture). Empty or "/" means real
+	// root; CollectorConfig.Validate rejects a non-absolute value.
+	c.SystemRootPrefix = strings.TrimSpace(c.getString("SYSTEM_ROOT_PREFIX", ""))
 	c.PBSDatastorePaths = normalizeList(c.getStringSlice("PBS_DATASTORE_PATH", nil))
 }
 

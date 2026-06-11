@@ -696,6 +696,37 @@ func TestPVEJobBricksComprehensive(t *testing.T) {
 	})
 }
 
+// TestSystemRootPrefixAppliesToCorosyncAndVzdumpPaths guards #68: the documented
+// SYSTEM_ROOT_PREFIX must be honored for the corosync/vzdump config reads, whose
+// defaults are absolute (/etc/pve/corosync.conf, /etc/vzdump.conf) and previously
+// bypassed the prefix.
+func TestSystemRootPrefixAppliesToCorosyncAndVzdumpPaths(t *testing.T) {
+	t.Run("absolute defaults are prefixed when SystemRootPrefix is set", func(t *testing.T) {
+		root := "/mnt/fixture"
+		cfg := GetDefaultCollectorConfig() // corosync/vzdump defaults are absolute
+		cfg.SystemRootPrefix = root
+		c := NewCollector(newTestLogger(), cfg, t.TempDir(), "pve", false)
+
+		if got, want := c.effectiveCorosyncConfigPath(), filepath.Join(root, "etc/pve/corosync.conf"); got != want {
+			t.Errorf("corosync: got %q, want %q", got, want)
+		}
+		if got, want := c.effectiveVzdumpConfigPath(), filepath.Join(root, "etc/vzdump.conf"); got != want {
+			t.Errorf("vzdump: got %q, want %q", got, want)
+		}
+	})
+	t.Run("no prefix is identity (production default unchanged)", func(t *testing.T) {
+		cfg := GetDefaultCollectorConfig() // SystemRootPrefix == ""
+		c := NewCollector(newTestLogger(), cfg, t.TempDir(), "pve", false)
+
+		if got := c.effectiveCorosyncConfigPath(); got != "/etc/pve/corosync.conf" {
+			t.Errorf("corosync without prefix: got %q, want /etc/pve/corosync.conf", got)
+		}
+		if got := c.effectiveVzdumpConfigPath(); got != "/etc/vzdump.conf" {
+			t.Errorf("vzdump without prefix: got %q, want /etc/vzdump.conf", got)
+		}
+	})
+}
+
 // TestPVEScheduleBricks runs the real PVE schedule bricks.
 func TestPVEScheduleBricks(t *testing.T) {
 	collector := newPVECollector(t)

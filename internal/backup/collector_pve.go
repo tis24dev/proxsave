@@ -284,13 +284,7 @@ func (c *Collector) populatePVEManifest() {
 	})
 
 	// VZDump configuration.
-	vzdumpPath := c.config.VzdumpConfigPath
-	if vzdumpPath == "" {
-		vzdumpPath = "/etc/vzdump.conf"
-	} else if !filepath.IsAbs(vzdumpPath) {
-		vzdumpPath = filepath.Join(pveConfigPath, vzdumpPath)
-	}
-	record(vzdumpPath, c.config.BackupVZDumpConfig, manifestLogOpts{
+	record(c.effectiveVzdumpConfigPath(), c.config.BackupVZDumpConfig, manifestLogOpts{
 		description:   "VZDump configuration",
 		disableHint:   "BACKUP_VZDUMP_CONFIG",
 		log:           true,
@@ -384,7 +378,6 @@ func (c *Collector) collectPVEConfigSnapshot(ctx context.Context) error {
 }
 
 func (c *Collector) collectPVEClusterSnapshot(ctx context.Context, clustered bool) error {
-	pveConfigPath := c.effectivePVEConfigPath()
 	clusterPath := c.effectivePVEClusterPath()
 
 	// /etc/pve is a pmxcfs mount backed by config.db: the cluster database still
@@ -397,12 +390,7 @@ func (c *Collector) collectPVEClusterSnapshot(ctx context.Context, clustered boo
 	}
 
 	if c.config.BackupClusterConfig {
-		corosyncPath := c.config.CorosyncConfigPath
-		if corosyncPath == "" {
-			corosyncPath = filepath.Join(pveConfigPath, "corosync.conf")
-		} else if !filepath.IsAbs(corosyncPath) {
-			corosyncPath = filepath.Join(pveConfigPath, corosyncPath)
-		}
+		corosyncPath := c.effectiveCorosyncConfigPath()
 		if err := c.safeCopyFile(ctx,
 			corosyncPath,
 			c.targetPathFor(corosyncPath),
@@ -484,15 +472,9 @@ func (c *Collector) collectPVEFirewallSnapshot(ctx context.Context) error {
 }
 
 func (c *Collector) collectPVEVZDumpSnapshot(ctx context.Context) error {
-	pveConfigPath := c.effectivePVEConfigPath()
 	if c.config.BackupVZDumpConfig {
 		c.logger.Info("Collecting VZDump backup configuration")
-		vzdumpPath := c.config.VzdumpConfigPath
-		if vzdumpPath == "" {
-			vzdumpPath = "/etc/vzdump.conf"
-		} else if !filepath.IsAbs(vzdumpPath) {
-			vzdumpPath = filepath.Join(pveConfigPath, vzdumpPath)
-		}
+		vzdumpPath := c.effectiveVzdumpConfigPath()
 		if err := c.safeCopyFile(ctx,
 			vzdumpPath,
 			c.targetPathFor(vzdumpPath),
@@ -2423,9 +2405,23 @@ func (c *Collector) effectiveCorosyncConfigPath() string {
 		return filepath.Join(c.effectivePVEConfigPath(), "corosync.conf")
 	}
 	if filepath.IsAbs(corosyncPath) {
-		return corosyncPath
+		// Honor SystemRootPrefix for an absolute override, like effectivePVEConfigPath.
+		return c.systemPath(corosyncPath)
 	}
 	return filepath.Join(c.effectivePVEConfigPath(), corosyncPath)
+}
+
+// effectiveVzdumpConfigPath resolves the vzdump.conf source, honoring an optional
+// SystemRootPrefix for the default and for absolute overrides (mirroring corosync).
+func (c *Collector) effectiveVzdumpConfigPath() string {
+	vzdumpPath := strings.TrimSpace(c.config.VzdumpConfigPath)
+	if vzdumpPath == "" {
+		return c.systemPath("/etc/vzdump.conf")
+	}
+	if filepath.IsAbs(vzdumpPath) {
+		return c.systemPath(vzdumpPath)
+	}
+	return filepath.Join(c.effectivePVEConfigPath(), vzdumpPath)
 }
 
 func (c *Collector) hasMultiplePVENodes() bool {
