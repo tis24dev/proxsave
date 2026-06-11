@@ -858,6 +858,71 @@ func TestCheckSuspiciousProcessesWarnsForNonZombieProxmoxBackupMatch(t *testing.
 	}
 }
 
+// TestCommandLineMatches pins the token-anchored matching contract that replaced
+// the naive whole-command-line substring scan (issue #232).
+func TestCommandLineMatches(t *testing.T) {
+	cases := []struct {
+		name      string
+		signature string
+		cmdline   string
+		want      bool
+	}{
+		{"concat false positive rejected", "ncat", "/usr/lib/ffmpeg/7.0/bin/ffmpeg -hide_banner -f concat -y", false},
+		{"bare ncat token matches", "ncat", "ncat -l 4444", true},
+		{"ncat via path basename matches", "ncat", "/usr/bin/ncat -e /bin/sh", true},
+		{"prefix-on-token preserved", "proxmox-backup", "proxmox-backup-proxy", true},
+		{"script via interpreter matches by basename", "mr.sh", "bash /tmp/mr.sh", true},
+		{"unrelated script does not match", "mr.sh", "bash /tmp/summary.sh", false},
+		{"binary via absolute path matches", "xmrig", "/usr/bin/xmrig --config /etc/x.json", true},
+		{"wildcard signature matches", "xmrig*", "xmrigd --foo", true},
+		{"anchored regex rejects concat", "regex:^ncat$", "ffmpeg -f concat", false},
+		{"anchored regex matches token", "regex:^ncat$", "ncat -l", true},
+		{"signature only in a path directory does not match", "xmrig", "/opt/xmrig-loader/start --go", false},
+		{"empty signature never matches", "", "anything here", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := commandLineMatches(tc.signature, tc.cmdline); got != tc.want {
+				t.Errorf("commandLineMatches(%q, %q) = %v, want %v", tc.signature, tc.cmdline, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckSuspiciousProcessesIgnoresConcatFalsePositive(t *testing.T) {
+	writeFakePS(t, "root S 1000 4242 /usr/lib/ffmpeg/7.0/bin/ffmpeg -hide_banner -f concat -y\n")
+	checker := newChecker(t, &config.Config{
+		SuspiciousProcesses: []string{"ncat"},
+	})
+
+	checker.checkSuspiciousProcesses(context.Background())
+
+	if containsIssue(checker.result, "Suspicious process detected") {
+		t.Fatalf("ffmpeg -f concat must not match the ncat signature, issues=%+v", checker.result.Issues)
+	}
+}
+
+func TestCheckSuspiciousProcessesSafeProcessesAllowlist(t *testing.T) {
+	writeFakePS(t, "root S 1000 4243 /usr/bin/xmrig --config /etc/x.json\n")
+
+	flagged := newChecker(t, &config.Config{
+		SuspiciousProcesses: []string{"xmrig"},
+	})
+	flagged.checkSuspiciousProcesses(context.Background())
+	if !containsIssue(flagged.result, "Suspicious process detected") {
+		t.Fatalf("xmrig must be flagged without an allowlist, issues=%+v", flagged.result.Issues)
+	}
+
+	allowed := newChecker(t, &config.Config{
+		SuspiciousProcesses: []string{"xmrig"},
+		SafeProcesses:       []string{"xmrig"},
+	})
+	allowed.checkSuspiciousProcesses(context.Background())
+	if containsIssue(allowed.result, "Suspicious process detected") {
+		t.Fatalf("SAFE_PROCESSES=xmrig must exempt the process, issues=%+v", allowed.result.Issues)
+	}
+}
+
 func writeFakePS(t *testing.T, output string) {
 	t.Helper()
 	dir := t.TempDir()

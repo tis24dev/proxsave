@@ -769,17 +769,15 @@ func (c *Checker) checkSuspiciousProcesses(ctx context.Context) {
 		if isZombieProxmoxProcess(user, state, vsz, trimmed) {
 			continue
 		}
-		lowerArgs := strings.ToLower(trimmed)
-
 		for _, signature := range c.cfg.SuspiciousProcesses {
-			sig := strings.ToLower(strings.TrimSpace(signature))
-			if sig == "" {
+			if !commandLineMatches(signature, trimmed) {
 				continue
 			}
-			if strings.Contains(lowerArgs, sig) {
-				c.addWarning("Suspicious process detected: %s (PID %s, user %s)", trimmed, pid, user)
-				break
+			if c.isSafeProcess(trimmed) {
+				break // allowlisted via SAFE_PROCESSES, do not warn
 			}
+			c.addWarning("Suspicious process detected: %s (PID %s, user %s)", trimmed, pid, user)
+			break
 		}
 
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
@@ -1011,6 +1009,57 @@ func matchesSafeProcessPattern(pattern, name string) bool {
 		return strings.HasPrefix(lower, prefix)
 	}
 	return lower == pattern
+}
+
+// commandLineMatches reports whether the command line contains a whitespace-
+// delimited token (or that token's path basename) matching the signature.
+// Matching is anchored to the start of each token, so a bare signature like
+// "ncat" no longer matches inside "concat" (issue #232) while "proxmox-backup"
+// still matches "proxmox-backup-proxy". Signatures using "*" or "regex:" are
+// delegated to matchesSafeProcessPattern, evaluated per token. This replaces a
+// naive strings.Contains over the whole command line, which collided on common
+// arguments such as ffmpeg's "-f concat" demuxer.
+func commandLineMatches(signature, commandLine string) bool {
+	sig := strings.ToLower(strings.TrimSpace(signature))
+	if sig == "" {
+		return false
+	}
+	usesPattern := strings.HasPrefix(sig, "regex:") || strings.Contains(sig, "*")
+	for _, tok := range strings.Fields(commandLine) {
+		candidates := [2]string{tok, ""}
+		if base := filepath.Base(tok); base != tok {
+			candidates[1] = base
+		}
+		for _, cand := range candidates {
+			if cand == "" {
+				continue
+			}
+			if usesPattern {
+				if matchesSafeProcessPattern(signature, cand) {
+					return true
+				}
+				continue
+			}
+			lc := strings.ToLower(cand)
+			if lc == sig || strings.HasPrefix(lc, sig) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isSafeProcess reports whether the command line is allowlisted via
+// SAFE_PROCESSES. It reuses commandLineMatches so the allowlist granularity
+// mirrors the suspicious-process detector: exempting "ffmpeg" exempts the ffmpeg
+// process by name without exempting unrelated commands.
+func (c *Checker) isSafeProcess(commandLine string) bool {
+	for _, pattern := range c.cfg.SafeProcesses {
+		if commandLineMatches(pattern, commandLine) {
+			return true
+		}
+	}
+	return false
 }
 
 func isLegitimateKernelProcess(name string) bool {

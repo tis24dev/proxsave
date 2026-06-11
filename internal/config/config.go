@@ -95,6 +95,7 @@ type Config struct {
 	SuspiciousProcesses      []string
 	SafeBracketProcesses     []string
 	SafeKernelProcesses      []string
+	SafeProcesses            []string
 	BackupUser               string
 	BackupGroup              string
 	SetBackupPermissions     bool
@@ -386,7 +387,7 @@ func (c *Config) loadEnvOverrides() {
 		"SECURITY_CHECK_ENABLED", "AUTO_UPDATE_HASHES", "AUTO_FIX_PERMISSIONS",
 		"CONTINUE_ON_SECURITY_ISSUES", "CHECK_NETWORK_SECURITY", "CHECK_FIREWALL",
 		"CHECK_OPEN_PORTS", "SUSPICIOUS_PORTS", "PORT_WHITELIST",
-		"SUSPICIOUS_PROCESSES", "SAFE_BRACKET_PROCESSES", "SAFE_KERNEL_PROCESSES",
+		"SUSPICIOUS_PROCESSES", "SAFE_BRACKET_PROCESSES", "SAFE_KERNEL_PROCESSES", "SAFE_PROCESSES",
 		"MIN_DISK_SPACE_PRIMARY_GB", "MIN_DISK_SPACE_SECONDARY_GB", "MIN_DISK_SPACE_CLOUD_GB",
 		"DISABLE_NETWORK_PREFLIGHT", "BACKUP_EXCLUDE_PATTERNS",
 		"SKIP_PERMISSION_CHECK", "BACKUP_CONFIG_FILE",
@@ -608,6 +609,10 @@ func (c *Config) parseSecuritySettings() {
 	}
 	userSafeKernel := c.getStringSlice("SAFE_KERNEL_PROCESSES", nil)
 	c.SafeKernelProcesses = mergeStringSlices(defaultSafeKernel, userSafeKernel)
+
+	// SAFE_PROCESSES is a purely user-driven allowlist (no built-in defaults) that
+	// exempts matching processes from the suspicious-process scan.
+	c.SafeProcesses = c.getStringSlice("SAFE_PROCESSES", nil)
 
 	c.BackupUser = strings.TrimSpace(c.getString("BACKUP_USER", ""))
 	c.BackupGroup = strings.TrimSpace(c.getString("BACKUP_GROUP", ""))
