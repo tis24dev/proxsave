@@ -172,6 +172,8 @@ Some interactive commands support two interface modes:
 5. Writes updated configuration
 6. Reports added/removed variables
 
+> **Keep `backup.env` a regular file.** The config upgrade (`--upgrade`, `--upgrade-config`) and `--env-migration` write the new configuration atomically (temp file + rename), so if `configs/backup.env` is a **symlink** it is replaced by a regular file and the symlink target is left unchanged. For a centrally managed configuration, deploy a regular `backup.env` (for example copied or templated by your config-management tool) instead of symlinking it.
+
 ### Binary Upgrade
 
 ```bash
