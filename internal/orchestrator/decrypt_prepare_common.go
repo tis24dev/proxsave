@@ -81,8 +81,8 @@ func preparePlainBundleCommon(ctx context.Context, cand *backupCandidate, versio
 		cand.BundlePath = localPath
 	}
 
-	tempRoot := filepath.Join("/tmp", "proxsave")
-	if err := restoreFS.MkdirAll(tempRoot, 0o755); err != nil {
+	tempRoot := tempWorkspaceRoot
+	if err := ensureSecureTempRoot(restoreFS, tempRoot); err != nil {
 		if rcloneCleanup != nil {
 			rcloneCleanup()
 		}

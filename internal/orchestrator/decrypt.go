@@ -428,9 +428,9 @@ func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config
 func downloadRcloneBackup(ctx context.Context, remotePath string, logger *logging.Logger) (tmpPath string, cleanup func(), err error) {
 	done := logging.DebugStart(logger, "download rclone backup", "remote=%s", remotePath)
 	defer func() { done(err) }()
-	// Ensure /tmp/proxsave exists
-	tempRoot := filepath.Join("/tmp", "proxsave")
-	if err := restoreFS.MkdirAll(tempRoot, 0o755); err != nil {
+	// Ensure /tmp/proxsave exists and is a safe, root-owned, non-symlink directory.
+	tempRoot := tempWorkspaceRoot
+	if err := ensureSecureTempRoot(restoreFS, tempRoot); err != nil {
 		return "", nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
 

@@ -124,8 +124,8 @@ func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr e
 
 func (o *Orchestrator) prepareBackupWorkspace(run *backupRunContext, workspace *backupWorkspace) error {
 	o.logger.Debug("Creating temporary directory for collection output")
-	workspace.tempRoot = filepath.Join("/tmp", "proxsave")
-	if err := workspace.fs.MkdirAll(workspace.tempRoot, 0o755); err != nil {
+	workspace.tempRoot = tempWorkspaceRoot
+	if err := ensureSecureTempRoot(workspace.fs, workspace.tempRoot); err != nil {
 		return fmt.Errorf("temp directory creation failed - path: %s: %w", workspace.tempRoot, err)
 	}
 
@@ -167,7 +167,7 @@ func (o *Orchestrator) cleanupBackupWorkspace(workspace *backupWorkspace) {
 }
 
 func (o *Orchestrator) markBackupWorkspace(workspace *backupWorkspace) error {
-	markerPath := filepath.Join(workspace.tempDir, ".proxsave-marker")
+	markerPath := filepath.Join(workspace.tempDir, tempWorkspaceMarker)
 	markerContent := fmt.Sprintf(
 		"Created by PID %d on %s UTC\n",
 		os.Getpid(),

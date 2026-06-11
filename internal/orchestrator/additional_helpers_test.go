@@ -1151,6 +1151,10 @@ func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
 		logger: logger,
 	}
 
+	origRoot := tempWorkspaceRoot
+	tempWorkspaceRoot = t.TempDir()
+	t.Cleanup(func() { tempWorkspaceRoot = origRoot })
+
 	logDir := t.TempDir()
 	o.logPath = logDir
 
@@ -1185,9 +1189,14 @@ func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
 	}
 	o.tempRegistry = reg
 
-	orphanDir := filepath.Join(registryDir, "orphan-temp")
-	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+	// A legitimate orphan workspace under the trusted root, with the marker, so the
+	// hardened CleanupOrphaned (issue #55) will remove it.
+	orphanDir := filepath.Join(tempWorkspaceRoot, "proxsave-orphan")
+	if err := os.MkdirAll(orphanDir, 0o700); err != nil {
 		t.Fatalf("create orphan dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(orphanDir, tempWorkspaceMarker), []byte("m"), 0o600); err != nil {
+		t.Fatalf("write orphan marker: %v", err)
 	}
 	if err := reg.Register(orphanDir); err != nil {
 		t.Fatalf("register orphan dir: %v", err)

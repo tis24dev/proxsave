@@ -25,6 +25,7 @@ var closeTestFile = func(f *os.File) error { return f.Close() }
 
 var (
 	osStat      = os.Stat
+	osLstat     = os.Lstat
 	osRemove    = os.Remove
 	osOpenFile  = os.OpenFile
 	osMkdirAll  = os.MkdirAll
@@ -628,6 +629,16 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 		}
 	} else {
 		c.logger.Debug("Temp directory exists: %s", tempRoot)
+	}
+
+	// osStat follows symlinks, so a pre-created /tmp/proxsave pointing at an
+	// attacker-controlled directory would otherwise pass. Reject a symlinked root
+	// (issue #54).
+	if linfo, lerr := osLstat(tempRoot); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+		result.Code = "SYMLINK_REJECTED"
+		result.Error = fmt.Errorf("temp path is a symlink - path: %s", tempRoot)
+		result.Message = result.Error.Error()
+		return result
 	}
 
 	if !info.IsDir() {
