@@ -62,13 +62,23 @@ func TestInstallEntrypointSymlink_ReplacesWrongSymlinkAndFile(t *testing.T) {
 	installEntrypointSymlink(exec, destA, logging.NewBootstrapLogger())
 	assertSymlinkTo(t, destA, exec)
 
-	// Real file occupying the entrypoint path.
+	// A real file occupying the entrypoint path is replaced by the symlink, but it
+	// must first be backed up to "<dest>.bak" so it is never lost (INSTALL-SYMLINK-001).
 	destB := filepath.Join(dir, "b")
 	if err := os.WriteFile(destB, []byte("stale"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	installEntrypointSymlink(exec, destB, logging.NewBootstrapLogger())
 	assertSymlinkTo(t, destB, exec)
+
+	backup := destB + ".bak"
+	got, err := os.ReadFile(backup)
+	if err != nil {
+		t.Fatalf("expected the real file backed up at %s: %v", backup, err)
+	}
+	if string(got) != "stale" {
+		t.Fatalf("backup content = %q, want %q", got, "stale")
+	}
 }
 
 func TestInstallEntrypointSymlink_KeepsCorrectSymlink(t *testing.T) {

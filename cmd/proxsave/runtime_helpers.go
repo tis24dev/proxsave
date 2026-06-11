@@ -617,11 +617,24 @@ func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 // succeeded; the atomic rename never leaves dest missing.
 func installEntrypointSymlink(execPath, dest string, bootstrap *logging.BootstrapLogger) {
 	if info, err := os.Lstat(dest); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
 			if resolved, err := filepath.EvalSymlinks(dest); err == nil && resolved == execPath {
 				logBootstrapInfo(bootstrap, "Keeping existing symlink %s -> %s", dest, resolved)
 				return
 			}
+		case info.Mode().IsRegular():
+			// A real (non-symlink) file occupies the entrypoint path: it may be an
+			// operator wrapper or a packaged binary, which the cleanup scan also
+			// refuses to delete. Back it up before replacing it with the proxsave
+			// symlink so it is never lost silently (INSTALL-SYMLINK-001). If the
+			// backup fails, refuse to replace it rather than clobber it.
+			backup, err := backupRealFile(dest)
+			if err != nil {
+				logBootstrapWarning(bootstrap, "WARNING: Not replacing real file %s: failed to back it up: %v", dest, err)
+				return
+			}
+			logBootstrapWarning(bootstrap, "WARNING: Backed up existing real file %s to %s before installing the proxsave symlink", dest, backup)
 		}
 	} else if !os.IsNotExist(err) {
 		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect %s: %v", dest, err)
@@ -640,6 +653,34 @@ func installEntrypointSymlink(execPath, dest string, bootstrap *logging.Bootstra
 		return
 	}
 	logBootstrapInfo(bootstrap, "Created symlink: %s -> %s", dest, execPath)
+}
+
+// backupRealFile copies the regular file at path to "<path>.bak", preserving its
+// permission bits, and returns the backup path. It is used before proxsave
+// replaces a real operator/package file at an entrypoint path with its symlink, so
+// the original is never lost (INSTALL-SYMLINK-001).
+func backupRealFile(path string) (string, error) {
+	backup := path + ".bak"
+	src, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = src.Close() }()
+
+	info, err := src.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	dst, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		return "", err
+	}
+	return backup, dst.Close()
 }
 
 func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
