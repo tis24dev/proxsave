@@ -144,13 +144,26 @@ func (o *Orchestrator) prepareBackupWorkspace(run *backupRunContext, workspace *
 }
 
 func (o *Orchestrator) cleanupBackupWorkspace(workspace *backupWorkspace) {
-	if workspace.registry == nil {
-		if cleanupErr := workspace.fs.RemoveAll(workspace.tempDir); cleanupErr != nil {
-			o.logger.Warning("Failed to remove temp directory %s: %v", workspace.tempDir, cleanupErr)
-		}
+	if workspace.tempDir == "" {
 		return
 	}
-	o.logger.Debug("Temporary workspace preserved at %s (will be removed at the next startup)", workspace.tempDir)
+	// Always remove the staging workspace when the run finishes: it holds plaintext
+	// copies of sensitive files (shadow, SSL/SSH keys, ...) gathered before
+	// encryption, so it must not be left on disk after a successful (or failed) run
+	// (issue #53). The registry exists for crash recovery only; previously a
+	// non-nil registry caused the workspace to be preserved "until the next
+	// startup", leaving secrets at rest for the whole inter-run window.
+	if cleanupErr := workspace.fs.RemoveAll(workspace.tempDir); cleanupErr != nil {
+		// Keep it registered so the next run's orphan sweep retries the removal.
+		o.logger.Warning("Failed to remove temp directory %s: %v", workspace.tempDir, cleanupErr)
+		return
+	}
+	o.logger.Debug("Removed temporary workspace %s", workspace.tempDir)
+	if workspace.registry != nil {
+		if err := workspace.registry.Deregister(workspace.tempDir); err != nil {
+			o.logger.Debug("Failed to deregister temp directory %s: %v", workspace.tempDir, err)
+		}
+	}
 }
 
 func (o *Orchestrator) markBackupWorkspace(workspace *backupWorkspace) error {
