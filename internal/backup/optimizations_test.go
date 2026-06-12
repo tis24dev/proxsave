@@ -53,7 +53,7 @@ func TestApplyOptimizationsRunsAllStages(t *testing.T) {
 		PrefilterMaxFileSizeBytes: 1024,
 	}
 
-	if err := ApplyOptimizations(context.Background(), logger, root, cfg); err != nil {
+	if _, err := ApplyOptimizations(context.Background(), logger, root, cfg); err != nil {
 		t.Fatalf("ApplyOptimizations: %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestDedupDoesNotReplaceCriticalFilesWithSymlinks(t *testing.T) {
 	cfg := OptimizationConfig{
 		EnableDeduplication: true,
 	}
-	if err := ApplyOptimizations(context.Background(), logger, root, cfg); err != nil {
+	if _, err := ApplyOptimizations(context.Background(), logger, root, cfg); err != nil {
 		t.Fatalf("ApplyOptimizations: %v", err)
 	}
 
@@ -139,9 +139,6 @@ func TestDedupDoesNotReplaceCriticalFilesWithSymlinks(t *testing.T) {
 	}
 }
 
-// TestReplaceWithSymlinkPreservesFileOnFailure verifies the dedup replacement is
-// fail-closed: if the symlink cannot be created the original staged file is kept,
-// instead of being removed first and lost (issue #71).
 // TestApplyOptimizationsFailsFatallyOnDedupError guards the #70 safety contract: an
 // unsafe deduplication state must NOT be swallowed to a warning; ApplyOptimizations
 // must return the error so the backup run aborts rather than ship a damaged tree.
@@ -150,7 +147,7 @@ func TestApplyOptimizationsFailsFatallyOnDedupError(t *testing.T) {
 	// A non-existent dedup root makes deduplicateFiles fail (os.OpenRoot error); the
 	// happy/fully-reverted paths return nil, so a returned error here can only come
 	// from an unsafe state that must abort.
-	err := ApplyOptimizations(context.Background(), logger, "/proxsave-nonexistent-root-xyz", OptimizationConfig{EnableDeduplication: true})
+	_, err := ApplyOptimizations(context.Background(), logger, "/proxsave-nonexistent-root-xyz", OptimizationConfig{EnableDeduplication: true})
 	if err == nil {
 		t.Fatal("ApplyOptimizations must return (not swallow) a deduplication error so the backup aborts")
 	}
@@ -177,7 +174,7 @@ func TestDeduplicationRevertsSymlinksWhenManifestUnwritable(t *testing.T) {
 	}
 
 	logger := logging.New(types.LogLevelError, false)
-	if err := deduplicateFiles(context.Background(), logger, root); err != nil {
+	if _, _, err := deduplicateFiles(context.Background(), logger, root); err != nil {
 		t.Fatalf("deduplicateFiles should succeed (revert) when the manifest cannot be written: %v", err)
 	}
 
@@ -305,7 +302,7 @@ func TestPrefilterSkipsStructuredConfigJSON(t *testing.T) {
 	}
 
 	logger := logging.New(types.LogLevelError, false)
-	if err := prefilterFiles(context.Background(), logger, root, 1024); err != nil {
+	if _, err := prefilterFiles(context.Background(), logger, root, 1024); err != nil {
 		t.Fatalf("prefilterFiles: %v", err)
 	}
 
@@ -336,8 +333,17 @@ func TestDeduplicationWritesManifest(t *testing.T) {
 	write(filepath.Join("a", "two.cfg"), "same content here", 0o600)
 
 	logger := logging.New(types.LogLevelError, false)
-	if err := ApplyOptimizations(context.Background(), logger, root, OptimizationConfig{EnableDeduplication: true}); err != nil {
+	res, err := ApplyOptimizations(context.Background(), logger, root, OptimizationConfig{EnableDeduplication: true})
+	if err != nil {
 		t.Fatalf("ApplyOptimizations: %v", err)
+	}
+	// #73: the result reports the reclaimed bytes (the deduplicated duplicate's size)
+	// so the caller can correct the uncompressed-payload figure / compression ratio.
+	if res.DuplicatesReplaced != 1 {
+		t.Fatalf("expected 1 duplicate replaced, got %d", res.DuplicatesReplaced)
+	}
+	if want := int64(len("same content here")); res.BytesReclaimed != want {
+		t.Fatalf("expected BytesReclaimed=%d (the duplicate size), got %d", want, res.BytesReclaimed)
 	}
 
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(DedupManifestRelPath)))

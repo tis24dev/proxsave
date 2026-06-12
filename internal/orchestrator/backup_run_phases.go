@@ -220,7 +220,20 @@ func (o *Orchestrator) collectBackupData(run *backupRunContext, workspace *backu
 		return err
 	}
 
-	return o.applyBackupOptimizations(run.ctx, workspace.tempDir)
+	optResult, err := o.applyBackupOptimizations(run.ctx, workspace.tempDir)
+	if err != nil {
+		return err
+	}
+	// Dedup/prefilter shrank the staged tree AFTER the collection stats were taken;
+	// correct the uncompressed-payload figure that the compression ratio divides by
+	// so reports/notifications/metrics reflect what is actually archived (issue #73).
+	// BytesCollected stays the honest "bytes read during collection" figure.
+	if optResult.BytesReclaimed > 0 {
+		if shipped := run.stats.BytesCollected - optResult.BytesReclaimed; shipped >= 0 {
+			run.stats.UncompressedSize = shipped
+		}
+	}
+	return nil
 }
 
 func (o *Orchestrator) validateCollectedBackupSize(stats *BackupStats) error {

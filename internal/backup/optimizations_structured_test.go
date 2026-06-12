@@ -46,7 +46,7 @@ func TestPrefilterSkipsStructuredConfigs(t *testing.T) {
 
 	// Run prefilter
 	logger := logging.New(types.LogLevelError, false)
-	if err := prefilterFiles(context.Background(), logger, tmp, 8*1024*1024); err != nil {
+	if _, err := prefilterFiles(context.Background(), logger, tmp, 8*1024*1024); err != nil {
 		t.Fatalf("prefilterFiles: %v", err)
 	}
 
