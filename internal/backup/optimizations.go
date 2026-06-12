@@ -56,10 +56,13 @@ func ApplyOptimizations(ctx context.Context, logger *logging.Logger, root string
 	if cfg.EnableDeduplication {
 		logger.Debug("Starting deduplication stage")
 		if err := deduplicateFiles(ctx, logger, root); err != nil {
-			logger.Warning("File deduplication failed: %v", err)
-		} else {
-			logger.Debug("Deduplication stage completed")
+			// A dedup error means the staging tree may still hold symlinks the restore
+			// cannot materialize (manifest unwritten, partial revert): fail rather than
+			// archive a tree that would lose fidelity on restore (issue #70). The
+			// happy path and a fully-reverted manifest failure both return nil.
+			return fmt.Errorf("deduplication: %w", err)
 		}
+		logger.Debug("Deduplication stage completed")
 	}
 
 	if cfg.EnablePrefilter {
@@ -80,6 +83,7 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 	hashes := make(map[string]string)
 	var duplicates int
 	var manifest []DedupManifestEntry
+	var replaced []dedupReplacement
 
 	rootFS, err := os.OpenRoot(root)
 	if err != nil {
@@ -133,6 +137,11 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 				Path: filepath.ToSlash(rel),
 				Mode: uint32(info.Mode().Perm()),
 			})
+			replaced = append(replaced, dedupReplacement{
+				duplicate: path,
+				canonical: existing,
+				mode:      info.Mode().Perm(),
+			})
 			logger.Debug("Deduplicated %s → %s", path, existing)
 		} else {
 			hashes[hash] = path
@@ -145,9 +154,24 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 	}
 
 	if err := writeDedupManifest(root, manifest); err != nil {
-		// Best-effort: without the manifest the restore cannot materialize these
-		// symlinks, so warn loudly rather than silently shipping unrecoverable links.
-		logger.Warning("Failed to write dedup manifest (deduplicated files may not restore faithfully): %v", err)
+		// Without the manifest the restore cannot materialize these symlinks, so an
+		// unrecorded symlink would ship and break fidelity (issue #70). Revert every
+		// symlink back to a regular file so the archive degrades to "no dedup this
+		// run" rather than carrying unrecoverable links.
+		logger.Warning("Failed to write dedup manifest; reverting %d deduplicated symlink(s) to regular files: %v", len(replaced), err)
+		reverted := 0
+		for _, r := range replaced {
+			if rerr := revertDedupSymlink(r); rerr != nil {
+				logger.Warning("Failed to revert deduplicated symlink %s: %v", r.duplicate, rerr)
+				continue
+			}
+			reverted++
+		}
+		if reverted != len(replaced) {
+			return fmt.Errorf("write dedup manifest: %w (reverted %d/%d symlinks)", err, reverted, len(replaced))
+		}
+		logger.Info("Deduplication aborted (manifest unwritable); %d symlink(s) reverted to regular files", reverted)
+		return nil
 	}
 
 	logger.Info("Deduplication completed: %d duplicates replaced", duplicates)
@@ -204,17 +228,71 @@ func replaceWithSymlink(target, duplicate string) error {
 	if err != nil {
 		rel = target
 	}
-	// Create the symlink at a temporary name, then atomically rename it over the
-	// duplicate. The previous order (os.Remove then os.Symlink) lost the staged
-	// file if Symlink failed; renaming makes the replacement fail-closed: on any
-	// error the original duplicate is left untouched (issue #71).
-	tmp := duplicate + ".dedup.tmp"
-	_ = os.Remove(tmp)
+	// Create the symlink at a UNIQUE temporary name in the same directory, then
+	// atomically rename it over the duplicate. A unique name (not the fixed
+	// duplicate+".dedup.tmp") avoids destroying a real staged file that happens to
+	// carry that suffix, and the rename keeps the replacement fail-closed: on any
+	// error the original duplicate is left untouched (issues #70/#71).
+	tmpFile, err := os.CreateTemp(filepath.Dir(duplicate), ".proxsave-dedup-*")
+	if err != nil {
+		return err
+	}
+	tmp := tmpFile.Name()
+	_ = tmpFile.Close()
+	_ = os.Remove(tmp) // os.Symlink needs a non-existent path
 	if err := os.Symlink(rel, tmp); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, duplicate); err != nil {
 		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// dedupReplacement remembers a symlink dedup created so it can be reverted to a
+// regular file if the manifest cannot be written (so an unrecorded symlink, which
+// the restore could not materialize, is never shipped).
+type dedupReplacement struct {
+	duplicate string // absolute staged path now holding the symlink
+	canonical string // absolute staged path of the kept original
+	mode      os.FileMode
+}
+
+// revertDedupSymlink turns one dedup symlink back into a regular copy of its
+// canonical. Used when the manifest write fails so the archive carries plain files.
+// It writes to a sibling temp then renames over the symlink, so a failed write never
+// leaves the duplicate missing (no remove-then-write window).
+func revertDedupSymlink(r dedupReplacement) error {
+	content, err := os.ReadFile(r.canonical)
+	if err != nil {
+		return err
+	}
+	mode := r.mode.Perm()
+	if mode == 0 {
+		mode = 0o600
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(r.duplicate), ".proxsave-dedup-revert-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, r.duplicate); err != nil {
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	return nil

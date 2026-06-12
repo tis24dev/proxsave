@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"archive/tar"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -29,7 +30,8 @@ func TestIsDedupManifestEntry(t *testing.T) {
 
 func TestSkipRestoreArchiveEntryAlwaysExtractsDedupManifest(t *testing.T) {
 	hdr := &tar.Header{Name: "./" + backup.DedupManifestRelPath}
-	// Selective restore with a category that the manifest path does not match.
+	// Selective restore with a category the manifest path does not match: the dedup
+	// manifest is force-extracted regardless so materialization can run (issue #70).
 	opts := restoreArchiveOptions{categories: []Category{{ID: "pve_access_control"}}}
 	var stats restoreExtractionStats
 	if skipRestoreArchiveEntry(hdr, opts, true, &restoreExtractionLog{}, &stats) {
@@ -41,6 +43,9 @@ func TestMaterializeDedupSymlinksFullRestore(t *testing.T) {
 	origFS := restoreFS
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = origFS })
+
+	root := t.TempDir()
+	archive := writeTarArchiveForTest(t, root, map[string]string{"a/one.cfg": "payload"})
 
 	destRoot := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(destRoot, "a"), 0o755); err != nil {
@@ -54,7 +59,7 @@ func TestMaterializeDedupSymlinksFullRestore(t *testing.T) {
 	}
 	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "a/two.cfg", Mode: 0o640}})
 
-	materializeDedupSymlinks(destRoot, logging.New(types.LogLevelError, false))
+	materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false))
 
 	two := filepath.Join(destRoot, "a", "two.cfg")
 	info, err := os.Lstat(two)
@@ -75,25 +80,109 @@ func TestMaterializeDedupSymlinksFullRestore(t *testing.T) {
 	}
 }
 
-func TestMaterializeDedupSymlinksRemovesDanglingLink(t *testing.T) {
+// TestMaterializeDedupCrossCategoryRebuildsFromArchive is the #70 regression guard:
+// a selective restore that selects the symlinked DUPLICATE but not its canonical
+// TARGET's category must rebuild the duplicate from the archive content, NOT delete
+// the user-selected file.
+func TestMaterializeDedupCrossCategoryRebuildsFromArchive(t *testing.T) {
 	origFS := restoreFS
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = origFS })
+
+	root := t.TempDir()
+	// The archive holds the canonical a/one.cfg (category A, NOT selected).
+	archive := writeTarArchiveForTest(t, root, map[string]string{"a/one.cfg": "payload"})
+
+	destRoot := t.TempDir()
+	// Simulate selective extraction of ONLY category B: the duplicate symlink exists,
+	// but its canonical a/one.cfg was not extracted.
+	if err := os.MkdirAll(filepath.Join(destRoot, "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../a/one.cfg", filepath.Join(destRoot, "b", "two.cfg")); err != nil {
+		t.Fatal(err)
+	}
+	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "b/two.cfg", Mode: 0o640}})
+
+	materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false))
+
+	two := filepath.Join(destRoot, "b", "two.cfg")
+	info, err := os.Lstat(two)
+	if err != nil {
+		t.Fatalf("selected duplicate must NOT be deleted on cross-category selective restore: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("expected b/two.cfg rebuilt as a regular file from the archive, got symlink")
+	}
+	if data, err := os.ReadFile(two); err != nil || string(data) != "payload" {
+		t.Fatalf("rebuilt content mismatch: %q err=%v", data, err)
+	}
+}
+
+// TestMaterializeDedupMissingCanonicalKeepsSymlink: if the canonical is genuinely
+// absent from the archive (corrupt backup), the symlink is kept (no deletion of the
+// user-selected file).
+func TestMaterializeDedupMissingCanonicalKeepsSymlink(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	root := t.TempDir()
+	archive := writeTarArchiveForTest(t, root, map[string]string{"unrelated.cfg": "x"})
+
+	destRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(destRoot, "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../a/one.cfg", filepath.Join(destRoot, "b", "two.cfg")); err != nil {
+		t.Fatal(err)
+	}
+	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "b/two.cfg", Mode: 0o640}})
+
+	materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false))
+
+	info, err := os.Lstat(filepath.Join(destRoot, "b", "two.cfg"))
+	if err != nil {
+		t.Fatalf("symlink must be kept when the canonical is missing from the archive, not deleted: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("expected the symlink to remain when the canonical is unavailable, got a regular file")
+	}
+}
+
+// TestMaterializeDedupUsesArchiveNotStaleDisk guards the HIGH fast-path defect: even
+// when a (stale) file exists on disk at the canonical path, the duplicate must be
+// rebuilt from the ARCHIVE bytes, never from the on-disk/live content.
+func TestMaterializeDedupUsesArchiveNotStaleDisk(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	root := t.TempDir()
+	archive := writeTarArchiveForTest(t, root, map[string]string{"a/one.cfg": "FRESH-from-archive"})
 
 	destRoot := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(destRoot, "a"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Symlink whose target was not extracted (its category was not selected).
-	if err := os.Symlink("missing.cfg", filepath.Join(destRoot, "a", "two.cfg")); err != nil {
+	// A STALE canonical exists on disk (e.g. the live pre-restore file, or a failed
+	// extraction left the old bytes).
+	if err := os.WriteFile(filepath.Join(destRoot, "a", "one.cfg"), []byte("STALE-on-disk"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("one.cfg", filepath.Join(destRoot, "a", "two.cfg")); err != nil {
 		t.Fatal(err)
 	}
 	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "a/two.cfg", Mode: 0o640}})
 
-	materializeDedupSymlinks(destRoot, logging.New(types.LogLevelError, false))
+	materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false))
 
-	if _, err := os.Lstat(filepath.Join(destRoot, "a", "two.cfg")); !os.IsNotExist(err) {
-		t.Fatalf("expected dangling dedup link to be removed, stat err=%v", err)
+	data, err := os.ReadFile(filepath.Join(destRoot, "a", "two.cfg"))
+	if err != nil {
+		t.Fatalf("read materialized: %v", err)
+	}
+	if string(data) != "FRESH-from-archive" {
+		t.Fatalf("duplicate must be rebuilt from the archive, not from stale disk content: got %q", data)
 	}
 }
 
@@ -110,4 +199,35 @@ func writeDedupManifestForTest(t *testing.T, destRoot string, entries []backup.D
 	if err := os.WriteFile(dest, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// writeTarArchiveForTest writes a plain (uncompressed) .tar with the given regular
+// files (archive-relative paths -> content) and returns its path.
+func writeTarArchiveForTest(t *testing.T, dir string, files map[string]string) string {
+	t.Helper()
+	p := filepath.Join(dir, "backup.tar")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	tw := tar.NewWriter(f)
+	for name, content := range files {
+		hdr := &tar.Header{
+			Name:     "./" + name,
+			Mode:     0o640,
+			Size:     int64(len(content)),
+			Typeflag: tar.TypeReg,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

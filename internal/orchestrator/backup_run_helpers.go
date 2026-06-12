@@ -149,7 +149,10 @@ func (o *Orchestrator) applyBackupOptimizations(ctx context.Context, tempDir str
 	fmt.Println()
 	o.logger.Step("Backup optimizations on collected data")
 	if err := backup.ApplyOptimizations(ctx, o.logger, tempDir, o.optimizationCfg); err != nil {
-		o.logger.Warning("Backup optimizations completed with warnings: %v", err)
+		// ApplyOptimizations only returns an error for an unsafe deduplication state
+		// (a tree that would lose fidelity on restore); abort rather than ship it.
+		// Benign prefilter issues are logged internally and do not surface here.
+		return fmt.Errorf("backup optimizations: %w", err)
 	}
 	return nil
 }

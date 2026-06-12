@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -141,35 +142,120 @@ func TestDedupDoesNotReplaceCriticalFilesWithSymlinks(t *testing.T) {
 // TestReplaceWithSymlinkPreservesFileOnFailure verifies the dedup replacement is
 // fail-closed: if the symlink cannot be created the original staged file is kept,
 // instead of being removed first and lost (issue #71).
-func TestReplaceWithSymlinkPreservesFileOnFailure(t *testing.T) {
+// TestApplyOptimizationsFailsFatallyOnDedupError guards the #70 safety contract: an
+// unsafe deduplication state must NOT be swallowed to a warning; ApplyOptimizations
+// must return the error so the backup run aborts rather than ship a damaged tree.
+func TestApplyOptimizationsFailsFatallyOnDedupError(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	// A non-existent dedup root makes deduplicateFiles fail (os.OpenRoot error); the
+	// happy/fully-reverted paths return nil, so a returned error here can only come
+	// from an unsafe state that must abort.
+	err := ApplyOptimizations(context.Background(), logger, "/proxsave-nonexistent-root-xyz", OptimizationConfig{EnableDeduplication: true})
+	if err == nil {
+		t.Fatal("ApplyOptimizations must return (not swallow) a deduplication error so the backup aborts")
+	}
+	if !strings.Contains(err.Error(), "deduplication") {
+		t.Fatalf("error should identify the deduplication stage, got: %v", err)
+	}
+}
+
+// TestDeduplicationRevertsSymlinksWhenManifestUnwritable guards #70: if the dedup
+// manifest cannot be written, the symlinks are reverted to regular files so the
+// archive never ships unrecorded (unrecoverable) links.
+func TestDeduplicationRevertsSymlinksWhenManifestUnwritable(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("same"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.txt"), []byte("same"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	// Make the manifest path a DIRECTORY so writeDedupManifest's WriteFile fails.
+	manifestAsDir := filepath.Join(root, filepath.FromSlash(DedupManifestRelPath))
+	if err := os.MkdirAll(manifestAsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	if err := deduplicateFiles(context.Background(), logger, root); err != nil {
+		t.Fatalf("deduplicateFiles should succeed (revert) when the manifest cannot be written: %v", err)
+	}
+
+	for _, name := range []string{"a.txt", "b.txt"} {
+		p := filepath.Join(root, name)
+		info, err := os.Lstat(p)
+		if err != nil {
+			t.Fatalf("lstat %s: %v", name, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("%s must be reverted to a regular file when the manifest is unwritable, got symlink", name)
+		}
+		if data, err := os.ReadFile(p); err != nil || string(data) != "same" {
+			t.Fatalf("%s content lost after revert: %q err=%v", name, data, err)
+		}
+	}
+}
+
+// TestReplaceWithSymlinkDoesNotClobberSuffixFile guards #71: using a unique temp
+// name must never destroy a real staged file that happens to carry a dedup temp
+// suffix.
+func TestReplaceWithSymlinkDoesNotClobberSuffixFile(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "a.txt")
 	duplicate := filepath.Join(root, "b.txt")
+	suffixFile := duplicate + ".dedup.tmp" // a legitimate backed-up file, not our temp
 	if err := os.WriteFile(target, []byte("data"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(duplicate, []byte("data"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	// Occupy the temp name with a NON-empty directory so both os.Remove(tmp) and
-	// the subsequent os.Symlink(tmp) fail, forcing replaceWithSymlink to error out.
-	if err := os.MkdirAll(filepath.Join(duplicate+".dedup.tmp", "child"), 0o755); err != nil {
+	if err := os.WriteFile(suffixFile, []byte("precious"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceWithSymlink(target, duplicate); err != nil {
+		t.Fatalf("replaceWithSymlink: %v", err)
+	}
+
+	if info, err := os.Lstat(duplicate); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("duplicate should be a symlink after dedup: info=%v err=%v", info, err)
+	}
+	// The pre-existing .dedup.tmp file must be intact (the old fixed-name temp would
+	// have removed/clobbered it).
+	if got, err := os.ReadFile(suffixFile); err != nil || string(got) != "precious" {
+		t.Fatalf("a real *.dedup.tmp file must not be clobbered: got %q err=%v", got, err)
+	}
+}
+
+// TestReplaceWithSymlinkFailClosedOnRenameFailure verifies that when the rename
+// over the duplicate fails, the original duplicate is left untouched (fail-closed,
+// issue #71).
+func TestReplaceWithSymlinkFailClosedOnRenameFailure(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "a.txt")
+	duplicate := filepath.Join(root, "dup")
+	if err := os.WriteFile(target, []byte("data"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	// Make the duplicate a NON-EMPTY directory so renaming a file over it fails.
+	if err := os.MkdirAll(filepath.Join(duplicate, "child"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := replaceWithSymlink(target, duplicate); err == nil {
-		t.Fatal("expected replaceWithSymlink to fail when the temp name is occupied")
+		t.Fatal("expected replaceWithSymlink to fail when rename over the duplicate cannot succeed")
 	}
 
 	info, err := os.Lstat(duplicate)
 	if err != nil {
 		t.Fatalf("duplicate must still exist after a failed dedup: %v", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		t.Fatal("duplicate must remain a regular file after a failed dedup, not a symlink")
+	if !info.IsDir() {
+		t.Fatal("duplicate must be left untouched (still a directory) after a failed dedup")
 	}
-	if got, err := os.ReadFile(duplicate); err != nil || string(got) != "data" {
-		t.Fatalf("duplicate content lost: got %q err=%v", got, err)
+	if _, err := os.Stat(filepath.Join(duplicate, "child")); err != nil {
+		t.Fatalf("duplicate contents must be preserved on failure: %v", err)
 	}
 }
 
