@@ -1376,3 +1376,19 @@ func TestParseSystemSettingsSystemRootPrefix(t *testing.T) {
 		}
 	})
 }
+
+func TestParseSystemSettingsScriptRepositoryDefaultsFalse(t *testing.T) {
+	// A config missing the key must default to false, matching the shipped template
+	// (#69), so it does not silently snapshot /opt/proxsave.
+	cfg := &Config{raw: map[string]string{}}
+	cfg.parseSystemSettings()
+	if cfg.BackupScriptRepository {
+		t.Fatalf("BACKUP_SCRIPT_REPOSITORY must default to false, got true")
+	}
+	// An explicit opt-in is still honored.
+	on := &Config{raw: map[string]string{"BACKUP_SCRIPT_REPOSITORY": "true"}}
+	on.parseSystemSettings()
+	if !on.BackupScriptRepository {
+		t.Fatalf("explicit BACKUP_SCRIPT_REPOSITORY=true must enable collection")
+	}
+}

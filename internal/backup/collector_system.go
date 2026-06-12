@@ -1524,14 +1524,15 @@ func (c *Collector) collectScriptRepository(ctx context.Context) error {
 		if err != nil || rel == "." {
 			return nil
 		}
-		parts := strings.Split(rel, string(filepath.Separator))
-		if len(parts) > 0 {
-			if parts[0] == "backup" || parts[0] == "log" {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
+		// Skip VCS metadata and runtime/output dirs at ANY depth (not just the top
+		// level): .git/.svn/.hg carry full history/objects (large and sensitive), and
+		// backup(s)/log(s) are regenerated output that only bloats the snapshot.
+		switch d.Name() {
+		case ".git", ".svn", ".hg", "backup", "backups", "log", "logs":
+			if d.IsDir() {
+				return filepath.SkipDir
 			}
+			return nil
 		}
 
 		dest := filepath.Join(target, rel)

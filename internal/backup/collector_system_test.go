@@ -1416,10 +1416,21 @@ func TestCollectScriptRepositoryCopiesAndSkipsRuntimeDirs(t *testing.T) {
 	repo := t.TempDir()
 	collector.config.ScriptRepositoryPath = repo
 
+	// Kept: real repo content.
 	writeFileAt(t, filepath.Join(repo, "keep.sh"), "#!/bin/sh\n")
 	writeFileAt(t, filepath.Join(repo, "nested", "config.env"), "A=1\n")
+	// Skipped (pre-existing): top-level backup/log as a dir and as a file.
 	writeFileAt(t, filepath.Join(repo, "backup", "skip.tar"), "backup\n")
 	writeFileAt(t, filepath.Join(repo, "log", "skip.log"), "log\n")
+	// Skipped (the #69 fix): .git at any depth, plural runtime dirs, and nested
+	// backup/log dirs that the old parts[0]-only check let through.
+	writeFileAt(t, filepath.Join(repo, ".git", "objects", "ab", "cd"), "obj\n")
+	writeFileAt(t, filepath.Join(repo, ".git", "logs", "HEAD"), "ref\n")
+	writeFileAt(t, filepath.Join(repo, ".svn", "entries"), "svn\n")
+	writeFileAt(t, filepath.Join(repo, "backups", "old.tar"), "old\n")
+	writeFileAt(t, filepath.Join(repo, "logs", "app.log"), "log\n")
+	writeFileAt(t, filepath.Join(repo, "nested", "backup", "skip"), "x\n")
+	writeFileAt(t, filepath.Join(repo, "nested", "log", "skip"), "y\n")
 
 	if err := collector.collectScriptRepository(context.Background()); err != nil {
 		t.Fatalf("collectScriptRepository: %v", err)
@@ -1428,12 +1439,23 @@ func TestCollectScriptRepositoryCopiesAndSkipsRuntimeDirs(t *testing.T) {
 	target := collector.proxsaveInfoDir("script-repository", filepath.Base(repo))
 	assertFileExists(t, filepath.Join(target, "keep.sh"))
 	assertFileExists(t, filepath.Join(target, "nested", "config.env"))
-	if _, err := os.Stat(filepath.Join(target, "backup", "skip.tar")); !os.IsNotExist(err) {
-		t.Fatalf("expected backup dir skipped, stat err=%v", err)
+
+	assertAbsent := func(rel string) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(target, rel)); !os.IsNotExist(err) {
+			t.Fatalf("expected %q to be skipped, stat err=%v", rel, err)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(target, "log", "skip.log")); !os.IsNotExist(err) {
-		t.Fatalf("expected log dir skipped, stat err=%v", err)
-	}
+	assertAbsent(filepath.Join("backup", "skip.tar"))
+	assertAbsent(filepath.Join("log", "skip.log"))
+	assertAbsent(".git")
+	assertAbsent(filepath.Join(".git", "objects", "ab", "cd"))
+	assertAbsent(filepath.Join(".git", "logs", "HEAD"))
+	assertAbsent(filepath.Join(".svn", "entries"))
+	assertAbsent(filepath.Join("backups", "old.tar"))
+	assertAbsent(filepath.Join("logs", "app.log"))
+	assertAbsent(filepath.Join("nested", "backup", "skip"))
+	assertAbsent(filepath.Join("nested", "log", "skip"))
 }
 
 func TestCollectScriptRepositorySkipAndCancelBranches(t *testing.T) {

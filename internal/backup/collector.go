@@ -426,7 +426,7 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		BackupSSHKeys:           true,
 		BackupZFSConfig:         true,
 		BackupRootHome:          true,
-		BackupScriptRepository:  true,
+		BackupScriptRepository:  false,
 		BackupUserHomes:         true,
 		BackupConfigFile:        true,
 		SystemRootPrefix:        "",
