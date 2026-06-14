@@ -608,8 +608,10 @@ func TestApplyPBSRemoteCfgViaAPI_StrictCleanupAndCreate(t *testing.T) {
 		"proxmox-backup-manager remote remove old": errors.New("cannot remove old"),
 	}
 
-	if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, true); err != nil {
-		t.Fatalf("applyPBSRemoteCfgViaAPI error: %v", err)
+	// Clean (1:1) mode with a failed remove must surface as errPBSCleanRemoveIncomplete
+	// (reported "with warnings"), while create/update still run (no abort).
+	if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
+		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -711,8 +713,8 @@ func TestApplyPBSS3CfgViaAPI_CreateUpdateAndStrictCleanup(t *testing.T) {
 		"proxmox-backup-manager s3 endpoint create e1 --endpoint https://s3.example --access-key access1 --secret-key secret1": errors.New("already exists"),
 	}
 
-	if err := applyPBSS3CfgViaAPI(context.Background(), logger, stageRoot, true); err != nil {
-		t.Fatalf("applyPBSS3CfgViaAPI error: %v", err)
+	if err := applyPBSS3CfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
+		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -839,8 +841,8 @@ func TestApplyPBSDatastoreCfgViaAPI_CurrentPathsFallbacksAndStrictRemoveWarn(t *
 		"proxmox-backup-manager datastore remove id1": errors.New("cannot remove id1"),
 	}
 
-	if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgViaAPI error: %v", err)
+	if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
+		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -1027,8 +1029,8 @@ func TestApplyPBSSyncCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing.T) {
 		"proxmox-backup-manager sync-job create job1 --remote r1 --store ds1": errors.New("already exists"),
 	}
 
-	if err := applyPBSSyncCfgViaAPI(context.Background(), logger, stageRoot, true); err != nil {
-		t.Fatalf("applyPBSSyncCfgViaAPI error: %v", err)
+	if err := applyPBSSyncCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
+		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -1082,8 +1084,8 @@ func TestApplyPBSVerificationCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing
 		"proxmox-backup-manager verify-job create v1 --store ds1": errors.New("already exists"),
 	}
 
-	if err := applyPBSVerificationCfgViaAPI(context.Background(), logger, stageRoot, true); err != nil {
-		t.Fatalf("applyPBSVerificationCfgViaAPI error: %v", err)
+	if err := applyPBSVerificationCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
+		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -1139,8 +1141,8 @@ func TestApplyPBSPruneCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing.T) {
 		"proxmox-backup-manager prune-job create p1 --store ds1 --keep-last 3": errors.New("already exists"),
 	}
 
-	if err := applyPBSPruneCfgViaAPI(context.Background(), logger, stageRoot, true); err != nil {
-		t.Fatalf("applyPBSPruneCfgViaAPI error: %v", err)
+	if err := applyPBSPruneCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
+		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -1171,8 +1173,8 @@ func TestApplyPBSTrafficControlCfgViaAPI_StrictCleanupAndCreate(t *testing.T) {
 		"proxmox-backup-manager traffic-control remove old": errors.New("cannot remove old"),
 	}
 
-	if err := applyPBSTrafficControlCfgViaAPI(context.Background(), logger, stageRoot, true); err != nil {
-		t.Fatalf("applyPBSTrafficControlCfgViaAPI error: %v", err)
+	if err := applyPBSTrafficControlCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
+		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
