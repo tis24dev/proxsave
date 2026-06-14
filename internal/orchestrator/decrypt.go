@@ -706,10 +706,18 @@ func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *backupCandid
 func decryptArchiveWithPrompts(ctx context.Context, reader *bufio.Reader, encryptedPath, outputPath string, logger *logging.Logger) error {
 	ui := newCLIWorkflowUI(reader, logger)
 	displayName := filepath.Base(encryptedPath)
-	return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, ui.PromptDecryptSecret)
+	return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, ui.PromptDecryptSecret, nil)
 }
 
 func parseIdentityInput(input string) ([]age.Identity, error) {
+	return parseIdentityInputWithSalts(input, nil)
+}
+
+// parseIdentityInputWithSalts parses a private key directly, or treats the input
+// as a passphrase and derives the candidate identities. extraSalts carries the
+// per-installation salt read from the archive manifest so passphrase decryption
+// works on any host; the fixed v1/legacy salts are always appended as fallback.
+func parseIdentityInputWithSalts(input string, extraSalts []string) ([]age.Identity, error) {
 	if strings.HasPrefix(strings.ToUpper(input), "AGE-SECRET-KEY-") {
 		id, err := age.ParseX25519Identity(strings.ToUpper(input))
 		if err != nil {
@@ -717,7 +725,19 @@ func parseIdentityInput(input string) ([]age.Identity, error) {
 		}
 		return []age.Identity{id}, nil
 	}
-	return deriveDeterministicIdentitiesFromPassphrase(input)
+	return deriveDeterministicIdentitiesFromPassphraseWithExtraSalts(input, extraSalts)
+}
+
+// manifestPassphraseSalts returns the per-installation salt recorded in a
+// manifest (if any), to be tried first when deriving identities from a passphrase.
+func manifestPassphraseSalts(m *backup.Manifest) []string {
+	if m == nil {
+		return nil
+	}
+	if salt := strings.TrimSpace(m.PassphraseSalt); salt != "" {
+		return []string{salt}
+	}
+	return nil
 }
 
 func decryptWithIdentity(src, dst string, identities ...age.Identity) (err error) {

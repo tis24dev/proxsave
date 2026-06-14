@@ -467,11 +467,14 @@ AGE_RECIPIENT="age1abc123def456..."
 ```bash
 # With private key file
 age --decrypt -i configs/age-keys.txt backup.tar.xz.age > test.tar.xz
-
-# With passphrase
-age --decrypt backup.tar.xz.age > test.tar.xz
-# (prompts for passphrase)
 ```
+
+> **Passphrase-based backups**: the archive is encrypted to an X25519 recipient
+> *derived* from your passphrase, not with age's native passphrase (scrypt) mode,
+> so `age --decrypt` will not prompt for a passphrase and cannot decrypt it on its
+> own. Use `proxsave --decrypt` and enter the passphrase when prompted: proxsave
+> re-derives the matching identity using the per-installation salt recorded in the
+> backup manifest (`passphrase_salt`).
 
 **Verify backup integrity**:
 ```bash

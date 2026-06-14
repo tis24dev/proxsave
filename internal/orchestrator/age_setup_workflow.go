@@ -143,7 +143,7 @@ func (o *Orchestrator) runAgeSetupWorkflow(ctx context.Context, candidatePath st
 			return nil, nil, ErrAgeRecipientSetupAborted
 		}
 
-		value, err := resolveAgeRecipientDraft(draft)
+		value, err := o.resolveAgeRecipientDraft(draft, targetPath)
 		if err != nil {
 			if o.logger != nil {
 				o.logger.Warning("Encryption setup: %v", err)
@@ -207,7 +207,7 @@ func (o *Orchestrator) runAgeSetupWorkflow(ctx context.Context, candidatePath st
 	}, nil
 }
 
-func resolveAgeRecipientDraft(draft *AgeRecipientDraft) (string, error) {
+func (o *Orchestrator) resolveAgeRecipientDraft(draft *AgeRecipientDraft, recipientPath string) (string, error) {
 	if draft == nil {
 		return "", fmt.Errorf("recipient draft is required")
 	}
@@ -228,7 +228,15 @@ func resolveAgeRecipientDraft(draft *AgeRecipientDraft) (string, error) {
 		if err := validatePassphraseStrength([]byte(passphrase)); err != nil {
 			return "", err
 		}
-		recipient, err := deriveDeterministicRecipientFromPassphrase(passphrase)
+		// Per-installation random salt (persisted next to the recipient file and
+		// embedded in archive manifests) instead of a global constant: this
+		// prevents cross-install precomputation and recipient correlation while
+		// keeping the asymmetric model (the passphrase is not needed at backup time).
+		salt, err := o.getOrCreatePassphraseSalt(recipientPath)
+		if err != nil {
+			return "", err
+		}
+		recipient, err := deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, salt)
 		if err != nil {
 			return "", err
 		}

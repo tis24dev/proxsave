@@ -308,6 +308,7 @@ func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, check
 		ScriptVersion:    stats.ScriptVersion,
 		EncryptionMode:   o.archiveEncryptionMode(),
 		ClusterMode:      stats.ClusterMode,
+		PassphraseSalt:   o.passphraseSaltForManifest(),
 	}
 }
 

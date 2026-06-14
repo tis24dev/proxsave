@@ -619,11 +619,33 @@ func deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, salt string) 
 }
 
 func deriveDeterministicIdentitiesFromPassphrase(passphrase string) ([]age.Identity, error) {
-	salts := []string{passphraseRecipientSalt, legacyPassphraseRecipientSalt}
-	seen := make(map[string]struct{}, len(salts))
+	return deriveDeterministicIdentitiesFromPassphraseWithExtraSalts(passphrase, nil)
+}
+
+// deriveDeterministicIdentitiesFromPassphraseWithExtraSalts derives one identity
+// per candidate salt. extraSalts (e.g. the per-installation salt embedded in an
+// archive manifest) are tried first, followed by the fixed v1/legacy salts so
+// archives produced before the per-install salt remain decryptable. Identities
+// are deduped by their recipient.
+func deriveDeterministicIdentitiesFromPassphraseWithExtraSalts(passphrase string, extraSalts []string) ([]age.Identity, error) {
+	salts := make([]string, 0, len(extraSalts)+2)
+	salts = append(salts, extraSalts...)
+	salts = append(salts, passphraseRecipientSalt, legacyPassphraseRecipientSalt)
+
+	seenSalt := make(map[string]struct{}, len(salts))
+	seenRec := make(map[string]struct{}, len(salts))
 	ids := make([]age.Identity, 0, len(salts))
 
 	for _, salt := range salts {
+		salt = strings.TrimSpace(salt)
+		if salt == "" {
+			continue
+		}
+		if _, ok := seenSalt[salt]; ok {
+			continue
+		}
+		seenSalt[salt] = struct{}{}
+
 		id, err := deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, salt)
 		if err != nil {
 			return nil, err
@@ -632,10 +654,10 @@ func deriveDeterministicIdentitiesFromPassphrase(passphrase string) ([]age.Ident
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seen[rec]; ok {
+		if _, ok := seenRec[rec]; ok {
 			continue
 		}
-		seen[rec] = struct{}{}
+		seenRec[rec] = struct{}{}
 		ids = append(ids, id)
 	}
 	return ids, nil

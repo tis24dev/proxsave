@@ -160,7 +160,7 @@ func ensureWritablePathWithUI(ctx context.Context, ui DecryptWorkflowUI, targetP
 	}
 }
 
-func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPath, displayName string, prompt func(ctx context.Context, displayName, previousError string) (string, error)) error {
+func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPath, displayName string, prompt func(ctx context.Context, displayName, previousError string) (string, error), extraSalts []string) error {
 	promptError := ""
 	for {
 		secret, err := prompt(ctx, displayName, promptError)
@@ -178,7 +178,7 @@ func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPa
 			continue
 		}
 
-		identities, err := parseIdentityInput(secret)
+		identities, err := parseIdentityInputWithSalts(secret, extraSalts)
 		resetString(&secret)
 		if err != nil {
 			promptError = fmt.Sprintf("Invalid key or passphrase: %v", err)
@@ -209,8 +209,9 @@ func preparePlainBundleWithUI(ctx context.Context, cand *backupCandidate, versio
 
 	done := logging.DebugStart(logger, "prepare plain bundle (ui)", "source=%v rclone=%v", cand.Source, cand.IsRclone)
 	defer func() { done(err) }()
+	extraSalts := manifestPassphraseSalts(cand.Manifest)
 	return preparePlainBundleCommon(ctx, cand, version, logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
-		return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, ui.PromptDecryptSecret)
+		return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, ui.PromptDecryptSecret, extraSalts)
 	})
 }
 
