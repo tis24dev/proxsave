@@ -136,7 +136,9 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		err = fmt.Errorf("gotify request failed: %w", err)
+		// The token is in the URL query, URL-encoded inside the *url.Error;
+		// RedactSecrets masks both the raw and URL-encoded forms.
+		err = fmt.Errorf("gotify request failed: %s", logging.RedactSecrets(err.Error(), g.config.Token))
 		g.logger.Warning("WARNING: %v", err)
 		result.Success = false
 		result.Error = err

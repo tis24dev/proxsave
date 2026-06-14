@@ -378,9 +378,12 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			lastErr = fmt.Errorf("request failed: %w", err)
-			w.logger.Warning("⚠️ Request failed after %dms (attempt %d/%d): %v",
-				requestDuration.Milliseconds(), attempt+1, maxRetries+1, err)
+			// The endpoint URL (often itself the secret, e.g. Discord/Slack) is
+			// carried verbatim by *url.Error; redact it before wrap/log.
+			redacted := logging.RedactSecrets(err.Error(), endpoint.URL)
+			lastErr = fmt.Errorf("request failed: %s", redacted)
+			w.logger.Warning("⚠️ Request failed after %dms (attempt %d/%d): %s",
+				requestDuration.Milliseconds(), attempt+1, maxRetries+1, redacted)
 			continue
 		}
 

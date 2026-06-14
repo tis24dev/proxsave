@@ -338,7 +338,9 @@ func (t *TelegramNotifier) sendToTelegram(ctx context.Context, botToken, chatID,
 	// Send request
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("api request failed: %w", err)
+		// The bot token is embedded in the URL path, which a *url.Error carries
+		// verbatim; redact it before the error is wrapped/logged/propagated.
+		return fmt.Errorf("api request failed: %s", logging.RedactSecrets(err.Error(), botToken))
 	}
 	defer func() { _ = resp.Body.Close() }()
 

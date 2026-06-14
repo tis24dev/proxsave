@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,35 @@ type Logger struct {
 	errorCount   int64
 	issueLines   []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
 	exitFunc     func(int)
+	secrets      []secretForm // registered secret values scrubbed from every log line
+}
+
+// RegisterSecret records a secret value so it is masked out of every subsequent
+// log line (stdout, log file, and the end-of-run issue summary), at any level.
+// This is a defense-in-depth net on top of source-level redaction; empty/too
+// short secrets are ignored, and both raw and URL-encoded forms are covered.
+func (l *Logger) RegisterSecret(s string) {
+	forms := secretReplaceForms([]string{s})
+	if len(forms) == 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, f := range forms {
+		dup := false
+		for _, existing := range l.secrets {
+			if existing.form == f.form {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			l.secrets = append(l.secrets, f)
+		}
+	}
+	sort.Slice(l.secrets, func(i, j int) bool {
+		return len(l.secrets[i].form) > len(l.secrets[j].form)
+	})
 }
 
 // New creates a new logger.
@@ -151,6 +181,12 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		levelStr = label
 	}
 	message := fmt.Sprintf(format, args...)
+	if len(l.secrets) > 0 {
+		// Defense-in-depth: scrub any registered secret value (raw or
+		// URL-encoded) from the line before it hits stdout, the log file, or
+		// the issue summary (the log is shipped off-host to secondary/cloud).
+		message = applySecretForms(message, l.secrets)
+	}
 
 	var colorCode string
 	var resetCode string
