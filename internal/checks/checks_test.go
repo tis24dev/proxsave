@@ -114,6 +114,40 @@ func TestCheckLockFile(t *testing.T) {
 	}
 }
 
+// TestCheckLockFile_InProgressSetsCode verifies that a fresh (live) lock makes
+// CheckLockFile report the BACKUP_IN_PROGRESS code, so callers can treat it as a
+// benign concurrency skip rather than a failure.
+func TestCheckLockFile_InProgressSetsCode(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+
+	cfg := &CheckerConfig{
+		BackupPath:   tmpDir,
+		LogPath:      tmpDir,
+		LockDirPath:  tmpDir,
+		LockFilePath: lockPath,
+		MaxLockAge:   1 * time.Hour,
+		DryRun:       false,
+	}
+	checker := NewChecker(logger, cfg)
+
+	// First call creates and acquires a fresh lock (passes).
+	if result := checker.CheckLockFile(); !result.Passed {
+		t.Fatalf("first CheckLockFile should pass: %s", result.Message)
+	}
+	t.Cleanup(func() { _ = checker.ReleaseLock() })
+
+	// Second call sees the fresh lock as another backup in progress.
+	result := checker.CheckLockFile()
+	if result.Passed {
+		t.Fatal("second CheckLockFile should fail with a live lock present")
+	}
+	if result.Code != CheckCodeBackupInProgress {
+		t.Fatalf("expected Code=%q, got %q (message=%q)", CheckCodeBackupInProgress, result.Code, result.Message)
+	}
+}
+
 func TestCheckLockFileStaleLock(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	tmpDir := t.TempDir()

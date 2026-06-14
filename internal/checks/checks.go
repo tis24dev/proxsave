@@ -280,6 +280,11 @@ func sameHost(a, b string) bool {
 }
 
 // CheckLockFile checks for stale lock files and creates a new lock
+// CheckCodeBackupInProgress marks a lock-file check that failed because another
+// backup is actively running. It is a benign concurrency skip, not a real
+// failure, so callers can treat it differently (no failure notification).
+const CheckCodeBackupInProgress = "BACKUP_IN_PROGRESS"
+
 func (c *Checker) CheckLockFile() CheckResult {
 	result := CheckResult{
 		Name:   "Lock File",
@@ -304,6 +309,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 		age := time.Since(info.ModTime())
 
 		formatInProgress := func(age time.Duration, meta lockFileMetadata) string {
+			result.Code = CheckCodeBackupInProgress
 			parts := []string{fmt.Sprintf("lock age: %v", age)}
 			if meta.PID > 0 {
 				parts = append(parts, fmt.Sprintf("pid=%d", meta.PID))

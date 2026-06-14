@@ -63,7 +63,6 @@ func runBackupMode(opts backupModeOptions) backupModeResult {
 		return finishBackupMode(orch, earlyErrorState, nil, exitCode)
 	}
 
-	initializeBackupNotifications(opts, orch)
 	logBackupRuntimeSummary(opts.cfg, storageState)
 
 	stats, earlyErrorState, exitCode := runConfiguredBackup(opts, orch)
@@ -86,6 +85,12 @@ func initializeBackupOrchestrator(opts backupModeOptions) (*orchestrator.Orchest
 	orchInitDone := logging.DebugStart(logger, "orchestrator init", "dry_run=%v", opts.dryRun)
 	orch := orchestrator.New(logger, opts.dryRun)
 	configureBackupOrchestrator(opts, orch)
+
+	// Register external notification channels NOW (before any fallible init step),
+	// so an early-init failure (encryption_setup / checker_config / storage_init)
+	// still reaches the configured channels via the deferred early-error dispatch.
+	// Notifiers are built purely from config and have no storage/encryption deps.
+	initializeBackupNotifications(opts, orch)
 
 	if earlyErrorState, exitCode := ensureBackupAgeRecipientsReady(opts, orch, orchInitDone); earlyErrorState != nil {
 		return orch, earlyErrorState, exitCode

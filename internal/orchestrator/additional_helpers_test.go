@@ -599,6 +599,7 @@ func TestFinalizeAndCloseLogWithoutLogFile(t *testing.T) {
 type stubNotifierChannel struct {
 	name          string
 	called        bool
+	count         int
 	logger        *logging.Logger
 	warnOnNotify  bool
 	errorCount    int
@@ -613,6 +614,7 @@ func (s *stubNotifierChannel) Name() string {
 
 func (s *stubNotifierChannel) Notify(ctx context.Context, stats *BackupStats) error {
 	s.called = true
+	s.count++
 	if stats != nil {
 		s.errorCount = stats.ErrorCount
 		s.warningCount = stats.WarningCount
