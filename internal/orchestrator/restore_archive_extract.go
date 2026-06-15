@@ -162,6 +162,17 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 		if skipRestoreArchiveEntry(header, opts, selectiveMode, extractionLog, &stats) {
 			continue
 		}
+		// A hardlink aliases an existing on-disk file; in a selective restore its
+		// target must belong to a selected category. A cross-category hardlink
+		// (e.g. an in-category name aliasing /etc/shadow) is never legitimate, so
+		// refuse it. Symlinks are intentionally NOT constrained this way: their
+		// targets legitimately point outside the category.
+		if selectiveMode && header.Typeflag == tar.TypeLink && !restoreEntryMatchesCategories(header.Linkname, opts.categories) {
+			opts.logger.Warning("Refusing hardlink %s: target %s is outside the selected categories", header.Name, header.Linkname)
+			stats.filesFailed++
+			extractionLog.recordSkipped(header.Name, "hardlink target outside selected categories")
+			continue
+		}
 		if err := extractTarEntry(tarReader, header, opts.destRoot, opts.logger); err != nil {
 			opts.logger.Warning("Failed to extract %s: %v", header.Name, err)
 			stats.filesFailed++
