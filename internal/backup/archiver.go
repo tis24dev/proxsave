@@ -49,6 +49,27 @@ func WithLookPathOverride(fn func(string) (string, error)) func() {
 	}
 }
 
+// ErrArchiveIncomplete signals that the archive was written and closed cleanly
+// but one or more source entries could not be added (omitted before their header)
+// or were stored with truncated content. The archive is structurally valid (it
+// passes `tar -t`) yet does not faithfully represent the source, so CreateArchive
+// returns this rather than a success - the run then fails with ExitArchiveError
+// instead of silently shipping a valid-looking but incomplete backup (H04).
+var ErrArchiveIncomplete = errors.New("archive incomplete: one or more source entries could not be added")
+
+// ErrArchiveEntryCountMismatch signals that the finished archive lists a different
+// number of entries than the archiver wrote, i.e. entries were lost after being
+// written (on-disk corruption/truncation that `tar -t` integrity alone does not
+// catch). Returned by VerifyArchive so the run fails with ExitVerificationError.
+var ErrArchiveEntryCountMismatch = errors.New("archive entry count mismatch")
+
+// skippedEntry records a source path the archiver could not add to the tar during
+// the current walk (omitted entirely before its header, or stored truncated).
+type skippedEntry struct {
+	path   string
+	reason string
+}
+
 // Archiver handles tar archive creation with compression
 type Archiver struct {
 	logger               *logging.Logger
@@ -62,6 +83,14 @@ type Archiver struct {
 	ageRecipients        []age.Recipient
 	excludePatterns      []string
 	deps                 ArchiverDeps
+
+	// State for the current CreateArchive run, reset at its start. Written only by
+	// the (single) walk goroutine and read by CreateArchive/VerifyArchive after the
+	// walk has finished (happens-before via the compressor errChan), so no locking
+	// is needed.
+	skipped        []skippedEntry // source entries that could not be archived
+	entriesWritten int            // tar headers successfully written, for verify reconciliation
+	contentVerify  bool           // true once this instance produced the archive (enables entry reconciliation)
 }
 
 // ArchiverConfig holds configuration for archive creation
@@ -417,25 +446,94 @@ func (a *Archiver) CreateArchive(ctx context.Context, sourceDir, outputPath stri
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
+	a.resetArchiveState()
+
 	// Choose compression method
+	var archiveErr error
 	switch actualCompression {
 	case types.CompressionGzip:
-		return a.createGzipArchive(ctx, sourceDir, outputPath)
+		archiveErr = a.createGzipArchive(ctx, sourceDir, outputPath)
 	case types.CompressionPigz:
-		return a.createPigzArchive(ctx, sourceDir, outputPath)
+		archiveErr = a.createPigzArchive(ctx, sourceDir, outputPath)
 	case types.CompressionXZ:
-		return a.createXZArchive(ctx, sourceDir, outputPath)
+		archiveErr = a.createXZArchive(ctx, sourceDir, outputPath)
 	case types.CompressionBzip2:
-		return a.createBzip2Archive(ctx, sourceDir, outputPath)
+		archiveErr = a.createBzip2Archive(ctx, sourceDir, outputPath)
 	case types.CompressionLZMA:
-		return a.createLzmaArchive(ctx, sourceDir, outputPath)
+		archiveErr = a.createLzmaArchive(ctx, sourceDir, outputPath)
 	case types.CompressionZstd:
-		return a.createZstdArchive(ctx, sourceDir, outputPath)
+		archiveErr = a.createZstdArchive(ctx, sourceDir, outputPath)
 	case types.CompressionNone:
-		return a.createTarArchive(ctx, sourceDir, outputPath)
+		archiveErr = a.createTarArchive(ctx, sourceDir, outputPath)
 	default:
 		return fmt.Errorf("unsupported compression type: %s", actualCompression)
 	}
+	if archiveErr != nil {
+		return archiveErr
+	}
+
+	// The compressor finished cleanly; the walk goroutine has joined, so reading
+	// the walk's accumulated state here is race-free. This instance produced the
+	// archive, so VerifyArchive may reconcile its entry count.
+	a.contentVerify = true
+	return a.incompleteArchiveError()
+}
+
+// resetArchiveState clears the per-run accounting before a new CreateArchive walk.
+func (a *Archiver) resetArchiveState() {
+	a.skipped = nil
+	a.entriesWritten = 0
+	a.contentVerify = false
+}
+
+// recordSkipped notes a source path that could not be added to the archive.
+func (a *Archiver) recordSkipped(path, reason string) {
+	a.skipped = append(a.skipped, skippedEntry{path: path, reason: reason})
+}
+
+// incompleteArchiveError returns an ErrArchiveIncomplete error naming a sample of
+// the skipped entries, or nil if the archive captured every source entry.
+func (a *Archiver) incompleteArchiveError() error {
+	if len(a.skipped) == 0 {
+		return nil
+	}
+	const sample = 5
+	names := make([]string, 0, sample)
+	for i, e := range a.skipped {
+		if i >= sample {
+			break
+		}
+		names = append(names, fmt.Sprintf("%s (%s)", e.path, e.reason))
+	}
+	more := ""
+	if len(a.skipped) > sample {
+		more = fmt.Sprintf(" (and %d more)", len(a.skipped)-sample)
+	}
+	return fmt.Errorf("%w: %d source entries could not be archived: %s%s",
+		ErrArchiveIncomplete, len(a.skipped), strings.Join(names, "; "), more)
+}
+
+// reconcileEntryCount compares the entries listed in the finished archive against
+// the number addToTar wrote, catching entries lost after they were written
+// (corruption/truncation that `tar -t` integrity alone does not surface). Skipped
+// for archives this instance did not create (preserving legacy verify-only
+// behaviour) and for encrypted archives (no plaintext listing is available).
+//
+// The check is "listed < written", not "!=": a genuine entry loss shortens the
+// listing, whereas a listing LONGER than expected is never data loss - it only
+// arises when the external `tar` splits a member name on an embedded newline
+// (e.g. busybox tar, which does not escape control characters like GNU tar does).
+// Tolerating the longer case avoids failing a healthy backup over a tar-flavour
+// quirk while still catching every dropped entry.
+func (a *Archiver) reconcileEntryCount(listed int) error {
+	if !a.contentVerify || a.encryptArchive {
+		return nil
+	}
+	if listed < a.entriesWritten {
+		return fmt.Errorf("%w: wrote %d entries but archive lists only %d", ErrArchiveEntryCountMismatch, a.entriesWritten, listed)
+	}
+	a.logger.Debug("Archive entry-count reconciliation passed (wrote %d, listed %d)", a.entriesWritten, listed)
+	return nil
 }
 
 // createGzipArchive creates a gzip-compressed tar archive using Go's stdlib
@@ -802,6 +900,10 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 
 		if err != nil {
 			a.logger.Warning("Error accessing path %s: %v", path, err)
+			// A walk error on a directory means filepath.Walk does not descend into
+			// it, so a whole subtree may be missing from the archive: record it so
+			// the run fails instead of shipping a silently incomplete archive.
+			a.recordSkipped(path, fmt.Sprintf("access error: %v", err))
 			return nil // Continue with other files
 		}
 
@@ -830,6 +932,7 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 		linkInfo, err := os.Lstat(path)
 		if err != nil {
 			a.logger.Warning("Failed to stat path %s: %v", path, err)
+			a.recordSkipped(path, fmt.Sprintf("stat failed: %v", err))
 			return nil
 		}
 
@@ -842,6 +945,7 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 			linkTarget, err = os.Readlink(path)
 			if err != nil {
 				a.logger.Warning("Failed to read symlink %s: %v", path, err)
+				a.recordSkipped(path, fmt.Sprintf("readlink failed: %v", err))
 				return nil
 			}
 		}
@@ -850,6 +954,7 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 		header, err := tar.FileInfoHeader(linkInfo, linkTarget)
 		if err != nil {
 			a.logger.Warning("Failed to create header for %s: %v", path, err)
+			a.recordSkipped(path, fmt.Sprintf("header build failed: %v", err))
 			return nil
 		}
 
@@ -882,18 +987,29 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return fmt.Errorf("failed to write tar header: %w", err)
 		}
+		a.entriesWritten++
 
 		// If it's a regular file (not symlink, dir, etc), write its content
 		if linkInfo.Mode().IsRegular() {
 			file, err := root.Open(relPath)
 			if err != nil {
 				a.logger.Warning("Failed to open file %s: %v", path, err)
+				// For a file with content the header (Size>0) is already written with
+				// no body, so the next WriteHeader/Close fails hard with "missed
+				// writing N bytes" - the run already fails, no silent loss. A 0-byte
+				// file has no body to lose, so its empty entry is faithful. Either way
+				// there is nothing to record here.
 				return nil
 			}
 
 			if _, err := io.Copy(tarWriter, file); err != nil {
 				_ = file.Close()
 				a.logger.Warning("Failed to write file %s to archive: %v", path, err)
+				// A short read leaves the entry under-filled (next op hard-fails); a
+				// file that grew yields io.ErrShortWrite/ErrWriteTooLong with the full
+				// Size written but truncated content, which `tar -t` never flags. Record
+				// it so the archive is treated as incomplete in both cases.
+				a.recordSkipped(path, fmt.Sprintf("content copy failed: %v", err))
 				return nil
 			}
 			if err := file.Close(); err != nil {
@@ -1030,8 +1146,12 @@ func (a *Archiver) verifyXZArchive(ctx context.Context, archivePath string) erro
 	if err != nil {
 		return err
 	}
-	if err := runTarListVerification(cmd); err != nil {
+	listed, err := runTarListVerification(cmd)
+	if err != nil {
 		return fmt.Errorf("tar listing failed: %w", err)
+	}
+	if err := a.reconcileEntryCount(listed); err != nil {
+		return err
 	}
 
 	a.logger.Debug("Archive verification passed: XZ compression and tar structure are valid")
@@ -1058,8 +1178,12 @@ func (a *Archiver) verifyZstdArchive(ctx context.Context, archivePath string) er
 	if err != nil {
 		return err
 	}
-	if err := runTarListVerification(cmd); err != nil {
+	listed, err := runTarListVerification(cmd)
+	if err != nil {
 		return fmt.Errorf("tar listing failed: %w", err)
+	}
+	if err := a.reconcileEntryCount(listed); err != nil {
+		return err
 	}
 
 	a.logger.Debug("Archive verification passed: Zstd compression and tar structure are valid")
@@ -1075,8 +1199,12 @@ func (a *Archiver) verifyGzipArchive(ctx context.Context, archivePath string) er
 	if err != nil {
 		return err
 	}
-	if err := runTarListVerification(cmd); err != nil {
+	listed, err := runTarListVerification(cmd)
+	if err != nil {
 		return fmt.Errorf("tar/gzip verification failed: %w", err)
+	}
+	if err := a.reconcileEntryCount(listed); err != nil {
+		return err
 	}
 
 	a.logger.Debug("Archive verification passed: Gzip compression and tar structure are valid")
@@ -1092,8 +1220,12 @@ func (a *Archiver) verifyBzip2Archive(ctx context.Context, archivePath string) e
 	if err != nil {
 		return err
 	}
-	if err := runTarListVerification(cmd); err != nil {
+	listed, err := runTarListVerification(cmd)
+	if err != nil {
 		return fmt.Errorf("tar/bzip2 verification failed: %w", err)
+	}
+	if err := a.reconcileEntryCount(listed); err != nil {
+		return err
 	}
 
 	a.logger.Debug("Archive verification passed: Bzip2 compression and tar structure are valid")
@@ -1109,8 +1241,12 @@ func (a *Archiver) verifyLzmaArchive(ctx context.Context, archivePath string) er
 	if err != nil {
 		return err
 	}
-	if err := runTarListVerification(cmd); err != nil {
+	listed, err := runTarListVerification(cmd)
+	if err != nil {
 		return fmt.Errorf("tar/lzma verification failed: %w", err)
+	}
+	if err := a.reconcileEntryCount(listed); err != nil {
+		return err
 	}
 
 	a.logger.Debug("Archive verification passed: LZMA compression and tar structure are valid")
@@ -1126,8 +1262,12 @@ func (a *Archiver) verifyTarArchive(ctx context.Context, archivePath string) err
 	if err != nil {
 		return err
 	}
-	if err := runTarListVerification(cmd); err != nil {
+	listed, err := runTarListVerification(cmd)
+	if err != nil {
 		return fmt.Errorf("tar verification failed: %w", err)
+	}
+	if err := a.reconcileEntryCount(listed); err != nil {
+		return err
 	}
 
 	a.logger.Debug("Archive verification passed: Tar structure is valid")
@@ -1159,22 +1299,37 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 
 func (c *cappedBuffer) String() string { return string(c.buf) }
 
+// lineCountWriter counts newline-terminated lines without retaining them, so a
+// `tar -t` listing (one line per entry, potentially enormous) can be counted for
+// entry reconciliation without buffering it in memory.
+type lineCountWriter struct{ lines int }
+
+func (c *lineCountWriter) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if b == '\n' {
+			c.lines++
+		}
+	}
+	return len(p), nil
+}
+
 // runTarListVerification runs a `tar -t...` listing command used only to verify
 // archive integrity. The listing prints one line per entry and can be enormous,
-// so its stdout is discarded instead of buffered in memory (the previous
-// CombinedOutput kept the whole listing despite the "discard" intent). Only a
+// so its stdout is counted (one line per archive member) instead of buffered in
+// memory; the count is returned for source-vs-archive entry reconciliation. Only a
 // bounded amount of stderr is captured so a failure stays actionable.
-func runTarListVerification(cmd *exec.Cmd) error {
-	cmd.Stdout = io.Discard
+func runTarListVerification(cmd *exec.Cmd) (int, error) {
+	counter := &lineCountWriter{}
+	cmd.Stdout = counter
 	stderr := &cappedBuffer{cap: verifyStderrCap}
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return fmt.Errorf("%w (stderr: %s)", err, msg)
+			return 0, fmt.Errorf("%w (stderr: %s)", err, msg)
 		}
-		return err
+		return 0, err
 	}
-	return nil
+	return counter.lines, nil
 }
 
 // GetArchiveSize returns the size of the archive in bytes
