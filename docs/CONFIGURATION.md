@@ -140,18 +140,28 @@ PORT_WHITELIST=                                 # e.g., "sshd:22,nginx:443"
 # Built-in defaults: ncat, cryptominer, xmrig, kdevtmpfsi, kinsing, minerd, mr.sh
 SUSPICIOUS_PROCESSES="ncat,cryptominer,xmrig,kdevtmpfsi,kinsing,minerd,mr.sh"
 
-# Safe process names (won't trigger alerts)
-# NOTE: Your values are ADDED to the built-in defaults (not replaced)
-# Supports exact match, prefix with *, or regex: patterns (case-insensitive)
+# Safe process names for the bracketed "kernel-style" process warning.
+# That warning ("Suspicious kernel-style process: ...") fires for any process the
+# host's `ps` reports inside square brackets, e.g. a real kernel thread
+# `[kworker/0:1]` or a container worker an unprivileged LXC exposes to the host as
+# `[celeryd: celery@paperless:ForkPoolWorker-3057]`. Both lists below are checked.
+# NOTE: Your values are ADDED to the built-in defaults (not replaced).
+# Matching is against the text BETWEEN the brackets, case-insensitive, and a plain
+# entry is an EXACT whole-name match (NOT a prefix). Use "name*" (prefix) or
+# "regex:pattern" (unanchored) to match part of the name. So the celery worker
+# above is matched by `celeryd*` or `regex:^celeryd`, but NOT by a plain `celeryd`.
 # Built-in defaults for SAFE_BRACKET_PROCESSES: sshd:, systemd, cron, rsyslogd, dbus-daemon, zvol_tq*, arc_*, dbu_*, dbuf_*, l2arc_feed, lockd, nfsd*, nfsv4 callback*
 SAFE_BRACKET_PROCESSES="sshd:,systemd,cron,rsyslogd,dbus-daemon"
 
 # Built-in defaults for SAFE_KERNEL_PROCESSES: ksgxd, hwrng, usb-storage, vdev_autotrim, card1-crtc0, card1-crtc1, card1-crtc2, kvm-pit*, and various regex patterns
 SAFE_KERNEL_PROCESSES="ksgxd,hwrng,usb-storage,vdev_autotrim,card1-crtc0,card1-crtc1,card1-crtc2,kvm-pit,regex:^card[0-9]+-crtc[0-9]+$,regex:^drbd_[wrs]_.+,regex:^kvm-pit/[0-9]+$,regex:^kmmpd-drbd[0-9]+$"
 
-# Allowlist for the suspicious-process scan (no built-in defaults; purely user-driven)
-# A process is never flagged if any token of its command line (or that token's basename)
-# matches an entry, even if it also matches SUSPICIOUS_PROCESSES.
+# Allowlist for the suspicious-process scan ONLY (no built-in defaults; purely user-driven).
+# This list does NOT silence the bracketed "kernel-style" warning above; use
+# SAFE_BRACKET_PROCESSES / SAFE_KERNEL_PROCESSES for those.
+# A process is never flagged by the suspicious-process scan if any token of its
+# command line (or that token's basename) matches an entry, even if it also matches
+# SUSPICIOUS_PROCESSES.
 # Matching is anchored to the start of each token: a plain entry matches any token that
 # STARTS WITH it (e.g. "ssh" also matches "sshd"), so use "regex:^name$" for an exact match.
 # "name*" wildcard and "regex:pattern" are also supported (case-insensitive).
@@ -194,12 +204,18 @@ This means you don't need to repeat the default values - just add your custom en
 
 #### Process Matching
 
-`SUSPICIOUS_PROCESSES` and `SAFE_PROCESSES` are matched per command-line token (and each token's path basename), anchored to the **start** of the token:
+proxsave runs two independent process detectors, and their allowlists are **not** interchangeable. Pick the list that matches the warning you see.
+
+**Suspicious-process scan** (`SUSPICIOUS_PROCESSES`, allowlisted by `SAFE_PROCESSES`) is matched per command-line token (and each token's path basename), anchored to the **start** of the token:
 
 - A **plain entry** matches any token that **starts with** it. For example `ncat` matches `ncat` and `/usr/bin/ncat`, but no longer matches the substring inside `concat`; note that `ssh` would also match `sshd`.
 - Use **`regex:^name$`** for an exact match, or **`name*`** / **`regex:pattern`** for explicit wildcard/regex control (case-insensitive).
 
-`SAFE_BRACKET_PROCESSES` and `SAFE_KERNEL_PROCESSES` match a single process name and behave differently: a plain entry there is an **exact** match (use `name*` / `regex:` for broader matching).
+**Bracketed "kernel-style" detector** (`SAFE_BRACKET_PROCESSES` and `SAFE_KERNEL_PROCESSES`) handles the `Suspicious kernel-style process: ...` warning. It fires for any process the host's `ps` reports inside square brackets, such as a real kernel thread (`[kworker/0:1]`) or a container worker an unprivileged LXC exposes to the host (`[celeryd: celery@paperless:ForkPoolWorker-3057]`). It matches a **single name** (the text *between* the brackets), case-insensitively, and behaves differently from the scan above:
+
+- A **plain entry is an exact, whole-name match** (not a prefix). `celeryd` does **not** match `celeryd: celery@paperless:ForkPoolWorker-3057`.
+- Use **`name*`** for a prefix match or **`regex:pattern`** for an unanchored regex. The celery worker above is matched by `celeryd*` or `regex:^celeryd`, but not by a plain `celeryd` or by an anchored `regex:^celeryd$`.
+- `SAFE_PROCESSES` has **no effect** on this detector. Allowlist bracketed processes via `SAFE_BRACKET_PROCESSES` (or `SAFE_KERNEL_PROCESSES`).
 
 ### Permission Management
 
