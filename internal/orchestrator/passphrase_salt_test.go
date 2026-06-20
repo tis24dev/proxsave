@@ -43,10 +43,10 @@ func TestGetOrCreatePassphraseSalt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getOrCreatePassphraseSalt: %v", err)
 	}
-	if !strings.HasPrefix(salt, passphraseRandomSaltPrefix) {
-		t.Fatalf("salt %q missing prefix %q", salt, passphraseRandomSaltPrefix)
+	if !strings.HasPrefix(salt, randomSaltNamespaceV2) {
+		t.Fatalf("salt %q missing prefix %q", salt, randomSaltNamespaceV2)
 	}
-	if salt == passphraseRecipientSalt || salt == legacyPassphraseRecipientSalt {
+	if salt == recipientSaltV1 || salt == legacyRecipientSalt {
 		t.Fatalf("salt collided with a fixed salt: %q", salt)
 	}
 
@@ -114,7 +114,7 @@ func TestPassphraseSaltIsPerInstallation(t *testing.T) {
 // actually required to decrypt: with the salt the archive decrypts, and with the
 // fixed/legacy salts alone (no manifest salt) it does not.
 func TestPassphraseRandomSaltRoundTripAndIsolation(t *testing.T) {
-	salt := passphraseRandomSaltPrefix + "00112233445566778899aabbccddeeff"
+	salt := randomSaltNamespaceV2 + "00112233445566778899aabbccddeeff"
 	recStr, err := deriveDeterministicRecipientFromPassphraseWithSalt(testStrongPassphrase, salt)
 	if err != nil {
 		t.Fatal(err)

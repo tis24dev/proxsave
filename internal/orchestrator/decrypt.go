@@ -429,7 +429,7 @@ func downloadRcloneBackup(ctx context.Context, remotePath string, logger *loggin
 	done := logging.DebugStart(logger, "download rclone backup", "remote=%s", remotePath)
 	defer func() { done(err) }()
 	// Ensure /tmp/proxsave exists and is a safe, root-owned, non-symlink directory.
-	tempRoot := tempWorkspaceRoot
+	tempRoot := workspaceRoot
 	if err := ensureSecureTempRoot(restoreFS, tempRoot); err != nil {
 		return "", nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}

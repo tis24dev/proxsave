@@ -52,9 +52,9 @@ func TestTempDirRegistryRegisterAndDeregister(t *testing.T) {
 }
 
 func TestTempDirRegistryCleanupOrphaned(t *testing.T) {
-	origRoot := tempWorkspaceRoot
-	tempWorkspaceRoot = t.TempDir()
-	t.Cleanup(func() { tempWorkspaceRoot = origRoot })
+	origRoot := workspaceRoot
+	workspaceRoot = t.TempDir()
+	t.Cleanup(func() { workspaceRoot = origRoot })
 
 	regPath := filepath.Join(t.TempDir(), "temp-dirs.json")
 	registry, err := NewTempDirRegistry(newTestLogger(), regPath)
@@ -63,11 +63,11 @@ func TestTempDirRegistryCleanupOrphaned(t *testing.T) {
 	}
 
 	// A legitimate workspace: under the trusted root and carrying the marker.
-	staleDir := filepath.Join(tempWorkspaceRoot, "proxsave-stale")
+	staleDir := filepath.Join(workspaceRoot, "proxsave-stale")
 	if err := os.MkdirAll(staleDir, 0o700); err != nil {
 		t.Fatalf("mkdir stale dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(staleDir, tempWorkspaceMarker), []byte("m"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(staleDir, workspaceMarker), []byte("m"), 0o600); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
 	// A poisoned entry pointing outside the trusted root: must NOT be deleted (#55).

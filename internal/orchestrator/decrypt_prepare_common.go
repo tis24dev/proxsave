@@ -81,7 +81,7 @@ func preparePlainBundleCommon(ctx context.Context, cand *backupCandidate, versio
 		cand.BundlePath = localPath
 	}
 
-	tempRoot := tempWorkspaceRoot
+	tempRoot := workspaceRoot
 	if err := ensureSecureTempRoot(restoreFS, tempRoot); err != nil {
 		if rcloneCleanup != nil {
 			rcloneCleanup()

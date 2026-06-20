@@ -17,14 +17,14 @@ const (
 	defaultRegistryEnvVar = "PROXMOX_TEMP_REGISTRY_PATH"
 	defaultRegistryPath   = "/var/run/proxsave/temp-dirs.json"
 	registryFallbackDir   = "proxsave"
-	tempWorkspaceMarker   = ".proxsave-marker"
+	workspaceMarker       = ".proxsave-marker"
 )
 
-// tempWorkspaceRoot is the shared root under which all ProxSave temp workspaces
+// workspaceRoot is the shared root under which all ProxSave temp workspaces
 // are created (MkdirTemp children). CleanupOrphaned only removes paths contained
 // here, and the backup/decrypt paths validate it before use. It is a var (not a
 // const) so tests can point it at a scratch directory.
-var tempWorkspaceRoot = "/tmp/proxsave"
+var workspaceRoot = "/tmp/proxsave"
 
 // ensureSecureTempRoot validates (and creates if missing) the shared temp root so
 // it cannot be hijacked by an attacker who pre-creates /tmp/proxsave as a symlink
@@ -61,13 +61,13 @@ func ensureSecureTempRoot(fsys FS, path string) error {
 
 // workspacePathIsRemovable reports whether path is a genuine ProxSave temp
 // workspace that CleanupOrphaned may RemoveAll: it must be a non-symlink
-// directory contained directly under tempWorkspaceRoot and carry the marker file
+// directory contained directly under workspaceRoot and carry the marker file
 // written before a workspace is registered (issue #55). This prevents a poisoned
 // registry (or a controlled PROXMOX_TEMP_REGISTRY_PATH) from deleting arbitrary
 // paths.
 func workspacePathIsRemovable(path string) bool {
 	clean := filepath.Clean(path)
-	root := filepath.Clean(tempWorkspaceRoot)
+	root := filepath.Clean(workspaceRoot)
 	if clean == root || !strings.HasPrefix(clean, root+string(os.PathSeparator)) {
 		return false
 	}
@@ -75,7 +75,7 @@ func workspacePathIsRemovable(path string) bool {
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return false
 	}
-	if _, err := os.Lstat(filepath.Join(clean, tempWorkspaceMarker)); err != nil {
+	if _, err := os.Lstat(filepath.Join(clean, workspaceMarker)); err != nil {
 		return false
 	}
 	return true
@@ -166,7 +166,7 @@ func (r *TempDirRegistry) CleanupOrphaned(maxAge time.Duration) (int, error) {
 			if stale || !alive {
 				if !workspacePathIsRemovable(entry.Path) {
 					if r.logger != nil {
-						r.logger.Warning("Refusing to remove registry entry %s: not a ProxSave workspace under %s; dropping untrusted entry", entry.Path, tempWorkspaceRoot)
+						r.logger.Warning("Refusing to remove registry entry %s: not a ProxSave workspace under %s; dropping untrusted entry", entry.Path, workspaceRoot)
 					}
 					// Drop the untrusted entry without touching the filesystem path.
 					continue

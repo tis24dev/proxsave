@@ -10,11 +10,11 @@ import (
 	"strings"
 )
 
-// passphraseRandomSaltPrefix namespaces the per-installation random salt used to
+// randomSaltNamespaceV2 namespaces the per-installation random salt used to
 // derive a passphrase-based AGE recipient. The "v2" generation replaces the
-// fixed salts (passphraseRecipientSalt / legacyPassphraseRecipientSalt), which
+// fixed salts (recipientSaltV1 / legacyRecipientSalt), which
 // remain accepted at decrypt time for backward compatibility with older archives.
-const passphraseRandomSaltPrefix = "proxsave/age-passphrase/v2:"
+const randomSaltNamespaceV2 = "proxsave/age-passphrase/v2:"
 
 // passphraseSaltFilePath returns the salt file that sits next to a recipient file.
 func passphraseSaltFilePath(recipientPath string) string {
@@ -46,7 +46,7 @@ func (o *Orchestrator) getOrCreatePassphraseSalt(recipientPath string) (string, 
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate passphrase salt: %w", err)
 	}
-	salt := passphraseRandomSaltPrefix + hex.EncodeToString(raw)
+	salt := randomSaltNamespaceV2 + hex.EncodeToString(raw)
 	if err := fs.MkdirAll(filepath.Dir(saltPath), 0o700); err != nil {
 		return "", fmt.Errorf("create passphrase salt directory: %w", err)
 	}

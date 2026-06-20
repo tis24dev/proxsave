@@ -27,12 +27,12 @@ var ErrAgeRecipientSetupAborted = errors.New("encryption setup aborted by user")
 
 const (
 	// Note: dual salt for passphrase-derived keys — keep legacy for decrypting older archives.
-	passphraseRecipientSalt       = "proxsave/age-passphrase/v1"
-	legacyPassphraseRecipientSalt = "proxmox-backup-go/age-passphrase/v1"
-	passphraseScryptN             = 1 << 15
-	passphraseScryptR             = 8
-	passphraseScryptP             = 1
-	minPassphraseLength           = 12
+	recipientSaltV1     = "proxsave/age-passphrase/v1"
+	legacyRecipientSalt = "proxmox-backup-go/age-passphrase/v1"
+	passphraseScryptN   = 1 << 15
+	passphraseScryptR   = 8
+	passphraseScryptP   = 1
+	minPassphraseLength = 12
 )
 
 var weakPassphraseList = []string{
@@ -560,7 +560,7 @@ func DeriveDeterministicRecipientFromPassphrase(passphrase string) (string, erro
 }
 
 func deriveDeterministicRecipientFromPassphrase(passphrase string) (string, error) {
-	return deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, passphraseRecipientSalt)
+	return deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, recipientSaltV1)
 }
 
 func deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, salt string) (string, error) {
@@ -589,7 +589,7 @@ func clampCurve25519Scalar(k []byte) {
 }
 
 func deriveCurve25519ScalarFromPassphrase(passphrase string) ([]byte, error) {
-	return deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, passphraseRecipientSalt)
+	return deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, recipientSaltV1)
 }
 
 func deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, salt string) ([]byte, error) {
@@ -602,7 +602,7 @@ func deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, salt string) ([]by
 }
 
 func deriveDeterministicIdentityFromPassphrase(passphrase string) (age.Identity, error) {
-	return deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, passphraseRecipientSalt)
+	return deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, recipientSaltV1)
 }
 
 func deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, salt string) (age.Identity, error) {
@@ -630,7 +630,7 @@ func deriveDeterministicIdentitiesFromPassphrase(passphrase string) ([]age.Ident
 func deriveDeterministicIdentitiesFromPassphraseWithExtraSalts(passphrase string, extraSalts []string) ([]age.Identity, error) {
 	salts := make([]string, 0, len(extraSalts)+2)
 	salts = append(salts, extraSalts...)
-	salts = append(salts, passphraseRecipientSalt, legacyPassphraseRecipientSalt)
+	salts = append(salts, recipientSaltV1, legacyRecipientSalt)
 
 	seenSalt := make(map[string]struct{}, len(salts))
 	seenRec := make(map[string]struct{}, len(salts))
