@@ -2,9 +2,13 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeAccountsCmd struct{ err error }
@@ -487,6 +491,121 @@ func assertPasswdShadowConsistent(t *testing.T, passwd, shadow string) {
 	for _, l := range splitNonEmptyLines(passwd) {
 		if name := colonName(l); !shadowNames[name] {
 			t.Errorf("passwd<->shadow desync: user %q in passwd has no shadow line", name)
+		}
+	}
+}
+
+// seedAccountFiles writes the four host auth-DB files (+ a staged set that imports
+// bob) into fakeFS and pins the clock so the per-file temp names are predictable.
+// Returns the four original contents for byte-for-byte rollback assertions.
+func seedAccountFiles(t *testing.T, fakeFS *FakeFS) (passwd0, shadow0, group0, gshadow0 string) {
+	t.Helper()
+	passwd0 = "root:x:0:0:root:/root:/bin/bash\n"
+	shadow0 = "root:CURHASH:1::::::\n"
+	group0 = "root:x:0:\nsudo:x:27:\n"
+	gshadow0 = "root:*::\n"
+	_ = fakeFS.WriteFile(etcPasswdPath, []byte(passwd0), 0o644)
+	_ = fakeFS.WriteFile(etcShadowPath, []byte(shadow0), 0o640)
+	_ = fakeFS.WriteFile(etcGroupPath, []byte(group0), 0o644)
+	_ = fakeFS.WriteFile(etcGshadowPath, []byte(gshadow0), 0o640)
+	_ = fakeFS.WriteFile("/stage/etc/passwd", []byte("bob:x:1001:1001::/home/bob:/bin/bash\n"), 0o644)
+	_ = fakeFS.WriteFile("/stage/etc/shadow", []byte("bob:BOBHASH:1::::::\n"), 0o640)
+	_ = fakeFS.WriteFile("/stage/etc/group", []byte("bob:x:1001:\n"), 0o644)
+	return passwd0, shadow0, group0, gshadow0
+}
+
+func accountTempPath(t *testing.T, path string) string {
+	t.Helper()
+	return fmt.Sprintf("%s.proxsave.tmp.%d", filepath.Clean(path), nowRestore().UnixNano())
+}
+
+// TestApplyAccountsPreparePhaseFailureLeavesAllOriginals: a failure while preparing a
+// temp file (the common disk-full / read-only / IO case) must leave ALL four live
+// auth-DB files untouched (no partial commit) and leave no temp behind.
+func TestApplyAccountsPreparePhaseFailureLeavesAllOriginals(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	restoreCmd = fakeAccountsCmd{}
+	origTime := restoreTime
+	t.Cleanup(func() { restoreTime = origTime })
+	restoreTime = &FakeTime{Current: time.Unix(10, 0)}
+
+	passwd0, shadow0, group0, gshadow0 := seedAccountFiles(t, fakeFS)
+
+	// Fail the THIRD file's (group) temp creation. With a pinned clock the four temps
+	// share the same nanosecond suffix but differ by path prefix, so this hits group.
+	fakeFS.OpenFileErr[filepath.Clean(accountTempPath(t, etcGroupPath))] = errors.New("forced temp-create failure")
+
+	if err := applyAccountsFromStage(context.Background(), newTestLogger(), "/stage"); err == nil {
+		t.Fatal("expected an error when a prepare-phase temp creation fails")
+	}
+
+	if got := readFake(t, fakeFS, etcPasswdPath); got != passwd0 {
+		t.Errorf("passwd must be unchanged after a prepare-phase failure, got:\n%s", got)
+	}
+	if got := readFake(t, fakeFS, etcShadowPath); got != shadow0 {
+		t.Errorf("shadow must be unchanged after a prepare-phase failure, got:\n%s", got)
+	}
+	if got := readFake(t, fakeFS, etcGroupPath); got != group0 {
+		t.Errorf("group must be unchanged after a prepare-phase failure, got:\n%s", got)
+	}
+	if got := readFake(t, fakeFS, etcGshadowPath); got != gshadow0 {
+		t.Errorf("gshadow must be unchanged after a prepare-phase failure, got:\n%s", got)
+	}
+	// The temps prepared before the failure (passwd, shadow) must have been cleaned up.
+	for _, p := range []string{etcPasswdPath, etcShadowPath, etcGshadowPath} {
+		if _, err := fakeFS.Stat(accountTempPath(t, p)); !os.IsNotExist(err) {
+			t.Errorf("temp for %s should not remain after prepare-phase failure (stat err=%v)", p, err)
+		}
+	}
+}
+
+// TestApplyAccountsCommitRollbackRestoresCommittedFiles: if a rename fails partway
+// through the commit phase, the files already committed must be rolled back to their
+// originals so the auth-DB set stays consistent.
+func TestApplyAccountsCommitRollbackRestoresCommittedFiles(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	restoreCmd = fakeAccountsCmd{}
+	origTime := restoreTime
+	t.Cleanup(func() { restoreTime = origTime })
+	restoreTime = &FakeTime{Current: time.Unix(10, 0)}
+
+	passwd0, shadow0, group0, gshadow0 := seedAccountFiles(t, fakeFS)
+
+	// Fail the group rename (index 2): passwd+shadow commit first, then group's rename
+	// fails -> the two committed files must be rolled back to their originals.
+	fakeFS.RenameErr[filepath.Clean(accountTempPath(t, etcGroupPath))] = errors.New("forced rename failure")
+
+	if err := applyAccountsFromStage(context.Background(), newTestLogger(), "/stage"); err == nil {
+		t.Fatal("expected an error when a commit-phase rename fails")
+	}
+
+	if got := readFake(t, fakeFS, etcPasswdPath); got != passwd0 {
+		t.Errorf("passwd must be rolled back to its original after a commit failure, got:\n%s", got)
+	}
+	if got := readFake(t, fakeFS, etcShadowPath); got != shadow0 {
+		t.Errorf("shadow must be rolled back to its original after a commit failure, got:\n%s", got)
+	}
+	if got := readFake(t, fakeFS, etcGroupPath); got != group0 {
+		t.Errorf("group (failed commit) must be untouched, got:\n%s", got)
+	}
+	if got := readFake(t, fakeFS, etcGshadowPath); got != gshadow0 {
+		t.Errorf("gshadow (never committed) must be untouched, got:\n%s", got)
+	}
+	for _, p := range []string{etcPasswdPath, etcShadowPath, etcGroupPath, etcGshadowPath} {
+		if _, err := fakeFS.Stat(accountTempPath(t, p)); !os.IsNotExist(err) {
+			t.Errorf("temp for %s should not remain after commit rollback (stat err=%v)", p, err)
 		}
 	}
 }

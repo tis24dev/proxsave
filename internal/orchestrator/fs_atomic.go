@@ -184,75 +184,82 @@ func desiredOwnershipForAtomicWrite(destPath string) uidGid {
 	return uidGid{}
 }
 
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	path = filepath.Clean(strings.TrimSpace(path))
-	if path == "" || path == "." {
-		return fmt.Errorf("invalid path")
+// syncDir fsyncs a directory so a rename within it becomes durable. Filesystems
+// that do not support directory fsync (EINVAL/ENOTSUP) are tolerated.
+func syncDir(dir string) error {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "" {
+		dir = "."
+	}
+
+	df, err := restoreFS.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open dir %s: %w", dir, err)
+	}
+
+	syncErr := atomicFileSync(df)
+	closeErr := df.Close()
+	if syncErr != nil {
+		if errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP) {
+			return closeErr
+		}
+		return fmt.Errorf("fsync dir %s: %w", dir, syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close dir %s: %w", dir, closeErr)
+	}
+	return nil
+}
+
+// prepareAtomicTempFile is phase 1 of an atomic write: it writes data to a sibling
+// temp file of path with the final ownership/permissions applied and flushed, but
+// does NOT rename it into place, so no live file is touched yet. On any error before
+// the temp is ready it removes the temp. It returns the temp path, the cleaned
+// destination path, and the parent directory for commitAtomicTempFile (phase 2).
+func prepareAtomicTempFile(path string, data []byte, perm os.FileMode) (tmpPath, cleanPath, dir string, err error) {
+	cleanPath = filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "" || cleanPath == "." {
+		return "", "", "", fmt.Errorf("invalid path")
 	}
 	perm = modeBits(perm)
 	if perm == 0 {
 		perm = 0o644
 	}
 
-	dir := filepath.Dir(path)
+	dir = filepath.Dir(cleanPath)
 	if err := ensureDirExistsWithInheritedMeta(dir); err != nil {
-		return err
+		return "", "", "", err
 	}
 
-	owner := desiredOwnershipForAtomicWrite(path)
+	owner := desiredOwnershipForAtomicWrite(cleanPath)
 
-	tmpPath := fmt.Sprintf("%s.proxsave.tmp.%d", path, nowRestore().UnixNano())
+	tmpPath = fmt.Sprintf("%s.proxsave.tmp.%d", cleanPath, nowRestore().UnixNano())
 	f, err := restoreFS.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL|os.O_TRUNC, 0o600)
 	if err != nil {
-		return err
-	}
-
-	syncDir := func(dir string) error {
-		dir = filepath.Clean(strings.TrimSpace(dir))
-		if dir == "" {
-			dir = "."
-		}
-
-		df, err := restoreFS.Open(dir)
-		if err != nil {
-			return fmt.Errorf("open dir %s: %w", dir, err)
-		}
-
-		syncErr := atomicFileSync(df)
-		closeErr := df.Close()
-		if syncErr != nil {
-			if errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP) {
-				return closeErr
-			}
-			return fmt.Errorf("fsync dir %s: %w", dir, syncErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close dir %s: %w", dir, closeErr)
-		}
-		return nil
+		return "", "", "", err
 	}
 
 	writeErr := func() error {
 		if len(data) == 0 {
 			return nil
 		}
-		_, err := f.Write(data)
-		return err
+		_, werr := f.Write(data)
+		return werr
 	}()
 	if writeErr == nil {
 		if atomicGeteuid() == 0 && owner.ok {
-			if err := atomicFileChown(f, owner.uid, owner.gid); err != nil {
-				writeErr = err
+			if cerr := atomicFileChown(f, owner.uid, owner.gid); cerr != nil {
+				writeErr = cerr
 			}
 		}
 		if writeErr == nil {
-			if err := atomicFileChmod(f, perm); err != nil {
-				writeErr = err
+			if cerr := atomicFileChmod(f, perm); cerr != nil {
+				writeErr = cerr
 			}
 		}
 		if writeErr == nil {
-			if err := atomicFileSync(f); err != nil {
-				writeErr = err
+			if serr := atomicFileSync(f); serr != nil {
+				writeErr = serr
 			}
 		}
 	}
@@ -260,20 +267,111 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	closeErr := f.Close()
 	if writeErr != nil {
 		_ = restoreFS.Remove(tmpPath)
-		return writeErr
+		return "", "", "", writeErr
 	}
 	if closeErr != nil {
 		_ = restoreFS.Remove(tmpPath)
-		return closeErr
+		return "", "", "", closeErr
 	}
+	return tmpPath, cleanPath, dir, nil
+}
 
-	if err := restoreFS.Rename(tmpPath, path); err != nil {
+// commitAtomicTempFile is phase 2 of an atomic write: it renames a prepared temp
+// file into its final destination and fsyncs the parent directory. The returned
+// committed flag lets a batch caller roll back precisely: committed==false means the
+// rename failed and the destination is untouched (the temp was removed); committed==
+// true with a non-nil error means the rename succeeded (the file is live) but the
+// directory fsync failed.
+func commitAtomicTempFile(tmpPath, cleanPath, dir string) (committed bool, err error) {
+	if err := restoreFS.Rename(tmpPath, cleanPath); err != nil {
 		_ = restoreFS.Remove(tmpPath)
+		return false, err
+	}
+	if err := syncDir(dir); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmpPath, cleanPath, dir, err := prepareAtomicTempFile(path, data, perm)
+	if err != nil {
 		return err
 	}
+	_, err = commitAtomicTempFile(tmpPath, cleanPath, dir)
+	return err
+}
 
-	if err := syncDir(dir); err != nil {
-		return err
+// atomicFileWrite is one entry of a writeFilesAtomic batch. original holds the
+// current on-disk bytes used to roll the file back if a later file in the batch
+// fails to commit. An empty original (the read-back representation of an absent or
+// empty file) rolls back to an empty file, which is acceptable for the account DB.
+type atomicFileWrite struct {
+	path     string
+	data     []byte
+	original []byte
+	perm     os.FileMode
+}
+
+// writeFilesAtomic writes a set of files all-or-nothing as far as is achievable
+// without a journal. Phase 1 prepares every temp file; if any preparation fails no
+// destination is touched, so the common disk-full / read-only / IO failures leave
+// every live file unchanged. Phase 2 renames each temp into place; if a commit fails
+// the already-committed files are rolled back to their originals. Residual window: a
+// crash or power loss BETWEEN renames cannot be made atomic here (that needs a
+// journal / recovery marker) — the window is narrowed to the cheap renames because
+// all data is already fsynced and closed in phase 1.
+func writeFilesAtomic(writes []atomicFileWrite) error {
+	type prepared struct {
+		tmpPath   string
+		cleanPath string
+		dir       string
+		w         atomicFileWrite
+	}
+
+	staged := make([]prepared, 0, len(writes))
+	// Phase 1: prepare all temps. No destination file is touched yet.
+	for _, w := range writes {
+		tmpPath, cleanPath, dir, err := prepareAtomicTempFile(w.path, w.data, w.perm)
+		if err != nil {
+			for _, s := range staged {
+				_ = restoreFS.Remove(s.tmpPath)
+			}
+			return fmt.Errorf("prepare %s: %w", w.path, err)
+		}
+		staged = append(staged, prepared{tmpPath: tmpPath, cleanPath: cleanPath, dir: dir, w: w})
+	}
+
+	// Phase 2: commit (rename) each in order; roll back on failure.
+	for i, s := range staged {
+		committed, err := commitAtomicTempFile(s.tmpPath, s.cleanPath, s.dir)
+		if err == nil {
+			continue
+		}
+
+		// Roll back the files already made live. When committed is true the rename of
+		// index i succeeded (only the dir fsync failed) so file i is live and must be
+		// reverted too; when false the rename failed and index i is untouched (its
+		// temp was already removed by commitAtomicTempFile).
+		last := i - 1
+		if committed {
+			last = i
+		}
+		var rollbackFailed []string
+		for j := last; j >= 0; j-- {
+			if rbErr := writeFileAtomic(staged[j].cleanPath, staged[j].w.original, staged[j].w.perm); rbErr != nil {
+				rollbackFailed = append(rollbackFailed, staged[j].cleanPath)
+			}
+		}
+		// Remove the not-yet-committed temps (index i's temp is already gone).
+		for k := i + 1; k < len(staged); k++ {
+			_ = restoreFS.Remove(staged[k].tmpPath)
+		}
+
+		if len(rollbackFailed) > 0 {
+			return fmt.Errorf("CRITICAL: commit of %s failed and rollback of %v also failed; the on-disk file set may be inconsistent and manual recovery is required: %w", s.cleanPath, rollbackFailed, err)
+		}
+		return fmt.Errorf("commit %s failed; already-written files were rolled back to their originals: %w", s.cleanPath, err)
 	}
 	return nil
 }

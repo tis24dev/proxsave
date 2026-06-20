@@ -145,16 +145,15 @@ func applyAccountsFromStage(ctx context.Context, logger *logging.Logger, stageRo
 	importedGroups, mergedGroup := mergeGroup(currentGroup, stagedGroup, hostGroupGID, hostGIDs, importedUsers)
 	mergedGshadow := mergeGshadow(currentGshadow, stagedGshadow, importedGroups)
 
-	if err := writeFileAtomic(etcPasswdPath, []byte(mergedPasswd), 0o644); err != nil {
-		return err
-	}
-	if err := writeFileAtomic(etcShadowPath, []byte(mergedShadow), 0o640); err != nil {
-		return err
-	}
-	if err := writeFileAtomic(etcGroupPath, []byte(mergedGroup), 0o644); err != nil {
-		return err
-	}
-	if err := writeFileAtomic(etcGshadowPath, []byte(mergedGshadow), 0o640); err != nil {
+	// Write the four auth-DB files all-or-nothing: a failure partway through must never
+	// leave the host with an inconsistent passwd/shadow/group/gshadow set (lockout
+	// risk). The current* contents read above are the rollback source.
+	if err := writeFilesAtomic([]atomicFileWrite{
+		{path: etcPasswdPath, data: []byte(mergedPasswd), original: []byte(currentPasswd), perm: 0o644},
+		{path: etcShadowPath, data: []byte(mergedShadow), original: []byte(currentShadow), perm: 0o640},
+		{path: etcGroupPath, data: []byte(mergedGroup), original: []byte(currentGroup), perm: 0o644},
+		{path: etcGshadowPath, data: []byte(mergedGshadow), original: []byte(currentGshadow), perm: 0o640},
+	}); err != nil {
 		return err
 	}
 	logger.Info("Restored system accounts: imported %d user(s) and %d group(s); host root, system accounts and group memberships preserved", len(importedUsers), len(importedGroups))
