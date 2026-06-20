@@ -696,6 +696,37 @@ func TestPVEJobBricksComprehensive(t *testing.T) {
 	})
 }
 
+// TestSystemRootPrefixAppliesToCorosyncAndVzdumpPaths guards #68: the documented
+// SYSTEM_ROOT_PREFIX must be honored for the corosync/vzdump config reads, whose
+// defaults are absolute (/etc/pve/corosync.conf, /etc/vzdump.conf) and previously
+// bypassed the prefix.
+func TestSystemRootPrefixAppliesToCorosyncAndVzdumpPaths(t *testing.T) {
+	t.Run("absolute defaults are prefixed when SystemRootPrefix is set", func(t *testing.T) {
+		root := "/mnt/fixture"
+		cfg := GetDefaultCollectorConfig() // corosync/vzdump defaults are absolute
+		cfg.SystemRootPrefix = root
+		c := NewCollector(newTestLogger(), cfg, t.TempDir(), "pve", false)
+
+		if got, want := c.effectiveCorosyncConfigPath(), filepath.Join(root, "etc/pve/corosync.conf"); got != want {
+			t.Errorf("corosync: got %q, want %q", got, want)
+		}
+		if got, want := c.effectiveVzdumpConfigPath(), filepath.Join(root, "etc/vzdump.conf"); got != want {
+			t.Errorf("vzdump: got %q, want %q", got, want)
+		}
+	})
+	t.Run("no prefix is identity (production default unchanged)", func(t *testing.T) {
+		cfg := GetDefaultCollectorConfig() // SystemRootPrefix == ""
+		c := NewCollector(newTestLogger(), cfg, t.TempDir(), "pve", false)
+
+		if got := c.effectiveCorosyncConfigPath(); got != "/etc/pve/corosync.conf" {
+			t.Errorf("corosync without prefix: got %q, want /etc/pve/corosync.conf", got)
+		}
+		if got := c.effectiveVzdumpConfigPath(); got != "/etc/vzdump.conf" {
+			t.Errorf("vzdump without prefix: got %q, want /etc/vzdump.conf", got)
+		}
+	})
+}
+
 // TestPVEScheduleBricks runs the real PVE schedule bricks.
 func TestPVEScheduleBricks(t *testing.T) {
 	collector := newPVECollector(t)
@@ -754,6 +785,10 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 	mustWrite(filepath.Join(pveRoot, "lxc", "101.conf"), "ct")
 	mustWrite(filepath.Join(pveRoot, "firewall", "cluster.fw"), "fw")
 	mustWrite(filepath.Join(pveRoot, "nodes", "node1", "host.fw"), "hostfw")
+	mustWrite(filepath.Join(pveRoot, "priv", "shadow.cfg"), "hash")
+	mustWrite(filepath.Join(pveRoot, "priv", "token.cfg"), "token")
+	mustWrite(filepath.Join(pveRoot, "priv", "tfa.cfg"), "tfa")
+	mustWrite(filepath.Join(pveRoot, "priv", "notifications.cfg"), "notif")
 
 	clusterPath := filepath.Join(t.TempDir(), "pve-cluster")
 	mustWrite(filepath.Join(clusterPath, "config.db"), "db")
@@ -787,6 +822,9 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 		filepath.Join("lxc", "101.conf"),
 		filepath.Join("firewall", "cluster.fw"),
 		filepath.Join("nodes", "node1", "host.fw"),
+		filepath.Join("priv", "shadow.cfg"),
+		filepath.Join("priv", "token.cfg"),
+		filepath.Join("priv", "tfa.cfg"),
 	} {
 		_, err := os.Stat(filepath.Join(destPVE, excluded))
 		if err == nil {
@@ -797,9 +835,91 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 		}
 	}
 
+	// priv/notifications.cfg belongs to the notifications domain, NOT access control:
+	// the BACKUP_PVE_ACL toggle must not exclude it (proves the exclusion is file-scoped,
+	// not a priv/** subtree wipe).
+	if _, err := os.Stat(filepath.Join(destPVE, "priv", "notifications.cfg")); err != nil {
+		t.Fatalf("expected priv/notifications.cfg retained (not governed by BACKUP_PVE_ACL): %v", err)
+	}
+
 	destDB := collector.targetPathFor(filepath.Join(clusterPath, "config.db"))
 	if _, err := os.Stat(destDB); err == nil {
 		t.Fatalf("expected config.db excluded when BACKUP_CLUSTER_CONFIG=false")
+	}
+}
+
+// TestPVEConfigSnapshotKeepsPrivWhenACLEnabled guards against over-exclusion:
+// with BACKUP_PVE_ACL=true the priv credential files must still be collected.
+func TestPVEConfigSnapshotKeepsPrivWhenACLEnabled(t *testing.T) {
+	collector := newPVECollector(t)
+	pveRoot := collector.config.PVEConfigPath
+
+	write := func(rel, contents string) {
+		t.Helper()
+		path := filepath.Join(pveRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	write("user.cfg", "user")
+	write(filepath.Join("priv", "shadow.cfg"), "hash")
+	write(filepath.Join("priv", "token.cfg"), "token")
+	write(filepath.Join("priv", "tfa.cfg"), "tfa")
+
+	collector.config.BackupPVEACL = true
+
+	runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil,
+		brickPVEConfigSnapshot,
+	)
+
+	destPVE := collector.targetPathFor(pveRoot)
+	for _, kept := range []string{
+		"user.cfg",
+		filepath.Join("priv", "shadow.cfg"),
+		filepath.Join("priv", "token.cfg"),
+		filepath.Join("priv", "tfa.cfg"),
+	} {
+		if _, err := os.Stat(filepath.Join(destPVE, kept)); err != nil {
+			t.Fatalf("expected %s collected when BACKUP_PVE_ACL=true, got %v", kept, err)
+		}
+	}
+}
+
+func TestCollectPVEConfigsPopulatesManifestDisabledForPrivWhenACLOff(t *testing.T) {
+	collector := newPVECollectorWithDeps(t, CollectorDeps{
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("{}"), nil
+		},
+		LookPath: func(cmd string) (string, error) {
+			return "/usr/bin/" + cmd, nil
+		},
+	})
+
+	pveConfigPath := collector.config.PVEConfigPath
+	if err := os.MkdirAll(filepath.Join(pveConfigPath, "priv"), 0o700); err != nil {
+		t.Fatalf("mkdir priv: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pveConfigPath, "priv", "shadow.cfg"), []byte("hash"), 0o600); err != nil {
+		t.Fatalf("write shadow.cfg: %v", err)
+	}
+	collector.config.BackupPVEACL = false
+
+	if err := collector.CollectPVEConfigs(context.Background()); err != nil {
+		t.Fatalf("CollectPVEConfigs failed: %v", err)
+	}
+
+	src := filepath.Join(collector.effectivePVEConfigPath(), "priv", "shadow.cfg")
+	dest := collector.targetPathFor(src)
+	key := pveManifestKey(collector.tempDir, dest)
+	entry, ok := collector.pveManifest[key]
+	if !ok {
+		t.Fatalf("expected manifest entry for %s (key=%s)", src, key)
+	}
+	if entry.Status != StatusDisabled {
+		t.Fatalf("expected %s status, got %s", StatusDisabled, entry.Status)
 	}
 }
 
@@ -979,4 +1099,25 @@ func TestPVECephBricks(t *testing.T) {
 
 		runSelectedBricksForTest(t, context.Background(), collector, newPVERecipe(), nil, brickPVECephConfigSnapshot, brickPVECephRuntime)
 	})
+}
+
+// TestDefaultPVEBackupPatternsCoverLegacyVariants verifies the default PVE backup
+// patterns include legacy vzdump compression variants (.lzo/.xz) so they are not
+// silently skipped during sampling/small-copy (issue #65).
+func TestDefaultPVEBackupPatternsCoverLegacyVariants(t *testing.T) {
+	have := make(map[string]bool, len(defaultPVEBackupPatterns))
+	for _, p := range defaultPVEBackupPatterns {
+		have[p] = true
+	}
+	for _, want := range []string{"*.vma.lzo", "*.vma.xz", "*.tar.lzo", "*.tar.xz"} {
+		if !have[want] {
+			t.Errorf("defaultPVEBackupPatterns missing legacy variant %q", want)
+		}
+	}
+	if !matchPattern("vzdump-qemu-100-2024_01_01.vma.lzo", "*.vma.lzo") {
+		t.Fatal("expected *.vma.lzo to match a legacy lzo backup file")
+	}
+	if !matchPattern("vzdump-lxc-101-2024_01_01.tar.xz", "*.tar.xz") {
+		t.Fatal("expected *.tar.xz to match a legacy xz backup file")
+	}
 }

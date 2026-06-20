@@ -20,8 +20,15 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 		return nil, nil, types.ExitSuccess.Int()
 	}
 
-	if earlyErrorState, exitCode := runPreBackupChecks(opts, orch); earlyErrorState != nil {
+	skip, earlyErrorState, exitCode := runPreBackupChecks(opts, orch)
+	if earlyErrorState != nil {
 		return nil, earlyErrorState, exitCode
+	}
+	if skip {
+		// Benign concurrency skip (another backup is already running): no failure
+		// notification, exit 0. The deferred ReleaseBackupLock is a no-op because
+		// this process never acquired the lock.
+		return nil, nil, exitCode
 	}
 
 	logging.Step("Start Go backup orchestration")
@@ -47,12 +54,19 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 	return stats, nil, stats.ExitCode
 }
 
-func runPreBackupChecks(opts backupModeOptions, orch *orchestrator.Orchestrator) (*orchestrator.EarlyErrorState, int) {
+// runPreBackupChecks returns (skip, earlyError, exitCode). skip=true means a
+// benign concurrency skip (another backup is already running): no early error,
+// no notification, exit 0.
+func runPreBackupChecks(opts backupModeOptions, orch *orchestrator.Orchestrator) (bool, *orchestrator.EarlyErrorState, int) {
 	preCheckDone := logging.DebugStart(opts.logger, "pre-backup checks", "")
 	if err := orch.RunPreBackupChecks(opts.ctx); err != nil {
 		preCheckDone(err)
+		if errors.Is(err, orchestrator.ErrBackupInProgress) {
+			logging.Warning("Skipping backup: %v", err)
+			return true, nil, types.ExitSuccess.Int()
+		}
 		logging.Error("Pre-backup validation failed: %v", err)
-		return &orchestrator.EarlyErrorState{
+		return false, &orchestrator.EarlyErrorState{
 			Phase:     "pre_backup_checks",
 			Error:     err,
 			ExitCode:  types.ExitBackupError,
@@ -61,7 +75,7 @@ func runPreBackupChecks(opts backupModeOptions, orch *orchestrator.Orchestrator)
 	}
 	preCheckDone(nil)
 	fmt.Println()
-	return nil, types.ExitSuccess.Int()
+	return false, nil, types.ExitSuccess.Int()
 }
 
 func handleBackupRunError(ctx context.Context, orch *orchestrator.Orchestrator, stats *orchestrator.BackupStats, err error) (*orchestrator.BackupStats, *orchestrator.EarlyErrorState, int) {

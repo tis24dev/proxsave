@@ -230,6 +230,20 @@ func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, early
 		stats.LogFilePath = logPath
 	}
 
+	// Export a Prometheus "fail" metric (status=error) so textfile-based alerting
+	// fires on early-init failures too; otherwise the textfile keeps the last
+	// successful run's metrics. Self-gated by MetricsEnabled && !dryRun.
+	if o.shouldExportBackupMetrics(stats) {
+		o.ensureBackupStatsTiming(stats)
+		o.exportPrometheusBackupMetrics(stats)
+	}
+
+	// Honor dry-run like the normal finalize path: never send real notifications.
+	if o.dryRun {
+		o.logger.Info("[DRY RUN] Would send early-error notification: %s", stats.LocalStatusSummary)
+		return stats
+	}
+
 	// Dispatch notifications with minimal stats. Early errors are already
 	// represented in stats and may not be present in the log file yet.
 	o.dispatchNotifications(ctx, stats)

@@ -19,6 +19,19 @@ const (
 	defaultOptimizedFilePerm     = 0o640
 )
 
+// DedupManifestRelPath is where deduplicateFiles records the symlinks it created,
+// relative to the staging/archive root. The restore reads it (always extracted)
+// to materialize those symlinks back into regular files, so selective restore
+// never produces dangling links and full restore preserves file-type fidelity
+// (issue #70).
+const DedupManifestRelPath = "var/lib/proxsave-info/dedup_manifest.json"
+
+// DedupManifestEntry records one file that deduplication replaced with a symlink.
+type DedupManifestEntry struct {
+	Path string `json:"path"` // path relative to the archive root, slash-separated
+	Mode uint32 `json:"mode"` // original regular-file permission bits
+}
+
 // OptimizationConfig controls optional preprocessing steps executed before archiving.
 type OptimizationConfig struct {
 	EnableDeduplication       bool
@@ -31,10 +44,22 @@ func (c OptimizationConfig) Enabled() bool {
 	return c.EnableDeduplication || c.EnablePrefilter
 }
 
-// ApplyOptimizations executes the requested optimizations in sequence.
-func ApplyOptimizations(ctx context.Context, logger *logging.Logger, root string, cfg OptimizationConfig) error {
+// OptimizationResult reports what the optimization stages removed from the staged
+// tree. Callers use BytesReclaimed to correct the reported uncompressed-payload size
+// (issue #73): dedup and prefilter shrink the tree AFTER the collection stats were
+// snapshotted, so the pre-optimization byte total would otherwise inflate the
+// compression ratio shown in reports/notifications/metrics.
+type OptimizationResult struct {
+	BytesReclaimed     int64 // bytes removed from the staged tree by dedup + prefilter
+	DuplicatesReplaced int
+}
+
+// ApplyOptimizations executes the requested optimizations in sequence and reports
+// how many bytes they reclaimed.
+func ApplyOptimizations(ctx context.Context, logger *logging.Logger, root string, cfg OptimizationConfig) (OptimizationResult, error) {
+	var res OptimizationResult
 	if !cfg.Enabled() {
-		return nil
+		return res, nil
 	}
 
 	logger.Info("Running backup optimizations (dedup=%v prefilter=%v)",
@@ -42,34 +67,45 @@ func ApplyOptimizations(ctx context.Context, logger *logging.Logger, root string
 
 	if cfg.EnableDeduplication {
 		logger.Debug("Starting deduplication stage")
-		if err := deduplicateFiles(ctx, logger, root); err != nil {
-			logger.Warning("File deduplication failed: %v", err)
-		} else {
-			logger.Debug("Deduplication stage completed")
+		dups, reclaimed, err := deduplicateFiles(ctx, logger, root)
+		if err != nil {
+			// A dedup error means the staging tree may still hold symlinks the restore
+			// cannot materialize (manifest unwritten, partial revert): fail rather than
+			// archive a tree that would lose fidelity on restore (issue #70). The
+			// happy path and a fully-reverted manifest failure both return nil.
+			return OptimizationResult{}, fmt.Errorf("deduplication: %w", err)
 		}
+		res.DuplicatesReplaced = dups
+		res.BytesReclaimed += reclaimed
+		logger.Debug("Deduplication stage completed")
 	}
 
 	if cfg.EnablePrefilter {
 		logger.Debug("Starting prefilter stage (max file size %d bytes)", cfg.PrefilterMaxFileSizeBytes)
-		if err := prefilterFiles(ctx, logger, root, cfg.PrefilterMaxFileSizeBytes); err != nil {
+		reclaimed, err := prefilterFiles(ctx, logger, root, cfg.PrefilterMaxFileSizeBytes)
+		if err != nil {
 			logger.Warning("Content prefilter failed: %v", err)
 		} else {
+			res.BytesReclaimed += reclaimed
 			logger.Debug("Prefilter stage completed")
 		}
 	}
 
-	return nil
+	return res, nil
 }
 
-func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) error {
+func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) (int, int64, error) {
 	logger.Debug("Scanning files for deduplication")
 
 	hashes := make(map[string]string)
 	var duplicates int
+	var bytesReclaimed int64
+	var manifest []DedupManifestEntry
+	var replaced []dedupReplacement
 
 	rootFS, err := os.OpenRoot(root)
 	if err != nil {
-		return fmt.Errorf("open dedup root: %w", err)
+		return 0, 0, fmt.Errorf("open dedup root: %w", err)
 	}
 	defer func() { _ = rootFS.Close() }()
 
@@ -115,6 +151,16 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 				return nil
 			}
 			duplicates++
+			bytesReclaimed += info.Size()
+			manifest = append(manifest, DedupManifestEntry{
+				Path: filepath.ToSlash(rel),
+				Mode: uint32(info.Mode().Perm()),
+			})
+			replaced = append(replaced, dedupReplacement{
+				duplicate: path,
+				canonical: existing,
+				mode:      info.Mode().Perm(),
+			})
 			logger.Debug("Deduplicated %s → %s", path, existing)
 		} else {
 			hashes[hash] = path
@@ -123,11 +169,51 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 	})
 
 	if err != nil {
-		return fmt.Errorf("deduplication walk failed: %w", err)
+		return 0, 0, fmt.Errorf("deduplication walk failed: %w", err)
+	}
+
+	if err := writeDedupManifest(root, manifest); err != nil {
+		// Without the manifest the restore cannot materialize these symlinks, so an
+		// unrecorded symlink would ship and break fidelity (issue #70). Revert every
+		// symlink back to a regular file so the archive degrades to "no dedup this
+		// run" rather than carrying unrecoverable links.
+		logger.Warning("Failed to write dedup manifest; reverting %d deduplicated symlink(s) to regular files: %v", len(replaced), err)
+		reverted := 0
+		for _, r := range replaced {
+			if rerr := revertDedupSymlink(r); rerr != nil {
+				logger.Warning("Failed to revert deduplicated symlink %s: %v", r.duplicate, rerr)
+				continue
+			}
+			reverted++
+		}
+		if reverted != len(replaced) {
+			return 0, 0, fmt.Errorf("write dedup manifest: %w (reverted %d/%d symlinks)", err, reverted, len(replaced))
+		}
+		// All symlinks reverted to regular files: nothing was actually reclaimed.
+		logger.Info("Deduplication aborted (manifest unwritable); %d symlink(s) reverted to regular files", reverted)
+		return 0, 0, nil
 	}
 
 	logger.Info("Deduplication completed: %d duplicates replaced", duplicates)
-	return nil
+	return duplicates, bytesReclaimed, nil
+}
+
+// writeDedupManifest records the deduplicated symlinks so the restore can
+// materialize them back into regular files (issue #70). It is a no-op when no
+// files were deduplicated.
+func writeDedupManifest(root string, entries []DedupManifestEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(root, filepath.FromSlash(DedupManifestRelPath))
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(dest, data, 0o600)
 }
 
 func shouldSkipDedupPath(rel string) bool {
@@ -158,17 +244,81 @@ func hashFile(root *os.Root, name string) (sum string, err error) {
 }
 
 func replaceWithSymlink(target, duplicate string) error {
-	if err := os.Remove(duplicate); err != nil {
-		return err
-	}
 	rel, err := filepath.Rel(filepath.Dir(duplicate), target)
 	if err != nil {
 		rel = target
 	}
-	return os.Symlink(rel, duplicate)
+	// Create the symlink at a UNIQUE temporary name in the same directory, then
+	// atomically rename it over the duplicate. A unique name (not the fixed
+	// duplicate+".dedup.tmp") avoids destroying a real staged file that happens to
+	// carry that suffix, and the rename keeps the replacement fail-closed: on any
+	// error the original duplicate is left untouched (issues #70/#71).
+	tmpFile, err := os.CreateTemp(filepath.Dir(duplicate), ".proxsave-dedup-*")
+	if err != nil {
+		return err
+	}
+	tmp := tmpFile.Name()
+	_ = tmpFile.Close()
+	_ = os.Remove(tmp) // os.Symlink needs a non-existent path
+	if err := os.Symlink(rel, tmp); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, duplicate); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
-func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, maxSize int64) error {
+// dedupReplacement remembers a symlink dedup created so it can be reverted to a
+// regular file if the manifest cannot be written (so an unrecorded symlink, which
+// the restore could not materialize, is never shipped).
+type dedupReplacement struct {
+	duplicate string // absolute staged path now holding the symlink
+	canonical string // absolute staged path of the kept original
+	mode      os.FileMode
+}
+
+// revertDedupSymlink turns one dedup symlink back into a regular copy of its
+// canonical. Used when the manifest write fails so the archive carries plain files.
+// It writes to a sibling temp then renames over the symlink, so a failed write never
+// leaves the duplicate missing (no remove-then-write window).
+func revertDedupSymlink(r dedupReplacement) error {
+	content, err := os.ReadFile(r.canonical)
+	if err != nil {
+		return err
+	}
+	mode := r.mode.Perm()
+	if mode == 0 {
+		mode = 0o600
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(r.duplicate), ".proxsave-dedup-revert-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, r.duplicate); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, maxSize int64) (int64, error) {
 	if maxSize <= 0 {
 		maxSize = defaultPrefilterMaxSizeBytes
 	}
@@ -181,6 +331,7 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 		skippedSymlink    int
 	}
 	var stats prefilterStats
+	var reclaimed int64
 
 	isStructuredConfigPath := func(path string) bool {
 		rel, err := filepath.Rel(root, path)
@@ -207,7 +358,7 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 
 	rootFS, err := os.OpenRoot(root)
 	if err != nil {
-		return fmt.Errorf("open prefilter root: %w", err)
+		return 0, fmt.Errorf("open prefilter root: %w", err)
 	}
 	defer func() { _ = rootFS.Close() }()
 
@@ -243,34 +394,48 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 		}
 
 		stats.scanned++
+		before := info.Size()
+		changed := false
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
 		case ".txt", ".log", ".md":
-			if changed, err := normalizeTextFile(rootFS, rel); err == nil && changed {
-				stats.optimized++
+			if c, err := normalizeTextFile(rootFS, rel); err == nil && c {
+				changed = true
 			}
 		case ".conf", ".cfg", ".ini":
 			if isStructuredConfigPath(path) {
 				stats.skippedStructured++
 				return nil
 			}
-			if changed, err := normalizeConfigFile(rootFS, rel); err == nil && changed {
-				stats.optimized++
+			if c, err := normalizeConfigFile(rootFS, rel); err == nil && c {
+				changed = true
 			}
 		case ".json":
-			if changed, err := minifyJSON(rootFS, rel); err == nil && changed {
-				stats.optimized++
+			if isStructuredConfigPath(path) {
+				stats.skippedStructured++
+				return nil
+			}
+			if c, err := minifyJSON(rootFS, rel); err == nil && c {
+				changed = true
+			}
+		}
+		if changed {
+			stats.optimized++
+			// Account for bytes removed (issue #73 ratio correction); re-stat the
+			// rewritten file (best-effort).
+			if newInfo, serr := os.Lstat(path); serr == nil && newInfo.Size() < before {
+				reclaimed += before - newInfo.Size()
 			}
 		}
 		return nil
 	})
 
 	if err != nil {
-		return fmt.Errorf("prefilter walk failed: %w", err)
+		return 0, fmt.Errorf("prefilter walk failed: %w", err)
 	}
 
-	logger.Info("Prefilter completed: optimized=%d scanned=%d skipped_structured=%d skipped_symlink=%d", stats.optimized, stats.scanned, stats.skippedStructured, stats.skippedSymlink)
-	return nil
+	logger.Info("Prefilter completed: optimized=%d scanned=%d skipped_structured=%d skipped_symlink=%d reclaimed_bytes=%d", stats.optimized, stats.scanned, stats.skippedStructured, stats.skippedSymlink, reclaimed)
+	return reclaimed, nil
 }
 
 // normalizeTextFile reads and rewrites name through root, an *os.Root opened on
@@ -300,14 +465,15 @@ func minifyJSON(root *os.Root, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var tmp any
-	if err := json.Unmarshal(data, &tmp); err != nil {
+	// json.Compact strips only insignificant whitespace at the token level. Unlike
+	// an Unmarshal-into-any + Marshal round-trip it preserves number text/precision
+	// (no >2^53 rounding), key order and duplicate keys, so the payload stays
+	// byte-faithful aside from whitespace (issue #72).
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, data); err != nil {
 		return false, err
 	}
-	minified, err := json.Marshal(tmp)
-	if err != nil {
-		return false, err
-	}
+	minified := buf.Bytes()
 	if bytes.Equal(bytes.TrimSpace(data), minified) {
 		return false, nil
 	}

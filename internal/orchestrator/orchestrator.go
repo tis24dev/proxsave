@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -360,6 +361,11 @@ func (o *Orchestrator) SetIdentity(serverID, serverMAC string) {
 }
 
 // RunPreBackupChecks performs all pre-backup validation checks
+// ErrBackupInProgress signals that the pre-backup lock check failed because
+// another backup is already running. It is a benign concurrency skip (not a
+// failure), so the caller exits 0 and does NOT send a failure notification.
+var ErrBackupInProgress = errors.New("another backup is already in progress")
+
 func (o *Orchestrator) RunPreBackupChecks(ctx context.Context) error {
 	if o.checker == nil {
 		o.logger.Debug("No checker configured, skipping pre-backup checks")
@@ -419,6 +425,9 @@ func (o *Orchestrator) RunPreBackupChecks(ctx context.Context) error {
 	lockResult := o.checker.CheckLockFile()
 	logResult(lockResult)
 	if !lockResult.Passed {
+		if lockResult.Code == checks.CheckCodeBackupInProgress {
+			return fmt.Errorf("pre-backup checks failed: %s: %w", lockResult.Message, ErrBackupInProgress)
+		}
 		return fmt.Errorf("pre-backup checks failed: %s", lockResult.Message)
 	}
 
@@ -1155,6 +1164,7 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.BackupScriptRepository = cfg.BackupScriptRepository
 	cc.BackupUserHomes = cfg.BackupUserHomes
 	cc.BackupConfigFile = cfg.BackupConfigFile
+	cc.SystemRootPrefix = cfg.SystemRootPrefix
 	cc.ScriptRepositoryPath = cfg.BaseDir
 	if cfg.PxarDatastoreConcurrency > 0 {
 		cc.PxarDatastoreConcurrency = cfg.PxarDatastoreConcurrency

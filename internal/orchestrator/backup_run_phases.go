@@ -124,8 +124,8 @@ func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr e
 
 func (o *Orchestrator) prepareBackupWorkspace(run *backupRunContext, workspace *backupWorkspace) error {
 	o.logger.Debug("Creating temporary directory for collection output")
-	workspace.tempRoot = filepath.Join("/tmp", "proxsave")
-	if err := workspace.fs.MkdirAll(workspace.tempRoot, 0o755); err != nil {
+	workspace.tempRoot = workspaceRoot
+	if err := ensureSecureTempRoot(workspace.fs, workspace.tempRoot); err != nil {
 		return fmt.Errorf("temp directory creation failed - path: %s: %w", workspace.tempRoot, err)
 	}
 
@@ -144,17 +144,30 @@ func (o *Orchestrator) prepareBackupWorkspace(run *backupRunContext, workspace *
 }
 
 func (o *Orchestrator) cleanupBackupWorkspace(workspace *backupWorkspace) {
-	if workspace.registry == nil {
-		if cleanupErr := workspace.fs.RemoveAll(workspace.tempDir); cleanupErr != nil {
-			o.logger.Warning("Failed to remove temp directory %s: %v", workspace.tempDir, cleanupErr)
-		}
+	if workspace.tempDir == "" {
 		return
 	}
-	o.logger.Debug("Temporary workspace preserved at %s (will be removed at the next startup)", workspace.tempDir)
+	// Always remove the staging workspace when the run finishes: it holds plaintext
+	// copies of sensitive files (shadow, SSL/SSH keys, ...) gathered before
+	// encryption, so it must not be left on disk after a successful (or failed) run
+	// (issue #53). The registry exists for crash recovery only; previously a
+	// non-nil registry caused the workspace to be preserved "until the next
+	// startup", leaving secrets at rest for the whole inter-run window.
+	if cleanupErr := workspace.fs.RemoveAll(workspace.tempDir); cleanupErr != nil {
+		// Keep it registered so the next run's orphan sweep retries the removal.
+		o.logger.Warning("Failed to remove temp directory %s: %v", workspace.tempDir, cleanupErr)
+		return
+	}
+	o.logger.Debug("Removed temporary workspace %s", workspace.tempDir)
+	if workspace.registry != nil {
+		if err := workspace.registry.Deregister(workspace.tempDir); err != nil {
+			o.logger.Debug("Failed to deregister temp directory %s: %v", workspace.tempDir, err)
+		}
+	}
 }
 
 func (o *Orchestrator) markBackupWorkspace(workspace *backupWorkspace) error {
-	markerPath := filepath.Join(workspace.tempDir, ".proxsave-marker")
+	markerPath := filepath.Join(workspace.tempDir, workspaceMarker)
 	markerContent := fmt.Sprintf(
 		"Created by PID %d on %s UTC\n",
 		os.Getpid(),
@@ -207,7 +220,20 @@ func (o *Orchestrator) collectBackupData(run *backupRunContext, workspace *backu
 		return err
 	}
 
-	return o.applyBackupOptimizations(run.ctx, workspace.tempDir)
+	optResult, err := o.applyBackupOptimizations(run.ctx, workspace.tempDir)
+	if err != nil {
+		return err
+	}
+	// Dedup/prefilter shrank the staged tree AFTER the collection stats were taken;
+	// correct the uncompressed-payload figure that the compression ratio divides by
+	// so reports/notifications/metrics reflect what is actually archived (issue #73).
+	// BytesCollected stays the honest "bytes read during collection" figure.
+	if optResult.BytesReclaimed > 0 {
+		if shipped := run.stats.BytesCollected - optResult.BytesReclaimed; shipped >= 0 {
+			run.stats.UncompressedSize = shipped
+		}
+	}
+	return nil
 }
 
 func (o *Orchestrator) validateCollectedBackupSize(stats *BackupStats) error {

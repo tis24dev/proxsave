@@ -203,11 +203,13 @@ type scriptedConfirmAction struct {
 
 type scriptedRestoreWorkflowUI struct {
 	*fakeRestoreWorkflowUI
-	script []scriptedConfirmAction
-	calls  int
+	script   []scriptedConfirmAction
+	calls    int
+	messages []string
 }
 
 func (s *scriptedRestoreWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
+	s.messages = append(s.messages, message)
 	if s.calls >= len(s.script) {
 		return false, fmt.Errorf("unexpected ConfirmAction call %d (title=%q)", s.calls+1, strings.TrimSpace(title))
 	}
@@ -1348,6 +1350,17 @@ func TestMaybeApplyPVEFirewallWithUI_AdditionalBranches(t *testing.T) {
 		}
 		if _, err := fakeFS.Stat(markerPath); err == nil || !os.IsNotExist(err) {
 			t.Fatalf("expected rollback marker removed; stat err=%v", err)
+		}
+		// H09: the failed restart must be surfaced at the commit decision point so
+		// the operator does not keep changes blindly (the default is still Rollback).
+		bannerShown := false
+		for _, m := range ui.messages {
+			if strings.Contains(m, "restart FAILED") {
+				bannerShown = true
+			}
+		}
+		if !bannerShown {
+			t.Fatalf("expected the commit prompt to warn about the failed restart; messages=%v", ui.messages)
 		}
 	})
 

@@ -648,6 +648,7 @@ func TestApplyCollectorOverridesCopiesConfig(t *testing.T) {
 		BackupScriptRepository:  true,
 		BackupUserHomes:         true,
 		BackupConfigFile:        true,
+		SystemRootPrefix:        "/mnt/testroot",
 		BaseDir:                 "/opt/proxsave",
 
 		PxarDatastoreConcurrency: 3,
@@ -688,6 +689,9 @@ func TestApplyCollectorOverridesCopiesConfig(t *testing.T) {
 	}
 	if cc.ScriptRepositoryPath != cfg.BaseDir {
 		t.Fatalf("ScriptRepositoryPath = %s, want %s", cc.ScriptRepositoryPath, cfg.BaseDir)
+	}
+	if cc.SystemRootPrefix != cfg.SystemRootPrefix {
+		t.Fatalf("SystemRootPrefix = %q, want %q", cc.SystemRootPrefix, cfg.SystemRootPrefix)
 	}
 	if cc.PxarDatastoreConcurrency != cfg.PxarDatastoreConcurrency {
 		t.Fatalf("PxarDatastoreConcurrency not copied correctly")

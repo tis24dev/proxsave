@@ -244,11 +244,19 @@ The `--decrypt` workflow converts an encrypted backup into a decrypted bundle fo
 **Output**:
 - A decrypted bundle saved as: `*.decrypted.bundle.tar`
 
-If you need fully scripted/non-interactive decryption, use the official `age` CLI tool:
+If you need fully scripted/non-interactive decryption with a **private key**, use the official `age` CLI tool:
 
 ```bash
 age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age > host-backup-YYYYMMDD-HHMMSS.tar.xz
 ```
+
+> **Passphrase recipients are not native age passphrases.** A passphrase recipient
+> is an X25519 key *derived* from the passphrase, so the raw `age --decrypt` (which
+> only understands age's own scrypt passphrase stanza) cannot decrypt it from the
+> passphrase alone — use `proxsave --decrypt`. proxsave re-derives the identity from
+> the passphrase plus the **per-installation random salt** generated at setup, which
+> is stored next to the recipient (`identity/age/passphrase.salt`) and embedded in
+> every backup manifest (`passphrase_salt`) so recovery works on any host.
 
 ---
 
@@ -370,7 +378,7 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age | 
 ### Encryption Implementation
 
 - **Algorithm**: ChaCha20-Poly1305 (AEAD) with X25519 ECDH
-- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases
+- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases, with a per-installation random salt (stored in `identity/age/passphrase.salt` and embedded in each manifest as `passphrase_salt`; legacy archives used a fixed salt and remain decryptable)
 - **Random nonces**: Unique per encryption operation
 - **Authentication**: Poly1305 MAC prevents tampering
 

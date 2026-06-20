@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -406,5 +407,68 @@ func TestMaybeApplyPBSConfigsFromStage_ApiErrorsTriggerFallbackOnlyInCleanMode(t
 		if strict {
 			t.Fatalf("expected strict=false in merge mode, got true")
 		}
+	}
+}
+
+// TestMaybeApplyPBSConfigsFromStage_CleanRemoveIncomplete_SurfacesWithoutFallback
+// (H10) checks that when a Clean (1:1) API apply succeeds at create/update but
+// could not remove a stale object, the wrapper surfaces it as a failed item (so
+// the restore reports "with warnings") WITHOUT invoking the destructive
+// file-based fallback that would force-rewrite the .cfg and drop the object.
+func TestMaybeApplyPBSConfigsFromStage_CleanRemoveIncomplete_SurfacesWithoutFallback(t *testing.T) {
+	origFS := restoreFS
+	origIsReal := pbsStagedApplyIsRealRestoreFSFn
+	origGeteuid := pbsStagedApplyGeteuidFn
+	origEnsure := pbsStagedApplyEnsurePBSServicesForAPIFn
+	origDS := pbsStagedApplyDatastoreCfgViaAPIFn
+	t.Cleanup(func() {
+		restoreFS = origFS
+		pbsStagedApplyIsRealRestoreFSFn = origIsReal
+		pbsStagedApplyGeteuidFn = origGeteuid
+		pbsStagedApplyEnsurePBSServicesForAPIFn = origEnsure
+		pbsStagedApplyDatastoreCfgViaAPIFn = origDS
+	})
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	pbsStagedApplyIsRealRestoreFSFn = func(FS) bool { return true }
+	pbsStagedApplyGeteuidFn = func() int { return 0 }
+	pbsStagedApplyEnsurePBSServicesForAPIFn = func(context.Context, *logging.Logger) error { return nil }
+
+	// Create/update succeed but a stale datastore could not be removed in Clean mode.
+	pbsStagedApplyDatastoreCfgViaAPIFn = func(context.Context, *logging.Logger, string, bool) error {
+		return pbsCleanRemoveResult("datastore", []string{"stale-ds"})
+	}
+
+	stageRoot := "/stage"
+	// datastore.cfg points at a SAFE, empty datastore path so the file fallback, IF
+	// wrongly invoked, would pass shouldApplyPBSDatastoreBlock and actually write the
+	// live file. A non-empty path like /tmp is deferred (never written), which would
+	// make the "file not written" assertion below pass even on a bypass regression.
+	safeDir := t.TempDir()
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/datastore.cfg", []byte("datastore: DS1\n    path "+safeDir+"\n"), 0o640); err != nil {
+		t.Fatalf("write staged datastore.cfg: %v", err)
+	}
+
+	plan := &RestorePlan{
+		SystemType:         SystemTypePBS,
+		PBSRestoreBehavior: PBSRestoreBehaviorClean,
+		NormalCategories:   []Category{{ID: "datastore_pbs"}},
+	}
+
+	err := maybeApplyPBSConfigsFromStage(context.Background(), newTestLogger(), plan, stageRoot, false)
+	if err == nil {
+		t.Fatalf("expected a summary error so the restore reports 'with warnings'")
+	}
+	if !strings.Contains(err.Error(), "datastore.cfg (clean 1:1 incomplete)") {
+		t.Fatalf("expected the clean-1:1-incomplete item in the summary, got: %v", err)
+	}
+
+	// Conservative outcome: the destructive file-based fallback must NOT run, so
+	// the live datastore.cfg is left untouched (the stale object stays).
+	if _, statErr := fakeFS.Stat("/etc/proxmox-backup/datastore.cfg"); statErr == nil {
+		t.Fatalf("file fallback must NOT rewrite /etc/proxmox-backup/datastore.cfg on a clean-remove failure")
 	}
 }

@@ -1359,3 +1359,36 @@ func TestParseSecuritySettingsSafeProcessesDefaultsEmpty(t *testing.T) {
 		t.Fatalf("SafeProcesses should default to empty, got %#v", cfg.SafeProcesses)
 	}
 }
+
+func TestParseSystemSettingsSystemRootPrefix(t *testing.T) {
+	t.Run("parses and trims the override", func(t *testing.T) {
+		cfg := &Config{raw: map[string]string{"SYSTEM_ROOT_PREFIX": "  /mnt/fixture  "}}
+		cfg.parseSystemSettings()
+		if cfg.SystemRootPrefix != "/mnt/fixture" {
+			t.Fatalf("SystemRootPrefix = %q; want /mnt/fixture", cfg.SystemRootPrefix)
+		}
+	})
+	t.Run("defaults to empty (real root) when unset", func(t *testing.T) {
+		cfg := &Config{raw: map[string]string{}}
+		cfg.parseSystemSettings()
+		if cfg.SystemRootPrefix != "" {
+			t.Fatalf("SystemRootPrefix should default to empty, got %q", cfg.SystemRootPrefix)
+		}
+	})
+}
+
+func TestParseSystemSettingsScriptRepositoryDefaultsFalse(t *testing.T) {
+	// A config missing the key must default to false, matching the shipped template
+	// (#69), so it does not silently snapshot /opt/proxsave.
+	cfg := &Config{raw: map[string]string{}}
+	cfg.parseSystemSettings()
+	if cfg.BackupScriptRepository {
+		t.Fatalf("BACKUP_SCRIPT_REPOSITORY must default to false, got true")
+	}
+	// An explicit opt-in is still honored.
+	on := &Config{raw: map[string]string{"BACKUP_SCRIPT_REPOSITORY": "true"}}
+	on.parseSystemSettings()
+	if !on.BackupScriptRepository {
+		t.Fatalf("explicit BACKUP_SCRIPT_REPOSITORY=true must enable collection")
+	}
+}

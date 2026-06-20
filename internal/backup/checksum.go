@@ -35,6 +35,11 @@ type Manifest struct {
 	ScriptVersion    string    `json:"script_version,omitempty"`
 	EncryptionMode   string    `json:"encryption_mode,omitempty"`
 	ClusterMode      string    `json:"cluster_mode,omitempty"`
+	// PassphraseSalt is the per-installation random salt used to derive a
+	// passphrase-based AGE recipient. It is a public value embedded so the
+	// archive stays decryptable from the passphrase alone on any host. Empty
+	// for X25519/SSH recipients and for legacy archives (which used a fixed salt).
+	PassphraseSalt string `json:"passphrase_salt,omitempty"`
 }
 
 // NormalizeChecksum validates and normalizes a SHA256 checksum string.

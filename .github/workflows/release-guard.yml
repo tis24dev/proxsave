@@ -1,0 +1,65 @@
+name: Release Guard
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  release-guard:
+    name: release-guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout trusted base policy
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Validate release PR
+        shell: bash
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f .github/scripts/release-policy.sh ]]; then
+            echo "::notice::Release policy is not present on base yet; allowing bootstrap PR."
+            exit 0
+          fi
+
+          source .github/scripts/release-policy.sh
+
+          [[ "${PR_BASE_REF}" == "main" ]] || die "Release PRs must target main."
+          [[ "${PR_HEAD_REF}" == "dev" ]] || die "main only accepts release PRs from dev."
+          [[ "${PR_HEAD_REPO}" == "${REPOSITORY}" ]] || die "Release PRs must come from the same repository."
+
+          # Maintenance (non-release) PRs dev -> main carry no release marker.
+          # Allow them through: post-merge syncs dev without publishing a release.
+          if ! TAG="$(extract_pr_marker release-tag)"; then
+            notice "No release marker in PR body; treating as a maintenance dev -> main PR."
+            exit 0
+          fi
+
+          # This project has no in-repo version file, so there is no manifest
+          # invariant to assert against the dev tree. The guard's job is to enforce
+          # the PR shape/provenance and that the release marker carries a
+          # well-formed tag.
+          validate_release_tag "${TAG}"
+          notice "Release PR for ${TAG} validated."

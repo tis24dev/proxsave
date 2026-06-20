@@ -53,17 +53,40 @@ type pveStorageScanResult struct {
 	SkipRemaining   bool
 }
 
+// defaultPVEBackupPatterns are the glob patterns used to recognise PVE backup
+// files for sampling/analysis and for the opt-in small/selected copy. It includes
+// the legacy vzdump compression variants (.lzo from lzop, .xz) so backups produced
+// by older or non-default vzdump settings are not silently missed (issue #65).
 var defaultPVEBackupPatterns = []string{
 	"*.vma",
 	"*.vma.gz",
 	"*.vma.lz4",
+	"*.vma.lzo",
+	"*.vma.xz",
 	"*.vma.zst",
 	"*.tar",
 	"*.tar.gz",
 	"*.tar.lz4",
+	"*.tar.lzo",
+	"*.tar.xz",
 	"*.tar.zst",
 	"*.log",
 	"*.notes",
+}
+
+// pveACLPrivExcludePatterns are the access-control credential files under
+// /etc/pve/priv/ that must be dropped from the flat /etc/pve snapshot when
+// BACKUP_PVE_ACL is disabled. They mirror the access-control material listed by
+// the pve_access_control restore category (internal/orchestrator/categories.go)
+// and the pve*CfgPath constants in internal/orchestrator/restore_access_control.go
+// (kept in sync manually: internal/backup cannot import internal/orchestrator).
+// The "**/priv/<file>.cfg" form anchors on the priv parent so it matches the
+// path candidate "etc/pve/priv/shadow.cfg" (see matchesGlob/globToRegex) without
+// touching priv/notifications.cfg (pve_notifications domain), authkey.key or acme/.
+var pveACLPrivExcludePatterns = []string{
+	"**/priv/shadow.cfg",
+	"**/priv/token.cfg",
+	"**/priv/tfa.cfg",
 }
 
 var errStopWalk = errors.New("stop walk")
@@ -209,6 +232,22 @@ func (c *Collector) populatePVEManifest() {
 		countNotFound:       false,
 		suppressNotFoundLog: true,
 	})
+	// Access-control credential material under priv/ (gated by the same toggle).
+	// These are absent on a fresh install with no custom users/tokens/2FA, so a
+	// missing file is not an error.
+	for _, privFile := range []struct{ name, description string }{
+		{"shadow.cfg", "User password hashes"},
+		{"token.cfg", "API token secrets"},
+		{"tfa.cfg", "TFA secrets"},
+	} {
+		record(filepath.Join(pveConfigPath, "priv", privFile.name), c.config.BackupPVEACL, manifestLogOpts{
+			description:         privFile.description,
+			disableHint:         "BACKUP_PVE_ACL",
+			log:                 true,
+			countNotFound:       false,
+			suppressNotFoundLog: true,
+		})
+	}
 
 	// Scheduled jobs.
 	record(filepath.Join(pveConfigPath, "jobs.cfg"), c.config.BackupPVEJobs, manifestLogOpts{
@@ -245,13 +284,7 @@ func (c *Collector) populatePVEManifest() {
 	})
 
 	// VZDump configuration.
-	vzdumpPath := c.config.VzdumpConfigPath
-	if vzdumpPath == "" {
-		vzdumpPath = "/etc/vzdump.conf"
-	} else if !filepath.IsAbs(vzdumpPath) {
-		vzdumpPath = filepath.Join(pveConfigPath, vzdumpPath)
-	}
-	record(vzdumpPath, c.config.BackupVZDumpConfig, manifestLogOpts{
+	record(c.effectiveVzdumpConfigPath(), c.config.BackupVZDumpConfig, manifestLogOpts{
 		description:   "VZDump configuration",
 		disableHint:   "BACKUP_VZDUMP_CONFIG",
 		log:           true,
@@ -321,6 +354,10 @@ func (c *Collector) collectPVEConfigSnapshot(ctx context.Context) error {
 	}
 	if !c.config.BackupPVEACL {
 		extraExclude = append(extraExclude, "user.cfg", "domains.cfg")
+		// ACLs/users are not just user.cfg/domains.cfg: the credential material
+		// lives under priv/ (password hashes, API token secrets, TFA secrets).
+		// Exclude it too so the toggle removes the whole access-control domain.
+		extraExclude = append(extraExclude, pveACLPrivExcludePatterns...)
 	}
 	if !c.config.BackupPVEJobs {
 		extraExclude = append(extraExclude, "jobs.cfg", "vzdump.cron")
@@ -341,16 +378,19 @@ func (c *Collector) collectPVEConfigSnapshot(ctx context.Context) error {
 }
 
 func (c *Collector) collectPVEClusterSnapshot(ctx context.Context, clustered bool) error {
-	pveConfigPath := c.effectivePVEConfigPath()
 	clusterPath := c.effectivePVEClusterPath()
 
+	// /etc/pve is a pmxcfs mount backed by config.db: the cluster database still
+	// contains the PVE access-control secrets even though BACKUP_PVE_ACL=false
+	// excludes the flat priv files. Warn so the operator is not left with a false
+	// sense of exclusion; the only way to drop them entirely is to also disable
+	// cluster backup.
+	if c.config.BackupClusterConfig && !c.config.BackupPVEACL {
+		c.logger.Warning("PVE access control: BACKUP_PVE_ACL=false excludes /etc/pve/priv/{shadow,token,tfa}.cfg, but the same secrets remain inside the cluster database config.db; set BACKUP_CLUSTER_CONFIG=false to exclude them entirely")
+	}
+
 	if c.config.BackupClusterConfig {
-		corosyncPath := c.config.CorosyncConfigPath
-		if corosyncPath == "" {
-			corosyncPath = filepath.Join(pveConfigPath, "corosync.conf")
-		} else if !filepath.IsAbs(corosyncPath) {
-			corosyncPath = filepath.Join(pveConfigPath, corosyncPath)
-		}
+		corosyncPath := c.effectiveCorosyncConfigPath()
 		if err := c.safeCopyFile(ctx,
 			corosyncPath,
 			c.targetPathFor(corosyncPath),
@@ -432,15 +472,9 @@ func (c *Collector) collectPVEFirewallSnapshot(ctx context.Context) error {
 }
 
 func (c *Collector) collectPVEVZDumpSnapshot(ctx context.Context) error {
-	pveConfigPath := c.effectivePVEConfigPath()
 	if c.config.BackupVZDumpConfig {
 		c.logger.Info("Collecting VZDump backup configuration")
-		vzdumpPath := c.config.VzdumpConfigPath
-		if vzdumpPath == "" {
-			vzdumpPath = "/etc/vzdump.conf"
-		} else if !filepath.IsAbs(vzdumpPath) {
-			vzdumpPath = filepath.Join(pveConfigPath, vzdumpPath)
-		}
+		vzdumpPath := c.effectiveVzdumpConfigPath()
 		if err := c.safeCopyFile(ctx,
 			vzdumpPath,
 			c.targetPathFor(vzdumpPath),
@@ -1236,11 +1270,9 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 
 	includePatterns := c.config.PxarFileIncludePatterns
 	if len(includePatterns) == 0 {
-		includePatterns = []string{
-			"*.vma", "*.vma.gz", "*.vma.lz4", "*.vma.zst",
-			"*.tar", "*.tar.gz", "*.tar.lz4", "*.tar.zst",
-			"*.log", "*.notes",
-		}
+		// Same default set as the analysis scan; keep them unified so legacy
+		// variants stay in sync (issue #65).
+		includePatterns = defaultPVEBackupPatterns
 	}
 	excludePatterns := c.config.PxarFileExcludePatterns
 
@@ -2373,9 +2405,23 @@ func (c *Collector) effectiveCorosyncConfigPath() string {
 		return filepath.Join(c.effectivePVEConfigPath(), "corosync.conf")
 	}
 	if filepath.IsAbs(corosyncPath) {
-		return corosyncPath
+		// Honor SystemRootPrefix for an absolute override, like effectivePVEConfigPath.
+		return c.systemPath(corosyncPath)
 	}
 	return filepath.Join(c.effectivePVEConfigPath(), corosyncPath)
+}
+
+// effectiveVzdumpConfigPath resolves the vzdump.conf source, honoring an optional
+// SystemRootPrefix for the default and for absolute overrides (mirroring corosync).
+func (c *Collector) effectiveVzdumpConfigPath() string {
+	vzdumpPath := strings.TrimSpace(c.config.VzdumpConfigPath)
+	if vzdumpPath == "" {
+		return c.systemPath("/etc/vzdump.conf")
+	}
+	if filepath.IsAbs(vzdumpPath) {
+		return c.systemPath(vzdumpPath)
+	}
+	return filepath.Join(c.effectivePVEConfigPath(), vzdumpPath)
 }
 
 func (c *Collector) hasMultiplePVENodes() bool {

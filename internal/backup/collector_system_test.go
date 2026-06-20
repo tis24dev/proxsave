@@ -1416,10 +1416,21 @@ func TestCollectScriptRepositoryCopiesAndSkipsRuntimeDirs(t *testing.T) {
 	repo := t.TempDir()
 	collector.config.ScriptRepositoryPath = repo
 
+	// Kept: real repo content.
 	writeFileAt(t, filepath.Join(repo, "keep.sh"), "#!/bin/sh\n")
 	writeFileAt(t, filepath.Join(repo, "nested", "config.env"), "A=1\n")
+	// Skipped (pre-existing): top-level backup/log as a dir and as a file.
 	writeFileAt(t, filepath.Join(repo, "backup", "skip.tar"), "backup\n")
 	writeFileAt(t, filepath.Join(repo, "log", "skip.log"), "log\n")
+	// Skipped (the #69 fix): .git at any depth, plural runtime dirs, and nested
+	// backup/log dirs that the old parts[0]-only check let through.
+	writeFileAt(t, filepath.Join(repo, ".git", "objects", "ab", "cd"), "obj\n")
+	writeFileAt(t, filepath.Join(repo, ".git", "logs", "HEAD"), "ref\n")
+	writeFileAt(t, filepath.Join(repo, ".svn", "entries"), "svn\n")
+	writeFileAt(t, filepath.Join(repo, "backups", "old.tar"), "old\n")
+	writeFileAt(t, filepath.Join(repo, "logs", "app.log"), "log\n")
+	writeFileAt(t, filepath.Join(repo, "nested", "backup", "skip"), "x\n")
+	writeFileAt(t, filepath.Join(repo, "nested", "log", "skip"), "y\n")
 
 	if err := collector.collectScriptRepository(context.Background()); err != nil {
 		t.Fatalf("collectScriptRepository: %v", err)
@@ -1428,12 +1439,23 @@ func TestCollectScriptRepositoryCopiesAndSkipsRuntimeDirs(t *testing.T) {
 	target := collector.proxsaveInfoDir("script-repository", filepath.Base(repo))
 	assertFileExists(t, filepath.Join(target, "keep.sh"))
 	assertFileExists(t, filepath.Join(target, "nested", "config.env"))
-	if _, err := os.Stat(filepath.Join(target, "backup", "skip.tar")); !os.IsNotExist(err) {
-		t.Fatalf("expected backup dir skipped, stat err=%v", err)
+
+	assertAbsent := func(rel string) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(target, rel)); !os.IsNotExist(err) {
+			t.Fatalf("expected %q to be skipped, stat err=%v", rel, err)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(target, "log", "skip.log")); !os.IsNotExist(err) {
-		t.Fatalf("expected log dir skipped, stat err=%v", err)
-	}
+	assertAbsent(filepath.Join("backup", "skip.tar"))
+	assertAbsent(filepath.Join("log", "skip.log"))
+	assertAbsent(".git")
+	assertAbsent(filepath.Join(".git", "objects", "ab", "cd"))
+	assertAbsent(filepath.Join(".git", "logs", "HEAD"))
+	assertAbsent(filepath.Join(".svn", "entries"))
+	assertAbsent(filepath.Join("backups", "old.tar"))
+	assertAbsent(filepath.Join("logs", "app.log"))
+	assertAbsent(filepath.Join("nested", "backup", "skip"))
+	assertAbsent(filepath.Join("nested", "log", "skip"))
 }
 
 func TestCollectScriptRepositorySkipAndCancelBranches(t *testing.T) {
@@ -2899,4 +2921,123 @@ func newTestCollectorWithDeps(t *testing.T, override CollectorDeps) *Collector {
 	config := GetDefaultCollectorConfig()
 	tempDir := t.TempDir()
 	return NewCollectorWithDeps(logger, config, tempDir, types.ProxmoxUnknown, false, deps)
+}
+
+// TestSystemManifestRecordsTargetsNotNestedFiles verifies system collection
+// populates systemManifest at collection-target granularity (issue #59): a direct
+// file copy and a directory copy each yield one entry, a missing source is
+// recorded as not_found, and files nested inside a copied directory are NOT
+// recorded individually.
+func TestSystemManifestRecordsTargetsNotNestedFiles(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "hostname"), []byte("h"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "netdir", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "netdir", "a.conf"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "netdir", "sub", "b.conf"), []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
+	collector.systemManifest = make(map[string]ManifestEntry)
+	collector.recordSystemManifest = true
+
+	ctx := context.Background()
+	if err := collector.safeCopyFile(ctx, filepath.Join(src, "hostname"), filepath.Join(collector.tempDir, "etc/hostname"), "Hostname"); err != nil {
+		t.Fatalf("safeCopyFile hostname: %v", err)
+	}
+	if err := collector.safeCopyFile(ctx, filepath.Join(src, "missing"), filepath.Join(collector.tempDir, "etc/missing"), "Missing"); err != nil {
+		t.Fatalf("safeCopyFile missing: %v", err)
+	}
+	if err := collector.safeCopyDir(ctx, filepath.Join(src, "netdir"), filepath.Join(collector.tempDir, "etc/netdir"), "Net dir"); err != nil {
+		t.Fatalf("safeCopyDir netdir: %v", err)
+	}
+
+	m := collector.systemManifest
+	if got := m["etc/hostname"]; got.Status != StatusCollected {
+		t.Fatalf("etc/hostname: want collected, got %+v", got)
+	}
+	if got := m["etc/missing"]; got.Status != StatusNotFound {
+		t.Fatalf("etc/missing: want not_found, got %+v", got)
+	}
+	if got := m["etc/netdir"]; got.Status != StatusCollected {
+		t.Fatalf("etc/netdir: want collected dir target, got %+v", got)
+	}
+	for k := range m {
+		if strings.HasPrefix(k, "etc/netdir/") {
+			t.Fatalf("nested file %q must not be recorded (only the dir target)", k)
+		}
+	}
+	if len(m) != 3 {
+		t.Fatalf("expected 3 system manifest entries (hostname, missing, netdir), got %d: %+v", len(m), m)
+	}
+}
+
+// TestSafeCopyDirRecordsFailedOnError is the #2 guard: a directory copy that fails
+// (here via a canceled context during the walk) must be recorded in the system
+// manifest as failed, not left as the up-front "collected" status.
+func TestSafeCopyDirRecordsFailedOnError(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.conf"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
+	collector.systemManifest = make(map[string]ManifestEntry)
+	collector.recordSystemManifest = true
+
+	// Make ensureDir(dest) fail: put a regular FILE where dest's parent dir would be,
+	// so MkdirAll(dest) returns ENOTDIR. ctx stays valid (the top-of-function guard
+	// must not short-circuit), so the failure happens inside the copy itself.
+	parent := filepath.Join(collector.tempDir, "etc")
+	if err := os.WriteFile(parent, []byte("blocker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(parent, "netdir") // tempDir/etc/netdir, but tempDir/etc is a file
+
+	if err := collector.safeCopyDir(context.Background(), src, dest, "Net dir"); err == nil {
+		t.Fatal("safeCopyDir should return an error when ensureDir(dest) fails")
+	}
+	if got := collector.systemManifest["etc/netdir"]; got.Status != StatusFailed {
+		t.Fatalf("etc/netdir: want failed status on a failed copy, got %+v", got)
+	}
+}
+
+// TestSafeCopyDirSkipsStagingWorkspace verifies a broad source does not copy the
+// staging workspace into itself (issue #56): the staging subtree under the source
+// must be pruned while the real content is still collected.
+func TestSafeCopyDirSkipsStagingWorkspace(t *testing.T) {
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
+
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "real.conf"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The staging workspace lives under the source (the self-recursion case).
+	staging := filepath.Join(srcDir, "proxsave-staging")
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "ARCHIVE_DATA"), []byte("must not be copied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	collector.tempDir = staging
+	collector.collectingCustomPaths = true // the prune is scoped to custom-path collection
+
+	dest := filepath.Join(staging, "etc", "custom")
+	if err := collector.safeCopyDir(context.Background(), srcDir, dest, "custom"); err != nil {
+		t.Fatalf("safeCopyDir: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, "real.conf")); err != nil {
+		t.Fatalf("expected real.conf to be collected: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "proxsave-staging")); !os.IsNotExist(err) {
+		t.Fatalf("staging workspace must not be copied into itself (#56), stat err=%v", err)
+	}
 }

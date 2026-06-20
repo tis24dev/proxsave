@@ -42,7 +42,7 @@ func BenchmarkPrefilterFiles(b *testing.B) {
 		if err := copyDir(template, iterRoot); err != nil {
 			b.Fatalf("copy template: %v", err)
 		}
-		if err := prefilterFiles(ctx, logger, iterRoot, maxSize); err != nil {
+		if _, err := prefilterFiles(ctx, logger, iterRoot, maxSize); err != nil {
 			b.Fatalf("prefilterFiles: %v", err)
 		}
 	}

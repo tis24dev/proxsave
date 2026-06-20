@@ -17,7 +17,69 @@ const (
 	defaultRegistryEnvVar = "PROXMOX_TEMP_REGISTRY_PATH"
 	defaultRegistryPath   = "/var/run/proxsave/temp-dirs.json"
 	registryFallbackDir   = "proxsave"
+	workspaceMarker       = ".proxsave-marker"
 )
+
+// workspaceRoot is the shared root under which all ProxSave temp workspaces
+// are created (MkdirTemp children). CleanupOrphaned only removes paths contained
+// here, and the backup/decrypt paths validate it before use. It is a var (not a
+// const) so tests can point it at a scratch directory.
+var workspaceRoot = "/tmp/proxsave"
+
+// ensureSecureTempRoot validates (and creates if missing) the shared temp root so
+// it cannot be hijacked by an attacker who pre-creates /tmp/proxsave as a symlink
+// or a world-writable / non-root-owned directory before ProxSave runs (issue #54).
+func ensureSecureTempRoot(fsys FS, path string) error {
+	info, err := fsys.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fsys.MkdirAll(path, 0o700)
+		}
+		return fmt.Errorf("stat temp root %s: %w", path, err)
+	}
+	if info == nil {
+		// Defensive: a well-behaved FS returns a non-nil FileInfo on success; if it
+		// does not, fall back to ensuring the directory exists.
+		return fsys.MkdirAll(path, 0o700)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to use temp root %s: it is a symlink", path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("refusing to use temp root %s: not a directory", path)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("refusing to use temp root %s: group/world-writable (mode %#o)", path, info.Mode().Perm())
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		if st.Uid != 0 && int(st.Uid) != os.Geteuid() {
+			return fmt.Errorf("refusing to use temp root %s: owned by uid %d, not root/self", path, st.Uid)
+		}
+	}
+	return nil
+}
+
+// workspacePathIsRemovable reports whether path is a genuine ProxSave temp
+// workspace that CleanupOrphaned may RemoveAll: it must be a non-symlink
+// directory contained directly under workspaceRoot and carry the marker file
+// written before a workspace is registered (issue #55). This prevents a poisoned
+// registry (or a controlled PROXMOX_TEMP_REGISTRY_PATH) from deleting arbitrary
+// paths.
+func workspacePathIsRemovable(path string) bool {
+	clean := filepath.Clean(path)
+	root := filepath.Clean(workspaceRoot)
+	if clean == root || !strings.HasPrefix(clean, root+string(os.PathSeparator)) {
+		return false
+	}
+	info, err := os.Lstat(clean)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false
+	}
+	if _, err := os.Lstat(filepath.Join(clean, workspaceMarker)); err != nil {
+		return false
+	}
+	return true
+}
 
 type tempDirRecord struct {
 	Path      string    `json:"path"`
@@ -102,6 +164,13 @@ func (r *TempDirRegistry) CleanupOrphaned(maxAge time.Duration) (int, error) {
 			alive := processAlive(entry.PID)
 
 			if stale || !alive {
+				if !workspacePathIsRemovable(entry.Path) {
+					if r.logger != nil {
+						r.logger.Warning("Refusing to remove registry entry %s: not a ProxSave workspace under %s; dropping untrusted entry", entry.Path, workspaceRoot)
+					}
+					// Drop the untrusted entry without touching the filesystem path.
+					continue
+				}
 				if r.logger != nil {
 					r.logger.Debug("Cleaning orphaned temp dir %s (pid=%d)...", entry.Path, entry.PID)
 				}

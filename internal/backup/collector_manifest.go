@@ -24,7 +24,12 @@ type ManifestEntry struct {
 	Error  string             `json:"error,omitempty"`
 }
 
-// BackupManifest contains metadata about all files in the backup
+// BackupManifest is the PRE-OPTIMIZATION collection inventory: its per-file Size
+// and Stats.BytesCollected describe files as collected, BEFORE the dedup/prefilter
+// stages mutate the staging tree (issue #73). It is an ExportOnly diagnostic
+// (category proxsave_info) and is never read back by restore. The authoritative
+// record of the shipped payload is the archive sidecar (<archive>.sha256 and
+// <archive>.manifest.json), computed after the archive is built.
 type BackupManifest struct {
 	CreatedAt      time.Time                `json:"created_at"`
 	Hostname       string                   `json:"hostname"`

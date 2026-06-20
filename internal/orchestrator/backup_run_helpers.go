@@ -140,18 +140,22 @@ func (o *Orchestrator) logBackupCollectionSummary(collStats *backup.CollectionSt
 		collStats.DirsCreated)
 }
 
-func (o *Orchestrator) applyBackupOptimizations(ctx context.Context, tempDir string) error {
+func (o *Orchestrator) applyBackupOptimizations(ctx context.Context, tempDir string) (backup.OptimizationResult, error) {
 	if !o.optimizationCfg.Enabled() {
 		o.logger.Debug("Skipping optimization step (all features disabled)")
-		return nil
+		return backup.OptimizationResult{}, nil
 	}
 
 	fmt.Println()
 	o.logger.Step("Backup optimizations on collected data")
-	if err := backup.ApplyOptimizations(ctx, o.logger, tempDir, o.optimizationCfg); err != nil {
-		o.logger.Warning("Backup optimizations completed with warnings: %v", err)
+	res, err := backup.ApplyOptimizations(ctx, o.logger, tempDir, o.optimizationCfg)
+	if err != nil {
+		// ApplyOptimizations only returns an error for an unsafe deduplication state
+		// (a tree that would lose fidelity on restore); abort rather than ship it.
+		// Benign prefilter issues are logged internally and do not surface here.
+		return backup.OptimizationResult{}, fmt.Errorf("backup optimizations: %w", err)
 	}
-	return nil
+	return res, nil
 }
 
 func estimatedBackupSizeGB(bytesCollected int64) float64 {
@@ -304,6 +308,7 @@ func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, check
 		ScriptVersion:    stats.ScriptVersion,
 		EncryptionMode:   o.archiveEncryptionMode(),
 		ClusterMode:      stats.ClusterMode,
+		PassphraseSalt:   o.passphraseSaltForManifest(),
 	}
 }
 

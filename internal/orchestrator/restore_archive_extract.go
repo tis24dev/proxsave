@@ -4,11 +4,15 @@ package orchestrator
 import (
 	"archive/tar"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
+	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -67,6 +71,20 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 
 	extractionLog.writeSummary(stats)
 	logRestoreExtractionSummary(opts, stats)
+
+	// Turn deduplicated symlinks back into regular files by rebuilding them from the
+	// archive, so selective restore never leaves a dangling link and full restore
+	// preserves the original file type (issue #70). Safe on every extraction: it
+	// never deletes and is a no-op when no dedup manifest is present.
+	if err := materializeDedupSymlinks(ctx, opts.archivePath, opts.destRoot, opts.logger); err != nil {
+		// On the staged path (failOnPartialExtraction) an incompletely reconstructed
+		// dedup tree must not be applied to the live system; elsewhere it is a
+		// recoverable warning and the (kept) manifest lets a re-run finish.
+		if opts.failOnPartialExtraction {
+			return err
+		}
+		opts.logger.Warning("Dedup materialization incomplete: %v", err)
+	}
 
 	// When the caller cannot safely act on a partial result (the staged restore
 	// path, which would otherwise apply an incomplete tree of PVE/PBS/network/
@@ -152,6 +170,17 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 		if skipRestoreArchiveEntry(header, opts, selectiveMode, extractionLog, &stats) {
 			continue
 		}
+		// A hardlink aliases an existing on-disk file; in a selective restore its
+		// target must belong to a selected category. A cross-category hardlink
+		// (e.g. an in-category name aliasing /etc/shadow) is never legitimate, so
+		// refuse it. Symlinks are intentionally NOT constrained this way: their
+		// targets legitimately point outside the category.
+		if selectiveMode && header.Typeflag == tar.TypeLink && !restoreEntryMatchesCategories(header.Linkname, opts.categories) {
+			opts.logger.Warning("Refusing hardlink %s: target %s is outside the selected categories", header.Name, header.Linkname)
+			stats.filesFailed++
+			extractionLog.recordSkipped(header.Name, "hardlink target outside selected categories")
+			continue
+		}
 		if err := extractTarEntry(tarReader, header, opts.destRoot, opts.logger); err != nil {
 			opts.logger.Warning("Failed to extract %s: %v", header.Name, err)
 			stats.filesFailed++
@@ -167,7 +196,17 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 	return stats, nil
 }
 
+func isDedupManifestEntry(name string) bool {
+	clean := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(name)), "/")
+	return clean == backup.DedupManifestRelPath
+}
+
 func skipRestoreArchiveEntry(header *tar.Header, opts restoreArchiveOptions, selectiveMode bool, extractionLog *restoreExtractionLog, stats *restoreExtractionStats) bool {
+	// The dedup manifest is always extracted, regardless of selected categories, so
+	// the post-extraction pass can materialize deduplicated symlinks (issue #70).
+	if isDedupManifestEntry(header.Name) {
+		return false
+	}
 	if opts.skipFn != nil && opts.skipFn(header.Name) {
 		stats.filesSkipped++
 		extractionLog.recordSkipped(header.Name, "skipped by restore policy")
@@ -258,4 +297,209 @@ func logRestoreExtractionSummary(opts restoreArchiveOptions, stats restoreExtrac
 	if opts.logFilePath != "" {
 		opts.logger.Info("Detailed restore log: %s", opts.logFilePath)
 	}
+}
+
+type materializeTarget struct {
+	path string // absolute duplicate path under destRoot (currently a symlink)
+	mode os.FileMode
+}
+
+// materializeDedupSymlinks reads the dedup manifest written at backup time and
+// replaces each recorded symlink with a regular file rebuilt from the BACKUP ARCHIVE
+// content. Reading the canonical bytes from the archive (never from the possibly
+// stale on-disk/live target, and never deleting the symlink) is what makes a
+// selective/staged restore safe: a selected duplicate is reconstructed even when its
+// dedup canonical's category was not selected or its on-disk copy failed to extract,
+// and it never picks up stale live content (issue #70). It is a no-op when no
+// manifest is present (deduplication was off or found no duplicates).
+func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string, logger *logging.Logger) error {
+	manifestTarget, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, backup.DedupManifestRelPath)
+	if err != nil {
+		return nil
+	}
+	data, err := restoreFS.ReadFile(manifestTarget)
+	if err != nil {
+		return nil // no dedup manifest: nothing to materialize
+	}
+	var entries []backup.DedupManifestEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		// Corrupt manifest: nothing can be materialized, but do not leave the garbage
+		// (force-extracted under var/lib/proxsave-info) lingering on the restored system.
+		logger.Warning("Dedup manifest unreadable; skipping symlink materialization: %v", err)
+		removeDedupManifest(manifestTarget)
+		return nil
+	}
+
+	// Map each canonical archive path to the extracted duplicate symlinks that need
+	// its content. Only duplicates actually present on disk are considered.
+	needByCanonical := map[string][]materializeTarget{}
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Path) == "" {
+			continue
+		}
+		target, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, entry.Path)
+		if err != nil {
+			continue
+		}
+		info, err := restoreFS.Lstat(target)
+		if err != nil {
+			continue // duplicate not extracted: its own category was not selected
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue // already a regular file (the target was extracted too)
+		}
+		linkTarget, err := restoreFS.Readlink(target)
+		if err != nil {
+			continue
+		}
+		// Canonical archive-relative path, derived purely lexically as the inverse of
+		// the relative link replaceWithSymlink wrote at backup time.
+		canonicalRel := dedupCleanArchivePath(path.Join(path.Dir(filepath.ToSlash(entry.Path)), filepath.ToSlash(linkTarget)))
+		needByCanonical[canonicalRel] = append(needByCanonical[canonicalRel], materializeTarget{
+			path: target,
+			mode: os.FileMode(entry.Mode).Perm(),
+		})
+	}
+
+	if len(needByCanonical) > 0 {
+		materialized, missing, completed := materializeFromArchive(ctx, archivePath, needByCanonical, logger)
+		if !completed {
+			// The archive scan was cut short (context canceled / open or read error):
+			// keep the manifest so a re-run can finish, rather than dropping it and
+			// stranding un-materialized symlinks with no way to recover. Surface it so a
+			// staged restore that cannot tolerate a partial result fails closed instead
+			// of applying an incompletely reconstructed tree (BH-002).
+			logger.Warning("Dedup: materialization did not complete (%d rebuilt so far); keeping the manifest for a retry", materialized)
+			return fmt.Errorf("dedup materialization incomplete: %d file(s) rebuilt before the archive scan stopped; manifest kept for retry", materialized)
+		}
+		if materialized > 0 || missing > 0 {
+			logger.Info("Dedup: materialized %d deduplicated file(s) from the archive; %d left as link(s) due to missing canonical content", materialized, missing)
+		}
+	}
+
+	// Drop the manifest (and the now-empty proxsave-info dir we may have force-created)
+	// so it does not linger on the restored system.
+	removeDedupManifest(manifestTarget)
+	return nil
+}
+
+// removeDedupManifest deletes the materialized-then-consumed dedup manifest and, if
+// force-extraction created an otherwise-empty var/lib/proxsave-info directory on the
+// destination, removes that too (Remove on a non-empty dir fails and is a no-op).
+func removeDedupManifest(manifestTarget string) {
+	_ = restoreFS.Remove(manifestTarget)
+	_ = restoreFS.Remove(filepath.Dir(manifestTarget))
+}
+
+// dedupCleanArchivePath normalizes a name to the archive-relative slash form used
+// for manifest/target matching (no leading "./" or "/").
+func dedupCleanArchivePath(name string) string {
+	return strings.TrimPrefix(path.Clean(filepath.ToSlash(name)), "/")
+}
+
+// materializeFromArchive streams the (already decrypted) archive once and rebuilds
+// each pending duplicate from its canonical's bytes, reading one canonical at a time
+// (bounded memory). A duplicate whose canonical is absent from the archive is left
+// as a symlink (never deleted). It returns how many were materialized, how many were
+// left as links (canonical genuinely missing from the archive), and whether the scan
+// ran to completion. completed is false when the archive could not be opened/read or
+// the scan was canceled mid-way; the caller then keeps the manifest for a retry
+// instead of dropping it and stranding un-materialized symlinks.
+func materializeFromArchive(ctx context.Context, archivePath string, needByCanonical map[string][]materializeTarget, logger *logging.Logger) (materialized, missing int, completed bool) {
+	file, err := restoreFS.Open(archivePath)
+	if err != nil {
+		logger.Warning("Dedup: could not open the archive to rebuild deduplicated files; left as links: %v", err)
+		return 0, 0, false
+	}
+	defer func() { _ = file.Close() }()
+	reader, err := createDecompressionReader(ctx, file, archivePath)
+	if err != nil {
+		logger.Warning("Dedup: could not read the archive to rebuild deduplicated files; left as links: %v", err)
+		return 0, 0, false
+	}
+	defer func() { _ = reader.Close() }()
+
+	found := map[string]bool{}
+	writeOK := true
+	tr := tar.NewReader(reader)
+	for len(found) < len(needByCanonical) {
+		if err := ctx.Err(); err != nil {
+			logger.Warning("Dedup: archive scan canceled while rebuilding deduplicated files: %v", err)
+			return materialized, 0, false
+		}
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			logger.Warning("Dedup: error reading the archive while rebuilding deduplicated files: %v", err)
+			return materialized, 0, false
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := dedupCleanArchivePath(header.Name)
+		dups, ok := needByCanonical[name]
+		if !ok {
+			continue
+		}
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			logger.Warning("Dedup: failed to read canonical %q from the archive: %v", name, err)
+			continue // leave its duplicates as links (counted as missing below)
+		}
+		found[name] = true
+		for _, d := range dups {
+			if werr := writeMaterializedFile(d.path, content, d.mode); werr != nil {
+				logger.Warning("Dedup: failed to materialize %s from archive: %v", name, werr)
+				writeOK = false // a transient write failure: keep the manifest for a retry
+				continue
+			}
+			materialized++
+		}
+	}
+
+	for name, dups := range needByCanonical {
+		if !found[name] {
+			logger.Warning("Dedup: canonical %q is missing from the archive; %d file(s) left as symlink(s)", name, len(dups))
+			missing += len(dups)
+		}
+	}
+	// completed=false on a write failure so the caller keeps the manifest and a re-run
+	// can finish the still-symlinked duplicate(s); a genuinely missing canonical
+	// (corrupt backup, not retryable) does not block manifest cleanup.
+	return materialized, missing, writeOK
+}
+
+// writeMaterializedFile atomically replaces a path (typically a dedup symlink) with
+// a regular file holding content, via a sibling temp + rename so a crash never
+// leaves the path missing.
+func writeMaterializedFile(target string, content []byte, mode os.FileMode) error {
+	if mode == 0 {
+		mode = 0o600
+	}
+	tmp, err := restoreFS.CreateTemp(filepath.Dir(target), restoreTempPattern)
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		_ = restoreFS.Remove(tmpPath)
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := atomicFileChmod(tmp, mode.Perm()); err != nil {
+		_ = tmp.Close()
+		_ = restoreFS.Remove(tmpPath)
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = restoreFS.Remove(tmpPath)
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := restoreFS.Rename(tmpPath, target); err != nil {
+		_ = restoreFS.Remove(tmpPath)
+		return fmt.Errorf("replace symlink with file: %w", err)
+	}
+	return nil
 }

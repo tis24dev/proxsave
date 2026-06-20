@@ -245,12 +245,17 @@ func maybeApplyPVEFirewallWithUI(
 		return nil
 	}
 
-	if err := firewallRestartService(ctx); err != nil {
-		logger.Warning("PVE firewall restore: reload/restart failed: %v", err)
+	restartErr := firewallRestartService(ctx)
+	if restartErr != nil {
+		logger.Warning("PVE firewall restore: reload/restart failed: %v", restartErr)
 	}
 
 	if rollbackHandle == nil {
-		logger.Info("PVE firewall restore applied (no rollback timer armed).")
+		if restartErr != nil {
+			logger.Warning("PVE firewall restore applied but the service restart failed and no rollback timer is armed; verify firewall state and access from the local console/IPMI.")
+		} else {
+			logger.Info("PVE firewall restore applied (no rollback timer armed).")
+		}
 		return nil
 	}
 
@@ -266,6 +271,17 @@ func maybeApplyPVEFirewallWithUI(
 			"Keep firewall changes?",
 		int(remaining.Seconds()),
 	)
+	if restartErr != nil {
+		// Surface the failed restart at the decision point: the new rules may not be
+		// active yet and the live firewall state is uncertain. The default stays
+		// "Rollback" (defaultYes=false); an explicit Keep is still honored.
+		commitMessage = fmt.Sprintf(
+			"WARNING: the firewall service restart FAILED (%v).\n"+
+				"The new rules may not be active yet and the live firewall state is uncertain.\n"+
+				"If unsure, choose Rollback.\n\n",
+			restartErr,
+		) + commitMessage
+	}
 	commit, err := ui.ConfirmAction(ctx, "Commit firewall changes", commitMessage, "Keep", "Rollback", remaining, false)
 	if err != nil {
 		if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {

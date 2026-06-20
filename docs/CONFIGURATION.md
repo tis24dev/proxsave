@@ -140,18 +140,28 @@ PORT_WHITELIST=                                 # e.g., "sshd:22,nginx:443"
 # Built-in defaults: ncat, cryptominer, xmrig, kdevtmpfsi, kinsing, minerd, mr.sh
 SUSPICIOUS_PROCESSES="ncat,cryptominer,xmrig,kdevtmpfsi,kinsing,minerd,mr.sh"
 
-# Safe process names (won't trigger alerts)
-# NOTE: Your values are ADDED to the built-in defaults (not replaced)
-# Supports exact match, prefix with *, or regex: patterns (case-insensitive)
+# Safe process names for the bracketed "kernel-style" process warning.
+# That warning ("Suspicious kernel-style process: ...") fires for any process the
+# host's `ps` reports inside square brackets, e.g. a real kernel thread
+# `[kworker/0:1]` or a container worker an unprivileged LXC exposes to the host as
+# `[celeryd: celery@paperless:ForkPoolWorker-3057]`. Both lists below are checked.
+# NOTE: Your values are ADDED to the built-in defaults (not replaced).
+# Matching is against the text BETWEEN the brackets, case-insensitive, and a plain
+# entry is an EXACT whole-name match (NOT a prefix). Use "name*" (prefix) or
+# "regex:pattern" (unanchored) to match part of the name. So the celery worker
+# above is matched by `celeryd*` or `regex:^celeryd`, but NOT by a plain `celeryd`.
 # Built-in defaults for SAFE_BRACKET_PROCESSES: sshd:, systemd, cron, rsyslogd, dbus-daemon, zvol_tq*, arc_*, dbu_*, dbuf_*, l2arc_feed, lockd, nfsd*, nfsv4 callback*
 SAFE_BRACKET_PROCESSES="sshd:,systemd,cron,rsyslogd,dbus-daemon"
 
 # Built-in defaults for SAFE_KERNEL_PROCESSES: ksgxd, hwrng, usb-storage, vdev_autotrim, card1-crtc0, card1-crtc1, card1-crtc2, kvm-pit*, and various regex patterns
 SAFE_KERNEL_PROCESSES="ksgxd,hwrng,usb-storage,vdev_autotrim,card1-crtc0,card1-crtc1,card1-crtc2,kvm-pit,regex:^card[0-9]+-crtc[0-9]+$,regex:^drbd_[wrs]_.+,regex:^kvm-pit/[0-9]+$,regex:^kmmpd-drbd[0-9]+$"
 
-# Allowlist for the suspicious-process scan (no built-in defaults; purely user-driven)
-# A process is never flagged if any token of its command line (or that token's basename)
-# matches an entry, even if it also matches SUSPICIOUS_PROCESSES.
+# Allowlist for the suspicious-process scan ONLY (no built-in defaults; purely user-driven).
+# This list does NOT silence the bracketed "kernel-style" warning above; use
+# SAFE_BRACKET_PROCESSES / SAFE_KERNEL_PROCESSES for those.
+# A process is never flagged by the suspicious-process scan if any token of its
+# command line (or that token's basename) matches an entry, even if it also matches
+# SUSPICIOUS_PROCESSES.
 # Matching is anchored to the start of each token: a plain entry matches any token that
 # STARTS WITH it (e.g. "ssh" also matches "sshd"), so use "regex:^name$" for an exact match.
 # "name*" wildcard and "regex:pattern" are also supported (case-insensitive).
@@ -194,12 +204,18 @@ This means you don't need to repeat the default values - just add your custom en
 
 #### Process Matching
 
-`SUSPICIOUS_PROCESSES` and `SAFE_PROCESSES` are matched per command-line token (and each token's path basename), anchored to the **start** of the token:
+proxsave runs two independent process detectors, and their allowlists are **not** interchangeable. Pick the list that matches the warning you see.
+
+**Suspicious-process scan** (`SUSPICIOUS_PROCESSES`, allowlisted by `SAFE_PROCESSES`) is matched per command-line token (and each token's path basename), anchored to the **start** of the token:
 
 - A **plain entry** matches any token that **starts with** it. For example `ncat` matches `ncat` and `/usr/bin/ncat`, but no longer matches the substring inside `concat`; note that `ssh` would also match `sshd`.
 - Use **`regex:^name$`** for an exact match, or **`name*`** / **`regex:pattern`** for explicit wildcard/regex control (case-insensitive).
 
-`SAFE_BRACKET_PROCESSES` and `SAFE_KERNEL_PROCESSES` match a single process name and behave differently: a plain entry there is an **exact** match (use `name*` / `regex:` for broader matching).
+**Bracketed "kernel-style" detector** (`SAFE_BRACKET_PROCESSES` and `SAFE_KERNEL_PROCESSES`) handles the `Suspicious kernel-style process: ...` warning. It fires for any process the host's `ps` reports inside square brackets, such as a real kernel thread (`[kworker/0:1]`) or a container worker an unprivileged LXC exposes to the host (`[celeryd: celery@paperless:ForkPoolWorker-3057]`). It matches a **single name** (the text *between* the brackets), case-insensitively, and behaves differently from the scan above:
+
+- A **plain entry is an exact, whole-name match** (not a prefix). `celeryd` does **not** match `celeryd: celery@paperless:ForkPoolWorker-3057`.
+- Use **`name*`** for a prefix match or **`regex:pattern`** for an unanchored regex. The celery worker above is matched by `celeryd*` or `regex:^celeryd`, but not by a plain `celeryd` or by an anchored `regex:^celeryd$`.
+- `SAFE_PROCESSES` has **no effect** on this detector. Allowlist bracketed processes via `SAFE_BRACKET_PROCESSES` (or `SAFE_KERNEL_PROCESSES`).
 
 ### Permission Management
 
@@ -1005,7 +1021,7 @@ BACKUP_PVE_FIREWALL=true           # PVE firewall configuration
 BACKUP_VZDUMP_CONFIG=true          # /etc/vzdump.conf
 
 # Access control lists
-BACKUP_PVE_ACL=true                # Access control (users/roles/groups/ACL; realms when configured)
+BACKUP_PVE_ACL=true                # Access control + priv credentials (shadow/token/tfa); realms when configured
 
 # Scheduled jobs
 BACKUP_PVE_JOBS=true               # Backup jobs configuration
@@ -1030,7 +1046,9 @@ CEPH_CONFIG_PATH=/etc/ceph         # Ceph config directory
 BACKUP_VM_CONFIGS=true             # VM/CT config files
 ```
 
-**Note (PVE snapshot behavior)**: ProxSave snapshots `PVE_CONFIG_PATH` for completeness. When a PVE feature is disabled, proxsave also excludes its well-known files from that snapshot to avoid “still included via full directory copy” surprises (e.g. `qemu-server/` + `lxc/` for `BACKUP_VM_CONFIGS=false`, `firewall/` + `host.fw` for `BACKUP_PVE_FIREWALL=false`, `user.cfg`/`domains.cfg` for `BACKUP_PVE_ACL=false` (ACLs are stored in `user.cfg` on PVE), `jobs.cfg` + `vzdump.cron` for `BACKUP_PVE_JOBS=false`, `corosync.conf` (and `config.db` capture) for `BACKUP_CLUSTER_CONFIG=false`).
+**Note (PVE snapshot behavior)**: ProxSave snapshots `PVE_CONFIG_PATH` for completeness. When a PVE feature is disabled, proxsave also excludes its well-known files from that snapshot to avoid “still included via full directory copy” surprises (e.g. `qemu-server/` + `lxc/` for `BACKUP_VM_CONFIGS=false`, `firewall/` + `host.fw` for `BACKUP_PVE_FIREWALL=false`, `user.cfg`/`domains.cfg` plus the credential files `priv/shadow.cfg`/`priv/token.cfg`/`priv/tfa.cfg` for `BACKUP_PVE_ACL=false` (ACLs are stored in `user.cfg` on PVE), `jobs.cfg` + `vzdump.cron` for `BACKUP_PVE_JOBS=false`, `corosync.conf` (and `config.db` capture) for `BACKUP_CLUSTER_CONFIG=false`).
+
+> **Security note**: `/etc/pve` is a pmxcfs mount backed by the cluster database `config.db`. Setting `BACKUP_PVE_ACL=false` removes the flat `priv/*` credential files from the snapshot, but the same secrets remain inside `config.db` (captured when `BACKUP_CLUSTER_CONFIG=true`). To exclude PVE access-control secrets from the backup entirely, set both `BACKUP_PVE_ACL=false` and `BACKUP_CLUSTER_CONFIG=false`. ProxSave logs a WARNING during backup when this combination leaves secrets in `config.db`.
 
 ### PBS-Specific
 
@@ -1057,7 +1075,7 @@ BACKUP_PBS_NOTIFICATIONS=true      # notifications.cfg (targets/matchers/endpoin
 BACKUP_PBS_NOTIFICATIONS_PRIV=true # notifications-priv.cfg (secrets/credentials for endpoints)
 
 # User and permissions
-BACKUP_USER_CONFIGS=true           # PBS users and tokens
+BACKUP_USER_CONFIGS=true           # PBS users/ACLs/realms + credentials (token.cfg, shadow.json, token.shadow, tfa.json)
 
 # Remote configurations
 BACKUP_REMOTE_CONFIGS=true         # Remote PBS servers
@@ -1161,7 +1179,7 @@ BACKUP_ZFS_CONFIG=true             # /etc/zfs, /etc/hostid, zpool cache & proper
 BACKUP_ROOT_HOME=true              # /root (excluding .cache, .local/share/Trash)
 
 # Backup script repository
-BACKUP_SCRIPT_REPOSITORY=false     # Include .git directory
+BACKUP_SCRIPT_REPOSITORY=false     # Snapshot the ProxSave install dir (excludes .git and backup/log output)
 
 # Backup configuration file
 BACKUP_CONFIG_FILE=true            # Include this backup.env configuration file in the backup

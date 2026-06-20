@@ -24,6 +24,7 @@ type FakeFS struct {
 	MkdirAllErr  error
 	MkdirTempErr error
 	OpenFileErr  map[string]error
+	RenameErr    map[string]error
 	Ownership    map[string]FakeOwnership
 }
 
@@ -39,6 +40,7 @@ func NewFakeFS() *FakeFS {
 		StatErr:     make(map[string]error),
 		StatErrors:  make(map[string]error),
 		OpenFileErr: make(map[string]error),
+		RenameErr:   make(map[string]error),
 		Ownership:   make(map[string]FakeOwnership),
 	}
 }
@@ -191,6 +193,9 @@ func (f *FakeFS) MkdirTemp(dir, pattern string) (string, error) {
 }
 
 func (f *FakeFS) Rename(oldpath, newpath string) error {
+	if err, ok := f.RenameErr[filepath.Clean(oldpath)]; ok {
+		return err
+	}
 	return os.Rename(f.onDisk(oldpath), f.onDisk(newpath))
 }
 

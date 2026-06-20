@@ -61,6 +61,15 @@ type Collector struct {
 	pbsManifest    map[string]ManifestEntry
 	pveManifest    map[string]ManifestEntry
 	systemManifest map[string]ManifestEntry
+	// recordSystemManifest gates population of systemManifest to the system
+	// collection phase; systemManifestDepth>0 means a directory walk is in
+	// progress, so only the top-level target is recorded, not every nested file
+	// (issue #59).
+	recordSystemManifest bool
+	systemManifestDepth  int
+	// collectingCustomPaths is set while copying operator-supplied CUSTOM_BACKUP_PATHS,
+	// during which the source walk prunes the staging workspace to avoid self-copy (#56).
+	collectingCustomPaths bool
 }
 
 var osSymlink = os.Symlink
@@ -417,7 +426,7 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		BackupSSHKeys:           true,
 		BackupZFSConfig:         true,
 		BackupRootHome:          true,
-		BackupScriptRepository:  true,
+		BackupScriptRepository:  false,
 		BackupUserHomes:         true,
 		BackupConfigFile:        true,
 		SystemRootPrefix:        "",
@@ -753,6 +762,24 @@ func (c *Collector) applySymlinkOwnership(dest string, info os.FileInfo) {
 	}
 }
 
+// recordSystemManifestEntry records a system collection target into the manifest
+// (issue #59). It is a no-op outside the system collection phase and inside
+// directory walks, so the manifest lists collection targets rather than every
+// nested file (no bloat). pveManifestKey computes a tempDir-relative key.
+func (c *Collector) recordSystemManifestEntry(dest string, entry ManifestEntry) {
+	if !c.recordSystemManifest || c.systemManifestDepth != 0 || c.systemManifest == nil {
+		return
+	}
+	c.systemManifest[pveManifestKey(c.tempDir, dest)] = entry
+}
+
+func manifestEntryFromResult(err error, size int64) ManifestEntry {
+	if err != nil {
+		return ManifestEntry{Status: StatusFailed, Error: err.Error()}
+	}
+	return ManifestEntry{Status: StatusCollected, Size: size}
+}
+
 func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -760,31 +787,48 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 
 	c.logger.Debug("Collecting %s: %s -> %s", description, src, dest)
 
+	if c.isWithinStagingDir(src) {
+		c.logger.Debug("Skipping file %s: inside the staging workspace (#56)", src)
+		return nil
+	}
+
 	info, found, err := c.statCopySource(src, description)
-	if err != nil || !found {
+	if err != nil {
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: err.Error()})
 		return err
+	}
+	if !found {
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusNotFound})
+		return nil
 	}
 
 	if c.shouldSkipCopy(src, dest) {
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusSkipped})
 		return nil
 	}
 
 	if c.dryRun {
 		c.logger.Debug("[DRY RUN] Would copy file: %s -> %s", src, dest)
 		c.incFilesProcessed()
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
 		return nil
 	}
 
 	if info.Mode()&os.ModeSymlink != 0 {
-		return c.copySymlinkFile(src, dest, info)
+		err := c.copySymlinkFile(src, dest, info)
+		c.recordSystemManifestEntry(dest, manifestEntryFromResult(err, 0))
+		return err
 	}
 
 	if !info.Mode().IsRegular() {
 		c.logger.Debug("Skipping non-regular file: %s", src)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusSkipped})
 		return nil
 	}
 
-	return c.copyRegularFile(src, dest, description, info)
+	err = c.copyRegularFile(src, dest, description, info)
+	c.recordSystemManifestEntry(dest, manifestEntryFromResult(err, info.Size()))
+	return err
 }
 
 func (c *Collector) statCopySource(src, description string) (os.FileInfo, bool, error) {
@@ -899,6 +943,19 @@ func copyRegularFileContents(srcFile io.Reader, src, dest string) (int64, error)
 	return written, nil
 }
 
+// isWithinStagingDir reports whether path is the staging tempDir or lives under
+// it. The source walk must never descend into the destination staging tree, or a
+// broad CUSTOM_BACKUP_PATHS entry (e.g. "/", "/tmp", "/tmp/proxsave") would copy
+// the growing archive into itself, recursing and ballooning the backup (#56).
+func (c *Collector) isWithinStagingDir(path string) bool {
+	if !c.collectingCustomPaths || c.tempDir == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	root := filepath.Clean(c.tempDir)
+	return clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator))
+}
+
 func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -906,68 +963,96 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 
 	c.logger.Debug("Collecting directory %s: %s -> %s", description, src, dest)
 
+	if c.isWithinStagingDir(src) {
+		c.logger.Debug("Skipping directory %s: inside the staging workspace (would copy the archive into itself)", src)
+		return nil
+	}
+
 	if c.shouldExclude(src) || c.shouldExclude(dest) {
 		c.logger.Debug("Skipping directory %s due to exclusion pattern", src)
 		c.incFilesSkipped()
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusSkipped})
 		return nil
 	}
 
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		c.logger.Debug("%s not found: %s (skipping)", description, src)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusNotFound})
 		return nil
 	}
 
 	if c.dryRun {
 		c.logger.Debug("[DRY RUN] Would copy directory: %s -> %s", src, dest)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
 		return nil
 	}
 
-	// Ensure destination exists
-	if err := c.ensureDir(dest); err != nil {
-		return err
-	}
-
-	// Walk source directory
-	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if errCtx := ctx.Err(); errCtx != nil {
-			return errCtx
-		}
-
-		if err != nil {
+	// Suppress per-file recording during the walk so the manifest stays at target
+	// granularity (#59), then record the directory's FINAL status from the actual
+	// outcome below. Recording StatusCollected up front would misreport a directory
+	// whose ensureDir/walk later fails as successfully collected.
+	c.systemManifestDepth++
+	walkErr := func() error {
+		// Ensure destination exists
+		if err := c.ensureDir(dest); err != nil {
 			return err
 		}
 
-		// Calculate relative path and destination path for archive matching.
-		relPath, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		destPath := filepath.Join(dest, relPath)
-
-		// Check if this path should be excluded
-		if c.shouldExclude(path) || c.shouldExclude(destPath) {
-			// If it's a directory, skip it entirely
-			if info.IsDir() {
-				return filepath.SkipDir
+		// Walk source directory
+		return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+			if errCtx := ctx.Err(); errCtx != nil {
+				return errCtx
 			}
-			return nil
-		}
 
-		if info.IsDir() {
-			if err := c.ensureDir(destPath); err != nil {
+			if err != nil {
 				return err
 			}
-			c.applyMetadata(destPath, info)
-			return nil
-		}
 
-		return c.safeCopyFile(ctx, path, destPath, filepath.Base(path))
-	})
+			// Never descend into the staging workspace: a broad source (e.g. a custom
+			// path of "/" or "/tmp") would otherwise copy the in-progress archive into
+			// itself (#56).
+			if c.isWithinStagingDir(path) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 
-	if err != nil {
-		c.logger.Warning("Failed to copy directory %s: %v", description, err)
-		return err
+			// Calculate relative path and destination path for archive matching.
+			relPath, err := filepath.Rel(src, path)
+			if err != nil {
+				return err
+			}
+			destPath := filepath.Join(dest, relPath)
+
+			// Check if this path should be excluded
+			if c.shouldExclude(path) || c.shouldExclude(destPath) {
+				// If it's a directory, skip it entirely
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			if info.IsDir() {
+				if err := c.ensureDir(destPath); err != nil {
+					return err
+				}
+				c.applyMetadata(destPath, info)
+				return nil
+			}
+
+			return c.safeCopyFile(ctx, path, destPath, filepath.Base(path))
+		})
+	}()
+	c.systemManifestDepth--
+
+	if walkErr != nil {
+		c.logger.Warning("Failed to copy directory %s: %v", description, walkErr)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: walkErr.Error()})
+		return walkErr
 	}
+	c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
 
 	c.logger.Debug("Successfully collected %s: %s", description, src)
 	return nil

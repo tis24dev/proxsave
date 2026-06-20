@@ -3,12 +3,49 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+func TestCleanupBackupWorkspaceRemovesAndDeregisters(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	orch := New(logger, false)
+
+	reg, err := NewTempDirRegistry(logger, filepath.Join(t.TempDir(), "registry.json"))
+	if err != nil {
+		t.Fatalf("NewTempDirRegistry: %v", err)
+	}
+
+	tempDir := t.TempDir()
+	// Represent plaintext staged secrets that must not survive a finished run.
+	if err := os.WriteFile(filepath.Join(tempDir, "shadow"), []byte("hash"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(tempDir); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	orch.cleanupBackupWorkspace(&backupWorkspace{registry: reg, fs: osFS{}, tempDir: tempDir})
+
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Fatalf("workspace must be removed when the run finishes (issue #53), stat err=%v", err)
+	}
+	entries, err := reg.loadEntries()
+	if err != nil {
+		t.Fatalf("loadEntries: %v", err)
+	}
+	for _, e := range entries {
+		if e.Path == tempDir {
+			t.Fatalf("workspace must be deregistered after removal; still present in %+v", entries)
+		}
+	}
+}
 
 func TestCreateBackupArchiveClassifiesAgeRecipientFailureAsEncryption(t *testing.T) {
 	orch := New(newTestLogger(), false)

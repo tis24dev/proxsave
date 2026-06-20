@@ -312,6 +312,12 @@ func GetAllCategories() []Category {
 				"./etc/auto.master",
 				"./etc/auto.master.d/",
 				"./etc/auto.*",
+				// Conventional LUKS/crypttab keyfile directories. Keyfiles at
+				// arbitrary absolute paths are collected dynamically but cannot be
+				// statically matched here; those still need the full/plain restore (#66).
+				"./etc/keys/",
+				"./etc/luks-keys/",
+				"./etc/cryptsetup-keys.d/",
 			},
 		},
 		{
@@ -372,6 +378,10 @@ func GetAllCategories() []Category {
 				"./etc/cron.d/",
 				"./etc/crontab",
 				"./var/spool/cron/",
+				"./etc/cron.daily/",
+				"./etc/cron.hourly/",
+				"./etc/cron.weekly/",
+				"./etc/cron.monthly/",
 			},
 		},
 		{
@@ -393,6 +403,21 @@ func GetAllCategories() []Category {
 				"./etc/iptables/",
 				"./etc/nftables.conf",
 				"./etc/nftables.d/",
+			},
+		},
+		{
+			ID:   "accounts",
+			Name: "System Accounts & Auth (WARNING)",
+			Description: "OS users/groups/passwords and sudoers (/etc/passwd,group,shadow,gshadow,sudoers). " +
+				"Applied with a safe merge that preserves the current host root and system accounts; " +
+				"WARNING: review before applying and prefer a matching/fresh host.",
+			Type: CategoryTypeCommon,
+			Paths: []string{
+				"./etc/passwd",
+				"./etc/group",
+				"./etc/shadow",
+				"./etc/gshadow",
+				"./etc/sudoers",
 			},
 		},
 		{

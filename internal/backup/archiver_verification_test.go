@@ -395,13 +395,18 @@ func TestVerifyGzipArchive_ValidTarContent(t *testing.T) {
 // successful command's (potentially huge) stdout is discarded rather than
 // buffered, and a failure surfaces the command's stderr (not its stdout).
 func TestRunTarListVerification(t *testing.T) {
-	// Success: stdout is produced (and discarded), exit 0 -> no error.
-	if err := runTarListVerification(exec.Command("sh", "-c", "echo a; echo b")); err != nil {
+	// Success: stdout is produced (and counted, not buffered), exit 0 -> no error.
+	// The returned count is the number of newline-terminated lines.
+	lines, err := runTarListVerification(exec.Command("sh", "-c", "echo a; echo b"))
+	if err != nil {
 		t.Fatalf("expected success, got %v", err)
+	}
+	if lines != 2 {
+		t.Fatalf("expected 2 counted lines, got %d", lines)
 	}
 
 	// Failure: the error carries stderr, not the discarded stdout.
-	err := runTarListVerification(exec.Command("sh", "-c", "echo discarded-stdout; echo boom 1>&2; exit 3"))
+	_, err = runTarListVerification(exec.Command("sh", "-c", "echo discarded-stdout; echo boom 1>&2; exit 3"))
 	if err == nil {
 		t.Fatal("expected an error")
 	}

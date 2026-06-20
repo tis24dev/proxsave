@@ -33,9 +33,9 @@ func initializeBackupStorage(opts backupModeOptions, orch *orchestrator.Orchestr
 		return state, &orchestrator.EarlyErrorState{
 			Phase:     "storage_init",
 			Error:     err,
-			ExitCode:  types.ExitConfigError,
+			ExitCode:  types.ExitStorageError,
 			Timestamp: time.Now(),
-		}, types.ExitConfigError.Int()
+		}, types.ExitStorageError.Int()
 	}
 	state.localFS = localFS
 	registerPrimaryStorage(opts, orch, localBackend, localFS)

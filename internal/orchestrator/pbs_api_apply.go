@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -13,6 +14,23 @@ import (
 )
 
 var pbsAPIApplyGeteuid = os.Geteuid
+
+// errPBSCleanRemoveIncomplete marks a Clean (1:1) restore where one or more stale
+// objects absent from the backup could NOT be removed from PBS. The objects are
+// left in place (the conservative outcome, nothing destroyed), but the caller
+// must report the restore "with warnings" instead of a clean success, and must
+// NOT paper over it with the file-based fallback (which would force-rewrite the
+// .cfg and drop the object, bypassing PBS's refusal, e.g. for an in-use object).
+var errPBSCleanRemoveIncomplete = errors.New("PBS Clean 1:1 incomplete: stale object(s) could not be removed")
+
+// pbsCleanRemoveResult returns nil when no clean-mode remove failed, otherwise an
+// error wrapping errPBSCleanRemoveIncomplete listing the objects left behind.
+func pbsCleanRemoveResult(kind string, failures []string) error {
+	if len(failures) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s remove failed for %d object(s) [%s]: %w", kind, len(failures), strings.Join(failures, ", "), errPBSCleanRemoveIncomplete)
+}
 
 func normalizeProxmoxCfgKey(key string) string {
 	key = strings.ToLower(strings.TrimSpace(key))
@@ -217,6 +235,7 @@ func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageR
 		desired[name] = s
 	}
 
+	var removeFailures []string
 	if strict {
 		out, err := runPBSManager(ctx, "remote", "list", "--output-format=json")
 		if err != nil {
@@ -232,6 +251,7 @@ func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageR
 			}
 			if _, err := runPBSManager(ctx, "remote", "remove", id); err != nil {
 				logger.Warning("PBS API apply: remote remove %s failed (continuing): %v", id, err)
+				removeFailures = append(removeFailures, id)
 			}
 		}
 	}
@@ -253,7 +273,7 @@ func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageR
 		}
 	}
 
-	return nil
+	return pbsCleanRemoveResult("remote", removeFailures)
 }
 
 func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
@@ -278,6 +298,7 @@ func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot 
 		desired[id] = s
 	}
 
+	var removeFailures []string
 	if strict {
 		out, err := runPBSManager(ctx, "s3", "endpoint", "list", "--output-format=json")
 		if err != nil {
@@ -293,6 +314,7 @@ func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot 
 			}
 			if _, err := runPBSManager(ctx, "s3", "endpoint", "remove", id); err != nil {
 				logger.Warning("PBS API apply: s3 endpoint remove %s failed (continuing): %v", id, err)
+				removeFailures = append(removeFailures, id)
 			}
 		}
 	}
@@ -314,7 +336,7 @@ func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot 
 		}
 	}
 
-	return nil
+	return pbsCleanRemoveResult("s3 endpoint", removeFailures)
 }
 
 func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
@@ -365,6 +387,7 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 		}
 	}
 
+	var removeFailures []string
 	if strict {
 		current := make([]string, 0, len(currentPaths))
 		for name := range currentPaths {
@@ -377,6 +400,7 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 			}
 			if _, err := runPBSManager(ctx, "datastore", "remove", name); err != nil {
 				logger.Warning("PBS API apply: datastore remove %s failed (continuing): %v", name, err)
+				removeFailures = append(removeFailures, name)
 			}
 		}
 	}
@@ -425,7 +449,7 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 		}
 	}
 
-	return nil
+	return pbsCleanRemoveResult("datastore", removeFailures)
 }
 
 func applyPBSSyncCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
@@ -450,6 +474,7 @@ func applyPBSSyncCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoo
 		desired[id] = s
 	}
 
+	var removeFailures []string
 	if strict {
 		out, err := runPBSManager(ctx, "sync-job", "list", "--output-format=json")
 		if err != nil {
@@ -465,6 +490,7 @@ func applyPBSSyncCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoo
 			}
 			if _, err := runPBSManager(ctx, "sync-job", "remove", id); err != nil {
 				logger.Warning("PBS API apply: sync-job remove %s failed (continuing): %v", id, err)
+				removeFailures = append(removeFailures, id)
 			}
 		}
 	}
@@ -486,7 +512,7 @@ func applyPBSSyncCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoo
 		}
 	}
 
-	return nil
+	return pbsCleanRemoveResult("sync-job", removeFailures)
 }
 
 func applyPBSVerificationCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
@@ -511,6 +537,7 @@ func applyPBSVerificationCfgViaAPI(ctx context.Context, logger *logging.Logger, 
 		desired[id] = s
 	}
 
+	var removeFailures []string
 	if strict {
 		out, err := runPBSManager(ctx, "verify-job", "list", "--output-format=json")
 		if err != nil {
@@ -526,6 +553,7 @@ func applyPBSVerificationCfgViaAPI(ctx context.Context, logger *logging.Logger, 
 			}
 			if _, err := runPBSManager(ctx, "verify-job", "remove", id); err != nil {
 				logger.Warning("PBS API apply: verify-job remove %s failed (continuing): %v", id, err)
+				removeFailures = append(removeFailures, id)
 			}
 		}
 	}
@@ -547,7 +575,7 @@ func applyPBSVerificationCfgViaAPI(ctx context.Context, logger *logging.Logger, 
 		}
 	}
 
-	return nil
+	return pbsCleanRemoveResult("verify-job", removeFailures)
 }
 
 func applyPBSPruneCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
@@ -572,6 +600,7 @@ func applyPBSPruneCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRo
 		desired[id] = s
 	}
 
+	var removeFailures []string
 	if strict {
 		out, err := runPBSManager(ctx, "prune-job", "list", "--output-format=json")
 		if err != nil {
@@ -587,6 +616,7 @@ func applyPBSPruneCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRo
 			}
 			if _, err := runPBSManager(ctx, "prune-job", "remove", id); err != nil {
 				logger.Warning("PBS API apply: prune-job remove %s failed (continuing): %v", id, err)
+				removeFailures = append(removeFailures, id)
 			}
 		}
 	}
@@ -608,7 +638,7 @@ func applyPBSPruneCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRo
 		}
 	}
 
-	return nil
+	return pbsCleanRemoveResult("prune-job", removeFailures)
 }
 
 func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
@@ -633,6 +663,7 @@ func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger
 		desired[name] = s
 	}
 
+	var removeFailures []string
 	if strict {
 		out, err := runPBSManager(ctx, "traffic-control", "list", "--output-format=json")
 		if err != nil {
@@ -648,6 +679,7 @@ func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger
 			}
 			if _, err := runPBSManager(ctx, "traffic-control", "remove", name); err != nil {
 				logger.Warning("PBS API apply: traffic-control remove %s failed (continuing): %v", name, err)
+				removeFailures = append(removeFailures, name)
 			}
 		}
 	}
@@ -669,7 +701,7 @@ func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger
 		}
 	}
 
-	return nil
+	return pbsCleanRemoveResult("traffic-control", removeFailures)
 }
 
 func applyPBSNodeCfgViaAPI(ctx context.Context, stageRoot string) error {

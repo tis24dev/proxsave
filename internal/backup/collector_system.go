@@ -137,6 +137,15 @@ func (c *Collector) CollectSystemInfo(ctx context.Context) error {
 
 	ensureSystemPath()
 	c.logger.Debug("System PATH verified for command execution")
+
+	// Populate the system_files manifest for the duration of system collection so
+	// the backup manifest records which system targets were collected (issue #59).
+	if c.systemManifest == nil {
+		c.systemManifest = make(map[string]ManifestEntry)
+	}
+	c.recordSystemManifest = true
+	defer func() { c.recordSystemManifest = false }()
+
 	state := newCollectionState(c)
 	if err := runRecipe(ctx, newSystemRecipe(), state); err != nil {
 		return err
@@ -1364,6 +1373,13 @@ func (c *Collector) collectConfigFile(ctx context.Context) error {
 
 func (c *Collector) collectCustomPaths(ctx context.Context) error {
 	c.logger.Debug("Collecting custom paths defined in configuration")
+	// Operator-supplied paths may be broad (e.g. "/", "/tmp", "/tmp/proxsave") and
+	// thus contain the staging workspace; prune it from the source walk so the
+	// in-progress archive is never copied into itself (#56). Other collection
+	// sources are fixed system paths that never contain tempDir, so the prune is
+	// scoped to this phase only.
+	c.collectingCustomPaths = true
+	defer func() { c.collectingCustomPaths = false }()
 	seen := make(map[string]struct{})
 
 	for _, rawPath := range c.config.CustomBackupPaths {
@@ -1508,14 +1524,15 @@ func (c *Collector) collectScriptRepository(ctx context.Context) error {
 		if err != nil || rel == "." {
 			return nil
 		}
-		parts := strings.Split(rel, string(filepath.Separator))
-		if len(parts) > 0 {
-			if parts[0] == "backup" || parts[0] == "log" {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
+		// Skip VCS metadata and runtime/output dirs at ANY depth (not just the top
+		// level): .git/.svn/.hg carry full history/objects (large and sensitive), and
+		// backup(s)/log(s) are regenerated output that only bloats the snapshot.
+		switch d.Name() {
+		case ".git", ".svn", ".hg", "backup", "backups", "log", "logs":
+			if d.IsDir() {
+				return filepath.SkipDir
 			}
+			return nil
 		}
 
 		dest := filepath.Join(target, rel)

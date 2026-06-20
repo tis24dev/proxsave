@@ -25,6 +25,7 @@ var closeTestFile = func(f *os.File) error { return f.Close() }
 
 var (
 	osStat      = os.Stat
+	osLstat     = os.Lstat
 	osRemove    = os.Remove
 	osOpenFile  = os.OpenFile
 	osMkdirAll  = os.MkdirAll
@@ -279,6 +280,11 @@ func sameHost(a, b string) bool {
 }
 
 // CheckLockFile checks for stale lock files and creates a new lock
+// CheckCodeBackupInProgress marks a lock-file check that failed because another
+// backup is actively running. It is a benign concurrency skip, not a real
+// failure, so callers can treat it differently (no failure notification).
+const CheckCodeBackupInProgress = "BACKUP_IN_PROGRESS"
+
 func (c *Checker) CheckLockFile() CheckResult {
 	result := CheckResult{
 		Name:   "Lock File",
@@ -303,6 +309,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 		age := time.Since(info.ModTime())
 
 		formatInProgress := func(age time.Duration, meta lockFileMetadata) string {
+			result.Code = CheckCodeBackupInProgress
 			parts := []string{fmt.Sprintf("lock age: %v", age)}
 			if meta.PID > 0 {
 				parts = append(parts, fmt.Sprintf("pid=%d", meta.PID))
@@ -377,6 +384,12 @@ func (c *Checker) CheckLockFile() CheckResult {
 		f, err := osOpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0640)
 		if err != nil {
 			if os.IsExist(err) {
+				// Lost the atomic O_EXCL create race: another backup created the lock
+				// between the stat above and this create. Set the in-progress code so
+				// callers treat it as a benign concurrency skip, exactly like the
+				// stat-found-a-live-lock path above; otherwise this race path raises a
+				// spurious failure notification.
+				result.Code = CheckCodeBackupInProgress
 				result.Message = "Another backup acquired the lock"
 				c.logger.Error("%s", result.Message)
 				return result
@@ -628,6 +641,16 @@ func (c *Checker) CheckTempDirectory() CheckResult {
 		}
 	} else {
 		c.logger.Debug("Temp directory exists: %s", tempRoot)
+	}
+
+	// osStat follows symlinks, so a pre-created /tmp/proxsave pointing at an
+	// attacker-controlled directory would otherwise pass. Reject a symlinked root
+	// (issue #54).
+	if linfo, lerr := osLstat(tempRoot); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+		result.Code = "SYMLINK_REJECTED"
+		result.Error = fmt.Errorf("temp path is a symlink - path: %s", tempRoot)
+		result.Message = result.Error.Error()
+		return result
 	}
 
 	if !info.IsDir() {

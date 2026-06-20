@@ -5,11 +5,49 @@ on:
     tags:
       - "v*"
 
+# Serialize runs for the same tag. The intake-time run (gate skips) and the
+# post-merge re-tag run are far apart in time, so this never queues in practice;
+# it makes a manual "re-run all jobs" deterministic instead of racing GoReleaser.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
+  # Gate: only cut a release when the tag is on main (i.e. it was created on the
+  # squash commit by post-merge-release after the dev->main PR merged). A v* tag
+  # that is not reachable from main is NOT released, which neutralizes a stray or
+  # legacy direct tag push on a dev commit. A tag pushed directly onto a commit
+  # already on main (legacy escape hatch) passes the gate immediately.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      on_main: ${{ steps.check.outputs.on_main }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check tag is on main
+        id: check
+        run: |
+          set -euo pipefail
+          git fetch --force origin main
+          TAG_SHA="$(git rev-list -n 1 "${GITHUB_REF#refs/tags/}")"
+          if git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+            echo "on_main=true" >> "$GITHUB_OUTPUT"
+            echo "Tag is on main; proceeding with release."
+          else
+            echo "on_main=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag is not on main; skipping release. A release fires only after the squash-merge creates the tag on main."
+          fi
+
   release:
-    # Run the job ONLY when the tag is pushed directly (not from a PR)
-    # and the ref is a tag.
-    if: startsWith(github.ref, 'refs/tags/') && github.event.base_ref == ''
+    needs: gate
+    if: needs.gate.outputs.on_main == 'true'
 
     runs-on: ubuntu-latest
 

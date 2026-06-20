@@ -14,6 +14,10 @@ import (
 func initializeBackupNotifications(opts backupModeOptions, orch *orchestrator.Orchestrator) {
 	logger := opts.logger
 
+	// Register notifier secrets so they are scrubbed from every log line
+	// (defense-in-depth on top of the per-notifier source redaction).
+	registerNotificationSecrets(logger, opts.cfg)
+
 	logging.Step("Initializing notification channels")
 	notifyDone := logging.DebugStart(logger, "notifications init", "")
 	initializeEmailNotification(opts, orch)
@@ -23,6 +27,26 @@ func initializeBackupNotifications(opts backupModeOptions, orch *orchestrator.Or
 	notifyDone(nil)
 
 	fmt.Println()
+}
+
+// registerNotificationSecrets registers the notifier credentials with the logger
+// so they are masked out of any log line. The public Cloudflare relay
+// worker token / HMAC secret are intentionally NOT registered (documented
+// shared anti-abuse credentials, not confidential).
+func registerNotificationSecrets(logger *logging.Logger, cfg *config.Config) {
+	if logger == nil || cfg == nil {
+		return
+	}
+	logger.RegisterSecret(cfg.TelegramBotToken)
+	logger.RegisterSecret(cfg.GotifyToken)
+	if cfg.WebhookEnabled {
+		for _, ep := range cfg.BuildWebhookConfig().Endpoints {
+			logger.RegisterSecret(ep.URL)
+			logger.RegisterSecret(ep.Auth.Token)
+			logger.RegisterSecret(ep.Auth.Secret)
+			logger.RegisterSecret(ep.Auth.Pass)
+		}
+	}
 }
 
 func initializeEmailNotification(opts backupModeOptions, orch *orchestrator.Orchestrator) {
