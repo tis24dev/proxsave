@@ -76,7 +76,15 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	// archive, so selective restore never leaves a dangling link and full restore
 	// preserves the original file type (issue #70). Safe on every extraction: it
 	// never deletes and is a no-op when no dedup manifest is present.
-	materializeDedupSymlinks(ctx, opts.archivePath, opts.destRoot, opts.logger)
+	if err := materializeDedupSymlinks(ctx, opts.archivePath, opts.destRoot, opts.logger); err != nil {
+		// On the staged path (failOnPartialExtraction) an incompletely reconstructed
+		// dedup tree must not be applied to the live system; elsewhere it is a
+		// recoverable warning and the (kept) manifest lets a re-run finish.
+		if opts.failOnPartialExtraction {
+			return err
+		}
+		opts.logger.Warning("Dedup materialization incomplete: %v", err)
+	}
 
 	// When the caller cannot safely act on a partial result (the staged restore
 	// path, which would otherwise apply an incomplete tree of PVE/PBS/network/
@@ -304,14 +312,14 @@ type materializeTarget struct {
 // dedup canonical's category was not selected or its on-disk copy failed to extract,
 // and it never picks up stale live content (issue #70). It is a no-op when no
 // manifest is present (deduplication was off or found no duplicates).
-func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string, logger *logging.Logger) {
+func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string, logger *logging.Logger) error {
 	manifestTarget, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, backup.DedupManifestRelPath)
 	if err != nil {
-		return
+		return nil
 	}
 	data, err := restoreFS.ReadFile(manifestTarget)
 	if err != nil {
-		return // no dedup manifest: nothing to materialize
+		return nil // no dedup manifest: nothing to materialize
 	}
 	var entries []backup.DedupManifestEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
@@ -319,7 +327,7 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 		// (force-extracted under var/lib/proxsave-info) lingering on the restored system.
 		logger.Warning("Dedup manifest unreadable; skipping symlink materialization: %v", err)
 		removeDedupManifest(manifestTarget)
-		return
+		return nil
 	}
 
 	// Map each canonical archive path to the extracted duplicate symlinks that need
@@ -358,9 +366,11 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 		if !completed {
 			// The archive scan was cut short (context canceled / open or read error):
 			// keep the manifest so a re-run can finish, rather than dropping it and
-			// stranding un-materialized symlinks with no way to recover.
+			// stranding un-materialized symlinks with no way to recover. Surface it so a
+			// staged restore that cannot tolerate a partial result fails closed instead
+			// of applying an incompletely reconstructed tree (BH-002).
 			logger.Warning("Dedup: materialization did not complete (%d rebuilt so far); keeping the manifest for a retry", materialized)
-			return
+			return fmt.Errorf("dedup materialization incomplete: %d file(s) rebuilt before the archive scan stopped; manifest kept for retry", materialized)
 		}
 		if materialized > 0 || missing > 0 {
 			logger.Info("Dedup: materialized %d deduplicated file(s) from the archive; %d left as link(s) due to missing canonical content", materialized, missing)
@@ -370,6 +380,7 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 	// Drop the manifest (and the now-empty proxsave-info dir we may have force-created)
 	// so it does not linger on the restored system.
 	removeDedupManifest(manifestTarget)
+	return nil
 }
 
 // removeDedupManifest deletes the materialized-then-consumed dedup manifest and, if

@@ -338,6 +338,75 @@ func TestApplyAccountsSkipsWhenCurrentPasswdEmpty(t *testing.T) {
 	}
 }
 
+func TestApplyAccountsSkipsWhenCurrentGroupEmpty(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	_ = fakeFS.WriteFile(etcPasswdPath, []byte("root:x:0:0:root:/root:/bin/bash\n"), 0o644)
+	_ = fakeFS.WriteFile(etcGroupPath, []byte("\n"), 0o644) // empty/unreadable host group baseline
+	// Non-empty shadow so the empty-group guard is the ONLY thing preventing a rewrite
+	// (otherwise the empty-shadow guard would mask this case and weaken the anchor).
+	_ = fakeFS.WriteFile(etcShadowPath, []byte("root:CURHASH:1::::::\n"), 0o640)
+	_ = fakeFS.WriteFile("/stage/etc/passwd", []byte("bob:x:1001:1001::/home/bob:/bin/bash\n"), 0o644)
+	_ = fakeFS.WriteFile("/stage/etc/group", []byte("team:x:1001:bob\n"), 0o644)
+
+	if err := applyAccountsFromStage(context.Background(), newTestLogger(), "/stage"); err != nil {
+		t.Fatalf("applyAccountsFromStage: %v", err)
+	}
+	if got := readFake(t, fakeFS, etcPasswdPath); strings.Contains(got, "bob") {
+		t.Errorf("must not rewrite accounts when current /etc/group is empty (anti-lockout), passwd:\n%s", got)
+	}
+}
+
+func TestApplyAccountsSkipsWhenCurrentShadowEmpty(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	_ = fakeFS.WriteFile(etcPasswdPath, []byte("root:x:0:0:root:/root:/bin/bash\n"), 0o644)
+	_ = fakeFS.WriteFile(etcGroupPath, []byte("root:x:0:\n"), 0o644)
+	_ = fakeFS.WriteFile(etcShadowPath, []byte("\n"), 0o640) // empty/unreadable host shadow baseline
+	_ = fakeFS.WriteFile("/stage/etc/passwd", []byte("bob:x:1001:1001::/home/bob:/bin/bash\n"), 0o644)
+
+	if err := applyAccountsFromStage(context.Background(), newTestLogger(), "/stage"); err != nil {
+		t.Fatalf("applyAccountsFromStage: %v", err)
+	}
+	if got := readFake(t, fakeFS, etcShadowPath); strings.Contains(got, "bob") {
+		t.Errorf("must not rewrite accounts when current /etc/shadow is empty (anti-lockout), shadow:\n%s", got)
+	}
+}
+
+// TestMergeGroupNewGroupDropsNonImportedMembers checks that a brand-new backup
+// group does not silently enroll an existing host account: its member list is
+// restricted to users actually being imported (mirrors the existing-host-group
+// member filtering).
+func TestMergeGroupNewGroupDropsNonImportedMembers(t *testing.T) {
+	current := "root:x:0:\nalice:x:1000:\n" // alice is a host user, NOT being imported
+	hostGroupGID := groupGIDsByName(current)
+	hostGIDs := gidValueSet(hostGroupGID)
+
+	importedGroups, merged := mergeGroup(current, "team:x:3000:bob,alice\n", hostGroupGID, hostGIDs, map[string]bool{"bob": true})
+	if !importedGroups["team"] {
+		t.Fatalf("brand-new regular group 'team' should be imported:\n%s", merged)
+	}
+	var teamMembers string
+	for _, line := range strings.Split(merged, "\n") {
+		if strings.HasPrefix(line, "team:") {
+			if f := strings.Split(line, ":"); len(f) >= 4 {
+				teamMembers = f[3]
+			}
+		}
+	}
+	if teamMembers != "bob" {
+		t.Errorf("new backup group must keep only the imported member 'bob', got members %q (host user 'alice' must not be enrolled):\n%s", teamMembers, merged)
+	}
+}
+
 func TestApplySudoersSkipsOnVisudoFailure(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })

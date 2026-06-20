@@ -95,6 +95,13 @@ func applyAccountsFromStage(ctx context.Context, logger *logging.Logger, stageRo
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(currentGroup) == "" {
+		// Same anti-lockout rationale as the empty /etc/passwd guard above: never
+		// rewrite the group DB without the host baseline (it would drop root and all
+		// host system groups). Skip rather than risk dropping host group memberships.
+		logger.Warning("Skipping system accounts restore: current /etc/group is empty/unreadable")
+		return nil
+	}
 
 	stagedShadow, _, err := readStageFileOptional(stageRoot, "etc/shadow")
 	if err != nil {
@@ -103,6 +110,12 @@ func applyAccountsFromStage(ctx context.Context, logger *logging.Logger, stageRo
 	currentShadow, err := readCurrentAccountFile(etcShadowPath)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(currentShadow) == "" {
+		// As above: without the host shadow baseline the rewrite would drop root and
+		// every host account's credentials. Skip to avoid a lockout.
+		logger.Warning("Skipping system accounts restore: current /etc/shadow is empty/unreadable")
+		return nil
 	}
 	stagedGroup, _, err := readStageFileOptional(stageRoot, "etc/group")
 	if err != nil {
@@ -278,6 +291,11 @@ func mergeGroup(current, backup string, hostGroupGID map[string]uint64, hostGIDs
 			if name == "root" || gid < systemAccountIDThreshold || hostGIDs[gid] {
 				continue
 			}
+			// Restrict members to users we are also importing, so a new backup group
+			// never silently enrolls an existing host account (mirrors the member
+			// filtering on the existing-host-group path below).
+			parts[3] = strings.Join(filterSet(groupMembers(parts), importedUsers), ",")
+			line = strings.Join(parts, ":")
 			imported[name] = true
 			upsert(&lines, index, name, line)
 			continue

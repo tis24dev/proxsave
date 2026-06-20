@@ -119,6 +119,40 @@ func TestMaterializeDedupCrossCategoryRebuildsFromArchive(t *testing.T) {
 	}
 }
 
+// TestMaterializeDedupReturnsErrorWhenIncomplete is the #8 guard: when the archive
+// scan cannot complete (here a canceled context with a duplicate still to rebuild),
+// materializeDedupSymlinks must RETURN an error so a staged restore that cannot
+// tolerate a partial result fails closed instead of applying it, and the manifest is
+// kept for a retry.
+func TestMaterializeDedupReturnsErrorWhenIncomplete(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	root := t.TempDir()
+	archive := writeTarArchiveForTest(t, root, map[string]string{"a/one.cfg": "payload"})
+
+	destRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(destRoot, "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../a/one.cfg", filepath.Join(destRoot, "b", "two.cfg")); err != nil {
+		t.Fatal(err)
+	}
+	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "b/two.cfg", Mode: 0o640}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // canceled before the archive scan: materialization cannot complete
+
+	if err := materializeDedupSymlinks(ctx, archive, destRoot, logging.New(types.LogLevelError, false)); err == nil {
+		t.Fatal("materializeDedupSymlinks must return an error when materialization is incomplete (canceled scan)")
+	}
+	// The manifest must be kept (not removed) so a re-run can finish.
+	if _, statErr := os.Stat(filepath.Join(destRoot, filepath.FromSlash(backup.DedupManifestRelPath))); statErr != nil {
+		t.Fatalf("dedup manifest should be kept for retry on incomplete materialization, stat err=%v", statErr)
+	}
+}
+
 // TestMaterializeDedupMissingCanonicalKeepsSymlink: if the canonical is genuinely
 // absent from the archive (corrupt backup), the symlink is kept (no deletion of the
 // user-selected file).

@@ -384,6 +384,12 @@ func (c *Checker) CheckLockFile() CheckResult {
 		f, err := osOpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0640)
 		if err != nil {
 			if os.IsExist(err) {
+				// Lost the atomic O_EXCL create race: another backup created the lock
+				// between the stat above and this create. Set the in-progress code so
+				// callers treat it as a benign concurrency skip, exactly like the
+				// stat-found-a-live-lock path above; otherwise this race path raises a
+				// spurious failure notification.
+				result.Code = CheckCodeBackupInProgress
 				result.Message = "Another backup acquired the lock"
 				c.logger.Error("%s", result.Message)
 				return result

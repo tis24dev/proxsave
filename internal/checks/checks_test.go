@@ -148,6 +148,45 @@ func TestCheckLockFile_InProgressSetsCode(t *testing.T) {
 	}
 }
 
+// TestCheckLockFile_CreateRaceSetsCode verifies that LOSING the atomic O_EXCL
+// create race (another backup created the lock between our stat and our create)
+// also reports the BACKUP_IN_PROGRESS code, so it is treated as a benign
+// concurrency skip rather than a failure notification (matching the
+// stat-found-a-live-lock path).
+func TestCheckLockFile_CreateRaceSetsCode(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, ".backup.lock")
+
+	// No lock file exists at stat time (fresh dir), so CheckLockFile proceeds to the
+	// atomic create; force that create to lose the race with EEXIST.
+	origOpen := osOpenFile
+	t.Cleanup(func() { osOpenFile = origOpen })
+	osOpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		return nil, &os.PathError{Op: "open", Path: name, Err: syscall.EEXIST}
+	}
+
+	cfg := &CheckerConfig{
+		BackupPath:   tmpDir,
+		LogPath:      tmpDir,
+		LockDirPath:  tmpDir,
+		LockFilePath: lockPath,
+		MaxLockAge:   time.Hour,
+		DryRun:       false,
+	}
+	checker := NewChecker(logger, cfg)
+
+	result := checker.CheckLockFile()
+	if result.Passed {
+		t.Fatal("CheckLockFile should fail when the atomic create loses the race")
+	}
+	if result.Code != CheckCodeBackupInProgress {
+		t.Fatalf("create-race must set Code=%q, got %q (message=%q)", CheckCodeBackupInProgress, result.Code, result.Message)
+	}
+}
+
 func TestCheckLockFileStaleLock(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	tmpDir := t.TempDir()

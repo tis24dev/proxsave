@@ -987,68 +987,72 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 		return nil
 	}
 
-	// Record the directory as a single collection target, then suppress per-file
-	// recording during the walk so the manifest stays at target granularity (#59).
-	c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
+	// Suppress per-file recording during the walk so the manifest stays at target
+	// granularity (#59), then record the directory's FINAL status from the actual
+	// outcome below. Recording StatusCollected up front would misreport a directory
+	// whose ensureDir/walk later fails as successfully collected.
 	c.systemManifestDepth++
-	defer func() { c.systemManifestDepth-- }()
-
-	// Ensure destination exists
-	if err := c.ensureDir(dest); err != nil {
-		return err
-	}
-
-	// Walk source directory
-	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if errCtx := ctx.Err(); errCtx != nil {
-			return errCtx
-		}
-
-		if err != nil {
+	walkErr := func() error {
+		// Ensure destination exists
+		if err := c.ensureDir(dest); err != nil {
 			return err
 		}
 
-		// Never descend into the staging workspace: a broad source (e.g. a custom
-		// path of "/" or "/tmp") would otherwise copy the in-progress archive into
-		// itself (#56).
-		if c.isWithinStagingDir(path) {
-			if info.IsDir() {
-				return filepath.SkipDir
+		// Walk source directory
+		return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+			if errCtx := ctx.Err(); errCtx != nil {
+				return errCtx
 			}
-			return nil
-		}
 
-		// Calculate relative path and destination path for archive matching.
-		relPath, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		destPath := filepath.Join(dest, relPath)
-
-		// Check if this path should be excluded
-		if c.shouldExclude(path) || c.shouldExclude(destPath) {
-			// If it's a directory, skip it entirely
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if info.IsDir() {
-			if err := c.ensureDir(destPath); err != nil {
+			if err != nil {
 				return err
 			}
-			c.applyMetadata(destPath, info)
-			return nil
-		}
 
-		return c.safeCopyFile(ctx, path, destPath, filepath.Base(path))
-	})
+			// Never descend into the staging workspace: a broad source (e.g. a custom
+			// path of "/" or "/tmp") would otherwise copy the in-progress archive into
+			// itself (#56).
+			if c.isWithinStagingDir(path) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 
-	if err != nil {
-		c.logger.Warning("Failed to copy directory %s: %v", description, err)
-		return err
+			// Calculate relative path and destination path for archive matching.
+			relPath, err := filepath.Rel(src, path)
+			if err != nil {
+				return err
+			}
+			destPath := filepath.Join(dest, relPath)
+
+			// Check if this path should be excluded
+			if c.shouldExclude(path) || c.shouldExclude(destPath) {
+				// If it's a directory, skip it entirely
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			if info.IsDir() {
+				if err := c.ensureDir(destPath); err != nil {
+					return err
+				}
+				c.applyMetadata(destPath, info)
+				return nil
+			}
+
+			return c.safeCopyFile(ctx, path, destPath, filepath.Base(path))
+		})
+	}()
+	c.systemManifestDepth--
+
+	if walkErr != nil {
+		c.logger.Warning("Failed to copy directory %s: %v", description, walkErr)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: walkErr.Error()})
+		return walkErr
 	}
+	c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
 
 	c.logger.Debug("Successfully collected %s: %s", description, src)
 	return nil

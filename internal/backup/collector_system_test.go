@@ -2978,6 +2978,36 @@ func TestSystemManifestRecordsTargetsNotNestedFiles(t *testing.T) {
 	}
 }
 
+// TestSafeCopyDirRecordsFailedOnError is the #2 guard: a directory copy that fails
+// (here via a canceled context during the walk) must be recorded in the system
+// manifest as failed, not left as the up-front "collected" status.
+func TestSafeCopyDirRecordsFailedOnError(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.conf"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	collector := newTestCollectorWithDeps(t, CollectorDeps{})
+	collector.systemManifest = make(map[string]ManifestEntry)
+	collector.recordSystemManifest = true
+
+	// Make ensureDir(dest) fail: put a regular FILE where dest's parent dir would be,
+	// so MkdirAll(dest) returns ENOTDIR. ctx stays valid (the top-of-function guard
+	// must not short-circuit), so the failure happens inside the copy itself.
+	parent := filepath.Join(collector.tempDir, "etc")
+	if err := os.WriteFile(parent, []byte("blocker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(parent, "netdir") // tempDir/etc/netdir, but tempDir/etc is a file
+
+	if err := collector.safeCopyDir(context.Background(), src, dest, "Net dir"); err == nil {
+		t.Fatal("safeCopyDir should return an error when ensureDir(dest) fails")
+	}
+	if got := collector.systemManifest["etc/netdir"]; got.Status != StatusFailed {
+		t.Fatalf("etc/netdir: want failed status on a failed copy, got %+v", got)
+	}
+}
+
 // TestSafeCopyDirSkipsStagingWorkspace verifies a broad source does not copy the
 // staging workspace into itself (issue #56): the staging subtree under the source
 // must be pruned while the real content is still collected.
