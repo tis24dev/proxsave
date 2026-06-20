@@ -443,8 +443,12 @@ func TestMaybeApplyPBSConfigsFromStage_CleanRemoveIncomplete_SurfacesWithoutFall
 	}
 
 	stageRoot := "/stage"
-	// datastore.cfg is present so the file fallback WOULD write the live file if invoked.
-	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/datastore.cfg", []byte("datastore: DS1\n    path /tmp\n"), 0o640); err != nil {
+	// datastore.cfg points at a SAFE, empty datastore path so the file fallback, IF
+	// wrongly invoked, would pass shouldApplyPBSDatastoreBlock and actually write the
+	// live file. A non-empty path like /tmp is deferred (never written), which would
+	// make the "file not written" assertion below pass even on a bypass regression.
+	safeDir := t.TempDir()
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/datastore.cfg", []byte("datastore: DS1\n    path "+safeDir+"\n"), 0o640); err != nil {
 		t.Fatalf("write staged datastore.cfg: %v", err)
 	}
 

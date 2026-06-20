@@ -47,7 +47,8 @@ func tarEntryNames(t *testing.T, archivePath string) map[string]bool {
 func newTestSocket(t *testing.T, dir string) string {
 	t.Helper()
 	sockPath := filepath.Join(dir, "x.sock")
-	l, err := net.Listen("unix", sockPath)
+	lc := net.ListenConfig{}
+	l, err := lc.Listen(context.Background(), "unix", sockPath)
 	if err != nil {
 		t.Skipf("cannot create unix socket for test (path length / platform?): %v", err)
 	}
