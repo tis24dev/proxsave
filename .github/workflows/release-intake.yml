@@ -1,0 +1,127 @@
+name: Release Intake
+
+# Started by pushing an UNPROTECTED pr-vX.Y.Z tag on dev. That tag does NOT match
+# the v* glob (so it never triggers release.yml and is not covered by a
+# tag-immutability ruleset), and it can be created/deleted freely. This workflow
+# never creates or moves a v* tag: the authoritative vX.Y.Z tag is CREATED ONCE on
+# the squash commit by post-merge-release (a tag creation, which the ruleset allows),
+# and that push re-triggers release.yml -> GoReleaser.
+on:
+  push:
+    tags:
+      - "pr-v*"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-intake-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || github.token }}
+  GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || github.token }}
+
+jobs:
+  open-release-pr:
+    name: open-release-pr
+    # Skip the tag-DELETION push event (this workflow deletes the pr-v* trigger
+    # tag itself; without this guard that deletion would re-trigger the job).
+    if: ${{ github.event.deleted != true }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          # Persist the token (default): this job runs `git push` to delete the
+          # unprotected pr-v* trigger tag, which needs the credential in git config.
+          token: ${{ secrets.RELEASE_BOT_TOKEN || github.token }}
+
+      - name: Validate trigger tag and open release PR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # SECURITY: source the release policy from the TRUSTED base (origin/main),
+          # NEVER from the checked-out tag tree. On a `push: tags` event the default
+          # checkout is the tag = dev HEAD (the to-be-released, untrusted code), so
+          # sourcing its release-policy.sh would let a tampered policy govern this
+          # write-credentialed job. Mirrors release-guard, which sources from base.
+          git fetch --force origin main
+          POLICY="$(mktemp)"
+          if git cat-file -e "origin/main:.github/scripts/release-policy.sh" 2>/dev/null; then
+            git show "origin/main:.github/scripts/release-policy.sh" > "${POLICY}"
+          else
+            echo "::notice::Release policy absent on origin/main; bootstrap release, using the tag's policy."
+            cp .github/scripts/release-policy.sh "${POLICY}"
+          fi
+          # shellcheck source=/dev/null
+          source "${POLICY}"
+
+          TRIGGER="${GITHUB_REF_NAME}"
+
+          if ! is_pr_tag "${TRIGGER}"; then
+            echo "::error::Invalid trigger '${TRIGGER}'. Push pr-vX.Y.Z (or pr-vX.Y.Z-rc1/-beta1) on dev to start a release."
+            delete_remote_tag "${TRIGGER}"
+            exit 1
+          fi
+
+          TAG="$(release_tag_from_pr_tag "${TRIGGER}")"
+
+          git fetch --force origin dev "refs/tags/${TRIGGER}:refs/tags/${TRIGGER}"
+
+          TRIGGER_SHA="$(git rev-list -n 1 "${TRIGGER}")"
+          DEV_SHA="$(git rev-parse origin/dev)"
+
+          if [[ "${TRIGGER_SHA}" != "${DEV_SHA}" ]]; then
+            echo "::error::${TRIGGER} must point to HEAD of dev (${DEV_SHA}), but points to ${TRIGGER_SHA}."
+            delete_remote_tag "${TRIGGER}"
+            exit 1
+          fi
+
+          # v* tags are immutable: refuse to start a release whose version already
+          # exists (release or tag). The probes distinguish absent from error, so a
+          # transient failure is NOT misread as "absent" (fail closed).
+          REL_STATE="$(remote_release_state "${TAG}")"
+          TAG_STATE="$(remote_tag_state "${TAG}")"
+          if [[ "${REL_STATE}" == "present" || "${TAG_STATE}" == "present" ]]; then
+            delete_remote_tag "${TRIGGER}"
+            die "Version ${TAG} already exists (release=${REL_STATE}, tag=${TAG_STATE}); pick a new version."
+          fi
+          if [[ "${REL_STATE}" == "error" || "${TAG_STATE}" == "error" ]]; then
+            # Transient query failure: do NOT open a PR and do NOT delete the trigger,
+            # so re-pushing ${TRIGGER} retries cleanly.
+            die "Could not verify whether ${TAG} already exists (release=${REL_STATE}, tag=${TAG_STATE}); aborting."
+          fi
+
+          OPEN_PR="$(gh pr list --base main --head dev --state open --json number --jq '.[0].number // ""')"
+          if [[ -n "${OPEN_PR}" ]]; then
+            PR_BODY="$(gh pr view "${OPEN_PR}" --json body --jq '.body')"
+            export PR_BODY
+            if PR_TAG="$(extract_pr_marker release-tag)" && [[ "${PR_TAG}" == "${TAG}" ]]; then
+              notice "Release PR #${OPEN_PR} for ${TAG} already open."
+              delete_remote_tag "${TRIGGER}"
+              exit 0
+            fi
+            delete_remote_tag "${TRIGGER}"
+            die "An open dev -> main PR already exists (#${OPEN_PR}). Close or merge it before starting a new release."
+          fi
+
+          # The trigger tag has done its job. Remove it (unprotected -> allowed).
+          delete_remote_tag "${TRIGGER}"
+
+          BODY="$(cat <<EOF
+          Automated release PR for \`${TAG}\`.
+
+          <!-- release-tag: ${TAG} -->
+          EOF
+          )"
+
+          gh pr create \
+            --base main \
+            --head dev \
+            --title "Release ${TAG}" \
+            --body "${BODY}"
