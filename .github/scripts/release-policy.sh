@@ -82,7 +82,12 @@ PY
 delete_remote_tag() {
   local tag="${1:-}"
 
-  git push origin ":refs/tags/${tag}" || true
+  # Best-effort cleanup of the unprotected trigger tag. Stays non-fatal, but a
+  # transient failure is surfaced as a warning: if the pr-vX.Y.Z tag is left
+  # behind, re-pushing the same trigger is a no-op (ref unchanged) and won't
+  # re-fire intake, so the leftover needs manual deletion before re-releasing.
+  git push origin ":refs/tags/${tag}" || \
+    echo "::warning::Failed to delete tag ${tag} (non-fatal); it may need manual cleanup before this version can be re-released."
 }
 
 # Existence probes that DISTINGUISH absent from error. A transient auth/network
