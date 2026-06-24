@@ -95,7 +95,9 @@ func recordImmutableGuardTarget(logger *logging.Logger, target string) {
 		return
 	}
 
-	if err := os.MkdirAll(mountGuardBaseDir, 0o755); err != nil {
+	// 0o750: the guard base dir is root-owned host state (it holds the 0o600 index
+	// and the bind-mount guard subdirs); nothing non-root needs to traverse it.
+	if err := os.MkdirAll(mountGuardBaseDir, 0o750); err != nil {
 		if logger != nil {
 			logger.Warning("Guard chattr index: unable to create %s: %v (cleanup will need a manual chattr -i %s)", mountGuardBaseDir, err, clean)
 		}
@@ -118,10 +120,20 @@ func recordImmutableGuardTarget(logger *logging.Logger, target string) {
 	}
 }
 
-// readImmutableGuardIndex reads and parses the index at path. A missing or
-// unreadable index yields no targets (the index is best-effort metadata).
+// readImmutableGuardIndex reads and parses the index at path through an *os.Root
+// on its directory, so the read is confined there at the syscall level: a symlink
+// or `..` in the basename cannot redirect the read outside the guard directory,
+// and the path is no longer a raw variable sink (resolving gosec G304 structurally
+// rather than with a suppression). A missing or unreadable index yields no targets
+// (the index is best-effort metadata).
 func readImmutableGuardIndex(path string) []string {
-	data, err := os.ReadFile(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = root.Close() }()
+
+	data, err := root.ReadFile(filepath.Base(path))
 	if err != nil {
 		return nil
 	}
