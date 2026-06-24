@@ -1533,10 +1533,14 @@ For PBS datastores whose paths live under typical mount roots (for example `/mnt
 - When a mountpoint used by a datastore currently resolves to the root filesystem (mount missing), ProxSave applies a **temporary mount guard** on the mount root:
   - Preferred: read-only bind-mount guard
   - Fallback: `chattr +i` on the mountpoint directory
-- Guards prevent PBS from writing into `/` if the storage is missing at restore time. When the real storage is mounted later, it overlays the guard and the datastore becomes available again.
+- Guards prevent PBS from writing into `/` if the storage is missing at restore time.
+- **Bind-mount guard:** when the real storage is mounted later it stacks on top of the read-only guard and the datastore becomes available again; the guard is then shadowed underneath and is discarded by a reboot or by `--cleanup-guards`.
+- **`chattr +i` fallback** (used only when a bind mount cannot be created): the immutable flag is set on the mountpoint *directory inode*. Mounting the real storage on top later still works, **but the immutable flag remains on the shadowed directory and is NOT removed by a reboot.** ProxSave records each such mountpoint under `/var/lib/proxsave/guards/chattr-targets` so cleanup can reverse it.
 
 Optional maintenance:
-- `proxsave --cleanup-guards` removes guard bind mounts and the guard directory when they are still visible on mountpoints.
+- `./build/proxsave --cleanup-guards` (preview with `--dry-run`) unmounts guard bind mounts **and** clears the recorded `chattr +i` immutable flags — but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). The guard directory and its index are kept until nothing is pending.
+- To clear an immutable flag on a mountpoint whose storage is already mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave no longer has a record to clear: check with `lsattr -d <mountpoint>` and clear it yourself with `chattr -i <mountpoint>` while the storage is unmounted.
 
 #### PVE Storage Mount Guards (Offline Storage)
 
@@ -1548,7 +1552,7 @@ For PVE storages that use mountpoints (notably `nfs`, `cifs`, `cephfs`, `gluster
   - Fallback: `chattr +i` on the mountpoint directory
 - For `dir` storages, guards are only applied when the storage `path` can be associated with a mountpoint present in `/etc/fstab` (to avoid guarding local root filesystem paths).
 
-This prevents accidental writes into the root filesystem when storage is offline at restore time. When the real mount comes back, it overlays the guard and normal operation resumes.
+This prevents accidental writes into the root filesystem when storage is offline at restore time. When the real mount comes back it stacks on top of a bind-mount guard and normal operation resumes; a `chattr +i` fallback, however, leaves the immutable flag on the shadowed directory (it survives reboot) until `--cleanup-guards` clears it (or a manual `chattr -i`). See the cleanup notes under PBS Datastore Mount Guards above.
 
 ### 5. Root Privilege Check
 
