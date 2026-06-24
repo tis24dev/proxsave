@@ -162,9 +162,9 @@ if args.Restore {
 - Handle errors and exit codes
 - Distinguish user abort vs system error
 
-### File: internal/orchestrator/restore.go
+### File: internal/orchestrator/restore.go (entry point — workflow body in restore_workflow_ui_run.go)
 
-**Main function**: `RunRestoreWorkflow()` (Lines 26-241)
+**Main function**: `RunRestoreWorkflow()` — thin dispatch stub that delegates to `runRestoreWorkflowWithUI()` (`restore_workflow_ui_run.go`)
 
 **Signature**:
 ```go
@@ -374,7 +374,7 @@ if args.Restore {
 
 #### Phase 2: Backup Preparation
 
-**File**: `internal/orchestrator/restore.go:28-55`
+**File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `prepareBundle()`
 
 ```go
 prepared, err := prepareDecryptedBackup(ctx, cfg, logger)
@@ -427,7 +427,7 @@ type PreparedBackup struct {
 
 #### Phase 3: System Detection & Compatibility
 
-**File**: `internal/orchestrator/restore.go:58-72`
+**File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `detectTargetSystem()`, `confirmCompatibility()`
 
 This section is the technical source of truth for restore compatibility.
 User-facing examples and warning text live in
@@ -490,7 +490,7 @@ the category set to the roles supported by the current host.
 
 #### Phase 4: Category Analysis
 
-**File**: `internal/orchestrator/restore.go:75-89`
+**File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `analyzeArchive()`
 
 ```go
 availableCategories, err := AnalyzeBackupCategories(
@@ -575,7 +575,7 @@ func PathMatchesCategory(filePath string, category Category) bool {
 
 #### Phase 5: Category Selection
 
-**File**: `internal/orchestrator/restore.go:93-116`
+**File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `selectRestorePlan()`
 
 ```go
 // Split categories
@@ -633,7 +633,7 @@ Your selection: _
 
 #### Phase 6: Safety Backup
 
-**File**: `internal/orchestrator/restore.go:117-134`
+**File**: `internal/orchestrator/restore_workflow_ui_backups_services.go` → `createSafetyBackup()`
 
 ```go
 var safetyBackup *SafetyBackupResult
@@ -712,7 +712,7 @@ func CreateSafetyBackup(
 
 #### Phase 7: Service Management (Cluster Restore Only)
 
-**File**: `internal/orchestrator/restore.go:136-155`
+**File**: `internal/orchestrator/restore_workflow_ui_backups_services.go` → `preparePVEClusterRestore()`
 
 ```go
 needsClusterRestore := systemType == SystemTypePVE &&
@@ -742,7 +742,7 @@ if needsClusterRestore {
 }
 ```
 
-**Stop Services** (`restore.go:308-321`):
+**Stop Services** (`internal/orchestrator/restore_services.go` → `stopPVEClusterServices()`):
 ```go
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
     commands := [][]string{
@@ -760,7 +760,7 @@ func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
 }
 ```
 
-**Start Services** (`restore.go:323-336`):
+**Start Services** (`internal/orchestrator/restore_services.go` → `startPVEClusterServices()`):
 ```go
 func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
     commands := [][]string{
@@ -778,7 +778,7 @@ func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error 
 }
 ```
 
-**Unmount** (`restore.go:338-356`):
+**Unmount** (`internal/orchestrator/restore_services.go` → `unmountEtcPVE()`):
 ```go
 func unmountEtcPVE(ctx context.Context, logger *logging.Logger) error {
     cmd := exec.CommandContext(ctx, "umount", "/etc/pve")
@@ -805,7 +805,7 @@ func unmountEtcPVE(ctx context.Context, logger *logging.Logger) error {
 
 **Two-Pass Extraction**:
 
-**Pass 1: Normal Categories** (`restore.go:157-172`):
+**Pass 1: Normal Categories** (`internal/orchestrator/restore_workflow_ui_extract.go` → `extractNormalCategories()`):
 ```go
 if len(normalCategories) > 0 {
     destRoot := "/"
@@ -823,7 +823,7 @@ if len(normalCategories) > 0 {
 }
 ```
 
-**Pass 2: Export Categories** (`restore.go:174-189`):
+**Pass 2: Export Categories** (`internal/orchestrator/restore_workflow_ui_extract.go` → `exportCategories()`):
 ```go
 if len(exportCategories) > 0 {
     exportRoot := exportDestRoot(cfg.BaseDir)
@@ -842,7 +842,7 @@ if len(exportCategories) > 0 {
 }
 ```
 
-**Extraction Implementation** (`restore.go:582-618`):
+**Extraction Implementation** (`internal/orchestrator/restore_archive.go` → `extractSelectiveArchive()`):
 ```go
 func extractSelectiveArchive(
     ctx context.Context,
@@ -1240,7 +1240,7 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 
 ### Archive Format Support
 
-**Decompression** (`restore.go:786-804`):
+**Decompression** (`internal/orchestrator/restore_decompression.go` → `createDecompressionReader()`):
 
 ```go
 func createDecompressionReader(file *os.File, archivePath string) (io.Reader, error) {
@@ -1273,7 +1273,7 @@ func createDecompressionReader(file *os.File, archivePath string) (io.Reader, er
 
 ### Selective Extraction Logic
 
-**File**: `internal/orchestrator/restore.go:622-784`
+**File**: `internal/orchestrator/restore_archive_extract.go` → `extractArchiveNative()`
 
 ```go
 func extractArchiveNative(
@@ -1348,7 +1348,7 @@ func extractArchiveNative(
 
 ### File Type Handling
 
-**Directories** (`restore.go:906-927`):
+**Directories** (`internal/orchestrator/restore_archive_entries.go` → `extractDirectory()`):
 ```go
 func extractDirectory(target string, header *tar.Header, logger *logging.Logger) error {
     // Create directory
@@ -1367,7 +1367,7 @@ func extractDirectory(target string, header *tar.Header, logger *logging.Logger)
 }
 ```
 
-**Regular Files** (`restore.go:930-967`):
+**Regular Files** (`internal/orchestrator/restore_archive_entries.go` → `extractRegularFile()`):
 ```go
 func extractRegularFile(
     tarReader *tar.Reader,
@@ -1398,7 +1398,7 @@ func extractRegularFile(
 }
 ```
 
-**Symlinks** (`restore.go:970-989`):
+**Symlinks** (`internal/orchestrator/restore_archive_entries.go` → `extractSymlink()`):
 ```go
 func extractSymlink(target string, header *tar.Header, logger *logging.Logger) error {
     // Ensure parent directory
@@ -1417,7 +1417,7 @@ func extractSymlink(target string, header *tar.Header, logger *logging.Logger) e
 }
 ```
 
-**Hard Links** (`restore.go:992-1002`):
+**Hard Links** (`internal/orchestrator/restore_archive_entries.go` → `extractHardlink()`):
 ```go
 func extractHardlink(target string, header *tar.Header, logger *logging.Logger) error {
     // Ensure parent directory
@@ -1435,7 +1435,7 @@ func extractHardlink(target string, header *tar.Header, logger *logging.Logger) 
 
 ### Timestamp Preservation
 
-**File**: `internal/orchestrator/restore.go:1004-1025`
+**File**: `internal/orchestrator/restore_archive_entries.go` → `setTimestamps()`
 
 ```go
 func setTimestamps(target string, header *tar.Header) error {
@@ -1459,7 +1459,7 @@ func setTimestamps(target string, header *tar.Header) error {
 
 ### 1. Path Traversal Prevention
 
-**Security Check** (`restore.go:869-878`):
+**Security Check** (`internal/orchestrator/restore_archive_paths.go` → `sanitizeRestoreEntryTargetWithFS()`):
 
 ```go
 func isSecurePath(target string, destRoot string) bool {
@@ -1489,7 +1489,7 @@ func isSecurePath(target string, destRoot string) bool {
 
 ### 2. /etc/pve Hard Guard
 
-**Absolute Block** (`restore.go:880-884`):
+**Absolute Block** (`internal/orchestrator/restore_archive_entries.go` → `shouldSkipRestoreEntryTarget()`):
 
 ```go
 if cleanDestRoot == string(os.PathSeparator) &&
@@ -1556,7 +1556,7 @@ This prevents accidental writes into the root filesystem when storage is offline
 
 ### 5. Root Privilege Check
 
-**Pre-Extraction Check** (`restore.go:568-570`, `588-590`):
+**Pre-Extraction Check** (`internal/orchestrator/restore_archive.go` → `extractPlainArchive()`, `extractSelectiveArchiveStrict()`):
 
 ```go
 // For system path restoration
