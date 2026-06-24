@@ -30,9 +30,14 @@ func setSmallBackupTestConfig(t *testing.T, orch *Orchestrator, dir string) {
 		t.Fatalf("write test config: %v", err)
 	}
 
+	// Collect from an isolated, empty root so these end-to-end backups do not walk
+	// the real filesystem. User home collection is unconditional, and on CI the
+	// runner's /home/<user>/go module cache is ~2 GiB, which made the archive
+	// phase time out.
 	orch.SetConfig(&config.Config{
 		ConfigPath:       configPath,
 		BackupConfigFile: true,
+		SystemRootPrefix: t.TempDir(),
 	})
 }
 
@@ -846,6 +851,7 @@ func TestRunGoBackup_DryRunParsesLogsAndSkipsDispatch(t *testing.T) {
 	orch.SetConfig(&config.Config{
 		BackupBlacklist:      []string{"./tmp/blacklist"},
 		BackupNetworkConfigs: true,
+		SystemRootPrefix:     t.TempDir(), // isolate collection from the real /home
 	})
 	orch.RegisterStorageTarget(&testStorageTarget{})
 
@@ -895,6 +901,7 @@ func TestRunGoBackup_BundleAndDispatchFailure(t *testing.T) {
 		SecondaryRetentionDays: 2,
 		CloudRetentionDays:     1,
 		BackupNetworkConfigs:   true,
+		SystemRootPrefix:       t.TempDir(), // isolate collection from the real /home
 	})
 	orch.RegisterStorageTarget(&testStorageTarget{err: errors.New("sync failed")})
 
