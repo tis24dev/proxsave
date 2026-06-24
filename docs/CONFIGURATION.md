@@ -540,8 +540,14 @@ CLOUD_UPLOAD_MODE=parallel         # sequential | parallel
 # Parallel worker count
 CLOUD_PARALLEL_MAX_JOBS=2          # Workers for associated files
 
-# Verify files in parallel
+# Verify associated/sidecar files in parallel
 CLOUD_PARALLEL_VERIFICATION=true   # true | false
+
+# Compare remote SHA256 to the local checksum after upload
+CLOUD_VERIFY_CHECKSUM=true         # true | false (size-only fallback when the backend has no native hash)
+
+# Force download-and-hash when the backend lacks a native SHA256
+CLOUD_VERIFY_DOWNLOAD=false        # true | false (uses bandwidth)
 
 # Preflight connectivity check
 CLOUD_WRITE_HEALTHCHECK=false      # true | false (auto-fallback mode vs force write test)
@@ -679,8 +685,12 @@ RCLONE_FLAGS="--checkers=4 --stats=0 --drive-use-trash=false --drive-pacer-min-s
 
 ### Verification Methods
 
+`RCLONE_VERIFY_METHOD` selects only *how the remote object is located* for verification:
+
 - **primary**: Uses `rclone lsl <file>` (fast, direct)
 - **alternative**: Uses `rclone ls <directory>` then searches (slower, compatible with all remotes)
+
+Independently, when `CLOUD_VERIFY_CHECKSUM=true` (default) ProxSave compares the remote object's SHA256 to the local archive after the size check. If the backend cannot produce a native SHA256, it falls back to size-only verification (logged at debug; it never fails a good upload nor changes its exit code). Set `CLOUD_VERIFY_DOWNLOAD=true` to instead download the object and hash it locally on such backends (uses bandwidth).
 
 ---
 

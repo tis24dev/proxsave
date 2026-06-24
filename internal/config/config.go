@@ -136,6 +136,15 @@ type Config struct {
 	CloudParallelJobs     int
 	CloudParallelVerify   bool
 	CloudWriteHealthCheck bool
+	// CloudVerifyChecksum compares the remote object's SHA256 against the locally
+	// computed checksum after upload. When the backend cannot provide a native
+	// SHA256, it falls back to the size-only check (logged at debug, never fails a
+	// good upload nor flips its exit code). Default true.
+	CloudVerifyChecksum bool
+	// CloudVerifyDownload forces a download-and-hash (rclone hashsum --download)
+	// when the backend has no native SHA256, giving true end-to-end verification
+	// at the cost of full egress. Default false.
+	CloudVerifyDownload bool
 
 	// Rclone settings with comprehensible timeout names
 	// RcloneTimeoutConnection: timeout for checking if remote is accessible (default: 30s)
@@ -654,6 +663,8 @@ func (c *Config) parseStorageSettings() {
 	}
 	c.CloudParallelVerify = c.getBool("CLOUD_PARALLEL_VERIFICATION", false)
 	c.CloudWriteHealthCheck = c.getBool("CLOUD_WRITE_HEALTHCHECK", false)
+	c.CloudVerifyChecksum = c.getBool("CLOUD_VERIFY_CHECKSUM", true)
+	c.CloudVerifyDownload = c.getBool("CLOUD_VERIFY_DOWNLOAD", false)
 
 	c.RcloneTimeoutConnection = c.getIntWithFallback([]string{"RCLONE_TIMEOUT_CONNECTION", "CLOUD_CONNECTIVITY_TIMEOUT"}, 30)
 	c.RcloneTimeoutOperation = c.getInt("RCLONE_TIMEOUT_OPERATION", 300)

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
@@ -45,6 +46,8 @@ type CloudStorage struct {
 	uploadMode     string
 	parallelJobs   int
 	parallelVerify bool
+	verifyChecksum bool
+	verifyDownload bool
 	execCommand    func(ctx context.Context, name string, args ...string) ([]byte, error)
 	lookPath       func(string) (string, error)
 	waitForRetry   func(context.Context, time.Duration) error
@@ -95,7 +98,7 @@ func validateRcloneArgs(args []string) error {
 		return fmt.Errorf("missing rclone subcommand")
 	}
 	switch args[0] {
-	case "copyto", "delete", "deletefile", "ls", "lsf", "lsl", "mkdir", "touch":
+	case "copyto", "delete", "deletefile", "hashsum", "ls", "lsf", "lsl", "mkdir", "touch":
 	default:
 		return fmt.Errorf("rclone subcommand not allowed: %s", args[0])
 	}
@@ -218,6 +221,8 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage,
 		uploadMode:     mode,
 		parallelJobs:   parallelJobs,
 		parallelVerify: cfg.CloudParallelVerify,
+		verifyChecksum: cfg.CloudVerifyChecksum,
+		verifyDownload: cfg.CloudVerifyDownload,
 		execCommand:    defaultExecCommand,
 		lookPath:       exec.LookPath,
 		waitForRetry:   waitForRetryContext,
@@ -1033,13 +1038,129 @@ func (c *CloudStorage) VerifyUpload(ctx context.Context, localFile, remoteFile s
 	filename := remoteBaseName(remoteFile)
 	logging.DebugStep(c.logger, "cloud verify upload", "method=%s expected=%s", c.config.RcloneVerifyMethod, utils.FormatBytes(localStat.Size()))
 
-	// Use primary verification method by default
+	// Step 1: existence + size verification (fast pre-check). Primary method by
+	// default, alternative when configured.
 	if c.config.RcloneVerifyMethod != "alternative" {
-		return c.verifyPrimary(ctx, remoteFile, localStat.Size(), filename)
+		ok, err = c.verifyPrimary(ctx, remoteFile, localStat.Size(), filename)
+	} else {
+		ok, err = c.verifyAlternative(ctx, remoteFile, localStat.Size(), filename)
+	}
+	if err != nil || !ok {
+		return ok, err
 	}
 
-	// Use alternative verification method
-	return c.verifyAlternative(ctx, remoteFile, localStat.Size(), filename)
+	// Step 2: SHA256 content verification (real integrity). Best-effort: when the
+	// remote backend cannot produce a SHA256 hash, fall back to the size-only
+	// verdict with a warning instead of failing a good upload.
+	if !c.verifyChecksum {
+		return true, nil
+	}
+	return c.verifyRemoteChecksum(ctx, localFile, remoteFile, filename)
+}
+
+// verifyRemoteChecksum compares the SHA256 of the just-uploaded local file with
+// the SHA256 of the remote object as reported by rclone. The expected hash is
+// computed fresh from the local file (which is the exact uploaded bytes -- raw
+// archive, bundle, or sidecar), never from a pre-existing .sha256 sidecar or
+// metadata.Checksum, because those record the inner-archive hash and would not
+// match a bundle. It is best-effort: when the backend cannot provide a SHA256,
+// it logs at debug (NOT warning, to avoid flipping a successful run's exit code)
+// and keeps the (already-passed) size-only verdict.
+func (c *CloudStorage) verifyRemoteChecksum(ctx context.Context, localFile, remoteFile, filename string) (bool, error) {
+	// Ask the remote for its SHA256 first. Many object stores (S3, B2, Wasabi,
+	// ...) cannot produce one; in that case there is no point reading and hashing
+	// the whole local file, so we fall back to the (already-passed) size-only
+	// verdict without paying for a full extra local read.
+	remoteHash, ok, err := c.remoteSHA256(ctx, remoteFile, false)
+	if err != nil {
+		return false, err
+	}
+	if !ok && c.verifyDownload {
+		remoteHash, ok, err = c.remoteSHA256(ctx, remoteFile, true)
+		if err != nil {
+			return false, err
+		}
+	}
+	if !ok {
+		// A backend without a native SHA256 is an expected capability limitation,
+		// not an anomaly. Log at Debug (not Warning) so a fully successful upload
+		// is not counted as a warning, which would flip the run's exit code to 1.
+		c.logger.Debug("Cloud verify: remote backend has no SHA256 for %s; verified by size only (set CLOUD_VERIFY_DOWNLOAD=true to force download-and-hash)", filename)
+		return true, nil
+	}
+
+	localHash, err := backup.GenerateChecksum(ctx, c.logger, localFile)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, err
+		}
+		c.logger.Debug("Cloud verify: could not hash local %s, kept size-only verification: %v", filename, err)
+		return true, nil
+	}
+	if remoteHash != localHash {
+		return false, fmt.Errorf("checksum mismatch: local=%s remote=%s", localHash, remoteHash)
+	}
+	c.logger.Debug("Cloud verify: SHA256 match for %s", filename)
+	return true, nil
+}
+
+// remoteSHA256 returns the SHA256 of the remote object via `rclone hashsum sha256`.
+// ok=false (with nil error) means the backend could not provide a usable SHA256
+// (blank/invalid hash, or an "unsupported hash type" error); the caller should
+// fall back to size-only verification. When download is true, rclone streams the
+// object back and hashes it locally (full egress cost) so even backends without a
+// native SHA256 can be verified end to end.
+func (c *CloudStorage) remoteSHA256(ctx context.Context, remoteFile string, download bool) (string, bool, error) {
+	if c.config.RcloneTimeoutOperation > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		defer cancel()
+	}
+
+	args := c.buildRcloneArgs("hashsum")
+	args = append(args, "sha256")
+	if download {
+		args = append(args, "--download")
+	}
+	args = append(args, remoteFile)
+
+	// Avoid logging the full argv: RcloneFlags may carry backend secrets.
+	c.logger.Debug("Remote SHA256: file=%s download=%v", remoteBaseName(remoteFile), download)
+	output, err := c.exec(ctx, args[0], args[1:]...)
+	if err != nil {
+		// rclone may report that the backend cannot produce the requested hash;
+		// treat that as "no hash available" (size-only fallback) rather than a
+		// transport error. Require the word "hash" so genuine transport/auth
+		// failures (e.g. "tls: unsupported protocol version", "operation not
+		// supported in this region") stay fatal instead of silently downgrading.
+		msg := strings.ToLower(strings.TrimSpace(string(output)))
+		if strings.Contains(msg, "hash") && (strings.Contains(msg, "not supported") || strings.Contains(msg, "unsupported")) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("rclone hashsum failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	// Output format: "<hex-hash><spaces><path>", one line per object. A blank
+	// hash field (backend cannot hash) yields a single field and is skipped.
+	want := remoteBaseName(remoteFile)
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+		// Match by basename so we never compare against a different object when
+		// more than one line is returned. The hash is always the first field; the
+		// path is the last (paths may contain spaces).
+		if want != "" && path.Base(fields[len(fields)-1]) != want {
+			continue
+		}
+		norm, nErr := backup.NormalizeChecksum(fields[0])
+		if nErr != nil {
+			continue // not a 64-hex token => backend gave no real hash
+		}
+		return norm, true, nil
+	}
+	return "", false, nil
 }
 
 // verifyPrimary uses 'rclone lsl' to verify upload (primary method)
