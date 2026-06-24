@@ -651,11 +651,16 @@ func (c *Config) parseStorageSettings() {
 	c.CloudEnabled = c.getBoolWithFallback([]string{"ENABLE_CLOUD_BACKUP", "CLOUD_ENABLED"}, false)
 	c.CloudRemote = c.getStringWithFallback([]string{"RCLONE_REMOTE", "CLOUD_REMOTE"}, "")
 	c.CloudRemotePath = strings.Trim(strings.TrimSpace(c.getString("CLOUD_REMOTE_PATH", "")), "/")
-	mode := strings.ToLower(strings.TrimSpace(c.getString("CLOUD_UPLOAD_MODE", "")))
-	if mode != "parallel" {
-		mode = "sequential"
+	// Default to "parallel" to match the shipped template and the documentation
+	// ("Default: parallel" with CLOUD_PARALLEL_MAX_JOBS=2). Unset or blank uses
+	// that default; only an explicit "sequential" (or any other non-empty,
+	// non-"parallel" value) selects sequential.
+	switch strings.ToLower(strings.TrimSpace(c.getString("CLOUD_UPLOAD_MODE", ""))) {
+	case "", "parallel":
+		c.CloudUploadMode = "parallel"
+	default:
+		c.CloudUploadMode = "sequential"
 	}
-	c.CloudUploadMode = mode
 	c.CloudParallelJobs = c.getInt("CLOUD_PARALLEL_MAX_JOBS", 2)
 	if c.CloudParallelJobs <= 0 {
 		c.CloudParallelJobs = 1

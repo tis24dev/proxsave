@@ -266,6 +266,34 @@ PBS_DATASTORE_PATH=/mnt/pbs1,/mnt/pbs2,/mnt/pbs3
 	}
 }
 
+func TestCloudUploadModeDefault(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "absent defaults to parallel", content: "# no upload mode set\n", want: "parallel"},
+		{name: "empty defaults to parallel", content: "CLOUD_UPLOAD_MODE=\n", want: "parallel"},
+		{name: "explicit sequential", content: "CLOUD_UPLOAD_MODE=sequential\n", want: "sequential"},
+		{name: "unknown falls back to sequential", content: "CLOUD_UPLOAD_MODE=bogus\n", want: "sequential"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "mode.env")
+			if err := os.WriteFile(configPath, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := LoadConfigWithBaseDir(configPath, "/custom/base")
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if cfg.CloudUploadMode != tt.want {
+				t.Errorf("CloudUploadMode = %q; want %q", cfg.CloudUploadMode, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfigAgeRecipients(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "age.env")
