@@ -830,8 +830,8 @@ crontab -e
 While most configuration is in `configs/backup.env`, these environment variables can override settings:
 
 ```bash
-# Override config file location
-CONFIG_FILE=/etc/pbs/prod.env ./build/proxsave
+# Override config file location (CLI flag, NOT an env var)
+./build/proxsave -c /etc/pbs/prod.env
 
 # Force dry-run mode
 DRY_RUN=true ./build/proxsave
