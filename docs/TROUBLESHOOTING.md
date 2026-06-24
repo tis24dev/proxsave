@@ -665,6 +665,33 @@ MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
 ---
 ### 7. Restore Issues
 
+#### Mountpoint is read-only / `Operation not permitted` after a restore (NFS/storage not restored)
+
+**Symptoms**:
+- After a restore, a storage mountpoint (e.g. `/mnt/pve/<id>` or a PBS datastore path) is read-only, or writes fail with `Operation not permitted`.
+- An NFS/CIFS/network share "wasn't restored" and the storage shows as unavailable.
+
+**Explanation**:
+- The storage *definition* is restored, but the share was offline/unreachable at restore time, so ProxSave applied a **mount guard** on the mountpoint to stop Proxmox from silently writing into the root filesystem (`/`). The guard is either a read-only bind mount, or — as a fallback — a `chattr +i` immutable flag on the mountpoint directory.
+- Bringing the share back online and mounting it is enough to *use* it again (a real mount stacks on top of the guard automatically). The guard is not deleted, only shadowed: a bind-mount guard clears on reboot or via cleanup; a `chattr +i` flag persists across reboots until cleared.
+
+**Resolution**:
+```bash
+# 1. Bring the share online and mount/activate the storage
+pvesm status
+mount -t nfs <server>:<export> /mnt/pve/<id>   # or: pvesm activate <id>
+
+# 2. Remove the leftover guards (run as root; preview first)
+./build/proxsave --cleanup-guards --dry-run
+./build/proxsave --cleanup-guards
+```
+- `--cleanup-guards` unmounts bind-mount guards and clears recorded `chattr +i` flags, but only on mountpoints that are **not currently mounted**. To clear a flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- If you already deleted `/var/lib/proxsave/guards` by hand and a mountpoint is still read-only, ProxSave has no record left to clear. Check for the immutable flag and remove it manually while the storage is unmounted:
+```bash
+lsattr -d /mnt/pve/<id>        # an 'i' in the flags means immutable
+chattr -i /mnt/pve/<id>
+```
+
 #### Restore drops SSH / IP changes during network restore
 
 **Symptoms**:

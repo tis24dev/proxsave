@@ -247,6 +247,7 @@ func (a *pbsMountGuardApply) protectOfflineTargetWithChattr(guardTarget string, 
 		return
 	}
 	a.protected[guardTarget] = struct{}{}
+	recordImmutableGuardTarget(a.logger, guardTarget) // so --cleanup-guards can later chattr -i it
 	a.warning("PBS mount guard: %s resolves to root filesystem (mount missing?) — marked immutable (chattr +i) to prevent writes until storage is available", guardTarget)
 }
 

@@ -2013,14 +2013,20 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 **PBS Datastore Mount Guards**:
 - When restoring PBS datastore definitions, ProxSave can apply a temporary mount guard (read-only bind mount; fallback `chattr +i`) on mount roots that currently resolve to the root filesystem.
 - Purpose: prevent accidental writes to `/` if a datastore mountpoint is missing/offline at restore time (PBS will show the datastore as unavailable until storage is mounted).
-- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview).
+- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview). See **Clearing mount guards after the storage is back** below.
 
 **PVE Storage Mount Guards**:
 - When restoring PVE storage definitions (from `storage.cfg`), ProxSave applies the same “restore even if offline” strategy for mount-backed storage:
   - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use mountpoints under `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary mount guard (read-only bind mount; fallback `chattr +i`).
   - `dir` storages are guarded only when their `path` lives under a mountpoint restored via `/etc/fstab` (to avoid guarding local root filesystem paths).
 - Purpose: prevent PVE from writing into `/mnt/pve/...` (or other mount roots) when the backing storage is offline at restore time.
-- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview).
+- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview). See **Clearing mount guards after the storage is back** below.
+
+**Clearing mount guards after the storage is back**:
+- Bringing the storage online again is enough to *use* it: a real mount stacks on top of a bind-mount guard automatically. The guard is not deleted, only shadowed — a reboot or `--cleanup-guards` removes the bind-mount leftover; a `chattr +i` fallback, however, leaves the directory immutable across reboots until it is cleared.
+- `./build/proxsave --cleanup-guards` (preview with `--dry-run`) unmounts bind-mount guards **and** clears the recorded `chattr +i` immutable flags, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). The guard directory is kept until nothing is pending.
+- To clear a flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left to clear: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
 ### 7. Service Management Fail-Fast
 
@@ -2375,7 +2381,8 @@ zpool import <pool-name>
 #   so you do not lose datastore entries after a restore.
 # - If a datastore path looks like a mount-root location (e.g. under `/mnt`) but currently resolves to the root filesystem,
 #   ProxSave applies a temporary **mount guard** (read-only bind mount; fallback `chattr +i`) on the mount root to prevent writes to `/`
-#   until the storage becomes available. When the real storage is mounted later, it overlays the guard and the datastore becomes available.
+#   until the storage becomes available. A bind-mount guard is shadowed when the real storage mounts on top (and is cleared by a reboot or --cleanup-guards);
+#   a chattr +i fallback persists across reboots and is cleared only by --cleanup-guards (recorded under /var/lib/proxsave/guards/chattr-targets) or a manual chattr -i.
 # - If the datastore path is not empty and contains unexpected files/directories (not a PBS datastore), ProxSave will defer that datastore block
 #   and save it under `/tmp/proxsave/datastore.cfg.deferred.*` for manual review.
 # - ProxSave does not format disks or import ZFS pools: mount/import the underlying storage first, then restart PBS.

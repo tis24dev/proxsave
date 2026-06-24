@@ -656,6 +656,7 @@ func containsGuardTarget(values []string, want string) bool {
 func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger()
+	withTempGuardBaseDir(t) // keep the chattr index off the real /var/lib/proxsave
 
 	if err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, nil, "/stage", "/"); err != nil {
 		t.Fatalf("nil plan: expected nil error, got %v", err)
@@ -752,6 +753,9 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T)
 	if !strings.Contains(calls, "chattr +i "+target) {
 		t.Fatalf("missing chattr fallback call; calls=%v", fakeCmd.CallsList())
 	}
+	if got := readGuardIndexLines(t); len(got) != 1 || got[0] != target {
+		t.Fatalf("chattr fallback must record %q in the immutable index; got %#v", target, got)
+	}
 }
 
 func TestMaybeApplyPVEStorageMountGuardsFromStage_ReadAndNoopBranches(t *testing.T) {
@@ -809,6 +813,7 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 	logger := newTestLogger()
 	plan := pvePlan(false, "storage_pve")
 	requireWritablePveMountRoot(t)
+	withTempGuardBaseDir(t) // keep any chattr index off the real /var/lib/proxsave
 
 	origFS := restoreFS
 	origCmd := restoreCmd

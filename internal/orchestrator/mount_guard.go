@@ -14,7 +14,11 @@ import (
 	"time"
 )
 
-const mountGuardBaseDir = "/var/lib/proxsave/guards"
+// mountGuardBaseDir is the directory under which ProxSave records mount guards.
+// It is a var (not a const) only so tests can redirect it to a temporary
+// directory; production never reassigns it.
+var mountGuardBaseDir = "/var/lib/proxsave/guards"
+
 const mountGuardMountAttemptTimeout = 10 * time.Second
 
 var (
