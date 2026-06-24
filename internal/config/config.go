@@ -294,7 +294,6 @@ type Config struct {
 	BackupZFSConfig         bool
 	BackupRootHome          bool
 	BackupScriptRepository  bool
-	BackupUserHomes         bool
 	BackupConfigFile        bool
 	SystemRootPrefix        string
 	PVEConfigPath           string
@@ -869,7 +868,6 @@ func (c *Config) parseSystemSettings() {
 	// Default false to match the shipped template (backup.env) and the project
 	// convention; a config missing this key must not silently snapshot /opt/proxsave.
 	c.BackupScriptRepository = c.getBool("BACKUP_SCRIPT_REPOSITORY", false)
-	c.BackupUserHomes = c.getBool("BACKUP_USER_HOMES", true)
 	c.BackupConfigFile = c.getBool("BACKUP_CONFIG_FILE", true)
 	// Optional system-root override (chroot/test fixture). Empty or "/" means real
 	// root; CollectorConfig.Validate rejects a non-absolute value.

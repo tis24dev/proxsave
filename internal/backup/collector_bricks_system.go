@@ -203,13 +203,12 @@ func newSystemHomeCollectionBricks() []collectionBrick {
 		}),
 		brick(brickSystemUserHomes, "Collect user home directories", func(ctx context.Context, state *collectionState) error {
 			c := state.collector
-			if c.config.BackupUserHomes {
-				c.logger.Debug("Collecting user home directories under /home")
-				if err := c.collectUserHomes(ctx); err != nil {
-					c.logger.Warning("Failed to collect user home directories: %v", err)
-				} else {
-					c.logger.Debug("User home directories collected successfully")
-				}
+			// User home directories (/home) are always part of a system backup.
+			c.logger.Debug("Collecting user home directories under /home")
+			if err := c.collectUserHomes(ctx); err != nil {
+				c.logger.Warning("Failed to collect user home directories: %v", err)
+			} else {
+				c.logger.Debug("User home directories collected successfully")
 			}
 			return nil
 		}),

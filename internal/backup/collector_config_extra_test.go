@@ -7,9 +7,11 @@ import (
 )
 
 func TestCollectorConfigValidateDefaultsAndErrors(t *testing.T) {
+	// User-home collection (/home) is unconditional, so even an otherwise-empty
+	// config is valid: there is no longer a "no backup options enabled" error.
 	cfg := &CollectorConfig{}
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected error when no backup options enabled")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty config should be valid now that /home is always collected: %v", err)
 	}
 
 	cfg = GetDefaultCollectorConfig()
@@ -41,7 +43,6 @@ func TestCollectorConfigValidateAcceptsNewStandaloneCollectionOptions(t *testing
 		{name: "pbs notification priv", cfg: &CollectorConfig{BackupPBSNotificationsPriv: true}},
 		{name: "root home", cfg: &CollectorConfig{BackupRootHome: true}},
 		{name: "script repository", cfg: &CollectorConfig{BackupScriptRepository: true}},
-		{name: "user homes", cfg: &CollectorConfig{BackupUserHomes: true}},
 	}
 
 	for _, tt := range tests {

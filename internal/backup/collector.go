@@ -233,7 +233,6 @@ type CollectorConfig struct {
 	BackupZFSConfig         bool
 	BackupRootHome          bool
 	BackupScriptRepository  bool
-	BackupUserHomes         bool
 	BackupConfigFile        bool
 	SystemRootPrefix        string
 
@@ -277,10 +276,9 @@ func (c *CollectorConfig) Validate() error {
 		return err
 	}
 
-	if !c.hasCollectionOptionEnabled() {
-		return fmt.Errorf("at least one backup option must be enabled")
-	}
-
+	// The system recipe always collects a baseline (kernel/hardware report info
+	// plus the /home user directories) regardless of the per-category toggles, so
+	// there is no "at least one option enabled" precondition to enforce here.
 	c.normalizePxarConcurrency()
 	if c.MaxPVEBackupSizeBytes < 0 {
 		return fmt.Errorf("MAX_PVE_BACKUP_SIZE must be >= 0")
@@ -303,39 +301,6 @@ func (c *CollectorConfig) validateExcludePatterns() error {
 		}
 	}
 	return nil
-}
-
-func (c *CollectorConfig) hasCollectionOptionEnabled() bool {
-	if len(c.CustomBackupPaths) > 0 {
-		return true
-	}
-	for _, enabled := range c.collectionOptionFlags() {
-		if enabled {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *CollectorConfig) collectionOptionFlags() []bool {
-	return []bool{
-		c.BackupVMConfigs, c.BackupClusterConfig,
-		c.BackupPVEFirewall, c.BackupVZDumpConfig, c.BackupPVEACL,
-		c.BackupPVEJobs, c.BackupPVESchedules, c.BackupPVEReplication,
-		c.BackupPVEBackupFiles, c.BackupCephConfig,
-		c.BackupDatastoreConfigs, c.BackupPBSS3Endpoints, c.BackupPBSNodeConfig,
-		c.BackupPBSAcmeAccounts, c.BackupPBSAcmePlugins, c.BackupPBSMetricServers,
-		c.BackupPBSTrafficControl, c.BackupPBSNotifications, c.BackupPBSNotificationsPriv,
-		c.BackupUserConfigs, c.BackupRemoteConfigs,
-		c.BackupSyncJobs, c.BackupVerificationJobs, c.BackupTapeConfigs,
-		c.BackupPBSNetworkConfig, c.BackupPruneSchedules, c.BackupPxarFiles,
-		c.BackupNetworkConfigs, c.BackupAptSources, c.BackupCronJobs,
-		c.BackupSystemdServices, c.BackupSSLCerts, c.BackupSysctlConfig,
-		c.BackupKernelModules, c.BackupFirewallRules,
-		c.BackupInstalledPackages, c.BackupScriptDir, c.BackupCriticalFiles,
-		c.BackupSSHKeys, c.BackupZFSConfig, c.BackupConfigFile,
-		c.BackupRootHome, c.BackupScriptRepository, c.BackupUserHomes,
-	}
 }
 
 func (c *CollectorConfig) normalizePxarConcurrency() {
@@ -427,7 +392,6 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		BackupZFSConfig:         true,
 		BackupRootHome:          true,
 		BackupScriptRepository:  false,
-		BackupUserHomes:         true,
 		BackupConfigFile:        true,
 		SystemRootPrefix:        "",
 

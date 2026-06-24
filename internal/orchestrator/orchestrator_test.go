@@ -646,7 +646,6 @@ func TestApplyCollectorOverridesCopiesConfig(t *testing.T) {
 		BackupZFSConfig:         true,
 		BackupRootHome:          true,
 		BackupScriptRepository:  true,
-		BackupUserHomes:         true,
 		BackupConfigFile:        true,
 		SystemRootPrefix:        "/mnt/testroot",
 		BaseDir:                 "/opt/proxsave",
