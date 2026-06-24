@@ -616,6 +616,7 @@ func TestMaybeApplyPBSDatastoreMountGuards_FullFlow(t *testing.T) {
 	logger := newTestLogger()
 	ctx := context.Background()
 	plan := &RestorePlan{SystemType: SystemTypePBS, NormalCategories: []Category{{ID: "datastore_pbs"}}}
+	withTempGuardBaseDir(t) // keep the chattr index off the real /var/lib/proxsave
 
 	origGeteuid := mountGuardGeteuid
 	origReadFile := mountGuardReadFile

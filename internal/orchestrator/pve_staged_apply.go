@@ -343,14 +343,14 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 			continue
 		}
 
-		if err := os.MkdirAll(guardTarget, 0o750); err != nil {
+		if err := mountGuardMkdirAll(guardTarget, 0o750); err != nil {
 			if logger != nil {
 				logger.Warning("PVE mount guard: unable to create mountpoint directory %s: %v", guardTarget, err)
 			}
 			continue
 		}
 
-		onRootFS, _, devErr := isPathOnRootFilesystem(guardTarget)
+		onRootFS, _, devErr := mountGuardIsPathOnRootFilesystem(guardTarget)
 		if devErr != nil {
 			if logger != nil {
 				logger.Warning("PVE mount guard: unable to determine filesystem device for %s: %v", guardTarget, devErr)
@@ -377,7 +377,7 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 		cancel()
 
 		if attemptErr == nil {
-			onRootFSNow, _, devErrNow := isPathOnRootFilesystem(guardTarget)
+			onRootFSNow, _, devErrNow := mountGuardIsPathOnRootFilesystem(guardTarget)
 			if devErrNow == nil && !onRootFSNow {
 				if logger != nil {
 					logger.Info("PVE mount guard: mountpoint %s is now mounted (activation/mount attempt succeeded)", guardTarget)
@@ -410,6 +410,7 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 				}
 				continue
 			}
+			recordImmutableGuardTarget(logger, guardTarget) // so --cleanup-guards can later chattr -i it
 			if logger != nil {
 				logger.Warning("PVE mount guard: %s resolves to root filesystem (mount missing?) — marked immutable (chattr +i) to prevent writes until storage is available", guardTarget)
 			}
