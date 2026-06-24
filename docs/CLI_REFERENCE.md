@@ -855,15 +855,25 @@ USE_COLOR=false ./build/proxsave
 
 ## Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| `0` | Success |
-| `1` | General error |
-| `2` | Configuration error |
-| `3` | Security check failed |
-| `4` | Insufficient disk space |
-| `5` | Backup creation failed |
-| `6` | Upload failed (local backup succeeded) |
-| `7` | Encryption/decryption failed |
+| Code | Name | Meaning |
+|------|------|---------|
+| `0` | success | Execution completed successfully |
+| `1` | generic error | Unspecified generic error |
+| `2` | configuration error | Configuration error |
+| `3` | environment error | Invalid or unsupported Proxmox environment |
+| `4` | backup error | Error during the backup operation (generic) |
+| `5` | storage error | Error during storage operations |
+| `6` | network error | Network error (upload, notifications, etc.) |
+| `7` | permission error | Permission error |
+| `8` | verification error | Error during integrity verification |
+| `9` | collection error | Error during collection of configuration files |
+| `10` | archive error | Error while creating the archive |
+| `11` | compression error | Error during compression |
+| `12` | disk space error | Insufficient disk space |
+| `13` | panic error | Unhandled panic caught |
+| `14` | security error | Errors detected by the security check |
+| `15` | encryption error | Error during encryption setup or processing |
 
-**Note**: Cloud upload failures return exit code `0` (local backup succeeded), but log warnings.
+**Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
+run with a storage error (`5`): the local backup is kept, but the failure is recorded as a
+warning, so the run finishes with a non-zero exit code (`1`, generic error) — not `0`.
