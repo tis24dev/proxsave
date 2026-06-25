@@ -146,8 +146,8 @@ BACKUP_BLACKLIST=/var/data/tmp
 		t.Error("Expected ContinueOnSecurityIssues to be false by default")
 	}
 
-	if cfg.AutoFixPermissions {
-		t.Error("Expected AutoFixPermissions to be false by default")
+	if !cfg.AutoFixPermissions {
+		t.Error("Expected AutoFixPermissions to be true by default (matches template)")
 	}
 
 	if !cfg.AutoUpdateHashes {
@@ -291,6 +291,31 @@ func TestCloudUploadModeDefault(t *testing.T) {
 				t.Errorf("CloudUploadMode = %q; want %q", cfg.CloudUploadMode, tt.want)
 			}
 		})
+	}
+}
+
+func TestOptimizationAndSecurityDefaultsMatchTemplate(t *testing.T) {
+	// With the keys absent, the code defaults must equal the shipped template:
+	// dedup/prefilter/auto-fix = true, ceph = false.
+	configPath := filepath.Join(t.TempDir(), "defaults.env")
+	if err := os.WriteFile(configPath, []byte("# no optimization/security keys set\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfigWithBaseDir(configPath, "/custom/base")
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if !cfg.EnableDeduplication {
+		t.Error("ENABLE_DEDUPLICATION default should be true (matches template)")
+	}
+	if !cfg.EnablePrefilter {
+		t.Error("ENABLE_PREFILTER default should be true (matches template)")
+	}
+	if !cfg.AutoFixPermissions {
+		t.Error("AUTO_FIX_PERMISSIONS default should be true (matches template)")
+	}
+	if cfg.BackupCephConfig {
+		t.Error("BACKUP_CEPH_CONFIG default should be false (matches template)")
 	}
 }
 

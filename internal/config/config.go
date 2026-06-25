@@ -547,8 +547,9 @@ func normalizeCompressionType(ct types.CompressionType) types.CompressionType {
 }
 
 func (c *Config) parseOptimizationSettings() {
-	c.EnableDeduplication = c.getBool("ENABLE_DEDUPLICATION", false)
-	c.EnablePrefilter = c.getBool("ENABLE_PREFILTER", false)
+	// Defaults match the shipped template (backup.env): both enabled.
+	c.EnableDeduplication = c.getBool("ENABLE_DEDUPLICATION", true)
+	c.EnablePrefilter = c.getBool("ENABLE_PREFILTER", true)
 	c.PrefilterMaxFileSizeMB = c.getInt("PREFILTER_MAX_FILE_SIZE_MB", 8)
 	if c.PrefilterMaxFileSizeMB <= 0 {
 		c.PrefilterMaxFileSizeMB = 8
@@ -574,7 +575,8 @@ func (c *Config) parseSecuritySettings() {
 
 	c.SecurityCheckEnabled = c.getBoolWithFallback([]string{"SECURITY_CHECK_ENABLED", "FULL_SECURITY_CHECK"}, true)
 	c.AutoUpdateHashes = c.getBool("AUTO_UPDATE_HASHES", true)
-	c.AutoFixPermissions = c.getBool("AUTO_FIX_PERMISSIONS", false)
+	// Default true to match the shipped template (backup.env) and the install flow.
+	c.AutoFixPermissions = c.getBool("AUTO_FIX_PERMISSIONS", true)
 	if val, ok := c.raw["CONTINUE_ON_SECURITY_ISSUES"]; ok {
 		c.ContinueOnSecurityIssues = utils.ParseBool(val)
 		c.AbortOnSecurityIssues = !c.ContinueOnSecurityIssues
@@ -822,7 +824,10 @@ func (c *Config) parsePVESettings() error {
 		c.MaxPVEBackupSizeBytes = sizeBytes
 	}
 	c.PVEBackupIncludePattern = strings.TrimSpace(c.getString("PVE_BACKUP_INCLUDE_PATTERN", ""))
-	c.BackupCephConfig = c.getBool("BACKUP_CEPH_CONFIG", true)
+	// Default false to match the shipped template (backup.env). On a Ceph host that
+	// omits the key, set BACKUP_CEPH_CONFIG=true to capture /etc/ceph. (env-migration
+	// preserves a legacy value and only auto-disables it when Ceph is absent.)
+	c.BackupCephConfig = c.getBool("BACKUP_CEPH_CONFIG", false)
 	c.CephConfigPath = c.getString("CEPH_CONFIG_PATH", "/etc/ceph")
 	c.PVEConfigPath = c.getString("PVE_CONFIG_PATH", "/etc/pve")
 	c.PVEClusterPath = c.getString("PVE_CLUSTER_PATH", "/var/lib/pve-cluster")
