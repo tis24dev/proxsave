@@ -671,8 +671,8 @@ MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
 - An NFS/CIFS/network share "wasn't restored" and the storage shows as unavailable.
 
 **Explanation**:
-- The storage *definition* is restored, but the share was offline/unreachable at restore time, so ProxSave applied a **mount guard** on the mountpoint to stop Proxmox from silently writing into the root filesystem (`/`). The guard is either a read-only bind mount, or — as a fallback — a `chattr +i` immutable flag on the mountpoint directory.
-- Bringing the share back online and mounting it is enough to *use* it again (a real mount stacks on top of the guard automatically). The guard is not deleted, only shadowed: a bind-mount guard clears on reboot or via cleanup; a `chattr +i` flag persists across reboots until cleared.
+- The storage *definition* is restored, but the share was offline/unreachable at restore time, so ProxSave applied a **read-only bind-mount guard** on the mountpoint to stop Proxmox from silently writing into the root filesystem (`/`). If the bind mount could not be created, ProxSave instead logged a warning and left the mountpoint unguarded (older versions set a persistent `chattr +i` immutable flag here; that was removed because it survived reboots and could re-block the mountpoint later).
+- Bringing the share back online and mounting it is enough to *use* it again (a real mount stacks on top of the guard automatically). The guard is not deleted, only shadowed: a bind-mount guard clears on reboot or via cleanup. A **legacy** `chattr +i` flag (from an older version) persists across reboots until cleared.
 
 **Resolution**:
 ```bash
@@ -684,7 +684,7 @@ mount -t nfs <server>:<export> /mnt/pve/<id>   # or: pvesm activate <id>
 proxsave --cleanup-guards --dry-run
 proxsave --cleanup-guards
 ```
-- `--cleanup-guards` unmounts bind-mount guards and clears recorded `chattr +i` flags, but only on mountpoints that are **not currently mounted**. To clear a flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- `--cleanup-guards` unmounts bind-mount guards and clears any **legacy** `chattr +i` flags, but only on mountpoints that are **not currently mounted**; it prints a summary of what was cleared vs left pending. To clear a flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
 - If you already deleted `/var/lib/proxsave/guards` by hand and a mountpoint is still read-only, ProxSave has no record left to clear. Check for the immutable flag and remove it manually while the storage is unmounted:
 ```bash
 lsattr -d /mnt/pve/<id>        # an 'i' in the flags means immutable

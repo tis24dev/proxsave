@@ -712,13 +712,12 @@ flowchart TD
     Try -->|Yes| NoOp
     Try -->|No| Bind[Bind-mount empty read-only guard dir<br/>RO + nodev + nosuid + noexec]
     Bind -->|success| Guarded[Path guarded:<br/>writes cannot land on root FS]
-    Bind -->|bind unavailable| Chattr[Fallback: chattr +i immutable<br/>recorded for --cleanup-guards]
-    Chattr --> Guarded
+    Bind -->|bind unavailable| Warn[Warn-only: log that the mountpoint<br/>is unguarded; no persistent flag set]
 
     style Start fill:#87CEEB
     style Guarded fill:#90EE90
     style NoOp fill:#90EE90
-    style Chattr fill:#FFD700
+    style Warn fill:#FFD700
     style Skip fill:#FFB6C1
 ```
 
@@ -726,10 +725,18 @@ flowchart TD
 stacks **on top of** the guard (overlay), so the datastore is usable again — but
 the guard is only **shadowed**, not removed.
 
+**Warn-only fallback**: if the read-only bind mount cannot be created, ProxSave logs
+a warning and proceeds **without** a persistent guard. Older versions set a
+`chattr +i` immutable flag here; it survived reboots and could silently re-block the
+mountpoint once the storage was later unmounted, so it was removed.
+
 **Cleanup** (`proxsave --cleanup-guards`):
 - bind-mount guards are unmounted (they also disappear on reboot);
-- `chattr +i` immutable guards are cleared, but **skipped while the target is
-  masked by a real mount** (clearing would touch the mounted filesystem).
+- **legacy** `chattr +i` immutable flags (from older versions) are cleared, but
+  **skipped while the target is masked by a real mount** (clearing would touch the
+  mounted filesystem);
+- a summary line reports unmounted / hidden-remaining / immutable-cleared /
+  immutable-pending.
 
 Code: `internal/orchestrator/mount_guard.go` (`guardMountPoint` →
 `bindReadOnlyGuard`), `mount_guard_apply.go`

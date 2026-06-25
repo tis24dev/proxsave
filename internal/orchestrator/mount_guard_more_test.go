@@ -800,13 +800,7 @@ func TestMaybeApplyPBSDatastoreMountGuards_FullFlow(t *testing.T) {
 				return []byte("mount: failed"), errors.New("mount failed")
 			}
 		case "chattr":
-			if len(args) != 2 || args[0] != "+i" {
-				return nil, fmt.Errorf("unexpected chattr args: %v", args)
-			}
-			target := filepath.Clean(args[1])
-			if target == "/mnt/chattrfail" {
-				return nil, errors.New("chattr failed")
-			}
+			t.Errorf("warn-only fallback must not invoke chattr; got args=%v", args)
 			return nil, nil
 		default:
 			return nil, fmt.Errorf("unexpected command: %s", name)

@@ -32,6 +32,40 @@ var (
 	}
 )
 
+// guardCleanupSummary accumulates what a cleanup run did so a single, uniform
+// SUMMARY line (plus actionable warnings) can be emitted once the guard directory
+// is known to exist and the mount state has been read.
+type guardCleanupSummary struct {
+	dryRun          bool
+	cleared         int  // immutable flags cleared (or would-clear, in dry-run)
+	pending         int  // immutable flags left (mounted/unresolvable/failed)
+	unmounted       int  // bind guards unmounted
+	guardsRemaining int  // bind guard mounts still present after this run
+	dirRemoved      bool // the guard directory was removed
+}
+
+func (s *guardCleanupSummary) emit(logger *logging.Logger) {
+	if logger == nil {
+		return
+	}
+	prefix := "Guard cleanup summary:"
+	if s.dryRun {
+		prefix = "Guard cleanup summary (DRY RUN):"
+	}
+	dirState := "kept"
+	if s.dirRemoved {
+		dirState = "removed"
+	}
+	logger.Info("%s bind-unmounted=%d guards-remaining=%d immutable-cleared=%d immutable-pending=%d guard-dir=%s",
+		prefix, s.unmounted, s.guardsRemaining, s.cleared, s.pending, dirState)
+	if s.guardsRemaining > 0 {
+		logger.Warning("Guard cleanup: %d bind guard(s) still present (hidden under a real mount, or an unmount failed); they are discarded on reboot, and re-running --cleanup-guards once the storage is unmounted will retry removing them", s.guardsRemaining)
+	}
+	if s.pending > 0 {
+		logger.Warning("Guard cleanup: %d immutable (chattr +i) flag(s) still pending; to clear, unmount the datastore, run 'proxsave --cleanup-guards', then remount", s.pending)
+	}
+}
+
 // CleanupMountGuards removes ProxSave mount guards created under mountGuardBaseDir.
 //
 // Safety: this will only unmount guard bind mounts when they are the currently-visible
@@ -54,17 +88,23 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 		return fmt.Errorf("stat guards dir: %w", err)
 	}
 
+	summary := &guardCleanupSummary{dryRun: dryRun}
+
 	// Reverse the chattr +i fallback guards first, independently of the bind-mount
 	// state below. This runs on BOTH paths (the no-guard-mounts early return AND the
 	// bind-mount loop). pending counts targets left immutable (mounted/unresolvable/
 	// failed); while it is > 0 we keep the guard directory and its index so a later
 	// run can finish the job.
-	pending := clearImmutableGuards(ctx, logger, dryRun)
+	cleared, pending := clearImmutableGuards(ctx, logger, dryRun)
+	summary.cleared, summary.pending = cleared, pending
 
 	mountinfo, err := cleanupReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return fmt.Errorf("read mountinfo: %w", err)
 	}
+	// Registered only after the mount state is known: a hard failure above returns
+	// without emitting a misleading "summary" line.
+	defer summary.emit(logger)
 
 	visibleMountpoints, hiddenMountpoints, totalGuardMounts := guardMountpointsFromMountinfo(string(mountinfo))
 	if totalGuardMounts == 0 {
@@ -79,6 +119,7 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 		if err := cleanupRemoveAll(mountGuardBaseDir); err != nil {
 			return fmt.Errorf("remove guards dir: %w", err)
 		}
+		summary.dirRemoved = true
 		logger.Info("Removed guard directory %s", mountGuardBaseDir)
 		return nil
 	}
@@ -129,8 +170,10 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 		unmounted++
 		logger.Info("Guard cleanup: unmounted guard at %s", mp)
 	}
+	summary.unmounted = unmounted
 
 	if dryRun {
+		summary.guardsRemaining = len(hiddenMountpoints)
 		if pending > 0 {
 			logger.Info("DRY RUN: would keep %s (%d immutable guard target(s) still pending)", mountGuardBaseDir, pending)
 		} else {
@@ -145,6 +188,7 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 	if after, rerr := cleanupReadFile("/proc/self/mountinfo"); rerr == nil {
 		_, _, remaining = guardMountpointsFromMountinfo(string(after))
 	}
+	summary.guardsRemaining = remaining
 	if remaining > 0 || pending > 0 {
 		logger.Warning("Guard cleanup: %d guard mount(s) and %d immutable target(s) still present; not removing %s", remaining, pending, mountGuardBaseDir)
 		return nil
@@ -153,6 +197,7 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 	if err := cleanupRemoveAll(mountGuardBaseDir); err != nil {
 		return fmt.Errorf("remove guards dir: %w", err)
 	}
+	summary.dirRemoved = true
 	logger.Info("Removed guard directory %s (unmounted=%d)", mountGuardBaseDir, unmounted)
 	return nil
 }
@@ -238,13 +283,12 @@ func guardMountpointsFromMountinfo(mountinfo string) (visible, hidden []string, 
 // clear them; the index is removed (with the directory) only when nothing is pending
 // and no bind-mount guards remain. In dry-run, pending reflects what a real run would
 // leave behind (mounted/unresolvable targets), so the "would remove" preview is honest.
-func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bool) int {
+func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bool) (cleared, pending int) {
 	data, err := cleanupChattrReadFile(mountGuardChattrTargetsPath())
 	if err != nil {
-		return 0 // missing/unreadable index => nothing was recorded => no-op
+		return 0, 0 // missing/unreadable index => nothing was recorded => no-op
 	}
 
-	pending := 0
 	for _, target := range parseImmutableGuardTargets(data) {
 		// Defense-in-depth against a tampered/corrupt index: only ever touch a
 		// datastore mount root (/mnt, /media, /run/media). A dropped entry is not
@@ -271,6 +315,7 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 
 		if dryRun {
 			logger.Info("DRY RUN: would clear immutable flag (chattr -i) on %s", target)
+			cleared++
 			continue
 		}
 
@@ -303,6 +348,7 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 			continue
 		}
 		logger.Info("Guard cleanup: cleared immutable flag (chattr -i) on %s", resolved)
+		cleared++
 	}
-	return pending
+	return cleared, pending
 }

@@ -1,12 +1,16 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // withTempGuardBaseDir redirects mountGuardBaseDir to an isolated temp dir for the
@@ -138,13 +142,17 @@ func TestParseImmutableGuardTargets_OversizedTreatedEmpty(t *testing.T) {
 	}
 }
 
-// Kills: removing the recordImmutableGuardTarget call in the PBS chattr fallback
-// (success records; a chattr +i failure must NOT record).
-func TestPBSChattrFallback_RecordsIndex(t *testing.T) {
+// Kills: re-introducing the chattr +i fallback at the PBS bind-failure site. The
+// fallback is now warn-only: it must run no command, record nothing in the index,
+// and not mark the target protected.
+func TestPBSBindFailWarnsNoChattr(t *testing.T) {
 	withTempGuardBaseDir(t)
 
 	origCmd := restoreCmd
 	t.Cleanup(func() { restoreCmd = origCmd })
+
+	fake := &FakeCommandRunner{}
+	restoreCmd = fake
 
 	a := &pbsMountGuardApply{
 		ctx:       context.Background(),
@@ -152,31 +160,24 @@ func TestPBSChattrFallback_RecordsIndex(t *testing.T) {
 		protected: map[string]struct{}{},
 	}
 
-	// chattr +i succeeds -> recorded.
-	restoreCmd = &FakeCommandRunner{}
-	a.protectOfflineTargetWithChattr("/mnt/pbs-ok", errors.New("bind failed"))
-	if _, ok := a.protected["/mnt/pbs-ok"]; !ok {
-		t.Fatalf("/mnt/pbs-ok should be marked protected")
-	}
-	if got := readGuardIndexLines(t); len(got) != 1 || got[0] != "/mnt/pbs-ok" {
-		t.Fatalf("index=%#v want [/mnt/pbs-ok]", got)
-	}
+	a.warnOfflineTargetUnguarded("/mnt/pbs-ok", errors.New("bind failed"))
 
-	// chattr +i fails -> NOT recorded.
-	restoreCmd = &FakeCommandRunner{Errors: map[string]error{"chattr +i /mnt/pbs-fail": errors.New("denied")}}
-	a.protectOfflineTargetWithChattr("/mnt/pbs-fail", errors.New("bind failed"))
-	got := readGuardIndexLines(t)
-	for _, l := range got {
-		if l == "/mnt/pbs-fail" {
-			t.Fatalf("a failed chattr +i must not be recorded; index=%#v", got)
-		}
+	if calls := fake.CallsList(); len(calls) != 0 {
+		t.Fatalf("warn-only fallback must run no commands (no chattr); got %v", calls)
+	}
+	if got := readGuardIndexLines(t); len(got) != 0 {
+		t.Fatalf("warn-only fallback must not record an immutable flag; got %#v", got)
+	}
+	if _, ok := a.protected["/mnt/pbs-ok"]; ok {
+		t.Fatalf("warn-only fallback must not mark the target protected")
 	}
 }
 
-// Kills: removing the recordImmutableGuardTarget call at the PVE chattr fallback
-// site. Drives the PVE guard path entirely through seams so it ALWAYS runs (the
-// pre-existing _EarlyAndFallback test is skip-gated on a writable /mnt/pve + root).
-func TestPVEChattrFallback_RecordsIndex(t *testing.T) {
+// Kills: re-introducing the chattr +i fallback at the PVE bind-failure site. The
+// fallback is now warn-only. Drives the PVE guard path entirely through seams so it
+// ALWAYS runs (the pre-existing _EarlyAndFallback test is skip-gated on a writable
+// /mnt/pve + root).
+func TestPVEBindFailWarnsNoChattr(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger()
 	withTempGuardBaseDir(t)
@@ -221,9 +222,8 @@ func TestPVEChattrFallback_RecordsIndex(t *testing.T) {
 
 	fakeCmd := &FakeCommandRunner{
 		Errors: map[string]error{
-			"which pvesm":         errors.New("missing"),
-			"mount " + target:     errors.New("offline"),
-			"chattr +i " + target: nil, // success -> record
+			"which pvesm":     errors.New("missing"),
+			"mount " + target: errors.New("offline"),
 		},
 	}
 	restoreCmd = fakeCmd
@@ -231,11 +231,16 @@ func TestPVEChattrFallback_RecordsIndex(t *testing.T) {
 	if err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, pvePlan(false, "storage_pve"), stageRoot, "/"); err != nil {
 		t.Fatalf("guard fallback should be non-fatal, got %v", err)
 	}
-	if !strings.Contains(strings.Join(fakeCmd.CallsList(), "\n"), "chattr +i "+target) {
-		t.Fatalf("expected chattr +i fallback; calls=%v", fakeCmd.CallsList())
+	// The offline mount attempt still runs, but the bind failure is now warn-only:
+	// no chattr +i, nothing recorded in the index.
+	if !strings.Contains(strings.Join(fakeCmd.CallsList(), "\n"), "mount "+target) {
+		t.Fatalf("expected the offline mount attempt on %q; calls=%v", target, fakeCmd.CallsList())
 	}
-	if got := readGuardIndexLines(t); len(got) != 1 || got[0] != target {
-		t.Fatalf("PVE chattr fallback must record %q in the index; got %#v", target, got)
+	if strings.Contains(strings.Join(fakeCmd.CallsList(), "\n"), "chattr +i") {
+		t.Fatalf("bind failure must be warn-only (no chattr +i); calls=%v", fakeCmd.CallsList())
+	}
+	if got := readGuardIndexLines(t); len(got) != 0 {
+		t.Fatalf("warn-only fallback must not record anything; got %#v", got)
 	}
 }
 
@@ -485,5 +490,89 @@ func TestCleanupMountGuards_RoundTripFromRecord(t *testing.T) {
 	}
 	if len(ran) != 1 || ran[0] != "chattr -i /mnt/pve/roundtrip" {
 		t.Fatalf("round-trip: runner calls=%#v want [chattr -i /mnt/pve/roundtrip]", ran)
+	}
+}
+
+// Kills: a reader that drops/duplicates recorded targets, or one that does not
+// return the recorded entries to the restore-start legacy warning.
+func TestRecordedImmutableGuardTargets(t *testing.T) {
+	withTempGuardBaseDir(t)
+	if got := recordedImmutableGuardTargets(); len(got) != 0 {
+		t.Fatalf("no index -> empty; got %#v", got)
+	}
+	recordImmutableGuardTarget(newTestLogger(), "/mnt/ds1")
+	recordImmutableGuardTarget(newTestLogger(), "/media/ds2")
+	got := recordedImmutableGuardTargets()
+	if len(got) != 2 || got[0] != "/mnt/ds1" || got[1] != "/media/ds2" {
+		t.Fatalf("recorded targets = %#v", got)
+	}
+}
+
+// Kills: dropping the restore-start legacy warning (it must fire when persistent
+// chattr +i flags are recorded and stay silent otherwise).
+func TestWarnLegacyImmutableGuards(t *testing.T) {
+	withTempGuardBaseDir(t)
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	warnLegacyImmutableGuards(logger)
+	if buf.Len() != 0 {
+		t.Fatalf("empty index must be silent; got %q", buf.String())
+	}
+
+	recordImmutableGuardTarget(newTestLogger(), "/mnt/ds1")
+	warnLegacyImmutableGuards(logger)
+	out := buf.String()
+	if !strings.Contains(out, "persistent immutable guard flag") || !strings.Contains(out, "/mnt/ds1") {
+		t.Fatalf("expected legacy warning naming the target; got %q", out)
+	}
+}
+
+// Kills: dropping the end-of-cleanup summary, or mis-reporting cleared/removed.
+func TestCleanupMountGuards_SummaryReported(t *testing.T) {
+	withTempGuardBaseDir(t)
+	installChattrCleanupSeams(t, []byte("/mnt/pve/a\n/media/b\n"), "", nil)
+
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("CleanupMountGuards: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Guard cleanup summary:") {
+		t.Fatalf("missing summary line; out=%q", out)
+	}
+	if !strings.Contains(out, "immutable-cleared=2") || !strings.Contains(out, "immutable-pending=0") {
+		t.Fatalf("summary counts wrong; out=%q", out)
+	}
+	if !strings.Contains(out, "guard-dir=removed") {
+		t.Fatalf("expected guard-dir=removed; out=%q", out)
+	}
+}
+
+// Kills: dropping the pending accounting/warning when an immutable target is left
+// (e.g. shadowed by a real mount), or removing the guard dir while pending > 0.
+func TestCleanupMountGuards_SummaryPending(t *testing.T) {
+	withTempGuardBaseDir(t)
+	mountinfo := "36 35 0:30 / /mnt/pve/offline rw - nfs server:/export rw\n"
+	installChattrCleanupSeams(t, []byte("/mnt/pve/offline\n"), mountinfo, nil)
+
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("CleanupMountGuards: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "immutable-cleared=0") || !strings.Contains(out, "immutable-pending=1") {
+		t.Fatalf("summary counts wrong; out=%q", out)
+	}
+	if !strings.Contains(out, "still pending") {
+		t.Fatalf("expected pending warning; out=%q", out)
+	}
+	if !strings.Contains(out, "guard-dir=kept") {
+		t.Fatalf("expected guard-dir=kept while pending; out=%q", out)
 	}
 }

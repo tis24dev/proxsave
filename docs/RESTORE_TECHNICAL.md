@@ -1534,16 +1534,15 @@ When restoring to the real system root (`/`), ProxSave avoids blindly overwritin
 For PBS datastores whose paths live under typical mount roots (for example `/mnt/...`), ProxSave aims for a “restore even if offline” behavior:
 
 - PBS datastore definitions are applied even when the underlying storage is offline/not mounted, so PBS shows them as **unavailable** rather than silently dropping them.
-- When a mountpoint used by a datastore currently resolves to the root filesystem (mount missing), ProxSave applies a **temporary mount guard** on the mount root:
-  - Preferred: read-only bind-mount guard
-  - Fallback: `chattr +i` on the mountpoint directory
+- When a mountpoint used by a datastore currently resolves to the root filesystem (mount missing), ProxSave applies a **read-only bind-mount guard** on the mount root.
 - Guards prevent PBS from writing into `/` if the storage is missing at restore time.
 - **Bind-mount guard:** when the real storage is mounted later it stacks on top of the read-only guard and the datastore becomes available again; the guard is then shadowed underneath and is discarded by a reboot or by `--cleanup-guards`.
-- **`chattr +i` fallback** (used only when a bind mount cannot be created): the immutable flag is set on the mountpoint *directory inode*. Mounting the real storage on top later still works, **but the immutable flag remains on the shadowed directory and is NOT removed by a reboot.** ProxSave records each such mountpoint under `/var/lib/proxsave/guards/chattr-targets` so cleanup can reverse it.
+- **If the bind mount cannot be created** (rare; e.g. a locked-down/containerized mount namespace), ProxSave does **not** set a persistent flag — it logs a loud warning that the mountpoint is unguarded and proceeds. (Older versions set a `chattr +i` immutable flag here; that flag survived reboots and could silently re-block the mountpoint once the storage was later unmounted, so it was removed.) ProxSave's own directory recreation on the mountpoint is still skipped by the storage-mount preflight, and the config-only restore never extracts into datastore mountpoints, so only *external* writers are unblocked while the storage stays offline.
+- At restore start, if persistent `chattr +i` flags from an older version are still recorded, ProxSave warns and points to `--cleanup-guards`.
 
 Optional maintenance:
-- `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts guard bind mounts **and** clears the recorded `chattr +i` immutable flags — but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). The guard directory and its index are kept until nothing is pending.
-- To clear an immutable flag on a mountpoint whose storage is already mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts guard bind mounts **and** clears any **legacy** `chattr +i` immutable flags recorded by older versions — but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). It prints a summary (unmounted / hidden-remaining / immutable-cleared / immutable-pending) and keeps the guard directory and its index until nothing is pending.
+- To clear a legacy immutable flag on a mountpoint whose storage is already mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
 - If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave no longer has a record to clear: check with `lsattr -d <mountpoint>` and clear it yourself with `chattr -i <mountpoint>` while the storage is unmounted.
 
 #### PVE Storage Mount Guards (Offline Storage)
@@ -1551,12 +1550,10 @@ Optional maintenance:
 For PVE storages that use mountpoints (notably `nfs`, `cifs`, `cephfs`, `glusterfs`, and `dir` storages on dedicated mountpoints), ProxSave applies the same “restore even if offline” safety model:
 
 - Network storages use `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>` with a short timeout.
-- If the mountpoint still resolves to the root filesystem afterwards (mount missing/offline), ProxSave applies a **temporary mount guard** on the mountpoint:
-  - Preferred: read-only bind-mount guard
-  - Fallback: `chattr +i` on the mountpoint directory
+- If the mountpoint still resolves to the root filesystem afterwards (mount missing/offline), ProxSave applies a **read-only bind-mount guard** on the mountpoint. If the bind mount cannot be created it logs a warning and proceeds unguarded (no persistent flag is set; see the PBS section above).
 - For `dir` storages, guards are only applied when the storage `path` can be associated with a mountpoint present in `/etc/fstab` (to avoid guarding local root filesystem paths).
 
-This prevents accidental writes into the root filesystem when storage is offline at restore time. When the real mount comes back it stacks on top of a bind-mount guard and normal operation resumes; a `chattr +i` fallback, however, leaves the immutable flag on the shadowed directory (it survives reboot) until `--cleanup-guards` clears it (or a manual `chattr -i`). See the cleanup notes under PBS Datastore Mount Guards above.
+This prevents accidental writes into the root filesystem when storage is offline at restore time. When the real mount comes back it stacks on top of a bind-mount guard and normal operation resumes. See the cleanup notes under PBS Datastore Mount Guards above.
 
 ### 5. Root Privilege Check
 

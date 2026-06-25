@@ -140,6 +140,33 @@ func readImmutableGuardIndex(path string) []string {
 	return parseImmutableGuardTargets(data)
 }
 
+// recordedImmutableGuardTargets returns the immutable-guard targets currently
+// recorded in the index (read-only; never mutates). Empty if the index is
+// missing/unreadable/empty. Used by the restore-start legacy warning and any
+// read-only listing.
+func recordedImmutableGuardTargets() []string {
+	return readImmutableGuardIndex(mountGuardChattrTargetsPath())
+}
+
+// warnLegacyImmutableGuards alerts the operator, at the start of a restore, about
+// persistent chattr +i guard flags recorded by an earlier ProxSave version. These
+// survive reboots and silently re-block writes once their datastore is unmounted,
+// so they must be cleared (while the storage is unmounted) with --cleanup-guards.
+// Best-effort and read-only: a missing/empty index is a silent no-op.
+func warnLegacyImmutableGuards(logger *logging.Logger) {
+	if logger == nil {
+		return
+	}
+	targets := recordedImmutableGuardTargets()
+	if len(targets) == 0 {
+		return
+	}
+	logger.Warning("%d persistent immutable guard flag(s) (chattr +i) recorded by a previous restore; these will re-block writes if their datastore is ever unmounted. To clear them: unmount the storage, run 'proxsave --cleanup-guards', then remount.", len(targets))
+	for _, t := range targets {
+		logger.Warning("  recorded immutable guard: %s", t)
+	}
+}
+
 // writeImmutableGuardIndex writes the index atomically (temp file + rename) on the
 // REAL host filesystem. The index is host state under /var/lib/proxsave — it is not
 // part of the staged restore tree — so it deliberately uses os.* directly rather

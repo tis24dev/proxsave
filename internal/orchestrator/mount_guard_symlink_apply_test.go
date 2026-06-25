@@ -220,20 +220,23 @@ func TestPBSGuard_AllowlistToAllowlistResolved(t *testing.T) {
 		t.Fatalf("guard should be non-fatal, got %v", err)
 	}
 
-	sawChattr := false
+	// Resolution flows downstream: the offline mount attempt runs on the RESOLVED
+	// path. The bind failure is warn-only, so there must be NO chattr and an empty
+	// index (no persistent landmine).
+	sawMountResolved := false
 	for _, c := range cmd.calls {
 		if c.name == "chattr" {
-			if len(c.args) != 2 || c.args[0] != "+i" || c.args[1] != resolved {
-				t.Fatalf("chattr must target the resolved path %q; got args=%v", resolved, c.args)
-			}
-			sawChattr = true
+			t.Fatalf("bind failure must be warn-only (no chattr); calls=%v", cmd.calls)
+		}
+		if c.name == "mount" && len(c.args) == 1 && c.args[0] == resolved {
+			sawMountResolved = true
 		}
 	}
-	if !sawChattr {
-		t.Fatalf("expected chattr +i on resolved path; calls=%v", cmd.calls)
+	if !sawMountResolved {
+		t.Fatalf("expected the offline mount attempt on the resolved path %q; calls=%v", resolved, cmd.calls)
 	}
-	if got := readGuardIndexLines(t); len(got) != 1 || got[0] != resolved {
-		t.Fatalf("index must record the resolved path %q; got %#v", resolved, got)
+	if got := readGuardIndexLines(t); len(got) != 0 {
+		t.Fatalf("warn-only fallback must not record anything; got %#v", got)
 	}
 }
 
@@ -343,8 +346,9 @@ func TestPVEGuard_SymlinkEscapeRefused(t *testing.T) {
 	}
 }
 
-// TestPVEGuard_AllowlistToAllowlistResolved: PVE apply acts on and records the
-// resolved path when a symlink stays inside the allowlist.
+// TestPVEGuard_AllowlistToAllowlistResolved: PVE apply acts on the RESOLVED path
+// when a symlink stays inside the allowlist (proven by the offline mount attempt on
+// the resolved path); the bind failure is warn-only (no chattr, empty index).
 func TestPVEGuard_AllowlistToAllowlistResolved(t *testing.T) {
 	const resolved = "/media/pvereal"
 	id := uniquePveMountTestStorageID(t, "resolved")
@@ -357,9 +361,8 @@ func TestPVEGuard_AllowlistToAllowlistResolved(t *testing.T) {
 	})
 	fakeCmd := &FakeCommandRunner{
 		Errors: map[string]error{
-			"which pvesm":           errors.New("missing"),
-			"mount " + resolved:     errors.New("offline"),
-			"chattr +i " + resolved: nil,
+			"which pvesm":       errors.New("missing"),
+			"mount " + resolved: errors.New("offline"),
 		},
 	}
 	origCmd := restoreCmd
@@ -370,11 +373,14 @@ func TestPVEGuard_AllowlistToAllowlistResolved(t *testing.T) {
 	if err := maybeApplyPVEStorageMountGuardsFromStage(context.Background(), newTestLogger(), pvePlan(false, "storage_pve"), stageRoot, "/"); err != nil {
 		t.Fatalf("guard should be non-fatal, got %v", err)
 	}
-	if !strings.Contains(strings.Join(fakeCmd.CallsList(), "\n"), "chattr +i "+resolved) {
-		t.Fatalf("expected chattr +i on resolved path %q; calls=%v", resolved, fakeCmd.CallsList())
+	if !strings.Contains(strings.Join(fakeCmd.CallsList(), "\n"), "mount "+resolved) {
+		t.Fatalf("expected the offline mount attempt on the resolved path %q; calls=%v", resolved, fakeCmd.CallsList())
 	}
-	if got := readGuardIndexLines(t); len(got) != 1 || got[0] != resolved {
-		t.Fatalf("index must record the resolved path %q; got %#v", resolved, got)
+	if strings.Contains(strings.Join(fakeCmd.CallsList(), "\n"), "chattr +i") {
+		t.Fatalf("bind failure must be warn-only (no chattr +i); calls=%v", fakeCmd.CallsList())
+	}
+	if got := readGuardIndexLines(t); len(got) != 0 {
+		t.Fatalf("warn-only fallback must not record anything; got %#v", got)
 	}
 }
 

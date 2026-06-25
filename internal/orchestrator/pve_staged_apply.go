@@ -420,18 +420,18 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 		}
 
 		if err := guardMountPoint(ctx, guardTarget); err != nil {
+			// Warn-only fallback: ProxSave no longer sets a persistent chattr +i here
+			// (it survived reboots and re-blocked writes once the storage was later
+			// unmounted). The config-only restore never extracts into datastore
+			// mountpoints and ProxSave's own dir recreation is skipped by the
+			// storage-mount preflight, so this only leaves EXTERNAL writers unblocked
+			// while the storage is offline. Legacy flags are still cleared by
+			// --cleanup-guards.
 			if logger != nil {
-				logger.Warning("PVE mount guard: failed to bind-mount guard on %s: %v; falling back to chattr +i", guardTarget, err)
-			}
-			if _, fallbackErr := restoreCmd.Run(ctx, "chattr", "+i", guardTarget); fallbackErr != nil {
-				if logger != nil {
-					logger.Warning("PVE mount guard: failed to set immutable attribute on %s: %v", guardTarget, fallbackErr)
-				}
-				continue
-			}
-			recordImmutableGuardTarget(logger, guardTarget) // so --cleanup-guards can later chattr -i it
-			if logger != nil {
-				logger.Warning("PVE mount guard: %s resolves to root filesystem (mount missing?) — marked immutable (chattr +i) to prevent writes until storage is available", guardTarget)
+				logger.Warning("PVE mount guard: could NOT guard offline mountpoint %s (read-only bind mount failed: %v). "+
+					"Writes there while the storage is offline are not blocked and would land on the root filesystem. "+
+					"Remedy: activate/mount the storage (e.g. `pvesm activate <storage>` or `mount %s` / `zpool import`) before any guest or job uses it.",
+					guardTarget, err, guardTarget)
 			}
 			continue
 		}

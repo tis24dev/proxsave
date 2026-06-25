@@ -482,9 +482,9 @@ proxsave --restore --cli
 
 ### Cleanup Mount Guards (Optional)
 
-During some restores (notably PBS datastores and PVE network storages on mountpoints under `/mnt`), ProxSave may apply **mount guards** to prevent accidental writes to `/` when the underlying storage is offline/not mounted yet. A guard is either a read-only bind mount over the mountpoint, or — if a bind mount cannot be created — an immutable flag (`chattr +i`) on the mountpoint directory.
+During some restores (notably PBS datastores and PVE network storages on mountpoints under `/mnt`), ProxSave may apply a **read-only bind-mount guard** over a mountpoint to prevent accidental writes to `/` when the underlying storage is offline/not mounted yet. If the bind mount cannot be created, ProxSave logs a warning and proceeds unguarded — it no longer sets a persistent `chattr +i` immutable flag (older versions did; that flag survived reboots and could silently re-block the mountpoint when the storage was later unmounted).
 
-`--cleanup-guards` reverses **both** guard types: it unmounts bind-mount guards **and** clears the recorded `chattr +i` immutable flags. For safety it only acts on mountpoints that are **not currently mounted** (a real mount on top shadows the guard; clearing it then would touch the wrong inode), and it keeps the guard directory until nothing is pending.
+`--cleanup-guards` unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags left by older versions. For safety it only acts on mountpoints that are **not currently mounted** (a real mount on top shadows the guard; clearing it then would touch the wrong inode), prints a summary (unmounted / hidden-remaining / immutable-cleared / immutable-pending), and keeps the guard directory until nothing is pending.
 
 ```bash
 # Preview (no changes)
@@ -495,8 +495,8 @@ proxsave --cleanup-guards
 ```
 
 Notes:
-- Bringing the storage back online is enough to *use* it again (a real mount stacks on top of the guard automatically); `--cleanup-guards` just removes the leftover guard. A bind-mount guard also clears on reboot; a `chattr +i` flag does **not** — it persists until cleared.
-- To clear a flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- Bringing the storage back online is enough to *use* it again (a real mount stacks on top of the guard automatically); `--cleanup-guards` just removes the leftover guard. A bind-mount guard also clears on reboot. A legacy `chattr +i` flag does **not** clear on reboot — it persists until cleared.
+- To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
 - If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
 ## Logging

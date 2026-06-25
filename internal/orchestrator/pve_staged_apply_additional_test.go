@@ -722,9 +722,8 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T)
 
 	fakeCmd := &FakeCommandRunner{
 		Errors: map[string]error{
-			"which pvesm":          errors.New("missing"),
-			"mount " + target:      errors.New("offline"),
-			"chattr +i " + target:  nil,
+			"which pvesm":     errors.New("missing"),
+			"mount " + target: errors.New("offline"),
 		},
 	}
 	restoreCmd = fakeCmd
@@ -750,11 +749,12 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T)
 	if !strings.Contains(calls, "mount "+target) {
 		t.Fatalf("missing offline mount attempt; calls=%v", fakeCmd.CallsList())
 	}
-	if !strings.Contains(calls, "chattr +i "+target) {
-		t.Fatalf("missing chattr fallback call; calls=%v", fakeCmd.CallsList())
+	// Bind failure is now warn-only: no chattr +i, nothing recorded.
+	if strings.Contains(calls, "chattr +i") {
+		t.Fatalf("bind failure must be warn-only (no chattr +i); calls=%v", fakeCmd.CallsList())
 	}
-	if got := readGuardIndexLines(t); len(got) != 1 || got[0] != target {
-		t.Fatalf("chattr fallback must record %q in the immutable index; got %#v", target, got)
+	if got := readGuardIndexLines(t); len(got) != 0 {
+		t.Fatalf("warn-only fallback must not record anything; got %#v", got)
 	}
 }
 
@@ -948,16 +948,16 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 		}
 	})
 
-	t.Run("guard fallback chattr failure and guard bind success", func(t *testing.T) {
+	t.Run("guard bind failure is warn-only and guard bind success", func(t *testing.T) {
 		stageRoot := t.TempDir()
 		stageCfgPath := filepath.Join(stageRoot, "etc/pve/storage.cfg")
 		if err := os.MkdirAll(filepath.Dir(stageCfgPath), 0o755); err != nil {
 			t.Fatalf("mkdir stage cfg dir: %v", err)
 		}
-		chattrFailID := uniquePveMountTestStorageID(t, "chattr-fail")
+		bindFailID := uniquePveMountTestStorageID(t, "bind-fail")
 		guardOKID := uniquePveMountTestStorageID(t, "guard-ok")
 		cfg := strings.Join([]string{
-			"nfs: " + chattrFailID,
+			"nfs: " + bindFailID,
 			"nfs: " + guardOKID,
 			"",
 		}, "\n")
@@ -965,19 +965,18 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 			t.Fatalf("write staged storage.cfg: %v", err)
 		}
 
-		chattrFailTarget := pveMountTargetForStorageID(chattrFailID)
+		bindFailTarget := pveMountTargetForStorageID(bindFailID)
 		guardOKTarget := pveMountTargetForStorageID(guardOKID)
-		cleanupPveMountTestTarget(t, chattrFailTarget)
+		cleanupPveMountTestTarget(t, bindFailTarget)
 		cleanupPveMountTestTarget(t, guardOKTarget)
-		cleanupPveMountTestGuardDir(t, chattrFailTarget)
+		cleanupPveMountTestGuardDir(t, bindFailTarget)
 		cleanupPveMountTestGuardDir(t, guardOKTarget)
 
 		fakeCmd := &FakeCommandRunner{
 			Errors: map[string]error{
-				"which pvesm":                  errors.New("missing"),
-				"mount " + chattrFailTarget:    errors.New("offline"),
-				"chattr +i " + chattrFailTarget: errors.New("chattr denied"),
-				"mount " + guardOKTarget:       errors.New("offline"),
+				"which pvesm":             errors.New("missing"),
+				"mount " + bindFailTarget: errors.New("offline"),
+				"mount " + guardOKTarget:  errors.New("offline"),
 			},
 		}
 		restoreCmd = fakeCmd
@@ -990,7 +989,7 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 			}
 		}
 		mountGuardSysMount = func(source, target, fstype string, flags uintptr, data string) error {
-			if target == chattrFailTarget {
+			if target == bindFailTarget {
 				return errors.New("bind denied")
 			}
 			return nil
@@ -1000,11 +999,13 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 			t.Fatalf("expected non-fatal guard fallback handling, got %v", err)
 		}
 		calls := strings.Join(fakeCmd.CallsList(), "\n")
-		if !strings.Contains(calls, "chattr +i "+chattrFailTarget) {
-			t.Fatalf("missing chattr fallback call for failing guard target; calls=%v", fakeCmd.CallsList())
+		// Bind failure is warn-only and bind success guards via bind mount: in
+		// neither case is chattr +i invoked, and nothing is recorded in the index.
+		if strings.Contains(calls, "chattr +i") {
+			t.Fatalf("chattr +i must never run (warn-only fallback / bind success); calls=%v", fakeCmd.CallsList())
 		}
-		if strings.Contains(calls, "chattr +i "+guardOKTarget) {
-			t.Fatalf("chattr should not run when guard bind succeeds; calls=%v", fakeCmd.CallsList())
+		if got := readGuardIndexLines(t); len(got) != 0 {
+			t.Fatalf("no immutable flag must be recorded; got %#v", got)
 		}
 	})
 }
