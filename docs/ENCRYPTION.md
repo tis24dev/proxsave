@@ -37,12 +37,12 @@ Proxsave uses the **[age](https://age-encryption.org/)** format (via `filippo.io
 | Feature | Description |
 |---------|-------------|
 | **Encryption algorithm** | ChaCha20-Poly1305 (AEAD) with X25519 key exchange |
-| **Key types** | Passphrase or X25519 key pair |
+| **Key types** | Passphrase, X25519 key pair, or SSH public key (`ssh-ed25519` / `ssh-rsa`) |
 | **Multiple recipients** | Single backup can be decrypted with any configured recipient |
 | **Interactive setup** | `--newkey` (or the first encrypted run) helps you configure recipients |
 | **Streaming mode** | Encrypts during backup creation (no temporary plaintext) |
 | **Security** | Passphrases read with `term.ReadPassword`, buffers zeroed after use |
-| **File permissions** | Enforces 0700/0600 on recipient files |
+| **File permissions** | Recipient files are created 0700/0600; the security check verifies them and auto-fixes only when `AUTO_FIX_PERMISSIONS` is enabled (otherwise it warns) |
 
 ---
 
@@ -118,12 +118,15 @@ age1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567abc
 
 # Recipient derived from a passphrase (still an "age1..." recipient; the passphrase is NOT stored)
 age1def456ghi789jkl012mno345pqr678stu901vwx234yz567abc123def
+
+# SSH public key recipient (encrypt to an existing SSH key; ssh-ed25519 or ssh-rsa)
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleSSHpublicKeyForAgeRecipient
 ```
 
 **Format**:
 - One recipient per line
 - Blank lines and `#` comments ignored
-- Mix key types freely
+- Supported types: X25519 (`age1...`) and SSH public keys (`ssh-ed25519` / `ssh-rsa`); mix freely
 
 ### Interactive Wizard
 
