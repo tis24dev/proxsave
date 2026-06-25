@@ -24,10 +24,6 @@ var (
 	// cleanupReadFile (which reads /proc) so tests can supply index bytes
 	// without faking /proc.
 	cleanupChattrReadFile = os.ReadFile
-	// cleanupResolveTarget resolves an immutable-guard target through any symlinks
-	// before it is re-validated and cleared, so a parent-component symlink cannot
-	// make `chattr -i` escape the datastore-root allowlist. Injectable for tests.
-	cleanupResolveTarget = filepath.EvalSymlinks
 	// cleanupRunCmd runs the `chattr -i` that reverses an immutable fallback
 	// guard. Injectable like the other cleanup* seams; defaults to the restore
 	// command runner.
@@ -279,22 +275,23 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 		}
 
 		// Resolve symlinks and re-check the allowlist so a parent-component symlink
-		// cannot make chattr -i escape the datastore roots. A path that no longer
-		// exists has nothing to clear (not pending). If a datastore root itself is a
-		// symlink that resolves outside the allowlist (rare on Proxmox/Debian), the
-		// target is refused and left pending — fail-safe: it never escapes and is
-		// never data loss; the operator can clear it manually with chattr -i.
-		resolved, rErr := cleanupResolveTarget(target)
+		// cannot make chattr -i escape the datastore roots (shared with the apply
+		// paths via resolveGuardTargetWithinAllowlist). A path that no longer exists
+		// has nothing to clear (not pending). If a datastore root itself is a symlink
+		// that resolves outside the allowlist (rare on Proxmox/Debian), the target is
+		// refused and left pending — fail-safe: it never escapes and is never data
+		// loss; the operator can clear it manually with chattr -i.
+		resolved, leafExists, ok, rErr := resolveGuardTargetWithinAllowlist(target)
 		if rErr != nil {
-			if os.IsNotExist(rErr) {
-				logger.Debug("Guard cleanup: immutable target %s no longer exists; nothing to clear", target)
-				continue
-			}
 			logger.Warning("Guard cleanup: cannot resolve %s: %v; leaving immutable flag (clear manually with: chattr -i %s)", target, rErr, target)
 			pending++
 			continue
 		}
-		if !isConfirmableDatastoreMountRoot(resolved) {
+		if !leafExists {
+			logger.Debug("Guard cleanup: immutable target %s no longer exists; nothing to clear", target)
+			continue
+		}
+		if !ok {
 			logger.Warning("Guard cleanup: %s resolves outside the datastore roots (%s); refusing to clear it automatically", target, resolved)
 			pending++
 			continue

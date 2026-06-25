@@ -81,10 +81,10 @@ func TestRecordImmutableGuardTarget_RejectsUnsafe(t *testing.T) {
 
 	for _, bad := range []string{
 		"", "   ", ".", "/",
-		"/etc/cron.d",            // not a datastore root
-		"/var/lib/x",             // not a datastore root
-		"/mnt/ok\n/etc/passwd",   // newline injection
-		"/mnt/with\ttab",         // control char
+		"/etc/cron.d",          // not a datastore root
+		"/var/lib/x",           // not a datastore root
+		"/mnt/ok\n/etc/passwd", // newline injection
+		"/mnt/with\ttab",       // control char
 	} {
 		recordImmutableGuardTarget(logger, bad)
 	}
@@ -203,7 +203,7 @@ func TestPVEChattrFallback_RecordsIndex(t *testing.T) {
 	restoreFS = osFS{}
 	mountGuardGeteuid = func() int { return 0 }
 	mountGuardMkdirAll = func(string, os.FileMode) error { return nil }
-	mountGuardIsPathOnRootFilesystem = func(p string) (bool, string, error) { return true, p, nil } // force offline guard
+	mountGuardIsPathOnRootFilesystem = func(p string) (bool, string, error) { return true, p, nil }               // force offline guard
 	mountGuardSysMount = func(string, string, string, uintptr, string) error { return errors.New("bind denied") } // force chattr fallback
 	mountGuardSysUnmount = func(string, int) error { return nil }
 	mountGuardReadFile = func(string) ([]byte, error) { return []byte(""), nil } // /proc empty -> not mounted
@@ -254,7 +254,7 @@ func installChattrCleanupSeams(t *testing.T, index []byte, mountinfo string, cha
 	origRemoveAll := cleanupRemoveAll
 	origUnmount := cleanupSysUnmount
 	origChattrRead := cleanupChattrReadFile
-	origResolve := cleanupResolveTarget
+	origResolve := resolveGuardTarget
 	origRunCmd := cleanupRunCmd
 	origMGRead := mountGuardReadFile
 	t.Cleanup(func() {
@@ -264,7 +264,7 @@ func installChattrCleanupSeams(t *testing.T, index []byte, mountinfo string, cha
 		cleanupRemoveAll = origRemoveAll
 		cleanupSysUnmount = origUnmount
 		cleanupChattrReadFile = origChattrRead
-		cleanupResolveTarget = origResolve
+		resolveGuardTarget = origResolve
 		cleanupRunCmd = origRunCmd
 		mountGuardReadFile = origMGRead
 	})
@@ -274,7 +274,7 @@ func installChattrCleanupSeams(t *testing.T, index []byte, mountinfo string, cha
 	cleanupReadFile = func(string) ([]byte, error) { return []byte(""), nil } // empty /proc -> no bind guards
 	cleanupRemoveAll = func(string) error { return nil }
 	cleanupSysUnmount = func(string, int) error { return nil }
-	cleanupResolveTarget = func(p string) (string, error) { return p, nil } // identity: no symlink resolution in unit tests
+	resolveGuardTarget = func(p string) (string, error) { return p, nil } // identity: no symlink resolution in unit tests
 	cleanupChattrReadFile = func(path string) ([]byte, error) {
 		if path != mountGuardChattrTargetsPath() {
 			t.Fatalf("unexpected index read path %q", path)
@@ -413,7 +413,7 @@ func TestCleanupMountGuards_SymlinkEscapeRefused(t *testing.T) {
 	withTempGuardBaseDir(t)
 	ran := installChattrCleanupSeams(t, []byte("/mnt/pve/evil\n"), "", nil)
 	// /mnt/pve/evil passes the string allowlist but resolves outside it.
-	cleanupResolveTarget = func(string) (string, error) { return "/etc/evil", nil }
+	resolveGuardTarget = func(string) (string, error) { return "/etc/evil", nil }
 
 	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
 		t.Fatalf("CleanupMountGuards: %v", err)
@@ -456,7 +456,7 @@ func TestCleanupMountGuards_RoundTripFromRecord(t *testing.T) {
 	origStat := cleanupStat
 	origReadFile := cleanupReadFile
 	origRemoveAll := cleanupRemoveAll
-	origResolve := cleanupResolveTarget
+	origResolve := resolveGuardTarget
 	origRunCmd := cleanupRunCmd
 	origMGRead := mountGuardReadFile
 	t.Cleanup(func() {
@@ -464,7 +464,7 @@ func TestCleanupMountGuards_RoundTripFromRecord(t *testing.T) {
 		cleanupStat = origStat
 		cleanupReadFile = origReadFile
 		cleanupRemoveAll = origRemoveAll
-		cleanupResolveTarget = origResolve
+		resolveGuardTarget = origResolve
 		cleanupRunCmd = origRunCmd
 		mountGuardReadFile = origMGRead
 	})
@@ -472,7 +472,7 @@ func TestCleanupMountGuards_RoundTripFromRecord(t *testing.T) {
 	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
 	cleanupReadFile = func(string) ([]byte, error) { return []byte(""), nil }
 	cleanupRemoveAll = func(string) error { return nil }
-	cleanupResolveTarget = func(p string) (string, error) { return p, nil } // identity (path is fake)
+	resolveGuardTarget = func(p string) (string, error) { return p, nil }        // identity (path is fake)
 	mountGuardReadFile = func(string) ([]byte, error) { return []byte(""), nil } // not mounted
 	var ran []string
 	cleanupRunCmd = func(_ context.Context, name string, args ...string) ([]byte, error) {

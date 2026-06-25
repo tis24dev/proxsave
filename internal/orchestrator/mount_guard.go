@@ -316,3 +316,74 @@ func isValidGuardTarget(path string) bool {
 	path = filepath.Clean(strings.TrimSpace(path))
 	return path != "" && path != "." && path != string(os.PathSeparator)
 }
+
+// resolveGuardTarget resolves a guard target through any symlinks. It is the
+// single injectable seam shared by the guard apply paths (bind-mount / chattr +i)
+// and the cleanup path (chattr -i), so the datastore-root allowlist is always
+// enforced AFTER symlink resolution and can never again be hardened on one path
+// while another is left trusting an unresolved string. Defaults to
+// filepath.EvalSymlinks; overridable in tests.
+var resolveGuardTarget = filepath.EvalSymlinks
+
+// resolveGuardTargetWithinAllowlist resolves target through symlinks and reports
+// whether the resolved path still lands inside the datastore-root allowlist
+// (/mnt, /media, /run/media). This is the shared gate that closes the
+// parent-component-symlink escape: a path that textually starts with /mnt/ but
+// whose parent (or leaf) is a symlink into the live OS tree resolves outside the
+// allowlist and is refused.
+//
+// The guard apply paths frequently target a mountpoint whose leaf does not exist
+// yet (the offline storage was never mounted, so the directory is created only by
+// the guard step). EvalSymlinks on such a path returns ENOENT, so we instead
+// resolve the deepest EXISTING ancestor and re-append the still-missing tail: a
+// component that does not exist cannot itself be a symlink, so only existing
+// components can redirect the path.
+//
+// Returns:
+//   - resolved: the symlink-resolved path to act on (ancestor resolution applied
+//     when the leaf is absent). Meaningful whenever err is nil.
+//   - leafExists: whether the full target already existed on disk. Cleanup uses
+//     this to treat a missing leaf as "nothing to clear"; apply ignores it (it
+//     creates the leaf).
+//   - ok: whether resolved is a confirmable datastore mount root. When false (and
+//     err is nil) the caller must refuse to act (fail-safe, no allowlist escape).
+//   - err: a real resolution/I/O error (never plain os.ErrNotExist, which is
+//     folded into the ancestor walk / leafExists=false).
+func resolveGuardTargetWithinAllowlist(target string) (resolved string, leafExists bool, ok bool, err error) {
+	clean := filepath.Clean(strings.TrimSpace(target))
+	if !isValidGuardTarget(clean) {
+		return "", false, false, nil
+	}
+
+	// Fast path: the full target exists — resolve it end to end (this also
+	// resolves a symlinked leaf), exactly like the cleanup path always has.
+	if res, rErr := resolveGuardTarget(clean); rErr == nil {
+		return res, true, isConfirmableDatastoreMountRoot(res), nil
+	} else if !os.IsNotExist(rErr) {
+		return "", false, false, rErr
+	}
+
+	// Leaf (or a tail segment) is missing: walk up to the deepest existing
+	// ancestor, resolving it through symlinks, then re-append the missing tail.
+	anc := clean
+	var missing []string
+	for {
+		parent := filepath.Dir(anc)
+		if parent == anc {
+			// Reached the filesystem root without an existing ancestor. "/" always
+			// exists, so this is unreachable in practice; treat as no symlink to
+			// escape through and act on the cleaned literal path.
+			return clean, false, isConfirmableDatastoreMountRoot(clean), nil
+		}
+		missing = append([]string{filepath.Base(anc)}, missing...)
+		anc = parent
+		res, rErr := resolveGuardTarget(anc)
+		if rErr == nil {
+			full := filepath.Clean(filepath.Join(append([]string{res}, missing...)...))
+			return full, false, isConfirmableDatastoreMountRoot(full), nil
+		}
+		if !os.IsNotExist(rErr) {
+			return "", false, false, rErr
+		}
+	}
+}

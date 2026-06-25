@@ -343,6 +343,25 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 			continue
 		}
 
+		// Resolve symlinks and re-check the allowlist BEFORE any mkdir / mount /
+		// activate / RO bind / chattr +i, so a parent-component symlink cannot make
+		// the guard escape the datastore roots (mirrors the cleanup path; shared
+		// helper). Fail-safe on an unresolvable path or an escape: skip.
+		resolved, _, ok, resErr := resolveGuardTargetWithinAllowlist(guardTarget)
+		if resErr != nil {
+			if logger != nil {
+				logger.Warning("PVE mount guard: cannot resolve %s: %v; skipping guard (fail-safe)", guardTarget, resErr)
+			}
+			continue
+		}
+		if !ok {
+			if logger != nil {
+				logger.Warning("PVE mount guard: %s resolves outside the datastore roots (%s); skipping guard (fail-safe)", guardTarget, resolved)
+			}
+			continue
+		}
+		guardTarget = resolved
+
 		if err := mountGuardMkdirAll(guardTarget, 0o750); err != nil {
 			if logger != nil {
 				logger.Warning("PVE mount guard: unable to create mountpoint directory %s: %v", guardTarget, err)

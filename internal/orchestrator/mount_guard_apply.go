@@ -128,6 +128,20 @@ func (a *pbsMountGuardApply) applyDatastoreBlock(block pbsDatastoreBlock) {
 	if !a.shouldProtectTarget(guardTarget) {
 		return
 	}
+	// Resolve symlinks and re-check the allowlist BEFORE any mkdir / mount / RO
+	// bind / chattr +i, so a parent-component symlink cannot make the guard escape
+	// the datastore roots (mirrors the cleanup path; shared helper). Fail-safe on
+	// an unresolvable path or an escape: skip, never act outside the allowlist.
+	resolved, _, ok, err := resolveGuardTargetWithinAllowlist(guardTarget)
+	if err != nil {
+		a.warning("PBS mount guard: cannot resolve %s: %v; skipping guard (fail-safe)", guardTarget, err)
+		return
+	}
+	if !ok {
+		a.warning("PBS mount guard: %s resolves outside the datastore roots (%s); skipping guard (fail-safe)", guardTarget, resolved)
+		return
+	}
+	guardTarget = resolved
 	if !a.prepareOfflineGuardTarget(guardTarget) {
 		return
 	}
