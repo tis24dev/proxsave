@@ -110,10 +110,10 @@ sudo cp rclone-*/rclone /usr/local/bin/
 sudo chmod 755 /usr/local/bin/rclone
 
 # Verify
-rclone version  # Should show v1.50+
+rclone version  # Should show v1.60+
 ```
 
-**Minimum version**: rclone v1.50+
+**Minimum version**: rclone v1.60+
 **Recommended version**: Latest stable (v1.65+)
 
 ---
