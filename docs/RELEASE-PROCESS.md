@@ -74,7 +74,12 @@ proxsave_1.6.0_linux_amd64
 proxsave_1.6.0_linux_amd64.tar.gz
 proxsave_1.6.0_linux_amd64.tar.gz.sbom.cdx.json
 SHA256SUMS
+SHA256SUMS.sig
 ```
+
+`SHA256SUMS.sig` is **mandatory**: the install/upgrade flow refuses to proceed
+without a verifiable release signature (`install.sh` downloads and verifies it),
+and the release workflow validates the signing key before publishing.
 
 ## Install script (optional)
 
