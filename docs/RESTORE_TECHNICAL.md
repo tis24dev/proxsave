@@ -1492,16 +1492,20 @@ func isSecurePath(target string, destRoot string) bool {
 **Absolute Block** (`internal/orchestrator/restore_archive_entries.go` → `shouldSkipRestoreEntryTarget()`):
 
 ```go
-if cleanDestRoot == string(os.PathSeparator) &&
-   strings.HasPrefix(target, "/etc/pve") {
-    logger.Warning("Skipping restore to %s (prohibited)", target)
-    return nil  // Skip, don't error
+// only when restoring to the real system root
+if cleanDestRoot != string(os.PathSeparator) {
+    return false, nil
+}
+// exact /etc/pve or anything under /etc/pve/ (NOT /etc/pvexyz)
+if target == "/etc/pve" || strings.HasPrefix(target, "/etc/pve/") {
+    logger.Warning("Skipping restore to %s (writes to /etc/pve are prohibited)", target)
+    return true, nil  // skip this entry, don't error
 }
 ```
 
 **Applies only when**:
 - Restoring to system root (`/`)
-- Target path is under `/etc/pve`
+- Target is exactly `/etc/pve` or under `/etc/pve/`
 
 **Does NOT apply**:
 - Export-only extraction (different `destRoot`)
