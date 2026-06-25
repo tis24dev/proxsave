@@ -1,7 +1,7 @@
 # backup.env – Legacy vs Go Mapping
 
 This file documents the mapping between variables from the **old Bash `backup.env`**
-(`reference/env/backup.env`) and the **new Go template**
+(from the legacy Bash project this tool was migrated from) and the **new Go template**
 (`internal/config/templates/backup.env` + `internal/config/config.go`).
 
 > Note: where the name is identical, the variable is already compatible.
