@@ -57,8 +57,8 @@ and decision flow details.
 │  Module  │ │ System │ │ Engine │ │   Backup     │
 └──────────┘ └────────┘ └────────┘ └──────────────┘
 │            │          │          │
-│ decrypt.go │categories│restore.go│backup_safety │
-│            │     .go  │selective │      .go     │
+│ decrypt.go │categories│restore_  │backup_safety │
+│            │     .go  │archive*  │      .go     │
 └────────────┴──────────┴──────────┴──────────────┘
 ```
 
@@ -176,57 +176,76 @@ func RunRestoreWorkflow(
 ) error
 ```
 
-**Key Sections**:
+**Key Sections** (the workflow body lives in `restore_workflow_ui_run.go`, driven by
+`run()` → `runSelectiveRestore()`; each step below names the implementing function(s)
+instead of line numbers, which drift on every edit):
 
-1. **Preparation** (Lines 28-66):
+1. **Preparation** (`prepareBundleAndPlan()` → `prepareBundle()`, `detectTargetSystem()` /
+   `DetectCurrentSystem()`, `analyzeArchive()` / `AnalyzeRestoreArchive()`,
+   `confirmCompatibility()` / `ValidateCompatibility()`):
    - Decrypt backup if needed
    - Detect system type
    - Validate compatibility
    - Analyze categories
 
-2. **Mode & Category Selection** (Lines 68-91):
+2. **Mode & Category Selection + Plan build** (`selectRestorePlan()` →
+   `selectModeAndCategories()` / `GetCategoriesForMode()`, then `PlanRestore()` in
+   `restore_plan.go` which splits the selection via `splitRestoreCategories()` in `staging.go`):
    - User selects restore mode (Full/Storage/Base/Custom)
    - Interactive category selection for Custom mode
-   - Build category list
+   - Build the plan, splitting categories into normal / staged / export-only
 
-3. **Cluster SAFE/RECOVERY Prompt** (Lines 93-116):
-   - Detect if backup is from cluster node (`manifest.ClusterMode`)
+3. **PBS Behavior + Cluster SAFE/RECOVERY Prompt** (`configurePlanForRuntime()` →
+   `selectPBSRestoreBehavior()` and `selectClusterRestoreMode()` → `applyClusterRestoreChoice()`
+   in `restore_workflow_ui_plan.go`; SAFE redirect via `RestorePlan.ApplyClusterSafeMode()` →
+   `redirectClusterCategoryToExport()` in `restore_archive.go`):
+   - Detect cluster payload in backup (`plan.ClusterBackup && plan.NeedsClusterRestore`)
    - Prompt user: SAFE (export+API) vs RECOVERY (full restore)
-   - Redirect pve_cluster to export-only if SAFE mode selected
-   - `promptClusterRestoreMode()` function
+   - SAFE mode redirects pve_cluster to export-only
 
-4. **Category Split & Plan** (Lines 118-137):
-   - Split normal vs export-only categories
-   - `splitExportCategories()`, `redirectClusterCategoryToExport()`
-   - Show restore plan and confirm
+4. **Plan confirmation** (`confirmRestorePlan()` in `restore_workflow_ui_plan.go`, called from
+   `runSelectiveRestore()` before any writes):
+   - Show the final restore plan
+   - User confirms (or aborts) before any data is written
 
-5. **Safety Backup** (Lines 139-156):
+5. **Safety Backup** (`createRollbackBackups()` in `restore_workflow_ui_backups_services.go`
+   → `CreateSafetyBackup()` in `backup_safety.go`):
    - Backup files to be overwritten
    - Handle backup failures
 
-6. **PVE Service Management** (Lines 158-179):
+6. **PVE Service Management** (`prepareRestoreServices()` → `preparePVEClusterRestore()`
+   in `restore_workflow_ui_backups_services.go` → `stopPVEClusterServices()` /
+   `unmountEtcPVE()` / `startPVEClusterServices()` in `restore_services.go`):
    - Detect cluster restore need (RECOVERY mode)
    - Stop PVE services: pve-cluster, pvedaemon, pveproxy, pvestatd
    - Unmount /etc/pve
    - Defer restart
 
-7. **PBS Service Management** (Lines 181-204):
+7. **PBS Service Management** (`preparePBSServices()` in
+   `restore_workflow_ui_backups_services.go` → `stopPBSServices()` / `startPBSServices()`
+   in `restore_services.go`):
    - Detect PBS-specific category restore need
    - Stop PBS services: proxmox-backup-proxy, proxmox-backup
    - Prompt to continue if stop fails
    - Defer restart
 
-8. **File Extraction** (Lines 206-239):
+8. **File Extraction** (`prepareAndRestoreSelectedPayloads()` → `extractNormalCategories()` /
+   `exportCategories()` in `restore_workflow_ui_extract.go`; engine `extractSelectiveArchive()`
+   in `restore_archive.go` → `extractArchiveNative()` in `restore_archive_extract.go`):
    - Extract normal categories to /
    - Extract export categories to timestamped directory
    - Handle extraction errors
 
-9. **pvesh SAFE Apply** (Lines 241-248):
+9. **pvesh SAFE Apply** (`runClusterSafeApply()` in `restore_workflow_ui_extract.go` →
+   `runSafeClusterApplyWithUI()` in `restore_workflow_ui_cluster_apply.go`, which drives
+   `safeClusterApplyUIFlow.run()`; the standalone `runSafeClusterApply()` in
+   `restore_cluster_apply.go` is the CLI wrapper, not used by this workflow):
    - If SAFE cluster mode selected
-   - `runSafeClusterApply()` function
    - Apply VM/CT configs, storage.cfg, datacenter.cfg via API
 
-10. **Post-Restore** (Lines 250-303):
+10. **Post-Restore** (`runPostRestoreApplyWorkflows()` in `restore_workflow_ui_run.go` →
+    `recreateStorageDirectories()` / `applyNetworkConfig()` / `applyFirewallConfig()` /
+    `applyHAConfig()`; then `logRestoreCompletion()` and `checkZFSPoolsAfterRestore()`):
     - Recreate storage/datastore directories
     - Check ZFS pools (PBS only)
     - Display completion summary
