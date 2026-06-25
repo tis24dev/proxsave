@@ -665,7 +665,9 @@ func (c *Config) parseStorageSettings() {
 	if c.CloudParallelJobs <= 0 {
 		c.CloudParallelJobs = 1
 	}
-	c.CloudParallelVerify = c.getBool("CLOUD_PARALLEL_VERIFICATION", false)
+	// Default true to match the shipped template and the documentation ("Also
+	// verify each associated/sidecar file"); set false (or 0/no/off) to disable.
+	c.CloudParallelVerify = c.getBool("CLOUD_PARALLEL_VERIFICATION", true)
 	c.CloudWriteHealthCheck = c.getBool("CLOUD_WRITE_HEALTHCHECK", false)
 	c.CloudVerifyChecksum = c.getBool("CLOUD_VERIFY_CHECKSUM", true)
 	c.CloudVerifyDownload = c.getBool("CLOUD_VERIFY_DOWNLOAD", false)

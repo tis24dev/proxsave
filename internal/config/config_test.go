@@ -294,6 +294,33 @@ func TestCloudUploadModeDefault(t *testing.T) {
 	}
 }
 
+func TestCloudParallelVerificationDefault(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "absent defaults to true", content: "# no verification key\n", want: true},
+		{name: "explicit false", content: "CLOUD_PARALLEL_VERIFICATION=false\n", want: false},
+		{name: "explicit true", content: "CLOUD_PARALLEL_VERIFICATION=true\n", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "verify.env")
+			if err := os.WriteFile(configPath, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := LoadConfigWithBaseDir(configPath, "/custom/base")
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if cfg.CloudParallelVerify != tt.want {
+				t.Errorf("CloudParallelVerify = %v; want %v", cfg.CloudParallelVerify, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfigAgeRecipients(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "age.env")
