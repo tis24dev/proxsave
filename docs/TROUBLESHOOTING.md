@@ -36,12 +36,11 @@ This guide covers the most common issues encountered when using Proxsave, along 
 
 #### Error: `go: cannot find main module`
 
-**Cause**: Not in project root directory, or `go.mod` missing.
+**Cause**: Not running from the project root directory (where `go.mod` lives).
 
 **Solution**:
 ```bash
-cd /opt/proxsave  # Ensure you're in project root
-go mod init github.com/tis24dev/proxsave
+cd /opt/proxsave  # Ensure you're in project root (go.mod ships with the repo)
 go mod tidy
 make build
 ```
