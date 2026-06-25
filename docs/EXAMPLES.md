@@ -65,14 +65,14 @@ COMPRESSION_MODE=standard
 MAX_LOCAL_BACKUPS=15
 
 # Run backup
-./build/proxsave
+proxsave
 ```
 
 ### Setup Steps
 
 ```bash
 # 1. Install
-./build/proxsave --install
+proxsave --install
 # (use --new-install to wipe everything except build/, env/, and identity/ before installing)
 
 # 2. Edit configuration
@@ -80,10 +80,10 @@ nano configs/backup.env
 # (paste configuration above)
 
 # 3. Test
-./build/proxsave --dry-run
+proxsave --dry-run
 
 # 4. Run first backup
-./build/proxsave
+proxsave
 ```
 
 ### Cron Schedule
@@ -138,7 +138,7 @@ MAX_LOCAL_BACKUPS=7        # 1 week local (SSD expensive)
 MAX_SECONDARY_BACKUPS=30   # 1 month secondary (NAS cheap)
 
 # Run backup
-./build/proxsave
+proxsave
 ```
 
 ### Setup Steps
@@ -159,11 +159,11 @@ chmod 700 /mnt/nas/pbs-backup /mnt/nas/pbs-log
 touch /mnt/nas/pbs-backup/test.txt && rm /mnt/nas/pbs-backup/test.txt
 
 # 4. Configure and run
-./build/proxsave --install
+proxsave --install
 # (use --new-install if you want to reset the install dir first, keeping build/, env/, and identity/)
 # (paste configuration above)
-./build/proxsave --dry-run
-./build/proxsave
+proxsave --dry-run
+proxsave
 ```
 
 ### Expected Results
@@ -237,10 +237,10 @@ RETENTION_YEARLY=3
 
 ```bash
 # Dry-run
-./build/proxsave --dry-run
+proxsave --dry-run
 
 # Real backup
-./build/proxsave
+proxsave
 
 # Verify
 rclone ls gdrive:pbs-backups/
@@ -278,7 +278,7 @@ rclone ls gdrive:/pbs-logs/
 #### Step 1: Generate Encryption Key
 
 ```bash
-./build/proxsave --newkey
+proxsave --newkey
 
 # Wizard:
 # [2] Generate from personal passphrase
@@ -309,7 +309,7 @@ MAX_CLOUD_BACKUPS=30
 #### Step 3: Run Backup
 
 ```bash
-./build/proxsave
+proxsave
 
 # Result (with bundling enabled): pve01-backup-20240115-020000.tar.xz.age.bundle.tar
 ```
@@ -317,7 +317,7 @@ MAX_CLOUD_BACKUPS=30
 #### Step 4: Decrypt (when needed)
 
 ```bash
-./build/proxsave --decrypt
+proxsave --decrypt
 
 # Select backup: [1]
 # Destination: /tmp/decrypt
@@ -547,7 +547,7 @@ WEBHOOK_PUSHOVER_AUTH_USER=<pushover-user-or-group-key>
 WEBHOOK_PUSHOVER_PRIORITY=0
 
 # Run backup
-./build/proxsave
+proxsave
 # Result: Notifications sent to Telegram, Email, Discord, and Pushover
 ```
 
@@ -717,7 +717,7 @@ CUSTOM_BACKUP_PATHS="
 "
 
 # Run backup
-./build/proxsave
+proxsave
 ```
 
 ### Cron Schedule
@@ -891,10 +891,10 @@ BACKUP_ENABLED=true
 mount /dev/vg0/snap /mnt/snapshot-root   # example
 
 # 2) Run a dry-run
-SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxsave --dry-run
+SYSTEM_ROOT_PREFIX=/mnt/snapshot-root proxsave --dry-run
 
 # 3) Run the actual backup (optional)
-SYSTEM_ROOT_PREFIX=/mnt/snapshot-root ./build/proxsave
+SYSTEM_ROOT_PREFIX=/mnt/snapshot-root proxsave
 ```
 
 ### Expected Results

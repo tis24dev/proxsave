@@ -295,7 +295,7 @@ pvecm status
 cd /opt/proxsave
 
 # Run restore
-./build/proxsave --restore
+proxsave --restore
 ```
 
 #### Step 3: Interactive Selection
@@ -451,7 +451,7 @@ hostname
 
 # 2. Run restore (STORAGE or FULL mode)
 cd /opt/proxsave
-./build/proxsave --restore
+proxsave --restore
 # Select: [2] STORAGE only
 # This restores cluster config, storage, ZFS
 
@@ -731,7 +731,7 @@ pvesm status
 ```bash
 # Use CUSTOM mode to restore only specific categories
 cd /opt/proxsave
-./build/proxsave --restore
+proxsave --restore
 
 # Select: [4] CUSTOM selection
 # Toggle:
@@ -815,7 +815,7 @@ pvecm add <working-node-ip>
 ```bash
 # 1. Create fresh backup
 cd /opt/proxsave
-./build/proxsave
+proxsave
 
 # 2. Document configuration
 pvecm status > /root/old-cluster-status.txt
@@ -858,7 +858,7 @@ mv /root/*.bundle.tar /opt/proxsave/backup/
 
 # 3. Run restore
 cd /opt/proxsave
-./build/proxsave --restore
+proxsave --restore
 
 # Select: [2] STORAGE only (or FULL)
 # Type "RESTORE" to confirm
@@ -984,7 +984,7 @@ reboot
 
 # 4. Run restore normally
 cd /opt/proxsave
-./build/proxsave --restore
+proxsave --restore
 ```
 
 ### Option B: Update Configuration After Restore
@@ -996,7 +996,7 @@ cd /opt/proxsave
 ```bash
 # Run restore (will work despite hostname mismatch)
 cd /opt/proxsave
-./build/proxsave --restore
+proxsave --restore
 
 # Select: [2] STORAGE only
 # Continue even though hostname differs

@@ -35,7 +35,7 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 
 ```bash
 # Use custom config file
-./build/proxsave --config /path/to/my-backup.env
+proxsave --config /path/to/my-backup.env
 ```
 
 ---

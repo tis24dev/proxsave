@@ -1538,7 +1538,7 @@ For PBS datastores whose paths live under typical mount roots (for example `/mnt
 - **`chattr +i` fallback** (used only when a bind mount cannot be created): the immutable flag is set on the mountpoint *directory inode*. Mounting the real storage on top later still works, **but the immutable flag remains on the shadowed directory and is NOT removed by a reboot.** ProxSave records each such mountpoint under `/var/lib/proxsave/guards/chattr-targets` so cleanup can reverse it.
 
 Optional maintenance:
-- `./build/proxsave --cleanup-guards` (preview with `--dry-run`) unmounts guard bind mounts **and** clears the recorded `chattr +i` immutable flags — but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). The guard directory and its index are kept until nothing is pending.
+- `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts guard bind mounts **and** clears the recorded `chattr +i` immutable flags — but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). The guard directory and its index are kept until nothing is pending.
 - To clear an immutable flag on a mountpoint whose storage is already mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
 - If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave no longer has a record to clear: check with `lsattr -d <mountpoint>` and clear it yourself with `chattr -i <mountpoint>` while the storage is unmounted.
 
@@ -1979,13 +1979,13 @@ func TestPathMatchesCategory(t *testing.T) {
 # Test full restore workflow
 
 # 1. Create test backup
-./build/proxsave
+proxsave
 
 # 2. Modify system files
 echo "test" > /etc/hostname
 
 # 3. Run restore (with test responses)
-echo -e "1\n1\n1\nRESTORE\n" | ./build/proxsave --restore
+echo -e "1\n1\n1\nRESTORE\n" | proxsave --restore
 
 # 4. Verify restoration
 if grep -q "original-hostname" /etc/hostname; then
@@ -2024,7 +2024,7 @@ func (m *MockServiceManager) Stop(service string) error {
 
 ```bash
 # Set log level to debug
-./build/proxsave --restore --log-level=debug
+proxsave --restore --log-level=debug
 ```
 
 ### Review Detailed Logs

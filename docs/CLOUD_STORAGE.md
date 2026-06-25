@@ -654,7 +654,7 @@ This creates a temporary test file (`.pbs-backup-healthcheck-<timestamp>`) and d
 
 ```bash
 # Run with debug level
-./build/proxsave --log-level debug
+proxsave --log-level debug
 
 # Or set in config
 nano configs/backup.env
@@ -674,7 +674,7 @@ DEBUG_LEVEL=extreme
 grep -E "^CLOUD_|^RCLONE_" /opt/proxsave/configs/backup.env
 
 # Test with dry-run
-./build/proxsave --dry-run --log-level debug
+proxsave --dry-run --log-level debug
 # Check output for loaded config values
 ```
 
