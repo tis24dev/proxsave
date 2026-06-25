@@ -101,7 +101,7 @@ make build
 ```bash
 # Run installer to create config
 ./build/proxsave --install
-# For a clean reinstall (keeps env/ and identity/), run:
+# For a clean reinstall (keeps build/, env/, and identity/), run:
 # ./build/proxsave --new-install
 
 # Or copy template manually

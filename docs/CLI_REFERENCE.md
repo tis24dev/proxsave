@@ -623,7 +623,7 @@ Some log lines use a label to make the output easier to scan:
 # First-time installation
 ./build/proxsave --install
 
-# Full reset + installation (preserves env/identity)
+# Full reset + installation (preserves build/env/identity)
 ./build/proxsave --new-install
 
 # Upgrade binary to latest release
@@ -790,7 +790,7 @@ crontab -e
 # First-time setup
 ./build/proxsave --install
 
-# Full reset (preserve env/identity) then setup
+# Full reset (preserve build/env/identity) then setup
 ./build/proxsave --new-install
 
 # Upgrade binary to latest version

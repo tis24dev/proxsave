@@ -160,7 +160,7 @@ touch /mnt/nas/pbs-backup/test.txt && rm /mnt/nas/pbs-backup/test.txt
 
 # 4. Configure and run
 ./build/proxsave --install
-# (use --new-install if you want to reset the install dir first, keeping env/identity)
+# (use --new-install if you want to reset the install dir first, keeping build/, env/, and identity/)
 # (paste configuration above)
 ./build/proxsave --dry-run
 ./build/proxsave
