@@ -127,17 +127,17 @@ Completion Summary
 | File | Purpose | Key Functions |
 |------|---------|---------------|
 | `cmd/proxsave/main.go` | Entry point, CLI parsing | `main()`, flag handling |
-| `internal/orchestrator/restore.go` | Main orchestration | `RunRestoreWorkflow()` |
-| `internal/orchestrator/categories.go` | Category definitions | `AllCategories()`, `PathMatchesCategory()` |
-| `internal/orchestrator/selective.go` | Category selection UI | `SelectRestoreMode()`, `ShowRestorePlan()` |
+| `internal/orchestrator/restore.go` | Entry stub (body in `restore_workflow_ui_run.go`) | `RunRestoreWorkflow()` |
+| `internal/orchestrator/categories.go` | Category definitions | `GetAllCategories()`, `PathMatchesCategory()` |
+| `internal/orchestrator/selective.go` | Category selection/plan UI | `ShowRestoreModeMenuWithReader()`, `ShowRestorePlan()` |
 | `internal/orchestrator/decrypt.go` | Decryption workflow | `prepareDecryptedBackup()` |
 | `internal/orchestrator/compatibility.go` | System validation | `ValidateCompatibility()` |
 | `internal/orchestrator/backup_safety.go` | Safety backups | `CreateSafetyBackup()` |
 | `internal/orchestrator/directory_recreation.go` | Storage setup | `RecreateDirectoriesFromConfig()` |
 
-### File: cmd/proxsave/main.go
+### File: cmd/proxsave/main_restore_decrypt.go
 
-**Lines 562-578**: Entry point for restore flag
+**`runRestoreCLI()` / `runRestoreTUI()`**: Entry point for the restore flag
 
 ```go
 if args.Restore {
@@ -278,26 +278,26 @@ type Category struct {
 
 **Key Functions**:
 
-1. **`AllCategories()`** (Lines 16-162):
+1. **`GetAllCategories()`** (`categories.go`):
    - Returns complete list of 15+ categories
    - Hardcoded category definitions
    - Each category includes ID, name, description, paths
 
-2. **`PathMatchesCategory()`** (Lines 263-292):
+2. **`PathMatchesCategory()`** (`categories.go`):
    - Check if archive path belongs to category
    - Handles exact matches and directory prefixes
    - Path normalization
 
-3. **`GetCategoriesForMode()`** (Lines 283-316):
+3. **`GetCategoriesForMode()`** (`selective.go`):
    - Return categories for restore mode
    - Filters export-only categories
    - Mode-specific category lists
 
-4. **`GetStorageModeCategories()`** (Lines 322-344):
+4. **`GetStorageModeCategories()`** (`categories.go`):
    - PVE: cluster, storage, jobs, zfs
    - PBS: config, datastore, jobs, zfs
 
-5. **`GetBaseModeCategories()`** (Lines 346-359):
+5. **`GetBaseModeCategories()`** (`categories.go`):
    - Common categories only
    - Network, SSL, SSH, services
 
@@ -313,25 +313,29 @@ type Category struct {
 
 **Key Functions**:
 
-1. **`SelectRestoreMode()`** (Lines 124-167):
+1. **`ShowRestoreModeMenuWithReader()`** (`selective.go`):
    - Display mode menu
    - Get user selection
    - Return RestoreMode enum
+   - Reached via the `RestoreWorkflowUI.SelectRestoreMode()` interface (CLI/TUI implementations)
 
-2. **`SelectCategoriesInteractive()`** (Lines 169-281):
+2. **`ShowCategorySelectionMenuWithReader()`** (`selective.go`):
    - Display checkbox menu
    - Toggle category selection
-   - Commands: number, 'a', 'n', 'c', '0'
+   - Commands: number, 'a', 'n', 'c', 'b', '0'
+   - Reached via the `RestoreWorkflowUI.SelectCategories()` interface
 
-3. **`ShowRestorePlan()`** (Lines 336-391):
+3. **`ShowRestorePlan()`** (`selective.go`):
    - Display selected categories
    - Show file paths to be restored
    - Display warnings
+   - Reached via the `RestoreWorkflowUI.ShowRestorePlan()` interface
 
-4. **`ConfirmRestorePlan()`** (Lines 393-417):
-   - User must type "RESTORE"
-   - Case-sensitive
-   - Returns error if not confirmed
+4. **`ConfirmRestoreOperationWithReader()`** (`selective.go`):
+   - User must type "RESTORE" (case-sensitive); "cancel"/"0" aborts
+   - Reached via the `RestoreWorkflowUI.ConfirmRestore()` interface, orchestrated by the
+     workflow method `confirmRestorePlan()` in `restore_workflow_ui_plan.go`
+   - CLI flow is two-stage: confirm ("RESTORE") then an overwrite "yes"/"no" prompt
 
 ### File: internal/orchestrator/decrypt.go
 
@@ -339,29 +343,29 @@ type Category struct {
 
 **Key Functions**:
 
-1. **`prepareDecryptedBackup()`** (Lines 484-496):
-   - Entry point for decryption workflow
+1. **`prepareDecryptedBackup()`** (`decrypt.go`):
+   - Entry point for the CLI decryption workflow
    - Delegates to selection and decryption
 
-2. **`SelectAndPrepareBackup()`** (Lines 166-203):
+2. **`prepareRestoreBundleWithUI()` / `selectBackupCandidateWithUI()`** (`restore_workflow_ui.go`, `decrypt_workflow_ui.go`):
    - Display configured paths
    - User selects location
    - Scans for backups
 
-3. **`DiscoverBackups()`** (Lines 234-308):
+3. **`discoverBackupCandidates()`** (`backup_sources.go`):
    - Find .bundle.tar files
    - Parse manifests
    - Sort by creation date
 
-4. **`SelectSpecificBackup()`** (Lines 344-377):
+4. **`selectBackupCandidateWithUI()`** (`decrypt_workflow_ui.go`):
    - Display backup list with metadata
    - User selects by number
 
-5. **`DecryptIfNeeded()`** (Lines 399-482):
+5. **`preparePlainBundleCommon()` / `preparePlainBundleWithUI()`** (`decrypt_prepare_common.go`, `decrypt_workflow_ui.go`):
    - Check encryption status
    - Prompt for key/passphrase
    - Decrypt to /tmp
-   - Verify checksum
+   - Verify checksum (`verifyStagedArchiveIntegrity()` in `decrypt_integrity.go`)
 
 ---
 
@@ -371,13 +375,11 @@ type Category struct {
 
 #### Phase 1: Initialization
 
-**File**: `cmd/proxsave/main.go:562-578`
+**File**: `cmd/proxsave/main_restore_decrypt.go` (`runRestoreCLI()` / `runRestoreTUI()`)
 
 ```go
-if args.Restore {
-    // Call orchestrator
-    err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, version)
-}
+// runRestoreCLI dispatches to the orchestrator
+err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, version)
 ```
 
 **Inputs**:
@@ -396,21 +398,17 @@ if args.Restore {
 **File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `prepareBundle()`
 
 ```go
-prepared, err := prepareDecryptedBackup(ctx, cfg, logger)
+candidate, prepared, err := prepareRestoreBundleFunc(ctx, cfg, logger, version, ui)
 if err != nil {
     return err
 }
 // cleanup deferred
-defer func() {
-    if prepared.CleanupFunc != nil {
-        prepared.CleanupFunc()
-    }
-}()
+defer prepared.Cleanup()
 ```
 
 **Sub-phases**:
 
-1. **Path Selection** (`decrypt.go:166-203`):
+1. **Path Selection** (`selectBackupCandidateWithUI()` in `decrypt_workflow_ui.go`):
    ```go
    Select backup source:
      [1] Primary: /opt/proxsave/backup
@@ -418,16 +416,16 @@ defer func() {
      [3] Cloud: /mnt/cloud-backups
    ```
 
-2. **Backup Discovery** (`decrypt.go:234-308`):
+2. **Backup Discovery** (`discoverBackupCandidates()` in `backup_sources.go`):
    - Scan for `.bundle.tar` files
    - Parse JSON manifests
    - Extract metadata (date, encryption, version)
 
-3. **Backup Selection** (`decrypt.go:344-377`):
+3. **Backup Selection** (`selectBackupCandidateWithUI()` in `decrypt_workflow_ui.go`):
    - Display sorted list (newest first)
    - User selects by index
 
-4. **Decryption** (`decrypt.go:399-482`):
+4. **Decryption** (`preparePlainBundleCommon()` in `decrypt_prepare_common.go`):
    - Check if encrypted (manifest)
    - Prompt for AGE key/passphrase
    - Decrypt to `/tmp/proxsave/proxmox-decrypt-<random>/`
@@ -435,10 +433,12 @@ defer func() {
 
 **Data Structure**:
 ```go
-type PreparedBackup struct {
-    ArchivePath  string        // Path to plaintext archive
-    Manifest     *Manifest     // Parsed metadata
-    CleanupFunc  func()        // Cleanup temporary files
+type preparedBundle struct {
+    ArchivePath    string         // Path to plaintext archive
+    Manifest       backup.Manifest // Parsed metadata
+    Checksum       string         // Plaintext archive checksum
+    SourceChecksum string         // Pre-decrypt integrity value
+    cleanup        func()         // Cleanup temporary files (via Cleanup())
 }
 ```
 
@@ -518,7 +518,8 @@ availableCategories, err := AnalyzeBackupCategories(
 )
 ```
 
-**Implementation** (`selective.go:24-89`):
+**Implementation** (`AnalyzeBackupCategories()` in `selective.go`, a thin wrapper over
+`AnalyzeRestoreArchive()` in `restore_decision.go`):
 
 ```go
 func AnalyzeBackupCategories(
@@ -541,7 +542,7 @@ func AnalyzeBackupCategories(
     }
 
     // 3. Check each category for matches
-    categories := AllCategories()
+    categories := GetAllCategories()
     for i := range categories {
         for _, path := range allPaths {
             if PathMatchesCategory(path, categories[i]) {
@@ -563,7 +564,7 @@ func AnalyzeBackupCategories(
 }
 ```
 
-**Path Matching** (`categories.go:263-292`):
+**Path Matching** (`PathMatchesCategory()` in `categories.go`):
 ```go
 func PathMatchesCategory(filePath string, category Category) bool {
     // Normalize paths to start with "./"
@@ -597,27 +598,22 @@ func PathMatchesCategory(filePath string, category Category) bool {
 **File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `selectRestorePlan()`
 
 ```go
-// Split categories
-normalCategories, exportCategories := splitExportCategories(selectedCategories)
+// Pick the mode and the categories (GetCategoriesForMode for FULL/STORAGE/BASE,
+// or the interactive SelectCategories for CUSTOM)
+categories, mode, err := w.selectModeAndCategories()
 
-// Select restore mode
-mode, err := SelectRestoreMode(systemType)
+// Build the plan; PlanRestore splits the selection 3-way via splitRestoreCategories
+// (normal / staged / export-only)
+w.plan = PlanRestore(w.decisionInfo.ClusterPayload, categories, w.systemType, mode)
 
-// Get categories for mode (or custom selection)
-selectedCategories, err := GetCategoriesForModeOrCustom(
-    mode, systemType, availableCategories,
-)
-
-// Show restore plan
-ShowRestorePlan(selectedCategories, systemType, mode)
-
-// Confirm
-if err := ConfirmRestorePlan(); err != nil {
-    return ErrRestoreAborted
+// Later, in runSelectiveRestore(), the plan is shown and confirmed:
+//   confirmRestorePlan() -> ui.ShowRestorePlan() + ui.ConfirmRestore()
+if err := w.confirmRestorePlan(); err != nil {
+    return err // ErrRestoreAborted on cancel
 }
 ```
 
-**Mode Selection UI** (`selective.go:124-167`):
+**Mode Selection UI** (`ShowRestoreModeMenuWithReader()` in `selective.go`):
 ```
 Select restore mode:
   [1] FULL restore - Restore everything from backup
@@ -629,7 +625,7 @@ Select restore mode:
 Your selection: _
 ```
 
-**Custom Selection UI** (`selective.go:169-281`):
+**Custom Selection UI** (`ShowCategorySelectionMenuWithReader()` in `selective.go`):
 ```
 Available categories:
   [1] [ ] PVE Cluster Configuration
@@ -668,7 +664,7 @@ if len(normalCategories) > 0 {
 }
 ```
 
-**Implementation** (`backup_safety.go:24-104`):
+**Implementation** (`CreateSafetyBackup()` in `backup_safety.go`):
 
 ```go
 func CreateSafetyBackup(
@@ -870,29 +866,21 @@ func extractSelectiveArchive(
     categories []Category,
     mode RestoreMode,
     logger *logging.Logger,
-) (string, error) {
-    // Create log file
-    logPath := filepath.Join(
-        "/tmp/proxsave",
-        fmt.Sprintf("restore_%s.log", time.Now().Format("20060102_150405")),
-    )
-    logFile, _ := os.Create(logPath)
-    defer logFile.Close()
-
-    // Call native extraction
-    err := extractArchiveNative(
-        ctx,
-        archivePath,
-        destRoot,
-        logger,
-        categories,
-        mode,
-        logFile,
-        logPath,
-        nil, // skipFn (optional)
-    )
-
-    return logPath, err
+) (logPath string, err error) {
+    // Thin wrapper over extractSelectiveArchiveStrict(..., failOnPartial=false),
+    // which creates the detailed log under /tmp/proxsave and then calls
+    // extractArchiveNative with a restoreArchiveOptions struct:
+    //
+    //   err := extractArchiveNative(ctx, restoreArchiveOptions{
+    //       archivePath: archivePath,
+    //       destRoot:    destRoot,
+    //       logger:      logger,
+    //       categories:  categories,
+    //       mode:        mode,
+    //       logFile:     logFile,
+    //       logFilePath: logPath,
+    //   })
+    return extractSelectiveArchiveStrict(ctx, archivePath, destRoot, categories, mode, logger, false)
 }
 ```
 
@@ -951,7 +939,7 @@ const (
 
 ### Path Matching Algorithm
 
-**File**: `internal/orchestrator/categories.go:263-292`
+**File**: `internal/orchestrator/categories.go` (`PathMatchesCategory()`)
 
 ```go
 func PathMatchesCategory(filePath string, category Category) bool {
@@ -1162,12 +1150,13 @@ The `ClusterMode` field in the backup manifest determines restore behavior:
 | `"standalone"` or empty | Standalone | NO | Direct database restore |
 | `"cluster"` | Cluster | YES | SAFE or RECOVERY choice |
 
-**ClusterMode is set during backup** in `bash.go`:
+**ClusterMode is set during backup** in `backup_run_helpers.go` (`standaloneClusterMode()`):
 ```go
-if stats.IsPVEClusterNode {
-    stats.ClusterMode = "cluster"
-} else {
-    stats.ClusterMode = "standalone"
+func standaloneClusterMode(collector *backup.Collector) string {
+    if collector.IsClusteredPVE() {
+        return "cluster"
+    }
+    return "standalone"
 }
 ```
 
@@ -1262,27 +1251,27 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 **Decompression** (`internal/orchestrator/restore_decompression.go` → `createDecompressionReader()`):
 
 ```go
-func createDecompressionReader(file *os.File, archivePath string) (io.Reader, error) {
+func createDecompressionReader(ctx context.Context, file *os.File, archivePath string) (io.ReadCloser, error) {
     switch {
     case strings.HasSuffix(archivePath, ".tar.gz"),
          strings.HasSuffix(archivePath, ".tgz"):
         return gzip.NewReader(file)  // Native Go
 
     case strings.HasSuffix(archivePath, ".tar.xz"):
-        return createXZReader(file)  // External: xz command
+        return createXZReader(ctx, file)  // External: xz command
 
     case strings.HasSuffix(archivePath, ".tar.zst"),
          strings.HasSuffix(archivePath, ".tar.zstd"):
-        return createZstdReader(file)  // External: zstd command
+        return createZstdReader(ctx, file)  // External: zstd command
 
     case strings.HasSuffix(archivePath, ".tar.bz2"):
-        return createBzip2Reader(file)  // External: bzip2 command
+        return createBzip2Reader(ctx, file)  // External: bzip2 command
 
     case strings.HasSuffix(archivePath, ".tar.lzma"):
-        return createLzmaReader(file)  // External: lzma command
+        return createLzmaReader(ctx, file)  // External: lzma command
 
     case strings.HasSuffix(archivePath, ".tar"):
-        return file, nil  // No decompression
+        return io.NopCloser(file), nil  // No decompression
 
     default:
         return nil, fmt.Errorf("unsupported format: %s", archivePath)
@@ -1295,20 +1284,10 @@ func createDecompressionReader(file *os.File, archivePath string) (io.Reader, er
 **File**: `internal/orchestrator/restore_archive_extract.go` → `extractArchiveNative()`
 
 ```go
-func extractArchiveNative(
-    ctx context.Context,
-    archivePath string,
-    destRoot string,
-    logger *logging.Logger,
-    categories []Category,
-    mode RestoreMode,
-    logFile *os.File,
-    logFilePath string,
-    skipFn func(entryName string) bool,
-) error {
+func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) error {
     // 1. Open archive with decompression
-    file, _ := os.Open(archivePath)
-    reader, _ := createDecompressionReader(file, archivePath)
+    file, _ := restoreFS.Open(opts.archivePath)
+    reader, _ := createDecompressionReader(ctx, file, opts.archivePath)
     tarReader := tar.NewReader(reader)
 
     // 2. Iterate through TAR entries
@@ -1318,31 +1297,30 @@ func extractArchiveNative(
             break
         }
 
-        // 3. Category filtering (if selective mode)
-        if selectiveMode {
-            shouldExtract := false
-            for _, cat := range categories {
-                if PathMatchesCategory(header.Name, cat) {
-                    shouldExtract = true
-                    break
-                }
-            }
-
-            if !shouldExtract {
-                filesSkipped++
-                continue
+        // 3. Category filtering
+        shouldExtract := false
+        for _, cat := range opts.categories {
+            if PathMatchesCategory(header.Name, cat) {
+                shouldExtract = true
+                break
             }
         }
+        if !shouldExtract {
+            filesSkipped++
+            continue
+        }
 
-        // 4. Security checks
-        target := filepath.Join(destRoot, header.Name)
-        if !isSecurePath(target, destRoot) {
+        // 4. Security checks: the real code resolves and validates the target via
+        //    sanitizeRestoreEntryTargetWithFS() (restore_archive_paths.go), which
+        //    rejects path traversal and symlink escapes outside destRoot.
+        target, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, opts.destRoot, header.Name)
+        if err != nil {
             return fmt.Errorf("illegal path: %s", header.Name)
         }
 
-        // 5. /etc/pve hard guard
-        if destRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
-            logger.Warning("Skipping %s (writes to /etc/pve prohibited)", target)
+        // 5. /etc/pve hard guard (exact match or under /etc/pve/)
+        if opts.destRoot == "/" && (target == "/etc/pve" || strings.HasPrefix(target, "/etc/pve/")) {
+            opts.logger.Warning("Skipping %s (writes to /etc/pve prohibited)", target)
             continue
         }
 
@@ -1481,7 +1459,10 @@ func setTimestamps(target string, header *tar.Header) error {
 **Security Check** (`internal/orchestrator/restore_archive_paths.go` → `sanitizeRestoreEntryTargetWithFS()`):
 
 ```go
-func isSecurePath(target string, destRoot string) bool {
+// Simplified illustration of the containment check. The real implementation is
+// ensureRestoreTargetWithinRoot() in restore_archive_paths.go, which returns an
+// error (not a bool) and is invoked by sanitizeRestoreEntryTargetWithFS().
+func targetWithinRoot(target string, destRoot string) bool {
     cleanTarget := filepath.Clean(target)
     cleanDestRoot := filepath.Clean(destRoot)
 
@@ -1590,7 +1571,7 @@ if destRoot == "/" && os.Geteuid() != 0 {
 
 ### 6. Checksum Verification
 
-**After Decryption** (`decrypt.go:272-289`):
+**Archive integrity check** (`verifyStagedArchiveIntegrity()` / `resolveIntegrityExpectationValues()` in `decrypt_integrity.go`):
 
 ```go
 // Verify checksum if available
@@ -1626,20 +1607,20 @@ if checksumFile exists {
 6. **Compatibility warning**: Type `no`
 7. **Any time**: Press Ctrl+C
 
-**Confirmation Pattern** (`selective.go:393-417`):
+**Confirmation Pattern** (`ConfirmRestoreOperationWithReader()` in `selective.go`):
 
 ```go
-func ConfirmRestorePlan(reader *bufio.Reader) error {
+func ConfirmRestoreOperationWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger) (bool, error) {
     fmt.Print(`Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort: `)
 
     response, _ := reader.ReadString('\n')
     response = strings.TrimSpace(response)
 
     if response == "RESTORE" {
-        return nil
+        return true, nil
     }
 
-    return ErrRestoreAborted
+    return false, nil
 }
 ```
 
@@ -1729,11 +1710,7 @@ func RunRestoreWorkflow(...) error {
     }
 
     // Schedule cleanup (ALWAYS executes)
-    defer func() {
-        if prepared.CleanupFunc != nil {
-            prepared.CleanupFunc()
-        }
-    }()
+    defer prepared.Cleanup()
 
     // ... restore operations ...
     // Even if restore fails, cleanup executes
@@ -1768,8 +1745,8 @@ const (
 **Step 2**: Add to menu
 
 ```go
-// File: internal/orchestrator/selective.go
-func SelectRestoreMode(systemType SystemType) (RestoreMode, error) {
+// File: internal/orchestrator/selective.go (the menu rendered behind RestoreWorkflowUI.SelectRestoreMode)
+func ShowRestoreModeMenuWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
     fmt.Println("Select restore mode:")
     fmt.Println("  [1] FULL restore")
     fmt.Println("  [2] STORAGE only")
@@ -1783,7 +1760,7 @@ func SelectRestoreMode(systemType SystemType) (RestoreMode, error) {
 **Step 3**: Implement category selection
 
 ```go
-// File: internal/orchestrator/categories.go
+// File: internal/orchestrator/selective.go
 func GetCategoriesForMode(mode RestoreMode, ...) []Category {
     switch mode {
     // ... existing cases ...
