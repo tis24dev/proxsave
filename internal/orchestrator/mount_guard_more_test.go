@@ -616,6 +616,7 @@ func TestMaybeApplyPBSDatastoreMountGuards_FullFlow(t *testing.T) {
 	logger := newTestLogger()
 	ctx := context.Background()
 	plan := &RestorePlan{SystemType: SystemTypePBS, NormalCategories: []Category{{ID: "datastore_pbs"}}}
+	withTempGuardBaseDir(t) // keep the chattr index off the real /var/lib/proxsave
 
 	origGeteuid := mountGuardGeteuid
 	origReadFile := mountGuardReadFile
@@ -799,13 +800,7 @@ func TestMaybeApplyPBSDatastoreMountGuards_FullFlow(t *testing.T) {
 				return []byte("mount: failed"), errors.New("mount failed")
 			}
 		case "chattr":
-			if len(args) != 2 || args[0] != "+i" {
-				return nil, fmt.Errorf("unexpected chattr args: %v", args)
-			}
-			target := filepath.Clean(args[1])
-			if target == "/mnt/chattrfail" {
-				return nil, errors.New("chattr failed")
-			}
+			t.Errorf("warn-only fallback must not invoke chattr; got args=%v", args)
 			return nil, nil
 		default:
 			return nil, fmt.Errorf("unexpected command: %s", name)

@@ -30,7 +30,7 @@ Proxsave integrates with [rclone](https://rclone.org/) to provide seamless cloud
 - **Bandwidth management**: Upload rate limiting for shared networks
 - **Parallel/sequential modes**: Optimize for network speed and API limits
 - **GFS retention**: Advanced retention policies applied to cloud backups
-- **Verification**: SHA256 checksum validation after upload
+- **Verification**: size check plus SHA256 checksum comparison after upload (falls back to size-only on backends without a native SHA256)
 
 ---
 
@@ -73,7 +73,7 @@ Proxsave uses a **3-tier storage system**:
 3. Upload to cloud (rclone)        ○ Optional (warn on failure)
    ├─> Parallel mode: 2-4 jobs concurrently
    ├─> Sequential mode: One at a time
-   ├─> Verification: SHA256 checksum
+   ├─> Verification: size + SHA256 (size-only fallback if backend lacks native hash)
    └─> Retry: 3 attempts with backoff
 
 4. Apply retention policies        ✓ Per-tier retention
@@ -110,10 +110,10 @@ sudo cp rclone-*/rclone /usr/local/bin/
 sudo chmod 755 /usr/local/bin/rclone
 
 # Verify
-rclone version  # Should show v1.50+
+rclone version  # Should show v1.60+
 ```
 
-**Minimum version**: rclone v1.50+
+**Minimum version**: rclone v1.60+
 **Recommended version**: Latest stable (v1.65+)
 
 ---
@@ -346,6 +346,8 @@ CLOUD_LOG_PATH=/proxsave/log         # Optional: log folder inside the same remo
 CLOUD_UPLOAD_MODE=parallel
 CLOUD_PARALLEL_MAX_JOBS=2
 CLOUD_PARALLEL_VERIFICATION=true
+CLOUD_VERIFY_CHECKSUM=true
+CLOUD_VERIFY_DOWNLOAD=false
 
 # Timeouts
 RCLONE_TIMEOUT_CONNECTION=30
@@ -381,14 +383,16 @@ RETENTION_YEARLY=3
 | `CLOUD_LOG_PATH` | _(empty)_ | Optional log folder (recommended: path-only on the same remote; use `otherremote:/path` only when using a different remote) |
 | `CLOUD_UPLOAD_MODE` | `parallel` | `parallel` or `sequential` |
 | `CLOUD_PARALLEL_MAX_JOBS` | `2` | Max concurrent uploads (parallel mode) |
-| `CLOUD_PARALLEL_VERIFICATION` | `true` | Verify checksums after upload |
+| `CLOUD_PARALLEL_VERIFICATION` | `true` | Also verify each associated/sidecar file (in parallel) |
+| `CLOUD_VERIFY_CHECKSUM` | `true` | Compare remote SHA256 to the local checksum after upload; size-only fallback when the backend has no native hash |
+| `CLOUD_VERIFY_DOWNLOAD` | `false` | When the backend lacks native SHA256, download the object and hash it locally (uses bandwidth) |
 | `CLOUD_WRITE_HEALTHCHECK` | `false` | Use write test for connectivity check |
 | `RCLONE_TIMEOUT_CONNECTION` | `30` | Per-command timeout (seconds). Also used by restore/decrypt cloud scan (`rclone lsf` + per-backup manifest/metadata read). |
 | `RCLONE_TIMEOUT_OPERATION` | `300` | Operation timeout (seconds) |
 | `RCLONE_BANDWIDTH_LIMIT` | _(empty)_ | Upload rate limit (e.g., `5M` = 5 MB/s) |
 | `RCLONE_TRANSFERS` | `4` | Number of parallel transfers |
 | `RCLONE_RETRIES` | `3` | Retry attempts on failure |
-| `RCLONE_VERIFY_METHOD` | `primary` | Verification method |
+| `RCLONE_VERIFY_METHOD` | `primary` | How the remote object is located for verification: `primary` (`rclone lsl`) or `alternative` (`rclone ls`). The SHA256 comparison (see `CLOUD_VERIFY_CHECKSUM`) runs on top of either. |
 | `CLOUD_BATCH_SIZE` | `20` | Files per batch (deletion) |
 | `CLOUD_BATCH_PAUSE` | `1` | Seconds between batches |
 | `MAX_CLOUD_BACKUPS` | `30` | Simple retention (ignored if GFS enabled) |
@@ -650,7 +654,7 @@ This creates a temporary test file (`.pbs-backup-healthcheck-<timestamp>`) and d
 
 ```bash
 # Run with debug level
-./build/proxsave --log-level debug
+proxsave --log-level debug
 
 # Or set in config
 nano configs/backup.env
@@ -670,7 +674,7 @@ DEBUG_LEVEL=extreme
 grep -E "^CLOUD_|^RCLONE_" /opt/proxsave/configs/backup.env
 
 # Test with dry-run
-./build/proxsave --dry-run --log-level debug
+proxsave --dry-run --log-level debug
 # Check output for loaded config values
 ```
 

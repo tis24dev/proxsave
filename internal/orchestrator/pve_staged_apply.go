@@ -343,14 +343,33 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 			continue
 		}
 
-		if err := os.MkdirAll(guardTarget, 0o750); err != nil {
+		// Resolve symlinks and re-check the allowlist BEFORE any mkdir / mount /
+		// activate / RO bind / chattr +i, so a parent-component symlink cannot make
+		// the guard escape the datastore roots (mirrors the cleanup path; shared
+		// helper). Fail-safe on an unresolvable path or an escape: skip.
+		resolved, _, ok, resErr := resolveGuardTargetWithinAllowlist(guardTarget)
+		if resErr != nil {
+			if logger != nil {
+				logger.Warning("PVE mount guard: cannot resolve %s: %v; skipping guard (fail-safe)", guardTarget, resErr)
+			}
+			continue
+		}
+		if !ok {
+			if logger != nil {
+				logger.Warning("PVE mount guard: %s resolves outside the datastore roots (%s); skipping guard (fail-safe)", guardTarget, resolved)
+			}
+			continue
+		}
+		guardTarget = resolved
+
+		if err := mountGuardMkdirAll(guardTarget, 0o750); err != nil {
 			if logger != nil {
 				logger.Warning("PVE mount guard: unable to create mountpoint directory %s: %v", guardTarget, err)
 			}
 			continue
 		}
 
-		onRootFS, _, devErr := isPathOnRootFilesystem(guardTarget)
+		onRootFS, _, devErr := mountGuardIsPathOnRootFilesystem(guardTarget)
 		if devErr != nil {
 			if logger != nil {
 				logger.Warning("PVE mount guard: unable to determine filesystem device for %s: %v", guardTarget, devErr)
@@ -377,7 +396,7 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 		cancel()
 
 		if attemptErr == nil {
-			onRootFSNow, _, devErrNow := isPathOnRootFilesystem(guardTarget)
+			onRootFSNow, _, devErrNow := mountGuardIsPathOnRootFilesystem(guardTarget)
 			if devErrNow == nil && !onRootFSNow {
 				if logger != nil {
 					logger.Info("PVE mount guard: mountpoint %s is now mounted (activation/mount attempt succeeded)", guardTarget)
@@ -401,17 +420,18 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 		}
 
 		if err := guardMountPoint(ctx, guardTarget); err != nil {
+			// Warn-only fallback: ProxSave no longer sets a persistent chattr +i here
+			// (it survived reboots and re-blocked writes once the storage was later
+			// unmounted). The config-only restore never extracts into datastore
+			// mountpoints and ProxSave's own dir recreation is skipped by the
+			// storage-mount preflight, so this only leaves EXTERNAL writers unblocked
+			// while the storage is offline. Legacy flags are still cleared by
+			// --cleanup-guards.
 			if logger != nil {
-				logger.Warning("PVE mount guard: failed to bind-mount guard on %s: %v; falling back to chattr +i", guardTarget, err)
-			}
-			if _, fallbackErr := restoreCmd.Run(ctx, "chattr", "+i", guardTarget); fallbackErr != nil {
-				if logger != nil {
-					logger.Warning("PVE mount guard: failed to set immutable attribute on %s: %v", guardTarget, fallbackErr)
-				}
-				continue
-			}
-			if logger != nil {
-				logger.Warning("PVE mount guard: %s resolves to root filesystem (mount missing?) — marked immutable (chattr +i) to prevent writes until storage is available", guardTarget)
+				logger.Warning("PVE mount guard: could NOT guard offline mountpoint %s (read-only bind mount failed: %v). "+
+					"Writes there while the storage is offline are not blocked and would land on the root filesystem. "+
+					"Remedy: activate/mount the storage (e.g. `pvesm activate <storage>` or `mount %s` / `zpool import`) before any guest or job uses it.",
+					guardTarget, err, guardTarget)
 			}
 			continue
 		}

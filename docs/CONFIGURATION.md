@@ -35,7 +35,7 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 
 ```bash
 # Use custom config file
-./build/proxsave --config /path/to/my-backup.env
+proxsave --config /path/to/my-backup.env
 ```
 
 ---
@@ -153,8 +153,9 @@ SUSPICIOUS_PROCESSES="ncat,cryptominer,xmrig,kdevtmpfsi,kinsing,minerd,mr.sh"
 # Built-in defaults for SAFE_BRACKET_PROCESSES: sshd:, systemd, cron, rsyslogd, dbus-daemon, zvol_tq*, arc_*, dbu_*, dbuf_*, l2arc_feed, lockd, nfsd*, nfsv4 callback*
 SAFE_BRACKET_PROCESSES="sshd:,systemd,cron,rsyslogd,dbus-daemon"
 
-# Built-in defaults for SAFE_KERNEL_PROCESSES: ksgxd, hwrng, usb-storage, vdev_autotrim, card1-crtc0, card1-crtc1, card1-crtc2, kvm-pit*, and various regex patterns
-SAFE_KERNEL_PROCESSES="ksgxd,hwrng,usb-storage,vdev_autotrim,card1-crtc0,card1-crtc1,card1-crtc2,kvm-pit,regex:^card[0-9]+-crtc[0-9]+$,regex:^drbd_[wrs]_.+,regex:^kvm-pit/[0-9]+$,regex:^kmmpd-drbd[0-9]+$"
+# Built-in defaults for SAFE_KERNEL_PROCESSES: ksgxd, hwrng, usb-storage, vdev_autotrim, card1-crtc0, card1-crtc1, card1-crtc2, kvm-pit*, psimon, regex:^kvm-pit/[0-9]+$, regex:^worker/.+-drbd_as_pm-.*
+# Your entries are ADDED to those defaults; the value below is just an example of extra patterns.
+SAFE_KERNEL_PROCESSES="regex:^card[0-9]+-crtc[0-9]+$,regex:^drbd_[wrs]_.+,regex:^kmmpd-drbd[0-9]+$"
 
 # Allowlist for the suspicious-process scan ONLY (no built-in defaults; purely user-driven).
 # This list does NOT silence the bracketed "kernel-style" warning above; use
@@ -540,8 +541,14 @@ CLOUD_UPLOAD_MODE=parallel         # sequential | parallel
 # Parallel worker count
 CLOUD_PARALLEL_MAX_JOBS=2          # Workers for associated files
 
-# Verify files in parallel
+# Verify associated/sidecar files in parallel
 CLOUD_PARALLEL_VERIFICATION=true   # true | false
+
+# Compare remote SHA256 to the local checksum after upload
+CLOUD_VERIFY_CHECKSUM=true         # true | false (size-only fallback when the backend has no native hash)
+
+# Force download-and-hash when the backend lacks a native SHA256
+CLOUD_VERIFY_DOWNLOAD=false        # true | false (uses bandwidth)
 
 # Preflight connectivity check
 CLOUD_WRITE_HEALTHCHECK=false      # true | false (auto-fallback mode vs force write test)
@@ -679,8 +686,12 @@ RCLONE_FLAGS="--checkers=4 --stats=0 --drive-use-trash=false --drive-pacer-min-s
 
 ### Verification Methods
 
+`RCLONE_VERIFY_METHOD` selects only *how the remote object is located* for verification:
+
 - **primary**: Uses `rclone lsl <file>` (fast, direct)
 - **alternative**: Uses `rclone ls <directory>` then searches (slower, compatible with all remotes)
+
+Independently, when `CLOUD_VERIFY_CHECKSUM=true` (default) ProxSave compares the remote object's SHA256 to the local archive after the size check. If the backend cannot produce a native SHA256, it falls back to size-only verification (logged at debug; it never fails a good upload nor changes its exit code). Set `CLOUD_VERIFY_DOWNLOAD=true` to instead download the object and hash it locally on such backends (uses bandwidth).
 
 ---
 

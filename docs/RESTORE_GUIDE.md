@@ -25,7 +25,7 @@ PVE+PBS backups using the interactive restore workflow.
 
 ```bash
 # Run the interactive restore workflow
-./build/proxsave --restore
+proxsave --restore
 
 # Follow the prompts:
 # 1. Select backup source location
@@ -1091,7 +1091,7 @@ After Restore:
 pvecm delnode <this-node-name>
 
 # Perform restore
-./build/proxsave --restore
+proxsave --restore
 
 # After restore: Rejoin cluster (if applicable)
 # Or accept this node as new standalone cluster
@@ -1103,7 +1103,7 @@ pvecm delnode <this-node-name>
 systemctl stop corosync
 
 # On PRIMARY node: Perform restore
-./build/proxsave --restore
+proxsave --restore
 
 # On PRIMARY node: Restart corosync
 systemctl start corosync
@@ -1119,7 +1119,7 @@ pvecm add <primary-node-ip>
 # (Disconnect network cable or firewall rules)
 
 # Perform restore on isolated node
-./build/proxsave --restore
+proxsave --restore
 
 # Test recovered configuration
 # Verify all services working
@@ -1518,7 +1518,7 @@ These configurations are included in every backup and can be restored using **th
 
 1. **Run restore workflow**:
    ```bash
-   ./build/proxsave --restore
+   proxsave --restore
    ```
 
 2. **Select backup and decrypt** (standard workflow)
@@ -1609,7 +1609,7 @@ https://your-pve:8006
 
 1. **Run restore and select pve_config_export category**:
    ```bash
-   ./build/proxsave --restore
+   proxsave --restore
    # Select "Custom" mode
    # Enable "PVE Config Export" category
    ```
@@ -2011,16 +2011,22 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 - Absolute prevention of `/etc/pve` corruption
 
 **PBS Datastore Mount Guards**:
-- When restoring PBS datastore definitions, ProxSave can apply a temporary mount guard (read-only bind mount; fallback `chattr +i`) on mount roots that currently resolve to the root filesystem.
+- When restoring PBS datastore definitions, ProxSave can apply a temporary read-only bind-mount guard on mount roots that currently resolve to the root filesystem. If the bind mount cannot be created, it logs a warning and proceeds unguarded (no persistent `chattr +i` flag is set).
 - Purpose: prevent accidental writes to `/` if a datastore mountpoint is missing/offline at restore time (PBS will show the datastore as unavailable until storage is mounted).
-- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview).
+- Optional cleanup: `proxsave --cleanup-guards` (use `--dry-run` to preview). See **Clearing mount guards after the storage is back** below.
 
 **PVE Storage Mount Guards**:
 - When restoring PVE storage definitions (from `storage.cfg`), ProxSave applies the same “restore even if offline” strategy for mount-backed storage:
-  - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use mountpoints under `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary mount guard (read-only bind mount; fallback `chattr +i`).
+  - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use mountpoints under `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary read-only bind-mount guard (or, if the bind mount cannot be created, logs a warning and proceeds unguarded).
   - `dir` storages are guarded only when their `path` lives under a mountpoint restored via `/etc/fstab` (to avoid guarding local root filesystem paths).
 - Purpose: prevent PVE from writing into `/mnt/pve/...` (or other mount roots) when the backing storage is offline at restore time.
-- Optional cleanup: `./build/proxsave --cleanup-guards` (use `--dry-run` to preview).
+- Optional cleanup: `proxsave --cleanup-guards` (use `--dry-run` to preview). See **Clearing mount guards after the storage is back** below.
+
+**Clearing mount guards after the storage is back**:
+- Bringing the storage online again is enough to *use* it: a real mount stacks on top of a bind-mount guard automatically. The guard is not deleted, only shadowed — a reboot or `--cleanup-guards` removes the bind-mount leftover. A **legacy** `chattr +i` flag (set by older versions when a bind mount failed) leaves the directory immutable across reboots until it is cleared.
+- `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode); it prints a summary of what was cleared vs left pending. The guard directory is kept until nothing is pending.
+- To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left to clear: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
 ### 7. Service Management Fail-Fast
 
@@ -2106,10 +2112,10 @@ Services stopped → Defer restart scheduled → Restore → (Failure) → Defer
 
 **Solution**:
 ```bash
-sudo ./build/proxsave --restore
+sudo proxsave --restore
 # Or
 su -
-./build/proxsave --restore
+proxsave --restore
 ```
 
 ---
@@ -2162,7 +2168,7 @@ vi /opt/proxsave/configs/backup.env
 ```bash
 # Retry with correct passphrase
 # Or use AGE identity file instead
-./build/proxsave --restore
+proxsave --restore
 # Select option [2] Use AGE identity file
 ```
 
@@ -2374,8 +2380,10 @@ zpool import <pool-name>
 # - Datastore definitions are applied even if the underlying storage is offline/not mounted (PBS will show them as unavailable),
 #   so you do not lose datastore entries after a restore.
 # - If a datastore path looks like a mount-root location (e.g. under `/mnt`) but currently resolves to the root filesystem,
-#   ProxSave applies a temporary **mount guard** (read-only bind mount; fallback `chattr +i`) on the mount root to prevent writes to `/`
-#   until the storage becomes available. When the real storage is mounted later, it overlays the guard and the datastore becomes available.
+#   ProxSave applies a temporary read-only **bind-mount guard** on the mount root to prevent writes to `/` until the storage becomes available.
+#   If the bind mount cannot be created, ProxSave logs a warning and proceeds unguarded (no persistent flag is set).
+#   A bind-mount guard is shadowed when the real storage mounts on top (and is cleared by a reboot or --cleanup-guards).
+#   Older versions set a chattr +i fallback that persisted across reboots; --cleanup-guards still clears any such legacy flags (or clear manually with chattr -i while unmounted).
 # - If the datastore path is not empty and contains unexpected files/directories (not a PBS datastore), ProxSave will defer that datastore block
 #   and save it under `/tmp/proxsave/datastore.cfg.deferred.*` for manual review.
 # - ProxSave does not format disks or import ZFS pools: mount/import the underlying storage first, then restart PBS.
@@ -2383,8 +2391,8 @@ ls -ld /mnt/datastore /mnt/datastore/<DatastoreName> 2>/dev/null
 namei -l /mnt/datastore/<DatastoreName> 2>/dev/null || true
 
 # If you need to remove ProxSave mount guards (optional / troubleshooting, run as root):
-./build/proxsave --cleanup-guards --dry-run
-./build/proxsave --cleanup-guards
+proxsave --cleanup-guards --dry-run
+proxsave --cleanup-guards
 
 # Common fix (adjust to your datastore path)
 chown backup:backup /mnt/datastore && chmod 750 /mnt/datastore
@@ -2596,7 +2604,7 @@ A: Yes, two approaches:
 **Approach 2: Decrypt-only mode**
 ```bash
 # Decrypt without restoring
-./build/proxsave --decrypt
+proxsave --decrypt
 
 # Manually inspect decrypted files
 tar -tzf /path/to/decrypted.tar.gz | less
@@ -2649,7 +2657,7 @@ A: Full procedure:
 hostnamectl set-hostname <original-hostname>
 
 # 3. Run restore
-./build/proxsave --restore
+proxsave --restore
 # Select: STORAGE mode or Custom (include pve_cluster)
 
 # 4. Verify services
@@ -2683,7 +2691,7 @@ reboot
 **Option 2: Update cluster config after restore**
 ```bash
 # Restore as normal (hostname will mismatch)
-./build/proxsave --restore
+proxsave --restore
 
 # Update corosync configuration
 vi /etc/pve/corosync.conf
@@ -2765,7 +2773,7 @@ A: Not directly. Categories are the smallest granularity.
 **Workaround**:
 ```bash
 # Use --decrypt to create plaintext archive
-./build/proxsave --decrypt
+proxsave --decrypt
 
 # Manually extract specific files
 tar -xzf /path/to/decrypted.tar.gz ./specific/file/path

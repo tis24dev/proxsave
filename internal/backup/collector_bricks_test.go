@@ -123,6 +123,33 @@ func TestRunRecipePropagatesContextCancellation(t *testing.T) {
 	}
 }
 
+// TestUserHomesBrickCollectsUnconditionally locks in that /home user-home
+// collection has no config toggle: the brick always runs and collects /home,
+// regardless of which collection options are set (the removed BACKUP_USER_HOMES).
+func TestUserHomesBrickCollectsUnconditionally(t *testing.T) {
+	collector := newTestCollector(t)
+	root := t.TempDir()
+	collector.config.SystemRootPrefix = root
+	writeRootFile(t, root, "home/alice/note.txt", "note\n", 0o644)
+
+	bricks := newSystemHomeCollectionBricks()
+	var userHomes *collectionBrick
+	for i := range bricks {
+		if bricks[i].ID == brickSystemUserHomes {
+			userHomes = &bricks[i]
+			break
+		}
+	}
+	if userHomes == nil {
+		t.Fatal("brickSystemUserHomes not found in system home bricks")
+	}
+
+	if err := userHomes.Run(context.Background(), &collectionState{collector: collector}); err != nil {
+		t.Fatalf("user homes brick failed: %v", err)
+	}
+	assertFileExists(t, filepath.Join(collector.tempDir, "home/alice/note.txt"))
+}
+
 func TestPVEGuestBrickPropagatesQEMUContextCancellation(t *testing.T) {
 	cfg := &CollectorConfig{
 		BackupVMConfigs: true,

@@ -13,6 +13,7 @@ textual restore rules.
 - [Two-Pass Extraction](#two-pass-extraction)
 - [Cluster Database Restore Sequence](#cluster-database-restore-sequence)
 - [Error Handling Flow](#error-handling-flow)
+- [PBS Datastore Mount Guards](#pbs-datastore-mount-guards)
 
 ---
 
@@ -689,6 +690,58 @@ flowchart TD
     style ProceedAnyway fill:#FFD700
     style Abort fill:#FFB6C1
 ```
+
+---
+
+## PBS Datastore Mount Guards
+
+When restoring PBS configuration, a datastore's backing mount may be **offline**
+(not yet mounted). Without protection, restoring the datastore layout — or PBS
+starting afterwards — would write into the empty mount-point directory on the
+**root filesystem**, filling `/` and creating a "ghost" datastore. The mount
+guard blocks that path until the real storage is back.
+
+```mermaid
+flowchart TD
+    Start([Apply PBS datastore guards<br/>Clean 1:1 restore]) --> Each{For each staged<br/>datastore mount target}
+    Each --> Valid{In fstab + valid target?}
+    Valid -->|No| Skip[Leave unguarded]
+    Valid -->|Yes| Root{Mount-point dir on the ROOT<br/>filesystem? i.e. real mount offline}
+    Root -->|No, real mount present| NoOp[No-op]
+    Root -->|Yes| Try{Real storage mounts now?}
+    Try -->|Yes| NoOp
+    Try -->|No| Bind[Bind-mount empty read-only guard dir<br/>RO + nodev + nosuid + noexec]
+    Bind -->|success| Guarded[Path guarded:<br/>writes cannot land on root FS]
+    Bind -->|bind unavailable| Warn[Warn-only: log that the mountpoint<br/>is unguarded; no persistent flag set]
+
+    style Start fill:#87CEEB
+    style Guarded fill:#90EE90
+    style NoOp fill:#90EE90
+    style Warn fill:#FFD700
+    style Skip fill:#FFB6C1
+```
+
+**Auto-restore (shadowing)**: when the real datastore mount comes back online it
+stacks **on top of** the guard (overlay), so the datastore is usable again — but
+the guard is only **shadowed**, not removed.
+
+**Warn-only fallback**: if the read-only bind mount cannot be created, ProxSave logs
+a warning and proceeds **without** a persistent guard. Older versions set a
+`chattr +i` immutable flag here; it survived reboots and could silently re-block the
+mountpoint once the storage was later unmounted, so it was removed.
+
+**Cleanup** (`proxsave --cleanup-guards`):
+- bind-mount guards are unmounted (they also disappear on reboot);
+- **legacy** `chattr +i` immutable flags (from older versions) are cleared, but
+  **skipped while the target is masked by a real mount** (clearing would touch the
+  mounted filesystem);
+- a summary line reports unmounted / hidden-remaining / immutable-cleared /
+  immutable-pending.
+
+Code: `internal/orchestrator/mount_guard.go` (`guardMountPoint` →
+`bindReadOnlyGuard`), `mount_guard_apply.go`
+(`maybeApplyPBSDatastoreMountGuards` → `protectOfflineTarget`), and
+`guards_cleanup.go` (`CleanupMountGuards`).
 
 ---
 

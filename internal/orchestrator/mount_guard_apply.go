@@ -128,6 +128,20 @@ func (a *pbsMountGuardApply) applyDatastoreBlock(block pbsDatastoreBlock) {
 	if !a.shouldProtectTarget(guardTarget) {
 		return
 	}
+	// Resolve symlinks and re-check the allowlist BEFORE any mkdir / mount / RO
+	// bind / chattr +i, so a parent-component symlink cannot make the guard escape
+	// the datastore roots (mirrors the cleanup path; shared helper). Fail-safe on
+	// an unresolvable path or an escape: skip, never act outside the allowlist.
+	resolved, _, ok, err := resolveGuardTargetWithinAllowlist(guardTarget)
+	if err != nil {
+		a.warning("PBS mount guard: cannot resolve %s: %v; skipping guard (fail-safe)", guardTarget, err)
+		return
+	}
+	if !ok {
+		a.warning("PBS mount guard: %s resolves outside the datastore roots (%s); skipping guard (fail-safe)", guardTarget, resolved)
+		return
+	}
+	guardTarget = resolved
 	if !a.prepareOfflineGuardTarget(guardTarget) {
 		return
 	}
@@ -229,7 +243,7 @@ func (a *pbsMountGuardApply) logMountAttemptFailure(mountCtx context.Context, gu
 func (a *pbsMountGuardApply) protectOfflineTarget(guardTarget string) {
 	a.info("PBS mount guard: mountpoint %s offline, applying guard bind mount", guardTarget)
 	if err := guardMountPoint(a.ctx, guardTarget); err != nil {
-		a.protectOfflineTargetWithChattr(guardTarget, err)
+		a.warnOfflineTargetUnguarded(guardTarget, err)
 		return
 	}
 
@@ -240,14 +254,21 @@ func (a *pbsMountGuardApply) protectOfflineTarget(guardTarget string) {
 	a.warning("PBS mount guard: %s resolves to root filesystem (mount missing?) — bind-mounted a read-only guard to prevent writes until storage is available", guardTarget)
 }
 
-func (a *pbsMountGuardApply) protectOfflineTargetWithChattr(guardTarget string, bindErr error) {
-	a.warning("PBS mount guard: failed to bind-mount guard on %s: %v; falling back to chattr +i", guardTarget, bindErr)
-	if _, err := restoreCmd.Run(a.ctx, "chattr", "+i", guardTarget); err != nil {
-		a.warning("PBS mount guard: failed to set immutable attribute on %s: %v", guardTarget, err)
-		return
-	}
-	a.protected[guardTarget] = struct{}{}
-	a.warning("PBS mount guard: %s resolves to root filesystem (mount missing?) — marked immutable (chattr +i) to prevent writes until storage is available", guardTarget)
+// warnOfflineTargetUnguarded is the warn-only fallback for when the read-only
+// bind-mount guard cannot be created. ProxSave deliberately no longer sets a
+// persistent `chattr +i` here: that immutable flag survived reboots and became a
+// latent landmine that re-blocked writes once the storage was later unmounted
+// (and could only be cleared while unmounted). ProxSave's own directory
+// recreation on this mountpoint is still skipped by the storage-mount preflight
+// (shouldSkipUnmountedStorageMount), and the config-only restore never extracts
+// into datastore mountpoints, so this only means EXTERNAL writers are not blocked
+// while the storage is offline. CleanupMountGuards still clears any legacy
+// chattr +i flags recorded by older ProxSave versions.
+func (a *pbsMountGuardApply) warnOfflineTargetUnguarded(guardTarget string, bindErr error) {
+	a.warning("PBS mount guard: could NOT guard offline mountpoint %s (read-only bind mount failed: %v). "+
+		"Writes there while the storage is offline are not blocked and would land on the root filesystem. "+
+		"Remedy: mount the storage / import the pool (e.g. `mount %s` or `zpool import`) before PBS or any job uses it.",
+		guardTarget, bindErr, guardTarget)
 }
 
 func (a *pbsMountGuardApply) debug(format string, args ...interface{}) {

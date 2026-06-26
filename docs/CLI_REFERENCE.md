@@ -23,7 +23,7 @@ The binary `/opt/proxsave/build/proxsave` supports multiple operation modes thro
 
 **Command structure**:
 ```bash
-./build/proxsave [FLAGS] [OPTIONS]
+proxsave [FLAGS] [OPTIONS]
 ```
 
 **Configuration precedence** (highest to lowest):
@@ -55,10 +55,10 @@ Some interactive commands support two interface modes:
 **Example**:
 ```bash
 # TUI mode (default) - full terminal interface
-./build/proxsave --install
+proxsave --install
 
 # CLI mode - text prompts only
-./build/proxsave --install --cli
+proxsave --install --cli
 ```
 
 **Note**: The `--cli` flag **only works** with the 5 commands listed above. All other commands always use CLI mode (no TUI alternative exists).
@@ -71,23 +71,23 @@ Some interactive commands support two interface modes:
 
 ```bash
 # Run backup with default config
-./build/proxsave
+proxsave
 
 # Use custom config file
-./build/proxsave --config /path/to/config.env
-./build/proxsave -c /path/to/config.env
+proxsave --config /path/to/config.env
+proxsave -c /path/to/config.env
 
 # Dry-run mode (test without changes)
-./build/proxsave --dry-run
-./build/proxsave -n
+proxsave --dry-run
+proxsave -n
 
 # Show version
-./build/proxsave --version
-./build/proxsave -v
+proxsave --version
+proxsave -v
 
 # Show help
-./build/proxsave --help
-./build/proxsave -h
+proxsave --help
+proxsave -h
 ```
 
 ### Flag Reference
@@ -107,25 +107,25 @@ Some interactive commands support two interface modes:
 
 ```bash
 # Interactive installation wizard (TUI mode - default)
-./build/proxsave --install
+proxsave --install
 
 # Interactive installation wizard (CLI mode - for debugging)
-./build/proxsave --install --cli
+proxsave --install --cli
 
 # Clean reinstall (wipes install dir except build/env/identity, then runs wizard)
-./build/proxsave --new-install
+proxsave --new-install
 
 # Clean reinstall with CLI mode
-./build/proxsave --new-install --cli
+proxsave --new-install --cli
 ```
 
 **Interface modes**:
 ```bash
 # TUI mode (default) - terminal interface
-./build/proxsave --install
+proxsave --install
 
 # CLI mode - text prompts (for debugging)
-./build/proxsave --install --cli
+proxsave --install --cli
 ```
 
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
@@ -156,10 +156,10 @@ Some interactive commands support two interface modes:
 
 ```bash
 # Upgrade configuration file from embedded template
-./build/proxsave --upgrade-config
+proxsave --upgrade-config
 
 # Preview configuration upgrade (dry-run)
-./build/proxsave --upgrade-config-dry-run
+proxsave --upgrade-config-dry-run
 ```
 
 **`--upgrade-config` use case**: After installing a new binary version, this command merges your current configuration with the latest embedded template, preserving your values while adding new options.
@@ -178,14 +178,14 @@ Some interactive commands support two interface modes:
 
 ```bash
 # Upgrade binary to latest version
-./build/proxsave --upgrade
+proxsave --upgrade
 
 # Non-interactive upgrade (auto-confirm)
-./build/proxsave --upgrade y
+proxsave --upgrade y
 
 # Full upgrade including configuration
-./build/proxsave --upgrade
-./build/proxsave --upgrade-config
+proxsave --upgrade
+proxsave --upgrade-config
 ```
 
 **`--upgrade` use case**: Update ProxSave binary to the latest version from GitHub releases while preserving your configuration and backup data. The upgrade process is safe and atomic, with checksum verification and automatic permission fixes.
@@ -204,7 +204,7 @@ Some interactive commands support two interface modes:
 **Post-upgrade steps**:
 1. New config template keys are merged into `backup.env` automatically (existing and custom values preserved; previous file backed up)
 2. Run `--upgrade-config` only to re-run that merge without upgrading the binary
-3. Test functionality with dry-run: `./build/proxsave --dry-run`
+3. Test functionality with dry-run: `proxsave --dry-run`
 4. Verify backups continue to work as expected
 5. Check cron schedule was preserved: `crontab -l`
 
@@ -223,16 +223,16 @@ See also: [upgrading configuration](#configuration-upgrade)
 
 ```bash
 # Migrate legacy Bash backup.env to Go configuration (pure migration)
-./build/proxsave --env-migration --old-env /opt/proxsave/env/backup.env
+proxsave --env-migration --old-env /opt/proxsave/env/backup.env
 
 # Or let the wizard prompt for the legacy path
-./build/proxsave --env-migration
+proxsave --env-migration
 
 # Preview migration without making changes (dry-run)
-./build/proxsave --env-migration-dry-run --old-env /opt/proxsave/env/backup.env
+proxsave --env-migration-dry-run --old-env /opt/proxsave/env/backup.env
 
 # Or with interactive prompt
-./build/proxsave --env-migration-dry-run
+proxsave --env-migration-dry-run
 ```
 
 **`--env-migration` use case**: Pure configuration migration from a legacy Bash `backup.env` to the Go configuration file, using migration rules to translate variable names and semantics.
@@ -277,7 +277,7 @@ See also: [upgrading configuration](#configuration-upgrade)
 1. Review `configs/backup.env` for SEMANTIC CHANGE warnings
 2. Manually convert storage thresholds: `%` used → `GB` free
 3. Verify cloud path format: full path → prefix only
-4. Test with dry-run: `./build/proxsave --dry-run`
+4. Test with dry-run: `proxsave --dry-run`
 5. Check output for configuration warnings
 
 **Example dry-run output** (`--env-migration-dry-run`):
@@ -315,7 +315,7 @@ Backup saved to: /opt/proxsave/configs/backup.env.bak-20251117-143022
 ⚠ IMPORTANT: Review SEMANTIC CHANGE variables before running backup!
 See migration documentation for conversion details.
 
-Next step: ./build/proxsave --dry-run
+Next step: proxsave --dry-run
 ```
 
 ### Flag Reference
@@ -339,20 +339,20 @@ Next step: ./build/proxsave --dry-run
 
 ```bash
 # Generate new AGE encryption key (TUI mode - default)
-./build/proxsave --newkey
-./build/proxsave --age-newkey  # Alias
+proxsave --newkey
+proxsave --age-newkey  # Alias
 
 # Generate new AGE encryption key (CLI mode - for debugging)
-./build/proxsave --newkey --cli
+proxsave --newkey --cli
 ```
 
 **Interface modes**:
 ```bash
 # TUI mode (default) - terminal interface
-./build/proxsave --newkey
+proxsave --newkey
 
 # CLI mode - text prompts (for debugging or when TUI rendering is unavailable)
-./build/proxsave --newkey --cli
+proxsave --newkey --cli
 ```
 
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
@@ -373,19 +373,19 @@ Next step: ./build/proxsave --dry-run
 
 ```bash
 # Decrypt existing backup archive (TUI mode - default)
-./build/proxsave --decrypt
+proxsave --decrypt
 
 # Decrypt existing backup archive (CLI mode - for debugging)
-./build/proxsave --decrypt --cli
+proxsave --decrypt --cli
 ```
 
 **Interface modes**:
 ```bash
 # TUI mode (default) - terminal interface
-./build/proxsave --decrypt
+proxsave --decrypt
 
 # CLI mode - text prompts (for debugging)
-./build/proxsave --decrypt --cli
+proxsave --decrypt --cli
 ```
 
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
@@ -415,19 +415,19 @@ Next step: ./build/proxsave --dry-run
 
 ```bash
 # Restore data from backup to system (TUI mode - default)
-./build/proxsave --restore
+proxsave --restore
 
 # Restore data from backup to system (CLI mode - for debugging)
-./build/proxsave --restore --cli
+proxsave --restore --cli
 ```
 
 **Interface modes**:
 ```bash
 # TUI mode (default) - terminal interface
-./build/proxsave --restore
+proxsave --restore
 
 # CLI mode - text prompts (for debugging)
-./build/proxsave --restore --cli
+proxsave --restore --cli
 ```
 
 **Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
@@ -482,17 +482,22 @@ Next step: ./build/proxsave --dry-run
 
 ### Cleanup Mount Guards (Optional)
 
-During some restores (notably PBS datastores on mountpoints under `/mnt`), ProxSave may apply **mount guards** to prevent accidental writes to `/` when the underlying storage is offline/not mounted yet.
+During some restores (notably PBS datastores and PVE network storages on mountpoints under `/mnt`), ProxSave may apply a **read-only bind-mount guard** over a mountpoint to prevent accidental writes to `/` when the underlying storage is offline/not mounted yet. If the bind mount cannot be created, ProxSave logs a warning and proceeds unguarded — it no longer sets a persistent `chattr +i` immutable flag (older versions did; that flag survived reboots and could silently re-block the mountpoint when the storage was later unmounted).
 
-If you want to remove those guards manually (optional):
+`--cleanup-guards` unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags left by older versions. For safety it only acts on mountpoints that are **not currently mounted** (a real mount on top shadows the guard; clearing it then would touch the wrong inode), prints a summary (unmounted / hidden-remaining / immutable-cleared / immutable-pending), and keeps the guard directory until nothing is pending.
 
 ```bash
 # Preview (no changes)
-./build/proxsave --cleanup-guards --dry-run --log-level debug
+proxsave --cleanup-guards --dry-run --log-level debug
 
 # Apply cleanup (requires root)
-./build/proxsave --cleanup-guards
+proxsave --cleanup-guards
 ```
+
+Notes:
+- Bringing the storage back online is enough to *use* it again (a real mount stacks on top of the guard automatically); `--cleanup-guards` just removes the leftover guard. A bind-mount guard also clears on reboot. A legacy `chattr +i` flag does **not** clear on reboot — it persists until cleared.
+- To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
 ## Logging
 
@@ -500,8 +505,8 @@ If you want to remove those guards manually (optional):
 
 ```bash
 # Set log level
-./build/proxsave --log-level debug
-./build/proxsave -l info    # debug|info|warning|error|critical
+proxsave --log-level debug
+proxsave -l info    # debug|info|warning|error|critical
 ```
 
 **Log level descriptions**:
@@ -552,7 +557,7 @@ Some log lines use a label to make the output easier to scan:
 
 ```bash
 # Run in support mode: force DEBUG logging and send log to developer
-./build/proxsave --support
+proxsave --support
 ```
 
 **Support mode workflow**:
@@ -592,23 +597,23 @@ Some log lines use a label to make the output easier to scan:
 
 ```bash
 # Standard backup
-./build/proxsave
+proxsave
 
 # Dry-run with debug logging
-./build/proxsave --dry-run --log-level debug
+proxsave --dry-run --log-level debug
 
 # Use custom config
-./build/proxsave -c /etc/proxmox-backup/prod.env
+proxsave -c /etc/proxmox-backup/prod.env
 
 # Generate encryption keys
-./build/proxsave --newkey
+proxsave --newkey
 
 # Decrypt specific backup
-./build/proxsave --decrypt
+proxsave --decrypt
 # ... follow interactive prompts ...
 
 # Full restore (DANGEROUS - test in VM first!)
-./build/proxsave --restore
+proxsave --restore
 # ... type RESTORE to confirm ...
 ```
 
@@ -616,49 +621,49 @@ Some log lines use a label to make the output easier to scan:
 
 ```bash
 # First-time installation
-./build/proxsave --install
+proxsave --install
 
-# Full reset + installation (preserves env/identity)
-./build/proxsave --new-install
+# Full reset + installation (preserves build/env/identity)
+proxsave --new-install
 
 # Upgrade binary to latest release
-./build/proxsave --upgrade
+proxsave --upgrade
 
 # Upgrade configuration after binary update
-./build/proxsave --upgrade-config
+proxsave --upgrade-config
 
 # Preview upgrade changes
-./build/proxsave --upgrade-config-dry-run
+proxsave --upgrade-config-dry-run
 
 # Full upgrade workflow (binary + config)
-./build/proxsave --upgrade
-./build/proxsave --upgrade-config
-./build/proxsave --dry-run  # Verify everything works
+proxsave --upgrade
+proxsave --upgrade-config
+proxsave --dry-run  # Verify everything works
 
 # Migrate from Bash version (preview)
-./build/proxsave --env-migration-dry-run --old-env /opt/proxsave/env/backup.env
+proxsave --env-migration-dry-run --old-env /opt/proxsave/env/backup.env
 
 # Execute migration
-./build/proxsave --env-migration --old-env /opt/proxsave/env/backup.env
+proxsave --env-migration --old-env /opt/proxsave/env/backup.env
 ```
 
 ### Troubleshooting
 
 ```bash
 # Test configuration without running backup
-./build/proxsave --dry-run
+proxsave --dry-run
 
 # Debug mode with extreme verbosity
-DEBUG_LEVEL=extreme ./build/proxsave --log-level debug
+DEBUG_LEVEL=extreme proxsave --log-level debug
 
 # Test encryption setup
-./build/proxsave --newkey
+proxsave --newkey
 
 # Verify backup integrity
-./build/proxsave --decrypt --log-level debug
+proxsave --decrypt --log-level debug
 
 # Support mode for developer assistance
-./build/proxsave --support
+proxsave --support
 ```
 
 ---
@@ -777,45 +782,45 @@ crontab -e
 
 ```bash
 # Standard backup
-./build/proxsave
+proxsave
 
 # Test before running
-./build/proxsave --dry-run --log-level debug
+proxsave --dry-run --log-level debug
 
 # First-time setup
-./build/proxsave --install
+proxsave --install
 
-# Full reset (preserve env/identity) then setup
-./build/proxsave --new-install
+# Full reset (preserve build/env/identity) then setup
+proxsave --new-install
 
 # Upgrade binary to latest version
-./build/proxsave --upgrade
+proxsave --upgrade
 
 # After binary upgrade, optionally update config
-./build/proxsave --upgrade-config
+proxsave --upgrade-config
 
 # Migrate from Bash (safe preview first)
-./build/proxsave --env-migration-dry-run
-./build/proxsave --env-migration
+proxsave --env-migration-dry-run
+proxsave --env-migration
 
 # Use CLI mode instead of TUI (for debugging)
-./build/proxsave --install --cli
-./build/proxsave --new-install --cli
-./build/proxsave --newkey --cli
-./build/proxsave --decrypt --cli
-./build/proxsave --restore --cli
+proxsave --install --cli
+proxsave --new-install --cli
+proxsave --newkey --cli
+proxsave --decrypt --cli
+proxsave --restore --cli
 
 # Encryption workflow
-./build/proxsave --newkey          # Generate keys
-./build/proxsave                   # Run encrypted backup
-./build/proxsave --decrypt         # Decrypt when needed
+proxsave --newkey          # Generate keys
+proxsave                   # Run encrypted backup
+proxsave --decrypt         # Decrypt when needed
 
 # Restore workflow (test in VM first!)
-./build/proxsave --restore
+proxsave --restore
 
 # Troubleshooting
-./build/proxsave --dry-run --log-level debug
-./build/proxsave --support
+proxsave --dry-run --log-level debug
+proxsave --support
 ```
 
 ---
@@ -825,11 +830,11 @@ crontab -e
 While most configuration is in `configs/backup.env`, these environment variables can override settings:
 
 ```bash
-# Override config file location
-CONFIG_FILE=/etc/pbs/prod.env ./build/proxsave
+# Config file location: there is no env var for this; use the -c / --config CLI flag
+proxsave -c /etc/pbs/prod.env
 
-# Force dry-run mode
-DRY_RUN=true ./build/proxsave
+# Dry-run mode: overridden via this environment variable
+DRY_RUN=true proxsave
 
 # BASE_DIR is not an override; it is detected from the installed executable.
 # BASE_DIR in the environment or backup.env is deprecated and ignored.
@@ -838,10 +843,10 @@ DRY_RUN=true ./build/proxsave
 # Selected interactively during `--restore` on PBS hosts (Merge vs Clean 1:1).
 
 # Set debug level
-DEBUG_LEVEL=extreme ./build/proxsave --log-level debug
+DEBUG_LEVEL=extreme proxsave --log-level debug
 
 # Disable colors
-USE_COLOR=false ./build/proxsave
+USE_COLOR=false proxsave
 ```
 
 **Priority**: Environment variables > Configuration file > Defaults, except `BASE_DIR`, which is always runtime-detected.
@@ -850,15 +855,25 @@ USE_COLOR=false ./build/proxsave
 
 ## Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| `0` | Success |
-| `1` | General error |
-| `2` | Configuration error |
-| `3` | Security check failed |
-| `4` | Insufficient disk space |
-| `5` | Backup creation failed |
-| `6` | Upload failed (local backup succeeded) |
-| `7` | Encryption/decryption failed |
+| Code | Name | Meaning |
+|------|------|---------|
+| `0` | success | Execution completed successfully |
+| `1` | generic error | Unspecified generic error |
+| `2` | configuration error | Configuration error |
+| `3` | environment error | Invalid or unsupported Proxmox environment |
+| `4` | backup error | Error during the backup operation (generic) |
+| `5` | storage error | Error during storage operations |
+| `6` | network error | Network error (upload, notifications, etc.) |
+| `7` | permission error | Permission error |
+| `8` | verification error | Error during integrity verification |
+| `9` | collection error | Error during collection of configuration files |
+| `10` | archive error | Error while creating the archive |
+| `11` | compression error | Error during compression |
+| `12` | disk space error | Insufficient disk space |
+| `13` | panic error | Unhandled panic caught |
+| `14` | security error | Errors detected by the security check |
+| `15` | encryption error | Error during encryption setup or processing |
 
-**Note**: Cloud upload failures return exit code `0` (local backup succeeded), but log warnings.
+**Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
+run with a storage error (`5`): the local backup is kept, but the failure is recorded as a
+warning, so the run finishes with a non-zero exit code (`1`, generic error) — not `0`.

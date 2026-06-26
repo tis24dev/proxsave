@@ -33,7 +33,7 @@ For more information, take a look at our landing page at [proxsave.dev](https://
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
 
-or: if you need a fully clean reinstall use: (preserves `env/` and `identity/`)
+or: if you need a fully clean reinstall use: (preserves `build/`, `env/`, and `identity/`)
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
 ```

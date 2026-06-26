@@ -11,6 +11,20 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+// archiveOutputPath returns a path for an archive output file in a directory
+// SEPARATE from any directory being archived. The output must never live inside
+// the source tree: filepath.Walk would then reach the archiver's own
+// still-growing output file, snapshot its size into the tar header, and overrun
+// it as the compressor keeps appending — failing the archive with
+// "archive/tar: write too long". That fail-closed behavior is correct, but the
+// scenario is self-inflicted and never happens in production, where backups
+// always target a destination directory outside the source. Each call gets its
+// own temp dir.
+func archiveOutputPath(t *testing.T, name string) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), name)
+}
+
 // TestCreatePigzArchive tests pigz compression
 func TestCreatePigzArchive(t *testing.T) {
 	// Create temporary directory with test files
@@ -20,7 +34,7 @@ func TestCreatePigzArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outputPath := filepath.Join(tempDir, "output.tar.gz")
+	outputPath := archiveOutputPath(t, "output.tar.gz")
 
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{
@@ -59,7 +73,7 @@ func TestCreateBzip2Archive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outputPath := filepath.Join(tempDir, "output.tar.bz2")
+	outputPath := archiveOutputPath(t, "output.tar.bz2")
 
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{
@@ -95,7 +109,7 @@ func TestCreateLzmaArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outputPath := filepath.Join(tempDir, "output.tar.lzma")
+	outputPath := archiveOutputPath(t, "output.tar.lzma")
 
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{
@@ -131,7 +145,7 @@ func TestCreateXZArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outputPath := filepath.Join(tempDir, "output.tar.xz")
+	outputPath := archiveOutputPath(t, "output.tar.xz")
 
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{
@@ -169,7 +183,7 @@ func TestCreateXZArchive_ExtremeMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outputPath := filepath.Join(tempDir, "output.tar.xz")
+	outputPath := archiveOutputPath(t, "output.tar.xz")
 
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{
@@ -201,7 +215,7 @@ func TestCreateZstdArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outputPath := filepath.Join(tempDir, "output.tar.zst")
+	outputPath := archiveOutputPath(t, "output.tar.zst")
 
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{
@@ -238,7 +252,7 @@ func TestCreateZstdArchive_HighCompression(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outputPath := filepath.Join(tempDir, "output.tar.zst")
+	outputPath := archiveOutputPath(t, "output.tar.zst")
 
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{
@@ -269,7 +283,7 @@ func TestCompressionWithCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outputPath := filepath.Join(tempDir, "output.tar.xz")
+	outputPath := archiveOutputPath(t, "output.tar.xz")
 
 	logger := logging.New(types.LogLevelInfo, false)
 	config := &ArchiverConfig{
@@ -320,7 +334,7 @@ func TestCreateArchiveWithDifferentCompressionTypes(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			outputPath := filepath.Join(tempDir, "output"+tt.extension)
+			outputPath := archiveOutputPath(t, "output"+tt.extension)
 
 			logger := logging.New(types.LogLevelInfo, false)
 			config := &ArchiverConfig{

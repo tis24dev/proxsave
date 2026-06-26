@@ -24,8 +24,8 @@ Complete troubleshooting guide for Proxsave with common issues, solutions, and d
 This guide covers the most common issues encountered when using Proxsave, along with step-by-step solutions and debugging procedures.
 
 **Before troubleshooting**:
-1. Check you're running the latest version: `./build/proxsave --version`
-2. Try dry-run mode first: `./build/proxsave --dry-run --log-level debug`
+1. Check you're running the latest version: `proxsave --version`
+2. Try dry-run mode first: `proxsave --dry-run --log-level debug`
 3. Review logs in `LOG_PATH/backup-$(hostname)-*.log`
 
 ---
@@ -36,12 +36,11 @@ This guide covers the most common issues encountered when using Proxsave, along 
 
 #### Error: `go: cannot find main module`
 
-**Cause**: Not in project root directory, or `go.mod` missing.
+**Cause**: Not running from the project root directory (where `go.mod` lives).
 
 **Solution**:
 ```bash
-cd /opt/proxsave  # Ensure you're in project root
-go mod init github.com/tis24dev/proxsave
+cd /opt/proxsave  # Ensure you're in project root (go.mod ships with the repo)
 go mod tidy
 make build
 ```
@@ -100,9 +99,9 @@ make build
 **Solution**:
 ```bash
 # Run installer to create config
-./build/proxsave --install
-# For a clean reinstall (keeps env/ and identity/), run:
-# ./build/proxsave --new-install
+proxsave --install
+# For a clean reinstall (keeps build/, env/, and identity/), run:
+# proxsave --new-install
 
 # Or copy template manually
 cp internal/config/templates/backup.env configs/backup.env
@@ -112,7 +111,7 @@ nano configs/backup.env
 **Using custom path**:
 ```bash
 # Specify custom config location
-./build/proxsave --config /etc/pbs/prod.env
+proxsave --config /etc/pbs/prod.env
 ```
 
 ---
@@ -165,7 +164,7 @@ COMPRESSION_TYPE=xz    # Valid: xz, zstd, gzip, bzip2, lz4
 
 **Test configuration**:
 ```bash
-./build/proxsave --dry-run --log-level debug
+proxsave --dry-run --log-level debug
 # Check for configuration validation errors
 ```
 
@@ -323,10 +322,10 @@ RCLONE_TIMEOUT_CONNECTION=120
 
 # Ensure you selected the remote directory that contains the backups (scan is non-recursive),
 # then re-run restore with debug logs (restore log path is printed on start)
-./build/proxsave --restore --log-level debug
+proxsave --restore --log-level debug
 
 # Or use support mode to capture full diagnostics
-./build/proxsave --restore --support
+proxsave --restore --support
 ```
 
 If it still fails, run the equivalent manual checks:
@@ -432,10 +431,10 @@ rm /tmp/test.txt
 **Solution 1: Pre-generate keys**:
 ```bash
 # Run key generation interactively first
-./build/proxsave --newkey
+proxsave --newkey
 
 # Then run backup (uses existing keys)
-./build/proxsave
+proxsave
 ```
 
 **Solution 2: Set recipient directly**:
@@ -665,6 +664,33 @@ MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
 ---
 ### 7. Restore Issues
 
+#### Mountpoint is read-only / `Operation not permitted` after a restore (NFS/storage not restored)
+
+**Symptoms**:
+- After a restore, a storage mountpoint (e.g. `/mnt/pve/<id>` or a PBS datastore path) is read-only, or writes fail with `Operation not permitted`.
+- An NFS/CIFS/network share "wasn't restored" and the storage shows as unavailable.
+
+**Explanation**:
+- The storage *definition* is restored, but the share was offline/unreachable at restore time, so ProxSave applied a **read-only bind-mount guard** on the mountpoint to stop Proxmox from silently writing into the root filesystem (`/`). If the bind mount could not be created, ProxSave instead logged a warning and left the mountpoint unguarded (older versions set a persistent `chattr +i` immutable flag here; that was removed because it survived reboots and could re-block the mountpoint later).
+- Bringing the share back online and mounting it is enough to *use* it again (a real mount stacks on top of the guard automatically). The guard is not deleted, only shadowed: a bind-mount guard clears on reboot or via cleanup. A **legacy** `chattr +i` flag (from an older version) persists across reboots until cleared.
+
+**Resolution**:
+```bash
+# 1. Bring the share online and mount/activate the storage
+pvesm status
+mount -t nfs <server>:<export> /mnt/pve/<id>   # or: pvesm activate <id>
+
+# 2. Remove the leftover guards (run as root; preview first)
+proxsave --cleanup-guards --dry-run
+proxsave --cleanup-guards
+```
+- `--cleanup-guards` unmounts bind-mount guards and clears any **legacy** `chattr +i` flags, but only on mountpoints that are **not currently mounted**; it prints a summary of what was cleared vs left pending. To clear a flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- If you already deleted `/var/lib/proxsave/guards` by hand and a mountpoint is still read-only, ProxSave has no record left to clear. Check for the immutable flag and remove it manually while the storage is unmounted:
+```bash
+lsattr -d /mnt/pve/<id>        # an 'i' in the flags means immutable
+chattr -i /mnt/pve/<id>
+```
+
 #### Restore drops SSH / IP changes during network restore
 
 **Symptoms**:
@@ -731,7 +757,7 @@ MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
 
 ```bash
 # Run with debug level
-./build/proxsave --log-level debug
+proxsave --log-level debug
 
 # Or set in config
 nano configs/backup.env
@@ -794,7 +820,7 @@ rclone about gdrive:
 grep -E "^CLOUD_|^RCLONE_" /opt/proxsave/configs/backup.env
 
 # Test with dry-run
-./build/proxsave --dry-run --log-level debug
+proxsave --dry-run --log-level debug
 # Check output for loaded config values
 ```
 
@@ -898,7 +924,7 @@ Before reporting issues, review:
 
 ```bash
 # Capture full debug output
-./build/proxsave --log-level debug 2>&1 | tee /tmp/pbs-debug.log
+proxsave --log-level debug 2>&1 | tee /tmp/pbs-debug.log
 ```
 
 ---
@@ -909,7 +935,7 @@ If problem persists:
 
 **1. Gather information**:
 ```bash
-./build/proxsave --version
+proxsave --version
 rclone version
 go version
 uname -a
@@ -944,7 +970,7 @@ nano /tmp/backup.env.sanitized
 **Issue template**:
 ```markdown
 **Version**:
-./build/proxsave --version output here
+proxsave --version output here
 
 **Environment**:
 - OS: Proxmox VE 8.x / PBS 3.x / Debian 12
@@ -992,7 +1018,7 @@ For complex issues requiring developer assistance:
 
 ```bash
 # Run in support mode (sends debug log to developer)
-./build/proxsave --support
+proxsave --support
 ```
 
 **Support mode workflow**:
@@ -1040,7 +1066,7 @@ ls -lh /opt/proxsave/configs/backup.env
 # Should show: -rw------- ... backup.env
 
 # 3. Test configuration loading
-./build/proxsave --dry-run
+proxsave --dry-run
 # Should NOT error on config parsing
 
 # 4. Check disk space
@@ -1062,7 +1088,7 @@ tail -50 /opt/proxsave/log/backup-*.log
 # Review for obvious errors
 
 # 8. Run debug mode
-./build/proxsave --dry-run --log-level debug 2>&1 | less
+proxsave --dry-run --log-level debug 2>&1 | less
 # Review detailed output for issues
 ```
 
@@ -1074,10 +1100,10 @@ tail -50 /opt/proxsave/log/backup-*.log
 A: No. Cloud uploads are non-critical. Local backup succeeded, which is the primary goal. Review cloud configuration and retry.
 
 **Q: How do I test my configuration without running a real backup?**
-A: Use `--dry-run` mode: `./build/proxsave --dry-run --log-level debug`
+A: Use `--dry-run` mode: `proxsave --dry-run --log-level debug`
 
 **Q: Logs show warnings about deprecated variables?**
-A: Update your configuration: `./build/proxsave --upgrade-config`
+A: Update your configuration: `proxsave --upgrade-config`
 
 **Q: Can I run backup while another backup is in progress?**
 A: No. Proxsave uses a lock file (`BACKUP_PATH/.backup.lock`) to prevent concurrent runs. The lock stores `pid/host/time`; on the same host, proxsave checks PID liveness to avoid “stuck” locks after an interrupted run.

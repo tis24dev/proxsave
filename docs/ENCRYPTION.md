@@ -37,12 +37,12 @@ Proxsave uses the **[age](https://age-encryption.org/)** format (via `filippo.io
 | Feature | Description |
 |---------|-------------|
 | **Encryption algorithm** | ChaCha20-Poly1305 (AEAD) with X25519 key exchange |
-| **Key types** | Passphrase or X25519 key pair |
+| **Key types** | Passphrase, X25519 key pair, or SSH public key (`ssh-ed25519` / `ssh-rsa`) |
 | **Multiple recipients** | Single backup can be decrypted with any configured recipient |
 | **Interactive setup** | `--newkey` (or the first encrypted run) helps you configure recipients |
 | **Streaming mode** | Encrypts during backup creation (no temporary plaintext) |
 | **Security** | Passphrases read with `term.ReadPassword`, buffers zeroed after use |
-| **File permissions** | Enforces 0700/0600 on recipient files |
+| **File permissions** | Recipient files are created 0700/0600; the security check verifies them and auto-fixes only when `AUTO_FIX_PERMISSIONS` is enabled (otherwise it warns) |
 
 ---
 
@@ -53,7 +53,7 @@ Proxsave uses the **[age](https://age-encryption.org/)** format (via `filippo.io
 **Option A: Interactive wizard** (recommended for beginners):
 
 ```bash
-./build/proxsave --newkey
+proxsave --newkey
 ```
 
 **Option B: Manual generation** with standard AGE tools:
@@ -66,7 +66,7 @@ age-keygen -o age-keys.txt
 grep "# public key:" age-keys.txt | cut -d: -f2 | tr -d ' '
 
 # Then paste the recipient into:
-#   ./build/proxsave --newkey
+#   proxsave --newkey
 # or configure it via AGE_RECIPIENT / AGE_RECIPIENT_FILE in configs/backup.env
 ```
 
@@ -89,7 +89,7 @@ AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt
 ### 3. Run Encrypted Backup
 
 ```bash
-./build/proxsave
+proxsave
 # Archive will be encrypted (archive ends with .age; if bundling is enabled, output ends with .age.bundle.tar)
 ```
 
@@ -97,7 +97,7 @@ AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt
 
 ```bash
 # Interactive decryption
-./build/proxsave --decrypt
+proxsave --decrypt
 ```
 
 ---
@@ -118,12 +118,15 @@ age1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567abc
 
 # Recipient derived from a passphrase (still an "age1..." recipient; the passphrase is NOT stored)
 age1def456ghi789jkl012mno345pqr678stu901vwx234yz567abc123def
+
+# SSH public key recipient (encrypt to an existing SSH key; ssh-ed25519 or ssh-rsa)
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleSSHpublicKeyForAgeRecipient
 ```
 
 **Format**:
 - One recipient per line
 - Blank lines and `#` comments ignored
-- Mix key types freely
+- Supported types: X25519 (`age1...`) and SSH public keys (`ssh-ed25519` / `ssh-rsa`); mix freely
 
 ### Interactive Wizard
 
@@ -131,10 +134,10 @@ You can create/update recipients in two ways:
 
 ```bash
 # Dedicated wizard (TUI by default)
-./build/proxsave --newkey
+proxsave --newkey
 
 # Use CLI prompts instead of TUI (useful for debugging or when TUI rendering is unavailable)
-./build/proxsave --newkey --cli
+proxsave --newkey --cli
 ```
 
 If `ENCRYPT_ARCHIVE=true` and no recipients are configured, proxsave will start an interactive setup automatically during the backup (only when running in a real terminal).
@@ -162,7 +165,7 @@ If `ENCRYPT_ARCHIVE=true` and no recipients are configured, proxsave will start 
 ### Backup Execution
 
 ```bash
-./build/proxsave
+proxsave
 ```
 
 **Encryption flow**:
@@ -230,7 +233,7 @@ backup/
 The `--decrypt` workflow converts an encrypted backup into a decrypted bundle for inspection or transfer.
 
 ```bash
-./build/proxsave --decrypt
+proxsave --decrypt
 ```
 
 **High-level flow**:
@@ -268,7 +271,7 @@ Encrypted backups can be restored using the standard `--restore` command. The de
 
 ```bash
 # Interactive restore (decrypts automatically)
-./build/proxsave --restore
+proxsave --restore
 ```
 
 **Restore workflow with encryption**:
@@ -331,7 +334,7 @@ Rotating encryption keys periodically improves security (recommended annually or
 To replace recipients completely (for example after a key compromise), run:
 
 ```bash
-./build/proxsave --newkey
+proxsave --newkey
 ```
 
 This overwrites the recipient file after confirmation. Back up `${BASE_DIR}/identity/age/recipient.txt` first if you need rollback.
@@ -499,16 +502,16 @@ AGE_RECIPIENT=age1abc123...,age1def456...
 
 ```bash
 # Generate new keys
-./build/proxsave --newkey
+proxsave --newkey
 
 # Run encrypted backup
-./build/proxsave
+proxsave
 
 # Decrypt backup (interactive)
-./build/proxsave --decrypt
+proxsave --decrypt
 
 # Restore from encrypted backup
-./build/proxsave --restore
+proxsave --restore
 
 # Manual decryption (scriptable) with age CLI
 age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age > host-backup-YYYYMMDD-HHMMSS.tar.xz

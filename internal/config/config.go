@@ -136,6 +136,15 @@ type Config struct {
 	CloudParallelJobs     int
 	CloudParallelVerify   bool
 	CloudWriteHealthCheck bool
+	// CloudVerifyChecksum compares the remote object's SHA256 against the locally
+	// computed checksum after upload. When the backend cannot provide a native
+	// SHA256, it falls back to the size-only check (logged at debug, never fails a
+	// good upload nor flips its exit code). Default true.
+	CloudVerifyChecksum bool
+	// CloudVerifyDownload forces a download-and-hash (rclone hashsum --download)
+	// when the backend has no native SHA256, giving true end-to-end verification
+	// at the cost of full egress. Default false.
+	CloudVerifyDownload bool
 
 	// Rclone settings with comprehensible timeout names
 	// RcloneTimeoutConnection: timeout for checking if remote is accessible (default: 30s)
@@ -285,7 +294,6 @@ type Config struct {
 	BackupZFSConfig         bool
 	BackupRootHome          bool
 	BackupScriptRepository  bool
-	BackupUserHomes         bool
 	BackupConfigFile        bool
 	SystemRootPrefix        string
 	PVEConfigPath           string
@@ -539,8 +547,9 @@ func normalizeCompressionType(ct types.CompressionType) types.CompressionType {
 }
 
 func (c *Config) parseOptimizationSettings() {
-	c.EnableDeduplication = c.getBool("ENABLE_DEDUPLICATION", false)
-	c.EnablePrefilter = c.getBool("ENABLE_PREFILTER", false)
+	// Defaults match the shipped template (backup.env): both enabled.
+	c.EnableDeduplication = c.getBool("ENABLE_DEDUPLICATION", true)
+	c.EnablePrefilter = c.getBool("ENABLE_PREFILTER", true)
 	c.PrefilterMaxFileSizeMB = c.getInt("PREFILTER_MAX_FILE_SIZE_MB", 8)
 	if c.PrefilterMaxFileSizeMB <= 0 {
 		c.PrefilterMaxFileSizeMB = 8
@@ -566,7 +575,8 @@ func (c *Config) parseSecuritySettings() {
 
 	c.SecurityCheckEnabled = c.getBoolWithFallback([]string{"SECURITY_CHECK_ENABLED", "FULL_SECURITY_CHECK"}, true)
 	c.AutoUpdateHashes = c.getBool("AUTO_UPDATE_HASHES", true)
-	c.AutoFixPermissions = c.getBool("AUTO_FIX_PERMISSIONS", false)
+	// Default true to match the shipped template (backup.env) and the install flow.
+	c.AutoFixPermissions = c.getBool("AUTO_FIX_PERMISSIONS", true)
 	if val, ok := c.raw["CONTINUE_ON_SECURITY_ISSUES"]; ok {
 		c.ContinueOnSecurityIssues = utils.ParseBool(val)
 		c.AbortOnSecurityIssues = !c.ContinueOnSecurityIssues
@@ -643,17 +653,26 @@ func (c *Config) parseStorageSettings() {
 	c.CloudEnabled = c.getBoolWithFallback([]string{"ENABLE_CLOUD_BACKUP", "CLOUD_ENABLED"}, false)
 	c.CloudRemote = c.getStringWithFallback([]string{"RCLONE_REMOTE", "CLOUD_REMOTE"}, "")
 	c.CloudRemotePath = strings.Trim(strings.TrimSpace(c.getString("CLOUD_REMOTE_PATH", "")), "/")
-	mode := strings.ToLower(strings.TrimSpace(c.getString("CLOUD_UPLOAD_MODE", "")))
-	if mode != "parallel" {
-		mode = "sequential"
+	// Default to "parallel" to match the shipped template and the documentation
+	// ("Default: parallel" with CLOUD_PARALLEL_MAX_JOBS=2). Unset or blank uses
+	// that default; only an explicit "sequential" (or any other non-empty,
+	// non-"parallel" value) selects sequential.
+	switch strings.ToLower(strings.TrimSpace(c.getString("CLOUD_UPLOAD_MODE", ""))) {
+	case "", "parallel":
+		c.CloudUploadMode = "parallel"
+	default:
+		c.CloudUploadMode = "sequential"
 	}
-	c.CloudUploadMode = mode
 	c.CloudParallelJobs = c.getInt("CLOUD_PARALLEL_MAX_JOBS", 2)
 	if c.CloudParallelJobs <= 0 {
 		c.CloudParallelJobs = 1
 	}
-	c.CloudParallelVerify = c.getBool("CLOUD_PARALLEL_VERIFICATION", false)
+	// Default true to match the shipped template and the documentation ("Also
+	// verify each associated/sidecar file"); set false (or 0/no/off) to disable.
+	c.CloudParallelVerify = c.getBool("CLOUD_PARALLEL_VERIFICATION", true)
 	c.CloudWriteHealthCheck = c.getBool("CLOUD_WRITE_HEALTHCHECK", false)
+	c.CloudVerifyChecksum = c.getBool("CLOUD_VERIFY_CHECKSUM", true)
+	c.CloudVerifyDownload = c.getBool("CLOUD_VERIFY_DOWNLOAD", false)
 
 	c.RcloneTimeoutConnection = c.getIntWithFallback([]string{"RCLONE_TIMEOUT_CONNECTION", "CLOUD_CONNECTIVITY_TIMEOUT"}, 30)
 	c.RcloneTimeoutOperation = c.getInt("RCLONE_TIMEOUT_OPERATION", 300)
@@ -805,7 +824,10 @@ func (c *Config) parsePVESettings() error {
 		c.MaxPVEBackupSizeBytes = sizeBytes
 	}
 	c.PVEBackupIncludePattern = strings.TrimSpace(c.getString("PVE_BACKUP_INCLUDE_PATTERN", ""))
-	c.BackupCephConfig = c.getBool("BACKUP_CEPH_CONFIG", true)
+	// Default false to match the shipped template (backup.env). On a Ceph host that
+	// omits the key, set BACKUP_CEPH_CONFIG=true to capture /etc/ceph. (env-migration
+	// preserves a legacy value and only auto-disables it when Ceph is absent.)
+	c.BackupCephConfig = c.getBool("BACKUP_CEPH_CONFIG", false)
 	c.CephConfigPath = c.getString("CEPH_CONFIG_PATH", "/etc/ceph")
 	c.PVEConfigPath = c.getString("PVE_CONFIG_PATH", "/etc/pve")
 	c.PVEClusterPath = c.getString("PVE_CLUSTER_PATH", "/var/lib/pve-cluster")
@@ -858,7 +880,6 @@ func (c *Config) parseSystemSettings() {
 	// Default false to match the shipped template (backup.env) and the project
 	// convention; a config missing this key must not silently snapshot /opt/proxsave.
 	c.BackupScriptRepository = c.getBool("BACKUP_SCRIPT_REPOSITORY", false)
-	c.BackupUserHomes = c.getBool("BACKUP_USER_HOMES", true)
 	c.BackupConfigFile = c.getBool("BACKUP_CONFIG_FILE", true)
 	// Optional system-root override (chroot/test fixture). Empty or "/" means real
 	// root; CollectorConfig.Validate rejects a non-absolute value.

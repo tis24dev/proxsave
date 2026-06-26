@@ -1,7 +1,7 @@
 # backup.env – Legacy vs Go Mapping
 
 This file documents the mapping between variables from the **old Bash `backup.env`**
-(`reference/env/backup.env`) and the **new Go template**
+(from the legacy Bash project this tool was migrated from) and the **new Go template**
 (`internal/config/templates/backup.env` + `internal/config/config.go`).
 
 > Note: where the name is identical, the variable is already compatible.
@@ -25,7 +25,6 @@ BACKUP_PVE_FIREWALL       = SAME
 BACKUP_PVE_JOBS           = SAME
 BACKUP_PVE_REPLICATION    = SAME
 BACKUP_PVE_SCHEDULES      = SAME
-BACKUP_PXAR_FILES         = SAME (you can also use PXAR_SCAN_ENABLE)
 BACKUP_SCRIPT_DIR         = SAME
 BACKUP_SMALL_PVE_BACKUPS  = SAME
 BACKUP_VM_CONFIGS         = SAME
@@ -42,6 +41,8 @@ CHECK_OPEN_PORTS          = SAME
 CLOUD_LOG_PATH            = SAME
 CLOUD_PARALLEL_MAX_JOBS   = SAME
 CLOUD_PARALLEL_VERIFICATION = SAME
+CLOUD_VERIFY_CHECKSUM     = SAME
+CLOUD_VERIFY_DOWNLOAD     = SAME
 CLOUD_UPLOAD_MODE         = SAME
 COMPRESSION_LEVEL         = SAME
 COMPRESSION_MODE          = SAME
@@ -109,6 +110,7 @@ BACKUP_PBS_NETWORK_CONFIG = NEW (Go-only) → Collect `network.cfg` and network 
 ABORT_ON_SECURITY_ISSUES   = RENAMED(CONTINUE_ON_SECURITY_ISSUES) ✅ *with inverted logic*
 BACKUP_CRONTABS            = RENAMED(BACKUP_CRON_JOBS) ✅
 BACKUP_NETWORK_CONFIG      = RENAMED(BACKUP_NETWORK_CONFIGS) ✅
+BACKUP_PXAR_FILES          = RENAMED(PXAR_SCAN_ENABLE) ✅
 BACKUP_REMOTE_CFG          = RENAMED(BACKUP_REMOTE_CONFIGS) ✅
 CLOUD_CONNECTIVITY_TIMEOUT = RENAMED(RCLONE_TIMEOUT_CONNECTION) ✅
 DISABLE_COLORS             = RENAMED(USE_COLOR) ✅ *with inverted logic*

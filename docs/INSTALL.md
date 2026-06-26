@@ -37,7 +37,7 @@
 2. Run your first backup
 
    ```bash
-   ./build/proxsave
+   proxsave
    ```
 
 > **Release integrity & authenticity.** `install.sh` and `proxsave --upgrade`
@@ -54,23 +54,23 @@
 1. Run migration installation from bash with old env file
 
    ```bash
-   ./build/proxsave --env-migration
+   proxsave --env-migration
    ```
 
 2. Run your first backup again after migration
 
    ```bash
-   ./build/proxsave
+   proxsave
    ```
 
 ### First Backup Workflow
 
 ```bash
 # Dry-run test (no actual changes)
-./build/proxsave --dry-run
+proxsave --dry-run
 
 # Real backup
-./build/proxsave
+proxsave
 
 # View logs
 tail -f log/backup-$(hostname)-*.log
@@ -89,16 +89,16 @@ ProxSave provides a built-in upgrade command to update your installation to the 
 
 ```bash
 # Upgrade to latest version
-./build/proxsave --upgrade
+proxsave --upgrade
 
 # Non-interactive upgrade (auto-confirm)
-./build/proxsave --upgrade y
+proxsave --upgrade y
 
 # Optionally update configuration template
-./build/proxsave --upgrade-config
+proxsave --upgrade-config
 
 # Verify everything works
-./build/proxsave --dry-run
+proxsave --dry-run
 ```
 
 ### What Gets Updated
@@ -117,19 +117,19 @@ The `--upgrade` command:
 
 ```bash
 # 1. Upgrade binary
-./build/proxsave --upgrade
+proxsave --upgrade
 
 # 2. (Optional) Update configuration with new template variables
-./build/proxsave --upgrade-config
+proxsave --upgrade-config
 
 # 3. Test configuration
-./build/proxsave --dry-run
+proxsave --dry-run
 
 # 4. Verify cron schedule
 crontab -l
 
 # 5. Run a real backup to confirm
-./build/proxsave
+proxsave
 ```
 
 ### Requirements
@@ -174,7 +174,7 @@ apt update && apt install -y make
 
 # Verify installations
 go version    # Should show go1.25.11+
-rclone version  # Should show rclone v1.50+
+rclone version  # Should show rclone v1.60+
 git --version # Should show git 2.47.3+
 make --version # Should show make 4.4.1+
 ```
@@ -302,7 +302,7 @@ The `--env-migration` tool imports an existing `backup.env` (e.g. from the legac
 Automatic tool based on variable mapping: BACKUP_ENV_MAPPING.md (we recommend checking after migration to ensure everything went smoothly)
 
 ```bash
-./build/proxsave --env-migration
+proxsave --env-migration
 ```
 
 You can then manually add your custom variables by referring to the mapping guide.
@@ -338,10 +338,10 @@ This guide categorizes every variable:
 
    ```bash
    # Step 1: Preview migration (recommended first step)
-   ./build/proxsave --env-migration-dry-run
+   proxsave --env-migration-dry-run
 
    # Review the output, then execute real migration
-   ./build/proxsave --env-migration
+   proxsave --env-migration
 
    # The tool will:
    # - Automatically map 70+ variables (SAME category)
@@ -362,7 +362,7 @@ This guide categorizes every variable:
 
    ```bash
    # Dry-run to verify configuration
-   ./build/proxsave --dry-run
+   proxsave --dry-run
 
    # Check the output for any warnings or errors
    ```
@@ -371,7 +371,7 @@ This guide categorizes every variable:
 
    ```bash
    # First real backup
-   ./build/proxsave
+   proxsave
 
    # Verify results
    ls -lh backup/
@@ -419,4 +419,4 @@ This guide categorizes every variable:
 
 - Review the complete mapping guide: [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md)
 - Compare your Bash config with the Go template side-by-side
-- Enable debug logging: `./build/proxsave --dry-run --log-level debug`
+- Enable debug logging: `proxsave --dry-run --log-level debug`

@@ -1162,7 +1162,6 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.BackupZFSConfig = cfg.BackupZFSConfig
 	cc.BackupRootHome = cfg.BackupRootHome
 	cc.BackupScriptRepository = cfg.BackupScriptRepository
-	cc.BackupUserHomes = cfg.BackupUserHomes
 	cc.BackupConfigFile = cfg.BackupConfigFile
 	cc.SystemRootPrefix = cfg.SystemRootPrefix
 	cc.ScriptRepositoryPath = cfg.BaseDir

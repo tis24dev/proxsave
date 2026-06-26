@@ -146,8 +146,8 @@ BACKUP_BLACKLIST=/var/data/tmp
 		t.Error("Expected ContinueOnSecurityIssues to be false by default")
 	}
 
-	if cfg.AutoFixPermissions {
-		t.Error("Expected AutoFixPermissions to be false by default")
+	if !cfg.AutoFixPermissions {
+		t.Error("Expected AutoFixPermissions to be true by default (matches template)")
 	}
 
 	if !cfg.AutoUpdateHashes {
@@ -263,6 +263,86 @@ PBS_DATASTORE_PATH=/mnt/pbs1,/mnt/pbs2,/mnt/pbs3
 	}
 	if got := cfg.PBSDatastorePaths; len(got) != 3 || got[0] != "/mnt/pbs1" || got[1] != "/mnt/pbs2" || got[2] != "/mnt/pbs3" {
 		t.Errorf("PBSDatastorePaths = %#v; want [/mnt/pbs1 /mnt/pbs2 /mnt/pbs3]", got)
+	}
+}
+
+func TestCloudUploadModeDefault(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "absent defaults to parallel", content: "# no upload mode set\n", want: "parallel"},
+		{name: "empty defaults to parallel", content: "CLOUD_UPLOAD_MODE=\n", want: "parallel"},
+		{name: "explicit sequential", content: "CLOUD_UPLOAD_MODE=sequential\n", want: "sequential"},
+		{name: "unknown falls back to sequential", content: "CLOUD_UPLOAD_MODE=bogus\n", want: "sequential"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "mode.env")
+			if err := os.WriteFile(configPath, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := LoadConfigWithBaseDir(configPath, "/custom/base")
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if cfg.CloudUploadMode != tt.want {
+				t.Errorf("CloudUploadMode = %q; want %q", cfg.CloudUploadMode, tt.want)
+			}
+		})
+	}
+}
+
+func TestOptimizationAndSecurityDefaultsMatchTemplate(t *testing.T) {
+	// With the keys absent, the code defaults must equal the shipped template:
+	// dedup/prefilter/auto-fix = true, ceph = false.
+	configPath := filepath.Join(t.TempDir(), "defaults.env")
+	if err := os.WriteFile(configPath, []byte("# no optimization/security keys set\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfigWithBaseDir(configPath, "/custom/base")
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if !cfg.EnableDeduplication {
+		t.Error("ENABLE_DEDUPLICATION default should be true (matches template)")
+	}
+	if !cfg.EnablePrefilter {
+		t.Error("ENABLE_PREFILTER default should be true (matches template)")
+	}
+	if !cfg.AutoFixPermissions {
+		t.Error("AUTO_FIX_PERMISSIONS default should be true (matches template)")
+	}
+	if cfg.BackupCephConfig {
+		t.Error("BACKUP_CEPH_CONFIG default should be false (matches template)")
+	}
+}
+
+func TestCloudParallelVerificationDefault(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "absent defaults to true", content: "# no verification key\n", want: true},
+		{name: "explicit false", content: "CLOUD_PARALLEL_VERIFICATION=false\n", want: false},
+		{name: "explicit true", content: "CLOUD_PARALLEL_VERIFICATION=true\n", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "verify.env")
+			if err := os.WriteFile(configPath, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := LoadConfigWithBaseDir(configPath, "/custom/base")
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if cfg.CloudParallelVerify != tt.want {
+				t.Errorf("CloudParallelVerify = %v; want %v", cfg.CloudParallelVerify, tt.want)
+			}
+		})
 	}
 }
 
