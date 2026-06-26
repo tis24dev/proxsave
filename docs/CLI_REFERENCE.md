@@ -830,10 +830,10 @@ proxsave --support
 While most configuration is in `configs/backup.env`, these environment variables can override settings:
 
 ```bash
-# Override config file location (CLI flag, NOT an env var)
+# Config file location: there is no env var for this; use the -c / --config CLI flag
 proxsave -c /etc/pbs/prod.env
 
-# Force dry-run mode
+# Dry-run mode: overridden via this environment variable
 DRY_RUN=true proxsave
 
 # BASE_DIR is not an override; it is detected from the installed executable.
