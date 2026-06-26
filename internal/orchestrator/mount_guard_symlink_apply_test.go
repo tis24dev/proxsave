@@ -189,6 +189,9 @@ func TestPBSGuard_SymlinkEscapeRefused(t *testing.T) {
 		if c.name == "chattr" {
 			t.Fatalf("escape target must not be chattr'd; calls=%v", cmd.calls)
 		}
+		if c.name == "mount" {
+			t.Fatalf("escape target must not be mounted; calls=%v", cmd.calls)
+		}
 	}
 	if got := readGuardIndexLines(t); len(got) != 0 {
 		t.Fatalf("escape target must not be recorded; got %#v", got)
@@ -266,6 +269,9 @@ func TestPBSGuard_ResolveErrorFailsSafe(t *testing.T) {
 		if c.name == "chattr" {
 			t.Fatalf("resolve error must skip the guard; calls=%v", cmd.calls)
 		}
+		if c.name == "mount" {
+			t.Fatalf("resolve error must not mount the target; calls=%v", cmd.calls)
+		}
 	}
 	if got := readGuardIndexLines(t); len(got) != 0 {
 		t.Fatalf("resolve error must not record anything; got %#v", got)
@@ -341,6 +347,11 @@ func TestPVEGuard_SymlinkEscapeRefused(t *testing.T) {
 	if strings.Contains(strings.Join(fakeCmd.CallsList(), "\n"), "chattr +i") {
 		t.Fatalf("escape target must not be chattr'd; calls=%v", fakeCmd.CallsList())
 	}
+	for _, call := range fakeCmd.CallsList() {
+		if strings.HasPrefix(call, "mount ") {
+			t.Fatalf("escape target must not be mounted; calls=%v", fakeCmd.CallsList())
+		}
+	}
 	if got := readGuardIndexLines(t); len(got) != 0 {
 		t.Fatalf("escape target must not be recorded; got %#v", got)
 	}
@@ -405,6 +416,11 @@ func TestPVEGuard_ResolveErrorFailsSafe(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(fakeCmd.CallsList(), "\n"), "chattr +i") {
 		t.Fatalf("resolve error must skip the guard; calls=%v", fakeCmd.CallsList())
+	}
+	for _, call := range fakeCmd.CallsList() {
+		if strings.HasPrefix(call, "mount ") {
+			t.Fatalf("resolve error must not mount the target; calls=%v", fakeCmd.CallsList())
+		}
 	}
 	if got := readGuardIndexLines(t); len(got) != 0 {
 		t.Fatalf("resolve error must not record anything; got %#v", got)
