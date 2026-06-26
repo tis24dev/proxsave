@@ -29,8 +29,8 @@ func writeLocalForVerify(t *testing.T, content string) (path string, size int, h
 	return path, len(content), sha256Hex(content)
 }
 
-// verifyChecksumCase drives VerifyUpload through the primary (lsl) path with the
-// checksum step enabled and a stubbed hashsum response.
+// TestCloudVerifyUploadChecksum drives VerifyUpload through the primary (lsl) path
+// with the checksum step enabled and a stubbed hashsum response.
 func TestCloudVerifyUploadChecksum(t *testing.T) {
 	const remoteFile = "remote:dir/file.tar"
 	content := "primary-archive-bytes"
