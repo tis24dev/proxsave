@@ -428,6 +428,66 @@ func TestCleanupMountGuards_SymlinkEscapeRefused(t *testing.T) {
 	}
 }
 
+// Kills: dropping the rErr (non-ENOENT resolution error) branch in the reordered
+// loop. A real resolve failure (e.g. an I/O error walking the path) must leave the
+// target pending and never reach the mount probe or chattr -i. ENOENT is handled
+// separately (leafExists=false, nothing to clear); this exercises the other error.
+func TestCleanupMountGuards_ResolveErrorLeftPending(t *testing.T) {
+	withTempGuardBaseDir(t)
+	ran := installChattrCleanupSeams(t, []byte("/mnt/pve/offline\n"), "", nil)
+	// resolveGuardTarget returns a non-ENOENT error: resolveGuardTargetWithinAllowlist
+	// surfaces it as rErr, so the loop must mark the target pending and skip it.
+	resolveGuardTarget = func(string) (string, error) { return "", errors.New("resolve I/O error") }
+
+	removed := false
+	cleanupRemoveAll = func(string) error { removed = true; return nil }
+
+	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("CleanupMountGuards: %v", err)
+	}
+	if len(*ran) != 0 {
+		t.Fatalf("a target whose resolution errors must not be chattr'd, calls=%#v", *ran)
+	}
+	if removed {
+		t.Fatalf("guard dir/index must be kept while a resolve-error target is still pending")
+	}
+}
+
+// Kills: probing isMounted on the RAW (unresolved) index path instead of the
+// resolved one. The recorded target /mnt/link is a symlink to /mnt/real, where the
+// storage is actually mounted. /proc/self/mountinfo records the kernel-resolved
+// mountpoint (/mnt/real), so a probe of the raw /mnt/link reads "not mounted" and
+// the old code would have run chattr -i on /mnt/real, the LIVE mount root. After the
+// reorder the mount probe runs on the resolved /mnt/real, sees it mounted, and leaves
+// the target pending (no chattr). This is the symlinked-mountpoint correctness case.
+func TestCleanupMountGuards_SymlinkedMountpointDetectedMountedAndLeftPending(t *testing.T) {
+	withTempGuardBaseDir(t)
+	// The mount is recorded against the kernel-resolved path /mnt/real (mountinfo
+	// never contains the symlink name). The raw index path /mnt/link is NOT here.
+	mountinfo := "36 35 0:30 / /mnt/real rw - nfs server:/export rw\n"
+	ran := installChattrCleanupSeams(t, []byte("/mnt/link\n"), mountinfo, nil)
+	// /mnt/link resolves (through the symlink) to the real mountpoint /mnt/real.
+	resolveGuardTarget = func(p string) (string, error) {
+		if p == "/mnt/link" {
+			return "/mnt/real", nil
+		}
+		return p, nil
+	}
+
+	removed := false
+	cleanupRemoveAll = func(string) error { removed = true; return nil }
+
+	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("CleanupMountGuards: %v", err)
+	}
+	if len(*ran) != 0 {
+		t.Fatalf("a symlinked mountpoint resolving onto a live mount must not be chattr'd, calls=%#v", *ran)
+	}
+	if removed {
+		t.Fatalf("guard dir/index must be kept while the symlinked-mount target is still pending")
+	}
+}
+
 // Kills: removing the pending-gate (a chattr target skipped because it is mounted
 // must NOT cause the guard dir/index to be removed, or its record is lost forever).
 func TestCleanupMountGuards_PendingKeepsIndexDir(t *testing.T) {

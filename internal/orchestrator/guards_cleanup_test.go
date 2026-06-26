@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"strings"
@@ -135,5 +136,111 @@ func TestCleanupMountGuards_DoesNotUnmountHiddenGuards(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
 		t.Fatalf("CleanupMountGuards error: %v", err)
+	}
+}
+
+// Kills: removing the fail-closed reread guard. If the verification reread of
+// /proc/self/mountinfo fails, the old code left remaining=0 and removed the guard
+// directory without confirming the guard mounts were gone. The fix keeps the
+// directory, does NOT report "0 remaining", and returns nil. Here the first read
+// (initial mount state) succeeds with a visible guard mount that is then unmounted,
+// and the second read (verification) fails, so the directory must be kept.
+func TestCleanupMountGuards_RereadFailureKeepsDir(t *testing.T) {
+	origGeteuid := cleanupGeteuid
+	origStat := cleanupStat
+	origReadFile := cleanupReadFile
+	origRemoveAll := cleanupRemoveAll
+	origUnmount := cleanupSysUnmount
+	t.Cleanup(func() {
+		cleanupGeteuid = origGeteuid
+		cleanupStat = origStat
+		cleanupReadFile = origReadFile
+		cleanupRemoveAll = origRemoveAll
+		cleanupSysUnmount = origUnmount
+	})
+
+	cleanupGeteuid = func() int { return 0 }
+	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
+
+	initialMountinfo := "10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/visible rw - ext4 /dev/sda1 rw\n"
+	readCount := 0
+	cleanupReadFile = func(path string) ([]byte, error) {
+		if path != "/proc/self/mountinfo" {
+			return nil, os.ErrNotExist
+		}
+		readCount++
+		if readCount == 1 {
+			return []byte(initialMountinfo), nil
+		}
+		// Verification reread fails: cannot confirm the guard mount is gone.
+		return nil, os.ErrPermission
+	}
+
+	cleanupSysUnmount = func(string, int) error { return nil }
+
+	removed := false
+	cleanupRemoveAll = func(string) error {
+		removed = true
+		return nil
+	}
+
+	logger := logging.New(types.LogLevelError, false)
+	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("CleanupMountGuards must be non-fatal on reread failure, got %v", err)
+	}
+	if removed {
+		t.Fatalf("guard directory must be kept when the verification reread fails (fail-closed)")
+	}
+}
+
+// Kills: rendering the guardsRemaining=-1 fail-closed sentinel as a misleading
+// "guards-remaining=0" (or "-1") in the summary line. On a reread failure the summary
+// must report the remaining count as "unknown".
+func TestCleanupMountGuards_RereadFailureSummaryUnknown(t *testing.T) {
+	origGeteuid := cleanupGeteuid
+	origStat := cleanupStat
+	origReadFile := cleanupReadFile
+	origRemoveAll := cleanupRemoveAll
+	origUnmount := cleanupSysUnmount
+	t.Cleanup(func() {
+		cleanupGeteuid = origGeteuid
+		cleanupStat = origStat
+		cleanupReadFile = origReadFile
+		cleanupRemoveAll = origRemoveAll
+		cleanupSysUnmount = origUnmount
+	})
+
+	cleanupGeteuid = func() int { return 0 }
+	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
+	initialMountinfo := "10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/visible rw - ext4 /dev/sda1 rw\n"
+	readCount := 0
+	cleanupReadFile = func(path string) ([]byte, error) {
+		if path != "/proc/self/mountinfo" {
+			return nil, os.ErrNotExist
+		}
+		readCount++
+		if readCount == 1 {
+			return []byte(initialMountinfo), nil
+		}
+		return nil, os.ErrPermission
+	}
+	cleanupSysUnmount = func(string, int) error { return nil }
+	cleanupRemoveAll = func(string) error { return nil }
+
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("CleanupMountGuards: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "guards-remaining=unknown") {
+		t.Fatalf("summary must report guards-remaining=unknown on reread failure; out=%q", out)
+	}
+	if strings.Contains(out, "guards-remaining=0") {
+		t.Fatalf("summary must not falsely report guards-remaining=0 on reread failure; out=%q", out)
+	}
+	if !strings.Contains(out, "guard-dir=kept") {
+		t.Fatalf("summary must report guard-dir=kept on reread failure; out=%q", out)
 	}
 }

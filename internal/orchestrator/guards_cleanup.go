@@ -40,7 +40,7 @@ type guardCleanupSummary struct {
 	cleared         int  // immutable flags cleared (or would-clear, in dry-run)
 	pending         int  // immutable flags left (mounted/unresolvable/failed)
 	unmounted       int  // bind guards unmounted
-	guardsRemaining int  // bind guard mounts still present after this run
+	guardsRemaining int  // bind guard mounts still present after this run (-1 = unknown: verification reread failed)
 	dirRemoved      bool // the guard directory was removed
 }
 
@@ -56,8 +56,15 @@ func (s *guardCleanupSummary) emit(logger *logging.Logger) {
 	if s.dirRemoved {
 		dirState = "removed"
 	}
-	logger.Info("%s bind-unmounted=%d guards-remaining=%d immutable-cleared=%d immutable-pending=%d guard-dir=%s",
-		prefix, s.unmounted, s.guardsRemaining, s.cleared, s.pending, dirState)
+	// guardsRemaining == -1 is the fail-closed sentinel: the verification reread of
+	// /proc/self/mountinfo failed, so the count is unknown. Render it as "unknown"
+	// rather than a misleading "-1" or "0".
+	remainingStr := strconv.Itoa(s.guardsRemaining)
+	if s.guardsRemaining < 0 {
+		remainingStr = "unknown"
+	}
+	logger.Info("%s bind-unmounted=%d guards-remaining=%s immutable-cleared=%d immutable-pending=%d guard-dir=%s",
+		prefix, s.unmounted, remainingStr, s.cleared, s.pending, dirState)
 	if s.guardsRemaining > 0 {
 		logger.Warning("Guard cleanup: %d bind guard(s) still present (hidden under a real mount, or an unmount failed); they are discarded on reboot, and re-running --cleanup-guards once the storage is unmounted will retry removing them", s.guardsRemaining)
 	}
@@ -184,10 +191,17 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 
 	// If any guard mounts remain (for example hidden under a real mount), or any
 	// immutable guard target is still pending, avoid removing the directory/index.
-	remaining := 0
-	if after, rerr := cleanupReadFile("/proc/self/mountinfo"); rerr == nil {
-		_, _, remaining = guardMountpointsFromMountinfo(string(after))
+	// Fail closed: if the verification reread of /proc/self/mountinfo fails we cannot
+	// confirm the guard mounts are gone, so we must NOT remove the directory and must
+	// NOT report "0 remaining". Keep the index so a later run can finish the job.
+	after, rerr := cleanupReadFile("/proc/self/mountinfo")
+	if rerr != nil {
+		// -1 records "unknown" so the summary never falsely advertises "0 remaining".
+		summary.guardsRemaining = -1
+		logger.Warning("Guard cleanup: could not re-read /proc/self/mountinfo to confirm guard mounts are gone (%v); keeping %s to be safe (re-run --cleanup-guards once the storage is unmounted)", rerr, mountGuardBaseDir)
+		return nil
 	}
+	_, _, remaining := guardMountpointsFromMountinfo(string(after))
 	summary.guardsRemaining = remaining
 	if remaining > 0 || pending > 0 {
 		logger.Warning("Guard cleanup: %d guard mount(s) and %d immutable target(s) still present; not removing %s", remaining, pending, mountGuardBaseDir)
@@ -264,25 +278,42 @@ func guardMountpointsFromMountinfo(mountinfo string) (visible, hidden []string, 
 // clearImmutableGuards reverses the `chattr +i` immutable fallback that restore
 // applied when a guard bind-mount could not be created. It is the symmetric
 // counterpart to the bind-mount unmount loop and processes ONLY the targets
-// ProxSave itself recorded in the immutable-guard index. For each one:
+// ProxSave itself recorded in the immutable-guard index. For each one it first
+// resolves the recorded path through symlinks (re-checking the datastore-root
+// allowlist on the RESOLVED path), then decides what to do:
 //
-//   - a non-datastore mount root is skipped (defense-in-depth against a tampered
-//     or corrupt index — the operation can never escape /mnt, /media, /run/media);
-//   - a target that is currently mounted is skipped, because the immutable flag is
-//     on the shadowed underlying directory and `chattr -i` would touch the live
-//     mount instead (this mirrors how a hidden bind-mount guard is left in place);
+//   - a non-datastore mount root (textually, before resolution) is skipped
+//     (defense-in-depth against a tampered or corrupt index — the operation can
+//     never escape /mnt, /media, /run/media);
+//   - a target whose leaf no longer exists has nothing to clear and is skipped (not
+//     pending — it is removed when the directory is finally cleaned up);
+//   - a target that resolves OUTSIDE the datastore roots (a parent/leaf symlink into
+//     the live OS tree) is refused and left pending — fail-safe, it is never chattr'd;
+//   - a target whose RESOLVED path is currently mounted is skipped, because the
+//     immutable flag is on the shadowed underlying directory and `chattr -i` would
+//     touch the live mount instead (this mirrors how a hidden bind-mount guard is
+//     left in place);
 //   - dry-run only logs the intended action.
+//
+// Ordering matters for correctness: the mount probe and the eventual `chattr -i` are
+// BOTH performed on the same resolved path returned by
+// resolveGuardTargetWithinAllowlist. Probing the raw index path instead could read
+// "not mounted" for a symlinked mountpoint (mountinfo records the kernel-resolved
+// mountpoint) and then run `chattr -i` on the live mount root. By resolving first,
+// the "is this path mounted?" question and the "what will I chattr?" answer can never
+// diverge.
 //
 // Every step is best-effort and non-fatal: a missing/empty index is a no-op, and a
 // failed `chattr -i` on one target does not stop the others or abort cleanup.
 //
 // It returns the number of targets left immutable ("pending"): those skipped because
-// they are currently mounted, whose mount status or path could not be resolved, or
-// whose `chattr -i` failed. The caller keeps the guard directory (and its index) on
-// disk while pending > 0, so a later run — once the storage is unmounted — can still
-// clear them; the index is removed (with the directory) only when nothing is pending
-// and no bind-mount guards remain. In dry-run, pending reflects what a real run would
-// leave behind (mounted/unresolvable targets), so the "would remove" preview is honest.
+// they are currently mounted, whose mount status or path could not be resolved, that
+// resolve outside the datastore roots, or whose `chattr -i` failed. The caller keeps
+// the guard directory (and its index) on disk while pending > 0, so a later run — once
+// the storage is unmounted — can still clear them; the index is removed (with the
+// directory) only when nothing is pending and no bind-mount guards remain. In dry-run,
+// pending reflects what a real run would leave behind (mounted/unresolvable/escaping
+// targets), so the "would remove" preview is honest.
 func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bool) (cleared, pending int) {
 	data, err := cleanupChattrReadFile(mountGuardChattrTargetsPath())
 	if err != nil {
@@ -298,34 +329,14 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 			continue
 		}
 
-		mounted, mErr := isMounted(target)
-		if mErr != nil {
-			logger.Warning("Guard cleanup: cannot determine mount status of %s: %v; leaving immutable flag (clear manually with: chattr -i %s)", target, mErr, target)
-			pending++
-			continue
-		}
-		if mounted {
-			// The real storage is mounted on top, so the immutable flag is on the
-			// shadowed underlying directory; clearing here would touch the live mount
-			// instead. Left intact (mirrors how a hidden bind-mount guard is kept).
-			logger.Info("Guard cleanup: %s is currently mounted; its immutable flag is on the shadowed directory and was left intact (to clear it: unmount the storage, run --cleanup-guards again, then remount)", target)
-			pending++
-			continue
-		}
-
-		if dryRun {
-			logger.Info("DRY RUN: would clear immutable flag (chattr -i) on %s", target)
-			cleared++
-			continue
-		}
-
-		// Resolve symlinks and re-check the allowlist so a parent-component symlink
-		// cannot make chattr -i escape the datastore roots (shared with the apply
-		// paths via resolveGuardTargetWithinAllowlist). A path that no longer exists
-		// has nothing to clear (not pending). If a datastore root itself is a symlink
-		// that resolves outside the allowlist (rare on Proxmox/Debian), the target is
-		// refused and left pending — fail-safe: it never escapes and is never data
-		// loss; the operator can clear it manually with chattr -i.
+		// Resolve symlinks and re-check the allowlist BEFORE probing mount status, so
+		// the mount check and the eventual chattr -i act on the SAME path the kernel
+		// sees (shared with the apply paths via resolveGuardTargetWithinAllowlist).
+		// A path that no longer exists has nothing to clear (not pending). If a
+		// datastore root itself is a symlink that resolves outside the allowlist (rare
+		// on Proxmox/Debian), the target is refused and left pending — fail-safe: it
+		// never escapes and is never data loss; the operator can clear it manually
+		// with chattr -i.
 		resolved, leafExists, ok, rErr := resolveGuardTargetWithinAllowlist(target)
 		if rErr != nil {
 			logger.Warning("Guard cleanup: cannot resolve %s: %v; leaving immutable flag (clear manually with: chattr -i %s)", target, rErr, target)
@@ -339,6 +350,31 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 		if !ok {
 			logger.Warning("Guard cleanup: %s resolves outside the datastore roots (%s); refusing to clear it automatically", target, resolved)
 			pending++
+			continue
+		}
+
+		// Probe mount status on the RESOLVED path. /proc/self/mountinfo records the
+		// kernel-resolved mountpoint, so probing the raw index path could miss a mount
+		// when the recorded path is a symlink to the real mountpoint, and chattr -i
+		// would then hit the live mount root below.
+		mounted, mErr := isMounted(resolved)
+		if mErr != nil {
+			logger.Warning("Guard cleanup: cannot determine mount status of %s: %v; leaving immutable flag (clear manually with: chattr -i %s)", resolved, mErr, resolved)
+			pending++
+			continue
+		}
+		if mounted {
+			// The real storage is mounted on top, so the immutable flag is on the
+			// shadowed underlying directory; clearing here would touch the live mount
+			// instead. Left intact (mirrors how a hidden bind-mount guard is kept).
+			logger.Info("Guard cleanup: %s is currently mounted; its immutable flag is on the shadowed directory and was left intact (to clear it: unmount the storage, run --cleanup-guards again, then remount)", resolved)
+			pending++
+			continue
+		}
+
+		if dryRun {
+			logger.Info("DRY RUN: would clear immutable flag (chattr -i) on %s", resolved)
+			cleared++
 			continue
 		}
 
