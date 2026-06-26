@@ -86,6 +86,14 @@ func parseImmutableGuardTargets(data []byte) []string {
 // directories ProxSave itself made immutable. Best-effort: any failure is logged
 // and swallowed so a recording problem never aborts the restore. The write is
 // atomic and de-duplicated.
+//
+// Retained on purpose, not currently wired into a production code path. The
+// offline mount-guard fallback is warn-only now (it no longer applies `chattr +i`),
+// so nothing in restore writes the index anymore. The reader side stays fully live:
+// CleanupMountGuards / warnLegacyImmutableGuards still parse and clear entries left
+// by older ProxSave versions. This writer is kept (and exercised by tests) as the
+// canonical definition of the index format the reader consumes, so the `chattr +i`
+// fallback can be re-enabled without re-deriving it.
 func recordImmutableGuardTarget(logger *logging.Logger, target string) {
 	clean, ok := isRecordableImmutableTarget(target)
 	if !ok {
