@@ -1144,14 +1144,21 @@ func (c *CloudStorage) remoteSHA256(ctx context.Context, remoteFile string, down
 	// hash field (backend cannot hash) yields a single field and is skipped.
 	want := remoteBaseName(remoteFile)
 	for _, line := range strings.Split(string(output), "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
+		line = strings.TrimSpace(line)
+		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
 		}
+		// The hash is always the first field. The path is the rest of the line
+		// after the whitespace that follows it, and rclone prints paths unquoted,
+		// so a name containing spaces must be reconstructed from the line. Taking
+		// the last Fields() token would yield only the trailing segment (e.g.
+		// "spaces.tar" for "file with spaces.tar") and silently miss the match,
+		// downgrading to size-only verification.
+		remotePath := strings.TrimLeft(strings.TrimPrefix(line, fields[0]), " \t")
 		// Match by basename so we never compare against a different object when
-		// more than one line is returned. The hash is always the first field; the
-		// path is the last (paths may contain spaces).
-		if want != "" && path.Base(fields[len(fields)-1]) != want {
+		// more than one line is returned.
+		if want != "" && path.Base(remotePath) != want {
 			continue
 		}
 		norm, nErr := backup.NormalizeChecksum(fields[0])

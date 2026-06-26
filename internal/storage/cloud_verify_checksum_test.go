@@ -145,6 +145,72 @@ func TestCloudVerifyUploadChecksum(t *testing.T) {
 	}
 }
 
+// TestCloudVerifyUploadChecksumFilenameWithSpaces covers a remote filename that
+// contains spaces. rclone prints the hashsum path unquoted, so the parser must
+// reconstruct the full path from the line rather than reading the last
+// whitespace-delimited token. The mismatch case is the mutation-prover: with the
+// old last-token parser the line would not match the basename and a real checksum
+// mismatch would be silently downgraded to a size-only "OK".
+func TestCloudVerifyUploadChecksumFilenameWithSpaces(t *testing.T) {
+	const remoteFile = "remote:dir/file with spaces.tar"
+	content := "spaced-archive-bytes"
+	wantHash := sha256Hex(content)
+
+	tests := []struct {
+		name          string
+		hashOut       string
+		wantOK        bool
+		wantErrSubstr string
+	}{
+		{
+			name:    "matching hash for a spaced name verifies",
+			hashOut: wantHash + "  file with spaces.tar\n",
+			wantOK:  true,
+		},
+		{
+			name:          "wrong hash for a spaced name is a mismatch, not a silent downgrade",
+			hashOut:       strings.Repeat("a", 64) + "  file with spaces.tar\n",
+			wantOK:        false,
+			wantErrSubstr: "checksum mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			localPath, size, _ := writeLocalForVerify(t, content)
+			cfg := &config.Config{
+				CloudEnabled:           true,
+				CloudRemote:            "remote",
+				CloudVerifyChecksum:    true,
+				RcloneTimeoutOperation: 10,
+			}
+			cs := newCloudStorageForTest(cfg)
+
+			queue := &commandQueue{t: t}
+			// Size pre-check (lsl) succeeds: verifyPrimary only reads the size field.
+			queue.queue = append(queue.queue, queuedResponse{
+				name: "rclone",
+				args: []string{"lsl", remoteFile},
+				out:  itoa(size) + " 2025-01-01 00:00:00 file with spaces.tar\n",
+			})
+			queue.queue = append(queue.queue, queuedResponse{name: "rclone", out: tt.hashOut})
+			cs.execCommand = queue.exec
+
+			ok, err := cs.VerifyUpload(context.Background(), localPath, remoteFile)
+			if tt.wantErrSubstr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrSubstr) {
+					t.Fatalf("want error containing %q, got %v", tt.wantErrSubstr, err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ok != tt.wantOK {
+				t.Fatalf("VerifyUpload ok = %v, want %v (err=%v)", ok, tt.wantOK, err)
+			}
+		})
+	}
+}
+
 // When CLOUD_VERIFY_CHECKSUM is off, no hashsum call must be made (legacy
 // size-only behavior). The commandQueue fails the test on any unexpected command,
 // so queueing only the lsl response asserts hashsum is never called.
