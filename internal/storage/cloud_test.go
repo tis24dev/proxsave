@@ -235,6 +235,35 @@ func TestCloudStorageVerifyAlternativeRejectsSizeMismatch(t *testing.T) {
 	}
 }
 
+// A remote filename containing spaces must still match in the rclone ls output.
+// The old parser read the second whitespace-delimited field as the name, so a
+// spaced name split into pieces and the file was reported as "not found". The
+// fixed parser reconstructs the path from the line after the size token.
+func TestCloudStorageVerifyAlternativeFilenameWithSpaces(t *testing.T) {
+	cfg := &config.Config{
+		CloudEnabled: true,
+		CloudRemote:  "remote",
+	}
+	cs := newCloudStorageForTest(cfg)
+
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{
+				name: "rclone",
+				args: []string{"ls", "remote:dir"},
+				out:  "123 file with spaces.tar\n",
+			},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	ok, err := cs.verifyAlternative(context.Background(), "remote:dir/file with spaces.tar", 123, "file with spaces.tar")
+	if err != nil || !ok {
+		t.Fatalf("verifyAlternative returned %v, %v; want true, nil", ok, err)
+	}
+}
+
 func TestCloudStorageUploadTasksParallelRunsAllTasks(t *testing.T) {
 	tmpDir := t.TempDir()
 	local1 := filepath.Join(tmpDir, "one.tar")

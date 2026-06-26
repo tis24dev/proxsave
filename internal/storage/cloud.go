@@ -1233,14 +1233,18 @@ func (c *CloudStorage) verifyAlternative(ctx context.Context, remoteFile string,
 			continue
 		}
 
-		// ls format: "SIZE FILENAME"
+		// ls format: "SIZE PATH". The path may contain spaces, so reconstruct it
+		// from the line after the leading size token rather than reading the second
+		// whitespace-delimited field (which would be only the first segment of a
+		// spaced name and would never match, reporting the file as not found).
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
 		}
+		remoteName := strings.TrimLeft(strings.TrimPrefix(line, fields[0]), " \t")
 
 		// Check if this is our file
-		if fields[1] != filename {
+		if remoteName != filename {
 			continue
 		}
 
