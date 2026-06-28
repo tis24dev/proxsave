@@ -17,9 +17,19 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
+
+// cloudExecWaitDelay bounds how long defaultExecCommand waits, after ctx
+// cancellation/deadline, for a SIGKILLed rclone to be reaped and its stdout/stderr
+// pipes to drain before they are force-closed and Wait is released with
+// exec.ErrWaitDelay. It is the reaping half of the WithTimeout+WaitDelay pair: a
+// rclone interruptibly stalled on the network (or one whose child holds the pipe
+// open) would otherwise block CombinedOutput's Wait forever. A var (not const) so
+// tests can shrink it; 3s mirrors orchestrator.defaultCommandWaitDelay.
+var cloudExecWaitDelay = 3 * time.Second
 
 // CloudStorage implements the Storage interface for cloud storage using rclone
 // All errors from cloud storage are NON-FATAL - they log warnings but don't abort the backup
@@ -976,6 +986,17 @@ func (c *CloudStorage) wrapUploadError(localPath string, err error) error {
 // UploadToRemotePath uploads an arbitrary file to the provided remote path using
 // the same retry and verification logic used for backups.
 func (c *CloudStorage) UploadToRemotePath(ctx context.Context, localFile, remoteFile string, verify bool) error {
+	// Bound the whole operation (copy retries + verify) on one RcloneTimeoutOperation
+	// budget. This is the only upload entry point reachable with a deadline-less ctx:
+	// the cloud log dispatch passes the run ctx, which is cancel-only (no deadline),
+	// so without this a stalled rclone or dead/stale mount could hang shutdown. Like
+	// Store/runUploadTask (here one shared budget covers copy+verify); guarded >0 to
+	// avoid an already-expired WithTimeout(ctx, 0).
+	if c.config.RcloneTimeoutOperation > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		defer cancel()
+	}
 	if err := c.uploadWithRetry(ctx, localFile, remoteFile); err != nil {
 		return err
 	}
@@ -1024,13 +1045,24 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 	return nil
 }
 
+// fsIoTimeout bounds the in-process LOCAL file syscalls the verify path performs
+// (stat + checksum read) so a dead/stale local mount cannot wedge them in an
+// uninterruptible read. Sourced from FS_IO_TIMEOUT; a non-positive value (the
+// FS_IO_TIMEOUT=0 opt-out) yields 0, which safefs treats as unbounded.
+func (c *CloudStorage) fsIoTimeout() time.Duration {
+	if c == nil || c.config == nil || c.config.FsIoTimeoutSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
+}
+
 // VerifyUpload verifies that a file was successfully uploaded to cloud storage
 // Uses two methods: primary (rclone lsl) and alternative (rclone ls + grep)
 func (c *CloudStorage) VerifyUpload(ctx context.Context, localFile, remoteFile string) (ok bool, err error) {
 	done := logging.DebugStart(c.logger, "cloud verify upload", "file=%s", filepath.Base(localFile))
 	defer func() { done(err) }()
-	// Get local file info
-	localStat, err := os.Stat(localFile)
+	// Get local file info (bounded: the local file may be on a dead/stale mount).
+	localStat, err := safefs.Stat(ctx, localFile, c.fsIoTimeout())
 	if err != nil {
 		return false, fmt.Errorf("cannot stat local file: %w", err)
 	}
@@ -1089,10 +1121,24 @@ func (c *CloudStorage) verifyRemoteChecksum(ctx context.Context, localFile, remo
 		return true, nil
 	}
 
-	localHash, err := backup.GenerateChecksum(ctx, c.logger, localFile)
+	// Bound the local read: GenerateChecksum opens and streams the whole local file,
+	// which on a dead/stale mount blocks in an uninterruptible read its own per-chunk
+	// ctx check cannot break. safefs.Run abandons the worker on timeout. A timeout is
+	// treated like any other local-hash failure here: the size pre-check already
+	// passed, so we keep the size-only verdict (best-effort, Debug) rather than fail a
+	// good upload, which would flip the run's exit code.
+	// Note: FS_IO_TIMEOUT also caps a *healthy* hash of a very large local file, so an
+	// oversized archive on slow local storage may degrade to size-only verification.
+	localHash, err := safefs.Run(ctx, "verify-local-hash", localFile, c.fsIoTimeout(), func() (string, error) {
+		return backup.GenerateChecksum(ctx, c.logger, localFile)
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, err
+		}
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.logger.Debug("Cloud verify: hashing local %s timed out (dead/stale mount?), kept size-only verification", filename)
+			return true, nil
 		}
 		c.logger.Debug("Cloud verify: could not hash local %s, kept size-only verification: %v", filename, err)
 		return true, nil
@@ -1978,6 +2024,14 @@ func defaultExecCommand(ctx context.Context, name string, args ...string) ([]byt
 	if err != nil {
 		return nil, err
 	}
+	// Once ctx is cancelled/expired the process is SIGKILLed; WaitDelay then bounds
+	// how long Wait blocks for it to be reaped / for orphaned pipes to drain before
+	// they are force-closed. Unlike osCommandRunner.Run (deps.go) we deliberately do
+	// NOT swallow exec.ErrWaitDelay to nil: a WaitDelay-killed rclone is an INCOMPLETE
+	// upload/op, and rcloneCopy/uploadWithRetry/verify rely on a non-nil error to
+	// retry or fail rather than record a phantom success. CombinedOutput already
+	// returns ErrWaitDelay as a non-nil error, so we propagate it unchanged.
+	cmd.WaitDelay = cloudExecWaitDelay
 	return cmd.CombinedOutput()
 }
 
