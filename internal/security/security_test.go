@@ -311,7 +311,7 @@ func TestVerifyDirectoriesCreatesMissing(t *testing.T) {
 		SecureAccount: filepath.Join(baseDir, "secure_account"),
 	}
 	checker := newChecker(t, cfg)
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	paths := []string{
 		cfg.BackupPath,
@@ -1721,7 +1721,7 @@ func TestVerifyDirectoriesSkipOwnership(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// Should not have ownership warnings for backup dir when SetBackupPermissions=true
 	// The function should skip ownership checks for this path
@@ -1742,7 +1742,7 @@ func TestVerifyDirectoriesEmptyPath(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// Should not create directories for empty paths
 	// Only identity dirs should be checked
@@ -2083,7 +2083,7 @@ func TestVerifyDirectoriesWithAllPaths(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// All directories should be created
 	paths := []string{
@@ -2337,7 +2337,7 @@ func TestVerifyDirectoriesWithExistingDir(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// Should have warning about wrong permissions
 	hasPermWarning := false
@@ -2369,7 +2369,7 @@ func TestVerifyDirectoriesSkipOwnershipForBackup(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// The backup directory should have ownership check skipped
 	// Ownership warnings for backup path should not appear
@@ -2412,7 +2412,7 @@ func TestVerifyDirectoriesSkipsPOSIXChecksOnCIFSBackupPath(t *testing.T) {
 		},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	for _, issue := range checker.result.Issues {
 		if strings.Contains(issue.Message, backupDir) &&
@@ -2647,7 +2647,7 @@ func TestVerifyDirectoriesStatOtherError(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// The function should handle this case (file exists but is not a directory)
 }

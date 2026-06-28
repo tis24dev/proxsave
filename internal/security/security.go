@@ -130,7 +130,7 @@ func Run(ctx context.Context, logger *logging.Logger, cfg *config.Config, config
 	checker.verifyBinaryIntegrity()
 	checker.verifyConfigFile()
 	checker.verifySensitiveFiles()
-	checker.verifyDirectories()
+	checker.verifyDirectories(ctx)
 	checker.verifySecureAccountFiles()
 	checker.detectPrivateAgeKeys()
 
@@ -491,7 +491,7 @@ func (c *Checker) verifySecureAccountFiles() {
 	}
 }
 
-func (c *Checker) verifyDirectories() {
+func (c *Checker) verifyDirectories(ctx context.Context) {
 	dirs := []struct {
 		path        string
 		perm        os.FileMode
@@ -528,7 +528,7 @@ func (c *Checker) verifyDirectories() {
 			continue
 		}
 
-		if dir.allowBackup && c.shouldSkipPOSIXDirectoryChecks(dir.path) {
+		if dir.allowBackup && c.shouldSkipPOSIXDirectoryChecks(ctx, dir.path) {
 			continue
 		}
 
@@ -848,13 +848,13 @@ func (c *Checker) shouldSkipOwnershipChecks(path string) bool {
 	return false
 }
 
-func (c *Checker) shouldSkipPOSIXDirectoryChecks(path string) bool {
+func (c *Checker) shouldSkipPOSIXDirectoryChecks(ctx context.Context, path string) bool {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return false
 	}
 
-	fsInfo, err := c.detectFilesystemInfo(context.Background(), path)
+	fsInfo, err := c.detectFilesystemInfo(ctx, path)
 	if err != nil {
 		if c.logger != nil {
 			c.logger.Debug("Security check: filesystem detection failed for %s; continuing with POSIX permission checks: %v", path, err)
