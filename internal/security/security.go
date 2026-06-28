@@ -396,7 +396,9 @@ func (c *Checker) verifyBinaryIntegrity() {
 
 	if _, err := os.Stat(hashFile); errors.Is(err, os.ErrNotExist) {
 		if c.cfg.AutoUpdateHashes {
-			if err := os.WriteFile(hashFile, []byte(currentHash), 0o600); err != nil {
+			if c.cfg.DryRun {
+				c.logger.Info("DRY RUN: would create hash file for executable: %s", hashFile)
+			} else if err := os.WriteFile(hashFile, []byte(currentHash), 0o600); err != nil {
 				c.addWarning("Failed to create hash file %s: %v", hashFile, err)
 			} else {
 				c.logger.Info("Created new hash file for executable: %s", hashFile)
@@ -417,7 +419,9 @@ func (c *Checker) verifyBinaryIntegrity() {
 	if strings.TrimSpace(string(stored)) != currentHash {
 		c.bannerWarning(fmt.Sprintf("executable hash mismatch for %s", c.execPath))
 		if c.cfg.AutoUpdateHashes {
-			if err := os.WriteFile(hashFile, []byte(currentHash), 0o600); err != nil {
+			if c.cfg.DryRun {
+				c.logger.Info("DRY RUN: would regenerate hash file: %s", hashFile)
+			} else if err := os.WriteFile(hashFile, []byte(currentHash), 0o600); err != nil {
 				c.addWarning("Failed to update hash file %s: %v", hashFile, err)
 			} else {
 				c.logger.Info("Regenerated hash file: %s", hashFile)
@@ -941,11 +945,15 @@ func (c *Checker) detectFilesystemInfo(ctx context.Context, path string) (*stora
 	}
 	logger := (*logging.Logger)(nil)
 	timeout := time.Duration(0)
+	dryRun := false
 	if c != nil {
 		logger = c.logger
 		timeout = c.fsTimeout
+		if c.cfg != nil {
+			dryRun = c.cfg.DryRun
+		}
 	}
-	return storage.NewFilesystemDetector(logger, storage.WithIOTimeout(timeout)).DetectFilesystem(ctx, path)
+	return storage.NewFilesystemDetector(logger, storage.WithIOTimeout(timeout), storage.WithDryRun(dryRun)).DetectFilesystem(ctx, path)
 }
 
 type ssEntry struct {
@@ -1193,6 +1201,8 @@ func (c *Checker) ensureOwnershipAndPerm(ctx context.Context, path string, info 
 			if c.cfg.AutoFixPermissions {
 				if isSymlink {
 					c.addError("Security: refusing to chmod symlink %s", path)
+				} else if c.cfg.DryRun {
+					c.logger.Info("DRY RUN: would adjust permissions on %s to %o (current %o)", path, expectedPerm, perm)
 				} else if err := safefs.Chmod(ctx, path, expectedPerm, c.fsTimeout); err != nil {
 					if errors.Is(err, safefs.ErrTimeout) {
 						c.addWarning("Security check: chmod on %s timed out after %s; leaving permissions unchanged (dead/stale mount?)", path, c.fsTimeout)
@@ -1219,6 +1229,8 @@ func (c *Checker) ensureOwnershipAndPerm(ctx context.Context, path string, info 
 		if c.cfg.AutoFixPermissions {
 			if isSymlink {
 				c.addError("Security: refusing to chown symlink %s", path)
+			} else if c.cfg.DryRun {
+				c.logger.Info("DRY RUN: would adjust ownership on %s to root:root", path)
 			} else if err := safefs.Lchown(ctx, path, 0, 0, c.fsTimeout); err != nil {
 				if errors.Is(err, safefs.ErrTimeout) {
 					c.addWarning("Security check: chown on %s timed out after %s; leaving ownership unchanged (dead/stale mount?)", path, c.fsTimeout)
@@ -1260,7 +1272,9 @@ func (c *Checker) ensureOwnershipAndPermFromFD(f *os.File, info os.FileInfo, exp
 		if perm := info.Mode().Perm(); perm != expectedPerm {
 			c.bannerWarning(fmt.Sprintf("incorrect permissions on %s (current %o, expected %o)", path, perm, expectedPerm))
 			if c.cfg.AutoFixPermissions {
-				if err := syscall.Fchmod(int(f.Fd()), uint32(expectedPerm)); err != nil {
+				if c.cfg.DryRun {
+					c.logger.Info("DRY RUN: would adjust permissions on %s to %o (current %o)", path, expectedPerm, perm)
+				} else if err := syscall.Fchmod(int(f.Fd()), uint32(expectedPerm)); err != nil {
 					c.addWarning("Failed to adjust permissions on %s: %v", path, err)
 				} else {
 					c.logger.Info("Adjusted permissions on %s to %o", path, expectedPerm)
@@ -1275,7 +1289,9 @@ func (c *Checker) ensureOwnershipAndPermFromFD(f *os.File, info os.FileInfo, exp
 	if info != nil && !isOwnedByRoot(info) {
 		c.bannerWarning(fmt.Sprintf("incorrect ownership on %s (required root:root)", path))
 		if c.cfg.AutoFixPermissions {
-			if err := syscall.Fchown(int(f.Fd()), 0, 0); err != nil {
+			if c.cfg.DryRun {
+				c.logger.Info("DRY RUN: would adjust ownership on %s to root:root", path)
+			} else if err := syscall.Fchown(int(f.Fd()), 0, 0); err != nil {
 				c.addWarning("Failed to set ownership root:root on %s: %v", path, err)
 			} else {
 				c.logger.Info("Adjusted ownership on %s to root:root", path)

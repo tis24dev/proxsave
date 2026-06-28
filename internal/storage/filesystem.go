@@ -24,6 +24,11 @@ type FilesystemDetector struct {
 	// touch dead/stale network mounts should opt in via WithIOTimeout.
 	ioTimeout time.Duration
 
+	// dryRun, when true, suppresses the network-FS ownership write-probe
+	// (testOwnershipSupport creates/chowns/chmods a temp file). A dry run must not
+	// mutate the filesystem, so detection falls back to the type-based default.
+	dryRun bool
+
 	// Test hooks (nil in production).
 	mountPointLookup     func(path string) (string, error)
 	filesystemTypeLookup func(ctx context.Context, mountPoint string) (FilesystemType, string, error)
@@ -44,6 +49,15 @@ func WithIOTimeout(timeout time.Duration) DetectorOption {
 			timeout = 0
 		}
 		d.ioTimeout = timeout
+	}
+}
+
+// WithDryRun suppresses the detector's network-FS ownership write-probe so a dry
+// run performs no filesystem mutations; SupportsOwnership then falls back to the
+// filesystem type's default.
+func WithDryRun(dryRun bool) DetectorOption {
+	return func(d *FilesystemDetector) {
+		d.dryRun = dryRun
 	}
 }
 
@@ -103,18 +117,24 @@ func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) 
 	// Log the detected filesystem in real-time (live output)
 	d.logFilesystemInfo(info)
 
-	// Check if we need to test ownership support for network filesystems
+	// Check if we need to test ownership support for network filesystems. The
+	// probe writes a temp file, so it is skipped in dry-run (which must not mutate
+	// the filesystem); SupportsOwnership keeps the type-based default.
 	if info.IsNetworkFS {
-		testFn := d.testOwnershipSupport
-		if d.ownershipSupportTest != nil {
-			testFn = d.ownershipSupportTest
-		}
-		supportsOwnership := testFn(ctx, path)
-		info.SupportsOwnership = supportsOwnership
-		if supportsOwnership {
-			d.logger.Info("Network filesystem %s supports Unix ownership", fsType)
+		if d.dryRun {
+			d.logger.Debug("DRY RUN: skipping network-FS ownership write-probe for %s; assuming type default (%v)", path, info.SupportsOwnership)
 		} else {
-			d.logger.Info("Network filesystem %s does NOT support Unix ownership", fsType)
+			testFn := d.testOwnershipSupport
+			if d.ownershipSupportTest != nil {
+				testFn = d.ownershipSupportTest
+			}
+			supportsOwnership := testFn(ctx, path)
+			info.SupportsOwnership = supportsOwnership
+			if supportsOwnership {
+				d.logger.Info("Network filesystem %s supports Unix ownership", fsType)
+			} else {
+				d.logger.Info("Network filesystem %s does NOT support Unix ownership", fsType)
+			}
 		}
 	}
 
