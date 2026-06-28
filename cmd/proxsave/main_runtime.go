@@ -66,6 +66,12 @@ func bootstrapRuntime(ctx context.Context, args *cli.Args, bootstrap *logging.Bo
 	rt.initialEnvBaseDir = initialEnvBaseDir
 	rt.autoBaseDirFound = autoFound
 	rt.dryRun = args.DryRun || cfg.DryRun
+	// Make the effective dry-run (CLI flag OR config) visible to every cfg.DryRun
+	// consumer, including the security preflight. Without this, a --dry-run *flag*
+	// run would still let the preflight create directories / mutate the filesystem
+	// because cfg.DryRun only reflects the DRY_RUN config key. This only ever adds
+	// the flag's effect (rt.dryRun already ORs in cfg.DryRun).
+	rt.cfg.DryRun = rt.dryRun
 
 	if exitCode, ok := validateRunConfig(rt); !ok {
 		return nil, exitCode, false

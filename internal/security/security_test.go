@@ -238,7 +238,7 @@ func TestParseSSLineVariants(t *testing.T) {
 
 func TestVerifyConfigFileMissingPath(t *testing.T) {
 	checker := newChecker(t, &config.Config{})
-	checker.verifyConfigFile()
+	checker.verifyConfigFile(context.Background())
 	if !containsIssue(checker.result, "Configuration path not provided") {
 		t.Fatalf("expected warning about missing configuration path, got %+v", checker.result.Issues)
 	}
@@ -247,7 +247,7 @@ func TestVerifyConfigFileMissingPath(t *testing.T) {
 func TestVerifyConfigFileStatError(t *testing.T) {
 	checker := newChecker(t, &config.Config{})
 	checker.configPath = filepath.Join(t.TempDir(), "does-not-exist.conf")
-	checker.verifyConfigFile()
+	checker.verifyConfigFile(context.Background())
 	if !containsIssue(checker.result, "Cannot stat configuration file") {
 		t.Fatalf("expected error about missing configuration file, got %+v", checker.result.Issues)
 	}
@@ -256,7 +256,7 @@ func TestVerifyConfigFileStatError(t *testing.T) {
 func TestVerifySensitiveFilesOptionalSkip(t *testing.T) {
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	checker := newChecker(t, cfg)
-	checker.verifySensitiveFiles()
+	checker.verifySensitiveFiles(context.Background())
 	if checker.result.TotalIssues() != 0 {
 		t.Fatalf("expected no issues for optional sensitive files, got %+v", checker.result.Issues)
 	}
@@ -278,7 +278,7 @@ func TestVerifySensitiveFilesAgeRecipientPermissions(t *testing.T) {
 		EncryptArchive: true,
 	}
 	checker := newChecker(t, cfg)
-	checker.verifySensitiveFiles()
+	checker.verifySensitiveFiles(context.Background())
 
 	if !containsIssue(checker.result, "AGE recipient file") {
 		t.Fatalf("expected warning mentioning AGE recipient file, got %+v", checker.result.Issues)
@@ -294,7 +294,7 @@ func TestVerifySecureAccountFiles(t *testing.T) {
 
 	cfg := &config.Config{SecureAccount: secureDir}
 	checker := newChecker(t, cfg)
-	checker.verifySecureAccountFiles()
+	checker.verifySecureAccountFiles(context.Background())
 
 	if !containsIssue(checker.result, "Secure account file") {
 		t.Fatalf("expected issue referencing secure account file, got %+v", checker.result.Issues)
@@ -1238,7 +1238,7 @@ func TestEnsureOwnershipAndPermNilInfo(t *testing.T) {
 	}
 
 	// Pass nil info - function should call Lstat internally
-	info := checker.ensureOwnershipAndPerm(testFile, nil, 0600, "test file")
+	info := checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0600, "test file")
 	if info == nil {
 		t.Error("ensureOwnershipAndPerm should return FileInfo when nil info passed")
 	}
@@ -1251,7 +1251,7 @@ func TestEnsureOwnershipAndPermNonExistentFile(t *testing.T) {
 		result: &Result{},
 	}
 
-	info := checker.ensureOwnershipAndPerm("/nonexistent/file/path", nil, 0600, "test")
+	info := checker.ensureOwnershipAndPerm(context.Background(), "/nonexistent/file/path", nil, 0600, "test")
 	if info != nil {
 		t.Error("ensureOwnershipAndPerm should return nil for non-existent file")
 	}
@@ -1273,7 +1273,7 @@ func TestEnsureOwnershipAndPermWrongPermissions(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.ensureOwnershipAndPerm(testFile, nil, 0600, "test file")
+	checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0600, "test file")
 
 	// Should have a warning about wrong permissions
 	if !containsIssue(checker.result, "should have permissions") {
@@ -1312,7 +1312,7 @@ func TestEnsureOwnershipAndPermRefusesSymlinkTarget(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.ensureOwnershipAndPerm(link, info, 0o600, "test file via symlink")
+	checker.ensureOwnershipAndPerm(context.Background(), link, info, 0o600, "test file via symlink")
 
 	// The target must NOT have been chmod'd through the link.
 	ti, err := os.Lstat(target)
@@ -1340,7 +1340,7 @@ func TestEnsureOwnershipAndPermAutoFix(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.ensureOwnershipAndPerm(testFile, nil, 0600, "test file")
+	checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0600, "test file")
 
 	// Check if permissions were fixed
 	info, err := os.Stat(testFile)
@@ -1406,7 +1406,7 @@ func TestEnsureOwnershipAndPermSymlink(t *testing.T) {
 	}
 
 	info, _ := os.Lstat(symlinkFile)
-	checker.ensureOwnershipAndPerm(symlinkFile, info, 0600, "symlink test")
+	checker.ensureOwnershipAndPerm(context.Background(), symlinkFile, info, 0600, "symlink test")
 
 	// Should refuse to chmod symlink
 	if !containsIssue(checker.result, "refusing to chmod symlink") {
@@ -1826,7 +1826,7 @@ func TestVerifySecureAccountFilesEmptyPath(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySecureAccountFiles()
+	checker.verifySecureAccountFiles(context.Background())
 
 	// Should return early with no issues
 	if checker.result.TotalIssues() != 0 {
@@ -1843,7 +1843,7 @@ func TestVerifySecureAccountFilesNoJsonFiles(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySecureAccountFiles()
+	checker.verifySecureAccountFiles(context.Background())
 
 	// Should not add issues when no JSON files exist
 	if checker.result.TotalIssues() != 0 {
@@ -1957,7 +1957,7 @@ func TestEnsureOwnershipAndPermNotOwnedByRoot(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.ensureOwnershipAndPerm(testFile, nil, 0600, "test file")
+	checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0600, "test file")
 
 	// Should have warning about ownership (not root:root)
 	if !containsIssue(checker.result, "should be owned by root:root") {
@@ -1990,7 +1990,7 @@ func TestEnsureOwnershipAndPermSymlinkOwnership(t *testing.T) {
 
 	info, _ := os.Lstat(symlinkFile)
 	// Force the symlink path through ownership check
-	checker.ensureOwnershipAndPerm(symlinkFile, info, 0, "symlink test")
+	checker.ensureOwnershipAndPerm(context.Background(), symlinkFile, info, 0, "symlink test")
 
 	// Should refuse to chown symlink
 	if !containsIssue(checker.result, "refusing to chown symlink") {
@@ -2126,7 +2126,7 @@ func TestVerifySensitiveFilesServerIdentity(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySensitiveFiles()
+	checker.verifySensitiveFiles(context.Background())
 
 	// Should have warning about permissions (0644 instead of 0600)
 	if !containsIssue(checker.result, "server identity") {
@@ -2444,7 +2444,7 @@ func TestVerifySecureAccountFilesStatError(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySecureAccountFiles()
+	checker.verifySecureAccountFiles(context.Background())
 
 	// Function should complete without panic
 }
@@ -2467,7 +2467,7 @@ func TestEnsureOwnershipAndPermExpectedPermZero(t *testing.T) {
 	}
 
 	// When expectedPerm is 0, skip permission check
-	checker.ensureOwnershipAndPerm(testFile, nil, 0, "test file")
+	checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0, "test file")
 
 	// Should not have permission-related warnings (only ownership if not root)
 	hasPermWarning := false
@@ -2791,7 +2791,7 @@ func TestVerifySensitiveFilesCustomAgeRecipient(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySensitiveFiles()
+	checker.verifySensitiveFiles(context.Background())
 
 	// Should warn about wrong permissions on custom recipient file
 	if !containsIssue(checker.result, "AGE recipient") {

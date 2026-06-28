@@ -13,7 +13,11 @@ import (
 
 var (
 	osStat        = os.Stat
+	osLstat       = os.Lstat
 	osReadDir     = os.ReadDir
+	osMkdirAll    = os.MkdirAll
+	osChmod       = os.Chmod
+	osLchown      = os.Lchown
 	syscallStatfs = syscall.Statfs
 	fsOpLimiter   = newOperationLimiter(32)
 )
@@ -172,6 +176,52 @@ func Statfs(ctx context.Context, path string, timeout time.Duration) (syscall.St
 		err := statfs(path, &stat)
 		return stat, err
 	})
+}
+
+// Lstat is the bounded, non-symlink-following counterpart to Stat.
+func Lstat(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
+	lstat := osLstat
+	return runLimited(ctx, timeout, &TimeoutError{Op: "lstat", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (fs.FileInfo, error) {
+		return lstat(path)
+	})
+}
+
+// MkdirAll is the bounded counterpart to os.MkdirAll.
+func MkdirAll(ctx context.Context, path string, perm os.FileMode, timeout time.Duration) error {
+	mkdirAll := osMkdirAll
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "mkdirall", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, mkdirAll(path, perm)
+	})
+	return err
+}
+
+// Chmod is the bounded counterpart to os.Chmod (for permission-only modes it is
+// equivalent to syscall.Chmod).
+func Chmod(ctx context.Context, path string, mode os.FileMode, timeout time.Duration) error {
+	chmod := osChmod
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "chmod", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, chmod(path, mode)
+	})
+	return err
+}
+
+// Lchown is the bounded counterpart to os.Lchown (equivalent to syscall.Lchown).
+func Lchown(ctx context.Context, path string, uid, gid int, timeout time.Duration) error {
+	lchown := osLchown
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "lchown", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, lchown(path, uid, gid)
+	})
+	return err
+}
+
+// Run bounds an arbitrary composite filesystem operation with the same
+// goroutine+timer+limiter path used by the typed helpers above. Use it when a
+// single logical probe performs several syscalls that must all be bounded as a
+// unit (for example a create+chown+chmod+stat ownership probe). On timeout the
+// worker goroutine is abandoned (the kernel call is not cancelled) and a
+// *TimeoutError (wrapping ErrTimeout) is returned.
+func Run[T any](ctx context.Context, op, path string, timeout time.Duration, fn func() (T, error)) (T, error) {
+	return runLimited(ctx, timeout, &TimeoutError{Op: op, Path: path, Timeout: effectiveTimeout(ctx, timeout)}, fn)
 }
 
 // SpaceUsageFromStatfs converts statfs counters into total, user-available, and
