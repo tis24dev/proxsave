@@ -305,7 +305,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		// Fallback to local sendmail if relay fails and fallback is enabled.
 		if err != nil && e.config.FallbackSendmail {
 			relayErr = err // Store original relay error
-			e.logger.Warning("WARNING: Cloud relay failed: %v", err)
+			e.logger.Warning("WARNING: Email delivery via cloud relay failed: %v", err)
 			e.logger.Info("Attempting sendmail fallback after relay delivery failure...")
 			e.logger.Debug("Email fallback decision: stage=delivery reason=relay_send_failed cause=%v", relayErr)
 
