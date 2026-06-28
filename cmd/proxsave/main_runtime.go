@@ -15,6 +15,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -207,7 +208,9 @@ func initializeRunLogFile(rt *appRuntime) {
 
 	logFileName := fmt.Sprintf("backup-%s-%s.log", rt.hostname, rt.timestampStr)
 	logFilePath := filepath.Join(rt.cfg.LogPath, logFileName)
-	if err := os.MkdirAll(rt.cfg.LogPath, defaultDirPerm); err != nil {
+	// Bounded so a dead/stale LOG_PATH mount cannot wedge the run here, before the
+	// security preflight even starts, in an uninterruptible syscall.
+	if err := safefs.MkdirAll(rt.ctx, rt.cfg.LogPath, defaultDirPerm, fsIoTimeoutDuration(rt.cfg)); err != nil {
 		logging.Warning("Failed to create log directory %s: %v", rt.cfg.LogPath, err)
 		return
 	}
@@ -224,7 +227,7 @@ func applyRunPermissions(rt *appRuntime) {
 		return
 	}
 	logging.DebugStep(rt.logger, "main", "applying backup permissions")
-	if err := applyBackupPermissions(rt.cfg, rt.logger); err != nil {
+	if err := applyBackupPermissions(rt.ctx, rt.cfg, rt.logger, rt.dryRun); err != nil {
 		logging.Warning("Failed to apply backup permissions: %v", err)
 	}
 }

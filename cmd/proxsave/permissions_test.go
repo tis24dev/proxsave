@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/user"
@@ -40,7 +41,7 @@ func TestApplyBackupPermissionsSkipsMissingDirectories(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(&buf)
 
-	if err := applyBackupPermissions(cfg, logger); err != nil {
+	if err := applyBackupPermissions(context.Background(), cfg, logger, false); err != nil {
 		t.Fatalf("applyBackupPermissions returned error: %v", err)
 	}
 
@@ -84,7 +85,7 @@ func TestApplyBackupPermissionsSkipsNonDirectoryPaths(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SetOutput(&buf)
 
-	if err := applyBackupPermissions(cfg, logger); err != nil {
+	if err := applyBackupPermissions(context.Background(), cfg, logger, false); err != nil {
 		t.Fatalf("applyBackupPermissions returned error: %v", err)
 	}
 

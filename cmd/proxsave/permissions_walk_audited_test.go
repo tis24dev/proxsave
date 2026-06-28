@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -27,7 +28,7 @@ func permWalkTestLogger() *logging.Logger {
 func TestApplyOwnershipWalkEntry_TraversalErrorIsSkippedNotAborted(t *testing.T) {
 	// A non-nil walkErr (with a nil DirEntry, as WalkDir passes on read failures)
 	// must return nil so the walk continues to the rest of the tree.
-	if err := applyOwnershipWalkEntry("/some/unreadable/subdir", nil, errors.New("permission denied"), 0, 0, permWalkTestLogger()); err != nil {
+	if err := applyOwnershipWalkEntry(context.Background(), "/some/unreadable/subdir", nil, errors.New("permission denied"), 0, 0, 0, permWalkTestLogger()); err != nil {
 		t.Fatalf("a traversal error must be skipped (return nil) so the walk continues, got %v", err)
 	}
 }
@@ -44,7 +45,7 @@ func TestApplyOwnershipWalkEntry_NormalEntryReturnsNil(t *testing.T) {
 	}
 
 	// chown to our own uid/gid is a harmless no-op; the entry must process cleanly.
-	if err := applyOwnershipWalkEntry(file, entries[0], nil, os.Getuid(), os.Getgid(), permWalkTestLogger()); err != nil {
+	if err := applyOwnershipWalkEntry(context.Background(), file, entries[0], nil, os.Getuid(), os.Getgid(), 0, permWalkTestLogger()); err != nil {
 		t.Fatalf("a normal entry must return nil, got %v", err)
 	}
 }
