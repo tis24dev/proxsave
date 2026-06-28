@@ -214,6 +214,10 @@ func initializeRunLogFile(rt *appRuntime) {
 		logging.Warning("Failed to create log directory %s: %v", rt.cfg.LogPath, err)
 		return
 	}
+	// Bound the log-file open/write/close on the run logger so a dead/stale LOG_PATH
+	// mount cannot wedge the run (the open here, or any later O_SYNC write under the
+	// logger mutex). Session loggers (local /tmp) keep the unbounded default.
+	rt.logger.SetIOTimeout(fsIoTimeoutDuration(rt.cfg))
 	if err := rt.logger.OpenLogFile(logFilePath); err != nil {
 		logging.Warning("Failed to open log file %s: %v", logFilePath, err)
 		return

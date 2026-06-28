@@ -1,6 +1,8 @@
 package logging
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,22 +11,44 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+// osOpenFile and fileWrite are indirected so tests can simulate a blocking/dead
+// log mount on the open and the write paths.
+var (
+	osOpenFile = os.OpenFile
+	fileWrite  = func(w io.Writer, s string) (int, error) { return fmt.Fprint(w, s) }
+)
+
+// logWriteTimeoutCap bounds how long a single log-line write may block before the
+// file sink is disabled. It caps the FS_IO_TIMEOUT-derived budget so that a mount
+// dying mid-run stalls logging at most this long (once) before degrading to
+// stdout-only, rather than for the full (generous) FS_IO_TIMEOUT.
+const logWriteTimeoutCap = 5 * time.Second
+
 // Logger handles application logging.
 type Logger struct {
-	mu           sync.Mutex
-	level        types.LogLevel
-	useColor     bool
-	output       io.Writer
-	timeFormat   string
-	logFile      *os.File // Log file (optional)
-	warningCount int64
-	errorCount   int64
-	issueLines   []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
-	exitFunc     func(int)
-	secrets      []secretForm // registered secret values scrubbed from every log line
+	mu         sync.Mutex
+	level      types.LogLevel
+	useColor   bool
+	output     io.Writer
+	timeFormat string
+	logFile    *os.File // Log file (optional)
+	// ioTimeout bounds the log-file open/write/close so a dead/stale LOG_PATH mount
+	// cannot wedge the run in an uninterruptible syscall. Zero means unbounded
+	// (legacy / FS_IO_TIMEOUT=0 opt-out). Set via SetIOTimeout by the run logger;
+	// session loggers (local /tmp) leave it at 0.
+	ioTimeout time.Duration
+	// fileSinkDisabled is set after an open/write/close timeout so subsequent log
+	// lines skip the (dead) file and go to stdout only. Guarded by mu.
+	fileSinkDisabled bool
+	warningCount     int64
+	errorCount       int64
+	issueLines       []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
+	exitFunc         func(int)
+	secrets          []secretForm // registered secret values scrubbed from every log line
 }
 
 // RegisterSecret records a secret value so it is masked out of every subsequent
@@ -77,6 +101,16 @@ func (l *Logger) SetOutput(w io.Writer) {
 	l.output = w
 }
 
+// SetIOTimeout bounds subsequent log-file open/write/close operations so a dead or
+// stale LOG_PATH mount cannot wedge the logger in an uninterruptible syscall. A
+// non-positive value restores unbounded behaviour (the FS_IO_TIMEOUT=0 opt-out).
+// Callers pass fsIoTimeoutDuration(cfg).
+func (l *Logger) SetIOTimeout(d time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ioTimeout = d
+}
+
 // SetLevel sets the logging level.
 func (l *Logger) SetLevel(level types.LogLevel) {
 	l.mu.Lock()
@@ -109,15 +143,69 @@ func (l *Logger) OpenLogFile(logPath string) error {
 		}
 	}
 
-	// Create the log file (O_CREATE|O_WRONLY|O_APPEND).
-	// O_SYNC forces immediate writes to disk (real-time, no buffering).
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0600)
+	file, err := l.openFileBounded(logPath)
 	if err != nil {
 		return fmt.Errorf("failed to open log file %s: %w", logPath, err)
 	}
 
 	l.logFile = file
+	l.fileSinkDisabled = false
 	return nil
+}
+
+// openFileBounded performs the O_SYNC create+open, bounded by l.ioTimeout when set
+// (0 = unbounded, legacy). On timeout safefs returns *TimeoutError and abandons the
+// worker goroutine; the caller falls back to stdout-only. Caller must hold l.mu.
+func (l *Logger) openFileBounded(logPath string) (*os.File, error) {
+	open := func() (*os.File, error) {
+		// O_SYNC forces immediate writes to disk (real-time, no buffering).
+		return osOpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0600)
+	}
+	if l.ioTimeout <= 0 {
+		return open()
+	}
+	return safefs.Run(context.Background(), "logopen", logPath, l.ioTimeout, open)
+}
+
+// writeFileLocked writes one preformatted line to the open log file, bounding the
+// (O_SYNC) write so a dead/stale mount cannot wedge the logger while it holds l.mu.
+// On a write timeout the sink is permanently disabled (subsequent lines skip the
+// file). Caller MUST hold l.mu and have checked logFile != nil && !fileSinkDisabled.
+func (l *Logger) writeFileLocked(line string) {
+	f := l.logFile // local: a disable nils l.logFile, the abandoned goroutine keeps f
+	if l.ioTimeout <= 0 {
+		_, _ = fileWrite(f, line) // opt-out / legacy: unbounded
+		return
+	}
+	wt := l.ioTimeout
+	if wt > logWriteTimeoutCap {
+		wt = logWriteTimeoutCap
+	}
+	_, err := safefs.Run(context.Background(), "logwrite", f.Name(), wt, func() (int, error) {
+		return fileWrite(f, line)
+	})
+	if err != nil && errors.Is(err, safefs.ErrTimeout) {
+		l.disableFileSinkLocked(err)
+	}
+}
+
+// disableFileSinkLocked turns the file sink off after a timed-out write so every
+// subsequent line skips the dead mount. The blocked write goroutine is abandoned
+// and the *os.File is intentionally NOT closed here: a Close() on the dead mount
+// would block too, and the abandoned goroutine still references it. We drop our
+// reference (the fd is reclaimed at process exit). Caller MUST hold l.mu.
+func (l *Logger) disableFileSinkLocked(cause error) {
+	if l.fileSinkDisabled {
+		return
+	}
+	l.fileSinkDisabled = true
+	l.logFile = nil
+	timestamp := time.Now().Format(l.timeFormat)
+	warn := fmt.Sprintf("log file sink disabled after I/O timeout (%v); continuing on stdout only", cause)
+	// stdout only - never route this back through the (dead) file sink.
+	_, _ = fmt.Fprintf(l.output, "[%s] %-8s %s\n", timestamp, types.LogLevelWarning.String(), warn)
+	l.warningCount++
+	l.issueLines = append(l.issueLines, fmt.Sprintf("[%s] %-8s %s", timestamp, types.LogLevelWarning.String(), warn))
 }
 
 // CloseLogFile closes the log file (call after notifications).
@@ -128,8 +216,16 @@ func (l *Logger) CloseLogFile() error {
 		return nil
 	}
 
-	err := l.logFile.Close()
+	f := l.logFile
 	l.logFile = nil
+	if l.ioTimeout <= 0 {
+		return f.Close()
+	}
+	// Bound the flushing close so a dead mount cannot hang shutdown; on timeout the
+	// close goroutine and fd are abandoned (l.logFile is already nil, no double close).
+	_, err := safefs.Run(context.Background(), "logclose", f.Name(), l.ioTimeout, func() (struct{}, error) {
+		return struct{}{}, f.Close()
+	})
 	return err
 }
 
@@ -239,9 +335,10 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 	// Write to stdout with colors.
 	_, _ = fmt.Fprint(l.output, outputStdout)
 
-	// If a log file is open, write there too (without colors).
-	if l.logFile != nil {
-		_, _ = fmt.Fprint(l.logFile, outputFile)
+	// If a log file is open and not disabled, write there too (without colors),
+	// bounded so a dead/stale mount cannot wedge logging while holding l.mu.
+	if l.logFile != nil && !l.fileSinkDisabled {
+		l.writeFileLocked(outputFile)
 	}
 }
 
@@ -364,7 +461,7 @@ func (l *Logger) Fatal(exitCode types.ExitCode, format string, args ...interface
 func (l *Logger) AppendRaw(message string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.logFile == nil {
+	if l.logFile == nil || l.fileSinkDisabled {
 		return
 	}
 	timestamp := time.Now().Format(l.timeFormat)
@@ -373,7 +470,7 @@ func (l *Logger) AppendRaw(message string) {
 		types.LogLevelInfo.String(),
 		message,
 	)
-	_, _ = fmt.Fprint(l.logFile, output)
+	l.writeFileLocked(output)
 }
 
 // Package-level default logger
