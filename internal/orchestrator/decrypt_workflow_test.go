@@ -102,7 +102,7 @@ func TestPreparePlainBundle_AllowsMissingRawChecksumSidecar(t *testing.T) {
 	restoreFS = osFS{}
 	t.Cleanup(func() { restoreFS = osFS{} })
 
-	if _, err := preparePlainBundle(context.Background(), reader, cand, "", logging.New(types.LogLevelInfo, false)); err != nil {
+	if _, err := preparePlainBundle(context.Background(), reader, cand, "", logging.New(types.LogLevelInfo, false), 0); err != nil {
 		t.Fatalf("expected manifest checksum to cover missing sidecar, got error: %v", err)
 	}
 }

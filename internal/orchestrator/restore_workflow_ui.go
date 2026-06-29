@@ -35,7 +35,7 @@ func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger 
 		return nil, nil, err
 	}
 
-	prepared, err := preparePlainBundleWithUI(ctx, candidate, version, logger, ui)
+	prepared, err := preparePlainBundleWithUI(ctx, candidate, version, logger, ui, fsIoTimeoutFromConfig(cfg))
 	if err != nil {
 		return nil, nil, err
 	}

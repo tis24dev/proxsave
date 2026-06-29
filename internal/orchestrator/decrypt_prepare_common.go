@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -62,7 +63,7 @@ func resolvePreparedArchivePath(workDir, stagedArchivePath, currentEncryption st
 	return filepath.Join(workDir, archiveBase), nil
 }
 
-func preparePlainBundleCommon(ctx context.Context, cand *backupCandidate, version string, logger *logging.Logger, decryptArchive archiveDecryptFunc) (bundle *preparedBundle, err error) {
+func preparePlainBundleCommon(ctx context.Context, cand *backupCandidate, version string, logger *logging.Logger, decryptArchive archiveDecryptFunc, timeout time.Duration) (bundle *preparedBundle, err error) {
 	if cand == nil || cand.Manifest == nil {
 		return nil, fmt.Errorf("invalid backup candidate")
 	}
@@ -120,7 +121,7 @@ func preparePlainBundleCommon(ctx context.Context, cand *backupCandidate, versio
 		return nil, err
 	}
 
-	sourceChecksum, err := verifyStagedArchiveIntegrity(ctx, logger, staged, cand)
+	sourceChecksum, err := verifyStagedArchiveIntegrity(ctx, logger, staged, cand, timeout)
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -162,7 +163,7 @@ func preparePlainBundleCommon(ctx context.Context, cand *backupCandidate, versio
 		return nil, fmt.Errorf("stat decrypted archive: %w", err)
 	}
 
-	plainChecksum, err := backup.GenerateChecksum(ctx, logger, plainArchivePath)
+	plainChecksum, err := backup.GenerateChecksumBounded(ctx, logger, plainArchivePath, timeout)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("generate checksum: %w", err)

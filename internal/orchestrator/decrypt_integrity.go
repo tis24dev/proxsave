@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -95,7 +96,7 @@ func resolveCandidateIntegrityExpectation(staged stagedFiles, cand *backupCandid
 	return resolveStagedIntegrityExpectation(staged, manifest)
 }
 
-func verifyStagedArchiveIntegrity(ctx context.Context, logger *logging.Logger, staged stagedFiles, cand *backupCandidate) (string, error) {
+func verifyStagedArchiveIntegrity(ctx context.Context, logger *logging.Logger, staged stagedFiles, cand *backupCandidate, timeout time.Duration) (string, error) {
 	if staged.ArchivePath == "" {
 		return "", fmt.Errorf("staged archive path is empty")
 	}
@@ -109,7 +110,7 @@ func verifyStagedArchiveIntegrity(ctx context.Context, logger *logging.Logger, s
 	}
 
 	logger.Info("Verifying staged archive integrity using %s", expectation.Source)
-	ok, err := backup.VerifyChecksum(ctx, logger, staged.ArchivePath, expectation.Checksum)
+	ok, err := backup.VerifyChecksumBounded(ctx, logger, staged.ArchivePath, expectation.Checksum, timeout)
 	if err != nil {
 		return "", fmt.Errorf("verify staged archive: %w", err)
 	}
