@@ -61,6 +61,42 @@ func TestVerifyStagedArchiveIntegrityThreadsTimeout(t *testing.T) {
 	}
 }
 
+// copyRawArtifactsToWorkdirWithLogger stages a LOCAL (non-rclone) raw backup by
+// reading the source from BACKUP_PATH/SECONDARY_PATH (which may be a dead/stale
+// network mount) into the local workdir. That source read must be bounded by
+// FS_IO_TIMEOUT so it cannot wedge the restore before the timeout-aware
+// checksum/decrypt steps. A blockingFS whose Open never returns simulates the dead
+// mount; reverting copyFileBounded to the unbounded copyFile (or dropping the
+// threaded timeout) hangs here and trips the watchdog.
+func TestCopyRawArtifactsToWorkdirBoundsLocalSourceOpen(t *testing.T) {
+	park := make(chan struct{})
+	t.Cleanup(func() { close(park) }) // release the abandoned source-open worker
+	useRestoreFS(t, &blockingFS{blockOpen: true, park: park})
+
+	cand := &backupCandidate{
+		Source:          sourceRaw,
+		RawArchivePath:  "/mnt/dead/backup.tar.xz",
+		RawMetadataPath: "/mnt/dead/backup.metadata",
+	}
+	workDir := t.TempDir()
+	logger := logging.New(types.LogLevelError, false)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), cand, workDir, logger, time.Second)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, safefs.ErrTimeout) {
+			t.Fatalf("want safefs.ErrTimeout from a bounded source open, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("staging hung: the local raw source open is not bounded")
+	}
+}
+
 // preparePlainBundleCommon must thread its timeout into the plain-archive hash
 // (backup.GenerateChecksumBounded). The decrypt callback writes the plain archive,
 // so we make it a FIFO: the bounded hash then wedges on the read and the threaded

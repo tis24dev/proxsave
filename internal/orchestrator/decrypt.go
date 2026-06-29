@@ -605,7 +605,9 @@ func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *loggin
 }
 
 func copyRawArtifactsToWorkdir(ctx context.Context, cand *backupCandidate, workDir string) (staged stagedFiles, err error) {
-	return copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, nil)
+	// timeout 0 = unbounded (legacy); the bounded production path passes the
+	// configured FS_IO_TIMEOUT via copyRawArtifactsToWorkdirWithLogger.
+	return copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, nil, 0)
 }
 
 func baseNameFromRemoteRef(ref string) string {
@@ -638,7 +640,7 @@ func rcloneCopyTo(ctx context.Context, remotePath, localPath string, showProgres
 	return cmd.Run()
 }
 
-func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *backupCandidate, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
+func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *backupCandidate, workDir string, logger *logging.Logger, timeout time.Duration) (staged stagedFiles, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -690,16 +692,16 @@ func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *backupCandid
 		}
 	} else {
 		logging.DebugStep(logger, "stage raw artifacts", "copy archive to %s", archiveDest)
-		if err := copyFile(restoreFS, cand.RawArchivePath, archiveDest); err != nil {
+		if err := copyFileBounded(ctx, restoreFS, cand.RawArchivePath, archiveDest, timeout); err != nil {
 			return stagedFiles{}, fmt.Errorf("copy archive: %w", err)
 		}
 		logging.DebugStep(logger, "stage raw artifacts", "copy metadata to %s", metadataDest)
-		if err := copyFile(restoreFS, cand.RawMetadataPath, metadataDest); err != nil {
+		if err := copyFileBounded(ctx, restoreFS, cand.RawMetadataPath, metadataDest, timeout); err != nil {
 			return stagedFiles{}, fmt.Errorf("copy metadata: %w", err)
 		}
 		if cand.RawChecksumPath != "" && checksumDest != "" {
 			logging.DebugStep(logger, "stage raw artifacts", "copy checksum to %s", checksumDest)
-			if err := copyFile(restoreFS, cand.RawChecksumPath, checksumDest); err != nil {
+			if err := copyFileBounded(ctx, restoreFS, cand.RawChecksumPath, checksumDest, timeout); err != nil {
 				logWarning(logger, "Failed to copy checksum %s: %v", cand.RawChecksumPath, err)
 				checksumDest = ""
 			}

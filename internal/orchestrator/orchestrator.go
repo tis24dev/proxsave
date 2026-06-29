@@ -1246,3 +1246,62 @@ func copyFile(fs FS, src, dest string) (err error) {
 	}
 	return out.Sync()
 }
+
+// copyFileBounded is copyFile with an FS_IO_TIMEOUT bound on the dead-mount-prone
+// source read: a stalled source Open or a mid-stream read on a dead/stale mount
+// (e.g. a network BACKUP_PATH/SECONDARY_PATH) cannot wedge the copy in an
+// uninterruptible (D-state) syscall. The source Open goes through the FS
+// abstraction (so an injected fs is honored) wrapped in safefs.Run, and the byte
+// stream uses safefs.CopyBounded's per-chunk stall budget. timeout<=0 falls back
+// to the unbounded copyFile (the FS_IO_TIMEOUT opt-out). On abandonment the worker
+// may still hold the handles, so they are dropped (not closed) and reclaimed by
+// the os.File finalizer. The dest is the local workDir, so its open stays raw.
+func copyFileBounded(ctx context.Context, fs FS, src, dest string, timeout time.Duration) (err error) {
+	if fs == nil {
+		fs = osFS{}
+	}
+	if timeout <= 0 {
+		return copyFile(fs, src, dest)
+	}
+
+	in, err := safefs.Run(ctx, "copy source open", src, timeout, func() (*os.File, error) {
+		return fs.Open(src)
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Best-effort, bounded read-side close. An abandoned copy worker may still
+		// hold this fd (in==nil below) -> skip it; the finalizer reclaims it. A close
+		// error on the read-only source does not invalidate the already-written
+		// staged copy, so it must not fail the staging.
+		if in == nil {
+			return
+		}
+		_, _ = safefs.Run(ctx, "copy source close", src, timeout, func() (struct{}, error) {
+			return struct{}{}, in.Close()
+		})
+	}()
+
+	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if out == nil { // abandoned worker may still hold this fd
+			return
+		}
+		if cerr := out.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+
+	if _, err = safefs.CopyBounded(ctx, out, in, 1<<20, timeout, "copy source", src); err != nil {
+		if safefs.IsAbandoned(err) {
+			in = nil // the abandoned worker may still touch both handles: skip the closes
+			out = nil
+		}
+		return err
+	}
+	return out.Sync()
+}

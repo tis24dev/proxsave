@@ -2681,7 +2681,7 @@ func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
 	useRestoreFS(t, osFS{})
 
 	fixture := createRawArtifactFixture(t, true, "")
-	staged, err := copyRawArtifactsToWorkdirWithLogger(context.TODO(), fixture.candidate, fixture.workDir, nil)
+	staged, err := copyRawArtifactsToWorkdirWithLogger(context.TODO(), fixture.candidate, fixture.workDir, nil, 0)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdirWithLogger error: %v", err)
 	}
@@ -2691,7 +2691,7 @@ func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
 }
 
 func TestCopyRawArtifactsToWorkdirWithLogger_NilCandidate(t *testing.T) {
-	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), nil, t.TempDir(), nil)
+	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), nil, t.TempDir(), nil, 0)
 	if err == nil {
 		t.Fatal("expected error for nil candidate")
 	}
@@ -2715,7 +2715,7 @@ func TestCopyRawArtifactsToWorkdir_InvalidRclonePaths(t *testing.T) {
 		RawChecksumPath: "",
 	}
 
-	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), cand, workDir, nil)
+	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), cand, workDir, nil, 0)
 	if err == nil {
 		t.Fatal("expected error for invalid rclone paths")
 	}
@@ -3533,7 +3533,7 @@ func TestCopyRawArtifactsToWorkdir_WithChecksum(t *testing.T) {
 	useRestoreFS(t, osFS{})
 
 	fixture := createRawArtifactFixture(t, true, "checksum backup.tar.xz")
-	staged, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), fixture.candidate, fixture.workDir, nil)
+	staged, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), fixture.candidate, fixture.workDir, nil, 0)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdirWithLogger error: %v", err)
 	}
@@ -3853,7 +3853,7 @@ exit 0
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger)
+	_, err := copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger, 0)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -3909,7 +3909,7 @@ fi
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger)
+	_, err := copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger, 0)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
