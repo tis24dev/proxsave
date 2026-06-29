@@ -515,7 +515,7 @@ func TestLocalStorageLoadMetadataFromBundle(t *testing.T) {
 	}
 
 	// Call loadMetadata with the bundle path directly
-	meta, err := local.loadMetadata(bundlePath)
+	meta, err := local.loadMetadata(context.Background(), bundlePath)
 	if err != nil {
 		t.Fatalf("loadMetadata() error = %v", err)
 	}
@@ -706,7 +706,7 @@ func TestLocalStorageLoadMetadataFallsBackToSidecar(t *testing.T) {
 		t.Fatalf("write metadata: %v", err)
 	}
 
-	meta, err := local.loadMetadata(backupPath)
+	meta, err := local.loadMetadata(context.Background(), backupPath)
 	if err != nil {
 		t.Fatalf("loadMetadata() error = %v", err)
 	}
@@ -739,7 +739,7 @@ func TestLocalStorageLoadMetadataMissingFile(t *testing.T) {
 		t.Fatalf("write backup: %v", err)
 	}
 
-	if _, err := local.loadMetadata(backupPath); err == nil {
+	if _, err := local.loadMetadata(context.Background(), backupPath); err == nil {
 		t.Fatal("loadMetadata() should fail when metadata file is missing")
 	}
 }

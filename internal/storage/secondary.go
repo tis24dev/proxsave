@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -37,7 +36,7 @@ func NewSecondaryStorage(cfg *config.Config, logger *logging.Logger) (*Secondary
 		config:     cfg,
 		logger:     logger,
 		basePath:   cfg.SecondaryPath,
-		fsDetector: NewFilesystemDetector(logger),
+		fsDetector: NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
 }
 
@@ -66,8 +65,8 @@ func (s *SecondaryStorage) IsCritical() bool {
 func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (info *FilesystemInfo, err error) {
 	done := logging.DebugStart(s.logger, "secondary detect filesystem", "path=%s", s.basePath)
 	defer func() { done(err) }()
-	// Ensure directory exists
-	if err := os.MkdirAll(s.basePath, 0700); err != nil {
+	// Ensure directory exists (bounded: secondary is typically an NFS/CIFS mount).
+	if err := safefs.MkdirAll(ctx, s.basePath, 0700, fsIoTimeout(s.config)); err != nil {
 		// Non-critical error - log warning and return
 		s.logger.Warning("WARNING: Cannot create secondary backup directory %s: %v", s.basePath, err)
 		s.logger.Warning("WARNING: Secondary backup will be skipped")
@@ -115,8 +114,8 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 		sourceFile = bundlePathFor(sourceFile)
 	}
 
-	// Verify source file exists
-	if _, err := os.Stat(sourceFile); err != nil {
+	// Verify source file exists (bounded against a dead/stale mount).
+	if _, err := safefs.Stat(ctx, sourceFile, fsIoTimeout(s.config)); err != nil {
 		s.logger.Debug("Secondary storage: source file %s not found", sourceFile)
 		s.logger.Warning("WARNING: Secondary storage - backup file not found: %s: %v", sourceFile, err)
 		return &StorageError{
@@ -129,8 +128,8 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 		}
 	}
 
-	// Ensure destination directory exists
-	if err := os.MkdirAll(s.basePath, 0700); err != nil {
+	// Ensure destination directory exists (bounded against a dead/stale mount).
+	if err := safefs.MkdirAll(ctx, s.basePath, 0700, fsIoTimeout(s.config)); err != nil {
 		s.logger.Debug("Secondary storage: failed to create destination folder %s", s.basePath)
 		s.logger.Warning("WARNING: Secondary storage - failed to create destination directory %s: %v", s.basePath, err)
 		return &StorageError{
@@ -172,7 +171,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 		failedAssoc := make([]string, 0)
 
 		for _, srcFile := range associatedFiles {
-			if _, err := os.Stat(srcFile); err != nil {
+			if _, err := safefs.Stat(ctx, srcFile, fsIoTimeout(s.config)); err != nil {
 				continue // Skip if doesn't exist
 			}
 
@@ -227,41 +226,50 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 		return err
 	}
 
-	sourceInfo, err := os.Stat(src)
+	// Bound the leaf metadata/open/finalize syscalls so a dead/stale secondary mount
+	// cannot wedge them. (The byte-transfer loop below is bounded separately in a
+	// follow-up; today it keeps its per-iteration ctx check.)
+	to := fsIoTimeout(s.config)
+
+	sourceInfo, err := safefs.Stat(ctx, src, to)
 	if err != nil {
 		return fmt.Errorf("failed to stat source file %s: %w", src, err)
 	}
 
 	destDir := filepath.Dir(dest)
-	if err := os.MkdirAll(destDir, 0700); err != nil {
+	if err := safefs.MkdirAll(ctx, destDir, 0700, to); err != nil {
 		return fmt.Errorf("failed to create destination directory %s: %w", destDir, err)
 	}
 
-	tempFile, err := os.CreateTemp(destDir, fmt.Sprintf(".tmp-%s-", filepath.Base(dest)))
+	tempFile, err := safefs.CreateTemp(ctx, destDir, fmt.Sprintf(".tmp-%s-", filepath.Base(dest)), to)
 	if err != nil {
 		return fmt.Errorf("failed to create temporary file in %s: %w", destDir, err)
 	}
 	tempName := tempFile.Name()
 	defer func() {
 		if tempFile != nil {
-			if closeErr := tempFile.Close(); closeErr != nil && err == nil {
+			if _, closeErr := safefs.Run(ctx, "secondary-close-temp", tempName, to, func() (struct{}, error) {
+				return struct{}{}, tempFile.Close()
+			}); closeErr != nil && err == nil {
 				err = fmt.Errorf("failed to close temporary file %s: %w", tempName, closeErr)
 			}
 		}
 		if tempName != "" {
-			if removeErr := os.Remove(tempName); removeErr != nil && err == nil && !os.IsNotExist(removeErr) {
+			if removeErr := safefs.Remove(ctx, tempName, to); removeErr != nil && err == nil && !os.IsNotExist(removeErr) {
 				err = fmt.Errorf("failed to remove temporary file %s: %w", tempName, removeErr)
 			}
 		}
 	}()
 
 	start := time.Now()
-	sourceFile, err := os.Open(src)
+	sourceFile, err := safefs.Open(ctx, src, to)
 	if err != nil {
 		return fmt.Errorf("failed to open source file %s: %w", src, err)
 	}
 	defer func() {
-		if closeErr := sourceFile.Close(); closeErr != nil && err == nil {
+		if _, closeErr := safefs.Run(ctx, "secondary-close-src", src, to, func() (struct{}, error) {
+			return struct{}{}, sourceFile.Close()
+		}); closeErr != nil && err == nil {
 			err = fmt.Errorf("failed to close source file %s: %w", src, closeErr)
 		}
 	}()
@@ -290,23 +298,29 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 		}
 	}
 
-	if err := tempFile.Sync(); err != nil {
+	if _, err := safefs.Run(ctx, "secondary-sync-temp", tempName, to, func() (struct{}, error) {
+		return struct{}{}, tempFile.Sync()
+	}); err != nil {
 		return fmt.Errorf("failed to sync temporary file %s: %w", tempName, err)
 	}
-	closeErr := tempFile.Close()
+	_, closeErr := safefs.Run(ctx, "secondary-close-temp", tempName, to, func() (struct{}, error) {
+		return struct{}{}, tempFile.Close()
+	})
 	tempFile = nil
 	if closeErr != nil {
 		return fmt.Errorf("failed to close temporary file %s: %w", tempName, closeErr)
 	}
 
-	if err := os.Chmod(tempName, sourceInfo.Mode()); err != nil {
+	if err := safefs.Chmod(ctx, tempName, sourceInfo.Mode(), to); err != nil {
 		s.logger.Debug("Secondary storage: unable to mirror permissions on %s: %v", tempName, err)
 	}
-	if err := os.Chtimes(tempName, sourceInfo.ModTime(), sourceInfo.ModTime()); err != nil {
+	if _, err := safefs.Run(ctx, "secondary-chtimes", tempName, to, func() (struct{}, error) {
+		return struct{}{}, os.Chtimes(tempName, sourceInfo.ModTime(), sourceInfo.ModTime())
+	}); err != nil {
 		s.logger.Debug("Secondary storage: unable to mirror timestamps on %s: %v", tempName, err)
 	}
 
-	if err := os.Rename(tempName, dest); err != nil {
+	if err := safefs.Rename(ctx, tempName, dest, to); err != nil {
 		return fmt.Errorf("failed to finalize copy to %s: %w", dest, err)
 	}
 	tempName = ""
@@ -340,10 +354,13 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 		filepath.Join(s.basePath, "*-backup-*.tar*"),        // Go pipeline naming (bundle included)
 	}
 
+	timeout := fsIoTimeout(s.config)
 	var matches []string
 	seen := make(map[string]struct{})
 	for _, pattern := range globPatterns {
-		patternMatches, err := filepath.Glob(pattern)
+		patternMatches, err := safefs.Run(ctx, "secondary-glob", s.basePath, timeout, func() ([]string, error) {
+			return filepath.Glob(pattern)
+		})
 		if err != nil {
 			s.logger.Warning("WARNING: Secondary storage - failed to list backups: %v", err)
 			return nil, &StorageError{
@@ -379,7 +396,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			if !strings.HasSuffix(match, ".bundle.tar") {
 				// This is a standalone file, check if bundle exists
 				bundlePath := match + ".bundle.tar"
-				if _, err := os.Stat(bundlePath); err == nil {
+				if _, err := safefs.Stat(ctx, bundlePath, timeout); err == nil {
 					// Bundle exists, skip the standalone file
 					s.logger.Debug("Skipping standalone file %s (bundle exists at %s)",
 						filepath.Base(match), filepath.Base(bundlePath))
@@ -388,8 +405,8 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			}
 		}
 
-		// Get file info
-		stat, err := os.Stat(match)
+		// Get file info (bounded against a dead/stale mount).
+		stat, err := safefs.Stat(ctx, match, timeout)
 		if err != nil {
 			continue
 		}
@@ -431,6 +448,7 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 	// track whether the data archive itself (not just a sidecar) failed, so the
 	// caller never counts a backup whose archive remains on disk as deleted
 	// (PS-BH-001), while a sidecar-only failure still counts (the archive IS gone).
+	timeout := fsIoTimeout(s.config)
 	var failedFiles []string
 	dataFailed := false
 	for _, f := range filesToDelete {
@@ -438,7 +456,7 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 			continue
 		}
 		s.logger.Debug("Removing file: %s", f)
-		if err := os.Remove(f); err != nil {
+		if err := safefs.Remove(ctx, f, timeout); err != nil {
 			if os.IsNotExist(err) {
 				s.logger.Debug("Secondary storage: file already removed %s", f)
 				continue
@@ -757,9 +775,8 @@ func (s *SecondaryStorage) GetStats(ctx context.Context) (stats *StorageStats, e
 	stats.OldestBackup = oldest
 	stats.NewestBackup = newest
 
-	// Get available/total space using statfs
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(s.basePath, &stat); err == nil {
+	// Get available/total space using statfs (bounded against a dead/stale mount).
+	if stat, err := safefs.Statfs(ctx, s.basePath, fsIoTimeout(s.config)); err == nil {
 		total, available, used := safefs.SpaceUsageFromStatfs(stat)
 		stats.AvailableSpace = available
 		stats.TotalSpace = total

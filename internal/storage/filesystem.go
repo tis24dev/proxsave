@@ -386,8 +386,10 @@ func (d *FilesystemDetector) SetPermissions(ctx context.Context, path string, ui
 		return nil
 	}
 
-	// Try to set ownership
-	if err := os.Chown(path, uid, gid); err != nil {
+	// Try to set ownership (bounded against a dead/stale mount).
+	if _, err := safefs.Run(ctx, "setperm-chown", path, d.ioTimeout, func() (struct{}, error) {
+		return struct{}{}, os.Chown(path, uid, gid)
+	}); err != nil {
 		// On compatible filesystem, this is a warning (not an error)
 		if fsInfo != nil && !fsInfo.Type.ShouldAutoExclude() {
 			d.logger.Warning("Failed to set ownership for %s (filesystem %s): %v", path, fsInfo.Type, err)
@@ -395,8 +397,8 @@ func (d *FilesystemDetector) SetPermissions(ctx context.Context, path string, ui
 		// Don't return error - continue with chmod
 	}
 
-	// Try to set permissions
-	if err := os.Chmod(path, mode); err != nil {
+	// Try to set permissions (bounded against a dead/stale mount).
+	if err := safefs.Chmod(ctx, path, mode, d.ioTimeout); err != nil {
 		// On compatible filesystem, this is a warning (not an error)
 		if fsInfo != nil && !fsInfo.Type.ShouldAutoExclude() {
 			d.logger.Warning("Failed to set permissions for %s (filesystem %s): %v", path, fsInfo.Type, err)

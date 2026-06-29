@@ -18,6 +18,10 @@ var (
 	osMkdirAll    = os.MkdirAll
 	osChmod       = os.Chmod
 	osLchown      = os.Lchown
+	osOpen        = os.Open
+	osRemove      = os.Remove
+	osRename      = os.Rename
+	osCreateTemp  = os.CreateTemp
 	syscallStatfs = syscall.Statfs
 	fsOpLimiter   = newOperationLimiter(32)
 )
@@ -222,6 +226,43 @@ func Lchown(ctx context.Context, path string, uid, gid int, timeout time.Duratio
 // *TimeoutError (wrapping ErrTimeout) is returned.
 func Run[T any](ctx context.Context, op, path string, timeout time.Duration, fn func() (T, error)) (T, error) {
 	return runLimited(ctx, timeout, &TimeoutError{Op: op, Path: path, Timeout: effectiveTimeout(ctx, timeout)}, fn)
+}
+
+// Open is the bounded counterpart to os.Open. On timeout the worker is abandoned;
+// a late-completing *os.File is dropped and its fd reclaimed by the os.File finalizer.
+func Open(ctx context.Context, path string, timeout time.Duration) (*os.File, error) {
+	open := osOpen
+	return runLimited(ctx, timeout, &TimeoutError{Op: "open", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (*os.File, error) {
+		return open(path)
+	})
+}
+
+// Remove is the bounded counterpart to os.Remove.
+func Remove(ctx context.Context, path string, timeout time.Duration) error {
+	remove := osRemove
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "remove", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, remove(path)
+	})
+	return err
+}
+
+// Rename is the bounded counterpart to os.Rename (oldpath is reported as Path).
+func Rename(ctx context.Context, oldpath, newpath string, timeout time.Duration) error {
+	rename := osRename
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "rename", Path: oldpath, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, rename(oldpath, newpath)
+	})
+	return err
+}
+
+// CreateTemp is the bounded counterpart to os.CreateTemp. On timeout the worker is
+// abandoned; a late-created temp file may be orphaned in dir (temp+rename callers
+// clean it best-effort).
+func CreateTemp(ctx context.Context, dir, pattern string, timeout time.Duration) (*os.File, error) {
+	createTemp := osCreateTemp
+	return runLimited(ctx, timeout, &TimeoutError{Op: "createtemp", Path: dir, Timeout: effectiveTimeout(ctx, timeout)}, func() (*os.File, error) {
+		return createTemp(dir, pattern)
+	})
 }
 
 // SpaceUsageFromStatfs converts statfs counters into total, user-available, and

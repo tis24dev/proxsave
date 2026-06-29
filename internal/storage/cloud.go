@@ -1050,10 +1050,10 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 // uninterruptible read. Sourced from FS_IO_TIMEOUT; a non-positive value (the
 // FS_IO_TIMEOUT=0 opt-out) yields 0, which safefs treats as unbounded.
 func (c *CloudStorage) fsIoTimeout() time.Duration {
-	if c == nil || c.config == nil || c.config.FsIoTimeoutSeconds <= 0 {
+	if c == nil {
 		return 0
 	}
-	return time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
+	return fsIoTimeout(c.config)
 }
 
 // VerifyUpload verifies that a file was successfully uploaded to cloud storage

@@ -112,6 +112,66 @@ func TestRun_ReturnsTimeoutError(t *testing.T) {
 	}
 }
 
+func TestOpen_ReturnsTimeoutError(t *testing.T) {
+	prev := osOpen
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	registerBlockedOpCleanup(t, "open completion", unblock, finished, func() { osOpen = prev })
+	osOpen = func(string) (*os.File, error) {
+		<-unblock
+		close(finished)
+		return nil, os.ErrNotExist
+	}
+	if _, err := Open(context.Background(), "/does/not/matter", 25*time.Millisecond); err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("Open err = %v; want timeout", err)
+	}
+}
+
+func TestRemove_ReturnsTimeoutError(t *testing.T) {
+	prev := osRemove
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	registerBlockedOpCleanup(t, "remove completion", unblock, finished, func() { osRemove = prev })
+	osRemove = func(string) error {
+		<-unblock
+		close(finished)
+		return nil
+	}
+	if err := Remove(context.Background(), "/does/not/matter", 25*time.Millisecond); err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("Remove err = %v; want timeout", err)
+	}
+}
+
+func TestRename_ReturnsTimeoutError(t *testing.T) {
+	prev := osRename
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	registerBlockedOpCleanup(t, "rename completion", unblock, finished, func() { osRename = prev })
+	osRename = func(string, string) error {
+		<-unblock
+		close(finished)
+		return nil
+	}
+	if err := Rename(context.Background(), "/a", "/b", 25*time.Millisecond); err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("Rename err = %v; want timeout", err)
+	}
+}
+
+func TestCreateTemp_ReturnsTimeoutError(t *testing.T) {
+	prev := osCreateTemp
+	unblock := make(chan struct{})
+	finished := make(chan struct{})
+	registerBlockedOpCleanup(t, "createtemp completion", unblock, finished, func() { osCreateTemp = prev })
+	osCreateTemp = func(string, string) (*os.File, error) {
+		<-unblock
+		close(finished)
+		return nil, os.ErrNotExist
+	}
+	if _, err := CreateTemp(context.Background(), "/dir", ".tmp-", 25*time.Millisecond); err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("CreateTemp err = %v; want timeout", err)
+	}
+}
+
 // TestPrimitives_SucceedOnHealthyFS verifies the new wrappers behave like their
 // raw os counterparts on a responsive filesystem (parity guard for the
 // syscall.Chmod->safefs.Chmod / syscall.Lchown->safefs.Lchown swaps).
