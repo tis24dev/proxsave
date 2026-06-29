@@ -326,8 +326,10 @@ func TestVerifyBinaryIntegrityHashReadTimeoutSkips(t *testing.T) {
 		t.Skipf("mkfifo unsupported: %v", err)
 	}
 	t.Cleanup(func() {
-		// Unblock the abandoned os.ReadFile(FIFO) worker by opening the write end.
-		if w, e := os.OpenFile(hashPath, os.O_WRONLY, 0); e == nil {
+		// Unblock the abandoned FIFO-read worker by opening the write end. O_NONBLOCK
+		// so a regression where the read was never attempted (no reader) returns ENXIO
+		// immediately (e != nil -> skip) instead of wedging the cleanup forever.
+		if w, e := os.OpenFile(hashPath, os.O_WRONLY|syscall.O_NONBLOCK, 0); e == nil {
 			_ = w.Close()
 		}
 	})
@@ -376,12 +378,20 @@ func TestVerifyBinaryIntegrityHashWriteTimeoutWarns(t *testing.T) {
 		_ = w.Close()
 	}()
 	t.Cleanup(func() {
-		<-writerDone
-		// Unblock the abandoned regenerate os.WriteFile(FIFO) worker by draining
-		// the read end.
-		if r, e := os.OpenFile(hashPath, os.O_RDONLY, 0); e == nil {
+		// Drain the read end FIRST (O_NONBLOCK open never wedges): providing a reader
+		// rendezvouses and releases both the feed goroutine's O_WRONLY open and the
+		// abandoned regenerate-write worker's O_WRONLY open, even on a regression where
+		// verifyBinaryIntegrity never touched the FIFO. io.Copy terminates because both
+		// writers close once unblocked.
+		if r, e := os.OpenFile(hashPath, os.O_RDONLY|syscall.O_NONBLOCK, 0); e == nil {
 			_, _ = io.Copy(io.Discard, r)
 			_ = r.Close()
+		}
+		// Then bound the join so a stuck feed goroutine cannot wedge the suite.
+		select {
+		case <-writerDone:
+		case <-time.After(time.Second):
+			t.Error("timed out waiting for the FIFO writer goroutine to finish")
 		}
 	})
 
