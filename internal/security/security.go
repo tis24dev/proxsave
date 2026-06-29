@@ -651,10 +651,14 @@ func (c *Checker) verifyDirectories(ctx context.Context) {
 }
 
 func (c *Checker) detectPrivateAgeKeys(ctx context.Context) {
-	identityDir := filepath.Join(c.cfg.BaseDir, "identity")
-	if identityDir == "" {
+	// Guard on BaseDir, not on the joined path: filepath.Join("", "identity")
+	// yields the relative "identity", so guarding the join never fires and an
+	// empty BaseDir would scan ./identity from the process CWD. BaseDir is a
+	// runtime-defaulted local dir, so empty means "nothing configured" -> skip.
+	if c.cfg.BaseDir == "" {
 		return
 	}
+	identityDir := filepath.Join(c.cfg.BaseDir, "identity")
 
 	if _, err := safefs.Stat(ctx, identityDir, c.fsTimeout); err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {

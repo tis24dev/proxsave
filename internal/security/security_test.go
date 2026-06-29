@@ -1786,6 +1786,21 @@ func TestDetectPrivateAgeKeysSkipsExtensions(t *testing.T) {
 }
 
 func TestDetectPrivateAgeKeysEmptyBaseDir(t *testing.T) {
+	// With an empty BaseDir the scan must be skipped entirely. Plant a
+	// CWD-relative ./identity holding a fake private key: if the guard regressed
+	// to checking the joined path (which is never "" since
+	// filepath.Join("", "identity") == "identity"), the function would walk
+	// ./identity from the process CWD and flag this file.
+	dir := t.TempDir()
+	rel := filepath.Join(dir, "identity")
+	if err := os.MkdirAll(rel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rel, "leaked.key"), []byte("AGE-SECRET-KEY-1ABC"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir) // auto-restored; the planted ./identity is what a dead guard would scan
+
 	checker := &Checker{
 		logger: newSecurityTestLogger(),
 		cfg:    &config.Config{BaseDir: ""},
@@ -1794,9 +1809,9 @@ func TestDetectPrivateAgeKeysEmptyBaseDir(t *testing.T) {
 
 	checker.detectPrivateAgeKeys(context.Background())
 
-	// Should not crash and should not add issues
+	// Empty BaseDir must skip the scan: no crash, and no walk of ./identity.
 	if checker.result.TotalIssues() != 0 {
-		t.Errorf("expected no issues for empty base dir, got %+v", checker.result.Issues)
+		t.Fatalf("empty BaseDir must skip the scan, got %+v", checker.result.Issues)
 	}
 }
 
