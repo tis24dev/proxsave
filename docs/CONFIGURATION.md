@@ -1044,7 +1044,7 @@ BACKUP_PVE_REPLICATION=true        # VM/CT replication config
 # PVE backup files
 BACKUP_PVE_BACKUP_FILES=true       # Include backup files from /var/lib/vz/dump
 PVESH_TIMEOUT=15                   # Timeout (seconds) for each `pvesh` call (0=disabled)
-FS_IO_TIMEOUT=30                   # Timeout (seconds) for filesystem probes on storages (stat/readdir/statfs). Helps avoid hangs on unreachable network mounts (0=disabled)
+FS_IO_TIMEOUT=30                   # Per-operation timeout (seconds) for filesystem syscalls (stat/readdir/open/read/write/close/glob/copy/hash) across the preflight, logging, storage, cloud and restore paths. Prevents hangs on dead/unreachable mounts (0=disabled)
 BACKUP_SMALL_PVE_BACKUPS=false     # Include small backups only
 MAX_PVE_BACKUP_SIZE=100M           # Max size for "small" backups
 PVE_BACKUP_INCLUDE_PATTERN=        # Glob patterns to include

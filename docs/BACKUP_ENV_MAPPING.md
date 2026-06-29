@@ -89,7 +89,7 @@ WEBHOOK_TIMEOUT           = SAME
 
 SYSTEM_ROOT_PREFIX = NEW (Go-only) → Override system root for collection (testing/chroot). Empty or "/" uses the real root.
 PVESH_TIMEOUT = NEW (Go-only) → Timeout (seconds) for each `pvesh` command execution (0=disabled).
-FS_IO_TIMEOUT = NEW (Go-only) → Timeout (seconds) for filesystem probes (stat/readdir/statfs) on storages (0=disabled). Helps avoid hangs on unreachable network mounts.
+FS_IO_TIMEOUT = NEW (Go-only) → Per-operation timeout (seconds) for filesystem syscalls (stat/readdir/open/read/write/close/glob/copy/hash) across the preflight, logging, storage, cloud and restore paths (0=disabled). Prevents hangs on dead/unreachable mounts.
 NOTE: PBS restore behavior is selected interactively during `--restore` and is intentionally not configured via `backup.env`.
 NOTE: There is no dedicated `DUAL_*` environment family. Dual-role hosts are detected automatically and use the same PVE/PBS collector flags in a single run.
 BACKUP_PBS_S3_ENDPOINTS = NEW (Go-only) → Collect `s3.cfg` and S3 endpoint snapshots (PBS).
