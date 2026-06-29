@@ -1154,18 +1154,27 @@ func (c *CloudStorage) verifyRemoteChecksum(ctx context.Context, localFile, remo
 	// by content. Only a genuinely stalled read (no progress for FS_IO_TIMEOUT, e.g. a
 	// dead/stale mount whose uninterruptible read never returns) is abandoned. A stall
 	// is treated like any other local-hash failure here: the size pre-check already
-	// passed, so we keep the size-only verdict (best-effort, Debug) rather than fail a
-	// good upload, which would flip the run's exit code.
+	// passed, so we keep the size-only verdict (best-effort) rather than fail a good
+	// upload, but we surface it at Warning (see below) so it is not silent.
 	localHash, err := backup.GenerateChecksumBounded(ctx, c.logger, localFile, c.fsIoTimeout())
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, err
 		}
+		// We hold the remote SHA256 but could not compute the local one, so the
+		// object is kept on the (already-passed) size-only verdict rather than
+		// failed: a local-read fault is no evidence the remote object is bad, the
+		// upload already streamed those bytes, and cloud is non-critical. Unlike a
+		// backend that simply has no SHA256 (an expected capability limit, Debug
+		// above), this is an actionable anomaly (typically a dead/stale BACKUP_PATH
+		// mount), so surface it at Warning: it must not be silently swallowed, and
+		// the run's exit code should reflect that the requested checksum could not
+		// actually run.
 		if errors.Is(err, safefs.ErrTimeout) {
-			c.logger.Debug("Cloud verify: hashing local %s stalled (dead/stale mount?), kept size-only verification", filename)
+			c.logger.Warning("Cloud verify: hashing local %s stalled (dead/stale mount?); object kept on size-only verification, full checksum NOT performed - check the backup mount", filename)
 			return true, nil
 		}
-		c.logger.Debug("Cloud verify: could not hash local %s, kept size-only verification: %v", filename, err)
+		c.logger.Warning("Cloud verify: could not hash local %s; object kept on size-only verification, full checksum NOT performed: %v", filename, err)
 		return true, nil
 	}
 	if remoteHash != localHash {

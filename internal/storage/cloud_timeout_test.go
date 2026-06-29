@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -158,6 +160,13 @@ func TestVerifyRemoteChecksumLocalHashTimeoutDegrades(t *testing.T) {
 
 	cfg := &config.Config{CloudRemote: "remote", FsIoTimeoutSeconds: 1, RcloneTimeoutOperation: 30}
 	cs := newCloudStorageForTest(cfg)
+	// Capture at Info level: a genuine stall must be surfaced at Warning (not the
+	// silent Debug used for a capability-limited backend). Info filters out Debug,
+	// so reverting the warning back to Debug leaves the buffer empty and fails this.
+	var buf bytes.Buffer
+	lg := logging.New(types.LogLevelInfo, false)
+	lg.SetOutput(&buf)
+	cs.logger = lg
 	q := &commandQueue{t: t, queue: []queuedResponse{
 		{name: "rclone", out: "0000000000000000000000000000000000000000000000000000000000000000  log.txt"},
 	}}
@@ -170,6 +179,9 @@ func TestVerifyRemoteChecksumLocalHashTimeoutDegrades(t *testing.T) {
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Fatalf("local hash was not bounded: %s", d)
+	}
+	if !strings.Contains(buf.String(), "stalled") || !strings.Contains(buf.String(), "full checksum NOT performed") {
+		t.Fatalf("a genuine local-hash stall must be surfaced at Warning, got log:\n%s", buf.String())
 	}
 }
 
