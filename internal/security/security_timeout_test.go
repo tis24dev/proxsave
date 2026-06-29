@@ -2,8 +2,11 @@ package security
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -238,5 +241,159 @@ func TestDetectPrivateAgeKeysSkipsOnTimeout(t *testing.T) {
 	}
 	if containsIssue(checker.result, "Possible private AGE/SSH key") {
 		t.Fatalf("must not scan/flag keys on timeout; got %+v", checker.result.Issues)
+	}
+}
+
+// runVerifyBinaryIntegrityGuarded runs verifyBinaryIntegrity in a goroutine and
+// fails the test if it does not return within 5s. A reverted bound on any .md5
+// op manifests as a hang on a wedged FIFO / blocked stat seam, so this watchdog
+// is the mutation property: drop a bound -> the op blocks forever -> Fatal.
+func runVerifyBinaryIntegrityGuarded(t *testing.T, checker *Checker, ctx context.Context) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		checker.verifyBinaryIntegrity(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("verifyBinaryIntegrity hung: a .md5 op is not timeout-bounded")
+	}
+}
+
+// TestVerifyBinaryIntegrityHashStatTimeoutSkips proves the existence-stat bound
+// on the .md5 path AND the explicit safefs.ErrTimeout branch (the control-flow
+// trap): a wedged stat must warn+skip, never fall through to the read.
+// Mutation: revert safefs.Stat -> os.Stat (the seam swaps safefs's osStat, not
+// the package's os.Stat, so a raw os.Stat returns ErrNotExist instantly and the
+// "timed out" warning never appears); OR delete the ErrTimeout branch (falls
+// through to the bounded read and emits a different message) -> this test fails.
+func TestVerifyBinaryIntegrityHashStatTimeoutSkips(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "binary")
+	if err := os.WriteFile(execPath, []byte("real content"), 0o700); err != nil {
+		t.Fatalf("write exec: %v", err)
+	}
+	// A real, readable .md5 with stale content: if the stat were NOT bounded the
+	// code would fall through, read this file, and warn "Executable hash mismatch"
+	// (never "timed out").
+	if err := os.WriteFile(execPath+".md5", []byte("stale-hash"), 0o600); err != nil {
+		t.Fatalf("write hash: %v", err)
+	}
+
+	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: false}, execPath)
+	checker.fsTimeout = 300 * time.Millisecond
+
+	// Install the blocking osStat seam AFTER setup (setup used raw os.WriteFile,
+	// not safefs.Stat). The lone safefs.Stat call in verifyBinaryIntegrity is the
+	// hashFile existence check; the executable path uses osLstat/osOpen and the
+	// FD-based ownership/checksum helpers, none of which route through osStat.
+	park := make(chan struct{})
+	t.Cleanup(func() { close(park) }) // release the abandoned osStat worker
+	restore := safefs.SetOsStatForTest(func(string) (os.FileInfo, error) {
+		<-park
+		return nil, errors.New("released")
+	})
+	t.Cleanup(restore)
+
+	runVerifyBinaryIntegrityGuarded(t, checker, context.Background())
+
+	if checker.result.ErrorCount() != 0 {
+		t.Fatalf("stat timeout must not error, got %d: %+v", checker.result.ErrorCount(), checker.result.Issues)
+	}
+	if !containsIssue(checker.result, "stat of hash file") || !containsIssue(checker.result, "timed out") {
+		t.Fatalf("expected a stat-of-hash-file timeout warning, got %+v", checker.result.Issues)
+	}
+	if containsIssue(checker.result, "Unable to read hash file") || containsIssue(checker.result, "Executable hash mismatch") {
+		t.Fatalf("stat timeout must not fall through to read/compare, got %+v", checker.result.Issues)
+	}
+}
+
+// TestVerifyBinaryIntegrityHashReadTimeoutSkips proves the ReadFile bound. The
+// .md5 is a FIFO with no writer: os.Stat(FIFO) succeeds (exists) so the code
+// falls through to the bounded read, which blocks on the writer-less FIFO until
+// the fs timeout fires. Mutation: revert safefs.Run -> raw os.ReadFile -> the
+// read blocks forever -> the watchdog Fatals.
+func TestVerifyBinaryIntegrityHashReadTimeoutSkips(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "binary")
+	if err := os.WriteFile(execPath, []byte("content"), 0o700); err != nil {
+		t.Fatalf("write exec: %v", err)
+	}
+	hashPath := execPath + ".md5"
+	if err := syscall.Mkfifo(hashPath, 0o600); err != nil {
+		t.Skipf("mkfifo unsupported: %v", err)
+	}
+	t.Cleanup(func() {
+		// Unblock the abandoned os.ReadFile(FIFO) worker by opening the write end.
+		if w, e := os.OpenFile(hashPath, os.O_WRONLY, 0); e == nil {
+			_ = w.Close()
+		}
+	})
+
+	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: false}, execPath)
+	checker.fsTimeout = 300 * time.Millisecond
+
+	runVerifyBinaryIntegrityGuarded(t, checker, context.Background())
+
+	if checker.result.ErrorCount() != 0 {
+		t.Fatalf("read timeout must not error, got %d: %+v", checker.result.ErrorCount(), checker.result.Issues)
+	}
+	if !containsIssue(checker.result, "reading hash file") || !containsIssue(checker.result, "timed out") {
+		t.Fatalf("expected a reading-hash-file timeout warning, got %+v", checker.result.Issues)
+	}
+}
+
+// TestVerifyBinaryIntegrityHashWriteTimeoutWarns proves the WriteFile bound via
+// the regenerate path (which shares c.writeHashFile with the create path, so a
+// single revert point covers both writes). A feed goroutine writes a wrong hash
+// to the FIFO then closes it, so the bounded read returns a mismatch; the
+// subsequent regenerate write opens the now reader/writer-less FIFO O_WRONLY and
+// blocks until the fs timeout fires. Mutation: revert writeHashFile's safefs.Run
+// -> raw os.WriteFile -> the write blocks forever -> the watchdog Fatals.
+func TestVerifyBinaryIntegrityHashWriteTimeoutWarns(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "binary")
+	if err := os.WriteFile(execPath, []byte("content"), 0o700); err != nil {
+		t.Fatalf("write exec: %v", err)
+	}
+	hashPath := execPath + ".md5"
+	if err := syscall.Mkfifo(hashPath, 0o600); err != nil {
+		t.Skipf("mkfifo unsupported: %v", err)
+	}
+
+	// Feed a wrong hash then EOF so the bounded read yields a mismatch and the
+	// code proceeds to the regenerate write.
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		w, e := os.OpenFile(hashPath, os.O_WRONLY, 0)
+		if e != nil {
+			return
+		}
+		_, _ = w.Write([]byte("stale-hash\n"))
+		_ = w.Close()
+	}()
+	t.Cleanup(func() {
+		<-writerDone
+		// Unblock the abandoned regenerate os.WriteFile(FIFO) worker by draining
+		// the read end.
+		if r, e := os.OpenFile(hashPath, os.O_RDONLY, 0); e == nil {
+			_, _ = io.Copy(io.Discard, r)
+			_ = r.Close()
+		}
+	})
+
+	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: true, DryRun: false}, execPath)
+	checker.fsTimeout = 300 * time.Millisecond
+
+	runVerifyBinaryIntegrityGuarded(t, checker, context.Background())
+
+	if checker.result.ErrorCount() != 0 {
+		t.Fatalf("write timeout must not error, got %d: %+v", checker.result.ErrorCount(), checker.result.Issues)
+	}
+	if !containsIssue(checker.result, "Failed to update hash file") {
+		t.Fatalf("expected a failed-to-update-hash-file warning, got %+v", checker.result.Issues)
 	}
 }

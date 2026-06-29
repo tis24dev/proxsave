@@ -403,24 +403,49 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 		return
 	}
 
-	if _, err := os.Stat(hashFile); errors.Is(err, os.ErrNotExist) {
-		if c.cfg.AutoUpdateHashes {
-			if c.cfg.DryRun {
-				c.logger.Info("DRY RUN: would create hash file for executable: %s", hashFile)
-			} else if err := os.WriteFile(hashFile, []byte(currentHash), 0o600); err != nil {
-				c.addWarning("Failed to create hash file %s: %v", hashFile, err)
-			} else {
-				c.logger.Info("Created new hash file for executable: %s", hashFile)
-			}
-		} else {
-			c.bannerWarning(fmt.Sprintf("hash file %s missing", hashFile))
-			c.addWarning("Hash file %s missing (AUTO_UPDATE_HASHES=false)", hashFile)
+	// The .md5 hash-file path is bounded with the same fs timeout as the
+	// executable above: a dead/stale mount must not wedge the integrity check
+	// here either. safefs.Stat is the bounded counterpart of os.Stat. Its
+	// outcomes are mapped explicitly:
+	//   safefs.ErrTimeout -> dead/stale mount: warn + skip (like the exec path).
+	//     Handled FIRST, because a *TimeoutError is never os.ErrNotExist and
+	//     would otherwise fall through to the (also bounded) read and time out
+	//     a second time.
+	//   os.ErrNotExist    -> genuinely missing: create (AUTO_UPDATE_HASHES) or warn.
+	//   other error / nil -> fall through to the bounded read+compare, exactly
+	//     as the original raw os.Stat fall-through did.
+	if _, statErr := safefs.Stat(ctx, hashFile, c.fsTimeout); statErr != nil {
+		if errors.Is(statErr, safefs.ErrTimeout) {
+			c.addWarning("Security check: stat of hash file %s timed out after %s; skipping integrity check (dead/stale mount?)", hashFile, c.fsTimeout)
+			return
 		}
-		return
+		if errors.Is(statErr, os.ErrNotExist) {
+			if c.cfg.AutoUpdateHashes {
+				if c.cfg.DryRun {
+					c.logger.Info("DRY RUN: would create hash file for executable: %s", hashFile)
+				} else if werr := c.writeHashFile(ctx, hashFile, currentHash); werr != nil {
+					c.addWarning("Failed to create hash file %s: %v", hashFile, werr)
+				} else {
+					c.logger.Info("Created new hash file for executable: %s", hashFile)
+				}
+			} else {
+				c.bannerWarning(fmt.Sprintf("hash file %s missing", hashFile))
+				c.addWarning("Hash file %s missing (AUTO_UPDATE_HASHES=false)", hashFile)
+			}
+			return
+		}
+		// Any other stat error (e.g. EACCES): preserve the original behavior and
+		// fall through to the read below, which surfaces the concrete failure.
 	}
 
-	stored, err := os.ReadFile(hashFile)
+	stored, err := safefs.Run(ctx, "readfile", hashFile, c.fsTimeout, func() ([]byte, error) {
+		return os.ReadFile(hashFile)
+	})
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: reading hash file %s timed out after %s; skipping integrity check (dead/stale mount?)", hashFile, c.fsTimeout)
+			return
+		}
 		c.addWarning("Unable to read hash file %s: %v", hashFile, err)
 		return
 	}
@@ -430,8 +455,8 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 		if c.cfg.AutoUpdateHashes {
 			if c.cfg.DryRun {
 				c.logger.Info("DRY RUN: would regenerate hash file: %s", hashFile)
-			} else if err := os.WriteFile(hashFile, []byte(currentHash), 0o600); err != nil {
-				c.addWarning("Failed to update hash file %s: %v", hashFile, err)
+			} else if werr := c.writeHashFile(ctx, hashFile, currentHash); werr != nil {
+				c.addWarning("Failed to update hash file %s: %v", hashFile, werr)
 			} else {
 				c.logger.Info("Regenerated hash file: %s", hashFile)
 			}
@@ -439,6 +464,19 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 			c.addWarning("Executable hash mismatch for %s (expected %s, current %s)", c.execPath, strings.TrimSpace(string(stored)), currentHash)
 		}
 	}
+}
+
+// writeHashFile writes currentHash to hashFile under the fs timeout. os.WriteFile
+// opens the path, which a dead/stale mount can wedge, so the write is bounded
+// with safefs.Run; on timeout a *TimeoutError (wrapping safefs.ErrTimeout) is
+// returned and the caller surfaces it through its best-effort
+// "Failed to create/update hash file" warning. With c.fsTimeout <= 0 (legacy /
+// FS_IO_TIMEOUT unset) safefs.Run is a direct synchronous os.WriteFile.
+func (c *Checker) writeHashFile(ctx context.Context, hashFile, currentHash string) error {
+	_, err := safefs.Run(ctx, "writefile", hashFile, c.fsTimeout, func() (struct{}, error) {
+		return struct{}{}, os.WriteFile(hashFile, []byte(currentHash), 0o600)
+	})
+	return err
 }
 
 func (c *Checker) verifyConfigFile(ctx context.Context) {
