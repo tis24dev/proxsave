@@ -219,6 +219,12 @@ func (s *SecondaryStorage) countBackups(ctx context.Context) int {
 	return len(backups)
 }
 
+// secondaryCloseSourceFile closes the read source after a copy. It is a seam so
+// a test can prove that a close failure on the success path (after the
+// destination has been durably renamed) is treated as best-effort read-side
+// cleanup and never turns a committed copy into a reported failure.
+var secondaryCloseSourceFile = func(f *os.File) error { return f.Close() }
+
 // copyFile copies a file using Go's io.Copy
 func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err error) {
 	if err := ctx.Err(); err != nil {
@@ -269,10 +275,16 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 		if sourceFile == nil { // abandoned copy worker may still hold this fd
 			return
 		}
+		// Best-effort read-side cleanup: on the success path the destination has
+		// already been durably renamed into place before this runs, so a failed or
+		// timed-out close of the read-only source must NOT turn a committed copy
+		// into a reported failure (that would drive misleading retries / duplicate
+		// backups). On the error paths err is already set, so this never masks a
+		// pre-commit failure either.
 		if _, closeErr := safefs.Run(ctx, "secondary-close-src", src, to, func() (struct{}, error) {
-			return struct{}{}, sourceFile.Close()
-		}); closeErr != nil && err == nil {
-			err = fmt.Errorf("failed to close source file %s: %w", src, closeErr)
+			return struct{}{}, secondaryCloseSourceFile(sourceFile)
+		}); closeErr != nil {
+			s.logger.Debug("Secondary storage: failed to close source file %s: %v", src, closeErr)
 		}
 	}()
 
