@@ -1146,23 +1146,21 @@ func (c *CloudStorage) verifyRemoteChecksum(ctx context.Context, localFile, remo
 		return true, nil
 	}
 
-	// Bound the local read: GenerateChecksum opens and streams the whole local file,
-	// which on a dead/stale mount blocks in an uninterruptible read its own per-chunk
-	// ctx check cannot break. safefs.Run abandons the worker on timeout. A timeout is
-	// treated like any other local-hash failure here: the size pre-check already
+	// Bound the local read per-chunk: GenerateChecksumBounded streams the whole local
+	// file but resets its stall budget on every chunk, so a healthy archive that is
+	// merely large (slow but steadily progressing) hashes to completion and is verified
+	// by content. Only a genuinely stalled read (no progress for FS_IO_TIMEOUT, e.g. a
+	// dead/stale mount whose uninterruptible read never returns) is abandoned. A stall
+	// is treated like any other local-hash failure here: the size pre-check already
 	// passed, so we keep the size-only verdict (best-effort, Debug) rather than fail a
 	// good upload, which would flip the run's exit code.
-	// Note: FS_IO_TIMEOUT also caps a *healthy* hash of a very large local file, so an
-	// oversized archive on slow local storage may degrade to size-only verification.
-	localHash, err := safefs.Run(ctx, "verify-local-hash", localFile, c.fsIoTimeout(), func() (string, error) {
-		return backup.GenerateChecksum(ctx, c.logger, localFile)
-	})
+	localHash, err := backup.GenerateChecksumBounded(ctx, c.logger, localFile, c.fsIoTimeout())
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, err
 		}
 		if errors.Is(err, safefs.ErrTimeout) {
-			c.logger.Debug("Cloud verify: hashing local %s timed out (dead/stale mount?), kept size-only verification", filename)
+			c.logger.Debug("Cloud verify: hashing local %s stalled (dead/stale mount?), kept size-only verification", filename)
 			return true, nil
 		}
 		c.logger.Debug("Cloud verify: could not hash local %s, kept size-only verification: %v", filename, err)

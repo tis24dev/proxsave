@@ -123,3 +123,70 @@ func TestVerifyRemoteChecksumLocalHashTimeoutDegrades(t *testing.T) {
 		t.Fatalf("local hash was not bounded: %s", d)
 	}
 }
+
+// Item 5 (mutation-prover for the per-chunk cloud-verify fix): a HEALTHY local
+// archive whose read is slow-but-progressing (aggregate hash time exceeds
+// FS_IO_TIMEOUT, yet every individual chunk lands well under it) must be hashed
+// to completion and verified by CONTENT, not silently downgraded to size-only.
+//
+// This pins verifyRemoteChecksum to the per-chunk-bounded backup.GenerateChecksumBounded.
+// The superseded whole-file safefs.Run(..., FS_IO_TIMEOUT) wrapper would abandon
+// this read at the 1s whole-file deadline and degrade to size-only, so the wrong
+// remote hash below would be wrongly accepted as (true, nil). With the per-chunk
+// budget the read finishes and the mismatch is caught: (false, "checksum mismatch").
+// Reverting cloud.go to the whole-file wrapper turns this test red.
+func TestVerifyRemoteChecksumHealthySlowReadIsContentVerified(t *testing.T) {
+	tmp := t.TempDir()
+	fifo := filepath.Join(tmp, "log.txt")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo unsupported: %v", err)
+	}
+
+	// A slow-but-alive producer: 15 chunks, 100ms apart => ~1.5s aggregate (well
+	// over the 1s FS_IO_TIMEOUT) while no single read waits anywhere near 1s. The
+	// total payload (<1 KiB) stays inside the pipe buffer, so the writer is paced
+	// solely by its own sleeps, never by the reader.
+	const chunks = 15
+	chunk := []byte("proxsave-healthy-slow-chunk\n")
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		w, err := os.OpenFile(fifo, os.O_WRONLY, 0) // rendezvous: unblocks once the reader opens the FIFO
+		if err != nil {
+			return
+		}
+		defer func() { _ = w.Close() }()
+		for i := 0; i < chunks; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if _, werr := w.Write(chunk); werr != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-writerDone:
+		case <-time.After(5 * time.Second):
+			t.Error("slow FIFO writer did not finish")
+		}
+	})
+
+	cfg := &config.Config{CloudRemote: "remote", FsIoTimeoutSeconds: 1, RcloneTimeoutOperation: 30}
+	cs := newCloudStorageForTest(cfg)
+	// A valid-but-wrong remote SHA256: the streamed content hashes to something
+	// else, so a COMPLETED local hash must report a mismatch rather than a
+	// size-only "OK". (A whole-file deadline would never reach this comparison.)
+	q := &commandQueue{t: t, queue: []queuedResponse{
+		{name: "rclone", out: strings.Repeat("0", 64) + "  log.txt"},
+	}}
+	cs.execCommand = q.exec
+
+	start := time.Now()
+	ok, err := cs.verifyRemoteChecksum(context.Background(), fifo, "remote:logs/log.txt", "log.txt")
+	if d := time.Since(start); d < time.Second {
+		t.Fatalf("hash finished in %s; the slow producer must push it past the 1s FS_IO_TIMEOUT to exercise the per-chunk budget", d)
+	}
+	if ok || err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("want content-verified mismatch (false, \"checksum mismatch\"), got (%v, %v)", ok, err)
+	}
+}
