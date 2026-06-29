@@ -247,15 +247,26 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 	// syscall, so the whole sequence is bounded as a single unit; on timeout the
 	// worker goroutine is abandoned and we conservatively report "no ownership".
 	ok, err := safefs.Run(ctx, "ownership-probe", path, d.ioTimeout, func() (bool, error) {
-		testFile := filepath.Join(path, ".ownership_test_"+utils.GenerateRandomString(8))
+		// Confine every probe op to `path` via os.Root: the create-by-name carries
+		// no tainted absolute path, so this is structurally free of gosec G304 (file
+		// inclusion via a variable) without a #nosec, and the probe file can never
+		// escape the directory under test.
+		root, rerr := os.OpenRoot(path)
+		if rerr != nil {
+			d.logger.Debug("Cannot open root for ownership check: %v", rerr)
+			return false, nil
+		}
+		defer func() { _ = root.Close() }()
+
+		name := ".ownership_test_" + utils.GenerateRandomString(8)
 
 		// Create the test file
-		f, cerr := os.Create(testFile)
+		f, cerr := root.Create(name)
 		if cerr != nil {
 			d.logger.Debug("Cannot create test file for ownership check: %v", cerr)
 			return false, nil
 		}
-		defer func() { _ = os.Remove(testFile) }()
+		defer func() { _ = root.Remove(name) }()
 
 		if cerr := f.Close(); cerr != nil {
 			d.logger.Debug("Cannot close test file for ownership check: %v", cerr)
@@ -266,19 +277,19 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 		uid := os.Getuid()
 		gid := os.Getgid()
 
-		if cerr := os.Chown(testFile, uid, gid); cerr != nil {
+		if cerr := root.Chown(name, uid, gid); cerr != nil {
 			d.logger.Debug("Chown test failed: %v", cerr)
 			return false, nil
 		}
 
 		// Try to change permissions
-		if cerr := os.Chmod(testFile, 0600); cerr != nil {
+		if cerr := root.Chmod(name, 0600); cerr != nil {
 			d.logger.Debug("Chmod test failed: %v", cerr)
 			return false, nil
 		}
 
 		// Verify the changes took effect
-		stat, serr := os.Stat(testFile)
+		stat, serr := root.Stat(name)
 		if serr != nil {
 			return false, nil
 		}
