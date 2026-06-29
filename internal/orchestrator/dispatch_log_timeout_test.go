@@ -133,6 +133,45 @@ func TestDispatchLogFileCloudSourceProbeTimeout(t *testing.T) {
 	}
 }
 
+// The cloud log upload must be dispatched on a context DETACHED from the run
+// ctx: at shutdown the log must still ship even when the run was cancelled
+// (Ctrl+C). If the run ctx is threaded into the upload, a cancelled run skips
+// the cloud copy with context.Canceled and the operator loses the log of the
+// very run they interrupted. This pins the upload to context.Background():
+// reverting extensions.go to copyLogToCloud(ctx, ...) turns this test red.
+func TestDispatchLogFileCloudUploadDetachesFromCancelledRunCtx(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	cfg := &config.Config{CloudEnabled: true, CloudLogPath: "/logs", CloudRemote: "remote", FsIoTimeoutSeconds: 30}
+	o := &Orchestrator{logger: logger, cfg: cfg}
+
+	var uploaded bool
+	var uploadCtxErr error
+	o.copyLogToCloudFn = func(ctx context.Context, _, _ string) error {
+		uploaded = true
+		uploadCtxErr = ctx.Err() // the upload must NOT see a cancelled context
+		return nil
+	}
+
+	src := writeSrcLog(t)
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate Ctrl+C before the finalize/dispatch step
+
+	if err := o.dispatchLogFile(runCtx, src); err != nil {
+		t.Fatalf("dispatchLogFile: %v", err)
+	}
+	if !uploaded {
+		t.Fatalf("cloud upload was not attempted; the source probe must pass for a healthy local log:\n%s", buf.String())
+	}
+	if uploadCtxErr != nil {
+		t.Fatalf("cloud upload received a cancelled context (%v); it must run on a context detached from the run ctx so the log still ships after Ctrl+C", uploadCtxErr)
+	}
+	if !strings.Contains(buf.String(), "Log copied to cloud") {
+		t.Fatalf("expected a success log for the dispatched cloud upload; got:\n%s", buf.String())
+	}
+}
+
 func TestDispatchLogFileHealthyBoundedCopies(t *testing.T) {
 	var buf bytes.Buffer
 	logger := logging.New(types.LogLevelInfo, false)

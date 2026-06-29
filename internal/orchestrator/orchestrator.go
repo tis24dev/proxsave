@@ -215,6 +215,11 @@ type Orchestrator struct {
 
 	// Unprivileged container context (computed once by CLI and injected into collectors).
 	unprivilegedContainerDetector func() (bool, string)
+
+	// copyLogToCloudFn overrides the cloud log upload (test-only seam); nil uses
+	// the real o.copyLogToCloud. Lets tests assert the upload is dispatched on a
+	// detached context even when the run ctx was cancelled (Ctrl+C).
+	copyLogToCloudFn func(ctx context.Context, sourcePath, destPath string) error
 }
 
 const tempDirCleanupAge = 24 * time.Hour

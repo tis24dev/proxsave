@@ -433,7 +433,15 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 				o.logger.Warning("Skipping cloud log copy: cannot stat source log %s: %v", logFilePath, probeErr)
 			default:
 				o.logger.Debug("Copying log to cloud: %s", destination)
-				if err := o.copyLogToCloud(ctx, logFilePath, destination); err != nil {
+				// Detach the upload from the (possibly cancelled) run ctx: like the
+				// secondary copy above, the log must still ship at shutdown after a
+				// Ctrl+C. UploadToRemotePath bounds a deadline-less ctx itself, so a
+				// stalled rclone cannot hang here.
+				upload := o.copyLogToCloud
+				if o.copyLogToCloudFn != nil {
+					upload = o.copyLogToCloudFn
+				}
+				if err := upload(context.Background(), logFilePath, destination); err != nil {
 					o.logger.Warning("Failed to copy log to cloud: %v", err)
 				} else {
 					o.logger.Info("✓ Log copied to cloud: %s", destination)
