@@ -951,6 +951,13 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 		_, err := safefs.Run(ctx, "cleanup-remove", file, timeout, func() (struct{}, error) {
 			return struct{}{}, fs.Remove(file)
 		})
+		// already gone == success: covers both the inherent glob->remove TOCTOU race
+		// and the duplicate cpu-*.pprof entry when LOG_PATH itself is /tmp/proxsave
+		// (the legacy and the /tmp/proxsave globs match the same file). A dead-mount
+		// timeout is *TimeoutError (never os.ErrNotExist), so it still counts as failed.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 

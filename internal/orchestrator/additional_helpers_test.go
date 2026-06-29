@@ -1275,6 +1275,67 @@ func TestCleanupPreviousExecutionArtifactsBoundsLogPathGlobOnTimeout(t *testing.
 	}
 }
 
+// vanishingRemoveFS embeds osFS and reports os.ErrNotExist from Remove for one
+// basename, simulating the glob->remove TOCTOU race and the LOG_PATH==/tmp/proxsave
+// duplicate second-remove. Remove never touches disk, so the test stays hermetic
+// even though cleanup also globs the shared /tmp/proxsave.
+type vanishingRemoveFS struct {
+	osFS
+	vanished string
+}
+
+func (f *vanishingRemoveFS) Remove(p string) error {
+	if filepath.Base(p) == f.vanished {
+		return os.ErrNotExist
+	}
+	return nil // pretend success; never mutate disk
+}
+
+// A globbed file that is already gone at remove time (TOCTOU, or the
+// /tmp/proxsave cpu-*.pprof duplicate when LOG_PATH is /tmp/proxsave) must count
+// as removed, not as a failure: it must not inflate failedFiles or flip the
+// summary to "completed with errors". A clean removal is planted alongside so the
+// summary line is emitted (it only prints when removedFiles>0). Reverting
+// boundedRemove's os.ErrNotExist no-op turns this red.
+func TestCleanupPreviousExecutionArtifactsTreatsVanishedFileAsRemoved(t *testing.T) {
+	origRoot := workspaceRoot
+	workspaceRoot = t.TempDir()
+	t.Cleanup(func() { workspaceRoot = origRoot })
+
+	logDir := t.TempDir()
+	for _, n := range []string{"backup-stats-AAA.json", "backup-stats-BBB.json"} {
+		if err := os.WriteFile(filepath.Join(logDir, n), []byte("{}"), 0o640); err != nil {
+			t.Fatalf("plant %s: %v", n, err)
+		}
+	}
+
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	o := &Orchestrator{
+		logger:  logger,
+		fs:      &vanishingRemoveFS{vanished: "backup-stats-BBB.json"},
+		logPath: logDir,
+	}
+	// Pin Phase 4 to a throwaway registry so cleanup never resolves the real
+	// /tmp/proxsave temp-dir registry (keeps the test fully hermetic).
+	reg, err := NewTempDirRegistry(logger, filepath.Join(t.TempDir(), "registry.json"))
+	if err != nil {
+		t.Fatalf("NewTempDirRegistry: %v", err)
+	}
+	o.tempRegistry = reg
+
+	o.cleanupPreviousExecutionArtifacts(context.Background())
+
+	out := buf.String()
+	if !strings.Contains(out, "completed successfully") {
+		t.Fatalf("a vanished/duplicate file must be treated as removed; got:\n%s", out)
+	}
+	if strings.Contains(out, "completed with errors") {
+		t.Fatalf("os.ErrNotExist must not count as a failed removal; got:\n%s", out)
+	}
+}
+
 func makeRegistryEntriesStale(t *testing.T, registryPath string) {
 	t.Helper()
 	data, err := os.ReadFile(registryPath)
