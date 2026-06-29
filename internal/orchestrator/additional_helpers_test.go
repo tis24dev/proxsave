@@ -1216,7 +1216,7 @@ func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
 	}
 	makeRegistryEntriesStale(t, registryPath)
 
-	returned := o.cleanupPreviousExecutionArtifacts()
+	returned := o.cleanupPreviousExecutionArtifacts(context.Background())
 	if returned != reg {
 		t.Fatalf("cleanup should return configured registry instance")
 	}
@@ -1235,6 +1235,43 @@ func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
 	}
 	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
 		t.Fatalf("orphan directory should be removed, got err=%v", err)
+	}
+}
+
+// The LOG_PATH globs are bounded: on a dead-deadline ctx (simulating a dead/stale
+// mount) the stats glob must short-circuit with a timeout-skip debug log and never
+// match/remove the file, instead of wedging cleanup in a raw lstat/readdir.
+func TestCleanupPreviousExecutionArtifactsBoundsLogPathGlobOnTimeout(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+	o := &Orchestrator{logger: logger}
+
+	origRoot := workspaceRoot
+	workspaceRoot = t.TempDir()
+	t.Cleanup(func() { workspaceRoot = origRoot })
+
+	logDir := t.TempDir()
+	o.logPath = logDir
+	statsFile := filepath.Join(logDir, "backup-stats-old.json")
+	if err := os.WriteFile(statsFile, []byte("stats"), 0o640); err != nil {
+		t.Fatalf("write stats file: %v", err)
+	}
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+
+	o.cleanupPreviousExecutionArtifacts(ctx)
+
+	if !strings.Contains(buf.String(), "globbing stats files") || !strings.Contains(buf.String(), "timed out") {
+		t.Fatalf("expected a bounded-glob timeout debug log; got:\n%s", buf.String())
+	}
+	// The legacy LOG_PATH cpu glob is bounded too (same dead ctx exercises both).
+	if !strings.Contains(buf.String(), "globbing legacy cpu profiles") {
+		t.Fatalf("expected the legacy cpu glob to also be bounded; got:\n%s", buf.String())
+	}
+	if _, err := os.Stat(statsFile); err != nil {
+		t.Fatalf("stats file must survive a timed-out glob; stat err = %v", err)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/metrics"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -520,7 +521,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.Env
 	o.logger.Info("Starting Go-based backup orchestration for %s", run.proxmoxType)
 
 	workspace := &backupWorkspace{
-		registry: o.cleanupPreviousExecutionArtifacts(),
+		registry: o.cleanupPreviousExecutionArtifacts(ctx),
 		fs:       o.filesystem(),
 	}
 	stats = o.initBackupRun(run)
@@ -936,23 +937,41 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) (err error) {
 
 // cleanupPreviousExecutionArtifacts performs unified cleanup of old JSON stats, pprof files,
 // and orphaned temp directories. Returns the TempDirRegistry for use by the caller.
-func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
+func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *TempDirRegistry {
 	fs := o.filesystem()
+	timeout := o.fsIoTimeout()
+	// boundedRemove bounds each fs.Remove so a dead/stale LOG_PATH mount cannot wedge
+	// the cleanup phase (timeout<=0 degrades to a direct call; /tmp removes are local).
+	boundedRemove := func(file string) error {
+		_, err := safefs.Run(ctx, "cleanup-remove", file, timeout, func() (struct{}, error) {
+			return struct{}{}, fs.Remove(file)
+		})
+		return err
+	}
 
-	// Discover JSON stats files and pprof profiles from previous runs
+	// Discover JSON stats files and pprof profiles from previous runs. The LOG_PATH
+	// globs are bounded: filepath.Glob does a raw lstat+readdir that a dead/stale mount
+	// would wedge. The /tmp/proxsave globs below are local and stay raw.
 	var statsFiles []string
 	var cpuProfiles []string
 	var heapProfiles []string
 	if o.logPath != "" {
-		if matches, err := filepath.Glob(filepath.Join(o.logPath, "backup-stats-*.json")); err == nil {
+		if matches, err := safefs.Run(ctx, "cleanup-glob", o.logPath, timeout, func() ([]string, error) {
+			return filepath.Glob(filepath.Join(o.logPath, "backup-stats-*.json"))
+		}); err == nil {
 			statsFiles = matches
+		} else if errors.Is(err, safefs.ErrTimeout) {
+			o.logger.Debug("Cleanup: globbing stats files under %s timed out after %s; skipping (dead/stale mount?)", o.logPath, timeout)
 		}
 
 		// Legacy: pre-fix versions wrote cpu-*.pprof under LOG_PATH; sweep them so an
-		// upgrade does not orphan them (this block already globs LOG_PATH for stats,
-		// so it adds no new dead-mount surface to cleanup).
-		if matches, err := filepath.Glob(filepath.Join(o.logPath, "cpu-*.pprof")); err == nil {
+		// upgrade does not orphan them.
+		if matches, err := safefs.Run(ctx, "cleanup-glob", o.logPath, timeout, func() ([]string, error) {
+			return filepath.Glob(filepath.Join(o.logPath, "cpu-*.pprof"))
+		}); err == nil {
 			cpuProfiles = matches
+		} else if errors.Is(err, safefs.ErrTimeout) {
+			o.logger.Debug("Cleanup: globbing legacy cpu profiles under %s timed out after %s; skipping (dead/stale mount?)", o.logPath, timeout)
 		}
 	}
 
@@ -982,7 +1001,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 		for _, file := range statsFiles {
 			filename := filepath.Base(file)
-			if err := fs.Remove(file); err != nil {
+			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove file %s: %v", filename, err)
 				failedFiles++
 			} else {
@@ -1002,7 +1021,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 		for _, file := range cpuProfiles {
 			filename := filepath.Base(file)
-			if err := fs.Remove(file); err != nil {
+			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove CPU profile %s: %v", filename, err)
 				failedFiles++
 			} else {
@@ -1022,7 +1041,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 		for _, file := range heapProfiles {
 			filename := filepath.Base(file)
-			if err := fs.Remove(file); err != nil {
+			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove heap profile %s: %v", filename, err)
 				failedFiles++
 			} else {
