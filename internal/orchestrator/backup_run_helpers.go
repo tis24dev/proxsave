@@ -255,7 +255,9 @@ func (o *Orchestrator) recordArchiveSize(stats *BackupStats, artifacts *backupAr
 }
 
 func (o *Orchestrator) generateArchiveChecksum(ctx context.Context, archivePath string) (string, error) {
-	checksum, err := backup.GenerateChecksum(ctx, o.logger, archivePath)
+	// archivePath lives on BACKUP_PATH, which can be a dead/stale mount; bound the
+	// hash with FS_IO_TIMEOUT so it cannot wedge in an uninterruptible read.
+	checksum, err := backup.GenerateChecksumBounded(ctx, o.logger, archivePath, o.fsIoTimeout())
 	if err != nil {
 		return "", &BackupError{
 			Phase: "verification",

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 // Manifest represents backup archive metadata with checksums
@@ -66,41 +68,68 @@ func ParseChecksumData(data []byte) (string, error) {
 	return NormalizeChecksum(fields[0])
 }
 
-// GenerateChecksum calculates SHA256 checksum of a file
-func GenerateChecksum(ctx context.Context, logger *logging.Logger, filePath string) (checksum string, err error) {
+// checksumOpen is the file-open seam for the checksum path; tests inject
+// blocking/slow/counting doubles. *os.File satisfies io.ReadCloser.
+var checksumOpen = func(ctx context.Context, path string, timeout time.Duration) (io.ReadCloser, error) {
+	return safefs.Open(ctx, path, timeout)
+}
+
+// GenerateChecksum calculates the SHA256 checksum of a file with NO FS I/O
+// timeout (the FS_IO_TIMEOUT=0 opt-out / legacy behaviour). Prefer
+// GenerateChecksumBounded with the configured FS_IO_TIMEOUT on any path that
+// may touch a removable or network mount.
+func GenerateChecksum(ctx context.Context, logger *logging.Logger, filePath string) (string, error) {
+	return GenerateChecksumBounded(ctx, logger, filePath, 0)
+}
+
+// GenerateChecksumBounded is GenerateChecksum with a per-chunk no-progress
+// (stall) budget on the open, every read+hash chunk, and the close, so a
+// dead/stale mount cannot wedge any of them in an uninterruptible (D-state)
+// syscall. The budget re-arms on every chunk that makes progress, so a healthy
+// large file over a slow-but-alive link still hashes in full. timeout<=0 disables
+// bounding (a plain synchronous read loop, identical to the legacy behaviour).
+// On a stalled read the safefs.CopyBounded worker is abandoned while still
+// holding the fd, so the close is skipped and the *os.File finalizer reclaims the
+// fd once the wedged kernel call returns.
+func GenerateChecksumBounded(ctx context.Context, logger *logging.Logger, filePath string, timeout time.Duration) (checksum string, err error) {
 	logger.Debug("Generating SHA256 checksum for: %s", filePath)
 
-	file, err := os.Open(filePath)
+	// Never open on an already-cancelled context (nothing to leak), and preserve
+	// the unwrapped context error identity callers assert on.
+	if cerr := ctx.Err(); cerr != nil {
+		return "", cerr
+	}
+
+	file, err := checksumOpen(ctx, filePath, timeout)
 	if err != nil {
 		return "", fmt.Errorf("failed to open file: %w", err)
 	}
-	defer closeIntoErr(&err, file, "close checksum source file")
-
-	hash := sha256.New()
-
-	// Copy file to hash in chunks with context checking
-	buf := make([]byte, 32*1024) // 32KB buffer
-	for {
-		// Check context cancellation
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		default:
+	defer func() {
+		// A worker abandoned mid-read may still hold this fd: do not close it
+		// (the close could itself re-wedge on a dead mount). Drop the reference
+		// and let the os.File finalizer reclaim the fd once the call returns.
+		if file == nil || safefs.IsAbandoned(err) {
+			return
 		}
+		// A close that is itself abandoned (ctx cancel / timeout short-circuits
+		// safefs.Run before Close runs) must not clobber an already-computed
+		// checksum: the hash succeeded, the fd is reclaimed by the finalizer.
+		if _, closeErr := safefs.Run(ctx, "close checksum source file", filePath, timeout, func() (struct{}, error) {
+			return struct{}{}, file.Close()
+		}); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) && !safefs.IsAbandoned(closeErr) && err == nil {
+			err = fmt.Errorf("close checksum source file: %w", closeErr)
+		}
+	}()
 
-		n, err := file.Read(buf)
-		if n > 0 {
-			if _, err := hash.Write(buf[:n]); err != nil {
-				return "", fmt.Errorf("failed to write to hash: %w", err)
-			}
+	hash := sha256.New() // fresh per call; never pooled/shared (abandon-safe as CopyBounded dst)
+	// bufSize 0 inherits safefs.CopyBounded's 1 MiB default (the stall floor is
+	// then a few tens of KB/s, harmless for a healthy mount). crypto/sha256.Write
+	// is in-memory and never blocks, so only the file read side can wedge.
+	if _, err = safefs.CopyBounded(ctx, hash, file, 0, timeout, "read checksum source file", filePath); err != nil {
+		if safefs.IsAbandoned(err) {
+			return "", err // ErrTimeout / context.Canceled verbatim (close skipped above)
 		}
-
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", fmt.Errorf("failed to read file: %w", err)
-		}
+		return "", fmt.Errorf("failed to read file: %w", err)
 	}
 
 	checksum = hex.EncodeToString(hash.Sum(nil))
@@ -133,8 +162,15 @@ func CreateManifest(ctx context.Context, logger *logging.Logger, manifest *Manif
 	return nil
 }
 
-// VerifyChecksum verifies a file against a manifest's checksum
+// VerifyChecksum verifies a file against a manifest's checksum with NO FS I/O
+// timeout (legacy). Prefer VerifyChecksumBounded on potentially remote/stale paths.
 func VerifyChecksum(ctx context.Context, logger *logging.Logger, filePath, expectedChecksum string) (bool, error) {
+	return VerifyChecksumBounded(ctx, logger, filePath, expectedChecksum, 0)
+}
+
+// VerifyChecksumBounded is VerifyChecksum with a per-chunk FS I/O stall budget
+// (see GenerateChecksumBounded).
+func VerifyChecksumBounded(ctx context.Context, logger *logging.Logger, filePath, expectedChecksum string, timeout time.Duration) (bool, error) {
 	logger.Debug("Verifying checksum for: %s", filePath)
 
 	normalizedExpected, err := NormalizeChecksum(expectedChecksum)
@@ -142,7 +178,7 @@ func VerifyChecksum(ctx context.Context, logger *logging.Logger, filePath, expec
 		return false, fmt.Errorf("invalid expected checksum: %w", err)
 	}
 
-	actualChecksum, err := GenerateChecksum(ctx, logger, filePath)
+	actualChecksum, err := GenerateChecksumBounded(ctx, logger, filePath, timeout)
 	if err != nil {
 		return false, fmt.Errorf("failed to generate checksum: %w", err)
 	}
