@@ -133,7 +133,7 @@ func TestVerifyBinaryIntegrityDryRunDoesNotRegenerateHash(t *testing.T) {
 	}
 
 	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: true, DryRun: true}, execPath)
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	data, err := os.ReadFile(hashPath)
 	if err != nil {
@@ -154,7 +154,7 @@ func TestVerifyBinaryIntegrityDryRunDoesNotCreateHash(t *testing.T) {
 	}
 
 	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: true, DryRun: true}, execPath)
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if _, err := os.Stat(execPath + ".md5"); !os.IsNotExist(err) {
 		t.Fatalf("dry-run must not create hash file; stat err = %v", err)
@@ -175,7 +175,7 @@ func TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod(t *testing.T) {
 	}
 
 	checker := newCheckerWithExec(t, &config.Config{AutoFixPermissions: true, AutoUpdateHashes: false, DryRun: true}, execPath)
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	info, err := os.Stat(execPath)
 	if err != nil {
@@ -183,5 +183,60 @@ func TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o755 {
 		t.Fatalf("dry-run must not fchmod the executable; perm = %o, want 755", info.Mode().Perm())
+	}
+}
+
+// TestVerifyBinaryIntegritySkipsOnTimeout simulates a dead/stale mount under the
+// executable: the bounded Lstat times out, so the integrity check warns and skips
+// without erroring and without creating the .md5 hash file.
+func TestVerifyBinaryIntegritySkipsOnTimeout(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "binary")
+	if err := os.WriteFile(execPath, []byte("content"), 0o700); err != nil {
+		t.Fatalf("write exec: %v", err)
+	}
+
+	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: true}, execPath)
+	checker.fsTimeout = 30 * time.Second
+
+	checker.verifyBinaryIntegrity(expiredContext(t))
+
+	if checker.result.ErrorCount() != 0 {
+		t.Fatalf("timeout must not error, got %d: %+v", checker.result.ErrorCount(), checker.result.Issues)
+	}
+	if !containsIssue(checker.result, "timed out") {
+		t.Fatalf("expected a timeout warning, got %+v", checker.result.Issues)
+	}
+	if _, err := os.Stat(execPath + ".md5"); !os.IsNotExist(err) {
+		t.Fatalf("must not create hash file on timeout; stat err = %v", err)
+	}
+}
+
+// TestDetectPrivateAgeKeysSkipsOnTimeout simulates a dead/stale mount under the
+// identity directory: the bounded stat times out, so the private-key scan warns and
+// skips without erroring and without scanning/flagging the planted key.
+func TestDetectPrivateAgeKeysSkipsOnTimeout(t *testing.T) {
+	baseDir := t.TempDir()
+	identityDir := filepath.Join(baseDir, "identity")
+	if err := os.MkdirAll(identityDir, 0o700); err != nil {
+		t.Fatalf("mkdir identity: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(identityDir, "key"), []byte("AGE-SECRET-KEY-1EXAMPLE"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	checker := newChecker(t, &config.Config{BaseDir: baseDir})
+	checker.fsTimeout = 30 * time.Second
+
+	checker.detectPrivateAgeKeys(expiredContext(t))
+
+	if checker.result.ErrorCount() != 0 {
+		t.Fatalf("timeout must not error, got %d: %+v", checker.result.ErrorCount(), checker.result.Issues)
+	}
+	if !containsIssue(checker.result, "timed out") {
+		t.Fatalf("expected a timeout warning, got %+v", checker.result.Issues)
+	}
+	if containsIssue(checker.result, "Possible private AGE/SSH key") {
+		t.Fatalf("must not scan/flag keys on timeout; got %+v", checker.result.Issues)
 	}
 }

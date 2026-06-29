@@ -625,7 +625,7 @@ func TestVerifyBinaryIntegrityCreatesHash(t *testing.T) {
 	}
 	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: true}, execPath)
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	hashPath := execPath + ".md5"
 	data, err := os.ReadFile(hashPath)
@@ -649,7 +649,7 @@ func TestVerifyBinaryIntegrityWarnsWhenHashMissing(t *testing.T) {
 	}
 	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: false}, execPath)
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Hash file") {
 		t.Fatalf("expected warning about missing hash file, issues=%+v", checker.result.Issues)
@@ -674,7 +674,7 @@ func TestVerifyBinaryIntegrityHashMismatch(t *testing.T) {
 	}
 	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: false}, execPath)
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Executable hash mismatch") {
 		t.Fatalf("expected hash mismatch warning, issues=%+v", checker.result.Issues)
@@ -697,7 +697,7 @@ func TestDetectPrivateAgeKeysAddsWarning(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	if !containsIssue(checker.result, "AGE/SSH key") {
 		t.Fatalf("expected warning about private key, issues=%+v", checker.result.Issues)
@@ -1649,7 +1649,7 @@ func TestVerifyBinaryIntegrityEmptyPath(t *testing.T) {
 		execPath: "",
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Executable path not available") {
 		t.Errorf("expected warning about empty exec path, got %+v", checker.result.Issues)
@@ -1675,7 +1675,7 @@ func TestVerifyBinaryIntegritySymlinkError(t *testing.T) {
 		execPath: symlinkFile,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "is a symlink") {
 		t.Fatalf("expected symlink error, issues=%+v", checker.result.Issues)
@@ -1693,7 +1693,7 @@ func TestVerifyBinaryIntegrityOpenError(t *testing.T) {
 		execPath: "/nonexistent/binary/path",
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Cannot stat executable") {
 		t.Errorf("expected error about cannot stat executable, got %+v", checker.result.Issues)
@@ -1777,7 +1777,7 @@ func TestDetectPrivateAgeKeysSkipsExtensions(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should not detect keys in files with .md, .txt, .example extensions
 	if checker.result.TotalIssues() != 0 {
@@ -1792,7 +1792,7 @@ func TestDetectPrivateAgeKeysEmptyBaseDir(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should not crash and should not add issues
 	if checker.result.TotalIssues() != 0 {
@@ -1807,7 +1807,7 @@ func TestDetectPrivateAgeKeysNonExistentDir(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should not crash and should not add issues
 	if checker.result.TotalIssues() != 0 {
@@ -2023,7 +2023,7 @@ func TestVerifyBinaryIntegrityHashFileReadError(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Unable to read hash file") {
 		t.Errorf("expected warning about reading hash file, got %+v", checker.result.Issues)
@@ -2050,7 +2050,7 @@ func TestVerifyBinaryIntegrityHashMismatchAutoUpdate(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	// Hash should be updated
 	newHash, err := os.ReadFile(hashPath)
@@ -2282,7 +2282,7 @@ func TestDetectPrivateAgeKeysWithUnreadableFile(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should not crash, the unreadable file should be skipped
 }
@@ -2306,7 +2306,7 @@ func TestDetectPrivateAgeKeysWithSSHKey(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should detect the SSH key
 	if !containsIssue(checker.result, "AGE/SSH key") {
@@ -2512,7 +2512,7 @@ func TestVerifyBinaryIntegrityMatchingHash(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	// Should not have hash-related warnings
 	for _, issue := range checker.result.Issues {
@@ -2672,7 +2672,7 @@ func TestDetectPrivateAgeKeysWithSubdirectory(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should find the key in subdirectory
 	if !containsIssue(checker.result, "AGE/SSH key") {
@@ -2706,7 +2706,7 @@ func TestVerifyBinaryIntegrityCreateHashErrorReadOnly(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	// Should have warning about failing to create hash file
 	if !containsIssue(checker.result, "Failed to create hash file") {
@@ -2746,7 +2746,7 @@ func TestVerifyBinaryIntegrityUpdateHashError(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	// Should have warning about failing to update hash file
 	if !containsIssue(checker.result, "Failed to update hash file") {

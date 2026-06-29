@@ -134,12 +134,12 @@ func Run(ctx context.Context, logger *logging.Logger, cfg *config.Config, config
 		cfg.AutoFixPermissions, cfg.AutoUpdateHashes, cfg.ContinueOnSecurityIssues, cfg.CheckNetworkSecurity, cfg.CheckFirewall, cfg.CheckOpenPorts,
 		len(cfg.SuspiciousProcesses), len(cfg.SafeBracketProcesses))
 	checker.checkDependencies()
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(ctx)
 	checker.verifyConfigFile(ctx)
 	checker.verifySensitiveFiles(ctx)
 	checker.verifyDirectories(ctx)
 	checker.verifySecureAccountFiles(ctx)
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(ctx)
 
 	if cfg.CheckNetworkSecurity {
 		if cfg.CheckFirewall {
@@ -352,14 +352,18 @@ func (c *Checker) bannerWarning(message string) {
 	c.logger.Warning("Security warning: %s", message)
 }
 
-func (c *Checker) verifyBinaryIntegrity() {
+func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 	if c.execPath == "" {
 		c.addWarning("Executable path not available for integrity check")
 		return
 	}
 
-	info, err := os.Lstat(c.execPath)
+	info, err := safefs.Lstat(ctx, c.execPath, c.fsTimeout)
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: stat of executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
+			return
+		}
 		c.addError("Cannot stat executable %s: %v", c.execPath, err)
 		return
 	}
@@ -370,8 +374,13 @@ func (c *Checker) verifyBinaryIntegrity() {
 	}
 
 	hashFile := c.execPath + ".md5"
-	f, err := os.Open(c.execPath)
+	f, err := safefs.Open(ctx, c.execPath, c.fsTimeout)
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			// safefs.Open abandoned its worker on timeout; f is nil, nothing to close.
+			c.addWarning("Security check: opening executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
+			return
+		}
 		c.addError("Cannot open executable %s: %v", c.execPath, err)
 		return
 	}
@@ -603,20 +612,27 @@ func (c *Checker) verifyDirectories(ctx context.Context) {
 	}
 }
 
-func (c *Checker) detectPrivateAgeKeys() {
+func (c *Checker) detectPrivateAgeKeys(ctx context.Context) {
 	identityDir := filepath.Join(c.cfg.BaseDir, "identity")
 	if identityDir == "" {
 		return
 	}
 
-	if _, err := os.Stat(identityDir); err != nil {
+	if _, err := safefs.Stat(ctx, identityDir, c.fsTimeout); err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: stat of identity directory %s timed out after %s; skipping private-key scan (dead/stale mount?)", identityDir, c.fsTimeout)
+		}
 		return
 	}
 
 	privateKeyMarkers := []string{"AGE-SECRET-KEY-", "BEGIN AGE PRIVATE KEY", "OPENSSH PRIVATE KEY"}
-	if err := filepath.WalkDir(identityDir, func(path string, d fs.DirEntry, err error) error {
+	if err := safefs.WalkBounded(ctx, identityDir, c.fsTimeout, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			c.logger.Debug("Security: cannot access %s: %v", path, err)
+			if errors.Is(err, safefs.ErrTimeout) {
+				c.addWarning("Security check: scanning %s timed out after %s; skipping subtree (dead/stale mount?)", path, c.fsTimeout)
+			} else {
+				c.logger.Debug("Security: cannot access %s: %v", path, err)
+			}
 			return nil
 		}
 		if d.IsDir() {
