@@ -694,8 +694,10 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		return err
 	}
 
-	// Verify source file exists
-	stat, err := os.Stat(backupFile)
+	// Verify source file exists. Bound the stat with FS_IO_TIMEOUT: this runs
+	// before uploadCtx/rclone, so a dead/stale BACKUP_PATH mount must not wedge
+	// Store in an uninterruptible (D-state) syscall here.
+	stat, err := safefs.Stat(ctx, backupFile, c.fsIoTimeout())
 	if err != nil {
 		c.logger.Debug("Cloud storage: source file %s not found", backupFile)
 		c.logger.Warning("WARNING: Cloud storage - backup file not found: %s: %v", backupFile, err)
@@ -717,7 +719,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		// canonical bundle exists alongside the raw archive.
 		bundleFile := bundlePathFor(backupFile)
 		if bundleFile != backupFile {
-			bundleStat, err := os.Stat(bundleFile)
+			bundleStat, err := safefs.Stat(ctx, bundleFile, c.fsIoTimeout())
 			if err == nil {
 				primaryFile = bundleFile
 				primaryStat = bundleStat
@@ -769,8 +771,8 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		}
 
 		for _, srcFile := range associatedFiles {
-			if _, err := os.Stat(srcFile); err != nil {
-				continue // Skip if doesn't exist
+			if _, err := safefs.Stat(ctx, srcFile, c.fsIoTimeout()); err != nil {
+				continue // Skip if missing or unreachable (a dead mount must not wedge the store)
 			}
 
 			tasks = append(tasks, uploadTask{

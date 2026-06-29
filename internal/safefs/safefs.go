@@ -26,6 +26,17 @@ var (
 	fsOpLimiter   = newOperationLimiter(32)
 )
 
+// SetOsStatForTest overrides the os.Stat seam used by Stat and returns a restore
+// func. Test-only (cross-package): lets callers that bound their stat probes via
+// safefs.Stat prove a dead/stale mount cannot wedge them, by simulating a stat
+// syscall that never returns. Not safe for concurrent use; restore before the
+// test ends.
+func SetOsStatForTest(fn func(string) (os.FileInfo, error)) (restore func()) {
+	prev := osStat
+	osStat = fn
+	return func() { osStat = prev }
+}
+
 // ErrTimeout is a sentinel error used to classify filesystem operations that did not
 // complete within the configured timeout.
 var ErrTimeout = errors.New("filesystem operation timed out")

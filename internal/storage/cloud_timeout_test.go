@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/safefs"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // Item 1: UploadToRemotePath must bound a deadline-less ctx so a stalled rclone
@@ -89,6 +91,53 @@ func TestVerifyUploadLocalStatBounded(t *testing.T) {
 	}
 	if called {
 		t.Fatal("no rclone exec should run when the local stat is bounded out")
+	}
+}
+
+// Item 3b: Store's pre-upload local source stat is bounded by FS_IO_TIMEOUT, so a
+// dead/stale BACKUP_PATH mount cannot wedge Store before uploadCtx/rclone apply.
+// The source file EXISTS, so a reverted raw os.Stat would SUCCEED (the dead-mount
+// stub only intercepts safefs's stat) and let the upload run; the per-chunk fix
+// instead times the stat out and skips the upload. Reverting Store's os.Stat ->
+// safefs.Stat swap turns this red (it would proceed to rclone).
+func TestStoreLocalSourceStatBoundedAgainstDeadMount(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "node-backup.tar.zst")
+	if err := os.WriteFile(src, []byte("data"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote", FsIoTimeoutSeconds: 1, RcloneTimeoutOperation: 30}
+	cs := newCloudStorageForTest(cfg)
+	var uploaded bool
+	cs.execCommand = func(context.Context, string, ...string) ([]byte, error) {
+		uploaded = true
+		return nil, nil
+	}
+
+	// Simulate a dead/stale local mount: the source stat never returns. Installed
+	// last so test setup is unaffected; the abandoned worker is released on cleanup.
+	park := make(chan struct{})
+	t.Cleanup(func() { close(park) })
+	restore := safefs.SetOsStatForTest(func(string) (os.FileInfo, error) {
+		<-park
+		return nil, errors.New("released")
+	})
+	t.Cleanup(restore)
+
+	done := make(chan error, 1)
+	go func() { done <- cs.Store(context.Background(), src, &types.BackupMetadata{}) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Store must fail when the local source stat times out, not succeed")
+		}
+		if uploaded {
+			t.Fatal("no rclone upload may run after a source-stat timeout (a raw os.Stat would have let it through)")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Store hung on a dead-mount source stat: the local source stat is not bounded")
 	}
 }
 
