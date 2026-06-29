@@ -1183,6 +1183,17 @@ func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
 		}
 	})
 
+	// issue #242: cpu profiles now live under /tmp/proxsave too (not just LOG_PATH).
+	tmpCPUProfile := filepath.Join(heapDir, fmt.Sprintf("cpu-%d.pprof", time.Now().UnixNano()))
+	if err := os.WriteFile(tmpCPUProfile, []byte("cpu"), 0o640); err != nil {
+		t.Fatalf("write tmp cpu profile: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Remove(tmpCPUProfile); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("cleanup tmp cpu file: %v", err)
+		}
+	})
+
 	registryDir := t.TempDir()
 	registryPath := filepath.Join(registryDir, "registry.json")
 	reg, err := NewTempDirRegistry(logger, registryPath)
@@ -1215,6 +1226,9 @@ func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
 	}
 	if _, err := os.Stat(cpuProfile); !os.IsNotExist(err) {
 		t.Fatalf("cpu profile should be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(tmpCPUProfile); !os.IsNotExist(err) {
+		t.Fatalf("/tmp/proxsave cpu profile should be removed, got err=%v", err)
 	}
 	if _, err := os.Stat(heapFile); !os.IsNotExist(err) {
 		t.Fatalf("heap profile should be removed, got err=%v", err)

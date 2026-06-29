@@ -948,12 +948,18 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 			statsFiles = matches
 		}
 
+		// Legacy: pre-fix versions wrote cpu-*.pprof under LOG_PATH; sweep them so an
+		// upgrade does not orphan them (this block already globs LOG_PATH for stats,
+		// so it adds no new dead-mount surface to cleanup).
 		if matches, err := filepath.Glob(filepath.Join(o.logPath, "cpu-*.pprof")); err == nil {
 			cpuProfiles = matches
 		}
 	}
 
-	// Heap profiles are written under /tmp/proxsave
+	// Profiles (cpu + heap) are now written under /tmp/proxsave.
+	if matches, err := filepath.Glob(filepath.Join("/tmp", "proxsave", "cpu-*.pprof")); err == nil {
+		cpuProfiles = append(cpuProfiles, matches...)
+	}
 	if matches, err := filepath.Glob(filepath.Join("/tmp", "proxsave", "heap-*.pprof")); err == nil {
 		heapProfiles = matches
 	}
@@ -986,7 +992,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 		}
 	}
 
-	// Phase 2: Cleanup CPU pprof files under log path
+	// Phase 2: Cleanup CPU pprof files (under /tmp/proxsave, plus any legacy ones under log path)
 	if len(cpuProfiles) > 0 {
 		if !cleanupStarted {
 			o.logger.Debug("Starting cleanup of previous execution files...")

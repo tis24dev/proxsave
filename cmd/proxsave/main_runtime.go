@@ -236,11 +236,21 @@ func applyRunPermissions(rt *appRuntime) {
 	}
 }
 
+// profileBaseDir is the local base dir for pprof artifacts. Both the CPU and heap
+// profiles live under <profileBaseDir>/proxsave, never on LOG_PATH, so a dead/stale
+// LOG_PATH mount cannot wedge the create, the runtime's periodic CPU-sample writes,
+// StopCPUProfile's flush, or Close (issue #242). A var (not const) so tests redirect it.
+var profileBaseDir = "/tmp"
+
 func initializeRunProfiling(rt *appRuntime) {
 	if !rt.cfg.ProfilingEnabled {
 		return
 	}
-	cpuProfilePath := filepath.Join(rt.cfg.LogPath, fmt.Sprintf("cpu-%s-%s.pprof", rt.hostname, rt.timestampStr))
+	profileDir := buildProfileDir()
+	if profileDir == "" {
+		return // could not create the local profile dir; skip profiling (best-effort)
+	}
+	cpuProfilePath := filepath.Join(profileDir, fmt.Sprintf("cpu-%s-%s.pprof", rt.hostname, rt.timestampStr))
 	f, err := os.Create(cpuProfilePath)
 	if err != nil {
 		logging.Warning("Failed to create CPU profile file: %v", err)
@@ -253,16 +263,20 @@ func initializeRunProfiling(rt *appRuntime) {
 	}
 	rt.cpuProfileFile = f
 	logging.Info("CPU profiling enabled: %s", cpuProfilePath)
-	rt.heapProfilePath = buildHeapProfilePath(rt)
+	rt.heapProfilePath = filepath.Join(profileDir, fmt.Sprintf("heap-%s-%s.pprof", rt.hostname, rt.timestampStr))
 }
 
-func buildHeapProfilePath(rt *appRuntime) string {
-	tmpProfileDir := filepath.Join("/tmp", "proxsave")
-	if err := os.MkdirAll(tmpProfileDir, defaultDirPerm); err != nil {
-		logging.Warning("Failed to create temp profile directory %s: %v", tmpProfileDir, err)
+// buildProfileDir creates and returns the local temp directory used for BOTH the cpu
+// and heap pprof output (<profileBaseDir>/proxsave). It is intentionally OFF LOG_PATH
+// so a dead/stale LOG_PATH mount can never wedge profiling I/O. Returns "" (after a
+// warning) if the directory cannot be created, signalling the caller to skip profiling.
+func buildProfileDir() string {
+	profileDir := filepath.Join(profileBaseDir, "proxsave")
+	if err := os.MkdirAll(profileDir, defaultDirPerm); err != nil {
+		logging.Warning("Failed to create temp profile directory %s: %v", profileDir, err)
 		return ""
 	}
-	return filepath.Join(tmpProfileDir, fmt.Sprintf("heap-%s-%s.pprof", rt.hostname, rt.timestampStr))
+	return profileDir
 }
 
 // checkGoRuntimeVersion ensures the running binary was built with at least the specified Go version (semver: major.minor.patch).

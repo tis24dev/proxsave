@@ -59,7 +59,7 @@ DEBUG_LEVEL=standard               # standard | advanced | extreme
 DRY_RUN=false                      # true | false
 
 # Enable/disable always-on pprof profiling (CPU + heap)
-PROFILING_ENABLED=true             # true | false (profiles written under LOG_PATH)
+PROFILING_ENABLED=true             # true | false (profiles written under /tmp/proxsave)
 ```
 
 ### DEBUG_LEVEL Details
