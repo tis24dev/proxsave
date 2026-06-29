@@ -439,7 +439,16 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 	}
 
 	stored, err := safefs.Run(ctx, "readfile", hashFile, c.fsTimeout, func() ([]byte, error) {
-		return os.ReadFile(hashFile)
+		// Read the .md5 confined to the executable's directory via os.Root: the
+		// read carries a bare basename, so this is structurally free of gosec G304
+		// (file inclusion via a variable) without a #nosec, consistent with the
+		// ownership-probe fix in storage/filesystem.go.
+		root, rerr := os.OpenRoot(filepath.Dir(hashFile))
+		if rerr != nil {
+			return nil, rerr
+		}
+		defer func() { _ = root.Close() }()
+		return root.ReadFile(filepath.Base(hashFile))
 	})
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
