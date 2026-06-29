@@ -32,7 +32,7 @@ func TestSecondaryCopyFileMidStreamWedge(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 		_, _ = w.Write([]byte("first chunk delivered, then the mount wedges"))
 		<-releaseWriter // keep the write end open (no EOF) so the next Read blocks
 	}()

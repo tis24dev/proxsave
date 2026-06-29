@@ -23,10 +23,18 @@ func TestOpenLogFileTimeoutFallsBackToStdout(t *testing.T) {
 	finished := make(chan struct{})
 	// Order matters: unblock + wait for the abandoned worker to finish BEFORE
 	// restoring the package var, so the worker's read of osOpenFile happens-before
-	// the restore (otherwise -race flags it).
+	// the restore (otherwise -race flags it). The wait is BOUNDED so a regression
+	// that never reaches the stub surfaces as a normal t.Error instead of wedging
+	// CI; that timeout branch is a failure path (test already red) where the
+	// happens-before for the restore is not guaranteed. We restore anyway to avoid
+	// leaking the stub into later tests in the package.
 	t.Cleanup(func() {
 		close(unblock)
-		<-finished
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Error("timed out waiting for the abandoned open worker to finish")
+		}
 		osOpenFile = prev
 	})
 	osOpenFile = func(string, int, os.FileMode) (*os.File, error) {
@@ -76,10 +84,18 @@ func TestLogWriteTimeoutDisablesSink(t *testing.T) {
 	unblock := make(chan struct{})
 	finished := make(chan struct{})
 	// Order matters: unblock + wait for the abandoned worker before restoring the
-	// package var (happens-before, otherwise -race flags the var access).
+	// package var (happens-before, otherwise -race flags the var access). The wait
+	// is BOUNDED so a regression that never reaches the stub surfaces as a normal
+	// t.Error instead of wedging CI; that timeout branch is a failure path (test
+	// already red) where the happens-before is not guaranteed. We restore anyway to
+	// avoid leaking the stub into later tests in the package.
 	t.Cleanup(func() {
 		close(unblock)
-		<-finished
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Error("timed out waiting for the abandoned write worker to finish")
+		}
 		fileWrite = prev
 	})
 	fileWrite = func(w io.Writer, s string) (int, error) {

@@ -24,7 +24,11 @@ func TestGenerateArchiveChecksum_ThreadsFsIoTimeout(t *testing.T) {
 		t.Skipf("mkfifo unsupported: %v", err)
 	}
 	t.Cleanup(func() {
-		if w, e := os.OpenFile(fifo, os.O_WRONLY, 0); e == nil {
+		// O_NONBLOCK so this never blocks: with the abandoned reader present the
+		// open succeeds and the close releases it; with no reader (a regression
+		// where the code under test never opened the FIFO) it returns ENXIO
+		// immediately -> e != nil -> skip, so the cleanup cannot wedge CI.
+		if w, e := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); e == nil {
 			_ = w.Close() // release the abandoned blocked open
 		}
 	})
