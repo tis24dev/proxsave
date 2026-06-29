@@ -83,7 +83,7 @@ jobs:
       # SETUP GO
       ########################################
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: 'go.mod'
 
@@ -195,6 +195,6 @@ jobs:
       # BUILD PROVENANCE ATTESTATION
       ########################################
       - name: Attest Build Provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-path: build/proxsave_*
