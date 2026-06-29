@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -226,9 +225,9 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 		return err
 	}
 
-	// Bound the leaf metadata/open/finalize syscalls so a dead/stale secondary mount
-	// cannot wedge them. (The byte-transfer loop below is bounded separately in a
-	// follow-up; today it keeps its per-iteration ctx check.)
+	// Bound the leaf metadata/open/finalize syscalls AND the byte-transfer loop
+	// (via safefs.CopyBounded below) so a dead/stale secondary mount cannot wedge
+	// any of them in an uninterruptible syscall.
 	to := fsIoTimeout(s.config)
 
 	sourceInfo, err := safefs.Stat(ctx, src, to)
@@ -267,6 +266,9 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 		return fmt.Errorf("failed to open source file %s: %w", src, err)
 	}
 	defer func() {
+		if sourceFile == nil { // abandoned copy worker may still hold this fd
+			return
+		}
 		if _, closeErr := safefs.Run(ctx, "secondary-close-src", src, to, func() (struct{}, error) {
 			return struct{}{}, sourceFile.Close()
 		}); closeErr != nil && err == nil {
@@ -274,28 +276,19 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 		}
 	}()
 
-	buf := make([]byte, 1024*1024) // 1MB buffer
-	var written int64
-
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
+	// Stream the bytes under a per-chunk stall budget so a mount dying mid-copy
+	// cannot wedge Read/Write in an uninterruptible (D-state) syscall. The copy
+	// bypasses the shared safefs limiter (it is sequential, so it self-throttles
+	// to one in-flight worker and must not erode the slot budget the critical
+	// paths rely on). On a stalled chunk the worker is abandoned and may still
+	// hold these handles, so on abandonment we drop them and skip the closes.
+	written, copyErr := safefs.CopyBounded(ctx, tempFile, sourceFile, 1024*1024, to, "secondary-copy", src)
+	if copyErr != nil {
+		if safefs.IsAbandoned(copyErr) {
+			tempFile = nil
+			sourceFile = nil
 		}
-
-		nr, er := sourceFile.Read(buf)
-		if nr > 0 {
-			if _, ew := tempFile.Write(buf[:nr]); ew != nil {
-				return fmt.Errorf("write error during copy: %w", ew)
-			}
-			written += int64(nr)
-		}
-
-		if er != nil {
-			if er == io.EOF {
-				break
-			}
-			return fmt.Errorf("read error during copy: %w", er)
-		}
+		return fmt.Errorf("stream copy %s -> %s: %w", src, dest, copyErr)
 	}
 
 	if _, err := safefs.Run(ctx, "secondary-sync-temp", tempName, to, func() (struct{}, error) {

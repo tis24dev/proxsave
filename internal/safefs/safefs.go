@@ -115,6 +115,18 @@ func (l *operationLimiter) inflight() int {
 }
 
 func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *TimeoutError, run func() (T, error)) (T, error) {
+	return runBounded(ctx, fsOpLimiter, timeout, timeoutErr, run)
+}
+
+// runBounded is runLimited with an explicit limiter. A nil limiter skips the
+// shared-pool acquire/release entirely: it is safe only for callers that
+// self-throttle their spawn rate (for example a sequential per-chunk copy that
+// keeps at most one worker in flight at a time). Such a long-lived best-effort
+// stream must not contend for, nor on a wedge permanently erode, the global slot
+// budget the critical paths rely on, so it runs limiter-free. Do NOT pass nil
+// from a caller that fans many concurrent workers out, or a wedge would leak
+// abandoned goroutines without the 32-slot backstop.
+func runBounded[T any](ctx context.Context, limiter *operationLimiter, timeout time.Duration, timeoutErr *TimeoutError, run func() (T, error)) (T, error) {
 	var zero T
 	if err := normalizeContextErr(ctx, timeoutErr); err != nil {
 		return zero, err
@@ -130,12 +142,13 @@ func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *T
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	limiter := fsOpLimiter
-	if err := limiter.acquire(ctx, timer.C); err != nil {
-		if errors.Is(err, ErrTimeout) {
-			return zero, timeoutErr
+	if limiter != nil {
+		if err := limiter.acquire(ctx, timer.C); err != nil {
+			if errors.Is(err, ErrTimeout) {
+				return zero, timeoutErr
+			}
+			return zero, err
 		}
-		return zero, err
 	}
 
 	type result struct {
@@ -144,7 +157,9 @@ func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *T
 	}
 	ch := make(chan result, 1)
 	go func() {
-		defer limiter.release()
+		if limiter != nil {
+			defer limiter.release()
+		}
 		value, err := run()
 		ch <- result{value: value, err: err}
 	}()
