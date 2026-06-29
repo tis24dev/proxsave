@@ -410,6 +410,45 @@ func TestSecondaryStorage_Store_NilConfigTreatsSourceAsUnbundled(t *testing.T) {
 	}
 }
 
+// A source-close failure on the SUCCESS path (after the destination has been
+// durably renamed) must not turn a committed copy into a reported failure:
+// Store would otherwise retry and create duplicate backups. This pins the
+// best-effort close. Reverting to the old "err = close error when err == nil"
+// turns it red (copyFile would return the synthetic close error even though the
+// destination is fully written).
+func TestSecondaryStorage_CopyFile_SourceCloseErrorAfterCommitStillSucceeds(t *testing.T) {
+	prev := secondaryCloseSourceFile
+	secondaryCloseSourceFile = func(f *os.File) error {
+		_ = f.Close() // release the real fd, then report a close failure (e.g. a dying read mount)
+		return errors.New("simulated source close failure")
+	}
+	t.Cleanup(func() { secondaryCloseSourceFile = prev })
+
+	logger := logging.New(types.LogLevelInfo, false)
+	cfg := &config.Config{SecondaryEnabled: true, FsIoTimeoutSeconds: 30}
+	s := &SecondaryStorage{config: cfg, logger: logger}
+
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "node-backup.tar.zst")
+	const content = "secondary-durable-payload"
+	if err := os.WriteFile(src, []byte(content), 0o640); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	dest := filepath.Join(t.TempDir(), "node-backup.tar.zst")
+
+	if err := s.copyFile(context.Background(), src, dest); err != nil {
+		t.Fatalf("copyFile must succeed despite a source-close error after a durable rename; got %v", err)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("destination missing after a 'failed' copy: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("destination content mismatch: got %q want %q", got, content)
+	}
+}
+
 func TestSecondaryStorage_CopyFile_CoversErrorBranches(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}

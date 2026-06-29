@@ -2,14 +2,45 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+// fsIoTimeout converts the configured FS_IO_TIMEOUT into a per-operation safefs
+// budget. A non-positive value (the explicit FS_IO_TIMEOUT=0 opt-out, or an unset
+// cfg) yields 0, which safefs treats as unbounded (legacy behaviour).
+func (o *Orchestrator) fsIoTimeout() time.Duration {
+	if o == nil || o.cfg == nil || o.cfg.FsIoTimeoutSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(o.cfg.FsIoTimeoutSeconds) * time.Second
+}
+
+// boundedCopyFile copies src to dest, bounding the whole open(src)+open(dest)+
+// io.Copy+Sync as a single unit via safefs so a dead/stale mount on EITHER endpoint
+// cannot wedge the caller. It delegates to the shared copyFile (preserving the FS
+// seam) and leaves that generic helper untouched. timeout<=0 means unbounded
+// (FS_IO_TIMEOUT=0 opt-out). On timeout safefs abandons the worker goroutine (the
+// kernel call is not cancelled; fds are reclaimed at process exit) and returns a
+// *safefs.TimeoutError wrapping safefs.ErrTimeout. Intended for best-effort
+// shipping of the (small) run log, not for completeness-critical restore copies.
+func boundedCopyFile(ctx context.Context, fs FS, src, dest string, timeout time.Duration) error {
+	if timeout <= 0 {
+		return copyFile(fs, src, dest)
+	}
+	_, err := safefs.Run(ctx, "logcopy", dest, timeout, func() (struct{}, error) {
+		return struct{}{}, copyFile(fs, src, dest)
+	})
+	return err
+}
 
 // StorageTarget represents an external destination (e.g., secondary storage, cloud).
 type StorageTarget interface {
@@ -349,32 +380,72 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 	logFileName := filepath.Base(logFilePath)
 	o.logger.Info("Dispatching log file: %s", logFileName)
 
-	// Copy to secondary storage
+	// All log-dispatch FS ops are bounded by FS_IO_TIMEOUT so a dead/stale mount on
+	// the source (LOG_PATH), the secondary destination (SecondaryLogPath), or the
+	// cloud local source cannot wedge the finalize in an uninterruptible (D-state)
+	// syscall. On timeout: warn and skip that destination (best-effort). Background
+	// ctx (not the run ctx): the log must ship at shutdown even when the run was
+	// cancelled (Ctrl+C); FS_IO_TIMEOUT alone bounds it.
+	timeout := o.fsIoTimeout()
+
+	// Copy to secondary storage. Bound the dir-create and the copy: both the source
+	// read (LOG_PATH) and the destination write (SecondaryLogPath) may be dead mounts.
 	if o.cfg.SecondaryEnabled && o.cfg.SecondaryLogPath != "" {
 		secondaryLogPath := filepath.Join(o.cfg.SecondaryLogPath, logFileName)
 		o.logger.Debug("Copying log to secondary: %s", secondaryLogPath)
 
-		if err := fs.MkdirAll(o.cfg.SecondaryLogPath, 0755); err != nil {
-			o.logger.Warning("Failed to create secondary log directory: %v", err)
-		} else {
-			if err := copyFile(fs, logFilePath, secondaryLogPath); err != nil {
-				o.logger.Warning("Failed to copy log to secondary: %v", err)
-			} else {
+		_, mkErr := safefs.Run(context.Background(), "logmkdir", o.cfg.SecondaryLogPath, timeout, func() (struct{}, error) {
+			return struct{}{}, fs.MkdirAll(o.cfg.SecondaryLogPath, 0755)
+		})
+		switch {
+		case mkErr != nil && errors.Is(mkErr, safefs.ErrTimeout):
+			o.logger.Warning("Skipping secondary log copy: creating %s timed out after %s (dead/stale mount?)", o.cfg.SecondaryLogPath, timeout)
+		case mkErr != nil:
+			o.logger.Warning("Failed to create secondary log directory: %v", mkErr)
+		default:
+			switch err := boundedCopyFile(context.Background(), fs, logFilePath, secondaryLogPath, timeout); {
+			case err == nil:
 				o.logger.Info("✓ Log copied to secondary: %s", secondaryLogPath)
+			case errors.Is(err, safefs.ErrTimeout):
+				o.logger.Warning("Skipping secondary log copy: copy to %s timed out after %s (dead/stale mount?)", secondaryLogPath, timeout)
+			default:
+				o.logger.Warning("Failed to copy log to secondary: %v", err)
 			}
 		}
 	}
 
-	// Copy to cloud storage
+	// Copy to cloud storage. rclone reads the LOCAL source log; a dead/stale LOG_PATH
+	// mount can wedge that read in an uninterruptible syscall that rclone's own
+	// --timeout (remote IO) and the deadline-less ctx do not bound. Probe the source
+	// with a bounded stat first and skip the cloud copy if it is unreachable.
 	if o.cfg.CloudEnabled {
 		if cloudBase := strings.TrimSpace(o.cfg.CloudLogPath); cloudBase != "" {
 			destination := buildCloudLogDestination(cloudBase, logFileName, o.cfg.CloudRemote)
-			o.logger.Debug("Copying log to cloud: %s", destination)
 
-			if err := o.copyLogToCloud(ctx, logFilePath, destination); err != nil {
-				o.logger.Warning("Failed to copy log to cloud: %v", err)
-			} else {
-				o.logger.Info("✓ Log copied to cloud: %s", destination)
+			_, probeErr := safefs.Run(context.Background(), "logstat", logFilePath, timeout, func() (struct{}, error) {
+				_, e := fs.Stat(logFilePath)
+				return struct{}{}, e
+			})
+			switch {
+			case probeErr != nil && errors.Is(probeErr, safefs.ErrTimeout):
+				o.logger.Warning("Skipping cloud log copy: source log %s unreachable after %s (dead/stale mount?)", logFilePath, timeout)
+			case probeErr != nil:
+				o.logger.Warning("Skipping cloud log copy: cannot stat source log %s: %v", logFilePath, probeErr)
+			default:
+				o.logger.Debug("Copying log to cloud: %s", destination)
+				// Detach the upload from the (possibly cancelled) run ctx: like the
+				// secondary copy above, the log must still ship at shutdown after a
+				// Ctrl+C. UploadToRemotePath bounds a deadline-less ctx itself, so a
+				// stalled rclone cannot hang here.
+				upload := o.copyLogToCloud
+				if o.copyLogToCloudFn != nil {
+					upload = o.copyLogToCloudFn
+				}
+				if err := upload(context.Background(), logFilePath, destination); err != nil {
+					o.logger.Warning("Failed to copy log to cloud: %v", err)
+				} else {
+					o.logger.Info("✓ Log copied to cloud: %s", destination)
+				}
 			}
 		}
 	}

@@ -155,6 +155,10 @@ func (e *StorageError) Error() string {
 		" operation failed for " + e.Path + recoverable + ": " + e.Err.Error()
 }
 
+// Unwrap exposes the wrapped cause so callers can classify it with errors.Is/As
+// (e.g. errors.Is(err, safefs.ErrTimeout)).
+func (e *StorageError) Unwrap() error { return e.Err }
+
 // SupportsUnixOwnership returns true if the filesystem supports Unix ownership (chown/chmod)
 func (f FilesystemType) SupportsUnixOwnership() bool {
 	switch f {

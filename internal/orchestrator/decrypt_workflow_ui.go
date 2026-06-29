@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"time"
 
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
@@ -199,7 +200,7 @@ func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPa
 
 func preparePlainBundleWithUI(ctx context.Context, cand *backupCandidate, version string, logger *logging.Logger, ui interface {
 	PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error)
-}) (bundle *preparedBundle, err error) {
+}, timeout time.Duration) (bundle *preparedBundle, err error) {
 	if cand == nil || cand.Manifest == nil {
 		return nil, fmt.Errorf("invalid backup candidate")
 	}
@@ -212,7 +213,7 @@ func preparePlainBundleWithUI(ctx context.Context, cand *backupCandidate, versio
 	extraSalts := manifestPassphraseSalts(cand.Manifest)
 	return preparePlainBundleCommon(ctx, cand, version, logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
 		return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, ui.PromptDecryptSecret, extraSalts)
-	})
+	}, timeout)
 }
 
 func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui DecryptWorkflowUI) (err error) {
@@ -241,7 +242,7 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		return err
 	}
 
-	prepared, err := preparePlainBundleWithUI(ctx, candidate, version, logger, ui)
+	prepared, err := preparePlainBundleWithUI(ctx, candidate, version, logger, ui, fsIoTimeoutFromConfig(cfg))
 	if err != nil {
 		return err
 	}

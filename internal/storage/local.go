@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/backup"
@@ -37,7 +36,7 @@ func NewLocalStorage(cfg *config.Config, logger *logging.Logger) (*LocalStorage,
 		config:     cfg,
 		logger:     logger,
 		basePath:   cfg.BackupPath,
-		fsDetector: NewFilesystemDetector(logger),
+		fsDetector: NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
 }
 
@@ -65,8 +64,8 @@ func (l *LocalStorage) IsCritical() bool {
 func (l *LocalStorage) DetectFilesystem(ctx context.Context) (info *FilesystemInfo, err error) {
 	done := logging.DebugStart(l.logger, "local detect filesystem", "path=%s", l.basePath)
 	defer func() { done(err) }()
-	// Ensure directory exists
-	if err := os.MkdirAll(l.basePath, 0700); err != nil {
+	// Ensure directory exists (bounded: basePath may be a dead/stale mount).
+	if err := safefs.MkdirAll(ctx, l.basePath, 0700, fsIoTimeout(l.config)); err != nil {
 		return nil, &StorageError{
 			Location:   LocationPrimary,
 			Operation:  "detect_filesystem",
@@ -103,8 +102,8 @@ func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *t
 		return err
 	}
 
-	// Verify file exists
-	if _, err := os.Stat(backupFile); err != nil {
+	// Verify file exists (bounded against a dead/stale mount).
+	if _, err := safefs.Stat(ctx, backupFile, fsIoTimeout(l.config)); err != nil {
 		l.logger.Debug("Local storage: source file %s not found", backupFile)
 		return &StorageError{
 			Location:   LocationPrimary,
@@ -156,10 +155,13 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 		filepath.Join(l.basePath, "*-backup-*.tar*"),        // Go pipeline naming (+ bundle)
 	}
 
+	timeout := fsIoTimeout(l.config)
 	var matches []string
 	seen := make(map[string]struct{})
 	for _, pattern := range globPatterns {
-		patternMatches, err := filepath.Glob(pattern)
+		patternMatches, err := safefs.Run(ctx, "local-glob", l.basePath, timeout, func() ([]string, error) {
+			return filepath.Glob(pattern)
+		})
 		if err != nil {
 			return nil, &StorageError{
 				Location:   LocationPrimary,
@@ -193,7 +195,7 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 			if !strings.HasSuffix(match, ".bundle.tar") {
 				// This is a standalone file, check if bundle exists
 				bundlePath := match + ".bundle.tar"
-				if _, err := os.Stat(bundlePath); err == nil {
+				if _, err := safefs.Stat(ctx, bundlePath, timeout); err == nil {
 					// Bundle exists, skip the standalone file
 					l.logger.Debug("Skipping standalone file %s (bundle exists at %s)",
 						filepath.Base(match), filepath.Base(bundlePath))
@@ -206,14 +208,14 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 			match, l.config != nil && l.config.BundleAssociatedFiles)
 
 		// Parse metadata if available
-		metadata, err := l.loadMetadata(match)
+		metadata, err := l.loadMetadata(ctx, match)
 		if err != nil {
 			l.logger.Warning("Missing .metadata for %s - using filename metadata", filepath.Base(match))
 			// Create minimal metadata from filename
 			metadata = &types.BackupMetadata{
 				BackupFile: match,
 			}
-			if stat, statErr := os.Stat(match); statErr == nil {
+			if stat, statErr := safefs.Stat(ctx, match, timeout); statErr == nil {
 				metadata.Timestamp = stat.ModTime()
 				metadata.Size = stat.Size()
 			} else {
@@ -233,25 +235,32 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 }
 
 // loadMetadata loads metadata for a backup file
-func (l *LocalStorage) loadMetadata(backupFile string) (*types.BackupMetadata, error) {
+func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*types.BackupMetadata, error) {
 	isBundle := strings.HasSuffix(backupFile, ".bundle.tar")
 	l.logger.Debug("Local storage: loadMetadata for %s (isBundle=%v)", backupFile, isBundle)
 
-	// If file IS a bundle → read metadata from INSIDE the bundle
+	timeout := fsIoTimeout(l.config)
+
+	// If file IS a bundle → read metadata from INSIDE the bundle. Bounded as a unit
+	// so a dead/stale mount cannot wedge the open or the bundle (tar) read.
 	if isBundle {
 		l.logger.Debug("Local storage: reading metadata from inside bundle %s", backupFile)
-		return l.loadMetadataFromBundle(backupFile)
+		return safefs.Run(ctx, "local-bundle-meta", backupFile, timeout, func() (*types.BackupMetadata, error) {
+			return l.loadMetadataFromBundle(backupFile)
+		})
 	}
 
 	// If file is NOT a bundle → read metadata from OUTSIDE (sidecar .metadata file)
 	metadataFile := backupFile + ".metadata"
 	l.logger.Debug("Local storage: looking for sidecar metadata %s", metadataFile)
-	if _, err := os.Stat(metadataFile); err != nil {
+	if _, err := safefs.Stat(ctx, metadataFile, timeout); err != nil {
 		l.logger.Debug("Local storage: sidecar metadata %s missing/inaccessible: %v", metadataFile, err)
 		return nil, err
 	}
 
-	manifest, err := backup.LoadManifest(metadataFile)
+	manifest, err := safefs.Run(ctx, "local-loadmanifest", metadataFile, timeout, func() (*backup.Manifest, error) {
+		return backup.LoadManifest(metadataFile)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +276,7 @@ func (l *LocalStorage) loadMetadata(backupFile string) (*types.BackupMetadata, e
 	}
 
 	if metadata.Timestamp.IsZero() || metadata.Size == 0 {
-		if stat, statErr := os.Stat(backupFile); statErr == nil {
+		if stat, statErr := safefs.Stat(ctx, backupFile, timeout); statErr == nil {
 			if metadata.Timestamp.IsZero() {
 				metadata.Timestamp = stat.ModTime()
 			}
@@ -360,6 +369,7 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 	// track whether the data archive itself (not just a sidecar) failed, so the
 	// caller never counts a backup whose archive remains on disk as deleted
 	// (PS-BH-001), while a sidecar-only failure still counts (the archive IS gone).
+	timeout := fsIoTimeout(l.config)
 	var failedFiles []string
 	dataFailed := false
 	for _, f := range filesToDelete {
@@ -367,7 +377,7 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 			continue
 		}
 		l.logger.Debug("Local storage: removing file %s", f)
-		if err := os.Remove(f); err != nil {
+		if err := safefs.Remove(ctx, f, timeout); err != nil {
 			if os.IsNotExist(err) {
 				l.logger.Debug("Local storage: file already removed %s", f)
 				continue
@@ -684,9 +694,8 @@ func (l *LocalStorage) GetStats(ctx context.Context) (stats *StorageStats, err e
 	stats.OldestBackup = oldest
 	stats.NewestBackup = newest
 
-	// Get available/total space using statfs
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(l.basePath, &stat); err == nil {
+	// Get available/total space using statfs (bounded against a dead/stale mount).
+	if stat, err := safefs.Statfs(ctx, l.basePath, fsIoTimeout(l.config)); err == nil {
 		total, available, used := safefs.SpaceUsageFromStatfs(stat)
 		stats.AvailableSpace = available
 		stats.TotalSpace = total

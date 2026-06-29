@@ -17,11 +17,13 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -87,6 +89,10 @@ type Checker struct {
 	envInfo    *environment.EnvironmentInfo
 	result     *Result
 	lookPath   func(string) (string, error)
+	// fsTimeout bounds each filesystem syscall the preflight performs on a
+	// configured path. Zero means unbounded. Sourced from FS_IO_TIMEOUT so a
+	// dead/stale mount cannot wedge the preflight in an uninterruptible syscall.
+	fsTimeout time.Duration
 
 	filesystemInfoLookup func(context.Context, string) (*storage.FilesystemInfo, error)
 }
@@ -120,6 +126,7 @@ func Run(ctx context.Context, logger *logging.Logger, cfg *config.Config, config
 		envInfo:    envInfo,
 		result:     &Result{},
 		lookPath:   exec.LookPath,
+		fsTimeout:  fsIoTimeout(cfg),
 	}
 
 	logger.Step("Security preflight checks")
@@ -127,12 +134,12 @@ func Run(ctx context.Context, logger *logging.Logger, cfg *config.Config, config
 		cfg.AutoFixPermissions, cfg.AutoUpdateHashes, cfg.ContinueOnSecurityIssues, cfg.CheckNetworkSecurity, cfg.CheckFirewall, cfg.CheckOpenPorts,
 		len(cfg.SuspiciousProcesses), len(cfg.SafeBracketProcesses))
 	checker.checkDependencies()
-	checker.verifyBinaryIntegrity()
-	checker.verifyConfigFile()
-	checker.verifySensitiveFiles()
-	checker.verifyDirectories()
-	checker.verifySecureAccountFiles()
-	checker.detectPrivateAgeKeys()
+	checker.verifyBinaryIntegrity(ctx)
+	checker.verifyConfigFile(ctx)
+	checker.verifySensitiveFiles(ctx)
+	checker.verifyDirectories(ctx)
+	checker.verifySecureAccountFiles(ctx)
+	checker.detectPrivateAgeKeys(ctx)
 
 	if cfg.CheckNetworkSecurity {
 		if cfg.CheckFirewall {
@@ -156,6 +163,16 @@ func Run(ctx context.Context, logger *logging.Logger, cfg *config.Config, config
 	}
 
 	return checker.result, nil
+}
+
+// fsIoTimeout converts the configured FS_IO_TIMEOUT into a duration. A
+// non-positive value (the explicit FS_IO_TIMEOUT=0 opt-out) yields 0, which
+// safefs treats as unbounded; the config default is 30s.
+func fsIoTimeout(cfg *config.Config) time.Duration {
+	if cfg == nil || cfg.FsIoTimeoutSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(cfg.FsIoTimeoutSeconds) * time.Second
 }
 
 func (c *Checker) checkDependencies() {
@@ -335,14 +352,18 @@ func (c *Checker) bannerWarning(message string) {
 	c.logger.Warning("Security warning: %s", message)
 }
 
-func (c *Checker) verifyBinaryIntegrity() {
+func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 	if c.execPath == "" {
 		c.addWarning("Executable path not available for integrity check")
 		return
 	}
 
-	info, err := os.Lstat(c.execPath)
+	info, err := safefs.Lstat(ctx, c.execPath, c.fsTimeout)
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: stat of executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
+			return
+		}
 		c.addError("Cannot stat executable %s: %v", c.execPath, err)
 		return
 	}
@@ -353,8 +374,13 @@ func (c *Checker) verifyBinaryIntegrity() {
 	}
 
 	hashFile := c.execPath + ".md5"
-	f, err := os.Open(c.execPath)
+	f, err := safefs.Open(ctx, c.execPath, c.fsTimeout)
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			// safefs.Open abandoned its worker on timeout; f is nil, nothing to close.
+			c.addWarning("Security check: opening executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
+			return
+		}
 		c.addError("Cannot open executable %s: %v", c.execPath, err)
 		return
 	}
@@ -377,22 +403,58 @@ func (c *Checker) verifyBinaryIntegrity() {
 		return
 	}
 
-	if _, err := os.Stat(hashFile); errors.Is(err, os.ErrNotExist) {
-		if c.cfg.AutoUpdateHashes {
-			if err := os.WriteFile(hashFile, []byte(currentHash), 0o600); err != nil {
-				c.addWarning("Failed to create hash file %s: %v", hashFile, err)
-			} else {
-				c.logger.Info("Created new hash file for executable: %s", hashFile)
-			}
-		} else {
-			c.bannerWarning(fmt.Sprintf("hash file %s missing", hashFile))
-			c.addWarning("Hash file %s missing (AUTO_UPDATE_HASHES=false)", hashFile)
+	// The .md5 hash-file path is bounded with the same fs timeout as the
+	// executable above: a dead/stale mount must not wedge the integrity check
+	// here either. safefs.Stat is the bounded counterpart of os.Stat. Its
+	// outcomes are mapped explicitly:
+	//   safefs.ErrTimeout -> dead/stale mount: warn + skip (like the exec path).
+	//     Handled FIRST, because a *TimeoutError is never os.ErrNotExist and
+	//     would otherwise fall through to the (also bounded) read and time out
+	//     a second time.
+	//   os.ErrNotExist    -> genuinely missing: create (AUTO_UPDATE_HASHES) or warn.
+	//   other error / nil -> fall through to the bounded read+compare, exactly
+	//     as the original raw os.Stat fall-through did.
+	if _, statErr := safefs.Stat(ctx, hashFile, c.fsTimeout); statErr != nil {
+		if errors.Is(statErr, safefs.ErrTimeout) {
+			c.addWarning("Security check: stat of hash file %s timed out after %s; skipping integrity check (dead/stale mount?)", hashFile, c.fsTimeout)
+			return
 		}
-		return
+		if errors.Is(statErr, os.ErrNotExist) {
+			if c.cfg.AutoUpdateHashes {
+				if c.cfg.DryRun {
+					c.logger.Info("DRY RUN: would create hash file for executable: %s", hashFile)
+				} else if werr := c.writeHashFile(ctx, hashFile, currentHash); werr != nil {
+					c.addWarning("Failed to create hash file %s: %v", hashFile, werr)
+				} else {
+					c.logger.Info("Created new hash file for executable: %s", hashFile)
+				}
+			} else {
+				c.bannerWarning(fmt.Sprintf("hash file %s missing", hashFile))
+				c.addWarning("Hash file %s missing (AUTO_UPDATE_HASHES=false)", hashFile)
+			}
+			return
+		}
+		// Any other stat error (e.g. EACCES): preserve the original behavior and
+		// fall through to the read below, which surfaces the concrete failure.
 	}
 
-	stored, err := os.ReadFile(hashFile)
+	stored, err := safefs.Run(ctx, "readfile", hashFile, c.fsTimeout, func() ([]byte, error) {
+		// Read the .md5 confined to the executable's directory via os.Root: the
+		// read carries a bare basename, so this is structurally free of gosec G304
+		// (file inclusion via a variable) without a #nosec, consistent with the
+		// ownership-probe fix in storage/filesystem.go.
+		root, rerr := os.OpenRoot(filepath.Dir(hashFile))
+		if rerr != nil {
+			return nil, rerr
+		}
+		defer func() { _ = root.Close() }()
+		return root.ReadFile(filepath.Base(hashFile))
+	})
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: reading hash file %s timed out after %s; skipping integrity check (dead/stale mount?)", hashFile, c.fsTimeout)
+			return
+		}
 		c.addWarning("Unable to read hash file %s: %v", hashFile, err)
 		return
 	}
@@ -400,8 +462,10 @@ func (c *Checker) verifyBinaryIntegrity() {
 	if strings.TrimSpace(string(stored)) != currentHash {
 		c.bannerWarning(fmt.Sprintf("executable hash mismatch for %s", c.execPath))
 		if c.cfg.AutoUpdateHashes {
-			if err := os.WriteFile(hashFile, []byte(currentHash), 0o600); err != nil {
-				c.addWarning("Failed to update hash file %s: %v", hashFile, err)
+			if c.cfg.DryRun {
+				c.logger.Info("DRY RUN: would regenerate hash file: %s", hashFile)
+			} else if werr := c.writeHashFile(ctx, hashFile, currentHash); werr != nil {
+				c.addWarning("Failed to update hash file %s: %v", hashFile, werr)
 			} else {
 				c.logger.Info("Regenerated hash file: %s", hashFile)
 			}
@@ -411,22 +475,39 @@ func (c *Checker) verifyBinaryIntegrity() {
 	}
 }
 
-func (c *Checker) verifyConfigFile() {
+// writeHashFile writes currentHash to hashFile under the fs timeout. os.WriteFile
+// opens the path, which a dead/stale mount can wedge, so the write is bounded
+// with safefs.Run; on timeout a *TimeoutError (wrapping safefs.ErrTimeout) is
+// returned and the caller surfaces it through its best-effort
+// "Failed to create/update hash file" warning. With c.fsTimeout <= 0 (legacy /
+// FS_IO_TIMEOUT unset) safefs.Run is a direct synchronous os.WriteFile.
+func (c *Checker) writeHashFile(ctx context.Context, hashFile, currentHash string) error {
+	_, err := safefs.Run(ctx, "writefile", hashFile, c.fsTimeout, func() (struct{}, error) {
+		return struct{}{}, os.WriteFile(hashFile, []byte(currentHash), 0o600)
+	})
+	return err
+}
+
+func (c *Checker) verifyConfigFile(ctx context.Context) {
 	if c.configPath == "" {
 		c.addWarning("Configuration path not provided")
 		return
 	}
 
-	info, err := os.Stat(c.configPath)
+	info, err := safefs.Stat(ctx, c.configPath, c.fsTimeout)
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: stat of configuration file %s timed out after %s; skipping its checks (dead/stale mount?)", c.configPath, c.fsTimeout)
+			return
+		}
 		c.addError("Cannot stat configuration file %s: %v", c.configPath, err)
 		return
 	}
 
-	c.ensureOwnershipAndPerm(c.configPath, info, 0o600, fmt.Sprintf("Config file %s", c.configPath))
+	c.ensureOwnershipAndPerm(ctx, c.configPath, info, 0o600, fmt.Sprintf("Config file %s", c.configPath))
 }
 
-func (c *Checker) verifySensitiveFiles() {
+func (c *Checker) verifySensitiveFiles(ctx context.Context) {
 	files := []struct {
 		path        string
 		perm        os.FileMode
@@ -455,43 +536,64 @@ func (c *Checker) verifySensitiveFiles() {
 	}
 
 	for _, entry := range files {
-		info, err := os.Stat(entry.path)
+		info, err := safefs.Stat(ctx, entry.path, c.fsTimeout)
 		if errors.Is(err, os.ErrNotExist) && entry.optional {
 			if entry.description == "AGE recipient file" && c.cfg.EncryptArchive {
 				c.logger.Debug("Security check: AGE recipient file %s not present yet (wizard will create it)", entry.path)
 			}
 			continue
 		}
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: stat of %s (%s) timed out after %s; skipping (dead/stale mount?)", entry.path, entry.description, c.fsTimeout)
+			continue
+		}
 		if err != nil {
 			c.addWarning("Cannot stat %s (%s): %v", entry.path, entry.description, err)
 			continue
 		}
-		c.ensureOwnershipAndPerm(entry.path, info, entry.perm, entry.description)
+		c.ensureOwnershipAndPerm(ctx, entry.path, info, entry.perm, entry.description)
 	}
 }
 
-func (c *Checker) verifySecureAccountFiles() {
+func (c *Checker) verifySecureAccountFiles(ctx context.Context) {
 	if c.cfg.SecureAccount == "" {
 		return
 	}
 
-	matches, err := filepath.Glob(filepath.Join(c.cfg.SecureAccount, "*.json"))
+	// Bounded directory read so a dead/stale SecureAccount mount cannot wedge the
+	// preflight in an uninterruptible syscall (filepath.Glob is unbounded).
+	entries, err := safefs.ReadDir(ctx, c.cfg.SecureAccount, c.fsTimeout)
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: listing secure account dir %s timed out after %s; skipping (dead/stale mount?)", c.cfg.SecureAccount, c.fsTimeout)
+			return
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
 		c.addWarning("Failed to enumerate secure account files: %v", err)
 		return
 	}
 
-	for _, file := range matches {
-		info, err := os.Stat(file)
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		file := filepath.Join(c.cfg.SecureAccount, entry.Name())
+		info, err := safefs.Stat(ctx, file, c.fsTimeout)
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: stat of secure account file %s timed out after %s; skipping (dead/stale mount?)", file, c.fsTimeout)
+			continue
+		}
 		if err != nil {
 			c.addWarning("Cannot stat secure account file %s: %v", file, err)
 			continue
 		}
-		c.ensureOwnershipAndPerm(file, info, 0o600, fmt.Sprintf("Secure account file %s", file))
+		c.ensureOwnershipAndPerm(ctx, file, info, 0o600, fmt.Sprintf("Secure account file %s", file))
 	}
 }
 
-func (c *Checker) verifyDirectories() {
+func (c *Checker) verifyDirectories(ctx context.Context) {
 	dirs := []struct {
 		path        string
 		perm        os.FileMode
@@ -511,24 +613,40 @@ func (c *Checker) verifyDirectories() {
 		if dir.path == "" {
 			continue
 		}
-		info, err := os.Stat(dir.path)
-		if errors.Is(err, os.ErrNotExist) {
-			if err := os.MkdirAll(dir.path, dir.perm); err != nil {
-				c.addError("Failed to create directory %s: %v", dir.path, err)
+		info, err := safefs.Stat(ctx, dir.path, c.fsTimeout)
+		switch {
+		case errors.Is(err, safefs.ErrTimeout):
+			c.addWarning("Security check: stat of directory %s timed out after %s; skipping its checks (dead/stale mount?)", dir.path, c.fsTimeout)
+			continue
+		case errors.Is(err, os.ErrNotExist):
+			if c.cfg.DryRun {
+				c.logger.Info("DRY RUN: directory %s is missing; would create it with mode %o (skipping creation and permission checks)", dir.path, dir.perm)
+				continue
+			}
+			if mkErr := safefs.MkdirAll(ctx, dir.path, dir.perm, c.fsTimeout); mkErr != nil {
+				if errors.Is(mkErr, safefs.ErrTimeout) {
+					c.addWarning("Security check: creating directory %s timed out after %s; skipping (dead/stale mount?)", dir.path, c.fsTimeout)
+				} else {
+					c.addError("Failed to create directory %s: %v", dir.path, mkErr)
+				}
 				continue
 			}
 			c.logger.Info("Created missing directory: %s", dir.path)
-			info, err = os.Stat(dir.path)
+			info, err = safefs.Stat(ctx, dir.path, c.fsTimeout)
 			if err != nil {
-				c.addWarning("Cannot verify permissions for %s: %v", dir.path, err)
+				if errors.Is(err, safefs.ErrTimeout) {
+					c.addWarning("Security check: re-stat of %s timed out after %s; skipping its checks", dir.path, c.fsTimeout)
+				} else {
+					c.addWarning("Cannot verify permissions for %s: %v", dir.path, err)
+				}
 				continue
 			}
-		} else if err != nil {
+		case err != nil:
 			c.addWarning("Cannot stat directory %s: %v", dir.path, err)
 			continue
 		}
 
-		if dir.allowBackup && c.shouldSkipPOSIXDirectoryChecks(dir.path) {
+		if dir.allowBackup && c.shouldSkipPOSIXDirectoryChecks(ctx, dir.path) {
 			continue
 		}
 
@@ -537,24 +655,35 @@ func (c *Checker) verifyDirectories() {
 			continue
 		}
 
-		c.ensureOwnershipAndPerm(dir.path, info, dir.perm, fmt.Sprintf("Directory %s", dir.path))
+		c.ensureOwnershipAndPerm(ctx, dir.path, info, dir.perm, fmt.Sprintf("Directory %s", dir.path))
 	}
 }
 
-func (c *Checker) detectPrivateAgeKeys() {
-	identityDir := filepath.Join(c.cfg.BaseDir, "identity")
-	if identityDir == "" {
+func (c *Checker) detectPrivateAgeKeys(ctx context.Context) {
+	// Guard on BaseDir, not on the joined path: filepath.Join("", "identity")
+	// yields the relative "identity", so guarding the join never fires and an
+	// empty BaseDir would scan ./identity from the process CWD. BaseDir is a
+	// runtime-defaulted local dir, so empty means "nothing configured" -> skip.
+	if c.cfg.BaseDir == "" {
 		return
 	}
+	identityDir := filepath.Join(c.cfg.BaseDir, "identity")
 
-	if _, err := os.Stat(identityDir); err != nil {
+	if _, err := safefs.Stat(ctx, identityDir, c.fsTimeout); err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: stat of identity directory %s timed out after %s; skipping private-key scan (dead/stale mount?)", identityDir, c.fsTimeout)
+		}
 		return
 	}
 
 	privateKeyMarkers := []string{"AGE-SECRET-KEY-", "BEGIN AGE PRIVATE KEY", "OPENSSH PRIVATE KEY"}
-	if err := filepath.WalkDir(identityDir, func(path string, d fs.DirEntry, err error) error {
+	if err := safefs.WalkBounded(ctx, identityDir, c.fsTimeout, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			c.logger.Debug("Security: cannot access %s: %v", path, err)
+			if errors.Is(err, safefs.ErrTimeout) {
+				c.addWarning("Security check: scanning %s timed out after %s; skipping subtree (dead/stale mount?)", path, c.fsTimeout)
+			} else {
+				c.logger.Debug("Security: cannot access %s: %v", path, err)
+			}
 			return nil
 		}
 		if d.IsDir() {
@@ -848,14 +977,18 @@ func (c *Checker) shouldSkipOwnershipChecks(path string) bool {
 	return false
 }
 
-func (c *Checker) shouldSkipPOSIXDirectoryChecks(path string) bool {
+func (c *Checker) shouldSkipPOSIXDirectoryChecks(ctx context.Context, path string) bool {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return false
 	}
 
-	fsInfo, err := c.detectFilesystemInfo(context.Background(), path)
+	fsInfo, err := c.detectFilesystemInfo(ctx, path)
 	if err != nil {
+		if errors.Is(err, safefs.ErrTimeout) {
+			c.addWarning("Security check: filesystem detection timed out on %s after %s; skipping POSIX permission checks (dead/stale mount?)", path, c.fsTimeout)
+			return true
+		}
 		if c.logger != nil {
 			c.logger.Debug("Security check: filesystem detection failed for %s; continuing with POSIX permission checks: %v", path, err)
 		}
@@ -878,10 +1011,16 @@ func (c *Checker) detectFilesystemInfo(ctx context.Context, path string) (*stora
 		return c.filesystemInfoLookup(ctx, path)
 	}
 	logger := (*logging.Logger)(nil)
+	timeout := time.Duration(0)
+	dryRun := false
 	if c != nil {
 		logger = c.logger
+		timeout = c.fsTimeout
+		if c.cfg != nil {
+			dryRun = c.cfg.DryRun
+		}
 	}
-	return storage.NewFilesystemDetector(logger).DetectFilesystem(ctx, path)
+	return storage.NewFilesystemDetector(logger, storage.WithIOTimeout(timeout), storage.WithDryRun(dryRun)).DetectFilesystem(ctx, path)
 }
 
 type ssEntry struct {
@@ -1096,11 +1235,15 @@ func (c *Checker) isSafeKernelProcess(name string) bool {
 	return false
 }
 
-func (c *Checker) ensureOwnershipAndPerm(path string, info os.FileInfo, expectedPerm os.FileMode, description string) os.FileInfo {
+func (c *Checker) ensureOwnershipAndPerm(ctx context.Context, path string, info os.FileInfo, expectedPerm os.FileMode, description string) os.FileInfo {
 	var err error
 	if info == nil {
-		info, err = os.Lstat(path)
+		info, err = safefs.Lstat(ctx, path, c.fsTimeout)
 		if err != nil {
+			if errors.Is(err, safefs.ErrTimeout) {
+				c.addWarning("Security check: stat of %s timed out after %s; skipping permission/ownership checks (dead/stale mount?)", path, c.fsTimeout)
+				return nil
+			}
 			c.addWarning("Cannot stat %s: %v", path, err)
 			return nil
 		}
@@ -1112,8 +1255,11 @@ func (c *Checker) ensureOwnershipAndPerm(path string, info os.FileInfo, expected
 	// refusal guards below and let syscall.Chmod follow the link to an arbitrary
 	// target.
 	isSymlink := info.Mode()&os.ModeSymlink != 0
-	if li, lerr := os.Lstat(path); lerr == nil {
+	if li, lerr := safefs.Lstat(ctx, path, c.fsTimeout); lerr == nil {
 		isSymlink = li.Mode()&os.ModeSymlink != 0
+	} else if errors.Is(lerr, safefs.ErrTimeout) {
+		c.addWarning("Security check: stat of %s timed out after %s; skipping permission/ownership checks (dead/stale mount?)", path, c.fsTimeout)
+		return info
 	}
 
 	if expectedPerm != 0 {
@@ -1122,11 +1268,17 @@ func (c *Checker) ensureOwnershipAndPerm(path string, info os.FileInfo, expected
 			if c.cfg.AutoFixPermissions {
 				if isSymlink {
 					c.addError("Security: refusing to chmod symlink %s", path)
-				} else if err := syscall.Chmod(path, uint32(expectedPerm)); err != nil {
-					c.addWarning("Failed to adjust permissions on %s: %v", path, err)
+				} else if c.cfg.DryRun {
+					c.logger.Info("DRY RUN: would adjust permissions on %s to %o (current %o)", path, expectedPerm, perm)
+				} else if err := safefs.Chmod(ctx, path, expectedPerm, c.fsTimeout); err != nil {
+					if errors.Is(err, safefs.ErrTimeout) {
+						c.addWarning("Security check: chmod on %s timed out after %s; leaving permissions unchanged (dead/stale mount?)", path, c.fsTimeout)
+					} else {
+						c.addWarning("Failed to adjust permissions on %s: %v", path, err)
+					}
 				} else {
 					c.logger.Info("Adjusted permissions on %s to %o", path, expectedPerm)
-					if reInfo, statErr := os.Lstat(path); statErr == nil {
+					if reInfo, statErr := safefs.Lstat(ctx, path, c.fsTimeout); statErr == nil {
 						info = reInfo
 						isSymlink = info.Mode()&os.ModeSymlink != 0
 					} else {
@@ -1144,11 +1296,17 @@ func (c *Checker) ensureOwnershipAndPerm(path string, info os.FileInfo, expected
 		if c.cfg.AutoFixPermissions {
 			if isSymlink {
 				c.addError("Security: refusing to chown symlink %s", path)
-			} else if err := syscall.Lchown(path, 0, 0); err != nil {
-				c.addWarning("Failed to set ownership root:root on %s: %v", path, err)
+			} else if c.cfg.DryRun {
+				c.logger.Info("DRY RUN: would adjust ownership on %s to root:root", path)
+			} else if err := safefs.Lchown(ctx, path, 0, 0, c.fsTimeout); err != nil {
+				if errors.Is(err, safefs.ErrTimeout) {
+					c.addWarning("Security check: chown on %s timed out after %s; leaving ownership unchanged (dead/stale mount?)", path, c.fsTimeout)
+				} else {
+					c.addWarning("Failed to set ownership root:root on %s: %v", path, err)
+				}
 			} else {
 				c.logger.Info("Adjusted ownership on %s to root:root", path)
-				info, _ = os.Lstat(path)
+				info, _ = safefs.Lstat(ctx, path, c.fsTimeout)
 			}
 		} else {
 			c.addWarning("%s should be owned by root:root", description)
@@ -1181,7 +1339,9 @@ func (c *Checker) ensureOwnershipAndPermFromFD(f *os.File, info os.FileInfo, exp
 		if perm := info.Mode().Perm(); perm != expectedPerm {
 			c.bannerWarning(fmt.Sprintf("incorrect permissions on %s (current %o, expected %o)", path, perm, expectedPerm))
 			if c.cfg.AutoFixPermissions {
-				if err := syscall.Fchmod(int(f.Fd()), uint32(expectedPerm)); err != nil {
+				if c.cfg.DryRun {
+					c.logger.Info("DRY RUN: would adjust permissions on %s to %o (current %o)", path, expectedPerm, perm)
+				} else if err := syscall.Fchmod(int(f.Fd()), uint32(expectedPerm)); err != nil {
 					c.addWarning("Failed to adjust permissions on %s: %v", path, err)
 				} else {
 					c.logger.Info("Adjusted permissions on %s to %o", path, expectedPerm)
@@ -1196,7 +1356,9 @@ func (c *Checker) ensureOwnershipAndPermFromFD(f *os.File, info os.FileInfo, exp
 	if info != nil && !isOwnedByRoot(info) {
 		c.bannerWarning(fmt.Sprintf("incorrect ownership on %s (required root:root)", path))
 		if c.cfg.AutoFixPermissions {
-			if err := syscall.Fchown(int(f.Fd()), 0, 0); err != nil {
+			if c.cfg.DryRun {
+				c.logger.Info("DRY RUN: would adjust ownership on %s to root:root", path)
+			} else if err := syscall.Fchown(int(f.Fd()), 0, 0); err != nil {
 				c.addWarning("Failed to set ownership root:root on %s: %v", path, err)
 			} else {
 				c.logger.Info("Adjusted ownership on %s to root:root", path)

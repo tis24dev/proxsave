@@ -1664,7 +1664,7 @@ func TestPreparePlainBundle_UnsupportedSource(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := preparePlainBundle(context.Background(), reader, cand, "", logger)
+	_, err := preparePlainBundle(context.Background(), reader, cand, "", logger, 0)
 	if err == nil {
 		t.Fatal("expected error for unsupported source")
 	}
@@ -1702,7 +1702,7 @@ func TestPreparePlainBundle_SourceBundleSuccess(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
 
-	prepared, err := preparePlainBundle(context.Background(), reader, cand, "1.0.0", logger)
+	prepared, err := preparePlainBundle(context.Background(), reader, cand, "1.0.0", logger, 0)
 	if err != nil {
 		t.Fatalf("preparePlainBundle error: %v", err)
 	}
@@ -1734,7 +1734,7 @@ func TestPreparePlainBundle_ExtractError(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
 
-	_, err := preparePlainBundle(context.Background(), reader, cand, "", logger)
+	_, err := preparePlainBundle(context.Background(), reader, cand, "", logger, 0)
 	if err == nil {
 		t.Fatal("expected error for nonexistent bundle")
 	}
@@ -2681,7 +2681,7 @@ func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
 	useRestoreFS(t, osFS{})
 
 	fixture := createRawArtifactFixture(t, true, "")
-	staged, err := copyRawArtifactsToWorkdirWithLogger(context.TODO(), fixture.candidate, fixture.workDir, nil)
+	staged, err := copyRawArtifactsToWorkdirWithLogger(context.TODO(), fixture.candidate, fixture.workDir, nil, 0)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdirWithLogger error: %v", err)
 	}
@@ -2691,7 +2691,7 @@ func TestCopyRawArtifactsToWorkdir_ContextWorks(t *testing.T) {
 }
 
 func TestCopyRawArtifactsToWorkdirWithLogger_NilCandidate(t *testing.T) {
-	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), nil, t.TempDir(), nil)
+	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), nil, t.TempDir(), nil, 0)
 	if err == nil {
 		t.Fatal("expected error for nil candidate")
 	}
@@ -2715,7 +2715,7 @@ func TestCopyRawArtifactsToWorkdir_InvalidRclonePaths(t *testing.T) {
 		RawChecksumPath: "",
 	}
 
-	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), cand, workDir, nil)
+	_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), cand, workDir, nil, 0)
 	if err == nil {
 		t.Fatal("expected error for invalid rclone paths")
 	}
@@ -2922,7 +2922,7 @@ func TestPreparePlainBundle_CopyFileSamePath(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
 
-	prepared, err := preparePlainBundle(context.Background(), reader, cand, "1.0.0", logger)
+	prepared, err := preparePlainBundle(context.Background(), reader, cand, "1.0.0", logger, 0)
 	if err != nil {
 		t.Fatalf("preparePlainBundle error: %v", err)
 	}
@@ -3041,7 +3041,7 @@ esac
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
 
-	prepared, err := preparePlainBundle(context.Background(), reader, cand, "1.0.0", logger)
+	prepared, err := preparePlainBundle(context.Background(), reader, cand, "1.0.0", logger, 0)
 	if err != nil {
 		t.Fatalf("preparePlainBundle error: %v", err)
 	}
@@ -3097,7 +3097,7 @@ func TestPreparePlainBundleCommon_TrimmedAgeEncryptionTriggersDecrypt(t *testing
 			t.Fatalf("displayName=%q; want %q", displayName, "backup.tar.xz.age")
 		}
 		return os.WriteFile(outputPath, []byte("plaintext"), 0o600)
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("preparePlainBundleCommon error: %v", err)
 	}
@@ -3157,7 +3157,7 @@ func TestPreparePlainBundleCommon_AgeModeRequiresAgeSuffix(t *testing.T) {
 	_, err := preparePlainBundleCommon(context.Background(), cand, "1.0.0", logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
 		decryptCalled = true
 		return nil
-	})
+	}, 0)
 	if err == nil {
 		t.Fatal("preparePlainBundleCommon error = nil; want missing .age suffix error")
 	}
@@ -3207,7 +3207,7 @@ func TestPreparePlainBundleCommon_NonAgeRejectsAgeSuffix(t *testing.T) {
 	_, err := preparePlainBundleCommon(context.Background(), cand, "1.0.0", logger, func(ctx context.Context, encryptedPath, outputPath, displayName string) error {
 		t.Fatal("decrypt callback should not be called for non-age archive handling")
 		return nil
-	})
+	}, 0)
 	if err == nil {
 		t.Fatal("preparePlainBundleCommon error = nil; want .age suffix mismatch error")
 	}
@@ -3377,7 +3377,7 @@ func TestPreparePlainBundle_SourceBundleAdditional(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
 
-	prepared, err := preparePlainBundle(context.Background(), reader, cand, "1.0.0", logger)
+	prepared, err := preparePlainBundle(context.Background(), reader, cand, "1.0.0", logger, 0)
 	if err != nil {
 		t.Fatalf("preparePlainBundle error: %v", err)
 	}
@@ -3533,7 +3533,7 @@ func TestCopyRawArtifactsToWorkdir_WithChecksum(t *testing.T) {
 	useRestoreFS(t, osFS{})
 
 	fixture := createRawArtifactFixture(t, true, "checksum backup.tar.xz")
-	staged, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), fixture.candidate, fixture.workDir, nil)
+	staged, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), fixture.candidate, fixture.workDir, nil, 0)
 	if err != nil {
 		t.Fatalf("copyRawArtifactsToWorkdirWithLogger error: %v", err)
 	}
@@ -3654,7 +3654,7 @@ func TestPreparePlainBundle_MkdirAllError(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := preparePlainBundle(ctx, reader, cand, "", logger)
+	_, err := preparePlainBundle(ctx, reader, cand, "", logger, 0)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -3680,7 +3680,7 @@ func TestPreparePlainBundle_MkdirTempError(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := preparePlainBundle(ctx, reader, cand, "", logger)
+	_, err := preparePlainBundle(ctx, reader, cand, "", logger, 0)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -3853,7 +3853,7 @@ exit 0
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger)
+	_, err := copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger, 0)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -3909,7 +3909,7 @@ fi
 	ctx := context.Background()
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger)
+	_, err := copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, logger, 0)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -4087,7 +4087,7 @@ func TestPreparePlainBundle_StatErrorAfterExtract(t *testing.T) {
 
 	// The test shows that with proper setup, stat error would be triggered
 	// For now, run with FakeFS to cover the MkdirAll/MkdirTemp paths
-	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger)
+	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger, 0)
 	if err != nil {
 		// This is expected for stat errors
 		if strings.Contains(err.Error(), "stat") {
@@ -4125,7 +4125,7 @@ exit 1
 	reader := bufio.NewReader(strings.NewReader(""))
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err := preparePlainBundle(ctx, reader, cand, "", logger)
+	_, err := preparePlainBundle(ctx, reader, cand, "", logger, 0)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -4179,7 +4179,7 @@ exit 1
 
 	// This test verifies the rclone download + cleanup path works
 	// The MkdirAllErr would affect downloadRcloneBackup first, so we test separately
-	bundle, err := preparePlainBundle(ctx, reader, cand, "", logger)
+	bundle, err := preparePlainBundle(ctx, reader, cand, "", logger, 0)
 	restoreFS = orig // Restore FS
 
 	if err != nil {
@@ -4362,7 +4362,7 @@ func TestPreparePlainBundle_CopyFileError(t *testing.T) {
 		&backup.Manifest{EncryptionMode: "none", Hostname: "test"},
 	)
 
-	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger)
+	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger, 0)
 	// This test verifies that the path goes through successfully for plain archives
 	// The actual copy error would require more complex mocking
 	if err != nil {
@@ -4453,7 +4453,7 @@ func TestPreparePlainBundle_StatErrorOnPlainArchive(t *testing.T) {
 		&backup.Manifest{EncryptionMode: "none", Hostname: "test"},
 	)
 
-	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger)
+	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger, 0)
 	if err == nil {
 		if bundle != nil {
 			bundle.Cleanup()
@@ -4513,7 +4513,7 @@ exit 0
 	logger := logging.New(types.LogLevelError, false)
 
 	// This test verifies the flow works - checking rclone cleanup is called on error
-	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger)
+	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger, 0)
 	if bundle != nil {
 		bundle.Cleanup()
 	}
@@ -4558,7 +4558,7 @@ func TestPreparePlainBundle_GenerateChecksumErrorPath(t *testing.T) {
 		&backup.Manifest{EncryptionMode: "none", Hostname: "test"},
 	)
 
-	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger)
+	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger, 0)
 	if err == nil {
 		if bundle != nil {
 			bundle.Cleanup()
@@ -4633,7 +4633,7 @@ exit 0
 	reader := bufio.NewReader(strings.NewReader(""))
 	logger := logging.New(types.LogLevelError, false)
 
-	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger)
+	bundle, err := preparePlainBundle(ctx, reader, cand, "1.0.0", logger, 0)
 	if err == nil {
 		if bundle != nil {
 			bundle.Cleanup()

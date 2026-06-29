@@ -71,7 +71,7 @@ func TestPreparePlainBundle_RejectsMissingChecksumVerification(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err = preparePlainBundle(context.Background(), reader, cand, "", logger)
+	_, err = preparePlainBundle(context.Background(), reader, cand, "", logger, 0)
 	if err == nil {
 		t.Fatalf("expected missing checksum verification error")
 	}
@@ -121,7 +121,7 @@ func TestPreparePlainBundle_RejectsChecksumMismatch(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	logger := logging.New(types.LogLevelError, false)
 
-	_, err = preparePlainBundle(context.Background(), reader, cand, "", logger)
+	_, err = preparePlainBundle(context.Background(), reader, cand, "", logger, 0)
 	if err == nil {
 		t.Fatalf("expected checksum mismatch error")
 	}
@@ -149,12 +149,12 @@ func TestVerifyStagedArchiveIntegrity_UsesCandidateIntegrityExpectation(t *testi
 			Checksum: strings.ToUpper(checksumHexForBytes(archiveData)),
 			Source:   "checksum file",
 		},
-	})
+	}, 0)
 	if err != nil {
-		t.Fatalf("verifyStagedArchiveIntegrity() error = %v", err)
+		t.Fatalf("verifyStagedArchiveIntegrity(, 0) error = %v", err)
 	}
 	want := checksumHexForBytes(archiveData)
 	if got != want {
-		t.Fatalf("verifyStagedArchiveIntegrity() = %q; want %q", got, want)
+		t.Fatalf("verifyStagedArchiveIntegrity(, 0) = %q; want %q", got, want)
 	}
 }

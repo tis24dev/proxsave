@@ -238,7 +238,7 @@ func TestParseSSLineVariants(t *testing.T) {
 
 func TestVerifyConfigFileMissingPath(t *testing.T) {
 	checker := newChecker(t, &config.Config{})
-	checker.verifyConfigFile()
+	checker.verifyConfigFile(context.Background())
 	if !containsIssue(checker.result, "Configuration path not provided") {
 		t.Fatalf("expected warning about missing configuration path, got %+v", checker.result.Issues)
 	}
@@ -247,7 +247,7 @@ func TestVerifyConfigFileMissingPath(t *testing.T) {
 func TestVerifyConfigFileStatError(t *testing.T) {
 	checker := newChecker(t, &config.Config{})
 	checker.configPath = filepath.Join(t.TempDir(), "does-not-exist.conf")
-	checker.verifyConfigFile()
+	checker.verifyConfigFile(context.Background())
 	if !containsIssue(checker.result, "Cannot stat configuration file") {
 		t.Fatalf("expected error about missing configuration file, got %+v", checker.result.Issues)
 	}
@@ -256,7 +256,7 @@ func TestVerifyConfigFileStatError(t *testing.T) {
 func TestVerifySensitiveFilesOptionalSkip(t *testing.T) {
 	cfg := &config.Config{BaseDir: t.TempDir()}
 	checker := newChecker(t, cfg)
-	checker.verifySensitiveFiles()
+	checker.verifySensitiveFiles(context.Background())
 	if checker.result.TotalIssues() != 0 {
 		t.Fatalf("expected no issues for optional sensitive files, got %+v", checker.result.Issues)
 	}
@@ -278,7 +278,7 @@ func TestVerifySensitiveFilesAgeRecipientPermissions(t *testing.T) {
 		EncryptArchive: true,
 	}
 	checker := newChecker(t, cfg)
-	checker.verifySensitiveFiles()
+	checker.verifySensitiveFiles(context.Background())
 
 	if !containsIssue(checker.result, "AGE recipient file") {
 		t.Fatalf("expected warning mentioning AGE recipient file, got %+v", checker.result.Issues)
@@ -294,7 +294,7 @@ func TestVerifySecureAccountFiles(t *testing.T) {
 
 	cfg := &config.Config{SecureAccount: secureDir}
 	checker := newChecker(t, cfg)
-	checker.verifySecureAccountFiles()
+	checker.verifySecureAccountFiles(context.Background())
 
 	if !containsIssue(checker.result, "Secure account file") {
 		t.Fatalf("expected issue referencing secure account file, got %+v", checker.result.Issues)
@@ -311,7 +311,7 @@ func TestVerifyDirectoriesCreatesMissing(t *testing.T) {
 		SecureAccount: filepath.Join(baseDir, "secure_account"),
 	}
 	checker := newChecker(t, cfg)
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	paths := []string{
 		cfg.BackupPath,
@@ -625,7 +625,7 @@ func TestVerifyBinaryIntegrityCreatesHash(t *testing.T) {
 	}
 	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: true}, execPath)
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	hashPath := execPath + ".md5"
 	data, err := os.ReadFile(hashPath)
@@ -649,7 +649,7 @@ func TestVerifyBinaryIntegrityWarnsWhenHashMissing(t *testing.T) {
 	}
 	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: false}, execPath)
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Hash file") {
 		t.Fatalf("expected warning about missing hash file, issues=%+v", checker.result.Issues)
@@ -674,7 +674,7 @@ func TestVerifyBinaryIntegrityHashMismatch(t *testing.T) {
 	}
 	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: false}, execPath)
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Executable hash mismatch") {
 		t.Fatalf("expected hash mismatch warning, issues=%+v", checker.result.Issues)
@@ -697,7 +697,7 @@ func TestDetectPrivateAgeKeysAddsWarning(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	if !containsIssue(checker.result, "AGE/SSH key") {
 		t.Fatalf("expected warning about private key, issues=%+v", checker.result.Issues)
@@ -1238,7 +1238,7 @@ func TestEnsureOwnershipAndPermNilInfo(t *testing.T) {
 	}
 
 	// Pass nil info - function should call Lstat internally
-	info := checker.ensureOwnershipAndPerm(testFile, nil, 0600, "test file")
+	info := checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0600, "test file")
 	if info == nil {
 		t.Error("ensureOwnershipAndPerm should return FileInfo when nil info passed")
 	}
@@ -1251,7 +1251,7 @@ func TestEnsureOwnershipAndPermNonExistentFile(t *testing.T) {
 		result: &Result{},
 	}
 
-	info := checker.ensureOwnershipAndPerm("/nonexistent/file/path", nil, 0600, "test")
+	info := checker.ensureOwnershipAndPerm(context.Background(), "/nonexistent/file/path", nil, 0600, "test")
 	if info != nil {
 		t.Error("ensureOwnershipAndPerm should return nil for non-existent file")
 	}
@@ -1273,7 +1273,7 @@ func TestEnsureOwnershipAndPermWrongPermissions(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.ensureOwnershipAndPerm(testFile, nil, 0600, "test file")
+	checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0600, "test file")
 
 	// Should have a warning about wrong permissions
 	if !containsIssue(checker.result, "should have permissions") {
@@ -1312,7 +1312,7 @@ func TestEnsureOwnershipAndPermRefusesSymlinkTarget(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.ensureOwnershipAndPerm(link, info, 0o600, "test file via symlink")
+	checker.ensureOwnershipAndPerm(context.Background(), link, info, 0o600, "test file via symlink")
 
 	// The target must NOT have been chmod'd through the link.
 	ti, err := os.Lstat(target)
@@ -1340,7 +1340,7 @@ func TestEnsureOwnershipAndPermAutoFix(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.ensureOwnershipAndPerm(testFile, nil, 0600, "test file")
+	checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0600, "test file")
 
 	// Check if permissions were fixed
 	info, err := os.Stat(testFile)
@@ -1406,7 +1406,7 @@ func TestEnsureOwnershipAndPermSymlink(t *testing.T) {
 	}
 
 	info, _ := os.Lstat(symlinkFile)
-	checker.ensureOwnershipAndPerm(symlinkFile, info, 0600, "symlink test")
+	checker.ensureOwnershipAndPerm(context.Background(), symlinkFile, info, 0600, "symlink test")
 
 	// Should refuse to chmod symlink
 	if !containsIssue(checker.result, "refusing to chmod symlink") {
@@ -1649,7 +1649,7 @@ func TestVerifyBinaryIntegrityEmptyPath(t *testing.T) {
 		execPath: "",
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Executable path not available") {
 		t.Errorf("expected warning about empty exec path, got %+v", checker.result.Issues)
@@ -1675,7 +1675,7 @@ func TestVerifyBinaryIntegritySymlinkError(t *testing.T) {
 		execPath: symlinkFile,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "is a symlink") {
 		t.Fatalf("expected symlink error, issues=%+v", checker.result.Issues)
@@ -1693,7 +1693,7 @@ func TestVerifyBinaryIntegrityOpenError(t *testing.T) {
 		execPath: "/nonexistent/binary/path",
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Cannot stat executable") {
 		t.Errorf("expected error about cannot stat executable, got %+v", checker.result.Issues)
@@ -1721,7 +1721,7 @@ func TestVerifyDirectoriesSkipOwnership(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// Should not have ownership warnings for backup dir when SetBackupPermissions=true
 	// The function should skip ownership checks for this path
@@ -1742,7 +1742,7 @@ func TestVerifyDirectoriesEmptyPath(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// Should not create directories for empty paths
 	// Only identity dirs should be checked
@@ -1777,7 +1777,7 @@ func TestDetectPrivateAgeKeysSkipsExtensions(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should not detect keys in files with .md, .txt, .example extensions
 	if checker.result.TotalIssues() != 0 {
@@ -1786,17 +1786,32 @@ func TestDetectPrivateAgeKeysSkipsExtensions(t *testing.T) {
 }
 
 func TestDetectPrivateAgeKeysEmptyBaseDir(t *testing.T) {
+	// With an empty BaseDir the scan must be skipped entirely. Plant a
+	// CWD-relative ./identity holding a fake private key: if the guard regressed
+	// to checking the joined path (which is never "" since
+	// filepath.Join("", "identity") == "identity"), the function would walk
+	// ./identity from the process CWD and flag this file.
+	dir := t.TempDir()
+	rel := filepath.Join(dir, "identity")
+	if err := os.MkdirAll(rel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rel, "leaked.key"), []byte("AGE-SECRET-KEY-1ABC"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir) // auto-restored; the planted ./identity is what a dead guard would scan
+
 	checker := &Checker{
 		logger: newSecurityTestLogger(),
 		cfg:    &config.Config{BaseDir: ""},
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
-	// Should not crash and should not add issues
+	// Empty BaseDir must skip the scan: no crash, and no walk of ./identity.
 	if checker.result.TotalIssues() != 0 {
-		t.Errorf("expected no issues for empty base dir, got %+v", checker.result.Issues)
+		t.Fatalf("empty BaseDir must skip the scan, got %+v", checker.result.Issues)
 	}
 }
 
@@ -1807,7 +1822,7 @@ func TestDetectPrivateAgeKeysNonExistentDir(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should not crash and should not add issues
 	if checker.result.TotalIssues() != 0 {
@@ -1826,7 +1841,7 @@ func TestVerifySecureAccountFilesEmptyPath(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySecureAccountFiles()
+	checker.verifySecureAccountFiles(context.Background())
 
 	// Should return early with no issues
 	if checker.result.TotalIssues() != 0 {
@@ -1843,7 +1858,7 @@ func TestVerifySecureAccountFilesNoJsonFiles(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySecureAccountFiles()
+	checker.verifySecureAccountFiles(context.Background())
 
 	// Should not add issues when no JSON files exist
 	if checker.result.TotalIssues() != 0 {
@@ -1957,7 +1972,7 @@ func TestEnsureOwnershipAndPermNotOwnedByRoot(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.ensureOwnershipAndPerm(testFile, nil, 0600, "test file")
+	checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0600, "test file")
 
 	// Should have warning about ownership (not root:root)
 	if !containsIssue(checker.result, "should be owned by root:root") {
@@ -1990,7 +2005,7 @@ func TestEnsureOwnershipAndPermSymlinkOwnership(t *testing.T) {
 
 	info, _ := os.Lstat(symlinkFile)
 	// Force the symlink path through ownership check
-	checker.ensureOwnershipAndPerm(symlinkFile, info, 0, "symlink test")
+	checker.ensureOwnershipAndPerm(context.Background(), symlinkFile, info, 0, "symlink test")
 
 	// Should refuse to chown symlink
 	if !containsIssue(checker.result, "refusing to chown symlink") {
@@ -2023,7 +2038,7 @@ func TestVerifyBinaryIntegrityHashFileReadError(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	if !containsIssue(checker.result, "Unable to read hash file") {
 		t.Errorf("expected warning about reading hash file, got %+v", checker.result.Issues)
@@ -2050,7 +2065,7 @@ func TestVerifyBinaryIntegrityHashMismatchAutoUpdate(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	// Hash should be updated
 	newHash, err := os.ReadFile(hashPath)
@@ -2083,7 +2098,7 @@ func TestVerifyDirectoriesWithAllPaths(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// All directories should be created
 	paths := []string{
@@ -2126,7 +2141,7 @@ func TestVerifySensitiveFilesServerIdentity(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySensitiveFiles()
+	checker.verifySensitiveFiles(context.Background())
 
 	// Should have warning about permissions (0644 instead of 0600)
 	if !containsIssue(checker.result, "server identity") {
@@ -2282,7 +2297,7 @@ func TestDetectPrivateAgeKeysWithUnreadableFile(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should not crash, the unreadable file should be skipped
 }
@@ -2306,7 +2321,7 @@ func TestDetectPrivateAgeKeysWithSSHKey(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should detect the SSH key
 	if !containsIssue(checker.result, "AGE/SSH key") {
@@ -2337,7 +2352,7 @@ func TestVerifyDirectoriesWithExistingDir(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// Should have warning about wrong permissions
 	hasPermWarning := false
@@ -2369,7 +2384,7 @@ func TestVerifyDirectoriesSkipOwnershipForBackup(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// The backup directory should have ownership check skipped
 	// Ownership warnings for backup path should not appear
@@ -2412,7 +2427,7 @@ func TestVerifyDirectoriesSkipsPOSIXChecksOnCIFSBackupPath(t *testing.T) {
 		},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	for _, issue := range checker.result.Issues {
 		if strings.Contains(issue.Message, backupDir) &&
@@ -2444,7 +2459,7 @@ func TestVerifySecureAccountFilesStatError(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySecureAccountFiles()
+	checker.verifySecureAccountFiles(context.Background())
 
 	// Function should complete without panic
 }
@@ -2467,7 +2482,7 @@ func TestEnsureOwnershipAndPermExpectedPermZero(t *testing.T) {
 	}
 
 	// When expectedPerm is 0, skip permission check
-	checker.ensureOwnershipAndPerm(testFile, nil, 0, "test file")
+	checker.ensureOwnershipAndPerm(context.Background(), testFile, nil, 0, "test file")
 
 	// Should not have permission-related warnings (only ownership if not root)
 	hasPermWarning := false
@@ -2512,7 +2527,7 @@ func TestVerifyBinaryIntegrityMatchingHash(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	// Should not have hash-related warnings
 	for _, issue := range checker.result.Issues {
@@ -2647,7 +2662,7 @@ func TestVerifyDirectoriesStatOtherError(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifyDirectories()
+	checker.verifyDirectories(context.Background())
 
 	// The function should handle this case (file exists but is not a directory)
 }
@@ -2672,7 +2687,7 @@ func TestDetectPrivateAgeKeysWithSubdirectory(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.detectPrivateAgeKeys()
+	checker.detectPrivateAgeKeys(context.Background())
 
 	// Should find the key in subdirectory
 	if !containsIssue(checker.result, "AGE/SSH key") {
@@ -2706,7 +2721,7 @@ func TestVerifyBinaryIntegrityCreateHashErrorReadOnly(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	// Should have warning about failing to create hash file
 	if !containsIssue(checker.result, "Failed to create hash file") {
@@ -2746,7 +2761,7 @@ func TestVerifyBinaryIntegrityUpdateHashError(t *testing.T) {
 		execPath: execPath,
 	}
 
-	checker.verifyBinaryIntegrity()
+	checker.verifyBinaryIntegrity(context.Background())
 
 	// Should have warning about failing to update hash file
 	if !containsIssue(checker.result, "Failed to update hash file") {
@@ -2791,7 +2806,7 @@ func TestVerifySensitiveFilesCustomAgeRecipient(t *testing.T) {
 		result: &Result{},
 	}
 
-	checker.verifySensitiveFiles()
+	checker.verifySensitiveFiles(context.Background())
 
 	// Should warn about wrong permissions on custom recipient file
 	if !containsIssue(checker.result, "AGE recipient") {

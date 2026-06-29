@@ -13,10 +13,29 @@ import (
 
 var (
 	osStat        = os.Stat
+	osLstat       = os.Lstat
 	osReadDir     = os.ReadDir
+	osMkdirAll    = os.MkdirAll
+	osChmod       = os.Chmod
+	osLchown      = os.Lchown
+	osOpen        = os.Open
+	osRemove      = os.Remove
+	osRename      = os.Rename
+	osCreateTemp  = os.CreateTemp
 	syscallStatfs = syscall.Statfs
 	fsOpLimiter   = newOperationLimiter(32)
 )
+
+// SetOsStatForTest overrides the os.Stat seam used by Stat and returns a restore
+// func. Test-only (cross-package): lets callers that bound their stat probes via
+// safefs.Stat prove a dead/stale mount cannot wedge them, by simulating a stat
+// syscall that never returns. Not safe for concurrent use; restore before the
+// test ends.
+func SetOsStatForTest(fn func(string) (os.FileInfo, error)) (restore func()) {
+	prev := osStat
+	osStat = fn
+	return func() { osStat = prev }
+}
 
 // ErrTimeout is a sentinel error used to classify filesystem operations that did not
 // complete within the configured timeout.
@@ -107,6 +126,18 @@ func (l *operationLimiter) inflight() int {
 }
 
 func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *TimeoutError, run func() (T, error)) (T, error) {
+	return runBounded(ctx, fsOpLimiter, timeout, timeoutErr, run)
+}
+
+// runBounded is runLimited with an explicit limiter. A nil limiter skips the
+// shared-pool acquire/release entirely: it is safe only for callers that
+// self-throttle their spawn rate (for example a sequential per-chunk copy that
+// keeps at most one worker in flight at a time). Such a long-lived best-effort
+// stream must not contend for, nor on a wedge permanently erode, the global slot
+// budget the critical paths rely on, so it runs limiter-free. Do NOT pass nil
+// from a caller that fans many concurrent workers out, or a wedge would leak
+// abandoned goroutines without the 32-slot backstop.
+func runBounded[T any](ctx context.Context, limiter *operationLimiter, timeout time.Duration, timeoutErr *TimeoutError, run func() (T, error)) (T, error) {
 	var zero T
 	if err := normalizeContextErr(ctx, timeoutErr); err != nil {
 		return zero, err
@@ -122,12 +153,13 @@ func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *T
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	limiter := fsOpLimiter
-	if err := limiter.acquire(ctx, timer.C); err != nil {
-		if errors.Is(err, ErrTimeout) {
-			return zero, timeoutErr
+	if limiter != nil {
+		if err := limiter.acquire(ctx, timer.C); err != nil {
+			if errors.Is(err, ErrTimeout) {
+				return zero, timeoutErr
+			}
+			return zero, err
 		}
-		return zero, err
 	}
 
 	type result struct {
@@ -136,7 +168,9 @@ func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *T
 	}
 	ch := make(chan result, 1)
 	go func() {
-		defer limiter.release()
+		if limiter != nil {
+			defer limiter.release()
+		}
 		value, err := run()
 		ch <- result{value: value, err: err}
 	}()
@@ -171,6 +205,89 @@ func Statfs(ctx context.Context, path string, timeout time.Duration) (syscall.St
 		var stat syscall.Statfs_t
 		err := statfs(path, &stat)
 		return stat, err
+	})
+}
+
+// Lstat is the bounded, non-symlink-following counterpart to Stat.
+func Lstat(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
+	lstat := osLstat
+	return runLimited(ctx, timeout, &TimeoutError{Op: "lstat", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (fs.FileInfo, error) {
+		return lstat(path)
+	})
+}
+
+// MkdirAll is the bounded counterpart to os.MkdirAll.
+func MkdirAll(ctx context.Context, path string, perm os.FileMode, timeout time.Duration) error {
+	mkdirAll := osMkdirAll
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "mkdirall", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, mkdirAll(path, perm)
+	})
+	return err
+}
+
+// Chmod is the bounded counterpart to os.Chmod (for permission-only modes it is
+// equivalent to syscall.Chmod).
+func Chmod(ctx context.Context, path string, mode os.FileMode, timeout time.Duration) error {
+	chmod := osChmod
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "chmod", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, chmod(path, mode)
+	})
+	return err
+}
+
+// Lchown is the bounded counterpart to os.Lchown (equivalent to syscall.Lchown).
+func Lchown(ctx context.Context, path string, uid, gid int, timeout time.Duration) error {
+	lchown := osLchown
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "lchown", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, lchown(path, uid, gid)
+	})
+	return err
+}
+
+// Run bounds an arbitrary composite filesystem operation with the same
+// goroutine+timer+limiter path used by the typed helpers above. Use it when a
+// single logical probe performs several syscalls that must all be bounded as a
+// unit (for example a create+chown+chmod+stat ownership probe). On timeout the
+// worker goroutine is abandoned (the kernel call is not cancelled) and a
+// *TimeoutError (wrapping ErrTimeout) is returned.
+func Run[T any](ctx context.Context, op, path string, timeout time.Duration, fn func() (T, error)) (T, error) {
+	return runLimited(ctx, timeout, &TimeoutError{Op: op, Path: path, Timeout: effectiveTimeout(ctx, timeout)}, fn)
+}
+
+// Open is the bounded counterpart to os.Open. On timeout the worker is abandoned;
+// a late-completing *os.File is dropped and its fd reclaimed by the os.File finalizer.
+func Open(ctx context.Context, path string, timeout time.Duration) (*os.File, error) {
+	open := osOpen
+	return runLimited(ctx, timeout, &TimeoutError{Op: "open", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (*os.File, error) {
+		return open(path)
+	})
+}
+
+// Remove is the bounded counterpart to os.Remove.
+func Remove(ctx context.Context, path string, timeout time.Duration) error {
+	remove := osRemove
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "remove", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, remove(path)
+	})
+	return err
+}
+
+// Rename is the bounded counterpart to os.Rename (oldpath is reported as Path).
+func Rename(ctx context.Context, oldpath, newpath string, timeout time.Duration) error {
+	rename := osRename
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "rename", Path: oldpath, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, rename(oldpath, newpath)
+	})
+	return err
+}
+
+// CreateTemp is the bounded counterpart to os.CreateTemp. On timeout the worker is
+// abandoned; a late-created temp file may be orphaned in dir (temp+rename callers
+// clean it best-effort).
+func CreateTemp(ctx context.Context, dir, pattern string, timeout time.Duration) (*os.File, error) {
+	createTemp := osCreateTemp
+	return runLimited(ctx, timeout, &TimeoutError{Op: "createtemp", Path: dir, Timeout: effectiveTimeout(ctx, timeout)}, func() (*os.File, error) {
+		return createTemp(dir, pattern)
 	})
 }
 

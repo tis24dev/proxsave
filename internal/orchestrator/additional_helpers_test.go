@@ -1183,6 +1183,17 @@ func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
 		}
 	})
 
+	// issue #242: cpu profiles now live under /tmp/proxsave too (not just LOG_PATH).
+	tmpCPUProfile := filepath.Join(heapDir, fmt.Sprintf("cpu-%d.pprof", time.Now().UnixNano()))
+	if err := os.WriteFile(tmpCPUProfile, []byte("cpu"), 0o640); err != nil {
+		t.Fatalf("write tmp cpu profile: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Remove(tmpCPUProfile); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("cleanup tmp cpu file: %v", err)
+		}
+	})
+
 	registryDir := t.TempDir()
 	registryPath := filepath.Join(registryDir, "registry.json")
 	reg, err := NewTempDirRegistry(logger, registryPath)
@@ -1205,7 +1216,7 @@ func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
 	}
 	makeRegistryEntriesStale(t, registryPath)
 
-	returned := o.cleanupPreviousExecutionArtifacts()
+	returned := o.cleanupPreviousExecutionArtifacts(context.Background())
 	if returned != reg {
 		t.Fatalf("cleanup should return configured registry instance")
 	}
@@ -1216,11 +1227,112 @@ func TestCleanupPreviousExecutionArtifacts(t *testing.T) {
 	if _, err := os.Stat(cpuProfile); !os.IsNotExist(err) {
 		t.Fatalf("cpu profile should be removed, got err=%v", err)
 	}
+	if _, err := os.Stat(tmpCPUProfile); !os.IsNotExist(err) {
+		t.Fatalf("/tmp/proxsave cpu profile should be removed, got err=%v", err)
+	}
 	if _, err := os.Stat(heapFile); !os.IsNotExist(err) {
 		t.Fatalf("heap profile should be removed, got err=%v", err)
 	}
 	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
 		t.Fatalf("orphan directory should be removed, got err=%v", err)
+	}
+}
+
+// The LOG_PATH globs are bounded: on a dead-deadline ctx (simulating a dead/stale
+// mount) the stats glob must short-circuit with a timeout-skip debug log and never
+// match/remove the file, instead of wedging cleanup in a raw lstat/readdir.
+func TestCleanupPreviousExecutionArtifactsBoundsLogPathGlobOnTimeout(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+	o := &Orchestrator{logger: logger}
+
+	origRoot := workspaceRoot
+	workspaceRoot = t.TempDir()
+	t.Cleanup(func() { workspaceRoot = origRoot })
+
+	logDir := t.TempDir()
+	o.logPath = logDir
+	statsFile := filepath.Join(logDir, "backup-stats-old.json")
+	if err := os.WriteFile(statsFile, []byte("stats"), 0o640); err != nil {
+		t.Fatalf("write stats file: %v", err)
+	}
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+
+	o.cleanupPreviousExecutionArtifacts(ctx)
+
+	if !strings.Contains(buf.String(), "globbing stats files") || !strings.Contains(buf.String(), "timed out") {
+		t.Fatalf("expected a bounded-glob timeout debug log; got:\n%s", buf.String())
+	}
+	// The legacy LOG_PATH cpu glob is bounded too (same dead ctx exercises both).
+	if !strings.Contains(buf.String(), "globbing legacy cpu profiles") {
+		t.Fatalf("expected the legacy cpu glob to also be bounded; got:\n%s", buf.String())
+	}
+	if _, err := os.Stat(statsFile); err != nil {
+		t.Fatalf("stats file must survive a timed-out glob; stat err = %v", err)
+	}
+}
+
+// vanishingRemoveFS embeds osFS and reports os.ErrNotExist from Remove for one
+// basename, simulating the glob->remove TOCTOU race and the LOG_PATH==/tmp/proxsave
+// duplicate second-remove. Remove never touches disk, so the test stays hermetic
+// even though cleanup also globs the shared /tmp/proxsave.
+type vanishingRemoveFS struct {
+	osFS
+	vanished string
+}
+
+func (f *vanishingRemoveFS) Remove(p string) error {
+	if filepath.Base(p) == f.vanished {
+		return os.ErrNotExist
+	}
+	return nil // pretend success; never mutate disk
+}
+
+// A globbed file that is already gone at remove time (TOCTOU, or the
+// /tmp/proxsave cpu-*.pprof duplicate when LOG_PATH is /tmp/proxsave) must count
+// as removed, not as a failure: it must not inflate failedFiles or flip the
+// summary to "completed with errors". A clean removal is planted alongside so the
+// summary line is emitted (it only prints when removedFiles>0). Reverting
+// boundedRemove's os.ErrNotExist no-op turns this red.
+func TestCleanupPreviousExecutionArtifactsTreatsVanishedFileAsRemoved(t *testing.T) {
+	origRoot := workspaceRoot
+	workspaceRoot = t.TempDir()
+	t.Cleanup(func() { workspaceRoot = origRoot })
+
+	logDir := t.TempDir()
+	for _, n := range []string{"backup-stats-AAA.json", "backup-stats-BBB.json"} {
+		if err := os.WriteFile(filepath.Join(logDir, n), []byte("{}"), 0o640); err != nil {
+			t.Fatalf("plant %s: %v", n, err)
+		}
+	}
+
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	o := &Orchestrator{
+		logger:  logger,
+		fs:      &vanishingRemoveFS{vanished: "backup-stats-BBB.json"},
+		logPath: logDir,
+	}
+	// Pin Phase 4 to a throwaway registry so cleanup never resolves the real
+	// /tmp/proxsave temp-dir registry (keeps the test fully hermetic).
+	reg, err := NewTempDirRegistry(logger, filepath.Join(t.TempDir(), "registry.json"))
+	if err != nil {
+		t.Fatalf("NewTempDirRegistry: %v", err)
+	}
+	o.tempRegistry = reg
+
+	o.cleanupPreviousExecutionArtifacts(context.Background())
+
+	out := buf.String()
+	if !strings.Contains(out, "completed successfully") {
+		t.Fatalf("a vanished/duplicate file must be treated as removed; got:\n%s", out)
+	}
+	if strings.Contains(out, "completed with errors") {
+		t.Fatalf("os.ErrNotExist must not count as a failed removal; got:\n%s", out)
 	}
 }
 

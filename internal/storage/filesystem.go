@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
@@ -17,24 +18,66 @@ import (
 type FilesystemDetector struct {
 	logger *logging.Logger
 
+	// ioTimeout bounds each raw filesystem syscall the detector performs (the
+	// initial existence stat, the statfs on the mount point, and the network-FS
+	// ownership probe). Zero means unbounded (legacy behaviour); callers that may
+	// touch dead/stale network mounts should opt in via WithIOTimeout.
+	ioTimeout time.Duration
+
+	// dryRun, when true, suppresses the network-FS ownership write-probe
+	// (testOwnershipSupport creates/chowns/chmods a temp file). A dry run must not
+	// mutate the filesystem, so detection falls back to the type-based default.
+	dryRun bool
+
 	// Test hooks (nil in production).
 	mountPointLookup     func(path string) (string, error)
 	filesystemTypeLookup func(ctx context.Context, mountPoint string) (FilesystemType, string, error)
 	ownershipSupportTest func(ctx context.Context, path string) bool
 }
 
-// NewFilesystemDetector creates a new filesystem detector
-func NewFilesystemDetector(logger *logging.Logger) *FilesystemDetector {
-	return &FilesystemDetector{
+// DetectorOption configures a FilesystemDetector at construction time.
+type DetectorOption func(*FilesystemDetector)
+
+// WithIOTimeout bounds every blocking filesystem syscall the detector performs
+// with the supplied per-operation timeout. A non-positive value keeps the legacy
+// unbounded behaviour. Use it on user-configured storage paths that may be
+// dead/stale network mounts, where a raw syscall would otherwise block forever
+// in uninterruptible (D) state.
+func WithIOTimeout(timeout time.Duration) DetectorOption {
+	return func(d *FilesystemDetector) {
+		if timeout < 0 {
+			timeout = 0
+		}
+		d.ioTimeout = timeout
+	}
+}
+
+// WithDryRun suppresses the detector's network-FS ownership write-probe so a dry
+// run performs no filesystem mutations; SupportsOwnership then falls back to the
+// filesystem type's default.
+func WithDryRun(dryRun bool) DetectorOption {
+	return func(d *FilesystemDetector) {
+		d.dryRun = dryRun
+	}
+}
+
+// NewFilesystemDetector creates a new filesystem detector. With no options the
+// detector is unbounded (legacy behaviour); pass WithIOTimeout to bound syscalls.
+func NewFilesystemDetector(logger *logging.Logger, opts ...DetectorOption) *FilesystemDetector {
+	d := &FilesystemDetector{
 		logger: logger,
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
 }
 
 // DetectFilesystem detects the filesystem type for a given path
 // This function logs the detected filesystem type in real-time
 func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) (*FilesystemInfo, error) {
-	// Ensure path exists
-	if _, err := os.Stat(path); err != nil {
+	// Ensure path exists. Bounded so a dead/stale mount does not wedge here.
+	if _, err := safefs.Stat(ctx, path, d.ioTimeout); err != nil {
 		return nil, fmt.Errorf("path does not exist: %s: %w", path, err)
 	}
 
@@ -74,18 +117,24 @@ func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) 
 	// Log the detected filesystem in real-time (live output)
 	d.logFilesystemInfo(info)
 
-	// Check if we need to test ownership support for network filesystems
+	// Check if we need to test ownership support for network filesystems. The
+	// probe writes a temp file, so it is skipped in dry-run (which must not mutate
+	// the filesystem); SupportsOwnership keeps the type-based default.
 	if info.IsNetworkFS {
-		testFn := d.testOwnershipSupport
-		if d.ownershipSupportTest != nil {
-			testFn = d.ownershipSupportTest
-		}
-		supportsOwnership := testFn(ctx, path)
-		info.SupportsOwnership = supportsOwnership
-		if supportsOwnership {
-			d.logger.Info("Network filesystem %s supports Unix ownership", fsType)
+		if d.dryRun {
+			d.logger.Debug("DRY RUN: skipping network-FS ownership write-probe for %s; assuming type default (%v)", path, info.SupportsOwnership)
 		} else {
-			d.logger.Info("Network filesystem %s does NOT support Unix ownership", fsType)
+			testFn := d.testOwnershipSupport
+			if d.ownershipSupportTest != nil {
+				testFn = d.ownershipSupportTest
+			}
+			supportsOwnership := testFn(ctx, path)
+			info.SupportsOwnership = supportsOwnership
+			if supportsOwnership {
+				d.logger.Info("Network filesystem %s supports Unix ownership", fsType)
+			} else {
+				d.logger.Info("Network filesystem %s does NOT support Unix ownership", fsType)
+			}
 		}
 	}
 
@@ -160,9 +209,9 @@ func (d *FilesystemDetector) getMountPoint(path string) (string, error) {
 
 // getFilesystemType gets the filesystem type for a mount point using df
 func (d *FilesystemDetector) getFilesystemType(ctx context.Context, mountPoint string) (FilesystemType, string, error) {
-	// Use stat syscall to get filesystem information
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(mountPoint, &stat); err != nil {
+	// Use statfs to confirm the mount point is reachable. Bounded so a dead/stale
+	// mount does not wedge here in an uninterruptible syscall.
+	if _, err := safefs.Statfs(ctx, mountPoint, d.ioTimeout); err != nil {
 		return FilesystemUnknown, "", err
 	}
 
@@ -193,50 +242,71 @@ func (d *FilesystemDetector) getFilesystemType(ctx context.Context, mountPoint s
 // testOwnershipSupport tests if a filesystem actually supports Unix ownership
 // This is necessary for network filesystems (NFS/CIFS) which may or may not support it
 func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path string) bool {
-	// Create a temporary test file
-	testFile := filepath.Join(path, ".ownership_test_"+utils.GenerateRandomString(8))
+	// The probe creates a temp file and exercises chown/chmod/stat on it. On a
+	// dead/stale network mount any of these can block in an uninterruptible
+	// syscall, so the whole sequence is bounded as a single unit; on timeout the
+	// worker goroutine is abandoned and we conservatively report "no ownership".
+	ok, err := safefs.Run(ctx, "ownership-probe", path, d.ioTimeout, func() (bool, error) {
+		// Confine every probe op to `path` via os.Root: the create-by-name carries
+		// no tainted absolute path, so this is structurally free of gosec G304 (file
+		// inclusion via a variable) without a #nosec, and the probe file can never
+		// escape the directory under test.
+		root, rerr := os.OpenRoot(path)
+		if rerr != nil {
+			d.logger.Debug("Cannot open root for ownership check: %v", rerr)
+			return false, nil
+		}
+		defer func() { _ = root.Close() }()
 
-	// Create the test file
-	f, err := os.Create(testFile)
+		name := ".ownership_test_" + utils.GenerateRandomString(8)
+
+		// Create the test file
+		f, cerr := root.Create(name)
+		if cerr != nil {
+			d.logger.Debug("Cannot create test file for ownership check: %v", cerr)
+			return false, nil
+		}
+		defer func() { _ = root.Remove(name) }()
+
+		if cerr := f.Close(); cerr != nil {
+			d.logger.Debug("Cannot close test file for ownership check: %v", cerr)
+			return false, nil
+		}
+
+		// Try to change ownership to current user (should be safe)
+		uid := os.Getuid()
+		gid := os.Getgid()
+
+		if cerr := root.Chown(name, uid, gid); cerr != nil {
+			d.logger.Debug("Chown test failed: %v", cerr)
+			return false, nil
+		}
+
+		// Try to change permissions
+		if cerr := root.Chmod(name, 0600); cerr != nil {
+			d.logger.Debug("Chmod test failed: %v", cerr)
+			return false, nil
+		}
+
+		// Verify the changes took effect
+		stat, serr := root.Stat(name)
+		if serr != nil {
+			return false, nil
+		}
+
+		// Check if permissions were actually set
+		if stat.Mode().Perm() != 0600 {
+			d.logger.Debug("Permissions not set correctly: expected 0600, got %o", stat.Mode().Perm())
+			return false, nil
+		}
+
+		return true, nil
+	})
 	if err != nil {
-		d.logger.Debug("Cannot create test file for ownership check: %v", err)
+		d.logger.Debug("Ownership probe on %s did not complete: %v", path, err)
 		return false
 	}
-	defer func() { _ = os.Remove(testFile) }()
-
-	if err := f.Close(); err != nil {
-		d.logger.Debug("Cannot close test file for ownership check: %v", err)
-		return false
-	}
-
-	// Try to change ownership to current user (should be safe)
-	uid := os.Getuid()
-	gid := os.Getgid()
-
-	if err := os.Chown(testFile, uid, gid); err != nil {
-		d.logger.Debug("Chown test failed: %v", err)
-		return false
-	}
-
-	// Try to change permissions
-	if err := os.Chmod(testFile, 0600); err != nil {
-		d.logger.Debug("Chmod test failed: %v", err)
-		return false
-	}
-
-	// Verify the changes took effect
-	stat, err := os.Stat(testFile)
-	if err != nil {
-		return false
-	}
-
-	// Check if permissions were actually set
-	if stat.Mode().Perm() != 0600 {
-		d.logger.Debug("Permissions not set correctly: expected 0600, got %o", stat.Mode().Perm())
-		return false
-	}
-
-	return true
+	return ok
 }
 
 // parseFilesystemType converts a filesystem type string to FilesystemType
@@ -327,8 +397,10 @@ func (d *FilesystemDetector) SetPermissions(ctx context.Context, path string, ui
 		return nil
 	}
 
-	// Try to set ownership
-	if err := os.Chown(path, uid, gid); err != nil {
+	// Try to set ownership (bounded against a dead/stale mount).
+	if _, err := safefs.Run(ctx, "setperm-chown", path, d.ioTimeout, func() (struct{}, error) {
+		return struct{}{}, os.Chown(path, uid, gid)
+	}); err != nil {
 		// On compatible filesystem, this is a warning (not an error)
 		if fsInfo != nil && !fsInfo.Type.ShouldAutoExclude() {
 			d.logger.Warning("Failed to set ownership for %s (filesystem %s): %v", path, fsInfo.Type, err)
@@ -336,8 +408,8 @@ func (d *FilesystemDetector) SetPermissions(ctx context.Context, path string, ui
 		// Don't return error - continue with chmod
 	}
 
-	// Try to set permissions
-	if err := os.Chmod(path, mode); err != nil {
+	// Try to set permissions (bounded against a dead/stale mount).
+	if err := safefs.Chmod(ctx, path, mode, d.ioTimeout); err != nil {
 		// On compatible filesystem, this is a warning (not an error)
 		if fsInfo != nil && !fsInfo.Type.ShouldAutoExclude() {
 			d.logger.Warning("Failed to set permissions for %s (filesystem %s): %v", path, fsInfo.Type, err)

@@ -20,6 +20,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/metrics"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -214,6 +215,11 @@ type Orchestrator struct {
 
 	// Unprivileged container context (computed once by CLI and injected into collectors).
 	unprivilegedContainerDetector func() (bool, string)
+
+	// copyLogToCloudFn overrides the cloud log upload (test-only seam); nil uses
+	// the real o.copyLogToCloud. Lets tests assert the upload is dispatched on a
+	// detached context even when the run ctx was cancelled (Ctrl+C).
+	copyLogToCloudFn func(ctx context.Context, sourcePath, destPath string) error
 }
 
 const tempDirCleanupAge = 24 * time.Hour
@@ -520,7 +526,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.Env
 	o.logger.Info("Starting Go-based backup orchestration for %s", run.proxmoxType)
 
 	workspace := &backupWorkspace{
-		registry: o.cleanupPreviousExecutionArtifacts(),
+		registry: o.cleanupPreviousExecutionArtifacts(ctx),
 		fs:       o.filesystem(),
 	}
 	stats = o.initBackupRun(run)
@@ -936,24 +942,55 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) (err error) {
 
 // cleanupPreviousExecutionArtifacts performs unified cleanup of old JSON stats, pprof files,
 // and orphaned temp directories. Returns the TempDirRegistry for use by the caller.
-func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
+func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *TempDirRegistry {
 	fs := o.filesystem()
+	timeout := o.fsIoTimeout()
+	// boundedRemove bounds each fs.Remove so a dead/stale LOG_PATH mount cannot wedge
+	// the cleanup phase (timeout<=0 degrades to a direct call; /tmp removes are local).
+	boundedRemove := func(file string) error {
+		_, err := safefs.Run(ctx, "cleanup-remove", file, timeout, func() (struct{}, error) {
+			return struct{}{}, fs.Remove(file)
+		})
+		// already gone == success: covers both the inherent glob->remove TOCTOU race
+		// and the duplicate cpu-*.pprof entry when LOG_PATH itself is /tmp/proxsave
+		// (the legacy and the /tmp/proxsave globs match the same file). A dead-mount
+		// timeout is *TimeoutError (never os.ErrNotExist), so it still counts as failed.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
 
-	// Discover JSON stats files and pprof profiles from previous runs
+	// Discover JSON stats files and pprof profiles from previous runs. The LOG_PATH
+	// globs are bounded: filepath.Glob does a raw lstat+readdir that a dead/stale mount
+	// would wedge. The /tmp/proxsave globs below are local and stay raw.
 	var statsFiles []string
 	var cpuProfiles []string
 	var heapProfiles []string
 	if o.logPath != "" {
-		if matches, err := filepath.Glob(filepath.Join(o.logPath, "backup-stats-*.json")); err == nil {
+		if matches, err := safefs.Run(ctx, "cleanup-glob", o.logPath, timeout, func() ([]string, error) {
+			return filepath.Glob(filepath.Join(o.logPath, "backup-stats-*.json"))
+		}); err == nil {
 			statsFiles = matches
+		} else if errors.Is(err, safefs.ErrTimeout) {
+			o.logger.Debug("Cleanup: globbing stats files under %s timed out after %s; skipping (dead/stale mount?)", o.logPath, timeout)
 		}
 
-		if matches, err := filepath.Glob(filepath.Join(o.logPath, "cpu-*.pprof")); err == nil {
+		// Legacy: pre-fix versions wrote cpu-*.pprof under LOG_PATH; sweep them so an
+		// upgrade does not orphan them.
+		if matches, err := safefs.Run(ctx, "cleanup-glob", o.logPath, timeout, func() ([]string, error) {
+			return filepath.Glob(filepath.Join(o.logPath, "cpu-*.pprof"))
+		}); err == nil {
 			cpuProfiles = matches
+		} else if errors.Is(err, safefs.ErrTimeout) {
+			o.logger.Debug("Cleanup: globbing legacy cpu profiles under %s timed out after %s; skipping (dead/stale mount?)", o.logPath, timeout)
 		}
 	}
 
-	// Heap profiles are written under /tmp/proxsave
+	// Profiles (cpu + heap) are now written under /tmp/proxsave.
+	if matches, err := filepath.Glob(filepath.Join("/tmp", "proxsave", "cpu-*.pprof")); err == nil {
+		cpuProfiles = append(cpuProfiles, matches...)
+	}
 	if matches, err := filepath.Glob(filepath.Join("/tmp", "proxsave", "heap-*.pprof")); err == nil {
 		heapProfiles = matches
 	}
@@ -976,7 +1013,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 		for _, file := range statsFiles {
 			filename := filepath.Base(file)
-			if err := fs.Remove(file); err != nil {
+			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove file %s: %v", filename, err)
 				failedFiles++
 			} else {
@@ -986,7 +1023,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 		}
 	}
 
-	// Phase 2: Cleanup CPU pprof files under log path
+	// Phase 2: Cleanup CPU pprof files (under /tmp/proxsave, plus any legacy ones under log path)
 	if len(cpuProfiles) > 0 {
 		if !cleanupStarted {
 			o.logger.Debug("Starting cleanup of previous execution files...")
@@ -996,7 +1033,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 		for _, file := range cpuProfiles {
 			filename := filepath.Base(file)
-			if err := fs.Remove(file); err != nil {
+			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove CPU profile %s: %v", filename, err)
 				failedFiles++
 			} else {
@@ -1016,7 +1053,7 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts() *TempDirRegistry {
 
 		for _, file := range heapProfiles {
 			filename := filepath.Base(file)
-			if err := fs.Remove(file); err != nil {
+			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove heap profile %s: %v", filename, err)
 				failedFiles++
 			} else {
@@ -1205,6 +1242,65 @@ func copyFile(fs FS, src, dest string) (err error) {
 	defer closeIntoErr(&err, out, "close destination file")
 
 	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
+// copyFileBounded is copyFile with an FS_IO_TIMEOUT bound on the dead-mount-prone
+// source read: a stalled source Open or a mid-stream read on a dead/stale mount
+// (e.g. a network BACKUP_PATH/SECONDARY_PATH) cannot wedge the copy in an
+// uninterruptible (D-state) syscall. The source Open goes through the FS
+// abstraction (so an injected fs is honored) wrapped in safefs.Run, and the byte
+// stream uses safefs.CopyBounded's per-chunk stall budget. timeout<=0 falls back
+// to the unbounded copyFile (the FS_IO_TIMEOUT opt-out). On abandonment the worker
+// may still hold the handles, so they are dropped (not closed) and reclaimed by
+// the os.File finalizer. The dest is the local workDir, so its open stays raw.
+func copyFileBounded(ctx context.Context, fs FS, src, dest string, timeout time.Duration) (err error) {
+	if fs == nil {
+		fs = osFS{}
+	}
+	if timeout <= 0 {
+		return copyFile(fs, src, dest)
+	}
+
+	in, err := safefs.Run(ctx, "copy source open", src, timeout, func() (*os.File, error) {
+		return fs.Open(src)
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Best-effort, bounded read-side close. An abandoned copy worker may still
+		// hold this fd (in==nil below) -> skip it; the finalizer reclaims it. A close
+		// error on the read-only source does not invalidate the already-written
+		// staged copy, so it must not fail the staging.
+		if in == nil {
+			return
+		}
+		_, _ = safefs.Run(ctx, "copy source close", src, timeout, func() (struct{}, error) {
+			return struct{}{}, in.Close()
+		})
+	}()
+
+	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if out == nil { // abandoned worker may still hold this fd
+			return
+		}
+		if cerr := out.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+
+	if _, err = safefs.CopyBounded(ctx, out, in, 1<<20, timeout, "copy source", src); err != nil {
+		if safefs.IsAbandoned(err) {
+			in = nil // the abandoned worker may still touch both handles: skip the closes
+			out = nil
+		}
 		return err
 	}
 	return out.Sync()

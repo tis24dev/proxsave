@@ -202,7 +202,7 @@ func TestPreparePlainBundleWithUICopiesRawArtifacts(t *testing.T) {
 
 	ctx := context.Background()
 	prompter := &countingSecretPrompter{}
-	prepared, err := preparePlainBundleWithUI(ctx, cand, "1.0.0", logger, prompter)
+	prepared, err := preparePlainBundleWithUI(ctx, cand, "1.0.0", logger, prompter, 0)
 	if err != nil {
 		t.Fatalf("preparePlainBundleWithUI error: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestPreparePlainBundleWithUIRejectsInvalidCandidate(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	ctx := context.Background()
 	prompter := &countingSecretPrompter{}
-	if _, err := preparePlainBundleWithUI(ctx, nil, "", logger, prompter); err == nil {
+	if _, err := preparePlainBundleWithUI(ctx, nil, "", logger, prompter, 0); err == nil {
 		t.Fatalf("expected error for nil candidate")
 	}
 }
@@ -268,7 +268,7 @@ func TestPreparePlainBundleWithUIRejectsMissingUI(t *testing.T) {
 		DisplayBase:     "test-backup",
 	}
 
-	if _, err := preparePlainBundleWithUI(context.Background(), cand, "1.0.0", logger, nil); err == nil {
+	if _, err := preparePlainBundleWithUI(context.Background(), cand, "1.0.0", logger, nil, 0); err == nil {
 		t.Fatalf("expected error for missing UI")
 	}
 }
@@ -335,7 +335,7 @@ func TestPreparePlainBundleWithUIRejectsTypedNilUI(t *testing.T) {
 
 	var typedNil *countingSecretPrompter
 
-	if _, err := preparePlainBundleWithUI(context.Background(), cand, "1.0.0", logger, typedNil); err == nil {
+	if _, err := preparePlainBundleWithUI(context.Background(), cand, "1.0.0", logger, typedNil, 0); err == nil {
 		t.Fatal("expected error for typed-nil UI")
 	}
 }
