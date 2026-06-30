@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,7 @@ type TelegramConfig struct {
 	ChatID        string
 	ServerAPIHost string // For centralized mode
 	ServerID      string // Server identifier for centralized mode
+	NotifySecret  string // Per-server relay secret; when set, use the server-side relay
 }
 
 // TelegramNotifier implements the Notifier interface for Telegram
@@ -128,6 +130,24 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	if !t.config.Enabled {
 		t.logger.Debug("Telegram notifications disabled")
 		result.Success = false
+		result.Duration = time.Since(startTime)
+		return result, nil
+	}
+
+	// Secure relay path: when a per-server secret is provisioned, the bot
+	// token never leaves the host. The server looks up the chat and sends
+	// the message itself. Falls back to the legacy path when no secret set.
+	if t.config.Mode == TelegramModeCentralized && t.config.NotifySecret != "" {
+		message := t.buildMessage(data)
+		if err := t.sendViaRelay(ctx, message); err != nil {
+			t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
+			result.Success = false
+			result.Error = err
+			result.Duration = time.Since(startTime)
+			return result, nil // Non-critical error, don't abort backup
+		}
+		t.logger.Debug("Telegram relay confirmed delivery")
+		result.Success = true
 		result.Duration = time.Since(startTime)
 		return result, nil
 	}
@@ -235,6 +255,63 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		return "", "", fmt.Errorf("invalid SERVER_ID (HTTP 422)")
 	default:
 		return "", "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+}
+
+// sendViaRelay sends a message through the authenticated server-side relay so
+// the bot token never leaves this host. The per-server secret is sent only in
+// the X-Server-Auth header; any returned error string is scrubbed of it.
+func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message string) error {
+	endpoint := strings.TrimRight(t.config.ServerAPIHost, "/") + "/api/notify"
+
+	payload := struct {
+		ServerID string `json:"server_id"`
+		Message  string `json:"message"`
+	}{
+		ServerID: t.config.ServerID,
+		Message:  message,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to encode relay request: %w", err)
+	}
+
+	// 5-second timeout, mirroring fetchCentralizedCredentials.
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create relay request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Server-Auth", t.config.NotifySecret)
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("relay request failed: %s", logging.RedactSecrets(err.Error(), t.config.NotifySecret))
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case 200:
+		return nil
+	case 401, 403:
+		return fmt.Errorf("relay auth rejected (HTTP %d)", resp.StatusCode)
+	case 404:
+		return fmt.Errorf("server unknown (HTTP 404)")
+	case 409:
+		return fmt.Errorf("registration missing (HTTP 409)")
+	case 413:
+		return fmt.Errorf("message too long (HTTP 413)")
+	default:
+		respBody, _ := io.ReadAll(resp.Body)
+		snippet := string(respBody)
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return fmt.Errorf("relay returned status %d: %s",
+			resp.StatusCode, logging.RedactSecrets(snippet, t.config.NotifySecret))
 	}
 }
 

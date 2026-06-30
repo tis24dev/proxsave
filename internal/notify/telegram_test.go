@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -233,5 +234,162 @@ func TestTelegramSendCentralized(t *testing.T) {
 	}
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
+	}
+}
+
+func TestTelegramSendCentralizedRelay(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+
+	const secret = "relay-secret-value-123456"
+	var relayCalls int
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Host, "api.telegram.org") {
+				t.Fatalf("api.telegram.org must never be contacted in relay mode")
+			}
+			if req.Method != http.MethodPost || req.URL.Path != "/api/notify" {
+				t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			}
+			if got := req.Header.Get("X-Server-Auth"); got != secret {
+				t.Fatalf("missing/incorrect X-Server-Auth header: %q", got)
+			}
+			bodyBytes, _ := io.ReadAll(req.Body)
+			var payload struct {
+				ServerID string `json:"server_id"`
+				Message  string `json:"message"`
+			}
+			if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+				t.Fatalf("invalid JSON body: %v", err)
+			}
+			if payload.ServerID != "server-123" {
+				t.Fatalf("server_id = %q, want server-123", payload.ServerID)
+			}
+			if payload.Message == "" {
+				t.Fatalf("message must not be empty")
+			}
+			relayCalls++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"status":"ok"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	notifier, err := NewTelegramNotifier(TelegramConfig{
+		Enabled:       true,
+		Mode:          TelegramModeCentralized,
+		ServerAPIHost: "https://central.test",
+		ServerID:      "server-123",
+		NotifySecret:  secret,
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	notifier.client = client
+
+	result, err := notifier.Send(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	if relayCalls != 1 {
+		t.Fatalf("expected exactly 1 relay call, got %d", relayCalls)
+	}
+}
+
+func TestTelegramRelayFallbackWhenNoSecret(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+
+	var sawGetChatID, sawTelegram bool
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "/api/notify" {
+				t.Fatalf("relay must not be used when NotifySecret is empty")
+			}
+			switch {
+			case strings.Contains(req.URL.Host, "central.test"):
+				sawGetChatID = true
+				body := `{"bot_token":"123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz","chat_id":"987654","status":200}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Header:     make(http.Header),
+				}, nil
+			case strings.Contains(req.URL.Host, "api.telegram.org"):
+				sawTelegram = true
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("ok")),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				t.Fatalf("unexpected host: %s", req.URL.Host)
+				return nil, nil
+			}
+		}),
+	}
+
+	notifier, err := NewTelegramNotifier(TelegramConfig{
+		Enabled:       true,
+		Mode:          TelegramModeCentralized,
+		ServerAPIHost: "https://central.test",
+		ServerID:      "server-123",
+		NotifySecret:  "",
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	notifier.client = client
+
+	result, err := notifier.Send(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	if !sawGetChatID || !sawTelegram {
+		t.Fatalf("legacy path not exercised: getChatID=%v telegram=%v", sawGetChatID, sawTelegram)
+	}
+}
+
+func TestTelegramRelayErrorRedactsSecret(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	const secret = "relay-secret-value-redaction-1234"
+
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			// Server echoes the secret in an error body; the client must scrub it.
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(strings.NewReader("internal error: " + secret)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	notifier, err := NewTelegramNotifier(TelegramConfig{
+		Enabled:       true,
+		Mode:          TelegramModeCentralized,
+		ServerAPIHost: "https://central.test",
+		ServerID:      "server-123",
+		NotifySecret:  secret,
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	notifier.client = client
+
+	relayErr := notifier.sendViaRelay(context.Background(), "hello")
+	if relayErr == nil {
+		t.Fatalf("expected an error from the relay")
+	}
+	if strings.Contains(relayErr.Error(), secret) {
+		t.Fatalf("error string leaked the NotifySecret: %q", relayErr.Error())
 	}
 }

@@ -38,6 +38,7 @@ func registerNotificationSecrets(logger *logging.Logger, cfg *config.Config) {
 		return
 	}
 	logger.RegisterSecret(cfg.TelegramBotToken)
+	logger.RegisterSecret(cfg.TelegramNotifySecret)
 	logger.RegisterSecret(cfg.GotifyToken)
 	if cfg.WebhookEnabled {
 		for _, ep := range cfg.BuildWebhookConfig().Endpoints {
@@ -101,6 +102,7 @@ func initializeTelegramNotification(opts backupModeOptions, orch *orchestrator.O
 		ChatID:        cfg.TelegramChatID,
 		ServerAPIHost: cfg.TelegramServerAPIHost,
 		ServerID:      cfg.ServerID,
+		NotifySecret:  cfg.TelegramNotifySecret,
 	}
 	telegramNotifier, err := notify.NewTelegramNotifier(telegramConfig, logger)
 	if err != nil {
