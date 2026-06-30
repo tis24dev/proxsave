@@ -7,11 +7,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -25,11 +27,123 @@ import (
 const (
 	identityDirName       = "identity"
 	identityFileName      = ".server_identity"
+	notifySecretFileName  = ".notify_secret"
 	maxProcVersionBytes   = 100
 	maxMachineIDBytes     = 32
 	systemKeyPrefixLength = 8
 	serverIDLength        = 16
 )
+
+// notifySecretFormat matches the server's generate_notify_secret output: lowercase
+// alphanumeric blocks separated by single dashes (e.g. 3h64-dyi8-q3d6-wcm5). It is
+// used only to reject a corrupted file, never to reject server-issued values strictly.
+var notifySecretFormat = regexp.MustCompile(`^[0-9a-z]+(-[0-9a-z]+)*$`)
+
+// NotifySecretPath returns the immutable identity-file path for the relay secret.
+func NotifySecretPath(baseDir string) string {
+	return filepath.Join(strings.TrimSpace(baseDir), identityDirName, notifySecretFileName)
+}
+
+// PersistNotifySecret writes the per-server relay secret into the same immutable
+// identity mechanism used for .server_identity (0600 + chattr +i), reusing
+// writeIdentityFileWithContext. Overwrite-safe: the helper clears +i first.
+func PersistNotifySecret(ctx context.Context, baseDir, secret string, logger *logging.Logger) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		logDebug(logger, "Identity: PersistNotifySecret: empty baseDir, refusing")
+		return fmt.Errorf("base directory is empty; cannot persist notify secret")
+	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		logDebug(logger, "Identity: PersistNotifySecret: empty secret, refusing")
+		return fmt.Errorf("refusing to persist an empty notify secret")
+	}
+	// Validate against the SAME format LoadNotifySecret enforces, so a persisted
+	// secret always reloads (otherwise a non-conforming value would be written but
+	// silently dropped on the next run, forcing reprovisioning).
+	if !notifySecretFormat.MatchString(secret) {
+		logDebug(logger, "Identity: PersistNotifySecret: malformed secret, refusing (len=%d)", len(secret))
+		return fmt.Errorf("refusing to persist a malformed notify secret")
+	}
+	dir := filepath.Join(baseDir, identityDirName)
+	if err := os.MkdirAll(dir, 0o750); err != nil { // same mode as Detect
+		logDebug(logger, "Identity: PersistNotifySecret: mkdir %s failed: %v", dir, err)
+		return fmt.Errorf("failed to create identity directory %s: %w", dir, err)
+	}
+	path := filepath.Join(dir, notifySecretFileName)
+	logDebug(logger, "Identity: PersistNotifySecret: writing immutable secret file %s (len=%d)", path, len(secret))
+	if err := writeIdentityFileWithContext(ctx, path, secret+"\n", logger); err != nil {
+		logDebug(logger, "Identity: PersistNotifySecret: write failed for %s: %v", path, err)
+		return err
+	}
+	logDebug(logger, "Identity: PersistNotifySecret: persisted (0600 + immutable) to %s", path)
+	return nil
+}
+
+// LoadNotifySecret returns the persisted relay secret, or ("", nil) when the file
+// is absent, empty, or fails the format check (junk is ignored rather than fed
+// into the auth header).
+func LoadNotifySecret(baseDir string, logger ...*logging.Logger) (string, error) {
+	var lg *logging.Logger
+	if len(logger) > 0 {
+		lg = logger[0]
+	}
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		return "", nil
+	}
+	dir := filepath.Join(baseDir, identityDirName)
+	path := filepath.Join(dir, notifySecretFileName)
+	// Read the secret confined to the identity directory via os.Root so the path is
+	// no longer a raw variable sink and a symlink or ".." cannot escape it, resolving
+	// the gosec G304 finding structurally (no #nosec). The basename is a constant; a
+	// missing directory or file still surfaces as os.ErrNotExist below.
+	data, err := readFileUnderRoot(dir, notifySecretFileName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			logDebug(lg, "Identity: LoadNotifySecret: no secret file at %s", path)
+			return "", nil
+		}
+		logDebug(lg, "Identity: LoadNotifySecret: read failed for %s: %v", path, err)
+		return "", err
+	}
+	secret := strings.TrimSpace(string(data))
+	if secret == "" {
+		logDebug(lg, "Identity: LoadNotifySecret: secret file empty at %s", path)
+		return "", nil
+	}
+	if !notifySecretFormat.MatchString(secret) {
+		logDebug(lg, "Identity: LoadNotifySecret: ignoring malformed secret at %s (len=%d)", path, len(secret))
+		return "", nil
+	}
+	logDebug(lg, "Identity: LoadNotifySecret: loaded secret from %s (len=%d)", path, len(secret))
+	return secret, nil
+}
+
+// readFileUnderRoot reads name (a single basename) from dir through an *os.Root on
+// dir, confining the read there at the syscall level: the path is no longer a raw
+// variable sink and a symlink or ".." in name cannot escape the directory. This
+// mirrors checks.readLockFileContent and resolves the gosec G304 finding
+// structurally rather than with a suppression. A missing directory or file
+// surfaces as os.ErrNotExist, matching os.ReadFile.
+func readFileUnderRoot(dir, name string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	return io.ReadAll(f)
+}
 
 // Info contains server identity information.
 type Info struct {
@@ -352,7 +466,9 @@ func loadServerID(path string, macs []string, logger *logging.Logger) (string, s
 		logDebug(logger, "Identity: identity file stat failed: path=%s err=%v", path, err)
 	}
 
-	data, err := os.ReadFile(path)
+	// Read confined to the identity directory via os.Root (structural gosec G304
+	// fix, no #nosec); see readFileUnderRoot.
+	data, err := readFileUnderRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return "", "", err
 	}
@@ -761,7 +877,9 @@ func maybeUpgradeIdentityFileWithContext(ctx context.Context, path string, serve
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	data, err := os.ReadFile(path)
+	// Read confined to the identity directory via os.Root (structural gosec G304
+	// fix, no #nosec); see readFileUnderRoot.
+	data, err := readFileUnderRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return nil
 	}

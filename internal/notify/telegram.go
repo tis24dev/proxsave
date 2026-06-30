@@ -1,8 +1,10 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,8 +13,31 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/version"
 )
+
+// errRelayAuthRejected signals the relay rejected our per-server secret (HTTP
+// 401/403): the secret is stale or rotated and should be dropped + reprovisioned
+// rather than treated as a permanent delivery failure.
+var errRelayAuthRejected = errors.New("relay auth rejected")
+
+// proxsaveVersionHeader carries the running ProxSave version so the central
+// server can gate version-specific behavior (e.g. the one-time secret handoff).
+const proxsaveVersionHeader = "X-Proxsave-Version"
+
+// proxsaveProvisionHeader marks a real provisioning call (issue/re-issue the relay
+// secret). Sent ONLY by the two provisioning paths, never the bare status probe.
+const proxsaveProvisionHeader = "X-Proxsave-Provision"
+
+// setProxsaveVersionHeader stamps an outbound central-server request with the
+// normalized ProxSave version (e.g. "0.28.0").
+func setProxsaveVersionHeader(req *http.Request) string {
+	v := version.String()
+	req.Header.Set(proxsaveVersionHeader, v)
+	return v
+}
 
 // TelegramMode represents the Telegram bot configuration mode
 type TelegramMode string
@@ -30,6 +55,8 @@ type TelegramConfig struct {
 	ChatID        string
 	ServerAPIHost string // For centralized mode
 	ServerID      string // Server identifier for centralized mode
+	NotifySecret  string // Per-server relay secret; when set, use the server-side relay
+	BaseDir       string // Identity store root for lazy-load / persist of the relay secret
 }
 
 // TelegramNotifier implements the Notifier interface for Telegram
@@ -41,10 +68,11 @@ type TelegramNotifier struct {
 
 // Telegram API response for centralized mode
 type telegramCentralizedResponse struct {
-	BotToken string `json:"bot_token"`
-	ChatID   string `json:"chat_id"`
-	Status   int    `json:"status"`
-	Message  string `json:"message,omitempty"`
+	BotToken     string `json:"bot_token"`
+	ChatID       string `json:"chat_id"`
+	Status       int    `json:"status"`
+	Message      string `json:"message,omitempty"`
+	NotifySecret string `json:"notify_secret"` // TOFU one-time provisioning
 }
 
 // Token and ChatID validation regex patterns
@@ -132,6 +160,52 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 		return result, nil
 	}
 
+	if t.config.Mode == TelegramModeCentralized {
+		t.logger.Debug("Telegram: send start (mode=centralized serverID=%q secretPreloaded=%v baseDir=%q)", t.config.ServerID, t.config.NotifySecret != "", t.config.BaseDir)
+	}
+
+	// Lazily adopt a previously provisioned per-server secret from the
+	// immutable identity file so the relay is used without fetching the token.
+	if t.config.Mode == TelegramModeCentralized && t.config.NotifySecret == "" && t.config.BaseDir != "" {
+		if sec, err := identity.LoadNotifySecret(t.config.BaseDir, t.logger); err != nil {
+			t.logger.Debug("Telegram: could not read persisted relay secret: %v", err)
+		} else if sec != "" {
+			t.config.NotifySecret = sec
+			t.logger.RegisterSecret(sec)
+			t.logger.Debug("Telegram: loaded persisted per-server relay secret (len=%d)", len(sec))
+		} else {
+			t.logger.Debug("Telegram: no persisted relay secret on disk; will attempt provisioning during fetch")
+		}
+	}
+
+	// Secure relay path: when a per-server secret is provisioned, the bot
+	// token never leaves the host. The server looks up the chat and sends
+	// the message itself. Falls back to the legacy path when no secret set.
+	if t.config.Mode == TelegramModeCentralized && t.config.NotifySecret != "" {
+		t.logger.Debug("Telegram: using server-side relay path (bot token stays on host)")
+		message := t.buildMessage(data)
+		err := t.sendViaRelay(ctx, message)
+		if err == nil {
+			t.logger.Debug("Telegram relay confirmed delivery")
+			result.Success = true
+			result.Duration = time.Since(startTime)
+			return result, nil
+		}
+		if !errors.Is(err, errRelayAuthRejected) {
+			t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
+			result.Success = false
+			result.Error = err
+			result.Duration = time.Since(startTime)
+			return result, nil // Non-critical error, don't abort backup
+		}
+		// The relay rejected our per-server secret (stale/rotated). Drop it and fall
+		// through to the fetch path below, which reprovisions a fresh secret and
+		// relays this run (or falls back to the legacy bot-token path). Bounded: the
+		// fetch path retries the relay at most once and never loops back here.
+		t.logger.Warning("Telegram: relay auth rejected; dropping stale relay secret and reprovisioning")
+		t.config.NotifySecret = ""
+	}
+
 	// Get bot token and chat ID (fetch if centralized mode)
 	botToken := t.config.BotToken
 	chatID := t.config.ChatID
@@ -139,13 +213,32 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	if t.config.Mode == TelegramModeCentralized {
 		t.logger.Debug("Fetching Telegram credentials from central server...")
 		var err error
-		botToken, chatID, err = t.fetchCentralizedCredentials(ctx)
+		botToken, chatID, err = t.fetchCentralizedCredentials(ctx) // may TOFU-provision+persist+set NotifySecret
 		if err != nil {
 			t.logger.Warning("WARNING: Failed to fetch Telegram credentials: %v", err)
 			result.Success = false
 			result.Error = err
 			result.Duration = time.Since(startTime)
 			return result, nil // Non-critical error, don't abort backup
+		}
+
+		// First-run provisioning: if the fetch just delivered a fresh secret,
+		// deliver THIS run via the relay so the new secret is used and the bot
+		// token is not.
+		if t.config.NotifySecret != "" {
+			t.logger.Debug("Telegram: fetch provisioned a fresh relay secret; relaying this run")
+			message := t.buildMessage(data)
+			if err := t.sendViaRelay(ctx, message); err != nil {
+				t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
+				result.Success = false
+				result.Error = err
+				result.Duration = time.Since(startTime)
+				return result, nil // Non-critical error, don't abort backup
+			}
+			t.logger.Debug("Telegram relay confirmed delivery (first-run provisioning)")
+			result.Success = true
+			result.Duration = time.Since(startTime)
+			return result, nil
 		}
 	}
 
@@ -163,6 +256,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	message := t.buildMessage(data)
 
 	// Send to Telegram API
+	t.logger.Debug("Telegram: legacy direct send via bot token (token leaves host; mode=%s)", t.config.Mode)
 	err := t.sendToTelegram(ctx, botToken, chatID, message)
 	if err != nil {
 		t.logger.Warning("WARNING: Failed to send Telegram notification: %v", err)
@@ -193,6 +287,15 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create request: %w", err)
 	}
+	pv := setProxsaveVersionHeader(req)
+	// Only ask the server to (re)issue a relay secret when we can actually persist
+	// it (BaseDir set). Otherwise the 200 body's secret is discarded below and every
+	// run would churn a fresh unconfirmed token server-side.
+	provisionIntent := t.config.BaseDir != ""
+	if provisionIntent {
+		req.Header.Set(proxsaveProvisionHeader, "1")
+	}
+	t.logger.Debug("Telegram: get-chat-id GET (serverID=%q X-Proxsave-Version=%q provisionIntent=%v)", t.config.ServerID, pv, provisionIntent)
 
 	// Make request
 	resp, err := t.client.Do(req)
@@ -215,6 +318,30 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		if err := json.Unmarshal(body, &response); err != nil {
 			return "", "", fmt.Errorf("failed to parse response: %w", err)
 		}
+		t.logger.Debug("Telegram: get-chat-id 200 (notifySecretPresent=%v botTokenPresent=%v chatIDPresent=%v)", response.NotifySecret != "", response.BotToken != "", response.ChatID != "")
+
+		// Adopt-on-token-present: whenever a 200 carries a notify_secret, the
+		// server wants the client to (re)adopt it, so we OVERWRITE any existing
+		// persisted secret (no idempotent skip, or a re-issued token would be
+		// stranded) and then CONFIRM it. When the body carries no token we keep
+		// whatever we already have. The secret is never logged.
+		if provisioned := strings.TrimSpace(response.NotifySecret); provisioned != "" && t.config.BaseDir != "" {
+			t.logger.RegisterSecret(provisioned) // mask before any I/O can echo it
+			if err := identity.PersistNotifySecret(ctx, t.config.BaseDir, provisioned, t.logger); err != nil {
+				t.logger.Warning("WARNING: failed to persist provisioned relay secret: %v", err)
+			} else {
+				t.config.NotifySecret = provisioned // adopt in-memory for this run
+				t.logger.Debug("Telegram: adopted+persisted per-server relay secret (overwrite)")
+				if err := confirmTelegramRelaySecret(ctx, t.client, t.config.ServerAPIHost, t.config.ServerID, provisioned, t.logger); err != nil {
+					t.logger.Debug("Telegram: relay secret confirm failed (non-fatal): %v", err)
+				}
+			}
+		}
+
+		// With a relay secret in hand, the bot token is irrelevant for this run.
+		if t.config.NotifySecret != "" {
+			return response.BotToken, response.ChatID, nil
+		}
 
 		// Validate credentials
 		if !tokenRegex.MatchString(response.BotToken) {
@@ -235,6 +362,66 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		return "", "", fmt.Errorf("invalid SERVER_ID (HTTP 422)")
 	default:
 		return "", "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+}
+
+// sendViaRelay sends a message through the authenticated server-side relay so
+// the bot token never leaves this host. The per-server secret is sent only in
+// the X-Server-Auth header; any returned error string is scrubbed of it.
+func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message string) error {
+	endpoint := strings.TrimRight(t.config.ServerAPIHost, "/") + "/api/notify"
+
+	payload := struct {
+		ServerID string `json:"server_id"`
+		Message  string `json:"message"`
+	}{
+		ServerID: t.config.ServerID,
+		Message:  message,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to encode relay request: %w", err)
+	}
+
+	// 5-second timeout, mirroring fetchCentralizedCredentials.
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create relay request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Server-Auth", t.config.NotifySecret)
+	pv := setProxsaveVersionHeader(req)
+	t.logger.Debug("Telegram: relay POST %s (serverID=%q msgLen=%d X-Proxsave-Version=%q)", endpoint, t.config.ServerID, len(message), pv)
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("relay request failed: %s", logging.RedactSecrets(err.Error(), t.config.NotifySecret))
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case 200:
+		t.logger.Debug("Telegram: relay delivered (HTTP 200)")
+		return nil
+	case 401, 403:
+		return fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.StatusCode)
+	case 404:
+		return fmt.Errorf("server unknown (HTTP 404)")
+	case 409:
+		return fmt.Errorf("registration missing (HTTP 409)")
+	case 413:
+		return fmt.Errorf("message too long (HTTP 413)")
+	default:
+		respBody, _ := io.ReadAll(resp.Body)
+		snippet := string(respBody)
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return fmt.Errorf("relay returned status %d: %s",
+			resp.StatusCode, logging.RedactSecrets(snippet, t.config.NotifySecret))
 	}
 }
 

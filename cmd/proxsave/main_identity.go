@@ -67,7 +67,8 @@ func checkTelegramServerStatus(rt *appRuntime) (string, bool) {
 
 	logging.Debug("Contacting remote Telegram server...")
 	logging.Debug("Telegram server URL: %s", rt.cfg.TelegramServerAPIHost)
-	status := notify.CheckTelegramRegistration(rt.ctx, rt.cfg.TelegramServerAPIHost, rt.serverIDValue, rt.logger)
+	res := notify.CheckTelegramRegistrationAndProvision(rt.ctx, rt.cfg.TelegramServerAPIHost, rt.serverIDValue, rt.cfg.BaseDir, rt.logger)
+	status := res.Status
 	if status.Error != nil {
 		logging.Warning("Telegram: %s", status.Message)
 		logging.Debug("Telegram connection error: %v", status.Error)

@@ -658,6 +658,46 @@ WEBHOOK_ENABLE=true
 	}
 }
 
+func TestParseTelegramNotifySecret(t *testing.T) {
+	t.Run("absent defaults to empty", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "no_secret.env")
+		if err := os.WriteFile(configPath, []byte("TELEGRAM_ENABLED=true\n"), 0o600); err != nil {
+			t.Fatalf("Failed to create test config: %v", err)
+		}
+		setBaseDirEnv(t, "/notify/secret/base")
+
+		cfg, err := LoadConfig(configPath)
+		if err != nil {
+			t.Fatalf("LoadConfig() error = %v", err)
+		}
+		if cfg.TelegramNotifySecret != "" {
+			t.Fatalf("TelegramNotifySecret = %q; want empty string when absent", cfg.TelegramNotifySecret)
+		}
+	})
+
+	t.Run("ignored when present", func(t *testing.T) {
+		// The relay secret is no longer read from backup.env; it is provisioned
+		// via TOFU into the immutable identity file. Any value present in the
+		// config must be ignored.
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "with_secret.env")
+		content := "TELEGRAM_ENABLED=true\nTELEGRAM_NOTIFY_SECRET=  relay-secret-abc123  \n"
+		if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+			t.Fatalf("Failed to create test config: %v", err)
+		}
+		setBaseDirEnv(t, "/notify/secret/base")
+
+		cfg, err := LoadConfig(configPath)
+		if err != nil {
+			t.Fatalf("LoadConfig() error = %v", err)
+		}
+		if cfg.TelegramNotifySecret != "" {
+			t.Fatalf("TelegramNotifySecret = %q; the secret must not be read from backup.env", cfg.TelegramNotifySecret)
+		}
+	})
+}
+
 func TestLoadConfigEmailDeliveryAliasesAndFallbackSendmail(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "email_aliases.env")

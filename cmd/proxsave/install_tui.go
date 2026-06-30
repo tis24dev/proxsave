@@ -173,11 +173,12 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 					for _, s := range auditRes.Suggestions {
 						keys = append(keys, s.Key)
 					}
-					bootstrap.Info("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
+					bootstrap.Debug("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
 					if len(auditRes.AppliedKeys) > 0 {
-						bootstrap.Info("Post-install audit: disabled (%d): %s", len(auditRes.AppliedKeys), strings.Join(auditRes.AppliedKeys, ", "))
+						bootstrap.Info("Post-install audit: disabled %d of %d unused component(s)", len(auditRes.AppliedKeys), len(keys))
+						bootstrap.Debug("Post-install audit: disabled keys: %s", strings.Join(auditRes.AppliedKeys, ", "))
 					} else {
-						bootstrap.Info("Post-install audit: no disables applied")
+						bootstrap.Info("Post-install audit: %d unused component(s) detected, none disabled", len(keys))
 					}
 				}
 			}

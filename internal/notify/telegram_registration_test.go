@@ -8,14 +8,15 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/version"
 )
 
 func TestCheckTelegramRegistrationMissingServerID(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	status := CheckTelegramRegistration(context.Background(), "https://central.test", "", logger)
 
-	if status.Code != 0 || status.Error == nil {
-		t.Fatalf("expected missing server ID error, got %+v", status)
+	if status.Code != StatusCodeMissingServerID || status.Error == nil {
+		t.Fatalf("expected missing server ID sentinel, got %+v", status)
 	}
 }
 
@@ -32,6 +33,7 @@ func TestCheckTelegramRegistrationResponses(t *testing.T) {
 		{"403-first-comm", http.StatusForbidden, 403, true},
 		{"409-missing-reg", http.StatusConflict, 409, true},
 		{"422-invalid", http.StatusUnprocessableEntity, 422, true},
+		{"426-upgrade", http.StatusUpgradeRequired, 426, true},
 		{"500-unexpected", http.StatusInternalServerError, 500, true},
 	}
 
@@ -54,5 +56,33 @@ func TestCheckTelegramRegistrationResponses(t *testing.T) {
 				t.Fatalf("unexpected error: %v", status.Error)
 			}
 		})
+	}
+}
+
+// TestCheckTelegramRegistrationSendsVersionHeader verifies the GET get-chat-id
+// request from CheckTelegramRegistration carries X-Proxsave-Version.
+func TestCheckTelegramRegistrationSendsVersionHeader(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	var captured, capturedProvision string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = r.Header.Get("X-Proxsave-Version")
+		capturedProvision = r.Header.Get("X-Proxsave-Provision")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	CheckTelegramRegistration(context.Background(), server.URL, "server-123", logger)
+
+	if captured == "" {
+		t.Fatalf("X-Proxsave-Version header was not set")
+	}
+	if captured != version.String() {
+		t.Fatalf("X-Proxsave-Version = %q, want %q", captured, version.String())
+	}
+	// The bare status probe must never carry provision-intent.
+	if capturedProvision != "" {
+		t.Fatalf("X-Proxsave-Provision = %q, want empty on the public status path", capturedProvision)
 	}
 }

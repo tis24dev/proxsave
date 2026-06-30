@@ -1,0 +1,342 @@
+package notify
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/version"
+)
+
+// TestSendCentralizedTOFUProvisionsThenRelays verifies the one-time provisioning:
+// get-chat-id rides a fresh per-server secret back, the client persists it into
+// the immutable identity file, and delivers THIS run through the relay (never the
+// bot token to api.telegram.org).
+func TestSendCentralizedTOFUProvisionsThenRelays(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+	baseDir := t.TempDir()
+
+	const secret = "3h64-dyi8-q3d6-wcm5"
+	const botToken = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+	var getChatIDCalls, relayCalls, confirmCalls int
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Host, "api.telegram.org") {
+				t.Fatalf("api.telegram.org must never be contacted once a relay secret is provisioned")
+			}
+			switch req.URL.Path {
+			case "/api/get-chat-id":
+				if got := req.Header.Get("X-Proxsave-Version"); got != version.String() {
+					t.Fatalf("get-chat-id X-Proxsave-Version = %q, want %q", got, version.String())
+				}
+				if got := req.Header.Get("X-Proxsave-Provision"); got != "1" {
+					t.Fatalf("get-chat-id X-Proxsave-Provision = %q, want %q", got, "1")
+				}
+				getChatIDCalls++
+				body := `{"chat_id":"123","bot_token":"` + botToken + `","notify_secret":"` + secret + `","status":200}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Header:     make(http.Header),
+				}, nil
+			case "/api/confirm-secret":
+				if got := req.Header.Get("X-Server-Auth"); got != secret {
+					t.Fatalf("confirm X-Server-Auth = %q, want %q", got, secret)
+				}
+				if got := req.Header.Get("X-Proxsave-Version"); got != version.String() {
+					t.Fatalf("confirm X-Proxsave-Version = %q, want %q", got, version.String())
+				}
+				confirmCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"status":"ok"}`)),
+					Header:     make(http.Header),
+				}, nil
+			case "/api/notify":
+				if got := req.Header.Get("X-Server-Auth"); got != secret {
+					t.Fatalf("relay X-Server-Auth = %q, want %q", got, secret)
+				}
+				if got := req.Header.Get("X-Proxsave-Version"); got != version.String() {
+					t.Fatalf("notify X-Proxsave-Version = %q, want %q", got, version.String())
+				}
+				relayCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"status":"ok"}`)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				t.Fatalf("unexpected request path: %s", req.URL.Path)
+				return nil, nil
+			}
+		}),
+	}
+
+	notifier, err := NewTelegramNotifier(TelegramConfig{
+		Enabled:       true,
+		Mode:          TelegramModeCentralized,
+		ServerAPIHost: "https://central.test",
+		ServerID:      "server-123",
+		BaseDir:       baseDir,
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	notifier.client = client
+
+	result, err := notifier.Send(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	if getChatIDCalls != 1 {
+		t.Fatalf("expected exactly 1 get-chat-id call, got %d", getChatIDCalls)
+	}
+	if relayCalls != 1 {
+		t.Fatalf("expected exactly 1 relay call, got %d", relayCalls)
+	}
+	if confirmCalls != 1 {
+		t.Fatalf("expected exactly 1 confirm-secret call, got %d", confirmCalls)
+	}
+
+	persisted, err := identity.LoadNotifySecret(baseDir)
+	if err != nil {
+		t.Fatalf("LoadNotifySecret() error = %v", err)
+	}
+	if persisted != secret {
+		t.Fatalf("persisted secret = %q, want %q", persisted, secret)
+	}
+}
+
+// TestSendCentralizedUsesPersistedSecretWithoutFetch verifies that once a secret
+// is persisted, Send adopts it lazily and goes straight to the relay, never
+// hitting get-chat-id.
+func TestSendCentralizedUsesPersistedSecretWithoutFetch(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+	baseDir := t.TempDir()
+
+	const secret = "abcd-efgh-ijkl-mnop"
+	if err := identity.PersistNotifySecret(context.Background(), baseDir, secret, logger); err != nil {
+		t.Fatalf("PersistNotifySecret() error = %v", err)
+	}
+
+	var relayCalls int
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Host, "api.telegram.org") {
+				t.Fatalf("api.telegram.org must never be contacted in relay mode")
+			}
+			if req.URL.Path == "/api/get-chat-id" {
+				t.Fatalf("get-chat-id must not be fetched once a secret is persisted")
+			}
+			if req.URL.Path != "/api/notify" {
+				t.Fatalf("unexpected request path: %s", req.URL.Path)
+			}
+			if got := req.Header.Get("X-Server-Auth"); got != secret {
+				t.Fatalf("relay X-Server-Auth = %q, want %q", got, secret)
+			}
+			relayCalls++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"status":"ok"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	notifier, err := NewTelegramNotifier(TelegramConfig{
+		Enabled:       true,
+		Mode:          TelegramModeCentralized,
+		ServerAPIHost: "https://central.test",
+		ServerID:      "server-123",
+		BaseDir:       baseDir,
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	notifier.client = client
+
+	result, err := notifier.Send(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	if relayCalls != 1 {
+		t.Fatalf("expected exactly 1 relay call, got %d", relayCalls)
+	}
+}
+
+// TestSendCentralizedNoProvisionWhenBaseDirEmpty pins the provision-header gating:
+// with an empty BaseDir the client cannot persist a relay secret, so it must NOT
+// send X-Proxsave-Provision (which would make the server mint+store a fresh
+// unconfirmed token every run). It falls back to the legacy bot-token send and
+// never confirms/relays.
+func TestSendCentralizedNoProvisionWhenBaseDirEmpty(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+
+	const botToken = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	const secret = "3h64-dyi8-q3d6-wcm5"
+
+	var getChatIDCalls, telegramCalls, confirmCalls, relayCalls int
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case strings.Contains(req.URL.Host, "api.telegram.org"):
+				telegramCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+					Header:     make(http.Header),
+				}, nil
+			case req.URL.Path == "/api/get-chat-id":
+				if got := req.Header.Get("X-Proxsave-Provision"); got != "" {
+					t.Fatalf("get-chat-id X-Proxsave-Provision = %q, want empty (no provision when BaseDir is empty)", got)
+				}
+				getChatIDCalls++
+				// The server still returns a secret; the client must ignore it
+				// because it has nowhere to persist it.
+				body := `{"chat_id":"123456789","bot_token":"` + botToken + `","notify_secret":"` + secret + `","status":200}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Header:     make(http.Header),
+				}, nil
+			case req.URL.Path == "/api/confirm-secret":
+				confirmCalls++
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+			case req.URL.Path == "/api/notify":
+				relayCalls++
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+			default:
+				t.Fatalf("unexpected request path: %s", req.URL.Path)
+				return nil, nil
+			}
+		}),
+	}
+
+	notifier, err := NewTelegramNotifier(TelegramConfig{
+		Enabled:       true,
+		Mode:          TelegramModeCentralized,
+		ServerAPIHost: "https://central.test",
+		ServerID:      "server-123",
+		BaseDir:       "", // cannot persist -> must not ask the server to provision
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	notifier.client = client
+
+	result, err := notifier.Send(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	if getChatIDCalls != 1 {
+		t.Fatalf("expected exactly 1 get-chat-id call, got %d", getChatIDCalls)
+	}
+	if telegramCalls != 1 {
+		t.Fatalf("expected the legacy bot-token send to api.telegram.org, got %d calls", telegramCalls)
+	}
+	if confirmCalls != 0 || relayCalls != 0 {
+		t.Fatalf("no confirm/relay expected when BaseDir is empty, got confirm=%d relay=%d", confirmCalls, relayCalls)
+	}
+}
+
+// TestSendCentralizedRelayAuthRejectedReprovisions pins the recovery from a stale
+// relay secret: a persisted secret that the relay rejects (403) must NOT strand
+// the client. Send drops the stale secret, reprovisions via get-chat-id, and
+// retries the relay with the fresh secret in the same run.
+func TestSendCentralizedRelayAuthRejectedReprovisions(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	data := createTestNotificationData()
+	baseDir := t.TempDir()
+
+	const stale = "aaaa-bbbb-cccc-dddd"
+	const fresh = "3h64-dyi8-q3d6-wcm5"
+	if err := identity.PersistNotifySecret(context.Background(), baseDir, stale, logger); err != nil {
+		t.Fatalf("seed PersistNotifySecret: %v", err)
+	}
+
+	var relayCalls, getChatIDCalls, confirmCalls int
+	var relayAuthSeen []string
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Host, "api.telegram.org") {
+				t.Fatalf("api.telegram.org must never be contacted; recovery stays on the relay")
+			}
+			switch req.URL.Path {
+			case "/api/notify":
+				relayCalls++
+				relayAuthSeen = append(relayAuthSeen, req.Header.Get("X-Server-Auth"))
+				if relayCalls == 1 {
+					// The stale secret is rejected.
+					return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"status":"ok"}`)), Header: make(http.Header)}, nil
+			case "/api/get-chat-id":
+				if got := req.Header.Get("X-Proxsave-Provision"); got != "1" {
+					t.Fatalf("reprovision get-chat-id X-Proxsave-Provision = %q, want 1", got)
+				}
+				getChatIDCalls++
+				body := `{"chat_id":"123","notify_secret":"` + fresh + `","status":200}`
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			case "/api/confirm-secret":
+				confirmCalls++
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+			default:
+				t.Fatalf("unexpected request path: %s", req.URL.Path)
+				return nil, nil
+			}
+		}),
+	}
+
+	notifier, err := NewTelegramNotifier(TelegramConfig{
+		Enabled:       true,
+		Mode:          TelegramModeCentralized,
+		ServerAPIHost: "https://central.test",
+		ServerID:      "server-123",
+		BaseDir:       baseDir,
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	notifier.client = client
+
+	result, err := notifier.Send(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success after reprovision, got %+v", result)
+	}
+	if getChatIDCalls != 1 {
+		t.Fatalf("expected exactly 1 reprovision get-chat-id call, got %d", getChatIDCalls)
+	}
+	if relayCalls != 2 {
+		t.Fatalf("expected 2 relay calls (reject then retry), got %d", relayCalls)
+	}
+	if confirmCalls != 1 {
+		t.Fatalf("expected exactly 1 confirm-secret call, got %d", confirmCalls)
+	}
+	if len(relayAuthSeen) != 2 || relayAuthSeen[0] != stale || relayAuthSeen[1] != fresh {
+		t.Fatalf("relay auth progression = %v, want [%q %q]", relayAuthSeen, stale, fresh)
+	}
+	if got, _ := identity.LoadNotifySecret(baseDir); got != fresh {
+		t.Fatalf("persisted secret = %q, want %q (fresh)", got, fresh)
+	}
+}
