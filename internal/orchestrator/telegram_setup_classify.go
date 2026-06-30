@@ -46,6 +46,9 @@ func ClassifyTelegramSetupResult(res notify.TelegramRegistrationResult) Telegram
 	case 426:
 		return TelegramSetupState{Code: "upgrade_required", Fatal: true,
 			Message: "Upgrade ProxSave to v0.28.0 or later to complete pairing."}
+	case notify.StatusCodeMissingServerID:
+		return TelegramSetupState{Code: "missing_identity", Fatal: true,
+			Message: "Server identity not found. Re-run the installer or regenerate the identity file."}
 	case 0:
 		return TelegramSetupState{Code: "connection_error",
 			Message: "Could not reach the pairing server. Check connectivity and press Check again."}

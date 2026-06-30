@@ -273,8 +273,14 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		return "", "", fmt.Errorf("failed to create request: %w", err)
 	}
 	pv := setProxsaveVersionHeader(req)
-	req.Header.Set(proxsaveProvisionHeader, "1") // this is a real provisioning call
-	t.logger.Debug("Telegram: get-chat-id GET (serverID=%q X-Proxsave-Version=%q provisionIntent=1)", t.config.ServerID, pv)
+	// Only ask the server to (re)issue a relay secret when we can actually persist
+	// it (BaseDir set). Otherwise the 200 body's secret is discarded below and every
+	// run would churn a fresh unconfirmed token server-side.
+	provisionIntent := t.config.BaseDir != ""
+	if provisionIntent {
+		req.Header.Set(proxsaveProvisionHeader, "1")
+	}
+	t.logger.Debug("Telegram: get-chat-id GET (serverID=%q X-Proxsave-Version=%q provisionIntent=%v)", t.config.ServerID, pv, provisionIntent)
 
 	// Make request
 	resp, err := t.client.Do(req)

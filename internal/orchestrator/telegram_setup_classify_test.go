@@ -88,6 +88,13 @@ func TestClassifyTelegramSetupResult(t *testing.T) {
 			wantMessage: "Could not reach the pairing server. Check connectivity and press Check again.",
 		},
 		{
+			name:        "missing-server-id-identity",
+			res:         notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: notify.StatusCodeMissingServerID, Error: errors.New("server ID missing")}},
+			wantCode:    "missing_identity",
+			wantMessage: "Server identity not found. Re-run the installer or regenerate the identity file.",
+			wantFatal:   true,
+		},
+		{
 			name:        "unexpected-500",
 			res:         notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 500, Message: "x"}},
 			wantCode:    "unexpected_response",
@@ -118,9 +125,10 @@ func TestClassifyTelegramSetupResult(t *testing.T) {
 }
 
 // TestClassifyTelegramSetupResult_ConnectionDistinctFromUnexpected pins that a
-// Code 0 (connection failure / missing server id) maps to a DISTINCT user-facing
-// state than an unexpected non-2xx response, so the user is told to check
-// connectivity rather than shown a raw upstream body.
+// Code 0 (genuine connection failure) maps to a DISTINCT user-facing state than an
+// unexpected non-2xx response, so the user is told to check connectivity rather
+// than shown a raw upstream body. A missing server identity is a separate sentinel
+// (StatusCodeMissingServerID), classified as missing_identity, not connection_error.
 func TestClassifyTelegramSetupResult_ConnectionDistinctFromUnexpected(t *testing.T) {
 	conn := ClassifyTelegramSetupResult(notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 0, Error: errors.New("conn")}})
 	other := ClassifyTelegramSetupResult(notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 500, Message: "x"}})

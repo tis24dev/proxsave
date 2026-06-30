@@ -15,8 +15,8 @@ func TestCheckTelegramRegistrationMissingServerID(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	status := CheckTelegramRegistration(context.Background(), "https://central.test", "", logger)
 
-	if status.Code != 0 || status.Error == nil {
-		t.Fatalf("expected missing server ID error, got %+v", status)
+	if status.Code != StatusCodeMissingServerID || status.Error == nil {
+		t.Fatalf("expected missing server ID sentinel, got %+v", status)
 	}
 }
 

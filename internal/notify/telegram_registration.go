@@ -39,6 +39,11 @@ type TelegramRegistrationStatus struct {
 	Error   error
 }
 
+// StatusCodeMissingServerID is a sentinel (non-HTTP, negative) status Code set when
+// the local server identity is missing, so the classifier can give identity-specific
+// guidance instead of generic connectivity copy. Real transport failures keep Code 0.
+const StatusCodeMissingServerID = -1
+
 // TelegramProvisionOutcome records what the best-effort persist+confirm phase did
 // after a 200. It NEVER alters the returned registration Status. NotApplicable is
 // the zero value, so a stub building TelegramRegistrationResult{Status:...} on a
@@ -46,7 +51,7 @@ type TelegramRegistrationStatus struct {
 type TelegramProvisionOutcome int
 
 const (
-	TelegramProvisionNotApplicable TelegramProvisionOutcome = iota // non-200 (zero value)
+	TelegramProvisionNotApplicable TelegramProvisionOutcome = iota // non-200; also the 200-only stub default (see type doc)
 	TelegramProvisionNoToken                                       // 200, server issued no token
 	TelegramProvisionConfirmed                                     // persisted AND confirmed
 	TelegramProvisionPersistFailed                                 // empty baseDir, or persist failed -> no confirm
@@ -84,7 +89,7 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 	if serverID == "" {
 		logTelegramRegistrationDebug(logger, "Telegram registration: missing serverID (empty string)")
 		return TelegramRegistrationStatus{
-			Code:    0,
+			Code:    StatusCodeMissingServerID,
 			Message: "SERVER_ID not available",
 			Error:   fmt.Errorf("server ID missing"),
 		}, ""
