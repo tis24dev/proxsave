@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -25,11 +26,66 @@ import (
 const (
 	identityDirName       = "identity"
 	identityFileName      = ".server_identity"
+	notifySecretFileName  = ".notify_secret"
 	maxProcVersionBytes   = 100
 	maxMachineIDBytes     = 32
 	systemKeyPrefixLength = 8
 	serverIDLength        = 16
 )
+
+// notifySecretFormat matches the server's generate_notify_secret output: lowercase
+// alphanumeric blocks separated by single dashes (e.g. 3h64-dyi8-q3d6-wcm5). It is
+// used only to reject a corrupted file, never to reject server-issued values strictly.
+var notifySecretFormat = regexp.MustCompile(`^[0-9a-z]+(-[0-9a-z]+)*$`)
+
+// NotifySecretPath returns the immutable identity-file path for the relay secret.
+func NotifySecretPath(baseDir string) string {
+	return filepath.Join(strings.TrimSpace(baseDir), identityDirName, notifySecretFileName)
+}
+
+// PersistNotifySecret writes the per-server relay secret into the same immutable
+// identity mechanism used for .server_identity (0600 + chattr +i), reusing
+// writeIdentityFileWithContext. Overwrite-safe: the helper clears +i first.
+func PersistNotifySecret(ctx context.Context, baseDir, secret string, logger *logging.Logger) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		return fmt.Errorf("base directory is empty; cannot persist notify secret")
+	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return fmt.Errorf("refusing to persist an empty notify secret")
+	}
+	dir := filepath.Join(baseDir, identityDirName)
+	if err := os.MkdirAll(dir, 0o750); err != nil { // same mode as Detect
+		return fmt.Errorf("failed to create identity directory %s: %w", dir, err)
+	}
+	return writeIdentityFileWithContext(ctx, filepath.Join(dir, notifySecretFileName), secret+"\n", logger)
+}
+
+// LoadNotifySecret returns the persisted relay secret, or ("", nil) when the file
+// is absent, empty, or fails the format check (junk is ignored rather than fed
+// into the auth header).
+func LoadNotifySecret(baseDir string) (string, error) {
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(filepath.Join(baseDir, identityDirName, notifySecretFileName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	secret := strings.TrimSpace(string(data))
+	if secret == "" || !notifySecretFormat.MatchString(secret) {
+		return "", nil
+	}
+	return secret, nil
+}
 
 // Info contains server identity information.
 type Info struct {

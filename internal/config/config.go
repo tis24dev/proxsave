@@ -192,7 +192,7 @@ type Config struct {
 	TelegramChatID        string // For personal mode
 	TelegramServerAPIHost string // For centralized mode
 	ServerID              string // Server identifier for centralized mode
-	TelegramNotifySecret  string // Per-server relay secret (centralized mode); empty = legacy token-fetch
+	TelegramNotifySecret  string // Deprecated: no longer read from backup.env; the relay secret is provisioned via TOFU into the immutable identity file. Kept "" for compatibility.
 
 	// Email Notifications
 	EmailEnabled          bool
@@ -387,7 +387,6 @@ func (c *Config) loadEnvOverrides() {
 		"RETENTION_DAILY", "RETENTION_WEEKLY", "RETENTION_MONTHLY", "RETENTION_YEARLY",
 		"BUNDLE_ASSOCIATED_FILES", "ENCRYPT_ARCHIVE", "AGE_RECIPIENT", "AGE_RECIPIENT_FILE",
 		"TELEGRAM_ENABLE", "TELEGRAM_ENABLED", "BOT_TELEGRAM_TYPE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
-		"TELEGRAM_NOTIFY_SECRET",
 		"EMAIL_ENABLE", "EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_PMF", "EMAIL_FALLBACK_SENDMAIL",
 		"EMAIL_RECIPIENT", "EMAIL_FROM",
 		"GOTIFY_ENABLE", "GOTIFY_ENABLED", "GOTIFY_SERVER_URL", "GOTIFY_TOKEN",
@@ -731,7 +730,7 @@ func (c *Config) parseNotificationSettings() {
 	c.TelegramChatID = c.getString("TELEGRAM_CHAT_ID", "")
 	c.TelegramServerAPIHost = "https://bot.tis24.it:1443"
 	c.ServerID = ""
-	c.TelegramNotifySecret = strings.TrimSpace(c.getString("TELEGRAM_NOTIFY_SECRET", ""))
+	c.TelegramNotifySecret = "" // no longer read from backup.env; provisioned via TOFU into the immutable identity file
 
 	c.EmailEnabled = c.getBoolWithLegacyAlias(emailEnabledKey, emailEnableLegacyKey, false)
 	c.EmailDeliveryMethod = NormalizeEmailDeliveryMethod(c.getString("EMAIL_DELIVERY_METHOD", "relay"))

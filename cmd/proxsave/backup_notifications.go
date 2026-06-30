@@ -103,6 +103,7 @@ func initializeTelegramNotification(opts backupModeOptions, orch *orchestrator.O
 		ServerAPIHost: cfg.TelegramServerAPIHost,
 		ServerID:      cfg.ServerID,
 		NotifySecret:  cfg.TelegramNotifySecret,
+		BaseDir:       cfg.BaseDir,
 	}
 	telegramNotifier, err := notify.NewTelegramNotifier(telegramConfig, logger)
 	if err != nil {

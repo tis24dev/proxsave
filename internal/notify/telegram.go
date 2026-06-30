@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -32,6 +33,7 @@ type TelegramConfig struct {
 	ServerAPIHost string // For centralized mode
 	ServerID      string // Server identifier for centralized mode
 	NotifySecret  string // Per-server relay secret; when set, use the server-side relay
+	BaseDir       string // Identity store root for lazy-load / persist of the relay secret
 }
 
 // TelegramNotifier implements the Notifier interface for Telegram
@@ -43,10 +45,11 @@ type TelegramNotifier struct {
 
 // Telegram API response for centralized mode
 type telegramCentralizedResponse struct {
-	BotToken string `json:"bot_token"`
-	ChatID   string `json:"chat_id"`
-	Status   int    `json:"status"`
-	Message  string `json:"message,omitempty"`
+	BotToken     string `json:"bot_token"`
+	ChatID       string `json:"chat_id"`
+	Status       int    `json:"status"`
+	Message      string `json:"message,omitempty"`
+	NotifySecret string `json:"notify_secret"` // TOFU one-time provisioning
 }
 
 // Token and ChatID validation regex patterns
@@ -134,6 +137,18 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 		return result, nil
 	}
 
+	// Lazily adopt a previously provisioned per-server secret from the
+	// immutable identity file so the relay is used without fetching the token.
+	if t.config.Mode == TelegramModeCentralized && t.config.NotifySecret == "" && t.config.BaseDir != "" {
+		if sec, err := identity.LoadNotifySecret(t.config.BaseDir); err != nil {
+			t.logger.Debug("Telegram: could not read persisted relay secret: %v", err)
+		} else if sec != "" {
+			t.config.NotifySecret = sec
+			t.logger.RegisterSecret(sec)
+			t.logger.Debug("Telegram: loaded persisted per-server relay secret")
+		}
+	}
+
 	// Secure relay path: when a per-server secret is provisioned, the bot
 	// token never leaves the host. The server looks up the chat and sends
 	// the message itself. Falls back to the legacy path when no secret set.
@@ -159,13 +174,31 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	if t.config.Mode == TelegramModeCentralized {
 		t.logger.Debug("Fetching Telegram credentials from central server...")
 		var err error
-		botToken, chatID, err = t.fetchCentralizedCredentials(ctx)
+		botToken, chatID, err = t.fetchCentralizedCredentials(ctx) // may TOFU-provision+persist+set NotifySecret
 		if err != nil {
 			t.logger.Warning("WARNING: Failed to fetch Telegram credentials: %v", err)
 			result.Success = false
 			result.Error = err
 			result.Duration = time.Since(startTime)
 			return result, nil // Non-critical error, don't abort backup
+		}
+
+		// First-run provisioning: if the fetch just delivered a fresh secret,
+		// deliver THIS run via the relay so the new secret is used and the bot
+		// token is not.
+		if t.config.NotifySecret != "" {
+			message := t.buildMessage(data)
+			if err := t.sendViaRelay(ctx, message); err != nil {
+				t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
+				result.Success = false
+				result.Error = err
+				result.Duration = time.Since(startTime)
+				return result, nil // Non-critical error, don't abort backup
+			}
+			t.logger.Debug("Telegram relay confirmed delivery (first-run provisioning)")
+			result.Success = true
+			result.Duration = time.Since(startTime)
+			return result, nil
 		}
 	}
 
@@ -234,6 +267,28 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		var response telegramCentralizedResponse
 		if err := json.Unmarshal(body, &response); err != nil {
 			return "", "", fmt.Errorf("failed to parse response: %w", err)
+		}
+
+		// TOFU: the server rides the per-server relay secret back on this 200
+		// the first time we are linked and have no secret yet. Persist it into
+		// the immutable identity file and adopt it, independent of the bot
+		// token's presence (Phase-3-ready). The secret is never logged.
+		if response.NotifySecret != "" && t.config.NotifySecret == "" && t.config.BaseDir != "" {
+			provisioned := strings.TrimSpace(response.NotifySecret)
+			if provisioned != "" {
+				t.logger.RegisterSecret(provisioned) // mask before any I/O can echo it
+				if err := identity.PersistNotifySecret(ctx, t.config.BaseDir, provisioned, t.logger); err != nil {
+					t.logger.Warning("WARNING: failed to persist provisioned relay secret: %v", err)
+				} else {
+					t.config.NotifySecret = provisioned
+					t.logger.Debug("Telegram: provisioned and persisted per-server relay secret")
+				}
+			}
+		}
+
+		// With a relay secret in hand, the bot token is irrelevant for this run.
+		if t.config.NotifySecret != "" {
+			return response.BotToken, response.ChatID, nil
 		}
 
 		// Validate credentials

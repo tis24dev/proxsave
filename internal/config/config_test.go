@@ -676,7 +676,10 @@ func TestParseTelegramNotifySecret(t *testing.T) {
 		}
 	})
 
-	t.Run("parses and trims value", func(t *testing.T) {
+	t.Run("ignored when present", func(t *testing.T) {
+		// The relay secret is no longer read from backup.env; it is provisioned
+		// via TOFU into the immutable identity file. Any value present in the
+		// config must be ignored.
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "with_secret.env")
 		content := "TELEGRAM_ENABLED=true\nTELEGRAM_NOTIFY_SECRET=  relay-secret-abc123  \n"
@@ -689,8 +692,8 @@ func TestParseTelegramNotifySecret(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadConfig() error = %v", err)
 		}
-		if cfg.TelegramNotifySecret != "relay-secret-abc123" {
-			t.Fatalf("TelegramNotifySecret = %q; want relay-secret-abc123", cfg.TelegramNotifySecret)
+		if cfg.TelegramNotifySecret != "" {
+			t.Fatalf("TelegramNotifySecret = %q; the secret must not be read from backup.env", cfg.TelegramNotifySecret)
 		}
 	})
 }
