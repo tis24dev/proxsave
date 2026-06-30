@@ -81,7 +81,8 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 		logTelegramRegistrationDebug(logger, "Telegram registration: failed to create request: %v", err)
 		return TelegramRegistrationStatus{Message: "Failed to create HTTP request", Error: err}, ""
 	}
-	setProxsaveVersionHeader(req) // keep X-Proxsave-Version on ALL get-chat-id requests
+	pv := setProxsaveVersionHeader(req) // keep X-Proxsave-Version on ALL get-chat-id requests
+	logTelegramRegistrationDebug(logger, "Telegram registration: X-Proxsave-Version=%q", pv)
 	logTelegramRegistrationDebug(logger, "Telegram registration: performing HTTP request (method=%s host=%s path=%s)", req.Method, req.URL.Host, req.URL.Path)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -101,6 +102,7 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 		if secret != "" && logger != nil {
 			logger.RegisterSecret(secret)
 		}
+		logTelegramRegistrationDebug(logger, "Telegram registration: 200 body parsed (notifySecretPresent=%v len=%d)", secret != "", len(secret))
 	}
 
 	logTelegramRegistrationDebug(logger, "Telegram registration: response status=%d bodyBytes=%d bodyPreview=%q", resp.StatusCode, len(body), truncateTelegramRegistrationBody(body, 200))
@@ -145,12 +147,15 @@ func CheckTelegramRegistration(ctx context.Context, serverAPIHost, serverID stri
 func CheckTelegramRegistrationAndProvision(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) TelegramRegistrationStatus {
 	status, secret := checkTelegramRegistrationWithSecret(ctx, serverAPIHost, serverID, logger)
 	if status.Code != 200 || secret == "" || strings.TrimSpace(baseDir) == "" {
+		logTelegramRegistrationDebug(logger, "Telegram registration: skip provisioning (statusCode=%d secretPresent=%v baseDir=%q)", status.Code, secret != "", baseDir)
 		return status
 	}
 	// Idempotent: never clobber a secret already on disk.
-	if existing, _ := identity.LoadNotifySecret(baseDir); existing != "" {
+	if existing, _ := identity.LoadNotifySecret(baseDir, logger); existing != "" {
+		logTelegramRegistrationDebug(logger, "Telegram registration: relay secret already persisted (len=%d), skipping provisioning", len(existing))
 		return status
 	}
+	logTelegramRegistrationDebug(logger, "Telegram registration: provisioning relay secret -> %s", identity.NotifySecretPath(baseDir))
 	if err := identity.PersistNotifySecret(ctx, baseDir, secret, logger); err != nil {
 		logTelegramRegistrationDebug(logger, "Telegram registration: failed to persist provisioned relay secret: %v", err)
 		return status // non-fatal: status unchanged

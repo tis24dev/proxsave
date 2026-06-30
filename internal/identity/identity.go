@@ -52,38 +52,61 @@ func PersistNotifySecret(ctx context.Context, baseDir, secret string, logger *lo
 	}
 	baseDir = strings.TrimSpace(baseDir)
 	if baseDir == "" {
+		logDebug(logger, "Identity: PersistNotifySecret: empty baseDir, refusing")
 		return fmt.Errorf("base directory is empty; cannot persist notify secret")
 	}
 	secret = strings.TrimSpace(secret)
 	if secret == "" {
+		logDebug(logger, "Identity: PersistNotifySecret: empty secret, refusing")
 		return fmt.Errorf("refusing to persist an empty notify secret")
 	}
 	dir := filepath.Join(baseDir, identityDirName)
 	if err := os.MkdirAll(dir, 0o750); err != nil { // same mode as Detect
+		logDebug(logger, "Identity: PersistNotifySecret: mkdir %s failed: %v", dir, err)
 		return fmt.Errorf("failed to create identity directory %s: %w", dir, err)
 	}
-	return writeIdentityFileWithContext(ctx, filepath.Join(dir, notifySecretFileName), secret+"\n", logger)
+	path := filepath.Join(dir, notifySecretFileName)
+	logDebug(logger, "Identity: PersistNotifySecret: writing immutable secret file %s (len=%d)", path, len(secret))
+	if err := writeIdentityFileWithContext(ctx, path, secret+"\n", logger); err != nil {
+		logDebug(logger, "Identity: PersistNotifySecret: write failed for %s: %v", path, err)
+		return err
+	}
+	logDebug(logger, "Identity: PersistNotifySecret: persisted (0600 + immutable) to %s", path)
+	return nil
 }
 
 // LoadNotifySecret returns the persisted relay secret, or ("", nil) when the file
 // is absent, empty, or fails the format check (junk is ignored rather than fed
 // into the auth header).
-func LoadNotifySecret(baseDir string) (string, error) {
+func LoadNotifySecret(baseDir string, logger ...*logging.Logger) (string, error) {
+	var lg *logging.Logger
+	if len(logger) > 0 {
+		lg = logger[0]
+	}
 	baseDir = strings.TrimSpace(baseDir)
 	if baseDir == "" {
 		return "", nil
 	}
-	data, err := os.ReadFile(filepath.Join(baseDir, identityDirName, notifySecretFileName))
+	path := filepath.Join(baseDir, identityDirName, notifySecretFileName)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			logDebug(lg, "Identity: LoadNotifySecret: no secret file at %s", path)
 			return "", nil
 		}
+		logDebug(lg, "Identity: LoadNotifySecret: read failed for %s: %v", path, err)
 		return "", err
 	}
 	secret := strings.TrimSpace(string(data))
-	if secret == "" || !notifySecretFormat.MatchString(secret) {
+	if secret == "" {
+		logDebug(lg, "Identity: LoadNotifySecret: secret file empty at %s", path)
 		return "", nil
 	}
+	if !notifySecretFormat.MatchString(secret) {
+		logDebug(lg, "Identity: LoadNotifySecret: ignoring malformed secret at %s (len=%d)", path, len(secret))
+		return "", nil
+	}
+	logDebug(lg, "Identity: LoadNotifySecret: loaded secret from %s (len=%d)", path, len(secret))
 	return secret, nil
 }
 

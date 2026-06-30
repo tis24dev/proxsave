@@ -23,8 +23,10 @@ const proxsaveVersionHeader = "X-Proxsave-Version"
 
 // setProxsaveVersionHeader stamps an outbound central-server request with the
 // normalized ProxSave version (e.g. "0.28.0").
-func setProxsaveVersionHeader(req *http.Request) {
-	req.Header.Set(proxsaveVersionHeader, version.String())
+func setProxsaveVersionHeader(req *http.Request) string {
+	v := version.String()
+	req.Header.Set(proxsaveVersionHeader, v)
+	return v
 }
 
 // TelegramMode represents the Telegram bot configuration mode
@@ -148,15 +150,21 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 		return result, nil
 	}
 
+	if t.config.Mode == TelegramModeCentralized {
+		t.logger.Debug("Telegram: send start (mode=centralized serverID=%q secretPreloaded=%v baseDir=%q)", t.config.ServerID, t.config.NotifySecret != "", t.config.BaseDir)
+	}
+
 	// Lazily adopt a previously provisioned per-server secret from the
 	// immutable identity file so the relay is used without fetching the token.
 	if t.config.Mode == TelegramModeCentralized && t.config.NotifySecret == "" && t.config.BaseDir != "" {
-		if sec, err := identity.LoadNotifySecret(t.config.BaseDir); err != nil {
+		if sec, err := identity.LoadNotifySecret(t.config.BaseDir, t.logger); err != nil {
 			t.logger.Debug("Telegram: could not read persisted relay secret: %v", err)
 		} else if sec != "" {
 			t.config.NotifySecret = sec
 			t.logger.RegisterSecret(sec)
-			t.logger.Debug("Telegram: loaded persisted per-server relay secret")
+			t.logger.Debug("Telegram: loaded persisted per-server relay secret (len=%d)", len(sec))
+		} else {
+			t.logger.Debug("Telegram: no persisted relay secret on disk; will attempt provisioning during fetch")
 		}
 	}
 
@@ -164,6 +172,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	// token never leaves the host. The server looks up the chat and sends
 	// the message itself. Falls back to the legacy path when no secret set.
 	if t.config.Mode == TelegramModeCentralized && t.config.NotifySecret != "" {
+		t.logger.Debug("Telegram: using server-side relay path (bot token stays on host)")
 		message := t.buildMessage(data)
 		if err := t.sendViaRelay(ctx, message); err != nil {
 			t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
@@ -198,6 +207,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 		// deliver THIS run via the relay so the new secret is used and the bot
 		// token is not.
 		if t.config.NotifySecret != "" {
+			t.logger.Debug("Telegram: fetch provisioned a fresh relay secret; relaying this run")
 			message := t.buildMessage(data)
 			if err := t.sendViaRelay(ctx, message); err != nil {
 				t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
@@ -227,6 +237,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	message := t.buildMessage(data)
 
 	// Send to Telegram API
+	t.logger.Debug("Telegram: legacy direct send via bot token (token leaves host; mode=%s)", t.config.Mode)
 	err := t.sendToTelegram(ctx, botToken, chatID, message)
 	if err != nil {
 		t.logger.Warning("WARNING: Failed to send Telegram notification: %v", err)
@@ -257,7 +268,8 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create request: %w", err)
 	}
-	setProxsaveVersionHeader(req)
+	pv := setProxsaveVersionHeader(req)
+	t.logger.Debug("Telegram: get-chat-id GET (serverID=%q X-Proxsave-Version=%q)", t.config.ServerID, pv)
 
 	// Make request
 	resp, err := t.client.Do(req)
@@ -280,6 +292,7 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		if err := json.Unmarshal(body, &response); err != nil {
 			return "", "", fmt.Errorf("failed to parse response: %w", err)
 		}
+		t.logger.Debug("Telegram: get-chat-id 200 (notifySecretPresent=%v botTokenPresent=%v chatIDPresent=%v)", response.NotifySecret != "", response.BotToken != "", response.ChatID != "")
 
 		// TOFU: the server rides the per-server relay secret back on this 200
 		// the first time we are linked and have no secret yet. Persist it into
@@ -353,7 +366,8 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message string) err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Server-Auth", t.config.NotifySecret)
-	setProxsaveVersionHeader(req)
+	pv := setProxsaveVersionHeader(req)
+	t.logger.Debug("Telegram: relay POST %s (serverID=%q msgLen=%d X-Proxsave-Version=%q)", endpoint, t.config.ServerID, len(message), pv)
 
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -363,6 +377,7 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message string) err
 
 	switch resp.StatusCode {
 	case 200:
+		t.logger.Debug("Telegram: relay delivered (HTTP 200)")
 		return nil
 	case 401, 403:
 		return fmt.Errorf("relay auth rejected (HTTP %d)", resp.StatusCode)
