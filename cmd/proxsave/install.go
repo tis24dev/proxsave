@@ -197,7 +197,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 		for _, s := range suggestions {
 			keys = append(keys, s.Key)
 		}
-		bootstrap.Info("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
+		bootstrap.Debug("Post-install audit: suggested disables (%d): %s", len(keys), strings.Join(keys, ", "))
 	}
 	for _, s := range suggestions {
 		reason := ""
@@ -269,7 +269,8 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 
 	fmt.Printf("✓ Updated %s: disabled %d component(s): %s\n", configPath, len(keys), strings.Join(keys, ", "))
 	if bootstrap != nil {
-		bootstrap.Info("Post-install audit: disabled (%d): %s", len(keys), strings.Join(keys, ", "))
+		bootstrap.Info("Post-install audit: disabled %d of %d unused component(s)", len(keys), len(suggestions))
+		bootstrap.Debug("Post-install audit: disabled keys: %s", strings.Join(keys, ", "))
 	}
 	return nil
 }
