@@ -21,6 +21,10 @@ import (
 // server can gate version-specific behavior (e.g. the one-time secret handoff).
 const proxsaveVersionHeader = "X-Proxsave-Version"
 
+// proxsaveProvisionHeader marks a real provisioning call (issue/re-issue the relay
+// secret). Sent ONLY by the two provisioning paths, never the bare status probe.
+const proxsaveProvisionHeader = "X-Proxsave-Provision"
+
 // setProxsaveVersionHeader stamps an outbound central-server request with the
 // normalized ProxSave version (e.g. "0.28.0").
 func setProxsaveVersionHeader(req *http.Request) string {
@@ -269,7 +273,8 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		return "", "", fmt.Errorf("failed to create request: %w", err)
 	}
 	pv := setProxsaveVersionHeader(req)
-	t.logger.Debug("Telegram: get-chat-id GET (serverID=%q X-Proxsave-Version=%q)", t.config.ServerID, pv)
+	req.Header.Set(proxsaveProvisionHeader, "1") // this is a real provisioning call
+	t.logger.Debug("Telegram: get-chat-id GET (serverID=%q X-Proxsave-Version=%q provisionIntent=1)", t.config.ServerID, pv)
 
 	// Make request
 	resp, err := t.client.Do(req)
@@ -294,19 +299,20 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		}
 		t.logger.Debug("Telegram: get-chat-id 200 (notifySecretPresent=%v botTokenPresent=%v chatIDPresent=%v)", response.NotifySecret != "", response.BotToken != "", response.ChatID != "")
 
-		// TOFU: the server rides the per-server relay secret back on this 200
-		// the first time we are linked and have no secret yet. Persist it into
-		// the immutable identity file and adopt it, independent of the bot
-		// token's presence (Phase-3-ready). The secret is never logged.
-		if response.NotifySecret != "" && t.config.NotifySecret == "" && t.config.BaseDir != "" {
-			provisioned := strings.TrimSpace(response.NotifySecret)
-			if provisioned != "" {
-				t.logger.RegisterSecret(provisioned) // mask before any I/O can echo it
-				if err := identity.PersistNotifySecret(ctx, t.config.BaseDir, provisioned, t.logger); err != nil {
-					t.logger.Warning("WARNING: failed to persist provisioned relay secret: %v", err)
-				} else {
-					t.config.NotifySecret = provisioned
-					t.logger.Debug("Telegram: provisioned and persisted per-server relay secret")
+		// Adopt-on-token-present: whenever a 200 carries a notify_secret, the
+		// server wants the client to (re)adopt it, so we OVERWRITE any existing
+		// persisted secret (no idempotent skip, or a re-issued token would be
+		// stranded) and then CONFIRM it. When the body carries no token we keep
+		// whatever we already have. The secret is never logged.
+		if provisioned := strings.TrimSpace(response.NotifySecret); provisioned != "" && t.config.BaseDir != "" {
+			t.logger.RegisterSecret(provisioned) // mask before any I/O can echo it
+			if err := identity.PersistNotifySecret(ctx, t.config.BaseDir, provisioned, t.logger); err != nil {
+				t.logger.Warning("WARNING: failed to persist provisioned relay secret: %v", err)
+			} else {
+				t.config.NotifySecret = provisioned // adopt in-memory for this run
+				t.logger.Debug("Telegram: adopted+persisted per-server relay secret (overwrite)")
+				if err := confirmTelegramRelaySecret(ctx, t.client, t.config.ServerAPIHost, t.config.ServerID, provisioned, t.logger); err != nil {
+					t.logger.Debug("Telegram: relay secret confirm failed (non-fatal): %v", err)
 				}
 			}
 		}

@@ -25,7 +25,7 @@ func TestSendCentralizedTOFUProvisionsThenRelays(t *testing.T) {
 	const secret = "3h64-dyi8-q3d6-wcm5"
 	const botToken = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
-	var getChatIDCalls, relayCalls int
+	var getChatIDCalls, relayCalls, confirmCalls int
 	client := &http.Client{
 		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 			if strings.Contains(req.URL.Host, "api.telegram.org") {
@@ -36,11 +36,27 @@ func TestSendCentralizedTOFUProvisionsThenRelays(t *testing.T) {
 				if got := req.Header.Get("X-Proxsave-Version"); got != version.String() {
 					t.Fatalf("get-chat-id X-Proxsave-Version = %q, want %q", got, version.String())
 				}
+				if got := req.Header.Get("X-Proxsave-Provision"); got != "1" {
+					t.Fatalf("get-chat-id X-Proxsave-Provision = %q, want %q", got, "1")
+				}
 				getChatIDCalls++
 				body := `{"chat_id":"123","bot_token":"` + botToken + `","notify_secret":"` + secret + `","status":200}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(body)),
+					Header:     make(http.Header),
+				}, nil
+			case "/api/confirm-secret":
+				if got := req.Header.Get("X-Server-Auth"); got != secret {
+					t.Fatalf("confirm X-Server-Auth = %q, want %q", got, secret)
+				}
+				if got := req.Header.Get("X-Proxsave-Version"); got != version.String() {
+					t.Fatalf("confirm X-Proxsave-Version = %q, want %q", got, version.String())
+				}
+				confirmCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"status":"ok"}`)),
 					Header:     make(http.Header),
 				}, nil
 			case "/api/notify":
@@ -87,6 +103,9 @@ func TestSendCentralizedTOFUProvisionsThenRelays(t *testing.T) {
 	}
 	if relayCalls != 1 {
 		t.Fatalf("expected exactly 1 relay call, got %d", relayCalls)
+	}
+	if confirmCalls != 1 {
+		t.Fatalf("expected exactly 1 confirm-secret call, got %d", confirmCalls)
 	}
 
 	persisted, err := identity.LoadNotifySecret(baseDir)

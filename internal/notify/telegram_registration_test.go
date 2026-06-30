@@ -63,9 +63,10 @@ func TestCheckTelegramRegistrationResponses(t *testing.T) {
 func TestCheckTelegramRegistrationSendsVersionHeader(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 
-	var captured string
+	var captured, capturedProvision string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured = r.Header.Get("X-Proxsave-Version")
+		capturedProvision = r.Header.Get("X-Proxsave-Provision")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -78,5 +79,9 @@ func TestCheckTelegramRegistrationSendsVersionHeader(t *testing.T) {
 	}
 	if captured != version.String() {
 		t.Fatalf("X-Proxsave-Version = %q, want %q", captured, version.String())
+	}
+	// The bare status probe must never carry provision-intent.
+	if capturedProvision != "" {
+		t.Fatalf("X-Proxsave-Provision = %q, want empty on the public status path", capturedProvision)
 	}
 }
