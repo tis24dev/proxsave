@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -87,8 +88,13 @@ func LoadNotifySecret(baseDir string, logger ...*logging.Logger) (string, error)
 	if baseDir == "" {
 		return "", nil
 	}
-	path := filepath.Join(baseDir, identityDirName, notifySecretFileName)
-	data, err := os.ReadFile(path)
+	dir := filepath.Join(baseDir, identityDirName)
+	path := filepath.Join(dir, notifySecretFileName)
+	// Read the secret confined to the identity directory via os.Root so the path is
+	// no longer a raw variable sink and a symlink or ".." cannot escape it, resolving
+	// the gosec G304 finding structurally (no #nosec). The basename is a constant; a
+	// missing directory or file still surfaces as os.ErrNotExist below.
+	data, err := readFileUnderRoot(dir, notifySecretFileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			logDebug(lg, "Identity: LoadNotifySecret: no secret file at %s", path)
@@ -108,6 +114,28 @@ func LoadNotifySecret(baseDir string, logger ...*logging.Logger) (string, error)
 	}
 	logDebug(lg, "Identity: LoadNotifySecret: loaded secret from %s (len=%d)", path, len(secret))
 	return secret, nil
+}
+
+// readFileUnderRoot reads name (a single basename) from dir through an *os.Root on
+// dir, confining the read there at the syscall level: the path is no longer a raw
+// variable sink and a symlink or ".." in name cannot escape the directory. This
+// mirrors checks.readLockFileContent and resolves the gosec G304 finding
+// structurally rather than with a suppression. A missing directory or file
+// surfaces as os.ErrNotExist, matching os.ReadFile.
+func readFileUnderRoot(dir, name string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	return io.ReadAll(f)
 }
 
 // Info contains server identity information.
@@ -431,7 +459,9 @@ func loadServerID(path string, macs []string, logger *logging.Logger) (string, s
 		logDebug(logger, "Identity: identity file stat failed: path=%s err=%v", path, err)
 	}
 
-	data, err := os.ReadFile(path)
+	// Read confined to the identity directory via os.Root (structural gosec G304
+	// fix, no #nosec); see readFileUnderRoot.
+	data, err := readFileUnderRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return "", "", err
 	}
@@ -840,7 +870,9 @@ func maybeUpgradeIdentityFileWithContext(ctx context.Context, path string, serve
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	data, err := os.ReadFile(path)
+	// Read confined to the identity directory via os.Root (structural gosec G304
+	// fix, no #nosec); see readFileUnderRoot.
+	data, err := readFileUnderRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return nil
 	}
