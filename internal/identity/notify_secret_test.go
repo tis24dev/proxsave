@@ -102,3 +102,16 @@ func TestPersistNotifySecretRejectsEmpty(t *testing.T) {
 		t.Fatalf("expected no notify secret file, stat err = %v", err)
 	}
 }
+
+func TestPersistNotifySecretRejectsMalformed(t *testing.T) {
+	baseDir := t.TempDir()
+	// Outside notifySecretFormat (uppercase + space + punctuation): the load path
+	// would drop it, so persist must refuse it to keep the read/write contract
+	// symmetric (a persisted secret always reloads).
+	if err := PersistNotifySecret(context.Background(), baseDir, "Bad Secret!!", nil); err == nil {
+		t.Fatalf("PersistNotifySecret() expected an error for a malformed secret")
+	}
+	if _, err := os.Stat(NotifySecretPath(baseDir)); !os.IsNotExist(err) {
+		t.Fatalf("expected no notify secret file written, stat err = %v", err)
+	}
+}

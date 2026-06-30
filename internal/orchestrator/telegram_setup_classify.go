@@ -53,7 +53,10 @@ func ClassifyTelegramSetupResult(res notify.TelegramRegistrationResult) Telegram
 		return TelegramSetupState{Code: "connection_error",
 			Message: "Could not reach the pairing server. Check connectivity and press Check again."}
 	default:
+		// Untrusted upstream text: strip terminal/control sequences AND truncate in
+		// this shared path so both the CLI and the TUI render the same safe copy
+		// (the TUI only tview.Escapes, so control bytes must be removed here).
 		return TelegramSetupState{Code: "unexpected_response",
-			Message: TruncateTelegramSetupStatusMessage(res.Status.Message)}
+			Message: SanitizeTelegramSetupStatusMessage(res.Status.Message)}
 	}
 }

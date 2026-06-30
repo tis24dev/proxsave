@@ -61,6 +61,13 @@ func PersistNotifySecret(ctx context.Context, baseDir, secret string, logger *lo
 		logDebug(logger, "Identity: PersistNotifySecret: empty secret, refusing")
 		return fmt.Errorf("refusing to persist an empty notify secret")
 	}
+	// Validate against the SAME format LoadNotifySecret enforces, so a persisted
+	// secret always reloads (otherwise a non-conforming value would be written but
+	// silently dropped on the next run, forcing reprovisioning).
+	if !notifySecretFormat.MatchString(secret) {
+		logDebug(logger, "Identity: PersistNotifySecret: malformed secret, refusing (len=%d)", len(secret))
+		return fmt.Errorf("refusing to persist a malformed notify secret")
+	}
 	dir := filepath.Join(baseDir, identityDirName)
 	if err := os.MkdirAll(dir, 0o750); err != nil { // same mode as Detect
 		logDebug(logger, "Identity: PersistNotifySecret: mkdir %s failed: %v", dir, err)

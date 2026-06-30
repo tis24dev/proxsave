@@ -120,6 +120,34 @@ func TestCheckTelegramRegistrationAndProvisionPersistsSecretAndMasksLog(t *testi
 	}
 }
 
+// TestCheckTelegramRegistrationMasksBotTokenInBodyPreview guards the bot-token
+// leak: the get-chat-id 200 body also carries bot_token, which must be registered
+// with the masker BEFORE the body-preview line so it never appears raw in logs.
+func TestCheckTelegramRegistrationMasksBotTokenInBodyPreview(t *testing.T) {
+	logger, buf := newProvisionTestLogger()
+	baseDir := t.TempDir()
+
+	const botToken = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+	var capture provisionCapture
+	body := `{"chat_id":"123","bot_token":"` + botToken + `","notify_secret":"` + provisionTestSecret + `","status":200}`
+	server := routingSecretServer(t, body, http.StatusOK, &capture)
+	defer server.Close()
+
+	_ = CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "bodyPreview") {
+		t.Fatalf("expected the body-preview line to be logged, got:\n%s", logged)
+	}
+	if strings.Contains(logged, botToken) {
+		t.Fatalf("plaintext bot_token leaked into log output:\n%s", logged)
+	}
+	if strings.Contains(logged, provisionTestSecret) {
+		t.Fatalf("plaintext notify_secret leaked into log output:\n%s", logged)
+	}
+}
+
 func TestCheckTelegramRegistrationAndProvisionNoSecretNoPersist(t *testing.T) {
 	logger, _ := newProvisionTestLogger()
 	baseDir := t.TempDir()

@@ -161,3 +161,24 @@ func TestClassifyTelegramSetupResult_TruncatesUnexpectedMessage(t *testing.T) {
 		t.Fatalf("message length=%d runes, want <= %d", len(runes), TelegramSetupStatusMessageMaxRunes)
 	}
 }
+
+// TestClassifyTelegramSetupResult_SanitizesUnexpectedBody pins that the shared
+// classifier strips terminal/control sequences from untrusted upstream text, so
+// the TUI (which only tview.Escapes) cannot be garbled or injected by a hostile
+// relay response.
+func TestClassifyTelegramSetupResult_SanitizesUnexpectedBody(t *testing.T) {
+	raw := "weird\x1b[31m body\x07\twith\x00controls\x9b2K"
+	st := ClassifyTelegramSetupResult(notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 500, Message: raw}})
+
+	if st.Code != "unexpected_response" {
+		t.Fatalf("Code=%q, want unexpected_response", st.Code)
+	}
+	if st.Message == "" {
+		t.Fatalf("expected a non-empty sanitized message")
+	}
+	for _, r := range st.Message {
+		if r == 0x1b || r == 0x9b || r == 0x07 || r == 0x00 || r == '\t' {
+			t.Fatalf("classifier left a control/escape byte (%#x) in Message: %q", r, st.Message)
+		}
+	}
+}

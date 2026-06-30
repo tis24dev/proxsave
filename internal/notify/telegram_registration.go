@@ -76,6 +76,20 @@ func parseTelegramNotifySecret(body []byte) string {
 	return strings.TrimSpace(parsed.NotifySecret)
 }
 
+// parseTelegramBotToken lifts the bot token out of a get-chat-id body so it can be
+// registered with the logger's masker BEFORE any raw body preview is logged. The
+// same provisioning endpoint returns bot_token on a 200, so without this it would
+// leak into debug logs. Best-effort: a non-JSON or token-less body yields "".
+func parseTelegramBotToken(body []byte) string {
+	var parsed struct {
+		BotToken string `json:"bot_token"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.BotToken)
+}
+
 // checkTelegramRegistrationWithSecret is the single shared implementation of the
 // get-chat-id handshake (5s timeout, X-Proxsave-Version header). It returns the
 // public status AND, on a 200, the notify_secret parsed from the body. The secret
@@ -132,6 +146,14 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 		secret = parseTelegramNotifySecret(body)
 		if secret != "" && logger != nil {
 			logger.RegisterSecret(secret)
+		}
+		// The same 200 body also carries bot_token; register it BEFORE the preview
+		// line below so the masker scrubs it (and every later line) rather than
+		// dumping it raw.
+		if logger != nil {
+			if botToken := parseTelegramBotToken(body); botToken != "" {
+				logger.RegisterSecret(botToken)
+			}
 		}
 		logTelegramRegistrationDebug(logger, "Telegram registration: 200 body parsed (notifySecretPresent=%v len=%d)", secret != "", len(secret))
 	}

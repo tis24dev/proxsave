@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,11 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/version"
 )
+
+// errRelayAuthRejected signals the relay rejected our per-server secret (HTTP
+// 401/403): the secret is stale or rotated and should be dropped + reprovisioned
+// rather than treated as a permanent delivery failure.
+var errRelayAuthRejected = errors.New("relay auth rejected")
 
 // proxsaveVersionHeader carries the running ProxSave version so the central
 // server can gate version-specific behavior (e.g. the one-time secret handoff).
@@ -178,17 +184,26 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	if t.config.Mode == TelegramModeCentralized && t.config.NotifySecret != "" {
 		t.logger.Debug("Telegram: using server-side relay path (bot token stays on host)")
 		message := t.buildMessage(data)
-		if err := t.sendViaRelay(ctx, message); err != nil {
+		err := t.sendViaRelay(ctx, message)
+		if err == nil {
+			t.logger.Debug("Telegram relay confirmed delivery")
+			result.Success = true
+			result.Duration = time.Since(startTime)
+			return result, nil
+		}
+		if !errors.Is(err, errRelayAuthRejected) {
 			t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
 			result.Success = false
 			result.Error = err
 			result.Duration = time.Since(startTime)
 			return result, nil // Non-critical error, don't abort backup
 		}
-		t.logger.Debug("Telegram relay confirmed delivery")
-		result.Success = true
-		result.Duration = time.Since(startTime)
-		return result, nil
+		// The relay rejected our per-server secret (stale/rotated). Drop it and fall
+		// through to the fetch path below, which reprovisions a fresh secret and
+		// relays this run (or falls back to the legacy bot-token path). Bounded: the
+		// fetch path retries the relay at most once and never loops back here.
+		t.logger.Warning("Telegram: relay auth rejected; dropping stale relay secret and reprovisioning")
+		t.config.NotifySecret = ""
 	}
 
 	// Get bot token and chat ID (fetch if centralized mode)
@@ -392,7 +407,7 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message string) err
 		t.logger.Debug("Telegram: relay delivered (HTTP 200)")
 		return nil
 	case 401, 403:
-		return fmt.Errorf("relay auth rejected (HTTP %d)", resp.StatusCode)
+		return fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.StatusCode)
 	case 404:
 		return fmt.Errorf("server unknown (HTTP 404)")
 	case 409:

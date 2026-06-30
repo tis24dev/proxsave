@@ -5,10 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
@@ -23,119 +20,9 @@ var (
 )
 
 func sanitizeTelegramSetupStatusMessage(raw string) string {
-	msg := strings.TrimSpace(raw)
-	if msg == "" {
-		return ""
-	}
-
-	sanitized := stripTelegramTerminalSequences(msg)
-	sanitized = orchestrator.TruncateTelegramSetupStatusMessage(sanitized)
-	if sanitized != "" {
-		return sanitized
-	}
-
-	quoted := strconv.QuoteToASCII(msg)
-	quoted = strings.TrimPrefix(quoted, `"`)
-	quoted = strings.TrimSuffix(quoted, `"`)
-	return orchestrator.TruncateTelegramSetupStatusMessage(quoted)
-}
-
-func stripTelegramTerminalSequences(msg string) string {
-	var b strings.Builder
-	b.Grow(len(msg))
-	pendingSpace := false
-
-	for i := 0; i < len(msg); {
-		switch msg[i] {
-		case 0x1b:
-			i = skipTelegramEscapeSequence(msg, i)
-			pendingSpace = true
-			continue
-		case 0x9b:
-			i = skipTelegramCSI(msg, i+1)
-			pendingSpace = true
-			continue
-		}
-
-		r, size := utf8.DecodeRuneInString(msg[i:])
-		if r == utf8.RuneError && size == 1 {
-			i++
-			continue
-		}
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			pendingSpace = true
-			i += size
-			continue
-		}
-		if !unicode.IsPrint(r) {
-			i += size
-			continue
-		}
-		if pendingSpace && b.Len() > 0 {
-			b.WriteByte(' ')
-		}
-		pendingSpace = false
-		b.WriteRune(r)
-		i += size
-	}
-
-	return strings.TrimSpace(b.String())
-}
-
-func skipTelegramEscapeSequence(msg string, i int) int {
-	if i >= len(msg) || msg[i] != 0x1b {
-		return i + 1
-	}
-	i++
-	if i >= len(msg) {
-		return i
-	}
-	switch msg[i] {
-	case '[':
-		return skipTelegramCSI(msg, i+1)
-	case ']':
-		return skipTelegramOSC(msg, i+1)
-	case 'P', 'X', '^', '_':
-		return skipTelegramST(msg, i+1)
-	default:
-		return i + 1
-	}
-}
-
-func skipTelegramCSI(msg string, i int) int {
-	for i < len(msg) {
-		b := msg[i]
-		i++
-		if b >= 0x40 && b <= 0x7e {
-			return i
-		}
-	}
-	return i
-}
-
-func skipTelegramOSC(msg string, i int) int {
-	for i < len(msg) {
-		switch msg[i] {
-		case 0x07:
-			return i + 1
-		case 0x1b:
-			if i+1 < len(msg) && msg[i+1] == '\\' {
-				return i + 2
-			}
-		}
-		i++
-	}
-	return i
-}
-
-func skipTelegramST(msg string, i int) int {
-	for i < len(msg) {
-		if msg[i] == 0x1b && i+1 < len(msg) && msg[i+1] == '\\' {
-			return i + 2
-		}
-		i++
-	}
-	return i
+	// Delegates to the shared orchestrator sanitizer so the CLI, the TUI, and the
+	// classifier all scrub control/terminal sequences and truncate identically.
+	return orchestrator.SanitizeTelegramSetupStatusMessage(raw)
 }
 
 func logTelegramSetupBootstrapOutcome(bootstrap *logging.BootstrapLogger, state orchestrator.TelegramSetupBootstrap) {
