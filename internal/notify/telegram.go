@@ -14,7 +14,18 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/version"
 )
+
+// proxsaveVersionHeader carries the running ProxSave version so the central
+// server can gate version-specific behavior (e.g. the one-time secret handoff).
+const proxsaveVersionHeader = "X-Proxsave-Version"
+
+// setProxsaveVersionHeader stamps an outbound central-server request with the
+// normalized ProxSave version (e.g. "0.28.0").
+func setProxsaveVersionHeader(req *http.Request) {
+	req.Header.Set(proxsaveVersionHeader, version.String())
+}
 
 // TelegramMode represents the Telegram bot configuration mode
 type TelegramMode string
@@ -246,6 +257,7 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create request: %w", err)
 	}
+	setProxsaveVersionHeader(req)
 
 	// Make request
 	resp, err := t.client.Do(req)
@@ -341,6 +353,7 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message string) err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Server-Auth", t.config.NotifySecret)
+	setProxsaveVersionHeader(req)
 
 	resp, err := t.client.Do(req)
 	if err != nil {

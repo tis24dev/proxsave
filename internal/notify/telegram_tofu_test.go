@@ -10,6 +10,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/version"
 )
 
 // TestSendCentralizedTOFUProvisionsThenRelays verifies the one-time provisioning:
@@ -32,6 +33,9 @@ func TestSendCentralizedTOFUProvisionsThenRelays(t *testing.T) {
 			}
 			switch req.URL.Path {
 			case "/api/get-chat-id":
+				if got := req.Header.Get("X-Proxsave-Version"); got != version.String() {
+					t.Fatalf("get-chat-id X-Proxsave-Version = %q, want %q", got, version.String())
+				}
 				getChatIDCalls++
 				body := `{"chat_id":"123","bot_token":"` + botToken + `","notify_secret":"` + secret + `","status":200}`
 				return &http.Response{
@@ -42,6 +46,9 @@ func TestSendCentralizedTOFUProvisionsThenRelays(t *testing.T) {
 			case "/api/notify":
 				if got := req.Header.Get("X-Server-Auth"); got != secret {
 					t.Fatalf("relay X-Server-Auth = %q, want %q", got, secret)
+				}
+				if got := req.Header.Get("X-Proxsave-Version"); got != version.String() {
+					t.Fatalf("notify X-Proxsave-Version = %q, want %q", got, version.String())
 				}
 				relayCalls++
 				return &http.Response{

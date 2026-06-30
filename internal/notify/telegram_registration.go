@@ -63,6 +63,7 @@ func CheckTelegramRegistration(ctx context.Context, serverAPIHost, serverID stri
 		logTelegramRegistrationDebug(logger, "Telegram registration: failed to create request: %v", err)
 		return TelegramRegistrationStatus{Message: "Failed to create HTTP request", Error: err}
 	}
+	setProxsaveVersionHeader(req)
 	logTelegramRegistrationDebug(logger, "Telegram registration: performing HTTP request (method=%s host=%s path=%s)", req.Method, req.URL.Host, req.URL.Path)
 
 	resp, err := http.DefaultClient.Do(req)

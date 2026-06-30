@@ -8,6 +8,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/version"
 )
 
 func TestCheckTelegramRegistrationMissingServerID(t *testing.T) {
@@ -54,5 +55,28 @@ func TestCheckTelegramRegistrationResponses(t *testing.T) {
 				t.Fatalf("unexpected error: %v", status.Error)
 			}
 		})
+	}
+}
+
+// TestCheckTelegramRegistrationSendsVersionHeader verifies the GET get-chat-id
+// request from CheckTelegramRegistration carries X-Proxsave-Version.
+func TestCheckTelegramRegistrationSendsVersionHeader(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	var captured string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = r.Header.Get("X-Proxsave-Version")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	CheckTelegramRegistration(context.Background(), server.URL, "server-123", logger)
+
+	if captured == "" {
+		t.Fatalf("X-Proxsave-Version header was not set")
+	}
+	if captured != version.String() {
+		t.Fatalf("X-Proxsave-Version = %q, want %q", captured, version.String())
 	}
 }
