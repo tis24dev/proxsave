@@ -39,6 +39,26 @@ type TelegramRegistrationStatus struct {
 	Error   error
 }
 
+// TelegramProvisionOutcome records what the best-effort persist+confirm phase did
+// after a 200. It NEVER alters the returned registration Status. NotApplicable is
+// the zero value, so a stub building TelegramRegistrationResult{Status:...} on a
+// 200 classifies as a clean link.
+type TelegramProvisionOutcome int
+
+const (
+	TelegramProvisionNotApplicable TelegramProvisionOutcome = iota // non-200 (zero value)
+	TelegramProvisionNoToken                                       // 200, server issued no token
+	TelegramProvisionConfirmed                                     // persisted AND confirmed
+	TelegramProvisionPersistFailed                                 // empty baseDir, or persist failed -> no confirm
+	TelegramProvisionConfirmFailed                                 // persisted, confirm POST failed
+)
+
+// TelegramRegistrationResult bundles the public status with the provision outcome.
+type TelegramRegistrationResult struct {
+	Status    TelegramRegistrationStatus
+	Provision TelegramProvisionOutcome
+}
+
 // parseTelegramNotifySecret lifts the one-time relay secret out of a get-chat-id
 // body. Best-effort: a non-JSON or secret-less body yields "".
 func parseTelegramNotifySecret(body []byte) string {
@@ -126,6 +146,13 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 	case 422:
 		logTelegramRegistrationDebug(logger, "Telegram registration: status 422 (invalid server ID)")
 		return TelegramRegistrationStatus{Code: 422, Message: "422 - Invalid Server ID", Error: fmt.Errorf("%s", body)}, ""
+	case 426:
+		logTelegramRegistrationDebug(logger, "Telegram registration: status 426 (upgrade required)")
+		return TelegramRegistrationStatus{
+			Code:    426,
+			Message: "426 - Upgrade ProxSave to v0.28.0 or later to complete pairing",
+			Error:   fmt.Errorf("%s", body),
+		}, ""
 	default:
 		logTelegramRegistrationDebug(logger, "Telegram registration: unexpected status %d", resp.StatusCode)
 		return TelegramRegistrationStatus{
@@ -150,27 +177,45 @@ func CheckTelegramRegistration(ctx context.Context, serverAPIHost, serverID stri
 // notify_secret, OVERWRITES the persisted secret and CONFIRMS it back to the
 // server so the subsequent Send in this same run relays through the server
 // instead of leaking the bot token. The server returns a token ONLY when it wants
-// the client to (re)adopt it, so there is no idempotent skip. The returned status
-// is identical to CheckTelegramRegistration's; persist and confirm are
-// best-effort and NEVER change the returned status.
-func CheckTelegramRegistrationAndProvision(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) TelegramRegistrationStatus {
+// the client to (re)adopt it, so there is no idempotent skip. The returned
+// Status is identical to CheckTelegramRegistration's; persist and confirm are
+// best-effort and NEVER change the returned Status. The Provision field records
+// what the persist+confirm phase did so callers (the install Check UIs) can show
+// a distinct message without altering the registration status.
+func CheckTelegramRegistrationAndProvision(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) TelegramRegistrationResult {
 	status, secret := checkTelegramRegistrationWithSecret(ctx, serverAPIHost, serverID, true, logger)
-	if status.Code != 200 || secret == "" || strings.TrimSpace(baseDir) == "" {
-		logTelegramRegistrationDebug(logger, "Telegram registration: skip provisioning (statusCode=%d secretPresent=%v baseDir=%q)", status.Code, secret != "", baseDir)
-		return status
+	res := TelegramRegistrationResult{Status: status, Provision: TelegramProvisionNotApplicable}
+
+	if status.Code != 200 {
+		logTelegramRegistrationDebug(logger, "Telegram registration: skip provisioning (statusCode=%d)", status.Code)
+		return res
+	}
+	if secret == "" {
+		res.Provision = TelegramProvisionNoToken
+		logTelegramRegistrationDebug(logger, "Telegram registration: 200 without token (nothing to provision)")
+		return res
+	}
+	if strings.TrimSpace(baseDir) == "" {
+		res.Provision = TelegramProvisionPersistFailed
+		logTelegramRegistrationDebug(logger, "Telegram registration: 200 with token but empty baseDir (cannot persist)")
+		return res
 	}
 	// Adopt-on-token-present: OVERWRITE (the server returns a token ONLY when it
 	// wants the client to (re)adopt it). No idempotent skip, or a re-issue strands.
 	// secret was already RegisterSecret'd in the helper on the 200 branch.
 	logTelegramRegistrationDebug(logger, "Telegram registration: provisioning relay secret (overwrite) -> %s", identity.NotifySecretPath(baseDir))
 	if err := identity.PersistNotifySecret(ctx, baseDir, secret, logger); err != nil {
+		res.Provision = TelegramProvisionPersistFailed
 		logTelegramRegistrationDebug(logger, "Telegram registration: failed to persist provisioned relay secret: %v", err)
-		return status // non-fatal: do NOT confirm; server re-issues next run
+		return res // non-fatal: do NOT confirm; server re-issues next run
 	}
 	if err := confirmTelegramRelaySecret(ctx, http.DefaultClient, serverAPIHost, serverID, secret, logger); err != nil {
+		res.Provision = TelegramProvisionConfirmFailed
 		logTelegramRegistrationDebug(logger, "Telegram registration: relay secret confirm failed (non-fatal): %v", err)
+		return res
 	}
-	return status
+	res.Provision = TelegramProvisionConfirmed
+	return res
 }
 
 // confirmTelegramRelaySecret completes phase 2: POST the freshly adopted relay

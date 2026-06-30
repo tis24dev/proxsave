@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"unicode"
@@ -12,11 +13,12 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 var (
 	telegramSetupBuildBootstrap    = orchestrator.BuildTelegramSetupBootstrap
-	telegramSetupCheckRegistration = notify.CheckTelegramRegistration
+	telegramSetupCheckRegistration = notify.CheckTelegramRegistrationAndProvision
 	telegramSetupPromptYesNo       = promptYesNo
 )
 
@@ -187,45 +189,56 @@ func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, con
 		return nil
 	}
 
+	// Real-but-silent logger: the reused provision path registers and masks the
+	// relay secret via this logger, but io.Discard keeps every debug line off the
+	// install console (full debug stays on the runtime backup path via rt.logger).
+	silentLogger := logging.New(types.LogLevelDebug, false)
+	silentLogger.SetOutput(io.Discard)
+
 	attempts := 0
 	for {
 		attempts++
-		status := telegramSetupCheckRegistration(ctx, state.ServerAPIHost, state.ServerID, nil)
-		if status.Code == 200 && status.Error == nil {
-			fmt.Println("✓ Telegram linked successfully.")
-			logBootstrapInfo(bootstrap, "Telegram setup: verified (attempts=%d)", attempts)
+		res := telegramSetupCheckRegistration(ctx, state.ServerAPIHost, state.ServerID, baseDir, silentLogger)
+		st := orchestrator.ClassifyTelegramSetupResult(res)
+
+		if st.Verified {
+			if st.Partial {
+				fmt.Println(st.Message)
+				logBootstrapInfo(bootstrap, "Telegram setup: verified with pending follow-up (attempts=%d state=%s)", attempts, st.Code)
+			} else {
+				fmt.Printf("✓ %s\n", st.Message)
+				logBootstrapInfo(bootstrap, "Telegram setup: verified (attempts=%d)", attempts)
+			}
 			return nil
 		}
 
-		msg := sanitizeTelegramSetupStatusMessage(status.Message)
-		if msg == "" {
-			msg = "Registration not active yet"
+		// rawMsg drives ONLY the byte-identical failure log line (sanitized RAW
+		// server message). The user-facing line is always the classifier message.
+		rawMsg := sanitizeTelegramSetupStatusMessage(res.Status.Message)
+		if rawMsg == "" {
+			rawMsg = "Registration not active yet"
 		}
-		fmt.Printf("Telegram: %s\n", msg)
-		switch status.Code {
-		case 403, 409:
-			fmt.Println("Hint: Start the bot, send the Server ID, then retry.")
-		case 422:
-			fmt.Println("Hint: The Server ID appears invalid. If this persists, re-run the installer.")
-		default:
-			if status.Error != nil {
-				fmt.Printf("Hint: Check failed: %v\n", status.Error)
-			}
+		fmt.Printf("Telegram: %s\n", sanitizeTelegramSetupStatusMessage(st.Message))
+
+		if st.Fatal { // 422 / 426: re-checking cannot help, do NOT offer "Check again?"
+			logBootstrapInfo(bootstrap, "Telegram setup: not verified (attempts=%d last=%d %s)", attempts, res.Status.Code, rawMsg)
+			return nil
 		}
 
 		if attempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
-			fmt.Println("Maximum verification attempts reached. You can retry later by running proxsave.")
-			logBootstrapInfo(bootstrap, "Telegram setup: not verified (attempts=%d last=%d %s)", attempts, status.Code, msg)
+			fmt.Println(orchestrator.TelegramSetupMaxAttemptsHint)
+			logBootstrapInfo(bootstrap, "Telegram setup: not verified (attempts=%d last=%d %s)", attempts, res.Status.Code, rawMsg)
 			return nil
 		}
 
+		fmt.Println(orchestrator.TelegramSetupRetryHint)
 		retry, err := telegramSetupPromptYesNo(ctx, reader, "Check again? [y/N]: ", false)
 		if err != nil {
 			return skipOptionalInstallStepOnAbort(bootstrap, "Telegram setup", err)
 		}
 		if !retry {
 			fmt.Println("Verification not completed. You can retry later by running proxsave.")
-			logBootstrapInfo(bootstrap, "Telegram setup: not verified (attempts=%d last=%d %s)", attempts, status.Code, msg)
+			logBootstrapInfo(bootstrap, "Telegram setup: not verified (attempts=%d last=%d %s)", attempts, res.Status.Code, rawMsg)
 			return nil
 		}
 	}

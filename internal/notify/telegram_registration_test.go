@@ -33,6 +33,7 @@ func TestCheckTelegramRegistrationResponses(t *testing.T) {
 		{"403-first-comm", http.StatusForbidden, 403, true},
 		{"409-missing-reg", http.StatusConflict, 409, true},
 		{"422-invalid", http.StatusUnprocessableEntity, 422, true},
+		{"426-upgrade", http.StatusUpgradeRequired, 426, true},
 		{"500-unexpected", http.StatusInternalServerError, 500, true},
 	}
 

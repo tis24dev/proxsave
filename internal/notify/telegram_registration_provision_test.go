@@ -80,10 +80,14 @@ func TestCheckTelegramRegistrationAndProvisionPersistsSecretAndMasksLog(t *testi
 	server := routingSecretServer(t, `{"chat_id":"123","notify_secret":"`+provisionTestSecret+`","status":200}`, http.StatusOK, &capture)
 	defer server.Close()
 
-	status := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	res := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	status := res.Status
 
 	if status.Code != 200 || status.Error != nil {
 		t.Fatalf("status = %+v, want Code=200 Error=nil", status)
+	}
+	if res.Provision != TelegramProvisionConfirmed {
+		t.Fatalf("Provision = %d, want TelegramProvisionConfirmed", res.Provision)
 	}
 
 	loaded, err := identity.LoadNotifySecret(baseDir)
@@ -124,10 +128,14 @@ func TestCheckTelegramRegistrationAndProvisionNoSecretNoPersist(t *testing.T) {
 	server := routingSecretServer(t, `{"chat_id":"123","status":200}`, http.StatusOK, &capture)
 	defer server.Close()
 
-	status := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	res := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	status := res.Status
 
 	if status.Code != 200 {
 		t.Fatalf("status.Code = %d, want 200", status.Code)
+	}
+	if res.Provision != TelegramProvisionNoToken {
+		t.Fatalf("Provision = %d, want TelegramProvisionNoToken", res.Provision)
 	}
 	loaded, err := identity.LoadNotifySecret(baseDir)
 	if err != nil {
@@ -152,10 +160,14 @@ func TestCheckTelegramRegistrationAndProvisionEmptyBaseDir(t *testing.T) {
 	server := routingSecretServer(t, `{"chat_id":"123","notify_secret":"`+provisionTestSecret+`","status":200}`, http.StatusOK, &capture)
 	defer server.Close()
 
-	status := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", "", logger)
+	res := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", "", logger)
+	status := res.Status
 
 	if status.Code != 200 {
 		t.Fatalf("status.Code = %d, want 200", status.Code)
+	}
+	if res.Provision != TelegramProvisionPersistFailed {
+		t.Fatalf("Provision = %d, want TelegramProvisionPersistFailed", res.Provision)
 	}
 	if loaded, _ := identity.LoadNotifySecret(""); loaded != "" {
 		t.Fatalf("expected no persisted secret for empty baseDir, got %q", loaded)
@@ -181,10 +193,14 @@ func TestCheckTelegramRegistrationAndProvisionPersistFailureKeepsStatus(t *testi
 	server := routingSecretServer(t, `{"chat_id":"123","notify_secret":"`+provisionTestSecret+`","status":200}`, http.StatusOK, &capture)
 	defer server.Close()
 
-	status := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	res := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	status := res.Status
 
 	if status.Code != 200 || status.Error != nil {
 		t.Fatalf("status = %+v, want Code=200 Error=nil despite persist failure", status)
+	}
+	if res.Provision != TelegramProvisionPersistFailed {
+		t.Fatalf("Provision = %d, want TelegramProvisionPersistFailed", res.Provision)
 	}
 	if loaded, _ := identity.LoadNotifySecret(baseDir); loaded != "" {
 		t.Fatalf("expected no persisted secret after failure, got %q", loaded)
@@ -214,10 +230,14 @@ func TestCheckTelegramRegistrationAndProvisionOverwritesAndConfirms(t *testing.T
 	server := routingSecretServer(t, `{"chat_id":"123","notify_secret":"`+provisionTestSecret+`","status":200}`, http.StatusOK, &capture)
 	defer server.Close()
 
-	status := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	res := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	status := res.Status
 
 	if status.Code != 200 {
 		t.Fatalf("status.Code = %d, want 200", status.Code)
+	}
+	if res.Provision != TelegramProvisionConfirmed {
+		t.Fatalf("Provision = %d, want TelegramProvisionConfirmed", res.Provision)
 	}
 	loaded, err := identity.LoadNotifySecret(baseDir)
 	if err != nil {
@@ -252,10 +272,14 @@ func TestCheckTelegramRegistrationAndProvisionConfirmNonFatalOn403(t *testing.T)
 	server := routingSecretServer(t, `{"chat_id":"123","notify_secret":"`+provisionTestSecret+`","status":200}`, http.StatusForbidden, &capture)
 	defer server.Close()
 
-	status := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	res := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+	status := res.Status
 
 	if status.Code != 200 || status.Error != nil {
 		t.Fatalf("status = %+v, want Code=200 Error=nil despite confirm 403", status)
+	}
+	if res.Provision != TelegramProvisionConfirmFailed {
+		t.Fatalf("Provision = %d, want TelegramProvisionConfirmFailed", res.Provision)
 	}
 	loaded, err := identity.LoadNotifySecret(baseDir)
 	if err != nil {
@@ -301,5 +325,45 @@ func TestCheckTelegramRegistrationStatusCheckMasksSecretNoPersist(t *testing.T) 
 	}
 	if capture.confirmHits != 0 {
 		t.Fatalf("status probe must not confirm, got %d hits", capture.confirmHits)
+	}
+}
+
+// TestCheckTelegramRegistrationAndProvision426NoConfirm verifies a 426 upgrade
+// response short-circuits before any provisioning: the status is 426 with an
+// error, the provision outcome is NotApplicable, and confirm-secret is never hit.
+func TestCheckTelegramRegistrationAndProvision426NoConfirm(t *testing.T) {
+	logger, _ := newProvisionTestLogger()
+	baseDir := t.TempDir()
+
+	var confirmHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/get-chat-id":
+			w.WriteHeader(http.StatusUpgradeRequired)
+			_, _ = w.Write([]byte("client too old"))
+		case "/api/confirm-secret":
+			confirmHits++
+			t.Errorf("confirm-secret must not be hit on a 426 response")
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	res := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", baseDir, logger)
+
+	if res.Status.Code != 426 {
+		t.Fatalf("status.Code = %d, want 426", res.Status.Code)
+	}
+	if res.Status.Error == nil {
+		t.Fatalf("expected a non-nil error on a 426 response")
+	}
+	if res.Provision != TelegramProvisionNotApplicable {
+		t.Fatalf("Provision = %d, want TelegramProvisionNotApplicable", res.Provision)
+	}
+	if confirmHits != 0 {
+		t.Fatalf("expected no confirm-secret hit on a 426 response, got %d", confirmHits)
 	}
 }

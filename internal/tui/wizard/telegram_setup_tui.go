@@ -3,15 +3,18 @@ package wizard
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/tui"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 var (
@@ -22,7 +25,7 @@ var (
 	}
 
 	telegramSetupBuildBootstrap    = orchestrator.BuildTelegramSetupBootstrap
-	telegramSetupCheckRegistration = notify.CheckTelegramRegistration
+	telegramSetupCheckRegistration = notify.CheckTelegramRegistrationAndProvision
 	telegramSetupQueueUpdateDraw   = func(app *tui.App, f func()) { app.QueueUpdateDraw(f) }
 	telegramSetupGo                = func(fn func()) { go fn() }
 )
@@ -34,6 +37,8 @@ type TelegramSetupResult struct {
 
 	CheckAttempts     int
 	Verified          bool
+	Partial           bool
+	LastStatusFatal   bool
 	LastStatusCode    int
 	LastStatusMessage string
 	LastStatusError   string
@@ -54,6 +59,12 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 		result.Shown = false
 		return result, nil
 	}
+
+	// Real-but-silent logger: the reused provision path registers and masks the
+	// relay secret via this logger, but io.Discard keeps any debug line out of the
+	// tview surface so the rendering is never corrupted.
+	silentLogger := logging.New(types.LogLevelDebug, false)
+	silentLogger.SetOutput(io.Discard)
 
 	app := tui.NewApp()
 	pages := tview.NewPages()
@@ -152,7 +163,7 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 		setStatus("[blue]Checking registration…[white]\n\nPlease wait.")
 		serverID := result.ServerID
 		telegramSetupGo(func() {
-			status := telegramSetupCheckRegistration(checkCtx, result.ServerAPIHost, serverID, nil)
+			res := telegramSetupCheckRegistration(checkCtx, result.ServerAPIHost, serverID, baseDir, silentLogger)
 			telegramSetupQueueUpdateDraw(app, func() {
 				mu.Lock()
 				defer mu.Unlock()
@@ -161,41 +172,37 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 				}
 				checking = false
 
+				status := res.Status
 				result.CheckAttempts++
 				result.LastStatusCode = status.Code
-				result.LastStatusMessage = status.Message
+				result.LastStatusMessage = status.Message // RAW preserved (truncation/escaping tests assert raw)
 				if status.Error != nil {
 					result.LastStatusError = status.Error.Error()
 				} else {
 					result.LastStatusError = ""
 				}
 
-				if status.Code == 200 && status.Error == nil {
+				st := orchestrator.ClassifyTelegramSetupResult(res)
+				result.LastStatusFatal = st.Fatal
+				if st.Verified { // latch: a later re-check can never un-verify
 					result.Verified = true
-					setStatus(fmt.Sprintf("[green]✓ Linked successfully.[white]\n\n%s", tview.Escape(status.Message)))
-					if refreshButtons != nil {
-						refreshButtons()
-					}
-					return
+					result.Partial = st.Partial
 				}
 
-				msg := status.Message
-				if msg == "" {
-					msg = "Registration not active yet"
-				}
-				var hint string
-				switch status.Code {
-				case 403, 409:
-					hint = "\n\nStart the bot, send the Server ID, then press Check again."
-				case 422:
-					hint = "\n\nThe Server ID appears invalid. If this persists, re-run the installer or regenerate the identity file."
+				switch {
+				case st.Verified && !st.Partial:
+					setStatus(fmt.Sprintf("[green]✓ %s[white]", tview.Escape(st.Message)))
+				case st.Verified && st.Partial:
+					setStatus(fmt.Sprintf("[orange]%s[white]", tview.Escape(st.Message)))
+				case st.Fatal:
+					setStatus(fmt.Sprintf("[red]%s[white]", tview.Escape(st.Message)))
 				default:
-					hint = "\n\nYou can press Check again, or Skip verification and complete pairing later."
+					hint := "\n\n" + orchestrator.TelegramSetupRetryHint
+					if result.CheckAttempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
+						hint = "\n\n" + orchestrator.TelegramSetupMaxAttemptsHint
+					}
+					setStatus(fmt.Sprintf("[yellow]%s[white]%s", tview.Escape(st.Message), hint))
 				}
-				if result.CheckAttempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
-					hint = "\n\nMaximum verification attempts reached. Skip and complete pairing later by running proxsave."
-				}
-				setStatus(fmt.Sprintf("[yellow]%s[white]%s", tview.Escape(orchestrator.TruncateTelegramSetupStatusMessage(msg)), hint))
 				if refreshButtons != nil {
 					refreshButtons()
 				}
@@ -207,8 +214,10 @@ func RunTelegramSetupWizard(ctx context.Context, baseDir, configPath, buildSig s
 		form.ClearButtons()
 		// Stop offering another check once the shared attempt cap is reached (and
 		// not yet verified), matching the CLI which stops after the same number of
-		// attempts; an explicit Skip is then required to leave.
-		if result.Verified || result.CheckAttempts < orchestrator.TelegramSetupMaxVerificationAttempts {
+		// attempts; an explicit Skip is then required to leave. A fatal status
+		// (invalid Server ID / upgrade required) also removes Check: re-checking
+		// cannot help, so the user must Skip and resolve it out of band.
+		if !result.LastStatusFatal && (result.Verified || result.CheckAttempts < orchestrator.TelegramSetupMaxVerificationAttempts) {
 			form.AddButton("Check", checkHandler)
 		}
 		if result.Verified {

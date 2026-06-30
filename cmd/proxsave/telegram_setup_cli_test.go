@@ -42,9 +42,9 @@ func TestRunTelegramSetupCLI_SkipOnConfigError(t *testing.T) {
 		t.Fatalf("prompt should not run for config skip")
 		return false, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		t.Fatalf("registration check should not run for config skip")
-		return notify.TelegramRegistrationStatus{}
+		return notify.TelegramRegistrationResult{}
 	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
@@ -67,9 +67,9 @@ func TestRunTelegramSetupCLI_SkipOnPersonalMode(t *testing.T) {
 		t.Fatalf("prompt should not run for personal mode")
 		return false, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		t.Fatalf("registration check should not run for personal mode")
-		return notify.TelegramRegistrationStatus{}
+		return notify.TelegramRegistrationResult{}
 	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
@@ -93,9 +93,9 @@ func TestRunTelegramSetupCLI_SkipOnMissingIdentity(t *testing.T) {
 		t.Fatalf("prompt should not run when identity is unavailable")
 		return false, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		t.Fatalf("registration check should not run when identity is unavailable")
-		return notify.TelegramRegistrationStatus{}
+		return notify.TelegramRegistrationResult{}
 	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
@@ -123,9 +123,9 @@ func TestRunTelegramSetupCLI_DeclineVerification(t *testing.T) {
 		}
 		return false, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		t.Fatalf("registration check should not run when user declines")
-		return notify.TelegramRegistrationStatus{}
+		return notify.TelegramRegistrationResult{}
 	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
@@ -156,7 +156,7 @@ func TestRunTelegramSetupCLI_VerifiesSuccessfully(t *testing.T) {
 		}
 		return true, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		checkCalls++
 		if serverAPIHost != "https://api.example.test" {
 			t.Fatalf("serverAPIHost=%q, want https://api.example.test", serverAPIHost)
@@ -164,7 +164,7 @@ func TestRunTelegramSetupCLI_VerifiesSuccessfully(t *testing.T) {
 		if serverID != "123456789" {
 			t.Fatalf("serverID=%q, want 123456789", serverID)
 		}
-		return notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}}
 	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
@@ -198,12 +198,12 @@ func TestRunTelegramSetupCLI_StopsAfterMaxVerificationAttempts(t *testing.T) {
 		promptCalls++
 		return true, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		checkCalls++
-		return notify.TelegramRegistrationStatus{
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{
 			Code:    409,
 			Message: "not linked yet",
-		}
+		}}
 	}
 
 	bootstrap := logging.NewBootstrapLogger()
@@ -237,9 +237,9 @@ func TestRunTelegramSetupCLI_BootstrapErrorNonBlocking(t *testing.T) {
 		t.Fatalf("prompt should not run on bootstrap error")
 		return false, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		t.Fatalf("registration check should not run on bootstrap error")
-		return notify.TelegramRegistrationStatus{}
+		return notify.TelegramRegistrationResult{}
 	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
@@ -266,9 +266,9 @@ func TestRunTelegramSetupCLI_PromptAbortIsNonBlocking(t *testing.T) {
 		promptCalls++
 		return false, errInteractiveAborted
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		t.Fatalf("registration check should not run when the prompt aborts")
-		return notify.TelegramRegistrationStatus{}
+		return notify.TelegramRegistrationResult{}
 	}
 
 	if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
@@ -329,12 +329,12 @@ func TestRunTelegramSetupCLI_SanitizesRegistrationStatusOutput(t *testing.T) {
 		promptCalls++
 		return promptCalls == 1, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
-		return notify.TelegramRegistrationStatus{
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{
 			Code:    500,
 			Message: "\x1b[31mneeds\tpairing\r\nnow\x1b[0m\x07",
 			Error:   errors.New("unexpected status 500"),
-		}
+		}}
 	}
 
 	output := captureStdout(t, func() {
@@ -348,5 +348,106 @@ func TestRunTelegramSetupCLI_SanitizesRegistrationStatusOutput(t *testing.T) {
 	}
 	if strings.Contains(output, "\x1b") {
 		t.Fatalf("output should not contain raw escape sequences, got %q", output)
+	}
+}
+
+// TestRunTelegramSetupCLI_UpgradeRequiredStopsRetry pins the CLI parity with the
+// TUI: a 426 (upgrade required) is fatal, so the CLI shows the distinct message
+// and returns WITHOUT offering "Check again?" (no second prompt, single check).
+func TestRunTelegramSetupCLI_UpgradeRequiredStopsRetry(t *testing.T) {
+	stubTelegramSetupCLIDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility:     orchestrator.TelegramSetupEligibleCentralized,
+			ConfigLoaded:    true,
+			TelegramEnabled: true,
+			TelegramMode:    "centralized",
+			ServerAPIHost:   "https://api.example.test",
+			ServerID:        "123456789",
+		}, nil
+	}
+	promptCalls := 0
+	telegramSetupPromptYesNo = func(ctx context.Context, reader *bufio.Reader, question string, defaultYes bool) (bool, error) {
+		promptCalls++
+		if promptCalls != 1 {
+			t.Fatalf("expected only the initial check prompt, got call %d: %q", promptCalls, question)
+		}
+		return true, nil
+	}
+	checkCalls := 0
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
+		checkCalls++
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{
+			Code:    426,
+			Message: "426 - Upgrade ProxSave to v0.28.0 or later to complete pairing",
+			Error:   errors.New("upgrade"),
+		}}
+	}
+
+	output := captureStdout(t, func() {
+		if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
+			t.Fatalf("runTelegramSetupCLI error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Upgrade ProxSave to v0.28.0 or later to complete pairing.") {
+		t.Fatalf("expected upgrade-required message in output, got %q", output)
+	}
+	if checkCalls != 1 {
+		t.Fatalf("checkCalls=%d, want 1", checkCalls)
+	}
+	if promptCalls != 1 {
+		t.Fatalf("promptCalls=%d, want 1 (no 'Check again?' after a fatal status)", promptCalls)
+	}
+}
+
+// TestRunTelegramSetupCLI_PartialLinked pins that a 200 with a failed persist
+// counts as verified (the CLI returns successfully after one check) but shows the
+// distinct partial message instead of the clean success line.
+func TestRunTelegramSetupCLI_PartialLinked(t *testing.T) {
+	stubTelegramSetupCLIDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility:     orchestrator.TelegramSetupEligibleCentralized,
+			ConfigLoaded:    true,
+			TelegramEnabled: true,
+			TelegramMode:    "centralized",
+			ServerAPIHost:   "https://api.example.test",
+			ServerID:        "123456789",
+		}, nil
+	}
+	promptCalls := 0
+	telegramSetupPromptYesNo = func(ctx context.Context, reader *bufio.Reader, question string, defaultYes bool) (bool, error) {
+		promptCalls++
+		if promptCalls != 1 {
+			t.Fatalf("expected only the initial check prompt, got call %d: %q", promptCalls, question)
+		}
+		return true, nil
+	}
+	checkCalls := 0
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
+		checkCalls++
+		return notify.TelegramRegistrationResult{
+			Status:    notify.TelegramRegistrationStatus{Code: 200, Message: "ok"},
+			Provision: notify.TelegramProvisionPersistFailed,
+		}
+	}
+
+	output := captureStdout(t, func() {
+		if err := runTelegramSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger()); err != nil {
+			t.Fatalf("runTelegramSetupCLI error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "could not be saved locally") {
+		t.Fatalf("expected distinct partial message in output, got %q", output)
+	}
+	if checkCalls != 1 {
+		t.Fatalf("checkCalls=%d, want 1", checkCalls)
+	}
+	if promptCalls != 1 {
+		t.Fatalf("promptCalls=%d, want 1", promptCalls)
 	}
 }

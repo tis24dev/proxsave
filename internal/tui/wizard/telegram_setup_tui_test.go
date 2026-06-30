@@ -288,14 +288,14 @@ func TestRunTelegramSetupWizard_CentralizedSuccess_RequiresCheckBeforeContinue(t
 		state.ServerID = "987654321"
 		return state, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		if serverAPIHost != "https://api.example.test" {
 			t.Fatalf("serverAPIHost=%q, want https://api.example.test", serverAPIHost)
 		}
 		if serverID != "987654321" {
 			t.Fatalf("serverID=%q, want 987654321", serverID)
 		}
-		return notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}}
 	}
 	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		form := focus.(*tview.Form)
@@ -438,15 +438,17 @@ func TestRunTelegramSetupWizard_CentralizedFailure_CanRetryAndSkip(t *testing.T)
 		state.ServerID = "111222333"
 		return state, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		calls++
 		switch calls {
 		case 1:
-			return notify.TelegramRegistrationStatus{Code: 403, Error: errors.New("not registered")}
+			return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 403, Error: errors.New("not registered")}}
 		case 2:
-			return notify.TelegramRegistrationStatus{Code: 422, Message: "invalid"}
+			// 422 is now Fatal and strips the Check button; use 409 here so all
+			// three retry presses still find the Check button.
+			return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 409, Message: "invalid"}}
 		default:
-			return notify.TelegramRegistrationStatus{Code: 500, Message: "oops"}
+			return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 500, Message: "oops"}}
 		}
 	}
 	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
@@ -495,9 +497,9 @@ func TestRunTelegramSetupWizard_StopsOfferingCheckAtCap(t *testing.T) {
 		return eligibleTelegramSetupBootstrap(), nil
 	}
 	calls := 0
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		calls++
-		return notify.TelegramRegistrationStatus{Code: 403, Error: errors.New("not registered")}
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 403, Error: errors.New("not registered")}}
 	}
 	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		form := focus.(*tview.Form)
@@ -536,11 +538,11 @@ func TestRunTelegramSetupWizard_TruncatesLongFailureMessage(t *testing.T) {
 	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
 		return eligibleTelegramSetupBootstrap(), nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
-		return notify.TelegramRegistrationStatus{
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{
 			Code:    500,
 			Message: "  " + longMessage + "  ",
-		}
+		}}
 	}
 	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		_, statusView, form := extractTelegramSetupViews(t, root)
@@ -587,11 +589,11 @@ func TestRunTelegramSetupWizard_EscapesBracketedStatusMessage(t *testing.T) {
 	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
 		return eligibleTelegramSetupBootstrap(), nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
-		return notify.TelegramRegistrationStatus{
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{
 			Code:    500,
 			Message: bracketedMessage,
-		}
+		}}
 	}
 	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		_, statusView, form := extractTelegramSetupViews(t, root)
@@ -663,8 +665,8 @@ func TestRunTelegramSetupWizard_CentralizedEscAfterVerificationDoesNotSkip(t *te
 	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
 		return eligibleTelegramSetupBootstrap(), nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
-		return notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}}
 	}
 	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		_, _, form := extractTelegramSetupViews(t, root)
@@ -731,9 +733,9 @@ func TestRunTelegramSetupWizard_CheckIgnoredWhileChecking_AndUpdateSuppressedAft
 		state.ServerID = "999888777"
 		return state, nil
 	}
-	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) notify.TelegramRegistrationStatus {
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
 		checkCalls++
-		return notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 200, Message: "ok"}}
 	}
 	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
 		form := focus.(*tview.Form)
@@ -765,6 +767,110 @@ func TestRunTelegramSetupWizard_CheckIgnoredWhileChecking_AndUpdateSuppressedAft
 	}
 	if checkCalls != 1 {
 		t.Fatalf("checkCalls=%d, want 1", checkCalls)
+	}
+}
+
+// TestRunTelegramSetupWizard_UpgradeRequiredStopsRetry pins that a 426 (upgrade
+// required) is fatal: the Check button is removed after the first press (a re-check
+// cannot help), the distinct upgrade message is shown, and the user must Skip.
+func TestRunTelegramSetupWizard_UpgradeRequiredStopsRetry(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return eligibleTelegramSetupBootstrap(), nil
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
+		return notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{
+			Code:    426,
+			Message: "426 - Upgrade ProxSave to v0.28.0 or later to complete pairing",
+			Error:   errors.New("upgrade"),
+		}}
+	}
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		_, statusView, form := extractTelegramSetupViews(t, root)
+
+		pressFormButton(t, form, "Check")
+
+		if form.GetButtonIndex("Check") != -1 {
+			t.Fatalf("expected Check button to be removed after a fatal upgrade-required status")
+		}
+		if form.GetButtonIndex("Continue") != -1 {
+			t.Fatalf("expected no Continue button when not verified")
+		}
+		if form.GetButtonIndex("Skip") == -1 {
+			t.Fatalf("expected Skip button after a fatal status")
+		}
+		text := statusView.GetText(true)
+		if !strings.Contains(text, "Upgrade ProxSave to v0.28.0 or later to complete pairing.") {
+			t.Fatalf("expected upgrade-required message, got %q", text)
+		}
+
+		pressFormButton(t, form, "Skip")
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
+	}
+	if result.Verified {
+		t.Fatalf("expected Verified=false")
+	}
+	if !result.LastStatusFatal {
+		t.Fatalf("expected LastStatusFatal=true")
+	}
+	if result.LastStatusCode != 426 {
+		t.Fatalf("LastStatusCode=%d, want 426", result.LastStatusCode)
+	}
+	if !result.SkippedVerification {
+		t.Fatalf("expected SkippedVerification=true")
+	}
+}
+
+// TestRunTelegramSetupWizard_PartialShownDistinct pins that a 200 with a failed
+// confirm counts as verified (Continue is offered, pairing self-heals next backup)
+// but shows a distinct partial message rather than the clean "Linked successfully."
+func TestRunTelegramSetupWizard_PartialShownDistinct(t *testing.T) {
+	stubTelegramSetupDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return eligibleTelegramSetupBootstrap(), nil
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
+		return notify.TelegramRegistrationResult{
+			Status:    notify.TelegramRegistrationStatus{Code: 200, Message: "ok"},
+			Provision: notify.TelegramProvisionConfirmFailed,
+		}
+	}
+	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
+		_, statusView, form := extractTelegramSetupViews(t, root)
+
+		pressFormButton(t, form, "Check")
+
+		text := statusView.GetText(true)
+		if !strings.Contains(text, "confirmation did not complete") {
+			t.Fatalf("expected distinct partial message, got %q", text)
+		}
+		if form.GetButtonIndex("Continue") == -1 {
+			t.Fatalf("expected Continue button after partial verification")
+		}
+
+		pressFormButton(t, form, "Continue")
+		return nil
+	}
+
+	result, err := RunTelegramSetupWizard(context.Background(), t.TempDir(), "/fake/backup.env", "sig")
+	if err != nil {
+		t.Fatalf("RunTelegramSetupWizard error: %v", err)
+	}
+	if !result.Verified {
+		t.Fatalf("expected Verified=true")
+	}
+	if !result.Partial {
+		t.Fatalf("expected Partial=true")
+	}
+	if result.SkippedVerification {
+		t.Fatalf("expected SkippedVerification=false")
 	}
 }
 
