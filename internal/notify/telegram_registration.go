@@ -45,17 +45,20 @@ type TelegramRegistrationStatus struct {
 const StatusCodeMissingServerID = -1
 
 // TelegramProvisionOutcome records what the best-effort persist+confirm phase did
-// after a 200. It NEVER alters the returned registration Status. NotApplicable is
-// the zero value, so a stub building TelegramRegistrationResult{Status:...} on a
-// 200 classifies as a clean link.
+// after a 200. It NEVER alters the returned registration Status, and the classifier
+// consults it ONLY on a 200. NotApplicable is the zero value, reserved for a
+// non-200 result; TelegramProvisionClean is the explicit "200 linked cleanly, no
+// provisioning action required" outcome. A 200-only stub that leaves the zero value
+// still classifies as a clean link via the classifier's default case.
 type TelegramProvisionOutcome int
 
 const (
-	TelegramProvisionNotApplicable TelegramProvisionOutcome = iota // non-200; also the 200-only stub default (see type doc)
+	TelegramProvisionNotApplicable TelegramProvisionOutcome = iota // non-200 result (zero value); Provision is consulted only on a 200
 	TelegramProvisionNoToken                                       // 200, server issued no token
 	TelegramProvisionConfirmed                                     // persisted AND confirmed
 	TelegramProvisionPersistFailed                                 // empty baseDir, or persist failed -> no confirm
 	TelegramProvisionConfirmFailed                                 // persisted, confirm POST failed
+	TelegramProvisionClean                                         // 200, clean link with no provisioning action required
 )
 
 // TelegramRegistrationResult bundles the public status with the provision outcome.

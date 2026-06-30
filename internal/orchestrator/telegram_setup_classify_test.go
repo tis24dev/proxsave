@@ -40,6 +40,13 @@ func TestClassifyTelegramSetupResult(t *testing.T) {
 			wantVerified: true,
 		},
 		{
+			name:         "200-clean",
+			res:          notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 200}, Provision: notify.TelegramProvisionClean},
+			wantCode:     "linked_confirmed",
+			wantMessage:  "Linked successfully.",
+			wantVerified: true,
+		},
+		{
 			name:         "200-persist-failed",
 			res:          notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 200}, Provision: notify.TelegramProvisionPersistFailed},
 			wantCode:     "linked_token_unsaved",

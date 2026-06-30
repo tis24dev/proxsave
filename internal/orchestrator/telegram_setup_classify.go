@@ -31,7 +31,7 @@ func ClassifyTelegramSetupResult(res notify.TelegramRegistrationResult) Telegram
 		case notify.TelegramProvisionConfirmFailed:
 			return TelegramSetupState{Code: "linked_confirm_pending", Verified: true, Partial: true,
 				Message: "Linked, but the relay-token confirmation did not complete. It will finish automatically on the next backup."}
-		default: // Confirmed, NoToken, or NotApplicable (stub zero-value)
+		default: // Confirmed, NoToken, Clean, or the NotApplicable zero value on a bare 200 stub
 			return TelegramSetupState{Code: "linked_confirmed", Verified: true, Message: "Linked successfully."}
 		}
 	case 403:
