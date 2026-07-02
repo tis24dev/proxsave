@@ -30,7 +30,7 @@ func dsJSONResp(code int, body string) *http.Response {
 
 // notifyID "" -> zero jitter, so these unit tests are fast and deterministic.
 func dsFastPollCfg() deliveryPollConfig {
-	return deliveryPollConfig{Enabled: true, Timeout: 300 * time.Millisecond, Interval: 2 * time.Millisecond, InitialDelay: 0}
+	return deliveryPollConfig{Timeout: 300 * time.Millisecond, Interval: 2 * time.Millisecond, InitialDelay: 0}
 }
 
 func TestPollDeliveryStatusDelivered(t *testing.T) {
@@ -68,7 +68,7 @@ func TestPollDeliveryStatusPendingTimesOutAsQueued(t *testing.T) {
 		atomic.AddInt32(&calls, 1)
 		return dsJSONResp(200, `{"state":"pending","attempts":0}`), nil
 	})}
-	cfg := deliveryPollConfig{Enabled: true, Timeout: 40 * time.Millisecond, Interval: 5 * time.Millisecond, InitialDelay: 0}
+	cfg := deliveryPollConfig{Timeout: 40 * time.Millisecond, Interval: 5 * time.Millisecond, InitialDelay: 0}
 	ds := pollTelegramDeliveryStatus(context.Background(), client, "https://c.test", "srv", "sek", "", cfg, dsTestLogger())
 	if ds.State != "pending" {
 		t.Fatalf("got %+v, want pending (queued)", ds)
@@ -131,10 +131,27 @@ func TestPollDeliveryStatusRespectsContextCancel(t *testing.T) {
 	})}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled
-	cfg := deliveryPollConfig{Enabled: true, Timeout: time.Second, Interval: 5 * time.Millisecond, InitialDelay: 10 * time.Millisecond}
+	cfg := deliveryPollConfig{Timeout: time.Second, Interval: 5 * time.Millisecond, InitialDelay: 10 * time.Millisecond}
 	ds := pollTelegramDeliveryStatus(ctx, client, "https://c.test", "srv", "sek", "notify-x", cfg, dsTestLogger())
 	if ds.State != "unknown" {
 		t.Fatalf("got %+v, want unknown on cancel", ds)
+	}
+}
+
+func TestPollDeliveryStatus503IsTransientRetriesThenDelivers(t *testing.T) {
+	var calls int32
+	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return dsJSONResp(503, `{"error":"OUTBOX_UNAVAILABLE"}`), nil // transient overload
+		}
+		return dsJSONResp(200, `{"state":"delivered","telegram_message_id":7}`), nil
+	})}
+	ds := pollTelegramDeliveryStatus(context.Background(), client, "https://c.test", "srv", "sek", "", dsFastPollCfg(), dsTestLogger())
+	if ds.State != "delivered" {
+		t.Fatalf("got %+v, want delivered after a transient 503", ds)
+	}
+	if atomic.LoadInt32(&calls) < 2 {
+		t.Fatalf("503 must be retried within the budget, got %d calls", calls)
 	}
 }
 
@@ -250,8 +267,8 @@ func TestSendRelay202NoPollWhenConfirmDisabled(t *testing.T) {
 	if got := atomic.LoadInt32(&statusCalls); got != 0 {
 		t.Fatalf("ConfirmDelivery=false must NOT poll, got %d status calls", got)
 	}
-	if result.Metadata["telegram_state"] != "pending" {
-		t.Fatalf("telegram_state=%v, want pending", result.Metadata["telegram_state"])
+	if result.Metadata["telegram_state"] != "unconfirmed" {
+		t.Fatalf("telegram_state=%v, want unconfirmed", result.Metadata["telegram_state"])
 	}
 }
 

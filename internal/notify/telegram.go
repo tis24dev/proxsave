@@ -215,7 +215,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 		message := t.buildMessage(data)
 		status, err := t.sendViaRelay(ctx, message, notifyID)
 		if err == nil {
-			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status)
+			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status, time.Since(startTime))
 			result.Success = true
 			result.Duration = time.Since(startTime)
 			return result, nil
@@ -267,7 +267,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 				result.Duration = time.Since(startTime)
 				return result, nil // Non-critical error, don't abort backup
 			}
-			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status)
+			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status, time.Since(startTime))
 			result.Success = true
 			result.Duration = time.Since(startTime)
 			return result, nil
@@ -469,9 +469,12 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID s
 // result.Metadata (relay_accepted, notify_id, telegram_state, telegram_message_id,
 // telegram_reason); it NEVER changes result.Success -- server acceptance is the
 // success signal, the delivery outcome is a separate best-effort line.
-func (t *TelegramNotifier) recordRelayAcceptedAndPoll(ctx context.Context, result *NotificationResult, notifyID string, httpStatus int) {
+func (t *TelegramNotifier) recordRelayAcceptedAndPoll(ctx context.Context, result *NotificationResult, notifyID string, httpStatus int, acceptDuration time.Duration) {
 	result.Metadata["relay_accepted"] = true
 	result.Metadata["notify_id"] = notifyID
+	// Time to server ACCEPTANCE only (before any delivery poll), so the adapter's
+	// first line reports true relay latency, not latency + the poll budget.
+	result.Metadata["relay_accept_duration"] = acceptDuration
 
 	// HTTP 200 = legacy synchronous relay (outbox kill-switch off): the server
 	// already delivered inside the request, so there is nothing to poll.
@@ -480,7 +483,10 @@ func (t *TelegramNotifier) recordRelayAcceptedAndPoll(ctx context.Context, resul
 		return
 	}
 	if !t.config.ConfirmDelivery {
-		result.Metadata["telegram_state"] = "pending" // confirmation disabled by config
+		// Confirmation disabled by config: this is NOT a pending delivery, so use a
+		// distinct state and let the adapter stay quiet (no "delivery in progress"
+		// warning on every backup).
+		result.Metadata["telegram_state"] = "unconfirmed"
 		return
 	}
 
@@ -507,7 +513,6 @@ func (t *TelegramNotifier) pollCfg() deliveryPollConfig {
 		timeout = 10 * time.Second
 	}
 	return deliveryPollConfig{
-		Enabled:      t.config.ConfirmDelivery,
 		Timeout:      timeout,
 		Interval:     interval,
 		InitialDelay: interval,

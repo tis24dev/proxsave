@@ -15,7 +15,6 @@ import (
 
 // deliveryPollConfig tunes the post-send delivery-status poll.
 type deliveryPollConfig struct {
-	Enabled      bool
 	Timeout      time.Duration // total budget across all attempts
 	Interval     time.Duration // base gap between attempts (grows with backoff)
 	InitialDelay time.Duration // wait before the first poll (delivery needs >=1s)
@@ -159,12 +158,14 @@ func fetchDeliveryStatusOnce(ctx context.Context, client *http.Client, endpoint,
 			Reason:    body.Reason,
 			Attempts:  body.Attempts,
 		}, false
-	case resp.StatusCode == 404 || resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 503:
-		// Old server without the route, row not found, stale secret, or relay off:
-		// definitive, do not retry.
+	case resp.StatusCode == 404 || resp.StatusCode == 401 || resp.StatusCode == 403:
+		// Old server without the route, row not found, or stale secret: definitive,
+		// do not retry.
 		return deliveryStatus{State: "unknown", Err: fmt.Errorf("status HTTP %d", resp.StatusCode)}, false
 	default:
-		// 5xx or anything unexpected: transient, retry.
+		// 5xx (incl. 503 overload / rolling-restart / relay killswitch) or anything
+		// unexpected: transient, retry within the budget (the message is already
+		// accepted on the durable outbox, so pending is the honest fallback).
 		return deliveryStatus{State: "unknown", Err: fmt.Errorf("status HTTP %d", resp.StatusCode)}, true
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
@@ -457,7 +458,13 @@ func (n *NotificationAdapter) logTelegramOutcome(result *notify.NotificationResu
 		}
 		return true // no second line: nothing was accepted
 	}
-	n.logger.Info("✓ %s: sent to ProxSave server (in %v)", name, result.Duration)
+	// First-line latency is the time to server ACCEPTANCE (recorded before any poll),
+	// falling back to the total duration if absent.
+	acceptDur := result.Duration
+	if d, ok := result.Metadata["relay_accept_duration"].(time.Duration); ok {
+		acceptDur = d
+	}
+	n.logger.Info("✓ %s: sent to ProxSave server (in %v)", name, acceptDur)
 
 	// Second response: did Telegram confirm delivery?
 	state, _ := result.Metadata["telegram_state"].(string)
@@ -472,6 +479,9 @@ func (n *NotificationAdapter) logTelegramOutcome(result *notify.NotificationResu
 		n.logger.Warning("❌ %s: not delivered (%s)", name, mapTelegramReason(reason))
 	case "pending":
 		n.logger.Warning("⚠️ %s: accepted; delivery in progress (auto-retry)", name)
+	case "unconfirmed":
+		// Confirmation disabled by config: accepted is enough, stay quiet.
+		n.logger.Debug("Telegram: delivery confirmation disabled (accepted by server)")
 	default: // "unknown" or missing
 		n.logger.Warning("⚠️ %s: accepted; delivery not confirmed", name)
 	}
@@ -504,7 +514,10 @@ func telegramDeliverySubstate(result *notify.NotificationResult) string {
 	if result == nil || result.Metadata == nil {
 		return ""
 	}
-	if _, ok := result.Metadata["relay_accepted"]; !ok {
+	// Gate on the VALUE, not mere presence: a relay POST that failed sets
+	// relay_accepted=false with no telegram_state and must NOT be labelled
+	// "delivery unconfirmed" (it was never accepted).
+	if accepted, _ := result.Metadata["relay_accepted"].(bool); !accepted {
 		return ""
 	}
 	switch s, _ := result.Metadata["telegram_state"].(string); s {
@@ -515,6 +528,8 @@ func telegramDeliverySubstate(result *notify.NotificationResult) string {
 		return "not delivered: " + mapTelegramReason(reason)
 	case "pending":
 		return "queued"
+	case "unconfirmed":
+		return "" // confirmation disabled -> no substate noise in the body
 	default:
 		return "delivery unconfirmed"
 	}

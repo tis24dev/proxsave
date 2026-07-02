@@ -115,6 +115,70 @@ func TestTelegramOutcome_RelayUnreachableIsWarning(t *testing.T) {
 	}
 }
 
+// F1: the first line reports the ACCEPTANCE latency (recorded before the poll), not
+// the total duration (which includes up to the whole poll budget).
+func TestTelegramOutcome_FirstLineUsesAcceptanceDuration(t *testing.T) {
+	out, _ := telegramOutcome(t, &notify.NotificationResult{
+		Success:  true,
+		Method:   "telegram",
+		Duration: 10 * time.Second, // total incl. poll
+		Metadata: map[string]interface{}{
+			"relay_accepted":        true,
+			"relay_accept_duration": 42 * time.Millisecond,
+			"telegram_state":        "delivered",
+		},
+	})
+	if !strings.Contains(out, "sent to ProxSave server (in 42ms)") {
+		t.Fatalf("first line must show acceptance latency (42ms): %q", out)
+	}
+	if strings.Contains(out, "in 10s") {
+		t.Fatalf("first line must NOT show the poll-inflated total (10s): %q", out)
+	}
+}
+
+// F2: with confirmation disabled the state is "unconfirmed" -> quiet, no warning.
+func TestTelegramOutcome_UnconfirmedIsQuietNotWarning(t *testing.T) {
+	out, logger := telegramOutcome(t, &notify.NotificationResult{
+		Success:  true,
+		Method:   "telegram",
+		Metadata: map[string]interface{}{
+			"relay_accepted": true,
+			"telegram_state": "unconfirmed",
+		},
+	})
+	if !strings.Contains(out, "sent to ProxSave server") {
+		t.Fatalf("missing first line: %q", out)
+	}
+	if strings.Contains(out, "delivery in progress") {
+		t.Fatalf("confirmation-disabled must NOT warn 'delivery in progress': %q", out)
+	}
+	if logger.WarningCount() != 0 {
+		t.Fatalf("confirmation-disabled must emit no warning, got %d", logger.WarningCount())
+	}
+}
+
+// F5: telegramDeliverySubstate must gate on the relay_accepted VALUE, so a failed
+// relay (accepted=false) gets no substate, not a misleading "delivery unconfirmed".
+func TestTelegramDeliverySubstate_ValueGated(t *testing.T) {
+	cases := []struct {
+		name string
+		meta map[string]interface{}
+		want string
+	}{
+		{"failed relay", map[string]interface{}{"relay_accepted": false}, ""},
+		{"confirmation disabled", map[string]interface{}{"relay_accepted": true, "telegram_state": "unconfirmed"}, ""},
+		{"delivered", map[string]interface{}{"relay_accepted": true, "telegram_state": "delivered"}, "delivered"},
+		{"pending", map[string]interface{}{"relay_accepted": true, "telegram_state": "pending"}, "queued"},
+		{"non-relay path", map[string]interface{}{}, ""},
+	}
+	for _, c := range cases {
+		got := telegramDeliverySubstate(&notify.NotificationResult{Metadata: c.meta})
+		if got != c.want {
+			t.Fatalf("%s: telegramDeliverySubstate=%q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // No relay metadata (personal mode / legacy direct bot-token send) keeps the old
 // generic single line.
 func TestTelegramOutcome_NonRelayKeepsGenericLine(t *testing.T) {
