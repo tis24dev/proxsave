@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -104,6 +105,10 @@ func initializeTelegramNotification(opts backupModeOptions, orch *orchestrator.O
 		ServerID:      cfg.ServerID,
 		NotifySecret:  cfg.TelegramNotifySecret,
 		BaseDir:       cfg.BaseDir,
+
+		ConfirmDelivery: cfg.TelegramConfirmDelivery,
+		ConfirmTimeout:  time.Duration(cfg.TelegramConfirmTimeoutS) * time.Second,
+		ConfirmInterval: time.Duration(cfg.TelegramConfirmIntervalS) * time.Second,
 	}
 	telegramNotifier, err := notify.NewTelegramNotifier(telegramConfig, logger)
 	if err != nil {

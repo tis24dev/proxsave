@@ -3,6 +3,8 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +33,23 @@ const proxsaveVersionHeader = "X-Proxsave-Version"
 // secret). Sent ONLY by the two provisioning paths, never the bare status probe.
 const proxsaveProvisionHeader = "X-Proxsave-Provision"
 
+// proxsaveNotifyIDHeader carries a client-generated id that makes the enqueue
+// idempotent and is the handle the client polls for the real delivery outcome.
+const proxsaveNotifyIDHeader = "X-Notify-Id"
+
+// newNotifyID returns a random 32-hex-char id (<=128, matching the server's cap).
+// Generated ONCE per Send and reused across the relay POST + status poll (and any
+// relay retry) so the server-side idempotency dedupe never double-queues.
+func newNotifyID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand effectively never fails; on the impossible error fall back to
+		// a time-derived id so the poll still has a usable handle.
+		return fmt.Sprintf("t%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
 // setProxsaveVersionHeader stamps an outbound central-server request with the
 // normalized ProxSave version (e.g. "0.28.0").
 func setProxsaveVersionHeader(req *http.Request) string {
@@ -57,6 +76,12 @@ type TelegramConfig struct {
 	ServerID      string // Server identifier for centralized mode
 	NotifySecret  string // Per-server relay secret; when set, use the server-side relay
 	BaseDir       string // Identity store root for lazy-load / persist of the relay secret
+
+	// Delivery confirmation (two-response CLI): after the relay accepts (202), poll
+	// GET /api/notify/status until Telegram confirms delivery or the budget elapses.
+	ConfirmDelivery bool
+	ConfirmTimeout  time.Duration
+	ConfirmInterval time.Duration
 }
 
 // TelegramNotifier implements the Notifier interface for Telegram
@@ -152,6 +177,10 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 		Method:   "telegram",
 		Metadata: make(map[string]interface{}),
 	}
+	// One idempotent id per notification, reused across the relay POST and the
+	// delivery-status poll (and any relay retry after a stale-secret reprovision) so
+	// the server-side idempotency dedupe never double-queues this notification.
+	notifyID := newNotifyID()
 
 	if !t.config.Enabled {
 		t.logger.Debug("Telegram notifications disabled")
@@ -184,15 +213,16 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	if t.config.Mode == TelegramModeCentralized && t.config.NotifySecret != "" {
 		t.logger.Debug("Telegram: using server-side relay path (bot token stays on host)")
 		message := t.buildMessage(data)
-		err := t.sendViaRelay(ctx, message)
+		status, err := t.sendViaRelay(ctx, message, notifyID)
 		if err == nil {
-			t.logger.Debug("Telegram relay confirmed delivery")
+			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status, time.Since(startTime))
 			result.Success = true
 			result.Duration = time.Since(startTime)
 			return result, nil
 		}
 		if !errors.Is(err, errRelayAuthRejected) {
 			t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
+			result.Metadata["relay_accepted"] = false
 			result.Success = false
 			result.Error = err
 			result.Duration = time.Since(startTime)
@@ -228,14 +258,16 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 		if t.config.NotifySecret != "" {
 			t.logger.Debug("Telegram: fetch provisioned a fresh relay secret; relaying this run")
 			message := t.buildMessage(data)
-			if err := t.sendViaRelay(ctx, message); err != nil {
+			status, err := t.sendViaRelay(ctx, message, notifyID)
+			if err != nil {
 				t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
+				result.Metadata["relay_accepted"] = false
 				result.Success = false
 				result.Error = err
 				result.Duration = time.Since(startTime)
 				return result, nil // Non-critical error, don't abort backup
 			}
-			t.logger.Debug("Telegram relay confirmed delivery (first-run provisioning)")
+			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status, time.Since(startTime))
 			result.Success = true
 			result.Duration = time.Since(startTime)
 			return result, nil
@@ -368,7 +400,7 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 // sendViaRelay sends a message through the authenticated server-side relay so
 // the bot token never leaves this host. The per-server secret is sent only in
 // the X-Server-Auth header; any returned error string is scrubbed of it.
-func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message string) error {
+func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID string) (int, error) {
 	endpoint := strings.TrimRight(t.config.ServerAPIHost, "/") + "/api/notify"
 
 	payload := struct {
@@ -380,7 +412,7 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message string) err
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to encode relay request: %w", err)
+		return 0, fmt.Errorf("failed to encode relay request: %w", err)
 	}
 
 	// 5-second timeout, mirroring fetchCentralizedCredentials.
@@ -389,39 +421,107 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message string) err
 
 	req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("failed to create relay request: %w", err)
+		return 0, fmt.Errorf("failed to create relay request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Server-Auth", t.config.NotifySecret)
+	if notifyID != "" {
+		req.Header.Set(proxsaveNotifyIDHeader, notifyID)
+	}
 	pv := setProxsaveVersionHeader(req)
-	t.logger.Debug("Telegram: relay POST %s (serverID=%q msgLen=%d X-Proxsave-Version=%q)", endpoint, t.config.ServerID, len(message), pv)
+	t.logger.Debug("Telegram: relay POST %s (serverID=%q msgLen=%d notifyID=%q X-Proxsave-Version=%q)", endpoint, t.config.ServerID, len(message), notifyID, pv)
 
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("relay request failed: %s", logging.RedactSecrets(err.Error(), t.config.NotifySecret))
+		return 0, fmt.Errorf("relay request failed: %s", logging.RedactSecrets(err.Error(), t.config.NotifySecret))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
-	case 200:
-		t.logger.Debug("Telegram: relay delivered (HTTP 200)")
-		return nil
+	case 200, 202:
+		// 200 = legacy synchronous relay (outbox kill-switch off) = already
+		// delivered. 202 = accepted onto the durable outbox; the real delivery
+		// outcome is learned via the status poll.
+		t.logger.Debug("Telegram: relay accepted (HTTP %d notifyID=%q)", resp.StatusCode, notifyID)
+		return resp.StatusCode, nil
 	case 401, 403:
-		return fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.StatusCode)
+		return resp.StatusCode, fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.StatusCode)
 	case 404:
-		return fmt.Errorf("server unknown (HTTP 404)")
+		return resp.StatusCode, fmt.Errorf("server unknown (HTTP 404)")
 	case 409:
-		return fmt.Errorf("registration missing (HTTP 409)")
+		return resp.StatusCode, fmt.Errorf("registration missing (HTTP 409)")
 	case 413:
-		return fmt.Errorf("message too long (HTTP 413)")
+		return resp.StatusCode, fmt.Errorf("message too long (HTTP 413)")
 	default:
 		respBody, _ := io.ReadAll(resp.Body)
 		snippet := string(respBody)
 		if len(snippet) > 200 {
 			snippet = snippet[:200]
 		}
-		return fmt.Errorf("relay returned status %d: %s",
+		return resp.StatusCode, fmt.Errorf("relay returned status %d: %s",
 			resp.StatusCode, logging.RedactSecrets(snippet, t.config.NotifySecret))
+	}
+}
+
+// recordRelayAcceptedAndPoll records that the ProxSave server accepted the
+// notification (first response) and, when confirmation is enabled, polls for the
+// real Telegram delivery outcome (second response). Everything lands in
+// result.Metadata (relay_accepted, notify_id, telegram_state, telegram_message_id,
+// telegram_reason); it NEVER changes result.Success -- server acceptance is the
+// success signal, the delivery outcome is a separate best-effort line.
+func (t *TelegramNotifier) recordRelayAcceptedAndPoll(ctx context.Context, result *NotificationResult, notifyID string, httpStatus int, acceptDuration time.Duration) {
+	result.Metadata["relay_accepted"] = true
+	result.Metadata["notify_id"] = notifyID
+	// Time to server ACCEPTANCE only (before any delivery poll), so the adapter's
+	// first line reports true relay latency, not latency + the poll budget.
+	result.Metadata["relay_accept_duration"] = acceptDuration
+
+	// HTTP 200 = legacy synchronous relay (outbox kill-switch off): the server
+	// already delivered inside the request, so there is nothing to poll.
+	if httpStatus == 200 {
+		result.Metadata["telegram_state"] = "delivered"
+		return
+	}
+	if !t.config.ConfirmDelivery {
+		// Confirmation disabled by config: this is NOT a pending delivery, so use a
+		// distinct state and let the adapter stay quiet (no "delivery in progress"
+		// warning on every backup).
+		result.Metadata["telegram_state"] = "unconfirmed"
+		return
+	}
+
+	ds := pollTelegramDeliveryStatus(ctx, t.client, t.config.ServerAPIHost,
+		t.config.ServerID, t.config.NotifySecret, notifyID, t.pollCfg(), t.logger)
+	result.Metadata["telegram_state"] = ds.State
+	if ds.State == "delivered" && ds.MessageID != 0 {
+		result.Metadata["telegram_message_id"] = ds.MessageID
+	}
+	if ds.State == "failed" {
+		result.Metadata["telegram_reason"] = ds.Reason
+	}
+}
+
+// pollCfg builds the delivery-status poll config from the notifier config, applying
+// sane floors so a mis-set interval/timeout can never spin.
+func (t *TelegramNotifier) pollCfg() deliveryPollConfig {
+	interval := t.config.ConfirmInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if interval > 5*time.Second {
+		interval = 5 * time.Second // ceiling: a mis-set interval must not starve the poll
+	}
+	timeout := t.config.ConfirmTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	if timeout > 60*time.Second {
+		timeout = 60 * time.Second // ceiling: never hang end-of-backup for minutes
+	}
+	return deliveryPollConfig{
+		Timeout:      timeout,
+		Interval:     interval,
+		InitialDelay: interval,
 	}
 }
 

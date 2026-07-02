@@ -194,6 +194,12 @@ type Config struct {
 	ServerID              string // Server identifier for centralized mode
 	TelegramNotifySecret  string // Deprecated: no longer read from backup.env; the relay secret is provisioned via TOFU into the immutable identity file. Kept "" for compatibility.
 
+	// Telegram delivery confirmation (two-response CLI): poll the server for the
+	// real Telegram delivery outcome after the relay accepts the notification.
+	TelegramConfirmDelivery  bool
+	TelegramConfirmTimeoutS  int
+	TelegramConfirmIntervalS int
+
 	// Email Notifications
 	EmailEnabled          bool
 	EmailDeliveryMethod   string // "relay", "sendmail", or "pmf"
@@ -731,6 +737,9 @@ func (c *Config) parseNotificationSettings() {
 	c.TelegramServerAPIHost = "https://bot.tis24.it:1443"
 	c.ServerID = ""
 	c.TelegramNotifySecret = "" // no longer read from backup.env; provisioned via TOFU into the immutable identity file
+	c.TelegramConfirmDelivery = c.getBool("TELEGRAM_CONFIRM_DELIVERY", true)
+	c.TelegramConfirmTimeoutS = c.getInt("TELEGRAM_CONFIRM_TIMEOUT_SECONDS", 10)
+	c.TelegramConfirmIntervalS = c.getInt("TELEGRAM_CONFIRM_INTERVAL_SECONDS", 1)
 
 	c.EmailEnabled = c.getBoolWithLegacyAlias(emailEnabledKey, emailEnableLegacyKey, false)
 	c.EmailDeliveryMethod = NormalizeEmailDeliveryMethod(c.getString("EMAIL_DELIVERY_METHOD", "relay"))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
@@ -69,8 +70,11 @@ func (n *NotificationAdapter) Notify(ctx context.Context, stats *BackupStats) er
 	n.logger.Debug("Notifier '%s' returned result: success=%v, method=%s, duration=%s",
 		n.notifier.Name(), result.Success, result.Method, result.Duration)
 
-	// Handle three cases: success, fallback success, or failure
-	if !result.Success {
+	// The Telegram relay path prints its own two-line result (server acceptance +
+	// real Telegram delivery); everything else keeps the generic single line.
+	if n.notifier.Name() == "Telegram" && n.logTelegramOutcome(result) {
+		// handled by the relay-aware two-line logger
+	} else if !result.Success {
 		// Complete failure
 		n.logger.Warning("%s: failure reported", n.notifier.Name())
 		if result.Error != nil {
@@ -378,6 +382,9 @@ func (n *NotificationAdapter) recordNotifierStatus(stats *BackupStats, result *n
 			base = "unknown"
 		}
 		statusDetail := describeNotificationResult(result)
+		if sub := telegramDeliverySubstate(result); sub != "" {
+			statusDetail = statusDetail + ", " + sub
+		}
 		if statusDetail != "" {
 			stats.TelegramStatus = fmt.Sprintf("%s (%s)", base, statusDetail)
 		} else {
@@ -421,4 +428,109 @@ func describeNotificationSeverity(result *notify.NotificationResult) string {
 		return "warning"
 	}
 	return "ok"
+}
+
+// logTelegramOutcome prints the two-response result for the Telegram RELAY path:
+// line 1 = accepted by the ProxSave server, line 2 = delivered to Telegram. It
+// returns false (logging nothing) when the notification did NOT go through the relay
+// (personal mode / legacy direct bot-token send), so the caller falls back to the
+// generic single line. Every second-line non-success is WARNING level with a ❌/⚠️
+// in the text: the delivery outcome must be VISIBLE but must never block the backup
+// (the exit code is frozen before the notification phase; a WARNING is counted as a
+// warning, never an error, in the run summary).
+func (n *NotificationAdapter) logTelegramOutcome(result *notify.NotificationResult) bool {
+	if result == nil || result.Metadata == nil {
+		return false
+	}
+	accVal, ok := result.Metadata["relay_accepted"]
+	if !ok {
+		return false // no relay path involved -> generic single line
+	}
+	name := n.notifier.Name()
+	accepted, _ := accVal.(bool)
+
+	// First response: did the ProxSave server accept it?
+	if !accepted {
+		if result.Error != nil {
+			n.logger.Warning("❌ %s: could not send to ProxSave server: %v", name, result.Error)
+		} else {
+			n.logger.Warning("❌ %s: could not send to ProxSave server", name)
+		}
+		return true // no second line: nothing was accepted
+	}
+	// First-line latency is the time to server ACCEPTANCE (recorded before any poll),
+	// falling back to the total duration if absent.
+	acceptDur := result.Duration
+	if d, ok := result.Metadata["relay_accept_duration"].(time.Duration); ok {
+		acceptDur = d
+	}
+	n.logger.Info("✓ %s: sent to ProxSave server (in %v)", name, acceptDur)
+
+	// Second response: did Telegram confirm delivery?
+	state, _ := result.Metadata["telegram_state"].(string)
+	switch state {
+	case "delivered":
+		if id, ok := result.Metadata["telegram_message_id"].(int64); ok && id != 0 {
+			n.logger.Debug("Telegram: message_id=%d", id)
+		}
+		n.logger.Info("✓ %s: delivered to Telegram", name)
+	case "failed":
+		reason, _ := result.Metadata["telegram_reason"].(string)
+		n.logger.Warning("❌ %s: not delivered (%s)", name, mapTelegramReason(reason))
+	case "pending":
+		n.logger.Warning("⚠️ %s: accepted; delivery in progress (auto-retry)", name)
+	case "unconfirmed":
+		// Confirmation disabled by config: accepted is enough, stay quiet.
+		n.logger.Debug("Telegram: delivery confirmation disabled (accepted by server)")
+	default: // "unknown" or missing
+		n.logger.Warning("⚠️ %s: accepted; delivery not confirmed", name)
+	}
+	return true
+}
+
+// mapTelegramReason turns a server-side outbox reason into user-facing copy.
+func mapTelegramReason(reason string) string {
+	switch {
+	case reason == "":
+		return "rejected by Telegram"
+	case reason == "http_403":
+		return "bot blocked by the user"
+	case reason == "http_400", reason == "http_404":
+		return "invalid chat"
+	case reason == "http_413":
+		return "message too long"
+	case strings.HasPrefix(reason, "gave_up_after_ttl"):
+		return "Telegram unreachable too long (expired)"
+	case strings.HasPrefix(reason, "gave_up_after_"):
+		return "too many failed attempts"
+	default:
+		return reason
+	}
+}
+
+// telegramDeliverySubstate is the short delivery tag appended to stats.TelegramStatus
+// (which is echoed into the notification body). Empty for the non-relay path.
+func telegramDeliverySubstate(result *notify.NotificationResult) string {
+	if result == nil || result.Metadata == nil {
+		return ""
+	}
+	// Gate on the VALUE, not mere presence: a relay POST that failed sets
+	// relay_accepted=false with no telegram_state and must NOT be labelled
+	// "delivery unconfirmed" (it was never accepted).
+	if accepted, _ := result.Metadata["relay_accepted"].(bool); !accepted {
+		return ""
+	}
+	switch s, _ := result.Metadata["telegram_state"].(string); s {
+	case "delivered":
+		return "delivered"
+	case "failed":
+		reason, _ := result.Metadata["telegram_reason"].(string)
+		return "not delivered: " + mapTelegramReason(reason)
+	case "pending":
+		return "queued"
+	case "unconfirmed":
+		return "" // confirmation disabled -> no substate noise in the body
+	default:
+		return "delivery unconfirmed"
+	}
 }
