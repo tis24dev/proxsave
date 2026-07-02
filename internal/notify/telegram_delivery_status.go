@@ -142,8 +142,8 @@ func fetchDeliveryStatusOnce(ctx context.Context, client *http.Client, endpoint,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	switch {
-	case resp.StatusCode == 200:
+	switch resp.StatusCode {
+	case 200:
 		var body notifyStatusResponse
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body); err != nil {
 			return deliveryStatus{State: "unknown", Err: err}, true
@@ -158,7 +158,7 @@ func fetchDeliveryStatusOnce(ctx context.Context, client *http.Client, endpoint,
 			Reason:    body.Reason,
 			Attempts:  body.Attempts,
 		}, false
-	case resp.StatusCode == 404 || resp.StatusCode == 401 || resp.StatusCode == 403:
+	case 404, 401, 403:
 		// Old server without the route, row not found, or stale secret: definitive,
 		// do not retry.
 		return deliveryStatus{State: "unknown", Err: fmt.Errorf("status HTTP %d", resp.StatusCode)}, false

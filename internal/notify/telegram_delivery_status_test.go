@@ -155,6 +155,30 @@ func TestPollDeliveryStatus503IsTransientRetriesThenDelivers(t *testing.T) {
 	}
 }
 
+func TestPollCfgAppliesFloorsAndCeilings(t *testing.T) {
+	// Oversized config must be capped so a mis-set knob cannot hang end-of-backup.
+	n, err := NewTelegramNotifier(TelegramConfig{
+		Enabled: true, Mode: TelegramModeCentralized, ServerAPIHost: "https://c.test",
+		ServerID: "server-123", NotifySecret: "sek",
+		ConfirmDelivery: true, ConfirmTimeout: time.Hour, ConfirmInterval: 100 * time.Second,
+	}, dsTestLogger())
+	if err != nil {
+		t.Fatalf("notifier: %v", err)
+	}
+	if cfg := n.pollCfg(); cfg.Timeout != 60*time.Second || cfg.Interval != 5*time.Second {
+		t.Fatalf("ceilings: got timeout=%v interval=%v, want 60s/5s", cfg.Timeout, cfg.Interval)
+	}
+	// Zero/negative -> floors.
+	n2, _ := NewTelegramNotifier(TelegramConfig{
+		Enabled: true, Mode: TelegramModeCentralized, ServerAPIHost: "https://c.test",
+		ServerID: "server-123", NotifySecret: "sek",
+		ConfirmDelivery: true, ConfirmTimeout: 0, ConfirmInterval: 0,
+	}, dsTestLogger())
+	if cfg := n2.pollCfg(); cfg.Timeout != 10*time.Second || cfg.Interval != time.Second {
+		t.Fatalf("floors: got timeout=%v interval=%v, want 10s/1s", cfg.Timeout, cfg.Interval)
+	}
+}
+
 // --- Send() integration: relay 202 + poll ---
 
 func dsRelayNotifier(t *testing.T, client *http.Client, confirm bool) *TelegramNotifier {

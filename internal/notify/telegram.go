@@ -508,9 +508,15 @@ func (t *TelegramNotifier) pollCfg() deliveryPollConfig {
 	if interval <= 0 {
 		interval = time.Second
 	}
+	if interval > 5*time.Second {
+		interval = 5 * time.Second // ceiling: a mis-set interval must not starve the poll
+	}
 	timeout := t.config.ConfirmTimeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
+	}
+	if timeout > 60*time.Second {
+		timeout = 60 * time.Second // ceiling: never hang end-of-backup for minutes
 	}
 	return deliveryPollConfig{
 		Timeout:      timeout,
