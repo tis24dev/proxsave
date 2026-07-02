@@ -385,7 +385,7 @@ func TestTelegramRelayErrorRedactsSecret(t *testing.T) {
 	}
 	notifier.client = client
 
-	relayErr := notifier.sendViaRelay(context.Background(), "hello")
+	_, relayErr := notifier.sendViaRelay(context.Background(), "hello", "notify-red-1")
 	if relayErr == nil {
 		t.Fatalf("expected an error from the relay")
 	}
