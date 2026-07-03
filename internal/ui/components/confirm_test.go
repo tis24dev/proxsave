@@ -180,6 +180,23 @@ func TestConfirmTinyHeightsKeepButtons(t *testing.T) {
 	}
 }
 
+// TestConfirmSanitizesInputs locks the constructor-level sanitize wiring:
+// removing sanitize() from NewConfirm must fail here (the sanitize function
+// itself is unit-tested separately).
+func TestConfirmSanitizesInputs(t *testing.T) {
+	c := NewConfirm("Ti\x1b[31mtle", "msg \x1b[31mevil\nline2", WithLabels("Y\x07es", "N\x07o"))
+	view := c.View(80, 20)
+	if strings.Contains(view, "\x1b[31m") || strings.Contains(view, "\x07") {
+		t.Fatalf("unsanitized control data in view: %q", view)
+	}
+	if !strings.Contains(view, "evil") || !strings.Contains(view, "line2") {
+		t.Errorf("sanitized content missing: %q", view)
+	}
+	if c.Title() != "Title" {
+		t.Errorf("title not sanitized: %q", c.Title())
+	}
+}
+
 func TestConfirmCountdownPrefix(t *testing.T) {
 	c := NewConfirm("Network commit", "Commit?", WithCountdown(30*time.Second),
 		WithCountdownPrefix("Rollback"))

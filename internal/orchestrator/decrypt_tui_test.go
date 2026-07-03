@@ -4,8 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rivo/tview"
-
 	"github.com/tis24dev/proxsave/internal/backup"
 )
 
@@ -57,16 +55,5 @@ func TestFilterEncryptedCandidates(t *testing.T) {
 	filtered := filterEncryptedCandidates([]*backupCandidate{nil, encrypted, plain, {}})
 	if len(filtered) != 1 || filtered[0] != encrypted {
 		t.Fatalf("filterEncryptedCandidates returned %+v, want only encrypted candidate", filtered)
-	}
-}
-
-func TestBuildWizardPageReturnsFlex(t *testing.T) {
-	content := tview.NewBox()
-	page := buildWizardPage("Title", "/etc/proxsave/backup.env", "sig", content)
-	if page == nil {
-		t.Fatalf("expected non-nil page")
-	}
-	if _, ok := page.(*tview.Flex); !ok {
-		t.Fatalf("expected *tview.Flex, got %T", page)
 	}
 }

@@ -6,21 +6,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
-
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/tui"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
-const (
-	decryptWizardSubtitle = "Decrypt Backup Workflow"
-	decryptNavText        = "[yellow]Navigation:[white] TAB/↑↓ to move | ENTER to select | ESC to exit screens | Mouse clicks enabled"
-)
+const decryptWizardSubtitle = "Decrypt Backup Workflow"
 
 // RunDecryptWorkflowTUI runs the decrypt workflow using the Charm UI: one
 // long-lived Session whose screens are driven by the same
@@ -106,17 +99,4 @@ func filterEncryptedCandidates(candidates []*backupCandidate) []*backupCandidate
 		}
 	}
 	return filtered
-}
-
-func buildWizardPage(title, configPath, buildSig string, content tview.Primitive) tview.Primitive {
-	return tui.BuildScreen(tui.ScreenSpec{
-		Title:           title,
-		HeaderText:      fmt.Sprintf("ProxSave - By TIS24DEV\n%s\n", decryptWizardSubtitle),
-		NavText:         decryptNavText,
-		ConfigPath:      configPath,
-		BuildSig:        buildSig,
-		TitleColor:      tui.ProxmoxOrange,
-		BorderColor:     tui.ProxmoxOrange,
-		BackgroundColor: tcell.ColorBlack,
-	}, content)
 }

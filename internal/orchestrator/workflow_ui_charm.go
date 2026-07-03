@@ -200,6 +200,26 @@ func (u *charmWorkflowUI) ResolveExistingPath(ctx context.Context, path, descrip
 	return PathDecisionNewPath, filepath.Clean(trimmed), nil
 }
 
+func backupSummaryForUI(cand *backupCandidate) string {
+	return describeBackupCandidate(cand).Summary
+}
+
+// validateDistinctNewPathInput rejects empty paths and paths equal to the
+// existing one (shared by the CLI and Charm new-path prompts).
+func validateDistinctNewPathInput(value, defaultPath string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", fmt.Errorf("path cannot be empty")
+	}
+
+	trimmedDefault := strings.TrimSpace(defaultPath)
+	if trimmedDefault != "" && filepath.Clean(trimmed) == filepath.Clean(trimmedDefault) {
+		return "", fmt.Errorf("path must be different from existing path")
+	}
+
+	return trimmed, nil
+}
+
 func (u *charmWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error) {
 	name := strings.TrimSpace(displayName)
 	if name == "" {
