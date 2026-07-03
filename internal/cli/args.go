@@ -43,6 +43,7 @@ type Args struct {
 	EnvMigrationDry   bool
 	CleanupGuards     bool
 	LegacyEnvPath     string
+	UIDemo            bool
 }
 
 var osExit = os.Exit
@@ -106,6 +107,11 @@ func Parse() *Args {
 		"Cleanup ProxSave guard bind mounts and directories (/var/lib/proxsave/guards). Use with --dry-run to preview")
 	flag.StringVar(&args.LegacyEnvPath, "old-env", "",
 		"Path to the legacy Bash backup.env used during --env-migration")
+
+	// Hidden developer flag (not listed in printHelp): interactive tour of
+	// the Charm UI components. Temporary, removed when the UI migration
+	// completes.
+	flag.BoolVar(&args.UIDemo, "ui-demo", false, "")
 
 	flag.BoolVar(&args.UpgradeConfig, "upgrade-config", false,
 		"Upgrade configuration file using the embedded template (adds missing keys, preserves existing and custom keys)")

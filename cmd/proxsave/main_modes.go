@@ -114,6 +114,7 @@ func enabledModes(modes []incompatibleMode) []string {
 
 func dispatchPreRuntimeModes(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, toolVersion string) (int, bool) {
 	for _, handler := range []preRuntimeModeHandler{
+		runUIDemoMode,
 		runUpgradeMode,
 		runNewKeyMode,
 		runDecryptOnlyMode,
