@@ -83,7 +83,10 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	defer func() { done(err) }()
 
 	ui := newCLIWorkflowUI(bufio.NewReader(os.Stdin), logger)
-	return runDecryptWorkflowWithUI(ctx, cfg, logger, version, ui)
+	// The CLI already surfaces the bundle path through the logger lines
+	// printed during the run; the returned path is for full-screen UIs.
+	_, err = runDecryptWorkflowWithUI(ctx, cfg, logger, version, ui)
+	return err
 }
 
 // RunDecryptWorkflow is the legacy entrypoint that builds default deps.

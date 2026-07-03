@@ -344,7 +344,7 @@ func TestRunDecryptWorkflowWithUIRejectsMissingUI(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	cfg := &config.Config{}
 
-	err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", nil)
+	_, err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", nil)
 	if err == nil {
 		t.Fatal("expected error for missing UI")
 	}
@@ -360,7 +360,7 @@ func TestRunDecryptWorkflowWithUIRejectsTypedNilUI(t *testing.T) {
 	var typedNil *fakeDecryptWorkflowUI
 	var ui DecryptWorkflowUI = typedNil
 
-	err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", ui)
+	_, err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", ui)
 	if err == nil {
 		t.Fatal("expected error for typed-nil UI")
 	}

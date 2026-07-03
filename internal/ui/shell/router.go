@@ -47,6 +47,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case pushScreenMsg:
 		m.stack = append(m.stack, screenEntry(msg))
+		if m.cfg.observeScreenPush != nil {
+			m.cfg.observeScreenPush(msg.screen.Title())
+		}
 		return m, msg.screen.Init()
 	case removeScreenMsg:
 		// Removal is strictly by id: a resolve command runs asynchronously

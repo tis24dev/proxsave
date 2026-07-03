@@ -35,6 +35,12 @@ type Config struct {
 	// UseColor mirrors the USE_COLOR/DISABLE_COLORS config knobs. When
 	// false the program renders monochrome (layout preserved).
 	UseColor bool
+
+	// observeScreenPush, when set (test harness only), is called from the
+	// event loop with the screen title every time a screen is pushed. It
+	// gives scripted tests a deterministic "screen is now on the stack"
+	// signal: keys sent after the notification are ordered after the push.
+	observeScreenPush func(title string)
 }
 
 // Session owns one long-lived Bubble Tea program for an interactive mode.

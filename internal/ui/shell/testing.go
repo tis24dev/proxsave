@@ -1,8 +1,11 @@
 package shell
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -76,5 +79,53 @@ func StartForTest(ctx context.Context, cfg Config) *Session {
 		tea.WithInput(strings.NewReader("")),
 		tea.WithoutSignalHandler(),
 		tea.WithWindowSize(100, 30),
+	)
+}
+
+// SyncBuffer is a goroutine-safe writer that accumulates renderer output so
+// tests can wait for screen text before sending keys.
+type SyncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *SyncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *SyncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *SyncBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+// StartForTestWithOutput launches a Session that renders plain (monochrome)
+// output into w, so end-to-end tests can observe what the user would see.
+// Combine with SyncBuffer and Session.Send to script whole flows.
+func StartForTestWithOutput(ctx context.Context, cfg Config, w io.Writer) *Session {
+	return StartObservedForTest(ctx, cfg, w, nil)
+}
+
+// StartObservedForTest is StartForTestWithOutput plus a deterministic
+// screen-push observer: onPush receives each pushed screen's title from the
+// event loop, so a scripted test can wait for a screen before sending keys
+// (renderer output alone is racy: the cell-diff renderer emits nothing for
+// an identical re-render).
+func StartObservedForTest(ctx context.Context, cfg Config, w io.Writer, onPush func(title string)) *Session {
+	cfg.UseColor = false // deterministic, greppable output
+	cfg.observeScreenPush = onPush
+	return Start(ctx, cfg,
+		tea.WithOutput(w),
+		tea.WithInput(strings.NewReader("")),
+		tea.WithoutSignalHandler(),
+		tea.WithWindowSize(120, 36),
 	)
 }
