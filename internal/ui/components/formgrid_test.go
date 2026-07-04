@@ -128,6 +128,20 @@ func TestFormGridSelectCyclesAndAlignment(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 field rows, got %d", len(rows))
 	}
+
+	// The hint line must be separated from the buttons by a blank line,
+	// mirroring the blank line above them.
+	all := strings.Split(view, "\n")
+	for i, l := range all {
+		if strings.Contains(l, "Continue") {
+			if i == 0 || strings.TrimSpace(all[i-1]) != "" {
+				t.Fatalf("missing blank line above buttons: %q", all[i-1])
+			}
+			if i+1 < len(all) && strings.TrimSpace(all[i+1]) != "" {
+				t.Fatalf("missing blank line below buttons: %q", all[i+1])
+			}
+		}
+	}
 }
 
 func TestFormGridEscAndCancelButton(t *testing.T) {

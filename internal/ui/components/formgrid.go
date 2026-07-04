@@ -380,6 +380,9 @@ func (g *FormGrid) View(width, height int) string {
 	// Scroll window over the field rows so buttons/footer stay visible.
 	head := 2 // title + blank
 	tailLines := 2 + len(footer)
+	if len(footer) > 0 {
+		tailLines++ // blank line between the buttons and the footer
+	}
 	visible := max(height-head-tailLines, 1)
 	if g.cursor < len(g.fields) {
 		if g.cursor < g.offset {
@@ -401,6 +404,10 @@ func (g *FormGrid) View(width, height int) string {
 	b.WriteString(strings.Join(windowed, "\n"))
 	b.WriteString("\n\n")
 	b.WriteString(buttons)
+	if len(footer) > 0 {
+		// Same breathing room below the buttons as above them.
+		b.WriteString("\n")
+	}
 	for _, line := range footer {
 		b.WriteString("\n" + line)
 	}
