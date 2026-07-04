@@ -134,6 +134,14 @@ func (d *daemon) runOnce(parentCtx context.Context) {
 	if parentCtx.Err() != nil { // shutting down: do not start a run
 		return
 	}
+	// Backups disabled: do NOT exec a child (it would exit 0 without backing up)
+	// and do NOT ping an outcome, so the backup-outcome check honestly goes down
+	// (no backups) rather than showing a false green. The alive heartbeat is
+	// independent and keeps signalling the daemon is up.
+	if !d.cfg.BackupEnabled {
+		logging.Info("daemon: BACKUP_ENABLED=false; skipping the scheduled run (no outcome ping)")
+		return
+	}
 	r := d.getReporter()
 	rid := health.NewRunID()
 	d.reportBestEffort("start", func() error { return d.startPing(parentCtx, r, rid) })

@@ -88,15 +88,11 @@ func removeDaemonService(ctx context.Context, bootstrap *logging.BootstrapLogger
 	return nil
 }
 
-// daemonServiceActive reports whether the unit is currently active (best-effort;
-// any error or non-"active" output is reported as false).
-func daemonServiceActive(ctx context.Context) bool {
-	cmd, err := safeexec.CommandContext(ctx, "systemctl", "is-active", daemonUnitName)
-	if err != nil {
-		return false
-	}
-	out, _ := cmd.Output()
-	return strings.TrimSpace(string(out)) == "active"
+// daemonUnitInstalled reports whether the unit FILE exists on disk (installed,
+// whether active or merely enabled/stopped). A cheap stat, no systemctl call.
+func daemonUnitInstalled() bool {
+	_, err := os.Stat(daemonUnitPath)
+	return err == nil
 }
 
 // runSystemctl runs one systemctl invocation through the safeexec allowlist with

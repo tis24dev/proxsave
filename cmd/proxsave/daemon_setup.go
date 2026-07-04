@@ -70,6 +70,16 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 		"HEALTHCHECK_ENABLED": "true",
 	}); err != nil {
 		logging.Warning("daemon: failed to record SCHEDULER_MODE=daemon in %s: %v", configPath, err)
+		return nil
+	}
+	// installDaemonService already `enable --now`-started the daemon, but it read
+	// the config as it was BEFORE the write above. Restart it (only if running) so
+	// the resident process picks up HEALTHCHECK_ENABLED=true immediately instead of
+	// at the next reboot/upgrade. Config-write-first ordering is avoided so a failed
+	// unit install can't leave SCHEDULER_MODE=daemon with no unit (which would make
+	// a later --upgrade skip re-migration).
+	if err := runSystemctl(ctx, "try-restart", daemonUnitName); err != nil {
+		logging.Debug("daemon: try-restart to reload config failed: %v", err)
 	}
 	return nil
 }
@@ -166,10 +176,12 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 	}
 
 	// cron mode: a previously-installed daemon unit would double-schedule with the
-	// cron line just written, so remove it.
-	if daemonServiceActive(ctx) {
+	// cron line just written, so remove it. Gate on the unit FILE existing (not just
+	// is-active) so an enabled-but-currently-stopped unit is also torn down, and a
+	// host that never had a daemon skips the systemctl calls entirely.
+	if daemonUnitInstalled() {
 		if err := removeDaemonService(ctx, bootstrap); err != nil {
-			logging.Warning("daemon: a previous daemon unit is active and could not be removed (possible double execution): %v", err)
+			logging.Warning("daemon: a previous daemon unit could not be removed (possible double execution): %v", err)
 		} else {
 			logging.Info("Removed the previous daemon service; this host now uses the cron scheduler.")
 		}
