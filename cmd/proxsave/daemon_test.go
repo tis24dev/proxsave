@@ -64,7 +64,7 @@ func (f *fakeReporter) snapshot() fakeReporter {
 
 func newTestDaemon(rep backupReporter, cmdFn func(ctx context.Context) *exec.Cmd, maxRun time.Duration) *daemon {
 	return &daemon{
-		cfg:          &config.Config{MaxRunDuration: maxRun, HealthcheckSendLog: false},
+		cfg:          &config.Config{MaxRunDuration: maxRun, HealthcheckSendLog: false, BackupEnabled: true},
 		reporter:     rep,
 		newBackupCmd: cmdFn,
 		now:          time.Now,
@@ -152,6 +152,24 @@ func TestRunOnceReportsHang(t *testing.T) {
 	s := rep.snapshot()
 	if s.hung != 1 || s.finished != 0 {
 		t.Fatalf("hang run: hung=%d finished=%d, want 1/0", s.hung, s.finished)
+	}
+}
+
+func TestRunOnceSkipsWhenBackupDisabled(t *testing.T) {
+	rep := &fakeReporter{backupURL: true}
+	called := false
+	d := newTestDaemon(rep, func(ctx context.Context) *exec.Cmd {
+		called = true
+		return exec.CommandContext(ctx, "/bin/sh", "-c", "exit 0")
+	}, time.Hour)
+	d.cfg.BackupEnabled = false
+	d.runOnce(context.Background())
+	if called {
+		t.Fatal("BACKUP_ENABLED=false must not exec a child")
+	}
+	s := rep.snapshot()
+	if s.started != 0 || s.finished != 0 || s.hung != 0 {
+		t.Fatalf("disabled run must report nothing (no false green), got started=%d finished=%d hung=%d", s.started, s.finished, s.hung)
 	}
 }
 
