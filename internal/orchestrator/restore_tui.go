@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -44,6 +45,14 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		BuildSig:   buildSig,
 		UseColor:   cfg.UseColor,
 	})
+	// The engine keeps logging while the session owns the terminal: raw
+	// stdout writes would corrupt the alternate screen (the diff renderer
+	// never repaints cells it did not touch), so the console output is
+	// silenced for the session lifetime. Log files are unaffected. Defers
+	// run LIFO: the session closes (terminal restored) BEFORE the console
+	// writer comes back.
+	prevOut := logger.SwapOutput(io.Discard)
+	defer logger.SetOutput(prevOut)
 	// Deferred so a panicking engine cannot leave the terminal in
 	// altscreen/raw mode; Close is idempotent for the normal path below.
 	defer func() { _ = session.Close() }()

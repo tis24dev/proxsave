@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/backup"
@@ -39,6 +40,11 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		BuildSig:   buildSig,
 		UseColor:   cfg.UseColor,
 	})
+	// Silence the logger console while the session owns the terminal (raw
+	// writes corrupt the alternate screen); log files are unaffected.
+	// Defers run LIFO: the session closes before the writer comes back.
+	prevOut := logger.SwapOutput(io.Discard)
+	defer logger.SetOutput(prevOut)
 	// Deferred so a panicking engine cannot leave the terminal in
 	// altscreen/raw mode; Close is idempotent for the normal path below.
 	defer func() { _ = session.Close() }()

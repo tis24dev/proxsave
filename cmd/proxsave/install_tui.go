@@ -72,6 +72,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		BuildSig:   buildSig,
 		UseColor:   true,
 	})
+	// Bootstrap console prints would land in the alternate screen and
+	// corrupt it: quiet them for the session lifetime (mirror/log records
+	// keep working). Defers run LIFO: the session closes first.
+	bootstrap.SetConsoleQuiet(true)
+	defer bootstrap.SetConsoleQuiet(false)
 	// Deferred for panic safety; Close is idempotent for the normal path
 	// (closed explicitly before the non-interactive finalization below).
 	defer func() { _ = session.Close() }()
@@ -257,6 +262,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	if closeErr := session.Close(); closeErr != nil && err == nil {
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "session close: %v", closeErr)
 	}
+	bootstrap.SetConsoleQuiet(false)
 
 	// Finalize legacy-symlink cleanup, entrypoint cleanup/recreation, and cron via the
 	// shared post-install engine (the same runPostInstallSymlinksAndCron the CLI uses),
