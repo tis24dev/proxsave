@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ type fakeReporter struct {
 	beats            int
 	lastCode         int
 	lastRid          string
+	lastTail         string
 	alive, backupURL bool
 }
 
@@ -41,12 +43,14 @@ func (f *fakeReporter) RunFinished(ctx context.Context, rid string, code int, ta
 	defer f.mu.Unlock()
 	f.finished++
 	f.lastCode = code
+	f.lastTail = tail
 	return nil
 }
 func (f *fakeReporter) RunHang(ctx context.Context, rid string, timeout time.Duration, tail string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.hung++
+	f.lastTail = tail
 	return nil
 }
 func (f *fakeReporter) HasAliveURL() bool  { return f.alive }
@@ -55,7 +59,7 @@ func (f *fakeReporter) HasBackupURL() bool { return f.backupURL }
 func (f *fakeReporter) snapshot() fakeReporter {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return fakeReporter{started: f.started, finished: f.finished, hung: f.hung, beats: f.beats, lastCode: f.lastCode, lastRid: f.lastRid}
+	return fakeReporter{started: f.started, finished: f.finished, hung: f.hung, beats: f.beats, lastCode: f.lastCode, lastRid: f.lastRid, lastTail: f.lastTail}
 }
 
 func newTestDaemon(rep backupReporter, cmdFn func(ctx context.Context) *exec.Cmd, maxRun time.Duration) *daemon {
@@ -110,6 +114,29 @@ func TestRunOnceReportsSuccess(t *testing.T) {
 	s := rep.snapshot()
 	if s.finished != 1 || s.lastCode != 0 || s.hung != 0 {
 		t.Fatalf("success run: finished=%d code=%d hung=%d, want 1/0/0", s.finished, s.lastCode, s.hung)
+	}
+}
+
+func TestRunOnceCapturesLogTail(t *testing.T) {
+	rep := &fakeReporter{backupURL: true}
+	d := newTestDaemon(rep, shCmd("echo HELLO_TAIL_MARKER; exit 4"), time.Hour)
+	d.cfg.HealthcheckSendLog = true // enable capture of the child's output
+	d.runOnce(context.Background())
+	s := rep.snapshot()
+	if s.finished != 1 || s.lastCode != 4 {
+		t.Fatalf("finished=%d code=%d, want 1/4", s.finished, s.lastCode)
+	}
+	if !strings.Contains(s.lastTail, "HELLO_TAIL_MARKER") {
+		t.Fatalf("log tail did not capture the child's output, got %q", s.lastTail)
+	}
+}
+
+func TestRunOnceNoLogTailWhenSendLogOff(t *testing.T) {
+	rep := &fakeReporter{backupURL: true}
+	d := newTestDaemon(rep, shCmd("echo SHOULD_NOT_APPEAR; exit 4"), time.Hour) // SendLog=false
+	d.runOnce(context.Background())
+	if s := rep.snapshot(); s.lastTail != "" {
+		t.Fatalf("SendLog off must POST no body, got %q", s.lastTail)
 	}
 }
 

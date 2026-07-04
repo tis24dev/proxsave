@@ -127,9 +127,10 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		bootstrap,
 		buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule),
 	)
-	if !configResult.SkipConfigWizard {
-		finishDaemonInstallIfSelected(ctx, configResult.SchedulerMode, configPath, execInfo, bootstrap)
-	}
+	// Reconcile the scheduler engine (daemon unit vs cron entry) as a mutually
+	// exclusive choice, INCLUDING the keep-existing path (SchedulerMode empty ->
+	// read from the kept config), so a re-install never leaves both active.
+	reconcileSchedulerAfterInstall(ctx, configResult.SchedulerMode, configPath, execInfo, bootstrap)
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "detecting telegram identity")
 	telegramCode = detectTelegramCodeWithContext(ctx, baseDir)
