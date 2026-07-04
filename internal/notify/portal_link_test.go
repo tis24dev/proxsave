@@ -19,10 +19,14 @@ func TestIsSafePortalLink(t *testing.T) {
 		"ftp://x",
 		"javascript:alert(1)",
 		"hc.proxsave.dev/x", // no scheme
-		"https://x/\x1b[2J", // ANSI
+		"https://x/\x1b[2J", // ANSI/CSI (ESC)
 		"https://x/\n",      // newline
 		"https://x/\t",      // tab
 		"https://x/\x7f",    // DEL
+		"https://x/2J",     // C1 CSI
+		"https://x/ ",       // line separator
+		"https://x/‮x",      // bidi override
+		"https://x/pa th",   // raw space
 	}
 	for _, s := range ok {
 		if !isSafePortalLink(s) {
