@@ -73,12 +73,15 @@ func TestClassifyHealthcheckSetupResult(t *testing.T) {
 		wantFatal    bool
 		wantLogin    string
 	}{
-		{"verified", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "L"}, true, false, "L"},
+		{"verified", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc/L"}, true, false, "https://hc/L"},
+		{"ready but not reachable -> retry", HealthcheckCheckResult{Err: nil, Reachable: false, LoginURL: "https://hc/L"}, false, false, "https://hc/L"},
 		{"auth fatal", HealthcheckCheckResult{Err: health.ErrHCAuth}, false, true, ""},
 		{"unknown fatal", HealthcheckCheckResult{Err: health.ErrHCUnknown}, false, true, ""},
 		{"disabled fatal", HealthcheckCheckResult{Err: health.ErrHCDisabled}, false, true, ""},
 		{"not ready retry", HealthcheckCheckResult{Err: health.ErrHCNotReady}, false, false, ""},
-		{"network retry keeps login", HealthcheckCheckResult{Err: errors.New("dial"), LoginURL: "L2"}, false, false, "L2"},
+		{"network retry keeps login", HealthcheckCheckResult{Err: errors.New("dial"), LoginURL: "https://hc/L2"}, false, false, "https://hc/L2"},
+		{"hostile ansi login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc/\x1b[2Jx"}, true, false, ""},
+		{"non-https login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "ftp://evil/x"}, true, false, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
