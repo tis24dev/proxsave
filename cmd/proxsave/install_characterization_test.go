@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/config"
-	"github.com/tis24dev/proxsave/internal/tui/wizard"
+	"github.com/tis24dev/proxsave/internal/installer"
 )
 
 // Characterization lock for the CLI install config wizard: these goldens
@@ -155,7 +155,7 @@ func TestInstallWizardCharacterization_EditExistingNoOp(t *testing.T) {
 	assertGolden(t, "edit_noop.transcript", []byte(run.transcript))
 	assertGolden(t, "edit_noop.env", run.configData)
 
-	values := wizard.DeriveInstallWizardPrefill(string(run.configData))
+	values := installer.DeriveInstallWizardPrefill(string(run.configData))
 	checks := []struct {
 		name string
 		got  string

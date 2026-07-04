@@ -1,19 +1,14 @@
-package wizard
+package installer
 
 import (
-	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
-
-	cronutil "github.com/tis24dev/proxsave/internal/cron"
-	"github.com/tis24dev/proxsave/internal/tui"
 )
+
+// Data-layer tests salvaged from the deleted internal/tui/wizard
+// install_test.go (the tview screens died with the package; ApplyInstallData
+// and its helpers moved here).
 
 func TestSetEnvValueUpdateAndAppend(t *testing.T) {
 	template := "KEY1=old\nKEY2=keep\n"
@@ -189,6 +184,7 @@ func TestApplyInstallDataRejectsInvalidSecondaryPath(t *testing.T) {
 // H7 regression: a partially-filled payload (cloud enabled but a remote left
 // empty) must be rejected, never written as CLOUD_ENABLED=true with an empty
 // CLOUD_REMOTE/CLOUD_LOG_PATH.
+
 func TestApplyInstallDataRejectsCloudWithoutRemote(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -296,218 +292,5 @@ func TestApplyInstallDataPreservesExistingEmailDeliveryMethod(t *testing.T) {
 	}
 	if strings.Contains(result, "EMAIL_FALLBACK_PMF") {
 		t.Fatalf("expected transitional EMAIL_FALLBACK_PMF key to be removed:\n%s", result)
-	}
-}
-
-func TestRunInstallWizardBlankCronIgnoresEnvOverride(t *testing.T) {
-	t.Setenv("CRON_SCHEDULE", "5 1 * * *")
-
-	originalRunner := runInstallWizardRunner
-	t.Cleanup(func() { runInstallWizardRunner = originalRunner })
-
-	runInstallWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
-		if ctx != t.Context() {
-			t.Fatalf("ctx=%p; want %p", ctx, t.Context())
-		}
-		form, ok := focus.(*tview.Form)
-		if !ok {
-			t.Fatalf("focus primitive = %T, want *tview.Form", focus)
-		}
-		button := form.GetButton(0)
-		if button == nil {
-			t.Fatal("expected install button")
-		}
-		button.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), nil)
-		return nil
-	}
-
-	data, err := RunInstallWizard(t.Context(), "/tmp/proxsave/backup.env", "/opt/proxsave", "sig", "")
-	if err != nil {
-		t.Fatalf("RunInstallWizard returned error: %v", err)
-	}
-	if data == nil {
-		t.Fatal("expected wizard data")
-	}
-	if data.CronTime != cronutil.DefaultTime {
-		t.Fatalf("CronTime = %q, want %q", data.CronTime, cronutil.DefaultTime)
-	}
-}
-
-func TestCheckExistingConfigActions(t *testing.T) {
-	tmp := t.TempDir()
-	configPath := filepath.Join(tmp, "prox.env")
-	if err := os.WriteFile(configPath, []byte("base"), 0o600); err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
-
-	originalRunner := checkExistingConfigRunner
-	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
-
-	tests := []struct {
-		name   string
-		button string
-		want   ExistingConfigAction
-	}{
-		{name: "overwrite", button: "Overwrite", want: ExistingConfigOverwrite},
-		{name: "edit existing", button: "Edit existing", want: ExistingConfigEdit},
-		{name: "keep continue", button: "Keep & continue", want: ExistingConfigKeepContinue},
-		{name: "cancel", button: "Cancel", want: ExistingConfigCancel},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			checkExistingConfigRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
-				done := extractModalDone(focus.(*tview.Modal))
-				done(0, tc.button)
-				return nil
-			}
-
-			action, err := CheckExistingConfig(context.Background(), configPath, "sig-abc")
-			if err != nil {
-				t.Fatalf("CheckExistingConfig returned error: %v", err)
-			}
-			if action != tc.want {
-				t.Fatalf("got %v, want %v for button %q", action, tc.want, tc.button)
-			}
-		})
-	}
-}
-
-func TestCheckExistingConfigMissingFileDefaultsToOverwrite(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "absent.env")
-	action, err := CheckExistingConfig(context.Background(), configPath, "sig")
-	if err != nil {
-		t.Fatalf("CheckExistingConfig returned error: %v", err)
-	}
-	if action != ExistingConfigOverwrite {
-		t.Fatalf("expected overwrite action when file is missing")
-	}
-}
-
-func TestCheckExistingConfigPropagatesStatErrors(t *testing.T) {
-	pathWithNul := string([]byte{0})
-	action, err := CheckExistingConfig(context.Background(), pathWithNul, "sig")
-	if err == nil {
-		t.Fatalf("expected error for invalid path")
-	}
-	if action != ExistingConfigCancel {
-		t.Fatalf("expected cancel action on stat error, got %v", action)
-	}
-}
-
-func TestCheckExistingConfigRejectsNonRegularPath(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config-dir")
-	if err := os.Mkdir(configPath, 0o755); err != nil {
-		t.Fatalf("failed to create directory: %v", err)
-	}
-
-	action, err := CheckExistingConfig(context.Background(), configPath, "sig")
-	if err == nil {
-		t.Fatal("expected error for non-regular config path")
-	}
-	if err.Error() != "configuration file path is not a regular file: "+configPath {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if action != ExistingConfigCancel {
-		t.Fatalf("expected cancel action on non-regular path, got %v", action)
-	}
-}
-
-func TestCheckExistingConfigDefaultsFocusToKeepContinue(t *testing.T) {
-	tmp := t.TempDir()
-	configPath := filepath.Join(tmp, "prox.env")
-	if err := os.WriteFile(configPath, []byte("base"), 0o600); err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
-
-	originalRunner := checkExistingConfigRunner
-	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
-
-	checkExistingConfigRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
-		modal, ok := focus.(*tview.Modal)
-		if !ok {
-			t.Fatalf("focus=%T; want *tview.Modal", focus)
-		}
-
-		var form *tview.Form
-		modal.Focus(func(p tview.Primitive) {
-			var ok bool
-			form, ok = p.(*tview.Form)
-			if !ok {
-				t.Fatalf("delegate focus=%T; want *tview.Form", p)
-			}
-		})
-
-		formItem, button := form.GetFocusedItemIndex()
-		if formItem != -1 || button != 2 {
-			t.Fatalf("focused item=(%d,%d); want (-1,2)", formItem, button)
-		}
-
-		done := extractModalDone(modal)
-		done(0, "Keep & continue")
-		return nil
-	}
-
-	action, err := CheckExistingConfig(context.Background(), configPath, "sig-abc")
-	if err != nil {
-		t.Fatalf("CheckExistingConfig returned error: %v", err)
-	}
-	if action != ExistingConfigKeepContinue {
-		t.Fatalf("action=%v; want %v", action, ExistingConfigKeepContinue)
-	}
-}
-
-func TestCheckExistingConfigPropagatesRunnerErrors(t *testing.T) {
-	tmp := t.TempDir()
-	configPath := filepath.Join(tmp, "prox.env")
-	if err := os.WriteFile(configPath, []byte("base"), 0o600); err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
-
-	originalRunner := checkExistingConfigRunner
-	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
-
-	expectedErr := errors.New("ui runner failure")
-	checkExistingConfigRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {
-		return expectedErr
-	}
-
-	action, err := CheckExistingConfig(context.Background(), configPath, "sig")
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected runner error %v, got %v", expectedErr, err)
-	}
-	if action != ExistingConfigCancel {
-		t.Fatalf("expected cancel action on runner error, got %v", action)
-	}
-}
-
-func TestCheckExistingConfigPassesContextToRunner(t *testing.T) {
-	tmp := t.TempDir()
-	configPath := filepath.Join(tmp, "prox.env")
-	if err := os.WriteFile(configPath, []byte("base"), 0o600); err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
-
-	originalRunner := checkExistingConfigRunner
-	t.Cleanup(func() { checkExistingConfigRunner = originalRunner })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	expectedErr := errors.New("ui runner failure")
-	checkExistingConfigRunner = func(gotCtx context.Context, app *tui.App, root, focus tview.Primitive) error {
-		if gotCtx != ctx {
-			t.Fatalf("ctx=%p; want %p", gotCtx, ctx)
-		}
-		return expectedErr
-	}
-
-	action, err := CheckExistingConfig(ctx, configPath, "sig")
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected runner error %v, got %v", expectedErr, err)
-	}
-	if action != ExistingConfigCancel {
-		t.Fatalf("expected cancel action on runner error, got %v", action)
 	}
 }

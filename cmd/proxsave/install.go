@@ -14,17 +14,16 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/identity"
-	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/installer"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
-	"github.com/tis24dev/proxsave/internal/tui/wizard"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
 
 var (
 	newInstallEnsureInteractiveStdin = ensureInteractiveStdin
 	newInstallConfirmCLI             = confirmNewInstallCLI
-	newInstallConfirmTUI             = wizard.ConfirmNewInstall
+	newInstallConfirmTUI             = confirmNewInstallCharm
 	newInstallRunInstall             = runInstall
 	newInstallRunInstallTUI          = runInstallTUI
 	configureCronTimeFunc            = configureCronTime
