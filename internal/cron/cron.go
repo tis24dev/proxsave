@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const DefaultTime = "02:00"
@@ -29,6 +30,21 @@ func TimeToSchedule(cronTime string) string {
 		return ""
 	}
 	return fmt.Sprintf("%02d %02d * * *", minute, hour)
+}
+
+// NextDaily returns the next occurrence of the daily HH:MM time strictly after
+// now (today if still ahead, otherwise tomorrow), in now's location. Used by the
+// resident daemon scheduler. Invalid HH:MM returns an error.
+func NextDaily(now time.Time, hhmm string) (time.Time, error) {
+	hour, minute, err := parseTime(strings.TrimSpace(hhmm))
+	if err != nil {
+		return time.Time{}, err
+	}
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next, nil
 }
 
 func parseTime(value string) (int, int, error) {

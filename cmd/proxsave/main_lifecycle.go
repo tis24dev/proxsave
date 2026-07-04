@@ -165,6 +165,9 @@ func runRuntime(rt *appRuntime, state *appRunState) int {
 	if exitCode, ok := runSecurityPreflight(rt); !ok {
 		return state.finalize(exitCode)
 	}
+	if result := dispatchDaemonMode(rt); result.handled {
+		return finalizeModeResult(state, result)
+	}
 	if result := dispatchRestoreMode(rt); result.handled {
 		return finalizeModeResult(state, result)
 	}
