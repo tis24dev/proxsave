@@ -169,9 +169,13 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	}
 	schedulerOptions := []string{"Resident daemon (recommended)", "System cron"}
 	schedulerValues := []string{"daemon", "cron"}
+	// Fresh install / Overwrite (empty base) defaults to the daemon. Editing an
+	// existing config defaults to its stored engine so a no-op edit never flips the
+	// scheduler; an old config without the key stays on cron (mirrors the CLI's
+	// schedulerEngineDefault).
 	schedulerIndex := 0 // default: daemon
-	if strings.EqualFold(strings.TrimSpace(prefill.SchedulerMode), "cron") {
-		schedulerIndex = 1
+	if strings.TrimSpace(baseTemplate) != "" && !strings.EqualFold(strings.TrimSpace(prefill.SchedulerMode), "daemon") {
+		schedulerIndex = 1 // cron
 	}
 	scheduler := &components.FormField{
 		Label:       "Scheduler engine",
