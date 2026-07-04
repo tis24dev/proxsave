@@ -71,7 +71,7 @@ func TestMultiSelectMouseClickToggles(t *testing.T) {
 func TestConfirmMouseClickButtons(t *testing.T) {
 	c := NewConfirm("Confirm", "Proceed?", WithLabels("Apply", "Skip"))
 	cap := bindConfirm(c)
-	c.View(80, 12) // establish layout
+	c.View(80, 12)                           // establish layout
 	c.Update(click(c.yesX0, c.lastButtonsY)) //nolint:errcheck
 	if !cap.resolved || !cap.result.Answer {
 		t.Fatalf("click on the yes button must resolve Yes, got %+v", cap)
