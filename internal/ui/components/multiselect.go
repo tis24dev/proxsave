@@ -33,6 +33,14 @@ type MultiSelect[T any] struct {
 	minSelected int
 	errMsg      string
 
+	// Optional action buttons rendered after the list. When enabled, a plain
+	// Enter no longer confirms the whole screen: Enter on a toggle row toggles it,
+	// Enter on the select-all button toggles every item, and only Enter on the
+	// confirm button resolves the selection.
+	actions        bool
+	selectAllLabel string
+	confirmLabel   string
+
 	lastRowsTop int // body row of the first visible item (set by View)
 }
 
@@ -52,6 +60,18 @@ func WithMinSelected[T any](n int) MultiSelectOption[T] {
 // WithMultiSelectPrompt adds an explanatory line under the title.
 func WithMultiSelectPrompt[T any](prompt string) MultiSelectOption[T] {
 	return func(m *MultiSelect[T]) { m.prompt = sanitize(prompt) }
+}
+
+// WithMultiSelectActions renders two action buttons at the end of the list and
+// disables the generic Enter-confirms behavior. selectAllLabel toggles every item
+// (select all, or deselect all when already all selected); confirmLabel is the
+// only control that resolves the selection. Enter on a toggle row toggles that row.
+func WithMultiSelectActions[T any](selectAllLabel, confirmLabel string) MultiSelectOption[T] {
+	return func(m *MultiSelect[T]) {
+		m.actions = true
+		m.selectAllLabel = sanitizeLine(selectAllLabel)
+		m.confirmLabel = sanitizeLine(confirmLabel)
+	}
 }
 
 // NewMultiSelect builds a checkbox list screen.
@@ -77,7 +97,12 @@ func (m *MultiSelect[T]) Init() tea.Cmd { return nil }
 func (m *MultiSelect[T]) Title() string { return m.title }
 
 func (m *MultiSelect[T]) Help() string {
-	help := "↑/↓ move · space toggle · a all · i invert · enter confirm"
+	var help string
+	if m.actions {
+		help = "↑/↓ move · space toggle · enter act on row"
+	} else {
+		help = "↑/↓ move · space toggle · a all · i invert · enter confirm"
+	}
 	if m.backErr != nil {
 		help += " · esc back"
 	}
@@ -94,6 +119,47 @@ func (m *MultiSelect[T]) selectedCount() int {
 	return n
 }
 
+// actionCount is the number of trailing action-button rows (0 or 2).
+func (m *MultiSelect[T]) actionCount() int {
+	if m.actions {
+		return 2
+	}
+	return 0
+}
+
+// totalRows is every navigable row: the toggle items plus the action buttons.
+func (m *MultiSelect[T]) totalRows() int { return len(m.items) + m.actionCount() }
+
+// selectAllRow / confirmRow are the row indices of the two buttons (valid only
+// when actions are enabled).
+func (m *MultiSelect[T]) selectAllRow() int { return len(m.items) }
+func (m *MultiSelect[T]) confirmRow() int   { return len(m.items) + 1 }
+
+// toggleAll selects every item, or deselects every item when all are already
+// selected (a select-all/deselect-all toggle).
+func (m *MultiSelect[T]) toggleAll() {
+	allSelected := len(m.items) > 0 && m.selectedCount() == len(m.items)
+	for i := range m.items {
+		m.items[i].Selected = !allSelected
+	}
+	m.errMsg = ""
+}
+
+// confirm resolves the selection subject to the minimum, or sets an error.
+func (m *MultiSelect[T]) confirm() (shell.Screen, tea.Cmd) {
+	if n := m.selectedCount(); n < m.minSelected {
+		m.errMsg = fmt.Sprintf("Select at least %d item(s); %d selected", m.minSelected, n)
+		return m, nil
+	}
+	values := make([]T, 0, m.selectedCount())
+	for _, it := range m.items {
+		if it.Selected {
+			values = append(values, it.Value)
+		}
+	}
+	return m, m.Resolve(values, nil)
+}
+
 func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	switch mouse := msg.(type) {
 	case tea.MouseWheelMsg:
@@ -103,7 +169,7 @@ func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 				m.cursor--
 			}
 		case tea.MouseWheelDown:
-			if m.cursor < len(m.items)-1 {
+			if m.cursor < m.totalRows()-1 {
 				m.cursor++
 			}
 		}
@@ -113,10 +179,18 @@ func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			return m, nil
 		}
 		row := mouse.Y - m.lastRowsTop + m.offset
-		if row >= 0 && row < len(m.items) {
-			m.cursor = row
+		if row < 0 || row >= m.totalRows() {
+			return m, nil
+		}
+		m.cursor = row
+		switch {
+		case row < len(m.items):
 			m.items[row].Selected = !m.items[row].Selected
 			m.errMsg = ""
+		case m.actions && row == m.selectAllRow():
+			m.toggleAll()
+		case m.actions && row == m.confirmRow():
+			return m.confirm()
 		}
 		return m, nil
 	}
@@ -131,15 +205,15 @@ func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			m.cursor--
 		}
 	case "down", "j":
-		if m.cursor < len(m.items)-1 {
+		if m.cursor < m.totalRows()-1 {
 			m.cursor++
 		}
 	case "home":
 		m.cursor = 0
 	case "end":
-		m.cursor = max(len(m.items)-1, 0)
+		m.cursor = max(m.totalRows()-1, 0)
 	case "space":
-		if len(m.items) > 0 {
+		if m.cursor < len(m.items) && len(m.items) > 0 {
 			m.items[m.cursor].Selected = !m.items[m.cursor].Selected
 			m.errMsg = ""
 		}
@@ -154,17 +228,21 @@ func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 		}
 		m.errMsg = ""
 	case "enter":
-		if n := m.selectedCount(); n < m.minSelected {
-			m.errMsg = fmt.Sprintf("Select at least %d item(s); %d selected", m.minSelected, n)
+		if m.actions {
+			switch m.cursor {
+			case m.confirmRow():
+				return m.confirm()
+			case m.selectAllRow():
+				m.toggleAll()
+			default:
+				if m.cursor < len(m.items) {
+					m.items[m.cursor].Selected = !m.items[m.cursor].Selected
+					m.errMsg = ""
+				}
+			}
 			return m, nil
 		}
-		values := make([]T, 0, m.selectedCount())
-		for _, it := range m.items {
-			if it.Selected {
-				values = append(values, it.Value)
-			}
-		}
-		return m, m.Resolve(values, nil)
+		return m.confirm()
 	case "esc":
 		if m.backErr != nil {
 			return m, m.Resolve(nil, m.backErr)
@@ -199,7 +277,22 @@ func (m *MultiSelect[T]) View(width, height int) string {
 		m.offset = 0
 	}
 
-	for row := m.offset; row < len(m.items) && row < m.offset+rows; row++ {
+	for row := m.offset; row < m.totalRows() && row < m.offset+rows; row++ {
+		if row >= len(m.items) {
+			// Trailing action button (Select all / confirm).
+			label := m.selectAllLabel
+			if row == m.confirmRow() {
+				label = m.confirmLabel
+			}
+			btn := ansi.Truncate("[ "+label+" ]", width-2, "…")
+			if row == m.cursor {
+				b.WriteString(theme.Selected.Render(theme.SymbolSelected + " " + btn))
+			} else {
+				b.WriteString(theme.Emphasis.Render("  " + btn))
+			}
+			b.WriteString("\n")
+			continue
+		}
 		it := m.items[row]
 		box := theme.SymbolUncheck
 		if it.Selected {
