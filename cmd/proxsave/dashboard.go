@@ -87,8 +87,9 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 	menuCtx, cancelMenu := context.WithTimeout(ctx, dashboardIdleTimeout)
 	defer cancelMenu()
 	action, err := menu.Run(menuCtx, session)
-	closeErr := session.Close()
 	if err != nil {
+		// The deferred Close releases the terminal before these prints.
+		_ = session.Close()
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "menu error: %v", err)
 		if errors.Is(err, context.DeadlineExceeded) {
 			fmt.Fprintln(os.Stderr, "Dashboard idle timeout: exiting without action. Use proxsave --backup for non-interactive runs.")
@@ -97,14 +98,13 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		}
 		return types.ExitSuccess.Int(), true
 	}
-	if closeErr != nil {
-		logging.DebugStepBootstrap(bootstrap, "dashboard", "session close: %v", closeErr)
-	}
 
 	switch action {
 	case menu.ActionBackup:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=backup")
-		// The backup run owns the plain terminal: leave the UI for real.
+		// The backup run owns the plain terminal: leave the UI for real
+		// (explicit close so the altscreen is gone before any run output).
+		_ = session.Close()
 		return types.ExitSuccess.Int(), false
 	case menu.ActionRestore:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=restore")

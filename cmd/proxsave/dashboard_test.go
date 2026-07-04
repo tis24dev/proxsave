@@ -8,6 +8,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
@@ -205,9 +206,29 @@ func TestDashboardInteractiveGateUnderTest(t *testing.T) {
 // alive (stashed for adoption) and adoption consumes it exactly once,
 // restoring the console mute it installed.
 func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
-	args, _, handled := runDashboardWith(t, "down enter") // Restore
-	if handled || !args.Restore {
-		t.Fatalf("restore dispatch broken: handled=%v args=%+v", handled, args)
+	installDashboardGates(t, true, true)
+	driver := installDashboardSessionSeam(t)
+
+	args := &cli.Args{}
+	type outcome struct {
+		code    int
+		handled bool
+	}
+	resCh := make(chan outcome, 1)
+	go func() {
+		code, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
+		resCh <- outcome{code, handled}
+	}()
+	driver.waitScreen("Dashboard")
+	driver.keys("down enter") // Restore
+	var res outcome
+	select {
+	case res = <-resCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("dashboard did not resolve")
+	}
+	if res.handled || !args.Restore {
+		t.Fatalf("restore dispatch broken: handled=%v args=%+v", res.handled, args)
 	}
 	if !dashboardHandoffPending() {
 		t.Fatal("flow action must stash the session for adoption")
@@ -218,6 +239,29 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 	}
 	if adoptDashboardSession(shell.Config{}) != nil {
 		t.Fatal("adoption must consume the stash (second call nil)")
+	}
+
+	// The adopted session must be ALIVE: a real Ask must reach the screen
+	// and resolve (this is the regression that shipped once: the dashboard
+	// closed the session before stashing, so every flow Ask died with
+	// ErrClosed and the workflow reported "aborted by user").
+	type askOut struct {
+		err error
+	}
+	askRes := make(chan askOut, 1)
+	go func() {
+		_, err := shell.Ask(context.Background(), s, components.NewNotice(components.NoticeInfo, "Adopted", "still alive"))
+		askRes <- askOut{err}
+	}()
+	driver.waitScreen("Adopted")
+	driver.keys("enter")
+	select {
+	case r := <-askRes:
+		if r.err != nil {
+			t.Fatalf("Ask on the adopted session must work, got %v", r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Ask on the adopted session did not resolve")
 	}
 	_ = s.Close()
 }
