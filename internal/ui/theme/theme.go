@@ -9,7 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Proxmox color palette (parity with internal/tui/theme.go).
+// Proxmox color palette (parity with the legacy tview theme).
 var (
 	Orange = lipgloss.Color("#E57000")
 	Dark   = lipgloss.Color("#282828")
@@ -50,7 +50,7 @@ var (
 	ButtonBlurred = lipgloss.NewStyle().Foreground(Light).Background(Surface).Padding(0, 2)
 )
 
-// Symbols and icons (parity with internal/tui/theme.go).
+// Symbols and icons (parity with the legacy tview theme).
 const (
 	SymbolSuccess  = "✓"
 	SymbolError    = "✗"

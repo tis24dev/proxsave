@@ -85,9 +85,17 @@ coverage-check:
 		fi
 
 # Lint
-lint:
+lint: check-no-tview
 	go vet ./...
 	@command -v golint >/dev/null 2>&1 && golint ./... || echo "golint not installed"
+
+# Guard: the legacy tview/tcell stack was excised (Charm UI replaced it);
+# any reappearance is a regression.
+check-no-tview:
+	@if grep -rn "rivo/tview\|gdamore/tcell" --include="*.go" cmd internal pkg 2>/dev/null; then \
+		echo "ERROR: legacy tview/tcell reference found (the Charm UI replaced them)"; \
+		exit 1; \
+	fi
 
 # Format code
 fmt:
