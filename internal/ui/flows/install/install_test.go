@@ -131,9 +131,9 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	}()
 
 	// Single aligned form: inactive dependent rows are skipped, so Enter
-	// through the 7 active rows reaches Continue; the final Enter submits.
+	// through the 8 active rows reaches Continue; the final Enter submits.
 	d.waitScreen("Configuration")
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 9; i++ {
 		d.keys("enter")
 	}
 
@@ -194,9 +194,9 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 	}()
 
 	// Single aligned form, everything prefilled/active: Enter through all
-	// 12 rows plus the Continue button is the no-op edit.
+	// 13 rows plus the Continue button is the no-op edit.
 	d.waitScreen("Configuration")
-	for i := 0; i < 13; i++ {
+	for i := 0; i < 14; i++ {
 		d.keys("enter")
 	}
 

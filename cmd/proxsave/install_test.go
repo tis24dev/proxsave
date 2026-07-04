@@ -727,7 +727,9 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 	cfgDir := t.TempDir()
 	configPath := filepath.Join(cfgDir, "env", "backup.env")
 	tmpConfigPath := configPath + ".tmp"
-	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n03:15\n"))
+	// 6 toggle declines, empty scheduler-engine answer (defaults to daemon on a
+	// fresh install), then the run-at time.
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n03:15\n"))
 
 	var result installConfigResult
 	var err error
@@ -739,6 +741,9 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 	}
 	if result.SkipConfigWizard {
 		t.Fatal("expected SkipConfigWizard=false")
+	}
+	if result.SchedulerMode != "daemon" {
+		t.Fatalf("fresh install should default to daemon, got %q", result.SchedulerMode)
 	}
 	if result.EnableEncryption {
 		t.Fatal("expected EnableEncryption=false")
@@ -759,7 +764,8 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 func TestRunConfigWizardCLIEditExistingRemovesRuntimeDerivedKeys(t *testing.T) {
 	cfgFile := createTempFile(t, "BASE_DIR=/custom\nCRON_HOUR=2\nMARKER=1\n")
 	tmpConfigPath := cfgFile + ".tmp"
-	reader := bufio.NewReader(strings.NewReader("2\nn\nn\nn\nn\nn\nn\n03:15\n"))
+	// "2" = overwrite/keep decision, 6 toggle declines, empty scheduler answer, run-at.
+	reader := bufio.NewReader(strings.NewReader("2\nn\nn\nn\nn\nn\nn\n\n03:15\n"))
 
 	var err error
 	captureStdout(t, func() {

@@ -21,5 +21,7 @@ ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifi
 Enable email notifications? [y/N]: 
 --- Encryption ---
 Enable backup encryption? [y/N]: 
+--- Scheduler ---
+Scheduler engine: daemon (resident, hang watchdog + healthchecks) or cron [daemon]: 
 --- Schedule ---
-Cron time for daily proxsave job (HH:MM) [02:00]: 
+Run at (daily, HH:MM) [02:00]: 

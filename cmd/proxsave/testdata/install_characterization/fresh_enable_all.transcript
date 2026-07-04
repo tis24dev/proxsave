@@ -25,5 +25,7 @@ Enable email notifications? [y/N]: Email delivery methods:
 Email delivery method [relay]: 
 --- Encryption ---
 Enable backup encryption? [y/N]: 
+--- Scheduler ---
+Scheduler engine: daemon (resident, hang watchdog + healthchecks) or cron [daemon]: 
 --- Schedule ---
-Cron time for daily proxsave job (HH:MM) [02:00]: 
+Run at (daily, HH:MM) [02:00]: 
