@@ -1,4 +1,4 @@
-package wizard
+package installer
 
 import (
 	"context"
