@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/tis24dev/proxsave/internal/health"
 )
@@ -13,9 +14,10 @@ const (
 )
 
 // HealthcheckSetupState is the single mapping of a check result to user-facing
-// copy + policy flags; both front-ends render it identically. All copy is our own
-// (no untrusted server text), so no sanitization is needed. LoginURL is the portal
-// magic-link to display, when present.
+// copy + policy flags; both front-ends render it identically. The status Message
+// is always our OWN copy; LoginURL (server-minted) is passed through
+// sanitizeLoginURL so a hostile/MITM'd server cannot inject terminal escape
+// sequences into the install console.
 type HealthcheckSetupState struct {
 	Message  string
 	LoginURL string
@@ -23,13 +25,37 @@ type HealthcheckSetupState struct {
 	Fatal    bool // another check cannot help -> do NOT offer Check again
 }
 
+// sanitizeLoginURL returns the magic-link only if it is a clean http(s) URL with
+// no control/ANSI bytes; otherwise "". Defense-in-depth: the link is display-only
+// (proxsave never fetches it), but it must not be able to spoof the console. It is
+// NOT truncated (that would break the link).
+func sanitizeLoginURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	for _, r := range raw {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://") {
+		return ""
+	}
+	return raw
+}
+
 // ClassifyHealthcheckSetupResult maps a HealthcheckCheckResult to display state.
 func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetupState {
-	st := HealthcheckSetupState{LoginURL: res.LoginURL}
+	st := HealthcheckSetupState{LoginURL: sanitizeLoginURL(res.LoginURL)}
 	switch {
-	case res.Err == nil:
+	case res.Err == nil && res.Reachable:
 		st.Verified = true
 		st.Message = "Monitoring connection verified: this host's backups will be reported to healthchecks."
+	case res.Err == nil:
+		// Provisioning is ready but reachability was not confirmed (defensive; not
+		// reachable in practice since the server rejects empty ping-urls). Retry.
+		st.Message = "Monitoring is provisioned, but reachability could not be confirmed. Try the check again."
 	case errors.Is(res.Err, health.ErrHCAuth):
 		st.Fatal = true
 		st.Message = "The monitoring server rejected this host's credentials. Complete Telegram pairing, then reinstall to retry."
