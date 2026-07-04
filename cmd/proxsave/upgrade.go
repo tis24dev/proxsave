@@ -183,10 +183,16 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	}
 	ensureGoSymlink(execPath, bootstrap)
 
-	// Upgrades intentionally leave the cron schedule untouched; the canonical
-	// /usr/local/bin/proxsave entry created at install keeps working across binary
-	// upgrades. Re-run --install to change the schedule.
-	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "leaving cron entries unchanged")
+	// Auto-migrate cron installs to the resident daemon now that the new binary +
+	// config keys are in place. Honours the DAEMON_OPT_OUT tombstone so a manual
+	// --daemon-remove is never undone. Best-effort: a failure stays on cron and is
+	// only warned. (When staying on cron, the canonical /usr/local/bin/proxsave
+	// entry created at install keeps working across binary upgrades.)
+	if upgradeErr == nil {
+		maybeAutoMigrateDaemon(ctx, args.ConfigPath, baseDir, execPath, bootstrap)
+	} else {
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "binary install failed; leaving scheduler unchanged")
+	}
 
 	telegramCode := ""
 	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {

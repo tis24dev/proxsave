@@ -45,6 +45,8 @@ type Args struct {
 	LegacyEnvPath     string
 	Backup            bool
 	Daemon            bool
+	DaemonSetup       bool
+	DaemonRemove      bool
 }
 
 var osExit = os.Exit
@@ -98,6 +100,10 @@ func Parse() *Args {
 		"Run the backup now (skips the interactive dashboard; this is the default behavior when proxsave runs non-interactively, e.g. from cron)")
 	flag.BoolVar(&args.Daemon, "daemon", false,
 		"Run as a resident daemon: schedule + supervise backups and report liveness/outcome to healthchecks (installed as proxsave-daemon.service)")
+	flag.BoolVar(&args.DaemonSetup, "daemon-setup", false,
+		"Switch this install to daemon mode: install+enable proxsave-daemon.service and remove the cron entry")
+	flag.BoolVar(&args.DaemonRemove, "daemon-remove", false,
+		"Remove daemon mode: disable the service, restore the cron entry, and prevent future upgrades from reinstalling the daemon")
 	flag.BoolVar(&args.Install, "install", false,
 		"Run the interactive installer (generate/configure backup.env)")
 	flag.BoolVar(&args.NewInstall, "new-install", false,
