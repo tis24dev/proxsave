@@ -25,22 +25,21 @@ type HealthcheckSetupState struct {
 	Fatal    bool // another check cannot help -> do NOT offer Check again
 }
 
-// sanitizeLoginURL returns the magic-link only if it is a clean http(s) URL with
-// no control/ANSI bytes; otherwise "". Defense-in-depth: the link is display-only
-// (proxsave never fetches it), but it must not be able to spoof the console. It is
-// NOT truncated (that would break the link).
+// sanitizeLoginURL returns the magic-link only if it is a clean http(s) URL made
+// of printable ASCII (0x21-0x7e); otherwise "". A URL is printable ASCII by RFC
+// 3986 (non-ASCII is percent-encoded), so this drops C0/C1 controls, DEL, spaces,
+// and every Unicode format/bidi/line-separator trick a hostile server might inject.
+// Defense-in-depth: the link is display-only (proxsave never fetches it), but it
+// must not be able to spoof the console. NOT truncated (that would break the link).
 func sanitizeLoginURL(raw string) string {
 	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://") {
 		return ""
 	}
 	for _, r := range raw {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x21 || r > 0x7e {
 			return ""
 		}
-	}
-	if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://") {
-		return ""
 	}
 	return raw
 }

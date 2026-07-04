@@ -422,17 +422,17 @@ func (t *TelegramNotifier) showPortalLink(body io.Reader) {
 	t.logger.Info("Monitoring portal (single-use link, open it to set a password and configure alerts): %s", link)
 }
 
-// isSafePortalLink accepts only a clean http(s) URL with no control/ANSI bytes,
-// so a hostile/MITM'd server cannot inject console escape sequences via login_url.
+// isSafePortalLink accepts only a clean http(s) URL made of printable ASCII, so a
+// hostile/MITM'd server cannot inject console escape sequences via login_url. A URL
+// is printable ASCII by RFC 3986 (non-ASCII is percent-encoded), so restricting to
+// 0x21-0x7e drops C0/C1 controls, DEL, spaces, and every Unicode format/bidi/
+// line-separator trick.
 func isSafePortalLink(raw string) bool {
-	if raw == "" {
-		return false
-	}
 	if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://") {
 		return false
 	}
 	for _, r := range raw {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x21 || r > 0x7e {
 			return false
 		}
 	}

@@ -81,6 +81,7 @@ func TestClassifyHealthcheckSetupResult(t *testing.T) {
 		{"not ready retry", HealthcheckCheckResult{Err: health.ErrHCNotReady}, false, false, ""},
 		{"network retry keeps login", HealthcheckCheckResult{Err: errors.New("dial"), LoginURL: "https://hc/L2"}, false, false, "https://hc/L2"},
 		{"hostile ansi login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc/\x1b[2Jx"}, true, false, ""},
+		{"c1 control login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc/x"}, true, false, ""},
 		{"non-https login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "ftp://evil/x"}, true, false, ""},
 	}
 	for _, tc := range tests {
