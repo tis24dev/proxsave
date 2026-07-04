@@ -79,8 +79,26 @@ func validateUpgradeCompatibility(args *cli.Args) []string {
 }
 
 func validateDaemonCompatibility(args *cli.Args) []string {
-	if !args.Daemon {
+	daemonFlags := 0
+	label := ""
+	for _, f := range []struct {
+		on   bool
+		name string
+	}{
+		{args.Daemon, "--daemon"},
+		{args.DaemonSetup, "--daemon-setup"},
+		{args.DaemonRemove, "--daemon-remove"},
+	} {
+		if f.on {
+			daemonFlags++
+			label = f.name
+		}
+	}
+	if daemonFlags == 0 {
 		return nil
+	}
+	if daemonFlags > 1 {
+		return []string{"Only one of --daemon, --daemon-setup, --daemon-remove may be used at a time."}
 	}
 	incompatible := enabledModes([]incompatibleMode{
 		{enabled: args.Install, label: "--install"},
@@ -96,7 +114,7 @@ func validateDaemonCompatibility(args *cli.Args) []string {
 		{enabled: args.CleanupGuards, label: "--cleanup-guards"},
 	})
 	if len(incompatible) > 0 {
-		return []string{fmt.Sprintf("--daemon cannot be combined with: %s", strings.Join(incompatible, ", "))}
+		return []string{fmt.Sprintf("%s cannot be combined with: %s", label, strings.Join(incompatible, ", "))}
 	}
 	return nil
 }
