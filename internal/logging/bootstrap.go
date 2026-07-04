@@ -58,6 +58,41 @@ func (b *BootstrapLogger) consoleQuietEnabled() bool {
 	return b.consoleQuiet
 }
 
+// EntryCount returns the number of recorded entries (a mark for
+// ReplayConsoleSince).
+func (b *BootstrapLogger) EntryCount() int {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.entries)
+}
+
+// ReplayConsoleSince re-prints to stderr the warning/error entries recorded
+// after mark. Used when console prints were quieted for a UI handoff that
+// then failed before the UI could take over: the failure must not stay
+// invisible.
+func (b *BootstrapLogger) ReplayConsoleSince(mark int) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	entries := append([]bootstrapEntry(nil), b.entries...)
+	b.mu.Unlock()
+	if mark < 0 {
+		mark = 0
+	}
+	// LogLevel orders NONE(0) < CRITICAL < ERROR < WARNING < INFO < DEBUG:
+	// replay warning and worse only.
+	for i := mark; i < len(entries); i++ {
+		e := entries[i]
+		if !e.raw && e.level >= types.LogLevelCritical && e.level <= types.LogLevelWarning {
+			fmt.Fprintln(os.Stderr, e.message)
+		}
+	}
+}
+
 func (b *BootstrapLogger) SetLevel(level types.LogLevel) {
 	if b == nil {
 		return

@@ -106,6 +106,23 @@ func (s *Session) closedErr() error {
 	return ErrClosed
 }
 
+// adoptConfigMsg swaps the frame chrome (subtitle, config path, colors) of a
+// running session, so a flow can take over the dashboard's program without a
+// visible altscreen teardown.
+type adoptConfigMsg struct{ cfg Config }
+
+// Adopt rebrands a live session for a new flow: the frame stays on screen,
+// only the chrome (subtitle, version, config path, build signature, color
+// gate) changes. Screens already on the stack are unaffected.
+func (s *Session) Adopt(cfg Config) {
+	cfg.AppName = cleanChrome(cfg.AppName)
+	cfg.Subtitle = cleanChrome(cfg.Subtitle)
+	cfg.Version = cleanChrome(cfg.Version)
+	cfg.ConfigPath = cleanChrome(cfg.ConfigPath)
+	cfg.BuildSig = cleanChrome(cfg.BuildSig)
+	s.prog.Send(adoptConfigMsg{cfg: cfg})
+}
+
 // cleanChrome strips ANSI escapes and control characters from a single-line
 // chrome string (frame header/footer data).
 func cleanChrome(s string) string {

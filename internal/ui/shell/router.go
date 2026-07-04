@@ -45,6 +45,13 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
+	case adoptConfigMsg:
+		// Preserve the test observer: it belongs to the program, not to
+		// the flow taking over.
+		observe := m.cfg.observeScreenPush
+		m.cfg = msg.cfg
+		m.cfg.observeScreenPush = observe
+		return m, nil
 	case pushScreenMsg:
 		m.stack = append(m.stack, screenEntry(msg))
 		if m.cfg.observeScreenPush != nil {

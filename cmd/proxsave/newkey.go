@@ -111,6 +111,9 @@ func runNewKeyTUI(ctx context.Context, configPath, baseDir string, bootstrap *lo
 // newAgeSetupSession is an injection point for tests. Production uses
 // shell.Start.
 var newAgeSetupSession = func(ctx context.Context, cfg shell.Config) *shell.Session {
+	if s := adoptDashboardSession(cfg); s != nil {
+		return s
+	}
 	return shell.Start(ctx, cfg)
 }
 

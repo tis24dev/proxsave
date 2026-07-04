@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/flows/menu"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -60,7 +63,7 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 	if strings.TrimSpace(buildSig) == "" {
 		buildSig = "n/a"
 	}
-	session := newAgeSetupSession(ctx, shell.Config{
+	session := shell.Start(ctx, shell.Config{
 		AppName:    "ProxSave",
 		Subtitle:   "Dashboard",
 		Version:    toolVersion,
@@ -68,7 +71,15 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		BuildSig:   buildSig,
 		UseColor:   true,
 	})
-	defer func() { _ = session.Close() }()
+	if s := testDashboardSession; s != nil {
+		session = s(ctx)
+	}
+	keepAlive := false
+	defer func() {
+		if !keepAlive {
+			_ = session.Close()
+		}
+	}()
 
 	// Idle timeout: a pty-allocating wrapper (script, tmux, ssh -tt) that
 	// reaches the dashboard by accident must not hang forever. Exit, never
@@ -93,26 +104,113 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 	switch action {
 	case menu.ActionBackup:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=backup")
-		// Fall through to the normal runtime path: backup is the default.
+		// The backup run owns the plain terminal: leave the UI for real.
 		return types.ExitSuccess.Int(), false
 	case menu.ActionRestore:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=restore")
 		args.Restore = true
-		return types.ExitSuccess.Int(), false
 	case menu.ActionDecrypt:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=decrypt")
 		args.Decrypt = true
-		return types.ExitSuccess.Int(), false
 	case menu.ActionNewKey:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=newkey")
 		args.ForceNewKey = true
-		return types.ExitSuccess.Int(), false
 	case menu.ActionReconfigure:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=install")
 		args.Install = true
-		return types.ExitSuccess.Int(), false
 	default:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=exit")
 		return types.ExitSuccess.Int(), true
 	}
+
+	// Flow actions: hand the live session to the chosen flow so the frame
+	// never leaves the screen (no altscreen teardown flash). Console output
+	// is muted for the gap between the menu and the flow's own session
+	// takeover; the flow (or the leftover cleanup) restores it.
+	keepAlive = true
+	stashDashboardSession(session, bootstrap)
+	return types.ExitSuccess.Int(), false
+}
+
+// testDashboardSession lets tests inject a renderless session (the seam used
+// to be newAgeSetupSession; the handoff needs the dashboard to own a real
+// Start by default).
+var testDashboardSession func(ctx context.Context) *shell.Session
+
+// --- Dashboard session handoff -------------------------------------------
+//
+// The dashboard stays open while the chosen flow spins up; the flow adopts
+// the same program via adoptDashboardSession (wired into the session seams
+// and orchestrator.SetUISessionHandoff). If the flow dies before adopting,
+// releaseDashboardLeftovers closes the session and replays the warnings and
+// errors that were muted in between, so failures never become invisible.
+
+type dashboardHandoffState struct {
+	mu        sync.Mutex
+	session   *shell.Session
+	bootstrap *logging.BootstrapLogger
+	entryMark int
+}
+
+var dashboardHandoff dashboardHandoffState
+
+func stashDashboardSession(session *shell.Session, bootstrap *logging.BootstrapLogger) {
+	dashboardHandoff.mu.Lock()
+	dashboardHandoff.session = session
+	dashboardHandoff.bootstrap = bootstrap
+	dashboardHandoff.entryMark = bootstrap.EntryCount()
+	dashboardHandoff.mu.Unlock()
+
+	// Mute the console for the handoff window: anything printed now would
+	// land inside the still-open alternate screen.
+	bootstrap.SetConsoleQuiet(true)
+	logging.GetDefaultLogger().SwapOutput(io.Discard)
+	orchestrator.SetUISessionHandoff(adoptDashboardSession)
+}
+
+// dashboardHandoffPending reports whether a stashed session is waiting to be
+// adopted (used to keep freshly created loggers muted in the gap).
+func dashboardHandoffPending() bool {
+	dashboardHandoff.mu.Lock()
+	defer dashboardHandoff.mu.Unlock()
+	return dashboardHandoff.session != nil
+}
+
+// adoptDashboardSession consumes the stashed session (once): the flow's
+// chrome replaces the dashboard's and the console mute is lifted, right
+// before the flow applies its own session-scoped silencing.
+func adoptDashboardSession(cfg shell.Config) *shell.Session {
+	dashboardHandoff.mu.Lock()
+	session := dashboardHandoff.session
+	bootstrap := dashboardHandoff.bootstrap
+	dashboardHandoff.session = nil
+	dashboardHandoff.bootstrap = nil
+	dashboardHandoff.mu.Unlock()
+	if session == nil {
+		return nil
+	}
+	session.Adopt(cfg)
+	bootstrap.SetConsoleQuiet(false)
+	logging.GetDefaultLogger().SetOutput(nil) // back to stdout
+	return session
+}
+
+// releaseDashboardLeftovers runs at the end of the process: if the chosen
+// flow never adopted the session (early failure), close it, restore the
+// console, and replay the muted warnings/errors to stderr.
+func releaseDashboardLeftovers() {
+	dashboardHandoff.mu.Lock()
+	session := dashboardHandoff.session
+	bootstrap := dashboardHandoff.bootstrap
+	mark := dashboardHandoff.entryMark
+	dashboardHandoff.session = nil
+	dashboardHandoff.bootstrap = nil
+	dashboardHandoff.mu.Unlock()
+	if session == nil {
+		return
+	}
+	_ = session.Close()
+	bootstrap.SetConsoleQuiet(false)
+	logging.GetDefaultLogger().SetOutput(nil)
+	bootstrap.ReplayConsoleSince(mark)
 }

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -179,6 +180,12 @@ func initializeRunLogger(rt *appRuntime) *logging.Logger {
 	logger := logging.New(rt.logLevel, rt.cfg.UseColor)
 	if rt.args.Restore {
 		logger = initializeRestoreSessionLogger(rt, logger)
+	}
+	if dashboardHandoffPending() {
+		// The dashboard's alternate screen is still up: keep the fresh run
+		// logger off the console until the flow adopts the session (the
+		// adoption lifts the mute; the flow then applies its own).
+		logger.SwapOutput(io.Discard)
 	}
 	logging.SetDefaultLogger(logger)
 	rt.bootstrap.SetLevel(rt.logLevel)

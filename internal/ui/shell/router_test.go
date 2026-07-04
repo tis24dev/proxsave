@@ -297,3 +297,29 @@ func TestKeyMsgHelper(t *testing.T) {
 		t.Errorf("Keys script length = %d, want 3", n)
 	}
 }
+
+// TestRouterAdoptSwapsChrome: adoptConfigMsg rebrands the frame while the
+// program keeps running; the test push observer survives the swap.
+func TestRouterAdoptSwapsChrome(t *testing.T) {
+	observed := 0
+	cfg := Config{AppName: "ProxSave", Subtitle: "Dashboard"}
+	cfg.observeScreenPush = func(string) { observed++ }
+	m := newRootModel(cfg)
+
+	updated, _ := m.Update(adoptConfigMsg{cfg: Config{AppName: "ProxSave", Subtitle: "Restore Backup Workflow", Version: "v2"}})
+	m = updated.(rootModel)
+	if m.cfg.Subtitle != "Restore Backup Workflow" || m.cfg.Version != "v2" {
+		t.Fatalf("chrome not swapped: %+v", m.cfg)
+	}
+	if m.cfg.observeScreenPush == nil {
+		t.Fatal("push observer must survive adoption")
+	}
+	m = pushEntry(m, newStubScreen(1), 1, func() {})
+	if observed != 1 {
+		t.Fatal("observer not functional after adoption")
+	}
+	header := m.renderHeader(96, m.stack[0].screen, true)
+	if !strings.Contains(header, "Restore Backup Workflow") {
+		t.Fatalf("header must show the adopted subtitle: %q", header)
+	}
+}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
 // installDashboardGates fixes the two gate seams for a test.
@@ -52,10 +53,24 @@ func TestDashboardGateNonInteractiveNeverIntercepts(t *testing.T) {
 	}
 }
 
+func installDashboardSessionSeam(t *testing.T) *newkeyUIDriver {
+	t.Helper()
+	d := installNewkeySessionSeam(t)
+	orig := testDashboardSession
+	testDashboardSession = func(ctx context.Context) *shell.Session {
+		return newAgeSetupSession(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"})
+	}
+	t.Cleanup(func() {
+		testDashboardSession = orig
+		releaseDashboardLeftovers()
+	})
+	return d
+}
+
 func runDashboardWith(t *testing.T, keys string) (*cli.Args, int, bool) {
 	t.Helper()
 	installDashboardGates(t, true, true)
-	driver := installNewkeySessionSeam(t)
+	driver := installDashboardSessionSeam(t)
 
 	args := &cli.Args{}
 	type outcome struct {
@@ -134,7 +149,7 @@ func TestDashboardActions(t *testing.T) {
 // a surprise backup for a human sitting at the menu.
 func TestDashboardUIDeathIsExitNotBackup(t *testing.T) {
 	installDashboardGates(t, true, true)
-	driver := installNewkeySessionSeam(t)
+	driver := installDashboardSessionSeam(t)
 
 	args := &cli.Args{}
 	type outcome struct {
@@ -183,5 +198,44 @@ func TestDashboardBareInvocationGateReal(t *testing.T) {
 func TestDashboardInteractiveGateUnderTest(t *testing.T) {
 	if isDashboardTerminalInteractive() {
 		t.Fatal("gate must be false without a real terminal")
+	}
+}
+
+// TestDashboardFlowActionHandsSessionOver: choosing a flow keeps the session
+// alive (stashed for adoption) and adoption consumes it exactly once,
+// restoring the console mute it installed.
+func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
+	args, _, handled := runDashboardWith(t, "down enter") // Restore
+	if handled || !args.Restore {
+		t.Fatalf("restore dispatch broken: handled=%v args=%+v", handled, args)
+	}
+	if !dashboardHandoffPending() {
+		t.Fatal("flow action must stash the session for adoption")
+	}
+	s := adoptDashboardSession(shell.Config{AppName: "ProxSave", Subtitle: "Restore Backup Workflow"})
+	if s == nil {
+		t.Fatal("adoption must return the stashed session")
+	}
+	if adoptDashboardSession(shell.Config{}) != nil {
+		t.Fatal("adoption must consume the stash (second call nil)")
+	}
+	_ = s.Close()
+}
+
+// TestDashboardExitStillClosesSession: exit and backup do NOT stash.
+func TestDashboardExitStillClosesSession(t *testing.T) {
+	_, _, handled := runDashboardWith(t, "esc")
+	if !handled {
+		t.Fatal("esc must exit")
+	}
+	if dashboardHandoffPending() {
+		t.Fatal("exit must not leave a stashed session")
+	}
+	args, _, handled := runDashboardWith(t, "enter") // Run backup now
+	if handled || args.Restore || args.Install {
+		t.Fatalf("backup dispatch broken: %+v", args)
+	}
+	if dashboardHandoffPending() {
+		t.Fatal("backup must not stash the session (plain terminal run)")
 	}
 }

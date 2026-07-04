@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
@@ -76,5 +77,34 @@ func TestBootstrapConsoleQuiet(t *testing.T) {
 	b.mu.Unlock()
 	if found != 1 {
 		t.Fatalf("quiet line must still be recorded, found %d", found)
+	}
+}
+
+func TestBootstrapReplayConsoleSince(t *testing.T) {
+	b := NewBootstrapLogger()
+	b.SetConsoleQuiet(true)
+	b.Info("noise before mark")
+	mark := b.EntryCount()
+	b.Info("muted info")       // below warning: not replayed
+	b.Warning("muted warning") // replayed
+	b.Error("muted error")     // replayed
+
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	b.ReplayConsoleSince(mark)
+	_ = w.Close()
+	os.Stderr = orig
+	data, _ := io.ReadAll(r)
+	out := string(data)
+
+	if !strings.Contains(out, "muted warning") || !strings.Contains(out, "muted error") {
+		t.Fatalf("replay must include warning and error: %q", out)
+	}
+	if strings.Contains(out, "muted info") || strings.Contains(out, "noise before mark") {
+		t.Fatalf("replay must exclude info and pre-mark entries: %q", out)
 	}
 }
