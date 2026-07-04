@@ -10,6 +10,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/cron"
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -60,7 +61,14 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 	if err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execToken), bootstrap); err != nil {
 		logging.Warning("daemon: failed to remove the cron entry (possible double execution; the per-run lock mitigates): %v", err)
 	}
-	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_MODE": "daemon", "DAEMON_OPT_OUT": "false"}); err != nil {
+	// HEALTHCHECK_ENABLED=true matches the fresh-install default so a retrofitted
+	// host also gets the dead-man switch out of the box (centralized resolves ping
+	// URLs at runtime and degrades gracefully when unpaired).
+	if err := setBackupEnvKeys(configPath, map[string]string{
+		"SCHEDULER_MODE":      "daemon",
+		"DAEMON_OPT_OUT":      "false",
+		"HEALTHCHECK_ENABLED": "true",
+	}); err != nil {
 		logging.Warning("daemon: failed to record SCHEDULER_MODE=daemon in %s: %v", configPath, err)
 	}
 	return nil
@@ -133,21 +141,53 @@ func setBackupEnvKeys(configPath string, kv map[string]string) error {
 	return writeConfigFile(configPath, configPath+".daemon.tmp", content)
 }
 
-// finishDaemonInstallIfSelected enables the daemon at install time when the
-// wizard picked daemon mode: install the unit and drop the just-written cron
-// entry. Best-effort (a failure leaves the install on cron with a warning).
-func finishDaemonInstallIfSelected(ctx context.Context, schedulerMode, configPath string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) {
-	if strings.ToLower(strings.TrimSpace(schedulerMode)) != "daemon" {
+// reconcileSchedulerAfterInstall makes the scheduler engine a MUTUALLY EXCLUSIVE
+// choice after an install/reinstall (which always (re)writes the cron line). It
+// takes the mode the wizard picked; when empty (keep-existing / skipped wizard)
+// it reads the mode from the just-written config. daemon -> install the unit and
+// drop the cron line; cron -> tear down any leftover daemon unit so a re-install
+// of a previously-daemon host can never end up double-scheduled (cron + unit).
+func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) {
+	mode := strings.ToLower(strings.TrimSpace(wizardMode))
+	if mode != "cron" && mode != "daemon" {
+		mode = readConfiguredSchedulerMode(configPath)
+	}
+
+	if mode == "daemon" {
+		if err := installDaemonService(ctx, daemonExecPath, configPath, bootstrap); err != nil {
+			logging.Warning("Failed to enable the daemon service (staying on cron): %v", err)
+			return
+		}
+		if err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execInfo.ExecPath), bootstrap); err != nil {
+			logging.Warning("daemon: failed to remove the cron entry (the per-run lock mitigates double execution): %v", err)
+		}
+		logging.Info("Daemon mode enabled: %s is active and the cron entry was removed.", daemonUnitName)
 		return
 	}
-	if err := installDaemonService(ctx, daemonExecPath, configPath, bootstrap); err != nil {
-		logging.Warning("Failed to enable the daemon service (staying on cron): %v", err)
-		return
+
+	// cron mode: a previously-installed daemon unit would double-schedule with the
+	// cron line just written, so remove it.
+	if daemonServiceActive(ctx) {
+		if err := removeDaemonService(ctx, bootstrap); err != nil {
+			logging.Warning("daemon: a previous daemon unit is active and could not be removed (possible double execution): %v", err)
+		} else {
+			logging.Info("Removed the previous daemon service; this host now uses the cron scheduler.")
+		}
 	}
-	if err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execInfo.ExecPath), bootstrap); err != nil {
-		logging.Warning("daemon: failed to remove the cron entry (the per-run lock mitigates double execution): %v", err)
+}
+
+// readConfiguredSchedulerMode returns "daemon" or "cron" from an existing
+// backup.env (default cron). Used for the keep-existing install path where the
+// wizard did not collect a mode.
+func readConfiguredSchedulerMode(configPath string) string {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "cron"
 	}
-	logging.Info("Daemon mode enabled: %s is active and the cron entry was removed.", daemonUnitName)
+	if strings.EqualFold(strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerMode), "daemon") {
+		return "daemon"
+	}
+	return "cron"
 }
 
 // cronCorrectPaths returns the canonical command tokens that identify a proxsave

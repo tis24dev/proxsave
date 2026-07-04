@@ -52,6 +52,35 @@ func TestSetBackupEnvKeysReplacesAndAppends(t *testing.T) {
 	}
 }
 
+func TestReadConfiguredSchedulerMode(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return p
+	}
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"daemon", write("d.env", "SCHEDULER_MODE=daemon\n"), "daemon"},
+		{"cron", write("c.env", "SCHEDULER_MODE=cron\n"), "cron"},
+		{"key absent", write("none.env", "BACKUP_PATH=/x\n"), "cron"},
+		{"garbage value", write("g.env", "SCHEDULER_MODE=weird\n"), "cron"},
+		{"missing file", filepath.Join(dir, "nope.env"), "cron"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := readConfiguredSchedulerMode(tc.path); got != tc.want {
+				t.Fatalf("readConfiguredSchedulerMode = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCronCorrectPaths(t *testing.T) {
 	if got := cronCorrectPaths(daemonExecPath); len(got) != 1 || got[0] != daemonExecPath {
 		t.Errorf("same-as-canonical -> %v, want [%s]", got, daemonExecPath)

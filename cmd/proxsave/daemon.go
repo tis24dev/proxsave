@@ -59,8 +59,9 @@ type daemon struct {
 	configPath string
 	now        func() time.Time
 
-	mu       sync.Mutex
-	reporter backupReporter
+	mu          sync.Mutex
+	reporter    backupReporter
+	fetchWarned bool // centralized fetch already warned once (throttle recurring WARN)
 	// newBackupCmd builds the child backup command; overridable in tests.
 	newBackupCmd func(ctx context.Context) *exec.Cmd
 }
@@ -140,7 +141,13 @@ func (d *daemon) runOnce(parentCtx context.Context) {
 	runCtx, cancel := context.WithTimeout(parentCtx, d.maxRunDuration())
 	defer cancel()
 
-	cmd := d.buildBackupCmd(runCtx)
+	// Capture the child's combined output (bounded) so a non-success outcome can
+	// POST a real log tail; the output still streams to journald via os.Std*.
+	var tail *tailBuffer
+	if d.cfg.HealthcheckSendLog {
+		tail = &tailBuffer{max: logTailBytes}
+	}
+	cmd := d.buildBackupCmd(runCtx, tail)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = daemonKillGrace
 
@@ -153,15 +160,20 @@ func (d *daemon) runOnce(parentCtx context.Context) {
 		return
 	}
 
+	logBody := ""
+	if tail != nil {
+		logBody = tail.String()
+	}
+
 	if runCtx.Err() == context.DeadlineExceeded {
 		logging.Error("daemon: backup exceeded %s and was killed (hang)", d.maxRunDuration())
-		d.reportBestEffort("hang", func() error { return d.hangPing(parentCtx, r, rid) })
+		d.reportBestEffort("hang", func() error { return d.hangPing(parentCtx, r, rid, logBody) })
 		return
 	}
 
 	code := exitCodeFromErr(runErr)
 	logging.Info("daemon: backup finished (rid=%s exit=%d)", rid, code)
-	d.reportBestEffort("finish", func() error { return d.finishPing(parentCtx, r, rid, code) })
+	d.reportBestEffort("finish", func() error { return d.finishPing(parentCtx, r, rid, code, logBody) })
 }
 
 func (d *daemon) startPing(ctx context.Context, r backupReporter, rid string) error {
@@ -171,18 +183,18 @@ func (d *daemon) startPing(ctx context.Context, r backupReporter, rid string) er
 	return r.RunStarted(ctx, rid)
 }
 
-func (d *daemon) finishPing(ctx context.Context, r backupReporter, rid string, code int) error {
+func (d *daemon) finishPing(ctx context.Context, r backupReporter, rid string, code int, logTail string) error {
 	if r == nil {
 		return nil
 	}
-	return r.RunFinished(ctx, rid, code, d.logTail())
+	return r.RunFinished(ctx, rid, code, logTail)
 }
 
-func (d *daemon) hangPing(ctx context.Context, r backupReporter, rid string) error {
+func (d *daemon) hangPing(ctx context.Context, r backupReporter, rid, logTail string) error {
 	if r == nil {
 		return nil
 	}
-	return r.RunHang(ctx, rid, d.maxRunDuration(), d.logTail())
+	return r.RunHang(ctx, rid, d.maxRunDuration(), logTail)
 }
 
 // reportBestEffort logs a ping failure at debug (a down monitor must never break
@@ -249,10 +261,25 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 	// centralized
 	alive, backup, err := d.fetchCentralized(ctx)
 	if err != nil {
-		logging.Warning("daemon: healthcheck centralized fetch failed: %v", err)
+		// The heartbeat loop retries this every interval; warn ONCE (so the
+		// operator sees healthchecks isn't working, e.g. Telegram not paired yet),
+		// then drop to Debug to avoid a recurring WARN every few minutes.
+		d.mu.Lock()
+		firstFail := !d.fetchWarned
+		d.fetchWarned = true
+		d.mu.Unlock()
+		if firstFail {
+			logging.Warning("daemon: healthcheck centralized fetch failed: %v", err)
+		} else {
+			logging.Debug("daemon: healthcheck centralized fetch failed: %v", err)
+		}
 		// Fall back to any URLs cached in backup.env so a transient server outage
 		// still lets us report.
 		alive, backup = d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL
+	} else {
+		d.mu.Lock()
+		d.fetchWarned = false // recovered: allow a future failure to warn again
+		d.mu.Unlock()
 	}
 	if alive == "" && backup == "" {
 		return nil
@@ -307,20 +334,33 @@ func (d *daemon) registerSecrets(urls ...string) {
 }
 
 // buildBackupCmd builds the supervised child: `proxsave --backup [--config ...]`.
-func (d *daemon) buildBackupCmd(ctx context.Context) *exec.Cmd {
+// When tail is non-nil the child's combined output is mirrored into it (bounded)
+// while still streaming to os.Std* (journald).
+func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer) *exec.Cmd {
+	var cmd *exec.Cmd
 	if d.newBackupCmd != nil {
-		return d.newBackupCmd(ctx)
+		cmd = d.newBackupCmd(ctx)
+	} else {
+		args := []string{"--backup"}
+		if strings.TrimSpace(d.configPath) != "" {
+			args = append(args, "--config", d.configPath)
+		}
+		// #nosec G204 -- execPath is the running proxsave binary (os.Executable), args
+		// are fixed literals; not user-controlled. safeexec's allowlist is for external
+		// tools, not for re-executing self.
+		cmd = exec.CommandContext(ctx, d.execPath, args...)
 	}
-	args := []string{"--backup"}
-	if strings.TrimSpace(d.configPath) != "" {
-		args = append(args, "--config", d.configPath)
+	if tail != nil {
+		cmd.Stdout = io.MultiWriter(os.Stdout, tail)
+		cmd.Stderr = io.MultiWriter(os.Stderr, tail)
+	} else {
+		if cmd.Stdout == nil {
+			cmd.Stdout = os.Stdout
+		}
+		if cmd.Stderr == nil {
+			cmd.Stderr = os.Stderr
+		}
 	}
-	// #nosec G204 -- execPath is the running proxsave binary (os.Executable), args
-	// are fixed literals; not user-controlled. safeexec's allowlist is for external
-	// tools, not for re-executing self.
-	cmd := exec.CommandContext(ctx, d.execPath, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	return cmd
 }
 
@@ -331,37 +371,28 @@ func (d *daemon) maxRunDuration() time.Duration {
 	return defaultMaxRunDuration
 }
 
-// logTail returns the last logTailBytes of the run log, for the outcome POST body.
-func (d *daemon) logTail() string {
-	if !d.cfg.HealthcheckSendLog {
-		return ""
+// tailBuffer is a bounded io.Writer keeping only the last max bytes written, used
+// to capture the tail of a supervised backup's output for the outcome POST body.
+type tailBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+	max int
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		t.buf = t.buf[len(t.buf)-t.max:]
 	}
-	path := strings.TrimSpace(d.cfg.LogPath)
-	if path == "" {
-		return ""
-	}
-	// Trusted operator-configured path (same pattern as orchestrator.ParseLogCounts).
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	st, err := f.Stat()
-	if err != nil {
-		return ""
-	}
-	var off int64
-	if st.Size() > logTailBytes {
-		off = st.Size() - logTailBytes
-	}
-	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return ""
-	}
-	buf, err := io.ReadAll(io.LimitReader(f, logTailBytes))
-	if err != nil {
-		return ""
-	}
-	return string(buf)
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.buf)
 }
 
 func (d *daemon) getReporter() backupReporter {
