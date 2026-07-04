@@ -38,6 +38,8 @@ type Selector[T any] struct {
 	filtering bool
 	backErr   error
 	prompt    string
+
+	lastRowsTop int // body row of the first visible item (set by View)
 }
 
 // SelectorOption customizes a Selector.
@@ -126,6 +128,34 @@ func (s *Selector[T]) clampCursor(visibleLen int) {
 }
 
 func (s *Selector[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
+	switch mouse := msg.(type) {
+	case tea.MouseWheelMsg:
+		vis := s.visible()
+		s.clampCursor(len(vis))
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			if s.cursor > 0 {
+				s.cursor--
+			}
+		case tea.MouseWheelDown:
+			if s.cursor < len(vis)-1 {
+				s.cursor++
+			}
+		}
+		return s, nil
+	case tea.MouseClickMsg:
+		if mouse.Button != tea.MouseLeft {
+			return s, nil
+		}
+		vis := s.visible()
+		row := mouse.Y - s.lastRowsTop + s.offset
+		if row >= 0 && row < len(vis) {
+			s.cursor = row
+			return s, s.Resolve(s.items[vis[row]].Value, nil)
+		}
+		return s, nil
+	}
+
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return s, nil
@@ -230,6 +260,7 @@ func (s *Selector[T]) View(width, height int) string {
 	b.WriteString("\n\n")
 
 	overhead := lipgloss.Height(b.String())
+	s.lastRowsTop = overhead - 1 // rows start after title/prompt/blank
 	if s.filtering || s.filter != "" {
 		overhead++
 	}

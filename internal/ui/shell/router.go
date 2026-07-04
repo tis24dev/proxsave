@@ -80,7 +80,13 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if isUserInput(msg) {
-		// User input goes to the top screen only (modal stack).
+		// User input goes to the top screen only (modal stack). Mouse
+		// coordinates are translated into body space (the area handed to
+		// Screen.View), so components can hit-test their own layout.
+		msg = m.translateMouse(msg)
+		if msg == nil {
+			return m, nil
+		}
 		if n := len(m.stack); n > 0 {
 			scr, cmd := m.stack[n-1].screen.Update(msg)
 			m.stack[n-1].screen = scr
@@ -117,6 +123,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m rootModel) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	// Parity with the old tview UI, which always enabled mouse support.
+	v.MouseMode = tea.MouseModeCellMotion
 	if m.cfg.UseColor {
 		// Only repaint the terminal background when color is enabled:
 		// with DISABLE_COLORS the OSC 11 repaint would contradict the
@@ -228,6 +236,46 @@ func (m rootModel) renderFooter(innerW int, top Screen, hasTop bool) string {
 
 func center(width int, s string) string {
 	return lipgloss.PlaceHorizontal(width, lipgloss.Center, s)
+}
+
+// Body origin inside the frame: border (1) + horizontal padding (1)
+// columns, border (1) + header (1) + rule (1) rows. Keep in sync with
+// render().
+const (
+	bodyOriginX = 2
+	bodyOriginY = 3
+)
+
+// translateMouse rebases mouse coordinates onto the body area. Clicks on
+// the chrome are swallowed (nil); wheel events pass through regardless of
+// position so scrolling works wherever the pointer is.
+func (m rootModel) translateMouse(msg tea.Msg) tea.Msg {
+	rebase := func(mouse tea.Mouse) (tea.Mouse, bool) {
+		mouse.X -= bodyOriginX
+		mouse.Y -= bodyOriginY
+		return mouse, mouse.X >= 0 && mouse.Y >= 0
+	}
+	switch mm := msg.(type) {
+	case tea.MouseClickMsg:
+		if adj, ok := rebase(tea.Mouse(mm)); ok {
+			return tea.MouseClickMsg(adj)
+		}
+		return nil
+	case tea.MouseReleaseMsg:
+		if adj, ok := rebase(tea.Mouse(mm)); ok {
+			return tea.MouseReleaseMsg(adj)
+		}
+		return nil
+	case tea.MouseMotionMsg:
+		if adj, ok := rebase(tea.Mouse(mm)); ok {
+			return tea.MouseMotionMsg(adj)
+		}
+		return nil
+	case tea.MouseWheelMsg:
+		adj, _ := rebase(tea.Mouse(mm))
+		return tea.MouseWheelMsg(adj)
+	}
+	return msg
 }
 
 // isUserInput reports whether msg is direct user input (keys, mouse,

@@ -242,6 +242,37 @@ func TestRouterBackgroundDelivery(t *testing.T) {
 
 func lipglossWidth(s string) int { return lipgloss.Width(s) }
 
+// TestRouterTranslatesMouseIntoBodySpace: clicks reach the top screen with
+// body-relative coordinates; chrome clicks are swallowed; wheel events pass
+// through regardless of position.
+func TestRouterTranslatesMouseIntoBodySpace(t *testing.T) {
+	m := newRootModel(Config{AppName: "ProxSave"})
+	scr := newStubScreen(1)
+	m = pushEntry(m, scr, 1, func() {})
+
+	m.Update(tea.MouseClickMsg{X: bodyOriginX + 5, Y: bodyOriginY + 2, Button: tea.MouseLeft}) //nolint:errcheck
+	got, ok := scr.lastMsg.(tea.MouseClickMsg)
+	if !ok {
+		t.Fatalf("click not forwarded: %T", scr.lastMsg)
+	}
+	if got.X != 5 || got.Y != 2 {
+		t.Fatalf("coordinates not rebased: %+v", got)
+	}
+
+	// Chrome click (header area) is swallowed.
+	scr.lastMsg = nil
+	m.Update(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft}) //nolint:errcheck
+	if scr.lastMsg != nil {
+		t.Fatalf("chrome click must be swallowed, got %T", scr.lastMsg)
+	}
+
+	// Wheel passes through even off-body.
+	m.Update(tea.MouseWheelMsg{X: 0, Y: 0, Button: tea.MouseWheelDown}) //nolint:errcheck
+	if _, ok := scr.lastMsg.(tea.MouseWheelMsg); !ok {
+		t.Fatalf("wheel must pass through, got %T", scr.lastMsg)
+	}
+}
+
 func TestKeyMsgHelper(t *testing.T) {
 	cases := map[string]string{
 		"enter":     "enter",

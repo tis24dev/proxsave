@@ -49,6 +49,10 @@ type Confirm struct {
 	timeout         time.Duration
 	deadline        time.Time
 	now             time.Time
+
+	// Button hit ranges from the last render (body coordinates).
+	lastButtonsY             int
+	yesX0, yesX1, noX0, noX1 int
 }
 
 // ConfirmOption customizes a Confirm.
@@ -158,6 +162,17 @@ func (c *Confirm) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			return c, c.Resolve(ConfirmResult{Answer: false, TimedOut: true}, nil)
 		}
 		return c, c.tick()
+	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft || msg.Y != c.lastButtonsY {
+			return c, nil
+		}
+		switch {
+		case msg.X >= c.yesX0 && msg.X < c.yesX1:
+			return c, c.Resolve(ConfirmResult{Answer: true}, nil)
+		case msg.X >= c.noX0 && msg.X < c.noX1:
+			return c, c.Resolve(ConfirmResult{Answer: false}, nil)
+		}
+		return c, nil
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "left", "right", "tab", "shift+tab", "up", "down":
@@ -251,6 +266,7 @@ func (c *Confirm) View(width, height int) string {
 	if len(head)+len(tail) < height {
 		head = append(head, "")
 	}
+	c.lastButtonsY = len(head) + len(tail) - 1
 	return strings.Join(append(head, tail...), "\n")
 }
 
@@ -271,5 +287,10 @@ func (c *Confirm) renderButtons(width int) string {
 		noBtn = theme.ButtonFocused.Render(no)
 	}
 	row := lipgloss.JoinHorizontal(lipgloss.Center, yesBtn, "  ", noBtn)
+	// Record the click ranges (body coordinates after centering).
+	wYes, wNo := lipgloss.Width(yesBtn), lipgloss.Width(noBtn)
+	leftPad := max((width-(wYes+2+wNo))/2, 0)
+	c.yesX0, c.yesX1 = leftPad, leftPad+wYes
+	c.noX0, c.noX1 = leftPad+wYes+2, leftPad+wYes+2+wNo
 	return lipgloss.PlaceHorizontal(width, lipgloss.Center, row)
 }

@@ -62,6 +62,12 @@ type FormGrid struct {
 	errMsg   string
 	ti       textinput.Model
 	editing  int // field index currently bound to ti, -1 none
+
+	// Layout from the last render (body coordinates) for mouse hit-testing.
+	lastRowsTop                    int
+	lastWindowEnd                  int
+	lastButtonsY                   int
+	contX0, contX1, cancX0, cancX1 int
 }
 
 // FormGridOption customizes a FormGrid.
@@ -185,6 +191,46 @@ func (g *FormGrid) submit() (shell.Screen, tea.Cmd) {
 }
 
 func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
+	switch mouse := msg.(type) {
+	case tea.MouseWheelMsg:
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			g.move(-1)
+		case tea.MouseWheelDown:
+			g.move(1)
+		}
+		return g, nil
+	case tea.MouseClickMsg:
+		if mouse.Button != tea.MouseLeft {
+			return g, nil
+		}
+		if mouse.Y == g.lastButtonsY {
+			switch {
+			case mouse.X >= g.contX0 && mouse.X < g.contX1:
+				g.cursor = len(g.fields)
+				g.onCancel = false
+				return g.submit()
+			case mouse.X >= g.cancX0 && mouse.X < g.cancX1:
+				return g, g.Resolve(struct{}{}, g.backErr)
+			}
+			return g, nil
+		}
+		row := mouse.Y - g.lastRowsTop + g.offset
+		if row >= 0 && row < len(g.fields) && g.fields[row].active() {
+			g.cursor = row
+			g.bindEditor()
+			f := g.fields[row]
+			switch f.Kind {
+			case FieldToggle:
+				f.Bool = !f.Bool
+				g.errMsg = ""
+			case FieldSelect:
+				f.OptionIndex = (f.OptionIndex + 1) % len(f.Options)
+			}
+		}
+		return g, nil
+	}
+
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		if g.editing >= 0 {
@@ -403,6 +449,18 @@ func (g *FormGrid) View(width, height int) string {
 	}
 	end := min(g.offset+visible, len(rows))
 	windowed := rows[g.offset:end]
+
+	// Mouse hit-test layout: rows start after title+blank; buttons after
+	// the window plus its blank separator.
+	g.lastRowsTop = head
+	g.lastWindowEnd = head + len(windowed)
+	g.lastButtonsY = g.lastWindowEnd + 1
+	contBtnW := lipgloss.Width(continueBtn)
+	cancBtnW := lipgloss.Width(cancelBtn)
+	g.contX0 = 2 + labelW + 2
+	g.contX1 = g.contX0 + contBtnW
+	g.cancX0 = g.contX1 + 2
+	g.cancX1 = g.cancX0 + cancBtnW
 
 	var b strings.Builder
 	b.WriteString(theme.Emphasis.Render(g.title))

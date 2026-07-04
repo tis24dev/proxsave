@@ -32,6 +32,8 @@ type MultiSelect[T any] struct {
 	backErr     error
 	minSelected int
 	errMsg      string
+
+	lastRowsTop int // body row of the first visible item (set by View)
 }
 
 // MultiSelectOption customizes a MultiSelect.
@@ -93,6 +95,32 @@ func (m *MultiSelect[T]) selectedCount() int {
 }
 
 func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
+	switch mouse := msg.(type) {
+	case tea.MouseWheelMsg:
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.MouseWheelDown:
+			if m.cursor < len(m.items)-1 {
+				m.cursor++
+			}
+		}
+		return m, nil
+	case tea.MouseClickMsg:
+		if mouse.Button != tea.MouseLeft {
+			return m, nil
+		}
+		row := mouse.Y - m.lastRowsTop + m.offset
+		if row >= 0 && row < len(m.items) {
+			m.cursor = row
+			m.items[row].Selected = !m.items[row].Selected
+			m.errMsg = ""
+		}
+		return m, nil
+	}
+
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -155,6 +183,7 @@ func (m *MultiSelect[T]) View(width, height int) string {
 	b.WriteString("\n\n")
 
 	overhead := len(strings.Split(b.String(), "\n"))
+	m.lastRowsTop = overhead - 1 // rows start after title/prompt/blank
 	if m.errMsg != "" {
 		overhead++
 	}
