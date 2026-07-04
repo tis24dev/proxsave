@@ -217,6 +217,49 @@ func TestMultiSelectActionsViewShowsButtons(t *testing.T) {
 	}
 }
 
+func detailItems() []MultiSelectItem[string] {
+	return []MultiSelectItem[string]{
+		{Label: "BACKUP_ZFS_CONFIG", Value: "zfs", Detail: "ZFS configuration pool cache description."},
+		{Label: "BACKUP_CEPH_CONFIG", Value: "ceph", Detail: "Ceph cluster configuration description."},
+	}
+}
+
+// The detail pane renders the highlighted item's Detail on the right, follows the
+// cursor, and keeps the list column clean (no inline Description).
+func TestMultiSelectDetailPane(t *testing.T) {
+	m := NewMultiSelect("Unused components", detailItems(),
+		WithMultiSelectDetailPane[string]("Details"),
+		WithMultiSelectActions[string]("Select ALL", "Disable Selected"))
+
+	view := ansi.Strip(m.View(100, 24))
+	if !strings.Contains(view, "Details") {
+		t.Fatalf("detail pane title missing: %q", view)
+	}
+	if !strings.Contains(view, "│") {
+		t.Fatalf("two-pane separator missing: %q", view)
+	}
+	if !strings.Contains(view, "ZFS configuration pool cache") {
+		t.Fatalf("highlighted item's detail missing: %q", view)
+	}
+	if strings.Contains(view, "Ceph cluster configuration") {
+		t.Fatalf("only the highlighted item's detail should render: %q", view)
+	}
+
+	press(t, m, "down") // highlight the second item
+	view2 := ansi.Strip(m.View(100, 24))
+	if !strings.Contains(view2, "Ceph cluster configuration") {
+		t.Fatalf("detail pane must follow the cursor: %q", view2)
+	}
+}
+
+// A terminal too narrow for two columns falls back to a single column.
+func TestMultiSelectDetailPaneNarrowFallback(t *testing.T) {
+	m := NewMultiSelect("T", detailItems(), WithMultiSelectDetailPane[string]("Details"))
+	if strings.Contains(ansi.Strip(m.View(30, 10)), "│") {
+		t.Fatal("narrow width must not render the two-pane separator")
+	}
+}
+
 func TestMultiSelectViewShowsState(t *testing.T) {
 	m := NewMultiSelect("Categories", categoryItems())
 	view := m.View(80, 20)

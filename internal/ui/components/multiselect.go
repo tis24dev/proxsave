@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -17,6 +18,9 @@ type MultiSelectItem[T any] struct {
 	Description string
 	Value       T
 	Selected    bool
+	// Detail is the long text shown in the side detail pane for this row (used
+	// only when the MultiSelect has a detail pane).
+	Detail string
 }
 
 // MultiSelect is a checkbox list resolving to the values of the selected
@@ -40,6 +44,11 @@ type MultiSelect[T any] struct {
 	actions        bool
 	selectAllLabel string
 	confirmLabel   string
+
+	// Optional side detail pane: the list renders on the left and the highlighted
+	// item's Detail on the right (a two-pane layout).
+	detailPane  bool
+	detailTitle string
 
 	lastRowsTop int // body row of the first visible item (set by View)
 }
@@ -74,6 +83,15 @@ func WithMultiSelectActions[T any](selectAllLabel, confirmLabel string) MultiSel
 	}
 }
 
+// WithMultiSelectDetailPane renders a side pane showing the highlighted item's
+// Detail text (a two-pane list/description layout). title labels the pane.
+func WithMultiSelectDetailPane[T any](title string) MultiSelectOption[T] {
+	return func(m *MultiSelect[T]) {
+		m.detailPane = true
+		m.detailTitle = sanitizeLine(title)
+	}
+}
+
 // NewMultiSelect builds a checkbox list screen.
 func NewMultiSelect[T any](title string, items []MultiSelectItem[T], opts ...MultiSelectOption[T]) *MultiSelect[T] {
 	clean := make([]MultiSelectItem[T], len(items))
@@ -83,6 +101,7 @@ func NewMultiSelect[T any](title string, items []MultiSelectItem[T], opts ...Mul
 			Description: sanitizeLine(it.Description),
 			Value:       it.Value,
 			Selected:    it.Selected,
+			Detail:      sanitize(it.Detail),
 		}
 	}
 	m := &MultiSelect[T]{title: sanitizeLine(title), items: clean}
@@ -314,49 +333,128 @@ func (m *MultiSelect[T]) View(width, height int) string {
 		m.offset = 0
 	}
 
-	for row := m.offset; row < m.totalRows() && row < m.offset+rows; row++ {
-		if row == m.spacerRow() {
-			// Blank divider between the item list and the action buttons.
-			b.WriteString("\n")
-			continue
+	// leftWidth is the list column width; with a detail pane the description takes
+	// the rest. Fall back to a single column when the terminal is too narrow.
+	leftWidth := width
+	twoPane := m.detailPane && width >= 48
+	sep := " │ "
+	if twoPane {
+		leftWidth = min(max(width*3/7, 28), 44)
+	}
+
+	visibleRows := func() []int {
+		out := []int{}
+		for row := m.offset; row < m.totalRows() && row < m.offset+rows; row++ {
+			out = append(out, row)
 		}
-		if row >= len(m.items) {
-			// Trailing action button (Select all / confirm).
-			label := m.selectAllLabel
-			if row == m.confirmRow() {
-				label = m.confirmLabel
+		return out
+	}
+
+	if twoPane {
+		rightWidth := width - leftWidth - lipgloss.Width(sep)
+		leftLines := []string{}
+		for _, row := range visibleRows() {
+			leftLines = append(leftLines, m.renderRow(row, leftWidth))
+		}
+		rightLines := m.detailLines(rightWidth, rows)
+		n := max(len(leftLines), len(rightLines))
+		for i := 0; i < n; i++ {
+			l, r := "", ""
+			if i < len(leftLines) {
+				l = leftLines[i]
 			}
-			btn := ansi.Truncate("[ "+label+" ]", width-2, "…")
-			if row == m.cursor {
-				b.WriteString(theme.Selected.Render(theme.SymbolSelected + " " + btn))
-			} else {
-				b.WriteString(theme.Emphasis.Render("  " + btn))
+			if i < len(rightLines) {
+				r = rightLines[i]
 			}
+			b.WriteString(padCol(l, leftWidth) + theme.Subtle.Render(sep) + r + "\n")
+		}
+	} else {
+		for _, row := range visibleRows() {
+			b.WriteString(m.renderRow(row, leftWidth))
 			b.WriteString("\n")
-			continue
 		}
-		it := m.items[row]
-		box := theme.SymbolUncheck
-		if it.Selected {
-			box = theme.SymbolCheck
-		}
-		line := box + " " + it.Label
-		if it.Description != "" {
-			line += "  " + it.Description
-		}
-		line = ansi.Truncate(line, width-2, "…")
-		switch {
-		case row == m.cursor:
-			b.WriteString(theme.Selected.Render(theme.SymbolSelected + " " + line))
-		case it.Selected:
-			b.WriteString(theme.SuccessText.Render("  " + line))
-		default:
-			b.WriteString(theme.Text.Render("  " + line))
-		}
-		b.WriteString("\n")
 	}
 	if m.errMsg != "" {
 		b.WriteString(theme.ErrorText.Render(theme.SymbolError + " " + m.errMsg))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderRow renders a single body row (item, spacer, or action button) within
+// colWidth. A spacer row renders as an empty line.
+func (m *MultiSelect[T]) renderRow(row, colWidth int) string {
+	if row == m.spacerRow() {
+		return ""
+	}
+	if row >= len(m.items) {
+		label := m.selectAllLabel
+		if row == m.confirmRow() {
+			label = m.confirmLabel
+		}
+		btn := ansi.Truncate("[ "+label+" ]", colWidth-2, "…")
+		if row == m.cursor {
+			return theme.Selected.Render(theme.SymbolSelected + " " + btn)
+		}
+		return theme.Emphasis.Render("  " + btn)
+	}
+	it := m.items[row]
+	box := theme.SymbolUncheck
+	if it.Selected {
+		box = theme.SymbolCheck
+	}
+	line := box + " " + it.Label
+	// Without a detail pane the first message rides inline; with a detail pane
+	// the list stays clean (just the key) and the description moves to the pane.
+	if it.Description != "" && !m.detailPane {
+		line += "  " + it.Description
+	}
+	line = ansi.Truncate(line, colWidth-2, "…")
+	switch {
+	case row == m.cursor:
+		return theme.Selected.Render(theme.SymbolSelected + " " + line)
+	case it.Selected:
+		return theme.SuccessText.Render("  " + line)
+	default:
+		return theme.Text.Render("  " + line)
+	}
+}
+
+// detailLines renders the side pane for the highlighted row: the pane title then
+// the wrapped Detail text (or a hint when the cursor is on an action button),
+// capped at maxLines.
+func (m *MultiSelect[T]) detailLines(width, maxLines int) []string {
+	if width < 4 {
+		return nil
+	}
+	var out []string
+	if m.detailTitle != "" {
+		out = append(out, theme.Emphasis.Render(ansi.Truncate(m.detailTitle, width, "…")), "")
+	}
+
+	detail := ""
+	switch {
+	case m.cursor < len(m.items):
+		detail = strings.TrimSpace(m.items[m.cursor].Detail)
+	case m.actions && m.cursor == m.selectAllRow():
+		detail = m.selectAllLabel + " checks or unchecks every component. Then choose " + m.confirmLabel + " to apply."
+	case m.actions && m.cursor == m.confirmRow():
+		detail = m.confirmLabel + " writes KEY=false for each checked component and applies the change."
+	}
+	if detail == "" {
+		out = append(out, theme.Subtle.Render("(no description)"))
+	} else {
+		out = append(out, strings.Split(theme.Text.Width(width).Render(detail), "\n")...)
+	}
+	if len(out) > maxLines {
+		out = out[:maxLines]
+	}
+	return out
+}
+
+// padCol pads a possibly-styled line with trailing spaces to a visible width w.
+func padCol(s string, w int) string {
+	if pad := w - lipgloss.Width(s); pad > 0 {
+		return s + strings.Repeat(" ", pad)
+	}
+	return s
 }
