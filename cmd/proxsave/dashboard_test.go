@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -126,7 +127,9 @@ func TestDashboardActions(t *testing.T) {
 				t.Fatal("install flag not set")
 			}
 		}},
-		{"exit row", "down down down down down enter", true, nil},
+		// Exit moved below the diagnostics group; down skips the separator, so it
+		// is the 9th selectable row (8 downs).
+		{"exit row", "down down down down down down down down enter", true, nil},
 		{"esc exits", "esc", true, nil},
 		{"ctrl+c exits", "ctrl+c", true, nil},
 	}
@@ -143,6 +146,111 @@ func TestDashboardActions(t *testing.T) {
 				tc.check(t, args)
 			}
 		})
+	}
+}
+
+// stubDashboardDiagnostics replaces the three diagnostics screen seams so the
+// loop can be driven without an on-disk config or the real Charm screens.
+func stubDashboardDiagnostics(t *testing.T, telegramShown, hcShown bool, tele, hc, audit *int) {
+	t.Helper()
+	origT, origH, origA := dashboardRunTelegramSetup, dashboardRunHealthcheckSetup, dashboardRunPostInstallAudit
+	t.Cleanup(func() {
+		dashboardRunTelegramSetup = origT
+		dashboardRunHealthcheckSetup = origH
+		dashboardRunPostInstallAudit = origA
+	})
+	dashboardRunTelegramSetup = func(ctx context.Context, s *shell.Session, baseDir, configPath string) (installer.TelegramSetupResult, error) {
+		*tele++
+		return installer.TelegramSetupResult{Shown: telegramShown}, nil
+	}
+	dashboardRunHealthcheckSetup = func(ctx context.Context, s *shell.Session, baseDir, configPath string) (installer.HealthcheckSetupResult, error) {
+		*hc++
+		return installer.HealthcheckSetupResult{Shown: hcShown}, nil
+	}
+	dashboardRunPostInstallAudit = func(ctx context.Context, s *shell.Session, execPath, configPath string) (installer.PostInstallAuditResult, error) {
+		*audit++
+		return installer.PostInstallAuditResult{}, nil
+	}
+}
+
+// TestDashboardDiagnosticsLoopBackToMenu: each diagnostics item runs its screen
+// in the live session and returns to the menu (never sets a mode flag, never
+// ends the dashboard); only Exit/esc ends it.
+func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
+	installDashboardGates(t, true, true)
+	driver := installDashboardSessionSeam(t)
+	var tele, hc, audit int
+	stubDashboardDiagnostics(t, true, true, &tele, &hc, &audit)
+
+	args := &cli.Args{}
+	type outcome struct {
+		code    int
+		handled bool
+	}
+	resCh := make(chan outcome, 1)
+	go func() {
+		code, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
+		resCh <- outcome{code, handled}
+	}()
+
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down enter")      // Check Telegram (6th selectable)
+	driver.waitScreen("Dashboard")                     // looped back after the screen
+	driver.keys("down down down down down down enter") // Check healthchecks (7th)
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down down down enter") // Post-install check (8th)
+	driver.waitScreen("Dashboard")
+	driver.keys("esc") // exit
+
+	select {
+	case res := <-resCh:
+		if !res.handled || res.code != types.ExitSuccess.Int() {
+			t.Fatalf("esc from menu must exit cleanly, got %+v", res)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("dashboard did not resolve")
+	}
+	if tele != 1 || hc != 1 || audit != 1 {
+		t.Fatalf("each diagnostic must run once: tele=%d hc=%d audit=%d", tele, hc, audit)
+	}
+	if args.Restore || args.Decrypt || args.ForceNewKey || args.Install || args.Backup {
+		t.Fatalf("diagnostics must not set any mode flag: %+v", args)
+	}
+}
+
+// TestDashboardDiagnosticNotConfiguredShowsNotice: when a setup screen is not
+// eligible (Shown=false), a dismissible notice appears instead of a blank
+// flicker, then the menu returns.
+func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
+	installDashboardGates(t, true, true)
+	driver := installDashboardSessionSeam(t)
+	var tele, hc, audit int
+	stubDashboardDiagnostics(t, false, true, &tele, &hc, &audit) // telegram not configured
+
+	args := &cli.Args{}
+	resCh := make(chan bool, 1)
+	go func() {
+		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
+		resCh <- handled
+	}()
+
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down enter") // Check Telegram (not configured)
+	driver.waitScreen("Telegram not configured")  // the notice
+	driver.keys("enter")                          // dismiss
+	driver.waitScreen("Dashboard")                // back at the menu
+	driver.keys("esc")                            // exit
+
+	select {
+	case handled := <-resCh:
+		if !handled {
+			t.Fatal("esc from menu must exit handled")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("dashboard did not resolve")
+	}
+	if tele != 1 {
+		t.Fatalf("the telegram check must have run once, got %d", tele)
 	}
 }
 
