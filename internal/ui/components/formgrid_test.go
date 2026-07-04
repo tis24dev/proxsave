@@ -144,6 +144,31 @@ func TestFormGridSelectCyclesAndAlignment(t *testing.T) {
 	}
 }
 
+// TestFormGridHintWrapsAtReadableWidth: a long field description must wrap
+// instead of running across the whole (wide) terminal.
+func TestFormGridHintWrapsAtReadableWidth(t *testing.T) {
+	long := &FormField{
+		Label:       "Secondary storage",
+		Description: "Additional local path for redundant copies; must be filesystem-mounted (e.g. /mnt/nas-backup). For direct network access use cloud storage (rclone).",
+		Kind:        FieldToggle,
+	}
+	g := NewFormGrid("Configuration", []*FormField{long})
+	bindGrid(g)
+	view := g.View(180, 30) // very wide terminal
+	found := 0
+	for _, l := range strings.Split(view, "\n") {
+		if strings.Contains(l, "redundant copies") || strings.Contains(l, "cloud storage") {
+			found++
+			if w := len([]rune(l)); w > 110 {
+				t.Fatalf("hint line too wide (%d cols): %q", w, l)
+			}
+		}
+	}
+	if found < 2 {
+		t.Fatalf("long hint must wrap onto multiple lines, matched %d", found)
+	}
+}
+
 func TestFormGridEscAndCancelButton(t *testing.T) {
 	back := errors.New("cancelled")
 	toggle, path, cron := gridFields()

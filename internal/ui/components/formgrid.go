@@ -367,19 +367,25 @@ func (g *FormGrid) View(width, height int) string {
 	}
 	buttons := "  " + strings.Repeat(" ", labelW) + "  " + continueBtn + "  " + cancelBtn
 
-	// Footer zone: hint (focused field description) and/or error.
+	// Footer zone: hint (focused field description) and/or error, wrapped
+	// at a readable measure instead of running across the whole terminal.
+	hintWidth := min(width, 100)
 	footer := make([]string, 0, 2)
 	if g.errMsg != "" {
-		footer = append(footer, theme.ErrorText.Render(theme.SymbolError+" "+g.errMsg))
+		footer = append(footer, theme.ErrorText.Width(hintWidth).Render(theme.SymbolError+" "+g.errMsg))
 	} else if !onButtons && g.cursor < len(g.fields) {
 		if d := g.fields[g.cursor].Description; d != "" {
-			footer = append(footer, theme.Subtle.Width(width).Render(d))
+			footer = append(footer, theme.Subtle.Width(hintWidth).Render(d))
 		}
+	}
+	footerHeight := 0
+	for _, block := range footer {
+		footerHeight += lipgloss.Height(block)
 	}
 
 	// Scroll window over the field rows so buttons/footer stay visible.
 	head := 2 // title + blank
-	tailLines := 2 + len(footer)
+	tailLines := 2 + footerHeight
 	if len(footer) > 0 {
 		tailLines++ // blank line between the buttons and the footer
 	}
