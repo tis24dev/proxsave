@@ -119,21 +119,66 @@ func (m *MultiSelect[T]) selectedCount() int {
 	return n
 }
 
-// actionCount is the number of trailing action-button rows (0 or 2).
-func (m *MultiSelect[T]) actionCount() int {
-	if m.actions {
+// hasSpacer reports whether a blank divider row sits between the items and the
+// action buttons (only when there is at least one item to separate from).
+func (m *MultiSelect[T]) hasSpacer() bool { return m.actions && len(m.items) > 0 }
+
+// actionRowCount is the number of trailing rows after the items: 0 (no actions),
+// 2 (the two buttons, no items to separate), or 3 (blank spacer + two buttons).
+func (m *MultiSelect[T]) actionRowCount() int {
+	switch {
+	case !m.actions:
+		return 0
+	case m.hasSpacer():
+		return 3
+	default:
 		return 2
 	}
-	return 0
 }
 
-// totalRows is every navigable row: the toggle items plus the action buttons.
-func (m *MultiSelect[T]) totalRows() int { return len(m.items) + m.actionCount() }
+// totalRows is every row the cursor/scroll span: items + spacer + buttons.
+func (m *MultiSelect[T]) totalRows() int { return len(m.items) + m.actionRowCount() }
+
+// spacerRow is the index of the blank divider row, or -1 when there is none. It
+// is non-navigable: the cursor skips it and clicks on it are a no-op.
+func (m *MultiSelect[T]) spacerRow() int {
+	if m.hasSpacer() {
+		return len(m.items)
+	}
+	return -1
+}
 
 // selectAllRow / confirmRow are the row indices of the two buttons (valid only
 // when actions are enabled).
-func (m *MultiSelect[T]) selectAllRow() int { return len(m.items) }
-func (m *MultiSelect[T]) confirmRow() int   { return len(m.items) + 1 }
+func (m *MultiSelect[T]) selectAllRow() int {
+	if m.hasSpacer() {
+		return len(m.items) + 1
+	}
+	return len(m.items)
+}
+func (m *MultiSelect[T]) confirmRow() int { return m.selectAllRow() + 1 }
+
+// setCursor clamps nc into range and, if it lands on the non-navigable spacer,
+// nudges one more step in the travel direction (dir = +1 down, -1 up).
+func (m *MultiSelect[T]) setCursor(nc, dir int) {
+	last := m.totalRows() - 1
+	if nc < 0 {
+		nc = 0
+	}
+	if nc > last {
+		nc = last
+	}
+	if nc == m.spacerRow() {
+		nc += dir
+		if nc < 0 {
+			nc = 0
+		}
+		if nc > last {
+			nc = last
+		}
+	}
+	m.cursor = nc
+}
 
 // toggleAll selects every item, or deselects every item when all are already
 // selected (a select-all/deselect-all toggle).
@@ -165,13 +210,9 @@ func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		switch mouse.Button {
 		case tea.MouseWheelUp:
-			if m.cursor > 0 {
-				m.cursor--
-			}
+			m.setCursor(m.cursor-1, -1)
 		case tea.MouseWheelDown:
-			if m.cursor < m.totalRows()-1 {
-				m.cursor++
-			}
+			m.setCursor(m.cursor+1, +1)
 		}
 		return m, nil
 	case tea.MouseClickMsg:
@@ -179,7 +220,7 @@ func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			return m, nil
 		}
 		row := mouse.Y - m.lastRowsTop + m.offset
-		if row < 0 || row >= m.totalRows() {
+		if row < 0 || row >= m.totalRows() || row == m.spacerRow() {
 			return m, nil
 		}
 		m.cursor = row
@@ -201,17 +242,13 @@ func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	}
 	switch key.String() {
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.setCursor(m.cursor-1, -1)
 	case "down", "j":
-		if m.cursor < m.totalRows()-1 {
-			m.cursor++
-		}
+		m.setCursor(m.cursor+1, +1)
 	case "home":
-		m.cursor = 0
+		m.setCursor(0, +1)
 	case "end":
-		m.cursor = max(m.totalRows()-1, 0)
+		m.setCursor(max(m.totalRows()-1, 0), -1)
 	case "space":
 		if m.cursor < len(m.items) && len(m.items) > 0 {
 			m.items[m.cursor].Selected = !m.items[m.cursor].Selected
@@ -278,6 +315,11 @@ func (m *MultiSelect[T]) View(width, height int) string {
 	}
 
 	for row := m.offset; row < m.totalRows() && row < m.offset+rows; row++ {
+		if row == m.spacerRow() {
+			// Blank divider between the item list and the action buttons.
+			b.WriteString("\n")
+			continue
+		}
 		if row >= len(m.items) {
 			// Trailing action button (Select all / confirm).
 			label := m.selectAllLabel

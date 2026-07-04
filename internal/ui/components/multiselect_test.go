@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func categoryItems() []MultiSelectItem[string] {
@@ -164,12 +166,47 @@ func TestMultiSelectActionsSelectAllButtonToggles(t *testing.T) {
 func TestMultiSelectActionsSpaceOnButtonIsNoop(t *testing.T) {
 	m := actionsMulti()
 	before := m.selectedCount()
-	for i := 0; i < 4; i++ { // to Disable Selected (row 4)
+	for i := 0; i < 4; i++ { // 3 items + skipped spacer -> Disable Selected
 		press(t, m, "down")
 	}
 	press(t, m, "space")
 	if m.selectedCount() != before {
 		t.Fatalf("space on a button must not change selection: %d -> %d", before, m.selectedCount())
+	}
+}
+
+// A blank spacer row separates the list from the buttons: it renders as an empty
+// line and the cursor skips over it in both directions.
+func TestMultiSelectActionsSpacerRow(t *testing.T) {
+	m := actionsMulti() // 3 items -> spacer=3, Select ALL=4, Disable Selected=5
+	if m.spacerRow() != 3 || m.selectAllRow() != 4 || m.confirmRow() != 5 {
+		t.Fatalf("layout: spacer=%d selectAll=%d confirm=%d", m.spacerRow(), m.selectAllRow(), m.confirmRow())
+	}
+	for i := 0; i < 3; i++ { // 0->1->2->(skip 3)->4
+		press(t, m, "down")
+	}
+	if m.cursor != 4 {
+		t.Fatalf("down from the last item must skip the spacer to Select ALL (4), got %d", m.cursor)
+	}
+	press(t, m, "up") // 4->(skip 3)->2
+	if m.cursor != 2 {
+		t.Fatalf("up from Select ALL must skip the spacer to the last item (2), got %d", m.cursor)
+	}
+
+	// The rendered view has a blank line immediately before the Select ALL button.
+	lines := strings.Split(ansi.Strip(m.View(80, 20)), "\n")
+	idx := -1
+	for i, ln := range lines {
+		if strings.Contains(ln, "Select ALL") {
+			idx = i
+			break
+		}
+	}
+	if idx <= 0 {
+		t.Fatalf("Select ALL button not found in view: %q", lines)
+	}
+	if strings.TrimSpace(lines[idx-1]) != "" {
+		t.Fatalf("expected a blank spacer line before the buttons, got %q", lines[idx-1])
 	}
 }
 
