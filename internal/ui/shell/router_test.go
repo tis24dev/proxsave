@@ -127,6 +127,34 @@ func TestRouterRenderContainsChrome(t *testing.T) {
 	}
 }
 
+// TestRouterHeaderSkipsDuplicateCrumb: a screen title equal to the flow
+// subtitle (case-insensitive) must not be repeated in the header.
+func TestRouterHeaderSkipsDuplicateCrumb(t *testing.T) {
+	m := newRootModel(Config{AppName: "ProxSave", Subtitle: "Dashboard"})
+	scr := newStubScreen(1) // Title() == "stub"
+	m = pushEntry(m, scr, 1, func() {})
+
+	header := m.renderHeader(96, scr, true)
+	if !strings.Contains(header, "stub") {
+		t.Fatalf("distinct screen title must appear: %q", header)
+	}
+
+	dup := &titledStub{stubScreen: *newStubScreen(2), title: "dashboard"}
+	m2 := newRootModel(Config{AppName: "ProxSave", Subtitle: "Dashboard"})
+	m2 = pushEntry(m2, dup, 2, func() {})
+	header2 := m2.renderHeader(96, dup, true)
+	if strings.Count(strings.ToLower(header2), "dashboard") != 1 {
+		t.Fatalf("duplicate crumb must be skipped: %q", header2)
+	}
+}
+
+type titledStub struct {
+	stubScreen
+	title string
+}
+
+func (s *titledStub) Title() string { return s.title }
+
 func TestRouterRenderEmptyStack(t *testing.T) {
 	m := newRootModel(Config{AppName: "ProxSave"})
 	out := m.render()

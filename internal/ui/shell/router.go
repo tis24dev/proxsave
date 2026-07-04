@@ -183,7 +183,9 @@ func (m rootModel) renderHeader(innerW int, top Screen, hasTop bool) string {
 		crumbs = append(crumbs, m.cfg.Subtitle)
 	}
 	if hasTop {
-		if t := top.Title(); t != "" {
+		// Skip the screen crumb when it just repeats the flow subtitle
+		// ("ProxSave  Dashboard→ Dashboard" reads as a bug).
+		if t := top.Title(); t != "" && !strings.EqualFold(strings.TrimSpace(t), strings.TrimSpace(m.cfg.Subtitle)) {
 			crumbs = append(crumbs, t)
 		}
 	}
