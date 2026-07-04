@@ -167,9 +167,22 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		Kind:        components.FieldToggle,
 		Bool:        prefill.EncryptionEnabled,
 	}
+	schedulerOptions := []string{"Resident daemon (recommended)", "System cron"}
+	schedulerValues := []string{"daemon", "cron"}
+	schedulerIndex := 0 // default: daemon
+	if strings.EqualFold(strings.TrimSpace(prefill.SchedulerMode), "cron") {
+		schedulerIndex = 1
+	}
+	scheduler := &components.FormField{
+		Label:       "Scheduler engine",
+		Description: "Daemon = resident service with hang watchdog + healthchecks; cron = system crontab.",
+		Kind:        components.FieldSelect,
+		Options:     schedulerOptions,
+		OptionIndex: schedulerIndex,
+	}
 	cronField := &components.FormField{
-		Label:       "Cron time (HH:MM)",
-		Description: fmt.Sprintf("Daily proxsave job schedule; default %s.", cronutil.DefaultTime),
+		Label:       "Run at (HH:MM)",
+		Description: fmt.Sprintf("Daily backup time; default %s.", cronutil.DefaultTime),
 		Kind:        components.FieldText,
 		Text:        cronutil.DefaultTime,
 		Validate: func(v string) error {
@@ -181,7 +194,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	fields := []*components.FormField{
 		secondary, secondaryPath, secondaryLog,
 		cloud, cloudRemote, cloudLog,
-		firewall, telegram, email, method, encryption, cronField,
+		firewall, telegram, email, method, encryption, scheduler, cronField,
 	}
 	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
 		"Configuration", fields,
@@ -224,6 +237,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		return nil, err
 	}
 	data.CronTime = normalized
+	data.SchedulerMode = schedulerValues[scheduler.OptionIndex]
 
 	return data, nil
 }

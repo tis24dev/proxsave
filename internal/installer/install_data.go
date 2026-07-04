@@ -47,6 +47,7 @@ type InstallWizardPrefill struct {
 	EmailEnabled        bool
 	EmailDeliveryMethod string
 	EncryptionEnabled   bool
+	SchedulerMode       string // "cron" | "daemon" (empty on a fresh config)
 }
 
 // InstallWizardData holds the collected installation data
@@ -63,8 +64,9 @@ type InstallWizardData struct {
 	NotificationMode       string // "none", "telegram", "email", "both"
 	EmailDeliveryMethod    string // "relay", "sendmail", or "pmf"
 	EmailFallbackSendmail  *bool
-	CronTime               string // HH:MM
+	CronTime               string // HH:MM (the "Run at" time)
 	EnableEncryption       bool
+	SchedulerMode          string // "cron" | "daemon"
 }
 
 // ExistingConfigAction represents how to handle an already-present configuration file.
@@ -166,7 +168,28 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = setEnvValue(template, "ENCRYPT_ARCHIVE", "false")
 	}
 
+	// Apply scheduler engine + the daily "Run at" time. SCHEDULER_TIME is a real
+	// daemon config key (unlike the removed CRON_* keys), so it is written here.
+	// When the daemon is chosen, enable the healthchecks connector so the dead-man
+	// switch is on out of the box (centralized mode resolves ping URLs at runtime).
+	mode := normalizeSchedulerMode(data.SchedulerMode)
+	template = setEnvValue(template, "SCHEDULER_MODE", mode)
+	if strings.TrimSpace(data.CronTime) != "" {
+		template = setEnvValue(template, "SCHEDULER_TIME", strings.TrimSpace(data.CronTime))
+	}
+	if mode == "daemon" {
+		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
+	}
+
 	return template, nil
+}
+
+// normalizeSchedulerMode maps any unrecognised value to the safe default "cron".
+func normalizeSchedulerMode(v string) string {
+	if strings.ToLower(strings.TrimSpace(v)) == "daemon" {
+		return "daemon"
+	}
+	return "cron"
 }
 
 // ValidateSecondaryInstallData validates the secondary-storage fields.
@@ -283,6 +306,7 @@ func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
 	out.EmailDeliveryMethod = installEmailDeliveryMethodOrDefault(readTemplateString(values, "EMAIL_DELIVERY_METHOD"))
 
 	out.EncryptionEnabled = readTemplateBool(values, "ENCRYPT_ARCHIVE")
+	out.SchedulerMode = readTemplateString(values, "SCHEDULER_MODE")
 
 	return out
 }

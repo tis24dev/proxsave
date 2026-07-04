@@ -279,6 +279,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule)
 	runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap, cronSchedule)
+	if wizardData != nil {
+		finishDaemonInstallIfSelected(ctx, wizardData.SchedulerMode, configPath, execInfo, bootstrap)
+	}
 
 	// Attempt to resolve or create a server identity for Telegram pairing
 	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {

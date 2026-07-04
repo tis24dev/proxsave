@@ -133,6 +133,23 @@ func setBackupEnvKeys(configPath string, kv map[string]string) error {
 	return writeConfigFile(configPath, configPath+".daemon.tmp", content)
 }
 
+// finishDaemonInstallIfSelected enables the daemon at install time when the
+// wizard picked daemon mode: install the unit and drop the just-written cron
+// entry. Best-effort (a failure leaves the install on cron with a warning).
+func finishDaemonInstallIfSelected(ctx context.Context, schedulerMode, configPath string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) {
+	if strings.ToLower(strings.TrimSpace(schedulerMode)) != "daemon" {
+		return
+	}
+	if err := installDaemonService(ctx, daemonExecPath, configPath, bootstrap); err != nil {
+		logging.Warning("Failed to enable the daemon service (staying on cron): %v", err)
+		return
+	}
+	if err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execInfo.ExecPath), bootstrap); err != nil {
+		logging.Warning("daemon: failed to remove the cron entry (the per-run lock mitigates double execution): %v", err)
+	}
+	logging.Info("Daemon mode enabled: %s is active and the cron entry was removed.", daemonUnitName)
+}
+
 // cronCorrectPaths returns the canonical command tokens that identify a proxsave
 // cron line (the /usr/local/bin symlink and the resolved binary), used to drop the
 // entry when switching to the daemon.

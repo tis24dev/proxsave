@@ -31,5 +31,7 @@ Enable email notifications? [Y/n]: Email delivery methods:
 Email delivery method [pmf]: 
 --- Encryption ---
 Enable backup encryption? [Y/n]: 
+--- Scheduler ---
+Scheduler engine: daemon (resident, hang watchdog + healthchecks) or cron [cron]: 
 --- Schedule ---
-Cron time for daily proxsave job (HH:MM) [02:00]: 
+Run at (daily, HH:MM) [02:00]: 
