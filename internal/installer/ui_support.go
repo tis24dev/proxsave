@@ -56,6 +56,22 @@ type TelegramSetupResult struct {
 	SkippedVerification bool
 }
 
+// HealthcheckSetupResult reports the outcome of the interactive healthchecks
+// setup step (log-only downstream, like TelegramSetupResult).
+type HealthcheckSetupResult struct {
+	orchestrator.HealthcheckSetupBootstrap
+
+	Shown bool
+
+	CheckAttempts int
+	Verified      bool
+	LastFatal     bool
+	LastMessage   string
+	MagicLinkSeen bool
+
+	SkippedVerification bool
+}
+
 // ApplyAuditDisables writes KEY=false for every selected key into the
 // configuration file (atomic replace). Shared by the UI audit flow; keys are
 // normalized to upper case and sorted.

@@ -22,7 +22,7 @@ func TestFetchCentralizedConfigSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "123456789012", "sekret-token")
+	cfg, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "123456789012", "sekret-token", false)
 	if err != nil {
 		t.Fatalf("FetchCentralizedConfig: %v", err)
 	}
@@ -46,6 +46,47 @@ func TestFetchCentralizedConfigSuccess(t *testing.T) {
 	}
 }
 
+func TestFetchCentralizedConfigIncludeLogin(t *testing.T) {
+	var gotLogin string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLogin = r.URL.Query().Get("login")
+		_, _ = io.WriteString(w, `{"mode":"centralized","alive_ping_url":"https://x/ping/a","backup_ping_url":"https://x/ping/b","project_code":"p","login_url":"https://hc/accounts/check_token/u/tok/"}`)
+	}))
+	defer srv.Close()
+
+	// includeLogin=true -> request carries ?login=1 and LoginURL is parsed.
+	cfg, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "1", "s", true)
+	if err != nil {
+		t.Fatalf("FetchCentralizedConfig: %v", err)
+	}
+	if gotLogin != "1" {
+		t.Fatalf("login query = %q, want 1", gotLogin)
+	}
+	if cfg.LoginURL != "https://hc/accounts/check_token/u/tok/" {
+		t.Fatalf("LoginURL = %q", cfg.LoginURL)
+	}
+}
+
+func TestFetchCentralizedConfigNoLoginByDefault(t *testing.T) {
+	var gotLogin string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLogin = r.URL.Query().Get("login")
+		_, _ = io.WriteString(w, `{"mode":"centralized","alive_ping_url":"https://x/ping/a","backup_ping_url":"https://x/ping/b","project_code":"p"}`)
+	}))
+	defer srv.Close()
+
+	cfg, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "1", "s", false)
+	if err != nil {
+		t.Fatalf("FetchCentralizedConfig: %v", err)
+	}
+	if gotLogin != "" {
+		t.Fatalf("daemon poll must not send ?login, got %q", gotLogin)
+	}
+	if cfg.LoginURL != "" {
+		t.Fatalf("LoginURL should be empty when not requested, got %q", cfg.LoginURL)
+	}
+}
+
 func TestFetchCentralizedConfigErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -66,7 +107,7 @@ func TestFetchCentralizedConfigErrors(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			_, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "1", "s")
+			_, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "1", "s", false)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
@@ -79,7 +120,7 @@ func TestFetchCentralizedConfigIncomplete(t *testing.T) {
 		_, _ = io.WriteString(w, `{"mode":"centralized","alive_ping_url":"","backup_ping_url":""}`)
 	}))
 	defer srv.Close()
-	if _, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "1", "s"); err == nil {
+	if _, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "1", "s", false); err == nil {
 		t.Fatalf("expected error on incomplete response")
 	}
 }
@@ -89,7 +130,7 @@ func TestFetchCentralizedConfigGenericStatus(t *testing.T) {
 		w.WriteHeader(500)
 	}))
 	defer srv.Close()
-	_, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "1", "s")
+	_, err := FetchCentralizedConfig(context.Background(), srv.Client(), srv.URL, "1", "s", false)
 	if err == nil {
 		t.Fatalf("expected error on HTTP 500")
 	}

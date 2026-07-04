@@ -261,6 +261,26 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 				bootstrap.Info("Telegram setup: not verified (no check performed)")
 			}
 		}
+
+		// Healthchecks setup: when the daemon engine (centralized monitoring) was
+		// chosen, guide the user + show the portal magic-link + a connection check.
+		// Eligibility is decided solely by RunHealthcheckSetup (re-reads the written
+		// HEALTHCHECK_ENABLED/mode + identity/secret); Shown=false with no UI otherwise.
+		hcRes, hcErr := flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath)
+		if hcErr != nil && bootstrap != nil {
+			bootstrap.Warning("Healthcheck setup failed (non-blocking): %v", hcErr)
+		}
+		if bootstrap != nil && hcErr == nil && hcRes.Shown {
+			if hcRes.Verified {
+				bootstrap.Info("Healthcheck setup: verified")
+			} else if hcRes.SkippedVerification {
+				bootstrap.Info("Healthcheck setup: check skipped by user")
+			} else if hcRes.CheckAttempts > 0 {
+				bootstrap.Info("Healthcheck setup: not verified (attempts=%d)", hcRes.CheckAttempts)
+			} else {
+				bootstrap.Info("Healthcheck setup: not verified (no check performed)")
+			}
+		}
 	}
 
 	// All interactive steps are done: release the terminal before the

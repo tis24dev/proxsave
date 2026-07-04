@@ -303,7 +303,7 @@ func (d *daemon) fetchCentralized(ctx context.Context) (string, string, error) {
 	if strings.TrimSpace(secret) == "" {
 		return "", "", fmt.Errorf("no relay secret on disk (pair Telegram first)")
 	}
-	cfg, err := health.FetchCentralizedConfig(ctx, nil, d.cfg.TelegramServerAPIHost, d.cfg.ServerID, secret)
+	cfg, err := health.FetchCentralizedConfig(ctx, nil, d.cfg.TelegramServerAPIHost, d.cfg.ServerID, secret, false)
 	if err != nil {
 		return "", "", err
 	}

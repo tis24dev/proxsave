@@ -117,6 +117,14 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		if err := runTelegramSetupCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
 			return err
 		}
+
+		// Healthchecks setup: if the daemon engine (centralized monitoring) was
+		// chosen, guide the user + show the portal magic-link + a connection check.
+		// Only renders when eligible (re-reads the written config), non-blocking.
+		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "healthcheck setup")
+		if err := runHealthcheckSetupCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
+			return err
+		}
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")

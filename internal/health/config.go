@@ -30,11 +30,14 @@ var (
 )
 
 // CentralizedConfig is the proxsave_server's answer for a client's two ping URLs.
+// LoginURL is a fresh single-use portal magic-link, populated only when the caller
+// requested it (includeLogin) AND the server minted one; otherwise it stays "".
 type CentralizedConfig struct {
 	Mode        string `json:"mode"`
 	AliveURL    string `json:"alive_ping_url"`
 	BackupURL   string `json:"backup_ping_url"`
 	ProjectCode string `json:"project_code"`
+	LoginURL    string `json:"login_url"`
 }
 
 // serverError is the {"error":...} envelope the proxsave_server returns on failure.
@@ -52,12 +55,18 @@ type serverError struct {
 // serverAPIHost is the base (e.g. https://bot.proxsave.dev); serverID is the
 // client's identity; secret is the raw notify secret (no signing, mirroring the
 // existing notify calls). Returns a typed error on the known failure codes so the
-// daemon can decide retry vs. give-up.
-func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string) (CentralizedConfig, error) {
+// daemon can decide retry vs. give-up. When includeLogin is set, the request asks
+// the server (?login=1) to also mint and return a portal magic-link (LoginURL) -
+// used by the install-time setup screen; the daemon's poll passes false so it
+// never triggers the server-side mint.
+func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool) (CentralizedConfig, error) {
 	if client == nil {
 		client = &http.Client{Timeout: fetchTimeout}
 	}
 	endpoint := strings.TrimRight(serverAPIHost, "/") + "/api/healthcheck/config?server_id=" + url.QueryEscape(serverID)
+	if includeLogin {
+		endpoint += "&login=1"
+	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
