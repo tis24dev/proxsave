@@ -102,6 +102,19 @@ BACKUP_PBS_NOTIFICATIONS = NEW (Go-only) → Collect `notifications.cfg` and not
 BACKUP_PBS_NOTIFICATIONS_PRIV = NEW (Go-only) → Collect `notifications-priv.cfg` (PBS notification secrets/credentials).
 BACKUP_PBS_NETWORK_CONFIG = NEW (Go-only) → Collect `network.cfg` and network snapshots (PBS), independent from BACKUP_NETWORK_CONFIGS (system).
 
+### Scheduler engine + healthchecks (daemon) - see docs/DAEMON.md
+
+SCHEDULER_MODE = NEW (Go-only) → `cron` (system crontab, default) or `daemon` (resident proxsave-daemon.service schedules + supervises runs).
+SCHEDULER_TIME = NEW (Go-only) → Daily `HH:MM` ("Run at") used by daemon mode; cron mode uses the crontab entry.
+MAX_RUN_DURATION = NEW (Go-only) → Daemon watchdog hard timeout for one backup (e.g. `6h`); on expiry the child is killed and the run is reported as a hang.
+DAEMON_OPT_OUT = NEW (Go-only) → Set to `true` automatically by `--daemon-remove`; while true, `--upgrade` never re-installs the daemon (honours a deliberate manual removal).
+HEALTHCHECK_ENABLED = NEW (Go-only) → Daemon reports a service-alive heartbeat + per-run outcome to a healthchecks monitor.
+HEALTHCHECK_MODE = NEW (Go-only) → `centralized` (ping URLs fetched from the proxsave_server, reusing the Telegram identity) or `self` (your own healthchecks/SaaS).
+HEALTHCHECK_HEARTBEAT_INTERVAL = NEW (Go-only) → Service-alive ping interval (e.g. `5m`).
+HEALTHCHECK_SEND_LOG = NEW (Go-only) → POST the log tail on a warning/error outcome.
+HEALTHCHECK_ALIVE_URL / HEALTHCHECK_BACKUP_URL = NEW (Go-only) → Centralized cache of the resolved ping URLs (auto-filled from the server; do not edit by hand).
+HEALTHCHECK_PING_ENDPOINT / HEALTHCHECK_PING_KEY / HEALTHCHECK_ALIVE_ID / HEALTHCHECK_BACKUP_ID = NEW (Go-only) → self-mode ping base, optional ping key, and the two check IDs.
+
 ## Renamed variables / Supported aliases in Go
 
 ### Renamed with automatic fallback ✅

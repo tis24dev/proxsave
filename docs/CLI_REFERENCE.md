@@ -98,6 +98,9 @@ proxsave -h
 | `--dry-run` | `-n` | Test mode - no actual changes made |
 | `--version` | `-v` | Display version information |
 | `--help` | `-h` | Show help message |
+| `--daemon` | | Run as the resident backup daemon (schedules + supervises runs, reports to healthchecks). Invoked by `proxsave-daemon.service`; not run by hand. See [docs/DAEMON.md](DAEMON.md). |
+| `--daemon-setup` | | Switch this install to daemon mode: install+enable the service and remove the cron entry. |
+| `--daemon-remove` | | Revert to the cron scheduler, disable the service, and stop future upgrades from reinstalling the daemon. |
 
 ---
 
