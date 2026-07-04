@@ -420,7 +420,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	defer func() { done(err) }()
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "preparing base template")
-	template, skipConfigWizard, err := prepareBaseTemplate(ctx, reader, configPath)
+	template, skipConfigWizard, fromExisting, err := prepareBaseTemplate(ctx, reader, configPath)
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
@@ -453,7 +453,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring scheduler engine")
-	engine, err := configureSchedulerEngine(ctx, reader, schedulerEngineDefault(configPath, template))
+	engine, err := configureSchedulerEngine(ctx, reader, schedulerEngineDefault(fromExisting, template))
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
@@ -621,19 +621,19 @@ func printInstallBanner(configPath string) {
 	fmt.Printf("Configuration file: %s\n\n", configPath)
 }
 
-func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, error) {
+func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, bool, error) {
 	decision, err := prepareExistingConfigDecisionCLI(ctx, reader, configPath)
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	if decision.AbortInstall {
-		return "", false, errInteractiveAborted
+		return "", false, false, errInteractiveAborted
 	}
 	if decision.SkipConfigWizard {
 		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
-		return "", true, nil
+		return "", true, false, nil
 	}
-	return decision.BaseTemplate, false, nil
+	return decision.BaseTemplate, false, decision.FromExistingFile, nil
 }
 
 func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
@@ -810,20 +810,20 @@ func configureEncryption(ctx context.Context, reader *bufio.Reader, template *st
 	return enableEncryption, nil
 }
 
-// schedulerEngineDefault picks the engine prompt default: a NEW install defaults
-// to the resident daemon; re-running the wizard on an EXISTING config defaults to
-// its stored SCHEDULER_MODE (so a no-op edit never flips the scheduler).
-func schedulerEngineDefault(configPath, template string) string {
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+// schedulerEngineDefault picks the engine prompt default. Fresh installs and
+// Overwrite (both start from the embedded template) default to the resident
+// daemon, matching the Charm front-end and the daemon-by-default intent. Only an
+// Edit of an existing config defaults to its stored SCHEDULER_MODE, so a no-op
+// edit never flips the scheduler; an old config without the key stays on cron.
+func schedulerEngineDefault(fromExisting bool, template string) string {
+	if !fromExisting {
 		return "daemon"
 	}
 	switch strings.ToLower(strings.TrimSpace(installer.DeriveInstallWizardPrefill(template).SchedulerMode)) {
-	case "cron":
-		return "cron"
 	case "daemon":
 		return "daemon"
 	default:
-		return "daemon"
+		return "cron"
 	}
 }
 
