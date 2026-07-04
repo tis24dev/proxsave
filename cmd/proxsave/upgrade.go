@@ -759,7 +759,8 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 	fmt.Println()
 
 	fmt.Println("Commands:")
-	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
+	fmt.Println("  proxsave (alias: proxmox-backup) - Open the interactive dashboard (runs the backup directly when non-interactive, e.g. cron)")
+	fmt.Println("  --backup           - Run a backup now (what bare proxsave does when non-interactive)")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
 	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")

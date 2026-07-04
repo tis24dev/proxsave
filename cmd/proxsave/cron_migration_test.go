@@ -274,7 +274,7 @@ func TestBuildReinstallCronLines(t *testing.T) {
 	want := []string{
 		"# Header",
 		userLine,
-		"30 1 * * * /usr/local/bin/proxsave", // single fresh entry at the chosen schedule
+		"30 1 * * * /usr/local/bin/proxsave --backup", // single fresh entry, --backup pins non-interactive behavior
 	}
 
 	if len(got) != len(want) {
