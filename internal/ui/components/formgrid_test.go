@@ -157,17 +157,41 @@ func TestFormGridHintWrapsAtReadableWidth(t *testing.T) {
 	g := NewFormGrid("Configuration", []*FormField{long})
 	bindGrid(g)
 	view := g.View(180, 30) // very wide terminal
-	found := 0
+	var first, second string
 	for _, l := range strings.Split(view, "\n") {
-		if strings.Contains(l, "redundant copies") || strings.Contains(l, "cloud storage") {
-			found++
-			if w := lipgloss.Width(l); w > 110 {
-				t.Fatalf("hint line too wide (%d cols): %q", w, l)
-			}
+		if strings.Contains(l, "redundant copies") {
+			first = l
+		}
+		if strings.Contains(l, "direct network access") {
+			second = l
+		}
+		if w := lipgloss.Width(l); w > 110 {
+			t.Fatalf("hint line too wide (%d cols): %q", w, l)
 		}
 	}
-	if found < 2 {
-		t.Fatalf("long hint must wrap onto multiple lines, matched %d", found)
+	if first == "" || second == "" {
+		t.Fatalf("hint must span two lines, got first=%q second=%q", first, second)
+	}
+	// Sentence integrity: the split happens at the sentence boundary, so
+	// the first line ends its sentence and the second starts with "For".
+	if strings.Contains(first, "For direct") {
+		t.Fatalf("second sentence must not start on the first line: %q", first)
+	}
+	if !strings.Contains(second, "For direct network access") {
+		t.Fatalf("second line must carry the whole second sentence: %q", second)
+	}
+}
+
+func TestSplitSentences(t *testing.T) {
+	got := splitSentences("Must be filesystem-mounted (e.g. /mnt/nas-backup). For direct network access use rclone.")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 sentences (e.g. must not split), got %d: %q", len(got), got)
+	}
+	if !strings.HasPrefix(got[1], "For direct") {
+		t.Fatalf("second sentence wrong: %q", got[1])
+	}
+	if one := splitSentences("Single sentence without split."); len(one) != 1 {
+		t.Fatalf("single sentence must stay whole, got %q", one)
 	}
 }
 

@@ -421,7 +421,10 @@ func (g *FormGrid) View(width, height int) string {
 		footer = append(footer, theme.ErrorText.Width(hintWidth).Render(theme.SymbolError+" "+g.errMsg))
 	} else if !onButtons && g.cursor < len(g.fields) {
 		if d := g.fields[g.cursor].Description; d != "" {
-			footer = append(footer, theme.Subtle.Width(hintWidth).Render(d))
+			// One sentence per line: never break a line mid-sentence.
+			for _, sentence := range splitSentences(d) {
+				footer = append(footer, theme.Subtle.Width(hintWidth).Render(sentence))
+			}
 		}
 	}
 	footerHeight := 0
@@ -476,6 +479,24 @@ func (g *FormGrid) View(width, height int) string {
 		b.WriteString("\n" + line)
 	}
 	return b.String()
+}
+
+// splitSentences breaks text at sentence boundaries: a ". " followed by an
+// uppercase letter (so "e.g. /mnt" or "e.g. foo" never split).
+func splitSentences(text string) []string {
+	var out []string
+	runes := []rune(text)
+	start := 0
+	for i := 0; i+2 < len(runes); i++ {
+		if runes[i] == '.' && runes[i+1] == ' ' && runes[i+2] >= 'A' && runes[i+2] <= 'Z' {
+			out = append(out, strings.TrimSpace(string(runes[start:i+1])))
+			start = i + 2
+		}
+	}
+	if rest := strings.TrimSpace(string(runes[start:])); rest != "" {
+		out = append(out, rest)
+	}
+	return out
 }
 
 func padRight(s string, w int) string {
