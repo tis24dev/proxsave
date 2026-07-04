@@ -130,8 +130,10 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 		resCh <- result{data, err}
 	}()
 
-	for _, screen := range []string{"Secondary storage", "Cloud storage (rclone)", "Firewall rules", "Telegram", "Email", "Encryption", "Schedule"} {
-		d.waitScreen(screen)
+	// Single-screen form (parity with the tview wizard): Enter through all
+	// 12 fields keeps every default.
+	d.waitScreen("Configuration")
+	for i := 0; i < 12; i++ {
 		d.keys("enter")
 	}
 
@@ -191,13 +193,10 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 		resCh <- result{data, err}
 	}()
 
-	for _, screen := range []string{
-		"Secondary storage", "Secondary backup path", "Secondary log path",
-		"Cloud storage (rclone)", "Rclone backup remote", "Rclone log remote",
-		"Firewall rules", "Telegram", "Email", "Email delivery method",
-		"Encryption", "Schedule",
-	} {
-		d.waitScreen(screen)
+	// Single-screen form: Enter through all 12 prefilled fields is the
+	// no-op edit.
+	d.waitScreen("Configuration")
+	for i := 0; i < 12; i++ {
 		d.keys("enter")
 	}
 
@@ -244,7 +243,7 @@ func TestCollectWizardDataEscCancels(t *testing.T) {
 		_, err := CollectWizardData(context.Background(), d.session, "")
 		resCh <- err
 	}()
-	d.waitScreen("Secondary storage")
+	d.waitScreen("Configuration")
 	d.keys("esc")
 	if err := <-resCh; !errors.Is(err, installer.ErrInstallCancelled) {
 		t.Fatalf("esc must cancel, got %v", err)
