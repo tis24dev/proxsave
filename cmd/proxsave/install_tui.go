@@ -11,6 +11,8 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/tui/wizard"
+	"github.com/tis24dev/proxsave/internal/ui/flows/agesetup"
+	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
 // runInstallTUI runs the TUI-based installation wizard
@@ -137,7 +139,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			bootstrap.Info("Running initial encryption setup (AGE recipients)")
 		}
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "running AGE setup via orchestrator")
-		setupResult, err := runInitialEncryptionSetupWithUI(ctx, configPath, wizard.NewAgeSetupUI(configPath, buildSig))
+		setupResult, err := runInstallAgeSetup(ctx, configPath, buildSig)
 		if err != nil {
 			return err
 		}
@@ -240,4 +242,31 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "permissions status=%s", permStatus)
 
 	return nil
+}
+
+// runInstallAgeSetup runs the AGE recipient setup on its own Charm session
+// (the tview install wizard has already released the terminal at this
+// point). The session is closed before the bootstrap success lines print.
+func runInstallAgeSetup(ctx context.Context, configPath, buildSig string) (*encryptionSetupResult, error) {
+	session := newAgeSetupSession(ctx, shell.Config{
+		AppName:    "ProxSave",
+		Subtitle:   "AGE Encryption Setup",
+		ConfigPath: configPath,
+		BuildSig:   buildSig,
+		UseColor:   true,
+	})
+	defer func() { _ = session.Close() }()
+
+	result, err := runInitialEncryptionSetupWithUI(ctx, configPath, agesetup.New(session))
+	closeErr := session.Close()
+	if err != nil {
+		if errors.Is(err, shell.ErrClosed) && closeErr == nil {
+			return nil, wrapInstallError(errInteractiveAborted)
+		}
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return result, nil
 }

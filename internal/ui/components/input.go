@@ -78,7 +78,12 @@ func (i *Input) Init() tea.Cmd { return i.ti.Focus() }
 
 func (i *Input) Title() string { return i.title }
 
-func (i *Input) Help() string { return "enter confirm · esc cancel" }
+func (i *Input) Help() string {
+	if i.backErr != nil {
+		return "enter confirm · esc back"
+	}
+	return "enter confirm · esc cancel"
+}
 
 func (i *Input) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok {

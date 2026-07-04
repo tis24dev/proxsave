@@ -14,8 +14,9 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
-	"github.com/tis24dev/proxsave/internal/tui/wizard"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/ui/flows/agesetup"
+	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
 // runNewKey performs a standalone AGE recipient setup without running a backup.
@@ -74,15 +75,43 @@ func runNewKeyTUI(ctx context.Context, configPath, baseDir string, bootstrap *lo
 	done := logging.DebugStartBootstrap(bootstrap, "newkey workflow (tui)", "config=%s", configPath)
 	defer func() { done(err) }()
 
+	useColor := true
+	if cfg, _, cfgErr := loadNewKeyConfig(configPath, baseDir); cfgErr == nil && cfg != nil {
+		useColor = cfg.UseColor
+	}
+
+	session := newAgeSetupSession(ctx, shell.Config{
+		AppName:    "ProxSave",
+		Subtitle:   "AGE Encryption Setup",
+		ConfigPath: configPath,
+		BuildSig:   sig,
+		UseColor:   useColor,
+	})
+	// Deferred for panic safety; Close is idempotent for the normal path.
+	defer func() { _ = session.Close() }()
+
 	logging.DebugStepBootstrap(bootstrap, "newkey workflow (tui)", "running AGE setup via orchestrator")
-	recipientPath, err := runNewKeySetup(ctx, configPath, baseDir, logging.GetDefaultLogger(), wizard.NewAgeSetupUI(configPath, sig))
+	recipientPath, err := runNewKeySetup(ctx, configPath, baseDir, logging.GetDefaultLogger(), agesetup.New(session))
+	closeErr := session.Close()
 	if err != nil {
+		if errors.Is(err, shell.ErrClosed) && closeErr == nil {
+			return wrapInstallError(errInteractiveAborted)
+		}
 		return err
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 
 	logNewKeySuccess(recipientPath, bootstrap)
 
 	return nil
+}
+
+// newAgeSetupSession is an injection point for tests. Production uses
+// shell.Start.
+var newAgeSetupSession = func(ctx context.Context, cfg shell.Config) *shell.Session {
+	return shell.Start(ctx, cfg)
 }
 
 func runNewKeyCLI(ctx context.Context, configPath, baseDir string, logger *logging.Logger, bootstrap *logging.BootstrapLogger) error {
