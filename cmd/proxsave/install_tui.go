@@ -58,7 +58,13 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		printInstallFooter(err, configPath, baseDir, telegramCode, permStatus, permMessage)
 	}()
 
-	printInstallBanner(configPath)
+	if !dashboardHandoffPending() {
+		// Plain-terminal banner for a direct --install run. Coming from
+		// the dashboard the alternate screen is still up (the session is
+		// adopted below): printing here would inject the banner into the
+		// UI, and the frame footer already shows config path and build.
+		printInstallBanner(configPath)
+	}
 
 	buildSig := buildSignature()
 	if strings.TrimSpace(buildSig) == "" {
