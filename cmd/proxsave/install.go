@@ -731,7 +731,7 @@ func configureNotifications(ctx context.Context, reader *bufio.Reader, template 
 	}
 
 	fmt.Println("\n--- Email ---")
-	fmt.Println("Default email delivery uses the TIS24 cloud relay, with local sendmail as failover.")
+	fmt.Println("Default email delivery uses the ProxSave Cloud Relay, with local sendmail as failover.")
 	fmt.Println("ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.")
 	enableEmail, err := confirmDefault(ctx, reader, "Enable email notifications?", prefill.EmailEnabled)
 	if err != nil {
@@ -759,7 +759,7 @@ func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaul
 	}
 
 	fmt.Println("Email delivery methods:")
-	fmt.Println("  relay    TIS24 cloud relay over outbound HTTPS (default)")
+	fmt.Println("  relay    ProxSave Cloud Relay over outbound HTTPS (default)")
 	fmt.Println("  sendmail Local /usr/sbin/sendmail (fallback/default failover; requires a local MTA)")
 	fmt.Println("  pmf      Proxmox Notifications via proxmox-mail-forward (SMTP lives in Proxmox)")
 	for {

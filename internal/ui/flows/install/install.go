@@ -141,11 +141,11 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	}
 	email := &components.FormField{
 		Label:       "Email notifications",
-		Description: "Default delivery uses the TIS24 cloud relay with local sendmail as failover.",
+		Description: "Default delivery uses the ProxSave Cloud Relay with local sendmail as failover.",
 		Kind:        components.FieldToggle,
 		Bool:        prefill.EmailEnabled,
 	}
-	methodOptions := []string{"Cloud relay (relay)", "Local sendmail (sendmail)", "Proxmox Notifications (pmf)"}
+	methodOptions := []string{"ProxSave Cloud Relay (relay)", "Local sendmail (sendmail)", "Proxmox Notifications (pmf)"}
 	methodValues := []string{"relay", "sendmail", "pmf"}
 	methodIndex := 0
 	for i, v := range methodValues {

@@ -16,7 +16,7 @@ Backup firewall rules? [y/N]:
 --- Telegram ---
 Enable Telegram notifications (centralized)? [y/N]: 
 --- Email ---
-Default email delivery uses the TIS24 cloud relay, with local sendmail as failover.
+Default email delivery uses the ProxSave Cloud Relay, with local sendmail as failover.
 ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.
 Enable email notifications? [y/N]: 
 --- Encryption ---
