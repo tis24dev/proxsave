@@ -70,9 +70,14 @@ func run(d *driver, ctx context.Context) <-chan struct {
 }
 
 // TestMenuRowOrder pins the row order the dashboard dispatch tests (and the
-// docs) rely on: backup first, exit last.
+// docs) rely on: backup first, exit last, with the diagnostics group after
+// Reconfigure. Down-navigation must skip the separator, so N downs lands on the
+// N-th SELECTABLE row (the divider is invisible to the cursor).
 func TestMenuRowOrder(t *testing.T) {
-	expected := []Action{ActionBackup, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure, ActionExit}
+	expected := []Action{
+		ActionBackup, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure,
+		ActionCheckTelegram, ActionCheckHealthcheck, ActionPostInstallCheck, ActionExit,
+	}
 	for i, want := range expected {
 		d := newDriver(t)
 		ch := run(d, context.Background())

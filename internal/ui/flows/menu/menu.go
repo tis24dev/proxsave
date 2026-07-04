@@ -23,6 +23,11 @@ const (
 	ActionDecrypt
 	ActionNewKey
 	ActionReconfigure
+	// Second group (diagnostics): each re-opens an existing setup/check screen
+	// in the live dashboard session; the caller loops back to the menu after.
+	ActionCheckTelegram
+	ActionCheckHealthcheck
+	ActionPostInstallCheck
 )
 
 // errMenuExit is the esc sentinel (leave without doing anything).
@@ -38,6 +43,11 @@ func Run(ctx context.Context, session *shell.Session) (Action, error) {
 		{Label: "Decrypt", Description: "convert an encrypted backup into a plaintext bundle", Value: ActionDecrypt},
 		{Label: "New encryption key", Description: "reset the AGE recipients and run the key setup", Value: ActionNewKey},
 		{Label: "Reconfigure", Description: "re-run the interactive installation/setup", Value: ActionReconfigure},
+		// Detached second group: diagnostics that re-open existing check screens.
+		{Label: "─── Diagnostics ───", Separator: true},
+		{Label: "Check Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
+		{Label: "Check healthchecks", Description: "verify backup monitoring and show the portal link", Value: ActionCheckHealthcheck},
+		{Label: "Post-install check", Description: "re-run the post-install audit", Value: ActionPostInstallCheck},
 		{Label: "Exit", Description: "leave without doing anything", Value: ActionExit},
 	}
 	action, err := shell.Ask(ctx, session, components.NewSelector(
