@@ -178,7 +178,7 @@ func TestRunTelegramSetupWizard_PersonalModeSkipsUI(t *testing.T) {
 			ConfigLoaded:    true,
 			TelegramEnabled: true,
 			TelegramMode:    "personal",
-			ServerAPIHost:   "https://bot.tis24.it:1443",
+			ServerAPIHost:   "https://bot.proxsave.dev",
 		}, nil
 	}
 	telegramSetupWizardRunner = func(ctx context.Context, app *tui.App, root, focus tview.Primitive) error {

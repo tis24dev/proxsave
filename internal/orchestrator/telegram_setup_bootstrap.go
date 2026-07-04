@@ -8,7 +8,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 )
 
-const defaultTelegramServerAPIHost = "https://bot.tis24.it:1443"
+const defaultTelegramServerAPIHost = "https://bot.proxsave.dev"
 
 // TelegramSetupMaxVerificationAttempts bounds how many registration checks the
 // install wizard runs before it stops offering another check and requires the
