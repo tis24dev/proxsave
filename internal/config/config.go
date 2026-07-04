@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -235,6 +236,25 @@ type Config struct {
 	MetricsEnabled bool
 	MetricsPath    string
 
+	// Scheduler engine (cron vs resident daemon). Defaults keep existing installs
+	// on cron; the install wizard and the --upgrade auto-migration are what set daemon.
+	SchedulerMode  string        // "cron" | "daemon"
+	SchedulerTime  string        // daily HH:MM ("Run at") used by daemon mode
+	MaxRunDuration time.Duration // daemon watchdog: hard timeout for one supervised backup
+	DaemonOptOut   bool          // true after --daemon-remove; --upgrade won't re-install the daemon
+
+	// Healthchecks connector (dead-man switch + backup outcome), used by the daemon.
+	HealthcheckEnabled           bool
+	HealthcheckMode              string // "centralized" (fetch ping-urls from the server) | "self"
+	HealthcheckHeartbeatInterval time.Duration
+	HealthcheckSendLog           bool
+	HealthcheckAliveURL          string // centralized cache (auto-filled from the server)
+	HealthcheckBackupURL         string // centralized cache (auto-filled from the server)
+	HealthcheckPingEndpoint      string // self mode: ping base
+	HealthcheckPingKey           string // self mode: optional ping key for slug URLs
+	HealthcheckAliveID           string // self mode: UUID or slug of the service-alive check
+	HealthcheckBackupID          string // self mode: UUID or slug of the backup-outcome check
+
 	// Security features
 	CheckNetworkSecurity bool
 	CheckFirewall        bool
@@ -433,6 +453,8 @@ func (c *Config) parse() error {
 	c.parseStorageSettings()
 	c.parseRetentionSettings()
 	c.parseNotificationSettings()
+	c.parseSchedulerSettings()
+	c.parseHealthcheckSettings()
 	if err := c.parseCollectionSettings(); err != nil {
 		return err
 	}
@@ -790,6 +812,46 @@ func (c *Config) parseNotificationSettings() {
 	}
 }
 
+// parseSchedulerSettings reads the scheduler-engine keys. All defaults keep the
+// current behaviour (cron), so a config merged by --upgrade is inert until the
+// wizard or the auto-migration flips SCHEDULER_MODE to daemon.
+func (c *Config) parseSchedulerSettings() {
+	c.SchedulerMode = normalizeSchedulerMode(c.getString("SCHEDULER_MODE", "cron"))
+	c.SchedulerTime = strings.TrimSpace(c.getString("SCHEDULER_TIME", "02:00"))
+	c.MaxRunDuration = c.getDuration("MAX_RUN_DURATION", 6*time.Hour)
+	c.DaemonOptOut = c.getBool("DAEMON_OPT_OUT", false)
+}
+
+// parseHealthcheckSettings reads the healthchecks-connector keys (daemon only).
+func (c *Config) parseHealthcheckSettings() {
+	c.HealthcheckEnabled = c.getBool("HEALTHCHECK_ENABLED", false)
+	c.HealthcheckMode = normalizeHealthcheckMode(c.getString("HEALTHCHECK_MODE", "centralized"))
+	c.HealthcheckHeartbeatInterval = c.getDuration("HEALTHCHECK_HEARTBEAT_INTERVAL", 5*time.Minute)
+	c.HealthcheckSendLog = c.getBool("HEALTHCHECK_SEND_LOG", true)
+	c.HealthcheckAliveURL = strings.TrimSpace(c.getString("HEALTHCHECK_ALIVE_URL", ""))
+	c.HealthcheckBackupURL = strings.TrimSpace(c.getString("HEALTHCHECK_BACKUP_URL", ""))
+	c.HealthcheckPingEndpoint = strings.TrimSpace(c.getString("HEALTHCHECK_PING_ENDPOINT", "https://hc-ping.com"))
+	c.HealthcheckPingKey = strings.TrimSpace(c.getString("HEALTHCHECK_PING_KEY", ""))
+	c.HealthcheckAliveID = strings.TrimSpace(c.getString("HEALTHCHECK_ALIVE_ID", ""))
+	c.HealthcheckBackupID = strings.TrimSpace(c.getString("HEALTHCHECK_BACKUP_ID", ""))
+}
+
+// normalizeSchedulerMode maps any unrecognised value to the safe default "cron".
+func normalizeSchedulerMode(v string) string {
+	if strings.ToLower(strings.TrimSpace(v)) == "daemon" {
+		return "daemon"
+	}
+	return "cron"
+}
+
+// normalizeHealthcheckMode maps any unrecognised value to the default "centralized".
+func normalizeHealthcheckMode(v string) string {
+	if strings.ToLower(strings.TrimSpace(v)) == "self" {
+		return "self"
+	}
+	return "centralized"
+}
+
 func (c *Config) parseCollectionSettings() error {
 	if patterns := c.getStringSlice("BACKUP_EXCLUDE_PATTERNS", nil); patterns != nil {
 		c.ExcludePatterns = patterns
@@ -919,6 +981,17 @@ func (c *Config) getInt(key string, defaultValue int) int {
 	if val, ok := c.raw[key]; ok {
 		if intVal, err := strconv.Atoi(val); err == nil {
 			return intVal
+		}
+	}
+	return defaultValue
+}
+
+// getDuration parses a Go duration string (e.g. "6h", "5m"); a missing, empty,
+// unparseable, or non-positive value yields the default.
+func (c *Config) getDuration(key string, defaultValue time.Duration) time.Duration {
+	if val, ok := c.raw[strings.ToUpper(key)]; ok {
+		if d, err := time.ParseDuration(strings.TrimSpace(val)); err == nil && d > 0 {
+			return d
 		}
 	}
 	return defaultValue
