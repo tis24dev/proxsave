@@ -269,7 +269,7 @@ func TestPrepareBaseTemplateExistingSkip(t *testing.T) {
 	var skip bool
 	var err error
 	captureStdout(t, func() {
-		tmpl, skip, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
+		tmpl, skip, _, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
 	})
 	if err != nil {
 		t.Fatalf("prepareBaseTemplate error: %v", err)
@@ -289,7 +289,7 @@ func TestPrepareBaseTemplateOverwrite(t *testing.T) {
 	var skip bool
 	var err error
 	captureStdout(t, func() {
-		tmpl, skip, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
+		tmpl, skip, _, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
 	})
 	if err != nil {
 		t.Fatalf("prepareBaseTemplate error: %v", err)
@@ -309,7 +309,7 @@ func TestPrepareBaseTemplateEditExisting(t *testing.T) {
 	var skip bool
 	var err error
 	captureStdout(t, func() {
-		tmpl, skip, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
+		tmpl, skip, _, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
 	})
 	if err != nil {
 		t.Fatalf("prepareBaseTemplate error: %v", err)
@@ -325,7 +325,7 @@ func TestPrepareBaseTemplateEditExisting(t *testing.T) {
 func TestPrepareBaseTemplateCancel(t *testing.T) {
 	cfgFile := createTempFile(t, "EXISTING=1\n")
 	reader := bufio.NewReader(strings.NewReader("0\n"))
-	_, _, err := prepareBaseTemplate(context.Background(), reader, cfgFile)
+	_, _, _, err := prepareBaseTemplate(context.Background(), reader, cfgFile)
 	if !errors.Is(err, errInteractiveAborted) {
 		t.Fatalf("expected interactive abort, got %v", err)
 	}

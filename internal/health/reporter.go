@@ -160,13 +160,13 @@ func (r *Reporter) ping(ctx context.Context, u, body, label string) error {
 	}
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, u, rdr)
 	if err != nil {
-		return fmt.Errorf("healthcheck %s: %w", label, err)
+		return fmt.Errorf("healthcheck %s: %w", label, redactURLErr(err))
 	}
 	req.Header.Set("User-Agent", "proxsave/"+version.String())
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("healthcheck %s: %w", label, err)
+		return fmt.Errorf("healthcheck %s: %w", label, redactURLErr(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
@@ -175,6 +175,18 @@ func (r *Reporter) ping(ctx context.Context, u, body, label string) error {
 		return fmt.Errorf("healthcheck %s: HTTP %d", label, resp.StatusCode)
 	}
 	return nil
+}
+
+// redactURLErr strips the URL from a *url.Error so it never reaches a log or a
+// caller: the ping URL embeds the check UUID (a low-capability secret) and the
+// centralized-fetch URL embeds the server_id. net's *url.Error.Error() prints the
+// full URL verbatim; we keep only the operation + underlying transport error.
+func redactURLErr(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
 
 // pingURL joins a check base URL with a suffix and an optional rid query.

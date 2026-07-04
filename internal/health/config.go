@@ -63,14 +63,14 @@ func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIH
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return CentralizedConfig{}, err
+		return CentralizedConfig{}, redactURLErr(err)
 	}
 	req.Header.Set("X-Server-Auth", secret)
 	req.Header.Set("X-Proxsave-Version", version.String())
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return CentralizedConfig{}, err
+		return CentralizedConfig{}, redactURLErr(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))

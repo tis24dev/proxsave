@@ -23,6 +23,11 @@ type existingConfigDecision struct {
 	BaseTemplate     string
 	SkipConfigWizard bool
 	AbortInstall     bool
+	// FromExistingFile is true only when the wizard starts from the user's current
+	// backup.env (Edit). Fresh installs and Overwrite start from the embedded
+	// template, so defaults (e.g. the scheduler engine) may be the recommended new
+	// values rather than the stored ones.
+	FromExistingFile bool
 }
 
 func promptExistingConfigModeCLI(ctx context.Context, reader *bufio.Reader, configPath string) (existingConfigMode, error) {
@@ -102,6 +107,7 @@ func resolveExistingConfigDecision(mode existingConfigMode, configPath string) (
 			BaseTemplate:     string(content),
 			SkipConfigWizard: false,
 			AbortInstall:     false,
+			FromExistingFile: true,
 		}, nil
 	case existingConfigKeepContinue:
 		return existingConfigDecision{

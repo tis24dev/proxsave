@@ -180,6 +180,37 @@ func TestNon2xxIsError(t *testing.T) {
 	}
 }
 
+func TestTransportErrorDoesNotLeakURL(t *testing.T) {
+	// Point the reporter at an unreachable address so client.Do returns a
+	// *url.Error; the returned error must not contain the ping URL / check UUID.
+	rep := NewReporter(Config{
+		AliveURL:  "http://127.0.0.1:1/ping/deadbeef-check-uuid-secret",
+		BackupURL: "http://127.0.0.1:1/ping/backup-uuid-secret",
+	})
+	err := rep.Heartbeat(context.Background())
+	if err == nil {
+		t.Fatal("expected a transport error against an unreachable address")
+	}
+	msg := err.Error()
+	// The check UUID (URL path) must be gone. The bare host:port from the
+	// underlying dial error is acceptable diagnostics (the host is not a secret;
+	// the per-check UUID is).
+	for _, leak := range []string{"/ping/", "deadbeef-check-uuid-secret"} {
+		if strings.Contains(msg, leak) {
+			t.Fatalf("error leaks %q: %v", leak, err)
+		}
+	}
+
+	// RunFinished (POST with a body) must also not leak.
+	err = rep.RunFinished(context.Background(), "rid", 4, "logtail")
+	if err == nil {
+		t.Fatal("expected a transport error")
+	}
+	if strings.Contains(err.Error(), "backup-uuid-secret") || strings.Contains(err.Error(), "/ping/") {
+		t.Fatalf("RunFinished error leaks the URL: %v", err)
+	}
+}
+
 func TestBodyCappedToTail(t *testing.T) {
 	cap, rep, done := newServer(t, 200, true)
 	defer done()
