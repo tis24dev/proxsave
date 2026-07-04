@@ -12,8 +12,8 @@ import (
 func TestMaskSecret(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"", ""},
-		{"short", secretMaskPrefix},               // <= 8 -> full mask
-		{"12345678", secretMaskPrefix},             // exactly 8 -> full mask
+		{"short", secretMaskPrefix},    // <= 8 -> full mask
+		{"12345678", secretMaskPrefix}, // exactly 8 -> full mask
 		{"0123456789ABCDEF", secretMaskPrefix + "CDEF"}, // last 4 visible
 	}
 	for _, c := range cases {
