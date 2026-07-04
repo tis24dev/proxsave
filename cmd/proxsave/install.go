@@ -816,7 +816,10 @@ func configureEncryption(ctx context.Context, reader *bufio.Reader, template *st
 // Edit of an existing config defaults to its stored SCHEDULER_MODE, so a no-op
 // edit never flips the scheduler; an old config without the key stays on cron.
 func schedulerEngineDefault(fromExisting bool, template string) string {
-	if !fromExisting {
+	// Fresh/Overwrite, or an Edit whose base is effectively empty, are "start from
+	// scratch" -> daemon (this also keeps the empty-base boundary identical to the
+	// Charm front-end, which keys off an empty base template).
+	if !fromExisting || strings.TrimSpace(template) == "" {
 		return "daemon"
 	}
 	switch strings.ToLower(strings.TrimSpace(installer.DeriveInstallWizardPrefill(template).SchedulerMode)) {
