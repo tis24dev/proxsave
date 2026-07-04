@@ -14,8 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"charm.land/huh/v2"
-
 	"github.com/tis24dev/proxsave/internal/config"
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/installer"
@@ -65,147 +63,163 @@ func ResolveExistingConfig(ctx context.Context, session *shell.Session, configPa
 	return action, nil
 }
 
-// CollectWizardData shows the configuration wizard as ONE screen (a single
-// form with every setting, like the tview wizard it replaced), prefilled
-// from baseTemplate. Esc cancels the installation.
+// CollectWizardData shows the configuration wizard as ONE aligned form
+// (label column left, controls right, like the tview wizard it replaced),
+// prefilled from baseTemplate. Esc cancels the installation.
 func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate string) (*installer.InstallWizardData, error) {
 	prefill := installer.DeriveInstallWizardPrefill(baseTemplate)
 
-	enableSecondary := prefill.SecondaryEnabled
-	secondaryPath := prefill.SecondaryPath
-	secondaryLog := prefill.SecondaryLogPath
-	enableCloud := prefill.CloudEnabled
-	cloudRemote := prefill.CloudRemote
-	cloudLog := prefill.CloudLogPath
-	firewall := prefill.FirewallEnabled
-	telegram := prefill.TelegramEnabled
-	email := prefill.EmailEnabled
-	method := installer.EmailDeliveryMethodOrDefault(prefill.EmailDeliveryMethod)
-	encryption := prefill.EncryptionEnabled
-	cronTime := cronutil.DefaultTime
+	secondary := &components.FormField{
+		Label:       "Secondary storage",
+		Description: "Additional local path for redundant copies; must be filesystem-mounted (e.g. /mnt/nas-backup). For direct network access use cloud storage (rclone).",
+		Kind:        components.FieldToggle,
+		Bool:        prefill.SecondaryEnabled,
+	}
+	secondaryPath := &components.FormField{
+		Label:       "Secondary backup path",
+		Description: "SECONDARY_PATH: filesystem path for the redundant copies.",
+		Kind:        components.FieldText,
+		Text:        prefill.SecondaryPath,
+		Active:      func() bool { return secondary.Bool },
+		Validate: func(v string) error {
+			return config.ValidateRequiredSecondaryPath(strings.TrimSpace(v))
+		},
+	}
+	secondaryLog := &components.FormField{
+		Label:       "Secondary log path",
+		Description: "SECONDARY_LOG_PATH, optional: leave empty to skip.",
+		Kind:        components.FieldText,
+		Text:        prefill.SecondaryLogPath,
+		Active:      func() bool { return secondary.Bool },
+		Validate: func(v string) error {
+			return config.ValidateOptionalSecondaryLogPath(strings.TrimSpace(v))
+		},
+	}
+	cloud := &components.FormField{
+		Label:       "Cloud backups (rclone)",
+		Description: "Configure rclone manually before enabling cloud backups.",
+		Kind:        components.FieldToggle,
+		Bool:        prefill.CloudEnabled,
+	}
+	cloudRemote := &components.FormField{
+		Label:       "Rclone backup remote",
+		Description: "CLOUD_REMOTE, e.g. myremote:pbs-backups.",
+		Kind:        components.FieldText,
+		Text:        prefill.CloudRemote,
+		Active:      func() bool { return cloud.Bool },
+		Validate: func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return fmt.Errorf("cannot be empty")
+			}
+			return nil
+		},
+	}
+	cloudLog := &components.FormField{
+		Label:       "Rclone log remote",
+		Description: "CLOUD_LOG_PATH, e.g. myremote:/logs.",
+		Kind:        components.FieldText,
+		Text:        prefill.CloudLogPath,
+		Active:      func() bool { return cloud.Bool },
+		Validate: func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return fmt.Errorf("cannot be empty")
+			}
+			return nil
+		},
+	}
+	firewall := &components.FormField{
+		Label:       "Backup firewall rules",
+		Description: "Collect firewall rules (iptables/nftables); changeable later via BACKUP_FIREWALL_RULES.",
+		Kind:        components.FieldToggle,
+		Bool:        prefill.FirewallEnabled,
+	}
+	telegram := &components.FormField{
+		Label:       "Telegram notifications",
+		Description: "Centralized bot pairing; the setup step follows after the wizard.",
+		Kind:        components.FieldToggle,
+		Bool:        prefill.TelegramEnabled,
+	}
+	email := &components.FormField{
+		Label:       "Email notifications",
+		Description: "Default delivery uses the TIS24 cloud relay with local sendmail as failover.",
+		Kind:        components.FieldToggle,
+		Bool:        prefill.EmailEnabled,
+	}
+	methodOptions := []string{"Cloud relay (relay)", "Local sendmail (sendmail)", "Proxmox Notifications (pmf)"}
+	methodValues := []string{"relay", "sendmail", "pmf"}
+	methodIndex := 0
+	for i, v := range methodValues {
+		if v == installer.EmailDeliveryMethodOrDefault(prefill.EmailDeliveryMethod) {
+			methodIndex = i
+		}
+	}
+	method := &components.FormField{
+		Label:       "Email delivery method",
+		Description: "Choose pmf only when Proxmox Notifications is configured.",
+		Kind:        components.FieldSelect,
+		Options:     methodOptions,
+		OptionIndex: methodIndex,
+		Active:      func() bool { return email.Bool },
+	}
+	encryption := &components.FormField{
+		Label:       "Backup encryption (AGE)",
+		Description: "The AGE recipient setup follows after the wizard.",
+		Kind:        components.FieldToggle,
+		Bool:        prefill.EncryptionEnabled,
+	}
+	cronField := &components.FormField{
+		Label:       "Cron time (HH:MM)",
+		Description: fmt.Sprintf("Daily proxsave job schedule; default %s.", cronutil.DefaultTime),
+		Kind:        components.FieldText,
+		Text:        cronutil.DefaultTime,
+		Validate: func(v string) error {
+			_, err := cronutil.NormalizeTime(v, cronutil.DefaultTime)
+			return err
+		},
+	}
 
-	form := huh.NewForm(huh.NewGroup(
-		huh.NewConfirm().
-			Title("Secondary storage").
-			Description("Additional local path for redundant copies. Must be a filesystem-mounted directory (e.g. /mnt/nas-backup); mount network shares first. For direct network access use cloud storage (rclone).").
-			Affirmative("Yes").Negative("No").
-			Value(&enableSecondary),
-		huh.NewInput().
-			Title("Secondary backup path (SECONDARY_PATH)").
-			Value(&secondaryPath).
-			Validate(func(v string) error {
-				if !enableSecondary {
-					return nil
-				}
-				return config.ValidateRequiredSecondaryPath(strings.TrimSpace(v))
-			}),
-		huh.NewInput().
-			Title("Secondary log path (SECONDARY_LOG_PATH, optional)").
-			Value(&secondaryLog).
-			Validate(func(v string) error {
-				if !enableSecondary {
-					return nil
-				}
-				return config.ValidateOptionalSecondaryLogPath(strings.TrimSpace(v))
-			}),
-		huh.NewConfirm().
-			Title("Cloud backups (rclone)").
-			Description("Configure rclone manually before enabling cloud backups.").
-			Affirmative("Yes").Negative("No").
-			Value(&enableCloud),
-		huh.NewInput().
-			Title("Rclone remote for backups (e.g. myremote:pbs-backups)").
-			Value(&cloudRemote).
-			Validate(func(v string) error {
-				if !enableCloud {
-					return nil
-				}
-				if strings.TrimSpace(v) == "" {
-					return fmt.Errorf("rclone backup remote cannot be empty")
-				}
-				return nil
-			}),
-		huh.NewInput().
-			Title("Rclone remote for logs (e.g. myremote:/logs)").
-			Value(&cloudLog).
-			Validate(func(v string) error {
-				if !enableCloud {
-					return nil
-				}
-				if strings.TrimSpace(v) == "" {
-					return fmt.Errorf("rclone log path cannot be empty")
-				}
-				return nil
-			}),
-		huh.NewConfirm().
-			Title("Backup firewall rules").
-			Description("Collect firewall rules (iptables/nftables). Changeable later via BACKUP_FIREWALL_RULES.").
-			Affirmative("Yes").Negative("No").
-			Value(&firewall),
-		huh.NewConfirm().
-			Title("Telegram notifications (centralized)").
-			Affirmative("Yes").Negative("No").
-			Value(&telegram),
-		huh.NewConfirm().
-			Title("Email notifications").
-			Description("Default delivery uses the TIS24 cloud relay with local sendmail as failover; choose pmf only when Proxmox Notifications is configured.").
-			Affirmative("Yes").Negative("No").
-			Value(&email),
-		huh.NewSelect[string]().
-			Title("Email delivery method").
-			Options(
-				huh.NewOption("Cloud relay (relay)", "relay"),
-				huh.NewOption("Local sendmail (sendmail)", "sendmail"),
-				huh.NewOption("Proxmox Notifications (pmf)", "pmf"),
-			).
-			Value(&method),
-		huh.NewConfirm().
-			Title("Backup encryption (AGE)").
-			Affirmative("Yes").Negative("No").
-			Value(&encryption),
-		huh.NewInput().
-			Title(fmt.Sprintf("Cron time for the daily job (HH:MM, default %s)", cronutil.DefaultTime)).
-			Value(&cronTime).
-			Validate(func(v string) error {
-				_, err := cronutil.NormalizeTime(v, cronutil.DefaultTime)
-				return err
-			}),
-	))
-
-	if _, err := shell.Ask(ctx, session, components.NewFormScreen("Configuration", form)); err != nil {
+	fields := []*components.FormField{
+		secondary, secondaryPath, secondaryLog,
+		cloud, cloudRemote, cloudLog,
+		firewall, telegram, email, method, encryption, cronField,
+	}
+	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
+		"Configuration", fields,
+		components.WithFormGridBack(installer.ErrInstallCancelled),
+	)); err != nil {
 		return nil, mapCancel(err)
 	}
 
 	data := &installer.InstallWizardData{
-		EnableSecondaryStorage: enableSecondary,
-		EnableCloudStorage:     enableCloud,
-		BackupFirewallRules:    &firewall,
-		EnableEncryption:       encryption,
+		EnableSecondaryStorage: secondary.Bool,
+		EnableCloudStorage:     cloud.Bool,
+		BackupFirewallRules:    &firewall.Bool,
+		EnableEncryption:       encryption.Bool,
 	}
-	if enableSecondary {
-		data.SecondaryPath = strings.TrimSpace(secondaryPath)
-		data.SecondaryLogPath = strings.TrimSpace(secondaryLog)
+	if secondary.Bool {
+		data.SecondaryPath = strings.TrimSpace(secondaryPath.Text)
+		data.SecondaryLogPath = strings.TrimSpace(secondaryLog.Text)
 	}
-	if enableCloud {
-		data.RcloneBackupRemote = strings.TrimSpace(cloudRemote)
-		data.RcloneLogRemote = strings.TrimSpace(cloudLog)
+	if cloud.Bool {
+		data.RcloneBackupRemote = strings.TrimSpace(cloudRemote.Text)
+		data.RcloneLogRemote = strings.TrimSpace(cloudLog.Text)
 	}
 	switch {
-	case telegram && email:
+	case telegram.Bool && email.Bool:
 		data.NotificationMode = "both"
-	case telegram:
+	case telegram.Bool:
 		data.NotificationMode = "telegram"
-	case email:
+	case email.Bool:
 		data.NotificationMode = "email"
 	default:
 		data.NotificationMode = "none"
 	}
-	if email {
-		data.EmailDeliveryMethod = installer.EmailDeliveryMethodOrDefault(method)
+	if email.Bool {
+		data.EmailDeliveryMethod = methodValues[method.OptionIndex]
 		fallbackSendmail := true
 		data.EmailFallbackSendmail = &fallbackSendmail
 	}
-	normalized, err := cronutil.NormalizeTime(cronTime, cronutil.DefaultTime)
+	normalized, err := cronutil.NormalizeTime(cronField.Text, cronutil.DefaultTime)
 	if err != nil {
 		return nil, err
 	}

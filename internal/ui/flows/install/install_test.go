@@ -130,10 +130,10 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 		resCh <- result{data, err}
 	}()
 
-	// Single-screen form (parity with the tview wizard): Enter through all
-	// 12 fields keeps every default.
+	// Single aligned form: inactive dependent rows are skipped, so Enter
+	// through the 7 active rows reaches Continue; the final Enter submits.
 	d.waitScreen("Configuration")
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 8; i++ {
 		d.keys("enter")
 	}
 
@@ -193,10 +193,10 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 		resCh <- result{data, err}
 	}()
 
-	// Single-screen form: Enter through all 12 prefilled fields is the
-	// no-op edit.
+	// Single aligned form, everything prefilled/active: Enter through all
+	// 12 rows plus the Continue button is the no-op edit.
 	d.waitScreen("Configuration")
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 13; i++ {
 		d.keys("enter")
 	}
 
