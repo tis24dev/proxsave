@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 func gridFields() (toggle, path, cron *FormField) {
@@ -159,7 +161,7 @@ func TestFormGridHintWrapsAtReadableWidth(t *testing.T) {
 	for _, l := range strings.Split(view, "\n") {
 		if strings.Contains(l, "redundant copies") || strings.Contains(l, "cloud storage") {
 			found++
-			if w := len([]rune(l)); w > 110 {
+			if w := lipgloss.Width(l); w > 110 {
 				t.Fatalf("hint line too wide (%d cols): %q", w, l)
 			}
 		}
