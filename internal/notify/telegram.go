@@ -400,6 +400,45 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 // sendViaRelay sends a message through the authenticated server-side relay so
 // the bot token never leaves this host. The per-server secret is sent only in
 // the X-Server-Auth header; any returned error string is scrubbed of it.
+// showPortalLink reads a login_url piggybacked on the /api/notify response and,
+// if present and safe, logs it at Info so the user can reach their monitoring
+// portal. The server returns it only until the user's first login, so it stops
+// appearing once they log in. Never fatal; best-effort.
+func (t *TelegramNotifier) showPortalLink(body io.Reader) {
+	raw, err := io.ReadAll(io.LimitReader(body, 8192))
+	if err != nil {
+		return
+	}
+	var r struct {
+		LoginURL string `json:"login_url"`
+	}
+	if json.Unmarshal(raw, &r) != nil {
+		return
+	}
+	link := strings.TrimSpace(r.LoginURL)
+	if !isSafePortalLink(link) {
+		return
+	}
+	t.logger.Info("Monitoring portal (single-use link, open it to set a password and configure alerts): %s", link)
+}
+
+// isSafePortalLink accepts only a clean http(s) URL with no control/ANSI bytes,
+// so a hostile/MITM'd server cannot inject console escape sequences via login_url.
+func isSafePortalLink(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://") {
+		return false
+	}
+	for _, r := range raw {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID string) (int, error) {
 	endpoint := strings.TrimRight(t.config.ServerAPIHost, "/") + "/api/notify"
 
@@ -443,6 +482,11 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID s
 		// delivered. 202 = accepted onto the durable outbox; the real delivery
 		// outcome is learned via the status poll.
 		t.logger.Debug("Telegram: relay accepted (HTTP %d notifyID=%q)", resp.StatusCode, notifyID)
+		// The server piggybacks a fresh portal magic-link on the response UNTIL the
+		// user logs into their monitoring portal the first time, then stops. Surface
+		// it so the user can reach their portal from a run's output. Deliberately NOT
+		// registered as a log secret (it must stay visible).
+		t.showPortalLink(resp.Body)
 		return resp.StatusCode, nil
 	case 401, 403:
 		return resp.StatusCode, fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.StatusCode)
