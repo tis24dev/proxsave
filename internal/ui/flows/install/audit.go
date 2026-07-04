@@ -81,6 +81,7 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 		"Unused components", items,
 		components.WithMultiSelectPrompt[string](
 			fmt.Sprintf("Detected %d unused/optional component(s) that may cause warnings.\nSelected components are written as KEY=false into backup.env.", len(suggestions))),
+		components.WithMultiSelectActions[string]("Select ALL", "Disable Selected"),
 		components.WithMultiSelectBack[string](errAuditSkip),
 	))
 	if err != nil {

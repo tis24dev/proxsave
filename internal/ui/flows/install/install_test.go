@@ -344,7 +344,10 @@ func TestRunPostInstallAudit(t *testing.T) {
 	d.waitScreen("Post-install check")
 	d.keys("enter") // default: run the check
 	d.waitScreen("Unused components")
-	d.keys("space enter") // select first suggestion, confirm
+	// 2 items (rows 0-1), Select ALL (2), Disable Selected (3). Select the first
+	// suggestion, then move to the Disable Selected button and press it (a plain
+	// Enter on the item now just toggles it - it no longer confirms the screen).
+	d.keys("space down down down enter")
 	d.waitScreen("Configuration updated")
 	d.keys("enter")
 
