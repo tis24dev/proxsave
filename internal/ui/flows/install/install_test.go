@@ -236,6 +236,39 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 	}
 }
 
+// TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron locks the no-op-edit
+// invariant for a legacy/pre-daemon config that lacks SCHEDULER_MODE: an Enter-only
+// edit must NOT silently flip the scheduler to daemon (it stays on cron, matching
+// the CLI's schedulerEngineDefault).
+func TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron(t *testing.T) {
+	d := newDriver(t)
+	template := installer.UnsetEnvValueInTemplate(config.DefaultEnvTemplate(), "SCHEDULER_MODE")
+
+	type result struct {
+		data *installer.InstallWizardData
+		err  error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		data, err := CollectWizardData(context.Background(), d.session, template)
+		resCh <- result{data, err}
+	}()
+
+	// All toggles default off -> 8 active rows + Continue.
+	d.waitScreen("Configuration")
+	for i := 0; i < 9; i++ {
+		d.keys("enter")
+	}
+
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("unexpected error: %v", res.err)
+	}
+	if res.data.SchedulerMode != "cron" {
+		t.Fatalf("editing a config without SCHEDULER_MODE must default to cron, got %q", res.data.SchedulerMode)
+	}
+}
+
 func TestCollectWizardDataEscCancels(t *testing.T) {
 	d := newDriver(t)
 	resCh := make(chan error, 1)
