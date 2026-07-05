@@ -2,12 +2,37 @@ package logging
 
 import (
 	"bytes"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+func TestRedactURLError(t *testing.T) {
+	ue := &url.Error{
+		Op:  "Get",
+		URL: "https://bot.proxsave.dev/api/healthcheck/config?server_id=900000000001",
+		Err: errors.New("connection refused"),
+	}
+	got := RedactURLError(ue)
+	if strings.Contains(got.Error(), "900000000001") || strings.Contains(got.Error(), "bot.proxsave.dev") {
+		t.Errorf("URL not stripped: %s", got.Error())
+	}
+	if !strings.Contains(got.Error(), "connection refused") {
+		t.Errorf("underlying transport error lost: %s", got.Error())
+	}
+	// errors.Is still works through the stripped error (the %w keeps the chain).
+	sentinel := errors.New("boom")
+	if wrapped := RedactURLError(&url.Error{Op: "Post", URL: "https://x?server_id=1", Err: sentinel}); !errors.Is(wrapped, sentinel) {
+		t.Error("RedactURLError must preserve the wrapped error for errors.Is")
+	}
+	// Non-*url.Error values pass through unchanged.
+	if RedactURLError(sentinel).Error() != "boom" {
+		t.Error("non-url error must pass through unchanged")
+	}
+}
 
 func TestMaskSecret(t *testing.T) {
 	cases := []struct{ in, want string }{
