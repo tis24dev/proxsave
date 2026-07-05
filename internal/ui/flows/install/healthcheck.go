@@ -145,7 +145,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 // buildHealthcheckPrompt renders the styled prompt shown above the Check/Continue/
 // Skip choices: the guide, the portal magic-link boxed for emphasis, and a Status
 // line whose keyword is green when verified and red on a fatal failure. The magic
-// link is already sanitized upstream (sanitizeLoginURL: http(s), printable ASCII).
+// link is already sanitized upstream (serverbot.SanitizeLoginURL: http(s), printable ASCII).
 func buildHealthcheckPrompt(magicLink, statusMsg string, verified, failed bool) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Backup monitoring (healthchecks) is enabled for this host."))

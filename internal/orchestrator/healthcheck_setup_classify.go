@@ -2,9 +2,9 @@ package orchestrator
 
 import (
 	"errors"
-	"strings"
 
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // Shared hints so the CLI and TUI render identical retry copy.
@@ -16,7 +16,7 @@ const (
 // HealthcheckSetupState is the single mapping of a check result to user-facing
 // copy + policy flags; both front-ends render it identically. The status Message
 // is always our OWN copy; LoginURL (server-minted) is passed through
-// sanitizeLoginURL so a hostile/MITM'd server cannot inject terminal escape
+// serverbot.SanitizeLoginURL so a hostile/MITM'd server cannot inject terminal escape
 // sequences into the install console.
 type HealthcheckSetupState struct {
 	Message  string
@@ -25,28 +25,9 @@ type HealthcheckSetupState struct {
 	Fatal    bool // another check cannot help -> do NOT offer Check again
 }
 
-// sanitizeLoginURL returns the magic-link only if it is a clean http(s) URL made
-// of printable ASCII (0x21-0x7e); otherwise "". A URL is printable ASCII by RFC
-// 3986 (non-ASCII is percent-encoded), so this drops C0/C1 controls, DEL, spaces,
-// and every Unicode format/bidi/line-separator trick a hostile server might inject.
-// Defense-in-depth: the link is display-only (proxsave never fetches it), but it
-// must not be able to spoof the console. NOT truncated (that would break the link).
-func sanitizeLoginURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://") {
-		return ""
-	}
-	for _, r := range raw {
-		if r < 0x21 || r > 0x7e {
-			return ""
-		}
-	}
-	return raw
-}
-
 // ClassifyHealthcheckSetupResult maps a HealthcheckCheckResult to display state.
 func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetupState {
-	st := HealthcheckSetupState{LoginURL: sanitizeLoginURL(res.LoginURL)}
+	st := HealthcheckSetupState{LoginURL: serverbot.SanitizeLoginURL(res.LoginURL)}
 	switch {
 	case res.Err == nil && res.Reachable:
 		st.Verified = true

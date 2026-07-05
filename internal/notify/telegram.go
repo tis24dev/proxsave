@@ -360,18 +360,12 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 	}
 }
 
-// sendViaRelay sends a message through the authenticated server-side relay so
-// the bot token never leaves this host. The per-server secret is sent only in
-// the X-Server-Auth header; any returned error string is scrubbed of it.
-// showPortalLink reads a login_url piggybacked on the /api/notify response and,
-// if present and safe, logs it at Info so the user can reach their monitoring
-// portal. The server returns it only until the user's first login, so it stops
-// appearing once they log in. Never fatal; best-effort.
-// showPortalLink parses login_url from the /api/notify response body and returns it
-// RAW so the caller can capture it (dual-write: it flows to BackupStats.Healthcheck
-// Link for the S4 healthchecks section, sanitized there). It ALSO still logs the link
-// when safe -- the S3 dual-write keeps the user-visible line until S4 owns the display
-// (then this direct emission is removed). The link is never registered as a secret.
+// showPortalLink parses login_url RAW from the /api/notify response body and returns
+// it for capture (the S3 dual-write flows it to BackupStats.HealthcheckLink). Since S4
+// the DISPLAY lives entirely in the orchestrator's Healthchecks section, which is the
+// sole sanitize (serverbot.SanitizeLoginURL) + emit boundary -- so this is capture-only
+// and no longer logs. The link is never registered as a log secret (it must stay
+// visible at that display boundary).
 func (t *TelegramNotifier) showPortalLink(body []byte) string {
 	var r struct {
 		LoginURL string `json:"login_url"`
@@ -379,28 +373,7 @@ func (t *TelegramNotifier) showPortalLink(body []byte) string {
 	if json.Unmarshal(body, &r) != nil {
 		return ""
 	}
-	link := strings.TrimSpace(r.LoginURL)
-	if isSafePortalLink(link) {
-		t.logger.Info("Monitoring portal (single-use link, open it to set a password and configure alerts): %s", link)
-	}
-	return link
-}
-
-// isSafePortalLink accepts only a clean http(s) URL made of printable ASCII, so a
-// hostile/MITM'd server cannot inject console escape sequences via login_url. A URL
-// is printable ASCII by RFC 3986 (non-ASCII is percent-encoded), so restricting to
-// 0x21-0x7e drops C0/C1 controls, DEL, spaces, and every Unicode format/bidi/
-// line-separator trick.
-func isSafePortalLink(raw string) bool {
-	if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://") {
-		return false
-	}
-	for _, r := range raw {
-		if r < 0x21 || r > 0x7e {
-			return false
-		}
-	}
-	return true
+	return strings.TrimSpace(r.LoginURL)
 }
 
 // sendViaRelay POSTs the message through the authenticated server-side relay (the
