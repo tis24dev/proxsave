@@ -17,25 +17,12 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/serverbot"
-	"github.com/tis24dev/proxsave/internal/version"
 )
 
 // errRelayAuthRejected signals the relay rejected our per-server secret (HTTP
 // 401/403): the secret is stale or rotated and should be dropped + reprovisioned
 // rather than treated as a permanent delivery failure.
 var errRelayAuthRejected = errors.New("relay auth rejected")
-
-// proxsaveVersionHeader carries the running ProxSave version so the central
-// server can gate version-specific behavior (e.g. the one-time secret handoff).
-const proxsaveVersionHeader = "X-Proxsave-Version"
-
-// proxsaveProvisionHeader marks a real provisioning call (issue/re-issue the relay
-// secret). Sent ONLY by the two provisioning paths, never the bare status probe.
-const proxsaveProvisionHeader = "X-Proxsave-Provision"
-
-// proxsaveNotifyIDHeader carries a client-generated id that makes the enqueue
-// idempotent and is the handle the client polls for the real delivery outcome.
-const proxsaveNotifyIDHeader = "X-Notify-Id"
 
 // newNotifyID returns a random 32-hex-char id (<=128, matching the server's cap).
 // Generated ONCE per Send and reused across the relay POST + status poll (and any
@@ -48,14 +35,6 @@ func newNotifyID() string {
 		return fmt.Sprintf("t%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b[:])
-}
-
-// setProxsaveVersionHeader stamps an outbound central-server request with the
-// normalized ProxSave version (e.g. "0.28.0").
-func setProxsaveVersionHeader(req *http.Request) string {
-	v := version.String()
-	req.Header.Set(proxsaveVersionHeader, v)
-	return v
 }
 
 // TelegramMode represents the Telegram bot configuration mode
@@ -306,44 +285,28 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 
 // fetchCentralizedCredentials fetches bot credentials from central server
 func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (string, string, error) {
-	// Build API URL
-	apiURL := fmt.Sprintf("%s/api/get-chat-id?server_id=%s",
-		strings.TrimRight(t.config.ServerAPIHost, "/"),
-		url.QueryEscape(t.config.ServerID))
-
-	// Create request with 5-second timeout
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, "GET", apiURL, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create request: %w", err)
-	}
-	pv := setProxsaveVersionHeader(req)
-	// Only ask the server to (re)issue a relay secret when we can actually persist
-	// it (BaseDir set). Otherwise the 200 body's secret is discarded below and every
-	// run would churn a fresh unconfirmed token server-side.
+	// Only ask the server to (re)issue a relay secret when we can actually persist it
+	// (BaseDir set). Otherwise the 200 body's secret is discarded below and every run
+	// would churn a fresh unconfirmed token server-side. Pre-auth call: NO X-Server-Auth
+	// (Secret left empty). Transport + version header + bounded read via serverbot,
+	// reusing t.client (the test seam).
 	provisionIntent := t.config.BaseDir != ""
-	if provisionIntent {
-		req.Header.Set(proxsaveProvisionHeader, "1")
-	}
-	t.logger.Debug("Telegram: get-chat-id GET (serverID=%q X-Proxsave-Version=%q provisionIntent=%v)", t.config.ServerID, pv, provisionIntent)
-
-	// Make request
-	resp, err := t.client.Do(req)
+	t.logger.Debug("Telegram: get-chat-id GET /api/get-chat-id (serverID=%q provisionIntent=%v)", t.config.ServerID, provisionIntent)
+	resp, err := serverbot.New(t.config.ServerAPIHost, t.client, t.logger).Do(ctx, serverbot.Request{
+		Method:    http.MethodGet,
+		Path:      "/api/get-chat-id",
+		Query:     url.Values{"server_id": {t.config.ServerID}},
+		Provision: provisionIntent,
+		Timeout:   5 * time.Second,
+		MaxBytes:  8192,
+	})
 	if err != nil {
 		return "", "", fmt.Errorf("API request failed: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Read response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to read response: %w", err)
-	}
+	body := resp.Body
 
 	// Handle HTTP status codes
-	switch resp.StatusCode {
+	switch resp.Status {
 	case 200:
 		// Success - parse response
 		var response telegramCentralizedResponse
@@ -393,7 +356,7 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 	case 422:
 		return "", "", fmt.Errorf("invalid SERVER_ID (HTTP 422)")
 	default:
-		return "", "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+		return "", "", fmt.Errorf("unexpected status %d: %s", resp.Status, string(body))
 	}
 }
 
