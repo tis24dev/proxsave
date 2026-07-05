@@ -337,7 +337,7 @@ func TestRunPostInstallAudit(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", configPath)
+		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", configPath, false)
 		resCh <- result{res, err}
 	}()
 
@@ -380,7 +380,7 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env")
+		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Post-install check")
@@ -393,7 +393,7 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 	// Ctrl+C on the confirm is a non-blocking skip too (parity with the
 	// CLI, where a prompt EOF abandons the optional step).
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env")
+		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Post-install check")
@@ -493,7 +493,7 @@ func TestRunTelegramSetup(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			res, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env")
+			res, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
 			resCh <- result{res, err}
 		}()
 	}
@@ -529,7 +529,7 @@ func TestRunTelegramSetup(t *testing.T) {
 	telegramBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
 		return orchestrator.TelegramSetupBootstrap{Eligibility: orchestrator.TelegramSetupSkipPersonalMode}, nil
 	}
-	notShown, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env")
+	notShown, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
 	if err != nil || notShown.Shown {
 		t.Fatalf("not-eligible must be silent: %+v err=%v", notShown, err)
 	}

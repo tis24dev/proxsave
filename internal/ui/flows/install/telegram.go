@@ -37,7 +37,10 @@ const (
 // verification step (Check with the shared attempt cap, Skip, Continue once
 // verified). Semantics mirror the deleted tview wizard: the verified flag
 // latches, a fatal status removes Check, Esc skips unless already verified.
-func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, configPath string) (installer.TelegramSetupResult, error) {
+// RunTelegramSetup drives the Telegram pairing/verify screen. backToMenu switches
+// the leave action's label to "Back" (dashboard diagnostics: return to the menu)
+// instead of the install-flow "Skip"/"Continue".
+func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, configPath string, backToMenu bool) (installer.TelegramSetupResult, error) {
 	state, err := telegramBuildBootstrap(configPath, baseDir)
 	if err != nil {
 		return installer.TelegramSetupResult{}, err
@@ -74,15 +77,16 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 				Label: "Check", Description: "verify the pairing now", Value: telegramActionCheck,
 			})
 		}
+		leaveLabel, leaveDesc, leaveVal := "Skip", "complete pairing later", telegramActionSkip
 		if result.Verified {
-			items = append(items, components.SelectorItem[telegramAction]{
-				Label: "Continue", Description: "pairing verified", Value: telegramActionContinue,
-			})
-		} else {
-			items = append(items, components.SelectorItem[telegramAction]{
-				Label: "Skip", Description: "complete pairing later", Value: telegramActionSkip,
-			})
+			leaveLabel, leaveDesc, leaveVal = "Continue", "pairing verified", telegramActionContinue
 		}
+		if backToMenu {
+			leaveLabel, leaveDesc = "Back", "return to the dashboard menu"
+		}
+		items = append(items, components.SelectorItem[telegramAction]{
+			Label: leaveLabel, Description: leaveDesc, Value: leaveVal,
+		})
 
 		action, err := shell.Ask(ctx, session, components.NewSelector(
 			"Telegram setup", items,

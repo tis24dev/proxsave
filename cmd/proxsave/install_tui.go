@@ -208,7 +208,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors
 	// based on actionable warning hints like "set BACKUP_*=false to disable".
 	if !skipConfigWizard {
-		auditRes, auditErr := flowinstall.RunPostInstallAudit(ctx, session, execInfo.ExecPath, configPath)
+		auditRes, auditErr := flowinstall.RunPostInstallAudit(ctx, session, execInfo.ExecPath, configPath, false)
 		if bootstrap != nil {
 			if auditErr != nil {
 				bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
@@ -243,7 +243,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// TELEGRAM_ENABLED/mode), the same single source of truth the CLI uses — it
 	// returns Shown=false without any UI when Telegram is not centrally enabled.
 	if !skipConfigWizard {
-		telegramRes, telegramErr := flowinstall.RunTelegramSetup(ctx, session, baseDir, configPath)
+		telegramRes, telegramErr := flowinstall.RunTelegramSetup(ctx, session, baseDir, configPath, false)
 		if telegramErr != nil && bootstrap != nil {
 			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)
 		}
@@ -266,7 +266,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// chosen, guide the user + show the portal magic-link + a connection check.
 		// Eligibility is decided solely by RunHealthcheckSetup (re-reads the written
 		// HEALTHCHECK_ENABLED/mode + identity/secret); Shown=false with no UI otherwise.
-		hcRes, hcErr := flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath)
+		hcRes, hcErr := flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath, false)
 		if hcErr != nil && bootstrap != nil {
 			bootstrap.Warning("Healthcheck setup failed (non-blocking): %v", hcErr)
 		}

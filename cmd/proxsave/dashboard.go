@@ -14,6 +14,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -301,12 +302,19 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 // without an on-disk config.
 var daemonStatusLoadConfig = config.LoadConfigWithBaseDir
 
-// Seams so tests can drive the diagnostics loop without the real setup screens
-// or an on-disk config.
+// Seams so tests can drive the diagnostics loop without the real setup screens or
+// an on-disk config. The closures pin backToMenu=true so the shared install screens
+// show a "Back" leave item (return to the dashboard menu) instead of "Skip"/"Continue".
 var (
-	dashboardRunTelegramSetup    = flowinstall.RunTelegramSetup
-	dashboardRunHealthcheckSetup = flowinstall.RunHealthcheckSetup
-	dashboardRunPostInstallAudit = flowinstall.RunPostInstallAudit
+	dashboardRunTelegramSetup = func(ctx context.Context, session *shell.Session, baseDir, configPath string) (installer.TelegramSetupResult, error) {
+		return flowinstall.RunTelegramSetup(ctx, session, baseDir, configPath, true)
+	}
+	dashboardRunHealthcheckSetup = func(ctx context.Context, session *shell.Session, baseDir, configPath string) (installer.HealthcheckSetupResult, error) {
+		return flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath, true)
+	}
+	dashboardRunPostInstallAudit = func(ctx context.Context, session *shell.Session, execPath, configPath string) (installer.PostInstallAuditResult, error) {
+		return flowinstall.RunPostInstallAudit(ctx, session, execPath, configPath, true)
+	}
 )
 
 // dashboardNotConfiguredNotice shows a dismissible info notice when a diagnostics
