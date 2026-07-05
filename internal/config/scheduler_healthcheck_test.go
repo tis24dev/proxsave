@@ -185,3 +185,110 @@ func TestUpgradePreservesDaemonOptOut(t *testing.T) {
 		}
 	})
 }
+
+// assertSafeDaemonDefaults asserts a merged/migrated config's RAW map carries the
+// daemon/healthcheck block with the behaviour-preserving defaults. It reads the raw
+// INJECTED values (not the parsed Config) on purpose: the parsers supply the SAME
+// safe defaults for ABSENT keys, so a template that stopped injecting the block
+// would sail through a parsed-value check -- the ok-presence check below catches
+// that. The empty-string checks catch a stale/attacker ping URL/ID that a parsed
+// check would miss (AliveURL/BackupURL are only read once healthchecks is enabled).
+func assertSafeDaemonDefaults(t *testing.T, raw map[string]string) {
+	t.Helper()
+	want := []struct{ key, val string }{
+		{"SCHEDULER_MODE", "cron"},       // upgraded host stays on cron
+		{"HEALTHCHECK_ENABLED", "false"}, // no pinging until explicitly enabled
+		{"DAEMON_OPT_OUT", "false"},      // a fresh upgrade is not a --daemon-remove tombstone
+		{"HEALTHCHECK_MODE", "centralized"},
+		{"HEALTHCHECK_PING_ENDPOINT", "https://hc-ping.com"},
+		// Empty by default: a non-empty default would make a host ping a stale or
+		// attacker-chosen URL the moment HEALTHCHECK_ENABLED is flipped on.
+		{"HEALTHCHECK_ALIVE_URL", ""},
+		{"HEALTHCHECK_BACKUP_URL", ""},
+		{"HEALTHCHECK_PING_KEY", ""},
+		{"HEALTHCHECK_ALIVE_ID", ""},
+		{"HEALTHCHECK_BACKUP_ID", ""},
+	}
+	for _, w := range want {
+		got, ok := raw[w.key]
+		if !ok {
+			t.Errorf("%s absent: the daemon/healthcheck block was not injected", w.key)
+			continue
+		}
+		if got != w.val {
+			t.Errorf("%s = %q, want %q (a template-default change here flips behaviour on every upgraded install)", w.key, got, w.val)
+		}
+	}
+}
+
+// TestUpgradeRealTemplateKeepsExistingInstallSafe guards the config-MERGE step of
+// --upgrade against a dangerous template-default typo. A pre-daemon config (no
+// scheduler/healthcheck block), merged against the REAL embedded template (NO
+// withTemplate override -> the production merge in computeConfigUpgrade), must gain
+// the block with the SAFE defaults. TestRealTemplateContainsNewKeys only checks key
+// PRESENCE, so a value typo (HEALTHCHECK_ENABLED=true, SCHEDULER_MODE=daemon, or a
+// non-empty ping URL) would land verbatim in every merged config undetected. This
+// asserts the raw INJECTED values and that they parse to safe semantics. (Scope is
+// the merge; the separate, DAEMON_OPT_OUT-gated retrofit auto-migration that a full
+// --upgrade may then run is not exercised here.)
+func TestUpgradeRealTemplateKeepsExistingInstallSafe(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("BACKUP_PATH=/data/backup\nLOG_PATH=/data/log\n"), 0600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	result, err := UpgradeConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("UpgradeConfigFile (real template): %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("expected the daemon/healthcheck block to be added (Changed=true)")
+	}
+
+	raw, err := parseEnvFile(configPath)
+	if err != nil {
+		t.Fatalf("parse merged config: %v", err)
+	}
+	// The injected VALUES are the safe defaults (raw map, presence-aware).
+	assertSafeDaemonDefaults(t, raw)
+
+	// ...and they parse to safe SEMANTICS (parse-path fidelity).
+	c := &Config{raw: raw}
+	c.parseSchedulerSettings()
+	c.parseHealthcheckSettings()
+	if c.SchedulerMode != "cron" || c.HealthcheckEnabled || c.DaemonOptOut {
+		t.Errorf("merged config parses to an unsafe daemon state: mode=%q enabled=%v optout=%v",
+			c.SchedulerMode, c.HealthcheckEnabled, c.DaemonOptOut)
+	}
+	// The user's own value survives the real-template merge (not clobbered).
+	if raw["BACKUP_PATH"] != "/data/backup" {
+		t.Errorf("merge clobbered the user's BACKUP_PATH: %q", raw["BACKUP_PATH"])
+	}
+}
+
+// TestMigrateLegacyRealTemplateInjectsSafeDaemonBlock guards the OTHER production
+// injection path (legacy bash config -> Go, migration.go mergeTemplateWithLegacy).
+// Like --upgrade it walks the REAL embedded template, so a legacy->Go migration must
+// inject the same safe daemon block; a regression in that separate merge code would
+// otherwise go uncaught.
+func TestMigrateLegacyRealTemplateInjectsSafeDaemonBlock(t *testing.T) {
+	tmpDir := t.TempDir()
+	legacyPath := filepath.Join(tmpDir, "legacy.env")
+	outputPath := filepath.Join(tmpDir, "backup.env")
+	if err := os.WriteFile(legacyPath, []byte("BACKUP_PATH=/data/backup\n"), 0600); err != nil {
+		t.Fatalf("seed legacy: %v", err)
+	}
+	_, merged, err := PlanLegacyEnvMigration(legacyPath, outputPath)
+	if err != nil {
+		t.Fatalf("PlanLegacyEnvMigration: %v", err)
+	}
+	if err := os.WriteFile(outputPath, []byte(merged), 0600); err != nil {
+		t.Fatalf("write merged: %v", err)
+	}
+	raw, err := parseEnvFile(outputPath)
+	if err != nil {
+		t.Fatalf("parse merged: %v", err)
+	}
+	assertSafeDaemonDefaults(t, raw)
+}
