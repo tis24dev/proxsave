@@ -1,0 +1,213 @@
+package health
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// TestRecordPingRoundTripEachKind writes one kind at a time and confirms that,
+// after each write, LoadStatus returns exactly the record set, the other kinds
+// stay nil until they are recorded, and earlier records accumulate rather than
+// being clobbered. It also checks that TS/OK/Mode round-trip through the file.
+func TestRecordPingRoundTripEachKind(t *testing.T) {
+	base := t.TempDir()
+
+	// Each step records one kind, then asserts which fields are (non-)nil so we
+	// see accumulation kind by kind.
+	if err := RecordPing(base, "centralized", KindHeartbeat, 1000, true, nil); err != nil {
+		t.Fatalf("RecordPing heartbeat: %v", err)
+	}
+	st := mustLoad(t, base)
+	assertRecord(t, "heartbeat", st.Heartbeat, 1000, true, "")
+	if st.RunStarted != nil || st.RunFinished != nil || st.RunHang != nil {
+		t.Fatalf("only heartbeat should be set, got %+v", st)
+	}
+	if st.Mode != "centralized" {
+		t.Fatalf("mode = %q, want centralized", st.Mode)
+	}
+
+	if err := RecordPing(base, "centralized", KindRunStarted, 2000, true, nil); err != nil {
+		t.Fatalf("RecordPing start: %v", err)
+	}
+	st = mustLoad(t, base)
+	assertRecord(t, "heartbeat", st.Heartbeat, 1000, true, "") // still there
+	assertRecord(t, "run_started", st.RunStarted, 2000, true, "")
+	if st.RunFinished != nil || st.RunHang != nil {
+		t.Fatalf("finished/hang should still be nil, got %+v", st)
+	}
+
+	if err := RecordPing(base, "centralized", KindRunFinished, 3000, true, nil); err != nil {
+		t.Fatalf("RecordPing finish: %v", err)
+	}
+	st = mustLoad(t, base)
+	assertRecord(t, "run_finished", st.RunFinished, 3000, true, "")
+	if st.Heartbeat == nil || st.RunStarted == nil || st.RunHang != nil {
+		t.Fatalf("finish step: unexpected field state %+v", st)
+	}
+
+	if err := RecordPing(base, "centralized", KindRunHang, 4000, false, errors.New("timed out")); err != nil {
+		t.Fatalf("RecordPing hang: %v", err)
+	}
+	st = mustLoad(t, base)
+	assertRecord(t, "run_hang", st.RunHang, 4000, false, "timed out")
+	if st.Heartbeat == nil || st.RunStarted == nil || st.RunFinished == nil {
+		t.Fatalf("hang step: earlier records must persist, got %+v", st)
+	}
+}
+
+// TestLoadStatusMissingFile: an untouched base dir has no file at all -> zero
+// Status, nil error (the "nothing recorded yet" path).
+func TestLoadStatusMissingFile(t *testing.T) {
+	base := t.TempDir()
+	st, err := LoadStatus(base)
+	if err != nil {
+		t.Fatalf("LoadStatus on missing file: unexpected error %v", err)
+	}
+	if !isZeroStatus(st) {
+		t.Fatalf("LoadStatus on missing file should be zero, got %+v", st)
+	}
+}
+
+// TestLoadStatusEmptyFile: a zero-byte file (e.g. an interrupted write) must be
+// treated exactly like a missing file, not as malformed JSON.
+func TestLoadStatusEmptyFile(t *testing.T) {
+	base := t.TempDir()
+	path := StatusPath(base)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("mkdir identity dir: %v", err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write empty status file: %v", err)
+	}
+	st, err := LoadStatus(base)
+	if err != nil {
+		t.Fatalf("LoadStatus on empty file: unexpected error %v", err)
+	}
+	if !isZeroStatus(st) {
+		t.Fatalf("LoadStatus on empty file should be zero, got %+v", st)
+	}
+}
+
+// TestLoadStatusBadJSON: garbage content surfaces as an error, and the returned
+// Status is the zero value so a tolerant caller renders "no data" rather than
+// trusting a half-parsed struct.
+func TestLoadStatusBadJSON(t *testing.T) {
+	base := t.TempDir()
+	path := StatusPath(base)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("mkdir identity dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("write bad status file: %v", err)
+	}
+	st, err := LoadStatus(base)
+	if err == nil {
+		t.Fatalf("LoadStatus on bad JSON should error")
+	}
+	if !isZeroStatus(st) {
+		t.Fatalf("LoadStatus on bad JSON should return zero Status, got %+v", st)
+	}
+}
+
+// TestErrPopulatedOnlyOnFailure: a nil pingErr leaves Err empty (OK path); a
+// non-nil pingErr stores its text verbatim (the Reporter has already redacted it).
+func TestErrPopulatedOnlyOnFailure(t *testing.T) {
+	base := t.TempDir()
+
+	if err := RecordPing(base, "self", KindHeartbeat, 10, true, nil); err != nil {
+		t.Fatalf("RecordPing ok: %v", err)
+	}
+	if st := mustLoad(t, base); st.Heartbeat == nil || st.Heartbeat.Err != "" {
+		t.Fatalf("nil pingErr should leave Err empty, got %+v", st.Heartbeat)
+	}
+
+	if err := RecordPing(base, "self", KindHeartbeat, 20, false, errors.New("healthcheck alive: dial tcp: refused")); err != nil {
+		t.Fatalf("RecordPing fail: %v", err)
+	}
+	st := mustLoad(t, base)
+	if st.Heartbeat == nil || st.Heartbeat.OK {
+		t.Fatalf("failed ping should record OK=false, got %+v", st.Heartbeat)
+	}
+	if st.Heartbeat.Err != "healthcheck alive: dial tcp: refused" {
+		t.Fatalf("Err = %q, want the redacted ping error", st.Heartbeat.Err)
+	}
+}
+
+// TestStatusPathShape pins the file location both siblings depend on.
+func TestStatusPathShape(t *testing.T) {
+	base := "/opt/proxsave"
+	want := filepath.Join(base, "identity", ".healthcheck_status.json")
+	if got := StatusPath(base); got != want {
+		t.Fatalf("StatusPath = %q, want %q", got, want)
+	}
+}
+
+// TestUnknownKindError: a kind the switch does not recognize returns a non-nil
+// error and never creates the file (the write is skipped before it happens).
+func TestUnknownKindError(t *testing.T) {
+	base := t.TempDir()
+	err := RecordPing(base, "centralized", "bogus-kind", 1, true, nil)
+	if err == nil {
+		t.Fatalf("unknown kind should return an error")
+	}
+	if _, statErr := os.Stat(StatusPath(base)); !os.IsNotExist(statErr) {
+		t.Fatalf("unknown kind must not create the status file (stat err=%v)", statErr)
+	}
+}
+
+// TestAtomicWriteLeavesNoTmp: the write goes through a ".tmp" sibling that is
+// renamed into place, so the identity dir must hold only the final file
+// afterwards (no leftover temp).
+func TestAtomicWriteLeavesNoTmp(t *testing.T) {
+	base := t.TempDir()
+	if err := RecordPing(base, "centralized", KindRunFinished, 5000, true, nil); err != nil {
+		t.Fatalf("RecordPing: %v", err)
+	}
+	dir := filepath.Dir(StatusPath(base))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read identity dir: %v", err)
+	}
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".tmp" {
+			t.Fatalf("leftover temp file after atomic write: %s", e.Name())
+		}
+	}
+	if _, err := os.Stat(StatusPath(base)); err != nil {
+		t.Fatalf("final status file missing after write: %v", err)
+	}
+}
+
+// --- helpers ---
+
+func mustLoad(t *testing.T, base string) Status {
+	t.Helper()
+	st, err := LoadStatus(base)
+	if err != nil {
+		t.Fatalf("LoadStatus: %v", err)
+	}
+	return st
+}
+
+func assertRecord(t *testing.T, name string, got *PingRecord, wantTS int64, wantOK bool, wantErr string) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s record is nil, want set", name)
+	}
+	if got.TS != wantTS {
+		t.Fatalf("%s TS = %d, want %d", name, got.TS, wantTS)
+	}
+	if got.OK != wantOK {
+		t.Fatalf("%s OK = %v, want %v", name, got.OK, wantOK)
+	}
+	if got.Err != wantErr {
+		t.Fatalf("%s Err = %q, want %q", name, got.Err, wantErr)
+	}
+}
+
+func isZeroStatus(st Status) bool {
+	return st.Mode == "" && st.Heartbeat == nil && st.RunStarted == nil &&
+		st.RunFinished == nil && st.RunHang == nil
+}

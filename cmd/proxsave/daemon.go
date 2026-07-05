@@ -64,6 +64,13 @@ type daemon struct {
 	fetchWarned bool // centralized fetch already warned once (throttle recurring WARN)
 	// newBackupCmd builds the child backup command; overridable in tests.
 	newBackupCmd func(ctx context.Context) *exec.Cmd
+
+	// statusMu serializes writes to the shared healthcheck status file: the
+	// heartbeat loop and runOnce record ping outcomes concurrently, and
+	// health.RecordPing is a read-modify-write, so it needs its own lock. Kept
+	// separate from mu (which guards reporter/fetchWarned across buildReporter) so
+	// a status write never contends with reporter resolution.
+	statusMu sync.Mutex
 }
 
 func runDaemon(rt *appRuntime) int {
@@ -184,32 +191,64 @@ func (d *daemon) runOnce(parentCtx context.Context) {
 	d.reportBestEffort("finish", func() error { return d.finishPing(parentCtx, r, rid, code, logBody) })
 }
 
+// A nil reporter means no ping URL was ever resolved (unpaired/centralized, or the
+// server was down at startup with no cached backup.env URLs), so NOTHING can be
+// transmitted. The helpers report that as ErrNoBackupURL (symmetric with beat's
+// r==nil guard) so reportBestEffort's swallow-and-skip path excludes it and does NOT
+// record a phantom RunFinished{OK:true} for a ping that never left the process.
 func (d *daemon) startPing(ctx context.Context, r backupReporter, rid string) error {
 	if r == nil {
-		return nil
+		return health.ErrNoBackupURL
 	}
 	return r.RunStarted(ctx, rid)
 }
 
 func (d *daemon) finishPing(ctx context.Context, r backupReporter, rid string, code int, logTail string) error {
 	if r == nil {
-		return nil
+		return health.ErrNoBackupURL
 	}
 	return r.RunFinished(ctx, rid, code, logTail)
 }
 
 func (d *daemon) hangPing(ctx context.Context, r backupReporter, rid, logTail string) error {
 	if r == nil {
-		return nil
+		return health.ErrNoBackupURL
 	}
 	return r.RunHang(ctx, rid, d.maxRunDuration(), logTail)
 }
 
-// reportBestEffort logs a ping failure at debug (a down monitor must never break
-// the daemon); a "not configured" error is silently ignored.
+// reportBestEffort runs one outcome ping (start/hang/finish), records its real
+// transmission result to the shared status file, and never lets a down monitor
+// break the daemon. An ErrNo*URL means no URL was resolved so nothing was
+// transmitted: it is swallowed and NOT recorded (recording it would misreport a
+// failed ping). Every other result, success included, is a genuine transmission
+// attempt worth persisting so the run-side section can report the real state.
 func (d *daemon) reportBestEffort(label string, fn func() error) {
-	if err := fn(); err != nil && !errors.Is(err, health.ErrNoBackupURL) && !errors.Is(err, health.ErrNoAliveURL) {
+	done := logging.DebugStart(d.logger, "hc ping", "kind=%s", label)
+	err := fn()
+	done(err)
+	if errors.Is(err, health.ErrNoBackupURL) || errors.Is(err, health.ErrNoAliveURL) {
+		logging.Debug("daemon: %s ping skipped (no url configured)", label)
+		return
+	}
+	if err != nil {
+		// err is already redacted by the Reporter (redactURLErr strips the url).
 		logging.Debug("daemon: %s ping failed: %v", label, err)
+	}
+	// label is already the kind ("start"/"hang"/"finish" == KindRun*).
+	d.recordPing(label, err)
+}
+
+// recordPing persists one real transmission outcome to the shared status file,
+// serialized by statusMu because the heartbeat loop and runOnce write it
+// concurrently and health.RecordPing is a read-modify-write. Best effort: a write
+// error must not break the daemon, so it is only logged at debug. The ping error
+// text is already redacted by the Reporter, so this never leaks a URL or secret.
+func (d *daemon) recordPing(kind string, pingErr error) {
+	d.statusMu.Lock()
+	defer d.statusMu.Unlock()
+	if err := health.RecordPing(d.cfg.BaseDir, d.cfg.HealthcheckMode, kind, d.now().Unix(), pingErr == nil, pingErr); err != nil {
+		logging.Debug("daemon: record %s ping status failed: %v", kind, err)
 	}
 }
 
@@ -245,9 +284,20 @@ func (d *daemon) beat(ctx context.Context) {
 	if r == nil {
 		return
 	}
-	if err := r.Heartbeat(ctx); err != nil && !errors.Is(err, health.ErrNoAliveURL) {
+	done := logging.DebugStart(d.logger, "hc ping", "kind=%s", health.KindHeartbeat)
+	err := r.Heartbeat(ctx)
+	done(err)
+	// ErrNoAliveURL means the alive URL was never resolved, so nothing was
+	// transmitted: swallow it and do NOT record it. Any other result, success
+	// included, is a real heartbeat transmission worth persisting.
+	if errors.Is(err, health.ErrNoAliveURL) {
+		logging.Debug("daemon: heartbeat ping skipped (no url configured)")
+		return
+	}
+	if err != nil {
 		logging.Debug("daemon: heartbeat ping failed: %v", err)
 	}
+	d.recordPing(health.KindHeartbeat, err)
 }
 
 // buildReporter resolves the two ping URLs (centralized fetch from the server, or
