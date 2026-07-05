@@ -34,14 +34,15 @@ type SelectorItem[T any] struct {
 // Selector is a list picker that resolves to the chosen item's value.
 type Selector[T any] struct {
 	shell.Resolver[T]
-	title     string
-	items     []SelectorItem[T]
-	cursor    int // index into the visible (filtered) rows
-	offset    int // scroll offset into the visible rows
-	filter    string
-	filtering bool
-	backErr   error
-	prompt    string
+	title        string
+	items        []SelectorItem[T]
+	cursor       int // index into the visible (filtered) rows
+	offset       int // scroll offset into the visible rows
+	filter       string
+	filtering    bool
+	backErr      error
+	prompt       string
+	promptStyled bool // prompt is pre-rendered (colors/box) - render verbatim, don't sanitize/wrap
 
 	lastRowsTop int // body row of the first visible item (set by View)
 }
@@ -67,6 +68,17 @@ func WithSelectorCursor[T any](i int) SelectorOption[T] {
 // WithSelectorPrompt adds an explanatory line under the title.
 func WithSelectorPrompt[T any](prompt string) SelectorOption[T] {
 	return func(s *Selector[T]) { s.prompt = sanitize(prompt) }
+}
+
+// WithSelectorPromptStyled sets a PRE-RENDERED prompt (already carrying colors,
+// borders, etc.) rendered verbatim under the title - NOT sanitized and NOT wrapped
+// in the default text style. The caller owns the styling and MUST ensure any
+// embedded dynamic data is already sanitized/validated.
+func WithSelectorPromptStyled[T any](rendered string) SelectorOption[T] {
+	return func(s *Selector[T]) {
+		s.prompt = rendered
+		s.promptStyled = true
+	}
 }
 
 // NewSelector builds a list picker screen. Labels and descriptions are
@@ -311,7 +323,11 @@ func (s *Selector[T]) View(width, height int) string {
 	var b strings.Builder
 	b.WriteString(theme.Emphasis.Render(s.title))
 	if s.prompt != "" {
-		b.WriteString("\n" + theme.Text.Render(s.prompt))
+		if s.promptStyled {
+			b.WriteString("\n" + s.prompt)
+		} else {
+			b.WriteString("\n" + theme.Text.Render(s.prompt))
+		}
 	}
 	b.WriteString("\n\n")
 
