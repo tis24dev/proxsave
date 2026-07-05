@@ -116,7 +116,7 @@ func initializeTelegramNotification(opts backupModeOptions, orch *orchestrator.O
 		Mode:          notify.TelegramMode(cfg.TelegramBotType),
 		BotToken:      cfg.TelegramBotToken,
 		ChatID:        cfg.TelegramChatID,
-		ServerAPIHost: cfg.TelegramServerAPIHost,
+		ServerAPIHost: cfg.ServerAPIHost,
 		ServerID:      cfg.ServerID,
 		NotifySecret:  cfg.TelegramNotifySecret,
 		BaseDir:       cfg.BaseDir,

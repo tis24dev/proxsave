@@ -83,10 +83,10 @@ func TestHealthchecksSectionActiveReusesCapturedLink(t *testing.T) {
 func TestHealthchecksSectionActiveMintsWhenNoCapture(t *testing.T) {
 	var buf bytes.Buffer
 	ch := newHCTestChannel(&config.Config{
-		HealthcheckEnabled:    true,
-		HealthcheckMode:       "centralized",
-		TelegramServerAPIHost: "https://bot",
-		ServerID:              "srv1",
+		HealthcheckEnabled: true,
+		HealthcheckMode:    "centralized",
+		ServerAPIHost:      "https://bot",
+		ServerID:           "srv1",
 	}, &buf)
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 	minted := 0

@@ -29,7 +29,7 @@ func stubHealthcheckBootstrap(t *testing.T, cfg *config.Config, cfgErr error, se
 
 func TestBuildHealthcheckSetupBootstrap(t *testing.T) {
 	daemonCfg := func() *config.Config {
-		return &config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized", TelegramServerAPIHost: "https://h"}
+		return &config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized", ServerAPIHost: "https://h"}
 	}
 	tests := []struct {
 		name     string

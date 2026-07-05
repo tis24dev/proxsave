@@ -96,7 +96,7 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 		link = stats.HealthcheckLink
 	}
 	if link == "" && h.mintLink != nil {
-		if minted, err := h.mintLink(ctx, h.cfg.TelegramServerAPIHost, h.cfg.ServerID, secret); err == nil {
+		if minted, err := h.mintLink(ctx, h.cfg.ServerAPIHost, h.cfg.ServerID, secret); err == nil {
 			link = minted
 		} else {
 			h.info("%s: portal link not available this run", healthchecksSectionName)

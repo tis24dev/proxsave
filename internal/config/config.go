@@ -187,13 +187,13 @@ type Config struct {
 	AgeRecipientFile      string
 
 	// Telegram Notifications
-	TelegramEnabled       bool
-	TelegramBotType       string // "personal" or "centralized"
-	TelegramBotToken      string // For personal mode
-	TelegramChatID        string // For personal mode
-	TelegramServerAPIHost string // For centralized mode
-	ServerID              string // Server identifier for centralized mode
-	TelegramNotifySecret  string // Deprecated: no longer read from backup.env; the relay secret is provisioned via TOFU into the immutable identity file. Kept "" for compatibility.
+	TelegramEnabled      bool
+	TelegramBotType      string // "personal" or "centralized"
+	TelegramBotToken     string // For personal mode
+	TelegramChatID       string // For personal mode
+	ServerAPIHost        string // Shared bot-server base host (Telegram relay + centralized healthchecks); centralized mode
+	ServerID             string // Server identifier for centralized mode
+	TelegramNotifySecret string // Deprecated: no longer read from backup.env; the relay secret is provisioned via TOFU into the immutable identity file. Kept "" for compatibility.
 
 	// Telegram delivery confirmation (two-response CLI): poll the server for the
 	// real Telegram delivery outcome after the relay accepts the notification.
@@ -756,7 +756,7 @@ func (c *Config) parseNotificationSettings() {
 	c.TelegramBotType = c.getString("BOT_TELEGRAM_TYPE", "centralized")
 	c.TelegramBotToken = c.getString("TELEGRAM_BOT_TOKEN", "")
 	c.TelegramChatID = c.getString("TELEGRAM_CHAT_ID", "")
-	c.TelegramServerAPIHost = "https://bot.proxsave.dev"
+	c.ServerAPIHost = "https://bot.proxsave.dev"
 	c.ServerID = ""
 	c.TelegramNotifySecret = "" // no longer read from backup.env; provisioned via TOFU into the immutable identity file
 	c.TelegramConfirmDelivery = c.getBool("TELEGRAM_CONFIRM_DELIVERY", true)

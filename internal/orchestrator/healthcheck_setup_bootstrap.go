@@ -70,7 +70,7 @@ func BuildHealthcheckSetupBootstrap(configPath, baseDir string) (HealthcheckSetu
 	if cfg != nil {
 		state.HealthcheckEnabled = cfg.HealthcheckEnabled
 		state.HealthcheckMode = strings.ToLower(strings.TrimSpace(cfg.HealthcheckMode))
-		state.ServerAPIHost = strings.TrimSpace(cfg.TelegramServerAPIHost)
+		state.ServerAPIHost = strings.TrimSpace(cfg.ServerAPIHost)
 	}
 
 	if !state.HealthcheckEnabled {
@@ -81,7 +81,7 @@ func BuildHealthcheckSetupBootstrap(configPath, baseDir string) (HealthcheckSetu
 		state.HealthcheckMode = "centralized"
 	}
 	if state.ServerAPIHost == "" {
-		state.ServerAPIHost = defaultTelegramServerAPIHost
+		state.ServerAPIHost = defaultServerAPIHost
 	}
 	if state.HealthcheckMode == "self" {
 		state.Eligibility = HealthcheckSetupSkipSelfMode
