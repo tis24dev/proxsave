@@ -60,7 +60,7 @@ func run(d *driver, ctx context.Context) <-chan struct {
 		err    error
 	}, 1)
 	go func() {
-		action, err := Run(ctx, d.session)
+		action, err := Run(ctx, d.session, DaemonStateOnCron)
 		ch <- struct {
 			action Action
 			err    error
@@ -76,7 +76,8 @@ func run(d *driver, ctx context.Context) <-chan struct {
 func TestMenuRowOrder(t *testing.T) {
 	expected := []Action{
 		ActionBackup, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure,
-		ActionCheckTelegram, ActionCheckHealthcheck, ActionPostInstallCheck, ActionExit,
+		ActionCheckTelegram, ActionCheckHealthcheck, ActionPostInstallCheck,
+		ActionDaemonSetup, ActionDaemonStatus, ActionExit,
 	}
 	for i, want := range expected {
 		d := newDriver(t)

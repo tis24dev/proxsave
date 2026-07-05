@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -88,7 +89,7 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		// reaches the dashboard by accident must not hang forever. Exit, never
 		// fall through to a surprise backup.
 		menuCtx, cancelMenu := context.WithTimeout(ctx, dashboardIdleTimeout)
-		action, err := menu.Run(menuCtx, session)
+		action, err := menu.Run(menuCtx, session, dashboardDaemonState(args))
 		cancelMenu()
 		if err != nil {
 			// The deferred Close releases the terminal before these prints.
@@ -128,6 +129,19 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		case menu.ActionReconfigure:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=install")
 			args.Install = true
+		case menu.ActionDaemonSetup, menu.ActionDaemonRemove:
+			// Admin ops: same path as --daemon-setup / --daemon-remove (bootstrap
+			// logging on the plain terminal). Close the UI, set the flag, and let the
+			// normal mode dispatch run it (like the backup action).
+			if action == menu.ActionDaemonSetup {
+				logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-setup")
+				args.DaemonSetup = true
+			} else {
+				logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-remove")
+				args.DaemonRemove = true
+			}
+			_ = session.Close()
+			return types.ExitSuccess.Int(), false
 		default:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=exit")
 			return types.ExitSuccess.Int(), true
@@ -173,11 +187,67 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 	case menu.ActionPostInstallCheck:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=post-install-check")
 		_, _ = dashboardRunPostInstallAudit(ctx, session, getExecInfo().ExecPath, configPath)
+	case menu.ActionDaemonStatus:
+		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-status")
+		runDashboardDaemonStatus(ctx, session, configPath, baseDir)
 	default:
 		return false
 	}
 	return true
 }
+
+// dashboardDaemonState decides which daemon command the menu offers, from the
+// on-disk scheduler mode + opt-out tombstone. Unreadable config -> only Status.
+func dashboardDaemonState(args *cli.Args) menu.DaemonState {
+	configPath := ""
+	if args != nil {
+		configPath = args.ConfigPath
+	}
+	baseDir, _ := detectedBaseDirOrFallback()
+	cfg, err := daemonStatusLoadConfig(configPath, baseDir)
+	if err != nil || cfg == nil {
+		return menu.DaemonStateUnknown
+	}
+	switch {
+	case cfg.SchedulerMode == "daemon":
+		return menu.DaemonStateActive
+	case cfg.DaemonOptOut:
+		return menu.DaemonStateDisabled
+	default:
+		return menu.DaemonStateOnCron
+	}
+}
+
+// runDashboardDaemonStatus shows a read-only notice with the daemon service +
+// scheduler state (config mode, opt-out, unit installed, systemctl is-active).
+func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, configPath, baseDir string) {
+	mode := "unknown"
+	optOut := "unknown"
+	if cfg, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && cfg != nil {
+		mode = cfg.SchedulerMode
+		optOut = "no"
+		if cfg.DaemonOptOut {
+			optOut = "yes"
+		}
+	}
+	unit := "not installed"
+	if daemonUnitInstalled() {
+		unit = "installed"
+	}
+	active := daemonUnitActiveState(ctx)
+	if active == "" {
+		active = "unknown"
+	}
+	msg := "Scheduler mode: " + mode + "\n" +
+		"Daemon service (proxsave-daemon.service): " + unit + "\n" +
+		"Service state (systemctl is-active): " + active + "\n" +
+		"Opted out of auto-migration (--daemon-remove): " + optOut
+	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeInfo, "Daemon status", msg))
+}
+
+// daemonStatusLoadConfig is a seam so tests can drive the daemon menu/status
+// without an on-disk config.
+var daemonStatusLoadConfig = config.LoadConfigWithBaseDir
 
 // Seams so tests can drive the diagnostics loop without the real setup screens
 // or an on-disk config.

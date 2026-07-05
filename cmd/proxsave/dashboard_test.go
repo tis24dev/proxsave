@@ -7,22 +7,30 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
-// installDashboardGates fixes the two gate seams for a test.
+// installDashboardGates fixes the two gate seams for a test. It also pins the
+// daemon menu state to DaemonStateOnCron (config load -> cron) so the menu layout
+// is deterministic (offers "Install daemon" + "Daemon status").
 func installDashboardGates(t *testing.T, bare, interactive bool) {
 	t.Helper()
 	origBare := dashboardIsBareInvocation
 	origInteractive := dashboardIsInteractive
+	origDaemonCfg := daemonStatusLoadConfig
 	dashboardIsBareInvocation = func() bool { return bare }
 	dashboardIsInteractive = func() bool { return interactive }
+	daemonStatusLoadConfig = func(configPath, baseDir string) (*config.Config, error) {
+		return &config.Config{SchedulerMode: "cron"}, nil
+	}
 	t.Cleanup(func() {
 		dashboardIsBareInvocation = origBare
 		dashboardIsInteractive = origInteractive
+		daemonStatusLoadConfig = origDaemonCfg
 	})
 }
 
@@ -127,9 +135,16 @@ func TestDashboardActions(t *testing.T) {
 				t.Fatal("install flag not set")
 			}
 		}},
-		// Exit moved below the diagnostics group; down skips the separator, so it
-		// is the 9th selectable row (8 downs).
-		{"exit row", "down down down down down down down down enter", true, nil},
+		// Diagnostics group (telegram/hc/post-install) are rows 6-8, then the Daemon
+		// group: Install daemon (row 9, 8 downs) + Daemon status (row 10). Install
+		// daemon sets the flag and hands off like backup (handled=false).
+		{"daemon install", "down down down down down down down down enter", false, func(t *testing.T, args *cli.Args) {
+			if !args.DaemonSetup || args.DaemonRemove {
+				t.Fatalf("Install daemon must set DaemonSetup only: %+v", args)
+			}
+		}},
+		// Exit is the last selectable (11th): 10 downs, skipping both separators.
+		{"exit row", "down down down down down down down down down down enter", true, nil},
 		{"esc exits", "esc", true, nil},
 		{"ctrl+c exits", "ctrl+c", true, nil},
 	}
@@ -146,6 +161,72 @@ func TestDashboardActions(t *testing.T) {
 				tc.check(t, args)
 			}
 		})
+	}
+}
+
+// TestDashboardDaemonStatusLoopsBack: Daemon status shows a read-only notice in
+// the live session and returns to the menu, setting no flag.
+func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
+	installDashboardGates(t, true, true) // stubs cron -> Install daemon + Daemon status
+	driver := installDashboardSessionSeam(t)
+	args := &cli.Args{}
+	resCh := make(chan bool, 1)
+	go func() {
+		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
+		resCh <- handled
+	}()
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down down down down down enter") // Daemon status (9 downs)
+	driver.waitScreen("Daemon status")                                // the notice
+	driver.keys("enter")                                              // dismiss
+	driver.waitScreen("Dashboard")                                    // back at the menu
+	driver.keys("esc")                                                // exit
+	select {
+	case handled := <-resCh:
+		if !handled {
+			t.Fatal("esc from menu must exit handled")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("dashboard did not resolve")
+	}
+	if args.DaemonSetup || args.DaemonRemove {
+		t.Fatalf("Daemon status must set no flag: %+v", args)
+	}
+}
+
+// TestDashboardDaemonRemoveWhenActive: with the daemon active the menu offers
+// "Disable daemon", which sets DaemonRemove and hands off (handled=false).
+func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
+	installDashboardGates(t, true, true)
+	orig := daemonStatusLoadConfig
+	daemonStatusLoadConfig = func(configPath, baseDir string) (*config.Config, error) {
+		return &config.Config{SchedulerMode: "daemon"}, nil
+	}
+	t.Cleanup(func() { daemonStatusLoadConfig = orig })
+	driver := installDashboardSessionSeam(t)
+	args := &cli.Args{}
+	type outcome struct {
+		code    int
+		handled bool
+	}
+	resCh := make(chan outcome, 1)
+	go func() {
+		code, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
+		resCh <- outcome{code, handled}
+	}()
+	driver.waitScreen("Dashboard")
+	// Active state: Daemon group = "Disable daemon" (row 9, 8 downs) + "Daemon status".
+	driver.keys("down down down down down down down down enter") // Disable daemon
+	select {
+	case res := <-resCh:
+		if res.handled {
+			t.Fatalf("Disable daemon must hand off (handled=false): %+v", res)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("dashboard did not resolve")
+	}
+	if !args.DaemonRemove || args.DaemonSetup {
+		t.Fatalf("Disable daemon must set DaemonRemove only: %+v", args)
 	}
 }
 
