@@ -87,18 +87,53 @@ func initializeEmailNotification(opts backupModeOptions, orch *orchestrator.Orch
 	logging.Info("✓ Email initialized (method: %s)", cfg.EmailDeliveryMethod)
 }
 
-// initializeHealthcheckSection registers the always-visible Phase-7 "Healthchecks"
-// section when HEALTHCHECK_ENABLED. Decoupled from Telegram. No Skip line here: when
-// disabled, the Phase-7 entries loop emits the single "Healthchecks: disabled" line
-// itself (registering the channel only when enabled keeps it out of the remainder
-// dispatch, so there is never a double line).
+// initializeHealthcheckSection verifies the healthchecks config at run start and
+// registers the Phase-7 section, EXACTLY like the other notification channels: it prints
+// a real init line (SKIP when disabled, a WARNING that disables the section on a config
+// problem, or a "✓ initialized" when usable) instead of being silent. This is a
+// CONFIG-only check (no network); the REAL transmission state is reported later by the
+// Phase-7 section from the daemon status file. Registering only when usable keeps a
+// disabled/broken section out of the dispatch, and the Phase-7 entries loop renders the
+// matching "disabled" / "enabled but not initialized" line just as it does for the others.
 func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orchestrator) {
 	cfg := opts.cfg
+	logger := opts.logger
 	if cfg == nil || !cfg.HealthcheckEnabled {
+		logging.DebugStep(logger, "notifications init", "healthchecks disabled")
+		logging.Skip("Healthchecks: disabled")
 		return
 	}
-	orch.RegisterNotificationChannel(orchestrator.NewHealthchecksChannel(cfg, opts.logger))
-	logging.DebugStep(opts.logger, "notifications init", "healthchecks section enabled (mode=%s)", cfg.HealthcheckMode)
+	if problem := healthcheckConfigProblem(cfg); problem != "" {
+		logging.DebugStep(logger, "notifications init", "healthchecks not usable: %s", problem)
+		logging.Warning("Healthchecks: %s; section disabled", problem)
+		return
+	}
+	logging.DebugStep(logger, "notifications init", "healthchecks enabled (mode=%s)", cfg.HealthcheckMode)
+	orch.RegisterNotificationChannel(orchestrator.NewHealthchecksChannel(cfg, logger))
+	logging.Info("✓ Healthchecks initialized (mode: %s)", cfg.HealthcheckMode)
+}
+
+// healthcheckConfigProblem returns a short reason when the healthcheck config is
+// structurally unusable, or "" when it is fine. Config-only (mirrors how the other
+// notifiers validate at init) - it never touches the network or the on-disk secret;
+// runtime provisioning/transmission is the Phase-7 section's job (the daemon status file).
+func healthcheckConfigProblem(cfg *config.Config) string {
+	switch cfg.HealthcheckMode {
+	case "self":
+		// Self mode needs a check to ping: a full alive URL, or an alive check id (the
+		// ping endpoint defaults to a public host, so the id/URL is the discriminator).
+		// The service-alive (heartbeat / dead-man) check is the mandatory one; a
+		// backup-only self config has no liveness signal. Name it precisely so the
+		// message is not mistaken for "no monitoring at all".
+		if cfg.HealthcheckAliveURL == "" && cfg.HealthcheckAliveID == "" {
+			return "self-hosted monitoring has no service-alive check configured (set HEALTHCHECK_ALIVE_ID or HEALTHCHECK_ALIVE_URL)"
+		}
+	default: // centralized
+		if strings.TrimSpace(cfg.ServerID) == "" {
+			return "centralized monitoring requires a SERVER_ID (pair the host with the bot)"
+		}
+	}
+	return ""
 }
 
 func initializeTelegramNotification(opts backupModeOptions, orch *orchestrator.Orchestrator) {
