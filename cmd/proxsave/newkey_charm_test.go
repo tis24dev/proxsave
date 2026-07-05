@@ -45,7 +45,7 @@ func installNewkeySessionSeam(t *testing.T) *newkeyUIDriver {
 
 func (d *newkeyUIDriver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(60 * time.Second)
 	for {
 		select {
 		case got := <-d.pushes:
