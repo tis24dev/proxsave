@@ -421,6 +421,32 @@ func TestFormatPreservedEntriesResolvesAgainstBaseDir(t *testing.T) {
 	}
 }
 
+func TestBuildTelegramPrompt(t *testing.T) {
+	// Verified -> green "✓ VERIFIED"; Server ID boxed.
+	v := buildTelegramPrompt("123456789", "/id/.server_identity", true, "Linked.", true, false, false)
+	if !strings.Contains(ansi.Strip(v), "✓ VERIFIED") || !strings.Contains(v, "34;197;94") {
+		t.Fatalf("verified must be green ✓: %q", ansi.Strip(v))
+	}
+	if !strings.Contains(ansi.Strip(v), "╭") || !strings.Contains(ansi.Strip(v), "123456789") {
+		t.Fatalf("Server ID must be boxed: %q", ansi.Strip(v))
+	}
+	// Partial -> yellow "⚠ PARTIAL".
+	p := buildTelegramPrompt("1", "", false, "Linked, token unsaved.", true, true, false)
+	if !strings.Contains(ansi.Strip(p), "⚠ PARTIAL") || !strings.Contains(p, "234;179;8") {
+		t.Fatalf("partial must be yellow ⚠: %q", ansi.Strip(p))
+	}
+	// Fatal -> red "✗ FAILED".
+	f := buildTelegramPrompt("1", "", false, "Invalid Server ID.", false, false, true)
+	if !strings.Contains(ansi.Strip(f), "✗ FAILED") || !strings.Contains(f, "239;68;68") {
+		t.Fatalf("failed must be red ✗: %q", ansi.Strip(f))
+	}
+	// Neutral -> no keyword, message verbatim.
+	n := ansi.Strip(buildTelegramPrompt("1", "", false, "Not checked yet.", false, false, false))
+	if !strings.Contains(n, "Not checked yet.") {
+		t.Fatalf("neutral status missing: %q", n)
+	}
+}
+
 func TestRunTelegramSetup(t *testing.T) {
 	d := newDriver(t)
 
