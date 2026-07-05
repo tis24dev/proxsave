@@ -4,9 +4,11 @@
 // It is deliberately dependency-light: an *http.Client plus two already-resolved
 // ping URLs (a "service alive" check and a "backup outcome" check). URL
 // resolution (centralized fetch from the proxsave_server, or self-mode
-// endpoint+slug assembly) lives elsewhere; this package only pings. Keeping it
-// free of the logging package makes it trivially unit-testable; the daemon that
-// wires it is responsible for registering the ping URLs as log secrets.
+// endpoint+slug assembly) lives elsewhere; this package only pings. The Reporter
+// takes no *logging.Logger, so it is trivially unit-testable without wiring a
+// logger; the daemon that wires it registers the ping URLs as log secrets.
+// (The package as a whole does now touch logging transitively via the
+// centralized-config fetch in config.go -> serverbot; the Reporter itself does not.)
 package health
 
 import (
@@ -178,9 +180,11 @@ func (r *Reporter) ping(ctx context.Context, u, body, label string) error {
 }
 
 // redactURLErr strips the URL from a *url.Error so it never reaches a log or a
-// caller: the ping URL embeds the check UUID (a low-capability secret) and the
-// centralized-fetch URL embeds the server_id. net's *url.Error.Error() prints the
-// full URL verbatim; we keep only the operation + underlying transport error.
+// caller: the ping URL embeds the check UUID (a low-capability secret). net's
+// *url.Error.Error() prints the full URL verbatim; we keep only the operation +
+// underlying transport error. Kept local (not logging.RedactURLError) so the
+// Reporter stays *logging.Logger-free; it is the byte-identical twin of
+// logging.RedactURLError (the canonical copy serverbot uses) -- keep them in sync.
 func redactURLErr(err error) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
