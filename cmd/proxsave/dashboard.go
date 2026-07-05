@@ -228,7 +228,7 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		title = "Installing daemon"
 		work = "Installing and enabling proxsave-daemon.service..."
 		doneTitle = "Daemon installed"
-		doneMsg = "The resident daemon (proxsave-daemon.service) is active; the cron entry was removed."
+		doneMsg = "The resident daemon (proxsave-daemon.service) is active. The cron entry was removed."
 	}
 	execToken := daemonSelfExecPath()
 	var opErr error
