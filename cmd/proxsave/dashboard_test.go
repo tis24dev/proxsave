@@ -9,6 +9,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/installer"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -22,15 +23,26 @@ func installDashboardGates(t *testing.T, bare, interactive bool) {
 	origBare := dashboardIsBareInvocation
 	origInteractive := dashboardIsInteractive
 	origDaemonCfg := daemonStatusLoadConfig
+	origApplyDaemon := daemonApplyDaemonMode
+	origApplyCron := daemonApplyCronMode
 	dashboardIsBareInvocation = func() bool { return bare }
 	dashboardIsInteractive = func() bool { return interactive }
 	daemonStatusLoadConfig = func(configPath, baseDir string) (*config.Config, error) {
 		return &config.Config{SchedulerMode: "cron"}, nil
 	}
+	// Stub the privileged apply ops (no real systemctl / /etc/systemd writes).
+	daemonApplyDaemonMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) error {
+		return nil
+	}
+	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger, optOut bool) error {
+		return nil
+	}
 	t.Cleanup(func() {
 		dashboardIsBareInvocation = origBare
 		dashboardIsInteractive = origInteractive
 		daemonStatusLoadConfig = origDaemonCfg
+		daemonApplyDaemonMode = origApplyDaemon
+		daemonApplyCronMode = origApplyCron
 	})
 }
 
@@ -135,15 +147,9 @@ func TestDashboardActions(t *testing.T) {
 				t.Fatal("install flag not set")
 			}
 		}},
-		// Diagnostics group (telegram/hc/post-install) are rows 6-8, then the Daemon
-		// group: Install daemon (row 9, 8 downs) + Daemon status (row 10). Install
-		// daemon sets the flag and hands off like backup (handled=false).
-		{"daemon install", "down down down down down down down down enter", false, func(t *testing.T, args *cli.Args) {
-			if !args.DaemonSetup || args.DaemonRemove {
-				t.Fatalf("Install daemon must set DaemonSetup only: %+v", args)
-			}
-		}},
 		// Exit is the last selectable (11th): 10 downs, skipping both separators.
+		// (The Daemon group items run in-session and loop; they are covered by the
+		// dedicated in-session tests below, not this fall-through harness.)
 		{"exit row", "down down down down down down down down down down enter", true, nil},
 		{"esc exits", "esc", true, nil},
 		{"ctrl+c exits", "ctrl+c", true, nil},
@@ -194,8 +200,48 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 	}
 }
 
+// TestDashboardDaemonInstallInSession: "Install daemon" runs the apply op inside a
+// RunTask (graphical), shows a success notice, and loops back to the menu WITHOUT
+// leaving the UI or setting a flag.
+func TestDashboardDaemonInstallInSession(t *testing.T) {
+	installDashboardGates(t, true, true) // cron -> Install daemon; apply stubbed -> nil
+	applied := 0
+	daemonApplyDaemonMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) error {
+		applied++
+		return nil
+	}
+	driver := installDashboardSessionSeam(t)
+	args := &cli.Args{}
+	resCh := make(chan bool, 1)
+	go func() {
+		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
+		resCh <- handled
+	}()
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down down down down enter") // Install daemon (8 downs)
+	driver.waitScreen("Daemon installed")                        // success notice (after the RunTask)
+	driver.keys("enter")                                         // dismiss
+	driver.waitScreen("Dashboard")                               // looped back
+	driver.keys("esc")                                           // exit
+	select {
+	case handled := <-resCh:
+		if !handled {
+			t.Fatal("esc from menu must exit handled")
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("dashboard did not resolve")
+	}
+	if applied != 1 {
+		t.Fatalf("apply-daemon must run once, got %d", applied)
+	}
+	if args.DaemonSetup || args.DaemonRemove {
+		t.Fatalf("in-session daemon install must set no flag: %+v", args)
+	}
+}
+
 // TestDashboardDaemonRemoveWhenActive: with the daemon active the menu offers
-// "Disable daemon", which sets DaemonRemove and hands off (handled=false).
+// "Disable daemon", which runs the revert op in-session (RunTask + notice) and
+// loops back. An op failure surfaces as an error notice, still non-blocking.
 func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 	installDashboardGates(t, true, true)
 	orig := daemonStatusLoadConfig
@@ -203,30 +249,41 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 		return &config.Config{SchedulerMode: "daemon"}, nil
 	}
 	t.Cleanup(func() { daemonStatusLoadConfig = orig })
+	reverted := 0
+	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger, optOut bool) error {
+		reverted++
+		if !optOut {
+			t.Errorf("disable must opt out (optOut=true)")
+		}
+		return nil
+	}
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
-	type outcome struct {
-		code    int
-		handled bool
-	}
-	resCh := make(chan outcome, 1)
+	resCh := make(chan bool, 1)
 	go func() {
-		code, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- outcome{code, handled}
+		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
+		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
 	// Active state: Daemon group = "Disable daemon" (row 9, 8 downs) + "Daemon status".
 	driver.keys("down down down down down down down down enter") // Disable daemon
+	driver.waitScreen("Daemon disabled")                         // success notice
+	driver.keys("enter")                                         // dismiss
+	driver.waitScreen("Dashboard")                               // looped back
+	driver.keys("esc")
 	select {
-	case res := <-resCh:
-		if res.handled {
-			t.Fatalf("Disable daemon must hand off (handled=false): %+v", res)
+	case handled := <-resCh:
+		if !handled {
+			t.Fatal("esc must exit handled")
 		}
 	case <-time.After(60 * time.Second):
 		t.Fatal("dashboard did not resolve")
 	}
-	if !args.DaemonRemove || args.DaemonSetup {
-		t.Fatalf("Disable daemon must set DaemonRemove only: %+v", args)
+	if reverted != 1 {
+		t.Fatalf("revert-to-cron must run once, got %d", reverted)
+	}
+	if args.DaemonSetup || args.DaemonRemove {
+		t.Fatalf("in-session daemon disable must set no flag: %+v", args)
 	}
 }
 
