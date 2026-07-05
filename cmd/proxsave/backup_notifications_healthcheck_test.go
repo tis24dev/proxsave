@@ -82,35 +82,34 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 		t.Fatalf("disabled must print a SKIP line, out=%q", out)
 	}
 
-	// enabled + centralized without SERVER_ID -> config-problem WARNING, no "✓".
-	out := run(&config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"})
-	if !strings.Contains(out, "SERVER_ID") || !strings.Contains(out, "Healthchecks disabled") {
-		t.Fatalf("no-server-id must WARN + disable, out=%q", out)
-	}
-	if strings.Contains(out, "Healthchecks initialized") {
-		t.Fatalf("a broken config must NOT print initialized, out=%q", out)
+	// On ANY problem the section must (like Telegram): WARN the reason, SKIP a clean
+	// "Healthchecks: disabled", flip cfg.HealthcheckEnabled=false, and NOT print "✓".
+	assertDisabled := func(t *testing.T, name string, c *config.Config, wantReason string) {
+		t.Helper()
+		out := run(c)
+		if !strings.Contains(out, wantReason) {
+			t.Fatalf("%s: want reason %q, out=%q", name, wantReason, out)
+		}
+		if !strings.Contains(out, "Healthchecks: disabled") {
+			t.Fatalf("%s: want a clean 'Healthchecks: disabled' SKIP, out=%q", name, out)
+		}
+		if strings.Contains(out, "Healthchecks initialized") {
+			t.Fatalf("%s: must NOT print initialized, out=%q", name, out)
+		}
+		if c.HealthcheckEnabled {
+			t.Fatalf("%s: must flip HealthcheckEnabled=false so the flow treats it as disabled", name)
+		}
 	}
 
-	// usable config BUT daemon not running (no status file) -> WARNING, NOT initialized.
-	out = run(usableCfg(t, 0, false))
-	if !strings.Contains(out, "daemon not running") || !strings.Contains(out, "Healthchecks disabled") {
-		t.Fatalf("no daemon must WARN 'not running' + disable, out=%q", out)
-	}
-	if strings.Contains(out, "Healthchecks initialized") {
-		t.Fatalf("a dead daemon must NOT print initialized, out=%q", out)
-	}
-
-	// usable config + STALE heartbeat (1h old, > default 10m stale window) -> stale.
-	out = run(usableCfg(t, time.Hour, true))
-	if !strings.Contains(out, "daemon stale") || !strings.Contains(out, "Healthchecks disabled") {
-		t.Fatalf("a stale daemon must WARN 'daemon stale' + disable, out=%q", out)
-	}
-	if strings.Contains(out, "Healthchecks initialized") {
-		t.Fatalf("a stale daemon must NOT print initialized, out=%q", out)
-	}
+	// enabled + centralized without SERVER_ID -> config problem.
+	assertDisabled(t, "no-server-id", &config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, "SERVER_ID")
+	// usable config BUT daemon not running (no status file).
+	assertDisabled(t, "no-daemon", usableCfg(t, 0, false), "daemon not running")
+	// usable config + STALE heartbeat (1h old, > default 10m stale window).
+	assertDisabled(t, "stale-daemon", usableCfg(t, time.Hour, true), "daemon stale")
 
 	// usable config + FRESH heartbeat -> "✓ Healthchecks initialized (mode: centralized)".
-	out = run(usableCfg(t, 30*time.Second, true))
+	out := run(usableCfg(t, 30*time.Second, true))
 	if !strings.Contains(out, "✓ Healthchecks initialized (mode: centralized)") {
 		t.Fatalf("usable config + live daemon must print the initialized line, out=%q", out)
 	}
