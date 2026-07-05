@@ -71,18 +71,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
-			if n := len(m.stack); n > 0 {
-				// Abort the top screen: its Ask returns ErrAborted and
-				// the engine drives teardown (it owns cleanup, e.g.
-				// network rollback). The program itself keeps running.
-				top := m.stack[n-1]
-				m.stack = m.stack[:n-1]
-				top.abort()
-				return m, nil
-			}
-			// No screen to abort (engine busy between Asks): terminate
-			// the program, approximating the SIGINT the terminal would
-			// deliver outside raw mode. Pending Asks get ErrClosed.
+			// Ctrl+C is a global emergency interrupt (world standard): terminate the
+			// program from ANY screen, not just pop one level. Going back one screen
+			// is Esc / the on-screen Back item. Pending Asks resolve to ErrClosed
+			// (identical to a UI death), which every flow already treats as a clean
+			// abort. Engine safety nets that must survive an interrupt (e.g. the
+			// timeout-armed network rollback) fire independently of this UI teardown.
 			return m, tea.Interrupt
 		}
 	}

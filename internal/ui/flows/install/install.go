@@ -8,7 +8,6 @@ package install
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +23,7 @@ import (
 // mapCancel converts the shell abort sentinel into the install-cancelled
 // sentinel the cmd layer branches on.
 func mapCancel(err error) error {
-	if errors.Is(err, shell.ErrAborted) {
+	if shell.IsAbort(err) {
 		return installer.ErrInstallCancelled
 	}
 	return err
@@ -257,7 +256,7 @@ func ConfirmNewInstall(ctx context.Context, session *shell.Session, baseDir stri
 		components.WithDanger(),
 	))
 	if err != nil {
-		if errors.Is(err, shell.ErrAborted) {
+		if shell.IsAbort(err) {
 			return false, nil
 		}
 		return false, err

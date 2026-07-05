@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -35,7 +34,7 @@ func newCharmWorkflowUI(session *shell.Session, logger *logging.Logger, abortErr
 // mapAbort converts the shell-level abort sentinel (Ctrl+C, Esc) into the
 // flow's canonical abort error, leaving everything else untouched.
 func (u *charmWorkflowUI) mapAbort(err error) error {
-	if errors.Is(err, shell.ErrAborted) {
+	if shell.IsAbort(err) {
 		return u.abortErr
 	}
 	return err
@@ -185,7 +184,7 @@ func (u *charmWorkflowUI) ResolveExistingPath(ctx context.Context, path, descrip
 		}),
 	))
 	if err != nil {
-		if errors.Is(err, shell.ErrAborted) {
+		if shell.IsAbort(err) {
 			// Parity with tview: cancelling the new-path input falls back
 			// to the cancel decision without a hard error; the caller
 			// decides how to proceed.
@@ -246,7 +245,7 @@ func (u *charmWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, 
 	if err != nil {
 		// Parity with tview: the shared secret prompt reports decrypt
 		// abort semantics in every flow.
-		if errors.Is(err, shell.ErrAborted) {
+		if shell.IsAbort(err) {
 			return "", ErrDecryptAborted
 		}
 		return "", err

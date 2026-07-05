@@ -12,13 +12,25 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// ErrAborted is resolved into a pending Ask when the user aborts the current
-// screen (Ctrl+C). Flow adapters map it to their canonical abort error.
+// ErrAborted was historically resolved into a pending Ask when the user pressed
+// Ctrl+C on the current screen. Ctrl+C is now a GLOBAL interrupt (it terminates
+// the program, surfacing as ErrClosed), so ErrAborted is retained only so flow
+// adapters keep matching it defensively via IsAbort.
 var ErrAborted = errors.New("ui: aborted by user")
 
-// ErrClosed is returned by Ask when the underlying program has terminated
-// and can no longer answer.
+// ErrClosed is returned by Ask when the underlying program has terminated and can
+// no longer answer -- a UI death OR a Ctrl+C interrupt. Flow adapters treat it as
+// "abort the current operation".
 var ErrClosed = errors.New("ui: session closed")
+
+// IsAbort reports whether err signals that the user tore down the UI: a Ctrl+C
+// interrupt or a programmatic/terminal session close (both surface as ErrClosed),
+// or the legacy ErrAborted. Flows map it to their canonical abort. NOTE: Esc is
+// NOT an abort -- it resolves a per-screen Back sentinel (or a "No" answer) that
+// each screen handles BEFORE falling through to this check.
+func IsAbort(err error) bool {
+	return errors.Is(err, ErrClosed) || errors.Is(err, ErrAborted)
+}
 
 // Config describes the immutable chrome of a Session.
 type Config struct {

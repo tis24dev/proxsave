@@ -31,7 +31,7 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 		components.WithDefaultYes(true),
 	))
 	if err != nil {
-		if errors.Is(err, shell.ErrAborted) {
+		if shell.IsAbort(err) {
 			return result, nil
 		}
 		return result, err
@@ -82,7 +82,7 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 		components.WithMultiSelectBack[string](errAuditSkip),
 	))
 	if err != nil {
-		if errors.Is(err, errAuditSkip) || errors.Is(err, shell.ErrAborted) {
+		if errors.Is(err, errAuditSkip) || shell.IsAbort(err) {
 			return result, nil
 		}
 		return result, err
