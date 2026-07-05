@@ -422,28 +422,49 @@ func TestFormatPreservedEntriesResolvesAgainstBaseDir(t *testing.T) {
 }
 
 func TestBuildTelegramPrompt(t *testing.T) {
-	// Verified -> green "✓ VERIFIED"; Server ID boxed.
-	v := buildTelegramPrompt("123456789", "/id/.server_identity", true, "Linked.", true, false, false)
-	if !strings.Contains(ansi.Strip(v), "✓ VERIFIED") || !strings.Contains(v, "34;197;94") {
-		t.Fatalf("verified must be green ✓: %q", ansi.Strip(v))
+	// Linked -> green "✓ LINKED"; Server ID boxed.
+	v := buildTelegramPrompt("123456789", "/id/.server_identity", true, "Linked.", "Linked", orchestrator.TelegramSeveritySuccess, 200)
+	if !strings.Contains(ansi.Strip(v), "✓ LINKED") || !strings.Contains(v, "34;197;94") {
+		t.Fatalf("linked must be green ✓: %q", ansi.Strip(v))
 	}
 	if !strings.Contains(ansi.Strip(v), "╭") || !strings.Contains(ansi.Strip(v), "123456789") {
 		t.Fatalf("Server ID must be boxed: %q", ansi.Strip(v))
 	}
-	// Partial -> yellow "⚠ PARTIAL".
-	p := buildTelegramPrompt("1", "", false, "Linked, token unsaved.", true, true, false)
-	if !strings.Contains(ansi.Strip(p), "⚠ PARTIAL") || !strings.Contains(p, "234;179;8") {
+
+	// Partial -> yellow "⚠ LINKED (FINISHING SETUP)".
+	p := buildTelegramPrompt("1", "", false, "token unsaved", "Linked (finishing setup)", orchestrator.TelegramSeverityPartial, 200)
+	if !strings.Contains(ansi.Strip(p), "⚠ LINKED (FINISHING SETUP)") || !strings.Contains(p, "234;179;8") {
 		t.Fatalf("partial must be yellow ⚠: %q", ansi.Strip(p))
 	}
-	// Fatal -> red "✗ FAILED".
-	f := buildTelegramPrompt("1", "", false, "Invalid Server ID.", false, false, true)
-	if !strings.Contains(ansi.Strip(f), "✗ FAILED") || !strings.Contains(f, "239;68;68") {
-		t.Fatalf("failed must be red ✗: %q", ansi.Strip(f))
+
+	// Action (not paired, 409) -> blue "ℹ NOT PAIRED YET (HTTP 409)".
+	a := buildTelegramPrompt("1", "", false, "send the id", "Not paired yet", orchestrator.TelegramSeverityAction, 409)
+	if !strings.Contains(ansi.Strip(a), "ℹ NOT PAIRED YET") || !strings.Contains(a, "59;130;246") {
+		t.Fatalf("action must be blue ℹ: %q", ansi.Strip(a))
 	}
+	if !strings.Contains(ansi.Strip(a), "(HTTP 409)") {
+		t.Fatalf("action must show the HTTP code: %q", ansi.Strip(a))
+	}
+
+	// Unreachable (code 0) -> red "⚠ SERVER UNREACHABLE", no HTTP code.
+	u := buildTelegramPrompt("1", "", false, "could not reach", "Server unreachable", orchestrator.TelegramSeverityUnreachable, 0)
+	if !strings.Contains(ansi.Strip(u), "⚠ SERVER UNREACHABLE") || !strings.Contains(u, "239;68;68") {
+		t.Fatalf("unreachable must be red ⚠: %q", ansi.Strip(u))
+	}
+	if strings.Contains(ansi.Strip(u), "HTTP 0") {
+		t.Fatalf("code 0 must not show an HTTP code: %q", ansi.Strip(u))
+	}
+
+	// Fatal (invalid id, 422) -> red "✗ INVALID SERVER ID (HTTP 422)".
+	f := buildTelegramPrompt("1", "", false, "invalid", "Invalid Server ID", orchestrator.TelegramSeverityFatal, 422)
+	if !strings.Contains(ansi.Strip(f), "✗ INVALID SERVER ID") || !strings.Contains(f, "239;68;68") {
+		t.Fatalf("fatal must be red ✗: %q", ansi.Strip(f))
+	}
+
 	// Neutral -> no keyword, message verbatim.
-	n := ansi.Strip(buildTelegramPrompt("1", "", false, "Not checked yet.", false, false, false))
-	if !strings.Contains(n, "Not checked yet.") {
-		t.Fatalf("neutral status missing: %q", n)
+	n := ansi.Strip(buildTelegramPrompt("1", "", false, "Not checked yet.", "", orchestrator.TelegramSeverityNeutral, 0))
+	if !strings.Contains(n, "Not checked yet.") || strings.Contains(n, "HTTP") {
+		t.Fatalf("neutral status wrong: %q", n)
 	}
 }
 
