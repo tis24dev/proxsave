@@ -122,7 +122,7 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 	// SOLE display boundary: sanitize the RAW link before printing; never register it as
 	// a secret (it must stay visible).
 	if safe := serverbot.SanitizeLoginURL(link); safe != "" {
-		h.info("Monitoring portal: %s", safe)
+		h.info("Monitoring portal (set your password): %s", safe)
 	}
 	return nil
 }
