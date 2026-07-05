@@ -21,13 +21,17 @@ var auditCollect = installer.CollectPostInstallDisableSuggestions
 // RunPostInstallAudit runs the optional post-install check: dry-run collect,
 // multi-select of suggested disables, shared apply. Prompt aborts are
 // non-blocking (the install continues), matching both legacy fronts.
-func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, configPath string) (installer.PostInstallAuditResult, error) {
+func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, configPath string, backToMenu bool) (installer.PostInstallAuditResult, error) {
 	result := installer.PostInstallAuditResult{}
 
+	declineLabel := "Skip"
+	if backToMenu {
+		declineLabel = "Back"
+	}
 	run, err := shell.Ask(ctx, session, components.NewConfirm(
 		"Post-install check",
 		"Run a dry-run to detect unused components and reduce warnings?\nThis may take a minute.",
-		components.WithLabels("Run check", "Skip"),
+		components.WithLabels("Run check", declineLabel),
 		components.WithDefaultYes(true),
 	))
 	if err != nil {

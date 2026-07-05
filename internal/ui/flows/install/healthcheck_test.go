@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -11,6 +12,62 @@ import (
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
+
+func healthcheckEligibleBootstrap(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+	return orchestrator.HealthcheckSetupBootstrap{
+		Eligibility:   orchestrator.HealthcheckSetupEligibleCentralized,
+		ServerID:      "12345678",
+		ServerAPIHost: "https://h",
+	}, nil
+}
+
+// In dashboard mode (backToMenu=true) the leave action is labeled "Back" (return to
+// the menu) instead of the install-flow "Skip"/"Continue".
+func TestRunHealthcheckSetupDashboardBack(t *testing.T) {
+	d := newDriver(t)
+	orig := healthcheckBuildBootstrap
+	t.Cleanup(func() { healthcheckBuildBootstrap = orig })
+	healthcheckBuildBootstrap = healthcheckEligibleBootstrap
+
+	resCh := make(chan struct{}, 1)
+	go func() {
+		_, _ = RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", true)
+		resCh <- struct{}{}
+	}()
+	d.waitScreen("Backup monitoring (healthchecks)")
+	deadline := time.After(10 * time.Second)
+	for !strings.Contains(ansi.Strip(d.buf.String()), "return to the dashboard menu") {
+		select {
+		case <-deadline:
+			t.Fatalf("dashboard mode must render a Back item:\n%s", ansi.Strip(d.buf.String()))
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	d.keys("down enter") // Back -> returns to the menu
+	<-resCh
+}
+
+// Ctrl+C on a dashboard diagnostic is a global interrupt: it terminates the session,
+// so the screen resolves via shell.IsAbort and returns without an error (the dead
+// session is what exits the dashboard loop).
+func TestRunHealthcheckSetupCtrlCInterrupts(t *testing.T) {
+	d := newDriver(t)
+	orig := healthcheckBuildBootstrap
+	t.Cleanup(func() { healthcheckBuildBootstrap = orig })
+	healthcheckBuildBootstrap = healthcheckEligibleBootstrap
+
+	resCh := make(chan error, 1)
+	go func() {
+		_, err := RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", true)
+		resCh <- err
+	}()
+	d.waitScreen("Backup monitoring (healthchecks)")
+	d.keys("ctrl+c")
+	if err := <-resCh; err != nil {
+		t.Fatalf("ctrl+c must resolve via the abort path (nil err), got %v", err)
+	}
+}
 
 func TestBuildHealthcheckPrompt(t *testing.T) {
 	link := "https://hc.proxsave.dev/l/Nr4vAebz5b"
@@ -71,7 +128,7 @@ func TestRunHealthcheckSetup(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			res, err := RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env")
+			res, err := RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
 			resCh <- result{res, err}
 		}()
 	}
@@ -120,7 +177,7 @@ func TestRunHealthcheckSetup(t *testing.T) {
 	healthcheckBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{Eligibility: orchestrator.HealthcheckSetupSkipDisabled}, nil
 	}
-	notShown, err := RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env")
+	notShown, err := RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
 	if err != nil || notShown.Shown {
 		t.Fatalf("not-eligible must be silent: %+v err=%v", notShown, err)
 	}

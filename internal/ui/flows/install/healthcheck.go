@@ -34,7 +34,7 @@ const (
 // status removes Check, Esc skips unless already verified. Renders only when the
 // daemon engine with centralized monitoring was chosen and the identity/secret
 // exist (decided by BuildHealthcheckSetupBootstrap re-reading the written config).
-func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, configPath string) (installer.HealthcheckSetupResult, error) {
+func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, configPath string, backToMenu bool) (installer.HealthcheckSetupResult, error) {
 	state, err := healthcheckBuildBootstrap(configPath, baseDir)
 	if err != nil {
 		return installer.HealthcheckSetupResult{}, err
@@ -63,15 +63,16 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 				Label: "Check", Description: "verify the monitoring connection now", Value: healthcheckActionCheck,
 			})
 		}
+		leaveLabel, leaveDesc, leaveVal := "Skip", "finish and verify later", healthcheckActionSkip
 		if result.Verified {
-			items = append(items, components.SelectorItem[healthcheckAction]{
-				Label: "Continue", Description: "monitoring verified", Value: healthcheckActionContinue,
-			})
-		} else {
-			items = append(items, components.SelectorItem[healthcheckAction]{
-				Label: "Skip", Description: "finish and verify later", Value: healthcheckActionSkip,
-			})
+			leaveLabel, leaveDesc, leaveVal = "Continue", "monitoring verified", healthcheckActionContinue
 		}
+		if backToMenu {
+			leaveLabel, leaveDesc = "Back", "return to the dashboard menu"
+		}
+		items = append(items, components.SelectorItem[healthcheckAction]{
+			Label: leaveLabel, Description: leaveDesc, Value: leaveVal,
+		})
 
 		action, err := shell.Ask(ctx, session, components.NewSelector(
 			"Backup monitoring (healthchecks)", items,
