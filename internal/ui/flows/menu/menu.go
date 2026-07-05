@@ -19,6 +19,7 @@ type Action int
 const (
 	ActionExit Action = iota
 	ActionBackup
+	ActionBackupDebug // same backup, forced --log-level debug
 	ActionRestore
 	ActionDecrypt
 	ActionNewKey
@@ -54,6 +55,7 @@ var errMenuExit = errors.New("dashboard: exit")
 func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Action, error) {
 	items := []components.SelectorItem[Action]{
 		{Label: "Run backup now", Description: "start a backup with the current configuration", Value: ActionBackup},
+		{Label: "Run backup now (debug)", Description: "start a backup with verbose debug logging (--log-level debug)", Value: ActionBackupDebug},
 		{Label: "Restore", Description: "restore a backup onto this system", Value: ActionRestore},
 		{Label: "Decrypt", Description: "convert an encrypted backup into a plaintext bundle", Value: ActionDecrypt},
 		{Label: "New encryption key", Description: "reset the AGE recipients and run the key setup", Value: ActionNewKey},

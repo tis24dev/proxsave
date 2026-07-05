@@ -126,31 +126,42 @@ func TestDashboardActions(t *testing.T) {
 			if args.Restore || args.Decrypt || args.ForceNewKey || args.Install {
 				t.Fatalf("backup must not set mode flags: %+v", args)
 			}
+			if args.LogLevel == types.LogLevelDebug {
+				t.Fatal("plain backup must not force debug log level")
+			}
 		}},
-		{"restore", "down enter", false, func(t *testing.T, args *cli.Args) {
+		{"backup debug", "down enter", false, func(t *testing.T, args *cli.Args) {
+			if args.Restore || args.Decrypt || args.ForceNewKey || args.Install {
+				t.Fatalf("debug backup must not set mode flags: %+v", args)
+			}
+			if args.LogLevel != types.LogLevelDebug {
+				t.Fatalf("debug backup must force --log-level debug, got %v", args.LogLevel)
+			}
+		}},
+		{"restore", "down down enter", false, func(t *testing.T, args *cli.Args) {
 			if !args.Restore {
 				t.Fatal("restore flag not set")
 			}
 		}},
-		{"decrypt", "down down enter", false, func(t *testing.T, args *cli.Args) {
+		{"decrypt", "down down down enter", false, func(t *testing.T, args *cli.Args) {
 			if !args.Decrypt {
 				t.Fatal("decrypt flag not set")
 			}
 		}},
-		{"newkey", "down down down enter", false, func(t *testing.T, args *cli.Args) {
+		{"newkey", "down down down down enter", false, func(t *testing.T, args *cli.Args) {
 			if !args.ForceNewKey {
 				t.Fatal("newkey flag not set")
 			}
 		}},
-		{"reconfigure", "down down down down enter", false, func(t *testing.T, args *cli.Args) {
+		{"reconfigure", "down down down down down enter", false, func(t *testing.T, args *cli.Args) {
 			if !args.Install {
 				t.Fatal("install flag not set")
 			}
 		}},
-		// Exit is the last selectable (11th): 10 downs, skipping both separators.
+		// Exit is the last selectable (12th): 11 downs, skipping both separators.
 		// (The Daemon group items run in-session and loop; they are covered by the
 		// dedicated in-session tests below, not this fall-through harness.)
-		{"exit row", "down down down down down down down down down down enter", true, nil},
+		{"exit row", "down down down down down down down down down down down enter", true, nil},
 		{"esc exits", "esc", true, nil},
 		{"ctrl+c exits", "ctrl+c", true, nil},
 	}
@@ -182,11 +193,11 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down down enter") // Daemon status (9 downs)
-	driver.waitScreen("Daemon status")                                // the notice
-	driver.keys("enter")                                              // dismiss
-	driver.waitScreen("Dashboard")                                    // back at the menu
-	driver.keys("esc")                                                // exit
+	driver.keys("down down down down down down down down down down enter") // Daemon status (10 downs)
+	driver.waitScreen("Daemon status")                                     // the notice
+	driver.keys("enter")                                                   // dismiss
+	driver.waitScreen("Dashboard")                                         // back at the menu
+	driver.keys("esc")                                                     // exit
 	select {
 	case handled := <-resCh:
 		if !handled {
@@ -218,11 +229,11 @@ func TestDashboardDaemonInstallInSession(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down enter") // Install daemon (8 downs)
-	driver.waitScreen("Daemon installed")                        // success notice (after the RunTask)
-	driver.keys("enter")                                         // dismiss
-	driver.waitScreen("Dashboard")                               // looped back
-	driver.keys("esc")                                           // exit
+	driver.keys("down down down down down down down down down enter") // Install daemon (9 downs)
+	driver.waitScreen("Daemon installed")                             // success notice (after the RunTask)
+	driver.keys("enter")                                              // dismiss
+	driver.waitScreen("Dashboard")                                    // looped back
+	driver.keys("esc")                                                // exit
 	select {
 	case handled := <-resCh:
 		if !handled {
@@ -265,11 +276,11 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	// Active state: Daemon group = "Disable daemon" (row 9, 8 downs) + "Daemon status".
-	driver.keys("down down down down down down down down enter") // Disable daemon
-	driver.waitScreen("Daemon disabled")                         // success notice
-	driver.keys("enter")                                         // dismiss
-	driver.waitScreen("Dashboard")                               // looped back
+	// Active state: Daemon group = "Disable daemon" (row 10, 9 downs) + "Daemon status".
+	driver.keys("down down down down down down down down down enter") // Disable daemon
+	driver.waitScreen("Daemon disabled")                              // success notice
+	driver.keys("enter")                                              // dismiss
+	driver.waitScreen("Dashboard")                                    // looped back
 	driver.keys("esc")
 	select {
 	case handled := <-resCh:
@@ -332,11 +343,11 @@ func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
 	}()
 
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down enter")      // Check Telegram (6th selectable)
-	driver.waitScreen("Dashboard")                     // looped back after the screen
-	driver.keys("down down down down down down enter") // Check healthchecks (7th)
+	driver.keys("down down down down down down enter")      // Check Telegram (7th selectable)
+	driver.waitScreen("Dashboard")                          // looped back after the screen
+	driver.keys("down down down down down down down enter") // Check healthchecks (8th)
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down enter") // Post-install check (8th)
+	driver.keys("down down down down down down down down enter") // Post-install check (9th)
 	driver.waitScreen("Dashboard")
 	driver.keys("esc") // exit
 
@@ -373,11 +384,11 @@ func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 	}()
 
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down enter") // Check Telegram (not configured)
-	driver.waitScreen("Telegram not configured")  // the notice
-	driver.keys("enter")                          // dismiss
-	driver.waitScreen("Dashboard")                // back at the menu
-	driver.keys("esc")                            // exit
+	driver.keys("down down down down down down enter") // Check Telegram (not configured)
+	driver.waitScreen("Telegram not configured")       // the notice
+	driver.keys("enter")                               // dismiss
+	driver.waitScreen("Dashboard")                     // back at the menu
+	driver.keys("esc")                                 // exit
 
 	select {
 	case handled := <-resCh:
@@ -466,7 +477,7 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 		resCh <- outcome{code, handled}
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down enter") // Restore
+	driver.keys("down down enter") // Restore (row 3, 2 downs)
 	var res outcome
 	select {
 	case res = <-resCh:
