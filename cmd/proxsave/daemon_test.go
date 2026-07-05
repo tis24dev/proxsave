@@ -207,6 +207,31 @@ func TestRunOnceNoReporterRecordsNoPhantomPing(t *testing.T) {
 	}
 }
 
+func TestBeatRecordsLivenessWhenNoURL(t *testing.T) {
+	// A running daemon that cannot resolve a ping URL (self mode with no URLs, or
+	// centralized not provisioned) must STILL record a heartbeat - as a liveness trace
+	// with reason no_url, OK=false - so the run-side section can tell "daemon up but not
+	// provisioned yet" from "daemon not running at all" (no heartbeat record).
+	d := newTestDaemon(t, nil, nil, time.Hour)
+	d.cfg.HealthcheckMode = "self" // self + no URLs: no centralized rebuild, no network
+
+	d.beat(context.Background())
+
+	st, err := health.LoadStatus(d.cfg.BaseDir)
+	if err != nil {
+		t.Fatalf("LoadStatus: %v", err)
+	}
+	if st.Heartbeat == nil {
+		t.Fatal("a running daemon with no url must still record a heartbeat (liveness), got nil")
+	}
+	if st.Heartbeat.OK {
+		t.Fatalf("a no-url beat must record OK=false, got %+v", st.Heartbeat)
+	}
+	if st.Heartbeat.Reason != health.ReasonNoURL {
+		t.Fatalf("Reason=%q want %q", st.Heartbeat.Reason, health.ReasonNoURL)
+	}
+}
+
 func TestRunOnceSkipsOnShutdown(t *testing.T) {
 	rep := &fakeReporter{backupURL: true}
 	d := newTestDaemon(t, rep, shCmd("exit 0"), time.Hour)

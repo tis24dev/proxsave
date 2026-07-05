@@ -135,6 +135,45 @@ func TestErrPopulatedOnlyOnFailure(t *testing.T) {
 	}
 }
 
+// TestNoURLErrorClassifiedAsReason: a ping that failed with ErrNoAliveURL/ErrNoBackupURL
+// (no endpoint resolved) is recorded as OK=false with Reason=ReasonNoURL and an EMPTY
+// Err, so the section can render a clean "not provisioned yet" line instead of leaking
+// an internal error string. Any OTHER error keeps Reason empty and populates Err.
+func TestNoURLErrorClassifiedAsReason(t *testing.T) {
+	base := t.TempDir()
+
+	if err := RecordPing(base, "centralized", KindHeartbeat, 10, false, ErrNoAliveURL); err != nil {
+		t.Fatalf("RecordPing no-url: %v", err)
+	}
+	st := mustLoad(t, base)
+	if st.Heartbeat == nil || st.Heartbeat.OK {
+		t.Fatalf("no-url ping should record OK=false, got %+v", st.Heartbeat)
+	}
+	if st.Heartbeat.Reason != ReasonNoURL {
+		t.Fatalf("Reason = %q, want %q", st.Heartbeat.Reason, ReasonNoURL)
+	}
+	if st.Heartbeat.Err != "" {
+		t.Fatalf("no-url ping must not populate Err, got %q", st.Heartbeat.Err)
+	}
+
+	// ErrNoBackupURL classifies the same way.
+	if err := RecordPing(base, "centralized", KindRunFinished, 20, false, ErrNoBackupURL); err != nil {
+		t.Fatalf("RecordPing no-url backup: %v", err)
+	}
+	if rf := mustLoad(t, base).RunFinished; rf == nil || rf.Reason != ReasonNoURL || rf.Err != "" {
+		t.Fatalf("ErrNoBackupURL should be Reason=no_url + empty Err, got %+v", rf)
+	}
+
+	// A genuine error keeps Reason empty and fills Err.
+	if err := RecordPing(base, "centralized", KindHeartbeat, 30, false, errors.New("healthcheck alive: HTTP 500")); err != nil {
+		t.Fatalf("RecordPing real err: %v", err)
+	}
+	hb := mustLoad(t, base).Heartbeat
+	if hb.Reason != "" || hb.Err != "healthcheck alive: HTTP 500" {
+		t.Fatalf("real error should be Reason='' + Err set, got %+v", hb)
+	}
+}
+
 // TestStatusPathShape pins the file location both siblings depend on.
 func TestStatusPathShape(t *testing.T) {
 	base := "/opt/proxsave"

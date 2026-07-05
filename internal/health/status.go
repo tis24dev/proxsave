@@ -15,6 +15,7 @@ package health
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +33,14 @@ const (
 	KindRunHang     = "hang"
 )
 
+// ReasonNoURL is the PingRecord.Reason set when a ping did NOT transmit because no
+// ping URL was resolved (centralized pairing still pending, or the server was
+// unreachable when the daemon tried to resolve the URLs). It is a distinct machine
+// code -- NOT a raw error string -- so the run-side section can phrase "daemon up but
+// not provisioned yet" separately and clearly from a genuine transmit failure. A beat
+// carrying this reason still PROVES the daemon is alive (it ran and tried).
+const ReasonNoURL = "no_url"
+
 // PingRecord is the outcome of a single ping attempt.
 type PingRecord struct {
 	// TS is the unix time in SECONDS when the ping was attempted (the caller
@@ -40,9 +49,15 @@ type PingRecord struct {
 	TS int64 `json:"ts"`
 	// OK is true iff the ping actually transmitted (a 2xx from the monitor).
 	OK bool `json:"ok"`
-	// Err is the redacted error text when OK is false. The Reporter already
-	// strips the ping URL / check UUID from its errors (redactURLErr), so what
-	// lands here is safe to persist; it is omitted when empty.
+	// Reason is a machine code classifying WHY OK is false, when the cause is a
+	// well-known non-transmit condition rather than a monitor-side error. Currently
+	// only ReasonNoURL ("no url resolved"); empty otherwise. It lets the section
+	// distinguish "not provisioned yet" from a real transmit failure without string
+	// matching. Omitted when empty.
+	Reason string `json:"reason,omitempty"`
+	// Err is the redacted error text when OK is false AND Reason is empty (a genuine
+	// transmit failure). The Reporter already strips the ping URL / check UUID from its
+	// errors (redactURLErr), so what lands here is safe to persist; omitted when empty.
 	Err string `json:"err,omitempty"`
 }
 
@@ -87,7 +102,7 @@ func LoadStatus(baseDir string) (Status, error) {
 	}
 	if err := json.Unmarshal(data, &st); err != nil {
 		// Return the zero value (not a half-parsed struct) so a tolerant caller
-		// falls back to "no transmission recorded" rather than trusting garbage.
+		// treats it as unreadable (a distinct state) rather than trusting garbage.
 		return Status{}, fmt.Errorf("parse healthcheck status: %w", err)
 	}
 	return st, nil
@@ -102,7 +117,15 @@ func LoadStatus(baseDir string) (Status, error) {
 func RecordPing(baseDir, mode, kind string, ts int64, ok bool, pingErr error) error {
 	rec := &PingRecord{TS: ts, OK: ok}
 	if pingErr != nil {
-		rec.Err = pingErr.Error()
+		// A "no ping URL resolved" error means the daemon was alive and tried but has
+		// no endpoint yet (pairing pending / server unreachable). Persist it as a
+		// distinct Reason code instead of a raw error string, so the section renders a
+		// clear "not provisioned yet" line separate from a real transmit failure.
+		if errors.Is(pingErr, ErrNoAliveURL) || errors.Is(pingErr, ErrNoBackupURL) {
+			rec.Reason = ReasonNoURL
+		} else {
+			rec.Err = pingErr.Error()
+		}
 	}
 
 	// Reject an unknown kind before the write so a caller typo cannot leave the

@@ -217,19 +217,19 @@ func TestHealthchecksSectionTransmitFailed(t *testing.T) {
 	}
 }
 
-func TestHealthchecksSectionHeartbeatFailed(t *testing.T) {
-	// A FRESH heartbeat whose transmission FAILED (OK=false) means the monitor is
-	// unreachable RIGHT NOW even though the daemon keeps beating; a superseding ok
-	// backup outcome must NOT rescue it into a false success. This is the exact false
-	// glyph the section exists to eliminate: fresh TS hides staleness, ok outcome hides
-	// transmit-failed, so only the heartbeat OK flag catches it.
+func TestHealthchecksSectionUnreachable(t *testing.T) {
+	// A FRESH heartbeat whose transmission FAILED with a real error (OK=false, no no_url
+	// reason) means the monitor is unreachable RIGHT NOW even though the daemon keeps
+	// beating; a superseding ok backup outcome must NOT rescue it into a false success.
+	// This is the exact false glyph the section exists to eliminate: fresh TS hides
+	// staleness, ok outcome hides transmit-failed, so only the heartbeat OK flag catches it.
 	var buf bytes.Buffer
 	ch := newHCTestChannel(&config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, &buf)
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 	ch.now = func() time.Time { return hcNow }
 	ch.loadStatus = func(string) (health.Status, error) {
 		return health.Status{
-			// fresh (-2m, well within the default 10m stale window) but FAILED
+			// fresh (-2m, well within the default 10m stale window) but FAILED (real error)
 			Heartbeat:   &health.PingRecord{TS: hcNow.Add(-2 * time.Minute).Unix(), OK: false, Err: "healthcheck alive: connection refused"},
 			RunFinished: &health.PingRecord{TS: hcNow.Add(-1 * 24 * time.Hour).Unix(), OK: true}, // old ok outcome must not rescue
 		}, nil
@@ -241,12 +241,12 @@ func TestHealthchecksSectionHeartbeatFailed(t *testing.T) {
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
 	_ = ch.Notify(context.Background(), stats)
-	if stats.HealthcheckStatus != "heartbeat-failed" {
-		t.Fatalf("status=%q want heartbeat-failed", stats.HealthcheckStatus)
+	if stats.HealthcheckStatus != "unreachable" {
+		t.Fatalf("status=%q want unreachable", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "heartbeat NOT transmitted") {
-		t.Fatalf("want warning glyph + heartbeat-failed line, out=%q", out)
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "monitor is unreachable") {
+		t.Fatalf("want warning glyph + unreachable line, out=%q", out)
 	}
 	if !strings.Contains(out, "connection refused") {
 		t.Fatalf("want the redacted err text surfaced, out=%q", out)
@@ -335,7 +335,11 @@ func TestHealthchecksSectionNewerOutcomeWins(t *testing.T) {
 	}
 }
 
-func TestHealthchecksSectionNoTransmission(t *testing.T) {
+// Empty status file = the daemon never recorded a beat = it is not running. Because the
+// daemon records its FIRST beat immediately (even before a URL resolves), a missing
+// heartbeat is an unambiguous "daemon not running" - NOT the old confusing "(daemon not
+// running, or first run pending)" that guessed two causes on one line.
+func TestHealthchecksSectionDaemonDown(t *testing.T) {
 	var buf bytes.Buffer
 	ch := newHCTestChannel(&config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, &buf)
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
@@ -348,15 +352,54 @@ func TestHealthchecksSectionNoTransmission(t *testing.T) {
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
 	_ = ch.Notify(context.Background(), stats)
-	if stats.HealthcheckStatus != "no-transmission" {
-		t.Fatalf("status=%q want no-transmission", stats.HealthcheckStatus)
+	if stats.HealthcheckStatus != "daemon-down" {
+		t.Fatalf("status=%q want daemon-down", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "no transmission recorded") {
-		t.Fatalf("want warning glyph + no-transmission line, out=%q", out)
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "daemon is not running") {
+		t.Fatalf("want warning glyph + daemon-not-running line, out=%q", out)
+	}
+	// The old confusing "or first run pending" hedge must be GONE.
+	if strings.Contains(out, "first run pending") {
+		t.Fatalf("must not hedge two causes on one line, out=%q", out)
 	}
 	if strings.Contains(out, checkGlyph) {
-		t.Fatalf("no-transmission must not print a success glyph, out=%q", out)
+		t.Fatalf("daemon-down must not print a success glyph, out=%q", out)
+	}
+}
+
+// A fresh beat whose Reason is no_url = the daemon is ALIVE but has no ping URL yet
+// (pairing pending / server unreachable). This is a DISTINCT line from "daemon not
+// running" and from "monitor unreachable"; it must not surface a raw error string.
+func TestHealthchecksSectionNotProvisioned(t *testing.T) {
+	var buf bytes.Buffer
+	ch := newHCTestChannel(&config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, &buf)
+	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
+	ch.now = func() time.Time { return hcNow }
+	ch.loadStatus = func(string) (health.Status, error) {
+		return health.Status{
+			Heartbeat: &health.PingRecord{TS: hcNow.Add(-30 * time.Second).Unix(), OK: false, Reason: health.ReasonNoURL},
+		}, nil
+	}
+	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+		t.Fatal("a captured link must not mint")
+		return "", nil
+	}
+
+	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
+	_ = ch.Notify(context.Background(), stats)
+	if stats.HealthcheckStatus != "not-provisioned" {
+		t.Fatalf("status=%q want not-provisioned", stats.HealthcheckStatus)
+	}
+	out := buf.String()
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "not provisioned yet") {
+		t.Fatalf("want warning glyph + not-provisioned line, out=%q", out)
+	}
+	if !strings.Contains(out, "running") {
+		t.Fatalf("not-provisioned must state the daemon IS running, out=%q", out)
+	}
+	if strings.Contains(out, checkGlyph) {
+		t.Fatalf("not-provisioned must not print a success glyph, out=%q", out)
 	}
 }
 
@@ -423,6 +466,42 @@ func TestHealthchecksSectionHostileLinkSanitizedAway(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "https://hc/ x") || strings.Contains(buf.String(), "Monitoring portal") {
 		t.Fatalf("hostile link must be sanitized away at the display boundary, got: %q", buf.String())
+	}
+}
+
+func TestHealthchecksSectionStatusUnreadable(t *testing.T) {
+	// A corrupt/unreadable status file is a DISTINCT condition: we can neither prove nor
+	// disprove transmission, so it must NOT be reported as "daemon not running".
+	var buf bytes.Buffer
+	ch := newHCTestChannel(&config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, &buf)
+	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
+	ch.now = func() time.Time { return hcNow }
+	ch.loadStatus = func(string) (health.Status, error) {
+		return health.Status{}, errors.New("parse healthcheck status: unexpected end of JSON input")
+	}
+	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+		t.Fatal("a captured link must not mint")
+		return "", nil
+	}
+
+	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
+	_ = ch.Notify(context.Background(), stats)
+	if stats.HealthcheckStatus != "status-unreadable" {
+		t.Fatalf("status=%q want status-unreadable", stats.HealthcheckStatus)
+	}
+	out := buf.String()
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "status unavailable") {
+		t.Fatalf("want warning glyph + status-unavailable line, out=%q", out)
+	}
+	if strings.Contains(out, "daemon is not running") {
+		t.Fatalf("a corrupt file must NOT claim daemon-down, out=%q", out)
+	}
+	// The raw parse error (may carry the file path) must stay debug-only, not in the WARNING.
+	if strings.Contains(out, "unexpected end of JSON") {
+		t.Fatalf("raw error must be debug-only, not surfaced in the warning, out=%q", out)
+	}
+	if strings.Contains(out, checkGlyph) {
+		t.Fatalf("status-unreadable must not print a success glyph, out=%q", out)
 	}
 }
 

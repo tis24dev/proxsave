@@ -281,22 +281,26 @@ func (d *daemon) beat(ctx context.Context) {
 			r = nr
 		}
 	}
-	if r == nil {
-		return
-	}
 	done := logging.DebugStart(d.logger, "hc ping", "kind=%s", health.KindHeartbeat)
-	err := r.Heartbeat(ctx)
-	done(err)
-	// ErrNoAliveURL means the alive URL was never resolved, so nothing was
-	// transmitted: swallow it and do NOT record it. Any other result, success
-	// included, is a real heartbeat transmission worth persisting.
-	if errors.Is(err, health.ErrNoAliveURL) {
-		logging.Debug("daemon: heartbeat ping skipped (no url configured)")
-		return
+	// A nil reporter means no alive URL was ever resolved. Surface that as
+	// ErrNoAliveURL (instead of returning) so the beat is STILL recorded -- as a
+	// liveness trace with reason no_url, not a false success. This is the whole point:
+	// the run-side section must be able to tell "daemon up but not provisioned yet"
+	// (a heartbeat record exists, OK=false, reason no_url) from "daemon not running at
+	// all" (no heartbeat record). A running daemon records its first beat immediately.
+	var err error
+	if r == nil {
+		err = health.ErrNoAliveURL
+	} else {
+		err = r.Heartbeat(ctx)
 	}
-	if err != nil {
+	done(err)
+	if errors.Is(err, health.ErrNoAliveURL) {
+		logging.Debug("daemon: heartbeat has no url yet (recording liveness, reason=no_url)")
+	} else if err != nil {
 		logging.Debug("daemon: heartbeat ping failed: %v", err)
 	}
+	// Always record: even a no-url beat proves the daemon is alive this tick.
 	d.recordPing(health.KindHeartbeat, err)
 }
 
