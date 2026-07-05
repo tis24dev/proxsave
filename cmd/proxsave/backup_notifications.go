@@ -104,24 +104,33 @@ func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orc
 		logging.Skip("Healthchecks: disabled")
 		return
 	}
+	// Verify config, then that the monitoring daemon (the ONLY pinger) is actually alive -
+	// a valid config is worthless if the daemon is down. On ANY problem, switch the
+	// channel to disabled EXACTLY like checkTelegramServerStatus does for a failed
+	// centralized handshake (main_identity.go): so the whole flow treats it as disabled.
 	if problem := healthcheckConfigProblem(cfg); problem != "" {
-		logging.DebugStep(logger, "notifications init", "healthchecks not usable: %s", problem)
-		logging.Warning("Healthchecks disabled: %s", problem)
+		disableHealthchecks(cfg, logger, problem)
 		return
 	}
-	// A valid config is worthless if the monitoring daemon (the ONLY pinger) is not
-	// running. Verify liveness at init from the daemon's persisted heartbeat - a missing
-	// beat means it never started, a stale one means it is down or stuck - and disable the
-	// section with a specific WARNING, just like the other channels refuse to enable when
-	// they cannot actually work.
 	if problem := healthcheckDaemonProblem(cfg, logger); problem != "" {
-		logging.DebugStep(logger, "notifications init", "healthchecks daemon problem: %s", problem)
-		logging.Warning("Healthchecks disabled: %s", problem)
+		disableHealthchecks(cfg, logger, problem)
 		return
 	}
 	logging.DebugStep(logger, "notifications init", "healthchecks enabled (mode=%s, daemon up)", cfg.HealthcheckMode)
 	orch.RegisterNotificationChannel(orchestrator.NewHealthchecksChannel(cfg, logger))
 	logging.Info("✓ Healthchecks initialized (mode: %s)", cfg.HealthcheckMode)
+}
+
+// disableHealthchecks switches the section to disabled with a reason, mirroring
+// checkTelegramServerStatus (cmd/proxsave/main_identity.go): a WARNING naming the
+// problem, a clean "Healthchecks: disabled" SKIP, and flipping cfg.HealthcheckEnabled so
+// the downstream Phase-7 dispatch entries loop renders "Healthchecks: disabled" instead
+// of "enabled but not initialized". cfg is the same pointer the dispatcher reads.
+func disableHealthchecks(cfg *config.Config, logger *logging.Logger, reason string) {
+	logging.DebugStep(logger, "notifications init", "healthchecks disabled: %s", reason)
+	logging.Warning("Healthchecks: %s", reason)
+	logging.Skip("Healthchecks: disabled")
+	cfg.HealthcheckEnabled = false
 }
 
 // healthcheckDaemonProblem verifies the monitoring daemon is actually alive by reading
