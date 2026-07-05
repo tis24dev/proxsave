@@ -160,7 +160,7 @@ func TestAskReturnsOnContextCancel(t *testing.T) {
 	}
 }
 
-func TestAskReturnsErrAbortedOnCtrlC(t *testing.T) {
+func TestAskReturnsErrClosedOnCtrlC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := StartForTest(ctx, Config{AppName: "ProxSave", UseColor: true})
@@ -171,9 +171,12 @@ func TestAskReturnsErrAbortedOnCtrlC(t *testing.T) {
 	scr.waitPushed(t)
 	s.Send(KeyMsg("ctrl+c"))
 
+	// Ctrl+C is a global interrupt: it terminates the program, so the pending Ask
+	// resolves to ErrClosed (not a per-screen abort). Flows treat that as an abort
+	// via shell.IsAbort; Esc, by contrast, resolves a per-screen Back sentinel.
 	_, err := askResult(t, ch)
-	if !errors.Is(err, ErrAborted) {
-		t.Fatalf("expected ErrAborted, got %v", err)
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected ErrClosed on ctrl+c interrupt, got %v", err)
 	}
 }
 
@@ -248,7 +251,10 @@ func TestAskStress(t *testing.T) {
 		scr := newStubScreen(i)
 		ch := startAsk[int](askCtx, s, scr)
 		scr.waitPushed(t)
-		switch i % 3 {
+		// Ctrl+C is deliberately NOT exercised here: it is now a global interrupt
+		// that terminates the program, which would kill the session for the rest of
+		// the loop. It has its own dedicated test (TestAskReturnsErrClosedOnCtrlC).
+		switch i % 2 {
 		case 0:
 			s.Send(KeyMsg("enter"))
 			v, err := askResult(t, ch)
@@ -256,11 +262,6 @@ func TestAskStress(t *testing.T) {
 				t.Fatalf("iter %d: v=%d err=%v", i, v, err)
 			}
 		case 1:
-			s.Send(KeyMsg("ctrl+c"))
-			if _, err := askResult(t, ch); !errors.Is(err, ErrAborted) {
-				t.Fatalf("iter %d: expected ErrAborted, got %v", i, err)
-			}
-		case 2:
 			askCancel()
 			if _, err := askResult(t, ch); !errors.Is(err, context.Canceled) {
 				t.Fatalf("iter %d: expected canceled, got %v", i, err)

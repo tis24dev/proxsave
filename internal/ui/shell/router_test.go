@@ -69,20 +69,27 @@ func TestRouterRemoveByID(t *testing.T) {
 	}
 }
 
-func TestRouterCtrlCAbortsTopScreenOnly(t *testing.T) {
+// Ctrl+C is a GLOBAL emergency interrupt: it must terminate the program, not pop
+// or abort a single screen. Going back one level is Esc / the on-screen Back item.
+func TestRouterCtrlCInterruptsWithoutPopping(t *testing.T) {
 	m := newRootModel(Config{AppName: "ProxSave"})
-	abortedBottom := false
-	abortedTop := false
-	m = pushEntry(m, newStubScreen(1), 1, func() { abortedBottom = true })
-	m = pushEntry(m, newStubScreen(2), 2, func() { abortedTop = true })
+	aborted := false
+	m = pushEntry(m, newStubScreen(1), 1, func() { aborted = true })
+	m = pushEntry(m, newStubScreen(2), 2, func() { aborted = true })
 
-	updated, _ := m.Update(KeyMsg("ctrl+c"))
+	updated, cmd := m.Update(KeyMsg("ctrl+c"))
 	m = updated.(rootModel)
-	if !abortedTop || abortedBottom {
-		t.Fatalf("expected only top abort: top=%v bottom=%v", abortedTop, abortedBottom)
+	if aborted {
+		t.Fatal("ctrl+c must not abort a screen (it interrupts the whole program)")
 	}
-	if len(m.stack) != 1 {
-		t.Fatalf("expected top screen popped, stack=%d", len(m.stack))
+	if len(m.stack) != 2 {
+		t.Fatalf("ctrl+c must not pop the stack, got %d", len(m.stack))
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+c must return the interrupt command")
+	}
+	if _, ok := cmd().(tea.InterruptMsg); !ok {
+		t.Fatalf("ctrl+c must return tea.Interrupt, got %T", cmd())
 	}
 }
 

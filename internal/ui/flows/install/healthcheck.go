@@ -79,7 +79,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 			components.WithSelectorBack[healthcheckAction](errHCEsc),
 		))
 		if err != nil {
-			if errors.Is(err, errHCEsc) || errors.Is(err, shell.ErrAborted) {
+			if errors.Is(err, errHCEsc) || shell.IsAbort(err) {
 				result.SkippedVerification = !result.Verified
 				return result, nil
 			}

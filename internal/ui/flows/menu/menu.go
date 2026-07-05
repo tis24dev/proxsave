@@ -86,7 +86,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		components.WithSelectorBack[Action](errMenuExit),
 	))
 	if err != nil {
-		if errors.Is(err, errMenuExit) || errors.Is(err, shell.ErrAborted) || errors.Is(err, shell.ErrClosed) {
+		if errors.Is(err, errMenuExit) || shell.IsAbort(err) || errors.Is(err, shell.ErrClosed) {
 			return ActionExit, nil
 		}
 		return ActionExit, err

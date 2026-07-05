@@ -90,7 +90,7 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 			components.WithSelectorBack[telegramAction](errTelegramEsc),
 		))
 		if err != nil {
-			if errors.Is(err, errTelegramEsc) || errors.Is(err, shell.ErrAborted) {
+			if errors.Is(err, errTelegramEsc) || shell.IsAbort(err) {
 				// Esc/abort: skip unless already verified (tview parity).
 				result.SkippedVerification = !result.Verified
 				return result, nil
