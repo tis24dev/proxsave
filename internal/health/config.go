@@ -2,16 +2,13 @@ package health
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
-	"github.com/tis24dev/proxsave/internal/version"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // fetchTimeout bounds the centralized-config GET; the daemon retries with backoff.
@@ -60,34 +57,36 @@ type serverError struct {
 // used by the install-time setup screen; the daemon's poll passes false so it
 // never triggers the server-side mint.
 func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool) (CentralizedConfig, error) {
-	if client == nil {
-		client = &http.Client{Timeout: fetchTimeout}
-	}
-	endpoint := strings.TrimRight(serverAPIHost, "/") + "/api/healthcheck/config?server_id=" + url.QueryEscape(serverID)
+	q := url.Values{"server_id": {serverID}}
 	if includeLogin {
-		endpoint += "&login=1"
+		q.Set("login", "1")
 	}
-
-	reqCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+	// Transport + auth (host normalize, X-Server-Auth, X-Proxsave-Version, timeout,
+	// bounded read, error redaction) is the shared serverbot brick; the endpoint
+	// vocabulary below (status map + typed errors + completeness check) stays here.
+	resp, err := serverbot.New(serverAPIHost, client, nil).Do(ctx, serverbot.Request{
+		Method:   http.MethodGet,
+		Path:     "/api/healthcheck/config",
+		Query:    q,
+		Secret:   secret,
+		Timeout:  fetchTimeout,
+		MaxBytes: 8192,
+	})
 	if err != nil {
-		return CentralizedConfig{}, redactURLErr(err)
+		// Transport failure (build/dial/read), already URL-stripped + secret-masked by
+		// serverbot. Note: unlike the pre-serverbot code (which swallowed a body-read
+		// error and still returned the typed sentinel), a body-read failure now surfaces
+		// as this transport error -> the caller retries instead of treating it as
+		// definitive. Benign: the affected 4xx/503 bodies are tiny, so the window (status
+		// received but body transfer broken) is vanishingly small, and retry is the safer
+		// degradation.
+		return CentralizedConfig{}, err
 	}
-	req.Header.Set("X-Server-Auth", secret)
-	req.Header.Set("X-Proxsave-Version", version.String())
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return CentralizedConfig{}, redactURLErr(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-
-	switch resp.StatusCode {
+	switch resp.Status {
 	case http.StatusOK:
 		var cfg CentralizedConfig
-		if err := json.Unmarshal(raw, &cfg); err != nil {
+		if err := resp.JSON(&cfg); err != nil {
 			return CentralizedConfig{}, fmt.Errorf("healthcheck config: bad JSON: %w", err)
 		}
 		if cfg.AliveURL == "" || cfg.BackupURL == "" {
@@ -102,12 +101,12 @@ func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIH
 		// The server returns HC_DISABLED (feature off) or HC_NOT_READY (provisioning
 		// not done yet). Distinguish so the daemon logs the right thing.
 		var e serverError
-		_ = json.Unmarshal(raw, &e)
+		_ = resp.JSON(&e)
 		if e.Error == "HC_DISABLED" {
 			return CentralizedConfig{}, ErrHCDisabled
 		}
 		return CentralizedConfig{}, ErrHCNotReady
 	default:
-		return CentralizedConfig{}, fmt.Errorf("healthcheck config: HTTP %d", resp.StatusCode)
+		return CentralizedConfig{}, fmt.Errorf("healthcheck config: HTTP %d", resp.Status)
 	}
 }
