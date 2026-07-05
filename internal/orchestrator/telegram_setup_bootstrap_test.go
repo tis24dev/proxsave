@@ -140,9 +140,9 @@ func TestBuildTelegramSetupBootstrap_PersonalModeSkips(t *testing.T) {
 
 	telegramSetupBootstrapLoadConfig = func(path, baseDir string) (*config.Config, error) {
 		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       " Personal ",
-			TelegramServerAPIHost: "",
+			TelegramEnabled: true,
+			TelegramBotType: " Personal ",
+			ServerAPIHost:   "",
 		}, nil
 	}
 	telegramSetupBootstrapIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
@@ -160,8 +160,8 @@ func TestBuildTelegramSetupBootstrap_PersonalModeSkips(t *testing.T) {
 	if state.TelegramMode != "personal" {
 		t.Fatalf("TelegramMode=%q, want personal", state.TelegramMode)
 	}
-	if state.ServerAPIHost != defaultTelegramServerAPIHost {
-		t.Fatalf("ServerAPIHost=%q, want %q", state.ServerAPIHost, defaultTelegramServerAPIHost)
+	if state.ServerAPIHost != defaultServerAPIHost {
+		t.Fatalf("ServerAPIHost=%q, want %q", state.ServerAPIHost, defaultServerAPIHost)
 	}
 }
 
@@ -188,8 +188,8 @@ func TestBuildTelegramSetupBootstrap_IdentityErrorSkips(t *testing.T) {
 	if state.IdentityDetectError == "" {
 		t.Fatalf("expected IdentityDetectError to be set")
 	}
-	if state.ServerAPIHost != defaultTelegramServerAPIHost {
-		t.Fatalf("ServerAPIHost=%q, want %q", state.ServerAPIHost, defaultTelegramServerAPIHost)
+	if state.ServerAPIHost != defaultServerAPIHost {
+		t.Fatalf("ServerAPIHost=%q, want %q", state.ServerAPIHost, defaultServerAPIHost)
 	}
 }
 
@@ -198,9 +198,9 @@ func TestBuildTelegramSetupBootstrap_EmptyServerIDSkips(t *testing.T) {
 
 	telegramSetupBootstrapLoadConfig = func(path, baseDir string) (*config.Config, error) {
 		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       "centralized",
-			TelegramServerAPIHost: "https://api.example.test",
+			TelegramEnabled: true,
+			TelegramBotType: "centralized",
+			ServerAPIHost:   "https://api.example.test",
 		}, nil
 	}
 	telegramSetupBootstrapIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
@@ -232,9 +232,9 @@ func TestBuildTelegramSetupBootstrap_EligibleCentralized(t *testing.T) {
 
 	telegramSetupBootstrapLoadConfig = func(path, baseDir string) (*config.Config, error) {
 		return &config.Config{
-			TelegramEnabled:       true,
-			TelegramBotType:       "   ",
-			TelegramServerAPIHost: " https://api.example.test ",
+			TelegramEnabled: true,
+			TelegramBotType: "   ",
+			ServerAPIHost:   " https://api.example.test ",
 		}, nil
 	}
 	telegramSetupBootstrapIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
