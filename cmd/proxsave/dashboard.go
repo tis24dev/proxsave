@@ -129,19 +129,6 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		case menu.ActionReconfigure:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=install")
 			args.Install = true
-		case menu.ActionDaemonSetup, menu.ActionDaemonRemove:
-			// Admin ops: same path as --daemon-setup / --daemon-remove (bootstrap
-			// logging on the plain terminal). Close the UI, set the flag, and let the
-			// normal mode dispatch run it (like the backup action).
-			if action == menu.ActionDaemonSetup {
-				logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-setup")
-				args.DaemonSetup = true
-			} else {
-				logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-remove")
-				args.DaemonRemove = true
-			}
-			_ = session.Close()
-			return types.ExitSuccess.Int(), false
 		default:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=exit")
 			return types.ExitSuccess.Int(), true
@@ -187,6 +174,12 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 	case menu.ActionPostInstallCheck:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=post-install-check")
 		_, _ = dashboardRunPostInstallAudit(ctx, session, getExecInfo().ExecPath, configPath)
+	case menu.ActionDaemonSetup:
+		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-setup")
+		runDashboardDaemonAdmin(ctx, session, true, configPath, baseDir)
+	case menu.ActionDaemonRemove:
+		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-remove")
+		runDashboardDaemonAdmin(ctx, session, false, configPath, baseDir)
 	case menu.ActionDaemonStatus:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-status")
 		runDashboardDaemonStatus(ctx, session, configPath, baseDir)
@@ -194,6 +187,65 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		return false
 	}
 	return true
+}
+
+// Seams so the daemon admin ops can be stubbed in tests (they otherwise run real
+// systemctl / write /etc/systemd + backup.env).
+var (
+	daemonApplyDaemonMode = applyDaemonMode
+	daemonApplyCronMode   = applyCronMode
+)
+
+// runDashboardDaemonAdmin installs (install=true) or reverts (install=false) the
+// daemon scheduler WITHOUT leaving the graphical UI: it runs the same apply* op as
+// the --daemon-setup / --daemon-remove flags inside a RunTask and shows the outcome
+// as a Notice, then loops back to the menu. Console + bootstrap logging are muted
+// for the duration so the ops (which log via the global logger + a bootstrap) can't
+// corrupt the alternate screen.
+func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, install bool, configPath, baseDir string) {
+	cfg, err := daemonStatusLoadConfig(configPath, baseDir)
+	if err != nil || cfg == nil {
+		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError,
+			"Daemon change failed", "Could not read the configuration to apply the scheduler change."))
+		return
+	}
+
+	// Mute the console for the op: swap the global logger to a discarding one and
+	// use a console-quiet bootstrap. Restored right after.
+	prev := logging.GetDefaultLogger()
+	silent := logging.New(types.LogLevelError, false)
+	silent.SetOutput(io.Discard)
+	logging.SetDefaultLogger(silent)
+	defer logging.SetDefaultLogger(prev)
+	bl := logging.NewBootstrapLogger()
+	bl.SetConsoleQuiet(true)
+
+	title := "Disabling daemon"
+	work := "Reverting to the cron scheduler..."
+	doneTitle := "Daemon disabled"
+	doneMsg := "Reverted to the cron scheduler and removed the daemon service. Future upgrades will not reinstall it."
+	if install {
+		title = "Installing daemon"
+		work = "Installing and enabling proxsave-daemon.service..."
+		doneTitle = "Daemon installed"
+		doneMsg = "The resident daemon (proxsave-daemon.service) is active; the cron entry was removed."
+	}
+	execToken := daemonSelfExecPath()
+	var opErr error
+	_ = components.RunTask(ctx, session, title, work, func(taskCtx context.Context, report func(string)) error {
+		if install {
+			opErr = daemonApplyDaemonMode(taskCtx, cfg, configPath, execToken, bl)
+		} else {
+			opErr = daemonApplyCronMode(taskCtx, cfg, configPath, execToken, bl, true)
+		}
+		return nil
+	})
+
+	if opErr != nil {
+		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError, title+" failed", opErr.Error()))
+		return
+	}
+	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, doneTitle, doneMsg))
 }
 
 // dashboardDaemonState decides which daemon command the menu offers, from the
