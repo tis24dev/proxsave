@@ -95,6 +95,21 @@ func daemonUnitInstalled() bool {
 	return err == nil
 }
 
+// daemonUnitActiveState returns the systemctl "is-active" word for the unit
+// (e.g. "active", "inactive", "failed"), best-effort: "" when systemctl is
+// unavailable. is-active exits non-zero when not active, so the exit code is
+// ignored and only the printed state word is used.
+func daemonUnitActiveState(ctx context.Context) string {
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd, err := safeexec.CommandContext(callCtx, "systemctl", "is-active", daemonUnitName)
+	if err != nil {
+		return ""
+	}
+	out, _ := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out))
+}
+
 // runSystemctl runs one systemctl invocation through the safeexec allowlist with
 // a bounded timeout, surfacing stderr on failure.
 func runSystemctl(ctx context.Context, args ...string) error {

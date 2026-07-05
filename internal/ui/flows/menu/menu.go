@@ -28,6 +28,21 @@ const (
 	ActionCheckTelegram
 	ActionCheckHealthcheck
 	ActionPostInstallCheck
+	// Third group (daemon scheduler): setup/remove run the same admin path as the
+	// --daemon-setup / --daemon-remove flags; status runs a read-only screen.
+	ActionDaemonSetup  // install OR re-enable the resident daemon (--daemon-setup)
+	ActionDaemonRemove // disable the daemon, revert to cron (--daemon-remove)
+	ActionDaemonStatus // show the daemon/scheduler state
+)
+
+// DaemonState tells Run which daemon command(s) to offer, context-aware.
+type DaemonState int
+
+const (
+	DaemonStateUnknown  DaemonState = iota // config unreadable: offer only Status
+	DaemonStateOnCron                      // on cron, not opted out: offer Install
+	DaemonStateActive                      // daemon is the active scheduler: offer Disable
+	DaemonStateDisabled                    // reverted via --daemon-remove: offer Re-enable
 )
 
 // errMenuExit is the esc sentinel (leave without doing anything).
@@ -36,7 +51,7 @@ var errMenuExit = errors.New("dashboard: exit")
 // Run shows the dashboard and returns the chosen action. Esc, Ctrl+C, and a
 // dying UI all resolve to ActionExit: a human at the menu must never get a
 // surprise backup out of a failed screen.
-func Run(ctx context.Context, session *shell.Session) (Action, error) {
+func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Action, error) {
 	items := []components.SelectorItem[Action]{
 		{Label: "Run backup now", Description: "start a backup with the current configuration", Value: ActionBackup},
 		{Label: "Restore", Description: "restore a backup onto this system", Value: ActionRestore},
@@ -48,8 +63,23 @@ func Run(ctx context.Context, session *shell.Session) (Action, error) {
 		{Label: "Check Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
 		{Label: "Check healthchecks", Description: "verify backup monitoring and show the portal link", Value: ActionCheckHealthcheck},
 		{Label: "Post-install check", Description: "re-run the post-install audit", Value: ActionPostInstallCheck},
-		{Label: "Exit", Description: "leave without doing anything", Value: ActionExit},
 	}
+
+	// Third group (daemon scheduler): context-aware - only the command that fits
+	// the current state, plus the read-only status. Setup/remove run the same admin
+	// path as the flags; status runs a screen in-session.
+	items = append(items, components.SelectorItem[Action]{Label: "─── Daemon ───", Separator: true})
+	switch daemon {
+	case DaemonStateActive:
+		items = append(items, components.SelectorItem[Action]{Label: "Disable daemon", Description: "stop the daemon and revert to the cron scheduler", Value: ActionDaemonRemove})
+	case DaemonStateDisabled:
+		items = append(items, components.SelectorItem[Action]{Label: "Re-enable daemon", Description: "switch back to the resident daemon scheduler", Value: ActionDaemonSetup})
+	case DaemonStateOnCron:
+		items = append(items, components.SelectorItem[Action]{Label: "Install daemon", Description: "switch to the resident daemon scheduler (from cron)", Value: ActionDaemonSetup})
+	}
+	items = append(items, components.SelectorItem[Action]{Label: "Daemon status", Description: "show the daemon service and scheduler state", Value: ActionDaemonStatus})
+
+	items = append(items, components.SelectorItem[Action]{Label: "Exit", Description: "leave without doing anything", Value: ActionExit})
 	action, err := shell.Ask(ctx, session, components.NewSelector(
 		"Dashboard", items,
 		components.WithSelectorPrompt[Action]("What do you want to do?\n(Non-interactive invocations, e.g. cron, run the backup directly.)"),
