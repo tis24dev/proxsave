@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
@@ -25,18 +27,28 @@ const healthchecksSectionName = "Healthchecks"
 // It is the SOLE display boundary for the magic-link: every link it prints passes
 // through serverbot.SanitizeLoginURL, and it never registers the link as a log secret
 // (it must stay visible). It NEVER aborts the run and never escalates a transport
-// hiccup to WARNING/ERROR: the "active" state comes from the on-disk secret (the
-// daemon's Reporter is the real pinger), and a failed best-effort mint degrades to a
-// quiet Info line.
+// hiccup to WARNING/ERROR by itself.
+//
+// The reported transmission state is REAL, not cosmetic: the DAEMON (a separate process,
+// cmd/proxsave/daemon.go) is the only pinger, and it persists every ping outcome to the
+// on-disk status file. This section runs inside the RUN process and transmits nothing,
+// so it can only READ that file and report what the daemon actually managed to send. A
+// missing/empty/corrupt file reads as "nothing transmitted yet" (honest for a first run
+// or a stopped daemon), never a false success. A failed best-effort mint of the portal
+// link degrades to a quiet Info line.
 type HealthchecksChannel struct {
 	cfg    *config.Config
 	logger *logging.Logger
 
 	// Seams for tests (nil-safe): loadSecret reads the on-disk per-server relay secret
 	// (presence == "centralized monitoring provisioned"); mintLink best-effort fetches a
-	// fresh portal magic-link (login=1) when this run's relay did not already capture one.
+	// fresh portal magic-link (login=1) when this run's relay did not already capture one;
+	// loadStatus reads the daemon's persisted ping outcomes; now clocks the freshness of
+	// those outcomes (injectable so the staleness branches are deterministic in tests).
 	loadSecret func(baseDir string) (string, error)
 	mintLink   func(ctx context.Context, serverAPIHost, serverID, secret string) (string, error)
+	loadStatus func(baseDir string) (health.Status, error)
+	now        func() time.Time
 }
 
 // NewHealthchecksChannel builds the Phase-7 healthchecks section from config.
@@ -51,6 +63,8 @@ func NewHealthchecksChannel(cfg *config.Config, logger *logging.Logger) *Healthc
 			c, err := health.FetchCentralizedConfig(ctx, nil, serverAPIHost, serverID, secret, true)
 			return c.LoginURL, err
 		},
+		loadStatus: health.LoadStatus,
+		now:        time.Now,
 	}
 }
 
@@ -85,8 +99,8 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 		return nil
 	}
 
-	h.info("✓ %s: active (reporting to the monitor)", healthchecksSectionName)
-	setHealthcheckStatus(stats, "active")
+	// Provisioned: report the REAL transmission status read from the daemon status file.
+	h.renderTransmissionStatus(stats)
 
 	// Portal magic-link: prefer the one THIS run's relay already captured (no network);
 	// else best-effort mint one (the server returns it only until the user's first
@@ -96,7 +110,11 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 		link = stats.HealthcheckLink
 	}
 	if link == "" && h.mintLink != nil {
-		if minted, err := h.mintLink(ctx, h.cfg.ServerAPIHost, h.cfg.ServerID, secret); err == nil {
+		// Network op: wrap in a shape-only debug envelope (no URL, no secret).
+		done := logging.DebugStart(h.logger, "hc portal mint", "have_capture=false")
+		minted, err := h.mintLink(ctx, h.cfg.ServerAPIHost, h.cfg.ServerID, secret)
+		done(err)
+		if err == nil {
 			link = minted
 		} else {
 			h.info("%s: portal link not available this run", healthchecksSectionName)
@@ -110,6 +128,145 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 	return nil
 }
 
+// renderTransmissionStatus reads the daemon status file and reports the latest REAL
+// transmission outcome. It NEVER prints the success glyph unless a fresh heartbeat is
+// backed by an ok-or-absent last backup outcome; anything else is an honest WARNING.
+func (h *HealthchecksChannel) renderTransmissionStatus(stats *BackupStats) {
+	var st health.Status
+	if h.loadStatus != nil {
+		// File read op: wrap in a shape-only debug envelope (mode only, never a path
+		// secret). Reads are tolerant: missing/empty file yields a zero Status + nil err.
+		done := logging.DebugStart(h.logger, "hc status read", "mode=%s", h.cfg.HealthcheckMode)
+		loaded, err := h.loadStatus(h.cfg.BaseDir)
+		done(err)
+		if err != nil {
+			// Unreadable/corrupt status file: we cannot PROVE any transmission, so fall
+			// through to the honest "no transmission recorded" branch. The error is
+			// debug-only and never carries a secret (LoadStatus wraps a JSON/path error).
+			h.debug("%s: status read failed, treating as no-transmission (%v)", healthchecksSectionName, err)
+		} else {
+			st = loaded
+		}
+	}
+
+	staleAfter := heartbeatStaleAfter(h.cfg.HealthcheckHeartbeatInterval)
+	// Shape-only debug: booleans + threshold, never timestamps of records as URLs/secrets.
+	h.debug("%s: status shape heartbeat=%t run_finished=%t run_hang=%t stale_after=%s",
+		healthchecksSectionName, st.Heartbeat != nil, st.RunFinished != nil, st.RunHang != nil, staleAfter)
+
+	// No file / no heartbeat record: the daemon has not (yet) transmitted anything.
+	if st.Heartbeat == nil {
+		h.warn("⚠️ %s: no transmission recorded (daemon not running, or first run pending)", healthchecksSectionName)
+		setHealthcheckStatus(stats, "no-transmission")
+		return
+	}
+
+	now := h.clock()
+	hbAge := now.Sub(time.Unix(st.Heartbeat.TS, 0))
+
+	// Stale heartbeat: the last beat is older than 2x the configured interval, so the
+	// daemon likely stopped beating (down, crashed, or wedged).
+	if hbAge > staleAfter {
+		h.debug("%s: heartbeat age exceeds threshold (stale)", healthchecksSectionName)
+		h.warn("⚠️ %s: monitor heartbeat stale (last %s) - daemon may be down", healthchecksSectionName, humanizeAge(hbAge))
+		setHealthcheckStatus(stats, "stale")
+		return
+	}
+
+	// Fresh but FAILED heartbeat: the daemon is still beating (TS fresh) yet the last
+	// beat did not transmit (OK=false), which is the daemon's "alive URL configured but
+	// the monitor is unreachable" signal (connection refused / timeout / non-2xx). A
+	// running-but-failing daemon keeps the TS fresh forever, so the stale branch above
+	// never rescues this; the OK flag is the only signal that the monitor is down RIGHT
+	// NOW. Reporting "transmitting" here would be the exact false success this section
+	// exists to eliminate. Heartbeat.Err was already redacted by the daemon's Reporter
+	// (redactURLErr strips the URL), so it is safe to surface verbatim.
+	if !st.Heartbeat.OK {
+		h.debug("%s: fresh heartbeat but transmit failed=true", healthchecksSectionName)
+		h.warn("⚠️ %s: monitor heartbeat NOT transmitted: %s (%s) - monitor may be unreachable", healthchecksSectionName, st.Heartbeat.Err, humanizeAge(hbAge))
+		setHealthcheckStatus(stats, "heartbeat-failed")
+		return
+	}
+
+	// Latest backup outcome = the NEWER of RunFinished/RunHang. Only its transmission
+	// result matters: an old failure that a newer run superseded is not a live problem.
+	outcome := newerPing(st.RunFinished, st.RunHang)
+	if outcome != nil && !outcome.OK {
+		outAge := now.Sub(time.Unix(outcome.TS, 0))
+		h.debug("%s: last backup outcome failed=true", healthchecksSectionName)
+		// outcome.Err was already redacted by the daemon's Reporter (redactURLErr): it
+		// carries no URL or secret, so it is safe to surface verbatim here.
+		h.warn("⚠️ %s: last backup outcome NOT transmitted: %s (%s)", healthchecksSectionName, outcome.Err, humanizeAge(outAge))
+		setHealthcheckStatus(stats, "transmit-failed")
+		return
+	}
+
+	// Healthy: fresh heartbeat, last outcome ok or absent. This is the ONLY success glyph.
+	tail := ""
+	if outcome != nil {
+		tail = fmt.Sprintf(", last backup outcome %s", humanizeAge(now.Sub(time.Unix(outcome.TS, 0))))
+	}
+	h.info("✓ %s: transmitting to the monitor (heartbeat %s%s)", healthchecksSectionName, humanizeAge(hbAge), tail)
+	setHealthcheckStatus(stats, "transmitting")
+}
+
+// clock returns the current time via the injectable seam (defaults to time.Now).
+func (h *HealthchecksChannel) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
+}
+
+// heartbeatStaleAfter returns the age past which the daemon heartbeat is treated as
+// stale: 2x the configured interval. WHY the guards: an unset/zero interval falls back
+// to the config default (5m), and a very small interval is floored so 2x stays at least
+// ~2m -- a heartbeat that merely slipped one tick must not read as "daemon down".
+func heartbeatStaleAfter(interval time.Duration) time.Duration {
+	const floor = time.Minute
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	if interval < floor {
+		interval = floor
+	}
+	return 2 * interval
+}
+
+// newerPing returns whichever record has the larger timestamp (nil-tolerant). Used to
+// pick the most recent backup outcome between RunFinished and RunHang.
+func newerPing(a, b *health.PingRecord) *health.PingRecord {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case b.TS > a.TS:
+		return b
+	default:
+		return a
+	}
+}
+
+// humanizeAge renders an age as a coarse single-unit "<n><unit> ago" string. It is
+// intentionally approximate: the exact value is debug-only, the human-facing line just
+// needs to convey freshness. A sub-second or negative age (clock skew) reads "just now".
+func humanizeAge(d time.Duration) string {
+	if d < time.Second {
+		return "just now"
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours())/24)
+	}
+}
+
 func (h *HealthchecksChannel) info(format string, args ...interface{}) {
 	if h.logger != nil {
 		h.logger.Info(format, args...)
@@ -119,6 +276,12 @@ func (h *HealthchecksChannel) info(format string, args ...interface{}) {
 func (h *HealthchecksChannel) warn(format string, args ...interface{}) {
 	if h.logger != nil {
 		h.logger.Warning(format, args...)
+	}
+}
+
+func (h *HealthchecksChannel) debug(format string, args ...interface{}) {
+	if h.logger != nil {
+		h.logger.Debug(format, args...)
 	}
 }
 

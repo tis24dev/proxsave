@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/health"
 )
 
 // fakeReporter records the daemon's healthchecks calls for assertions.
@@ -62,9 +63,12 @@ func (f *fakeReporter) snapshot() fakeReporter {
 	return fakeReporter{started: f.started, finished: f.finished, hung: f.hung, beats: f.beats, lastCode: f.lastCode, lastRid: f.lastRid, lastTail: f.lastTail}
 }
 
-func newTestDaemon(rep backupReporter, cmdFn func(ctx context.Context) *exec.Cmd, maxRun time.Duration) *daemon {
+func newTestDaemon(t *testing.T, rep backupReporter, cmdFn func(ctx context.Context) *exec.Cmd, maxRun time.Duration) *daemon {
+	t.Helper()
 	return &daemon{
-		cfg:          &config.Config{MaxRunDuration: maxRun, HealthcheckSendLog: false, BackupEnabled: true},
+		// A temp BaseDir keeps recordPing's status writes out of the source tree
+		// (StatusPath("") would resolve to a cwd-relative identity/ dir).
+		cfg:          &config.Config{BaseDir: t.TempDir(), MaxRunDuration: maxRun, HealthcheckSendLog: false, BackupEnabled: true},
 		reporter:     rep,
 		newBackupCmd: cmdFn,
 		now:          time.Now,
@@ -93,7 +97,7 @@ func TestExitCodeFromErr(t *testing.T) {
 
 func TestRunOnceReportsExitCode(t *testing.T) {
 	rep := &fakeReporter{backupURL: true}
-	d := newTestDaemon(rep, shCmd("exit 4"), time.Hour)
+	d := newTestDaemon(t, rep, shCmd("exit 4"), time.Hour)
 	d.runOnce(context.Background())
 	s := rep.snapshot()
 	if s.started != 1 || s.finished != 1 || s.hung != 0 {
@@ -109,7 +113,7 @@ func TestRunOnceReportsExitCode(t *testing.T) {
 
 func TestRunOnceReportsSuccess(t *testing.T) {
 	rep := &fakeReporter{backupURL: true}
-	d := newTestDaemon(rep, shCmd("exit 0"), time.Hour)
+	d := newTestDaemon(t, rep, shCmd("exit 0"), time.Hour)
 	d.runOnce(context.Background())
 	s := rep.snapshot()
 	if s.finished != 1 || s.lastCode != 0 || s.hung != 0 {
@@ -119,7 +123,7 @@ func TestRunOnceReportsSuccess(t *testing.T) {
 
 func TestRunOnceCapturesLogTail(t *testing.T) {
 	rep := &fakeReporter{backupURL: true}
-	d := newTestDaemon(rep, shCmd("echo HELLO_TAIL_MARKER; exit 4"), time.Hour)
+	d := newTestDaemon(t, rep, shCmd("echo HELLO_TAIL_MARKER; exit 4"), time.Hour)
 	d.cfg.HealthcheckSendLog = true // enable capture of the child's output
 	d.runOnce(context.Background())
 	s := rep.snapshot()
@@ -133,7 +137,7 @@ func TestRunOnceCapturesLogTail(t *testing.T) {
 
 func TestRunOnceNoLogTailWhenSendLogOff(t *testing.T) {
 	rep := &fakeReporter{backupURL: true}
-	d := newTestDaemon(rep, shCmd("echo SHOULD_NOT_APPEAR; exit 4"), time.Hour) // SendLog=false
+	d := newTestDaemon(t, rep, shCmd("echo SHOULD_NOT_APPEAR; exit 4"), time.Hour) // SendLog=false
 	d.runOnce(context.Background())
 	if s := rep.snapshot(); s.lastTail != "" {
 		t.Fatalf("SendLog off must POST no body, got %q", s.lastTail)
@@ -143,7 +147,7 @@ func TestRunOnceNoLogTailWhenSendLogOff(t *testing.T) {
 func TestRunOnceReportsHang(t *testing.T) {
 	rep := &fakeReporter{backupURL: true}
 	// Tiny watchdog budget + a slow child -> timeout -> SIGTERM -> hang.
-	d := newTestDaemon(rep, shCmd("sleep 5"), 150*time.Millisecond)
+	d := newTestDaemon(t, rep, shCmd("sleep 5"), 150*time.Millisecond)
 	start := time.Now()
 	d.runOnce(context.Background())
 	if elapsed := time.Since(start); elapsed > 4*time.Second {
@@ -158,7 +162,7 @@ func TestRunOnceReportsHang(t *testing.T) {
 func TestRunOnceSkipsWhenBackupDisabled(t *testing.T) {
 	rep := &fakeReporter{backupURL: true}
 	called := false
-	d := newTestDaemon(rep, func(ctx context.Context) *exec.Cmd {
+	d := newTestDaemon(t, rep, func(ctx context.Context) *exec.Cmd {
 		called = true
 		return exec.CommandContext(ctx, "/bin/sh", "-c", "exit 0")
 	}, time.Hour)
@@ -173,9 +177,39 @@ func TestRunOnceSkipsWhenBackupDisabled(t *testing.T) {
 	}
 }
 
+func TestRunOnceNoReporterRecordsNoPhantomPing(t *testing.T) {
+	// No reporter resolved (unpaired centralized, or the server was down at startup with
+	// no cached backup.env URLs) means NOTHING can be transmitted. A scheduled backup
+	// still runs, but the outcome pings must be swallowed as "no url configured" and NOT
+	// persisted: recording a RunFinished{OK:true} for a ping that never left the process
+	// would let the run-side section print a false green "transmitting to the monitor".
+	base := t.TempDir()
+	called := false
+	d := newTestDaemon(t, nil, func(ctx context.Context) *exec.Cmd {
+		called = true
+		return exec.CommandContext(ctx, "/bin/sh", "-c", "exit 0")
+	}, time.Hour)
+	d.cfg.BaseDir = base
+	d.cfg.HealthcheckMode = "centralized"
+
+	d.runOnce(context.Background())
+
+	if !called {
+		t.Fatal("the backup child should still run even without a reporter")
+	}
+	st, err := health.LoadStatus(base)
+	if err != nil {
+		t.Fatalf("LoadStatus: %v", err)
+	}
+	if st.RunStarted != nil || st.RunFinished != nil || st.RunHang != nil {
+		t.Fatalf("a nil reporter must record no outcome ping, got started=%v finished=%v hang=%v",
+			st.RunStarted, st.RunFinished, st.RunHang)
+	}
+}
+
 func TestRunOnceSkipsOnShutdown(t *testing.T) {
 	rep := &fakeReporter{backupURL: true}
-	d := newTestDaemon(rep, shCmd("exit 0"), time.Hour)
+	d := newTestDaemon(t, rep, shCmd("exit 0"), time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already shutting down
 	d.runOnce(ctx)
