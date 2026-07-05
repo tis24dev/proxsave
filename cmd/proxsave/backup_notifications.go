@@ -25,6 +25,7 @@ func initializeBackupNotifications(opts backupModeOptions, orch *orchestrator.Or
 	initializeTelegramNotification(opts, orch)
 	initializeGotifyNotification(opts, orch)
 	initializeWebhookNotification(opts, orch)
+	initializeHealthcheckSection(opts, orch)
 	notifyDone(nil)
 
 	fmt.Println()
@@ -84,6 +85,20 @@ func initializeEmailNotification(opts backupModeOptions, orch *orchestrator.Orch
 	emailAdapter := orchestrator.NewNotificationAdapter(emailNotifier, logger)
 	orch.RegisterNotificationChannel(emailAdapter)
 	logging.Info("✓ Email initialized (method: %s)", cfg.EmailDeliveryMethod)
+}
+
+// initializeHealthcheckSection registers the always-visible Phase-7 "Healthchecks"
+// section when HEALTHCHECK_ENABLED. Decoupled from Telegram. No Skip line here: when
+// disabled, the Phase-7 entries loop emits the single "Healthchecks: disabled" line
+// itself (registering the channel only when enabled keeps it out of the remainder
+// dispatch, so there is never a double line).
+func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orchestrator) {
+	cfg := opts.cfg
+	if cfg == nil || !cfg.HealthcheckEnabled {
+		return
+	}
+	orch.RegisterNotificationChannel(orchestrator.NewHealthchecksChannel(cfg, opts.logger))
+	logging.DebugStep(opts.logger, "notifications init", "healthchecks section enabled (mode=%s)", cfg.HealthcheckMode)
 }
 
 func initializeTelegramNotification(opts backupModeOptions, orch *orchestrator.Orchestrator) {
