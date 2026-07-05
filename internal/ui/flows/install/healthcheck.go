@@ -3,13 +3,15 @@ package install
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // Seams for tests.
@@ -46,21 +48,14 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 		return result, nil
 	}
 
-	status := "Not checked yet. Choose Check to verify the monitoring connection."
+	statusMsg := "Not checked yet. Choose Check to verify the monitoring connection."
+	statusVerified := false // last check verified (green)
+	statusFailed := false   // last check was a fatal failure (red)
 	magicLink := ""
 	errHCEsc := errors.New("healthcheck setup: esc")
 
 	for {
-		var prompt strings.Builder
-		prompt.WriteString("Backup monitoring (healthchecks) is enabled for this host.\n")
-		prompt.WriteString("It reports each backup outcome + a liveness heartbeat to an external\n")
-		prompt.WriteString("monitor, so a silent failure (crash, hang, host down) is still caught.\n\n")
-		if magicLink != "" {
-			prompt.WriteString("Your monitoring portal (single-use link, valid ~1h):\n")
-			fmt.Fprintf(&prompt, "  %s\n", magicLink)
-			prompt.WriteString("Open it to set a password and configure alert channels.\n\n")
-		}
-		prompt.WriteString("Status: " + status)
+		prompt := buildHealthcheckPrompt(magicLink, statusMsg, statusVerified, statusFailed)
 
 		items := make([]components.SelectorItem[healthcheckAction], 0, 3)
 		if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
@@ -80,7 +75,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 
 		action, err := shell.Ask(ctx, session, components.NewSelector(
 			"Backup monitoring (healthchecks)", items,
-			components.WithSelectorPrompt[healthcheckAction](prompt.String()),
+			components.WithSelectorPromptStyled[healthcheckAction](prompt),
 			components.WithSelectorBack[healthcheckAction](errHCEsc),
 		))
 		if err != nil {
@@ -129,16 +124,63 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 
 			switch {
 			case st.Verified:
-				status = fmt.Sprintf("VERIFIED: %s", st.Message)
+				statusVerified, statusFailed = true, false
+				statusMsg = st.Message
 			case st.Fatal:
-				status = fmt.Sprintf("FAILED: %s", st.Message)
+				statusVerified, statusFailed = false, true
+				statusMsg = st.Message
 			default:
+				statusVerified, statusFailed = false, false
 				hint := orchestrator.HealthcheckSetupRetryHint
 				if result.CheckAttempts >= orchestrator.HealthcheckSetupMaxVerificationAttempts {
 					hint = orchestrator.HealthcheckSetupMaxAttemptsHint
 				}
-				status = fmt.Sprintf("%s\n%s", st.Message, hint)
+				statusMsg = st.Message + "\n" + hint
 			}
 		}
 	}
+}
+
+// buildHealthcheckPrompt renders the styled prompt shown above the Check/Continue/
+// Skip choices: the guide, the portal magic-link boxed for emphasis, and a Status
+// line whose keyword is green when verified and red on a fatal failure. The magic
+// link is already sanitized upstream (sanitizeLoginURL: http(s), printable ASCII).
+func buildHealthcheckPrompt(magicLink, statusMsg string, verified, failed bool) string {
+	var b strings.Builder
+	b.WriteString(theme.Text.Render("Backup monitoring (healthchecks) is enabled for this host."))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("It reports each backup outcome + a liveness heartbeat to an external"))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("monitor, so a silent failure (crash, hang, host down) is still caught."))
+	b.WriteString("\n\n")
+
+	if magicLink != "" {
+		box := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(theme.Orange).
+			Padding(0, 1).
+			Render(theme.Subtle.Render("Your monitoring portal (single-use link, valid ~1h):") +
+				"\n" + theme.Emphasis.Render(magicLink))
+		b.WriteString(box)
+		b.WriteString("\n")
+		b.WriteString(theme.Subtle.Render("Open it to set a password and configure alert channels."))
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(theme.Text.Render("Status: "))
+	switch {
+	case verified:
+		b.WriteString(theme.SuccessText.Render(theme.SymbolSuccess + " VERIFIED"))
+		if statusMsg != "" {
+			b.WriteString(theme.Text.Render(": " + statusMsg))
+		}
+	case failed:
+		b.WriteString(theme.ErrorText.Render(theme.SymbolError + " FAILED"))
+		if statusMsg != "" {
+			b.WriteString(theme.Text.Render(": " + statusMsg))
+		}
+	default:
+		b.WriteString(theme.Text.Render(statusMsg))
+	}
+	return b.String()
 }

@@ -2,12 +2,49 @@ package install
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
+
+func TestBuildHealthcheckPrompt(t *testing.T) {
+	link := "https://hc.proxsave.dev/l/Nr4vAebz5b"
+
+	// Verified: green "✓ VERIFIED", the link boxed.
+	v := buildHealthcheckPrompt(link, "ready", true, false)
+	if !strings.Contains(ansi.Strip(v), "\u2713 VERIFIED") {
+		t.Fatalf("verified keyword missing: %q", ansi.Strip(v))
+	}
+	if !strings.Contains(v, "34;197;94") { // theme.Green SGR
+		t.Fatalf("VERIFIED must be green")
+	}
+	if !strings.Contains(ansi.Strip(v), "╭") || !strings.Contains(ansi.Strip(v), link) {
+		t.Fatalf("magic-link must be boxed: %q", ansi.Strip(v))
+	}
+
+	// Fatal: red "✗ FAILED".
+	f := buildHealthcheckPrompt(link, "bad creds", false, true)
+	if !strings.Contains(ansi.Strip(f), "\u2717 FAILED") {
+		t.Fatalf("failed keyword missing: %q", ansi.Strip(f))
+	}
+	if !strings.Contains(f, "239;68;68") { // theme.Red SGR
+		t.Fatalf("FAILED must be red")
+	}
+
+	// No link -> no box; neutral status shows the message verbatim.
+	n := ansi.Strip(buildHealthcheckPrompt("", "Not checked yet.", false, false))
+	if strings.Contains(n, "╭") {
+		t.Fatalf("no link must render no box: %q", n)
+	}
+	if !strings.Contains(n, "Not checked yet.") {
+		t.Fatalf("neutral status missing: %q", n)
+	}
+}
 
 func TestRunHealthcheckSetup(t *testing.T) {
 	d := newDriver(t)
