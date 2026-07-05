@@ -116,11 +116,11 @@ func TestHealthchecksSectionTransmitting(t *testing.T) {
 		t.Fatalf("status=%q want transmitting", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, checkGlyph) || !strings.Contains(out, "transmitting to the monitor") {
+	if !strings.Contains(out, checkGlyph) || !strings.Contains(out, "transmitting") {
 		t.Fatalf("want success glyph + transmitting line, out=%q", out)
 	}
-	if !strings.Contains(out, "heartbeat") || !strings.Contains(out, "last backup outcome") {
-		t.Fatalf("want heartbeat + last-outcome ages, out=%q", out)
+	if !strings.Contains(out, "last beat") {
+		t.Fatalf("want last-beat age, out=%q", out)
 	}
 	// magic-link still works (reuse-captured)
 	if !strings.Contains(out, "https://hc/accounts/check_token/u/CAP/") {
@@ -146,11 +146,8 @@ func TestHealthchecksSectionTransmittingNoOutcome(t *testing.T) {
 		t.Fatalf("status=%q want transmitting", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, checkGlyph) || !strings.Contains(out, "heartbeat") {
-		t.Fatalf("want success glyph + heartbeat age, out=%q", out)
-	}
-	if strings.Contains(out, "last backup outcome") {
-		t.Fatalf("no outcome recorded -> must not mention last backup outcome, out=%q", out)
+	if !strings.Contains(out, checkGlyph) || !strings.Contains(out, "last beat") {
+		t.Fatalf("want success glyph + last-beat age, out=%q", out)
 	}
 }
 
@@ -175,7 +172,7 @@ func TestHealthchecksSectionHeartbeatStale(t *testing.T) {
 		t.Fatalf("status=%q want stale", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "heartbeat stale") {
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "daemon stale") {
 		t.Fatalf("want warning glyph + stale line, out=%q", out)
 	}
 	if strings.Contains(out, checkGlyph) {
@@ -206,7 +203,7 @@ func TestHealthchecksSectionTransmitFailed(t *testing.T) {
 		t.Fatalf("status=%q want transmit-failed", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "NOT transmitted") {
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "not transmitted") {
 		t.Fatalf("want warning glyph + failed line, out=%q", out)
 	}
 	if !strings.Contains(out, "connection refused") {
@@ -245,7 +242,7 @@ func TestHealthchecksSectionUnreachable(t *testing.T) {
 		t.Fatalf("status=%q want unreachable", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "monitor is unreachable") {
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "monitor unreachable") {
 		t.Fatalf("want warning glyph + unreachable line, out=%q", out)
 	}
 	if !strings.Contains(out, "connection refused") {
@@ -356,7 +353,7 @@ func TestHealthchecksSectionDaemonDown(t *testing.T) {
 		t.Fatalf("status=%q want daemon-down", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "daemon is not running") {
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "daemon not running") {
 		t.Fatalf("want warning glyph + daemon-not-running line, out=%q", out)
 	}
 	// The old confusing "or first run pending" hedge must be GONE.
@@ -392,11 +389,8 @@ func TestHealthchecksSectionNotProvisioned(t *testing.T) {
 		t.Fatalf("status=%q want not-provisioned", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "not provisioned yet") {
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "not provisioned") {
 		t.Fatalf("want warning glyph + not-provisioned line, out=%q", out)
-	}
-	if !strings.Contains(out, "running") {
-		t.Fatalf("not-provisioned must state the daemon IS running, out=%q", out)
 	}
 	if strings.Contains(out, checkGlyph) {
 		t.Fatalf("not-provisioned must not print a success glyph, out=%q", out)
@@ -445,7 +439,7 @@ func TestHealthchecksSectionMintFailIsQuiet(t *testing.T) {
 	if strings.Contains(out, "Monitoring portal") {
 		t.Fatalf("a failed mint must not print a portal line, got: %q", out)
 	}
-	if !strings.Contains(out, "not available this run") {
+	if !strings.Contains(out, "portal link unavailable") {
 		t.Fatalf("a failed mint must degrade to a quiet info line, got: %q", out)
 	}
 }
@@ -490,8 +484,8 @@ func TestHealthchecksSectionStatusUnreadable(t *testing.T) {
 		t.Fatalf("status=%q want status-unreadable", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "status unavailable") {
-		t.Fatalf("want warning glyph + status-unavailable line, out=%q", out)
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "status file unreadable") {
+		t.Fatalf("want warning glyph + status-unreadable line, out=%q", out)
 	}
 	if strings.Contains(out, "daemon is not running") {
 		t.Fatalf("a corrupt file must NOT claim daemon-down, out=%q", out)

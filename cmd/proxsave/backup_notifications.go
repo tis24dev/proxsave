@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
@@ -105,12 +106,43 @@ func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orc
 	}
 	if problem := healthcheckConfigProblem(cfg); problem != "" {
 		logging.DebugStep(logger, "notifications init", "healthchecks not usable: %s", problem)
-		logging.Warning("Healthchecks: %s; section disabled", problem)
+		logging.Warning("Healthchecks disabled: %s", problem)
 		return
 	}
-	logging.DebugStep(logger, "notifications init", "healthchecks enabled (mode=%s)", cfg.HealthcheckMode)
+	// A valid config is worthless if the monitoring daemon (the ONLY pinger) is not
+	// running. Verify liveness at init from the daemon's persisted heartbeat - a missing
+	// beat means it never started, a stale one means it is down or stuck - and disable the
+	// section with a specific WARNING, just like the other channels refuse to enable when
+	// they cannot actually work.
+	if problem := healthcheckDaemonProblem(cfg, logger); problem != "" {
+		logging.DebugStep(logger, "notifications init", "healthchecks daemon problem: %s", problem)
+		logging.Warning("Healthchecks disabled: %s", problem)
+		return
+	}
+	logging.DebugStep(logger, "notifications init", "healthchecks enabled (mode=%s, daemon up)", cfg.HealthcheckMode)
 	orch.RegisterNotificationChannel(orchestrator.NewHealthchecksChannel(cfg, logger))
 	logging.Info("✓ Healthchecks initialized (mode: %s)", cfg.HealthcheckMode)
+}
+
+// healthcheckDaemonProblem verifies the monitoring daemon is actually alive by reading
+// its persisted heartbeat (the daemon records its first beat immediately on startup, so
+// a fresh beat proves it is running). Returns a specific reason when the daemon is not
+// usable (unreadable status, not running, or down/stuck), or "" when it is up. It never
+// transmits - it only inspects the local status file the daemon writes.
+func healthcheckDaemonProblem(cfg *config.Config, logger *logging.Logger) string {
+	st, err := health.LoadStatus(cfg.BaseDir)
+	if err != nil {
+		logging.DebugStep(logger, "notifications init", "healthchecks status unreadable: %v", err)
+		return "status file unreadable"
+	}
+	d := health.Diagnose(st, cfg.HealthcheckHeartbeatInterval, time.Now())
+	if d.DaemonUp {
+		return ""
+	}
+	if d.State == health.TxStale {
+		return "daemon stale (last beat " + health.HumanizeAge(d.HbAge) + ")"
+	}
+	return "daemon not running"
 }
 
 // healthcheckConfigProblem returns a short reason when the healthcheck config is
@@ -126,11 +158,11 @@ func healthcheckConfigProblem(cfg *config.Config) string {
 		// backup-only self config has no liveness signal. Name it precisely so the
 		// message is not mistaken for "no monitoring at all".
 		if cfg.HealthcheckAliveURL == "" && cfg.HealthcheckAliveID == "" {
-			return "self-hosted monitoring has no service-alive check configured (set HEALTHCHECK_ALIVE_ID or HEALTHCHECK_ALIVE_URL)"
+			return "no alive check configured"
 		}
 	default: // centralized
 		if strings.TrimSpace(cfg.ServerID) == "" {
-			return "centralized monitoring requires a SERVER_ID (pair the host with the bot)"
+			return "no SERVER_ID"
 		}
 	}
 	return ""

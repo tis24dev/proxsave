@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -82,7 +81,7 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 	}
 
 	if h.cfg.HealthcheckMode == "self" {
-		h.info("✓ %s: self-hosted monitoring configured", healthchecksSectionName)
+		h.info("✓ %s: self-hosted", healthchecksSectionName)
 		setHealthcheckStatus(stats, "self")
 		return nil
 	}
@@ -94,7 +93,7 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 		secret, _ = h.loadSecret(h.cfg.BaseDir)
 	}
 	if secret == "" {
-		h.warn("%s: not configured (pair with the bot to provision centralized monitoring)", healthchecksSectionName)
+		h.warn("⚠️ %s: not configured", healthchecksSectionName)
 		setHealthcheckStatus(stats, "not-configured")
 		return nil
 	}
@@ -117,13 +116,13 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 		if err == nil {
 			link = minted
 		} else {
-			h.info("%s: portal link not available this run", healthchecksSectionName)
+			h.info("%s: portal link unavailable", healthchecksSectionName)
 		}
 	}
 	// SOLE display boundary: sanitize the RAW link before printing; never register it as
 	// a secret (it must stay visible).
 	if safe := serverbot.SanitizeLoginURL(link); safe != "" {
-		h.info("Monitoring portal (single-use link, open it to set a password and configure alerts): %s", safe)
+		h.info("Monitoring portal: %s", safe)
 	}
 	return nil
 }
@@ -146,85 +145,42 @@ func (h *HealthchecksChannel) renderTransmissionStatus(stats *BackupStats) {
 			// missing/empty is the nil-error daemon-down path below). The raw error (may
 			// carry the file path) stays debug-only; the WARNING keeps it out.
 			h.debug("%s: status read failed (%v)", healthchecksSectionName, err)
-			h.warn("⚠️ %s: monitoring status unavailable - could not read the status file", healthchecksSectionName)
+			h.warn("⚠️ %s: status file unreadable", healthchecksSectionName)
 			setHealthcheckStatus(stats, "status-unreadable")
 			return
 		}
 		st = loaded
 	}
 
-	staleAfter := heartbeatStaleAfter(h.cfg.HealthcheckHeartbeatInterval)
-	// Shape-only debug: booleans + threshold + the heartbeat reason code (a small enum,
-	// never a URL/secret), so a support log shows exactly which branch was taken.
-	hbReason, hbOK := "", false
-	if st.Heartbeat != nil {
-		hbReason, hbOK = st.Heartbeat.Reason, st.Heartbeat.OK
-	}
-	h.debug("%s: status shape heartbeat=%t hb_ok=%t hb_reason=%q run_finished=%t run_hang=%t stale_after=%s",
-		healthchecksSectionName, st.Heartbeat != nil, hbOK, hbReason, st.RunFinished != nil, st.RunHang != nil, staleAfter)
+	// SINGLE source of truth: the SAME health.Diagnose the run-start init check uses, so
+	// the init verdict and this line can never disagree.
+	d := health.Diagnose(st, h.cfg.HealthcheckHeartbeatInterval, h.clock())
+	// Shape-only debug: the diagnosed state + booleans, never a URL/secret.
+	h.debug("%s: diagnose state=%s daemon_up=%t hb_age=%s has_outcome=%t",
+		healthchecksSectionName, d.State, d.DaemonUp, d.HbAge, d.HasOutcome)
 
-	// Each condition below is a DISTINCT, single-cause line - never a confusing "A or B"
-	// guess. Because the daemon records its very first beat immediately (even when it
-	// cannot yet resolve a URL), a MISSING heartbeat record means the daemon is not
-	// running, full stop; it is no longer conflated with "not provisioned" or "first run".
-	if st.Heartbeat == nil {
-		h.warn("⚠️ %s: the monitoring daemon is not running - no heartbeat recorded (start it to begin monitoring)", healthchecksSectionName)
+	// Each state is a DISTINCT, single-cause, SYNTHETIC line - a bare fact, never an
+	// instruction or a parenthetical explanation. d.Err is already Reporter-redacted.
+	switch d.State {
+	case health.TxNoHeartbeat:
+		h.warn("⚠️ %s: daemon not running", healthchecksSectionName)
 		setHealthcheckStatus(stats, "daemon-down")
-		return
-	}
-
-	now := h.clock()
-	hbAge := now.Sub(time.Unix(st.Heartbeat.TS, 0))
-
-	// Stale heartbeat: the last beat is older than 2x the configured interval, so the
-	// daemon stopped beating (down, crashed, or wedged) after having run before.
-	if hbAge > staleAfter {
-		h.debug("%s: heartbeat age exceeds threshold (stale)", healthchecksSectionName)
-		h.warn("⚠️ %s: heartbeat stale (last %s) - the monitoring daemon may have stopped", healthchecksSectionName, humanizeAge(hbAge))
+	case health.TxStale:
+		h.warn("⚠️ %s: daemon stale (last beat %s)", healthchecksSectionName, health.HumanizeAge(d.HbAge))
 		setHealthcheckStatus(stats, "stale")
-		return
-	}
-
-	// Fresh beat that did NOT transmit. Two genuinely different causes, each its own line:
-	if !st.Heartbeat.OK {
-		// (a) no_url: the daemon is alive and beating but has no ping URL yet (centralized
-		// pairing still pending, or the server was unreachable when it tried to resolve the
-		// URLs). Not a monitor failure - it simply is not provisioned yet.
-		if st.Heartbeat.Reason == health.ReasonNoURL {
-			h.debug("%s: fresh heartbeat, reason=no_url (not provisioned)", healthchecksSectionName)
-			h.warn("⚠️ %s: the monitoring daemon is running but not provisioned yet - no ping URL resolved (pairing pending, or the monitor was unreachable)", healthchecksSectionName)
-			setHealthcheckStatus(stats, "not-provisioned")
-			return
-		}
-		// (b) a real transmit failure: the daemon keeps a fresh TS forever, so the stale
-		// branch never rescues this; the OK flag is the only live signal the monitor is
-		// down RIGHT NOW. Err was already redacted by the Reporter (no URL/secret).
-		h.debug("%s: fresh heartbeat but transmit failed=true", healthchecksSectionName)
-		h.warn("⚠️ %s: the monitoring daemon is running but the monitor is unreachable: %s (last beat %s)", healthchecksSectionName, orNA(st.Heartbeat.Err), humanizeAge(hbAge))
+	case health.TxNotProvisioned:
+		h.warn("⚠️ %s: not provisioned (no ping URL)", healthchecksSectionName)
+		setHealthcheckStatus(stats, "not-provisioned")
+	case health.TxUnreachable:
+		h.warn("⚠️ %s: monitor unreachable: %s", healthchecksSectionName, orNA(d.Err))
 		setHealthcheckStatus(stats, "unreachable")
-		return
-	}
-
-	// Latest backup outcome = the NEWER of RunFinished/RunHang. Only its transmission
-	// result matters: an old failure that a newer run superseded is not a live problem.
-	outcome := newerPing(st.RunFinished, st.RunHang)
-	if outcome != nil && !outcome.OK {
-		outAge := now.Sub(time.Unix(outcome.TS, 0))
-		h.debug("%s: last backup outcome failed=true", healthchecksSectionName)
-		// outcome.Err was already redacted by the daemon's Reporter (redactURLErr): it
-		// carries no URL or secret, so it is safe to surface verbatim here.
-		h.warn("⚠️ %s: last backup outcome NOT transmitted: %s (%s)", healthchecksSectionName, orNA(outcome.Err), humanizeAge(outAge))
+	case health.TxTransmitFailed:
+		h.warn("⚠️ %s: last outcome not transmitted: %s", healthchecksSectionName, orNA(d.Err))
 		setHealthcheckStatus(stats, "transmit-failed")
-		return
+	default: // health.TxTransmitting - the ONLY success glyph
+		h.info("✓ %s: transmitting (last beat %s)", healthchecksSectionName, health.HumanizeAge(d.HbAge))
+		setHealthcheckStatus(stats, "transmitting")
 	}
-
-	// Healthy: fresh heartbeat, last outcome ok or absent. This is the ONLY success glyph.
-	tail := ""
-	if outcome != nil {
-		tail = fmt.Sprintf(", last backup outcome %s", humanizeAge(now.Sub(time.Unix(outcome.TS, 0))))
-	}
-	h.info("✓ %s: transmitting to the monitor (heartbeat %s%s)", healthchecksSectionName, humanizeAge(hbAge), tail)
-	setHealthcheckStatus(stats, "transmitting")
 }
 
 // clock returns the current time via the injectable seam (defaults to time.Now).
@@ -235,21 +191,6 @@ func (h *HealthchecksChannel) clock() time.Time {
 	return time.Now()
 }
 
-// heartbeatStaleAfter returns the age past which the daemon heartbeat is treated as
-// stale: 2x the configured interval. WHY the guards: an unset/zero interval falls back
-// to the config default (5m), and a very small interval is floored so 2x stays at least
-// ~2m -- a heartbeat that merely slipped one tick must not read as "daemon down".
-func heartbeatStaleAfter(interval time.Duration) time.Duration {
-	const floor = time.Minute
-	if interval <= 0 {
-		interval = 5 * time.Minute
-	}
-	if interval < floor {
-		interval = floor
-	}
-	return 2 * interval
-}
-
 // orNA renders a possibly-empty error string as "unspecified error" so a WARNING line
 // never trails off into an empty value (defensive: a non-no_url failure always carries
 // an Err today, but a future recorder that forgets one must not print a blank reason).
@@ -258,40 +199,6 @@ func orNA(s string) string {
 		return "unspecified error"
 	}
 	return s
-}
-
-// newerPing returns whichever record has the larger timestamp (nil-tolerant). Used to
-// pick the most recent backup outcome between RunFinished and RunHang.
-func newerPing(a, b *health.PingRecord) *health.PingRecord {
-	switch {
-	case a == nil:
-		return b
-	case b == nil:
-		return a
-	case b.TS > a.TS:
-		return b
-	default:
-		return a
-	}
-}
-
-// humanizeAge renders an age as a coarse single-unit "<n><unit> ago" string. It is
-// intentionally approximate: the exact value is debug-only, the human-facing line just
-// needs to convey freshness. A sub-second or negative age (clock skew) reads "just now".
-func humanizeAge(d time.Duration) string {
-	if d < time.Second {
-		return "just now"
-	}
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours())/24)
-	}
 }
 
 func (h *HealthchecksChannel) info(format string, args ...interface{}) {
