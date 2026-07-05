@@ -1,6 +1,8 @@
 package logging
 
 import (
+	"errors"
+	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -100,4 +102,17 @@ func RedactSecrets(s string, secrets ...string) string {
 		return s
 	}
 	return applySecretForms(s, secretReplaceForms(secrets))
+}
+
+// RedactURLError strips the URL from a *url.Error so it never reaches a log or a
+// caller: request URLs to the central servers embed low-capability secrets in the
+// path/query (a check UUID, or the server_id). net's *url.Error.Error() prints the
+// full URL verbatim; this keeps only the operation + underlying transport error.
+// Non-*url.Error values pass through unchanged.
+func RedactURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
