@@ -246,29 +246,64 @@ func RecordUpdate(baseDir, mode string, ts int64, available bool, latest string,
 	return writeStatus(baseDir, st)
 }
 
-// writeStatus writes st atomically, byte-for-byte the same idiom as
-// temp_registry.saveEntries: MkdirAll(dir, 0o750) so the identity dir exists,
-// MarshalIndent for a human-readable file, WriteFile to a ".tmp" sibling at 0o600,
-// then Rename over the final path so a concurrent reader sees either the old or
-// the new file, never a partial one.
+// RecordNotifyPing persists one per-notification-channel ping outcome into Records[kind]
+// (kind = "notify-<ch>"), atomically, next to RecordPing and sharing LoadStatus/writeStatus.
+// down is the /1 SIGNAL (the channel's send failed/degraded, so the monitor check goes DOWN);
+// ok is whether the ping transmitted. A no-url error is stored as the distinct ReasonNoURL
+// code. It is a separate writer from RecordPing so the fixed-kind callers keep their signature
+// and only the notify path carries Down.
+func RecordNotifyPing(baseDir, mode, kind string, ts int64, ok, down bool, pingErr error) error {
+	if kind == "" {
+		return fmt.Errorf("healthcheck status: empty notify kind")
+	}
+	rec := &PingRecord{TS: ts, OK: ok, Down: down}
+	if pingErr != nil {
+		if IsNoURLErr(pingErr) {
+			rec.Reason = ReasonNoURL
+		} else {
+			rec.Err = pingErr.Error()
+		}
+	}
+	st, err := LoadStatus(baseDir)
+	if err != nil {
+		return err
+	}
+	if st.Records == nil {
+		st.Records = make(map[string]*PingRecord)
+	}
+	st.Records[kind] = rec
+	st.Mode = mode
+	return writeStatus(baseDir, st)
+}
+
+// writeStatus writes st atomically to the shared status file.
 func writeStatus(baseDir string, st Status) error {
-	path := StatusPath(baseDir)
+	return writeJSONAtomic(StatusPath(baseDir), st)
+}
+
+// writeJSONAtomic writes v as indented JSON to path atomically, byte-for-byte the same
+// idiom as temp_registry.saveEntries: MkdirAll(dir, 0o750) so the parent dir exists,
+// MarshalIndent for a human-readable file, WriteFile to a ".tmp" sibling at 0o600, then
+// Rename over the final path so a concurrent reader sees either the old or the new file,
+// never a partial one. Shared by the status file and the per-run notify-results file, both
+// of which live in the identity dir and must NOT set the immutable +i attribute (which
+// would block every rewrite).
+func writeJSONAtomic(path string, v any) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create healthcheck status dir: %w", err)
+		return fmt.Errorf("create dir %s: %w", dir, err)
 	}
-	data, err := json.MarshalIndent(st, "", "  ")
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal healthcheck status: %w", err)
+		return fmt.Errorf("marshal %s: %w", filepath.Base(path), err)
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write healthcheck status: %w", err)
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		// Best-effort cleanup so a failed rename does not leave a stray ".tmp".
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename healthcheck status: %w", err)
+		_ = os.Remove(tmp) // best-effort cleanup so a failed rename leaves no stray ".tmp"
+		return fmt.Errorf("rename %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

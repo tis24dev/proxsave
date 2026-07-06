@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -175,7 +176,7 @@ func (d *daemon) runOnce(parentCtx context.Context) {
 	if d.cfg.HealthcheckSendLog {
 		tail = &tailBuffer{max: logTailBytes}
 	}
-	cmd := d.buildBackupCmd(runCtx, tail)
+	cmd := d.buildBackupCmd(runCtx, tail, rid)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = daemonKillGrace
 
@@ -202,6 +203,11 @@ func (d *daemon) runOnce(parentCtx context.Context) {
 	code := exitCodeFromErr(runErr)
 	logging.Info("daemon: backup finished (rid=%s exit=%d)", rid, code)
 	d.reportBestEffort("finish", func() error { return d.finishPing(parentCtx, r, rid, code, logBody) })
+
+	// The child reached Phase-7 and wrote its per-channel notify outcomes; ping one
+	// healthchecks check per channel it reported (Fase 2B / R4). Strictly after the child
+	// exits, so it is naturally the last transmission of the run.
+	d.reportNotifyOutcomes(parentCtx, r, rid)
 }
 
 // A nil reporter means no ping URL was ever resolved (unpaired/centralized, or the
@@ -559,7 +565,7 @@ func (d *daemon) registerSecrets(urls ...string) {
 // buildBackupCmd builds the supervised child: `proxsave --backup [--config ...]`.
 // When tail is non-nil the child's combined output is mirrored into it (bounded)
 // while still streaming to os.Std* (journald).
-func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer) *exec.Cmd {
+func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer, rid string) *exec.Cmd {
 	var cmd *exec.Cmd
 	if d.newBackupCmd != nil {
 		cmd = d.newBackupCmd(ctx)
@@ -573,6 +579,17 @@ func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer) *exec.Cmd
 		// tools, not for re-executing self.
 		cmd = exec.CommandContext(ctx, d.execPath, args...)
 	}
+	// Correlate the child's per-channel notify-results handoff with THIS run: the child
+	// writes <baseDir>/identity/.notify_results.json tagged with this rid, and the daemon
+	// rejects any file whose rid does not match. Preserve the inherited environment (PATH,
+	// etc.) via os.Environ() so the child still finds its tools.
+	if rid != "" {
+		base := cmd.Env
+		if base == nil {
+			base = os.Environ()
+		}
+		cmd.Env = append(base, health.EnvRunID+"="+rid)
+	}
 	if tail != nil {
 		cmd.Stdout = io.MultiWriter(os.Stdout, tail)
 		cmd.Stderr = io.MultiWriter(os.Stderr, tail)
@@ -585,6 +602,98 @@ func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer) *exec.Cmd
 		}
 	}
 	return cmd
+}
+
+// reportNotifyOutcomes pings one healthchecks check per notification channel the CHILD
+// reported in its per-run handoff file, then records each outcome. It is driven by the FILE's
+// channel set (what the child actually attempted), NOT the daemon's cached config, so a
+// channel toggled off without a daemon restart never produces a false DOWN. A results file
+// whose rid does not match this run (stale, or a child that crashed before Phase-7) is
+// rejected: no pings, no flap. Best-effort throughout.
+func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid string) {
+	if !d.cfg.HealthcheckEnabled {
+		return
+	}
+	nr, err := health.LoadNotifyResults(d.cfg.BaseDir)
+	if err != nil {
+		logging.Debug("daemon: read notify results failed: %v", err)
+		return
+	}
+	if nr.RID != rid || len(nr.Results) == 0 {
+		return // stale/missing file, or the child recorded nothing to report
+	}
+
+	// Resolve the reporter at most ONCE for the whole run: in centralized mode, if any
+	// channel still lacks a resolved check URL, try a single rebuild (mirrors beat's single
+	// re-resolve; never a per-channel re-fetch storm).
+	if d.cfg.HealthcheckMode == "centralized" && needsNotifyResolve(r, nr.Results) {
+		if newR := d.buildReporter(ctx); newR != nil {
+			d.setReporter(newR)
+			r = newR
+		}
+	}
+
+	names := make([]string, 0, len(nr.Results))
+	for name := range nr.Results {
+		names = append(names, name)
+	}
+	sort.Strings(names) // deterministic ping/record order
+	for _, name := range names {
+		suffix, down, skip := severityToSuffix(nr.Results[name])
+		if skip {
+			continue // "disabled"/unknown: the child did not really send this channel
+		}
+		key := health.CheckKeyNotify(name)
+		var perr error
+		if r == nil || !r.HasCheck(key) {
+			perr = health.ErrNoPingURL // not provisioned yet (self/old server) -> no_url trace
+		} else {
+			perr = r.Ping(ctx, key, suffix, rid, "", key)
+		}
+		if perr != nil && !health.IsNoURLErr(perr) {
+			logging.Debug("daemon: notify ping %s failed: %v", key, perr)
+		}
+		d.recordNotifyPing(key, down, perr)
+	}
+}
+
+// needsNotifyResolve reports whether any pingable channel in results lacks a resolved check
+// URL, so reportNotifyOutcomes rebuilds the reporter at most once per run.
+func needsNotifyResolve(r backupReporter, results map[string]string) bool {
+	for name := range results {
+		if _, _, skip := severityToSuffix(results[name]); skip {
+			continue
+		}
+		if r == nil || !r.HasCheck(health.CheckKeyNotify(name)) {
+			return true
+		}
+	}
+	return false
+}
+
+// severityToSuffix maps a channel send severity to the ping suffix + Down signal. Per the
+// chosen policy ANY imperfection (warning = a fallback was used, or error = the send failed)
+// makes the check go DOWN (/1) so the user is alerted; only a clean "ok" is /0 (green).
+// "disabled" and an unrecognized/empty severity are skipped (the child did not really send).
+func severityToSuffix(severity string) (suffix string, down, skip bool) {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "ok":
+		return "/0", false, false
+	case "warning", "error":
+		return "/1", true, false
+	default: // "disabled", "", or anything unknown
+		return "", false, true
+	}
+}
+
+// recordNotifyPing persists one per-channel ping outcome, serialized by statusMu like the
+// other status writers (the run/heartbeat/update loops share the file). Best-effort.
+func (d *daemon) recordNotifyPing(key string, down bool, pingErr error) {
+	d.statusMu.Lock()
+	defer d.statusMu.Unlock()
+	if err := health.RecordNotifyPing(d.cfg.BaseDir, d.cfg.HealthcheckMode, key, d.now().Unix(), pingErr == nil, down, pingErr); err != nil {
+		logging.Debug("daemon: record notify ping status failed: %v", err)
+	}
 }
 
 func (d *daemon) maxRunDuration() time.Duration {
