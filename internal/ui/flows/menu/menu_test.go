@@ -76,7 +76,7 @@ func run(d *driver, ctx context.Context) <-chan struct {
 func TestMenuRowOrder(t *testing.T) {
 	expected := []Action{
 		ActionBackup, ActionBackupDebug, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure,
-		ActionCheckTelegram, ActionCheckHealthcheck, ActionPostInstallCheck,
+		ActionCheckTelegram, ActionCheckHealthcheck, ActionPostInstallCheck, ActionCheckUpgrade,
 		ActionDaemonSetup, ActionDaemonStatus, ActionExit,
 	}
 	for i, want := range expected {
