@@ -177,6 +177,9 @@ func TestClassifyHealthcheckDaemonState(t *testing.T) {
 		wantLevel   HealthcheckSetupLevel
 	}{
 		{"working", reachable(health.Diagnosis{State: health.TxTransmitting, DaemonUp: true}), "WORKING", HealthcheckSetupLevelOk},
+		{"not installed", reachable(health.Diagnosis{State: health.TxNotInstalled}), "NOT INSTALLED", HealthcheckSetupLevelWarn},
+		{"not active", reachable(health.Diagnosis{State: health.TxNotActive}), "NOT RUNNING", HealthcheckSetupLevelWarn},
+		{"running not reporting", reachable(health.Diagnosis{State: health.TxRunningNoReport, DaemonUp: true}), "RUNNING, NOT REPORTING", HealthcheckSetupLevelWarn},
 		{"daemon down", reachable(health.Diagnosis{State: health.TxNoHeartbeat}), "NOT RUNNING", HealthcheckSetupLevelWarn},
 		{"stale", reachable(health.Diagnosis{State: health.TxStale, HbAge: time.Hour}), "STALE", HealthcheckSetupLevelWarn},
 		{"transmit failed", reachable(health.Diagnosis{State: health.TxTransmitFailed, DaemonUp: true, Err: "500"}), "TRANSMIT FAILED", HealthcheckSetupLevelWarn},

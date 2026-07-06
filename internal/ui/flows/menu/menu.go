@@ -31,9 +31,10 @@ const (
 	ActionPostInstallCheck
 	// Third group (daemon scheduler): setup/remove run the same admin path as the
 	// --daemon-setup / --daemon-remove flags; status runs a read-only screen.
-	ActionDaemonSetup  // install OR re-enable the resident daemon (--daemon-setup)
-	ActionDaemonRemove // disable the daemon, revert to cron (--daemon-remove)
-	ActionDaemonStatus // show the daemon/scheduler state
+	ActionDaemonSetup   // install OR re-enable the resident daemon (--daemon-setup)
+	ActionDaemonRemove  // disable the daemon, revert to cron (--daemon-remove)
+	ActionDaemonRestart // restart the running daemon (e.g. to pick up a rebuilt binary)
+	ActionDaemonStatus  // show the daemon/scheduler state
 )
 
 // DaemonState tells Run which daemon command(s) to offer, context-aware.
@@ -78,6 +79,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 	switch daemon {
 	case DaemonStateActive:
 		items = append(items, components.SelectorItem[Action]{Label: "Disable daemon", Description: "stop the daemon and revert to the cron scheduler", Value: ActionDaemonRemove})
+		items = append(items, components.SelectorItem[Action]{Label: "Restart daemon", Description: "restart the resident daemon (e.g. to load a rebuilt binary)", Value: ActionDaemonRestart})
 	case DaemonStateDisabled:
 		items = append(items, components.SelectorItem[Action]{Label: "Re-enable daemon", Description: "switch back to the resident daemon scheduler", Value: ActionDaemonSetup})
 	case DaemonStateOnCron:

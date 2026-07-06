@@ -98,8 +98,9 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 		return nil
 	}
 
-	// Provisioned: report the REAL transmission status read from the daemon status file.
-	h.renderTransmissionStatus(stats)
+	// Provisioned: report the REAL transmission status read from the daemon status file,
+	// refined with the systemd state so a running-but-silent daemon is not called "down".
+	h.renderTransmissionStatus(ctx, stats)
 
 	// Portal magic-link: prefer the one THIS run's relay already captured (no network);
 	// else best-effort mint one (the server returns it only until the user's first
@@ -130,7 +131,12 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 // renderTransmissionStatus reads the daemon status file and reports the latest REAL
 // transmission outcome. It NEVER prints the success glyph unless a fresh heartbeat is
 // backed by an ok-or-absent last backup outcome; anything else is an honest WARNING.
-func (h *HealthchecksChannel) renderTransmissionStatus(stats *BackupStats) {
+func (h *HealthchecksChannel) renderTransmissionStatus(ctx context.Context, stats *BackupStats) {
+	// systemd is the authoritative existence signal; probe it up front so even an
+	// unreadable status file still yields a real verdict (installed/active) instead of a
+	// bare "unreadable" - matching the run-start init check exactly.
+	presence := probeDaemonPresence(ctx)
+
 	var st health.Status
 	if h.loadStatus != nil {
 		// File read op: wrap in a shape-only debug envelope (mode only, never a path
@@ -139,22 +145,36 @@ func (h *HealthchecksChannel) renderTransmissionStatus(stats *BackupStats) {
 		loaded, err := h.loadStatus(h.cfg.BaseDir)
 		done(err)
 		if err != nil {
-			// A corrupt/UNREADABLE file (bad JSON, permissions) is its OWN condition: we
-			// can neither prove nor disprove transmission, so it must NOT fall through and
-			// claim "daemon not running". Near-unreachable (writes are atomic tmp+rename;
-			// missing/empty is the nil-error daemon-down path below). The raw error (may
-			// carry the file path) stays debug-only; the WARNING keeps it out.
+			// A corrupt/UNREADABLE file (bad JSON, permissions) can neither prove nor
+			// disprove transmission from the file alone. When systemd was probed it still
+			// speaks (installed/active/running-not-reporting), keeping this line consistent
+			// with the init check; only when systemd is unavailable is the state truly
+			// unknown. The raw error (may carry the file path) stays debug-only.
 			h.debug("%s: status read failed (%v)", healthchecksSectionName, err)
-			h.warn("⚠️ %s: status file unreadable", healthchecksSectionName)
-			setHealthcheckStatus(stats, "status-unreadable")
+			if !presence.Probed {
+				h.warn("⚠️ %s: status file unreadable", healthchecksSectionName)
+				setHealthcheckStatus(stats, "status-unreadable")
+				return
+			}
+			d := health.RefineWithPresence(health.Diagnosis{State: health.TxNoHeartbeat}, presence)
+			h.renderTransmissionState(d, stats)
 			return
 		}
 		st = loaded
 	}
 
-	// SINGLE source of truth: the SAME health.Diagnose the run-start init check uses, so
-	// the init verdict and this line can never disagree.
+	// SINGLE source of truth: the SAME health.Diagnose the run-start init check uses, then
+	// refined with the authoritative systemd state so the init verdict and this line can
+	// never disagree and a running-but-silent daemon reads as such, not as "down".
 	d := health.Diagnose(st, h.cfg.HealthcheckHeartbeatInterval, h.clock())
+	d = health.RefineWithPresence(d, presence)
+	h.renderTransmissionState(d, stats)
+}
+
+// renderTransmissionState renders ONE synthetic WARNING/OK line for a (presence-refined)
+// diagnosis. Split out so the normal and unreadable-but-systemd-probed paths render the
+// exact same vocabulary.
+func (h *HealthchecksChannel) renderTransmissionState(d health.Diagnosis, stats *BackupStats) {
 	// Shape-only debug: the diagnosed state + booleans, never a URL/secret.
 	h.debug("%s: diagnose state=%s daemon_up=%t hb_age=%s has_outcome=%t",
 		healthchecksSectionName, d.State, d.DaemonUp, d.HbAge, d.HasOutcome)
@@ -162,6 +182,15 @@ func (h *HealthchecksChannel) renderTransmissionStatus(stats *BackupStats) {
 	// Each state is a DISTINCT, single-cause, SYNTHETIC line - a bare fact, never an
 	// instruction or a parenthetical explanation. d.Err is already Reporter-redacted.
 	switch d.State {
+	case health.TxNotInstalled:
+		h.warn("⚠️ %s: daemon not installed", healthchecksSectionName)
+		setHealthcheckStatus(stats, "not-installed")
+	case health.TxNotActive:
+		h.warn("⚠️ %s: daemon not running", healthchecksSectionName)
+		setHealthcheckStatus(stats, "not-active")
+	case health.TxRunningNoReport:
+		h.warn("⚠️ %s: daemon running, not reporting", healthchecksSectionName)
+		setHealthcheckStatus(stats, "running-not-reporting")
 	case health.TxNoHeartbeat:
 		h.warn("⚠️ %s: daemon not running", healthchecksSectionName)
 		setHealthcheckStatus(stats, "daemon-down")
