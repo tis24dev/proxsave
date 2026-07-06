@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -112,7 +113,7 @@ func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orc
 		disableHealthchecks(cfg, logger, problem)
 		return
 	}
-	if problem := healthcheckDaemonProblem(cfg, logger); problem != "" {
+	if problem := healthcheckDaemonProblem(opts.ctx, cfg, logger); problem != "" {
 		disableHealthchecks(cfg, logger, problem)
 		return
 	}
@@ -138,22 +139,48 @@ func disableHealthchecks(cfg *config.Config, logger *logging.Logger, reason stri
 // a fresh beat proves it is running). Returns a specific reason when the daemon is not
 // usable (unreadable status, not running, or down/stuck), or "" when it is up. It never
 // transmits - it only inspects the local status file the daemon writes.
-func healthcheckDaemonProblem(cfg *config.Config, logger *logging.Logger) string {
+func healthcheckDaemonProblem(ctx context.Context, cfg *config.Config, logger *logging.Logger) string {
+	// The status file answers "is it transmitting?"; systemd answers "does the process
+	// exist and run?". Refine the heartbeat diagnosis with the systemd verdict so a
+	// running-but-silent daemon (stale binary) is not misreported as "daemon not running".
+	presence := daemonPresenceProbe(ctx)
 	st, err := health.LoadStatus(cfg.BaseDir)
 	if err != nil {
+		if presence.Probed {
+			d := health.RefineWithPresence(health.Diagnosis{State: health.TxNoHeartbeat}, presence)
+			logging.DebugStep(logger, "notifications init",
+				"healthchecks status unreadable, presence state=%s installed=%t active=%t", d.State, presence.Installed, presence.Active)
+			return daemonProblemForState(d)
+		}
 		logging.DebugStep(logger, "notifications init", "healthchecks status unreadable: %v", err)
 		return "status file unreadable"
 	}
 	d := health.Diagnose(st, cfg.HealthcheckHeartbeatInterval, time.Now())
+	d = health.RefineWithPresence(d, presence)
 	// Shape-only debug, mirroring the Phase-7 section's diagnose line so the init verdict
 	// and the run-time section can be cross-read at debug (no URL/secret, just state).
 	logging.DebugStep(logger, "notifications init",
-		"healthchecks daemon diagnose state=%s daemon_up=%t hb_age=%s", d.State, d.DaemonUp, d.HbAge)
+		"healthchecks daemon diagnose state=%s daemon_up=%t hb_age=%s installed=%t active=%t",
+		d.State, d.DaemonUp, d.HbAge, presence.Installed, presence.Active)
+	return daemonProblemForState(d)
+}
+
+// daemonProblemForState maps a presence-refined diagnosis to a terse SYNTHETIC reason
+// (bare fact, never an instruction) or "" when the daemon is up. Shares the exact state
+// vocabulary the Phase-7 section renders so the init verdict and the section never drift.
+func daemonProblemForState(d health.Diagnosis) string {
+	switch d.State {
+	case health.TxNotInstalled:
+		return "daemon not installed"
+	case health.TxNotActive:
+		return "daemon not running"
+	case health.TxRunningNoReport:
+		return "daemon running, not reporting"
+	case health.TxStale:
+		return "daemon stale (last beat " + health.HumanizeAge(d.HbAge) + ")"
+	}
 	if d.DaemonUp {
 		return ""
-	}
-	if d.State == health.TxStale {
-		return "daemon stale (last beat " + health.HumanizeAge(d.HbAge) + ")"
 	}
 	return "daemon not running"
 }

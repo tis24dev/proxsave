@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -53,18 +54,27 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 	orig := logging.GetDefaultLogger()
 	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
 
+	origProbe := daemonPresenceProbe
+	t.Cleanup(func() { daemonPresenceProbe = origProbe })
+
 	discard := logging.New(types.LogLevelInfo, false)
 	discard.SetOutput(io.Discard)
 
-	run := func(cfg *config.Config) string {
+	// run drives the init with an explicit systemd presence. The default (unprobed) keeps
+	// the heartbeat-only behaviour the pre-existing cases assert; the presence cases below
+	// pin the systemd-refined verdicts.
+	run := func(cfg *config.Config, p health.DaemonPresence) string {
+		daemonPresenceProbe = func(context.Context) health.DaemonPresence { return p }
 		var buf bytes.Buffer
 		def := logging.New(types.LogLevelDebug, false)
 		def.SetOutput(&buf)
 		logging.SetDefaultLogger(def)
 		orch := orchestrator.New(discard, false)
-		initializeHealthcheckSection(backupModeOptions{cfg: cfg, logger: discard}, orch)
+		initializeHealthcheckSection(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: discard}, orch)
 		return buf.String()
 	}
+	unprobed := health.DaemonPresence{}
+	activeDaemon := health.DaemonPresence{Probed: true, Installed: true, Active: true}
 	// writeHeartbeat records a heartbeat into a fresh temp BaseDir at the given age.
 	usableCfg := func(t *testing.T, hbAge time.Duration, hasBeat bool) *config.Config {
 		t.Helper()
@@ -78,15 +88,15 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 	}
 
 	// disabled -> a SKIP line, exactly like Email/Gotify/Webhook.
-	if out := run(&config.Config{HealthcheckEnabled: false}); !strings.Contains(out, "Healthchecks: disabled") {
+	if out := run(&config.Config{HealthcheckEnabled: false}, unprobed); !strings.Contains(out, "Healthchecks: disabled") {
 		t.Fatalf("disabled must print a SKIP line, out=%q", out)
 	}
 
 	// On ANY problem the section must (like Telegram): WARN the reason, SKIP a clean
 	// "Healthchecks: disabled", flip cfg.HealthcheckEnabled=false, and NOT print "✓".
-	assertDisabled := func(t *testing.T, name string, c *config.Config, wantReason string) {
+	assertDisabled := func(t *testing.T, name string, c *config.Config, p health.DaemonPresence, wantReason string) {
 		t.Helper()
-		out := run(c)
+		out := run(c, p)
 		if !strings.Contains(out, wantReason) {
 			t.Fatalf("%s: want reason %q, out=%q", name, wantReason, out)
 		}
@@ -102,14 +112,24 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 	}
 
 	// enabled + centralized without SERVER_ID -> config problem.
-	assertDisabled(t, "no-server-id", &config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, "SERVER_ID")
-	// usable config BUT daemon not running (no status file).
-	assertDisabled(t, "no-daemon", usableCfg(t, 0, false), "daemon not running")
-	// usable config + STALE heartbeat (1h old, > default 10m stale window).
-	assertDisabled(t, "stale-daemon", usableCfg(t, time.Hour, true), "daemon stale")
+	assertDisabled(t, "no-server-id", &config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, unprobed, "SERVER_ID")
+	// Heartbeat-only fallback (systemctl unavailable): no beat -> "daemon not running".
+	assertDisabled(t, "no-daemon", usableCfg(t, 0, false), unprobed, "daemon not running")
+	// Heartbeat-only fallback: STALE heartbeat -> "daemon stale".
+	assertDisabled(t, "stale-daemon", usableCfg(t, time.Hour, true), unprobed, "daemon stale")
 
-	// usable config + FRESH heartbeat -> "✓ Healthchecks initialized (mode: centralized)".
-	out := run(usableCfg(t, 30*time.Second, true))
+	// Systemd-refined verdicts (the completeness fix): presence dominates the heartbeat.
+	// Unit absent -> "daemon not installed", even with a fresh beat seeded.
+	assertDisabled(t, "not-installed", usableCfg(t, 30*time.Second, true),
+		health.DaemonPresence{Probed: true, Installed: false}, "daemon not installed")
+	// Installed but systemd inactive -> "daemon not running" (truly stopped).
+	assertDisabled(t, "not-active", usableCfg(t, 30*time.Second, true),
+		health.DaemonPresence{Probed: true, Installed: true, Active: false}, "daemon not running")
+	// systemd ACTIVE but no fresh beat -> "daemon running, not reporting" (stale binary).
+	assertDisabled(t, "running-not-reporting", usableCfg(t, 0, false), activeDaemon, "daemon running, not reporting")
+
+	// usable config + FRESH heartbeat + systemd active -> initialized.
+	out := run(usableCfg(t, 30*time.Second, true), activeDaemon)
 	if !strings.Contains(out, "✓ Healthchecks initialized (mode: centralized)") {
 		t.Fatalf("usable config + live daemon must print the initialized line, out=%q", out)
 	}

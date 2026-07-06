@@ -499,6 +499,39 @@ func TestHealthchecksSectionStatusUnreadable(t *testing.T) {
 	}
 }
 
+func TestHealthchecksSectionUnreadableButDaemonProbed(t *testing.T) {
+	// When the status file is unreadable BUT systemd was probed, the section must report
+	// the REAL systemd state (here: active -> "running, not reporting") so it agrees with
+	// the run-init check instead of a bare "status file unreadable".
+	orig := DaemonPresenceProbe
+	t.Cleanup(func() { DaemonPresenceProbe = orig })
+	DaemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: true, Active: true}
+	}
+
+	var buf bytes.Buffer
+	ch := newHCTestChannel(&config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, &buf)
+	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
+	ch.now = func() time.Time { return hcNow }
+	ch.loadStatus = func(string) (health.Status, error) {
+		return health.Status{}, errors.New("parse healthcheck status: unexpected end of JSON input")
+	}
+	ch.mintLink = func(context.Context, string, string, string) (string, error) { return "", nil }
+
+	stats := &BackupStats{}
+	_ = ch.Notify(context.Background(), stats)
+	if stats.HealthcheckStatus != "running-not-reporting" {
+		t.Fatalf("status=%q want running-not-reporting", stats.HealthcheckStatus)
+	}
+	out := buf.String()
+	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "daemon running, not reporting") {
+		t.Fatalf("want 'daemon running, not reporting' warning, out=%q", out)
+	}
+	if strings.Contains(out, "status file unreadable") {
+		t.Fatalf("a probed systemd state must override the bare unreadable line, out=%q", out)
+	}
+}
+
 func TestHealthchecksChannelNameMatchesEntryConst(t *testing.T) {
 	// R7: Name() and the dispatchNotifications entry MUST be the same const, or the
 	// section double-handles. Pin the invariant so a rename cannot silently break it.

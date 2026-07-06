@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 )
@@ -95,6 +96,28 @@ func daemonUnitInstalled() bool {
 	return err == nil
 }
 
+// daemonPresenceProbe reports the daemon's systemd-level existence so the healthcheck
+// checks can tell "not installed" / "not running" / "running but not reporting" apart
+// from a heartbeat-derived guess. It is a seam so tests can drive the states without a
+// real systemctl. When systemctl is unavailable (no active-state word) the probe returns
+// Probed=false and the checks fall back to a heartbeat-only diagnosis.
+var daemonPresenceProbe = daemonPresence
+
+func daemonPresence(ctx context.Context) health.DaemonPresence {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	active := daemonUnitActiveState(ctx)
+	if active == "" {
+		return health.DaemonPresence{Probed: false}
+	}
+	return health.DaemonPresence{
+		Probed:    true,
+		Installed: daemonUnitInstalled(),
+		Active:    strings.EqualFold(active, "active"),
+	}
+}
+
 // daemonUnitActiveState returns the systemctl "is-active" word for the unit
 // (e.g. "active", "inactive", "failed"), best-effort: "" when systemctl is
 // unavailable. is-active exits non-zero when not active, so the exit code is
@@ -108,6 +131,13 @@ func daemonUnitActiveState(ctx context.Context) string {
 	}
 	out, _ := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out))
+}
+
+// restartDaemonService restarts the resident daemon unit (best used to load a rebuilt
+// binary: systemd keeps the old process until an explicit restart). Idempotent-ish:
+// systemctl restart starts the unit if it was stopped.
+func restartDaemonService(ctx context.Context) error {
+	return runSystemctl(ctx, "restart", daemonUnitName)
 }
 
 // runSystemctl runs one systemctl invocation through the safeexec allowlist with

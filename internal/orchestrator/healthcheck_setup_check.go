@@ -34,6 +34,22 @@ var (
 	healthcheckSetupNow        = time.Now
 )
 
+// DaemonPresenceProbe reports the daemon's authoritative systemd-level existence
+// (installed + active). cmd/proxsave sets it at startup (the systemd unit helpers live
+// there); when nil the checks fall back to a heartbeat-only diagnosis. This is what lets
+// the checks tell "daemon not installed" / "not running" / "running but not reporting"
+// apart instead of flattening everything to a heartbeat-derived "daemon not running".
+var DaemonPresenceProbe func(context.Context) health.DaemonPresence
+
+// probeDaemonPresence returns the injected systemd verdict, or an unprobed presence when
+// no probe is wired (health.RefineWithPresence then leaves the diagnosis untouched).
+func probeDaemonPresence(ctx context.Context) health.DaemonPresence {
+	if DaemonPresenceProbe == nil {
+		return health.DaemonPresence{}
+	}
+	return DaemonPresenceProbe(ctx)
+}
+
 // CheckHealthcheckConnection runs one install-time check: fetch the centralized
 // config (asking for a fresh magic-link) to confirm provisioning is ready, then a
 // /log ping to the alive URL to confirm the monitor is reachable from this host. It
@@ -46,11 +62,19 @@ var (
 func CheckHealthcheckConnection(ctx context.Context, serverAPIHost, serverID, baseDir string, heartbeatInterval time.Duration) HealthcheckCheckResult {
 	res := HealthcheckCheckResult{}
 
-	// Real operational state from the daemon status file (never fatal to the check).
+	// Real operational state: the status file answers "is it transmitting?", systemd
+	// answers "does the process exist and run?". Probe both so a running-but-silent daemon
+	// is not misreported as down. A readable file OR a probed systemd state yields a
+	// verdict; only when BOTH are unavailable is the daemon state genuinely unknown.
+	presence := probeDaemonPresence(ctx)
+	base := health.Diagnosis{State: health.TxNoHeartbeat}
+	fileOK := false
 	if st, derr := healthcheckSetupLoadStatus(baseDir); derr == nil {
-		res.Daemon = health.Diagnose(st, heartbeatInterval, healthcheckSetupNow())
-		res.DaemonRead = true
+		base = health.Diagnose(st, heartbeatInterval, healthcheckSetupNow())
+		fileOK = true
 	}
+	res.Daemon = health.RefineWithPresence(base, presence)
+	res.DaemonRead = fileOK || presence.Probed
 
 	secret := healthcheckSetupLoadSecret(baseDir)
 	cfg, err := healthcheckSetupFetch(ctx, nil, serverAPIHost, serverID, secret, true)

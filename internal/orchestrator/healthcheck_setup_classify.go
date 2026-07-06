@@ -102,6 +102,15 @@ func applyHealthcheckDaemonState(st HealthcheckSetupState, d health.Diagnosis) H
 	case health.TxTransmitting:
 		st.Level, st.Keyword = HealthcheckSetupLevelOk, "WORKING"
 		st.Message = "The monitoring daemon is running and reporting this host's backups and heartbeats to the monitor."
+	case health.TxNotInstalled:
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "NOT INSTALLED"
+		st.Message = "The monitor is reachable, but the monitoring daemon is not installed on this host, so nothing is reported."
+	case health.TxNotActive:
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "NOT RUNNING"
+		st.Message = "The monitor is reachable, but the monitoring daemon is installed and stopped, so nothing is reported on schedule."
+	case health.TxRunningNoReport:
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "RUNNING, NOT REPORTING"
+		st.Message = "The monitoring daemon is running but has not written a heartbeat yet; it may be a stale build that needs a restart."
 	case health.TxNoHeartbeat:
 		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "NOT RUNNING"
 		st.Message = "The monitor is reachable, but the monitoring daemon is not running, so nothing is reported on schedule."

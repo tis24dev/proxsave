@@ -30,6 +30,20 @@ const (
 	// TxTransmitting: fresh healthy heartbeat and last outcome ok/absent - the only fully
 	// healthy state.
 	TxTransmitting TxState = "transmitting"
+
+	// The following three states come ONLY from RefineWithPresence: they require the
+	// authoritative systemd state, which the heartbeat file alone cannot reveal.
+
+	// TxNotInstalled: the daemon service unit is not installed at all.
+	TxNotInstalled TxState = "not-installed"
+	// TxNotActive: the unit is installed but systemd reports it is not active (stopped or
+	// failed) - the daemon is genuinely not running.
+	TxNotActive TxState = "not-active"
+	// TxRunningNoReport: systemd says the daemon IS active, yet no fresh heartbeat exists.
+	// The process runs but is not writing the status file (e.g. a stale binary that was
+	// rebuilt without a restart, or the very first beat is still pending). This is the
+	// state that a heartbeat-only check would MISreport as "daemon not running".
+	TxRunningNoReport TxState = "running-not-reporting"
 )
 
 // Diagnosis is the outcome of Diagnose. DaemonUp is the load-bearing signal for the
@@ -118,6 +132,49 @@ func Diagnose(st Status, heartbeatInterval time.Duration, now time.Time) Diagnos
 		return d
 	}
 	d.State = TxTransmitting
+	return d
+}
+
+// DaemonPresence is the systemd-level existence of the daemon, probed OUTSIDE this
+// package (health never shells out to systemctl - it stays logging-free and side-effect
+// free). Probed=false means the systemd state could not be determined (systemctl absent),
+// and the heartbeat-only diagnosis must be used unchanged.
+type DaemonPresence struct {
+	Probed    bool
+	Installed bool
+	Active    bool
+}
+
+// RefineWithPresence sharpens a heartbeat-only Diagnosis with the authoritative systemd
+// state, so a running-but-silent daemon is never misreported as "not running". The
+// heartbeat file answers "is the daemon transmitting?"; systemd answers "does the daemon
+// process exist and run?" - both are needed for a complete verdict:
+//   - not installed            -> TxNotInstalled
+//   - installed but not active -> TxNotActive (truly stopped/failed)
+//   - active but no/stale beat -> TxRunningNoReport (stale binary, or first beat pending)
+//   - active + fresh beat      -> the heartbeat transmit state is kept as-is
+//
+// When presence was not probed, the input diagnosis is returned unchanged (graceful
+// fallback on hosts without systemctl).
+func RefineWithPresence(d Diagnosis, p DaemonPresence) Diagnosis {
+	if !p.Probed {
+		return d
+	}
+	if !p.Installed {
+		d.State = TxNotInstalled
+		d.DaemonUp = false
+		return d
+	}
+	if !p.Active {
+		d.State = TxNotActive
+		d.DaemonUp = false
+		return d
+	}
+	// systemd says the process is active: it is alive regardless of the heartbeat file.
+	d.DaemonUp = true
+	if d.State == TxNoHeartbeat || d.State == TxStale {
+		d.State = TxRunningNoReport
+	}
 	return d
 }
 

@@ -111,3 +111,37 @@ func TestHumanizeAge(t *testing.T) {
 		}
 	}
 }
+
+func TestRefineWithPresence(t *testing.T) {
+	down := Diagnosis{State: TxNoHeartbeat}
+	stale := Diagnosis{State: TxStale, HbAge: time.Hour}
+	fresh := Diagnosis{State: TxTransmitting, DaemonUp: true}
+
+	cases := []struct {
+		name      string
+		in        Diagnosis
+		p         DaemonPresence
+		wantState TxState
+		wantUp    bool
+	}{
+		// Not probed -> unchanged (graceful fallback).
+		{"unprobed keeps input", down, DaemonPresence{Probed: false}, TxNoHeartbeat, false},
+		// Not installed dominates any heartbeat.
+		{"not installed", fresh, DaemonPresence{Probed: true, Installed: false}, TxNotInstalled, false},
+		// Installed but inactive -> truly stopped.
+		{"installed not active", fresh, DaemonPresence{Probed: true, Installed: true, Active: false}, TxNotActive, false},
+		// Active but no beat -> running but not reporting (the key fix).
+		{"active no beat", down, DaemonPresence{Probed: true, Installed: true, Active: true}, TxRunningNoReport, true},
+		{"active stale beat", stale, DaemonPresence{Probed: true, Installed: true, Active: true}, TxRunningNoReport, true},
+		// Active + fresh beat -> keep the transmit state.
+		{"active transmitting", fresh, DaemonPresence{Probed: true, Installed: true, Active: true}, TxTransmitting, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RefineWithPresence(tc.in, tc.p)
+			if got.State != tc.wantState || got.DaemonUp != tc.wantUp {
+				t.Fatalf("state=%q up=%v, want %q/%v", got.State, got.DaemonUp, tc.wantState, tc.wantUp)
+			}
+		})
+	}
+}

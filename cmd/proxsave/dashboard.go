@@ -188,6 +188,9 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 	case menu.ActionDaemonRemove:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-remove")
 		runDashboardDaemonAdmin(ctx, session, false, configPath, baseDir)
+	case menu.ActionDaemonRestart:
+		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-restart")
+		runDashboardDaemonRestart(ctx, session)
 	case menu.ActionDaemonStatus:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-status")
 		runDashboardDaemonStatus(ctx, session, configPath, baseDir)
@@ -202,7 +205,26 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 var (
 	daemonApplyDaemonMode = applyDaemonMode
 	daemonApplyCronMode   = applyCronMode
+	daemonRestartService  = restartDaemonService
 )
+
+// runDashboardDaemonRestart restarts the resident daemon in-session (RunTask + Notice),
+// then loops back to the menu. Useful after a rebuild: systemd keeps the old process
+// until an explicit restart, which is exactly the "installed+active but running a stale
+// binary that no longer writes the status file" case the healthcheck checks now surface.
+func runDashboardDaemonRestart(ctx context.Context, session *shell.Session) {
+	var opErr error
+	_ = components.RunTask(ctx, session, "Restarting daemon", "Restarting proxsave-daemon.service...", func(taskCtx context.Context, report func(string)) error {
+		opErr = daemonRestartService(taskCtx)
+		return nil
+	})
+	if opErr != nil {
+		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError, "Daemon restart failed", opErr.Error()))
+		return
+	}
+	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Daemon restarted",
+		"The resident daemon (proxsave-daemon.service) was restarted."))
+}
 
 // runDashboardDaemonAdmin installs (install=true) or reverts (install=false) the
 // daemon scheduler WITHOUT leaving the graphical UI: it runs the same apply* op as
