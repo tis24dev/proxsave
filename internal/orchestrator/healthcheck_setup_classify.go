@@ -18,9 +18,10 @@ const (
 type HealthcheckSetupLevel int
 
 const (
-	HealthcheckSetupLevelWarn  HealthcheckSetupLevel = iota // attention (yellow) - the default
-	HealthcheckSetupLevelOk                                 // working (green)
-	HealthcheckSetupLevelError                              // hard blocker (red)
+	HealthcheckSetupLevelWarn    HealthcheckSetupLevel = iota // attention (yellow) - the default
+	HealthcheckSetupLevelOk                                   // working (green)
+	HealthcheckSetupLevelError                                // hard blocker (red)
+	HealthcheckSetupLevelNeutral                              // pre-check (yellow, NO symbol) - set by the front-end, never by the classifier
 )
 
 // HealthcheckSetupState is the single mapping of a check result to user-facing copy +

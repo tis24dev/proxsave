@@ -65,7 +65,11 @@ func releaseTagURL(tag string) string {
 
 func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath string) {
 	cur := upgradeSafeToken(dashboardUpgradeVersion())
-	kw, sty := "unchecked", theme.WarningText
+	// Symbols on the RESULT keyword (consistent with the Telegram/healthcheck check
+	// screens): green ✓ ok, yellow ⚠ attention, red ✗ error. The pre-check "NOT CHECKED"
+	// carries NO symbol - yellow-without-triangle.
+	symOk, symWarn, symErr := theme.SymbolSuccess+" ", theme.SymbolWarning+" ", theme.SymbolError+" "
+	kw, sty, sym := "NOT CHECKED", theme.WarningText, ""
 	notes := "" // latest release's CodeRabbit summary (remote text; rendered via renderReleaseNotes)
 	url := ""   // latest release page URL (tag portion scrubbed via releaseTagURL)
 	avail := false
@@ -76,7 +80,7 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			lbl = "Run upgrade"
 		}
 		p := theme.Emphasis.Render("Current version: ") + theme.Text.Render(cur) + "\n\n" +
-			theme.Text.Render("Last available release: ") + sty.Render(kw)
+			theme.Text.Render("Last available release: ") + sty.Render(sym+kw)
 		if url != "" {
 			p += "\n\n" + theme.Text.Render(url)
 		}
@@ -93,26 +97,26 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			info := upgCheck(ctx, session, cur)
 			switch {
 			case info == nil || (!info.NewVersion && strings.TrimSpace(info.Latest) == ""):
-				kw, sty, notes, url = "check failed", theme.WarningText, "", ""
+				kw, sty, sym, notes, url = "CHECK FAILED", theme.WarningText, symWarn, "", ""
 			case info.NewVersion:
 				avail = true
 				latest := upgradeSafeToken(info.Latest)
 				if latest == "" {
-					latest = "update available"
+					latest = "UPDATE AVAILABLE"
 				}
-				kw, sty, notes, url = latest, theme.WarningText, info.Notes, releaseTagURL(info.Tag)
+				kw, sty, sym, notes, url = latest, theme.WarningText, symWarn, info.Notes, releaseTagURL(info.Tag)
 			default:
-				kw, sty, notes, url = "no upgrade ("+cur+")", theme.SuccessText, info.Notes, releaseTagURL(info.Tag)
+				kw, sty, sym, notes, url = "NO UPGRADE ("+cur+")", theme.SuccessText, symOk, info.Notes, releaseTagURL(info.Tag)
 			}
 			continue
 		}
 		avail = false
 		if upgRun(ctx, session, configPath) == types.ExitSuccess.Int() {
-			kw, sty = "upgraded", theme.SuccessText
+			kw, sty, sym = "UPGRADED", theme.SuccessText, symOk
 			_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Upgrade complete",
 				"New binary on disk. This process still runs the old version; relaunch proxsave, and Restart daemon if active."))
 		} else {
-			kw, sty = "failed", theme.ErrorText
+			kw, sty, sym = "FAILED", theme.ErrorText, symErr
 			_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError, "Upgrade failed",
 				"Run 'proxsave --upgrade' from a shell for details."))
 		}

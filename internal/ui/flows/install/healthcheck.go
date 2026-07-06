@@ -50,7 +50,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 
 	statusKeyword := "NOT CHECKED"
 	statusExplanation := "Choose Check to verify the monitoring connection."
-	statusLevel := orchestrator.HealthcheckSetupLevelWarn
+	statusLevel := orchestrator.HealthcheckSetupLevelNeutral // pre-check: yellow, no symbol
 	magicLink := ""
 	errHCEsc := errors.New("healthcheck setup: esc")
 
@@ -168,17 +168,19 @@ func buildHealthcheckPrompt(magicLink, keyword, explanation string, level orches
 		b.WriteString("\n\n")
 	}
 
-	// Colored keyword, NO symbol (consistent with the Telegram and upgrade check screens):
-	// yellow = not-checked/warning, green = ok, red = error. The pre-check "NOT CHECKED"
-	// is level Warn -> yellow, so it reads yellow-with-no-triangle like the upgrade screen.
+	// Colored keyword: green ✓ ok, red ✗ error, yellow ⚠ warning. The pre-check (Neutral)
+	// state is yellow with NO symbol, so it reads yellow-without-triangle like the upgrade
+	// and Telegram check screens (only a real post-check warning carries the ⚠).
 	b.WriteString(theme.Text.Render("Status: "))
 	switch level {
 	case orchestrator.HealthcheckSetupLevelOk:
-		b.WriteString(theme.SuccessText.Render(keyword))
+		b.WriteString(theme.SuccessText.Render(theme.SymbolSuccess + " " + keyword))
 	case orchestrator.HealthcheckSetupLevelError:
-		b.WriteString(theme.ErrorText.Render(keyword))
-	default:
+		b.WriteString(theme.ErrorText.Render(theme.SymbolError + " " + keyword))
+	case orchestrator.HealthcheckSetupLevelNeutral:
 		b.WriteString(theme.WarningText.Render(keyword))
+	default: // HealthcheckSetupLevelWarn - a real post-check warning
+		b.WriteString(theme.WarningText.Render(theme.SymbolWarning + " " + keyword))
 	}
 	if explanation != "" {
 		b.WriteString("\n")

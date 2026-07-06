@@ -119,8 +119,6 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		close(done)
 	}()
 
-	driver.waitScreen("Upgrade")
-
 	// waitFor polls the accumulated output until it contains substr (the screen-title
 	// push can precede the rendered bytes, so a bare read races the flush).
 	waitFor := func(substr string) string {
@@ -136,6 +134,13 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 			case <-time.After(20 * time.Millisecond):
 			}
 		}
+	}
+
+	driver.waitScreen("Upgrade")
+	// Pre-check: yellow "NOT CHECKED", no symbol (uppercase, consistent with the other screens).
+	pre := waitFor("NOT CHECKED")
+	if strings.ContainsAny(pre, "✓✗⚠") {
+		t.Fatalf("pre-check must carry no ✓/✗/⚠ symbol: %q", tailStr(pre))
 	}
 
 	// Check: the loop re-renders the Upgrade screen with the available version + notes.

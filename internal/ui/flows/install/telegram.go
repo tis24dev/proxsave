@@ -158,25 +158,26 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 	}
 }
 
-// telegramSeverityStyle maps a check severity to a display COLOR (no symbol), so each
-// state reads by color alone - consistent with the healthcheck and upgrade check screens:
-// green linked, yellow partial, blue action-needed (start bot / send ID), red unreachable,
-// red fatal. The bool is false for the neutral (pre-check) state, which is rendered
-// separately as a yellow "NOT CHECKED".
-func telegramSeverityStyle(sev orchestrator.TelegramSetupSeverity) (lipgloss.Style, bool) {
+// telegramSeverityStyle maps a check RESULT severity to a display style + symbol, using
+// the SAME three pairings as the healthcheck/upgrade check screens: green ✓ positive,
+// yellow ⚠ warning/attention, red ✗ error. So: green ✓ linked; yellow ⚠ partial /
+// action-needed (start bot / send ID) / server-unreachable (all retryable); red ✗ fatal.
+// The bool is false only for the neutral (pre-check) state, rendered separately as a
+// yellow "NOT CHECKED" (no symbol).
+func telegramSeverityStyle(sev orchestrator.TelegramSetupSeverity) (lipgloss.Style, string, bool) {
 	switch sev {
 	case orchestrator.TelegramSeveritySuccess:
-		return theme.SuccessText, true
+		return theme.SuccessText, theme.SymbolSuccess, true
 	case orchestrator.TelegramSeverityPartial:
-		return theme.WarningText, true
+		return theme.WarningText, theme.SymbolWarning, true
 	case orchestrator.TelegramSeverityAction:
-		return theme.InfoText, true
+		return theme.WarningText, theme.SymbolWarning, true
 	case orchestrator.TelegramSeverityUnreachable:
-		return theme.ErrorText, true
+		return theme.WarningText, theme.SymbolWarning, true
 	case orchestrator.TelegramSeverityFatal:
-		return theme.ErrorText, true
+		return theme.ErrorText, theme.SymbolError, true
 	default:
-		return theme.Text, false
+		return theme.Text, "", false
 	}
 }
 
@@ -219,7 +220,7 @@ func buildTelegramPrompt(serverID, identityFile string, identityPersisted bool, 
 	// Status: a distinct colored keyword + the HTTP status code + the message, so
 	// e.g. "server unreachable" reads differently from "not paired yet".
 	b.WriteString(theme.Text.Render("Status: "))
-	style, colored := telegramSeverityStyle(severity)
+	style, symbol, colored := telegramSeverityStyle(severity)
 	if !colored {
 		// Pre-check: yellow "NOT CHECKED" (no symbol), same look as the healthcheck/upgrade
 		// screens, then the guidance message in plain text.
@@ -233,7 +234,7 @@ func buildTelegramPrompt(serverID, identityFile string, identityPersisted bool, 
 	if label == "" {
 		label = "Status"
 	}
-	b.WriteString(style.Render(strings.ToUpper(label)))
+	b.WriteString(style.Render(symbol + " " + strings.ToUpper(label)))
 	if httpCode > 0 {
 		b.WriteString(theme.Subtle.Render(" (HTTP " + strconv.Itoa(httpCode) + ")"))
 	}

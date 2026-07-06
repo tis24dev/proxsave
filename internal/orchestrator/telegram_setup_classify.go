@@ -15,8 +15,8 @@ const (
 	TelegramSeverityNeutral     TelegramSetupSeverity = iota // pre-check / not applicable
 	TelegramSeveritySuccess                                  // linked (green)
 	TelegramSeverityPartial                                  // linked, a local step still pending (yellow)
-	TelegramSeverityAction                                   // waiting for a user step: start bot / send ID (blue)
-	TelegramSeverityUnreachable                              // could not reach / unexpected server response (red, retryable)
+	TelegramSeverityAction                                   // waiting for a user step: start bot / send ID (yellow)
+	TelegramSeverityUnreachable                              // could not reach / unexpected server response (yellow, retryable)
 	TelegramSeverityFatal                                    // cannot proceed - another check won't help (red)
 )
 
