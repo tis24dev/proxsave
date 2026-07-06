@@ -254,6 +254,10 @@ type Config struct {
 	HealthcheckPingKey           string // self mode: optional ping key for slug URLs
 	HealthcheckAliveID           string // self mode: UUID or slug of the service-alive check
 	HealthcheckBackupID          string // self mode: UUID or slug of the backup-outcome check
+	// Fase 1 updates sensor (daemon): whether a newer release is available.
+	HealthcheckUpdatesURL     string        // self mode: full updates check ping URL (optional)
+	HealthcheckUpdatesID      string        // self mode: UUID or slug of the updates check
+	HealthcheckUpdateInterval time.Duration // updates-check cadence (default 5m)
 
 	// Security features
 	CheckNetworkSecurity bool
@@ -834,6 +838,9 @@ func (c *Config) parseHealthcheckSettings() {
 	c.HealthcheckPingKey = strings.TrimSpace(c.getString("HEALTHCHECK_PING_KEY", ""))
 	c.HealthcheckAliveID = strings.TrimSpace(c.getString("HEALTHCHECK_ALIVE_ID", ""))
 	c.HealthcheckBackupID = strings.TrimSpace(c.getString("HEALTHCHECK_BACKUP_ID", ""))
+	c.HealthcheckUpdatesURL = strings.TrimSpace(c.getString("HEALTHCHECK_UPDATES_URL", ""))
+	c.HealthcheckUpdatesID = strings.TrimSpace(c.getString("HEALTHCHECK_UPDATES_ID", ""))
+	c.HealthcheckUpdateInterval = c.getDuration("HEALTHCHECK_UPDATE_INTERVAL", 5*time.Minute)
 }
 
 // normalizeSchedulerMode maps any unrecognised value to the safe default "cron".

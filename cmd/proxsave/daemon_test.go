@@ -24,6 +24,10 @@ type fakeReporter struct {
 	lastRid          string
 	lastTail         string
 	alive, backupURL bool
+	// Fase 1 updates sensor.
+	updates         bool
+	updatesReported int
+	lastAvailable   bool
 }
 
 func (f *fakeReporter) Heartbeat(ctx context.Context) error {
@@ -56,6 +60,15 @@ func (f *fakeReporter) RunHang(ctx context.Context, rid string, timeout time.Dur
 }
 func (f *fakeReporter) HasAliveURL() bool  { return f.alive }
 func (f *fakeReporter) HasBackupURL() bool { return f.backupURL }
+
+func (f *fakeReporter) ReportUpdate(ctx context.Context, available bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updatesReported++
+	f.lastAvailable = available
+	return nil
+}
+func (f *fakeReporter) HasUpdatesURL() bool { return f.updates }
 
 func (f *fakeReporter) snapshot() fakeReporter {
 	f.mu.Lock()
@@ -246,9 +259,9 @@ func TestRunOnceSkipsOnShutdown(t *testing.T) {
 
 func TestSelfURLs(t *testing.T) {
 	tests := []struct {
-		name              string
-		cfg               config.Config
-		wantAlive, wantBk string
+		name                       string
+		cfg                        config.Config
+		wantAlive, wantBk, wantUpd string
 	}{
 		{
 			name:      "uuid urls from endpoint + ids",
@@ -265,13 +278,23 @@ func TestSelfURLs(t *testing.T) {
 			cfg:       config.Config{HealthcheckAliveURL: "https://x/ping/1", HealthcheckBackupURL: "https://x/ping/2", HealthcheckPingEndpoint: "https://hc-ping.com", HealthcheckAliveID: "ignored"},
 			wantAlive: "https://x/ping/1", wantBk: "https://x/ping/2",
 		},
+		{
+			name:      "updates url assembled from its check id",
+			cfg:       config.Config{HealthcheckPingEndpoint: "https://hc-ping.com", HealthcheckAliveID: "a", HealthcheckBackupID: "b", HealthcheckUpdatesID: "u"},
+			wantAlive: "https://hc-ping.com/a", wantBk: "https://hc-ping.com/b", wantUpd: "https://hc-ping.com/u",
+		},
+		{
+			name:      "explicit updates full url wins over id",
+			cfg:       config.Config{HealthcheckPingEndpoint: "https://hc-ping.com", HealthcheckAliveID: "a", HealthcheckBackupID: "b", HealthcheckUpdatesURL: "https://x/ping/u", HealthcheckUpdatesID: "ignored"},
+			wantAlive: "https://hc-ping.com/a", wantBk: "https://hc-ping.com/b", wantUpd: "https://x/ping/u",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &daemon{cfg: &tc.cfg}
-			alive, backup := d.selfURLs()
-			if alive != tc.wantAlive || backup != tc.wantBk {
-				t.Fatalf("selfURLs = %q / %q, want %q / %q", alive, backup, tc.wantAlive, tc.wantBk)
+			alive, backup, updates := d.selfURLs()
+			if alive != tc.wantAlive || backup != tc.wantBk || updates != tc.wantUpd {
+				t.Fatalf("selfURLs = %q / %q / %q, want %q / %q / %q", alive, backup, updates, tc.wantAlive, tc.wantBk, tc.wantUpd)
 			}
 		})
 	}

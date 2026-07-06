@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/components"
@@ -52,10 +54,11 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 	statusExplanation := "Choose Check to verify the monitoring connection."
 	statusLevel := orchestrator.HealthcheckSetupLevelNeutral // pre-check: yellow, no symbol
 	magicLink := ""
+	var sensors []health.SensorRow // per-sensor rows, populated after each Check
 	errHCEsc := errors.New("healthcheck setup: esc")
 
 	for {
-		prompt := buildHealthcheckPrompt(magicLink, statusKeyword, statusExplanation, statusLevel)
+		prompt := buildHealthcheckPrompt(magicLink, statusKeyword, statusExplanation, statusLevel, sensors)
 
 		items := make([]components.SelectorItem[healthcheckAction], 0, 3)
 		if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
@@ -112,6 +115,11 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 			}
 
 			result.CheckAttempts++
+			if res.HaveStatus {
+				sensors = health.SensorRows(res.RawStatus, result.HealthcheckHeartbeatInterval, time.Now())
+			} else {
+				sensors = nil
+			}
 			st := orchestrator.ClassifyHealthcheckSetupResult(res)
 			result.LastFatal = st.Fatal
 			result.LastMessage = st.Message
@@ -146,7 +154,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 // on a hard blocker, yellow otherwise) on the first line and its plain-language
 // explanation on the second. The magic link is already sanitized upstream
 // (serverbot.SanitizeLoginURL: http(s), printable ASCII).
-func buildHealthcheckPrompt(magicLink, keyword, explanation string, level orchestrator.HealthcheckSetupLevel) string {
+func buildHealthcheckPrompt(magicLink, keyword, explanation string, level orchestrator.HealthcheckSetupLevel, sensors []health.SensorRow) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Backup monitoring (healthchecks) is enabled for this host."))
 	b.WriteString("\n")
@@ -172,19 +180,58 @@ func buildHealthcheckPrompt(magicLink, keyword, explanation string, level orches
 	// state is yellow with NO symbol, so it reads yellow-without-triangle like the upgrade
 	// and Telegram check screens (only a real post-check warning carries the ⚠).
 	b.WriteString(theme.Text.Render("Status: "))
-	switch level {
-	case orchestrator.HealthcheckSetupLevelOk:
-		b.WriteString(theme.SuccessText.Render(theme.SymbolSuccess + " " + keyword))
-	case orchestrator.HealthcheckSetupLevelError:
-		b.WriteString(theme.ErrorText.Render(theme.SymbolError + " " + keyword))
-	case orchestrator.HealthcheckSetupLevelNeutral:
-		b.WriteString(theme.WarningText.Render(keyword))
-	default: // HealthcheckSetupLevelWarn - a real post-check warning
-		b.WriteString(theme.WarningText.Render(theme.SymbolWarning + " " + keyword))
-	}
+	b.WriteString(renderHealthcheckLevel(level, keyword))
 	if explanation != "" {
 		b.WriteString("\n")
 		b.WriteString(theme.Subtle.Render(explanation))
 	}
+
+	// Per-sensor list: what we actually transmit + its real state, one colored line each,
+	// reusing the SAME palette as the Status line. Rendered only once a Check has populated
+	// the rows (before that the block is omitted).
+	if len(sensors) > 0 {
+		b.WriteString("\n\n")
+		b.WriteString(theme.Text.Render("Sensors:"))
+		for _, s := range sensors {
+			line := s.Name + ": " + s.State
+			if s.Age != "" {
+				line += " (last ping " + s.Age + ")"
+			}
+			b.WriteString("\n")
+			b.WriteString(renderHealthcheckLevel(sensorSetupLevel(s.Level), line))
+		}
+	}
 	return b.String()
+}
+
+// renderHealthcheckLevel is the unified colored-keyword renderer shared by the Status line
+// and every sensor line: green ✓ (Ok), red ✗ (Error), yellow ⚠ (Warn), and yellow with NO
+// symbol (Neutral, the pre-check state).
+func renderHealthcheckLevel(level orchestrator.HealthcheckSetupLevel, text string) string {
+	switch level {
+	case orchestrator.HealthcheckSetupLevelOk:
+		return theme.SuccessText.Render(theme.SymbolSuccess + " " + text)
+	case orchestrator.HealthcheckSetupLevelError:
+		return theme.ErrorText.Render(theme.SymbolError + " " + text)
+	case orchestrator.HealthcheckSetupLevelNeutral:
+		return theme.WarningText.Render(text)
+	default: // HealthcheckSetupLevelWarn - a real post-check warning
+		return theme.WarningText.Render(theme.SymbolWarning + " " + text)
+	}
+}
+
+// sensorSetupLevel maps a health.SensorLevel onto the shared HealthcheckSetupLevel so the
+// sensor lines reuse renderHealthcheckLevel (and its exact palette) instead of a second
+// color switch. SensorError (an available update) maps to the red Error level.
+func sensorSetupLevel(l health.SensorLevel) orchestrator.HealthcheckSetupLevel {
+	switch l {
+	case health.SensorOk:
+		return orchestrator.HealthcheckSetupLevelOk
+	case health.SensorError:
+		return orchestrator.HealthcheckSetupLevelError
+	case health.SensorNeutral:
+		return orchestrator.HealthcheckSetupLevelNeutral
+	default: // health.SensorWarn
+		return orchestrator.HealthcheckSetupLevelWarn
+	}
 }

@@ -45,25 +45,31 @@ var (
 	// succeeded). The daemon treats these as "not reportable yet", not fatal.
 	ErrNoAliveURL  = errors.New("healthcheck: alive ping url not configured")
 	ErrNoBackupURL = errors.New("healthcheck: backup ping url not configured")
+	// ErrNoUpdatesURL mirrors the two above for the updates-report ping: returned when
+	// ReportUpdate runs before the updates check URL is resolved. Treated as "not
+	// reportable yet", never fatal.
+	ErrNoUpdatesURL = errors.New("healthcheck: updates ping url not configured")
 )
 
 // Reporter pings a healthchecks-compatible monitor. Zero value is not usable;
 // build one with NewReporter.
 type Reporter struct {
-	client    *http.Client
-	aliveURL  string
-	backupURL string
-	sendLog   bool
+	client     *http.Client
+	aliveURL   string
+	backupURL  string
+	updatesURL string
+	sendLog    bool
 }
 
 // Config configures a Reporter. AliveURL/BackupURL are full ping URLs, e.g.
 // "https://hc.proxsave.dev/ping/<uuid>". Either may be empty (the matching ping
 // then returns ErrNo*URL). A nil Client gets a default with a bounded timeout.
 type Config struct {
-	Client    *http.Client
-	AliveURL  string
-	BackupURL string
-	SendLog   bool // POST a log tail on non-success backup outcomes
+	Client     *http.Client
+	AliveURL   string
+	BackupURL  string
+	UpdatesURL string
+	SendLog    bool // POST a log tail on non-success backup outcomes
 }
 
 // NewReporter builds a Reporter from Config.
@@ -73,10 +79,11 @@ func NewReporter(c Config) *Reporter {
 		client = &http.Client{Timeout: pingTimeout}
 	}
 	return &Reporter{
-		client:    client,
-		aliveURL:  strings.TrimRight(strings.TrimSpace(c.AliveURL), "/"),
-		backupURL: strings.TrimRight(strings.TrimSpace(c.BackupURL), "/"),
-		sendLog:   c.SendLog,
+		client:     client,
+		aliveURL:   strings.TrimRight(strings.TrimSpace(c.AliveURL), "/"),
+		backupURL:  strings.TrimRight(strings.TrimSpace(c.BackupURL), "/"),
+		updatesURL: strings.TrimRight(strings.TrimSpace(c.UpdatesURL), "/"),
+		sendLog:    c.SendLog,
 	}
 }
 
@@ -85,6 +92,9 @@ func (r *Reporter) HasBackupURL() bool { return r.backupURL != "" }
 
 // HasAliveURL reports whether the service-alive check URL is resolved.
 func (r *Reporter) HasAliveURL() bool { return r.aliveURL != "" }
+
+// HasUpdatesURL reports whether the updates-report check URL is resolved.
+func (r *Reporter) HasUpdatesURL() bool { return r.updatesURL != "" }
 
 // Heartbeat pings the "service alive" check with a success ping. Called on a
 // fixed interval from the daemon so silence (host down / daemon dead) is detected
@@ -132,6 +142,22 @@ func (r *Reporter) RunHang(ctx context.Context, rid string, timeout time.Duratio
 		body = body + "\n\n" + logTail
 	}
 	return r.ping(ctx, pingURL(r.backupURL, suffixFail, rid), body, "hang")
+}
+
+// ReportUpdate pings the "updates" check with the update-availability signal:
+// available==false -> /0 (up to date; the check stays UP/green), available==true -> /1
+// (a non-zero "exit" so the check goes DOWN/red and fires the user's alerts), mirroring
+// RunFinished's /<code> convention. Whether the ping transmitted is a separate outcome
+// the caller records; this only encodes the signal.
+func (r *Reporter) ReportUpdate(ctx context.Context, available bool) error {
+	if r.updatesURL == "" {
+		return ErrNoUpdatesURL
+	}
+	suffix := "/0"
+	if available {
+		suffix = "/1"
+	}
+	return r.ping(ctx, pingURL(r.updatesURL, suffix, ""), "", "updates")
 }
 
 // TestPing hits base + /log, which records a ping WITHOUT changing the check

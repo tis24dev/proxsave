@@ -31,6 +31,7 @@ const (
 	KindRunStarted  = "start"
 	KindRunFinished = "finish"
 	KindRunHang     = "hang"
+	KindUpdates     = "updates"
 )
 
 // ReasonNoURL is the PingRecord.Reason set when a ping did NOT transmit because no
@@ -73,6 +74,22 @@ type Status struct {
 	RunStarted  *PingRecord `json:"run_started,omitempty"`
 	RunFinished *PingRecord `json:"run_finished,omitempty"`
 	RunHang     *PingRecord `json:"run_hang,omitempty"`
+	// Update is the last update-check + report-ping outcome. It is a dedicated record
+	// (not a bare PingRecord) because the /0-vs-/1 SIGNAL (Available) is orthogonal to
+	// whether the ping transmitted (Ping.OK). Nil until the first update check runs;
+	// omitempty so an old status file that predates it round-trips unchanged.
+	Update *UpdateRecord `json:"update,omitempty"`
+}
+
+// UpdateRecord is the outcome of one update check plus the report ping that announced it.
+// Ping is the TRANSMISSION outcome (did the /0 or /1 reach the monitor); Available is the
+// orthogonal SEMANTIC that chose /0 (up to date) vs /1 (update available, which makes the
+// monitor's check go DOWN so alerts fire); Latest is the newest version seen (for display).
+// A perfectly transmitted /1 is Ping.OK==true AND Available==true.
+type UpdateRecord struct {
+	Ping      PingRecord `json:"ping"`
+	Available bool       `json:"available"`
+	Latest    string     `json:"latest,omitempty"`
 }
 
 // StatusPath returns the shared status-file path under the identity directory,
@@ -146,6 +163,37 @@ func RecordPing(baseDir, mode, kind string, ts int64, ok bool, pingErr error) er
 	default:
 		return fmt.Errorf("healthcheck status: unknown ping kind %q", kind)
 	}
+	st.Mode = mode
+
+	return writeStatus(baseDir, st)
+}
+
+// RecordUpdate persists the outcome of one update check + its report ping, atomically,
+// next to RecordPing and sharing LoadStatus/writeStatus. ts is the unix SECONDS of the
+// attempt; available is whether a newer release was found (the /0-vs-/1 signal); latest
+// is the newest version string (for display); ok is whether the report ping transmitted;
+// pingErr is the (already redacted) error on failure. A "no updates url resolved" error is
+// stored as the distinct ReasonNoURL code (like RecordPing), never a raw string, so the
+// section renders "not provisioned yet" instead of a transmit failure.
+func RecordUpdate(baseDir, mode string, ts int64, available bool, latest string, ok bool, pingErr error) error {
+	rec := &UpdateRecord{
+		Ping:      PingRecord{TS: ts, OK: ok},
+		Available: available,
+		Latest:    latest,
+	}
+	if pingErr != nil {
+		if errors.Is(pingErr, ErrNoUpdatesURL) || errors.Is(pingErr, ErrNoAliveURL) || errors.Is(pingErr, ErrNoBackupURL) {
+			rec.Ping.Reason = ReasonNoURL
+		} else {
+			rec.Ping.Err = pingErr.Error()
+		}
+	}
+
+	st, err := LoadStatus(baseDir)
+	if err != nil {
+		return err
+	}
+	st.Update = rec
 	st.Mode = mode
 
 	return writeStatus(baseDir, st)

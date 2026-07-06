@@ -35,7 +35,16 @@ type CentralizedConfig struct {
 	BackupURL   string `json:"backup_ping_url"`
 	ProjectCode string `json:"project_code"`
 	LoginURL    string `json:"login_url"`
+	// Checks carries additive, OPTIONAL per-sensor ping URLs beyond the two frozen
+	// alive/backup keys (Fase 1: {"updates":"<ping-url>"}). An old server omits it; the
+	// completeness check below still requires only alive+backup, so a new client against
+	// an old server simply resolves no updates URL. Omitted when empty.
+	Checks map[string]string `json:"checks,omitempty"`
 }
+
+// CheckKeyUpdates is the CentralizedConfig.Checks map key carrying the updates sensor's
+// ping URL. Deliberately distinct from the SensorUpdates display name ("proxsave-updates").
+const CheckKeyUpdates = "updates"
 
 // serverError is the {"error":...} envelope the proxsave_server returns on failure.
 type serverError struct {
