@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
@@ -102,34 +103,49 @@ func TestClassifyHealthcheckSetupResult(t *testing.T) {
 
 func TestCheckHealthcheckConnection(t *testing.T) {
 	of, op, osec := healthcheckSetupFetch, healthcheckSetupPing, healthcheckSetupLoadSecret
+	ols, on := healthcheckSetupLoadStatus, healthcheckSetupNow
 	t.Cleanup(func() {
 		healthcheckSetupFetch = of
 		healthcheckSetupPing = op
 		healthcheckSetupLoadSecret = osec
+		healthcheckSetupLoadStatus = ols
+		healthcheckSetupNow = on
 	})
 	healthcheckSetupLoadSecret = func(baseDir string) string { return "s" }
+	// Default: no daemon status file yet (tolerant zero read) -> DaemonRead true, down.
+	healthcheckSetupLoadStatus = func(baseDir string) (health.Status, error) { return health.Status{}, nil }
+	now := time.Unix(1_700_000_000, 0)
+	healthcheckSetupNow = func() time.Time { return now }
 
-	t.Run("success returns login + reachable", func(t *testing.T) {
+	t.Run("success returns login + reachable + daemon diagnosed", func(t *testing.T) {
 		gotInclude := false
 		healthcheckSetupFetch = func(ctx context.Context, client *http.Client, host, id, secret string, includeLogin bool) (health.CentralizedConfig, error) {
 			gotInclude = includeLogin
 			return health.CentralizedConfig{AliveURL: "https://a", BackupURL: "https://b", LoginURL: "MAGIC"}, nil
 		}
 		healthcheckSetupPing = func(ctx context.Context, aliveURL string) error { return nil }
-		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base")
+		// Fresh, OK heartbeat -> the daemon is alive and transmitting.
+		healthcheckSetupLoadStatus = func(baseDir string) (health.Status, error) {
+			return health.Status{Heartbeat: &health.PingRecord{TS: now.Unix(), OK: true}}, nil
+		}
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base", time.Minute)
 		if !gotInclude {
 			t.Fatal("the install check must request the login (includeLogin=true)")
 		}
 		if res.Err != nil || !res.Reachable || res.LoginURL != "MAGIC" {
 			t.Fatalf("unexpected: %+v", res)
 		}
+		if !res.DaemonRead || res.Daemon.State != health.TxTransmitting {
+			t.Fatalf("daemon must be diagnosed as transmitting: read=%v state=%q", res.DaemonRead, res.Daemon.State)
+		}
 	})
 
 	t.Run("fetch error propagates, no login", func(t *testing.T) {
+		healthcheckSetupLoadStatus = func(baseDir string) (health.Status, error) { return health.Status{}, nil }
 		healthcheckSetupFetch = func(ctx context.Context, client *http.Client, host, id, secret string, includeLogin bool) (health.CentralizedConfig, error) {
 			return health.CentralizedConfig{}, health.ErrHCNotReady
 		}
-		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base")
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base", time.Minute)
 		if !errors.Is(res.Err, health.ErrHCNotReady) || res.Reachable || res.LoginURL != "" {
 			t.Fatalf("unexpected: %+v", res)
 		}
@@ -140,9 +156,44 @@ func TestCheckHealthcheckConnection(t *testing.T) {
 			return health.CentralizedConfig{AliveURL: "https://a", LoginURL: "MAGIC"}, nil
 		}
 		healthcheckSetupPing = func(ctx context.Context, aliveURL string) error { return errors.New("dial") }
-		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base")
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base", time.Minute)
 		if res.Err == nil || res.Reachable || res.LoginURL != "MAGIC" {
 			t.Fatalf("unexpected: %+v", res)
 		}
 	})
+}
+
+// TestClassifyHealthcheckDaemonState pins the new headline semantics: with the
+// connection reachable, the status keyword IS the real daemon state (mirroring the run),
+// and only a live transmitting daemon reads WORKING (green/Ok level).
+func TestClassifyHealthcheckDaemonState(t *testing.T) {
+	reachable := func(d health.Diagnosis) HealthcheckCheckResult {
+		return HealthcheckCheckResult{Err: nil, Reachable: true, DaemonRead: true, Daemon: d}
+	}
+	cases := []struct {
+		name        string
+		res         HealthcheckCheckResult
+		wantKeyword string
+		wantLevel   HealthcheckSetupLevel
+	}{
+		{"working", reachable(health.Diagnosis{State: health.TxTransmitting, DaemonUp: true}), "WORKING", HealthcheckSetupLevelOk},
+		{"daemon down", reachable(health.Diagnosis{State: health.TxNoHeartbeat}), "NOT RUNNING", HealthcheckSetupLevelWarn},
+		{"stale", reachable(health.Diagnosis{State: health.TxStale, HbAge: time.Hour}), "STALE", HealthcheckSetupLevelWarn},
+		{"transmit failed", reachable(health.Diagnosis{State: health.TxTransmitFailed, DaemonUp: true, Err: "500"}), "TRANSMIT FAILED", HealthcheckSetupLevelWarn},
+		{"status unreadable", HealthcheckCheckResult{Err: nil, Reachable: true, DaemonRead: false}, "STATUS UNREADABLE", HealthcheckSetupLevelWarn},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := ClassifyHealthcheckSetupResult(tc.res)
+			if st.Keyword != tc.wantKeyword || st.Level != tc.wantLevel {
+				t.Fatalf("keyword=%q level=%d, want %q/%d", st.Keyword, st.Level, tc.wantKeyword, tc.wantLevel)
+			}
+			if !st.Verified { // reachable connection must still latch Continue
+				t.Fatalf("reachable connection must be Verified, got %+v", st)
+			}
+			if st.Message == "" {
+				t.Fatalf("Message must never be empty")
+			}
+		})
+	}
 }

@@ -48,14 +48,14 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 		return result, nil
 	}
 
-	statusMsg := "Not checked yet. Choose Check to verify the monitoring connection."
-	statusVerified := false // last check verified (green)
-	statusFailed := false   // last check was a fatal failure (red)
+	statusKeyword := "NOT CHECKED"
+	statusExplanation := "Choose Check to verify the monitoring connection."
+	statusLevel := orchestrator.HealthcheckSetupLevelWarn
 	magicLink := ""
 	errHCEsc := errors.New("healthcheck setup: esc")
 
 	for {
-		prompt := buildHealthcheckPrompt(magicLink, statusMsg, statusVerified, statusFailed)
+		prompt := buildHealthcheckPrompt(magicLink, statusKeyword, statusExplanation, statusLevel)
 
 		items := make([]components.SelectorItem[healthcheckAction], 0, 3)
 		if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
@@ -65,7 +65,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 		}
 		leaveLabel, leaveDesc, leaveVal := "Skip", "finish and verify later", healthcheckActionSkip
 		if result.Verified {
-			leaveLabel, leaveDesc, leaveVal = "Continue", "monitoring verified", healthcheckActionContinue
+			leaveLabel, leaveDesc, leaveVal = "Continue", "connection verified", healthcheckActionContinue
 		}
 		if backToMenu {
 			leaveLabel, leaveDesc = "Back", "return to the dashboard menu"
@@ -98,7 +98,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 			var res orchestrator.HealthcheckCheckResult
 			cancelled := false
 			runErr := components.RunTask(ctx, session, "Checking monitoring", "Contacting the monitor...", func(taskCtx context.Context, report func(string)) error {
-				res = healthcheckCheck(taskCtx, result.ServerAPIHost, result.ServerID, baseDir)
+				res = healthcheckCheck(taskCtx, result.ServerAPIHost, result.ServerID, baseDir, result.HealthcheckHeartbeatInterval)
 				if taskCtx.Err() != nil {
 					cancelled = true
 				}
@@ -119,34 +119,34 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 				magicLink = link
 				result.MagicLinkSeen = true
 			}
-			if st.Verified { // latch
+			if st.Verified { // latch: connection reached the monitor at least once
 				result.Verified = true
 			}
 
-			switch {
-			case st.Verified:
-				statusVerified, statusFailed = true, false
-				statusMsg = st.Message
-			case st.Fatal:
-				statusVerified, statusFailed = false, true
-				statusMsg = st.Message
-			default:
-				statusVerified, statusFailed = false, false
+			// The headline is the REAL state (WORKING / NOT RUNNING / ...); a retry hint is
+			// appended only when the connection itself could not be confirmed and another
+			// check might still help (not when it is a hard blocker or already reached).
+			statusKeyword = st.Keyword
+			statusExplanation = st.Message
+			statusLevel = st.Level
+			if !st.Verified && !st.Fatal {
 				hint := orchestrator.HealthcheckSetupRetryHint
 				if result.CheckAttempts >= orchestrator.HealthcheckSetupMaxVerificationAttempts {
 					hint = orchestrator.HealthcheckSetupMaxAttemptsHint
 				}
-				statusMsg = st.Message + "\n" + hint
+				statusExplanation = st.Message + " " + hint
 			}
 		}
 	}
 }
 
 // buildHealthcheckPrompt renders the styled prompt shown above the Check/Continue/
-// Skip choices: the guide, the portal magic-link boxed for emphasis, and a Status
-// line whose keyword is green when verified and red on a fatal failure. The magic
-// link is already sanitized upstream (serverbot.SanitizeLoginURL: http(s), printable ASCII).
-func buildHealthcheckPrompt(magicLink, statusMsg string, verified, failed bool) string {
+// Skip choices: the guide, the portal magic-link boxed for emphasis, and a two-line
+// Status block - a state keyword (green only when monitoring is actually WORKING, red
+// on a hard blocker, yellow otherwise) on the first line and its plain-language
+// explanation on the second. The magic link is already sanitized upstream
+// (serverbot.SanitizeLoginURL: http(s), printable ASCII).
+func buildHealthcheckPrompt(magicLink, keyword, explanation string, level orchestrator.HealthcheckSetupLevel) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Backup monitoring (healthchecks) is enabled for this host."))
 	b.WriteString("\n")
@@ -169,19 +169,17 @@ func buildHealthcheckPrompt(magicLink, statusMsg string, verified, failed bool) 
 	}
 
 	b.WriteString(theme.Text.Render("Status: "))
-	switch {
-	case verified:
-		b.WriteString(theme.SuccessText.Render(theme.SymbolSuccess + " VERIFIED"))
-		if statusMsg != "" {
-			b.WriteString(theme.Text.Render(": " + statusMsg))
-		}
-	case failed:
-		b.WriteString(theme.ErrorText.Render(theme.SymbolError + " FAILED"))
-		if statusMsg != "" {
-			b.WriteString(theme.Text.Render(": " + statusMsg))
-		}
+	switch level {
+	case orchestrator.HealthcheckSetupLevelOk:
+		b.WriteString(theme.SuccessText.Render(theme.SymbolSuccess + " " + keyword))
+	case orchestrator.HealthcheckSetupLevelError:
+		b.WriteString(theme.ErrorText.Render(theme.SymbolError + " " + keyword))
 	default:
-		b.WriteString(theme.Text.Render(statusMsg))
+		b.WriteString(theme.WarningText.Render(theme.SymbolWarning + " " + keyword))
+	}
+	if explanation != "" {
+		b.WriteString("\n")
+		b.WriteString(theme.Subtle.Render(explanation))
 	}
 	return b.String()
 }
