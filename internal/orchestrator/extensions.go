@@ -93,6 +93,8 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		{name: "Telegram", enabled: cfg != nil && cfg.TelegramEnabled},
 		{name: "Gotify", enabled: cfg != nil && cfg.GotifyEnabled},
 		{name: "Webhook", enabled: cfg != nil && cfg.WebhookEnabled},
+		// R3 (Fase 1): Healthchecks stays LAST in this dispatch order; do not reorder it
+		// without re-checking the magic-link capture + outcome semantics below.
 		// Always-visible healthchecks status; LAST so the Telegram relay above has
 		// already captured any portal magic-link onto stats.HealthcheckLink. Gated on
 		// HEALTHCHECK_ENABLED (independent of Telegram). Same const as Name() so it is

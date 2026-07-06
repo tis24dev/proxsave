@@ -22,6 +22,12 @@ type HealthcheckCheckResult struct {
 
 	Daemon     health.Diagnosis // daemon liveness/transmission diagnosed from the status file
 	DaemonRead bool             // false only if the status file existed but could not be read
+
+	// RawStatus is the on-disk status snapshot Daemon was diagnosed from, exposed so the
+	// install check screen can render the per-sensor list with no second read. HaveStatus
+	// is false when the status file was absent/unreadable (RawStatus is then the zero value).
+	RawStatus  health.Status
+	HaveStatus bool
 }
 
 // Seams for tests.
@@ -71,6 +77,8 @@ func CheckHealthcheckConnection(ctx context.Context, serverAPIHost, serverID, ba
 	fileOK := false
 	if st, derr := healthcheckSetupLoadStatus(baseDir); derr == nil {
 		base = health.Diagnose(st, heartbeatInterval, healthcheckSetupNow())
+		res.RawStatus = st
+		res.HaveStatus = true
 		fileOK = true
 	}
 	res.Daemon = health.RefineWithPresence(base, presence)

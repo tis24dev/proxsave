@@ -19,6 +19,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/version"
 )
 
 const (
@@ -30,6 +31,8 @@ const (
 	defaultMaxRunDuration = 6 * time.Hour
 	// defaultHeartbeatInterval is the alive-ping fallback.
 	defaultHeartbeatInterval = 5 * time.Minute
+	// defaultUpdateInterval is the updates-check fallback cadence.
+	defaultUpdateInterval = 5 * time.Minute
 )
 
 // backupReporter is the healthchecks surface the daemon uses; *health.Reporter
@@ -39,8 +42,10 @@ type backupReporter interface {
 	RunStarted(ctx context.Context, rid string) error
 	RunFinished(ctx context.Context, rid string, exitCode int, logTail string) error
 	RunHang(ctx context.Context, rid string, timeout time.Duration, logTail string) error
+	ReportUpdate(ctx context.Context, available bool) error
 	HasAliveURL() bool
 	HasBackupURL() bool
+	HasUpdatesURL() bool
 }
 
 // dispatchDaemonMode runs the resident daemon when --daemon is set. It blocks
@@ -59,9 +64,10 @@ type daemon struct {
 	configPath string
 	now        func() time.Time
 
-	mu          sync.Mutex
-	reporter    backupReporter
-	fetchWarned bool // centralized fetch already warned once (throttle recurring WARN)
+	mu           sync.Mutex
+	reporter     backupReporter
+	fetchWarned  bool // centralized fetch already warned once (throttle recurring WARN)
+	updateWarned bool // an update is already known available (WARN once per transition)
 	// newBackupCmd builds the child backup command; overridable in tests.
 	newBackupCmd func(ctx context.Context) *exec.Cmd
 
@@ -99,6 +105,11 @@ func (d *daemon) run(ctx context.Context) int {
 		go func() {
 			defer wg.Done()
 			d.heartbeatLoop(ctx)
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.updateCheckLoop(ctx)
 		}()
 	}
 
@@ -304,6 +315,113 @@ func (d *daemon) beat(ctx context.Context) {
 	d.recordPing(health.KindHeartbeat, err)
 }
 
+// updateCheckLoop checks for a newer release on a fixed interval (and once immediately)
+// and reports it to the "updates" check: /0 when up to date (green) or /1 when an update
+// is available (the check goes DOWN so the user's alerts fire). It mirrors heartbeatLoop
+// (immediate first tick + ticker) and, in centralized mode, lazily (re)resolves the
+// reporter so a daemon paired after startup eventually reports.
+func (d *daemon) updateCheckLoop(ctx context.Context) {
+	interval := d.cfg.HealthcheckUpdateInterval
+	if interval <= 0 {
+		interval = defaultUpdateInterval
+	}
+	d.updateTick(ctx)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.updateTick(ctx)
+		}
+	}
+}
+
+// updateTick runs one update check, reports the /0-vs-/1 signal, and records the real
+// transmission outcome. The operator-facing WARNING is throttled to once per transition
+// into "available" (mirrors fetchWarned): checkForUpdates would WARN on every call, so it
+// is handed a silenced logger (the same idiom the dashboard upgrade check uses) while the
+// loop emits a single throttled WARNING, instead of spamming journald every ~5m.
+func (d *daemon) updateTick(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	info := checkForUpdates(ctx, quietUpdateLogger(), version.String())
+	available := info != nil && info.NewVersion
+	latest := ""
+	if info != nil {
+		latest = strings.TrimSpace(info.Latest)
+	}
+
+	// Throttle: warn the first tick an update becomes available, stay quiet while it
+	// remains available, and reset when it clears so a later update warns again.
+	d.mu.Lock()
+	firstAvail := available && !d.updateWarned
+	d.updateWarned = available
+	d.mu.Unlock()
+	switch {
+	case firstAvail:
+		logging.Warning("daemon: a newer ProxSave version is available (%s); run 'proxsave --upgrade' to install", orUnknownVersion(latest))
+	case available:
+		logging.Debug("daemon: update still available (%s)", orUnknownVersion(latest))
+	default:
+		logging.Debug("daemon: ProxSave is up to date")
+	}
+
+	r := d.getReporter()
+	// In centralized mode, lazily (re)resolve until the updates URL is present, so a daemon
+	// paired (or a server that adds the updates check) after startup eventually reports it.
+	if (r == nil || !r.HasUpdatesURL()) && d.cfg.HealthcheckMode == "centralized" {
+		if nr := d.buildReporter(ctx); nr != nil {
+			d.setReporter(nr)
+			r = nr
+		}
+	}
+	var perr error
+	if r == nil {
+		perr = health.ErrNoUpdatesURL
+	} else {
+		perr = r.ReportUpdate(ctx, available)
+	}
+	if errors.Is(perr, health.ErrNoUpdatesURL) {
+		logging.Debug("daemon: updates ping has no url yet (recording, reason=no_url)")
+	} else if perr != nil {
+		logging.Debug("daemon: updates ping failed: %v", perr)
+	}
+	d.recordUpdate(available, latest, perr)
+}
+
+// recordUpdate persists one update-report outcome to the shared status file, serialized by
+// statusMu (like recordPing) because the update loop and the heartbeat/run loops write the
+// same file concurrently and health.RecordUpdate is a read-modify-write. Best effort: a
+// write error must not break the daemon.
+func (d *daemon) recordUpdate(available bool, latest string, pingErr error) {
+	d.statusMu.Lock()
+	defer d.statusMu.Unlock()
+	if err := health.RecordUpdate(d.cfg.BaseDir, d.cfg.HealthcheckMode, d.now().Unix(), available, latest, pingErr == nil, pingErr); err != nil {
+		logging.Debug("daemon: record updates ping status failed: %v", err)
+	}
+}
+
+// quietUpdateLogger builds a discard logger for the periodic update check so
+// checkForUpdates' own per-tick "new version available" WARNING (main_update.go) does not
+// spam journald every ~5m; the loop emits ONE throttled warning itself. This is the same
+// idiom the dashboard upgrade check uses (dashboard_upgrade.go) to silence checkForUpdates.
+func quietUpdateLogger() *logging.Logger {
+	lg := logging.New(types.LogLevelError, false)
+	lg.SetOutput(io.Discard)
+	return lg
+}
+
+// orUnknownVersion renders an empty version string as "unknown" for the update WARNING.
+func orUnknownVersion(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "unknown"
+	}
+	return v
+}
+
 // buildReporter resolves the two ping URLs (centralized fetch from the server, or
 // self-mode assembly) and returns a Reporter, or nil if nothing is reportable.
 func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
@@ -311,17 +429,17 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 		return nil
 	}
 	if d.cfg.HealthcheckMode == "self" {
-		alive, backup := d.selfURLs()
-		if alive == "" && backup == "" {
+		alive, backup, updates := d.selfURLs()
+		if alive == "" && backup == "" && updates == "" {
 			logging.Warning("daemon: healthcheck self mode enabled but no ping URLs configured")
 			return nil
 		}
-		d.registerSecrets(alive, backup)
-		return health.NewReporter(health.Config{AliveURL: alive, BackupURL: backup, SendLog: d.cfg.HealthcheckSendLog})
+		d.registerSecrets(alive, backup, updates)
+		return health.NewReporter(health.Config{AliveURL: alive, BackupURL: backup, UpdatesURL: updates, SendLog: d.cfg.HealthcheckSendLog})
 	}
 
 	// centralized
-	alive, backup, err := d.fetchCentralized(ctx)
+	alive, backup, updates, err := d.fetchCentralized(ctx)
 	if err != nil {
 		// The heartbeat loop retries this every interval; warn ONCE (so the
 		// operator sees healthchecks isn't working, e.g. Telegram not paired yet),
@@ -343,33 +461,32 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 		d.fetchWarned = false // recovered: allow a future failure to warn again
 		d.mu.Unlock()
 	}
-	if alive == "" && backup == "" {
+	if alive == "" && backup == "" && updates == "" {
 		return nil
 	}
-	d.registerSecrets(alive, backup)
-	return health.NewReporter(health.Config{AliveURL: alive, BackupURL: backup, SendLog: d.cfg.HealthcheckSendLog})
+	d.registerSecrets(alive, backup, updates)
+	return health.NewReporter(health.Config{AliveURL: alive, BackupURL: backup, UpdatesURL: updates, SendLog: d.cfg.HealthcheckSendLog})
 }
 
 // fetchCentralized asks the proxsave_server for this client's ping URLs, reusing
-// the same identity/secret as /api/notify.
-func (d *daemon) fetchCentralized(ctx context.Context) (string, string, error) {
+// the same identity/secret as /api/notify. The optional updates URL rides in the additive
+// Checks map (absent on old servers -> "").
+func (d *daemon) fetchCentralized(ctx context.Context) (string, string, string, error) {
 	secret, _ := identity.LoadNotifySecret(d.cfg.BaseDir)
 	if strings.TrimSpace(secret) == "" {
-		return "", "", fmt.Errorf("no relay secret on disk (pair Telegram first)")
+		return "", "", "", fmt.Errorf("no relay secret on disk (pair Telegram first)")
 	}
 	cfg, err := health.FetchCentralizedConfig(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, false)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return cfg.AliveURL, cfg.BackupURL, nil
+	return cfg.AliveURL, cfg.BackupURL, cfg.Checks[health.CheckKeyUpdates], nil
 }
 
-// selfURLs resolves the two ping URLs from self-mode config: full URLs if given,
-// otherwise assembled from the ping endpoint (+ optional ping key) and check IDs.
-func (d *daemon) selfURLs() (string, string) {
-	if d.cfg.HealthcheckAliveURL != "" || d.cfg.HealthcheckBackupURL != "" {
-		return d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL
-	}
+// selfURLs resolves the ping URLs from self-mode config: full URLs if given, otherwise
+// assembled from the ping endpoint (+ optional ping key) and check IDs. The updates URL
+// prefers an explicit full URL, else assembles from its own check ID.
+func (d *daemon) selfURLs() (string, string, string) {
 	base := strings.TrimRight(strings.TrimSpace(d.cfg.HealthcheckPingEndpoint), "/")
 	build := func(id string) string {
 		id = strings.TrimSpace(id)
@@ -381,7 +498,14 @@ func (d *daemon) selfURLs() (string, string) {
 		}
 		return base + "/" + id
 	}
-	return build(d.cfg.HealthcheckAliveID), build(d.cfg.HealthcheckBackupID)
+	updates := strings.TrimSpace(d.cfg.HealthcheckUpdatesURL)
+	if updates == "" {
+		updates = build(d.cfg.HealthcheckUpdatesID)
+	}
+	if d.cfg.HealthcheckAliveURL != "" || d.cfg.HealthcheckBackupURL != "" {
+		return d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL, updates
+	}
+	return build(d.cfg.HealthcheckAliveID), build(d.cfg.HealthcheckBackupID), updates
 }
 
 func (d *daemon) registerSecrets(urls ...string) {
