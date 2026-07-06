@@ -8,6 +8,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -185,6 +186,12 @@ func TestDashboardActions(t *testing.T) {
 // the live session and returns to the menu, setting no flag.
 func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 	installDashboardGates(t, true, true) // stubs cron -> Install daemon + Daemon status
+	// Deterministic systemd verdict (avoid a real systemctl call): unit absent.
+	origProbe := daemonPresenceProbe
+	t.Cleanup(func() { daemonPresenceProbe = origProbe })
+	daemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: false}
+	}
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
 	resCh := make(chan bool, 1)
@@ -194,7 +201,7 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 	}()
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down down down down enter") // Daemon status (10 downs)
-	driver.waitScreen("Daemon status")                                     // the notice
+	driver.waitScreen("Daemon: not installed")                             // the styled outcome notice
 	driver.keys("enter")                                                   // dismiss
 	driver.waitScreen("Dashboard")                                         // back at the menu
 	driver.keys("esc")                                                     // exit
