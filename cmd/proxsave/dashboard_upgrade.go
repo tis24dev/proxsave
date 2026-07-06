@@ -52,10 +52,22 @@ func upgradeSafeToken(v string) string {
 	return v
 }
 
+// releaseTagURL builds the GitHub release-page URL for a tag. The base is a constant; only
+// the remote tag is scrubbed (upgradeSafeToken), so a spoofed release tag cannot inject
+// control bytes into the displayed URL. Empty when the tag is empty/unusable.
+func releaseTagURL(tag string) string {
+	tag = upgradeSafeToken(tag)
+	if tag == "" {
+		return ""
+	}
+	return "https://github.com/" + githubRepo + "/releases/tag/" + tag
+}
+
 func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath string) {
 	cur := upgradeSafeToken(dashboardUpgradeVersion())
 	kw, sty := "unchecked", theme.WarningText
 	notes := "" // latest release's CodeRabbit summary (remote text; rendered via renderReleaseNotes)
+	url := ""   // latest release page URL (tag portion scrubbed via releaseTagURL)
 	avail := false
 	back := errors.New("back")
 	for {
@@ -65,6 +77,9 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 		}
 		p := theme.Emphasis.Render("Current version: ") + theme.Text.Render(cur) + "\n\n" +
 			theme.Text.Render("Last available release: ") + sty.Render(kw)
+		if url != "" {
+			p += "\n\n" + theme.Emphasis.Render(url)
+		}
 		if notes != "" {
 			p += "\n\n" + renderReleaseNotes(notes)
 		}
@@ -78,16 +93,16 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			info := upgCheck(ctx, session, cur)
 			switch {
 			case info == nil || (!info.NewVersion && strings.TrimSpace(info.Latest) == ""):
-				kw, sty, notes = "check failed", theme.WarningText, ""
+				kw, sty, notes, url = "check failed", theme.WarningText, "", ""
 			case info.NewVersion:
 				avail = true
 				latest := upgradeSafeToken(info.Latest)
 				if latest == "" {
 					latest = "update available"
 				}
-				kw, sty, notes = latest, theme.WarningText, info.Notes
+				kw, sty, notes, url = latest, theme.WarningText, info.Notes, releaseTagURL(info.Tag)
 			default:
-				kw, sty, notes = "no upgrade ("+cur+")", theme.SuccessText, info.Notes
+				kw, sty, notes, url = "no upgrade ("+cur+")", theme.SuccessText, info.Notes, releaseTagURL(info.Tag)
 			}
 			continue
 		}

@@ -16,6 +16,10 @@ type UpdateInfo struct {
 	NewVersion bool
 	Current    string
 	Latest     string
+	// Tag is the latest release's git tag (e.g. "v0.29.0"), used to build the release
+	// page URL. It is remote-controlled: consumers that display a URL from it MUST scrub
+	// the tag portion. Empty when the release could not be read.
+	Tag string
 	// Notes is the latest release's CodeRabbit "Release Notes" summary (extracted from
 	// the GitHub release body). It is remote-controlled text: consumers that render it
 	// MUST sanitize it. Empty when the block is absent or the release could not be read.
@@ -70,7 +74,7 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo)
 	logger.Debug("Fetching latest release from GitHub: %s", apiURL)
 
-	_, latestVersion, releaseBody, err := fetchLatestRelease(checkCtx)
+	latestTag, latestVersion, releaseBody, err := fetchLatestRelease(checkCtx)
 	if err != nil {
 		logger.Debug("Update check skipped: GitHub unreachable: %v", err)
 		return &UpdateInfo{
@@ -96,6 +100,7 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 			NewVersion: false,
 			Current:    currentVersion,
 			Latest:     latestVersion,
+			Tag:        latestTag,
 			Notes:      notes,
 		}
 	}
@@ -107,6 +112,7 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 		NewVersion: true,
 		Current:    currentVersion,
 		Latest:     latestVersion,
+		Tag:        latestTag,
 		Notes:      notes,
 	}
 }

@@ -95,7 +95,7 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		// A hostile GitHub version with a non-allowlist byte ('!'): the screen MUST scrub
 		// it (a real ESC would be invisible after ansi.Strip, so '!' is the visible probe).
 		return &UpdateInfo{
-			NewVersion: true, Current: current, Latest: "2.0.0!",
+			NewVersion: true, Current: current, Latest: "2.0.0!", Tag: "v2.0.0",
 			Notes: "## Release Notes\n\n* **New Features**\n  * Shiny new widget",
 		}
 	}
@@ -147,7 +147,8 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	if strings.Contains(out, "2.0.0!") {
 		t.Fatalf("the non-allowlist byte from the GitHub version must be scrubbed, out tail:\n%s", tailStr(out))
 	}
-	_ = waitFor("Shiny new widget") // the release-notes summary must render below the version
+	_ = waitFor("https://github.com/tis24dev/proxsave/releases/tag/v2.0.0") // release link under the version
+	_ = waitFor("Shiny new widget")                                         // the release-notes summary below
 	if strings.Contains(ansi.Strip(driver.buf.String()), "**New Features**") {
 		t.Fatalf("markdown bold markers must be stripped from the notes")
 	}
