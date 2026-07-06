@@ -145,6 +145,10 @@ func healthcheckDaemonProblem(cfg *config.Config, logger *logging.Logger) string
 		return "status file unreadable"
 	}
 	d := health.Diagnose(st, cfg.HealthcheckHeartbeatInterval, time.Now())
+	// Shape-only debug, mirroring the Phase-7 section's diagnose line so the init verdict
+	// and the run-time section can be cross-read at debug (no URL/secret, just state).
+	logging.DebugStep(logger, "notifications init",
+		"healthchecks daemon diagnose state=%s daemon_up=%t hb_age=%s", d.State, d.DaemonUp, d.HbAge)
 	if d.DaemonUp {
 		return ""
 	}
@@ -266,10 +270,10 @@ func initializeWebhookNotification(opts backupModeOptions, orch *orchestrator.Or
 	logging.Info("✓ Webhook initialized (%d endpoint(s))", len(webhookConfig.Endpoints))
 }
 
-func logBackupRuntimeSummary(cfg *config.Config, storageState backupStorageState) {
+func logBackupRuntimeSummary(cfg *config.Config, logger *logging.Logger, storageState backupStorageState) {
 	logBackupStorageSummary(cfg, storageState)
 	logBackupLogSummary(cfg)
-	logBackupNotificationSummary(cfg)
+	logBackupNotificationSummary(cfg, logger)
 }
 
 func logBackupStorageSummary(cfg *config.Config, storageState backupStorageState) {
@@ -312,12 +316,25 @@ func logBackupLogSummary(cfg *config.Config) {
 	fmt.Println()
 }
 
-func logBackupNotificationSummary(cfg *config.Config) {
+// logBackupNotificationSummary prints the EFFECTIVE per-channel state for THIS run, not
+// the raw config: every flag has already absorbed the network-preflight, Telegram-handshake
+// and Healthchecks-daemon flips, all of which run earlier on this same cfg pointer (proof:
+// runNetworkPreflight and initializeServerIdentity precede runBackupMode, and
+// initializeBackupNotifications precedes this summary). Healthchecks is listed so the set is
+// not silently short a channel; Metrics has no runtime flip, so its effective value always
+// equals the configured one.
+func logBackupNotificationSummary(cfg *config.Config, logger *logging.Logger) {
+	done := logging.DebugStart(logger, "notification summary", "effective post-flip state")
 	logging.Info("Notification configuration:")
 	logging.Info("  Telegram: %v", cfg.TelegramEnabled)
 	logging.Info("  Email: %v", cfg.EmailEnabled)
 	logging.Info("  Gotify: %v", cfg.GotifyEnabled)
 	logging.Info("  Webhook: %v", cfg.WebhookEnabled)
+	logging.Info("  Healthchecks: %v", cfg.HealthcheckEnabled)
 	logging.Info("  Metrics: %v", cfg.MetricsEnabled)
+	logging.DebugStep(logger, "notification summary",
+		"telegram=%t email=%t gotify=%t webhook=%t healthchecks=%t metrics=%t",
+		cfg.TelegramEnabled, cfg.EmailEnabled, cfg.GotifyEnabled, cfg.WebhookEnabled, cfg.HealthcheckEnabled, cfg.MetricsEnabled)
+	done(nil)
 	fmt.Println()
 }
