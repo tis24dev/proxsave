@@ -168,14 +168,17 @@ func buildHealthcheckPrompt(magicLink, keyword, explanation string, level orches
 		b.WriteString("\n\n")
 	}
 
+	// Colored keyword, NO symbol (consistent with the Telegram and upgrade check screens):
+	// yellow = not-checked/warning, green = ok, red = error. The pre-check "NOT CHECKED"
+	// is level Warn -> yellow, so it reads yellow-with-no-triangle like the upgrade screen.
 	b.WriteString(theme.Text.Render("Status: "))
 	switch level {
 	case orchestrator.HealthcheckSetupLevelOk:
-		b.WriteString(theme.SuccessText.Render(theme.SymbolSuccess + " " + keyword))
+		b.WriteString(theme.SuccessText.Render(keyword))
 	case orchestrator.HealthcheckSetupLevelError:
-		b.WriteString(theme.ErrorText.Render(theme.SymbolError + " " + keyword))
+		b.WriteString(theme.ErrorText.Render(keyword))
 	default:
-		b.WriteString(theme.WarningText.Render(theme.SymbolWarning + " " + keyword))
+		b.WriteString(theme.WarningText.Render(keyword))
 	}
 	if explanation != "" {
 		b.WriteString("\n")

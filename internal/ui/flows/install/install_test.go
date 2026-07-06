@@ -422,49 +422,55 @@ func TestFormatPreservedEntriesResolvesAgainstBaseDir(t *testing.T) {
 }
 
 func TestBuildTelegramPrompt(t *testing.T) {
-	// Linked -> green "✓ LINKED"; Server ID boxed.
+	// Linked -> green "LINKED" (no symbol); Server ID boxed.
 	v := buildTelegramPrompt("123456789", "/id/.server_identity", true, "Linked.", "Linked", orchestrator.TelegramSeveritySuccess, 200)
-	if !strings.Contains(ansi.Strip(v), "✓ LINKED") || !strings.Contains(v, "34;197;94") {
-		t.Fatalf("linked must be green ✓: %q", ansi.Strip(v))
+	if !strings.Contains(ansi.Strip(v), "LINKED") || !strings.Contains(v, "34;197;94") {
+		t.Fatalf("linked must be green: %q", ansi.Strip(v))
+	}
+	if strings.ContainsAny(ansi.Strip(v), "✓✗⚠ℹ") {
+		t.Fatalf("status keyword must carry NO symbol: %q", ansi.Strip(v))
 	}
 	if !strings.Contains(ansi.Strip(v), "╭") || !strings.Contains(ansi.Strip(v), "123456789") {
 		t.Fatalf("Server ID must be boxed: %q", ansi.Strip(v))
 	}
 
-	// Partial -> yellow "⚠ LINKED (FINISHING SETUP)".
+	// Partial -> yellow "LINKED (FINISHING SETUP)".
 	p := buildTelegramPrompt("1", "", false, "token unsaved", "Linked (finishing setup)", orchestrator.TelegramSeverityPartial, 200)
-	if !strings.Contains(ansi.Strip(p), "⚠ LINKED (FINISHING SETUP)") || !strings.Contains(p, "234;179;8") {
-		t.Fatalf("partial must be yellow ⚠: %q", ansi.Strip(p))
+	if !strings.Contains(ansi.Strip(p), "LINKED (FINISHING SETUP)") || !strings.Contains(p, "234;179;8") {
+		t.Fatalf("partial must be yellow: %q", ansi.Strip(p))
 	}
 
-	// Action (not paired, 409) -> blue "ℹ NOT PAIRED YET (HTTP 409)".
+	// Action (not paired, 409) -> blue "NOT PAIRED YET (HTTP 409)".
 	a := buildTelegramPrompt("1", "", false, "send the id", "Not paired yet", orchestrator.TelegramSeverityAction, 409)
-	if !strings.Contains(ansi.Strip(a), "ℹ NOT PAIRED YET") || !strings.Contains(a, "59;130;246") {
-		t.Fatalf("action must be blue ℹ: %q", ansi.Strip(a))
+	if !strings.Contains(ansi.Strip(a), "NOT PAIRED YET") || !strings.Contains(a, "59;130;246") {
+		t.Fatalf("action must be blue: %q", ansi.Strip(a))
 	}
 	if !strings.Contains(ansi.Strip(a), "(HTTP 409)") {
 		t.Fatalf("action must show the HTTP code: %q", ansi.Strip(a))
 	}
 
-	// Unreachable (code 0) -> red "⚠ SERVER UNREACHABLE", no HTTP code.
+	// Unreachable (code 0) -> red "SERVER UNREACHABLE", no HTTP code.
 	u := buildTelegramPrompt("1", "", false, "could not reach", "Server unreachable", orchestrator.TelegramSeverityUnreachable, 0)
-	if !strings.Contains(ansi.Strip(u), "⚠ SERVER UNREACHABLE") || !strings.Contains(u, "239;68;68") {
-		t.Fatalf("unreachable must be red ⚠: %q", ansi.Strip(u))
+	if !strings.Contains(ansi.Strip(u), "SERVER UNREACHABLE") || !strings.Contains(u, "239;68;68") {
+		t.Fatalf("unreachable must be red: %q", ansi.Strip(u))
 	}
 	if strings.Contains(ansi.Strip(u), "HTTP 0") {
 		t.Fatalf("code 0 must not show an HTTP code: %q", ansi.Strip(u))
 	}
 
-	// Fatal (invalid id, 422) -> red "✗ INVALID SERVER ID (HTTP 422)".
+	// Fatal (invalid id, 422) -> red "INVALID SERVER ID (HTTP 422)".
 	f := buildTelegramPrompt("1", "", false, "invalid", "Invalid Server ID", orchestrator.TelegramSeverityFatal, 422)
-	if !strings.Contains(ansi.Strip(f), "✗ INVALID SERVER ID") || !strings.Contains(f, "239;68;68") {
-		t.Fatalf("fatal must be red ✗: %q", ansi.Strip(f))
+	if !strings.Contains(ansi.Strip(f), "INVALID SERVER ID") || !strings.Contains(f, "239;68;68") {
+		t.Fatalf("fatal must be red: %q", ansi.Strip(f))
 	}
 
-	// Neutral -> no keyword, message verbatim.
-	n := ansi.Strip(buildTelegramPrompt("1", "", false, "Not checked yet.", "", orchestrator.TelegramSeverityNeutral, 0))
-	if !strings.Contains(n, "Not checked yet.") || strings.Contains(n, "HTTP") {
-		t.Fatalf("neutral status wrong: %q", n)
+	// Neutral (pre-check) -> yellow "NOT CHECKED" (no symbol) + the guidance message.
+	n := buildTelegramPrompt("1", "", false, "Not checked yet.", "", orchestrator.TelegramSeverityNeutral, 0)
+	if !strings.Contains(ansi.Strip(n), "NOT CHECKED") || !strings.Contains(ansi.Strip(n), "Not checked yet.") {
+		t.Fatalf("neutral must show yellow NOT CHECKED + message: %q", ansi.Strip(n))
+	}
+	if !strings.Contains(n, "234;179;8") || strings.ContainsAny(ansi.Strip(n), "✓✗⚠ℹ") || strings.Contains(ansi.Strip(n), "HTTP") {
+		t.Fatalf("neutral must be yellow, no symbol, no HTTP: %q", ansi.Strip(n))
 	}
 }
 
