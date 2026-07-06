@@ -21,8 +21,8 @@ func TestCheckHealthcheckConnectionPopulatesRawStatus(t *testing.T) {
 	})
 
 	want := health.Status{
-		Heartbeat: &health.PingRecord{TS: 1000, OK: true},
-		Update:    &health.UpdateRecord{Ping: health.PingRecord{TS: 1000, OK: true}, Available: true, Latest: "9.9.9"},
+		Records: map[string]*health.PingRecord{health.KindHeartbeat: {TS: 1000, OK: true}},
+		Update:  &health.UpdateRecord{Ping: health.PingRecord{TS: 1000, OK: true}, Available: true, Latest: "9.9.9"},
 	}
 	healthcheckSetupLoadStatus = func(baseDir string) (health.Status, error) { return want, nil }
 	// Fail the fetch so the function returns early AFTER the status load.
@@ -34,7 +34,7 @@ func TestCheckHealthcheckConnectionPopulatesRawStatus(t *testing.T) {
 	if !res.HaveStatus {
 		t.Fatalf("HaveStatus must be true when the status file was readable")
 	}
-	if res.RawStatus.Heartbeat == nil || res.RawStatus.Update == nil || !res.RawStatus.Update.Available {
+	if res.RawStatus.Record(health.KindHeartbeat) == nil || res.RawStatus.Update == nil || !res.RawStatus.Update.Available {
 		t.Fatalf("RawStatus must carry the loaded snapshot, got %+v", res.RawStatus)
 	}
 	if res.Err == nil {

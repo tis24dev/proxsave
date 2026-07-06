@@ -1,6 +1,10 @@
 package health
 
-import "time"
+import (
+	"sort"
+	"strings"
+	"time"
+)
 
 // Sensor display names as they appear on the healthchecks panel and in the install
 // check screen. They are the three Fase-1 sensors' identities; the CentralizedConfig
@@ -80,8 +84,8 @@ func sensorLevel(rec *PingRecord, staleAfter time.Duration, now time.Time) (Sens
 func SensorRows(st Status, interval time.Duration, now time.Time) []SensorRow {
 	staleAfter := heartbeatStaleAfter(interval)
 
-	aliveLvl, aliveState, aliveAge := sensorLevel(st.Heartbeat, staleAfter, now)
-	backupLvl, backupState, backupAge := sensorLevel(newerPing(st.RunFinished, st.RunHang), 0, now)
+	aliveLvl, aliveState, aliveAge := sensorLevel(st.Record(KindHeartbeat), staleAfter, now)
+	backupLvl, backupState, backupAge := sensorLevel(newerPing(st.Record(KindRunFinished), st.Record(KindRunHang)), 0, now)
 
 	rows := []SensorRow{
 		{Name: SensorAlive, Level: aliveLvl, State: aliveState, Age: aliveAge},
@@ -101,6 +105,30 @@ func SensorRows(st Status, interval time.Duration, now time.Time) []SensorRow {
 		}
 	}
 	rows = append(rows, SensorRow{Name: SensorUpdates, Level: upLvl, State: upState, Age: upAge})
+
+	// Per-notification-channel sensors: one row per Records key with the notify- prefix,
+	// sorted for a deterministic screen. Event-driven (they ride the daily run), so never
+	// "stale". PingRecord.OK is only the TRANSMISSION outcome; the Down flag is the /1
+	// "channel send failed" signal, so a fresh transmitted /1 is SensorError "send failed".
+	var notifyKeys []string
+	for k := range st.Records {
+		if strings.HasPrefix(k, CheckKeyNotifyPrefix) {
+			notifyKeys = append(notifyKeys, k)
+		}
+	}
+	sort.Strings(notifyKeys)
+	for _, k := range notifyKeys {
+		rec := st.Records[k]
+		lvl, state, age := sensorLevel(rec, 0, now)
+		if lvl == SensorOk {
+			if rec != nil && rec.Down {
+				lvl, state = SensorError, "send failed"
+			} else {
+				state = "sent"
+			}
+		}
+		rows = append(rows, SensorRow{Name: SensorProxsavePrefix + k, Level: lvl, State: state, Age: age})
+	}
 
 	return rows
 }

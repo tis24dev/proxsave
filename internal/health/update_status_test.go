@@ -30,8 +30,8 @@ func TestRecordUpdateRoundTrip(t *testing.T) {
 	if st.Update.Ping.Err != "" || st.Update.Ping.Reason != "" {
 		t.Fatalf("ok update must have empty Err/Reason, got %+v", st.Update.Ping)
 	}
-	if st.Heartbeat == nil || st.Heartbeat.TS != 500 {
-		t.Fatalf("heartbeat must survive the update write, got %+v", st.Heartbeat)
+	if st.Record(KindHeartbeat) == nil || st.Record(KindHeartbeat).TS != 500 {
+		t.Fatalf("heartbeat must survive the update write, got %+v", st.Record(KindHeartbeat))
 	}
 	if st.Mode != "self" {
 		t.Fatalf("mode = %q, want self", st.Mode)
@@ -90,8 +90,8 @@ func TestLoadStatusToleratesOldFileWithoutUpdate(t *testing.T) {
 	if st.Update != nil {
 		t.Fatalf("old file must yield Update==nil, got %+v", st.Update)
 	}
-	if st.Heartbeat == nil || st.Heartbeat.TS != 777 {
-		t.Fatalf("old heartbeat must load, got %+v", st.Heartbeat)
+	if st.Record(KindHeartbeat) == nil || st.Record(KindHeartbeat).TS != 777 {
+		t.Fatalf("old heartbeat must load, got %+v", st.Record(KindHeartbeat))
 	}
 	if err := RecordUpdate(base, "centralized", 888, false, "v1", true, nil); err != nil {
 		t.Fatalf("RecordUpdate over old file: %v", err)
@@ -100,7 +100,7 @@ func TestLoadStatusToleratesOldFileWithoutUpdate(t *testing.T) {
 	if st.Update == nil || st.Update.Ping.TS != 888 || st.Update.Available {
 		t.Fatalf("update not added over old file: %+v", st.Update)
 	}
-	if st.Heartbeat == nil || st.Heartbeat.TS != 777 {
-		t.Fatalf("heartbeat must be preserved across the update write, got %+v", st.Heartbeat)
+	if st.Record(KindHeartbeat) == nil || st.Record(KindHeartbeat).TS != 777 {
+		t.Fatalf("heartbeat must be preserved across the update write, got %+v", st.Record(KindHeartbeat))
 	}
 }

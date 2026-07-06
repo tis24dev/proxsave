@@ -28,7 +28,13 @@ type fakeReporter struct {
 	updates         bool
 	updatesReported int
 	lastAvailable   bool
+	// Fase 2 generic per-check Ping + dynamic (notify-*) check resolution.
+	checks map[string]bool // HasCheck(name) for dynamic keys (alive/backup/updates use the flags above)
+	pings  []fakePing      // recorded generic Ping calls
 }
+
+// fakePing records one generic Reporter.Ping call for assertions.
+type fakePing struct{ name, suffix, rid string }
 
 func (f *fakeReporter) Heartbeat(ctx context.Context) error {
 	f.mu.Lock()
@@ -73,10 +79,32 @@ func (f *fakeReporter) ReportUpdate(ctx context.Context, available bool) error {
 }
 func (f *fakeReporter) HasUpdatesURL() bool { return f.updates }
 
+func (f *fakeReporter) HasCheck(name string) bool {
+	switch name {
+	case health.CheckKeyAlive:
+		return f.alive
+	case health.CheckKeyBackup:
+		return f.backupURL
+	case health.CheckKeyUpdates:
+		return f.updates
+	}
+	return f.checks[name]
+}
+
+func (f *fakeReporter) Ping(ctx context.Context, name, suffix, rid, body, label string) error {
+	if !f.HasCheck(name) {
+		return health.ErrNoPingURL
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pings = append(f.pings, fakePing{name: name, suffix: suffix, rid: rid})
+	return nil
+}
+
 func (f *fakeReporter) snapshot() fakeReporter {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return fakeReporter{started: f.started, finished: f.finished, hung: f.hung, beats: f.beats, lastCode: f.lastCode, lastRid: f.lastRid, lastTail: f.lastTail, updates: f.updates, updatesReported: f.updatesReported, lastAvailable: f.lastAvailable}
+	return fakeReporter{started: f.started, finished: f.finished, hung: f.hung, beats: f.beats, lastCode: f.lastCode, lastRid: f.lastRid, lastTail: f.lastTail, updates: f.updates, updatesReported: f.updatesReported, lastAvailable: f.lastAvailable, pings: append([]fakePing(nil), f.pings...)}
 }
 
 func newTestDaemon(t *testing.T, rep backupReporter, cmdFn func(ctx context.Context) *exec.Cmd, maxRun time.Duration) *daemon {
@@ -217,9 +245,9 @@ func TestRunOnceNoReporterRecordsNoPhantomPing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadStatus: %v", err)
 	}
-	if st.RunStarted != nil || st.RunFinished != nil || st.RunHang != nil {
+	if st.Record(health.KindRunStarted) != nil || st.Record(health.KindRunFinished) != nil || st.Record(health.KindRunHang) != nil {
 		t.Fatalf("a nil reporter must record no outcome ping, got started=%v finished=%v hang=%v",
-			st.RunStarted, st.RunFinished, st.RunHang)
+			st.Record(health.KindRunStarted), st.Record(health.KindRunFinished), st.Record(health.KindRunHang))
 	}
 }
 
@@ -237,14 +265,14 @@ func TestBeatRecordsLivenessWhenNoURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadStatus: %v", err)
 	}
-	if st.Heartbeat == nil {
+	if st.Record(health.KindHeartbeat) == nil {
 		t.Fatal("a running daemon with no url must still record a heartbeat (liveness), got nil")
 	}
-	if st.Heartbeat.OK {
-		t.Fatalf("a no-url beat must record OK=false, got %+v", st.Heartbeat)
+	if st.Record(health.KindHeartbeat).OK {
+		t.Fatalf("a no-url beat must record OK=false, got %+v", st.Record(health.KindHeartbeat))
 	}
-	if st.Heartbeat.Reason != health.ReasonNoURL {
-		t.Fatalf("Reason=%q want %q", st.Heartbeat.Reason, health.ReasonNoURL)
+	if st.Record(health.KindHeartbeat).Reason != health.ReasonNoURL {
+		t.Fatalf("Reason=%q want %q", st.Record(health.KindHeartbeat).Reason, health.ReasonNoURL)
 	}
 }
 
@@ -295,9 +323,9 @@ func TestSelfURLs(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &daemon{cfg: &tc.cfg}
-			alive, backup, updates := d.selfURLs()
-			if alive != tc.wantAlive || backup != tc.wantBk || updates != tc.wantUpd {
-				t.Fatalf("selfURLs = %q / %q / %q, want %q / %q / %q", alive, backup, updates, tc.wantAlive, tc.wantBk, tc.wantUpd)
+			alive, backup, checks := d.selfURLs()
+			if alive != tc.wantAlive || backup != tc.wantBk || checks[health.CheckKeyUpdates] != tc.wantUpd {
+				t.Fatalf("selfURLs = %q / %q / %q, want %q / %q / %q", alive, backup, checks[health.CheckKeyUpdates], tc.wantAlive, tc.wantBk, tc.wantUpd)
 			}
 		})
 	}

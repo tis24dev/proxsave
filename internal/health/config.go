@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/serverbot"
@@ -42,9 +43,26 @@ type CentralizedConfig struct {
 	Checks map[string]string `json:"checks,omitempty"`
 }
 
-// CheckKeyUpdates is the CentralizedConfig.Checks map key carrying the updates sensor's
-// ping URL. Deliberately distinct from the SensorUpdates display name ("proxsave-updates").
-const CheckKeyUpdates = "updates"
+// Check-name vocabulary, shared by the Reporter url map, the Status.Records-derived
+// sensor names, and the CentralizedConfig.Checks wire keys. The rule is: the wire/client
+// key is the server hc slug with the leading "proxsave-" stripped once. alive/backup ride
+// the FROZEN top-level alive_ping_url/backup_ping_url wire fields, NOT the Checks map, so
+// their keys are internal-only (the url map and Has*URL accessors). updates + notify-<ch>
+// travel inside Checks.
+const (
+	CheckKeyAlive        = "alive"
+	CheckKeyBackup       = "backup"
+	CheckKeyUpdates      = "updates"
+	CheckKeyNotifyPrefix = "notify-" // per-notification-channel check key prefix (notify-email, ...)
+	SensorProxsavePrefix = "proxsave-"
+)
+
+// CheckKeyNotify returns the Checks/url-map key for a notification channel (lowercased),
+// e.g. CheckKeyNotify("email") == "notify-email". The server hc slug is
+// SensorProxsavePrefix+CheckKeyNotify(ch) = "proxsave-notify-email".
+func CheckKeyNotify(channel string) string {
+	return CheckKeyNotifyPrefix + strings.ToLower(strings.TrimSpace(channel))
+}
 
 // serverError is the {"error":...} envelope the proxsave_server returns on failure.
 type serverError struct {

@@ -126,7 +126,7 @@ func TestCheckHealthcheckConnection(t *testing.T) {
 		healthcheckSetupPing = func(ctx context.Context, aliveURL string) error { return nil }
 		// Fresh, OK heartbeat -> the daemon is alive and transmitting.
 		healthcheckSetupLoadStatus = func(baseDir string) (health.Status, error) {
-			return health.Status{Heartbeat: &health.PingRecord{TS: now.Unix(), OK: true}}, nil
+			return health.Status{Records: map[string]*health.PingRecord{health.KindHeartbeat: {TS: now.Unix(), OK: true}}}, nil
 		}
 		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base", time.Minute)
 		if !gotInclude {
