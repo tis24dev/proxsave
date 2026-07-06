@@ -78,7 +78,7 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 		p := theme.Emphasis.Render("Current version: ") + theme.Text.Render(cur) + "\n\n" +
 			theme.Text.Render("Last available release: ") + sty.Render(kw)
 		if url != "" {
-			p += "\n\n" + theme.Emphasis.Render(url)
+			p += "\n\n" + theme.Text.Render(url)
 		}
 		if notes != "" {
 			p += "\n\n" + renderReleaseNotes(notes)
