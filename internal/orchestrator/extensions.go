@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -137,6 +138,13 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			} else {
 				o.logger.Warning("%s: enabled but not initialized", entry.name)
 			}
+			// An enabled channel that failed to initialize sent nothing: record an "error"
+			// outcome so its per-channel healthchecks sensor goes DOWN instead of silently
+			// absent. The Healthchecks section entry is a reporting surface, not a notify
+			// channel, so it never gets a per-channel result.
+			if entry.name != healthchecksSectionName {
+				setNotifyResult(stats, entry.name, "error")
+			}
 			continue
 		}
 
@@ -150,6 +158,28 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			continue
 		}
 		_ = ch.Notify(ctx, stats)
+	}
+
+	// Hand the per-channel outcomes to the daemon (Fase 2B): env-gated, so only the daemon's
+	// supervised child (which has EnvRunID set) writes; a bare `proxsave --backup` no-ops.
+	o.persistNotifyResults(stats)
+}
+
+// persistNotifyResults writes the per-channel notify outcomes to the handoff file the daemon
+// reads after the child exits, to ping one healthchecks check per channel. Best-effort and
+// env-gated on EnvRunID (set only by the daemon on its child), so a non-daemon run leaves no
+// stray file. Writes an empty results object when nothing was recorded so the daemon can tell
+// "child ran, nothing to report" from "child crashed" (a missing/stale file).
+func (o *Orchestrator) persistNotifyResults(stats *BackupStats) {
+	if o.cfg == nil || strings.TrimSpace(o.cfg.BaseDir) == "" || stats == nil {
+		return
+	}
+	rid := strings.TrimSpace(os.Getenv(health.EnvRunID))
+	if rid == "" {
+		return
+	}
+	if err := health.WriteNotifyResults(o.cfg.BaseDir, rid, time.Now().Unix(), stats.NotifyResults); err != nil {
+		o.logger.Debug("notify results handoff write failed: %v", err)
 	}
 }
 
