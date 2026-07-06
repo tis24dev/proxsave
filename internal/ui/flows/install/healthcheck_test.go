@@ -72,13 +72,10 @@ func TestRunHealthcheckSetupCtrlCInterrupts(t *testing.T) {
 func TestBuildHealthcheckPrompt(t *testing.T) {
 	link := "https://hc.proxsave.dev/l/Nr4vAebz5b"
 
-	// Ok level: green "WORKING" (no symbol), the explanation on its own line, the link boxed.
+	// Ok level: green "✓ WORKING", the explanation on its own line, the link boxed.
 	v := buildHealthcheckPrompt(link, "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk)
-	if !strings.Contains(ansi.Strip(v), "WORKING") {
+	if !strings.Contains(ansi.Strip(v), "✓ WORKING") {
 		t.Fatalf("working keyword missing: %q", ansi.Strip(v))
-	}
-	if strings.ContainsAny(ansi.Strip(v), "✓✗⚠") {
-		t.Fatalf("status keyword must carry NO symbol: %q", ansi.Strip(v))
 	}
 	if !strings.Contains(v, "34;197;94") { // theme.Green SGR
 		t.Fatalf("WORKING must be green")
@@ -90,29 +87,38 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 		t.Fatalf("magic-link must be boxed: %q", ansi.Strip(v))
 	}
 
-	// Error level: red "REJECTED" (no symbol).
+	// Error level: red "✗ REJECTED".
 	f := buildHealthcheckPrompt(link, "REJECTED", "bad creds", orchestrator.HealthcheckSetupLevelError)
-	if !strings.Contains(ansi.Strip(f), "REJECTED") {
+	if !strings.Contains(ansi.Strip(f), "✗ REJECTED") {
 		t.Fatalf("error keyword missing: %q", ansi.Strip(f))
 	}
 	if !strings.Contains(f, "239;68;68") { // theme.Red SGR
 		t.Fatalf("REJECTED must be red")
 	}
 
-	// Warn level: yellow "NOT RUNNING" (no triangle) - same look as pre-check "NOT CHECKED".
+	// Warn level (a real post-check warning): yellow "⚠ NOT RUNNING" (with the triangle).
 	w := buildHealthcheckPrompt(link, "NOT RUNNING", "daemon down", orchestrator.HealthcheckSetupLevelWarn)
-	if !strings.Contains(ansi.Strip(w), "NOT RUNNING") {
+	if !strings.Contains(ansi.Strip(w), "⚠ NOT RUNNING") {
 		t.Fatalf("warn keyword missing: %q", ansi.Strip(w))
-	}
-	if strings.ContainsAny(ansi.Strip(w), "✓✗⚠") {
-		t.Fatalf("warn keyword must carry NO triangle: %q", ansi.Strip(w))
 	}
 	if !strings.Contains(w, "234;179;8") { // theme.Yellow SGR (#EAB308)
 		t.Fatalf("NOT RUNNING must be yellow")
 	}
 
+	// Neutral level (pre-check): yellow "NOT CHECKED" with NO triangle - like upgrade/telegram.
+	nn := buildHealthcheckPrompt(link, "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral)
+	if !strings.Contains(ansi.Strip(nn), "NOT CHECKED") {
+		t.Fatalf("neutral keyword missing: %q", ansi.Strip(nn))
+	}
+	if strings.ContainsAny(ansi.Strip(nn), "✓✗⚠") {
+		t.Fatalf("pre-check NOT CHECKED must carry NO triangle: %q", ansi.Strip(nn))
+	}
+	if !strings.Contains(nn, "234;179;8") { // yellow
+		t.Fatalf("NOT CHECKED must be yellow")
+	}
+
 	// No link -> no box; the explanation still renders verbatim.
-	n := ansi.Strip(buildHealthcheckPrompt("", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelWarn))
+	n := ansi.Strip(buildHealthcheckPrompt("", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral))
 	if strings.Contains(n, "╭") {
 		t.Fatalf("no link must render no box: %q", n)
 	}
