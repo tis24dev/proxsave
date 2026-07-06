@@ -43,9 +43,11 @@ type backupReporter interface {
 	RunFinished(ctx context.Context, rid string, exitCode int, logTail string) error
 	RunHang(ctx context.Context, rid string, timeout time.Duration, logTail string) error
 	ReportUpdate(ctx context.Context, available bool) error
+	Ping(ctx context.Context, name, suffix, rid, body, label string) error
 	HasAliveURL() bool
 	HasBackupURL() bool
 	HasUpdatesURL() bool
+	HasCheck(name string) bool
 }
 
 // dispatchDaemonMode runs the resident daemon when --daemon is set. It blocks
@@ -450,17 +452,17 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 		return nil
 	}
 	if d.cfg.HealthcheckMode == "self" {
-		alive, backup, updates := d.selfURLs()
-		if alive == "" && backup == "" && updates == "" {
+		alive, backup, checks := d.selfURLs()
+		if alive == "" && backup == "" && len(checks) == 0 {
 			logging.Warning("daemon: healthcheck self mode enabled but no ping URLs configured")
 			return nil
 		}
-		d.registerSecrets(alive, backup, updates)
-		return health.NewReporter(health.Config{AliveURL: alive, BackupURL: backup, UpdatesURL: updates, SendLog: d.cfg.HealthcheckSendLog})
+		d.registerReporterSecrets(alive, backup, checks)
+		return health.NewReporter(health.Config{AliveURL: alive, BackupURL: backup, Checks: checks, SendLog: d.cfg.HealthcheckSendLog})
 	}
 
 	// centralized
-	alive, backup, updates, err := d.fetchCentralized(ctx)
+	alive, backup, checks, err := d.fetchCentralized(ctx)
 	if err != nil {
 		// The heartbeat loop retries this every interval; warn ONCE (so the
 		// operator sees healthchecks isn't working, e.g. Telegram not paired yet),
@@ -476,38 +478,48 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 		}
 		// Fall back to any URLs cached in backup.env so a transient server outage
 		// still lets us report.
-		alive, backup = d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL
+		alive, backup, checks = d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL, nil
 	} else {
 		d.mu.Lock()
 		d.fetchWarned = false // recovered: allow a future failure to warn again
 		d.mu.Unlock()
 	}
-	if alive == "" && backup == "" && updates == "" {
+	if alive == "" && backup == "" && len(checks) == 0 {
 		return nil
 	}
-	d.registerSecrets(alive, backup, updates)
-	return health.NewReporter(health.Config{AliveURL: alive, BackupURL: backup, UpdatesURL: updates, SendLog: d.cfg.HealthcheckSendLog})
+	d.registerReporterSecrets(alive, backup, checks)
+	return health.NewReporter(health.Config{AliveURL: alive, BackupURL: backup, Checks: checks, SendLog: d.cfg.HealthcheckSendLog})
+}
+
+// registerReporterSecrets registers the alive/backup URLs plus every dynamic check URL as
+// log secrets so a ping URL (which embeds the check UUID) never leaks into a log line.
+func (d *daemon) registerReporterSecrets(alive, backup string, checks map[string]string) {
+	secrets := []string{alive, backup}
+	for _, u := range checks {
+		secrets = append(secrets, u)
+	}
+	d.registerSecrets(secrets...)
 }
 
 // fetchCentralized asks the proxsave_server for this client's ping URLs, reusing
 // the same identity/secret as /api/notify. The optional updates URL rides in the additive
 // Checks map (absent on old servers -> "").
-func (d *daemon) fetchCentralized(ctx context.Context) (string, string, string, error) {
+func (d *daemon) fetchCentralized(ctx context.Context) (string, string, map[string]string, error) {
 	secret, _ := identity.LoadNotifySecret(d.cfg.BaseDir)
 	if strings.TrimSpace(secret) == "" {
-		return "", "", "", fmt.Errorf("no relay secret on disk (pair Telegram first)")
+		return "", "", nil, fmt.Errorf("no relay secret on disk (pair Telegram first)")
 	}
 	cfg, err := health.FetchCentralizedConfig(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, false)
 	if err != nil {
-		return "", "", "", err
+		return "", "", nil, err
 	}
-	return cfg.AliveURL, cfg.BackupURL, cfg.Checks[health.CheckKeyUpdates], nil
+	return cfg.AliveURL, cfg.BackupURL, cfg.Checks, nil
 }
 
 // selfURLs resolves the ping URLs from self-mode config: full URLs if given, otherwise
 // assembled from the ping endpoint (+ optional ping key) and check IDs. The updates URL
 // prefers an explicit full URL, else assembles from its own check ID.
-func (d *daemon) selfURLs() (string, string, string) {
+func (d *daemon) selfURLs() (string, string, map[string]string) {
 	base := strings.TrimRight(strings.TrimSpace(d.cfg.HealthcheckPingEndpoint), "/")
 	build := func(id string) string {
 		id = strings.TrimSpace(id)
@@ -519,14 +531,18 @@ func (d *daemon) selfURLs() (string, string, string) {
 		}
 		return base + "/" + id
 	}
+	checks := map[string]string{}
 	updates := strings.TrimSpace(d.cfg.HealthcheckUpdatesURL)
 	if updates == "" {
 		updates = build(d.cfg.HealthcheckUpdatesID)
 	}
-	if d.cfg.HealthcheckAliveURL != "" || d.cfg.HealthcheckBackupURL != "" {
-		return d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL, updates
+	if updates != "" {
+		checks[health.CheckKeyUpdates] = updates
 	}
-	return build(d.cfg.HealthcheckAliveID), build(d.cfg.HealthcheckBackupID), updates
+	if d.cfg.HealthcheckAliveURL != "" || d.cfg.HealthcheckBackupURL != "" {
+		return d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL, checks
+	}
+	return build(d.cfg.HealthcheckAliveID), build(d.cfg.HealthcheckBackupID), checks
 }
 
 func (d *daemon) registerSecrets(urls ...string) {

@@ -19,7 +19,7 @@ func TestReportUpdatePings0vs1(t *testing.T) {
 		_, _ = io.WriteString(w, "OK")
 	}))
 	defer srv.Close()
-	rep := NewReporter(Config{Client: srv.Client(), UpdatesURL: srv.URL + "/ping/updates"})
+	rep := NewReporter(Config{Client: srv.Client(), Checks: map[string]string{CheckKeyUpdates: srv.URL + "/ping/updates"}})
 	if !rep.HasUpdatesURL() {
 		t.Fatalf("HasUpdatesURL should be true")
 	}

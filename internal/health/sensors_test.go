@@ -1,6 +1,8 @@
 package health
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,9 +52,11 @@ func TestSensorRowsMapping(t *testing.T) {
 	interval := 5 * time.Minute
 
 	st := Status{
-		Heartbeat:   &PingRecord{TS: fresh, OK: true},
-		RunFinished: &PingRecord{TS: fresh, OK: true},
-		Update:      &UpdateRecord{Ping: PingRecord{TS: fresh, OK: true}, Available: true, Latest: "v2"},
+		Records: map[string]*PingRecord{
+			KindHeartbeat:   {TS: fresh, OK: true},
+			KindRunFinished: {TS: fresh, OK: true},
+		},
+		Update: &UpdateRecord{Ping: PingRecord{TS: fresh, OK: true}, Available: true, Latest: "v2"},
 	}
 	rows := SensorRows(st, interval, now)
 	if len(rows) != 3 {
@@ -95,5 +99,72 @@ func TestSensorRowsUpToDateAndEmpty(t *testing.T) {
 		if r.Level != SensorNeutral || r.State != "no data" || r.Age != "" {
 			t.Fatalf("empty status row %+v, want neutral/no data/no age", r)
 		}
+	}
+}
+
+// TestSensorRowsNotify: each notify-<channel> record in Records produces a
+// "proxsave-notify-<channel>" row AFTER the three fixed rows. A fresh transmitted send is
+// SensorOk "sent"; a fresh transmitted /1 (Down) is SensorError "send failed"; a
+// non-transmitted ping is SensorWarn; an absent channel yields no row; and multiple
+// channels are emitted in sorted order for a deterministic screen.
+func TestSensorRowsNotify(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	fresh := int64(9_990)
+	interval := 5 * time.Minute
+
+	find := func(rows []SensorRow, name string) (SensorRow, bool) {
+		for _, r := range rows {
+			if r.Name == name {
+				return r, true
+			}
+		}
+		return SensorRow{}, false
+	}
+
+	emailKey := CheckKeyNotify("email")         // "notify-email"
+	emailRow := SensorProxsavePrefix + emailKey // "proxsave-notify-email"
+
+	// OK + !Down -> a healthy transmitted send is green "sent".
+	st := Status{Records: map[string]*PingRecord{emailKey: {TS: fresh, OK: true}}}
+	if r, ok := find(SensorRows(st, interval, now), emailRow); !ok || r.Level != SensorOk || r.State != "sent" {
+		t.Fatalf("OK+!Down notify = %+v ok=%v, want SensorOk 'sent'", r, ok)
+	}
+
+	// OK + Down -> a healthy transmitted /1 (send failed) is red "send failed".
+	st = Status{Records: map[string]*PingRecord{emailKey: {TS: fresh, OK: true, Down: true}}}
+	if r, ok := find(SensorRows(st, interval, now), emailRow); !ok || r.Level != SensorError || r.State != "send failed" {
+		t.Fatalf("OK+Down notify = %+v ok=%v, want SensorError 'send failed'", r, ok)
+	}
+
+	// !OK -> the ping never transmitted, so the shared helper yields SensorWarn.
+	st = Status{Records: map[string]*PingRecord{emailKey: {TS: fresh, OK: false, Err: "HTTP 500"}}}
+	if r, ok := find(SensorRows(st, interval, now), emailRow); !ok || r.Level != SensorWarn {
+		t.Fatalf("!OK notify = %+v ok=%v, want SensorWarn", r, ok)
+	}
+
+	// Absent channel -> no row (only the three fixed sensors when no notify keys exist).
+	rows := SensorRows(Status{}, interval, now)
+	if _, ok := find(rows, emailRow); ok {
+		t.Fatalf("absent notify channel must not produce a row")
+	}
+	if len(rows) != 3 {
+		t.Fatalf("no notify keys should leave only the 3 fixed rows, got %d", len(rows))
+	}
+
+	// Multiple channels -> emitted in sorted order, after the fixed rows.
+	telKey := CheckKeyNotify("telegram")
+	st = Status{Records: map[string]*PingRecord{
+		telKey:   {TS: fresh, OK: true},
+		emailKey: {TS: fresh, OK: true},
+	}}
+	var notifyNames []string
+	for _, r := range SensorRows(st, interval, now) {
+		if strings.HasPrefix(r.Name, SensorProxsavePrefix+CheckKeyNotifyPrefix) {
+			notifyNames = append(notifyNames, r.Name)
+		}
+	}
+	want := []string{SensorProxsavePrefix + emailKey, SensorProxsavePrefix + telKey}
+	if !reflect.DeepEqual(notifyNames, want) {
+		t.Fatalf("notify rows = %v, want sorted %v", notifyNames, want)
 	}
 }
