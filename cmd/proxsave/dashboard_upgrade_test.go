@@ -33,6 +33,50 @@ func TestUpgradeSafeToken(t *testing.T) {
 	}
 }
 
+func TestExtractReleaseNotes(t *testing.T) {
+	body := "Some header text\n" +
+		coderabbitNotesStart + "\n## Release Notes\n\n* **New Features**\n  * Thing\n" + coderabbitNotesEnd +
+		"\nfooter with a checklist"
+	got := extractReleaseNotes(body)
+	want := "## Release Notes\n\n* **New Features**\n  * Thing"
+	if got != want {
+		t.Fatalf("extractReleaseNotes = %q, want %q", got, want)
+	}
+	if extractReleaseNotes("no markers here at all") != "" {
+		t.Fatal("absent block must yield empty")
+	}
+	// Start marker but no end marker -> everything after start (trimmed).
+	if got := extractReleaseNotes(coderabbitNotesStart + "\ntail"); got != "tail" {
+		t.Fatalf("unterminated block = %q, want %q", got, "tail")
+	}
+}
+
+func TestRenderReleaseNotes(t *testing.T) {
+	// Control/ANSI bytes in the remote notes MUST be stripped; bold markers dropped;
+	// headers emphasized (the '##' prefix removed from the visible text).
+	notes := "## Release Notes\n* **New Features**\n  * shiny\x1b[31m red\x00 thing\ttabbed"
+	out := ansi.Strip(renderReleaseNotes(notes))
+	for _, bad := range []string{"\x1b", "\x00", "**", "## "} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("renderReleaseNotes must strip %q, got %q", bad, out)
+		}
+	}
+	if !strings.Contains(out, "Release Notes") || !strings.Contains(out, "shiny") || !strings.Contains(out, "red") {
+		t.Fatalf("visible notes text must survive, got %q", out)
+	}
+	// Line-COUNT cap: a very long block is truncated with an ellipsis.
+	long := strings.Repeat("* line\n", 60)
+	capped := ansi.Strip(renderReleaseNotes(long))
+	if strings.Count(capped, "line") > 20 || !strings.Contains(capped, "...") {
+		t.Fatalf("long notes must be capped with an ellipsis, got %d lines", strings.Count(capped, "line"))
+	}
+	// Line-WIDTH cap: a single newline-free line is truncated so it can't soft-wrap the menu.
+	wide := ansi.Strip(renderReleaseNotes(strings.Repeat("x", 500)))
+	if len([]rune(strings.TrimSpace(wide))) > 110 || !strings.Contains(wide, "…") {
+		t.Fatalf("a very long single line must be width-capped, got %d runes", len([]rune(strings.TrimSpace(wide))))
+	}
+}
+
 // TestDashboardUpgradeScreen drives the in-session upgrade screen directly: Check (shows
 // the available version, sanitized) -> Run upgrade (calls the real upgrade with
 // Upgrade+AutoYes+ConfigPath, shows the success notice) -> Back.
@@ -50,7 +94,10 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		gotVersion = current
 		// A hostile GitHub version with a non-allowlist byte ('!'): the screen MUST scrub
 		// it (a real ESC would be invisible after ansi.Strip, so '!' is the visible probe).
-		return &UpdateInfo{NewVersion: true, Current: current, Latest: "2.0.0!"}
+		return &UpdateInfo{
+			NewVersion: true, Current: current, Latest: "2.0.0!",
+			Notes: "## Release Notes\n\n* **New Features**\n  * Shiny new widget",
+		}
 	}
 	var gotArgs *cli.Args
 	dashboardUpgradeRun = func(ctx context.Context, args *cli.Args, bl *logging.BootstrapLogger) int {
@@ -91,7 +138,7 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		}
 	}
 
-	// Check: the loop re-renders the Upgrade screen with the available version.
+	// Check: the loop re-renders the Upgrade screen with the available version + notes.
 	driver.keys("enter")
 	out := waitFor("2.0.0")
 	if gotVersion != "1.0.0" {
@@ -99,6 +146,10 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	}
 	if strings.Contains(out, "2.0.0!") {
 		t.Fatalf("the non-allowlist byte from the GitHub version must be scrubbed, out tail:\n%s", tailStr(out))
+	}
+	_ = waitFor("Shiny new widget") // the release-notes summary must render below the version
+	if strings.Contains(ansi.Strip(driver.buf.String()), "**New Features**") {
+		t.Fatalf("markdown bold markers must be stripped from the notes")
 	}
 
 	// Run upgrade (the button swapped to "Run upgrade").
