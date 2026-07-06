@@ -29,6 +29,7 @@ const (
 	ActionCheckTelegram
 	ActionCheckHealthcheck
 	ActionPostInstallCheck
+	ActionCheckUpgrade // check for a newer release and (on confirm) install it in-session
 	// Third group (daemon scheduler): setup/remove run the same admin path as the
 	// --daemon-setup / --daemon-remove flags; status runs a read-only screen.
 	ActionDaemonSetup   // install OR re-enable the resident daemon (--daemon-setup)
@@ -70,6 +71,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		{Label: "Check Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
 		{Label: "Check healthchecks", Description: "verify backup monitoring and show the portal link", Value: ActionCheckHealthcheck},
 		{Label: "Post-install check", Description: "re-run the post-install audit", Value: ActionPostInstallCheck},
+		{Label: "Check for updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
 	}
 
 	// Third group (daemon scheduler): context-aware - only the command that fits

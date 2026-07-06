@@ -159,10 +159,10 @@ func TestDashboardActions(t *testing.T) {
 				t.Fatal("install flag not set")
 			}
 		}},
-		// Exit is the last selectable (12th): 11 downs, skipping both separators.
+		// Exit is the last selectable (13th): 12 downs, skipping both separators.
 		// (The Daemon group items run in-session and loop; they are covered by the
 		// dedicated in-session tests below, not this fall-through harness.)
-		{"exit row", "down down down down down down down down down down down enter", true, nil},
+		{"exit row", "down down down down down down down down down down down down enter", true, nil},
 		{"esc exits", "esc", true, nil},
 		{"ctrl+c exits", "ctrl+c", true, nil},
 	}
@@ -200,11 +200,11 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down down down enter") // Daemon status (10 downs)
-	driver.waitScreen("Daemon: not installed")                             // the styled outcome notice
-	driver.keys("enter")                                                   // dismiss
-	driver.waitScreen("Dashboard")                                         // back at the menu
-	driver.keys("esc")                                                     // exit
+	driver.keys("down down down down down down down down down down down enter") // Daemon status (11 downs)
+	driver.waitScreen("Daemon: not installed")                                  // the styled outcome notice
+	driver.keys("enter")                                                        // dismiss
+	driver.waitScreen("Dashboard")                                              // back at the menu
+	driver.keys("esc")                                                          // exit
 	select {
 	case handled := <-resCh:
 		if !handled {
@@ -236,11 +236,11 @@ func TestDashboardDaemonInstallInSession(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down down enter") // Install daemon (9 downs)
-	driver.waitScreen("Daemon installed")                             // success notice (after the RunTask)
-	driver.keys("enter")                                              // dismiss
-	driver.waitScreen("Dashboard")                                    // looped back
-	driver.keys("esc")                                                // exit
+	driver.keys("down down down down down down down down down down enter") // Install daemon (10 downs)
+	driver.waitScreen("Daemon installed")                                  // success notice (after the RunTask)
+	driver.keys("enter")                                                   // dismiss
+	driver.waitScreen("Dashboard")                                         // looped back
+	driver.keys("esc")                                                     // exit
 	select {
 	case handled := <-resCh:
 		if !handled {
@@ -283,11 +283,11 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	// Active state: Daemon group = "Disable daemon" (row 10, 9 downs) + "Daemon status".
-	driver.keys("down down down down down down down down down enter") // Disable daemon
-	driver.waitScreen("Daemon disabled")                              // success notice
-	driver.keys("enter")                                              // dismiss
-	driver.waitScreen("Dashboard")                                    // looped back
+	// Active state: Daemon group = "Disable daemon" (row 11, 10 downs) + "Restart" + "Daemon status".
+	driver.keys("down down down down down down down down down down enter") // Disable daemon
+	driver.waitScreen("Daemon disabled")                                   // success notice
+	driver.keys("enter")                                                   // dismiss
+	driver.waitScreen("Dashboard")                                         // looped back
 	driver.keys("esc")
 	select {
 	case handled := <-resCh:
