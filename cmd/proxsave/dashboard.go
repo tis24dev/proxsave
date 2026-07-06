@@ -14,6 +14,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
@@ -300,17 +301,22 @@ func dashboardDaemonState(args *cli.Args) menu.DaemonState {
 	}
 }
 
-// runDashboardDaemonStatus shows a read-only notice with the daemon service +
-// scheduler state (config mode, opt-out, unit installed, systemctl is-active).
+// runDashboardDaemonStatus is a read-only, auto-on-entry check (no button), styled like
+// the other diagnostics: a colored outcome keyword (from the daemon's REAL combined state
+// - systemd existence refined with the heartbeat, the SAME verdict the run/healthcheck
+// checks use) plus a description of the scheduler details. The notice severity colors the
+// title/border so the outcome reads at a glance.
 func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, configPath, baseDir string) {
 	mode := "unknown"
 	optOut := "unknown"
+	var interval time.Duration
 	if cfg, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && cfg != nil {
 		mode = cfg.SchedulerMode
 		optOut = "no"
 		if cfg.DaemonOptOut {
 			optOut = "yes"
 		}
+		interval = cfg.HealthcheckHeartbeatInterval
 	}
 	unit := "not installed"
 	if daemonUnitInstalled() {
@@ -320,11 +326,41 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 	if active == "" {
 		active = "unknown"
 	}
-	msg := "Scheduler mode: " + mode + "\n" +
+
+	// Combined verdict: systemd existence (installed/active) refined onto the heartbeat, so
+	// this screen and the healthcheck checks can never disagree about the daemon.
+	st, _ := health.LoadStatus(baseDir)
+	d := health.RefineWithPresence(health.Diagnose(st, interval, time.Now()), daemonPresenceProbe(ctx))
+	kind, outcome, explanation := daemonStatusStyle(d)
+
+	body := explanation + "\n\n" +
+		"Scheduler mode: " + mode + "\n" +
 		"Daemon service (proxsave-daemon.service): " + unit + "\n" +
 		"Service state (systemctl is-active): " + active + "\n" +
 		"Opted out of auto-migration (--daemon-remove): " + optOut
-	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeInfo, "Daemon status", msg))
+	_, _ = shell.Ask(ctx, session, components.NewNotice(kind, "Daemon: "+outcome, body))
+}
+
+// daemonStatusStyle maps a presence-refined diagnosis to the dashboard notice severity, a
+// short outcome keyword for the (colored) title, and a one-line explanation. Green only
+// when the daemon is actually alive and beating; every gap is a yellow warning. It shares
+// health's state vocabulary so the daemon-status screen agrees with the run/healthcheck
+// checks by construction.
+func daemonStatusStyle(d health.Diagnosis) (components.NoticeKind, string, string) {
+	switch d.State {
+	case health.TxNotInstalled:
+		return components.NoticeWarning, "not installed", "The resident daemon service is not installed; backups run from cron."
+	case health.TxNotActive:
+		return components.NoticeWarning, "not running", "The daemon service is installed but stopped."
+	case health.TxRunningNoReport:
+		return components.NoticeWarning, "running, not reporting", "The daemon is running but has not written a heartbeat; it may be a stale build that needs a restart."
+	case health.TxStale:
+		return components.NoticeWarning, "stale", "The daemon's last heartbeat is old; it may be stuck or stopped."
+	case health.TxNoHeartbeat:
+		return components.NoticeWarning, "not running", "No daemon heartbeat was found on this host."
+	default: // fresh heartbeat: the daemon process is alive and beating.
+		return components.NoticeSuccess, "running", "The daemon is running and beating on schedule."
+	}
 }
 
 // daemonStatusLoadConfig is a seam so tests can drive the daemon menu/status
