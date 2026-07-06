@@ -64,6 +64,9 @@ func (f *fakeReporter) HasBackupURL() bool { return f.backupURL }
 func (f *fakeReporter) ReportUpdate(ctx context.Context, available bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if !f.updates { // no updates URL resolved: mirror health.Reporter's ErrNoUpdatesURL
+		return health.ErrNoUpdatesURL
+	}
 	f.updatesReported++
 	f.lastAvailable = available
 	return nil
@@ -73,7 +76,7 @@ func (f *fakeReporter) HasUpdatesURL() bool { return f.updates }
 func (f *fakeReporter) snapshot() fakeReporter {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return fakeReporter{started: f.started, finished: f.finished, hung: f.hung, beats: f.beats, lastCode: f.lastCode, lastRid: f.lastRid, lastTail: f.lastTail}
+	return fakeReporter{started: f.started, finished: f.finished, hung: f.hung, beats: f.beats, lastCode: f.lastCode, lastRid: f.lastRid, lastTail: f.lastTail, updates: f.updates, updatesReported: f.updatesReported, lastAvailable: f.lastAvailable}
 }
 
 func newTestDaemon(t *testing.T, rep backupReporter, cmdFn func(ctx context.Context) *exec.Cmd, maxRun time.Duration) *daemon {

@@ -315,6 +315,11 @@ func (d *daemon) beat(ctx context.Context) {
 	d.recordPing(health.KindHeartbeat, err)
 }
 
+// daemonEvaluateUpdate is the update-check seam: production uses checkForUpdates (a live
+// GitHub fetch); tests override it to drive updateTick through the up-to-date / available /
+// inconclusive transitions deterministically without network access.
+var daemonEvaluateUpdate = checkForUpdates
+
 // updateCheckLoop checks for a newer release on a fixed interval (and once immediately)
 // and reports it to the "updates" check: /0 when up to date (green) or /1 when an update
 // is available (the check goes DOWN so the user's alerts fire). It mirrors heartbeatLoop
@@ -347,11 +352,27 @@ func (d *daemon) updateTick(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	info := checkForUpdates(ctx, quietUpdateLogger(), version.String())
+	info := daemonEvaluateUpdate(ctx, quietUpdateLogger(), version.String())
 	available := info != nil && info.NewVersion
 	latest := ""
 	if info != nil {
 		latest = strings.TrimSpace(info.Latest)
+	}
+
+	// checkForUpdates collapses "GitHub unreachable", rate-limit, and empty-latest into an
+	// UpdateInfo with NewVersion:false and no Latest (main_update.go). A genuine "up to date"
+	// result ALWAYS carries a non-empty Latest, so an empty Latest here means the check was
+	// INCONCLUSIVE. Do not let a transient error flip a live /1 (update available) to /0
+	// (green): that clears the monitor's DOWN state and flaps the alert until the operator
+	// upgrades. Re-affirm the last persisted verdict instead, or skip if there is none yet.
+	if latest == "" {
+		prev, _ := health.LoadStatus(d.cfg.BaseDir)
+		if prev.Update == nil {
+			logging.Debug("daemon: update check inconclusive and no prior verdict; skipping ping")
+			return
+		}
+		available = prev.Update.Available
+		latest = prev.Update.Latest
 	}
 
 	// Throttle: warn the first tick an update becomes available, stay quiet while it
@@ -373,7 +394,7 @@ func (d *daemon) updateTick(ctx context.Context) {
 	// In centralized mode, lazily (re)resolve until the updates URL is present, so a daemon
 	// paired (or a server that adds the updates check) after startup eventually reports it.
 	if (r == nil || !r.HasUpdatesURL()) && d.cfg.HealthcheckMode == "centralized" {
-		if nr := d.buildReporter(ctx); nr != nil {
+		if nr := d.buildReporter(ctx); nr != nil && nr.HasUpdatesURL() {
 			d.setReporter(nr)
 			r = nr
 		}
