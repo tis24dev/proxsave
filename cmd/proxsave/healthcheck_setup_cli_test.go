@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -27,7 +28,7 @@ func TestRunHealthcheckSetupCLI_SkipWhenNotEligible(t *testing.T) {
 	healthcheckSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{Eligibility: orchestrator.HealthcheckSetupSkipDisabled}, nil
 	}
-	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string) orchestrator.HealthcheckCheckResult {
+	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string, hbInterval time.Duration) orchestrator.HealthcheckCheckResult {
 		called = true
 		return orchestrator.HealthcheckCheckResult{}
 	}
@@ -60,11 +61,14 @@ func TestRunHealthcheckSetupCLI_VerifiedShowsMagicLink(t *testing.T) {
 	healthcheckSetupPromptYesNo = func(ctx context.Context, r *bufio.Reader, q string, d bool) (bool, error) {
 		return true, nil // "Check now? yes"
 	}
-	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string) orchestrator.HealthcheckCheckResult {
+	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string, hbInterval time.Duration) orchestrator.HealthcheckCheckResult {
 		if host != "https://h" || id != "123456789012" {
 			t.Fatalf("check got host=%q id=%q", host, id)
 		}
-		return orchestrator.HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc/accounts/check_token/u/MAGIC/"}
+		return orchestrator.HealthcheckCheckResult{
+			Err: nil, Reachable: true, LoginURL: "https://hc/accounts/check_token/u/MAGIC/",
+			DaemonRead: true, Daemon: health.Diagnosis{State: health.TxTransmitting, DaemonUp: true},
+		}
 	}
 	out := captureStdout(t, func() {
 		if err := runHealthcheckSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), "/base", "/cfg", logging.NewBootstrapLogger()); err != nil {
@@ -74,8 +78,9 @@ func TestRunHealthcheckSetupCLI_VerifiedShowsMagicLink(t *testing.T) {
 	if !strings.Contains(out, "https://hc/accounts/check_token/u/MAGIC/") {
 		t.Fatalf("must show the magic-link, got: %q", out)
 	}
-	if !strings.Contains(out, "verified") {
-		t.Fatalf("must confirm verified, got: %q", out)
+	// The real state is shown, not a cosmetic "verified": a live transmitting daemon reads WORKING.
+	if !strings.Contains(out, "WORKING") {
+		t.Fatalf("must show the real WORKING state, got: %q", out)
 	}
 }
 
@@ -88,7 +93,7 @@ func TestRunHealthcheckSetupCLI_DeclineCheck(t *testing.T) {
 	healthcheckSetupPromptYesNo = func(ctx context.Context, r *bufio.Reader, q string, d bool) (bool, error) {
 		return false, nil // decline the check
 	}
-	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string) orchestrator.HealthcheckCheckResult {
+	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string, hbInterval time.Duration) orchestrator.HealthcheckCheckResult {
 		checkCalled = true
 		return orchestrator.HealthcheckCheckResult{}
 	}
@@ -113,7 +118,7 @@ func TestRunHealthcheckSetupCLI_FatalStopsRetry(t *testing.T) {
 		prompts++
 		return true, nil
 	}
-	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string) orchestrator.HealthcheckCheckResult {
+	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string, hbInterval time.Duration) orchestrator.HealthcheckCheckResult {
 		return orchestrator.HealthcheckCheckResult{Err: health.ErrHCAuth} // fatal
 	}
 	_ = captureStdout(t, func() {

@@ -72,34 +72,46 @@ func TestRunHealthcheckSetupCtrlCInterrupts(t *testing.T) {
 func TestBuildHealthcheckPrompt(t *testing.T) {
 	link := "https://hc.proxsave.dev/l/Nr4vAebz5b"
 
-	// Verified: green "✓ VERIFIED", the link boxed.
-	v := buildHealthcheckPrompt(link, "ready", true, false)
-	if !strings.Contains(ansi.Strip(v), "\u2713 VERIFIED") {
-		t.Fatalf("verified keyword missing: %q", ansi.Strip(v))
+	// Ok level: green "✓ WORKING", the explanation on its own line, the link boxed.
+	v := buildHealthcheckPrompt(link, "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk)
+	if !strings.Contains(ansi.Strip(v), "✓ WORKING") {
+		t.Fatalf("working keyword missing: %q", ansi.Strip(v))
 	}
 	if !strings.Contains(v, "34;197;94") { // theme.Green SGR
-		t.Fatalf("VERIFIED must be green")
+		t.Fatalf("WORKING must be green")
+	}
+	if !strings.Contains(ansi.Strip(v), "It is reporting.") {
+		t.Fatalf("explanation must render on the second line: %q", ansi.Strip(v))
 	}
 	if !strings.Contains(ansi.Strip(v), "╭") || !strings.Contains(ansi.Strip(v), link) {
 		t.Fatalf("magic-link must be boxed: %q", ansi.Strip(v))
 	}
 
-	// Fatal: red "✗ FAILED".
-	f := buildHealthcheckPrompt(link, "bad creds", false, true)
-	if !strings.Contains(ansi.Strip(f), "\u2717 FAILED") {
-		t.Fatalf("failed keyword missing: %q", ansi.Strip(f))
+	// Error level: red "✗ REJECTED".
+	f := buildHealthcheckPrompt(link, "REJECTED", "bad creds", orchestrator.HealthcheckSetupLevelError)
+	if !strings.Contains(ansi.Strip(f), "✗ REJECTED") {
+		t.Fatalf("error keyword missing: %q", ansi.Strip(f))
 	}
 	if !strings.Contains(f, "239;68;68") { // theme.Red SGR
-		t.Fatalf("FAILED must be red")
+		t.Fatalf("REJECTED must be red")
 	}
 
-	// No link -> no box; neutral status shows the message verbatim.
-	n := ansi.Strip(buildHealthcheckPrompt("", "Not checked yet.", false, false))
+	// Warn level: yellow "⚠ NOT RUNNING".
+	w := buildHealthcheckPrompt(link, "NOT RUNNING", "daemon down", orchestrator.HealthcheckSetupLevelWarn)
+	if !strings.Contains(ansi.Strip(w), "⚠ NOT RUNNING") {
+		t.Fatalf("warn keyword missing: %q", ansi.Strip(w))
+	}
+	if !strings.Contains(w, "234;179;8") { // theme.Yellow SGR (#EAB308)
+		t.Fatalf("NOT RUNNING must be yellow")
+	}
+
+	// No link -> no box; the explanation still renders verbatim.
+	n := ansi.Strip(buildHealthcheckPrompt("", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelWarn))
 	if strings.Contains(n, "╭") {
 		t.Fatalf("no link must render no box: %q", n)
 	}
-	if !strings.Contains(n, "Not checked yet.") {
-		t.Fatalf("neutral status missing: %q", n)
+	if !strings.Contains(n, "Choose Check.") {
+		t.Fatalf("explanation missing: %q", n)
 	}
 }
 
@@ -142,9 +154,13 @@ func TestRunHealthcheckSetup(t *testing.T) {
 		t.Fatalf("skip path: %+v", res)
 	}
 
-	// Verified path: Check succeeds + returns the magic-link, then Continue.
-	healthcheckCheck = func(ctx context.Context, host, id, baseDir string) orchestrator.HealthcheckCheckResult {
-		return orchestrator.HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc/accounts/check_token/u/MAGIC/"}
+	// Verified path: Check reaches the monitor + returns the magic-link, then Continue.
+	// The daemon reads as transmitting -> the headline is WORKING.
+	healthcheckCheck = func(ctx context.Context, host, id, baseDir string, hbInterval time.Duration) orchestrator.HealthcheckCheckResult {
+		return orchestrator.HealthcheckCheckResult{
+			Err: nil, Reachable: true, LoginURL: "https://hc/accounts/check_token/u/MAGIC/",
+			DaemonRead: true, Daemon: health.Diagnosis{State: health.TxTransmitting, DaemonUp: true},
+		}
 	}
 	ask()
 	d.waitScreen("Backup monitoring (healthchecks)")
@@ -160,7 +176,7 @@ func TestRunHealthcheckSetup(t *testing.T) {
 	}
 
 	// Fatal path: Check returns a fatal error -> Check item removed, only Skip.
-	healthcheckCheck = func(ctx context.Context, host, id, baseDir string) orchestrator.HealthcheckCheckResult {
+	healthcheckCheck = func(ctx context.Context, host, id, baseDir string, hbInterval time.Duration) orchestrator.HealthcheckCheckResult {
 		return orchestrator.HealthcheckCheckResult{Err: health.ErrHCAuth}
 	}
 	ask()

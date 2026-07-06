@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/identity"
@@ -37,6 +38,11 @@ type HealthcheckSetupBootstrap struct {
 	HealthcheckMode    string
 	ServerAPIHost      string
 
+	// HealthcheckHeartbeatInterval is the daemon's configured heartbeat period; the
+	// connection check needs it to judge (via health.Diagnose) whether the daemon's last
+	// beat is fresh or stale, exactly as the run-start init check does.
+	HealthcheckHeartbeatInterval time.Duration
+
 	ServerID  string
 	HasSecret bool
 }
@@ -71,6 +77,7 @@ func BuildHealthcheckSetupBootstrap(configPath, baseDir string) (HealthcheckSetu
 		state.HealthcheckEnabled = cfg.HealthcheckEnabled
 		state.HealthcheckMode = strings.ToLower(strings.TrimSpace(cfg.HealthcheckMode))
 		state.ServerAPIHost = strings.TrimSpace(cfg.ServerAPIHost)
+		state.HealthcheckHeartbeatInterval = cfg.HealthcheckHeartbeatInterval
 	}
 
 	if !state.HealthcheckEnabled {

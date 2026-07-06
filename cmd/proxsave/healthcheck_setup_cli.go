@@ -65,7 +65,7 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 	attempts := 0
 	for {
 		attempts++
-		res := healthcheckSetupCheck(ctx, state.ServerAPIHost, state.ServerID, baseDir)
+		res := healthcheckSetupCheck(ctx, state.ServerAPIHost, state.ServerID, baseDir, state.HealthcheckHeartbeatInterval)
 		st := orchestrator.ClassifyHealthcheckSetupResult(res)
 
 		// Show the portal magic-link whenever the server minted one - even if the
@@ -78,13 +78,12 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 			fmt.Println()
 		}
 
+		printHealthcheckSetupStatus(st)
+
 		if st.Verified {
-			fmt.Printf("✓ %s\n", st.Message)
-			logBootstrapInfo(bootstrap, "Healthcheck setup: verified (attempts=%d)", attempts)
+			logBootstrapInfo(bootstrap, "Healthcheck setup: connection verified (attempts=%d, state=%s)", attempts, st.Keyword)
 			return nil
 		}
-
-		fmt.Printf("Healthchecks: %s\n", st.Message)
 
 		if st.Fatal { // re-checking cannot help: do NOT offer another check
 			logBootstrapInfo(bootstrap, "Healthcheck setup: not verified (attempts=%d, fatal)", attempts)
@@ -106,5 +105,22 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 			logBootstrapInfo(bootstrap, "Healthcheck setup: not verified (attempts=%d, declined)", attempts)
 			return nil
 		}
+	}
+}
+
+// printHealthcheckSetupStatus renders the real state as a two-line block: a symbol +
+// state keyword, then the plain-language explanation indented on the next line. The
+// keyword is the SAME real state the run reports (WORKING / NOT RUNNING / ...).
+func printHealthcheckSetupStatus(st orchestrator.HealthcheckSetupState) {
+	symbol := "⚠"
+	switch st.Level {
+	case orchestrator.HealthcheckSetupLevelOk:
+		symbol = "✓"
+	case orchestrator.HealthcheckSetupLevelError:
+		symbol = "✗"
+	}
+	fmt.Printf("Status: %s %s\n", symbol, st.Keyword)
+	if st.Message != "" {
+		fmt.Printf("  %s\n", st.Message)
 	}
 }
