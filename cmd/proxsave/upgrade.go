@@ -50,6 +50,7 @@ liDJEnB+RgiWOQR+6xLWeX7PyauuMxUh/HNnvBQAokK91fLWes4r9Xlwzw==
 
 type releaseInfo struct {
 	TagName string `json:"tag_name"`
+	Body    string `json:"body"`
 }
 
 // runUpgrade orchestrates the upgrade flow:
@@ -112,7 +113,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	// Discover the latest available release on GitHub and compare with the
 	// currently installed version before proceeding.
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "fetching latest release info")
-	tag, latestVersion, err := fetchLatestRelease(ctx)
+	tag, latestVersion, _, err := fetchLatestRelease(ctx)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to check latest release: %v", err)
 		workflowErr = err
@@ -326,38 +327,43 @@ func resolveReleaseTarget(goos, goarch string) (string, string, error) {
 	return osName, "amd64", nil
 }
 
-func fetchLatestRelease(ctx context.Context) (string, string, error) {
+// fetchLatestRelease returns (tag, version, body, err) for the latest GitHub release.
+// body is the raw release description (used to surface the release notes); it is remote-
+// controlled, so every consumer that displays it MUST sanitize it first.
+func fetchLatestRelease(ctx context.Context) (string, string, string, error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create request: %w", err)
+		return "", "", "", fmt.Errorf("failed to create request: %w", err)
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to fetch latest release: %w", err)
+		return "", "", "", fmt.Errorf("failed to fetch latest release: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
-		return "", "", fmt.Errorf("failed to fetch latest release: status %d, body: %s", resp.StatusCode, string(body))
+		return "", "", "", fmt.Errorf("failed to fetch latest release: status %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var info releaseInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return "", "", fmt.Errorf("failed to parse release response: %w", err)
+	// Bound the JSON read: a release body (notes/changelog) is small, but the response
+	// is remote-controlled, so cap it defensively.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 512*1024)).Decode(&info); err != nil {
+		return "", "", "", fmt.Errorf("failed to parse release response: %w", err)
 	}
 
 	tag := strings.TrimSpace(info.TagName)
 	if tag == "" {
-		return "", "", errors.New("empty tag_name in latest release response")
+		return "", "", "", errors.New("empty tag_name in latest release response")
 	}
 
 	version := strings.TrimPrefix(tag, "v")
-	return tag, version, nil
+	return tag, version, info.Body, nil
 }
 
 // compareVersions compares two semantic version strings (e.g. "0.11.2") and

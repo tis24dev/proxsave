@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -53,7 +54,8 @@ func upgradeSafeToken(v string) string {
 
 func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath string) {
 	cur := upgradeSafeToken(dashboardUpgradeVersion())
-	kw, exp, sty := "unchecked", "Choose Check upgrade.", theme.WarningText
+	kw, sty := "unchecked", theme.WarningText
+	notes := "" // latest release's CodeRabbit summary (remote text; rendered via renderReleaseNotes)
 	avail := false
 	back := errors.New("back")
 	for {
@@ -62,7 +64,10 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			lbl = "Run upgrade"
 		}
 		p := theme.Emphasis.Render("Current version: ") + theme.Text.Render(cur) + "\n\n" +
-			theme.Text.Render("Status: ") + sty.Render(kw) + "\n" + theme.Subtle.Render(exp)
+			theme.Text.Render("Last available release: ") + sty.Render(kw)
+		if notes != "" {
+			p += "\n\n" + renderReleaseNotes(notes)
+		}
 		a, err := shell.Ask(ctx, session, components.NewSelector("Upgrade",
 			[]components.SelectorItem[upgAct]{{Label: lbl, Value: upgGo}, {Label: "Back", Value: upgBack}},
 			components.WithSelectorPromptStyled[upgAct](p), components.WithSelectorBack[upgAct](back)))
@@ -73,30 +78,86 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			info := upgCheck(ctx, session, cur)
 			switch {
 			case info == nil || (!info.NewVersion && strings.TrimSpace(info.Latest) == ""):
-				kw, exp, sty = "check failed", "Could not reach GitHub.", theme.WarningText
+				kw, sty, notes = "check failed", theme.WarningText, ""
 			case info.NewVersion:
 				avail = true
 				latest := upgradeSafeToken(info.Latest)
 				if latest == "" {
 					latest = "update available"
 				}
-				kw, exp, sty = latest, fmt.Sprintf("Newer release (current %s).", cur), theme.WarningText
+				kw, sty, notes = latest, theme.WarningText, info.Notes
 			default:
-				kw, exp, sty = "no upgrade", fmt.Sprintf("On the latest (%s).", cur), theme.SuccessText
+				kw, sty, notes = "no upgrade ("+cur+")", theme.SuccessText, info.Notes
 			}
 			continue
 		}
 		avail = false
 		if upgRun(ctx, session, configPath) == types.ExitSuccess.Int() {
-			kw, exp, sty = "upgraded", "Installed; relaunch proxsave, Restart daemon if active.", theme.SuccessText
+			kw, sty = "upgraded", theme.SuccessText
 			_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Upgrade complete",
 				"New binary on disk. This process still runs the old version; relaunch proxsave, and Restart daemon if active."))
 		} else {
-			kw, exp, sty = "failed", "Did not complete.", theme.ErrorText
+			kw, sty = "failed", theme.ErrorText
 			_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError, "Upgrade failed",
 				"Run 'proxsave --upgrade' from a shell for details."))
 		}
 	}
+}
+
+// renderReleaseNotes formats the latest release's CodeRabbit summary for the styled
+// prompt. The notes are REMOTE-controlled (GitHub release body), and the styled-prompt
+// path is NOT sanitized by the component, so every line is scrubbed of ANSI/control bytes
+// here. Bold markers are dropped, markdown headers are emphasized, and the block is capped
+// so it can never push the menu items off-screen.
+func renderReleaseNotes(notes string) string {
+	const (
+		maxLines = 16
+		maxWidth = 100 // cap each line so a hostile newline-free body can't soft-wrap the menu away
+	)
+	notes = strings.ReplaceAll(notes, "**", "")
+	var b strings.Builder
+	shown := 0
+	for _, raw := range strings.Split(notes, "\n") {
+		if shown >= maxLines {
+			b.WriteString(theme.Subtle.Render("  ..."))
+			b.WriteString("\n")
+			break
+		}
+		line := sanitizeNotesLine(raw)
+		if r := []rune(line); len(r) > maxWidth {
+			line = string(r[:maxWidth]) + "…"
+		}
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "":
+			// blank separator line
+		case strings.HasPrefix(trimmed, "## "):
+			b.WriteString(theme.Emphasis.Render(strings.TrimPrefix(trimmed, "## ")))
+		case strings.HasPrefix(trimmed, "# "):
+			b.WriteString(theme.Emphasis.Render(strings.TrimPrefix(trimmed, "# ")))
+		default:
+			b.WriteString(theme.Text.Render(line))
+		}
+		b.WriteString("\n")
+		shown++
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// sanitizeNotesLine strips ANSI sequences and C0/DEL/C1 control bytes from one line of
+// remote release-notes text (tabs -> space), so a hostile release body cannot inject
+// terminal escapes into the dashboard.
+func sanitizeNotesLine(s string) string {
+	s = ansi.Strip(s)
+	return strings.Map(func(r rune) rune {
+		if r == '\t' {
+			return ' '
+		}
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func upgCheck(ctx context.Context, session *shell.Session, cur string) *UpdateInfo {
