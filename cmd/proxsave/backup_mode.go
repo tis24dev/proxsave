@@ -63,7 +63,7 @@ func runBackupMode(opts backupModeOptions) backupModeResult {
 		return finishBackupMode(orch, earlyErrorState, nil, exitCode)
 	}
 
-	logBackupRuntimeSummary(opts.cfg, storageState)
+	logBackupRuntimeSummary(opts.cfg, opts.logger, storageState)
 
 	stats, earlyErrorState, exitCode := runConfiguredBackup(opts, orch)
 	return finishBackupMode(orch, earlyErrorState, stats, exitCode)
