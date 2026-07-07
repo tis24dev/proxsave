@@ -28,6 +28,18 @@ type HealthcheckCheckResult struct {
 	// is false when the status file was absent/unreadable (RawStatus is then the zero value).
 	RawStatus  health.Status
 	HaveStatus bool
+
+	// Daemon* alignment fields answer "is the running daemon on the SAME binary as the one now
+	// on disk?". DaemonAligned is a real comparison only when DaemonAlignChecked is true (a record
+	// was found, its recorded hash was non-empty, AND the on-disk binary re-hashed). When
+	// DaemonAlignChecked is false the alignment is UNKNOWN and the "behind" verdict must NOT be
+	// reported. DaemonStale carries the human phrasing when not aligned; DaemonVersion is the
+	// running daemon's recorded version.
+	DaemonAligned      bool
+	DaemonHaveInfo     bool
+	DaemonAlignChecked bool
+	DaemonStale        string
+	DaemonVersion      string
 }
 
 // Seams for tests.
@@ -36,8 +48,7 @@ var (
 	healthcheckSetupPing  = func(ctx context.Context, aliveURL string) error {
 		return health.NewReporter(health.Config{}).TestPing(ctx, aliveURL)
 	}
-	healthcheckSetupLoadStatus = health.LoadStatus
-	healthcheckSetupNow        = time.Now
+	healthcheckSetupNow = time.Now
 )
 
 // DaemonPresenceProbe reports the daemon's authoritative systemd-level existence
@@ -68,21 +79,28 @@ func probeDaemonPresence(ctx context.Context) health.DaemonPresence {
 func CheckHealthcheckConnection(ctx context.Context, serverAPIHost, serverID, baseDir string, heartbeatInterval time.Duration) HealthcheckCheckResult {
 	res := HealthcheckCheckResult{}
 
-	// Real operational state: the status file answers "is it transmitting?", systemd
-	// answers "does the process exist and run?". Probe both so a running-but-silent daemon
-	// is not misreported as down. A readable file OR a probed systemd state yields a
-	// verdict; only when BOTH are unavailable is the daemon state genuinely unknown.
-	presence := probeDaemonPresence(ctx)
-	base := health.Diagnosis{State: health.TxNoHeartbeat}
-	fileOK := false
-	if st, derr := healthcheckSetupLoadStatus(baseDir); derr == nil {
-		base = health.Diagnose(st, heartbeatInterval, healthcheckSetupNow())
-		res.RawStatus = st
-		res.HaveStatus = true
-		fileOK = true
-	}
-	res.Daemon = health.RefineWithPresence(base, presence)
-	res.DaemonRead = fileOK || presence.Probed
+	// Real operational state via the SHARED daemon-state checker: the status file answers "is it
+	// transmitting?", systemd answers "does the process exist and run?", and the identity record
+	// answers "is the running binary aligned with the one on disk?". A readable file OR a probed
+	// systemd state yields a verdict; only when BOTH are unavailable is the daemon genuinely
+	// unknown. ProcAlive is nil (the leaf signal-0 liveness): alignment here does not need the
+	// /proc/cmdline gate.
+	ds := health.CheckDaemonState(health.DaemonStateInput{
+		BaseDir:           baseDir,
+		HeartbeatInterval: heartbeatInterval,
+		Now:               healthcheckSetupNow(),
+		Presence:          probeDaemonPresence(ctx),
+		ProcAlive:         nil,
+	})
+	res.Daemon = ds.Diagnosis
+	res.DaemonRead = ds.Probed || ds.HaveStatus
+	res.RawStatus = ds.RawStatus
+	res.HaveStatus = ds.HaveStatus
+	res.DaemonAligned = ds.Aligned
+	res.DaemonHaveInfo = ds.HaveInfo
+	res.DaemonAlignChecked = ds.AlignChecked
+	res.DaemonStale = ds.StaleReason
+	res.DaemonVersion = ds.Version
 
 	secret := healthcheckSetupLoadSecret(baseDir)
 	cfg, err := healthcheckSetupFetch(ctx, nil, serverAPIHost, serverID, secret, true)

@@ -92,6 +92,16 @@ func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetup
 		st.Message = "The monitoring status file could not be read, so the daemon state is unknown."
 		return st
 	}
+	// A running daemon on an OLDER binary than the one now on disk (an in-place upgrade replaced
+	// the file without a restart) needs a restart to load the update. This is DISTINCT from "not
+	// reporting yet" and takes precedence over the transmission-state headline. Only reported when
+	// alignment was actually checked (DaemonAlignChecked): with no record, an empty recorded hash, or
+	// an unreadable on-disk binary, alignment is UNKNOWN and must NOT read as behind.
+	if res.DaemonHaveInfo && res.DaemonAlignChecked && !res.DaemonAligned {
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "BEHIND"
+		st.Message = "The monitoring daemon is running an older binary than the one now on disk; restart it to load the update."
+		return st
+	}
 	return applyHealthcheckDaemonState(st, res.Daemon)
 }
 

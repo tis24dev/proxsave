@@ -133,8 +133,9 @@ func (d *daemon) run(ctx context.Context) int {
 	// binary it booted from, version/commit, start time -- in the companion .daemon_info.json, so a
 	// later reader can tell whether the running daemon is still aligned with the on-disk binary or is
 	// behind (an in-place upgrade replaced the file without a restart). Best-effort: neither the hash
-	// nor the write may fail startup. A hash error still writes the record with an EMPTY Binary
-	// (which reads as "alignment unknown"), and a write hiccup is only Debug-logged.
+	// nor the write may fail startup. A hash error still writes the record with an EMPTY Binary, which
+	// a reader treats as "alignment unknown" (CheckDaemonState leaves AlignChecked=false, never
+	// "behind"); a write hiccup is only Debug-logged.
 	binID, binErr := health.ComputeBinaryIdentity(d.execPath)
 	if binErr != nil {
 		logging.Debug("daemon: compute binary identity failed: %v", binErr)

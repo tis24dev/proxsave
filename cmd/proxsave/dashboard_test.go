@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,42 @@ func TestDashboardActions(t *testing.T) {
 				tc.check(t, args)
 			}
 		})
+	}
+}
+
+// TestDaemonStatusStyleBehind: a daemon on an OLDER binary than the one on disk reads the
+// distinct "behind - restart needed" warning, which takes precedence over the heartbeat-derived
+// "running, not reporting" (that keeps rendering for an aligned daemon, so the two stay DISTINCT).
+func TestDaemonStatusStyleBehind(t *testing.T) {
+	behind := health.DaemonState{
+		HaveInfo:     true,
+		AlignChecked: true, // a real comparison ran and mismatched -> genuinely behind
+		Aligned:      false,
+		Active:       true,
+		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
+	}
+	kind, outcome, expl := daemonStatusStyle(behind)
+	if kind != components.NoticeWarning {
+		t.Fatalf("behind kind = %v, want NoticeWarning", kind)
+	}
+	if outcome != "behind - restart needed" {
+		t.Fatalf("behind outcome = %q, want %q", outcome, "behind - restart needed")
+	}
+	if !strings.Contains(expl, "restart") {
+		t.Fatalf("behind explanation should mention restart, got %q", expl)
+	}
+
+	// The SAME underlying TxRunningNoReport but ALIGNED must still read as the separate
+	// "running, not reporting" state, never conflated with "behind".
+	running := health.DaemonState{
+		HaveInfo:     true,
+		AlignChecked: true,
+		Aligned:      true,
+		Active:       true,
+		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
+	}
+	if _, gotOutcome, _ := daemonStatusStyle(running); gotOutcome != "running, not reporting" {
+		t.Fatalf("aligned running outcome = %q, want %q", gotOutcome, "running, not reporting")
 	}
 }
 

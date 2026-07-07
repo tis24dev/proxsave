@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,17 +106,14 @@ func TestClassifyHealthcheckSetupResult(t *testing.T) {
 
 func TestCheckHealthcheckConnection(t *testing.T) {
 	of, op, osec := healthcheckSetupFetch, healthcheckSetupPing, healthcheckSetupLoadSecret
-	ols, on := healthcheckSetupLoadStatus, healthcheckSetupNow
+	on := healthcheckSetupNow
 	t.Cleanup(func() {
 		healthcheckSetupFetch = of
 		healthcheckSetupPing = op
 		healthcheckSetupLoadSecret = osec
-		healthcheckSetupLoadStatus = ols
 		healthcheckSetupNow = on
 	})
 	healthcheckSetupLoadSecret = func(baseDir string) string { return "s" }
-	// Default: no daemon status file yet (tolerant zero read) -> DaemonRead true, down.
-	healthcheckSetupLoadStatus = func(baseDir string) (health.Status, error) { return health.Status{}, nil }
 	now := time.Unix(1_700_000_000, 0)
 	healthcheckSetupNow = func() time.Time { return now }
 
@@ -124,11 +124,13 @@ func TestCheckHealthcheckConnection(t *testing.T) {
 			return health.CentralizedConfig{AliveURL: "https://a", BackupURL: "https://b", LoginURL: "MAGIC"}, nil
 		}
 		healthcheckSetupPing = func(ctx context.Context, aliveURL string) error { return nil }
-		// Fresh, OK heartbeat -> the daemon is alive and transmitting.
-		healthcheckSetupLoadStatus = func(baseDir string) (health.Status, error) {
-			return health.Status{Records: map[string]*health.PingRecord{health.KindHeartbeat: {TS: now.Unix(), OK: true}}}, nil
+		// Fresh, OK heartbeat on disk -> the daemon is alive and transmitting (CheckDaemonState
+		// reads the real status file now, so seed one instead of stubbing the load).
+		base := t.TempDir()
+		if err := health.RecordPing(base, "self", health.KindHeartbeat, now.Unix(), true, nil); err != nil {
+			t.Fatalf("seed heartbeat: %v", err)
 		}
-		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base", time.Minute)
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
 		if !gotInclude {
 			t.Fatal("the install check must request the login (includeLogin=true)")
 		}
@@ -141,11 +143,10 @@ func TestCheckHealthcheckConnection(t *testing.T) {
 	})
 
 	t.Run("fetch error propagates, no login", func(t *testing.T) {
-		healthcheckSetupLoadStatus = func(baseDir string) (health.Status, error) { return health.Status{}, nil }
 		healthcheckSetupFetch = func(ctx context.Context, client *http.Client, host, id, secret string, includeLogin bool) (health.CentralizedConfig, error) {
 			return health.CentralizedConfig{}, health.ErrHCNotReady
 		}
-		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base", time.Minute)
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", t.TempDir(), time.Minute)
 		if !errors.Is(res.Err, health.ErrHCNotReady) || res.Reachable || res.LoginURL != "" {
 			t.Fatalf("unexpected: %+v", res)
 		}
@@ -156,7 +157,7 @@ func TestCheckHealthcheckConnection(t *testing.T) {
 			return health.CentralizedConfig{AliveURL: "https://a", LoginURL: "MAGIC"}, nil
 		}
 		healthcheckSetupPing = func(ctx context.Context, aliveURL string) error { return errors.New("dial") }
-		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", "/base", time.Minute)
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", t.TempDir(), time.Minute)
 		if res.Err == nil || res.Reachable || res.LoginURL != "MAGIC" {
 			t.Fatalf("unexpected: %+v", res)
 		}
@@ -198,5 +199,114 @@ func TestClassifyHealthcheckDaemonState(t *testing.T) {
 				t.Fatalf("Message must never be empty")
 			}
 		})
+	}
+}
+
+// seedDaemonInfoFor writes a fresh heartbeat, a real binary at base/proxsave, and a DaemonInfo
+// recording that binary's identity. It returns the binary path so a test can overwrite it to
+// simulate an in-place upgrade (making the running daemon "behind").
+func seedDaemonInfoFor(t *testing.T, base string, now time.Time) string {
+	t.Helper()
+	if err := health.RecordPing(base, "self", health.KindHeartbeat, now.Unix(), true, nil); err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+	bin := filepath.Join(base, "proxsave")
+	if err := os.WriteFile(bin, []byte("proxsave-v1"), 0o600); err != nil {
+		t.Fatalf("seed binary: %v", err)
+	}
+	id, err := health.ComputeBinaryIdentity(bin)
+	if err != nil {
+		t.Fatalf("compute identity: %v", err)
+	}
+	if err := health.WriteDaemonInfo(base, health.DaemonInfo{
+		PID: 4321, ExecPath: bin, Binary: id, Version: "1.2.3", Commit: "abcdef0", StartTS: now.Unix(),
+	}); err != nil {
+		t.Fatalf("seed daemon info: %v", err)
+	}
+	return bin
+}
+
+// TestCheckHealthcheckConnectionPopulatesDaemonAlignment: the shared CheckDaemonState surfaces
+// the running daemon's binary alignment onto the check result, so the post-install classify can
+// tell "behind" apart from a fresh/aligned daemon.
+func TestCheckHealthcheckConnectionPopulatesDaemonAlignment(t *testing.T) {
+	of, on := healthcheckSetupFetch, healthcheckSetupNow
+	t.Cleanup(func() {
+		healthcheckSetupFetch = of
+		healthcheckSetupNow = on
+	})
+	now := time.Unix(1_700_000_000, 0)
+	healthcheckSetupNow = func() time.Time { return now }
+	// Fail the fetch so the check returns right after the daemon-state read.
+	healthcheckSetupFetch = func(ctx context.Context, client *http.Client, host, id, secret string, login bool) (health.CentralizedConfig, error) {
+		return health.CentralizedConfig{}, errors.New("stub-fetch-down")
+	}
+
+	t.Run("behind: on-disk binary differs from the running daemon's record", func(t *testing.T) {
+		base := t.TempDir()
+		bin := seedDaemonInfoFor(t, base, now)
+		// The upgrade replaces the on-disk binary while the recorded identity still points at v1.
+		if err := os.WriteFile(bin, []byte("proxsave-v2-different"), 0o600); err != nil {
+			t.Fatalf("rewrite binary: %v", err)
+		}
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
+		if !res.DaemonHaveInfo {
+			t.Fatalf("DaemonHaveInfo must be true when a record was found")
+		}
+		if res.DaemonAligned {
+			t.Fatalf("DaemonAligned must be false after the on-disk binary changed")
+		}
+		if res.DaemonStale == "" {
+			t.Fatalf("DaemonStale must carry the not-aligned phrasing")
+		}
+		if res.DaemonVersion != "1.2.3" {
+			t.Fatalf("DaemonVersion = %q, want 1.2.3", res.DaemonVersion)
+		}
+	})
+
+	t.Run("aligned: on-disk binary matches the running daemon's record", func(t *testing.T) {
+		base := t.TempDir()
+		seedDaemonInfoFor(t, base, now) // binary left untouched -> aligned
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
+		if !res.DaemonHaveInfo || !res.DaemonAligned {
+			t.Fatalf("aligned daemon: HaveInfo=%v Aligned=%v, want true/true", res.DaemonHaveInfo, res.DaemonAligned)
+		}
+		if res.DaemonStale != "" {
+			t.Fatalf("DaemonStale must be empty when aligned, got %q", res.DaemonStale)
+		}
+	})
+}
+
+// TestClassifyHealthcheckBehind: a reachable host whose running daemon is on an OLDER binary than
+// the one now on disk reads BEHIND, DISTINCT from the aligned "RUNNING, NOT REPORTING" headline,
+// and takes precedence over the transmission-state switch.
+func TestClassifyHealthcheckBehind(t *testing.T) {
+	behind := HealthcheckCheckResult{
+		Err: nil, Reachable: true, DaemonRead: true,
+		Daemon:             health.Diagnosis{State: health.TxRunningNoReport, DaemonUp: true},
+		DaemonHaveInfo:     true,
+		DaemonAlignChecked: true, // a real comparison ran and mismatched -> genuinely behind
+		DaemonAligned:      false,
+	}
+	st := ClassifyHealthcheckSetupResult(behind)
+	if st.Keyword != "BEHIND" {
+		t.Fatalf("keyword = %q, want BEHIND", st.Keyword)
+	}
+	if st.Level != HealthcheckSetupLevelWarn {
+		t.Fatalf("level = %d, want Warn", st.Level)
+	}
+	if !st.Verified {
+		t.Fatalf("reachable connection must still be Verified")
+	}
+	if !strings.Contains(st.Message, "restart") {
+		t.Fatalf("message should mention restart, got %q", st.Message)
+	}
+
+	// With the SAME diagnosis but an aligned binary, the headline stays the plain
+	// transmission state (distinct verdicts, no BEHIND).
+	aligned := behind
+	aligned.DaemonAligned = true
+	if got := ClassifyHealthcheckSetupResult(aligned).Keyword; got != "RUNNING, NOT REPORTING" {
+		t.Fatalf("aligned daemon keyword = %q, want RUNNING, NOT REPORTING", got)
 	}
 }
