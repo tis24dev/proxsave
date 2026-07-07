@@ -172,12 +172,12 @@ func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval
 	rv := verifyDaemonAligned(ctx, baseDir, interval)
 	switch {
 	case rv.ProcessAlive && rv.Aligned:
-		logging.Info("Daemon verified: running and aligned with the installed binary (v%s).", rv.State.Version)
+		logging.Info("Daemon verified: running and aligned (v%s).", rv.State.Version)
 	case rv.ProcessAlive && rv.State.AlignChecked:
 		// Up and assessable but NOT aligned = behind (the same verdict --daemon-status reports).
-		logging.Warning("Daemon running but BEHIND: on an older binary than the one on disk.")
+		logging.Warning("Daemon running but not aligned (behind).")
 	default:
-		logging.Warning("Daemon not confirmed running after install.")
+		logging.Warning("Daemon not running.")
 	}
 }
 
