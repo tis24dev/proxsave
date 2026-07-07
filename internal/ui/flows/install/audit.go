@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/installer"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // errAuditSkip is the local sentinel for skipping the audit selection.
@@ -57,15 +59,15 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 	})
 	if collectErr != nil {
 		result.CollectErr = collectErr
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeWarning,
-			"Post-install check failed", fmt.Sprintf("Non-blocking: %v", collectErr)))
+		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelWarn,
+			"check failed", fmt.Sprintf("Non-blocking: %v", collectErr))
 		return result, nil
 	}
 	result.Suggestions = suggestions
 
 	if len(suggestions) == 0 {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess,
-			"Post-install check", "No unused components detected. No changes required."))
+		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelOk,
+			"no unused components", "")
 		return result, nil
 	}
 
@@ -92,21 +94,49 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 		return result, err
 	}
 	if len(keys) == 0 {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeInfo,
-			"Post-install check", "No changes selected. Nothing was modified."))
+		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelNeutral,
+			"no changes", "No components were selected; nothing was modified.")
 		return result, nil
 	}
 
 	if err := installer.ApplyAuditDisables(configPath, keys); err != nil {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError,
-			"Configuration update failed", err.Error()))
+		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelError,
+			"update failed", err.Error())
 		return result, nil
 	}
 	result.AppliedKeys = normalizeAuditKeys(keys)
-	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess,
-		"Configuration updated", fmt.Sprintf("Disabled %d component(s): %s",
-			len(result.AppliedKeys), strings.Join(result.AppliedKeys, ", "))))
+	showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelOk,
+		"updated", fmt.Sprintf("Disabled %d component(s): %s",
+			len(result.AppliedKeys), strings.Join(result.AppliedKeys, ", ")))
 	return result, nil
+}
+
+// auditResultAction is the single choice on a post-install audit outcome screen:
+// dismiss it and return to the caller (mirrors daemonResultAction on the dashboard).
+type auditResultAction int
+
+const auditResultActionBack auditResultAction = iota
+
+// showAuditResult presents a post-install audit outcome with the SAME styled look as the
+// healthcheck/daemon result screens: a "Status:" line with a colored keyword (green ✓ Ok,
+// red ✗ Error, yellow ⚠ Warn, yellow with no symbol Neutral, via renderHealthcheckLevel) and,
+// only when the explanation is non-empty, a blank line then a Subtle explanation, above a
+// single Back item. These are non-blocking informational outcomes (exactly like the Notices
+// they replaced): the result and any esc/abort are swallowed, never propagated as an error.
+func showAuditResult(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation string) {
+	errAuditResultEsc := errors.New("post-install audit result: esc")
+	prompt := theme.Text.Render("Status: ") + renderHealthcheckLevel(level, keyword)
+	if explanation != "" {
+		prompt += "\n\n" + theme.Subtle.Render(explanation)
+	}
+	items := []components.SelectorItem[auditResultAction]{
+		{Label: "Back", Description: "return to the install flow", Value: auditResultActionBack},
+	}
+	_, _ = shell.Ask(ctx, session, components.NewSelector(
+		title, items,
+		components.WithSelectorPromptStyled[auditResultAction](prompt),
+		components.WithSelectorBack[auditResultAction](errAuditResultEsc),
+	))
 }
 
 // auditComponentDetail is the side-pane text for a suggestion: the curated
