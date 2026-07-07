@@ -11,6 +11,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -116,8 +117,8 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			dashboardUpgradeRestartDaemon(ctx, session, configPath)
 		} else {
 			kw, sty, sym = "FAILED", theme.ErrorText, symErr
-			_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError, "Upgrade failed",
-				"Run 'proxsave --upgrade' from a shell for details."))
+			showDaemonResultScreen(ctx, session, "Upgrade failed", orchestrator.HealthcheckSetupLevelError,
+				"failed", "Run 'proxsave --upgrade' from a shell for details.")
 		}
 	}
 }
@@ -212,14 +213,16 @@ func upgRun(ctx context.Context, session *shell.Session, configPath string) int 
 
 // dashboardUpgradeRestartDaemon completes a successful dashboard upgrade by restarting
 // the resident daemon (when active) so it loads the freshly installed binary, then shows
-// the outcome as a notice. When the daemon is not active there is nothing to restart --
-// the new binary just needs a relaunch of this process. This is the SINGLE restart on the
-// dashboard path: runUpgrade's own inline restart is suppressed (upgradeRestartsDaemon is
-// set false in upgRun), so there is no double restart.
+// the outcome via the SAME styled result screen as the daemon-status check
+// (showDaemonResultScreen), so the post-upgrade restart result matches the daemon menu.
+// When the daemon is not active there is nothing to restart -- the new binary just needs a
+// relaunch of this process. This is the SINGLE restart on the dashboard path: runUpgrade's
+// own inline restart is suppressed (upgradeRestartsDaemon is set false in upgRun), so there
+// is no double restart.
 func dashboardUpgradeRestartDaemon(ctx context.Context, session *shell.Session, configPath string) {
 	if !daemonIsActive(ctx) {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Upgrade complete",
-			"New binary on disk. This process still runs the old version; relaunch proxsave."))
+		showDaemonResultScreen(ctx, session, "Upgrade complete", orchestrator.HealthcheckSetupLevelOk,
+			"new binary on disk", "New binary on disk. This process still runs the old version; relaunch proxsave.")
 		return
 	}
 	baseDir, _ := detectedBaseDirOrFallback()
@@ -231,8 +234,8 @@ func dashboardUpgradeRestartDaemon(ctx context.Context, session *shell.Session, 
 			rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, interval)
 			return nil
 		})
-	kind, title, msg := restartVerifyNotice(rv)
-	_, _ = shell.Ask(ctx, session, components.NewNotice(kind, title, msg))
+	level, keyword, explanation := restartVerifyStatus(rv)
+	showDaemonResultScreen(ctx, session, "Daemon restart", level, keyword, explanation)
 }
 
 func defaultUpgradeMuteStdio() func() {

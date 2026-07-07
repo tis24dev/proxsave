@@ -213,13 +213,13 @@ var (
 	daemonRestartService  = restartDaemonService
 )
 
-// runDashboardDaemonRestart restarts the resident daemon in-session (RunTask + Notice),
-// then loops back to the menu. Useful after a rebuild: systemd keeps the old process
+// runDashboardDaemonRestart restarts the resident daemon in-session (RunTask + styled result
+// screen), then loops back to the menu. Useful after a rebuild: systemd keeps the old process
 // until an explicit restart, which is exactly the "installed+active but running a stale
 // binary that no longer writes the status file" case the healthcheck checks now surface.
 // It uses restartAndVerifyDaemon, so it also WAITS for an in-progress backup to finish
 // (a restart would kill a daemon-supervised backup) and VERIFIES the daemon came back
-// aligned before reporting success -- the notice distinguishes aligned / deferred /
+// aligned before reporting success -- the result screen distinguishes aligned / deferred /
 // not-confirmed / error.
 func runDashboardDaemonRestart(ctx context.Context, session *shell.Session, configPath, baseDir string) {
 	interval := time.Duration(0)
@@ -239,47 +239,99 @@ func runDashboardDaemonRestart(ctx context.Context, session *shell.Session, conf
 		rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, interval)
 		return nil
 	})
-	kind, title, msg := restartVerifyNotice(rv)
-	_, _ = shell.Ask(ctx, session, components.NewNotice(kind, title, msg))
+	level, keyword, explanation := restartVerifyStatus(rv)
+	showDaemonResultScreen(ctx, session, "Daemon restart", level, keyword, explanation)
 }
 
-// restartVerifyNotice maps a restart+verify outcome to a dashboard notice (severity +
-// title + body), shared by the "Restart daemon" button and the post-upgrade restart.
-// Success is green; a deferral (backup running), a not-confirmed alignment, and an
-// ambiguous restart are yellow warnings; a restart error is red.
-func restartVerifyNotice(rv RestartVerifyResult) (components.NoticeKind, string, string) {
+// restartVerifyStatus maps a restart+verify outcome to the styled daemon-result triple (a
+// shared HealthcheckSetupLevel + a short colored keyword + a one-line explanation), shared by
+// the "Restart daemon" button and the post-upgrade restart. Success is green (Ok); a deferral
+// (backup running), a not-confirmed alignment, and an ambiguous restart are yellow warnings
+// (Warn); a restart error is red (Error). The explanation strings are unchanged from the old
+// notice bodies -- only the outcome keyword is added for the colored "Status:" line.
+func restartVerifyStatus(rv RestartVerifyResult) (orchestrator.HealthcheckSetupLevel, string, string) {
 	switch {
 	case rv.Err != nil:
-		return components.NoticeError, "Daemon restart failed", rv.Err.Error()
+		return orchestrator.HealthcheckSetupLevelError, "restart failed", rv.Err.Error()
 	case rv.BackupWaitTimedOut:
-		return components.NoticeWarning, "Daemon restart deferred",
+		return orchestrator.HealthcheckSetupLevelWarn, "deferred - backup running",
 			"A backup is currently running; the restart was deferred to avoid interrupting it. Restart again once the backup finishes, or the daemon stays on the old binary."
 	case rv.TimedOut:
-		return components.NoticeWarning, "Daemon restarted",
+		return orchestrator.HealthcheckSetupLevelWarn, "restarted, not confirmed",
 			"The daemon was restarted but could not be confirmed aligned within the timeout. Check the daemon status."
 	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
+		keyword := "restarted, aligned"
 		msg := "The resident daemon (proxsave-daemon.service) was restarted and is now running the current binary"
 		if v := strings.TrimSpace(rv.State.Version); v != "" {
+			keyword += " (v" + v + ")"
 			msg += " (v" + v + ")"
 		}
-		return components.NoticeSuccess, "Daemon restarted", msg + "."
+		return orchestrator.HealthcheckSetupLevelOk, keyword, msg + "."
 	default:
-		return components.NoticeWarning, "Daemon restarted",
+		return orchestrator.HealthcheckSetupLevelWarn, "restarted, not confirmed",
 			"The daemon was restarted but alignment could not be confirmed. Check the daemon status."
+	}
+}
+
+// daemonResultAction is the single choice on a daemon action-result screen: return to the
+// dashboard menu (mirrors daemonStatusAction, which additionally offers a re-check).
+type daemonResultAction int
+
+const daemonResultActionBack daemonResultAction = iota
+
+// buildDaemonResultPrompt renders the styled "Status:" block for a daemon action-result screen,
+// mirroring buildDaemonStatusPrompt's Status block: a colored keyword line + a Subtle
+// explanation on the next line. This is the single styled renderer for the daemon action outcomes.
+func buildDaemonResultPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation string) string {
+	var b strings.Builder
+	b.WriteString(theme.Text.Render("Status: "))
+	b.WriteString(renderDaemonStatusLevel(level, keyword))
+	if explanation != "" {
+		b.WriteString("\n")
+		b.WriteString(theme.Subtle.Render(explanation))
+	}
+	return b.String()
+}
+
+// showDaemonResultScreen presents a daemon action outcome (restart / install / revert / error)
+// with the SAME look as the daemon-status screen: a styled "Status:" line (a colored keyword +
+// a Subtle explanation) above a single Back item. It loops to Back/esc and is non-blocking on
+// any UI failure, mirroring runDashboardDaemonStatus. This is the single styled result renderer
+// shared by every daemon action result, so they can never disagree visually with the status screen.
+func showDaemonResultScreen(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation string) {
+	errDaemonResultEsc := errors.New("daemon result: esc")
+	prompt := buildDaemonResultPrompt(level, keyword, explanation)
+	items := []components.SelectorItem[daemonResultAction]{
+		{Label: "Back", Description: "return to the dashboard menu", Value: daemonResultActionBack},
+	}
+	for {
+		action, err := shell.Ask(ctx, session, components.NewSelector(
+			title, items,
+			components.WithSelectorPromptStyled[daemonResultAction](prompt),
+			components.WithSelectorBack[daemonResultAction](errDaemonResultEsc),
+		))
+		if err != nil {
+			return
+		}
+		switch action {
+		case daemonResultActionBack:
+			return
+		}
 	}
 }
 
 // runDashboardDaemonAdmin installs (install=true) or reverts (install=false) the
 // daemon scheduler WITHOUT leaving the graphical UI: it runs the same apply* op as
 // the --daemon-setup / --daemon-remove flags inside a RunTask and shows the outcome
-// as a Notice, then loops back to the menu. Console + bootstrap logging are muted
-// for the duration so the ops (which log via the global logger + a bootstrap) can't
-// corrupt the alternate screen.
+// via the SAME styled result screen as the daemon-status check (showDaemonResultScreen),
+// then loops back to the menu. Console + bootstrap logging are muted for the duration
+// so the ops (which log via the global logger + a bootstrap) can't corrupt the alternate
+// screen.
 func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, install bool, configPath, baseDir string) {
 	cfg, err := daemonStatusLoadConfig(configPath, baseDir)
 	if err != nil || cfg == nil {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError,
-			"Daemon change failed", "Could not read the configuration to apply the scheduler change."))
+		showDaemonResultScreen(ctx, session, "Daemon change failed", orchestrator.HealthcheckSetupLevelError,
+			"config unreadable", "Could not read the configuration to apply the scheduler change.")
 		return
 	}
 
@@ -296,11 +348,13 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	title := "Disabling daemon"
 	work := "Reverting to the cron scheduler..."
 	doneTitle := "Daemon disabled"
+	doneKeyword := "reverted to cron"
 	doneMsg := "Reverted to the cron scheduler and removed the daemon service. Future upgrades will not reinstall it."
 	if install {
 		title = "Installing daemon"
 		work = "Installing and enabling proxsave-daemon.service..."
 		doneTitle = "Daemon installed"
+		doneKeyword = "installed"
 		doneMsg = "The resident daemon (proxsave-daemon.service) is active. The cron entry was removed."
 	}
 	execToken := daemonSelfExecPath()
@@ -315,10 +369,10 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	})
 
 	if opErr != nil {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError, title+" failed", opErr.Error()))
+		showDaemonResultScreen(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "failed", opErr.Error())
 		return
 	}
-	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, doneTitle, doneMsg))
+	showDaemonResultScreen(ctx, session, doneTitle, orchestrator.HealthcheckSetupLevelOk, doneKeyword, doneMsg)
 }
 
 // dashboardDaemonState decides which daemon command the menu offers, from the
