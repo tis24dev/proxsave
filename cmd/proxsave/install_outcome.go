@@ -8,10 +8,11 @@ import (
 
 // buildInstallOutcomePrompt composes the pre-styled outcome block shown under
 // the streamed finalization lines (StreamDoneMsg.Outcome). It is the install's
-// own Mattone C consumer: it reuses the shared daemon renderers
-// (restartVerifyStatus + renderDaemonStatusLevel) for the "Daemon:" line and
-// colors the "Permissions:" line with the same status strings printInstallFooter
-// switches on (ok / warning / error / skipped).
+// own Mattone C consumer: it reuses the shared daemon verdict + renderer
+// (installVerifyVerdict + renderDaemonStatusLevel) for the "Daemon:" line - the
+// SAME aligned / behind / not-running verdict as --daemon-status - and colors the
+// "Permissions:" line with the same status strings printInstallFooter switches on
+// (ok / warning / error / skipped).
 //
 // The whole string is caller-pre-styled and passed verbatim to the StreamTask
 // screen, mirroring how WithSelectorPromptStyled accepts an already-rendered
@@ -22,12 +23,10 @@ func buildInstallOutcomePrompt(rv RestartVerifyResult, verified bool, permStatus
 
 	b.WriteString(theme.Text.Render("Daemon: "))
 	if verified {
-		level, keyword, explanation := restartVerifyStatus(rv)
+		// Same verdict the log line and --daemon-status show (NOT restartVerifyStatus,
+		// whose success arm needs Restarted/FreshInfo the poll-only verify never sets).
+		level, keyword := installVerifyVerdict(rv)
 		b.WriteString(renderDaemonStatusLevel(level, keyword))
-		if strings.TrimSpace(explanation) != "" {
-			b.WriteString("\n")
-			b.WriteString(theme.Subtle.Render(explanation))
-		}
 	} else {
 		// No daemon verify ran (cron scheduler, install-daemon failure, or an
 		// unreadable verify context): state the neutral scheduler fact instead

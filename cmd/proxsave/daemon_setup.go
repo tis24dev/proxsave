@@ -170,16 +170,33 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval time.Duration) RestartVerifyResult {
 	logging.Info("Verifying daemon alignment...")
 	rv := verifyDaemonAligned(ctx, baseDir, interval)
-	switch {
-	case rv.ProcessAlive && rv.Aligned:
-		logging.Info("Daemon verified: running and aligned (v%s).", rv.State.Version)
-	case rv.ProcessAlive && rv.State.AlignChecked:
-		// Up and assessable but NOT aligned = behind (the same verdict --daemon-status reports).
-		logging.Warning("Daemon running but not aligned (behind).")
-	default:
-		logging.Warning("Daemon not running.")
+	if level, keyword := installVerifyVerdict(rv); level == orchestrator.HealthcheckSetupLevelOk {
+		logging.Info("Daemon verified: %s.", keyword)
+	} else {
+		logging.Warning("Daemon %s.", keyword)
 	}
 	return rv
+}
+
+// installVerifyVerdict maps a poll-only verify result (verifyDaemonAligned) to the
+// aligned / behind / not-running verdict as a (level, keyword) pair - the SAME verdict
+// --daemon-status reports. Shared by the log line (verifyDaemonAlignedBestEffort) and the
+// graphical install outcome (buildInstallOutcomePrompt) so they never diverge. It must NOT
+// go through restartVerifyStatus, whose success arm needs Restarted/FreshInfo that the
+// poll-only verify never sets - that mis-mapping made the install always say "not confirmed".
+func installVerifyVerdict(rv RestartVerifyResult) (orchestrator.HealthcheckSetupLevel, string) {
+	switch {
+	case rv.ProcessAlive && rv.Aligned:
+		keyword := "running and aligned"
+		if v := strings.TrimSpace(rv.State.Version); v != "" {
+			keyword += " (v" + v + ")"
+		}
+		return orchestrator.HealthcheckSetupLevelOk, keyword
+	case rv.ProcessAlive && rv.State.AlignChecked:
+		return orchestrator.HealthcheckSetupLevelWarn, "running but not aligned (behind)"
+	default:
+		return orchestrator.HealthcheckSetupLevelWarn, "not running"
+	}
 }
 
 // installVerifyContext resolves the base dir + heartbeat interval for a post-install
