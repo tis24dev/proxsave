@@ -925,7 +925,7 @@ func healthcheckModeDefault(fromExisting bool, template string) string {
 func configureHealthcheckMode(ctx context.Context, reader *bufio.Reader, def string) (string, error) {
 	fmt.Println("\n--- Backup monitoring (healthchecks) ---")
 	fmt.Println("off         no monitoring")
-	fmt.Println("centralized ProxSave-hosted monitor (zero setup, reuses the Telegram identity)")
+	fmt.Println("centralized ProxSave HC Server (zero setup, reuses the Telegram identity)")
 	fmt.Println("self        your own healthchecks/SaaS server (you paste the ping URLs next)")
 	raw, err := promptOptional(ctx, reader, fmt.Sprintf("Healthchecks monitoring: off, centralized, or self [%s]: ", def))
 	if err != nil {

@@ -188,7 +188,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	// Fresh/Overwrite defaults to Centralized (paired with the daemon default);
 	// editing an existing config defaults to its stored mode so a no-op edit never
 	// flips it. The config VALUES stay "off"/"centralized"/"self" (UI labels differ).
-	hcOptions := []string{"Off", "Centralized (ours)", "Your own server"}
+	hcOptions := []string{"Off", "ProxSave HC Server", "Your own server"}
 	hcValues := []string{"off", "centralized", "self"}
 	hcIndex := 1 // default: Centralized, paired with the daemon default
 	if strings.TrimSpace(baseTemplate) != "" {
@@ -203,7 +203,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	}
 	healthcheck := &components.FormField{
 		Label:       "Healthchecks",
-		Description: "Backup monitoring (daemon only): Off, Centralized (ours, zero setup), or Your own server (self: paste the ping URLs).",
+		Description: "Backup monitoring (daemon only): Off, ProxSave HC Server (zero setup), or Your own server (self: paste the ping URLs).",
 		Kind:        components.FieldSelect,
 		Options:     hcOptions,
 		OptionIndex: hcIndex,
