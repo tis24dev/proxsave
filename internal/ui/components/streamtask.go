@@ -43,14 +43,15 @@ var streamToken atomic.Uint64
 // input while running and never automatically.
 type StreamTask struct {
 	shell.Resolver[StreamResult]
-	token   uint64
-	title   string
-	spin    spinner.Model
-	lines   []string
-	done    bool
-	outcome string
-	err     error
-	cancel  context.CancelFunc
+	token      uint64
+	title      string
+	spin       spinner.Model
+	lines      []string
+	done       bool
+	outcome    string
+	err        error
+	cancel     context.CancelFunc
+	cancelling bool
 }
 
 func newStreamScreen(title string, token uint64, cancel context.CancelFunc) *StreamTask {
@@ -84,11 +85,13 @@ func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	case StreamLineMsg:
 		if msg.Token == t.token && !t.done {
 			// Streamed lines carry untrusted runtime data: sanitize at the
-			// boundary.
-			t.lines = append(t.lines, sanitizeLine(msg.Line))
-			if len(t.lines) > streamLineCap {
-				// Drop the oldest lines beyond the cap (bounded ring).
-				t.lines = t.lines[len(t.lines)-streamLineCap:]
+			// boundary. Skip blank lines so the stream shows no empty rows.
+			if line := sanitizeLine(msg.Line); strings.TrimSpace(line) != "" {
+				t.lines = append(t.lines, line)
+				if len(t.lines) > streamLineCap {
+					// Drop the oldest lines beyond the cap (bounded ring).
+					t.lines = t.lines[len(t.lines)-streamLineCap:]
+				}
 			}
 		}
 		return t, nil
@@ -113,7 +116,8 @@ func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 				return t, t.Resolve(StreamResult{Err: t.err}, nil)
 			}
 		case "esc":
-			if !t.done && t.cancel != nil {
+			if !t.done && !t.cancelling && t.cancel != nil {
+				t.cancelling = true
 				t.cancel()
 			}
 		}
@@ -136,6 +140,9 @@ func (t *StreamTask) View(width, height int) string {
 		b.WriteString(theme.Title.Render(t.spin.View()))
 	}
 	b.WriteString(" " + theme.Emphasis.Render(t.title))
+	if t.cancelling && !t.done {
+		b.WriteString(" " + theme.WarningText.Render("(cancelling...)"))
+	}
 	b.WriteString("\n\n")
 
 	// Reserve rows for the outcome block and hint so the line tail fits.
