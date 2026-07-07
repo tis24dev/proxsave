@@ -31,7 +31,7 @@ func TestBuildInstallOutcomePromptVerified(t *testing.T) {
 	out := ansi.Strip(buildInstallOutcomePrompt(rv, true, "ok", "permissions and ownership normalized correctly"))
 
 	// The summary opens with the shared completion banner (same wording as the CLI footer).
-	if !strings.Contains(out, "Go-based installation completed") {
+	if !strings.Contains(out, "Installation completed") {
 		t.Fatalf("missing completion banner:\n%s", out)
 	}
 	if !strings.Contains(out, "Daemon: ") {

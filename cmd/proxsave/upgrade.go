@@ -144,7 +144,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	// Print version/banner header for upgrade mode
 	currentVersion := buildinfo.String()
 	bootstrap.Println("===========================================")
-	bootstrap.Println("  ProxSave - Go Version")
+	bootstrap.Println("  ProxSave")
 	bootstrap.Printf("  Version: %s", currentVersion)
 	if sig := buildSignature(); strings.TrimSpace(sig) != "" {
 		bootstrap.Printf("  Build Signature: %s", sig)
@@ -745,12 +745,12 @@ func closeIntoErr(errp *error, closer io.Closer, operation string) {
 func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error, daemonRestart *RestartVerifyResult) {
 	colorReset := "\033[0m"
 
-	title := "Go-based upgrade completed"
+	title := "Upgrade completed"
 	color := "\033[32m" // green
 
 	if upgradeErr != nil {
 		color = "\033[31m"
-		title = "Go-based upgrade failed"
+		title = "Upgrade failed"
 	}
 
 	fmt.Println()
