@@ -219,6 +219,38 @@ func TestDaemonStatusStyleBehind(t *testing.T) {
 	}
 }
 
+// TestDaemonStatusStyleBehindWithoutRecord: the record-less-but-stale daemon (HaveInfo=false, but
+// alignment determined by the /proc fallback) must now render "behind - restart needed". This is the
+// core of the fix: before, the behind gate required HaveInfo, so a record-less stale daemon read
+// GREEN. The gate is now AlignChecked && !Aligned && (Active || ProcessAlive), no record required.
+func TestDaemonStatusStyleBehindWithoutRecord(t *testing.T) {
+	behind := health.DaemonState{
+		HaveInfo:     false, // no identity record (predates the feature / bootstrap first-deploy)
+		AlignChecked: true,  // yet the /proc fallback determined alignment
+		Aligned:      false, // ...and found the running binary stale
+		Active:       true,
+		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
+	}
+	kind, outcome, expl := daemonStatusStyle(behind)
+	if kind != components.NoticeWarning {
+		t.Fatalf("behind kind = %v, want NoticeWarning", kind)
+	}
+	if outcome != "behind - restart needed" {
+		t.Fatalf("record-less behind outcome = %q, want %q", outcome, "behind - restart needed")
+	}
+	if !strings.Contains(expl, "restart") {
+		t.Fatalf("behind explanation should mention restart, got %q", expl)
+	}
+
+	// UNKNOWN alignment (AlignChecked=false) with no record must NOT read as behind -- it falls
+	// through to the transmission-state verdict.
+	unknown := behind
+	unknown.AlignChecked = false
+	if _, gotOutcome, _ := daemonStatusStyle(unknown); gotOutcome == "behind - restart needed" {
+		t.Fatalf("UNKNOWN alignment must not read as behind")
+	}
+}
+
 // TestDashboardDaemonStatusLoopsBack: Daemon status shows a read-only notice in
 // the live session and returns to the menu, setting no flag.
 func TestDashboardDaemonStatusLoopsBack(t *testing.T) {

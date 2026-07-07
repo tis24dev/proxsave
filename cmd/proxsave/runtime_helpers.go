@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -15,7 +17,6 @@ import (
 	"unicode"
 
 	"github.com/tis24dev/proxsave/internal/config"
-	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/storage"
@@ -1111,18 +1112,20 @@ func executableBuildTime() time.Time {
 }
 
 func executableHash() string {
-	// Delegate to the SINGLE sha256-of-file implementation (health.ComputeBinaryIdentity) so this
-	// package no longer carries its own hasher. The contract is preserved: an empty ExecPath or any
-	// read/hash error yields "" (never a partial hash).
 	info := getExecInfo()
 	if info.ExecPath == "" {
 		return ""
 	}
-	id, err := health.ComputeBinaryIdentity(info.ExecPath)
+	f, err := os.Open(info.ExecPath)
 	if err != nil {
 		return ""
 	}
-	return id.SHA256
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func truncateHash(hash string) string {

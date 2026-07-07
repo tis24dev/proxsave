@@ -202,38 +202,32 @@ func TestClassifyHealthcheckDaemonState(t *testing.T) {
 	}
 }
 
-// seedDaemonInfoFor writes a fresh heartbeat, a real binary at base/proxsave, and a DaemonInfo
-// recording that binary's identity. It returns the binary path so a test can overwrite it to
-// simulate an in-place upgrade (making the running daemon "behind").
-func seedDaemonInfoFor(t *testing.T, base string, now time.Time) string {
+// seedDaemonInfoFor writes a fresh heartbeat and a DaemonInfo recording the running daemon's version
+// under this process's LIVE pid (so the leaf pidAlive probe reads ProcessAlive=true and the /proc
+// alignment probe is consulted). It records ExecPath at base/proxsave for realism; alignment itself
+// is driven by the injected DaemonProcStale seam, not the record.
+func seedDaemonInfoFor(t *testing.T, base string, now time.Time) {
 	t.Helper()
 	if err := health.RecordPing(base, "self", health.KindHeartbeat, now.Unix(), true, nil); err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
 	}
-	bin := filepath.Join(base, "proxsave")
-	if err := os.WriteFile(bin, []byte("proxsave-v1"), 0o600); err != nil {
-		t.Fatalf("seed binary: %v", err)
-	}
-	id, err := health.ComputeBinaryIdentity(bin)
-	if err != nil {
-		t.Fatalf("compute identity: %v", err)
-	}
 	if err := health.WriteDaemonInfo(base, health.DaemonInfo{
-		PID: 4321, ExecPath: bin, Binary: id, Version: "1.2.3", Commit: "abcdef0", StartTS: now.Unix(),
+		PID: os.Getpid(), ExecPath: filepath.Join(base, "proxsave"),
+		Version: "1.2.3", Commit: "abcdef0", StartTS: now.Unix(),
 	}); err != nil {
 		t.Fatalf("seed daemon info: %v", err)
 	}
-	return bin
 }
 
-// TestCheckHealthcheckConnectionPopulatesDaemonAlignment: the shared CheckDaemonState surfaces
-// the running daemon's binary alignment onto the check result, so the post-install classify can
-// tell "behind" apart from a fresh/aligned daemon.
+// TestCheckHealthcheckConnectionPopulatesDaemonAlignment: the shared CheckDaemonState surfaces the
+// running daemon's version (from the record) AND the /proc-derived binary alignment onto the check
+// result, so the post-install classify can tell "behind" apart from a fresh/aligned daemon.
 func TestCheckHealthcheckConnectionPopulatesDaemonAlignment(t *testing.T) {
-	of, on := healthcheckSetupFetch, healthcheckSetupNow
+	of, on, ops := healthcheckSetupFetch, healthcheckSetupNow, DaemonProcStale
 	t.Cleanup(func() {
 		healthcheckSetupFetch = of
 		healthcheckSetupNow = on
+		DaemonProcStale = ops
 	})
 	now := time.Unix(1_700_000_000, 0)
 	healthcheckSetupNow = func() time.Time { return now }
@@ -242,19 +236,16 @@ func TestCheckHealthcheckConnectionPopulatesDaemonAlignment(t *testing.T) {
 		return health.CentralizedConfig{}, errors.New("stub-fetch-down")
 	}
 
-	t.Run("behind: on-disk binary differs from the running daemon's record", func(t *testing.T) {
+	t.Run("behind: /proc reports the running binary was replaced", func(t *testing.T) {
+		DaemonProcStale = func(pid int) (bool, bool) { return true, true }
 		base := t.TempDir()
-		bin := seedDaemonInfoFor(t, base, now)
-		// The upgrade replaces the on-disk binary while the recorded identity still points at v1.
-		if err := os.WriteFile(bin, []byte("proxsave-v2-different"), 0o600); err != nil {
-			t.Fatalf("rewrite binary: %v", err)
-		}
+		seedDaemonInfoFor(t, base, now)
 		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
 		if !res.DaemonHaveInfo {
 			t.Fatalf("DaemonHaveInfo must be true when a record was found")
 		}
 		if res.DaemonAligned {
-			t.Fatalf("DaemonAligned must be false after the on-disk binary changed")
+			t.Fatalf("DaemonAligned must be false when /proc reports the binary replaced")
 		}
 		if res.DaemonStale == "" {
 			t.Fatalf("DaemonStale must carry the not-aligned phrasing")
@@ -264,9 +255,10 @@ func TestCheckHealthcheckConnectionPopulatesDaemonAlignment(t *testing.T) {
 		}
 	})
 
-	t.Run("aligned: on-disk binary matches the running daemon's record", func(t *testing.T) {
+	t.Run("aligned: /proc reports the running binary intact", func(t *testing.T) {
+		DaemonProcStale = func(pid int) (bool, bool) { return false, true }
 		base := t.TempDir()
-		seedDaemonInfoFor(t, base, now) // binary left untouched -> aligned
+		seedDaemonInfoFor(t, base, now)
 		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
 		if !res.DaemonHaveInfo || !res.DaemonAligned {
 			t.Fatalf("aligned daemon: HaveInfo=%v Aligned=%v, want true/true", res.DaemonHaveInfo, res.DaemonAligned)
@@ -308,5 +300,80 @@ func TestClassifyHealthcheckBehind(t *testing.T) {
 	aligned.DaemonAligned = true
 	if got := ClassifyHealthcheckSetupResult(aligned).Keyword; got != "RUNNING, NOT REPORTING" {
 		t.Fatalf("aligned daemon keyword = %q, want RUNNING, NOT REPORTING", got)
+	}
+}
+
+// TestClassifyHealthcheckBehindWithoutRecord: a record-less-but-stale daemon (DaemonHaveInfo=false,
+// but alignment determined by the /proc fallback) now reads BEHIND. The gate no longer requires a
+// record (DaemonHaveInfo), so the daemon that predates the identity-record feature is caught instead
+// of flattening to the transmission-state headline.
+func TestClassifyHealthcheckBehindWithoutRecord(t *testing.T) {
+	behind := HealthcheckCheckResult{
+		Err: nil, Reachable: true, DaemonRead: true,
+		Daemon:             health.Diagnosis{State: health.TxRunningNoReport, DaemonUp: true},
+		DaemonHaveInfo:     false, // no record: the /proc fallback determined alignment
+		DaemonAlignChecked: true,
+		DaemonAligned:      false,
+	}
+	st := ClassifyHealthcheckSetupResult(behind)
+	if st.Keyword != "BEHIND" {
+		t.Fatalf("record-less stale daemon keyword = %q, want BEHIND", st.Keyword)
+	}
+	if !strings.Contains(st.Message, "restart") {
+		t.Fatalf("message should mention restart, got %q", st.Message)
+	}
+
+	// UNKNOWN alignment (AlignChecked=false) with no record must NOT read as behind.
+	unknown := behind
+	unknown.DaemonAlignChecked = false
+	if got := ClassifyHealthcheckSetupResult(unknown).Keyword; got == "BEHIND" {
+		t.Fatalf("UNKNOWN alignment must not read as BEHIND")
+	}
+}
+
+// TestCheckHealthcheckConnectionProcStaleFallback: with NO identity record but a live pid and a wired
+// DaemonProcStale, the check surfaces the record-independent staleness verdict onto the result so the
+// classify can read BEHIND. This exercises the orchestrator seam wiring end-to-end.
+func TestCheckHealthcheckConnectionProcStaleFallback(t *testing.T) {
+	of, on, ops := healthcheckSetupFetch, healthcheckSetupNow, DaemonProcStale
+	t.Cleanup(func() {
+		healthcheckSetupFetch = of
+		healthcheckSetupNow = on
+		DaemonProcStale = ops
+	})
+	now := time.Unix(1_700_000_000, 0)
+	healthcheckSetupNow = func() time.Time { return now }
+	healthcheckSetupFetch = func(ctx context.Context, client *http.Client, host, id, secret string, login bool) (health.CentralizedConfig, error) {
+		return health.CentralizedConfig{}, errors.New("stub-fetch-down") // return right after the daemon-state read
+	}
+	// Wire the /proc fallback to report the running binary stale.
+	DaemonProcStale = func(pid int) (bool, bool) { return true, true }
+
+	base := t.TempDir()
+	if err := health.RecordPing(base, "self", health.KindHeartbeat, now.Unix(), true, nil); err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+	// A LIVE pid (this process) so the leaf pidAlive probe reads ProcessAlive=true and the /proc probe
+	// is consulted.
+	if err := health.WriteDaemonPID(base, os.Getpid()); err != nil {
+		t.Fatalf("WriteDaemonPID: %v", err)
+	}
+	// Deliberately NO WriteDaemonInfo: there is no record, so /proc alone decides alignment.
+
+	// The fetch stub fails, so the check returns right after the daemon-state read (res.Err set); we
+	// assert on the Daemon* alignment fields the fallback populated. The record-less classify BEHIND
+	// is covered by TestClassifyHealthcheckBehindWithoutRecord.
+	res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
+	if res.DaemonHaveInfo {
+		t.Fatalf("DaemonHaveInfo must be false with no record")
+	}
+	if !res.DaemonAlignChecked {
+		t.Fatalf("DaemonAlignChecked must be true: the /proc fallback returned a verdict")
+	}
+	if res.DaemonAligned {
+		t.Fatalf("DaemonAligned must be false when the /proc fallback reports stale")
+	}
+	if res.DaemonStale == "" {
+		t.Fatalf("DaemonStale must carry the /proc fallback phrasing")
 	}
 }

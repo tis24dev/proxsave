@@ -380,6 +380,7 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 		Now:               time.Now(),
 		Presence:          daemonPresenceProbe(ctx),
 		ProcAlive:         probeProxsaveDaemonAlive,
+		ProcStale:         procBinaryStaleProbe,
 	})
 	kind, outcome, explanation := daemonStatusStyle(ds)
 
@@ -388,10 +389,15 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 		"Daemon service (proxsave-daemon.service): " + unit + "\n" +
 		"Service state (systemctl is-active): " + active + "\n" +
 		"Opted out of auto-migration (--daemon-remove): " + optOut
-	// Binary alignment is a real comparison only when AlignChecked; without a record, with an empty
-	// recorded hash, or with an unreadable on-disk binary it is UNKNOWN -- report "unknown" rather
-	// than imply "aligned" or a false "behind".
+	// The running version comes from the identity record (HaveInfo). The alignment verdict comes from
+	// the record-independent /proc probe, so show it whenever AlignChecked -- a live daemon on a
+	// replaced binary reads "Binary alignment: BEHIND". Binary alignment is known only when
+	// AlignChecked; otherwise it is UNKNOWN -- report "unknown" rather than imply "aligned" or a false
+	// "behind".
 	if ds.HaveInfo {
+		body += "\n" + "Running version: " + ds.Version + " (" + ds.Commit + ")"
+	}
+	if ds.HaveInfo || ds.AlignChecked {
 		align := "unknown"
 		switch {
 		case !ds.AlignChecked:
@@ -401,9 +407,7 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 		default:
 			align = "BEHIND (restart needed)"
 		}
-		body += "\n" +
-			"Running version: " + ds.Version + " (" + ds.Commit + ")\n" +
-			"Binary alignment: " + align
+		body += "\n" + "Binary alignment: " + align
 	}
 	_, _ = shell.Ask(ctx, session, components.NewNotice(kind, "Daemon: "+outcome, body))
 }
@@ -415,7 +419,10 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 // construction. The "behind" verdict (running an older binary than the one now on disk) is
 // checked FIRST and is DISTINCT from the heartbeat-derived "running, not reporting" below.
 func daemonStatusStyle(ds health.DaemonState) (components.NoticeKind, string, string) {
-	if ds.HaveInfo && ds.AlignChecked && !ds.Aligned && (ds.Active || ds.ProcessAlive) {
+	// AlignChecked already implies alignment was actually determined by the record-independent /proc
+	// probe, so it is the sole correct gate here; a record (HaveInfo) is not required, which is
+	// exactly what lets any live daemon on a replaced binary read as behind instead of a false GREEN.
+	if ds.AlignChecked && !ds.Aligned && (ds.Active || ds.ProcessAlive) {
 		return components.NoticeWarning, "behind - restart needed", "The daemon is running an older binary than the one now on disk; restart it to load the update."
 	}
 	switch ds.TxState() {

@@ -67,6 +67,14 @@ func probeDaemonPresence(ctx context.Context) health.DaemonPresence {
 	return DaemonPresenceProbe(ctx)
 }
 
+// DaemonProcStale is the RECORD-INDEPENDENT, HASH-FREE /proc staleness probe (was the running
+// daemon's executable replaced on disk? -- signalled by the " (deleted)" suffix on /proc/<pid>/exe).
+// cmd/proxsave wires it at startup (the /proc read lives there, keeping this package a leaf); it is
+// the SOLE source of the alignment verdict, so when nil (e.g. unit tests) alignment stays UNKNOWN.
+// When wired, it lets the install/dashboard check catch a live daemon running a rebuilt/upgraded
+// binary as BEHIND instead of a false WORKING.
+var DaemonProcStale func(pid int) (stale bool, checked bool)
+
 // CheckHealthcheckConnection runs one install-time check: fetch the centralized
 // config (asking for a fresh magic-link) to confirm provisioning is ready, then a
 // /log ping to the alive URL to confirm the monitor is reachable from this host. It
@@ -80,17 +88,19 @@ func CheckHealthcheckConnection(ctx context.Context, serverAPIHost, serverID, ba
 	res := HealthcheckCheckResult{}
 
 	// Real operational state via the SHARED daemon-state checker: the status file answers "is it
-	// transmitting?", systemd answers "does the process exist and run?", and the identity record
-	// answers "is the running binary aligned with the one on disk?". A readable file OR a probed
-	// systemd state yields a verdict; only when BOTH are unavailable is the daemon genuinely
-	// unknown. ProcAlive is nil (the leaf signal-0 liveness): alignment here does not need the
-	// /proc/cmdline gate.
+	// transmitting?", systemd answers "does the process exist and run?", and the /proc probe answers
+	// "is the running binary aligned with the one on disk?". A readable file OR a probed systemd state
+	// yields a verdict; only when BOTH are unavailable is the daemon genuinely unknown. ProcAlive is
+	// nil (the leaf signal-0 liveness): alignment here does not need the /proc/cmdline gate. ProcStale
+	// is the wired /proc probe -- the sole alignment signal (nil when cmd/proxsave has not wired it,
+	// e.g. unit tests, leaving alignment UNKNOWN).
 	ds := health.CheckDaemonState(health.DaemonStateInput{
 		BaseDir:           baseDir,
 		HeartbeatInterval: heartbeatInterval,
 		Now:               healthcheckSetupNow(),
 		Presence:          probeDaemonPresence(ctx),
 		ProcAlive:         nil,
+		ProcStale:         DaemonProcStale,
 	})
 	res.Daemon = ds.Diagnosis
 	res.DaemonRead = ds.Probed || ds.HaveStatus
