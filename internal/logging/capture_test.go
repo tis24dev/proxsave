@@ -3,6 +3,7 @@ package logging
 import (
 	"io"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -125,6 +126,46 @@ func TestCaptureConsole_WiresAndRestores(t *testing.T) {
 	}
 	if bootstrap.consoleQuietEnabled() {
 		t.Fatalf("bootstrap console-quiet should be restored to false")
+	}
+}
+
+func TestCaptureConsole_FiltersDebugAtStandardLevel(t *testing.T) {
+	// Standard run: bootstrap + default logger both at INFO. Debug lines must NOT
+	// leak into the UI stream - the mirror is created at the bootstrap's level, not
+	// hardcoded Debug (a debug run raises the level and would stream debug).
+	prev := GetDefaultLogger()
+	t.Cleanup(func() { SetDefaultLogger(prev) })
+	fresh := New(types.LogLevelInfo, false)
+	fresh.SetOutput(io.Discard)
+	SetDefaultLogger(fresh)
+
+	var mu sync.Mutex
+	var lines []string
+	sink := NewLineWriter(func(line string) {
+		mu.Lock()
+		lines = append(lines, line)
+		mu.Unlock()
+	})
+
+	bootstrap := NewBootstrapLogger() // INFO by default
+	bootstrap.SetConsoleQuiet(false)
+	restore := CaptureConsole(bootstrap, sink)
+	defer restore()
+
+	bootstrap.Debug("boot-debug-hidden")
+	bootstrap.Info("boot-info-shown")
+	Debug("default-debug-hidden")
+	Info("default-info-shown")
+
+	mu.Lock()
+	joined := strings.Join(lines, "\n")
+	mu.Unlock()
+
+	if strings.Contains(joined, "boot-debug-hidden") || strings.Contains(joined, "default-debug-hidden") {
+		t.Fatalf("debug lines leaked into the standard-level stream:\n%s", joined)
+	}
+	if !strings.Contains(joined, "boot-info-shown") || !strings.Contains(joined, "default-info-shown") {
+		t.Fatalf("info lines missing from the stream:\n%s", joined)
 	}
 }
 

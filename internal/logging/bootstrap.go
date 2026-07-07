@@ -123,6 +123,18 @@ func (b *BootstrapLogger) SetLevel(level types.LogLevel) {
 	b.minLevel = level
 }
 
+// levelValue returns the configured minimum level (lock-safe), so a consumer can
+// create a mirror at the SAME verbosity the bootstrap console uses instead of
+// hardcoding one. Defaults to INFO for a nil receiver.
+func (b *BootstrapLogger) levelValue() types.LogLevel {
+	if b == nil {
+		return types.LogLevelInfo
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.minLevel
+}
+
 // Println records a raw line (used for banners/text without a header).
 func (b *BootstrapLogger) Println(message string) {
 	if b == nil {
