@@ -303,8 +303,10 @@ func TestSummarizeRestartVerify(t *testing.T) {
 // post-upgrade restart.
 func TestRestartVerifyStatus(t *testing.T) {
 	success := RestartVerifyResult{Restarted: true, ProcessAlive: true, Aligned: true, FreshInfo: true, State: health.DaemonState{Version: "4.5.6"}}
+	// Success: the version is in the keyword; the explanation is EMPTY (a what-to-do suggestion
+	// appears only on a problem outcome).
 	if level, keyword, msg := restartVerifyStatus(success); level != orchestrator.HealthcheckSetupLevelOk ||
-		keyword != "restarted, aligned (v4.5.6)" || !strings.Contains(msg, "v4.5.6") {
+		keyword != "restarted, aligned (v4.5.6)" || msg != "" {
 		t.Fatalf("success status wrong: level=%v keyword=%q msg=%q", level, keyword, msg)
 	}
 	deferred := RestartVerifyResult{BackupWaitTimedOut: true}
@@ -341,6 +343,15 @@ func TestBuildDaemonResultPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "all good") {
 		t.Fatalf("prompt must carry the explanation: %q", prompt)
+	}
+	// A blank line separates the Status line from the what-to-do suggestion.
+	if !strings.Contains(prompt, "\n\nall good") {
+		t.Fatalf("a blank line must separate Status from the suggestion: %q", prompt)
+	}
+	// A success outcome (empty explanation) is just the Status line, no trailing text.
+	okOnly := ansi.Strip(buildDaemonResultPrompt(orchestrator.HealthcheckSetupLevelOk, "restarted, aligned (v9.9.9)", ""))
+	if strings.Contains(okOnly, "\n") {
+		t.Fatalf("a success result must be a single Status line, got: %q", okOnly)
 	}
 }
 

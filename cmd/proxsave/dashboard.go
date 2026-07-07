@@ -255,21 +255,21 @@ func restartVerifyStatus(rv RestartVerifyResult) (orchestrator.HealthcheckSetupL
 		return orchestrator.HealthcheckSetupLevelError, "restart failed", rv.Err.Error()
 	case rv.BackupWaitTimedOut:
 		return orchestrator.HealthcheckSetupLevelWarn, "deferred - backup running",
-			"A backup is currently running; the restart was deferred to avoid interrupting it. Restart again once the backup finishes, or the daemon stays on the old binary."
+			"Restart again once the backup finishes, or the daemon stays on the old binary."
 	case rv.TimedOut:
 		return orchestrator.HealthcheckSetupLevelWarn, "restarted, not confirmed",
-			"The daemon was restarted but could not be confirmed aligned within the timeout. Check the daemon status."
+			"Open Daemon status to confirm it came back aligned."
 	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
+		// Success: the keyword ("restarted, aligned (vX)") already says everything, so no
+		// explanation line -- a what-to-do suggestion only appears on a problem outcome.
 		keyword := "restarted, aligned"
-		msg := "The resident daemon (proxsave-daemon.service) was restarted and is now running the current binary"
 		if v := strings.TrimSpace(rv.State.Version); v != "" {
 			keyword += " (v" + v + ")"
-			msg += " (v" + v + ")"
 		}
-		return orchestrator.HealthcheckSetupLevelOk, keyword, msg + "."
+		return orchestrator.HealthcheckSetupLevelOk, keyword, ""
 	default:
 		return orchestrator.HealthcheckSetupLevelWarn, "restarted, not confirmed",
-			"The daemon was restarted but alignment could not be confirmed. Check the daemon status."
+			"Open Daemon status to confirm it came back aligned."
 	}
 }
 
@@ -286,8 +286,10 @@ func buildDaemonResultPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Status: "))
 	b.WriteString(renderDaemonStatusLevel(level, keyword))
+	// A what-to-do suggestion is shown only on a problem outcome (success passes ""), with a
+	// blank line separating it from the Status line.
 	if explanation != "" {
-		b.WriteString("\n")
+		b.WriteString("\n\n")
 		b.WriteString(theme.Subtle.Render(explanation))
 	}
 	return b.String()
