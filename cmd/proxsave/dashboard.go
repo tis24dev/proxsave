@@ -330,27 +330,57 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 		active = "unknown"
 	}
 
-	// Combined verdict: systemd existence (installed/active) refined onto the heartbeat, so
-	// this screen and the healthcheck checks can never disagree about the daemon.
-	st, _ := health.LoadStatus(baseDir)
-	d := health.RefineWithPresence(health.Diagnose(st, interval, time.Now()), daemonPresenceProbe(ctx))
-	kind, outcome, explanation := daemonStatusStyle(d)
+	// Combined verdict via the SHARED daemon-state checker (systemd existence refined onto the
+	// heartbeat, plus on-disk binary alignment), so this screen and the healthcheck checks can
+	// never disagree about the daemon. probeProxsaveDaemonAlive is the stricter signal-0 +
+	// /proc/cmdline liveness gate. The raw unit/active words above stay from the direct probes
+	// so the systemctl vocabulary is shown verbatim.
+	ds := health.CheckDaemonState(health.DaemonStateInput{
+		BaseDir:           baseDir,
+		SchedulerMode:     mode,
+		HeartbeatInterval: interval,
+		Now:               time.Now(),
+		Presence:          daemonPresenceProbe(ctx),
+		ProcAlive:         probeProxsaveDaemonAlive,
+	})
+	kind, outcome, explanation := daemonStatusStyle(ds)
 
 	body := explanation + "\n\n" +
 		"Scheduler mode: " + mode + "\n" +
 		"Daemon service (proxsave-daemon.service): " + unit + "\n" +
 		"Service state (systemctl is-active): " + active + "\n" +
 		"Opted out of auto-migration (--daemon-remove): " + optOut
+	// Binary alignment is a real comparison only when AlignChecked; without a record, with an empty
+	// recorded hash, or with an unreadable on-disk binary it is UNKNOWN -- report "unknown" rather
+	// than imply "aligned" or a false "behind".
+	if ds.HaveInfo {
+		align := "unknown"
+		switch {
+		case !ds.AlignChecked:
+			align = "unknown"
+		case ds.Aligned:
+			align = "aligned"
+		default:
+			align = "BEHIND (restart needed)"
+		}
+		body += "\n" +
+			"Running version: " + ds.Version + " (" + ds.Commit + ")\n" +
+			"Binary alignment: " + align
+	}
 	_, _ = shell.Ask(ctx, session, components.NewNotice(kind, "Daemon: "+outcome, body))
 }
 
-// daemonStatusStyle maps a presence-refined diagnosis to the dashboard notice severity, a
-// short outcome keyword for the (colored) title, and a one-line explanation. Green only
-// when the daemon is actually alive and beating; every gap is a yellow warning. It shares
-// health's state vocabulary so the daemon-status screen agrees with the run/healthcheck
-// checks by construction.
-func daemonStatusStyle(d health.Diagnosis) (components.NoticeKind, string, string) {
-	switch d.State {
+// daemonStatusStyle maps a composed daemon state to the dashboard notice severity, a short
+// outcome keyword for the (colored) title, and a one-line explanation. Green only when the
+// daemon is actually alive and beating; every gap is a yellow warning. It shares health's
+// state vocabulary so the daemon-status screen agrees with the run/healthcheck checks by
+// construction. The "behind" verdict (running an older binary than the one now on disk) is
+// checked FIRST and is DISTINCT from the heartbeat-derived "running, not reporting" below.
+func daemonStatusStyle(ds health.DaemonState) (components.NoticeKind, string, string) {
+	if ds.HaveInfo && ds.AlignChecked && !ds.Aligned && (ds.Active || ds.ProcessAlive) {
+		return components.NoticeWarning, "behind - restart needed", "The daemon is running an older binary than the one now on disk; restart it to load the update."
+	}
+	switch ds.TxState() {
 	case health.TxNotInstalled:
 		return components.NoticeWarning, "not installed", "The resident daemon service is not installed; backups run from cron."
 	case health.TxNotActive:

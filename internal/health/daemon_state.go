@@ -16,10 +16,14 @@ import (
 )
 
 // DaemonState is the composed verdict for the resident daemon. Aligned answers "is the running
-// daemon's binary the same as the file on disk?" -- but it is only MEANINGFUL when HaveInfo is true;
-// with no identity record the alignment is UNKNOWN (Aligned stays false) and callers must NOT report
-// "behind" without a record. StaleReason carries the human phrasing when Aligned is false with a
-// record.
+// daemon's binary the same as the file on disk?" -- but a comparison is only MEANINGFUL when
+// AlignChecked is true, i.e. a record was found AND its recorded binary hash was non-empty AND the
+// on-disk binary re-hashed successfully. Alignment is UNKNOWN (AlignChecked=false, Aligned=false) when
+// there is no record, when the record carries an empty binary hash (the daemon's startup hash failed),
+// or when the on-disk binary could not be re-read at check time. Callers must gate any "behind"
+// verdict on AlignChecked so an UNKNOWN alignment never renders as behind. StaleReason carries the
+// human phrasing: a real mismatch when AlignChecked, or the read failure (diagnostic only) when the
+// on-disk binary is unreadable.
 type DaemonState struct {
 	SchedulerMode string
 	Probed        bool
@@ -32,6 +36,7 @@ type DaemonState struct {
 	HaveStatus    bool
 	HaveInfo      bool
 	Aligned       bool
+	AlignChecked  bool
 	StaleReason   string
 	Version       string
 	Commit        string
@@ -57,9 +62,10 @@ type DaemonStateInput struct {
 
 // CheckDaemonState composes the daemon-state verdict from existing primitives only. The steps are
 // load-bearing in order: (1) load the persisted status; (2) diagnose it and refine with systemd
-// presence; (3) resolve the pid and probe liveness; (4) load the identity record and, if present,
-// re-hash the on-disk binary to decide alignment. With no identity record, alignment is UNKNOWN
-// (Aligned=false, no StaleReason) and callers gate the "behind" verdict on HaveInfo.
+// presence; (3) resolve the pid and probe liveness; (4) load the identity record and, if present with
+// a recorded hash, re-hash the on-disk binary to decide alignment. Alignment is a real comparison only
+// when AlignChecked is set; with no record, an empty recorded hash, or an unreadable on-disk binary it
+// stays UNKNOWN (Aligned=false) and callers gate the "behind" verdict on AlignChecked.
 func CheckDaemonState(in DaemonStateInput) DaemonState {
 	s := DaemonState{SchedulerMode: in.SchedulerMode}
 
@@ -95,21 +101,34 @@ func CheckDaemonState(in DaemonStateInput) DaemonState {
 	}
 	s.ProcessAlive = s.PID > 0 && probe(s.PID)
 
-	// 4. Identity record + alignment. Without a record, alignment is UNKNOWN (not "aligned").
+	// 4. Identity record + alignment. Alignment is a real comparison ONLY when AlignChecked is set:
+	// a record exists, its recorded hash is non-empty, AND the on-disk binary re-hashed. Every other
+	// path is UNKNOWN (AlignChecked=false, Aligned=false) and must NOT read as "behind":
+	//   - no record                          -> UNKNOWN.
+	//   - record with an empty recorded hash  -> UNKNOWN (the daemon's startup hash failed), no reason.
+	//   - record but the on-disk binary errs  -> UNKNOWN, StaleReason keeps the read failure for
+	//                                             diagnostics (the binary is gone/unreadable, not stale).
+	//   - record + hash both present          -> AlignChecked, Aligned reflects the real comparison,
+	//                                             StaleReason set only on a genuine mismatch.
 	s.HaveInfo = haveInfo
 	if haveInfo {
 		s.Version = info.Version
 		s.Commit = info.Commit
 		s.StartTS = info.StartTS
-		cur, cerr := ComputeBinaryIdentity(info.ExecPath)
-		if cerr == nil {
-			s.Aligned = cur.Aligned(info.Binary)
-			if !s.Aligned {
-				s.StaleReason = "on-disk binary differs from the running daemon's binary"
+		switch {
+		case info.Binary.SHA256 == "":
+			// Recorded identity unavailable: alignment is UNKNOWN, not behind.
+		default:
+			cur, cerr := ComputeBinaryIdentity(info.ExecPath)
+			if cerr != nil {
+				s.StaleReason = "cannot read on-disk binary: " + cerr.Error()
+			} else {
+				s.AlignChecked = true
+				s.Aligned = cur.Aligned(info.Binary)
+				if !s.Aligned {
+					s.StaleReason = "on-disk binary differs from the running daemon's binary"
+				}
 			}
-		} else {
-			s.Aligned = false
-			s.StaleReason = "cannot read on-disk binary: " + cerr.Error()
 		}
 	}
 

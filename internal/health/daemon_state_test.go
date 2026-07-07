@@ -89,6 +89,9 @@ func TestCheckDaemonStateAligned(t *testing.T) {
 	if !s.Aligned {
 		t.Fatalf("Aligned should be true; StaleReason=%q", s.StaleReason)
 	}
+	if !s.AlignChecked {
+		t.Fatalf("AlignChecked should be true when a real comparison ran")
+	}
 	if s.StaleReason != "" {
 		t.Fatalf("StaleReason should be empty when aligned, got %q", s.StaleReason)
 	}
@@ -129,6 +132,9 @@ func TestCheckDaemonStateStale(t *testing.T) {
 	if s.Aligned {
 		t.Fatalf("Aligned should be false after the on-disk binary changed")
 	}
+	if !s.AlignChecked {
+		t.Fatalf("AlignChecked should be true: the comparison ran and mismatched (a real behind)")
+	}
 	if s.StaleReason == "" {
 		t.Fatalf("StaleReason should be set when not aligned")
 	}
@@ -157,6 +163,9 @@ func TestCheckDaemonStateNoInfo(t *testing.T) {
 	if s.Aligned {
 		t.Fatalf("Aligned should be false (UNKNOWN) with no info record")
 	}
+	if s.AlignChecked {
+		t.Fatalf("AlignChecked should be false (UNKNOWN) with no info record")
+	}
 	if s.StaleReason != "" {
 		t.Fatalf("StaleReason should be empty when alignment is UNKNOWN, got %q", s.StaleReason)
 	}
@@ -165,6 +174,111 @@ func TestCheckDaemonStateNoInfo(t *testing.T) {
 	}
 	if !s.ProcessAlive {
 		t.Fatalf("ProcessAlive should still reflect the probe")
+	}
+}
+
+// TestCheckDaemonStateEmptyRecordedHash (alignment UNKNOWN, not behind): the info record exists but
+// its recorded Binary.SHA256 is EMPTY (the daemon's startup hash failed) even though a real binary
+// sits on disk. Alignment is UNDETERMINABLE -> AlignChecked=false, Aligned=false, no StaleReason, and
+// the "behind" render gate (which requires AlignChecked) must NOT fire.
+func TestCheckDaemonStateEmptyRecordedHash(t *testing.T) {
+	base := t.TempDir()
+	bin := seedBinary(t, base, []byte("proxsave-v1"))
+	seedFreshHeartbeat(t, base, testNow.Unix())
+	if err := WriteDaemonPID(base, 4321); err != nil {
+		t.Fatalf("WriteDaemonPID: %v", err)
+	}
+	// Record identity with an EMPTY Binary (SHA256 == "") but a valid ExecPath.
+	if err := WriteDaemonInfo(base, DaemonInfo{
+		PID:      4321,
+		ExecPath: bin,
+		Binary:   BinaryIdentity{}, // empty recorded hash: the startup hash failed
+		Version:  "1.2.3",
+		Commit:   "abcdef0",
+		StartTS:  ts,
+	}); err != nil {
+		t.Fatalf("WriteDaemonInfo: %v", err)
+	}
+
+	s := CheckDaemonState(DaemonStateInput{
+		BaseDir:           base,
+		HeartbeatInterval: 5 * time.Minute,
+		Now:               testNow,
+		Presence:          activePresence(),
+		ProcAlive:         func(int) bool { return true },
+	})
+
+	if !s.HaveInfo {
+		t.Fatalf("HaveInfo should be true (a record was written)")
+	}
+	if s.AlignChecked {
+		t.Fatalf("AlignChecked should be false when the recorded hash is empty (UNKNOWN)")
+	}
+	if s.Aligned {
+		t.Fatalf("Aligned should be false (UNKNOWN) with an empty recorded hash")
+	}
+	if s.StaleReason != "" {
+		t.Fatalf("StaleReason should be empty when alignment is UNKNOWN, got %q", s.StaleReason)
+	}
+	// Intent: the behind render gate (HaveInfo && AlignChecked && !Aligned) must NOT fire.
+	if s.HaveInfo && s.AlignChecked && !s.Aligned {
+		t.Fatalf("must NOT be behind-eligible when alignment is UNKNOWN (empty recorded hash)")
+	}
+}
+
+// TestCheckDaemonStateExecPathMissing (alignment UNKNOWN, not behind): the record carries a GOOD
+// recorded hash, but ExecPath points at a file that is GONE at check time, so the on-disk binary
+// cannot be re-hashed. This is "cannot verify", NOT "behind" -> AlignChecked=false, Aligned=false,
+// and StaleReason keeps the read failure for diagnostics.
+func TestCheckDaemonStateExecPathMissing(t *testing.T) {
+	base := t.TempDir()
+	// Compute a real, non-empty identity from a scratch binary, then record it against a MISSING path.
+	scratch := seedBinary(t, base, []byte("proxsave-v1"))
+	id, err := ComputeBinaryIdentity(scratch)
+	if err != nil {
+		t.Fatalf("compute identity: %v", err)
+	}
+	if id.SHA256 == "" {
+		t.Fatalf("precondition: recorded hash must be non-empty")
+	}
+	seedFreshHeartbeat(t, base, testNow.Unix())
+	if err := WriteDaemonPID(base, 4321); err != nil {
+		t.Fatalf("WriteDaemonPID: %v", err)
+	}
+	missing := filepath.Join(base, "gone-proxsave")
+	if err := WriteDaemonInfo(base, DaemonInfo{
+		PID:      4321,
+		ExecPath: missing, // the on-disk binary is gone/unreadable at check time
+		Binary:   id,      // recorded hash is present and valid
+		Version:  "1.2.3",
+		Commit:   "abcdef0",
+		StartTS:  ts,
+	}); err != nil {
+		t.Fatalf("WriteDaemonInfo: %v", err)
+	}
+
+	s := CheckDaemonState(DaemonStateInput{
+		BaseDir:           base,
+		HeartbeatInterval: 5 * time.Minute,
+		Now:               testNow,
+		Presence:          activePresence(),
+		ProcAlive:         func(int) bool { return true },
+	})
+
+	if !s.HaveInfo {
+		t.Fatalf("HaveInfo should be true (a record was written)")
+	}
+	if s.AlignChecked {
+		t.Fatalf("AlignChecked should be false when the on-disk binary cannot be re-read (UNKNOWN)")
+	}
+	if s.Aligned {
+		t.Fatalf("Aligned should be false when the on-disk binary is missing")
+	}
+	if s.StaleReason == "" {
+		t.Fatalf("StaleReason should keep the read failure for diagnostics")
+	}
+	if s.HaveInfo && s.AlignChecked && !s.Aligned {
+		t.Fatalf("must NOT be behind-eligible when alignment is UNKNOWN (cannot verify)")
 	}
 }
 
