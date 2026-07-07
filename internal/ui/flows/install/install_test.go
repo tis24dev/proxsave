@@ -67,6 +67,27 @@ func (d *driver) keys(script string) {
 	}
 }
 
+// waitText blocks until the (ANSI-stripped) rendered buffer contains want, so tests
+// can assert on styled content that lands slightly after the screen-title push.
+func (d *driver) waitText(want string) {
+	d.t.Helper()
+	deadline := time.After(60 * time.Second)
+	for {
+		if strings.Contains(ansi.Strip(d.buf.String()), want) {
+			return
+		}
+		select {
+		case <-deadline:
+			out := ansi.Strip(d.buf.String())
+			if len(out) > 2000 {
+				out = out[len(out)-2000:]
+			}
+			d.t.Fatalf("timed out waiting for text %q; output tail:\n%s", want, out)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 func TestResolveExistingConfig(t *testing.T) {
 	d := newDriver(t)
 	dir := t.TempDir()
@@ -451,7 +472,12 @@ func TestRunPostInstallAudit(t *testing.T) {
 	// suggestion, then move to the Disable Selected button and press it (a plain
 	// Enter on the item now just toggles it - it no longer confirms the screen).
 	d.keys("space down down down enter")
-	d.waitScreen("Configuration updated")
+	// The outcome is now the shared styled "Post-install check" result screen (a
+	// selector with a colored Status keyword), not a Notice. Assert the green
+	// "✓ updated" keyword + the disabled-component line, then dismiss via Back.
+	d.waitScreen("Post-install check")
+	d.waitText("✓ updated")
+	d.waitText("Disabled 1 component(s): BACKUP_X")
 	d.keys("enter")
 
 	res := <-resCh
@@ -471,6 +497,44 @@ func TestRunPostInstallAudit(t *testing.T) {
 	content := string(data)
 	if !strings.Contains(content, "BACKUP_X=false") || !strings.Contains(content, "BACKUP_Y=true") {
 		t.Fatalf("config not updated correctly:\n%s", content)
+	}
+}
+
+// TestRunPostInstallAuditNoSuggestions drives the empty-suggestions outcome: it must
+// render the shared styled "Post-install check" result screen with the green
+// "✓ no unused components" Status keyword (and, per the daemon-result convention, no
+// redundant explanation sentence), dismissible via Back.
+func TestRunPostInstallAuditNoSuggestions(t *testing.T) {
+	d := newDriver(t)
+
+	origCollect := auditCollect
+	auditCollect = func(ctx context.Context, execPath, cfgPath string) ([]installer.PostInstallAuditSuggestion, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { auditCollect = origCollect })
+
+	type result struct {
+		res installer.PostInstallAuditResult
+		err error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
+		resCh <- result{res, err}
+	}()
+
+	d.waitScreen("Post-install check") // the Run check confirm
+	d.keys("enter")                    // run the dry-run
+	d.waitScreen("Post-install check") // the outcome screen (same title)
+	d.waitText("✓ no unused components")
+	d.keys("enter") // dismiss via Back
+
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("unexpected error: %v", res.err)
+	}
+	if !res.res.Ran || len(res.res.Suggestions) != 0 || len(res.res.AppliedKeys) != 0 {
+		t.Fatalf("unexpected result: %+v", res.res)
 	}
 }
 
