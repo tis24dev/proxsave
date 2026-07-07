@@ -9,11 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/tis24dev/proxsave/internal/checks"
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
-	"github.com/tis24dev/proxsave/internal/ui/components"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
 
 // shrinkRestartBudgets replaces the restart/backup-wait budgets with tiny values so the
@@ -296,19 +298,49 @@ func TestSummarizeRestartVerify(t *testing.T) {
 	}
 }
 
-// TestRestartVerifyNotice covers the dashboard notice mapping for each outcome.
-func TestRestartVerifyNotice(t *testing.T) {
+// TestRestartVerifyStatus covers the styled daemon-result mapping (level + short keyword +
+// explanation) for each restart+verify outcome, shared by the restart button and the
+// post-upgrade restart.
+func TestRestartVerifyStatus(t *testing.T) {
 	success := RestartVerifyResult{Restarted: true, ProcessAlive: true, Aligned: true, FreshInfo: true, State: health.DaemonState{Version: "4.5.6"}}
-	if kind, _, msg := restartVerifyNotice(success); kind != components.NoticeSuccess || !strings.Contains(msg, "v4.5.6") {
-		t.Fatalf("success notice wrong: kind=%v msg=%q", kind, msg)
+	if level, keyword, msg := restartVerifyStatus(success); level != orchestrator.HealthcheckSetupLevelOk ||
+		keyword != "restarted, aligned (v4.5.6)" || !strings.Contains(msg, "v4.5.6") {
+		t.Fatalf("success status wrong: level=%v keyword=%q msg=%q", level, keyword, msg)
 	}
 	deferred := RestartVerifyResult{BackupWaitTimedOut: true}
-	if _, title, _ := restartVerifyNotice(deferred); title != "Daemon restart deferred" {
-		t.Fatalf("deferred title wrong: %q", title)
+	if level, keyword, _ := restartVerifyStatus(deferred); level != orchestrator.HealthcheckSetupLevelWarn ||
+		keyword != "deferred - backup running" {
+		t.Fatalf("deferred status wrong: level=%v keyword=%q", level, keyword)
+	}
+	timedOut := RestartVerifyResult{Restarted: true, TimedOut: true}
+	if level, keyword, _ := restartVerifyStatus(timedOut); level != orchestrator.HealthcheckSetupLevelWarn ||
+		keyword != "restarted, not confirmed" {
+		t.Fatalf("timed-out status wrong: level=%v keyword=%q", level, keyword)
+	}
+	ambiguous := RestartVerifyResult{Restarted: true} // restarted but not confirmed aligned (default arm)
+	if level, keyword, _ := restartVerifyStatus(ambiguous); level != orchestrator.HealthcheckSetupLevelWarn ||
+		keyword != "restarted, not confirmed" {
+		t.Fatalf("ambiguous status wrong: level=%v keyword=%q", level, keyword)
 	}
 	failed := RestartVerifyResult{Err: errors.New("x")}
-	if _, title, _ := restartVerifyNotice(failed); title != "Daemon restart failed" {
-		t.Fatalf("failed title wrong: %q", title)
+	if level, keyword, msg := restartVerifyStatus(failed); level != orchestrator.HealthcheckSetupLevelError ||
+		keyword != "restart failed" || msg != "x" {
+		t.Fatalf("failed status wrong: level=%v keyword=%q msg=%q", level, keyword, msg)
+	}
+}
+
+// TestBuildDaemonResultPrompt: the styled result prompt carries the "Status: " label and the
+// colored keyword (matching the daemon-status screen's Status block), plus the explanation.
+func TestBuildDaemonResultPrompt(t *testing.T) {
+	prompt := ansi.Strip(buildDaemonResultPrompt(orchestrator.HealthcheckSetupLevelOk, "restarted, aligned (v9.9.9)", "all good"))
+	if !strings.Contains(prompt, "Status: ") {
+		t.Fatalf("prompt must carry the Status label: %q", prompt)
+	}
+	if !strings.Contains(prompt, "restarted, aligned (v9.9.9)") {
+		t.Fatalf("prompt must carry the keyword: %q", prompt)
+	}
+	if !strings.Contains(prompt, "all good") {
+		t.Fatalf("prompt must carry the explanation: %q", prompt)
 	}
 }
 
@@ -400,8 +432,8 @@ func TestDashboardDaemonRestartButton(t *testing.T) {
 	driver.waitScreen("Dashboard")
 	// Active layout: Disable daemon (10 downs) -> Restart daemon (11 downs).
 	driver.keys("down down down down down down down down down down down enter")
-	driver.waitScreen("Daemon restarted")
-	driver.keys("enter")
+	driver.waitScreen("Daemon restart") // styled result screen (selector title)
+	driver.keys("enter")                // Back -> menu
 	driver.waitScreen("Dashboard")
 	driver.keys("esc")
 	select {
