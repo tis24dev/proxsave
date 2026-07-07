@@ -88,6 +88,7 @@ func validateDaemonCompatibility(args *cli.Args) []string {
 		{args.Daemon, "--daemon"},
 		{args.DaemonSetup, "--daemon-setup"},
 		{args.DaemonRemove, "--daemon-remove"},
+		{args.DaemonStatus, "--daemon-status"},
 	} {
 		if f.on {
 			daemonFlags++
@@ -98,7 +99,7 @@ func validateDaemonCompatibility(args *cli.Args) []string {
 		return nil
 	}
 	if daemonFlags > 1 {
-		return []string{"Only one of --daemon, --daemon-setup, --daemon-remove may be used at a time."}
+		return []string{"Only one of --daemon, --daemon-setup, --daemon-remove, --daemon-status may be used at a time."}
 	}
 	incompatible := enabledModes([]incompatibleMode{
 		{enabled: args.Install, label: "--install"},
