@@ -7,14 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // installDashboardGates fixes the two gate seams for a test. It also pins the
@@ -194,9 +198,9 @@ func TestDaemonStatusStyleBehind(t *testing.T) {
 		Active:       true,
 		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
 	}
-	kind, outcome, expl := daemonStatusStyle(behind)
-	if kind != components.NoticeWarning {
-		t.Fatalf("behind kind = %v, want NoticeWarning", kind)
+	level, outcome, expl := daemonStatusStyle(behind)
+	if level != orchestrator.HealthcheckSetupLevelWarn {
+		t.Fatalf("behind level = %v, want HealthcheckSetupLevelWarn", level)
 	}
 	if outcome != "behind - restart needed" {
 		t.Fatalf("behind outcome = %q, want %q", outcome, "behind - restart needed")
@@ -219,6 +223,82 @@ func TestDaemonStatusStyleBehind(t *testing.T) {
 	}
 }
 
+// TestDaemonStatusStyleLevels: the healthy/beating daemon reads Ok (green ✓); every gap reads
+// Warn (yellow ⚠). This is the level mapping the styled Status line consumes.
+func TestDaemonStatusStyleLevels(t *testing.T) {
+	running := health.DaemonState{Diagnosis: health.Diagnosis{State: health.TxTransmitting}}
+	if level, outcome, _ := daemonStatusStyle(running); level != orchestrator.HealthcheckSetupLevelOk || outcome != "running" {
+		t.Fatalf("running -> (%v, %q), want (Ok, running)", level, outcome)
+	}
+	gaps := []struct {
+		name  string
+		state health.TxState
+	}{
+		{"not installed", health.TxNotInstalled},
+		{"not active", health.TxNotActive},
+		{"running no report", health.TxRunningNoReport},
+		{"stale", health.TxStale},
+		{"no heartbeat", health.TxNoHeartbeat},
+	}
+	for _, g := range gaps {
+		ds := health.DaemonState{Diagnosis: health.Diagnosis{State: g.state}}
+		if level, _, _ := daemonStatusStyle(ds); level != orchestrator.HealthcheckSetupLevelWarn {
+			t.Fatalf("%s level = %v, want HealthcheckSetupLevelWarn", g.name, level)
+		}
+	}
+}
+
+// TestRenderDaemonStatusLevel: the colored-keyword renderer prefixes the success symbol for Ok
+// and the warning symbol for Warn (same palette as the Telegram/Healthchecks screens), and emits
+// no symbol for the Neutral pre-check level.
+func TestRenderDaemonStatusLevel(t *testing.T) {
+	ok := ansi.Strip(renderDaemonStatusLevel(orchestrator.HealthcheckSetupLevelOk, "running"))
+	if !strings.Contains(ok, theme.SymbolSuccess) || !strings.Contains(ok, "running") {
+		t.Fatalf("Ok render = %q, want success symbol + text", ok)
+	}
+	warn := ansi.Strip(renderDaemonStatusLevel(orchestrator.HealthcheckSetupLevelWarn, "behind - restart needed"))
+	if !strings.Contains(warn, theme.SymbolWarning) || !strings.Contains(warn, "behind - restart needed") {
+		t.Fatalf("Warn render = %q, want warning symbol + text", warn)
+	}
+	neutral := ansi.Strip(renderDaemonStatusLevel(orchestrator.HealthcheckSetupLevelNeutral, "not checked"))
+	if strings.ContainsAny(neutral, theme.SymbolSuccess+theme.SymbolWarning+theme.SymbolError) {
+		t.Fatalf("Neutral render = %q, want no symbol", neutral)
+	}
+}
+
+// TestBuildDaemonStatusPrompt: the styled prompt carries the "Status: " header, the colored
+// keyword, the explanation, and the Details block (including the version + BEHIND alignment line
+// for a behind daemon) -- the same content the old Notice body carried, now above the selector.
+func TestBuildDaemonStatusPrompt(t *testing.T) {
+	behind := health.DaemonState{
+		HaveInfo:     true,
+		Version:      "1.2.3",
+		Commit:       "abc1234",
+		AlignChecked: true,
+		Aligned:      false,
+		Active:       true,
+		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
+	}
+	level, keyword, expl := daemonStatusStyle(behind)
+	prompt := ansi.Strip(buildDaemonStatusPrompt(level, keyword, expl, "daemon", "installed", "active", "no", behind))
+	for _, want := range []string{
+		"Status: ",
+		keyword,
+		expl,
+		"Details:",
+		"Scheduler mode: daemon",
+		"Daemon service (proxsave-daemon.service): installed",
+		"Service state (systemctl is-active): active",
+		"Opted out of auto-migration (--daemon-remove): no",
+		"Running version: 1.2.3 (abc1234)",
+		"Binary alignment: BEHIND (restart needed)",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+}
+
 // TestDaemonStatusStyleBehindWithoutRecord: the record-less-but-stale daemon (HaveInfo=false, but
 // alignment determined by the /proc fallback) must now render "behind - restart needed". This is the
 // core of the fix: before, the behind gate required HaveInfo, so a record-less stale daemon read
@@ -231,9 +311,9 @@ func TestDaemonStatusStyleBehindWithoutRecord(t *testing.T) {
 		Active:       true,
 		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
 	}
-	kind, outcome, expl := daemonStatusStyle(behind)
-	if kind != components.NoticeWarning {
-		t.Fatalf("behind kind = %v, want NoticeWarning", kind)
+	level, outcome, expl := daemonStatusStyle(behind)
+	if level != orchestrator.HealthcheckSetupLevelWarn {
+		t.Fatalf("behind level = %v, want HealthcheckSetupLevelWarn", level)
 	}
 	if outcome != "behind - restart needed" {
 		t.Fatalf("record-less behind outcome = %q, want %q", outcome, "behind - restart needed")
@@ -251,8 +331,8 @@ func TestDaemonStatusStyleBehindWithoutRecord(t *testing.T) {
 	}
 }
 
-// TestDashboardDaemonStatusLoopsBack: Daemon status shows a read-only notice in
-// the live session and returns to the menu, setting no flag.
+// TestDashboardDaemonStatusLoopsBack: Daemon status shows the styled selector screen in the
+// live session; Back (esc) returns to the menu, setting no flag.
 func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 	installDashboardGates(t, true, true) // stubs cron -> Install daemon + Daemon status
 	// Deterministic systemd verdict (avoid a real systemctl call): unit absent.
@@ -270,8 +350,8 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 	}()
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down down down down down enter") // Daemon status (11 downs)
-	driver.waitScreen("Daemon: not installed")                                  // the styled outcome notice
-	driver.keys("enter")                                                        // dismiss
+	driver.waitScreen("Daemon status")                                          // the styled selector screen
+	driver.keys("esc")                                                          // Back to the menu
 	driver.waitScreen("Dashboard")                                              // back at the menu
 	driver.keys("esc")                                                          // exit
 	select {

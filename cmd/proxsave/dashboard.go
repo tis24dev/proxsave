@@ -23,6 +23,7 @@ import (
 	flowinstall "github.com/tis24dev/proxsave/internal/ui/flows/install"
 	"github.com/tis24dev/proxsave/internal/ui/flows/menu"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // dashboardIdleTimeout bounds how long the dashboard waits for a choice.
@@ -342,60 +343,135 @@ func dashboardDaemonState(args *cli.Args) menu.DaemonState {
 	}
 }
 
-// runDashboardDaemonStatus is a read-only, auto-on-entry check (no button), styled like
-// the other diagnostics: a colored outcome keyword (from the daemon's REAL combined state
-// - systemd existence refined with the heartbeat, the SAME verdict the run/healthcheck
-// checks use) plus a description of the scheduler details. The notice severity colors the
-// title/border so the outcome reads at a glance.
+// daemonStatusAction is the choice on the daemon-status screen: re-run the state check,
+// or return to the dashboard menu (mirrors healthcheckAction / telegramAction).
+type daemonStatusAction int
+
+const (
+	daemonStatusActionCheck daemonStatusAction = iota
+	daemonStatusActionBack
+)
+
+// runDashboardDaemonStatus shows the daemon-status screen with the SAME look as the Telegram
+// and Healthchecks check screens: a styled prompt (a colored "Status:" keyword + explanation +
+// a Details block) presented ABOVE a Check/Back selector. Check re-computes the state (so after
+// the user restarts the daemon elsewhere it flips to aligned/running), Back/esc returns to the
+// menu. The verdict comes from the daemon's REAL combined state (systemd existence refined with
+// the heartbeat + on-disk binary alignment, the SAME verdict the run/healthcheck checks use), so
+// this screen and the healthcheck checks can never disagree.
 func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, configPath, baseDir string) {
-	mode := "unknown"
-	optOut := "unknown"
-	var interval time.Duration
-	if cfg, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && cfg != nil {
-		mode = cfg.SchedulerMode
-		optOut = "no"
-		if cfg.DaemonOptOut {
-			optOut = "yes"
+	errDaemonStatusEsc := errors.New("daemon status: esc")
+	for {
+		mode := "unknown"
+		optOut := "unknown"
+		var interval time.Duration
+		if cfg, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && cfg != nil {
+			mode = cfg.SchedulerMode
+			optOut = "no"
+			if cfg.DaemonOptOut {
+				optOut = "yes"
+			}
+			interval = cfg.HealthcheckHeartbeatInterval
 		}
-		interval = cfg.HealthcheckHeartbeatInterval
+		unit := "not installed"
+		if daemonUnitInstalled() {
+			unit = "installed"
+		}
+		active := daemonUnitActiveState(ctx)
+		if active == "" {
+			active = "unknown"
+		}
+
+		// Combined verdict via the SHARED daemon-state checker (systemd existence refined onto the
+		// heartbeat, plus on-disk binary alignment). probeProxsaveDaemonAlive is the stricter signal-0
+		// + /proc/cmdline liveness gate. The raw unit/active words stay from the direct probes so the
+		// systemctl vocabulary is shown verbatim. This is IDENTICAL to before -- presentation only.
+		ds := health.CheckDaemonState(health.DaemonStateInput{
+			BaseDir:           baseDir,
+			SchedulerMode:     mode,
+			HeartbeatInterval: interval,
+			Now:               time.Now(),
+			Presence:          daemonPresenceProbe(ctx),
+			ProcAlive:         probeProxsaveDaemonAlive,
+			ProcStale:         procBinaryStaleProbe,
+		})
+		level, keyword, explanation := daemonStatusStyle(ds)
+		prompt := buildDaemonStatusPrompt(level, keyword, explanation, mode, unit, active, optOut, ds)
+
+		items := []components.SelectorItem[daemonStatusAction]{
+			{Label: "Check", Description: "re-check the daemon state", Value: daemonStatusActionCheck},
+			{Label: "Back", Description: "return to the dashboard menu", Value: daemonStatusActionBack},
+		}
+
+		action, err := shell.Ask(ctx, session, components.NewSelector(
+			"Daemon status", items,
+			components.WithSelectorPromptStyled[daemonStatusAction](prompt),
+			components.WithSelectorBack[daemonStatusAction](errDaemonStatusEsc),
+		))
+		if err != nil {
+			// Esc/abort or any UI failure returns to the menu: this screen is non-blocking.
+			return
+		}
+		switch action {
+		case daemonStatusActionBack:
+			return
+		case daemonStatusActionCheck:
+			// Loop: recompute the state so a restart done elsewhere shows up on the next render.
+		}
 	}
-	unit := "not installed"
-	if daemonUnitInstalled() {
-		unit = "installed"
+}
+
+// renderDaemonStatusLevel is the colored-keyword renderer for the daemon-status "Status:" line.
+// It replicates renderHealthcheckLevel (package-private to install) with the SAME theme constants,
+// so the two screens are visually identical: green ✓ (Ok), red ✗ (Error), yellow ⚠ (Warn), and
+// yellow with NO symbol (Neutral). The daemon screen only ever emits Ok/Warn today.
+func renderDaemonStatusLevel(level orchestrator.HealthcheckSetupLevel, text string) string {
+	switch level {
+	case orchestrator.HealthcheckSetupLevelOk:
+		return theme.SuccessText.Render(theme.SymbolSuccess + " " + text)
+	case orchestrator.HealthcheckSetupLevelError:
+		return theme.ErrorText.Render(theme.SymbolError + " " + text)
+	case orchestrator.HealthcheckSetupLevelNeutral:
+		return theme.WarningText.Render(text)
+	default: // HealthcheckSetupLevelWarn
+		return theme.WarningText.Render(theme.SymbolWarning + " " + text)
 	}
-	active := daemonUnitActiveState(ctx)
-	if active == "" {
-		active = "unknown"
+}
+
+// buildDaemonStatusPrompt renders the styled prompt shown above the Check/Back choices (mirrors
+// buildHealthcheckPrompt): a short intro, a two-line Status block (a colored keyword + a Subtle
+// explanation), then a Details block with the scheduler/service facts. The wording/logic of the
+// detail lines is unchanged from the old Notice body; only the presentation moved into the prompt.
+func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation, mode, unit, active, optOut string, ds health.DaemonState) string {
+	var b strings.Builder
+	b.WriteString(theme.Text.Render("Resident backup daemon (runs scheduled backups + healthchecks reporting)."))
+	b.WriteString("\n\n")
+
+	b.WriteString(theme.Text.Render("Status: "))
+	b.WriteString(renderDaemonStatusLevel(level, keyword))
+	if explanation != "" {
+		b.WriteString("\n")
+		b.WriteString(theme.Subtle.Render(explanation))
 	}
 
-	// Combined verdict via the SHARED daemon-state checker (systemd existence refined onto the
-	// heartbeat, plus on-disk binary alignment), so this screen and the healthcheck checks can
-	// never disagree about the daemon. probeProxsaveDaemonAlive is the stricter signal-0 +
-	// /proc/cmdline liveness gate. The raw unit/active words above stay from the direct probes
-	// so the systemctl vocabulary is shown verbatim.
-	ds := health.CheckDaemonState(health.DaemonStateInput{
-		BaseDir:           baseDir,
-		SchedulerMode:     mode,
-		HeartbeatInterval: interval,
-		Now:               time.Now(),
-		Presence:          daemonPresenceProbe(ctx),
-		ProcAlive:         probeProxsaveDaemonAlive,
-		ProcStale:         procBinaryStaleProbe,
-	})
-	kind, outcome, explanation := daemonStatusStyle(ds)
-
-	body := explanation + "\n\n" +
-		"Scheduler mode: " + mode + "\n" +
-		"Daemon service (proxsave-daemon.service): " + unit + "\n" +
-		"Service state (systemctl is-active): " + active + "\n" +
-		"Opted out of auto-migration (--daemon-remove): " + optOut
+	b.WriteString("\n\n")
+	b.WriteString(theme.Text.Render("Details:"))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("Scheduler mode: " + mode))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("Daemon service (proxsave-daemon.service): " + unit))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + active))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("Opted out of auto-migration (--daemon-remove): " + optOut))
 	// The running version comes from the identity record (HaveInfo). The alignment verdict comes from
 	// the record-independent /proc probe, so show it whenever AlignChecked -- a live daemon on a
 	// replaced binary reads "Binary alignment: BEHIND". Binary alignment is known only when
 	// AlignChecked; otherwise it is UNKNOWN -- report "unknown" rather than imply "aligned" or a false
 	// "behind".
 	if ds.HaveInfo {
-		body += "\n" + "Running version: " + ds.Version + " (" + ds.Commit + ")"
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Running version: " + ds.Version + " (" + ds.Commit + ")"))
 	}
 	if ds.HaveInfo || ds.AlignChecked {
 		align := "unknown"
@@ -407,37 +483,39 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 		default:
 			align = "BEHIND (restart needed)"
 		}
-		body += "\n" + "Binary alignment: " + align
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Binary alignment: " + align))
 	}
-	_, _ = shell.Ask(ctx, session, components.NewNotice(kind, "Daemon: "+outcome, body))
+	return b.String()
 }
 
-// daemonStatusStyle maps a composed daemon state to the dashboard notice severity, a short
-// outcome keyword for the (colored) title, and a one-line explanation. Green only when the
-// daemon is actually alive and beating; every gap is a yellow warning. It shares health's
-// state vocabulary so the daemon-status screen agrees with the run/healthcheck checks by
-// construction. The "behind" verdict (running an older binary than the one now on disk) is
-// checked FIRST and is DISTINCT from the heartbeat-derived "running, not reporting" below.
-func daemonStatusStyle(ds health.DaemonState) (components.NoticeKind, string, string) {
+// daemonStatusStyle maps a composed daemon state to a shared HealthcheckSetupLevel (the SAME
+// palette the Telegram/Healthchecks screens use), a short outcome keyword, and a one-line
+// explanation. Green (Ok) only when the daemon is actually alive and beating; every gap is a
+// yellow warning (Warn). It shares health's state vocabulary so the daemon-status screen agrees
+// with the run/healthcheck checks by construction. The "behind" verdict (running an older binary
+// than the one now on disk) is checked FIRST and is DISTINCT from the heartbeat-derived
+// "running, not reporting" below. There is no red/Error daemon state today; all gaps stay Warn.
+func daemonStatusStyle(ds health.DaemonState) (orchestrator.HealthcheckSetupLevel, string, string) {
 	// AlignChecked already implies alignment was actually determined by the record-independent /proc
 	// probe, so it is the sole correct gate here; a record (HaveInfo) is not required, which is
 	// exactly what lets any live daemon on a replaced binary read as behind instead of a false GREEN.
 	if ds.AlignChecked && !ds.Aligned && (ds.Active || ds.ProcessAlive) {
-		return components.NoticeWarning, "behind - restart needed", "The daemon is running an older binary than the one now on disk; restart it to load the update."
+		return orchestrator.HealthcheckSetupLevelWarn, "behind - restart needed", "The daemon is running an older binary than the one now on disk; restart it to load the update."
 	}
 	switch ds.TxState() {
 	case health.TxNotInstalled:
-		return components.NoticeWarning, "not installed", "The resident daemon service is not installed; backups run from cron."
+		return orchestrator.HealthcheckSetupLevelWarn, "not installed", "The resident daemon service is not installed; backups run from cron."
 	case health.TxNotActive:
-		return components.NoticeWarning, "not running", "The daemon service is installed but stopped."
+		return orchestrator.HealthcheckSetupLevelWarn, "not running", "The daemon service is installed but stopped."
 	case health.TxRunningNoReport:
-		return components.NoticeWarning, "running, not reporting", "The daemon is running but has not written a heartbeat; it may be a stale build that needs a restart."
+		return orchestrator.HealthcheckSetupLevelWarn, "running, not reporting", "The daemon is running but has not written a heartbeat; it may be a stale build that needs a restart."
 	case health.TxStale:
-		return components.NoticeWarning, "stale", "The daemon's last heartbeat is old; it may be stuck or stopped."
+		return orchestrator.HealthcheckSetupLevelWarn, "stale", "The daemon's last heartbeat is old; it may be stuck or stopped."
 	case health.TxNoHeartbeat:
-		return components.NoticeWarning, "not running", "No daemon heartbeat was found on this host."
+		return orchestrator.HealthcheckSetupLevelWarn, "not running", "No daemon heartbeat was found on this host."
 	default: // fresh heartbeat: the daemon process is alive and beating.
-		return components.NoticeSuccess, "running", "The daemon is running and beating on schedule."
+		return orchestrator.HealthcheckSetupLevelOk, "running", "The daemon is running and beating on schedule."
 	}
 }
 
