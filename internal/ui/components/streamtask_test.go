@@ -130,6 +130,32 @@ func TestStreamScreenBoundedRingDropsOldest(t *testing.T) {
 	}
 }
 
+func TestStreamScreenSkipsBlankLines(t *testing.T) {
+	scr := newStreamScreen("Finalizing", 1, func() {})
+	scr.Update(StreamLineMsg{Token: 1, Line: "real-line"}) //nolint:errcheck
+	scr.Update(StreamLineMsg{Token: 1, Line: ""})          //nolint:errcheck
+	scr.Update(StreamLineMsg{Token: 1, Line: "   "})       //nolint:errcheck
+	scr.Update(StreamLineMsg{Token: 1, Line: "\t"})        //nolint:errcheck
+	if len(scr.lines) != 1 {
+		t.Fatalf("blank lines were appended: got %d lines, want 1", len(scr.lines))
+	}
+	if !strings.Contains(scr.View(80, 40), "real-line") {
+		t.Fatalf("real line missing from view")
+	}
+}
+
+func TestStreamScreenEscShowsCancelling(t *testing.T) {
+	cancelled := false
+	scr := newStreamScreen("Finalizing", 1, func() { cancelled = true })
+	scr.Update(shell.KeyMsg("esc")) //nolint:errcheck
+	if !cancelled {
+		t.Fatal("esc must cancel the task context")
+	}
+	if !strings.Contains(scr.View(80, 40), "cancelling") {
+		t.Fatalf("esc must show a cancelling indicator:\n%s", scr.View(80, 40))
+	}
+}
+
 func TestRunStreamTaskDriverSuccess(t *testing.T) {
 	s := testSession(t)
 	ran := false
