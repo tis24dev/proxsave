@@ -60,14 +60,14 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 	if collectErr != nil {
 		result.CollectErr = collectErr
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelWarn,
-			"check failed", fmt.Sprintf("Non-blocking: %v", collectErr))
+			"check failed", fmt.Sprintf("Non-blocking: %v", collectErr), backToMenu)
 		return result, nil
 	}
 	result.Suggestions = suggestions
 
 	if len(suggestions) == 0 {
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelOk,
-			"no unused components", "")
+			"no unused components", "", backToMenu)
 		return result, nil
 	}
 
@@ -95,19 +95,19 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 	}
 	if len(keys) == 0 {
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelNeutral,
-			"no changes", "No components were selected; nothing was modified.")
+			"no changes", "No components were selected; nothing was modified.", backToMenu)
 		return result, nil
 	}
 
 	if err := installer.ApplyAuditDisables(configPath, keys); err != nil {
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelError,
-			"update failed", err.Error())
+			"update failed", err.Error(), backToMenu)
 		return result, nil
 	}
 	result.AppliedKeys = normalizeAuditKeys(keys)
 	showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelOk,
 		"updated", fmt.Sprintf("Disabled %d component(s): %s",
-			len(result.AppliedKeys), strings.Join(result.AppliedKeys, ", ")))
+			len(result.AppliedKeys), strings.Join(result.AppliedKeys, ", ")), backToMenu)
 	return result, nil
 }
 
@@ -123,14 +123,20 @@ const auditResultActionBack auditResultAction = iota
 // only when the explanation is non-empty, a blank line then a Subtle explanation, above a
 // single Back item. These are non-blocking informational outcomes (exactly like the Notices
 // they replaced): the result and any esc/abort are swallowed, never propagated as an error.
-func showAuditResult(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation string) {
+func showAuditResult(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation string, backToMenu bool) {
 	errAuditResultEsc := errors.New("post-install audit result: esc")
 	prompt := theme.Text.Render("Status: ") + renderHealthcheckLevel(level, keyword)
 	if explanation != "" {
 		prompt += "\n\n" + theme.Subtle.Render(explanation)
 	}
+	// Mirror the Telegram/healthcheck check screens' leave item: the install flow
+	// continues forward ("Continue"); the dashboard returns to its menu ("Back").
+	leaveLabel, leaveDesc := "Continue", "continue the install"
+	if backToMenu {
+		leaveLabel, leaveDesc = "Back", "return to the dashboard menu"
+	}
 	items := []components.SelectorItem[auditResultAction]{
-		{Label: "Back", Description: "return to the install flow", Value: auditResultActionBack},
+		{Label: leaveLabel, Description: leaveDesc, Value: auditResultActionBack},
 	}
 	_, _ = shell.Ask(ctx, session, components.NewSelector(
 		title, items,
