@@ -129,9 +129,32 @@ func (d *daemon) run(ctx context.Context) int {
 	if err := health.WriteDaemonPID(d.cfg.BaseDir, os.Getpid()); err != nil {
 		logging.Debug("daemon: write pid file failed: %v", err)
 	}
+	// Alongside the bare pid (the SIGUSR1 handoff contract), record the daemon's IDENTITY -- the
+	// binary it booted from, version/commit, start time -- in the companion .daemon_info.json, so a
+	// later reader can tell whether the running daemon is still aligned with the on-disk binary or is
+	// behind (an in-place upgrade replaced the file without a restart). Best-effort: neither the hash
+	// nor the write may fail startup. A hash error still writes the record with an EMPTY Binary
+	// (which reads as "alignment unknown"), and a write hiccup is only Debug-logged.
+	binID, binErr := health.ComputeBinaryIdentity(d.execPath)
+	if binErr != nil {
+		logging.Debug("daemon: compute binary identity failed: %v", binErr)
+	}
+	if err := health.WriteDaemonInfo(d.cfg.BaseDir, health.DaemonInfo{
+		PID:      os.Getpid(),
+		ExecPath: d.execPath,
+		Binary:   binID,
+		Version:  version.String(),
+		Commit:   version.Commit,
+		StartTS:  d.now().Unix(),
+	}); err != nil {
+		logging.Debug("daemon: write daemon info failed: %v", err)
+	}
 	defer func() {
 		if err := health.RemoveDaemonPID(d.cfg.BaseDir); err != nil {
 			logging.Debug("daemon: remove pid file failed: %v", err)
+		}
+		if err := health.RemoveDaemonInfo(d.cfg.BaseDir); err != nil {
+			logging.Debug("daemon: remove daemon info failed: %v", err)
 		}
 	}()
 
