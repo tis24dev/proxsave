@@ -21,9 +21,10 @@ type HealthcheckSetupEligibility int
 const (
 	HealthcheckSetupEligibilityUnknown HealthcheckSetupEligibility = iota
 	HealthcheckSetupEligibleCentralized
+	HealthcheckSetupEligibleSelf            // self mode with a collected alive ping URL: reachability check only
 	HealthcheckSetupSkipDisabled            // cron mode / HEALTHCHECK_ENABLED=false
 	HealthcheckSetupSkipConfigError         // config failed to load
-	HealthcheckSetupSkipSelfMode            // self mode: no centralized portal/magic-link
+	HealthcheckSetupSkipSelfMode            // self mode but no alive URL collected yet (params screen not run)
 	HealthcheckSetupSkipIdentityUnavailable // no ServerID or no relay secret on disk
 )
 
@@ -37,6 +38,10 @@ type HealthcheckSetupBootstrap struct {
 	HealthcheckEnabled bool
 	HealthcheckMode    string
 	ServerAPIHost      string
+
+	// HealthcheckAliveURL is the self-mode full service-alive ping URL (cfg.HealthcheckAliveURL).
+	// It is the sole input the self reachability check needs; centralized mode leaves it empty.
+	HealthcheckAliveURL string
 
 	// HealthcheckHeartbeatInterval is the daemon's configured heartbeat period; the
 	// connection check needs it to judge (via health.Diagnose) whether the daemon's last
@@ -78,6 +83,7 @@ func BuildHealthcheckSetupBootstrap(configPath, baseDir string) (HealthcheckSetu
 		state.HealthcheckMode = strings.ToLower(strings.TrimSpace(cfg.HealthcheckMode))
 		state.ServerAPIHost = strings.TrimSpace(cfg.ServerAPIHost)
 		state.HealthcheckHeartbeatInterval = cfg.HealthcheckHeartbeatInterval
+		state.HealthcheckAliveURL = strings.TrimSpace(cfg.HealthcheckAliveURL)
 	}
 
 	if !state.HealthcheckEnabled {
@@ -91,7 +97,14 @@ func BuildHealthcheckSetupBootstrap(configPath, baseDir string) (HealthcheckSetu
 		state.ServerAPIHost = defaultServerAPIHost
 	}
 	if state.HealthcheckMode == "self" {
-		state.Eligibility = HealthcheckSetupSkipSelfMode
+		// Self mode needs no centralized identity (no ServerID / relay secret): the
+		// check is pure reachability of the user's own alive URL. Return BEFORE the
+		// identity checks. When the params screen has not run yet (no alive URL), skip.
+		if state.HealthcheckAliveURL != "" {
+			state.Eligibility = HealthcheckSetupEligibleSelf
+		} else {
+			state.Eligibility = HealthcheckSetupSkipSelfMode
+		}
 		return state, nil
 	}
 

@@ -130,10 +130,11 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 		resCh <- result{data, err}
 	}()
 
-	// Single aligned form: inactive dependent rows are skipped, so Enter
-	// through the 8 active rows reaches Continue; the final Enter submits.
+	// Single aligned form: inactive dependent rows are skipped. Fresh install
+	// defaults to the daemon, so the Healthchecks row is active too: Enter through
+	// the 9 active rows reaches Continue; the final Enter submits.
 	d.waitScreen("Configuration")
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 10; i++ {
 		d.keys("enter")
 	}
 
@@ -144,6 +145,10 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	data := res.data
 	if data.EnableSecondaryStorage || data.EnableCloudStorage || data.EnableEncryption {
 		t.Fatalf("decline-all produced enabled toggles: %+v", data)
+	}
+	// Fresh daemon default: Healthchecks defaults to centralized.
+	if data.SchedulerMode != "daemon" || data.HealthcheckMode != "centralized" {
+		t.Fatalf("fresh daemon must default Healthchecks to centralized: mode=%q hc=%q", data.SchedulerMode, data.HealthcheckMode)
 	}
 	if data.NotificationMode != "none" {
 		t.Fatalf("notification mode = %q, want none", data.NotificationMode)
@@ -267,6 +272,104 @@ func TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron(t *testing.T) {
 	if res.data.SchedulerMode != "cron" {
 		t.Fatalf("editing a config without SCHEDULER_MODE must default to cron, got %q", res.data.SchedulerMode)
 	}
+}
+
+// collectWizardAsync runs CollectWizardData on baseTemplate and returns a channel
+// with the result so a driver can script keys against the form.
+func collectWizardAsync(t *testing.T, d *driver, baseTemplate string) chan struct {
+	data *installer.InstallWizardData
+	err  error
+} {
+	t.Helper()
+	resCh := make(chan struct {
+		data *installer.InstallWizardData
+		err  error
+	}, 1)
+	go func() {
+		data, err := CollectWizardData(context.Background(), d.session, baseTemplate)
+		resCh <- struct {
+			data *installer.InstallWizardData
+			err  error
+		}{data, err}
+	}()
+	return resCh
+}
+
+// TestCollectWizardDataHealthcheckSelect exercises the new Healthchecks FieldSelect:
+// on a fresh (daemon) install the row is active and cycles off/centralized/self, and
+// switching the scheduler to cron dims it and forces the mode off.
+func TestCollectWizardDataHealthcheckSelect(t *testing.T) {
+	// Self: from the daemon default (centralized) press right once -> self.
+	t.Run("daemon_self", func(t *testing.T) {
+		d := newDriver(t)
+		resCh := collectWizardAsync(t, d, "")
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down down")  // 7 downs -> Healthchecks row
+		d.keys("right")                               // centralized -> self
+		d.keys("down down down down down down enter") // to Continue, submit
+		res := <-resCh
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+		if res.data.SchedulerMode != "daemon" || res.data.HealthcheckMode != "self" {
+			t.Fatalf("mode=%q hc=%q, want daemon/self", res.data.SchedulerMode, res.data.HealthcheckMode)
+		}
+	})
+
+	// Off: from the daemon default (centralized) press left once -> off.
+	t.Run("daemon_off", func(t *testing.T) {
+		d := newDriver(t)
+		resCh := collectWizardAsync(t, d, "")
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down down") // 7 downs -> Healthchecks row
+		d.keys("left")                               // centralized -> off
+		d.keys("down down down down down down enter")
+		res := <-resCh
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+		if res.data.HealthcheckMode != "off" {
+			t.Fatalf("hc=%q, want off", res.data.HealthcheckMode)
+		}
+	})
+
+	// Cron forces off: switch the scheduler (row 6) to cron; the Healthchecks row
+	// then dims and the collected mode is forced off regardless of its select.
+	t.Run("cron_forces_off", func(t *testing.T) {
+		d := newDriver(t)
+		resCh := collectWizardAsync(t, d, "")
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down") // 6 downs -> Scheduler row
+		d.keys("right")                         // daemon -> cron
+		d.keys("down down down down down down enter")
+		res := <-resCh
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+		if res.data.SchedulerMode != "cron" || res.data.HealthcheckMode != "off" {
+			t.Fatalf("mode=%q hc=%q, want cron/off", res.data.SchedulerMode, res.data.HealthcheckMode)
+		}
+	})
+
+	// Prefill round-trip: an existing daemon+self config prefills the row to self and
+	// a no-op edit preserves it.
+	t.Run("prefill_self_roundtrip", func(t *testing.T) {
+		d := newDriver(t)
+		template := config.DefaultEnvTemplate()
+		template = installer.SetEnvValueInTemplate(template, "SCHEDULER_MODE", "daemon")
+		template = installer.SetEnvValueInTemplate(template, "HEALTHCHECK_ENABLED", "true")
+		template = installer.SetEnvValueInTemplate(template, "HEALTHCHECK_MODE", "self")
+		resCh := collectWizardAsync(t, d, template)
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down down down down down down down enter") // spam to Continue + submit
+		res := <-resCh
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+		if res.data.SchedulerMode != "daemon" || res.data.HealthcheckMode != "self" {
+			t.Fatalf("prefill lost: mode=%q hc=%q, want daemon/self", res.data.SchedulerMode, res.data.HealthcheckMode)
+		}
+	})
 }
 
 func TestCollectWizardDataEscCancels(t *testing.T) {

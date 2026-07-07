@@ -20,6 +20,7 @@ import (
 var (
 	healthcheckBuildBootstrap = orchestrator.BuildHealthcheckSetupBootstrap
 	healthcheckCheck          = orchestrator.CheckHealthcheckConnection
+	healthcheckSelfCheck      = orchestrator.CheckHealthcheckSelfConnection
 )
 
 type healthcheckAction int
@@ -45,10 +46,16 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 		HealthcheckSetupBootstrap: state,
 		Shown:                     true,
 	}
-	if result.Eligibility != orchestrator.HealthcheckSetupEligibleCentralized {
+	// Both centralized (portal magic-link + full diagnosis) and self (pure
+	// reachability of the user's own alive URL) render this screen; every other
+	// verdict renders nothing. selfMode swaps the check seam, the classifier, and
+	// the intro copy - the magic-link box and sensor list stay naturally empty.
+	if result.Eligibility != orchestrator.HealthcheckSetupEligibleCentralized &&
+		result.Eligibility != orchestrator.HealthcheckSetupEligibleSelf {
 		result.Shown = false
 		return result, nil
 	}
+	selfMode := result.Eligibility == orchestrator.HealthcheckSetupEligibleSelf
 
 	statusKeyword := "NOT CHECKED"
 	statusExplanation := "Choose Check to verify the monitoring connection."
@@ -58,7 +65,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 	errHCEsc := errors.New("healthcheck setup: esc")
 
 	for {
-		prompt := buildHealthcheckPrompt(magicLink, statusKeyword, statusExplanation, statusLevel, sensors)
+		prompt := buildHealthcheckPrompt(selfMode, magicLink, statusKeyword, statusExplanation, statusLevel, sensors)
 
 		items := make([]components.SelectorItem[healthcheckAction], 0, 3)
 		if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
@@ -101,7 +108,11 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 			var res orchestrator.HealthcheckCheckResult
 			cancelled := false
 			runErr := components.RunTask(ctx, session, "Checking monitoring", "Contacting the monitor...", func(taskCtx context.Context, report func(string)) error {
-				res = healthcheckCheck(taskCtx, result.ServerAPIHost, result.ServerID, baseDir, result.HealthcheckHeartbeatInterval)
+				if selfMode {
+					res = healthcheckSelfCheck(taskCtx, result.HealthcheckAliveURL)
+				} else {
+					res = healthcheckCheck(taskCtx, result.ServerAPIHost, result.ServerID, baseDir, result.HealthcheckHeartbeatInterval)
+				}
 				if taskCtx.Err() != nil {
 					cancelled = true
 				}
@@ -120,7 +131,12 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 			} else {
 				sensors = nil
 			}
-			st := orchestrator.ClassifyHealthcheckSetupResult(res)
+			var st orchestrator.HealthcheckSetupState
+			if selfMode {
+				st = orchestrator.ClassifyHealthcheckSelfResult(res)
+			} else {
+				st = orchestrator.ClassifyHealthcheckSetupResult(res)
+			}
 			result.LastFatal = st.Fatal
 			result.LastMessage = st.Message
 			if link := strings.TrimSpace(st.LoginURL); link != "" {
@@ -154,13 +170,19 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 // on a hard blocker, yellow otherwise) on the first line and its plain-language
 // explanation on the second. The magic link is already sanitized upstream
 // (serverbot.SanitizeLoginURL: http(s), printable ASCII).
-func buildHealthcheckPrompt(magicLink, keyword, explanation string, level orchestrator.HealthcheckSetupLevel, sensors []health.SensorRow) string {
+func buildHealthcheckPrompt(selfMode bool, magicLink, keyword, explanation string, level orchestrator.HealthcheckSetupLevel, sensors []health.SensorRow) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Backup monitoring (healthchecks) is enabled for this host."))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("It reports each backup outcome + a liveness heartbeat to an external"))
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("monitor, so a silent failure (crash, hang, host down) is still caught."))
+	if selfMode {
+		b.WriteString(theme.Text.Render("Self mode: the daemon reports to YOUR own healthchecks server using the"))
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("ping URLs you entered. The check below verifies that alive URL is reachable."))
+	} else {
+		b.WriteString(theme.Text.Render("It reports each backup outcome + a liveness heartbeat to an external"))
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("monitor, so a silent failure (crash, hang, host down) is still caught."))
+	}
 	b.WriteString("\n\n")
 
 	if magicLink != "" {

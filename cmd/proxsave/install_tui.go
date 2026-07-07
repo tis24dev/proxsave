@@ -262,10 +262,28 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			}
 		}
 
-		// Healthchecks setup: when the daemon engine (centralized monitoring) was
-		// chosen, guide the user + show the portal magic-link + a connection check.
-		// Eligibility is decided solely by RunHealthcheckSetup (re-reads the written
-		// HEALTHCHECK_ENABLED/mode + identity/secret); Shown=false with no UI otherwise.
+		// Self-mode healthchecks: collect the ping URLs BEFORE the healthcheck
+		// bootstrap re-reads the config (ordering invariant - eligibility keys off the
+		// written HEALTHCHECK_ALIVE_URL). Only when self was chosen in the wizard.
+		if wizardData != nil && wizardData.HealthcheckMode == "self" {
+			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "healthcheck self params")
+			if hcParamsErr := flowinstall.RunHealthcheckSelfParams(ctx, session, baseDir, configPath); hcParamsErr != nil {
+				if errors.Is(hcParamsErr, installer.ErrInstallCancelled) {
+					return wrapInstallError(errInteractiveAborted)
+				}
+				if mapped := mapUIDeath(hcParamsErr); errors.Is(mapped, errInteractiveAborted) {
+					return mapped
+				}
+				if bootstrap != nil {
+					bootstrap.Warning("Healthcheck self params failed (non-blocking): %v", hcParamsErr)
+				}
+			}
+		}
+
+		// Healthchecks setup: when the daemon engine with monitoring was chosen, guide
+		// the user + (centralized) show the portal magic-link + a connection check, or
+		// (self) verify the pasted alive URL is reachable. Eligibility is decided solely
+		// by RunHealthcheckSetup (re-reads the written config); Shown=false with no UI otherwise.
 		hcRes, hcErr := flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath, false)
 		if hcErr != nil && bootstrap != nil {
 			bootstrap.Warning("Healthcheck setup failed (non-blocking): %v", hcErr)

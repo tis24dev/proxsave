@@ -3,23 +3,101 @@ package main
 import (
 	"bufio"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
 
 func stubHealthcheckSetupCLIDeps(t *testing.T) {
 	t.Helper()
-	ob, oc, op := healthcheckSetupBuildBootstrap, healthcheckSetupCheck, healthcheckSetupPromptYesNo
+	ob, oc, os, op := healthcheckSetupBuildBootstrap, healthcheckSetupCheck, healthcheckSetupSelfCheck, healthcheckSetupPromptYesNo
 	t.Cleanup(func() {
 		healthcheckSetupBuildBootstrap = ob
 		healthcheckSetupCheck = oc
+		healthcheckSetupSelfCheck = os
 		healthcheckSetupPromptYesNo = op
 	})
+}
+
+// TestRunHealthcheckSetupCLI_SelfBranch verifies the self path uses the reachability
+// seam (not the centralized check), renders REACHABLE with no magic-link, and passes
+// the bootstrap alive URL through - the SAME keyword/level the TUI self branch shows.
+func TestRunHealthcheckSetupCLI_SelfBranch(t *testing.T) {
+	stubHealthcheckSetupCLIDeps(t)
+	centralizedCalled := false
+	var gotURL string
+	healthcheckSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+		return orchestrator.HealthcheckSetupBootstrap{
+			Eligibility:         orchestrator.HealthcheckSetupEligibleSelf,
+			HealthcheckMode:     "self",
+			HealthcheckAliveURL: "https://hc-ping.com/alive-uuid",
+		}, nil
+	}
+	healthcheckSetupPromptYesNo = func(ctx context.Context, r *bufio.Reader, q string, d bool) (bool, error) {
+		return true, nil // "Check now? yes"
+	}
+	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string, hbInterval time.Duration) orchestrator.HealthcheckCheckResult {
+		centralizedCalled = true
+		return orchestrator.HealthcheckCheckResult{}
+	}
+	healthcheckSetupSelfCheck = func(ctx context.Context, aliveURL string) orchestrator.HealthcheckCheckResult {
+		gotURL = aliveURL
+		return orchestrator.HealthcheckCheckResult{Reachable: true}
+	}
+	out := captureStdout(t, func() {
+		if err := runHealthcheckSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), "/base", "/cfg", logging.NewBootstrapLogger()); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+	})
+	if centralizedCalled {
+		t.Fatal("self mode must not call the centralized check")
+	}
+	if gotURL != "https://hc-ping.com/alive-uuid" {
+		t.Fatalf("self check got alive URL %q", gotURL)
+	}
+	if !strings.Contains(out, "REACHABLE") {
+		t.Fatalf("self mode must show REACHABLE, got: %q", out)
+	}
+	if strings.Contains(out, "accounts/check_token") {
+		t.Fatalf("self mode must not show a magic-link, got: %q", out)
+	}
+}
+
+// TestRunHealthcheckSelfParamsCLI collects the ping URLs from scripted stdin
+// (alive + backup required, optionals skipped with Enter) and writes them into the
+// config via installer.ApplyHealthcheckSelfParams, matching the TUI screen.
+func TestRunHealthcheckSelfParamsCLI(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte(config.DefaultEnvTemplate()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// alive, backup, then 5 empty lines for the optional URLs (updates + 4 notify).
+	script := "https://hc-ping.com/alive-uuid\nhttps://hc-ping.com/backup-uuid\n\n\n\n\n\n"
+	_ = captureStdout(t, func() {
+		if err := runHealthcheckSelfParamsCLI(context.Background(), bufio.NewReader(strings.NewReader(script)), "/base", configPath, logging.NewBootstrapLogger()); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+	})
+	out, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := installer.DeriveHealthcheckSelfParams(string(out))
+	if params.AliveURL != "https://hc-ping.com/alive-uuid" || params.BackupURL != "https://hc-ping.com/backup-uuid" {
+		t.Fatalf("required URLs not written: %+v", params)
+	}
+	if params.UpdatesURL != "" || params.NotifyEmailURL != "" || params.NotifyWebhookURL != "" {
+		t.Fatalf("skipped optionals must stay blank: %+v", params)
+	}
 }
 
 func TestRunHealthcheckSetupCLI_SkipWhenNotEligible(t *testing.T) {

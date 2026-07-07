@@ -179,7 +179,7 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=check-healthcheck")
 		res, _ := dashboardRunHealthcheckSetup(ctx, session, baseDir, configPath)
 		if !res.Shown {
-			dashboardNotConfiguredNotice(ctx, session, "Backup monitoring", "Centralized healthchecks monitoring is not enabled on this host.")
+			dashboardNotConfiguredNotice(ctx, session, "Backup monitoring", "Backup monitoring (healthchecks) is not enabled on this host.")
 		}
 	case menu.ActionPostInstallCheck:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=post-install-check")

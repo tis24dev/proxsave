@@ -13,6 +13,7 @@ import (
 var (
 	healthcheckSetupBuildBootstrap = orchestrator.BuildHealthcheckSetupBootstrap
 	healthcheckSetupCheck          = orchestrator.CheckHealthcheckConnection
+	healthcheckSetupSelfCheck      = orchestrator.CheckHealthcheckSelfConnection
 	healthcheckSetupPromptYesNo    = promptYesNo
 )
 
@@ -22,8 +23,10 @@ func logHealthcheckSetupBootstrapOutcome(bootstrap *logging.BootstrapLogger, sta
 		if strings.TrimSpace(state.ConfigError) != "" {
 			logBootstrapWarning(bootstrap, "Healthcheck setup: unable to load config (skipping): %s", state.ConfigError)
 		}
+	case orchestrator.HealthcheckSetupEligibleSelf:
+		logBootstrapInfo(bootstrap, "Healthcheck setup: self mode (reachability check of your own alive URL)")
 	case orchestrator.HealthcheckSetupSkipSelfMode:
-		logBootstrapInfo(bootstrap, "Healthcheck setup: self mode (no centralized portal check)")
+		logBootstrapInfo(bootstrap, "Healthcheck setup: self mode but no alive URL configured yet (skipping)")
 	case orchestrator.HealthcheckSetupSkipIdentityUnavailable:
 		logBootstrapWarning(bootstrap, "Healthcheck setup: identity/relay secret unavailable; skipping (pair Telegram to enable centralized monitoring)")
 	}
@@ -42,14 +45,21 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 	}
 
 	logHealthcheckSetupBootstrapOutcome(bootstrap, state)
-	if state.Eligibility != orchestrator.HealthcheckSetupEligibleCentralized {
+	if state.Eligibility != orchestrator.HealthcheckSetupEligibleCentralized &&
+		state.Eligibility != orchestrator.HealthcheckSetupEligibleSelf {
 		return nil
 	}
+	selfMode := state.Eligibility == orchestrator.HealthcheckSetupEligibleSelf
 
 	fmt.Println("\n--- Backup monitoring (healthchecks) ---")
-	fmt.Println("The daemon reports each backup outcome + a liveness heartbeat to healthchecks,")
-	fmt.Println("so a silent failure (crash, hang, host down) is caught by an external monitor.")
-	fmt.Println("A personal monitoring portal has been provisioned for this host.")
+	if selfMode {
+		fmt.Println("Self mode: the daemon reports to YOUR own healthchecks server using the ping")
+		fmt.Println("URLs you entered. The check below verifies the alive URL is reachable from here.")
+	} else {
+		fmt.Println("The daemon reports each backup outcome + a liveness heartbeat to healthchecks,")
+		fmt.Println("so a silent failure (crash, hang, host down) is caught by an external monitor.")
+		fmt.Println("A personal monitoring portal has been provisioned for this host.")
+	}
 	fmt.Println()
 
 	check, err := healthcheckSetupPromptYesNo(ctx, reader, "Check the monitoring connection now? [Y/n]: ", true)
@@ -65,8 +75,16 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 	attempts := 0
 	for {
 		attempts++
-		res := healthcheckSetupCheck(ctx, state.ServerAPIHost, state.ServerID, baseDir, state.HealthcheckHeartbeatInterval)
-		st := orchestrator.ClassifyHealthcheckSetupResult(res)
+		var st orchestrator.HealthcheckSetupState
+		if selfMode {
+			// Self mode: pure reachability of the user's own alive URL; no server
+			// fetch, no magic-link (LoginURL stays empty so the box is skipped).
+			res := healthcheckSetupSelfCheck(ctx, state.HealthcheckAliveURL)
+			st = orchestrator.ClassifyHealthcheckSelfResult(res)
+		} else {
+			res := healthcheckSetupCheck(ctx, state.ServerAPIHost, state.ServerID, baseDir, state.HealthcheckHeartbeatInterval)
+			st = orchestrator.ClassifyHealthcheckSetupResult(res)
+		}
 
 		// Show the portal magic-link whenever the server minted one - even if the
 		// reachability ping then failed, the user can still open the portal.

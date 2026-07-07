@@ -20,7 +20,7 @@ func TestBuildHealthcheckPromptSensors(t *testing.T) {
 		{Name: "proxsave-updates", Level: health.SensorError, State: "update available", Age: "1m ago"},
 		{Name: "proxsave-neutral", Level: health.SensorNeutral, State: "no data"},
 	}
-	v := buildHealthcheckPrompt("", "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk, sensors)
+	v := buildHealthcheckPrompt(false, "", "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk, sensors)
 	plain := ansi.Strip(v)
 
 	if !strings.Contains(plain, "Sensors:") {
@@ -49,7 +49,7 @@ func TestBuildHealthcheckPromptSensors(t *testing.T) {
 	}
 
 	// No sensors -> no "Sensors:" block (pre-check state).
-	none := ansi.Strip(buildHealthcheckPrompt("", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil))
+	none := ansi.Strip(buildHealthcheckPrompt(false, "", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil))
 	if strings.Contains(none, "Sensors:") {
 		t.Fatalf("no sensors must render no Sensors block:\n%s", none)
 	}
