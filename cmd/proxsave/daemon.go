@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync"
@@ -34,6 +35,12 @@ const (
 	defaultHeartbeatInterval = 5 * time.Minute
 	// defaultUpdateInterval is the updates-check fallback cadence.
 	defaultUpdateInterval = 5 * time.Minute
+	// manualOutcomeStaleWindow bounds how old a handed-off standalone-backup outcome may be
+	// before the daemon refuses to ping it. A wake that arrives long after the run (e.g. the
+	// daemon was down when the standalone backup finished and only started later) must NOT flip
+	// the backup-outcome check for a stale run; 15 minutes is comfortably longer than any real
+	// handoff-to-signal latency while still discarding a genuinely stale outcome.
+	manualOutcomeStaleWindow = 15 * time.Minute
 )
 
 // backupReporter is the healthchecks surface the daemon uses; *health.Reporter
@@ -96,6 +103,38 @@ func runDaemon(rt *appRuntime) int {
 }
 
 func (d *daemon) run(ctx context.Context) int {
+	// CRITICAL: install the SIGUSR1 handler BEFORE publishing the pidfile below. Go's DEFAULT action
+	// for SIGUSR1 is to TERMINATE the process, and the pidfile is exactly what a standalone backup
+	// run uses to discover us and send SIGUSR1 to hand off its outcome. If the pid became
+	// discoverable first, a concurrent standalone handoff in that window could deliver SIGUSR1 while
+	// Go still held the default-terminate disposition and KILL the just-started daemon. signal.Notify
+	// replaces that disposition; only after it returns is it safe for the pid to become
+	// discoverable/signallable. SIGUSR1 wakes the daemon to ping a standalone run's handed-off outcome
+	// (processManualOutcome). Buffered(1) so a wake is not lost while we are mid-process.
+	usr1 := make(chan os.Signal, 1)
+	signal.Notify(usr1, syscall.SIGUSR1)
+	// Revert SIGUSR1 to its default (terminate) disposition on shutdown -- but only AFTER the pidfile
+	// has been removed. run() owns BOTH lifecycles so their order is guaranteed: this defer is
+	// declared BEFORE the RemoveDaemonPID defer below, so by LIFO the pid is removed FIRST and
+	// signal.Stop runs LAST. That keeps the startup invariant symmetric on shutdown -- the handler
+	// stays installed for as long as the pid is discoverable, so a standalone handoff can never
+	// deliver SIGUSR1 under the default-terminate action to the exiting daemon. A SIGUSR1 that
+	// arrives after the waker has returned but before this Stop lands in the buffered(1) channel and
+	// is harmlessly dropped (never terminate).
+	defer signal.Stop(usr1)
+
+	// Record our PID so a STANDALONE backup run can find us to hand off its outcome, and clear it
+	// on shutdown. Best-effort: a pid-file hiccup must not stop the daemon. Published AFTER the
+	// SIGUSR1 handler above so the pid is never signallable while the default-terminate action holds.
+	if err := health.WriteDaemonPID(d.cfg.BaseDir, os.Getpid()); err != nil {
+		logging.Debug("daemon: write pid file failed: %v", err)
+	}
+	defer func() {
+		if err := health.RemoveDaemonPID(d.cfg.BaseDir); err != nil {
+			logging.Debug("daemon: remove pid file failed: %v", err)
+		}
+	}()
+
 	if d.cfg.HealthcheckEnabled {
 		if r := d.buildReporter(ctx); r != nil {
 			d.setReporter(r)
@@ -103,6 +142,25 @@ func (d *daemon) run(ctx context.Context) int {
 	}
 
 	var wg sync.WaitGroup
+	// The manual-outcome waker runs regardless of the heartbeat/update loops: it must receive
+	// SIGUSR1 (so the default terminate action never fires) even when a piece of the healthcheck
+	// wiring is off. processManualOutcome is itself a no-op when healthchecks are disabled or
+	// nothing was handed off. It returns on ctx.Done() and joins the waitgroup; it does NOT
+	// signal.Stop -- that is owned by run()'s defer above so the disposition is reverted only after
+	// the pidfile is gone (see the signal.Stop comment).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-usr1:
+				d.processManualOutcome(ctx)
+			}
+		}
+	}()
+
 	if d.cfg.HealthcheckEnabled {
 		wg.Add(1)
 		go func() {
@@ -120,6 +178,68 @@ func (d *daemon) run(ctx context.Context) int {
 	wg.Wait()
 	logging.Info("ProxSave daemon stopped")
 	return types.ExitSuccess.Int()
+}
+
+// processManualOutcome pings + records the backup-outcome check for a STANDALONE backup run that
+// handed off its outcome and woke the daemon with SIGUSR1. The daemon is the SOLE pinger: a
+// standalone run never builds a Reporter nor writes the status file; it drops a handoff file and
+// signals here. This runs the outcome through the SAME finish machinery a daemon-supervised run
+// uses -- finishPing (nil-guarded like beat) then recordPing under KindRunFinished, serialized by
+// statusMu -- so the backup-outcome check updates identically. A stale handoff (older than
+// manualOutcomeStaleWindow) is dropped WITHOUT pinging (never flip the check for a long-past run).
+// A nil/unresolved reporter records a no_url liveness trace (like beat's no-url path) instead of a
+// phantom success. The handoff is removed after processing (processed-once; also guards a
+// duplicate signal). Best-effort throughout.
+func (d *daemon) processManualOutcome(ctx context.Context) {
+	if !d.cfg.HealthcheckEnabled {
+		return
+	}
+	mo, err := health.LoadManualOutcome(d.cfg.BaseDir)
+	if err != nil {
+		logging.Debug("daemon: read manual outcome failed: %v", err)
+		return
+	}
+	if mo.RID == "" { // nothing handed off (missing/empty file)
+		return
+	}
+	// Staleness guard: never ping a run whose handoff is older than the window (e.g. the daemon
+	// was down when the standalone backup finished and only received the wake much later).
+	if age := d.now().Unix() - mo.TS; age > int64(manualOutcomeStaleWindow/time.Second) {
+		logging.Debug("daemon: manual outcome rid=%s is stale (%ds old); dropping without ping", mo.RID, age)
+		if rmErr := health.RemoveManualOutcome(d.cfg.BaseDir); rmErr != nil {
+			logging.Debug("daemon: remove stale manual outcome failed: %v", rmErr)
+		}
+		return
+	}
+
+	r := d.getReporter()
+	// Centralized lazy re-resolve (mirrors beat/updateTick's single re-resolve): if the backup URL
+	// is not resolved yet, try ONE rebuild so a daemon paired after startup can still ping.
+	if (r == nil || !r.HasBackupURL()) && d.cfg.HealthcheckMode == "centralized" {
+		if nr := d.buildReporter(ctx); nr != nil && nr.HasBackupURL() {
+			d.setReporter(nr)
+			r = nr
+		}
+	}
+
+	logging.Info("daemon: pinging handed-off standalone backup outcome (rid=%s exit=%d)", mo.RID, mo.ExitCode)
+	// Same finish path as a supervised run: finishPing returns ErrNoBackupURL on a nil/unresolved
+	// reporter. Unlike reportBestEffort (which swallows a no-url finish for a supervised run whose
+	// start ping was ALSO skipped), we ALWAYS record here -- exactly like beat -- so a standalone
+	// run against an unprovisioned daemon leaves a no_url trace the section can render.
+	done := logging.DebugStart(d.logger, "hc ping", "kind=%s", health.KindRunFinished)
+	perr := d.finishPing(ctx, r, mo.RID, mo.ExitCode, "")
+	done(perr)
+	if health.IsNoURLErr(perr) {
+		logging.Debug("daemon: manual outcome finish has no url yet (recording, reason=no_url)")
+	} else if perr != nil {
+		logging.Debug("daemon: manual outcome finish ping failed: %v", perr)
+	}
+	d.recordPing(health.KindRunFinished, perr)
+
+	if rmErr := health.RemoveManualOutcome(d.cfg.BaseDir); rmErr != nil {
+		logging.Debug("daemon: remove manual outcome failed: %v", rmErr)
+	}
 }
 
 // scheduleLoop waits for the next daily run time and supervises a backup, until
