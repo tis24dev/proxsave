@@ -127,52 +127,52 @@ func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 }
 
 func (t *StreamTask) View(width, height int) string {
-	var b strings.Builder
-
-	// Header: spinner while running, a colored symbol once done.
+	// Bottom summary: spinner (running) or a colored symbol (done) + title, and
+	// once done the pre-styled outcome + Continue hint. Built FIRST so its height
+	// sizes the line tail, and rendered LAST so it sits at the BOTTOM with the
+	// streamed log lines scrolling ABOVE it (recaps/outcomes go below the log).
+	var summary strings.Builder
 	if t.done {
 		if t.err != nil {
-			b.WriteString(theme.ErrorText.Render(theme.SymbolError))
+			summary.WriteString(theme.ErrorText.Render(theme.SymbolError))
 		} else {
-			b.WriteString(theme.SuccessText.Render(theme.SymbolSuccess))
+			summary.WriteString(theme.SuccessText.Render(theme.SymbolSuccess))
 		}
 	} else {
-		b.WriteString(theme.Title.Render(t.spin.View()))
+		summary.WriteString(theme.Title.Render(t.spin.View()))
 	}
-	b.WriteString(" " + theme.Emphasis.Render(t.title))
+	summary.WriteString(" " + theme.Emphasis.Render(t.title))
 	if t.cancelling && !t.done {
-		b.WriteString(" " + theme.WarningText.Render("(cancelling...)"))
+		summary.WriteString(" " + theme.WarningText.Render("(cancelling...)"))
 	}
-	b.WriteString("\n\n")
-
-	// Reserve rows for the outcome block and hint so the line tail fits.
-	reserved := 4 // header (line + blank)
 	if t.done {
-		// separator + outcome (may be multi-line) + hint line.
-		reserved += 2 + strings.Count(t.outcome, "\n") + 1
+		summary.WriteString("\n")
+		// Outcome is pre-styled by the caller; render it verbatim.
+		summary.WriteString(t.outcome)
+		summary.WriteString("\n")
+		summary.WriteString(theme.Subtle.Render(t.Help()))
 	}
+	summaryStr := summary.String()
+
+	// The log tail fills the space above the summary (separator + summary block).
+	reserved := strings.Count(summaryStr, "\n") + 2
 	visible := height - reserved
 	if visible < 1 {
 		visible = 1
 	}
-
 	lines := t.lines
 	if len(lines) > visible {
 		lines = lines[len(lines)-visible:]
 	}
+
+	var b strings.Builder
 	for _, line := range lines {
 		b.WriteString(theme.Text.Width(width).Render(line))
 		b.WriteString("\n")
 	}
-
-	if t.done {
-		b.WriteString(theme.Subtle.Render(strings.Repeat("─", 3)))
-		b.WriteString("\n")
-		// Outcome is pre-styled by the caller; render it verbatim.
-		b.WriteString(t.outcome)
-		b.WriteString("\n")
-		b.WriteString(theme.Subtle.Render(t.Help()))
-	}
+	b.WriteString(theme.Subtle.Render(strings.Repeat("─", 3)))
+	b.WriteString("\n")
+	b.WriteString(summaryStr)
 	return b.String()
 }
 
