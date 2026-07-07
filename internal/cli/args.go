@@ -47,6 +47,7 @@ type Args struct {
 	Daemon            bool
 	DaemonSetup       bool
 	DaemonRemove      bool
+	DaemonStatus      bool
 }
 
 var osExit = os.Exit
@@ -104,6 +105,8 @@ func Parse() *Args {
 		"Switch this install to daemon mode: install+enable proxsave-daemon.service and remove the cron entry")
 	flag.BoolVar(&args.DaemonRemove, "daemon-remove", false,
 		"Remove daemon mode: disable the service, restore the cron entry, and prevent future upgrades from reinstalling the daemon")
+	flag.BoolVar(&args.DaemonStatus, "daemon-status", false,
+		"Print the resident daemon's status (scheduler mode, service state, running version, binary alignment) and exit")
 	flag.BoolVar(&args.Install, "install", false,
 		"Run the interactive installer (generate/configure backup.env)")
 	flag.BoolVar(&args.NewInstall, "new-install", false,

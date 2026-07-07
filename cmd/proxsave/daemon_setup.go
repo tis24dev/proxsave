@@ -11,21 +11,26 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/cron"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
-// dispatchDaemonAdminMode handles the one-shot --daemon-setup / --daemon-remove
-// admin commands (switch the scheduler engine and the systemd unit / cron entry).
+// dispatchDaemonAdminMode handles the one-shot --daemon-setup / --daemon-remove admin
+// commands (switch the scheduler engine and the systemd unit / cron entry) and the
+// read-only --daemon-status report.
 func dispatchDaemonAdminMode(rt *appRuntime) modeResult {
 	switch {
 	case rt.args.DaemonSetup:
 		return modeResult{exitCode: runDaemonSetup(rt), handled: true}
 	case rt.args.DaemonRemove:
 		return modeResult{exitCode: runDaemonRemove(rt), handled: true}
+	case rt.args.DaemonStatus:
+		return modeResult{exitCode: runDaemonStatus(rt), handled: true}
 	}
 	return modeResult{exitCode: types.ExitSuccess.Int()}
 }
@@ -48,6 +53,73 @@ func runDaemonRemove(rt *appRuntime) int {
 	}
 	logging.Info("Daemon removed: reverted to the cron scheduler. Future upgrades will NOT reinstall it (DAEMON_OPT_OUT=true).")
 	return types.ExitSuccess.Int()
+}
+
+// runDaemonStatus prints the resident daemon's real state - the SAME combined verdict the dashboard
+// "Daemon status" screen shows (systemd presence refined with the heartbeat + the on-disk binary
+// alignment) - non-interactively, then exits. Exit 0 when the daemon is running and aligned,
+// non-zero otherwise, so scripts can gate on it.
+func runDaemonStatus(rt *appRuntime) int {
+	ctx := rt.ctx
+	mode := "unknown"
+	optOut := "unknown"
+	baseDir := ""
+	var interval time.Duration
+	if rt.cfg != nil {
+		mode = rt.cfg.SchedulerMode
+		optOut = "no"
+		if rt.cfg.DaemonOptOut {
+			optOut = "yes"
+		}
+		interval = rt.cfg.HealthcheckHeartbeatInterval
+		baseDir = strings.TrimSpace(rt.cfg.BaseDir)
+	}
+	if baseDir == "" {
+		baseDir, _ = detectedBaseDirOrFallback()
+	}
+	unit := "not installed"
+	if daemonUnitInstalled() {
+		unit = "installed"
+	}
+	active := daemonUnitActiveState(ctx)
+	if active == "" {
+		active = "unknown"
+	}
+	ds := health.CheckDaemonState(health.DaemonStateInput{
+		BaseDir:           baseDir,
+		SchedulerMode:     mode,
+		HeartbeatInterval: interval,
+		Now:               time.Now(),
+		Presence:          daemonPresenceProbe(ctx),
+		ProcAlive:         probeProxsaveDaemonAlive,
+		ProcStale:         procBinaryStaleProbe,
+	})
+	level, keyword, _ := daemonStatusStyle(ds)
+
+	logging.Info("Daemon status: %s", keyword)
+	logging.Info("Scheduler mode: %s", mode)
+	logging.Info("Daemon service (%s): %s", daemonUnitName, unit)
+	logging.Info("Service state (systemctl is-active): %s", active)
+	logging.Info("Opted out of auto-migration (--daemon-remove): %s", optOut)
+	if ds.HaveInfo {
+		logging.Info("Running version: %s (%s)", ds.Version, ds.Commit)
+	}
+	if ds.HaveInfo || ds.AlignChecked {
+		align := "unknown"
+		switch {
+		case !ds.AlignChecked:
+			align = "unknown"
+		case ds.Aligned:
+			align = "aligned"
+		default:
+			align = "BEHIND (restart needed)"
+		}
+		logging.Info("Binary alignment: %s", align)
+	}
+	if level == orchestrator.HealthcheckSetupLevelOk {
+		return types.ExitSuccess.Int()
+	}
+	return types.ExitGenericError.Int()
 }
 
 // applyDaemonMode switches an install to the resident daemon: install the systemd
