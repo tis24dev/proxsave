@@ -166,7 +166,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		Kind:        components.FieldToggle,
 		Bool:        prefill.EncryptionEnabled,
 	}
-	schedulerOptions := []string{"Resident daemon (recommended)", "System cron"}
+	schedulerOptions := []string{"ProxSave local daemon", "System cron"}
 	schedulerValues := []string{"daemon", "cron"}
 	// Fresh install / Overwrite (empty base) defaults to the daemon. Editing an
 	// existing config defaults to its stored engine so a no-op edit never flips the
