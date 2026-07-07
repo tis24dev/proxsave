@@ -273,7 +273,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "normalizing permissions")
-	permStatus, permMessage := fixPermissionsAfterInstall(ctx, args.ConfigPath, baseDir, bootstrap)
+	permStatus, permMessage := fixPermissionsAfterInstall(ctx, args.ConfigPath, baseDir, bootstrap, nil)
 
 	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr, daemonRestart)
 

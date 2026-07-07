@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/user"
@@ -208,7 +209,11 @@ func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, wa
 // It returns a status code (ok, warning, error, skipped) and a short
 // human-readable message suitable for the install footer. Errors are
 // always non-blocking for the install flow.
-func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string, bootstrap *logging.BootstrapLogger) (string, string) {
+//
+// logSink, when non-nil, receives the temporary logger's console output so a
+// UI stream can display the security/backup-permission lines instead of raw
+// stdout (used by the TUI finalization). The CLI passes nil (unchanged).
+func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string, bootstrap *logging.BootstrapLogger, logSink io.Writer) (string, string) {
 	configPath = strings.TrimSpace(configPath)
 	baseDir = strings.TrimSpace(baseDir)
 	if configPath == "" {
@@ -227,6 +232,11 @@ func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string,
 	}
 
 	logger := logging.New(types.LogLevelInfo, cfg.UseColor)
+	if logSink != nil {
+		// Route this local logger's console output into the UI stream so its
+		// lines appear in-graphics instead of corrupting the alternate screen.
+		logger.SetOutput(logSink)
+	}
 
 	// Force-enable security checks in a safe, non-blocking way for install.
 	cfg.SecurityCheckEnabled = true

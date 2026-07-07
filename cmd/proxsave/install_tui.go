@@ -301,45 +301,70 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		}
 	}
 
-	// All interactive steps are done: release the terminal before the
-	// non-interactive finalization and the footer prints.
-	if closeErr := session.Close(); closeErr != nil && err == nil {
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "session close: %v", closeErr)
-	}
-	bootstrap.SetConsoleQuiet(false)
-
-	// Finalize legacy-symlink cleanup, entrypoint cleanup/recreation, and cron via the
-	// shared post-install engine (the same runPostInstallSymlinksAndCron the CLI uses),
-	// so TUI and CLI behave identically here.
+	// All interactive steps are done. Unlike the CLI, the TUI keeps the session
+	// OPEN and streams the non-interactive finalization INSIDE the graphics via
+	// RunStreamTask: the same shared engine helpers run, but their [ts] LEVEL log
+	// lines are captured (logging.CaptureConsole) and appended to a growing list
+	// instead of landing raw on the alternate screen. The session is closed only
+	// after the user presses Continue, so the deferred footer still prints to the
+	// persistent scrollback exactly like the CLI.
 	wizardCronSchedule := ""
 	if wizardData != nil {
 		wizardCronSchedule = cronutil.TimeToSchedule(wizardData.CronTime)
 	}
 	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule)
-	runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap, cronSchedule)
 	wizardMode := ""
 	if wizardData != nil {
 		wizardMode = wizardData.SchedulerMode
 	}
-	reconcileSchedulerAfterInstall(ctx, wizardMode, configPath, execInfo, bootstrap)
 
-	// Attempt to resolve or create a server identity for Telegram pairing
-	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {
-		if code := info.ServerID; code != "" {
-			telegramCode = code
-		}
-	}
-	if telegramCode != "" {
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "telegram identity detected")
-	} else {
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "telegram identity not found")
+	streamErr := components.RunStreamTask(ctx, session, "Finalizing installation",
+		func(taskCtx context.Context, emit func(line string)) (string, error) {
+			// Capture the default + bootstrap-mirror loggers into the UI stream;
+			// restore on return/panic. The bootstrap stays quiet and forwards via
+			// the mirror, so its finalization lines also appear in-graphics.
+			sink := logging.NewLineWriter(emit)
+			defer logging.CaptureConsole(bootstrap, sink)()
+
+			// Finalize legacy-symlink cleanup, entrypoint cleanup/recreation, and cron
+			// via the shared post-install engine (the same runPostInstallSymlinksAndCron
+			// the CLI uses), so TUI and CLI behave identically here.
+			runPostInstallSymlinksAndCron(taskCtx, baseDir, execInfo, bootstrap, cronSchedule)
+			rv, verified := reconcileSchedulerAfterInstall(taskCtx, wizardMode, configPath, execInfo, bootstrap)
+
+			// Attempt to resolve or create a server identity for Telegram pairing.
+			if info, idErr := identity.DetectWithContext(taskCtx, baseDir, nil); idErr == nil {
+				if code := info.ServerID; code != "" {
+					telegramCode = code
+				}
+			}
+			if telegramCode != "" {
+				logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "telegram identity detected")
+			} else {
+				logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "telegram identity not found")
+			}
+
+			// Best-effort post-install permission and ownership normalization so that
+			// the environment starts in a consistent state. The temporary logger's
+			// output is routed into the UI stream via sink (nil in the CLI).
+			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "normalizing permissions")
+			permStatus, permMessage = fixPermissionsAfterInstall(taskCtx, configPath, baseDir, bootstrap, sink)
+			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "permissions status=%s", permStatus)
+
+			return buildInstallOutcomePrompt(rv, verified, permStatus, permMessage), nil
+		})
+	if streamErr != nil {
+		// Finalization is best-effort (the CLI ignores these errors too): an abort
+		// or UI-death here never fails the install, so only trace it.
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "finalization stream: %v", streamErr)
 	}
 
-	// Best-effort post-install permission and ownership normalization so that
-	// the environment starts in a consistent state.
-	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "normalizing permissions")
-	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap)
-	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "permissions status=%s", permStatus)
+	// The user pressed Continue: release the terminal so the deferred footer
+	// prints to the plain scrollback (the in-graphics lines/outcome vanish with
+	// the alternate screen, matching the AGE notice behavior).
+	if closeErr := session.Close(); closeErr != nil && err == nil {
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "session close: %v", closeErr)
+	}
 
 	return nil
 }

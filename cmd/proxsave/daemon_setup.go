@@ -167,7 +167,7 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 // become process-alive with an assessable alignment, then REPORTS its real state - the SAME verdict
 // --daemon-status gives (aligned / behind / not running) - never a bare "timeout". It NEVER fails
 // the caller (install / --daemon-setup): a behind or unconfirmed daemon is a warning, not an error.
-func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval time.Duration) {
+func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval time.Duration) RestartVerifyResult {
 	logging.Info("Verifying daemon alignment...")
 	rv := verifyDaemonAligned(ctx, baseDir, interval)
 	switch {
@@ -179,6 +179,7 @@ func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval
 	default:
 		logging.Warning("Daemon not running.")
 	}
+	return rv
 }
 
 // installVerifyContext resolves the base dir + heartbeat interval for a post-install
@@ -269,7 +270,13 @@ func setBackupEnvKeys(configPath string, kv map[string]string) error {
 // it reads the mode from the just-written config. daemon -> install the unit and
 // drop the cron line; cron -> tear down any leftover daemon unit so a re-install
 // of a previously-daemon host can never end up double-scheduled (cron + unit).
-func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) {
+//
+// It returns the daemon restart-verify result and verified=true ONLY in the
+// daemon branch that actually ran verifyDaemonAlignedBestEffort; every other
+// path (install failed, verify context unreadable, or cron mode) returns a
+// zero result with verified=false. The existing statement call sites discard
+// both returns; only the TUI finalization captures them to render the outcome.
+func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) (rv RestartVerifyResult, verified bool) {
 	mode := strings.ToLower(strings.TrimSpace(wizardMode))
 	if mode != "cron" && mode != "daemon" {
 		mode = readConfiguredSchedulerMode(configPath)
@@ -278,7 +285,7 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 	if mode == "daemon" {
 		if err := installDaemonService(ctx, daemonExecPath, configPath, bootstrap); err != nil {
 			logging.Warning("Failed to enable the daemon service (staying on cron): %v", err)
-			return
+			return RestartVerifyResult{}, false
 		}
 		if err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execInfo.ExecPath), bootstrap); err != nil {
 			logging.Warning("daemon: failed to remove the cron entry (the per-run lock mitigates double execution): %v", err)
@@ -293,9 +300,9 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 		// Report the daemon's real state (aligned / behind / not running), best-effort
 		// (a verify miss is only logged, never fails the install).
 		if baseDir, interval, ok := installVerifyContext(configPath); ok {
-			verifyDaemonAlignedBestEffort(ctx, baseDir, interval)
+			return verifyDaemonAlignedBestEffort(ctx, baseDir, interval), true
 		}
-		return
+		return RestartVerifyResult{}, false
 	}
 
 	// cron mode: a previously-installed daemon unit would double-schedule with the
@@ -309,6 +316,7 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 			logging.Info("Removed the previous daemon service; this host now uses the cron scheduler.")
 		}
 	}
+	return RestartVerifyResult{}, false
 }
 
 // readConfiguredSchedulerMode returns "daemon" or "cron" from an existing
