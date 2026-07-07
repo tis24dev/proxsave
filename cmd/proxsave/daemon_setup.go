@@ -96,7 +96,7 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 // NEVER fails the caller (install / --daemon-setup): an unconfirmed alignment is a
 // warning, not an error, so a verify miss cannot block bringing the daemon up.
 func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval time.Duration) {
-	logging.Info("Verifying the daemon started and is aligned with the installed binary...")
+	logging.Info("Verifying daemon alignment...")
 	rv := verifyDaemonAligned(ctx, baseDir, interval)
 	switch {
 	case rv.ProcessAlive && rv.Aligned:
