@@ -728,8 +728,9 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 	configPath := filepath.Join(cfgDir, "env", "backup.env")
 	tmpConfigPath := configPath + ".tmp"
 	// 6 toggle declines, empty scheduler-engine answer (defaults to daemon on a
-	// fresh install), then the run-at time.
-	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n03:15\n"))
+	// fresh install), empty healthcheck-mode answer (daemon-only prompt, defaults
+	// to centralized), then the run-at time.
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n\n03:15\n"))
 
 	var result installConfigResult
 	var err error

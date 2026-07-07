@@ -106,6 +106,35 @@ func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetup
 	return applyHealthcheckDaemonState(st, res.Daemon)
 }
 
+// ClassifyHealthcheckSelfResult maps a self-mode check result to the SAME
+// HealthcheckSetupState the centralized classifier produces, so the CLI and TUI
+// renderers stay untouched. Self mode has no provisioning/daemon dimension: the
+// verdict is pure reachability of the user's own alive URL. A successful ping reads
+// REACHABLE (green, Verified so the install may Continue); a ping error reads
+// UNREACHABLE (yellow, retryable, NOT fatal); an empty/not-configured URL reads NOT
+// CONFIGURED (yellow). Self mode never mints a magic-link, so LoginURL stays empty.
+func ClassifyHealthcheckSelfResult(res HealthcheckCheckResult) HealthcheckSetupState {
+	st := HealthcheckSetupState{}
+	switch {
+	case errors.Is(res.Err, ErrHealthcheckSelfNotConfigured):
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "NOT CONFIGURED"
+		st.Message = "No service-alive ping URL is configured for self mode yet. Enter the healthchecks parameters, then run the check."
+		return st
+	case res.Err != nil:
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "UNREACHABLE"
+		st.Message = "Could not reach the healthchecks ping URL. Check the URL and this host's connectivity, then try again."
+		return st
+	case !res.Reachable:
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "UNREACHABLE"
+		st.Message = "Could not confirm the healthchecks ping URL is reachable. Try the check again."
+		return st
+	}
+	st.Verified = true
+	st.Level, st.Keyword = HealthcheckSetupLevelOk, "REACHABLE"
+	st.Message = "The healthchecks ping URL responded; your self-hosted monitor is reachable from this host."
+	return st
+}
+
 // applyHealthcheckDaemonState maps the daemon diagnosis to the headline keyword/level and
 // an explanation. WORKING (green) is the ONLY healthy state; every other state is a live
 // gap between "reachable" and "actually monitoring".

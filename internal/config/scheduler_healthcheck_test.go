@@ -161,6 +161,11 @@ func TestRealTemplateContainsNewKeys(t *testing.T) {
 		"HEALTHCHECK_SEND_LOG=", "HEALTHCHECK_ALIVE_URL=", "HEALTHCHECK_BACKUP_URL=",
 		"HEALTHCHECK_PING_ENDPOINT=", "HEALTHCHECK_PING_KEY=", "HEALTHCHECK_ALIVE_ID=",
 		"HEALTHCHECK_BACKUP_ID=",
+		"HEALTHCHECK_UPDATES_URL=", "HEALTHCHECK_UPDATES_ID=", "HEALTHCHECK_UPDATE_INTERVAL=",
+		"HEALTHCHECK_NOTIFY_EMAIL_URL=", "HEALTHCHECK_NOTIFY_EMAIL_ID=",
+		"HEALTHCHECK_NOTIFY_TELEGRAM_URL=", "HEALTHCHECK_NOTIFY_TELEGRAM_ID=",
+		"HEALTHCHECK_NOTIFY_GOTIFY_URL=", "HEALTHCHECK_NOTIFY_GOTIFY_ID=",
+		"HEALTHCHECK_NOTIFY_WEBHOOK_URL=", "HEALTHCHECK_NOTIFY_WEBHOOK_ID=",
 	} {
 		if !strings.Contains(tmpl, key) {
 			t.Errorf("embedded template is missing new key %q", key)
@@ -242,6 +247,19 @@ func assertSafeDaemonDefaults(t *testing.T, raw map[string]string) {
 		{"HEALTHCHECK_PING_KEY", ""},
 		{"HEALTHCHECK_ALIVE_ID", ""},
 		{"HEALTHCHECK_BACKUP_ID", ""},
+		// New self-mode ping URLs/IDs: all empty so no accidental self activation
+		// (a non-empty default would ping a stale/attacker URL when self mode flips on).
+		{"HEALTHCHECK_UPDATES_URL", ""},
+		{"HEALTHCHECK_UPDATES_ID", ""},
+		{"HEALTHCHECK_UPDATE_INTERVAL", "5m"},
+		{"HEALTHCHECK_NOTIFY_EMAIL_URL", ""},
+		{"HEALTHCHECK_NOTIFY_EMAIL_ID", ""},
+		{"HEALTHCHECK_NOTIFY_TELEGRAM_URL", ""},
+		{"HEALTHCHECK_NOTIFY_TELEGRAM_ID", ""},
+		{"HEALTHCHECK_NOTIFY_GOTIFY_URL", ""},
+		{"HEALTHCHECK_NOTIFY_GOTIFY_ID", ""},
+		{"HEALTHCHECK_NOTIFY_WEBHOOK_URL", ""},
+		{"HEALTHCHECK_NOTIFY_WEBHOOK_ID", ""},
 	}
 	for _, w := range want {
 		got, ok := raw[w.key]

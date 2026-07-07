@@ -2,10 +2,17 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/health"
 )
+
+// ErrHealthcheckSelfNotConfigured is the sentinel CheckHealthcheckSelfConnection
+// returns when it is called with an empty alive URL (the self params screen has not
+// collected the URL yet). It maps to the NOT CONFIGURED classifier verdict.
+var ErrHealthcheckSelfNotConfigured = errors.New("self healthcheck alive URL not configured")
 
 // HealthcheckCheckResult is the outcome of one install-time connection check.
 // A nil Err with Reachable=true means provisioning is ready AND the monitor is
@@ -126,5 +133,26 @@ func CheckHealthcheckConnection(ctx context.Context, serverAPIHost, serverID, ba
 		}
 		res.Reachable = true
 	}
+	return res
+}
+
+// CheckHealthcheckSelfConnection runs the self-mode install check: a single
+// state-neutral reachability ping to the user's own alive URL. It performs NO
+// server config fetch, NO magic-link/login, and NO daemon-state read (self mode
+// has no centralized identity and the daemon has not started yet at install time),
+// so the result carries only Reachable/Err. An empty alive URL yields
+// ErrHealthcheckSelfNotConfigured without pinging.
+func CheckHealthcheckSelfConnection(ctx context.Context, aliveURL string) HealthcheckCheckResult {
+	res := HealthcheckCheckResult{}
+	aliveURL = strings.TrimSpace(aliveURL)
+	if aliveURL == "" {
+		res.Err = ErrHealthcheckSelfNotConfigured
+		return res
+	}
+	if err := healthcheckSetupPing(ctx, aliveURL); err != nil {
+		res.Err = err
+		return res
+	}
+	res.Reachable = true
 	return res
 }
