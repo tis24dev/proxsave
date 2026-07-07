@@ -113,8 +113,7 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 		avail = false
 		if upgRun(ctx, session, configPath) == types.ExitSuccess.Int() {
 			kw, sty, sym = "UPGRADED", theme.SuccessText, symOk
-			_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Upgrade complete",
-				"New binary on disk. This process still runs the old version; relaunch proxsave, and Restart daemon if active."))
+			dashboardUpgradeRestartDaemon(ctx, session, configPath)
 		} else {
 			kw, sty, sym = "FAILED", theme.ErrorText, symErr
 			_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError, "Upgrade failed",
@@ -198,11 +197,42 @@ func upgRun(ctx context.Context, session *shell.Session, configPath string) int 
 	defer rs()
 	bl := logging.NewBootstrapLogger()
 	bl.SetConsoleQuiet(true)
+	// Suppress runUpgrade's inline daemon restart on the dashboard path: the dashboard
+	// drives the restart itself (spinner + notice) after this returns, so an inline
+	// restart here would be invisible (stdout is muted) and would double-restart.
+	prevRestart := upgradeRestartsDaemon
+	upgradeRestartsDaemon = false
+	defer func() { upgradeRestartsDaemon = prevRestart }()
 	ar := &cli.Args{Upgrade: true, UpgradeAutoYes: true, ConfigPath: configPath, LogLevel: types.LogLevelInfo}
 	code := types.ExitGenericError.Int()
 	_ = components.RunTask(ctx, session, "Running upgrade", "Installing...",
 		func(tc context.Context, _ func(string)) error { code = dashboardUpgradeRun(tc, ar, bl); return nil })
 	return code
+}
+
+// dashboardUpgradeRestartDaemon completes a successful dashboard upgrade by restarting
+// the resident daemon (when active) so it loads the freshly installed binary, then shows
+// the outcome as a notice. When the daemon is not active there is nothing to restart --
+// the new binary just needs a relaunch of this process. This is the SINGLE restart on the
+// dashboard path: runUpgrade's own inline restart is suppressed (upgradeRestartsDaemon is
+// set false in upgRun), so there is no double restart.
+func dashboardUpgradeRestartDaemon(ctx context.Context, session *shell.Session, configPath string) {
+	if !daemonIsActive(ctx) {
+		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Upgrade complete",
+			"New binary on disk. This process still runs the old version; relaunch proxsave."))
+		return
+	}
+	baseDir, _ := detectedBaseDirOrFallback()
+	interval := upgradeHeartbeatInterval(configPath, baseDir)
+	lockPath := upgradeBackupLockPath(configPath, baseDir)
+	var rv RestartVerifyResult
+	_ = components.RunTask(ctx, session, "Restarting daemon", "Loading the new binary...",
+		func(taskCtx context.Context, _ func(string)) error {
+			rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, interval)
+			return nil
+		})
+	kind, title, msg := restartVerifyNotice(rv)
+	_, _ = shell.Ask(ctx, session, components.NewNotice(kind, title, msg))
 }
 
 func defaultUpgradeMuteStdio() func() {

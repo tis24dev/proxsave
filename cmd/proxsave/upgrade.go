@@ -53,6 +53,58 @@ type releaseInfo struct {
 	Body    string `json:"body"`
 }
 
+// upgradeRestartsDaemon gates whether runUpgrade performs the automatic post-upgrade
+// daemon restart+verify itself (folding the outcome into the footer). The dashboard
+// upgrade wrapper sets it false for the duration of its run so IT drives the restart
+// inside a spinner and renders a notice instead -- runUpgrade's stdout (and thus the
+// footer) is muted in the dashboard, so its inline restart would be invisible and would
+// double-restart. Default true = the CLI --upgrade path restarts inline.
+var upgradeRestartsDaemon = true
+
+// upgradeHeartbeatInterval loads the heartbeat interval from the config, best-effort
+// (0 when unreadable). The interval only shapes the daemon-state Diagnosis shown for
+// display; the restart-verify SUCCESS gate (process-alive + aligned + fresh) does not
+// depend on it, so a 0 fallback never breaks verification.
+func upgradeHeartbeatInterval(configPath, baseDir string) time.Duration {
+	if cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir); err == nil && cfg != nil {
+		return cfg.HealthcheckHeartbeatInterval
+	}
+	return 0
+}
+
+// upgradeBackupLockPath resolves the REAL backup lock file path (honouring a custom
+// LOCK_PATH), best-effort, mirroring upgradeHeartbeatInterval's config load. The
+// daemon-restart backup-wait probe MUST inspect this exact path -- the same
+// <cfg.LockPath>/.backup.lock the orchestrator's Checker acquires -- or a restart on a
+// custom-LOCK_PATH host would find no lock and could kill an in-progress backup. An
+// unreadable config falls back to the base-dir default lock path.
+func upgradeBackupLockPath(configPath, baseDir string) string {
+	cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir)
+	if err != nil {
+		cfg = nil
+	}
+	return backupLockFilePath(cfg, baseDir)
+}
+
+// logUpgradeDaemonRestart mirrors the restart outcome to the bootstrap log (the CLI
+// path). It never fails the upgrade -- every outcome is informational.
+func logUpgradeDaemonRestart(bootstrap *logging.BootstrapLogger, rv *RestartVerifyResult) {
+	switch {
+	case rv == nil:
+		return
+	case rv.Err != nil:
+		bootstrap.Warning("Daemon restart failed: %v (it may still run the old binary; restart it manually).", rv.Err)
+	case rv.BackupWaitTimedOut:
+		bootstrap.Warning("A backup is running; daemon restart deferred. Restart when idle or the daemon stays on the old binary.")
+	case rv.TimedOut:
+		bootstrap.Warning("Daemon restarted but could not be confirmed aligned; check 'proxsave --daemon-status'.")
+	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
+		bootstrap.Println("Daemon restarted and now aligned with the new binary.")
+	default:
+		bootstrap.Warning("Daemon restarted but alignment could not be confirmed; check 'proxsave --daemon-status'.")
+	}
+}
+
 // runUpgrade orchestrates the upgrade flow:
 //   - downloads and installs the latest binary release
 //   - upgrades backup.env by adding missing keys from the new template (preserving existing values)
@@ -189,8 +241,21 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	// --daemon-remove is never undone. Best-effort: a failure stays on cron and is
 	// only warned. (When staying on cron, the canonical /usr/local/bin/proxsave
 	// entry created at install keeps working across binary upgrades.)
+	var daemonRestart *RestartVerifyResult
 	if upgradeErr == nil {
 		maybeAutoMigrateDaemon(ctx, args.ConfigPath, baseDir, execPath, bootstrap)
+		// The new binary is on disk, but the resident daemon still runs the OLD one
+		// (systemd keeps the process alive across an in-place replace). Restart+verify
+		// it so the upgrade ends with the daemon aligned. This is automatic (no extra
+		// prompt) and NEVER changes the upgrade exit code -- the upgrade already
+		// succeeded. It first waits out any in-progress backup rather than killing it,
+		// and only runs when the daemon is actually active (a cron install has none).
+		if upgradeRestartsDaemon && daemonIsActive(ctx) {
+			bootstrap.Println("Restarting the resident daemon to load the new binary...")
+			rv := restartAndVerifyDaemon(ctx, baseDir, upgradeBackupLockPath(args.ConfigPath, baseDir), upgradeHeartbeatInterval(args.ConfigPath, baseDir))
+			daemonRestart = &rv
+			logUpgradeDaemonRestart(bootstrap, &rv)
+		}
 	} else {
 		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "binary install failed; leaving scheduler unchanged")
 	}
@@ -210,7 +275,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "normalizing permissions")
 	permStatus, permMessage := fixPermissionsAfterInstall(ctx, args.ConfigPath, baseDir, bootstrap)
 
-	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr)
+	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr, daemonRestart)
 
 	// A configuration-upgrade failure after a successful binary install must also be
 	// reflected in the exit code (the footer already shows "Configuration: ERROR"),
@@ -677,7 +742,7 @@ func closeIntoErr(errp *error, closer io.Closer, operation string) {
 	}
 }
 
-func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error) {
+func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error, daemonRestart *RestartVerifyResult) {
 	colorReset := "\033[0m"
 
 	title := "Go-based upgrade completed"
@@ -749,6 +814,15 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 		for _, warning := range cfgUpgradeResult.Warnings {
 			fmt.Printf("  - %s\n", warning)
 		}
+		fmt.Println()
+	}
+
+	if line, warn := summarizeRestartVerify(daemonRestart, version); line != "" {
+		color := "\033[32m" // green (success)
+		if warn {
+			color = "\033[33m" // yellow (non-blocking warning)
+		}
+		fmt.Printf("%s%s%s\n", color, line, colorReset)
 		fmt.Println()
 	}
 

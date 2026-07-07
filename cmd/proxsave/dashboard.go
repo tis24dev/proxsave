@@ -194,7 +194,7 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		runDashboardDaemonAdmin(ctx, session, false, configPath, baseDir)
 	case menu.ActionDaemonRestart:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-restart")
-		runDashboardDaemonRestart(ctx, session)
+		runDashboardDaemonRestart(ctx, session, configPath, baseDir)
 	case menu.ActionDaemonStatus:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-status")
 		runDashboardDaemonStatus(ctx, session, configPath, baseDir)
@@ -216,18 +216,56 @@ var (
 // then loops back to the menu. Useful after a rebuild: systemd keeps the old process
 // until an explicit restart, which is exactly the "installed+active but running a stale
 // binary that no longer writes the status file" case the healthcheck checks now surface.
-func runDashboardDaemonRestart(ctx context.Context, session *shell.Session) {
-	var opErr error
+// It uses restartAndVerifyDaemon, so it also WAITS for an in-progress backup to finish
+// (a restart would kill a daemon-supervised backup) and VERIFIES the daemon came back
+// aligned before reporting success -- the notice distinguishes aligned / deferred /
+// not-confirmed / error.
+func runDashboardDaemonRestart(ctx context.Context, session *shell.Session, configPath, baseDir string) {
+	interval := time.Duration(0)
+	// Fallback lock path (base-dir default) used only when the config is unreadable; the
+	// normal path resolves the REAL <cfg.LockPath>/.backup.lock so the backup-wait probe
+	// inspects the same lock the orchestrator acquires even under a custom LOCK_PATH.
+	lockPath := backupLockFilePath(nil, baseDir)
+	if cfg, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && cfg != nil {
+		interval = cfg.HealthcheckHeartbeatInterval
+		if strings.TrimSpace(cfg.BaseDir) != "" {
+			baseDir = cfg.BaseDir
+		}
+		lockPath = backupLockFilePath(cfg, baseDir)
+	}
+	var rv RestartVerifyResult
 	_ = components.RunTask(ctx, session, "Restarting daemon", "Restarting proxsave-daemon.service...", func(taskCtx context.Context, report func(string)) error {
-		opErr = daemonRestartService(taskCtx)
+		rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, interval)
 		return nil
 	})
-	if opErr != nil {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError, "Daemon restart failed", opErr.Error()))
-		return
+	kind, title, msg := restartVerifyNotice(rv)
+	_, _ = shell.Ask(ctx, session, components.NewNotice(kind, title, msg))
+}
+
+// restartVerifyNotice maps a restart+verify outcome to a dashboard notice (severity +
+// title + body), shared by the "Restart daemon" button and the post-upgrade restart.
+// Success is green; a deferral (backup running), a not-confirmed alignment, and an
+// ambiguous restart are yellow warnings; a restart error is red.
+func restartVerifyNotice(rv RestartVerifyResult) (components.NoticeKind, string, string) {
+	switch {
+	case rv.Err != nil:
+		return components.NoticeError, "Daemon restart failed", rv.Err.Error()
+	case rv.BackupWaitTimedOut:
+		return components.NoticeWarning, "Daemon restart deferred",
+			"A backup is currently running; the restart was deferred to avoid interrupting it. Restart again once the backup finishes, or the daemon stays on the old binary."
+	case rv.TimedOut:
+		return components.NoticeWarning, "Daemon restarted",
+			"The daemon was restarted but could not be confirmed aligned within the timeout. Check the daemon status."
+	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
+		msg := "The resident daemon (proxsave-daemon.service) was restarted and is now running the current binary"
+		if v := strings.TrimSpace(rv.State.Version); v != "" {
+			msg += " (v" + v + ")"
+		}
+		return components.NoticeSuccess, "Daemon restarted", msg + "."
+	default:
+		return components.NoticeWarning, "Daemon restarted",
+			"The daemon was restarted but alignment could not be confirmed. Check the daemon status."
 	}
-	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Daemon restarted",
-		"The resident daemon (proxsave-daemon.service) was restarted."))
 }
 
 // runDashboardDaemonAdmin installs (install=true) or reverts (install=false) the
