@@ -163,20 +163,21 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 	return nil
 }
 
-// verifyDaemonAlignedBestEffort confirms (poll-only, no restart) that a just-(re)started
-// daemon is process-alive and aligned with the installed binary, logging the outcome. It
-// NEVER fails the caller (install / --daemon-setup): an unconfirmed alignment is a
-// warning, not an error, so a verify miss cannot block bringing the daemon up.
+// verifyDaemonAlignedBestEffort waits (poll-only, no restart) for the just-(re)started daemon to
+// become process-alive with an assessable alignment, then REPORTS its real state - the SAME verdict
+// --daemon-status gives (aligned / behind / not running) - never a bare "timeout". It NEVER fails
+// the caller (install / --daemon-setup): a behind or unconfirmed daemon is a warning, not an error.
 func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval time.Duration) {
 	logging.Info("Verifying daemon alignment...")
 	rv := verifyDaemonAligned(ctx, baseDir, interval)
 	switch {
 	case rv.ProcessAlive && rv.Aligned:
 		logging.Info("Daemon verified: running and aligned with the installed binary (v%s).", rv.State.Version)
-	case rv.TimedOut:
-		logging.Warning("Daemon started but alignment check timeout")
+	case rv.ProcessAlive && rv.State.AlignChecked:
+		// Up and assessable but NOT aligned = behind (the same verdict --daemon-status reports).
+		logging.Warning("Daemon running but BEHIND: on an older binary than the one on disk.")
 	default:
-		logging.Warning("Daemon alignment could not be confirmed")
+		logging.Warning("Daemon not confirmed running after install.")
 	}
 }
 
@@ -282,10 +283,15 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 		if err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execInfo.ExecPath), bootstrap); err != nil {
 			logging.Warning("daemon: failed to remove the cron entry (the per-run lock mitigates double execution): %v", err)
 		}
+		// `enable --now` does NOT restart an ALREADY-running daemon, so a reinstall/reconfigure
+		// (or a rebuilt binary) would leave it on the OLD inode. Restart so the running process is
+		// the freshly installed binary before we report alignment.
+		if err := restartDaemonService(ctx); err != nil {
+			logging.Debug("daemon: restart to load the installed binary failed: %v", err)
+		}
 		logging.Info("Daemon mode enabled: %s is active and the cron entry was removed.", daemonUnitName)
-		// installDaemonService just `enable --now`-started the unit; confirm it came up
-		// aligned with the freshly installed binary so a fresh install ends verified.
-		// Best-effort (a verify miss is only logged, never fails the install).
+		// Report the daemon's real state (aligned / behind / not running), best-effort
+		// (a verify miss is only logged, never fails the install).
 		if baseDir, interval, ok := installVerifyContext(configPath); ok {
 			verifyDaemonAlignedBestEffort(ctx, baseDir, interval)
 		}
