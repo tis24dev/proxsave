@@ -18,27 +18,36 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
-// TestBuildInstallOutcomePromptVerified asserts the daemon-verified branch reuses the
-// shared restartVerifyStatus/renderDaemonStatusLevel renderers and colors the permissions
-// line by status. ANSI is stripped so the assertions do not depend on the color profile.
+// TestBuildInstallOutcomePromptVerified asserts the daemon-verified branch reuses the shared
+// installVerifyVerdict/renderDaemonStatusLevel verdict (aligned / behind / not-running - the SAME
+// as --daemon-status, NOT the restart-verify "not confirmed") and colors the permissions line by
+// status. ANSI is stripped so the assertions do not depend on the color profile.
 func TestBuildInstallOutcomePromptVerified(t *testing.T) {
 	rv := RestartVerifyResult{
-		Restarted:    true,
 		ProcessAlive: true,
 		Aligned:      true,
-		FreshInfo:    true,
-		State:        health.DaemonState{Version: "9.9.9"},
+		State:        health.DaemonState{Version: "9.9.9", AlignChecked: true},
 	}
 	out := ansi.Strip(buildInstallOutcomePrompt(rv, true, "ok", "permissions and ownership normalized correctly"))
 
 	if !strings.Contains(out, "Daemon: ") {
 		t.Fatalf("missing Daemon line:\n%s", out)
 	}
-	if !strings.Contains(out, "restarted, aligned (v9.9.9)") {
-		t.Fatalf("missing verified daemon keyword:\n%s", out)
+	if !strings.Contains(out, "running and aligned (v9.9.9)") {
+		t.Fatalf("missing aligned daemon verdict:\n%s", out)
+	}
+	if strings.Contains(out, "not confirmed") {
+		t.Fatalf("an aligned daemon must NOT say 'not confirmed':\n%s", out)
 	}
 	if !strings.Contains(out, "Permissions: ") || !strings.Contains(out, "normalized correctly") {
 		t.Fatalf("missing permissions line:\n%s", out)
+	}
+
+	// A running-but-behind daemon reports the behind verdict, not a timeout/not-confirmed.
+	behind := RestartVerifyResult{ProcessAlive: true, State: health.DaemonState{AlignChecked: true}}
+	bOut := ansi.Strip(buildInstallOutcomePrompt(behind, true, "ok", "ok"))
+	if !strings.Contains(bOut, "running but not aligned (behind)") {
+		t.Fatalf("missing behind verdict:\n%s", bOut)
 	}
 }
 
@@ -50,7 +59,7 @@ func TestBuildInstallOutcomePromptUnverified(t *testing.T) {
 	if !strings.Contains(out, "Daemon: ") || !strings.Contains(out, "cron scheduler") {
 		t.Fatalf("expected neutral cron scheduler line:\n%s", out)
 	}
-	if strings.Contains(out, "restarted, aligned") {
+	if strings.Contains(out, "running and aligned") {
 		t.Fatalf("unverified outcome must not claim an alignment verdict:\n%s", out)
 	}
 	if !strings.Contains(out, "errors during security permission checks") {
