@@ -20,29 +20,56 @@ var errAuditSkip = errors.New("post-install audit: skip")
 // auditCollect is an injection point for tests.
 var auditCollect = installer.CollectPostInstallDisableSuggestions
 
+// auditAction is the choice on the post-install check's initial screen: run the
+// dry-run or leave (mirrors the Telegram/Healthchecks check screens' Check + leave).
+type auditAction int
+
+const (
+	auditActionCheck auditAction = iota
+	auditActionLeave
+)
+
+// buildAuditPrompt renders the styled prompt shown above the Check/leave selector,
+// matching the pre-check "Status: NOT CHECKED" look of the Telegram/Healthchecks checks.
+func buildAuditPrompt() string {
+	var b strings.Builder
+	b.WriteString(theme.Text.Render("Detect unused/optional backup components (a dry-run) and disable them to reduce warnings."))
+	b.WriteString("\n\n")
+	b.WriteString(theme.Text.Render("Status: "))
+	b.WriteString(renderHealthcheckLevel(orchestrator.HealthcheckSetupLevelNeutral, "NOT CHECKED"))
+	b.WriteString("\n")
+	b.WriteString(theme.Subtle.Render("Choose Check to run the dry-run (this may take a minute)."))
+	return b.String()
+}
+
 // RunPostInstallAudit runs the optional post-install check: dry-run collect,
 // multi-select of suggested disables, shared apply. Prompt aborts are
 // non-blocking (the install continues), matching both legacy fronts.
 func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, configPath string, backToMenu bool) (installer.PostInstallAuditResult, error) {
 	result := installer.PostInstallAuditResult{}
 
-	declineLabel := "Skip"
+	// Mirror the Telegram/Healthchecks check screens: a styled "Status: NOT CHECKED"
+	// prompt above a "Check" + leave selector, instead of a bespoke Yes/No confirm.
+	leaveLabel, leaveDesc := "Skip", "skip the check"
 	if backToMenu {
-		declineLabel = "Back"
+		leaveLabel, leaveDesc = "Back", "return to the dashboard menu"
 	}
-	run, err := shell.Ask(ctx, session, components.NewConfirm(
-		"Post-install check",
-		"Run a dry-run to detect unused components and reduce warnings?\nThis may take a minute.",
-		components.WithLabels("Run check", declineLabel),
-		components.WithDefaultYes(true),
+	initItems := []components.SelectorItem[auditAction]{
+		{Label: "Check", Description: "run the dry-run to detect unused components", Value: auditActionCheck},
+		{Label: leaveLabel, Description: leaveDesc, Value: auditActionLeave},
+	}
+	action, err := shell.Ask(ctx, session, components.NewSelector(
+		"Post-install check", initItems,
+		components.WithSelectorPromptStyled[auditAction](buildAuditPrompt()),
+		components.WithSelectorBack[auditAction](errAuditSkip),
 	))
 	if err != nil {
-		if shell.IsAbort(err) {
+		if errors.Is(err, errAuditSkip) || shell.IsAbort(err) {
 			return result, nil
 		}
 		return result, err
 	}
-	if !run.Answer {
+	if action == auditActionLeave {
 		return result, nil
 	}
 	result.Ran = true
