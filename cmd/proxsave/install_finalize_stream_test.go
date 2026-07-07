@@ -30,6 +30,10 @@ func TestBuildInstallOutcomePromptVerified(t *testing.T) {
 	}
 	out := ansi.Strip(buildInstallOutcomePrompt(rv, true, "ok", "permissions and ownership normalized correctly"))
 
+	// The summary opens with the shared completion banner (same wording as the CLI footer).
+	if !strings.Contains(out, "Go-based installation completed") {
+		t.Fatalf("missing completion banner:\n%s", out)
+	}
 	if !strings.Contains(out, "Daemon: ") {
 		t.Fatalf("missing Daemon line:\n%s", out)
 	}
@@ -93,6 +97,9 @@ func TestRunStreamTaskFinalizationDriver(t *testing.T) {
 	waitFor(t, &buf, "first finalize line")
 	waitFor(t, &buf, "second finalize line")
 	waitFor(t, &buf, "permissions OK")
+	// The Continue hint is rendered by the frame's Help bar once done - NOT duplicated
+	// in the screen body (asserted by TestStreamScreenDoneShowsOutcomeAndHint).
+	waitFor(t, &buf, "enter continue")
 
 	// Enter on a done screen resolves; spam is safe (no-op before done / on empty stack).
 	if err := pumpEnter(t, session, done); err != nil {

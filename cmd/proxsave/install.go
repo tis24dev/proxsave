@@ -344,22 +344,40 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 	return newInstallRunInstallTUI(ctx, plan.ResolvedConfigPath, bootstrap)
 }
 
+// installBannerLevel classifies the install result for the completion banner.
+type installBannerLevel int
+
+const (
+	installBannerCompleted installBannerLevel = iota
+	installBannerAborted
+	installBannerFailed
+)
+
+// installBanner derives the completion banner title + severity from the install
+// result. Single extraction point reused by BOTH the CLI footer (printInstallFooter,
+// ANSI box) and the graphical finalization summary (buildInstallOutcomePrompt, themed),
+// so the two never drift.
+func installBanner(installErr error) (title string, level installBannerLevel) {
+	switch {
+	case installErr == nil:
+		return "Go-based installation completed", installBannerCompleted
+	case isInstallAbortedError(installErr):
+		return "Go-based installation aborted", installBannerAborted
+	default:
+		return "Go-based installation failed", installBannerFailed
+	}
+}
+
 func printInstallFooter(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
 	colorReset := "\033[0m"
 
-	title := "Go-based installation completed"
-	color := "\033[32m" // green by default
-
-	if installErr != nil {
-		if isInstallAbortedError(installErr) {
-			// User-driven abort (Ctrl+C, exit, setup aborted) -> SKIP color
-			color = "\033[35m"
-			title = "Go-based installation aborted"
-		} else {
-			// Any other error -> red
-			color = "\033[31m"
-			title = "Go-based installation failed"
-		}
+	title, level := installBanner(installErr)
+	color := "\033[32m" // green (completed)
+	switch level {
+	case installBannerAborted:
+		color = "\033[35m" // magenta (user-driven abort)
+	case installBannerFailed:
+		color = "\033[31m" // red (error)
 	}
 
 	fmt.Println()
@@ -385,7 +403,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	}
 
 	// For user-aborted runs, stop here to avoid showing next steps/commands.
-	if installErr != nil && isInstallAbortedError(installErr) {
+	if level == installBannerAborted {
 		return
 	}
 

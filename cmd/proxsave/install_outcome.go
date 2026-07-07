@@ -6,20 +6,29 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
-// buildInstallOutcomePrompt composes the pre-styled outcome block shown under
-// the streamed finalization lines (StreamDoneMsg.Outcome). It is the install's
-// own Mattone C consumer: it reuses the shared daemon verdict + renderer
-// (installVerifyVerdict + renderDaemonStatusLevel) for the "Daemon:" line - the
-// SAME aligned / behind / not-running verdict as --daemon-status - and colors the
-// "Permissions:" line with the same status strings printInstallFooter switches on
-// (ok / warning / error / skipped).
+// buildInstallOutcomePrompt composes the pre-styled summary block shown at the bottom
+// of the streamed finalization screen (StreamDoneMsg.Outcome): a completion banner +
+// the "Daemon:" and "Permissions:" lines. It is the install's own Mattone C consumer,
+// reusing the SHARED helpers so it never drifts from the CLI footer:
+//   - installBanner (the same completed/aborted/failed title + severity the footer's
+//     ANSI box uses), rendered here in the theme via renderInstallBanner;
+//   - installVerifyVerdict + renderDaemonStatusLevel for the "Daemon:" line (the SAME
+//     aligned / behind / not-running verdict as --daemon-status);
+//   - the same permStatus strings printInstallFooter switches on for "Permissions:".
 //
-// The whole string is caller-pre-styled and passed verbatim to the StreamTask
-// screen, mirroring how WithSelectorPromptStyled accepts an already-rendered
-// prompt. It never renders the CLI footer, which stays the persistent
-// scrollback record after the session closes.
+// The graphical finalization is reached only on the success path (failures/aborts
+// return early and the footer prints the red/magenta banner), so the banner here is
+// "completed"; the shared helper keeps the wording in one place.
+//
+// The whole string is caller-pre-styled and passed verbatim to the StreamTask screen,
+// mirroring how WithSelectorPromptStyled accepts an already-rendered prompt. It never
+// renders the CLI footer, which stays the persistent scrollback record after Close.
 func buildInstallOutcomePrompt(rv RestartVerifyResult, verified bool, permStatus, permMessage string) string {
 	var b strings.Builder
+
+	title, level := installBanner(nil)
+	b.WriteString(renderInstallBanner(level, title))
+	b.WriteString("\n\n")
 
 	b.WriteString(theme.Text.Render("Daemon: "))
 	if verified {
@@ -52,4 +61,18 @@ func buildInstallOutcomePrompt(rv RestartVerifyResult, verified bool, permStatus
 	}
 
 	return b.String()
+}
+
+// renderInstallBanner renders the themed completion banner line (symbol + title) for
+// the graphical finalization summary - the theme counterpart of printInstallFooter's
+// ANSI box, sharing installBanner's severity so the wording matches the CLI.
+func renderInstallBanner(level installBannerLevel, title string) string {
+	switch level {
+	case installBannerFailed:
+		return theme.ErrorText.Render(theme.SymbolError + " " + title)
+	case installBannerAborted:
+		return theme.WarningText.Render(theme.SymbolWarning + " " + title)
+	default:
+		return theme.SuccessText.Render(theme.SymbolSuccess + " " + title)
+	}
 }

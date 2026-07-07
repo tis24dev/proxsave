@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
-	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // pumpEnterUntilDone repeatedly sends Enter until RunStreamTask returns. Enter
@@ -64,20 +63,23 @@ func TestStreamScreenDoneShowsOutcomeAndHint(t *testing.T) {
 	if !strings.Contains(view, "OUTCOME-XYZ") {
 		t.Errorf("view missing outcome\n%s", view)
 	}
-	if !strings.Contains(view, "enter continue") {
-		t.Errorf("view missing continue hint\n%s", view)
+	// The Continue hint is shown by the FRAME via Help(), never duplicated in the body.
+	if strings.Contains(view, "enter continue") {
+		t.Errorf("view must NOT render the continue hint (the frame's help bar does)\n%s", view)
 	}
-	if !strings.Contains(view, theme.SymbolSuccess) {
-		t.Errorf("view missing success symbol\n%s", view)
+	if got := scr.Help(); got != "enter continue" {
+		t.Errorf("Help() = %q, want \"enter continue\"", got)
 	}
 }
 
-func TestStreamScreenDoneErrorShowsErrorSymbol(t *testing.T) {
+func TestStreamScreenDoneShowsOutcomeVerbatim(t *testing.T) {
 	scr := newStreamScreen("Finalizing", 1, func() {})
-	scr.Update(StreamDoneMsg{Token: 1, Outcome: "bad", Err: errors.New("boom")}) //nolint:errcheck
+	// The caller owns the outcome styling (including any symbol); StreamTask injects
+	// none - it renders the pre-styled outcome verbatim, even on a run error.
+	scr.Update(StreamDoneMsg{Token: 1, Outcome: "CALLER-OUTCOME", Err: errors.New("boom")}) //nolint:errcheck
 	view := scr.View(80, 40)
-	if !strings.Contains(view, theme.SymbolError) {
-		t.Errorf("view missing error symbol\n%s", view)
+	if !strings.Contains(view, "CALLER-OUTCOME") {
+		t.Errorf("view missing verbatim outcome\n%s", view)
 	}
 }
 
