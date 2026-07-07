@@ -185,12 +185,12 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	}
 	// Healthchecks monitoring mode. Active only with the daemon engine (the daemon
 	// is the sole pinger); with cron it is dimmed and forced off in the data block.
-	// Fresh/Overwrite defaults to Centralizzato (paired with the daemon default);
+	// Fresh/Overwrite defaults to Centralized (paired with the daemon default);
 	// editing an existing config defaults to its stored mode so a no-op edit never
 	// flips it. The config VALUES stay "off"/"centralized"/"self" (UI labels differ).
-	hcOptions := []string{"Off", "Centralizzato (nostro)", "Server personale (manuale)"}
+	hcOptions := []string{"Off", "Centralized (ours)", "Your own server"}
 	hcValues := []string{"off", "centralized", "self"}
-	hcIndex := 1 // default: Centralizzato, paired with the daemon default
+	hcIndex := 1 // default: Centralized, paired with the daemon default
 	if strings.TrimSpace(baseTemplate) != "" {
 		switch strings.ToLower(strings.TrimSpace(prefill.HealthcheckMode)) {
 		case "off":
@@ -203,7 +203,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	}
 	healthcheck := &components.FormField{
 		Label:       "Healthchecks",
-		Description: "Backup monitoring (daemon only): Off, Centralizzato (nostro, zero setup), o Server personale (self: incolli le URL di ping).",
+		Description: "Backup monitoring (daemon only): Off, Centralized (ours, zero setup), or Your own server (self: paste the ping URLs).",
 		Kind:        components.FieldSelect,
 		Options:     hcOptions,
 		OptionIndex: hcIndex,

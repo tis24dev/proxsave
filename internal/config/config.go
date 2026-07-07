@@ -985,7 +985,7 @@ func (c *Config) parseSystemSettings() {
 	c.PBSDatastorePaths = normalizeList(c.getStringSlice("PBS_DATASTORE_PATH", nil))
 }
 
-// Helper methods per ottenere valori tipizzati
+// Helper methods to obtain typed values
 
 func (c *Config) getString(key, defaultValue string) string {
 	upperKey := strings.ToUpper(key)

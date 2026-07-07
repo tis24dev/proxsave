@@ -76,7 +76,7 @@ func TestRunHealthcheckSelfParams(t *testing.T) {
 	go func() {
 		errCh <- RunHealthcheckSelfParams(context.Background(), d.session, dir, configPath)
 	}()
-	d.waitScreen("Healthchecks - parametri server personale")
+	d.waitScreen("Healthchecks - your own server parameters")
 	d.typeText(aliveURL)
 	d.keys("down")
 	d.typeText(backupURL)

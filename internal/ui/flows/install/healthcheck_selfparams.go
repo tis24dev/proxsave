@@ -68,49 +68,49 @@ func RunHealthcheckSelfParams(ctx context.Context, session *shell.Session, baseD
 
 	alive := &components.FormField{
 		Label:       "Alive ping URL",
-		Description: "HEALTHCHECK_ALIVE_URL (obbligatorio): URL di ping service-alive completo (es. https://hc-ping.com/<uuid>).",
+		Description: "HEALTHCHECK_ALIVE_URL (required): the full service-alive ping URL (e.g. https://hc-ping.com/<uuid>).",
 		Kind:        components.FieldText,
 		Text:        prefill.AliveURL,
 		Validate:    validateHealthcheckPingURL,
 	}
 	backup := &components.FormField{
 		Label:       "Backup ping URL",
-		Description: "HEALTHCHECK_BACKUP_URL (obbligatorio): URL di ping dell'esito backup completo.",
+		Description: "HEALTHCHECK_BACKUP_URL (required): the full backup-outcome ping URL.",
 		Kind:        components.FieldText,
 		Text:        prefill.BackupURL,
 		Validate:    validateHealthcheckPingURL,
 	}
 	updates := &components.FormField{
 		Label:       "Updates ping URL",
-		Description: "HEALTHCHECK_UPDATES_URL (opzionale): URL di ping del check aggiornamenti.",
+		Description: "HEALTHCHECK_UPDATES_URL (optional): the updates-check ping URL.",
 		Kind:        components.FieldText,
 		Text:        prefill.UpdatesURL,
 		Validate:    validateOptionalHealthcheckPingURL,
 	}
 	notifyEmail := &components.FormField{
 		Label:       "Notify email URL",
-		Description: "HEALTHCHECK_NOTIFY_EMAIL_URL (opzionale): URL di ping notifica email.",
+		Description: "HEALTHCHECK_NOTIFY_EMAIL_URL (optional): the email-notification ping URL.",
 		Kind:        components.FieldText,
 		Text:        prefill.NotifyEmailURL,
 		Validate:    validateOptionalHealthcheckPingURL,
 	}
 	notifyTelegram := &components.FormField{
 		Label:       "Notify Telegram URL",
-		Description: "HEALTHCHECK_NOTIFY_TELEGRAM_URL (opzionale): URL di ping notifica Telegram.",
+		Description: "HEALTHCHECK_NOTIFY_TELEGRAM_URL (optional): the Telegram-notification ping URL.",
 		Kind:        components.FieldText,
 		Text:        prefill.NotifyTelegramURL,
 		Validate:    validateOptionalHealthcheckPingURL,
 	}
 	notifyGotify := &components.FormField{
 		Label:       "Notify Gotify URL",
-		Description: "HEALTHCHECK_NOTIFY_GOTIFY_URL (opzionale): URL di ping notifica Gotify.",
+		Description: "HEALTHCHECK_NOTIFY_GOTIFY_URL (optional): the Gotify-notification ping URL.",
 		Kind:        components.FieldText,
 		Text:        prefill.NotifyGotifyURL,
 		Validate:    validateOptionalHealthcheckPingURL,
 	}
 	notifyWebhook := &components.FormField{
 		Label:       "Notify webhook URL",
-		Description: "HEALTHCHECK_NOTIFY_WEBHOOK_URL (opzionale): URL di ping notifica webhook.",
+		Description: "HEALTHCHECK_NOTIFY_WEBHOOK_URL (optional): the webhook-notification ping URL.",
 		Kind:        components.FieldText,
 		Text:        prefill.NotifyWebhookURL,
 		Validate:    validateOptionalHealthcheckPingURL,
@@ -121,7 +121,7 @@ func RunHealthcheckSelfParams(ctx context.Context, session *shell.Session, baseD
 		notifyEmail, notifyTelegram, notifyGotify, notifyWebhook,
 	}
 	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
-		"Healthchecks - parametri server personale", fields,
+		"Healthchecks - your own server parameters", fields,
 		components.WithFormGridBack(installer.ErrInstallCancelled),
 	)); err != nil {
 		return mapCancel(err)

@@ -549,8 +549,8 @@ func TestEmailNotifierBuildEmailMessage_EncodesUTF8BodiesAsSevenBitSafe(t *testi
 	emailMessage, _ := notifier.buildEmailMessage(
 		"admin@example.com",
 		"✅ PVE Backup à",
-		"<p>Backup completato ✅ con avvisi: è pieno</p>",
-		"Backup completato ✅ con avvisi: è pieno",
+		"<p>Backup complete ✅ with warnings: è full</p>",
+		"Backup complete ✅ with warnings: è full",
 		createTestNotificationData(),
 	)
 
