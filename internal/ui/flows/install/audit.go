@@ -33,12 +33,10 @@ const (
 // matching the pre-check "Status: NOT CHECKED" look of the Telegram/Healthchecks checks.
 func buildAuditPrompt() string {
 	var b strings.Builder
-	b.WriteString(theme.Text.Render("Detect unused/optional backup components (a dry-run) and disable them to reduce warnings."))
+	b.WriteString(theme.Text.Render("Detect unused backup components."))
 	b.WriteString("\n\n")
 	b.WriteString(theme.Text.Render("Status: "))
 	b.WriteString(renderHealthcheckLevel(orchestrator.HealthcheckSetupLevelNeutral, "NOT CHECKED"))
-	b.WriteString("\n")
-	b.WriteString(theme.Subtle.Render("Choose Check to run the dry-run (this may take a minute)."))
 	return b.String()
 }
 
