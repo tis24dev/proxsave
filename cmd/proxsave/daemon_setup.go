@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/cron"
@@ -81,7 +82,44 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 	if err := runSystemctl(ctx, "try-restart", daemonUnitName); err != nil {
 		logging.Debug("daemon: try-restart to reload config failed: %v", err)
 	}
+	// Confirm the (re)started daemon actually came up ALIGNED with the binary now on
+	// disk before returning success. Best-effort: an unconfirmed alignment is only a
+	// warning (never fails --daemon-setup / the migration).
+	if cfg != nil && strings.TrimSpace(cfg.BaseDir) != "" {
+		verifyDaemonAlignedBestEffort(ctx, cfg.BaseDir, cfg.HealthcheckHeartbeatInterval)
+	}
 	return nil
+}
+
+// verifyDaemonAlignedBestEffort confirms (poll-only, no restart) that a just-(re)started
+// daemon is process-alive and aligned with the installed binary, logging the outcome. It
+// NEVER fails the caller (install / --daemon-setup): an unconfirmed alignment is a
+// warning, not an error, so a verify miss cannot block bringing the daemon up.
+func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval time.Duration) {
+	rv := verifyDaemonAligned(ctx, baseDir, interval)
+	switch {
+	case rv.ProcessAlive && rv.Aligned:
+		logging.Info("Daemon verified: running and aligned with the installed binary (v%s).", rv.State.Version)
+	case rv.TimedOut:
+		logging.Warning("Daemon started but could not be confirmed aligned within the timeout; check 'proxsave --daemon-status'.")
+	default:
+		logging.Warning("Daemon alignment could not be confirmed after install; check 'proxsave --daemon-status'.")
+	}
+}
+
+// installVerifyContext resolves the base dir + heartbeat interval for a post-install
+// daemon verify from the just-written config (best-effort; ok=false when unreadable).
+func installVerifyContext(configPath string) (baseDir string, interval time.Duration, ok bool) {
+	detected, _ := detectedBaseDirOrFallback()
+	cfg, err := config.LoadConfigWithBaseDir(configPath, detected)
+	if err != nil || cfg == nil {
+		return "", 0, false
+	}
+	baseDir = detected
+	if strings.TrimSpace(cfg.BaseDir) != "" {
+		baseDir = cfg.BaseDir
+	}
+	return baseDir, cfg.HealthcheckHeartbeatInterval, true
 }
 
 // applyCronMode reverts an install to cron: remove the systemd unit, re-add the
@@ -172,6 +210,12 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 			logging.Warning("daemon: failed to remove the cron entry (the per-run lock mitigates double execution): %v", err)
 		}
 		logging.Info("Daemon mode enabled: %s is active and the cron entry was removed.", daemonUnitName)
+		// installDaemonService just `enable --now`-started the unit; confirm it came up
+		// aligned with the freshly installed binary so a fresh install ends verified.
+		// Best-effort (a verify miss is only logged, never fails the install).
+		if baseDir, interval, ok := installVerifyContext(configPath); ok {
+			verifyDaemonAlignedBestEffort(ctx, baseDir, interval)
+		}
 		return
 	}
 
