@@ -2,10 +2,10 @@
 // is the daemon installed / active / process-alive, what is its transmission diagnosis, and -- the
 // new question -- is the running daemon ALIGNED with the binary now on disk, or is it behind (an
 // in-place upgrade replaced the file without a restart). It reuses only existing calls (LoadStatus,
-// Diagnose, RefineWithPresence, ReadDaemonPID, ReadDaemonInfo, ComputeBinaryIdentity); the two
-// side-effecting seams -- systemd presence and process-liveness -- are INJECTED so this package
-// never shells out to systemctl and stays a logging-free leaf. Later stages render this state into
-// the dashboard and drive upgrade/install restart-verify; this file only computes it.
+// Diagnose, RefineWithPresence, ReadDaemonPID, ReadDaemonInfo); the side-effecting seams -- systemd
+// presence, process-liveness, and the /proc staleness probe -- are INJECTED so this package never
+// shells out to systemctl nor reads /proc itself and stays a logging-free leaf. Later stages render
+// this state into the dashboard and drive upgrade/install restart-verify; this file only computes it.
 
 package health
 
@@ -15,15 +15,15 @@ import (
 	"time"
 )
 
-// DaemonState is the composed verdict for the resident daemon. Aligned answers "is the running
-// daemon's binary the same as the file on disk?" -- but a comparison is only MEANINGFUL when
-// AlignChecked is true, i.e. a record was found AND its recorded binary hash was non-empty AND the
-// on-disk binary re-hashed successfully. Alignment is UNKNOWN (AlignChecked=false, Aligned=false) when
-// there is no record, when the record carries an empty binary hash (the daemon's startup hash failed),
-// or when the on-disk binary could not be re-read at check time. Callers must gate any "behind"
-// verdict on AlignChecked so an UNKNOWN alignment never renders as behind. StaleReason carries the
-// human phrasing: a real mismatch when AlignChecked, or the read failure (diagnostic only) when the
-// on-disk binary is unreadable.
+// DaemonState is the composed verdict for the resident daemon. Aligned answers "was the running
+// daemon's binary replaced on disk?" -- but the answer is only MEANINGFUL when AlignChecked is true,
+// i.e. the injected /proc staleness probe returned a definitive verdict for a live, pid-bearing
+// process. Alignment is UNKNOWN (AlignChecked=false, Aligned=false) when the process is not alive,
+// when no ProcStale probe is wired, or when the probe could not read /proc/<pid>/exe. Callers must
+// gate any "behind" verdict on AlignChecked so an UNKNOWN alignment never renders as behind.
+// StaleReason carries the human phrasing when a genuine "behind" is detected. Version/Commit/StartTS
+// come from the identity record (HaveInfo) and are for DISPLAY and the restart-verify freshness gate
+// only -- the record no longer participates in the alignment decision.
 type DaemonState struct {
 	SchedulerMode string
 	Probed        bool
@@ -50,7 +50,10 @@ func (s DaemonState) TxState() TxState { return s.Diagnosis.State }
 // DaemonStateInput is the injected context for CheckDaemonState. Presence is the systemd-level
 // existence probed OUTSIDE this package; ProcAlive is the process-liveness probe (nil falls back to
 // the local pidAlive). Now + HeartbeatInterval feed Diagnose deterministically (this package never
-// reads the clock).
+// reads the clock). ProcStale is the RECORD-INDEPENDENT, HASH-FREE staleness probe (via
+// /proc/<pid>/exe, implemented in the cmd layer so this leaf never reads /proc itself): it is the
+// SOLE source of the alignment verdict, returning (stale, checked) where checked=false means "could
+// not determine" (alignment stays UNKNOWN). A nil ProcStale leaves alignment UNKNOWN.
 type DaemonStateInput struct {
 	BaseDir           string
 	SchedulerMode     string
@@ -58,14 +61,16 @@ type DaemonStateInput struct {
 	Now               time.Time
 	Presence          DaemonPresence
 	ProcAlive         func(pid int) bool
+	ProcStale         func(pid int) (stale bool, checked bool)
 }
 
 // CheckDaemonState composes the daemon-state verdict from existing primitives only. The steps are
 // load-bearing in order: (1) load the persisted status; (2) diagnose it and refine with systemd
-// presence; (3) resolve the pid and probe liveness; (4) load the identity record and, if present with
-// a recorded hash, re-hash the on-disk binary to decide alignment. Alignment is a real comparison only
-// when AlignChecked is set; with no record, an empty recorded hash, or an unreadable on-disk binary it
-// stays UNKNOWN (Aligned=false) and callers gate the "behind" verdict on AlignChecked.
+// presence; (3) resolve the pid and probe liveness; (4) load the identity record for the daemon's
+// version/commit/start time (DISPLAY + freshness only); (5) decide alignment SOLELY from the injected
+// ProcStale probe (/proc/<pid>/exe). Alignment is known only when AlignChecked is set (the probe
+// returned a verdict for a live process); otherwise it stays UNKNOWN (Aligned=false) and callers gate
+// the "behind" verdict on AlignChecked.
 func CheckDaemonState(in DaemonStateInput) DaemonState {
 	s := DaemonState{SchedulerMode: in.SchedulerMode}
 
@@ -101,33 +106,29 @@ func CheckDaemonState(in DaemonStateInput) DaemonState {
 	}
 	s.ProcessAlive = s.PID > 0 && probe(s.PID)
 
-	// 4. Identity record + alignment. Alignment is a real comparison ONLY when AlignChecked is set:
-	// a record exists, its recorded hash is non-empty, AND the on-disk binary re-hashed. Every other
-	// path is UNKNOWN (AlignChecked=false, Aligned=false) and must NOT read as "behind":
-	//   - no record                          -> UNKNOWN.
-	//   - record with an empty recorded hash  -> UNKNOWN (the daemon's startup hash failed), no reason.
-	//   - record but the on-disk binary errs  -> UNKNOWN, StaleReason keeps the read failure for
-	//                                             diagnostics (the binary is gone/unreadable, not stale).
-	//   - record + hash both present          -> AlignChecked, Aligned reflects the real comparison,
-	//                                             StaleReason set only on a genuine mismatch.
+	// 4. Identity record: surface the running daemon's version/commit/start time for DISPLAY and the
+	// restart-verify freshness gate. HaveInfo now means only "a record exists"; the record no longer
+	// participates in the alignment decision (that is step 5, /proc alone).
 	s.HaveInfo = haveInfo
 	if haveInfo {
 		s.Version = info.Version
 		s.Commit = info.Commit
 		s.StartTS = info.StartTS
-		switch {
-		case info.Binary.SHA256 == "":
-			// Recorded identity unavailable: alignment is UNKNOWN, not behind.
-		default:
-			cur, cerr := ComputeBinaryIdentity(info.ExecPath)
-			if cerr != nil {
-				s.StaleReason = "cannot read on-disk binary: " + cerr.Error()
-			} else {
-				s.AlignChecked = true
-				s.Aligned = cur.Aligned(info.Binary)
-				if !s.Aligned {
-					s.StaleReason = "on-disk binary differs from the running daemon's binary"
-				}
+	}
+
+	// 5. Alignment via the record-independent /proc probe ONLY. Linux blocks overwriting a running
+	// executable (ETXTBSY), so an in-place upgrade/rebuild unlinks the old file and /proc/<pid>/exe
+	// gains a " (deleted)" suffix -- a complete, HASH-FREE "behind" signal. The probe returns
+	// (stale, checked); checked=false leaves alignment UNKNOWN (AlignChecked stays false), so a
+	// "behind" verdict never renders on an undecidable state. It runs only for a live, pid-bearing
+	// process -- a dead process has no /proc/<pid>/exe to read.
+	if s.ProcessAlive && s.PID > 0 && in.ProcStale != nil {
+		stale, checked := in.ProcStale(s.PID)
+		if checked {
+			s.AlignChecked = true
+			s.Aligned = !stale
+			if stale {
+				s.StaleReason = "running binary was replaced on disk (rebuilt/upgraded without a restart)"
 			}
 		}
 	}

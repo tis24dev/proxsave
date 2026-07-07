@@ -1,12 +1,12 @@
 // daemon_info.go records the running daemon's IDENTITY (pid, the binary it booted from, its version/
 // commit, and start time) in a COMPANION file next to the pid file. It is deliberately separate from
 // .daemon.pid, which is the SIGUSR1 handoff contract (a bare pid a standalone run reads to signal
-// us); overloading that file would risk that contract. This record instead answers "is the running
-// daemon still aligned with the binary on disk?" -- an in-place upgrade replaces the file without
-// restarting the process, so the daemon captures the binary's identity ONCE at startup here, and a
-// later reader re-hashes the on-disk file and compares (see daemon_state.go). It is a sibling of the
-// status/pid files in the identity dir, written with the same atomic idiom (writeJSONAtomic) and
-// read tolerantly (like LoadStatus), and stays logging-free + stdlib-only like its siblings.
+// us); overloading that file would risk that contract. This record supplies the running daemon's
+// VERSION/commit/start time for display and the restart-verify freshness gate; the "is the running
+// binary stale?" question is answered separately and hash-free via /proc/<pid>/exe (see
+// daemon_state.go), so no binary hash is recorded here. It is a sibling of the status/pid files in
+// the identity dir, written with the same atomic idiom (writeJSONAtomic) and read tolerantly (like
+// LoadStatus), and stays logging-free + stdlib-only like its siblings.
 
 package health
 
@@ -17,16 +17,15 @@ import (
 	"path/filepath"
 )
 
-// DaemonInfo is the identity record the daemon writes at startup. Binary is the identity of the
-// executable the daemon is running FROM (captured once at startup); a reader compares it against a
-// fresh ComputeBinaryIdentity of the same path to detect a behind/stale daemon.
+// DaemonInfo is the identity record the daemon writes at startup: the pid, the path of the executable
+// it is running FROM, and its version/commit/start time (for display and the restart-verify freshness
+// gate). Staleness is detected hash-free via /proc/<pid>/exe, so no binary hash is stored here.
 type DaemonInfo struct {
-	PID      int            `json:"pid"`
-	ExecPath string         `json:"exec_path"`
-	Binary   BinaryIdentity `json:"binary"`
-	Version  string         `json:"version"`
-	Commit   string         `json:"commit"`
-	StartTS  int64          `json:"start_ts"`
+	PID      int    `json:"pid"`
+	ExecPath string `json:"exec_path"`
+	Version  string `json:"version"`
+	Commit   string `json:"commit"`
+	StartTS  int64  `json:"start_ts"`
 }
 
 // DaemonInfoPath returns the daemon-info file path, a sibling of the pid/status files in the

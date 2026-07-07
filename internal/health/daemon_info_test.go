@@ -13,7 +13,6 @@ func TestDaemonInfoRoundTrip(t *testing.T) {
 	want := DaemonInfo{
 		PID:      1234,
 		ExecPath: "/usr/local/bin/proxsave",
-		Binary:   BinaryIdentity{Path: "/usr/local/bin/proxsave", SHA256: "deadbeef", Size: 42, MTime: 1000},
 		Version:  "1.2.3",
 		Commit:   "abc123",
 		StartTS:  1700000000,

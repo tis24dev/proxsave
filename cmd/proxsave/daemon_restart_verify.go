@@ -145,6 +145,7 @@ func restartAndVerifyDaemon(ctx context.Context, baseDir, lockFilePath string, i
 			Now:               time.Now(),
 			Presence:          daemonPresenceProbe(ctx),
 			ProcAlive:         probeProxsaveDaemonAlive,
+			ProcStale:         procBinaryStaleProbe,
 		})
 		res.State = st
 		res.ProcessAlive = st.ProcessAlive
@@ -184,6 +185,7 @@ func verifyDaemonAligned(ctx context.Context, baseDir string, interval time.Dura
 			Now:               time.Now(),
 			Presence:          daemonPresenceProbe(ctx),
 			ProcAlive:         probeProxsaveDaemonAlive,
+			ProcStale:         procBinaryStaleProbe,
 		})
 		res.State = st
 		res.ProcessAlive = st.ProcessAlive

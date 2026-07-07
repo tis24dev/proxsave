@@ -95,9 +95,10 @@ func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetup
 	// A running daemon on an OLDER binary than the one now on disk (an in-place upgrade replaced
 	// the file without a restart) needs a restart to load the update. This is DISTINCT from "not
 	// reporting yet" and takes precedence over the transmission-state headline. Only reported when
-	// alignment was actually checked (DaemonAlignChecked): with no record, an empty recorded hash, or
-	// an unreadable on-disk binary, alignment is UNKNOWN and must NOT read as behind.
-	if res.DaemonHaveInfo && res.DaemonAlignChecked && !res.DaemonAligned {
+	// alignment was actually determined (DaemonAlignChecked) by the record-independent /proc probe;
+	// when it could not be determined, alignment is UNKNOWN and must NOT read as behind. A record
+	// (DaemonHaveInfo) is not required, so any live daemon on a replaced binary is caught.
+	if res.DaemonAlignChecked && !res.DaemonAligned {
 		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "BEHIND"
 		st.Message = "The monitoring daemon is running an older binary than the one now on disk; restart it to load the update."
 		return st

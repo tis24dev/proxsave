@@ -131,19 +131,13 @@ func (d *daemon) run(ctx context.Context) int {
 	}
 	// Alongside the bare pid (the SIGUSR1 handoff contract), record the daemon's IDENTITY -- the
 	// binary it booted from, version/commit, start time -- in the companion .daemon_info.json, so a
-	// later reader can tell whether the running daemon is still aligned with the on-disk binary or is
-	// behind (an in-place upgrade replaced the file without a restart). Best-effort: neither the hash
-	// nor the write may fail startup. A hash error still writes the record with an EMPTY Binary, which
-	// a reader treats as "alignment unknown" (CheckDaemonState leaves AlignChecked=false, never
-	// "behind"); a write hiccup is only Debug-logged.
-	binID, binErr := health.ComputeBinaryIdentity(d.execPath)
-	if binErr != nil {
-		logging.Debug("daemon: compute binary identity failed: %v", binErr)
-	}
+	// later reader can display the running version and gate restart-verify freshness. Staleness ("is
+	// the running binary behind the file on disk?") is answered separately and hash-free via
+	// /proc/<pid>/exe (see daemon_state.go), so nothing is hashed here. Best-effort: a write hiccup is
+	// only Debug-logged and must not fail startup.
 	if err := health.WriteDaemonInfo(d.cfg.BaseDir, health.DaemonInfo{
 		PID:      os.Getpid(),
 		ExecPath: d.execPath,
-		Binary:   binID,
 		Version:  version.String(),
 		Commit:   version.Commit,
 		StartTS:  d.now().Unix(),
