@@ -163,12 +163,12 @@ func restartAndVerifyDaemon(ctx context.Context, baseDir, lockFilePath string, i
 	}
 }
 
-// verifyDaemonAligned is the poll-only variant (no restart, no backup-wait): it verifies
-// that an ALREADY-(re)started daemon is process-alive and aligned. It suits the
-// post-install path where installDaemonService just `enable --now`-started the unit, so
-// there is nothing to restart -- only to confirm it came up on the freshly installed
-// binary. Success is ProcessAlive && Aligned && AlignChecked; there is no pre-restart
-// snapshot, so FreshInfo simply reflects that an identity record exists.
+// verifyDaemonAligned is the poll-only variant (no restart, no backup-wait): it waits for an
+// ALREADY-(re)started daemon to become process-alive with an ASSESSABLE alignment, then returns
+// the state (res.Aligned tells aligned vs behind). It polls until ProcessAlive && AlignChecked --
+// NOT until Aligned -- so a daemon that is up but BEHIND is reported immediately (the SAME verdict
+// --daemon-status gives), never as a timeout. TimedOut means the daemon never came up. There is no
+// pre-restart snapshot, so FreshInfo simply reflects that an identity record exists.
 func verifyDaemonAligned(ctx context.Context, baseDir string, interval time.Duration) RestartVerifyResult {
 	if ctx == nil {
 		ctx = context.Background()
@@ -191,7 +191,7 @@ func verifyDaemonAligned(ctx context.Context, baseDir string, interval time.Dura
 		res.ProcessAlive = st.ProcessAlive
 		res.Aligned = st.Aligned
 		res.FreshInfo = st.HaveInfo
-		if st.ProcessAlive && st.Aligned && st.AlignChecked {
+		if st.ProcessAlive && st.AlignChecked {
 			return res
 		}
 		select {

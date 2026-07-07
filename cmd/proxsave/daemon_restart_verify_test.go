@@ -207,7 +207,24 @@ func TestVerifyDaemonAligned(t *testing.T) {
 		}
 	})
 
-	t.Run("timeout", func(t *testing.T) {
+	t.Run("behind returns immediately, not a timeout", func(t *testing.T) {
+		// A daemon that is up and assessable but NOT aligned (behind) must be reported at once,
+		// the SAME verdict --daemon-status gives - never polled-until-aligned into a timeout.
+		stubRestartSeams(t, nil,
+			func(string) bool { return false },
+			func(health.DaemonStateInput) health.DaemonState {
+				return health.DaemonState{ProcessAlive: true, AlignChecked: true, Aligned: false, HaveInfo: true}
+			})
+		rv := verifyDaemonAligned(context.Background(), t.TempDir(), 0)
+		if rv.TimedOut {
+			t.Fatalf("a running-but-behind daemon must be reported, not time out: %+v", rv)
+		}
+		if !rv.ProcessAlive || rv.Aligned {
+			t.Fatalf("expected process-alive + not-aligned (behind), got %+v", rv)
+		}
+	})
+
+	t.Run("timeout only when never alive", func(t *testing.T) {
 		stubRestartSeams(t, nil,
 			func(string) bool { return false },
 			func(health.DaemonStateInput) health.DaemonState {
