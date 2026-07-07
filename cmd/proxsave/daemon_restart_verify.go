@@ -252,15 +252,13 @@ func summarizeRestartVerify(rv *RestartVerifyResult, version string) (line strin
 		return "Daemon: WARNING - a backup is running; daemon restart deferred - " +
 			"restart when idle or it stays on the old binary", true
 	case rv.TimedOut:
-		return "Daemon: WARNING - restarted but not confirmed aligned - " +
-			"check the daemon (proxsave --daemon-status)", true
+		return "Daemon: WARNING - restarted but alignment check timeout", true
 	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
 		if v := strings.TrimSpace(version); v != "" {
 			return "Daemon: restarted, now aligned (v" + v + ")", false
 		}
 		return "Daemon: restarted, now aligned", false
 	default:
-		return "Daemon: WARNING - restarted but alignment could not be confirmed - " +
-			"check the daemon (proxsave --daemon-status)", true
+		return "Daemon: WARNING - restarted but alignment could not be confirmed", true
 	}
 }

@@ -289,7 +289,7 @@ func TestSummarizeRestartVerify(t *testing.T) {
 		t.Fatalf("deferred line wrong: %q warn=%v", line, warn)
 	}
 	timedOut := &RestartVerifyResult{Restarted: true, TimedOut: true}
-	if line, warn := summarizeRestartVerify(timedOut, ""); !warn || !strings.Contains(line, "not confirmed aligned") {
+	if line, warn := summarizeRestartVerify(timedOut, ""); !warn || !strings.Contains(line, "alignment check timeout") {
 		t.Fatalf("timeout line wrong: %q warn=%v", line, warn)
 	}
 	failed := &RestartVerifyResult{Err: errors.New("boom")}

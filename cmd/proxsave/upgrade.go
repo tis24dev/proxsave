@@ -97,11 +97,11 @@ func logUpgradeDaemonRestart(bootstrap *logging.BootstrapLogger, rv *RestartVeri
 	case rv.BackupWaitTimedOut:
 		bootstrap.Warning("A backup is running; daemon restart deferred. Restart when idle or the daemon stays on the old binary.")
 	case rv.TimedOut:
-		bootstrap.Warning("Daemon restarted but could not be confirmed aligned; check 'proxsave --daemon-status'.")
+		bootstrap.Warning("Daemon restarted but alignment check timeout")
 	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
 		bootstrap.Println("Daemon restarted and now aligned with the new binary.")
 	default:
-		bootstrap.Warning("Daemon restarted but alignment could not be confirmed; check 'proxsave --daemon-status'.")
+		bootstrap.Warning("Daemon restarted but alignment could not be confirmed")
 	}
 }
 

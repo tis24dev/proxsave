@@ -102,9 +102,9 @@ func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval
 	case rv.ProcessAlive && rv.Aligned:
 		logging.Info("Daemon verified: running and aligned with the installed binary (v%s).", rv.State.Version)
 	case rv.TimedOut:
-		logging.Warning("Daemon started but could not be confirmed aligned within the timeout; check 'proxsave --daemon-status'.")
+		logging.Warning("Daemon started but alignment check timeout")
 	default:
-		logging.Warning("Daemon alignment could not be confirmed after install; check 'proxsave --daemon-status'.")
+		logging.Warning("Daemon alignment could not be confirmed")
 	}
 }
 
