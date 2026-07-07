@@ -164,7 +164,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	// Best-effort post-install permission and ownership normalization so that
 	// the environment starts in a consistent state.
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "normalizing permissions")
-	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap)
+	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap, nil)
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "permissions status=%s", permStatus)
 
 	return nil
