@@ -360,11 +360,11 @@ const (
 func installBanner(installErr error) (title string, level installBannerLevel) {
 	switch {
 	case installErr == nil:
-		return "Go-based installation completed", installBannerCompleted
+		return "Installation completed", installBannerCompleted
 	case isInstallAbortedError(installErr):
-		return "Go-based installation aborted", installBannerAborted
+		return "Installation aborted", installBannerAborted
 	default:
-		return "Go-based installation failed", installBannerFailed
+		return "Installation failed", installBannerFailed
 	}
 }
 
@@ -681,7 +681,7 @@ func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstr
 
 func printInstallBanner(configPath string) {
 	fmt.Println("===========================================")
-	fmt.Println("  ProxSave - Go Version")
+	fmt.Println("  ProxSave")
 	fmt.Printf("  Version: %s\n", buildinfo.String())
 	sig := buildSignature()
 	if strings.TrimSpace(sig) == "" {

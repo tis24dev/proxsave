@@ -536,7 +536,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.Env
 	run := o.newBackupRunContext(ctx, envInfo, hostname)
 	done := logging.DebugStart(o.logger, "backup run", "type=%s hostname=%s", run.proxmoxType, hostname)
 	defer func() { done(err) }()
-	o.logger.Info("Starting Go-based backup orchestration for %s", run.proxmoxType)
+	o.logger.Info("Starting backup orchestration for %s", run.proxmoxType)
 
 	workspace := &backupWorkspace{
 		registry: o.cleanupPreviousExecutionArtifacts(ctx),
