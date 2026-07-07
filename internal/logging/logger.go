@@ -265,6 +265,57 @@ func (l *Logger) GetLevel() types.LogLevel {
 	return l.level
 }
 
+// levelColorCode returns the ANSI color code for a level using the standard
+// console palette. It is the single source of truth for the level->color
+// mapping shared by the main Logger and FormatConsoleLogLine.
+func levelColorCode(level types.LogLevel) string {
+	switch level {
+	case types.LogLevelDebug:
+		return "\033[36m" // Cyan
+	case types.LogLevelInfo:
+		return "\033[32m" // Green
+	case types.LogLevelWarning:
+		return "\033[33m" // Yellow
+	case types.LogLevelError:
+		return "\033[31m" // Red
+	case types.LogLevelCritical:
+		return "\033[1;31m" // Bold Red
+	}
+	return ""
+}
+
+// assembleConsoleLine is the single source of truth for the stdout console log
+// format. Both the main Logger and FormatConsoleLogLine build their output from
+// this one Sprintf so the two can never drift. colorCode/resetCode are empty
+// when color is disabled.
+func assembleConsoleLine(timestamp, colorCode, levelStr, resetCode, message string) string {
+	return fmt.Sprintf("[%s] %s%-8s%s %s\n",
+		timestamp,
+		colorCode,
+		levelStr,
+		resetCode,
+		message,
+	)
+}
+
+// FormatConsoleLogLine returns the exact stdout console format used by the main
+// Logger for a standard (unlabelled) level:
+//
+//	[<timestamp>] <color><LEVEL padded %-8s><reset> <message>\n
+//
+// The color is applied only when useColor is true, using the same palette as
+// the main Logger (see levelColorCode). This shared formatter lets the
+// BootstrapLogger print early semantic lines with the same prefix as the main
+// Logger, so the console format stays consistent across the whole run.
+func FormatConsoleLogLine(timestamp string, level types.LogLevel, message string, useColor bool) string {
+	var colorCode, resetCode string
+	if useColor {
+		resetCode = "\033[0m"
+		colorCode = levelColorCode(level)
+	}
+	return assembleConsoleLine(timestamp, colorCode, level.String(), resetCode, message)
+}
+
 // log is the internal method used to write logs.
 func (l *Logger) log(level types.LogLevel, format string, args ...interface{}) {
 	l.logWithLabel(level, "", "", format, args...)
@@ -306,29 +357,16 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		if colorOverride != "" {
 			colorCode = colorOverride
 		} else {
-			switch level {
-			case types.LogLevelDebug:
-				colorCode = "\033[36m" // Cyan
-			case types.LogLevelInfo:
-				colorCode = "\033[32m" // Green
-			case types.LogLevelWarning:
-				colorCode = "\033[33m" // Yellow
-			case types.LogLevelError:
-				colorCode = "\033[31m" // Red
-			case types.LogLevelCritical:
-				colorCode = "\033[1;31m" // Bold Red
-			}
+			colorCode = levelColorCode(level)
 		}
 	}
 
-	// Format for stdout (with colors if enabled).
-	outputStdout := fmt.Sprintf("[%s] %s%-8s%s %s\n",
-		timestamp,
-		colorCode,
-		levelStr,
-		resetCode,
-		message,
-	)
+	// Format for stdout (with colors if enabled). Built from the shared
+	// assembler so this and FormatConsoleLogLine can never drift. levelStr may
+	// be a label override (PHASE/STEP/SKIP) and colorCode a color override, so
+	// this path passes the resolved parts rather than calling
+	// FormatConsoleLogLine directly.
+	outputStdout := assembleConsoleLine(timestamp, colorCode, levelStr, resetCode, message)
 
 	// Format for file (without colors).
 	outputFile := fmt.Sprintf("[%s] %-8s %s\n",
