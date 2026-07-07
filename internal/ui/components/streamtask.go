@@ -77,7 +77,7 @@ func (t *StreamTask) Help() string {
 	if t.done {
 		return "enter continue"
 	}
-	return ""
+	return "esc cancel"
 }
 
 func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
@@ -127,30 +127,21 @@ func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 }
 
 func (t *StreamTask) View(width, height int) string {
-	// Bottom summary: spinner (running) or a colored symbol (done) + title, and
-	// once done the pre-styled outcome + Continue hint. Built FIRST so its height
-	// sizes the line tail, and rendered LAST so it sits at the BOTTOM with the
+	// Bottom summary: while running, the spinner + title; once done, the caller's
+	// pre-styled outcome verbatim (it carries its own completion banner + details).
+	// The Continue hint is NOT rendered here - the frame shows Help() in its help bar
+	// like every other screen (rendering it here duplicated it). Built FIRST so its
+	// height sizes the log tail, rendered LAST so it sits at the BOTTOM with the
 	// streamed log lines scrolling ABOVE it (recaps/outcomes go below the log).
 	var summary strings.Builder
 	if t.done {
-		if t.err != nil {
-			summary.WriteString(theme.ErrorText.Render(theme.SymbolError))
-		} else {
-			summary.WriteString(theme.SuccessText.Render(theme.SymbolSuccess))
-		}
+		summary.WriteString(t.outcome)
 	} else {
 		summary.WriteString(theme.Title.Render(t.spin.View()))
-	}
-	summary.WriteString(" " + theme.Emphasis.Render(t.title))
-	if t.cancelling && !t.done {
-		summary.WriteString(" " + theme.WarningText.Render("(cancelling...)"))
-	}
-	if t.done {
-		summary.WriteString("\n")
-		// Outcome is pre-styled by the caller; render it verbatim.
-		summary.WriteString(t.outcome)
-		summary.WriteString("\n")
-		summary.WriteString(theme.Subtle.Render(t.Help()))
+		summary.WriteString(" " + theme.Emphasis.Render(t.title))
+		if t.cancelling {
+			summary.WriteString(" " + theme.WarningText.Render("(cancelling...)"))
+		}
 	}
 	summaryStr := summary.String()
 
