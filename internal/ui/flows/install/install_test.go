@@ -474,10 +474,12 @@ func TestRunPostInstallAudit(t *testing.T) {
 	d.keys("space down down down enter")
 	// The outcome is now the shared styled "Post-install check" result screen (a
 	// selector with a colored Status keyword), not a Notice. Assert the green
-	// "✓ updated" keyword + the disabled-component line, then dismiss via Back.
+	// "✓ updated" keyword + the disabled-component line. In the install flow the
+	// leave item is "Continue" (mirrors the Telegram check that follows), NOT "Back".
 	d.waitScreen("Post-install check")
 	d.waitText("✓ updated")
 	d.waitText("Disabled 1 component(s): BACKUP_X")
+	d.waitText("Continue")
 	d.keys("enter")
 
 	res := <-resCh
@@ -503,7 +505,7 @@ func TestRunPostInstallAudit(t *testing.T) {
 // TestRunPostInstallAuditNoSuggestions drives the empty-suggestions outcome: it must
 // render the shared styled "Post-install check" result screen with the green
 // "✓ no unused components" Status keyword (and, per the daemon-result convention, no
-// redundant explanation sentence), dismissible via Back.
+// redundant explanation sentence), dismissible via Continue in the install flow.
 func TestRunPostInstallAuditNoSuggestions(t *testing.T) {
 	d := newDriver(t)
 
