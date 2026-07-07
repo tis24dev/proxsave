@@ -84,9 +84,33 @@ type serverError struct {
 // used by the install-time setup screen; the daemon's poll passes false so it
 // never triggers the server-side mint.
 func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool) (CentralizedConfig, error) {
+	return fetchConfig(ctx, client, serverAPIHost, serverID, secret, includeLogin, nil)
+}
+
+// FetchCentralizedConfigWithChannels is the daemon-only variant that ALSO sends the
+// authoritative enabled-notification set as ?channels so the server provisions one check per
+// enabled channel. channels is the lowercased set (e.g. ["email","telegram"]); an EMPTY
+// (non-nil) slice sends the "none" sentinel (pause all). It is a separate function from
+// FetchCentralizedConfig so the install-wizard/Phase-7 callers structurally CANNOT send
+// ?channels (only the daemon owns the authoritative set).
+func FetchCentralizedConfigWithChannels(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string) (CentralizedConfig, error) {
+	return fetchConfig(ctx, client, serverAPIHost, serverID, secret, includeLogin, channels)
+}
+
+func fetchConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string) (CentralizedConfig, error) {
 	q := url.Values{"server_id": {serverID}}
 	if includeLogin {
 		q.Set("login", "1")
+	}
+	// A non-nil channels slice is the daemon's authoritative set; an empty one means "all
+	// notify channels disabled" and is sent as the explicit "none" sentinel (never an empty
+	// value, which a proxy could drop and silently turn into "leave alone").
+	if channels != nil {
+		v := strings.Join(channels, ",")
+		if v == "" {
+			v = "none"
+		}
+		q.Set("channels", v)
 	}
 	// Transport + auth (host normalize, X-Server-Auth, X-Proxsave-Version, timeout,
 	// bounded read, error redaction) is the shared serverbot brick; the endpoint

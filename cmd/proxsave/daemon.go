@@ -515,11 +515,39 @@ func (d *daemon) fetchCentralized(ctx context.Context) (string, string, map[stri
 	if strings.TrimSpace(secret) == "" {
 		return "", "", nil, fmt.Errorf("no relay secret on disk (pair Telegram first)")
 	}
-	cfg, err := health.FetchCentralizedConfig(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, false)
+	// Send the authoritative enabled-notification set so the server provisions one check per
+	// enabled channel (Fase 2C). Always non-nil in centralized mode (empty -> "none" sentinel).
+	channels := enabledNotifyChannels(d.cfg)
+	cfg, err := health.FetchCentralizedConfigWithChannels(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, false, channels)
 	if err != nil {
 		return "", "", nil, err
 	}
 	return cfg.AliveURL, cfg.BackupURL, cfg.Checks, nil
+}
+
+// enabledNotifyChannels returns the lowercased notification-channel names enabled in cfg,
+// sorted, for the ?channels provisioning hint. Metrics/Prometheus is a sink, not a
+// notification channel, and is excluded. A non-nil (possibly empty) slice is always returned
+// so the daemon sends an authoritative set (empty -> the server pauses all notify checks).
+func enabledNotifyChannels(cfg *config.Config) []string {
+	out := []string{}
+	if cfg == nil {
+		return out
+	}
+	if cfg.EmailEnabled {
+		out = append(out, "email")
+	}
+	if cfg.TelegramEnabled {
+		out = append(out, "telegram")
+	}
+	if cfg.GotifyEnabled {
+		out = append(out, "gotify")
+	}
+	if cfg.WebhookEnabled {
+		out = append(out, "webhook")
+	}
+	sort.Strings(out)
+	return out
 }
 
 // selfURLs resolves the ping URLs from self-mode config: full URLs if given, otherwise
@@ -545,6 +573,20 @@ func (d *daemon) selfURLs() (string, string, map[string]string) {
 	if updates != "" {
 		checks[health.CheckKeyUpdates] = updates
 	}
+	// Per-notification-channel checks (self mode): full URL or assembled from a check ID.
+	addNotify := func(ch, fullURL, id string) {
+		u := strings.TrimSpace(fullURL)
+		if u == "" {
+			u = build(id)
+		}
+		if u != "" {
+			checks[health.CheckKeyNotify(ch)] = u
+		}
+	}
+	addNotify("email", d.cfg.HealthcheckNotifyEmailURL, d.cfg.HealthcheckNotifyEmailID)
+	addNotify("telegram", d.cfg.HealthcheckNotifyTelegramURL, d.cfg.HealthcheckNotifyTelegramID)
+	addNotify("gotify", d.cfg.HealthcheckNotifyGotifyURL, d.cfg.HealthcheckNotifyGotifyID)
+	addNotify("webhook", d.cfg.HealthcheckNotifyWebhookURL, d.cfg.HealthcheckNotifyWebhookID)
 	if d.cfg.HealthcheckAliveURL != "" || d.cfg.HealthcheckBackupURL != "" {
 		return d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL, checks
 	}
