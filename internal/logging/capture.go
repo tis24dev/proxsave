@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // lineWriter is a thread-safe io.Writer that splits its input into complete
@@ -77,7 +76,11 @@ func CaptureConsole(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
 	)
 	if bootstrap != nil {
 		prevQuiet = bootstrap.consoleQuietEnabled()
-		mirror := New(types.LogLevelDebug, false) // useColor=false -> clean prefix
+		// Mirror at the bootstrap's OWN level (INFO by default), NOT hardcoded Debug:
+		// otherwise every bootstrap.Debug line (e.g. DebugStepBootstrap) would leak into
+		// the UI stream even on a standard run. A debug run (bootstrap SetLevel Debug)
+		// still streams debug - see the plan's "run finalization in debug" design task.
+		mirror := New(bootstrap.levelValue(), false) // useColor=false -> clean prefix
 		mirror.SetOutput(w)
 		bootstrap.SetMirrorLogger(mirror)
 		bootstrap.SetConsoleQuiet(true)
