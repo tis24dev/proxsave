@@ -211,7 +211,12 @@ fi
 ###############################################
 echo "[+] Installing binary -> ${TARGET_BIN}"
 mv proxsave "${TARGET_BIN}"
-chmod +x "${TARGET_BIN}"
+# Root-only 0700 (owner rwx): the binary runs as root and reaches the age
+# identity/keys, and proxsave's own security check requires the installed
+# executable to be root:root 0700. Install it that way directly rather than a
+# world-readable/executable 0755 that the check would otherwise flag (and, with
+# AUTO_FIX_PERMISSIONS enabled, silently chmod back to 0700 on every run).
+chmod 700 "${TARGET_BIN}"
 
 ###############################################
 # 13) Run internal installer (--install or --new-install)
