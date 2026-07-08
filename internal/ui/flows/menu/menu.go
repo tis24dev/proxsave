@@ -65,7 +65,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		// Maintenance: key/config management and updates.
 		{Label: "─── Maintenance ───", Separator: true},
 		{Label: "New key", Description: "create new encryption AGE key", Value: ActionNewKey},
-		{Label: "Reconfigure", Description: "re-run the interactive installation/setup", Value: ActionReconfigure},
+		{Label: "Install", Description: "re-run the interactive installation/setup (--install)", Value: ActionReconfigure},
 		{Label: "Updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
 		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
 		{Label: "─── Diagnostic Checks ───", Separator: true},
