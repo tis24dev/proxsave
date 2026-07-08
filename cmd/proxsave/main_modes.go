@@ -226,8 +226,7 @@ func runDecryptOnlyMode(ctx context.Context, args *cli.Args, bootstrap *logging.
 		}
 		if errors.Is(err, orchestrator.ErrDecryptNoBackups) {
 			// Graceful empty-state: every source was exhausted and the user already
-			// saw the "Status:" screen, so do not log a redundant raw ERROR line.
-			bootstrap.Info("Decrypt: no usable backup sources")
+			// saw the "Status:" screen. Exit cleanly with NO log line at all.
 			return types.ExitSuccess.Int(), true
 		}
 		bootstrap.Error("ERROR: %v", err)
