@@ -72,6 +72,22 @@ func (d *newkeyUIDriver) waitScreen(title string) {
 	}
 }
 
+// waitOutput polls the cumulative rendered output for text unique to the
+// current step (use waitScreen for screen transitions).
+func (d *newkeyUIDriver) waitOutput(text string) {
+	d.t.Helper()
+	deadline := time.Now().Add(uitest.Deadline(60 * time.Second))
+	for {
+		if strings.Contains(ansi.Strip(d.buf.String()), text) {
+			return
+		}
+		if time.Now().After(deadline) {
+			d.t.Fatalf("timed out waiting for %q in UI output; tail:\n%s", text, tailStr(ansi.Strip(d.buf.String())))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (d *newkeyUIDriver) keys(script string) {
 	d.t.Helper()
 	for _, msg := range shell.Keys(script) {

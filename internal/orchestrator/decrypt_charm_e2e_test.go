@@ -317,8 +317,9 @@ func TestRunDecryptWorkflowTUICharm_SuccessLocalEncrypted(t *testing.T) {
 	driver.keys("enter")
 	driver.waitScreen("Destination directory")
 	driver.keys("enter")
-	driver.waitScreen("Decrypt complete")
-	// The full path may hard-wrap inside the notice box; the on-disk
+	driver.waitScreen("Decrypt")
+	driver.waitOutput("DECRYPT COMPLETE")
+	// The full path may hard-wrap inside the result box; the on-disk
 	// assertions below cover the exact path.
 	driver.waitOutput("Decrypted bundle created")
 	driver.keys("enter")
@@ -432,7 +433,8 @@ func TestRunDecryptWorkflowTUICharm_WrongSecretThenRetry(t *testing.T) {
 	driver.keys("enter")
 	driver.waitScreen("Destination directory")
 	driver.keys("enter")
-	driver.waitScreen("Decrypt complete")
+	driver.waitScreen("Decrypt")
+	driver.waitOutput("DECRYPT COMPLETE")
 	driver.keys("enter")
 
 	if err := waitDecryptResult(t, errCh); err != nil {
