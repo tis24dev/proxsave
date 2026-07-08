@@ -138,6 +138,11 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		case menu.ActionReconfigure:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=install")
 			args.Install = true
+		case menu.ActionNewInstall:
+			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=new-install")
+			// --new-install: the flow (runNewInstall) confirms the destructive wipe
+			// itself (confirmNewInstallCharm) before resetting the base dir.
+			args.NewInstall = true
 		default:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=exit")
 			return types.ExitSuccess.Int(), true
