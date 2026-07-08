@@ -224,9 +224,11 @@ func runDecryptOnlyMode(ctx context.Context, args *cli.Args, bootstrap *logging.
 			bootstrap.Info("Decrypt workflow aborted by user")
 			return types.ExitSuccess.Int(), true
 		}
-		if errors.Is(err, orchestrator.ErrDecryptNoBackups) {
-			// Graceful empty-state: every source was exhausted and the user already
-			// saw the "Status:" screen. Exit cleanly with NO log line at all.
+		if errors.Is(err, orchestrator.ErrDecryptNoBackups) && dashboardIsBareInvocation() {
+			// ONLY the interactive dashboard (bare invocation): the user already saw the
+			// graceful "Status:" empty-state screen, so exit cleanly with NO log line. A
+			// CLI --decrypt execution falls through and keeps its original ERROR line
+			// (its CLI-execution lines are left untouched).
 			return types.ExitSuccess.Int(), true
 		}
 		bootstrap.Error("ERROR: %v", err)
