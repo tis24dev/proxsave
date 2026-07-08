@@ -6,9 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/serverbot"
@@ -171,18 +169,6 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 			b.WriteString(theme.WarningText.Render(fmt.Sprintf(" (%d failed)", st.FilesFailed)))
 		}
 
-		if st.ArchiveSize > 0 {
-			b.WriteString("\n")
-			b.WriteString(theme.Text.Render("Size: " + backup.FormatBytes(st.ArchiveSize)))
-		}
-		if st.Duration > 0 {
-			b.WriteString("\n")
-			b.WriteString(theme.Text.Render("Duration: " + st.Duration.Round(time.Second).String()))
-		}
-		if p := strings.TrimSpace(st.ArchivePath); p != "" {
-			b.WriteString("\n")
-			b.WriteString(theme.Text.Render("Archive: " + p))
-		}
 		// The run log file is CLOSED during the log-management phase before this
 		// outcome is built, so GetLogFilePath may be "" by now; runLogPath falls back
 		// to the LOG_FILE the runtime exports at startup.
@@ -191,9 +177,8 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 			b.WriteString(theme.Text.Render("Log: " + lp))
 		}
 
-		// Local is always shown when known; Secondary/Cloud only when they carry a
-		// meaningful (non-disabled) status, so a single-destination run stays terse.
-		appendBackupStatusLine(&b, "Local", st.LocalStatus)
+		// Secondary/Cloud storage status, only when they carry a meaningful
+		// (non-disabled) status, so a single-destination run stays terse.
 		if s := strings.TrimSpace(st.SecondaryStatus); s != "" && s != "disabled" {
 			appendBackupStatusLine(&b, "Secondary", st.SecondaryStatus)
 		}
@@ -235,8 +220,6 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 // formatBytes/formatDuration and the shared compressionRatioText), just
 // THEME-styled instead of logged.
 func appendBackupStatsBlock(b *strings.Builder, st *orchestrator.BackupStats) {
-	b.WriteString("\n")
-	b.WriteString(theme.Emphasis.Render("=== Backup Statistics ==="))
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render(fmt.Sprintf("Files collected: %d", st.FilesCollected)))
 	if st.FilesFailed > 0 {

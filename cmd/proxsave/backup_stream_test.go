@@ -57,30 +57,25 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 	if !strings.Contains(out, "Files: 42 collected - 0 missing") || !strings.Contains(out, "(3 failed)") {
 		t.Fatalf("missing files line:\n%s", out)
 	}
-	if !strings.Contains(out, "Size: 4.0 KiB") {
-		t.Fatalf("missing size line:\n%s", out)
-	}
-	if !strings.Contains(out, "Duration: 1m30s") {
-		t.Fatalf("missing duration line:\n%s", out)
-	}
-	if !strings.Contains(out, "Archive: /var/backup/proxsave-2026.tar.zst") {
-		t.Fatalf("missing archive line:\n%s", out)
-	}
-	if !strings.Contains(out, "Local: ok") {
-		t.Fatalf("missing local status line:\n%s", out)
-	}
+	// PARTE ALTA dropped Size / Duration / Archive / Local: Size/Duration/Archive
+	// now live only in the stats block below, Local is removed entirely. Secondary
+	// stays; a disabled Cloud is skipped.
 	if !strings.Contains(out, "Secondary: warning") {
 		t.Fatalf("missing secondary status line:\n%s", out)
 	}
-	// A disabled cloud destination is skipped to keep the block terse.
+	if strings.Contains(out, "Local:") {
+		t.Fatalf("the Local status line must be removed:\n%s", out)
+	}
 	if strings.Contains(out, "Cloud:") {
 		t.Fatalf("disabled cloud must be skipped:\n%s", out)
 	}
 
-	// The recap now ALSO carries the full "=== Backup Statistics ===" block,
-	// mirroring the debug-only log block verbatim.
+	// The recap carries the backup-statistics lines (mirroring the debug-only log
+	// block) WITHOUT the "=== Backup Statistics ===" header.
+	if strings.Contains(out, "=== Backup Statistics ===") {
+		t.Fatalf("the stats header must be removed:\n%s", out)
+	}
 	for _, want := range []string{
-		"=== Backup Statistics ===",
 		"Files collected: 42",
 		"Files failed: 3",
 		"Directories created: 7",
@@ -230,8 +225,8 @@ func TestBuildBackupOutcomePromptWarning(t *testing.T) {
 	if strings.Contains(out, "Backup failed") {
 		t.Fatalf("exit 1 must NOT read as failed (that is the fix #4 flip):\n%s", out)
 	}
-	if !strings.Contains(out, "Local: error") {
-		t.Fatalf("missing local error status line:\n%s", out)
+	if strings.Contains(out, "Local:") {
+		t.Fatalf("the Local status line must be removed:\n%s", out)
 	}
 }
 
@@ -300,8 +295,8 @@ func TestBuildBackupOutcomePromptFailure(t *testing.T) {
 	if strings.Contains(out, "Backup completed") {
 		t.Fatalf("a failed run must NOT read as completed:\n%s", out)
 	}
-	if !strings.Contains(out, "Local: error") {
-		t.Fatalf("missing local error status line:\n%s", out)
+	if strings.Contains(out, "Local:") {
+		t.Fatalf("the Local status line must be removed:\n%s", out)
 	}
 }
 
