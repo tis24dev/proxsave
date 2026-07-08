@@ -492,11 +492,11 @@ func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
 	}()
 
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down enter")      // Check Telegram (6th selectable)
-	driver.waitScreen("Dashboard")                     // looped back after the screen
-	driver.keys("down down down down down down enter") // Check healthchecks (7th)
+	driver.keys("down down down down down down enter")      // Check Telegram (7th selectable)
+	driver.waitScreen("Dashboard")                          // looped back after the screen
+	driver.keys("down down down down down down down enter") // Check healthchecks (8th)
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down enter") // Post-install check (8th)
+	driver.keys("down down down down down down down down enter") // Post-install check (9th)
 	driver.waitScreen("Dashboard")
 	driver.keys("esc") // exit
 
@@ -533,11 +533,11 @@ func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 	}()
 
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down enter") // Check Telegram (not configured)
-	driver.waitScreen("Telegram not configured")  // the notice
-	driver.keys("enter")                          // dismiss
-	driver.waitScreen("Dashboard")                // back at the menu
-	driver.keys("esc")                            // exit
+	driver.keys("down down down down down down enter") // Check Telegram (not configured)
+	driver.waitScreen("Telegram not configured")       // the notice
+	driver.keys("enter")                               // dismiss
+	driver.waitScreen("Dashboard")                     // back at the menu
+	driver.keys("esc")                                 // exit
 
 	select {
 	case handled := <-resCh:

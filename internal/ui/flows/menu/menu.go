@@ -55,26 +55,28 @@ var errMenuExit = errors.New("dashboard: exit")
 // surprise backup out of a failed screen.
 func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Action, error) {
 	items := []components.SelectorItem[Action]{
-		// First group (backup run): the primary action.
+		// Backup: the primary action.
 		{Label: "─── Backup ───", Separator: true},
 		{Label: "Run backup now", Description: "start a backup with the current configuration", Value: ActionBackup},
-		// Second group (maintenance): restore/decrypt and key/config management.
-		{Label: "─── Maintenance ───", Separator: true},
+		// Tools: operate on existing backups.
+		{Label: "─── Tools ───", Separator: true},
 		{Label: "Restore", Description: "restore a backup onto this system", Value: ActionRestore},
 		{Label: "Decrypt", Description: "convert an encrypted backup into a plaintext bundle", Value: ActionDecrypt},
+		// Maintenance: key/config management and updates.
+		{Label: "─── Maintenance ───", Separator: true},
 		{Label: "New encryption key", Description: "reset the AGE recipients and run the key setup", Value: ActionNewKey},
 		{Label: "Reconfigure", Description: "re-run the interactive installation/setup", Value: ActionReconfigure},
-		// Third group (diagnostics): re-open existing check screens.
+		{Label: "Updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
+		// Diagnostics: re-open existing check screens.
 		{Label: "─── Diagnostics ───", Separator: true},
 		{Label: "Check Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
 		{Label: "Check healthchecks", Description: "verify backup monitoring and show the portal link", Value: ActionCheckHealthcheck},
 		{Label: "Post-install check", Description: "re-run the post-install audit", Value: ActionPostInstallCheck},
-		{Label: "Check for updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
 	}
 
-	// Third group (daemon scheduler): context-aware - only the command that fits
-	// the current state, plus the read-only status. Setup/remove run the same admin
-	// path as the flags; status runs a screen in-session.
+	// Daemon scheduler group: context-aware - only the command that fits the current
+	// state, plus the read-only status. Setup/remove run the same admin path as the
+	// flags; status runs a screen in-session.
 	items = append(items, components.SelectorItem[Action]{Label: "─── Daemon ───", Separator: true})
 	switch daemon {
 	case DaemonStateActive:
@@ -87,6 +89,8 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 	}
 	items = append(items, components.SelectorItem[Action]{Label: "Daemon status", Description: "show the daemon service and scheduler state", Value: ActionDaemonStatus})
 
+	// Detach the standalone Exit from the Daemon group above with its own divider.
+	items = append(items, components.SelectorItem[Action]{Label: "──────────────", Separator: true})
 	items = append(items, components.SelectorItem[Action]{Label: "Exit", Description: "leave without doing anything", Value: ActionExit})
 	action, err := shell.Ask(ctx, session, components.NewSelector(
 		"Dashboard", items,
