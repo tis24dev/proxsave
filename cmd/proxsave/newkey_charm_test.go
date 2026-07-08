@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 // End-to-end coverage of the Charm newkey flow through the
@@ -45,7 +46,7 @@ func installNewkeySessionSeam(t *testing.T) *newkeyUIDriver {
 
 func (d *newkeyUIDriver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(uitest.Deadline(60 * time.Second))
 	for {
 		select {
 		case got := <-d.pushes:
@@ -106,7 +107,7 @@ func TestRunNewKeyTUISavesRecipient(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runNewKeyTUI error: %v", err)
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("newkey flow did not finish")
 	}
 
@@ -144,7 +145,7 @@ func TestRunNewKeyTUIProgramDeathMapsToAborted(t *testing.T) {
 		if !errors.Is(err, errInteractiveAborted) {
 			t.Fatalf("expected errInteractiveAborted, got %v", err)
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(uitest.Deadline(30 * time.Second)):
 		t.Fatal("newkey flow did not return after UI death")
 	}
 }

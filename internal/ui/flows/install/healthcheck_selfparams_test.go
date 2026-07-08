@@ -12,6 +12,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 // typeText types s one rune at a time into the focused text field.
@@ -143,7 +144,7 @@ func TestRunHealthcheckSetupSelfBranch(t *testing.T) {
 	d.keys("enter") // Check
 	d.waitScreen("Backup monitoring (healthchecks)")
 	// The self screen must show the reachability keyword, no magic-link.
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(uitest.Deadline(10 * time.Second))
 	for !strings.Contains(d.buf.String(), "REACHABLE") {
 		select {
 		case <-deadline:

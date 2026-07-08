@@ -19,6 +19,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 // installDashboardGates fixes the two gate seams for a test. It also pins the
@@ -115,7 +116,7 @@ func runDashboardWith(t *testing.T, keys string) (*cli.Args, int, bool) {
 	select {
 	case res := <-resCh:
 		return args, res.code, res.handled
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 		return nil, 0, false
 	}
@@ -359,7 +360,7 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 		if !handled {
 			t.Fatal("esc from menu must exit handled")
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if args.DaemonSetup || args.DaemonRemove {
@@ -395,7 +396,7 @@ func TestDashboardDaemonInstallInSession(t *testing.T) {
 		if !handled {
 			t.Fatal("esc from menu must exit handled")
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if applied != 1 {
@@ -443,7 +444,7 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 		if !handled {
 			t.Fatal("esc must exit handled")
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if reverted != 1 {
@@ -512,7 +513,7 @@ func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
 		if !res.handled || res.code != types.ExitSuccess.Int() {
 			t.Fatalf("esc from menu must exit cleanly, got %+v", res)
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if tele != 1 || hc != 1 || audit != 1 {
@@ -551,7 +552,7 @@ func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 		if !handled {
 			t.Fatal("esc from menu must exit handled")
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if tele != 1 {
@@ -582,7 +583,7 @@ func TestDashboardUIDeathIsExitNotBackup(t *testing.T) {
 		if !res.handled || res.code != types.ExitSuccess.Int() {
 			t.Fatalf("UI death must exit cleanly, got %+v", res)
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve after UI death")
 	}
 }
@@ -637,7 +638,7 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 	var res outcome
 	select {
 	case res = <-resCh:
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if res.handled || !args.Restore {
@@ -673,7 +674,7 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 		if r.err != nil {
 			t.Fatalf("Ask on the adopted session must work, got %v", r.err)
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("Ask on the adopted session did not resolve")
 	}
 	_ = s.Close()

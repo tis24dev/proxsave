@@ -12,6 +12,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 func TestUpgradeSafeToken(t *testing.T) {
@@ -122,7 +123,7 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	// waitFor polls the accumulated output until it contains substr (the screen-title
 	// push can precede the rendered bytes, so a bare read races the flush).
 	waitFor := func(substr string) string {
-		deadline := time.After(15 * time.Second)
+		deadline := time.After(uitest.Deadline(15 * time.Second))
 		for {
 			out := ansi.Strip(driver.buf.String())
 			if strings.Contains(out, substr) {
@@ -170,7 +171,7 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	driver.keys("down enter")    // Back -> return
 	select {
 	case <-done:
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("upgrade screen did not return")
 	}
 }

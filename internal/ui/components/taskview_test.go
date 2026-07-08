@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 func testSession(t *testing.T) *shell.Session {
@@ -76,7 +77,7 @@ func TestRunTaskContextCancelDrains(t *testing.T) {
 		if !drained {
 			t.Fatal("RunTask returned before the task drained")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(uitest.Deadline(5 * time.Second)):
 		t.Fatal("RunTask did not return")
 	}
 }
@@ -98,7 +99,7 @@ func TestRunTaskUserCancelViaEsc(t *testing.T) {
 	// first esc that lands cancels, later ones are no-ops).
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(uitest.Deadline(5 * time.Second))
 	for {
 		select {
 		case err := <-done:
