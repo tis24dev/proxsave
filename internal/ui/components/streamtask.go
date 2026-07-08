@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
@@ -64,6 +65,7 @@ type StreamTask struct {
 	err        error
 	cancel     context.CancelFunc
 	cancelling bool
+	copied     bool // transient "log copied to clipboard" confirmation
 	vp         viewport.Model
 	// follow keeps the viewport pinned to the newest line (auto-scroll). It
 	// turns off the moment the user scrolls up, so a manual review is not
@@ -99,9 +101,9 @@ func (t *StreamTask) Title() string { return t.title }
 
 func (t *StreamTask) Help() string {
 	if t.done {
-		return "↑/↓ scroll · enter continue"
+		return "↑/↓ scroll · c copy log · enter continue"
 	}
-	return "↑/↓ scroll · esc cancel"
+	return "↑/↓ scroll · c copy log · esc cancel"
 }
 
 func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
@@ -139,7 +141,15 @@ func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 		t.spin, cmd = t.spin.Update(msg)
 		return t, cmd
 	case tea.KeyPressMsg:
+		// Any keypress clears the transient "copied" confirmation; the copy key
+		// below re-sets it.
+		t.copied = false
 		switch msg.String() {
+		case "c":
+			// Copy the WHOLE log to the system clipboard via OSC52, ANSI stripped
+			// so the paste is clean plain text for a support request.
+			t.copied = true
+			return t, tea.SetClipboard(ansi.Strip(strings.Join(t.lines, "\n")))
 		case "enter", "space", "return":
 			if t.done {
 				return t, t.Resolve(StreamResult{Err: t.err}, nil)
@@ -204,6 +214,9 @@ func (t *StreamTask) View(width, height int) string {
 	}
 	if t.dropped {
 		header.WriteString(" " + theme.Subtle.Render(fmt.Sprintf("(showing last %d lines)", streamLineCap)))
+	}
+	if t.copied {
+		header.WriteString(" " + theme.SuccessText.Render(theme.SymbolSuccess+" log copied"))
 	}
 	headerStr := header.String()
 
