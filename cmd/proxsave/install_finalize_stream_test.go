@@ -16,6 +16,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 // TestBuildInstallOutcomePromptVerified asserts the daemon-verified branch reuses the shared
@@ -157,7 +158,7 @@ func TestFixPermissionsAfterInstallRoutesSink(t *testing.T) {
 // waitFor polls the observed render buffer until it contains want or the deadline elapses.
 func waitFor(t *testing.T, buf *shell.SyncBuffer, want string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(uitest.Deadline(5 * time.Second))
 	for time.Now().Before(deadline) {
 		if strings.Contains(ansi.Strip(buf.String()), want) {
 			return
@@ -172,7 +173,7 @@ func pumpEnter(t *testing.T, s *shell.Session, done <-chan error) error {
 	t.Helper()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(uitest.Deadline(5 * time.Second))
 	for {
 		select {
 		case err := <-done:

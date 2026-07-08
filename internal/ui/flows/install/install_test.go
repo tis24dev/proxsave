@@ -17,6 +17,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 type driver struct {
@@ -43,7 +44,7 @@ func newDriver(t *testing.T) *driver {
 
 func (d *driver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(uitest.Deadline(60 * time.Second))
 	for {
 		select {
 		case got := <-d.pushes:
@@ -71,7 +72,7 @@ func (d *driver) keys(script string) {
 // can assert on styled content that lands slightly after the screen-title push.
 func (d *driver) waitText(want string) {
 	d.t.Helper()
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(uitest.Deadline(60 * time.Second))
 	for {
 		if strings.Contains(ansi.Strip(d.buf.String()), want) {
 			return

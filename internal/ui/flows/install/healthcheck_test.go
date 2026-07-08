@@ -11,6 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 func healthcheckEligibleBootstrap(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
@@ -35,7 +36,7 @@ func TestRunHealthcheckSetupDashboardBack(t *testing.T) {
 		resCh <- struct{}{}
 	}()
 	d.waitScreen("Backup monitoring (healthchecks)")
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(uitest.Deadline(10 * time.Second))
 	for !strings.Contains(ansi.Strip(d.buf.String()), "return to the dashboard menu") {
 		select {
 		case <-deadline:

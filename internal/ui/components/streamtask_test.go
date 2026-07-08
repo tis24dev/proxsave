@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 // pumpEnterUntilDone repeatedly sends Enter until RunStreamTask returns. Enter
@@ -17,7 +18,7 @@ import (
 func pumpEnterUntilDone(s *shell.Session, done <-chan error) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(uitest.Deadline(5 * time.Second))
 	for {
 		select {
 		case err := <-done:

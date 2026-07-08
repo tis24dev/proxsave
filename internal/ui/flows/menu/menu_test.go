@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 type driver struct {
@@ -31,7 +32,7 @@ func newDriver(t *testing.T) *driver {
 
 func (d *driver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(uitest.Deadline(60 * time.Second))
 	for {
 		select {
 		case got := <-d.pushes:

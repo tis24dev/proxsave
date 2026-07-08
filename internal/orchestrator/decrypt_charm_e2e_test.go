@@ -24,6 +24,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 // End-to-end coverage of the Charm decrypt flow: RunDecryptWorkflowTUI is
@@ -187,7 +188,7 @@ func installCharmUIDriver(t *testing.T) *charmUIDriver {
 // are guaranteed to be processed after the push.
 func (d *charmUIDriver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(charmE2EWaitTimeout)
+	deadline := time.After(uitest.Deadline(charmE2EWaitTimeout))
 	for {
 		select {
 		case got := <-d.pushes:
@@ -204,7 +205,7 @@ func (d *charmUIDriver) waitScreen(title string) {
 // current step (use waitScreen for screen transitions).
 func (d *charmUIDriver) waitOutput(text string) {
 	d.t.Helper()
-	deadline := time.Now().Add(charmE2EWaitTimeout)
+	deadline := time.Now().Add(uitest.Deadline(charmE2EWaitTimeout))
 	for {
 		if strings.Contains(ansi.Strip(d.buf.String()), text) {
 			return
@@ -286,7 +287,7 @@ func waitDecryptResult(t *testing.T, errCh <-chan error) error {
 	select {
 	case err := <-errCh:
 		return err
-	case <-time.After(3 * time.Minute):
+	case <-time.After(uitest.Deadline(3 * time.Minute)):
 		t.Fatal("decrypt workflow did not finish")
 		return nil
 	}

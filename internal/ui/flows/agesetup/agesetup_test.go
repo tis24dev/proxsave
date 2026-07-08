@@ -12,6 +12,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 // Strong enough for ValidatePassphraseStrength (length + character classes).
@@ -41,7 +42,7 @@ func newDriver(t *testing.T) (*driver, *UI) {
 
 func (d *driver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(uitest.Deadline(60 * time.Second))
 	for {
 		select {
 		case got := <-d.pushes:
@@ -56,7 +57,7 @@ func (d *driver) waitScreen(title string) {
 
 func (d *driver) waitOutput(text string) {
 	d.t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(uitest.Deadline(60 * time.Second))
 	for {
 		if strings.Contains(ansi.Strip(d.buf.String()), text) {
 			return
