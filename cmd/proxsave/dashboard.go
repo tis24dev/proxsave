@@ -203,6 +203,9 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 	case menu.ActionDaemonStatus:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-status")
 		runDashboardDaemonStatus(ctx, session, configPath, baseDir)
+	case menu.ActionCleanupGuards:
+		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=cleanup-guards")
+		runDashboardCleanupGuards(ctx, session)
 	default:
 		return false
 	}

@@ -162,10 +162,10 @@ func TestDashboardActions(t *testing.T) {
 				t.Fatal("new-install flag not set")
 			}
 		}},
-		// Exit is the last selectable (13th): 12 downs, skipping both separators.
-		// (The Daemon group items run in-session and loop; they are covered by the
-		// dedicated in-session tests below, not this fall-through harness.)
-		{"exit row", "down down down down down down down down down down down down enter", true, nil},
+		// Exit is the last selectable (14th): 13 downs, skipping every separator.
+		// (The Daemon group and Cleanup guards run in-session and loop; they are
+		// covered by the dedicated in-session tests below, not this fall-through harness.)
+		{"exit row", "down down down down down down down down down down down down down enter", true, nil},
 		{"esc exits", "esc", true, nil},
 		{"ctrl+c exits", "ctrl+c", true, nil},
 	}
