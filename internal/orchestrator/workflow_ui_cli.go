@@ -67,6 +67,17 @@ func (u *cliWorkflowUI) ShowMessage(ctx context.Context, title, message string) 
 	return nil
 }
 
+func (u *cliWorkflowUI) ShowWarning(ctx context.Context, title, message string) error {
+	// Non-fatal notice (e.g. an empty-state): stdout, like ShowMessage, not stderr.
+	if strings.TrimSpace(title) != "" {
+		fmt.Printf("\n%s\n", title)
+	}
+	if strings.TrimSpace(message) != "" {
+		fmt.Println(message)
+	}
+	return nil
+}
+
 func (u *cliWorkflowUI) ShowError(ctx context.Context, title, message string) error {
 	if strings.TrimSpace(title) != "" {
 		fmt.Fprintf(os.Stderr, "\n%s\n", title)
