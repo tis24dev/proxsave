@@ -175,7 +175,7 @@ proxsave --upgrade-config-dry-run
 5. Writes updated configuration
 6. Reports added/removed variables
 
-> **Keep `backup.env` a regular file.** The config upgrade (`--upgrade`, `--upgrade-config`) and `--env-migration` write the new configuration atomically (temp file + rename), so if `configs/backup.env` is a **symlink** it is replaced by a regular file and the symlink target is left unchanged. For a centrally managed configuration, deploy a regular `backup.env` (for example copied or templated by your config-management tool) instead of symlinking it.
+> **Keep `backup.env` a regular file.** The config upgrade (`--upgrade`, `--upgrade-config`) writes the new configuration atomically (temp file + rename), so if `configs/backup.env` is a **symlink** it is replaced by a regular file and the symlink target is left unchanged. For a centrally managed configuration, deploy a regular `backup.env` (for example copied or templated by your config-management tool) instead of symlinking it.
 
 ### Binary Upgrade
 
@@ -222,105 +222,6 @@ proxsave --upgrade-config
 
 See also: [upgrading configuration](#configuration-upgrade)
 
-### Configuration Migration
-
-```bash
-# Migrate legacy Bash backup.env to Go configuration (pure migration)
-proxsave --env-migration --old-env /opt/proxsave/env/backup.env
-
-# Or let the wizard prompt for the legacy path
-proxsave --env-migration
-
-# Preview migration without making changes (dry-run)
-proxsave --env-migration-dry-run --old-env /opt/proxsave/env/backup.env
-
-# Or with interactive prompt
-proxsave --env-migration-dry-run
-```
-
-**`--env-migration` use case**: Pure configuration migration from a legacy Bash `backup.env` to the Go configuration file, using migration rules to translate variable names and semantics.
-
-**Migration workflow**:
-1. Prompts for the legacy Bash `backup.env` path (or uses `--old-env` flag if provided)
-2. Generates the Go `configs/backup.env` from the embedded template
-3. Reads and parses the legacy Bash configuration file
-4. Maps variables using migration rules:
-   - **SAME**: Variables copied directly (e.g., `BACKUP_ENABLED`, `COMPRESSION_TYPE`)
-   - **RENAMED**: Old names automatically converted to new names (e.g., `LOCAL_BACKUP_PATH` → `BACKUP_PATH`)
-   - **SEMANTIC CHANGE**: Variables flagged for manual review (e.g., `STORAGE_WARNING_THRESHOLD_*`)
-   - **LEGACY**: Bash-only variables skipped (e.g., `ENABLE_EMOJI_LOG`, color codes)
-5. Backs up any existing Go configuration (timestamped: `backup.env.bak-YYYYMMDD-HHMMSS`)
-6. Writes the new Go configuration with migrated values
-7. Reloads/validates the migrated config and prints warnings for manual review
-
-**`--env-migration-dry-run` use case**: Preview mode that shows exactly what would be migrated without making any changes to your system. **Recommended as first step** before running `--env-migration`.
-
-**Dry-run behavior**:
-- ✅ Reads and parses the legacy Bash configuration
-- ✅ Shows complete migration summary with statistics
-- ✅ Lists all SEMANTIC CHANGE variables requiring manual review
-- ✅ Displays the mapping for each category (SAME, RENAMED, LEGACY)
-- ❌ Does NOT create or modify any files
-- ❌ Does NOT run the installer
-- ❌ Does NOT create configuration backups
-
-**Why use dry-run first**:
-1. **Verify variable mapping** before committing changes
-2. **Identify SEMANTIC CHANGE variables** that need attention
-3. **Review what gets skipped** (LEGACY category)
-4. **Safe exploration** - no risk of breaking existing config
-
-**What gets migrated**:
-- ✅ ~70 unchanged variables (SAME category)
-- ✅ 16 renamed variables with automatic conversion (RENAMED category)
-- ⚠️ 2 variables flagged for manual review (SEMANTIC CHANGE - storage thresholds, cloud path)
-- ❌ ~27 legacy variables skipped (LEGACY category - no longer needed)
-
-**Post-migration steps**:
-1. Review `configs/backup.env` for SEMANTIC CHANGE warnings
-2. Manually convert storage thresholds: `%` used → `GB` free
-3. Verify cloud path format: full path → prefix only
-4. Test with dry-run: `proxsave --dry-run`
-5. Check output for configuration warnings
-
-**Example dry-run output** (`--env-migration-dry-run`):
-```
-[DRY-RUN] Reading legacy Bash configuration: /opt/proxsave/env/backup.env
-[DRY-RUN] Parsing 89 variables from legacy file...
-
-[DRY-RUN] Migration summary:
-✓ Would migrate 45 variables (SAME category)
-✓ Would convert 12 variables (RENAMED category)
-⚠ Manual review required: 2 variables (SEMANTIC CHANGE)
-  - STORAGE_WARNING_THRESHOLD_PRIMARY → MIN_DISK_SPACE_PRIMARY_GB
-    Bash: "90" (90% used) → Go: needs GB value (e.g., "10")
-  - CLOUD_BACKUP_PATH → CLOUD_REMOTE_PATH
-    Bash: "/gdrive:backups/folder" → Go: "backups/folder" (prefix only)
-ℹ Would skip 18 legacy variables (LEGACY category)
-
-[DRY-RUN] No files created or modified (preview mode)
-
-✓ Dry-run complete. Run without --dry-run to execute migration.
-```
-
-**Example real migration output** (`--env-migration`):
-```
-✓ Migrated 45 variables (SAME category)
-✓ Converted 12 variables (RENAMED category)
-⚠ Review required: 2 variables (SEMANTIC CHANGE)
-  - STORAGE_WARNING_THRESHOLD_PRIMARY → MIN_DISK_SPACE_PRIMARY_GB
-  - CLOUD_BACKUP_PATH → CLOUD_REMOTE_PATH
-ℹ Skipped 18 legacy variables (LEGACY category)
-
-Configuration written to: /opt/proxsave/configs/backup.env
-Backup saved to: /opt/proxsave/configs/backup.env.bak-20251117-143022
-
-⚠ IMPORTANT: Review SEMANTIC CHANGE variables before running backup!
-See migration documentation for conversion details.
-
-Next step: proxsave --dry-run
-```
-
 ### Flag Reference
 
 | Flag | Description |
@@ -330,9 +231,6 @@ Next step: proxsave --dry-run
 | `--upgrade` | Download and install latest ProxSave binary from GitHub releases |
 | `--upgrade-config` | Merge current config with latest template |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
-| `--env-migration` | Migrate legacy Bash config to Go |
-| `--env-migration-dry-run` | Preview migration without changes |
-| `--old-env <path>` | Path to legacy Bash backup.env (used with `--env-migration`) |
 
 ---
 
@@ -642,12 +540,6 @@ proxsave --upgrade-config-dry-run
 proxsave --upgrade
 proxsave --upgrade-config
 proxsave --dry-run  # Verify everything works
-
-# Migrate from Bash version (preview)
-proxsave --env-migration-dry-run --old-env /opt/proxsave/env/backup.env
-
-# Execute migration
-proxsave --env-migration --old-env /opt/proxsave/env/backup.env
 ```
 
 ### Troubleshooting
@@ -738,7 +630,6 @@ crontab -e
 
 ### Configuration
 - **[Configuration Guide](CONFIGURATION.md)** - Complete variable reference
-- **[Migration Guide](MIGRATION_GUIDE.md)** - backup.env config migration (`--env-migration`)
 
 ### Operations
 - **[Encryption Guide](ENCRYPTION.md)** - AGE encryption setup and usage
@@ -772,9 +663,6 @@ crontab -e
 | `--upgrade` | - | Download and install latest binary from GitHub releases |
 | `--upgrade-config` | - | Upgrade config from embedded template |
 | `--upgrade-config-dry-run` | - | Preview config upgrade |
-| `--env-migration` | - | Migrate legacy Bash config |
-| `--env-migration-dry-run` | - | Preview migration |
-| `--old-env <path>` | - | Path to legacy Bash backup.env |
 | `--newkey` | - | Generate new AGE encryption key |
 | `--age-newkey` | - | Alias for `--newkey` |
 | `--decrypt` | - | Decrypt existing backup |
@@ -801,10 +689,6 @@ proxsave --upgrade
 
 # After binary upgrade, optionally update config
 proxsave --upgrade-config
-
-# Migrate from Bash (safe preview first)
-proxsave --env-migration-dry-run
-proxsave --env-migration
 
 # Use CLI mode instead of TUI (for debugging)
 proxsave --install --cli

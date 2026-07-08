@@ -923,8 +923,7 @@ func (c *Config) parsePVESettings() error {
 	}
 	c.PVEBackupIncludePattern = strings.TrimSpace(c.getString("PVE_BACKUP_INCLUDE_PATTERN", ""))
 	// Default false to match the shipped template (backup.env). On a Ceph host that
-	// omits the key, set BACKUP_CEPH_CONFIG=true to capture /etc/ceph. (env-migration
-	// preserves a legacy value and only auto-disables it when Ceph is absent.)
+	// omits the key, set BACKUP_CEPH_CONFIG=true to capture /etc/ceph.
 	c.BackupCephConfig = c.getBool("BACKUP_CEPH_CONFIG", false)
 	c.CephConfigPath = c.getString("CEPH_CONFIG_PATH", "/etc/ceph")
 	c.PVEConfigPath = c.getString("PVE_CONFIG_PATH", "/etc/pve")

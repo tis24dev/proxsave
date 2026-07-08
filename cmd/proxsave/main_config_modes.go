@@ -46,8 +46,6 @@ func runUpgradeConfigJSONMode(args *cli.Args) (int, bool) {
 func dispatchPostHeaderConfigModes(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) (int, bool) {
 	for _, handler := range []postHeaderConfigModeHandler{
 		runUpgradeConfigMode,
-		runEnvMigrationDryMode,
-		runEnvMigrationMode,
 	} {
 		if exitCode, handled := handler(ctx, args, bootstrap); handled {
 			return exitCode, true
@@ -107,22 +105,6 @@ func runUpgradeConfigDryMode(_ context.Context, args *cli.Args, bootstrap *loggi
 
 	printConfigUpgradeDryRunResult(bootstrap, result)
 	return types.ExitSuccess.Int(), true
-}
-
-func runEnvMigrationDryMode(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) (int, bool) {
-	if !args.EnvMigrationDry {
-		return types.ExitSuccess.Int(), false
-	}
-	logging.DebugStepBootstrap(bootstrap, "main run", "mode=env-migration-dry")
-	return runEnvMigrationDry(ctx, args, bootstrap), true
-}
-
-func runEnvMigrationMode(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) (int, bool) {
-	if !args.EnvMigration {
-		return types.ExitSuccess.Int(), false
-	}
-	logging.DebugStepBootstrap(bootstrap, "main run", "mode=env-migration")
-	return runEnvMigration(ctx, args, bootstrap), true
 }
 
 func logConfigUpgradeWarnings(bootstrap *logging.BootstrapLogger, warnings []string) {

@@ -408,7 +408,6 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	}
 
 	fmt.Println("Next steps:")
-	fmt.Println("0. If you need, start migration from old backup.env:  proxsave --env-migration (alias: proxmox-backup --env-migration)")
 	if strings.TrimSpace(configPath) != "" {
 		fmt.Printf("1. Edit configuration: %s\n", configPath)
 	} else {
