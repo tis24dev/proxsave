@@ -30,25 +30,16 @@ func TestRouterPushResolvePop(t *testing.T) {
 	}
 }
 
-// TestRouterViewInlineDisablesAltScreenAndMouse proves the inline gate: an
-// inline session renders in the normal buffer (AltScreen false) with mouse
-// tracking off (so the terminal keeps native click-drag selection), while the
-// default (altscreen) session keeps cell-motion mouse.
-func TestRouterViewInlineDisablesAltScreenAndMouse(t *testing.T) {
-	inline := newRootModel(Config{AppName: "ProxSave", Inline: true}).View()
-	if inline.AltScreen {
-		t.Fatal("inline View: AltScreen should be false")
+// TestRouterViewAltScreenAndMouse locks the frame's transport contract: every
+// session renders on the altscreen with cell-motion mouse tracking (tview
+// parity), regardless of config.
+func TestRouterViewAltScreenAndMouse(t *testing.T) {
+	v := newRootModel(Config{AppName: "ProxSave"}).View()
+	if !v.AltScreen {
+		t.Fatal("View: AltScreen should be true")
 	}
-	if inline.MouseMode != tea.MouseModeNone {
-		t.Fatalf("inline View: MouseMode = %v, want MouseModeNone", inline.MouseMode)
-	}
-
-	def := newRootModel(Config{AppName: "ProxSave"}).View()
-	if !def.AltScreen {
-		t.Fatal("default View: AltScreen should be true")
-	}
-	if def.MouseMode != tea.MouseModeCellMotion {
-		t.Fatalf("default View: MouseMode = %v, want MouseModeCellMotion", def.MouseMode)
+	if v.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("View: MouseMode = %v, want MouseModeCellMotion", v.MouseMode)
 	}
 }
 

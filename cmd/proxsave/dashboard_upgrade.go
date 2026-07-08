@@ -64,16 +64,17 @@ func releaseTagURL(tag string) string {
 	return "https://github.com/" + githubRepo + "/releases/tag/" + tag
 }
 
-// TODO(inline): rebuild this the same way backup and install were rebuilt for the
-// inline streaming UI. Today runDashboardUpgrade runs the upgrade inside the
-// altscreen dashboard session (upgRun mutes stdout + RunTask spinner), so the
-// upgrade's log lines never reach the user. It should instead: close the altscreen
-// session -> shell.StartInline -> components.RunStreamTaskInline with
+// TODO(viewport): rebuild this the same way backup and install were rebuilt for
+// the CONTAINED viewport streaming UI. Today runDashboardUpgrade runs the upgrade
+// inside the altscreen dashboard session (upgRun mutes stdout + RunTask spinner),
+// so the upgrade's log lines never reach the user. It should instead adopt the
+// altscreen session and drive components.RunStreamTask with
 // logging.NewLineWriterRaw + logging.CaptureConsoleWithColor, so the upgrade's
-// [ts] LEVEL lines land in the native scrollback (colors + selection preserved),
-// and classify the outcome via a buildUpgradeOutcomePrompt built on the SHARED
-// exitCodeSeverity(code, logger) (the upgrade already has an exit code), matching
-// the CLI final-summary coloring exactly. No behavior change here yet.
+// [ts] LEVEL lines stream (colored) into a contained, scrollable viewport panel
+// within the frame, and classify the outcome via a buildUpgradeOutcomePrompt
+// built on the SHARED exitCodeSeverity(code, logger) (the upgrade already has an
+// exit code), matching the CLI final-summary coloring exactly. No behavior change
+// here yet.
 func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath string) {
 	cur := upgradeSafeToken(dashboardUpgradeVersion())
 	// Symbols on the RESULT keyword (consistent with the Telegram/healthcheck check

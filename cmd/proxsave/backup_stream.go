@@ -19,51 +19,47 @@ import (
 // result, so the capture->stream plumbing can be exercised without a real backup.
 var backupStreamSteps = runBackupModeSteps
 
-// backupInlineSession is the seam runBackupStreamed uses to start the inline
-// (non-altscreen) streaming session. Production uses shell.StartInline; tests
-// override it with an output-observing inline session so the emitted lines and
-// the outcome can be asserted.
-var backupInlineSession = shell.StartInline
+// backupAdoptSession is the seam runBackupStreamed uses to adopt the altscreen
+// session the dashboard stashed on the "Backup" choice. Production uses
+// adoptDashboardSession; tests override it with an output-observing altscreen
+// session so the emitted lines and the outcome can be asserted.
+var backupAdoptSession = adoptDashboardSession
 
-// runBackupStreamed runs the backup INSIDE a fresh INLINE (non-altscreen)
-// graphical session, streaming its [ts] LEVEL log lines into the terminal's
-// NATIVE scrollback via tea.Println (RunStreamTaskInline), so colors, native
-// scrollback and text selection are all preserved -- exactly what a long run
-// needs. It tears down the altscreen session the dashboard stashed on the "Run
-// backup now" choice (teardownDashboardSessionForInline) and opens a new inline
-// one; if nothing was stashed (a CLI/cron/daemon backup) it falls back to the
-// plain steps so the backup always runs.
+// runBackupStreamed runs the backup INSIDE the graphical dashboard ALTSCREEN
+// session, streaming its [ts] LEVEL log lines into a CONTAINED, scrollable,
+// COLORED viewport panel (components.RunStreamTask) so scrolling stays within the
+// box and the whole run is contained in the frame -- exactly what a long run
+// needs. It adopts the session the dashboard stashed on the "Backup" choice; if
+// that handoff has vanished (already adopted, or never stashed -- a CLI/cron/
+// daemon backup) it falls back to the plain steps so the backup always runs.
 //
 // The captured console (logging.CaptureConsoleWithColor) routes the default
 // logger + the COLORED bootstrap mirror into the raw sink, so both the run's
-// logging.Info lines and the bootstrap finalization lines flow (colored) into
-// the scrollback. taskCtx is threaded into the backup so Esc cancels the run;
-// the session is closed only after the user presses Continue.
-//
-// ORDER IS LOAD-BEARING: teardownDashboardSessionForInline restores the default
-// logger to stdout (SetOutput(nil)); it MUST run BEFORE CaptureConsoleWithColor
-// so that capture's restore() returns to stdout, not the io.Discard the stash
-// installed.
+// logging.Info lines and the bootstrap finalization lines flow (colored) into the
+// viewport. taskCtx is threaded into the backup so Esc cancels the run; the
+// session is closed only after the user presses Continue.
 func runBackupStreamed(opts backupModeOptions) backupModeResult {
-	if !teardownDashboardSessionForInline() {
-		// Nothing stashed (CLI/cron/daemon): run the backup plain.
-		return backupStreamSteps(opts)
+	useColor := true
+	if opts.cfg != nil {
+		useColor = opts.cfg.UseColor
 	}
-
-	useColor := opts.cfg != nil && opts.cfg.UseColor
-	session := backupInlineSession(opts.ctx, shell.Config{
+	session := backupAdoptSession(shell.Config{
 		AppName:  "ProxSave",
 		Subtitle: "Backup",
 		UseColor: useColor,
 	})
+	if session == nil {
+		// The handoff vanished (CLI/cron/daemon): run the backup plain.
+		return backupStreamSteps(opts)
+	}
 
 	var res backupModeResult
-	streamErr := components.RunStreamTaskInline(opts.ctx, session, "Running backup",
+	streamErr := components.RunStreamTask(opts.ctx, session, "Running backup",
 		func(taskCtx context.Context, emit func(line string)) (string, error) {
 			// Capture the default + COLORED bootstrap-mirror loggers into the raw
 			// sink; restore on return/panic. The real backup logs via both, so its
-			// [ts] LEVEL lines flow (colored) into the native scrollback via
-			// tea.Println instead of a bounded altscreen tail.
+			// [ts] LEVEL lines flow (colored) into the contained viewport instead
+			// of the raw altscreen.
 			sink := logging.NewLineWriterRaw(emit)
 			defer logging.CaptureConsoleWithColor(opts.bootstrap, sink)()
 
@@ -79,9 +75,9 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 		logging.DebugStepBootstrap(opts.bootstrap, "dashboard", "backup stream: %v", streamErr)
 	}
 
-	// The user pressed Continue: quit the inline program so any deferred output
-	// prints to the plain scrollback after it (the in-graphics status line is
-	// erased; the streamed log lines stay in the scrollback).
+	// The user pressed Continue: release the terminal so any deferred output
+	// prints to the plain scrollback (the in-graphics viewport vanishes with the
+	// alternate screen, matching the install finalization).
 	if closeErr := session.Close(); closeErr != nil {
 		logging.DebugStepBootstrap(opts.bootstrap, "dashboard", "session close: %v", closeErr)
 	}

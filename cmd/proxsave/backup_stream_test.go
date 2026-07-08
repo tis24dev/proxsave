@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -156,14 +155,13 @@ func TestBuildBackupOutcomePromptNoStats(t *testing.T) {
 	}
 }
 
-// TestRunBackupStreamedDriver drives runBackupStreamed the same way the dashboard
-// handoff does: it stashes a session (so teardownDashboardSessionForInline succeeds
-// and tears the altscreen session down), overrides backupInlineSession with an
-// output-observing INLINE session (so the tea.Println lines are asserted), and
-// overrides backupStreamSteps with a stub that emits [ts] LEVEL lines via
-// logging.Info (captured -> streamed) and returns a canned result. It then asserts
-// the streamed lines + the outcome + the Continue hint render, and that pressing
-// Enter lets runBackupStreamed close the session and return the result.
+// TestRunBackupStreamedDriver drives runBackupStreamed on an observed altscreen
+// session the same way the dashboard handoff does: it stashes the session (so
+// runBackupStreamed adopts it), overrides backupStreamSteps with a stub that emits
+// [ts] LEVEL lines via logging.Info (captured -> streamed into the contained
+// viewport) and returns a canned result, then asserts the streamed lines + the
+// outcome + the Continue hint render, and that pressing Enter lets runBackupStreamed
+// close the session and return the result.
 func TestRunBackupStreamedDriver(t *testing.T) {
 	// Clean, Info-level default logger so the captured logging.Info lines emit.
 	prevLogger := logging.GetDefaultLogger()
@@ -188,23 +186,14 @@ func TestRunBackupStreamedDriver(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// The INLINE session runBackupStreamed streams into: the emitted lines land in
-	// buf via tea.Println (a no-op in altscreen), so they can be asserted.
 	var buf shell.SyncBuffer
-	var inlineSession *shell.Session
-	prevInline := backupInlineSession
-	backupInlineSession = func(c context.Context, cfg shell.Config, _ ...tea.ProgramOption) *shell.Session {
-		inlineSession = shell.StartInlineForTestWithOutput(c, cfg, &buf)
-		return inlineSession
-	}
-	t.Cleanup(func() { backupInlineSession = prevInline })
+	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, &buf)
 
-	// Stash a session so teardownDashboardSessionForInline finds one to tear down
-	// (mirrors the dashboard "Run backup now" handoff); teardown closes it. A
-	// renderless session is enough - it is only closed, never rendered.
-	stashed := shell.StartForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"})
+	// Stash the observed session so runBackupStreamed adopts it (mirrors the
+	// dashboard "Backup" handoff). releaseDashboardLeftovers cleans up if the run
+	// never adopts (guards other tests against a dangling stash).
 	bootstrap := logging.NewBootstrapLogger()
-	stashDashboardSession(stashed, bootstrap)
+	stashDashboardSession(session, bootstrap)
 	t.Cleanup(releaseDashboardLeftovers)
 
 	resCh := make(chan backupModeResult, 1)
@@ -218,9 +207,7 @@ func TestRunBackupStreamedDriver(t *testing.T) {
 	waitFor(t, &buf, "Files: 7 collected")
 	waitFor(t, &buf, "enter continue")
 
-	// inlineSession is set by backupInlineSession by the time the streamed lines
-	// above have appeared in buf; Enter on it resolves the done screen.
-	res := pumpEnterBackup(t, inlineSession, resCh)
+	res := pumpEnterBackup(t, session, resCh)
 	if res.exitCode != types.ExitSuccess.Int() {
 		t.Fatalf("expected success exit, got %d", res.exitCode)
 	}

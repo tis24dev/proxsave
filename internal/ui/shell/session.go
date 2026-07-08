@@ -47,12 +47,6 @@ type Config struct {
 	// UseColor mirrors the USE_COLOR/DISABLE_COLORS config knobs. When
 	// false the program renders monochrome (layout preserved).
 	UseColor bool
-	// Inline runs the program in the terminal's normal buffer (no
-	// altscreen), so tea.Println lines land in the native scrollback with
-	// colors and text selection preserved. Default false keeps every
-	// existing session on the altscreen, byte-identical. Inline sessions
-	// are created fresh (StartInline), never adopted.
-	Inline bool
 
 	// observeScreenPush, when set (test harness only), is called from the
 	// event loop with the screen title every time a screen is pushed. It
@@ -96,15 +90,6 @@ func Start(ctx context.Context, cfg Config, opts ...tea.ProgramOption) *Session 
 		close(s.done)
 	}()
 	return s
-}
-
-// StartInline launches a non-altscreen Session (cfg.Inline forced true), so
-// long streamed operations can emit lines into the native scrollback via
-// tea.Println with colors and text selection preserved. Interactive screens
-// (wizard, menus) belong on the altscreen; use Start for those.
-func StartInline(ctx context.Context, cfg Config, opts ...tea.ProgramOption) *Session {
-	cfg.Inline = true
-	return Start(ctx, cfg, opts...)
 }
 
 // Send injects a message into the program. Safe from any goroutine and a
