@@ -75,12 +75,16 @@ type StreamTask struct {
 func newStreamScreen(title string, token uint64, cancel context.CancelFunc) *StreamTask {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
+	vp := viewport.New()
+	// Wrap long lines INSIDE the box so the whole line stays visible and there is
+	// no horizontal-scroll offset (which renders unpredictably in the frame).
+	vp.SoftWrap = true
 	return &StreamTask{
 		token:  token,
 		title:  sanitizeLine(title),
 		spin:   sp,
 		cancel: cancel,
-		vp:     viewport.New(),
+		vp:     vp,
 		follow: true,
 	}
 }
@@ -100,15 +104,6 @@ func (t *StreamTask) Help() string {
 	return "↑/↓ scroll · esc cancel"
 }
 
-// syncContent rebuilds the viewport content from the ring and, while following,
-// re-pins to the bottom so the newest line is visible.
-func (t *StreamTask) syncContent() {
-	t.vp.SetContent(strings.Join(t.lines, "\n"))
-	if t.follow {
-		t.vp.GotoBottom()
-	}
-}
-
 func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case StreamLineMsg:
@@ -124,7 +119,6 @@ func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 					t.lines = t.lines[len(t.lines)-streamLineCap:]
 					t.dropped = true
 				}
-				t.syncContent()
 			}
 		}
 		return t, nil
@@ -135,7 +129,6 @@ func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			t.done = true
 			// Keep follow so the final lines are shown; the user can still
 			// scroll up to review the whole run afterwards.
-			t.syncContent()
 		}
 		return t, nil
 	case spinner.TickMsg:
@@ -235,7 +228,10 @@ func (t *StreamTask) View(width, height int) string {
 	}
 	t.vp.SetWidth(width)
 	t.vp.SetHeight(bodyH)
-	// Re-pin while following so a resize does not leave the view mid-scroll.
+	// Set the content HERE, after sizing, so it is always measured/soft-wrapped
+	// against the CURRENT width (never a stale or zero width from an earlier
+	// Update), and re-pin to the bottom while following.
+	t.vp.SetContent(strings.Join(t.lines, "\n"))
 	if t.follow {
 		t.vp.GotoBottom()
 	}
