@@ -45,6 +45,7 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 	logBackupStatistics(stats)
 	logging.Info("✓ Go backup orchestration completed")
 	logServerIdentityValues(opts.serverIDValue, opts.serverMACValue)
+	logMonitoringPortalLink(stats)
 
 	if opts.heapProfilePath != "" {
 		logging.Info("Heap profiling saved: %s", opts.heapProfilePath)
