@@ -19,7 +19,6 @@ type Action int
 const (
 	ActionExit Action = iota
 	ActionBackup
-	ActionBackupDebug // same backup, forced --log-level debug
 	ActionRestore
 	ActionDecrypt
 	ActionNewKey
@@ -56,10 +55,9 @@ var errMenuExit = errors.New("dashboard: exit")
 // surprise backup out of a failed screen.
 func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Action, error) {
 	items := []components.SelectorItem[Action]{
-		// First group (backup runs): the primary action + a debug variant.
+		// First group (backup run): the primary action.
 		{Label: "─── Backup ───", Separator: true},
 		{Label: "Run backup now", Description: "start a backup with the current configuration", Value: ActionBackup},
-		{Label: "Run backup now (debug)", Description: "start a backup with verbose debug logging (--log-level debug)", Value: ActionBackupDebug},
 		// Second group (maintenance): restore/decrypt and key/config management.
 		{Label: "─── Maintenance ───", Separator: true},
 		{Label: "Restore", Description: "restore a backup onto this system", Value: ActionRestore},
