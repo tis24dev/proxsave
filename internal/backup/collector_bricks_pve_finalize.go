@@ -145,6 +145,32 @@ func newPVEManifestBricks() []collectionBrick {
 	}
 }
 
+// newPVEFinalizeSummaryBricks logs the PVE collection summary as the final PVE
+// brick, mirroring newPBSFinalizeBricks exactly: Files collected / not found at
+// Info, a non-zero Files failed at Warning, and skipped / bytes at Debug. Keeping
+// the two summaries identical means a PVE run surfaces the same collection counts,
+// at the same log levels, that a PBS run already does.
+func newPVEFinalizeSummaryBricks() []collectionBrick {
+	return []collectionBrick{
+		{
+			ID:          brickPVEFinalizeSummary,
+			Description: "Finalize PVE collection state",
+			Run: func(_ context.Context, state *collectionState) error {
+				c := state.collector
+				c.logger.Info("PVE collection summary:")
+				c.logger.Info("  Files collected: %d", c.stats.FilesProcessed)
+				c.logger.Info("  Files not found: %d", c.stats.FilesNotFound)
+				if c.stats.FilesFailed > 0 {
+					c.logger.Warning("  Files failed: %d", c.stats.FilesFailed)
+				}
+				c.logger.Debug("  Files skipped: %d", c.stats.FilesSkipped)
+				c.logger.Debug("  Bytes collected: %d", c.stats.BytesCollected)
+				return nil
+			},
+		},
+	}
+}
+
 func (p *pveContext) runtimeNodes() []string {
 	if p == nil || p.runtimeInfo == nil {
 		return nil
