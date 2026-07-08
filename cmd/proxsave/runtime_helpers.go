@@ -261,7 +261,7 @@ func logServerIdentityValues(serverID, mac string) {
 // logMonitoringPortalLink is the SOLE display boundary for the portal magic-link. The
 // Healthchecks section carries the link RAW on stats.HealthcheckLink (captured this run
 // or best-effort minted); this sanitizes it once with serverbot.SanitizeLoginURL and,
-// only if it survives, prints it with the SAME wording as before. It is called in the
+// only if it survives, prints it as the "Healthchecks Portal" line. It is called in the
 // backup epilogue right after the Server MAC Address line so the link appears at the
 // very end of the run. It never registers the link as a log secret (it must stay
 // visible) and prints nothing for a nil stats, empty, or hostile link.
@@ -270,7 +270,7 @@ func logMonitoringPortalLink(stats *orchestrator.BackupStats) {
 		return
 	}
 	if safe := serverbot.SanitizeLoginURL(stats.HealthcheckLink); safe != "" {
-		logging.Info("Monitoring portal (set your password): %s", safe)
+		logging.Info("Healthchecks Portal: %s", safe)
 	}
 }
 

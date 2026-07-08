@@ -33,7 +33,7 @@ func captureDefaultInfo(t *testing.T, fn func()) string {
 // hostile link is stripped by serverbot.SanitizeLoginURL and prints nothing; nil stats
 // and an empty link print nothing. The line never registers the link as a log secret.
 func TestLogMonitoringPortalLink(t *testing.T) {
-	const wording = "Monitoring portal (set your password):"
+	const wording = "Healthchecks Portal:"
 
 	t.Run("valid link is sanitized and displayed", func(t *testing.T) {
 		link := "https://hc/accounts/check_token/u/CAP/"
