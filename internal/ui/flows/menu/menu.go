@@ -67,11 +67,11 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		{Label: "New encryption key", Description: "reset the AGE recipients and run the key setup", Value: ActionNewKey},
 		{Label: "Reconfigure", Description: "re-run the interactive installation/setup", Value: ActionReconfigure},
 		{Label: "Updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
-		// Diagnostics: re-open existing check screens.
-		{Label: "─── Diagnostics ───", Separator: true},
-		{Label: "Check Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
-		{Label: "Check healthchecks", Description: "verify backup monitoring and show the portal link", Value: ActionCheckHealthcheck},
-		{Label: "Post-install check", Description: "re-run the post-install audit", Value: ActionPostInstallCheck},
+		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
+		{Label: "─── Diagnostic Checks ───", Separator: true},
+		{Label: "Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
+		{Label: "Healthchecks", Description: "verify backup monitoring and show the portal link", Value: ActionCheckHealthcheck},
+		{Label: "Post-install", Description: "re-run the post-install audit", Value: ActionPostInstallCheck},
 	}
 
 	// Daemon scheduler group: context-aware - only the command that fits the current
