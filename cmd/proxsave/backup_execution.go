@@ -156,9 +156,27 @@ func logBackupArtifactPaths(stats *orchestrator.BackupStats) {
 	}
 }
 
+// consoleStatusGlyph returns a TEXT-presentation glyph (all width 1, terminal-stable)
+// for the console "Exit status" line, matching the plain checkmarks used everywhere
+// else in the run output. It deliberately avoids notify.GetStatusEmoji, whose
+// emoji-presentation glyphs (e.g. "⚠️" = U+26A0 U+FE0F) render at a width the terminal
+// and lipgloss disagree on, shifting the framed graphical panel's border by one column.
+func consoleStatusGlyph(status notify.NotificationStatus) string {
+	switch status {
+	case notify.StatusSuccess:
+		return "✓"
+	case notify.StatusWarning:
+		return "⚠"
+	case notify.StatusFailure:
+		return "✗"
+	default:
+		return "•"
+	}
+}
+
 func logBackupExitStatus(exitCode int) {
 	status := notify.StatusFromExitCode(exitCode)
 	statusLabel := strings.ToUpper(status.String())
-	emoji := notify.GetStatusEmoji(status)
-	logging.Info("Exit status: %s %s (code=%d)", emoji, statusLabel, exitCode)
+	glyph := consoleStatusGlyph(status)
+	logging.Info("Exit status: %s %s (code=%d)", glyph, statusLabel, exitCode)
 }
