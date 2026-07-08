@@ -64,7 +64,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		{Label: "Decrypt", Description: "convert an encrypted backup into a plaintext bundle", Value: ActionDecrypt},
 		// Maintenance: key/config management and updates.
 		{Label: "─── Maintenance ───", Separator: true},
-		{Label: "New encryption key", Description: "reset the AGE recipients and run the key setup", Value: ActionNewKey},
+		{Label: "New key", Description: "create new encryption AGE key", Value: ActionNewKey},
 		{Label: "Reconfigure", Description: "re-run the interactive installation/setup", Value: ActionReconfigure},
 		{Label: "Updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
 		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
