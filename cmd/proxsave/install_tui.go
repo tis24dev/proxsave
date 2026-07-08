@@ -301,13 +301,29 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		}
 	}
 
-	// All interactive steps are done. Unlike the CLI, the TUI keeps the session
-	// OPEN and streams the non-interactive finalization INSIDE the graphics via
-	// RunStreamTask: the same shared engine helpers run, but their [ts] LEVEL log
-	// lines are captured (logging.CaptureConsole) and appended to a growing list
-	// instead of landing raw on the alternate screen. The session is closed only
-	// after the user presses Continue, so the deferred footer still prints to the
-	// persistent scrollback exactly like the CLI.
+	// All interactive steps are done. The wizard ran on the ALTSCREEN (interactive
+	// screens belong there); close it now and start a FRESH INLINE (non-altscreen)
+	// session for the non-interactive finalization, so its [ts] LEVEL log lines
+	// land in the terminal's NATIVE scrollback via tea.Println (RunStreamTaskInline)
+	// with colors and text selection preserved -- exactly what a long finalization
+	// needs. The same shared engine helpers run; only the presentation surface
+	// changes. The inline session is closed after the user presses Continue, so the
+	// deferred footer still prints to the persistent scrollback exactly like the CLI.
+	//
+	// Closing the altscreen wizard session here makes the deferred session.Close()
+	// (:88) a double-close; Session.Close is idempotent (Quit on an exited program
+	// is a no-op and <-done returns immediately), so the defer stays for panic safety.
+	if closeErr := session.Close(); closeErr != nil && err == nil {
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "wizard session close: %v", closeErr)
+	}
+	fin := shell.StartInline(ctx, shell.Config{
+		AppName:    "ProxSave",
+		Subtitle:   "Install",
+		ConfigPath: configPath,
+		BuildSig:   buildSig,
+		UseColor:   true,
+	})
+
 	wizardCronSchedule := ""
 	if wizardData != nil {
 		wizardCronSchedule = cronutil.TimeToSchedule(wizardData.CronTime)
@@ -318,13 +334,14 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		wizardMode = wizardData.SchedulerMode
 	}
 
-	streamErr := components.RunStreamTask(ctx, session, "Finalizing installation",
+	streamErr := components.RunStreamTaskInline(ctx, fin, "Finalizing installation",
 		func(taskCtx context.Context, emit func(line string)) (string, error) {
-			// Capture the default + bootstrap-mirror loggers into the UI stream;
-			// restore on return/panic. The bootstrap stays quiet and forwards via
-			// the mirror, so its finalization lines also appear in-graphics.
-			sink := logging.NewLineWriter(emit)
-			defer logging.CaptureConsole(bootstrap, sink)()
+			// Capture the default + COLORED bootstrap-mirror loggers into the raw
+			// sink; restore on return/panic. The bootstrap stays quiet and forwards
+			// via the mirror, so its finalization lines also flow (colored) into the
+			// native scrollback.
+			sink := logging.NewLineWriterRaw(emit)
+			defer logging.CaptureConsoleWithColor(bootstrap, sink)()
 
 			// Finalize legacy-symlink cleanup, entrypoint cleanup/recreation, and cron
 			// via the shared post-install engine (the same runPostInstallSymlinksAndCron
@@ -359,11 +376,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "finalization stream: %v", streamErr)
 	}
 
-	// The user pressed Continue: release the terminal so the deferred footer
-	// prints to the plain scrollback (the in-graphics lines/outcome vanish with
-	// the alternate screen, matching the AGE notice behavior).
-	if closeErr := session.Close(); closeErr != nil && err == nil {
-		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "session close: %v", closeErr)
+	// The user pressed Continue: quit the inline program so the deferred footer
+	// prints to the plain scrollback after it (the in-graphics status line is
+	// erased; the streamed finalization log lines stay in the scrollback).
+	if closeErr := fin.Close(); closeErr != nil && err == nil {
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "finalization session close: %v", closeErr)
 	}
 
 	return nil

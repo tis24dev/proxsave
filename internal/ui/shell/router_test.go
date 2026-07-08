@@ -30,6 +30,28 @@ func TestRouterPushResolvePop(t *testing.T) {
 	}
 }
 
+// TestRouterViewInlineDisablesAltScreenAndMouse proves the inline gate: an
+// inline session renders in the normal buffer (AltScreen false) with mouse
+// tracking off (so the terminal keeps native click-drag selection), while the
+// default (altscreen) session keeps cell-motion mouse.
+func TestRouterViewInlineDisablesAltScreenAndMouse(t *testing.T) {
+	inline := newRootModel(Config{AppName: "ProxSave", Inline: true}).View()
+	if inline.AltScreen {
+		t.Fatal("inline View: AltScreen should be false")
+	}
+	if inline.MouseMode != tea.MouseModeNone {
+		t.Fatalf("inline View: MouseMode = %v, want MouseModeNone", inline.MouseMode)
+	}
+
+	def := newRootModel(Config{AppName: "ProxSave"}).View()
+	if !def.AltScreen {
+		t.Fatal("default View: AltScreen should be true")
+	}
+	if def.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("default View: MouseMode = %v, want MouseModeCellMotion", def.MouseMode)
+	}
+}
+
 // TestRouterResolvePopsByIDNotTop locks the race fix: a resolve command that
 // lands after the engine already pushed the next screen must remove the
 // resolved screen, not whatever is on top.

@@ -16,10 +16,11 @@ var (
 	Gray   = lipgloss.Color("#808080")
 	Light  = lipgloss.Color("#C8C8C8")
 
-	Green  = lipgloss.Color("#22C55E")
-	Red    = lipgloss.Color("#EF4444")
-	Yellow = lipgloss.Color("#EAB308")
-	Blue   = lipgloss.Color("#3B82F6")
+	Green   = lipgloss.Color("#22C55E")
+	Red     = lipgloss.Color("#EF4444")
+	Yellow  = lipgloss.Color("#EAB308")
+	Blue    = lipgloss.Color("#3B82F6")
+	Magenta = lipgloss.Color("#C026D3")
 
 	White = lipgloss.Color("#FFFFFF")
 
@@ -42,6 +43,10 @@ var (
 	ErrorText   = lipgloss.NewStyle().Foreground(Red).Bold(true)
 	WarningText = lipgloss.NewStyle().Foreground(Yellow)
 	InfoText    = lipgloss.NewStyle().Foreground(Blue)
+	// InterruptedText mirrors the final summary's magenta Ctrl+C color so an
+	// interrupted long op (backup/upgrade) reads the same in-graphics and in the
+	// plain CLI footer.
+	InterruptedText = lipgloss.NewStyle().Foreground(Magenta)
 
 	// Selection bar for lists (parity with the tview orange selection).
 	Selected = lipgloss.NewStyle().Foreground(White).Background(Orange).Bold(true)

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -19,6 +20,12 @@ import (
 // TestBuildBackupOutcomePromptSuccess asserts a successful run renders the green
 // "Backup completed" banner plus themed stat lines from the run's BackupStats.
 func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
+	// A clean (no-warnings) default logger so the exit-0 run classifies OK, not
+	// Warning (buildBackupOutcomePrompt reads GetDefaultLogger().HasWarnings()).
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelInfo, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
 	res := backupModeResult{
 		exitCode: types.ExitSuccess.Int(),
 		supportStats: &orchestrator.BackupStats{
@@ -64,12 +71,42 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 	}
 }
 
-// TestBuildBackupOutcomePromptFailure asserts a non-success exit code renders the
-// red "Backup failed" banner and never reads as completed (a cancelled/failed run
-// must not be mistaken for success).
-func TestBuildBackupOutcomePromptFailure(t *testing.T) {
+// TestBuildBackupOutcomePromptWarning is the visible proof of fix #4: exit 1
+// (ExitGenericError, a NON-FATAL generic error) must classify as a WARNING and
+// read "Backup completed with warnings", NOT the old red "Backup failed" - the
+// same yellow the CLI final summary gives that exit code.
+func TestBuildBackupOutcomePromptWarning(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelInfo, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
 	res := backupModeResult{
 		exitCode:     types.ExitGenericError.Int(),
+		supportStats: &orchestrator.BackupStats{FilesCollected: 1, LocalStatus: "error"},
+	}
+	out := ansi.Strip(buildBackupOutcomePrompt(res))
+
+	if !strings.Contains(out, "Backup completed with warnings") {
+		t.Fatalf("exit 1 (non-fatal) must read as completed-with-warnings:\n%s", out)
+	}
+	if strings.Contains(out, "Backup failed") {
+		t.Fatalf("exit 1 must NOT read as failed (that is the fix #4 flip):\n%s", out)
+	}
+	if !strings.Contains(out, "Local: error") {
+		t.Fatalf("missing local error status line:\n%s", out)
+	}
+}
+
+// TestBuildBackupOutcomePromptFailure asserts a genuinely fatal exit code
+// (ExitConfigError) renders the red "Backup failed" banner and never reads as
+// completed.
+func TestBuildBackupOutcomePromptFailure(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelInfo, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	res := backupModeResult{
+		exitCode:     types.ExitConfigError.Int(),
 		supportStats: &orchestrator.BackupStats{FilesCollected: 1, LocalStatus: "error"},
 	}
 	out := ansi.Strip(buildBackupOutcomePrompt(res))
@@ -85,9 +122,31 @@ func TestBuildBackupOutcomePromptFailure(t *testing.T) {
 	}
 }
 
+// TestBuildBackupOutcomePromptInterrupted asserts an interrupted run (Ctrl+C,
+// exit 130) renders the magenta "Backup interrupted" banner.
+func TestBuildBackupOutcomePromptInterrupted(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelInfo, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	res := backupModeResult{exitCode: exitCodeInterrupted}
+	out := ansi.Strip(buildBackupOutcomePrompt(res))
+
+	if !strings.Contains(out, "Backup interrupted") {
+		t.Fatalf("missing interrupted banner:\n%s", out)
+	}
+	if strings.Contains(out, "Backup failed") || strings.Contains(out, "Backup completed") {
+		t.Fatalf("an interrupted run must read as interrupted, not failed/completed:\n%s", out)
+	}
+}
+
 // TestBuildBackupOutcomePromptNoStats asserts a missing BackupStats renders just the
 // banner without panicking.
 func TestBuildBackupOutcomePromptNoStats(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelInfo, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
 	out := ansi.Strip(buildBackupOutcomePrompt(backupModeResult{exitCode: types.ExitSuccess.Int()}))
 	if !strings.Contains(out, "Backup completed") {
 		t.Fatalf("missing banner:\n%s", out)
@@ -97,11 +156,14 @@ func TestBuildBackupOutcomePromptNoStats(t *testing.T) {
 	}
 }
 
-// TestRunBackupStreamedDriver drives runBackupStreamed on an observed session the same
-// way the dashboard handoff does: it stashes the session, overrides backupStreamSteps with
-// a stub that emits [ts] LEVEL lines via logging.Info (captured -> streamed) and returns a
-// canned result, then asserts the streamed lines + the outcome + the Continue hint render,
-// and that pressing Enter lets runBackupStreamed close the session and return the result.
+// TestRunBackupStreamedDriver drives runBackupStreamed the same way the dashboard
+// handoff does: it stashes a session (so teardownDashboardSessionForInline succeeds
+// and tears the altscreen session down), overrides backupInlineSession with an
+// output-observing INLINE session (so the tea.Println lines are asserted), and
+// overrides backupStreamSteps with a stub that emits [ts] LEVEL lines via
+// logging.Info (captured -> streamed) and returns a canned result. It then asserts
+// the streamed lines + the outcome + the Continue hint render, and that pressing
+// Enter lets runBackupStreamed close the session and return the result.
 func TestRunBackupStreamedDriver(t *testing.T) {
 	// Clean, Info-level default logger so the captured logging.Info lines emit.
 	prevLogger := logging.GetDefaultLogger()
@@ -126,14 +188,23 @@ func TestRunBackupStreamedDriver(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The INLINE session runBackupStreamed streams into: the emitted lines land in
+	// buf via tea.Println (a no-op in altscreen), so they can be asserted.
 	var buf shell.SyncBuffer
-	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, &buf)
+	var inlineSession *shell.Session
+	prevInline := backupInlineSession
+	backupInlineSession = func(c context.Context, cfg shell.Config, _ ...tea.ProgramOption) *shell.Session {
+		inlineSession = shell.StartInlineForTestWithOutput(c, cfg, &buf)
+		return inlineSession
+	}
+	t.Cleanup(func() { backupInlineSession = prevInline })
 
-	// Stash the observed session so runBackupStreamed adopts it (mirrors the
-	// dashboard "Run backup now" handoff). releaseDashboardLeftovers cleans up
-	// if the run never adopts (guards other tests against a dangling stash).
+	// Stash a session so teardownDashboardSessionForInline finds one to tear down
+	// (mirrors the dashboard "Run backup now" handoff); teardown closes it. A
+	// renderless session is enough - it is only closed, never rendered.
+	stashed := shell.StartForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"})
 	bootstrap := logging.NewBootstrapLogger()
-	stashDashboardSession(session, bootstrap)
+	stashDashboardSession(stashed, bootstrap)
 	t.Cleanup(releaseDashboardLeftovers)
 
 	resCh := make(chan backupModeResult, 1)
@@ -147,7 +218,9 @@ func TestRunBackupStreamedDriver(t *testing.T) {
 	waitFor(t, &buf, "Files: 7 collected")
 	waitFor(t, &buf, "enter continue")
 
-	res := pumpEnterBackup(t, session, resCh)
+	// inlineSession is set by backupInlineSession by the time the streamed lines
+	// above have appeared in buf; Enter on it resolves the done screen.
+	res := pumpEnterBackup(t, inlineSession, resCh)
 	if res.exitCode != types.ExitSuccess.Int() {
 		t.Fatalf("expected success exit, got %d", res.exitCode)
 	}

@@ -189,6 +189,126 @@ func TestCaptureConsole_NilBootstrap(t *testing.T) {
 	}
 }
 
+func TestNewLineWriterRaw_PreservesANSI(t *testing.T) {
+	var got []string
+	w := NewLineWriterRaw(func(line string) { got = append(got, line) })
+	if _, err := w.Write([]byte("\x1b[32m[c] INFO z\x1b[0m\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 forwarded line, got %#v", got)
+	}
+	// Raw writer must KEEP the ANSI escapes (inverse of the strip writer).
+	if !strings.Contains(got[0], "\x1b[32m") {
+		t.Fatalf("raw line lost its ANSI escape: %q", got[0])
+	}
+	if !strings.Contains(got[0], "[c] INFO z") {
+		t.Fatalf("raw line lost its prefix/text: %q", got[0])
+	}
+}
+
+func TestCaptureConsoleWithColor_WiresAndRestores(t *testing.T) {
+	prev := GetDefaultLogger()
+	t.Cleanup(func() { SetDefaultLogger(prev) })
+
+	fresh := New(types.LogLevelInfo, false)
+	fresh.SetOutput(io.Discard)
+	SetDefaultLogger(fresh)
+
+	var mu sync.Mutex
+	var lines []string
+	sink := NewLineWriterRaw(func(line string) {
+		mu.Lock()
+		lines = append(lines, line)
+		mu.Unlock()
+	})
+
+	bootstrap := NewBootstrapLogger()
+	bootstrap.SetConsoleQuiet(false)
+
+	restore := CaptureConsoleWithColor(bootstrap, sink)
+
+	Info("hello")
+	bootstrap.Info("world")
+
+	mu.Lock()
+	captured := append([]string(nil), lines...)
+	mu.Unlock()
+
+	if len(captured) != 2 {
+		t.Fatalf("expected 2 captured lines, got %#v", captured)
+	}
+	if !containsAll(captured[0], "INFO", "hello") {
+		t.Fatalf("first captured line %q missing INFO/hello", captured[0])
+	}
+	if !containsAll(captured[1], "INFO", "world") {
+		t.Fatalf("second captured line %q missing INFO/world", captured[1])
+	}
+	if !bootstrap.consoleQuietEnabled() {
+		t.Fatalf("bootstrap should be console-quiet during capture")
+	}
+
+	restore()
+
+	before := len(captured)
+	Info("after-restore")
+	mu.Lock()
+	n := len(lines)
+	mu.Unlock()
+	if n != before {
+		t.Fatalf("default logger still feeding sink after restore: %d != %d", n, before)
+	}
+
+	bootstrap.mu.Lock()
+	mirror := bootstrap.mirror
+	bootstrap.mu.Unlock()
+	if mirror != nil {
+		t.Fatalf("bootstrap mirror should be nil after restore, got %v", mirror)
+	}
+	if bootstrap.consoleQuietEnabled() {
+		t.Fatalf("bootstrap console-quiet should be restored to false")
+	}
+}
+
+func TestCaptureConsoleWithColor_FiltersDebugAtStandardLevel(t *testing.T) {
+	// The colored mirror must still filter Debug at a standard (INFO) run - the
+	// mirror is created at the bootstrap's level, not hardcoded Debug.
+	prev := GetDefaultLogger()
+	t.Cleanup(func() { SetDefaultLogger(prev) })
+	fresh := New(types.LogLevelInfo, false)
+	fresh.SetOutput(io.Discard)
+	SetDefaultLogger(fresh)
+
+	var mu sync.Mutex
+	var lines []string
+	sink := NewLineWriterRaw(func(line string) {
+		mu.Lock()
+		lines = append(lines, line)
+		mu.Unlock()
+	})
+
+	bootstrap := NewBootstrapLogger() // INFO by default
+	bootstrap.SetConsoleQuiet(false)
+	restore := CaptureConsoleWithColor(bootstrap, sink)
+	defer restore()
+
+	bootstrap.Debug("boot-debug-hidden")
+	bootstrap.Info("boot-info-shown")
+	Debug("default-debug-hidden")
+	Info("default-info-shown")
+
+	mu.Lock()
+	joined := strings.Join(lines, "\n")
+	mu.Unlock()
+
+	if strings.Contains(joined, "boot-debug-hidden") || strings.Contains(joined, "default-debug-hidden") {
+		t.Fatalf("debug lines leaked into the standard-level stream:\n%s", joined)
+	}
+	if !strings.Contains(joined, "boot-info-shown") || !strings.Contains(joined, "default-info-shown") {
+		t.Fatalf("info lines missing from the stream:\n%s", joined)
+	}
+}
+
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
 		found := false

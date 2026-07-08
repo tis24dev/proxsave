@@ -123,9 +123,16 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m rootModel) View() tea.View {
 	v := tea.NewView(m.render())
-	v.AltScreen = true
-	// Parity with the old tview UI, which always enabled mouse support.
-	v.MouseMode = tea.MouseModeCellMotion
+	// Inline sessions run in the terminal's normal buffer so tea.Println
+	// lands in the native scrollback; cell-motion mouse tracking there
+	// steals the terminal's click-drag text selection, so disable it.
+	v.AltScreen = !m.cfg.Inline
+	if m.cfg.Inline {
+		v.MouseMode = tea.MouseModeNone
+	} else {
+		// Parity with the old tview UI, which always enabled mouse support.
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	if m.cfg.UseColor {
 		// Only repaint the terminal background when color is enabled:
 		// with DISABLE_COLORS the OSC 11 repaint would contradict the
