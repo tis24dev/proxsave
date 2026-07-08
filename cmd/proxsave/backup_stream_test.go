@@ -53,7 +53,8 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 	if strings.Contains(out, "Backup failed") {
 		t.Fatalf("a successful run must not say 'failed':\n%s", out)
 	}
-	// Existing recap lines must remain untouched.
+	// The enriched Files line (collected + missing + failed) now lives in the lower
+	// stats block, not the upper recap.
 	if !strings.Contains(out, "Files: 42 collected - 0 missing") || !strings.Contains(out, "(3 failed)") {
 		t.Fatalf("missing files line:\n%s", out)
 	}
@@ -76,8 +77,6 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 		t.Fatalf("the stats header must be removed:\n%s", out)
 	}
 	for _, want := range []string{
-		"Files collected: 42",
-		"Files failed: 3",
 		"Directories created: 7",
 		"Data collected: 8.0 KiB",
 		"Archive size: 4.0 KiB",

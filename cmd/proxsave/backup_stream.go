@@ -155,20 +155,6 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 	if st := res.supportStats; st != nil {
 		b.WriteString("\n")
 
-		// Files: N collected - M missing (K failed) - "missing" reuses st.FilesMissing
-		// (the SAME field the notifications report), always shown (yellow when >0). The
-		// failed count is only shown (in yellow) when non-zero.
-		b.WriteString("\n")
-		b.WriteString(theme.Text.Render(fmt.Sprintf("Files: %d collected - ", st.FilesCollected)))
-		missingStyle := theme.Text
-		if st.FilesMissing > 0 {
-			missingStyle = theme.WarningText
-		}
-		b.WriteString(missingStyle.Render(fmt.Sprintf("%d missing", st.FilesMissing)))
-		if st.FilesFailed > 0 {
-			b.WriteString(theme.WarningText.Render(fmt.Sprintf(" (%d failed)", st.FilesFailed)))
-		}
-
 		// The run log file is CLOSED during the log-management phase before this
 		// outcome is built, so GetLogFilePath may be "" by now; runLogPath falls back
 		// to the LOG_FILE the runtime exports at startup.
@@ -200,8 +186,8 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 			b.WriteString(theme.Text.Render("Healthchecks link: " + link))
 		}
 
-		// Verbatim mirror of the (now debug-only) "=== Backup Statistics ==="
-		// log block, so a standard run still surfaces the full stats here.
+		// The backup-statistics block (headerless), so a standard run still surfaces
+		// the full stats here even though the log block is now debug-only.
 		b.WriteString("\n")
 		appendBackupStatsBlock(&b, st)
 	}
@@ -214,17 +200,25 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 	return b.String()
 }
 
-// appendBackupStatsBlock renders the "=== Backup Statistics ===" block into the
-// graphical outcome recap, mirroring the debug-only log block in
-// logBackupStatistics EXACTLY (same lines, same conditionals, same formatters -
-// formatBytes/formatDuration and the shared compressionRatioText), just
-// THEME-styled instead of logged.
+// appendBackupStatsBlock renders the backup-statistics block into the graphical
+// outcome recap. Its first line is the enriched "Files: N collected - K missing
+// (M failed)" moved down from the upper recap; the remaining lines mirror the
+// debug-only log block in logBackupStatistics (same lines, conditionals and
+// formatters - formatBytes/formatDuration and the shared compressionRatioText),
+// just THEME-styled instead of logged.
 func appendBackupStatsBlock(b *strings.Builder, st *orchestrator.BackupStats) {
+	// Files: N collected - K missing (M failed) - moved down from the upper recap.
+	// "missing" reuses st.FilesMissing (the field the notifications report), always
+	// shown (yellow when >0); the failed count only when non-zero.
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render(fmt.Sprintf("Files collected: %d", st.FilesCollected)))
+	b.WriteString(theme.Text.Render(fmt.Sprintf("Files: %d collected - ", st.FilesCollected)))
+	missingStyle := theme.Text
+	if st.FilesMissing > 0 {
+		missingStyle = theme.WarningText
+	}
+	b.WriteString(missingStyle.Render(fmt.Sprintf("%d missing", st.FilesMissing)))
 	if st.FilesFailed > 0 {
-		b.WriteString("\n")
-		b.WriteString(theme.WarningText.Render(fmt.Sprintf("Files failed: %d", st.FilesFailed)))
+		b.WriteString(theme.WarningText.Render(fmt.Sprintf(" (%d failed)", st.FilesFailed)))
 	}
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render(fmt.Sprintf("Directories created: %d", st.DirsCreated)))
