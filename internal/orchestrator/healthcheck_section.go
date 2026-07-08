@@ -25,7 +25,7 @@ const healthchecksSectionName = "Healthchecks"
 // already fetched, or best-effort MINTS a fresh one, and STORES the RAW link on
 // stats.HealthcheckLink. The link is NEVER registered as a log secret (it must stay
 // visible), and it is carried RAW so the SOLE display boundary can sanitize it once.
-// That display boundary (serverbot.SanitizeLoginURL + the "Monitoring portal" line) now
+// That display boundary (serverbot.SanitizeLoginURL + the "Healthchecks Portal" line) now
 // lives in the backup epilogue (logMonitoringPortalLink in cmd/proxsave), which prints
 // it right after the Server MAC Address line. This channel NEVER aborts the run and
 // never escalates a transport hiccup to WARNING/ERROR by itself.

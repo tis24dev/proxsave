@@ -127,7 +127,7 @@ func TestHealthchecksSectionTransmitting(t *testing.T) {
 	if stats.HealthcheckLink != "https://hc/accounts/check_token/u/CAP/" {
 		t.Fatalf("captured link must be preserved on stats, got %q", stats.HealthcheckLink)
 	}
-	if strings.Contains(out, "https://hc/accounts/check_token/u/CAP/") || strings.Contains(out, "Monitoring portal") {
+	if strings.Contains(out, "https://hc/accounts/check_token/u/CAP/") || strings.Contains(out, "Healthchecks Portal") {
 		t.Fatalf("the channel must no longer display the link (moved to the epilogue), out=%q", out)
 	}
 }
@@ -428,7 +428,7 @@ func TestHealthchecksSectionMintsWhenNoCapture(t *testing.T) {
 	if stats.HealthcheckLink != "https://hc/accounts/check_token/u/MINT/" {
 		t.Fatalf("minted link must be stored on stats, got %q", stats.HealthcheckLink)
 	}
-	if strings.Contains(buf.String(), "https://hc/accounts/check_token/u/MINT/") || strings.Contains(buf.String(), "Monitoring portal") {
+	if strings.Contains(buf.String(), "https://hc/accounts/check_token/u/MINT/") || strings.Contains(buf.String(), "Healthchecks Portal") {
 		t.Fatalf("the channel must not display the minted link (moved to the epilogue), out=%q", buf.String())
 	}
 }
@@ -445,7 +445,7 @@ func TestHealthchecksSectionMintFailIsQuiet(t *testing.T) {
 		t.Fatalf("status=%q want transmitting", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if strings.Contains(out, "Monitoring portal") {
+	if strings.Contains(out, "Healthchecks Portal") {
 		t.Fatalf("a failed mint must not print a portal line, got: %q", out)
 	}
 	if !strings.Contains(out, "portal link unavailable") {
@@ -470,7 +470,7 @@ func TestHealthchecksSectionHostileLinkSanitizedAway(t *testing.T) {
 	if stats.HealthcheckStatus != "transmitting" {
 		t.Fatalf("status=%q want transmitting", stats.HealthcheckStatus)
 	}
-	if strings.Contains(buf.String(), "https://hc/ x") || strings.Contains(buf.String(), "Monitoring portal") {
+	if strings.Contains(buf.String(), "https://hc/ x") || strings.Contains(buf.String(), "Healthchecks Portal") {
 		t.Fatalf("the channel must not display the hostile link, got: %q", buf.String())
 	}
 	// The raw link is carried through untouched for the epilogue to sanitize.
