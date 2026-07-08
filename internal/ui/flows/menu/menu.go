@@ -23,6 +23,7 @@ const (
 	ActionDecrypt
 	ActionNewKey
 	ActionReconfigure
+	ActionNewInstall // wipe the install dir (keep build/env/identity) then re-run the installer (--new-install)
 	// Second group (diagnostics): each re-opens an existing setup/check screen
 	// in the live dashboard session; the caller loops back to the menu after.
 	ActionCheckTelegram
@@ -66,6 +67,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		{Label: "─── Maintenance ───", Separator: true},
 		{Label: "New key", Description: "create new encryption AGE key", Value: ActionNewKey},
 		{Label: "Install", Description: "re-run the interactive installation/setup (--install)", Value: ActionReconfigure},
+		{Label: "New install", Description: "wipe the install directory (keep build/env/identity) then re-run the installer (--new-install)", Value: ActionNewInstall},
 		{Label: "Updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
 		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
 		{Label: "─── Diagnostic Checks ───", Separator: true},
