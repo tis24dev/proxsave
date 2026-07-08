@@ -29,14 +29,20 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 	res := backupModeResult{
 		exitCode: types.ExitSuccess.Int(),
 		supportStats: &orchestrator.BackupStats{
-			FilesCollected:  42,
-			FilesFailed:     3,
-			ArchiveSize:     4096,
-			Duration:        90 * time.Second,
-			ArchivePath:     "/var/backup/proxsave-2026.tar.zst",
-			LocalStatus:     "ok",
-			SecondaryStatus: "warning",
-			CloudStatus:     "disabled",
+			FilesCollected:   42,
+			FilesFailed:      3,
+			DirsCreated:      7,
+			BytesCollected:   8192,
+			ArchiveSize:      4096,
+			Compression:      "zstd",
+			CompressionLevel: 3,
+			CompressionMode:  "standard",
+			BundleCreated:    true,
+			Duration:         90 * time.Second,
+			ArchivePath:      "/var/backup/proxsave-2026.tar.zst",
+			LocalStatus:      "ok",
+			SecondaryStatus:  "warning",
+			CloudStatus:      "disabled",
 		},
 	}
 	out := ansi.Strip(buildBackupOutcomePrompt(res))
@@ -47,6 +53,7 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 	if strings.Contains(out, "Backup failed") {
 		t.Fatalf("a successful run must not say 'failed':\n%s", out)
 	}
+	// Existing recap lines must remain untouched.
 	if !strings.Contains(out, "Files: 42 collected - 0 missing") || !strings.Contains(out, "(3 failed)") {
 		t.Fatalf("missing files line:\n%s", out)
 	}
@@ -68,6 +75,25 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 	// A disabled cloud destination is skipped to keep the block terse.
 	if strings.Contains(out, "Cloud:") {
 		t.Fatalf("disabled cloud must be skipped:\n%s", out)
+	}
+
+	// The recap now ALSO carries the full "=== Backup Statistics ===" block,
+	// mirroring the debug-only log block verbatim.
+	for _, want := range []string{
+		"=== Backup Statistics ===",
+		"Files collected: 42",
+		"Files failed: 3",
+		"Directories created: 7",
+		"Data collected: 8.0 KiB",
+		"Archive size: 4.0 KiB",
+		"Compression ratio: 50.0%",
+		"Compression used: zstd (level 3, mode standard)",
+		"Bundle path: /var/backup/proxsave-2026.tar.zst",
+		"Bundle contents: archive + checksum + metadata",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stats block missing %q:\n%s", want, out)
+		}
 	}
 }
 

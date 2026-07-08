@@ -107,52 +107,66 @@ func persistBackupStats(orch *orchestrator.Orchestrator, stats *orchestrator.Bac
 }
 
 func logBackupStatistics(stats *orchestrator.BackupStats) {
+	// The block is now debug-only; a standard run shows it in the graphical
+	// outcome recap (buildBackupOutcomePrompt) instead. Guard before the blank
+	// spacers too, so a standard run shows no orphan blank lines.
+	if logging.GetDefaultLogger().GetLevel() < types.LogLevelDebug {
+		return
+	}
 	fmt.Println()
-	logging.Info("=== Backup Statistics ===")
-	logging.Info("Files collected: %d", stats.FilesCollected)
+	logging.Debug("=== Backup Statistics ===")
+	logging.Debug("Files collected: %d", stats.FilesCollected)
 	if stats.FilesFailed > 0 {
-		logging.Warning("Files failed: %d", stats.FilesFailed)
+		// The PVE/PBS collection summary carries the Files-failed warning now.
+		logging.Debug("Files failed: %d", stats.FilesFailed)
 	}
-	logging.Info("Directories created: %d", stats.DirsCreated)
-	logging.Info("Data collected: %s", formatBytes(stats.BytesCollected))
-	logging.Info("Archive size: %s", formatBytes(stats.ArchiveSize))
+	logging.Debug("Directories created: %d", stats.DirsCreated)
+	logging.Debug("Data collected: %s", formatBytes(stats.BytesCollected))
+	logging.Debug("Archive size: %s", formatBytes(stats.ArchiveSize))
 	logCompressionRatio(stats)
-	logging.Info("Compression used: %s (level %d, mode %s)", stats.Compression, stats.CompressionLevel, stats.CompressionMode)
+	logging.Debug("Compression used: %s (level %d, mode %s)", stats.Compression, stats.CompressionLevel, stats.CompressionMode)
 	if stats.RequestedCompression != stats.Compression {
-		logging.Info("Requested compression: %s", stats.RequestedCompression)
+		logging.Debug("Requested compression: %s", stats.RequestedCompression)
 	}
-	logging.Info("Duration: %s", formatDuration(stats.Duration))
+	logging.Debug("Duration: %s", formatDuration(stats.Duration))
 	logBackupArtifactPaths(stats)
 	fmt.Println()
 }
 
 func logCompressionRatio(stats *orchestrator.BackupStats) {
+	logging.Debug("Compression ratio: %s", compressionRatioText(stats))
+}
+
+// compressionRatioText renders the compression-ratio value shared by the
+// debug-only log block (logCompressionRatio) and the graphical outcome recap
+// (appendBackupStatsBlock), so the two never drift.
+func compressionRatioText(stats *orchestrator.BackupStats) string {
 	switch {
 	case stats.CompressionSavingsPercent > 0:
-		logging.Info("Compression ratio: %.1f%%", stats.CompressionSavingsPercent)
+		return fmt.Sprintf("%.1f%%", stats.CompressionSavingsPercent)
 	case stats.CompressionRatioPercent > 0:
-		logging.Info("Compression ratio: %.1f%%", stats.CompressionRatioPercent)
+		return fmt.Sprintf("%.1f%%", stats.CompressionRatioPercent)
 	case stats.BytesCollected > 0:
 		ratio := float64(stats.ArchiveSize) / float64(stats.BytesCollected) * 100
-		logging.Info("Compression ratio: %.1f%%", ratio)
+		return fmt.Sprintf("%.1f%%", ratio)
 	default:
-		logging.Info("Compression ratio: N/A")
+		return "N/A"
 	}
 }
 
 func logBackupArtifactPaths(stats *orchestrator.BackupStats) {
 	if stats.BundleCreated {
-		logging.Info("Bundle path: %s", stats.ArchivePath)
-		logging.Info("Bundle contents: archive + checksum + metadata")
+		logging.Debug("Bundle path: %s", stats.ArchivePath)
+		logging.Debug("Bundle contents: archive + checksum + metadata")
 		return
 	}
 
-	logging.Info("Archive path: %s", stats.ArchivePath)
+	logging.Debug("Archive path: %s", stats.ArchivePath)
 	if stats.ManifestPath != "" {
-		logging.Info("Manifest path: %s", stats.ManifestPath)
+		logging.Debug("Manifest path: %s", stats.ManifestPath)
 	}
 	if stats.Checksum != "" {
-		logging.Info("Archive checksum (SHA256): %s", stats.Checksum)
+		logging.Debug("Archive checksum (SHA256): %s", stats.Checksum)
 	}
 }
 

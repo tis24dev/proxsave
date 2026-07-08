@@ -10,6 +10,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -213,6 +214,11 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 			b.WriteString("\n")
 			b.WriteString(theme.Text.Render("Healthchecks link: " + link))
 		}
+
+		// Verbatim mirror of the (now debug-only) "=== Backup Statistics ==="
+		// log block, so a standard run still surfaces the full stats here.
+		b.WriteString("\n")
+		appendBackupStatsBlock(&b, st)
 	}
 
 	// Warnings/errors recap - the theme counterpart of the CLI footer's
@@ -221,6 +227,57 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 	appendRunIssueSummary(&b, logger)
 
 	return b.String()
+}
+
+// appendBackupStatsBlock renders the "=== Backup Statistics ===" block into the
+// graphical outcome recap, mirroring the debug-only log block in
+// logBackupStatistics EXACTLY (same lines, same conditionals, same formatters -
+// formatBytes/formatDuration and the shared compressionRatioText), just
+// THEME-styled instead of logged.
+func appendBackupStatsBlock(b *strings.Builder, st *orchestrator.BackupStats) {
+	b.WriteString("\n")
+	b.WriteString(theme.Emphasis.Render("=== Backup Statistics ==="))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render(fmt.Sprintf("Files collected: %d", st.FilesCollected)))
+	if st.FilesFailed > 0 {
+		b.WriteString("\n")
+		b.WriteString(theme.WarningText.Render(fmt.Sprintf("Files failed: %d", st.FilesFailed)))
+	}
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render(fmt.Sprintf("Directories created: %d", st.DirsCreated)))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("Data collected: " + formatBytes(st.BytesCollected)))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("Archive size: " + formatBytes(st.ArchiveSize)))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("Compression ratio: " + compressionRatioText(st)))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render(fmt.Sprintf("Compression used: %s (level %d, mode %s)", st.Compression, st.CompressionLevel, st.CompressionMode)))
+	if st.RequestedCompression != st.Compression {
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render(fmt.Sprintf("Requested compression: %s", st.RequestedCompression)))
+	}
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("Duration: " + formatDuration(st.Duration)))
+
+	// Mirror logBackupArtifactPaths.
+	if st.BundleCreated {
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Bundle path: " + st.ArchivePath))
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Bundle contents: archive + checksum + metadata"))
+		return
+	}
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("Archive path: " + st.ArchivePath))
+	if st.ManifestPath != "" {
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Manifest path: " + st.ManifestPath))
+	}
+	if st.Checksum != "" {
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Archive checksum (SHA256): " + st.Checksum))
+	}
 }
 
 // runLogPath returns the path of the run's log file for the outcome "Log:" line.
