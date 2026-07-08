@@ -554,13 +554,13 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Post-install check")
-	d.keys("tab enter") // choose Skip
+	d.keys("down enter") // choose Skip (the 2nd selector item, after Check)
 	res := <-resCh
 	if res.err != nil || res.res.Ran {
 		t.Fatalf("skip must not run the check: %+v", res)
 	}
 
-	// Ctrl+C on the confirm is a non-blocking skip too (parity with the
+	// Ctrl+C on the selector is a non-blocking skip too (parity with the
 	// CLI, where a prompt EOF abandons the optional step).
 	go func() {
 		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
