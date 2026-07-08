@@ -82,7 +82,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 				// so remove the option to avoid a broken loop.
 				pathOptions = removeDecryptPathOption(pathOptions, option)
 				if len(pathOptions) == 0 {
-					return nil, fmt.Errorf("no usable backup sources available")
+					return nil, ErrDecryptNoBackups
 				}
 			}
 			continue
@@ -93,7 +93,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 			_ = ui.ShowStatusResult(ctx, "Decrypt", HealthcheckSetupLevelWarn, "NO BACKUPS FOUND", fmt.Sprintf("No backups found in %s.", option.Path))
 			pathOptions = removeDecryptPathOption(pathOptions, option)
 			if len(pathOptions) == 0 {
-				return nil, fmt.Errorf("no usable backup sources available")
+				return nil, ErrDecryptNoBackups
 			}
 			continue
 		}
@@ -105,7 +105,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 				_ = ui.ShowStatusResult(ctx, "Decrypt", HealthcheckSetupLevelWarn, "NO ENCRYPTED BACKUPS", fmt.Sprintf("No encrypted backups found in %s.", option.Path))
 				pathOptions = removeDecryptPathOption(pathOptions, option)
 				if len(pathOptions) == 0 {
-					return nil, fmt.Errorf("no usable backup sources available")
+					return nil, ErrDecryptNoBackups
 				}
 				continue
 			}

@@ -27,6 +27,11 @@ import (
 )
 
 var ErrDecryptAborted = errors.New("decrypt workflow aborted by user")
+
+// ErrDecryptNoBackups is the graceful empty-state: every backup source was
+// exhausted (already shown to the user as a "Status:" screen). Callers treat it
+// like an abort - a clean exit, NOT a logged ERROR.
+var ErrDecryptNoBackups = errors.New("no usable backup sources available")
 var titleCaser = cases.Title(language.English)
 
 type decryptSourceType int
