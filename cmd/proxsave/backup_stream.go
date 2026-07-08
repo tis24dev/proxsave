@@ -148,48 +148,89 @@ func renderBackupBanner(sev exitSeverity) string {
 func buildBackupOutcomePrompt(res backupModeResult) string {
 	var b strings.Builder
 
-	sev := exitCodeSeverity(res.exitCode, logging.GetDefaultLogger())
+	logger := logging.GetDefaultLogger()
+	sev := exitCodeSeverity(res.exitCode, logger)
 	b.WriteString(renderBackupBanner(sev))
 
-	st := res.supportStats
-	if st == nil {
-		return b.String()
-	}
-
-	b.WriteString("\n")
-
-	// Files: N collected (M failed) - the failed count is only shown (in yellow)
-	// when non-zero, so a clean run reads simply "Files: N collected".
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render(fmt.Sprintf("Files: %d collected", st.FilesCollected)))
-	if st.FilesFailed > 0 {
-		b.WriteString(theme.WarningText.Render(fmt.Sprintf(" (%d failed)", st.FilesFailed)))
-	}
-
-	if st.ArchiveSize > 0 {
+	if st := res.supportStats; st != nil {
 		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Size: " + backup.FormatBytes(st.ArchiveSize)))
-	}
-	if st.Duration > 0 {
+
+		// Files: N collected (M failed) - the failed count is only shown (in yellow)
+		// when non-zero, so a clean run reads simply "Files: N collected".
 		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Duration: " + st.Duration.Round(time.Second).String()))
-	}
-	if p := strings.TrimSpace(st.ArchivePath); p != "" {
-		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Archive: " + p))
+		b.WriteString(theme.Text.Render(fmt.Sprintf("Files: %d collected", st.FilesCollected)))
+		if st.FilesFailed > 0 {
+			b.WriteString(theme.WarningText.Render(fmt.Sprintf(" (%d failed)", st.FilesFailed)))
+		}
+
+		if st.ArchiveSize > 0 {
+			b.WriteString("\n")
+			b.WriteString(theme.Text.Render("Size: " + backup.FormatBytes(st.ArchiveSize)))
+		}
+		if st.Duration > 0 {
+			b.WriteString("\n")
+			b.WriteString(theme.Text.Render("Duration: " + st.Duration.Round(time.Second).String()))
+		}
+		if p := strings.TrimSpace(st.ArchivePath); p != "" {
+			b.WriteString("\n")
+			b.WriteString(theme.Text.Render("Archive: " + p))
+		}
+
+		// Local is always shown when known; Secondary/Cloud only when they carry a
+		// meaningful (non-disabled) status, so a single-destination run stays terse.
+		appendBackupStatusLine(&b, "Local", st.LocalStatus)
+		if s := strings.TrimSpace(st.SecondaryStatus); s != "" && s != "disabled" {
+			appendBackupStatusLine(&b, "Secondary", st.SecondaryStatus)
+		}
+		if s := strings.TrimSpace(st.CloudStatus); s != "" && s != "disabled" {
+			appendBackupStatusLine(&b, "Cloud", st.CloudStatus)
+		}
 	}
 
-	// Local is always shown when known; Secondary/Cloud only when they carry a
-	// meaningful (non-disabled) status, so a single-destination run stays terse.
-	appendBackupStatusLine(&b, "Local", st.LocalStatus)
-	if s := strings.TrimSpace(st.SecondaryStatus); s != "" && s != "disabled" {
-		appendBackupStatusLine(&b, "Secondary", st.SecondaryStatus)
-	}
-	if s := strings.TrimSpace(st.CloudStatus); s != "" && s != "disabled" {
-		appendBackupStatusLine(&b, "Cloud", st.CloudStatus)
-	}
+	// Warnings/errors recap - the theme counterpart of the CLI footer's
+	// printRunIssueSummary - shown whenever the run logged issues (even a failed run
+	// with no stats), so the graphical outcome states them as clearly as the CLI.
+	appendRunIssueSummary(&b, logger)
 
 	return b.String()
+}
+
+// appendRunIssueSummary appends a warnings/errors recap to the backup outcome: a
+// colored count header (yellow when only warnings, red once any error was logged)
+// followed by the captured "[ts] LEVEL msg" issue lines. Nothing is emitted for a
+// clean run. The list is capped so a noisy run cannot overflow the outcome block;
+// the full list stays scrollable in the panel above. It reads the SAME logger the
+// CLI footer's printRunIssueSummary reads, so the counts and lines match exactly.
+func appendRunIssueSummary(b *strings.Builder, logger *logging.Logger) {
+	if logger == nil {
+		return
+	}
+	issues := logger.IssueLines()
+	if len(issues) == 0 {
+		return
+	}
+
+	headerStyle := theme.WarningText
+	if logger.ErrorCount() > 0 {
+		headerStyle = theme.ErrorText
+	}
+	b.WriteString("\n\n")
+	b.WriteString(headerStyle.Render(fmt.Sprintf("%s Warnings/errors during run: %d warning(s), %d error(s)",
+		theme.SymbolWarning, logger.WarningCount(), logger.ErrorCount())))
+
+	const maxLines = 10
+	shown := issues
+	if len(shown) > maxLines {
+		shown = shown[:maxLines]
+	}
+	for _, line := range shown {
+		b.WriteString("\n")
+		b.WriteString(theme.Subtle.Render("  " + line))
+	}
+	if extra := len(issues) - len(shown); extra > 0 {
+		b.WriteString("\n")
+		b.WriteString(theme.Subtle.Render(fmt.Sprintf("  ... and %d more (scroll up to review)", extra)))
+	}
 }
 
 // appendBackupStatusLine writes a themed "<label>: <status>" storage line, colored

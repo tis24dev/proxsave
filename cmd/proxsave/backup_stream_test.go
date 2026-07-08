@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,51 @@ func TestBuildBackupOutcomePromptWarning(t *testing.T) {
 	}
 	if !strings.Contains(out, "Local: error") {
 		t.Fatalf("missing local error status line:\n%s", out)
+	}
+}
+
+// TestBuildBackupOutcomePromptIncludesIssueSummary asserts the graphical outcome
+// carries the same warnings/errors recap the CLI footer prints: a count header plus
+// the captured issue lines, from the same default logger.
+func TestBuildBackupOutcomePromptIncludesIssueSummary(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	lg := logging.New(types.LogLevelInfo, false)
+	lg.SetOutput(io.Discard)
+	lg.Warning("disk almost full")
+	lg.Error("failed to upload chunk 7")
+	logging.SetDefaultLogger(lg)
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	res := backupModeResult{
+		exitCode:     types.ExitGenericError.Int(),
+		supportStats: &orchestrator.BackupStats{FilesCollected: 1, LocalStatus: "ok"},
+	}
+	out := ansi.Strip(buildBackupOutcomePrompt(res))
+
+	if !strings.Contains(out, "Warnings/errors during run: 1 warning(s), 1 error(s)") {
+		t.Fatalf("missing warnings/errors recap header:\n%s", out)
+	}
+	if !strings.Contains(out, "disk almost full") || !strings.Contains(out, "failed to upload chunk 7") {
+		t.Fatalf("recap must list the captured issue lines:\n%s", out)
+	}
+}
+
+// TestBuildBackupOutcomePromptNoIssueSummaryWhenClean asserts a clean run (no
+// warnings/errors logged) shows no recap at all.
+func TestBuildBackupOutcomePromptNoIssueSummaryWhenClean(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	lg := logging.New(types.LogLevelInfo, false)
+	lg.SetOutput(io.Discard)
+	logging.SetDefaultLogger(lg)
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	res := backupModeResult{
+		exitCode:     types.ExitSuccess.Int(),
+		supportStats: &orchestrator.BackupStats{FilesCollected: 1, LocalStatus: "ok"},
+	}
+	out := ansi.Strip(buildBackupOutcomePrompt(res))
+	if strings.Contains(out, "Warnings/errors during run") {
+		t.Fatalf("a clean run must not show the issue recap:\n%s", out)
 	}
 }
 
