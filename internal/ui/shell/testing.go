@@ -129,3 +129,19 @@ func StartObservedForTest(ctx context.Context, cfg Config, w io.Writer, onPush f
 		tea.WithWindowSize(120, 36),
 	)
 }
+
+// StartInlineForTestWithOutput launches an INLINE (non-altscreen) Session that
+// renders plain output into w. Because the program is not on the altscreen,
+// tea.Println lines land in w (in the altscreen they are a no-op), so
+// streaming tests can assert the emitted log lines actually reached the
+// terminal.
+func StartInlineForTestWithOutput(ctx context.Context, cfg Config, w io.Writer) *Session {
+	cfg.UseColor = false // deterministic, greppable output
+	cfg.Inline = true
+	return Start(ctx, cfg,
+		tea.WithOutput(w),
+		tea.WithInput(strings.NewReader("")),
+		tea.WithoutSignalHandler(),
+		tea.WithWindowSize(120, 36),
+	)
+}

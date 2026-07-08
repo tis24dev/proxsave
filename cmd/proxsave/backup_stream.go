@@ -8,7 +8,6 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
@@ -20,41 +19,53 @@ import (
 // result, so the capture->stream plumbing can be exercised without a real backup.
 var backupStreamSteps = runBackupModeSteps
 
-// runBackupStreamed runs the backup INSIDE the graphical dashboard session,
-// streaming its [ts] LEVEL log lines into a StreamTask exactly like the install
-// finalization (runInstallTUI). It adopts the session the dashboard stashed on
-// the "Run backup now" choice; if that handoff has vanished (already adopted, or
-// never stashed) it falls back to the plain steps so the backup always runs.
+// backupInlineSession is the seam runBackupStreamed uses to start the inline
+// (non-altscreen) streaming session. Production uses shell.StartInline; tests
+// override it with an output-observing inline session so the emitted lines and
+// the outcome can be asserted.
+var backupInlineSession = shell.StartInline
+
+// runBackupStreamed runs the backup INSIDE a fresh INLINE (non-altscreen)
+// graphical session, streaming its [ts] LEVEL log lines into the terminal's
+// NATIVE scrollback via tea.Println (RunStreamTaskInline), so colors, native
+// scrollback and text selection are all preserved -- exactly what a long run
+// needs. It tears down the altscreen session the dashboard stashed on the "Run
+// backup now" choice (teardownDashboardSessionForInline) and opens a new inline
+// one; if nothing was stashed (a CLI/cron/daemon backup) it falls back to the
+// plain steps so the backup always runs.
 //
-// The captured console (logging.CaptureConsole) routes the default logger + the
-// bootstrap mirror into the stream sink, so both the run's logging.Info lines and
-// the bootstrap finalization lines appear in-graphics instead of corrupting the
-// alternate screen. taskCtx is threaded into the backup so Esc cancels the run;
-// the session is closed only after the user presses Continue, matching the
-// install finalization's teardown.
+// The captured console (logging.CaptureConsoleWithColor) routes the default
+// logger + the COLORED bootstrap mirror into the raw sink, so both the run's
+// logging.Info lines and the bootstrap finalization lines flow (colored) into
+// the scrollback. taskCtx is threaded into the backup so Esc cancels the run;
+// the session is closed only after the user presses Continue.
+//
+// ORDER IS LOAD-BEARING: teardownDashboardSessionForInline restores the default
+// logger to stdout (SetOutput(nil)); it MUST run BEFORE CaptureConsoleWithColor
+// so that capture's restore() returns to stdout, not the io.Discard the stash
+// installed.
 func runBackupStreamed(opts backupModeOptions) backupModeResult {
-	useColor := true
-	if opts.cfg != nil {
-		useColor = opts.cfg.UseColor
+	if !teardownDashboardSessionForInline() {
+		// Nothing stashed (CLI/cron/daemon): run the backup plain.
+		return backupStreamSteps(opts)
 	}
-	session := adoptDashboardSession(shell.Config{
+
+	useColor := opts.cfg != nil && opts.cfg.UseColor
+	session := backupInlineSession(opts.ctx, shell.Config{
 		AppName:  "ProxSave",
 		Subtitle: "Backup",
 		UseColor: useColor,
 	})
-	if session == nil {
-		// The handoff vanished: run the backup plain (no graphical session).
-		return backupStreamSteps(opts)
-	}
 
 	var res backupModeResult
-	streamErr := components.RunStreamTask(opts.ctx, session, "Running backup",
+	streamErr := components.RunStreamTaskInline(opts.ctx, session, "Running backup",
 		func(taskCtx context.Context, emit func(line string)) (string, error) {
-			// Capture the default + bootstrap-mirror loggers into the UI stream;
-			// restore on return/panic. The real backup logs via both, so its
-			// [ts] LEVEL lines flow into the growing list instead of the altscreen.
-			sink := logging.NewLineWriter(emit)
-			defer logging.CaptureConsole(opts.bootstrap, sink)()
+			// Capture the default + COLORED bootstrap-mirror loggers into the raw
+			// sink; restore on return/panic. The real backup logs via both, so its
+			// [ts] LEVEL lines flow (colored) into the native scrollback via
+			// tea.Println instead of a bounded altscreen tail.
+			sink := logging.NewLineWriterRaw(emit)
+			defer logging.CaptureConsoleWithColor(opts.bootstrap, sink)()
 
 			// Thread taskCtx so an Esc cancel propagates into the running backup.
 			stepOpts := opts
@@ -68,30 +79,48 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 		logging.DebugStepBootstrap(opts.bootstrap, "dashboard", "backup stream: %v", streamErr)
 	}
 
-	// The user pressed Continue: release the terminal so any deferred output
-	// prints to the plain scrollback (the in-graphics lines vanish with the
-	// alternate screen, matching the install finalization).
+	// The user pressed Continue: quit the inline program so any deferred output
+	// prints to the plain scrollback after it (the in-graphics status line is
+	// erased; the streamed log lines stay in the scrollback).
 	if closeErr := session.Close(); closeErr != nil {
 		logging.DebugStepBootstrap(opts.bootstrap, "dashboard", "session close: %v", closeErr)
 	}
 	return res
 }
 
+// renderBackupBanner renders the pre-styled backup outcome banner for a given
+// display severity, mapping each severity to its (style, symbol, title). It
+// classifies with the SHARED exitCodeSeverity so the banner colors res.exitCode
+// EXACTLY like the CLI final summary footer: a non-fatal generic error (exit 1,
+// ExitGenericError) reads yellow "completed with warnings", NOT red "failed".
+// The interrupted case uses the magenta InterruptedText matching the footer's
+// Ctrl+C color; there is no altscreen banner level for it.
+func renderBackupBanner(sev exitSeverity) string {
+	switch sev {
+	case severityOK:
+		return theme.SuccessText.Render(theme.SymbolSuccess + " " + "Backup completed")
+	case severityWarning:
+		return theme.WarningText.Render(theme.SymbolWarning + " " + "Backup completed with warnings")
+	case severityInterrupted:
+		return theme.InterruptedText.Render(theme.SymbolWarning + " " + "Backup interrupted")
+	default: // severityError
+		return theme.ErrorText.Render(theme.SymbolError + " " + "Backup failed")
+	}
+}
+
 // buildBackupOutcomePrompt composes the pre-styled outcome block shown at the
 // bottom of the streamed backup screen (StreamDoneMsg.Outcome), mirroring
-// buildInstallOutcomePrompt. It opens with the shared themed banner
-// (renderInstallBanner) - green "Backup completed" on success (exitCode ==
-// ExitSuccess), red "Backup failed" otherwise, so a context-cancelled run never
-// reads as completed - then adds themed stat lines from the run's BackupStats
-// when present. Missing/nil data is skipped (never panics).
+// buildInstallOutcomePrompt. It opens with renderBackupBanner classified via the
+// shared exitCodeSeverity (same logger the footer reads, so HasWarnings agrees),
+// then adds themed stat lines from the run's BackupStats when present. The
+// display classification only colors the banner - res.exitCode is untouched and
+// still drives finalize, byte-identical to the CLI. Missing/nil data is skipped
+// (never panics).
 func buildBackupOutcomePrompt(res backupModeResult) string {
 	var b strings.Builder
 
-	if res.exitCode == types.ExitSuccess.Int() {
-		b.WriteString(renderInstallBanner(installBannerCompleted, "Backup completed"))
-	} else {
-		b.WriteString(renderInstallBanner(installBannerFailed, "Backup failed"))
-	}
+	sev := exitCodeSeverity(res.exitCode, logging.GetDefaultLogger())
+	b.WriteString(renderBackupBanner(sev))
 
 	st := res.supportStats
 	if st == nil {

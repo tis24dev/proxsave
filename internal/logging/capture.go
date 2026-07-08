@@ -17,6 +17,7 @@ import (
 type lineWriter struct {
 	mu      sync.Mutex
 	buf     []byte
+	strip   bool
 	forward func(line string)
 }
 
@@ -27,7 +28,16 @@ type lineWriter struct {
 // reparsed). A trailing partial (no newline) is retained until the next write
 // completes it. A nil forward is tolerated (lines are dropped).
 func NewLineWriter(forward func(line string)) io.Writer {
-	return &lineWriter{forward: forward}
+	return &lineWriter{forward: forward, strip: true}
+}
+
+// NewLineWriterRaw is the color-preserving sibling of NewLineWriter: identical
+// line-splitting and trailing-whitespace trimming, but it KEEPS ANSI escapes
+// (no ansi.Strip) so colored "[ts] LEVEL msg" lines survive into the forward
+// callback. This is the sink used for the inline tea.Println stream, where the
+// terminal's native scrollback renders the colors.
+func NewLineWriterRaw(forward func(line string)) io.Writer {
+	return &lineWriter{forward: forward, strip: false}
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
@@ -41,9 +51,13 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 		}
 		line := string(w.buf[:i])
 		w.buf = w.buf[i+1:]
-		if w.forward != nil {
-			w.forward(strings.TrimRight(ansi.Strip(line), " \t\r"))
+		if w.forward == nil {
+			continue
 		}
+		if w.strip {
+			line = ansi.Strip(line)
+		}
+		w.forward(strings.TrimRight(line, " \t\r"))
 	}
 	return len(p), nil
 }
@@ -63,6 +77,24 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 // captures only the default logger. restore() is idempotent-safe to call once;
 // call it via defer for panic safety.
 func CaptureConsole(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
+	return captureConsole(bootstrap, w, false)
+}
+
+// CaptureConsoleWithColor is the color-preserving sibling of CaptureConsole: it
+// wires the same default-logger + bootstrap-mirror plumbing, but the bootstrap
+// mirror is COLORED (useColor=true) so its "[ts] LEVEL msg" lines carry ANSI
+// like the default logger already does. Pair it with NewLineWriterRaw so the
+// colors reach the inline tea.Println stream. The mirror is still created at the
+// bootstrap's OWN level, so the standard-run debug-suppression contract holds.
+func CaptureConsoleWithColor(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
+	return captureConsole(bootstrap, w, true)
+}
+
+// captureConsole is the shared body of CaptureConsole / CaptureConsoleWithColor.
+// mirrorColor selects whether the bootstrap mirror logger is colored; every
+// other behavior (default-logger SwapOutput, bootstrap console-quiet, the
+// idempotent-safe restore) is identical between the two.
+func captureConsole(bootstrap *BootstrapLogger, w io.Writer, mirrorColor bool) (restore func()) {
 	def := GetDefaultLogger()
 	var prevDefault io.Writer
 	if def != nil {
@@ -80,7 +112,7 @@ func CaptureConsole(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
 		// otherwise every bootstrap.Debug line (e.g. DebugStepBootstrap) would leak into
 		// the UI stream even on a standard run. A debug run (bootstrap SetLevel Debug)
 		// still streams debug - see the plan's "run finalization in debug" design task.
-		mirror := New(bootstrap.levelValue(), false) // useColor=false -> clean prefix
+		mirror := New(bootstrap.levelValue(), mirrorColor) // useColor per caller
 		mirror.SetOutput(w)
 		bootstrap.SetMirrorLogger(mirror)
 		bootstrap.SetConsoleQuiet(true)
