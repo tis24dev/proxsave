@@ -318,29 +318,3 @@ func TestUpgradeRealTemplateKeepsExistingInstallSafe(t *testing.T) {
 		t.Errorf("merge clobbered the user's BACKUP_PATH: %q", raw["BACKUP_PATH"])
 	}
 }
-
-// TestMigrateLegacyRealTemplateInjectsSafeDaemonBlock guards the OTHER production
-// injection path (legacy bash config -> Go, migration.go mergeTemplateWithLegacy).
-// Like --upgrade it walks the REAL embedded template, so a legacy->Go migration must
-// inject the same safe daemon block; a regression in that separate merge code would
-// otherwise go uncaught.
-func TestMigrateLegacyRealTemplateInjectsSafeDaemonBlock(t *testing.T) {
-	tmpDir := t.TempDir()
-	legacyPath := filepath.Join(tmpDir, "legacy.env")
-	outputPath := filepath.Join(tmpDir, "backup.env")
-	if err := os.WriteFile(legacyPath, []byte("BACKUP_PATH=/data/backup\n"), 0600); err != nil {
-		t.Fatalf("seed legacy: %v", err)
-	}
-	_, merged, err := PlanLegacyEnvMigration(legacyPath, outputPath)
-	if err != nil {
-		t.Fatalf("PlanLegacyEnvMigration: %v", err)
-	}
-	if err := os.WriteFile(outputPath, []byte(merged), 0600); err != nil {
-		t.Fatalf("write merged: %v", err)
-	}
-	raw, err := parseEnvFile(outputPath)
-	if err != nil {
-		t.Fatalf("parse merged: %v", err)
-	}
-	assertSafeDaemonDefaults(t, raw)
-}

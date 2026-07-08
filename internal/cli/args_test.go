@@ -87,7 +87,7 @@ func TestParseDefaults(t *testing.T) {
 		t.Fatalf("LogLevel = %v, want LogLevelNone", args.LogLevel)
 	}
 	if args.DryRun || args.ShowVersion || args.ShowHelp || args.ForceNewKey || args.Decrypt ||
-		args.Restore || args.Install || args.NewInstall || args.EnvMigration || args.EnvMigrationDry || args.UpgradeConfig ||
+		args.Restore || args.Install || args.NewInstall || args.UpgradeConfig ||
 		args.UpgradeConfigDry || args.CleanupGuards {
 		t.Fatal("all boolean flags should default to false")
 	}
@@ -106,12 +106,9 @@ func TestParseCustomFlags(t *testing.T) {
 		"--restore",
 		"--install",
 		"--new-install",
-		"--env-migration",
-		"--env-migration-dry-run",
 		"--cleanup-guards",
 		"--upgrade-config",
 		"--upgrade-config-dry-run",
-		"--old-env", "/legacy.env",
 	})
 
 	if args.ConfigPath != "/custom/config.env" {
@@ -125,12 +122,9 @@ func TestParseCustomFlags(t *testing.T) {
 	}
 	if !args.DryRun || !args.Support || !args.ShowVersion || !args.ShowHelp ||
 		!args.ForceNewKey || !args.Decrypt || !args.Restore || !args.Install || !args.NewInstall ||
-		!args.EnvMigration || !args.EnvMigrationDry || !args.UpgradeConfig ||
+		!args.UpgradeConfig ||
 		!args.UpgradeConfigDry || !args.CleanupGuards {
 		t.Fatal("expected boolean flags to be set")
-	}
-	if args.LegacyEnvPath != "/legacy.env" {
-		t.Fatalf("LegacyEnvPath = %q, want /legacy.env", args.LegacyEnvPath)
 	}
 }
 

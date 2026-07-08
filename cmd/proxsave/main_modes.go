@@ -110,7 +110,6 @@ func validateDaemonCompatibility(args *cli.Args) []string {
 		{enabled: args.ForceNewKey, label: "--newkey"},
 		{enabled: args.Backup, label: "--backup"},
 		{enabled: args.Support, label: "--support"},
-		{enabled: args.EnvMigration || args.EnvMigrationDry, label: "--env-migration"},
 		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config"},
 		{enabled: args.CleanupGuards, label: "--cleanup-guards"},
 	})
@@ -129,7 +128,6 @@ func cleanupGuardsIncompatibleModes(args *cli.Args) []string {
 		{enabled: args.NewInstall, label: "--new-install"},
 		{enabled: args.Upgrade, label: "--upgrade"},
 		{enabled: args.ForceNewKey, label: "--newkey"},
-		{enabled: args.EnvMigration || args.EnvMigrationDry, label: "--env-migration/--env-migration-dry-run"},
 		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config/--upgrade-config-dry-run/--upgrade-config-json"},
 	})
 }
@@ -139,7 +137,6 @@ func supportIncompatibleModes(args *cli.Args) []string {
 		{enabled: args.Decrypt, label: "--decrypt"},
 		{enabled: args.Install, label: "--install"},
 		{enabled: args.NewInstall, label: "--new-install"},
-		{enabled: args.EnvMigration || args.EnvMigrationDry, label: "--env-migration"},
 		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config"},
 		{enabled: args.ForceNewKey, label: "--newkey"},
 	})

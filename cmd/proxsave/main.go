@@ -10,8 +10,6 @@ import (
 )
 
 const (
-	defaultLegacyEnvPath          = "/opt/proxsave/env/backup.env"
-	legacyEnvFallbackPath         = "/opt/proxmox-backup/env/backup.env"
 	goRuntimeMinVersion           = "1.25.10"
 	networkPreflightTimeout       = 2 * time.Second
 	bytesPerMegabyte        int64 = 1024 * 1024
