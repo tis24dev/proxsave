@@ -19,6 +19,7 @@ import (
 
 type backupModeOptions struct {
 	ctx              context.Context
+	bootstrap        *logging.BootstrapLogger
 	cfg              *config.Config
 	logger           *logging.Logger
 	envInfo          *environment.EnvironmentInfo
@@ -44,7 +45,17 @@ type backupModeResult struct {
 // return path of the backup is covered by exactly one handoff decision (which itself no-ops on the
 // disabled/concurrency-skip/supervised-child/daemon-down paths).
 func runBackupMode(opts backupModeOptions) backupModeResult {
-	res := runBackupModeSteps(opts)
+	// A pending dashboard handoff means the interactive dashboard kept its
+	// graphical session open for this backup: adopt it and stream the run
+	// in-graphics (runBackupStreamed). Every non-dashboard path (CLI, cron,
+	// daemon-supervised child) has no stashed session, so it runs the plain
+	// steps unchanged. The healthcheck handoff runs in BOTH branches.
+	var res backupModeResult
+	if dashboardHandoffPending() {
+		res = runBackupStreamed(opts)
+	} else {
+		res = runBackupModeSteps(opts)
+	}
 	maybeHandoffManualBackup(opts, res)
 	return res
 }

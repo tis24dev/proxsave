@@ -672,7 +672,8 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 	_ = s.Close()
 }
 
-// TestDashboardExitStillClosesSession: exit and backup do NOT stash.
+// TestDashboardExitStillClosesSession: exit does NOT stash; backup DOES stash so
+// runBackupStreamed can adopt the live session and stream the run in-graphics.
 func TestDashboardExitStillClosesSession(t *testing.T) {
 	_, _, handled := runDashboardWith(t, "esc")
 	if !handled {
@@ -685,7 +686,11 @@ func TestDashboardExitStillClosesSession(t *testing.T) {
 	if handled || args.Restore || args.Install {
 		t.Fatalf("backup dispatch broken: %+v", args)
 	}
-	if dashboardHandoffPending() {
-		t.Fatal("backup must not stash the session (plain terminal run)")
+	// Backup now mirrors the flow-action handoff: the graphical session stays
+	// open and stashed for the backup to adopt (streamed in-graphics), instead
+	// of being closed for a plain-terminal run. releaseDashboardLeftovers in the
+	// session-seam cleanup closes the still-stashed session.
+	if !dashboardHandoffPending() {
+		t.Fatal("backup must stash the session for in-graphics streaming")
 	}
 }

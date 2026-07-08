@@ -116,9 +116,14 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		switch action {
 		case menu.ActionBackup:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=backup")
-			// The backup run owns the plain terminal: leave the UI for real
-			// (explicit close so the altscreen is gone before any run output).
-			_ = session.Close()
+			// Keep the graphical session OPEN and hand it off, exactly like the
+			// flow actions below: the backup adopts it (runBackupStreamed ->
+			// adoptDashboardSession) and streams its [ts] LEVEL log lines
+			// in-graphics via RunStreamTask, the same way the install
+			// finalization does. A CLI/cron/daemon backup stashes nothing here,
+			// so it keeps running plain (there is no session to adopt).
+			keepAlive = true
+			stashDashboardSession(session, bootstrap)
 			return types.ExitSuccess.Int(), false
 		case menu.ActionRestore:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=restore")
