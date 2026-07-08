@@ -522,8 +522,8 @@ func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
 }
 
 // TestDashboardDiagnosticNotConfiguredShowsNotice: when a setup screen is not
-// eligible (Shown=false), a dismissible notice appears instead of a blank
-// flicker, then the menu returns.
+// eligible (Shown=false), a dismissible styled "Status: NOT CONFIGURED" result
+// screen appears instead of a blank flicker, then the menu returns.
 func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 	installDashboardGates(t, true, true)
 	driver := installDashboardSessionSeam(t)
@@ -539,8 +539,9 @@ func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down enter") // Check Telegram (not configured)
-	driver.waitScreen("Telegram not configured")            // the notice
-	driver.keys("enter")                                    // dismiss
+	driver.waitScreen("Telegram")                           // the styled "Status:" result screen
+	driver.waitOutput("NOT CONFIGURED")                     // Status: ⚠ NOT CONFIGURED
+	driver.keys("enter")                                    // dismiss (Back)
 	driver.waitScreen("Dashboard")                          // back at the menu
 	driver.keys("esc")                                      // exit
 

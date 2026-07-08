@@ -598,10 +598,12 @@ var (
 	}
 )
 
-// dashboardNotConfiguredNotice shows a dismissible info notice when a diagnostics
-// screen has nothing to show because the feature is not enabled on this host.
+// dashboardNotConfiguredNotice shows a not-configured diagnostic when a screen has
+// nothing to show because the feature is not enabled on this host. It reuses the
+// shared styled result screen (showDaemonResultScreen) so it reads
+// "Status: ⚠ NOT CONFIGURED" exactly like the configured check screens.
 func dashboardNotConfiguredNotice(ctx context.Context, session *shell.Session, title, msg string) {
-	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeInfo, title+" not configured", msg))
+	showDaemonResultScreen(ctx, session, title, orchestrator.HealthcheckSetupLevelWarn, "NOT CONFIGURED", msg)
 }
 
 // testDashboardSession lets tests inject a renderless session (the seam used

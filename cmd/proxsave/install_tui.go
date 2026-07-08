@@ -11,6 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/flows/agesetup"
 	flowinstall "github.com/tis24dev/proxsave/internal/ui/flows/install"
@@ -202,7 +203,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			ageMsg += "\nUsing the existing AGE recipient configuration."
 		}
 		ageMsg += "\n\nIMPORTANT: keep your passphrase/private key offline and secure!"
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Encryption ready", ageMsg))
+		// Reuse the shared styled result screen so this reads
+		// "Status: ✓ ENCRYPTION READY" like the other install result screens.
+		showDaemonResultScreen(ctx, session, "Encryption", orchestrator.HealthcheckSetupLevelOk, "ENCRYPTION READY", ageMsg)
 	}
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors

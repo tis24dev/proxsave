@@ -88,9 +88,12 @@ func (u *charmWorkflowUI) ShowStatusResult(ctx context.Context, screenTitle stri
 	}
 }
 
+// ShowError renders a workflow failure with the SAME styled "Status:" selector as
+// ShowStatusResult, at Error level, so a failure (e.g. "Network preflight failed")
+// reads "Status: ✗ <keyword>" instead of a components.Notice. The keyword is the
+// uppercased title, matching the failure look of the other Status screens.
 func (u *charmWorkflowUI) ShowError(ctx context.Context, title, message string) error {
-	_, err := shell.Ask(ctx, u.session, components.NewNotice(components.NoticeError, title, message))
-	return u.mapAbort(err)
+	return u.ShowStatusResult(ctx, title, HealthcheckSetupLevelError, strings.ToUpper(title), message)
 }
 
 func (u *charmWorkflowUI) SelectBackupSource(ctx context.Context, options []decryptPathOption) (decryptPathOption, error) {
