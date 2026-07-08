@@ -164,16 +164,16 @@ func TestVerifyBinaryIntegrityDryRunDoesNotCreateHash(t *testing.T) {
 	}
 }
 
-// TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod verifies that a dry-run does
-// not fchmod the executable (ensureOwnershipAndPermFromFD) when its mode differs
-// from the expected 0o700.
+// TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod verifies that a dry-run does not
+// fchmod the executable (ensureExecutableOwnerWriteOnly) even when it is genuinely
+// group/other-writable — the one permission state the guard would otherwise correct.
 func TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod(t *testing.T) {
 	dir := t.TempDir()
 	execPath := filepath.Join(dir, "binary")
 	if err := os.WriteFile(execPath, []byte("content"), 0o700); err != nil {
 		t.Fatalf("write exec: %v", err)
 	}
-	if err := os.Chmod(execPath, 0o755); err != nil { // wrong perm vs expected 0o700
+	if err := os.Chmod(execPath, 0o777); err != nil { // group/other-writable: the guard would fix it
 		t.Fatalf("chmod: %v", err)
 	}
 
@@ -184,8 +184,61 @@ func TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
+	if info.Mode().Perm() != 0o777 {
+		t.Fatalf("dry-run must not fchmod the executable; perm = %o, want 777", info.Mode().Perm())
+	}
+}
+
+// TestVerifyBinaryIntegrityFixesGroupOtherWritable verifies that with AUTO_FIX on the
+// guard clears only the group/other write bits of a writable executable (0o777 ->
+// 0o755, i.e. perm &^ 0o022) rather than forcing an exact mode.
+func TestVerifyBinaryIntegrityFixesGroupOtherWritable(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "binary")
+	if err := os.WriteFile(execPath, []byte("content"), 0o755); err != nil {
+		t.Fatalf("write exec: %v", err)
+	}
+	if err := os.Chmod(execPath, 0o777); err != nil { // group/other-writable
+		t.Fatalf("chmod: %v", err)
+	}
+
+	checker := newCheckerWithExec(t, &config.Config{AutoFixPermissions: true, AutoUpdateHashes: false}, execPath)
+	checker.verifyBinaryIntegrity(context.Background())
+
+	info, err := os.Stat(execPath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
 	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("dry-run must not fchmod the executable; perm = %o, want 755", info.Mode().Perm())
+		t.Fatalf("guard must clear only the group/other write bits; perm = %o, want 755", info.Mode().Perm())
+	}
+}
+
+// TestVerifyBinaryIntegrityWarnsGroupOtherWritable verifies that with AUTO_FIX off a
+// group/other-writable executable is warned about and left untouched — and that a
+// conventional 0o755 binary raises no such warning.
+func TestVerifyBinaryIntegrityWarnsGroupOtherWritable(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "binary")
+	if err := os.WriteFile(execPath, []byte("content"), 0o755); err != nil {
+		t.Fatalf("write exec: %v", err)
+	}
+	if err := os.Chmod(execPath, 0o777); err != nil { // group/other-writable
+		t.Fatalf("chmod: %v", err)
+	}
+
+	checker := newCheckerWithExec(t, &config.Config{AutoFixPermissions: false, AutoUpdateHashes: false}, execPath)
+	checker.verifyBinaryIntegrity(context.Background())
+
+	if !containsIssue(checker.result, "must not be writable by group or other") {
+		t.Fatalf("expected group/other-writable warning, got %+v", checker.result.Issues)
+	}
+	info, err := os.Stat(execPath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o777 {
+		t.Fatalf("warn-only must not chmod the executable; perm = %o, want 777", info.Mode().Perm())
 	}
 }
 

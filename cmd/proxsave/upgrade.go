@@ -711,22 +711,12 @@ func installBinary(srcRoot *os.Root, srcName, destPath string, bootstrap *loggin
 	}
 	defer closeIntoErr(&err, src, "close extracted binary")
 
-	// Install root-only (0700, owner rwx). The binary runs as root and reaches the
-	// age identity/keys, so verifyBinaryIntegrity requires it to be root:root 0700.
-	// Write it that way directly instead of shipping 0755 and relying on
-	// AUTO_FIX_PERMISSIONS to chmod it afterwards (which also nags a warning when
-	// auto-fix is disabled).
-	dst, err := destRoot.OpenFile(tmpName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o700)
+	// Install the conventional executable mode 0755 (owner rwx, group/other r-x). The
+	// binary runs as root and only root can replace it; the security check verifies it
+	// is root-owned and not group/other-writable, not an exact mode, so 0755 is fine.
+	dst, err := destRoot.OpenFile(tmpName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return fmt.Errorf("cannot create temp target binary: %w", err)
-	}
-	// Enforce 0700 explicitly. O_CREATE applies its mode only when it actually
-	// creates the file: a leftover .tmp from a prior failed upgrade is reused as-is
-	// (O_TRUNC clears the contents but not the permissions), so it could otherwise
-	// carry a looser mode into the rename below. Chmod pins it to 0700 either way.
-	if err := dst.Chmod(0o700); err != nil {
-		_ = dst.Close()
-		return fmt.Errorf("cannot set permissions on temp target binary: %w", err)
 	}
 
 	if _, err := io.Copy(dst, src); err != nil {
