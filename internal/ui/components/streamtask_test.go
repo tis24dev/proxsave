@@ -190,6 +190,37 @@ func TestStreamScreenEscCancels(t *testing.T) {
 	}
 }
 
+func TestStreamScreenCopyLog(t *testing.T) {
+	scr := newStreamScreen("Running backup", 1, func() {})
+	scr.Update(StreamLineMsg{Token: 1, Line: "\x1b[32m[a] INFO\x1b[0m first line"}) //nolint:errcheck
+	scr.Update(StreamLineMsg{Token: 1, Line: "[b] STEP second line"})               //nolint:errcheck
+
+	_, cmd := scr.Update(shell.KeyMsg("c"))
+	if !scr.copied {
+		t.Fatal("'c' should set the copied confirmation")
+	}
+	if cmd == nil {
+		t.Fatal("'c' should return a SetClipboard command")
+	}
+	// tea.SetClipboard's message is a string type; %s yields the copied text.
+	got := fmt.Sprintf("%s", cmd())
+	if !strings.Contains(got, "[a] INFO first line") || !strings.Contains(got, "[b] STEP second line") {
+		t.Fatalf("clipboard missing log lines: %q", got)
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Fatalf("clipboard must be ANSI-stripped plain text: %q", got)
+	}
+	if !strings.Contains(scr.View(80, 20), "log copied") {
+		t.Fatal("view should show the 'log copied' confirmation")
+	}
+
+	// Any other key clears the transient confirmation.
+	scr.Update(shell.KeyMsg("down")) //nolint:errcheck
+	if scr.copied {
+		t.Fatal("copied confirmation should clear on the next keypress")
+	}
+}
+
 // TestStreamScreenScrollUpStopsFollow: scrolling up stops auto-follow so a
 // manual review is not yanked back to the bottom by the next line.
 func TestStreamScreenScrollUpStopsFollow(t *testing.T) {
