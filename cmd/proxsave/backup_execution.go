@@ -43,7 +43,7 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 
 	persistBackupStats(orch, stats)
 	logBackupStatistics(stats)
-	logging.Info("✓ Go backup orchestration completed")
+	logging.Info("✓ Backup completed")
 	logServerIdentityValues(opts.serverIDValue, opts.serverMACValue)
 	logMonitoringPortalLink(stats)
 
