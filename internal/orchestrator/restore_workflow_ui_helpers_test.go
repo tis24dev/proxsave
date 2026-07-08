@@ -51,6 +51,9 @@ func (f *fakeRestoreWorkflowUI) ShowMessage(ctx context.Context, title, message 
 	f.shownMessages = append(f.shownMessages, message)
 	return nil
 }
+func (f *fakeRestoreWorkflowUI) ShowWarning(ctx context.Context, title, message string) error {
+	return nil
+}
 func (f *fakeRestoreWorkflowUI) ShowError(ctx context.Context, title, message string) error {
 	return nil
 }

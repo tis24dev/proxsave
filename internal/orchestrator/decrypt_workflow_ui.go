@@ -76,7 +76,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 
 		if scanErr != nil {
 			logger.Warning("Failed to inspect %s: %v", option.Path, scanErr)
-			_ = ui.ShowError(ctx, "Backup scan failed", fmt.Sprintf("Failed to inspect %s: %v", option.Path, scanErr))
+			_ = ui.ShowWarning(ctx, "Backup scan failed", fmt.Sprintf("Failed to inspect %s: %v", option.Path, scanErr))
 			if option.IsRclone {
 				// For rclone remotes, persistent failures are unlikely to self-heal,
 				// so remove the option to avoid a broken loop.
@@ -90,7 +90,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 
 		if len(candidates) == 0 {
 			logger.Warning("No backups found in %s", option.Path)
-			_ = ui.ShowError(ctx, "No backups found", fmt.Sprintf("No backups found in %s.", option.Path))
+			_ = ui.ShowWarning(ctx, "No backups found", fmt.Sprintf("No backups found in %s.", option.Path))
 			pathOptions = removeDecryptPathOption(pathOptions, option)
 			if len(pathOptions) == 0 {
 				return nil, fmt.Errorf("no usable backup sources available")
@@ -102,7 +102,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 			encrypted := filterEncryptedCandidates(candidates)
 			if len(encrypted) == 0 {
 				logger.Warning("No encrypted backups found in %s", option.Path)
-				_ = ui.ShowError(ctx, "No encrypted backups", fmt.Sprintf("No encrypted backups found in %s.", option.Path))
+				_ = ui.ShowWarning(ctx, "No encrypted backups", fmt.Sprintf("No encrypted backups found in %s.", option.Path))
 				pathOptions = removeDecryptPathOption(pathOptions, option)
 				if len(pathOptions) == 0 {
 					return nil, fmt.Errorf("no usable backup sources available")

@@ -51,6 +51,11 @@ func (u *charmWorkflowUI) ShowMessage(ctx context.Context, title, message string
 	return u.mapAbort(err)
 }
 
+func (u *charmWorkflowUI) ShowWarning(ctx context.Context, title, message string) error {
+	_, err := shell.Ask(ctx, u.session, components.NewNotice(components.NoticeWarning, title, message))
+	return u.mapAbort(err)
+}
+
 func (u *charmWorkflowUI) ShowError(ctx context.Context, title, message string) error {
 	_, err := shell.Ask(ctx, u.session, components.NewNotice(components.NoticeError, title, message))
 	return u.mapAbort(err)
