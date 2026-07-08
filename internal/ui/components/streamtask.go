@@ -111,16 +111,15 @@ func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	case StreamLineMsg:
 		if msg.Token == t.token && !t.done {
 			// Streamed lines carry untrusted runtime data: sanitize at the
-			// boundary while PRESERVING ANSI SGR so the colors survive into
-			// the panel. Skip blank lines so no empty rows scroll past.
-			if line := sanitizeStreamLine(msg.Line); strings.TrimSpace(line) != "" {
-				t.lines = append(t.lines, line)
-				if len(t.lines) > streamLineCap {
-					// Drop the oldest lines beyond the cap (bounded ring) and
-					// remember it so the panel can note the truncation.
-					t.lines = t.lines[len(t.lines)-streamLineCap:]
-					t.dropped = true
-				}
+			// boundary while PRESERVING ANSI SGR so the colors survive into the
+			// panel. BLANK lines are KEPT: they are the section spacers the run
+			// prints (fmt.Println), so the panel spaces sections like the CLI.
+			t.lines = append(t.lines, sanitizeStreamLine(msg.Line))
+			if len(t.lines) > streamLineCap {
+				// Drop the oldest lines beyond the cap (bounded ring) and
+				// remember it so the panel can note the truncation.
+				t.lines = t.lines[len(t.lines)-streamLineCap:]
+				t.dropped = true
 			}
 		}
 		return t, nil

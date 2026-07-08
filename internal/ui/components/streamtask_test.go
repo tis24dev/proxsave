@@ -221,6 +221,19 @@ func TestStreamScreenCopyLog(t *testing.T) {
 	}
 }
 
+func TestStreamScreenKeepsBlankLines(t *testing.T) {
+	scr := newStreamScreen("Running", 1, func() {})
+	scr.Update(StreamLineMsg{Token: 1, Line: "section one"}) //nolint:errcheck
+	scr.Update(StreamLineMsg{Token: 1, Line: ""})            //nolint:errcheck // section spacer
+	scr.Update(StreamLineMsg{Token: 1, Line: "section two"}) //nolint:errcheck
+	if len(scr.lines) != 3 {
+		t.Fatalf("blank spacer dropped: got %d lines, want 3 (%q)", len(scr.lines), scr.lines)
+	}
+	if scr.lines[1] != "" {
+		t.Fatalf("middle line should be the blank spacer, got %q", scr.lines[1])
+	}
+}
+
 // TestStreamScreenScrollUpStopsFollow: scrolling up stops auto-follow so a
 // manual review is not yanked back to the bottom by the next line.
 func TestStreamScreenScrollUpStopsFollow(t *testing.T) {

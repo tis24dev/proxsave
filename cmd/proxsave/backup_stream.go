@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -24,6 +26,37 @@ var backupStreamSteps = runBackupModeSteps
 // adoptDashboardSession; tests override it with an output-observing altscreen
 // session so the emitted lines and the outcome can be asserted.
 var backupAdoptSession = adoptDashboardSession
+
+// captureRunOutput routes BOTH the loggers (default + colored bootstrap mirror)
+// AND raw os.Stdout through a SINGLE pipe into emit, so everything a run prints -
+// colored logger lines AND the raw fmt.Println blank spacers between sections -
+// streams into the panel in the SAME order as the CLI. The bubbletea program
+// renders to its own saved fd (captured at program start), so redirecting the
+// os.Stdout variable here never touches the altscreen. restore() (call via defer)
+// undoes the logger swap + restores os.Stdout, closes the pipe, and drains it.
+// If os.Pipe fails it degrades to logger-only capture (no stdout spacers).
+func captureRunOutput(bootstrap *logging.BootstrapLogger, emit func(line string)) func() {
+	sink := logging.NewLineWriterRaw(emit)
+	r, w, err := os.Pipe()
+	if err != nil {
+		return logging.CaptureConsoleWithColor(bootstrap, sink)
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(sink, r)
+		close(done)
+	}()
+	origStdout := os.Stdout
+	os.Stdout = w
+	restoreLoggers := logging.CaptureConsoleWithColor(bootstrap, w)
+	return func() {
+		restoreLoggers()
+		os.Stdout = origStdout
+		_ = w.Close()
+		<-done
+		_ = r.Close()
+	}
+}
 
 // runBackupStreamed runs the backup INSIDE the graphical dashboard ALTSCREEN
 // session, streaming its [ts] LEVEL log lines into a CONTAINED, scrollable,
@@ -56,12 +89,12 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 	var res backupModeResult
 	streamErr := components.RunStreamTask(opts.ctx, session, "Running backup",
 		func(taskCtx context.Context, emit func(line string)) (string, error) {
-			// Capture the default + COLORED bootstrap-mirror loggers into the raw
-			// sink; restore on return/panic. The real backup logs via both, so its
-			// [ts] LEVEL lines flow (colored) into the contained viewport instead
-			// of the raw altscreen.
-			sink := logging.NewLineWriterRaw(emit)
-			defer logging.CaptureConsoleWithColor(opts.bootstrap, sink)()
+			// Route the default + COLORED bootstrap-mirror loggers AND raw os.Stdout
+			// (the fmt.Println section spacers the CLI prints) through one pipe into
+			// the panel; restored on return/panic. So the panel shows the SAME lines -
+			// colored logs + the blank spacer rows between sections - in the same
+			// order as the CLI, instead of losing them to the raw altscreen.
+			defer captureRunOutput(opts.bootstrap, emit)()
 
 			// Thread taskCtx so an Esc cancel propagates into the running backup.
 			stepOpts := opts
