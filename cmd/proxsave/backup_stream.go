@@ -10,6 +10,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
@@ -155,10 +156,16 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 	if st := res.supportStats; st != nil {
 		b.WriteString("\n")
 
-		// Files: N collected (M failed) - the failed count is only shown (in yellow)
-		// when non-zero, so a clean run reads simply "Files: N collected".
+		// Files: N collected - M missing (K failed) - "missing" reuses st.FilesMissing
+		// (the SAME field the notifications report), always shown (yellow when >0). The
+		// failed count is only shown (in yellow) when non-zero.
 		b.WriteString("\n")
-		b.WriteString(theme.Text.Render(fmt.Sprintf("Files: %d collected", st.FilesCollected)))
+		b.WriteString(theme.Text.Render(fmt.Sprintf("Files: %d collected - ", st.FilesCollected)))
+		missingStyle := theme.Text
+		if st.FilesMissing > 0 {
+			missingStyle = theme.WarningText
+		}
+		b.WriteString(missingStyle.Render(fmt.Sprintf("%d missing", st.FilesMissing)))
 		if st.FilesFailed > 0 {
 			b.WriteString(theme.WarningText.Render(fmt.Sprintf(" (%d failed)", st.FilesFailed)))
 		}
@@ -175,6 +182,13 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 			b.WriteString("\n")
 			b.WriteString(theme.Text.Render("Archive: " + p))
 		}
+		// The run log file is CLOSED during the log-management phase before this
+		// outcome is built, so GetLogFilePath may be "" by now; runLogPath falls back
+		// to the LOG_FILE the runtime exports at startup.
+		if lp := runLogPath(); lp != "" {
+			b.WriteString("\n")
+			b.WriteString(theme.Text.Render("Log: " + lp))
+		}
 
 		// Local is always shown when known; Secondary/Cloud only when they carry a
 		// meaningful (non-disabled) status, so a single-destination run stays terse.
@@ -185,6 +199,20 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 		if s := strings.TrimSpace(st.CloudStatus); s != "" && s != "disabled" {
 			appendBackupStatusLine(&b, "Cloud", st.CloudStatus)
 		}
+
+		// Centralized-mode identity: the Telegram/relay pairing id and the sanitized
+		// Healthchecks portal link, each shown only when present. The link mirrors the
+		// sole-display discipline of logMonitoringPortalLink: sanitized once with
+		// serverbot.SanitizeLoginURL, printed ONLY if it survives, NEVER raw and never
+		// registered as a secret.
+		if id := strings.TrimSpace(st.ServerID); id != "" {
+			b.WriteString("\n")
+			b.WriteString(theme.Text.Render("Server ID Telegram: " + id))
+		}
+		if link := serverbot.SanitizeLoginURL(st.HealthcheckLink); link != "" {
+			b.WriteString("\n")
+			b.WriteString(theme.Text.Render("Healthchecks link: " + link))
+		}
 	}
 
 	// Warnings/errors recap - the theme counterpart of the CLI footer's
@@ -193,6 +221,18 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 	appendRunIssueSummary(&b, logger)
 
 	return b.String()
+}
+
+// runLogPath returns the path of the run's log file for the outcome "Log:" line.
+// It prefers the live default logger's path, but that logger's file is CLOSED
+// during the backup log-management phase before the outcome is built, so
+// GetLogFilePath may be "" by then; it then falls back to the LOG_FILE env var the
+// runtime exports at startup (main_runtime.go os.Setenv("LOG_FILE", logFilePath)).
+func runLogPath() string {
+	if p := logging.GetDefaultLogger().GetLogFilePath(); p != "" {
+		return p
+	}
+	return strings.TrimSpace(os.Getenv("LOG_FILE"))
 }
 
 // appendRunIssueSummary appends a warnings/errors recap to the backup outcome: a
