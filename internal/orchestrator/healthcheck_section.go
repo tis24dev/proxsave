@@ -8,7 +8,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // healthchecksSectionName is the SINGLE source of truth for the Phase-7 section name.
@@ -20,13 +19,16 @@ const healthchecksSectionName = "Healthchecks"
 // HealthchecksChannel renders the always-visible "Healthchecks" line in Phase 7. It is
 // a NotificationChannel in name only: it SENDS nothing. It reports the centralized/self
 // monitoring state -- DECOUPLED from Telegram (gated on HEALTHCHECK_ENABLED and reading
-// the identity secret directly, so disabling Telegram never hides it) -- and surfaces
-// the portal magic-link.
+// the identity secret directly, so disabling Telegram never hides it).
 //
-// It is the SOLE display boundary for the magic-link: every link it prints passes
-// through serverbot.SanitizeLoginURL, and it never registers the link as a log secret
-// (it must stay visible). It NEVER aborts the run and never escalates a transport
-// hiccup to WARNING/ERROR by itself.
+// It does NOT display the portal magic-link: it only CAPTURES the one this run's relay
+// already fetched, or best-effort MINTS a fresh one, and STORES the RAW link on
+// stats.HealthcheckLink. The link is NEVER registered as a log secret (it must stay
+// visible), and it is carried RAW so the SOLE display boundary can sanitize it once.
+// That display boundary (serverbot.SanitizeLoginURL + the "Monitoring portal" line) now
+// lives in the backup epilogue (logMonitoringPortalLink in cmd/proxsave), which prints
+// it right after the Server MAC Address line. This channel NEVER aborts the run and
+// never escalates a transport hiccup to WARNING/ERROR by itself.
 //
 // The reported transmission state is REAL, not cosmetic: the DAEMON (a separate process,
 // cmd/proxsave/daemon.go) is the only pinger, and it persists every ping outcome to the
@@ -71,9 +73,10 @@ func NewHealthchecksChannel(cfg *config.Config, logger *logging.Logger) *Healthc
 // healthchecksSectionName) so the section is dispatched exactly once.
 func (h *HealthchecksChannel) Name() string { return healthchecksSectionName }
 
-// Notify reports the monitoring state and (centralized) the portal link. Errors are
-// never returned as fatal: it always returns nil, and every failure degrades to a
-// quiet Info -- it must not break a successful backup over a cosmetic section.
+// Notify reports the monitoring state and (centralized) captures/mints and STORES the
+// RAW portal link on stats.HealthcheckLink (it does not display it; the epilogue does).
+// Errors are never returned as fatal: it always returns nil, and every failure degrades
+// to a quiet Info -- it must not break a successful backup over a cosmetic section.
 func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) error {
 	h.info("%s: starting", healthchecksSectionName)
 	if h.cfg == nil {
@@ -120,10 +123,12 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 			h.info("%s: portal link unavailable", healthchecksSectionName)
 		}
 	}
-	// SOLE display boundary: sanitize the RAW link before printing; never register it as
-	// a secret (it must stay visible).
-	if safe := serverbot.SanitizeLoginURL(link); safe != "" {
-		h.info("Monitoring portal (set your password): %s", safe)
+	// STORE the RAW link on stats so a MINTED link is carried to the epilogue (a captured
+	// link is already there). This channel does NOT display it: the SOLE display boundary
+	// (sanitize + print) moved to logMonitoringPortalLink in cmd/proxsave, which prints
+	// it right after the Server MAC Address line. Never register the link as a secret.
+	if link != "" && stats != nil {
+		stats.HealthcheckLink = link
 	}
 	return nil
 }
