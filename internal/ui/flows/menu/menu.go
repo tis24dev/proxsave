@@ -96,7 +96,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 
 	// Recovery: post-restore cleanup of leftover mount guards.
 	items = append(items, components.SelectorItem[Action]{Label: "─── Recovery ───", Separator: true})
-	items = append(items, components.SelectorItem[Action]{Label: "Cleanup guards", Description: "remove leftover restore mount guards (dry-run first, then confirm)", Value: ActionCleanupGuards})
+	items = append(items, components.SelectorItem[Action]{Label: "Cleanup guards", Description: "remove leftover restore mount guards", Value: ActionCleanupGuards})
 
 	// Detach the standalone Exit from the Daemon group above with its own divider.
 	items = append(items, components.SelectorItem[Action]{Label: "──────────────", Separator: true})
