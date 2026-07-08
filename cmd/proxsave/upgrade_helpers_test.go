@@ -196,8 +196,10 @@ func TestInstallBinary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stat(dest): %v", err)
 		}
-		if info.Mode().Perm() != 0o755 {
-			t.Fatalf("dest mode = %o, want %o", info.Mode().Perm(), 0o755)
+		// installBinary must land root-only 0700 to match verifyBinaryIntegrity's
+		// expectation for the installed executable (root:root, owner-only rwx).
+		if info.Mode().Perm() != 0o700 {
+			t.Fatalf("dest mode = %o, want %o", info.Mode().Perm(), 0o700)
 		}
 	}
 }
