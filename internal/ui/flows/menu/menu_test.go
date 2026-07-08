@@ -78,7 +78,7 @@ func TestMenuRowOrder(t *testing.T) {
 	expected := []Action{
 		ActionBackup, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure, ActionNewInstall, ActionCheckUpgrade,
 		ActionCheckTelegram, ActionCheckHealthcheck, ActionPostInstallCheck,
-		ActionDaemonSetup, ActionDaemonStatus, ActionExit,
+		ActionDaemonSetup, ActionDaemonStatus, ActionCleanupGuards, ActionExit,
 	}
 	for i, want := range expected {
 		d := newDriver(t)

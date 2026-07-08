@@ -36,6 +36,9 @@ const (
 	ActionDaemonRemove  // disable the daemon, revert to cron (--daemon-remove)
 	ActionDaemonRestart // restart the running daemon (e.g. to pick up a rebuilt binary)
 	ActionDaemonStatus  // show the daemon/scheduler state
+	// Recovery: post-restore cleanup of leftover mount guards (--cleanup-guards),
+	// run in-session as a two-step dry-run -> confirm -> apply result flow.
+	ActionCleanupGuards
 )
 
 // DaemonState tells Run which daemon command(s) to offer, context-aware.
@@ -90,6 +93,10 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		items = append(items, components.SelectorItem[Action]{Label: "Install", Description: "switch to the resident daemon scheduler (from cron)", Value: ActionDaemonSetup})
 	}
 	items = append(items, components.SelectorItem[Action]{Label: "Status", Description: "show the daemon service and scheduler state", Value: ActionDaemonStatus})
+
+	// Recovery: post-restore cleanup of leftover mount guards.
+	items = append(items, components.SelectorItem[Action]{Label: "─── Recovery ───", Separator: true})
+	items = append(items, components.SelectorItem[Action]{Label: "Cleanup guards", Description: "remove leftover restore mount guards (dry-run first, then confirm)", Value: ActionCleanupGuards})
 
 	// Detach the standalone Exit from the Daemon group above with its own divider.
 	items = append(items, components.SelectorItem[Action]{Label: "──────────────", Separator: true})
