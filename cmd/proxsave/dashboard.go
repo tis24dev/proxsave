@@ -116,14 +116,13 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		switch action {
 		case menu.ActionBackup:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=backup")
-			// Keep the graphical session OPEN and hand it off. Unlike the flow
-			// actions below (which ADOPT the altscreen program), the backup TEARS
-			// the altscreen session DOWN (teardownDashboardSessionForInline) and
-			// starts a FRESH inline (non-altscreen) session, so its [ts] LEVEL
-			// log lines land in the native scrollback via tea.Println with colors
-			// and text selection preserved (runBackupStreamed ->
-			// RunStreamTaskInline). A CLI/cron/daemon backup stashes nothing here,
-			// so it keeps running plain (there is no session to tear down).
+			// Keep the graphical session OPEN and hand it off. Like the flow
+			// actions below, the backup ADOPTS the altscreen program
+			// (runBackupStreamed -> adoptDashboardSession) and streams its
+			// [ts] LEVEL log lines into a CONTAINED, scrollable viewport panel
+			// (components.RunStreamTask), so the run stays inside the frame. A
+			// CLI/cron/daemon backup stashes nothing here, so it keeps running
+			// plain (there is no session to adopt).
 			keepAlive = true
 			stashDashboardSession(session, bootstrap)
 			return types.ExitSuccess.Int(), false
@@ -661,35 +660,6 @@ func adoptDashboardSession(cfg shell.Config) *shell.Session {
 	bootstrap.SetConsoleQuiet(false)
 	logging.GetDefaultLogger().SetOutput(nil) // back to stdout
 	return session
-}
-
-// teardownDashboardSessionForInline consumes the stashed session (once) but,
-// unlike adoptDashboardSession, does NOT rebrand it for reuse: the altscreen
-// dashboard program is CLOSED so a FRESH inline (non-altscreen) session can be
-// started in its place (runBackupStreamed). It mirrors adoptDashboardSession's
-// structure -- take session+bootstrap under the mutex, nil them, lift the
-// console mute -- but Close()s the program and restores the default logger to
-// stdout (SetOutput(nil)) instead of Adopt. It returns whether a session was
-// actually torn down, so a CLI/cron/daemon backup (nothing stashed) can fall
-// back to running the backup plain. The default-logger restore MUST run before
-// the caller wires CaptureConsoleWithColor, so that capture's restore() returns
-// to stdout, not the io.Discard the stash installed.
-func teardownDashboardSessionForInline() bool {
-	dashboardHandoff.mu.Lock()
-	session := dashboardHandoff.session
-	bootstrap := dashboardHandoff.bootstrap
-	dashboardHandoff.session = nil
-	dashboardHandoff.bootstrap = nil
-	dashboardHandoff.mu.Unlock()
-	if session == nil {
-		return false
-	}
-	_ = session.Close() // restores the normal terminal buffer (altscreen down)
-	if bootstrap != nil {
-		bootstrap.SetConsoleQuiet(false)
-	}
-	logging.GetDefaultLogger().SetOutput(nil) // back to stdout
-	return true
 }
 
 // releaseDashboardLeftovers runs at the end of the process: if the chosen

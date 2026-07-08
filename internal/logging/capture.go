@@ -34,8 +34,8 @@ func NewLineWriter(forward func(line string)) io.Writer {
 // NewLineWriterRaw is the color-preserving sibling of NewLineWriter: identical
 // line-splitting and trailing-whitespace trimming, but it KEEPS ANSI escapes
 // (no ansi.Strip) so colored "[ts] LEVEL msg" lines survive into the forward
-// callback. This is the sink used for the inline tea.Println stream, where the
-// terminal's native scrollback renders the colors.
+// callback. This is the sink used for the streamed viewport panel (StreamTask),
+// where the scrollable box renders the colored lines.
 func NewLineWriterRaw(forward func(line string)) io.Writer {
 	return &lineWriter{forward: forward, strip: false}
 }
@@ -84,7 +84,7 @@ func CaptureConsole(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
 // wires the same default-logger + bootstrap-mirror plumbing, but the bootstrap
 // mirror is COLORED (useColor=true) so its "[ts] LEVEL msg" lines carry ANSI
 // like the default logger already does. Pair it with NewLineWriterRaw so the
-// colors reach the inline tea.Println stream. The mirror is still created at the
+// colors reach the streamed viewport panel (StreamTask). The mirror is still created at the
 // bootstrap's OWN level, so the standard-run debug-suppression contract holds.
 func CaptureConsoleWithColor(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
 	return captureConsole(bootstrap, w, true)

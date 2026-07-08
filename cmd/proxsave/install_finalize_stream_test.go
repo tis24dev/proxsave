@@ -72,22 +72,22 @@ func TestBuildInstallOutcomePromptUnverified(t *testing.T) {
 	}
 }
 
-// TestRunStreamTaskFinalizationDriver drives RunStreamTaskInline on an observed INLINE
-// session the same way runInstallTUI's finalization does: the emitted lines land in the
-// output buffer via tea.Println (a no-op in altscreen) and the composed outcome appears
-// on screen, and pressing Enter after done must let the driver return.
+// TestRunStreamTaskFinalizationDriver drives RunStreamTask on an observed altscreen
+// session the same way runInstallTUI's finalization does: the emitted lines and the
+// composed outcome must appear on screen (inside the contained viewport), and pressing
+// Enter after done must let the driver return.
 func TestRunStreamTaskFinalizationDriver(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	var buf shell.SyncBuffer
-	session := shell.StartInlineForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Install"}, &buf)
+	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Install Wizard"}, &buf)
 	defer func() { _ = session.Close() }()
 
 	outcome := ansi.Strip(buildInstallOutcomePrompt(RestartVerifyResult{}, false, "ok", "permissions OK"))
 	done := make(chan error, 1)
 	go func() {
-		done <- components.RunStreamTaskInline(ctx, session, "Finalizing installation",
+		done <- components.RunStreamTask(ctx, session, "Finalizing installation",
 			func(taskCtx context.Context, emit func(string)) (string, error) {
 				emit("[00:00:00] INFO first finalize line")
 				emit("[00:00:00] INFO second finalize line")
@@ -96,7 +96,6 @@ func TestRunStreamTaskFinalizationDriver(t *testing.T) {
 	}()
 
 	// Wait for both streamed lines + the outcome to render before sending Enter.
-	// tea.Println lands the emitted lines in the output buffer (native scrollback).
 	waitFor(t, &buf, "first finalize line")
 	waitFor(t, &buf, "second finalize line")
 	waitFor(t, &buf, "permissions OK")
@@ -106,7 +105,7 @@ func TestRunStreamTaskFinalizationDriver(t *testing.T) {
 
 	// Enter on a done screen resolves; spam is safe (no-op before done / on empty stack).
 	if err := pumpEnter(t, session, done); err != nil {
-		t.Fatalf("RunStreamTaskInline returned error: %v", err)
+		t.Fatalf("RunStreamTask returned error: %v", err)
 	}
 }
 
@@ -170,7 +169,7 @@ func waitFor(t *testing.T, buf *shell.SyncBuffer, want string) {
 	t.Fatalf("screen never showed %q; last frame:\n%s", want, ansi.Strip(buf.String()))
 }
 
-// pumpEnter sends Enter until RunStreamTaskInline returns (Enter is a no-op before done).
+// pumpEnter sends Enter until RunStreamTask returns (Enter is a no-op before done).
 func pumpEnter(t *testing.T, s *shell.Session, done <-chan error) error {
 	t.Helper()
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -183,7 +182,7 @@ func pumpEnter(t *testing.T, s *shell.Session, done <-chan error) error {
 		case <-ticker.C:
 			s.Send(shell.KeyMsg("enter"))
 		case <-deadline:
-			return errors.New("RunStreamTaskInline did not return")
+			return errors.New("RunStreamTask did not return")
 		}
 	}
 }
