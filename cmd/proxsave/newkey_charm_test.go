@@ -40,7 +40,20 @@ func installNewkeySessionSeam(t *testing.T) *newkeyUIDriver {
 		})
 		return d.session
 	}
-	t.Cleanup(func() { newAgeSetupSession = orig })
+	t.Cleanup(func() {
+		newAgeSetupSession = orig
+		// Deterministically tear down the program this test created (if any): Close
+		// quits it and BLOCKS until its event-loop/renderer goroutines exit, so a
+		// leftover bubbletea program can never leak into and destabilize the next test.
+		// This is the root fix for the flaky driver-test hangs (a stray program from an
+		// earlier test intermittently stalled a later test's RunTask/waitScreen).
+		if d.session != nil {
+			_ = d.session.Close()
+		}
+		if d.cancel != nil {
+			d.cancel()
+		}
+	})
 	return d
 }
 
