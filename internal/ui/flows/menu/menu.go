@@ -75,19 +75,19 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 	}
 
 	// Daemon scheduler group: context-aware - only the command that fits the current
-	// state, plus the read-only status. Setup/remove run the same admin path as the
-	// flags; status runs a screen in-session.
+	// state, plus the read-only status. The group header already says "Daemon", so the
+	// items drop the redundant word. Setup/remove run the same admin path as the flags.
 	items = append(items, components.SelectorItem[Action]{Label: "─── Daemon ───", Separator: true})
 	switch daemon {
 	case DaemonStateActive:
-		items = append(items, components.SelectorItem[Action]{Label: "Disable daemon", Description: "stop the daemon and revert to the cron scheduler", Value: ActionDaemonRemove})
-		items = append(items, components.SelectorItem[Action]{Label: "Restart daemon", Description: "restart the resident daemon (e.g. to load a rebuilt binary)", Value: ActionDaemonRestart})
+		items = append(items, components.SelectorItem[Action]{Label: "Disable", Description: "stop the daemon and revert to the cron scheduler", Value: ActionDaemonRemove})
+		items = append(items, components.SelectorItem[Action]{Label: "Restart", Description: "restart the resident daemon (e.g. to load a rebuilt binary)", Value: ActionDaemonRestart})
 	case DaemonStateDisabled:
-		items = append(items, components.SelectorItem[Action]{Label: "Re-enable daemon", Description: "switch back to the resident daemon scheduler", Value: ActionDaemonSetup})
+		items = append(items, components.SelectorItem[Action]{Label: "Re-enable", Description: "switch back to the resident daemon scheduler", Value: ActionDaemonSetup})
 	case DaemonStateOnCron:
-		items = append(items, components.SelectorItem[Action]{Label: "Install daemon", Description: "switch to the resident daemon scheduler (from cron)", Value: ActionDaemonSetup})
+		items = append(items, components.SelectorItem[Action]{Label: "Install", Description: "switch to the resident daemon scheduler (from cron)", Value: ActionDaemonSetup})
 	}
-	items = append(items, components.SelectorItem[Action]{Label: "Daemon status", Description: "show the daemon service and scheduler state", Value: ActionDaemonStatus})
+	items = append(items, components.SelectorItem[Action]{Label: "Status", Description: "show the daemon service and scheduler state", Value: ActionDaemonStatus})
 
 	// Detach the standalone Exit from the Daemon group above with its own divider.
 	items = append(items, components.SelectorItem[Action]{Label: "──────────────", Separator: true})
