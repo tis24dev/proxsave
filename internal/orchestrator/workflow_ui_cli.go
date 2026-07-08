@@ -67,13 +67,16 @@ func (u *cliWorkflowUI) ShowMessage(ctx context.Context, title, message string) 
 	return nil
 }
 
-func (u *cliWorkflowUI) ShowWarning(ctx context.Context, title, message string) error {
-	// Non-fatal notice (e.g. an empty-state): stdout, like ShowMessage, not stderr.
-	if strings.TrimSpace(title) != "" {
-		fmt.Printf("\n%s\n", title)
+func (u *cliWorkflowUI) ShowStatusResult(ctx context.Context, screenTitle string, level HealthcheckSetupLevel, keyword, explanation string) error {
+	// Non-fatal outcome (e.g. an empty-state): stdout, like ShowMessage, not stderr.
+	if strings.TrimSpace(screenTitle) != "" {
+		fmt.Printf("\n%s\n", strings.TrimSpace(screenTitle))
 	}
-	if strings.TrimSpace(message) != "" {
-		fmt.Println(message)
+	if strings.TrimSpace(keyword) != "" {
+		fmt.Printf("Status: %s\n", strings.TrimSpace(keyword))
+	}
+	if strings.TrimSpace(explanation) != "" {
+		fmt.Println(strings.TrimSpace(explanation))
 	}
 	return nil
 }
