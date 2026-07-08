@@ -76,7 +76,7 @@ func run(d *driver, ctx context.Context) <-chan struct {
 // N-th SELECTABLE row (the divider is invisible to the cursor).
 func TestMenuRowOrder(t *testing.T) {
 	expected := []Action{
-		ActionBackup, ActionBackupDebug, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure,
+		ActionBackup, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure,
 		ActionCheckTelegram, ActionCheckHealthcheck, ActionPostInstallCheck, ActionCheckUpgrade,
 		ActionDaemonSetup, ActionDaemonStatus, ActionExit,
 	}

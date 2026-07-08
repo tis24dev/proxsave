@@ -120,13 +120,6 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 			// (explicit close so the altscreen is gone before any run output).
 			_ = session.Close()
 			return types.ExitSuccess.Int(), false
-		case menu.ActionBackupDebug:
-			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=backup-debug")
-			// Same backup, but force verbose logging (equivalent to --log-level debug).
-			// resolveRunLogLevel honours args.LogLevel when set, so this run is debug.
-			args.LogLevel = types.LogLevelDebug
-			_ = session.Close()
-			return types.ExitSuccess.Int(), false
 		case menu.ActionRestore:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=restore")
 			args.Restore = true
