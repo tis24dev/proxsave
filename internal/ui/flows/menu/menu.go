@@ -57,7 +57,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 	items := []components.SelectorItem[Action]{
 		// Backup: the primary action.
 		{Label: "─── Backup ───", Separator: true},
-		{Label: "Run backup now", Description: "start a backup with the current configuration", Value: ActionBackup},
+		{Label: "Backup", Description: "start a backup with the current configuration", Value: ActionBackup},
 		// Tools: operate on existing backups.
 		{Label: "─── Tools ───", Separator: true},
 		{Label: "Restore", Description: "restore a backup onto this system", Value: ActionRestore},
