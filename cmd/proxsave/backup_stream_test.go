@@ -47,7 +47,7 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 	if strings.Contains(out, "Backup failed") {
 		t.Fatalf("a successful run must not say 'failed':\n%s", out)
 	}
-	if !strings.Contains(out, "Files: 42 collected") || !strings.Contains(out, "(3 failed)") {
+	if !strings.Contains(out, "Files: 42 collected - 0 missing") || !strings.Contains(out, "(3 failed)") {
 		t.Fatalf("missing files line:\n%s", out)
 	}
 	if !strings.Contains(out, "Size: 4.0 KiB") {
@@ -68,6 +68,118 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 	// A disabled cloud destination is skipped to keep the block terse.
 	if strings.Contains(out, "Cloud:") {
 		t.Fatalf("disabled cloud must be skipped:\n%s", out)
+	}
+}
+
+// TestBuildBackupOutcomePromptFilesMissing asserts the Files line renders the
+// "- N missing" count from st.FilesMissing (the SAME field the notifications
+// report) when non-zero.
+func TestBuildBackupOutcomePromptFilesMissing(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelInfo, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	res := backupModeResult{
+		exitCode: types.ExitSuccess.Int(),
+		supportStats: &orchestrator.BackupStats{
+			FilesCollected: 40,
+			FilesMissing:   5,
+			LocalStatus:    "ok",
+		},
+	}
+	out := ansi.Strip(buildBackupOutcomePrompt(res))
+	if !strings.Contains(out, "Files: 40 collected - 5 missing") {
+		t.Fatalf("missing files-missing count:\n%s", out)
+	}
+}
+
+// TestBuildBackupOutcomePromptLogLine asserts the "Log:" line falls back to the
+// LOG_FILE env var when the default logger has no file path (as in tests).
+func TestBuildBackupOutcomePromptLogLine(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelInfo, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	t.Setenv("LOG_FILE", "/tmp/run.log")
+
+	res := backupModeResult{
+		exitCode:     types.ExitSuccess.Int(),
+		supportStats: &orchestrator.BackupStats{FilesCollected: 1, LocalStatus: "ok"},
+	}
+	out := ansi.Strip(buildBackupOutcomePrompt(res))
+	if !strings.Contains(out, "Log: /tmp/run.log") {
+		t.Fatalf("missing log line (env fallback):\n%s", out)
+	}
+}
+
+// TestBuildBackupOutcomePromptCentralizedIdentity asserts the centralized-mode
+// lines: the Telegram/relay ServerID and the SANITIZED Healthchecks link. A
+// hostile link is stripped by serverbot.SanitizeLoginURL (no line printed), and
+// empty ServerID/link produce no lines.
+func TestBuildBackupOutcomePromptCentralizedIdentity(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelInfo, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	// Present + clean: both lines shown, link passed through verbatim (sanitized OK).
+	res := backupModeResult{
+		exitCode: types.ExitSuccess.Int(),
+		supportStats: &orchestrator.BackupStats{
+			FilesCollected:  1,
+			LocalStatus:     "ok",
+			ServerID:        "srv-42",
+			HealthcheckLink: "https://hc/accounts/check_token/u/CAP/",
+		},
+	}
+	out := ansi.Strip(buildBackupOutcomePrompt(res))
+	if !strings.Contains(out, "Server ID Telegram: srv-42") {
+		t.Fatalf("missing server id line:\n%s", out)
+	}
+	if !strings.Contains(out, "Healthchecks link: https://hc/accounts/check_token/u/CAP/") {
+		t.Fatalf("missing sanitized healthchecks link line:\n%s", out)
+	}
+
+	// Hostile link (space injection): sanitized away -> NO link line, raw never shown.
+	resHostile := backupModeResult{
+		exitCode: types.ExitSuccess.Int(),
+		supportStats: &orchestrator.BackupStats{
+			FilesCollected:  1,
+			LocalStatus:     "ok",
+			HealthcheckLink: "https://hc/ x",
+		},
+	}
+	outHostile := ansi.Strip(buildBackupOutcomePrompt(resHostile))
+	if strings.Contains(outHostile, "Healthchecks link:") {
+		t.Fatalf("hostile link must be sanitized away:\n%s", outHostile)
+	}
+	if strings.Contains(outHostile, "https://hc/ x") {
+		t.Fatalf("raw hostile link must never be shown:\n%s", outHostile)
+	}
+
+	// javascript: scheme is not http(s) -> stripped.
+	resJS := backupModeResult{
+		exitCode: types.ExitSuccess.Int(),
+		supportStats: &orchestrator.BackupStats{
+			FilesCollected:  1,
+			LocalStatus:     "ok",
+			HealthcheckLink: "javascript:alert(1)",
+		},
+	}
+	if strings.Contains(ansi.Strip(buildBackupOutcomePrompt(resJS)), "Healthchecks link:") {
+		t.Fatalf("javascript: scheme must be sanitized away")
+	}
+
+	// Empty ServerID/link: neither line present.
+	resEmpty := backupModeResult{
+		exitCode:     types.ExitSuccess.Int(),
+		supportStats: &orchestrator.BackupStats{FilesCollected: 1, LocalStatus: "ok"},
+	}
+	outEmpty := ansi.Strip(buildBackupOutcomePrompt(resEmpty))
+	if strings.Contains(outEmpty, "Server ID Telegram:") {
+		t.Fatalf("empty server id must produce no line:\n%s", outEmpty)
+	}
+	if strings.Contains(outEmpty, "Healthchecks link:") {
+		t.Fatalf("empty link must produce no line:\n%s", outEmpty)
 	}
 }
 
