@@ -153,8 +153,13 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 	b.WriteString(renderBackupBanner(sev))
 
 	if st := res.supportStats; st != nil {
+		// The backup-statistics block (headerless); the log block is now debug-only.
 		b.WriteString("\n")
+		appendBackupStatsBlock(&b, st)
 
+		// Appended at the BOTTOM of the block: the run log path, then storage status,
+		// then centralized-mode identity.
+		//
 		// The run log file is CLOSED during the log-management phase before this
 		// outcome is built, so GetLogFilePath may be "" by now; runLogPath falls back
 		// to the LOG_FILE the runtime exports at startup.
@@ -185,11 +190,6 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 			b.WriteString("\n")
 			b.WriteString(theme.Text.Render("Healthchecks link: " + link))
 		}
-
-		// The backup-statistics block (headerless), so a standard run still surfaces
-		// the full stats here even though the log block is now debug-only.
-		b.WriteString("\n")
-		appendBackupStatsBlock(&b, st)
 	}
 
 	// Warnings/errors recap - the theme counterpart of the CLI footer's
@@ -237,12 +237,14 @@ func appendBackupStatsBlock(b *strings.Builder, st *orchestrator.BackupStats) {
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Duration: " + formatDuration(st.Duration)))
 
-	// Mirror logBackupArtifactPaths.
+	// Mirror logBackupArtifactPaths (bundle case shown contents-then-path). A base
+	// (non-bundle) run has no "Bundle contents" line: it shows "Archive path" plus
+	// the manifest/checksum, so this line adapts to the configured mode.
 	if st.BundleCreated {
 		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Bundle path: " + st.ArchivePath))
-		b.WriteString("\n")
 		b.WriteString(theme.Text.Render("Bundle contents: archive + checksum + metadata"))
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Bundle path: " + st.ArchivePath))
 		return
 	}
 	b.WriteString("\n")
