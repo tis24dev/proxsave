@@ -321,12 +321,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	streamErr := components.RunStreamTask(ctx, session, "Finalizing installation",
 		func(taskCtx context.Context, emit func(line string)) (string, error) {
-			// Capture the default + COLORED bootstrap-mirror loggers into the raw
-			// sink; restore on return/panic. The bootstrap stays quiet and forwards
-			// via the mirror, so its finalization lines also flow (colored) into the
-			// contained viewport.
-			sink := logging.NewLineWriterRaw(emit)
-			defer logging.CaptureConsoleWithColor(bootstrap, sink)()
+			// Route the loggers AND raw os.Stdout (fmt.Println spacers) through one
+			// pipe into the panel; restored on return/panic. So the panel shows the
+			// same colored lines + blank section spacers as the CLI. (captureRunOutput
+			// is defined in backup_stream.go.)
+			defer captureRunOutput(bootstrap, emit)()
 
 			// Finalize legacy-symlink cleanup, entrypoint cleanup/recreation, and cron
 			// via the shared post-install engine (the same runPostInstallSymlinksAndCron
@@ -347,10 +346,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			}
 
 			// Best-effort post-install permission and ownership normalization so that
-			// the environment starts in a consistent state. The temporary logger's
-			// output is routed into the UI stream via sink (nil in the CLI).
+			// the environment starts in a consistent state. Its temporary logger writes
+			// to os.Stdout, which captureRunOutput has redirected into the panel, so pass
+			// nil (no explicit sink needed).
 			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "normalizing permissions")
-			permStatus, permMessage = fixPermissionsAfterInstall(taskCtx, configPath, baseDir, bootstrap, sink)
+			permStatus, permMessage = fixPermissionsAfterInstall(taskCtx, configPath, baseDir, bootstrap, nil)
 			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "permissions status=%s", permStatus)
 
 			return buildInstallOutcomePrompt(rv, verified, permStatus, permMessage), nil
