@@ -27,7 +27,7 @@ const (
 type BackupSelectionUI interface {
 	TaskRunner
 	ShowMessage(ctx context.Context, title, message string) error
-	ShowWarning(ctx context.Context, title, message string) error
+	ShowStatusResult(ctx context.Context, screenTitle string, level HealthcheckSetupLevel, keyword, explanation string) error
 	ShowError(ctx context.Context, title, message string) error
 	SelectBackupSource(ctx context.Context, options []decryptPathOption) (decryptPathOption, error)
 	SelectBackupCandidate(ctx context.Context, candidates []*backupCandidate) (*backupCandidate, error)
