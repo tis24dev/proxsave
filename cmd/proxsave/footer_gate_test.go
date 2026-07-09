@@ -23,19 +23,24 @@ func setDashboardGraphicalForTest(t *testing.T, v bool) {
 	})
 }
 
-// TestFooterSuppressed pins the SHARED footer gate: an end-of-run CLI footer is
-// suppressed for a graphical (dashboard) run, which shows its outcome on-screen,
-// and prints for a plain CLI/cron run. This single predicate now gates
-// printFinalSummary, printInstallFooter and printUpgradeFooter alike.
-func TestFooterSuppressed(t *testing.T) {
+// TestPrintRunFooter pins the SINGLE footer choke point: printRunFooter runs the
+// emitted body for a plain CLI/cron run and skips it for a graphical (dashboard)
+// run, which shows its outcome on-screen. Every footer (printFinalSummary,
+// printInstallFooter, printUpgradeFooter) routes through here, so this one test
+// covers the gate for all of them.
+func TestPrintRunFooter(t *testing.T) {
 	setDashboardGraphicalForTest(t, false)
-	if footerSuppressed() {
-		t.Fatal("a CLI run (not graphical) must NOT suppress the footer")
+	ran := false
+	printRunFooter(func() { ran = true })
+	if !ran {
+		t.Fatal("a CLI run (not graphical) must run the footer body")
 	}
 
 	setDashboardGraphicalForTest(t, true)
-	if !footerSuppressed() {
-		t.Fatal("a graphical (dashboard) run must suppress the footer")
+	ran = false
+	printRunFooter(func() { ran = true })
+	if ran {
+		t.Fatal("a graphical (dashboard) run must NOT run the footer body")
 	}
 }
 
