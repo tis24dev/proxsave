@@ -168,21 +168,21 @@ func TestDashboardCleanupGuardsCleanRecheck(t *testing.T) {
 	}
 }
 
-// TestDashboardCleanupGuardsFoundCancel: Cancel on the Found screen returns to the menu
+// TestDashboardCleanupGuardsFoundBack: Back on the Found screen returns to the menu
 // WITHOUT the real run.
-func TestDashboardCleanupGuardsFoundCancel(t *testing.T) {
+func TestDashboardCleanupGuardsFoundBack(t *testing.T) {
 	calls := stubGuardReport(t,
 		orchestrator.GuardCleanupReport{GuardDirPresent: true, ImmutableGuards: 2}, // check -> Found
 		orchestrator.GuardCleanupReport{},
 	)
 	driver, resCh := runCleanupGuardsDriver(t, &cli.Args{})
 	driver.waitScreen("Cleanup guards") // Found screen
-	driver.keys("down enter")           // Cancel (secondary)
+	driver.keys("down enter")           // Back (secondary)
 	driver.waitScreen("Dashboard")
 	driver.keys("esc")
 	waitDashboardResolved(t, resCh)
 
 	if len(*calls) != 1 || (*calls)[0] != true {
-		t.Fatalf("Cancel must run the check only (no apply), got %v", *calls)
+		t.Fatalf("Back must run the check only (no apply), got %v", *calls)
 	}
 }
