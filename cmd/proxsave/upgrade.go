@@ -746,9 +746,12 @@ func closeIntoErr(errp *error, closer io.Closer, operation string) {
 }
 
 func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error, daemonRestart *RestartVerifyResult) {
-	if footerSuppressed() {
-		return
-	}
+	printRunFooter(func() {
+		upgradeFooterBody(upgradeErr, version, configPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr, daemonRestart)
+	})
+}
+
+func upgradeFooterBody(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error, daemonRestart *RestartVerifyResult) {
 	colorReset := "\033[0m"
 
 	title := "Upgrade completed"

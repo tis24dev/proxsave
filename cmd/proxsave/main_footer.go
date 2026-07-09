@@ -147,23 +147,27 @@ func printNetworkRollbackLiveCountdown(deadline time.Time) {
 	}
 }
 
-// footerSuppressed reports whether an end-of-run CLI footer must be skipped. A
-// graphical run (launched from the dashboard, which adopts the session) already
-// shows its outcome on-screen, so any plain-scrollback CLI footer, with its
-// usage-commands and sponsors block, is redundant and would leak after the
-// alternate screen closes. This is the SINGLE gate shared by every footer
-// (printFinalSummary, printInstallFooter, printUpgradeFooter): each returns early
-// on it, so a graphical run never prints a footer and none can be missed.
+// printRunFooter is the SINGLE place that gates every end-of-run CLI footer.
+// Route a footer's printing through here (as emit): it runs only for a
+// non-graphical run; a graphical run (launched from the dashboard, which adopts
+// the session) already shows its outcome on-screen, so any plain-scrollback CLI
+// footer, with its usage-commands and sponsors block, is redundant and would leak
+// after the alternate screen closes. To add a NEW suppressible footer, print it
+// via printRunFooter and nothing else needs to know about the gate.
 // dashboardRunWasGraphical() latches true only once a flow adopts the dashboard
 // session; a plain CLI/cron run never adopts, so the footer prints there as before.
-func footerSuppressed() bool {
-	return dashboardRunWasGraphical()
+func printRunFooter(emit func()) {
+	if dashboardRunWasGraphical() {
+		return
+	}
+	emit()
 }
 
 func printFinalSummary(finalExitCode int) {
-	if footerSuppressed() {
-		return
-	}
+	printRunFooter(func() { finalSummaryBody(finalExitCode) })
+}
+
+func finalSummaryBody(finalExitCode int) {
 	fmt.Println()
 
 	logger := logging.GetDefaultLogger()
