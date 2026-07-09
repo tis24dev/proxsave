@@ -85,11 +85,11 @@ func stubUpdateConfig(t *testing.T, plan, apply *config.UpgradeResult) *[]string
 
 // runUpdateConfigDriver reaches the Update config flow the way the dashboard now exposes
 // it: it lives UNDER "Upgrade" as the "Check config" button, not as a top-level menu row.
-// So it navigates to Updates (6 downs) then selects Check config (2nd item of the Upgrade
+// So it navigates to Upgrade (5 downs) then selects Check config (2nd item of the Upgrade
 // screen), and returns the driver positioned on the Update config check screen.
 func runUpdateConfigDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan bool) {
 	t.Helper()
-	installDashboardGates(t, true, true) // cron state -> Updates is the 7th selectable
+	installDashboardGates(t, true, true) // cron state -> Upgrade is the 6th selectable
 	driver := installDashboardSessionSeam(t)
 	resCh := make(chan bool, 1)
 	go func() {
@@ -97,7 +97,7 @@ func runUpdateConfigDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan 
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down enter") // Updates (6 downs) -> Upgrade screen
+	driver.keys("down down down down down enter") // Upgrade (5 downs) -> Upgrade chooser
 	driver.waitScreen("Upgrade")
 	driver.keys("down enter") // Check config (2nd item) -> Update config flow
 	return driver, resCh

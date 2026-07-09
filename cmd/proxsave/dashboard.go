@@ -106,6 +106,18 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 			return types.ExitSuccess.Int(), true
 		}
 
+		// Install sub-menu: the single "Install" row opens an in-session chooser
+		// (Edit install / Wipe install) that resolves to the --install or --new-install
+		// flow; Back re-opens the menu. The resolved action then falls through to the
+		// same flag dispatch below, so each install mode keeps its exact code path.
+		if action == menu.ActionInstallMenu {
+			sub, ok := runDashboardInstallChoice(ctx, session)
+			if !ok {
+				continue
+			}
+			action = sub
+		}
+
 		// Diagnostics group: re-open an existing check screen in the live session
 		// and loop back to the menu. These never leave the dashboard, so the flag
 		// dispatch below is untouched.
@@ -155,6 +167,45 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		keepAlive = true
 		stashDashboardSession(session, bootstrap)
 		return types.ExitSuccess.Int(), false
+	}
+}
+
+// installChoice is the choice on the Install sub-menu chooser.
+type installChoice int
+
+const (
+	installEdit installChoice = iota
+	installWipe
+	installBack
+)
+
+// runDashboardInstallChoice shows the in-session Install chooser (Edit install / Wipe
+// install / Back) and resolves it to the corresponding install action: Edit install ->
+// --install, Wipe install -> --new-install. Only the dashboard labels are new; the CLI
+// flags are unchanged. Returns (action, true) to dispatch that flow, or (_, false) on
+// Back/esc (the caller re-opens the menu).
+func runDashboardInstallChoice(ctx context.Context, session *shell.Session) (menu.Action, bool) {
+	errBack := errors.New("install: back")
+	items := []components.SelectorItem[installChoice]{
+		{Label: "Edit install", Description: "re-run the interactive installation/setup (--install)", Value: installEdit},
+		{Label: "Wipe install", Description: "wipe the install directory (keep build/env/identity) then re-run the installer (--new-install)", Value: installWipe},
+		{Label: "Back", Value: installBack},
+	}
+	choice, err := shell.Ask(ctx, session, components.NewSelector(
+		"Install", items,
+		components.WithSelectorPrompt[installChoice]("Install or re-install ProxSave."),
+		components.WithSelectorBack[installChoice](errBack),
+	))
+	if err != nil {
+		return menu.ActionExit, false
+	}
+	switch choice {
+	case installEdit:
+		return menu.ActionReconfigure, true
+	case installWipe:
+		return menu.ActionNewInstall, true
+	default:
+		return menu.ActionExit, false
 	}
 }
 
