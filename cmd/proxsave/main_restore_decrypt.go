@@ -102,12 +102,18 @@ func dispatchBackupMode(rt *appRuntime) modeResult {
 		heapProfilePath:  rt.heapProfilePath,
 		serverIDValue:    rt.serverIDValue,
 		serverMACValue:   rt.serverMACValue,
+		support:          rt.args.Support,
+		supportMeta: support.Meta{
+			GitHubUser: rt.args.SupportGitHubUser,
+			IssueID:    rt.args.SupportIssueID,
+		},
 	})
 	return modeResult{
-		orch:            result.orch,
-		earlyErrorState: result.earlyErrorState,
-		supportStats:    result.supportStats,
-		exitCode:        result.exitCode,
-		handled:         true,
+		orch:             result.orch,
+		earlyErrorState:  result.earlyErrorState,
+		supportStats:     result.supportStats,
+		supportEmailSent: result.supportEmailSent,
+		exitCode:         result.exitCode,
+		handled:          true,
 	}
 }

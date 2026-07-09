@@ -49,14 +49,15 @@ func runDeferredActions(rt *appRuntime, state *appRunState) []runDeferredAction 
 }
 
 func sendDeferredSupportEmail(rt *appRuntime, state *appRunState) {
-	if !rt.args.Support || state.pendingSupportStat == nil {
+	// supportEmailSent means the streamed dashboard run already sent it inside the
+	// viewport (visible to the user); skip here so it is not sent twice.
+	if !rt.args.Support || state.pendingSupportStat == nil || state.supportEmailSent {
 		return
 	}
-	logging.Step("Support mode - sending support email with attached log")
-	support.SendEmail(rt.ctx, rt.cfg, rt.logger, rt.envInfo.Type, state.pendingSupportStat, support.Meta{
+	emitSupportEmail(rt.ctx, rt.cfg, rt.logger, rt.envInfo.Type, state.pendingSupportStat, support.Meta{
 		GitHubUser: rt.args.SupportGitHubUser,
 		IssueID:    rt.args.SupportIssueID,
-	}, buildSignature())
+	})
 }
 
 func dispatchDeferredEarlyErrorNotification(rt *appRuntime, state *appRunState) {
