@@ -1,107 +1,88 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
-	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
-// TestCleanupGuardsOutcomeClassification pins how the captured cleanup log maps to the
-// styled "Status:" (level, keyword): dry-run always previews (Warn/DRY RUN); the real
-// run reads DONE / NOTHING TO CLEAN / PENDING from the summary; any error is surfaced
-// as Error/FAILED so the caller shows a red screen (this covers the root-required error).
-func TestCleanupGuardsOutcomeClassification(t *testing.T) {
-	orig := cleanupGuardsRun
-	t.Cleanup(func() { cleanupGuardsRun = orig })
-
+// TestGuardCheckDescription pins the CHECK wording (no "dry run" text): nothing-to-unlock
+// vs a pluralized list of what is locking the storage.
+func TestGuardCheckDescription(t *testing.T) {
 	cases := []struct {
-		name      string
-		dryRun    bool
-		emit      func(lg *logging.Logger)
-		runErr    error
-		wantLevel orchestrator.HealthcheckSetupLevel
-		wantKey   string
-		wantErr   bool
+		name string
+		r    orchestrator.GuardCleanupReport
+		want string
 	}{
-		{"dry-run previews as warn", true, func(lg *logging.Logger) {
-			lg.Info("DRY RUN: would remove /var/lib/proxsave/guards")
-		}, nil, orchestrator.HealthcheckSetupLevelWarn, "DRY RUN", false},
-		{"apply clean reads DONE", false, func(lg *logging.Logger) {
-			lg.Info("Guard cleanup summary: bind-unmounted=1 guards-remaining=0 immutable-cleared=0 immutable-pending=0 guard-dir=removed")
-		}, nil, orchestrator.HealthcheckSetupLevelOk, "DONE", false},
-		{"apply with no guard dir reads NOTHING TO CLEAN", false, func(lg *logging.Logger) {
-			lg.Info("No guard directory found at /var/lib/proxsave/guards — nothing to clean up.")
-		}, nil, orchestrator.HealthcheckSetupLevelOk, "NOTHING TO CLEAN", false},
-		{"apply with leftovers reads PENDING", false, func(lg *logging.Logger) {
-			lg.Warning("Guard cleanup: 2 bind guard(s) still present")
-		}, nil, orchestrator.HealthcheckSetupLevelWarn, "PENDING", false},
-		{"failure surfaces FAILED", true, nil,
-			errors.New("cleanup guards requires root privileges"),
-			orchestrator.HealthcheckSetupLevelError, "FAILED", true},
+		{"clean", orchestrator.GuardCleanupReport{}, "No restore mount guards are present — nothing to unlock."},
+		{"bind only", orchestrator.GuardCleanupReport{BindGuards: 2},
+			"Found 2 bind mount guards locking the storage. Apply removes them to unlock it."},
+		{"immutable only", orchestrator.GuardCleanupReport{ImmutableGuards: 1},
+			"Found 1 immutable flag locking the storage. Apply removes them to unlock it."},
+		{"both", orchestrator.GuardCleanupReport{BindGuards: 1, ImmutableGuards: 2},
+			"Found 1 bind mount guard and 2 immutable flags locking the storage. Apply removes them to unlock it."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cleanupGuardsRun = func(_ context.Context, lg *logging.Logger, dryRun bool) error {
-				if dryRun != tc.dryRun {
-					t.Fatalf("dryRun = %v, want %v", dryRun, tc.dryRun)
-				}
-				if tc.emit != nil {
-					tc.emit(lg)
-				}
-				return tc.runErr
-			}
-			level, keyword, _, err := cleanupGuardsOutcome(context.Background(), tc.dryRun)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
-			}
-			if level != tc.wantLevel || keyword != tc.wantKey {
-				t.Fatalf("got (%v, %q), want (%v, %q)", level, keyword, tc.wantLevel, tc.wantKey)
+			if got := describeGuardCheck(tc.r); got != tc.want {
+				t.Fatalf("describeGuardCheck =\n%q\nwant\n%q", got, tc.want)
 			}
 		})
 	}
 }
 
-// TestCleanGuardLogStripsPrefix locks that the captured "[ts] LEVEL msg" console lines
-// are reduced to bare messages for the "Status:" explanation (blank lines dropped),
-// tested against the real logger format rather than a hand-written prefix.
-func TestCleanGuardLogStripsPrefix(t *testing.T) {
-	var buf bytes.Buffer
-	lg := logging.New(types.LogLevelInfo, false)
-	lg.SetOutput(&buf)
-	lg.Info("Guard cleanup summary: bind-unmounted=0 guard-dir=kept")
-	lg.Warning("2 bind guard(s) still present")
-
-	got := cleanGuardLog(buf.String())
-	want := "Guard cleanup summary: bind-unmounted=0 guard-dir=kept\n2 bind guard(s) still present"
-	if got != want {
-		t.Fatalf("cleanGuardLog =\n%q\nwant\n%q", got, want)
+// TestClassifyGuardApply: a fully-removed run is Ok/DONE; anything left behind (including
+// the -1 "unknown" fail-closed sentinel) is Warn/PENDING.
+func TestClassifyGuardApply(t *testing.T) {
+	cases := []struct {
+		name    string
+		r       orchestrator.GuardCleanupReport
+		wantLvl orchestrator.HealthcheckSetupLevel
+		wantKey string
+	}{
+		{"done", orchestrator.GuardCleanupReport{DirRemoved: true}, orchestrator.HealthcheckSetupLevelOk, "DONE"},
+		{"bind remaining", orchestrator.GuardCleanupReport{GuardsRemaining: 1}, orchestrator.HealthcheckSetupLevelWarn, "PENDING"},
+		{"unknown", orchestrator.GuardCleanupReport{GuardsRemaining: -1}, orchestrator.HealthcheckSetupLevelWarn, "PENDING"},
+		{"immutable pending", orchestrator.GuardCleanupReport{ImmutablePending: 1}, orchestrator.HealthcheckSetupLevelWarn, "PENDING"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lvl, key := classifyGuardApply(tc.r)
+			if lvl != tc.wantLvl || key != tc.wantKey {
+				t.Fatalf("got (%v, %q), want (%v, %q)", lvl, key, tc.wantLvl, tc.wantKey)
+			}
+		})
 	}
 }
 
-// TestDashboardCleanupGuardsTwoStepApply drives the in-session flow: selecting Cleanup
-// guards runs a DRY RUN, shows its "Status:" screen, and only on Apply does it run for
-// real. It must call the cleanup exactly twice (dry-run then apply) and set no flag.
-func TestDashboardCleanupGuardsTwoStepApply(t *testing.T) {
-	installDashboardGates(t, true, true) // cron state -> Cleanup guards is the 13th selectable (12 downs)
-	orig := cleanupGuardsRun
-	t.Cleanup(func() { cleanupGuardsRun = orig })
-	var dryRuns []bool
-	cleanupGuardsRun = func(_ context.Context, lg *logging.Logger, dryRun bool) error {
-		dryRuns = append(dryRuns, dryRun)
-		lg.Info("Guard cleanup summary: bind-unmounted=1 guard-dir=removed")
-		return nil
+// stubGuardReport swaps the report seam and records the dryRun of each call. check() is
+// used for the dry-run CHECK; apply() for the real run.
+func stubGuardReport(t *testing.T, check, apply orchestrator.GuardCleanupReport) *[]bool {
+	t.Helper()
+	orig := cleanupGuardsReport
+	t.Cleanup(func() { cleanupGuardsReport = orig })
+	calls := &[]bool{}
+	cleanupGuardsReport = func(_ context.Context, _ *logging.Logger, dryRun bool) (orchestrator.GuardCleanupReport, error) {
+		*calls = append(*calls, dryRun)
+		if dryRun {
+			return check, nil
+		}
+		return apply, nil
 	}
+	return calls
+}
 
+// runCleanupGuardsDriver navigates to Cleanup guards (12 downs) and returns the driver so
+// the test can drive the resulting screens, plus a channel with the dashboard result.
+func runCleanupGuardsDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan bool) {
+	t.Helper()
+	installDashboardGates(t, true, true) // cron state -> Cleanup guards is the 13th selectable
 	driver := installDashboardSessionSeam(t)
-	args := &cli.Args{}
 	resCh := make(chan bool, 1)
 	go func() {
 		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
@@ -109,60 +90,99 @@ func TestDashboardCleanupGuardsTwoStepApply(t *testing.T) {
 	}()
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down down down down down down enter") // Cleanup guards (12 downs)
-	driver.waitScreen("Cleanup guards")                                              // dry-run preview
-	driver.keys("enter")                                                             // Apply
-	driver.waitScreen("Cleanup guards")                                              // real-run result
-	driver.keys("esc")                                                               // Back to the menu
-	driver.waitScreen("Dashboard")
-	driver.keys("esc") // exit
+	return driver, resCh
+}
+
+func waitDashboardResolved(t *testing.T, resCh chan bool) {
+	t.Helper()
 	select {
-	case handled := <-resCh:
-		if !handled {
-			t.Fatal("esc from menu must exit handled")
-		}
+	case <-resCh:
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
-	if len(dryRuns) != 2 || dryRuns[0] != true || dryRuns[1] != false {
-		t.Fatalf("expected dry-run then apply, got %v", dryRuns)
+}
+
+// TestDashboardCleanupGuardsFoundApply: a CHECK that finds guards shows the Found screen;
+// Apply runs the real cleanup and shows the outcome. The report seam is called twice
+// (check then apply) and no flag is set.
+func TestDashboardCleanupGuardsFoundApply(t *testing.T) {
+	calls := stubGuardReport(t,
+		orchestrator.GuardCleanupReport{GuardDirPresent: true, BindGuards: 1}, // check -> Found
+		orchestrator.GuardCleanupReport{DirRemoved: true},                     // apply -> DONE
+	)
+	args := &cli.Args{}
+	driver, resCh := runCleanupGuardsDriver(t, args)
+	driver.waitScreen("Cleanup guards") // Found screen
+	driver.keys("enter")                // Apply (primary)
+	driver.waitScreen("Cleanup guards") // result screen
+	driver.keys("esc")                  // Back to the menu
+	driver.waitScreen("Dashboard")
+	driver.keys("esc")
+	waitDashboardResolved(t, resCh)
+
+	if len(*calls) != 2 || (*calls)[0] != true || (*calls)[1] != false {
+		t.Fatalf("expected check then apply, got %v", *calls)
 	}
 	if args.CleanupGuards {
 		t.Fatal("Cleanup guards is an in-session action; it must not set the --cleanup-guards flag")
 	}
 }
 
-// TestDashboardCleanupGuardsCancelSkipsApply: Cancel on the dry-run screen returns to
-// the menu WITHOUT running the real cleanup (the dry run is the only call).
-func TestDashboardCleanupGuardsCancelSkipsApply(t *testing.T) {
-	installDashboardGates(t, true, true)
-	orig := cleanupGuardsRun
-	t.Cleanup(func() { cleanupGuardsRun = orig })
-	var dryRuns []bool
-	cleanupGuardsRun = func(_ context.Context, lg *logging.Logger, dryRun bool) error {
-		dryRuns = append(dryRuns, dryRun)
-		lg.Info("DRY RUN: would remove /var/lib/proxsave/guards")
-		return nil
-	}
-
-	driver := installDashboardSessionSeam(t)
-	args := &cli.Args{}
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+// TestDashboardCleanupGuardsCleanNoApply: a CHECK with nothing to unlock shows the Clean
+// screen (no Apply); Back returns to the menu WITHOUT a real run.
+func TestDashboardCleanupGuardsCleanNoApply(t *testing.T) {
+	calls := stubGuardReport(t,
+		orchestrator.GuardCleanupReport{}, // check -> Clean (no guards)
+		orchestrator.GuardCleanupReport{},
+	)
+	driver, resCh := runCleanupGuardsDriver(t, &cli.Args{})
+	driver.waitScreen("Cleanup guards") // Clean screen
+	driver.keys("down enter")           // Back (secondary)
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down down down down down enter") // Cleanup guards
-	driver.waitScreen("Cleanup guards")                                              // dry-run preview
-	driver.keys("down enter")                                                        // Cancel (second item)
-	driver.waitScreen("Dashboard")                                                   // straight back, no apply
 	driver.keys("esc")
-	select {
-	case <-resCh:
-	case <-time.After(uitest.Deadline(60 * time.Second)):
-		t.Fatal("dashboard did not resolve")
+	waitDashboardResolved(t, resCh)
+
+	if len(*calls) != 1 || (*calls)[0] != true {
+		t.Fatalf("Clean must run the check only (no apply), got %v", *calls)
 	}
-	if len(dryRuns) != 1 || dryRuns[0] != true {
-		t.Fatalf("Cancel must run the dry run only, got %v", dryRuns)
+}
+
+// TestDashboardCleanupGuardsCleanRecheck: on the Clean screen the primary action is Check
+// (re-scan), which re-runs the check and never applies.
+func TestDashboardCleanupGuardsCleanRecheck(t *testing.T) {
+	calls := stubGuardReport(t,
+		orchestrator.GuardCleanupReport{}, // check -> Clean (both times)
+		orchestrator.GuardCleanupReport{},
+	)
+	driver, resCh := runCleanupGuardsDriver(t, &cli.Args{})
+	driver.waitScreen("Cleanup guards") // Clean screen (1)
+	driver.keys("enter")                // Check (primary) -> re-scan
+	driver.waitScreen("Cleanup guards") // Clean screen (2)
+	driver.keys("down enter")           // Back
+	driver.waitScreen("Dashboard")
+	driver.keys("esc")
+	waitDashboardResolved(t, resCh)
+
+	if len(*calls) != 2 || (*calls)[0] != true || (*calls)[1] != true {
+		t.Fatalf("re-check must run two checks and no apply, got %v", *calls)
+	}
+}
+
+// TestDashboardCleanupGuardsFoundCancel: Cancel on the Found screen returns to the menu
+// WITHOUT the real run.
+func TestDashboardCleanupGuardsFoundCancel(t *testing.T) {
+	calls := stubGuardReport(t,
+		orchestrator.GuardCleanupReport{GuardDirPresent: true, ImmutableGuards: 2}, // check -> Found
+		orchestrator.GuardCleanupReport{},
+	)
+	driver, resCh := runCleanupGuardsDriver(t, &cli.Args{})
+	driver.waitScreen("Cleanup guards") // Found screen
+	driver.keys("down enter")           // Cancel (secondary)
+	driver.waitScreen("Dashboard")
+	driver.keys("esc")
+	waitDashboardResolved(t, resCh)
+
+	if len(*calls) != 1 || (*calls)[0] != true {
+		t.Fatalf("Cancel must run the check only (no apply), got %v", *calls)
 	}
 }
