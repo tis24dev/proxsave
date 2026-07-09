@@ -692,6 +692,13 @@ type dashboardHandoffState struct {
 	session   *shell.Session
 	bootstrap *logging.BootstrapLogger
 	entryMark int
+	// graphical latches true once a flow actually ADOPTS the handed-off session
+	// (adoptDashboardSession), i.e. the run was launched from the dashboard and
+	// ran in-graphics. Unlike session/bootstrap it is NOT cleared by adoption, so
+	// it still reports "this run was graphical" to the deferred final-summary
+	// footer, which is a CLI affordance suppressed for graphical runs. Reset only
+	// at end-of-process (releaseDashboardLeftovers) for test isolation.
+	graphical bool
 }
 
 var dashboardHandoff dashboardHandoffState
@@ -718,6 +725,17 @@ func dashboardHandoffPending() bool {
 	return dashboardHandoff.session != nil
 }
 
+// dashboardRunWasGraphical reports whether this run adopted the dashboard's
+// handed-off session (i.e. it was launched from the dashboard and ran
+// in-graphics). Unlike dashboardHandoffPending it stays true AFTER adoption, so
+// the deferred final-summary footer can be suppressed for graphical runs (the
+// outcome is already shown on-screen) while CLI/cron/daemon runs still print it.
+func dashboardRunWasGraphical() bool {
+	dashboardHandoff.mu.Lock()
+	defer dashboardHandoff.mu.Unlock()
+	return dashboardHandoff.graphical
+}
+
 // adoptDashboardSession consumes the stashed session (once): the flow's
 // chrome replaces the dashboard's and the console mute is lifted, right
 // before the flow applies its own session-scoped silencing.
@@ -727,6 +745,11 @@ func adoptDashboardSession(cfg shell.Config) *shell.Session {
 	bootstrap := dashboardHandoff.bootstrap
 	dashboardHandoff.session = nil
 	dashboardHandoff.bootstrap = nil
+	if session != nil {
+		// A real adoption: latch "this run is graphical" (never cleared here) so
+		// the deferred CLI footer is suppressed for the rest of the run.
+		dashboardHandoff.graphical = true
+	}
 	dashboardHandoff.mu.Unlock()
 	if session == nil {
 		return nil
@@ -747,6 +770,11 @@ func releaseDashboardLeftovers() {
 	mark := dashboardHandoff.entryMark
 	dashboardHandoff.session = nil
 	dashboardHandoff.bootstrap = nil
+	// Reset the graphical latch (before the nil-session early return: after a
+	// successful adoption session is already nil here). Runs at process end, so
+	// the footer has already read it; this is purely for test isolation across
+	// the shared package global.
+	dashboardHandoff.graphical = false
 	dashboardHandoff.mu.Unlock()
 	if session == nil {
 		return

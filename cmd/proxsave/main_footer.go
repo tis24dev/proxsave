@@ -147,6 +147,14 @@ func printNetworkRollbackLiveCountdown(deadline time.Time) {
 	}
 }
 
+// shouldPrintFinalSummary decides whether the deferred CLI final-summary footer
+// prints: only when the run wants a summary AND it was NOT launched from the
+// dashboard. A graphical (dashboard) run already shows its outcome on-screen, so
+// the footer - with its CLI usage-commands/sponsors block - is redundant there.
+func shouldPrintFinalSummary(state *appRunState) bool {
+	return state.showSummary && !dashboardRunWasGraphical()
+}
+
 func printFinalSummary(finalExitCode int) {
 	fmt.Println()
 
