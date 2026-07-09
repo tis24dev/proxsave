@@ -100,6 +100,19 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 			stepOpts := opts
 			stepOpts.ctx = taskCtx
 			res = backupStreamSteps(stepOpts)
+
+			// Support mode: send the maintainer email HERE, inside the capture, so
+			// its outcome (handed off / skipped) streams into the viewport instead
+			// of printing to a screen that has already closed after Continue -
+			// otherwise the stream would omit the very thing the user launched
+			// support for. The backup's log-management phase (run just above) has
+			// closed the log file, so the email attaches the COMPLETE log. The
+			// deferred sender is then skipped via res.supportEmailSent (no double
+			// send). envInfo is always set for a real run; guarded to never deref.
+			if opts.support && res.supportStats != nil && opts.envInfo != nil {
+				emitSupportEmail(taskCtx, opts.cfg, opts.logger, opts.envInfo.Type, res.supportStats, opts.supportMeta)
+				res.supportEmailSent = true
+			}
 			return buildBackupOutcomePrompt(res), nil
 		})
 	if streamErr != nil {

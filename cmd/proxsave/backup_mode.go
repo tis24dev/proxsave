@@ -14,6 +14,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/support"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -31,6 +32,13 @@ type backupModeOptions struct {
 	heapProfilePath  string
 	serverIDValue    string
 	serverMACValue   string
+	// support arms support mode for this run: when set, the STREAMED path sends the
+	// maintainer email inside the viewport (see runBackupStreamed) instead of after
+	// the screen closes. supportMeta carries the GitHub nickname + issue the
+	// dashboard collected. The plain (CLI) path leaves these zero and relies on the
+	// deferred sender.
+	support     bool
+	supportMeta support.Meta
 }
 
 type backupModeResult struct {
@@ -38,6 +46,9 @@ type backupModeResult struct {
 	earlyErrorState *orchestrator.EarlyErrorState
 	supportStats    *orchestrator.BackupStats
 	exitCode        int
+	// supportEmailSent is set once the streamed run has already sent the support
+	// email (inside the viewport), so the deferred sender skips it - no double send.
+	supportEmailSent bool
 }
 
 // runBackupMode runs the backup, then (for a STANDALONE run) hands the outcome to the resident
