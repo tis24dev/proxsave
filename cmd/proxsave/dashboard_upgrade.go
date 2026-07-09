@@ -65,6 +65,34 @@ func releaseTagURL(tag string) string {
 	return "https://github.com/" + githubRepo + "/releases/tag/" + tag
 }
 
+// runDashboardUpgradeMenu is the "Upgrade" chooser. It splits the two upgrades so neither
+// screen carries the other's button: "Check upgrade" opens the binary upgrade screen
+// (runDashboardUpgrade), "Check config" opens the config upgrade flow (--upgrade-config),
+// and Back/esc returns to the dashboard menu. It loops so each sub-flow returns here.
+func runDashboardUpgradeMenu(ctx context.Context, session *shell.Session, configPath string) {
+	back := errors.New("back")
+	for {
+		prompt := theme.Emphasis.Render("Current version: ") + theme.Text.Render(upgradeSafeToken(dashboardUpgradeVersion()))
+		a, err := shell.Ask(ctx, session, components.NewSelector("Upgrade",
+			[]components.SelectorItem[upgAct]{
+				{Label: "Check upgrade", Value: upgGo},
+				{Label: "Check config", Value: upgConfig},
+				{Label: "Back", Value: upgBack},
+			},
+			components.WithSelectorPromptStyled[upgAct](prompt),
+			components.WithSelectorBack[upgAct](back)))
+		if err != nil || a == upgBack {
+			return
+		}
+		switch a {
+		case upgGo:
+			runDashboardUpgrade(ctx, session, configPath)
+		case upgConfig:
+			runDashboardUpdateConfig(ctx, session, configPath)
+		}
+	}
+}
+
 // TODO(viewport): rebuild this the same way backup and install were rebuilt for
 // the CONTAINED viewport streaming UI. Today runDashboardUpgrade runs the upgrade
 // inside the altscreen dashboard session (upgRun mutes stdout + RunTask spinner),
@@ -101,20 +129,10 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			p += "\n\n" + renderReleaseNotes(notes)
 		}
 		a, err := shell.Ask(ctx, session, components.NewSelector("Upgrade",
-			[]components.SelectorItem[upgAct]{
-				{Label: lbl, Value: upgGo},
-				{Label: "Check config", Value: upgConfig},
-				{Label: "Back", Value: upgBack},
-			},
+			[]components.SelectorItem[upgAct]{{Label: lbl, Value: upgGo}, {Label: "Back", Value: upgBack}},
 			components.WithSelectorPromptStyled[upgAct](p), components.WithSelectorBack[upgAct](back)))
 		if err != nil || a == upgBack {
 			return
-		}
-		if a == upgConfig {
-			// Config update lives here (collapsed under Updates): the same two-step
-			// check -> Up to date/Update available -> Apply flow as the CLI --upgrade-config.
-			runDashboardUpdateConfig(ctx, session, configPath)
-			continue
 		}
 		if !avail {
 			info := upgCheck(ctx, session, cur)
