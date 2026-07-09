@@ -75,8 +75,8 @@ func runDashboardUpgradeMenu(ctx context.Context, session *shell.Session, config
 		prompt := theme.Emphasis.Render("Current version: ") + theme.Text.Render(upgradeSafeToken(dashboardUpgradeVersion()))
 		a, err := shell.Ask(ctx, session, components.NewSelector("Upgrade",
 			[]components.SelectorItem[upgAct]{
-				{Label: "Check upgrade", Value: upgGo},
-				{Label: "Check config", Value: upgConfig},
+				{Label: "Check upgrade", Description: "update the proxsave binary to a newer release", Value: upgGo},
+				{Label: "Check config", Description: "add new template keys to the configuration file", Value: upgConfig},
 				{Label: "Back", Value: upgBack},
 			},
 			components.WithSelectorPromptStyled[upgAct](prompt),
