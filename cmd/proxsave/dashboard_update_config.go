@@ -46,7 +46,7 @@ func runDashboardUpdateConfig(ctx context.Context, session *shell.Session, confi
 			}
 			return dashboardApplyResult{Level: orchestrator.HealthcheckSetupLevelOk, Keyword: keyword, Explanation: describeConfigApply(result)}, nil
 		},
-		"Apply", "update the configuration file now (a backup is saved first)")
+		"Apply", "update the configuration file now")
 }
 
 // describeConfigPlan renders the CHECK explanation for a pending config upgrade, using
@@ -66,7 +66,7 @@ func describeConfigPlan(r *config.UpgradeResult) string {
 	if len(parts) > 0 {
 		summary = strings.Join(parts, ", ")
 	}
-	return fmt.Sprintf("Found %s. Apply updates the config file (a backup is saved first).", summary)
+	return fmt.Sprintf("Found %s.\nApply updates the config file (a backup is saved first).", summary)
 }
 
 // describeConfigApply renders the real-run outcome explanation.
