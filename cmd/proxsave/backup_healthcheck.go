@@ -35,6 +35,13 @@ var daemonAliveProbe = probeProxsaveDaemonAlive
 // pings anyway). Every step is best-effort: a hiccup here must never change the backup exit code,
 // so failures are logged at Debug and swallowed.
 func maybeHandoffManualBackup(opts backupModeOptions, res backupModeResult) {
+	if opts.dryRun {
+		// A dry-run is a TEST, never a real backup outcome, so it must not touch the
+		// backup-outcome check. The post-install audit runs `proxsave --dry-run` as a
+		// subprocess (installer.runPostInstallAuditDryRun) and exits 1 on warnings --
+		// without this gate that probe would ping the monitor with a phantom exit=1.
+		return
+	}
 	if res.supportStats == nil && res.earlyErrorState == nil {
 		return // no backup attempted (disabled / benign concurrency skip): nothing to report
 	}
