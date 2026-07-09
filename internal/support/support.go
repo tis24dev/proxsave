@@ -23,6 +23,15 @@ type Meta struct {
 	IssueID    string
 }
 
+// supportEmail is the maintainer recipient for the support email. It is INJECTED at build
+// time via ldflags from the EMAIL_SUPPORT secret
+// (-X github.com/tis24dev/proxsave/internal/support.supportEmail=...), never hardcoded. An
+// empty value (a dev build without the secret) disables the support email with a warning.
+var supportEmail string
+
+// SupportEmailConfigured reports whether the maintainer recipient was baked into this build.
+func SupportEmailConfigured() bool { return strings.TrimSpace(supportEmail) != "" }
+
 var newEmailNotifier = func(config notify.EmailConfig, proxmoxType types.ProxmoxType, logger *logging.Logger) (notify.Notifier, error) {
 	return notify.NewEmailNotifier(config, proxmoxType, logger)
 }
@@ -126,7 +135,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 
 	fmt.Println()
 	fmt.Println("Support mode confirmed.")
-	fmt.Println("The run will execute in DEBUG mode and a support email with the full log will be sent to github-support@tis24.it at the end.")
+	fmt.Println("The run will execute in DEBUG mode and a support email with the full log will be sent to the maintainer at the end.")
 	fmt.Println()
 
 	return meta, true, false
@@ -186,6 +195,11 @@ func SendEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, 
 		logging.Warning("Support mode: cannot send support email because stats are nil")
 		return
 	}
+	recipient := strings.TrimSpace(supportEmail)
+	if recipient == "" {
+		logging.Warning("Support mode: support email recipient is not configured in this build (EMAIL_SUPPORT); skipping the support email")
+		return
+	}
 
 	subject := "SUPPORT REQUEST"
 	if strings.TrimSpace(meta.GitHubUser) != "" || strings.TrimSpace(meta.IssueID) != "" {
@@ -213,7 +227,7 @@ func SendEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, 
 		DeliveryMethod:   notify.EmailDeliverySendmail,
 		FallbackSendmail: false,
 		AttachLogFile:    true,
-		Recipient:        "github-support@tis24.it",
+		Recipient:        recipient,
 		From:             from,
 		SubjectOverride:  subject,
 	}
@@ -231,5 +245,5 @@ func SendEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, 
 		return
 	}
 
-	logging.Info("Support mode: support email handed off to local MTA for github-support@tis24.it (check mailq and /var/log/mail.log for delivery)")
+	logging.Info("Support mode: support email handed off to local MTA for %s (check mailq and /var/log/mail.log for delivery)", recipient)
 }

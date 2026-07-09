@@ -181,7 +181,9 @@ func TestSendEmail_NewNotifierErrorHandled(t *testing.T) {
 
 func TestSendEmail_SubjectCompositionAndSend(t *testing.T) {
 	orig := newEmailNotifier
-	t.Cleanup(func() { newEmailNotifier = orig })
+	origEmail := supportEmail
+	t.Cleanup(func() { newEmailNotifier = orig; supportEmail = origEmail })
+	supportEmail = "maint@example.com" // injected via ldflags (EMAIL_SUPPORT) in real builds; set here for the test
 
 	var captured notify.EmailConfig
 	fake := &fakeNotifier{enabled: true}
@@ -200,7 +202,7 @@ func TestSendEmail_SubjectCompositionAndSend(t *testing.T) {
 
 	SendEmail(context.Background(), cfg, logger, types.ProxmoxVE, stats, Meta{GitHubUser: " alice ", IssueID: " #123 "}, " sig ")
 
-	if captured.Recipient != "github-support@tis24.it" {
+	if captured.Recipient != "maint@example.com" {
 		t.Fatalf("Recipient=%q", captured.Recipient)
 	}
 	if captured.From != "from@example.com" {
@@ -215,5 +217,27 @@ func TestSendEmail_SubjectCompositionAndSend(t *testing.T) {
 	}
 	if fake.sent != 1 || fake.last == nil {
 		t.Fatalf("expected fake notifier to be called once")
+	}
+}
+
+// TestSendEmail_SkipsWhenNoRecipient: a build without the EMAIL_SUPPORT secret (supportEmail
+// empty) must not attempt to send — it warns and returns without building a notifier.
+func TestSendEmail_SkipsWhenNoRecipient(t *testing.T) {
+	orig := newEmailNotifier
+	origEmail := supportEmail
+	t.Cleanup(func() { newEmailNotifier = orig; supportEmail = origEmail })
+	supportEmail = "" // no recipient baked into this build
+
+	built := false
+	newEmailNotifier = func(notify.EmailConfig, types.ProxmoxType, *logging.Logger) (notify.Notifier, error) {
+		built = true
+		return &fakeNotifier{enabled: true}, nil
+	}
+
+	stats := &orchestrator.BackupStats{ExitCode: 0, Hostname: "host", ArchivePath: "/tmp/a.tar"}
+	SendEmail(context.Background(), &config.Config{}, logging.New(types.LogLevelDebug, false), types.ProxmoxVE, stats, Meta{}, "sig")
+
+	if built {
+		t.Fatal("SendEmail must not build a notifier when no recipient is configured")
 	}
 }
