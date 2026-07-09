@@ -62,11 +62,13 @@ func stubUpdateConfig(t *testing.T, plan, apply *config.UpgradeResult) *[]string
 	return calls
 }
 
-// runUpdateConfigDriver navigates to Update config (7 downs) and returns the driver plus
-// the dashboard result channel.
+// runUpdateConfigDriver reaches the Update config flow the way the dashboard now exposes
+// it: it lives UNDER "Updates" as the "Check config" button, not as a top-level menu row.
+// So it navigates to Updates (6 downs) then selects Check config (2nd item of the Upgrade
+// screen), and returns the driver positioned on the Update config check screen.
 func runUpdateConfigDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan bool) {
 	t.Helper()
-	installDashboardGates(t, true, true) // cron state -> Update config is the 8th selectable
+	installDashboardGates(t, true, true) // cron state -> Updates is the 7th selectable
 	driver := installDashboardSessionSeam(t)
 	resCh := make(chan bool, 1)
 	go func() {
@@ -74,7 +76,9 @@ func runUpdateConfigDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan 
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down enter") // Update config (7 downs)
+	driver.keys("down down down down down down enter") // Updates (6 downs) -> Upgrade screen
+	driver.waitScreen("Upgrade")
+	driver.keys("down enter") // Check config (2nd item) -> Update config flow
 	return driver, resCh
 }
 
@@ -85,6 +89,17 @@ func waitUpdateConfigResolved(t *testing.T, resCh chan bool) {
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
+}
+
+// escOutOfUpgrade escapes the Update config flow's return point (the Upgrade screen) back
+// to the menu and exits, so every driver test ends the same way.
+func escOutOfUpgrade(t *testing.T, driver *newkeyUIDriver, resCh chan bool) {
+	t.Helper()
+	driver.waitScreen("Upgrade") // Update config returned to the Upgrade screen
+	driver.keys("esc")           // Back from Upgrade -> menu
+	driver.waitScreen("Dashboard")
+	driver.keys("esc") // exit
+	waitUpdateConfigResolved(t, resCh)
 }
 
 // TestDashboardUpdateConfigAvailableApply: a CHECK that finds new keys shows the Update
@@ -99,10 +114,8 @@ func TestDashboardUpdateConfigAvailableApply(t *testing.T) {
 	driver.waitScreen("Update config") // Update available screen
 	driver.keys("enter")               // Apply (primary)
 	driver.waitScreen("Update config") // result screen
-	driver.keys("esc")                 // Back to the menu
-	driver.waitScreen("Dashboard")
-	driver.keys("esc")
-	waitUpdateConfigResolved(t, resCh)
+	driver.keys("esc")                 // Back from result -> Upgrade screen
+	escOutOfUpgrade(t, driver, resCh)
 
 	if len(*calls) != 2 || (*calls)[0] != "plan" || (*calls)[1] != "apply" {
 		t.Fatalf("expected plan then apply, got %v", *calls)
@@ -113,15 +126,13 @@ func TestDashboardUpdateConfigAvailableApply(t *testing.T) {
 }
 
 // TestDashboardUpdateConfigUpToDateBack: nothing to add shows the Up to date screen (no
-// Apply); Back returns to the menu WITHOUT a real run.
+// Apply); Back returns WITHOUT a real run.
 func TestDashboardUpdateConfigUpToDateBack(t *testing.T) {
 	calls := stubUpdateConfig(t, &config.UpgradeResult{Changed: false}, &config.UpgradeResult{})
 	driver, resCh := runUpdateConfigDriver(t, &cli.Args{})
 	driver.waitScreen("Update config") // Up to date screen
-	driver.keys("down enter")          // Back (secondary)
-	driver.waitScreen("Dashboard")
-	driver.keys("esc")
-	waitUpdateConfigResolved(t, resCh)
+	driver.keys("down enter")          // Back (secondary) -> Upgrade screen
+	escOutOfUpgrade(t, driver, resCh)
 
 	if len(*calls) != 1 || (*calls)[0] != "plan" {
 		t.Fatalf("Up to date must run the check only, got %v", *calls)
@@ -136,10 +147,8 @@ func TestDashboardUpdateConfigUpToDateRecheck(t *testing.T) {
 	driver.waitScreen("Update config") // Up to date (1)
 	driver.keys("enter")               // Check (primary) -> re-plan
 	driver.waitScreen("Update config") // Up to date (2)
-	driver.keys("down enter")          // Back
-	driver.waitScreen("Dashboard")
-	driver.keys("esc")
-	waitUpdateConfigResolved(t, resCh)
+	driver.keys("down enter")          // Back -> Upgrade screen
+	escOutOfUpgrade(t, driver, resCh)
 
 	if len(*calls) != 2 || (*calls)[0] != "plan" || (*calls)[1] != "plan" {
 		t.Fatalf("re-check must run two plans and no apply, got %v", *calls)
@@ -147,15 +156,13 @@ func TestDashboardUpdateConfigUpToDateRecheck(t *testing.T) {
 }
 
 // TestDashboardUpdateConfigAvailableCancel: Cancel on the Update available screen returns
-// to the menu WITHOUT the real run.
+// WITHOUT the real run.
 func TestDashboardUpdateConfigAvailableCancel(t *testing.T) {
 	calls := stubUpdateConfig(t, &config.UpgradeResult{Changed: true, MissingKeys: []string{"A"}}, &config.UpgradeResult{})
 	driver, resCh := runUpdateConfigDriver(t, &cli.Args{})
 	driver.waitScreen("Update config") // Update available screen
-	driver.keys("down enter")          // Cancel (secondary)
-	driver.waitScreen("Dashboard")
-	driver.keys("esc")
-	waitUpdateConfigResolved(t, resCh)
+	driver.keys("down enter")          // Cancel (secondary) -> Upgrade screen
+	escOutOfUpgrade(t, driver, resCh)
 
 	if len(*calls) != 1 || (*calls)[0] != "plan" {
 		t.Fatalf("Cancel must run the check only, got %v", *calls)
