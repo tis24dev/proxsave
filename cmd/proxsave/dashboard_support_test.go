@@ -65,12 +65,14 @@ func TestSupportFormIsOneScreen(t *testing.T) {
 			}
 		}
 	}
-	// One screen (the shared FormGrid) carries both field labels and the Continue button.
+	// One screen (the shared FormGrid) carries the consent note, both field labels
+	// and the Continue button together.
 	waitFor("GitHub nickname") // field 1
 	waitFor("GitHub issue")    // field 2
 	waitFor("Continue")        // the submit button
-	// The consent note is the issue field's focused hint.
-	driver.keys("down")
+	// The consent note sits ABOVE the fields and is always visible (not a focused
+	// hint): the DEBUG log goes to the maintainer and may contain the MAC.
+	waitFor("maintainer")
 	waitFor("MAC")
 	cancel()
 	select {

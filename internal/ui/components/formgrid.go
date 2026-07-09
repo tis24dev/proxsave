@@ -54,6 +54,7 @@ func (f *FormField) active() bool { return f.Active == nil || f.Active() }
 type FormGrid struct {
 	shell.Resolver[struct{}]
 	title    string
+	intro    []string // consent/intro note rendered ABOVE the fields (one line each)
 	fields   []*FormField
 	backErr  error
 	cursor   int // index into fields; len(fields) = buttons row
@@ -76,6 +77,22 @@ type FormGridOption func(*FormGrid)
 // WithFormGridBack overrides the Esc/Cancel error (default shell.ErrAborted).
 func WithFormGridBack(err error) FormGridOption {
 	return func(g *FormGrid) { g.backErr = err }
+}
+
+// WithFormGridNote sets an intro/consent note rendered ABOVE the fields, one
+// line per string. Pass each clause as its own line (coherent, never broken
+// mid-sentence) — the grid does not re-wrap them. Lines are sanitized and empty
+// ones dropped.
+func WithFormGridNote(lines ...string) FormGridOption {
+	return func(g *FormGrid) {
+		note := make([]string, 0, len(lines))
+		for _, l := range lines {
+			if s := sanitizeLine(l); s != "" {
+				note = append(note, s)
+			}
+		}
+		g.intro = note
+	}
 }
 
 // NewFormGrid builds the grid. Field labels/descriptions are sanitized; the
@@ -432,8 +449,23 @@ func (g *FormGrid) View(width, height int) string {
 		footerHeight += lipgloss.Height(block)
 	}
 
+	// Intro/consent note rendered ABOVE the fields: fixed (never scrolled), one
+	// line per clause. Styled like the field hints for cosmetic consistency.
+	introWidth := min(width, 100)
+	intro := make([]string, 0, len(g.intro))
+	for _, line := range g.intro {
+		intro = append(intro, theme.Subtle.Width(introWidth).Render(line))
+	}
+	introHeight := 0
+	for _, block := range intro {
+		introHeight += lipgloss.Height(block)
+	}
+
 	// Scroll window over the field rows so buttons/footer stay visible.
 	head := 2 // title + blank
+	if len(intro) > 0 {
+		head += introHeight + 1 // note lines + a blank separator before the fields
+	}
 	tailLines := 2 + footerHeight
 	if len(footer) > 0 {
 		tailLines++ // blank line between the buttons and the footer
@@ -468,6 +500,10 @@ func (g *FormGrid) View(width, height int) string {
 	var b strings.Builder
 	b.WriteString(theme.Emphasis.Render(g.title))
 	b.WriteString("\n\n")
+	if len(intro) > 0 {
+		b.WriteString(strings.Join(intro, "\n"))
+		b.WriteString("\n\n")
+	}
 	b.WriteString(strings.Join(windowed, "\n"))
 	b.WriteString("\n\n")
 	b.WriteString(buttons)

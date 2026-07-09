@@ -182,6 +182,43 @@ func TestFormGridHintWrapsAtReadableWidth(t *testing.T) {
 	}
 }
 
+func TestFormGridNoteAboveFields(t *testing.T) {
+	field := &FormField{Label: "GitHub nickname", Kind: FieldText}
+	g := NewFormGrid("Support", []*FormField{field},
+		WithFormGridNote(
+			"The full run log is emailed to the maintainer for support.",
+			"It may contain personal data such as this server's MAC address.",
+			"Continue only if you consent to sharing it.",
+		))
+	bindGrid(g)
+	view := g.View(100, 20)
+	lines := strings.Split(view, "\n")
+
+	idx := func(substr string) int {
+		for i, l := range lines {
+			if strings.Contains(l, substr) {
+				return i
+			}
+		}
+		return -1
+	}
+	noteTop := idx("emailed to the maintainer")
+	noteMid := idx("MAC address")
+	noteBot := idx("consent to sharing")
+	label := idx("GitHub nickname")
+	if noteTop < 0 || noteMid < 0 || noteBot < 0 {
+		t.Fatalf("all consent note lines must render:\n%s", view)
+	}
+	if label < 0 {
+		t.Fatalf("the field label must render:\n%s", view)
+	}
+	// The note sits ABOVE the fields, in order, one clause per line (never merged).
+	if !(noteTop < noteMid && noteMid < noteBot && noteBot < label) {
+		t.Fatalf("note must be above the fields, in order: top=%d mid=%d bot=%d label=%d\n%s",
+			noteTop, noteMid, noteBot, label, view)
+	}
+}
+
 func TestSplitSentences(t *testing.T) {
 	got := splitSentences("Must be filesystem-mounted (e.g. /mnt/nas-backup). For direct network access use rclone.")
 	if len(got) != 2 {
