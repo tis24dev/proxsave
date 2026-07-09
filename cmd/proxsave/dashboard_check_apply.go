@@ -57,7 +57,7 @@ func runDashboardCheckApply(ctx context.Context, session *shell.Session, title s
 
 		if !showDashboardCheckChoice(ctx, session, title, res.Level, res.Keyword, res.Explanation,
 			applyLabel, applyDesc,
-			"Cancel", "return to the dashboard without changes") {
+			"Back", "return to the dashboard menu") {
 			return
 		}
 

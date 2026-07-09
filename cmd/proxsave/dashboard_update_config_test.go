@@ -155,16 +155,16 @@ func TestDashboardUpdateConfigUpToDateRecheck(t *testing.T) {
 	}
 }
 
-// TestDashboardUpdateConfigAvailableCancel: Cancel on the Update available screen returns
+// TestDashboardUpdateConfigAvailableBack: Back on the Update available screen returns
 // WITHOUT the real run.
-func TestDashboardUpdateConfigAvailableCancel(t *testing.T) {
+func TestDashboardUpdateConfigAvailableBack(t *testing.T) {
 	calls := stubUpdateConfig(t, &config.UpgradeResult{Changed: true, MissingKeys: []string{"A"}}, &config.UpgradeResult{})
 	driver, resCh := runUpdateConfigDriver(t, &cli.Args{})
 	driver.waitScreen("Update config") // Update available screen
-	driver.keys("down enter")          // Cancel (secondary) -> Upgrade screen
+	driver.keys("down enter")          // Back (secondary) -> Upgrade screen
 	escOutOfUpgrade(t, driver, resCh)
 
 	if len(*calls) != 1 || (*calls)[0] != "plan" {
-		t.Fatalf("Cancel must run the check only, got %v", *calls)
+		t.Fatalf("Back must run the check only, got %v", *calls)
 	}
 }
