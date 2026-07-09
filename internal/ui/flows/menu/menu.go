@@ -30,7 +30,6 @@ const (
 	ActionCheckHealthcheck
 	ActionPostInstallCheck
 	ActionCheckUpgrade // check for a newer release and (on confirm) install it in-session
-	ActionUpdateConfig // merge new template keys into the config file (--upgrade-config), two-step check -> apply
 	// Third group (daemon scheduler): setup/remove run the same admin path as the
 	// --daemon-setup / --daemon-remove flags; status runs a read-only screen.
 	ActionDaemonSetup   // install OR re-enable the resident daemon (--daemon-setup)
@@ -73,7 +72,6 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		{Label: "Install", Description: "re-run the interactive installation/setup (--install)", Value: ActionReconfigure},
 		{Label: "New install", Description: "wipe the install directory (keep build/env/identity) then re-run the installer (--new-install)", Value: ActionNewInstall},
 		{Label: "Updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
-		{Label: "Update config", Description: "add new template keys to the configuration file", Value: ActionUpdateConfig},
 		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
 		{Label: "─── Diagnostic Checks ───", Separator: true},
 		{Label: "Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},

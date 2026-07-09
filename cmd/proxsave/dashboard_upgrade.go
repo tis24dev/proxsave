@@ -31,6 +31,7 @@ type upgAct int
 const (
 	upgGo upgAct = iota
 	upgBack
+	upgConfig // open the two-step config-update flow (--upgrade-config) in-session
 )
 
 // upgradeTokenAllowed is the allowlist for a version string shown on screen. The
@@ -100,10 +101,20 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			p += "\n\n" + renderReleaseNotes(notes)
 		}
 		a, err := shell.Ask(ctx, session, components.NewSelector("Upgrade",
-			[]components.SelectorItem[upgAct]{{Label: lbl, Value: upgGo}, {Label: "Back", Value: upgBack}},
+			[]components.SelectorItem[upgAct]{
+				{Label: lbl, Value: upgGo},
+				{Label: "Check config", Value: upgConfig},
+				{Label: "Back", Value: upgBack},
+			},
 			components.WithSelectorPromptStyled[upgAct](p), components.WithSelectorBack[upgAct](back)))
 		if err != nil || a == upgBack {
 			return
+		}
+		if a == upgConfig {
+			// Config update lives here (collapsed under Updates): the same two-step
+			// check -> Up to date/Update available -> Apply flow as the CLI --upgrade-config.
+			runDashboardUpdateConfig(ctx, session, configPath)
+			continue
 		}
 		if !avail {
 			info := upgCheck(ctx, session, cur)

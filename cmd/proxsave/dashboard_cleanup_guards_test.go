@@ -89,7 +89,7 @@ func runCleanupGuardsDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down down down down down down enter") // Cleanup guards (13 downs)
+	driver.keys("down down down down down down down down down down down down enter") // Cleanup guards (12 downs)
 	return driver, resCh
 }
 

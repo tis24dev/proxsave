@@ -166,9 +166,9 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		t.Fatalf("run upgrade must pass Upgrade+AutoYes+ConfigPath, got %+v", gotArgs)
 	}
 
-	driver.keys("enter")         // dismiss the notice
-	driver.waitScreen("Upgrade") // back on the screen (button reverted to Check upgrade)
-	driver.keys("down enter")    // Back -> return
+	driver.keys("enter")           // dismiss the notice
+	driver.waitScreen("Upgrade")   // back on the screen (button reverted to Check upgrade)
+	driver.keys("down down enter") // Back (3rd item, after Check config) -> return
 	select {
 	case <-done:
 	case <-time.After(uitest.Deadline(60 * time.Second)):
