@@ -11,6 +11,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/support"
@@ -448,6 +449,51 @@ func TestRunBackupStreamedSupportEmailInStream(t *testing.T) {
 	if !res.supportEmailSent {
 		t.Fatalf("streamed support run must mark the email as sent (so the deferred sender skips): %+v", res)
 	}
+}
+
+// TestRunBackupStreamedHandsOffInStream asserts the manual-backup daemon handoff
+// runs INSIDE the streamed capture, so its debug trace lands in the viewport
+// instead of printing to the plain scrollback after the session closes - the
+// regression the user saw in support mode, where the run forces DEBUG logging.
+func TestRunBackupStreamedHandsOffInStream(t *testing.T) {
+	// A supervised child would skip the handoff; make sure this run is standalone.
+	t.Setenv(health.EnvRunID, "")
+	// DEBUG level so the handoff's debug trace emits (support mode forces DEBUG).
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelDebug, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	prevSteps := backupStreamSteps
+	backupStreamSteps = func(opts backupModeOptions) backupModeResult {
+		return backupModeResult{
+			exitCode:     types.ExitGenericError.Int(),
+			supportStats: &orchestrator.BackupStats{FilesCollected: 1, LocalStatus: "ok"},
+		}
+	}
+	t.Cleanup(func() { backupStreamSteps = prevSteps })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var buf shell.SyncBuffer
+	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, &buf)
+	bootstrap := logging.NewBootstrapLogger()
+	stashDashboardSession(session, bootstrap)
+	t.Cleanup(releaseDashboardLeftovers)
+
+	// Handoff enabled (healthchecks + backups) with a base dir that has no daemon
+	// pid file, so the handoff runs and traces its outcome INSIDE the capture.
+	cfg := &config.Config{HealthcheckEnabled: true, BackupEnabled: true, BaseDir: t.TempDir()}
+
+	resCh := make(chan backupModeResult, 1)
+	go func() {
+		resCh <- runBackupStreamed(backupModeOptions{ctx: ctx, bootstrap: bootstrap, cfg: cfg})
+	}()
+
+	// The handoff's debug trace appears in the viewport buffer (proving it ran
+	// inside the capture, not after the session closed).
+	waitFor(t, &buf, "manual backup handoff")
+	waitFor(t, &buf, "enter continue")
+	_ = pumpEnterBackup(t, session, resCh)
 }
 
 // pumpEnterBackup sends Enter until runBackupStreamed returns its result.
