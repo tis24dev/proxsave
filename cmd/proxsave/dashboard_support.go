@@ -7,78 +7,53 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/huh/v2"
+
 	"github.com/tis24dev/proxsave/internal/support"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
-	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // dashboardRunSupportForm is the seam so the dispatch can be tested without driving the
 // full graphical form. Production points it at runDashboardSupportForm.
 var dashboardRunSupportForm = runDashboardSupportForm
 
-// supportStartAction is the yes/no choice on the final confirm step of the support form.
-type supportStartAction int
-
-const (
-	supportStartGo supportStartAction = iota
-	supportStartCancel
-)
-
-// runDashboardSupportForm collects, GRAPHICALLY, the GitHub metadata the CLI support intro
-// (support.RunIntro) reads from stdin: the GitHub nickname, then the issue id (#1234) whose
-// screen carries a concise consent note (the DEBUG log — which may contain sensitive data,
-// e.g. this server's MAC — is sent to the maintainer, and the issue must already be open),
-// then a final confirmation. It returns (meta, true) only when the user confirms; esc /
-// Cancel at any step returns (_, false) so the caller loops back to the menu. The maintainer
-// email address is never shown.
+// runDashboardSupportForm shows a SINGLE screen (one huh form) with everything: a concise
+// consent note, the GitHub nickname, the GitHub issue (#1234), and a Start button. It
+// returns (meta, true) only when the user picks Start; esc / Cancel returns (_, false) so
+// the caller loops back to the menu. The maintainer email address is never shown.
 func runDashboardSupportForm(ctx context.Context, session *shell.Session) (support.Meta, bool) {
 	errBack := errors.New("support: back")
-
-	nickname, err := shell.Ask(ctx, session, components.NewInput(
-		"Support", "Enter your GitHub nickname.",
-		components.WithValidate(func(v string) error {
-			if strings.TrimSpace(v) == "" {
-				return fmt.Errorf("nickname cannot be empty")
-			}
-			return nil
-		}),
-		components.WithInputBack(errBack),
-	))
-	if err != nil {
-		return support.Meta{}, false
+	var (
+		nickname string
+		issue    string
+		start    bool
+	)
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewNote().Description(
+				"Runs a backup in DEBUG and sends its log to the maintainer for support.\n"+
+					"The log may contain sensitive data (e.g. this server's MAC). The GitHub issue must already be open."),
+			huh.NewInput().Title("GitHub nickname").Value(&nickname).Validate(func(v string) error {
+				if strings.TrimSpace(v) == "" {
+					return fmt.Errorf("nickname cannot be empty")
+				}
+				return nil
+			}),
+			huh.NewInput().Title("GitHub issue").Placeholder("#1234").Value(&issue).Validate(validateSupportIssue),
+			huh.NewConfirm().Title("Start the support run in DEBUG?").Affirmative("Start").Negative("Cancel").Value(&start),
+		),
+	)
+	if _, err := shell.Ask(ctx, session, components.NewFormScreen("Support", form, components.WithFormBack(errBack))); err != nil {
+		return support.Meta{}, false // esc / back / abort
 	}
-
-	issue, err := shell.Ask(ctx, session, components.NewInput(
-		"Support", "Enter the GitHub issue number (#1234).",
-		components.WithPlaceholder("#1234"),
-		components.WithNote("Sends the DEBUG log (may contain sensitive data, e.g. this server's MAC) to the maintainer. The issue must already be open."),
-		components.WithValidate(validateSupportIssue),
-		components.WithInputBack(errBack),
-	))
-	if err != nil {
-		return support.Meta{}, false
+	if !start {
+		return support.Meta{}, false // chose Cancel on the Start confirm
 	}
-
-	meta := support.Meta{
+	return support.Meta{
 		GitHubUser: strings.TrimSpace(nickname),
 		IssueID:    strings.TrimSpace(issue),
-	}
-
-	summary := theme.Text.Render(fmt.Sprintf("Start the support run in DEBUG?\n\nGitHub: %s\nIssue: %s", meta.GitHubUser, meta.IssueID))
-	start, err := shell.Ask(ctx, session, components.NewSelector(
-		"Support",
-		[]components.SelectorItem[supportStartAction]{
-			{Label: "Start support run", Description: "run the backup in support mode now", Value: supportStartGo},
-			{Label: "Cancel", Description: "return to the dashboard menu", Value: supportStartCancel},
-		},
-		components.WithSelectorPromptStyled[supportStartAction](summary),
-		components.WithSelectorBack[supportStartAction](errBack),
-	))
-	if err != nil || start != supportStartGo {
-		return support.Meta{}, false
-	}
-	return meta, true
+	}, true
 }
 
 // validateSupportIssue enforces the #<number> issue format (mirrors support.RunIntro).
