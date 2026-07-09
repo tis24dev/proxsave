@@ -190,7 +190,7 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		_, _ = dashboardRunPostInstallAudit(ctx, session, getExecInfo().ExecPath, configPath)
 	case menu.ActionCheckUpgrade:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=check-upgrade")
-		runDashboardUpgrade(ctx, session, configPath)
+		runDashboardUpgradeMenu(ctx, session, configPath)
 	case menu.ActionDaemonSetup:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-setup")
 		runDashboardDaemonAdmin(ctx, session, true, configPath, baseDir)
