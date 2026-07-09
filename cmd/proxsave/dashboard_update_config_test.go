@@ -18,11 +18,11 @@ func TestConfigPlanDescription(t *testing.T) {
 		want string
 	}{
 		{"missing only", &config.UpgradeResult{MissingKeys: []string{"A", "B"}},
-			"Found 2 missing key(s) to add. Apply updates the config file (a backup is saved first)."},
+			"Found 2 missing key(s) to add.\nApply updates the config file (a backup is saved first)."},
 		{"missing + custom + case", &config.UpgradeResult{MissingKeys: []string{"A"}, ExtraKeys: []string{"X"}, CaseConflictKeys: []string{"y"}},
-			"Found 1 missing key(s) to add, 1 custom key(s) to keep, 1 case-only key(s) to keep. Apply updates the config file (a backup is saved first)."},
+			"Found 1 missing key(s) to add, 1 custom key(s) to keep, 1 case-only key(s) to keep.\nApply updates the config file (a backup is saved first)."},
 		{"rewrite only", &config.UpgradeResult{},
-			"Found the file would be rewritten from the template. Apply updates the config file (a backup is saved first)."},
+			"Found the file would be rewritten from the template.\nApply updates the config file (a backup is saved first)."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
