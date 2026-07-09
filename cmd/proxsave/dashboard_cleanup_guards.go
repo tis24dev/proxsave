@@ -70,7 +70,7 @@ func guardApplyClean(r orchestrator.GuardCleanupReport) bool {
 // there is nothing to unlock, or what was found locking the storage.
 func describeGuardCheck(r orchestrator.GuardCleanupReport) string {
 	if !r.HasGuards() {
-		return "No restore mount guards are present — nothing to unlock."
+		return "No restore mount guards are present. Nothing to unlock."
 	}
 	var parts []string
 	if r.BindGuards > 0 {
@@ -85,7 +85,7 @@ func describeGuardCheck(r orchestrator.GuardCleanupReport) string {
 // describeGuardApply renders the real-run outcome explanation.
 func describeGuardApply(r orchestrator.GuardCleanupReport) string {
 	if guardApplyClean(r) {
-		return "Removed the restore mount guards — the storage is unlocked."
+		return "Removed the restore mount guards. The storage is unlocked."
 	}
 	return "Some guards are still in place (hidden under a live mount). Unmount the datastore and run Cleanup guards again once it is offline."
 }

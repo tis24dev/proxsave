@@ -29,7 +29,7 @@ func runDashboardUpdateConfig(ctx context.Context, session *shell.Session, confi
 			}
 			if result == nil || !result.Changed {
 				return dashboardCheckResult{Found: false, Level: orchestrator.HealthcheckSetupLevelOk, Keyword: "Up to date",
-					Explanation: "The configuration already has every key from the template — nothing to update."}, nil
+					Explanation: "The configuration already has every key from the template. Nothing to update."}, nil
 			}
 			return dashboardCheckResult{Found: true, Level: orchestrator.HealthcheckSetupLevelWarn, Keyword: "Update available",
 				Explanation: describeConfigPlan(result)}, nil
