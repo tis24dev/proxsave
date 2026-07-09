@@ -155,8 +155,8 @@ func TestDashboardActions(t *testing.T) {
 		// Install is now a single row that opens an in-session chooser (Edit install /
 		// Wipe install); its two flag dispatches are covered by the dedicated install
 		// chooser tests below, not this fall-through harness.
-		// Exit is the last selectable (13th): 12 downs, skipping every separator.
-		{"exit row", "down down down down down down down down down down down down enter", true, nil},
+		// Exit is the last selectable (14th): 13 downs, skipping every separator.
+		{"exit row", "down down down down down down down down down down down down down enter", true, nil},
 		{"esc exits", "esc", true, nil},
 		{"ctrl+c exits", "ctrl+c", true, nil},
 	}
