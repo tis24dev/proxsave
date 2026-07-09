@@ -71,7 +71,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		{Label: "New key", Description: "create new encryption AGE key", Value: ActionNewKey},
 		{Label: "Install", Description: "re-run the interactive installation/setup (--install)", Value: ActionReconfigure},
 		{Label: "New install", Description: "wipe the install directory (keep build/env/identity) then re-run the installer (--new-install)", Value: ActionNewInstall},
-		{Label: "Updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
+		{Label: "Upgrade", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
 		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
 		{Label: "─── Diagnostic Checks ───", Separator: true},
 		{Label: "Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},

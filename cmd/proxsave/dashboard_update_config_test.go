@@ -63,7 +63,7 @@ func stubUpdateConfig(t *testing.T, plan, apply *config.UpgradeResult) *[]string
 }
 
 // runUpdateConfigDriver reaches the Update config flow the way the dashboard now exposes
-// it: it lives UNDER "Updates" as the "Check config" button, not as a top-level menu row.
+// it: it lives UNDER "Upgrade" as the "Check config" button, not as a top-level menu row.
 // So it navigates to Updates (6 downs) then selects Check config (2nd item of the Upgrade
 // screen), and returns the driver positioned on the Update config check screen.
 func runUpdateConfigDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan bool) {
@@ -111,10 +111,10 @@ func TestDashboardUpdateConfigAvailableApply(t *testing.T) {
 	)
 	args := &cli.Args{}
 	driver, resCh := runUpdateConfigDriver(t, args)
-	driver.waitScreen("Update config") // Update available screen
-	driver.keys("enter")               // Apply (primary)
-	driver.waitScreen("Update config") // result screen
-	driver.keys("esc")                 // Back from result -> Upgrade screen
+	driver.waitScreen("Upgrade config") // Update available screen
+	driver.keys("enter")                // Apply (primary)
+	driver.waitScreen("Upgrade config") // result screen
+	driver.keys("esc")                  // Back from result -> Upgrade screen
 	escOutOfUpgrade(t, driver, resCh)
 
 	if len(*calls) != 2 || (*calls)[0] != "plan" || (*calls)[1] != "apply" {
@@ -130,8 +130,8 @@ func TestDashboardUpdateConfigAvailableApply(t *testing.T) {
 func TestDashboardUpdateConfigUpToDateBack(t *testing.T) {
 	calls := stubUpdateConfig(t, &config.UpgradeResult{Changed: false}, &config.UpgradeResult{})
 	driver, resCh := runUpdateConfigDriver(t, &cli.Args{})
-	driver.waitScreen("Update config") // Up to date screen
-	driver.keys("down enter")          // Back (secondary) -> Upgrade screen
+	driver.waitScreen("Upgrade config") // Up to date screen
+	driver.keys("down enter")           // Back (secondary) -> Upgrade screen
 	escOutOfUpgrade(t, driver, resCh)
 
 	if len(*calls) != 1 || (*calls)[0] != "plan" {
@@ -144,10 +144,10 @@ func TestDashboardUpdateConfigUpToDateBack(t *testing.T) {
 func TestDashboardUpdateConfigUpToDateRecheck(t *testing.T) {
 	calls := stubUpdateConfig(t, &config.UpgradeResult{Changed: false}, &config.UpgradeResult{})
 	driver, resCh := runUpdateConfigDriver(t, &cli.Args{})
-	driver.waitScreen("Update config") // Up to date (1)
-	driver.keys("enter")               // Check (primary) -> re-plan
-	driver.waitScreen("Update config") // Up to date (2)
-	driver.keys("down enter")          // Back -> Upgrade screen
+	driver.waitScreen("Upgrade config") // Up to date (1)
+	driver.keys("enter")                // Check (primary) -> re-plan
+	driver.waitScreen("Upgrade config") // Up to date (2)
+	driver.keys("down enter")           // Back -> Upgrade screen
 	escOutOfUpgrade(t, driver, resCh)
 
 	if len(*calls) != 2 || (*calls)[0] != "plan" || (*calls)[1] != "plan" {
@@ -160,8 +160,8 @@ func TestDashboardUpdateConfigUpToDateRecheck(t *testing.T) {
 func TestDashboardUpdateConfigAvailableBack(t *testing.T) {
 	calls := stubUpdateConfig(t, &config.UpgradeResult{Changed: true, MissingKeys: []string{"A"}}, &config.UpgradeResult{})
 	driver, resCh := runUpdateConfigDriver(t, &cli.Args{})
-	driver.waitScreen("Update config") // Update available screen
-	driver.keys("down enter")          // Back (secondary) -> Upgrade screen
+	driver.waitScreen("Upgrade config") // Update available screen
+	driver.keys("down enter")           // Back (secondary) -> Upgrade screen
 	escOutOfUpgrade(t, driver, resCh)
 
 	if len(*calls) != 1 || (*calls)[0] != "plan" {

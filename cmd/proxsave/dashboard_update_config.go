@@ -21,7 +21,7 @@ var (
 // (--upgrade-config-dry-run) classifies "Up to date" (green) vs "Update available"
 // (yellow), and Apply runs the real merge (--upgrade-config: backup + rollback).
 func runDashboardUpdateConfig(ctx context.Context, session *shell.Session, configPath string) {
-	runDashboardCheckApply(ctx, session, "Update config",
+	runDashboardCheckApply(ctx, session, "Upgrade config",
 		func() (dashboardCheckResult, error) {
 			result, err := updateConfigPlan(configPath)
 			if err != nil {
