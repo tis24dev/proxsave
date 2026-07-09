@@ -613,7 +613,7 @@ func verifyReleaseSignature(root *os.Root, checksumName, signatureName, pubKeyPE
 	}
 	digest := sha256.Sum256(data)
 	if !ecdsa.VerifyASN1(pub, digest[:], sig) {
-		return errors.New("SHA256SUMS signature verification failed — refusing to upgrade")
+		return errors.New("SHA256SUMS signature verification failed; refusing to upgrade")
 	}
 	return nil
 }

@@ -18,8 +18,8 @@ var dashboardRunSupportForm = runDashboardSupportForm
 
 // runDashboardSupportForm shows the SAME single-screen grid form as the installer's
 // configuration screen (components.FormGrid). A consent note sits ABOVE the two fields
-// (always visible, one clause per line): the full run log is captured in DEBUG detail and
-// emailed to the maintainer, and it may contain personal data such as this server's MAC.
+// (always visible, one line each): the backup runs in debug mode and its log is emailed to
+// the maintainer, and the log may contain personal data such as this server's MAC.
 // Below it are the GitHub nickname and the GitHub issue (#1234), each with a concise
 // focused hint, plus the shared Continue / Cancel buttons. It returns (meta, true) only on
 // Continue; esc / Cancel returns (_, false) so the caller loops back to the menu. The
@@ -40,7 +40,7 @@ func runDashboardSupportForm(ctx context.Context, session *shell.Session) (suppo
 	}
 	issue := &components.FormField{
 		Label:       "GitHub issue",
-		Description: "The issue number, e.g. #1234 — it must already be open on GitHub.",
+		Description: "Must be an issue already open on GitHub, e.g. #1234.",
 		Kind:        components.FieldText,
 		Validate:    validateSupportIssue,
 	}
@@ -49,9 +49,8 @@ func runDashboardSupportForm(ctx context.Context, session *shell.Session) (suppo
 	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
 		"Support", fields,
 		components.WithFormGridNote(
-			"The full run log is captured in DEBUG detail and emailed to the maintainer for support.",
-			"It may contain personal data — for example this server's MAC address, hostnames or paths.",
-			"Continue only if you consent to sharing it.",
+			"Backup run in debug mode, log will be emailed to the maintainer.",
+			"The log may contain personal data such as this server's MAC address.",
 		),
 		components.WithFormGridBack(errBack),
 	)); err != nil {

@@ -19,7 +19,7 @@ func TestGuardCheckDescription(t *testing.T) {
 		r    orchestrator.GuardCleanupReport
 		want string
 	}{
-		{"clean", orchestrator.GuardCleanupReport{}, "No restore mount guards are present — nothing to unlock."},
+		{"clean", orchestrator.GuardCleanupReport{}, "No restore mount guards are present. Nothing to unlock."},
 		{"bind only", orchestrator.GuardCleanupReport{BindGuards: 2},
 			"Found 2 bind mount guards locking the storage. Apply removes them to unlock it."},
 		{"immutable only", orchestrator.GuardCleanupReport{ImmutableGuards: 1},
