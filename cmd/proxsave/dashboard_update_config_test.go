@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,9 +20,9 @@ func TestConfigPlanDescription(t *testing.T) {
 		want string
 	}{
 		{"missing only", &config.UpgradeResult{MissingKeys: []string{"A", "B"}},
-			"Found 2 missing key(s) to add.\nApply updates the config file (a backup is saved first)."},
+			"Found 2 missing key(s) to add.\nKeys to add:\n  A\n  B\nApply updates the config file (a backup is saved first)."},
 		{"missing + custom + case", &config.UpgradeResult{MissingKeys: []string{"A"}, ExtraKeys: []string{"X"}, CaseConflictKeys: []string{"y"}},
-			"Found 1 missing key(s) to add, 1 custom key(s) to keep, 1 case-only key(s) to keep.\nApply updates the config file (a backup is saved first)."},
+			"Found 1 missing key(s) to add, 1 custom key(s) to keep, 1 case-only key(s) to keep.\nKeys to add:\n  A\nApply updates the config file (a backup is saved first)."},
 		{"rewrite only", &config.UpgradeResult{},
 			"Found the file would be rewritten from the template.\nApply updates the config file (a backup is saved first)."},
 	}
@@ -30,6 +32,25 @@ func TestConfigPlanDescription(t *testing.T) {
 				t.Fatalf("describeConfigPlan =\n%q\nwant\n%q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestConfigPlanDescriptionCaps: a large set of missing keys lists up to the cap and
+// summarizes the rest as "… and N more", so the check screen can never overflow.
+func TestConfigPlanDescriptionCaps(t *testing.T) {
+	keys := make([]string, 0, maxConfigKeysShown+2)
+	for i := 1; i <= maxConfigKeysShown+2; i++ {
+		keys = append(keys, fmt.Sprintf("K%d", i))
+	}
+	got := describeConfigPlan(&config.UpgradeResult{MissingKeys: keys})
+	if !strings.Contains(got, fmt.Sprintf("\n  K%d", maxConfigKeysShown)) {
+		t.Fatalf("should list up to the cap: %q", got)
+	}
+	if strings.Contains(got, fmt.Sprintf("K%d", maxConfigKeysShown+1)) {
+		t.Fatalf("must not list past the cap: %q", got)
+	}
+	if !strings.Contains(got, "… and 2 more") {
+		t.Fatalf("should summarize the overflow: %q", got)
 	}
 }
 

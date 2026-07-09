@@ -49,8 +49,13 @@ func runDashboardUpdateConfig(ctx context.Context, session *shell.Session, confi
 		"Apply", "update the configuration file now")
 }
 
+// maxConfigKeysShown caps how many keys the check screen lists so a large template bump
+// cannot push the menu items off-screen; the remainder is summarized ("… and N more").
+const maxConfigKeysShown = 12
+
 // describeConfigPlan renders the CHECK explanation for a pending config upgrade, using
-// the same "(s)" wording as the CLI --upgrade-config output.
+// the same "(s)" wording as the CLI --upgrade-config output, and lists the keys that
+// would be added (one per line, capped).
 func describeConfigPlan(r *config.UpgradeResult) string {
 	var parts []string
 	if n := len(r.MissingKeys); n > 0 {
@@ -66,7 +71,21 @@ func describeConfigPlan(r *config.UpgradeResult) string {
 	if len(parts) > 0 {
 		summary = strings.Join(parts, ", ")
 	}
-	return fmt.Sprintf("Found %s.\nApply updates the config file (a backup is saved first).", summary)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Found %s.", summary)
+	if len(r.MissingKeys) > 0 {
+		b.WriteString("\nKeys to add:")
+		for i, k := range r.MissingKeys {
+			if i >= maxConfigKeysShown {
+				fmt.Fprintf(&b, "\n  … and %d more", len(r.MissingKeys)-maxConfigKeysShown)
+				break
+			}
+			b.WriteString("\n  " + k)
+		}
+	}
+	b.WriteString("\nApply updates the config file (a backup is saved first).")
+	return b.String()
 }
 
 // describeConfigApply renders the real-run outcome explanation.
