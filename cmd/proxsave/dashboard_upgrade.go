@@ -115,8 +115,26 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 	url := ""   // latest release page URL (tag portion scrubbed via releaseTagURL)
 	avail := false
 	back := errors.New("back")
+	pendingCheck := true // auto-run the release check on entry (like Daemon status), so the
+	//                      screen shows the result immediately instead of "NOT CHECKED".
 	for {
-		lbl := "Check upgrade"
+		if pendingCheck {
+			info := upgCheck(ctx, session, cur)
+			switch {
+			case info == nil || (!info.NewVersion && strings.TrimSpace(info.Latest) == ""):
+				avail, kw, sty, sym, notes, url = false, "CHECK FAILED", theme.WarningText, symWarn, "", ""
+			case info.NewVersion:
+				latest := upgradeSafeToken(info.Latest)
+				if latest == "" {
+					latest = "UPDATE AVAILABLE"
+				}
+				avail, kw, sty, sym, notes, url = true, latest, theme.WarningText, symWarn, info.Notes, releaseTagURL(info.Tag)
+			default:
+				avail, kw, sty, sym, notes, url = false, "NO UPGRADE ("+cur+")", theme.SuccessText, symOk, info.Notes, releaseTagURL(info.Tag)
+			}
+			pendingCheck = false
+		}
+		lbl := "Re-check"
 		if avail {
 			lbl = "Run upgrade"
 		}
@@ -135,20 +153,7 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			return
 		}
 		if !avail {
-			info := upgCheck(ctx, session, cur)
-			switch {
-			case info == nil || (!info.NewVersion && strings.TrimSpace(info.Latest) == ""):
-				kw, sty, sym, notes, url = "CHECK FAILED", theme.WarningText, symWarn, "", ""
-			case info.NewVersion:
-				avail = true
-				latest := upgradeSafeToken(info.Latest)
-				if latest == "" {
-					latest = "UPDATE AVAILABLE"
-				}
-				kw, sty, sym, notes, url = latest, theme.WarningText, symWarn, info.Notes, releaseTagURL(info.Tag)
-			default:
-				kw, sty, sym, notes, url = "NO UPGRADE ("+cur+")", theme.SuccessText, symOk, info.Notes, releaseTagURL(info.Tag)
-			}
+			pendingCheck = true // "Re-check" pressed: re-run the check on the next loop
 			continue
 		}
 		avail = false

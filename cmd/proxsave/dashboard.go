@@ -513,7 +513,7 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 		prompt := buildDaemonStatusPrompt(level, keyword, explanation, mode, unit, active, optOut, ds)
 
 		items := []components.SelectorItem[daemonStatusAction]{
-			{Label: "Check", Description: "re-check the daemon state", Value: daemonStatusActionCheck},
+			{Label: "Re-check", Description: "re-run the daemon state check", Value: daemonStatusActionCheck},
 			{Label: "Back", Description: "return to the dashboard menu", Value: daemonStatusActionBack},
 		}
 

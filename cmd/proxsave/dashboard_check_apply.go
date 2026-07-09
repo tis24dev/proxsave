@@ -48,7 +48,7 @@ func runDashboardCheckApply(ctx context.Context, session *shell.Session, title s
 		if !res.Found {
 			// Nothing to apply. No Apply — only re-Check / Back.
 			if showDashboardCheckChoice(ctx, session, title, res.Level, res.Keyword, res.Explanation,
-				"Check", "re-run the check",
+				"Re-check", "re-run the check",
 				"Back", "return to the dashboard menu") {
 				continue
 			}
