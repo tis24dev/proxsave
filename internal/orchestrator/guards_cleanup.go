@@ -37,6 +37,8 @@ var (
 // is known to exist and the mount state has been read.
 type guardCleanupSummary struct {
 	dryRun          bool
+	guardDirPresent bool // the guard base dir exists (false => nothing to clean up)
+	bindGuards      int  // guard bind mounts found (visible + hidden)
 	cleared         int  // immutable flags cleared (or would-clear, in dry-run)
 	pending         int  // immutable flags left (mounted/unresolvable/failed)
 	unmounted       int  // bind guards unmounted
@@ -73,29 +75,75 @@ func (s *guardCleanupSummary) emit(logger *logging.Logger) {
 	}
 }
 
+// GuardCleanupReport summarizes what a guard cleanup (or a dry-run check) found and did,
+// so callers can classify the outcome without parsing log lines.
+type GuardCleanupReport struct {
+	DryRun           bool
+	GuardDirPresent  bool // the guard base dir exists (false => nothing to clean up)
+	BindGuards       int  // guard bind mounts found (visible + hidden)
+	ImmutableGuards  int  // immutable (chattr +i) targets found (cleared + pending)
+	Unmounted        int  // bind guards actually unmounted (real run only)
+	GuardsRemaining  int  // guard mounts still present after a real run (-1 = unknown)
+	ImmutableCleared int  // immutable flags cleared (would-clear, in dry-run)
+	ImmutablePending int  // immutable flags left pending
+	DirRemoved       bool // the guard directory was removed
+}
+
+// HasGuards reports whether any guard is present to unlock (a bind mount or an immutable
+// flag). It is the signal that classifies "found something to remove" vs "clean".
+func (r GuardCleanupReport) HasGuards() bool {
+	return r.BindGuards > 0 || r.ImmutableGuards > 0
+}
+
 // CleanupMountGuards removes ProxSave mount guards created under mountGuardBaseDir.
 //
 // Safety: this will only unmount guard bind mounts when they are the currently-visible
 // mount on the mountpoint (i.e. the guard is the top-most mount at that mountpoint).
 // If a real mount is stacked on top, the guard will be left in place.
 func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool) error {
+	_, err := cleanupMountGuards(ctx, logger, dryRun)
+	return err
+}
+
+// CleanupMountGuardsReport is CleanupMountGuards with a structured report of what was
+// found/done. In dry-run it is a read-only CHECK (reports what is present without
+// changing anything); a real run reports what it removed and what is left pending.
+func CleanupMountGuardsReport(ctx context.Context, logger *logging.Logger, dryRun bool) (GuardCleanupReport, error) {
+	return cleanupMountGuards(ctx, logger, dryRun)
+}
+
+func cleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool) (GuardCleanupReport, error) {
+	summary := &guardCleanupSummary{dryRun: dryRun}
+	report := func() GuardCleanupReport {
+		return GuardCleanupReport{
+			DryRun:           summary.dryRun,
+			GuardDirPresent:  summary.guardDirPresent,
+			BindGuards:       summary.bindGuards,
+			ImmutableGuards:  summary.cleared + summary.pending,
+			Unmounted:        summary.unmounted,
+			GuardsRemaining:  summary.guardsRemaining,
+			ImmutableCleared: summary.cleared,
+			ImmutablePending: summary.pending,
+			DirRemoved:       summary.dirRemoved,
+		}
+	}
+
 	if logger == nil {
 		logger = logging.GetDefaultLogger()
 	}
 
 	if cleanupGeteuid() != 0 {
-		return fmt.Errorf("cleanup guards requires root privileges")
+		return report(), fmt.Errorf("cleanup guards requires root privileges")
 	}
 
 	if _, err := cleanupStat(mountGuardBaseDir); err != nil {
 		if os.IsNotExist(err) {
 			logger.Info("No guard directory found at %s — nothing to clean up. If you deleted it manually and a mountpoint is still read-only, check 'lsattr -d <mountpoint>' and clear it with 'chattr -i <mountpoint>' while the storage is unmounted.", mountGuardBaseDir)
-			return nil
+			return report(), nil
 		}
-		return fmt.Errorf("stat guards dir: %w", err)
+		return report(), fmt.Errorf("stat guards dir: %w", err)
 	}
-
-	summary := &guardCleanupSummary{dryRun: dryRun}
+	summary.guardDirPresent = true
 
 	// Reverse the chattr +i fallback guards first, independently of the bind-mount
 	// state below. This runs on BOTH paths (the no-guard-mounts early return AND the
@@ -107,28 +155,29 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 
 	mountinfo, err := cleanupReadFile("/proc/self/mountinfo")
 	if err != nil {
-		return fmt.Errorf("read mountinfo: %w", err)
+		return report(), fmt.Errorf("read mountinfo: %w", err)
 	}
 	// Registered only after the mount state is known: a hard failure above returns
 	// without emitting a misleading "summary" line.
 	defer summary.emit(logger)
 
 	visibleMountpoints, hiddenMountpoints, totalGuardMounts := guardMountpointsFromMountinfo(string(mountinfo))
+	summary.bindGuards = totalGuardMounts
 	if totalGuardMounts == 0 {
 		if pending > 0 {
 			logger.Info("Guard cleanup: %d immutable guard target(s) still pending (mounted or uncleared); keeping %s", pending, mountGuardBaseDir)
-			return nil
+			return report(), nil
 		}
 		if dryRun {
 			logger.Info("DRY RUN: would remove %s", mountGuardBaseDir)
-			return nil
+			return report(), nil
 		}
 		if err := cleanupRemoveAll(mountGuardBaseDir); err != nil {
-			return fmt.Errorf("remove guards dir: %w", err)
+			return report(), fmt.Errorf("remove guards dir: %w", err)
 		}
 		summary.dirRemoved = true
 		logger.Info("Removed guard directory %s", mountGuardBaseDir)
-		return nil
+		return report(), nil
 	}
 
 	var targets []string
@@ -186,7 +235,7 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 		} else {
 			logger.Info("DRY RUN: would remove %s", mountGuardBaseDir)
 		}
-		return nil
+		return report(), nil
 	}
 
 	// If any guard mounts remain (for example hidden under a real mount), or any
@@ -199,21 +248,21 @@ func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 		// -1 records "unknown" so the summary never falsely advertises "0 remaining".
 		summary.guardsRemaining = -1
 		logger.Warning("Guard cleanup: could not re-read /proc/self/mountinfo to confirm guard mounts are gone (%v); keeping %s to be safe (re-run --cleanup-guards once the storage is unmounted)", rerr, mountGuardBaseDir)
-		return nil
+		return report(), nil
 	}
 	_, _, remaining := guardMountpointsFromMountinfo(string(after))
 	summary.guardsRemaining = remaining
 	if remaining > 0 || pending > 0 {
 		logger.Warning("Guard cleanup: %d guard mount(s) and %d immutable target(s) still present; not removing %s", remaining, pending, mountGuardBaseDir)
-		return nil
+		return report(), nil
 	}
 
 	if err := cleanupRemoveAll(mountGuardBaseDir); err != nil {
-		return fmt.Errorf("remove guards dir: %w", err)
+		return report(), fmt.Errorf("remove guards dir: %w", err)
 	}
 	summary.dirRemoved = true
 	logger.Info("Removed guard directory %s (unmounted=%d)", mountGuardBaseDir, unmounted)
-	return nil
+	return report(), nil
 }
 
 func guardMountpointsFromMountinfo(mountinfo string) (visible, hidden []string, guardMounts int) {

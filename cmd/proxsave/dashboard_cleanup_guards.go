@@ -1,9 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -13,114 +14,140 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
-// cleanupGuardsRun is the seam for orchestrator.CleanupMountGuards so the dashboard
-// flow can be tested without touching real mounts / requiring root.
-var cleanupGuardsRun = orchestrator.CleanupMountGuards
+// cleanupGuardsReport is the seam for orchestrator.CleanupMountGuardsReport so the
+// dashboard flow can be tested without touching real mounts / requiring root.
+var cleanupGuardsReport = orchestrator.CleanupMountGuardsReport
 
 // runDashboardCleanupGuards runs the guard cleanup from the dashboard as a RESULT-ONLY,
 // TWO-STEP flow (no streaming), matching the check/daemon result screens:
-//   - step 1: a DRY RUN whose styled "Status:" screen previews what would happen and
-//     offers Apply / Cancel;
-//   - step 2 (only on Apply): the real run, whose "Status:" screen shows the outcome.
+//   - step 1 is a read-only CHECK. If there is nothing to unlock it shows a GREEN
+//     "Clean" screen whose action is "Check" (re-scan) — never Apply. If guards are
+//     present it shows a YELLOW "Found" screen whose action is "Apply".
+//   - step 2 (only on Apply) runs the cleanup for real and shows the outcome (DONE /
+//     PENDING / FAILED).
 //
-// It is non-blocking (a failure just renders a red "Status: FAILED" screen, e.g. the
-// root-required error) and loops back to the menu. Runs in the live dashboard session.
+// It is non-blocking (a failure — e.g. the root-required error — renders a red FAILED
+// screen) and loops back to the menu. Runs in the live dashboard session.
 func runDashboardCleanupGuards(ctx context.Context, session *shell.Session) {
-	// Step 1: DRY RUN preview (changes nothing).
-	level, keyword, explanation, err := cleanupGuardsOutcome(ctx, true)
-	if err != nil {
-		showDaemonResultScreen(ctx, session, "Cleanup guards", orchestrator.HealthcheckSetupLevelError, "FAILED", err.Error())
-		return
-	}
-	if !showCleanupGuardsConfirm(ctx, session, level, keyword, explanation) {
-		return // Cancel / esc -> back to the menu, nothing applied
-	}
+	for {
+		report, err := cleanupGuardsReport(ctx, discardLogger(), true) // read-only check
+		if err != nil {
+			showDaemonResultScreen(ctx, session, "Cleanup guards", orchestrator.HealthcheckSetupLevelError, "FAILED", err.Error())
+			return
+		}
 
-	// Step 2: apply for real.
-	level, keyword, explanation, err = cleanupGuardsOutcome(ctx, false)
-	if err != nil {
-		showDaemonResultScreen(ctx, session, "Cleanup guards", orchestrator.HealthcheckSetupLevelError, "FAILED", err.Error())
+		if !report.HasGuards() {
+			// Clean: nothing to unlock. Green "Clean", no Apply — only re-Check / Back.
+			if recheck := showCleanupGuardsChoice(ctx, session,
+				orchestrator.HealthcheckSetupLevelOk, "Clean", describeGuardCheck(report),
+				"Check", "re-scan for mount guards",
+				"Back", "return to the dashboard menu"); recheck {
+				continue
+			}
+			return
+		}
+
+		// Found: guards are locking the storage. Yellow "Found", action is Apply.
+		if apply := showCleanupGuardsChoice(ctx, session,
+			orchestrator.HealthcheckSetupLevelWarn, "Found", describeGuardCheck(report),
+			"Apply", "remove the guards now to unlock the storage",
+			"Cancel", "return to the dashboard without changes"); !apply {
+			return
+		}
+
+		applied, err := cleanupGuardsReport(ctx, discardLogger(), false) // run for real
+		if err != nil {
+			showDaemonResultScreen(ctx, session, "Cleanup guards", orchestrator.HealthcheckSetupLevelError, "FAILED", err.Error())
+			return
+		}
+		level, keyword := classifyGuardApply(applied)
+		showDaemonResultScreen(ctx, session, "Cleanup guards", level, keyword, describeGuardApply(applied))
 		return
 	}
-	showDaemonResultScreen(ctx, session, "Cleanup guards", level, keyword, explanation)
 }
 
-// cleanupGuardsOutcome runs the guard cleanup (dry-run or real) capturing its log
-// output, and derives the (level, keyword, explanation) for the styled "Status:"
-// screen. Any failure (including the root-required error) is returned as err so the
-// caller shows a red FAILED screen; the dry-run always previews (Warn), and the real
-// run classifies the result (Ok/DONE, Ok/NOTHING TO CLEAN, or Warn/PENDING).
-func cleanupGuardsOutcome(ctx context.Context, dryRun bool) (orchestrator.HealthcheckSetupLevel, string, string, error) {
-	var buf bytes.Buffer
+// discardLogger is a quiet logger for the in-session cleanup: the outcome is taken from
+// the structured report and shown on screen, so the cleanup's own log lines are dropped
+// (writing them to stdout would corrupt the live TUI).
+func discardLogger() *logging.Logger {
 	lg := logging.New(types.LogLevelInfo, false)
-	lg.SetOutput(&buf)
-	if err := cleanupGuardsRun(ctx, lg, dryRun); err != nil {
-		return orchestrator.HealthcheckSetupLevelError, "FAILED", "", err
-	}
-
-	explanation := cleanGuardLog(buf.String())
-	if dryRun {
-		return orchestrator.HealthcheckSetupLevelWarn, "DRY RUN", explanation, nil
-	}
-	low := strings.ToLower(explanation)
-	switch {
-	case strings.Contains(low, "still present") || strings.Contains(low, "still pending"):
-		return orchestrator.HealthcheckSetupLevelWarn, "PENDING", explanation, nil
-	case strings.Contains(low, "nothing to clean"):
-		return orchestrator.HealthcheckSetupLevelOk, "NOTHING TO CLEAN", explanation, nil
-	default:
-		return orchestrator.HealthcheckSetupLevelOk, "DONE", explanation, nil
-	}
+	lg.SetOutput(io.Discard)
+	return lg
 }
 
-// cleanupGuardsConfirmAction is the choice on the dry-run preview screen.
-type cleanupGuardsConfirmAction int
+// classifyGuardApply maps a real cleanup report to the styled result (level, keyword):
+// fully removed -> Ok/DONE; anything left behind (or unconfirmed) -> Warn/PENDING.
+func classifyGuardApply(r orchestrator.GuardCleanupReport) (orchestrator.HealthcheckSetupLevel, string) {
+	if guardApplyClean(r) {
+		return orchestrator.HealthcheckSetupLevelOk, "DONE"
+	}
+	return orchestrator.HealthcheckSetupLevelWarn, "PENDING"
+}
+
+// guardApplyClean reports whether a real run left nothing behind. GuardsRemaining == -1
+// is the fail-closed "unknown" sentinel, which counts as not-clean.
+func guardApplyClean(r orchestrator.GuardCleanupReport) bool {
+	return r.GuardsRemaining == 0 && r.ImmutablePending == 0
+}
+
+// describeGuardCheck renders the CHECK explanation (no "dry run" wording): either that
+// there is nothing to unlock, or what was found locking the storage.
+func describeGuardCheck(r orchestrator.GuardCleanupReport) string {
+	if !r.HasGuards() {
+		return "No restore mount guards are present — nothing to unlock."
+	}
+	var parts []string
+	if r.BindGuards > 0 {
+		parts = append(parts, countLabel(r.BindGuards, "bind mount guard"))
+	}
+	if r.ImmutableGuards > 0 {
+		parts = append(parts, countLabel(r.ImmutableGuards, "immutable flag"))
+	}
+	return fmt.Sprintf("Found %s locking the storage. Apply removes them to unlock it.", strings.Join(parts, " and "))
+}
+
+// describeGuardApply renders the real-run outcome explanation.
+func describeGuardApply(r orchestrator.GuardCleanupReport) string {
+	if guardApplyClean(r) {
+		return "Removed the restore mount guards — the storage is unlocked."
+	}
+	return "Some guards are still in place (hidden under a live mount). Unmount the datastore and run Cleanup guards again once it is offline."
+}
+
+// countLabel pluralizes "N thing" / "N things".
+func countLabel(n int, singular string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, singular)
+	}
+	return fmt.Sprintf("%d %ss", n, singular)
+}
+
+// cleanupGuardsChoice is the primary/secondary choice on a Cleanup guards screen.
+type cleanupGuardsChoice int
 
 const (
-	cleanupGuardsApply cleanupGuardsConfirmAction = iota
-	cleanupGuardsCancel
+	cleanupGuardsPrimary cleanupGuardsChoice = iota
+	cleanupGuardsSecondary
 )
 
-// showCleanupGuardsConfirm shows the dry-run outcome as a styled "Status:" screen (the
-// SAME renderer the daemon/check results use) and asks whether to apply it for real.
-// Returns true only on Apply; esc or Cancel returns false (nothing changes).
-func showCleanupGuardsConfirm(ctx context.Context, session *shell.Session, level orchestrator.HealthcheckSetupLevel, keyword, explanation string) bool {
-	errCleanupEsc := errors.New("cleanup guards: esc")
+// showCleanupGuardsChoice shows a styled "Status:" screen (the SAME renderer the
+// daemon/check results use) with a primary and a secondary action, and reports whether
+// the primary was chosen. esc / secondary return false. Used for both the Clean screen
+// (primary = Check / re-scan) and the Found screen (primary = Apply).
+func showCleanupGuardsChoice(ctx context.Context, session *shell.Session, level orchestrator.HealthcheckSetupLevel, keyword, explanation, primaryLabel, primaryDesc, secondaryLabel, secondaryDesc string) bool {
+	errEsc := errors.New("cleanup guards: esc")
 	prompt := buildDaemonResultPrompt(level, keyword, explanation)
-	items := []components.SelectorItem[cleanupGuardsConfirmAction]{
-		{Label: "Apply", Description: "run the cleanup for real", Value: cleanupGuardsApply},
-		{Label: "Cancel", Description: "return to the dashboard without changes", Value: cleanupGuardsCancel},
+	items := []components.SelectorItem[cleanupGuardsChoice]{
+		{Label: primaryLabel, Description: primaryDesc, Value: cleanupGuardsPrimary},
+		{Label: secondaryLabel, Description: secondaryDesc, Value: cleanupGuardsSecondary},
 	}
 	action, err := shell.Ask(ctx, session, components.NewSelector(
 		"Cleanup guards", items,
-		components.WithSelectorPromptStyled[cleanupGuardsConfirmAction](prompt),
-		components.WithSelectorBack[cleanupGuardsConfirmAction](errCleanupEsc),
+		components.WithSelectorPromptStyled[cleanupGuardsChoice](prompt),
+		components.WithSelectorBack[cleanupGuardsChoice](errEsc),
 	))
 	if err != nil {
 		return false
 	}
-	return action == cleanupGuardsApply
-}
-
-// cleanGuardLog strips the "[ts] LEVEL " prefix from each captured log line so the
-// "Status:" explanation shows the plain messages, joining the non-empty ones.
-func cleanGuardLog(raw string) string {
-	lines := strings.Split(strings.TrimSpace(raw), "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		// Drop "[ts] " then the level token: "[2026-..] INFO     msg" -> "msg".
-		if idx := strings.Index(line, "] "); idx >= 0 {
-			rest := strings.TrimSpace(line[idx+2:])
-			if sp := strings.IndexByte(rest, ' '); sp >= 0 {
-				rest = strings.TrimSpace(rest[sp+1:])
-			}
-			line = rest
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
+	return action == cleanupGuardsPrimary
 }
