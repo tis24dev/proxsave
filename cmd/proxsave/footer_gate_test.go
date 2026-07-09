@@ -23,24 +23,19 @@ func setDashboardGraphicalForTest(t *testing.T, v bool) {
 	})
 }
 
-// TestShouldPrintFinalSummary pins the footer gate: the CLI final-summary footer
-// prints only when the run wants a summary AND it was not launched from the
-// dashboard (graphical). A graphical run shows its outcome on-screen, so the
-// footer is suppressed.
-func TestShouldPrintFinalSummary(t *testing.T) {
+// TestFooterSuppressed pins the SHARED footer gate: an end-of-run CLI footer is
+// suppressed for a graphical (dashboard) run, which shows its outcome on-screen,
+// and prints for a plain CLI/cron run. This single predicate now gates
+// printFinalSummary, printInstallFooter and printUpgradeFooter alike.
+func TestFooterSuppressed(t *testing.T) {
 	setDashboardGraphicalForTest(t, false)
-	if !shouldPrintFinalSummary(&appRunState{showSummary: true}) {
-		t.Fatal("a CLI run (not graphical) with showSummary must print the footer")
+	if footerSuppressed() {
+		t.Fatal("a CLI run (not graphical) must NOT suppress the footer")
 	}
 
 	setDashboardGraphicalForTest(t, true)
-	if shouldPrintFinalSummary(&appRunState{showSummary: true}) {
-		t.Fatal("a graphical (dashboard) run must NOT print the footer")
-	}
-
-	setDashboardGraphicalForTest(t, false)
-	if shouldPrintFinalSummary(&appRunState{showSummary: false}) {
-		t.Fatal("a run that does not want a summary must not print the footer")
+	if !footerSuppressed() {
+		t.Fatal("a graphical (dashboard) run must suppress the footer")
 	}
 }
 

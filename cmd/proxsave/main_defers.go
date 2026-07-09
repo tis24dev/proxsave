@@ -22,7 +22,9 @@ func runDeferredActions(rt *appRuntime, state *appRunState) []runDeferredAction 
 	// preserving that dependency.
 	return []runDeferredAction{
 		func() {
-			if shouldPrintFinalSummary(state) {
+			// printFinalSummary self-gates on footerSuppressed() (graphical runs),
+			// so this only asks whether the run wants a summary at all.
+			if state.showSummary {
 				printFinalSummary(state.finalExitCode)
 			}
 		},

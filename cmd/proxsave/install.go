@@ -369,6 +369,9 @@ func installBanner(installErr error) (title string, level installBannerLevel) {
 }
 
 func printInstallFooter(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
+	if footerSuppressed() {
+		return
+	}
 	colorReset := "\033[0m"
 
 	title, level := installBanner(installErr)

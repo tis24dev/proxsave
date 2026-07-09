@@ -147,15 +147,23 @@ func printNetworkRollbackLiveCountdown(deadline time.Time) {
 	}
 }
 
-// shouldPrintFinalSummary decides whether the deferred CLI final-summary footer
-// prints: only when the run wants a summary AND it was NOT launched from the
-// dashboard. A graphical (dashboard) run already shows its outcome on-screen, so
-// the footer - with its CLI usage-commands/sponsors block - is redundant there.
-func shouldPrintFinalSummary(state *appRunState) bool {
-	return state.showSummary && !dashboardRunWasGraphical()
+// footerSuppressed reports whether an end-of-run CLI footer must be skipped. A
+// graphical run (launched from the dashboard, which adopts the session) already
+// shows its outcome on-screen, so any plain-scrollback CLI footer, with its
+// usage-commands and sponsors block, is redundant and would leak after the
+// alternate screen closes. This is the SINGLE gate shared by every footer
+// (printFinalSummary, printInstallFooter, printUpgradeFooter): each returns early
+// on it, so a graphical run never prints a footer and none can be missed.
+// dashboardRunWasGraphical() latches true only once a flow adopts the dashboard
+// session; a plain CLI/cron run never adopts, so the footer prints there as before.
+func footerSuppressed() bool {
+	return dashboardRunWasGraphical()
 }
 
 func printFinalSummary(finalExitCode int) {
+	if footerSuppressed() {
+		return
+	}
 	fmt.Println()
 
 	logger := logging.GetDefaultLogger()

@@ -746,6 +746,9 @@ func closeIntoErr(errp *error, closer io.Closer, operation string) {
 }
 
 func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error, daemonRestart *RestartVerifyResult) {
+	if footerSuppressed() {
+		return
+	}
 	colorReset := "\033[0m"
 
 	title := "Upgrade completed"
