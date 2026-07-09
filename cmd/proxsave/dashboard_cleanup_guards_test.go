@@ -77,11 +77,11 @@ func stubGuardReport(t *testing.T, check, apply orchestrator.GuardCleanupReport)
 	return calls
 }
 
-// runCleanupGuardsDriver navigates to Cleanup guards (12 downs) and returns the driver so
+// runCleanupGuardsDriver navigates to Cleanup guards (11 downs) and returns the driver so
 // the test can drive the resulting screens, plus a channel with the dashboard result.
 func runCleanupGuardsDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan bool) {
 	t.Helper()
-	installDashboardGates(t, true, true) // cron state -> Cleanup guards is the 13th selectable
+	installDashboardGates(t, true, true) // cron state -> Cleanup guards is the 12th selectable
 	driver := installDashboardSessionSeam(t)
 	resCh := make(chan bool, 1)
 	go func() {
@@ -89,7 +89,7 @@ func runCleanupGuardsDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down down down down down enter") // Cleanup guards (12 downs)
+	driver.keys("down down down down down down down down down down down enter") // Cleanup guards (11 downs)
 	return driver, resCh
 }
 
