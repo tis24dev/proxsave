@@ -82,8 +82,11 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 		UseColor: useColor,
 	})
 	if session == nil {
-		// The handoff vanished (CLI/cron/daemon): run the backup plain.
-		return backupStreamSteps(opts)
+		// The handoff vanished (CLI/cron/daemon): run the backup plain, then hand
+		// the outcome to the daemon (plain console, like the CLI path).
+		res := backupStreamSteps(opts)
+		maybeHandoffManualBackup(opts, res)
+		return res
 	}
 
 	var res backupModeResult
@@ -113,6 +116,12 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 				emitSupportEmail(taskCtx, opts.cfg, opts.logger, opts.envInfo.Type, res.supportStats, opts.supportMeta)
 				res.supportEmailSent = true
 			}
+
+			// Hand the outcome to the resident daemon HERE, inside the capture, so
+			// its debug trace streams into the viewport instead of printing to the
+			// plain scrollback after the session closes (visible in support mode,
+			// where the run forces DEBUG logging).
+			maybeHandoffManualBackup(opts, res)
 			return buildBackupOutcomePrompt(res), nil
 		})
 	if streamErr != nil {

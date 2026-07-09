@@ -60,13 +60,16 @@ func runBackupMode(opts backupModeOptions) backupModeResult {
 	// graphical session open for this backup: adopt it and stream the run
 	// in-graphics (runBackupStreamed). Every non-dashboard path (CLI, cron,
 	// daemon-supervised child) has no stashed session, so it runs the plain
-	// steps unchanged. The healthcheck handoff runs in BOTH branches.
-	var res backupModeResult
+	// steps unchanged.
+	//
+	// The manual-backup daemon handoff runs for both, but the streamed path runs
+	// it ITSELF, inside the viewport capture (runBackupStreamed), so its debug
+	// trace streams into the panel instead of printing to the plain scrollback
+	// after the session closes. Only the plain path hands off here.
 	if dashboardHandoffPending() {
-		res = runBackupStreamed(opts)
-	} else {
-		res = runBackupModeSteps(opts)
+		return runBackupStreamed(opts)
 	}
+	res := runBackupModeSteps(opts)
 	maybeHandoffManualBackup(opts, res)
 	return res
 }
