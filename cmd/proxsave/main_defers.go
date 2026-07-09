@@ -22,7 +22,7 @@ func runDeferredActions(rt *appRuntime, state *appRunState) []runDeferredAction 
 	// preserving that dependency.
 	return []runDeferredAction{
 		func() {
-			if state.showSummary {
+			if shouldPrintFinalSummary(state) {
 				printFinalSummary(state.finalExitCode)
 			}
 		},
