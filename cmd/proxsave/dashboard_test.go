@@ -162,10 +162,10 @@ func TestDashboardActions(t *testing.T) {
 				t.Fatal("new-install flag not set")
 			}
 		}},
-		// Exit is the last selectable (14th): 13 downs, skipping every separator.
-		// (The Daemon group and Cleanup guards run in-session and loop; they are
-		// covered by the dedicated in-session tests below, not this fall-through harness.)
-		{"exit row", "down down down down down down down down down down down down down enter", true, nil},
+		// Exit is the last selectable (15th): 14 downs, skipping every separator.
+		// (The Daemon group, Cleanup guards and Update config run in-session and loop;
+		// they are covered by dedicated in-session tests, not this fall-through harness.)
+		{"exit row", "down down down down down down down down down down down down down down enter", true, nil},
 		{"esc exits", "esc", true, nil},
 		{"ctrl+c exits", "ctrl+c", true, nil},
 	}
@@ -347,11 +347,11 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down down down down enter") // Daemon status (11 downs)
-	driver.waitScreen("Daemon status")                                          // the styled selector screen
-	driver.keys("esc")                                                          // Back to the menu
-	driver.waitScreen("Dashboard")                                              // back at the menu
-	driver.keys("esc")                                                          // exit
+	driver.keys("down down down down down down down down down down down down enter") // Daemon status (12 downs)
+	driver.waitScreen("Daemon status")                                               // the styled selector screen
+	driver.keys("esc")                                                               // Back to the menu
+	driver.waitScreen("Dashboard")                                                   // back at the menu
+	driver.keys("esc")                                                               // exit
 	select {
 	case handled := <-resCh:
 		if !handled {
@@ -383,11 +383,11 @@ func TestDashboardDaemonInstallInSession(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down down down enter") // Install daemon (10 downs)
-	driver.waitScreen("Daemon installed")                                  // success notice (after the RunTask)
-	driver.keys("enter")                                                   // dismiss
-	driver.waitScreen("Dashboard")                                         // looped back
-	driver.keys("esc")                                                     // exit
+	driver.keys("down down down down down down down down down down down enter") // Install daemon (11 downs)
+	driver.waitScreen("Daemon installed")                                       // success notice (after the RunTask)
+	driver.keys("enter")                                                        // dismiss
+	driver.waitScreen("Dashboard")                                              // looped back
+	driver.keys("esc")                                                          // exit
 	select {
 	case handled := <-resCh:
 		if !handled {
@@ -431,10 +431,10 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 	}()
 	driver.waitScreen("Dashboard")
 	// Active state: Daemon group = "Disable daemon" (row 11, 10 downs) + "Restart" + "Daemon status".
-	driver.keys("down down down down down down down down down down enter") // Disable daemon
-	driver.waitScreen("Daemon disabled")                                   // success notice
-	driver.keys("enter")                                                   // dismiss
-	driver.waitScreen("Dashboard")                                         // looped back
+	driver.keys("down down down down down down down down down down down enter") // Disable daemon
+	driver.waitScreen("Daemon disabled")                                        // success notice
+	driver.keys("enter")                                                        // dismiss
+	driver.waitScreen("Dashboard")                                              // looped back
 	driver.keys("esc")
 	select {
 	case handled := <-resCh:
@@ -497,11 +497,11 @@ func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
 	}()
 
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down enter")      // Check Telegram (8th selectable)
-	driver.waitScreen("Dashboard")                               // looped back after the screen
-	driver.keys("down down down down down down down down enter") // Check healthchecks (9th)
+	driver.keys("down down down down down down down down enter")      // Check Telegram (9th selectable)
+	driver.waitScreen("Dashboard")                                    // looped back after the screen
+	driver.keys("down down down down down down down down down enter") // Check healthchecks (10th)
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down down down enter") // Post-install check (10th)
+	driver.keys("down down down down down down down down down down enter") // Post-install check (11th)
 	driver.waitScreen("Dashboard")
 	driver.keys("esc") // exit
 
@@ -538,12 +538,12 @@ func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 	}()
 
 	driver.waitScreen("Dashboard")
-	driver.keys("down down down down down down down enter") // Check Telegram (not configured)
-	driver.waitScreen("Telegram")                           // the styled "Status:" result screen
-	driver.waitOutput("NOT CONFIGURED")                     // Status: ⚠ NOT CONFIGURED
-	driver.keys("enter")                                    // dismiss (Back)
-	driver.waitScreen("Dashboard")                          // back at the menu
-	driver.keys("esc")                                      // exit
+	driver.keys("down down down down down down down down enter") // Check Telegram (not configured)
+	driver.waitScreen("Telegram")                                // the styled "Status:" result screen
+	driver.waitOutput("NOT CONFIGURED")                          // Status: ⚠ NOT CONFIGURED
+	driver.keys("enter")                                         // dismiss (Back)
+	driver.waitScreen("Dashboard")                               // back at the menu
+	driver.keys("esc")                                           // exit
 
 	select {
 	case handled := <-resCh:

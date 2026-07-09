@@ -458,8 +458,8 @@ func TestDashboardDaemonRestartButton(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	// Active layout: Disable daemon (10 downs) -> Restart daemon (11 downs).
-	driver.keys("down down down down down down down down down down down enter")
+	// Active layout: Disable daemon (11 downs) -> Restart daemon (12 downs).
+	driver.keys("down down down down down down down down down down down down enter")
 	driver.waitScreen("Daemon restart") // styled result screen (selector title)
 	driver.keys("enter")                // Back -> menu
 	driver.waitScreen("Dashboard")
