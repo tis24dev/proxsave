@@ -62,15 +62,76 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 	statusLevel := orchestrator.HealthcheckSetupLevelNeutral // pre-check: yellow, no symbol
 	magicLink := ""
 	var sensors []health.SensorRow // per-sensor rows, populated after each Check
+	// In the dashboard (backToMenu) the check runs automatically on entry, like Daemon
+	// status; the installer keeps it manual (the user presses Check).
+	pendingCheck := backToMenu
 	errHCEsc := errors.New("healthcheck setup: esc")
 
 	for {
+		if pendingCheck {
+			pendingCheck = false
+			if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
+				var res orchestrator.HealthcheckCheckResult
+				cancelled := false
+				runErr := components.RunTask(ctx, session, "Checking monitoring", "Contacting the monitor...", func(taskCtx context.Context, report func(string)) error {
+					if selfMode {
+						res = healthcheckSelfCheck(taskCtx, result.HealthcheckAliveURL)
+					} else {
+						res = healthcheckCheck(taskCtx, result.ServerAPIHost, result.ServerID, baseDir, result.HealthcheckHeartbeatInterval)
+					}
+					if taskCtx.Err() != nil {
+						cancelled = true
+					}
+					return nil
+				})
+				if runErr != nil {
+					return result, runErr
+				}
+				if !cancelled {
+					result.CheckAttempts++
+					if res.HaveStatus {
+						sensors = health.SensorRows(res.RawStatus, result.HealthcheckHeartbeatInterval, time.Now())
+					} else {
+						sensors = nil
+					}
+					var st orchestrator.HealthcheckSetupState
+					if selfMode {
+						st = orchestrator.ClassifyHealthcheckSelfResult(res)
+					} else {
+						st = orchestrator.ClassifyHealthcheckSetupResult(res)
+					}
+					result.LastFatal = st.Fatal
+					result.LastMessage = st.Message
+					if link := strings.TrimSpace(st.LoginURL); link != "" {
+						magicLink = link
+						result.MagicLinkSeen = true
+					}
+					if st.Verified {
+						result.Verified = true
+					}
+					statusKeyword = st.Keyword
+					statusExplanation = st.Message
+					statusLevel = st.Level
+					if !st.Verified && !st.Fatal {
+						hint := orchestrator.HealthcheckSetupRetryHint
+						if result.CheckAttempts >= orchestrator.HealthcheckSetupMaxVerificationAttempts {
+							hint = orchestrator.HealthcheckSetupMaxAttemptsHint
+						}
+						statusExplanation = st.Message + " " + hint
+					}
+				}
+			}
+		}
 		prompt := buildHealthcheckPrompt(selfMode, magicLink, statusKeyword, statusExplanation, statusLevel, sensors)
 
 		items := make([]components.SelectorItem[healthcheckAction], 0, 3)
 		if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
+			checkLabel, checkDesc := "Check", "verify the monitoring connection now"
+			if backToMenu {
+				checkLabel, checkDesc = "Re-check", "re-run the monitoring check"
+			}
 			items = append(items, components.SelectorItem[healthcheckAction]{
-				Label: "Check", Description: "verify the monitoring connection now", Value: healthcheckActionCheck,
+				Label: checkLabel, Description: checkDesc, Value: healthcheckActionCheck,
 			})
 		}
 		leaveLabel, leaveDesc, leaveVal := "Skip", "finish and verify later", healthcheckActionSkip
@@ -105,61 +166,8 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 			result.SkippedVerification = true
 			return result, nil
 		case healthcheckActionCheck:
-			var res orchestrator.HealthcheckCheckResult
-			cancelled := false
-			runErr := components.RunTask(ctx, session, "Checking monitoring", "Contacting the monitor...", func(taskCtx context.Context, report func(string)) error {
-				if selfMode {
-					res = healthcheckSelfCheck(taskCtx, result.HealthcheckAliveURL)
-				} else {
-					res = healthcheckCheck(taskCtx, result.ServerAPIHost, result.ServerID, baseDir, result.HealthcheckHeartbeatInterval)
-				}
-				if taskCtx.Err() != nil {
-					cancelled = true
-				}
-				return nil
-			})
-			if runErr != nil {
-				return result, runErr
-			}
-			if cancelled {
-				continue
-			}
-
-			result.CheckAttempts++
-			if res.HaveStatus {
-				sensors = health.SensorRows(res.RawStatus, result.HealthcheckHeartbeatInterval, time.Now())
-			} else {
-				sensors = nil
-			}
-			var st orchestrator.HealthcheckSetupState
-			if selfMode {
-				st = orchestrator.ClassifyHealthcheckSelfResult(res)
-			} else {
-				st = orchestrator.ClassifyHealthcheckSetupResult(res)
-			}
-			result.LastFatal = st.Fatal
-			result.LastMessage = st.Message
-			if link := strings.TrimSpace(st.LoginURL); link != "" {
-				magicLink = link
-				result.MagicLinkSeen = true
-			}
-			if st.Verified { // latch: connection reached the monitor at least once
-				result.Verified = true
-			}
-
-			// The headline is the REAL state (WORKING / NOT RUNNING / ...); a retry hint is
-			// appended only when the connection itself could not be confirmed and another
-			// check might still help (not when it is a hard blocker or already reached).
-			statusKeyword = st.Keyword
-			statusExplanation = st.Message
-			statusLevel = st.Level
-			if !st.Verified && !st.Fatal {
-				hint := orchestrator.HealthcheckSetupRetryHint
-				if result.CheckAttempts >= orchestrator.HealthcheckSetupMaxVerificationAttempts {
-					hint = orchestrator.HealthcheckSetupMaxAttemptsHint
-				}
-				statusExplanation = st.Message + " " + hint
-			}
+			pendingCheck = true // (re-)run the check at the top of the loop
+			continue
 		}
 	}
 }
