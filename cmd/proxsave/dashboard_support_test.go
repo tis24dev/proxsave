@@ -65,11 +65,13 @@ func TestSupportFormIsOneScreen(t *testing.T) {
 			}
 		}
 	}
-	// One screen carries all of it: the consent note, both fields, and the Start confirm.
-	waitFor("MAC")                   // consent note
-	waitFor("GitHub nickname")       // field 1
-	waitFor("GitHub issue")          // field 2
-	waitFor("Start the support run") // the run confirm
+	// One screen (the shared FormGrid) carries both field labels and the Continue button.
+	waitFor("GitHub nickname") // field 1
+	waitFor("GitHub issue")    // field 2
+	waitFor("Continue")        // the submit button
+	// The consent note is the issue field's focused hint.
+	driver.keys("down")
+	waitFor("MAC")
 	cancel()
 	select {
 	case <-done:

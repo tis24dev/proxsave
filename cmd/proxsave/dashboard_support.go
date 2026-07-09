@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"charm.land/huh/v2"
-
 	"github.com/tis24dev/proxsave/internal/support"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -18,41 +16,44 @@ import (
 // full graphical form. Production points it at runDashboardSupportForm.
 var dashboardRunSupportForm = runDashboardSupportForm
 
-// runDashboardSupportForm shows a SINGLE screen (one huh form) with everything: a concise
-// consent note, the GitHub nickname, the GitHub issue (#1234), and a Start button. It
-// returns (meta, true) only when the user picks Start; esc / Cancel returns (_, false) so
-// the caller loops back to the menu. The maintainer email address is never shown.
+// runDashboardSupportForm shows the SAME single-screen grid form as the installer's
+// configuration screen (components.FormGrid): the GitHub nickname and the GitHub issue
+// (#1234), each with a focused-hint description — the issue hint carries the concise consent
+// note (the DEBUG log, which may contain sensitive data e.g. the MAC, is sent to the
+// maintainer; the issue must already be open) — plus the shared Continue / Cancel buttons.
+// It returns (meta, true) only on Continue; esc / Cancel returns (_, false) so the caller
+// loops back to the menu. The maintainer email address is never shown.
 func runDashboardSupportForm(ctx context.Context, session *shell.Session) (support.Meta, bool) {
 	errBack := errors.New("support: back")
-	var (
-		nickname string
-		issue    string
-		start    bool
-	)
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewNote().Description(
-				"Runs a backup in DEBUG and sends its log to the maintainer for support.\n"+
-					"The log may contain sensitive data (e.g. this server's MAC). The GitHub issue must already be open."),
-			huh.NewInput().Title("GitHub nickname").Value(&nickname).Validate(func(v string) error {
-				if strings.TrimSpace(v) == "" {
-					return fmt.Errorf("nickname cannot be empty")
-				}
-				return nil
-			}),
-			huh.NewInput().Title("GitHub issue").Placeholder("#1234").Value(&issue).Validate(validateSupportIssue),
-			huh.NewConfirm().Title("Start the support run in DEBUG?").Affirmative("Start").Negative("Cancel").Value(&start),
-		),
-	)
-	if _, err := shell.Ask(ctx, session, components.NewFormScreen("Support", form, components.WithFormBack(errBack))); err != nil {
-		return support.Meta{}, false // esc / back / abort
+
+	nickname := &components.FormField{
+		Label:       "GitHub nickname",
+		Description: "Your GitHub nickname for the support request.",
+		Kind:        components.FieldText,
+		Validate: func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return fmt.Errorf("nickname cannot be empty")
+			}
+			return nil
+		},
 	}
-	if !start {
-		return support.Meta{}, false // chose Cancel on the Start confirm
+	issue := &components.FormField{
+		Label:       "GitHub issue",
+		Description: "Issue #1234 (must already be open). The DEBUG log — which may contain sensitive data, e.g. this server's MAC — is sent to the maintainer.",
+		Kind:        components.FieldText,
+		Validate:    validateSupportIssue,
+	}
+
+	fields := []*components.FormField{nickname, issue}
+	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
+		"Support", fields,
+		components.WithFormGridBack(errBack),
+	)); err != nil {
+		return support.Meta{}, false // esc / Cancel / abort
 	}
 	return support.Meta{
-		GitHubUser: strings.TrimSpace(nickname),
-		IssueID:    strings.TrimSpace(issue),
+		GitHubUser: strings.TrimSpace(nickname.Text),
+		IssueID:    strings.TrimSpace(issue.Text),
 	}, true
 }
 
