@@ -40,6 +40,9 @@ const (
 	// Recovery: post-restore cleanup of leftover mount guards (--cleanup-guards),
 	// run in-session as a two-step dry-run -> confirm -> apply result flow.
 	ActionCleanupGuards
+	// Support: collect consent + GitHub metadata graphically, then run a backup in support
+	// mode (--support: DEBUG + email the log to the maintainer), streamed like a backup.
+	ActionSupport
 )
 
 // DaemonState tells Run which daemon command(s) to offer, context-aware.
@@ -97,6 +100,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 	// Recovery: post-restore cleanup of leftover mount guards.
 	items = append(items, components.SelectorItem[Action]{Label: "─── Recovery ───", Separator: true})
 	items = append(items, components.SelectorItem[Action]{Label: "Cleanup guards", Description: "remove leftover restore mount guards", Value: ActionCleanupGuards})
+	items = append(items, components.SelectorItem[Action]{Label: "Support", Description: "run a support backup and email the debug log to the maintainer", Value: ActionSupport})
 
 	// Detach the standalone Exit from the Daemon group above with its own divider.
 	items = append(items, components.SelectorItem[Action]{Label: "──────────────", Separator: true})

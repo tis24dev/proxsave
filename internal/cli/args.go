@@ -27,24 +27,28 @@ type Args struct {
 	Support           bool
 	SupportGitHubUser string
 	SupportIssueID    string
-	ShowVersion       bool
-	ShowHelp          bool
-	Upgrade           bool
-	UpgradeAutoYes    bool
-	ForceNewKey       bool
-	Decrypt           bool
-	Restore           bool
-	Install           bool
-	NewInstall        bool
-	UpgradeConfig     bool
-	UpgradeConfigDry  bool
-	UpgradeConfigJSON bool
-	CleanupGuards     bool
-	Backup            bool
-	Daemon            bool
-	DaemonSetup       bool
-	DaemonRemove      bool
-	DaemonStatus      bool
+	// SupportMetaProvided is set by the dashboard when it has already collected consent +
+	// GitHub metadata graphically, so handleSupportIntro skips the stdin RunIntro (which
+	// would otherwise prompt over the graphical run). Not a CLI flag.
+	SupportMetaProvided bool
+	ShowVersion         bool
+	ShowHelp            bool
+	Upgrade             bool
+	UpgradeAutoYes      bool
+	ForceNewKey         bool
+	Decrypt             bool
+	Restore             bool
+	Install             bool
+	NewInstall          bool
+	UpgradeConfig       bool
+	UpgradeConfigDry    bool
+	UpgradeConfigJSON   bool
+	CleanupGuards       bool
+	Backup              bool
+	Daemon              bool
+	DaemonSetup         bool
+	DaemonRemove        bool
+	DaemonStatus        bool
 }
 
 var osExit = os.Exit

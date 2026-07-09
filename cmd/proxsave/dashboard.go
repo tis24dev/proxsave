@@ -155,6 +155,20 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 			// --new-install: the flow (runNewInstall) confirms the destructive wipe
 			// itself (confirmNewInstallCharm) before resetting the base dir.
 			args.NewInstall = true
+		case menu.ActionSupport:
+			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=support")
+			// Collect consent + GitHub metadata graphically; on cancel, loop back to the
+			// menu. On confirm, arm support mode (DEBUG + email) with the meta already
+			// collected (SupportMetaProvided skips the stdin intro), then fall through to
+			// the SAME handoff as Backup so the run streams in-graphics identically.
+			meta, ok := dashboardRunSupportForm(ctx, session)
+			if !ok {
+				continue
+			}
+			args.Support = true
+			args.SupportGitHubUser = meta.GitHubUser
+			args.SupportIssueID = meta.IssueID
+			args.SupportMetaProvided = true
 		default:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=exit")
 			return types.ExitSuccess.Int(), true
