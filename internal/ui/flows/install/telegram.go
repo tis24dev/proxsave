@@ -64,17 +64,64 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 	statusLabel := ""
 	statusSeverity := orchestrator.TelegramSeverityNeutral
 	statusCode := 0
+	// In the dashboard (backToMenu) the check runs automatically on entry, like Daemon
+	// status; the installer keeps it manual (the user presses Check after sending the ID).
+	pendingCheck := backToMenu
 	// errTelegramEsc distinguishes Esc from a hard Ctrl+C abort.
 	errTelegramEsc := errors.New("telegram setup: esc")
 
 	for {
+		if pendingCheck {
+			pendingCheck = false
+			if !result.LastStatusFatal && (result.Verified || result.CheckAttempts < orchestrator.TelegramSetupMaxVerificationAttempts) {
+				var res notify.TelegramRegistrationResult
+				cancelled := false
+				runErr := components.RunTask(ctx, session, "Checking registration", "Contacting the relay...", func(taskCtx context.Context, report func(string)) error {
+					res = telegramCheckRegistration(taskCtx, result.ServerAPIHost, result.ServerID, baseDir, silentLogger)
+					if taskCtx.Err() != nil {
+						cancelled = true
+					}
+					return nil
+				})
+				if runErr != nil {
+					return result, runErr
+				}
+				if !cancelled {
+					result.CheckAttempts++
+					result.LastStatusCode = res.Status.Code
+					result.LastStatusMessage = res.Status.Message // RAW preserved (parity with tview)
+					if res.Status.Error != nil {
+						result.LastStatusError = res.Status.Error.Error()
+					} else {
+						result.LastStatusError = ""
+					}
+					st := orchestrator.ClassifyTelegramSetupResult(res)
+					result.LastStatusFatal = st.Fatal
+					if st.Verified { // latch: a later re-check can never un-verify
+						result.Verified = true
+						result.Partial = st.Partial
+					}
+					statusMsg = st.Message
+					statusLabel = st.Label
+					statusSeverity = st.Severity
+					statusCode = res.Status.Code
+					if !st.Verified && !st.Fatal && result.CheckAttempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
+						statusMsg = st.Message + "\n" + orchestrator.TelegramSetupMaxAttemptsHint
+					}
+				}
+			}
+		}
 		prompt := buildTelegramPrompt(result.ServerID, result.IdentityFile, result.IdentityPersisted,
 			statusMsg, statusLabel, statusSeverity, statusCode)
 
 		items := make([]components.SelectorItem[telegramAction], 0, 3)
 		if !result.LastStatusFatal && (result.Verified || result.CheckAttempts < orchestrator.TelegramSetupMaxVerificationAttempts) {
+			checkLabel, checkDesc := "Check", "verify the pairing now"
+			if backToMenu {
+				checkLabel, checkDesc = "Re-check", "re-run the pairing check"
+			}
 			items = append(items, components.SelectorItem[telegramAction]{
-				Label: "Check", Description: "verify the pairing now", Value: telegramActionCheck,
+				Label: checkLabel, Description: checkDesc, Value: telegramActionCheck,
 			})
 		}
 		leaveLabel, leaveDesc, leaveVal := "Skip", "complete pairing later", telegramActionSkip
@@ -110,50 +157,8 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 			result.SkippedVerification = true
 			return result, nil
 		case telegramActionCheck:
-			var res notify.TelegramRegistrationResult
-			cancelled := false
-			runErr := components.RunTask(ctx, session, "Checking registration", "Contacting the relay...", func(taskCtx context.Context, report func(string)) error {
-				res = telegramCheckRegistration(taskCtx, result.ServerAPIHost, result.ServerID, baseDir, silentLogger)
-				if taskCtx.Err() != nil {
-					cancelled = true
-				}
-				return nil
-			})
-			if runErr != nil {
-				// UI death or hard failure: surface it, the caller treats
-				// the whole step as non-blocking.
-				return result, runErr
-			}
-			if cancelled {
-				// User cancelled the check: back to the menu without
-				// consuming a verification attempt.
-				continue
-			}
-
-			result.CheckAttempts++
-			result.LastStatusCode = res.Status.Code
-			result.LastStatusMessage = res.Status.Message // RAW preserved (parity with tview)
-			if res.Status.Error != nil {
-				result.LastStatusError = res.Status.Error.Error()
-			} else {
-				result.LastStatusError = ""
-			}
-
-			st := orchestrator.ClassifyTelegramSetupResult(res)
-			result.LastStatusFatal = st.Fatal
-			if st.Verified { // latch: a later re-check can never un-verify
-				result.Verified = true
-				result.Partial = st.Partial
-			}
-
-			statusMsg = st.Message
-			statusLabel = st.Label
-			statusSeverity = st.Severity
-			statusCode = res.Status.Code
-			// A retryable state that has hit the attempt cap gets the cap hint appended.
-			if !st.Verified && !st.Fatal && result.CheckAttempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
-				statusMsg = st.Message + "\n" + orchestrator.TelegramSetupMaxAttemptsHint
-			}
+			pendingCheck = true // (re-)run the check at the top of the loop
+			continue
 		}
 	}
 }

@@ -26,9 +26,13 @@ func healthcheckEligibleBootstrap(configPath, baseDir string) (orchestrator.Heal
 // the menu) instead of the install-flow "Skip"/"Continue".
 func TestRunHealthcheckSetupDashboardBack(t *testing.T) {
 	d := newDriver(t)
-	orig := healthcheckBuildBootstrap
-	t.Cleanup(func() { healthcheckBuildBootstrap = orig })
+	orig, origCheck := healthcheckBuildBootstrap, healthcheckCheck
+	t.Cleanup(func() { healthcheckBuildBootstrap = orig; healthcheckCheck = origCheck })
 	healthcheckBuildBootstrap = healthcheckEligibleBootstrap
+	// Dashboard mode auto-checks on entry now; stub the check so it is deterministic (no network).
+	healthcheckCheck = func(context.Context, string, string, string, time.Duration) orchestrator.HealthcheckCheckResult {
+		return orchestrator.HealthcheckCheckResult{Reachable: true, DaemonRead: true, Daemon: health.Diagnosis{State: health.TxTransmitting, DaemonUp: true}}
+	}
 
 	resCh := make(chan struct{}, 1)
 	go func() {
@@ -54,9 +58,13 @@ func TestRunHealthcheckSetupDashboardBack(t *testing.T) {
 // session is what exits the dashboard loop).
 func TestRunHealthcheckSetupCtrlCInterrupts(t *testing.T) {
 	d := newDriver(t)
-	orig := healthcheckBuildBootstrap
-	t.Cleanup(func() { healthcheckBuildBootstrap = orig })
+	orig, origCheck := healthcheckBuildBootstrap, healthcheckCheck
+	t.Cleanup(func() { healthcheckBuildBootstrap = orig; healthcheckCheck = origCheck })
 	healthcheckBuildBootstrap = healthcheckEligibleBootstrap
+	// Dashboard mode auto-checks on entry now; stub the check (deterministic, no network).
+	healthcheckCheck = func(context.Context, string, string, string, time.Duration) orchestrator.HealthcheckCheckResult {
+		return orchestrator.HealthcheckCheckResult{Reachable: true, DaemonRead: true, Daemon: health.Diagnosis{State: health.TxTransmitting, DaemonUp: true}}
+	}
 
 	resCh := make(chan error, 1)
 	go func() {
