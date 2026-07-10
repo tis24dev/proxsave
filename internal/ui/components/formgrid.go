@@ -272,8 +272,7 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 		return g, g.Resolve(struct{}{}, g.backErr)
 	case "up", "shift+tab":
 		if onButtons {
-			g.cursor = len(g.fields) // stay, move() handles from a field
-			// jump back to the last active field
+			// Jump back to the last active field (stay on the buttons row if none).
 			g.cursor = len(g.fields)
 			for i := len(g.fields) - 1; i >= 0; i-- {
 				if g.fields[i].active() {
