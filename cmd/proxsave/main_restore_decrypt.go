@@ -52,6 +52,13 @@ func finishFailedRestore(rt *appRuntime, err error, includeDecryptAbort bool) mo
 		logging.Warning("Restore workflow aborted by user")
 		return restoreModeResult(rt, exitCodeInterrupted)
 	}
+	if errors.Is(err, orchestrator.ErrDecryptNoBackups) && dashboardIsBareInvocation() {
+		// Dashboard bare invocation: the user already saw the graceful "Status:"
+		// empty-state screen, so exit cleanly with NO log line, mirroring the
+		// decrypt entrypoint (runDecryptOnlyMode). A CLI --restore is not bare, so
+		// it falls through and keeps its ERROR line (CLI-execution lines untouched).
+		return restoreModeResult(rt, types.ExitSuccess.Int())
+	}
 	logging.Error("Restore workflow failed: %v", err)
 	return restoreModeResult(rt, types.ExitGenericError.Int())
 }

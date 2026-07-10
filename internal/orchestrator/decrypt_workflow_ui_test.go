@@ -284,7 +284,7 @@ func TestSelectBackupCandidateWithUIRejectsTypedNilUI(t *testing.T) {
 	var typedNil *fakeDecryptWorkflowUI
 	var ui BackupSelectionUI = typedNil
 
-	_, err := selectBackupCandidateWithUI(context.Background(), ui, cfg, logger, false)
+	_, err := selectBackupCandidateWithUI(context.Background(), ui, cfg, logger, "Decrypt", false)
 	if err == nil {
 		t.Fatal("expected error for typed-nil UI")
 	}
