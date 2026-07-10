@@ -255,3 +255,27 @@ func TestFormGridEscAndCancelButton(t *testing.T) {
 		t.Fatalf("Cancel button must resolve back sentinel, got %+v", cap2)
 	}
 }
+
+// A FieldSelect with no Options must never divide by zero in the left/right/space
+// or mouse-click handlers (the modulo guard mirrors renderControl). Shipped
+// callers pass non-empty Options, but FormGrid/FieldSelect are reusable.
+func TestFormGridSelectEmptyOptionsNoPanic(t *testing.T) {
+	sel := &FormField{Label: "Empty select", Kind: FieldSelect, Options: nil}
+	g := NewFormGrid("Configuration", []*FormField{sel})
+	bindGrid(g)
+	g.View(100, 20) // populate lastRowsTop for the click below
+
+	// Cursor starts on the (only, active) select; none of these may panic.
+	press(t, g, "right")
+	press(t, g, "left")
+	press(t, g, "space")
+	if sel.OptionIndex != 0 {
+		t.Fatalf("empty-options index must stay 0, got %d", sel.OptionIndex)
+	}
+
+	// A mouse click on the select row must not panic either.
+	g.Update(click(4, g.lastRowsTop)) //nolint:errcheck
+	if sel.OptionIndex != 0 {
+		t.Fatalf("empty-options index must stay 0 after click, got %d", sel.OptionIndex)
+	}
+}
