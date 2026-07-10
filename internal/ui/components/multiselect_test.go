@@ -2,6 +2,7 @@ package components
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -257,6 +258,124 @@ func TestMultiSelectDetailPaneNarrowFallback(t *testing.T) {
 	m := NewMultiSelect("T", detailItems(), WithMultiSelectDetailPane[string]("Details"))
 	if strings.Contains(ansi.Strip(m.View(30, 10)), "│") {
 		t.Fatal("narrow width must not render the two-pane separator")
+	}
+}
+
+// A click above the first list row (the title or the blank separator) must be a
+// no-op even when scrolled, and must not toggle a hidden off-screen item.
+func TestMultiSelectMouseClickAboveListIsNoop(t *testing.T) {
+	items := make([]MultiSelectItem[string], 30)
+	for i := range items {
+		items[i] = MultiSelectItem[string]{Label: fmt.Sprintf("item-%d", i), Value: fmt.Sprintf("item-%d", i)}
+	}
+	m := NewMultiSelect("Categories", items)
+	bindMulti(m)
+	for i := 0; i < 20; i++ { // scroll the window down
+		press(t, m, "down")
+	}
+	m.View(80, 12) // establish lastRowsTop and offset>0
+	if m.offset == 0 {
+		t.Fatalf("test setup: expected the list to be scrolled, offset=%d", m.offset)
+	}
+
+	before := make([]bool, len(m.items))
+	for i, it := range m.items {
+		before[i] = it.Selected
+	}
+
+	// Click the blank separator row just above the first list row.
+	m.Update(click(4, m.lastRowsTop-1)) //nolint:errcheck
+
+	for i, it := range m.items {
+		if it.Selected != before[i] {
+			t.Fatalf("click above the list toggled item %d (Selected %v -> %v)", i, before[i], it.Selected)
+		}
+	}
+}
+
+// lipgloss.Place top-pads the body, so a scrolled window leaves a blank line
+// below it. A click there must not toggle an off-screen item.
+func TestMultiSelectMouseClickBelowWindowIsNoop(t *testing.T) {
+	items := make([]MultiSelectItem[string], 30)
+	for i := range items {
+		items[i] = MultiSelectItem[string]{Label: fmt.Sprintf("item-%d", i), Value: fmt.Sprintf("item-%d", i)}
+	}
+	m := NewMultiSelect("Categories", items)
+	bindMulti(m)
+	for i := 0; i < 20; i++ {
+		press(t, m, "down")
+	}
+	m.View(80, 12)
+	if m.offset == 0 {
+		t.Fatalf("test setup: expected the list to be scrolled, offset=%d", m.offset)
+	}
+	if row := m.lastWindowEnd - m.lastRowsTop + m.offset; row >= m.totalRows() {
+		t.Fatalf("test setup: window reaches the end (row=%d); below-blank rejected anyway", row)
+	}
+
+	before := make([]bool, len(m.items))
+	for i, it := range m.items {
+		before[i] = it.Selected
+	}
+	m.Update(click(4, m.lastWindowEnd)) //nolint:errcheck
+	for i, it := range m.items {
+		if it.Selected != before[i] {
+			t.Fatalf("click below the window toggled item %d (Selected %v -> %v)", i, before[i], it.Selected)
+		}
+	}
+}
+
+// With action buttons, a below-window blank click could (pre-fix) land on the
+// off-screen confirm button and silently resolve the whole screen.
+func TestMultiSelectMouseClickBelowWindowDoesNotHitOffscreenConfirm(t *testing.T) {
+	items := make([]MultiSelectItem[string], 8)
+	for i := range items {
+		items[i] = MultiSelectItem[string]{Label: fmt.Sprintf("item-%d", i), Value: fmt.Sprintf("item-%d", i)}
+	}
+	m := NewMultiSelect("Categories", items, WithMultiSelectActions[string]("Select all", "Apply"))
+	cap := bindMulti(m)
+	for i := 0; i < 8; i++ { // land on the select-all button, forcing offset>0
+		press(t, m, "down")
+	}
+	m.View(80, 8)
+	if m.offset == 0 {
+		t.Fatalf("test setup: expected a scrolled list, offset=%d", m.offset)
+	}
+	// Precondition: the below-window blank maps exactly to the off-screen confirm row.
+	if row := m.lastWindowEnd - m.lastRowsTop + m.offset; row != m.confirmRow() {
+		t.Fatalf("test setup: below-blank maps to row %d, want confirmRow %d", row, m.confirmRow())
+	}
+	m.Update(click(4, m.lastWindowEnd)) //nolint:errcheck
+	if cap.resolved {
+		t.Fatalf("click on the blank below the window must not trigger the off-screen confirm button")
+	}
+}
+
+// The band guard must not over-reject: a click on the FIRST visible row while
+// scrolled toggles that row (offset), not row 0 and not a no-op.
+func TestMultiSelectMouseClickFirstVisibleRowToggles(t *testing.T) {
+	items := make([]MultiSelectItem[string], 30)
+	for i := range items {
+		items[i] = MultiSelectItem[string]{Label: fmt.Sprintf("item-%d", i), Value: fmt.Sprintf("item-%d", i)}
+	}
+	m := NewMultiSelect("Categories", items)
+	bindMulti(m)
+	for i := 0; i < 20; i++ {
+		press(t, m, "down")
+	}
+	m.View(80, 12)
+	if m.offset == 0 {
+		t.Fatalf("test setup: expected the list to be scrolled, offset=%d", m.offset)
+	}
+	first := m.offset
+	m.Update(click(4, m.lastRowsTop)) //nolint:errcheck
+	if !m.items[first].Selected {
+		t.Fatalf("click on the first visible row must toggle item %d", first)
+	}
+	for i, it := range m.items {
+		if i != first && it.Selected {
+			t.Fatalf("click on the first visible row also toggled item %d", i)
+		}
 	}
 }
 

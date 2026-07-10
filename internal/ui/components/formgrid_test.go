@@ -219,6 +219,64 @@ func TestFormGridNoteAboveFields(t *testing.T) {
 	}
 }
 
+// TestFormGridMouseClickBandRejectsOffscreen guards the two-sided hit-test band:
+// when the field window is scrolled, a click above lastRowsTop (title/intro/blank)
+// or on the blank separator at lastWindowEnd must NOT map to an off-screen field
+// (which would otherwise be silently focused and toggled/cycled).
+func TestFormGridMouseClickBandRejectsOffscreen(t *testing.T) {
+	fields := make([]*FormField, 12)
+	for i := range fields {
+		fields[i] = &FormField{Label: fmt.Sprintf("Toggle %d", i), Kind: FieldToggle}
+	}
+	g := NewFormGrid("Configuration", fields)
+	bindGrid(g)
+
+	// Scroll: move the cursor down so offset > 0 and fields stay hidden both
+	// ABOVE and BELOW the window.
+	for i := 0; i < 8; i++ {
+		press(t, g, "down")
+	}
+	g.View(80, 12)
+	if g.offset == 0 {
+		t.Fatalf("expected the window to scroll (offset>0), got offset=%d", g.offset)
+	}
+	if g.lastWindowEnd >= len(fields)+g.lastRowsTop {
+		t.Fatalf("test setup: window must not reach the last field (end=%d)", g.lastWindowEnd)
+	}
+
+	// Off-screen field ABOVE the window (index 0), and the field the blank at
+	// lastWindowEnd would (pre-fix) map to BELOW the window.
+	above := fields[0]
+	belowIdx := g.offset + (g.lastWindowEnd - g.lastRowsTop)
+	if belowIdx >= len(fields) {
+		t.Fatalf("test setup: expected an off-screen field below the window, belowIdx=%d", belowIdx)
+	}
+	below := fields[belowIdx]
+	if above.Bool || below.Bool {
+		t.Fatalf("test setup: off-screen toggles must start false")
+	}
+	cursor0, editing0 := g.cursor, g.editing
+
+	// CASE 1: click above lastRowsTop (the title/blank). Nothing may change.
+	g.Update(click(4, 1)) //nolint:errcheck
+	if above.Bool || below.Bool {
+		t.Fatalf("click above the window must not toggle an off-screen field (above=%v below=%v)", above.Bool, below.Bool)
+	}
+	if g.cursor != cursor0 || g.editing != editing0 {
+		t.Fatalf("click above the window must not move focus (cursor %d->%d editing %d->%d)", cursor0, g.cursor, editing0, g.editing)
+	}
+
+	// CASE 2: click on the blank separator at lastWindowEnd (below the window). The
+	// field this Y maps to (belowIdx) must stay untouched and focus must not move.
+	g.Update(click(4, g.lastWindowEnd)) //nolint:errcheck
+	if above.Bool || below.Bool {
+		t.Fatalf("click on the blank below the window must not toggle an off-screen field (above=%v below=%v)", above.Bool, below.Bool)
+	}
+	if g.cursor != cursor0 || g.editing != editing0 {
+		t.Fatalf("click below the window must not move focus (cursor %d->%d editing %d->%d)", cursor0, g.cursor, editing0, g.editing)
+	}
+}
+
 func TestSplitSentences(t *testing.T) {
 	got := splitSentences("Must be filesystem-mounted (e.g. /mnt/nas-backup). For direct network access use rclone.")
 	if len(got) != 2 {

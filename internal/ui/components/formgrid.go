@@ -232,6 +232,12 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			}
 			return g, nil
 		}
+		// Only clicks inside the rendered field window map to a field; reject the
+		// title/intro/blank above and the blank separator below (which, when
+		// scrolled, would otherwise hit an off-screen field).
+		if mouse.Y < g.lastRowsTop || mouse.Y >= g.lastWindowEnd {
+			return g, nil
+		}
 		row := mouse.Y - g.lastRowsTop + g.offset
 		if row >= 0 && row < len(g.fields) && g.fields[row].active() {
 			g.cursor = row
