@@ -277,6 +277,57 @@ func TestFormGridMouseClickBandRejectsOffscreen(t *testing.T) {
 	}
 }
 
+// TestFormGridMouseClickBelowWindowLeavesOffscreenSelectUnchanged mirrors CASE 2
+// of TestFormGridMouseClickBandRejectsOffscreen but for the FieldSelect branch:
+// a blank click at lastWindowEnd (below the scrolled window) must NOT cycle an
+// off-screen select's OptionIndex, and must not move focus.
+func TestFormGridMouseClickBelowWindowLeavesOffscreenSelectUnchanged(t *testing.T) {
+	fields := make([]*FormField, 12)
+	for i := range fields {
+		fields[i] = &FormField{
+			Label:   fmt.Sprintf("Select %d", i),
+			Kind:    FieldSelect,
+			Options: []string{"a", "b"}, // 2 options so a cycle is observable
+		}
+	}
+	g := NewFormGrid("Configuration", fields)
+	bindGrid(g)
+
+	// Scroll: move the cursor down so offset > 0 and fields stay hidden BELOW
+	// the window (same layout math as the FieldToggle band test).
+	for i := 0; i < 8; i++ {
+		press(t, g, "down")
+	}
+	g.View(80, 12)
+	if g.offset == 0 {
+		t.Fatalf("expected the window to scroll (offset>0), got offset=%d", g.offset)
+	}
+	if g.lastWindowEnd >= len(fields)+g.lastRowsTop {
+		t.Fatalf("test setup: window must not reach the last field (end=%d)", g.lastWindowEnd)
+	}
+
+	// The field the blank at lastWindowEnd would (pre-fix) map to BELOW the window.
+	belowIdx := g.offset + (g.lastWindowEnd - g.lastRowsTop)
+	if belowIdx >= len(fields) {
+		t.Fatalf("test setup: expected an off-screen field below the window, belowIdx=%d", belowIdx)
+	}
+	below := fields[belowIdx]
+	if below.OptionIndex != 0 {
+		t.Fatalf("test setup: off-screen select must start at index 0, got %d", below.OptionIndex)
+	}
+	cursor0, editing0 := g.cursor, g.editing
+
+	// Click on the blank separator at lastWindowEnd (below the window). The
+	// off-screen select this Y maps to must not cycle and focus must not move.
+	g.Update(click(4, g.lastWindowEnd)) //nolint:errcheck
+	if below.OptionIndex != 0 {
+		t.Fatalf("click on the blank below the window must not cycle an off-screen select (index=%d)", below.OptionIndex)
+	}
+	if g.cursor != cursor0 || g.editing != editing0 {
+		t.Fatalf("click below the window must not move focus (cursor %d->%d editing %d->%d)", cursor0, g.cursor, editing0, g.editing)
+	}
+}
+
 func TestSplitSentences(t *testing.T) {
 	got := splitSentences("Must be filesystem-mounted (e.g. /mnt/nas-backup). For direct network access use rclone.")
 	if len(got) != 2 {

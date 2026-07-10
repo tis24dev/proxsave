@@ -254,6 +254,67 @@ func TestSelectorMouseClickFirstVisibleRowResolvesWhenScrolled(t *testing.T) {
 	}
 }
 
+// A styled multi-line prompt (pre-rendered, not wrapped) pushes the first row
+// down, so lastRowsTop > 2. The click band must stay aligned to it: the first
+// visible row resolves, rows inside the prompt block do not, and the padded
+// blank below the window does not.
+func TestSelectorMouseClickBandWithStyledMultilinePrompt(t *testing.T) {
+	// A genuinely multi-line prompt (two '\n' -> lipgloss.Height >= 3).
+	prompt := strings.Join([]string{"line1", "line2", "line3"}, "\n")
+	s := NewSelector("Backup", manyItems(30), WithSelectorPromptStyled[int](prompt))
+	cap := bindSelector(s)
+	// Scroll so offset>0: the first visible row is item offset, not item 0.
+	for i := 0; i < 20; i++ {
+		press(t, s, "down")
+	}
+	s.View(80, 20)
+
+	// Setup guard: the multi-line prompt must have shifted the first row down.
+	if s.lastRowsTop <= 2 {
+		t.Fatalf("test setup: styled multi-line prompt must push lastRowsTop past 2, got %d", s.lastRowsTop)
+	}
+	if s.offset == 0 {
+		t.Fatalf("test setup: expected a scrolled list, offset=%d", s.offset)
+	}
+
+	// POSITIVE: a click on the first visible row (body-Y == lastRowsTop) resolves
+	// the first visible item, whose Value == offset (manyItems Value == index).
+	s.Update(click(4, s.lastRowsTop)) //nolint:errcheck
+	if !cap.resolved || cap.value != s.offset {
+		t.Fatalf("click on the first visible row must resolve item %d, got resolved=%v value=%d", s.offset, cap.resolved, cap.value)
+	}
+
+	// NEGATIVE: a click inside the styled prompt block (body-Y between 1 and
+	// lastRowsTop-1) must be a no-op, even though the band is shifted down.
+	s2 := NewSelector("Backup", manyItems(30), WithSelectorPromptStyled[int](prompt))
+	cap2 := bindSelector(s2)
+	for i := 0; i < 20; i++ {
+		press(t, s2, "down")
+	}
+	s2.View(80, 20)
+	promptY := s2.lastRowsTop - 1 // a row inside the prompt/blank, above the first item
+	if promptY < 1 {
+		t.Fatalf("test setup: no prompt row to click, lastRowsTop=%d", s2.lastRowsTop)
+	}
+	s2.Update(click(4, promptY)) //nolint:errcheck
+	if cap2.resolved {
+		t.Fatalf("click inside the styled prompt block must be ignored, resolved to %+v", cap2)
+	}
+
+	// NEGATIVE: a click on the padded blank just below the last visible row
+	// (body-Y == lastWindowEnd) must also be a no-op.
+	s3 := NewSelector("Backup", manyItems(30), WithSelectorPromptStyled[int](prompt))
+	cap3 := bindSelector(s3)
+	for i := 0; i < 20; i++ {
+		press(t, s3, "down")
+	}
+	s3.View(80, 20)
+	s3.Update(click(4, s3.lastWindowEnd)) //nolint:errcheck
+	if cap3.resolved {
+		t.Fatalf("click below the last visible row must be ignored, resolved to %+v", cap3)
+	}
+}
+
 func TestSelectorEmptyEnterIgnored(t *testing.T) {
 	s := NewSelector("Empty", []SelectorItem[string]{})
 	cap := bindSelector(s)
