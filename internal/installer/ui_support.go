@@ -106,7 +106,13 @@ func ApplyAuditDisables(configPath string, keys []string) error {
 // directory and renames it over configPath (same containment strategy as the
 // installer's main writer).
 func WriteConfigFileAtomic(configPath, tmpPath, content string) error {
-	dir := filepath.Dir(configPath)
+	// Reject a bare-filename path (dir == "." or ""), which would otherwise write
+	// the config into the process working directory instead of a real config dir.
+	// Parity with the pre-migration wizard writer.
+	dir := filepath.Dir(strings.TrimSpace(configPath))
+	if dir == "" || dir == "." {
+		return fmt.Errorf("invalid configuration path: %q", configPath)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("failed to create configuration directory: %w", err)
 	}
