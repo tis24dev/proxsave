@@ -232,8 +232,18 @@ func TestConfirmCountdownLine(t *testing.T) {
 	if !strings.Contains(view, "Auto-skip in 30s") {
 		t.Errorf("countdown line missing/wrong: %q", view)
 	}
-	if !strings.Contains(view, "default: COMMIT") {
-		t.Error("countdown must advertise the Enter default label")
+	// The countdown advertises the TIMEOUT outcome (always the No label), not the
+	// Enter default: a countdown-armed prompt auto-resolves to No on expiry, so a
+	// defaultYes prompt must not read "default: <yes label>" there.
+	if !strings.Contains(view, "on timeout: Let rollback run") {
+		t.Errorf("countdown must advertise the timeout outcome (No label): %q", view)
+	}
+	if strings.Contains(view, "default: COMMIT") {
+		t.Errorf("countdown must not advertise the Enter default as the timeout outcome: %q", view)
+	}
+	// The Enter default stays advertised on the button, not the countdown.
+	if !strings.Contains(view, "COMMIT (default)") {
+		t.Errorf("Enter default must be marked on the button: %q", view)
 	}
 	if !strings.Contains(view, c.deadline.Format("15:04:05")) {
 		t.Error("countdown must show the absolute deadline")
