@@ -119,7 +119,7 @@ func (m *MultiSelect[T]) Title() string { return m.title }
 func (m *MultiSelect[T]) Help() string {
 	var help string
 	if m.actions {
-		help = "↑/↓ move · space toggle · enter act on row"
+		help = "↑/↓ move · space toggle · a all · i invert · enter act on row"
 	} else {
 		help = "↑/↓ move · space toggle · a all · i invert · enter confirm"
 	}
