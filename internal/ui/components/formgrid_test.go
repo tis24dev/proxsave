@@ -7,7 +7,73 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
+
+// TestFormGridTabReachesCancel: Tab/Down on the buttons row toggles Continue/Cancel
+// so Cancel is reachable via Tab (it used to snap back to Continue).
+func TestFormGridTabReachesCancel(t *testing.T) {
+	g := NewFormGrid("Config", []*FormField{{Label: "A", Kind: FieldToggle}})
+	cap := bindGrid(g)
+	press(t, g, "down") // A -> buttons (Continue focused)
+	if g.cursor != len(g.fields) || g.onCancel {
+		t.Fatalf("expected the buttons row with Continue focused (cursor=%d onCancel=%v)", g.cursor, g.onCancel)
+	}
+	press(t, g, "tab") // must reach Cancel, not snap back to Continue
+	if !g.onCancel {
+		t.Fatalf("tab on the buttons row must reach Cancel, got onCancel=%v", g.onCancel)
+	}
+	press(t, g, "enter") // Cancel resolves the back error
+	if !cap.resolved || cap.err == nil {
+		t.Fatalf("enter on Cancel must resolve an abort error, got %+v", cap)
+	}
+}
+
+// TestFormGridDownStaysOnContinue: down on the buttons row keeps Continue focused
+// (unlike tab, it does not toggle), so a "mash down then Enter" submit is reliable.
+func TestFormGridDownStaysOnContinue(t *testing.T) {
+	g := NewFormGrid("Config", []*FormField{{Label: "A", Kind: FieldToggle}})
+	for i := 0; i < 4; i++ {
+		press(t, g, "down") // 1st down -> buttons (Continue); the rest stay on Continue
+	}
+	if g.onCancel {
+		t.Fatalf("extra down on the buttons row must not toggle to Cancel, got onCancel=%v", g.onCancel)
+	}
+}
+
+// TestFormGridBlinkCmdOnFieldChange: moving to a text field returns the caret-blink
+// Cmd instead of dropping it (the caret stopped blinking after the first field).
+func TestFormGridBlinkCmdOnFieldChange(t *testing.T) {
+	g := NewFormGrid("Config", []*FormField{
+		{Label: "One", Kind: FieldText},
+		{Label: "Two", Kind: FieldText},
+	})
+	bindGrid(g)
+	_, cmd := g.Update(shell.KeyMsg("enter")) // field 0 -> field 1 (both text)
+	if cmd == nil {
+		t.Fatal("moving to a text field must return a blink Cmd")
+	}
+}
+
+// TestFormGridReservesButtonsAtSmallHeight: the buttons block is reserved first, so
+// at a tight height (that used to crop it from below) the buttons still render and
+// the body fits the budget.
+func TestFormGridReservesButtonsAtSmallHeight(t *testing.T) {
+	fields := make([]*FormField, 6)
+	for i := range fields {
+		fields[i] = &FormField{Label: fmt.Sprintf("Field %d", i), Description: "a hint", Kind: FieldToggle}
+	}
+	g := NewFormGrid("Config", fields)
+	bindGrid(g)
+	view := g.View(80, 4) // cursor on field 0 (a Description -> a footer line)
+	if n := len(strings.Split(view, "\n")); n > 4 {
+		t.Fatalf("body must fit the height budget (got %d lines, want <= 4):\n%s", n, view)
+	}
+	if !strings.Contains(view, "Continue") || !strings.Contains(view, "Cancel") {
+		t.Fatalf("buttons must always render at small heights:\n%s", view)
+	}
+}
 
 func gridFields() (toggle, path, cron *FormField) {
 	toggle = &FormField{Label: "Secondary storage", Kind: FieldToggle}

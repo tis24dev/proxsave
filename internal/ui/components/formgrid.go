@@ -132,8 +132,10 @@ func (g *FormGrid) firstActive() int {
 	return len(g.fields) // straight to buttons
 }
 
-// bindEditor attaches the shared text editor to the focused field.
-func (g *FormGrid) bindEditor() {
+// bindEditor attaches the shared text editor to the focused field and returns
+// the caret-blink Cmd (nil when the focused row is not an active text field), so
+// callers can keep the caret blinking on every field change, not just the first.
+func (g *FormGrid) bindEditor() tea.Cmd {
 	if g.editing >= 0 && g.editing < len(g.fields) {
 		g.fields[g.editing].Text = g.ti.Value()
 	}
@@ -148,31 +150,30 @@ func (g *FormGrid) bindEditor() {
 			} else {
 				g.ti.EchoMode = textinput.EchoNormal
 			}
-			g.ti.Focus()
 			g.editing = g.cursor
+			return g.ti.Focus()
 		}
 	}
+	return nil
 }
 
 // move advances the cursor to the next/previous active row (or the buttons
-// row past the end).
-func (g *FormGrid) move(delta int) {
+// row past the end) and returns the focused field's blink Cmd.
+func (g *FormGrid) move(delta int) tea.Cmd {
 	i := g.cursor
 	for {
 		i += delta
 		if i < 0 {
-			return
+			return nil
 		}
 		if i >= len(g.fields) {
 			g.cursor = len(g.fields)
 			g.onCancel = false
-			g.bindEditor()
-			return
+			return g.bindEditor()
 		}
 		if g.fields[i].active() {
 			g.cursor = i
-			g.bindEditor()
-			return
+			return g.bindEditor()
 		}
 	}
 }
@@ -200,8 +201,7 @@ func (g *FormGrid) submit() (shell.Screen, tea.Cmd) {
 		if err := f.Validate(f.Text); err != nil {
 			g.errMsg = fmt.Sprintf("%s: %v", f.Label, err)
 			g.cursor = i
-			g.bindEditor()
-			return g, nil
+			return g, g.bindEditor()
 		}
 	}
 	return g, g.Resolve(struct{}{}, nil)
@@ -210,13 +210,14 @@ func (g *FormGrid) submit() (shell.Screen, tea.Cmd) {
 func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	switch mouse := msg.(type) {
 	case tea.MouseWheelMsg:
+		var cmd tea.Cmd
 		switch mouse.Button {
 		case tea.MouseWheelUp:
-			g.move(-1)
+			cmd = g.move(-1)
 		case tea.MouseWheelDown:
-			g.move(1)
+			cmd = g.move(1)
 		}
-		return g, nil
+		return g, cmd
 	case tea.MouseClickMsg:
 		if mouse.Button != tea.MouseLeft {
 			return g, nil
@@ -239,9 +240,10 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			return g, nil
 		}
 		row := mouse.Y - g.lastRowsTop + g.offset
+		var cmd tea.Cmd
 		if row >= 0 && row < len(g.fields) && g.fields[row].active() {
 			g.cursor = row
-			g.bindEditor()
+			cmd = g.bindEditor()
 			f := g.fields[row]
 			switch f.Kind {
 			case FieldToggle:
@@ -253,7 +255,7 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 				}
 			}
 		}
-		return g, nil
+		return g, cmd
 	}
 
 	key, ok := msg.(tea.KeyPressMsg)
@@ -280,14 +282,21 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 					break
 				}
 			}
-			g.bindEditor()
+			return g, g.bindEditor()
+		}
+		return g, g.move(-1)
+	case "tab":
+		if onButtons {
+			// Tab cycles Continue <-> Cancel so Cancel is reachable from the keyboard
+			// (it used to snap back to Continue, reachable only via left/right/click).
+			g.onCancel = !g.onCancel
 			return g, nil
 		}
-		g.move(-1)
-		return g, nil
-	case "down", "tab":
-		g.move(1)
-		return g, nil
+		return g, g.move(1)
+	case "down":
+		// Down advances toward the primary action; on the buttons row move(1) keeps
+		// Continue focused so a "mash down then Enter" submit stays reliable.
+		return g, g.move(1)
 	case "enter":
 		if onButtons {
 			if g.onCancel {
@@ -296,8 +305,7 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			return g.submit()
 		}
 		g.errMsg = ""
-		g.move(1)
-		return g, nil
+		return g, g.move(1)
 	}
 
 	if onButtons {
@@ -478,11 +486,22 @@ func (g *FormGrid) View(width, height int) string {
 	if len(intro) > 0 {
 		head += introHeight + 1 // note lines + a blank separator before the fields
 	}
-	tailLines := 2 + footerHeight
+	// Reserve the buttons block (blank + buttons = 2 rows) as the TOP priority so
+	// the actionable rows are never cropped from below (the router crops overflow
+	// from the bottom, like Confirm's budget). The footer (hint/error) is lower
+	// priority: drop it when there is no room, and let the field window shrink
+	// into the remainder (down to zero at extreme sizes, recoverable by enlarging).
+	buttonsLines := 2 // blank + buttons
+	footerBlock := footerHeight
 	if len(footer) > 0 {
-		tailLines++ // blank line between the buttons and the footer
+		footerBlock++ // blank line between the buttons and the footer
 	}
-	visible := max(height-head-tailLines, 1)
+	if height-head-buttonsLines-footerBlock < 0 {
+		footer = nil
+		footerBlock = 0
+	}
+	tailLines := buttonsLines + footerBlock
+	visible := max(height-head-tailLines, 0)
 	if g.cursor < len(g.fields) {
 		if g.cursor < g.offset {
 			g.offset = g.cursor
@@ -516,8 +535,11 @@ func (g *FormGrid) View(width, height int) string {
 		b.WriteString(strings.Join(intro, "\n"))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(strings.Join(windowed, "\n"))
-	b.WriteString("\n\n")
+	if len(windowed) > 0 {
+		b.WriteString(strings.Join(windowed, "\n"))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 	b.WriteString(buttons)
 	if len(footer) > 0 {
 		// Same breathing room below the buttons as above them.
