@@ -194,6 +194,66 @@ func TestSelectorViewShowsCursorAndScrolls(t *testing.T) {
 	}
 }
 
+func TestSelectorMouseClickAboveRowsIgnoredWhenScrolled(t *testing.T) {
+	s := NewSelector("Backup", manyItems(30))
+	cap := bindSelector(s)
+	// Scroll so offset>0: move the cursor deep, then render to set the window.
+	for i := 0; i < 20; i++ {
+		press(t, s, "down")
+	}
+	s.View(80, 12)
+	if s.offset == 0 {
+		t.Fatalf("expected a scrolled list, offset=%d", s.offset)
+	}
+	// A click on the blank separator line above the first row (body-Y =
+	// lastRowsTop-1) must not resolve to an off-screen item.
+	s.Update(click(4, s.lastRowsTop-1)) //nolint:errcheck
+	if cap.resolved {
+		t.Fatalf("click above the first row must be ignored, resolved to %+v", cap)
+	}
+}
+
+// lipgloss.Place top-pads the body, so a scrolled window leaves a blank line
+// below it. A click there must not map to a valid off-screen item.
+func TestSelectorMouseClickBelowWindowIgnoredWhenScrolled(t *testing.T) {
+	s := NewSelector("Backup", manyItems(30))
+	cap := bindSelector(s)
+	for i := 0; i < 20; i++ {
+		press(t, s, "down")
+	}
+	s.View(80, 12)
+	if s.offset == 0 {
+		t.Fatalf("test setup: expected a scrolled list, offset=%d", s.offset)
+	}
+	// Precondition: an item still sits below the window, so the padded blank at
+	// lastWindowEnd maps to a real off-screen index without the band guard.
+	if row := s.lastWindowEnd - s.lastRowsTop + s.offset; row >= len(s.items) {
+		t.Fatalf("test setup: window reaches the end (row=%d); below-blank would be rejected anyway", row)
+	}
+	s.Update(click(4, s.lastWindowEnd)) //nolint:errcheck
+	if cap.resolved {
+		t.Fatalf("click on the padded blank below the window must be ignored, resolved to %+v", cap)
+	}
+}
+
+// The band guard must not over-reject: a click on the FIRST visible row while
+// scrolled resolves that row (offset), not row 0 and not a no-op.
+func TestSelectorMouseClickFirstVisibleRowResolvesWhenScrolled(t *testing.T) {
+	s := NewSelector("Backup", manyItems(30))
+	cap := bindSelector(s)
+	for i := 0; i < 20; i++ {
+		press(t, s, "down")
+	}
+	s.View(80, 12)
+	if s.offset == 0 {
+		t.Fatalf("test setup: expected a scrolled list, offset=%d", s.offset)
+	}
+	s.Update(click(4, s.lastRowsTop)) //nolint:errcheck
+	if !cap.resolved || cap.value != s.offset {
+		t.Fatalf("click on the first visible row must resolve item %d, got resolved=%v value=%d", s.offset, cap.resolved, cap.value)
+	}
+}
+
 func TestSelectorEmptyEnterIgnored(t *testing.T) {
 	s := NewSelector("Empty", []SelectorItem[string]{})
 	cap := bindSelector(s)
