@@ -107,4 +107,13 @@ func TestBootstrapReplayConsoleSince(t *testing.T) {
 	if strings.Contains(out, "muted info") || strings.Contains(out, "noise before mark") {
 		t.Fatalf("replay must exclude info and pre-mark entries: %q", out)
 	}
+	// Replayed lines must carry the same "[ts] LEVEL" console prefix as the live
+	// path, not the bare message, so a replayed failure is indistinguishable from
+	// a normally printed one.
+	if !strings.Contains(out, "] WARNING") {
+		t.Fatalf("replayed warning must carry the [ts] LEVEL prefix, got %q", out)
+	}
+	if !strings.Contains(out, "] ERROR") {
+		t.Fatalf("replayed error must carry the [ts] LEVEL prefix, got %q", out)
+	}
 }
