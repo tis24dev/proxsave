@@ -573,7 +573,7 @@ func shouldApplyPBSDatastoreBlock(block pbsDatastoreBlock, logger *logging.Logge
 		// We still apply the datastore definition 1:1 so PBS shows the datastore as unavailable
 		// rather than silently dropping it from datastore.cfg.
 		if logger != nil {
-			logger.Warning("PBS staged apply: datastore %s path %s resolves to root filesystem (mount missing?) — applying definition anyway", block.Name, path)
+			logger.Warning("PBS staged apply: datastore %s path %s resolves to root filesystem (mount missing?), applying definition anyway", block.Name, path)
 		}
 	}
 
