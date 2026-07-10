@@ -97,6 +97,12 @@ func runDaemon(rt *appRuntime) int {
 		configPath: rt.args.ConfigPath,
 		now:        time.Now,
 	}
+	// The status file is written only by this daemon; surface a corrupt-file
+	// self-heal (health quarantines the unreadable bytes and resets) as a debug
+	// line, since the health package is deliberately logger-free.
+	health.SetCorruptStatusHook(func(quarantinedPath string) {
+		logging.Debug("daemon: healthcheck status file was corrupt, quarantined to %s and reset", quarantinedPath)
+	})
 	logging.Info("ProxSave daemon starting (run-at=%s max-run=%s healthcheck=%v mode=%s)",
 		d.cfg.SchedulerTime, d.maxRunDuration(), d.cfg.HealthcheckEnabled, d.cfg.HealthcheckMode)
 	return d.run(rt.ctx)

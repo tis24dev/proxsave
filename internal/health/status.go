@@ -15,6 +15,7 @@ package health
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -171,9 +172,49 @@ func LoadStatus(baseDir string) (Status, error) {
 	if err := json.Unmarshal(data, &st); err != nil {
 		// Return the zero value (not a half-parsed struct) so a tolerant caller
 		// treats it as unreadable (a distinct state) rather than trusting garbage.
-		return Status{}, fmt.Errorf("parse healthcheck status: %w", err)
+		// Wrap ErrStatusParse so a writer can tell a recoverable corruption (which
+		// the next write must overwrite) from a genuine read/permission error.
+		return Status{}, fmt.Errorf("%w: %w", ErrStatusParse, err)
 	}
 	return st, nil
+}
+
+// ErrStatusParse marks LoadStatus's malformed-JSON failure (as opposed to a
+// genuine read/permission error). A writer treats a parse error as a corrupt file
+// to overwrite via loadStatusForWrite; every other LoadStatus error is propagated.
+var ErrStatusParse = errors.New("parse healthcheck status")
+
+// corruptStatusHook, if set, is invoked with the quarantine path whenever
+// loadStatusForWrite discards an unparseable status file. It lets the daemon (the
+// sole writer, which owns a logger) emit a debug line for the self-heal WITHOUT
+// this package importing a logger, so health stays logger-free and stdlib-only.
+// Nil by default; set once at startup (SetCorruptStatusHook).
+var corruptStatusHook func(quarantinedPath string)
+
+// SetCorruptStatusHook registers the corrupt-file self-heal callback. The daemon
+// wires it to a debug log line at startup; tests and the orchestrator leave it nil
+// (the self-heal still happens, just silently). Not safe to call concurrently with
+// the writers; call once before the daemon loops start.
+func SetCorruptStatusHook(fn func(quarantinedPath string)) { corruptStatusHook = fn }
+
+// loadStatusForWrite loads the status for a read-modify-write. A parse error means
+// the on-disk file is corrupt: the next write must overwrite it, so quarantine the
+// bytes once (fixed name, best effort, so an operator/support bundle can recover
+// them) and continue from a zero Status. Any other LoadStatus error (a real IO or
+// permission fault; missing/empty already return nil) is propagated so the write is
+// not attempted on a half-known file and the reader-side "status file unreadable"
+// signal is preserved.
+func loadStatusForWrite(baseDir string) (Status, error) {
+	st, err := LoadStatus(baseDir)
+	if errors.Is(err, ErrStatusParse) {
+		quarantine := StatusPath(baseDir) + ".corrupt"
+		_ = os.Rename(StatusPath(baseDir), quarantine) // best-effort; a lost race just self-heals without a sidecar
+		if corruptStatusHook != nil {
+			corruptStatusHook(quarantine)
+		}
+		return Status{}, nil
+	}
+	return st, err
 }
 
 // RecordPing performs an atomic read-modify-write of the status file: it loads
@@ -202,7 +243,7 @@ func RecordPing(baseDir, mode, kind string, ts int64, ok bool, pingErr error) er
 		}
 	}
 
-	st, err := LoadStatus(baseDir)
+	st, err := loadStatusForWrite(baseDir)
 	if err != nil {
 		return err
 	}
@@ -236,7 +277,7 @@ func RecordUpdate(baseDir, mode string, ts int64, available bool, latest string,
 		}
 	}
 
-	st, err := LoadStatus(baseDir)
+	st, err := loadStatusForWrite(baseDir)
 	if err != nil {
 		return err
 	}
@@ -264,7 +305,7 @@ func RecordNotifyPing(baseDir, mode, kind string, ts int64, ok, down bool, pingE
 			rec.Err = pingErr.Error()
 		}
 	}
-	st, err := LoadStatus(baseDir)
+	st, err := loadStatusForWrite(baseDir)
 	if err != nil {
 		return err
 	}
