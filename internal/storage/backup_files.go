@@ -14,9 +14,16 @@ const bundleSuffix = ".bundle.tar"
 var errBackupSidecarDeleteOnly = errors.New("backup archive deleted; associated file(s) could not be removed")
 
 // isBackupSidecar reports whether a candidate path is an associated sidecar
-// (checksum/metadata) rather than the backup data archive itself.
+// (checksum, metadata, or manifest) rather than the backup data archive itself.
+// It is the single source of truth for "not a standalone backup", shared by the
+// retention delete accounting and by every storage List filter, so a new sidecar
+// suffix only has to be added here. PS-BH-002: .manifest.json was added to the
+// cloud upload set but omitted from these checks, leaving retention unable to
+// delete it (orphan accumulation) and List counting it as a phantom backup.
 func isBackupSidecar(path string) bool {
-	return strings.HasSuffix(path, ".sha256") || strings.HasSuffix(path, ".metadata")
+	return strings.HasSuffix(path, ".sha256") ||
+		strings.HasSuffix(path, ".metadata") ||
+		strings.HasSuffix(path, ".manifest.json")
 }
 
 // trimBundleSuffix removes the .bundle.tar suffix from a path if present.
@@ -71,6 +78,7 @@ func buildBackupCandidatePaths(base string, includeBundle bool) []string {
 	candidates := []string{
 		base,
 		base + ".sha256",
+		base + ".manifest.json",
 		base + ".metadata",
 		base + ".metadata.sha256",
 	}

@@ -480,6 +480,34 @@ func TestLocalStorage_GetStats(t *testing.T) {
 	}
 }
 
+// TestLocalStorage_List_SkipsSidecars proves local List skips the checksum,
+// metadata, and manifest sidecars (PS-BH-002: .manifest.json must not be counted
+// as a standalone backup).
+func TestLocalStorage_List_SkipsSidecars(t *testing.T) {
+	logger := newTestLogger()
+	base := t.TempDir()
+	cfg := &config.Config{BackupPath: base, BundleAssociatedFiles: false}
+	storage, _ := NewLocalStorage(cfg, logger)
+
+	backup := filepath.Join(base, "node-backup-20240102-030405.tar.zst")
+	for _, f := range []string{backup, backup + ".sha256", backup + ".manifest.json", backup + ".metadata", backup + ".metadata.sha256"} {
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile %s: %v", f, err)
+		}
+	}
+
+	backups, err := storage.List(context.Background())
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("List returned %d backups want 1 (sha256/manifest/metadata are sidecars)", len(backups))
+	}
+	if backups[0].BackupFile != backup {
+		t.Fatalf("BackupFile=%q want %q", backups[0].BackupFile, backup)
+	}
+}
+
 func TestLocalStorage_GetStats_ListError(t *testing.T) {
 	logger := newTestLogger()
 	base := t.TempDir()
