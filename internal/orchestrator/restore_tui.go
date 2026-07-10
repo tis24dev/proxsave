@@ -157,7 +157,8 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 	b.WriteString("  • Services may need to be restarted after restoration\n\n")
 	if (hasCategoryID(config.SelectedCategories, "pve_access_control") || hasCategoryID(config.SelectedCategories, "pbs_access_control")) &&
 		(!hasCategoryID(config.SelectedCategories, "network") || !hasCategoryID(config.SelectedCategories, "ssl")) {
-		b.WriteString("  • TFA/WebAuthn: for best 1:1 compatibility keep the same UI origin (FQDN/hostname and port) and restore 'network' + 'ssl'\n\n")
+		b.WriteString("  • TFA/WebAuthn: keep the same UI origin (FQDN/hostname and port) for 1:1\n")
+		b.WriteString("    compatibility, and restore 'network' + 'ssl'\n\n")
 	}
 
 	return b.String()
