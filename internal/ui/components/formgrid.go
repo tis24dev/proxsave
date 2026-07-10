@@ -242,7 +242,9 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 				f.Bool = !f.Bool
 				g.errMsg = ""
 			case FieldSelect:
-				f.OptionIndex = (f.OptionIndex + 1) % len(f.Options)
+				if len(f.Options) > 0 {
+					f.OptionIndex = (f.OptionIndex + 1) % len(f.Options)
+				}
 			}
 		}
 		return g, nil
@@ -319,6 +321,11 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			return g, nil
 		}
 	case FieldSelect:
+		if len(f.Options) == 0 {
+			// A select with no options is not navigable; guard the modulo so
+			// left/right/space can never divide by zero (mirrors renderControl).
+			return g, nil
+		}
 		switch key.String() {
 		case "left":
 			f.OptionIndex = (f.OptionIndex - 1 + len(f.Options)) % len(f.Options)
