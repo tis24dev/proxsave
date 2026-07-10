@@ -174,3 +174,40 @@ func TestSanitizeLine(t *testing.T) {
 		})
 	}
 }
+
+// TestSanitizeStreamLine covers the color-preserving stream scrub directly: SGR
+// (color) escapes survive verbatim, every other escape (OSC, cursor/mode CSI) is
+// dropped WITH its payload, and C0/DEL/C1 plus newlines/tabs are flattened. The
+// security-critical arm is "drop a non-SGR escape" - a bug in isSGR that matched
+// any CSI would slip cursor/OSC escapes through, which only this test catches.
+func TestSanitizeStreamLine(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		contain []string
+		absent  []string
+	}{
+		{"sgr kept verbatim", "\x1b[31mred\x1b[0m", []string{"\x1b[31m", "red", "\x1b[0m"}, nil},
+		{"non-sgr csi erase dropped", "before\x1b[2Jafter", []string{"before", "after"}, []string{"\x1b[2J"}},
+		{"cursor-move csi dropped", "x\x1b[Hy", []string{"x", "y"}, []string{"\x1b[H"}},
+		{"osc title dropped with payload", "a\x1b]0;pwned\x07b", []string{"a", "b"}, []string{"\x1b]0;", "pwned", "\x07"}},
+		{"bel flattened", "a\x07b", []string{"ab"}, []string{"\x07"}},
+		{"newline and tab become spaces", "l1\nl2\tc", []string{"l1 l2 c"}, []string{"\n", "\t"}},
+		{"printable unicode kept", "café /mnt/x", []string{"café /mnt/x"}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := sanitizeStreamLine(tc.in)
+			for _, want := range tc.contain {
+				if !strings.Contains(out, want) {
+					t.Fatalf("sanitizeStreamLine(%q) = %q, must contain %q", tc.in, out, want)
+				}
+			}
+			for _, bad := range tc.absent {
+				if strings.Contains(out, bad) {
+					t.Fatalf("sanitizeStreamLine(%q) = %q, must NOT contain %q", tc.in, out, bad)
+				}
+			}
+		})
+	}
+}

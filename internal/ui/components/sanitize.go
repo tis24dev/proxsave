@@ -70,6 +70,11 @@ func sanitizeStreamLine(s string) string {
 		} else if isSGR(seq) {
 			// A color/style escape (ESC[...m): keep it verbatim.
 			b.WriteString(seq)
+		} else if seq == "\n" || seq == "\t" || seq == "\r" {
+			// Standalone newline/tab/CR: flatten to a space so one physical row
+			// stays one logical line (tokenized apart from printable runs, these
+			// never reach stripStreamText).
+			b.WriteByte(' ')
 		}
 		// Any other escape (cursor moves, mode toggles, OSC, ...) is dropped.
 		s = s[n:]
