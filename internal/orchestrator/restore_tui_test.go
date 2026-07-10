@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 func TestFilterAndSortCategoriesForSystem(t *testing.T) {
@@ -32,6 +34,32 @@ func TestFilterAndSortCategoriesForSystem(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The restore plan is shown in a non-wrapping Pager, so an over-width line is
+// truncated (only reachable via horizontal scroll). Every static plan line must
+// fit a conventional 80-column terminal. The TFA/WebAuthn advisory is the tightest
+// line; a config that arms it plus short paths must keep every line within 80.
+func TestBuildRestorePlanTextLinesFit80Columns(t *testing.T) {
+	config := &SelectiveRestoreConfig{
+		Mode:       RestoreModeCustom,
+		SystemType: SystemTypePVE,
+		SelectedCategories: []Category{
+			// pve_access_control without network+ssl arms the TFA/WebAuthn advisory.
+			{ID: "pve_access_control", Name: "Access control", Description: "Users, roles, TFA", Paths: []string{"./etc/pve/user.cfg"}},
+		},
+	}
+
+	text := buildRestorePlanText(config)
+
+	if !strings.Contains(text, "TFA/WebAuthn") {
+		t.Fatalf("expected the TFA/WebAuthn advisory to be present:\n%s", text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if w := lipgloss.Width(line); w > 80 {
+			t.Errorf("plan line exceeds 80 columns (%d): %q", w, line)
+		}
 	}
 }
 
