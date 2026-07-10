@@ -237,20 +237,11 @@ func buildHealthcheckPrompt(selfMode bool, magicLink, keyword, explanation strin
 	return b.String()
 }
 
-// renderHealthcheckLevel is the unified colored-keyword renderer shared by the Status line
-// and every sensor line: green ✓ (Ok), red ✗ (Error), yellow ⚠ (Warn), and yellow with NO
-// symbol (Neutral, the pre-check state).
+// renderHealthcheckLevel is the colored-keyword renderer shared by the Status line and every
+// sensor line. It delegates to the shared orchestrator.RenderStatusLevel so the healthcheck,
+// audit, daemon, and workflow screens can never drift apart.
 func renderHealthcheckLevel(level orchestrator.HealthcheckSetupLevel, text string) string {
-	switch level {
-	case orchestrator.HealthcheckSetupLevelOk:
-		return theme.SuccessText.Render(theme.SymbolSuccess + " " + text)
-	case orchestrator.HealthcheckSetupLevelError:
-		return theme.ErrorText.Render(theme.SymbolError + " " + text)
-	case orchestrator.HealthcheckSetupLevelNeutral:
-		return theme.WarningText.Render(text)
-	default: // HealthcheckSetupLevelWarn - a real post-check warning
-		return theme.WarningText.Render(theme.SymbolWarning + " " + text)
-	}
+	return orchestrator.RenderStatusLevel(level, text)
 }
 
 // sensorSetupLevel maps a health.SensorLevel onto the shared HealthcheckSetupLevel so the
