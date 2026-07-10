@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -51,10 +52,36 @@ WantedBy=multi-user.target
 `, cmd)
 }
 
+// validateDaemonUnitToken rejects a token that would be word-split (or, for a
+// newline, inject unit directives) once embedded unquoted in ExecStart. An empty
+// token is valid: empty configPath means "no --config" and empty execToken falls
+// back to the canonical path. Only whitespace and control characters are hazards
+// here (systemd word-splits on ASCII whitespace); anything else is left as-is.
+func validateDaemonUnitToken(label, token string) error {
+	if token == "" {
+		return nil
+	}
+	for _, r := range token {
+		if r == ' ' || unicode.IsControl(r) {
+			return fmt.Errorf("%s must not contain whitespace or control characters: %q", label, token)
+		}
+	}
+	return nil
+}
+
 // installDaemonService writes the unit, reloads systemd, and enables+starts it.
 // execToken is the entrypoint the unit runs (canonical symlink by default);
 // configPath is pinned when non-empty.
 func installDaemonService(ctx context.Context, execToken, configPath string, bootstrap *logging.BootstrapLogger) error {
+	// Reject a whitespace/control-char token BEFORE writing the unit, so a bad
+	// --config path surfaces a clear error instead of a daemon that boots with the
+	// wrong config or crash-loops on a word-split ExecStart.
+	if err := validateDaemonUnitToken("executable path", strings.TrimSpace(execToken)); err != nil {
+		return err
+	}
+	if err := validateDaemonUnitToken("config path", strings.TrimSpace(configPath)); err != nil {
+		return err
+	}
 	unit := buildDaemonUnit(execToken, configPath)
 	// The unit path is a fixed constant and the content is our own template, so a
 	// plain write is safe here (no user-controlled path -> no G304/G306 class).
