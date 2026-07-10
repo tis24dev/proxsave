@@ -153,7 +153,7 @@ func TestCharmShowRestorePlan(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- ui.ShowRestorePlan(context.Background(), cfg) }()
 	d.waitScreen("Restore plan")
-	d.waitOutput("RESTORE PLAN")
+	d.waitOutput("Restore mode:") // plan body (the styled title replaces the old ASCII banner)
 	d.keys("enter")
 	if err := <-errCh; err != nil {
 		t.Fatalf("continue must return nil, got %v", err)

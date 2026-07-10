@@ -110,10 +110,8 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 
 	var b strings.Builder
 
-	b.WriteString("═══════════════════════════════════════════════════════════════\n")
-	b.WriteString("RESTORE PLAN\n")
-	b.WriteString("═══════════════════════════════════════════════════════════════\n\n")
-
+	// No ASCII banner: the Pager renders the styled "Restore plan" title, and the
+	// legacy box rule was cosmetically inconsistent with the Charm screens.
 	modeName := ""
 	switch config.Mode {
 	case RestoreModeFull:
