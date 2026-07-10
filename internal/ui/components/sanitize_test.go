@@ -38,6 +38,71 @@ func TestSanitizeStripsControlCharacters(t *testing.T) {
 	}
 }
 
+// SanitizeText is the exported scrub for free-form untrusted text on the
+// pre-styled prompt path: malicious escape/control bytes must be gone while
+// legitimate text (newlines, tabs, unicode) survives. Each case asserts BOTH
+// the dangerous byte is absent AND the good text is present, so it is not
+// vacuous.
+func TestSanitizeText(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		absent  []rune // bytes/runes that must NOT survive
+		contain []string
+	}{
+		{
+			name:    "csi sgr stripped",
+			in:      "\x1b[31mred\x1b[0m",
+			absent:  []rune{0x1b},
+			contain: []string{"red"},
+		},
+		{
+			name:    "osc set title stripped",
+			in:      "before\x1b]0;pwned\x07after",
+			absent:  []rune{0x1b, 0x07},
+			contain: []string{"before", "after"},
+		},
+		{
+			name:   "bel backspace del removed",
+			in:     "a\x07b\x08c\x7fd",
+			absent: []rune{0x07, 0x08, 0x7f},
+			// The letters between the control bytes survive.
+			contain: []string{"a", "b", "c", "d"},
+		},
+		{
+			name:    "c1 csi byte removed",
+			in:      "x31my",
+			absent:  []rune{0x9b},
+			contain: []string{"x", "31my"},
+		},
+		{
+			name:    "newlines and tabs preserved",
+			in:      "line1\nline2\tcol",
+			contain: []string{"line1", "line2", "col", "\n", "\t"},
+		},
+		{
+			name:    "printable unicode preserved",
+			in:      "ok /mnt/nas-backup (café)",
+			contain: []string{"ok /mnt/nas-backup (café)"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := SanitizeText(tc.in)
+			for _, r := range tc.absent {
+				if strings.ContainsRune(out, r) {
+					t.Fatalf("SanitizeText(%q) = %q, must not contain %#U", tc.in, out, r)
+				}
+			}
+			for _, want := range tc.contain {
+				if !strings.Contains(out, want) {
+					t.Fatalf("SanitizeText(%q) = %q, must contain %q", tc.in, out, want)
+				}
+			}
+		})
+	}
+}
+
 func TestSanitizeLineCollapsesWhitespace(t *testing.T) {
 	got := sanitizeLine("multi\nline\tvalue")
 	if got != "multi line value" {
@@ -45,5 +110,67 @@ func TestSanitizeLineCollapsesWhitespace(t *testing.T) {
 	}
 	if strings.ContainsAny(got, "\n\t") {
 		t.Fatal("sanitizeLine must not leave newlines or tabs")
+	}
+}
+
+// SanitizeLine is the exported single-line scrub for untrusted values printed
+// into a table cell, filename, or menu row on the plain CLI path. Like
+// SanitizeText it removes escape/control bytes, but UNLIKE SanitizeText it
+// collapses newlines and tabs to spaces so the row stays one line. Each case
+// asserts BOTH the dangerous byte is absent AND the good text is present, so it
+// is not vacuous.
+func TestSanitizeLine(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		absent  []rune // bytes/runes that must NOT survive
+		contain []string
+	}{
+		{
+			name:    "csi sgr stripped",
+			in:      "\x1b[31mhost\x1b[0m",
+			absent:  []rune{0x1b},
+			contain: []string{"host"},
+		},
+		{
+			name:    "osc set title stripped",
+			in:      "a\x1b]0;pwned\x07b",
+			absent:  []rune{0x1b, 0x07},
+			contain: []string{"a", "b"},
+		},
+		{
+			name:    "c1 csi byte and del removed",
+			in:      "x\u009by\x7fz",
+			absent:  []rune{0x9b, 0x7f},
+			contain: []string{"x", "y", "z"},
+		},
+		{
+			// The key difference from SanitizeText: newlines and tabs
+			// collapse to spaces so the row stays one line.
+			name:    "newlines and tabs collapse to spaces",
+			in:      "line1\nline2\tcol",
+			absent:  []rune{'\n', '\t'},
+			contain: []string{"line1 line2 col"},
+		},
+		{
+			name:    "printable unicode preserved",
+			in:      "pve-node-01 (café)",
+			contain: []string{"pve-node-01 (café)"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := SanitizeLine(tc.in)
+			for _, r := range tc.absent {
+				if strings.ContainsRune(out, r) {
+					t.Fatalf("SanitizeLine(%q) = %q, must not contain %#U", tc.in, out, r)
+				}
+			}
+			for _, want := range tc.contain {
+				if !strings.Contains(out, want) {
+					t.Fatalf("SanitizeLine(%q) = %q, must contain %q", tc.in, out, want)
+				}
+			}
+		})
 	}
 }

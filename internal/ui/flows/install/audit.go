@@ -142,6 +142,19 @@ type auditResultAction int
 
 const auditResultActionBack auditResultAction = iota
 
+// auditResultPrompt builds the styled "Status:" block for an audit outcome, mirroring
+// buildWorkflowStatusPrompt: a colored keyword line + an optional Subtle explanation. It is a
+// pure string builder (extracted for testability). Keyword and explanation are free-form (may
+// embed external tool output / error strings), so both are SanitizeText-scrubbed before theme
+// rendering to keep raw ANSI/OSC/C0/C1 escapes out of the verbatim WithSelectorPromptStyled path.
+func auditResultPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation string) string {
+	prompt := theme.Text.Render("Status: ") + renderHealthcheckLevel(level, components.SanitizeText(keyword))
+	if exp := components.SanitizeText(explanation); exp != "" {
+		prompt += "\n\n" + theme.Subtle.Render(exp)
+	}
+	return prompt
+}
+
 // showAuditResult presents a post-install audit outcome with the SAME styled look as the
 // healthcheck/daemon result screens: a "Status:" line with a colored keyword (green ✓ Ok,
 // red ✗ Error, yellow ⚠ Warn, yellow with no symbol Neutral, via renderHealthcheckLevel) and,
@@ -150,10 +163,7 @@ const auditResultActionBack auditResultAction = iota
 // they replaced): the result and any esc/abort are swallowed, never propagated as an error.
 func showAuditResult(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation string, backToMenu bool) {
 	errAuditResultEsc := errors.New("post-install audit result: esc")
-	prompt := theme.Text.Render("Status: ") + renderHealthcheckLevel(level, keyword)
-	if explanation != "" {
-		prompt += "\n\n" + theme.Subtle.Render(explanation)
-	}
+	prompt := auditResultPrompt(level, keyword, explanation)
 	// Mirror the Telegram/healthcheck check screens' leave item: the install flow
 	// continues forward ("Continue"); the dashboard returns to its menu ("Back").
 	leaveLabel, leaveDesc := "Continue", "continue the install"

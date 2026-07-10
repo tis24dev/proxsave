@@ -54,3 +54,27 @@ func TestBuildHealthcheckPromptSensors(t *testing.T) {
 		t.Fatalf("no sensors must render no Sensors block:\n%s", none)
 	}
 }
+
+// TestBuildHealthcheckPromptSanitizesInjection: the explanation (free-form probe
+// error text, e.g. orNA(d.Err) read raw from the status file) and a sensor Name
+// (a status-file record key) reach the verbatim styled-prompt path, so raw escape
+// bytes in them must be stripped. Assert absence of the injected OSC/BEL/C1/CSI
+// markers (theme rendering adds its own legitimate SGR), and that real text survives.
+func TestBuildHealthcheckPromptSanitizesInjection(t *testing.T) {
+	sensors := []health.SensorRow{
+		{Name: "proxsave-\x1b]0;pwned\x07alive", Level: health.SensorOk, State: "ok", Age: "10s ago"},
+	}
+	v := buildHealthcheckPrompt(false, "", "UNREACHABLE",
+		"probe failed: \x1b[2J\x07connection refused\x1b]0;evil\x07",
+		orchestrator.HealthcheckSetupLevelError, sensors)
+	for _, bad := range []string{"\x1b]0;", "\x07", "\x9b", "\x1b[2J", "pwned", "evil"} {
+		if strings.Contains(v, bad) {
+			t.Fatalf("healthcheck prompt leaks injected sequence %q:\n%q", bad, v)
+		}
+	}
+	for _, want := range []string{"probe failed:", "connection refused", "proxsave-", "alive"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("sanitized prompt dropped legitimate text %q:\n%q", want, v)
+		}
+	}
+}

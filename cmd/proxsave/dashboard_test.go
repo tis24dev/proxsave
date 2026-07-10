@@ -353,6 +353,53 @@ func TestBuildDaemonStatusPrompt(t *testing.T) {
 	}
 }
 
+// TestBuildDaemonStatusPromptSanitizesInjection: a daemon whose Version/Commit (RAW from
+// .daemon_info.json) and whose config-derived mode / systemctl-derived active carry raw escape
+// bytes must NOT render those sequences into the verbatim WithSelectorPromptStyled path, while the
+// human-readable text survives. This closes the daemon-info escape path (Version/Commit) plus the
+// external mode/active segments. assertNoRawInjection lives in daemon_restart_verify_test.go (same
+// package): it asserts on ABSENCE of the injected OSC/BEL/C1/CSI markers, not "no ESC at all"
+// (theme rendering adds its own legitimate SGR color codes).
+func TestBuildDaemonStatusPromptSanitizesInjection(t *testing.T) {
+	behind := health.DaemonState{
+		HaveInfo:     true,
+		Version:      "1.0\x1b]0;pwned\x07",
+		Commit:       "abc\x1b[2Jdef",
+		AlignChecked: true,
+		Aligned:      false,
+		Active:       true,
+		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
+	}
+	level, keyword, expl := daemonStatusStyle(behind)
+	prompt := buildDaemonStatusPrompt(
+		level, keyword, expl,
+		"cron\x1b]0;evilmode\x07", // mode: from the config file
+		"installed",
+		"active\x9b\x1b]0;x\x07running", // active: from systemctl (0x9b is the bare C1 CSI byte)
+		"no",
+		behind,
+	)
+	assertNoRawInjection(t, prompt)
+	// OSC payloads ("pwned", "evilmode") are stripped WHOLE with their escape, so
+	// they must NOT survive. Commit's CSI erase carries no payload, so "abcdef"
+	// rejoins; the bare 0x9b in "active" drops without eating a real char.
+	for _, bad := range []string{"pwned", "evilmode"} {
+		if strings.Contains(prompt, bad) {
+			t.Fatalf("OSC payload %q must be stripped with its escape\n---\n%s", bad, prompt)
+		}
+	}
+	for _, want := range []string{
+		"Running version: 1.0",
+		"abcdef",
+		"Scheduler mode: cron",
+		"Service state (systemctl is-active): activerunning",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("sanitized status prompt dropped legitimate text %q\n---\n%s", want, prompt)
+		}
+	}
+}
+
 // TestDaemonStatusStyleBehindWithoutRecord: the record-less-but-stale daemon (HaveInfo=false, but
 // alignment determined by the /proc fallback) must now render "behind - restart needed". This is the
 // core of the fix: before, the behind gate required HaveInfo, so a record-less stale daemon read
