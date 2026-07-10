@@ -241,9 +241,6 @@ func TestCheckHealthcheckConnectionPopulatesDaemonAlignment(t *testing.T) {
 		base := t.TempDir()
 		seedDaemonInfoFor(t, base, now)
 		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
-		if !res.DaemonHaveInfo {
-			t.Fatalf("DaemonHaveInfo must be true when a record was found")
-		}
 		if res.DaemonAligned {
 			t.Fatalf("DaemonAligned must be false when /proc reports the binary replaced")
 		}
@@ -260,8 +257,8 @@ func TestCheckHealthcheckConnectionPopulatesDaemonAlignment(t *testing.T) {
 		base := t.TempDir()
 		seedDaemonInfoFor(t, base, now)
 		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
-		if !res.DaemonHaveInfo || !res.DaemonAligned {
-			t.Fatalf("aligned daemon: HaveInfo=%v Aligned=%v, want true/true", res.DaemonHaveInfo, res.DaemonAligned)
+		if !res.DaemonAligned {
+			t.Fatalf("aligned daemon: Aligned=%v, want true", res.DaemonAligned)
 		}
 		if res.DaemonStale != "" {
 			t.Fatalf("DaemonStale must be empty when aligned, got %q", res.DaemonStale)
@@ -276,7 +273,6 @@ func TestClassifyHealthcheckBehind(t *testing.T) {
 	behind := HealthcheckCheckResult{
 		Err: nil, Reachable: true, DaemonRead: true,
 		Daemon:             health.Diagnosis{State: health.TxRunningNoReport, DaemonUp: true},
-		DaemonHaveInfo:     true,
 		DaemonAlignChecked: true, // a real comparison ran and mismatched -> genuinely behind
 		DaemonAligned:      false,
 	}
@@ -303,16 +299,35 @@ func TestClassifyHealthcheckBehind(t *testing.T) {
 	}
 }
 
-// TestClassifyHealthcheckBehindWithoutRecord: a record-less-but-stale daemon (DaemonHaveInfo=false,
+// TestClassifyHealthcheckBehindSurfacesReasonAndVersion: the BEHIND message wires the
+// specific stale reason (DaemonStale) and the running version (DaemonVersion) instead of
+// the generic fallback sentence.
+func TestClassifyHealthcheckBehindSurfacesReasonAndVersion(t *testing.T) {
+	behind := HealthcheckCheckResult{
+		Err: nil, Reachable: true, DaemonRead: true,
+		Daemon:             health.Diagnosis{State: health.TxRunningNoReport, DaemonUp: true},
+		DaemonAlignChecked: true,
+		DaemonAligned:      false,
+		DaemonStale:        "running binary was replaced on disk",
+		DaemonVersion:      "1.2.3",
+	}
+	msg := ClassifyHealthcheckSetupResult(behind).Message
+	for _, want := range []string{"running binary was replaced on disk", "1.2.3", "restart"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("BEHIND message must surface %q, got %q", want, msg)
+		}
+	}
+}
+
+// TestClassifyHealthcheckBehindWithoutRecord: a record-less-but-stale daemon (no identity record,
 // but alignment determined by the /proc fallback) now reads BEHIND. The gate no longer requires a
-// record (DaemonHaveInfo), so the daemon that predates the identity-record feature is caught instead
-// of flattening to the transmission-state headline.
+// record, so the daemon that predates the identity-record feature is caught instead of flattening
+// to the transmission-state headline.
 func TestClassifyHealthcheckBehindWithoutRecord(t *testing.T) {
 	behind := HealthcheckCheckResult{
 		Err: nil, Reachable: true, DaemonRead: true,
 		Daemon:             health.Diagnosis{State: health.TxRunningNoReport, DaemonUp: true},
-		DaemonHaveInfo:     false, // no record: the /proc fallback determined alignment
-		DaemonAlignChecked: true,
+		DaemonAlignChecked: true, // no record: the /proc fallback determined alignment
 		DaemonAligned:      false,
 	}
 	st := ClassifyHealthcheckSetupResult(behind)
@@ -364,9 +379,6 @@ func TestCheckHealthcheckConnectionProcStaleFallback(t *testing.T) {
 	// assert on the Daemon* alignment fields the fallback populated. The record-less classify BEHIND
 	// is covered by TestClassifyHealthcheckBehindWithoutRecord.
 	res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
-	if res.DaemonHaveInfo {
-		t.Fatalf("DaemonHaveInfo must be false with no record")
-	}
 	if !res.DaemonAlignChecked {
 		t.Fatalf("DaemonAlignChecked must be true: the /proc fallback returned a verdict")
 	}

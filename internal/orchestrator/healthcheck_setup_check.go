@@ -43,7 +43,6 @@ type HealthcheckCheckResult struct {
 	// reported. DaemonStale carries the human phrasing when not aligned; DaemonVersion is the
 	// running daemon's recorded version.
 	DaemonAligned      bool
-	DaemonHaveInfo     bool
 	DaemonAlignChecked bool
 	DaemonStale        string
 	DaemonVersion      string
@@ -114,7 +113,6 @@ func CheckHealthcheckConnection(ctx context.Context, serverAPIHost, serverID, ba
 	res.RawStatus = ds.RawStatus
 	res.HaveStatus = ds.HaveStatus
 	res.DaemonAligned = ds.Aligned
-	res.DaemonHaveInfo = ds.HaveInfo
 	res.DaemonAlignChecked = ds.AlignChecked
 	res.DaemonStale = ds.StaleReason
 	res.DaemonVersion = ds.Version

@@ -128,7 +128,7 @@ func CheckDaemonState(in DaemonStateInput) DaemonState {
 			s.AlignChecked = true
 			s.Aligned = !stale
 			if stale {
-				s.StaleReason = "running binary was replaced on disk (rebuilt/upgraded without a restart)"
+				s.StaleReason = "running binary was replaced on disk"
 			}
 		}
 	}

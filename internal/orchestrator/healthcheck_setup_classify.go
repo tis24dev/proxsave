@@ -96,11 +96,20 @@ func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetup
 	// the file without a restart) needs a restart to load the update. This is DISTINCT from "not
 	// reporting yet" and takes precedence over the transmission-state headline. Only reported when
 	// alignment was actually determined (DaemonAlignChecked) by the record-independent /proc probe;
-	// when it could not be determined, alignment is UNKNOWN and must NOT read as behind. A record
-	// (DaemonHaveInfo) is not required, so any live daemon on a replaced binary is caught.
+	// when it could not be determined, alignment is UNKNOWN and must NOT read as behind. A daemon
+	// identity record is not required (the /proc probe alone decides), so a live daemon on a
+	// replaced binary is caught. The message surfaces the specific stale reason and running version.
 	if res.DaemonAlignChecked && !res.DaemonAligned {
 		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "BEHIND"
-		st.Message = "The monitoring daemon is running an older binary than the one now on disk; restart it to load the update."
+		reason := res.DaemonStale
+		if reason == "" {
+			reason = "it is running an older binary than the one now on disk"
+		}
+		ver := ""
+		if res.DaemonVersion != "" {
+			ver = " (v" + res.DaemonVersion + ")"
+		}
+		st.Message = "The monitoring daemon" + ver + " is behind: " + reason + "; restart it to load the update."
 		return st
 	}
 	return applyHealthcheckDaemonState(st, res.Daemon)
