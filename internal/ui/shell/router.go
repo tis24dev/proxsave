@@ -22,7 +22,6 @@ const (
 type screenEntry struct {
 	id     uint64
 	screen Screen
-	abort  func()
 }
 
 // rootModel renders the ProxSave frame and routes messages to the top screen
