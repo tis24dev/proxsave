@@ -46,6 +46,8 @@ func TestConfirmDefaultParity(t *testing.T) {
 		{"default-yes n is No", true, []string{"n"}, false},
 		{"default-no toggle then enter is Yes", false, []string{"left", "enter"}, true},
 		{"default-yes toggle then enter is No", true, []string{"tab", "enter"}, false},
+		{"default-no up then enter is Yes", false, []string{"up", "enter"}, true},
+		{"default-yes down then enter is No", true, []string{"down", "enter"}, false},
 		{"default-yes esc is No", true, []string{"esc"}, false},
 	}
 	for _, tc := range cases {
