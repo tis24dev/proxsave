@@ -33,7 +33,12 @@ func consoleUseColor(f *os.File) bool {
 type bootstrapEntry struct {
 	level   types.LogLevel
 	message string
-	raw     bool
+	// ts is the console timestamp captured when the entry was recorded, so
+	// ReplayConsoleSince can re-print with the same "[ts] LEVEL" prefix the live
+	// path used (the live print is suppressed during a UI handoff, so the record
+	// time is the authoritative timestamp for the event). Empty for raw entries.
+	ts  string
+	raw bool
 }
 
 // BootstrapLogger accumulates logs generated before the main logger is initialized,
@@ -109,7 +114,13 @@ func (b *BootstrapLogger) ReplayConsoleSince(mark int) {
 	for i := mark; i < len(entries); i++ {
 		e := entries[i]
 		if !e.raw && e.level >= types.LogLevelCritical && e.level <= types.LogLevelWarning {
-			fmt.Fprintln(os.Stderr, e.message)
+			ts := e.ts
+			if ts == "" {
+				ts = time.Now().Format(bootstrapTimeFormat)
+			}
+			// Same "[ts] LEVEL   message" prefix as the live console path, so a
+			// replayed line is indistinguishable from a normally printed one.
+			fmt.Fprint(os.Stderr, FormatConsoleLogLine(ts, e.level, e.message, consoleUseColor(os.Stderr)))
 		}
 	}
 }
@@ -225,6 +236,7 @@ func (b *BootstrapLogger) record(level types.LogLevel, message string) {
 	b.entries = append(b.entries, bootstrapEntry{
 		level:   level,
 		message: message,
+		ts:      time.Now().Format(bootstrapTimeFormat),
 	})
 }
 
