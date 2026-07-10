@@ -49,8 +49,17 @@ func KeyMsg(name string) tea.Msg {
 		}
 		break
 	}
+	if name == "" {
+		panic(`shell.KeyMsg: empty key name (or a bare modifier like "ctrl+")`)
+	}
 	if code, ok := specialKeys[name]; ok {
-		return tea.KeyPressMsg{Code: code, Mod: mod}
+		key := tea.KeyPressMsg{Code: code, Mod: mod}
+		if code == tea.KeySpace && mod == 0 {
+			// Real terminals emit space with Text set; without it a scripted
+			// space is dropped from text-input / filter paths.
+			key.Text = " "
+		}
+		return key
 	}
 	r := []rune(name)[0]
 	key := tea.KeyPressMsg{Code: r, Mod: mod}

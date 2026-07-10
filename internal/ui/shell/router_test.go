@@ -370,6 +370,23 @@ func TestKeyMsgHelper(t *testing.T) {
 			t.Errorf("KeyMsg(%q).String() = %q, want %q", input, got, want)
 		}
 	}
+	// Space carries its Text, matching real terminals, so a scripted space
+	// reaches text-input / filter paths instead of being dropped.
+	if sp, ok := KeyMsg("space").(tea.KeyPressMsg); !ok || sp.Text != " " {
+		t.Errorf(`KeyMsg("space").Text = %q, want a single space`, sp.Text)
+	}
+	// An empty name (or a bare modifier that trims to empty) must panic with a
+	// descriptive message, not an index-out-of-range.
+	for _, bad := range []string{"", "ctrl+"} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("KeyMsg(%q) should panic on an empty key name", bad)
+				}
+			}()
+			KeyMsg(bad)
+		}()
+	}
 	if n := len(Keys("up down enter")); n != 3 {
 		t.Errorf("Keys script length = %d, want 3", n)
 	}
