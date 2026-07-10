@@ -7,12 +7,12 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
-// renderWorkflowStatusLevel is the colored-keyword renderer for a workflow "Status:" line.
-// It is BYTE-IDENTICAL to dashboard.go renderDaemonStatusLevel (same switch, same theme
-// constants), so a decrypt-workflow outcome screen is visually identical to the daemon /
-// check result screens: green ✓ (Ok), red ✗ (Error), yellow ⚠ (Warn), and yellow with NO
-// symbol (Neutral). HealthcheckSetupLevel lives in this package, so no import is needed.
-func renderWorkflowStatusLevel(level HealthcheckSetupLevel, text string) string {
+// RenderStatusLevel is the SINGLE colored-keyword renderer for every "Status:" line:
+// green ✓ (Ok), red ✗ (Error), yellow ⚠ (Warn), yellow with NO symbol (Neutral). The
+// dashboard daemon screens (renderDaemonStatusLevel) and the install healthcheck/audit
+// screens (renderHealthcheckLevel) delegate here, so the three can never drift (previously
+// they were hand-copied byte-for-byte, guarded only by comments).
+func RenderStatusLevel(level HealthcheckSetupLevel, text string) string {
 	switch level {
 	case HealthcheckSetupLevelOk:
 		return theme.SuccessText.Render(theme.SymbolSuccess + " " + text)
@@ -36,7 +36,7 @@ func renderWorkflowStatusLevel(level HealthcheckSetupLevel, text string) string 
 func buildWorkflowStatusPrompt(level HealthcheckSetupLevel, keyword, explanation string) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderWorkflowStatusLevel(level, components.SanitizeText(keyword)))
+	b.WriteString(RenderStatusLevel(level, components.SanitizeText(keyword)))
 	if exp := components.SanitizeText(explanation); exp != "" {
 		b.WriteString("\n\n")
 		b.WriteString(theme.Subtle.Render(exp))

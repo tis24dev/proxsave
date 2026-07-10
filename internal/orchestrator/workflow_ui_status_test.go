@@ -3,7 +3,43 @@ package orchestrator
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
+
+// TestRenderStatusLevel locks the single shared Status: renderer (the daemon, healthcheck,
+// audit, and workflow screens all delegate here): green ✓ Ok, red ✗ Error, yellow ⚠ Warn,
+// and yellow with NO symbol for Neutral.
+func TestRenderStatusLevel(t *testing.T) {
+	cases := []struct {
+		level  HealthcheckSetupLevel
+		symbol string
+	}{
+		{HealthcheckSetupLevelOk, theme.SymbolSuccess},
+		{HealthcheckSetupLevelError, theme.SymbolError},
+		{HealthcheckSetupLevelWarn, theme.SymbolWarning},
+		{HealthcheckSetupLevelNeutral, ""},
+	}
+	for _, tc := range cases {
+		plain := ansi.Strip(RenderStatusLevel(tc.level, "msg"))
+		if !strings.Contains(plain, "msg") {
+			t.Fatalf("level %v: missing text: %q", tc.level, plain)
+		}
+		if tc.symbol == "" {
+			for _, sym := range []string{theme.SymbolSuccess, theme.SymbolError, theme.SymbolWarning} {
+				if strings.Contains(plain, sym) {
+					t.Fatalf("neutral must carry no symbol, got %q", plain)
+				}
+			}
+			continue
+		}
+		if !strings.HasPrefix(plain, tc.symbol+" ") {
+			t.Fatalf("level %v: want prefix %q, got %q", tc.level, tc.symbol, plain)
+		}
+	}
+}
 
 // TestBuildWorkflowStatusPromptStripsInjectedEscapes proves buildWorkflowStatusPrompt scrubs
 // free-form keyword/explanation before theme rendering, so raw ANSI/OSC/C0/C1 escapes from

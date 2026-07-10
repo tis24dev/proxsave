@@ -554,20 +554,10 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 }
 
 // renderDaemonStatusLevel is the colored-keyword renderer for the daemon-status "Status:" line.
-// It replicates renderHealthcheckLevel (package-private to install) with the SAME theme constants,
-// so the two screens are visually identical: green ✓ (Ok), red ✗ (Error), yellow ⚠ (Warn), and
-// yellow with NO symbol (Neutral). The daemon screen only ever emits Ok/Warn today.
+// It delegates to the shared orchestrator.RenderStatusLevel so the daemon, workflow, and install
+// healthcheck/audit screens can never drift apart.
 func renderDaemonStatusLevel(level orchestrator.HealthcheckSetupLevel, text string) string {
-	switch level {
-	case orchestrator.HealthcheckSetupLevelOk:
-		return theme.SuccessText.Render(theme.SymbolSuccess + " " + text)
-	case orchestrator.HealthcheckSetupLevelError:
-		return theme.ErrorText.Render(theme.SymbolError + " " + text)
-	case orchestrator.HealthcheckSetupLevelNeutral:
-		return theme.WarningText.Render(text)
-	default: // HealthcheckSetupLevelWarn
-		return theme.WarningText.Render(theme.SymbolWarning + " " + text)
-	}
+	return orchestrator.RenderStatusLevel(level, text)
 }
 
 // buildDaemonStatusPrompt renders the styled prompt shown above the Check/Back choices (mirrors
