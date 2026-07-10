@@ -102,7 +102,7 @@ type StreamTask struct {
 	lines      []string // bounded ring of RAW retained log lines (with ANSI) - copy source
 	wrapped    []string // pre-soft-wrapped DISPLAY lines derived from lines at wrapWidth
 	wrapWidth  int      // the width wrapped was computed against (0 = not yet wrapped)
-	dirty      bool     // wrapped content changed since the last SetContent (View gate)
+	dirty      bool     // wrapped content changed since the last SetContentLines (View gate)
 	dropped    bool     // true once the ring has shed its oldest lines
 	done       bool
 	outcome    string
@@ -235,7 +235,7 @@ func (t *StreamTask) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			// original logical lines, not the panel's cosmetic wrap boundaries.
 			t.copied = true
 			return t, tea.SetClipboard(ansi.Strip(strings.Join(t.lines, "\n")))
-		case "enter", "space", "return":
+		case "enter", "space":
 			if t.done {
 				return t, t.Resolve(StreamResult{Err: t.err}, nil)
 			}
@@ -326,8 +326,8 @@ func (t *StreamTask) View(width, height int) string {
 	}
 
 	// Size FIRST (garble fix 80704d7 / memory proxsave-charm-viewport-gotcha):
-	// SetWidth/SetHeight then SetContent, both here in View, so the content is
-	// always measured against the CURRENT width and re-pinned while following.
+	// SetWidth/SetHeight then SetContentLines, both here in View, so the content
+	// is always measured against the CURRENT width and re-pinned while following.
 	t.vp.SetWidth(width)
 	t.vp.SetHeight(bodyH)
 
@@ -341,10 +341,11 @@ func (t *StreamTask) View(width, height int) string {
 	}
 
 	// GATE: only push content into the viewport when the wrapped content actually
-	// changed (new lines / re-wrap) - not on every spinner tick or key. SetContent
-	// stays HERE, after sizing, per the garble fix.
+	// changed (new lines / re-wrap) - not on every spinner tick or key.
+	// SetContentLines (pre-wrapped, \n-free rows) stays HERE, after sizing, per
+	// the garble fix, and avoids a Join+Split round-trip vs SetContent.
 	if t.dirty {
-		t.vp.SetContent(strings.Join(t.wrapped, "\n"))
+		t.vp.SetContentLines(t.wrapped)
 		t.dirty = false
 	}
 	if t.follow {
