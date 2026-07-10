@@ -311,7 +311,7 @@ func validateFutureFeatures(cfg *config.Config) error {
 		}
 	}
 	if cfg.CloudEnabled && cfg.CloudRemote == "" {
-		logging.Warning("Cloud backup enabled but CLOUD_REMOTE is empty – disabling cloud storage for this run")
+		logging.Warning("Cloud backup enabled but CLOUD_REMOTE is empty, disabling cloud storage for this run")
 		cfg.CloudEnabled = false
 		cfg.CloudRemote = ""
 		cfg.CloudLogPath = ""

@@ -226,12 +226,12 @@ func shouldSkipUnmountedStorageMount(basePath string, hasData bool, logger *logg
 	}
 	onRootFS, _, err := isPathOnRootFilesystem(basePath)
 	if err != nil {
-		logger.Warning("Storage mount preflight: cannot determine whether %s is on the root filesystem: %v — proceeding with directory creation", basePath, err)
+		logger.Warning("Storage mount preflight: cannot determine whether %s is on the root filesystem: %v; proceeding with directory creation", basePath, err)
 		return false
 	}
 	suspicious := isSuspiciousDatastoreMountLocation(basePath) || zfsLikely
 	if rootFilesystemMountShouldSkip(onRootFS, suspicious, hasData, false) {
-		logger.Warning("Storage mount preflight: %s resolves to the root filesystem (mount missing?) — skipping directory creation to avoid writing to the wrong disk; mount the storage disk / import the pool first", basePath)
+		logger.Warning("Storage mount preflight: %s resolves to the root filesystem (mount missing?), skipping directory creation to avoid writing to the wrong disk; mount the storage disk / import the pool first", basePath)
 		return true
 	}
 	return false

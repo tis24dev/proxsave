@@ -138,7 +138,7 @@ func cleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 
 	if _, err := cleanupStat(mountGuardBaseDir); err != nil {
 		if os.IsNotExist(err) {
-			logger.Info("No guard directory found at %s — nothing to clean up. If you deleted it manually and a mountpoint is still read-only, check 'lsattr -d <mountpoint>' and clear it with 'chattr -i <mountpoint>' while the storage is unmounted.", mountGuardBaseDir)
+			logger.Info("No guard directory found at %s, nothing to clean up. If you deleted it manually and a mountpoint is still read-only, check 'lsattr -d <mountpoint>' and clear it with 'chattr -i <mountpoint>' while the storage is unmounted.", mountGuardBaseDir)
 			return report(), nil
 		}
 		return report(), fmt.Errorf("stat guards dir: %w", err)

@@ -174,7 +174,7 @@ fi
 
 printf '%s\n' "${PUBKEY_PEM}" > pubkey.pem
 if ! openssl dgst -sha256 -verify pubkey.pem -signature SHA256SUMS.sig SHA256SUMS >/dev/null 2>&1; then
-  echo "❌ SHA256SUMS signature verification FAILED — refusing to install"
+  echo "❌ SHA256SUMS signature verification FAILED, refusing to install"
   exit 1
 fi
 echo "✔ Signature OK (release authenticity verified)"

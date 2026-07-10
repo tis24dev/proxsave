@@ -591,7 +591,7 @@ func buildPushoverPayload(endpoint config.WebhookEndpoint, data *NotificationDat
 		return nil, fmt.Errorf("pushover: AUTH_USER (Pushover user/group key) is required")
 	}
 
-	title := truncateRunes(fmt.Sprintf("%s Proxmox Backup — %s", GetStatusEmoji(data.Status), data.Hostname), 250)
+	title := truncateRunes(fmt.Sprintf("%s Proxmox Backup: %s", GetStatusEmoji(data.Status), data.Hostname), 250)
 
 	message := truncateRunes(fmt.Sprintf(
 		"Status: %s\nDuration: %s\nSize: %s\nErrors: %d | Warnings: %d",

@@ -436,7 +436,7 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 			continue
 		}
 		if logger != nil {
-			logger.Warning("PVE mount guard: %s resolves to root filesystem (mount missing?) — bind-mounted a read-only guard to prevent writes until storage is available", guardTarget)
+			logger.Warning("PVE mount guard: %s resolves to root filesystem (mount missing?), bind-mounted a read-only guard to prevent writes until storage is available", guardTarget)
 		}
 	}
 

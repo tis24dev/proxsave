@@ -44,7 +44,7 @@ func (w *restoreUIWorkflowRun) prepareBundle() error {
 	}
 	w.candidate = candidate
 	w.prepared = prepared
-	w.logger.Info("Restore target: system root (/) — files will be written back to their original paths")
+	w.logger.Info("Restore target: system root (/); files will be written back to their original paths")
 	warnLegacyImmutableGuards(w.logger)
 	return nil
 }
