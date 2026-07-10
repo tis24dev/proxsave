@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
 const (
@@ -36,6 +37,18 @@ func describeBackupCandidate(cand *backupCandidate) backupCandidateDisplay {
 		Compression: formatBackupCandidateCompression(cand),
 		Base:        backupCandidateBaseName(cand),
 	}
+	// Sanitize manifest-derived fields here, the single choke point feeding
+	// both the CLI table (printed raw via fmt.Print*) and the Summary. The
+	// TUI double-sanitizes harmlessly via NewSelector. No-op on clean data,
+	// so column-width math on these fields stays consistent.
+	display.Created = components.SanitizeLine(display.Created)
+	display.Hostname = components.SanitizeLine(display.Hostname)
+	display.Mode = components.SanitizeLine(display.Mode)
+	display.Tool = components.SanitizeLine(display.Tool)
+	display.Target = components.SanitizeLine(display.Target)
+	display.Compression = components.SanitizeLine(display.Compression)
+	display.Base = components.SanitizeLine(display.Base)
+	// Build Summary from the already-sanitized fields so it is clean too.
 	display.Summary = formatBackupCandidateSummary(display)
 	return display
 }

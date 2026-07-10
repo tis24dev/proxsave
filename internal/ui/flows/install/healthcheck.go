@@ -210,10 +210,12 @@ func buildHealthcheckPrompt(selfMode bool, magicLink, keyword, explanation strin
 	// state is yellow with NO symbol, so it reads yellow-without-triangle like the upgrade
 	// and Telegram check screens (only a real post-check warning carries the ⚠).
 	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderHealthcheckLevel(level, keyword))
-	if explanation != "" {
+	b.WriteString(renderHealthcheckLevel(level, components.SanitizeText(keyword)))
+	// explanation embeds free-form probe error text (orNA(d.Err) read raw from the
+	// status file): scrub it before the verbatim styled-prompt path.
+	if exp := components.SanitizeText(explanation); exp != "" {
 		b.WriteString("\n")
-		b.WriteString(theme.Subtle.Render(explanation))
+		b.WriteString(theme.Subtle.Render(exp))
 	}
 
 	// Per-sensor list: what we actually transmit + its real state, one colored line each,
@@ -228,7 +230,8 @@ func buildHealthcheckPrompt(selfMode bool, magicLink, keyword, explanation strin
 				line += " (last ping " + s.Age + ")"
 			}
 			b.WriteString("\n")
-			b.WriteString(renderHealthcheckLevel(sensorSetupLevel(s.Level), line))
+			// s.Name is a status-file record key read raw: scrub the composed line.
+			b.WriteString(renderHealthcheckLevel(sensorSetupLevel(s.Level), components.SanitizeText(line)))
 		}
 	}
 	return b.String()

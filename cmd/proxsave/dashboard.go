@@ -357,12 +357,16 @@ const daemonResultActionBack daemonResultAction = iota
 func buildDaemonResultPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation string) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderDaemonStatusLevel(level, keyword))
+	b.WriteString(renderDaemonStatusLevel(level, components.SanitizeText(keyword)))
 	// A what-to-do suggestion is shown only on a problem outcome (success passes ""), with a
-	// blank line separating it from the Status line.
-	if explanation != "" {
+	// blank line separating it from the Status line. keyword and explanation are free-form (may
+	// embed external tool output, error strings, or the daemon Version), so both are
+	// SanitizeText-scrubbed before theme rendering to keep raw ANSI/OSC/C0/C1 escapes out of the
+	// verbatim WithSelectorPromptStyled path. The scrub-then-render shape is BYTE-IDENTICAL to
+	// buildWorkflowStatusPrompt; the exp != "" guard preserves the success-passes-"" behavior.
+	if exp := components.SanitizeText(explanation); exp != "" {
 		b.WriteString("\n\n")
-		b.WriteString(theme.Subtle.Render(explanation))
+		b.WriteString(theme.Subtle.Render(exp))
 	}
 	return b.String()
 }
@@ -571,25 +575,31 @@ func renderDaemonStatusLevel(level orchestrator.HealthcheckSetupLevel, text stri
 // explanation), then a Details block with the scheduler/service facts. The wording/logic of the
 // detail lines is unchanged from the old Notice body; only the presentation moved into the prompt.
 func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation, mode, unit, active, optOut string, ds health.DaemonState) string {
+	// Every dynamic segment below carries text from outside this file (keyword/explanation from
+	// daemonStatusStyle, mode from the config file, active from systemctl, Version/Commit RAW from
+	// .daemon_info.json), so each is SanitizeText-scrubbed before theme rendering to keep raw
+	// ANSI/OSC/C0/C1 escapes out of the verbatim WithSelectorPromptStyled path. Compile-time
+	// literals (unit/optOut, the "Binary alignment" verdict) are left as-is: sanitizing them is a
+	// no-op.
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Resident backup daemon (runs scheduled backups + healthchecks reporting)."))
 	b.WriteString("\n\n")
 
 	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderDaemonStatusLevel(level, keyword))
-	if explanation != "" {
+	b.WriteString(renderDaemonStatusLevel(level, components.SanitizeText(keyword)))
+	if exp := components.SanitizeText(explanation); exp != "" {
 		b.WriteString("\n")
-		b.WriteString(theme.Subtle.Render(explanation))
+		b.WriteString(theme.Subtle.Render(exp))
 	}
 
 	b.WriteString("\n\n")
 	b.WriteString(theme.Text.Render("Details:"))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Scheduler mode: " + mode))
+	b.WriteString(theme.Text.Render("Scheduler mode: " + components.SanitizeText(mode)))
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Daemon service (proxsave-daemon.service): " + unit))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + active))
+	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + components.SanitizeText(active)))
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Opted out of auto-migration (--daemon-remove): " + optOut))
 	// The running version comes from the identity record (HaveInfo). The alignment verdict comes from
@@ -599,7 +609,7 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	// "behind".
 	if ds.HaveInfo {
 		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Running version: " + ds.Version + " (" + ds.Commit + ")"))
+		b.WriteString(theme.Text.Render("Running version: " + components.SanitizeText(ds.Version) + " (" + components.SanitizeText(ds.Commit) + ")"))
 	}
 	if ds.HaveInfo || ds.AlignChecked {
 		align := "unknown"
