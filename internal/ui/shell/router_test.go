@@ -279,7 +279,7 @@ func TestRouterTranslatesMouseIntoBodySpace(t *testing.T) {
 		t.Fatalf("coordinates not rebased: %+v", got)
 	}
 
-	// Chrome click (header area) is swallowed.
+	// Chrome click (header area, above the body) is swallowed.
 	scr.lastMsg = nil
 	m.Update(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft}) //nolint:errcheck
 	if scr.lastMsg != nil {
@@ -290,6 +290,63 @@ func TestRouterTranslatesMouseIntoBodySpace(t *testing.T) {
 	m.Update(tea.MouseWheelMsg{X: 0, Y: 0, Button: tea.MouseWheelDown}) //nolint:errcheck
 	if _, ok := scr.lastMsg.(tea.MouseWheelMsg); !ok {
 		t.Fatalf("wheel must pass through, got %T", scr.lastMsg)
+	}
+}
+
+// TestRouterSwallowsMouseBelowAndRightOfBody locks the symmetric bound: a
+// click on the footer/border below the body, or on the border/padding to the
+// right of it, must be swallowed just like a click on the chrome above/left.
+// Otherwise a component that lays out a cropped-off row at body-Y >= bodyH (at
+// extreme small sizes) would hit-test the off-screen click as a real row.
+func TestRouterSwallowsMouseBelowAndRightOfBody(t *testing.T) {
+	m := newRootModel(Config{AppName: "ProxSave"})
+	scr := newStubScreen(1)
+	m = pushEntry(m, scr, 1, func() {})
+	// Drive a small, known body via a window size; compute its extent the
+	// same way render() does, through the shared helper.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+	m = updated.(rootModel)
+	_, _, innerW, bodyH, _, _, _ := m.bodyViewport()
+
+	// Click below the body: absolute Y = bodyOriginY + bodyH is the first
+	// chrome row under the body (body-Y == bodyH, out of bounds).
+	scr.lastMsg = nil
+	m.Update(tea.MouseClickMsg{X: bodyOriginX, Y: bodyOriginY + bodyH, Button: tea.MouseLeft}) //nolint:errcheck
+	if scr.lastMsg != nil {
+		t.Fatalf("click below the body must be swallowed, got %T", scr.lastMsg)
+	}
+
+	// Click to the right of the body: absolute X = bodyOriginX + innerW is
+	// the first border/padding column past the body (body-X == innerW).
+	scr.lastMsg = nil
+	m.Update(tea.MouseClickMsg{X: bodyOriginX + innerW, Y: bodyOriginY, Button: tea.MouseLeft}) //nolint:errcheck
+	if scr.lastMsg != nil {
+		t.Fatalf("click right of the body must be swallowed, got %T", scr.lastMsg)
+	}
+
+	// Regression guard: an in-body click is still forwarded with rebased
+	// coords, and a wheel event off-body still passes through.
+	scr.lastMsg = nil
+	m.Update(tea.MouseClickMsg{X: bodyOriginX + 1, Y: bodyOriginY + 1, Button: tea.MouseLeft}) //nolint:errcheck
+	if got, ok := scr.lastMsg.(tea.MouseClickMsg); !ok {
+		t.Fatalf("in-body click must be forwarded, got %T", scr.lastMsg)
+	} else if got.X != 1 || got.Y != 1 {
+		t.Fatalf("in-body coordinates not rebased: %+v", got)
+	}
+
+	// Boundary positive control: the LAST in-body cell (body-X == innerW-1,
+	// body-Y == bodyH-1) must still be forwarded. Guards against a high-side
+	// bound that is one cell too tight (e.g. `< innerW-1`).
+	scr.lastMsg = nil
+	m.Update(tea.MouseClickMsg{X: bodyOriginX + innerW - 1, Y: bodyOriginY + bodyH - 1, Button: tea.MouseLeft}) //nolint:errcheck
+	if got, ok := scr.lastMsg.(tea.MouseClickMsg); !ok {
+		t.Fatalf("last in-body cell must be forwarded, got %T", scr.lastMsg)
+	} else if got.X != innerW-1 || got.Y != bodyH-1 {
+		t.Fatalf("last in-body cell coordinates not rebased: %+v (want %d,%d)", got, innerW-1, bodyH-1)
+	}
+	m.Update(tea.MouseWheelMsg{X: bodyOriginX + innerW, Y: bodyOriginY + bodyH, Button: tea.MouseWheelDown}) //nolint:errcheck
+	if _, ok := scr.lastMsg.(tea.MouseWheelMsg); !ok {
+		t.Fatalf("off-body wheel must pass through, got %T", scr.lastMsg)
 	}
 }
 
