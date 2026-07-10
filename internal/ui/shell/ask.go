@@ -36,7 +36,6 @@ func Ask[T any](ctx context.Context, s *Session, scr AskScreen[T]) (T, error) {
 	s.prog.Send(pushScreenMsg{
 		id:     id,
 		screen: scr,
-		abort:  func() { resolve(zero, ErrAborted) },
 	})
 	select {
 	case r := <-resp:
