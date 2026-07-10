@@ -31,7 +31,7 @@ func isNilInterface(v any) bool {
 	}
 }
 
-func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *backupCandidate, err error) {
+func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg *config.Config, logger *logging.Logger, screenTitle string, requireEncrypted bool) (candidate *backupCandidate, err error) {
 	done := logging.DebugStart(logger, "select backup candidate (ui)", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
 
@@ -76,7 +76,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 
 		if scanErr != nil {
 			logger.Warning("Failed to inspect %s: %v", option.Path, scanErr)
-			_ = ui.ShowStatusResult(ctx, "Decrypt", HealthcheckSetupLevelWarn, "SCAN FAILED", fmt.Sprintf("Failed to inspect %s: %v", option.Path, scanErr))
+			_ = ui.ShowStatusResult(ctx, screenTitle, HealthcheckSetupLevelWarn, "SCAN FAILED", fmt.Sprintf("Failed to inspect %s: %v", option.Path, scanErr))
 			if option.IsRclone {
 				// For rclone remotes, persistent failures are unlikely to self-heal,
 				// so remove the option to avoid a broken loop.
@@ -90,7 +90,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 
 		if len(candidates) == 0 {
 			logger.Warning("No backups found in %s", option.Path)
-			_ = ui.ShowStatusResult(ctx, "Decrypt", HealthcheckSetupLevelWarn, "NO BACKUPS FOUND", fmt.Sprintf("No backups found in %s.", option.Path))
+			_ = ui.ShowStatusResult(ctx, screenTitle, HealthcheckSetupLevelWarn, "NO BACKUPS FOUND", fmt.Sprintf("No backups found in %s.", option.Path))
 			pathOptions = removeDecryptPathOption(pathOptions, option)
 			if len(pathOptions) == 0 {
 				return nil, ErrDecryptNoBackups
@@ -102,7 +102,7 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 			encrypted := filterEncryptedCandidates(candidates)
 			if len(encrypted) == 0 {
 				logger.Warning("No encrypted backups found in %s", option.Path)
-				_ = ui.ShowStatusResult(ctx, "Decrypt", HealthcheckSetupLevelWarn, "NO ENCRYPTED BACKUPS", fmt.Sprintf("No encrypted backups found in %s.", option.Path))
+				_ = ui.ShowStatusResult(ctx, screenTitle, HealthcheckSetupLevelWarn, "NO ENCRYPTED BACKUPS", fmt.Sprintf("No encrypted backups found in %s.", option.Path))
 				pathOptions = removeDecryptPathOption(pathOptions, option)
 				if len(pathOptions) == 0 {
 					return nil, ErrDecryptNoBackups
@@ -240,7 +240,7 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 	}()
 
-	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, true)
+	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, "Decrypt", true)
 	if err != nil {
 		return "", err
 	}

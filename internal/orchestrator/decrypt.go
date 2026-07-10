@@ -112,7 +112,7 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 	defer func() { done(err) }()
 
 	ui := newCLIWorkflowUI(reader, logger)
-	return selectBackupCandidateWithUI(ctx, ui, cfg, logger, requireEncrypted)
+	return selectBackupCandidateWithUI(ctx, ui, cfg, logger, "Decrypt", requireEncrypted)
 }
 
 func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []decryptPathOption) (decryptPathOption, error) {
