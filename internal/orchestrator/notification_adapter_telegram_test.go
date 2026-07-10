@@ -78,6 +78,47 @@ func TestTelegramOutcome_FailedIsWarningNotError(t *testing.T) {
 	}
 }
 
+// L3: the per-channel monitoring sensor must go DOWN ("error") when a
+// relay-accepted Telegram message is polled as "failed", even though Success stays
+// true (server acceptance). Otherwise NotifyResults reports "ok" on an undelivered
+// message and the daemon's per-channel sensor stays UP. Success is left untouched.
+func TestRecordNotifierStatus_TelegramFailedDeliveryDrivesSensorDown(t *testing.T) {
+	cases := []struct {
+		name  string
+		state string
+		want  string
+	}{
+		{"failed delivery drives sensor down", "failed", "error"},
+		{"delivered stays ok", "delivered", "ok"},
+		{"pending stays ok (may still deliver)", "pending", "ok"},
+		{"unconfirmed stays ok (confirmation off)", "unconfirmed", "ok"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&bytes.Buffer{})
+			adapter := NewNotificationAdapter(&stubNotifier{name: "Telegram"}, logger)
+			result := &notify.NotificationResult{
+				Success: true, // relay accepted: the run's success signal
+				Method:  "telegram",
+				Metadata: map[string]interface{}{
+					"relay_accepted": true,
+					"telegram_state": c.state,
+				},
+			}
+			stats := &BackupStats{}
+			adapter.recordNotifierStatus(stats, result)
+			if got := stats.NotifyResults["Telegram"]; got != c.want {
+				t.Fatalf("telegram_state=%q: NotifyResults[Telegram]=%q, want %q", c.state, got, c.want)
+			}
+			// The sensor refinement must not flip the run's success signal.
+			if !result.Success {
+				t.Fatalf("recordNotifierStatus must not mutate result.Success")
+			}
+		})
+	}
+}
+
 func TestTelegramOutcome_PendingIsInProgress(t *testing.T) {
 	out, logger := telegramOutcome(t, &notify.NotificationResult{
 		Success:  true,
