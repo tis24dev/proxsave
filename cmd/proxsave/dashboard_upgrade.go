@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -23,7 +22,6 @@ var (
 	dashboardUpgradeCheck   = checkForUpdates
 	dashboardUpgradeRun     = runUpgrade
 	dashboardUpgradeVersion = buildinfo.String
-	dashboardUpgradeMute    = defaultUpgradeMuteStdio
 )
 
 type upgAct int
@@ -77,7 +75,7 @@ func runDashboardUpgradeMenu(ctx context.Context, session *shell.Session, config
 			[]components.SelectorItem[upgAct]{
 				{Label: "Check upgrade", Description: "update the proxsave binary to a newer release", Value: upgGo},
 				{Label: "Check config", Description: "add new template keys to the configuration file", Value: upgConfig},
-				{Label: "Back", Value: upgBack},
+				{Label: "Back", Description: "return to the dashboard menu", Value: upgBack},
 			},
 			components.WithSelectorPromptStyled[upgAct](prompt),
 			components.WithSelectorBack[upgAct](back)))
@@ -93,17 +91,11 @@ func runDashboardUpgradeMenu(ctx context.Context, session *shell.Session, config
 	}
 }
 
-// TODO(viewport): rebuild this the same way backup and install were rebuilt for
-// the CONTAINED viewport streaming UI. Today runDashboardUpgrade runs the upgrade
-// inside the altscreen dashboard session (upgRun mutes stdout + RunTask spinner),
-// so the upgrade's log lines never reach the user. It should instead adopt the
-// altscreen session and drive components.RunStreamTask with
-// logging.NewLineWriterRaw + logging.CaptureConsoleWithColor, so the upgrade's
-// [ts] LEVEL lines stream (colored) into a contained, scrollable viewport panel
-// within the frame, and classify the outcome via a buildUpgradeOutcomePrompt
-// built on the SHARED exitCodeSeverity(code, logger) (the upgrade already has an
-// exit code), matching the CLI final-summary coloring exactly. No behavior change
-// here yet.
+// runDashboardUpgrade is the in-session binary-upgrade screen. It auto-runs the release
+// check on entry, shows the available version (sanitized) with the release notes, and on
+// "Run upgrade" streams the upgrade INSIDE the altscreen session via components.RunStreamTask
+// (upgRun), the same contained viewport panel backup and install-finalize use, then drives
+// the single daemon restart. It loops back to the menu on Back.
 func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath string) {
 	cur := upgradeSafeToken(dashboardUpgradeVersion())
 	// Symbols on the RESULT keyword (consistent with the Telegram/healthcheck check
@@ -134,9 +126,9 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			}
 			pendingCheck = false
 		}
-		lbl := "Re-check"
+		lbl, lblDesc := "Re-check", "check GitHub for a newer release"
 		if avail {
-			lbl = "Run upgrade"
+			lbl, lblDesc = "Run upgrade", "download and install the latest release"
 		}
 		p := theme.Emphasis.Render("Current version: ") + theme.Text.Render(cur) + "\n\n" +
 			theme.Text.Render("Last available release: ") + sty.Render(sym+kw)
@@ -147,7 +139,10 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			p += "\n\n" + renderReleaseNotes(notes)
 		}
 		a, err := shell.Ask(ctx, session, components.NewSelector("Upgrade",
-			[]components.SelectorItem[upgAct]{{Label: lbl, Value: upgGo}, {Label: "Back", Value: upgBack}},
+			[]components.SelectorItem[upgAct]{
+				{Label: lbl, Description: lblDesc, Value: upgGo},
+				{Label: "Back", Description: "return to the dashboard menu", Value: upgBack},
+			},
 			components.WithSelectorPromptStyled[upgAct](p), components.WithSelectorBack[upgAct](back)))
 		if err != nil || a == upgBack {
 			return
@@ -233,27 +228,53 @@ func upgCheck(ctx context.Context, session *shell.Session, cur string) *UpdateIn
 	return i
 }
 
+// upgRun runs the binary upgrade INSIDE the dashboard altscreen session, streaming its
+// [ts] LEVEL log lines into a CONTAINED, scrollable, colored viewport panel
+// (components.RunStreamTask), the same contained panel the backup and install-finalize
+// screens use, so the three long ops look identical. captureRunOutput routes the default +
+// colored bootstrap loggers AND raw os.Stdout through one pipe into the panel. runUpgrade's
+// own inline daemon restart is suppressed (upgradeRestartsDaemon=false): the dashboard drives
+// the SINGLE restart itself after this returns, so there is no double restart. Returns the
+// upgrade exit code so the caller can branch UPGRADED vs FAILED.
 func upgRun(ctx context.Context, session *shell.Session, configPath string) int {
-	pl := logging.GetDefaultLogger()
-	sl := logging.New(types.LogLevelError, false)
-	sl.SetOutput(io.Discard)
-	logging.SetDefaultLogger(sl)
-	defer logging.SetDefaultLogger(pl)
-	rs := dashboardUpgradeMute()
-	defer rs()
 	bl := logging.NewBootstrapLogger()
-	bl.SetConsoleQuiet(true)
-	// Suppress runUpgrade's inline daemon restart on the dashboard path: the dashboard
-	// drives the restart itself (spinner + notice) after this returns, so an inline
-	// restart here would be invisible (stdout is muted) and would double-restart.
 	prevRestart := upgradeRestartsDaemon
 	upgradeRestartsDaemon = false
 	defer func() { upgradeRestartsDaemon = prevRestart }()
 	ar := &cli.Args{Upgrade: true, UpgradeAutoYes: true, ConfigPath: configPath, LogLevel: types.LogLevelInfo}
 	code := types.ExitGenericError.Int()
-	_ = components.RunTask(ctx, session, "Running upgrade", "Installing...",
-		func(tc context.Context, _ func(string)) error { code = dashboardUpgradeRun(tc, ar, bl); return nil })
+	streamErr := components.RunStreamTask(ctx, session, "Running upgrade",
+		func(taskCtx context.Context, emit func(line string)) (string, error) {
+			// Route the default + colored bootstrap loggers AND raw os.Stdout through one
+			// pipe into the panel (restored on return/panic), so the panel shows the same
+			// colored [ts] LEVEL lines as the CLI instead of losing them to the altscreen.
+			defer captureRunOutput(bl, emit)()
+			code = dashboardUpgradeRun(taskCtx, ar, bl)
+			return buildUpgradeOutcomePrompt(code), nil
+		})
+	if streamErr != nil {
+		// The stream is best-effort UI: an abort/UI-death never changes the upgrade
+		// outcome (code already holds it), so only trace it.
+		logging.DebugStepBootstrap(bl, "dashboard", "upgrade stream: %v", streamErr)
+	}
 	return code
+}
+
+// buildUpgradeOutcomePrompt is the pre-styled banner shown at the bottom of the streamed
+// upgrade panel (StreamDoneMsg.Outcome). Unlike backup, the upgrade is all-or-nothing: the
+// caller (runDashboardUpgrade) treats ANY non-zero code as FAILED and shows a red result
+// screen next, so the banner must agree and render red "Upgrade failed" for any non-zero code
+// (a non-zero ExitGenericError would otherwise read yellow "completed with warnings" here yet
+// red "FAILED" on the following screen). The shared exitCodeSeverity is used only to tell a
+// clean success from a success-with-warnings at code 0, matching the CLI final-summary color.
+func buildUpgradeOutcomePrompt(code int) string {
+	if code != types.ExitSuccess.Int() {
+		return theme.ErrorText.Render(theme.SymbolError + " Upgrade failed")
+	}
+	if exitCodeSeverity(code, logging.GetDefaultLogger()) == severityWarning {
+		return theme.WarningText.Render(theme.SymbolWarning + " Upgrade completed with warnings")
+	}
+	return theme.SuccessText.Render(theme.SymbolSuccess + " Upgrade completed")
 }
 
 // dashboardUpgradeRestartDaemon completes a successful dashboard upgrade by restarting
@@ -281,14 +302,4 @@ func dashboardUpgradeRestartDaemon(ctx context.Context, session *shell.Session, 
 		})
 	level, keyword, explanation := restartVerifyStatus(rv)
 	showDaemonResultScreen(ctx, session, "Daemon restart", level, keyword, explanation)
-}
-
-func defaultUpgradeMuteStdio() func() {
-	dn, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		return func() {}
-	}
-	o, e := os.Stdout, os.Stderr
-	os.Stdout, os.Stderr = dn, dn
-	return func() { os.Stdout, os.Stderr = o, e; _ = dn.Close() }
 }

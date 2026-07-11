@@ -203,7 +203,7 @@ func runDashboardInstallChoice(ctx context.Context, session *shell.Session) (men
 	items := []components.SelectorItem[installChoice]{
 		{Label: "Edit install", Description: "re-run the interactive installation/setup (--install)", Value: installEdit},
 		{Label: "Wipe install", Description: "wipe the install directory (keep build/env/identity) then re-run the installer (--new-install)", Value: installWipe},
-		{Label: "Back", Value: installBack},
+		{Label: "Back", Description: "return to the dashboard menu", Value: installBack},
 	}
 	choice, err := shell.Ask(ctx, session, components.NewSelector(
 		"Install", items,

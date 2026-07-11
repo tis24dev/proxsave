@@ -163,26 +163,22 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 	}
 }
 
-// telegramSeverityStyle maps a check RESULT severity to a display style + symbol, using
-// the SAME three pairings as the healthcheck/upgrade check screens: green ✓ positive,
-// yellow ⚠ warning/attention, red ✗ error. So: green ✓ linked; yellow ⚠ partial /
-// action-needed (start bot / send ID) / server-unreachable (all retryable); red ✗ fatal.
-// The bool is false only for the neutral (pre-check) state, rendered separately as a
-// yellow "NOT CHECKED" (no symbol).
-func telegramSeverityStyle(sev orchestrator.TelegramSetupSeverity) (lipgloss.Style, string, bool) {
+// telegramSeverityLevel maps a check RESULT severity onto the shared HealthcheckSetupLevel so
+// the Status line renders through renderHealthcheckLevel like the sibling healthcheck/audit/
+// daemon screens, instead of a private color+symbol table that could silently drift from the
+// shared one. green ✓ linked; yellow ⚠ partial / action-needed (start bot / send ID) /
+// server-unreachable (all retryable); red ✗ fatal. The bool is false only for the neutral
+// (pre-check) state, rendered separately as a yellow "NOT CHECKED" (no symbol).
+func telegramSeverityLevel(sev orchestrator.TelegramSetupSeverity) (orchestrator.HealthcheckSetupLevel, bool) {
 	switch sev {
 	case orchestrator.TelegramSeveritySuccess:
-		return theme.SuccessText, theme.SymbolSuccess, true
-	case orchestrator.TelegramSeverityPartial:
-		return theme.WarningText, theme.SymbolWarning, true
-	case orchestrator.TelegramSeverityAction:
-		return theme.WarningText, theme.SymbolWarning, true
-	case orchestrator.TelegramSeverityUnreachable:
-		return theme.WarningText, theme.SymbolWarning, true
+		return orchestrator.HealthcheckSetupLevelOk, true
+	case orchestrator.TelegramSeverityPartial, orchestrator.TelegramSeverityAction, orchestrator.TelegramSeverityUnreachable:
+		return orchestrator.HealthcheckSetupLevelWarn, true
 	case orchestrator.TelegramSeverityFatal:
-		return theme.ErrorText, theme.SymbolError, true
+		return orchestrator.HealthcheckSetupLevelError, true
 	default:
-		return theme.Text, "", false
+		return orchestrator.HealthcheckSetupLevelNeutral, false
 	}
 }
 
@@ -225,11 +221,11 @@ func buildTelegramPrompt(serverID, identityFile string, identityPersisted bool, 
 	// Status: a distinct colored keyword + the HTTP status code + the message, so
 	// e.g. "server unreachable" reads differently from "not paired yet".
 	b.WriteString(theme.Text.Render("Status: "))
-	style, symbol, colored := telegramSeverityStyle(severity)
+	level, colored := telegramSeverityLevel(severity)
 	if !colored {
-		// Pre-check: yellow "NOT CHECKED" (no symbol), same look as the healthcheck/upgrade
-		// screens, then the guidance message in plain text.
-		b.WriteString(theme.WarningText.Render("NOT CHECKED"))
+		// Pre-check: yellow "NOT CHECKED" (no symbol) via the shared renderer, same look as
+		// the healthcheck/upgrade screens, then the guidance message in plain text.
+		b.WriteString(renderHealthcheckLevel(orchestrator.HealthcheckSetupLevelNeutral, "NOT CHECKED"))
 		if statusMsg != "" {
 			b.WriteString(theme.Text.Render(": " + statusMsg))
 		}
@@ -239,7 +235,7 @@ func buildTelegramPrompt(serverID, identityFile string, identityPersisted bool, 
 	if label == "" {
 		label = "Status"
 	}
-	b.WriteString(style.Render(symbol + " " + strings.ToUpper(label)))
+	b.WriteString(renderHealthcheckLevel(level, strings.ToUpper(label)))
 	if httpCode > 0 {
 		b.WriteString(theme.Subtle.Render(" (HTTP " + strconv.Itoa(httpCode) + ")"))
 	}
