@@ -90,7 +90,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 				if !cancelled {
 					result.CheckAttempts++
 					if res.HaveStatus {
-						sensors = health.SensorRows(res.RawStatus, result.HealthcheckHeartbeatInterval, time.Now())
+						sensors = health.SensorRows(res.RawStatus, result.HealthcheckHeartbeatInterval, result.HealthcheckUpdateInterval, time.Now())
 					} else {
 						sensors = nil
 					}
