@@ -6,6 +6,7 @@ Advanced disaster recovery procedures for Proxmox VE cluster database restoratio
 
 - [Overview](#overview)
 - [Understanding PVE Cluster Architecture](#understanding-pve-cluster-architecture)
+- [Cluster restore modes: SAFE vs RECOVERY](#cluster-restore-modes-safe-vs-recovery)
 - [Recovery Scenarios](#recovery-scenarios)
 - [Pre-Recovery Checklist](#pre-recovery-checklist)
 - [Scenario 1: Single-Node Recovery](#scenario-1-single-node-recovery)
@@ -104,32 +105,101 @@ Communication Layer:
 **/etc/pve**:
 - **NOT** a real directory (it's a FUSE mount)
 - View into config.db
-- **Cannot be restored directly** (that's why export-only)
-- Automatically populated when pmxcfs starts with restored config.db
+- You cannot write files into it directly (writes go to the FUSE layer). ProxSave either applies the exported files through the API (SAFE) or restores config.db while pmxcfs is stopped (RECOVERY). See [Cluster restore modes](#cluster-restore-modes-safe-vs-recovery).
+- Repopulated from config.db when pmxcfs restarts (the RECOVERY path)
 
 **Corosync**:
 - Synchronizes config.db changes across nodes
 - Manages quorum (who can make changes)
 - Configuration in `/etc/pve/corosync.conf`
 
-### Why Special Handling Is Required
+### Why /etc/pve needs special handling
 
-**Problem**: You cannot simply copy files to `/etc/pve`:
+You cannot simply copy files into `/etc/pve`. It is a FUSE view of config.db, so a `cp` into it writes to the FUSE layer and is lost when pmxcfs restarts:
+
 ```bash
-# ✗ This will NOT work:
+# This does NOT persist:
 cp backup/etc/pve/storage.cfg /etc/pve/storage.cfg
-# Writes go to FUSE, not permanent storage
-# Lost on pmxcfs restart
 ```
 
-**Solution**: Restore `/var/lib/pve-cluster/config.db`:
-```bash
-# ✓ This works (with services stopped):
-# 1. Stop pmxcfs and related services
-# 2. Restore config.db from backup
-# 3. Restart pmxcfs
-# 4. /etc/pve automatically repopulated from restored config.db
+ProxSave handles this in one of two ways, and it makes you choose which at restore time: it either applies the exported configuration to a running cluster through the Proxmox API (SAFE), or it restores the whole config.db while pmxcfs is stopped (RECOVERY). The next section is the one that matters most.
+
+---
+
+## Cluster restore modes: SAFE vs RECOVERY
+
+This is the single most important decision in a cluster restore, and ProxSave forces you to make it explicitly.
+
+### When the prompt appears
+
+Whenever a PVE restore includes the `pve_cluster` category and the backup actually contains cluster data, ProxSave shows a second, mandatory prompt right after you pick the restore scope. FULL and STORAGE both include `pve_cluster`, so they always reach it; CUSTOM reaches it only if you select `PVE Cluster Configuration`. SYSTEM BASE does not include `pve_cluster`, so it never shows this prompt. In the CLI it reads:
+
 ```
+Cluster backup detected. Choose how to restore the cluster database:
+  [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
+  [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
+  [0] Exit
+Choice:
+```
+
+In the TUI it is a selector titled `Cluster restore mode` with `SAFE`, `RECOVERY`, and `Exit` items carrying the same text. `Exit` (or Esc) aborts the whole restore.
+
+### SAFE (the non-destructive choice)
+
+SAFE never writes config.db, never stops `pve-cluster`/`pvedaemon`/`pveproxy`/`pvestatd`, and never unmounts `/etc/pve`. It extracts the cluster files to an export directory and re-applies them to the RUNNING cluster through `pvesh`/`pveum`:
+
+- storage definitions (`pvesh create /storage` from storage.cfg), unless the `storage_pve` category already restores them;
+- datacenter options (`pvesh set /cluster/config`);
+- resource pools (`pveum pool add/modify` for definitions, then membership, with an optional allow-move guard when a pool lists guests);
+- PCI, USB, and directory resource mappings;
+- VM and CT configs, re-created on the CURRENT node via `pvesh create` then `pvesh set` under `/nodes/<node>/qemu|lxc/<vmid>/config`.
+
+Use SAFE when the node or cluster is up and you want to merge the backed-up configuration back in without touching the live database. SAFE needs `pvesh` on PATH; without it, it logs a skip and applies nothing.
+
+If the backup's VM/CT configs are stored under a node name that does not match the current host (a hostname change), SAFE handles it for you: it warns, and either auto-selects the single exported node or asks which exported node to import the guest configs from. The chosen configs are applied to the current node. You do not need to copy `/etc/pve/nodes/...` by hand.
+
+### RECOVERY (the destructive, offline choice)
+
+RECOVERY restores the entire cluster database by overwriting `/var/lib/pve-cluster/`. To do that safely it:
+
+1. stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd` in that order (escalating to SIGKILL if a service will not stop);
+2. unmounts `/etc/pve` (a failure here is a warning, not fatal);
+3. extracts `./var/lib/pve-cluster/` (config.db) directly to disk while pmxcfs is down;
+4. restarts the four services during cleanup.
+
+While pmxcfs is down, ProxSave does not write individual `/etc/pve` files. The config areas that live under `/etc/pve` (storage, jobs, firewall, HA, SDN, access control, notifications) each skip their own apply step during a cluster RECOVERY, because config.db now owns them; a shadow-guard strips any `/etc/pve` path from the direct-extraction set as a backstop. Everything under `/etc/pve` comes back from the restored config.db once `/etc/pve` is remounted.
+
+Use RECOVERY only on an OFFLINE or ISOLATED node. Restoring config.db on a node that is still talking to other cluster members can corrupt the cluster. ProxSave logs a warning when you pick it: `Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated`.
+
+### Which one an earlier version of this guide described
+
+Older versions of this guide showed the "stopping PVE services / unmounting /etc/pve / restart" sequence as the automatic result of choosing "STORAGE only". That sequence is RECOVERY only. Choosing STORAGE (or FULL) just brings you to the SAFE/RECOVERY prompt; SAFE does none of it.
+
+### Offline storage: mount guards
+
+If a datastore or storage mountpoint is offline during a restore (its device is not mounted, so the path resolves to the root filesystem), ProxSave bind-mounts a read-only guard over it under `/var/lib/proxsave/guards`, so the restore cannot write onto the root disk and be shadowed later when the real storage mounts. The guard is a runtime bind mount: it disappears when the real storage mounts on top, and it is gone after a reboot. Current versions no longer set a persistent `chattr +i` flag. To clear leftover guards once storage is back online:
+
+```bash
+proxsave --cleanup-guards            # remove leftover guards
+proxsave --cleanup-guards --dry-run  # preview only
+```
+
+`--cleanup-guards` also clears any legacy `chattr +i` immutable flags left by older versions.
+
+### Network changes are applied with an auto-rollback
+
+If your restore scope includes the network category (FULL, SYSTEM BASE, or a CUSTOM selection, not STORAGE), ProxSave remaps interface names by hardware identity and applies the config with an armed auto-rollback: it arms a 180-second timer, reloads networking, and reverts automatically unless you confirm with `COMMIT` in time. Run that step from the local console or IPMI, not over SSH, since it can change the active IP. The firewall, HA, and access-control applies use the same armed 180-second rollback.
+
+### The safety backup
+
+Before overwriting anything, ProxSave writes a safety backup of the current configuration to `/tmp/proxsave/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` and keeps it. At the end it prints where it is and how to remove it:
+
+```
+Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+```
+
+If any staged step fails, the run ends with `Restore completed with warnings.` rather than aborting, and this safety backup is your rollback.
 
 ---
 
@@ -291,10 +361,7 @@ pvecm status
 #### Step 2: Run Restore Workflow
 
 ```bash
-# Navigate to proxsave directory
-cd /opt/proxsave
-
-# Run restore
+# Run restore (works from any directory)
 proxsave --restore
 ```
 
@@ -303,60 +370,70 @@ proxsave --restore
 ```
 Select backup source:
   [1] Primary backup path
-→ Select: 1
+Select: 1
 
 Available backups:
   [1] backup-pve01-20251120-143052.bundle.tar
-→ Select: 1
+Select: 1
 
 Backup is encrypted with AGE.
 Enter AGE passphrase: ********
-→ Enter your passphrase
 
 Select restore mode:
-  [1] FULL restore
-  [2] STORAGE only    ← Recommended for cluster recovery
-  [3] SYSTEM BASE only
-  [4] CUSTOM selection
-→ Select: 2 (STORAGE only)
+  [1] FULL restore - Restore everything from backup
+  [2] STORAGE only - PVE cluster + storage + jobs + mounts
+  [3] SYSTEM BASE only - Network + SSL + SSH + services + filesystem
+  [4] CUSTOM selection - Choose specific categories
+  [0] Cancel
+Select: 2 (STORAGE only)
+```
 
+Because the backup contains cluster data, ProxSave now asks how to restore the cluster database (see [Cluster restore modes](#cluster-restore-modes-safe-vs-recovery)):
+
+```
+Cluster backup detected. Choose how to restore the cluster database:
+  [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
+  [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
+  [0] Exit
+Choice: 2 (RECOVERY)
+```
+
+For a standalone node you are rebuilding from backup, RECOVERY is the right choice: the node is offline and you want its exact database back. On a node that is already up and running, choose SAFE instead. The STORAGE-mode restore plan on a PVE host is:
+
+```
 RESTORE PLAN:
-  • PVE Cluster Configuration
-  • PVE Storage Configuration
-  • PVE Backup Jobs
-  • ZFS Configuration
+  - PVE Cluster Configuration
+  - PVE Storage Configuration
+  - PVE Backup Jobs
+  - ZFS Configuration
+  - Filesystem Configuration
+  - Storage Stack (Mounts/Targets)
 
-Type "RESTORE" to proceed: RESTORE
-→ Type: RESTORE
+Type RESTORE to proceed or 0 to cancel: RESTORE
 ```
 
-#### Step 4: Automated Process
+#### Step 4: Automated Process (RECOVERY)
+
+Because you chose RECOVERY, ProxSave restores config.db with the cluster services stopped. The real log is terse; the sequence is:
 
 ```
-Creating safety backup...
-✓ Safety backup: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated
 
-Preparing system for cluster database restore:
-  Stopping pve-cluster... ✓
-  Stopping pvedaemon... ✓
-  Stopping pveproxy... ✓
-  Stopping pvestatd... ✓
-  Unmounting /etc/pve... ✓
+Creating Safety backup of current configuration...
+Safety backup location: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 
-Extracting selected categories...
-✓ Restored 47 files/directories
+Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve
 
-Recreating storage directories...
-✓ Storage directories recreated
-
-Restarting services...
-✓ pve-cluster started
-✓ pvedaemon started
-✓ pveproxy started
-✓ pvestatd started
+... extraction of the selected categories ...
 
 Restore completed successfully.
+Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 ```
+
+ProxSave stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts the four services. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
+
+Had you chosen SAFE, this step would instead apply the exported storage, datacenter, pool, and VM/CT configs through `pvesh` on the running cluster, with no service stop and no config.db write.
 
 #### Step 5: Verification
 
@@ -450,10 +527,11 @@ hostname
 # reboot
 
 # 2. Run restore (STORAGE or FULL mode)
-cd /opt/proxsave
 proxsave --restore
 # Select: [2] STORAGE only
-# This restores cluster config, storage, ZFS
+# At the cluster prompt choose RECOVERY: the primary is offline, so this
+# restores the full config.db. SAFE would apply configs via the API without
+# writing config.db, so the cluster/corosync state would not come back.
 
 # 3. Verify primary node working
 pvecm status
@@ -730,7 +808,6 @@ pvesm status
 
 ```bash
 # Use CUSTOM mode to restore only specific categories
-cd /opt/proxsave
 proxsave --restore
 
 # Select: [4] CUSTOM selection
@@ -744,7 +821,7 @@ proxsave --restore
 # Type "RESTORE" to proceed
 ```
 
-**Important**: Do NOT restore `pve_cluster` category - node is already in working cluster!
+**Important**: Never run a RECOVERY cluster restore on a node that is still in the cluster; it overwrites config.db and can corrupt the cluster. The conservative choice is to leave `PVE Cluster Configuration` unselected here. If you do select it, ProxSave prompts SAFE vs RECOVERY, and on a live member SAFE is the only correct answer (it applies configs via the API and never writes config.db).
 
 #### Step 6: Migrate VMs/CTs to Replacement Node
 
@@ -814,8 +891,7 @@ pvecm add <working-node-ip>
 
 ```bash
 # 1. Create fresh backup
-cd /opt/proxsave
-proxsave
+proxsave --backup
 
 # 2. Document configuration
 pvecm status > /root/old-cluster-status.txt
@@ -857,10 +933,11 @@ mkdir -p /opt/proxsave/backup
 mv /root/*.bundle.tar /opt/proxsave/backup/
 
 # 3. Run restore
-cd /opt/proxsave
 proxsave --restore
 
 # Select: [2] STORAGE only (or FULL)
+# At the cluster prompt choose RECOVERY: the old hardware is shut down, so
+# this node is offline/isolated and RECOVERY restores the full config.db.
 # Type "RESTORE" to confirm
 ```
 
@@ -983,7 +1060,6 @@ vi /etc/hosts
 reboot
 
 # 4. Run restore normally
-cd /opt/proxsave
 proxsave --restore
 ```
 
@@ -994,12 +1070,15 @@ proxsave --restore
 #### Step 1: Restore with Mismatched Hostname
 
 ```bash
-# Run restore (will work despite hostname mismatch)
-cd /opt/proxsave
+# Run restore (works despite the hostname mismatch)
 proxsave --restore
 
 # Select: [2] STORAGE only
-# Continue even though hostname differs
+# At the cluster prompt choose RECOVERY: this restores the backup's config.db,
+# which still references the OLD hostname. You fix those references in the
+# steps below. (If the node is already up and you would rather keep it running,
+# SAFE applies the configs via the API and auto-handles the VM/CT node-name
+# mismatch, which makes most of the manual fixes below unnecessary.)
 ```
 
 #### Step 2: Fix Corosync Configuration
@@ -1040,10 +1119,12 @@ systemctl restart pve-cluster pvedaemon pveproxy
 ls -la /etc/pve/nodes/
 # Will show old hostname directory
 
-# 2. The cluster filesystem should auto-create new hostname directory
-# But you may need to migrate configs:
+# 2. The cluster filesystem auto-creates the new hostname directory, but a
+# RECOVERY restore put the guest configs under the OLD node name.
 
-# 3. Copy node-specific configs (if needed)
+# 3. Copy the node-specific configs to the new node directory.
+# (Had you used SAFE instead, ProxSave would have re-created the VM/CT configs
+# on the current node automatically and this copy would not be needed.)
 cp -r /etc/pve/nodes/pve01/* /etc/pve/nodes/pve02/
 
 # 4. Verify new directory
@@ -1394,6 +1475,9 @@ systemctl restart pve-cluster
 ```
 
 **3. Permissions wrong**:
+
+ProxSave preserves each restored file's owner and mode from the backup archive, so it does not hardcode these. The following is manual Proxmox advice for the case where the ownership on `/var/lib/pve-cluster` is wrong for some other reason:
+
 ```bash
 chown -R root:www-data /var/lib/pve-cluster
 chmod 0640 /var/lib/pve-cluster/config.db
@@ -1774,6 +1858,4 @@ journalctl -u corosync              # Corosync logs
 2. Create additional backups
 3. Test procedure on non-production system
 4. Ask for help on Proxmox forums
-5. Better to be slow and safe than fast and corrupted
-
-Good luck with your recovery! 🍀
+5. Better to be slow and safe than fast and corrupted.
