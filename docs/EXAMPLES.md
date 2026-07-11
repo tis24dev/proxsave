@@ -15,6 +15,7 @@ Real-world configuration examples for Proxsave covering common deployment scenar
 - [Example 8: Complete Production Setup](#example-8-complete-production-setup)
 - [Example 9: Test in a Chroot/Fixture](#example-9-test-in-a-chrootfixture)
 - [Example 10: Dual PVE+PBS Host](#example-10-dual-pvepbs-host)
+- [Example 11: Resident daemon and healthchecks monitoring](#example-11-resident-daemon-and-healthchecks-monitoring)
 - [Related Documentation](#related-documentation)
 
 ---
@@ -280,11 +281,10 @@ rclone ls gdrive:/pbs-logs/
 ```bash
 proxsave --newkey
 
-# Wizard:
-# [2] Generate from personal passphrase
-# Enter passphrase: **************** (min 12 chars, strong)
-# Confirm: ****************
-# ✓ AGE recipient generated and saved
+# In the wizard (a Charm TUI by default; add --cli for text prompts):
+# - choose the passphrase option to derive a recipient from a passphrase
+# - enter a strong passphrase (min 12 chars, at least 3 character classes)
+# - confirm it; the AGE recipient is generated and saved (the passphrase is not stored)
 ```
 
 #### Step 2: Configure backup.env
@@ -319,10 +319,11 @@ proxsave
 ```bash
 proxsave --decrypt
 
-# Select backup: [1]
-# Destination: /tmp/decrypt
-# Enter passphrase: ****************
-# ✓ Decryption successful
+# In the wizard (a Charm TUI by default; add --cli for text prompts):
+# - select the backup to decrypt
+# - enter the AGE key or passphrase in the single secret field
+# - enter the destination directory (defaults to the decrypt/ folder under BASE_DIR)
+# The decrypted archive is written there as <name>.decrypted.bundle.tar
 ```
 
 ### Expected Results
@@ -571,7 +572,7 @@ proxsave
 ```bash
 # Option A: Cloud relay (default, outbound HTTPS)
 # - Set EMAIL_DELIVERY_METHOD=relay and configure EMAIL_RECIPIENT (or leave empty for root@pam auto-detect)
-# - Relay blocks root@… recipients; use a real non-root mailbox for EMAIL_RECIPIENT
+# - Relay blocks root@... recipients; use a real non-root mailbox for EMAIL_RECIPIENT
 # - No local SMTP/MTA setup required on the node
 # - Optional/default: set EMAIL_FALLBACK_SENDMAIL=true to fall back to local sendmail when the relay fails
 
@@ -964,6 +965,41 @@ PXAR_SCAN_ENABLE=true
 
 The restore workflow filters categories automatically when the current host does
 not support all backup targets.
+
+---
+
+## Example 11: Resident daemon and healthchecks monitoring
+
+**Scenario**: You want the backup scheduled and supervised by a resident service with a
+hang watchdog and an external dead-man switch, instead of a bare cron entry. Fresh
+installs default to this engine; use these commands to switch an existing install or to
+inspect it.
+
+### Switch to the daemon
+
+```bash
+# Install the systemd service, remove the cron entry, turn on centralized healthchecks
+proxsave --daemon-setup
+
+# Check status (exit 0 only when running, beating, and binary-aligned)
+proxsave --daemon-status
+```
+
+`--daemon-setup` writes `SCHEDULER_MODE=daemon` and `HEALTHCHECK_ENABLED=true` and starts
+`proxsave-daemon.service`. The daemon runs the backup daily at `SCHEDULER_TIME`, under a
+`MAX_RUN_DURATION` watchdog, and reports four checks (alive, backup, updates, and one per
+notification channel) to an external healthchecks monitor.
+
+### Inspect and revert
+
+```bash
+systemctl status proxsave-daemon.service      # is it running?
+journalctl -u proxsave-daemon.service -f      # follow its log
+proxsave --daemon-remove                       # revert to a cron entry
+```
+
+See [DAEMON.md](DAEMON.md) for the healthchecks modes (centralized vs self) and the full
+configuration keys.
 
 ---
 
