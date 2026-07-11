@@ -324,23 +324,23 @@ func runDashboardDaemonRestart(ctx context.Context, session *shell.Session, conf
 func restartVerifyStatus(rv RestartVerifyResult) (orchestrator.HealthcheckSetupLevel, string, string) {
 	switch {
 	case rv.Err != nil:
-		return orchestrator.HealthcheckSetupLevelError, "restart failed", rv.Err.Error()
+		return orchestrator.HealthcheckSetupLevelError, "RESTART FAILED", rv.Err.Error()
 	case rv.BackupWaitTimedOut:
-		return orchestrator.HealthcheckSetupLevelWarn, "deferred - backup running",
+		return orchestrator.HealthcheckSetupLevelWarn, "DEFERRED - BACKUP RUNNING",
 			"Restart again once the backup finishes, or the daemon stays on the old binary."
 	case rv.TimedOut:
-		return orchestrator.HealthcheckSetupLevelWarn, "restarted, not confirmed",
+		return orchestrator.HealthcheckSetupLevelWarn, "RESTARTED, NOT CONFIRMED",
 			"Open Daemon status to confirm it came back aligned."
 	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
-		// Success: the keyword ("restarted, aligned (vX)") already says everything, so no
+		// Success: the keyword ("RESTARTED, ALIGNED (vX)") already says everything, so no
 		// explanation line -- a what-to-do suggestion only appears on a problem outcome.
-		keyword := "restarted, aligned"
+		keyword := "RESTARTED, ALIGNED"
 		if v := strings.TrimSpace(rv.State.Version); v != "" {
 			keyword += " (v" + v + ")"
 		}
 		return orchestrator.HealthcheckSetupLevelOk, keyword, ""
 	default:
-		return orchestrator.HealthcheckSetupLevelWarn, "restarted, not confirmed",
+		return orchestrator.HealthcheckSetupLevelWarn, "RESTARTED, NOT CONFIRMED",
 			"Open Daemon status to confirm it came back aligned."
 	}
 }
@@ -409,7 +409,7 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	cfg, err := daemonStatusLoadConfig(configPath, baseDir)
 	if err != nil || cfg == nil {
 		showDaemonResultScreen(ctx, session, "Daemon change failed", orchestrator.HealthcheckSetupLevelError,
-			"config unreadable", "Could not read the configuration to apply the scheduler change.")
+			"CONFIG UNREADABLE", "Could not read the configuration to apply the scheduler change.")
 		return
 	}
 
@@ -426,13 +426,13 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	title := "Disabling daemon"
 	work := "Reverting to the cron scheduler..."
 	doneTitle := "Daemon disabled"
-	doneKeyword := "reverted to cron"
+	doneKeyword := "REVERTED TO CRON"
 	doneMsg := "Reverted to the cron scheduler and removed the daemon service. Future upgrades will not reinstall it."
 	if install {
 		title = "Installing daemon"
 		work = "Installing and enabling proxsave-daemon.service..."
 		doneTitle = "Daemon installed"
-		doneKeyword = "installed"
+		doneKeyword = "INSTALLED"
 		doneMsg = "The resident daemon (proxsave-daemon.service) is active. The cron entry was removed."
 	}
 	execToken := daemonSelfExecPath()
@@ -447,7 +447,7 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	})
 
 	if opErr != nil {
-		showDaemonResultScreen(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "failed", opErr.Error())
+		showDaemonResultScreen(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "FAILED", opErr.Error())
 		return
 	}
 	showDaemonResultScreen(ctx, session, doneTitle, orchestrator.HealthcheckSetupLevelOk, doneKeyword, doneMsg)
@@ -528,7 +528,11 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 			ProcStale:         procBinaryStaleProbe,
 		})
 		level, keyword, explanation := daemonStatusStyle(ds)
-		prompt := buildDaemonStatusPrompt(level, keyword, explanation, mode, unit, active, optOut, ds)
+		// Dashboard "Status:" keywords are ALL-CAPS (the house convention across every
+		// dashboard Status screen). daemonStatusStyle is shared with the plain-text
+		// --daemon-status CLI line, so uppercase HERE (the graphical consumer) rather than at
+		// the source, keeping the CLI/log readout in its natural case.
+		prompt := buildDaemonStatusPrompt(level, strings.ToUpper(keyword), explanation, mode, unit, active, optOut, ds)
 
 		items := []components.SelectorItem[daemonStatusAction]{
 			{Label: "Re-check", Description: "re-run the daemon state check", Value: daemonStatusActionCheck},

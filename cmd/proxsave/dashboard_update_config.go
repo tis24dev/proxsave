@@ -28,10 +28,10 @@ func runDashboardUpdateConfig(ctx context.Context, session *shell.Session, confi
 				return dashboardCheckResult{}, err
 			}
 			if result == nil || !result.Changed {
-				return dashboardCheckResult{Found: false, Level: orchestrator.HealthcheckSetupLevelOk, Keyword: "Up to date",
+				return dashboardCheckResult{Found: false, Level: orchestrator.HealthcheckSetupLevelOk, Keyword: "UP TO DATE",
 					Explanation: "The configuration already has every key from the template. Nothing to update."}, nil
 			}
-			return dashboardCheckResult{Found: true, Level: orchestrator.HealthcheckSetupLevelWarn, Keyword: "Update available",
+			return dashboardCheckResult{Found: true, Level: orchestrator.HealthcheckSetupLevelWarn, Keyword: "UPDATE AVAILABLE",
 				Explanation: describeConfigPlan(result)}, nil
 		},
 		func() (dashboardApplyResult, error) {
@@ -40,9 +40,9 @@ func runDashboardUpdateConfig(ctx context.Context, session *shell.Session, confi
 			if err != nil {
 				return dashboardApplyResult{}, err
 			}
-			keyword := "Updated"
+			keyword := "UPDATED"
 			if result == nil || !result.Changed {
-				keyword = "Up to date"
+				keyword = "UP TO DATE"
 			}
 			return dashboardApplyResult{Level: orchestrator.HealthcheckSetupLevelOk, Keyword: keyword, Explanation: describeConfigApply(result)}, nil
 		},

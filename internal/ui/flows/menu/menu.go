@@ -25,12 +25,15 @@ const (
 	ActionInstallMenu // one menu row that opens an Edit install / Wipe install chooser
 	ActionReconfigure // "Edit install" -> the --install flow (chosen inside ActionInstallMenu)
 	ActionNewInstall  // "Wipe install" -> the --new-install flow (chosen inside ActionInstallMenu)
-	// Second group (diagnostics): each re-opens an existing setup/check screen
-	// in the live dashboard session; the caller loops back to the menu after.
+	// Second group: each re-opens an existing setup/check screen in the live dashboard
+	// session (dispatched through runDashboardDiagnostic); the caller loops back to the menu
+	// after. This is a DISPATCH grouping, not the menu layout: the menu positions these rows
+	// by user task, so ActionCheckUpgrade renders under "Maintenance" (next to New key and
+	// Install) while the other three render under "Diagnostic Checks".
 	ActionCheckTelegram
 	ActionCheckHealthcheck
 	ActionPostInstallCheck
-	ActionCheckUpgrade // check for a newer release and (on confirm) install it in-session
+	ActionCheckUpgrade // check for a newer release and (on confirm) install it in-session; shown under Maintenance
 	// Third group (daemon scheduler): setup/remove run the same admin path as the
 	// --daemon-setup / --daemon-remove flags; status runs a read-only screen.
 	ActionDaemonSetup   // install OR re-enable the resident daemon (--daemon-setup)

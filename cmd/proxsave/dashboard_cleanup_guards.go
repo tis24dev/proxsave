@@ -27,9 +27,9 @@ func runDashboardCleanupGuards(ctx context.Context, session *shell.Session) {
 				return dashboardCheckResult{}, err
 			}
 			if !report.HasGuards() {
-				return dashboardCheckResult{Found: false, Level: orchestrator.HealthcheckSetupLevelOk, Keyword: "Clean", Explanation: describeGuardCheck(report)}, nil
+				return dashboardCheckResult{Found: false, Level: orchestrator.HealthcheckSetupLevelOk, Keyword: "CLEAN", Explanation: describeGuardCheck(report)}, nil
 			}
-			return dashboardCheckResult{Found: true, Level: orchestrator.HealthcheckSetupLevelWarn, Keyword: "Found", Explanation: describeGuardCheck(report)}, nil
+			return dashboardCheckResult{Found: true, Level: orchestrator.HealthcheckSetupLevelWarn, Keyword: "FOUND", Explanation: describeGuardCheck(report)}, nil
 		},
 		func() (dashboardApplyResult, error) {
 			report, err := cleanupGuardsReport(ctx, discardLogger(), false) // run for real
