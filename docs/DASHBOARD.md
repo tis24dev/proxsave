@@ -143,7 +143,7 @@ The `Upgrade` row opens a chooser with two entries:
 - `Check upgrade` looks for a newer release. It runs the check the moment you open it. If you are current it shows green `NO UPGRADE (<version>)`. If a newer release exists it shows yellow with the version, the release URL and notes, and a `Run upgrade` button. A failed check shows yellow `CHECK FAILED`.
 - `Check config` compares your `backup.env` against the shipped template. This is the two-step check-and-apply described under [Cleanup guards](#recovery-cleanup-guards); it lists the keys it would add and only offers Apply when there is something to add.
 
-When you run the binary upgrade from here, its log output is suppressed and you see a spinner rather than a live log (a streaming panel for this is planned but not built yet). On success the daemon, if present, is restarted once and verified.
+When you run the binary upgrade from here, its log streams into the same contained panel that Backup uses; press Enter when it finishes. On success the daemon, if present, is restarted once and verified.
 
 Binary upgrade details are in [CLI_REFERENCE.md](CLI_REFERENCE.md#binary-upgrade).
 

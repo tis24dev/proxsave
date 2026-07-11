@@ -83,10 +83,10 @@ func TestRenderReleaseNotes(t *testing.T) {
 // Upgrade+AutoYes+ConfigPath, shows the success notice) -> Back.
 func TestDashboardUpgradeScreen(t *testing.T) {
 	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
-	origRun, origMute := dashboardUpgradeRun, dashboardUpgradeMute
+	origRun := dashboardUpgradeRun
 	t.Cleanup(func() {
 		dashboardUpgradeVersion, dashboardUpgradeCheck = origVer, origChk
-		dashboardUpgradeRun, dashboardUpgradeMute = origRun, origMute
+		dashboardUpgradeRun = origRun
 	})
 
 	gotVersion := ""
@@ -105,7 +105,6 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		gotArgs = args
 		return 0 // success
 	}
-	dashboardUpgradeMute = func() func() { return func() {} } // no real stdio swap in tests
 
 	// Build an observed session eagerly (the shared seam creates it lazily via a flow).
 	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
@@ -153,7 +152,12 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		t.Fatalf("markdown bold markers must be stripped from the notes")
 	}
 
-	// The button is "Run upgrade" (an update was found): press it.
+	// The button is "Run upgrade" (an update was found): press it. The upgrade now streams
+	// into a contained viewport (like backup/install), so wait for the run to finish (the
+	// Continue hint) and press Enter to leave the stream panel before the daemon-restart step.
+	driver.keys("enter")
+	driver.waitScreen("Running upgrade")
+	driver.waitOutput("enter continue")
 	driver.keys("enter")
 	driver.waitScreen("Upgrade complete")
 	if gotArgs == nil || !gotArgs.Upgrade || !gotArgs.UpgradeAutoYes || gotArgs.ConfigPath != "/tmp/backup.env" {
