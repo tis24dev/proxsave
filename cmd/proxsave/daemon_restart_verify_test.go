@@ -323,27 +323,27 @@ func TestRestartVerifyStatus(t *testing.T) {
 	// Success: the version is in the keyword; the explanation is EMPTY (a what-to-do suggestion
 	// appears only on a problem outcome).
 	if level, keyword, msg := restartVerifyStatus(success); level != orchestrator.HealthcheckSetupLevelOk ||
-		keyword != "restarted, aligned (v4.5.6)" || msg != "" {
+		keyword != "RESTARTED, ALIGNED (v4.5.6)" || msg != "" {
 		t.Fatalf("success status wrong: level=%v keyword=%q msg=%q", level, keyword, msg)
 	}
 	deferred := RestartVerifyResult{BackupWaitTimedOut: true}
 	if level, keyword, _ := restartVerifyStatus(deferred); level != orchestrator.HealthcheckSetupLevelWarn ||
-		keyword != "deferred - backup running" {
+		keyword != "DEFERRED - BACKUP RUNNING" {
 		t.Fatalf("deferred status wrong: level=%v keyword=%q", level, keyword)
 	}
 	timedOut := RestartVerifyResult{Restarted: true, TimedOut: true}
 	if level, keyword, _ := restartVerifyStatus(timedOut); level != orchestrator.HealthcheckSetupLevelWarn ||
-		keyword != "restarted, not confirmed" {
+		keyword != "RESTARTED, NOT CONFIRMED" {
 		t.Fatalf("timed-out status wrong: level=%v keyword=%q", level, keyword)
 	}
 	ambiguous := RestartVerifyResult{Restarted: true} // restarted but not confirmed aligned (default arm)
 	if level, keyword, _ := restartVerifyStatus(ambiguous); level != orchestrator.HealthcheckSetupLevelWarn ||
-		keyword != "restarted, not confirmed" {
+		keyword != "RESTARTED, NOT CONFIRMED" {
 		t.Fatalf("ambiguous status wrong: level=%v keyword=%q", level, keyword)
 	}
 	failed := RestartVerifyResult{Err: errors.New("x")}
 	if level, keyword, msg := restartVerifyStatus(failed); level != orchestrator.HealthcheckSetupLevelError ||
-		keyword != "restart failed" || msg != "x" {
+		keyword != "RESTART FAILED" || msg != "x" {
 		t.Fatalf("failed status wrong: level=%v keyword=%q msg=%q", level, keyword, msg)
 	}
 }
@@ -429,7 +429,7 @@ func TestRestartKeywordVersionInjectionSanitized(t *testing.T) {
 	}
 	prompt := buildDaemonResultPrompt(level, keyword, explanation)
 	assertNoRawInjection(t, prompt)
-	if !strings.Contains(prompt, "restarted, aligned (v1.0)") || strings.Contains(prompt, "pwned") {
+	if !strings.Contains(prompt, "RESTARTED, ALIGNED (v1.0)") || strings.Contains(prompt, "pwned") {
 		t.Fatalf("sanitized restart keyword should keep the plaintext version and drop the OSC payload: %q", prompt)
 	}
 }

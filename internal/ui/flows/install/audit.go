@@ -85,14 +85,14 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 	if collectErr != nil {
 		result.CollectErr = collectErr
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelWarn,
-			"check failed", fmt.Sprintf("Non-blocking: %v", collectErr), backToMenu)
+			"CHECK FAILED", fmt.Sprintf("Non-blocking: %v", collectErr), backToMenu)
 		return result, nil
 	}
 	result.Suggestions = suggestions
 
 	if len(suggestions) == 0 {
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelOk,
-			"no unused components", "", backToMenu)
+			"NO UNUSED COMPONENTS", "", backToMenu)
 		return result, nil
 	}
 
@@ -120,18 +120,18 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 	}
 	if len(keys) == 0 {
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelNeutral,
-			"no changes", "No components were selected; nothing was modified.", backToMenu)
+			"NO CHANGES", "No components were selected; nothing was modified.", backToMenu)
 		return result, nil
 	}
 
 	if err := installer.ApplyAuditDisables(configPath, keys); err != nil {
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelError,
-			"update failed", err.Error(), backToMenu)
+			"UPDATE FAILED", err.Error(), backToMenu)
 		return result, nil
 	}
 	result.AppliedKeys = normalizeAuditKeys(keys)
 	showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelOk,
-		"updated", fmt.Sprintf("Disabled %d component(s): %s",
+		"UPDATED", fmt.Sprintf("Disabled %d component(s): %s",
 			len(result.AppliedKeys), strings.Join(result.AppliedKeys, ", ")), backToMenu)
 	return result, nil
 }
