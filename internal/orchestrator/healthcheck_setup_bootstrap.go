@@ -48,6 +48,11 @@ type HealthcheckSetupBootstrap struct {
 	// beat is fresh or stale, exactly as the run-start init check does.
 	HealthcheckHeartbeatInterval time.Duration
 
+	// HealthcheckUpdateInterval is the daemon's configured update-check period; the
+	// updates sensor ages against 2x this cadence (not the heartbeat), so a longer
+	// HEALTHCHECK_UPDATE_INTERVAL does not render a freshly-transmitted updates ping stale.
+	HealthcheckUpdateInterval time.Duration
+
 	ServerID  string
 	HasSecret bool
 }
@@ -83,6 +88,7 @@ func BuildHealthcheckSetupBootstrap(configPath, baseDir string) (HealthcheckSetu
 		state.HealthcheckMode = strings.ToLower(strings.TrimSpace(cfg.HealthcheckMode))
 		state.ServerAPIHost = strings.TrimSpace(cfg.ServerAPIHost)
 		state.HealthcheckHeartbeatInterval = cfg.HealthcheckHeartbeatInterval
+		state.HealthcheckUpdateInterval = cfg.HealthcheckUpdateInterval
 		state.HealthcheckAliveURL = strings.TrimSpace(cfg.HealthcheckAliveURL)
 	}
 

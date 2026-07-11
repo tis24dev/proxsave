@@ -75,14 +75,17 @@ func sensorLevel(rec *PingRecord, staleAfter time.Duration, now time.Time) (Sens
 //
 //	proxsave-alive   <- Heartbeat                    (stale window = 2x heartbeat interval)
 //	proxsave-backup  <- newer(RunFinished, RunHang)  (event-driven: never "stale")
-//	proxsave-updates <- Update.Ping, refined by Update.Available
+//	proxsave-updates <- Update.Ping, refined by Update.Available (stale window = 2x update interval)
 //
 // The updates sensor is special: PingRecord.OK is only the TRANSMISSION outcome, so a
 // fresh, transmitted ping that reported "update available" (Available) is a healthy
 // transmission of a RED check -> SensorError "update available". A fresh, transmitted "up
-// to date" is SensorOk "up to date". interval and now are injected (deterministic).
-func SensorRows(st Status, interval time.Duration, now time.Time) []SensorRow {
-	staleAfter := heartbeatStaleAfter(interval)
+// to date" is SensorOk "up to date". The updates ping is refreshed on its own
+// update-check cadence, so it ages against updateInterval, not the heartbeat; otherwise a
+// longer HEALTHCHECK_UPDATE_INTERVAL would render a healthy fresh ping "stale".
+// heartbeatInterval, updateInterval and now are injected (deterministic).
+func SensorRows(st Status, heartbeatInterval, updateInterval time.Duration, now time.Time) []SensorRow {
+	staleAfter := heartbeatStaleAfter(heartbeatInterval)
 
 	aliveLvl, aliveState, aliveAge := sensorLevel(st.Record(KindHeartbeat), staleAfter, now)
 	backupLvl, backupState, backupAge := sensorLevel(newerPing(st.Record(KindRunFinished), st.Record(KindRunHang)), 0, now)
@@ -96,7 +99,7 @@ func SensorRows(st Status, interval time.Duration, now time.Time) []SensorRow {
 	if st.Update != nil {
 		upRec = &st.Update.Ping
 	}
-	upLvl, upState, upAge := sensorLevel(upRec, staleAfter, now)
+	upLvl, upState, upAge := sensorLevel(upRec, heartbeatStaleAfter(updateInterval), now)
 	if upLvl == SensorOk {
 		if st.Update != nil && st.Update.Available {
 			upLvl, upState = SensorError, "update available"
