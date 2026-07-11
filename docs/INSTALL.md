@@ -1,18 +1,19 @@
 # ProxSave Installation Guide
 
-## 📑 Table of Contents
+## Table of Contents
 
-- [🚀 Fast Install](#fast-install)
+- [Fast Install](#fast-install)
   - [Direct Install](#direct-install)
   - [First Backup Workflow](#first-backup-workflow)
-- [⬆️ Upgrading ProxSave Binary](#upgrading-proxsave-binary)
+- [Upgrading ProxSave Binary](#upgrading-proxsave-binary)
   - [Quick Upgrade](#quick-upgrade)
   - [What Gets Updated](#what-gets-updated)
   - [Full Upgrade Workflow](#full-upgrade-workflow)
-- [💾 Manual Installation](#manual-installation)
+- [Manual Installation](#manual-installation)
   - [Prerequisites](#prerequisites)
   - [Building from Source](#building-from-source)
   - [Interactive Installation Wizard](#interactive-installation-wizard)
+  - [Scheduling and the daemon](#scheduling-and-the-daemon)
 
 ## Fast Install
 
@@ -30,6 +31,8 @@
    bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
    ```
 
+   Append `--cli` to run the text-mode installer instead of the TUI (for example `... install.sh)" _ --cli`).
+
 2. Run your first backup
 
    ```bash
@@ -40,7 +43,7 @@
 > verify every release before installing it: `SHA256SUMS` is checked against the
 > project's pinned **ECDSA P-256** signature (`SHA256SUMS.sig`), then the archive
 > is checked against `SHA256SUMS`. A missing or invalid signature aborts the
-> install/upgrade — there is no fallback to checksum-only. `install.sh` requires
+> install/upgrade, with no fallback to checksum-only. `install.sh` requires
 > `openssl` for this (preinstalled on Proxmox); the Go upgrade verifies it
 > natively. To verify a download yourself, see
 > [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md#release-signature-sha256sumssig).
@@ -87,13 +90,11 @@ proxsave --dry-run
 
 The `--upgrade` command:
 
-- ✅ Downloads latest binary from GitHub releases
-- ✅ Verifies integrity with SHA256 checksums
-- ✅ Atomically replaces current binary
-- ✅ Updates the `/usr/local/bin/proxsave` symlink (and removes the legacy `proxmox-backup` symlink if present)
-- ✅ Fixes file permissions
-- ✅ Merges any new template keys into your `backup.env` (your existing and custom values are preserved, and the previous file is backed up first)
-- ❌ **Does NOT touch** your cron schedule (re-run `--install` to change it)
+- Downloads the latest binary from GitHub releases and verifies its signature and checksum before installing.
+- Atomically replaces the current binary and updates the `/usr/local/bin/proxsave` symlink (removing the legacy `proxmox-backup` symlink if present).
+- Fixes file permissions.
+- Merges any new template keys into your `backup.env` (your existing and custom values are preserved, and the previous file is backed up first).
+- Reconciles the scheduler: a cron install is migrated to the resident daemon unless you opted out with `--daemon-remove`; a daemon install stays on the daemon. Re-run `--install` to change the run time or engine.
 
 ### Full Upgrade Workflow
 
@@ -107,8 +108,8 @@ proxsave --upgrade-config
 # 3. Test configuration
 proxsave --dry-run
 
-# 4. Verify cron schedule
-crontab -l
+# 4. Check the scheduler
+proxsave --daemon-status   # daemon installs; use crontab -l if you opted out of the daemon
 
 # 5. Run a real backup to confirm
 proxsave
@@ -207,20 +208,22 @@ In **Keep existing & continue** mode, config-dependent post-steps are skipped:
 
 Final install steps still run:
 - Support docs installation
-- Symlink and cron finalization
+- Symlink and scheduler finalization (installs the daemon service or the cron entry for the chosen engine)
 - Permission normalization
 
 **Wizard prompts:**
 
-1. **Configuration file path**: Default `configs/backup.env` (accepts absolute or relative paths within repo)
+1. **Configuration file path** (taken from `--config`, not asked in the wizard): default `configs/backup.env`, shown in the install banner. An absolute path is used as-is; a relative path resolves against the detected install directory (`BASE_DIR`), not the current directory.
 2. **Secondary storage**: Optional path for backup/log copies; disabling it clears both saved secondary paths from `backup.env`
 3. **Cloud storage (rclone)**: Optional rclone configuration (supports `CLOUD_REMOTE` as a remote name (recommended) or legacy `remote:path`; `CLOUD_LOG_PATH` supports path-only (recommended) or `otherremote:/path`)
 4. **Firewall rules**: Optional firewall rules collection toggle (`BACKUP_FIREWALL_RULES=false` by default; supports iptables/nftables)
 5. **Notifications**: Enable Telegram (centralized) and Email notifications; Email asks for a delivery method and defaults to `relay` with `sendmail` failover. Use `pmf` only when you want Proxmox Notifications via `proxmox-mail-forward`.
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
-7. **Cron schedule**: Choose cron time (HH:MM, default `02:00`) for the `proxsave` cron entry in both CLI and TUI install modes
-8. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
-9. **Telegram pairing (optional)**: If Telegram centralized mode is enabled and the installer can load a valid config plus a Server ID, it shows your Server ID and lets you verify pairing with the bot (retry/skip supported). Otherwise installation continues and logs why pairing was skipped.
+7. **Scheduler engine**: choose the ProxSave local daemon or system cron. Fresh installs and Overwrite default to the daemon (a resident systemd service with a hang watchdog and healthchecks); editing an existing config keeps its current engine. See [DAEMON.md](DAEMON.md).
+8. **Healthchecks** (daemon only): with the daemon engine, choose the monitoring mode: `Off`, `ProxSave HC Server` (centralized, zero setup, the default), or `Your own server` (self). Self mode opens a follow-up screen to paste your ping URLs, then a verification screen. With the cron engine this choice is dimmed and forced off.
+9. **Run at (HH:MM)**: the daily backup time (default `02:00`), used by whichever engine you chose (the daemon's daily run, or the cron entry).
+10. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
+11. **Telegram pairing (optional)**: If Telegram centralized mode is enabled and the installer can load a valid config plus a Server ID, it shows your Server ID and lets you verify pairing with the bot (retry/skip supported). Otherwise installation continues and logs why pairing was skipped.
 
 #### Telegram pairing wizard (TUI)
 
@@ -268,5 +271,9 @@ When shown, it does **not** modify your `backup.env`. It only:
 - Install session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome)
 
 After completion, edit `configs/backup.env` manually for advanced options.
+
+### Scheduling and the daemon
+
+ProxSave runs the backup from the resident daemon or from cron, chosen in the wizard above. Switch or inspect the scheduler at any time with `proxsave --daemon-setup`, `proxsave --daemon-remove`, and `proxsave --daemon-status`. See [DAEMON.md](DAEMON.md).
 
 `BASE_DIR` is detected from the installed `proxsave` executable. Do not add an active `BASE_DIR=...` line to `backup.env`; upgrades remove it and runtime ignores it if present.
