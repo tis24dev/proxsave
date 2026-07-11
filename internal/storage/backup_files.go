@@ -15,11 +15,19 @@ var errBackupSidecarDeleteOnly = errors.New("backup archive deleted; associated 
 
 // isBackupSidecar reports whether a candidate path is an associated sidecar
 // (checksum, metadata, or manifest) rather than the backup data archive itself.
-// It is the single source of truth for "not a standalone backup", shared by the
-// retention delete accounting and by every storage List filter, so a new sidecar
-// suffix only has to be added here. PS-BH-002: .manifest.json was added to the
-// cloud upload set but omitted from these checks, leaving retention unable to
-// delete it (orphan accumulation) and List counting it as a phantom backup.
+//
+// Scope: this is the source of truth ONLY for CLASSIFICATION ("is this a standalone
+// backup?"), shared by every storage List filter (local/secondary/cloud) and by the
+// retention delete accounting. It is NOT the source of truth for the set of files a
+// backup enumerates to create or delete.
+//
+// Anti-drift: adding a new sidecar suffix means updating THREE places, not one:
+//  1. here (classification),
+//  2. buildBackupCandidatePaths below (the delete/retention enumeration),
+//  3. Orchestrator.removeAssociatedFiles in internal/orchestrator (raw-workspace cleanup).
+// PS-BH-002 was exactly this drift: .manifest.json was added to the cloud upload set
+// but omitted here, so retention could not delete it (orphan accumulation) and List
+// counted it as a phantom backup.
 func isBackupSidecar(path string) bool {
 	return strings.HasSuffix(path, ".sha256") ||
 		strings.HasSuffix(path, ".metadata") ||
@@ -68,19 +76,21 @@ func buildBackupCandidatePaths(base string, includeBundle bool) []string {
 		return true
 	}
 
-	files := make([]string, 0, 5)
-	if includeBundle {
-		bundlePath := bundlePathFor(base)
-		if add(bundlePath) {
-			files = append(files, bundlePath)
-		}
-	}
 	candidates := []string{
 		base,
 		base + ".sha256",
 		base + ".manifest.json",
 		base + ".metadata",
 		base + ".metadata.sha256",
+	}
+	// Cap: every candidate plus at most one bundle path. Derived from len so it
+	// cannot re-diverge when a suffix is added to the list above.
+	files := make([]string, 0, len(candidates)+1)
+	if includeBundle {
+		bundlePath := bundlePathFor(base)
+		if add(bundlePath) {
+			files = append(files, bundlePath)
+		}
 	}
 	for _, c := range candidates {
 		if add(c) {
