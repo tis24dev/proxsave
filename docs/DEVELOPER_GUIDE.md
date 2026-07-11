@@ -30,7 +30,7 @@ Proxsave is built with modern Go practices, emphasizing:
 - **Language**: Go 1.25+
 - **Dependencies**: See `go.mod` for complete list
 - **Build system**: Makefile + Go modules
-- **Compression**: xz, zstd, gzip, bzip2, lz4
+- **Compression**: gzip, bzip2, xz, lzma, zstd
 - **Encryption**: AGE (age-encryption.org)
 - **Cloud storage**: rclone integration
 
@@ -98,33 +98,50 @@ go test ./...
 ```
 proxsave/
 ├── cmd/
-│   └── proxsave/              # Main entry point
+│   └── proxsave/              # Main entry point, CLI commands, and the resident daemon (daemon*.go)
 ├── internal/                  # Private application code
-│   ├── backup/                # Archiving, manifests, checksums
-│   ├── checks/                # Dependency/system checks
-│   ├── cli/                   # CLI argument parsing
-│   ├── config/                # Configuration management + templates
-│   ├── environment/           # Environment detection
-│   ├── identity/              # Identity helpers
-│   ├── logging/               # Logging
+│   ├── backup/                # Collector recipes/bricks, archiving, compression, manifests, checksums
+│   ├── checks/                # Dependency and system checks
+│   ├── cli/                   # CLI argument parsing (stdlib flag)
+│   ├── closeerr/              # Deferred-close error helpers
+│   ├── config/                # Configuration management and embedded template
+│   ├── cron/                  # Cron scheduler integration
+│   ├── environment/           # PVE/PBS environment detection
+│   ├── health/                # Healthchecks monitoring and daemon reporting
+│   ├── identity/              # Server identity and relay-secret provisioning
+│   ├── input/                 # Interactive input helpers
+│   ├── installer/             # Install and upgrade flows
+│   ├── lint/                  # Internal static-analysis helpers
+│   ├── logging/               # Logging and secret redaction
 │   ├── metrics/               # Prometheus metrics export
 │   ├── notify/                # Notification channels (Telegram/Email/Gotify/Webhook)
-│   ├── orchestrator/          # Backup/restore workflows
+│   ├── orchestrator/          # Backup and restore workflows (the restore engine lives here)
 │   ├── pbs/                   # PBS helpers
-│   ├── security/              # Security checks, permissions
+│   ├── safeexec/              # Guarded external-command execution
+│   ├── safefs/                # Filesystem-safety guards (I/O timeouts, mount checks)
+│   ├── security/              # Security checks and permissions
+│   ├── serverbot/             # Leaf transport to the centralized bot-server
 │   ├── storage/               # Storage backends (local/secondary/cloud)
-│   ├── tui/                   # TUI wizards
+│   ├── support/               # Support-bundle helpers
+│   ├── testutil/              # Shared test utilities
 │   ├── types/                 # Shared types
+│   ├── ui/                    # Charm (bubbletea) TUI: dashboard, wizards, forms
+│   ├── uitest/                # Race-aware UI test helpers
 │   └── version/               # Version info
-├── pkg/                       # Shared helper packages for Proxsave (not an implicit stable external API)
+├── pkg/                       # Shared helper packages (bech32, utils); not an implicit stable external API
 ├── build/                     # Build artifacts (binary output)
-├── configs/                   # Configuration files
 ├── docs/                      # Documentation
 ├── go.mod                     # Go module definition
 ├── go.sum                     # Dependency checksums
 ├── Makefile                   # Build automation
-└── README.md                  # Main documentation
+└── README.md                  # Minimal root readme (see docs/ for the full set)
 ```
+
+The live `backup.env` is not in the source tree. The configuration template is
+embedded in the binary (`internal/config`) and the working config is created under
+the install base dir at install time (see [INSTALL.md](INSTALL.md)). The UI stack is
+Charm (`charm.land/bubbletea/v2` and friends); the legacy `tview`/`tcell` stack was
+removed and a `make lint` guard (`check-no-tview`) keeps it out.
 
 ### Key Modules
 
@@ -133,8 +150,11 @@ proxsave/
 | **orchestrator** | Core backup/restore orchestration and capability-based restore decisions | `internal/orchestrator/*.go` |
 | **config** | Configuration management | `internal/config/config.go` |
 | **storage** | Local/secondary/cloud storage | `internal/storage/*.go` |
-| **backup** | Collector recipes/bricks, archiving, manifest/checksum helpers | `internal/backup/*.go` |
-| **notify** | Notification channels | `internal/notify/*.go` |
+| **backup** | Collector recipes/bricks, archiving, compression, manifest/checksum helpers | `internal/backup/*.go` |
+| **notify** | Notification channels (see [NOTIFICATIONS.md](NOTIFICATIONS.md)) | `internal/notify/*.go` |
+| **serverbot** | Leaf transport to the centralized bot-server (see [NOTIFICATIONS.md](NOTIFICATIONS.md)) | `internal/serverbot/*.go` |
+| **health** | Healthchecks monitoring; the resident daemon lives in `cmd/proxsave/daemon*.go` (see [DAEMON.md](DAEMON.md)) | `internal/health/*.go` |
+| **ui** | Charm (bubbletea) TUI: dashboard, wizards, forms (see [DASHBOARD_TUI.md](DASHBOARD_TUI.md)) | `internal/ui/*.go` |
 | **security** | Security checks, permissions | `internal/security/*.go` |
 
 ---
@@ -255,6 +275,20 @@ go tool cover -func=coverage.out
 go tool cover -html=coverage.out -o coverage.html
 ```
 
+The Makefile wraps these with a pinned toolchain:
+
+```bash
+# Coverage profile + HTML (opens coverage.out)
+make test-coverage
+
+# Full coverage report across all packages (prints the total)
+make coverage
+
+# Enforce a minimum total coverage (default 50%, override COVERAGE_THRESHOLD)
+make coverage-check
+make coverage-check COVERAGE_THRESHOLD=60.0
+```
+
 ### Benchmark Tests
 
 ```bash
@@ -264,22 +298,27 @@ go test -bench=. ./...
 # Benchmark with memory stats
 go test -bench=. -benchmem ./...
 
-# Benchmark specific function
-go test -bench=BenchmarkCompression ./internal/compression
+# Benchmark a specific package (compression lives in internal/backup)
+go test -bench=. ./internal/backup
 ```
 
 ---
 
 ## Dependency Management
 
+The CLI is built on the standard library `flag` package, not a third-party
+framework. The real direct dependencies are the Charm TUI stack
+(`charm.land/bubbletea/v2`, `charm.land/bubbles/v2`, `charm.land/lipgloss/v2`) and
+`filippo.io/age` for encryption; see `go.mod` for the full list.
+
 ### Add Dependency
 
 ```bash
-# Add new dependency
-go get github.com/spf13/cobra@latest
+# Add a new dependency (example)
+go get filippo.io/age@latest
 
-# Add specific version
-go get github.com/spf13/cobra@v1.8.0
+# Add a specific version
+go get filippo.io/age@v1.3.1
 
 # Tidy up (remove unused, add missing)
 go mod tidy
@@ -292,7 +331,7 @@ go mod tidy
 go get -u ./...
 
 # Update specific dependency
-go get -u github.com/spf13/cobra
+go get -u filippo.io/age
 
 # Tidy after updates
 go mod tidy
@@ -328,11 +367,24 @@ go build -mod=vendor -o build/proxsave ./cmd/proxsave
 ### Go Best Practices
 
 - **Follow [Effective Go](https://golang.org/doc/effective_go.html)**
-- **Use `gofmt`** for formatting (automatic with `go fmt`)
-- **Run `golangci-lint`** before committing
+- **Use `gofmt`** for formatting (automatic with `go fmt` or `make fmt`)
+- **Run `make lint`** before committing (see the structural guards below)
 - **Write godoc comments** for exported functions
 - **Handle errors explicitly** (no silent failures)
 - **Use `context.Context`** for cancellation
+
+### Lint and structural guards
+
+`make lint` runs `go vet ./...`, `golint` if installed, and two repo-specific
+guards that fail the build on an architectural regression:
+
+- `check-no-tview`: fails if any `cmd`, `internal`, or `pkg` code imports the legacy
+  `rivo/tview` or `gdamore/tcell` stack. The Charm rebuild removed them and they must
+  not come back.
+- `check-serverbot-leaf`: fails if `internal/serverbot` imports
+  `internal/health`, `internal/notify`, `internal/orchestrator`, `internal/config`, or
+  `internal/identity`. The transport must stay a leaf (logging, version, and the
+  standard library only); see [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 ### Code Style
 
@@ -438,11 +490,10 @@ We welcome contributions! Here's how you can help:
 
 ### Ways to Contribute
 
-- 🐛 **Report bugs**: Open an issue with detailed reproduction steps
-- 💡 **Suggest features**: Share your ideas for improvements
-- 📖 **Improve documentation**: Fix typos, add examples, clarify instructions
-- 💻 **Submit code**: Fork, create a branch, and submit a pull request
-- ⭐ **Star the repo**: Show your support!
+- **Report bugs**: open an issue with detailed reproduction steps
+- **Suggest features**: share your ideas for improvements
+- **Improve documentation**: fix typos, add examples, clarify instructions
+- **Submit code**: fork, create a branch, and submit a pull request
 
 ### Contribution Workflow
 
@@ -471,8 +522,8 @@ go fmt ./...
 # Run tests
 go test ./...
 
-# Run linter (if installed)
-golangci-lint run
+# Run vet and the structural guards
+make lint
 ```
 
 **4. Commit changes**:
@@ -575,15 +626,15 @@ go test -v ./...
 # Benchmarks
 go test -bench=. ./...
 
-# Lint (requires golangci-lint)
-golangci-lint run
+# Lint (go vet + structural guards: check-no-tview, check-serverbot-leaf)
+make lint
 ```
 
 ### Dependencies
 
 ```bash
 # Add dependency
-go get github.com/spf13/cobra@latest
+go get filippo.io/age@latest
 
 # Update all dependencies
 go get -u ./...
@@ -695,8 +746,8 @@ Testing:
 □ Write unit tests for new functions
 □ Add integration tests for workflows
 □ Run all tests (go test ./...)
-□ Check coverage (make test-coverage)
-□ Run linter (golangci-lint run)
+□ Check coverage (make coverage-check)
+□ Run vet and guards (make lint)
 
 Documentation:
 □ Update relevant docs/*.md files
@@ -714,8 +765,6 @@ Before Submitting PR:
 After PR Submission:
 □ Address review comments
 □ Push updates to same branch
-□ Thank reviewers
-□ Celebrate when merged! 🎉
 ```
 
 ---
@@ -723,20 +772,18 @@ After PR Submission:
 ## Code Review Guidelines
 
 **For reviewers**:
-- ✅ Verify tests pass
-- ✅ Check code follows Go best practices
-- ✅ Ensure documentation is updated
-- ✅ Look for potential security issues
-- ✅ Verify error handling is robust
-- ✅ Check for race conditions (use `-race`)
-- ✅ Ensure commit messages are clear
+- Verify tests pass
+- Check code follows Go best practices
+- Ensure documentation is updated
+- Look for potential security issues
+- Verify error handling is robust
+- Check for race conditions (use `-race`)
+- Ensure commit messages are clear
 
 **For contributors**:
-- ⏰ Be patient - reviews take time
-- 📝 Respond to all comments
-- 🙏 Thank reviewers for their time
-- 🔄 Push updates to same branch (no force push after review starts)
-- ✅ Mark resolved comments
+- Respond to all comments
+- Push updates to the same branch (no force push after review starts)
+- Mark resolved comments
 
 ---
 
@@ -752,8 +799,4 @@ This project is licensed under the **MIT License** - see the [LICENSE](../LICENS
 - **Pull Requests**: https://github.com/tis24dev/proxsave/pulls
 - **Discussions**: Use GitHub Discussions for questions and ideas
 
-**For security vulnerabilities**: Please email privately instead of opening a public issue.
-
----
-
-Thank you for contributing to Proxsave! 🎉
+**For security vulnerabilities**: please email privately instead of opening a public issue.
