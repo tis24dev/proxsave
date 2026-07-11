@@ -74,7 +74,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		{Label: "─── Maintenance ───", Separator: true},
 		{Label: "New key", Description: "create new encryption AGE key", Value: ActionNewKey},
 		{Label: "Install", Description: "install or re-install ProxSave (edit or wipe)", Value: ActionInstallMenu},
-		{Label: "Upgrade", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
+		{Label: "Upgrade", Description: "update the proxsave binary and merge new config keys", Value: ActionCheckUpgrade},
 		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
 		{Label: "─── Diagnostic Checks ───", Separator: true},
 		{Label: "Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},

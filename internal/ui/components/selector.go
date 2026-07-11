@@ -1,7 +1,8 @@
 // Package components provides the reusable Charm screens ProxSave flows are
-// built from: list selection, confirmation (with countdown), text input,
-// task progress, paged text, and notices. Every component embeds
-// shell.Resolver and is driven through shell.Ask.
+// built from: list selection, checkbox multi-select, single-screen grid forms,
+// confirmation (with countdown), text input, paged text, task progress, and the
+// streaming task viewport, plus notices. Every component embeds shell.Resolver and
+// is driven through shell.Ask.
 package components
 
 import (
