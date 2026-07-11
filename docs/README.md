@@ -12,6 +12,7 @@ below for the current operational and technical behavior.
 - [CLI_REFERENCE.md](CLI_REFERENCE.md): commands, flags, and workflow phases
 - [EXAMPLES.md](EXAMPLES.md): ready-to-use configuration examples
 - [RESTORE_GUIDE.md](RESTORE_GUIDE.md): full restore guide and category behavior
+- [NOTIFICATIONS.md](NOTIFICATIONS.md): notification channels and the centralized bot relay
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md): operational diagnostics and fixes
 
 ## Architecture & Developer Docs
