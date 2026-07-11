@@ -70,7 +70,18 @@ func TestNoEmDashInUserFacingText(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		f, perr := parser.ParseFile(fset, path, nil, 0)
+		// Fast path: a banned dash is the same UTF-8 bytes whether it lands in a
+		// string literal or a comment, so if the file has none it cannot have an
+		// offending string literal and we skip the (expensive) parse. Files that DO
+		// contain the bytes are parsed, and only STRING literals are flagged there.
+		src, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil // unreadable: the build/vet will surface it, not this guard
+		}
+		if !hasBannedDash(string(src)) {
+			return nil
+		}
+		f, perr := parser.ParseFile(fset, path, src, 0)
 		if perr != nil {
 			// Not this guard's job to report unparsable Go; the build/vet will.
 			return nil
@@ -80,9 +91,11 @@ func TestNoEmDashInUserFacingText(t *testing.T) {
 			if !ok || lit.Kind != token.STRING {
 				return true
 			}
+			// A STRING literal from a file the parser accepted is always well-formed,
+			// so Unquote cannot fail here; a failure would be a bug, not bad input.
 			s, uerr := strconv.Unquote(lit.Value)
 			if uerr != nil {
-				s = lit.Value // raw fallback; still contains the dash if present
+				t.Fatalf("unquote %s at %s: %v", lit.Value, fset.Position(lit.Pos()), uerr)
 			}
 			if hasBannedDash(s) {
 				rel, _ := filepath.Rel(root, path)
@@ -121,11 +134,30 @@ func userFacingAssets(root string) []string {
 	if p := filepath.Join(root, "install.sh"); fileExists(p) {
 		out = append(out, p)
 	}
-	tmpl := filepath.Join(root, "internal", "config", "templates")
-	if entries, err := os.ReadDir(tmpl); err == nil {
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".env") {
-				out = append(out, filepath.Join(tmpl, e.Name()))
+	// Live config templates the operator reads and edits.
+	out = appendFilesWithSuffix(out, filepath.Join(root, "internal", "config", "templates"), ".env")
+	// Installer characterization goldens: the rendered backup.env and the captured
+	// installer transcript the operator sees. They live under a testdata/ dir the .go
+	// walk SkipDirs, so scan them explicitly here; the rest of testdata stays exempt.
+	out = appendFilesWithSuffix(out, filepath.Join(root, "cmd", "proxsave", "testdata", "install_characterization"), ".env", ".transcript")
+	return out
+}
+
+// appendFilesWithSuffix appends every file directly under dir whose name ends with
+// one of the given suffixes. A missing dir is not an error (scan what exists).
+func appendFilesWithSuffix(out []string, dir string, suffixes ...string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		for _, suf := range suffixes {
+			if strings.HasSuffix(e.Name(), suf) {
+				out = append(out, filepath.Join(dir, e.Name()))
+				break
 			}
 		}
 	}
