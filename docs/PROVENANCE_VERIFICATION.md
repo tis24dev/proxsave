@@ -10,11 +10,23 @@ Every Proxsave release binary includes cryptographically signed provenance attes
 
 Attestations use the SLSA (Supply-chain Levels for Software Artifacts) standard and are registered in an immutable public transparency log (Sigstore).
 
+Proxsave publishes a single build target, `linux/amd64`. The release assets for a tag `vX.Y.Z` are:
+
+```
+proxsave_X.Y.Z_linux_amd64                     # uncompressed binary
+proxsave_X.Y.Z_linux_amd64.tar.gz              # binary + LICENSE + README
+proxsave_X.Y.Z_linux_amd64.tar.gz.sbom.cdx.json
+SHA256SUMS
+SHA256SUMS.sig
+```
+
+GoReleaser drops the leading `v` from the version in filenames, so tag `v0.29.0` produces `proxsave_0.29.0_linux_amd64`. There are no macOS or Windows binaries.
+
 ## Release signature (SHA256SUMS.sig)
 
 In addition to the SLSA attestations described below, every release ships a detached signature of its `SHA256SUMS` file: `SHA256SUMS.sig`. It is an **ECDSA P-256 / SHA-256** signature produced in CI with a private key that exists only as a GitHub Actions secret.
 
-**This is what the tooling enforces automatically.** `install.sh` and `proxsave --upgrade` download `SHA256SUMS.sig` and verify it against a public key **pinned in the tool itself** before trusting `SHA256SUMS` (and then the archive checksum). A missing or invalid signature aborts the install/upgrade — there is no fallback to checksum-only. Because the public key is pinned in the client, an attacker cannot substitute their own key: only the project's private key can produce a signature that verifies.
+**This is what the tooling enforces automatically.** `install.sh` and `proxsave --upgrade` download `SHA256SUMS.sig` and verify it against a public key **pinned in the tool itself** before trusting `SHA256SUMS` (and then the archive checksum). A missing or invalid signature aborts the install or upgrade; there is no fallback to checksum-only. Because the public key is pinned in the client, an attacker cannot substitute their own key: only the project's private key can produce a signature that verifies. The release workflow also validates the signing key against the same pinned public key before publishing.
 
 Pinned public key (sha256/DER fingerprint `fdbbba66cdb770b85a728c8aee0b920b4cd244c84f4fc5a0065188fbe9a5eddb`):
 
@@ -28,7 +40,7 @@ liDJEnB+RgiWOQR+6xLWeX7PyauuMxUh/HNnvBQAokK91fLWes4r9Xlwzw==
 ### Verify a download manually
 
 ```bash
-TAG=v0.0.0   # the release you downloaded
+TAG=vX.Y.Z          # the release you downloaded, e.g. v0.29.0
 base="https://github.com/tis24dev/proxsave/releases/download/${TAG}"
 curl -fsSLO "${base}/SHA256SUMS"
 curl -fsSLO "${base}/SHA256SUMS.sig"
@@ -43,19 +55,17 @@ sha256sum --ignore-missing -c SHA256SUMS
 
 > The release signature (above) and the SLSA attestations (below) are complementary: the signature is the lightweight check the installer enforces with no extra tooling, while attestations add an independently verifiable, transparency-logged build provenance via the GitHub CLI.
 
-## Why Attestations Matter
+## Why attestations matter
 
 Provenance attestations protect against:
-- **Supply chain attacks**: Verifies that the binary comes from the official repository
-- **Tampering**: Guarantees that no one has modified the binary after the build
-- **Compromises**: Proves that the binary was built in a trusted environment (GitHub Actions)
-- **Unauthorized builds**: Confirms that only maintainers can create releases
+- **Supply chain attacks**: verifies that the binary comes from the official repository
+- **Tampering**: guarantees that no one has modified the binary after the build
+- **Compromises**: proves that the binary was built in a trusted environment (GitHub Actions)
+- **Unauthorized builds**: confirms that only maintainers can create releases
 
 ## Prerequisites
 
-To verify attestations, you need to install GitHub CLI (`gh`).
-
-### Linux
+To verify attestations you need the GitHub CLI (`gh`). It runs on any OS even though the Proxsave binary is `linux/amd64` only.
 
 ```bash
 # Debian/Ubuntu
@@ -71,70 +81,57 @@ sudo dnf install gh
 sudo pacman -S github-cli
 ```
 
-### macOS
+See the [GitHub CLI install docs](https://github.com/cli/cli#installation) for other platforms.
+
+## Verification methods
+
+The examples below use a small setup block so you can paste any release tag:
 
 ```bash
-brew install gh
+TAG=vX.Y.Z                       # the release you are verifying, e.g. v0.29.0
+VER=${TAG#v}                     # version without the leading v (used in asset names)
+ASSET="proxsave_${VER}_linux_amd64"
 ```
 
-### Windows
-
-```powershell
-# With winget
-winget install --id GitHub.cli
-
-# With Chocolatey
-choco install gh
-
-# With Scoop
-scoop install gh
-```
-
-## Verification Methods
-
-### Method 1: Quick Verification (Single Binary)
-
-This is the simplest method to verify a single downloaded binary.
+### Method 1: quick verification (single binary)
 
 ```bash
-# Download the binary for your platform
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
+# Download the binary
+wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/${ASSET}"
 
 # Verify the attestation
-gh attestation verify proxsave-linux-amd64 --repo tis24dev/proxsave
+gh attestation verify "${ASSET}" --repo tis24dev/proxsave
 ```
 
 **Expected output:**
 ```
-Loaded digest sha256:abc123... for file://proxsave-linux-amd64
+Loaded digest sha256:abc123... for file://proxsave_0.29.0_linux_amd64
 Loaded 1 attestation from GitHub API
-✓ Verification succeeded!
+Verification succeeded!
 
 sha256:abc123... was attested by:
-REPO                        PREDICATE_TYPE                  WORKFLOW
-tis24dev/proxsave     https://slsa.dev/provenance/v1  .github/workflows/release.yml@refs/tags/v0.9.0
+REPO               PREDICATE_TYPE                  WORKFLOW
+tis24dev/proxsave  https://slsa.dev/provenance/v1  .github/workflows/release.yml@refs/tags/v0.29.0
 ```
 
-### Method 2: Verify All Artifacts
+### Method 2: verify both artifacts
 
-Verify all binaries downloaded in a directory.
+Both the uncompressed binary and the `.tar.gz` are attested (the attestation subject-path `build/proxsave_*` also covers the SBOM document).
 
 ```bash
-# Download all the binaries you need
 cd ~/downloads
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-darwin-amd64
+wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/${ASSET}"
+wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/${ASSET}.tar.gz"
 
-# Verify all together
-gh attestation verify proxsave-* --repo tis24dev/proxsave
+gh attestation verify proxsave_${VER}_linux_amd64* --repo tis24dev/proxsave
 ```
 
-### Method 3: Verification with JSON Output
+### Method 3: verification with JSON output
 
 For integrating verification into scripts or for detailed analysis.
 
 ```bash
-gh attestation verify proxsave-linux-amd64 \
+gh attestation verify "${ASSET}" \
   --repo tis24dev/proxsave \
   --format json | jq
 ```
@@ -144,19 +141,14 @@ gh attestation verify proxsave-linux-amd64 \
 {
   "verificationResult": {
     "verifiedTimestamps": [
-      {
-        "timestamp": "2024-11-28T10:30:45Z",
-        "source": "Rekor"
-      }
+      { "timestamp": "2025-06-20T10:30:45Z", "source": "Rekor" }
     ],
     "statement": {
       "_type": "https://in-toto.io/Statement/v1",
       "subject": [
         {
-          "name": "proxsave-linux-amd64",
-          "digest": {
-            "sha256": "abc123..."
-          }
+          "name": "proxsave_0.29.0_linux_amd64",
+          "digest": { "sha256": "abc123..." }
         }
       ],
       "predicateType": "https://slsa.dev/provenance/v1",
@@ -165,7 +157,7 @@ gh attestation verify proxsave-linux-amd64 \
           "buildType": "https://slsa.dev/provenance/github/actions/v1",
           "externalParameters": {
             "workflow": {
-              "ref": "refs/tags/v0.9.0",
+              "ref": "refs/tags/v0.29.0",
               "repository": "https://github.com/tis24dev/proxsave"
             }
           }
@@ -176,303 +168,163 @@ gh attestation verify proxsave-linux-amd64 \
 }
 ```
 
-### Method 4: Offline Verification (with downloaded bundle)
+### Method 4: offline verification (with downloaded bundle)
 
 Useful for air-gapped environments or for archiving attestations.
 
 ```bash
 # Download the attestation as a bundle
-gh attestation download proxsave-linux-amd64 \
+gh attestation download "${ASSET}" \
   --repo tis24dev/proxsave \
   --output attestation.jsonl
 
 # Verify offline using the bundle
-gh attestation verify proxsave-linux-amd64 \
+gh attestation verify "${ASSET}" \
   --bundle attestation.jsonl \
   --repo tis24dev/proxsave
 ```
 
-## Complete Practical Examples
-
-### Example 1: Linux - Verification and Installation
+## A complete verify-and-install example (Linux)
 
 ```bash
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# 1. Download the binary
-echo "Downloading binary..."
-wget -q https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
+TAG=vX.Y.Z                       # the release you want, e.g. v0.29.0
+VER=${TAG#v}
+ASSET="proxsave_${VER}_linux_amd64"
 
-# 2. Verify the attestation
+echo "Downloading ${ASSET}..."
+wget -q "https://github.com/tis24dev/proxsave/releases/download/${TAG}/${ASSET}"
+
 echo "Verifying attestation..."
-if gh attestation verify proxsave-linux-amd64 --repo tis24dev/proxsave; then
-    echo "✓ Attestation verified successfully!"
+if gh attestation verify "${ASSET}" --repo tis24dev/proxsave; then
+    echo "Attestation verified."
 else
-    echo "✗ Attestation verification failed!"
-    rm proxsave-linux-amd64
+    echo "Attestation verification failed."
+    rm -f "${ASSET}"
     exit 1
 fi
 
-# 3. Make executable
-chmod +x proxsave-linux-amd64
-
-# 4. Move to /usr/local/bin
-sudo mv proxsave-linux-amd64 /usr/local/bin/proxsave
-
-echo "Installation complete!"
+chmod +x "${ASSET}"
+sudo mv "${ASSET}" /usr/local/bin/proxsave
 proxsave --version
 ```
 
-### Example 2: macOS - Verification with Homebrew Alternative
+For most users the recommended path is still the install script, which performs the `SHA256SUMS.sig` signature check automatically:
 
 ```bash
-#!/bin/bash
-set -e
-
-VERSION="v0.9.0"
-BINARY="proxsave-darwin-$(uname -m)"
-URL="https://github.com/tis24dev/proxsave/releases/download/${VERSION}/${BINARY}"
-
-# Download
-echo "Downloading ${BINARY}..."
-curl -L -o proxsave "${URL}"
-
-# Verify
-echo "Verifying provenance..."
-gh attestation verify proxsave --repo tis24dev/proxsave || {
-    echo "Verification failed!"
-    rm proxsave
-    exit 1
-}
-
-# Install
-chmod +x proxsave
-sudo mv proxsave /usr/local/bin/
-echo "Installed successfully!"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
 
-### Example 3: Windows PowerShell - Verification and Installation
-
-```powershell
-# Download binary
-$version = "v0.9.0"
-$binary = "proxsave-windows-amd64.exe"
-$url = "https://github.com/tis24dev/proxsave/releases/download/$version/$binary"
-
-Write-Host "Downloading $binary..." -ForegroundColor Cyan
-Invoke-WebRequest -Uri $url -OutFile "proxsave.exe"
-
-# Verify attestation
-Write-Host "Verifying attestation..." -ForegroundColor Cyan
-$result = gh attestation verify proxsave.exe --repo tis24dev/proxsave
-
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "✓ Attestation verified successfully!" -ForegroundColor Green
-
-    # Move to Program Files
-    $destPath = "$env:ProgramFiles\ProxmoxBackup"
-    New-Item -ItemType Directory -Force -Path $destPath | Out-Null
-    Move-Item -Path "proxsave.exe" -Destination "$destPath\proxsave.exe" -Force
-
-    # Add to PATH if not already there
-    $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    if ($currentPath -notlike "*$destPath*") {
-        [Environment]::SetEnvironmentVariable("Path", "$currentPath;$destPath", "Machine")
-        Write-Host "Added to system PATH" -ForegroundColor Green
-    }
-
-    Write-Host "Installation complete!" -ForegroundColor Green
-} else {
-    Write-Host "✗ Attestation verification failed!" -ForegroundColor Red
-    Remove-Item "proxsave.exe"
-    exit 1
-}
-```
-
-## What Gets Verified
+## What gets verified
 
 When you run `gh attestation verify`, the following checks are performed:
 
 | Verification | Description |
 |--------------|-------------|
-| ✓ **Source repository** | Confirms that the build comes from `github.com/tis24dev/proxsave` |
-| ✓ **Commit SHA** | Verifies the exact commit used for the build |
-| ✓ **Workflow** | Checks that `.github/workflows/release.yml` was used |
-| ✓ **Build environment** | Confirms that the build occurred on GitHub-hosted runner |
-| ✓ **SHA256 integrity** | Calculates the file hash and compares it with the attested one |
-| ✓ **Cryptographic signature** | Verifies the OIDC/Sigstore signature on the attestation |
-| ✓ **Rekor timestamp** | Checks the immutable record in the transparency log |
-| ✓ **SLSA compliance** | Verifies that the attestation complies with the SLSA v1 standard |
+| Source repository | Confirms the build comes from `github.com/tis24dev/proxsave` |
+| Commit SHA | Verifies the exact commit used for the build |
+| Workflow | Checks that `.github/workflows/release.yml` was used |
+| Build environment | Confirms the build occurred on a GitHub-hosted runner |
+| SHA256 integrity | Recomputes the file hash and compares it with the attested one |
+| Cryptographic signature | Verifies the OIDC/Sigstore signature on the attestation |
+| Rekor timestamp | Checks the immutable record in the transparency log |
+| SLSA compliance | Verifies the attestation complies with the SLSA v1 standard |
 
 ## Troubleshooting
 
+The variables `TAG`, `VER`, and `ASSET` below are the ones defined in [Verification methods](#verification-methods).
+
 ### Error: "no attestations found"
 
-**Cause**: The release does not include attestations (release prior to this feature).
+**Cause**: the release does not include attestations (a release created before this feature).
 
 **Solution**:
 ```bash
-# Check the release version
-gh release view v0.9.0 --repo tis24dev/proxsave
-
-# Note: older releases may not include attestations/provenance data.
+gh release view "${TAG}" --repo tis24dev/proxsave
+# Older releases may not include attestation/provenance data.
 ```
 
 ### Error: "gh: command not found"
 
 **Cause**: GitHub CLI is not installed or not in PATH.
 
-**Solution**: Install `gh` following the instructions in the Prerequisites section above.
+**Solution**: install `gh` following the Prerequisites section above.
 
 ### Error: "failed to verify signature"
 
-**Cause**: The file may have been tampered with or corrupted.
+**Cause**: the file may have been tampered with or corrupted.
 
 **Solution**:
 ```bash
-# Re-download the binary
-rm proxsave-linux-amd64
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
-
-# Retry verification
-gh attestation verify proxsave-linux-amd64 --repo tis24dev/proxsave
+rm -f "${ASSET}"
+wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/${ASSET}"
+gh attestation verify "${ASSET}" --repo tis24dev/proxsave
 ```
 
-If the problem persists, **DO NOT use the binary** and report the issue by opening an issue on GitHub.
+If the problem persists, **do not use the binary** and report the issue on GitHub.
 
 ### Error: "attestation verification failed: subject digest mismatch"
 
-**Cause**: The SHA256 hash of the file does not match the one in the attestation.
-
-**Possible causes**:
-- File downloaded partially (interrupted download)
-- File modified after download
-- File corrupted during transfer
+**Cause**: the SHA256 hash of the file does not match the attested one (partial download, modification, or corruption).
 
 **Solution**:
 ```bash
-# Check file size
-ls -lh proxsave-linux-amd64
+ls -lh "${ASSET}"
+rm -f "${ASSET}"
+wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/${ASSET}"
 
-# Re-download completely
-rm proxsave-linux-amd64
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
-
-# Manual checksum verification (optional)
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS
-sha256sum -c SHA256SUMS
+# Optional: cross-check against the signed checksums
+wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 ### Error: "HTTP 401: Bad credentials"
 
-**Cause**: GitHub CLI is not authenticated or the token has expired.
+**Cause**: GitHub CLI is not authenticated or the token expired.
 
 **Solution**:
 ```bash
-# Authenticate with GitHub
 gh auth login
-
-# Or use a token
+# or
 export GITHUB_TOKEN=your_personal_access_token
 ```
 
 ### Slow verification or timeout
 
-**Cause**: Connection issues to the transparency log (Rekor).
+**Cause**: connection issues to the transparency log (Rekor).
 
-**Solution**:
-```bash
-# Use offline verification if you've already downloaded the attestation
-gh attestation download proxsave-linux-amd64 --repo tis24dev/proxsave -o attestation.jsonl
-gh attestation verify proxsave-linux-amd64 --bundle attestation.jsonl --repo tis24dev/proxsave
-```
+**Solution**: use offline verification if you already downloaded the attestation bundle (Method 4).
 
-## Security Considerations
+## Security considerations
 
-### Trust Model
+### Trust model
 
 Attestations are based on:
 1. **GitHub Actions OIDC**: GitHub signs attestations using short-lived OIDC tokens
-2. **Sigstore/Rekor**: Public transparency log that records all attestations
-3. **SLSA Framework**: Industry standard for provenance metadata
+2. **Sigstore/Rekor**: a public transparency log that records all attestations
+3. **SLSA framework**: an industry standard for provenance metadata
 
-**What this means**: You must trust GitHub as the root of trust. If GitHub is compromised, attestations could be forged.
+**What this means**: you must trust GitHub as the root of trust for the attestations. If GitHub is compromised, attestations could be forged. The pinned-key `SHA256SUMS.sig` signature is an independent check that does not rely on GitHub as a signer.
 
-### Transparency Log (Rekor)
+### Transparency log (Rekor)
 
-Every attestation is publicly recorded on https://search.sigstore.dev/
+Every attestation is publicly recorded and searchable at https://search.sigstore.dev/ (filter by `tis24dev/proxsave`).
 
-**Benefits**:
-- Immutable and publicly auditable registry
+Benefits:
+- Immutable, publicly auditable registry
 - Verifiable timestamps
 - No secrets to manage (keyless signing)
 
-**What you can check**:
-```bash
-# Search for attestations for this repository
-open "https://search.sigstore.dev/?logIndex=&email=&hash=&logEntry=&uuid="
-# Filter by: tis24dev/proxsave
-```
+### Best practices
 
-### Comparison with GPG Signing
-
-| Aspect | Attestations (new) | GPG Signing (old) |
-|--------|-------------------|-------------------|
-| **Key management** | None (keyless) | Requires private key management |
-| **Key rotation** | Automatic | Manual and complex |
-| **Revocation** | Timestamp-based | Requires key revocation |
-| **Transparency** | Public registry | Only if published on keyserver |
-| **Build metadata** | Complete SLSA provenance | Only checksum signature |
-| **Verification** | `gh attestation verify` | `gpg --verify` |
-| **Trust model** | GitHub OIDC + Sigstore | Web of trust / keyserver |
-
-### Best Practices
-
-1. **Always verify before use**: Do not run unverified binaries
-2. **Use HTTPS**: Always download from `https://github.com`
-3. **Verify the repository**: Ensure it's `tis24dev/proxsave`
-4. **Update gh CLI**: Keep GitHub CLI updated for the latest security features
-5. **Automation**: Integrate verification into your deployment scripts
-6. **Archive attestations**: Save attestations for future audits
-
-## Migration from GPG
-
-### For Users Who Used Old GPG Signing
-
-**What changed**:
-- ✗ We no longer generate `SHA256SUMS.asc` (GPG signature)
-- ✓ We generate SLSA provenance attestations
-- ✓ We continue to generate `SHA256SUMS` (plain checksums)
-
-**Previous releases** (v0.9.0 and earlier):
-- Use GPG signing (key: CD28A21CC11B270E)
-- Verify with: `gpg --verify SHA256SUMS.asc SHA256SUMS`
-
-**New releases** (v0.9.1+):
-- Use GitHub attestations
-- Verify with: `gh attestation verify`
-
-### Migration Script
-
-If you have scripts that use GPG, here's how to migrate them:
-
-**Before (GPG)**:
-```bash
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/proxsave-linux-amd64
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.0/SHA256SUMS.asc
-gpg --verify SHA256SUMS.asc SHA256SUMS
-sha256sum -c SHA256SUMS
-```
-
-**After (Attestations)**:
-```bash
-wget https://github.com/tis24dev/proxsave/releases/download/v0.9.1/proxsave-linux-amd64
-gh attestation verify proxsave-linux-amd64 --repo tis24dev/proxsave
-```
-
-Much simpler! 🎉
+1. **Always verify before use**: do not run unverified binaries.
+2. **Use HTTPS**: always download from `https://github.com`.
+3. **Verify the repository**: ensure it is `tis24dev/proxsave`.
+4. **Keep `gh` updated**: newer versions carry the latest verification logic.
+5. **Automate**: integrate verification into your deployment scripts.
+6. **Archive attestations**: save attestation bundles for future audits.
 
 ## References
 
@@ -486,8 +338,8 @@ Much simpler! 🎉
 ## Support
 
 If you have problems with attestation verification:
-1. Check this documentation for troubleshooting
-2. Verify you have the latest version of `gh` CLI
-3. Open an issue on https://github.com/tis24dev/proxsave/issues
+1. Check this documentation for troubleshooting.
+2. Make sure you have the latest `gh` CLI.
+3. Open an issue on https://github.com/tis24dev/proxsave/issues.
 
-**Security note**: If you suspect that an attestation has been forged or compromised, **DO NOT use the binary** and immediately report it by opening a private security advisory on GitHub.
+**Security note**: if you suspect an attestation has been forged or compromised, **do not use the binary** and report it by opening a private security advisory on GitHub.
