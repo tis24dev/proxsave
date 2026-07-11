@@ -105,14 +105,15 @@ Service Management (if cluster)
   ├─ Stop PVE services
   └─ Unmount /etc/pve
   ↓
-File Extraction
+File Extraction (three tiers)
   ├─ Normal categories → /
-  ├─ Export categories → export dir
+  ├─ Export categories → export dir (read-only)
+  ├─ Staged categories → stage dir, then applied
   └─ Log all operations
   ↓
 Post-Restore Tasks
   ├─ Recreate directories
-  ├─ Check ZFS pools
+  ├─ Check ZFS pools (when the ZFS category is selected)
   └─ Restart services (deferred)
   ↓
 Completion Summary
@@ -162,9 +163,9 @@ if args.Restore {
 - Handle errors and exit codes
 - Distinguish user abort vs system error
 
-### File: internal/orchestrator/restore.go (entry point — workflow body in restore_workflow_ui_run.go)
+### File: internal/orchestrator/restore.go (entry point; workflow body in restore_workflow_ui_run.go)
 
-**Main function**: `RunRestoreWorkflow()` — thin dispatch stub that delegates to `runRestoreWorkflowWithUI()` (`restore_workflow_ui_run.go`)
+**Main function**: `RunRestoreWorkflow()`, a thin dispatch stub that delegates to `runRestoreWorkflowWithUI()` (`restore_workflow_ui_run.go`)
 
 **Signature**:
 ```go
@@ -247,7 +248,7 @@ instead of line numbers, which drift on every edit):
     `recreateStorageDirectories()` / `applyNetworkConfig()` / `applyFirewallConfig()` /
     `applyHAConfig()`; then `logRestoreCompletion()` and `checkZFSPoolsAfterRestore()`):
     - Recreate storage/datastore directories
-    - Check ZFS pools (PBS only)
+    - Check ZFS pools (only when the `zfs` category is selected; no-op if `zpool` is absent)
     - Display completion summary
 
 ### File: internal/orchestrator/categories.go
@@ -818,98 +819,90 @@ func unmountEtcPVE(ctx context.Context, logger *logging.Logger) error {
 
 #### Phase 8 & 9: File Extraction
 
-**Two-Pass Extraction**:
+**Three-tier extraction.** `splitRestoreCategories` (`staging.go`) divides the selected
+categories into three tiers: **export-only**, **staged** (sensitive), and **normal**.
+`prepareAndRestoreSelectedPayloads` (`restore_workflow_ui_run.go`) then processes them in
+a fixed order:
 
-**Pass 1: Normal Categories** (`internal/orchestrator/restore_workflow_ui_extract.go` → `extractNormalCategories()`):
+1. **Normal categories** are extracted directly to `destRoot` (`/` on a real restore) via
+   `extractNormalCategories`.
+2. **`/etc/fstab`** is smart-merged, never blindly overwritten (see Safety Mechanisms).
+3. **Export-only categories** (`pve_config_export`, `pbs_config`, `proxsave_info`) are
+   extracted read-only to an export dir (`proxmox-config-export-<ts>` under the base dir),
+   never onto the live system.
+4. **Cluster SAFE apply** runs when applicable.
+5. **Staged (sensitive) categories** are extracted into a per-run stage dir
+   (`/tmp/proxsave/restore-stage-<ts>_<seq>`) and then applied (Phase 10).
+
 ```go
-if len(normalCategories) > 0 {
-    destRoot := "/"
-    logPath, err := extractSelectiveArchive(
-        ctx,
-        prepared.ArchivePath,
-        destRoot,
-        normalCategories,
-        mode,
-        logger,
-    )
-    if err != nil {
-        logger.Warning("Restore completed with errors: %v", err)
-    }
-}
+// restore_workflow_ui_run.go: prepareAndRestoreSelectedPayloads (processing order)
+interceptFilesystemCategory(...)       // fstab handling
+extractNormalCategories(...)           // tier 1 -> destRoot
+smartMergeFilesystemCategory(...)      // fstab smart merge
+exportCategories(...)                  // tier 3 -> export dir (read-only)
+runClusterSafeApply(...)               // cluster SAFE apply
+stageAndApplySensitiveCategories(...)  // tier 2 -> stage dir, then Phase 10
 ```
 
-**Pass 2: Export Categories** (`internal/orchestrator/restore_workflow_ui_extract.go` → `exportCategories()`):
-```go
-if len(exportCategories) > 0 {
-    exportRoot := exportDestRoot(cfg.BaseDir)
-    logger.Info("Exporting /etc/pve contents to: %s", exportRoot)
+Staged categories are extracted **strictly**:
+`extractSelectiveArchiveStrict(..., failOnPartial=true)`. If any entry fails, the whole
+staged apply is skipped and the live system is left untouched (BH-002), so a partial tree
+is never applied to sensitive config. The plain (non-staged) tiers use
+`extractSelectiveArchive`, a thin wrapper over `extractSelectiveArchiveStrict(..., false)`
+that creates the detailed log under `/tmp/proxsave` and calls `extractArchiveNative`.
 
-    os.MkdirAll(exportRoot, 0o755)
+**Which categories are staged** (`isStagedCategoryID`, `staging.go`): `network`,
+`datastore_pbs`, `pbs_jobs`, `pbs_remotes`, `pbs_host`, `pbs_tape`, `storage_pve`,
+`pve_jobs`, `pve_notifications`, `pbs_notifications`, `pve_access_control`,
+`pbs_access_control`, `accounts`, `pve_firewall`, `pve_ha`, `pve_sdn`. Everything else is
+a normal category unless it is flagged `ExportOnly`.
 
-    exportLog, err := extractSelectiveArchive(
-        ctx,
-        prepared.ArchivePath,
-        exportRoot,
-        exportCategories,
-        RestoreModeCustom,
-        logger,
-    )
-}
-```
-
-**Extraction Implementation** (`internal/orchestrator/restore_archive.go` → `extractSelectiveArchive()`):
-```go
-func extractSelectiveArchive(
-    ctx context.Context,
-    archivePath string,
-    destRoot string,
-    categories []Category,
-    mode RestoreMode,
-    logger *logging.Logger,
-) (logPath string, err error) {
-    // Thin wrapper over extractSelectiveArchiveStrict(..., failOnPartial=false),
-    // which creates the detailed log under /tmp/proxsave and then calls
-    // extractArchiveNative with a restoreArchiveOptions struct:
-    //
-    //   err := extractArchiveNative(ctx, restoreArchiveOptions{
-    //       archivePath: archivePath,
-    //       destRoot:    destRoot,
-    //       logger:      logger,
-    //       categories:  categories,
-    //       mode:        mode,
-    //       logFile:     logFile,
-    //       logFilePath: logPath,
-    //   })
-    return extractSelectiveArchiveStrict(ctx, archivePath, destRoot, categories, mode, logger, false)
-}
-```
+When staging is unavailable (a non-real or test filesystem) the plan folds the staged
+categories back into the normal tier, so they are extracted directly instead of
+staged-and-applied (`restore_workflow_ui_plan.go`).
 
 ---
 
-#### Phase 10: Staged Apply (PVE/PBS)
+#### Phase 10: Staged Apply
 
-After extraction, **staged categories** are applied from the staging directory under `/tmp/proxsave/restore-stage-*`.
+After the sensitive categories are staged under `/tmp/proxsave/restore-stage-*`,
+`applyStagedCategories` (`restore_workflow_ui_extract.go`) applies them. It first runs the
+**PBS datastore mount guards** as a pre-step (see Safety Mechanisms), then a fixed ordered
+list of steps. Each step is individually gated on whether its category was selected,
+re-checks context cancellation between steps, and degrades a non-fatal error to a warning
+(only an abort or input error stops the apply):
 
-**PBS staged apply**:
-- Selected interactively during restore on PBS hosts: **Merge (existing PBS)** vs **Clean 1:1 (fresh PBS install)**.
-- ProxSave applies supported PBS categories via `proxmox-backup-manager`.
-  - **Merge**: create/update only (no deletions of existing objects not in the backup).
-  - **Clean 1:1**: attempts 1:1 reconciliation (may remove objects not present in the backup).
-- If API apply is unavailable or fails, ProxSave may fall back to applying staged `*.cfg` files back to `/etc/proxmox-backup` (**Clean 1:1 only**).
+1. **PBS staged config apply** (`maybeApplyPBSConfigsFromStage`, `pbs_staged_apply.go`): datastores/S3, remotes, sync/verify/prune jobs, node + traffic control, tape.
+2. **PVE staged config apply** (`maybeApplyPVEConfigsFromStage`, `pve_staged_apply.go`): `storage_pve`, `pve_jobs`.
+3. **PVE SDN staged apply** (`maybeApplyPVESDNFromStage`, `restore_sdn.go`).
+4. **Access control staged apply** (`applyAccessControlFromStage` -> `maybeApplyAccessControlWithUI`): PBS and PVE ACLs, with a rollback/commit UI. In a cluster backup it skips the 1:1 PVE apply in SAFE mode and skips entirely in RECOVERY mode (`config.db` owns that state). Requires root and a real filesystem.
+5. **System accounts staged apply** (`maybeApplyAccountsFromStage`, `restore_accounts.go`): the anti-lockout merge below.
+6. **Notifications staged apply** (`maybeApplyNotificationsFromStage`, `restore_notifications.go`): PVE and PBS notification endpoints/matchers.
 
-**Current PBS API coverage**:
-- `pbs_host`: node + traffic control
-- `datastore_pbs`: datastores + S3 endpoints
-- `pbs_remotes`: remotes
-- `pbs_jobs`: sync/verify/prune jobs
-- `pbs_notifications`: notification endpoints/matchers
+**PBS apply model (interactive).** On PBS hosts the apply offers **Merge (existing PBS)**
+vs **Clean 1:1 (fresh PBS install)**. Merge creates/updates only (no deletions); Clean 1:1
+attempts a 1:1 reconciliation (may remove objects not in the backup) via
+`proxmox-backup-manager`, and may fall back to writing staged `*.cfg` files into
+`/etc/proxmox-backup` (Clean 1:1 only). API coverage: `pbs_host` (node + traffic control),
+`datastore_pbs` (datastores + S3), `pbs_remotes`, `pbs_jobs` (sync/verify/prune),
+`pbs_notifications`. Other PBS categories remain file-based.
 
-Other PBS categories remain file-based (e.g. access control, tape, proxy/ACME/metricserver).
+**Anti-lockout account merge** (`applyAccountsFromStage`). Accounts are **merged**, not
+overwritten. ProxSave keeps every current host line and imports only regular backup
+accounts: a backup user is imported only if it is non-root, non-NIS, has a valid name,
+`uid >= 1000` (`systemAccountIDThreshold`), and no primary-gid escalation. It reads the
+current `/etc/passwd`, `/etc/group`, and `/etc/shadow` first and refuses to rewrite the
+auth DB if any is missing (no host baseline). A missing shadow line becomes a locked
+placeholder (`:*:::::::`). Existing host groups only gain imported members; new groups
+need `gid >= 1000`. All four files (`passwd`/`shadow`/`group`/`gshadow`) are written
+all-or-nothing with the current contents as rollback. `/etc/sudoers` is replaced only if
+the staged copy passes `visudo -c`.
 
-**Key code paths**:
-- `internal/orchestrator/pbs_staged_apply.go` (`maybeApplyPBSConfigsFromStage`)
-- `internal/orchestrator/restore_notifications.go` (`maybeApplyNotificationsFromStage`, `pbs_notifications`)
-- `internal/orchestrator/pbs_api_apply.go` / `internal/orchestrator/pbs_notifications_api_apply.go` (API apply engines)
+**PBS raw-config skips** (`shouldSkipProxmoxSystemRestore`, `restore_archive_paths.go`).
+These are never restored raw (they are recreated through the API instead):
+`etc/proxmox-backup/domains.cfg`, `etc/proxmox-backup/user.cfg`,
+`etc/proxmox-backup/acl.cfg`, plus the runtime locks `var/lib/proxmox-backup/.clusterlock`
+and anything under `var/lib/proxmox-backup/lock/`.
 
 ## Category System
 
@@ -982,12 +975,12 @@ func PathMatchesCategory(filePath string, category Category) bool {
 
 | Archive Path | Category Path | Match? | Reason |
 |--------------|---------------|--------|--------|
-| `./etc/network/interfaces` | `./etc/network/` | ✅ | Prefix match |
-| `./etc/network/interfaces` | `./etc/network/interfaces` | ✅ | Exact match |
-| `./etc/hostname` | `./etc/hostname` | ✅ | Exact match |
-| `./etc/hostname` | `./etc/network/` | ❌ | No match |
-| `./var/lib/pve-cluster/config.db` | `./var/lib/pve-cluster/` | ✅ | Prefix match |
-| `etc/network/interfaces` | `./etc/network/` | ✅ | Normalized to `./` |
+| `./etc/network/interfaces` | `./etc/network/` | yes | Prefix match |
+| `./etc/network/interfaces` | `./etc/network/interfaces` | yes | Exact match |
+| `./etc/hostname` | `./etc/hostname` | yes | Exact match |
+| `./etc/hostname` | `./etc/network/` | no | No match |
+| `./var/lib/pve-cluster/config.db` | `./var/lib/pve-cluster/` | yes | Prefix match |
+| `etc/network/interfaces` | `./etc/network/` | yes | Normalized to `./` |
 
 ### Adding New Categories
 
@@ -1324,131 +1317,111 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) error
             continue
         }
 
-        // 6. Extract based on type
+        // 6. Extract based on type (extractTypedTarEntry passes the cleaned
+        //    destRoot to symlink/hardlink so path escapes can be validated).
         switch header.Typeflag {
         case tar.TypeDir:
             extractDirectory(target, header, logger)
         case tar.TypeReg:
             extractRegularFile(tarReader, target, header, logger)
         case tar.TypeSymlink:
-            extractSymlink(target, header, logger)
+            extractSymlink(target, header, cleanDestRoot, logger)
         case tar.TypeLink:
-            extractHardlink(target, header, logger)
+            // BH-002: in selective mode a hardlink whose Linkname is outside the
+            // selected categories is refused, so an in-category name can never alias
+            // an out-of-category inode (for example /etc/shadow).
+            extractHardlink(target, header, cleanDestRoot)
         }
 
         filesExtracted++
     }
 
+    // BH-002: on the staged path (failOnPartialExtraction=true) any failed entry makes
+    // the whole extraction return an error, so a partial tree is never applied.
     return nil
 }
 ```
+
+The real loop is `processRestoreArchiveEntries`, and the per-entry `/etc/pve` hard guard
+plus the PBS raw-config skips live in `shouldSkipRestoreEntryTarget` (only when
+`cleanDestRoot == "/"`). After the loop, `extractArchiveNative` also runs dedup symlink
+materialization (below) before the fail-on-partial check.
 
 ### File Type Handling
 
-**Directories** (`internal/orchestrator/restore_archive_entries.go` → `extractDirectory()`):
+Extraction never writes onto the live target. A regular file is written to a **sibling
+temp file**, has its metadata set on the open file descriptor, and is then **atomically
+renamed** over the target, so a truncated archive entry or a crash can only affect the
+temp (removed on error), never the real file. The sibling temp name pattern is
+`.proxsave-tmp-*` (`restoreTempPattern`); the rename is atomic because the temp is created
+in the target's own directory (same filesystem). This replaces the older
+`os.Create(target)` + `io.Copy` model, which wrote directly onto the live file and could
+leave it truncated on a partial copy.
+
+**Regular files** (`restore_archive_entries.go` -> `extractRegularFile`):
 ```go
-func extractDirectory(target string, header *tar.Header, logger *logging.Logger) error {
-    // Create directory
-    os.MkdirAll(target, os.FileMode(header.Mode))
+func extractRegularFile(tarReader *tar.Reader, target string, header *tar.Header, logger *logging.Logger) (retErr error) {
+    // Sibling temp in the target's own directory
+    outFile, _ := restoreFS.CreateTemp(filepath.Dir(target), restoreTempPattern) // ".proxsave-tmp-*"
+    tmpPath := outFile.Name()
+    defer func() { if tmpPath != "" { _ = restoreFS.Remove(tmpPath) } }() // cleanup unless renamed
 
-    // Set ownership
-    os.Chown(target, header.Uid, header.Gid)
-
-    // Set permissions
-    os.Chmod(target, os.FileMode(header.Mode))
-
-    // Set timestamps
-    setTimestamps(target, header)
-
-    return nil
-}
-```
-
-**Regular Files** (`internal/orchestrator/restore_archive_entries.go` → `extractRegularFile()`):
-```go
-func extractRegularFile(
-    tarReader *tar.Reader,
-    target string,
-    header *tar.Header,
-    logger *logging.Logger,
-) error {
-    // Ensure parent directory exists
-    os.MkdirAll(filepath.Dir(target), 0755)
-
-    // Create file
-    outFile, _ := os.Create(target)
-    defer outFile.Close()
-
-    // Copy content
     io.Copy(outFile, tarReader)
+    atomicFileChown(outFile, header.Uid, header.Gid) // fchown on the FD, best-effort
+    atomicFileChmod(outFile, mode)                   // fchmod on the FD, hard error
+    outFile.Close()
 
-    // Set ownership
-    os.Chown(target, header.Uid, header.Gid)
-
-    // Set permissions
-    os.Chmod(target, os.FileMode(header.Mode))
-
-    // Set timestamps
-    setTimestamps(target, header)
-
+    restoreFS.Rename(tmpPath, target) // atomic replace
+    tmpPath = ""                      // rename done, skip cleanup
+    setTimestamps(target, header)     // atime/mtime on the final path
     return nil
 }
 ```
 
-**Symlinks** (`internal/orchestrator/restore_archive_entries.go` → `extractSymlink()`):
-```go
-func extractSymlink(target string, header *tar.Header, logger *logging.Logger) error {
-    // Ensure parent directory
-    os.MkdirAll(filepath.Dir(target), 0755)
+Ownership and permissions are set on the **open descriptor** (`fchown`/`fchmod`, via the
+`atomicFileChown`/`atomicFileChmod` helpers in `fs_atomic.go`) rather than by path, so a
+logical or test filesystem root never leaks to a host path. The order is always
+write -> fchown -> fchmod -> close -> rename -> timestamps.
 
-    // Remove existing
-    os.Remove(target)
+**Directories** (`extractDirectory`): `MkdirAll(target, 0o700)` (owner-accessible), then
+`Open` the directory and apply `fchown`/`fchmod` on the directory descriptor (mode masked
+with `&0o7777`), then set timestamps. Chown is best-effort; a chmod failure is a hard
+error.
 
-    // Create symlink
-    os.Symlink(header.Linkname, target)
+**Symlinks** (`extractSymlink(target, header, destRoot, logger)`): the link target is
+validated **before** creation with `resolvePathRelativeToBaseWithinRootFS` and again
+**after** creation (readlink + re-resolve). If it resolves outside `destRoot` the symlink
+is removed and the entry fails (`symlink target escapes root before/after creation`).
+Ownership uses `Lchown`.
 
-    // Set ownership (use Lchown to not follow symlink)
-    syscall.Lchown(target, header.Uid, header.Gid)
+**Hard links** (`extractHardlink(target, header, destRoot)`): empty and absolute link
+targets are rejected outright, then the target is resolved and validated with
+`resolvePathWithinRootFS` (`hardlink target escapes root`) before the link is created. No
+chown is applied to hard links.
 
-    return nil
-}
-```
+Config files applied outside tar extraction (staged apply, network, and so on) use a
+separate two-phase helper in `fs_atomic.go` (`prepareAtomicTempFile` +
+`commitAtomicTempFile`, wrapped by `writeFileAtomic` / `writeFilesAtomic`) with `fsync`
+plus a parent-directory `fsync` for durability. Note that helper uses a distinct temp
+pattern (`%s.proxsave.tmp.%d`), not `restoreTempPattern`.
 
-**Hard Links** (`internal/orchestrator/restore_archive_entries.go` → `extractHardlink()`):
-```go
-func extractHardlink(target string, header *tar.Header, logger *logging.Logger) error {
-    // Ensure parent directory
-    os.MkdirAll(filepath.Dir(target), 0755)
+### Dedup symlink materialization (issue #70)
 
-    // Resolve link target
-    linkTarget := filepath.Join(filepath.Dir(target), header.Linkname)
-
-    // Create hard link
-    os.Link(linkTarget, target)
-
-    return nil
-}
-```
+Deduplicated backups store repeated files once and record the duplicates as symlinks.
+After the tar loop, `materializeDedupSymlinks` (`restore_archive_extract.go`) reads the
+dedup manifest (always extracted regardless of the selected categories) and, for each
+recorded duplicate still present as a symlink, rebuilds it into a **regular file from the
+archive bytes** (never from the live target, never by deleting the symlink), using the
+same atomic sibling-temp-plus-rename write. The manifest is streamed once (bounded
+memory). If the pass does not complete it is **kept for retry** and, on the staged path,
+surfaces an error (BH-002); on success it is deleted. A genuinely missing canonical (a
+corrupt backup) is left as a symlink and does not block cleanup.
 
 ### Timestamp Preservation
 
-**File**: `internal/orchestrator/restore_archive_entries.go` → `setTimestamps()`
-
-```go
-func setTimestamps(target string, header *tar.Header) error {
-    // Extract times from header
-    atime := header.AccessTime
-    mtime := header.ModTime
-
-    // Use syscall for precise control
-    return syscall.UtimesNano(target, []syscall.Timespec{
-        {Sec: atime.Unix(), Nsec: int64(atime.Nanosecond())},
-        {Sec: mtime.Unix(), Nsec: int64(mtime.Nanosecond())},
-    })
-}
-```
-
-**Note**: `ctime` (change time) cannot be set by userspace - it's kernel-managed.
+`setTimestamps` sets atime and mtime on the final path with nanosecond precision via
+`restoreFS.UtimesNano`. `ctime` (change time) cannot be set from userspace, so
+`header.ChangeTime` is not restorable.
 
 ---
 
@@ -1482,10 +1455,10 @@ func targetWithinRoot(target string, destRoot string) bool {
 
 | Target | DestRoot | Secure? |
 |--------|----------|---------|
-| `/var/lib/pve-cluster/config.db` | `/` | ✅ |
-| `/../etc/passwd` | `/` | ❌ |
-| `/tmp/../etc/passwd` | `/` | ❌ |
-| `/opt/backup/file` | `/opt/backup` | ✅ |
+| `/var/lib/pve-cluster/config.db` | `/` | yes |
+| `/../etc/passwd` | `/` | no |
+| `/tmp/../etc/passwd` | `/` | no |
+| `/opt/backup/file` | `/opt/backup` | yes |
 
 ### 2. /etc/pve Hard Guard
 
@@ -1531,23 +1504,23 @@ When restoring to the real system root (`/`), ProxSave avoids blindly overwritin
 
 ### 4. PBS Datastore Mount Guards (Offline Storage)
 
-For PBS datastores whose paths live under typical mount roots (for example `/mnt/...`), ProxSave aims for a “restore even if offline” behavior:
+For PBS datastores whose paths live under typical mount roots (for example `/mnt/...`), ProxSave aims for a "restore even if offline" behavior:
 
 - PBS datastore definitions are applied even when the underlying storage is offline/not mounted, so PBS shows them as **unavailable** rather than silently dropping them.
 - When a mountpoint used by a datastore currently resolves to the root filesystem (mount missing), ProxSave applies a **read-only bind-mount guard** on the mount root.
 - Guards prevent PBS from writing into `/` if the storage is missing at restore time.
 - **Bind-mount guard:** when the real storage is mounted later it stacks on top of the read-only guard and the datastore becomes available again; the guard is then shadowed underneath and is discarded by a reboot or by `--cleanup-guards`.
-- **If the bind mount cannot be created** (rare; e.g. a locked-down/containerized mount namespace), ProxSave does **not** set a persistent flag — it logs a loud warning that the mountpoint is unguarded and proceeds. (Older versions set a `chattr +i` immutable flag here; that flag survived reboots and could silently re-block the mountpoint once the storage was later unmounted, so it was removed.) ProxSave's own directory recreation on the mountpoint is still skipped by the storage-mount preflight, and the config-only restore never extracts into datastore mountpoints, so only *external* writers are unblocked while the storage stays offline.
+- **If the bind mount cannot be created** (rare; e.g. a locked-down/containerized mount namespace), ProxSave does **not** set a persistent flag; it logs a loud warning that the mountpoint is unguarded and proceeds. (Older versions set a `chattr +i` immutable flag here; that flag survived reboots and could silently re-block the mountpoint once the storage was later unmounted, so it was removed.) ProxSave's own directory recreation on the mountpoint is still skipped by the storage-mount preflight, and the config-only restore never extracts into datastore mountpoints, so only *external* writers are unblocked while the storage stays offline.
 - At restore start, if persistent `chattr +i` flags from an older version are still recorded, ProxSave warns and points to `--cleanup-guards`.
 
 Optional maintenance:
-- `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts guard bind mounts **and** clears any **legacy** `chattr +i` immutable flags recorded by older versions — but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). It prints a summary (unmounted / hidden-remaining / immutable-cleared / immutable-pending) and keeps the guard directory and its index until nothing is pending.
+- `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts guard bind mounts **and** clears any **legacy** `chattr +i` immutable flags recorded by older versions, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). It prints a summary (unmounted / hidden-remaining / immutable-cleared / immutable-pending) and keeps the guard directory and its index until nothing is pending.
 - To clear a legacy immutable flag on a mountpoint whose storage is already mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
 - If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave no longer has a record to clear: check with `lsattr -d <mountpoint>` and clear it yourself with `chattr -i <mountpoint>` while the storage is unmounted.
 
 #### PVE Storage Mount Guards (Offline Storage)
 
-For PVE storages that use mountpoints (notably `nfs`, `cifs`, `cephfs`, `glusterfs`, and `dir` storages on dedicated mountpoints), ProxSave applies the same “restore even if offline” safety model:
+For PVE storages that use mountpoints (notably `nfs`, `cifs`, `cephfs`, `glusterfs`, and `dir` storages on dedicated mountpoints), ProxSave applies the same "restore even if offline" safety model:
 
 - Network storages use `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>` with a short timeout.
 - If the mountpoint still resolves to the root filesystem afterwards (mount missing/offline), ProxSave applies a **read-only bind-mount guard** on the mountpoint. If the bind mount cannot be created it logs a warning and proceeds unguarded (no persistent flag is set; see the PBS section above).
@@ -1560,11 +1533,14 @@ This prevents accidental writes into the root filesystem when storage is offline
 **Pre-Extraction Check** (`internal/orchestrator/restore_archive.go` → `extractPlainArchive()`, `extractSelectiveArchiveStrict()`):
 
 ```go
-// For system path restoration
-if destRoot == "/" && os.Geteuid() != 0 {
+// For system-path restoration on the REAL filesystem only
+if destRoot == "/" && isRealRestoreFS(restoreFS) && os.Geteuid() != 0 {
     return fmt.Errorf("restore to %s requires root privileges", destRoot)
 }
 ```
+
+The `isRealRestoreFS` gate means the root check fires only against the real OS
+filesystem, not against a test or in-memory FS.
 
 ### 6. Checksum Verification
 
@@ -1620,6 +1596,27 @@ func ConfirmRestoreOperationWithReader(ctx context.Context, reader *bufio.Reader
     return false, nil
 }
 ```
+
+### 8. Secure Temp-Root Guard (issue #54)
+
+Before ProxSave uses the shared workspace root `/tmp/proxsave` (for backup, decrypt, and
+restore), `ensureSecureTempRoot` (`temp_registry.go`) validates it and creates it `0o700`
+if missing. It **rejects** the root when it is a symlink, is not a directory, is group- or
+world-writable (`perm & 0o022 != 0`), or is not owned by root or the effective uid. This
+stops an attacker from pre-planting `/tmp/proxsave` as a symlink or a writable dir to
+hijack restore temp files.
+
+### 9. Registry-Backed Orphan Cleanup (issue #55)
+
+Temp workspaces are tracked in a small registry (`TempDirRegistry`, default
+`/var/run/proxsave/temp-dirs.json`, flock-guarded, atomically written). Each workspace
+gets a `.proxsave-marker` file written **before** it is registered.
+`CleanupOrphaned(maxAge)` removes entries whose process is gone or that are older than
+`maxAge` (24h). Before deleting anything it calls `workspacePathIsRemovable`, which
+returns true only for a real, non-symlink directory **strictly under** `/tmp/proxsave`
+that carries the `.proxsave-marker`. An entry that fails the check is dropped from the
+registry without touching the filesystem, so a poisoned registry or a hostile
+`PROXMOX_TEMP_REGISTRY_PATH` can never make ProxSave delete an arbitrary path.
 
 ---
 
@@ -1904,31 +1901,23 @@ func AnalyzeBackupCategories(...) ([]Category, error) {
 }
 ```
 
-### Two-Pass Extraction
+### Multi-tier Extraction
 
-**Current**: Archive read twice if export-only categories exist
+The archive is opened once per tier that has selected categories (normal, export-only,
+and staged), plus one more streaming pass for dedup materialization when a dedup manifest
+is present. Each pass filters TAR entries by category, so a tier with no selected
+categories is skipped entirely.
+
 ```
-Pass 1: Normal categories
-Pass 2: Export-only categories
+Normal tier   -> destRoot (/)                     (skipped if empty)
+Export tier   -> proxmox-config-export-<ts>       (skipped if empty)
+Staged tier   -> /tmp/proxsave/restore-stage-*    (skipped if empty), then applied
+Dedup pass    -> streams the archive to rebuild deduplicated symlinks (issue #70)
 ```
 
-**Optimization**: Single-pass with dual writers
-```go
-func extractArchiveSinglePass(...) error {
-    normalWriter := createTarWriter("/")
-    exportWriter := createTarWriter(exportDir)
-
-    for {
-        header, _ := tarReader.Next()
-
-        if isExportOnly(header) {
-            exportWriter.Write(header, content)
-        } else {
-            normalWriter.Write(header, content)
-        }
-    }
-}
-```
+Trading a few extra reads for isolation is deliberate: the staged tier is extracted
+strictly and applied separately so sensitive config is never written half-applied
+(BH-002), and the export tier is kept off the live system entirely.
 
 ### Memory Usage
 
@@ -2027,8 +2016,8 @@ proxsave --restore --log-level=debug
 ### Review Detailed Logs
 
 ```bash
-# Restore log
-cat /tmp/proxsave/restore_20251120_143052.log
+# Restore log (name is restore_<timestamp>_<seq>.log, seq is a per-process counter)
+cat /tmp/proxsave/restore_20251120_143052_1.log
 
 # Service logs
 journalctl -u pve-cluster --since "10 minutes ago"
