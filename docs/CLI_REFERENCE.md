@@ -29,7 +29,7 @@ proxsave [FLAGS] [OPTIONS]
 **Configuration precedence** (highest to lowest):
 1. Command-line flags
 2. Environment variables
-3. Configuration file (`configs/backup.env`)
+3. Configuration file (default `configs/backup.env`, resolved under the detected install directory, typically `/opt/proxsave/configs/backup.env`)
 4. Default values
 
 ---
@@ -70,7 +70,11 @@ proxsave --install --cli
 ### Run Backup
 
 ```bash
-# Run backup with default config
+# Run the backup now (explicit; always skips the interactive dashboard)
+proxsave --backup
+
+# Bare invocation: runs the backup when non-interactive (cron, pipe, systemd),
+# opens the interactive dashboard on an interactive terminal
 proxsave
 
 # Use custom config file
@@ -94,13 +98,15 @@ proxsave -h
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--config <path>` | `-c` | Path to configuration file (default: `configs/backup.env`) |
+| `--config <path>` | `-c` | Path to configuration file (default `configs/backup.env`, resolved under the install dir, e.g. `/opt/proxsave/configs/backup.env`). An absolute path is used as-is; a relative path is joined onto the install dir, not the current directory. |
 | `--dry-run` | `-n` | Test mode - no actual changes made |
 | `--version` | `-v` | Display version information |
 | `--help` | `-h` | Show help message |
+| `--backup` | | Run the backup now and skip the interactive dashboard. This is the default behavior when proxsave runs non-interactively (cron, pipe, systemd). |
 | `--daemon` | | Run as the resident backup daemon (schedules + supervises runs, reports to healthchecks). Invoked by `proxsave-daemon.service`; not run by hand. See [docs/DAEMON.md](DAEMON.md). |
 | `--daemon-setup` | | Switch this install to daemon mode: install+enable the service and remove the cron entry. |
-| `--daemon-remove` | | Revert to the cron scheduler, disable the service, and stop future upgrades from reinstalling the daemon. |
+| `--daemon-remove` | | Revert to the cron scheduler, disable the service, and block future upgrades from reinstalling the daemon. |
+| `--daemon-status` | | Print the daemon status (scheduler mode, service state, running version, binary alignment) and exit. Exit code is `0` only when the daemon is running and aligned, non-zero otherwise, so scripts can gate on it. |
 
 ---
 
@@ -139,7 +145,7 @@ proxsave --install --cli
   - **Edit existing** (use current file as base and pre-fill wizard fields)
   - **Keep existing & continue** (leave file untouched and skip configuration wizard)
   - **Cancel** (abort installation)
-- In **Keep existing & continue** mode, config-dependent post-steps are skipped (encryption setup, post-install audit, Telegram pairing), while finalization steps still run (docs install, symlink/cron finalization, permissions normalization).
+- In **Keep existing & continue** mode, config-dependent post-steps are skipped (encryption setup, post-install audit, Telegram pairing), while finalization steps still run (docs install, symlink and scheduler finalization, permissions normalization).
 
 **Wizard workflow**:
 1. Generates/updates the configuration file (`configs/backup.env` by default)
@@ -148,10 +154,10 @@ proxsave --install --cli
 4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
 5. Optionally sets up notifications (Telegram, Email; Email asks for a delivery method and defaults to `EMAIL_DELIVERY_METHOD=relay` with `EMAIL_FALLBACK_SENDMAIL=true`)
 6. Optionally configures encryption (AGE setup)
-7. Optionally selects a cron time (HH:MM, default `02:00`) for the `proxsave` cron entry in both CLI and TUI install flows
+7. Optionally selects a daily run time (HH:MM, default `02:00`). On fresh installs the scheduler defaults to the resident daemon; cron is offered as the alternative engine (see [INSTALL.md](INSTALL.md) and [DAEMON.md](DAEMON.md))
 8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)
 9. (If Telegram centralized mode is enabled and config + Server ID resolve successfully) Shows Server ID and offers pairing verification (retry/skip supported); otherwise install continues and logs why pairing was skipped
-10. Finalizes installation (symlinks, cron migration, permission checks)
+10. Finalizes installation (symlinks, scheduler setup for the chosen engine, permission checks)
 
 **Install log**: The installer writes a session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome).
 
@@ -202,21 +208,21 @@ proxsave --upgrade-config
 6. Extracts binary from tar.gz archive
 7. Atomically replaces current binary (write to .tmp, then rename)
 8. Updates the `proxsave` symlink in `/usr/local/bin/` (and removes the legacy `proxmox-backup` symlink if present)
-9. Upgrades the configuration file (adds any new keys from the template to `backup.env`, preserving your existing and custom values, after backing up the current file) and fixes file permissions. The cron schedule is left untouched (re-run `--install` to change it).
+9. Upgrades the configuration file (adds any new keys from the template to `backup.env`, preserving your existing and custom values, after backing up the current file) and fixes file permissions. After a successful binary install, a cron install is migrated to the resident daemon (`proxsave-daemon.service`) unless you opted out with `--daemon-remove`; a daemon install stays on the daemon. The daemon runs once daily at `SCHEDULER_TIME` (default `02:00`) and does not carry over your crontab schedule, so a hand-edited cron time or any non-daily cadence (hourly, weekly, several times a day) is dropped. Run `--daemon-remove` to stay on cron if you need a non-daily schedule.
 
 **Post-upgrade steps**:
 1. New config template keys are merged into `backup.env` automatically (existing and custom values preserved; previous file backed up)
 2. Run `--upgrade-config` only to re-run that merge without upgrading the binary
 3. Test functionality with dry-run: `proxsave --dry-run`
 4. Verify backups continue to work as expected
-5. Check cron schedule was preserved: `crontab -l`
+5. Check the scheduler: `proxsave --daemon-status` for daemon installs, or `crontab -l` if you opted out of the daemon
 
 **Important notes**:
 - **Internet required**: Must be able to reach GitHub releases
 - **Configuration kept current**: `--upgrade` merges new template keys into `backup.env`, preserving your existing and custom values and backing up the previous file first; it never changes or removes values you set
 - **Platform support**: Linux only (amd64)
 - **Incompatible flags**: Cannot use with `--install` or `--new-install`
-- **Automatic maintenance**: Symlinks and permissions are updated automatically; the cron schedule is left untouched (re-run `--install` to change it)
+- **Automatic maintenance**: Symlinks and permissions are updated automatically. A cron install is migrated to the resident daemon unless you opted out with `--daemon-remove`; re-run `--install` to change the run time or engine
 - **Safe replacement**: Old binary is replaced atomically (no backup created)
 - **Standalone config upgrade**: `--upgrade` already merges new template keys; use `--upgrade-config` to run that merge without upgrading the binary
 
@@ -231,6 +237,7 @@ See also: [upgrading configuration](#configuration-upgrade)
 | `--upgrade` | Download and install latest ProxSave binary from GitHub releases |
 | `--upgrade-config` | Merge current config with latest template |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
+| `--upgrade-config-json` | Internal: upgrade the config and print a JSON summary to stdout (used by `--upgrade`; not for direct use) |
 
 ---
 
@@ -383,7 +390,7 @@ proxsave --restore --cli
 
 ### Cleanup Mount Guards (Optional)
 
-During some restores (notably PBS datastores and PVE network storages on mountpoints under `/mnt`), ProxSave may apply a **read-only bind-mount guard** over a mountpoint to prevent accidental writes to `/` when the underlying storage is offline/not mounted yet. If the bind mount cannot be created, ProxSave logs a warning and proceeds unguarded — it no longer sets a persistent `chattr +i` immutable flag (older versions did; that flag survived reboots and could silently re-block the mountpoint when the storage was later unmounted).
+During some restores (notably PBS datastores and PVE network storages on mountpoints under `/mnt`), ProxSave may apply a **read-only bind-mount guard** over a mountpoint to prevent accidental writes to `/` when the underlying storage is offline/not mounted yet. If the bind mount cannot be created, ProxSave logs a warning and proceeds unguarded, and no longer sets a persistent `chattr +i` immutable flag (older versions did; that flag survived reboots and could silently re-block the mountpoint when the storage was later unmounted).
 
 `--cleanup-guards` unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags left by older versions. For safety it only acts on mountpoints that are **not currently mounted** (a real mount on top shadows the guard; clearing it then would touch the wrong inode), prints a summary (unmounted / hidden-remaining / immutable-cleared / immutable-pending), and keeps the guard directory until nothing is pending.
 
@@ -396,7 +403,7 @@ proxsave --cleanup-guards
 ```
 
 Notes:
-- Bringing the storage back online is enough to *use* it again (a real mount stacks on top of the guard automatically); `--cleanup-guards` just removes the leftover guard. A bind-mount guard also clears on reboot. A legacy `chattr +i` flag does **not** clear on reboot — it persists until cleared.
+- Bringing the storage back online is enough to *use* it again (a real mount stacks on top of the guard automatically); `--cleanup-guards` just removes the leftover guard. A bind-mount guard also clears on reboot. A legacy `chattr +i` flag does **not** clear on reboot; it persists until cleared.
 - To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
 - If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
@@ -424,9 +431,10 @@ proxsave -l info    # debug|info|warning|error|critical
 - **Console**: Colored output (if `USE_COLOR=true`)
 - **File**: `LOG_PATH/backup-$(hostname)-YYYYMMDD-HHMMSS.log`
 
-**Debug level vs DEBUG_LEVEL**:
-- `--log-level` (CLI flag): Controls logging verbosity
-- `DEBUG_LEVEL` (config): Controls operation detail level (`standard`/`advanced`/`extreme`)
+**`--log-level` vs `DEBUG_LEVEL`**:
+- `DEBUG_LEVEL` (config) sets the base log level: `standard` resolves to `info`, `advanced` and `extreme` both resolve to `debug`. Default is `info`.
+- `--log-level` (CLI flag) overrides `DEBUG_LEVEL` for that run.
+- `--support` forces `debug`, overriding both.
 
 ### Log Labels (PHASE/STEP/SKIP)
 
@@ -441,7 +449,7 @@ Some log lines use a label to make the output easier to scan:
 **Common `SKIP` examples**:
 - A feature is disabled by configuration.
 - A non-critical CLI tool is not installed.
-- Running in an **unprivileged container/rootless** environment where low-level inventory commands are expected to fail (for example `dmidecode` or `blkid`). In this case, ProxSave still attempts the collection, but logs a `SKIP` (not a `WARNING`) when the failure matches known “missing privileges” patterns.
+- Running in an **unprivileged container/rootless** environment where low-level inventory commands are expected to fail (for example `dmidecode` or `blkid`). In this case, ProxSave still attempts the collection, but logs a `SKIP` (not a `WARNING`) when the failure matches known "missing privileges" patterns.
   - For `blkid`, the skip reason also includes a restore hint: `/etc/fstab` remap may be limited.
 
 ### Flag Reference
@@ -467,12 +475,13 @@ proxsave --support
 3. Requests GitHub issue number
 4. Runs backup with **forced DEBUG logging** (overrides config)
 5. Collects complete log file
-6. Emails log to `github-support@tis24.it` with metadata
+6. Emails the log to the maintainer address baked into the build, with the GitHub username and issue number in the subject
 7. Returns log file path for user review
 
 **Requirements**:
 - Existing GitHub issue for tracking
-- Working local mail delivery on the node (`/usr/sbin/sendmail` via Postfix/Exim/Sendmail)
+- A build with the maintainer recipient compiled in (`EMAIL_SUPPORT`). The recipient is injected at build time, not hardcoded; a build without it (for example a local dev build) skips the email and logs a warning.
+- Working local mail delivery on the node (`/usr/sbin/sendmail` via Postfix/Exim/Sendmail). Support mode always hands the email to the local MTA; it does not use the notification relay.
 
 **Privacy considerations**:
 - Logs may contain sensitive information (paths, hostnames, file names)
@@ -497,8 +506,8 @@ proxsave --support
 ### Standard Operations
 
 ```bash
-# Standard backup
-proxsave
+# Run a backup now (bare `proxsave` opens the dashboard on a TTY)
+proxsave --backup
 
 # Dry-run with debug logging
 proxsave --dry-run --log-level debug
@@ -564,6 +573,8 @@ proxsave --support
 ---
 
 ## Scheduling with Cron
+
+> On fresh installs ProxSave schedules backups through the **resident daemon** (`proxsave-daemon.service`) by default; see [DAEMON.md](DAEMON.md). The daemon runs once daily, so every schedule below (hourly, every 6 hours, weekly, several times a day) requires the daemon-less **cron** engine. To use one, install with the cron engine or run `proxsave --daemon-remove` first. Do not add a cron entry while the daemon is active, or the backup runs twice.
 
 ### Cron Setup
 
@@ -667,13 +678,19 @@ crontab -e
 | `--age-newkey` | - | Alias for `--newkey` |
 | `--decrypt` | - | Decrypt existing backup |
 | `--restore` | - | Restore from backup to system |
+| `--backup` | - | Run the backup now and skip the interactive dashboard (default when non-interactive, e.g. cron) |
+| `--daemon` | - | Run as the resident backup daemon (installed as `proxsave-daemon.service`; not run by hand) |
+| `--daemon-setup` | - | Switch this install to daemon mode (install+enable the service, remove the cron entry) |
+| `--daemon-remove` | - | Revert to the cron scheduler, disable the service, and block future upgrades from reinstalling the daemon |
+| `--daemon-status` | - | Print daemon status and exit (`0` only when running and aligned) |
+| `--cleanup-guards` | - | Remove leftover ProxSave mount guards under `/var/lib/proxsave/guards` (use with `--dry-run` to preview) |
 | `--support` | - | Run in support mode (force DEBUG logging and email log). Available for the standard backup run and `--restore` |
 
 ### Common Command Patterns
 
 ```bash
-# Standard backup
-proxsave
+# Run a backup now (bare `proxsave` opens the dashboard on a TTY)
+proxsave --backup
 
 # Test before running
 proxsave --dry-run --log-level debug
@@ -699,7 +716,7 @@ proxsave --restore --cli
 
 # Encryption workflow
 proxsave --newkey          # Generate keys
-proxsave                   # Run encrypted backup
+proxsave --backup          # Run encrypted backup
 proxsave --decrypt         # Decrypt when needed
 
 # Restore workflow (test in VM first!)
@@ -763,4 +780,4 @@ USE_COLOR=false proxsave
 
 **Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
 run with a storage error (`5`): the local backup is kept, but the failure is recorded as a
-warning, so the run finishes with a non-zero exit code (`1`, generic error) — not `0`.
+warning, so the run finishes with a non-zero exit code (`1`, generic error), not `0`.
