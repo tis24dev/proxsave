@@ -108,7 +108,7 @@ Recipients are public keys or passphrases that can decrypt backups. A backup enc
 
 ### Static Configuration
 
-**File** (default): `${BASE_DIR}/identity/age/recipient.txt`
+**File**: set by `AGE_RECIPIENT_FILE`, which is **empty by default**; when unset ProxSave resolves it to `${BASE_DIR}/identity/age/recipient.txt`.
 
 ```plaintext
 # AGE recipients (one per line)
@@ -147,9 +147,15 @@ If `ENCRYPT_ARCHIVE=true` and no recipients are configured, proxsave will start 
 - Enter a passphrase to derive a deterministic AGE key (passphrase is **not stored**)
 - Paste an AGE private key (`AGE-SECRET-KEY-...`) to derive its public recipient (key is **not stored**)
 
+**Passphrase strength.** When you derive a recipient from a passphrase, ProxSave
+enforces a minimum strength or rejects it with an error: at least **12 characters**, and
+characters from at least **3 of 4 classes** (lowercase, uppercase, digit, symbol). A
+short list of well-known weak passphrases (for example `password`, `123456`, `qwerty`)
+is also rejected outright.
+
 **Notes**:
 - Proxsave stores **only recipients** (public keys) in `${BASE_DIR}/identity/age/recipient.txt`. Keep private keys and passphrases offline.
-- `AGE_RECIPIENT` and `AGE_RECIPIENT_FILE` are **merged and de-duplicated**.
+- `AGE_RECIPIENT` (inline) and `AGE_RECIPIENT_FILE` are **merged and de-duplicated**. `AGE_RECIPIENTS` (plural) is accepted as a fallback alias for `AGE_RECIPIENT`, used only when `AGE_RECIPIENT` is empty.
 - Both TUI and CLI setup flows support multiple recipients and de-duplicate repeated entries before saving.
 
 ---
@@ -160,7 +166,7 @@ If `ENCRYPT_ARCHIVE=true` and no recipients are configured, proxsave will start 
 
 1. `ENCRYPT_ARCHIVE=true` in `configs/backup.env`
 2. At least one recipient configured via `AGE_RECIPIENT` and/or `AGE_RECIPIENT_FILE`
-3. File permissions checked automatically (0700 directory, 0600 recipient file)
+3. File permissions and ownership checked automatically (0700 directory, 0600 recipient file, owned root:root; auto-fixed when `AUTO_FIX_PERMISSIONS=true`, otherwise a warning)
 
 ### Backup Execution
 
@@ -218,7 +224,7 @@ backup/
 {
   "archive_path": "/opt/proxsave/backup/pve-node1-backup-20240115-023000.tar.xz.age",
   "archive_size": 1234567890,
-  "sha256": "…",
+  "sha256": "...",
   "created_at": "2024-01-15T02:30:00Z",
   "compression_type": "xz",
   "hostname": "pve-node1",
@@ -256,7 +262,7 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age > 
 > **Passphrase recipients are not native age passphrases.** A passphrase recipient
 > is an X25519 key *derived* from the passphrase, so the raw `age --decrypt` (which
 > only understands age's own scrypt passphrase stanza) cannot decrypt it from the
-> passphrase alone — use `proxsave --decrypt`. proxsave re-derives the identity from
+> passphrase alone, use `proxsave --decrypt`. proxsave re-derives the identity from
 > the passphrase plus the **per-installation random salt** generated at setup, which
 > is stored next to the recipient (`identity/age/passphrase.salt`) and embedded in
 > every backup manifest (`passphrase_salt`) so recovery works on any host.
@@ -381,7 +387,7 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age | 
 ### Encryption Implementation
 
 - **Algorithm**: ChaCha20-Poly1305 (AEAD) with X25519 ECDH
-- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases, with a per-installation random salt (stored in `identity/age/passphrase.salt` and embedded in each manifest as `passphrase_salt`; legacy archives used a fixed salt and remain decryptable)
+- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases. The current scheme uses a **per-installation random salt** (v2), generated once, stored `0600` at `identity/age/passphrase.salt`, and embedded in each manifest as `passphrase_salt` so the passphrase alone can re-derive the recipient on any host. At decrypt ProxSave tries salts in order: the manifest's per-install salt first, then two fixed legacy namespaces (`proxsave/age-passphrase/v1`, then the pre-rebrand `proxmox-backup-go/age-passphrase/v1`), so archives from older versions and from before the rename stay decryptable.
 - **Random nonces**: Unique per encryption operation
 - **Authentication**: Poly1305 MAC prevents tampering
 
@@ -392,7 +398,7 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age | 
 | **Passphrase handling** | Read with `term.ReadPassword` (no echo) |
 | **Memory security** | Buffers zeroed immediately after use |
 | **Streaming encryption** | No plaintext on disk during backup |
-| **File permissions** | Enforced 0700/0600 on recipient/identity files |
+| **File permissions & ownership** | Enforced 0700/0600 and root:root on recipient/identity files (auto-fixed with `AUTO_FIX_PERMISSIONS`, otherwise warned) |
 | **Private key storage** | **Keep offline** (password manager, hardware token, printed backup) |
 | **Backup separation** | Store keys separately from backup media |
 | **Access control** | Limit who has decryption keys |
@@ -492,9 +498,11 @@ AGE encryption meets requirements for:
 ENCRYPT_ARCHIVE=true                       # Master switch
 
 # Recipient configuration
+# AGE_RECIPIENT_FILE is empty by default; when unset it resolves to ${BASE_DIR}/identity/age/recipient.txt
 AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt   # Public recipients (recommended)
 
 # Optional: inline recipients (merged with file; supports comma/semicolon/pipe/newline)
+# AGE_RECIPIENTS (plural) is accepted as a fallback alias, used only when AGE_RECIPIENT is empty
 AGE_RECIPIENT=age1abc123...,age1def456...
 ```
 
