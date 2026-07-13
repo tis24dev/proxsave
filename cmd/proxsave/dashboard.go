@@ -351,26 +351,6 @@ type daemonResultAction int
 
 const daemonResultActionBack daemonResultAction = iota
 
-// buildDaemonResultPrompt renders the styled "Status:" block for a daemon action-result screen,
-// mirroring buildDaemonStatusPrompt's Status block: a colored keyword line + a Subtle
-// explanation on the next line. This is the single styled renderer for the daemon action outcomes.
-func buildDaemonResultPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation string) string {
-	var b strings.Builder
-	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderDaemonStatusLevel(level, components.SanitizeText(keyword)))
-	// A what-to-do suggestion is shown only on a problem outcome (success passes ""), with a
-	// blank line separating it from the Status line. keyword and explanation are free-form (may
-	// embed external tool output, error strings, or the daemon Version), so both are
-	// SanitizeText-scrubbed before theme rendering to keep raw ANSI/OSC/C0/C1 escapes out of the
-	// verbatim WithSelectorPromptStyled path. The scrub-then-render shape is BYTE-IDENTICAL to
-	// buildWorkflowStatusPrompt; the exp != "" guard preserves the success-passes-"" behavior.
-	if exp := components.SanitizeText(explanation); exp != "" {
-		b.WriteString("\n\n")
-		b.WriteString(theme.Subtle.Render(exp))
-	}
-	return b.String()
-}
-
 // showDaemonResultScreen presents a daemon action outcome (restart / install / revert / error)
 // with the SAME look as the daemon-status screen: a styled "Status:" line (a colored keyword +
 // a Subtle explanation) above a single Back item. It loops to Back/esc and is non-blocking on
@@ -378,7 +358,7 @@ func buildDaemonResultPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 // shared by every daemon action result, so they can never disagree visually with the status screen.
 func showDaemonResultScreen(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation string) {
 	errDaemonResultEsc := errors.New("daemon result: esc")
-	prompt := buildDaemonResultPrompt(level, keyword, explanation)
+	prompt := orchestrator.BuildStatusPrompt(level, keyword, explanation)
 	items := []components.SelectorItem[daemonResultAction]{
 		{Label: "Back", Description: "return to the dashboard menu", Value: daemonResultActionBack},
 	}

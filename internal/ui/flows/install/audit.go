@@ -143,7 +143,7 @@ type auditResultAction int
 const auditResultActionBack auditResultAction = iota
 
 // auditResultPrompt builds the styled "Status:" block for an audit outcome, mirroring
-// buildWorkflowStatusPrompt: a colored keyword line + an optional Subtle explanation. It is a
+// orchestrator.BuildStatusPrompt: a colored keyword line + an optional Subtle explanation. It is a
 // pure string builder (extracted for testability). Keyword and explanation are free-form (may
 // embed external tool output / error strings), so both are SanitizeText-scrubbed before theme
 // rendering to keep raw ANSI/OSC/C0/C1 escapes out of the verbatim WithSelectorPromptStyled path.

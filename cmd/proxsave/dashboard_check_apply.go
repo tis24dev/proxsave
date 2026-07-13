@@ -84,7 +84,7 @@ const (
 // the primary was chosen. esc / secondary return false.
 func showDashboardCheckChoice(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation, primaryLabel, primaryDesc, secondaryLabel, secondaryDesc string) bool {
 	errEsc := errors.New("dashboard check: esc")
-	prompt := buildDaemonResultPrompt(level, keyword, explanation)
+	prompt := orchestrator.BuildStatusPrompt(level, keyword, explanation)
 	items := []components.SelectorItem[dashboardCheckChoice]{
 		{Label: primaryLabel, Description: primaryDesc, Value: dashboardCheckPrimary},
 		{Label: secondaryLabel, Description: secondaryDesc, Value: dashboardCheckSecondary},
