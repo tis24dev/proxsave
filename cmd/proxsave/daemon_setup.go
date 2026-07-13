@@ -106,13 +106,12 @@ func runDaemonStatus(rt *appRuntime) int {
 	}
 	if ds.HaveInfo || ds.AlignChecked {
 		align := "unknown"
-		switch {
-		case !ds.AlignChecked:
-			align = "unknown"
-		case ds.Aligned:
-			align = "aligned"
-		default:
-			align = "BEHIND (restart needed)"
+		if ds.AlignChecked {
+			if ds.Aligned {
+				align = "aligned"
+			} else {
+				align = "BEHIND (restart needed)"
+			}
 		}
 		logging.Info("Binary alignment: %s", align)
 	}

@@ -587,13 +587,12 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	}
 	if ds.HaveInfo || ds.AlignChecked {
 		align := "unknown"
-		switch {
-		case !ds.AlignChecked:
-			align = "unknown"
-		case ds.Aligned:
-			align = "aligned"
-		default:
-			align = "BEHIND (restart needed)"
+		if ds.AlignChecked {
+			if ds.Aligned {
+				align = "aligned"
+			} else {
+				align = "BEHIND (restart needed)"
+			}
 		}
 		b.WriteString("\n")
 		b.WriteString(theme.Text.Render("Binary alignment: " + align))

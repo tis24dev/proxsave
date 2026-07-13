@@ -192,7 +192,7 @@ func (b *BootstrapLogger) Info(format string, args ...interface{}) {
 		// Logger; record() still keeps the RAW msg so Flush re-formats it once.
 		now := time.Now().Format(bootstrapTimeFormat)
 		line := FormatConsoleLogLine(now, types.LogLevelInfo, msg, consoleUseColor(os.Stdout))
-		fmt.Fprint(os.Stdout, line)
+		_, _ = fmt.Fprint(os.Stdout, line)
 	}
 	b.mirrorLog(types.LogLevelInfo, msg)
 	b.record(types.LogLevelInfo, msg)

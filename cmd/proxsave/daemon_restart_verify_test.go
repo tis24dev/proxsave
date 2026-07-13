@@ -285,7 +285,7 @@ func TestUpgradeRestartDecisionGate(t *testing.T) {
 	}
 
 	upgradeRestartsDaemon = true
-	if !(upgradeRestartsDaemon && daemonIsActive(context.Background())) {
+	if !upgradeRestartsDaemon || !daemonIsActive(context.Background()) {
 		t.Fatal("CLI upgrade with an active daemon must restart")
 	}
 	upgradeRestartsDaemon = false
