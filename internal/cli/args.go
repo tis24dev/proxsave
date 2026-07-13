@@ -35,20 +35,23 @@ type Args struct {
 	ShowHelp            bool
 	Upgrade             bool
 	UpgradeAutoYes      bool
-	ForceNewKey         bool
-	Decrypt             bool
-	Restore             bool
-	Install             bool
-	NewInstall          bool
-	UpgradeConfig       bool
-	UpgradeConfigDry    bool
-	UpgradeConfigJSON   bool
-	CleanupGuards       bool
-	Backup              bool
-	Daemon              bool
-	DaemonSetup         bool
-	DaemonRemove        bool
-	DaemonStatus        bool
+	// LocalFile modifies --upgrade: skip the release check + download and finalize
+	// using the binary already on disk (upgrade-beta.sh swaps it in first).
+	LocalFile         bool
+	ForceNewKey       bool
+	Decrypt           bool
+	Restore           bool
+	Install           bool
+	NewInstall        bool
+	UpgradeConfig     bool
+	UpgradeConfigDry  bool
+	UpgradeConfigJSON bool
+	CleanupGuards     bool
+	Backup            bool
+	Daemon            bool
+	DaemonSetup       bool
+	DaemonRemove      bool
+	DaemonStatus      bool
 }
 
 var osExit = os.Exit
@@ -114,6 +117,8 @@ func Parse() *Args {
 		"Reset the installation directory (preserving build/env/identity) and launch the interactive installer")
 	flag.BoolVar(&args.Upgrade, "upgrade", false,
 		"Download and install the latest ProxSave binary (also upgrades backup.env by adding missing keys from the new template). Append 'y' to auto-confirm (e.g., --upgrade y)")
+	flag.BoolVar(&args.LocalFile, "localfile", false,
+		"With --upgrade: skip the release check and download, and finalize using the binary already on disk (upgrade backup.env, refresh docs/symlinks, install/restart the daemon, fix permissions). Used by upgrade-beta.sh after it swaps in a binary")
 	flag.BoolVar(&args.CleanupGuards, "cleanup-guards", false,
 		"Cleanup ProxSave guard bind mounts and directories (/var/lib/proxsave/guards). Use with --dry-run to preview")
 

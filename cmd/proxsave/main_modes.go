@@ -75,6 +75,9 @@ func validateUpgradeCompatibility(args *cli.Args) []string {
 	if args.Upgrade && (args.Install || args.NewInstall) {
 		return []string{"Cannot use --upgrade together with --install or --new-install."}
 	}
+	if args.LocalFile && !args.Upgrade {
+		return []string{"The --localfile flag only applies to --upgrade (use: --upgrade --localfile)."}
+	}
 	return nil
 }
 
