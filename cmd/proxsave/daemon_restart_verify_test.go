@@ -16,6 +16,8 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/ui/components"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // shrinkRestartBudgets replaces the restart/backup-wait budgets with tiny values so the
@@ -348,10 +350,10 @@ func TestRestartVerifyStatus(t *testing.T) {
 	}
 }
 
-// TestBuildDaemonResultPrompt: the styled result prompt carries the "Status: " label and the
+// TestBuildStatusPrompt: the shared styled result prompt carries the "Status: " label and the
 // colored keyword (matching the daemon-status screen's Status block), plus the explanation.
-func TestBuildDaemonResultPrompt(t *testing.T) {
-	prompt := ansi.Strip(buildDaemonResultPrompt(orchestrator.HealthcheckSetupLevelOk, "restarted, aligned (v9.9.9)", "all good"))
+func TestBuildStatusPrompt(t *testing.T) {
+	prompt := ansi.Strip(orchestrator.BuildStatusPrompt(orchestrator.HealthcheckSetupLevelOk, "restarted, aligned (v9.9.9)", "all good"))
 	if !strings.Contains(prompt, "Status: ") {
 		t.Fatalf("prompt must carry the Status label: %q", prompt)
 	}
@@ -366,9 +368,23 @@ func TestBuildDaemonResultPrompt(t *testing.T) {
 		t.Fatalf("a blank line must separate Status from the suggestion: %q", prompt)
 	}
 	// A success outcome (empty explanation) is just the Status line, no trailing text.
-	okOnly := ansi.Strip(buildDaemonResultPrompt(orchestrator.HealthcheckSetupLevelOk, "restarted, aligned (v9.9.9)", ""))
+	okOnly := ansi.Strip(orchestrator.BuildStatusPrompt(orchestrator.HealthcheckSetupLevelOk, "restarted, aligned (v9.9.9)", ""))
 	if strings.Contains(okOnly, "\n") {
 		t.Fatalf("a success result must be a single Status line, got: %q", okOnly)
+	}
+}
+
+// TestBuildStatusPromptMatchesDashboardResultContract locks the exact pre-refactor
+// dashboard output, including SGR styling and the blank line before an explanation.
+func TestBuildStatusPromptMatchesDashboardResultContract(t *testing.T) {
+	level := orchestrator.HealthcheckSetupLevelWarn
+	keyword := "RESTARTED, NOT CONFIRMED"
+	explanation := "Open Daemon status to confirm it came back aligned."
+	want := theme.Text.Render("Status: ") +
+		orchestrator.RenderStatusLevel(level, components.SanitizeText(keyword)) + "\n\n" +
+		theme.Subtle.Render(components.SanitizeText(explanation))
+	if got := orchestrator.BuildStatusPrompt(level, keyword, explanation); got != want {
+		t.Fatalf("shared Status prompt changed dashboard output:\n got: %q\nwant: %q", got, want)
 	}
 }
 
@@ -385,13 +401,13 @@ func assertNoRawInjection(t *testing.T, out string) {
 	}
 }
 
-// TestBuildDaemonResultPromptSanitizesInjection: a keyword/explanation carrying raw escape bytes
+// TestBuildStatusPromptSanitizesInjection: a keyword/explanation carrying raw escape bytes
 // (OSC title-set + BEL, a CSI erase-screen) must NOT reach the verbatim WithSelectorPromptStyled
 // path as raw sequences, while the human-readable text survives. This closes the injection path
 // for daemon action outcomes (restart keyword embeds the daemon Version; error explanations embed
 // external tool / error strings).
-func TestBuildDaemonResultPromptSanitizesInjection(t *testing.T) {
-	prompt := buildDaemonResultPrompt(
+func TestBuildStatusPromptSanitizesInjection(t *testing.T) {
+	prompt := orchestrator.BuildStatusPrompt(
 		orchestrator.HealthcheckSetupLevelOk,
 		"restarted, aligned (v1.0\x1b]0;pwned\x07)",
 		"\x1b[2J\x07evil",
@@ -411,7 +427,7 @@ func TestBuildDaemonResultPromptSanitizesInjection(t *testing.T) {
 
 // TestRestartKeywordVersionInjectionSanitized: a hostile daemon Version (RAW from
 // .daemon_info.json) reaches the restart-result keyword as "restarted, aligned (v<version>)",
-// then flows restartVerifyStatus -> buildDaemonResultPrompt. Confirm the Version-carrying keyword
+// then flows restartVerifyStatus -> BuildStatusPrompt. Confirm the Version-carrying keyword
 // actually goes through the sanitized builder (no separate raw render), so the escape is scrubbed
 // end-to-end.
 func TestRestartKeywordVersionInjectionSanitized(t *testing.T) {
@@ -427,7 +443,7 @@ func TestRestartKeywordVersionInjectionSanitized(t *testing.T) {
 	if !strings.Contains(keyword, "\x1b]0;") {
 		t.Fatalf("expected the raw Version to ride in the keyword (sanitize happens in the builder): %q", keyword)
 	}
-	prompt := buildDaemonResultPrompt(level, keyword, explanation)
+	prompt := orchestrator.BuildStatusPrompt(level, keyword, explanation)
 	assertNoRawInjection(t, prompt)
 	if !strings.Contains(prompt, "RESTARTED, ALIGNED (v1.0)") || strings.Contains(prompt, "pwned") {
 		t.Fatalf("sanitized restart keyword should keep the plaintext version and drop the OSC payload: %q", prompt)

@@ -25,15 +25,12 @@ func RenderStatusLevel(level HealthcheckSetupLevel, text string) string {
 	}
 }
 
-// buildWorkflowStatusPrompt renders the styled "Status:" block for a workflow outcome screen,
-// identical to dashboard.go buildDaemonResultPrompt: a colored keyword line + a Subtle
-// explanation on the next line (separated by a blank line). This is the single styled
-// renderer for the decrypt-workflow outcomes, so they can never disagree visually with the
-// daemon / check result screens. Keyword and explanation are free-form (may embed external
-// tool output / error strings), so both are SanitizeText-scrubbed before theme rendering to
-// keep raw ANSI/OSC/C0/C1 escapes out of the verbatim WithSelectorPromptStyled path. The
-// scrub-then-render shape is BYTE-IDENTICAL to buildDaemonResultPrompt.
-func buildWorkflowStatusPrompt(level HealthcheckSetupLevel, keyword, explanation string) string {
+// BuildStatusPrompt renders the styled "Status:" block shared by dashboard and workflow
+// outcome screens: a colored keyword line plus an optional Subtle explanation separated by a
+// blank line. Keyword and explanation are free-form (may embed external tool output / error
+// strings), so both are SanitizeText-scrubbed before theme rendering to keep raw ANSI/OSC/C0/C1
+// escapes out of the verbatim WithSelectorPromptStyled path.
+func BuildStatusPrompt(level HealthcheckSetupLevel, keyword, explanation string) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Status: "))
 	b.WriteString(RenderStatusLevel(level, components.SanitizeText(keyword)))

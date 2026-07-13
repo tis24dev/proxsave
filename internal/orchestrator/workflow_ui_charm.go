@@ -65,7 +65,7 @@ const workflowStatusResultActionContinue workflowStatusResultAction = iota
 // on a real UI error. This is a Selector, NOT a components.Notice.
 func (u *charmWorkflowUI) ShowStatusResult(ctx context.Context, screenTitle string, level HealthcheckSetupLevel, keyword, explanation string) error {
 	errWorkflowStatusEsc := errors.New("workflow status: esc")
-	prompt := buildWorkflowStatusPrompt(level, keyword, explanation)
+	prompt := BuildStatusPrompt(level, keyword, explanation)
 	items := []components.SelectorItem[workflowStatusResultAction]{
 		{Label: "Continue", Description: "continue the workflow", Value: workflowStatusResultActionContinue},
 	}
