@@ -71,7 +71,7 @@ func TestSanitizeText(t *testing.T) {
 		},
 		{
 			name:    "c1 csi byte removed",
-			in:      "x31my",
+			in:      "x\u009b31my",
 			absent:  []rune{0x9b},
 			contain: []string{"x", "31my"},
 		},
