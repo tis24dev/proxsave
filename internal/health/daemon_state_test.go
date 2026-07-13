@@ -227,7 +227,7 @@ func TestCheckDaemonStateProcStaleStale(t *testing.T) {
 		t.Fatalf("StaleReason should be set when the /proc probe reports stale")
 	}
 	// The behind render gate: AlignChecked && !Aligned suffices (no record required).
-	if !(s.AlignChecked && !s.Aligned) {
+	if !s.AlignChecked || s.Aligned {
 		t.Fatalf("stale daemon must be behind-eligible via AlignChecked && !Aligned")
 	}
 }

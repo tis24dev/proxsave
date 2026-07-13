@@ -279,7 +279,7 @@ func TestFormGridNoteAboveFields(t *testing.T) {
 		t.Fatalf("the field label must render:\n%s", view)
 	}
 	// The note sits ABOVE the fields, in order, one clause per line (never merged).
-	if !(noteTop < noteMid && noteMid < noteBot && noteBot < label) {
+	if noteTop >= noteMid || noteMid >= noteBot || noteBot >= label {
 		t.Fatalf("note must be above the fields, in order: top=%d mid=%d bot=%d label=%d\n%s",
 			noteTop, noteMid, noteBot, label, view)
 	}

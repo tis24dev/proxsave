@@ -631,7 +631,7 @@ func TestPVEStorageMountGuardItems_CoversFilteringAndFallbacks(t *testing.T) {
 			t.Fatalf("items len=%d; want 2 (%v)", len(items), items)
 		}
 		targets := []string{items[0].GuardTarget, items[1].GuardTarget}
-		if !(containsGuardTarget(targets, "/mnt/pool") && containsGuardTarget(targets, "/mnt/pve/nas-net")) {
+		if !containsGuardTarget(targets, "/mnt/pool") || !containsGuardTarget(targets, "/mnt/pve/nas-net") {
 			t.Fatalf("unexpected guard targets: %v", targets)
 		}
 	})
