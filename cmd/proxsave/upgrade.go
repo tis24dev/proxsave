@@ -105,10 +105,15 @@ func logUpgradeDaemonRestart(bootstrap *logging.BootstrapLogger, rv *RestartVeri
 	}
 }
 
-// runUpgrade orchestrates the upgrade flow:
-//   - downloads and installs the latest binary release
-//   - upgrades backup.env by adding missing keys from the new template (preserving existing values)
-//   - refreshes symlinks/cron/docs and normalizes permissions/ownership
+// runUpgrade orchestrates the upgrade flow in two phases:
+//   - acquire the binary (upgradeAcquireBinary): download+install the latest
+//     release, or -- with --localfile -- use the binary already on disk
+//   - finalize (upgradeFinalizePhase): upgrade backup.env by adding missing keys
+//     from the new template, refresh symlinks/docs, migrate/restart the daemon,
+//     and normalize permissions/ownership
+//
+// The shared setup (logger, banner, config load) runs before either phase so the
+// --localfile path prints the same header and honours the same guards.
 func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) int {
 	baseDir, _ := detectedBaseDirOrFallback()
 	_ = os.Setenv("BASE_DIR", baseDir)
@@ -132,7 +137,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	}
 
 	var workflowErr error
-	done := logging.DebugStartBootstrap(bootstrap, "upgrade workflow", "config=%s base=%s", args.ConfigPath, baseDir)
+	done := logging.DebugStartBootstrap(bootstrap, "upgrade workflow", "config=%s base=%s localfile=%t", args.ConfigPath, baseDir, args.LocalFile)
 	defer func() { done(workflowErr) }()
 
 	if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
@@ -155,11 +160,46 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	bootstrap.Printf("Base directory: %s", baseDir)
 	bootstrap.Println("")
 
-	_, err := config.LoadConfigWithBaseDir(args.ConfigPath, baseDir)
-	if err != nil {
+	if _, err := config.LoadConfigWithBaseDir(args.ConfigPath, baseDir); err != nil {
 		bootstrap.Error("ERROR: Failed to load configuration: %v", err)
 		workflowErr = err
 		return types.ExitConfigError.Int()
+	}
+
+	// Phase 1: resolve the binary to finalize against. terminal=true means a
+	// pre-finalize gate fired (already latest / newer / fetch failure / declined)
+	// and we must return without touching the install.
+	execPath, versionInstalled, exitCode, terminal, upgradeErr := upgradeAcquireBinary(ctx, args, bootstrap, baseDir, currentVersion)
+	if terminal {
+		workflowErr = upgradeErr
+		return exitCode
+	}
+
+	// Phase 2: local finalize, shared by the download and --localfile paths.
+	code, finalizeErr := upgradeFinalizePhase(ctx, args, bootstrap, sessionLogger, baseDir, execPath, versionInstalled, upgradeErr)
+	workflowErr = finalizeErr
+	return code
+}
+
+// upgradeAcquireBinary resolves the binary that upgradeFinalizePhase will act on.
+// Default: fetch the latest GitHub release, confirm, download and install it.
+// With --localfile: skip the release check and download entirely and use the
+// binary already on disk (the upgrade-beta.sh path, which has already swapped in
+// and verified a binary the flow must not re-fetch -- fetching would resolve the
+// latest STABLE release and could pull a beta tester back off their build).
+//
+// terminal=true tells runUpgrade to return exitCode WITHOUT finalizing (the
+// pre-download gates: already-latest, installed-newer, fetch failure, decline).
+// When terminal=false the returned execPath/versionInstalled/upgradeErr feed the
+// finalize phase; upgradeErr!=nil there means the download failed but the footer
+// still runs.
+func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, baseDir, currentVersion string) (execPath, versionInstalled string, exitCode int, terminal bool, upgradeErr error) {
+	if args.LocalFile {
+		execPath = getExecInfo().ExecPath
+		versionInstalled = strings.TrimPrefix(currentVersion, "v")
+		bootstrap.Println("Local-file upgrade: finalizing with the binary already on disk (no release check, no download).")
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "localfile mode: on-disk binary %s (version %s)", execPath, versionInstalled)
+		return execPath, versionInstalled, 0, false, nil
 	}
 
 	// Discover the latest available release on GitHub and compare with the
@@ -168,20 +208,17 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	tag, latestVersion, _, err := fetchLatestRelease(ctx)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to check latest release: %v", err)
-		workflowErr = err
-		return types.ExitConfigError.Int()
+		return "", "", types.ExitConfigError.Int(), true, err
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "current=%s latest=%s", currentVersion, latestVersion)
 	switch compareVersions(currentVersion, latestVersion) {
 	case 0:
 		bootstrap.Printf("You are already running the latest version: %s", currentVersion)
-		workflowErr = nil
-		return types.ExitSuccess.Int()
+		return "", "", types.ExitSuccess.Int(), true, nil
 	case 1:
 		bootstrap.Printf("Installed version (%s) is newer than latest release (%s); aborting upgrade.", currentVersion, latestVersion)
-		workflowErr = fmt.Errorf("current version newer than latest")
-		return types.ExitConfigError.Int()
+		return "", "", types.ExitConfigError.Int(), true, fmt.Errorf("current version newer than latest")
 	}
 
 	bootstrap.Printf("Latest available version: %s (current: %s)", latestVersion, currentVersion)
@@ -191,35 +228,42 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "auto-confirm enabled (--upgrade y)")
 	} else {
 		reader := bufio.NewReader(os.Stdin)
-		var err error
-		confirm, err = promptYesNo(ctx, reader, "Do you want to download and install this version now? (backup.env will be updated with any missing keys; a backup will be created) [y/N]: ", false)
-		if err != nil {
-			bootstrap.Error("ERROR: %v", err)
-			workflowErr = err
-			return types.ExitConfigError.Int()
+		confirmed, promptErr := promptYesNo(ctx, reader, "Do you want to download and install this version now? (backup.env will be updated with any missing keys; a backup will be created) [y/N]: ", false)
+		if promptErr != nil {
+			bootstrap.Error("ERROR: %v", promptErr)
+			return "", "", types.ExitConfigError.Int(), true, promptErr
 		}
+		confirm = confirmed
 	}
 	if !confirm {
 		bootstrap.Println("Upgrade cancelled by user; no changes were made.")
-		workflowErr = nil
-		return types.ExitSuccess.Int()
+		return "", "", types.ExitSuccess.Int(), true, nil
 	}
 
 	// Download + install latest binary (confirmed)
-	execInfo := getExecInfo()
-	execPath := execInfo.ExecPath
+	execPath = getExecInfo().ExecPath
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "executing upgrade for %s", execPath)
-	versionInstalled, upgradeErr := downloadAndInstallLatest(ctx, execPath, bootstrap, tag, latestVersion)
+	versionInstalled, upgradeErr = downloadAndInstallLatest(ctx, execPath, bootstrap, tag, latestVersion)
 	if upgradeErr != nil {
 		bootstrap.Error("ERROR: Upgrade failed: %v", upgradeErr)
-		// Continue to footer to show guidance and permission status, but exit with error.
-		workflowErr = upgradeErr
+		// Continue to the footer to show guidance and permission status, but exit
+		// with error (upgradeErr flows through finalize).
 	}
+	return execPath, versionInstalled, 0, false, upgradeErr
+}
 
+// upgradeFinalizePhase runs the local, post-binary steps of an upgrade against
+// the binary now on disk: upgrade backup.env with any new template keys, refresh
+// docs/symlinks, auto-migrate/restart the daemon, normalize permissions, and
+// print the footer. It is shared by the download path and the --localfile path,
+// which both reach it with the target binary already in place. Returns the
+// process exit code and the error to attribute to the workflow span (nil on full
+// success, the config-upgrade error, or the binary-install error).
+func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, sessionLogger *logging.Logger, baseDir, execPath, versionInstalled string, upgradeErr error) (int, error) {
 	var cfgUpgradeResult *config.UpgradeResult
 	var cfgUpgradeErr error
 	if upgradeErr == nil {
-		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "upgrading configuration with newly installed binary")
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "upgrading configuration with the installed binary")
 		cfgUpgradeResult, cfgUpgradeErr = upgradeConfigWithBinary(ctx, execPath, args.ConfigPath)
 		if cfgUpgradeErr != nil {
 			bootstrap.Warning("Upgrade: configuration upgrade failed: %v", cfgUpgradeErr)
@@ -277,13 +321,17 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 
 	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr, daemonRestart)
 
-	// A configuration-upgrade failure after a successful binary install must also be
-	// reflected in the exit code (the footer already shows "Configuration: ERROR"),
-	// so automation does not treat the run as fully successful.
-	if upgradeErr == nil && cfgUpgradeErr != nil {
+	// The workflow span error mirrors the exit code's reasoning: a binary-install
+	// failure, or a config-upgrade failure after a good install (the footer already
+	// shows "Configuration: ERROR"), so automation and the trace agree.
+	var workflowErr error
+	switch {
+	case upgradeErr != nil:
+		workflowErr = upgradeErr
+	case cfgUpgradeErr != nil:
 		workflowErr = cfgUpgradeErr
 	}
-	return upgradeExitCode(upgradeErr, cfgUpgradeErr)
+	return upgradeExitCode(upgradeErr, cfgUpgradeErr), workflowErr
 }
 
 // upgradeExitCode maps the binary-install and config-upgrade outcomes to a process

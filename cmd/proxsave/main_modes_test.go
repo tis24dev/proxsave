@@ -53,6 +53,15 @@ func TestValidateModeCompatibility(t *testing.T) {
 			want: []string{"Cannot use --upgrade together with --install or --new-install."},
 		},
 		{
+			name: "upgrade localfile allowed",
+			args: &cli.Args{Upgrade: true, LocalFile: true},
+		},
+		{
+			name: "localfile without upgrade rejected",
+			args: &cli.Args{LocalFile: true},
+			want: []string{"The --localfile flag only applies to --upgrade (use: --upgrade --localfile)."},
+		},
+		{
 			name: "accumulates all compatibility violations",
 			args: &cli.Args{CleanupGuards: true, Support: true, Decrypt: true, Install: true, NewInstall: true, Upgrade: true},
 			want: []string{
