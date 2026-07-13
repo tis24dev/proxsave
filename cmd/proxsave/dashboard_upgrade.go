@@ -158,7 +158,7 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 		} else {
 			kw, sty, sym = "FAILED", theme.ErrorText, symErr
 			showDaemonResultScreen(ctx, session, "Upgrade failed", orchestrator.HealthcheckSetupLevelError,
-				"failed", "Run 'proxsave --upgrade' from a shell for details.")
+				"FAILED", "Run 'proxsave --upgrade' from a shell for details.")
 		}
 	}
 }
@@ -288,7 +288,7 @@ func buildUpgradeOutcomePrompt(code int) string {
 func dashboardUpgradeRestartDaemon(ctx context.Context, session *shell.Session, configPath string) {
 	if !daemonIsActive(ctx) {
 		showDaemonResultScreen(ctx, session, "Upgrade complete", orchestrator.HealthcheckSetupLevelOk,
-			"new binary on disk", "New binary on disk. This process still runs the old version; relaunch proxsave.")
+			"NEW BINARY ON DISK", "New binary on disk. This process still runs the old version; relaunch proxsave.")
 		return
 	}
 	baseDir, _ := detectedBaseDirOrFallback()

@@ -80,7 +80,8 @@ func TestRenderReleaseNotes(t *testing.T) {
 
 // TestDashboardUpgradeScreen drives the in-session upgrade screen directly: Check (shows
 // the available version, sanitized) -> Run upgrade (calls the real upgrade with
-// Upgrade+AutoYes+ConfigPath, shows the success notice) -> Back.
+// Upgrade+AutoYes+ConfigPath, keeps the binary-upgrade detail screen after each
+// result) -> Back. Both terminal result keywords stay ALL-CAPS.
 func TestDashboardUpgradeScreen(t *testing.T) {
 	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
 	origRun := dashboardUpgradeRun
@@ -101,9 +102,14 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		}
 	}
 	var gotArgs *cli.Args
+	runCalls := 0
 	dashboardUpgradeRun = func(ctx context.Context, args *cli.Args, bl *logging.BootstrapLogger) int {
+		runCalls++
 		gotArgs = args
-		return 0 // success
+		if runCalls == 1 {
+			return 0 // first run succeeds
+		}
+		return 1 // second run exercises the failure result
 	}
 
 	// Build an observed session eagerly (the shared seam creates it lazily via a flow).
@@ -160,17 +166,78 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	driver.waitOutput("enter continue")
 	driver.keys("enter")
 	driver.waitScreen("Upgrade complete")
+	_ = waitFor("NEW BINARY ON DISK") // inactive-daemon success uses the dashboard ALL-CAPS status convention
 	if gotArgs == nil || !gotArgs.Upgrade || !gotArgs.UpgradeAutoYes || gotArgs.ConfigPath != "/tmp/backup.env" {
 		t.Fatalf("run upgrade must pass Upgrade+AutoYes+ConfigPath, got %+v", gotArgs)
 	}
 
 	driver.keys("enter")         // dismiss the notice
 	driver.waitScreen("Upgrade") // back on the screen, now showing UPGRADED with a Re-check button
-	driver.keys("down enter")    // Back (2nd item) -> return
+	_ = waitFor("UPGRADED")
+	driver.keys("enter") // Re-check -> update remains available
+	driver.waitScreen("Upgrade")
+	driver.keys("enter") // Run upgrade again, this time failing
+	driver.waitScreen("Running upgrade")
+	driver.waitOutput("enter continue")
+	driver.keys("enter")
+	driver.waitScreen("Upgrade failed")
+	_ = waitFor("FAILED") // failure result uses the same ALL-CAPS convention
+	driver.keys("enter")
+	driver.waitScreen("Upgrade") // failure also returns to the binary-upgrade detail screen
+	if runCalls != 2 {
+		t.Fatalf("run upgrade calls = %d, want 2", runCalls)
+	}
+	driver.keys("down enter") // Back (2nd item) -> return
 	select {
 	case <-done:
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("upgrade screen did not return")
+	}
+}
+
+// TestDashboardUpgradeExternalCheckFailureIsWarning preserves the deliberate
+// retryable-external-resource policy: GitHub being unavailable is yellow, not
+// a red local-operation failure, and the user can return without an action.
+func TestDashboardUpgradeExternalCheckFailureIsWarning(t *testing.T) {
+	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
+	t.Cleanup(func() { dashboardUpgradeVersion, dashboardUpgradeCheck = origVer, origChk })
+	dashboardUpgradeVersion = func() string { return "1.0.0" }
+	dashboardUpgradeCheck = func(context.Context, *logging.Logger, string) *UpdateInfo { return nil }
+
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
+		driver.buf, func(title string) { driver.pushes <- title })
+
+	done := make(chan struct{})
+	go func() {
+		runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
+		close(done)
+	}()
+
+	driver.waitScreen("Upgrade")
+	deadline := time.After(uitest.Deadline(15 * time.Second))
+	for {
+		out := ansi.Strip(driver.buf.String())
+		if strings.Contains(out, "CHECK FAILED") {
+			if !strings.Contains(out, "⚠ CHECK FAILED") {
+				t.Fatalf("external check failure must retain the warning symbol, got %q", tailStr(out))
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for CHECK FAILED, tail:\n%s", tailStr(out))
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	driver.keys("down enter") // Back, not Re-check
+	select {
+	case <-done:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("upgrade screen did not return after external check failure")
 	}
 }
 
