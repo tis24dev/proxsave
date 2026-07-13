@@ -195,6 +195,8 @@ else
     exit 0
   fi
 
+  BETA_TAG="${LATEST_TAG}"
+
   # Guard against a publish-order downgrade: /releases is ordered by publish date,
   # not semver, so a back-ported beta published AFTER a newer stable would show up
   # as .[0]. Refuse to auto-install a beta that is not newer than the installed
@@ -211,8 +213,6 @@ else
       exit 0
     fi
   fi
-
-  BETA_TAG="${LATEST_TAG}"
 fi
 
 VERSION="${BETA_TAG#v}"
