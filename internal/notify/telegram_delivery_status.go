@@ -2,15 +2,13 @@ package notify
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // deliveryPollConfig tunes the post-send delivery-status poll.
@@ -45,13 +43,11 @@ type notifyStatusResponse struct {
 // then reported as "pending" (accepted, delivery unconfirmed). Only X-Server-Auth is
 // sent; the bot token never appears here.
 func pollTelegramDeliveryStatus(ctx context.Context, client *http.Client, serverAPIHost, serverID, notifySecret, notifyID string, cfg deliveryPollConfig, logger *logging.Logger) deliveryStatus {
-	if client == nil {
-		client = http.DefaultClient
-	}
 	done := logging.DebugStart(logger, "telegram delivery poll", "notifyID=%q timeout=%s interval=%s", notifyID, cfg.Timeout, cfg.Interval)
 
-	endpoint := strings.TrimRight(serverAPIHost, "/") + "/api/notify/status" +
-		"?server_id=" + url.QueryEscape(serverID) + "&notify_id=" + url.QueryEscape(notifyID)
+	// Shared serverbot transport (nil client -> http.DefaultClient); built once and
+	// reused for every poll attempt below.
+	sb := serverbot.New(serverAPIHost, client, logger)
 
 	interval := cfg.Interval
 	if interval <= 0 {
@@ -70,7 +66,7 @@ func pollTelegramDeliveryStatus(ctx context.Context, client *http.Client, server
 	result := deliveryStatus{State: "pending"}
 	for {
 		attempt++
-		st, retryable := fetchDeliveryStatusOnce(ctx, client, endpoint, notifySecret, deadline)
+		st, retryable := fetchDeliveryStatusOnce(ctx, sb, serverID, notifyID, notifySecret, deadline)
 		if logger != nil {
 			logger.Debug("Telegram: delivery poll attempt %d -> state=%s", attempt, st.State)
 		}
@@ -116,7 +112,7 @@ func pollTelegramDeliveryStatus(ctx context.Context, client *http.Client, server
 // fetchDeliveryStatusOnce does ONE GET. Returns the parsed status and whether an
 // "unknown" outcome is worth retrying (true for transient network/5xx, false for a
 // definitive 404/401/403/503).
-func fetchDeliveryStatusOnce(ctx context.Context, client *http.Client, endpoint, notifySecret string, deadline time.Time) (deliveryStatus, bool) {
+func fetchDeliveryStatusOnce(ctx context.Context, sb *serverbot.Client, serverID, notifyID, notifySecret string, deadline time.Time) (deliveryStatus, bool) {
 	// Cap the per-request timeout at the remaining budget so a hung server cannot
 	// overrun ConfirmTimeout by a whole 5s; keep a small floor so a near-expired
 	// budget still allows one real attempt.
@@ -127,25 +123,22 @@ func fetchDeliveryStatusOnce(ctx context.Context, client *http.Client, endpoint,
 	if reqTimeout < 250*time.Millisecond {
 		reqTimeout = 250 * time.Millisecond
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, reqTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, "GET", endpoint, nil)
-	if err != nil {
-		return deliveryStatus{State: "unknown", Err: err}, false
-	}
-	req.Header.Set("X-Server-Auth", notifySecret)
-	setProxsaveVersionHeader(req)
-
-	resp, err := client.Do(req)
+	resp, err := sb.Do(ctx, serverbot.Request{
+		Method:   http.MethodGet,
+		Path:     "/api/notify/status",
+		Query:    url.Values{"server_id": {serverID}, "notify_id": {notifyID}},
+		Secret:   notifySecret,
+		Timeout:  reqTimeout,
+		MaxBytes: 4096,
+	})
 	if err != nil {
 		return deliveryStatus{State: "unknown", Err: err}, true // transient -> retry
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	switch resp.StatusCode {
+	switch resp.Status {
 	case 200:
 		var body notifyStatusResponse
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body); err != nil {
+		if err := resp.JSON(&body); err != nil {
 			return deliveryStatus{State: "unknown", Err: err}, true
 		}
 		state := body.State
@@ -161,12 +154,12 @@ func fetchDeliveryStatusOnce(ctx context.Context, client *http.Client, endpoint,
 	case 404, 401, 403:
 		// Old server without the route, row not found, or stale secret: definitive,
 		// do not retry.
-		return deliveryStatus{State: "unknown", Err: fmt.Errorf("status HTTP %d", resp.StatusCode)}, false
+		return deliveryStatus{State: "unknown", Err: fmt.Errorf("status HTTP %d", resp.Status)}, false
 	default:
 		// 5xx (incl. 503 overload / rolling-restart / relay killswitch) or anything
 		// unexpected: transient, retry within the budget (the message is already
 		// accepted on the durable outbox, so pending is the honest fallback).
-		return deliveryStatus{State: "unknown", Err: fmt.Errorf("status HTTP %d", resp.StatusCode)}, true
+		return deliveryStatus{State: "unknown", Err: fmt.Errorf("status HTTP %d", resp.Status)}, true
 	}
 }
 

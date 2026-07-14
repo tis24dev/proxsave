@@ -208,7 +208,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors
 	// based on actionable warning hints like "set BACKUP_*=false to disable".
 	if !skipConfigWizard {
-		auditRes, auditErr := flowinstall.RunPostInstallAudit(ctx, session, execInfo.ExecPath, configPath)
+		auditRes, auditErr := flowinstall.RunPostInstallAudit(ctx, session, execInfo.ExecPath, configPath, false)
 		if bootstrap != nil {
 			if auditErr != nil {
 				bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
@@ -243,7 +243,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// TELEGRAM_ENABLED/mode), the same single source of truth the CLI uses — it
 	// returns Shown=false without any UI when Telegram is not centrally enabled.
 	if !skipConfigWizard {
-		telegramRes, telegramErr := flowinstall.RunTelegramSetup(ctx, session, baseDir, configPath)
+		telegramRes, telegramErr := flowinstall.RunTelegramSetup(ctx, session, baseDir, configPath, false)
 		if telegramErr != nil && bootstrap != nil {
 			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)
 		}
@@ -259,6 +259,26 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 				bootstrap.Info("Telegram setup: not verified (attempts=%d last=%d %s)", telegramRes.CheckAttempts, telegramRes.LastStatusCode, telegramRes.LastStatusMessage)
 			} else {
 				bootstrap.Info("Telegram setup: not verified (no check performed)")
+			}
+		}
+
+		// Healthchecks setup: when the daemon engine (centralized monitoring) was
+		// chosen, guide the user + show the portal magic-link + a connection check.
+		// Eligibility is decided solely by RunHealthcheckSetup (re-reads the written
+		// HEALTHCHECK_ENABLED/mode + identity/secret); Shown=false with no UI otherwise.
+		hcRes, hcErr := flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath, false)
+		if hcErr != nil && bootstrap != nil {
+			bootstrap.Warning("Healthcheck setup failed (non-blocking): %v", hcErr)
+		}
+		if bootstrap != nil && hcErr == nil && hcRes.Shown {
+			if hcRes.Verified {
+				bootstrap.Info("Healthcheck setup: verified")
+			} else if hcRes.SkippedVerification {
+				bootstrap.Info("Healthcheck setup: check skipped by user")
+			} else if hcRes.CheckAttempts > 0 {
+				bootstrap.Info("Healthcheck setup: not verified (attempts=%d)", hcRes.CheckAttempts)
+			} else {
+				bootstrap.Info("Healthcheck setup: not verified (no check performed)")
 			}
 		}
 	}
@@ -279,6 +299,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule)
 	runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap, cronSchedule)
+	wizardMode := ""
+	if wizardData != nil {
+		wizardMode = wizardData.SchedulerMode
+	}
+	reconcileSchedulerAfterInstall(ctx, wizardMode, configPath, execInfo, bootstrap)
 
 	// Attempt to resolve or create a server identity for Telegram pairing
 	if info, err := identity.DetectWithContext(ctx, baseDir, nil); err == nil {

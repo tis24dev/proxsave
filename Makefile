@@ -85,7 +85,7 @@ coverage-check:
 		fi
 
 # Lint
-lint: check-no-tview
+lint: check-no-tview check-serverbot-leaf
 	go vet ./...
 	@command -v golint >/dev/null 2>&1 && golint ./... || echo "golint not installed"
 
@@ -94,6 +94,15 @@ lint: check-no-tview
 check-no-tview:
 	@if grep -rn "rivo/tview\|gdamore/tcell" --include="*.go" cmd internal pkg 2>/dev/null; then \
 		echo "ERROR: legacy tview/tcell reference found (the Charm UI replaced them)"; \
+		exit 1; \
+	fi
+
+# Guard: internal/serverbot must stay a transport leaf (only logging/version/stdlib).
+# Importing health/notify/orchestrator/config/identity would create an import cycle
+# and pull endpoint vocabulary back into the shared transport.
+check-serverbot-leaf:
+	@if grep -rEn "tis24dev/proxsave/internal/(health|notify|orchestrator|config|identity)" internal/serverbot/ 2>/dev/null; then \
+		echo "ERROR: internal/serverbot must not import health/notify/orchestrator/config/identity (leaf transport)"; \
 		exit 1; \
 	fi
 

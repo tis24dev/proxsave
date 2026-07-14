@@ -21,17 +21,21 @@ var auditCollect = installer.CollectPostInstallDisableSuggestions
 // RunPostInstallAudit runs the optional post-install check: dry-run collect,
 // multi-select of suggested disables, shared apply. Prompt aborts are
 // non-blocking (the install continues), matching both legacy fronts.
-func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, configPath string) (installer.PostInstallAuditResult, error) {
+func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, configPath string, backToMenu bool) (installer.PostInstallAuditResult, error) {
 	result := installer.PostInstallAuditResult{}
 
+	declineLabel := "Skip"
+	if backToMenu {
+		declineLabel = "Back"
+	}
 	run, err := shell.Ask(ctx, session, components.NewConfirm(
 		"Post-install check",
 		"Run a dry-run to detect unused components and reduce warnings?\nThis may take a minute.",
-		components.WithLabels("Run check", "Skip"),
+		components.WithLabels("Run check", declineLabel),
 		components.WithDefaultYes(true),
 	))
 	if err != nil {
-		if errors.Is(err, shell.ErrAborted) {
+		if shell.IsAbort(err) {
 			return result, nil
 		}
 		return result, err
@@ -67,24 +71,22 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 
 	items := make([]components.MultiSelectItem[string], 0, len(suggestions))
 	for _, s := range suggestions {
-		desc := ""
-		if len(s.Messages) > 0 {
-			desc = strings.TrimSpace(s.Messages[0])
-		}
 		items = append(items, components.MultiSelectItem[string]{
-			Label:       s.Key,
-			Description: desc,
-			Value:       s.Key,
+			Label:  s.Key,
+			Value:  s.Key,
+			Detail: auditComponentDetail(s),
 		})
 	}
 	keys, err := shell.Ask(ctx, session, components.NewMultiSelect(
 		"Unused components", items,
 		components.WithMultiSelectPrompt[string](
 			fmt.Sprintf("Detected %d unused/optional component(s) that may cause warnings.\nSelected components are written as KEY=false into backup.env.", len(suggestions))),
+		components.WithMultiSelectDetailPane[string]("Details"),
+		components.WithMultiSelectActions[string]("Select ALL", "Disable Selected"),
 		components.WithMultiSelectBack[string](errAuditSkip),
 	))
 	if err != nil {
-		if errors.Is(err, errAuditSkip) || errors.Is(err, shell.ErrAborted) {
+		if errors.Is(err, errAuditSkip) || shell.IsAbort(err) {
 			return result, nil
 		}
 		return result, err
@@ -105,6 +107,19 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 		"Configuration updated", fmt.Sprintf("Disabled %d component(s): %s",
 			len(result.AppliedKeys), strings.Join(result.AppliedKeys, ", "))))
 	return result, nil
+}
+
+// auditComponentDetail is the side-pane text for a suggestion: the curated
+// component description, or the raw dry-run warnings when no description is
+// catalogued for that key (so the pane is never empty).
+func auditComponentDetail(s installer.PostInstallAuditSuggestion) string {
+	if desc := installer.PostInstallComponentDescription(s.Key); desc != "" {
+		return desc
+	}
+	if len(s.Messages) > 0 {
+		return "Detected during the dry-run:\n" + strings.Join(s.Messages, "\n")
+	}
+	return ""
 }
 
 func normalizeAuditKeys(keys []string) []string {

@@ -38,7 +38,7 @@ func (u *UI) ConfirmOverwriteExistingRecipient(ctx context.Context, recipientPat
 		components.WithDanger(),
 	))
 	if err != nil {
-		if errors.Is(err, shell.ErrAborted) {
+		if shell.IsAbort(err) {
 			// Parity with tview: Ctrl+C on the modal behaved like Cancel.
 			return false, nil
 		}
@@ -190,7 +190,7 @@ func (u *UI) ConfirmAddAnotherRecipient(ctx context.Context, currentCount int) (
 		components.WithDefaultYes(false),
 	))
 	if err != nil {
-		if errors.Is(err, shell.ErrAborted) {
+		if shell.IsAbort(err) {
 			// Parity with tview: Ctrl+C behaved like Finish (recipients
 			// already saved keep working).
 			return false, nil
@@ -201,7 +201,7 @@ func (u *UI) ConfirmAddAnotherRecipient(ctx context.Context, currentCount int) (
 }
 
 func (u *UI) mapAbort(err error) error {
-	if errors.Is(err, shell.ErrAborted) {
+	if shell.IsAbort(err) {
 		return orchestrator.ErrAgeRecipientSetupAborted
 	}
 	return err

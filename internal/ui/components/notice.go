@@ -71,7 +71,17 @@ func (n *Notice) View(width, height int) string {
 	var b strings.Builder
 	b.WriteString(header)
 	b.WriteString("\n\n")
-	b.WriteString(theme.Text.Width(width - 4).Render(n.message))
+	// One sentence per line: never break a line mid-sentence (a wrapped word from
+	// the next sentence reads as a broken phrase). Each sentence still wraps on its
+	// own if longer than the width.
+	if n.message != "" {
+		for i, sentence := range splitSentences(n.message) {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(theme.Text.Width(width - 4).Render(sentence))
+		}
+	}
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

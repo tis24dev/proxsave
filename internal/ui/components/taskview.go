@@ -2,7 +2,6 @@ package components
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync/atomic"
 
@@ -134,7 +133,7 @@ func RunTask(ctx context.Context, s *shell.Session, title, initialMessage string
 	runErr := <-done
 
 	if askErr != nil {
-		if errors.Is(askErr, shell.ErrAborted) {
+		if shell.IsAbort(askErr) {
 			// The user aborted the screen; the task context was cancelled
 			// and run has drained. Surface the task's own outcome.
 			return runErr

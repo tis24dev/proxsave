@@ -150,6 +150,23 @@ func TestSelectorSanitizesItems(t *testing.T) {
 	}
 }
 
+func TestSelectorPromptSanitizedVsStyled(t *testing.T) {
+	// The default prompt is sanitized: raw ANSI is stripped.
+	plain := NewSelector("T", threeItems(),
+		WithSelectorPrompt[string]("\x1b[31mred\x1b[0m body"))
+	if strings.Contains(plain.View(80, 12), "\x1b[31m") {
+		t.Error("WithSelectorPrompt must strip raw ANSI")
+	}
+
+	// The styled prompt is rendered verbatim (colors/box preserved, not sanitized).
+	pre := "\x1b[38;2;34;197;94mVERIFIED\x1b[0m"
+	styled := NewSelector("T", threeItems(),
+		WithSelectorPromptStyled[string](pre))
+	if !strings.Contains(styled.View(80, 12), pre) {
+		t.Errorf("WithSelectorPromptStyled must render the pre-styled prompt verbatim, got %q", styled.View(80, 12))
+	}
+}
+
 func TestSelectorShortListHasNoFilter(t *testing.T) {
 	s := NewSelector("Mode", threeItems())
 	press(t, s, "/")

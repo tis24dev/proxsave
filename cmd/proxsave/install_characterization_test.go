@@ -98,8 +98,8 @@ func editedExistingConfig() string {
 
 func TestInstallWizardCharacterization_FreshDeclineAll(t *testing.T) {
 	// No existing config: overwrite mode is implicit (no prompt); every
-	// toggle declined via bare Enter; default cron accepted.
-	run := runWizardCharacterization(t, "", strings.Repeat("\n", 7))
+	// toggle declined via bare Enter; default scheduler (daemon) + run-at accepted.
+	run := runWizardCharacterization(t, "", strings.Repeat("\n", 8))
 	if run.err != nil {
 		t.Fatalf("wizard error: %v", run.err)
 	}
@@ -126,7 +126,8 @@ func TestInstallWizardCharacterization_FreshEnableAll(t *testing.T) {
 		"y",     // email
 		"",      // delivery method: default relay
 		"y",     // encryption
-		"03:30", // cron
+		"",      // scheduler engine: default daemon
+		"03:30", // run at
 	}, "\n") + "\n"
 	run := runWizardCharacterization(t, "", script)
 	if run.err != nil {
@@ -147,7 +148,7 @@ func TestInstallWizardCharacterization_EditExistingNoOp(t *testing.T) {
 	// setting (including BOT_TELEGRAM_TYPE=personal and
 	// EMAIL_DELIVERY_METHOD=pmf, which the wizard must not reset).
 	existing := editedExistingConfig()
-	script := "2\n" + strings.Repeat("\n", 14)
+	script := "2\n" + strings.Repeat("\n", 15)
 	run := runWizardCharacterization(t, existing, script)
 	if run.err != nil {
 		t.Fatalf("wizard error: %v", run.err)

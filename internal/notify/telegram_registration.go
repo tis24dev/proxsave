@@ -1,11 +1,9 @@
 package notify
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 func logTelegramRegistrationDebug(logger *logging.Logger, format string, args ...interface{}) {
@@ -112,40 +111,29 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 		}, ""
 	}
 
-	baseHost := strings.TrimRight(serverAPIHost, "/")
-	escapedServerID := url.QueryEscape(serverID)
-	apiURL := fmt.Sprintf("%s/api/get-chat-id?server_id=%s", baseHost, escapedServerID)
-	logTelegramRegistrationDebug(logger, "Telegram registration: apiURL=%q (baseHost=%q escapedServerID=%q)", apiURL, baseHost, escapedServerID)
-
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	logTelegramRegistrationDebug(logger, "Telegram registration: request timeout=%s", (5 * time.Second).String())
-
-	req, err := http.NewRequestWithContext(reqCtx, "GET", apiURL, nil)
-	if err != nil {
-		logTelegramRegistrationDebug(logger, "Telegram registration: failed to create request: %v", err)
-		return TelegramRegistrationStatus{Message: "Failed to create HTTP request", Error: err}, ""
-	}
-	pv := setProxsaveVersionHeader(req) // keep X-Proxsave-Version on ALL get-chat-id requests
-	if provision {
-		req.Header.Set(proxsaveProvisionHeader, "1")
-	}
-	logTelegramRegistrationDebug(logger, "Telegram registration: provisionIntent=%v X-Proxsave-Version=%q", provision, pv)
-	logTelegramRegistrationDebug(logger, "Telegram registration: performing HTTP request (method=%s host=%s path=%s)", req.Method, req.URL.Host, req.URL.Path)
-
-	resp, err := http.DefaultClient.Do(req)
+	// Uses http.DefaultClient (its httptest tests hit a real client; no seam here) via
+	// the shared serverbot transport (host normalize, X-Proxsave-Version always,
+	// X-Proxsave-Provision iff provision, bounded 8 KiB read, error redaction). This is
+	// the pre-auth get-chat-id call: NO X-Server-Auth (Secret left empty).
+	logTelegramRegistrationDebug(logger, "Telegram registration: get-chat-id GET /api/get-chat-id (serverID=%q provisionIntent=%v)", serverID, provision)
+	resp, err := serverbot.New(serverAPIHost, http.DefaultClient, logger).Do(ctx, serverbot.Request{
+		Method:    http.MethodGet,
+		Path:      "/api/get-chat-id",
+		Query:     url.Values{"server_id": {serverID}},
+		Provision: provision,
+		Timeout:   5 * time.Second,
+		MaxBytes:  8192,
+	})
 	if err != nil {
 		logTelegramRegistrationDebug(logger, "Telegram registration: request failed: %v", err)
 		return TelegramRegistrationStatus{Message: "Connection failed", Error: err}, ""
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, _ := io.ReadAll(resp.Body)
+	body := resp.Body
 
 	// SECRET-IN-LOG GUARD: on a 200, parse + register the one-time secret BEFORE
 	// the body-preview line so the masker scrubs it (and every later line).
 	var secret string
-	if resp.StatusCode == http.StatusOK {
+	if resp.Status == http.StatusOK {
 		secret = parseTelegramNotifySecret(body)
 		if secret != "" && logger != nil {
 			logger.RegisterSecret(secret)
@@ -161,9 +149,9 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 		logTelegramRegistrationDebug(logger, "Telegram registration: 200 body parsed (notifySecretPresent=%v len=%d)", secret != "", len(secret))
 	}
 
-	logTelegramRegistrationDebug(logger, "Telegram registration: response status=%d bodyBytes=%d bodyPreview=%q", resp.StatusCode, len(body), truncateTelegramRegistrationBody(body, 200))
+	logTelegramRegistrationDebug(logger, "Telegram registration: response status=%d bodyBytes=%d bodyPreview=%q", resp.Status, len(body), truncateTelegramRegistrationBody(body, 200))
 
-	switch resp.StatusCode {
+	switch resp.Status {
 	case 200:
 		logTelegramRegistrationDebug(logger, "Telegram registration: status 200 (active)")
 		return TelegramRegistrationStatus{Code: 200, Message: "200 - Registration active"}, secret
@@ -184,11 +172,11 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 			Error:   fmt.Errorf("%s", body),
 		}, ""
 	default:
-		logTelegramRegistrationDebug(logger, "Telegram registration: unexpected status %d", resp.StatusCode)
+		logTelegramRegistrationDebug(logger, "Telegram registration: unexpected status %d", resp.Status)
 		return TelegramRegistrationStatus{
-			Code:    resp.StatusCode,
-			Message: fmt.Sprintf("%d - Unexpected response: %s", resp.StatusCode, string(body)),
-			Error:   fmt.Errorf("unexpected status %d", resp.StatusCode),
+			Code:    resp.Status,
+			Message: fmt.Sprintf("%d - Unexpected response: %s", resp.Status, string(body)),
+			Error:   fmt.Errorf("unexpected status %d", resp.Status),
 		}, ""
 	}
 }
@@ -255,37 +243,27 @@ func CheckTelegramRegistrationAndProvision(ctx context.Context, serverAPIHost, s
 // http.DefaultClient. Best-effort and NON-FATAL: failures are logged (never the
 // secret) and the server re-issues next run. Transport errors are redacted.
 func confirmTelegramRelaySecret(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, logger *logging.Logger) error {
-	if client == nil {
-		client = http.DefaultClient
-	}
+	// Short-circuit BEFORE the transport call (map-risk: empty inputs must not hit
+	// the wire). serverbot.New handles nil client -> http.DefaultClient.
 	if strings.TrimSpace(secret) == "" || strings.TrimSpace(serverID) == "" {
 		return fmt.Errorf("confirm: missing secret or serverID")
 	}
-	endpoint := strings.TrimRight(serverAPIHost, "/") + "/api/confirm-secret"
-	body, err := json.Marshal(struct {
-		ServerID string `json:"server_id"`
-	}{ServerID: serverID})
-	if err != nil {
-		return fmt.Errorf("confirm: encode failed: %w", err)
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("confirm: create request failed: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Server-Auth", secret)
-	pv := setProxsaveVersionHeader(req)
-	logTelegramRegistrationDebug(logger, "Telegram: confirm-secret POST %s (serverID=%q X-Proxsave-Version=%q)", endpoint, serverID, pv)
-	resp, err := client.Do(req)
+	logTelegramRegistrationDebug(logger, "Telegram: confirm-secret POST /api/confirm-secret (serverID=%q)", serverID)
+	resp, err := serverbot.New(serverAPIHost, client, logger).Do(ctx, serverbot.Request{
+		Method: http.MethodPost,
+		Path:   "/api/confirm-secret",
+		Body: struct {
+			ServerID string `json:"server_id"`
+		}{ServerID: serverID},
+		Secret:  secret,
+		Timeout: 5 * time.Second,
+	})
 	if err != nil {
 		return fmt.Errorf("confirm: request failed: %s", logging.RedactSecrets(err.Error(), secret))
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusOK {
+	if resp.Status == http.StatusOK {
 		logTelegramRegistrationDebug(logger, "Telegram: confirm-secret accepted (HTTP 200)")
 		return nil
 	}
-	return fmt.Errorf("confirm: server rejected (HTTP %d)", resp.StatusCode)
+	return fmt.Errorf("confirm: server rejected (HTTP %d)", resp.Status)
 }

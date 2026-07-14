@@ -93,6 +93,11 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		{name: "Telegram", enabled: cfg != nil && cfg.TelegramEnabled},
 		{name: "Gotify", enabled: cfg != nil && cfg.GotifyEnabled},
 		{name: "Webhook", enabled: cfg != nil && cfg.WebhookEnabled},
+		// Always-visible healthchecks status; LAST so the Telegram relay above has
+		// already captured any portal magic-link onto stats.HealthcheckLink. Gated on
+		// HEALTHCHECK_ENABLED (independent of Telegram). Same const as Name() so it is
+		// dispatched exactly once.
+		{name: healthchecksSectionName, enabled: cfg != nil && cfg.HealthcheckEnabled},
 	}
 
 	channelsByName := make(map[string]NotificationChannel, len(o.notificationChannels))

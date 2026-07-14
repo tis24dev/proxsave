@@ -8,7 +8,6 @@ package install
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +23,7 @@ import (
 // mapCancel converts the shell abort sentinel into the install-cancelled
 // sentinel the cmd layer branches on.
 func mapCancel(err error) error {
-	if errors.Is(err, shell.ErrAborted) {
+	if shell.IsAbort(err) {
 		return installer.ErrInstallCancelled
 	}
 	return err
@@ -167,9 +166,26 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		Kind:        components.FieldToggle,
 		Bool:        prefill.EncryptionEnabled,
 	}
+	schedulerOptions := []string{"Resident daemon (recommended)", "System cron"}
+	schedulerValues := []string{"daemon", "cron"}
+	// Fresh install / Overwrite (empty base) defaults to the daemon. Editing an
+	// existing config defaults to its stored engine so a no-op edit never flips the
+	// scheduler; an old config without the key stays on cron (mirrors the CLI's
+	// schedulerEngineDefault).
+	schedulerIndex := 0 // default: daemon
+	if strings.TrimSpace(baseTemplate) != "" && !strings.EqualFold(strings.TrimSpace(prefill.SchedulerMode), "daemon") {
+		schedulerIndex = 1 // cron
+	}
+	scheduler := &components.FormField{
+		Label:       "Scheduler engine",
+		Description: "Daemon = resident service with hang watchdog + healthchecks; cron = system crontab.",
+		Kind:        components.FieldSelect,
+		Options:     schedulerOptions,
+		OptionIndex: schedulerIndex,
+	}
 	cronField := &components.FormField{
-		Label:       "Cron time (HH:MM)",
-		Description: fmt.Sprintf("Daily proxsave job schedule; default %s.", cronutil.DefaultTime),
+		Label:       "Run at (HH:MM)",
+		Description: fmt.Sprintf("Daily backup time; default %s.", cronutil.DefaultTime),
 		Kind:        components.FieldText,
 		Text:        cronutil.DefaultTime,
 		Validate: func(v string) error {
@@ -181,7 +197,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	fields := []*components.FormField{
 		secondary, secondaryPath, secondaryLog,
 		cloud, cloudRemote, cloudLog,
-		firewall, telegram, email, method, encryption, cronField,
+		firewall, telegram, email, method, encryption, scheduler, cronField,
 	}
 	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
 		"Configuration", fields,
@@ -224,6 +240,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		return nil, err
 	}
 	data.CronTime = normalized
+	data.SchedulerMode = schedulerValues[scheduler.OptionIndex]
 
 	return data, nil
 }
@@ -239,7 +256,7 @@ func ConfirmNewInstall(ctx context.Context, session *shell.Session, baseDir stri
 		components.WithDanger(),
 	))
 	if err != nil {
-		if errors.Is(err, shell.ErrAborted) {
+		if shell.IsAbort(err) {
 			return false, nil
 		}
 		return false, err

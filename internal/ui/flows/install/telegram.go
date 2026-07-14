@@ -3,9 +3,11 @@ package install
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
+	"strconv"
 	"strings"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -14,6 +16,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // Seams for tests.
@@ -34,7 +37,10 @@ const (
 // verification step (Check with the shared attempt cap, Skip, Continue once
 // verified). Semantics mirror the deleted tview wizard: the verified flag
 // latches, a fatal status removes Check, Esc skips unless already verified.
-func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, configPath string) (installer.TelegramSetupResult, error) {
+// RunTelegramSetup drives the Telegram pairing/verify screen. backToMenu switches
+// the leave action's label to "Back" (dashboard diagnostics: return to the menu)
+// instead of the install-flow "Skip"/"Continue".
+func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, configPath string, backToMenu bool) (installer.TelegramSetupResult, error) {
 	state, err := telegramBuildBootstrap(configPath, baseDir)
 	if err != nil {
 		return installer.TelegramSetupResult{}, err
@@ -54,25 +60,16 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 	silentLogger := logging.New(types.LogLevelDebug, false)
 	silentLogger.SetOutput(io.Discard)
 
-	status := "Not checked yet. Choose Check after sending the Server ID to the bot."
+	statusMsg := "Not checked yet. Choose Check after sending the Server ID to the bot."
+	statusLabel := ""
+	statusSeverity := orchestrator.TelegramSeverityNeutral
+	statusCode := 0
 	// errTelegramEsc distinguishes Esc from a hard Ctrl+C abort.
 	errTelegramEsc := errors.New("telegram setup: esc")
 
 	for {
-		var prompt strings.Builder
-		prompt.WriteString("Mode: centralized\n\n")
-		prompt.WriteString("1) Open Telegram and start @ProxmoxAN_bot\n")
-		fmt.Fprintf(&prompt, "2) Send the Server ID below (digits only)\n")
-		prompt.WriteString("3) Choose Check to verify\n\n")
-		fmt.Fprintf(&prompt, "Server ID: %s\n", result.ServerID)
-		if result.IdentityFile != "" {
-			persisted := "not persisted"
-			if result.IdentityPersisted {
-				persisted = "persisted"
-			}
-			fmt.Fprintf(&prompt, "Identity file: %s (%s)\n", result.IdentityFile, persisted)
-		}
-		prompt.WriteString("\nStatus: " + status)
+		prompt := buildTelegramPrompt(result.ServerID, result.IdentityFile, result.IdentityPersisted,
+			statusMsg, statusLabel, statusSeverity, statusCode)
 
 		items := make([]components.SelectorItem[telegramAction], 0, 3)
 		if !result.LastStatusFatal && (result.Verified || result.CheckAttempts < orchestrator.TelegramSetupMaxVerificationAttempts) {
@@ -80,23 +77,24 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 				Label: "Check", Description: "verify the pairing now", Value: telegramActionCheck,
 			})
 		}
+		leaveLabel, leaveDesc, leaveVal := "Skip", "complete pairing later", telegramActionSkip
 		if result.Verified {
-			items = append(items, components.SelectorItem[telegramAction]{
-				Label: "Continue", Description: "pairing verified", Value: telegramActionContinue,
-			})
-		} else {
-			items = append(items, components.SelectorItem[telegramAction]{
-				Label: "Skip", Description: "complete pairing later", Value: telegramActionSkip,
-			})
+			leaveLabel, leaveDesc, leaveVal = "Continue", "pairing verified", telegramActionContinue
 		}
+		if backToMenu {
+			leaveLabel, leaveDesc = "Back", "return to the dashboard menu"
+		}
+		items = append(items, components.SelectorItem[telegramAction]{
+			Label: leaveLabel, Description: leaveDesc, Value: leaveVal,
+		})
 
 		action, err := shell.Ask(ctx, session, components.NewSelector(
 			"Telegram setup", items,
-			components.WithSelectorPrompt[telegramAction](prompt.String()),
+			components.WithSelectorPromptStyled[telegramAction](prompt),
 			components.WithSelectorBack[telegramAction](errTelegramEsc),
 		))
 		if err != nil {
-			if errors.Is(err, errTelegramEsc) || errors.Is(err, shell.ErrAborted) {
+			if errors.Is(err, errTelegramEsc) || shell.IsAbort(err) {
 				// Esc/abort: skip unless already verified (tview parity).
 				result.SkippedVerification = !result.Verified
 				return result, nil
@@ -148,20 +146,93 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 				result.Partial = st.Partial
 			}
 
-			switch {
-			case st.Verified && !st.Partial:
-				status = fmt.Sprintf("VERIFIED: %s", st.Message)
-			case st.Verified && st.Partial:
-				status = fmt.Sprintf("PARTIAL: %s", st.Message)
-			case st.Fatal:
-				status = fmt.Sprintf("FAILED: %s", st.Message)
-			default:
-				hint := orchestrator.TelegramSetupRetryHint
-				if result.CheckAttempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
-					hint = orchestrator.TelegramSetupMaxAttemptsHint
-				}
-				status = fmt.Sprintf("%s\n%s", st.Message, hint)
+			statusMsg = st.Message
+			statusLabel = st.Label
+			statusSeverity = st.Severity
+			statusCode = res.Status.Code
+			// A retryable state that has hit the attempt cap gets the cap hint appended.
+			if !st.Verified && !st.Fatal && result.CheckAttempts >= orchestrator.TelegramSetupMaxVerificationAttempts {
+				statusMsg = st.Message + "\n" + orchestrator.TelegramSetupMaxAttemptsHint
 			}
 		}
 	}
+}
+
+// telegramSeverityStyle maps a check severity to a display style + symbol so each
+// state reads distinctly: green ✓ linked, yellow ⚠ partial, blue ℹ action-needed
+// (start bot / send ID), red ⚠ unreachable, red ✗ fatal. The bool is false for the
+// neutral (pre-check) state, which renders without a colored keyword.
+func telegramSeverityStyle(sev orchestrator.TelegramSetupSeverity) (lipgloss.Style, string, bool) {
+	switch sev {
+	case orchestrator.TelegramSeveritySuccess:
+		return theme.SuccessText, theme.SymbolSuccess, true
+	case orchestrator.TelegramSeverityPartial:
+		return theme.WarningText, theme.SymbolWarning, true
+	case orchestrator.TelegramSeverityAction:
+		return theme.InfoText, theme.SymbolInfo, true
+	case orchestrator.TelegramSeverityUnreachable:
+		return theme.ErrorText, theme.SymbolWarning, true
+	case orchestrator.TelegramSeverityFatal:
+		return theme.ErrorText, theme.SymbolError, true
+	default:
+		return theme.Text, "", false
+	}
+}
+
+// buildTelegramPrompt renders the styled prompt above the Check/Continue/Skip
+// choices: the pairing steps, the Server ID boxed for emphasis (the user must send
+// it to the bot), and a Status line whose keyword is green when verified, yellow
+// when partially verified, and red on a fatal failure. Every dynamic input is safe:
+// the Server ID is the local digit identity, statusMsg is our own copy (the only
+// upstream case is pre-sanitized by SanitizeTelegramSetupStatusMessage), and the
+// identity path is local.
+func buildTelegramPrompt(serverID, identityFile string, identityPersisted bool, statusMsg, statusLabel string, severity orchestrator.TelegramSetupSeverity, httpCode int) string {
+	var b strings.Builder
+	b.WriteString(theme.Text.Render("Mode: centralized"))
+	b.WriteString("\n\n")
+	b.WriteString(theme.Text.Render("1) Open Telegram and start @ProxmoxAN_bot"))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("2) Send the Server ID below (digits only)"))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("3) Choose Check to verify"))
+	b.WriteString("\n\n")
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(theme.Orange).
+		Padding(0, 1).
+		Render(theme.Subtle.Render("Server ID (send this to the bot):") +
+			"\n" + theme.Emphasis.Render(serverID))
+	b.WriteString(box)
+	b.WriteString("\n")
+	if identityFile != "" {
+		persisted := "not persisted"
+		if identityPersisted {
+			persisted = "persisted"
+		}
+		b.WriteString(theme.Subtle.Render("Identity file: " + identityFile + " (" + persisted + ")"))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+
+	// Status: a distinct colored keyword + the HTTP status code + the message, so
+	// e.g. "server unreachable" reads differently from "not paired yet".
+	b.WriteString(theme.Text.Render("Status: "))
+	style, symbol, colored := telegramSeverityStyle(severity)
+	if !colored {
+		b.WriteString(theme.Text.Render(statusMsg))
+		return b.String()
+	}
+	label := statusLabel
+	if label == "" {
+		label = "Status"
+	}
+	b.WriteString(style.Render(symbol + " " + strings.ToUpper(label)))
+	if httpCode > 0 {
+		b.WriteString(theme.Subtle.Render(" (HTTP " + strconv.Itoa(httpCode) + ")"))
+	}
+	if statusMsg != "" {
+		b.WriteString(theme.Text.Render(": " + statusMsg))
+	}
+	return b.String()
 }

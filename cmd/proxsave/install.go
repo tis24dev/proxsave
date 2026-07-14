@@ -33,6 +33,7 @@ type installConfigResult struct {
 	EnableEncryption bool
 	SkipConfigWizard bool
 	CronSchedule     string
+	SchedulerMode    string // "cron" | "daemon"
 }
 
 func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) (err error) {
@@ -116,6 +117,14 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		if err := runTelegramSetupCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
 			return err
 		}
+
+		// Healthchecks setup: if the daemon engine (centralized monitoring) was
+		// chosen, guide the user + show the portal magic-link + a connection check.
+		// Only renders when eligible (re-reads the written config), non-blocking.
+		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "healthcheck setup")
+		if err := runHealthcheckSetupCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
+			return err
+		}
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
@@ -126,6 +135,10 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		bootstrap,
 		buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule),
 	)
+	// Reconcile the scheduler engine (daemon unit vs cron entry) as a mutually
+	// exclusive choice, INCLUDING the keep-existing path (SchedulerMode empty ->
+	// read from the kept config), so a re-install never leaves both active.
+	reconcileSchedulerAfterInstall(ctx, configResult.SchedulerMode, configPath, execInfo, bootstrap)
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "detecting telegram identity")
 	telegramCode = detectTelegramCodeWithContext(ctx, baseDir)
@@ -416,7 +429,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	defer func() { done(err) }()
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "preparing base template")
-	template, skipConfigWizard, err := prepareBaseTemplate(ctx, reader, configPath)
+	template, skipConfigWizard, fromExisting, err := prepareBaseTemplate(ctx, reader, configPath)
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
@@ -448,7 +461,14 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 		return installConfigResult{}, wrapInstallError(err)
 	}
 
-	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cron time")
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring scheduler engine")
+	engine, err := configureSchedulerEngine(ctx, reader, schedulerEngineDefault(fromExisting, template))
+	if err != nil {
+		return installConfigResult{}, wrapInstallError(err)
+	}
+	result.SchedulerMode = engine
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring run-at time")
 	cronTime, err := configureCronTimeFunc(ctx, reader, cronutil.DefaultTime)
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
@@ -456,11 +476,16 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	result.CronSchedule = cronutil.TimeToSchedule(cronTime)
 
 	if bootstrap != nil {
-		bootstrap.Info("Cron schedule selected: %s", cronTime)
+		bootstrap.Info("Scheduler: %s, run at %s", engine, cronTime)
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "writing configuration")
 	template = config.RemoveRuntimeDerivedEnvKeys(template)
+	template = setEnvValue(template, "SCHEDULER_MODE", engine)
+	template = setEnvValue(template, "SCHEDULER_TIME", cronTime)
+	if engine == "daemon" {
+		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
+	}
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
 		return installConfigResult{}, err
 	}
@@ -605,19 +630,19 @@ func printInstallBanner(configPath string) {
 	fmt.Printf("Configuration file: %s\n\n", configPath)
 }
 
-func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, error) {
+func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, bool, error) {
 	decision, err := prepareExistingConfigDecisionCLI(ctx, reader, configPath)
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	if decision.AbortInstall {
-		return "", false, errInteractiveAborted
+		return "", false, false, errInteractiveAborted
 	}
 	if decision.SkipConfigWizard {
 		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
-		return "", true, nil
+		return "", true, false, nil
 	}
-	return decision.BaseTemplate, false, nil
+	return decision.BaseTemplate, false, decision.FromExistingFile, nil
 }
 
 func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
@@ -794,10 +819,46 @@ func configureEncryption(ctx context.Context, reader *bufio.Reader, template *st
 	return enableEncryption, nil
 }
 
+// schedulerEngineDefault picks the engine prompt default. Fresh installs and
+// Overwrite (both start from the embedded template) default to the resident
+// daemon, matching the Charm front-end and the daemon-by-default intent. Only an
+// Edit of an existing config defaults to its stored SCHEDULER_MODE, so a no-op
+// edit never flips the scheduler; an old config without the key stays on cron.
+func schedulerEngineDefault(fromExisting bool, template string) string {
+	// Fresh/Overwrite, or an Edit whose base is effectively empty, are "start from
+	// scratch" -> daemon (this also keeps the empty-base boundary identical to the
+	// Charm front-end, which keys off an empty base template).
+	if !fromExisting || strings.TrimSpace(template) == "" {
+		return "daemon"
+	}
+	switch strings.ToLower(strings.TrimSpace(installer.DeriveInstallWizardPrefill(template).SchedulerMode)) {
+	case "daemon":
+		return "daemon"
+	default:
+		return "cron"
+	}
+}
+
+func configureSchedulerEngine(ctx context.Context, reader *bufio.Reader, def string) (string, error) {
+	fmt.Println("\n--- Scheduler ---")
+	raw, err := promptOptional(ctx, reader, fmt.Sprintf("Scheduler engine: daemon (resident, hang watchdog + healthchecks) or cron [%s]: ", def))
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "cron":
+		return "cron", nil
+	case "daemon":
+		return "daemon", nil
+	default:
+		return def, nil
+	}
+}
+
 func configureCronTime(ctx context.Context, reader *bufio.Reader, defaultCron string) (string, error) {
 	fmt.Println("\n--- Schedule ---")
 	for {
-		cronTime, err := promptOptional(ctx, reader, fmt.Sprintf("Cron time for daily proxsave job (HH:MM) [%s]: ", defaultCron))
+		cronTime, err := promptOptional(ctx, reader, fmt.Sprintf("Run at (daily, HH:MM) [%s]: ", defaultCron))
 		if err != nil {
 			return "", err
 		}

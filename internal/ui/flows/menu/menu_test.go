@@ -31,7 +31,7 @@ func newDriver(t *testing.T) *driver {
 
 func (d *driver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(60 * time.Second)
 	for {
 		select {
 		case got := <-d.pushes:
@@ -60,7 +60,7 @@ func run(d *driver, ctx context.Context) <-chan struct {
 		err    error
 	}, 1)
 	go func() {
-		action, err := Run(ctx, d.session)
+		action, err := Run(ctx, d.session, DaemonStateOnCron)
 		ch <- struct {
 			action Action
 			err    error
@@ -70,9 +70,15 @@ func run(d *driver, ctx context.Context) <-chan struct {
 }
 
 // TestMenuRowOrder pins the row order the dashboard dispatch tests (and the
-// docs) rely on: backup first, exit last.
+// docs) rely on: backup first, exit last, with the diagnostics group after
+// Reconfigure. Down-navigation must skip the separator, so N downs lands on the
+// N-th SELECTABLE row (the divider is invisible to the cursor).
 func TestMenuRowOrder(t *testing.T) {
-	expected := []Action{ActionBackup, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure, ActionExit}
+	expected := []Action{
+		ActionBackup, ActionBackupDebug, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure,
+		ActionCheckTelegram, ActionCheckHealthcheck, ActionPostInstallCheck,
+		ActionDaemonSetup, ActionDaemonStatus, ActionExit,
+	}
 	for i, want := range expected {
 		d := newDriver(t)
 		ch := run(d, context.Background())

@@ -5,6 +5,8 @@ import (
 	"os"
 	"syscall"
 	"time"
+
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
 
 const (
@@ -27,6 +29,11 @@ func main() {
 }
 
 func run() int {
+	// Wire the systemd daemon-presence probe into the orchestrator so the Phase-7 section
+	// and the dashboard/install check report the REAL daemon existence (installed/active),
+	// not just a heartbeat-derived guess. Set once here so the running binary always has
+	// it while unit tests (which never call run()) keep the unprobed heartbeat-only path.
+	orchestrator.DaemonPresenceProbe = daemonPresenceProbe
 	runInfo := startMainRun()
 	defer finishMainRun(runInfo)
 	defer releaseDashboardLeftovers()

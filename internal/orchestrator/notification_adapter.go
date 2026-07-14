@@ -390,6 +390,14 @@ func (n *NotificationAdapter) recordNotifierStatus(stats *BackupStats, result *n
 		} else {
 			stats.TelegramStatus = base
 		}
+		// Dual-write (S3): the relay may have piggybacked a fresh portal magic-link on
+		// the /api/notify response. Stash it RAW for the S4 healthchecks section; it is
+		// sanitized (serverbot.SanitizeLoginURL) only at that display boundary.
+		if result != nil && result.Metadata != nil {
+			if link, ok := result.Metadata["login_url"].(string); ok && link != "" {
+				stats.HealthcheckLink = link
+			}
+		}
 	case "Email":
 		stats.EmailStatus = describeNotificationSeverity(result)
 	}

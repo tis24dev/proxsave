@@ -151,6 +151,41 @@ func TestClassifyTelegramSetupResult_ConnectionDistinctFromUnexpected(t *testing
 	}
 }
 
+// TestClassifyTelegramSetupResult_Severities locks the per-state severities so the
+// UI can render distinct labels/colors: "server unreachable" must NOT look like
+// "not paired yet" (the user's requirement).
+func TestClassifyTelegramSetupResult_Severities(t *testing.T) {
+	sev := func(code int) TelegramSetupSeverity {
+		return ClassifyTelegramSetupResult(notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: code}}).Severity
+	}
+	if sev(0) == sev(409) {
+		t.Fatal("connection-error and not-associated must be DISTINCT severities")
+	}
+	for _, tc := range []struct {
+		code int
+		want TelegramSetupSeverity
+	}{
+		{200, TelegramSeveritySuccess},
+		{403, TelegramSeverityAction},
+		{409, TelegramSeverityAction},
+		{0, TelegramSeverityUnreachable},
+		{500, TelegramSeverityUnreachable},
+		{422, TelegramSeverityFatal},
+		{426, TelegramSeverityFatal},
+	} {
+		if got := sev(tc.code); got != tc.want {
+			t.Errorf("code %d severity = %d, want %d", tc.code, got, tc.want)
+		}
+	}
+	// Every non-neutral classified state must carry a display label.
+	for _, code := range []int{200, 403, 409, 0, 500, 422, 426} {
+		st := ClassifyTelegramSetupResult(notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: code}})
+		if st.Label == "" {
+			t.Errorf("code %d has an empty Label", code)
+		}
+	}
+}
+
 // TestClassifyTelegramSetupResult_TruncatesUnexpectedMessage verifies the raw,
 // untrusted upstream message in the unexpected_response branch is truncated to the
 // shared bound before it reaches either UI.

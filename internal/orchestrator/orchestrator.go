@@ -164,6 +164,13 @@ type BackupStats struct {
 	ScriptVersion  string
 	TelegramStatus string
 	EmailStatus    string
+	// HealthcheckLink is the RAW portal magic-link captured from this run's
+	// /api/notify response (dual-write in S3; empty until the server mints one).
+	// It is stored RAW and MUST be passed through serverbot.SanitizeLoginURL before
+	// any display (the healthchecks Phase-7 section, S4). HealthcheckStatus is that
+	// section's state (S4). Neither is registered as a log secret.
+	HealthcheckLink   string
+	HealthcheckStatus string
 
 	// Version update information
 	NewVersionAvailable bool

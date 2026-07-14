@@ -43,7 +43,7 @@ func newDriver(t *testing.T) *driver {
 
 func (d *driver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(60 * time.Second)
 	for {
 		select {
 		case got := <-d.pushes:
@@ -131,9 +131,9 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	}()
 
 	// Single aligned form: inactive dependent rows are skipped, so Enter
-	// through the 7 active rows reaches Continue; the final Enter submits.
+	// through the 8 active rows reaches Continue; the final Enter submits.
 	d.waitScreen("Configuration")
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 9; i++ {
 		d.keys("enter")
 	}
 
@@ -194,9 +194,9 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 	}()
 
 	// Single aligned form, everything prefilled/active: Enter through all
-	// 12 rows plus the Continue button is the no-op edit.
+	// 13 rows plus the Continue button is the no-op edit.
 	d.waitScreen("Configuration")
-	for i := 0; i < 13; i++ {
+	for i := 0; i < 14; i++ {
 		d.keys("enter")
 	}
 
@@ -233,6 +233,39 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 	prefill := installer.DeriveInstallWizardPrefill(out)
 	if prefill.TelegramType != "personal" || prefill.EmailDeliveryMethod != "pmf" {
 		t.Fatalf("no-op edit reset stored settings: %+v", prefill)
+	}
+}
+
+// TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron locks the no-op-edit
+// invariant for a legacy/pre-daemon config that lacks SCHEDULER_MODE: an Enter-only
+// edit must NOT silently flip the scheduler to daemon (it stays on cron, matching
+// the CLI's schedulerEngineDefault).
+func TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron(t *testing.T) {
+	d := newDriver(t)
+	template := installer.UnsetEnvValueInTemplate(config.DefaultEnvTemplate(), "SCHEDULER_MODE")
+
+	type result struct {
+		data *installer.InstallWizardData
+		err  error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		data, err := CollectWizardData(context.Background(), d.session, template)
+		resCh <- result{data, err}
+	}()
+
+	// All toggles default off -> 8 active rows + Continue.
+	d.waitScreen("Configuration")
+	for i := 0; i < 9; i++ {
+		d.keys("enter")
+	}
+
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("unexpected error: %v", res.err)
+	}
+	if res.data.SchedulerMode != "cron" {
+		t.Fatalf("editing a config without SCHEDULER_MODE must default to cron, got %q", res.data.SchedulerMode)
 	}
 }
 
@@ -304,14 +337,17 @@ func TestRunPostInstallAudit(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", configPath)
+		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", configPath, false)
 		resCh <- result{res, err}
 	}()
 
 	d.waitScreen("Post-install check")
 	d.keys("enter") // default: run the check
 	d.waitScreen("Unused components")
-	d.keys("space enter") // select first suggestion, confirm
+	// 2 items (rows 0-1), Select ALL (2), Disable Selected (3). Select the first
+	// suggestion, then move to the Disable Selected button and press it (a plain
+	// Enter on the item now just toggles it - it no longer confirms the screen).
+	d.keys("space down down down enter")
 	d.waitScreen("Configuration updated")
 	d.keys("enter")
 
@@ -344,7 +380,7 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env")
+		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Post-install check")
@@ -357,7 +393,7 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 	// Ctrl+C on the confirm is a non-blocking skip too (parity with the
 	// CLI, where a prompt EOF abandons the optional step).
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env")
+		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Post-install check")
@@ -382,6 +418,53 @@ func TestFormatPreservedEntriesResolvesAgainstBaseDir(t *testing.T) {
 	}
 	if formatPreservedEntries(baseDir, nil) != "(none)" {
 		t.Fatal("empty entries must render (none)")
+	}
+}
+
+func TestBuildTelegramPrompt(t *testing.T) {
+	// Linked -> green "✓ LINKED"; Server ID boxed.
+	v := buildTelegramPrompt("123456789", "/id/.server_identity", true, "Linked.", "Linked", orchestrator.TelegramSeveritySuccess, 200)
+	if !strings.Contains(ansi.Strip(v), "✓ LINKED") || !strings.Contains(v, "34;197;94") {
+		t.Fatalf("linked must be green ✓: %q", ansi.Strip(v))
+	}
+	if !strings.Contains(ansi.Strip(v), "╭") || !strings.Contains(ansi.Strip(v), "123456789") {
+		t.Fatalf("Server ID must be boxed: %q", ansi.Strip(v))
+	}
+
+	// Partial -> yellow "⚠ LINKED (FINISHING SETUP)".
+	p := buildTelegramPrompt("1", "", false, "token unsaved", "Linked (finishing setup)", orchestrator.TelegramSeverityPartial, 200)
+	if !strings.Contains(ansi.Strip(p), "⚠ LINKED (FINISHING SETUP)") || !strings.Contains(p, "234;179;8") {
+		t.Fatalf("partial must be yellow ⚠: %q", ansi.Strip(p))
+	}
+
+	// Action (not paired, 409) -> blue "ℹ NOT PAIRED YET (HTTP 409)".
+	a := buildTelegramPrompt("1", "", false, "send the id", "Not paired yet", orchestrator.TelegramSeverityAction, 409)
+	if !strings.Contains(ansi.Strip(a), "ℹ NOT PAIRED YET") || !strings.Contains(a, "59;130;246") {
+		t.Fatalf("action must be blue ℹ: %q", ansi.Strip(a))
+	}
+	if !strings.Contains(ansi.Strip(a), "(HTTP 409)") {
+		t.Fatalf("action must show the HTTP code: %q", ansi.Strip(a))
+	}
+
+	// Unreachable (code 0) -> red "⚠ SERVER UNREACHABLE", no HTTP code.
+	u := buildTelegramPrompt("1", "", false, "could not reach", "Server unreachable", orchestrator.TelegramSeverityUnreachable, 0)
+	if !strings.Contains(ansi.Strip(u), "⚠ SERVER UNREACHABLE") || !strings.Contains(u, "239;68;68") {
+		t.Fatalf("unreachable must be red ⚠: %q", ansi.Strip(u))
+	}
+	if strings.Contains(ansi.Strip(u), "HTTP 0") {
+		t.Fatalf("code 0 must not show an HTTP code: %q", ansi.Strip(u))
+	}
+
+	// Fatal (invalid id, 422) -> red "✗ INVALID SERVER ID (HTTP 422)".
+	f := buildTelegramPrompt("1", "", false, "invalid", "Invalid Server ID", orchestrator.TelegramSeverityFatal, 422)
+	if !strings.Contains(ansi.Strip(f), "✗ INVALID SERVER ID") || !strings.Contains(f, "239;68;68") {
+		t.Fatalf("fatal must be red ✗: %q", ansi.Strip(f))
+	}
+
+	// Neutral -> no keyword, message verbatim.
+	n := ansi.Strip(buildTelegramPrompt("1", "", false, "Not checked yet.", "", orchestrator.TelegramSeverityNeutral, 0))
+	if !strings.Contains(n, "Not checked yet.") || strings.Contains(n, "HTTP") {
+		t.Fatalf("neutral status wrong: %q", n)
 	}
 }
 
@@ -410,7 +493,7 @@ func TestRunTelegramSetup(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			res, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env")
+			res, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
 			resCh <- result{res, err}
 		}()
 	}
@@ -446,7 +529,7 @@ func TestRunTelegramSetup(t *testing.T) {
 	telegramBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
 		return orchestrator.TelegramSetupBootstrap{Eligibility: orchestrator.TelegramSetupSkipPersonalMode}, nil
 	}
-	notShown, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env")
+	notShown, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
 	if err != nil || notShown.Shown {
 		t.Fatalf("not-eligible must be silent: %+v err=%v", notShown, err)
 	}

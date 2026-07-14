@@ -162,6 +162,16 @@ func runRuntime(rt *appRuntime, state *appRunState) int {
 
 	logRunContext(rt)
 	initializeServerIdentity(rt)
+	// Daemon run + admin commands run before the backup security preflight: the
+	// resident daemon must not crash-loop on a transient preflight issue (each
+	// supervised child runs its own preflight), and the admin commands only touch
+	// systemd/cron/config.
+	if result := dispatchDaemonAdminMode(rt); result.handled {
+		return finalizeModeResult(state, result)
+	}
+	if result := dispatchDaemonMode(rt); result.handled {
+		return finalizeModeResult(state, result)
+	}
 	if exitCode, ok := runSecurityPreflight(rt); !ok {
 		return state.finalize(exitCode)
 	}

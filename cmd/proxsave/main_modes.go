@@ -33,6 +33,7 @@ func validateModeCompatibility(args *cli.Args) []string {
 		validateSupportCompatibility,
 		validateInstallCompatibility,
 		validateUpgradeCompatibility,
+		validateDaemonCompatibility,
 	} {
 		if messages := rule(args); len(messages) > 0 {
 			allMessages = append(allMessages, messages...)
@@ -73,6 +74,47 @@ func validateInstallCompatibility(args *cli.Args) []string {
 func validateUpgradeCompatibility(args *cli.Args) []string {
 	if args.Upgrade && (args.Install || args.NewInstall) {
 		return []string{"Cannot use --upgrade together with --install or --new-install."}
+	}
+	return nil
+}
+
+func validateDaemonCompatibility(args *cli.Args) []string {
+	daemonFlags := 0
+	label := ""
+	for _, f := range []struct {
+		on   bool
+		name string
+	}{
+		{args.Daemon, "--daemon"},
+		{args.DaemonSetup, "--daemon-setup"},
+		{args.DaemonRemove, "--daemon-remove"},
+	} {
+		if f.on {
+			daemonFlags++
+			label = f.name
+		}
+	}
+	if daemonFlags == 0 {
+		return nil
+	}
+	if daemonFlags > 1 {
+		return []string{"Only one of --daemon, --daemon-setup, --daemon-remove may be used at a time."}
+	}
+	incompatible := enabledModes([]incompatibleMode{
+		{enabled: args.Install, label: "--install"},
+		{enabled: args.NewInstall, label: "--new-install"},
+		{enabled: args.Upgrade, label: "--upgrade"},
+		{enabled: args.Restore, label: "--restore"},
+		{enabled: args.Decrypt, label: "--decrypt"},
+		{enabled: args.ForceNewKey, label: "--newkey"},
+		{enabled: args.Backup, label: "--backup"},
+		{enabled: args.Support, label: "--support"},
+		{enabled: args.EnvMigration || args.EnvMigrationDry, label: "--env-migration"},
+		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config"},
+		{enabled: args.CleanupGuards, label: "--cleanup-guards"},
+	})
+	if len(incompatible) > 0 {
+		return []string{fmt.Sprintf("%s cannot be combined with: %s", label, strings.Join(incompatible, ", "))}
 	}
 	return nil
 }
