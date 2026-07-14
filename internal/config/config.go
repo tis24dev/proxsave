@@ -734,7 +734,7 @@ func (c *Config) parseNotificationSettings() {
 	c.TelegramBotType = c.getString("BOT_TELEGRAM_TYPE", "centralized")
 	c.TelegramBotToken = c.getString("TELEGRAM_BOT_TOKEN", "")
 	c.TelegramChatID = c.getString("TELEGRAM_CHAT_ID", "")
-	c.TelegramServerAPIHost = "https://bot.tis24.it:1443"
+	c.TelegramServerAPIHost = "https://bot.proxsave.dev"
 	c.ServerID = ""
 	c.TelegramNotifySecret = "" // no longer read from backup.env; provisioned via TOFU into the immutable identity file
 	c.TelegramConfirmDelivery = c.getBool("TELEGRAM_CONFIRM_DELIVERY", true)

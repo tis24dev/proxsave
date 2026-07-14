@@ -1,0 +1,7 @@
+<TMPDIR>/backup.env already exists.
+Choose how to proceed:
+  [1] Overwrite (start from embedded template)
+  [2] Edit existing (use current file as base)
+  [3] Keep existing & continue (skip configuration wizard)
+  [0] Cancel installation
+Choice [3]: 

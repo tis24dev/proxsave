@@ -14,16 +14,16 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
-	"github.com/tis24dev/proxsave/internal/tui/wizard"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
 
 var (
 	newInstallEnsureInteractiveStdin = ensureInteractiveStdin
 	newInstallConfirmCLI             = confirmNewInstallCLI
-	newInstallConfirmTUI             = wizard.ConfirmNewInstall
+	newInstallConfirmTUI             = confirmNewInstallCharm
 	newInstallRunInstall             = runInstall
 	newInstallRunInstallTUI          = runInstallTUI
 	configureCronTimeFunc            = configureCronTime
@@ -175,7 +175,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 		bootstrap.Info("Post-install audit: running dry-run (this may take a minute)")
 	}
 
-	suggestions, err := wizard.CollectPostInstallDisableSuggestions(ctx, execPath, configPath)
+	suggestions, err := installer.CollectPostInstallDisableSuggestions(ctx, execPath, configPath)
 	if err != nil {
 		fmt.Printf("WARNING: Post-install check failed (non-blocking): %v\n", err)
 		if bootstrap != nil {
@@ -387,7 +387,8 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println("https://github.com/sponsors/tis24dev")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
+	fmt.Println("  proxsave (alias: proxmox-backup) - Open the interactive dashboard (runs the backup directly when non-interactive, e.g. cron)")
+	fmt.Println("  --backup           - Run a backup now (what bare proxsave does when non-interactive)")
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
@@ -626,7 +627,7 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 	fmt.Println("Network shares must be mounted BEFORE running this backup tool.")
 	fmt.Println("For direct network access without mounting, use cloud storage (rclone) instead.")
 	fmt.Println("(You can change these settings later in backup.env)")
-	prefill := wizard.DeriveInstallWizardPrefill(template)
+	prefill := installer.DeriveInstallWizardPrefill(template)
 	enableSecondary, err := confirmDefault(ctx, reader, "Enable secondary backup path?", prefill.SecondaryEnabled)
 	if err != nil {
 		return "", err
@@ -668,7 +669,7 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 func configureCloudStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
 	fmt.Println("\n--- Cloud storage (rclone) ---")
 	fmt.Println("Remember to configure rclone manually before enabling cloud backups.")
-	prefill := wizard.DeriveInstallWizardPrefill(template)
+	prefill := installer.DeriveInstallWizardPrefill(template)
 	enableCloud, err := confirmDefault(ctx, reader, "Enable cloud backups?", prefill.CloudEnabled)
 	if err != nil {
 		return "", err
@@ -699,7 +700,7 @@ func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template 
 	fmt.Println("\n--- Firewall rules ---")
 	fmt.Println("Enable collection of firewall rules (e.g., iptables/nftables).")
 	fmt.Println("(You can change this later in backup.env via BACKUP_FIREWALL_RULES)")
-	enable, err := confirmDefault(ctx, reader, "Backup firewall rules?", wizard.DeriveInstallWizardPrefill(template).FirewallEnabled)
+	enable, err := confirmDefault(ctx, reader, "Backup firewall rules?", installer.DeriveInstallWizardPrefill(template).FirewallEnabled)
 	if err != nil {
 		return "", err
 	}
@@ -712,7 +713,7 @@ func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template 
 }
 
 func configureNotifications(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
-	prefill := wizard.DeriveInstallWizardPrefill(template)
+	prefill := installer.DeriveInstallWizardPrefill(template)
 	fmt.Println("\n--- Telegram ---")
 	enableTelegram, err := confirmDefault(ctx, reader, "Enable Telegram notifications (centralized)?", prefill.TelegramEnabled)
 	if err != nil {
@@ -730,7 +731,7 @@ func configureNotifications(ctx context.Context, reader *bufio.Reader, template 
 	}
 
 	fmt.Println("\n--- Email ---")
-	fmt.Println("Default email delivery uses the TIS24 cloud relay, with local sendmail as failover.")
+	fmt.Println("Default email delivery uses the ProxSave Cloud Relay, with local sendmail as failover.")
 	fmt.Println("ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.")
 	enableEmail, err := confirmDefault(ctx, reader, "Enable email notifications?", prefill.EmailEnabled)
 	if err != nil {
@@ -758,7 +759,7 @@ func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaul
 	}
 
 	fmt.Println("Email delivery methods:")
-	fmt.Println("  relay    TIS24 cloud relay over outbound HTTPS (default)")
+	fmt.Println("  relay    ProxSave Cloud Relay over outbound HTTPS (default)")
 	fmt.Println("  sendmail Local /usr/sbin/sendmail (fallback/default failover; requires a local MTA)")
 	fmt.Println("  pmf      Proxmox Notifications via proxmox-mail-forward (SMTP lives in Proxmox)")
 	for {
@@ -781,7 +782,7 @@ func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaul
 
 func configureEncryption(ctx context.Context, reader *bufio.Reader, template *string) (bool, error) {
 	fmt.Println("\n--- Encryption ---")
-	enableEncryption, err := confirmDefault(ctx, reader, "Enable backup encryption?", wizard.DeriveInstallWizardPrefill(*template).EncryptionEnabled)
+	enableEncryption, err := confirmDefault(ctx, reader, "Enable backup encryption?", installer.DeriveInstallWizardPrefill(*template).EncryptionEnabled)
 	if err != nil {
 		return false, err
 	}

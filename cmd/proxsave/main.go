@@ -29,6 +29,7 @@ func main() {
 func run() int {
 	runInfo := startMainRun()
 	defer finishMainRun(runInfo)
+	defer releaseDashboardLeftovers()
 	ctx, cancel := setupRunContext(runInfo.bootstrap)
 	defer cancel()
 

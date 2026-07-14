@@ -9,11 +9,18 @@ import (
 
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/tui/wizard"
+	"github.com/tis24dev/proxsave/internal/ui/components"
+	"github.com/tis24dev/proxsave/internal/ui/flows/agesetup"
+	flowinstall "github.com/tis24dev/proxsave/internal/ui/flows/install"
+	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
-// runInstallTUI runs the TUI-based installation wizard
+// runInstallTUI runs the installation wizard on the Charm UI: one long-lived
+// Session drives every interactive step (existing-config decision, config
+// wizard, AGE setup, post-install audit, Telegram pairing) over the same
+// installer engine helpers the CLI uses. The step order mirrors runInstall.
 func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) (err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "install workflow (tui)", "config=%s", configPath)
 	defer func() { done(err) }()
@@ -51,32 +58,65 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		printInstallFooter(err, configPath, baseDir, telegramCode, permStatus, permMessage)
 	}()
 
-	printInstallBanner(configPath)
+	if !dashboardHandoffPending() {
+		// Plain-terminal banner for a direct --install run. Coming from
+		// the dashboard the alternate screen is still up (the session is
+		// adopted below): printing here would inject the banner into the
+		// UI, and the frame footer already shows config path and build.
+		printInstallBanner(configPath)
+	}
 
 	buildSig := buildSignature()
 	if strings.TrimSpace(buildSig) == "" {
 		buildSig = "n/a"
 	}
 
+	session := newAgeSetupSession(ctx, shell.Config{
+		AppName:    "ProxSave",
+		Subtitle:   "Install Wizard",
+		ConfigPath: configPath,
+		BuildSig:   buildSig,
+		UseColor:   true,
+	})
+	// Bootstrap console prints would land in the alternate screen and
+	// corrupt it: quiet them for the session lifetime (mirror/log records
+	// keep working). Defers run LIFO: the session closes first.
+	bootstrap.SetConsoleQuiet(true)
+	defer bootstrap.SetConsoleQuiet(false)
+	// Deferred for panic safety; Close is idempotent for the normal path
+	// (closed explicitly before the non-interactive finalization below).
+	defer func() { _ = session.Close() }()
+	mapUIDeath := func(stepErr error) error {
+		if errors.Is(stepErr, shell.ErrClosed) {
+			if closeErr := session.Close(); closeErr == nil {
+				return wrapInstallError(errInteractiveAborted)
+			}
+		}
+		return stepErr
+	}
+
 	// Check if config exists
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "checking existing configuration")
-	existingAction, err := wizard.CheckExistingConfig(ctx, configPath, buildSig)
+	existingAction, err := flowinstall.ResolveExistingConfig(ctx, session, configPath)
 	if err != nil {
-		return err
+		if errors.Is(err, installer.ErrInstallCancelled) {
+			return wrapInstallError(errInteractiveAborted)
+		}
+		return mapUIDeath(err)
 	}
 
 	var skipConfigWizard bool
-	var wizardData *wizard.InstallWizardData
+	var wizardData *installer.InstallWizardData
 	baseTemplate := ""
 
 	switch existingAction {
-	case wizard.ExistingConfigCancel:
+	case installer.ExistingConfigCancel:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "user cancelled installation")
 		return wrapInstallError(errInteractiveAborted)
-	case wizard.ExistingConfigKeepContinue:
+	case installer.ExistingConfigKeepContinue:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using existing configuration and skipping wizard")
 		skipConfigWizard = true
-	case wizard.ExistingConfigEdit:
+	case installer.ExistingConfigEdit:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "editing existing configuration")
 		content, readErr := os.ReadFile(configPath)
 		if readErr != nil {
@@ -91,18 +131,20 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	if !skipConfigWizard {
 		// Run the wizard
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "running install wizard")
-		wizardData, err = wizard.RunInstallWizard(ctx, configPath, baseDir, buildSig, baseTemplate)
+		wizardData, err = flowinstall.CollectWizardData(ctx, session, baseTemplate)
 		if err != nil {
-			if errors.Is(err, wizard.ErrInstallCancelled) {
+			if errors.Is(err, installer.ErrInstallCancelled) {
 				return wrapInstallError(errInteractiveAborted)
-			} else {
-				return fmt.Errorf("wizard failed: %w", err)
 			}
+			if mapped := mapUIDeath(err); errors.Is(mapped, errInteractiveAborted) {
+				return mapped
+			}
+			return fmt.Errorf("wizard failed: %w", err)
 		}
 
 		// Apply collected data to template
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "applying wizard data")
-		template, err := wizard.ApplyInstallData(baseTemplate, wizardData)
+		template, err := installer.ApplyInstallData(baseTemplate, wizardData)
 		if err != nil {
 			return err
 		}
@@ -137,9 +179,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			bootstrap.Info("Running initial encryption setup (AGE recipients)")
 		}
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "running AGE setup via orchestrator")
-		setupResult, err := runInitialEncryptionSetupWithUI(ctx, configPath, wizard.NewAgeSetupUI(configPath, buildSig))
+		setupResult, err := runInitialEncryptionSetupWithUI(ctx, configPath, agesetup.New(session))
 		if err != nil {
-			return err
+			return mapUIDeath(err)
 		}
 
 		if bootstrap != nil {
@@ -151,12 +193,22 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			}
 			bootstrap.Info("IMPORTANT: Keep your passphrase/private key offline and secure!")
 		}
+		// The bootstrap lines above land in the altscreen and vanish on
+		// Close: show the outcome where the user can actually read it.
+		ageMsg := "AGE encryption configured successfully."
+		if setupResult.WroteRecipientFile && setupResult.RecipientPath != "" {
+			ageMsg += "\nRecipient saved to:\n" + setupResult.RecipientPath
+		} else if setupResult.ReusedExistingRecipients {
+			ageMsg += "\nUsing the existing AGE recipient configuration."
+		}
+		ageMsg += "\n\nIMPORTANT: keep your passphrase/private key offline and secure!"
+		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Encryption ready", ageMsg))
 	}
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors
 	// based on actionable warning hints like "set BACKUP_*=false to disable".
 	if !skipConfigWizard {
-		auditRes, auditErr := wizard.RunPostInstallAuditWizard(ctx, execInfo.ExecPath, configPath, buildSig)
+		auditRes, auditErr := flowinstall.RunPostInstallAudit(ctx, session, execInfo.ExecPath, configPath)
 		if bootstrap != nil {
 			if auditErr != nil {
 				bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
@@ -187,11 +239,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	// Telegram setup (centralized bot): guide the user through pairing with an
 	// explicit verification step (retry + skip). Eligibility is decided solely by
-	// RunTelegramSetupWizard (BuildTelegramSetupBootstrap reads the written
+	// RunTelegramSetup (BuildTelegramSetupBootstrap reads the written
 	// TELEGRAM_ENABLED/mode), the same single source of truth the CLI uses — it
 	// returns Shown=false without any UI when Telegram is not centrally enabled.
 	if !skipConfigWizard {
-		telegramRes, telegramErr := wizard.RunTelegramSetupWizard(ctx, baseDir, configPath, buildSig)
+		telegramRes, telegramErr := flowinstall.RunTelegramSetup(ctx, session, baseDir, configPath)
 		if telegramErr != nil && bootstrap != nil {
 			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)
 		}
@@ -210,6 +262,13 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			}
 		}
 	}
+
+	// All interactive steps are done: release the terminal before the
+	// non-interactive finalization and the footer prints.
+	if closeErr := session.Close(); closeErr != nil && err == nil {
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "session close: %v", closeErr)
+	}
+	bootstrap.SetConsoleQuiet(false)
 
 	// Finalize legacy-symlink cleanup, entrypoint cleanup/recreation, and cron via the
 	// shared post-install engine (the same runPostInstallSymlinksAndCron the CLI uses),
@@ -240,4 +299,25 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "permissions status=%s", permStatus)
 
 	return nil
+}
+
+// confirmNewInstallCharm confirms the --new-install reset on its own Charm
+// session (created and closed around the single prompt).
+func confirmNewInstallCharm(ctx context.Context, baseDir, buildSig string, preservedEntries []string) (bool, error) {
+	session := newAgeSetupSession(ctx, shell.Config{
+		AppName:  "ProxSave",
+		Subtitle: "New Install",
+		BuildSig: buildSig,
+		UseColor: true,
+	})
+	defer func() { _ = session.Close() }()
+	ok, err := flowinstall.ConfirmNewInstall(ctx, session, baseDir, preservedEntries)
+	closeErr := session.Close()
+	if err != nil {
+		if errors.Is(err, shell.ErrClosed) && closeErr == nil {
+			return false, nil
+		}
+		return false, err
+	}
+	return ok, nil
 }

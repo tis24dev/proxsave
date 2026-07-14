@@ -23,6 +23,10 @@ type BootstrapLogger struct {
 	flushed  bool
 	minLevel types.LogLevel
 	mirror   *Logger
+
+	// consoleQuiet suppresses direct console prints while a full-screen UI
+	// session owns the terminal; mirror/record keep working.
+	consoleQuiet bool
 }
 
 // NewBootstrapLogger creates a new bootstrap logger with INFO level by default.
@@ -33,6 +37,62 @@ func NewBootstrapLogger() *BootstrapLogger {
 }
 
 // SetLevel updates the minimum level used during Flush.
+// SetConsoleQuiet suppresses direct console prints (mirror logging and the
+// recorded summary are unaffected). Used while a full-screen UI session owns
+// the terminal: raw writes would corrupt the alternate screen.
+func (b *BootstrapLogger) SetConsoleQuiet(quiet bool) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.consoleQuiet = quiet
+}
+
+func (b *BootstrapLogger) consoleQuietEnabled() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.consoleQuiet
+}
+
+// EntryCount returns the number of recorded entries (a mark for
+// ReplayConsoleSince).
+func (b *BootstrapLogger) EntryCount() int {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.entries)
+}
+
+// ReplayConsoleSince re-prints to stderr the warning/error entries recorded
+// after mark. Used when console prints were quieted for a UI handoff that
+// then failed before the UI could take over: the failure must not stay
+// invisible.
+func (b *BootstrapLogger) ReplayConsoleSince(mark int) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	entries := append([]bootstrapEntry(nil), b.entries...)
+	b.mu.Unlock()
+	if mark < 0 {
+		mark = 0
+	}
+	// LogLevel orders NONE(0) < CRITICAL < ERROR < WARNING < INFO < DEBUG:
+	// replay warning and worse only.
+	for i := mark; i < len(entries); i++ {
+		e := entries[i]
+		if !e.raw && e.level >= types.LogLevelCritical && e.level <= types.LogLevelWarning {
+			fmt.Fprintln(os.Stderr, e.message)
+		}
+	}
+}
+
 func (b *BootstrapLogger) SetLevel(level types.LogLevel) {
 	if b == nil {
 		return
@@ -47,7 +107,9 @@ func (b *BootstrapLogger) Println(message string) {
 	if b == nil {
 		return
 	}
-	fmt.Println(message)
+	if !b.consoleQuietEnabled() {
+		fmt.Println(message)
+	}
 	b.mirrorLog(types.LogLevelInfo, message)
 	b.recordRaw(message)
 }
@@ -68,7 +130,9 @@ func (b *BootstrapLogger) Printf(format string, args ...interface{}) {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
-	fmt.Println(msg)
+	if !b.consoleQuietEnabled() {
+		fmt.Println(msg)
+	}
 	b.mirrorLog(types.LogLevelInfo, msg)
 	b.recordRaw(msg)
 }
@@ -79,7 +143,9 @@ func (b *BootstrapLogger) Info(format string, args ...interface{}) {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
-	fmt.Println(msg)
+	if !b.consoleQuietEnabled() {
+		fmt.Println(msg)
+	}
 	b.mirrorLog(types.LogLevelInfo, msg)
 	b.record(types.LogLevelInfo, msg)
 }
@@ -93,7 +159,9 @@ func (b *BootstrapLogger) Warning(format string, args ...interface{}) {
 	if !strings.HasSuffix(msg, "\n") {
 		msg += "\n"
 	}
-	fmt.Fprint(os.Stderr, msg)
+	if !b.consoleQuietEnabled() {
+		fmt.Fprint(os.Stderr, msg)
+	}
 	msg = strings.TrimSuffix(msg, "\n")
 	b.mirrorLog(types.LogLevelWarning, msg)
 	b.record(types.LogLevelWarning, msg)
@@ -108,7 +176,9 @@ func (b *BootstrapLogger) Error(format string, args ...interface{}) {
 	if !strings.HasSuffix(msg, "\n") {
 		msg += "\n"
 	}
-	fmt.Fprint(os.Stderr, msg)
+	if !b.consoleQuietEnabled() {
+		fmt.Fprint(os.Stderr, msg)
+	}
 	msg = strings.TrimSuffix(msg, "\n")
 	b.mirrorLog(types.LogLevelError, msg)
 	b.record(types.LogLevelError, msg)

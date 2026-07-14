@@ -79,6 +79,14 @@ func preparePreRuntimeArgs(ctx context.Context, bootstrap *logging.BootstrapLogg
 	if exitCode, ok := resolveRunConfigPath(args, bootstrap); !ok {
 		return args, exitCode, true
 	}
+	if exitCode, handled := maybeRunDashboard(ctx, args, bootstrap, toolVersion); handled {
+		return args, exitCode, true
+	}
+	// Re-validate after a possible dashboard mutation so any future
+	// single-flag compatibility rule cannot be bypassed by the menu.
+	if exitCode, handled := rejectIncompatibleModes(args, bootstrap); handled {
+		return args, exitCode, true
+	}
 	if exitCode, handled := runUpgradeConfigJSONMode(args); handled {
 		return args, exitCode, true
 	}

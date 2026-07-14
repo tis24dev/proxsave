@@ -3,12 +3,9 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/tis24dev/proxsave/internal/input"
 )
 
 func (c *cliWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
@@ -47,31 +44,4 @@ func (c *cliWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.
 		fmt.Printf("\nNIC repair: %s\n", nicRepair.Summary())
 	}
 	return promptNetworkCommitWithCountdown(ctx, c.reader, c.logger, remaining)
-}
-
-func (u *tuiWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		title = "Confirm"
-	}
-	message = strings.TrimSpace(message)
-	if timeout > 0 {
-		return promptYesNoTUIWithCountdown(ctx, u.logger, title, u.configPath, u.buildSig, message, yesLabel, noLabel, timeout, defaultYes)
-	}
-	return promptYesNoTUIFunc(ctx, title, u.configPath, u.buildSig, message, yesLabel, noLabel, defaultYes)
-}
-
-func (u *tuiWorkflowUI) RepairNICNames(ctx context.Context, archivePath string) (*nicRepairResult, error) {
-	return repairNICNamesWithUI(ctx, u, u.logger, archivePath), nil
-}
-
-func (u *tuiWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir string) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	committed, err := promptNetworkCommitTUI(ctx, remaining, health, nicRepair, diagnosticsDir, u.configPath, u.buildSig)
-	if err != nil && errors.Is(err, input.ErrInputAborted) {
-		return false, err
-	}
-	return committed, err
 }

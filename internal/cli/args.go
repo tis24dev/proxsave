@@ -43,6 +43,7 @@ type Args struct {
 	EnvMigrationDry   bool
 	CleanupGuards     bool
 	LegacyEnvPath     string
+	Backup            bool
 }
 
 var osExit = os.Exit
@@ -92,6 +93,8 @@ func Parse() *Args {
 		"Run the decrypt workflow (converts encrypted bundles into plaintext bundles)")
 	flag.BoolVar(&args.Restore, "restore", false,
 		"Run the restore workflow (select bundle, optionally decrypt, apply to system)")
+	flag.BoolVar(&args.Backup, "backup", false,
+		"Run the backup now (skips the interactive dashboard; this is the default behavior when proxsave runs non-interactively, e.g. from cron)")
 	flag.BoolVar(&args.Install, "install", false,
 		"Run the interactive installer (generate/configure backup.env)")
 	flag.BoolVar(&args.NewInstall, "new-install", false,
@@ -106,6 +109,7 @@ func Parse() *Args {
 		"Cleanup ProxSave guard bind mounts and directories (/var/lib/proxsave/guards). Use with --dry-run to preview")
 	flag.StringVar(&args.LegacyEnvPath, "old-env", "",
 		"Path to the legacy Bash backup.env used during --env-migration")
+
 
 	flag.BoolVar(&args.UpgradeConfig, "upgrade-config", false,
 		"Upgrade configuration file using the embedded template (adds missing keys, preserves existing and custom keys)")

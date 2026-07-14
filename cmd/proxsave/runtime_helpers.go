@@ -917,7 +917,9 @@ func buildReinstallCronLines(lines []string, baseDir string, correctPaths []stri
 	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
 	updated, _, _ := filterCronLines(lines, correctPaths)
 	updated = dropCanonicalCronLines(updated, correctPaths)
-	return append(updated, fmt.Sprintf("%s %s", schedule, commandToken))
+	// --backup pins the non-interactive behavior: even if a scheduler ever
+	// allocates a pty, the run can never land on the interactive dashboard.
+	return append(updated, fmt.Sprintf("%s %s --backup", schedule, commandToken))
 }
 
 // cronScheduleField returns the schedule portion of a cron line — the first five

@@ -90,6 +90,20 @@ func New(level types.LogLevel, useColor bool) *Logger {
 	}
 }
 
+// SwapOutput replaces the console writer and returns the previous one, so
+// full-screen UI sessions can silence the console for their lifetime (log
+// files are unaffected) and restore it afterwards.
+func (l *Logger) SwapOutput(w io.Writer) io.Writer {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	prev := l.output
+	if w == nil {
+		w = os.Stdout
+	}
+	l.output = w
+	return prev
+}
+
 // SetOutput sets the logger output writer.
 func (l *Logger) SetOutput(w io.Writer) {
 	l.mu.Lock()

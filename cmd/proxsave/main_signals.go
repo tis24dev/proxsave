@@ -9,12 +9,10 @@ import (
 	"syscall"
 
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/tui"
 )
 
 func setupRunContext(bootstrap *logging.BootstrapLogger) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-	tui.SetAbortContext(ctx)
 
 	var closeStdinOnce sync.Once
 	sigChan := make(chan os.Signal, 1)

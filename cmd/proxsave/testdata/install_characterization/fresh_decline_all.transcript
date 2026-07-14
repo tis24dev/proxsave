@@ -1,0 +1,25 @@
+
+--- Secondary storage ---
+Configure an additional local path for redundant copies.
+IMPORTANT: Secondary path must be a filesystem-mounted directory (e.g., /mnt/nas-backup)
+Network shares must be mounted BEFORE running this backup tool.
+For direct network access without mounting, use cloud storage (rclone) instead.
+(You can change these settings later in backup.env)
+Enable secondary backup path? [y/N]: 
+--- Cloud storage (rclone) ---
+Remember to configure rclone manually before enabling cloud backups.
+Enable cloud backups? [y/N]: 
+--- Firewall rules ---
+Enable collection of firewall rules (e.g., iptables/nftables).
+(You can change this later in backup.env via BACKUP_FIREWALL_RULES)
+Backup firewall rules? [y/N]: 
+--- Telegram ---
+Enable Telegram notifications (centralized)? [y/N]: 
+--- Email ---
+Default email delivery uses the ProxSave Cloud Relay, with local sendmail as failover.
+ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.
+Enable email notifications? [y/N]: 
+--- Encryption ---
+Enable backup encryption? [y/N]: 
+--- Schedule ---
+Cron time for daily proxsave job (HH:MM) [02:00]: 
