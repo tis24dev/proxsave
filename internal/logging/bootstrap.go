@@ -5,14 +5,40 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/types"
+	"golang.org/x/term"
 )
+
+// bootstrapTimeFormat matches the main Logger's timeFormat (see logger.go) so
+// bootstrap console lines carry an identically shaped timestamp.
+const bootstrapTimeFormat = "2006-01-02 15:04:05"
+
+// consoleUseColor decides whether the bootstrap console prefix carries ANSI
+// color for the given target stream. The main Logger's color is config-driven
+// (USE_COLOR/DISABLE_COLORS), but the bootstrap runs before config is loaded,
+// so it falls back to the conventional rule: color only on a real terminal and
+// only when NO_COLOR is unset.
+func consoleUseColor(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	if _, noColor := os.LookupEnv("NO_COLOR"); noColor {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}
 
 type bootstrapEntry struct {
 	level   types.LogLevel
 	message string
-	raw     bool
+	// ts is the console timestamp captured when the entry was recorded, so
+	// ReplayConsoleSince can re-print with the same "[ts] LEVEL" prefix the live
+	// path used (the live print is suppressed during a UI handoff, so the record
+	// time is the authoritative timestamp for the event). Empty for raw entries.
+	ts  string
+	raw bool
 }
 
 // BootstrapLogger accumulates logs generated before the main logger is initialized,
@@ -23,6 +49,10 @@ type BootstrapLogger struct {
 	flushed  bool
 	minLevel types.LogLevel
 	mirror   *Logger
+
+	// consoleQuiet suppresses direct console prints while a full-screen UI
+	// session owns the terminal; mirror/record keep working.
+	consoleQuiet bool
 }
 
 // NewBootstrapLogger creates a new bootstrap logger with INFO level by default.
@@ -33,6 +63,68 @@ func NewBootstrapLogger() *BootstrapLogger {
 }
 
 // SetLevel updates the minimum level used during Flush.
+// SetConsoleQuiet suppresses direct console prints (mirror logging and the
+// recorded summary are unaffected). Used while a full-screen UI session owns
+// the terminal: raw writes would corrupt the alternate screen.
+func (b *BootstrapLogger) SetConsoleQuiet(quiet bool) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.consoleQuiet = quiet
+}
+
+func (b *BootstrapLogger) consoleQuietEnabled() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.consoleQuiet
+}
+
+// EntryCount returns the number of recorded entries (a mark for
+// ReplayConsoleSince).
+func (b *BootstrapLogger) EntryCount() int {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.entries)
+}
+
+// ReplayConsoleSince re-prints to stderr the warning/error entries recorded
+// after mark. Used when console prints were quieted for a UI handoff that
+// then failed before the UI could take over: the failure must not stay
+// invisible.
+func (b *BootstrapLogger) ReplayConsoleSince(mark int) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	entries := append([]bootstrapEntry(nil), b.entries...)
+	b.mu.Unlock()
+	if mark < 0 {
+		mark = 0
+	}
+	// LogLevel orders NONE(0) < CRITICAL < ERROR < WARNING < INFO < DEBUG:
+	// replay warning and worse only.
+	for i := mark; i < len(entries); i++ {
+		e := entries[i]
+		if !e.raw && e.level >= types.LogLevelCritical && e.level <= types.LogLevelWarning {
+			ts := e.ts
+			if ts == "" {
+				ts = time.Now().Format(bootstrapTimeFormat)
+			}
+			// Same "[ts] LEVEL   message" prefix as the live console path, so a
+			// replayed line is indistinguishable from a normally printed one.
+			fmt.Fprint(os.Stderr, FormatConsoleLogLine(ts, e.level, e.message, consoleUseColor(os.Stderr)))
+		}
+	}
+}
+
 func (b *BootstrapLogger) SetLevel(level types.LogLevel) {
 	if b == nil {
 		return
@@ -42,12 +134,26 @@ func (b *BootstrapLogger) SetLevel(level types.LogLevel) {
 	b.minLevel = level
 }
 
+// levelValue returns the configured minimum level (lock-safe), so a consumer can
+// create a mirror at the SAME verbosity the bootstrap console uses instead of
+// hardcoding one. Defaults to INFO for a nil receiver.
+func (b *BootstrapLogger) levelValue() types.LogLevel {
+	if b == nil {
+		return types.LogLevelInfo
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.minLevel
+}
+
 // Println records a raw line (used for banners/text without a header).
 func (b *BootstrapLogger) Println(message string) {
 	if b == nil {
 		return
 	}
-	fmt.Println(message)
+	if !b.consoleQuietEnabled() {
+		fmt.Println(message)
+	}
 	b.mirrorLog(types.LogLevelInfo, message)
 	b.recordRaw(message)
 }
@@ -68,7 +174,9 @@ func (b *BootstrapLogger) Printf(format string, args ...interface{}) {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
-	fmt.Println(msg)
+	if !b.consoleQuietEnabled() {
+		fmt.Println(msg)
+	}
 	b.mirrorLog(types.LogLevelInfo, msg)
 	b.recordRaw(msg)
 }
@@ -79,7 +187,13 @@ func (b *BootstrapLogger) Info(format string, args ...interface{}) {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
-	fmt.Println(msg)
+	if !b.consoleQuietEnabled() {
+		// Print the same "[timestamp] LEVEL   message" prefix as the main
+		// Logger; record() still keeps the RAW msg so Flush re-formats it once.
+		now := time.Now().Format(bootstrapTimeFormat)
+		line := FormatConsoleLogLine(now, types.LogLevelInfo, msg, consoleUseColor(os.Stdout))
+		_, _ = fmt.Fprint(os.Stdout, line)
+	}
 	b.mirrorLog(types.LogLevelInfo, msg)
 	b.record(types.LogLevelInfo, msg)
 }
@@ -89,12 +203,13 @@ func (b *BootstrapLogger) Warning(format string, args ...interface{}) {
 	if b == nil {
 		return
 	}
-	msg := fmt.Sprintf(format, args...)
-	if !strings.HasSuffix(msg, "\n") {
-		msg += "\n"
+	msg := strings.TrimSuffix(fmt.Sprintf(format, args...), "\n")
+	if !b.consoleQuietEnabled() {
+		// Same prefixed console format as the main Logger, to stderr.
+		now := time.Now().Format(bootstrapTimeFormat)
+		line := FormatConsoleLogLine(now, types.LogLevelWarning, msg, consoleUseColor(os.Stderr))
+		fmt.Fprint(os.Stderr, line)
 	}
-	fmt.Fprint(os.Stderr, msg)
-	msg = strings.TrimSuffix(msg, "\n")
 	b.mirrorLog(types.LogLevelWarning, msg)
 	b.record(types.LogLevelWarning, msg)
 }
@@ -104,12 +219,13 @@ func (b *BootstrapLogger) Error(format string, args ...interface{}) {
 	if b == nil {
 		return
 	}
-	msg := fmt.Sprintf(format, args...)
-	if !strings.HasSuffix(msg, "\n") {
-		msg += "\n"
+	msg := strings.TrimSuffix(fmt.Sprintf(format, args...), "\n")
+	if !b.consoleQuietEnabled() {
+		// Same prefixed console format as the main Logger, to stderr.
+		now := time.Now().Format(bootstrapTimeFormat)
+		line := FormatConsoleLogLine(now, types.LogLevelError, msg, consoleUseColor(os.Stderr))
+		fmt.Fprint(os.Stderr, line)
 	}
-	fmt.Fprint(os.Stderr, msg)
-	msg = strings.TrimSuffix(msg, "\n")
 	b.mirrorLog(types.LogLevelError, msg)
 	b.record(types.LogLevelError, msg)
 }
@@ -120,6 +236,7 @@ func (b *BootstrapLogger) record(level types.LogLevel, message string) {
 	b.entries = append(b.entries, bootstrapEntry{
 		level:   level,
 		message: message,
+		ts:      time.Now().Format(bootstrapTimeFormat),
 	})
 }
 

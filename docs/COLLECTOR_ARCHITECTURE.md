@@ -43,15 +43,14 @@ not be reintroduced as hidden orchestration layers.
 
 ## Recipes
 
-The collector runtime is built from explicit recipes in
-`internal/backup/collector_bricks.go`.
+The collector runtime is built from explicit recipes. The recipe machinery and the
+brick IDs live in `internal/backup/collector_bricks.go`, but the per-role builders are
+split across files:
 
-The important builders are:
-
-- `newPVERecipe()`
-- `newPBSRecipe()`
-- `newDualRecipe()`
-- `newSystemRecipe()`
+- `newPVERecipe()` (`collector_bricks_pve.go`)
+- `newPBSRecipe()` (`collector_bricks_pbs.go`)
+- `newSystemRecipe()` (`collector_bricks_system.go`)
+- `newDualRecipe()` (`collector_bricks.go`)
 
 ### Composition Rules
 
@@ -118,6 +117,12 @@ PBS access control, notifications, remotes, jobs, tape, datastore state, and
 PXAR metadata are no longer handled by macro-wrappers. They are exposed as
 independent recipe bricks.
 
+`CollectPBSConfigs()` actually runs **two** recipes in sequence: `newPBSRecipe()`, then
+`newPBSUserConfigRecipe()`. The second is a follow-up that reads the PBS user IDs from
+the `user_list.json` snapshot captured by the first recipe and aggregates the per-user
+API token config, so token export runs as a distinct pass seeded by the earlier
+user-list.
+
 ## Dual Branch
 
 `CollectDualConfigs()` runs `newDualRecipe()` and collects both product roles in
@@ -171,20 +176,18 @@ Examples:
 
 ## Manifest and Metadata
 
-Two layers are important:
+Two layers are important, and they carry different fields:
 
-- collector manifest (`manifest.json`) written in the temp tree
-- backup metadata/sidecars written by the orchestrator/archive flow
-
-Current persisted role fields include:
-
-- `ProxmoxType`
-- `ProxmoxTargets`
-- `PVEVersion`
-- `PBSVersion`
-
-These fields are used later by restore for backup-type detection and category
-filtering.
+- The **collector manifest** (`manifest.json`, written in the temp tree) is the
+  pre-optimization collection inventory. Among role fields it carries only
+  `ProxmoxType` (`proxmox_type`) and `ProxmoxTargets` (`proxmox_targets`), plus per-file
+  entries. It is an ExportOnly diagnostic (category `proxsave_info`) and is **not read
+  back by restore**; the authoritative record of the shipped payload is the archive
+  sidecar (`<archive>.sha256` / `<archive>.manifest.json`) computed after archiving.
+- The **backup metadata sidecar**, written by the orchestrator, carries the role and
+  version fields restore actually uses: `BACKUP_TYPE`, `BACKUP_TARGETS`, and
+  `PVE_VERSION` / `PBS_VERSION` (from the orchestrator's `PVEVersion` / `PBSVersion`
+  stats). These drive backup-type detection and category filtering at restore time.
 
 ## Restore Relationship
 
@@ -216,9 +219,13 @@ real collector flow.
 ## Related Files
 
 - `internal/backup/collector.go`
-- `internal/backup/collector_bricks.go`
+- `internal/backup/collector_bricks.go` (recipe machinery, brick IDs, `newDualRecipe()`)
+- `internal/backup/collector_bricks_pve.go` (`newPVERecipe()`)
+- `internal/backup/collector_bricks_pbs.go` (`newPBSRecipe()`, `newPBSUserConfigRecipe()`)
+- `internal/backup/collector_bricks_system.go` (`newSystemRecipe()`)
+- `internal/backup/collector_pbs.go` (PBS branch: runs both PBS recipes)
 - `internal/backup/collector_dual.go`
 - `internal/backup/collector_manifest.go`
 - `internal/backup/collector_storage_stack_common.go`
 - `internal/environment/detect.go`
-- `internal/orchestrator/compatibility.go`
+- `internal/orchestrator/compatibility.go` (restore compatibility + metadata sidecar versions)

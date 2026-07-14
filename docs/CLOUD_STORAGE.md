@@ -82,6 +82,35 @@ Proxsave uses a **3-tier storage system**:
    └─> Cloud: MAX_CLOUD_BACKUPS or GFS
 ```
 
+### Cloud layout (bundle vs raw)
+
+By default (`BUNDLE_ASSOCIATED_FILES=true`) each backup is packed into a single
+`<archive>.bundle.tar` before upload, so the cloud remote receives **one file per
+backup**. The bundle contains the raw archive plus its `.metadata` and `.sha256`
+sidecars (and `.metadata.sha256` when present); the `.manifest.json` is **not** inside
+the bundle.
+
+Set `BUNDLE_ASSOCIATED_FILES=false` to upload the **raw** archive plus separate
+sidecars: `<archive>`, `<archive>.sha256`, `<archive>.manifest.json`,
+`<archive>.metadata`, and `<archive>.metadata.sha256` (missing ones are skipped). In
+this raw layout the `<archive>.manifest.json` is the **authoritative metadata** that
+keeps the backup discoverable and verifiable during restore/decrypt cloud scans, so do
+not delete it (PS-BH-002).
+
+### How ProxSave invokes rclone
+
+ProxSave never runs a free-form rclone command line. Every call is built from a fixed
+**subcommand allowlist**: `copyto`, `delete`, `deletefile`, `hashsum`, `ls`, `lsf`,
+`lsl`, `mkdir`, `touch` (anything else is rejected). Uploads use **`copyto`** (not
+`copy`), with `--progress --stats 10s` and, when set, `--bwlimit` and `--transfers`.
+Connectivity checks use `lsf` (plus `mkdir`, or `touch` + `deletefile` for the write
+test), and verification uses `lsl`/`ls` plus `hashsum sha256`. Timeouts are enforced
+with Go context deadlines rather than rclone flags, so ProxSave does not add
+`--config`, `--timeout`, or `--contimeout`. `RCLONE_FLAGS`, if set, is appended to
+every one of these commands (see the Configuration Reference). The manual `rclone`
+commands shown later in this guide are for you to run by hand and are not subject to
+this allowlist.
+
 ---
 
 ## Prerequisites
@@ -378,7 +407,7 @@ RETENTION_YEARLY=3
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLOUD_ENABLED` | `false` | Enable cloud storage |
-| `CLOUD_REMOTE` | _(required)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported) |
+| `CLOUD_REMOTE` | _(empty)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported). Required only when cloud is enabled: if empty, cloud is **silently disabled** even with `CLOUD_ENABLED=true`. |
 | `CLOUD_REMOTE_PATH` | _(empty)_ | Folder path/prefix inside the remote (e.g., `/proxsave/backup`) |
 | `CLOUD_LOG_PATH` | _(empty)_ | Optional log folder (recommended: path-only on the same remote; use `otherremote:/path` only when using a different remote) |
 | `CLOUD_UPLOAD_MODE` | `parallel` | `parallel` or `sequential` |
@@ -388,7 +417,7 @@ RETENTION_YEARLY=3
 | `CLOUD_VERIFY_DOWNLOAD` | `false` | When the backend lacks native SHA256, download the object and hash it locally (uses bandwidth) |
 | `CLOUD_WRITE_HEALTHCHECK` | `false` | Use write test for connectivity check |
 | `RCLONE_TIMEOUT_CONNECTION` | `30` | Per-command timeout (seconds). Also used by restore/decrypt cloud scan (`rclone lsf` + per-backup manifest/metadata read). |
-| `RCLONE_TIMEOUT_OPERATION` | `300` | Operation timeout (seconds) |
+| `RCLONE_TIMEOUT_OPERATION` | `300` | Per-operation upload timeout (seconds). `0` means **unbounded** uploads (no per-op deadline). Management/query ops (list, delete, retention) are always bounded: they use this value when it is > 0, otherwise a built-in 300s floor. So raising it also raises the management ceiling, and a positive value below 300 also shortens management ops. |
 | `RCLONE_BANDWIDTH_LIMIT` | _(empty)_ | Upload rate limit (e.g., `5M` = 5 MB/s) |
 | `RCLONE_TRANSFERS` | `4` | Number of parallel transfers |
 | `RCLONE_RETRIES` | `3` | Retry attempts on failure |
@@ -396,12 +425,24 @@ RETENTION_YEARLY=3
 | `CLOUD_BATCH_SIZE` | `20` | Files per batch (deletion) |
 | `CLOUD_BATCH_PAUSE` | `1` | Seconds between batches |
 | `MAX_CLOUD_BACKUPS` | `30` | Simple retention (ignored if GFS enabled) |
+| `RCLONE_FLAGS` | _(empty)_ | Extra global rclone flags, split on whitespace and injected verbatim into **every** rclone command (right after the subcommand). No shell quoting or validation, so keep each flag a single token (e.g. `--fast-list --checkers 8`). |
+| `BUNDLE_ASSOCIATED_FILES` | `true` | Bundle the archive and its sidecars into one `.bundle.tar` before upload (the default cloud layout). Set `false` to upload the raw archive plus separate sidecars. See [Cloud layout](#cloud-layout-bundle-vs-raw). |
+
+**Legacy env-var aliases.** For backward compatibility ProxSave also accepts these
+older names (the value is read from whichever is set):
+
+- `CLOUD_ENABLED` accepts `ENABLE_CLOUD_BACKUP`
+- `CLOUD_REMOTE` accepts `RCLONE_REMOTE`
+- `MAX_CLOUD_BACKUPS` accepts `CLOUD_RETENTION_DAYS`
+- `RCLONE_TIMEOUT_CONNECTION` accepts `CLOUD_CONNECTIVITY_TIMEOUT`
+
+Prefer the canonical names on the left in new configs.
 
 For complete configuration reference, see: **[Configuration Guide](CONFIGURATION.md)**
 
 ### Recommended Remote Path Formats (Important)
 
-ProxSave supports both “new style” (path-only) and “legacy style” (`remote:path`) values, but using a consistent format avoids confusion.
+ProxSave supports both "new style" (path-only) and "legacy style" (`remote:path`) values, but using a consistent format avoids confusion.
 
 **Recommended:**
 - `CLOUD_REMOTE` should be just the **remote name** (no `:`), e.g. `nextcloud` or `GoogleDrive`.
@@ -440,10 +481,10 @@ In both cases ProxSave combines the base path and the optional prefix into a sin
 path inside the remote, and uses that consistently for:
 - **uploads** (cloud backend);
 - **cloud retention**;
-- **restore / decrypt menus** (entry “Cloud backups (rclone)”).
+- **restore / decrypt menus** (entry "Cloud backups (rclone)").
   - Restore/decrypt cloud scanning applies `RCLONE_TIMEOUT_CONNECTION` per rclone command (the timer resets on each `lsf`/manifest read).
 
-You can choose the style you prefer; they are equivalent from the tool’s point of view.
+You can choose the style you prefer; they are equivalent from the tool's point of view.
 
 **When to use CLOUD_REMOTE_PATH**:
 - Organizing multiple servers' backups: `server1/`, `server2/`
@@ -750,7 +791,7 @@ echo "Latest: $LATEST"
 rclone copy "gdrive:pbs-backups/$LATEST" /tmp/recovery/
 ```
 
-**Step 5: Extract Bundle** (if using bundle format)
+**Step 5: Extract Bundle** (the default layout ships one `.bundle.tar` per backup; skip this step only if you set `BUNDLE_ASSOCIATED_FILES=false`)
 
 ```bash
 cd /tmp/recovery

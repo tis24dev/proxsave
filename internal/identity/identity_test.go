@@ -900,7 +900,7 @@ func extractIdentityKeyField(t *testing.T, fileContent string) string {
 	return ""
 }
 
-// ============ Test funzioni MAC address ============
+// ============ MAC address function tests ============
 
 func TestIsLocallyAdministeredMAC(t *testing.T) {
 	tests := []struct {
@@ -1093,7 +1093,7 @@ func TestIsBetterMACCandidateEdgeCases(t *testing.T) {
 	}
 }
 
-// ============ Test rilevamento interfacce ============
+// ============ Interface detection tests ============
 
 func TestReadAddrAssignType(t *testing.T) {
 	origRead := readFirstLineFunc
@@ -1184,7 +1184,7 @@ func TestIsWirelessInterfaceByName(t *testing.T) {
 	}
 }
 
-// ============ Test generazione ID ============
+// ============ ID generation tests ============
 
 func TestBuildSystemData(t *testing.T) {
 	origRead := readFirstLineFunc
@@ -1353,7 +1353,7 @@ func TestParseKeyFieldPrefixes(t *testing.T) {
 	}
 }
 
-// ============ Test funzioni helper ============
+// ============ Helper function tests ============
 
 func TestReadMachineID(t *testing.T) {
 	origRead := readFirstLineFunc

@@ -12,6 +12,7 @@ below for the current operational and technical behavior.
 - [CLI_REFERENCE.md](CLI_REFERENCE.md): commands, flags, and workflow phases
 - [EXAMPLES.md](EXAMPLES.md): ready-to-use configuration examples
 - [RESTORE_GUIDE.md](RESTORE_GUIDE.md): full restore guide and category behavior
+- [NOTIFICATIONS.md](NOTIFICATIONS.md): notification channels and the centralized bot relay
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md): operational diagnostics and fixes
 
 ## Architecture & Developer Docs
@@ -23,10 +24,8 @@ below for the current operational and technical behavior.
 
 ## Supporting References
 
-- [BACKUP_ENV_MAPPING.md](BACKUP_ENV_MAPPING.md): legacy Bash to Go env mapping
 - [CLOUD_STORAGE.md](CLOUD_STORAGE.md): cloud/rclone behavior
 - [ENCRYPTION.md](ENCRYPTION.md): archive encryption and decrypt/restore flow
 - [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md): attestation verification
-- [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md): env-migration of an existing backup.env to Go config
 - [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md): PVE cluster disaster recovery
 - [RELEASE-PROCESS.md](RELEASE-PROCESS.md): release engineering notes

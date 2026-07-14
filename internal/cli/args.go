@@ -27,10 +27,17 @@ type Args struct {
 	Support           bool
 	SupportGitHubUser string
 	SupportIssueID    string
-	ShowVersion       bool
-	ShowHelp          bool
-	Upgrade           bool
-	UpgradeAutoYes    bool
+	// SupportMetaProvided is set by the dashboard when it has already collected consent +
+	// GitHub metadata graphically, so handleSupportIntro skips the stdin RunIntro (which
+	// would otherwise prompt over the graphical run). Not a CLI flag.
+	SupportMetaProvided bool
+	ShowVersion         bool
+	ShowHelp            bool
+	Upgrade             bool
+	UpgradeAutoYes      bool
+	// LocalFile modifies --upgrade: skip the release check + download and finalize
+	// using the binary already on disk (upgrade-beta.sh swaps it in first).
+	LocalFile         bool
 	ForceNewKey       bool
 	Decrypt           bool
 	Restore           bool
@@ -39,10 +46,12 @@ type Args struct {
 	UpgradeConfig     bool
 	UpgradeConfigDry  bool
 	UpgradeConfigJSON bool
-	EnvMigration      bool
-	EnvMigrationDry   bool
 	CleanupGuards     bool
-	LegacyEnvPath     string
+	Backup            bool
+	Daemon            bool
+	DaemonSetup       bool
+	DaemonRemove      bool
+	DaemonStatus      bool
 }
 
 var osExit = os.Exit
@@ -69,7 +78,7 @@ func Parse() *Args {
 		"Perform a dry run (shorthand)")
 
 	flag.BoolVar(&args.Support, "support", false,
-		"Run in support mode (force debug log level and send a support email with the attached log to github-support@tis24.it). Available for the standard backup run and --restore")
+		"Run in support mode (force debug log level and send a support email with the attached log to the maintainer). Available for the standard backup run and --restore")
 	flag.BoolVar(&args.ForceCLI, "cli", false,
 		"Use CLI prompts instead of TUI for interactive workflows (works with --install/--new-install/--newkey/--decrypt/--restore)")
 
@@ -92,20 +101,26 @@ func Parse() *Args {
 		"Run the decrypt workflow (converts encrypted bundles into plaintext bundles)")
 	flag.BoolVar(&args.Restore, "restore", false,
 		"Run the restore workflow (select bundle, optionally decrypt, apply to system)")
+	flag.BoolVar(&args.Backup, "backup", false,
+		"Run the backup now (skips the interactive dashboard; this is the default behavior when proxsave runs non-interactively, e.g. from cron)")
+	flag.BoolVar(&args.Daemon, "daemon", false,
+		"Run as a resident daemon: schedule + supervise backups and report liveness/outcome to healthchecks (installed as proxsave-daemon.service)")
+	flag.BoolVar(&args.DaemonSetup, "daemon-setup", false,
+		"Switch this install to daemon mode: install+enable proxsave-daemon.service and remove the cron entry")
+	flag.BoolVar(&args.DaemonRemove, "daemon-remove", false,
+		"Remove daemon mode: disable the service, restore the cron entry, and prevent future upgrades from reinstalling the daemon")
+	flag.BoolVar(&args.DaemonStatus, "daemon-status", false,
+		"Print the resident daemon's status (scheduler mode, service state, running version, binary alignment) and exit")
 	flag.BoolVar(&args.Install, "install", false,
 		"Run the interactive installer (generate/configure backup.env)")
 	flag.BoolVar(&args.NewInstall, "new-install", false,
 		"Reset the installation directory (preserving build/env/identity) and launch the interactive installer")
 	flag.BoolVar(&args.Upgrade, "upgrade", false,
 		"Download and install the latest ProxSave binary (also upgrades backup.env by adding missing keys from the new template). Append 'y' to auto-confirm (e.g., --upgrade y)")
-	flag.BoolVar(&args.EnvMigration, "env-migration", false,
-		"Run the installer and migrate a legacy Bash backup.env to the Go template")
-	flag.BoolVar(&args.EnvMigrationDry, "env-migration-dry-run", false,
-		"Preview the installer + legacy env migration without writing files")
+	flag.BoolVar(&args.LocalFile, "localfile", false,
+		"With --upgrade: skip the release check and download, and finalize using the binary already on disk (upgrade backup.env, refresh docs/symlinks, install/restart the daemon, fix permissions). Used by upgrade-beta.sh after it swaps in a binary")
 	flag.BoolVar(&args.CleanupGuards, "cleanup-guards", false,
 		"Cleanup ProxSave guard bind mounts and directories (/var/lib/proxsave/guards). Use with --dry-run to preview")
-	flag.StringVar(&args.LegacyEnvPath, "old-env", "",
-		"Path to the legacy Bash backup.env used during --env-migration")
 
 	flag.BoolVar(&args.UpgradeConfig, "upgrade-config", false,
 		"Upgrade configuration file using the embedded template (adds missing keys, preserves existing and custom keys)")

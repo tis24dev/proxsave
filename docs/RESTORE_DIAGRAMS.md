@@ -10,7 +10,7 @@ textual restore rules.
 - [Complete Restore Workflow](#complete-restore-workflow)
 - [Category Decision Tree](#category-decision-tree)
 - [Service Management Flow](#service-management-flow)
-- [Two-Pass Extraction](#two-pass-extraction)
+- [Three-Tier Extraction](#three-tier-extraction)
 - [Cluster Database Restore Sequence](#cluster-database-restore-sequence)
 - [Error Handling Flow](#error-handling-flow)
 - [PBS Datastore Mount Guards](#pbs-datastore-mount-guards)
@@ -105,7 +105,7 @@ flowchart TD
     SystemFull -->|PVE| PVEFull[PVE Categories:<br/>- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- pve_notifications<br/>- pve_access_control<br/>- pve_firewall<br/>- pve_ha<br/>- pve_sdn<br/>- corosync<br/>- ceph<br/>+ Common]
     SystemFull -->|PBS| PBSFull[PBS Categories:<br/>- pbs_host<br/>- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- pbs_notifications<br/>- pbs_access_control<br/>- pbs_tape<br/>+ Common]
     SystemFull -->|DUAL| DualFull[Dual Categories:<br/>- PVE categories<br/>- PBS categories<br/>- Common categories]
-    SystemFull -->|Unknown| CommonFull[Common Only:<br/>- filesystem<br/>- storage_stack<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- user_data<br/>- zfs<br/>- proxsave_info]
+    SystemFull -->|Unknown| CommonFull[Common Only:<br/>- filesystem<br/>- storage_stack<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- accounts<br/>- user_data<br/>- zfs<br/>- proxsave_info]
 
     Storage --> SystemStorage{System Type?}
     SystemStorage -->|PVE| PVEStorage[- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- filesystem<br/>- storage_stack<br/>- zfs]
@@ -214,58 +214,55 @@ sequenceDiagram
 
 ---
 
-## Two-Pass Extraction
+## Three-Tier Extraction
+
+`splitRestoreCategories` divides the selected categories into three tiers. Normal
+categories go straight to `/`, export-only categories go to a read-only export
+directory, and staged (sensitive) categories are extracted strictly into a stage
+directory and then applied (Phase 10). If any staged entry fails, the staged apply is
+skipped and the live system is left untouched (BH-002).
 
 ```mermaid
 flowchart LR
     subgraph Input
-        Archive[backup.tar.gz]
+        Archive[backup archive]
     end
 
-    subgraph "Pass 1: Normal Categories"
-        Open1[Open Archive]
-        Decompress1[Decompress]
-        Scan1[Scan TAR Entries]
-        Filter1{Matches Normal<br/>Category?}
+    subgraph "Tier 1: Normal categories"
+        Filter1{Matches a<br/>Normal category?}
         Extract1[Extract to /]
-        Skip1[Skip Entry]
     end
 
-    subgraph "Pass 2: Export-Only Categories"
-        Open2[Open Archive]
-        Decompress2[Decompress]
-        Scan2[Scan TAR Entries]
-        Filter2{Matches Export<br/>Category?}
-        Extract2[Extract to<br/>Export Dir]
-        Skip2[Skip Entry]
+    subgraph "Tier 2: Export-only categories"
+        Filter2{Matches an<br/>Export-only category?}
+        Extract2[Extract to<br/>Export Dir, read-only]
+    end
+
+    subgraph "Tier 3: Staged (sensitive) categories"
+        Filter3{Matches a<br/>Staged category?}
+        Stage3[Extract to<br/>stage dir, strict]
+        Apply3[Staged apply<br/>PBS/PVE/SDN/ACL/accounts/notify]
     end
 
     subgraph Output
         SystemRoot[System Root /<br/>- /var/lib/pve-cluster/<br/>- /etc/network/<br/>- etc.]
-        ExportDir[Export Directory<br/>BASE_DIR/proxmox-config-export-TIMESTAMP/<br/>- etc/pve/storage.cfg<br/>- etc/pve/datacenter.cfg<br/>- etc.]
+        ExportDir[Export Directory<br/>BASE_DIR/proxmox-config-export-TIMESTAMP/<br/>- etc/pve/storage.cfg<br/>- etc.]
+        Live[Live config applied<br/>atomically, or skipped on<br/>any staged failure - BH-002]
     end
 
-    Archive --> Open1
-    Open1 --> Decompress1
-    Decompress1 --> Scan1
-    Scan1 --> Filter1
-    Filter1 -->|Yes| Extract1
-    Filter1 -->|No| Skip1
-    Skip1 --> Scan1
-    Extract1 --> SystemRoot
+    Archive --> Filter1
+    Filter1 -->|Yes| Extract1 --> SystemRoot
 
-    Archive --> Open2
-    Open2 --> Decompress2
-    Decompress2 --> Scan2
-    Scan2 --> Filter2
-    Filter2 -->|Yes| Extract2
-    Filter2 -->|No| Skip2
-    Skip2 --> Scan2
-    Extract2 --> ExportDir
+    Archive --> Filter2
+    Filter2 -->|Yes| Extract2 --> ExportDir
+
+    Archive --> Filter3
+    Filter3 -->|Yes| Stage3 --> Apply3 --> Live
 
     style Archive fill:#87CEEB
     style SystemRoot fill:#90EE90
     style ExportDir fill:#FFD700
+    style Live fill:#FFA500
 ```
 
 ---
@@ -539,21 +536,16 @@ flowchart TD
     ReadManifest --> CheckEnc{EncryptionMode?}
 
     CheckEnc -->|"none"| Plain[Use Archive Directly]
-    CheckEnc -->|"age"| ShowOptions[Show Decryption Options]
+    CheckEnc -->|"age"| GetSecret[Prompt: AGE key or passphrase<br/>single field, 0 = exit]
 
-    ShowOptions --> UserChoice{User Selects?}
-    UserChoice -->|1. Passphrase| GetPass[Get AGE Passphrase]
-    UserChoice -->|2. Identity| GetKey[Get AGE Identity File]
-    UserChoice -->|0. Cancel| Abort([Abort])
-
-    GetPass --> PrepareTemp[Prepare /tmp/proxsave/proxmox-decrypt-XXXX/]
-    GetKey --> PrepareTemp
+    GetSecret -->|"0 = exit"| Abort([Abort])
+    GetSecret --> PrepareTemp[Prepare /tmp/proxsave/proxmox-decrypt-XXXX/]
 
     PrepareTemp --> Decrypt[Run AGE Decrypt]
     Decrypt --> DecryptResult{Success?}
 
     DecryptResult -->|No| RetryPrompt{Retry?}
-    RetryPrompt -->|Yes| ShowOptions
+    RetryPrompt -->|Yes| GetSecret
     RetryPrompt -->|No| Abort
 
     DecryptResult -->|Yes| ChecksumCheck{Checksum Available?}
@@ -696,8 +688,8 @@ flowchart TD
 ## PBS Datastore Mount Guards
 
 When restoring PBS configuration, a datastore's backing mount may be **offline**
-(not yet mounted). Without protection, restoring the datastore layout — or PBS
-starting afterwards — would write into the empty mount-point directory on the
+(not yet mounted). Without protection, restoring the datastore layout, or PBS
+starting afterwards, would write into the empty mount-point directory on the
 **root filesystem**, filling `/` and creating a "ghost" datastore. The mount
 guard blocks that path until the real storage is back.
 
@@ -722,7 +714,7 @@ flowchart TD
 ```
 
 **Auto-restore (shadowing)**: when the real datastore mount comes back online it
-stacks **on top of** the guard (overlay), so the datastore is usable again — but
+stacks **on top of** the guard (overlay), so the datastore is usable again, but
 the guard is only **shadowed**, not removed.
 
 **Warn-only fallback**: if the read-only bind mount cannot be created, ProxSave logs

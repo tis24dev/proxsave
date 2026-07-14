@@ -1479,9 +1479,9 @@ func (c *CloudStorage) isBackupEntry(filename string, snapshot map[string]struct
 		return false
 	}
 
-	// Skip associated files
-	if strings.HasSuffix(filename, ".sha256") ||
-		strings.HasSuffix(filename, ".metadata") {
+	// Skip associated sidecars (checksum/metadata/manifest); shared with the
+	// local/secondary List filters and the delete accounting via isBackupSidecar.
+	if isBackupSidecar(filename) {
 		return false
 	}
 

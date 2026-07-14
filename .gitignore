@@ -1,5 +1,8 @@
 # Local analyses, diagnostics & bug-hunt reports — not for version control
 /diagnostics/
+/.claude/
+/AGENTS.md
+/CLAUDE.md
 
 # Build artifacts — compiled binary (root build) and Makefile output dir
 /proxsave

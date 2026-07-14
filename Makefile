@@ -28,7 +28,7 @@ build:
 	); \
 	COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo dev); \
 	BUILD_TIME=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
-	go build -ldflags="-X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME'" -o build/proxsave ./cmd/proxsave
+	go build -ldflags="-X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/support.supportEmail=$$EMAIL_SUPPORT'" -o build/proxsave ./cmd/proxsave
 
 # Build ottimizzato per release
 build-release:
@@ -54,7 +54,7 @@ build-release:
 	); \
 	COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo dev); \
 	BUILD_TIME=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
-	go build -ldflags="-s -w -X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME'" -o build/proxsave ./cmd/proxsave
+	go build -ldflags="-s -w -X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/support.supportEmail=$$EMAIL_SUPPORT'" -o build/proxsave ./cmd/proxsave
 
 # Test
 test:
@@ -85,9 +85,26 @@ coverage-check:
 		fi
 
 # Lint
-lint:
+lint: check-no-tview check-serverbot-leaf
 	go vet ./...
 	@command -v golint >/dev/null 2>&1 && golint ./... || echo "golint not installed"
+
+# Guard: the legacy tview/tcell stack was excised (Charm UI replaced it);
+# any reappearance is a regression.
+check-no-tview:
+	@if grep -rn "rivo/tview\|gdamore/tcell" --include="*.go" cmd internal pkg 2>/dev/null; then \
+		echo "ERROR: legacy tview/tcell reference found (the Charm UI replaced them)"; \
+		exit 1; \
+	fi
+
+# Guard: internal/serverbot must stay a transport leaf (only logging/version/stdlib).
+# Importing health/notify/orchestrator/config/identity would create an import cycle
+# and pull endpoint vocabulary back into the shared transport.
+check-serverbot-leaf:
+	@if grep -rEn "tis24dev/proxsave/internal/(health|notify|orchestrator|config|identity)" internal/serverbot/ 2>/dev/null; then \
+		echo "ERROR: internal/serverbot must not import health/notify/orchestrator/config/identity (leaf transport)"; \
+		exit 1; \
+	fi
 
 # Format code
 fmt:

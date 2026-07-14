@@ -24,16 +24,19 @@ PVE+PBS backups using the interactive restore workflow.
 ### Basic Restore
 
 ```bash
-# Run the interactive restore workflow
+# Run the interactive restore workflow (launches the TUI by default)
 proxsave --restore
 
-# Follow the prompts:
+# Add --cli to force the classic text prompts instead of the TUI
+proxsave --restore --cli
+
+# The steps, either way:
 # 1. Select backup source location
 # 2. Choose specific backup from list
-# 3. Enter decryption passphrase (if encrypted)
+# 3. Enter the AGE key or passphrase in a single field (if encrypted)
 # 4. Select restore mode
 # 5. Review restore plan
-# 6. Type "RESTORE" to confirm
+# 6. Confirm twice: type RESTORE (or press the RESTORE button), then confirm the overwrite
 # 7. Wait for completion
 # 8. Verify services and cluster status
 ```
@@ -58,6 +61,18 @@ The restore documentation is split on purpose:
 - [RESTORE_GUIDE.md](RESTORE_GUIDE.md): operator workflow, modes, warnings, and practical examples
 - [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md): implementation details, detection logic, and internal architecture
 - [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md): visual companion for the main workflow and decision paths
+
+### Interactive UI: TUI by default, `--cli` for text prompts
+
+`proxsave --restore` and `proxsave --decrypt` launch a **Charm TUI** by default: a
+selector for the restore mode, a multi-select list for CUSTOM categories, and labeled
+confirmation buttons. Add **`--cli`** to force the classic text prompts and numbered
+menus instead (`--cli` works with `--install`, `--new-install`, `--newkey`,
+`--decrypt`, and `--restore`). Both paths run the same restore engine and ask the same questions.
+
+The numbered-menu and text transcripts throughout this guide show the `--cli`
+experience because it is the clearest to read on the page; in the default TUI the same
+steps appear as a selector, a multi-select, and buttons.
 
 ### Key Features
 
@@ -117,7 +132,11 @@ ProxSave warns because role-specific compatibility cannot be verified.
 
 ## Category System
 
-Restore operations are organized into **20–22 categories** (PBS = 20, PVE = 22) that group related configuration files.
+Restore operations are organized into categories that group related configuration
+files. The code defines **32 categories** in total: **11 PVE**, **9 PBS**, and **12
+Common**. A host only sees the categories relevant to it: a **PVE host sees 23** (11
+PVE + 12 Common) and a **PBS host sees 21** (9 PBS + 12 Common); a `dual` host sees all
+32.
 
 ### Category Handling Types
 
@@ -163,7 +182,7 @@ API apply is automatic for supported PBS staged categories; ProxSave may fall ba
 | `pbs_access_control` | PBS Access Control | **Staged** access control + secrets restored 1:1 (root@pam safety rail) | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json`<br>`./var/lib/proxsave-info/commands/pbs/user_list.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ldap.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ad.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_openid.json`<br>`./var/lib/proxsave-info/commands/pbs/acl_list.json` |
 | `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`<br>`./etc/proxmox-backup/tape-job.cfg`<br>`./etc/proxmox-backup/media-pool.cfg`<br>`./etc/proxmox-backup/tape-encryption-keys.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_drives.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_changers.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_pools.json` |
 
-### Common Categories (11 categories)
+### Common Categories (12 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
@@ -175,6 +194,7 @@ API apply is automatic for supported PBS staged categories; ProxSave may fall ba
 | `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
 | `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |
 | `services` | System Services | Systemd service configs and related system settings | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/`<br>`./etc/apt/`<br>`./etc/logrotate.d/`<br>`./etc/timezone`<br>`./etc/sysctl.conf`<br>`./etc/sysctl.d/`<br>`./etc/modprobe.d/`<br>`./etc/modules`<br>`./etc/iptables/`<br>`./etc/nftables.conf`<br>`./etc/nftables.d/` |
+| `accounts` | System Accounts & Auth (WARNING) | Local system accounts and sudo policy, applied with a **safe merge** that preserves the current host root and system accounts (does not overwrite the auth database) | `./etc/passwd`<br>`./etc/group`<br>`./etc/shadow`<br>`./etc/gshadow`<br>`./etc/sudoers` |
 | `user_data` | User Data (Home Directories) | Root and user home directories (/root and /home) | `./root/`<br>`./home/` |
 | `zfs` | ZFS Configuration | ZFS pool cache and configs | `./etc/zfs/`<br>`./etc/hostid` |
 | `proxsave_info` | ProxSave Diagnostics (Export Only) | **Export-only** ProxSave command outputs and inventory reports (never written to system) | `./var/lib/proxsave-info/`<br>`./manifest.json` |
@@ -227,7 +247,12 @@ ProxSave restores `pbs_access_control` by applying staged files to `/etc/proxmox
 
 ## Restore Modes
 
-Four predefined modes provide common restoration scenarios, plus custom selection for advanced users.
+Four predefined modes provide common restoration scenarios, plus custom selection for advanced users. The mode ids are `full`, `storage`, `base`, and `custom`.
+
+> **Note on export-only categories.** FULL keeps the three export-only categories
+> (`pve_config_export`, `pbs_config`, `proxsave_info`) and writes them to the export
+> directory. The **STORAGE** and **SYSTEM BASE** presets strip export-only categories,
+> so an export-only id listed in a preset is silently dropped and never restored.
 
 ### 1. FULL Restore
 
@@ -487,16 +512,13 @@ Available backups:
 
 #### Phase 2: Decryption
 
-**For AGE-encrypted backups**:
+**For AGE-encrypted backups**, ProxSave asks for the secret in a **single field**
+that accepts either an AGE key or a passphrase (there is no separate "passphrase vs
+identity file" sub-menu). In the TUI this is a masked input labeled `Decrypt key`; the
+`--cli` prompt is:
+
 ```
-Backup is encrypted with AGE.
-
-Decryption options:
-  [1] Use AGE passphrase
-  [2] Use AGE identity file (key)
-  [0] Cancel
-
-Enter AGE passphrase: ********
+Enter decryption key or passphrase for pve01-backup-20251120-143052.tar.xz (0 = exit): ********
 Decrypting... (this may take several minutes)
 Decryption complete.
 Verifying SHA256 checksum...
@@ -612,8 +634,21 @@ Categories to restore:
   • Services may need to be restarted after restoration
   • PVE cluster services will be stopped during restore
 
-Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort:
+Type 'RESTORE' to proceed or 'cancel' to abort:
 ```
+
+Confirmation is **two stages**. After you type `RESTORE` (or, in the TUI, press the
+`RESTORE` button), ProxSave asks a second, explicit overwrite question before touching
+anything:
+
+```
+This operation will overwrite existing configuration files on this system.
+
+Proceed with overwrite? (yes/no):
+```
+
+In the TUI this second gate is a danger-styled confirm with `Overwrite and restore` /
+`Cancel` buttons defaulting to Cancel. Only after both stages does extraction begin.
 
 #### Phase 8: Safety Backup
 
@@ -872,7 +907,7 @@ Cluster backup detected. Choose how to restore the cluster database:
 **Post-restore actions (SAFE mode)**:
 After export, the workflow offers interactive options to apply configurations via `pvesh`:
 1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and applies them via `pvesh set /nodes/<node>/qemu/<vmid>/config`
-   - If the target node hostname differs from the hostname stored in the backup (common after hardware migration / reinstall), ProxSave detects the mismatch and prompts you to select the exported node directory to import from (instead of silently reporting “No VM/CT configs found”).
+   - If the target node hostname differs from the hostname stored in the backup (common after hardware migration / reinstall), ProxSave detects the mismatch and prompts you to select the exported node directory to import from (instead of silently reporting "No VM/CT configs found").
 2. **Storage configuration**: Applies `storage.cfg` entries via `pvesh set /cluster/storage/<id>`
 3. **Datacenter configuration**: Applies `datacenter.cfg` via `pvesh set /cluster/config`
 
@@ -1837,12 +1872,12 @@ Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort: _
 - Prevents accidental restoration
 
 **Prompt timeouts (auto-skip)**:
-- Some interactive prompts include a visible countdown (currently **90 seconds**) to avoid getting “stuck” waiting for input in remote/automated scenarios.
+- Some interactive prompts include a visible countdown (currently **90 seconds**) to avoid getting "stuck" waiting for input in remote/automated scenarios.
 - If the user does not answer before the countdown reaches 0, ProxSave proceeds with a **safe default** (no destructive action) and logs the decision.
 
 Current auto-skip prompts:
 - **Smart `/etc/fstab` merge**: defaults to **Skip** unless the backup root (and swap, when comparable) match the current system; when they match, the default is **Yes**.
-- **Live network apply** (“Apply restored network configuration now…”): defaults to **No** (stays staged/on-disk only; no live reload).
+- **Live network apply** ("Apply restored network configuration now..."): defaults to **No** (stays staged/on-disk only; no live reload).
 
 ### 3. Compatibility Validation
 
@@ -1864,12 +1899,12 @@ If the **network** category is restored, ProxSave can optionally apply the
 new network configuration immediately using a **transactional rollback timer**.
 
 **Apply prompt auto-skip**:
-- The “apply now” prompt includes a **90-second** countdown; if you do not answer in time, ProxSave defaults to **No** and skips the live reload.
+- The "apply now" prompt includes a **90-second** countdown; if you do not answer in time, ProxSave defaults to **No** and skips the live reload.
 
 **Important (console recommended)**:
 - Run the live network apply/commit step from the **local console** (physical console, IPMI/iDRAC/iLO, Proxmox console, or hypervisor console), not from SSH.
 - If the restored network config changes the management IP or routes, your SSH session will drop and you may be unable to type `COMMIT`.
-- In that case, ProxSave will treat the lack of `COMMIT` as “not confirmed” and will restore the previous network settings (rollback).
+- In that case, ProxSave will treat the lack of `COMMIT` as "not confirmed" and will restore the previous network settings (rollback).
 
 **How it works**:
 - On live restores (writing to `/`), ProxSave **stages** network files first under `/tmp/proxsave/restore-stage-*` and does **not** overwrite `/etc/network/*` during archive extraction.
@@ -1877,7 +1912,7 @@ new network configuration immediately using a **transactional rollback timer**.
 - If rollback backup creation fails (or ProxSave is not running as root), ProxSave keeps network files staged and avoids writing to `/etc`.
 - When you choose to apply live, ProxSave (re)validates and reloads networking inside the rollback timer window.
 - ProxSave arms a local rollback job **before** applying changes
-- Rollback restores **only network-related files** using a dedicated archive under `/tmp/proxsave/network_rollback_backup_*` (so it won’t undo other restored categories)
+- Rollback restores **only network-related files** using a dedicated archive under `/tmp/proxsave/network_rollback_backup_*` (so it won't undo other restored categories)
 - Rollback also prunes network config files that were **created after** the backup (e.g. extra files under `/etc/network/interfaces.d/`), so rollback returns to the exact pre-restore state
 - The user has **180 seconds** to type `COMMIT`
 - If `COMMIT` is not received, ProxSave triggers the rollback and restores the pre-restore network configuration
@@ -1930,7 +1965,7 @@ Notes:
 
 The `NETWORK ROLLBACK` block is printed just before the standard ProxSave footer (the footer color reflects the exit status, e.g. magenta on Ctrl+C).
 
-Example 1 — **ARMED** (rollback pending, countdown shown for a few seconds):
+Example 1, **ARMED** (rollback pending, countdown shown for a few seconds):
 ```text
 ===========================================
 NETWORK ROLLBACK
@@ -1950,7 +1985,7 @@ ProxSave - Go - <build signature>
 ===========================================
 ```
 
-Example 2 — **EXECUTED** (rollback already ran, no countdown):
+Example 2, **EXECUTED** (rollback already ran, no countdown):
 ```text
 ===========================================
 NETWORK ROLLBACK
@@ -1964,7 +1999,7 @@ Rollback executed: reconnect using the pre-apply IP: 192.168.1.100
 ===========================================
 ```
 
-Example 3 — **DISARMED/CLEARED** (rollback will not run, applied config remains active):
+Example 3, **DISARMED/CLEARED** (rollback will not run, applied config remains active):
 ```text
 ===========================================
 NETWORK ROLLBACK
@@ -2016,14 +2051,14 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 - Optional cleanup: `proxsave --cleanup-guards` (use `--dry-run` to preview). See **Clearing mount guards after the storage is back** below.
 
 **PVE Storage Mount Guards**:
-- When restoring PVE storage definitions (from `storage.cfg`), ProxSave applies the same “restore even if offline” strategy for mount-backed storage:
+- When restoring PVE storage definitions (from `storage.cfg`), ProxSave applies the same "restore even if offline" strategy for mount-backed storage:
   - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use mountpoints under `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary read-only bind-mount guard (or, if the bind mount cannot be created, logs a warning and proceeds unguarded).
   - `dir` storages are guarded only when their `path` lives under a mountpoint restored via `/etc/fstab` (to avoid guarding local root filesystem paths).
 - Purpose: prevent PVE from writing into `/mnt/pve/...` (or other mount roots) when the backing storage is offline at restore time.
 - Optional cleanup: `proxsave --cleanup-guards` (use `--dry-run` to preview). See **Clearing mount guards after the storage is back** below.
 
 **Clearing mount guards after the storage is back**:
-- Bringing the storage online again is enough to *use* it: a real mount stacks on top of a bind-mount guard automatically. The guard is not deleted, only shadowed — a reboot or `--cleanup-guards` removes the bind-mount leftover. A **legacy** `chattr +i` flag (set by older versions when a bind mount failed) leaves the directory immutable across reboots until it is cleared.
+- Bringing the storage online again is enough to *use* it: a real mount stacks on top of a bind-mount guard automatically. The guard is not deleted, only shadowed; a reboot or `--cleanup-guards` removes the bind-mount leftover. A **legacy** `chattr +i` flag (set by older versions when a bind mount failed) leaves the directory immutable across reboots until it is cleared.
 - `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode); it prints a summary of what was cleared vs left pending. The guard directory is kept until nothing is pending.
 - To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
 - If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left to clear: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
