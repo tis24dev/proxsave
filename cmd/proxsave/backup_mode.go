@@ -14,11 +14,13 @@ import (
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/support"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
 type backupModeOptions struct {
 	ctx              context.Context
+	bootstrap        *logging.BootstrapLogger
 	cfg              *config.Config
 	logger           *logging.Logger
 	envInfo          *environment.EnvironmentInfo
@@ -30,6 +32,13 @@ type backupModeOptions struct {
 	heapProfilePath  string
 	serverIDValue    string
 	serverMACValue   string
+	// support arms support mode for this run: when set, the STREAMED path sends the
+	// maintainer email inside the viewport (see runBackupStreamed) instead of after
+	// the screen closes. supportMeta carries the GitHub nickname + issue the
+	// dashboard collected. The plain (CLI) path leaves these zero and relies on the
+	// deferred sender.
+	support     bool
+	supportMeta support.Meta
 }
 
 type backupModeResult struct {
@@ -37,9 +46,35 @@ type backupModeResult struct {
 	earlyErrorState *orchestrator.EarlyErrorState
 	supportStats    *orchestrator.BackupStats
 	exitCode        int
+	// supportEmailSent is set once the streamed run has already sent the support
+	// email (inside the viewport), so the deferred sender skips it - no double send.
+	supportEmailSent bool
 }
 
+// runBackupMode runs the backup, then (for a STANDALONE run) hands the outcome to the resident
+// daemon to ping. The steps live in runBackupModeSteps; this wrapper adds the handoff so every
+// return path of the backup is covered by exactly one handoff decision (which itself no-ops on the
+// disabled/concurrency-skip/supervised-child/daemon-down paths).
 func runBackupMode(opts backupModeOptions) backupModeResult {
+	// A pending dashboard handoff means the interactive dashboard kept its
+	// graphical session open for this backup: adopt it and stream the run
+	// in-graphics (runBackupStreamed). Every non-dashboard path (CLI, cron,
+	// daemon-supervised child) has no stashed session, so it runs the plain
+	// steps unchanged.
+	//
+	// The manual-backup daemon handoff runs for both, but the streamed path runs
+	// it ITSELF, inside the viewport capture (runBackupStreamed), so its debug
+	// trace streams into the panel instead of printing to the plain scrollback
+	// after the session closes. Only the plain path hands off here.
+	if dashboardHandoffPending() {
+		return runBackupStreamed(opts)
+	}
+	res := runBackupModeSteps(opts)
+	maybeHandoffManualBackup(opts, res)
+	return res
+}
+
+func runBackupModeSteps(opts backupModeOptions) backupModeResult {
 	orch, earlyErrorState, exitCode := initializeBackupOrchestrator(opts)
 	if earlyErrorState != nil {
 		return finishBackupMode(orch, earlyErrorState, nil, exitCode)
@@ -63,7 +98,7 @@ func runBackupMode(opts backupModeOptions) backupModeResult {
 		return finishBackupMode(orch, earlyErrorState, nil, exitCode)
 	}
 
-	logBackupRuntimeSummary(opts.cfg, storageState)
+	logBackupRuntimeSummary(opts.cfg, opts.logger, storageState)
 
 	stats, earlyErrorState, exitCode := runConfiguredBackup(opts, orch)
 	return finishBackupMode(orch, earlyErrorState, stats, exitCode)

@@ -28,6 +28,7 @@ func TestBuildBackupCandidatePathsNormalizesBundleInput(t *testing.T) {
 				"backup.tar.zst.bundle.tar",
 				"backup.tar.zst",
 				"backup.tar.zst.sha256",
+				"backup.tar.zst.manifest.json",
 				"backup.tar.zst.metadata",
 				"backup.tar.zst.metadata.sha256",
 			},
@@ -39,6 +40,7 @@ func TestBuildBackupCandidatePathsNormalizesBundleInput(t *testing.T) {
 			want: []string{
 				"backup.tar.zst",
 				"backup.tar.zst.sha256",
+				"backup.tar.zst.manifest.json",
 				"backup.tar.zst.metadata",
 				"backup.tar.zst.metadata.sha256",
 			},

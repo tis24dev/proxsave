@@ -2,11 +2,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
@@ -25,6 +27,7 @@ func initializeBackupNotifications(opts backupModeOptions, orch *orchestrator.Or
 	initializeTelegramNotification(opts, orch)
 	initializeGotifyNotification(opts, orch)
 	initializeWebhookNotification(opts, orch)
+	initializeHealthcheckSection(opts, orch)
 	notifyDone(nil)
 
 	fmt.Println()
@@ -86,6 +89,125 @@ func initializeEmailNotification(opts backupModeOptions, orch *orchestrator.Orch
 	logging.Info("✓ Email initialized (method: %s)", cfg.EmailDeliveryMethod)
 }
 
+// initializeHealthcheckSection verifies the healthchecks config at run start and
+// registers the Phase-7 section, EXACTLY like the other notification channels: it prints
+// a real init line (SKIP when disabled, a WARNING that disables the section on a config
+// problem, or a "✓ initialized" when usable) instead of being silent. This is a
+// CONFIG-only check (no network); the REAL transmission state is reported later by the
+// Phase-7 section from the daemon status file. Registering only when usable keeps a
+// disabled/broken section out of the dispatch, and the Phase-7 entries loop renders the
+// matching "disabled" / "enabled but not initialized" line just as it does for the others.
+func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orchestrator) {
+	cfg := opts.cfg
+	logger := opts.logger
+	if cfg == nil || !cfg.HealthcheckEnabled {
+		logging.DebugStep(logger, "notifications init", "healthchecks disabled")
+		logging.Skip("Healthchecks: disabled")
+		return
+	}
+	// Verify config, then that the monitoring daemon (the ONLY pinger) is actually alive -
+	// a valid config is worthless if the daemon is down. On ANY problem, switch the
+	// channel to disabled EXACTLY like checkTelegramServerStatus does for a failed
+	// centralized handshake (main_identity.go): so the whole flow treats it as disabled.
+	if problem := healthcheckConfigProblem(cfg); problem != "" {
+		disableHealthchecks(cfg, logger, problem)
+		return
+	}
+	if problem := healthcheckDaemonProblem(opts.ctx, cfg, logger); problem != "" {
+		disableHealthchecks(cfg, logger, problem)
+		return
+	}
+	logging.DebugStep(logger, "notifications init", "healthchecks enabled (mode=%s, daemon up)", cfg.HealthcheckMode)
+	orch.RegisterNotificationChannel(orchestrator.NewHealthchecksChannel(cfg, logger))
+	logging.Info("✓ Healthchecks initialized (mode: %s)", cfg.HealthcheckMode)
+}
+
+// disableHealthchecks switches the section to disabled with a reason, mirroring
+// checkTelegramServerStatus (cmd/proxsave/main_identity.go): a WARNING naming the
+// problem, a clean "Healthchecks: disabled" SKIP, and flipping cfg.HealthcheckEnabled so
+// the downstream Phase-7 dispatch entries loop renders "Healthchecks: disabled" instead
+// of "enabled but not initialized". cfg is the same pointer the dispatcher reads.
+func disableHealthchecks(cfg *config.Config, logger *logging.Logger, reason string) {
+	logging.DebugStep(logger, "notifications init", "healthchecks disabled: %s", reason)
+	logging.Warning("Healthchecks: %s", reason)
+	logging.Skip("Healthchecks: disabled")
+	cfg.HealthcheckEnabled = false
+}
+
+// healthcheckDaemonProblem verifies the monitoring daemon is actually alive by reading
+// its persisted heartbeat (the daemon records its first beat immediately on startup, so
+// a fresh beat proves it is running). Returns a specific reason when the daemon is not
+// usable (unreadable status, not running, or down/stuck), or "" when it is up. It never
+// transmits - it only inspects the local status file the daemon writes.
+func healthcheckDaemonProblem(ctx context.Context, cfg *config.Config, logger *logging.Logger) string {
+	// The status file answers "is it transmitting?"; systemd answers "does the process
+	// exist and run?". Refine the heartbeat diagnosis with the systemd verdict so a
+	// running-but-silent daemon (stale binary) is not misreported as "daemon not running".
+	presence := daemonPresenceProbe(ctx)
+	st, err := health.LoadStatus(cfg.BaseDir)
+	if err != nil {
+		if presence.Probed {
+			d := health.RefineWithPresence(health.Diagnosis{State: health.TxNoHeartbeat}, presence)
+			logging.DebugStep(logger, "notifications init",
+				"healthchecks status unreadable, presence state=%s installed=%t active=%t", d.State, presence.Installed, presence.Active)
+			return daemonProblemForState(d)
+		}
+		logging.DebugStep(logger, "notifications init", "healthchecks status unreadable: %v", err)
+		return "status file unreadable"
+	}
+	d := health.Diagnose(st, cfg.HealthcheckHeartbeatInterval, time.Now())
+	d = health.RefineWithPresence(d, presence)
+	// Shape-only debug, mirroring the Phase-7 section's diagnose line so the init verdict
+	// and the run-time section can be cross-read at debug (no URL/secret, just state).
+	logging.DebugStep(logger, "notifications init",
+		"healthchecks daemon diagnose state=%s daemon_up=%t hb_age=%s installed=%t active=%t",
+		d.State, d.DaemonUp, d.HbAge, presence.Installed, presence.Active)
+	return daemonProblemForState(d)
+}
+
+// daemonProblemForState maps a presence-refined diagnosis to a terse SYNTHETIC reason
+// (bare fact, never an instruction) or "" when the daemon is up. Shares the exact state
+// vocabulary the Phase-7 section renders so the init verdict and the section never drift.
+func daemonProblemForState(d health.Diagnosis) string {
+	switch d.State {
+	case health.TxNotInstalled:
+		return "daemon not installed"
+	case health.TxNotActive:
+		return "daemon not running"
+	case health.TxRunningNoReport:
+		return "daemon running, not reporting"
+	case health.TxStale:
+		return "daemon stale (last beat " + health.HumanizeAge(d.HbAge) + ")"
+	}
+	if d.DaemonUp {
+		return ""
+	}
+	return "daemon not running"
+}
+
+// healthcheckConfigProblem returns a short reason when the healthcheck config is
+// structurally unusable, or "" when it is fine. Config-only (mirrors how the other
+// notifiers validate at init) - it never touches the network or the on-disk secret;
+// runtime provisioning/transmission is the Phase-7 section's job (the daemon status file).
+func healthcheckConfigProblem(cfg *config.Config) string {
+	switch cfg.HealthcheckMode {
+	case "self":
+		// Self mode needs a check to ping: a full alive URL, or an alive check id (the
+		// ping endpoint defaults to a public host, so the id/URL is the discriminator).
+		// The service-alive (heartbeat / dead-man) check is the mandatory one; a
+		// backup-only self config has no liveness signal. Name it precisely so the
+		// message is not mistaken for "no monitoring at all".
+		if cfg.HealthcheckAliveURL == "" && cfg.HealthcheckAliveID == "" {
+			return "no alive check configured"
+		}
+	default: // centralized
+		if strings.TrimSpace(cfg.ServerID) == "" {
+			return "no SERVER_ID"
+		}
+	}
+	return ""
+}
+
 func initializeTelegramNotification(opts backupModeOptions, orch *orchestrator.Orchestrator) {
 	cfg := opts.cfg
 	logger := opts.logger
@@ -101,7 +223,7 @@ func initializeTelegramNotification(opts backupModeOptions, orch *orchestrator.O
 		Mode:          notify.TelegramMode(cfg.TelegramBotType),
 		BotToken:      cfg.TelegramBotToken,
 		ChatID:        cfg.TelegramChatID,
-		ServerAPIHost: cfg.TelegramServerAPIHost,
+		ServerAPIHost: cfg.ServerAPIHost,
 		ServerID:      cfg.ServerID,
 		NotifySecret:  cfg.TelegramNotifySecret,
 		BaseDir:       cfg.BaseDir,
@@ -175,10 +297,10 @@ func initializeWebhookNotification(opts backupModeOptions, orch *orchestrator.Or
 	logging.Info("✓ Webhook initialized (%d endpoint(s))", len(webhookConfig.Endpoints))
 }
 
-func logBackupRuntimeSummary(cfg *config.Config, storageState backupStorageState) {
+func logBackupRuntimeSummary(cfg *config.Config, logger *logging.Logger, storageState backupStorageState) {
 	logBackupStorageSummary(cfg, storageState)
 	logBackupLogSummary(cfg)
-	logBackupNotificationSummary(cfg)
+	logBackupNotificationSummary(cfg, logger)
 }
 
 func logBackupStorageSummary(cfg *config.Config, storageState backupStorageState) {
@@ -221,12 +343,25 @@ func logBackupLogSummary(cfg *config.Config) {
 	fmt.Println()
 }
 
-func logBackupNotificationSummary(cfg *config.Config) {
+// logBackupNotificationSummary prints the EFFECTIVE per-channel state for THIS run, not
+// the raw config: every flag has already absorbed the network-preflight, Telegram-handshake
+// and Healthchecks-daemon flips, all of which run earlier on this same cfg pointer (proof:
+// runNetworkPreflight and initializeServerIdentity precede runBackupMode, and
+// initializeBackupNotifications precedes this summary). Healthchecks is listed so the set is
+// not silently short a channel; Metrics has no runtime flip, so its effective value always
+// equals the configured one.
+func logBackupNotificationSummary(cfg *config.Config, logger *logging.Logger) {
+	done := logging.DebugStart(logger, "notification summary", "effective post-flip state")
 	logging.Info("Notification configuration:")
 	logging.Info("  Telegram: %v", cfg.TelegramEnabled)
 	logging.Info("  Email: %v", cfg.EmailEnabled)
 	logging.Info("  Gotify: %v", cfg.GotifyEnabled)
 	logging.Info("  Webhook: %v", cfg.WebhookEnabled)
+	logging.Info("  Healthchecks: %v", cfg.HealthcheckEnabled)
 	logging.Info("  Metrics: %v", cfg.MetricsEnabled)
+	logging.DebugStep(logger, "notification summary",
+		"telegram=%t email=%t gotify=%t webhook=%t healthchecks=%t metrics=%t",
+		cfg.TelegramEnabled, cfg.EmailEnabled, cfg.GotifyEnabled, cfg.WebhookEnabled, cfg.HealthcheckEnabled, cfg.MetricsEnabled)
+	done(nil)
 	fmt.Println()
 }

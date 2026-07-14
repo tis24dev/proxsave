@@ -184,9 +184,8 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 
 	// Filter and parse backup files
 	for _, match := range matches {
-		// Skip associated files (.sha256, .metadata)
-		if strings.HasSuffix(match, ".sha256") ||
-			strings.HasSuffix(match, ".metadata") {
+		// Skip associated sidecars (checksum/metadata/manifest); shared predicate.
+		if isBackupSidecar(match) {
 			continue
 		}
 
