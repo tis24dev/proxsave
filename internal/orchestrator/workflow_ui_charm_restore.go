@@ -364,7 +364,9 @@ func newNetworkCommitConfirm(remaining time.Duration, health networkHealthReport
 	var b strings.Builder
 
 	if nicRepair != nil {
-		if nicRepair.Applied() {
+		if nicRepair.Failed {
+			fmt.Fprintf(&b, "NIC repair: FAILED (%s)\n\n", nicRepair.FailedReason)
+		} else if nicRepair.Applied() {
 			fmt.Fprintf(&b, "NIC repair: APPLIED (%d file(s))\n", len(nicRepair.ChangedFiles))
 			for _, m := range nicRepair.AppliedNICMap {
 				fmt.Fprintf(&b, "- %s -> %s\n", m.OldName, m.NewName)

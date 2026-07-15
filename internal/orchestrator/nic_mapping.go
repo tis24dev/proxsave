@@ -143,6 +143,8 @@ type nicRepairResult struct {
 	BackupDir     string
 	AppliedAt     time.Time
 	SkippedReason string
+	Failed        bool
+	FailedReason  string
 }
 
 func (r nicRepairResult) Applied() bool {
@@ -150,6 +152,9 @@ func (r nicRepairResult) Applied() bool {
 }
 
 func (r nicRepairResult) Summary() string {
+	if r.Failed {
+		return fmt.Sprintf("NIC name repair FAILED: %s", r.FailedReason)
+	}
 	if r.SkippedReason != "" {
 		return fmt.Sprintf("NIC name repair skipped: %s", r.SkippedReason)
 	}

@@ -167,6 +167,10 @@ func (f *networkRollbackUIApplyFlow) repairNICNames() {
 	if repair == nil {
 		return
 	}
+	if repair.Failed {
+		f.warning("%s", repair.Summary())
+		return
+	}
 	if repair.Applied() || repair.SkippedReason != "" {
 		f.info("%s", repair.Summary())
 		return

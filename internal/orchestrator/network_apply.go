@@ -419,7 +419,7 @@ func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.L
 	plan, err := planNICNameRepairFn(ctx, archivePath)
 	if err != nil {
 		logger.Warning("NIC name repair plan failed: %v", err)
-		return nil
+		return &nicRepairResult{AppliedAt: nowRestore(), Failed: true, FailedReason: fmt.Sprintf("could not read backup network inventory: %v", err)}
 	}
 	if plan == nil {
 		return nil
@@ -499,7 +499,7 @@ func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.L
 	result, err := applyNICNameRepair(logger, plan, includeConflicts)
 	if err != nil {
 		logger.Warning("NIC name repair failed: %v", err)
-		return nil
+		return &nicRepairResult{AppliedAt: nowRestore(), Failed: true, FailedReason: fmt.Sprintf("apply failed: %v", err)}
 	}
 
 	// Surface the outcome in both modes (this was previously CLI-only): the
