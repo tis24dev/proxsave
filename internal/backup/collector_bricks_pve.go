@@ -28,6 +28,7 @@ func newPVERecipe() recipe {
 	bricks = append(bricks, newPVEAggregateBricks()...)
 	bricks = append(bricks, newPVEVersionBricks()...)
 	bricks = append(bricks, newPVEManifestBricks()...)
+	bricks = append(bricks, newPVEFinalizeSummaryBricks()...)
 	return recipe{Name: "pve", Bricks: bricks}
 }
 

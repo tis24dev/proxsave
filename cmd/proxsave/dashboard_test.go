@@ -152,15 +152,11 @@ func TestDashboardActions(t *testing.T) {
 				t.Fatal("newkey flag not set")
 			}
 		}},
-		{"reconfigure", "down down down down enter", false, func(t *testing.T, args *cli.Args) {
-			if !args.Install {
-				t.Fatal("install flag not set")
-			}
-		}},
-		// Exit is the last selectable (12th): 11 downs, skipping both separators.
-		// (The Daemon group items run in-session and loop; they are covered by the
-		// dedicated in-session tests below, not this fall-through harness.)
-		{"exit row", "down down down down down down down down down down down enter", true, nil},
+		// Install is now a single row that opens an in-session chooser (Edit install /
+		// Wipe install); its two flag dispatches are covered by the dedicated install
+		// chooser tests below, not this fall-through harness.
+		// Exit is the last selectable (14th): 13 downs, skipping every separator.
+		{"exit row", "down down down down down down down down down down down down down enter", true, nil},
 		{"esc exits", "esc", true, nil},
 		{"ctrl+c exits", "ctrl+c", true, nil},
 	}
@@ -177,6 +173,71 @@ func TestDashboardActions(t *testing.T) {
 				tc.check(t, args)
 			}
 		})
+	}
+}
+
+// installChooserResult drives the menu to Install (4 downs), then the given chooser keys,
+// and returns whether maybeRunDashboard reported handled plus the mutated args. loopsBack
+// is true for the Back choice (which re-opens the menu, so it esc-exits afterwards).
+func installChooserResult(t *testing.T, chooserKeys string, loopsBack bool) (*cli.Args, bool) {
+	t.Helper()
+	installDashboardGates(t, true, true)
+	driver := installDashboardSessionSeam(t)
+	args := &cli.Args{}
+	resCh := make(chan bool, 1)
+	go func() {
+		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
+		resCh <- handled
+	}()
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down enter") // Install (4 downs) -> chooser
+	driver.waitScreen("Install")             // the in-session chooser
+	driver.keys(chooserKeys)
+	if loopsBack {
+		driver.waitScreen("Dashboard") // Back re-opened the menu
+		driver.keys("esc")             // exit it so maybeRunDashboard resolves
+	}
+	select {
+	case handled := <-resCh:
+		return args, handled
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("dashboard did not resolve")
+		return nil, false
+	}
+}
+
+// TestDashboardInstallEditDispatches: the Install chooser's "Edit install" resolves to the
+// --install flow (args.Install), falling through to the normal flag dispatch.
+func TestDashboardInstallEditDispatches(t *testing.T) {
+	args, handled := installChooserResult(t, "enter", false) // Edit install (1st item)
+	if handled {
+		t.Fatal("Edit install must fall through to the flag dispatch")
+	}
+	if !args.Install || args.NewInstall {
+		t.Fatalf("Edit install must set --install only: %+v", args)
+	}
+}
+
+// TestDashboardInstallWipeDispatches: "Wipe install" resolves to the --new-install flow.
+func TestDashboardInstallWipeDispatches(t *testing.T) {
+	args, handled := installChooserResult(t, "down enter", false) // Wipe install (2nd item)
+	if handled {
+		t.Fatal("Wipe install must fall through to the flag dispatch")
+	}
+	if !args.NewInstall || args.Install {
+		t.Fatalf("Wipe install must set --new-install only: %+v", args)
+	}
+}
+
+// TestDashboardInstallBackLoops: Back on the Install chooser returns to the menu WITHOUT
+// setting any install flag (then esc exits).
+func TestDashboardInstallBackLoops(t *testing.T) {
+	args, handled := installChooserResult(t, "down down enter", true) // Back (3rd item)
+	if !handled {
+		t.Fatal("esc from the menu must exit handled")
+	}
+	if args.Install || args.NewInstall {
+		t.Fatalf("Back must set no install flag: %+v", args)
 	}
 }
 
@@ -425,7 +486,7 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	// Active state: Daemon group = "Disable daemon" (row 10, 9 downs) + "Restart" + "Daemon status".
+	// Active state: Daemon group = "Disable daemon" (row 11, 10 downs) + "Restart" + "Daemon status".
 	driver.keys("down down down down down down down down down enter") // Disable daemon
 	driver.waitScreen("Daemon disabled")                              // success notice
 	driver.keys("enter")                                              // dismiss
@@ -517,8 +578,8 @@ func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
 }
 
 // TestDashboardDiagnosticNotConfiguredShowsNotice: when a setup screen is not
-// eligible (Shown=false), a dismissible notice appears instead of a blank
-// flicker, then the menu returns.
+// eligible (Shown=false), a dismissible styled "Status: NOT CONFIGURED" result
+// screen appears instead of a blank flicker, then the menu returns.
 func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 	installDashboardGates(t, true, true)
 	driver := installDashboardSessionSeam(t)
@@ -534,8 +595,9 @@ func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down enter") // Check Telegram (not configured)
-	driver.waitScreen("Telegram not configured")       // the notice
-	driver.keys("enter")                               // dismiss
+	driver.waitScreen("Telegram")                      // the styled "Status:" result screen
+	driver.waitOutput("NOT CONFIGURED")                // Status: ⚠ NOT CONFIGURED
+	driver.keys("enter")                               // dismiss (Back)
 	driver.waitScreen("Dashboard")                     // back at the menu
 	driver.keys("esc")                                 // exit
 
@@ -672,7 +734,8 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 	_ = s.Close()
 }
 
-// TestDashboardExitStillClosesSession: exit and backup do NOT stash.
+// TestDashboardExitStillClosesSession: exit does NOT stash; backup DOES stash so
+// runBackupStreamed can adopt the live session and stream the run in-graphics.
 func TestDashboardExitStillClosesSession(t *testing.T) {
 	_, _, handled := runDashboardWith(t, "esc")
 	if !handled {
@@ -685,7 +748,11 @@ func TestDashboardExitStillClosesSession(t *testing.T) {
 	if handled || args.Restore || args.Install {
 		t.Fatalf("backup dispatch broken: %+v", args)
 	}
-	if dashboardHandoffPending() {
-		t.Fatal("backup must not stash the session (plain terminal run)")
+	// Backup now mirrors the flow-action handoff: the graphical session stays
+	// open and stashed for the backup to adopt (streamed in-graphics), instead
+	// of being closed for a plain-terminal run. releaseDashboardLeftovers in the
+	// session-seam cleanup closes the still-stashed session.
+	if !dashboardHandoffPending() {
+		t.Fatal("backup must stash the session for in-graphics streaming")
 	}
 }

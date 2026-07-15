@@ -30,6 +30,19 @@ func TestRouterPushResolvePop(t *testing.T) {
 	}
 }
 
+// TestRouterViewAltScreenAndMouse locks the frame's transport contract: every
+// session renders on the altscreen with cell-motion mouse tracking (tview
+// parity), regardless of config.
+func TestRouterViewAltScreenAndMouse(t *testing.T) {
+	v := newRootModel(Config{AppName: "ProxSave"}).View()
+	if !v.AltScreen {
+		t.Fatal("View: AltScreen should be true")
+	}
+	if v.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("View: MouseMode = %v, want MouseModeCellMotion", v.MouseMode)
+	}
+}
+
 // TestRouterResolvePopsByIDNotTop locks the race fix: a resolve command that
 // lands after the engine already pushed the next screen must remove the
 // resolved screen, not whatever is on top.

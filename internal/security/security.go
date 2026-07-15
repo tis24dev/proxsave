@@ -395,7 +395,17 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 		c.addError("Executable %s changed during integrity check; aborting", c.execPath)
 		return
 	}
-	c.ensureOwnershipAndPermFromFD(f, openedInfo, 0o700, fmt.Sprintf("Executable %s", c.execPath))
+	execDesc := fmt.Sprintf("Executable %s", c.execPath)
+	// For the executable, integrity means root-owned and not writable by group or
+	// other; the exact owner mode is intentionally not enforced. A self-managed 0700
+	// binary and a package-managed 0755 /usr/bin binary are equally tamper-proof (only
+	// root can replace either), and the binary is public compiled code, so demanding
+	// exactly 0700 would only raise false positives on FHS-packaged installs. Passing
+	// expectedPerm 0 runs the root:root ownership check without the exact-mode check;
+	// the group/other-write guard follows. The key/config/backup paths keep their
+	// strict 0700/0600 checks.
+	c.ensureOwnershipAndPermFromFD(f, openedInfo, 0, execDesc)
+	c.ensureExecutableOwnerWriteOnly(f, openedInfo, execDesc)
 
 	currentHash, err := checksumReader(f)
 	if err != nil {
@@ -1370,6 +1380,39 @@ func (c *Checker) ensureOwnershipAndPermFromFD(f *os.File, info os.FileInfo, exp
 	}
 
 	return info
+}
+
+// ensureExecutableOwnerWriteOnly flags an executable that is writable by group or
+// other — the only permission state that lets a non-owner tamper with it. The exact
+// owner mode is deliberately not enforced: 0755 (package-managed /usr/bin) and 0700
+// (self-managed /opt) are both acceptable. When AUTO_FIX_PERMISSIONS is on it clears
+// only the offending group/other write bits (perm &^ 0o022); it never widens the mode.
+func (c *Checker) ensureExecutableOwnerWriteOnly(f *os.File, info os.FileInfo, description string) {
+	if f == nil || info == nil {
+		return
+	}
+	perm := info.Mode().Perm()
+	if perm&0o022 == 0 {
+		return
+	}
+
+	path := f.Name()
+	if path == "" {
+		path = "<opened file>"
+	}
+	fixed := perm &^ 0o022
+	c.bannerWarning(fmt.Sprintf("group/other-writable executable %s (current %o)", path, perm))
+	if c.cfg.AutoFixPermissions {
+		if c.cfg.DryRun {
+			c.logger.Info("DRY RUN: would adjust permissions on %s to %o (current %o)", path, fixed, perm)
+		} else if err := syscall.Fchmod(int(f.Fd()), uint32(fixed)); err != nil {
+			c.addWarning("Failed to adjust permissions on %s: %v", path, err)
+		} else {
+			c.logger.Info("Adjusted permissions on %s to %o", path, fixed)
+		}
+	} else {
+		c.addWarning("%s must not be writable by group or other (current %o)", description, perm)
+	}
 }
 
 var kernelProcessPrefixes = []string{

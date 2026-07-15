@@ -164,18 +164,48 @@ func finalSummarySignature() string {
 	return summarySig
 }
 
-func finalSummaryColor(finalExitCode int, logger *logging.Logger) string {
+// exitSeverity is the display-only classification of a run's exit code, shared
+// by the final summary footer and the backup outcome banner so both color the
+// SAME exit code identically. It carries no exit semantics of its own.
+type exitSeverity int
+
+const (
+	severityOK exitSeverity = iota
+	severityWarning
+	severityError
+	severityInterrupted
+)
+
+// exitCodeSeverity classifies an exit code into an exitSeverity, encoding the
+// EXACT decision tree finalSummaryColor has always used: an interrupt (Ctrl+C)
+// is its own bucket; a clean 0 is a warning if the run logged warnings, else OK;
+// ExitGenericError is a non-fatal warning; everything else is an error. logger
+// may be nil (treated as no warnings).
+func exitCodeSeverity(exitCode int, logger *logging.Logger) exitSeverity {
 	hasWarnings := logger != nil && logger.HasWarnings()
 
 	switch {
-	case finalExitCode == exitCodeInterrupted:
+	case exitCode == exitCodeInterrupted:
+		return severityInterrupted
+	case exitCode == 0 && hasWarnings:
+		return severityWarning
+	case exitCode == 0:
+		return severityOK
+	case exitCode == types.ExitGenericError.Int():
+		return severityWarning
+	default:
+		return severityError
+	}
+}
+
+func finalSummaryColor(finalExitCode int, logger *logging.Logger) string {
+	switch exitCodeSeverity(finalExitCode, logger) {
+	case severityInterrupted:
 		return "\033[35m" // magenta for Ctrl+C
-	case finalExitCode == 0 && hasWarnings:
-		return "\033[33m" // yellow for success with warnings
-	case finalExitCode == 0:
+	case severityWarning:
+		return "\033[33m" // yellow for success-with-warnings or non-fatal generic error
+	case severityOK:
 		return "\033[32m" // green for clean success
-	case finalExitCode == types.ExitGenericError.Int():
-		return "\033[33m" // yellow for generic error (non-fatal)
 	default:
 		return "\033[31m" // red for all other errors
 	}
@@ -225,8 +255,6 @@ func printFinalSummaryCommands() {
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
 	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
-	fmt.Println("  --env-migration    - Run installer and migrate legacy Bash backup.env to Go template")
-	fmt.Println("  --env-migration-dry-run - Preview installer/migration without writing files")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")

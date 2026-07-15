@@ -196,6 +196,8 @@ func TestInstallBinary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stat(dest): %v", err)
 		}
+		// installBinary lands the conventional 0755; the security check only requires
+		// the executable to be root-owned and not group/other-writable, not 0700.
 		if info.Mode().Perm() != 0o755 {
 			t.Fatalf("dest mode = %o, want %o", info.Mode().Perm(), 0o755)
 		}

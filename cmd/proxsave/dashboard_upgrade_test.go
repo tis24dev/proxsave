@@ -138,14 +138,8 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	}
 
 	driver.waitScreen("Upgrade")
-	// Pre-check: yellow "NOT CHECKED", no symbol (uppercase, consistent with the other screens).
-	pre := waitFor("NOT CHECKED")
-	if strings.ContainsAny(pre, "✓✗⚠") {
-		t.Fatalf("pre-check must carry no ✓/✗/⚠ symbol: %q", tailStr(pre))
-	}
-
-	// Check: the loop re-renders the Upgrade screen with the available version + notes.
-	driver.keys("enter")
+	// Auto-check on entry (like Daemon status): the screen runs the release check immediately
+	// and shows the available version -- no "NOT CHECKED" pre-state, no manual Check press.
 	out := waitFor("2.0.0")
 	if gotVersion != "1.0.0" {
 		t.Fatalf("check must run against the current version, got %q", gotVersion)
@@ -159,7 +153,7 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		t.Fatalf("markdown bold markers must be stripped from the notes")
 	}
 
-	// Run upgrade (the button swapped to "Run upgrade").
+	// The button is "Run upgrade" (an update was found): press it.
 	driver.keys("enter")
 	driver.waitScreen("Upgrade complete")
 	if gotArgs == nil || !gotArgs.Upgrade || !gotArgs.UpgradeAutoYes || gotArgs.ConfigPath != "/tmp/backup.env" {
@@ -167,11 +161,62 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	}
 
 	driver.keys("enter")         // dismiss the notice
-	driver.waitScreen("Upgrade") // back on the screen (button reverted to Check upgrade)
-	driver.keys("down enter")    // Back -> return
+	driver.waitScreen("Upgrade") // back on the screen, now showing UPGRADED with a Re-check button
+	driver.keys("down enter")    // Back (2nd item) -> return
 	select {
 	case <-done:
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("upgrade screen did not return")
+	}
+}
+
+// TestDashboardUpgradeMenu drives the Upgrade CHOOSER: it offers Check upgrade / Check
+// config / Back, and "Check upgrade" opens the binary upgrade screen (which no longer
+// carries the config button). The chooser's Back is exercised by the Update config driver
+// tests (escOutOfUpgrade), and the binary screen's item layout by TestDashboardUpgradeScreen.
+func TestDashboardUpgradeMenu(t *testing.T) {
+	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
+	t.Cleanup(func() { dashboardUpgradeVersion, dashboardUpgradeCheck = origVer, origChk })
+	dashboardUpgradeVersion = func() string { return "1.0.0" }
+	// The binary screen auto-checks on entry now; stub the check so it is deterministic (no network).
+	dashboardUpgradeCheck = func(context.Context, *logging.Logger, string) *UpdateInfo {
+		return &UpdateInfo{NewVersion: false, Latest: "1.0.0", Current: "1.0.0"}
+	}
+
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
+		driver.buf, func(title string) { driver.pushes <- title })
+
+	done := make(chan struct{})
+	go func() {
+		runDashboardUpgradeMenu(ctx, driver.session, "/tmp/backup.env")
+		close(done)
+	}()
+
+	waitFor := func(substr string) {
+		deadline := time.After(uitest.Deadline(15 * time.Second))
+		for {
+			if strings.Contains(ansi.Strip(driver.buf.String()), substr) {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("timed out waiting for %q", substr)
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}
+
+	driver.waitScreen("Upgrade") // the chooser
+	waitFor("Check config")      // the chooser carries the config button (the binary screen does not)
+	driver.keys("enter")         // Check upgrade (1st item) -> binary upgrade screen
+	waitFor("NO UPGRADE")        // ...which opened AND auto-checked (deterministic stub): the two are split
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("upgrade chooser did not return")
 	}
 }

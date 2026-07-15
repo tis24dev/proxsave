@@ -211,7 +211,10 @@ fi
 ###############################################
 echo "[+] Installing binary -> ${TARGET_BIN}"
 mv proxsave "${TARGET_BIN}"
-chmod +x "${TARGET_BIN}"
+# Conventional executable mode 0755 (owner rwx, group/other r-x). The binary runs as
+# root and only root can replace it; the security check verifies it is root-owned and
+# not group/other-writable, not an exact mode, so 0755 is the right standard here.
+chmod 755 "${TARGET_BIN}"
 
 ###############################################
 # 13) Run internal installer (--install or --new-install)

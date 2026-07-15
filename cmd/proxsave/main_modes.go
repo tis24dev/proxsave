@@ -110,7 +110,6 @@ func validateDaemonCompatibility(args *cli.Args) []string {
 		{enabled: args.ForceNewKey, label: "--newkey"},
 		{enabled: args.Backup, label: "--backup"},
 		{enabled: args.Support, label: "--support"},
-		{enabled: args.EnvMigration || args.EnvMigrationDry, label: "--env-migration"},
 		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config"},
 		{enabled: args.CleanupGuards, label: "--cleanup-guards"},
 	})
@@ -129,7 +128,6 @@ func cleanupGuardsIncompatibleModes(args *cli.Args) []string {
 		{enabled: args.NewInstall, label: "--new-install"},
 		{enabled: args.Upgrade, label: "--upgrade"},
 		{enabled: args.ForceNewKey, label: "--newkey"},
-		{enabled: args.EnvMigration || args.EnvMigrationDry, label: "--env-migration/--env-migration-dry-run"},
 		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config/--upgrade-config-dry-run/--upgrade-config-json"},
 	})
 }
@@ -139,7 +137,6 @@ func supportIncompatibleModes(args *cli.Args) []string {
 		{enabled: args.Decrypt, label: "--decrypt"},
 		{enabled: args.Install, label: "--install"},
 		{enabled: args.NewInstall, label: "--new-install"},
-		{enabled: args.EnvMigration || args.EnvMigrationDry, label: "--env-migration"},
 		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config"},
 		{enabled: args.ForceNewKey, label: "--newkey"},
 	})
@@ -222,6 +219,13 @@ func runDecryptOnlyMode(ctx context.Context, args *cli.Args, bootstrap *logging.
 	if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, toolVersion, decryptCLI); err != nil {
 		if errors.Is(err, orchestrator.ErrDecryptAborted) {
 			bootstrap.Info("Decrypt workflow aborted by user")
+			return types.ExitSuccess.Int(), true
+		}
+		if errors.Is(err, orchestrator.ErrDecryptNoBackups) && dashboardIsBareInvocation() {
+			// ONLY the interactive dashboard (bare invocation): the user already saw the
+			// graceful "Status:" empty-state screen, so exit cleanly with NO log line. A
+			// CLI --decrypt execution falls through and keeps its original ERROR line
+			// (its CLI-execution lines are left untouched).
 			return types.ExitSuccess.Int(), true
 		}
 		bootstrap.Error("ERROR: %v", err)

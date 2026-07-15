@@ -106,6 +106,18 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 			return types.ExitSuccess.Int(), true
 		}
 
+		// Install sub-menu: the single "Install" row opens an in-session chooser
+		// (Edit install / Wipe install) that resolves to the --install or --new-install
+		// flow; Back re-opens the menu. The resolved action then falls through to the
+		// same flag dispatch below, so each install mode keeps its exact code path.
+		if action == menu.ActionInstallMenu {
+			sub, ok := runDashboardInstallChoice(ctx, session)
+			if !ok {
+				continue
+			}
+			action = sub
+		}
+
 		// Diagnostics group: re-open an existing check screen in the live session
 		// and loop back to the menu. These never leave the dashboard, so the flag
 		// dispatch below is untouched.
@@ -116,9 +128,15 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		switch action {
 		case menu.ActionBackup:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=backup")
-			// The backup run owns the plain terminal: leave the UI for real
-			// (explicit close so the altscreen is gone before any run output).
-			_ = session.Close()
+			// Keep the graphical session OPEN and hand it off. Like the flow
+			// actions below, the backup ADOPTS the altscreen program
+			// (runBackupStreamed -> adoptDashboardSession) and streams its
+			// [ts] LEVEL log lines into a CONTAINED, scrollable viewport panel
+			// (components.RunStreamTask), so the run stays inside the frame. A
+			// CLI/cron/daemon backup stashes nothing here, so it keeps running
+			// plain (there is no session to adopt).
+			keepAlive = true
+			stashDashboardSession(session, bootstrap)
 			return types.ExitSuccess.Int(), false
 		case menu.ActionRestore:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=restore")
@@ -132,6 +150,25 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		case menu.ActionReconfigure:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=install")
 			args.Install = true
+		case menu.ActionNewInstall:
+			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=new-install")
+			// --new-install: the flow (runNewInstall) confirms the destructive wipe
+			// itself (confirmNewInstallCharm) before resetting the base dir.
+			args.NewInstall = true
+		case menu.ActionSupport:
+			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=support")
+			// Collect consent + GitHub metadata graphically; on cancel, loop back to the
+			// menu. On confirm, arm support mode (DEBUG + email) with the meta already
+			// collected (SupportMetaProvided skips the stdin intro), then fall through to
+			// the SAME handoff as Backup so the run streams in-graphics identically.
+			meta, ok := dashboardRunSupportForm(ctx, session)
+			if !ok {
+				continue
+			}
+			args.Support = true
+			args.SupportGitHubUser = meta.GitHubUser
+			args.SupportIssueID = meta.IssueID
+			args.SupportMetaProvided = true
 		default:
 			logging.DebugStepBootstrap(bootstrap, "dashboard", "action=exit")
 			return types.ExitSuccess.Int(), true
@@ -144,6 +181,45 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		keepAlive = true
 		stashDashboardSession(session, bootstrap)
 		return types.ExitSuccess.Int(), false
+	}
+}
+
+// installChoice is the choice on the Install sub-menu chooser.
+type installChoice int
+
+const (
+	installEdit installChoice = iota
+	installWipe
+	installBack
+)
+
+// runDashboardInstallChoice shows the in-session Install chooser (Edit install / Wipe
+// install / Back) and resolves it to the corresponding install action: Edit install ->
+// --install, Wipe install -> --new-install. Only the dashboard labels are new; the CLI
+// flags are unchanged. Returns (action, true) to dispatch that flow, or (_, false) on
+// Back/esc (the caller re-opens the menu).
+func runDashboardInstallChoice(ctx context.Context, session *shell.Session) (menu.Action, bool) {
+	errBack := errors.New("install: back")
+	items := []components.SelectorItem[installChoice]{
+		{Label: "Edit install", Description: "re-run the interactive installation/setup (--install)", Value: installEdit},
+		{Label: "Wipe install", Description: "wipe the install directory (keep build/env/identity) then re-run the installer (--new-install)", Value: installWipe},
+		{Label: "Back", Value: installBack},
+	}
+	choice, err := shell.Ask(ctx, session, components.NewSelector(
+		"Install", items,
+		components.WithSelectorPrompt[installChoice]("Install or re-install ProxSave."),
+		components.WithSelectorBack[installChoice](errBack),
+	))
+	if err != nil {
+		return menu.ActionExit, false
+	}
+	switch choice {
+	case installEdit:
+		return menu.ActionReconfigure, true
+	case installWipe:
+		return menu.ActionNewInstall, true
+	default:
+		return menu.ActionExit, false
 	}
 }
 
@@ -179,7 +255,7 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		_, _ = dashboardRunPostInstallAudit(ctx, session, getExecInfo().ExecPath, configPath)
 	case menu.ActionCheckUpgrade:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=check-upgrade")
-		runDashboardUpgrade(ctx, session, configPath)
+		runDashboardUpgradeMenu(ctx, session, configPath)
 	case menu.ActionDaemonSetup:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-setup")
 		runDashboardDaemonAdmin(ctx, session, true, configPath, baseDir)
@@ -192,6 +268,9 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 	case menu.ActionDaemonStatus:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-status")
 		runDashboardDaemonStatus(ctx, session, configPath, baseDir)
+	case menu.ActionCleanupGuards:
+		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=cleanup-guards")
+		runDashboardCleanupGuards(ctx, session)
 	default:
 		return false
 	}
@@ -448,7 +527,7 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 		prompt := buildDaemonStatusPrompt(level, keyword, explanation, mode, unit, active, optOut, ds)
 
 		items := []components.SelectorItem[daemonStatusAction]{
-			{Label: "Check", Description: "re-check the daemon state", Value: daemonStatusActionCheck},
+			{Label: "Re-check", Description: "re-run the daemon state check", Value: daemonStatusActionCheck},
 			{Label: "Back", Description: "return to the dashboard menu", Value: daemonStatusActionBack},
 		}
 
@@ -587,10 +666,12 @@ var (
 	}
 )
 
-// dashboardNotConfiguredNotice shows a dismissible info notice when a diagnostics
-// screen has nothing to show because the feature is not enabled on this host.
+// dashboardNotConfiguredNotice shows a not-configured diagnostic when a screen has
+// nothing to show because the feature is not enabled on this host. It reuses the
+// shared styled result screen (showDaemonResultScreen) so it reads
+// "Status: ⚠ NOT CONFIGURED" exactly like the configured check screens.
 func dashboardNotConfiguredNotice(ctx context.Context, session *shell.Session, title, msg string) {
-	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeInfo, title+" not configured", msg))
+	showDaemonResultScreen(ctx, session, title, orchestrator.HealthcheckSetupLevelWarn, "NOT CONFIGURED", msg)
 }
 
 // testDashboardSession lets tests inject a renderless session (the seam used

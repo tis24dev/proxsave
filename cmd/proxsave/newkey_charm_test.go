@@ -40,7 +40,20 @@ func installNewkeySessionSeam(t *testing.T) *newkeyUIDriver {
 		})
 		return d.session
 	}
-	t.Cleanup(func() { newAgeSetupSession = orig })
+	t.Cleanup(func() {
+		newAgeSetupSession = orig
+		// Deterministically tear down the program this test created (if any): Close
+		// quits it and BLOCKS until its event-loop/renderer goroutines exit, so a
+		// leftover bubbletea program can never leak into and destabilize the next test.
+		// This is the root fix for the flaky driver-test hangs (a stray program from an
+		// earlier test intermittently stalled a later test's RunTask/waitScreen).
+		if d.session != nil {
+			_ = d.session.Close()
+		}
+		if d.cancel != nil {
+			d.cancel()
+		}
+	})
 	return d
 }
 
@@ -56,6 +69,22 @@ func (d *newkeyUIDriver) waitScreen(title string) {
 		case <-deadline:
 			d.t.Fatalf("timed out waiting for screen %q; output tail:\n%s", title, tailStr(ansi.Strip(d.buf.String())))
 		}
+	}
+}
+
+// waitOutput polls the cumulative rendered output for text unique to the
+// current step (use waitScreen for screen transitions).
+func (d *newkeyUIDriver) waitOutput(text string) {
+	d.t.Helper()
+	deadline := time.Now().Add(uitest.Deadline(60 * time.Second))
+	for {
+		if strings.Contains(ansi.Strip(d.buf.String()), text) {
+			return
+		}
+		if time.Now().After(deadline) {
+			d.t.Fatalf("timed out waiting for %q in UI output; tail:\n%s", text, tailStr(ansi.Strip(d.buf.String())))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

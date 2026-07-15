@@ -31,6 +31,7 @@ type upgAct int
 const (
 	upgGo upgAct = iota
 	upgBack
+	upgConfig // open the two-step config-update flow (--upgrade-config) in-session
 )
 
 // upgradeTokenAllowed is the allowlist for a version string shown on screen. The
@@ -64,6 +65,45 @@ func releaseTagURL(tag string) string {
 	return "https://github.com/" + githubRepo + "/releases/tag/" + tag
 }
 
+// runDashboardUpgradeMenu is the "Upgrade" chooser. It splits the two upgrades so neither
+// screen carries the other's button: "Check upgrade" opens the binary upgrade screen
+// (runDashboardUpgrade), "Check config" opens the config upgrade flow (--upgrade-config),
+// and Back/esc returns to the dashboard menu. It loops so each sub-flow returns here.
+func runDashboardUpgradeMenu(ctx context.Context, session *shell.Session, configPath string) {
+	back := errors.New("back")
+	for {
+		prompt := theme.Emphasis.Render("Current version: ") + theme.Text.Render(upgradeSafeToken(dashboardUpgradeVersion()))
+		a, err := shell.Ask(ctx, session, components.NewSelector("Upgrade",
+			[]components.SelectorItem[upgAct]{
+				{Label: "Check upgrade", Description: "update the proxsave binary to a newer release", Value: upgGo},
+				{Label: "Check config", Description: "add new template keys to the configuration file", Value: upgConfig},
+				{Label: "Back", Value: upgBack},
+			},
+			components.WithSelectorPromptStyled[upgAct](prompt),
+			components.WithSelectorBack[upgAct](back)))
+		if err != nil || a == upgBack {
+			return
+		}
+		switch a {
+		case upgGo:
+			runDashboardUpgrade(ctx, session, configPath)
+		case upgConfig:
+			runDashboardUpdateConfig(ctx, session, configPath)
+		}
+	}
+}
+
+// TODO(viewport): rebuild this the same way backup and install were rebuilt for
+// the CONTAINED viewport streaming UI. Today runDashboardUpgrade runs the upgrade
+// inside the altscreen dashboard session (upgRun mutes stdout + RunTask spinner),
+// so the upgrade's log lines never reach the user. It should instead adopt the
+// altscreen session and drive components.RunStreamTask with
+// logging.NewLineWriterRaw + logging.CaptureConsoleWithColor, so the upgrade's
+// [ts] LEVEL lines stream (colored) into a contained, scrollable viewport panel
+// within the frame, and classify the outcome via a buildUpgradeOutcomePrompt
+// built on the SHARED exitCodeSeverity(code, logger) (the upgrade already has an
+// exit code), matching the CLI final-summary coloring exactly. No behavior change
+// here yet.
 func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath string) {
 	cur := upgradeSafeToken(dashboardUpgradeVersion())
 	// Symbols on the RESULT keyword (consistent with the Telegram/healthcheck check
@@ -75,8 +115,26 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 	url := ""   // latest release page URL (tag portion scrubbed via releaseTagURL)
 	avail := false
 	back := errors.New("back")
+	pendingCheck := true // auto-run the release check on entry (like Daemon status), so the
+	//                      screen shows the result immediately instead of "NOT CHECKED".
 	for {
-		lbl := "Check upgrade"
+		if pendingCheck {
+			info := upgCheck(ctx, session, cur)
+			switch {
+			case info == nil || (!info.NewVersion && strings.TrimSpace(info.Latest) == ""):
+				avail, kw, sty, sym, notes, url = false, "CHECK FAILED", theme.WarningText, symWarn, "", ""
+			case info.NewVersion:
+				latest := upgradeSafeToken(info.Latest)
+				if latest == "" {
+					latest = "UPDATE AVAILABLE"
+				}
+				avail, kw, sty, sym, notes, url = true, latest, theme.WarningText, symWarn, info.Notes, releaseTagURL(info.Tag)
+			default:
+				avail, kw, sty, sym, notes, url = false, "NO UPGRADE ("+cur+")", theme.SuccessText, symOk, info.Notes, releaseTagURL(info.Tag)
+			}
+			pendingCheck = false
+		}
+		lbl := "Re-check"
 		if avail {
 			lbl = "Run upgrade"
 		}
@@ -95,20 +153,7 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			return
 		}
 		if !avail {
-			info := upgCheck(ctx, session, cur)
-			switch {
-			case info == nil || (!info.NewVersion && strings.TrimSpace(info.Latest) == ""):
-				kw, sty, sym, notes, url = "CHECK FAILED", theme.WarningText, symWarn, "", ""
-			case info.NewVersion:
-				avail = true
-				latest := upgradeSafeToken(info.Latest)
-				if latest == "" {
-					latest = "UPDATE AVAILABLE"
-				}
-				kw, sty, sym, notes, url = latest, theme.WarningText, symWarn, info.Notes, releaseTagURL(info.Tag)
-			default:
-				kw, sty, sym, notes, url = "NO UPGRADE ("+cur+")", theme.SuccessText, symOk, info.Notes, releaseTagURL(info.Tag)
-			}
+			pendingCheck = true // "Re-check" pressed: re-run the check on the next loop
 			continue
 		}
 		avail = false

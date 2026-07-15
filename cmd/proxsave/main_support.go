@@ -15,6 +15,13 @@ func handleSupportIntro(ctx context.Context, args *cli.Args, bootstrap *logging.
 		return types.ExitSuccess.Int(), false
 	}
 
+	if args.SupportMetaProvided {
+		// The dashboard already collected consent + GitHub metadata graphically; skip the
+		// stdin RunIntro (it would prompt over the in-graphics run). args.Support* are set.
+		logging.DebugStepBootstrap(bootstrap, "main run", "mode=support (meta provided)")
+		return types.ExitSuccess.Int(), false
+	}
+
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=support")
 	meta, continueRun, interrupted := support.RunIntro(ctx, bootstrap)
 	if continueRun {

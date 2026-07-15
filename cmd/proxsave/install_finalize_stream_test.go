@@ -72,9 +72,10 @@ func TestBuildInstallOutcomePromptUnverified(t *testing.T) {
 	}
 }
 
-// TestRunStreamTaskFinalizationDriver drives RunStreamTask on an observed session the same
-// way runInstallTUI does: the emitted lines and the composed outcome must appear on screen,
-// and pressing Enter after done must let the driver return.
+// TestRunStreamTaskFinalizationDriver drives RunStreamTask on an observed altscreen
+// session the same way runInstallTUI's finalization does: the emitted lines and the
+// composed outcome must appear on screen (inside the contained viewport), and pressing
+// Enter after done must let the driver return.
 func TestRunStreamTaskFinalizationDriver(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -99,7 +100,7 @@ func TestRunStreamTaskFinalizationDriver(t *testing.T) {
 	waitFor(t, &buf, "second finalize line")
 	waitFor(t, &buf, "permissions OK")
 	// The Continue hint is rendered by the frame's Help bar once done - NOT duplicated
-	// in the screen body (asserted by TestStreamScreenDoneShowsOutcomeAndHint).
+	// in the screen body.
 	waitFor(t, &buf, "enter continue")
 
 	// Enter on a done screen resolves; spam is safe (no-op before done / on empty stack).

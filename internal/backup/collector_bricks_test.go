@@ -278,6 +278,7 @@ func TestNewPVERecipeOrder(t *testing.T) {
 		brickPVEAggregateReplicationStatus,
 		brickPVEVersionInfo,
 		brickPVEManifestFinalize,
+		brickPVEFinalizeSummary,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("PVE recipe IDs = %v, want %v", got, want)

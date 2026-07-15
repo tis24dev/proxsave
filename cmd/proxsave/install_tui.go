@@ -11,6 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/flows/agesetup"
 	flowinstall "github.com/tis24dev/proxsave/internal/ui/flows/install"
@@ -202,7 +203,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			ageMsg += "\nUsing the existing AGE recipient configuration."
 		}
 		ageMsg += "\n\nIMPORTANT: keep your passphrase/private key offline and secure!"
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess, "Encryption ready", ageMsg))
+		// Reuse the shared styled result screen so this reads
+		// "Status: ✓ ENCRYPTION READY" like the other install result screens.
+		showDaemonResultScreen(ctx, session, "Encryption", orchestrator.HealthcheckSetupLevelOk, "ENCRYPTION READY", ageMsg)
 	}
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors
@@ -301,13 +304,14 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		}
 	}
 
-	// All interactive steps are done. Unlike the CLI, the TUI keeps the session
-	// OPEN and streams the non-interactive finalization INSIDE the graphics via
-	// RunStreamTask: the same shared engine helpers run, but their [ts] LEVEL log
-	// lines are captured (logging.CaptureConsole) and appended to a growing list
-	// instead of landing raw on the alternate screen. The session is closed only
-	// after the user presses Continue, so the deferred footer still prints to the
-	// persistent scrollback exactly like the CLI.
+	// All interactive steps are done. Unlike the CLI, the TUI keeps the ALTSCREEN
+	// session OPEN and streams the non-interactive finalization INSIDE the graphics
+	// via a CONTAINED, scrollable, COLORED viewport panel (components.RunStreamTask):
+	// the same shared engine helpers run, but their [ts] LEVEL log lines are
+	// captured (logging.CaptureConsoleWithColor) and appended to the viewport
+	// instead of landing raw on the alternate screen, so scrolling stays within the
+	// box. The session is closed only after the user presses Continue, so the
+	// deferred footer still prints to the persistent scrollback exactly like the CLI.
 	wizardCronSchedule := ""
 	if wizardData != nil {
 		wizardCronSchedule = cronutil.TimeToSchedule(wizardData.CronTime)
@@ -320,11 +324,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 
 	streamErr := components.RunStreamTask(ctx, session, "Finalizing installation",
 		func(taskCtx context.Context, emit func(line string)) (string, error) {
-			// Capture the default + bootstrap-mirror loggers into the UI stream;
-			// restore on return/panic. The bootstrap stays quiet and forwards via
-			// the mirror, so its finalization lines also appear in-graphics.
-			sink := logging.NewLineWriter(emit)
-			defer logging.CaptureConsole(bootstrap, sink)()
+			// Route the loggers AND raw os.Stdout (fmt.Println spacers) through one
+			// pipe into the panel; restored on return/panic. So the panel shows the
+			// same colored lines + blank section spacers as the CLI. (captureRunOutput
+			// is defined in backup_stream.go.)
+			defer captureRunOutput(bootstrap, emit)()
 
 			// Finalize legacy-symlink cleanup, entrypoint cleanup/recreation, and cron
 			// via the shared post-install engine (the same runPostInstallSymlinksAndCron
@@ -345,10 +349,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			}
 
 			// Best-effort post-install permission and ownership normalization so that
-			// the environment starts in a consistent state. The temporary logger's
-			// output is routed into the UI stream via sink (nil in the CLI).
+			// the environment starts in a consistent state. Its temporary logger writes
+			// to os.Stdout, which captureRunOutput has redirected into the panel, so pass
+			// nil (no explicit sink needed).
 			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "normalizing permissions")
-			permStatus, permMessage = fixPermissionsAfterInstall(taskCtx, configPath, baseDir, bootstrap, sink)
+			permStatus, permMessage = fixPermissionsAfterInstall(taskCtx, configPath, baseDir, bootstrap, nil)
 			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "permissions status=%s", permStatus)
 
 			return buildInstallOutcomePrompt(rv, verified, permStatus, permMessage), nil
@@ -360,7 +365,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 
 	// The user pressed Continue: release the terminal so the deferred footer
-	// prints to the plain scrollback (the in-graphics lines/outcome vanish with
+	// prints to the plain scrollback (the in-graphics viewport/outcome vanish with
 	// the alternate screen, matching the AGE notice behavior).
 	if closeErr := session.Close(); closeErr != nil && err == nil {
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "session close: %v", closeErr)

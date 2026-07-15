@@ -18,7 +18,9 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
@@ -253,6 +255,22 @@ func logServerIdentityValues(serverID, mac string) {
 	}
 	if mac != "" {
 		logging.Info("Server MAC Address: %s", mac)
+	}
+}
+
+// logMonitoringPortalLink is the SOLE display boundary for the portal magic-link. The
+// Healthchecks section carries the link RAW on stats.HealthcheckLink (captured this run
+// or best-effort minted); this sanitizes it once with serverbot.SanitizeLoginURL and,
+// only if it survives, prints it as the "Healthchecks Portal" line. It is called in the
+// backup epilogue right after the Server MAC Address line so the link appears at the
+// very end of the run. It never registers the link as a log secret (it must stay
+// visible) and prints nothing for a nil stats, empty, or hostile link.
+func logMonitoringPortalLink(stats *orchestrator.BackupStats) {
+	if stats == nil {
+		return
+	}
+	if safe := serverbot.SanitizeLoginURL(stats.HealthcheckLink); safe != "" {
+		logging.Info("Healthchecks Portal: %s", safe)
 	}
 }
 

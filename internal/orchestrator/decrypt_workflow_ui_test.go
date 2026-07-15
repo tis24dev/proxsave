@@ -26,6 +26,10 @@ func (f *fakeDecryptWorkflowUI) ShowMessage(ctx context.Context, title, message 
 	panic("unexpected ShowMessage call")
 }
 
+func (f *fakeDecryptWorkflowUI) ShowStatusResult(ctx context.Context, screenTitle string, level HealthcheckSetupLevel, keyword, explanation string) error {
+	panic("unexpected ShowStatusResult call")
+}
+
 func (f *fakeDecryptWorkflowUI) ShowError(ctx context.Context, title, message string) error {
 	panic("unexpected ShowError call")
 }

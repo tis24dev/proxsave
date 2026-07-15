@@ -122,9 +122,13 @@ func TestHealthchecksSectionTransmitting(t *testing.T) {
 	if !strings.Contains(out, "last beat") {
 		t.Fatalf("want last-beat age, out=%q", out)
 	}
-	// magic-link still works (reuse-captured)
-	if !strings.Contains(out, "https://hc/accounts/check_token/u/CAP/") {
-		t.Fatalf("captured link must still be displayed, out=%q", out)
+	// The captured link is PRESERVED on stats (carried RAW to the epilogue) but is NOT
+	// displayed by this channel: the SOLE display boundary moved to logMonitoringPortalLink.
+	if stats.HealthcheckLink != "https://hc/accounts/check_token/u/CAP/" {
+		t.Fatalf("captured link must be preserved on stats, got %q", stats.HealthcheckLink)
+	}
+	if strings.Contains(out, "https://hc/accounts/check_token/u/CAP/") || strings.Contains(out, "Healthchecks Portal") {
+		t.Fatalf("the channel must no longer display the link (moved to the epilogue), out=%q", out)
 	}
 }
 
@@ -419,8 +423,13 @@ func TestHealthchecksSectionMintsWhenNoCapture(t *testing.T) {
 	if minted != 1 {
 		t.Fatalf("mint called %d times, want 1", minted)
 	}
-	if !strings.Contains(buf.String(), "https://hc/accounts/check_token/u/MINT/") {
-		t.Fatalf("out=%q", buf.String())
+	// The MINTED link is STORED RAW on stats (carried to the epilogue) but NOT displayed
+	// by this channel: the SOLE display boundary is logMonitoringPortalLink in cmd/proxsave.
+	if stats.HealthcheckLink != "https://hc/accounts/check_token/u/MINT/" {
+		t.Fatalf("minted link must be stored on stats, got %q", stats.HealthcheckLink)
+	}
+	if strings.Contains(buf.String(), "https://hc/accounts/check_token/u/MINT/") || strings.Contains(buf.String(), "Healthchecks Portal") {
+		t.Fatalf("the channel must not display the minted link (moved to the epilogue), out=%q", buf.String())
 	}
 }
 
@@ -436,7 +445,7 @@ func TestHealthchecksSectionMintFailIsQuiet(t *testing.T) {
 		t.Fatalf("status=%q want transmitting", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if strings.Contains(out, "Monitoring portal") {
+	if strings.Contains(out, "Healthchecks Portal") {
 		t.Fatalf("a failed mint must not print a portal line, got: %q", out)
 	}
 	if !strings.Contains(out, "portal link unavailable") {
@@ -452,14 +461,21 @@ func TestHealthchecksSectionHostileLinkSanitizedAway(t *testing.T) {
 		return "", nil
 	}
 
-	// captured RAW link is hostile (raw space) -> SanitizeLoginURL rejects -> no line.
+	// captured RAW link is hostile (raw space). This channel carries it RAW and does NOT
+	// display it: the sanitize-away happens at the SOLE display boundary in the epilogue
+	// (proven by TestLogMonitoringPortalLink in cmd/proxsave). Here we only assert the
+	// channel never leaks the hostile link to its own output.
 	stats := &BackupStats{HealthcheckLink: "https://hc/ x"}
 	_ = ch.Notify(context.Background(), stats)
 	if stats.HealthcheckStatus != "transmitting" {
 		t.Fatalf("status=%q want transmitting", stats.HealthcheckStatus)
 	}
-	if strings.Contains(buf.String(), "https://hc/ x") || strings.Contains(buf.String(), "Monitoring portal") {
-		t.Fatalf("hostile link must be sanitized away at the display boundary, got: %q", buf.String())
+	if strings.Contains(buf.String(), "https://hc/ x") || strings.Contains(buf.String(), "Healthchecks Portal") {
+		t.Fatalf("the channel must not display the hostile link, got: %q", buf.String())
+	}
+	// The raw link is carried through untouched for the epilogue to sanitize.
+	if stats.HealthcheckLink != "https://hc/ x" {
+		t.Fatalf("channel must carry the raw link untouched, got %q", stats.HealthcheckLink)
 	}
 }
 

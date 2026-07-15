@@ -408,7 +408,8 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID s
 		t.logger.Debug("Telegram: relay accepted (HTTP %d notifyID=%q)", resp.Status, notifyID)
 		// The server piggybacks a fresh portal magic-link on the response UNTIL the
 		// user logs into their monitoring portal the first time, then stops. Capture
-		// it RAW (for the S4 healthchecks section) and log it (dual-write).
+		// it RAW onto stats.HealthcheckLink; the backup epilogue is the sole display
+		// boundary (sanitized) - this path does not log it.
 		return resp.Status, t.showPortalLink(resp.Body), nil
 	case 401, 403:
 		return resp.Status, "", fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.Status)

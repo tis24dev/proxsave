@@ -663,7 +663,6 @@ rclone check /local/dir/ gdrive:pbs-backups/ --checksum
 ### Contributor Documentation
 - **[Collector Architecture](COLLECTOR_ARCHITECTURE.md)** - Collector recipes, bricks, and `dual`
 - **[Restore Technical](RESTORE_TECHNICAL.md)** - Restore internals and compatibility flow
-- **[Migration Guide](MIGRATION_GUIDE.md)** - Config (backup.env) migration to Go (`--env-migration`)
 - **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues
 
 ### External Resources

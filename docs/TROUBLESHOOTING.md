@@ -1036,7 +1036,6 @@ proxsave --support
 ### Configuration & Setup
 - **[Configuration Guide](CONFIGURATION.md)** - Complete variable reference
 - **[CLI Reference](CLI_REFERENCE.md)** - All command-line flags
-- **[Migration Guide](MIGRATION_GUIDE.md)** - backup.env config migration to Go
 
 ### Operations
 - **[Cloud Storage Guide](CLOUD_STORAGE.md)** - rclone configuration and troubleshooting

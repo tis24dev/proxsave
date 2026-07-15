@@ -90,6 +90,7 @@ func restoreSupportStats(rt *appRuntime, exitCode int) *orchestrator.BackupStats
 func dispatchBackupMode(rt *appRuntime) modeResult {
 	result := runBackupMode(backupModeOptions{
 		ctx:              rt.ctx,
+		bootstrap:        rt.bootstrap,
 		cfg:              rt.cfg,
 		logger:           rt.logger,
 		envInfo:          rt.envInfo,

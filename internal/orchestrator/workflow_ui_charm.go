@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -51,9 +52,48 @@ func (u *charmWorkflowUI) ShowMessage(ctx context.Context, title, message string
 	return u.mapAbort(err)
 }
 
+// workflowStatusResultAction is the single choice on a workflow outcome screen: continue
+// past the result (mirrors daemonResultAction in cmd/proxsave/dashboard.go).
+type workflowStatusResultAction int
+
+const workflowStatusResultActionContinue workflowStatusResultAction = iota
+
+// ShowStatusResult presents a workflow outcome with the SAME look as the daemon / check
+// result screens: a styled "Status:" line (a colored keyword + a Subtle explanation) above
+// a single Continue item. It mirrors showDaemonResultScreen (single item + WithSelectorBack +
+// non-blocking loop): it loops until Continue/esc, returning nil on esc and u.mapAbort(err)
+// on a real UI error. This is a Selector, NOT a components.Notice.
+func (u *charmWorkflowUI) ShowStatusResult(ctx context.Context, screenTitle string, level HealthcheckSetupLevel, keyword, explanation string) error {
+	errWorkflowStatusEsc := errors.New("workflow status: esc")
+	prompt := buildWorkflowStatusPrompt(level, keyword, explanation)
+	items := []components.SelectorItem[workflowStatusResultAction]{
+		{Label: "Continue", Description: "continue", Value: workflowStatusResultActionContinue},
+	}
+	for {
+		action, err := shell.Ask(ctx, u.session, components.NewSelector(
+			screenTitle, items,
+			components.WithSelectorPromptStyled[workflowStatusResultAction](prompt),
+			components.WithSelectorBack[workflowStatusResultAction](errWorkflowStatusEsc),
+		))
+		if err != nil {
+			if errors.Is(err, errWorkflowStatusEsc) {
+				return nil
+			}
+			return u.mapAbort(err)
+		}
+		switch action {
+		case workflowStatusResultActionContinue:
+			return nil
+		}
+	}
+}
+
+// ShowError renders a workflow failure with the SAME styled "Status:" selector as
+// ShowStatusResult, at Error level, so a failure (e.g. "Network preflight failed")
+// reads "Status: ✗ <keyword>" instead of a components.Notice. The keyword is the
+// uppercased title, matching the failure look of the other Status screens.
 func (u *charmWorkflowUI) ShowError(ctx context.Context, title, message string) error {
-	_, err := shell.Ask(ctx, u.session, components.NewNotice(components.NoticeError, title, message))
-	return u.mapAbort(err)
+	return u.ShowStatusResult(ctx, title, HealthcheckSetupLevelError, strings.ToUpper(title), message)
 }
 
 func (u *charmWorkflowUI) SelectBackupSource(ctx context.Context, options []decryptPathOption) (decryptPathOption, error) {

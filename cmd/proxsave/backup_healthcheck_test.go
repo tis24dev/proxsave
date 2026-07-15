@@ -112,6 +112,30 @@ func TestMaybeHandoffSkipsSupervisedChild(t *testing.T) {
 	}
 }
 
+// A DRY-RUN backup (e.g. the post-install audit's `proxsave --dry-run` probe, which exits 1 on
+// warnings) is a TEST, never a real outcome: it must write NOTHING and never touch the monitor.
+// The probe must not even be consulted.
+func TestMaybeHandoffSkipsDryRun(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv(health.EnvRunID, "") // standalone, so only the dry-run gate can stop it
+
+	if err := health.WriteDaemonPID(base, os.Getpid()); err != nil {
+		t.Fatalf("WriteDaemonPID: %v", err)
+	}
+	withProbe(t, func(int) bool {
+		t.Fatal("a dry-run must return before probing the daemon")
+		return false
+	})
+
+	opts := handoffOpts(base)
+	opts.dryRun = true
+	maybeHandoffManualBackup(opts, attemptedResult(1)) // exit 1 like the post-install audit warnings
+
+	if mo, _ := health.LoadManualOutcome(base); mo.RID != "" {
+		t.Fatalf("a dry-run must write nothing, got %+v", mo)
+	}
+}
+
 // A run that did NOT attempt a backup (disabled / benign concurrency skip: supportStats AND
 // earlyErrorState both nil) never hands off, regardless of the daemon being alive.
 func TestMaybeHandoffSkipsWhenNoBackupAttempted(t *testing.T) {

@@ -22,7 +22,9 @@ const (
 	ActionRestore
 	ActionDecrypt
 	ActionNewKey
-	ActionReconfigure
+	ActionInstallMenu // one menu row that opens an Edit install / Wipe install chooser
+	ActionReconfigure // "Edit install" -> the --install flow (chosen inside ActionInstallMenu)
+	ActionNewInstall  // "Wipe install" -> the --new-install flow (chosen inside ActionInstallMenu)
 	// Second group (diagnostics): each re-opens an existing setup/check screen
 	// in the live dashboard session; the caller loops back to the menu after.
 	ActionCheckTelegram
@@ -35,6 +37,12 @@ const (
 	ActionDaemonRemove  // disable the daemon, revert to cron (--daemon-remove)
 	ActionDaemonRestart // restart the running daemon (e.g. to pick up a rebuilt binary)
 	ActionDaemonStatus  // show the daemon/scheduler state
+	// Recovery: post-restore cleanup of leftover mount guards (--cleanup-guards),
+	// run in-session as a two-step dry-run -> confirm -> apply result flow.
+	ActionCleanupGuards
+	// Support: collect consent + GitHub metadata graphically, then run a backup in support
+	// mode (--support: DEBUG + email the log to the maintainer), streamed like a backup.
+	ActionSupport
 )
 
 // DaemonState tells Run which daemon command(s) to offer, context-aware.
@@ -57,16 +65,16 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 	items := []components.SelectorItem[Action]{
 		// Backup: the primary action.
 		{Label: "─── Backup ───", Separator: true},
-		{Label: "Run backup now", Description: "start a backup with the current configuration", Value: ActionBackup},
+		{Label: "Backup", Description: "start a backup with the current configuration", Value: ActionBackup},
 		// Tools: operate on existing backups.
 		{Label: "─── Tools ───", Separator: true},
 		{Label: "Restore", Description: "restore a backup onto this system", Value: ActionRestore},
 		{Label: "Decrypt", Description: "convert an encrypted backup into a plaintext bundle", Value: ActionDecrypt},
 		// Maintenance: key/config management and updates.
 		{Label: "─── Maintenance ───", Separator: true},
-		{Label: "New encryption key", Description: "reset the AGE recipients and run the key setup", Value: ActionNewKey},
-		{Label: "Reconfigure", Description: "re-run the interactive installation/setup", Value: ActionReconfigure},
-		{Label: "Updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
+		{Label: "New key", Description: "create new encryption AGE key", Value: ActionNewKey},
+		{Label: "Install", Description: "install or re-install ProxSave (edit or wipe)", Value: ActionInstallMenu},
+		{Label: "Upgrade", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
 		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
 		{Label: "─── Diagnostic Checks ───", Separator: true},
 		{Label: "Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
@@ -75,19 +83,24 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 	}
 
 	// Daemon scheduler group: context-aware - only the command that fits the current
-	// state, plus the read-only status. Setup/remove run the same admin path as the
-	// flags; status runs a screen in-session.
+	// state, plus the read-only status. The group header already says "Daemon", so the
+	// items drop the redundant word. Setup/remove run the same admin path as the flags.
 	items = append(items, components.SelectorItem[Action]{Label: "─── Daemon ───", Separator: true})
 	switch daemon {
 	case DaemonStateActive:
-		items = append(items, components.SelectorItem[Action]{Label: "Disable daemon", Description: "stop the daemon and revert to the cron scheduler", Value: ActionDaemonRemove})
-		items = append(items, components.SelectorItem[Action]{Label: "Restart daemon", Description: "restart the resident daemon (e.g. to load a rebuilt binary)", Value: ActionDaemonRestart})
+		items = append(items, components.SelectorItem[Action]{Label: "Disable", Description: "stop the daemon and revert to the cron scheduler", Value: ActionDaemonRemove})
+		items = append(items, components.SelectorItem[Action]{Label: "Restart", Description: "restart the resident daemon (e.g. to load a rebuilt binary)", Value: ActionDaemonRestart})
 	case DaemonStateDisabled:
-		items = append(items, components.SelectorItem[Action]{Label: "Re-enable daemon", Description: "switch back to the resident daemon scheduler", Value: ActionDaemonSetup})
+		items = append(items, components.SelectorItem[Action]{Label: "Re-enable", Description: "switch back to the resident daemon scheduler", Value: ActionDaemonSetup})
 	case DaemonStateOnCron:
-		items = append(items, components.SelectorItem[Action]{Label: "Install daemon", Description: "switch to the resident daemon scheduler (from cron)", Value: ActionDaemonSetup})
+		items = append(items, components.SelectorItem[Action]{Label: "Install", Description: "switch to the resident daemon scheduler (from cron)", Value: ActionDaemonSetup})
 	}
-	items = append(items, components.SelectorItem[Action]{Label: "Daemon status", Description: "show the daemon service and scheduler state", Value: ActionDaemonStatus})
+	items = append(items, components.SelectorItem[Action]{Label: "Status", Description: "show the daemon service and scheduler state", Value: ActionDaemonStatus})
+
+	// Recovery: post-restore cleanup of leftover mount guards.
+	items = append(items, components.SelectorItem[Action]{Label: "─── Recovery ───", Separator: true})
+	items = append(items, components.SelectorItem[Action]{Label: "Cleanup guards", Description: "remove leftover restore mount guards", Value: ActionCleanupGuards})
+	items = append(items, components.SelectorItem[Action]{Label: "Support", Description: "run a support backup and email the debug log to the maintainer", Value: ActionSupport})
 
 	// Detach the standalone Exit from the Daemon group above with its own divider.
 	items = append(items, components.SelectorItem[Action]{Label: "──────────────", Separator: true})

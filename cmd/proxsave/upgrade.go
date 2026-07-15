@@ -711,6 +711,9 @@ func installBinary(srcRoot *os.Root, srcName, destPath string, bootstrap *loggin
 	}
 	defer closeIntoErr(&err, src, "close extracted binary")
 
+	// Install the conventional executable mode 0755 (owner rwx, group/other r-x). The
+	// binary runs as root and only root can replace it; the security check verifies it
+	// is root-owned and not group/other-writable, not an exact mode, so 0755 is fine.
 	dst, err := destRoot.OpenFile(tmpName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return fmt.Errorf("cannot create temp target binary: %w", err)

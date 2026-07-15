@@ -10,7 +10,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
@@ -54,9 +53,11 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	bundlePath, err = runDecryptWorkflowWithUI(ctx, cfg, logger, version, ui)
 	if err == nil && strings.TrimSpace(bundlePath) != "" {
 		// The logger lines land in the altscreen and vanish on Close:
-		// show the result where the user can actually read it.
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess,
-			"Decrypt complete", fmt.Sprintf("Decrypted bundle created:\n%s", bundlePath)))
+		// show the result where the user can actually read it. Reuse the
+		// workflow "Status:" selector so the success matches the decrypt
+		// failures visually ("Status: ✓ DECRYPT COMPLETE").
+		_ = ui.ShowStatusResult(ctx, "Decrypt", HealthcheckSetupLevelOk,
+			"DECRYPT COMPLETE", fmt.Sprintf("Decrypted bundle created:\n%s", bundlePath))
 	}
 	closeErr := session.Close()
 	switch {

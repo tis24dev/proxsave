@@ -20,7 +20,7 @@ import (
 // return early and the footer prints the red/magenta banner), so the banner here is
 // "completed"; the shared helper keeps the wording in one place.
 //
-// The whole string is caller-pre-styled and passed verbatim to the StreamTask screen,
+// The whole string is caller-pre-styled and passed verbatim to the inline stream screen,
 // mirroring how WithSelectorPromptStyled accepts an already-rendered prompt. It never
 // renders the CLI footer, which stays the persistent scrollback record after Close.
 func buildInstallOutcomePrompt(rv RestartVerifyResult, verified bool, permStatus, permMessage string) string {
